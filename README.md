@@ -1,0 +1,130 @@
+# jop
+
+A Macintosh System 1-style graphical operating system for the Intel 8086,
+written in real-mode assembly and booted from a floppy. 640x480, 16 colors,
+overlapping draggable windows, pull-down menus — and pre-emptive
+multitasking, which the real 1984 Macintosh never had.
+
+```
+make        # build both floppy images
+make run    # boot it in QEMU (with an emulated serial mouse)
+make xt     # boot the 360KB image on an emulated IBM PC/XT in 86Box
+make test   # boot headless with a QMP socket for scripted testing
+make debug  # boot with QEMU halted, waiting for gdb on :1234
+make clean
+```
+
+![what it looks like: gray dithered desktop, menu bar, Note Pad, Clock and
+Bounce windows](docs/screenshot.png)
+
+## What it does
+
+Boots straight into the GUI: a 50%-dither gray desktop, a menu bar
+(Apple, File, Special), and three windows already open. All of classic Mac's
+core interactions work:
+
+- **Windows** — title bars with pinstripes and a close box on the frontmost,
+  1px drop shadows, drag by title bar (XOR outline, Mac-style), click to
+  raise, close box to hide, reopen from the File menu.
+- **Menus** — press in the bar, drag through pull-downs with live highlight,
+  release to choose. Apple → About jop; File → Note Pad / Clock / Bounce /
+  Close Window; Special → Restart.
+- **Note Pad** — click it, type; wraps lines, Backspace and Return work.
+- **Clock** and **Bounce** — each runs as its *own pre-empted task*. The
+  clock ticks and the ball bounces while you type or hold a drag: that is
+  the PIT timer interrupt switching tasks out from under each other, on an
+  8086. When another window covers them they stop drawing (and the clock
+  keeps time silently); uncover them and they resume.
+
+## How
+
+| piece         | how it works on an XT                                       |
+|---------------|--------------------------------------------------------------|
+| graphics      | VGA mode 12h, 640x480x16 planar, drawn directly (no double buffer — a 150KB backbuffer wouldn't fit in 256KB of RAM; the real Mac drew directly too). Set/Reset + Bit Mask fills, XOR for drag outlines and menu highlights. |
+| multitasking  | pre-emptive round-robin: int 08h (PIT, 18.2Hz) chains to the BIOS tick, then saves the register frame on the task stack, swaps SP, and irets into the next ready task. 4 task slots, 1536-byte stacks. |
+| mouse         | Microsoft serial mouse on COM1, IRQ4, 1200 baud 7N1, 3-byte packets — the period-correct XT mouse. QEMU emulates one natively (`-chardev msmouse`). |
+| cursor        | arrow with save-under, drawn by the mouse ISR itself when it's safe, deferred to the next unlock when a task holds the drawing lock. |
+| keyboard      | BIOS int 16h, polled by the UI task. |
+| font          | the VGA ROM's own 8x8 font, copied out via int 10h AX=1130h at boot. |
+| concurrency   | one drawing mutex (`gfx_lock`); background tasks re-check visibility *under* the lock; ISRs run IF=0 throughout and never draw over a held lock. SPEC.md is the binding contract. |
+
+The kernel is ~6KB. Everything runs in the tiny model — CS = DS = SS =
+0x1000, all near calls, no linker: NASM `-f bin` flat binaries only, which
+keeps Apple's Mach-O-only toolchain out of the picture.
+
+Only 8086 instructions are used, and `cpu 8086` at the top of kernel.asm
+makes NASM enforce that: no `pusha`, no `push imm`, no shifts by an
+immediate other than 1. The 8088 in a real XT is the same programming model
+on a slower bus.
+
+## Memory map
+
+| linear    | segment | contents                                          |
+|-----------|---------|----------------------------------------------------|
+| `0x00500` | —       | free; boot stack grows down from `0x7C00`          |
+| `0x07C00` | `0000`  | boot sector, where the BIOS puts us                |
+| `0x10000` | `1000`  | kernel: code, data, .bss (task stacks, buffers)    |
+| `0x20000` | `2000`  | menu save-under heap                               |
+| `0xA0000` | `A000`  | VGA planar framebuffer, 80 bytes per row           |
+
+Fits and runs in 256KB of RAM; a build-time assertion fails the build if
+image + bss ever pass offset 0xF000.
+
+## Layout
+
+```
+SPEC.md              the binding module contracts (interfaces, layouts,
+                     concurrency rules) - read this first
+boot/boot.asm        512-byte boot sector: LBA->CHS, retrying reads
+kernel/kernel.asm    constants, boot sequence, includes, size assertion
+kernel/vga12.inc     mode 12h planar primitives, save/restore, gfx lock
+kernel/font.inc      ROM font grab + transparent text drawing
+kernel/mouse.inc     COM1 UART, IRQ4 ISR, packet decode, cursor
+kernel/sched.inc     PIT hook, context switch, spawn/yield/sleep
+kernel/events.inc    ISR-safe event ring queue
+kernel/wm.inc        window records, z-order, frames, hit test, painter
+kernel/menu.inc      menu bar, pull-down tracking
+kernel/ui.inc        UI task: event pump, keyboard, drags, dispatch
+kernel/apps.inc      About, Note Pad, Clock task, Bounce task
+tools/qmp.py         QMP client for scripted control of a test boot
+tools/mouse.py       absolute mouse positioning over the QMP socket
+```
+
+## Two images
+
+| image              | geometry                | for                       |
+|--------------------|-------------------------|---------------------------|
+| `build/jop.img`    | 1.44MB, 18 spt, 2 heads | QEMU                      |
+| `build/jop360.img` | 360KB, 9 spt, 2 heads   | 86Box, and any real XT    |
+
+The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
+time and reads exactly as many sectors as the measured kernel occupies.
+A 1.44MB drive postdates the 8086 by years, so period hardware gets the
+360KB build.
+
+## Emulators
+
+`make run` boots QEMU with `-chardev msmouse,id=m0 -serial chardev:m0` —
+grab the guest pointer and the arrow follows.
+
+`make xt` boots the 360KB image on an emulated IBM PC/XT in 86Box
+(`vm/xt/86box.cfg`): 8088 @ 4.77MHz, 256KB RAM, an Oak OTI-067 8-bit ISA
+VGA card, and a Microsoft serial mouse on COM1. VGA arrived in 1987, nine
+years after the 8086, but ISA VGA cards did work in XTs — a legitimate if
+fancy period configuration. Expect the real 4.77MHz experience: repaints
+you can watch.
+
+## Scripted testing
+
+`make test` boots headless with a QMP socket at `build/qmp.sock`:
+
+```
+python3 tools/mouse.py build/qmp.sock click 180 150     # click Note Pad
+python3 tools/qmp.py build/qmp.sock 'sendkey h' 'sendkey i'
+python3 tools/qmp.py build/qmp.sock 'screendump /abs/path/shot.ppm'
+python3 tools/qmp.py build/qmp.sock 'quit'
+```
+
+(QEMU's msmouse backend truncates large injected deltas, so `tools/mouse.py`
+splits every move into ≤60px chunks and derives absolute positions by
+pinning against the kernel's edge clamp first.)
