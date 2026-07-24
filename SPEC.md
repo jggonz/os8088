@@ -43,7 +43,8 @@ pre-empted background task, updating live while the user types or drags).
    "initialize memory in a nobits section" warning fails the build.
 5. **Label hygiene.** One flat namespace. Prefix every module-internal label
    with the module's prefix (`vga_`, `font_`, `mou_`, `cur_`, `sch_`, `evq_`,
-   `wm_`, `menu_`, `ui_`, `app_`) or use NASM local labels (`.foo`).
+   `wm_`, `menu_`, `ui_`, `app_`, `dsk_`/`disk_`, `ld_`/`loader_`,
+   `fm_`/`files_`) or use NASM local labels (`.foo`).
 6. Public drawing routines may assume the caller holds the **gfx lock**
    (§7) and that the cursor is hidden. They must not take the lock
    themselves.
@@ -59,11 +60,15 @@ pre-empted background task, updating live while the user types or drags).
 | 0x00500       | —       | free; boot stack grows down from 0x7C00            |
 | 0x07C00       | 0000    | boot sector                                        |
 | 0x10000       | 0x1000  | kernel: code, data, .bss (stacks, buffers)         |
+| 0x1A000       | 0x1000  | `APP_LOAD_OFF` — loaded-program region, 20KB (§20) |
+| 0x1F000       | 0x1000  | free gap; boot/task-0 stack grows down from 0xFFFE |
 | 0x20000       | 0x2000  | `SAVE_SEG` — save-under heap (menus), raw, via ES  |
 | 0xA0000       | 0xA000  | VGA planar framebuffer, 80 bytes/row               |
 
-Kernel image + .bss must fit below offset 0xF000 (task stacks included);
-`kernel.asm` ends with a build-time assertion (§15). Works in 256KB of RAM.
+Kernel image + .bss must fit below offset **0xA000** (task stacks included);
+`kernel.asm` ends with a build-time assertion (§15). Loaded programs occupy
+kernel-segment offsets 0xA000..0xEFFF so they share the tiny model: their
+paint/key/click procs are ordinary near pointers. Works in 256KB of RAM.
 
 ## 3. Global constants (defined once in kernel.asm, used everywhere)
 
@@ -81,13 +86,16 @@ CBLACK  equ 0
 CWHITE  equ 15
 CLGRAY  equ 7
 CDGRAY  equ 8
+; loadable programs (§20)
+APP_LOAD_OFF equ 0xA000      ; where packages load (kernel segment offset)
+APP_MAX_SIZE equ 0x5000      ; image + bss budget, 0xA000..0xEFFF
 ```
 
 ## 4. Module files and ownership
 
 | file                | owns                                                    |
 |---------------------|---------------------------------------------------------|
-| `kernel/kernel.asm` | entry, constants, init order, includes, .bss layout, syscall gate (kept as-is for compat, at 0x0010) |
+| `kernel/kernel.asm` | entry, constants, init order, includes, .bss layout, **jop API jump table at 0x0010** (§20.3) + japi helper routines |
 | `kernel/vga12.inc`  | mode set, planar primitives, save/restore, gfx lock     |
 | `kernel/font.inc`   | 8x8 font (copied from VGA BIOS ROM at init), text draw  |
 | `kernel/mouse.inc`  | COM1 UART, IRQ4 ISR, packet decode, cursor (save-under) |
@@ -97,6 +105,9 @@ CDGRAY  equ 8
 | `kernel/menu.inc`   | menu bar, pull-down tracking, command return            |
 | `kernel/ui.inc`     | UI task: event pump, keyboard poll, drag, dispatch      |
 | `kernel/apps.inc`   | About, Note Pad, Clock task, Bounce task                |
+| `kernel/disk.inc`   | BIOS int 13h floppy reads, jopfs mount + directory (§18–19) |
+| `kernel/loader.inc` | package validation, load into APP region, launch (§21)  |
+| `kernel/files.inc`  | Disk window: file list UI, selection, open (§22)        |
 
 `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` remain in the
 tree but are **no longer included**; the GUI replaces the text shell.
@@ -277,16 +288,26 @@ W_H     equ 8    ; word, frame height (includes title bar)
 W_TITLE equ 10   ; word: near ptr to NUL title string
 W_PAINT equ 12   ; word: near ptr, in: SI = window ptr. Draws CONTENT only.
 W_ONKEY equ 14   ; word: near ptr or 0, in: AL=ascii, AH=scan, SI=win ptr
-WIN_SIZE equ 16
-MAX_WIN  equ 6
+W_ONCLICK equ 16 ; word: near ptr or 0, in: CX=x, DX=y (absolute screen
+                 ; coords), SI=win ptr. Called under the gfx lock when
+                 ; EVT_MDOWN lands in the CONTENT of the FRONT window (§13).
+                 ; Same rules as W_PAINT: must not lock, block or spawn.
+WIN_SIZE equ 18
+MAX_WIN  equ 8
 ```
+
+(WIN_SIZE grew 16 → 18: any ×16 shift idioms in wm.inc must become a true
+×18 multiply. The wm_create template grows to **16 bytes**:
+{x,y,w,h,title,paint,onkey,onclick} words — every existing template in
+apps.inc gains a trailing `dw 0`.)
 
 Storage: `wm_wins` (MAX_WIN × WIN_SIZE, .bss), z-order byte array
 `wm_zord` (window indices, index 0 = backmost) + `wm_zn` count. Every used
 window is always present in `wm_zord` — membership is established at
-wm_create and never removed; `wm_hide` clears only the visible bit, and
-`wm_show`/`wm_front` only reorder. The visible flag alone decides whether a
-window is painted, hit-tested, or counted by `wm_top`/`wm_obscured`.
+wm_create and removed only by `wm_destroy`; `wm_hide` clears only the
+visible bit, and `wm_show`/`wm_front` only reorder. The visible flag alone
+decides whether a window is painted, hit-tested, or counted by
+`wm_top`/`wm_obscured`.
 
 Frame drawing (paint-all does this before calling W_PAINT):
 - 1px black outline around the whole frame; 1px black drop shadow along the
@@ -303,7 +324,8 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | symbol         | contract                                                     |
 |----------------|--------------------------------------------------------------|
 | `wm_init`      | zero table                                                   |
-| `wm_create`    | in SI → 14-byte template {x,y,w,h,title,paint,onkey} words; out BX = window ptr, CF on table full. Created **hidden**; appends the window's index to `wm_zord` (frontmost) and increments `wm_zn`. |
+| `wm_create`    | in SI → 16-byte template {x,y,w,h,title,paint,onkey,onclick} words; out BX = window ptr, CF on table full. Created **hidden**; appends the window's index to `wm_zord` (frontmost) and increments `wm_zn`. Does not repaint — callable without the gfx lock. |
+| `wm_destroy`   | in BX = win ptr: clear W_FLAGS (used+visible), remove its index from `wm_zord` (compact the array, decrement `wm_zn`), repaint all. Caller holds the gfx lock. The record slot becomes reusable by wm_create. |
 | `wm_show`      | in BX = win ptr: set visible, bring to front, repaint all    |
 | `wm_hide`      | in BX = win ptr: clear visible, repaint all                  |
 | `wm_front`     | in BX = win ptr: raise to front of z-order, repaint all      |
@@ -332,13 +354,16 @@ CMD_ABOUT  equ 1
 CMD_NOTE   equ 2
 CMD_CLOCK  equ 3
 CMD_BOUNCE equ 4
-CMD_CLOSE  equ 5
-CMD_REBOOT equ 6
+CMD_FILES  equ 5
+CMD_CLOSE  equ 6
+CMD_REBOOT equ 7
 ```
 
 Menus: **Apple**: "About jop..." (CMD_ABOUT). **File**: "Note Pad"
-(CMD_NOTE), "Clock" (CMD_CLOCK), "Bounce" (CMD_BOUNCE), "Close Window"
-(CMD_CLOSE). **Special**: "Restart" (CMD_REBOOT).
+(CMD_NOTE), "Clock" (CMD_CLOCK), "Bounce" (CMD_BOUNCE), "Disk"
+(CMD_FILES), "Close Window" (CMD_CLOSE). **Special**: "Restart"
+(CMD_REBOOT). (CMD_CLOSE/CMD_REBOOT were renumbered when Disk was
+inserted — cmd = menu base + item index must still hold.)
 
 | symbol          | contract                                                   |
 |-----------------|-------------------------------------------------------------|
@@ -374,13 +399,19 @@ Loop forever:
      gfx_lock again in the release step — the lock is non-reentrant (§7)
      and task 0 already holds it; re-acquiring would deadlock the GUI.
    - content of non-front window → `wm_front`.
-   - content of front window → (v1: ignore; apps are keyboard/task driven).
-3. `task_yield`.
+   - content of front window → if its `W_ONCLICK` is non-zero: gfx_lock,
+     near-call it (CX=x, DX=y, SI=win ptr), gfx_unlock; else ignore.
+3. If `[ld_pending]` is non-zero (§21): AX = [ld_pending] − 1, zero
+   `[ld_pending]`, call `loader_run`. This runs **outside** the gfx lock —
+   loader_run manages its own locking.
+4. `task_yield`.
 
 Command dispatch: CMD_ABOUT/NOTE/CLOCK/BOUNCE → `wm_show` the corresponding
-window (created at boot, initially hidden or shown per §15). CMD_CLOSE →
-`wm_hide` frontmost. CMD_REBOOT → gfx_lock (never released), `vga_text`,
-`sched_unhook`, `int 0x19`.
+window (created at boot, initially hidden or shown per §15). CMD_FILES →
+call `files_open` (§22; same position in the dispatch flow as the wm_show
+cases — files_open does its own locking). CMD_CLOSE → `wm_hide` frontmost.
+CMD_REBOOT → gfx_lock (never released), `vga_text`, `sched_unhook`,
+`int 0x19`.
 
 All wm_* calls that repaint are made under gfx_lock by the UI task.
 
@@ -430,14 +461,16 @@ wm_paint_all afterwards), stores the window ptrs, and `task_spawn`s
 
 ## 15. kernel.asm — boot sequence
 
-Keep the 0x0000 cold entry and the 0x0010 syscall gate (existing dispatcher
-and its little helpers may be dropped; the gate may simply `retf` for now —
-offset layout preserved). `cpu 8086` + `bits 16` + `org 0`.
+Keep the 0x0000 cold entry. At 0x0010 the retired syscall gate is replaced
+by the **jop API jump table** (§20.3) — a run of 4-byte `jmp near` slots at
+pinned offsets. kernel.asm also owns the tiny japi helper routines
+(§20.4) and the `japi_seed` word. `cpu 8086` + `bits 16` + `org 0`.
 
 kmain: set segments/stack (SP=0xFFFE), `sti`, `cld`, then:
 `sched_init` → `evq_init` → `vga_mode12` → `font_init` → `wm_init` →
-`mouse_init` → `apps_init` → gfx_lock → `wm_paint_all` → gfx_unlock →
-`cursor_show` → jump into `ui_task` (task 0 never returns).
+`mouse_init` → `apps_init` → `files_init` → `loader_init` → gfx_lock →
+`wm_paint_all` → gfx_unlock → `cursor_show` → jump into `ui_task` (task 0
+never returns).
 
 End of file (after all `%include` lines, with `section .text` in effect):
 
@@ -450,20 +483,24 @@ section .bss
 ;  NASM accumulates them in declaration order — this block lands last)
 kernel_bss_end:
 KBSS_SIZE equ kernel_bss_end - $$
-%if KTEXT_SIZE + KBSS_SIZE > 0xF000
-%error "kernel too big: image + bss must stay below 0xF000"
+%if KTEXT_SIZE + KBSS_SIZE > 0xA000
+%error "kernel too big: image + bss must stay below APP_LOAD_OFF (0xA000)"
 %endif
 ```
 
 (The sizes must be same-section label differences bound via `equ` — a bare
-label in `%if` is a non-scalar and will not assemble. Keep this block last.)
+label in `%if` is a non-scalar and will not assemble. Keep this block last.
+The limit is 0xA000 now, not 0xF000: everything above it belongs to the
+loaded-program region, §20.)
 
 ## 16. Build & test
 
-- Makefile: unchanged image recipes. `run` target gains the serial mouse:
-  `-chardev msmouse,id=m0 -serial chardev:m0`.
-  New `test` target: same plus `-display none -qmp unix:build/qmp.sock,server,nowait`
-  run in background, for scripted screendumps and input injection.
+- Makefile: boot-image recipes unchanged. `run` target keeps the serial
+  mouse (`-chardev msmouse,id=m0 -serial chardev:m0`) and now also attaches
+  the software floppy as drive B:
+  `-drive file=build/apps.img,format=raw,if=floppy,index=1`.
+  `test` target: same, plus `-display none -qmp unix:build/qmp.sock,server,nowait`.
+- New tooling targets: see §24 (apps, packages, jopfs images).
 - 86Box config (`vm/xt/86box.cfg`): set the mouse to a serial Microsoft
   mouse on COM1 (best-effort; cannot be verified headless).
 - The kernel may exceed 8 sectors; the two images are already built
@@ -472,7 +509,7 @@ label in `%if` is a non-scalar and will not assemble. Keep this block last.)
 
 ## 17. Definition of done
 
-1. `make` builds both images with zero warnings; kernel < 0xF000 with .bss.
+1. `make` builds all images with zero warnings; kernel < 0xA000 with .bss.
 2. QEMU boots to: gray desktop, menu bar (apple + File + Special), Note Pad
    + Clock + Bounce windows open, arrow cursor.
 3. Clock ticks and ball bounces **while** typing in Note Pad and while a
@@ -480,3 +517,252 @@ label in `%if` is a non-scalar and will not assemble. Keep this block last.)
 4. Mouse moves cursor; windows drag by title bar; clicking a back window
    raises it; close box hides; menus pull down and dispatch.
 5. Only 8086 instructions (`cpu 8086` proves it at build time).
+6. File → Disk opens the Disk window listing the software floppy's
+   contents; double-clicking MINES loads and shows Minesweeper.
+7. Minesweeper is playable with the mouse: reveal, flag (F), flood fill,
+   win and lose states, colored numbers; the clock keeps ticking behind it.
+
+## 18. disk.inc — floppy reads (BIOS int 13h)
+
+Only the UI task touches the disk (extends §7's BIOS rule to int 13h).
+During a read, task switching is paused: `inc byte [sch_lock]` before,
+`dec` after (the timer ISR still chains the BIOS tick, which the floppy
+motor logic needs). The gfx lock is NOT held across disk I/O.
+
+Geometry lives in variables so both 1.44MB (18 spt) and 360KB (9 spt) data
+disks work: `disk_spt` (word), `disk_heads` (word) — loaded from the jopfs
+superblock at mount. LBA→CHS: cyl = LBA/(spt×heads); rem = LBA%(spt×heads);
+head = rem/spt; sector = rem%spt + 1. Reads go **one sector per int 13h
+call** (AH=02, AL=1) — no multi-sector calls, so track boundaries and DMA
+alignment never matter. Each sector: up to 3 attempts, with AH=00 reset on
+failure between attempts.
+
+| symbol       | contract                                                      |
+|--------------|----------------------------------------------------------------|
+| `disk_read`  | in: AX=LBA, CX=sector count, ES:BX → dest (advances BX by 512 per sector; caller's ES:BX budget must cover count×512). Drive from `[disk_drive]`. Out: CF=1 on unrecoverable error. Preserves registers per §1. |
+| `disk_mount` | in: DL=drive (0=A, 1=B). Sets `[disk_drive]`, reads LBA 0 with the *fallback* geometry spt=9/heads=2 (CHS 0/0/1 — identical under any real floppy geometry), validates the superblock (§19), loads `disk_spt`/`disk_heads`/`disk_nfiles`, then reads the 2 directory sectors (LBA 1–2) into `disk_dir`. Out: CF=1 if the disk is unreadable or not jopfs (then `disk_nfiles`=0). |
+| `disk_drive`  | byte variable, current drive (init 1 = B:)                   |
+| `disk_nfiles` | word, valid after a successful mount (else 0)                |
+| `disk_dir`    | 1024-byte .bss buffer: the 32 directory entries              |
+
+## 19. jopfs — on-disk format (data floppies)
+
+A jopfs floppy is not bootable and holds only packages. All words
+little-endian. Sector size 512.
+
+**LBA 0 — superblock:**
+
+| off | size | contents                                  |
+|-----|------|-------------------------------------------|
+| 0   | 8    | magic `"JOPFS1"` then two zero bytes      |
+| 8   | 2    | sectors per track (18 or 9)               |
+| 10  | 2    | heads (2)                                 |
+| 12  | 2    | file count (0..32)                        |
+| 14  | 498  | zero                                      |
+
+**LBA 1–2 — directory**, 32 entries × 32 bytes:
+
+| off | size | contents                                            |
+|-----|------|------------------------------------------------------|
+| 0   | 16   | file name, printable ASCII, NUL-padded (≤15 chars)  |
+| 16  | 2    | type: 1 = application package (.jop)                |
+| 18  | 2    | start LBA of file data                              |
+| 20  | 2    | size in bytes                                       |
+| 22  | 10   | zero                                                |
+
+File data starts at LBA 3; every file starts on a sector boundary. Entries
+are packed from index 0; `file count` in the superblock is authoritative.
+
+## 20. Loadable programs — the .jop package format
+
+### 20.1 Region
+
+A package is a flat 8086 binary assembled with `org APP_LOAD_OFF` (0xA000)
+and loaded verbatim to KERNEL_SEG:0xA000. It runs in the tiny model exactly
+like kernel code: CS=DS=SS=KERNEL_SEG, near calls everywhere, §1 hard rules
+apply (cpu 8086, register discipline, no bare `sti` in handlers). Its
+paint/onkey/onclick procs are near pointers into the region. Budget:
+image + zeroed-bss ≤ APP_MAX_SIZE (0x5000). One program is resident at a
+time; loading another replaces it (§21).
+
+### 20.2 Header — first 32 bytes of the file (and of memory at 0xA000)
+
+| off | size | contents                                                  |
+|-----|------|------------------------------------------------------------|
+| 0   | 2    | magic: bytes `'J','P'` (word 0x504A)                      |
+| 2   | 1    | format version = 1                                        |
+| 3   | 1    | flags = 0                                                 |
+| 4   | 2    | load offset — must equal 0xA000                           |
+| 6   | 2    | entry offset (absolute, ≥ 0xA020, < load+image size)      |
+| 8   | 2    | image size = total file bytes, header included            |
+| 10  | 2    | bss size — bytes the loader zeroes after the image        |
+| 12  | 4    | zero (reserved)                                           |
+| 16  | 16   | program name, printable, NUL-padded (shown by tools)      |
+
+**Entry contract**: near-called by the loader with DS=ES=KERNEL_SEG, IF=1,
+gfx lock NOT held. The program creates its window(s) via the API table
+(wm_create is lock-free) and **returns** BX = window ptr with CF clear;
+the loader wm_shows it. CF set = abort (loader reports "load failed"); an
+aborting entry must return BX = its already-created window ptr (or 0 if it
+created none) so the loader can wm_destroy it — otherwise aborted loads
+would leak window records.
+The entry must not call wm_show/wm_hide/wm_front, spawn tasks, or draw.
+After entry returns, the program is pure event-driven code: its W_PAINT /
+W_ONKEY / W_ONCLICK procs run under the gfx lock per §11.
+
+### 20.3 The jop API jump table (kernel.asm, fixed offsets)
+
+At KERNEL_SEG:0x0010, 4-byte slots, each `jmp near target` + 1 pad byte.
+Programs `call` these absolute offsets; register contracts are the target
+routines' own (§5, §6, §8, §11). Pinned layout:
+
+```
+0x0010 gfx_lock        0x0034 gfx_xor_fill    0x0058 wm_obscured
+0x0014 gfx_unlock      0x0038 font_char       0x005C task_yield
+0x0018 gfx_pixel       0x003C font_str        0x0060 task_sleep
+0x001C gfx_hline       0x0040 font_width      0x0064 japi_get_ticks
+0x0020 gfx_vline       0x0044 wm_create       0x0068 japi_set_color
+0x0024 gfx_fill        0x0048 wm_show         0x006C japi_mouse
+0x0028 gfx_frame       0x004C wm_hide         0x0070 japi_srand
+0x002C gfx_fill_gray   0x0050 wm_front        0x0074 japi_rand
+0x0030 gfx_xor_rect    0x0054 wm_content
+```
+
+### 20.4 japi helpers (kernel.asm)
+
+| symbol           | contract                                            |
+|------------------|------------------------------------------------------|
+| `japi_get_ticks` | out AX = [ticks]                                     |
+| `japi_set_color` | in AL → [gfx_color]                                  |
+| `japi_mouse`     | out CX=[mouse_x], DX=[mouse_y], AL=[mouse_btn]       |
+| `japi_srand`     | in AX → [japi_seed]                                  |
+| `japi_rand`      | seed = seed×25173 + 13849; out AX = seed             |
+
+### 20.5 apps/jopapi.inc — the program-side SDK
+
+NASM include used by packages (not by the kernel). Provides: `JAPI_*` equs
+for every table offset (§20.3), the window-record W_* / template offsets
+(§11), color constants, and a `JOP_HEADER 'NAME', entry_label` macro that
+emits the §20.2 header (image size via a forward-referenced
+`equ` to an end label the program declares with `JOP_BSS n` /
+end-of-file macro — exact macro design is the implementer's, but a package
+source must be able to consist of just `%include "jopapi.inc"`, the header
+macro, code/data, and an end macro).
+
+## 21. loader.inc
+
+State (.bss, cleared by `loader_init`): `ld_pending` (word: 0 = none, else
+directory index+1 — set by files.inc, consumed by ui.inc §13), `ld_appwin`
+(word: window ptr of the resident program, 0 = none), `ld_status` (byte:
+0 ok, 1 disk error, 2 not a valid package, 3 too large, 4 entry aborted).
+
+`loader_run` — in AX = directory index. UI task only, gfx lock not held on
+entry. Steps:
+1. Validate the entry: index < [disk_nfiles], type = 1, size ≤ APP_MAX_SIZE
+   and non-zero → else status 2, step 7.
+2. If `[ld_appwin]` non-zero: gfx_lock, `wm_destroy` it, gfx_unlock, zero
+   it. (Must happen before the read clobbers the region the old program's
+   procs live in.)
+3. `disk_read` the file — start LBA and ceil(size/512) sectors — into
+   ES=KERNEL_SEG, BX=APP_LOAD_OFF. CF → status 1, step 7.
+4. Validate the header (§20.2): magic, version, load offset, image+bss ≤
+   APP_MAX_SIZE, entry in range → else status 2, step 7.
+5. Zero bss-size bytes at load+image size.
+6. Near-call the entry. CF → status 4. Else: store BX in `ld_appwin`,
+   gfx_lock, `wm_show` BX, gfx_unlock, status 0.
+7. Set `[ld_status]`, call `files_refresh` (§22).
+
+## 22. files.inc — the Disk window (file manager)
+
+Built-in window, record created hidden by `files_init` (from kmain), title
+"Disk", 320×200 at (110,80). No background task. State: `fm_sel` (word,
+selected row, 0xFFFF = none), `fm_clkt` (word, [ticks] at last row click),
+`fm_mounted` (byte).
+
+Content layout (coords relative to content top-left): header line at
+(6,6): `"Drive B:  N files"` (drive letter from [disk_drive]) or, when the
+last mount failed, `"No jop disk in drive B:"`. Status line from
+`[ld_status]` at (6,182-TITLE_H): e.g. "", "Disk error", "Bad package",
+"Too large", "Load failed" — plus "Loading..." while a load is pending.
+File rows: 12 px tall, first at y=22; name at x=6, size in bytes
+right-aligned at the content's right edge minus 6. At most 11 rows shown
+(entries beyond that are mounted but not listed — fine for v1; 11 keeps
+the last row clear of the status line at y=164). Selected
+row: drawn inverted (black bar, white text; `gfx_xor_fill` over the row
+after drawing is acceptable).
+
+Behaviour:
+- `files_open` (from CMD_FILES dispatch, no lock held): if `[fm_mounted]`
+  = 0 → `disk_mount` DL=[disk_drive] (initial drive: B) and set fm_mounted
+  (even on failure — the window then shows the failure line; 'r' retries).
+  Then gfx_lock, wm_show, gfx_unlock.
+- `W_ONCLICK` (lock held): map DX to a row; row ≥ [disk_nfiles] → clear
+  selection, repaint content. Else if row == fm_sel and [ticks]−fm_clkt < 9
+  → double-click: set [ld_pending] = row+1 (ui.inc runs the loader after
+  the lock drops), repaint content (shows "Loading..."). Else select row,
+  stamp fm_clkt, repaint content. Repaint = white-fill own content + redraw
+  (like Note Pad's onkey; the caller already holds the lock).
+- `W_ONKEY` (lock held): 'a'/'A' → drive 0, 'b'/'B' → drive 1, 'r'/'R' →
+  same drive; all three: `disk_mount`, clear selection, repaint content.
+  Enter (13) with a valid selection → same as double-click.
+  (disk_mount under the gfx lock stalls painters ~a second; acceptable.)
+- `files_refresh` (called by loader_run, no lock held): acquire gfx_lock,
+  and if the window is visible call `wm_paint_all`; unlock. It must be a
+  full repaint, not content-only: loader_run calls it right after wm_show
+  raised the loaded program's window, which may overlap the Disk window —
+  a content-only repaint would paint over the new front window.
+
+## 23. Minesweeper — the first software package (apps/mines/mines.asm)
+
+Not kernel code: a .jop package built with jopapi.inc, org 0xA000, all
+services via the API table. Label prefix `mn_`. Everything below is
+content-relative; the procs fetch the content origin via `wm_content`
+(JAPI) each call.
+
+- Window: "Minesweeper", 146×183 at (240,120) → content 144×164.
+- Board: 9×9 cells, 16×16 px each, at content (0,20). 10 mines.
+- Status strip (content rows 0..19, light gray): mines-remaining counter
+  "10" minus flags placed (may go negative → clamp display at 0) at left;
+  center text: playing → "F=FLAG" when flag mode is ON else blank;
+  lost → "BOOM! N=NEW"; won → "YOU WIN!". Keep every string ≤ 17 chars.
+- Cell rendering, 16 colors, Mac-meets-Win31: covered = light gray face,
+  2px white bevel top/left, 2px dark gray bevel bottom/right; flag = red
+  (12) pennant + black mast on a covered cell; revealed = white face, 1px
+  dark gray grid border, centered colored digit; digit colors:
+  1=1 (blue), 2=2 (green), 3=4 (red), 4=5 (magenta), 5=6 (brown),
+  6=3 (cyan), 7=0 (black), 8=8 (dark gray). Mine = black disc with spokes;
+  the one you clicked sits on a light-red (12) cell, others (shown on
+  loss) on light gray. Wrong flags on loss: mine + black X.
+- Input: W_ONCLICK reveals (or flags, in flag mode) the cell under the
+  click. W_ONKEY: 'f'/'F' toggles flag mode (repaint status strip),
+  'n'/'N' new game (repaint content). Space = reveal is not required.
+- Rules: first reveal is always safe — mines are placed lazily on the
+  first reveal (japi_srand with japi_get_ticks, then japi_rand), excluding
+  the clicked cell. Reveal of a 0-count cell flood-fills neighbours
+  (iterative, explicit queue in the package's own buffer — no recursion;
+  stack budget is the UI task's 1536 bytes). Flags block reveal. Reveal of
+  a mine → lost (reveal all mines, mark wrong flags). All 71 safe cells
+  revealed → won. After win/lose, clicks are dead until 'N'.
+- Handlers repaint only what changed (single cells; whole board on
+  new-game/win/lose), Note-Pad-style, under the caller's lock.
+
+## 24. Packaging toolchain (host side)
+
+Python 3, stdlib only, both tools executable with clear argparse `--help`
+and non-zero exit + stderr message on any validation failure.
+
+- `tools/jopkg.py IN.bin -o OUT.jop` — package validator/stamper. Reads a
+  NASM flat binary that already carries the §20.2 header; verifies magic,
+  version, load offset 0xA000, entry range, image size field == actual
+  file size, image+bss ≤ 0x5000, name printable; prints a one-line summary
+  (name, entry, image/bss sizes) and copies to OUT.jop.
+- `tools/jopdisk.py -o OUT.img --size {1440,360} PKG.jop ...` — builds a
+  jopfs floppy (§19): superblock geometry 18/2 or 9/2, directory entries
+  named from each package's header name field, data from LBA 3, sector-
+  aligned. Fails if >32 files or the disk overflows. Total image size:
+  1474560 or 368640 bytes.
+- Makefile: `build/mines.bin` from `apps/mines/mines.asm`
+  (`nasm -f bin -w+error -I apps/`), `build/mines.jop` via jopkg.py,
+  `build/apps.img` (1440) + `build/apps360.img` (360) via jopdisk.py; all
+  built by `all`. `run`/`debug`/`test` attach build/apps.img as floppy
+  index 1. 86Box's fdd_02 gets apps360.img (best-effort config keys).

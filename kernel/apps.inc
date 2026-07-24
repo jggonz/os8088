@@ -73,11 +73,11 @@ apps_init:
     pop ax
     ret
 
-; --- window templates: {x, y, w, h, title, paint, onkey} words ---------------
-app_tpl_about:  dw 170, 140, 300, 120, app_ttl_about,  app_about_paint,  0
-app_tpl_note:   dw  60,  60, 260, 180, app_ttl_note,   app_note_paint,   app_note_onkey
-app_tpl_clock:  dw 450,  80, 130,  60, app_ttl_clock,  app_clock_paint,  0
-app_tpl_bounce: dw 440, 260, 150, 130, app_ttl_bounce, app_bounce_paint, 0
+; --- window templates: {x, y, w, h, title, paint, onkey, onclick} words ------
+app_tpl_about:  dw 170, 140, 300, 120, app_ttl_about,  app_about_paint,  0, 0
+app_tpl_note:   dw  60,  60, 260, 180, app_ttl_note,   app_note_paint,   app_note_onkey, 0
+app_tpl_clock:  dw 450,  80, 130,  60, app_ttl_clock,  app_clock_paint,  0, 0
+app_tpl_bounce: dw 440, 260, 150, 130, app_ttl_bounce, app_bounce_paint, 0, 0
 
 app_ttl_about:  db 'About jop', 0
 app_ttl_note:   db 'Note Pad', 0

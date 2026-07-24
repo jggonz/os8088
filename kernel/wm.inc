@@ -3,15 +3,16 @@
 ;
 ; Window records, z-order, frame drawing, hit testing, paint-all. Every used
 ; window is always present in wm_zord (index 0 = backmost); membership is set
-; at wm_create and never removed - wm_hide only clears the visible bit, and
-; wm_show/wm_front only reorder. The visible flag alone decides whether a
-; window is painted, hit-tested, or counted by wm_top/wm_obscured.
+; at wm_create and removed only by wm_destroy - wm_hide only clears the
+; visible bit, and wm_show/wm_front only reorder. The visible flag alone
+; decides whether a window is painted, hit-tested, or counted by
+; wm_top/wm_obscured.
 ;
 ; All drawing here goes through the vga12/font primitives with [gfx_color];
 ; every caller of a repainting routine already holds the gfx lock (SPEC 1.6).
 ; =============================================================================
 
-; --- window record, 16 bytes, fixed offsets (SPEC.md 11) ---------------------
+; --- window record, 18 bytes, fixed offsets (SPEC.md 11) ---------------------
 W_FLAGS equ 0                   ; word: bit0 = used, bit1 = visible
 W_X     equ 2                   ; word, frame left (screen coords)
 W_Y     equ 4                   ; word, frame top (below menu bar: y >= MBAR_H)
@@ -20,8 +21,11 @@ W_H     equ 8                   ; word, frame height (includes title bar)
 W_TITLE equ 10                  ; word: near ptr to NUL title string
 W_PAINT equ 12                  ; word: near ptr, in: SI = window ptr
 W_ONKEY equ 14                  ; word: near ptr or 0; AL=ascii AH=scan SI=win
-WIN_SIZE equ 16
-MAX_WIN  equ 6
+W_ONCLICK equ 16                ; word: near ptr or 0; CX=x DX=y SI=win, called
+                                ; under the gfx lock for content clicks on the
+                                ; front window (SPEC.md 13)
+WIN_SIZE equ 18                 ; NOT a power of two: never shift, multiply
+MAX_WIN  equ 8
 
 ; -----------------------------------------------------------------------------
 ; wm_init - zero the window table, z-order array and count
@@ -47,11 +51,13 @@ wm_init:
 
 ; -----------------------------------------------------------------------------
 ; wm_create - allocate a window from a template
-; in:  SI -> 14-byte template {x, y, w, h, title, paint, onkey} (7 words)
+; in:  SI -> 16-byte template {x, y, w, h, title, paint, onkey, onclick}
+;      (8 words)
 ; out: BX = window ptr, CF clear; CF set (BX = 0) if the table is full
 ;
 ; The window is created hidden (used bit only); its index is appended to
-; wm_zord - frontmost position - and wm_zn is incremented.
+; wm_zord - frontmost position - and wm_zn is incremented. Does not repaint,
+; so it is callable without the gfx lock (SPEC.md 11).
 ; -----------------------------------------------------------------------------
 wm_create:
     push ax
@@ -74,12 +80,12 @@ wm_create:
     pop es
     mov word [bx+W_FLAGS], 1    ; used, not visible
     lea di, [bx+W_X]
-    mov cx, 7
-    rep movsw                   ; copy the template into x..onkey
+    mov cx, 8
+    rep movsw                   ; copy the template into x..onclick
     mov ax, bx                  ; index = (ptr - wm_wins) / WIN_SIZE
     sub ax, wm_wins
-    mov cl, 4
-    shr ax, cl
+    mov cl, WIN_SIZE
+    div cl                      ; AL = index (AH = 0: ptr is record-aligned)
     mov ch, 0
     mov cl, [wm_zn]
     mov di, wm_zord
@@ -90,6 +96,51 @@ wm_create:
 .out:
     pop es
     pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_destroy - free a window record and repaint everything
+; in:  BX = window ptr (caller holds the gfx lock)
+; out: nothing (all registers preserved)
+;
+; Clears W_FLAGS (used + visible), removes the window's index from wm_zord
+; (compacting the byte array over it, decrementing wm_zn), then repaints all.
+; The record slot becomes reusable by wm_create.
+; -----------------------------------------------------------------------------
+wm_destroy:
+    push ax
+    push cx
+    push si
+    mov word [bx+W_FLAGS], 0    ; free the record slot
+    mov ax, bx                  ; AL = window index
+    sub ax, wm_wins
+    mov cl, WIN_SIZE
+    div cl                      ; AL = index (AH = 0: ptr is record-aligned)
+    mov ch, 0
+    mov cl, [wm_zn]
+    jcxz .paint                 ; empty z-order: nothing to remove
+    mov si, wm_zord
+.find:
+    cmp [si], al
+    je .remove
+    inc si
+    loop .find
+    jmp .paint                  ; not in z-order (cannot happen when used)
+.remove:
+    dec cx                      ; entries above us; compact them down a slot
+    jcxz .count
+.shift:
+    mov ah, [si+1]
+    mov [si], ah
+    inc si
+    loop .shift
+.count:
+    dec byte [wm_zn]
+.paint:
+    call wm_paint_all
     pop si
     pop cx
     pop ax
@@ -124,8 +175,8 @@ wm_front:
     push si
     mov ax, bx                  ; AL = window index
     sub ax, wm_wins
-    mov cl, 4
-    shr ax, cl
+    mov cl, WIN_SIZE
+    div cl                      ; AL = index (AH = 0: ptr is record-aligned)
     mov ch, 0
     mov cl, [wm_zn]
     jcxz .paint                 ; empty z-order: nothing to reorder
@@ -340,8 +391,8 @@ wm_obscured:
     push di
     mov ax, bx                  ; AL = our index
     sub ax, wm_wins
-    mov cl, 4
-    shr ax, cl
+    mov cl, WIN_SIZE
+    div cl                      ; AL = index (AH = 0: ptr is record-aligned)
     mov ch, 0
     mov cl, [wm_zn]
     mov si, wm_zord
@@ -404,11 +455,13 @@ wm_obscured:
 wm_idx2ptr:
     push ax
     push cx
-    mov ah, 0
+    mov ah, 0                   ; index*18 = index*16 + index*2 (8086-legal:
+    mov bx, ax                  ; no shift-by-imm other than 1)
     mov cl, 4
-    shl ax, cl
-    add ax, wm_wins
-    mov bx, ax
+    shl ax, cl                  ; AX = index*16
+    shl bx, 1                   ; BX = index*2
+    add bx, ax
+    add bx, wm_wins
     pop cx
     pop ax
     ret
@@ -578,7 +631,7 @@ wm_draw_win:
 ; so these three must stay contiguous and in this order)
 ; -----------------------------------------------------------------------------
 section .bss
-wm_wins:    resb MAX_WIN * WIN_SIZE ; 6 windows x 16 bytes
+wm_wins:    resb MAX_WIN * WIN_SIZE ; 8 windows x 18 bytes
 wm_zord:    resb MAX_WIN            ; window indices, [0] = backmost
 wm_zn:      resb 1                  ; entries in wm_zord
 section .text

@@ -2,12 +2,15 @@
 ; jop - ui.inc
 ;
 ; The UI task (SPEC.md 13): task 0's forever-loop. Each pass polls the BIOS
-; keyboard, drains one event from the system queue, and yields. Mouse-downs
-; in the menu bar run menu_track and dispatch the returned CMD_*; mouse-downs
-; on windows close, raise, or drag them. Every wm_* call that repaints is
-; made under the gfx lock, and the drag loop's binding rule is honored: the
-; lock is only ever released while the XOR outline is erased, and the release
-; path never re-takes the lock it already holds (it is non-reentrant, SPEC 7).
+; keyboard, drains one event from the system queue, runs any pending package
+; load (outside the gfx lock - loader_run manages its own locking), and
+; yields. Mouse-downs in the menu bar run menu_track and dispatch the
+; returned CMD_*; mouse-downs on windows close, raise, or drag them; content
+; clicks on the front window feed its W_ONCLICK under the lock. Every wm_*
+; call that repaints is made under the gfx lock, and the drag loop's binding
+; rule is honored: the lock is only ever released while the XOR outline is
+; erased, and the release path never re-takes the lock it already holds (it
+; is non-reentrant, SPEC 7).
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -62,14 +65,23 @@ ui_task:
     cmp al, 1
     je .title_bar
 
-    ; AL = 0: content. Raise a background window; the front one is ignored.
+    ; AL = 0: content. Raise a background window; the front one gets its
+    ; W_ONCLICK (if any) under the gfx lock, like W_ONKEY above.
     mov si, bx                  ; keep the hit window; wm_top returns in BX
     call wm_top
     cmp bx, si
-    je .yield                   ; already frontmost
+    je .content_front           ; already frontmost: feed the click handler
     mov bx, si
     call gfx_lock
     call wm_front               ; raise + repaint
+    call gfx_unlock
+    jmp .yield
+
+.content_front:
+    cmp word [si + W_ONCLICK], 0
+    je .yield                   ; window does not take clicks
+    call gfx_lock               ; W_ONCLICK contract: CX=x, DX=y, SI=win
+    call [si + W_ONCLICK]       ; (CX/DX survived wm_hit/wm_top/gfx_lock)
     call gfx_unlock
     jmp .yield
 
@@ -91,8 +103,17 @@ ui_task:
 .drag:
     call ui_drag                ; in: BX = window, CX/DX = mousedown x/y
 
-    ; --- 3. give everyone else a slice ----------------------------------------
+    ; --- 3. pending package load (SPEC.md 13/21): OUTSIDE the gfx lock --------
 .yield:
+    cmp word [ld_pending], 0    ; set by files.inc's click handler
+    je .idle
+    mov ax, [ld_pending]        ; stored as directory index + 1
+    dec ax
+    mov word [ld_pending], 0    ; consume before running, not after
+    call loader_run             ; in: AX = index; does its own locking
+
+    ; --- 4. give everyone else a slice ----------------------------------------
+.idle:
     call task_yield
     jmp .loop
 
@@ -238,6 +259,8 @@ ui_dispatch:
     je .clock
     cmp ax, CMD_BOUNCE
     je .bounce
+    cmp ax, CMD_FILES
+    je .files
     cmp ax, CMD_CLOSE
     je .close
     cmp ax, CMD_REBOOT
@@ -261,6 +284,10 @@ ui_dispatch:
     call wm_show                ; in: BX; shows + raises + repaints
     call gfx_unlock
     ret
+
+.files:
+    call files_open             ; mounts + shows the Disk window; it takes the
+    ret                         ; gfx lock itself (SPEC 22) - none held here
 
 .close:
     call gfx_lock
