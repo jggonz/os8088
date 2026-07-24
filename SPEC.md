@@ -111,6 +111,7 @@ APP_MAX_SIZE equ 0x5000      ; image + bss budget, 0xA000..0xEFFF
 | `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22) |
 | `kernel/icons.inc`  | 1-bit icon format, draw routine, built-in library (§25) |
 | `kernel/desk.inc`   | desktop drive icons: detect, paint, click/open (§26)    |
+| `kernel/taskmgr.inc`| Task Manager window: CPU bar graph, RAM usage bar/text (§28) |
 
 `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` remain in the
 tree but are **no longer included**; the GUI replaces the text shell.
@@ -229,6 +230,15 @@ window.
   (`mov ax,[ticks]` / `sub ax,[t0]` / `cmp ax,n`).
 - `sched_unhook` — restore the original int 08h and int 0Ch vectors (calls
   `mouse_unhook` too) — used before reboot.
+- `sch_cpu_ticks` — public word array, `MAX_TASKS` entries, .bss. Coarse
+  CPU-time attribution for the round-robin scheduler: `sch_isr` increments
+  `sch_cpu_ticks[sch_cur]` immediately after `inc word [ticks]` (BEFORE the
+  wake-scan and switch — `sch_cur` still names the task that ran for the
+  interval that just elapsed). Zeroed by `sched_init` alongside the task
+  table. Wraps at 65536 exactly like `ticks`; consumers must use the same
+  wrap-safe subtraction idiom (current = value; delta = current − last;
+  last = current), never compare magnitude. Consumed by `taskmgr.inc` (§28)
+  to compute a live per-slot CPU percentage.
 
 ## 9. mouse.inc — serial Microsoft mouse + cursor
 
@@ -355,20 +365,23 @@ is the one place bitmap data is hand-made). Others are text titles.
 ; menu table (menu.inc data):
 ; per menu: { titleptr (0 = apple glyph), itemsptr, item count, cmd base }
 ; items: array of near ptrs to NUL strings
-CMD_ABOUT  equ 1
-CMD_NOTE   equ 2
-CMD_CLOCK  equ 3
-CMD_BOUNCE equ 4
-CMD_FILES  equ 5
-CMD_CLOSE  equ 6
-CMD_REBOOT equ 7
+CMD_ABOUT    equ 1
+CMD_NOTE     equ 2
+CMD_CLOCK    equ 3
+CMD_BOUNCE   equ 4
+CMD_FILES    equ 5
+CMD_CLOSE    equ 6
+CMD_TASKMGR  equ 7
+CMD_REBOOT   equ 8
 ```
 
 Menus: **Apple**: "About jop..." (CMD_ABOUT). **File**: "Note Pad"
 (CMD_NOTE), "Clock" (CMD_CLOCK), "Bounce" (CMD_BOUNCE), "Disk"
-(CMD_FILES), "Close Window" (CMD_CLOSE). **Special**: "Restart"
-(CMD_REBOOT). (CMD_CLOSE/CMD_REBOOT were renumbered when Disk was
-inserted — cmd = menu base + item index must still hold.)
+(CMD_FILES), "Close Window" (CMD_CLOSE). **Special**: "Task Manager"
+(CMD_TASKMGR), "Restart" (CMD_REBOOT). (CMD_CLOSE/CMD_REBOOT were
+renumbered when Disk was inserted; CMD_TASKMGR/CMD_REBOOT were renumbered
+again when Task Manager was inserted — cmd = menu base + item index must
+still hold.)
 
 | symbol          | contract                                                   |
 |-----------------|-------------------------------------------------------------|
@@ -417,12 +430,12 @@ Loop forever:
    loader_run manages its own locking.
 4. `task_yield`.
 
-Command dispatch: CMD_ABOUT/NOTE/CLOCK/BOUNCE → `wm_show` the corresponding
-window (created at boot, initially hidden or shown per §15). CMD_FILES →
-call `files_open` (§22; same position in the dispatch flow as the wm_show
-cases — files_open does its own locking). CMD_CLOSE → `wm_hide` frontmost.
-CMD_REBOOT → gfx_lock (never released), `vga_text`, `sched_unhook`,
-`int 0x19`.
+Command dispatch: CMD_ABOUT/NOTE/CLOCK/BOUNCE/TASKMGR → `wm_show` the
+corresponding window (created at boot, initially hidden or shown per §15;
+Task Manager per §28 is created hidden). CMD_FILES → call `files_open`
+(§22; same position in the dispatch flow as the wm_show cases — files_open
+does its own locking). CMD_CLOSE → `wm_hide` frontmost. CMD_REBOOT →
+gfx_lock (never released), `vga_text`, `sched_unhook`, `int 0x19`.
 
 All wm_* calls that repaint are made under gfx_lock by the UI task.
 
@@ -479,10 +492,13 @@ pinned offsets. kernel.asm also owns the tiny japi helper routines
 
 kmain: set segments/stack (SP=0xFFFE), `sti`, `cld`, then:
 `sched_init` → `evq_init` → `vga_mode12` → `font_init` → `wm_init` →
-`mouse_init` → `desk_init` → `apps_init` → `files_init` → `loader_init` →
-gfx_lock → `wm_paint_all` → gfx_unlock → `cursor_show` → jump into
-`ui_task` (task 0 never returns). Include order appends `icons.inc` and
-`desk.inc` after `files.inc`.
+`mouse_init` → `desk_init` → `apps_init` → `tm_init` → `files_init` →
+`loader_init` → gfx_lock → `wm_paint_all` → gfx_unlock → `cursor_show` →
+jump into `ui_task` (task 0 never returns). `tm_init` (§28) runs right
+after `apps_init` — it spawns the fourth and last task slot, so it must run
+after Clock/Bounce are spawned and before anything else that might need a
+free slot. Include order appends `icons.inc`, `desk.inc`, then
+`taskmgr.inc` after `files.inc`.
 
 End of file (after all `%include` lines, with `section .text` in effect):
 
@@ -540,6 +556,9 @@ loaded-program region, §20.)
    glyph, HELLO with the generic application icon — and the Refresh
    button re-reads a swapped disk (QMP `change` + Refresh shows the new
    directory without rebooting).
+10. Special > Task Manager opens a window with a live bar-graph of CPU
+    usage across all 4 task slots and a RAM usage bar/text, updating
+    roughly once a second, while Clock/Bounce keep running.
 
 ## 18. disk.inc — floppy reads (BIOS int 13h)
 
@@ -880,3 +899,76 @@ Deliberately minimal, to prove the SDK surface and the no-icon fallback:
 `ico_app16` for it), one window "Hello" 240×90 at (200,150), paint =
 two centered lines: "Hello from a" / ".jop package!", no onkey, no
 onclick, no bss. Entry: wm_create, return BX/CF. Prefix `hl_`.
+
+## 28. taskmgr.inc — Task Manager window
+
+Built-in window (module prefix `tm_`), **not** a loadable `.jop` package —
+it ships in the kernel image, created hidden at boot by `tm_init` like
+About/Disk, shown via Special > Task Manager (`CMD_TASKMGR`, §12/13). No
+`W_ONKEY`/`W_ONCLICK` (view-only, like About).
+
+- Window: "Task Manager", 240×210 at (170,250) → content ~238×191.
+- `tm_init` (called from kmain right after `apps_init`, before
+  `files_init`, §15): reads total conventional RAM once via BIOS `int 12h`
+  (out AX = KB; 0 = unknown — same boot-time-hardware-query precedent as
+  `desk_init`'s `int 11h`, §26) into public word `tm_ram_total_kb`; zeroes
+  `tm_cpu_last` (MAX_TASKS words), `tm_ticks_last` (word), `tm_pct`
+  (MAX_TASKS bytes, last-computed CPU percentage per slot) — all before
+  `task_spawn`, since the spawned task runs immediately (apps_init's
+  rationale, §14); then `wm_create`s the window and `task_spawn`s
+  `tm_task`, which lands in task slot 3 — MAX_TASKS is exactly 4 and
+  exactly 3 slots (0 = boot/UI, 1 = Clock, 2 = Bounce) are used before
+  this, by boot-pinned spawn order (apps_init spawns Clock then Bounce);
+  this fills the table exactly and must not be exceeded.
+- **Task-slot names are pinned by that same boot order** (the same
+  convention as jopfs directory order, §4): slot 0 = "UI/Boot", slot 1 =
+  "Clock", slot 2 = "Bounce", slot 3 = "TaskMgr".
+- **CPU bar graph**: one row per task slot (all 4, `T_SIZE`/`T_STATE`
+  layout, §8), row top = content (4, 16 + slot·16). Label at x=4. If
+  `T_STATE` is 0 (free — should not occur once boot completes, since
+  nothing ever frees a slot): "(free)" at x=64, no bar/pct. Otherwise: a
+  100×10 1px-black-framed bar at x=64 with a white 98×8 interior, filled
+  black from the interior's left edge for `tm_pct[slot] * 98 / 100` px
+  (0 → no fill), then the percentage ("0".."100" + "%") at x=170.
+- **CPU percentage cache** (`tm_pct`): recomputed every `tm_task`
+  iteration (unconditionally, Clock's time-keeping pattern) from
+  `sch_cpu_ticks` (§8) deltas, wrap-safe subtraction idiom: `delta_t =
+  [ticks] − tm_ticks_last`; per slot, `delta_i = sch_cpu_ticks[slot] −
+  tm_cpu_last[slot]`; if `delta_t != 0`, `tm_pct[slot] = delta_i * 100 /
+  delta_t` (fits a word — `delta_i <= delta_t`, bounded by the ~18-tick
+  sleep interval); if `delta_t == 0`, `tm_pct[]` is left unchanged
+  (defensive div-by-zero guard, shouldn't happen since `task_sleep 18`
+  always elapses real ticks).
+- **Memory bar**: 200×14 at content (4, 96), 1px black frame. If
+  `tm_ram_total_kb` is 0 ("unknown" — the BIOS contract isn't ironclad):
+  frame only, then "RAM: unknown" at content (4, 114). Otherwise: white
+  interior fill, then `kernel_kb = (KTEXT_SIZE + KBSS_SIZE + 511) / 1024`
+  (rounded up; a forward reference to kernel.asm's end-of-file `equ`s,
+  resolved in a later NASM pass — the same pattern `JOP_HEADER` relies on
+  for its image-size field, §20.5) and `app_kb = 0` if `[ld_appwin] == 0`
+  else `(APP_MAX_SIZE + 1023) / 1024`; segment widths `kernel_w =
+  kernel_kb * 197 / tm_ram_total_kb`, `app_w = app_kb * 197 /
+  tm_ram_total_kb` (197 = the interior's usable px budget for the ratio
+  math — segments start 1px in from the frame, so a fully-used bar leaves
+  a 1px white margin before the frame); kernel segment (`CDGRAY`) drawn
+  first at the interior's left edge, then the app segment (color 1, blue)
+  immediately after (0 width → skip either), remainder stays white
+  (free); the 1px black frame is (re)drawn **last** so it stays crisp
+  over the segment fills. Two text lines follow: content (4, 114)
+  `"Kernel NNK  App NNK"` (or `"App none"` with no resident package) and
+  content (4, 124) `"Free NNNK / NNNK total"` (`free_kb = tm_ram_total_kb
+  − kernel_kb − app_kb`, clamped at 0). Decimal strings are built with
+  `fm_utoa` (files.inc, §22 — called directly, flat namespace, its
+  contract fits verbatim) and concatenated with `fm_scat`.
+- **Redraw cadence**: `tm_task` (background task, spawned by `tm_init`):
+  loop { `task_sleep` ~18 ticks (~1s); `tm_recalc` (the percentage
+  compute above) unconditionally; then, under `gfx_lock`, re-check the
+  window is visible and not `wm_obscured` (Clock/Bounce pattern, §14) —
+  if it fails, skip the draw (not the compute); otherwise white-fill the
+  window's whole content rect and call `tm_paint` — Note Pad's
+  onkey-style "white-fill then re-run the paint proc" redraw (§14),
+  chosen over Clock's minimal-rect approach because this window's content
+  is several bars, not one small string, and a 1s full-content redraw is
+  cheap while keeping the drawing logic single-sourced in `tm_paint` }.
+  `tm_paint` is also the window's `W_PAINT` (called by `wm_paint_all`)
+  and must not lock, block, or spawn (§11).

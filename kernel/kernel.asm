@@ -119,6 +119,8 @@ kmain:
     call mouse_init             ; IRQ4 live; cursor stays hidden until shown
     call desk_init              ; count floppy drives for the desktop icons
     call apps_init              ; windows + background tasks
+    call tm_init                 ; Task Manager window (hidden until Special
+                                 ; > Task Manager); its own background task
     call files_init             ; Disk window (hidden until File > Disk)
     call loader_init            ; package loader state
 
@@ -185,6 +187,7 @@ japi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "files.inc"
 %include "icons.inc"
 %include "desk.inc"
+%include "taskmgr.inc"
 
 ; =============================================================================
 ; Size guard: image + bss must stay below APP_LOAD_OFF (0xA000) - everything

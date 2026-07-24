@@ -57,6 +57,13 @@ sched_init:
     add bx, T_SIZE
     loop .clear
 
+    mov bx, sch_cpu_ticks        ; zero the per-slot CPU-tick counters (§8)
+    mov cx, MAX_TASKS
+.clearcpu:
+    mov word [bx], 0
+    add bx, 2
+    loop .clearcpu
+
     mov byte [sch_cur], 0
     mov byte [sch_lock], 0
     mov word [ticks], 0
@@ -246,9 +253,11 @@ task_sleep:
 ; sch_isr - int 08h handler (PIT, ~18.2 Hz)
 ;
 ; Chains to the BIOS tick FIRST (it maintains its own count and sends the
-; EOI - we must not), then bumps [ticks], wakes due sleepers, and switches
-; round-robin unless sch_lock is held. Runs with IF=0 throughout; calls no
-; BIOS service beyond the chain; never sti.
+; EOI - we must not), then bumps [ticks], credits the elapsed tick to
+; sch_cpu_ticks[sch_cur] (still naming the task that ran for the interval
+; that just elapsed), wakes due sleepers, and switches round-robin unless
+; sch_lock is held. Runs with IF=0 throughout; calls no BIOS service beyond
+; the chain; never sti.
 ;
 ; in:       hardware interrupt (any task, any DS/ES)
 ; out:      via iret, possibly into a different task
@@ -270,6 +279,11 @@ sch_isr:
     call far [sch_old08]
 
     inc word [ticks]
+
+    xor bh, bh                  ; attribute the elapsed tick to whoever was
+    mov bl, [sch_cur]           ; running (taskmgr.inc's CPU-time cache, §8):
+    shl bx, 1                   ; sch_cpu_ticks[sch_cur]++ - BX is free here,
+    inc word [bx+sch_cpu_ticks] ; the wake-scan below sets it up fresh
 
     mov dx, [ticks]             ; wake sleepers whose deadline has passed
     mov bx, sch_tasks
@@ -356,5 +370,12 @@ sch_old08:  resb 4                      ; saved BIOS int 08h vector (off:seg)
 ticks:      resw 1                      ; public tick count, wraps at 65536
 sch_cur:    resb 1                      ; index of the running task
 sch_lock:   resb 1                      ; non-zero: ISR counts but won't switch
+sch_cpu_ticks: resw MAX_TASKS           ; public: per-slot count of PIT ticks
+                                        ; where that slot was [sch_cur] when
+                                        ; the tick landed (coarse CPU-time
+                                        ; attribution for round-robin - §8).
+                                        ; Wraps at 65536 like ticks; consumers
+                                        ; must subtract (current-last), never
+                                        ; compare magnitude.
 
 section .text
