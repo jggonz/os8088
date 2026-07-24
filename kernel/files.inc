@@ -3,22 +3,32 @@
 ;
 ; The Disk window - a minimal file manager for the jopfs data floppy
 ; (SPEC.md 22). files_init creates the window hidden at boot; CMD_FILES
-; dispatch calls files_open, which mounts the disk on first open and shows
-; the window. Rows list the directory (name + size); a double-click (same
-; row twice within 9 ticks) posts the entry to [ld_pending] - ui.inc runs
-; loader_run after the lock drops, and loader_run calls files_refresh with
-; the result in [ld_status]. The paint/onkey/onclick procs run with the gfx
-; lock already held by the caller (SPEC.md 11) and never lock, block or
-; spawn; files_open / files_refresh take the lock themselves.
+; dispatch calls files_open and desk_click calls files_open_drive - both
+; ALWAYS remount (that is the disk-swap story: a swapped disk must never
+; show stale contents) and show the window. Rows list the directory (icon +
+; name + size); a double-click (same row twice within 9 ticks) posts the
+; entry to [ld_pending] - ui.inc runs loader_run after the lock drops, and
+; loader_run calls files_refresh with the result in [ld_status]. A Refresh
+; button at the top right remounts the current drive in place. The
+; paint/onkey/onclick procs run with the gfx lock already held by the
+; caller (SPEC.md 11) and never lock, block or spawn; files_open /
+; files_open_drive / files_refresh take the lock themselves.
 ; =============================================================================
 
 ; --- layout (content-relative, SPEC.md 22) -----------------------------------
-FM_ROW_H    equ 12              ; file row height, px
+FM_ROW_H    equ 16              ; file row height, px
 FM_ROW_Y0   equ 22              ; first row top
-FM_MAX_ROWS equ 11              ; rows shown (entries beyond are not listed);
-                                ; 11 keeps the last row band (ends at y=153)
+FM_MAX_ROWS equ 8               ; rows shown (entries beyond are not listed);
+                                ; 8 keeps the last row band (ends at y=149)
                                 ; clear of the status line at y=164
 FM_DBLCLK   equ 9               ; double-click window, ticks
+
+; Refresh button rect, content-relative: content_w = W_W-2 = 318, so
+; (content_w-68, 2) .. (content_w-6, 15) per SPEC.md 22.
+FM_BTN_X1   equ 250
+FM_BTN_Y1   equ 2
+FM_BTN_X2   equ 312
+FM_BTN_Y2   equ 15
 
 ; -----------------------------------------------------------------------------
 ; files_init - create the Disk window (hidden) and reset module state
@@ -33,7 +43,6 @@ files_init:
 
     mov word [fm_sel], 0xFFFF   ; no selection
     mov word [fm_clkt], 0
-    mov byte [fm_mounted], 0    ; mount happens on first files_open
     mov byte [fm_mountok], 0
 
     mov si, fm_tpl
@@ -52,6 +61,7 @@ fm_s_drive:  db 'Drive ', 0     ; header: "Drive " letter ":  " N " files"
 fm_s_colsp:  db ':  ', 0
 fm_s_files:  db ' files', 0
 fm_s_nodisk: db 'No jop disk in drive ', 0
+fm_s_refresh: db 'Refresh', 0   ; button label, 7 chars = 56 px
 
 fm_s_loading: db 'Loading...', 0
 fm_s_empty:   db 0              ; status line strings, indexed by [ld_status]
@@ -66,25 +76,38 @@ fm_stattab:   dw fm_s_empty, fm_s_dskerr, fm_s_badpkg, fm_s_toobig, fm_s_ldfail
 ; in:  nothing
 ; out: nothing
 ; clobbers: nothing (flags only)
-; First open mounts drive [disk_drive] (initial B:); the mounted flag is set
-; even on failure - the window then shows the failure line and 'r' retries
-; (SPEC.md 22). disk_mount is called OUTSIDE the gfx lock (SPEC.md 18).
+; Re-opens the current drive: AL = [disk_drive], fall into files_open_drive
+; (SPEC.md 22). Every open remounts - that is the disk-swap story.
 ; -----------------------------------------------------------------------------
 files_open:
+    push ax
+    mov al, [disk_drive]
+    jmp fm_open_body            ; files_open_drive body; pops the AX above
+
+; -----------------------------------------------------------------------------
+; files_open_drive - mount a drive and show the Disk window
+; in:  AL = drive (0 = A:, 1 = B:); no lock held on entry
+; out: nothing
+; clobbers: nothing (flags only)
+; Callers: CMD_FILES dispatch (via files_open) and desk_click (SPEC.md 26).
+; ALWAYS mounts - a swapped or newly chosen disk must never show stale
+; contents; fm_mountok records the result for the header line and the
+; selection is cleared. disk_mount runs OUTSIDE the gfx lock (SPEC.md 18).
+; -----------------------------------------------------------------------------
+files_open_drive:
+    push ax
+fm_open_body:
     push bx
     push dx
 
-    cmp byte [fm_mounted], 0
-    jne .show
-    mov dl, [disk_drive]
-    call disk_mount
+    mov dl, al
+    call disk_mount             ; sets [disk_drive]; CF = failure
     mov byte [fm_mountok], 0
     jc .fail
     mov byte [fm_mountok], 1
 .fail:
-    mov byte [fm_mounted], 1    ; even on failure (SPEC.md 22)
+    mov word [fm_sel], 0xFFFF   ; directory (re)read: selection is stale
 
-.show:
     call gfx_lock
     mov bx, [fm_win]
     call wm_show                ; visible + front + repaint all
@@ -92,6 +115,7 @@ files_open:
 
     pop dx
     pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -137,7 +161,9 @@ fm_paint:
 ; in:  CX = x, DX = y (absolute), SI = window ptr (gfx lock held by caller)
 ; out: nothing
 ; clobbers: nothing (flags only)
-; Maps the click to a row (guarding the header band y < 22 and rows past the
+; The Refresh button rect is tested FIRST (SPEC.md 22): inside it, remount
+; the current drive, update fm_mountok, clear the selection, repaint. Else
+; map the click to a row (guarding the header band y < 22 and rows past the
 ; listing); same row twice within FM_DBLCLK ticks = double-click, which posts
 ; [ld_pending] = row + 1 for ui.inc to run after the lock drops. Every path
 ; repaints own content ("Loading..." shows immediately on a double-click).
@@ -149,9 +175,30 @@ fm_onclick:
     push dx
 
     mov bx, si
-    mov cx, dx                  ; CX = click y (x is not needed)
+    push cx                     ; save click x
+    mov cx, dx                  ; CX = click y
     call wm_content             ; AX = content left, DX = content top
-    sub cx, dx
+    sub cx, dx                  ; CX = content-relative y
+    pop dx
+    sub dx, ax                  ; DX = content-relative x
+
+    ; --- Refresh button first (SPEC.md 22) ---
+    cmp dx, FM_BTN_X1
+    jl .rows
+    cmp dx, FM_BTN_X2
+    jg .rows
+    cmp cx, FM_BTN_Y1
+    jl .rows
+    cmp cx, FM_BTN_Y2
+    jg .rows
+    mov dl, [disk_drive]        ; remount the current drive in place
+    call disk_mount             ; (under the gfx lock: stalls painters
+    mov byte [fm_mountok], 0    ;  briefly; accepted by SPEC.md 22)
+    jc .clear                   ; either way: clear selection + repaint
+    mov byte [fm_mountok], 1
+    jmp .clear
+
+.rows:
     sub cx, FM_ROW_Y0           ; content-relative y, rebased to row 0
     js .clear                   ; header band: y < 22 clears the selection
     mov ax, cx
@@ -165,8 +212,9 @@ fm_onclick:
 
     cmp ax, [fm_sel]            ; second click on the selected row?
     jne .select
-    mov dx, [ticks]
-    sub dx, [fm_clkt]           ; wrap-safe (SPEC.md 8)
+    mov dx, [ui_click_t]        ; click birth tick (EV_C), not [ticks]:
+    sub dx, [fm_clkt]           ; wrap-safe (SPEC.md 8); queued clicks
+                                ; must not collapse into double-clicks
     cmp dx, FM_DBLCLK
     jae .select
     inc ax                      ; double-click: post directory index + 1
@@ -175,7 +223,7 @@ fm_onclick:
 
 .select:
     mov [fm_sel], ax
-    mov dx, [ticks]
+    mov dx, [ui_click_t]
     mov [fm_clkt], dx
     jmp .redraw
 
@@ -230,7 +278,6 @@ fm_onkey:
     jc .mounted
     mov byte [fm_mountok], 1
 .mounted:
-    mov byte [fm_mounted], 1
     mov word [fm_sel], 0xFFFF   ; directory changed: selection is stale
     jmp .redraw
 
@@ -287,17 +334,22 @@ fm_repaint:
     ret
 
 ; -----------------------------------------------------------------------------
-; fm_draw_core - draw the whole content (header, rows, selection, status)
+; fm_draw_core - draw the whole content (header, button, rows, selection,
+; status)
 ; in:  BX = window ptr (content already white, gfx lock held)
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; Header at (6,6): "Drive X:  N files", or "No jop disk in drive X:" when
-; the last mount failed. Rows are FM_ROW_H tall from FM_ROW_Y0, name at x=6
-; (copied to a local buffer to guarantee NUL termination - directory names
-; are NUL-PADDED 16-byte fields), size right-aligned at content right - 6.
-; The selected row is inverted with gfx_xor_fill after drawing. Status line
-; at content-relative (6, 182-TITLE_H) from [ld_status], or "Loading..."
-; while [ld_pending] is armed.
+; the last mount failed. Refresh button: 1px frame at FM_BTN_* with the
+; label centered inside. Rows are FM_ROW_H tall from FM_ROW_Y0: the file's
+; 16x16 icon at x=4, row top (disk_icons entry i, body-only layout via
+; icon_draw16; an all-zero entry falls back to the built-in ico_app16
+; library record via icon_draw - SPEC.md 19/25), name at x=24 (copied to a
+; local buffer to guarantee NUL termination - directory names are
+; NUL-PADDED 16-byte fields), size right-aligned at content right - 6,
+; text at row top + 4. The selected row is inverted with gfx_xor_fill
+; after drawing. Status line at content-relative (6, 182-TITLE_H) from
+; [ld_status], or "Loading..." while [ld_pending] is armed.
 ; -----------------------------------------------------------------------------
 fm_draw_core:
     push ax
@@ -352,6 +404,23 @@ fm_draw_core:
     mov si, fm_hdrbuf
     call font_str
 
+    ; --- Refresh button: 1px frame + centered label (SPEC.md 22) ---
+    mov ax, [fm_cx]
+    add ax, FM_BTN_X1
+    mov bx, [fm_cy]
+    add bx, FM_BTN_Y1
+    mov cx, [fm_cx]
+    add cx, FM_BTN_X2
+    mov dx, [fm_cy]
+    add dx, FM_BTN_Y2
+    call gfx_frame              ; color still CBLACK from the header
+    mov cx, [fm_cx]
+    add cx, FM_BTN_X1 + 3       ; 56px label centered in the 63px rect
+    mov dx, [fm_cy]
+    add dx, FM_BTN_Y1 + 2
+    mov si, fm_s_refresh
+    call font_str
+
     ; --- file rows ---
     mov ax, [disk_nfiles]       ; rows shown = min(nfiles, FM_MAX_ROWS);
     cmp ax, FM_MAX_ROWS         ; 0 after a failed mount, so the loop and
@@ -364,15 +433,43 @@ fm_draw_core:
 .rowloop:
     cmp di, [fm_cnt]
     jae .rowsdone
+    mov ax, FM_ROW_H            ; BP = row band top (absolute)
+    mul di
+    add ax, [fm_cy]
+    add ax, FM_ROW_Y0
+    mov bp, ax
+
+    ; --- 16x16 icon at x = 4, row top ---
+    mov ax, 64                  ; SI = disk_icons + row*64 (SPEC.md 19)
+    mul di
+    add ax, disk_icons
+    mov si, ax
+    mov bx, si                  ; all-zero entry = no icon: OR the 32
+    xor ax, ax                  ; words together to find out
+    mov cx, 32
+.orwords:
+    or ax, [bx]
+    inc bx
+    inc bx
+    loop .orwords
+    mov cx, [fm_cx]
+    add cx, 4
+    mov dx, bp
+    test ax, ax
+    jz .noicon
+    call icon_draw16            ; body-only table entry (SPEC.md 25)
+    jmp .icondone
+.noicon:
+    mov si, ico_app16           ; fall back to the built-in app icon
+    call icon_draw              ; (library record, with header)
+.icondone:
+
     mov ax, 32                  ; SI = disk_dir + row*32 (SPEC.md 19)
     mul di
     add ax, disk_dir
     mov si, ax
-    mov ax, FM_ROW_H            ; BP = text y: row top + 2 centers the
-    mul di                      ; 8px glyphs in the 12px band
-    add ax, [fm_cy]
-    add ax, FM_ROW_Y0 + 2
-    mov bp, ax
+    add bp, 4                   ; BP = text y: row top + 4 centers the
+                                ; 8px glyphs in the 16px band
 
     mov bx, fm_name             ; name field is NUL-padded, not guaranteed
     mov cx, 16                  ; NUL-terminated: copy all 16 bytes and
@@ -384,11 +481,12 @@ fm_draw_core:
     mov byte [fm_name+16], 0
 
     push si                     ; SI -> entry+16 (type; size is at +4)
+    mov byte [gfx_color], CBLACK
     mov cx, [fm_cx]
-    add cx, 6
+    add cx, 24
     mov dx, bp
     mov si, fm_name
-    call font_str               ; name at x = 6
+    call font_str               ; name at x = 24
     pop si
 
     mov ax, [si+4]              ; size in bytes (entry offset 20)
@@ -415,7 +513,7 @@ fm_draw_core:
     cmp ax, [fm_cnt]            ; 0xFFFF (none) also fails this
     jae .nosel
     mov cx, FM_ROW_H
-    mul cx                      ; AX = sel * 12
+    mul cx                      ; AX = sel * 16
     add ax, [fm_cy]
     add ax, FM_ROW_Y0
     mov bx, ax                  ; y1 = row band top
@@ -514,8 +612,7 @@ section .bss
 
 fm_win:     resw 1              ; Disk window record ptr
 fm_sel:     resw 1              ; selected row, 0xFFFF = none
-fm_clkt:    resw 1              ; [ticks] at the last row click
-fm_mounted: resb 1              ; non-zero once files_open has mounted
+fm_clkt:    resw 1              ; click birth tick (EV_C) of the last row click
 fm_mountok: resb 1              ; non-zero when the last mount succeeded
 
 fm_cx:      resw 1              ; draw scratch: content left

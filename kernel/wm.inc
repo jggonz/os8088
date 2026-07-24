@@ -333,6 +333,8 @@ wm_paint_all:
     mov cx, SCREEN_W-1
     mov dx, SCREEN_H-1
     call gfx_fill_gray
+    call desk_paint             ; drive icons live on the desktop, under
+                                ; every window (SPEC.md 26)
     call menu_draw_bar
     call wm_top
     mov bp, bx                  ; BP = frontmost visible (0 if none)

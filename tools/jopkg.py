@@ -18,6 +18,8 @@ MAGIC = 0x504A            # 'J','P' little-endian
 VERSION = 1
 LOAD_OFF = 0xA000
 ENTRY_MIN = 0xA020        # first byte after the header
+ENTRY_MIN_ICON = 0xA060   # first byte after the embedded icon (flags bit 0)
+ICON_END = 96             # header (32) + icon block (64)
 APP_MAX_SIZE = 0x5000     # image + bss budget
 
 
@@ -67,6 +69,8 @@ def main() -> int:
         fail(f"bad magic 0x{magic:04X} (want 0x{MAGIC:04X} 'JP')")
     if version != VERSION:
         fail(f"bad version {version} (want {VERSION})")
+    if flags & 0xFE:
+        fail(f"flags 0x{flags:02X} has reserved bits set (bits 1-7 must be 0)")
     if load != LOAD_OFF:
         fail(f"bad load offset 0x{load:04X} (want 0x{LOAD_OFF:04X})")
     if image != len(data):
@@ -77,6 +81,13 @@ def main() -> int:
     if image + bss > APP_MAX_SIZE:
         fail(f"image {image} + bss {bss} = {image + bss} exceeds "
              f"budget 0x{APP_MAX_SIZE:04X} ({APP_MAX_SIZE})")
+    if flags & 1:
+        if image < ICON_END:
+            fail(f"flags bit 0 set but image is {image} bytes; the embedded "
+                 f"icon needs at least {ICON_END}")
+        if entry < ENTRY_MIN_ICON:
+            fail(f"flags bit 0 set but entry 0x{entry:04X} lands inside the "
+                 f"icon block (want >= 0x{ENTRY_MIN_ICON:04X})")
 
     try:
         with open(args.output, "wb") as f:
@@ -84,8 +95,9 @@ def main() -> int:
     except OSError as e:
         fail(f"cannot write {args.output}: {e}")
 
+    icon = "yes" if flags & 1 else "no"
     print(f"jopkg: {name!r} entry=0x{entry:04X} image={image} bss={bss} "
-          f"-> {args.output}")
+          f"icon={icon} -> {args.output}")
     return 0
 
 

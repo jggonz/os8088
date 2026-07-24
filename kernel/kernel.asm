@@ -117,6 +117,7 @@ kmain:
     call font_init              ; needs int 10h, so after the mode is set
     call wm_init
     call mouse_init             ; IRQ4 live; cursor stays hidden until shown
+    call desk_init              ; count floppy drives for the desktop icons
     call apps_init              ; windows + background tasks
     call files_init             ; Disk window (hidden until File > Disk)
     call loader_init            ; package loader state
@@ -182,6 +183,8 @@ japi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "disk.inc"
 %include "loader.inc"
 %include "files.inc"
+%include "icons.inc"
+%include "desk.inc"
 
 ; =============================================================================
 ; Size guard: image + bss must stay below APP_LOAD_OFF (0xA000) - everything

@@ -10,6 +10,11 @@
 ;
 ;   %include "jopapi.inc"
 ;   JOP_HEADER 'NAME', entry        ; emits cpu/bits/org + the 32-byte header
+;                                   ; (optional 3rd arg = flags byte, SPEC.md
+;                                   ; 20.2: bit 0 = embedded icon follows)
+;   JOP_ICON16                      ; only with flags bit 0: 32 dw rows
+;   ... 16 mask rows, 16 data rows  ; (bit 15 = leftmost pixel)
+;   JOP_ICON16_END
 ;   ... code and data ...
 ;   JOP_BSS totalbytes              ; optional; must precede JOP_IMAGE_END
 ;   JOP_IMAGE_END                   ; defines JOP_IMAGE_SIZE (and bss = 0
@@ -109,19 +114,26 @@ WT_ONCLICK equ 14
 WT_SIZE    equ 16
 
 ; -----------------------------------------------------------------------------
-; JOP_HEADER 'NAME', entry - open the package and emit the 32-byte header
-; (SPEC.md 20.2). Emits cpu 8086 / bits 16 / org APP_LOAD_OFF first, so this
-; must be the first thing after the %include. The image-size and bss-size
-; words are forward references resolved by JOP_IMAGE_END / JOP_BSS at the
-; end of the source. The name is NUL-padded to exactly 16 bytes.
+; JOP_HEADER 'NAME', entry [, flags] - open the package and emit the 32-byte
+; header (SPEC.md 20.2). Emits cpu 8086 / bits 16 / org APP_LOAD_OFF first,
+; so this must be the first thing after the %include. The image-size and
+; bss-size words are forward references resolved by JOP_IMAGE_END / JOP_BSS
+; at the end of the source. The name is NUL-padded to exactly 16 bytes.
+; The optional third parameter is the flags byte (default 0); flags bit 0
+; declares an embedded icon, which must follow immediately as a
+; JOP_ICON16 .. JOP_ICON16_END block.
 ; -----------------------------------------------------------------------------
-%macro JOP_HEADER 2
+%macro JOP_HEADER 2-3
     cpu 8086
     bits 16
     org APP_LOAD_OFF
     db 'J', 'P'             ; +0  magic (word 0x504A)
     db 1                    ; +2  format version
+    %if %0 >= 3
+    db %3                   ; +3  flags (bit 0 = embedded icon)
+    %else
     db 0                    ; +3  flags
+    %endif
     dw APP_LOAD_OFF         ; +4  load offset
     dw %2                   ; +6  entry offset (absolute)
     dw JOP_IMAGE_SIZE       ; +8  image size = total file bytes
@@ -133,6 +145,27 @@ WT_SIZE    equ 16
     %endif
     db %1                   ; +16 program name...
     times 16 - %%len db 0   ;     ...NUL-padded to 16 bytes
+%endmacro
+
+; -----------------------------------------------------------------------------
+; JOP_ICON16 / JOP_ICON16_END - bracket the embedded 16x16 icon (SPEC.md
+; 20.2/20.5). Only valid when JOP_HEADER was given flags bit 0. The author
+; writes exactly 32 hand-authored dw rows between the two macros: 16 mask
+; words (white underlay) then 16 data words (black pixels), bit 15 =
+; leftmost pixel, row-major. JOP_ICON16 asserts the block starts right
+; after the header (file offset 32); JOP_ICON16_END asserts it ends at
+; offset 96, i.e. exactly 64 bytes of rows were written.
+; -----------------------------------------------------------------------------
+%macro JOP_ICON16 0
+    %if ($ - $$) != 32
+        %error "JOP_ICON16 must immediately follow JOP_HEADER (file offset 32)"
+    %endif
+%endmacro
+
+%macro JOP_ICON16_END 0
+    %if ($ - $$) != 96
+        %error "JOP_ICON16 block must be exactly 32 dw rows (16 mask + 16 data, ending at offset 96)"
+    %endif
 %endmacro
 
 ; -----------------------------------------------------------------------------

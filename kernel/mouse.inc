@@ -255,7 +255,10 @@ mou_isr:
     mov [si+2], ax
     mov ax, [mouse_y]
     mov [si+4], ax
-    mov word [si+6], 0
+    mov ax, [ticks]             ; c = birth time: double-click detection must
+    mov [si+6], ax              ; not use processing time - clicks queued
+                                ; behind a slow disk mount would collapse
+                                ; into one instant and read as double-clicks
     call evq_push               ; guards internally with pushf/cli; IF stays 0
 
 .move:

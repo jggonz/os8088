@@ -20,7 +20,65 @@
 
 %include "jopapi.inc"
 
-    JOP_HEADER 'MINES', mn_entry
+    JOP_HEADER 'MINES', mn_entry, 1
+
+; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
+; A mine: black disc (rows 4..11) with 8 spokes (N/S/E/W 2px + 1px
+; diagonals) and a 2x2 white glint punched out of the disc's upper-left.
+; The mask is the disc+spokes silhouette dilated 1px (8-connected) so the
+; glyph sits on a clean white underlay over any background.
+;
+;   data (o = glint, white)      mask
+;   ................             ......####......
+;   .......##.......             .###..####..###.
+;   ..#....##....#..             .####.####.####.
+;   ...#...##...#...             .##############.
+;   ....#.####.#....             ..############..
+;   .....######.....             ...##########...
+;   ....#oo#####....             ################
+;   .####oo########.             ################
+;   .##############.             ################
+;   ....########....             ################
+;   .....######.....             ...##########...
+;   ....#.####.#....             ..############..
+;   ...#...##...#...             .##############.
+;   ..#....##....#..             .####.####.####.
+;   .......##.......             .###..####..###.
+;   ................             ......####......
+    JOP_ICON16
+    dw 0x03C0                       ; 16 mask rows (white underlay)
+    dw 0x73CE
+    dw 0x7BDE
+    dw 0x7FFE
+    dw 0x3FFC
+    dw 0x1FF8
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0x1FF8
+    dw 0x3FFC
+    dw 0x7FFE
+    dw 0x7BDE
+    dw 0x73CE
+    dw 0x03C0
+    dw 0x0000                       ; 16 data rows (black pixels)
+    dw 0x0180
+    dw 0x2184
+    dw 0x1188
+    dw 0x0BD0
+    dw 0x07E0
+    dw 0x09F0
+    dw 0x79FE
+    dw 0x7FFE
+    dw 0x0FF0
+    dw 0x07E0
+    dw 0x0BD0
+    dw 0x1188
+    dw 0x2184
+    dw 0x0180
+    dw 0x0000
+    JOP_ICON16_END
 
 ; --- board geometry ------------------------------------------------------------
 MN_COLS      equ 9                  ; cells per row / column
