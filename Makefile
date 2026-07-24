@@ -72,12 +72,22 @@ $(BUILD)/mines.bin: apps/mines/mines.asm apps/jopapi.inc | $(BUILD)
 $(BUILD)/mines.jop: $(BUILD)/mines.bin tools/jopkg.py
 	python3 tools/jopkg.py $(BUILD)/mines.bin -o $@
 
-# The software floppies (drive B:) hold packages, not boot code - jopfs only.
-$(APPSIMG): $(BUILD)/mines.jop tools/jopdisk.py
-	python3 tools/jopdisk.py -o $@ --size 1440 $(BUILD)/mines.jop
+# HELLO, the second package: minimal, no embedded icon (proves the
+# generic-icon fallback in the Disk window).
+$(BUILD)/hello.bin: apps/hello/hello.asm apps/jopapi.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/hello/hello.asm
+	@echo "hello:  $$(stat -f%z $@) bytes"
 
-$(APPSIMG360): $(BUILD)/mines.jop tools/jopdisk.py
-	python3 tools/jopdisk.py -o $@ --size 360 $(BUILD)/mines.jop
+$(BUILD)/hello.jop: $(BUILD)/hello.bin tools/jopkg.py
+	python3 tools/jopkg.py $(BUILD)/hello.bin -o $@
+
+# The software floppies (drive B:) hold packages, not boot code - jopfs only.
+# Directory order is pinned: mines first, hello second (tests rely on it).
+$(APPSIMG): $(BUILD)/mines.jop $(BUILD)/hello.jop tools/jopdisk.py
+	python3 tools/jopdisk.py -o $@ --size 1440 $(BUILD)/mines.jop $(BUILD)/hello.jop
+
+$(APPSIMG360): $(BUILD)/mines.jop $(BUILD)/hello.jop tools/jopdisk.py
+	python3 tools/jopdisk.py -o $@ --size 360 $(BUILD)/mines.jop $(BUILD)/hello.jop
 
 # The GUI reads a Microsoft serial mouse on COM1; QEMU emulates one natively.
 MOUSE := -chardev msmouse,id=m0 -serial chardev:m0

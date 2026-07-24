@@ -47,6 +47,8 @@ ui_task:
     jne .yield                  ; only mouse-downs matter here
     mov cx, [ui_ev + EV_A]      ; CX = click x
     mov dx, [ui_ev + EV_B]      ; DX = click y
+    mov ax, [ui_ev + EV_C]      ; publish the click's birth tick for the
+    mov [ui_click_t], ax        ; double-click detectors (SPEC 22, 26)
 
     cmp dx, MBAR_H              ; in the menu bar?
     jae .on_desktop
@@ -59,7 +61,7 @@ ui_task:
 .on_desktop:
     call wm_hit                 ; BX = window hit (0 = none), AL = region
     or bx, bx
-    jz .yield                   ; desktop click: nothing to do
+    jz .desk_icons              ; no window: the desktop icons get a look
     cmp al, 2
     je .close_box
     cmp al, 1
@@ -84,6 +86,10 @@ ui_task:
     call [si + W_ONCLICK]       ; (CX/DX survived wm_hit/wm_top/gfx_lock)
     call gfx_unlock
     jmp .yield
+
+.desk_icons:
+    call desk_click             ; CX/DX = click point, no lock held; select /
+    jmp .yield                  ; double-click-open is desk.inc's business
 
 .close_box:                     ; wm_hit only reports AL=2 on the front window
     call gfx_lock
@@ -310,6 +316,9 @@ ui_dispatch:
 section .bss
 
 ui_ev:      resb 8              ; popped event record (EV_TYPE/A/B/C)
+ui_click_t: resw 1              ; EV_C of the event being dispatched: the
+                                ; click's birth tick (valid during dispatch,
+                                ; which always stores before handlers read)
 ui_dragwin: resw 1              ; window being dragged
 ui_startx:  resw 1              ; mousedown position (drag origin)
 ui_starty:  resw 1

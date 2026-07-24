@@ -30,10 +30,19 @@ core interactions work:
   release to choose. Apple → About jop; File → Note Pad / Clock / Bounce /
   Close Window; Special → Restart.
 - **Note Pad** — click it, type; wraps lines, Backspace and Return work.
-- **Disk** — a file manager (File → Disk). Mounts the software floppy in
-  drive B:, lists what's on it, and double-clicking a program loads it
-  from disk and runs it. Yes: loadable software, from a second floppy,
-  on an 8086.
+- **Disk icons** — the desktop shows an icon per floppy drive the BIOS
+  reports (int 11h). Click to select, double-click to open that drive in
+  the Disk window, freshly mounted.
+- **Disk** — a file manager (File → Disk, or a desktop disk icon).
+  Mounts the software floppy, lists each file with its icon, and
+  double-clicking a program loads it from disk and runs it. Yes:
+  loadable software, from a second floppy, on an 8086. A Refresh button
+  re-reads the directory after you swap disks; A/B/R keys switch drives.
+- **Icons** — a 1-bit icon system, classic Mac style: a built-in library
+  (32×32 floppy, 16×16 generic application) plus per-application icons
+  that ship inside each `.jop` package and get copied onto the disk's
+  icon table by the packaging tools. Minesweeper carries a mine glyph;
+  packages without one fall back to the generic icon.
 - **Minesweeper** — the first software package: a colorful 9×9
   minesweeper that ships on `build/apps.img`, loaded through the Disk
   window. Blue 1s, green 2s, red flags, first-click-safe mine placement,
@@ -99,8 +108,11 @@ kernel/apps.inc      About, Note Pad, Clock task, Bounce task
 kernel/disk.inc      int 13h floppy reads, jopfs mount + directory
 kernel/loader.inc    .jop package validation, load, launch, replace
 kernel/files.inc     the Disk window (file manager)
-apps/jopapi.inc      the package SDK: API offsets, header macros
+kernel/icons.inc     1-bit icon format, draw routine, built-in library
+kernel/desk.inc      desktop drive icons: detect, paint, click to open
+apps/jopapi.inc      the package SDK: API offsets, header + icon macros
 apps/mines/          Minesweeper, the first software package
+apps/hello/          HELLO, a minimal second package (no icon)
 tools/jopkg.py       package validator/stamper (.bin -> .jop)
 tools/jopdisk.py     jopfs floppy image builder
 tools/qmp.py         QMP client for scripted control of a test boot

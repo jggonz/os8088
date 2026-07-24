@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""jopdisk: build a jopfs data floppy image from .jop packages.
+"""jopdisk: build a jopfs v2 data floppy image from .jop packages.
 
-    python3 tools/jopdisk.py -o OUT.img --size {1440,360} PKG.jop ...
+    python3 tools/jopdisk.py -o OUT.img --size {1440,360} [PKG.jop ...]
 
-jopfs layout (SPEC.md section 19): LBA 0 superblock ("JOPFS1\\0\\0",
-geometry, file count), LBA 1-2 directory (32 entries x 32 bytes), file
-data from LBA 3, every file sector-aligned. Directory names come from
-each package's header name field (SPEC.md section 20.2). The image is
-zero-filled to exactly 1474560 (1.44MB) or 368640 (360KB) bytes. Fails
-with a non-zero exit if there are more than 32 files or the data does
-not fit on the disk.
+jopfs v2 layout (SPEC.md section 19): LBA 0 superblock ("JOPFS2\\0\\0",
+geometry, file count), LBA 1-2 directory (32 entries x 32 bytes), LBA 3-6
+icon table (32 entries x 64 bytes: package bytes 32..95 when its flags
+bit 0 is set, else all zeros = "no icon"), file data from LBA 7, every
+file sector-aligned. Directory names come from each package's header name
+field (SPEC.md section 20.2). Zero packages is legal (an empty disk). The
+image is zero-filled to exactly 1474560 (1.44MB) or 368640 (360KB) bytes.
+Fails with a non-zero exit if there are more than 32 files or the data
+does not fit on the disk.
 """
 import argparse
 import struct
@@ -17,7 +19,8 @@ import sys
 
 SECTOR = 512
 MAX_FILES = 32
-DATA_LBA = 3
+ICON_SECTORS = 4      # LBA 3-6: 32 icon entries x 64 bytes
+DATA_LBA = 7
 TYPE_APP = 1
 GEOMETRY = {          # size -> (sectors per track, heads, total sectors)
     1440: (18, 2, 2880),
@@ -30,8 +33,8 @@ def fail(msg: str) -> None:
     sys.exit(1)
 
 
-def read_package(path: str) -> tuple[bytes, bytes]:
-    """Read one .jop file; return (name16, data)."""
+def read_package(path: str) -> tuple[bytes, bytes, bytes]:
+    """Read one .jop file; return (name16, icon64, data)."""
     try:
         with open(path, "rb") as f:
             data = f.read()
@@ -51,7 +54,15 @@ def read_package(path: str) -> tuple[bytes, bytes]:
     name16 = data[16:32]
     if not name16.split(b"\0", 1)[0]:
         fail(f"{path}: empty name field in header")
-    return name16, data
+    flags = data[3]
+    if flags & 1:                     # embedded icon (SPEC.md 20.2)
+        if len(data) < 96:
+            fail(f"{path}: flags bit 0 set but no icon block "
+                 "(run jopkg.py first)")
+        icon64 = data[32:96]
+    else:
+        icon64 = bytes(64)            # all-zero = "no icon"
+    return name16, icon64, data
 
 
 def main() -> int:
@@ -61,8 +72,8 @@ def main() -> int:
                     help="floppy image to write")
     ap.add_argument("--size", type=int, choices=(1440, 360), required=True,
                     help="disk size in KB: 1440 (18 spt) or 360 (9 spt)")
-    ap.add_argument("packages", metavar="PKG.jop", nargs="+",
-                    help="package files, in directory order")
+    ap.add_argument("packages", metavar="PKG.jop", nargs="*",
+                    help="package files, in directory order (none = empty disk)")
     args = ap.parse_args()
 
     spt, heads, total_sectors = GEOMETRY[args.size]
@@ -70,25 +81,28 @@ def main() -> int:
         fail(f"{len(args.packages)} files; jopfs holds at most {MAX_FILES}")
 
     # Superblock (LBA 0).
-    sb = struct.pack("<8sHHH", b"JOPFS1\0\0", spt, heads, len(args.packages))
+    sb = struct.pack("<8sHHH", b"JOPFS2\0\0", spt, heads, len(args.packages))
     image = bytearray(sb.ljust(SECTOR, b"\0"))
 
-    # Directory (LBA 1-2) + data (LBA 3 onward, each file sector-aligned).
+    # Directory (LBA 1-2) + icon table (LBA 3-6) + data (LBA 7 onward,
+    # each file sector-aligned).
     directory = bytearray(2 * SECTOR)
+    icons = bytearray(ICON_SECTORS * SECTOR)
     data = bytearray()
     lba = DATA_LBA
     for i, path in enumerate(args.packages):
-        name16, body = read_package(path)
+        name16, icon64, body = read_package(path)
         sectors = (len(body) + SECTOR - 1) // SECTOR
         struct.pack_into("<16sHHH", directory, i * 32,
                          name16, TYPE_APP, lba, len(body))
+        icons[i * 64:(i + 1) * 64] = icon64
         data += body.ljust(sectors * SECTOR, b"\0")
         lba += sectors
 
     if lba > total_sectors:
         fail(f"data ends at LBA {lba}; disk holds {total_sectors} sectors")
 
-    image += directory + data
+    image += directory + icons + data
     image += b"\0" * (total_sectors * SECTOR - len(image))
     assert len(image) == total_sectors * SECTOR
 
@@ -98,8 +112,9 @@ def main() -> int:
     except OSError as e:
         fail(f"cannot write {args.output}: {e}")
 
+    span = f"data LBA {DATA_LBA}..{lba - 1}" if args.packages else "no data"
     print(f"jopdisk: {args.output} ({args.size}KB, {spt} spt) "
-          f"{len(args.packages)} file(s), data LBA {DATA_LBA}..{lba - 1}")
+          f"{len(args.packages)} file(s), {span}")
     return 0
 
 

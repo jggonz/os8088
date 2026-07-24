@@ -1,7 +1,9 @@
 ; =============================================================================
 ; jop - disk.inc
 ;
-; BIOS int 13h floppy reads and the jopfs mount (SPEC.md 18-19). Only the
+; BIOS int 13h floppy reads and the jopfs v2 mount (SPEC.md 18-19): the
+; superblock (LBA 0), the 32-entry directory (LBA 1-2) and the 32-entry
+; icon table (LBA 3-6); file data starts at LBA 7. Only the
 ; UI task touches the disk. Task switching is paused around all int 13h
 ; activity by inc/dec of [sch_lock] - the timer ISR still chains the BIOS
 ; tick (the floppy motor logic needs it), it just stops switching.
@@ -18,7 +20,7 @@ disk_spt:    dw 9                ; sectors per track  } fallback geometry,
 disk_heads:  dw 2                ; heads              } replaced at mount
 disk_nfiles: dw 0                ; file count, valid after a good mount
 
-dsk_magic:   db 'JOPFS1', 0, 0  ; superblock magic, 8 bytes (SPEC.md 19)
+dsk_magic:   db 'JOPFS2', 0, 0  ; superblock magic, 8 bytes (SPEC.md 19)
 
 ; -----------------------------------------------------------------------------
 ; disk_read - read CX sectors starting at LBA AX to ES:BX
@@ -107,11 +109,12 @@ disk_read:
     ret
 
 ; -----------------------------------------------------------------------------
-; disk_mount - mount a jopfs floppy: superblock + directory
+; disk_mount - mount a jopfs v2 floppy: superblock + directory + icon table
 ; in:  DL = drive (0 = A:, 1 = B:)
 ; out: CF=1 if the disk is unreadable or not jopfs (then [disk_nfiles] = 0);
-;      CF=0 on success with [disk_spt]/[disk_heads]/[disk_nfiles] loaded and
-;      the 32 directory entries (LBA 1-2) in disk_dir
+;      CF=0 on success with [disk_spt]/[disk_heads]/[disk_nfiles] loaded,
+;      the 32 directory entries (LBA 1-2) in disk_dir and the 32 icon-table
+;      entries (LBA 3-6) in disk_icons
 ; clobbers: nothing but CF
 ;
 ; LBA 0 is read with the fallback geometry spt=9/heads=2 - that maps to
@@ -142,7 +145,7 @@ disk_mount:
     call disk_read
     jc .fail
 
-    ; magic must be "JOPFS1" + two zero bytes
+    ; magic must be "JOPFS2" + two zero bytes
     cld
     mov si, dsk_secbuf
     mov di, dsk_magic
@@ -182,6 +185,13 @@ disk_mount:
     call disk_read
     jc .dirfail
 
+    ; --- LBA 3-6: the icon table, 32 entries x 64 bytes ---
+    mov ax, 3
+    mov cx, 4
+    mov bx, disk_icons
+    call disk_read
+    jc .dirfail                 ; a torn mount is a failed mount
+
     clc
     jmp .out
 
@@ -205,6 +215,9 @@ disk_mount:
 section .bss
 
 disk_dir:   resb 1024           ; 32 directory entries x 32 bytes (LBA 1-2)
+disk_icons: resb 2048           ; 32 icon-table entries x 64 bytes (LBA 3-6);
+                                ; entry i belongs to directory entry i,
+                                ; all-zero = no icon (SPEC.md 19)
 dsk_secbuf: resb 512            ; superblock scratch sector for disk_mount
 
 section .text

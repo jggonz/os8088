@@ -44,7 +44,8 @@ pre-empted background task, updating live while the user types or drags).
 5. **Label hygiene.** One flat namespace. Prefix every module-internal label
    with the module's prefix (`vga_`, `font_`, `mou_`, `cur_`, `sch_`, `evq_`,
    `wm_`, `menu_`, `ui_`, `app_`, `dsk_`/`disk_`, `ld_`/`loader_`,
-   `fm_`/`files_`) or use NASM local labels (`.foo`).
+   `fm_`/`files_`, `ico_`/`icon_`, `desk_`) or use NASM local labels
+   (`.foo`).
 6. Public drawing routines may assume the caller holds the **gfx lock**
    (§7) and that the cursor is hidden. They must not take the lock
    themselves.
@@ -107,7 +108,9 @@ APP_MAX_SIZE equ 0x5000      ; image + bss budget, 0xA000..0xEFFF
 | `kernel/apps.inc`   | About, Note Pad, Clock task, Bounce task                |
 | `kernel/disk.inc`   | BIOS int 13h floppy reads, jopfs mount + directory (§18–19) |
 | `kernel/loader.inc` | package validation, load into APP region, launch (§21)  |
-| `kernel/files.inc`  | Disk window: file list UI, selection, open (§22)        |
+| `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22) |
+| `kernel/icons.inc`  | 1-bit icon format, draw routine, built-in library (§25) |
+| `kernel/desk.inc`   | desktop drive icons: detect, paint, click/open (§26)    |
 
 `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` remain in the
 tree but are **no longer included**; the GUI replaces the text shell.
@@ -240,7 +243,9 @@ window.
   0x3F8, assemble packet (resync: any byte with bit 6 set restarts the
   packet), update `mouse_x` (clamp 0..639), `mouse_y` (0..479), `mouse_btn`
   (bit 0 = left). On button *change*, push an event (§10): EVT_MDOWN /
-  EVT_MUP with a=x, b=y. Move the cursor per §7 (draw only when
+  EVT_MUP with a=x, b=y, c=[ticks] — the click's birth time; double-click
+  detection compares birth ticks, never processing time, so clicks queued
+  behind a slow disk mount cannot collapse into a double-click. Move the cursor per §7 (draw only when
   `gfx_lock_flag` is clear AND `cur_level` >= 0; otherwise just update
   position and set `cur_dirty`). Send EOI (AL=0x20 → port 0x20) — the BIOS
   does not handle IRQ4 for us. `cld` before any string op; never `sti`.
@@ -263,8 +268,8 @@ Event record, 8 bytes: `EV_TYPE` dw, `EV_A` dw, `EV_B` dw, `EV_C` dw.
 
 ```nasm
 EVT_NONE  equ 0
-EVT_MDOWN equ 1     ; a=x, b=y
-EVT_MUP   equ 2     ; a=x, b=y
+EVT_MDOWN equ 1     ; a=x, b=y, c=birth tick
+EVT_MUP   equ 2     ; a=x, b=y, c=birth tick
 ```
 
 Single system queue, 16 records, ring buffer in .bss. Producers may be ISRs:
@@ -331,7 +336,7 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | `wm_front`     | in BX = win ptr: raise to front of z-order, repaint all      |
 | `wm_top`       | out BX = frontmost visible window ptr, 0 if none             |
 | `wm_hit`       | in CX=x, DX=y; out BX = topmost visible window ptr containing the point (0 if none), AL = 0 content, 1 title bar, 2 close box. AL=2 only when BX is the frontmost visible window (the only one with a close box drawn); on any other window that region reports AL=1. |
-| `wm_paint_all` | full repaint: desktop gray (below menu bar), menu bar, every visible window back→front (frame + white content + W_PAINT). Caller holds gfx lock. |
+| `wm_paint_all` | full repaint: desktop gray (below menu bar), then `desk_paint` (§26 — desktop icons sit on the desktop, under every window), menu bar, every visible window back→front (frame + white content + W_PAINT). Caller holds gfx lock. |
 | `wm_content`   | in BX = win ptr; out AX = content left, DX = content top     |
 | `wm_obscured`  | in BX = win ptr; out CF=1 if any visible window above BX in z-order overlaps its frame rect (background tasks use this to skip live updates when covered). Result is only trustworthy while the caller holds the gfx lock — the UI task mutates `wm_zord`/window rects under it. |
 
@@ -379,7 +384,9 @@ acceptable, tracking feedback is the highlight).
 Loop forever:
 1. Poll keyboard: int 16h AH=01; if a key, fetch (AH=00) and near-call the
    front window's W_ONKEY (if any) under gfx_lock.
-2. `evq_pop`; on EVT_MDOWN at (x,y):
+2. `evq_pop`; on EVT_MDOWN at (x,y) — first store the event's EV_C into
+   the public word `ui_click_t` (the click's birth tick; §22/§26 read it
+   during dispatch):
    - y < MBAR_H → gfx_lock, `menu_track`, gfx_unlock, then dispatch CMD_*
      (below).
    - else `wm_hit`: close box → if released over it (simplify: immediately)
@@ -401,6 +408,10 @@ Loop forever:
    - content of non-front window → `wm_front`.
    - content of front window → if its `W_ONCLICK` is non-zero: gfx_lock,
      near-call it (CX=x, DX=y, SI=win ptr), gfx_unlock; else ignore.
+   - no window hit (wm_hit BX=0) → call `desk_click` (§26) with CX=x,
+     DX=y, no lock held — desktop icons are hit-tested only after every
+     window has declined the click, which gives them correct z-order
+     semantics for free.
 3. If `[ld_pending]` is non-zero (§21): AX = [ld_pending] − 1, zero
    `[ld_pending]`, call `loader_run`. This runs **outside** the gfx lock —
    loader_run manages its own locking.
@@ -468,9 +479,10 @@ pinned offsets. kernel.asm also owns the tiny japi helper routines
 
 kmain: set segments/stack (SP=0xFFFE), `sti`, `cld`, then:
 `sched_init` → `evq_init` → `vga_mode12` → `font_init` → `wm_init` →
-`mouse_init` → `apps_init` → `files_init` → `loader_init` → gfx_lock →
-`wm_paint_all` → gfx_unlock → `cursor_show` → jump into `ui_task` (task 0
-never returns).
+`mouse_init` → `desk_init` → `apps_init` → `files_init` → `loader_init` →
+gfx_lock → `wm_paint_all` → gfx_unlock → `cursor_show` → jump into
+`ui_task` (task 0 never returns). Include order appends `icons.inc` and
+`desk.inc` after `files.inc`.
 
 End of file (after all `%include` lines, with `section .text` in effect):
 
@@ -521,6 +533,13 @@ loaded-program region, §20.)
    contents; double-clicking MINES loads and shows Minesweeper.
 7. Minesweeper is playable with the mouse: reveal, flag (F), flood fill,
    win and lose states, colored numbers; the clock keeps ticking behind it.
+8. Two disk icons on the desktop (QEMU reports two floppy drives);
+   double-clicking one opens the Disk window freshly mounted for that
+   drive; windows cover the icons correctly.
+9. The Disk window shows per-file icons — MINES with its embedded mine
+   glyph, HELLO with the generic application icon — and the Refresh
+   button re-reads a swapped disk (QMP `change` + Refresh shows the new
+   directory without rebooting).
 
 ## 18. disk.inc — floppy reads (BIOS int 13h)
 
@@ -540,10 +559,11 @@ failure between attempts.
 | symbol       | contract                                                      |
 |--------------|----------------------------------------------------------------|
 | `disk_read`  | in: AX=LBA, CX=sector count, ES:BX → dest (advances BX by 512 per sector; caller's ES:BX budget must cover count×512). Drive from `[disk_drive]`. Out: CF=1 on unrecoverable error. Preserves registers per §1. |
-| `disk_mount` | in: DL=drive (0=A, 1=B). Sets `[disk_drive]`, reads LBA 0 with the *fallback* geometry spt=9/heads=2 (CHS 0/0/1 — identical under any real floppy geometry), validates the superblock (§19), loads `disk_spt`/`disk_heads`/`disk_nfiles`, then reads the 2 directory sectors (LBA 1–2) into `disk_dir`. Out: CF=1 if the disk is unreadable or not jopfs (then `disk_nfiles`=0). |
+| `disk_mount` | in: DL=drive (0=A, 1=B). Sets `[disk_drive]`, reads LBA 0 with the *fallback* geometry spt=9/heads=2 (CHS 0/0/1 — identical under any real floppy geometry), validates the superblock (§19), loads `disk_spt`/`disk_heads`/`disk_nfiles`, then reads the 2 directory sectors (LBA 1–2) into `disk_dir` and the 4 icon-table sectors (LBA 3–6) into `disk_icons`. Out: CF=1 if the disk is unreadable or not jopfs (then `disk_nfiles`=0). |
 | `disk_drive`  | byte variable, current drive (init 1 = B:)                   |
 | `disk_nfiles` | word, valid after a successful mount (else 0)                |
 | `disk_dir`    | 1024-byte .bss buffer: the 32 directory entries              |
+| `disk_icons`  | 2048-byte .bss buffer: the 32 icon-table entries (§19); entry i belongs to directory entry i, 64 bytes each, all-zero = no icon |
 
 ## 19. jopfs — on-disk format (data floppies)
 
@@ -554,11 +574,15 @@ little-endian. Sector size 512.
 
 | off | size | contents                                  |
 |-----|------|-------------------------------------------|
-| 0   | 8    | magic `"JOPFS1"` then two zero bytes      |
+| 0   | 8    | magic `"JOPFS2"` then two zero bytes      |
 | 8   | 2    | sectors per track (18 or 9)               |
 | 10  | 2    | heads (2)                                 |
 | 12  | 2    | file count (0..32)                        |
 | 14  | 498  | zero                                      |
+
+(Format v2: v1 disks — magic `JOPFS1`, no icon table, data from LBA 3 —
+are no longer accepted; nothing shipped in v1, so no compatibility
+shim.)
 
 **LBA 1–2 — directory**, 32 entries × 32 bytes:
 
@@ -570,7 +594,15 @@ little-endian. Sector size 512.
 | 20  | 2    | size in bytes                                       |
 | 22  | 10   | zero                                                |
 
-File data starts at LBA 3; every file starts on a sector boundary. Entries
+**LBA 3–6 — icon table**, 32 entries × 64 bytes, entry i belongs to
+directory entry i: 16 words of AND-style mask (white underlay) then 16
+words of data (black pixels), bit 15 = leftmost pixel, row-major (the
+§25 16×16 icon body, without the 2-byte header). An all-zero entry means
+"no icon" — viewers fall back to the built-in `ico_app16`. jopdisk.py
+fills entries from each package's embedded icon (§20.2 flags bit 0), or
+zeros.
+
+File data starts at LBA 7; every file starts on a sector boundary. Entries
 are packed from index 0; `file count` in the superblock is authoritative.
 
 ## 20. Loadable programs — the .jop package format
@@ -591,13 +623,20 @@ time; loading another replaces it (§21).
 |-----|------|------------------------------------------------------------|
 | 0   | 2    | magic: bytes `'J','P'` (word 0x504A)                      |
 | 2   | 1    | format version = 1                                        |
-| 3   | 1    | flags = 0                                                 |
+| 3   | 1    | flags: bit 0 = embedded icon follows the header; bits 1–7 zero |
 | 4   | 2    | load offset — must equal 0xA000                           |
 | 6   | 2    | entry offset (absolute, ≥ 0xA020, < load+image size)      |
 | 8   | 2    | image size = total file bytes, header included            |
 | 10  | 2    | bss size — bytes the loader zeroes after the image        |
 | 12  | 4    | zero (reserved)                                           |
 | 16  | 16   | program name, printable, NUL-padded (shown by tools)      |
+
+**Embedded icon** (flags bit 0): file offset 32..95 holds the program's
+16×16 icon — 16 mask words then 16 data words (same body layout as the
+jopfs icon table, §19). With the flag set, image size must be ≥ 96 and
+the entry offset ≥ 0xA060. The kernel loader ignores the flag entirely
+(the icon rides along in memory like any other data); it exists for
+jopdisk.py, which copies the block into the disk's icon table.
 
 **Entry contract**: near-called by the loader with DS=ES=KERNEL_SEG, IF=1,
 gfx lock NOT held. The program creates its window(s) via the API table
@@ -649,6 +688,12 @@ end-of-file macro — exact macro design is the implementer's, but a package
 source must be able to consist of just `%include "jopapi.inc"`, the header
 macro, code/data, and an end macro).
 
+Icon support: `JOP_HEADER 'NAME', entry, 1` sets flags bit 0; the author
+then writes `JOP_ICON16` (asserts, via `%if`-on-equ, that it starts at
+offset 32), 32 hand-authored `dw` rows (16 mask, 16 data), and
+`JOP_ICON16_END` (asserts offset 96). The third JOP_HEADER parameter is
+optional and defaults to 0.
+
 ## 21. loader.inc
 
 State (.bss, cleared by `loader_init`): `ld_pending` (word: 0 = none, else
@@ -677,35 +722,46 @@ entry. Steps:
 Built-in window, record created hidden by `files_init` (from kmain), title
 "Disk", 320×200 at (110,80). No background task. State: `fm_sel` (word,
 selected row, 0xFFFF = none), `fm_clkt` (word, [ticks] at last row click),
-`fm_mounted` (byte).
+`fm_mountok` (byte, 1 = last mount succeeded).
 
 Content layout (coords relative to content top-left): header line at
 (6,6): `"Drive B:  N files"` (drive letter from [disk_drive]) or, when the
-last mount failed, `"No jop disk in drive B:"`. Status line from
+last mount failed, `"No jop disk in drive B:"`. A **Refresh button** at
+the top right: 1px black frame from (content_w−68, 2) to (content_w−6,
+15), label "Refresh" centered inside — remounts the current drive so a
+swapped disk shows its real contents. Status line from
 `[ld_status]` at (6,182-TITLE_H): e.g. "", "Disk error", "Bad package",
 "Too large", "Load failed" — plus "Loading..." while a load is pending.
-File rows: 12 px tall, first at y=22; name at x=6, size in bytes
-right-aligned at the content's right edge minus 6. At most 11 rows shown
-(entries beyond that are mounted but not listed — fine for v1; 11 keeps
-the last row clear of the status line at y=164). Selected
-row: drawn inverted (black bar, white text; `gfx_xor_fill` over the row
-after drawing is acceptable).
+File rows: **16 px tall**, first at y=22, at most **8** rows shown
+(entries beyond are mounted but not listed; row 8 ends at y=149, clear of
+the status line at 164). Per row: the file's 16×16 icon at x=4 (from
+`disk_icons` entry i; all-zero entry → built-in `ico_app16`, §25), name
+at x=24, size right-aligned at content right minus 6, text baselines at
+row top + 4. Selected row: drawn inverted (`gfx_xor_fill` over the row
+band after drawing is acceptable).
 
 Behaviour:
-- `files_open` (from CMD_FILES dispatch, no lock held): if `[fm_mounted]`
-  = 0 → `disk_mount` DL=[disk_drive] (initial drive: B) and set fm_mounted
-  (even on failure — the window then shows the failure line; 'r' retries).
-  Then gfx_lock, wm_show, gfx_unlock.
-- `W_ONCLICK` (lock held): map DX to a row; row ≥ [disk_nfiles] → clear
-  selection, repaint content. Else if row == fm_sel and [ticks]−fm_clkt < 9
-  → double-click: set [ld_pending] = row+1 (ui.inc runs the loader after
-  the lock drops), repaint content (shows "Loading..."). Else select row,
-  stamp fm_clkt, repaint content. Repaint = white-fill own content + redraw
-  (like Note Pad's onkey; the caller already holds the lock).
+- `files_open_drive` (public; in AL = drive 0/1, no lock held): **always**
+  `disk_mount` DL=AL — a swapped or newly chosen disk must never show
+  stale contents — record success in fm_mountok, clear the selection,
+  then gfx_lock, wm_show, gfx_unlock. Callers: CMD_FILES dispatch and
+  desk_click (§26).
+- `files_open` (from CMD_FILES dispatch, no lock held): AL = [disk_drive],
+  fall into files_open_drive.
+- `W_ONCLICK` (lock held): the Refresh button rect is tested first —
+  inside it: `disk_mount` the current drive, update fm_mountok, clear
+  selection, repaint content. Otherwise map DX to a row ((y−22)/16, guard
+  y<22); row ≥ [disk_nfiles] or ≥ 8 → clear selection, repaint. Else if
+  row == fm_sel and [ui_click_t]−fm_clkt < 9 (birth ticks, §10) → double-click: set [ld_pending]
+  = row+1 (ui.inc runs the loader after the lock drops), repaint content
+  (shows "Loading..."). Else select row, stamp fm_clkt, repaint content.
+  Repaint = white-fill own content + redraw (like Note Pad's onkey; the
+  caller already holds the lock).
 - `W_ONKEY` (lock held): 'a'/'A' → drive 0, 'b'/'B' → drive 1, 'r'/'R' →
-  same drive; all three: `disk_mount`, clear selection, repaint content.
-  Enter (13) with a valid selection → same as double-click.
-  (disk_mount under the gfx lock stalls painters ~a second; acceptable.)
+  same drive; all three: `disk_mount`, update fm_mountok, clear selection,
+  repaint content. Enter (13) with a valid selection → same as
+  double-click. (disk_mount under the gfx lock stalls painters ~a second;
+  acceptable.)
 - `files_refresh` (called by loader_run, no lock held): acquire gfx_lock,
   and if the window is visible call `wm_paint_all`; unlock. It must be a
   full repaint, not content-only: loader_run calls it right after wm_show
@@ -754,15 +810,73 @@ and non-zero exit + stderr message on any validation failure.
 - `tools/jopkg.py IN.bin -o OUT.jop` — package validator/stamper. Reads a
   NASM flat binary that already carries the §20.2 header; verifies magic,
   version, load offset 0xA000, entry range, image size field == actual
-  file size, image+bss ≤ 0x5000, name printable; prints a one-line summary
-  (name, entry, image/bss sizes) and copies to OUT.jop.
-- `tools/jopdisk.py -o OUT.img --size {1440,360} PKG.jop ...` — builds a
-  jopfs floppy (§19): superblock geometry 18/2 or 9/2, directory entries
-  named from each package's header name field, data from LBA 3, sector-
-  aligned. Fails if >32 files or the disk overflows. Total image size:
-  1474560 or 368640 bytes.
-- Makefile: `build/mines.bin` from `apps/mines/mines.asm`
-  (`nasm -f bin -w+error -I apps/`), `build/mines.jop` via jopkg.py,
-  `build/apps.img` (1440) + `build/apps360.img` (360) via jopdisk.py; all
-  built by `all`. `run`/`debug`/`test` attach build/apps.img as floppy
-  index 1. 86Box's fdd_02 gets apps360.img (best-effort config keys).
+  file size, image+bss ≤ 0x5000, name printable ≤15 chars NUL-padded,
+  flags bits 1–7 zero, and when flags bit 0 is set: image ≥ 96 and entry
+  ≥ 0xA060; prints a one-line summary (name, entry, image/bss, icon
+  yes/no) and copies to OUT.jop.
+- `tools/jopdisk.py -o OUT.img --size {1440,360} [PKG.jop ...]` — builds a
+  jopfs v2 floppy (§19): superblock geometry 18/2 or 9/2, directory
+  entries named from each package's header name field, icon table LBA 3–6
+  (entry i = package i's embedded icon bytes 32..95 when flags bit 0,
+  else 64 zero bytes), data from LBA 7, sector-aligned. Zero packages is
+  legal (an empty disk — useful for testing Refresh). Fails if >32 files
+  or the disk overflows. Total image size: 1474560 or 368640 bytes.
+- Makefile: `build/mines.bin` from `apps/mines/mines.asm` and
+  `build/hello.bin` from `apps/hello/hello.asm` (§27), each
+  (`nasm -f bin -w+error -I apps/`, dep on apps/jopapi.inc), packaged via
+  jopkg.py, then `build/apps.img` (1440) + `build/apps360.img` (360) from
+  **mines.jop + hello.jop** via jopdisk.py; all built by `all`.
+  `run`/`debug`/`test` attach build/apps.img as floppy index 1. 86Box's
+  fdd_02 gets apps360.img (best-effort config keys).
+
+## 25. icons.inc — icon format, draw routine, built-in library
+
+1-bit icons with a mask, classic Mac style, drawn exactly like the mouse
+cursor: a white underlay pass (Set/Reset white + Bit Mask from the mask
+rows) then a black pass (data rows). In-memory record:
+
+```
+db wwords        ; row width in words (1 = 16px, 2 = 32px)
+db height        ; rows
+; then: height × wwords mask words, then height × wwords data words
+; bit 15 = leftmost pixel of the word's 16px span; words left→right
+```
+
+| symbol      | contract                                                     |
+|-------------|---------------------------------------------------------------|
+| `icon_draw` | in CX=x, DX=y (top-left), SI → record. Caller holds the gfx lock. Clips to the screen (skip clipped rows/bytes — windows can hang off the bottom edge). Leaves the GC in the default state (§1 rule 7); preserves registers. |
+| `icon_draw16`| in CX=x, DX=y, SI → **body only** (16 mask words + 16 data words, no 2-byte header) — the §19 icon-table / §20.2 embedded-icon layout. |
+| `ico_disk32`| library record: 32×32 floppy disk (rect body, shutter, label area) |
+| `ico_app16` | library record: 16×16 generic application (a recognizable "program" glyph, e.g. a diamond/tool shape) |
+
+Bitmaps are hand-authored `dw` rows (like the menu-bar apple, the one
+sanctioned place for hand-made bitmap data — icons are the second).
+
+## 26. desk.inc — desktop drive icons
+
+State: `desk_ndrives` (byte), `desk_sel` (byte, 0xFF = none),
+`desk_clkt` (word). `desk_init` (from kmain): int 11h equipment word —
+if bit 0 is set, drives = ((AX>>6) & 3) + 1, else 0; clamp to 2. QEMU
+with two floppy `-drive`s reports 2.
+
+Layout, per drive i (0 = A, 1 = B): hit zone x 584..631, y
+(32+60·i)..(75+60·i); inside it the 32×32 `ico_disk32` at x=592,
+y=32+60·i, and below it the label "Disk A"/"Disk B" (48px), black text
+on a white gap 2px around the text, centered in the zone.
+
+| symbol       | contract                                                    |
+|--------------|--------------------------------------------------------------|
+| `desk_paint` | draw every drive's icon + label; the selected one (desk_sel) gets `gfx_xor_fill` over its hit zone. Called by wm_paint_all after the desktop fill (lock held by caller). |
+| `desk_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window). Zone hit: if same zone as desk_sel and [ui_click_t]−desk_clkt < 9 (birth ticks, §10) → clear the selection and call `files_open_drive` with AL = drive. Else select it, stamp desk_clkt. Miss: clear any selection. All its own drawing (selection flips) happens under gfx_lock/gfx_unlock acquired internally, redrawing only the affected zones — EXCEPT when a visible window overlaps a zone's drawn rect (x 582..633 with the label overhang, window rect incl. the 1px shadow): a partial redraw would paint desktop over that window, so the flip falls back to a full wm_paint_all under the same lock. |
+
+Selection is purely visual bookkeeping; a window covering an icon simply
+paints over it (desk_paint runs before windows in wm_paint_all), and
+clicks over windows never reach desk_click.
+
+## 27. HELLO — the second package (apps/hello/hello.asm)
+
+Deliberately minimal, to prove the SDK surface and the no-icon fallback:
+`JOP_HEADER 'HELLO', entry` (no icon flag — the Disk window must show
+`ico_app16` for it), one window "Hello" 240×90 at (200,150), paint =
+two centered lines: "Hello from a" / ".jop package!", no onkey, no
+onclick, no bss. Entry: wm_create, return BX/CF. Prefix `hl_`.
