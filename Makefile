@@ -12,15 +12,17 @@ QEMU  := qemu-system-i386
 BUILD := build
 IMG   := $(BUILD)/jop.img
 IMG360 := $(BUILD)/jop360.img
+APPSIMG := $(BUILD)/apps.img
+APPSIMG360 := $(BUILD)/apps360.img
 BOX   := /Applications/86Box.app/Contents/MacOS/86Box
 VM    := $(CURDIR)/vm/xt
 
 KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
-.PHONY: all run debug xt clean
+.PHONY: all run debug test xt clean
 
-all: $(IMG) $(IMG360)
+all: $(IMG) $(IMG360) $(APPSIMG) $(APPSIMG360)
 
 $(BUILD):
 	@mkdir -p $(BUILD)
@@ -61,25 +63,44 @@ $(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin
 	@dd if=$(BUILD)/kernel.bin of=$@ bs=512 seek=1 conv=notrunc status=none
 	@echo "image:  $@ (360KB, 9 spt)"
 
+# Minesweeper, the first loadable program: a flat binary with the .jop
+# package header, validated by jopkg.py and shipped on a jopfs data floppy.
+$(BUILD)/mines.bin: apps/mines/mines.asm apps/jopapi.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/mines/mines.asm
+	@echo "mines:  $$(stat -f%z $@) bytes"
+
+$(BUILD)/mines.jop: $(BUILD)/mines.bin tools/jopkg.py
+	python3 tools/jopkg.py $(BUILD)/mines.bin -o $@
+
+# The software floppies (drive B:) hold packages, not boot code - jopfs only.
+$(APPSIMG): $(BUILD)/mines.jop tools/jopdisk.py
+	python3 tools/jopdisk.py -o $@ --size 1440 $(BUILD)/mines.jop
+
+$(APPSIMG360): $(BUILD)/mines.jop tools/jopdisk.py
+	python3 tools/jopdisk.py -o $@ --size 360 $(BUILD)/mines.jop
+
 # The GUI reads a Microsoft serial mouse on COM1; QEMU emulates one natively.
 MOUSE := -chardev msmouse,id=m0 -serial chardev:m0
 
-run: $(IMG)
-	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE)
+run: $(IMG) $(APPSIMG)
+	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1
 
-debug: $(IMG)
-	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) -s -S
+debug: $(IMG) $(APPSIMG)
+	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) -s -S \
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1
 
 # Headless boot with a QMP socket, for scripted screendumps and input:
 #   make test
 #   python3 tools/qmp.py build/qmp.sock 'screendump build/shot.ppm'
 #   python3 tools/qmp.py build/qmp.sock 'quit'
-test: $(IMG)
+test: $(IMG) $(APPSIMG)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 \
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid
 
 # Boot the 360KB image on emulated period hardware in 86Box.
-xt: $(IMG360)
+xt: $(IMG360) $(APPSIMG360)
 	$(BOX) -P $(VM) -N
 
 clean:
