@@ -25,10 +25,10 @@ W_ONCLICK equ 16                ; word: near ptr or 0; CX=x DX=y SI=win, called
                                 ; under the gfx lock for content clicks on the
                                 ; front window (SPEC.md 13)
 WIN_SIZE equ 18                 ; NOT a power of two: never shift, multiply
-MAX_WIN  equ 8
+MAX_WIN  equ 12                 ; mirrored in apps/jopapi.inc (SPEC.md 11)
 
 ; -----------------------------------------------------------------------------
-; wm_init - zero the window table, z-order array and count
+; wm_init - zero the window table, z-order array and count; orphan wm_owner
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
@@ -42,6 +42,10 @@ wm_init:
     xor ax, ax
     mov di, wm_wins             ; wins + zord + zn are contiguous in .bss
     mov cx, MAX_WIN*WIN_SIZE + MAX_WIN + 1
+    rep stosb
+    mov al, 0xFF                ; wm_owner is NOT part of the zero run: its
+    mov di, wm_owner            ; empty value is 0xFF (unowned, SPEC.md 11)
+    mov cx, MAX_WIN
     rep stosb
     pop es
     pop di
@@ -106,9 +110,10 @@ wm_create:
 ; in:  BX = window ptr (caller holds the gfx lock)
 ; out: nothing (all registers preserved)
 ;
-; Clears W_FLAGS (used + visible), removes the window's index from wm_zord
-; (compacting the byte array over it, decrementing wm_zn), then repaints all.
-; The record slot becomes reusable by wm_create.
+; Clears W_FLAGS (used + visible), resets the slot's wm_owner entry to 0xFF,
+; removes the window's index from wm_zord (compacting the byte array over
+; it, decrementing wm_zn), then repaints all. The record slot becomes
+; reusable by wm_create.
 ; -----------------------------------------------------------------------------
 wm_destroy:
     push ax
@@ -119,6 +124,8 @@ wm_destroy:
     sub ax, wm_wins
     mov cl, WIN_SIZE
     div cl                      ; AL = index (AH = 0: ptr is record-aligned)
+    mov si, ax                  ; orphan the slot's owner entry so a future
+    mov byte [wm_owner+si], 0xFF; wm_create reuse starts unowned (SPEC.md 11)
     mov ch, 0
     mov cl, [wm_zn]
     jcxz .paint                 ; empty z-order: nothing to remove
@@ -237,11 +244,11 @@ wm_top:
 ; wm_hit - find the topmost visible window containing a point
 ; in:  CX = x, DX = y
 ; out: BX = window ptr (0 if none)
-;      AL = 0 content, 1 title bar, 2 close box
+;      AL = 0 content, 1 title bar, 2 close box, 3 minimize box
 ;
-; AL=2 is reported only when BX is the frontmost visible window - the only
-; one with a close box drawn; the same region on any other window is title
-; bar (AL=1).
+; AL=2/AL=3 are reported only when BX is the frontmost visible window - the
+; only one with the boxes drawn; the same regions on any other window are
+; title bar (AL=1).
 ; -----------------------------------------------------------------------------
 wm_hit:
     push si
@@ -279,20 +286,31 @@ wm_hit:
     sub ax, [bx+W_Y]
     cmp ax, TITLE_H
     jge .content
-    test bp, bp                 ; close box exists on the frontmost only
+    test bp, bp                 ; the boxes exist on the frontmost only
     jz .title
-    cmp ax, 4                   ; box rows W_Y+4 .. W_Y+14
+    cmp ax, 4                   ; both boxes occupy rows W_Y+4 .. W_Y+14
     jl .title
     cmp ax, 14
     jg .title
-    mov ax, [bx+W_X]            ; box columns W_X+8 .. W_X+18
+    mov ax, [bx+W_X]            ; close box columns W_X+8 .. W_X+18
     add ax, 8
+    cmp cx, ax
+    jl .minbox
+    add ax, 10
+    cmp cx, ax
+    jg .minbox
+    mov al, 2
+    jmp .out
+.minbox:
+    mov ax, [bx+W_X]            ; minimize box: W_X+W_W-19 .. W_X+W_W-9
+    add ax, [bx+W_W]            ; (the close box mirrored, SPEC.md 11)
+    sub ax, 19
     cmp cx, ax
     jl .title
     add ax, 10
     cmp cx, ax
     jg .title
-    mov al, 2
+    mov al, 3
     jmp .out
 .title:
     mov al, 1
@@ -335,6 +353,7 @@ wm_paint_all:
     call gfx_fill_gray
     call desk_paint             ; drive icons live on the desktop, under
                                 ; every window (SPEC.md 26)
+    call dock_paint             ; so does the dock strip (SPEC.md 30)
     call menu_draw_bar
     call wm_top
     mov bp, bx                  ; BP = frontmost visible (0 if none)
@@ -450,6 +469,21 @@ wm_obscured:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_ptr2idx - window record pointer to index (public, SPEC.md 11)
+; in:  BX = window ptr (record-aligned)
+; out: AL = window index, AH = 0
+; clobbers: nothing else
+; -----------------------------------------------------------------------------
+wm_ptr2idx:
+    push cx
+    mov ax, bx
+    sub ax, wm_wins
+    mov cl, WIN_SIZE
+    div cl                      ; AL = index (AH = 0: ptr is record-aligned)
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_idx2ptr - window index to record pointer (module internal)
 ; in:  AL = window index
 ; out: BX = wm_wins + index*WIN_SIZE
@@ -475,10 +509,12 @@ wm_idx2ptr:
 ;
 ; Exact frame per SPEC.md 11: 1px black outline; drop shadow offset (+1,+1)
 ; along the right and bottom edges; title bar rows W_Y+1..W_Y+TITLE_H-2
-; white; frontmost window gets 6 black pinstripes inset 3px and an 11x11
-; close box at W_X+8, rows W_Y+4..W_Y+14, stripes broken by white 2px around
-; the box and 6px around the centered black title; black separator at row
-; W_Y+TITLE_H-1; content white-filled, then W_PAINT is called with SI=window.
+; white; frontmost window gets 6 black pinstripes inset 3px, an 11x11
+; close box at W_X+8, rows W_Y+4..W_Y+14, and an 11x11 minimize box
+; mirrored at W_X+W_W-19 with a collapse bar across row W_Y+9 - stripes
+; broken by white 2px around each box and 6px around the centered black
+; title; black separator at row W_Y+TITLE_H-1; content white-filled, then
+; W_PAINT is called with SI=window.
 ; -----------------------------------------------------------------------------
 wm_draw_win:
     push ax
@@ -574,6 +610,42 @@ wm_draw_win:
     add dx, 14
     call gfx_frame
 
+    mov byte [gfx_color], CWHITE
+    mov ax, [di+W_X]            ; break the stripes around the minimize box
+    add ax, [di+W_W]            ; (mirror of the close-box break, SPEC.md 11)
+    sub ax, 21
+    mov bx, [di+W_Y]
+    add bx, 2
+    mov cx, [di+W_X]
+    add cx, [di+W_W]
+    sub cx, 7
+    mov dx, [di+W_Y]
+    add dx, 16
+    call gfx_fill
+
+    mov byte [gfx_color], CBLACK
+    mov ax, [di+W_X]            ; minimize box: 11x11 black frame at
+    add ax, [di+W_W]            ; W_X+W_W-19 .. W_X+W_W-9, rows +4..+14
+    sub ax, 19
+    mov bx, [di+W_Y]
+    add bx, 4
+    mov cx, [di+W_X]
+    add cx, [di+W_W]
+    sub cx, 9
+    mov dx, [di+W_Y]
+    add dx, 14
+    call gfx_frame
+
+    mov ax, [di+W_X]            ; collapse glyph: black bar across row
+    add ax, [di+W_W]            ; W_Y+9, cols W_X+W_W-17 .. W_X+W_W-11
+    sub ax, 17
+    mov bx, [di+W_X]
+    add bx, [di+W_W]
+    sub bx, 11
+    mov dx, [di+W_Y]
+    add dx, 9
+    call gfx_hline
+
 .title:
     mov si, [di+W_TITLE]        ; centered title on a 6px white gap
     test si, si
@@ -633,7 +705,10 @@ wm_draw_win:
 ; so these three must stay contiguous and in this order)
 ; -----------------------------------------------------------------------------
 section .bss
-wm_wins:    resb MAX_WIN * WIN_SIZE ; 8 windows x 18 bytes
+wm_wins:    resb MAX_WIN * WIN_SIZE ; 12 windows x 18 bytes
 wm_zord:    resb MAX_WIN            ; window indices, [0] = backmost
 wm_zn:      resb 1                  ; entries in wm_zord
+wm_owner:   resb MAX_WIN            ; instance index owning each window slot
+                                    ; (SPEC.md 29), 0xFF = unowned; NOT part
+                                    ; of wm_init's zero run (fill is 0xFF)
 section .text

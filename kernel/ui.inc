@@ -2,15 +2,18 @@
 ; jop - ui.inc
 ;
 ; The UI task (SPEC.md 13): task 0's forever-loop. Each pass polls the BIOS
-; keyboard, drains one event from the system queue, runs any pending package
-; load (outside the gfx lock - loader_run manages its own locking), and
-; yields. Mouse-downs in the menu bar run menu_track and dispatch the
-; returned CMD_*; mouse-downs on windows close, raise, or drag them; content
-; clicks on the front window feed its W_ONCLICK under the lock. Every wm_*
-; call that repaints is made under the gfx lock, and the drag loop's binding
-; rule is honored: the lock is only ever released while the XOR outline is
-; erased, and the release path never re-takes the lock it already holds (it
-; is non-reentrant, SPEC 7).
+; keyboard, drains one event from the system queue, runs any deferred
+; instance launch and any pending package load (both outside the gfx lock -
+; app_launch and loader_run manage their own locking), and yields.
+; Mouse-downs in the menu bar run menu_track and dispatch the returned
+; CMD_*: app commands launch a new instance (or front a full singleton) via
+; app_launch (SPEC.md 29). Mouse-downs on windows QUIT (close box ->
+; app_close_win: window, task and state freed), raise, or drag them;
+; content clicks on the front window feed its W_ONCLICK under the lock.
+; Every wm_* call that repaints is made under the gfx lock, and the drag
+; loop's binding rule is honored: the lock is only ever released while the
+; XOR outline is erased, and the release path never re-takes the lock it
+; already holds (it is non-reentrant, SPEC 7).
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -61,9 +64,11 @@ ui_task:
 .on_desktop:
     call wm_hit                 ; BX = window hit (0 = none), AL = region
     or bx, bx
-    jz .desk_icons              ; no window: the desktop icons get a look
+    jz .desk_icons              ; no window: dock, then desktop icons
     cmp al, 2
     je .close_box
+    cmp al, 3
+    je .min_box
     cmp al, 1
     je .title_bar
 
@@ -88,13 +93,21 @@ ui_task:
     jmp .yield
 
 .desk_icons:
+    call dock_click             ; CX/DX; CF=1 = consumed (locks internally,
+    jc .yield                   ; SPEC.md 30) - the dock gets first look
     call desk_click             ; CX/DX = click point, no lock held; select /
     jmp .yield                  ; double-click-open is desk.inc's business
 
 .close_box:                     ; wm_hit only reports AL=2 on the front window
     call gfx_lock
-    call wm_hide                ; in: BX; clears visible + repaints
-    call gfx_unlock
+    call app_close_win          ; in: BX; quits the owning instance (or
+    call gfx_unlock             ; hides an ownerless window) - SPEC.md 29
+    jmp .yield
+
+.min_box:                       ; wm_hit only reports AL=3 on the front window
+    call gfx_lock
+    call inst_minimize          ; in: BX; flags the instance minimized and
+    call gfx_unlock             ; hides - its dock tile inverts (SPEC.md 30)
     jmp .yield
 
 .title_bar:
@@ -109,8 +122,15 @@ ui_task:
 .drag:
     call ui_drag                ; in: BX = window, CX/DX = mousedown x/y
 
-    ; --- 3. pending package load (SPEC.md 13/21): OUTSIDE the gfx lock --------
+    ; --- 3. deferred work (SPEC.md 13/21/29): OUTSIDE the gfx lock ------------
 .yield:
+    mov ax, [inst_launch]       ; deferred instance launch (posted by
+    or ax, ax                   ; lock-held handlers via inst_launch_post)
+    jz .chk_ld
+    dec ax                      ; stored as kind + 1
+    mov word [inst_launch], 0   ; consume before running, not after
+    call app_launch             ; in: AL = kind; does its own locking
+.chk_ld:
     cmp word [ld_pending], 0    ; set by files.inc's click handler
     je .idle
     mov ax, [ld_pending]        ; stored as directory index + 1
@@ -252,7 +272,10 @@ ui_drag_xor:
 ; in:  AX = CMD_* (0 = tracking ended on no item; ignored)
 ; out: nothing (CMD_REBOOT never returns)
 ; clobbers: AX, BX (internal helper of the UI task)
-; wm_show/wm_hide repaint internally (SPEC 11) - no extra wm_paint_all here.
+; Runs on the UI task with NO lock held, so app commands call app_launch
+; directly (SPEC.md 13/29): a new instance per launch, or - for a kind at
+; its cap - front + un-minimize the existing one. A failed launch (tables
+; full) is a silent no-op. CMD_CLOSE quits the frontmost instance.
 ; -----------------------------------------------------------------------------
 ui_dispatch:
     or ax, ax
@@ -277,35 +300,33 @@ ui_dispatch:
     ret
 
 .about:
-    mov bx, [app_win_about]
-    jmp .show
+    mov al, KIND_ABOUT
+    jmp .launch
 .note:
-    mov bx, [app_win_note]
-    jmp .show
+    mov al, KIND_NOTE
+    jmp .launch
 .clock:
-    mov bx, [app_win_clock]
-    jmp .show
+    mov al, KIND_CLOCK
+    jmp .launch
 .bounce:
-    mov bx, [app_win_bounce]
-    jmp .show
+    mov al, KIND_BOUNCE
+    jmp .launch
 .tasks:
-    mov bx, [tm_win]
-.show:
-    call gfx_lock
-    call wm_show                ; in: BX; shows + raises + repaints
-    call gfx_unlock
+    mov al, KIND_TASKMGR
+.launch:
+    call app_launch             ; takes its own locks; CF (full) ignored
     ret
 
 .files:
-    call files_open             ; mounts + shows the Disk window; it takes the
-    ret                         ; gfx lock itself (SPEC 22) - none held here
+    call files_open             ; mounts + launches/fronts the Disk window;
+    ret                         ; takes its own locks (SPEC 22)
 
 .close:
     call gfx_lock
     call wm_top                 ; BX = frontmost visible, 0 if none
     or bx, bx
     jz .close_none
-    call wm_hide                ; in: BX
+    call app_close_win          ; in: BX; quit its instance (SPEC.md 29)
 .close_none:
     call gfx_unlock
     ret

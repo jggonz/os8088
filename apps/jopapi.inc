@@ -25,11 +25,18 @@
 ; bytes after the image, so a package addresses its bss with equ offsets
 ; from the jop_image_end label that JOP_IMAGE_END defines.
 ;
-; Packages run in the kernel's tiny model (CS = DS = SS = KERNEL_SEG) at
-; APP_LOAD_OFF; every JAPI_* symbol below is a fixed near-call target
-; (4-byte jump-table slots in kernel.asm). Register contracts are the
-; target routines' own (SPEC.md 5, 6, 8, 11, 20.4); all of them preserve
-; every register except their documented outputs.
+; Packages run in the kernel's tiny model (CS = DS = SS = KERNEL_SEG),
+; assembled at the APP_LOAD_OFF link base and RELOCATED at load time to a
+; per-instance region - several packages (or several instances of one) can
+; be resident at once, each a fully relocated copy with its own bss
+; (SPEC.md 20.1). This imposes ONE coding rule (SPEC.md 20.2): a package
+; address may only be embedded as a whole 16-bit word (imm16, disp16,
+; dw label) - never byte-split, shifted or folded into other constants;
+; jopkg.py's reconstruction check fails the build otherwise. Every JAPI_*
+; symbol below is a fixed near-call target (4-byte jump-table slots in
+; kernel.asm). Register contracts are the target routines' own (SPEC.md
+; 5, 6, 8, 11, 20.4); all of them preserve every register except their
+; documented outputs.
 ; =============================================================================
 
 ; --- environment ---------------------------------------------------------------
@@ -100,7 +107,7 @@ W_PAINT   equ 12            ; word: near ptr, SI = win ptr; content only
 W_ONKEY   equ 14            ; word: near ptr or 0; AL=ascii, AH=scan, SI=win
 W_ONCLICK equ 16            ; word: near ptr or 0; CX=x, DX=y, SI=win
 WIN_SIZE  equ 18
-MAX_WIN   equ 8
+MAX_WIN   equ 12
 
 ; --- wm_create template layout (SPEC.md 11, 16 bytes, 8 words) -----------------
 WT_X       equ 0
@@ -126,19 +133,25 @@ WT_SIZE    equ 16
 %macro JOP_HEADER 2-3
     cpu 8086
     bits 16
-    org APP_LOAD_OFF
+%ifdef JOP_ORG
+    org JOP_ORG             ; relocation-probe pass (Makefile passes
+%else                       ; -DJOP_ORG=0xA800; jopkg.py diffs the two
+    org APP_LOAD_OFF        ; assemblies into the fixup table, SPEC.md 24)
+%endif
     db 'J', 'P'             ; +0  magic (word 0x504A)
-    db 1                    ; +2  format version
+    db 2                    ; +2  format version 2: relocatable (SPEC.md 20.2)
     %if %0 >= 3
     db %3                   ; +3  flags (bit 0 = embedded icon)
     %else
     db 0                    ; +3  flags
     %endif
-    dw APP_LOAD_OFF         ; +4  load offset
-    dw %2                   ; +6  entry offset (absolute)
-    dw JOP_IMAGE_SIZE       ; +8  image size = total file bytes
+    dw APP_LOAD_OFF         ; +4  link base (constant across both passes)
+    dw (%2) - $$            ; +6  entry offset, image-relative
+    dw JOP_IMAGE_SIZE       ; +8  image size (resident bytes; the reloc
+                            ;     table jopkg appends is excluded)
     dw JOP_BSS_SIZE         ; +10 bytes the loader zeroes after the image
-    dd 0                    ; +12 reserved
+    dw 0                    ; +12 relocation count - stamped by jopkg.py
+    dw 0                    ; +14 reserved
     %strlen %%len %1
     %if %%len > 15
         %error "JOP_HEADER: program name must be at most 15 characters (the 16-byte field is NUL-padded)"

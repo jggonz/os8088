@@ -2,8 +2,10 @@
 ; jop - sched.inc
 ;
 ; Pre-emptive round-robin scheduler off the PIT (SPEC.md 8). Up to MAX_TASKS
-; tasks, each with a 1536-byte stack in .bss; task 0 is the boot thread (the
-; UI task). All tasks run tiny-model: CS = DS = SS = KERNEL_SEG, so a context
+; tasks; task 0 is the boot thread (the UI task) and runs on the boot stack
+; (SS:0xFFFE) — it owns no slice of sch_stacks. Slots 1..MAX_TASKS-1 are
+; dynamic (task_spawn / task_exit), each with a 1536-byte stack in .bss.
+; All tasks run tiny-model: CS = DS = SS = KERNEL_SEG, so a context
 ; switch is nothing more than swapping SP between stacks that share one
 ; segment.
 ;
@@ -25,11 +27,13 @@
 ; =============================================================================
 
 ; --- task table (SPEC.md 8) --------------------------------------------------
-MAX_TASKS   equ 4
+MAX_TASKS   equ 8
 T_STATE     equ 0               ; byte: 0 free, 1 ready, 2 sleeping
 T_SP        equ 2               ; word: saved SP (frame above)
 T_WAKE      equ 4               ; word: [ticks] value to wake at
-T_SIZE      equ 8               ; record stride (2 bytes padding)
+T_INST      equ 6               ; byte: owning instance index (SPEC.md 29),
+                                ; 0xFF = none (the UI task)
+T_SIZE      equ 8               ; record stride (1 byte padding)
 
 SCH_STACK   equ 1536            ; per-task stack bytes
 SCH_FRAME   equ 24              ; saved-frame size: 9 regs + IP/CS/FLAGS
@@ -61,6 +65,7 @@ sched_init:
     mov byte [sch_lock], 0
     mov word [ticks], 0
     mov byte [sch_tasks+T_STATE], 1     ; task 0 = this thread, ready
+    mov byte [sch_tasks+T_INST], 0xFF   ; the UI task owns no instance
 
     ; PIT ch0 -> mode 2 (rate generator), divisor 0 = 65536: the IRQ rate
     ; stays 18.2065 Hz (BIOS timekeeping counts IRQs, unaffected), but the
@@ -155,41 +160,50 @@ sched_unhook:
 ; -----------------------------------------------------------------------------
 ; task_spawn - create a task that iret-launches into a near entry point
 ;
-; Builds a complete saved frame at the top of the slot's stack: GP regs zero,
-; DS = ES = KERNEL_SEG, CS = KERNEL_SEG, IP = entry, FLAGS with IF=1. The
-; timer ISR is live while we work, so the T_STATE=1 store is the LAST write
-; to the record - a byte store is atomic, publishing a fully built frame.
-; The entry routine must never ret (loop forever).
+; Builds a complete saved frame at the top of the slot's stack: DX = the
+; spawn argument, other GP regs zero, DS = ES = KERNEL_SEG, CS = KERNEL_SEG,
+; IP = entry, FLAGS with IF=1. The timer ISR is live while we work, so the
+; T_STATE=1 store is the LAST write to the record - a byte store is atomic,
+; publishing a fully built frame. The slot's sch_cycles counter is zeroed
+; before the publish (the ISR only charges the RUNNING slot, so a
+; pre-publish write cannot race - SPEC.md 8.1). The scan starts at slot 1:
+; slot 0 is the UI task, never free, and runs on the boot stack.
+; The entry routine must never ret - it terminates only via task_exit
+; (usually through inst_task_die, SPEC.md 29) or loops forever.
 ;
 ; in:       AX = entry point (near, kernel segment)
+;           DX = argument word - lands in the new task's DX; DL is also
+;                stored to T_INST (instance index, 0xFF = none)
 ; out:      CF = 1 if no free slot (task not created)
-; clobbers: flags
+;           CF = 0, AL = slot index (1..MAX_TASKS-1)
+; clobbers: AX (AL is an output), flags
 ; -----------------------------------------------------------------------------
 task_spawn:
-    push ax
     push bx
     push cx
     push dx
+    push si
     push di
 
-    mov bx, sch_tasks           ; scan for a free slot
-    xor dx, dx                  ; DX = slot index
+    mov bx, sch_tasks + T_SIZE  ; scan for a free slot, from slot 1
+    mov cx, 1                   ; CX = slot index
 .find:
     cmp byte [bx+T_STATE], 0
     je .found
     add bx, T_SIZE
-    inc dx
-    cmp dx, MAX_TASKS
+    inc cx
+    cmp cx, MAX_TASKS
     jb .find
     stc                         ; table full
     jmp .done
 
 .found:
-    mov cx, ax                  ; CX = entry (AX is about to be clobbered)
-    mov ax, dx
-    inc ax                      ; stack top = sch_stacks + (slot+1)*SCH_STACK
-    mov di, SCH_STACK
-    mul di                      ; DX:AX = AX * 1536 (DX high half discarded)
+    mov si, ax                  ; SI = entry (AX becomes scratch)
+    mov ax, cx                  ; stack top = sch_stacks + slot*SCH_STACK
+    mov di, SCH_STACK           ; (slot 1 owns sch_stacks[0..1535]; slot 0
+    push dx                     ; has no slice - it runs on the boot stack)
+    mul di                      ; DX:AX = AX * 1536 (high half discarded)
+    pop dx
     add ax, sch_stacks
     sub ax, SCH_FRAME           ; carve the fake frame at the very top
     mov di, ax
@@ -202,22 +216,31 @@ task_spawn:
     mov [di+6], ax              ; DI
     mov [di+8], ax              ; SI
     mov [di+10], ax             ; BX
-    mov [di+12], ax             ; DX
+    mov [di+12], dx             ; DX = the spawn argument
     mov [di+14], ax             ; CX
     mov [di+16], ax             ; AX
-    mov [di+18], cx             ; IP = entry
+    mov [di+18], si             ; IP = entry
     mov word [di+20], KERNEL_SEG; CS
     mov word [di+22], 0x0202    ; FLAGS: IF=1, reserved bit 1 set
+    mov [bx+T_INST], dl         ; owning instance (0xFF = none)
+
+    mov ax, cx                  ; zero the slot's cycle counter before the
+    shl ax, 1                   ; publish, so a reused slot never inherits
+    shl ax, 1                   ; a dead task's total (SPEC.md 8.1)
+    mov di, ax
+    mov word [di+sch_cycles], 0
+    mov word [di+sch_cycles+2], 0
 
     mov byte [bx+T_STATE], 1    ; publish - MUST be the last record write
+    mov ax, cx                  ; AL = slot index
     clc
 
 .done:
     pop di
+    pop si
     pop dx
     pop cx
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -287,13 +310,50 @@ task_sleep:
     ret
 
 ; -----------------------------------------------------------------------------
+; task_exit - terminate the CURRENT task (self-exit only; NEVER RETURNS)
+;
+; in:  BX = ptr to a release byte zeroed atomically with the task's death
+;      (an instance record's I_STATE, SPEC.md 29), or 0 for none
+;
+; Runs entirely under IF=0 (the cli below has no matching popf - control
+; never returns): charges the final slice, zeroes the release byte, frees
+; the own task record, and jumps into sch_switch, which parks a
+; now-meaningless SP into the freed record (harmless) and resumes the next
+; ready task. The freed slot is skipped by the round-robin scan (T_STATE=0);
+; the resume-the-outgoing-task fallback cannot pick a dead task because it
+; is only reachable when NOTHING is ready, and task 0 (the UI task) never
+; sleeps and never exits. Because the release byte and T_STATE are both
+; cleared inside one IF=0 window, an instance slot and its task slot free
+; at the same instant - "instance free but task table still holding the
+; zombie" is unobservable (SPEC.md 8/29).
+;
+; PLACEMENT: outside the sch_isr -> sch_switch -> sch_resume fall-through
+; run - this routine reaches sch_switch by explicit jmp only.
+; -----------------------------------------------------------------------------
+task_exit:
+    cli                         ; IF=0 to the end - we never return
+    mov di, bx                  ; DI survives sch_account's clobbers
+    call sch_account            ; charge the final slice to the dying slot
+    test di, di
+    jz .norel
+    mov byte [di], 0            ; release the instance record (SPEC.md 29)
+.norel:
+    mov bl, [sch_cur]           ; free our own task record
+    xor bh, bh
+    mov cl, 3
+    shl bx, cl
+    mov byte [bx+sch_tasks+T_STATE], 0
+    jmp sch_switch              ; explicit jump - placement-safe
+
+; -----------------------------------------------------------------------------
 ; sch_account - charge the PIT cycles since the last measure point to the
 ;               task that just ran (module-internal, SPEC.md 8.1)
 ;
 ; PLACEMENT: this routine must sit OUTSIDE the sch_isr -> sch_switch
 ; fall-through path (sch_isr does not jump to sch_switch - it falls into
 ; it). Inserting any routine between them sends every unlocked tick through
-; that routine's ret with no return address on the stack.
+; that routine's ret with no return address on the stack. (task_exit above
+; enters sch_switch by explicit jmp - that is the sanctioned pattern.)
 ;
 ; Builds the 32-bit timestamp now = [ticks]*65536 + phase, where phase =
 ; 65536 - latched count (0 at reload, monotone within a period), subtracts
@@ -460,7 +520,9 @@ sch_resume:
 section .bss
 
 sch_tasks:  resb MAX_TASKS * T_SIZE     ; task records (layout above)
-sch_stacks: resb MAX_TASKS * SCH_STACK  ; slot n's stack tops at (n+1)*1536
+sch_stacks: resb (MAX_TASKS-1) * SCH_STACK ; slots 1..7 only: slot n's stack
+                                        ; top at n*1536 (slot 0 = the UI task
+                                        ; runs on the boot stack, SS:0xFFFE)
 sch_old08:  resb 4                      ; saved BIOS int 08h vector (off:seg)
 ticks:      resw 1                      ; public tick count, wraps at 65536
 sch_cur:    resb 1                      ; index of the running task

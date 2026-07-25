@@ -2,10 +2,13 @@
 ; jop - files.inc
 ;
 ; The Disk window - a minimal file manager for the jopfs data floppy
-; (SPEC.md 22). files_init creates the window hidden at boot; CMD_FILES
-; dispatch calls files_open and desk_click calls files_open_drive - both
-; ALWAYS remount (that is the disk-swap story: a swapped disk must never
-; show stale contents) and show the window. Rows list the directory (icon +
+; (SPEC.md 22). A singleton app kind (KIND_FILES, cap 1 - the mount state
+; below is module-global): no boot-time window; app_launch creates it on
+; demand (fm_kinit is the KD_INIT). CMD_FILES dispatch calls files_open and
+; desk_click calls files_open_drive - both ALWAYS remount (that is the
+; disk-swap story: a swapped disk must never show stale contents) and end
+; in app_launch, which creates the window or fronts + un-minimizes the
+; existing instance. Rows list the directory (icon +
 ; name + size); a double-click (same row twice within 9 ticks) posts the
 ; entry to [ld_pending] - ui.inc runs loader_run after the lock drops, and
 ; loader_run calls files_refresh with the result in [ld_status]. A Refresh
@@ -31,26 +34,26 @@ FM_BTN_X2   equ 312
 FM_BTN_Y2   equ 15
 
 ; -----------------------------------------------------------------------------
-; files_init - create the Disk window (hidden) and reset module state
+; files_init - reset module state (no window is created at boot, SPEC.md 22)
 ; in:  nothing
-; out: nothing; window ptr stored in fm_win
+; out: nothing
 ; clobbers: nothing (flags only)
 ; .bss is not zeroed by the loader: every state variable is set here.
 ; -----------------------------------------------------------------------------
 files_init:
-    push bx
-    push si
-
     mov word [fm_sel], 0xFFFF   ; no selection
     mov word [fm_clkt], 0
     mov byte [fm_mountok], 0
+    ret
 
-    mov si, fm_tpl
-    call wm_create
-    mov [fm_win], bx            ; stays hidden until CMD_FILES
-
-    pop si
-    pop bx
+; -----------------------------------------------------------------------------
+; fm_kinit - KD_INIT for the Disk kind (SPEC.md 29.3): fresh instance state
+; in:  BX = window ptr, DI = state ptr (0 - stateless), SI = instance record
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fm_kinit:
+    mov word [fm_sel], 0xFFFF   ; a fresh window starts with no selection
+    mov word [fm_clkt], 0
     ret
 
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
@@ -69,7 +72,9 @@ fm_s_dskerr:  db 'Disk error', 0
 fm_s_badpkg:  db 'Bad package', 0
 fm_s_toobig:  db 'Too large', 0
 fm_s_ldfail:  db 'Load failed', 0
+fm_s_nomem:   db 'Out of memory', 0
 fm_stattab:   dw fm_s_empty, fm_s_dskerr, fm_s_badpkg, fm_s_toobig, fm_s_ldfail
+              dw fm_s_nomem
 
 ; -----------------------------------------------------------------------------
 ; files_open - CMD_FILES dispatch entry (ui.inc); no lock held on entry
@@ -108,10 +113,8 @@ fm_open_body:
 .fail:
     mov word [fm_sel], 0xFFFF   ; directory (re)read: selection is stale
 
-    call gfx_lock
-    mov bx, [fm_win]
-    call wm_show                ; visible + front + repaint all
-    call gfx_unlock
+    mov al, KIND_FILES          ; create the window, or front + un-minimize
+    call app_launch             ; the existing instance (SPEC.md 29)
 
     pop dx
     pop bx
@@ -123,24 +126,33 @@ fm_open_body:
 ; in:  nothing; no lock held on entry
 ; out: nothing
 ; clobbers: nothing (flags only)
-; Takes the gfx lock itself; hidden window = nothing to do. This must be a
+; No live Disk instance (the user closed it mid-load) = nothing to do; else
+; takes the gfx lock itself; hidden window = nothing to do. This must be a
 ; FULL wm_paint_all, not a content-only repaint: loader_run calls it right
 ; after wm_show raised the loaded program's window, which may overlap the
 ; Disk window - painting only our content would draw over the new front
 ; window. Rare (once per load attempt), so the full repaint is cheap enough.
 ; -----------------------------------------------------------------------------
 files_refresh:
+    push ax
     push si
+    push di
 
+    mov al, KIND_FILES
+    call inst_find_kind         ; DI = the live Disk instance (SPEC.md 29)
+    jc .closed
     call gfx_lock
-    mov si, [fm_win]
+    mov si, [di+I_WIN]
     test word [si+W_FLAGS], 2   ; visible?
     jz .skip
     call wm_paint_all
 .skip:
     call gfx_unlock
+.closed:
 
+    pop di
     pop si
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -529,7 +541,7 @@ fm_draw_core:
     cmp word [ld_pending], 0
     jne .stat
     mov al, [ld_status]
-    cmp al, 4
+    cmp al, 5
     ja .statdone                ; out-of-range status: draw nothing
     xor ah, ah
     mov bx, ax
@@ -610,7 +622,6 @@ fm_utoa:
 ; -----------------------------------------------------------------------------
 section .bss
 
-fm_win:     resw 1              ; Disk window record ptr
 fm_sel:     resw 1              ; selected row, 0xFFFF = none
 fm_clkt:    resw 1              ; click birth tick (EV_C) of the last row click
 fm_mountok: resb 1              ; non-zero when the last mount succeeded

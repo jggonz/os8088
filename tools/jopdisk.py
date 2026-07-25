@@ -45,12 +45,18 @@ def read_package(path: str) -> tuple[bytes, bytes, bytes]:
     magic, = struct.unpack_from("<H", data, 0)
     if magic != 0x504A:
         fail(f"{path}: bad magic 0x{magic:04X} (not a .jop package)")
+    if data[2] != 2:
+        fail(f"{path}: format version {data[2]}; this is the v2 toolchain "
+             "(rebuild the package)")
     if len(data) > 0xFFFF:
         fail(f"{path}: {len(data)} bytes overflows the 16-bit size field")
-    image, = struct.unpack_from("<H", data, 8)
-    if image != len(data):
-        fail(f"{path}: header image size {image} != file size {len(data)} "
-             "(run jopkg.py first)")
+    image, rcount = struct.unpack_from("<H", data, 8)[0], \
+        struct.unpack_from("<H", data, 12)[0]
+    if not 32 <= image <= len(data):
+        fail(f"{path}: header image size {image} out of range")
+    if image + 2 * rcount != len(data):
+        fail(f"{path}: image {image} + {rcount} reloc words != file size "
+             f"{len(data)} (run jopkg.py first)")
     name16 = data[16:32]
     if not name16.split(b"\0", 1)[0]:
         fail(f"{path}: empty name field in header")
