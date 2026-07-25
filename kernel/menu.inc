@@ -17,8 +17,9 @@ CMD_NOTE    equ 2
 CMD_CLOCK   equ 3
 CMD_BOUNCE  equ 4
 CMD_FILES   equ 5
-CMD_CLOSE   equ 6
-CMD_REBOOT  equ 7
+CMD_TASKS   equ 6
+CMD_CLOSE   equ 7
+CMD_REBOOT  equ 8
 
 ; --- menu table entry layout --------------------------------------------------
 MENU_TITLE  equ 0               ; word: near ptr to NUL title, 0 = apple glyph
@@ -415,6 +416,7 @@ menu_s_note     db 'Note Pad', 0
 menu_s_clock    db 'Clock', 0
 menu_s_bounce   db 'Bounce', 0
 menu_s_disk     db 'Disk', 0
+menu_s_tasks    db 'Task Manager', 0
 menu_s_close    db 'Close Window', 0
 menu_s_restart  db 'Restart', 0
 
@@ -425,6 +427,7 @@ menu_items_file:
     dw menu_s_clock
     dw menu_s_bounce
     dw menu_s_disk
+    dw menu_s_tasks
     dw menu_s_close
 menu_items_special:
     dw menu_s_restart
@@ -434,7 +437,7 @@ menu_items_special:
 ;           left edge with 12px padding zones around each title.
 menu_table:
     dw 0,              menu_items_apple,   1, CMD_ABOUT,  0,   29,  10
-    dw menu_s_file,    menu_items_file,    5, CMD_NOTE,   30,  85,  42
+    dw menu_s_file,    menu_items_file,    6, CMD_NOTE,   30,  85,  42
     dw menu_s_special, menu_items_special, 1, CMD_REBOOT, 86, 165,  98
 
 ; -----------------------------------------------------------------------------

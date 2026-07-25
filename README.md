@@ -28,7 +28,7 @@ core interactions work:
   raise, close box to hide, reopen from the File menu.
 - **Menus** — press in the bar, drag through pull-downs with live highlight,
   release to choose. Apple → About jop; File → Note Pad / Clock / Bounce /
-  Close Window; Special → Restart.
+  Disk / Task Manager / Close Window; Special → Restart.
 - **Note Pad** — click it, type; wraps lines, Backspace and Return work.
 - **Disk icons** — the desktop shows an icon per floppy drive the BIOS
   reports (int 11h). Click to select, double-click to open that drive in
@@ -52,6 +52,10 @@ core interactions work:
   the PIT timer interrupt switching tasks out from under each other, on an
   8086. When another window covers them they stop drawing (and the clock
   keeps time silently); uncover them and they resume.
+- **Task Manager** — a built-in core-OS window (File → Task Manager), not a
+  package on the software disk. It shows a live visual CPU-activity meter,
+  total and used conventional RAM, and every scheduler task with its state
+  and recent CPU share.
 
 ## How
 
@@ -105,6 +109,7 @@ kernel/wm.inc        window records, z-order, frames, hit test, painter
 kernel/menu.inc      menu bar, pull-down tracking
 kernel/ui.inc        UI task: event pump, keyboard, drags, dispatch
 kernel/apps.inc      About, Note Pad, Clock task, Bounce task
+kernel/taskmgr.inc   built-in Task Manager, CPU/RAM/task telemetry
 kernel/disk.inc      int 13h floppy reads, jopfs mount + directory
 kernel/loader.inc    .jop package validation, load, launch, replace
 kernel/files.inc     the Disk window (file manager)
