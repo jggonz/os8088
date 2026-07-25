@@ -106,6 +106,7 @@ APP_MAX_SIZE equ 0x5000      ; image + bss budget, 0xA000..0xEFFF
 | `kernel/menu.inc`   | menu bar, pull-down tracking, command return            |
 | `kernel/ui.inc`     | UI task: event pump, keyboard poll, drag, dispatch      |
 | `kernel/apps.inc`   | About, Note Pad, Clock task, Bounce task                |
+| `kernel/taskmgr.inc`| built-in Task Manager window, sampler and live updater  |
 | `kernel/disk.inc`   | BIOS int 13h floppy reads, jopfs mount + directory (§18–19) |
 | `kernel/loader.inc` | package validation, load into APP region, launch (§21)  |
 | `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22) |
@@ -227,6 +228,13 @@ window.
   `[ticks]` passes T_WAKE, then becomes ready.
 - `ticks` — public word, wraps at 65536; only compare with subtraction
   (`mov ax,[ticks]` / `sub ax,[t0]` / `cmp ax,n`).
+- Task Manager instrumentation uses parallel arrays so `T_SIZE` stays fixed:
+  `sch_task_entry[MAX_TASKS]` identifies each slot by its near entry point,
+  and `sch_task_cpu[MAX_TASKS]` counts PIT intervals charged to it.
+  `sch_cpu_total` aliases `ticks`; `sch_cpu_busy` counts intervals charged
+  outside task 0. Since task 0 busy-polls rather than halting in a true idle
+  task, `busy / total` is explicitly an activity proxy, not electrical CPU
+  utilization. Coherent snapshots use `pushf`/`cli` ... `popf`.
 - `sched_unhook` — restore the original int 08h and int 0Ch vectors (calls
   `mouse_unhook` too) — used before reboot.
 
@@ -360,15 +368,16 @@ CMD_NOTE   equ 2
 CMD_CLOCK  equ 3
 CMD_BOUNCE equ 4
 CMD_FILES  equ 5
-CMD_CLOSE  equ 6
-CMD_REBOOT equ 7
+CMD_TASKS  equ 6
+CMD_CLOSE  equ 7
+CMD_REBOOT equ 8
 ```
 
 Menus: **Apple**: "About jop..." (CMD_ABOUT). **File**: "Note Pad"
 (CMD_NOTE), "Clock" (CMD_CLOCK), "Bounce" (CMD_BOUNCE), "Disk"
-(CMD_FILES), "Close Window" (CMD_CLOSE). **Special**: "Restart"
-(CMD_REBOOT). (CMD_CLOSE/CMD_REBOOT were renumbered when Disk was
-inserted — cmd = menu base + item index must still hold.)
+(CMD_FILES), "Task Manager" (CMD_TASKS), "Close Window" (CMD_CLOSE).
+**Special**: "Restart" (CMD_REBOOT). Command values remain consecutive
+within the File menu so `cmd = menu base + item index` still holds.
 
 | symbol          | contract                                                   |
 |-----------------|-------------------------------------------------------------|
@@ -420,9 +429,9 @@ Loop forever:
 Command dispatch: CMD_ABOUT/NOTE/CLOCK/BOUNCE → `wm_show` the corresponding
 window (created at boot, initially hidden or shown per §15). CMD_FILES →
 call `files_open` (§22; same position in the dispatch flow as the wm_show
-cases — files_open does its own locking). CMD_CLOSE → `wm_hide` frontmost.
-CMD_REBOOT → gfx_lock (never released), `vga_text`, `sched_unhook`,
-`int 0x19`.
+cases — files_open does its own locking). CMD_TASKS → `wm_show` the built-in
+Task Manager window. CMD_CLOSE → `wm_hide` frontmost. CMD_REBOOT → gfx_lock
+(never released), `vga_text`, `sched_unhook`, `int 0x19`.
 
 All wm_* calls that repaint are made under gfx_lock by the UI task.
 
@@ -470,6 +479,16 @@ visible (set W_FLAGS bit1 directly; the boot sequence does one
 wm_paint_all afterwards), stores the window ptrs, and `task_spawn`s
 `app_clock_task` and `app_bounce_task`.
 
+### Built-in Task Manager
+
+`taskmgr_init` creates a hidden core-OS window and spawns the fourth and
+final scheduler task. The window shows a visual non-UI CPU-activity meter,
+BIOS `int 12h` conventional RAM total and used RAM, plus one row for every
+non-free scheduler slot with its name, state and recent CPU share. Used RAM
+is the rounded kernel text+BSS footprint plus a resident package's validated
+image+BSS size. The updater samples every 18 ticks, and follows the same
+gfx-lock/visibility/`wm_obscured` drawing rules as Clock and Bounce.
+
 ## 15. kernel.asm — boot sequence
 
 Keep the 0x0000 cold entry. At 0x0010 the retired syscall gate is replaced
@@ -480,9 +499,10 @@ pinned offsets. kernel.asm also owns the tiny japi helper routines
 kmain: set segments/stack (SP=0xFFFE), `sti`, `cld`, then:
 `sched_init` → `evq_init` → `vga_mode12` → `font_init` → `wm_init` →
 `mouse_init` → `desk_init` → `apps_init` → `files_init` → `loader_init` →
-gfx_lock → `wm_paint_all` → gfx_unlock → `cursor_show` → jump into
-`ui_task` (task 0 never returns). Include order appends `icons.inc` and
-`desk.inc` after `files.inc`.
+`taskmgr_init` → gfx_lock → `wm_paint_all` → gfx_unlock → `cursor_show` →
+jump into `ui_task` (task 0 never returns). Include order includes
+`taskmgr.inc` with the other core kernel modules; it is never loaded from
+the apps disk.
 
 End of file (after all `%include` lines, with `section .text` in effect):
 
@@ -540,6 +560,9 @@ loaded-program region, §20.)
    glyph, HELLO with the generic application icon — and the Refresh
    button re-reads a swapped disk (QMP `change` + Refresh shows the new
    directory without rebooting).
+10. File → Task Manager works without an apps disk and shows a live CPU
+    activity meter, total/used RAM, and System UI, Clock, Bounce and Task
+    Manager scheduler rows.
 
 ## 18. disk.inc — floppy reads (BIOS int 13h)
 

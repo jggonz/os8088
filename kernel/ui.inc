@@ -267,6 +267,8 @@ ui_dispatch:
     je .bounce
     cmp ax, CMD_FILES
     je .files
+    cmp ax, CMD_TASKS
+    je .tasks
     cmp ax, CMD_CLOSE
     je .close
     cmp ax, CMD_REBOOT
@@ -294,6 +296,10 @@ ui_dispatch:
 .files:
     call files_open             ; mounts + shows the Disk window; it takes the
     ret                         ; gfx lock itself (SPEC 22) - none held here
+
+.tasks:
+    mov bx, [taskmgr_win]
+    jmp .show
 
 .close:
     call gfx_lock

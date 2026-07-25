@@ -121,6 +121,7 @@ kmain:
     call apps_init              ; windows + background tasks
     call files_init             ; Disk window (hidden until File > Disk)
     call loader_init            ; package loader state
+    call taskmgr_init           ; Task Manager window + final background task
 
     call gfx_lock
     call wm_paint_all
@@ -183,6 +184,7 @@ japi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "disk.inc"
 %include "loader.inc"
 %include "files.inc"
+%include "taskmgr.inc"
 %include "icons.inc"
 %include "desk.inc"
 

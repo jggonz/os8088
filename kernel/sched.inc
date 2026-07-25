@@ -34,6 +34,20 @@ T_SIZE      equ 8               ; record stride (2 bytes padding)
 SCH_STACK   equ 1536            ; per-task stack bytes
 SCH_FRAME   equ 24              ; saved-frame size: 9 regs + IP/CS/FLAGS
 
+; Task-manager instrumentation lives in parallel arrays so the binding
+; 8-byte task-record layout and its shift-by-three address arithmetic remain
+; unchanged:
+;   sch_task_entry[slot] = near entry offset (stable task identity)
+;   sch_task_cpu[slot]   = PIT intervals charged to the task (wraps at 65536)
+;   sch_cpu_total        = total sampled PIT intervals (alias of [ticks])
+;   sch_cpu_busy         = intervals charged outside task 0 (wraps at 65536)
+; A reader obtains CPU shares by subtracting two snapshots of sch_task_cpu
+; and sch_cpu_total.  Since task 0 is a busy-polling UI rather than a true
+; idle task, delta(sch_cpu_busy) / delta(sch_cpu_total) is the scheduler's
+; aggregate activity proxy; summing every task would always be 100 percent.
+; Take the snapshot with pushf/cli ... popf if all words must describe exactly
+; the same instant.
+
 ; -----------------------------------------------------------------------------
 ; sched_init - set up the task table and hook int 08h
 ;
@@ -60,7 +74,17 @@ sched_init:
     mov byte [sch_cur], 0
     mov byte [sch_lock], 0
     mov word [ticks], 0
+    mov word [sch_cpu_busy], 0
     mov byte [sch_tasks+T_STATE], 1     ; task 0 = this thread, ready
+
+    mov bx, sch_task_entry       ; clear identities and CPU counters
+    mov cx, MAX_TASKS * 2        ; the two word arrays are contiguous
+    xor ax, ax
+.clear_stats:
+    mov [bx], ax
+    add bx, 2
+    loop .clear_stats
+    mov word [sch_task_entry], ui_task ; task 0 becomes the UI task
 
     xor ax, ax                  ; vector table segment
     mov es, ax
@@ -143,6 +167,11 @@ task_spawn:
 
 .found:
     mov cx, ax                  ; CX = entry (AX is about to be clobbered)
+    mov di, dx                  ; publish identity/counter before T_STATE
+    shl di, 1                   ; word-array offset for this slot
+    mov [di+sch_task_entry], cx
+    mov word [di+sch_task_cpu], 0
+
     mov ax, dx
     inc ax                      ; stack top = sch_stacks + (slot+1)*SCH_STACK
     mov di, SCH_STACK
@@ -271,6 +300,15 @@ sch_isr:
 
     inc word [ticks]
 
+    mov bl, [sch_cur]           ; charge the completed hardware interval to
+    xor bh, bh                  ; the task that was running when it ended
+    shl bx, 1
+    inc word [bx+sch_task_cpu]
+    cmp byte [sch_cur], 0       ; task 0 busy-polls: treat its share as the
+    je .cpu_accounted           ; idle baseline for aggregate activity
+    inc word [sch_cpu_busy]
+.cpu_accounted:
+
     mov dx, [ticks]             ; wake sleepers whose deadline has passed
     mov bx, sch_tasks
     mov cx, MAX_TASKS
@@ -352,8 +390,16 @@ section .bss
 
 sch_tasks:  resb MAX_TASKS * T_SIZE     ; task records (layout above)
 sch_stacks: resb MAX_TASKS * SCH_STACK  ; slot n's stack tops at (n+1)*1536
+sch_task_entry:
+            resw MAX_TASKS              ; stable near entry offset per slot
+sch_task_cpu:
+            resw MAX_TASKS              ; PIT intervals run per slot
 sch_old08:  resb 4                      ; saved BIOS int 08h vector (off:seg)
-ticks:      resw 1                      ; public tick count, wraps at 65536
+ticks:                                  ; public tick count, wraps at 65536
+sch_cpu_total:
+            resw 1                      ; same word: denominator for CPU deltas
+sch_cpu_busy:
+            resw 1                      ; non-UI interval activity proxy
 sch_cur:    resb 1                      ; index of the running task
 sch_lock:   resb 1                      ; non-zero: ISR counts but won't switch
 
