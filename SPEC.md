@@ -43,9 +43,9 @@ pre-empted background task, updating live while the user types or drags).
    "initialize memory in a nobits section" warning fails the build.
 5. **Label hygiene.** One flat namespace. Prefix every module-internal label
    with the module's prefix (`vga_`, `font_`, `mou_`, `cur_`, `sch_`, `evq_`,
-   `wm_`, `menu_`, `ui_`, `app_`, `dsk_`/`disk_`, `ld_`/`loader_`,
-   `fm_`/`files_`, `ico_`/`icon_`, `desk_`) or use NASM local labels
-   (`.foo`).
+   `wm_`, `menu_`, `ui_`, `app_`, `inst_`, `dsk_`/`disk_`, `ld_`/`loader_`,
+   `fm_`/`files_`, `ico_`/`icon_`, `desk_`, `dock_`) or use NASM local
+   labels (`.foo`).
 6. Public drawing routines may assume the caller holds the **gfx lock**
    (§7) and that the cursor is hidden. They must not take the lock
    themselves.
@@ -61,7 +61,7 @@ pre-empted background task, updating live while the user types or drags).
 | 0x00500       | —       | free; boot stack grows down from 0x7C00            |
 | 0x07C00       | 0000    | boot sector                                        |
 | 0x10000       | 0x1000  | kernel: code, data, .bss (stacks, buffers)         |
-| 0x1A000       | 0x1000  | `APP_LOAD_OFF` — loaded-program region, 20KB (§20) |
+| 0x1A000       | 0x1000  | `APP_LOAD_OFF` — package pool, 20KB: multi-instance, sector-granular first-fit (§20/§21) |
 | 0x1F000       | 0x1000  | free gap; boot/task-0 stack grows down from 0xFFFE |
 | 0x20000       | 0x2000  | `SAVE_SEG` — save-under heap (menus), raw, via ES  |
 | 0xA0000       | 0xA000  | VGA planar framebuffer, 80 bytes/row               |
@@ -102,15 +102,17 @@ APP_MAX_SIZE equ 0x5000      ; image + bss budget, 0xA000..0xEFFF
 | `kernel/mouse.inc`  | COM1 UART, IRQ4 ISR, packet decode, cursor (save-under) |
 | `kernel/sched.inc`  | PIT hook, context switch, task table, spawn/yield/sleep |
 | `kernel/events.inc` | 8-byte event records, system event ring queue           |
-| `kernel/wm.inc`     | window records, z-order, frames, hit test, paint-all    |
+| `kernel/wm.inc`     | window records, z-order, frames, hit test, paint-all, `wm_owner` side table |
+| `kernel/instance.inc` | instance table: records, kind descriptors, launch/close lifecycle (§29) |
 | `kernel/menu.inc`   | menu bar, pull-down tracking, command return            |
 | `kernel/ui.inc`     | UI task: event pump, keyboard poll, drag, dispatch      |
-| `kernel/apps.inc`   | About, Note Pad, Clock task, Bounce task                |
+| `kernel/apps.inc`   | built-in app kinds: About, Note Pad, Clock, Bounce — state pools, kinit procs, per-instance tasks |
 | `kernel/disk.inc`   | BIOS int 13h floppy reads, jopfs mount + directory (§18–19) |
-| `kernel/loader.inc` | package validation, load into APP region, launch (§21)  |
+| `kernel/loader.inc` | package validation, pool allocation, per-instance load + relocate, launch (§21) |
 | `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22) |
 | `kernel/icons.inc`  | 1-bit icon format, draw routine, built-in library (§25) |
 | `kernel/desk.inc`   | desktop drive icons: detect, paint, click/open (§26)    |
+| `kernel/dock.inc`   | bottom dock strip: one tile per running instance, minimize/restore/activate (§30) |
 | `kernel/taskmgr.inc`| Task Manager window: CPU load gauge + history graph, RAM readout, task list (§28) |
 
 `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` remain in the
@@ -198,10 +200,17 @@ window.
 
 ## 8. sched.inc — pre-emptive round-robin
 
-- `MAX_TASKS equ 4`. Task 0 is the boot thread (becomes the UI task). Each
-  task has a 1536-byte stack in .bss (`sch_stacks`).
+- `MAX_TASKS equ 12`. Task 0 is the boot thread (becomes the UI task); it
+  runs on the boot stack (SS:0xFFFE) and owns **no** slice of `sch_stacks`.
+  Slots 1..11 are dynamic (spawned by `app_launch`/§29, freed by
+  `task_exit`); each has a 1536-byte stack:
+  `sch_stacks resb (MAX_TASKS-1) * SCH_STACK`, slot n's stack top at
+  `sch_stacks + n*SCH_STACK` (slot 1 owns bytes 0..1535).
 - Task record (8 bytes): `T_STATE` (0 free, 1 ready, 2 sleeping), `T_SP`
-  (saved SP), `T_WAKE` (tick count to wake at), padding. `T_SIZE equ 8`.
+  (saved SP), `T_WAKE` (tick count to wake at), `T_INST` at offset 6
+  (byte: owning instance index, §29; 0xFF = none — the Task Manager
+  resolves slot → instance → name through it), 1 byte padding.
+  `T_SIZE equ 8`.
 - Timer: hook int 08h. Handler: push registers + DS/ES, load DS=KERNEL_SEG,
   chain to the saved BIOS vector first (`pushf` + far call), then
   `inc word [ticks]`, wake sleepers whose `T_WAKE` has passed, and if
@@ -211,13 +220,36 @@ window.
   another.)
 - `sched_init` — set up task 0 as current/ready, save old int 08h vector,
   install handler.
-- `task_spawn` — in: AX = entry point (near). Builds a fresh stack frame that
-  `iret`s into the entry with IF=1, DS=ES=KERNEL_SEG. Out: CF set if no free
-  slot. **Publication order matters**: the timer ISR is live during spawn, so
-  the full frame must be built and T_SP stored before the slot is marked
-  ready — the `mov byte [T_STATE], 1` store must be the last write to the
-  record (a byte store is atomic w.r.t. interrupts on the 8086). A task's
-  entry routine must never `ret` (loop forever).
+- `task_spawn` — in: AX = entry point (near), DX = argument word — delivered
+  in the new task's DX register; DL is additionally stored to `T_INST`
+  (instance index, 0xFF = none). Builds a fresh stack frame that `iret`s
+  into the entry with IF=1, DS=ES=KERNEL_SEG, all other GP regs zero.
+  Out: CF set if no free slot, else CF clear and **AL = slot index**
+  (1..MAX_TASKS-1; the scan starts at slot 1 — slot 0 is the UI task and is
+  never free). Clobbers AX. Zeroes the slot's `sch_cycles` dword **before**
+  publication (the ISR only charges the running slot, so a pre-publish
+  write cannot race; §8.1/§28). **Publication order matters**: the timer
+  ISR is live during spawn, so the full frame must be built and T_SP stored
+  before the slot is marked ready — the `mov byte [T_STATE], 1` store must
+  be the last write to the record (a byte store is atomic w.r.t. interrupts
+  on the 8086). A task's entry routine must never `ret` — it terminates
+  only via `task_exit` (usually through `inst_task_die`, §29) or loops
+  forever.
+- `task_exit` — terminate the CURRENT task; self-exit only, never returns.
+  In: BX = pointer to a release byte zeroed atomically with the task's
+  death (an instance record's I_STATE, §29), or 0 for none. Body runs
+  entirely under IF=0 (`cli` with no matching `popf` — control never
+  returns): charge the final slice via `sch_account`, store 0 to the
+  release byte, store 0 to the own slot's T_STATE, then `jmp sch_switch`.
+  Because the release byte and T_STATE are cleared inside one IF=0 window,
+  an instance slot and its task slot free at the same instant — "instance
+  free but task table still holding the zombie" is unobservable. The
+  freed record parks a meaningless SP (harmless); the round-robin scan
+  skips it (T_STATE=0), and the resume-the-outgoing-task fallback cannot
+  pick a dead task because it is only reachable when nothing is ready and
+  **task 0 (the UI task) never sleeps and never exits**. PLACEMENT: the
+  routine must sit outside the `sch_isr` → `sch_switch` → `sch_resume`
+  fall-through run (it reaches sch_switch by explicit `jmp` only).
 - `task_yield` — voluntarily give up the slice: `int 0x08`? **No** — that
   would re-run the BIOS tick. Instead simulate: `pushf`, `cli`, push CS/near
   return via a small stub so the stack looks exactly like the ISR frame, then
@@ -265,7 +297,10 @@ window.
 - `sch_cycles` — MAX_TASKS dwords in .bss (lo word first): per-task CPU
   time in PIT cycles (1.19318 MHz), wrapping mod 2^32. Readers snapshot
   under `pushf`/`cli` … `popf` (the ISR writes them). `sch_pit_last`
-  (dword) is module-internal.
+  (dword) is module-internal. `task_spawn` zeroes a slot's counter before
+  publishing it, so a reused slot never inherits a dead task's total; the
+  Task Manager additionally forces a freshly appeared slot's first
+  interval diff to 0 (`tm_pstate`, §28).
 
 ## 9. mouse.inc — serial Microsoft mouse + cursor
 
@@ -319,7 +354,7 @@ Keyboard events are *not* queued — the UI task polls BIOS int 16h directly.
 
 ## 11. wm.inc — windows
 
-Window record, 16 bytes, fixed offsets:
+Window record, 18 bytes, fixed offsets:
 
 ```nasm
 W_FLAGS equ 0    ; word: bit0 = used, bit1 = visible
@@ -335,21 +370,26 @@ W_ONCLICK equ 16 ; word: near ptr or 0, in: CX=x, DX=y (absolute screen
                  ; EVT_MDOWN lands in the CONTENT of the FRONT window (§13).
                  ; Same rules as W_PAINT: must not lock, block or spawn.
 WIN_SIZE equ 18
-MAX_WIN  equ 8
+MAX_WIN  equ 12
 ```
 
 (WIN_SIZE grew 16 → 18: any ×16 shift idioms in wm.inc must become a true
-×18 multiply. The wm_create template grows to **16 bytes**:
-{x,y,w,h,title,paint,onkey,onclick} words — every existing template in
-apps.inc gains a trailing `dw 0`.)
+×18 multiply. The wm_create template stays **16 bytes**:
+{x,y,w,h,title,paint,onkey,onclick} words. MAX_WIN grew 8 → 12 for
+instancing (§29); `apps/jopapi.inc` mirrors it.)
 
 Storage: `wm_wins` (MAX_WIN × WIN_SIZE, .bss), z-order byte array
-`wm_zord` (window indices, index 0 = backmost) + `wm_zn` count. Every used
-window is always present in `wm_zord` — membership is established at
-wm_create and removed only by `wm_destroy`; `wm_hide` clears only the
-visible bit, and `wm_show`/`wm_front` only reorder. The visible flag alone
-decides whether a window is painted, hit-tested, or counted by
-`wm_top`/`wm_obscured`.
+`wm_zord` (window indices, index 0 = backmost) + `wm_zn` count. Those
+three must stay contiguous and in that order — wm_init zeroes them as one
+`rep stosb` run. After them sits `wm_owner` (MAX_WIN bytes, **not** part
+of the zero run): the instance index (§29) owning each window slot,
+0xFF = unowned; wm_init fills it with 0xFF separately. Writers:
+`inst_bind_win` at instance creation, `wm_destroy` (resets the destroyed
+slot's entry to 0xFF). Every used window is always present in `wm_zord` —
+membership is established at wm_create and removed only by `wm_destroy`;
+`wm_hide` clears only the visible bit, and `wm_show`/`wm_front` only
+reorder. The visible flag alone decides whether a window is painted,
+hit-tested, or counted by `wm_top`/`wm_obscured`.
 
 Frame drawing (paint-all does this before calling W_PAINT):
 - 1px black outline around the whole frame; 1px black drop shadow along the
@@ -357,9 +397,14 @@ Frame drawing (paint-all does this before calling W_PAINT):
 - Title bar: rows W_Y+1 .. W_Y+TITLE_H-2 (16 rows), white. If the window is
   frontmost: 6 horizontal black pinstripes inset 3px from each side, and a
   close box — 11×11 white square with black frame at x = W_X+8, occupying
-  rows W_Y+4 .. W_Y+14, pinstripes broken 2px around it. Title text
-  centered, black, on a white gap 6px each side of the text (so stripes
-  don't touch it).
+  rows W_Y+4 .. W_Y+14, pinstripes broken 2px around it — and a
+  **minimize box** mirrored on the right: 11×11 white square with black
+  frame, cols W_X+W_W−19 .. W_X+W_W−9, same rows, stripes broken by a
+  white fill cols W_X+W_W−21 .. W_X+W_W−7, rows W_Y+2 .. W_Y+16, with a
+  black hline across row W_Y+9, cols W_X+W_W−17 .. W_X+W_W−11 (the
+  "collapse" glyph, so it does not read as a second close box). Windows
+  are assumed ≥ 48px wide. Title text centered, black, on a white gap 6px
+  each side of the text (so stripes don't touch it).
 - 1px black separator line at row W_Y+TITLE_H-1. Content area =
   x+1 .. x+w-2, y+TITLE_H .. y+h-2, filled white before W_PAINT is called.
 
@@ -367,14 +412,15 @@ Frame drawing (paint-all does this before calling W_PAINT):
 |----------------|--------------------------------------------------------------|
 | `wm_init`      | zero table                                                   |
 | `wm_create`    | in SI → 16-byte template {x,y,w,h,title,paint,onkey,onclick} words; out BX = window ptr, CF on table full. Created **hidden**; appends the window's index to `wm_zord` (frontmost) and increments `wm_zn`. Does not repaint — callable without the gfx lock. |
-| `wm_destroy`   | in BX = win ptr: clear W_FLAGS (used+visible), remove its index from `wm_zord` (compact the array, decrement `wm_zn`), repaint all. Caller holds the gfx lock. The record slot becomes reusable by wm_create. |
+| `wm_destroy`   | in BX = win ptr: clear W_FLAGS (used+visible), reset the slot's `wm_owner` entry to 0xFF, remove its index from `wm_zord` (compact the array, decrement `wm_zn`), repaint all. Caller holds the gfx lock. The record slot becomes reusable by wm_create. |
 | `wm_show`      | in BX = win ptr: set visible, bring to front, repaint all    |
 | `wm_hide`      | in BX = win ptr: clear visible, repaint all                  |
 | `wm_front`     | in BX = win ptr: raise to front of z-order, repaint all      |
 | `wm_top`       | out BX = frontmost visible window ptr, 0 if none             |
-| `wm_hit`       | in CX=x, DX=y; out BX = topmost visible window ptr containing the point (0 if none), AL = 0 content, 1 title bar, 2 close box. AL=2 only when BX is the frontmost visible window (the only one with a close box drawn); on any other window that region reports AL=1. |
-| `wm_paint_all` | full repaint: desktop gray (below menu bar), then `desk_paint` (§26 — desktop icons sit on the desktop, under every window), menu bar, every visible window back→front (frame + white content + W_PAINT). Caller holds gfx lock. |
+| `wm_hit`       | in CX=x, DX=y; out BX = topmost visible window ptr containing the point (0 if none), AL = 0 content, 1 title bar, 2 close box, 3 minimize box. AL=2/AL=3 only when BX is the frontmost visible window (the only one with the boxes drawn); on any other window those regions report AL=1. |
+| `wm_paint_all` | full repaint: desktop gray (below menu bar), then `desk_paint` (§26 — desktop icons sit on the desktop, under every window), then `dock_paint` (§30 — the dock strip sits on the desktop under every window, like the icons), menu bar, every visible window back→front (frame + white content + W_PAINT). Caller holds gfx lock. |
 | `wm_content`   | in BX = win ptr; out AX = content left, DX = content top     |
+| `wm_ptr2idx`   | in BX = win ptr (record-aligned); out AL = window index, AH = 0. Clobbers nothing else. The one public home of the `(ptr − wm_wins) / WIN_SIZE` idiom. |
 | `wm_obscured`  | in BX = win ptr; out CF=1 if any visible window above BX in z-order overlaps its frame rect (background tasks use this to skip live updates when covered). Result is only trustworthy while the caller holds the gfx lock — the UI task mutates `wm_zord`/window rects under it. |
 
 Paint procs and key handlers run on the **UI task** (via wm_paint_all /
@@ -428,8 +474,14 @@ Loop forever:
    during dispatch):
    - y < MBAR_H → gfx_lock, `menu_track`, gfx_unlock, then dispatch CMD_*
      (below).
-   - else `wm_hit`: close box → if released over it (simplify: immediately)
-     `wm_hide` that window. Title bar → if not front, `wm_front`; then run
+   - else `wm_hit`: close box → **quit**: gfx_lock, `app_close_win` BX
+     (§29 — looks up the owning instance via `wm_ptr2idx` + `wm_owner`
+     and runs the close protocol: synchronous teardown for task-less
+     instances, die-flag + hide for task-owned ones; an ownerless window
+     degrades to plain `wm_hide`), gfx_unlock. Minimize box (AL=3) →
+     gfx_lock, `inst_minimize` BX (§29 — sets the instance's minimized
+     flag and hides; the dock tile inverts), gfx_unlock. Title bar → if
+     not front, `wm_front`; then run
      the **drag loop**: gfx_lock; xor-draw the outline at the window rect;
      while `mouse_btn` bit0 set: xor-erase the outline, gfx_unlock,
      `task_yield` (background tasks stay live here), gfx_lock, xor-draw the
@@ -447,35 +499,62 @@ Loop forever:
    - content of non-front window → `wm_front`.
    - content of front window → if its `W_ONCLICK` is non-zero: gfx_lock,
      near-call it (CX=x, DX=y, SI=win ptr), gfx_unlock; else ignore.
-   - no window hit (wm_hit BX=0) → call `desk_click` (§26) with CX=x,
-     DX=y, no lock held — desktop icons are hit-tested only after every
-     window has declined the click, which gives them correct z-order
-     semantics for free.
-3. If `[ld_pending]` is non-zero (§21): AX = [ld_pending] − 1, zero
-   `[ld_pending]`, call `loader_run`. This runs **outside** the gfx lock —
-   loader_run manages its own locking.
+   - no window hit (wm_hit BX=0) → call `dock_click` (§30) with CX=x,
+     DX=y, no lock held; CF=1 = the click was consumed (anywhere in the
+     dock strip). Only if it declines (CF=0), call `desk_click` (§26) —
+     dock and desktop icons are hit-tested only after every window has
+     declined the click, which gives them correct z-order semantics for
+     free.
+3. If `[inst_launch]` is non-zero (§29): AX = [inst_launch] − 1, zero
+   `[inst_launch]`, call `app_launch` with AL = kind. Then if
+   `[ld_pending]` is non-zero (§21): AX = [ld_pending] − 1, zero
+   `[ld_pending]`, call `loader_run`. Both run **outside** the gfx lock
+   with the same consume-before-run rule — app_launch and loader_run
+   manage their own locking.
 4. `task_yield`.
 
-Command dispatch: CMD_ABOUT/NOTE/CLOCK/BOUNCE/TASKS → `wm_show` the
-corresponding window (created at boot, initially hidden or shown per §15;
-CMD_TASKS shows `[tm_win]`, §28). CMD_FILES →
-call `files_open` (§22; same position in the dispatch flow as the wm_show
-cases — files_open does its own locking). CMD_CLOSE → `wm_hide` frontmost.
-CMD_REBOOT → gfx_lock (never released), `vga_text`, `sched_unhook`,
-`int 0x19`.
+Command dispatch: CMD_ABOUT/NOTE/CLOCK/BOUNCE/TASKS → `call app_launch`
+with AL = the matching KIND_* (§29). ui_dispatch runs on the UI task with
+no lock held, so the call is direct — the deferred `inst_launch` channel
+in step 3 exists for lock-held posters (e.g. W_ONCLICK handlers). Note
+Pad/Clock/Bounce launch a **new instance** each time (up to their §29
+caps); About/Task Manager are singletons — at cap, app_launch fronts (and
+un-minimizes) the existing instance instead. CMD_FILES → call
+`files_open` (§22 — mounts, then launches/fronts the Disk singleton via
+app_launch; does its own locking). CMD_CLOSE → **quit** the frontmost:
+gfx_lock, `wm_top`, and if BX ≠ 0 `app_close_win` under the same lock,
+gfx_unlock. CMD_REBOOT → gfx_lock (never released), `vga_text`,
+`sched_unhook`, `int 0x19`.
 
 All wm_* calls that repaint are made under gfx_lock by the UI task.
 
 ## 14. apps.inc
 
-Four windows, records created at boot by `apps_init` (called from kmain
-before the first paint). Templates:
+The built-in app **kinds**: About, Note Pad, Clock, Bounce. Nothing is
+created at boot (there is no `apps_init`) — every instance is launched on
+demand through `app_launch` (§29), which allocates an instance record and
+a per-instance state block from the kind's pool, creates the window from
+the kind's template (cascaded +16px per pool slot so instances don't
+stack), runs the kind's init proc, and spawns the kind's task if it has
+one. Closing an instance frees all of it.
 
-- **About** — 300×120 at (170,140), title "About jop". Paint: centered lines
-  "jop 1.0", "a graphical OS for the 8086", "pre-emptive - 640x480 - 16
-  colors". No onkey. Hidden at boot.
-- **Note Pad** — 260×180 at (60,60), title "Note Pad". 512-byte text buffer
-  in .bss. Paint: render buffer, 8px chars, line wrap at content width,
+Per-instance state pools (.bss; slot stride and cap pinned in the §29
+kind table): `app_note_pool` 2 × 514 (NOTE_LEN word at +0, NOTE_BUF 512
+bytes at +2), `app_clk_pool` 10 × 8 (CLK_H/M/S bytes at +0/+1/+2, pad,
+CLK_LAST word at +4, CLK_ACC word at +6), `app_ball_pool` 10 × 8
+(BAL_X/Y/VX/VY words). About is stateless. Init procs (KD_INIT contract,
+§29): `app_note_kinit` (len = 0), `app_clock_kinit` (h/m/s = 0, last =
+[ticks], acc = 0), `app_bounce_kinit` (x=4, y=4, vx=3, vy=2).
+
+Paint/onkey procs receive SI = window ptr (§11) and find their state via
+`inst_of_win` (§29) + `I_SPTR`; module-level draw scratch (used only under
+the gfx lock) may stay shared. Kind behavior:
+
+- **About** — 300×120 at (170,140), title "About jop". Paint: centered
+  lines "jop 1.0", "a graphical OS for the 8086", "pre-emptive - 640x480 -
+  16 colors". No onkey. Singleton (cap 1).
+- **Note Pad** — 260×180 at (60,60), title "Note Pad". Cap 2. Paint:
+  render the instance's buffer, 8px chars, line wrap at content width,
   6px left/top margin, then a 1px black caret. Vertical clip: stop before
   emitting any text row whose bottom (content top + 6 + 8*row + 7) would
   exceed the content bottom (W_Y + W_H - 2); overflow lines are discarded,
@@ -483,32 +562,36 @@ before the first paint). Templates:
   is not drawn. Onkey: printable ASCII appends (buffer full = beep-less
   drop), backspace (ASCII 8) deletes, Enter (13) newline. After editing,
   the handler repaints **its own content only** (white-fill content, redraw
-  text) — caller already holds the lock. Visible at boot.
-- **Clock** — 130×60 at (450,80), title "Clock". Keeps its own time in
-  .bss: `clk_h`/`clk_m`/`clk_s` (bytes, boot at 0), `clk_last` (word, last
-  `[ticks]` sample), `clk_acc` (word, tenth-of-tick accumulator). Its
-  **own task** (`app_clock_task`): loop { task_sleep 9; AX = [ticks];
-  delta = AX - [clk_last] (subtraction idiom, safe across wrap);
-  [clk_last] = AX; clk_acc += delta*10; while clk_acc >= 182:
-  clk_acc -= 182 and advance seconds with carries (s 60→0/m+1, m 60→0/h+1,
-  h 24→0). This time-keeping runs every iteration; only drawing is
-  conditional: gfx_lock; **re-check under the lock** window visible and not
-  `wm_obscured` — if it fails, gfx_unlock and skip; else white-fill the
-  string rect (font background is transparent, §6), set `[gfx_color]` =
-  CBLACK, draw HH:MM:SS from clk_h/m/s centered in content; gfx_unlock }.
-  Paint proc renders the same string from clk_h/m/s. Visible at boot.
-- **Bounce** — 150×130 at (440,260), title "Bounce". Own task: loop
-  { task_sleep 2; gfx_lock; **check under the lock** visible and not
-  obscured — if the check fails, gfx_unlock and skip the frame without
-  erasing or stepping; else erase 8×8 black square at old pos (white
-  fill), step x/y by velocity, bounce off content edges, draw at new pos;
-  gfx_unlock }. Paint proc: white content + square at current pos.
-  Visible at boot.
+  text) — caller already holds the lock.
+- **Clock** — 130×60 at (350,60), title "Clock". Cap 10 (the template
+  position keeps the whole +16·9 cascade on-screen and above the dock).
+  Per-instance
+  task (`app_clock_task`; entry receives DX = instance index, caches the
+  record and state ptrs): loop { task_sleep 9; **if I_STATE = 2 →
+  teardown via `inst_task_die`** (§29); AX = [ticks]; delta = AX −
+  CLK_LAST (subtraction idiom, safe across wrap); CLK_LAST = AX; CLK_ACC
+  += delta*10; while CLK_ACC >= 182: CLK_ACC −= 182 and advance seconds
+  with carries (s 60→0/m+1, m 60→0/h+1, h 24→0). This time-keeping runs
+  every iteration; only drawing is conditional: gfx_lock; **re-check
+  under the lock** window (I_WIN) visible and not `wm_obscured` — if it
+  fails, gfx_unlock and skip; else white-fill the string rect (font
+  background is transparent, §6), set `[gfx_color]` = CBLACK, draw
+  HH:MM:SS from the instance's CLK_H/M/S centered in content;
+  gfx_unlock }. Paint proc renders the same string from the state block.
+  The accumulator design is binding.
+- **Bounce** — 150×130 at (300,150), title "Bounce". Cap 10 (the template
+  position keeps the whole +16·9 cascade on-screen and above the dock).
+  Per-instance task: loop { task_sleep 2; **if I_STATE = 2 → `inst_task_die`**;
+  gfx_lock; **check under the lock** visible and not obscured — if the
+  check fails, gfx_unlock and skip the frame without erasing or stepping;
+  else erase 8×8 black square at old pos (white fill), step x/y by
+  velocity, bounce off content edges, draw at new pos; gfx_unlock }.
+  Paint proc: square at the instance's current pos.
 
-`apps_init` creates all four (wm_create), marks Note Pad/Clock/Bounce
-visible (set W_FLAGS bit1 directly; the boot sequence does one
-wm_paint_all afterwards), stores the window ptrs, and `task_spawn`s
-`app_clock_task` and `app_bounce_task`.
+The close protocol for these tasks is §29's: the UI task never destroys a
+task-owned instance's window — it sets I_STATE = 2 and hides; the task
+notices at its next wake (≤ 9 ticks for Clock, ≤ 2 for Bounce) and tears
+itself down with `inst_task_die` → `task_exit`.
 
 ## 15. kernel.asm — boot sequence
 
@@ -519,10 +602,14 @@ pinned offsets. kernel.asm also owns the tiny japi helper routines
 
 kmain: set segments/stack (SP=0xFFFE), `sti`, `cld`, then:
 `sched_init` → `evq_init` → `vga_mode12` → `font_init` → `wm_init` →
-`mouse_init` → `desk_init` → `apps_init` → `files_init` → `loader_init` →
+`inst_init` → `mouse_init` → `desk_init` → `files_init` → `loader_init` →
 `tm_init` → gfx_lock → `wm_paint_all` → gfx_unlock → `cursor_show` → jump
-into `ui_task` (task 0 never returns). Include order appends `icons.inc`,
-`desk.inc` and `taskmgr.inc` after `files.inc`.
+into `ui_task` (task 0 never returns). (`dock_init` runs right after
+`desk_init`.) **Clean boot**: no app instances exist — the first paint
+shows only the desktop, drive icons, the empty dock strip and menu bar;
+everything is launched from the menus (§13/§29). Include order:
+`instance.inc` right after `wm.inc`; `icons.inc`, `desk.inc`, `dock.inc`
+and `taskmgr.inc` after `files.inc`.
 
 End of file (after all `%include` lines, with `section .text` in effect):
 
@@ -562,12 +649,17 @@ loaded-program region, §20.)
 ## 17. Definition of done
 
 1. `make` builds all images with zero warnings; kernel < 0xA000 with .bss.
-2. QEMU boots to: gray desktop, menu bar (apple + File + Special), Note Pad
-   + Clock + Bounce windows open, arrow cursor.
-3. Clock ticks and ball bounces **while** typing in Note Pad and while a
-   drag outline is being moved (pre-emption visibly working).
+2. QEMU boots to a **clean desktop**: gray dither, menu bar (apple + File
+   + Special), drive icons, the empty dock strip at the bottom, arrow
+   cursor — no windows, nothing running.
+3. Apps launch from the menus as closable instances — two Clocks tick
+   independently, and they keep ticking **while** typing in Note Pad and
+   while a drag outline is being moved (pre-emption visibly working).
 4. Mouse moves cursor; windows drag by title bar; clicking a back window
-   raises it; close box hides; menus pull down and dispatch.
+   raises it; the close box **quits** its instance (window, task and
+   state freed — the Task Manager row goes free within a task period);
+   the minimize box sends an instance to the dock (tile inverts) and a
+   dock-tile click restores or fronts it; menus pull down and dispatch.
 5. Only 8086 instructions (`cpu 8086` proves it at build time).
 6. File → Disk opens the Disk window listing the software floppy's
    contents; double-clicking MINES loads and shows Minesweeper.
@@ -582,8 +674,10 @@ loaded-program region, §20.)
    directory without rebooting).
 10. Special → Task Manager opens a window with a live CPU load gauge and
     history graph (near 0% idle, visibly rising while dragging a window),
-    a RAM readout, and the four-slot task list with per-task CPU shares —
-    all updating twice a second while Clock and Bounce keep running.
+    a RAM readout, and the eight-slot task list with per-task CPU shares
+    and per-instance names — all updating twice a second while launched
+    Clocks and Bounces keep running, rows appearing and freeing as
+    instances launch and quit.
 
 ## 18. disk.inc — floppy reads (BIOS int 13h)
 
@@ -651,44 +745,76 @@ are packed from index 0; `file count` in the superblock is authoritative.
 
 ## 20. Loadable programs — the .jop package format
 
-### 20.1 Region
+### 20.1 The pool
 
-A package is a flat 8086 binary assembled with `org APP_LOAD_OFF` (0xA000)
-and loaded verbatim to KERNEL_SEG:0xA000. It runs in the tiny model exactly
-like kernel code: CS=DS=SS=KERNEL_SEG, near calls everywhere, §1 hard rules
-apply (cpu 8086, register discipline, no bare `sti` in handlers). Its
-paint/onkey/onclick procs are near pointers into the region. Budget:
-image + zeroed-bss ≤ APP_MAX_SIZE (0x5000). One program is resident at a
-time; loading another replaces it (§21).
+A package is a flat 8086 binary assembled with `org APP_LOAD_OFF` (0xA000
+— the **link base**) and **relocated at load time** to a per-instance
+region allocated from the 20KB pool 0xA000..0xEFFF (§21). It runs in the
+tiny model exactly like kernel code: CS=DS=SS=KERNEL_SEG, near calls
+everywhere, §1 hard rules apply (cpu 8086, register discipline, no bare
+`sti` in handlers). Its paint/onkey/onclick procs are near pointers into
+its region. Budget: image + zeroed-bss ≤ APP_MAX_SIZE (0x5000). Multiple
+package instances can be resident at once — including two instances of
+the same package: each is a fully relocated copy with its own image, data
+and bss, so package state (equ offsets from `jop_image_end`) is
+per-instance automatically. Closing an instance frees its region (§29.2
+rule 7).
 
-### 20.2 Header — first 32 bytes of the file (and of memory at 0xA000)
+### 20.2 Header — first 32 bytes of the file (and of each loaded region)
 
 | off | size | contents                                                  |
 |-----|------|------------------------------------------------------------|
 | 0   | 2    | magic: bytes `'J','P'` (word 0x504A)                      |
-| 2   | 1    | format version = 1                                        |
+| 2   | 1    | format version = 2 (relocatable; v1 files are rejected)   |
 | 3   | 1    | flags: bit 0 = embedded icon follows the header; bits 1–7 zero |
-| 4   | 2    | load offset — must equal 0xA000                           |
-| 6   | 2    | entry offset (absolute, ≥ 0xA020, < load+image size)      |
-| 8   | 2    | image size = total file bytes, header included            |
+| 4   | 2    | link base — must equal 0xA000 (the org the image was assembled at) |
+| 6   | 2    | entry offset, **image-relative** (≥ 0x20; ≥ 0x60 with icon; < image size) |
+| 8   | 2    | image size = resident bytes: header + icon + code + data (**excludes** the reloc table) |
 | 10  | 2    | bss size — bytes the loader zeroes after the image        |
-| 12  | 4    | zero (reserved)                                           |
+| 12  | 2    | relocation count n (0 legal). NASM emits 0; **jopkg.py stamps the real count** |
+| 14  | 2    | zero (reserved)                                           |
 | 16  | 16   | program name, printable, NUL-padded (shown by tools)      |
+
+**Relocation table**: appended immediately after the image — n
+little-endian words. Each entry's low 15 bits are the **image offset** of
+a word to patch (in [0x20, image−2], ascending, non-overlapping; image ≤
+0x5000, so bit 15 is free); bit 15 is the fixup **class**:
+
+- bit 15 = 0 — an embedded package address (imm16 / disp16 / `dw label`):
+  the loader **adds** `base − 0xA000`.
+- bit 15 = 1 — the rel16 displacement of a near call/jmp to a **fixed
+  kernel offset** (`call JAPI_*`): the displacement is target − (site+2),
+  and the site moves with the base while the target does not, so the
+  loader **subtracts** `base − 0xA000`. (Package-internal relative
+  branches shift with both ends and need no fixup.)
+
+Total file bytes = image + 2n (this is what the jopfs directory size
+field holds; the dir type stays 1). After the patches the table is dead
+(bss zeroing overwrites it). The table is generated host-side by **dual
+assembly** (§24): the Makefile assembles each package twice — at org
+0xA000 and org 0xA800 (`-DJOP_ORG=0xA800`) — and jopkg.py diffs the two
+images: a word whose value grew by 0x800 is class 0, one that shrank by
+0x800 is class 1. **Author rule (binding)**: a package address may only
+ever be embedded as a whole 16-bit word — never byte-truncated, shifted,
+split, or folded into a non-address constant. jopkg's reconstruction
+check refuses the package otherwise, so violations fail the build.
 
 **Embedded icon** (flags bit 0): file offset 32..95 holds the program's
 16×16 icon — 16 mask words then 16 data words (same body layout as the
 jopfs icon table, §19). With the flag set, image size must be ≥ 96 and
-the entry offset ≥ 0xA060. The kernel loader ignores the flag entirely
-(the icon rides along in memory like any other data); it exists for
-jopdisk.py, which copies the block into the disk's icon table.
+the entry offset ≥ 0x60. jopdisk.py copies the block into the disk's icon
+table; the kernel points the instance's dock tile (I_ICON, §29) at the
+block inside the loaded region.
 
-**Entry contract**: near-called by the loader with DS=ES=KERNEL_SEG, IF=1,
-gfx lock NOT held. The program creates its window(s) via the API table
+**Entry contract** (unchanged from v1): near-called by the loader — at
+`base + entry` — with DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held. The code
+is fully relocated, so its own labels already encode the base; no base
+register is passed. The program creates its window(s) via the API table
 (wm_create is lock-free) and **returns** BX = window ptr with CF clear;
-the loader wm_shows it. CF set = abort (loader reports "load failed"); an
-aborting entry must return BX = its already-created window ptr (or 0 if it
-created none) so the loader can wm_destroy it — otherwise aborted loads
-would leak window records.
+the loader registers the instance (§29) and wm_shows it. CF set = abort
+(loader reports "load failed"); an aborting entry must return BX = its
+already-created window ptr (or 0 if it created none) so the loader can
+wm_destroy it — otherwise aborted loads would leak window records.
 The entry must not call wm_show/wm_hide/wm_front, spawn tasks, or draw.
 After entry returns, the program is pure event-driven code: its W_PAINT /
 W_ONKEY / W_ONCLICK procs run under the gfx lock per §11.
@@ -730,7 +856,13 @@ emits the §20.2 header (image size via a forward-referenced
 `equ` to an end label the program declares with `JOP_BSS n` /
 end-of-file macro — exact macro design is the implementer's, but a package
 source must be able to consist of just `%include "jopapi.inc"`, the header
-macro, code/data, and an end macro).
+macro, code/data, and an end macro). JOP_HEADER opens with
+`org JOP_ORG` when that macro is defined (`-DJOP_ORG=0xA800`, the §24
+relocation-probe pass) and `org APP_LOAD_OFF` otherwise; it emits version
+2, the image-relative entry (`entry − $$`), and a zero relocation count
+for jopkg.py to stamp. The org value must only ever affect emitted
+addresses, never instruction selection — jopkg verifies this (equal
+lengths, whole-word diffs).
 
 Icon support: `JOP_HEADER 'NAME', entry, 1` sets flags bit 0; the author
 then writes `JOP_ICON16` (asserts, via `%if`-on-equ, that it starts at
@@ -741,31 +873,80 @@ optional and defaults to 0.
 ## 21. loader.inc
 
 State (.bss, cleared by `loader_init`): `ld_pending` (word: 0 = none, else
-directory index+1 — set by files.inc, consumed by ui.inc §13), `ld_appwin`
-(word: window ptr of the resident program, 0 = none), `ld_status` (byte:
-0 ok, 1 disk error, 2 not a valid package, 3 too large, 4 entry aborted).
+directory index+1 — set by files.inc, consumed by ui.inc §13), `ld_status`
+(byte: 0 ok, 1 disk error, 2 not a valid package, 3 too large, 4 entry
+aborted, 5 out of memory), plus loader_run scratch words (registers run
+out on the 8086). `ld_appwin` is gone — the instance table (§29) tracks
+residency.
 
-`loader_run` — in AX = directory index. UI task only, gfx lock not held on
-entry. Steps:
-1. Validate the entry: index < [disk_nfiles], type = 1, size ≤ APP_MAX_SIZE
-   and non-zero → else status 2, step 7.
-2. If `[ld_appwin]` non-zero: gfx_lock, `wm_destroy` it, gfx_unlock, zero
-   it. (Must happen before the read clobbers the region the old program's
-   procs live in.)
-3. `disk_read` the file — start LBA and ceil(size/512) sectors — into
-   ES=KERNEL_SEG, BX=APP_LOAD_OFF. CF → status 1, step 7.
-4. Validate the header (§20.2): magic, version, load offset, image+bss ≤
-   APP_MAX_SIZE, entry in range → else status 2, step 7.
-5. Zero bss-size bytes at load+image size.
-6. Near-call the entry. CF → status 4. Else: store BX in `ld_appwin`,
-   gfx_lock, `wm_show` BX, gfx_unlock, status 0.
-7. Set `[ld_status]`, call `files_refresh` (§22).
+**The pool allocator is the instance table.** A package record's byte
+range [I_SPTR, I_SPTR + I_SIZE) is occupied iff I_STATE ≠ 0 (§29.2 rule
+7); I_SIZE is the ALLOCATED size (512-multiple). `ld_alloc` (in: AX =
+bytes, a 512-multiple; out: CF=1 no hole, else BX = region base):
+first-fit lowest base over [0xA000, 0xF000) — start at 0xA000; if any
+in-use package record overlaps [start, start+AX), set start = that
+record's end and rescan from the top; fail when start + AX > 0xF000.
+UI-task-only, so allocation never races itself; freeing is the record
+store (task-less close path or task_exit, §29). No compaction — regions
+never move once relocated.
+
+`ld_check_hdr` (module-internal) — in: SI → 32 readable header bytes,
+[ld_fsz] = file size; out: CF=0 + scratch (img/bss/entry/reloc-count)
+filled, or CF=1 + AL = status. Checks: magic; **version = 2** (a v1 file
+→ "Bad package"); link base = 0xA000; image ≥ 0x20; entry in
+[0x20, image) (icon rule enforced by jopkg, not re-checked); image+bss ≤
+APP_MAX_SIZE (else "Too large"); image + 2·count = file size (guards
+truncated files and stale directories).
+
+`loader_run` — in AX = directory index. UI task only, gfx lock not held
+on entry. Steps:
+1. Validate the entry: index < [disk_nfiles], type = 1, size ≤
+   APP_MAX_SIZE and non-zero → else status 2, step 10. **No eviction
+   exists** — a load never disturbs running instances; every failure
+   path below frees whatever it reserved and leaves them untouched.
+2. Peek the header: `disk_read` 1 sector (the file's first) into
+   `dsk_secbuf` (UI-task-only shared scratch). CF → status 1.
+3. `ld_check_hdr` on the peek → status 2/3.
+4. need = roundup512(max(image+bss, file size)); > APP_MAX_SIZE → status
+   3. (Sector-granular allocation makes the whole-file read safe: it
+   writes ceil(fsize/512)·512 ≤ need bytes, never a neighbour's region.)
+5. `inst_alloc` (§29) → CF → status 5. `ld_alloc` need bytes → CF →
+   status 5 (the unpublished instance record stays free). Note the
+   record is not yet published, so the region is reserved only by
+   single-threadedness (rule §29.2.8).
+6. `disk_read` the whole file — ceil(fsize/512) sectors — to
+   ES=KERNEL_SEG, BX=base. CF → status 1. Re-run `ld_check_hdr` against
+   the in-region header (the disk could have been swapped between the
+   peek and the read) → status 2/3.
+7. Relocate: for each of the n table words at base+image (each validated
+   in [0x20, image−2] → else status 2): word at base+offset += base −
+   0xA000.
+8. Zero bss-size bytes at base+image (this overwrites the reloc table —
+   it is disposable).
+9. Near-call base+entry (contract §20.2; DS=ES=KERNEL_SEG, lock free).
+   CF → the abort path (BX sanity-checked exactly as before: inside
+   wm_wins, record-aligned, then locked wm_destroy), status 4. Else:
+   fill the reserved instance record — I_KIND = KIND_PKG, I_TASK = 0xFF,
+   I_SPTR = base, I_SIZE = need, `inst_set_name` from base+16, I_ICON =
+   base+32 when header flags bit 0 else 0 — `inst_bind_win` BX, publish
+   I_STATE = 1, then gfx_lock, `wm_show` BX, gfx_unlock, status 0.
+   (`wm_create` failing inside the entry surfaces as CF = status 4.)
+10. Set `[ld_status]`, call `files_refresh` (§22).
+
+Closing a package instance is §29's task-less path: locked wm_destroy +
+I_STATE ← 0 — that store frees the region. The Task Manager's RAM readout
+sums package records' I_SIZE under one cli (§28) and no longer peeks at
+package headers; the old "`ld_appwin` zeroed before the region is
+overwritten" invariant is retired.
 
 ## 22. files.inc — the Disk window (file manager)
 
-Built-in window, record created hidden by `files_init` (from kmain), title
-"Disk", 320×200 at (110,80). No background task. State: `fm_sel` (word,
-selected row, 0xFFFF = none), `fm_clkt` (word, [ticks] at last row click),
+Built-in singleton app kind (KIND_FILES, cap 1 — the mount state below is
+module-global), title "Disk", 320×200 at (110,80). No background task, no
+boot-time window: `files_init` (from kmain) only resets module state;
+the window is created on demand by `app_launch` (§29), whose KD_INIT is
+`fm_kinit` (clears `fm_sel`/`fm_clkt`). State: `fm_sel` (word, selected
+row, 0xFFFF = none), `fm_clkt` (word, [ticks] at last row click),
 `fm_mountok` (byte, 1 = last mount succeeded).
 
 Content layout (coords relative to content top-left): header line at
@@ -774,8 +955,9 @@ last mount failed, `"No jop disk in drive B:"`. A **Refresh button** at
 the top right: 1px black frame from (content_w−68, 2) to (content_w−6,
 15), label "Refresh" centered inside — remounts the current drive so a
 swapped disk shows its real contents. Status line from
-`[ld_status]` at (6,182-TITLE_H): e.g. "", "Disk error", "Bad package",
-"Too large", "Load failed" — plus "Loading..." while a load is pending.
+`[ld_status]` at (6,182-TITLE_H): "", "Disk error", "Bad package",
+"Too large", "Load failed", "Out of memory" (0..5) — plus "Loading..."
+while a load is pending.
 File rows: **16 px tall**, first at y=22, at most **8** rows shown
 (entries beyond are mounted but not listed; row 8 ends at y=149, clear of
 the status line at 164). Per row: the file's 16×16 icon at x=4 (from
@@ -788,8 +970,9 @@ Behaviour:
 - `files_open_drive` (public; in AL = drive 0/1, no lock held): **always**
   `disk_mount` DL=AL — a swapped or newly chosen disk must never show
   stale contents — record success in fm_mountok, clear the selection,
-  then gfx_lock, wm_show, gfx_unlock. Callers: CMD_FILES dispatch and
-  desk_click (§26).
+  then `app_launch` KIND_FILES (creates the window, or fronts +
+  un-minimizes the existing instance at cap; §29). Callers: CMD_FILES
+  dispatch and desk_click (§26).
 - `files_open` (from CMD_FILES dispatch, no lock held): AL = [disk_drive],
   fall into files_open_drive.
 - `W_ONCLICK` (lock held): the Refresh button rect is tested first —
@@ -806,8 +989,10 @@ Behaviour:
   repaint content. Enter (13) with a valid selection → same as
   double-click. (disk_mount under the gfx lock stalls painters ~a second;
   acceptable.)
-- `files_refresh` (called by loader_run, no lock held): acquire gfx_lock,
-  and if the window is visible call `wm_paint_all`; unlock. It must be a
+- `files_refresh` (called by loader_run, no lock held): find the live
+  Disk instance via `inst_find_kind` KIND_FILES (§29) — none = nothing to
+  do (the user closed the window mid-load); else acquire gfx_lock, and if
+  its window is visible call `wm_paint_all`; unlock. It must be a
   full repaint, not content-only: loader_run calls it right after wm_show
   raised the loaded program's window, which may overlap the Disk window —
   a content-only repaint would paint over the new front window.
@@ -851,24 +1036,42 @@ content-relative; the procs fetch the content origin via `wm_content`
 Python 3, stdlib only, both tools executable with clear argparse `--help`
 and non-zero exit + stderr message on any validation failure.
 
-- `tools/jopkg.py IN.bin -o OUT.jop` — package validator/stamper. Reads a
-  NASM flat binary that already carries the §20.2 header; verifies magic,
-  version, load offset 0xA000, entry range, image size field == actual
-  file size, image+bss ≤ 0x5000, name printable ≤15 chars NUL-padded,
-  flags bits 1–7 zero, and when flags bit 0 is set: image ≥ 96 and entry
-  ≥ 0xA060; prints a one-line summary (name, entry, image/bss, icon
-  yes/no) and copies to OUT.jop.
+- `tools/jopkg.py IN.bin --alt ALT.bin -o OUT.jop` — package
+  validator/reloc-generator/stamper. IN is the org-0xA000 assembly, ALT
+  the same source at org 0xA800 (`-DJOP_ORG=0xA800`; the probe delta
+  0x800 has a zero low byte, so every fixup word differs in exactly its
+  high byte). Steps, any failure → exit 1, no output: (1) equal lengths
+  (an org-dependent encoding would desync the images); (2) header
+  validation — magic, version 2, link base 0xA000, image field == file
+  size (no table yet), entry image-relative in [0x20, image) (≥ 0x60
+  with the icon flag), image+bss ≤ 0x5000, reloc-count field 0, reserved
+  0, flags bits 1–7 zero, name printable ≤15 NUL-padded — plus
+  byte-equality of the two headers (and icon blocks); (3) diff scan:
+  each differing byte at offset i must satisfy i ≥ 33, fixup site
+  o = i−1, (ALT[i] − IN[i]) & 0xFF ∈ {8 (class 0), 0xF8 (class 1)},
+  IN[o] == ALT[o], o ≤ image−2, o ≥ previous o + 2; (4) **hard verify**:
+  IN with 0x800 added (class 0) / subtracted (class 1) at every recorded
+  fixup word must reconstruct ALT byte-for-byte — this is what catches
+  split/truncated addresses (§20.2 author rule); (5) loadable
+  bound: max(image+bss, roundup512(image + 2n)) ≤ 0x5000; (6) emit IN
+  with the count stamped at offset 12 and the n sorted offsets appended.
+  Summary line gains `relocs=N`.
 - `tools/jopdisk.py -o OUT.img --size {1440,360} [PKG.jop ...]` — builds a
   jopfs v2 floppy (§19): superblock geometry 18/2 or 9/2, directory
   entries named from each package's header name field, icon table LBA 3–6
   (entry i = package i's embedded icon bytes 32..95 when flags bit 0,
-  else 64 zero bytes), data from LBA 7, sector-aligned. Zero packages is
-  legal (an empty disk — useful for testing Refresh). Fails if >32 files
-  or the disk overflows. Total image size: 1474560 or 368640 bytes.
+  else 64 zero bytes), data from LBA 7, sector-aligned. Accepts format-v2
+  packages only: version byte 2 and image + 2·reloc-count == file size
+  (a v1 file fails with "rebuild with the v2 toolchain"). The directory
+  size field is the full file length, reloc table included. Zero packages
+  is legal (an empty disk — useful for testing Refresh). Fails if >32
+  files or the disk overflows. Total image size: 1474560 or 368640 bytes.
 - Makefile: `build/mines.bin` from `apps/mines/mines.asm` and
   `build/hello.bin` from `apps/hello/hello.asm` (§27), each
-  (`nasm -f bin -w+error -I apps/`, dep on apps/jopapi.inc), packaged via
-  jopkg.py, then `build/apps.img` (1440) + `build/apps360.img` (360) from
+  (`nasm -f bin -w+error -I apps/`, dep on apps/jopapi.inc), plus a
+  second assembly of each at org 0xA800 (`-DJOP_ORG=0xA800` →
+  `build/X.alt.bin`); both fed to jopkg.py (`X.bin --alt X.alt.bin`),
+  then `build/apps.img` (1440) + `build/apps360.img` (360) from
   **mines.jop + hello.jop** via jopdisk.py; all built by `all`.
   `run`/`debug`/`test` attach build/apps.img as floppy index 1. 86Box's
   fdd_02 gets apps360.img (best-effort config keys).
@@ -911,7 +1114,7 @@ on a white gap 2px around the text, centered in the zone.
 | symbol       | contract                                                    |
 |--------------|--------------------------------------------------------------|
 | `desk_paint` | draw every drive's icon + label; the selected one (desk_sel) gets `gfx_xor_fill` over its hit zone. Called by wm_paint_all after the desktop fill (lock held by caller). |
-| `desk_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window). Zone hit: if same zone as desk_sel and [ui_click_t]−desk_clkt < 9 (birth ticks, §10) → clear the selection and call `files_open_drive` with AL = drive. Else select it, stamp desk_clkt. Miss: clear any selection. All its own drawing (selection flips) happens under gfx_lock/gfx_unlock acquired internally, redrawing only the affected zones — EXCEPT when a visible window overlaps a zone's drawn rect (x 582..633 with the label overhang, window rect incl. the 1px shadow): a partial redraw would paint desktop over that window, so the flip falls back to a full wm_paint_all under the same lock. |
+| `desk_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window and `dock_click` declined the click, §30). Zone hit: if same zone as desk_sel and [ui_click_t]−desk_clkt < 9 (birth ticks, §10) → clear the selection and call `files_open_drive` with AL = drive. Else select it, stamp desk_clkt. Miss: clear any selection. All its own drawing (selection flips) happens under gfx_lock/gfx_unlock acquired internally, redrawing only the affected zones — EXCEPT when a visible window overlaps a zone's drawn rect (x 582..633 with the label overhang, window rect incl. the 1px shadow): a partial redraw would paint desktop over that window, so the flip falls back to a full wm_paint_all under the same lock. |
 
 Selection is purely visual bookkeeping; a window covering an icon simply
 paints over it (desk_paint runs before windows in wm_paint_all), and
@@ -927,14 +1130,17 @@ onclick, no bss. Entry: wm_create, return BX/CF. Prefix `hl_`.
 
 ## 28. taskmgr.inc — the Task Manager window
 
-Built-in window "Task Manager", 176×162 at (250,100), record created
-hidden by `tm_init` (from kmain, after loader_init). Label prefix `tm_`.
-No onkey, no onclick. `tm_init`: reads total conventional RAM once via
-int 12h (kmain runs on task 0, so §7's only-the-UI-task-calls-BIOS rule
-holds), zeroes all module state including the history ring (.bss is not
-zeroed at boot), creates the window (ptr in `tm_win`), and `task_spawn`s
-`tm_task`, which takes the last free slot — the task table is then full:
-UI, Clock, Bounce, TaskMgr.
+Built-in singleton app kind (KIND_TASKMGR, cap 1 — one sampler), window
+"Task Manager", 176×250 at (250,100). Label prefix `tm_`. No onkey, no
+onclick, no boot-time window or task: `tm_init` (from kmain, after
+loader_init) only reads total conventional RAM once via int 12h (kmain
+runs on task 0, so §7's only-the-UI-task-calls-BIOS rule holds). The
+window + monitor task exist only while an instance is open: `app_launch`
+runs `tm_kinit` (zeroes all module state including the history ring —
+the gauge calibration restarts from scratch at every launch — and caches
+the window ptr in `tm_win`), then spawns `tm_task` with DX = the instance
+index. `tm_task` checks I_STATE = 2 once per interval (after the spin
+phase) and tears down via `inst_task_die` (§29).
 
 **Load gauge — idle-spin calibration.** tm_task never sleeps. Each
 interval it spins { 32-bit counter += 1; `task_yield` } until 9 ticks have
@@ -957,18 +1163,29 @@ appears honestly in the task list as TaskMgr.
 
 **Sampling** (once per interval, after the spin phase):
 
-- Under one `pushf`/`cli` … `popf`: snapshot `sch_cycles` (16 bytes) and
-  the four T_STATE bytes. Per-task share: diff_i = new_i − old_i (32-bit,
-  old ← new), total = Σ diff_i; normalize by shifting total and every diff
-  right while total's high word is non-zero; **total = 0 → every share is
-  0 (no DIV ever executes with a zero divisor)**; else
+- Under one `pushf`/`cli` … `popf`: snapshot `sch_cycles` (32 bytes), the
+  eight T_STATE bytes, the eight T_INST bytes (`tm_inst`), and — for each
+  used slot whose T_INST ≠ 0xFF — the 16 I_NAME bytes of its instance
+  record into `tm_nsnap` + slot·16 (§29 records free atomically with
+  T_STATE inside task_exit's cli window, so a name read in the same
+  snapshot block can never be torn). Per-task share: diff_i = new_i −
+  old_i (32-bit, old ← new); **negative-diff clamp**: a diff with bit 31
+  set (the counter regressed — a slot reused mid-interval, or a rare PIT
+  stamp race) is forced to 0, since a wrapped "huge" diff would shrink
+  the total and clamp several rows to 100%; **appeared-slot rule**: a
+  slot whose previous-sample state (`tm_pstate`, copied from tm_state at
+  the end of every sample) was free but is now used gets diff_i forced
+  to 0 — task_spawn reset its counter (§8.1), so the interval diff is
+  meaningless. total = Σ diff_i; normalize by shifting total and every
+  diff right while total's high word is non-zero; **total = 0 → every
+  share is 0 (no DIV ever executes with a zero divisor)**; else
   share_i = diff_i·100/total (≤ 100 since diff_i ≤ total).
-- Under one `pushf`/`cli` … `popf`: read `[ld_appwin]` and, when non-zero,
-  the resident header's image-size and bss-size words at APP_LOAD_OFF+8
-  and +10 (loader_run zeroes ld_appwin before overwriting the region, so a
-  non-zero gate observed atomically with the reads implies an intact
-  header). used bytes = `kernel_bss_end` (bare label = the kernel
-  text+bss footprint, org 0) + image + bss. usedK = (used+1023) >> 10.
+- Under one `pushf`/`cli` … `popf`: sum I_SIZE over instance records with
+  I_STATE ≠ 0 and I_KIND bit 7 set (§29 — package regions; dying
+  instances still count: their region is still resident). The loader
+  keeps ΣI_SIZE ≤ APP_MAX_SIZE, so the 16-bit sum cannot overflow.
+  used bytes = `kernel_bss_end` (bare label = the kernel
+  text+bss footprint, org 0) + that sum. usedK = (used+1023) >> 10.
   Total KB is the boot-time int 12h value. **All bar math is in KB**:
   barw = usedK·160/totalK (`mul` then `div`; totalK cannot be 0 from
   int 12h, but a 0 check that skips the bar is required anyway).
@@ -988,7 +1205,7 @@ All drawing is self-backgrounding (each element white-fills its own rect
 or paints both segments), so tm_paint needs no preceding content clear
 beyond the one wm_paint_all already does.
 
-**Content layout** (content-relative; content is 174×143):
+**Content layout** (content-relative; content is 174×231):
 
 - (6,4): `"CPU nnn%"` (white-fill (6,4)-(90,11) first; n right-aligned,
   space-padded, 0..100).
@@ -1000,16 +1217,177 @@ beyond the one wm_paint_all already does.
 - RAM bar: 1px black frame (6,71)-(167,80); interior (7,72)-(166,79):
   black for barw pixels from the left, white for the remainder.
 - (6,87): header `"#  TASK    ST   CPU"`.
-- Task rows i = 0..3 at y = 97 + 11·i (white-fill (6,y)-(167,y+7) first),
-  20 chars ('%' included; a free row omits it and is 19): slot digit,
-  2 spaces, name left-justified in 7, space, state
-  in 3, 2 spaces, share right-aligned in 3 + `'%'`. Names come from a
-  fixed slot-indexed table {UI, Clock, Bounce, TaskMgr} — kmain's spawn
-  order is deterministic and pinned here. State: tm_task's own slot shows
-  `run` (it is running when it samples); otherwise T_STATE 1 → `rdy`,
-  2 → `slp`; a free slot shows name `-`, state `---`, share ` --` with no
-  `%`.
+- Task rows i = 0..11 at y = 97 + 11·i (white-fill (6,y)-(167,y+7) first),
+  20 chars ('%' included; a free row omits it and is 19): slot number
+  left-justified in 3 (one digit + 2 spaces, or two digits + 1 space for
+  slots ≥ 10), name left-justified in 7 (truncated), space, state
+  in 3, 2 spaces, share right-aligned in 3 + `'%'`. Names are dynamic:
+  slot with T_INST = 0xFF → "UI" (only slot 0 qualifies); otherwise the
+  instance-name snapshot `tm_nsnap` + slot·16. State: tm_task's own slot
+  shows `run` (it is running when it samples); otherwise T_STATE 1 →
+  `rdy`, 2 → `slp`; a free slot shows name `-`, state `---`, share ` --`
+  with no `%`.
 
-Menu/dispatch: see §12/§13 — Special gains "Task Manager" (CMD_TASKS = 7)
-above "Restart" (CMD_REBOOT, renumbered to 8); dispatch wm_shows
-`[tm_win]` under gfx_lock exactly like the §14 windows.
+Menu/dispatch: see §12/§13 — Special has "Task Manager" (CMD_TASKS = 7)
+above "Restart" (CMD_REBOOT = 8); dispatch calls `app_launch`
+KIND_TASKMGR like the §14 kinds.
+
+## 29. instance.inc — the instance table (running-app lifecycle)
+
+Every running application instance — built-in kind or loaded package — is
+one record in `inst_tab`. The table is the single source of truth for
+"what is running": the dock renders from it, the Task Manager names tasks
+through it, and (from format v2 on, §21) the package-region allocator
+derives occupancy from it. Label prefix `inst_` (lifecycle verbs use
+`app_`). Included from kernel.asm right after `wm.inc`.
+
+### 29.1 Record — 32 bytes (power of two: index↔ptr via CL shifts), `INST_MAX equ 12`
+
+```nasm
+I_STATE  equ 0    ; byte: 0 = free, 1 = live, 2 = dying (close requested)
+I_FLAGS  equ 1    ; byte: bit0 = minimized (window hidden, tile in the dock)
+I_KIND   equ 2    ; byte: KIND_* below; bit 7 set = package instance
+I_TASK   equ 3    ; byte: task slot index (§8), 0xFF = task-less
+I_WIN    equ 4    ; word: window record ptr (valid while I_STATE != 0)
+I_SPTR   equ 6    ; word: builtin — per-instance state block ptr (0 = none)
+                  ;       package — region base offset (>= 0xA000)
+I_SIZE   equ 8    ; word: package — allocated region bytes; 0 for builtins
+I_ICON   equ 10   ; word: near ptr to a 16x16 icon BODY (16 mask + 16 data
+                  ;       words, the icon_draw16 layout, §25); 0 = generic
+                  ;       fallback. Must outlive the instance (static data
+                  ;       for builtins; inside the region for packages) —
+                  ;       never a disk_icons index (disk_mount overwrites
+                  ;       that buffer on every mount).
+I_NAME   equ 12   ; 16 bytes: NUL-terminated copy, <= 15 chars; byte
+                  ;       I_NAME+15 is always 0
+                  ; 28..31 reserved, zeroed at alloc
+I_RECSZ  equ 32
+
+KIND_ABOUT   equ 0
+KIND_NOTE    equ 1
+KIND_CLOCK   equ 2
+KIND_BOUNCE  equ 3
+KIND_FILES   equ 4
+KIND_TASKMGR equ 5
+KIND_PKG     equ 0x80    ; bit 7: package instance
+```
+
+### 29.2 Concurrency rules (binding)
+
+1. **Publish-last**: a record becomes visible by the `I_STATE ← 1` byte
+   store, which must be the LAST write when creating an instance (the
+   task_spawn precedent, §8).
+2. **Free points**: task-less instances are freed (I_STATE ← 0) by the UI
+   task under the gfx lock (inside `app_close_win`); task-owned instances
+   are freed by `task_exit`'s release byte — interrupt-atomically, and
+   simultaneously with the task slot (§8).
+3. **Lock-held readers** (dock, wm paint paths) may only dereference
+   I_WIN/I_ICON/I_NAME of records read as I_STATE = 1 *during the same
+   lock hold*; records read as I_STATE = 2 (dying) must be skipped.
+4. **Lock-free readers** (the Task Manager) snapshot fields under
+   `pushf`/`cli` … `popf`.
+5. **Only the owning task destroys a task-owned instance's window** — the
+   UI task may only `wm_hide` it. (Otherwise the wm slot could be reused
+   while the sleeping task still holds the old ptr and would draw into a
+   stranger's window.)
+6. Fields are immutable after publish, except I_FLAGS bit0 (written only
+   by the UI task under the gfx lock) and I_STATE (atomic byte stores).
+7. **Package region occupancy is derived** (format v2, §21): the byte
+   range [I_SPTR, I_SPTR + I_SIZE) is occupied iff I_STATE != 0. There is
+   no explicit region-free call — the store that frees the record frees
+   the region.
+8. Only the UI task allocates instance records, so allocation never races
+   itself; the only non-UI transition is task_exit's 2 → 0 under cli.
+
+### 29.3 Kind descriptor table (.text, `inst_kinds`, stride KD_SIZE = 16)
+
+Per built-in kind: `KD_TPL` (word, wm_create template ptr), `KD_TASK`
+(word, task entry, 0 = task-less), `KD_POOL` (word, state pool base, 0 =
+stateless), `KD_SSIZE` (word, pool stride), `KD_INIT` (word, state-init
+proc or 0 — in: BX = window ptr, DI = state ptr or 0, SI = instance
+record ptr; preserves all registers; runs on the UI task with no lock
+held, window not yet visible), `KD_NAME` (word, NUL name string),
+`KD_ICON` (word, 16x16 icon body ptr or 0), `KD_CAP` (byte, max
+simultaneous instances), 1 pad byte.
+
+Pinned caps: About 1 (stateless), Note Pad 2 (stride 514), Clock 3
+(stride 8), Bounce 3 (stride 8), Files 1 (module-global mount state),
+TaskMgr 1 (one sampler). Sum 11 ≤ INST_MAX.
+
+### 29.4 Routines
+
+| symbol | contract |
+|--------|----------|
+| `inst_init` | zero `inst_tab` + `inst_launch`. From kmain, after wm_init. |
+| `inst_ptr` | in AL = instance index; out DI = record ptr. |
+| `inst_of_win` | in BX = window ptr; out CF=0 + DI = record (via `wm_ptr2idx` + `wm_owner`), CF=1 if unowned. Preserves BX. |
+| `inst_find_kind` | in AL = kind byte (exact match incl. bit 7); out CF=0 + DI = first record with I_STATE=1 of that kind, CF=1 none. |
+| `inst_alloc` | out CF=0 + DI = free record with I_FLAGS/I_SPTR/I_SIZE/I_ICON/reserved zeroed, CF=1 table full. Does NOT publish. UI task only. |
+| `inst_set_name` | in DI = record, SI = name source (NUL-terminated or NUL-padded; at most 15 chars taken). Zero-fills all 16 I_NAME bytes first. Safe on a package header's 16-byte name field. |
+| `inst_bind_win` | in DI = record, BX = window ptr: I_WIN ← BX, `wm_owner[window index]` ← record index. |
+| `app_launch` | in AL = kind (built-in). UI task only, no lock held; takes its own locks. out CF=1 failed (instance/window/task table full — silent no-op for the caller), CF=0 done. Order: cap check (at cap → gfx_lock, clear the live instance's minimized bit, wm_show it, gfx_unlock — i.e. "launch" of a full singleton fronts it; only-dying-instances → CF=1, retry after a task period) → inst_alloc → pool-slot pick (first candidate `pool + s·stride` not held by a same-kind record with I_STATE != 0) → template copied to scratch with x/y cascaded +16·s → wm_create (CF → fail; record was never published) → fill record (I_KIND, I_TASK=0xFF, I_ICON, name) + inst_bind_win → KD_INIT → **publish I_STATE ← 1** → if KD_TASK: task_spawn (AX = entry, DX = instance index), I_TASK ← returned slot; spawn CF → rollback (I_STATE ← 0, then locked wm_destroy) → gfx_lock, wm_show, gfx_unlock. |
+| `app_close_win` | in BX = window ptr; **caller holds the gfx lock**; UI task only. Unowned window → wm_hide (fallback). I_STATE = 2 already → wm_hide (idempotent). Task-less (I_TASK = 0xFF) → I_STATE ← 2, wm_destroy (clears wm_owner, repaints), I_WIN ← 0, I_STATE ← 0 — for a package instance that final store frees the region (rule 29.2.7). Task-owned → I_STATE ← 2 (the die flag), wm_hide (instant feedback); the task tears down at its next wake. |
+| `inst_minimize` | in BX = window ptr, lock held: set I_FLAGS bit0 (unowned → skip), wm_hide. |
+| `inst_restore` | in DI = record, lock held: clear I_FLAGS bit0, wm_show I_WIN. |
+| `inst_task_die` | in DI = the CURRENT task's instance record; no lock held; **never returns**: gfx_lock, wm_destroy I_WIN (clears wm_owner), I_WIN ← 0, gfx_unlock, then `jmp task_exit` with BX = record ptr (I_STATE is offset 0 — the release byte). |
+| `inst_launch_post` | in AL = kind: one atomic word store of kind+1 into `inst_launch` — the deferred launch channel for lock-held posters (drained by ui_task step 3, §13). Rapid double posts coalesce (last wins). |
+
+### 29.5 State (.bss)
+
+`inst_tab` (INST_MAX × I_RECSZ = 384 bytes), `inst_launch` (word: 0 =
+none, else kind + 1), plus module scratch (template copy buffer, pool-slot
+cursor — UI task only). All zeroed by `inst_init`.
+
+## 30. dock.inc — the dock strip
+
+A taskbar-style strip along the bottom of the screen showing one tile per
+**running** instance (I_STATE = 1, §29), built-in or package. Minimized
+instances stay in the dock with an inverted tile; clicking a tile restores
+a minimized instance (`inst_restore`) or fronts a visible one (`wm_front`).
+Label prefix `dock_`. The dock is not exposed to packages.
+
+### Geometry (pinned)
+
+```nasm
+DOCK_H      equ 24              ; strip rows 456..479
+DOCK_Y0     equ SCREEN_H - DOCK_H   ; 456: 1px black rule, full width
+DOCK_TY0    equ DOCK_Y0 + 3     ; tile top row = 459 (tiles rows 459..478)
+DOCK_TILE_W equ 24
+DOCK_TILE_H equ 20
+DOCK_X0     equ 8               ; first tile's left edge
+DOCK_STEP   equ 28              ; tile + 4px gap; 8 + 12*28 = 344 < 640
+```
+
+Look: black `gfx_hline` across row DOCK_Y0, white fill rows DOCK_Y0+1..479
+(an inverted menu bar). Tile i (= instance index i — **stable slot↔tile
+mapping**, holes stay; quitting one instance never moves another's tile):
+1px black frame DOCK_TILE_W × DOCK_TILE_H at x = DOCK_X0 + i·DOCK_STEP,
+row DOCK_TY0; the instance's 16×16 icon body (`I_ICON`, via `icon_draw16`)
+at (x+4, DOCK_TY0+2); I_ICON = 0 → the generic `ico_app16` **body** (the
+library record's data at `ico_app16+2` — icon_draw16 takes a header-less
+body, §25). Minimized (I_FLAGS bit0): `gfx_xor_fill` over the tile
+interior (x+1..x+DOCK_TILE_W−2, DOCK_TY0+1..DOCK_TY0+DOCK_TILE_H−2).
+
+The dock renders ONLY records read as I_STATE = 1 during the same lock
+hold (§29.2 rule 3); dying records are skipped, so a closing instance's
+tile vanishes with the `wm_hide` repaint. Icon pointers must satisfy
+§29.1's lifetime rule — never a `disk_icons` index.
+
+### Contracts
+
+| symbol       | contract                                                    |
+|--------------|--------------------------------------------------------------|
+| `dock_init`  | reset module scratch. From kmain, right after desk_init.    |
+| `dock_paint` | draw the rule, the strip and every live instance's tile. Called by wm_paint_all after `desk_paint`, before the menu bar and windows (lock held by caller) — windows cover the dock exactly like desktop icons (§26). |
+| `dock_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window, BEFORE desk_click). Out: CF=1 = consumed (any click with y ≥ DOCK_Y0 — strip background clicks are consumed no-ops), CF=0 = not in the dock. Tile hit on a live instance: minimized → gfx_lock, `inst_restore`, gfx_unlock; else → gfx_lock, `wm_front` on I_WIN, gfx_unlock. Single click activates; no double-click logic. |
+
+Every dock-state transition (launch, quit, minimize, restore) rides a
+`wm_show`/`wm_hide`/`wm_destroy` full repaint, so dock_paint needs no
+partial-redraw path; if a future teardown path ever changes dock state
+without a repainting wm_* call, it must add a desk_zone_redraw-style
+partial redraw (overlap check against all windows, full wm_paint_all
+fallback).
+
+The window drag clamp (§13) is unchanged: windows may be dropped over the
+dock; clicks in the overlap go to the window (wm_hit wins), and the strip
+repaints when the window moves away — desk-icon semantics throughout.

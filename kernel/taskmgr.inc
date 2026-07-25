@@ -38,77 +38,77 @@ TM_ROW_Y    equ 97              ; first task row
 TM_ROW_H    equ 11              ; row pitch, px
 
 ; -----------------------------------------------------------------------------
-; tm_init - create the Task Manager window and spawn the monitor task
+; tm_init - read total conventional RAM once (boot thread only)
 ;
 ; Runs on task 0 from kmain (after loader_init), so the int 12h call honors
-; the only-the-UI-task-calls-BIOS rule. Zeroes all module state first (.bss
-; is not zeroed at boot, and tm_task starts running the moment it is
-; spawned), then reads total conventional RAM, creates the window (hidden),
-; and spawns tm_task into the last free slot - the task table is then full:
-; UI, Clock, Bounce, TaskMgr.
+; the only-the-UI-task-calls-BIOS rule. Nothing else happens at boot: the
+; window and monitor task exist only while an instance is open (SPEC.md 28).
 ;
 ; in:       nothing
-; out:      nothing; window ptr in [tm_win]
+; out:      nothing; [tm_totkb] set
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
 tm_init:
     push ax
-    push bx
+    int 0x12                    ; AX = conventional memory, KB
+    mov [tm_totkb], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_kinit - KD_INIT for the Task Manager kind (SPEC.md 29.3)
+;
+; Zeroes all module state including the history ring (.bss is not zeroed at
+; boot, and a relaunched instance must not inherit the previous one's
+; calibration or graph) and caches the window ptr.
+;
+; in:  BX = window ptr, DI = state ptr (0 - module state), SI = record
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+tm_kinit:
+    push ax
     push cx
     push di
-    push si
     push es
 
-    push ds                     ; zero the state block (DF=0 per boot path)
+    push ds                     ; zero the state block (DF=0 per SPEC.md 1)
     pop es
     mov di, tm_zero_beg
     mov cx, tm_zero_end - tm_zero_beg
     xor al, al
     rep stosb
-
-    int 0x12                    ; AX = conventional memory, KB
-    mov [tm_totkb], ax
-
-    mov si, tm_tpl
-    call wm_create              ; created hidden; shown by CMD_TASKS
     mov [tm_win], bx
 
-    mov ax, tm_task
-    call task_spawn
-
     pop es
-    pop si
     pop di
     pop cx
-    pop bx
     pop ax
     ret
 
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
-tm_tpl:     dw 250, 100, 176, 162, tm_ttl, tm_paint, 0, 0
+tm_tpl:     dw 250, 100, 176, 250, tm_ttl, tm_paint, 0, 0
 tm_ttl:     db 'Task Manager', 0
+tm_sname:   db 'TaskMgr', 0     ; KD_NAME: fits the 7-char task-list column
 
 tm_s_cpu:   db 'CPU ', 0
 tm_s_ram:   db 'RAM ', 0
 tm_s_hdr:   db '#  TASK    ST   CPU', 0
 tm_s_ui:    db 'UI', 0
-tm_s_clk:   db 'Clock', 0
-tm_s_bnc:   db 'Bounce', 0
-tm_s_tm:    db 'TaskMgr', 0
 tm_s_dash:  db '-', 0
 tm_s_run:   db 'run', 0
 tm_s_rdy:   db 'rdy', 0
 tm_s_slp:   db 'slp', 0
 tm_s_free:  db '---', 0
 
-; slot -> name; kmain's spawn order is deterministic and pinned in SPEC.md 28
-tm_names:   dw tm_s_ui, tm_s_clk, tm_s_bnc, tm_s_tm
-
 ; -----------------------------------------------------------------------------
-; tm_task - the monitor task: spin-measure for TM_INT ticks, sample, redraw
-; in:  nothing (task entry; never returns)
+; tm_task - the monitor task: spin-measure for TM_INT ticks, sample, redraw,
+;           die on request
+; in:  DX = instance index (the spawn argument, SPEC.md 8); never returns
 ; -----------------------------------------------------------------------------
 tm_task:
+    mov al, dl
+    call inst_ptr               ; DI = our instance record
+    mov bp, di                  ; BP = record for life
 .interval:
     mov ax, [ticks]
     mov [tm_t0], ax
@@ -123,6 +123,9 @@ tm_task:
     cmp ax, TM_INT
     jb .spin
 
+    cmp byte [bp+I_STATE], 2    ; close requested? (once per interval)
+    je .die
+
     call tm_sample              ; no lock: computes load, shares, RAM
 
     call gfx_lock
@@ -135,6 +138,11 @@ tm_task:
 .skip:
     call gfx_unlock
     jmp .interval
+
+.die:
+    mov di, bp
+    jmp inst_task_die           ; destroys the window, frees the record,
+                                ; task_exit - never returns
 
 ; -----------------------------------------------------------------------------
 ; tm_sample - one measurement pass: load gauge, history push, per-task CPU
@@ -236,7 +244,11 @@ tm_sample:
 .posok:
     mov [tm_pos], bx
 
-    ; --- snapshot scheduler state (one atomic block, SPEC.md 8.1) ------------
+    ; --- snapshot scheduler state (one atomic block, SPEC.md 8.1/28) ---------
+    ; Cycles, states, owning-instance indices, and - for used slots with an
+    ; instance - the instance's I_NAME bytes, all inside ONE cli window:
+    ; task_exit frees a record atomically with its task slot (SPEC.md 8),
+    ; so a name read in the same window can never be torn.
     pushf
     cli
     mov si, sch_cycles
@@ -257,6 +269,42 @@ tm_sample:
     add si, T_SIZE
     inc di
     loop .ssnap
+    mov si, sch_tasks + T_INST
+    mov di, tm_inst
+    mov cx, MAX_TASKS
+.isnap:
+    mov al, [si]
+    mov [di], al
+    add si, T_SIZE
+    inc di
+    loop .isnap
+    xor bx, bx                  ; BX = slot: copy instance names
+.nsnap:
+    cmp byte [tm_state+bx], 0
+    je .nnext
+    mov al, [tm_inst+bx]
+    cmp al, 0xFF
+    je .nnext
+    push bx
+    call inst_ptr               ; DI = instance record
+    lea si, [di+I_NAME]
+    mov ax, bx
+    mov cl, 4
+    shl ax, cl                  ; dest = tm_nsnap + slot*16
+    mov di, ax
+    add di, tm_nsnap
+    mov cx, 16
+.ncpy:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .ncpy
+    pop bx
+.nnext:
+    inc bx
+    cmp bx, MAX_TASKS
+    jb .nsnap
     mov al, [sch_cur]           ; = our own slot (we are running)
     mov [tm_self], al
     popf
@@ -271,17 +319,40 @@ tm_sample:
     mov dx, [tm_new+bx+2]
     sub ax, [tm_old+bx]         ; wrap-safe 32-bit difference
     sbb dx, [tm_old+bx+2]
-    mov [tm_diff+bx], ax
-    mov [tm_diff+bx+2], dx
     mov cx, [tm_new+bx]
     mov [tm_old+bx], cx
     mov cx, [tm_new+bx+2]
     mov [tm_old+bx+2], cx
+    test dx, dx                 ; negative diff = the counter regressed
+    jns .possign                ; (slot reused mid-interval, or a rare PIT
+    xor ax, ax                  ; stamp race): meaningless, force 0 - a
+    xor dx, dx                  ; wrapped "huge" diff would shrink the
+.possign:                       ; total and clamp several rows to 100%
+    mov si, bx                  ; appeared-slot rule (SPEC.md 28): a slot
+    shr si, 1                   ; free last sample but used now had its
+    shr si, 1                   ; counter reset by task_spawn - the diff is
+    cmp byte [tm_pstate+si], 0  ; meaningless, force 0
+    jne .keep
+    cmp byte [tm_state+si], 0
+    je .keep
+    xor ax, ax
+    xor dx, dx
+.keep:
+    mov [tm_diff+bx], ax
+    mov [tm_diff+bx+2], dx
     add [tm_total], ax
     adc [tm_total+2], dx
     add bx, 4
     cmp bx, MAX_TASKS * 4
     jb .diff
+
+    xor bx, bx                  ; this sample's states become the previous
+.pcopy:
+    mov al, [tm_state+bx]
+    mov [tm_pstate+bx], al
+    inc bx
+    cmp bx, MAX_TASKS
+    jb .pcopy
 
     ; normalize: shift total and every diff right until total fits 16 bits
 .tnorm:
@@ -327,21 +398,25 @@ tm_sample:
     cmp bx, MAX_TASKS * 4
     jb .pct
 
-    ; --- RAM: kernel footprint + resident package (SPEC.md 28) ---------------
-    pushf                       ; gate + header words in one atomic block:
-    cli                         ; loader_run zeroes ld_appwin before it
-    mov ax, [ld_appwin]         ; overwrites the region, so gate != 0 here
-    mov bx, [APP_LOAD_OFF+8]    ; means the header is intact
-    mov cx, [APP_LOAD_OFF+10]
+    ; --- RAM: kernel footprint + resident package regions (SPEC.md 28) -------
+    pushf                       ; one atomic block: records free atomically
+    cli                         ; (task_exit) or on the UI task, and the
+    xor bx, bx                  ; loader keeps the sum <= APP_MAX_SIZE.
+    mov si, inst_tab            ; Dying instances still count - their
+    mov cx, INST_MAX            ; region is still resident.
+.rsum:
+    cmp byte [si+I_STATE], 0
+    je .rnext
+    test byte [si+I_KIND], 0x80 ; packages only (builtins have I_SIZE 0)
+    jz .rnext
+    add bx, [si+I_SIZE]
+.rnext:
+    add si, I_RECSZ
+    loop .rsum
     popf
-    or ax, ax
-    jnz .app
-    xor bx, bx
-    xor cx, cx
-.app:
     mov ax, kernel_bss_end      ; kernel text+bss footprint (bare label);
     add ax, bx                  ; max total 0xA000 + 0x5000 = 61440, no
-    add ax, cx                  ; 16-bit overflow possible
+                                ; 16-bit overflow possible
     add ax, 1023
     mov cl, 10
     shr ax, cl                  ; usedK, rounded up
@@ -458,7 +533,7 @@ tm_paint:
 ;
 ; Frames and the header are static and already on screen; only the dynamic
 ; elements are touched: CPU line, the freshly written column + the advanced
-; sweep gap, RAM line + bar, and the four task rows.
+; sweep gap, RAM line + bar, and the task rows.
 ;
 ; in:  nothing ([tm_win] set)
 ; out: nothing
@@ -720,7 +795,7 @@ tm_bar:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_rows - the four task rows: white-fill each band, build the 20-char row
+; tm_rows - the MAX_TASKS task rows: white-fill each band, build the 20-char row
 ;           string, draw it (SPEC.md 28 pins the format)
 ; in:  tm_state/tm_self/tm_pct
 ; out: nothing
@@ -755,22 +830,45 @@ tm_rows:
 
     ; --- build "N  NAME    ST   nn%" in tm_str -------------------------------
     mov di, tm_str
-    mov ax, si
+    mov ax, si                  ; slot number, left-justified in 3
+    cmp al, 10
+    jb .slot1
+    mov byte [di], '1'          ; slots 10..: two digits + one space
+    inc di
+    sub al, 10
     add al, '0'
+    mov [di], al
+    inc di
+    mov byte [di], ' '
+    inc di
+    jmp .slotdn
+.slot1:
+    add al, '0'                 ; slots 0..9: one digit + two spaces
     mov [di], al
     inc di
     mov byte [di], ' '
     inc di
     mov byte [di], ' '
     inc di
+.slotdn:
 
     mov bx, si
     cmp byte [tm_state+bx], 0
     je .free
 
-    shl bx, 1                   ; name, left-justified in 7
-    push si
-    mov si, [tm_names+bx]
+    push si                     ; name, left-justified in 7 (dynamic:
+    mov al, [tm_inst+bx]        ; snapshot of the owning instance's I_NAME,
+    cmp al, 0xFF                ; or "UI" for the instance-less slot 0)
+    jne .named
+    mov si, tm_s_ui
+    jmp .name
+.named:
+    mov ax, bx
+    mov cl, 4
+    shl ax, cl
+    mov si, ax
+    add si, tm_nsnap
+.name:
     call tm_copy7
     pop si
     mov byte [di], ' '
@@ -976,6 +1074,9 @@ tm_new:     resw MAX_TASKS * 2  ; current snapshot
 tm_diff:    resw MAX_TASKS * 2  ; per-task interval cycles
 tm_total:   resw 2              ; sum of diffs, dword
 tm_state:   resb MAX_TASKS      ; T_STATE snapshot
+tm_pstate:  resb MAX_TASKS      ; previous sample's T_STATE (appeared rule)
+tm_inst:    resb MAX_TASKS      ; T_INST snapshot (owning instance or 0xFF)
+tm_nsnap:   resb MAX_TASKS * 16 ; instance-name snapshots
 tm_self:    resb 1              ; our own slot ([sch_cur] at snapshot)
 tm_pct:     resb MAX_TASKS      ; per-task share, 0..100
 tm_usedk:   resw 1              ; used RAM, KB

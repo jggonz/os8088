@@ -64,13 +64,19 @@ $(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin
 	@echo "image:  $@ (360KB, 9 spt)"
 
 # Minesweeper, the first loadable program: a flat binary with the .jop
-# package header, validated by jopkg.py and shipped on a jopfs data floppy.
+# package header. Each package is assembled TWICE - at the 0xA000 link base
+# and at org 0xA800 - and jopkg.py diffs the pair into the v2 relocation
+# table (SPEC.md 24), so the kernel can load any number of instances at
+# per-instance bases.
 $(BUILD)/mines.bin: apps/mines/mines.asm apps/jopapi.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/mines/mines.asm
 	@echo "mines:  $$(stat -f%z $@) bytes"
 
-$(BUILD)/mines.jop: $(BUILD)/mines.bin tools/jopkg.py
-	python3 tools/jopkg.py $(BUILD)/mines.bin -o $@
+$(BUILD)/mines.alt.bin: apps/mines/mines.asm apps/jopapi.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DJOP_ORG=0xA800 -o $@ apps/mines/mines.asm
+
+$(BUILD)/mines.jop: $(BUILD)/mines.bin $(BUILD)/mines.alt.bin tools/jopkg.py
+	python3 tools/jopkg.py $(BUILD)/mines.bin --alt $(BUILD)/mines.alt.bin -o $@
 
 # HELLO, the second package: minimal, no embedded icon (proves the
 # generic-icon fallback in the Disk window).
@@ -78,8 +84,11 @@ $(BUILD)/hello.bin: apps/hello/hello.asm apps/jopapi.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/hello/hello.asm
 	@echo "hello:  $$(stat -f%z $@) bytes"
 
-$(BUILD)/hello.jop: $(BUILD)/hello.bin tools/jopkg.py
-	python3 tools/jopkg.py $(BUILD)/hello.bin -o $@
+$(BUILD)/hello.alt.bin: apps/hello/hello.asm apps/jopapi.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DJOP_ORG=0xA800 -o $@ apps/hello/hello.asm
+
+$(BUILD)/hello.jop: $(BUILD)/hello.bin $(BUILD)/hello.alt.bin tools/jopkg.py
+	python3 tools/jopkg.py $(BUILD)/hello.bin --alt $(BUILD)/hello.alt.bin -o $@
 
 # The software floppies (drive B:) hold packages, not boot code - jopfs only.
 # Directory order is pinned: mines first, hello second (tests rely on it).

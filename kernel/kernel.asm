@@ -116,12 +116,14 @@ kmain:
     call vga_mode12
     call font_init              ; needs int 10h, so after the mode is set
     call wm_init
+    call inst_init              ; instance table (SPEC.md 29) - clean boot:
+                                ; no app instances exist until launched
     call mouse_init             ; IRQ4 live; cursor stays hidden until shown
     call desk_init              ; count floppy drives for the desktop icons
-    call apps_init              ; windows + background tasks
-    call files_init             ; Disk window (hidden until File > Disk)
+    call dock_init              ; dock strip scratch (SPEC.md 30)
+    call files_init             ; Disk module state (no window at boot)
     call loader_init            ; package loader state
-    call tm_init                ; Task Manager window + monitor task
+    call tm_init                ; Task Manager total-RAM read (no window)
 
     call gfx_lock
     call wm_paint_all
@@ -178,6 +180,7 @@ japi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "sched.inc"
 %include "events.inc"
 %include "wm.inc"
+%include "instance.inc"
 %include "menu.inc"
 %include "ui.inc"
 %include "apps.inc"
@@ -186,6 +189,7 @@ japi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "files.inc"
 %include "icons.inc"
 %include "desk.inc"
+%include "dock.inc"
 %include "taskmgr.inc"
 
 ; =============================================================================
