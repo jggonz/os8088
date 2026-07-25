@@ -24,6 +24,7 @@ APP_BALL_YMAX   equ 130 - TITLE_H - 1 - 8   ; bounce content rows are
 ; clobbers: nothing (flags only)
 ; Note Pad / Clock / Bounce get W_FLAGS bit1 (visible) set directly - the
 ; boot sequence does a single wm_paint_all afterwards (SPEC.md 14/15).
+; Each spawn passes SI = the app's window title as the task name (SPEC.md 7).
 ; -----------------------------------------------------------------------------
 apps_init:
     push ax
@@ -63,9 +64,13 @@ apps_init:
     mov [app_win_bounce], bx
     or word [bx+W_FLAGS], 2     ; visible at boot
 
+    ; task_spawn takes SI = name ptr; the window titles double as the task
+    ; names the Task Manager lists, so there is one string to keep true
     mov ax, app_clock_task
+    mov si, app_ttl_clock
     call task_spawn
     mov ax, app_bounce_task
+    mov si, app_ttl_bounce
     call task_spawn
 
     pop si

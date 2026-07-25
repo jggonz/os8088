@@ -18,15 +18,27 @@
 ; in:  nothing
 ; out: never returns
 ; clobbers: everything (it is a task entry, not a callable routine)
+;
+; The loop also publishes [sch_idle_flag] for the scheduler's CPU accounting
+; (SPEC.md 7): it is raised at the top of every pass and lowered the instant
+; real work appears (a keystroke, a popped event, a pending package load).
+; Task 0 is the system's idle loop - without this flag the empty keyboard poll
+; and the empty event queue would be charged as busy and the Task Manager
+; would read 100% forever. Menus, drags, clicks and loads are charged busy
+; because the flag stays down from the moment the work is picked up until the
+; next pass begins.
 ; -----------------------------------------------------------------------------
 ui_task:
 .loop:
+    mov byte [sch_idle_flag], 1 ; idle until proven otherwise (see header)
+
     ; --- 1. keyboard: poll, and feed the front window's key handler ----------
     mov ah, 0x01                ; any key pending?
     int 0x16
     jz .events
     mov ah, 0x00                ; fetch it: AL = ascii, AH = scan
     int 0x16
+    mov byte [sch_idle_flag], 0 ; a real keystroke: the pass is busy from here
     call gfx_lock               ; handler draws; it runs under the lock
     call wm_top                 ; BX = frontmost visible window, 0 if none
     or bx, bx
@@ -43,6 +55,7 @@ ui_task:
     mov di, ui_ev
     call evq_pop
     jc .yield                   ; queue empty
+    mov byte [sch_idle_flag], 0 ; a real event: charge the dispatch as busy
     cmp word [ui_ev + EV_TYPE], EVT_MDOWN
     jne .yield                  ; only mouse-downs matter here
     mov cx, [ui_ev + EV_A]      ; CX = click x
@@ -116,6 +129,7 @@ ui_task:
     mov ax, [ld_pending]        ; stored as directory index + 1
     dec ax
     mov word [ld_pending], 0    ; consume before running, not after
+    mov byte [sch_idle_flag], 0 ; a load is work: charge the disk wait as busy
     call loader_run             ; in: AX = index; does its own locking
 
     ; --- 4. give everyone else a slice ----------------------------------------
@@ -269,6 +283,8 @@ ui_dispatch:
     je .files
     cmp ax, CMD_CLOSE
     je .close
+    cmp ax, CMD_TASKS
+    je .tasks
     cmp ax, CMD_REBOOT
     je .reboot
 .done:
@@ -285,6 +301,9 @@ ui_dispatch:
     jmp .show
 .bounce:
     mov bx, [app_win_bounce]
+    jmp .show
+.tasks:
+    mov bx, [tm_win]            ; created hidden by tm_init; opens here
 .show:
     call gfx_lock
     call wm_show                ; in: BX; shows + raises + repaints

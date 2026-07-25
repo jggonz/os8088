@@ -28,7 +28,7 @@ core interactions work:
   raise, close box to hide, reopen from the File menu.
 - **Menus** — press in the bar, drag through pull-downs with live highlight,
   release to choose. Apple → About jop; File → Note Pad / Clock / Bounce /
-  Close Window; Special → Restart.
+  Close Window; Special → Task Manager / Restart.
 - **Note Pad** — click it, type; wraps lines, Backspace and Return work.
 - **Disk icons** — the desktop shows an icon per floppy drive the BIOS
   reports (int 11h). Click to select, double-click to open that drive in
@@ -47,6 +47,14 @@ core interactions work:
   minesweeper that ships on `build/apps.img`, loaded through the Disk
   window. Blue 1s, green 2s, red flags, first-click-safe mine placement,
   flood fill; `F` toggles flag mode, `N` starts a new game.
+- **Task Manager** — Special → Task Manager. A live CPU meter (a sweeping
+  graph plus a percentage), two memory bars — all of RAM, then the kernel's
+  own 64KB segment broken into kernel, loaded program and free — and the
+  task list: every slot with its name, whether it is running, ready or
+  sleeping, and its share of the CPU. The measurement is real: the PIT runs
+  in mode 2 so the scheduler can read the counter and charge sub-tick
+  intervals to whichever task was current, and the UI task flags its own
+  idle poll so the meter reads load rather than a permanent 100%.
 - **Clock** and **Bounce** — each runs as its *own pre-empted task*. The
   clock ticks and the ball bounces while you type or hold a drag: that is
   the PIT timer interrupt switching tasks out from under each other, on an
@@ -105,6 +113,7 @@ kernel/wm.inc        window records, z-order, frames, hit test, painter
 kernel/menu.inc      menu bar, pull-down tracking
 kernel/ui.inc        UI task: event pump, keyboard, drags, dispatch
 kernel/apps.inc      About, Note Pad, Clock task, Bounce task
+kernel/taskman.inc   Task Manager: CPU meter, memory bars, task list
 kernel/disk.inc      int 13h floppy reads, jopfs mount + directory
 kernel/loader.inc    .jop package validation, load, launch, replace
 kernel/files.inc     the Disk window (file manager)

@@ -119,6 +119,7 @@ kmain:
     call mouse_init             ; IRQ4 live; cursor stays hidden until shown
     call desk_init              ; count floppy drives for the desktop icons
     call apps_init              ; windows + background tasks
+    call tm_init                ; Task Manager window + its background task
     call files_init             ; Disk window (hidden until File > Disk)
     call loader_init            ; package loader state
 
@@ -180,6 +181,7 @@ japi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "menu.inc"
 %include "ui.inc"
 %include "apps.inc"
+%include "taskman.inc"
 %include "disk.inc"
 %include "loader.inc"
 %include "files.inc"
