@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-jop: a Macintosh System 1-style GUI OS for the Intel 8086, written entirely in real-mode NASM assembly, booted from floppy. Pre-emptive multitasking, overlapping windows, serial mouse, and loadable software packages — all in 256KB of RAM.
+jop: a Macintosh System 1-style GUI OS for the Intel 8086, written entirely in real-mode NASM assembly, booted from floppy. Pre-emptive multitasking, overlapping windows, serial mouse, loadable software packages, and a Task Manager with a live CPU sweep graph and memory bars — all in 256KB of RAM.
 
 **SPEC.md is the binding contract.** Every symbol name, register contract, constant, and data layout is pinned there. Update SPEC.md *before* changing any interface, not after.
 
@@ -45,17 +45,17 @@ Testing quirks (learned the hard way):
 - **Tiny model.** CS = DS = SS = 0x1000 for kernel *and* loaded programs; all inter-module calls are near. ES is scratch but must be restored unless documented.
 - **Register discipline.** Every public routine preserves all registers except documented outputs. ISRs push DS/ES, load DS = KERNEL_SEG, `cld` before string ops. Critical sections use `pushf`/`cli` … `popf`, never `cli` … `sti`.
 - **.bss discipline.** Large buffers go in `section .bss` (free on disk with `-f bin`). NASM section state persists across `%include`: any .inc that opens `section .bss` must switch back to `section .text` before it ends, or the next include's code silently lands in .bss. `-w+error` turns the tell-tale warning into a build failure.
-- **Label hygiene.** One flat namespace; every module-internal label carries its module prefix (`vga_`, `mou_`, `sch_`, `wm_`, `menu_`, `ui_`, `dsk_`, `ld_`, `fm_`, `ico_`, `desk_`, …) or is a NASM local label.
+- **Label hygiene.** One flat namespace; every module-internal label carries its module prefix (`vga_`, `mou_`, `sch_`, `wm_`, `menu_`, `ui_`, `tm_`, `dsk_`, `ld_`, `fm_`, `ico_`, `desk_`, …) or is a NASM local label.
 - **Memory budget.** Kernel image + .bss must fit below offset 0xA000 (loaded programs occupy 0xA000..0xEFFF in the same segment); `kernel.asm` ends with a build-time assertion that fails the build if exceeded.
 
 ### Concurrency (SPEC.md §7 — the crux)
 
-Pre-emptive round-robin scheduling: the int 08h PIT hook chains the BIOS tick, saves the register frame on the task stack, swaps SP, and irets into the next ready task. One drawing mutex (`gfx_lock`) guards all VGA access and hides the cursor; public drawing routines *assume* the caller holds it. Background tasks (Clock, Bounce) re-check window visibility *under* the lock. The mouse ISR draws the cursor itself only when the lock is free, deferring to the next unlock otherwise. Task switching pauses during floppy reads (the tick still runs — the motor needs it).
+Pre-emptive round-robin scheduling: the int 08h PIT hook chains the BIOS tick, saves the register frame on the task stack, swaps SP, and irets into the next ready task. One drawing mutex (`gfx_lock`) guards all VGA access and hides the cursor; public drawing routines *assume* the caller holds it. Background tasks (Clock, Bounce) re-check window visibility *under* the lock. The mouse ISR draws the cursor itself only when the lock is free, deferring to the next unlock otherwise. Task switching pauses during floppy reads (the tick still runs — the motor needs it). PIT channel 0 runs in **mode 2** (same ~18.2 Hz rate as the BIOS, but an unambiguous readable down-count), so `sch_account` can charge sub-tick intervals to the current task at every switch; `sch_idle_flag` — written by ui.inc, read by sched.inc — is what keeps the UI task's idle poll from reading as 100% CPU.
 
 ### Layout
 
 - `boot/boot.asm` — 512-byte boot sector; geometry comes from `-DSPT`/`-DHEADS`, sector count from the measured kernel size (both injected by the Makefile).
-- `kernel/kernel.asm` — constants, boot sequence, the jop API jump table at 1000:0010, `%include`s of all modules, final .bss and size assertion. Module ownership is the table in SPEC.md §4; each `.inc` owns one subsystem (vga12, font, mouse, sched, events, wm, menu, ui, apps, disk, loader, files, icons, desk).
+- `kernel/kernel.asm` — constants, boot sequence, the jop API jump table at 1000:0010, `%include`s of all modules, final .bss and size assertion. Module ownership is the table in SPEC.md §4; each `.inc` owns one subsystem (vga12, font, mouse, sched, events, wm, menu, ui, apps, taskman, disk, loader, files, icons, desk).
 - `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` are dead — left in the tree but **no longer included** (relics of the pre-GUI text shell, as is `kernel-shell.asm.bak`).
 - `apps/` — loadable packages. `jopapi.inc` is the SDK: `JOP_HEADER` emits the 32-byte package header, `JAPI_*` constants name jump-table entries, `JOP_IMAGE_END` seals size + bss. `mines/` (embedded icon) and `hello/` (proves the generic-icon fallback).
 - `tools/` — host-side Python: `jopkg.py` (validates/stamps `.bin` → `.jop`), `jopdisk.py` (builds jopfs floppy images), `qmp.py` + `mouse.py` (test drivers).

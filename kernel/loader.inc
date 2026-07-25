@@ -42,6 +42,7 @@ LD_HDR_SIZE equ 0x20            ; entry must land at or past the header end
 loader_init:
     mov word [ld_pending], 0
     mov word [ld_appwin], 0
+    mov word [ld_size], 0       ; invariant: ld_size != 0 iff ld_appwin != 0
     mov byte [ld_status], LD_OK
     ret
 
@@ -61,6 +62,12 @@ loader_init:
 ;   6. near-call the entry (DS=ES=KERNEL_SEG, lock free); on success store
 ;      BX in ld_appwin and wm_show it under the lock
 ;   7. store the status and call files_refresh (no lock held)
+;
+; ld_size (image + bss of the resident package, for the Task Manager's
+; kernel-segment bar) is kept in lockstep with ld_appwin: zeroed on eviction,
+; set on success. Every failure after step 2 has already been through the
+; eviction, so it leaves both at 0; the step 1 failures run before it and must
+; leave the still-resident program's pair alone.
 ; -----------------------------------------------------------------------------
 loader_run:
     push ax
@@ -96,6 +103,7 @@ loader_run:
     call wm_destroy             ; in: BX = window ptr; repaints all
     call gfx_unlock
     mov word [ld_appwin], 0
+    mov word [ld_size], 0       ; nothing resident: the pair moves together
 .no_evict:
 
     ; --- step 3: read the file into the APP region ---------------------------
@@ -128,6 +136,8 @@ loader_run:
     add ax, cx                  ; safe from 16-bit overflow
     cmp ax, APP_MAX_SIZE
     ja .toobig
+    mov [ld_tsize], ax          ; stash now: step 5 consumes DI/CX and the
+                                ; package entry preserves nothing
     mov ax, [APP_LOAD_OFF+LD_H_ENTRY]
     cmp ax, APP_LOAD_OFF+LD_HDR_SIZE
     jb .bad                     ; entry inside the header
@@ -149,6 +159,8 @@ loader_run:
     call bx
     jc .abort
     mov [ld_appwin], bx
+    mov ax, [ld_tsize]          ; commit the pair together
+    mov [ld_size], ax
     call gfx_lock
     call wm_show                ; in: BX = window ptr; repaints all
     call gfx_unlock
@@ -207,6 +219,11 @@ section .bss
 ld_pending: resw 1              ; 0 = none, else directory index + 1
                                 ; (set by files.inc, consumed by ui.inc)
 ld_appwin:  resw 1              ; window ptr of the resident program, 0 = none
+ld_size:    resw 1              ; image + bss of the resident program, bytes;
+                                ; 0 = none. Read by taskman.inc. Invariant:
+                                ; non-zero exactly when ld_appwin is non-zero
+ld_tsize:   resw 1              ; scratch: candidate image + bss, held across
+                                ; the bss zeroing and the entry call
 ld_status:  resb 1              ; LD_* result of the last loader_run
 
 section .text
