@@ -62,10 +62,10 @@ inst_kinds:                     ; indexed by KIND_* * 16; caps are binding
     db 2, 0                     ; Note Pad: 2 x (len word + 512-byte buffer)
     dw app_tpl_clock,  app_clock_task,  app_clk_pool,  8,   app_clock_kinit,  app_ttl_clock
     dw 0
-    db 3, 0                     ; Clock: 3 x 8-byte time state, one task each
+    db 10, 0                    ; Clock: 10 x 8-byte time state, one task each
     dw app_tpl_bounce, app_bounce_task, app_ball_pool, 8,   app_bounce_kinit, app_ttl_bounce
     dw 0
-    db 3, 0                     ; Bounce: 3 x 8-byte ball state, one task each
+    db 10, 0                    ; Bounce: 10 x 8-byte ball state, one task each
     dw fm_tpl,         0,               0,             0,   fm_kinit,         fm_ttl
     dw 0
     db 1, 0                     ; Disk: singleton (module-global mount state)

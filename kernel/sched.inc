@@ -27,7 +27,7 @@
 ; =============================================================================
 
 ; --- task table (SPEC.md 8) --------------------------------------------------
-MAX_TASKS   equ 8
+MAX_TASKS   equ 12
 T_STATE     equ 0               ; byte: 0 free, 1 ready, 2 sleeping
 T_SP        equ 2               ; word: saved SP (frame above)
 T_WAKE      equ 4               ; word: [ticks] value to wake at
@@ -520,7 +520,7 @@ sch_resume:
 section .bss
 
 sch_tasks:  resb MAX_TASKS * T_SIZE     ; task records (layout above)
-sch_stacks: resb (MAX_TASKS-1) * SCH_STACK ; slots 1..7 only: slot n's stack
+sch_stacks: resb (MAX_TASKS-1) * SCH_STACK ; slots 1..11 only: slot n's stack
                                         ; top at n*1536 (slot 0 = the UI task
                                         ; runs on the boot stack, SS:0xFFFE)
 sch_old08:  resb 4                      ; saved BIOS int 08h vector (off:seg)

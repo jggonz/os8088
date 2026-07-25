@@ -200,9 +200,9 @@ window.
 
 ## 8. sched.inc — pre-emptive round-robin
 
-- `MAX_TASKS equ 8`. Task 0 is the boot thread (becomes the UI task); it
+- `MAX_TASKS equ 12`. Task 0 is the boot thread (becomes the UI task); it
   runs on the boot stack (SS:0xFFFE) and owns **no** slice of `sch_stacks`.
-  Slots 1..7 are dynamic (spawned by `app_launch`/§29, freed by
+  Slots 1..11 are dynamic (spawned by `app_launch`/§29, freed by
   `task_exit`); each has a 1536-byte stack:
   `sch_stacks resb (MAX_TASKS-1) * SCH_STACK`, slot n's stack top at
   `sch_stacks + n*SCH_STACK` (slot 1 owns bytes 0..1535).
@@ -540,8 +540,8 @@ one. Closing an instance frees all of it.
 
 Per-instance state pools (.bss; slot stride and cap pinned in the §29
 kind table): `app_note_pool` 2 × 514 (NOTE_LEN word at +0, NOTE_BUF 512
-bytes at +2), `app_clk_pool` 3 × 8 (CLK_H/M/S bytes at +0/+1/+2, pad,
-CLK_LAST word at +4, CLK_ACC word at +6), `app_ball_pool` 3 × 8
+bytes at +2), `app_clk_pool` 10 × 8 (CLK_H/M/S bytes at +0/+1/+2, pad,
+CLK_LAST word at +4, CLK_ACC word at +6), `app_ball_pool` 10 × 8
 (BAL_X/Y/VX/VY words). About is stateless. Init procs (KD_INIT contract,
 §29): `app_note_kinit` (len = 0), `app_clock_kinit` (h/m/s = 0, last =
 [ticks], acc = 0), `app_bounce_kinit` (x=4, y=4, vx=3, vy=2).
@@ -563,7 +563,9 @@ the gfx lock) may stay shared. Kind behavior:
   drop), backspace (ASCII 8) deletes, Enter (13) newline. After editing,
   the handler repaints **its own content only** (white-fill content, redraw
   text) — caller already holds the lock.
-- **Clock** — 130×60 at (450,80), title "Clock". Cap 3. Per-instance
+- **Clock** — 130×60 at (350,60), title "Clock". Cap 10 (the template
+  position keeps the whole +16·9 cascade on-screen and above the dock).
+  Per-instance
   task (`app_clock_task`; entry receives DX = instance index, caches the
   record and state ptrs): loop { task_sleep 9; **if I_STATE = 2 →
   teardown via `inst_task_die`** (§29); AX = [ticks]; delta = AX −
@@ -577,8 +579,9 @@ the gfx lock) may stay shared. Kind behavior:
   HH:MM:SS from the instance's CLK_H/M/S centered in content;
   gfx_unlock }. Paint proc renders the same string from the state block.
   The accumulator design is binding.
-- **Bounce** — 150×130 at (440,260), title "Bounce". Cap 3. Per-instance
-  task: loop { task_sleep 2; **if I_STATE = 2 → `inst_task_die`**;
+- **Bounce** — 150×130 at (300,150), title "Bounce". Cap 10 (the template
+  position keeps the whole +16·9 cascade on-screen and above the dock).
+  Per-instance task: loop { task_sleep 2; **if I_STATE = 2 → `inst_task_die`**;
   gfx_lock; **check under the lock** visible and not obscured — if the
   check fails, gfx_unlock and skip the frame without erasing or stepping;
   else erase 8×8 black square at old pos (white fill), step x/y by
@@ -1128,7 +1131,7 @@ onclick, no bss. Entry: wm_create, return BX/CF. Prefix `hl_`.
 ## 28. taskmgr.inc — the Task Manager window
 
 Built-in singleton app kind (KIND_TASKMGR, cap 1 — one sampler), window
-"Task Manager", 176×206 at (250,100). Label prefix `tm_`. No onkey, no
+"Task Manager", 176×250 at (250,100). Label prefix `tm_`. No onkey, no
 onclick, no boot-time window or task: `tm_init` (from kmain, after
 loader_init) only reads total conventional RAM once via int 12h (kmain
 runs on task 0, so §7's only-the-UI-task-calls-BIOS rule holds). The
@@ -1202,7 +1205,7 @@ All drawing is self-backgrounding (each element white-fills its own rect
 or paints both segments), so tm_paint needs no preceding content clear
 beyond the one wm_paint_all already does.
 
-**Content layout** (content-relative; content is 174×187):
+**Content layout** (content-relative; content is 174×231):
 
 - (6,4): `"CPU nnn%"` (white-fill (6,4)-(90,11) first; n right-aligned,
   space-padded, 0..100).
@@ -1214,9 +1217,10 @@ beyond the one wm_paint_all already does.
 - RAM bar: 1px black frame (6,71)-(167,80); interior (7,72)-(166,79):
   black for barw pixels from the left, white for the remainder.
 - (6,87): header `"#  TASK    ST   CPU"`.
-- Task rows i = 0..7 at y = 97 + 11·i (white-fill (6,y)-(167,y+7) first),
-  20 chars ('%' included; a free row omits it and is 19): slot digit,
-  2 spaces, name left-justified in 7 (truncated), space, state
+- Task rows i = 0..11 at y = 97 + 11·i (white-fill (6,y)-(167,y+7) first),
+  20 chars ('%' included; a free row omits it and is 19): slot number
+  left-justified in 3 (one digit + 2 spaces, or two digits + 1 space for
+  slots ≥ 10), name left-justified in 7 (truncated), space, state
   in 3, 2 spaces, share right-aligned in 3 + `'%'`. Names are dynamic:
   slot with T_INST = 0xFF → "UI" (only slot 0 qualifies); otherwise the
   instance-name snapshot `tm_nsnap` + slot·16. State: tm_task's own slot

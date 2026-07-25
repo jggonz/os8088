@@ -86,7 +86,7 @@ tm_kinit:
     ret
 
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
-tm_tpl:     dw 250, 100, 176, 206, tm_ttl, tm_paint, 0, 0
+tm_tpl:     dw 250, 100, 176, 250, tm_ttl, tm_paint, 0, 0
 tm_ttl:     db 'Task Manager', 0
 tm_sname:   db 'TaskMgr', 0     ; KD_NAME: fits the 7-char task-list column
 
@@ -533,7 +533,7 @@ tm_paint:
 ;
 ; Frames and the header are static and already on screen; only the dynamic
 ; elements are touched: CPU line, the freshly written column + the advanced
-; sweep gap, RAM line + bar, and the four task rows.
+; sweep gap, RAM line + bar, and the task rows.
 ;
 ; in:  nothing ([tm_win] set)
 ; out: nothing
@@ -795,7 +795,7 @@ tm_bar:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_rows - the four task rows: white-fill each band, build the 20-char row
+; tm_rows - the MAX_TASKS task rows: white-fill each band, build the 20-char row
 ;           string, draw it (SPEC.md 28 pins the format)
 ; in:  tm_state/tm_self/tm_pct
 ; out: nothing
@@ -830,14 +830,27 @@ tm_rows:
 
     ; --- build "N  NAME    ST   nn%" in tm_str -------------------------------
     mov di, tm_str
-    mov ax, si
+    mov ax, si                  ; slot number, left-justified in 3
+    cmp al, 10
+    jb .slot1
+    mov byte [di], '1'          ; slots 10..: two digits + one space
+    inc di
+    sub al, 10
     add al, '0'
+    mov [di], al
+    inc di
+    mov byte [di], ' '
+    inc di
+    jmp .slotdn
+.slot1:
+    add al, '0'                 ; slots 0..9: one digit + two spaces
     mov [di], al
     inc di
     mov byte [di], ' '
     inc di
     mov byte [di], ' '
     inc di
+.slotdn:
 
     mov bx, si
     cmp byte [tm_state+bx], 0
@@ -1063,7 +1076,7 @@ tm_total:   resw 2              ; sum of diffs, dword
 tm_state:   resb MAX_TASKS      ; T_STATE snapshot
 tm_pstate:  resb MAX_TASKS      ; previous sample's T_STATE (appeared rule)
 tm_inst:    resb MAX_TASKS      ; T_INST snapshot (owning instance or 0xFF)
-tm_nsnap:   resb 128            ; MAX_TASKS x 16: instance-name snapshots
+tm_nsnap:   resb MAX_TASKS * 16 ; instance-name snapshots
 tm_self:    resb 1              ; our own slot ([sch_cur] at snapshot)
 tm_pct:     resb MAX_TASKS      ; per-task share, 0..100
 tm_usedk:   resw 1              ; used RAM, KB
