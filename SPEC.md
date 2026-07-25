@@ -111,6 +111,7 @@ APP_MAX_SIZE equ 0x5000      ; image + bss budget, 0xA000..0xEFFF
 | `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22) |
 | `kernel/icons.inc`  | 1-bit icon format, draw routine, built-in library (§25) |
 | `kernel/desk.inc`   | desktop drive icons: detect, paint, click/open (§26)    |
+| `kernel/taskmgr.inc`| Task Manager window: CPU load gauge + history graph, RAM readout, task list (§28) |
 
 `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` remain in the
 tree but are **no longer included**; the GUI replaces the text shell.
@@ -228,7 +229,43 @@ window.
 - `ticks` — public word, wraps at 65536; only compare with subtraction
   (`mov ax,[ticks]` / `sub ax,[t0]` / `cmp ax,n`).
 - `sched_unhook` — restore the original int 08h and int 0Ch vectors (calls
-  `mouse_unhook` too) — used before reboot.
+  `mouse_unhook` too) — used before reboot. Afterwards it restores PIT
+  channel 0 to the BIOS-default mode 3 (control word 0x36, then two zero
+  bytes to port 0x40), the three OUTs under `pushf`/`cli` … `popf`.
+
+### 8.1 CPU cycle accounting (for the Task Manager, §28)
+
+- `sched_init` reprograms PIT channel 0 to mode 2 (rate generator), divisor
+  0 = 65536 (`out 0x43, 0x34`, then two zero bytes to port 0x40) **before**
+  installing the int 08h vector (the BIOS tick handler never touches PIT
+  ports, so IF=1 is safe there), and then seeds `sch_pit_last` with a real
+  timestamp (below). Mode 2 keeps the same 18.2065 Hz IRQ rate — BIOS
+  timekeeping counts IRQs and is unaffected. The default mode 3 is useless
+  for elapsed-time reads (it decrements by 2 and wraps twice per period);
+  mode 2 counts down by 1 from 65536 with one IRQ per reload.
+- `sch_account` (module-internal) — called with IF=0 and DS=KERNEL_SEG from
+  exactly two places: sch_isr, after the BIOS chain **and after
+  `inc word [ticks]`**, before the sch_lock check (so it runs every tick,
+  including while floppy reads hold sch_lock); and task_yield's save path,
+  right after DS is loaded. It builds the 32-bit timestamp
+  now = [ticks]·65536 + phase, where phase = 65536 − latched count
+  (0 at reload, monotone within a period): latch (out 0x43, 0), read count
+  lo/hi from port 0x40, negate. Pending-IRQ disambiguation: the counter may
+  have reloaded during an IF=0 window with int 08h not yet delivered (then
+  [ticks] is one behind the phase) — after latching, read the PIC IRR
+  (out 0x20, 0x0A; in al, 0x20); if bit 0 is set AND phase < 0x8000, use
+  ticks+1 as the high word (bit set with a large phase means the reload
+  happened in the µs between latch and IRR read — keep ticks).
+  elapsed = now − [sch_pit_last] (32-bit sub), store now back, add elapsed
+  into `sch_cycles` + 4·[sch_cur] (add/adc). Both call sites run before
+  sch_switch changes sch_cur, so the slice lands on the task that just ran.
+  The timestamp scheme is exact for intervals of any length — a full-tick
+  slice with no yield spans exactly one reload, which a bare mod-65536
+  count delta would alias to ~0.
+- `sch_cycles` — MAX_TASKS dwords in .bss (lo word first): per-task CPU
+  time in PIT cycles (1.19318 MHz), wrapping mod 2^32. Readers snapshot
+  under `pushf`/`cli` … `popf` (the ISR writes them). `sch_pit_last`
+  (dword) is module-internal.
 
 ## 9. mouse.inc — serial Microsoft mouse + cursor
 
@@ -361,14 +398,16 @@ CMD_CLOCK  equ 3
 CMD_BOUNCE equ 4
 CMD_FILES  equ 5
 CMD_CLOSE  equ 6
-CMD_REBOOT equ 7
+CMD_TASKS  equ 7
+CMD_REBOOT equ 8
 ```
 
 Menus: **Apple**: "About jop..." (CMD_ABOUT). **File**: "Note Pad"
 (CMD_NOTE), "Clock" (CMD_CLOCK), "Bounce" (CMD_BOUNCE), "Disk"
-(CMD_FILES), "Close Window" (CMD_CLOSE). **Special**: "Restart"
-(CMD_REBOOT). (CMD_CLOSE/CMD_REBOOT were renumbered when Disk was
-inserted — cmd = menu base + item index must still hold.)
+(CMD_FILES), "Close Window" (CMD_CLOSE). **Special**: "Task Manager"
+(CMD_TASKS), "Restart" (CMD_REBOOT). (CMD_REBOOT was renumbered 7 → 8
+when Task Manager was inserted, as CMD_CLOSE/CMD_REBOOT were when Disk
+was — cmd = menu base + item index must still hold.)
 
 | symbol          | contract                                                   |
 |-----------------|-------------------------------------------------------------|
@@ -417,8 +456,9 @@ Loop forever:
    loader_run manages its own locking.
 4. `task_yield`.
 
-Command dispatch: CMD_ABOUT/NOTE/CLOCK/BOUNCE → `wm_show` the corresponding
-window (created at boot, initially hidden or shown per §15). CMD_FILES →
+Command dispatch: CMD_ABOUT/NOTE/CLOCK/BOUNCE/TASKS → `wm_show` the
+corresponding window (created at boot, initially hidden or shown per §15;
+CMD_TASKS shows `[tm_win]`, §28). CMD_FILES →
 call `files_open` (§22; same position in the dispatch flow as the wm_show
 cases — files_open does its own locking). CMD_CLOSE → `wm_hide` frontmost.
 CMD_REBOOT → gfx_lock (never released), `vga_text`, `sched_unhook`,
@@ -480,9 +520,9 @@ pinned offsets. kernel.asm also owns the tiny japi helper routines
 kmain: set segments/stack (SP=0xFFFE), `sti`, `cld`, then:
 `sched_init` → `evq_init` → `vga_mode12` → `font_init` → `wm_init` →
 `mouse_init` → `desk_init` → `apps_init` → `files_init` → `loader_init` →
-gfx_lock → `wm_paint_all` → gfx_unlock → `cursor_show` → jump into
-`ui_task` (task 0 never returns). Include order appends `icons.inc` and
-`desk.inc` after `files.inc`.
+`tm_init` → gfx_lock → `wm_paint_all` → gfx_unlock → `cursor_show` → jump
+into `ui_task` (task 0 never returns). Include order appends `icons.inc`,
+`desk.inc` and `taskmgr.inc` after `files.inc`.
 
 End of file (after all `%include` lines, with `section .text` in effect):
 
@@ -540,6 +580,10 @@ loaded-program region, §20.)
    glyph, HELLO with the generic application icon — and the Refresh
    button re-reads a swapped disk (QMP `change` + Refresh shows the new
    directory without rebooting).
+10. Special → Task Manager opens a window with a live CPU load gauge and
+    history graph (near 0% idle, visibly rising while dragging a window),
+    a RAM readout, and the four-slot task list with per-task CPU shares —
+    all updating twice a second while Clock and Bounce keep running.
 
 ## 18. disk.inc — floppy reads (BIOS int 13h)
 
@@ -880,3 +924,92 @@ Deliberately minimal, to prove the SDK surface and the no-icon fallback:
 `ico_app16` for it), one window "Hello" 240×90 at (200,150), paint =
 two centered lines: "Hello from a" / ".jop package!", no onkey, no
 onclick, no bss. Entry: wm_create, return BX/CF. Prefix `hl_`.
+
+## 28. taskmgr.inc — the Task Manager window
+
+Built-in window "Task Manager", 176×162 at (250,100), record created
+hidden by `tm_init` (from kmain, after loader_init). Label prefix `tm_`.
+No onkey, no onclick. `tm_init`: reads total conventional RAM once via
+int 12h (kmain runs on task 0, so §7's only-the-UI-task-calls-BIOS rule
+holds), zeroes all module state including the history ring (.bss is not
+zeroed at boot), creates the window (ptr in `tm_win`), and `task_spawn`s
+`tm_task`, which takes the last free slot — the task table is then full:
+UI, Clock, Bounce, TaskMgr.
+
+**Load gauge — idle-spin calibration.** tm_task never sleeps. Each
+interval it spins { 32-bit counter += 1; `task_yield` } until 9 ticks have
+elapsed (wrap-safe compare), measuring how quickly a yield loop gets the
+CPU back; this self-calibrates away the UI task's constant busy-poll cost.
+Calibration is a phased-window maximum, not an all-time max or a decay: two
+32-bit slots, `tm_cmax` (current epoch) and `tm_pmax` (previous epoch).
+Every sample: tm_cmax = max(tm_cmax, count); every 20 samples (~10s) the
+epochs rotate (pmax ← cmax, cmax ← count). The effective max is
+max(tm_cmax, tm_pmax) — always ≥ the current count, so no clamp is needed
+before the divide. An anomalously cheap phase (menu_track's poll loop
+yields far faster than the normal idle loop) can poison the calibration
+only until its epoch ages out (≤ ~20s); the tradeoff is that a *sustained*
+saturating load also re-baselines after ~10–20s and fades toward 0 — bursts
+(drags, repaints, package loads) always read correctly.
+load% = 100 − 100·count/max_eff, both first normalized by shifting right
+until max_eff's high word is zero; if max_eff's low word is then 0, load
+reads 0. The spin phase doubles as the system idle soak; its cycle share
+appears honestly in the task list as TaskMgr.
+
+**Sampling** (once per interval, after the spin phase):
+
+- Under one `pushf`/`cli` … `popf`: snapshot `sch_cycles` (16 bytes) and
+  the four T_STATE bytes. Per-task share: diff_i = new_i − old_i (32-bit,
+  old ← new), total = Σ diff_i; normalize by shifting total and every diff
+  right while total's high word is non-zero; **total = 0 → every share is
+  0 (no DIV ever executes with a zero divisor)**; else
+  share_i = diff_i·100/total (≤ 100 since diff_i ≤ total).
+- Under one `pushf`/`cli` … `popf`: read `[ld_appwin]` and, when non-zero,
+  the resident header's image-size and bss-size words at APP_LOAD_OFF+8
+  and +10 (loader_run zeroes ld_appwin before overwriting the region, so a
+  non-zero gate observed atomically with the reads implies an intact
+  header). used bytes = `kernel_bss_end` (bare label = the kernel
+  text+bss footprint, org 0) + image + bss. usedK = (used+1023) >> 10.
+  Total KB is the boot-time int 12h value. **All bar math is in KB**:
+  barw = usedK·160/totalK (`mul` then `div`; totalK cannot be 0 from
+  int 12h, but a 0 check that skips the bar is required anyway).
+- History: load% scaled to 0..40 (·40 then /100), stored at
+  `tm_hist[tm_pos]`. The ring index IS the graph column — an oscilloscope
+  sweep, no scrolling — then tm_pos advances mod 160.
+
+**Drawing.** `tm_paint` (W_PAINT) is a bare, unconditional full redraw —
+no lock, no visibility check (wm_paint_all calls it with the lock already
+held, §11). tm_task's periodic path wraps its drawing Clock-style
+(§14): gfx_lock, re-check visible + not `wm_obscured` under the lock (else
+skip), and touches only what changed — the CPU text line, the new sweep
+column plus an all-white gap column at the advanced tm_pos, the RAM line
+and bar, and the four task rows. The full 160-column graph render happens
+only in tm_paint, so the periodic lock hold stays small (Bounce-scale).
+All drawing is self-backgrounding (each element white-fills its own rect
+or paints both segments), so tm_paint needs no preceding content clear
+beyond the one wm_paint_all already does.
+
+**Content layout** (content-relative; content is 174×143):
+
+- (6,4): `"CPU nnn%"` (white-fill (6,4)-(90,11) first; n right-aligned,
+  space-padded, 0..100).
+- Graph: 1px black frame (6,14)-(167,55); interior columns x = 7+i,
+  i = 0..159, rows 15..54. Column value v (0..40): white vline rows
+  15..54−v, then black vline rows 55−v..54 (v=0 → all white, v=40 → all
+  black). The column at tm_pos draws all white (the sweep gap).
+- (6,61): `"RAM uuuK/tttK"` (white-fill (6,61)-(167,68) first).
+- RAM bar: 1px black frame (6,71)-(167,80); interior (7,72)-(166,79):
+  black for barw pixels from the left, white for the remainder.
+- (6,87): header `"#  TASK    ST   CPU"`.
+- Task rows i = 0..3 at y = 97 + 11·i (white-fill (6,y)-(167,y+7) first),
+  20 chars ('%' included; a free row omits it and is 19): slot digit,
+  2 spaces, name left-justified in 7, space, state
+  in 3, 2 spaces, share right-aligned in 3 + `'%'`. Names come from a
+  fixed slot-indexed table {UI, Clock, Bounce, TaskMgr} — kmain's spawn
+  order is deterministic and pinned here. State: tm_task's own slot shows
+  `run` (it is running when it samples); otherwise T_STATE 1 → `rdy`,
+  2 → `slp`; a free slot shows name `-`, state `---`, share ` --` with no
+  `%`.
+
+Menu/dispatch: see §12/§13 — Special gains "Task Manager" (CMD_TASKS = 7)
+above "Restart" (CMD_REBOOT, renumbered to 8); dispatch wm_shows
+`[tm_win]` under gfx_lock exactly like the §14 windows.

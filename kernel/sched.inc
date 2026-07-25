@@ -62,6 +62,35 @@ sched_init:
     mov word [ticks], 0
     mov byte [sch_tasks+T_STATE], 1     ; task 0 = this thread, ready
 
+    ; PIT ch0 -> mode 2 (rate generator), divisor 0 = 65536: the IRQ rate
+    ; stays 18.2065 Hz (BIOS timekeeping counts IRQs, unaffected), but the
+    ; counter now decrements by 1 per input clock - the BIOS default mode 3
+    ; steps by 2 and wraps twice per period, useless for elapsed reads
+    ; (SPEC.md 8.1). Reprogram BEFORE hooking int 08h: the BIOS tick
+    ; handler touches no PIT ports, so IF=1 is safe here.
+    mov al, 0x34
+    out 0x43, al
+    xor al, al
+    out 0x40, al
+    out 0x40, al
+
+    mov bx, sch_cycles          ; zero the per-task cycle counters
+    mov cx, MAX_TASKS * 2
+.zcyc:
+    mov word [bx], 0
+    add bx, 2
+    loop .zcyc
+
+    mov al, 0x00                ; seed sch_pit_last with a coherent stamp:
+    out 0x43, al                ; high word = [ticks] = 0, low word = the
+    in al, 0x40                 ; current phase (65536 - latched count)
+    mov cl, al
+    in al, 0x40
+    mov ch, al
+    neg cx
+    mov [sch_pit_last], cx
+    mov word [sch_pit_last+2], 0
+
     xor ax, ax                  ; vector table segment
     mov es, ax
     pushf
@@ -104,6 +133,20 @@ sched_unhook:
     popf
 
     call mouse_unhook           ; restores int 0Ch, masks IRQ4
+
+    ; PIT ch0 back to the BIOS default (mode 3, square wave, divisor
+    ; 65536). The vector is already restored so sch_isr can no longer read
+    ; the PIT mid-sequence, but keep the three OUTs atomic anyway - an
+    ; interleaved counter read between the two count-byte writes is
+    ; undefined on a real 8253 (SPEC.md 8.1).
+    pushf
+    cli
+    mov al, 0x36
+    out 0x43, al
+    xor al, al
+    out 0x40, al
+    out 0x40, al
+    popf
 
     pop es
     pop ax
@@ -208,6 +251,7 @@ task_yield:
     push ds
     mov ax, KERNEL_SEG          ; caller's DS is on the stack; we need ours
     mov ds, ax
+    call sch_account            ; charge the slice that just ended (IF=0)
     cmp byte [sch_lock], 0      ; scheduler locked: resume self immediately
     jne sch_resume
     jmp sch_switch
@@ -243,6 +287,67 @@ task_sleep:
     ret
 
 ; -----------------------------------------------------------------------------
+; sch_account - charge the PIT cycles since the last measure point to the
+;               task that just ran (module-internal, SPEC.md 8.1)
+;
+; PLACEMENT: this routine must sit OUTSIDE the sch_isr -> sch_switch
+; fall-through path (sch_isr does not jump to sch_switch - it falls into
+; it). Inserting any routine between them sends every unlocked tick through
+; that routine's ret with no return address on the stack.
+;
+; Builds the 32-bit timestamp now = [ticks]*65536 + phase, where phase =
+; 65536 - latched count (0 at reload, monotone within a period), subtracts
+; the previous stamp and adds the difference into sch_cycles[sch_cur].
+; The timestamp is exact for intervals of any length - a full-tick slice
+; with no yield spans exactly one counter reload, which a bare mod-65536
+; count delta would alias to ~0.
+;
+; Pending-IRQ disambiguation: during an IF=0 window the counter may reload
+; with int 08h not yet delivered, leaving [ticks] one behind the phase.
+; After latching, read the PIC IRR; if IRQ0 is pending AND the phase is
+; small (< 0x8000), the reload preceded the latch - use ticks+1. A large
+; phase with the bit set means the reload landed in the us between latch
+; and IRR read - keep ticks.
+;
+; in:       IF=0, DS=KERNEL_SEG, [sch_cur] = the task being charged. Both
+;           call sites (sch_isr, task_yield's save path) hold a complete
+;           saved frame, so clobbering is safe.
+; clobbers: AX, BX, CX, DX, SI
+; -----------------------------------------------------------------------------
+sch_account:
+    mov al, 0x00                ; latch channel 0's count
+    out 0x43, al
+    in al, 0x40                 ; count lo
+    mov cl, al
+    in al, 0x40                 ; count hi
+    mov ch, al
+    neg cx                      ; CX = phase = 65536 - count
+    mov dx, [ticks]             ; DX = timestamp high word candidate
+    mov al, 0x0A                ; OCW3: next read of 0x20 returns the IRR
+    out 0x20, al
+    in al, 0x20
+    test al, 1                  ; IRQ0 pending?
+    jz .cohere
+    or cx, cx                   ; phase >= 0x8000: reload came after the
+    js .cohere                  ; latch - keep ticks
+    inc dx                      ; reload before the latch: tick not yet in
+.cohere:
+    mov ax, cx                  ; elapsed = now - last, 32-bit
+    sub ax, [sch_pit_last]
+    mov bx, dx
+    sbb bx, [sch_pit_last+2]
+    mov [sch_pit_last], cx
+    mov [sch_pit_last+2], dx
+    mov cl, [sch_cur]           ; sch_cycles[sch_cur] += elapsed
+    xor ch, ch
+    shl cx, 1
+    shl cx, 1
+    mov si, cx
+    add [si+sch_cycles], ax
+    adc [si+sch_cycles+2], bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; sch_isr - int 08h handler (PIT, ~18.2 Hz)
 ;
 ; Chains to the BIOS tick FIRST (it maintains its own count and sends the
@@ -270,6 +375,10 @@ sch_isr:
     call far [sch_old08]
 
     inc word [ticks]
+    call sch_account            ; after the inc, so [ticks] and the freshly
+                                ; reloaded counter agree (SPEC.md 8.1); and
+                                ; before the sch_lock check, so accounting
+                                ; runs every tick even during floppy reads
 
     mov dx, [ticks]             ; wake sleepers whose deadline has passed
     mov bx, sch_tasks
@@ -356,5 +465,9 @@ sch_old08:  resb 4                      ; saved BIOS int 08h vector (off:seg)
 ticks:      resw 1                      ; public tick count, wraps at 65536
 sch_cur:    resb 1                      ; index of the running task
 sch_lock:   resb 1                      ; non-zero: ISR counts but won't switch
+sch_cycles: resw MAX_TASKS * 2          ; per-task CPU time, PIT cycles, dword
+                                        ; each (lo word first); readers snap-
+                                        ; shot under pushf/cli (SPEC.md 8.1)
+sch_pit_last: resw 2                    ; last timestamp: phase, then ticks
 
 section .text

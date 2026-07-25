@@ -121,6 +121,7 @@ kmain:
     call apps_init              ; windows + background tasks
     call files_init             ; Disk window (hidden until File > Disk)
     call loader_init            ; package loader state
+    call tm_init                ; Task Manager window + monitor task
 
     call gfx_lock
     call wm_paint_all
@@ -185,6 +186,7 @@ japi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "files.inc"
 %include "icons.inc"
 %include "desk.inc"
+%include "taskmgr.inc"
 
 ; =============================================================================
 ; Size guard: image + bss must stay below APP_LOAD_OFF (0xA000) - everything

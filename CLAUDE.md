@@ -55,7 +55,7 @@ Pre-emptive round-robin scheduling: the int 08h PIT hook chains the BIOS tick, s
 ### Layout
 
 - `boot/boot.asm` — 512-byte boot sector; geometry comes from `-DSPT`/`-DHEADS`, sector count from the measured kernel size (both injected by the Makefile).
-- `kernel/kernel.asm` — constants, boot sequence, the jop API jump table at 1000:0010, `%include`s of all modules, final .bss and size assertion. Module ownership is the table in SPEC.md §4; each `.inc` owns one subsystem (vga12, font, mouse, sched, events, wm, menu, ui, apps, disk, loader, files, icons, desk).
+- `kernel/kernel.asm` — constants, boot sequence, the jop API jump table at 1000:0010, `%include`s of all modules, final .bss and size assertion. Module ownership is the table in SPEC.md §4; each `.inc` owns one subsystem (vga12, font, mouse, sched, events, wm, menu, ui, apps, disk, loader, files, icons, desk, taskmgr).
 - `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` are dead — left in the tree but **no longer included** (relics of the pre-GUI text shell, as is `kernel-shell.asm.bak`).
 - `apps/` — loadable packages. `jopapi.inc` is the SDK: `JOP_HEADER` emits the 32-byte package header, `JAPI_*` constants name jump-table entries, `JOP_IMAGE_END` seals size + bss. `mines/` (embedded icon) and `hello/` (proves the generic-icon fallback).
 - `tools/` — host-side Python: `jopkg.py` (validates/stamps `.bin` → `.jop`), `jopdisk.py` (builds jopfs floppy images), `qmp.py` + `mouse.py` (test drivers).
