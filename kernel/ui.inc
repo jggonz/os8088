@@ -269,6 +269,8 @@ ui_dispatch:
     je .files
     cmp ax, CMD_CLOSE
     je .close
+    cmp ax, CMD_TASKS
+    je .tasks
     cmp ax, CMD_REBOOT
     je .reboot
 .done:
@@ -285,6 +287,9 @@ ui_dispatch:
     jmp .show
 .bounce:
     mov bx, [app_win_bounce]
+    jmp .show
+.tasks:
+    mov bx, [tm_win]
 .show:
     call gfx_lock
     call wm_show                ; in: BX; shows + raises + repaints

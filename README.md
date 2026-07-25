@@ -28,7 +28,7 @@ core interactions work:
   raise, close box to hide, reopen from the File menu.
 - **Menus** — press in the bar, drag through pull-downs with live highlight,
   release to choose. Apple → About jop; File → Note Pad / Clock / Bounce /
-  Close Window; Special → Restart.
+  Disk / Close Window; Special → Task Manager / Restart.
 - **Note Pad** — click it, type; wraps lines, Backspace and Return work.
 - **Disk icons** — the desktop shows an icon per floppy drive the BIOS
   reports (int 11h). Click to select, double-click to open that drive in
