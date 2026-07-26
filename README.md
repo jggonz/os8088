@@ -27,8 +27,9 @@ core interactions work:
   1px drop shadows, drag by title bar (XOR outline, Mac-style), click to
   raise, close box to hide, reopen from the File menu.
 - **Menus** — press in the bar, drag through pull-downs with live highlight,
-  release to choose. Apple → About jop; File → Note Pad / Clock / Bounce /
-  Disk / Close Window; Special → Task Manager / Restart.
+  release to choose. Apple → About jop / Control Panel / Task Manager;
+  File → Note Pad / Clock / Bounce / Disk / Close Window;
+  Special → Restart.
 - **Note Pad** — click it, type; wraps lines, Backspace and Return work.
 - **Disk icons** — the desktop shows an icon per floppy drive the BIOS
   reports (int 11h). Click to select, double-click to open that drive in
@@ -52,6 +53,14 @@ core interactions work:
   the PIT timer interrupt switching tasks out from under each other, on an
   8086. When another window covers them they stop drawing (and the clock
   keeps time silently); uncover them and they resume.
+- **Control Panel** — Apple → Control Panel: a two-pane browser, the item
+  list on the left and the selected item's settings on the right. It opens
+  on **Scheduler**, a two-way toggle between **Pre-emptive** (the boot
+  default) and **Cooperative**. Flipping it takes effect on the very next
+  timer tick — the About box's third line and the Task Manager's SCHED
+  field follow — and cooperative mode still
+  can't hang the machine: the timer keeps a watchdog on the running task
+  and forces a switch if one holds the CPU for a second without yielding.
 
 ## How
 

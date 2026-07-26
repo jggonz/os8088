@@ -1,10 +1,21 @@
 ; =============================================================================
 ; jop - sched.inc
 ;
-; Pre-emptive round-robin scheduler off the PIT (SPEC.md 8). Up to MAX_TASKS
-; tasks; task 0 is the boot thread (the UI task) and runs on the boot stack
-; (SS:0xFFFE) — it owns no slice of sch_stacks. Slots 1..MAX_TASKS-1 are
-; dynamic (task_spawn / task_exit), each with a 1536-byte stack in .bss.
+; Round-robin scheduler off the PIT, in either of two modes (SPEC.md 8/8.2):
+; pre-emptive (the boot default - every tick on which sch_lock is clear
+; switches) or cooperative (the tick declines to switch, so the running task
+; keeps the CPU until it reaches the switch path itself through task_yield,
+; task_sleep or task_exit - with a watchdog that forces a switch anyway once
+; the task has held the CPU for SCH_WD_TICKS ticks, so a task that never
+; yields cannot hard-hang the machine). The mode is the single byte sch_coop,
+; flipped at run time by sched_mode_set; both modes share the task table, the
+; per-task stacks and the saved frame below, so the flip adds and removes no
+; state and needs no rendezvous.
+;
+; Up to MAX_TASKS tasks; task 0 is the boot thread (the UI task) and runs on
+; the boot stack (SS:0xFFFE) — it owns no slice of sch_stacks. Slots
+; 1..MAX_TASKS-1 are dynamic (task_spawn / task_exit), each with a 1536-byte
+; stack in .bss.
 ; All tasks run tiny-model: CS = DS = SS = KERNEL_SEG, so a context
 ; switch is nothing more than swapping SP between stacks that share one
 ; segment.
@@ -38,6 +49,11 @@ T_SIZE      equ 8               ; record stride (1 byte padding)
 SCH_STACK   equ 1536            ; per-task stack bytes
 SCH_FRAME   equ 24              ; saved-frame size: 9 regs + IP/CS/FLAGS
 
+SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
+                                ; switch once the running task has held the
+                                ; CPU this many ticks without reaching
+                                ; sch_switch (~1s at 18.2065 Hz, SPEC.md 8.2)
+
 ; -----------------------------------------------------------------------------
 ; sched_init - set up the task table and hook int 08h
 ;
@@ -64,6 +80,11 @@ sched_init:
     mov byte [sch_cur], 0
     mov byte [sch_lock], 0
     mov word [ticks], 0
+    mov byte [sch_coop], 0      ; pre-emptive until the Control Panel says
+    mov byte [sch_hold], 0      ; otherwise (SPEC.md 8.2). All three are
+    mov word [sch_wd_hits], 0   ; zeroed HERE by hand: nothing clears .bss at
+                                ; boot, so an uninitialised sch_coop would
+                                ; boot into a random mode
     mov byte [sch_tasks+T_STATE], 1     ; task 0 = this thread, ready
     mov byte [sch_tasks+T_INST], 0xFF   ; the UI task owns no instance
 
@@ -502,12 +523,82 @@ task_debit:
     ret
 
 ; -----------------------------------------------------------------------------
+; sched_mode_set - select the scheduling mode (SPEC.md 8.2)
+;
+; Normalises the flag to 0/1 and hands the incoming mode a full watchdog
+; budget by clearing the hold counter. Both stores are single bytes made
+; under IF=0, so no tick can observe a half-changed mode; the worst case is
+; that the tick racing the store schedules with the old mode - one tick's
+; decision, self-correcting on the next.
+;
+; Callable from any task at any time: the two modes share the task table, the
+; per-task stacks and the 24-byte saved frame above, so a mode change adds no
+; state, removes no state and invalidates no saved frame - no task has to be
+; parked, drained or notified. That is why the Control Panel may call this
+; from inside a window callback while holding the gfx lock (SPEC.md 31).
+;
+; sch_lock is deliberately NOT reused as the "don't switch" flag even though
+; it looks like one: task_yield tests it too and self-resumes when it is set
+; (see task_yield above), so raising sch_lock would not make multitasking
+; cooperative - it would stop multitasking altogether and freeze every Clock
+; and Bounce instance forever, their task_sleep never handing the CPU on.
+; Cooperative mode must leave the VOLUNTARY path fully working and suppress
+; only the INVOLUNTARY one, hence a separate byte tested after sch_lock.
+;
+; PLACEMENT: outside the sch_isr -> sch_switch -> sch_resume fall-through
+; run, for the reason spelled out on sch_account.
+;
+; in:       AL = 0 pre-emptive, any non-zero = cooperative
+; out:      nothing
+; clobbers: flags (every register preserved, AL included)
+; -----------------------------------------------------------------------------
+sched_mode_set:
+    push ax
+    pushf
+    cli                         ; no tick between the two stores
+    or al, al
+    jz .store
+    mov al, 1                   ; normalise: any non-zero means cooperative
+.store:
+    mov [sch_coop], al
+    mov byte [sch_hold], 0      ; the incoming mode starts with a full budget
+    popf
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sched_mode_get - read the current scheduling mode (SPEC.md 8.2)
+;
+; The only sanctioned reader of sch_coop: the Control Panel's radio glyphs,
+; the About box's third line and the Task Manager's SCHED field all come
+; through here. A one-byte read needs no critical section - the store side is
+; a single atomic byte write (sched_mode_set).
+;
+; PLACEMENT: outside the sch_isr -> sch_switch -> sch_resume fall-through
+; run, for the reason spelled out on sch_account.
+;
+; in:       nothing
+; out:      AL = 0 pre-emptive, 1 cooperative
+; clobbers: AL (it is the output); flags untouched
+; -----------------------------------------------------------------------------
+sched_mode_get:
+    mov al, [sch_coop]
+    ret
+
+; -----------------------------------------------------------------------------
 ; sch_isr - int 08h handler (PIT, ~18.2 Hz)
 ;
 ; Chains to the BIOS tick FIRST (it maintains its own count and sends the
 ; EOI - we must not), then bumps [ticks], wakes due sleepers, and switches
-; round-robin unless sch_lock is held. Runs with IF=0 throughout; calls no
-; BIOS service beyond the chain; never sti.
+; round-robin if the tail's two tests allow it: sch_lock must be clear, and
+; in cooperative mode only the watchdog switches (SPEC.md 8.2). Runs with
+; IF=0 throughout; calls no BIOS service beyond the chain; never sti.
+;
+; Decision order is binding: accounting and the wake scan run BEFORE both
+; tests, so cycle accounting and task_sleep deadlines keep working every tick
+; in both modes; and sch_lock is tested BEFORE the mode, so a floppy read
+; (disk.inc holds sch_lock across int 13h) accumulates no hold ticks and can
+; never trip the watchdog.
 ;
 ; in:       hardware interrupt (any task, any DS/ES)
 ; out:      via iret, possibly into a different task
@@ -550,6 +641,13 @@ sch_isr:
 
     cmp byte [sch_lock], 0      ; locked: count ticks but do not switch
     jne sch_resume
+    cmp byte [sch_coop], 0
+    je .sw                      ; pre-emptive: switch every tick
+    inc byte [sch_hold]         ; cooperative: only the watchdog switches
+    cmp byte [sch_hold], SCH_WD_TICKS
+    jb sch_resume
+    inc word [sch_wd_hits]      ; forced switch - diagnostic only
+.sw:
     ; fall through into sch_switch
 
 ; -----------------------------------------------------------------------------
@@ -559,8 +657,19 @@ sch_isr:
 ; stack (from sch_isr or task_yield's save stub). Parks SP in the current
 ; record, picks the next ready task round-robin (falling back to the current
 ; task if nothing is ready), and resumes it.
+;
+; Clearing sch_hold is the FIRST thing done here, and deliberately on the
+; routine's single entry point rather than at each caller: the counter means
+; "ticks since the running task last reached the switch path", so every one of
+; the three ways in - fall-through from sch_isr, the explicit jmp from
+; task_yield's save path, the explicit jmp from task_exit - must clear it
+; (SPEC.md 8.2). Hence a task that yields voluntarily can never trip the
+; watchdog however long it runs in total; the "nothing ready, resume the
+; outgoing task" fallback below clears it too, so an idle single-task system
+; manufactures no watchdog hits; and a dying task clears it for its successor.
 ; -----------------------------------------------------------------------------
 sch_switch:
+    mov byte [sch_hold], 0      ; the outgoing task reached the switch path
     mov bl, [sch_cur]           ; park the outgoing task's SP
     xor bh, bh
     mov cl, 3
@@ -625,5 +734,17 @@ sch_cycles: resw MAX_TASKS * 2          ; per-task CPU time, PIT cycles, dword
                                         ; each (lo word first); readers snap-
                                         ; shot under pushf/cli (SPEC.md 8.1)
 sch_pit_last: resw 2                    ; last timestamp: phase, then ticks
+sch_coop:   resb 1                      ; mode (SPEC.md 8.2): 0 pre-emptive,
+                                        ; 1 cooperative; sched_mode_set/_get
+sch_hold:   resb 1                      ; ticks the running task has held the
+                                        ; CPU since the last entry to
+                                        ; sch_switch; only counts up while
+                                        ; sch_coop is set and sch_lock clear,
+                                        ; and is compared against
+                                        ; SCH_WD_TICKS (18) on the tick that
+                                        ; incremented it, so it cannot pass 18
+sch_wd_hits: resw 1                     ; watchdog-forced switches; diagnostic
+                                        ; only (QMP xp on segment 0x1000),
+                                        ; wraps mod 65536, never reset
 
 section .text

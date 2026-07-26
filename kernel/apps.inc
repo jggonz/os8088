@@ -51,7 +51,11 @@ app_ttl_bounce: db 'Bounce', 0
 
 app_about_s1:   db 'jop 1.0', 0
 app_about_s2:   db 'a graphical OS for the 8086', 0
-app_about_s3:   db 'pre-emptive - 640x480 - 16 colors', 0
+; third line, one whole string per scheduler mode (SPEC.md 8.2/14): both
+; scheduling words are exactly 11 chars, so the line width - and therefore
+; the centered x app_about_center computes - is identical either way
+app_about_s3p:  db 'pre-emptive - 640x480 - 16 colors', 0
+app_about_s3c:  db 'cooperative - 640x480 - 16 colors', 0
 
 ; =============================================================================
 ; Kind init procs (KD_INIT contract, SPEC.md 29.3): in BX = window ptr,
@@ -94,7 +98,8 @@ app_bounce_kinit:
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; Three black lines, each centered in the content; the block of three
-; (8px lines, 8px gaps) is centered vertically in the 101px content.
+; (8px lines, 8px gaps) is centered vertically in the 101px content. The
+; third line's scheduling word tracks the live mode (sched_mode_get).
 ; -----------------------------------------------------------------------------
 app_about_paint:
     push ax
@@ -113,7 +118,12 @@ app_about_paint:
     mov si, app_about_s2
     call app_about_center
     add dx, 16
-    mov si, app_about_s3
+    mov si, app_about_s3p       ; third line follows the live scheduler mode
+    call sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
+    or al, al
+    jz .s3
+    mov si, app_about_s3c
+.s3:
     call app_about_center
 
     pop si
