@@ -408,6 +408,100 @@ sch_account:
     ret
 
 ; -----------------------------------------------------------------------------
+; task_cycles - flush the slice so far onto the running task and read its total
+;
+; The stamp half of the charge-a-callback pair (SPEC.md 8.1). Both readings
+; come from the same sch_cycles slot, which only grows while that task is
+; actually on the CPU, so the difference measures real CPU time and not the
+; ticks the task spent pre-empted away.
+;
+; PLACEMENT: outside the sch_isr -> sch_switch -> sch_resume fall-through run,
+; for the reason spelled out on sch_account.
+;
+; in:       nothing (any task; IF either way, DS = KERNEL_SEG)
+; out:      DX:AX = sch_cycles[sch_cur] with the pending slice folded in
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+task_cycles:
+    push bx
+    push cx
+    push si
+    pushf
+    cli                         ; sch_account's contract: IF=0
+    call sch_account
+    mov cl, [sch_cur]
+    xor ch, ch
+    shl cx, 1
+    shl cx, 1
+    mov si, cx
+    mov ax, [si+sch_cycles]
+    mov dx, [si+sch_cycles+2]
+    popf
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; task_debit - close a task_cycles stamp: return the cycles elapsed since it
+;              and REMOVE them from the running task's counter
+;
+; Move, not copy (SPEC.md 8.1): the caller adds the amount to some other
+; counter (an instance's I_CYC, SPEC.md 29), so the two together still
+; partition one total. Nesting works for free - an inner debit lowers the
+; outer pair's end reading by exactly the inner amount, so the outer stretch
+; is credited only with what it did itself.
+;
+; A negative difference is forced to 0 and nothing is subtracted: sch_account
+; can hand back a slightly backwards timestamp when its pending-IRQ
+; disambiguation guesses the wrong side of a counter reload, and an unclamped
+; borrow would wrap the caller's 32-bit counter to just under 2^32 (seen in
+; practice as a package's tally jumping backwards by ~0.6 tick).
+;
+; in:       DX:AX = stamp from task_cycles, taken on THIS task
+; out:      DX:AX = elapsed cycles (0 if the counter regressed), already
+;           subtracted from sch_cycles[sch_cur]
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+task_debit:
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    mov bp, ax                  ; BP:DI = the start stamp - sch_account
+    mov di, dx                  ; clobbers AX/BX/CX/DX/SI, but not BP/DI
+    pushf
+    cli
+    call sch_account
+    mov cl, [sch_cur]
+    xor ch, ch
+    shl cx, 1
+    shl cx, 1
+    mov si, cx
+    mov ax, [si+sch_cycles]
+    mov dx, [si+sch_cycles+2]
+    sub ax, bp                  ; DX:AX = now - start
+    sbb dx, di
+    test dx, dx                 ; counter regressed: report nothing and leave
+    js .none                    ; the task's tally alone
+    sub [si+sch_cycles], ax     ; ...and off the task's tally it comes
+    sbb [si+sch_cycles+2], dx
+    popf
+    jmp .out
+.none:
+    xor ax, ax
+    xor dx, dx
+    popf
+.out:
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; sch_isr - int 08h handler (PIT, ~18.2 Hz)
 ;
 ; Chains to the BIOS tick FIRST (it maintains its own count and sends the

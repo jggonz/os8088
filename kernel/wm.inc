@@ -514,7 +514,9 @@ wm_idx2ptr:
 ; mirrored at W_X+W_W-19 with a collapse bar across row W_Y+9 - stripes
 ; broken by white 2px around each box and 6px around the centered black
 ; title; black separator at row W_Y+TITLE_H-1; content white-filled, then
-; W_PAINT is called with SI=window.
+; W_PAINT is called with SI=window - bracketed by task_cycles/inst_charge so
+; the paint is billed to the window's instance, not to the painting task
+; (SPEC.md 8.1/28).
 ; -----------------------------------------------------------------------------
 wm_draw_win:
     push ax
@@ -686,11 +688,22 @@ wm_draw_win:
     sub dx, 2
     call gfx_fill
 
-    mov si, di                  ; SI = window ptr for the paint proc
-    mov ax, [di+W_PAINT]
-    test ax, ax
+    cmp word [di+W_PAINT], 0
+    je .done
+    mov bx, di                  ; the paint is the owning instance's CPU
+    call inst_win_owner         ; time, not the painting task's (SPEC.md 8.1)
+    push di
+    call task_cycles            ; DX:AX = start stamp
+    push dx
+    push ax
+    mov si, bx                  ; SI = window ptr for the paint proc
+    call [bx+W_PAINT]
+    pop ax                      ; start stamp
+    pop dx
+    pop di                      ; owning instance record, 0 = unowned window
+    or di, di
     jz .done
-    call ax
+    call inst_charge
 .done:
     pop di
     pop si

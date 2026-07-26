@@ -113,7 +113,7 @@ APP_MAX_SIZE equ 0x5000      ; image + bss budget, 0xA000..0xEFFF
 | `kernel/icons.inc`  | 1-bit icon format, draw routine, built-in library (§25) |
 | `kernel/desk.inc`   | desktop drive icons: detect, paint, click/open (§26)    |
 | `kernel/dock.inc`   | bottom dock strip: one tile per running instance, minimize/restore/activate (§30) |
-| `kernel/taskmgr.inc`| Task Manager window: CPU load gauge + history graph, RAM readout, task list (§28) |
+| `kernel/taskmgr.inc`| Task Manager window: CPU load gauge + history graph, RAM readout, per-instance process list with CPU + memory (§28) |
 
 `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` remain in the
 tree but are **no longer included**; the GUI replaces the text shell.
@@ -301,6 +301,31 @@ window.
   publishing it, so a reused slot never inherits a dead task's total; the
   Task Manager additionally forces a freshly appeared slot's first
   interval diff to 0 (`tm_pstate`, §28).
+- **Charging a stretch of work to something other than a task.** Window
+  callbacks run on whichever task drives the repaint or the event — nearly
+  always the UI task, which owns no instance — so a task-granular counter
+  alone would report every task-less app (About, Note Pad, Disk, and every
+  loaded package, which cannot spawn at all, §20.2) at 0% forever. Two
+  public routines bracket such a stretch; both preserve every register
+  except their outputs, are callable at any IF, and must sit **outside**
+  the sch_isr → sch_switch → sch_resume fall-through run (same placement
+  rule as sch_account):
+  - `task_cycles` — out DX:AX = `sch_cycles[sch_cur]` with the pending
+    slice folded in (`pushf`/`cli`, sch_account, read, `popf`).
+  - `task_debit` — in DX:AX = a stamp from `task_cycles` **taken on this
+    task**; out DX:AX = the cycles elapsed since it, *subtracted* from
+    `sch_cycles[sch_cur]` in the same cli window. Move, not copy: the
+    caller adds the amount to another counter, so the two still partition
+    one total. Nesting works unaided — an inner debit lowers the outer
+    pair's end reading by exactly the inner amount. **A negative
+    difference is forced to 0 and nothing is subtracted**: sch_account can
+    return a slightly backwards timestamp when its pending-IRQ
+    disambiguation lands on the wrong side of a reload, and an unclamped
+    borrow wraps the caller's counter to just under 2^32.
+  Both readings come from one sch_cycles slot, which only advances while
+  that task is on the CPU, so the difference is real CPU time and not
+  wall-clock across a pre-emption. `inst_charge` (§29.4) is the only
+  caller; it bills window callbacks to `I_CYC`.
 
 ## 9. mouse.inc — serial Microsoft mouse + cursor
 
@@ -391,6 +416,16 @@ membership is established at wm_create and removed only by `wm_destroy`;
 reorder. The visible flag alone decides whether a window is painted,
 hit-tested, or counted by `wm_top`/`wm_obscured`.
 
+**Callback billing (binding).** All three dispatch sites — `wm_draw_win`'s
+W_PAINT call, and ui.inc's W_ONKEY / W_ONCLICK calls (§13) — bracket the
+near-call with `inst_win_owner` → `task_cycles` → callback →
+`inst_charge` (§8.1/§29.4), so the work lands on the window's instance
+instead of on the task that happened to drive it. An unowned window
+(record ptr 0) skips the charge. The stamp lives on the stack across the
+callback, never in a static, so nested paints (a W_ONCLICK that repaints
+every window) bill correctly. The callbacks' own register contracts below
+are unchanged — the sites restore AX/CX/DX/SI before calling.
+
 Frame drawing (paint-all does this before calling W_PAINT):
 - 1px black outline around the whole frame; 1px black drop shadow along the
   right and bottom edges, offset (+1,+1), Mac-style.
@@ -468,7 +503,8 @@ acceptable, tracking feedback is the highlight).
 
 Loop forever:
 1. Poll keyboard: int 16h AH=01; if a key, fetch (AH=00) and near-call the
-   front window's W_ONKEY (if any) under gfx_lock.
+   front window's W_ONKEY (if any) under gfx_lock, billed to the window's
+   instance (§11 "callback billing").
 2. `evq_pop`; on EVT_MDOWN at (x,y) — first store the event's EV_C into
    the public word `ui_click_t` (the click's birth tick; §22/§26 read it
    during dispatch):
@@ -498,7 +534,8 @@ Loop forever:
      and task 0 already holds it; re-acquiring would deadlock the GUI.
    - content of non-front window → `wm_front`.
    - content of front window → if its `W_ONCLICK` is non-zero: gfx_lock,
-     near-call it (CX=x, DX=y, SI=win ptr), gfx_unlock; else ignore.
+     near-call it (CX=x, DX=y, SI=win ptr) billed to the window's instance
+     (§11 "callback billing"), gfx_unlock; else ignore.
    - no window hit (wm_hit BX=0) → call `dock_click` (§30) with CX=x,
      DX=y, no lock held; CF=1 = the click was consumed (anywhere in the
      dock strip). Only if it declines (CF=0), call `desk_click` (§26) —
@@ -674,10 +711,14 @@ loaded-program region, §20.)
    directory without rebooting).
 10. Special → Task Manager opens a window with a live CPU load gauge and
     history graph (near 0% idle, visibly rising while dragging a window),
-    a RAM readout, and the eight-slot task list with per-task CPU shares
-    and per-instance names — all updating twice a second while launched
-    Clocks and Bounces keep running, rows appearing and freeing as
-    instances launch and quit.
+    a RAM readout, and the per-instance process list with each row's CPU
+    share and memory — all updating twice a second while launched Clocks
+    and Bounces keep running, rows appearing and freeing as instances
+    launch and quit. **Task-less apps are listed too**: About, Note Pad,
+    Disk and every loaded package show state `evt`, their own region size
+    under MEM (`-` for built-ins, which own no region), and a CPU share
+    that rises with the work their window callbacks actually do — a
+    Minesweeper repainted repeatedly reads double digits.
 
 ## 18. disk.inc — floppy reads (BIOS int 13h)
 
@@ -1131,7 +1172,7 @@ onclick, no bss. Entry: wm_create, return BX/CF. Prefix `hl_`.
 ## 28. taskmgr.inc — the Task Manager window
 
 Built-in singleton app kind (KIND_TASKMGR, cap 1 — one sampler), window
-"Task Manager", 176×250 at (250,100). Label prefix `tm_`. No onkey, no
+"Task Manager", 176×264 at (250,100). Label prefix `tm_`. No onkey, no
 onclick, no boot-time window or task: `tm_init` (from kmain, after
 loader_init) only reads total conventional RAM once via int 12h (kmain
 runs on task 0, so §7's only-the-UI-task-calls-BIOS rule holds). The
@@ -1159,36 +1200,57 @@ saturating load also re-baselines after ~10–20s and fades toward 0 — bursts
 load% = 100 − 100·count/max_eff, both first normalized by shifting right
 until max_eff's high word is zero; if max_eff's low word is then 0, load
 reads 0. The spin phase doubles as the system idle soak; its cycle share
-appears honestly in the task list as TaskMgr.
+appears honestly in the list as TaskMgr.
+
+**The list is an INSTANCE list, not a task list.** A task list shows only
+the kinds that own a task; every task-less app — About, Note Pad, Disk,
+and every loaded package, which cannot spawn at all (§20.2/§21) — runs
+purely inside window callbacks on the UI task and would never appear.
+Rows are therefore `TM_ROWS = INST_MAX + 1`: row 0 is **System** (the
+kernel), row 1+i mirrors instance slot i, so a row's position is stable
+for as long as the instance lives (the slot↔tile rule of §30). Each
+instance's cycles are the sum of two disjoint counters — its `I_CYC`
+(callback time billed by §11's dispatch sites) and, if I_TASK ≠ 0xFF,
+that task's `sch_cycles`. They are disjoint by construction: `task_debit`
+moves cycles off the task rather than copying them (§8.1), so System —
+plain `sch_cycles[0]` — is exactly what the kernel did on its own
+account, and the rows partition one total.
 
 **Sampling** (once per interval, after the spin phase):
 
-- Under one `pushf`/`cli` … `popf`: snapshot `sch_cycles` (32 bytes), the
-  eight T_STATE bytes, the eight T_INST bytes (`tm_inst`), and — for each
-  used slot whose T_INST ≠ 0xFF — the 16 I_NAME bytes of its instance
-  record into `tm_nsnap` + slot·16 (§29 records free atomically with
-  T_STATE inside task_exit's cli window, so a name read in the same
-  snapshot block can never be torn). Per-task share: diff_i = new_i −
-  old_i (32-bit, old ← new); **negative-diff clamp**: a diff with bit 31
-  set (the counter regressed — a slot reused mid-interval, or a rare PIT
-  stamp race) is forced to 0, since a wrapped "huge" diff would shrink
-  the total and clamp several rows to 100%; **appeared-slot rule**: a
-  slot whose previous-sample state (`tm_pstate`, copied from tm_state at
-  the end of every sample) was free but is now used gets diff_i forced
-  to 0 — task_spawn reset its counter (§8.1), so the interval diff is
-  meaningless. total = Σ diff_i; normalize by shifting total and every
-  diff right while total's high word is non-zero; **total = 0 → every
-  share is 0 (no DIV ever executes with a zero divisor)**; else
-  share_i = diff_i·100/total (≤ 100 since diff_i ≤ total).
-- Under one `pushf`/`cli` … `popf`: sum I_SIZE over instance records with
-  I_STATE ≠ 0 and I_KIND bit 7 set (§29 — package regions; dying
-  instances still count: their region is still resident). The loader
-  keeps ΣI_SIZE ≤ APP_MAX_SIZE, so the 16-bit sum cannot overflow.
-  used bytes = `kernel_bss_end` (bare label = the kernel
-  text+bss footprint, org 0) + that sum. usedK = (used+1023) >> 10.
-  Total KB is the boot-time int 12h value. **All bar math is in KB**:
-  barw = usedK·160/totalK (`mul` then `div`; totalK cannot be 0 from
-  int 12h, but a 0 check that skips the bar is required anyway).
+- Under ONE `pushf`/`cli` … `popf`: snapshot `sch_cycles`, the MAX_TASKS
+  T_STATE bytes, `sch_cur`, and then the whole instance table — per slot
+  its I_STATE, I_TASK, I_SIZE, I_CYC and 16 I_NAME bytes (§29 records
+  free atomically with T_STATE inside task_exit's cli window, so nothing
+  read in one block can be torn against itself).
+- Per-task diffs and per-instance diffs, both by the same two rules:
+  diff = new − old (32-bit, old ← new); **negative-diff clamp**: a diff
+  with bit 31 set (the counter regressed — a slot reused mid-interval, a
+  rare PIT stamp race, or a task_debit reaching back across the sample
+  point) is forced to 0, since a wrapped "huge" diff would shrink the
+  total and clamp several rows to 100%; **appeared-slot rule**: a slot
+  whose previous-sample state (`tm_pstate` / `tm_pist`, copied at the end
+  of every sample) was free but is now used gets its diff forced to 0 —
+  task_spawn and inst_alloc reset those counters (§8.1), so the interval
+  diff is meaningless.
+- Fold into one figure per ROW: row 0 = task 0's diff; row 1+i =
+  instance i's diff, plus task `I_TASK`'s diff when the record is in use
+  and I_TASK < MAX_TASKS (a free record's I_TASK byte is stale). Cycles
+  of a task whose instance died this interval belong to no row and simply
+  drop out. total = Σ row_i; normalize by shifting total and every row
+  right while total's high word is non-zero; **total = 0 → every share is
+  0 (no DIV ever executes with a zero divisor)**; else
+  share_i = row_i·100/total (≤ 100 since row_i ≤ total).
+- RAM, straight off the same snapshot (no second cli window): sum I_SIZE
+  over slots with I_STATE ≠ 0 — built-ins carry I_SIZE 0, so this counts
+  exactly the resident package regions, and dying instances still count
+  because their region is still resident. The loader keeps ΣI_SIZE ≤
+  APP_MAX_SIZE, so the 16-bit sum cannot overflow. used bytes =
+  `kernel_bss_end` (bare label = the kernel text+bss footprint, org 0) +
+  that sum. usedK = (used+1023) >> 10. Total KB is the boot-time int 12h
+  value. **All bar math is in KB**: barw = usedK·160/totalK (`mul` then
+  `div`; totalK cannot be 0 from int 12h, but a 0 check that skips the
+  bar is required anyway).
 - History: load% scaled to 0..40 (·40 then /100), stored at
   `tm_hist[tm_pos]`. The ring index IS the graph column — an oscilloscope
   sweep, no scrolling — then tm_pos advances mod 160.
@@ -1199,13 +1261,13 @@ held, §11). tm_task's periodic path wraps its drawing Clock-style
 (§14): gfx_lock, re-check visible + not `wm_obscured` under the lock (else
 skip), and touches only what changed — the CPU text line, the new sweep
 column plus an all-white gap column at the advanced tm_pos, the RAM line
-and bar, and the four task rows. The full 160-column graph render happens
+and bar, and the process rows. The full 160-column graph render happens
 only in tm_paint, so the periodic lock hold stays small (Bounce-scale).
 All drawing is self-backgrounding (each element white-fills its own rect
 or paints both segments), so tm_paint needs no preceding content clear
 beyond the one wm_paint_all already does.
 
-**Content layout** (content-relative; content is 174×231):
+**Content layout** (content-relative; content is 174×245):
 
 - (6,4): `"CPU nnn%"` (white-fill (6,4)-(90,11) first; n right-aligned,
   space-padded, 0..100).
@@ -1216,17 +1278,24 @@ beyond the one wm_paint_all already does.
 - (6,61): `"RAM uuuK/tttK"` (white-fill (6,61)-(167,68) first).
 - RAM bar: 1px black frame (6,71)-(167,80); interior (7,72)-(166,79):
   black for barw pixels from the left, white for the remainder.
-- (6,87): header `"#  TASK    ST   CPU"`.
-- Task rows i = 0..11 at y = 97 + 11·i (white-fill (6,y)-(167,y+7) first),
-  20 chars ('%' included; a free row omits it and is 19): slot number
-  left-justified in 3 (one digit + 2 spaces, or two digits + 1 space for
-  slots ≥ 10), name left-justified in 7 (truncated), space, state
-  in 3, 2 spaces, share right-aligned in 3 + `'%'`. Names are dynamic:
-  slot with T_INST = 0xFF → "UI" (only slot 0 qualifies); otherwise the
-  instance-name snapshot `tm_nsnap` + slot·16. State: tm_task's own slot
-  shows `run` (it is running when it samples); otherwise T_STATE 1 →
-  `rdy`, 2 → `slp`; a free slot shows name `-`, state `---`, share ` --`
-  with no `%`.
+- (6,87): header `"NAME    ST  CPU MEM"`.
+- Process rows r = 0..TM_ROWS−1 at y = 97 + 11·r (white-fill
+  (6,y)-(167,y+7) first), exactly 20 chars — the 8px font puts the last
+  glyph at x = 158..165, inside the 174px content. Columns, by index:
+  `[0..6]` name left-justified in 7 (truncated), `[7]` space, `[8..10]`
+  state, `[11]` space, `[12..14]` CPU share right-aligned, `[15]` `'%'`,
+  `[16..18]` memory right-aligned, `[19]` `'K'`.
+- Row 0 is the kernel: name `System`, state `run` if `sch_cur` was 0 at
+  snapshot time else `rdy`, memory = `kernel_bss_end` rounded up to KB.
+- Row 1+i renders instance slot i. Name is the I_NAME snapshot. State:
+  I_STATE 2 → `die`; else I_TASK = 0xFF (or ≥ MAX_TASKS) → `evt`
+  (task-less: it only runs inside window callbacks); else its task's slot
+  = `sch_cur` → `run`, T_STATE 2 → `slp`, otherwise `rdy`. Memory =
+  I_SIZE rounded up to KB, or `"   -"` (no `'K'`) when I_SIZE is 0 —
+  every built-in kind, which owns no region of its own; a misleading `0K`
+  is not used.
+- A free slot renders `-` / `---` / `  -` / `   -`: name dash, state
+  dashes, no `'%'` and no `'K'`.
 
 Menu/dispatch: see §12/§13 — Special has "Task Manager" (CMD_TASKS = 7)
 above "Restart" (CMD_REBOOT = 8); dispatch calls `app_launch`
@@ -1260,7 +1329,12 @@ I_ICON   equ 10   ; word: near ptr to a 16x16 icon BODY (16 mask + 16 data
                   ;       that buffer on every mount).
 I_NAME   equ 12   ; 16 bytes: NUL-terminated copy, <= 15 chars; byte
                   ;       I_NAME+15 is always 0
-                  ; 28..31 reserved, zeroed at alloc
+I_CYC    equ 28   ; dword (lo word first): PIT cycles billed to this
+                  ;       instance's window callbacks (§8.1), zeroed at
+                  ;       alloc so a reused record never inherits a dead
+                  ;       instance's tally. Written only by inst_charge,
+                  ;       under the gfx lock; read by the Task Manager
+                  ;       under pushf/cli (§28)
 I_RECSZ  equ 32
 
 KIND_ABOUT   equ 0
@@ -1321,8 +1395,10 @@ TaskMgr 1 (one sampler). Sum 11 ≤ INST_MAX.
 | `inst_init` | zero `inst_tab` + `inst_launch`. From kmain, after wm_init. |
 | `inst_ptr` | in AL = instance index; out DI = record ptr. |
 | `inst_of_win` | in BX = window ptr; out CF=0 + DI = record (via `wm_ptr2idx` + `wm_owner`), CF=1 if unowned. Preserves BX. |
+| `inst_win_owner` | in BX = window ptr; out DI = record ptr, or **0** if unowned. `inst_of_win` with the CF case folded into the result, so a caller can stash one word across a callback. Preserves BX. |
+| `inst_charge` | in DI = record (non-zero), DX:AX = a `task_cycles` stamp (§8.1): `task_debit`, then add the returned cycles to I_CYC. Preserves all registers. Called only by the W_PAINT / W_ONKEY / W_ONCLICK dispatch sites (§11/§13), which hold the gfx lock — and a task-owned instance destroys its window, clearing `wm_owner`, under that same lock before its record is freed (29.2), so the record named by wm_owner stays live for the whole charged stretch. |
 | `inst_find_kind` | in AL = kind byte (exact match incl. bit 7); out CF=0 + DI = first record with I_STATE=1 of that kind, CF=1 none. |
-| `inst_alloc` | out CF=0 + DI = free record with I_FLAGS/I_SPTR/I_SIZE/I_ICON/reserved zeroed, CF=1 table full. Does NOT publish. UI task only. |
+| `inst_alloc` | out CF=0 + DI = free record with I_FLAGS/I_SPTR/I_SIZE/I_ICON/I_CYC zeroed, CF=1 table full. Does NOT publish. UI task only. |
 | `inst_set_name` | in DI = record, SI = name source (NUL-terminated or NUL-padded; at most 15 chars taken). Zero-fills all 16 I_NAME bytes first. Safe on a package header's 16-byte name field. |
 | `inst_bind_win` | in DI = record, BX = window ptr: I_WIN ← BX, `wm_owner[window index]` ← record index. |
 | `app_launch` | in AL = kind (built-in). UI task only, no lock held; takes its own locks. out CF=1 failed (instance/window/task table full — silent no-op for the caller), CF=0 done. Order: cap check (at cap → gfx_lock, clear the live instance's minimized bit, wm_show it, gfx_unlock — i.e. "launch" of a full singleton fronts it; only-dying-instances → CF=1, retry after a task period) → inst_alloc → pool-slot pick (first candidate `pool + s·stride` not held by a same-kind record with I_STATE != 0) → template copied to scratch with x/y cascaded +16·s → wm_create (CF → fail; record was never published) → fill record (I_KIND, I_TASK=0xFF, I_ICON, name) + inst_bind_win → KD_INIT → **publish I_STATE ← 1** → if KD_TASK: task_spawn (AX = entry, DX = instance index), I_TASK ← returned slot; spawn CF → rollback (I_STATE ← 0, then locked wm_destroy) → gfx_lock, wm_show, gfx_unlock. |
