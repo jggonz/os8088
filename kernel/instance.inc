@@ -27,7 +27,9 @@ I_SPTR   equ 6                  ; word: builtin state ptr / package base
 I_SIZE   equ 8                  ; word: package region bytes; 0 for builtins
 I_ICON   equ 10                 ; word: 16x16 icon body ptr, 0 = generic
 I_NAME   equ 12                 ; 16 bytes: NUL-terminated copy (<= 15 chars)
-                                ; 28..31 reserved, zeroed at alloc
+I_CYC    equ 28                 ; dword: CPU cycles billed to this instance's
+                                ; window callbacks (SPEC.md 8.1), zeroed at
+                                ; alloc; lo word first
 I_RECSZ  equ 32                 ; power of two: index<<5 via CL
 INST_MAX equ 12
 
@@ -189,8 +191,8 @@ inst_alloc:
     mov word [di+I_SPTR], 0
     mov word [di+I_SIZE], 0
     mov word [di+I_ICON], 0
-    mov word [di+28], 0         ; reserved
-    mov word [di+30], 0
+    mov word [di+I_CYC], 0      ; a reused record never inherits a dead
+    mov word [di+I_CYC+2], 0    ; instance's CPU tally (SPEC.md 8.1)
     clc
 .out:
     pop cx
@@ -253,6 +255,48 @@ inst_bind_win:
     mov [wm_owner+si], al
     pop si
     pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; inst_win_owner - inst_of_win with the "no owner" case folded into the result
+; in:  BX = window ptr (record-aligned)
+; out: DI = instance record ptr, or 0 if the window is unowned. BX preserved.
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+inst_win_owner:
+    call inst_of_win
+    jnc .out
+    xor di, di
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; inst_charge - bill a stretch of the running task's CPU time to an instance
+;
+; in:  DI = instance record (non-zero), DX:AX = stamp from task_cycles
+; out: nothing (all registers preserved except flags)
+;
+; Window callbacks (W_PAINT / W_ONKEY / W_ONCLICK) run on whichever task
+; drives the repaint or the event - nearly always the UI task, which owns no
+; instance. Without this, every task-less app - About, Note Pad, Disk, and
+; EVERY loaded package (SPEC.md 21 - packages cannot spawn) - would read 0%
+; forever while its cost showed up as kernel time. task_debit moves the
+; cycles instead of copying them, so instance rows and task rows still add
+; up to one total (SPEC.md 8.1/28).
+;
+; Safe against a concurrent teardown: callbacks only ever run under the gfx
+; lock, and a task-owned instance destroys its window (clearing wm_owner)
+; under that same lock before its record is freed (SPEC.md 29.2), so the
+; record named by wm_owner stays live for the whole charged stretch.
+; -----------------------------------------------------------------------------
+inst_charge:
+    push ax
+    push dx
+    call task_debit             ; DX:AX = elapsed, taken off the task
+    add [di+I_CYC], ax
+    adc [di+I_CYC+2], dx
+    pop dx
     pop ax
     ret
 

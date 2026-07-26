@@ -37,7 +37,21 @@ ui_task:
     cmp word [bx + W_ONKEY], 0  ; window may not take keys
     je .key_done
     mov si, bx                  ; W_ONKEY contract: AL=ascii, AH=scan, SI=win
-    call [bx + W_ONKEY]
+    call inst_win_owner         ; bill the handler to its instance, not to
+    push di                     ; this task (SPEC.md 8.1); BX/SI/AX survive
+    push ax                     ; the key - task_cycles returns in DX:AX
+    call task_cycles            ; DX:AX = start stamp
+    mov bx, ax
+    pop ax                      ; key back for the handler's contract
+    push dx                     ; start stamp: hi, then lo
+    push bx
+    call [si + W_ONKEY]
+    pop ax
+    pop dx
+    pop di
+    or di, di
+    jz .key_done
+    call inst_charge
 .key_done:
     call gfx_unlock
 
@@ -88,7 +102,26 @@ ui_task:
     cmp word [si + W_ONCLICK], 0
     je .yield                   ; window does not take clicks
     call gfx_lock               ; W_ONCLICK contract: CX=x, DX=y, SI=win
-    call [si + W_ONCLICK]       ; (CX/DX survived wm_hit/wm_top/gfx_lock)
+    mov bx, si                  ; (CX/DX survived wm_hit/wm_top/gfx_lock)
+    call inst_win_owner         ; bill the handler to its instance (8.1)
+    push di
+    push cx                     ; the click point - task_cycles returns in
+    push dx                     ; DX:AX, so CX/DX have to step aside
+    call task_cycles            ; DX:AX = start stamp
+    mov bx, ax
+    mov ax, dx
+    pop dx                      ; click y
+    pop cx                      ; click x
+    push ax                     ; start stamp: hi, then lo
+    push bx
+    call [si + W_ONCLICK]
+    pop ax
+    pop dx
+    pop di
+    or di, di
+    jz .click_done
+    call inst_charge
+.click_done:
     call gfx_unlock
     jmp .yield
 

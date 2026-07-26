@@ -2,8 +2,21 @@
 ; jop - taskmgr.inc
 ;
 ; The Task Manager window (SPEC.md 28): a live CPU load gauge with an
-; oscilloscope-sweep history graph, a RAM readout, and the task table with
-; per-task CPU shares from the scheduler's PIT cycle accounting (SPEC.md 8.1).
+; oscilloscope-sweep history graph, a RAM readout, and the process list with
+; per-instance CPU shares and memory from the PIT cycle accounting
+; (SPEC.md 8.1).
+;
+; The list is an INSTANCE list, not a task list (SPEC.md 29). A task list
+; would show only the four kinds that own a task; every task-less app -
+; About, Note Pad, Disk, and every loaded package, which cannot spawn at all
+; (SPEC.md 20.2/21) - runs purely inside window callbacks on the UI task and
+; would be invisible. Each instance's row therefore adds two counters: the
+; I_CYC that wm.inc/ui.inc bill to it around every W_PAINT / W_ONKEY /
+; W_ONCLICK, and, if it owns a task, that task's sch_cycles. Row 0 is
+; "System" - task 0's remainder, i.e. the kernel's own work once every
+; callback has been debited away. The two counters are disjoint by
+; construction (task_debit moves cycles rather than copying them), so the
+; rows partition one total.
 ;
 ; tm_task is the monitor task and doubles as the system idle soak: it never
 ; sleeps, spinning { count += 1; task_yield } for 9-tick intervals. The spin
@@ -33,9 +46,10 @@ TM_GF_Y2    equ 55              ; graph frame bottom
 TM_RAM_Y    equ 61              ; "RAM uuuK/tttK" line
 TM_BAR_Y1   equ 71              ; RAM bar frame top (interior rows 72..79)
 TM_BAR_Y2   equ 80              ; RAM bar frame bottom
-TM_HDR_Y    equ 87              ; task-list header line
-TM_ROW_Y    equ 97              ; first task row
+TM_HDR_Y    equ 87              ; process-list header line
+TM_ROW_Y    equ 97              ; first process row
 TM_ROW_H    equ 11              ; row pitch, px
+TM_ROWS     equ INST_MAX + 1    ; "System" plus one row per instance slot
 
 ; -----------------------------------------------------------------------------
 ; tm_init - read total conventional RAM once (boot thread only)
@@ -86,19 +100,22 @@ tm_kinit:
     ret
 
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
-tm_tpl:     dw 250, 100, 176, 250, tm_ttl, tm_paint, 0, 0
+tm_tpl:     dw 250, 100, 176, 264, tm_ttl, tm_paint, 0, 0
 tm_ttl:     db 'Task Manager', 0
-tm_sname:   db 'TaskMgr', 0     ; KD_NAME: fits the 7-char task-list column
+tm_sname:   db 'TaskMgr', 0     ; KD_NAME: fits the 7-char NAME column
 
 tm_s_cpu:   db 'CPU ', 0
 tm_s_ram:   db 'RAM ', 0
-tm_s_hdr:   db '#  TASK    ST   CPU', 0
-tm_s_ui:    db 'UI', 0
+tm_s_hdr:   db 'NAME    ST  CPU MEM', 0
+tm_s_sys:   db 'System', 0      ; row 0: the kernel's own share
 tm_s_dash:  db '-', 0
 tm_s_run:   db 'run', 0
 tm_s_rdy:   db 'rdy', 0
 tm_s_slp:   db 'slp', 0
+tm_s_evt:   db 'evt', 0         ; task-less: runs only in window callbacks
+tm_s_die:   db 'die', 0         ; I_STATE 2: closing, task not yet reaped
 tm_s_free:  db '---', 0
+tm_s_frtl:  db '  -    -', 0    ; free row's CPU + MEM columns
 
 ; -----------------------------------------------------------------------------
 ; tm_task - the monitor task: spin-measure for TM_INT ticks, sample, redraw,
@@ -145,11 +162,11 @@ tm_task:
                                 ; task_exit - never returns
 
 ; -----------------------------------------------------------------------------
-; tm_sample - one measurement pass: load gauge, history push, per-task CPU
+; tm_sample - one measurement pass: load gauge, history push, per-instance CPU
 ;             shares, RAM usage. Touches only module state; no lock needed.
 ; in:  [tm_cnt] = the interval's spin count
 ; out: tm_load/tm_hist/tm_pos/tm_lastcol/tm_pct/tm_state/tm_self/tm_usedk/
-;      tm_barw updated
+;      tm_barw and the whole instance snapshot block updated
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
 tm_sample:
@@ -244,15 +261,15 @@ tm_sample:
 .posok:
     mov [tm_pos], bx
 
-    ; --- snapshot scheduler state (one atomic block, SPEC.md 8.1/28) ---------
-    ; Cycles, states, owning-instance indices, and - for used slots with an
-    ; instance - the instance's I_NAME bytes, all inside ONE cli window:
-    ; task_exit frees a record atomically with its task slot (SPEC.md 8),
-    ; so a name read in the same window can never be torn.
+    ; --- snapshot scheduler + instance state (one atomic block, 8.1/28) ------
+    ; Task cycles and T_STATE, then the whole instance table: I_STATE,
+    ; I_TASK, I_SIZE, I_CYC and the 16 I_NAME bytes of every slot. One cli
+    ; window for the lot - task_exit frees a record atomically with its task
+    ; slot (SPEC.md 8), so nothing read here can be torn against itself.
     pushf
     cli
     mov si, sch_cycles
-    mov di, tm_new
+    mov di, tm_tnew
     mov cx, MAX_TASKS * 2
 .csnap:
     mov ax, [si]
@@ -269,82 +286,109 @@ tm_sample:
     add si, T_SIZE
     inc di
     loop .ssnap
-    mov si, sch_tasks + T_INST
-    mov di, tm_inst
-    mov cx, MAX_TASKS
+    mov al, [sch_cur]           ; = our own slot (we are running)
+    mov [tm_self], al
+
+    mov si, inst_tab            ; SI = record, BX = instance index
+    xor bx, bx
 .isnap:
-    mov al, [si]
-    mov [di], al
-    add si, T_SIZE
-    inc di
-    loop .isnap
-    xor bx, bx                  ; BX = slot: copy instance names
-.nsnap:
-    cmp byte [tm_state+bx], 0
-    je .nnext
-    mov al, [tm_inst+bx]
-    cmp al, 0xFF
-    je .nnext
-    push bx
-    call inst_ptr               ; DI = instance record
-    lea si, [di+I_NAME]
-    mov ax, bx
+    mov al, [si+I_STATE]
+    mov [tm_ist+bx], al
+    mov al, [si+I_TASK]
+    mov [tm_itsk+bx], al
+    mov di, bx
+    shl di, 1                   ; DI = index*2
+    mov ax, [si+I_SIZE]
+    mov [tm_isz+di], ax
+    shl di, 1                   ; DI = index*4
+    mov ax, [si+I_CYC]
+    mov [tm_inew+di], ax
+    mov ax, [si+I_CYC+2]
+    mov [tm_inew+di+2], ax
+    mov ax, bx                  ; name goes to tm_inm + index*16
     mov cl, 4
-    shl ax, cl                  ; dest = tm_nsnap + slot*16
+    shl ax, cl
     mov di, ax
-    add di, tm_nsnap
+    add di, tm_inm
+    push si
+    add si, I_NAME
     mov cx, 16
-.ncpy:
+.incpy:
     mov al, [si]
     mov [di], al
     inc si
     inc di
-    loop .ncpy
-    pop bx
-.nnext:
+    loop .incpy
+    pop si
+    add si, I_RECSZ
     inc bx
-    cmp bx, MAX_TASKS
-    jb .nsnap
-    mov al, [sch_cur]           ; = our own slot (we are running)
-    mov [tm_self], al
+    cmp bx, INST_MAX
+    jb .isnap
     popf
 
-    ; --- per-task diffs + total ----------------------------------------------
-    xor ax, ax
-    mov [tm_total], ax
-    mov [tm_total+2], ax
+    ; --- per-task diffs ------------------------------------------------------
     xor bx, bx
-.diff:
-    mov ax, [tm_new+bx]
-    mov dx, [tm_new+bx+2]
-    sub ax, [tm_old+bx]         ; wrap-safe 32-bit difference
-    sbb dx, [tm_old+bx+2]
-    mov cx, [tm_new+bx]
-    mov [tm_old+bx], cx
-    mov cx, [tm_new+bx+2]
-    mov [tm_old+bx+2], cx
-    test dx, dx                 ; negative diff = the counter regressed
-    jns .possign                ; (slot reused mid-interval, or a rare PIT
-    xor ax, ax                  ; stamp race): meaningless, force 0 - a
-    xor dx, dx                  ; wrapped "huge" diff would shrink the
-.possign:                       ; total and clamp several rows to 100%
+.tdiff:
+    mov ax, [tm_tnew+bx]
+    mov dx, [tm_tnew+bx+2]
+    sub ax, [tm_told+bx]        ; wrap-safe 32-bit difference
+    sbb dx, [tm_told+bx+2]
+    mov cx, [tm_tnew+bx]
+    mov [tm_told+bx], cx
+    mov cx, [tm_tnew+bx+2]
+    mov [tm_told+bx+2], cx
+    test dx, dx                 ; negative diff = the counter regressed (a
+    jns .tsign                  ; slot reused mid-interval, a rare PIT stamp
+    xor ax, ax                  ; race, or a task_debit that reached back
+    xor dx, dx                  ; into the previous interval): force 0 - a
+.tsign:                         ; wrapped "huge" diff would clamp rows to 100%
     mov si, bx                  ; appeared-slot rule (SPEC.md 28): a slot
     shr si, 1                   ; free last sample but used now had its
     shr si, 1                   ; counter reset by task_spawn - the diff is
     cmp byte [tm_pstate+si], 0  ; meaningless, force 0
-    jne .keep
+    jne .tkeep
     cmp byte [tm_state+si], 0
-    je .keep
+    je .tkeep
     xor ax, ax
     xor dx, dx
-.keep:
-    mov [tm_diff+bx], ax
-    mov [tm_diff+bx+2], dx
-    add [tm_total], ax
-    adc [tm_total+2], dx
+.tkeep:
+    mov [tm_tdif+bx], ax
+    mov [tm_tdif+bx+2], dx
     add bx, 4
     cmp bx, MAX_TASKS * 4
-    jb .diff
+    jb .tdiff
+
+    ; --- per-instance diffs (same two rules; inst_alloc zeroes I_CYC) --------
+    xor bx, bx
+.idiff:
+    mov ax, [tm_inew+bx]
+    mov dx, [tm_inew+bx+2]
+    sub ax, [tm_iold+bx]
+    sbb dx, [tm_iold+bx+2]
+    mov cx, [tm_inew+bx]
+    mov [tm_iold+bx], cx
+    mov cx, [tm_inew+bx+2]
+    mov [tm_iold+bx+2], cx
+    test dx, dx
+    jns .isign
+    xor ax, ax
+    xor dx, dx
+.isign:
+    mov si, bx
+    shr si, 1
+    shr si, 1
+    cmp byte [tm_pist+si], 0
+    jne .ikeep
+    cmp byte [tm_ist+si], 0
+    je .ikeep
+    xor ax, ax
+    xor dx, dx
+.ikeep:
+    mov [tm_idif+bx], ax
+    mov [tm_idif+bx+2], dx
+    add bx, 4
+    cmp bx, INST_MAX * 4
+    jb .idiff
 
     xor bx, bx                  ; this sample's states become the previous
 .pcopy:
@@ -353,8 +397,65 @@ tm_sample:
     inc bx
     cmp bx, MAX_TASKS
     jb .pcopy
+    xor bx, bx
+.picopy:
+    mov al, [tm_ist+bx]
+    mov [tm_pist+bx], al
+    inc bx
+    cmp bx, INST_MAX
+    jb .picopy
 
-    ; normalize: shift total and every diff right until total fits 16 bits
+    ; --- fold task + instance cycles into one cycle figure per ROW ----------
+    ; Row 0 is the UI task's remainder (callbacks have already been debited
+    ; off it); row 1+i is instance i's callback time plus, if it owns a task,
+    ; that task's slice. Cycles of a task whose instance died this interval
+    ; belong to no row and simply drop out of the total.
+    mov ax, [tm_tdif]
+    mov [tm_rcyc], ax
+    mov ax, [tm_tdif+2]
+    mov [tm_rcyc+2], ax
+
+    xor bx, bx                  ; BX = instance index
+.rowc:
+    mov si, bx
+    shl si, 1
+    shl si, 1                   ; SI = index*4
+    mov ax, [tm_idif+si]
+    mov dx, [tm_idif+si+2]
+    cmp byte [tm_ist+bx], 0     ; a free record's I_TASK byte is stale
+    je .rnotask
+    mov cl, [tm_itsk+bx]
+    cmp cl, MAX_TASKS           ; catches 0xFF (task-less) and any garbage
+    jae .rnotask
+    xor ch, ch
+    shl cx, 1
+    shl cx, 1
+    mov di, cx
+    add ax, [tm_tdif+di]
+    adc dx, [tm_tdif+di+2]
+.rnotask:
+    mov di, si
+    add di, 4                   ; row index = instance index + 1
+    mov [tm_rcyc+di], ax
+    mov [tm_rcyc+di+2], dx
+    inc bx
+    cmp bx, INST_MAX
+    jb .rowc
+
+    xor ax, ax                  ; total = sum of the rows, so the shares of
+    mov [tm_total], ax          ; a fully accounted system add up to 100
+    mov [tm_total+2], ax
+    xor bx, bx
+.tsum:
+    mov ax, [tm_rcyc+bx]
+    mov dx, [tm_rcyc+bx+2]
+    add [tm_total], ax
+    adc [tm_total+2], dx
+    add bx, 4
+    cmp bx, TM_ROWS * 4
+    jb .tsum
+
+    ; normalize: shift total and every row right until total fits 16 bits
 .tnorm:
     cmp word [tm_total+2], 0
     je .tnormed
@@ -362,28 +463,28 @@ tm_sample:
     rcr word [tm_total], 1
     xor bx, bx
 .tshr:
-    shr word [tm_diff+bx+2], 1
-    rcr word [tm_diff+bx], 1
+    shr word [tm_rcyc+bx+2], 1
+    rcr word [tm_rcyc+bx], 1
     add bx, 4
-    cmp bx, MAX_TASKS * 4
+    cmp bx, TM_ROWS * 4
     jb .tshr
     jmp .tnorm
 .tnormed:
 
-    ; share_i = diff_i*100/total; total 0 -> all 0; clamp keeps DIV safe
+    ; share_i = row_i*100/total; total 0 -> all 0; clamp keeps DIV safe
     xor bx, bx
     mov di, tm_pct
 .pct:
     mov cx, [tm_total]
     jcxz .pzero
-    mov ax, [tm_diff+bx+2]
+    mov ax, [tm_rcyc+bx+2]
     or ax, ax
-    jnz .pfull                  ; pathological diff > total: clamp
-    mov ax, [tm_diff+bx]
+    jnz .pfull                  ; pathological row > total: clamp
+    mov ax, [tm_rcyc+bx]
     cmp ax, cx
     ja .pfull
     mov si, 100
-    mul si                      ; DX:AX = diff*100
+    mul si                      ; DX:AX = row*100
     div cx                      ; AX <= 100: no overflow possible
     jmp .pstore
 .pfull:
@@ -395,25 +496,26 @@ tm_sample:
     mov [di], al
     inc di
     add bx, 4
-    cmp bx, MAX_TASKS * 4
+    cmp bx, TM_ROWS * 4
     jb .pct
 
     ; --- RAM: kernel footprint + resident package regions (SPEC.md 28) -------
-    pushf                       ; one atomic block: records free atomically
-    cli                         ; (task_exit) or on the UI task, and the
-    xor bx, bx                  ; loader keeps the sum <= APP_MAX_SIZE.
-    mov si, inst_tab            ; Dying instances still count - their
-    mov cx, INST_MAX            ; region is still resident.
+    ; Straight off the snapshot above - built-ins carry I_SIZE 0, so summing
+    ; every in-use record counts exactly the resident package regions. Dying
+    ; instances still count: their region is still resident. The loader keeps
+    ; the sum <= APP_MAX_SIZE, so the 16-bit total cannot overflow.
+    xor bx, bx
+    xor si, si
 .rsum:
-    cmp byte [si+I_STATE], 0
+    cmp byte [tm_ist+si], 0
     je .rnext
-    test byte [si+I_KIND], 0x80 ; packages only (builtins have I_SIZE 0)
-    jz .rnext
-    add bx, [si+I_SIZE]
+    mov di, si
+    shl di, 1
+    add bx, [tm_isz+di]
 .rnext:
-    add si, I_RECSZ
-    loop .rsum
-    popf
+    inc si
+    cmp si, INST_MAX
+    jb .rsum
     mov ax, kernel_bss_end      ; kernel text+bss footprint (bare label);
     add ax, bx                  ; max total 0xA000 + 0x5000 = 61440, no
                                 ; 16-bit overflow possible
@@ -795,11 +897,15 @@ tm_bar:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_rows - the MAX_TASKS task rows: white-fill each band, build the 20-char row
-;           string, draw it (SPEC.md 28 pins the format)
-; in:  tm_state/tm_self/tm_pct
+; tm_rows - the TM_ROWS process rows: white-fill each band, build the 20-char
+;           row string, draw it (SPEC.md 28 pins the format)
+; in:  tm_self/tm_state/tm_pct + the instance snapshot block
 ; out: nothing
 ; clobbers: nothing (flags only)
+;
+; Row 0 is "System"; row 1+i mirrors instance slot i, so a row's position is
+; stable for as long as the instance lives (same slot<->row rule as the dock,
+; SPEC.md 30).
 ; -----------------------------------------------------------------------------
 tm_rows:
     push ax
@@ -809,9 +915,9 @@ tm_rows:
     push si
     push di
 
-    xor si, si                  ; SI = slot
+    xor si, si                  ; SI = row index
 .row:
-    mov ax, si                  ; y1 = cy + TM_ROW_Y + 11*slot
+    mov ax, si                  ; y1 = cy + TM_ROW_Y + 11*row
     mov cx, TM_ROW_H
     mul cx
     add ax, TM_ROW_Y
@@ -828,84 +934,92 @@ tm_rows:
     add cx, 167
     call gfx_fill
 
-    ; --- build "N  NAME    ST   nn%" in tm_str -------------------------------
+    ; --- build "NAME    ST  nnn%mmmK" in tm_str ------------------------------
     mov di, tm_str
-    mov ax, si                  ; slot number, left-justified in 3
-    cmp al, 10
-    jb .slot1
-    mov byte [di], '1'          ; slots 10..: two digits + one space
-    inc di
-    sub al, 10
-    add al, '0'
-    mov [di], al
-    inc di
-    mov byte [di], ' '
-    inc di
-    jmp .slotdn
-.slot1:
-    add al, '0'                 ; slots 0..9: one digit + two spaces
-    mov [di], al
-    inc di
-    mov byte [di], ' '
-    inc di
-    mov byte [di], ' '
-    inc di
-.slotdn:
+    or si, si
+    jnz .inst
 
+    ; row 0: the kernel - task 0 minus everything debited to an instance
+    push si
+    mov si, tm_s_sys
+    call tm_copy7
+    mov byte [di], ' '
+    inc di
+    mov si, tm_s_rdy            ; task 0 never sleeps; it shows "run" only
+    cmp byte [tm_self], 0       ; when it happened to be current at snapshot
+    jne .sysst
+    mov si, tm_s_run
+.sysst:
+    call tm_copy
+    pop si
+    mov byte [di], ' '
+    inc di
     mov bx, si
-    cmp byte [tm_state+bx], 0
+    mov al, [tm_pct+bx]
+    call tm_cpucol
+    mov ax, kernel_bss_end      ; the kernel's own image + bss (bare label)
+    call tm_memcol
+    jmp .draw
+
+.inst:
+    mov bx, si
+    dec bx                      ; BX = instance index, held to the end
+    cmp byte [tm_ist+bx], 0
     je .free
 
-    push si                     ; name, left-justified in 7 (dynamic:
-    mov al, [tm_inst+bx]        ; snapshot of the owning instance's I_NAME,
-    cmp al, 0xFF                ; or "UI" for the instance-less slot 0)
-    jne .named
-    mov si, tm_s_ui
-    jmp .name
-.named:
+    push si                     ; name: the I_NAME snapshot, 7 chars
     mov ax, bx
     mov cl, 4
     shl ax, cl
     mov si, ax
-    add si, tm_nsnap
-.name:
+    add si, tm_inm
     call tm_copy7
     pop si
     mov byte [di], ' '
     inc di
 
-    push si                     ; state: own slot = run, else rdy/slp
-    mov ax, si
-    cmp al, [tm_self]
-    jne .notrun
-    mov si, tm_s_run
-    jmp .state
-.notrun:
-    mov bx, si
-    cmp byte [tm_state+bx], 2
-    je .slp
+    push si                     ; state (SPEC.md 28)
+    cmp byte [tm_ist+bx], 2
+    je .stdie
+    mov cl, [tm_itsk+bx]
+    cmp cl, MAX_TASKS           ; 0xFF = task-less: lives in callbacks only
+    jae .stevt
+    cmp cl, [tm_self]
+    je .strun
+    xor ch, ch
+    mov si, cx                  ; SI = the owning task's slot
+    cmp byte [tm_state+si], 2
+    je .stslp
     mov si, tm_s_rdy
-    jmp .state
-.slp:
+    jmp .stput
+.stslp:
     mov si, tm_s_slp
-.state:
+    jmp .stput
+.strun:
+    mov si, tm_s_run
+    jmp .stput
+.stevt:
+    mov si, tm_s_evt
+    jmp .stput
+.stdie:
+    mov si, tm_s_die
+.stput:
     call tm_copy
     pop si
-    mov byte [di], ' '
-    inc di
     mov byte [di], ' '
     inc di
 
     mov bx, si                  ; share, right-aligned in 3, then '%'
     mov al, [tm_pct+bx]
-    xor ah, ah
-    call tm_put3
-    mov byte [di], '%'
-    inc di
-    mov byte [di], 0
+    call tm_cpucol
+    mov bx, si                  ; region bytes (0 for a built-in kind)
+    dec bx
+    shl bx, 1
+    mov ax, [tm_isz+bx]
+    call tm_memcol
     jmp .draw
 
-.free:                          ; free slot: "-       ---   --"
+.free:                          ; free slot: "-       ---   -    -"
     push si
     mov si, tm_s_dash
     call tm_copy7
@@ -913,20 +1027,14 @@ tm_rows:
     inc di
     mov si, tm_s_free
     call tm_copy
+    mov byte [di], ' '
+    inc di
+    mov si, tm_s_frtl
+    call tm_copy
     pop si
-    mov byte [di], ' '
-    inc di
-    mov byte [di], ' '
-    inc di
-    mov byte [di], ' '
-    inc di
-    mov byte [di], '-'
-    inc di
-    mov byte [di], '-'
-    inc di
-    mov byte [di], 0
 
 .draw:
+    mov byte [di], 0
     mov byte [gfx_color], CBLACK
     mov cx, [tm_cx]
     add cx, 6
@@ -937,7 +1045,7 @@ tm_rows:
     pop si
 
     inc si
-    cmp si, MAX_TASKS
+    cmp si, TM_ROWS
     jb .row
 
     pop di
@@ -945,6 +1053,55 @@ tm_rows:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_cpucol - the CPU column: share right-aligned in 3, then '%'
+; in:  AL = share 0..100, DI = dest
+; out: DI advanced by 4
+; clobbers: nothing else (internal helper)
+; -----------------------------------------------------------------------------
+tm_cpucol:
+    push ax
+    xor ah, ah
+    call tm_put3
+    mov byte [di], '%'
+    inc di
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_memcol - the MEM column: KB right-aligned in 3, then 'K'; an instance
+;             that owns no region of its own (every built-in kind) shows
+;             "   -" instead of a misleading 0 (SPEC.md 28)
+; in:  AX = bytes, DI = dest
+; out: DI advanced by 4
+; clobbers: nothing else (internal helper)
+; -----------------------------------------------------------------------------
+tm_memcol:
+    push ax
+    push cx
+    or ax, ax
+    jz .none
+    add ax, 1023                ; round up; AX <= 0xA000 here, no overflow
+    mov cl, 10
+    shr ax, cl
+    call tm_put3
+    mov byte [di], 'K'
+    inc di
+    jmp .out
+.none:
+    mov byte [di], ' '
+    inc di
+    mov byte [di], ' '
+    inc di
+    mov byte [di], ' '
+    inc di
+    mov byte [di], '-'
+    inc di
+.out:
+    pop cx
     pop ax
     ret
 
@@ -1069,16 +1226,23 @@ tm_pmax:    resw 2              ; calibration max, previous epoch, dword
 tm_epc:     resb 1              ; samples into the current epoch
 tm_t0:      resw 1              ; interval start tick
 tm_load:    resw 1              ; latest load, 0..100
-tm_old:     resw MAX_TASKS * 2  ; previous sch_cycles snapshot
-tm_new:     resw MAX_TASKS * 2  ; current snapshot
-tm_diff:    resw MAX_TASKS * 2  ; per-task interval cycles
-tm_total:   resw 2              ; sum of diffs, dword
+tm_told:    resw MAX_TASKS * 2  ; previous sch_cycles snapshot
+tm_tnew:    resw MAX_TASKS * 2  ; current snapshot
+tm_tdif:    resw MAX_TASKS * 2  ; per-task interval cycles
 tm_state:   resb MAX_TASKS      ; T_STATE snapshot
 tm_pstate:  resb MAX_TASKS      ; previous sample's T_STATE (appeared rule)
-tm_inst:    resb MAX_TASKS      ; T_INST snapshot (owning instance or 0xFF)
-tm_nsnap:   resb MAX_TASKS * 16 ; instance-name snapshots
 tm_self:    resb 1              ; our own slot ([sch_cur] at snapshot)
-tm_pct:     resb MAX_TASKS      ; per-task share, 0..100
+tm_iold:    resw INST_MAX * 2   ; previous I_CYC snapshot
+tm_inew:    resw INST_MAX * 2   ; current snapshot
+tm_idif:    resw INST_MAX * 2   ; per-instance interval callback cycles
+tm_ist:     resb INST_MAX       ; I_STATE snapshot
+tm_pist:    resb INST_MAX       ; previous sample's I_STATE (appeared rule)
+tm_itsk:    resb INST_MAX       ; I_TASK snapshot (owning task or 0xFF)
+tm_isz:     resw INST_MAX       ; I_SIZE snapshot, bytes
+tm_inm:     resb INST_MAX * 16  ; I_NAME snapshots
+tm_rcyc:    resw TM_ROWS * 2    ; per-ROW cycles: task + instance, dword
+tm_total:   resw 2              ; sum of the rows, dword
+tm_pct:     resb TM_ROWS        ; per-row share, 0..100
 tm_usedk:   resw 1              ; used RAM, KB
 tm_barw:    resw 1              ; RAM bar black width, 0..160
 tm_zero_end:
