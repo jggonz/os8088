@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - ctrl.inc
+; os8088 - ctrl.inc
 ;
 ; The Control Panel window (SPEC.md 31): a two-pane browser. The LEFT pane
 ; is the list of panel items, one row each, the selected row drawn as a
@@ -87,7 +87,7 @@ cp_sname:   db 'Control', 0     ; KD_NAME: fits the 7-char NAME column
 
 ; Deferred-repaint flag, drained by ui_task step 3 (SPEC.md 13/31.2). Inline
 ; .text data, not .bss, so it is initialised on disk and needs no cp_init -
-; the japi_seed trick from kernel.asm.
+; the osapi_seed trick from kernel.asm.
 cp_dirty:   db 0                ; 1 = the mode changed, repaint everything
 
 ; Selected item, index into cp_items. Inline .text data for the same reason;
@@ -569,11 +569,11 @@ cp_radios:
 ;      color in [gfx_color]; caller holds the gfx lock
 ; out: nothing
 ; clobbers: nothing (flags only; [gfx_color] is restored)
-; A menu_apple_glyph-style per-bit walk (bit 15 = leftmost pixel), preceded
+; A menu_logo_glyph-style per-bit walk (bit 15 = leftmost pixel), preceded
 ; by a white gfx_fill of the glyph's own 12x12 box so a glyph can be
 ; redrawn in place. The caller's pen is saved across that fill and put back
 ; for the bit walk (SPEC.md 31.2), so this routine leaves no global behind.
-; Written here rather than reused because menu_apple_glyph hardcodes both
+; Written here rather than reused because menu_logo_glyph hardcodes both
 ; its top row (MENU_APPLE_Y) and its bitmap, and icon_draw16 wants a 16
 ; mask + 16 data word body (SPEC.md 25).
 ; -----------------------------------------------------------------------------
@@ -626,7 +626,7 @@ cp_glyph:
 
 ; -----------------------------------------------------------------------------
 ; radio bitmaps: 12x12, one word per row, bit 15 = x offset 0 (the
-; menu_apple_bmp convention). The low 4 bits of every word are unused.
+; menu_logo_bmp convention). The low 4 bits of every word are unused.
 ; -----------------------------------------------------------------------------
 
 ; cp_radio_off - open ring (the mode that is NOT selected)

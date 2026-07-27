@@ -1,9 +1,9 @@
 ; =============================================================================
-; jop - menu.inc
+; os8088 - menu.inc
 ;
-; The menu bar and pull-down menus (SPEC.md 12). Three menus: the Apple
-; (an 11x11 hand-authored silhouette - the one place bitmap data is
-; hand-made), File, and Special. menu_track runs the entire mouse
+; The menu bar and pull-down menus (SPEC.md 12). Three menus: the System
+; menu (an 11x11 hand-authored chip silhouette - the os8088 logo, and the
+; one place bitmap data is hand-made), File, and Special. menu_track runs the entire mouse
 ; interaction while the button is held: the caller (the UI task) already
 ; holds the gfx lock, so tracking reads mouse_x/mouse_y/mouse_btn directly
 ; (the ISR keeps them fresh; the cursor stays hidden - the highlight is
@@ -14,8 +14,8 @@
 ; --- commands returned by menu_track (owned here, dispatched by ui.inc) ------
 ; cmd = menu base + item index, so each menu's commands must stay
 ; consecutive from its base (SPEC.md 12) - moving Task Manager into the
-; Apple menu is what renumbered CMD_NOTE..CMD_CLOSE up by one.
-CMD_ABOUT   equ 1               ; --- Apple ---
+; System menu is what renumbered CMD_NOTE..CMD_CLOSE up by one.
+CMD_ABOUT   equ 1               ; --- System ---
 CMD_CTRL    equ 2
 CMD_TASKS   equ 3
 CMD_NOTE    equ 4               ; --- File ---
@@ -26,7 +26,7 @@ CMD_CLOSE   equ 8
 CMD_REBOOT  equ 9               ; --- Special ---
 
 ; --- menu table entry layout --------------------------------------------------
-MENU_TITLE  equ 0               ; word: near ptr to NUL title, 0 = apple glyph
+MENU_TITLE  equ 0               ; word: near ptr to NUL title, 0 = logo glyph
 MENU_ITEMS  equ 2               ; word: near ptr to array of item string ptrs
 MENU_NITEM  equ 4               ; word: item count
 MENU_BASE   equ 6               ; word: CMD_* of item 0 (items are consecutive)
@@ -37,12 +37,12 @@ MENU_ENTSZ  equ 14
 MENU_NUM    equ 3               ; menus in the table
 
 MENU_TEXT_Y equ 6               ; title text row (8px glyphs in a 19px bar)
-MENU_APPLE_Y equ 4              ; apple glyph top row (11px tall)
+MENU_LOGO_Y equ 4               ; logo glyph top row (11px tall)
 MENU_ITEM_H equ 16              ; pull-down item cell height, px
 
 ; -----------------------------------------------------------------------------
 ; menu_draw_bar - draw the menu bar: white rows 0..MBAR_H-2, black line at
-;                 row MBAR_H-1, apple glyph + titles at their fixed x.
+;                 row MBAR_H-1, logo glyph + titles at their fixed x.
 ; in:  nothing (caller holds the gfx lock)
 ; out: nothing
 ; clobbers: nothing (flags only)
@@ -83,7 +83,7 @@ menu_draw_bar:
     jmp .next
 .glyph:
     mov cx, [si + MENU_TX]
-    call menu_apple_glyph
+    call menu_logo_glyph
 .next:
     pop cx
     add si, MENU_ENTSZ
@@ -355,21 +355,22 @@ menu_widest:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_apple_glyph - draw the 11x11 apple silhouette in [gfx_color]
-; in:  CX = left x (top is MENU_APPLE_Y)
+; menu_logo_glyph - draw the 11x11 chip silhouette (the os8088 logo) in
+; [gfx_color]
+; in:  CX = left x (top is MENU_LOGO_Y)
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
-menu_apple_glyph:
+menu_logo_glyph:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
-    mov si, menu_apple_bmp
+    mov si, menu_logo_bmp
     mov di, cx                  ; DI = left x
-    mov dx, MENU_APPLE_Y
+    mov dx, MENU_LOGO_Y
     mov bh, 11                  ; rows
 .row:
     lodsw                       ; bit 15 = leftmost pixel of the row
@@ -395,27 +396,29 @@ menu_apple_glyph:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu data: apple bitmap, strings, item lists, the menu table
+; menu data: logo bitmap, strings, item lists, the menu table
 ; -----------------------------------------------------------------------------
 
-; 11x11 apple-with-bite, one word per row, bit 15 = x offset 0
-menu_apple_bmp:
-    dw 0x0C00                   ; ....##.....   leaf
-    dw 0x0400                   ; .....#.....   stem
-    dw 0x7780                   ; .###.####..   twin top lobes
-    dw 0xFFC0                   ; ##########.
-    dw 0xFF80                   ; #########..   bite starts
-    dw 0xFF00                   ; ########...   bite, deepest
-    dw 0xFF80                   ; #########..   bite curves back
-    dw 0xFFC0                   ; ##########.
-    dw 0x7FC0                   ; .#########.
-    dw 0x7F80                   ; .########..
-    dw 0x3300                   ; ..##..##...   bottom cleft
+; 11x11 DIP-chip silhouette - the os8088 logo: a 7px-wide package body with
+; a notch at the top and four pins down each side. One word per row,
+; bit 15 = x offset 0.
+menu_logo_bmp:
+    dw 0x0000                   ; ...........
+    dw 0x3B80                   ; ..###.###..   body top, orientation notch
+    dw 0xFFE0                   ; ###########   pins
+    dw 0x3F80                   ; ..#######..
+    dw 0xFFE0                   ; ###########   pins
+    dw 0x3F80                   ; ..#######..
+    dw 0xFFE0                   ; ###########   pins
+    dw 0x3F80                   ; ..#######..
+    dw 0xFFE0                   ; ###########   pins
+    dw 0x3F80                   ; ..#######..   body bottom
+    dw 0x0000                   ; ...........
 
 menu_s_file     db 'File', 0
 menu_s_special  db 'Special', 0
 
-menu_s_about    db 'About jop...', 0
+menu_s_about    db 'About os8088...', 0
 menu_s_ctrl     db 'Control Panel', 0
 menu_s_note     db 'Note Pad', 0
 menu_s_clock    db 'Clock', 0
@@ -425,7 +428,7 @@ menu_s_close    db 'Close Window', 0
 menu_s_tasks    db 'Task Manager', 0
 menu_s_restart  db 'Restart', 0
 
-menu_items_apple:
+menu_items_logo:
     dw menu_s_about
     dw menu_s_ctrl
     dw menu_s_tasks
@@ -438,11 +441,11 @@ menu_items_file:
 menu_items_special:
     dw menu_s_restart
 
-; per menu: title (0 = apple glyph), items, count, cmd base,
+; per menu: title (0 = logo glyph), items, count, cmd base,
 ;           bar hit range [xl..xr], title x. The hit ranges tile the bar's
 ;           left edge with 12px padding zones around each title.
 menu_table:
-    dw 0,              menu_items_apple,   3, CMD_ABOUT,  0,   29,  10
+    dw 0,              menu_items_logo,    3, CMD_ABOUT,  0,   29,  10
     dw menu_s_file,    menu_items_file,    5, CMD_NOTE,   30,  85,  42
     dw menu_s_special, menu_items_special, 1, CMD_REBOOT, 86, 165,  98
 

@@ -1,8 +1,8 @@
 ; =============================================================================
 ; loader.inc - package loader (SPEC.md 21)
 ;
-; Validates a jopfs directory entry, allocates a region from the package
-; pool (0xA000..0xEFFF), reads the .jop v2 file into it, applies the
+; Validates an os88fs directory entry, allocates a region from the package
+; pool (0xA000..0xEFFF), reads the .o88 v2 file into it, applies the
 ; relocation table (SPEC.md 20.2: class 0 entries += base-0xA000, class 1
 ; entries -= it), zeroes the package bss, near-calls its entry, and
 ; registers the new instance in the instance table (SPEC.md 29). There is
@@ -33,14 +33,14 @@ LD_EBIG     equ 3               ; too large (file, image or image+bss)
 LD_EABORT   equ 4               ; package entry returned CF=1
 LD_ENOMEM   equ 5               ; instance table or pool exhausted
 
-; --- jopfs directory entry field offsets (SPEC.md 19) ------------------------
+; --- os88fs directory entry field offsets (SPEC.md 19) ------------------------
 LD_DE_TYPE  equ 16              ; word: 1 = application package
 LD_DE_LBA   equ 18              ; word: start LBA of file data
 LD_DE_SIZE  equ 20              ; word: size in bytes (image + reloc table)
 LD_DE_SHIFT equ 5               ; entry stride 32 = 1 << 5
 
-; --- .jop v2 header field offsets (SPEC.md 20.2) ------------------------------
-LD_H_MAGIC  equ 0               ; word: 0x504A ('J','P')
+; --- .o88 v2 header field offsets (SPEC.md 20.2) ------------------------------
+LD_H_MAGIC  equ 0               ; word: 0x384F ('O','8')
 LD_H_VER    equ 2               ; byte: format version = 2
 LD_H_FLAGS  equ 3               ; byte: bit 0 = embedded 16x16 icon
 LD_H_LINK   equ 4               ; word: link base, must equal APP_LOAD_OFF
@@ -116,14 +116,14 @@ ld_alloc:
     ret
 
 ; -----------------------------------------------------------------------------
-; ld_check_hdr - validate a .jop v2 header (module-internal)
+; ld_check_hdr - validate a .o88 v2 header (module-internal)
 ; in:  SI -> 32 readable header bytes; [ld_fsz] = the file's byte count
 ; out: CF = 0 and [ld_img]/[ld_bss]/[ld_ent]/[ld_rcnt] filled, or
 ;      CF = 1 and AL = LD_EBAD / LD_EBIG
 ; clobbers: AX, DX
 ; -----------------------------------------------------------------------------
 ld_check_hdr:
-    cmp word [si+LD_H_MAGIC], 0x504A        ; 'J','P'
+    cmp word [si+LD_H_MAGIC], 0x384F        ; 'O','8'
     jne .bad
     cmp byte [si+LD_H_VER], 2               ; v1 files: "Bad package"
     jne .bad

@@ -1,7 +1,7 @@
 ; =============================================================================
-; jop - files.inc
+; os8088 - files.inc
 ;
-; The Disk window - a minimal file manager for the jopfs data floppy
+; The Disk window - a minimal file manager for the os88fs data floppy
 ; (SPEC.md 22). A singleton app kind (KIND_FILES, cap 1 - the mount state
 ; below is module-global): no boot-time window; app_launch creates it on
 ; demand (fm_kinit is the KD_INIT). CMD_FILES dispatch calls files_open and
@@ -63,7 +63,7 @@ fm_ttl:     db 'Disk', 0
 fm_s_drive:  db 'Drive ', 0     ; header: "Drive " letter ":  " N " files"
 fm_s_colsp:  db ':  ', 0
 fm_s_files:  db ' files', 0
-fm_s_nodisk: db 'No jop disk in drive ', 0
+fm_s_nodisk: db 'No os8088 disk in drive ', 0
 fm_s_refresh: db 'Refresh', 0   ; button label, 7 chars = 56 px
 
 fm_s_loading: db 'Loading...', 0
@@ -351,7 +351,7 @@ fm_repaint:
 ; in:  BX = window ptr (content already white, gfx lock held)
 ; out: nothing
 ; clobbers: nothing (flags only)
-; Header at (6,6): "Drive X:  N files", or "No jop disk in drive X:" when
+; Header at (6,6): "Drive X:  N files", or "No os8088 disk in drive X:" when
 ; the last mount failed. Refresh button: 1px frame at FM_BTN_* with the
 ; label centered inside. Rows are FM_ROW_H tall from FM_ROW_Y0: the file's
 ; 16x16 icon at x=4, row top (disk_icons entry i, body-only layout via
@@ -398,7 +398,7 @@ fm_draw_core:
     call fm_scat
     jmp .drawhdr
 .badhdr:
-    mov si, fm_s_nodisk         ; "No jop disk in drive X:"
+    mov si, fm_s_nodisk         ; "No os8088 disk in drive X:"
     call fm_scat
     mov al, [disk_drive]
     add al, 'A'

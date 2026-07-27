@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - events.inc
+; os8088 - events.inc
 ;
 ; The system event queue (SPEC.md 10): a single ring of 16 fixed 8-byte
 ; records in .bss. Producers may be ISRs (the mouse ISR pushes button

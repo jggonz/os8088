@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - apps/hello/hello.asm
+; os8088 - apps/hello/hello.asm
 ;
 ; HELLO, the second software package (SPEC.md 27). Deliberately minimal: it
 ; proves the SDK surface (header macro, wm_create template, paint via the
@@ -13,9 +13,9 @@
 ; origin via wm_content each call (the window moves).
 ; =============================================================================
 
-%include "jopapi.inc"
+%include "os88api.inc"
 
-    JOP_HEADER 'HELLO', hl_entry
+    OS88_HEADER 'HELLO', hl_entry
 
 HL_CONT_W equ 238                   ; content width: 240 outer - 2px borders
 
@@ -28,7 +28,7 @@ HL_CONT_W equ 238                   ; content width: 240 outer - 2px borders
 hl_entry:
     push si
     mov si, hl_tpl
-    call JAPI_WM_CREATE             ; BX = window ptr, CF on table full
+    call OSAPI_WM_CREATE             ; BX = window ptr, CF on table full
     pop si
     ret
 
@@ -44,10 +44,10 @@ hl_paint:
     push dx
     push si
     mov bx, si
-    call JAPI_WM_CONTENT            ; AX = content left, DX = content top
+    call OSAPI_WM_CONTENT            ; AX = content left, DX = content top
     mov bx, ax                      ; keep the content left in BX
     mov al, CBLACK
-    call JAPI_SET_COLOR
+    call OSAPI_SET_COLOR
     mov si, hl_s_line1              ; content is 71px tall; two 8px lines
     add dx, 25                      ; 12px apart, centred as a 20px block
     call hl_line
@@ -69,12 +69,12 @@ hl_paint:
 hl_line:
     push ax
     push cx
-    call JAPI_FONT_WIDTH            ; AX = pixel width
+    call OSAPI_FONT_WIDTH            ; AX = pixel width
     mov cx, HL_CONT_W
     sub cx, ax
     shr cx, 1
     add cx, bx
-    call JAPI_FONT_STR
+    call OSAPI_FONT_STR
     pop cx
     pop ax
     ret
@@ -86,6 +86,6 @@ hl_tpl:
 
 hl_ttl:     db 'Hello', 0
 hl_s_line1: db 'Hello from a', 0
-hl_s_line2: db '.jop package!', 0
+hl_s_line2: db '.o88 package!', 0
 
-    JOP_IMAGE_END
+    OS88_IMAGE_END

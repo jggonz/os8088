@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
-"""jopkg: validate a .jop v2 package, generate its relocation table, stamp.
+"""os88pkg: validate a .o88 v2 package, generate its relocation table, stamp.
 
-    python3 tools/jopkg.py IN.bin --alt ALT.bin -o OUT.jop
+    python3 tools/os88pkg.py IN.bin --alt ALT.bin -o OUT.o88
 
 IN.bin is the package assembled at the 0xA000 link base; ALT.bin is the
-SAME source assembled at org 0xA800 (the Makefile passes -DJOP_ORG=0xA800).
+SAME source assembled at org 0xA800 (the Makefile passes -DOS88_ORG=0xA800).
 The probe delta 0x800 has a zero low byte, so every relocated word differs
 from IN in exactly its high byte - the diff below finds each fixup site
-deterministically. jopkg verifies the header (SPEC.md section 20.2), diffs
+deterministically. os88pkg verifies the header (SPEC.md section 20.2), diffs
 the two images into the sorted fixup-offset table, HARD-VERIFIES that
 adding the delta at exactly those words reconstructs ALT byte-for-byte
 (catching any byte-split/truncated address, which the format forbids),
 stamps the relocation count into header offset 12, and writes
-OUT.jop = IN + the table. Any failure exits 1 with a message on stderr;
-OUT.jop is not written on failure.
+OUT.o88 = IN + the table. Any failure exits 1 with a message on stderr;
+OUT.o88 is not written on failure.
 """
 import argparse
 import struct
 import sys
 
 HEADER_SIZE = 32
-MAGIC = 0x504A            # 'J','P' little-endian
+MAGIC = 0x384F            # 'O','8' little-endian
 VERSION = 2
 LINK_BASE = 0xA000
 PROBE_ORG = 0xA800
@@ -33,7 +33,7 @@ SECTOR = 512
 
 
 def fail(msg: str) -> None:
-    print(f"jopkg: error: {msg}", file=sys.stderr)
+    print(f"os88pkg: error: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -62,14 +62,14 @@ def read_file(path: str) -> bytes:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Validate a jop v2 package, build its relocation table, "
-                    "and write the .jop file.")
+        description="Validate an os8088 v2 package, build its relocation table, "
+                    "and write the .o88 file.")
     ap.add_argument("input", metavar="IN.bin",
                     help="flat binary assembled at the 0xA000 link base")
     ap.add_argument("--alt", metavar="ALT.bin", required=True,
                     help="the same source assembled at org 0xA800 "
-                         "(-DJOP_ORG=0xA800)")
-    ap.add_argument("-o", "--output", metavar="OUT.jop", required=True,
+                         "(-DOS88_ORG=0xA800)")
+    ap.add_argument("-o", "--output", metavar="OUT.o88", required=True,
                     help="package file to write on success")
     args = ap.parse_args()
 
@@ -89,10 +89,10 @@ def main() -> int:
     name = parse_name(a[16:32])
 
     if magic != MAGIC:
-        fail(f"bad magic 0x{magic:04X} (want 0x{MAGIC:04X} 'JP')")
+        fail(f"bad magic 0x{magic:04X} (want 0x{MAGIC:04X} 'O8')")
     if version != VERSION:
         fail(f"bad version {version} (want {VERSION}; rebuild against the "
-             "v2 jopapi.inc)")
+             "v2 os88api.inc)")
     if flags & 0xFE:
         fail(f"flags 0x{flags:02X} has reserved bits set (bits 1-7 must be 0)")
     if link != LINK_BASE:
@@ -107,8 +107,8 @@ def main() -> int:
         fail(f"image {image} + bss {bss} = {image + bss} exceeds "
              f"budget 0x{APP_MAX_SIZE:04X} ({APP_MAX_SIZE})")
     if rcount != 0:
-        fail("relocation-count field is non-zero; jopkg stamps it - "
-             "JOP_HEADER must emit 0")
+        fail("relocation-count field is non-zero; os88pkg stamps it - "
+             "OS88_HEADER must emit 0")
     if resv != 0:
         fail("reserved header word (offset 14) is non-zero")
     if flags & 1 and image < ICON_END:
@@ -123,7 +123,7 @@ def main() -> int:
     # --- 3. diff scan: every mismatch is the high byte of a fixup word --------
     # Class 0 (+0x800): an embedded package address, relocated with the
     # load base. Class 1 (-0x800): the rel16 displacement of a near
-    # call/jmp into the kernel (call JAPI_*): the site moves with the
+    # call/jmp into the kernel (call OSAPI_*): the site moves with the
     # base while the target stays put, so the load-time patch is the
     # negation. Encoded in the table entry's bit 15 (SPEC.md 20.2).
     hi = PROBE_DELTA >> 8
@@ -184,7 +184,7 @@ def main() -> int:
         fail(f"cannot write {args.output}: {e}")
 
     icon = "yes" if flags & 1 else "no"
-    print(f"jopkg: {name!r} entry=+0x{entry:04X} image={image} bss={bss} "
+    print(f"os88pkg: {name!r} entry=+0x{entry:04X} image={image} bss={bss} "
           f"relocs={len(fixups)} icon={icon} -> {args.output}")
     return 0
 

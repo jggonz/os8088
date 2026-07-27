@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - sched.inc
+; os8088 - sched.inc
 ;
 ; Round-robin scheduler off the PIT, in either of two modes (SPEC.md 8/8.2):
 ; pre-emptive (the boot default - every tick on which sch_lock is clear

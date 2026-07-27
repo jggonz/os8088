@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - vga12.inc
+; os8088 - vga12.inc
 ;
 ; VGA mode 12h (640x480x16, planar) primitives, region save/restore, and the
 ; global drawing mutex. Everything here programs the Graphics Controller

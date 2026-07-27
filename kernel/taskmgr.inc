@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - taskmgr.inc
+; os8088 - taskmgr.inc
 ;
 ; The Task Manager window (SPEC.md 28): a live CPU load gauge with an
 ; oscilloscope-sweep history graph, a RAM readout, and the process list with

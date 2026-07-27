@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - apps.inc
+; os8088 - apps.inc
 ;
 ; The built-in application KINDS (SPEC.md 14): About dialog, Note Pad, Clock
 ; and Bounce. Nothing is created at boot - instances are launched on demand
@@ -13,7 +13,7 @@
 ; caller (SPEC.md 11), find their instance state via inst_of_win + I_SPTR,
 ; and never lock, block or spawn; the Clock/Bounce tasks take the lock
 ; themselves and re-check visibility + wm_obscured under it before touching
-; the screen. Background tasks use only jop primitives and [ticks] - no
+; the screen. Background tasks use only os8088 primitives and [ticks] - no
 ; BIOS calls (SPEC.md 7).
 ; =============================================================================
 
@@ -44,12 +44,12 @@ app_tpl_note:   dw  60,  60, 260, 180, app_ttl_note,   app_note_paint,   app_not
 app_tpl_clock:  dw 350,  60, 130,  60, app_ttl_clock,  app_clock_paint,  0, 0
 app_tpl_bounce: dw 300, 150, 150, 130, app_ttl_bounce, app_bounce_paint, 0, 0
 
-app_ttl_about:  db 'About jop', 0
+app_ttl_about:  db 'About os8088', 0
 app_ttl_note:   db 'Note Pad', 0
 app_ttl_clock:  db 'Clock', 0
 app_ttl_bounce: db 'Bounce', 0
 
-app_about_s1:   db 'jop 1.0', 0
+app_about_s1:   db 'os8088 1.0', 0
 app_about_s2:   db 'a graphical OS for the 8086', 0
 ; third line, one whole string per scheduler mode (SPEC.md 8.2/14): both
 ; scheduling words are exactly 11 chars, so the line width - and therefore

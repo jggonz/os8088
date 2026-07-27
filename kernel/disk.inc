@@ -1,7 +1,7 @@
 ; =============================================================================
-; jop - disk.inc
+; os8088 - disk.inc
 ;
-; BIOS int 13h floppy reads and the jopfs v2 mount (SPEC.md 18-19): the
+; BIOS int 13h floppy reads and the os88fs v2 mount (SPEC.md 18-19): the
 ; superblock (LBA 0), the 32-entry directory (LBA 1-2) and the 32-entry
 ; icon table (LBA 3-6); file data starts at LBA 7. Only the
 ; UI task touches the disk. Task switching is paused around all int 13h
@@ -20,7 +20,7 @@ disk_spt:    dw 9                ; sectors per track  } fallback geometry,
 disk_heads:  dw 2                ; heads              } replaced at mount
 disk_nfiles: dw 0                ; file count, valid after a good mount
 
-dsk_magic:   db 'JOPFS2', 0, 0  ; superblock magic, 8 bytes (SPEC.md 19)
+dsk_magic:   db 'OS88FS2', 0     ; superblock magic, 8 bytes (SPEC.md 19)
 
 ; -----------------------------------------------------------------------------
 ; disk_read - read CX sectors starting at LBA AX to ES:BX
@@ -109,9 +109,9 @@ disk_read:
     ret
 
 ; -----------------------------------------------------------------------------
-; disk_mount - mount a jopfs v2 floppy: superblock + directory + icon table
+; disk_mount - mount an os88fs v2 floppy: superblock + directory + icon table
 ; in:  DL = drive (0 = A:, 1 = B:)
-; out: CF=1 if the disk is unreadable or not jopfs (then [disk_nfiles] = 0);
+; out: CF=1 if the disk is unreadable or not os88fs (then [disk_nfiles] = 0);
 ;      CF=0 on success with [disk_spt]/[disk_heads]/[disk_nfiles] loaded,
 ;      the 32 directory entries (LBA 1-2) in disk_dir and the 32 icon-table
 ;      entries (LBA 3-6) in disk_icons
@@ -145,7 +145,7 @@ disk_mount:
     call disk_read
     jc .fail
 
-    ; magic must be "JOPFS2" + two zero bytes
+    ; magic must be "OS88FS2" + one zero byte
     cld
     mov si, dsk_secbuf
     mov di, dsk_magic

@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - mouse.inc
+; os8088 - mouse.inc
 ;
 ; Serial Microsoft mouse on COM1 (0x3F8, IRQ4 -> int 0x0C) plus the arrow
 ; cursor with save-under. The ISR decodes the 3-byte Microsoft packet, keeps

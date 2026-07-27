@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""jopdisk: build a jopfs v2 data floppy image from .jop packages.
+"""os88disk: build an os88fs v2 data floppy image from .o88 packages.
 
-    python3 tools/jopdisk.py -o OUT.img --size {1440,360} [PKG.jop ...]
+    python3 tools/os88disk.py -o OUT.img --size {1440,360} [PKG.o88 ...]
 
-jopfs v2 layout (SPEC.md section 19): LBA 0 superblock ("JOPFS2\\0\\0",
+os88fs v2 layout (SPEC.md section 19): LBA 0 superblock ("OS88FS2\\0",
 geometry, file count), LBA 1-2 directory (32 entries x 32 bytes), LBA 3-6
 icon table (32 entries x 64 bytes: package bytes 32..95 when its flags
 bit 0 is set, else all zeros = "no icon"), file data from LBA 7, every
@@ -29,22 +29,22 @@ GEOMETRY = {          # size -> (sectors per track, heads, total sectors)
 
 
 def fail(msg: str) -> None:
-    print(f"jopdisk: error: {msg}", file=sys.stderr)
+    print(f"os88disk: error: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
 def read_package(path: str) -> tuple[bytes, bytes, bytes]:
-    """Read one .jop file; return (name16, icon64, data)."""
+    """Read one .o88 file; return (name16, icon64, data)."""
     try:
         with open(path, "rb") as f:
             data = f.read()
     except OSError as e:
         fail(f"cannot read {path}: {e}")
     if len(data) < 32:
-        fail(f"{path}: too short for a jop header ({len(data)} bytes)")
+        fail(f"{path}: too short for an os8088 header ({len(data)} bytes)")
     magic, = struct.unpack_from("<H", data, 0)
-    if magic != 0x504A:
-        fail(f"{path}: bad magic 0x{magic:04X} (not a .jop package)")
+    if magic != 0x384F:
+        fail(f"{path}: bad magic 0x{magic:04X} (not a .o88 package)")
     if data[2] != 2:
         fail(f"{path}: format version {data[2]}; this is the v2 toolchain "
              "(rebuild the package)")
@@ -56,7 +56,7 @@ def read_package(path: str) -> tuple[bytes, bytes, bytes]:
         fail(f"{path}: header image size {image} out of range")
     if image + 2 * rcount != len(data):
         fail(f"{path}: image {image} + {rcount} reloc words != file size "
-             f"{len(data)} (run jopkg.py first)")
+             f"{len(data)} (run os88pkg.py first)")
     name16 = data[16:32]
     if not name16.split(b"\0", 1)[0]:
         fail(f"{path}: empty name field in header")
@@ -64,7 +64,7 @@ def read_package(path: str) -> tuple[bytes, bytes, bytes]:
     if flags & 1:                     # embedded icon (SPEC.md 20.2)
         if len(data) < 96:
             fail(f"{path}: flags bit 0 set but no icon block "
-                 "(run jopkg.py first)")
+                 "(run os88pkg.py first)")
         icon64 = data[32:96]
     else:
         icon64 = bytes(64)            # all-zero = "no icon"
@@ -73,21 +73,21 @@ def read_package(path: str) -> tuple[bytes, bytes, bytes]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Build a jopfs data floppy from .jop packages.")
+        description="Build an os88fs data floppy from .o88 packages.")
     ap.add_argument("-o", "--output", metavar="OUT.img", required=True,
                     help="floppy image to write")
     ap.add_argument("--size", type=int, choices=(1440, 360), required=True,
                     help="disk size in KB: 1440 (18 spt) or 360 (9 spt)")
-    ap.add_argument("packages", metavar="PKG.jop", nargs="*",
+    ap.add_argument("packages", metavar="PKG.o88", nargs="*",
                     help="package files, in directory order (none = empty disk)")
     args = ap.parse_args()
 
     spt, heads, total_sectors = GEOMETRY[args.size]
     if len(args.packages) > MAX_FILES:
-        fail(f"{len(args.packages)} files; jopfs holds at most {MAX_FILES}")
+        fail(f"{len(args.packages)} files; os88fs holds at most {MAX_FILES}")
 
     # Superblock (LBA 0).
-    sb = struct.pack("<8sHHH", b"JOPFS2\0\0", spt, heads, len(args.packages))
+    sb = struct.pack("<8sHHH", b"OS88FS2\0", spt, heads, len(args.packages))
     image = bytearray(sb.ljust(SECTOR, b"\0"))
 
     # Directory (LBA 1-2) + icon table (LBA 3-6) + data (LBA 7 onward,
@@ -119,7 +119,7 @@ def main() -> int:
         fail(f"cannot write {args.output}: {e}")
 
     span = f"data LBA {DATA_LBA}..{lba - 1}" if args.packages else "no data"
-    print(f"jopdisk: {args.output} ({args.size}KB, {spt} spt) "
+    print(f"os88disk: {args.output} ({args.size}KB, {spt} spt) "
           f"{len(args.packages)} file(s), {span}")
     return 0
 
