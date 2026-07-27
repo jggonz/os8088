@@ -191,6 +191,7 @@ japi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "desk.inc"
 %include "dock.inc"
 %include "taskmgr.inc"
+%include "ctrl.inc"
 
 ; =============================================================================
 ; Size guard: image + bss must stay below APP_LOAD_OFF (0xA000) - everything

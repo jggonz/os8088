@@ -3,8 +3,9 @@
 ;
 ; The UI task (SPEC.md 13): task 0's forever-loop. Each pass polls the BIOS
 ; keyboard, drains one event from the system queue, runs any deferred
-; instance launch and any pending package load (both outside the gfx lock -
-; app_launch and loader_run manage their own locking), and yields.
+; instance launch, any pending package load and any posted full repaint (all
+; outside the gfx lock - app_launch and loader_run manage their own locking),
+; and yields.
 ; Mouse-downs in the menu bar run menu_track and dispatch the returned
 ; CMD_*: app commands launch a new instance (or front a full singleton) via
 ; app_launch (SPEC.md 29). Mouse-downs on windows QUIT (close box ->
@@ -165,11 +166,18 @@ ui_task:
     call app_launch             ; in: AL = kind; does its own locking
 .chk_ld:
     cmp word [ld_pending], 0    ; set by files.inc's click handler
-    je .idle
+    je .chk_cp
     mov ax, [ld_pending]        ; stored as directory index + 1
     dec ax
     mov word [ld_pending], 0    ; consume before running, not after
     call loader_run             ; in: AX = index; does its own locking
+.chk_cp:
+    cmp byte [cp_dirty], 0      ; scheduler mode changed in the Control
+    je .idle                    ; Panel (SPEC.md 31.2): windows that quote
+    mov byte [cp_dirty], 0      ; the mode - the About box's third line -
+    call gfx_lock               ; are already painted, so repaint them here,
+    call wm_paint_all           ; outside cp_onclick's held lock
+    call gfx_unlock
 
     ; --- 4. give everyone else a slice ----------------------------------------
 .idle:
@@ -315,6 +323,8 @@ ui_dispatch:
     jz .done
     cmp ax, CMD_ABOUT
     je .about
+    cmp ax, CMD_CTRL
+    je .ctrl
     cmp ax, CMD_NOTE
     je .note
     cmp ax, CMD_CLOCK
@@ -334,6 +344,9 @@ ui_dispatch:
 
 .about:
     mov al, KIND_ABOUT
+    jmp .launch
+.ctrl:
+    mov al, KIND_CTRL
     jmp .launch
 .note:
     mov al, KIND_NOTE

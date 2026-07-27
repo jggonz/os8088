@@ -2,11 +2,13 @@
 
 A Macintosh System 1-style graphical operating system for the Intel 8086,
 written in real-mode assembly and booted from a floppy. 640x480, 16 colors,
-overlapping draggable windows, pull-down menus — and pre-emptive
-multitasking, which the real 1984 Macintosh never had.
+overlapping draggable windows, pull-down menus, closable multi-instance
+apps, a dock — and pre-emptive multitasking, which the real 1984 Macintosh
+never had (switchable to cooperative from the Control Panel, if you want to
+feel what they were up against).
 
 ```
-make        # build both floppy images
+make        # build all four floppy images
 make run    # boot it in QEMU (with an emulated serial mouse)
 make xt     # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make test   # boot headless with a QMP socket for scripted testing
@@ -14,22 +16,35 @@ make debug  # boot with QEMU halted, waiting for gdb on :1234
 make clean
 ```
 
-![what it looks like: gray dithered desktop, menu bar, Note Pad, Clock and
-Bounce windows](docs/screenshot.png)
+![what it looks like: gray dithered desktop, menu bar, drive icons, Note Pad,
+Clock, Bounce, Control Panel and Task Manager windows, and the dock
+strip](docs/screenshot.png)
 
 ## What it does
 
-Boots straight into the GUI: a 50%-dither gray desktop, a menu bar
-(Apple, File, Special), and three windows already open. All of classic Mac's
-core interactions work:
+Boots straight into the GUI, and boots *clean*: a 50%-dither gray desktop, a
+menu bar (Apple, File, Special), an icon per floppy drive, an empty dock
+strip along the bottom — and nothing running. Everything is launched from
+the menus. All of classic Mac's core interactions work:
 
-- **Windows** — title bars with pinstripes and a close box on the frontmost,
-  1px drop shadows, drag by title bar (XOR outline, Mac-style), click to
-  raise, close box to hide, reopen from the File menu.
+- **Windows** — title bars with pinstripes, a close box and a minimize box on
+  the frontmost, 1px drop shadows, drag by title bar (XOR outline, Mac-style),
+  click to raise. The close box *quits* the app; the minimize box sends it to
+  the dock.
+- **Apps as instances** — every running thing, built-in or loaded from disk,
+  is a record in one instance table (12 slots). Launching from the menu opens
+  a *new* instance up to that app's cap — two Note Pads, ten Clocks — and at
+  the cap it fronts the one already open instead. Closing frees the slot, the
+  task and the memory.
+- **Dock** — the bottom strip carries one tile per live instance. Click a
+  tile to bring that window up; minimized instances show inverted until you
+  restore them.
 - **Menus** — press in the bar, drag through pull-downs with live highlight,
-  release to choose. Apple → About jop; File → Note Pad / Clock / Bounce /
-  Disk / Close Window; Special → Task Manager / Restart.
-- **Note Pad** — click it, type; wraps lines, Backspace and Return work.
+  release to choose. Apple → About jop / Control Panel / Task Manager;
+  File → Note Pad / Clock / Bounce / Disk / Close Window;
+  Special → Restart.
+- **Note Pad** — File → Note Pad, then type; wraps lines, Backspace and
+  Return work. Two can be open at once, each with its own buffer.
 - **Disk icons** — the desktop shows an icon per floppy drive the BIOS
   reports (int 11h). Click to select, double-click to open that drive in
   the Disk window, freshly mounted.
@@ -47,27 +62,40 @@ core interactions work:
   minesweeper that ships on `build/apps.img`, loaded through the Disk
   window. Blue 1s, green 2s, red flags, first-click-safe mine placement,
   flood fill; `F` toggles flag mode, `N` starts a new game.
-- **Clock** and **Bounce** — each runs as its *own pre-empted task*. The
-  clock ticks and the ball bounces while you type or hold a drag: that is
-  the PIT timer interrupt switching tasks out from under each other, on an
-  8086. When another window covers them they stop drawing (and the clock
-  keeps time silently); uncover them and they resume.
+- **Clock** and **Bounce** — each instance runs as its *own pre-empted task*,
+  up to ten of each. The clocks tick and the balls bounce while you type or
+  hold a drag: that is the PIT timer interrupt switching tasks out from under
+  each other, on an 8086. When another window covers them they stop drawing
+  (and the clocks keep time silently); uncover them and they resume.
+- **Task Manager** — Apple → Task Manager: a live CPU load gauge with a
+  scrolling history graph, a RAM readout with a usage bar, and one row per
+  instance with its state, CPU share and memory. Task-less apps only ever run
+  inside their window callbacks, so those callbacks are timed at the dispatch
+  site and billed to the instance — the rows still add up to one total.
+- **Control Panel** — Apple → Control Panel: a two-pane browser, the item
+  list on the left and the selected item's settings on the right. It opens
+  on **Scheduler**, a two-way toggle between **Pre-emptive** (the boot
+  default) and **Cooperative**. Flipping it takes effect on the very next
+  timer tick — the About box's third line and the Task Manager's SCH field
+  follow — and cooperative mode still can't hang the machine: the timer keeps
+  a watchdog on the running task and forces a switch if one holds the CPU for
+  a second without yielding.
 
 ## How
 
 | piece         | how it works on an XT                                       |
 |---------------|--------------------------------------------------------------|
 | graphics      | VGA mode 12h, 640x480x16 planar, drawn directly (no double buffer — a 150KB backbuffer wouldn't fit in 256KB of RAM; the real Mac drew directly too). Set/Reset + Bit Mask fills, XOR for drag outlines and menu highlights. |
-| multitasking  | pre-emptive round-robin: int 08h (PIT, 18.2Hz) chains to the BIOS tick, then saves the register frame on the task stack, swaps SP, and irets into the next ready task. 4 task slots, 1536-byte stacks. |
+| multitasking  | round-robin off int 08h (PIT, 18.2Hz): chain to the BIOS tick, then save the register frame on the task stack, swap SP, and iret into the next ready task. 12 task slots, 1536-byte stacks. Pre-emptive by default; in cooperative mode the tick declines to switch and a task runs until it yields, sleeps or exits — with a ~1s watchdog so a runaway one can't take the machine with it. |
 | mouse         | Microsoft serial mouse on COM1, IRQ4, 1200 baud 7N1, 3-byte packets — the period-correct XT mouse. QEMU emulates one natively (`-chardev msmouse`). |
 | cursor        | arrow with save-under, drawn by the mouse ISR itself when it's safe, deferred to the next unlock when a task holds the drawing lock. |
 | keyboard      | BIOS int 16h, polled by the UI task. |
 | font          | the VGA ROM's own 8x8 font, copied out via int 10h AX=1130h at boot. |
 | floppy        | BIOS int 13h, one sector per call with retries; task switching pauses during a read (the tick still runs — the floppy motor needs it). |
-| software      | `.jop` packages on a jopfs data floppy in B:. A package is a flat binary loaded at 1000:A000 — inside the kernel segment, so its window procs are ordinary near pointers — calling the kernel through a fixed jump table at 1000:0010. |
+| software      | `.jop` packages on a jopfs data floppy in B:. A package is a flat binary loaded into a first-fit region of 1000:A000..1000:EFFF — inside the kernel segment, so its window procs are ordinary near pointers — calling the kernel through a fixed jump table at 1000:0010. It ships with a relocation table, so several packages, or several copies of one, run at once. |
 | concurrency   | one drawing mutex (`gfx_lock`); background tasks re-check visibility *under* the lock; ISRs run IF=0 throughout and never draw over a held lock. SPEC.md is the binding contract. |
 
-The kernel is ~6KB. Everything runs in the tiny model — CS = DS = SS =
+The kernel is ~14KB. Everything runs in the tiny model — CS = DS = SS =
 0x1000, all near calls, no linker: NASM `-f bin` flat binaries only, which
 keeps Apple's Mach-O-only toolchain out of the picture.
 
@@ -83,11 +111,13 @@ on a slower bus.
 | `0x00500` | —       | free; boot stack grows down from `0x7C00`          |
 | `0x07C00` | `0000`  | boot sector, where the BIOS puts us                |
 | `0x10000` | `1000`  | kernel: code, data, .bss (task stacks, buffers)    |
+| `0x1A000` | `1000`  | loaded-program pool, offsets `0xA000`..`0xEFFF`    |
 | `0x20000` | `2000`  | menu save-under heap                               |
 | `0xA0000` | `A000`  | VGA planar framebuffer, 80 bytes per row           |
 
-Fits and runs in 256KB of RAM; a build-time assertion fails the build if
-image + bss ever pass offset 0xF000.
+Fits and runs in 256KB of RAM; a build-time assertion fails the build if the
+kernel image + bss ever reach offset 0xA000, where the loaded-program pool
+starts.
 
 ## Layout
 
@@ -99,17 +129,22 @@ kernel/kernel.asm    constants, boot sequence, includes, size assertion
 kernel/vga12.inc     mode 12h planar primitives, save/restore, gfx lock
 kernel/font.inc      ROM font grab + transparent text drawing
 kernel/mouse.inc     COM1 UART, IRQ4 ISR, packet decode, cursor
-kernel/sched.inc     PIT hook, context switch, spawn/yield/sleep
+kernel/sched.inc     PIT hook, context switch, spawn/yield/sleep,
+                     pre-emptive/cooperative mode + watchdog
 kernel/events.inc    ISR-safe event ring queue
 kernel/wm.inc        window records, z-order, frames, hit test, painter
+kernel/instance.inc  the instance table: app kinds, launch, close, billing
 kernel/menu.inc      menu bar, pull-down tracking
 kernel/ui.inc        UI task: event pump, keyboard, drags, dispatch
 kernel/apps.inc      About, Note Pad, Clock task, Bounce task
 kernel/disk.inc      int 13h floppy reads, jopfs mount + directory
-kernel/loader.inc    .jop package validation, load, launch, replace
+kernel/loader.inc    .jop package validation, region alloc, relocate, launch
 kernel/files.inc     the Disk window (file manager)
 kernel/icons.inc     1-bit icon format, draw routine, built-in library
 kernel/desk.inc      desktop drive icons: detect, paint, click to open
+kernel/dock.inc      the bottom dock strip: one tile per live instance
+kernel/taskmgr.inc   the Task Manager window: CPU, RAM, instance list
+kernel/ctrl.inc      the Control Panel window: item list + settings pages
 apps/jopapi.inc      the package SDK: API offsets, header + icon macros
 apps/mines/          Minesweeper, the first software package
 apps/hello/          HELLO, a minimal second package (no icon)
@@ -126,22 +161,27 @@ read-only filesystem, **jopfs**: a superblock that names the disk
 geometry, a 32-entry directory, sector-aligned file data. The build:
 
 ```
-apps/mines/mines.asm --nasm--> build/mines.bin      flat binary, org 0xA000,
-                                                    32-byte .jop header baked in
-build/mines.bin --tools/jopkg.py--> build/mines.jop validated package
-build/*.jop --tools/jopdisk.py--> build/apps.img    jopfs floppy (and apps360.img)
+apps/mines/mines.asm --nasm x2--> build/mines.bin      org 0xA000, header baked in
+                                  build/mines.alt.bin  the same source at org 0xA800
+build/mines.bin + .alt --jopkg.py--> build/mines.jop   package + relocation table
+build/*.jop --tools/jopdisk.py--> build/apps.img       jopfs floppy (and apps360.img)
 ```
 
 A package is written against `apps/jopapi.inc`: `JOP_HEADER 'NAME', entry`
 emits the header, `JAPI_*` constants name the kernel's jump-table entries
 (gfx primitives, fonts, windows, ticks, a PRNG), and `JOP_IMAGE_END`
-seals the image with its size and loader-zeroed bss. At load time the
-kernel validates the header, reads the file into 1000:A000, zeroes bss,
-and calls the entry, which registers a window and returns; from then on
-the program is event-driven — its paint/key/click procs are called like
-any built-in window's. Loading another package replaces the resident one.
+seals the image with its size and loader-zeroed bss.
 
-## Two images
+Packages are **relocatable**, which is what lets several run at once. Each is
+assembled twice, at two different link bases; `jopkg.py` diffs the two
+binaries to recover exactly which words are addresses, and ships that as a
+relocation table. At load time the kernel picks a free region out of the
+`0xA000..0xEFFF` pool, reads the file in, walks the table adding the load
+delta, zeroes bss, and calls the entry, which registers a window and returns;
+from then on the program is event-driven — its paint/key/click procs are
+called like any built-in window's. Closing a package frees its region.
+
+## Two geometries of everything
 
 | image                | geometry                | for                             |
 |----------------------|-------------------------|---------------------------------|
@@ -172,7 +212,10 @@ you can watch.
 `make test` boots headless with a QMP socket at `build/qmp.sock`:
 
 ```
-python3 tools/mouse.py build/qmp.sock click 180 150     # click Note Pad
+python3 tools/mouse.py build/qmp.sock to 42 8           # File in the menu bar
+python3 tools/mouse.py build/qmp.sock down              # menus need press...
+python3 tools/mouse.py build/qmp.sock to 60 27          # ...drag to Note Pad...
+python3 tools/mouse.py build/qmp.sock up                # ...release to choose
 python3 tools/qmp.py build/qmp.sock 'sendkey h' 'sendkey i'
 python3 tools/qmp.py build/qmp.sock 'screendump /abs/path/shot.ppm'
 python3 tools/qmp.py build/qmp.sock 'quit'
@@ -180,4 +223,5 @@ python3 tools/qmp.py build/qmp.sock 'quit'
 
 (QEMU's msmouse backend truncates large injected deltas, so `tools/mouse.py`
 splits every move into ≤60px chunks and derives absolute positions by
-pinning against the kernel's edge clamp first.)
+pinning against the kernel's edge clamp first. Boot is clean, so anything you
+want to click has to be launched from a menu first.)
