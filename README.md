@@ -225,3 +225,12 @@ python3 tools/qmp.py build/qmp.sock 'quit'
 splits every move into ≤60px chunks and derives absolute positions by
 pinning against the kernel's edge clamp first. Boot is clean, so anything you
 want to click has to be launched from a menu first.)
+
+## License
+
+MIT -- see [LICENSE](LICENSE). Everything here is hand-written; no third-party
+code is vendored into the OS, so the whole tree is covered by that one license.
+
+The website in the sibling `os8088-web` repository is a separate matter: it
+vendors the v86 emulator (BSD-2-Clause), SeaBIOS and SeaVGABIOS binaries
+(LGPLv3) and a bitmap font (CC BY-SA 4.0), each shipped with its own license.
