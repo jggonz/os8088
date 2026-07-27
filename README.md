@@ -226,6 +226,26 @@ splits every move into ≤60px chunks and derives absolute positions by
 pinning against the kernel's edge clamp first. Boot is clean, so anything you
 want to click has to be launched from a menu first.)
 
+## Secret scanning
+
+There are no credentials anywhere in this repo or its history, and a tracked
+pre-commit hook is there to keep it that way: `.githooks/pre-commit` runs
+[gitleaks](https://github.com/gitleaks/gitleaks) over the staged diff and
+refuses the commit if anything credential-shaped shows up.
+
+Git does not enable tracked hooks on its own, so each clone needs a one-time:
+
+```
+brew install gitleaks
+git config core.hooksPath .githooks
+```
+
+Without gitleaks on PATH the hook warns loudly and lets the commit through,
+rather than making commits impossible on a machine that lacks the tool. To
+bypass it deliberately -- a test fixture that is *meant* to look like a key --
+use `SKIP_GITLEAKS=1 git commit` or `git commit --no-verify`. If a real secret
+ever does land, rotate it; deleting the line does not un-leak it.
+
 ## License
 
 MIT -- see [LICENSE](LICENSE). Everything here is hand-written; no third-party
