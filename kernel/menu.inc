@@ -12,14 +12,18 @@
 ; =============================================================================
 
 ; --- commands returned by menu_track (owned here, dispatched by ui.inc) ------
-CMD_ABOUT   equ 1
-CMD_NOTE    equ 2
-CMD_CLOCK   equ 3
-CMD_BOUNCE  equ 4
-CMD_FILES   equ 5
-CMD_CLOSE   equ 6
-CMD_TASKS   equ 7
-CMD_REBOOT  equ 8
+; cmd = menu base + item index, so each menu's commands must stay
+; consecutive from its base (SPEC.md 12) - moving Task Manager into the
+; System menu is what renumbered CMD_NOTE..CMD_CLOSE up by one.
+CMD_ABOUT   equ 1               ; --- System ---
+CMD_CTRL    equ 2
+CMD_TASKS   equ 3
+CMD_NOTE    equ 4               ; --- File ---
+CMD_CLOCK   equ 5
+CMD_BOUNCE  equ 6
+CMD_FILES   equ 7
+CMD_CLOSE   equ 8
+CMD_REBOOT  equ 9               ; --- Special ---
 
 ; --- menu table entry layout --------------------------------------------------
 MENU_TITLE  equ 0               ; word: near ptr to NUL title, 0 = logo glyph
@@ -415,6 +419,7 @@ menu_s_file     db 'File', 0
 menu_s_special  db 'Special', 0
 
 menu_s_about    db 'About os8088...', 0
+menu_s_ctrl     db 'Control Panel', 0
 menu_s_note     db 'Note Pad', 0
 menu_s_clock    db 'Clock', 0
 menu_s_bounce   db 'Bounce', 0
@@ -425,6 +430,8 @@ menu_s_restart  db 'Restart', 0
 
 menu_items_logo:
     dw menu_s_about
+    dw menu_s_ctrl
+    dw menu_s_tasks
 menu_items_file:
     dw menu_s_note
     dw menu_s_clock
@@ -432,16 +439,15 @@ menu_items_file:
     dw menu_s_disk
     dw menu_s_close
 menu_items_special:
-    dw menu_s_tasks
     dw menu_s_restart
 
 ; per menu: title (0 = logo glyph), items, count, cmd base,
 ;           bar hit range [xl..xr], title x. The hit ranges tile the bar's
 ;           left edge with 12px padding zones around each title.
 menu_table:
-    dw 0,              menu_items_logo,    1, CMD_ABOUT,  0,   29,  10
+    dw 0,              menu_items_logo,    3, CMD_ABOUT,  0,   29,  10
     dw menu_s_file,    menu_items_file,    5, CMD_NOTE,   30,  85,  42
-    dw menu_s_special, menu_items_special, 2, CMD_TASKS,  86, 165,  98
+    dw menu_s_special, menu_items_special, 1, CMD_REBOOT, 86, 165,  98
 
 ; -----------------------------------------------------------------------------
 section .bss

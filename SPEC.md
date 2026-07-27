@@ -8,7 +8,8 @@ exactly what is written; put questions in your report, not in the code.
 
 A Macintosh System 1-style graphical OS for an 8086/8088 XT-class machine with
 an ISA VGA card. 640x480, 16 colors (VGA mode 12h). Pre-emptive multitasking
-via the PIT timer interrupt. Serial Microsoft mouse on COM1. Boots from floppy
+via the PIT timer interrupt, switchable at run time to cooperative from the
+Control Panel (§8.2/§31). Serial Microsoft mouse on COM1. Boots from floppy
 straight into the GUI: gray dithered desktop, menu bar with pull-down menus,
 draggable overlapping windows with title bars and close boxes. Built-in apps:
 About dialog, Note Pad (typing), Clock and Bounce (each running as its own
@@ -44,8 +45,8 @@ pre-empted background task, updating live while the user types or drags).
 5. **Label hygiene.** One flat namespace. Prefix every module-internal label
    with the module's prefix (`vga_`, `font_`, `mou_`, `cur_`, `sch_`, `evq_`,
    `wm_`, `menu_`, `ui_`, `app_`, `inst_`, `dsk_`/`disk_`, `ld_`/`loader_`,
-   `fm_`/`files_`, `ico_`/`icon_`, `desk_`, `dock_`) or use NASM local
-   labels (`.foo`).
+   `fm_`/`files_`, `ico_`/`icon_`, `desk_`, `dock_`, `tm_`, `cp_`) or use
+   NASM local labels (`.foo`).
 6. Public drawing routines may assume the caller holds the **gfx lock**
    (§7) and that the cursor is hidden. They must not take the lock
    themselves.
@@ -114,6 +115,7 @@ APP_MAX_SIZE equ 0x5000      ; image + bss budget, 0xA000..0xEFFF
 | `kernel/desk.inc`   | desktop drive icons: detect, paint, click/open (§26)    |
 | `kernel/dock.inc`   | bottom dock strip: one tile per running instance, minimize/restore/activate (§30) |
 | `kernel/taskmgr.inc`| Task Manager window: CPU load gauge + history graph, RAM readout, per-instance process list with CPU + memory (§28) |
+| `kernel/ctrl.inc`   | Control Panel window: two-pane item list + settings pages (§31), prefix `cp_` |
 
 `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` remain in the
 tree but are **no longer included**; the GUI replaces the text shell.
@@ -197,8 +199,17 @@ window.
   ticks but does not switch. Used only inside scheduler internals — normal
   code uses gfx_lock, which does NOT stop pre-emption (background tasks keep
   running during drags; they just block on gfx_lock when they try to draw).
+- **Scheduler mode**: multitasking is round-robin in both of the two modes
+  of §8.2 — **pre-emptive** (the boot default: every unlocked tick
+  switches) and **cooperative** (a task runs until it reaches the switch
+  path itself, with a `SCH_WD_TICKS` watchdog as the backstop). The mode is
+  one byte, `sch_coop`, flipped from the Control Panel (§31) at any time
+  from any task; nothing else in the tree may read it to decide behavior.
+  Every rule in this section holds unchanged in both modes: the locks, the
+  cursor/ISR protocol and the BIOS restriction are about who may touch
+  what, not about when the CPU is taken away.
 
-## 8. sched.inc — pre-emptive round-robin
+## 8. sched.inc — round-robin, pre-emptive or cooperative (§8.2)
 
 - `MAX_TASKS equ 12`. Task 0 is the boot thread (becomes the UI task); it
   runs on the boot stack (SS:0xFFFE) and owns **no** slice of `sch_stacks`.
@@ -214,12 +225,16 @@ window.
 - Timer: hook int 08h. Handler: push registers + DS/ES, load DS=KERNEL_SEG,
   chain to the saved BIOS vector first (`pushf` + far call), then
   `inc word [ticks]`, wake sleepers whose `T_WAKE` has passed, and if
-  `sch_lock` is clear, switch: with all GP regs + ES + DS on the current
-  stack, store SP in the task record, pick the next ready task round-robin,
-  load its SP, pop, `iret`. (The BIOS handler already sent EOI; do not send
-  another.)
+  `sch_lock` is clear **and the mode check of §8.2 allows it**, switch: with
+  all GP regs + ES + DS on the current stack, store SP in the task record,
+  pick the next ready task round-robin, load its SP, pop, `iret`. (The BIOS
+  handler already sent EOI; do not send another.)
 - `sched_init` — set up task 0 as current/ready, save old int 08h vector,
-  install handler.
+  install handler. Also explicitly stores 0 to `sch_lock`, `ticks` and the
+  three mode fields of §8.2 — nothing clears .bss at boot (`-f bin` puts no
+  bytes on disk and the boot sector does not blank the region), so every
+  .bss byte that needs a defined initial value is stored explicitly by its
+  module's init routine.
 - `task_spawn` — in: AX = entry point (near), DX = argument word — delivered
   in the new task's DX register; DL is additionally stored to `T_INST`
   (instance index, 0xFF = none). Builds a fresh stack frame that `iret`s
@@ -326,6 +341,117 @@ window.
   that task is on the CPU, so the difference is real CPU time and not
   wall-clock across a pre-emption. `inst_charge` (§29.4) is the only
   caller; it bills window callbacks to `I_CYC`.
+
+### 8.2 Scheduler modes — pre-emptive and cooperative
+
+Two modes, selected at run time from the Control Panel (§31), both
+round-robin over the same task table:
+
+- **Pre-emptive** (boot default, and the only behavior before this
+  section existed): every tick on which `sch_lock` is clear switches.
+- **Cooperative**: the timer ISR normally declines to switch, so the
+  running task keeps the CPU until it reaches the switch path itself —
+  `task_yield`, `task_sleep` or `task_exit`. It is *cooperative with a
+  watchdog*: a task that has held the CPU for `SCH_WD_TICKS` ticks without
+  ever reaching that path is switched away anyway, and the forced switch is
+  counted. The watchdog is an internal safety net, **never a user-visible
+  concept**: the only names for the two modes in any string the user can
+  see are exactly "Pre-emptive" and "Cooperative" (§31).
+
+```nasm
+SCH_WD_TICKS equ 18       ; ~1s at 18.2065 Hz: forced switch after this many
+                          ; held ticks in cooperative mode
+
+; .bss (sched_init stores 0 to all three — nothing clears .bss at boot, §8)
+sch_coop     resb 1       ; 0 = pre-emptive, 1 = cooperative
+sch_hold     resb 1       ; ticks the running task has held the CPU since the
+                          ; last entry to sch_switch
+sch_wd_hits  resw 1       ; diagnostic count of watchdog-forced switches;
+                          ; wraps mod 65536, never reset after init, read
+                          ; only by a debugger (QMP `xp` on segment 0x1000)
+```
+
+**sch_isr decision order (binding).** The mode check is the *last* thing in
+the ISR, and the order of everything ahead of it is load-bearing:
+`inc word [ticks]` → `sch_account` (§8.1) → the sleeper-wake scan →
+`sch_lock` → the mode check. So cycle accounting and `task_sleep` deadlines
+keep working on **every** tick in **both** modes (a cooperative task that
+never yields still lets sleepers become ready — they just do not run until
+it yields or the watchdog fires), and because `sch_lock` is tested first, a
+floppy read (§18 holds `sch_lock` across int 13h) accumulates no hold ticks
+and can never trip the watchdog. The tail of the ISR is exactly:
+
+```nasm
+    cmp byte [sch_lock], 0      ; locked: count ticks but do not switch
+    jne sch_resume
+    cmp byte [sch_coop], 0
+    je .sw                      ; pre-emptive: switch every tick
+    inc byte [sch_hold]         ; cooperative: only the watchdog switches
+    cmp byte [sch_hold], SCH_WD_TICKS
+    jb sch_resume
+    inc word [sch_wd_hits]
+.sw:
+    ; fall through into sch_switch
+```
+
+The `sch_isr` → `sch_switch` → `sch_resume` fall-through run stays intact:
+no routine may be inserted anywhere inside it (§8 `task_exit`).
+
+**`sch_hold` is reset on every entry to `sch_switch`** (`mov byte
+[sch_hold], 0`, at the top of the routine). `sch_switch` is entered three
+ways — fall-through from `sch_isr`, the explicit `jmp` from `task_yield`'s
+save path, and the explicit `jmp` from `task_exit` — and all three reset
+it, because the counter's meaning is *ticks since the running task last
+reached the switch path*, not ticks since the last successful task change.
+Consequences that are relied upon: a task that yields voluntarily can never
+trip the watchdog no matter how long it runs in total; the
+"nothing ready, resume the outgoing task" fallback inside `sch_switch`
+clears the counter too, so an idle single-task system does not manufacture
+watchdog hits; and a task that dies clears it for its successor.
+
+| symbol | contract |
+|--------|----------|
+| `sched_mode_set` | in AL = 0 pre-emptive, any non-zero = cooperative. Out: nothing; **preserves every register**, clobbers flags only. Under `pushf`/`cli` … `popf`: normalize AL to 0/1 into `[sch_coop]` and store 0 to `[sch_hold]` (the incoming mode starts with a full budget). Callable from any task at any time. |
+| `sched_mode_get` | out AL = `[sch_coop]` (0 or 1); preserves every other register, clobbers flags only. Readers that only display the mode (§14 About, §28 Task Manager, §31) call this — nobody reads `sch_coop` directly. |
+
+**PLACEMENT (safety-critical).** Both routines must sit **outside** the
+`sch_isr` → `sch_switch` → `sch_resume` fall-through run — put them right
+after `task_debit` and before `sch_isr`. A routine dropped between `sch_isr`
+and `sch_switch` sends every unlocked tick through its `ret` with no return
+address on the stack: an instant boot-killer. `task_exit`'s explicit `jmp`
+into `sch_switch` is the only sanctioned way to reach the run from outside.
+
+**Why flipping the mode needs no rendezvous.** The two modes share the task
+table, the per-task stacks and the 24-byte saved-frame layout exactly; a
+mode change adds no state, removes no state and invalidates no saved frame.
+The whole switch is one atomic byte store (§29.2's publish-last precedent:
+a byte store cannot be torn by an interrupt on the 8086), so the worst case
+is that the tick which races the store uses the old mode — one tick's
+scheduling decision, self-correcting. No task has to be parked, drained or
+notified, which is why `cp_onclick` (§31) may call `sched_mode_set` from
+inside a window callback while it holds the gfx lock.
+
+**Why `sch_lock` is deliberately NOT reused for this.** `sch_lock` would
+look like a ready-made "don't switch" flag, but `task_yield` checks it too
+and self-resumes when it is set (§8), so raising `sch_lock` does not make
+multitasking cooperative — it stops multitasking altogether, freezing every
+Clock and Bounce instance forever, since their `task_sleep` would never
+hand the CPU to anyone else. Cooperative mode must leave the *voluntary*
+path fully working and suppress only the *involuntary* one, which is
+exactly why the mode is a separate byte tested after `sch_lock`.
+
+**Liveness (why cooperative mode is safe for the built-ins).** Every wait
+loop in the tree already yields: `ui_task`'s idle pass (§13 step 4),
+`ui_drag`'s track loop and its linger loop (§13), `menu_track`'s poll loop
+(§12), the `gfx_lock` spin (§7), `tm_task`'s measurement spin (§28), and
+Clock/Bounce through `task_sleep` (§14). No built-in path depends on being
+pre-empted. The watchdog exists for **loaded packages** (§20–21): they are
+task-less, run inside the UI task's `W_PAINT`/`W_ONKEY`/`W_ONCLICK`
+dispatch (§11), are under no obligation to yield, and cannot be escaped
+from by keyboard — keys are polled with int 16h from the UI task (§13 step
+1) and there is no keyboard ISR. A runaway package would hard-hang the
+machine in a switch-free cooperative mode; with the watchdog it merely
+makes the machine slow, and the Task Manager keeps updating.
 
 ## 9. mouse.inc — serial Microsoft mouse + cursor
 
@@ -474,22 +600,36 @@ data is hand-made). Others are text titles.
 ; menu table (menu.inc data):
 ; per menu: { titleptr (0 = logo glyph), itemsptr, item count, cmd base }
 ; items: array of near ptrs to NUL strings
-CMD_ABOUT  equ 1
-CMD_NOTE   equ 2
-CMD_CLOCK  equ 3
-CMD_BOUNCE equ 4
-CMD_FILES  equ 5
-CMD_CLOSE  equ 6
-CMD_TASKS  equ 7
-CMD_REBOOT equ 8
+CMD_ABOUT  equ 1   ; --- System ---
+CMD_CTRL   equ 2
+CMD_TASKS  equ 3
+CMD_NOTE   equ 4   ; --- File ---
+CMD_CLOCK  equ 5
+CMD_BOUNCE equ 6
+CMD_FILES  equ 7
+CMD_CLOSE  equ 8
+CMD_REBOOT equ 9   ; --- Special ---
 ```
 
-Menus: **System** (logo): "About os8088..." (CMD_ABOUT). **File**: "Note Pad"
-(CMD_NOTE), "Clock" (CMD_CLOCK), "Bounce" (CMD_BOUNCE), "Disk"
-(CMD_FILES), "Close Window" (CMD_CLOSE). **Special**: "Task Manager"
-(CMD_TASKS), "Restart" (CMD_REBOOT). (CMD_REBOOT was renumbered 7 → 8
-when Task Manager was inserted, as CMD_CLOSE/CMD_REBOOT were when Disk
-was — cmd = menu base + item index must still hold.)
+Menus: **System** (logo): "About os8088..." (CMD_ABOUT), "Control Panel"
+(CMD_CTRL, string `menu_s_ctrl`, §31), "Task Manager" (CMD_TASKS,
+string `menu_s_tasks`, §28) — System's item count in `menu_table` is 3.
+**File**: "Note Pad" (CMD_NOTE), "Clock" (CMD_CLOCK), "Bounce"
+(CMD_BOUNCE), "Disk" (CMD_FILES), "Close Window" (CMD_CLOSE).
+**Special**: "Restart" (CMD_REBOOT) — one item. Menu bases:
+System = CMD_ABOUT, File = CMD_NOTE, Special = CMD_REBOOT.
+
+**`cmd = menu base + item index`, so each menu's commands must stay
+consecutive from its base** — that arithmetic is how `menu_track` turns a
+highlighted item index into a CMD_*. Moving "Task Manager" out of Special
+and onto the end of the System menu therefore renumbered the File menu
+(3 → 4, … 7 → 8) and left CMD_REBOOT alone as Special's only item and its
+base, exactly as inserting Disk, Task Manager and Control Panel renumbered
+their successors before. Bar hit ranges in `menu_table` are unchanged (the
+titles did not move); the pull-down's width is computed from the widest
+item by `menu_widest`, so the System menu is as wide as "Control Panel" and
+Special shrinks to "Restart". A one-item menu needs no special case — the
+count only feeds the rect height, the item loop and `menu_hover`'s bound.
 
 | symbol          | contract                                                   |
 |-----------------|-------------------------------------------------------------|
@@ -546,18 +686,24 @@ Loop forever:
 3. If `[inst_launch]` is non-zero (§29): AX = [inst_launch] − 1, zero
    `[inst_launch]`, call `app_launch` with AL = kind. Then if
    `[ld_pending]` is non-zero (§21): AX = [ld_pending] − 1, zero
-   `[ld_pending]`, call `loader_run`. Both run **outside** the gfx lock
-   with the same consume-before-run rule — app_launch and loader_run
-   manage their own locking.
+   `[ld_pending]`, call `loader_run`. Then if `[cp_dirty]` is non-zero
+   (§31.2): zero it, gfx_lock, `wm_paint_all`, gfx_unlock — the scheduler
+   mode was flipped from the Control Panel and every already-painted
+   window that quotes it (the About box's third line, §14) must follow.
+   All three run **outside** the gfx lock with the same
+   consume-before-run rule — app_launch and loader_run manage their own
+   locking, and the repaint takes the lock here rather than inside
+   `cp_onclick`, which already holds it.
 4. `task_yield`.
 
-Command dispatch: CMD_ABOUT/NOTE/CLOCK/BOUNCE/TASKS → `call app_launch`
-with AL = the matching KIND_* (§29). ui_dispatch runs on the UI task with
+Command dispatch: CMD_ABOUT/CTRL/NOTE/CLOCK/BOUNCE/TASKS → `call
+app_launch` with AL = the matching KIND_* (§29; CMD_CTRL → KIND_CTRL, the
+Control Panel of §31). ui_dispatch runs on the UI task with
 no lock held, so the call is direct — the deferred `inst_launch` channel
 in step 3 exists for lock-held posters (e.g. W_ONCLICK handlers). Note
 Pad/Clock/Bounce launch a **new instance** each time (up to their §29
-caps); About/Task Manager are singletons — at cap, app_launch fronts (and
-un-minimizes) the existing instance instead. CMD_FILES → call
+caps); About/Control Panel/Task Manager are singletons — at cap,
+app_launch fronts (and un-minimizes) the existing instance instead. CMD_FILES → call
 `files_open` (§22 — mounts, then launches/fronts the Disk singleton via
 app_launch; does its own locking). CMD_CLOSE → **quit** the frontmost:
 gfx_lock, `wm_top`, and if BX ≠ 0 `app_close_win` under the same lock,
@@ -589,8 +735,15 @@ Paint/onkey procs receive SI = window ptr (§11) and find their state via
 the gfx lock) may stay shared. Kind behavior:
 
 - **About** — 300×120 at (170,140), title "About os8088". Paint: centered
-  lines "os8088 1.0", "a graphical OS for the 8086", "pre-emptive - 640x480 -
-  16 colors". No onkey. Singleton (cap 1).
+  lines "os8088 1.0", "a graphical OS for the 8086", and a third line whose
+  scheduling word **tracks the live mode** (§8.2, read with
+  `sched_mode_get`): "pre-emptive - 640x480 - 16 colors" or
+  "cooperative - 640x480 - 16 colors". Either implementation is fine — two
+  whole alternative strings picked by mode, or the mode word drawn ahead of
+  a shared " - 640x480 - 16 colors" tail — because "pre-emptive" and
+  "cooperative" are both exactly 11 characters, so the line's pixel width
+  and its centered x are identical in both modes and the existing centering
+  math is unchanged. No onkey. Singleton (cap 1).
 - **Note Pad** — 260×180 at (60,60), title "Note Pad". Cap 2. Paint:
   render the instance's buffer, 8px chars, line wrap at content width,
   6px left/top margin, then a 1px black caret. Vertical clip: stop before
@@ -646,8 +799,12 @@ into `ui_task` (task 0 never returns). (`dock_init` runs right after
 `desk_init`.) **Clean boot**: no app instances exist — the first paint
 shows only the desktop, drive icons, the empty dock strip and menu bar;
 everything is launched from the menus (§13/§29). Include order:
-`instance.inc` right after `wm.inc`; `icons.inc`, `desk.inc`, `dock.inc`
-and `taskmgr.inc` after `files.inc`.
+`instance.inc` right after `wm.inc`; `icons.inc`, `desk.inc`, `dock.inc`,
+`taskmgr.inc` and then `ctrl.inc` (§31) after `files.inc`. The Control
+Panel has no init routine — it is task-less and stateless, so nothing runs
+for it at boot; forward references from `instance.inc`'s kind table to
+`cp_tpl`/`cp_sname` resolve at assembly time exactly as `tm_tpl` already
+does.
 
 End of file (after all `%include` lines, with `section .text` in effect):
 
@@ -689,7 +846,8 @@ loaded-program region, §20.)
 1. `make` builds all images with zero warnings; kernel < 0xA000 with .bss.
 2. QEMU boots to a **clean desktop**: gray dither, menu bar (logo + File
    + Special), drive icons, the empty dock strip at the bottom, arrow
-   cursor — no windows, nothing running.
+   cursor — no windows, nothing running. The scheduler boots
+   **pre-emptive** (§8.2).
 3. Apps launch from the menus as closable instances — two Clocks tick
    independently, and they keep ticking **while** typing in Note Pad and
    while a drag outline is being moved (pre-emption visibly working).
@@ -710,7 +868,7 @@ loaded-program region, §20.)
    glyph, HELLO with the generic application icon — and the Refresh
    button re-reads a swapped disk (QMP `change` + Refresh shows the new
    directory without rebooting).
-10. Special → Task Manager opens a window with a live CPU load gauge and
+10. System → Task Manager opens a window with a live CPU load gauge and
     history graph (near 0% idle, visibly rising while dragging a window),
     a RAM readout, and the per-instance process list with each row's CPU
     share and memory — all updating twice a second while launched Clocks
@@ -720,6 +878,20 @@ loaded-program region, §20.)
     under MEM (`-` for built-ins, which own no region), and a CPU share
     that rises with the work their window callbacks actually do — a
     Minesweeper repainted repeatedly reads double digits.
+11. System → Control Panel opens a singleton two-pane window: the left pane
+    lists the panel items with "Scheduler" already selected (white on a
+    black bar), the right pane shows that item's page — a "Scheduler"
+    heading and two radio rows, "Pre-emptive" (filled at boot) and
+    "Cooperative". Clicking a row moves the dot immediately, an About box
+    already open on screen has its third line repainted to the new
+    scheduling word within the same UI pass (the `cp_dirty` repaint of
+    §31.2), the Task Manager's SCHED field follows at its next sample, and
+    no user-visible string anywhere says "watchdog" (§31).
+    In cooperative mode Clocks keep ticking, Bounce keeps moving, menus
+    still pull down and Note Pad still types — every wait loop yields
+    (§8.2) — and a runaway package's callback is still cut off after
+    `SCH_WD_TICKS` ticks (`sch_wd_hits` advances, readable with QMP `xp` on
+    segment 0x1000).
 
 ## 18. disk.inc — floppy reads (BIOS int 13h)
 
@@ -1260,7 +1432,9 @@ account, and the rows partition one total.
 no lock, no visibility check (wm_paint_all calls it with the lock already
 held, §11). tm_task's periodic path wraps its drawing Clock-style
 (§14): gfx_lock, re-check visible + not `wm_obscured` under the lock (else
-skip), and touches only what changed — the CPU text line, the new sweep
+skip), and touches only what changed — the CPU + scheduler text line (one
+line, redrawn whole every interval, so a mode change shows up within one
+sample period without any extra plumbing), the new sweep
 column plus an all-white gap column at the advanced tm_pos, the RAM line
 and bar, and the process rows. The full 160-column graph render happens
 only in tm_paint, so the periodic lock hold stays small (Bounce-scale).
@@ -1270,8 +1444,15 @@ beyond the one wm_paint_all already does.
 
 **Content layout** (content-relative; content is 174×245):
 
-- (6,4): `"CPU nnn%"` (white-fill (6,4)-(90,11) first; n right-aligned,
-  space-padded, 0..100).
+- (6,4): the CPU + scheduler line, exactly 20 chars like the process rows
+  below, so its last glyph lands at x = 158..165 inside the 174px content
+  (white-fill (6,4)-(167,11) first): `[0..7]` `"CPU nnn%"` (n
+  right-aligned, space-padded, 0..100), `[8]` space, `[9..19]` the
+  **read-only** scheduler-mode field, left-justified and space-padded to
+  11 chars — `"SCH preempt"` or `"SCH coop   "` — from `sched_mode_get`
+  (§8.2). The Task Manager only *displays* the mode; it is changed from the
+  Control Panel (§31). The padding is what erases the longer word when the
+  mode changes, so the field must always be written full-width.
 - Graph: 1px black frame (6,14)-(167,55); interior columns x = 7+i,
   i = 0..159, rows 15..54. Column value v (0..40): white vline rows
   15..54−v, then black vline rows 55−v..54 (v=0 → all white, v=40 → all
@@ -1298,8 +1479,8 @@ beyond the one wm_paint_all already does.
 - A free slot renders `-` / `---` / `  -` / `   -`: name dash, state
   dashes, no `'%'` and no `'K'`.
 
-Menu/dispatch: see §12/§13 — Special has "Task Manager" (CMD_TASKS = 7)
-above "Restart" (CMD_REBOOT = 8); dispatch calls `app_launch`
+Menu/dispatch: see §12/§13 — "Task Manager" (CMD_TASKS = 3) is the System
+menu's third item, under "Control Panel"; dispatch calls `app_launch`
 KIND_TASKMGR like the §14 kinds.
 
 ## 29. instance.inc — the instance table (running-app lifecycle)
@@ -1344,6 +1525,7 @@ KIND_CLOCK   equ 2
 KIND_BOUNCE  equ 3
 KIND_FILES   equ 4
 KIND_TASKMGR equ 5
+KIND_CTRL    equ 6       ; Control Panel (§31)
 KIND_PKG     equ 0x80    ; bit 7: package instance
 ```
 
@@ -1385,9 +1567,23 @@ held, window not yet visible), `KD_NAME` (word, NUL name string),
 `KD_ICON` (word, 16x16 icon body ptr or 0), `KD_CAP` (byte, max
 simultaneous instances), 1 pad byte.
 
-Pinned caps: About 1 (stateless), Note Pad 2 (stride 514), Clock 3
-(stride 8), Bounce 3 (stride 8), Files 1 (module-global mount state),
-TaskMgr 1 (one sampler). Sum 11 ≤ INST_MAX.
+Pinned caps: About 1 (stateless), Note Pad 2 (stride 514), Clock 10
+(stride 8), Bounce 10 (stride 8), Files 1 (module-global mount state),
+TaskMgr 1 (one sampler), Control Panel 1 (no per-instance state, §31). The
+per-kind caps deliberately over-subscribe INST_MAX now that Clock and
+Bounce allow 10 each — `INST_MAX` (and MAX_TASKS, §8) is the real ceiling,
+and a launch on a full table simply fails with CF=1.
+
+`inst_kinds` rows are in KIND_* order, one 16-byte row per kind; the
+Control Panel's row is the last one and is task-less, pool-less and
+init-less:
+
+```nasm
+    dw cp_tpl, 0, 0, 0, 0, cp_sname   ; tpl, task, pool, ssize, init, name
+    dw 0                              ; icon: generic fallback
+    db 1, 0                           ; Control Panel: stateless task-less
+                                      ; singleton
+```
 
 ### 29.4 Routines
 
@@ -1468,3 +1664,195 @@ fallback).
 The window drag clamp (§13) is unchanged: windows may be dropped over the
 dock; clicks in the overlap go to the window (wm_hit wins), and the strip
 repaints when the window moves away — desk-icon semantics throughout.
+
+## 31. ctrl.inc — the Control Panel window
+
+Built-in singleton app kind (KIND_CTRL = 6, cap 1), window "Control Panel",
+320×120 at (160,130). Label prefix `cp_`. Included from kernel.asm right
+after `taskmgr.inc`.
+
+The window is a **two-pane browser**. The **left pane** lists the panel's
+items, one row each, the selected row drawn as a black bar with white text;
+the **right pane** is that item's settings page. Item 0 is **"Scheduler"**
+— the scheduler mode of §8.2 as a pair of radio rows — and is the boot
+selection, so the panel opens showing the scheduler page with no click
+needed.
+
+Structurally it is still the simplest kind in the tree — **task-less, no
+KD_INIT, no pool, no .bss**: nothing runs for it at boot and it exists only
+while an instance is open. Its one byte of panel state is `cp_sel`, the
+selected item, kept as initialised `.text` data (the `osapi_seed` trick of
+§15) precisely so nothing has to be zeroed at boot. `cp_sel` is global, not
+per-instance, and persists across opens; with one item that is
+indistinguishable from resetting to 0.
+
+```nasm
+cp_ttl   db 'Control Panel', 0   ; window title
+cp_sname db 'Control', 0         ; KD_NAME: <= 7 chars, fits the Task
+                                 ; Manager NAME column (the tm_sname rule)
+cp_tpl:  dw 160, 130, 320, 120, cp_ttl, cp_paint, 0, cp_onclick
+         ;  x    y    w    h     title   paint     onkey  onclick
+cp_dirty db 0                    ; deferred-repaint flag (§31.2)
+cp_sel   db 0                    ; selected item; 0 = Scheduler
+```
+
+No onkey (the panel is mouse-only), no icon of its own (KD_ICON 0 → the
+generic `ico_app16` body in the dock, §30), I_SIZE 0 → MEM reads `-` in the
+Task Manager (§28).
+
+**User-visible wording (binding).** The two modes are called exactly
+**"Pre-emptive"** and **"Cooperative"**. The word "watchdog" — and any
+mention of `SCH_WD_TICKS`, forced switches or `sch_wd_hits` — must **not**
+appear in any string the user can see, here or anywhere else in the GUI.
+The watchdog is an implementation detail of cooperative mode (§8.2), not a
+third mode and not a setting.
+
+### 31.1 Content layout (pinned, content-relative)
+
+Content is 318×101 (frame 320×120 minus the 1px borders and the 18px title
+bar). Every coordinate below is relative to the window's content origin,
+which `cp_paint`/`cp_onclick` derive from the live `W_X`/`W_Y` — **never
+hardcoded screen coords**, because the window drags. Both callbacks receive
+the window in SI and `wm_content` takes it in BX (out AX = content left,
+DX = content top), so both copy SI → BX first and then carry the origin in
+**DI = content left, BP = content top** — the register pair every helper in
+the module takes it in.
+
+```nasm
+CP_CW    equ 318     ; content width          CP_RX   equ 96   ; right pane x
+CP_CH    equ 101     ; content height
+CP_DIVX  equ 88      ; divider column: left pane is x 0..CP_DIVX-1
+CP_IX    equ 6       ; item label x           CP_I0Y  equ 6    ; row 0 top
+CP_IROWH equ 14      ; row pitch = hit band   CP_IBH  equ 12   ; sel bar height
+CP_ITDY  equ 2       ; label y offset inside the bar
+CP_IBX1  equ 2       ; sel bar left           CP_IBX2 equ CP_DIVX-3  ; 85
+```
+
+- **Left pane**, x 0..CP_DIVX−1: item *i*'s row top is
+  `CP_I0Y + i*CP_IROWH`; its name is drawn at (CP_IX, row top + CP_ITDY).
+  The selected item's row is a black `gfx_fill` (CP_IBX1, row top)–(CP_IBX2,
+  row top + CP_IBH − 1) with the name in white; every other name is black
+  on white.
+- **Divider**: a 1px black `gfx_vline` at content x = CP_DIVX, y 0..CP_CH−1.
+- **Right pane**, x CP_RX..CP_CW−1, top = the content top: the selected
+  item's page, drawn by its own proc in **pane-relative** coordinates.
+
+**Item table (binding).** One 8-byte record per item, stride a power of two
+so index → record is three `shl`-by-1s (no CL, no 8086-illegal immediate
+shift). `CP_ITEMS` is computed from the table's own extent, so adding an
+item is one row plus a paint/click pair — the pane machinery does not
+change.
+
+```nasm
+CP_I_NAME  equ 0   ; -> list name, ASCIIZ
+CP_I_PAINT equ 2   ; -> page paint proc   (in DI = pane left, BP = pane top)
+CP_I_CLICK equ 4   ; -> page click proc   (in DI/BP, CX/DX = pane-relative)
+CP_ISTRIDE equ 8   ; 4th word reserved (a future page onkey proc)
+cp_items:  dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
+cp_items_end:
+CP_ITEMS   equ (cp_items_end - cp_items) / CP_ISTRIDE
+```
+
+**Page contract.** A page proc is called with **DI = pane left (absolute
+screen x), BP = pane top (absolute screen y = the content top)**, the gfx
+lock held by the caller and — for paint — the pane already white-filled by
+`cp_page`. Click procs additionally get **CX = pane-relative x, DX =
+pane-relative y**; CX may be *negative*, because the gutter between the
+divider and CP_RX (and the window's left border) reaches them. Page procs
+preserve all registers, must not lock, block, spawn or call BIOS, and must
+not draw outside their pane.
+
+**The Scheduler page (item 0)**, pane-relative:
+
+```nasm
+CP_PMX   equ 2       ; left margin for the heading and the caption
+CP_PHY   equ 6       ; 'Scheduler' heading text row
+CP_PGX   equ 4       ; radio glyph left edge
+CP_GW    equ 12      ; radio glyph is 12x12
+CP_PR0Y  equ 26      ; first radio row: glyph top
+CP_PROWH equ 20      ; row pitch: row i glyph top = CP_PR0Y + i*CP_PROWH
+CP_PLX   equ CP_PGX + 18   ; 22: label text x
+CP_PLDY  equ 2       ; label text y = glyph top + 2 (8px font in a 12px box)
+CP_PCAPY equ 74      ; caption text row
+```
+
+- Heading `'Scheduler'` at (CP_PMX, CP_PHY), black — the **same string** as
+  the list row that selects the page.
+- Row 0: radio glyph at (CP_PGX, CP_PR0Y), label `'Pre-emptive'` at
+  (CP_PLX, CP_PR0Y + CP_PLDY).
+- Row 1: radio glyph at (CP_PGX, CP_PR0Y + CP_PROWH), label
+  `'Cooperative'` at (CP_PLX, CP_PR0Y + CP_PROWH + CP_PLDY).
+- Caption at (CP_PMX, CP_PCAPY): one short line stating that the change
+  applies at once, e.g. `'Takes effect immediately'` (24 chars = 192px,
+  inside the 222px pane). No other text.
+
+**Radio glyphs.** Two hand-authored 12×12 bitmaps, one word per row, bit 15
+= leftmost pixel (the §12 logo / §25 icon convention): `cp_radio_off` (an
+open ring) and `cp_radio_on` (the same ring with a filled centre dot), 24
+bytes each. They are drawn by a module-internal `cp_glyph` — in CX = left
+x, DX = top y, SI = bitmap; 12 rows of `lodsw` + per-bit `gfx_pixel` in
+`[gfx_color]`, preserving all registers — because neither existing blitter
+fits: `menu_logo_glyph` hardcodes its top row at MENU_LOGO_Y, and
+`icon_draw16` wants a 16 mask + 16 data word body (§25). The glyph for the
+**live** mode is the filled one; the other is the ring. `sched_mode_get`
+(§8.2) is the only source of that truth — the page keeps no state of its
+own, so a mode changed from anywhere else still paints correctly.
+
+### 31.2 Contracts
+
+| symbol | contract |
+|--------|-----------|
+| `cp_paint` | W_PAINT (§11): in SI = window ptr; the gfx lock is **already held** by the caller and wm has already white-filled the content. Preserves all registers. Derives DI/BP from `wm_content`, then `cp_list` → `cp_divider` → `cp_page`. Must not lock, block, spawn, or call BIOS. |
+| `cp_onclick` | W_ONCLICK (§11): in CX = x, DX = y (**absolute screen coords** — convert with `wm_content` before hit-testing), SI = window ptr. The gfx lock is already held and the call is already billed to the instance by ui.inc (§8.1/§13). Preserves all registers. Content-relative x < CP_DIVX → `cp_pick`: a hit on a different item stores it in `cp_sel` and redraws both panes (`cp_list` + `cp_page`); a hit on the live item, or a miss below the last row, does nothing. Otherwise the click is handed to the selected item's `CP_I_CLICK` proc with DI advanced to the pane left and CX made pane-relative. |
+| `cp_entry` | module-internal: in AL = item index, out SI = record ptr (`cp_items + 8*AL`). Preserves everything else. |
+| `cp_pick` | module-internal hit test of the item list: in DX = content-relative y, out CF=0 and AL = item index on a row, CF=1 above the first row or below the last. Rows are contiguous — row *i* owns `CP_IROWH` rows from `CP_I0Y + i*CP_IROWH`, so the bar and the 2px gap under it both select. x is not tested: the whole pane width selects. |
+| `cp_list` | module-internal, in DI/BP = content origin, lock held. Preserves all registers. White-fills the whole left pane, then draws every item name with the `cp_sel` row barred — so it doubles as the redraw path when the selection moves. |
+| `cp_divider` | module-internal, in DI/BP, lock held: the 1px black rule at content x = CP_DIVX. Preserves all registers. |
+| `cp_page` | module-internal, in DI/BP, lock held. Preserves all registers. White-fills the right pane (divider column excluded), then calls the selected record's `CP_I_PAINT` with DI advanced by CP_RX — the redraw path when the selection moves. |
+| `cp_sched_paint` | Scheduler page paint (page contract above): heading, both radio rows (glyph + label, filled glyph per `sched_mode_get`) and the caption. |
+| `cp_sched_click` | Scheduler page click (page contract above). x is ignored — the two hit bands span the whole pane. A hit on the row whose mode is already live does nothing; a hit that changes the mode calls `sched_mode_set` with AL = the row index (0 = pre-emptive, 1 = cooperative), sets `[cp_dirty]` = 1, then redraws **only the two radio glyphs**. A click outside both bands does nothing. |
+| `cp_glyph` | module-internal 12×12 bitmap blit: in CX = x, DX = y, SI = bitmap. Preserves all registers. Lock held by the caller. |
+| `cp_sel` | byte, initialised `.text` data, init 0 (Scheduler). Written only by `cp_onclick`, and only to an index `< CP_ITEMS`. |
+| `cp_dirty` | byte, initialised `.text` data, init 0. Set to 1 by `cp_sched_click` only when the mode actually changed; drained by ui_task step 3 (§13), which zeroes it and does gfx_lock / `wm_paint_all` / gfx_unlock. Idempotent and coalescing: repeated flips inside one UI pass cost one repaint. |
+
+**Hit bands (Scheduler page).** Pane-relative, generous and contiguous so
+that both the glyph and its label select the row: row *i* covers y from
+`CP_PR0Y + i*CP_PROWH − 4` to `CP_PR0Y + i*CP_PROWH + CP_GW + 3` (row 0 =
+22..41, row 1 = 42..61) across the **whole pane**. The heading above and
+the caption below are outside both bands, so clicking them is a no-op.
+
+**Signed comparisons (binding).** Every hit test in this module compares
+**signed**: `wm_hit` dispatches the window's 1px border as content, so a
+content- or pane-relative coordinate can legitimately be negative (or one
+past the content) and an unsigned compare would place such a click inside
+a band.
+
+**Locking (binding).** `cp_onclick` runs on the UI task inside ui.inc's
+W_ONCLICK dispatch, which already holds the gfx lock. It must **not** call
+`gfx_lock`/`gfx_unlock` — the lock is non-reentrant (§7) and re-acquiring
+it deadlocks the GUI, the same trap as §13's drag-release step. It must
+**not** call `wm_paint_all`: every redraw is done in place, by erasing and
+redrawing exactly the rectangle that changed — the two panes on a selection
+change, the two 12×12 glyph boxes on a mode flip. No `wm_obscured` check is
+needed — W_ONCLICK only ever fires on the frontmost window (§13).
+
+**Other windows follow via `cp_dirty`.** Nothing else on screen is
+invalidated by a mode change, so an already-painted About box would keep
+displaying the previous scheduling word (§14) indefinitely — no wm_* path
+repaints it until an unrelated raise, drag or close happens. A flip
+therefore sets `[cp_dirty]`, and ui_task step 3 (§13) does the
+`wm_paint_all` **outside** the lock, in the same UI pass as the click:
+lock-clean, non-recursive, and each window's paint stays inside its own
+`wm_draw_win` billing bracket (§8.1). A *selection* change invalidates
+nothing outside this window and posts nothing.
+
+**Why a mode flip is safe from inside a callback.** `sched_mode_set` is one
+`pushf`/`cli`-guarded byte store plus a counter reset (§8.2); the task
+table, the per-task stacks and the saved-frame layout are identical in both
+modes, so no task has to be parked or notified and the call cannot block.
+The flip therefore happens with the gfx lock held and takes effect on the
+very next tick — which is exactly what the caption promises. The other two
+places that show the mode read it live: the About box's third line (§14),
+repainted within the same UI pass by the `cp_dirty` repaint above, and the
+Task Manager's SCHED field (§28), rewritten at its next sample (≤ 9 ticks)
+and by that repaint.

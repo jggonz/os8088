@@ -40,7 +40,7 @@ TM_INT      equ 9               ; sample interval, ticks (~0.5s)
 TM_EPOCH    equ 20              ; samples per calibration epoch (~10s)
 TM_GW       equ 160             ; graph interior width = history ring size
 TM_GH       equ 40              ; graph interior height, px
-TM_CPU_Y    equ 4               ; "CPU nnn%" line, content-relative y
+TM_CPU_Y    equ 4               ; "CPU nnn% SCH xxxxxxx" line, content-rel y
 TM_GF_Y1    equ 14              ; graph frame top (interior rows 15..54)
 TM_GF_Y2    equ 55              ; graph frame bottom
 TM_RAM_Y    equ 61              ; "RAM uuuK/tttK" line
@@ -105,6 +105,9 @@ tm_ttl:     db 'Task Manager', 0
 tm_sname:   db 'TaskMgr', 0     ; KD_NAME: fits the 7-char NAME column
 
 tm_s_cpu:   db 'CPU ', 0
+tm_s_pre:   db 'SCH preempt', 0 ; read-only scheduler-mode field, chars 9..19
+tm_s_coop:  db 'SCH coop   ', 0 ; both exactly 11: the padding erases the
+                                ; longer word when the mode changes
 tm_s_ram:   db 'RAM ', 0
 tm_s_hdr:   db 'NAME    ST  CPU MEM', 0
 tm_s_sys:   db 'System', 0      ; row 0: the kernel's own share
@@ -634,8 +637,8 @@ tm_paint:
 ; tm_update - periodic incremental redraw (gfx lock held, window visible)
 ;
 ; Frames and the header are static and already on screen; only the dynamic
-; elements are touched: CPU line, the freshly written column + the advanced
-; sweep gap, RAM line + bar, and the task rows.
+; elements are touched: the CPU + scheduler-mode line, the freshly written
+; column + the advanced sweep gap, RAM line + bar, and the task rows.
 ;
 ; in:  nothing ([tm_win] set)
 ; out: nothing
@@ -742,8 +745,12 @@ tm_gapcol:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_txt_cpu - white-fill the CPU line's rect and draw "CPU nnn%"
-; in:  [tm_load]
+; tm_txt_cpu - white-fill the CPU line's rect and draw the 20-char
+;              "CPU nnn% SCH xxxxxxx" line (SPEC.md 28): chars 0..7 the load,
+;              8 a space, 9..19 the read-only scheduler-mode field. The whole
+;              line is rewritten every interval, so a mode flip from the
+;              Control Panel (SPEC.md 31) shows up within one sample period.
+; in:  [tm_load]; live mode from sched_mode_get (SPEC.md 8.2)
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
@@ -761,7 +768,7 @@ tm_txt_cpu:
     mov bx, [tm_cy]
     add bx, TM_CPU_Y
     mov cx, [tm_cx]
-    add cx, 90
+    add cx, 167
     mov dx, [tm_cy]
     add dx, TM_CPU_Y + 7
     call gfx_fill
@@ -773,6 +780,15 @@ tm_txt_cpu:
     call tm_put3
     mov byte [di], '%'
     inc di
+    mov byte [di], ' '
+    inc di
+    mov si, tm_s_pre            ; chars 9..19: the live scheduler mode
+    call sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
+    or al, al
+    jz .mode
+    mov si, tm_s_coop
+.mode:
+    call tm_copy                ; 11 chars either way, space-padded
     mov byte [di], 0
 
     mov byte [gfx_color], CBLACK

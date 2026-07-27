@@ -39,6 +39,7 @@ KIND_CLOCK   equ 2
 KIND_BOUNCE  equ 3
 KIND_FILES   equ 4
 KIND_TASKMGR equ 5
+KIND_CTRL    equ 6
 KIND_PKG     equ 0x80           ; bit 7: package instance
 
 ; --- kind descriptor table (SPEC.md 29.3) -------------------------------------
@@ -74,6 +75,9 @@ inst_kinds:                     ; indexed by KIND_* * 16; caps are binding
     dw tm_tpl,         tm_task,         0,             0,   tm_kinit,         tm_sname
     dw 0
     db 1, 0                     ; Task Manager: singleton (one sampler task)
+    dw cp_tpl,         0,               0,             0,   0,                cp_sname
+    dw 0
+    db 1, 0                     ; Control Panel: stateless task-less singleton
 
 ; -----------------------------------------------------------------------------
 ; inst_init - clear the instance table and the deferred-launch word
@@ -302,7 +306,7 @@ inst_charge:
 
 ; -----------------------------------------------------------------------------
 ; app_launch - launch (or front) a built-in app kind (SPEC.md 29.4)
-; in:  AL = kind (0..5); UI task only, gfx lock NOT held (takes its own)
+; in:  AL = kind (0..6); UI task only, gfx lock NOT held (takes its own)
 ; out: CF = 1 launch failed (instance/window/task table full), CF = 0 done
 ; clobbers: nothing else (flags only)
 ;
