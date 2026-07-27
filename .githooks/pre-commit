@@ -1,0 +1,29 @@
+#!/bin/sh
+# Block commits containing credential-shaped data.
+#
+# This hook is tracked in the repo, but git does not enable tracked hooks
+# automatically. Every clone needs the one-time:
+#
+#   git config core.hooksPath .githooks
+#
+# Bypass (use sparingly, e.g. a deliberate test fixture):
+#   SKIP_GITLEAKS=1 git commit ...
+#   git commit --no-verify ...
+
+[ -n "$SKIP_GITLEAKS" ] && exit 0
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+	printf '\n\033[33mWARNING: gitleaks not found — commit NOT scanned for secrets.\033[0m\n'
+	printf '  Install with: brew install gitleaks\n\n'
+	exit 0
+fi
+
+if ! gitleaks git --staged --redact --no-banner; then
+	printf '\n\033[31mCommit blocked: gitleaks flagged credential-shaped data above.\033[0m\n'
+	printf '  If the secret is real, rotate it — do not just unstage it.\n'
+	printf '  If it is a false positive, add a rule to .gitleaksignore or append\n'
+	printf '  the "gitleaks:allow" comment to the offending line.\n\n'
+	exit 1
+fi
+
+exit 0
