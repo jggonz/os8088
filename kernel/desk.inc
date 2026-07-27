@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - desk.inc (SPEC.md 26)
+; os8088 - desk.inc (SPEC.md 26)
 ;
 ; Desktop drive icons: detect the floppy drives at boot (int 11h), paint a
 ; 32x32 disk icon + "Disk A"/"Disk B" label per drive on the desktop, track

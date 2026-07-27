@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - instance.inc
+; os8088 - instance.inc
 ;
 ; The instance table (SPEC.md 29): one record per running application
 ; instance, built-in kind or loaded package. The table is the single source

@@ -1,9 +1,9 @@
 ; =============================================================================
-; jop - apps/mines/mines.asm
+; os8088 - apps/mines/mines.asm
 ;
 ; Minesweeper, the first software package (SPEC.md 23). Not kernel code: a
-; flat .jop binary at org 0xA000 that reaches every kernel service through
-; the jop API jump table (jopapi.inc). 9x9 board, 10 mines, 16px cells,
+; flat .o88 binary at org 0xA000 that reaches every kernel service through
+; the os8088 API jump table (os88api.inc). 9x9 board, 10 mines, 16px cells,
 ; a 20px status strip above the board. Mines are placed lazily on the first
 ; reveal (never under it); zero-count reveals flood-fill through an explicit
 ; queue (no recursion - the UI task's stack is 1536 bytes). 'F' toggles flag
@@ -18,9 +18,9 @@
 ; the image; the all-zeroes state is exactly a fresh game.
 ; =============================================================================
 
-%include "jopapi.inc"
+%include "os88api.inc"
 
-    JOP_HEADER 'MINES', mn_entry, 1
+    OS88_HEADER 'MINES', mn_entry, 1
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
 ; A mine: black disc (rows 4..11) with 8 spokes (N/S/E/W 2px + 1px
@@ -45,7 +45,7 @@
 ;   ..#....##....#..             .####.####.####.
 ;   .......##.......             .###..####..###.
 ;   ................             ......####......
-    JOP_ICON16
+    OS88_ICON16
     dw 0x03C0                       ; 16 mask rows (white underlay)
     dw 0x73CE
     dw 0x7BDE
@@ -78,7 +78,7 @@
     dw 0x2184
     dw 0x0180
     dw 0x0000
-    JOP_ICON16_END
+    OS88_ICON16_END
 
 ; --- board geometry ------------------------------------------------------------
 MN_COLS      equ 9                  ; cells per row / column
@@ -100,7 +100,7 @@ MN_S_COVER   equ 0
 MN_S_FLAG    equ 1
 MN_S_OPEN    equ 2
 
-MN_BSS_TOTAL equ 426                ; see the bss layout after JOP_IMAGE_END
+MN_BSS_TOTAL equ 426                ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; mn_entry - package entry point (SPEC.md 20.2)
@@ -112,7 +112,7 @@ MN_BSS_TOTAL equ 426                ; see the bss layout after JOP_IMAGE_END
 mn_entry:
     push si
     mov si, mn_tpl
-    call JAPI_WM_CREATE             ; BX = window ptr, CF on table full
+    call OSAPI_WM_CREATE             ; BX = window ptr, CF on table full
     pop si
     ret
 
@@ -126,7 +126,7 @@ mn_paint:
     push bx
     push dx
     mov bx, si
-    call JAPI_WM_CONTENT            ; AX = content left, DX = content top
+    call OSAPI_WM_CONTENT            ; AX = content left, DX = content top
     mov [mn_ox], ax
     mov [mn_oy], dx
     call mn_draw_status
@@ -149,7 +149,7 @@ mn_onkey:
     push si
     mov cl, al                      ; keep the key; wm_content returns AX/DX
     mov bx, si
-    call JAPI_WM_CONTENT
+    call OSAPI_WM_CONTENT
     mov [mn_ox], ax
     mov [mn_oy], dx
     cmp cl, 'f'
@@ -205,7 +205,7 @@ mn_onclick:
     mov bx, si
     push cx
     push dx
-    call JAPI_WM_CONTENT            ; AX = content left, DX = content top
+    call OSAPI_WM_CONTENT            ; AX = content left, DX = content top
     mov [mn_ox], ax
     mov [mn_oy], dx
     pop dx
@@ -292,11 +292,11 @@ mn_onclick:
 ; -----------------------------------------------------------------------------
 mn_place:
     push bp
-    call JAPI_GET_TICKS
-    call JAPI_SRAND
+    call OSAPI_GET_TICKS
+    call OSAPI_SRAND
     mov bp, MN_MINES                ; mines left to place
 .next:
-    call JAPI_RAND                  ; AX = pseudo-random word
+    call OSAPI_RAND                  ; AX = pseudo-random word
     xor dx, dx
     mov di, MN_CELLS
     div di                          ; DX = AX mod 81
@@ -487,7 +487,7 @@ mn_shape:
     lodsb                           ; colour (DF=0 per calling convention)
     cmp al, 0xFF
     je .done
-    call JAPI_SET_COLOR
+    call OSAPI_SET_COLOR
     lodsb                           ; x1
     mov ah, 0
     add ax, bp
@@ -506,7 +506,7 @@ mn_shape:
     mov dx, ax
     pop bx                          ; y1
     pop ax                          ; x1
-    call JAPI_GFX_FILL
+    call OSAPI_GFX_FILL
     jmp .rec
 .done:
     pop bp
@@ -549,12 +549,12 @@ mn_draw_cell:
     mov bh, 0
     mov al, [mn_digcol+bx]
     pop bx
-    call JAPI_SET_COLOR
+    call OSAPI_SET_COLOR
     mov al, [mn_adj+bx]
     add al, '0'
     add cx, 4                       ; centre the 8x8 glyph in the 16px cell
     add dx, 4
-    call JAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR
 .done:
     pop si
     pop dx
@@ -626,7 +626,7 @@ mn_draw_wrongflag:
     mov si, mn_sh_mine
     call mn_shape
     mov al, CBLACK
-    call JAPI_SET_COLOR
+    call OSAPI_SET_COLOR
     mov di, 0                       ; two 10px diagonals, corner to corner
 .px:
     push cx
@@ -635,7 +635,7 @@ mn_draw_wrongflag:
     add cx, 3
     add dx, di
     add dx, 3
-    call JAPI_GFX_PIXEL             ; (3+i, 3+i)
+    call OSAPI_GFX_PIXEL             ; (3+i, 3+i)
     pop dx
     pop cx
     push cx
@@ -644,7 +644,7 @@ mn_draw_wrongflag:
     sub cx, di
     add dx, di
     add dx, 3
-    call JAPI_GFX_PIXEL             ; (12-i, 3+i)
+    call OSAPI_GFX_PIXEL             ; (12-i, 3+i)
     pop dx
     pop cx
     inc di
@@ -687,17 +687,17 @@ mn_draw_status:
     push dx
     push si
     mov al, CLGRAY
-    call JAPI_SET_COLOR
+    call OSAPI_SET_COLOR
     mov ax, [mn_ox]
     mov bx, [mn_oy]
     mov cx, ax
     add cx, MN_BOARD_W - 1
     mov dx, bx
     add dx, MN_STRIP_H - 1
-    call JAPI_GFX_FILL
+    call OSAPI_GFX_FILL
 
     mov al, CBLACK                  ; counter, clamped at 0
-    call JAPI_SET_COLOR
+    call OSAPI_SET_COLOR
     mov al, MN_MINES
     sub al, [mn_flags]
     jnc .clamped
@@ -710,14 +710,14 @@ mn_draw_status:
     cmp al, 10                      ; only ever 0..10: "10" or one digit
     jb .one
     mov al, '1'
-    call JAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR
     add cx, 8
     mov al, '0'
     jmp .putc
 .one:
     add al, '0'
 .putc:
-    call JAPI_FONT_CHAR
+    call OSAPI_FONT_CHAR
 
     mov si, mn_s_boom               ; centred mode text
     cmp byte [mn_mode], MN_M_LOST
@@ -729,14 +729,14 @@ mn_draw_status:
     je .done                        ; playing, flag mode off: blank
     mov si, mn_s_flag
 .have:
-    call JAPI_FONT_WIDTH            ; AX = pixel width
+    call OSAPI_FONT_WIDTH            ; AX = pixel width
     mov cx, MN_BOARD_W
     sub cx, ax
     shr cx, 1
     add cx, [mn_ox]
     mov dx, [mn_oy]
     add dx, 6
-    call JAPI_FONT_STR
+    call OSAPI_FONT_STR
 .done:
     pop si
     pop dx
@@ -805,25 +805,25 @@ mn_sh_mine:                         ; black disc with spokes
     db CBLACK, 11, 11, 12, 12
     db 0xFF
 
-    JOP_BSS MN_BSS_TOTAL
-    JOP_IMAGE_END
+    OS88_BSS MN_BSS_TOTAL
+    OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -------------------------------------
 ; All zero = fresh game: covered board, no mines placed (MN_M_FRESH), flag
 ; mode off, nothing revealed. mn_mine/mn_state/mn_adj must stay contiguous -
 ; the 'N' handler wipes all three as one 243-byte run.
-mn_mine     equ jop_image_end + 0   ; 81 bytes: 1 = mine here
-mn_state    equ jop_image_end + 81  ; 81 bytes: MN_S_COVER / FLAG / OPEN
-mn_adj      equ jop_image_end + 162 ; 81 bytes: adjacent-mine counts 0..8
-mn_queue    equ jop_image_end + 243 ; 81 words: flood-fill queue
-mn_qhead    equ jop_image_end + 405 ; word: queue read index
-mn_qtail    equ jop_image_end + 407 ; word: queue write index
-mn_ox       equ jop_image_end + 409 ; word: content left (per handler call)
-mn_oy       equ jop_image_end + 411 ; word: content top
-mn_flags    equ jop_image_end + 413 ; byte: flags currently placed
-mn_mode     equ jop_image_end + 414 ; byte: MN_M_*
-mn_flagmode equ jop_image_end + 415 ; byte: 1 = clicks flag instead of reveal
-mn_revealed equ jop_image_end + 416 ; byte: open safe cells (win at 71)
-mn_boom     equ jop_image_end + 417 ; byte: the mine cell that was clicked
-mn_nbuf     equ jop_image_end + 418 ; 8 bytes: mn_nlist output
+mn_mine     equ os88_image_end + 0   ; 81 bytes: 1 = mine here
+mn_state    equ os88_image_end + 81  ; 81 bytes: MN_S_COVER / FLAG / OPEN
+mn_adj      equ os88_image_end + 162 ; 81 bytes: adjacent-mine counts 0..8
+mn_queue    equ os88_image_end + 243 ; 81 words: flood-fill queue
+mn_qhead    equ os88_image_end + 405 ; word: queue read index
+mn_qtail    equ os88_image_end + 407 ; word: queue write index
+mn_ox       equ os88_image_end + 409 ; word: content left (per handler call)
+mn_oy       equ os88_image_end + 411 ; word: content top
+mn_flags    equ os88_image_end + 413 ; byte: flags currently placed
+mn_mode     equ os88_image_end + 414 ; byte: MN_M_*
+mn_flagmode equ os88_image_end + 415 ; byte: 1 = clicks flag instead of reveal
+mn_revealed equ os88_image_end + 416 ; byte: open safe cells (win at 71)
+mn_boom     equ os88_image_end + 417 ; byte: the mine cell that was clicked
+mn_nbuf     equ os88_image_end + 418 ; 8 bytes: mn_nlist output
                                     ; total 426 = MN_BSS_TOTAL

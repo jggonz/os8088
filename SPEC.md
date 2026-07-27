@@ -1,4 +1,4 @@
-# jop 1.0 — GUI specification
+# os8088 1.0 — GUI specification
 
 This document is the **binding contract** for all kernel modules. Every symbol
 name, register contract, constant, and data layout here is pinned. Implement
@@ -96,7 +96,7 @@ APP_MAX_SIZE equ 0x5000      ; image + bss budget, 0xA000..0xEFFF
 
 | file                | owns                                                    |
 |---------------------|---------------------------------------------------------|
-| `kernel/kernel.asm` | entry, constants, init order, includes, .bss layout, **jop API jump table at 0x0010** (§20.3) + japi helper routines |
+| `kernel/kernel.asm` | entry, constants, init order, includes, .bss layout, **os8088 API jump table at 0x0010** (§20.3) + osapi helper routines |
 | `kernel/vga12.inc`  | mode set, planar primitives, save/restore, gfx lock     |
 | `kernel/font.inc`   | 8x8 font (copied from VGA BIOS ROM at init), text draw  |
 | `kernel/mouse.inc`  | COM1 UART, IRQ4 ISR, packet decode, cursor (save-under) |
@@ -107,7 +107,7 @@ APP_MAX_SIZE equ 0x5000      ; image + bss budget, 0xA000..0xEFFF
 | `kernel/menu.inc`   | menu bar, pull-down tracking, command return            |
 | `kernel/ui.inc`     | UI task: event pump, keyboard poll, drag, dispatch      |
 | `kernel/apps.inc`   | built-in app kinds: About, Note Pad, Clock, Bounce — state pools, kinit procs, per-instance tasks |
-| `kernel/disk.inc`   | BIOS int 13h floppy reads, jopfs mount + directory (§18–19) |
+| `kernel/disk.inc`   | BIOS int 13h floppy reads, os88fs mount + directory (§18–19) |
 | `kernel/loader.inc` | package validation, pool allocation, per-instance load + relocate, launch (§21) |
 | `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22) |
 | `kernel/icons.inc`  | 1-bit icon format, draw routine, built-in library (§25) |
@@ -191,7 +191,7 @@ window.
   that is *inside* the lock's cli window (and nothing it calls may `sti`,
   see §1 rule 3).
 - **BIOS calls**: only the UI task calls int 10h/16h after boot. Background
-  tasks (clock, bounce) use only jop primitives and `ticks`. The syscall gate
+  tasks (clock, bounce) use only os8088 primitives and `ticks`. The syscall gate
   remains for compatibility but the GUI does not depend on it.
 - **Scheduler lock**: `sch_lock` byte; when non-zero the timer ISR counts
   ticks but does not switch. Used only inside scheduler internals — normal
@@ -401,7 +401,7 @@ MAX_WIN  equ 12
 (WIN_SIZE grew 16 → 18: any ×16 shift idioms in wm.inc must become a true
 ×18 multiply. The wm_create template stays **16 bytes**:
 {x,y,w,h,title,paint,onkey,onclick} words. MAX_WIN grew 8 → 12 for
-instancing (§29); `apps/jopapi.inc` mirrors it.)
+instancing (§29); `apps/os88api.inc` mirrors it.)
 
 Storage: `wm_wins` (MAX_WIN × WIN_SIZE, .bss), z-order byte array
 `wm_zord` (window indices, index 0 = backmost) + `wm_zn` count. Those
@@ -465,13 +465,14 @@ of W_PAINT already holds the gfx lock. W_PAINT must not lock, block or spawn.
 ## 12. menu.inc
 
 Menu bar: rows 0..MBAR_H-1, white, 1px black line at row MBAR_H-1. First
-menu is the Apple: an 11×11 one-color apple silhouette bitmap (any
-recognizable apple-with-bite shape; hand-authored `dw` rows are fine — this
-is the one place bitmap data is hand-made). Others are text titles.
+menu is the System menu, titled by the os8088 logo: an 11×11 one-color
+DIP-chip silhouette bitmap (7px-wide body with a top notch and four pins
+per side; hand-authored `dw` rows are fine — this is the one place bitmap
+data is hand-made). Others are text titles.
 
 ```nasm
 ; menu table (menu.inc data):
-; per menu: { titleptr (0 = apple glyph), itemsptr, item count, cmd base }
+; per menu: { titleptr (0 = logo glyph), itemsptr, item count, cmd base }
 ; items: array of near ptrs to NUL strings
 CMD_ABOUT  equ 1
 CMD_NOTE   equ 2
@@ -483,7 +484,7 @@ CMD_TASKS  equ 7
 CMD_REBOOT equ 8
 ```
 
-Menus: **Apple**: "About jop..." (CMD_ABOUT). **File**: "Note Pad"
+Menus: **System** (logo): "About os8088..." (CMD_ABOUT). **File**: "Note Pad"
 (CMD_NOTE), "Clock" (CMD_CLOCK), "Bounce" (CMD_BOUNCE), "Disk"
 (CMD_FILES), "Close Window" (CMD_CLOSE). **Special**: "Task Manager"
 (CMD_TASKS), "Restart" (CMD_REBOOT). (CMD_REBOOT was renumbered 7 → 8
@@ -587,8 +588,8 @@ Paint/onkey procs receive SI = window ptr (§11) and find their state via
 `inst_of_win` (§29) + `I_SPTR`; module-level draw scratch (used only under
 the gfx lock) may stay shared. Kind behavior:
 
-- **About** — 300×120 at (170,140), title "About jop". Paint: centered
-  lines "jop 1.0", "a graphical OS for the 8086", "pre-emptive - 640x480 -
+- **About** — 300×120 at (170,140), title "About os8088". Paint: centered
+  lines "os8088 1.0", "a graphical OS for the 8086", "pre-emptive - 640x480 -
   16 colors". No onkey. Singleton (cap 1).
 - **Note Pad** — 260×180 at (60,60), title "Note Pad". Cap 2. Paint:
   render the instance's buffer, 8px chars, line wrap at content width,
@@ -633,9 +634,9 @@ itself down with `inst_task_die` → `task_exit`.
 ## 15. kernel.asm — boot sequence
 
 Keep the 0x0000 cold entry. At 0x0010 the retired syscall gate is replaced
-by the **jop API jump table** (§20.3) — a run of 4-byte `jmp near` slots at
-pinned offsets. kernel.asm also owns the tiny japi helper routines
-(§20.4) and the `japi_seed` word. `cpu 8086` + `bits 16` + `org 0`.
+by the **os8088 API jump table** (§20.3) — a run of 4-byte `jmp near` slots at
+pinned offsets. kernel.asm also owns the tiny osapi helper routines
+(§20.4) and the `osapi_seed` word. `cpu 8086` + `bits 16` + `org 0`.
 
 kmain: set segments/stack (SP=0xFFFE), `sti`, `cld`, then:
 `sched_init` → `evq_init` → `vga_mode12` → `font_init` → `wm_init` →
@@ -676,7 +677,7 @@ loaded-program region, §20.)
   the software floppy as drive B:
   `-drive file=build/apps.img,format=raw,if=floppy,index=1`.
   `test` target: same, plus `-display none -qmp unix:build/qmp.sock,server,nowait`.
-- New tooling targets: see §24 (apps, packages, jopfs images).
+- New tooling targets: see §24 (apps, packages, os88fs images).
 - 86Box config (`vm/xt/86box.cfg`): set the mouse to a serial Microsoft
   mouse on COM1 (best-effort; cannot be verified headless).
 - The kernel may exceed 8 sectors; the two images are already built
@@ -686,7 +687,7 @@ loaded-program region, §20.)
 ## 17. Definition of done
 
 1. `make` builds all images with zero warnings; kernel < 0xA000 with .bss.
-2. QEMU boots to a **clean desktop**: gray dither, menu bar (apple + File
+2. QEMU boots to a **clean desktop**: gray dither, menu bar (logo + File
    + Special), drive icons, the empty dock strip at the bottom, arrow
    cursor — no windows, nothing running.
 3. Apps launch from the menus as closable instances — two Clocks tick
@@ -728,7 +729,7 @@ During a read, task switching is paused: `inc byte [sch_lock]` before,
 motor logic needs). The gfx lock is NOT held across disk I/O.
 
 Geometry lives in variables so both 1.44MB (18 spt) and 360KB (9 spt) data
-disks work: `disk_spt` (word), `disk_heads` (word) — loaded from the jopfs
+disks work: `disk_spt` (word), `disk_heads` (word) — loaded from the os88fs
 superblock at mount. LBA→CHS: cyl = LBA/(spt×heads); rem = LBA%(spt×heads);
 head = rem/spt; sector = rem%spt + 1. Reads go **one sector per int 13h
 call** (AH=02, AL=1) — no multi-sector calls, so track boundaries and DMA
@@ -738,28 +739,28 @@ failure between attempts.
 | symbol       | contract                                                      |
 |--------------|----------------------------------------------------------------|
 | `disk_read`  | in: AX=LBA, CX=sector count, ES:BX → dest (advances BX by 512 per sector; caller's ES:BX budget must cover count×512). Drive from `[disk_drive]`. Out: CF=1 on unrecoverable error. Preserves registers per §1. |
-| `disk_mount` | in: DL=drive (0=A, 1=B). Sets `[disk_drive]`, reads LBA 0 with the *fallback* geometry spt=9/heads=2 (CHS 0/0/1 — identical under any real floppy geometry), validates the superblock (§19), loads `disk_spt`/`disk_heads`/`disk_nfiles`, then reads the 2 directory sectors (LBA 1–2) into `disk_dir` and the 4 icon-table sectors (LBA 3–6) into `disk_icons`. Out: CF=1 if the disk is unreadable or not jopfs (then `disk_nfiles`=0). |
+| `disk_mount` | in: DL=drive (0=A, 1=B). Sets `[disk_drive]`, reads LBA 0 with the *fallback* geometry spt=9/heads=2 (CHS 0/0/1 — identical under any real floppy geometry), validates the superblock (§19), loads `disk_spt`/`disk_heads`/`disk_nfiles`, then reads the 2 directory sectors (LBA 1–2) into `disk_dir` and the 4 icon-table sectors (LBA 3–6) into `disk_icons`. Out: CF=1 if the disk is unreadable or not os88fs (then `disk_nfiles`=0). |
 | `disk_drive`  | byte variable, current drive (init 1 = B:)                   |
 | `disk_nfiles` | word, valid after a successful mount (else 0)                |
 | `disk_dir`    | 1024-byte .bss buffer: the 32 directory entries              |
 | `disk_icons`  | 2048-byte .bss buffer: the 32 icon-table entries (§19); entry i belongs to directory entry i, 64 bytes each, all-zero = no icon |
 
-## 19. jopfs — on-disk format (data floppies)
+## 19. os88fs — on-disk format (data floppies)
 
-A jopfs floppy is not bootable and holds only packages. All words
+An os88fs floppy is not bootable and holds only packages. All words
 little-endian. Sector size 512.
 
 **LBA 0 — superblock:**
 
 | off | size | contents                                  |
 |-----|------|-------------------------------------------|
-| 0   | 8    | magic `"JOPFS2"` then two zero bytes      |
+| 0   | 8    | magic `"OS88FS2"` then one zero byte       |
 | 8   | 2    | sectors per track (18 or 9)               |
 | 10  | 2    | heads (2)                                 |
 | 12  | 2    | file count (0..32)                        |
 | 14  | 498  | zero                                      |
 
-(Format v2: v1 disks — magic `JOPFS1`, no icon table, data from LBA 3 —
+(Format v2: v1 disks — magic `OS88FS1`, no icon table, data from LBA 3 —
 are no longer accepted; nothing shipped in v1, so no compatibility
 shim.)
 
@@ -768,7 +769,7 @@ shim.)
 | off | size | contents                                            |
 |-----|------|------------------------------------------------------|
 | 0   | 16   | file name, printable ASCII, NUL-padded (≤15 chars)  |
-| 16  | 2    | type: 1 = application package (.jop)                |
+| 16  | 2    | type: 1 = application package (.o88)                |
 | 18  | 2    | start LBA of file data                              |
 | 20  | 2    | size in bytes                                       |
 | 22  | 10   | zero                                                |
@@ -777,14 +778,14 @@ shim.)
 directory entry i: 16 words of AND-style mask (white underlay) then 16
 words of data (black pixels), bit 15 = leftmost pixel, row-major (the
 §25 16×16 icon body, without the 2-byte header). An all-zero entry means
-"no icon" — viewers fall back to the built-in `ico_app16`. jopdisk.py
+"no icon" — viewers fall back to the built-in `ico_app16`. os88disk.py
 fills entries from each package's embedded icon (§20.2 flags bit 0), or
 zeros.
 
 File data starts at LBA 7; every file starts on a sector boundary. Entries
 are packed from index 0; `file count` in the superblock is authoritative.
 
-## 20. Loadable programs — the .jop package format
+## 20. Loadable programs — the .o88 package format
 
 ### 20.1 The pool
 
@@ -797,7 +798,7 @@ everywhere, §1 hard rules apply (cpu 8086, register discipline, no bare
 its region. Budget: image + zeroed-bss ≤ APP_MAX_SIZE (0x5000). Multiple
 package instances can be resident at once — including two instances of
 the same package: each is a fully relocated copy with its own image, data
-and bss, so package state (equ offsets from `jop_image_end`) is
+and bss, so package state (equ offsets from `os88_image_end`) is
 per-instance automatically. Closing an instance frees its region (§29.2
 rule 7).
 
@@ -805,14 +806,14 @@ rule 7).
 
 | off | size | contents                                                  |
 |-----|------|------------------------------------------------------------|
-| 0   | 2    | magic: bytes `'J','P'` (word 0x504A)                      |
+| 0   | 2    | magic: bytes `'O','8'` (word 0x384F)                      |
 | 2   | 1    | format version = 2 (relocatable; v1 files are rejected)   |
 | 3   | 1    | flags: bit 0 = embedded icon follows the header; bits 1–7 zero |
 | 4   | 2    | link base — must equal 0xA000 (the org the image was assembled at) |
 | 6   | 2    | entry offset, **image-relative** (≥ 0x20; ≥ 0x60 with icon; < image size) |
 | 8   | 2    | image size = resident bytes: header + icon + code + data (**excludes** the reloc table) |
 | 10  | 2    | bss size — bytes the loader zeroes after the image        |
-| 12  | 2    | relocation count n (0 legal). NASM emits 0; **jopkg.py stamps the real count** |
+| 12  | 2    | relocation count n (0 legal). NASM emits 0; **os88pkg.py stamps the real count** |
 | 14  | 2    | zero (reserved)                                           |
 | 16  | 16   | program name, printable, NUL-padded (shown by tools)      |
 
@@ -824,26 +825,26 @@ a word to patch (in [0x20, image−2], ascending, non-overlapping; image ≤
 - bit 15 = 0 — an embedded package address (imm16 / disp16 / `dw label`):
   the loader **adds** `base − 0xA000`.
 - bit 15 = 1 — the rel16 displacement of a near call/jmp to a **fixed
-  kernel offset** (`call JAPI_*`): the displacement is target − (site+2),
+  kernel offset** (`call OSAPI_*`): the displacement is target − (site+2),
   and the site moves with the base while the target does not, so the
   loader **subtracts** `base − 0xA000`. (Package-internal relative
   branches shift with both ends and need no fixup.)
 
-Total file bytes = image + 2n (this is what the jopfs directory size
+Total file bytes = image + 2n (this is what the os88fs directory size
 field holds; the dir type stays 1). After the patches the table is dead
 (bss zeroing overwrites it). The table is generated host-side by **dual
 assembly** (§24): the Makefile assembles each package twice — at org
-0xA000 and org 0xA800 (`-DJOP_ORG=0xA800`) — and jopkg.py diffs the two
+0xA000 and org 0xA800 (`-DOS88_ORG=0xA800`) — and os88pkg.py diffs the two
 images: a word whose value grew by 0x800 is class 0, one that shrank by
 0x800 is class 1. **Author rule (binding)**: a package address may only
 ever be embedded as a whole 16-bit word — never byte-truncated, shifted,
-split, or folded into a non-address constant. jopkg's reconstruction
+split, or folded into a non-address constant. os88pkg's reconstruction
 check refuses the package otherwise, so violations fail the build.
 
 **Embedded icon** (flags bit 0): file offset 32..95 holds the program's
 16×16 icon — 16 mask words then 16 data words (same body layout as the
-jopfs icon table, §19). With the flag set, image size must be ≥ 96 and
-the entry offset ≥ 0x60. jopdisk.py copies the block into the disk's icon
+os88fs icon table, §19). With the flag set, image size must be ≥ 96 and
+the entry offset ≥ 0x60. os88disk.py copies the block into the disk's icon
 table; the kernel points the instance's dock tile (I_ICON, §29) at the
 block inside the loaded region.
 
@@ -860,7 +861,7 @@ The entry must not call wm_show/wm_hide/wm_front, spawn tasks, or draw.
 After entry returns, the program is pure event-driven code: its W_PAINT /
 W_ONKEY / W_ONCLICK procs run under the gfx lock per §11.
 
-### 20.3 The jop API jump table (kernel.asm, fixed offsets)
+### 20.3 The os8088 API jump table (kernel.asm, fixed offsets)
 
 At KERNEL_SEG:0x0010, 4-byte slots, each `jmp near target` + 1 pad byte.
 Programs `call` these absolute offsets; register contracts are the target
@@ -870,45 +871,45 @@ routines' own (§5, §6, §8, §11). Pinned layout:
 0x0010 gfx_lock        0x0034 gfx_xor_fill    0x0058 wm_obscured
 0x0014 gfx_unlock      0x0038 font_char       0x005C task_yield
 0x0018 gfx_pixel       0x003C font_str        0x0060 task_sleep
-0x001C gfx_hline       0x0040 font_width      0x0064 japi_get_ticks
-0x0020 gfx_vline       0x0044 wm_create       0x0068 japi_set_color
-0x0024 gfx_fill        0x0048 wm_show         0x006C japi_mouse
-0x0028 gfx_frame       0x004C wm_hide         0x0070 japi_srand
-0x002C gfx_fill_gray   0x0050 wm_front        0x0074 japi_rand
+0x001C gfx_hline       0x0040 font_width      0x0064 osapi_get_ticks
+0x0020 gfx_vline       0x0044 wm_create       0x0068 osapi_set_color
+0x0024 gfx_fill        0x0048 wm_show         0x006C osapi_mouse
+0x0028 gfx_frame       0x004C wm_hide         0x0070 osapi_srand
+0x002C gfx_fill_gray   0x0050 wm_front        0x0074 osapi_rand
 0x0030 gfx_xor_rect    0x0054 wm_content
 ```
 
-### 20.4 japi helpers (kernel.asm)
+### 20.4 osapi helpers (kernel.asm)
 
 | symbol           | contract                                            |
 |------------------|------------------------------------------------------|
-| `japi_get_ticks` | out AX = [ticks]                                     |
-| `japi_set_color` | in AL → [gfx_color]                                  |
-| `japi_mouse`     | out CX=[mouse_x], DX=[mouse_y], AL=[mouse_btn]       |
-| `japi_srand`     | in AX → [japi_seed]                                  |
-| `japi_rand`      | seed = seed×25173 + 13849; out AX = seed             |
+| `osapi_get_ticks` | out AX = [ticks]                                     |
+| `osapi_set_color` | in AL → [gfx_color]                                  |
+| `osapi_mouse`     | out CX=[mouse_x], DX=[mouse_y], AL=[mouse_btn]       |
+| `osapi_srand`     | in AX → [osapi_seed]                                  |
+| `osapi_rand`      | seed = seed×25173 + 13849; out AX = seed             |
 
-### 20.5 apps/jopapi.inc — the program-side SDK
+### 20.5 apps/os88api.inc — the program-side SDK
 
-NASM include used by packages (not by the kernel). Provides: `JAPI_*` equs
+NASM include used by packages (not by the kernel). Provides: `OSAPI_*` equs
 for every table offset (§20.3), the window-record W_* / template offsets
-(§11), color constants, and a `JOP_HEADER 'NAME', entry_label` macro that
+(§11), color constants, and a `OS88_HEADER 'NAME', entry_label` macro that
 emits the §20.2 header (image size via a forward-referenced
-`equ` to an end label the program declares with `JOP_BSS n` /
+`equ` to an end label the program declares with `OS88_BSS n` /
 end-of-file macro — exact macro design is the implementer's, but a package
-source must be able to consist of just `%include "jopapi.inc"`, the header
-macro, code/data, and an end macro). JOP_HEADER opens with
-`org JOP_ORG` when that macro is defined (`-DJOP_ORG=0xA800`, the §24
+source must be able to consist of just `%include "os88api.inc"`, the header
+macro, code/data, and an end macro). OS88_HEADER opens with
+`org OS88_ORG` when that macro is defined (`-DOS88_ORG=0xA800`, the §24
 relocation-probe pass) and `org APP_LOAD_OFF` otherwise; it emits version
 2, the image-relative entry (`entry − $$`), and a zero relocation count
-for jopkg.py to stamp. The org value must only ever affect emitted
-addresses, never instruction selection — jopkg verifies this (equal
+for os88pkg.py to stamp. The org value must only ever affect emitted
+addresses, never instruction selection — os88pkg verifies this (equal
 lengths, whole-word diffs).
 
-Icon support: `JOP_HEADER 'NAME', entry, 1` sets flags bit 0; the author
-then writes `JOP_ICON16` (asserts, via `%if`-on-equ, that it starts at
+Icon support: `OS88_HEADER 'NAME', entry, 1` sets flags bit 0; the author
+then writes `OS88_ICON16` (asserts, via `%if`-on-equ, that it starts at
 offset 32), 32 hand-authored `dw` rows (16 mask, 16 data), and
-`JOP_ICON16_END` (asserts offset 96). The third JOP_HEADER parameter is
+`OS88_ICON16_END` (asserts offset 96). The third OS88_HEADER parameter is
 optional and defaults to 0.
 
 ## 21. loader.inc
@@ -935,7 +936,7 @@ never move once relocated.
 [ld_fsz] = file size; out: CF=0 + scratch (img/bss/entry/reloc-count)
 filled, or CF=1 + AL = status. Checks: magic; **version = 2** (a v1 file
 → "Bad package"); link base = 0xA000; image ≥ 0x20; entry in
-[0x20, image) (icon rule enforced by jopkg, not re-checked); image+bss ≤
+[0x20, image) (icon rule enforced by os88pkg, not re-checked); image+bss ≤
 APP_MAX_SIZE (else "Too large"); image + 2·count = file size (guards
 truncated files and stale directories).
 
@@ -992,7 +993,7 @@ row, 0xFFFF = none), `fm_clkt` (word, [ticks] at last row click),
 
 Content layout (coords relative to content top-left): header line at
 (6,6): `"Drive B:  N files"` (drive letter from [disk_drive]) or, when the
-last mount failed, `"No jop disk in drive B:"`. A **Refresh button** at
+last mount failed, `"No os8088 disk in drive B:"`. A **Refresh button** at
 the top right: 1px black frame from (content_w−68, 2) to (content_w−6,
 15), label "Refresh" centered inside — remounts the current drive so a
 swapped disk shows its real contents. Status line from
@@ -1040,7 +1041,7 @@ Behaviour:
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
-Not kernel code: a .jop package built with jopapi.inc, org 0xA000, all
+Not kernel code: a .o88 package built with os88api.inc, org 0xA000, all
 services via the API table. Label prefix `mn_`. Everything below is
 content-relative; the procs fetch the content origin via `wm_content`
 (JAPI) each call.
@@ -1063,7 +1064,7 @@ content-relative; the procs fetch the content origin via `wm_content`
   click. W_ONKEY: 'f'/'F' toggles flag mode (repaint status strip),
   'n'/'N' new game (repaint content). Space = reveal is not required.
 - Rules: first reveal is always safe — mines are placed lazily on the
-  first reveal (japi_srand with japi_get_ticks, then japi_rand), excluding
+  first reveal (osapi_srand with osapi_get_ticks, then osapi_rand), excluding
   the clicked cell. Reveal of a 0-count cell flood-fills neighbours
   (iterative, explicit queue in the package's own buffer — no recursion;
   stack budget is the UI task's 1536 bytes). Flags block reveal. Reveal of
@@ -1077,9 +1078,9 @@ content-relative; the procs fetch the content origin via `wm_content`
 Python 3, stdlib only, both tools executable with clear argparse `--help`
 and non-zero exit + stderr message on any validation failure.
 
-- `tools/jopkg.py IN.bin --alt ALT.bin -o OUT.jop` — package
+- `tools/os88pkg.py IN.bin --alt ALT.bin -o OUT.o88` — package
   validator/reloc-generator/stamper. IN is the org-0xA000 assembly, ALT
-  the same source at org 0xA800 (`-DJOP_ORG=0xA800`; the probe delta
+  the same source at org 0xA800 (`-DOS88_ORG=0xA800`; the probe delta
   0x800 has a zero low byte, so every fixup word differs in exactly its
   high byte). Steps, any failure → exit 1, no output: (1) equal lengths
   (an org-dependent encoding would desync the images); (2) header
@@ -1097,8 +1098,8 @@ and non-zero exit + stderr message on any validation failure.
   bound: max(image+bss, roundup512(image + 2n)) ≤ 0x5000; (6) emit IN
   with the count stamped at offset 12 and the n sorted offsets appended.
   Summary line gains `relocs=N`.
-- `tools/jopdisk.py -o OUT.img --size {1440,360} [PKG.jop ...]` — builds a
-  jopfs v2 floppy (§19): superblock geometry 18/2 or 9/2, directory
+- `tools/os88disk.py -o OUT.img --size {1440,360} [PKG.o88 ...]` — builds a
+  os88fs v2 floppy (§19): superblock geometry 18/2 or 9/2, directory
   entries named from each package's header name field, icon table LBA 3–6
   (entry i = package i's embedded icon bytes 32..95 when flags bit 0,
   else 64 zero bytes), data from LBA 7, sector-aligned. Accepts format-v2
@@ -1109,11 +1110,11 @@ and non-zero exit + stderr message on any validation failure.
   files or the disk overflows. Total image size: 1474560 or 368640 bytes.
 - Makefile: `build/mines.bin` from `apps/mines/mines.asm` and
   `build/hello.bin` from `apps/hello/hello.asm` (§27), each
-  (`nasm -f bin -w+error -I apps/`, dep on apps/jopapi.inc), plus a
-  second assembly of each at org 0xA800 (`-DJOP_ORG=0xA800` →
-  `build/X.alt.bin`); both fed to jopkg.py (`X.bin --alt X.alt.bin`),
+  (`nasm -f bin -w+error -I apps/`, dep on apps/os88api.inc), plus a
+  second assembly of each at org 0xA800 (`-DOS88_ORG=0xA800` →
+  `build/X.alt.bin`); both fed to os88pkg.py (`X.bin --alt X.alt.bin`),
   then `build/apps.img` (1440) + `build/apps360.img` (360) from
-  **mines.jop + hello.jop** via jopdisk.py; all built by `all`.
+  **mines.o88 + hello.o88** via os88disk.py; all built by `all`.
   `run`/`debug`/`test` attach build/apps.img as floppy index 1. 86Box's
   fdd_02 gets apps360.img (best-effort config keys).
 
@@ -1137,7 +1138,7 @@ db height        ; rows
 | `ico_disk32`| library record: 32×32 floppy disk (rect body, shutter, label area) |
 | `ico_app16` | library record: 16×16 generic application (a recognizable "program" glyph, e.g. a diamond/tool shape) |
 
-Bitmaps are hand-authored `dw` rows (like the menu-bar apple, the one
+Bitmaps are hand-authored `dw` rows (like the menu-bar logo, the one
 sanctioned place for hand-made bitmap data — icons are the second).
 
 ## 26. desk.inc — desktop drive icons
@@ -1164,9 +1165,9 @@ clicks over windows never reach desk_click.
 ## 27. HELLO — the second package (apps/hello/hello.asm)
 
 Deliberately minimal, to prove the SDK surface and the no-icon fallback:
-`JOP_HEADER 'HELLO', entry` (no icon flag — the Disk window must show
+`OS88_HEADER 'HELLO', entry` (no icon flag — the Disk window must show
 `ico_app16` for it), one window "Hello" 240×90 at (200,150), paint =
-two centered lines: "Hello from a" / ".jop package!", no onkey, no
+two centered lines: "Hello from a" / ".o88 package!", no onkey, no
 onclick, no bss. Entry: wm_create, return BX/CF. Prefix `hl_`.
 
 ## 28. taskmgr.inc — the Task Manager window

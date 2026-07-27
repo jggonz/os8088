@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-jop: a Macintosh System 1-style GUI OS for the Intel 8086, written entirely in real-mode NASM assembly, booted from floppy. Pre-emptive multitasking, overlapping windows, serial mouse, a bottom dock, and loadable software packages that run as closable, multi-instance apps — all in 256KB of RAM.
+os8088: a Macintosh System 1-style GUI OS for the Intel 8086, written entirely in real-mode NASM assembly, booted from floppy. Pre-emptive multitasking, overlapping windows, serial mouse, a bottom dock, and loadable software packages that run as closable, multi-instance apps — all in 256KB of RAM.
 
 **SPEC.md is the binding contract.** Every symbol name, register contract, constant, and data layout is pinned there. Update SPEC.md *before* changing any interface, not after.
 
@@ -60,21 +60,21 @@ Everything running — built-in kind or loaded package — is a record in `kerne
 ### Layout
 
 - `boot/boot.asm` — 512-byte boot sector; geometry comes from `-DSPT`/`-DHEADS`, sector count from the measured kernel size (both injected by the Makefile).
-- `kernel/kernel.asm` — constants, boot sequence, the jop API jump table at 1000:0010, `%include`s of all modules, final .bss and size assertion. Module ownership is the table in SPEC.md §4; each `.inc` owns one subsystem (vga12, font, mouse, sched, events, wm, instance, menu, ui, apps, disk, loader, files, icons, desk, dock, taskmgr).
+- `kernel/kernel.asm` — constants, boot sequence, the os8088 API jump table at 1000:0010, `%include`s of all modules, final .bss and size assertion. Module ownership is the table in SPEC.md §4; each `.inc` owns one subsystem (vga12, font, mouse, sched, events, wm, instance, menu, ui, apps, disk, loader, files, icons, desk, dock, taskmgr).
 - `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` are dead — left in the tree but **no longer included** (relics of the pre-GUI text shell, as is `kernel-shell.asm.bak`).
-- `apps/` — loadable packages. `jopapi.inc` is the SDK: `JOP_HEADER` emits the 32-byte package header, `JAPI_*` constants name jump-table entries, `JOP_IMAGE_END` seals size + bss. `mines/` (embedded icon) and `hello/` (proves the generic-icon fallback).
-- `tools/` — host-side Python: `jopkg.py` (validates/stamps `.bin` → `.jop`), `jopdisk.py` (builds jopfs floppy images), `qmp.py` + `mouse.py` (test drivers).
+- `apps/` — loadable packages. `os88api.inc` is the SDK: `OS88_HEADER` emits the 32-byte package header, `OSAPI_*` constants name jump-table entries, `OS88_IMAGE_END` seals size + bss. `mines/` (embedded icon) and `hello/` (proves the generic-icon fallback).
+- `tools/` — host-side Python: `os88pkg.py` (validates/stamps `.bin` → `.o88`), `os88disk.py` (builds os88fs floppy images), `qmp.py` + `mouse.py` (test drivers).
 
 ### Software package pipeline
 
 ```
 apps/mines/mines.asm --nasm x2--> build/mines.bin (org 0xA000) + build/mines.alt.bin (org 0xA800)
-                    --jopkg.py--> build/mines.jop   (v2: reloc table diffed from the pair)
-build/*.jop        --jopdisk.py--> build/apps.img / apps360.img   (jopfs floppy, drive B:)
+                    --os88pkg.py--> build/mines.o88   (v2: reloc table diffed from the pair)
+build/*.o88        --os88disk.py--> build/apps.img / apps360.img   (os88fs floppy, drive B:)
 ```
 
-jopfs is a purpose-built read-only filesystem: superblock (magic `JOPFS2`) naming disk geometry, 32-entry directory, icon table at LBA 3–6, file data from LBA 7, sector-aligned. Packages are format v2 (SPEC.md §20.2): assembled at the 0xA000 link base, shipped with a relocation table that jopkg.py generates by diffing the dual assembly (class 0 = package-address words, +delta at load; class 1 = `call JAPI_*` rel16 displacements, −delta). The kernel allocates a region from the 0xA000..0xEFFF pool (first-fit; occupancy derived from the instance table), reads, relocates, zeroes bss, and calls the entry, which registers a window and returns; from then on its paint/key/click procs are ordinary near pointers called like any built-in window's. **Multiple packages — or multiple instances of one — run at once**; closing one frees its region. One binding author rule: package addresses only as whole 16-bit words (jopkg's reconstruction check fails the build otherwise). **Directory order on the apps disk is pinned in the Makefile: mines first, hello second — tests rely on it.**
+os88fs is a purpose-built read-only filesystem: superblock (magic `OS88FS2`) naming disk geometry, 32-entry directory, icon table at LBA 3–6, file data from LBA 7, sector-aligned. Packages are format v2 (SPEC.md §20.2): assembled at the 0xA000 link base, shipped with a relocation table that os88pkg.py generates by diffing the dual assembly (class 0 = package-address words, +delta at load; class 1 = `call OSAPI_*` rel16 displacements, −delta). The kernel allocates a region from the 0xA000..0xEFFF pool (first-fit; occupancy derived from the instance table), reads, relocates, zeroes bss, and calls the entry, which registers a window and returns; from then on its paint/key/click procs are ordinary near pointers called like any built-in window's. **Multiple packages — or multiple instances of one — run at once**; closing one frees its region. One binding author rule: package addresses only as whole 16-bit words (os88pkg's reconstruction check fails the build otherwise). **Directory order on the apps disk is pinned in the Makefile: mines first, hello second — tests rely on it.**
 
 ### Two geometries of everything
 
-Every image is built twice: 1.44MB (18 spt, for QEMU) and 360KB (9 spt, for 86Box / a real XT). If you change the boot path or jopfs, check both.
+Every image is built twice: 1.44MB (18 spt, for QEMU) and 360KB (9 spt, for 86Box / a real XT). If you change the boot path or os88fs, check both.

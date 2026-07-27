@@ -1,4 +1,4 @@
-# jop
+# os8088
 
 A Macintosh System 1-style graphical operating system for the Intel 8086,
 written in real-mode assembly and booted from a floppy. 640x480, 16 colors,
@@ -20,14 +20,14 @@ Bounce windows](docs/screenshot.png)
 ## What it does
 
 Boots straight into the GUI: a 50%-dither gray desktop, a menu bar
-(Apple, File, Special), and three windows already open. All of classic Mac's
+(System, File, Special), and three windows already open. All of classic Mac's
 core interactions work:
 
 - **Windows** — title bars with pinstripes and a close box on the frontmost,
   1px drop shadows, drag by title bar (XOR outline, Mac-style), click to
   raise, close box to hide, reopen from the File menu.
 - **Menus** — press in the bar, drag through pull-downs with live highlight,
-  release to choose. Apple → About jop; File → Note Pad / Clock / Bounce /
+  release to choose. System → About os8088; File → Note Pad / Clock / Bounce /
   Disk / Close Window; Special → Task Manager / Restart.
 - **Note Pad** — click it, type; wraps lines, Backspace and Return work.
 - **Disk icons** — the desktop shows an icon per floppy drive the BIOS
@@ -40,7 +40,7 @@ core interactions work:
   re-reads the directory after you swap disks; A/B/R keys switch drives.
 - **Icons** — a 1-bit icon system, classic Mac style: a built-in library
   (32×32 floppy, 16×16 generic application) plus per-application icons
-  that ship inside each `.jop` package and get copied onto the disk's
+  that ship inside each `.o88` package and get copied onto the disk's
   icon table by the packaging tools. Minesweeper carries a mine glyph;
   packages without one fall back to the generic icon.
 - **Minesweeper** — the first software package: a colorful 9×9
@@ -64,7 +64,7 @@ core interactions work:
 | keyboard      | BIOS int 16h, polled by the UI task. |
 | font          | the VGA ROM's own 8x8 font, copied out via int 10h AX=1130h at boot. |
 | floppy        | BIOS int 13h, one sector per call with retries; task switching pauses during a read (the tick still runs — the floppy motor needs it). |
-| software      | `.jop` packages on a jopfs data floppy in B:. A package is a flat binary loaded at 1000:A000 — inside the kernel segment, so its window procs are ordinary near pointers — calling the kernel through a fixed jump table at 1000:0010. |
+| software      | `.o88` packages on an os88fs data floppy in B:. A package is a flat binary loaded at 1000:A000 — inside the kernel segment, so its window procs are ordinary near pointers — calling the kernel through a fixed jump table at 1000:0010. |
 | concurrency   | one drawing mutex (`gfx_lock`); background tasks re-check visibility *under* the lock; ISRs run IF=0 throughout and never draw over a held lock. SPEC.md is the binding contract. |
 
 The kernel is ~6KB. Everything runs in the tiny model — CS = DS = SS =
@@ -105,16 +105,16 @@ kernel/wm.inc        window records, z-order, frames, hit test, painter
 kernel/menu.inc      menu bar, pull-down tracking
 kernel/ui.inc        UI task: event pump, keyboard, drags, dispatch
 kernel/apps.inc      About, Note Pad, Clock task, Bounce task
-kernel/disk.inc      int 13h floppy reads, jopfs mount + directory
-kernel/loader.inc    .jop package validation, load, launch, replace
+kernel/disk.inc      int 13h floppy reads, os88fs mount + directory
+kernel/loader.inc    .o88 package validation, load, launch, replace
 kernel/files.inc     the Disk window (file manager)
 kernel/icons.inc     1-bit icon format, draw routine, built-in library
 kernel/desk.inc      desktop drive icons: detect, paint, click to open
-apps/jopapi.inc      the package SDK: API offsets, header + icon macros
+apps/os88api.inc      the package SDK: API offsets, header + icon macros
 apps/mines/          Minesweeper, the first software package
 apps/hello/          HELLO, a minimal second package (no icon)
-tools/jopkg.py       package validator/stamper (.bin -> .jop)
-tools/jopdisk.py     jopfs floppy image builder
+tools/os88pkg.py       package validator/stamper (.bin -> .o88)
+tools/os88disk.py     os88fs floppy image builder
 tools/qmp.py         QMP client for scripted control of a test boot
 tools/mouse.py       absolute mouse positioning over the QMP socket
 ```
@@ -122,19 +122,19 @@ tools/mouse.py       absolute mouse positioning over the QMP socket
 ## Software packages
 
 Programs live on a second floppy (drive B:) with a purpose-built
-read-only filesystem, **jopfs**: a superblock that names the disk
+read-only filesystem, **os88fs**: a superblock that names the disk
 geometry, a 32-entry directory, sector-aligned file data. The build:
 
 ```
 apps/mines/mines.asm --nasm--> build/mines.bin      flat binary, org 0xA000,
-                                                    32-byte .jop header baked in
-build/mines.bin --tools/jopkg.py--> build/mines.jop validated package
-build/*.jop --tools/jopdisk.py--> build/apps.img    jopfs floppy (and apps360.img)
+                                                    32-byte .o88 header baked in
+build/mines.bin --tools/os88pkg.py--> build/mines.o88 validated package
+build/*.o88 --tools/os88disk.py--> build/apps.img    os88fs floppy (and apps360.img)
 ```
 
-A package is written against `apps/jopapi.inc`: `JOP_HEADER 'NAME', entry`
-emits the header, `JAPI_*` constants name the kernel's jump-table entries
-(gfx primitives, fonts, windows, ticks, a PRNG), and `JOP_IMAGE_END`
+A package is written against `apps/os88api.inc`: `OS88_HEADER 'NAME', entry`
+emits the header, `OSAPI_*` constants name the kernel's jump-table entries
+(gfx primitives, fonts, windows, ticks, a PRNG), and `OS88_IMAGE_END`
 seals the image with its size and loader-zeroed bss. At load time the
 kernel validates the header, reads the file into 1000:A000, zeroes bss,
 and calls the entry, which registers a window and returns; from then on
@@ -145,10 +145,10 @@ any built-in window's. Loading another package replaces the resident one.
 
 | image                | geometry                | for                             |
 |----------------------|-------------------------|---------------------------------|
-| `build/jop.img`      | 1.44MB, 18 spt, 2 heads | QEMU boot floppy (A:)           |
-| `build/jop360.img`   | 360KB, 9 spt, 2 heads   | 86Box / real XT boot floppy     |
-| `build/apps.img`     | 1.44MB jopfs            | QEMU software floppy (B:)       |
-| `build/apps360.img`  | 360KB jopfs             | 86Box / real XT software floppy |
+| `build/os8088.img`      | 1.44MB, 18 spt, 2 heads | QEMU boot floppy (A:)           |
+| `build/os8088-360.img`   | 360KB, 9 spt, 2 heads   | 86Box / real XT boot floppy     |
+| `build/apps.img`     | 1.44MB os88fs            | QEMU software floppy (B:)       |
+| `build/apps360.img`  | 360KB os88fs             | 86Box / real XT software floppy |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.

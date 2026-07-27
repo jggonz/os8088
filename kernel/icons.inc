@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - icons.inc (SPEC.md 25)
+; os8088 - icons.inc (SPEC.md 25)
 ;
 ; 1-bit icons with a mask, classic Mac style, drawn exactly like the mouse
 ; cursor (mouse.inc cur_draw/cur_pass): a white underlay pass using the mask
@@ -61,7 +61,7 @@ icon_draw:
 
 ; -----------------------------------------------------------------------------
 ; icon_draw16 - draw a header-less 16x16 icon body (16 mask words + 16 data
-;               words) - the jopfs icon-table / embedded-icon layout
+;               words) - the os88fs icon-table / embedded-icon layout
 ;               (SPEC 19 / 20.2).
 ;
 ; in:       CX = x, DX = y, SI -> body; caller holds the gfx lock

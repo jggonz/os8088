@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - sched.inc
+; os8088 - sched.inc
 ;
 ; Pre-emptive round-robin scheduler off the PIT (SPEC.md 8). Up to MAX_TASKS
 ; tasks; task 0 is the boot thread (the UI task) and runs on the boot stack

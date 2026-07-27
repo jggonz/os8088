@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop 1.0 - kernel
+; os8088 1.0 - kernel
 ;
 ; A Macintosh-style GUI for the 8086: 640x480x16 (VGA mode 12h), pre-emptive
 ; round-robin multitasking off the PIT, serial Microsoft mouse on COM1.
@@ -11,7 +11,7 @@
 ;
 ; Two fixed entry points:
 ;   1000:0000  cold entry (the boot sector jumps here)
-;   1000:0010  jop API jump table (SPEC.md 20.3): 4-byte near-jmp slots at
+;   1000:0010  os8088 API jump table (SPEC.md 20.3): 4-byte near-jmp slots at
 ;              pinned offsets, called by loaded programs (replaces the
 ;              retired syscall gate)
 ; =============================================================================
@@ -48,54 +48,54 @@ cold_entry:
     times 0x10 - ($ - $$) db 0  ; the table must land exactly at 0x0010
 
 ; =============================================================================
-; jop API jump table (SPEC.md 20.3)
+; os8088 API jump table (SPEC.md 20.3)
 ;
 ; Loaded programs `call` these pinned absolute offsets; each slot is a 4-byte
 ; cell: `jmp near target` (3 bytes) + 1 pad byte. Register contracts are the
 ; target routines' own. The slot order below IS the ABI - never reorder.
 ; =============================================================================
-%macro JAPI_SLOT 1
+%macro OSAPI_SLOT 1
     jmp near %1                 ; E9 rel16 = 3 bytes
     db 0                        ; pad to a 4-byte cell
 %endmacro
 
-japi_table:
-    JAPI_SLOT gfx_lock          ; 0x0010
-    JAPI_SLOT gfx_unlock        ; 0x0014
-    JAPI_SLOT gfx_pixel         ; 0x0018
-    JAPI_SLOT gfx_hline         ; 0x001C
-    JAPI_SLOT gfx_vline         ; 0x0020
-    JAPI_SLOT gfx_fill          ; 0x0024
-    JAPI_SLOT gfx_frame         ; 0x0028
-    JAPI_SLOT gfx_fill_gray     ; 0x002C
-    JAPI_SLOT gfx_xor_rect      ; 0x0030
-    JAPI_SLOT gfx_xor_fill      ; 0x0034
-    JAPI_SLOT font_char         ; 0x0038
-    JAPI_SLOT font_str          ; 0x003C
-    JAPI_SLOT font_width        ; 0x0040
-    JAPI_SLOT wm_create         ; 0x0044
-    JAPI_SLOT wm_show           ; 0x0048
-    JAPI_SLOT wm_hide           ; 0x004C
-    JAPI_SLOT wm_front          ; 0x0050
-    JAPI_SLOT wm_content        ; 0x0054
-    JAPI_SLOT wm_obscured       ; 0x0058
-    JAPI_SLOT task_yield        ; 0x005C
-    JAPI_SLOT task_sleep        ; 0x0060
-    JAPI_SLOT japi_get_ticks    ; 0x0064
-    JAPI_SLOT japi_set_color    ; 0x0068
-    JAPI_SLOT japi_mouse        ; 0x006C
-    JAPI_SLOT japi_srand        ; 0x0070
-    JAPI_SLOT japi_rand         ; 0x0074
-japi_table_end:                 ; 0x0078
+osapi_table:
+    OSAPI_SLOT gfx_lock          ; 0x0010
+    OSAPI_SLOT gfx_unlock        ; 0x0014
+    OSAPI_SLOT gfx_pixel         ; 0x0018
+    OSAPI_SLOT gfx_hline         ; 0x001C
+    OSAPI_SLOT gfx_vline         ; 0x0020
+    OSAPI_SLOT gfx_fill          ; 0x0024
+    OSAPI_SLOT gfx_frame         ; 0x0028
+    OSAPI_SLOT gfx_fill_gray     ; 0x002C
+    OSAPI_SLOT gfx_xor_rect      ; 0x0030
+    OSAPI_SLOT gfx_xor_fill      ; 0x0034
+    OSAPI_SLOT font_char         ; 0x0038
+    OSAPI_SLOT font_str          ; 0x003C
+    OSAPI_SLOT font_width        ; 0x0040
+    OSAPI_SLOT wm_create         ; 0x0044
+    OSAPI_SLOT wm_show           ; 0x0048
+    OSAPI_SLOT wm_hide           ; 0x004C
+    OSAPI_SLOT wm_front          ; 0x0050
+    OSAPI_SLOT wm_content        ; 0x0054
+    OSAPI_SLOT wm_obscured       ; 0x0058
+    OSAPI_SLOT task_yield        ; 0x005C
+    OSAPI_SLOT task_sleep        ; 0x0060
+    OSAPI_SLOT osapi_get_ticks    ; 0x0064
+    OSAPI_SLOT osapi_set_color    ; 0x0068
+    OSAPI_SLOT osapi_mouse        ; 0x006C
+    OSAPI_SLOT osapi_srand        ; 0x0070
+    OSAPI_SLOT osapi_rand         ; 0x0074
+osapi_table_end:                 ; 0x0078
 
 ; build-time assertions: the table's start and span are ABI, prove them here
-JAPI_TABLE_OFF equ japi_table - $$
-JAPI_TABLE_LEN equ japi_table_end - japi_table
-%if JAPI_TABLE_OFF != 0x0010
-%error "jop API jump table must start at offset 0x0010"
+OSAPI_TABLE_OFF equ osapi_table - $$
+OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
+%if OSAPI_TABLE_OFF != 0x0010
+%error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if JAPI_TABLE_LEN != 26 * 4
-%error "jop API jump table must be exactly 26 4-byte slots"
+%if OSAPI_TABLE_LEN != 26 * 4
+%error "os8088 API jump table must be exactly 26 4-byte slots"
 %endif
 
 ; =============================================================================
@@ -133,45 +133,45 @@ kmain:
     jmp ui_task                 ; task 0 becomes the UI task; never returns
 
 ; =============================================================================
-; japi helpers (SPEC.md 20.4) - tiny accessors for loaded programs, reached
+; osapi helpers (SPEC.md 20.4) - tiny accessors for loaded programs, reached
 ; only through the jump table. Each preserves all registers except its
 ; documented outputs.
 ; =============================================================================
 
-; ---- japi_get_ticks - out: AX = [ticks] -------------------------------------
-japi_get_ticks:
+; ---- osapi_get_ticks - out: AX = [ticks] -------------------------------------
+osapi_get_ticks:
     mov ax, [ticks]
     ret
 
-; ---- japi_set_color - in: AL -> [gfx_color] ---------------------------------
-japi_set_color:
+; ---- osapi_set_color - in: AL -> [gfx_color] ---------------------------------
+osapi_set_color:
     mov [gfx_color], al
     ret
 
-; ---- japi_mouse - out: CX = [mouse_x], DX = [mouse_y], AL = [mouse_btn] -----
-japi_mouse:
+; ---- osapi_mouse - out: CX = [mouse_x], DX = [mouse_y], AL = [mouse_btn] -----
+osapi_mouse:
     mov cx, [mouse_x]
     mov dx, [mouse_y]
     mov al, [mouse_btn]
     ret
 
-; ---- japi_srand - in: AX -> [japi_seed] -------------------------------------
-japi_srand:
-    mov [japi_seed], ax
+; ---- osapi_srand - in: AX -> [osapi_seed] -------------------------------------
+osapi_srand:
+    mov [osapi_seed], ax
     ret
 
-; ---- japi_rand - seed = seed*25173 + 13849; out: AX = new seed --------------
-japi_rand:
+; ---- osapi_rand - seed = seed*25173 + 13849; out: AX = new seed --------------
+osapi_rand:
     push dx                     ; mul clobbers DX; only AX is an output
-    mov ax, [japi_seed]
+    mov ax, [osapi_seed]
     mov dx, 25173
     mul dx                      ; DX:AX = seed * 25173; keep the low word
     add ax, 13849
-    mov [japi_seed], ax
+    mov [osapi_seed], ax
     pop dx
     ret
 
-japi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
+osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 
 ; -----------------------------------------------------------------------------
 %include "vga12.inc"

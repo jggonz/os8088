@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - dock.inc
+; os8088 - dock.inc
 ;
 ; The dock strip (SPEC.md 30): a taskbar along the bottom of the screen with
 ; one tile per RUNNING instance (I_STATE = 1, SPEC.md 29), built-in or

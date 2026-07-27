@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - boot sector
+; os8088 - boot sector
 ;
 ; The BIOS loads this single 512-byte sector to 0000:7C00 and jumps to it with
 ; DL set to the drive we came from. Our only job is to pull the kernel off the
@@ -146,9 +146,9 @@ halt:
 boot_drive  db 0
 lba         dw 0
 
-msg_load    db 'jop: loading', 13, 10, 0
-msg_ok      db 'jop: ok', 13, 10, 0
-msg_err     db 'jop: disk error', 13, 10, 0
+msg_load    db 'os8088: loading', 13, 10, 0
+msg_ok      db 'os8088: ok', 13, 10, 0
+msg_err     db 'os8088: disk error', 13, 10, 0
 
 ; -----------------------------------------------------------------------------
     times 510 - ($ - $$) db 0

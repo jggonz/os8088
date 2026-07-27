@@ -1,5 +1,5 @@
 ; =============================================================================
-; jop - ui.inc
+; os8088 - ui.inc
 ;
 ; The UI task (SPEC.md 13): task 0's forever-loop. Each pass polls the BIOS
 ; keyboard, drains one event from the system queue, runs any deferred

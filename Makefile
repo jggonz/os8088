@@ -1,7 +1,7 @@
 # =============================================================================
-# jop - build a bootable 1.44MB floppy image
+# os8088 - build a bootable 1.44MB floppy image
 #
-#   make        build build/jop.img
+#   make        build build/os8088.img
 #   make run    boot it in QEMU
 #   make debug  boot it with QEMU waiting for gdb on :1234
 #   make clean
@@ -10,8 +10,8 @@
 NASM  := nasm
 QEMU  := qemu-system-i386
 BUILD := build
-IMG   := $(BUILD)/jop.img
-IMG360 := $(BUILD)/jop360.img
+IMG   := $(BUILD)/os8088.img
+IMG360 := $(BUILD)/os8088-360.img
 APPSIMG := $(BUILD)/apps.img
 APPSIMG360 := $(BUILD)/apps360.img
 BOX   := /Applications/86Box.app/Contents/MacOS/86Box
@@ -63,40 +63,40 @@ $(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin
 	@dd if=$(BUILD)/kernel.bin of=$@ bs=512 seek=1 conv=notrunc status=none
 	@echo "image:  $@ (360KB, 9 spt)"
 
-# Minesweeper, the first loadable program: a flat binary with the .jop
+# Minesweeper, the first loadable program: a flat binary with the .o88
 # package header. Each package is assembled TWICE - at the 0xA000 link base
-# and at org 0xA800 - and jopkg.py diffs the pair into the v2 relocation
+# and at org 0xA800 - and os88pkg.py diffs the pair into the v2 relocation
 # table (SPEC.md 24), so the kernel can load any number of instances at
 # per-instance bases.
-$(BUILD)/mines.bin: apps/mines/mines.asm apps/jopapi.inc | $(BUILD)
+$(BUILD)/mines.bin: apps/mines/mines.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/mines/mines.asm
 	@echo "mines:  $$(stat -f%z $@) bytes"
 
-$(BUILD)/mines.alt.bin: apps/mines/mines.asm apps/jopapi.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -DJOP_ORG=0xA800 -o $@ apps/mines/mines.asm
+$(BUILD)/mines.alt.bin: apps/mines/mines.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xA800 -o $@ apps/mines/mines.asm
 
-$(BUILD)/mines.jop: $(BUILD)/mines.bin $(BUILD)/mines.alt.bin tools/jopkg.py
-	python3 tools/jopkg.py $(BUILD)/mines.bin --alt $(BUILD)/mines.alt.bin -o $@
+$(BUILD)/mines.o88: $(BUILD)/mines.bin $(BUILD)/mines.alt.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/mines.bin --alt $(BUILD)/mines.alt.bin -o $@
 
 # HELLO, the second package: minimal, no embedded icon (proves the
 # generic-icon fallback in the Disk window).
-$(BUILD)/hello.bin: apps/hello/hello.asm apps/jopapi.inc | $(BUILD)
+$(BUILD)/hello.bin: apps/hello/hello.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/hello/hello.asm
 	@echo "hello:  $$(stat -f%z $@) bytes"
 
-$(BUILD)/hello.alt.bin: apps/hello/hello.asm apps/jopapi.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -DJOP_ORG=0xA800 -o $@ apps/hello/hello.asm
+$(BUILD)/hello.alt.bin: apps/hello/hello.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xA800 -o $@ apps/hello/hello.asm
 
-$(BUILD)/hello.jop: $(BUILD)/hello.bin $(BUILD)/hello.alt.bin tools/jopkg.py
-	python3 tools/jopkg.py $(BUILD)/hello.bin --alt $(BUILD)/hello.alt.bin -o $@
+$(BUILD)/hello.o88: $(BUILD)/hello.bin $(BUILD)/hello.alt.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/hello.bin --alt $(BUILD)/hello.alt.bin -o $@
 
-# The software floppies (drive B:) hold packages, not boot code - jopfs only.
+# The software floppies (drive B:) hold packages, not boot code - os88fs only.
 # Directory order is pinned: mines first, hello second (tests rely on it).
-$(APPSIMG): $(BUILD)/mines.jop $(BUILD)/hello.jop tools/jopdisk.py
-	python3 tools/jopdisk.py -o $@ --size 1440 $(BUILD)/mines.jop $(BUILD)/hello.jop
+$(APPSIMG): $(BUILD)/mines.o88 $(BUILD)/hello.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/mines.o88 $(BUILD)/hello.o88
 
-$(APPSIMG360): $(BUILD)/mines.jop $(BUILD)/hello.jop tools/jopdisk.py
-	python3 tools/jopdisk.py -o $@ --size 360 $(BUILD)/mines.jop $(BUILD)/hello.jop
+$(APPSIMG360): $(BUILD)/mines.o88 $(BUILD)/hello.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/mines.o88 $(BUILD)/hello.o88
 
 # The GUI reads a Microsoft serial mouse on COM1; QEMU emulates one natively.
 MOUSE := -chardev msmouse,id=m0 -serial chardev:m0

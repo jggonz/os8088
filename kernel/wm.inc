@@ -25,7 +25,7 @@ W_ONCLICK equ 16                ; word: near ptr or 0; CX=x DX=y SI=win, called
                                 ; under the gfx lock for content clicks on the
                                 ; front window (SPEC.md 13)
 WIN_SIZE equ 18                 ; NOT a power of two: never shift, multiply
-MAX_WIN  equ 12                 ; mirrored in apps/jopapi.inc (SPEC.md 11)
+MAX_WIN  equ 12                 ; mirrored in apps/os88api.inc (SPEC.md 11)
 
 ; -----------------------------------------------------------------------------
 ; wm_init - zero the window table, z-order array and count; orphan wm_owner
