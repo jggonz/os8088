@@ -17,6 +17,10 @@ APPSIMG360 := $(BUILD)/apps360.img
 BOX   := /Applications/86Box.app/Contents/MacOS/86Box
 VM    := $(CURDIR)/vm/xt
 
+# "size of this file in bytes" is spelled differently by GNU coreutils and by
+# BSD/macOS stat, and this gets built on both. Try GNU first, fall back to BSD.
+FILESIZE = $$(stat -c%s $(1) 2>/dev/null || stat -f%z $(1))
+
 KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
@@ -31,25 +35,25 @@ $(BUILD):
 # which keeps Apple's Mach-O-only toolchain out of the picture entirely.
 $(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) | $(BUILD)
 	$(NASM) -f bin -w+error -I kernel/ -o $@ $(KERNEL_SRC)
-	@echo "kernel: $$(stat -f%z $@) bytes"
+	@echo "kernel: $(call FILESIZE,$@) bytes"
 
 # The boot sector needs to know how many sectors to read, so we measure the
 # kernel at build time and assemble the count in. Reading exactly what exists
 # means a short kernel never waits on phantom sectors.
 $(BUILD)/boot.bin: boot/boot.asm $(BUILD)/kernel.bin | $(BUILD)
 	$(NASM) -f bin \
-		-DKERNEL_SECTORS=$$(( ( $$(stat -f%z $(BUILD)/kernel.bin) + 511 ) / 512 )) \
+		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/kernel.bin) + 511 ) / 512 )) \
 		-o $@ boot/boot.asm
-	@test $$(stat -f%z $@) -eq 512 || { echo "boot sector is not 512 bytes"; exit 1; }
+	@test $(call FILESIZE,$@) -eq 512 || { echo "boot sector is not 512 bytes"; exit 1; }
 
 # The same kernel on a 360KB 5.25" disk: 40 cylinders, 2 heads, 9 sectors per
 # track. This is what an 8086-era machine can actually read - 1.44MB drives
 # postdate the 8086 by years, and an XT BIOS knows nothing about them.
 $(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin | $(BUILD)
 	$(NASM) -f bin -DSPT=9 -DHEADS=2 \
-		-DKERNEL_SECTORS=$$(( ( $$(stat -f%z $(BUILD)/kernel.bin) + 511 ) / 512 )) \
+		-DKERNEL_SECTORS=$$(( ( $(call FILESIZE,$(BUILD)/kernel.bin) + 511 ) / 512 )) \
 		-o $@ boot/boot.asm
-	@test $$(stat -f%z $@) -eq 512 || { echo "boot sector is not 512 bytes"; exit 1; }
+	@test $(call FILESIZE,$@) -eq 512 || { echo "boot sector is not 512 bytes"; exit 1; }
 
 $(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin
 	@dd if=/dev/zero of=$@ bs=512 count=2880 status=none
@@ -70,7 +74,7 @@ $(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin
 # per-instance bases.
 $(BUILD)/mines.bin: apps/mines/mines.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/mines/mines.asm
-	@echo "mines:  $$(stat -f%z $@) bytes"
+	@echo "mines:  $(call FILESIZE,$@) bytes"
 
 $(BUILD)/mines.alt.bin: apps/mines/mines.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xA800 -o $@ apps/mines/mines.asm
@@ -82,7 +86,7 @@ $(BUILD)/mines.o88: $(BUILD)/mines.bin $(BUILD)/mines.alt.bin tools/os88pkg.py
 # generic-icon fallback in the Disk window).
 $(BUILD)/hello.bin: apps/hello/hello.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/hello/hello.asm
-	@echo "hello:  $$(stat -f%z $@) bytes"
+	@echo "hello:  $(call FILESIZE,$@) bytes"
 
 $(BUILD)/hello.alt.bin: apps/hello/hello.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xA800 -o $@ apps/hello/hello.asm

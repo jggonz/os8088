@@ -1,5 +1,23 @@
 # os8088
 
+## Contributing
+
+Patches welcome — and you do not need to already know 8086 assembly.
+**[CONTRIBUTING.md](CONTRIBUTING.md)** walks through contributing with a
+coding agent (**Claude Code** or **Codex**) on **macOS, Linux or Windows**:
+toolchain setup per platform, the rules the assembler enforces, how to boot
+and drive the OS headlessly to verify a change, and what a reviewable pull
+request looks like.
+
+```
+git clone https://github.com/jggonz/os8088.git && cd os8088
+git config core.hooksPath .githooks     # one-time: secret-scan hook
+make && make run                        # build, then boot it in QEMU
+claude                                  # ...or: codex
+```
+
+---
+
 A Macintosh System 1-style graphical operating system for the Intel 8086,
 written in real-mode assembly and booted from a floppy. 640x480, 16 colors,
 overlapping draggable windows, pull-down menus, closable multi-instance
