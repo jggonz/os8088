@@ -1,0 +1,9 @@
+# Code owners for os8088.
+# Every file in the repo is owned by @jggonz, so every pull request
+# requests review from that account automatically.
+#
+# To make that review mandatory, enable branch protection on `main`:
+#   Settings -> Rules/Branches -> Require a pull request before merging
+#                             -> Require review from Code Owners
+
+* @jggonz
