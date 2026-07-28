@@ -45,7 +45,10 @@ APP_MAX_SIZE equ 0x5000         ; image + bss budget, 0xA000..0xEFFF
 ; double buffering (SPEC.md 32)
 BB_SEG        equ 0x4000        ; back buffer base segment (plane 0)
 BB_PLANE_PARA equ 0x960         ; paragraphs per plane (0x9600 = 480 rows x 80)
-DB_MIN_KB     equ 512           ; int 12h floor: double-buffer only at >= 512KB
+DB_MIN_KB     equ 500           ; int 12h floor: double-buffer only at >= 500KB
+                                ; (a real 512KB machine reports less once the
+                                ; BIOS takes its cut - 500 lets those in, and
+                                ; the buffer ends at 0x657FF = 406KB anyway)
 
 ; =============================================================================
 ; Fixed entry points

@@ -57,7 +57,7 @@ Pre-emptive round-robin scheduling: the int 08h PIT hook chains the BIOS tick, s
 
 ### Double buffering (SPEC.md §32 — conditional)
 
-At boot `bb_init` reads int 12h: with ≥ 512KB conventional RAM every `gfx_*`/font/icon draw renders into a 4-plane back buffer at segment 0x4000 (`kernel/vgabb.inc`, software or/and/xor — RAM has no VGA latches) and `gfx_unlock` flushes the dirty rect to VRAM before the cursor reappears; `menu_track` flushes once for the pull-down because it draws while holding the lock. Below 512KB nothing changes — every entry falls through to the original VRAM body, which is all a 256KB machine ever runs. QEMU (int 12h → 639K) always boots double-buffered; `make xt` (256K) is the fallback path.
+At boot `bb_init` reads int 12h: with ≥ 500KB conventional RAM (the floor is 500, not 512, so a real 512KB machine still qualifies after the BIOS takes its cut) every `gfx_*`/font/icon draw renders into a 4-plane back buffer at segment 0x4000 (`kernel/vgabb.inc`, software or/and/xor — RAM has no VGA latches) and `gfx_unlock` flushes the dirty rect to VRAM before the cursor reappears; `menu_track` flushes once for the pull-down because it draws while holding the lock. Below that nothing changes — every entry falls through to the original VRAM body, which is all a 256KB machine ever runs. QEMU (int 12h → 639K) always boots double-buffered; `make xt` (256K) is the fallback path.
 
 Two things keep it affordable, because the flush (VRAM) costs ~24× the render (RAM):
 

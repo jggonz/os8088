@@ -101,7 +101,7 @@ APP_MAX_SIZE equ 0x5000      ; image + bss budget, 0xA000..0xEFFF
 ; double buffering (§32)
 BB_SEG        equ 0x4000     ; back buffer base segment (plane 0)
 BB_PLANE_PARA equ 0x960      ; paragraphs per plane (0x9600 bytes = 480 rows × 80)
-DB_MIN_KB     equ 512        ; int 12h floor: double-buffer only at ≥ 512KB
+DB_MIN_KB     equ 500        ; int 12h floor: double-buffer only at ≥ 500KB
 ```
 
 ## 4. Module files and ownership
@@ -1954,22 +1954,23 @@ Module prefix `bb_`; file included right after `vga12.inc`.
 
 **Probe & arm — `bb_init`** (from kmain, right after `vga_mode12`, before
 any drawing; task 0, so the §7 BIOS rule holds): int 12h → AX =
-conventional KB. If AX < `DB_MIN_KB` (512) the byte `[bb_on]` stays 0 and
+conventional KB. If AX < `DB_MIN_KB` (500) the byte `[bb_on]` stays 0 and
 **nothing else in this section applies — every drawing path is exactly the
 pre-§32 direct-VRAM code**. Otherwise set `[bb_on]` = 1, zero all four
 back-buffer planes (the mode set just cleared VRAM, so both start equal)
 and reset the dirty rect to empty. `[bb_on]` is initialized data (db 0,
 next to `gfx_lock_flag`), **not** .bss — nothing zeroes .bss at boot — and
 it never changes after bb_init. Note the EBDA caveat: a BIOS that steals
-top-of-memory (SeaBIOS's 640K → 639) still passes; a 512K machine whose
-BIOS reports 511 falls back — the gate is deliberately the reported value.
+top-of-memory (SeaBIOS's 640K → 639) still passes, and so does a real 512K
+machine once its BIOS has taken a cut — which is why the floor is 500 and not
+512. The gate is deliberately the reported value.
 
 **Back buffer layout.** Plane p lives at segment `BB_SEG + p*BB_PLANE_PARA`
 (0x4000, 0x4960, 0x52C0, 0x5C20 — 0x960 paragraphs = 0x9600 bytes apart),
 offsets 0..0x95FF, 80-byte rows — byte-for-byte the same geometry
 as one VRAM plane, so `vga_rect_setup`'s offsets work unchanged in both
 worlds. Linear span 0x40000..0x657FF: untouchable on a 256KB machine,
-free below the 512KB floor's 0x80000 top.
+and 406KB of address space in all, so it clears the 500KB floor with room.
 
 **Rendering.** RAM has no latches, no Set/Reset, no write modes — the
 `bb_*` twins do in software, per plane, what the VGA ALU did in hardware:
