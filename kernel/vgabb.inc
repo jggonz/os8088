@@ -28,6 +28,22 @@ bb_on           db 0            ; double buffering armed? Initialized data,
                                 ; NOT .bss (nothing zeroes .bss at boot);
                                 ; written once by bb_init, read everywhere.
 
+bb_mono         db 1            ; are all four back-buffer planes identical?
+                                ; True from boot (bb_init zeroes them) and
+                                ; for every pixel drawn in colour 0 or 15 -
+                                ; which is the whole System-1 UI, since its
+                                ; greys are 0/15 dither. While set, gfx_flush
+                                ; copies ONE plane with Map Mask = 0Fh and the
+                                ; hardware fans it out to all four: a quarter
+                                ; of the VRAM writes, and no plane-sequential
+                                ; colour fringing (SPEC.md 32). The first draw
+                                ; in any other colour - a Minesweeper digit -
+                                ; clears it for good; the planes are always
+                                ; fully rendered, so the flush just falls back
+                                ; to four passes with nothing to repair.
+                                ; Initialized data for the same reason as
+                                ; bb_on.
+
 ; -----------------------------------------------------------------------------
 ; bb_init - probe conventional RAM; arm and clear the back buffer at >= 512KB
 ;
@@ -64,6 +80,27 @@ bb_init:
     pop es
     pop di
     pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; bb_mono_chk - internal: retire [bb_mono] if [gfx_color] is not 0 or 15
+;
+; Called from the solid-fill and glyph entries - the only two places a colour
+; other than black or white can reach the planes. Gray fills dither 0/15, XOR
+; flips every plane alike and icons are white-under/black-over, so all three
+; preserve the invariant untouched.
+; clobbers: flags only
+; -----------------------------------------------------------------------------
+bb_mono_chk:
+    push ax
+    mov al, [gfx_color]
+    and al, 0x0F
+    jz .ok                      ; 0 = every plane 00
+    cmp al, 0x0F
+    je .ok                      ; 15 = every plane FF
+    mov byte [bb_mono], 0
+.ok:
     pop ax
     ret
 
@@ -166,7 +203,18 @@ gfx_flush:
     mov ax, VGA_SEG
     mov es, ax
     mov cx, BB_SEG              ; CX = current plane segment
-    mov byte [bb_plane], 1      ; Map Mask bit
+    mov al, 1                   ; Map Mask bit: one plane per pass...
+    cmp byte [bb_mono], 0
+    je .setp
+    mov al, 0x0F                ; ...unless every plane holds the same bytes:
+                                ; enable all four and copy plane 0 once, which
+                                ; the shl below turns into a single iteration
+                                ; (0Fh << 1 = 1Eh already trips the 10h test).
+                                ; Quarter the VRAM traffic, and all four
+                                ; planes land together so no pixel is ever
+                                ; briefly the wrong colour (SPEC.md 32).
+.setp:
+    mov [bb_plane], al
 .plane:
     mov dx, VGA_SEQ
     mov ah, [bb_plane]
@@ -236,6 +284,7 @@ BBM_XOR   equ 2
 
 bb_fill:
     mov byte [bb_mode], BBM_SOLID
+    call bb_mono_chk            ; the one solid-colour entry (SPEC.md 32)
     jmp bb_rect
 
 bb_fill_gray:
@@ -322,10 +371,14 @@ bb_plane_op:
     cmp byte [bb_mode], BBM_XOR
     je .xrow
 .irow:
-    mov al, ah
-    mov cx, bp
+    mov al, ah                  ; AX = pattern:pattern, so stosw is safe for
+    mov cx, bp                  ; both the solid 00/FF and the AA/55 dither
+    shr cx, 1
     push di
-    rep stosb
+    rep stosw                   ; string ops leave the shr's CF alone
+    jnc .ieven
+    stosb                       ; odd interior width: one tail byte
+.ieven:
     pop di
     add di, ROW_BYTES
     xor ah, [bb_altm]           ; gray alternates, solid stays

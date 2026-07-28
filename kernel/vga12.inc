@@ -639,6 +639,9 @@ vga_xor_hline:
 gfx_xor_rect:
     cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
     jne bb_xor_rect
+vga_xor_rect_vram:              ; VRAM body under its own name: transient
+                                ; overlays (the drag outline) call it direct
+                                ; so they never enter the back buffer
     push bx
     push dx
     push si
@@ -685,6 +688,8 @@ gfx_xor_rect:
 gfx_xor_fill:
     cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
     jne bb_xor_fill
+vga_xor_fill_vram:              ; VRAM body under its own name (see
+                                ; vga_xor_rect_vram) - the menu highlights
     push ax
     push bx
     push cx

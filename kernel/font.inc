@@ -177,6 +177,7 @@ font_char:
 ; clobbers: ax, bx, cx, dx, si, di, es (font_char's epilogue restores all)
 ; -----------------------------------------------------------------------------
 font_char_bb:
+    call bb_mono_chk            ; glyphs are the other colour entry (SPEC.md 32)
     mov ax, cx                  ; dirty: columns x/8..(x+7)/8, rows y..y+7
     mov bx, cx
     add bx, 7

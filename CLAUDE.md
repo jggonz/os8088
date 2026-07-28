@@ -57,7 +57,12 @@ Pre-emptive round-robin scheduling: the int 08h PIT hook chains the BIOS tick, s
 
 ### Double buffering (SPEC.md §32 — conditional)
 
-At boot `bb_init` reads int 12h: with ≥ 512KB conventional RAM every `gfx_*`/font/icon draw renders into a 4-plane back buffer at segment 0x4000 (`kernel/vgabb.inc`, software or/and/xor — RAM has no VGA latches) and `gfx_unlock` flushes the dirty rect to VRAM before the cursor reappears; `menu_track` and the drag loop call `gfx_flush` explicitly because they draw while holding the lock. Below 512KB nothing changes — every entry falls through to the original VRAM body, which is all a 256KB machine ever runs. The cursor is *never* double-buffered: the ISR goes through `vga_save_vram`/`vga_restore_vram`. QEMU (int 12h → 639K) always boots double-buffered; `make xt` (256K) is the fallback path.
+At boot `bb_init` reads int 12h: with ≥ 512KB conventional RAM every `gfx_*`/font/icon draw renders into a 4-plane back buffer at segment 0x4000 (`kernel/vgabb.inc`, software or/and/xor — RAM has no VGA latches) and `gfx_unlock` flushes the dirty rect to VRAM before the cursor reappears; `menu_track` flushes once for the pull-down because it draws while holding the lock. Below 512KB nothing changes — every entry falls through to the original VRAM body, which is all a 256KB machine ever runs. QEMU (int 12h → 639K) always boots double-buffered; `make xt` (256K) is the fallback path.
+
+Two things keep it affordable, because the flush (VRAM) costs ~24× the render (RAM):
+
+- **`[bb_mono]`** — all four planes hold identical bytes as long as everything is drawn in colour 0 or 15, which is the whole UI (its greys are 0/15 dither). While set, the flush copies *one* plane with Map Mask = 0Fh and the hardware fans it out: a quarter of the VRAM writes, and no mid-flush colour fringing. `bb_mono_chk` retires it one-way on the first other colour (a Minesweeper digit); the planes are always fully rendered, so the flush just reverts to four passes.
+- **Transient overlays never enter the back buffer.** The drag outline and the menu highlights are XOR overlays drawn and erased inside one held lock — the cursor's contract — so they call `vga_xor_rect_vram`/`vga_xor_fill_vram` direct, like the cursor calls `vga_save_vram`. Routed through the buffer, a 1px outline dirtied the whole window rect and flushed it twice per drag pass. The public `gfx_xor_*` still dispatch to the buffer: packages reach them through the API table and their output is persistent.
 
 ### Instances (SPEC.md §29 — how apps live and die)
 

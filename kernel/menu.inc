@@ -133,10 +133,8 @@ menu_track:
 
 .found:
     mov [menu_ent], si
-    call menu_title_xor         ; highlight the title cell
-    call gfx_flush              ; the whole interaction holds the gfx lock,
-                                ; so feedback must be flushed explicitly
-                                ; (SPEC.md 32; no-op without double buffering)
+    call menu_title_xor         ; highlight the title cell (VRAM-direct, so
+                                ; no flush needed - SPEC.md 32)
 
     ; --- menu rect: width = widest item + 16, items are 16px cells -----------
     call menu_widest            ; AX = widest item text, px (SI = entry)
@@ -215,8 +213,9 @@ menu_track:
     je .same
     call menu_item_xor
 .same:
-    call gfx_flush              ; highlight moves reach the screen; cheap
-                                ; no-op on the iterations that drew nothing
+                                ; no flush: the highlights are VRAM-direct and
+                                ; nothing else draws while we hold the lock,
+                                ; so the back buffer is untouched here (§32)
     call task_yield             ; keep the scheduler healthy while we spin
     jmp .poll
 
@@ -298,7 +297,7 @@ menu_item_xor:
     inc ax                      ; keep the frame out of the highlight
     mov cx, [menu_x2]
     dec cx
-    call gfx_xor_fill
+    call vga_xor_fill_vram      ; VRAM-direct transient overlay (SPEC.md 32)
     pop dx
     pop cx
     pop bx

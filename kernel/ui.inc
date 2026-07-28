@@ -213,11 +213,9 @@ ui_drag:
     mov [ui_dragh], ax
 
     call gfx_lock
-    call ui_drag_xor            ; draw the outline
-    call gfx_flush              ; outline drawn with the lock held: push it
-                                ; to the screen (SPEC.md 32; no-op when not
-                                ; double-buffered). The erases need no flush
-                                ; of their own - a gfx_unlock follows each.
+    call ui_drag_xor            ; draw the outline (VRAM-direct, SPEC.md 32:
+                                ; a transient overlay never enters the back
+                                ; buffer, so no flush is needed here)
 
 .track:
     ; The linger below stretches each pass to a whole tick, so the button is
@@ -246,7 +244,6 @@ ui_drag:
     add ax, [ui_origy]
     mov [ui_cury], ax
     call ui_drag_xor            ; redraw every pass, moved or not
-    call gfx_flush              ; and push it while the lock is held (§32)
 
     ; Linger with the outline drawn (lock held) until the next timer tick.
     ; The erase window that follows is short but includes the unlock/yield
@@ -310,7 +307,14 @@ ui_drag_xor:
     mov dx, bx
     add dx, [ui_dragh]
     dec dx                      ; y2 = y1 + h - 1
-    call gfx_xor_rect           ; clips, so off-screen edges are fine
+    call vga_xor_rect_vram      ; clips, so off-screen edges are fine.
+                                ; VRAM-direct (SPEC.md 32): the outline is a
+                                ; transient overlay like the cursor - it is
+                                ; always XOR-erased before the lock drops, so
+                                ; VRAM still equals the back buffer whenever
+                                ; anyone else can draw. Going through the back
+                                ; buffer instead would dirty the whole window
+                                ; rect and flush it twice per pass.
     ret
 
 ; -----------------------------------------------------------------------------

@@ -176,11 +176,13 @@ Save/restore for a W-px-wide, H-px-tall rect uses
 **Double-buffer dispatch (§32).** Every public drawing entry above
 (`gfx_pixel` … `gfx_restore`) starts with a `[bb_on]` test and branches to
 its `bb_*` twin in vgabb.inc when double buffering is active; contracts,
-clipping and buffer layouts are identical in both paths. The VRAM bodies of
-`gfx_save`/`gfx_restore` remain reachable under their own names,
-`vga_save_vram`/`vga_restore_vram` — the mouse cursor's save-under (§9)
-calls them directly because the cursor always lives in VRAM, never in the
-back buffer.
+clipping and buffer layouts are identical in both paths. Four VRAM bodies
+remain reachable under their own names, for callers that must not touch the
+back buffer: `vga_save_vram`/`vga_restore_vram` (the mouse cursor's
+save-under, §9) and `vga_xor_rect_vram`/`vga_xor_fill_vram` (the drag
+outline and the menu highlights, §12/§13). All four are transient overlays —
+drawn and erased within one held lock — so they live in VRAM only, never in
+the back buffer (§32).
 
 ## 6. font.inc
 
@@ -674,11 +676,14 @@ them fresh; cursor stays hidden during tracking since the gfx lock is held —
 acceptable, tracking feedback is the highlight).
 
 Because the whole interaction runs under one gfx_lock, `menu_track` calls
-`gfx_flush` (§32) at its feedback points so the menu is visible while the
-button is held: after the title highlight, after the pull-down + items are
-drawn, and once per poll iteration (a no-op when the highlight did not
-move). The final save-under restore + title un-highlight need no flush of
-their own — the caller's gfx_unlock flushes them (§13 step 2).
+`gfx_flush` (§32) once, after the pull-down + items are drawn — that is real
+back-buffer content and would otherwise stay invisible while the button is
+held. The two highlights are not: `menu_title_xor` and `menu_item_xor` go
+through `vga_xor_fill_vram` (§5), straight to VRAM, so tracking neither
+dirties the back buffer nor flushes — the poll loop does no drawing work at
+all beyond the XOR itself. The final save-under restore + title un-highlight
+need no flush of their own — the caller's gfx_unlock flushes them (§13
+step 2), and that flush is what clears the last item highlight from VRAM.
 
 ## 13. ui.inc — the UI task (task 0)
 
@@ -700,10 +705,10 @@ Loop forever:
      flag and hides; the dock tile inverts), gfx_unlock. Title bar → if
      not front, `wm_front`; then run
      the **drag loop**: gfx_lock; xor-draw the outline at the window rect
-     (then `gfx_flush`, §32 — the outline is drawn with the lock held, so
-     it must be pushed to the screen explicitly; every xor-draw in this
-     loop is followed by a flush, while the xor-erases are flushed by the
-     gfx_unlock that follows them);
+     (via `vga_xor_rect_vram`, §5/§32 — the outline is a transient overlay
+     that never enters the back buffer, so no flush is involved anywhere in
+     this loop; it is always xor-erased before the lock drops, which is what
+     keeps VRAM equal to the back buffer for every other drawer);
      while `mouse_btn` bit0 set: xor-erase the outline, gfx_unlock,
      `task_yield` (background tasks stay live here), gfx_lock, xor-draw the
      outline at rect offset by (mouse - start) — every iteration, even if
@@ -1971,10 +1976,16 @@ free below the 512KB floor's 0x80000 top.
 
 - solid ops (`bb_pixel/hline/vline/fill`): plane byte value from
   `[gfx_color]`'s plane bit — set bits with `or dest, mask`, clear with
-  `and dest, ~mask`; interiors of fills are `rep stosb` of 0xFF/0x00.
+  `and dest, ~mask`; interiors of fills are `rep stosw` of 0xFFFF/0x0000.
 - `bb_fill_gray`: per row `and dest, ~mask` + `or dest, pat&mask` at the
-  edges, `rep stosb` pattern in the interior; 0xAA/0x55 alternating by row
+  edges, `rep stosw` pattern in the interior; 0xAA/0x55 alternating by row
   parity, identical in all four planes (color 15/0 per pixel bit).
+
+Interiors go by word, not byte: the pattern is uniform across a row in both
+solid and dither modes, so AL=AH and one `rep stosw` (plus a `stosb` tail on
+an odd width, selected by the `shr cx, 1` carry that the string op leaves
+alone) replaces two `stosb`. Free on an 8088's 8-bit bus, half the bus
+cycles on any 16-bit part.
 - XOR ops (`bb_xor_rect/xor_fill` internals): `xor dest, mask` at edges,
   `not dest` for full interior bytes, all four planes — self-inverting
   exactly like the hardware XOR path.
@@ -2004,12 +2015,64 @@ primitives). Interrupts stay enabled — the tick may switch tasks mid-flush,
 but any drawer blocks on the gfx lock and the mouse ISR defers the cursor
 while the lock is held, so nobody else touches VRAM or the Map Mask.
 
+**The monochrome fast path — `[bb_mono]`.** The flush is the expensive half
+of double buffering: back-buffer rendering is plain RAM, but the flush is
+four passes of VRAM writes, and VRAM is the slow side on every target
+(measured on QEMU: a full-screen 4-plane flush costs ~3.7× a one-plane one
+and ~24× the RAM-side render of the same area).
+
+`bb_mono` (initialized data, `db 1`, same reason as `bb_on`) records whether
+all four planes hold identical bytes. That is true at boot — `bb_init` zeroes
+them — and stays true for every pixel drawn in colour 0 or 15, which is the
+entire System 1 UI: its greys are 0/15 dither, not a grey plane value. While
+it holds, the flush sets Map Mask = **0Fh** and copies plane 0 *once*; the
+Sequencer fans that byte out to all four planes. A quarter of the VRAM
+writes, and — because the four planes now land in the same write — a pixel is
+never briefly the wrong colour, which is what the plane-sequential copy could
+otherwise show mid-flush on a large rect.
+
+The single loop falls out of the existing one: `[bb_plane]` starts at 0Fh
+instead of 1, and the `shl` + `test 0x10` that ends the four-plane loop trips
+on the first iteration (0Fh << 1 = 1Eh).
+
+`bb_mono_chk` retires the flag when `[gfx_color]` is neither 0 nor 15. It is
+called from exactly two places — `bb_fill` (the one solid-colour entry) and
+`font_char_bb` — because those are the only paths a third colour can reach
+the planes by: gray dithers 0/15, XOR flips every plane alike, icons are
+white-under/black-over, and save/restore only moves plane bytes that were
+already there. Retirement is one-way and needs no repair pass: all four
+planes are always fully rendered, so the flush simply reverts to four passes.
+A Minesweeper digit (§20) is what trips it in practice.
+
 **Flush points.** `gfx_unlock` flushes before `cursor_show` (§7) — that
 covers every ordinary lock/draw/unlock burst, including `wm_paint_all` and
-the boot paint. The two interactions that draw *while holding* the lock
-flush explicitly: `menu_track` (§12) and the ui_drag outline (§13). A
-flush with a clean rect is cheap, so per-iteration flushes in those loops
-are fine.
+the boot paint. Nothing else flushes: the two interactions that draw *while
+holding* the lock — `menu_track` (§12) and the ui_drag outline (§13) — draw
+their feedback **VRAM-direct** instead (see below), so the back buffer stays
+clean through both and there is nothing to push. `menu_track` keeps one
+flush, for the pull-down itself, which is real back-buffer content.
+
+**Transient overlays bypass the back buffer.** The drag outline and the two
+menu highlights are XOR overlays: drawn, then erased, never meant to persist
+— the cursor's contract, not a window's. They call `vga_xor_rect_vram` /
+`vga_xor_fill_vram`, the VRAM bodies of `gfx_xor_rect` / `gfx_xor_fill` under
+their own names (§5), exactly as the cursor calls `vga_save_vram`. The
+public `gfx_xor_*` entries keep dispatching to the back buffer, because
+packages reach them through the API table (§20.3) and their XOR output *is*
+persistent content.
+
+This is a throughput fix, not a tidiness one. Routed through the back buffer,
+a 1px outline dirties the **whole window rect** — `bb_xor_rect` unions four
+strips — so each drag pass flushed the entire window area, twice (once for
+the draw, once inside the `gfx_unlock` after the erase), for ~1000 changed
+pixels. Correctness rests on the drag loop's existing discipline: the outline
+is XOR-erased before the lock ever drops, so whenever another task can draw,
+VRAM still equals the back buffer. The menu highlights rely on the same
+property, plus the teardown order — the save-under restore repaints the
+pull-down area in the back buffer and the caller's `gfx_unlock` flushes it,
+which is what actually clears the item highlight from VRAM; the title
+highlight sits above `MBAR_H`, outside that rect, so its VRAM-direct
+un-highlight survives the flush.
 
 **The cursor is not double-buffered.** The ISR draws it into VRAM over
 flushed content; its save-under reads VRAM through `vga_save_vram` /
