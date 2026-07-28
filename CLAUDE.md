@@ -13,9 +13,11 @@ os8088: a Macintosh System 1-style GUI OS for the Intel 8086, written entirely i
 ```
 make          # build all four floppy images into build/
 make run      # boot in QEMU with emulated serial mouse (1.44MB images)
+make run-640  # same, as a maxed-out 640KB machine (-m 1M; QEMU/SeaBIOS can't boot below 1MB, int 12h caps at 640K anyway; SeaBIOS's EBDA makes it 639K)
 make test     # boot headless with QMP socket at build/qmp.sock for scripted testing
 make debug    # boot QEMU halted, waiting for gdb on :1234
 make xt       # boot 360KB images on an emulated IBM PC/XT in 86Box
+make xt-640   # same XT with a full 640KB RAM (vm/xt640/86box.cfg)
 make clean
 ```
 
@@ -36,7 +38,7 @@ Testing quirks (learned the hard way):
 - Menus need press/move/up sequences (`mouse.py down` / `to` / `up`), not `click`.
 - Double-clicks compare birth ticks with a 9-tick (~0.5s) window: two separate `mouse.py click` invocations are too slow. Position with `mouse.py to X Y`, then send both clicks over one QMP connection: `qmp.py build/qmp.sock 'mouse_button 1' 'sleep 0.08' 'mouse_button 0' 'sleep 0.12' 'mouse_button 1' 'sleep 0.08' 'mouse_button 0'`.
 - Small changes (e.g. one revealed 16px Minesweeper cell) are easy to misread as "nothing happened" in a full 640x480 screendump — crop and zoom before concluding a click was lost.
-- Only QEMU is routinely verified. `vm/xt/86box.cfg` keys are best-effort guesses and 86Box rewrites its own preference keys on exit (harmless drift).
+- Only QEMU is routinely verified. `vm/xt/86box.cfg` keys are best-effort guesses and 86Box rewrites its own preference keys on exit (harmless drift — except that it silently clamps `mem_size` to the machine's maximum: `ibmxt` caps at 256K, which is why `vm/xt640` uses `ibmxt86`, the 1986 board revision).
 
 ## Architecture
 

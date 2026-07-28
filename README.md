@@ -26,11 +26,13 @@ never had (switchable to cooperative from the Control Panel, if you want to
 feel what they were up against).
 
 ```
-make        # build all four floppy images
-make run    # boot it in QEMU (with an emulated serial mouse)
-make xt     # boot the 360KB image on an emulated IBM PC/XT in 86Box
-make test   # boot headless with a QMP socket for scripted testing
-make debug  # boot with QEMU halted, waiting for gdb on :1234
+make          # build all four floppy images
+make run      # boot it in QEMU (with an emulated serial mouse)
+make run-640  # the same, on a 640KB machine
+make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
+make xt-640   # the same XT with a full 640KB of RAM
+make test     # boot headless with a QMP socket for scripted testing
+make debug    # boot with QEMU halted, waiting for gdb on :1234
 make clean
 ```
 
@@ -218,12 +220,23 @@ A 1.44MB drive postdates the 8086 by years, so period hardware gets the
 `make run` boots QEMU with `-chardev msmouse,id=m0 -serial chardev:m0` —
 grab the guest pointer and the arrow follows.
 
+`make run-640` boots the same QEMU as a maxed-out 640KB machine.
+QEMU/SeaBIOS cannot actually run with less than 1MB of guest RAM, but
+conventional memory tops out at 640K regardless of installed RAM, so
+`-m 1M` makes int 12h — the only way the OS learns the memory size —
+report a full conventional memory map, same as a fully populated XT.
+(SeaBIOS reserves 1KB at the top for its EBDA, so the OS sees 639K;
+86Box's XT BIOS has no EBDA and reports a true 640K.)
+
 `make xt` boots the 360KB image on an emulated IBM PC/XT in 86Box
 (`vm/xt/86box.cfg`): 8088 @ 4.77MHz, 256KB RAM, an Oak OTI-067 8-bit ISA
 VGA card, and a Microsoft serial mouse on COM1. VGA arrived in 1987, nine
 years after the 8086, but ISA VGA cards did work in XTs — a legitimate if
 fancy period configuration. Expect the real 4.77MHz experience: repaints
-you can watch.
+you can watch. `make xt-640` boots the same setup with a full 640KB of
+RAM (`vm/xt640/86box.cfg`) — on the 1986 XT board revision (`ibmxt86`),
+because the original 1982 planar maxes out at 256KB and 86Box silently
+clamps `mem_size` back to the board's limit.
 
 ## Scripted testing
 

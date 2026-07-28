@@ -16,6 +16,7 @@ APPSIMG := $(BUILD)/apps.img
 APPSIMG360 := $(BUILD)/apps360.img
 BOX   := /Applications/86Box.app/Contents/MacOS/86Box
 VM    := $(CURDIR)/vm/xt
+VM640 := $(CURDIR)/vm/xt640
 
 # "size of this file in bytes" is spelled differently by GNU coreutils and by
 # BSD/macOS stat, and this gets built on both. Try GNU first, fall back to BSD.
@@ -24,7 +25,7 @@ FILESIZE = $$(stat -c%s $(1) 2>/dev/null || stat -f%z $(1))
 KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
-.PHONY: all run debug test xt clean
+.PHONY: all run run-640 debug test xt xt-640 clean
 
 all: $(IMG) $(IMG360) $(APPSIMG) $(APPSIMG360)
 
@@ -109,6 +110,14 @@ run: $(IMG) $(APPSIMG)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(APPSIMG),format=raw,if=floppy,index=1
 
+# A maxed-out 640KB machine. QEMU/SeaBIOS cannot boot with less than 1MB
+# of guest RAM (SeaBIOS wedges during POST at -m 512k and -m 640k alike),
+# but conventional memory tops out at 640K regardless of installed RAM, so
+# -m 1M makes int 12h report 640K - same as a fully populated XT.
+run-640: $(IMG) $(APPSIMG)
+	$(QEMU) -m 1M -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1
+
 debug: $(IMG) $(APPSIMG)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) -s -S \
 		-drive file=$(APPSIMG),format=raw,if=floppy,index=1
@@ -125,6 +134,10 @@ test: $(IMG) $(APPSIMG)
 # Boot the 360KB image on emulated period hardware in 86Box.
 xt: $(IMG360) $(APPSIMG360)
 	$(BOX) -P $(VM) -N
+
+# The same XT with a full 640KB of RAM instead of 256KB.
+xt-640: $(IMG360) $(APPSIMG360)
+	$(BOX) -P $(VM640) -N
 
 clean:
 	rm -rf $(BUILD)
