@@ -3,7 +3,12 @@
 ;
 ; The BIOS loads this single 512-byte sector to 0000:7C00 and jumps to it with
 ; DL set to the drive we came from. Our only job is to pull the kernel off the
-; floppy into 1000:0000 and hand control over.
+; floppy into 1000:0000 and hand control over. The loading screen itself lives
+; in the kernel (kernel/splash.inc, SPEC.md 15): once its opening SPL_RESIDENT
+; sectors are aboard we far-call its pinned 1000:0008 entry after every
+; further sector, and it draws the welcome dialog, progress bar and spinning
+; 8088. Strictly event-driven - a completed read is the only thing that ever
+; advances it, so the animation costs no load time.
 ;
 ; Assembled with -DKERNEL_SECTORS=<n> by the Makefile, which measures the
 ; built kernel so we never read more sectors than exist.
@@ -26,15 +31,17 @@ org 0x7C00
 %define HEADS 2
 %endif
 
-KERNEL_SEG  equ 0x1000          ; kernel lands at linear 0x10000
-STACK_TOP   equ 0x7C00          ; stack grows down, away from our code
+KERNEL_SEG   equ 0x1000         ; kernel lands at linear 0x10000
+STACK_TOP    equ 0x7C00         ; stack grows down, away from our code
+SPLASH_OFF   equ 0x0008         ; the kernel's boot splash far entry (SPEC.md 15)
+SPL_RESIDENT equ 4              ; splash is fully aboard after this many
+                                ; sectors - must match kernel/splash.inc
 
 ; -----------------------------------------------------------------------------
 start:
     cli
     xor ax, ax
     mov ds, ax
-    mov es, ax
     mov ss, ax
     mov sp, STACK_TOP
     sti
@@ -42,8 +49,11 @@ start:
 
     mov [boot_drive], dl        ; BIOS told us where we came from; believe it
 
-    mov si, msg_load
-    call print
+    mov ax, 0x0003              ; clean, cursorless text screen while the
+    int 0x10                    ; first sectors land; the kernel splash takes
+    mov ah, 0x01                ; over in mode 12h the moment it is resident
+    mov cx, 0x2000
+    int 0x10
 
     ; --- reset the drive before the first read ------------------------------
     xor ah, ah
@@ -51,27 +61,28 @@ start:
     int 0x13
 
     ; --- copy KERNEL_SECTORS sectors, starting at LBA 1, to KERNEL_SEG:0000 --
-    ; We bump ES by one sector (0x20 paragraphs) per read and keep BX at zero,
-    ; so the destination pointer can never wrap inside a segment.
+    ; The destination segment advances one sector (0x20 paragraphs) per read
+    ; with BX held at zero, so the pointer can never wrap inside a segment.
     mov word [lba], 1
-    mov ax, KERNEL_SEG
-    mov es, ax
-    xor bx, bx
     mov cx, KERNEL_SECTORS
 
 .load_next:
     push cx
+    mov es, [dest_seg]
+    xor bx, bx
     call read_sector
-    pop cx
+    add word [dest_seg], 0x20
 
-    mov ax, es
-    add ax, 0x20
-    mov es, ax
+    mov ax, [lba]               ; tick the splash once it is fully resident:
+    cmp ax, SPL_RESIDENT        ; AX = sectors done, DX = total (SPEC.md 15)
+    jb .no_tick
+    mov dx, KERNEL_SECTORS
+    call KERNEL_SEG:SPLASH_OFF
+.no_tick:
+
     inc word [lba]
+    pop cx
     loop .load_next
-
-    mov si, msg_ok
-    call print
 
     ; --- hand off ------------------------------------------------------------
     mov dl, [boot_drive]        ; kernel may want to know the boot drive
@@ -116,38 +127,40 @@ read_sector:
 
     mov si, msg_err
     call print
-    jmp halt
+.halt:
+    cli
+    hlt
+    jmp .halt
 
 .done:
     ret
 
 ; -----------------------------------------------------------------------------
-; print - write the NUL-terminated string at DS:SI via BIOS teletype
+; print - write the NUL-terminated string at DS:SI via BIOS teletype. BL
+;         carries the colour so it stays legible if the splash already
+;         switched us into mode 12h.
 ; -----------------------------------------------------------------------------
 print:
     push ax
-    mov ah, 0x0E
+    push bx
+    mov bx, 0x000F
 .next:
     lodsb
     test al, al
     jz .done
+    mov ah, 0x0E
     int 0x10
     jmp .next
 .done:
+    pop bx
     pop ax
     ret
-
-halt:
-    cli
-    hlt
-    jmp halt
 
 ; -----------------------------------------------------------------------------
 boot_drive  db 0
 lba         dw 0
+dest_seg    dw KERNEL_SEG
 
-msg_load    db 'os8088: loading', 13, 10, 0
-msg_ok      db 'os8088: ok', 13, 10, 0
 msg_err     db 'os8088: disk error', 13, 10, 0
 
 ; -----------------------------------------------------------------------------

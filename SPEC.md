@@ -97,7 +97,8 @@ APP_MAX_SIZE equ 0x5000      ; image + bss budget, 0xA000..0xEFFF
 
 | file                | owns                                                    |
 |---------------------|---------------------------------------------------------|
-| `kernel/kernel.asm` | entry, constants, init order, includes, .bss layout, **os8088 API jump table at 0x0010** (§20.3) + osapi helper routines |
+| `kernel/kernel.asm` | entry, constants, init order, includes, .bss layout, **os8088 API jump table at 0x0010** (§20.3) + osapi helper routines, **boot splash entry at 0x0008** (§15) |
+| `kernel/splash.inc` | boot-time loading screen (§15): mode 12h welcome dialog, pixel progress bar, spinning vector "8088"; far-ticked by the boot sector per sector read; self-contained, no .bss |
 | `kernel/vga12.inc`  | mode set, planar primitives, save/restore, gfx lock     |
 | `kernel/font.inc`   | 8x8 font (copied from VGA BIOS ROM at init), text draw  |
 | `kernel/mouse.inc`  | COM1 UART, IRQ4 ISR, packet decode, cursor (save-under) |
@@ -790,6 +791,32 @@ Keep the 0x0000 cold entry. At 0x0010 the retired syscall gate is replaced
 by the **os8088 API jump table** (§20.3) — a run of 4-byte `jmp near` slots at
 pinned offsets. kernel.asm also owns the tiny osapi helper routines
 (§20.4) and the `osapi_seed` word. `cpu 8086` + `bits 16` + `org 0`.
+
+**Boot splash entry — 1000:0008.** A third fixed entry point sits between
+the cold entry and the API table: a `jmp near spl_tick` at offset 0x0008,
+**far-called by the boot sector after every sector it reads** once at least
+`SPL_RESIDENT` (= 4) sectors are in memory. Contract: AX = sectors loaded
+so far, DX = total sectors to load; `spl_tick` preserves every register and
+segment (flags clobbered), runs on the boot stack with the boot sector's
+segments, and returns with `retf`. The boot sector defines the same
+`SPL_RESIDENT` constant; the two must agree with this section.
+
+The splash module (`splash.inc`, prefix `spl_`) is **included first, before
+every other module**, and ends with a build assertion that its last byte
+lies below `SPL_RESIDENT * 512` — it must be fully resident before the
+first tick can arrive. Because it runs mid-load it is **self-contained**:
+it calls int 10h (mode set 12h, cursor set, teletype text — BIOS text is
+legal here; the "only the UI task calls int 10h after boot" rule of §8
+starts at kmain) and its own planar drawing primitives, never another
+module's routines (they are not yet resident). Its state lives in
+in-module data words, **never .bss**: .bss begins at the image's end, so
+the final sector read lands on top of it, and nothing has cleared it yet.
+The splash must never delay loading — no waits, no timing loops; it only
+draws, once per completed sector, inside the disk's own rotational latency.
+First tick: mode 12h + chrome (welcome dialog, bar trough, title). Every
+tick: bar fill = AX×288/DX pixels, right-aligned percentage, and one
+spin step of the vector "8088" (cosine-scaled about its vertical axis,
+angle index = AX mod 16). kmain's own `vga_mode12` then wipes the splash.
 
 kmain: set segments/stack (SP=0xFFFE), `sti`, `cld`, then:
 `sched_init` → `evq_init` → `vga_mode12` → `font_init` → `wm_init` →

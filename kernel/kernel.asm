@@ -9,8 +9,11 @@
 ; contracts (register use, data layouts, concurrency rules) live in SPEC.md;
 ; that document is binding.
 ;
-; Two fixed entry points:
+; Three fixed entry points:
 ;   1000:0000  cold entry (the boot sector jumps here)
+;   1000:0008  boot splash tick (SPEC.md 15): far-called by the boot sector
+;              after every sector it reads, while the rest of this image is
+;              still coming off the floppy
 ;   1000:0010  os8088 API jump table (SPEC.md 20.3): 4-byte near-jmp slots at
 ;              pinned offsets, called by loaded programs (replaces the
 ;              retired syscall gate)
@@ -44,6 +47,9 @@ APP_MAX_SIZE equ 0x5000         ; image + bss budget, 0xA000..0xEFFF
 ; =============================================================================
 cold_entry:
     jmp kmain
+
+    times 0x08 - ($ - $$) db 0
+    jmp near spl_tick           ; 1000:0008 - boot splash tick (SPEC.md 15)
 
     times 0x10 - ($ - $$) db 0  ; the table must land exactly at 0x0010
 
@@ -174,6 +180,8 @@ osapi_rand:
 osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 
 ; -----------------------------------------------------------------------------
+%include "splash.inc"           ; FIRST: must be resident within the image's
+                                ; opening SPL_RESIDENT sectors (SPEC.md 15)
 %include "vga12.inc"
 %include "font.inc"
 %include "mouse.inc"
