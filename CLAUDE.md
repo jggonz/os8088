@@ -27,7 +27,7 @@ There are no unit tests. Testing = boot `make test`, then drive it over QMP:
 
 ```
 python3 tools/mouse.py build/qmp.sock click 180 150      # absolute mouse click
-python3 tools/mouse.py build/qmp.sock press X Y / move / up   # for menus: press, drag, release
+python3 tools/mouse.py build/qmp.sock to X Y / down / up      # for menus: position, press, drag (`to` while held), release
 python3 tools/qmp.py build/qmp.sock 'sendkey h'
 python3 tools/qmp.py build/qmp.sock 'screendump /abs/path/shot.ppm'
 python3 tools/qmp.py build/qmp.sock 'quit'
@@ -54,6 +54,10 @@ Testing quirks (learned the hard way):
 ### Concurrency (SPEC.md §7 — the crux)
 
 Pre-emptive round-robin scheduling: the int 08h PIT hook chains the BIOS tick, saves the register frame on the task stack, swaps SP, and irets into the next ready task. Tasks are dynamic (MAX_TASKS=12): `task_spawn` takes an argument word (delivered in the task's DX) and returns the slot; a task terminates only via `task_exit` (self-exit; usually through `inst_task_die`), which frees the task slot and the instance record inside one IF=0 window. One drawing mutex (`gfx_lock`) guards all VGA access and hides the cursor; public drawing routines *assume* the caller holds it. Background tasks (Clock, Bounce instances) re-check window visibility *under* the lock. The mouse ISR draws the cursor itself only when the lock is free, deferring to the next unlock otherwise. Task switching pauses during floppy reads (the tick still runs — the motor needs it).
+
+### Double buffering (SPEC.md §32 — conditional)
+
+At boot `bb_init` reads int 12h: with ≥ 512KB conventional RAM every `gfx_*`/font/icon draw renders into a 4-plane back buffer at segment 0x4000 (`kernel/vgabb.inc`, software or/and/xor — RAM has no VGA latches) and `gfx_unlock` flushes the dirty rect to VRAM before the cursor reappears; `menu_track` and the drag loop call `gfx_flush` explicitly because they draw while holding the lock. Below 512KB nothing changes — every entry falls through to the original VRAM body, which is all a 256KB machine ever runs. The cursor is *never* double-buffered: the ISR goes through `vga_save_vram`/`vga_restore_vram`. QEMU (int 12h → 639K) always boots double-buffered; `make xt` (256K) is the fallback path.
 
 ### Instances (SPEC.md §29 — how apps live and die)
 

@@ -382,9 +382,12 @@ cursor_hide:
 
 ; -----------------------------------------------------------------------------
 ; cur_saveu - copy the 16x16 cell under (cur_drawn_x, cur_drawn_y) into
-;             cur_save via gfx_save. Internal; caller guarantees IF=0 or the
-;             gfx lock. gfx_save clips the rect at the screen edges the
-;             same way gfx_restore does, so partial cells stay coherent.
+;             cur_save via vga_save_vram - always VRAM, never the back
+;             buffer (SPEC.md 32): the cursor lives on the screen only, and
+;             this runs from the ISR where the bb dispatch must not apply.
+;             Internal; caller guarantees IF=0 or the gfx lock.
+;             vga_save_vram clips the rect at the screen edges the same way
+;             vga_restore_vram does, so partial cells stay coherent.
 ; clobbers: ax, bx, cx, dx, di
 ; -----------------------------------------------------------------------------
 cur_saveu:
@@ -398,12 +401,13 @@ cur_saveu:
     push ds
     pop es                      ; buffer lives in kernel .bss
     mov di, cur_save
-    call gfx_save
+    call vga_save_vram
     pop es
     ret
 
 ; -----------------------------------------------------------------------------
 ; cur_restoreu - write cur_save back under (cur_drawn_x, cur_drawn_y).
+;                VRAM-direct like cur_saveu (SPEC.md 32).
 ; clobbers: ax, bx, cx, dx, si
 ; -----------------------------------------------------------------------------
 cur_restoreu:
@@ -417,7 +421,7 @@ cur_restoreu:
     push ds
     pop es
     mov si, cur_save
-    call gfx_restore
+    call vga_restore_vram
     pop es
     ret
 

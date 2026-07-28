@@ -196,6 +196,7 @@ vga_rect_setup:
     mov [vga_rmsk], dl
     mov cl, 3
     shr ax, cl                  ; ax = left byte  (x1 / 8)
+    mov [vga_lcol], ax          ; kept for the bb_* dirty union (SPEC.md 32)
     pop dx                      ; dx = x2 (pushed above)
     shr dx, cl                  ; dx = right byte (x2 / 8)
     sub dx, ax
@@ -226,11 +227,9 @@ vga_rect_setup:
 gfx_pixel:
     push ax
     push bx
-    call vga_set_color
-    mov ax, cx                  ; a pixel is a 1-row vertical line
-    mov bx, dx
-    call vga_vline_core
-    call vga_gc_reset
+    mov ax, cx                  ; a pixel is a 1x1 solid rect (CX/DX already
+    mov bx, dx                  ; hold x2/y2); gfx_fill clips and back-
+    call gfx_fill               ; buffer-dispatches itself
     pop bx
     pop ax
     ret
@@ -240,86 +239,19 @@ gfx_pixel:
 ; in:       AX = x1, BX = x2, DX = y  (x1 <= x2)
 ; out:      -
 ; clobbers: flags
+;
+; A 1-row solid rect: gfx_fill clips and back-buffer-dispatches itself.
+; (The former dedicated VRAM loop was retired for the SPEC.md 32 code
+; budget - gfx_fill produces identical pixels for one row.)
 ; -----------------------------------------------------------------------------
 gfx_hline:
-    push ax
     push bx
     push cx
-    push dx
-    push si
-    push di
-    push es
-    cmp dx, SCREEN_H            ; catches y < 0 too (unsigned)
-    jae .done
-    or ax, ax
-    jns .x1ok
-    xor ax, ax
-.x1ok:
-    cmp bx, SCREEN_W
-    jl .x2ok
-    mov bx, SCREEN_W-1
-.x2ok:
-    cmp bx, ax
-    jl .done
-    call vga_set_color
-    push ax
-    mov ax, ROW_BYTES
-    mul dx                      ; ax = y * 80
-    mov di, ax
-    pop ax
-    mov si, ax                  ; si = left byte
-    mov cl, 3
-    shr si, cl
-    mov dx, bx                  ; dx = right byte
-    shr dx, cl
-    sub dx, si
-    add di, si                  ; di = VRAM offset of left byte
-    mov si, dx                  ; si = span (right byte - left byte)
-    mov cl, al                  ; ch = left mask
-    and cl, 7
-    mov ch, 0xFF
-    shr ch, cl
-    mov cl, bl                  ; bh = right mask
-    and cl, 7
-    xor cl, 7
-    mov bh, 0xFF
-    shl bh, cl
-    mov ax, VGA_SEG
-    mov es, ax
-    mov dx, VGA_GC
-    or si, si
-    jnz .edge
-    and ch, bh                  ; one byte: combine the masks
-.edge:
-    mov ah, ch                  ; left (or only) byte, masked
-    mov al, 8
-    out dx, ax
-    mov al, [es:di]             ; load latches
-    stosb
-    or si, si
-    jz .reset
-    dec si                      ; interior byte count
-    jz .right
-    mov ax, 0xFF08              ; full bytes: mask off, latches irrelevant
-    out dx, ax
-    mov cx, si
-    rep stosb
-.right:
-    mov ah, bh                  ; right byte, masked
-    mov al, 8
-    out dx, ax
-    mov al, [es:di]
-    stosb
-.reset:
-    call vga_gc_reset
-.done:
-    pop es
-    pop di
-    pop si
-    pop dx
+    mov cx, bx                  ; rect (x1,y)-(x2,y)
+    mov bx, dx
+    call gfx_fill
     pop cx
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -394,11 +326,15 @@ vga_vline_core:
 ; in:       AX = x, BX = y1, DX = y2  (y1 <= y2)
 ; out:      -
 ; clobbers: flags
+;
+; A 1-column solid rect via gfx_fill (which clips and back-buffer-
+; dispatches itself); vga_vline_core stays for gfx_xor_rect's verticals.
 ; -----------------------------------------------------------------------------
 gfx_vline:
-    call vga_set_color
-    call vga_vline_core
-    call vga_gc_reset
+    push cx
+    mov cx, ax                  ; rect (x,y1)-(x,y2)
+    call gfx_fill
+    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -408,6 +344,8 @@ gfx_vline:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 gfx_fill:
+    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
+    jne bb_fill
     push ax
     push bx
     push cx
@@ -517,6 +455,8 @@ gfx_frame:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 gfx_fill_gray:
+    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
+    jne bb_fill_gray
     push ax
     push bx
     push cx
@@ -697,6 +637,8 @@ vga_xor_hline:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 gfx_xor_rect:
+    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
+    jne bb_xor_rect
     push bx
     push dx
     push si
@@ -741,6 +683,8 @@ gfx_xor_rect:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 gfx_xor_fill:
+    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
+    jne bb_xor_fill
     push ax
     push bx
     push cx
@@ -820,8 +764,15 @@ gfx_xor_fill:
 ; out:      DI advanced past the data (unchanged if the clipped rect is
 ;           empty); ES preserved
 ; clobbers: flags
+;
+; Dispatches to bb_save under double buffering (SPEC.md 32). vga_save_vram
+; is the VRAM body under its own name: the mouse cursor's save-under calls
+; it directly - the cursor lives in VRAM, never in the back buffer.
 ; -----------------------------------------------------------------------------
 gfx_save:
+    cmp byte [bb_on], 0
+    jne bb_save
+vga_save_vram:
     push ax
     push bx
     push cx
@@ -876,8 +827,14 @@ gfx_save:
 ; out:      SI advanced past the data (unchanged if the clipped rect is
 ;           empty); ES preserved
 ; clobbers: flags
+;
+; Dispatches to bb_restore under double buffering (SPEC.md 32);
+; vga_restore_vram is the VRAM body for the cursor path (see gfx_save).
 ; -----------------------------------------------------------------------------
 gfx_restore:
+    cmp byte [bb_on], 0
+    jne bb_restore
+vga_restore_vram:
     push ax
     push bx
     push cx
@@ -1009,15 +966,19 @@ gfx_lock:
     ret
 
 ; -----------------------------------------------------------------------------
-; gfx_unlock - show the cursor, then release the drawing mutex (SPEC.md 7)
+; gfx_unlock - flush, show the cursor, then release the mutex (SPEC.md 7)
 ;
-; Order is binding: cursor_show redraws at the latest mouse position while
-; we still own the screen; only then may the ISR draw again.
+; Order is binding: gfx_flush pushes the dirty back-buffer rect to VRAM
+; while the cursor is still hidden (a no-op without double buffering);
+; cursor_show then redraws at the latest mouse position - its save-under
+; captures the freshly flushed pixels - while we still own the screen;
+; only then may the ISR draw again.
 ; in:       -
 ; out:      -
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 gfx_unlock:
+    call gfx_flush
     call cursor_show
     mov byte [gfx_lock_flag], 0
     ret
@@ -1032,5 +993,6 @@ vga_y1          resw 1          ; rect: clipped top row (dither parity)
 vga_rows        resw 1          ; rect: clipped row count
 vga_span        resw 1          ; rect: right byte - left byte
 vga_off         resw 1          ; rect: VRAM offset of top-left byte
+vga_lcol        resw 1          ; rect: left byte column (bb dirty union)
 
 section .text

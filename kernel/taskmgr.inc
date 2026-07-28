@@ -525,6 +525,10 @@ tm_sample:
     add ax, 1023
     mov cl, 10
     shr ax, cl                  ; usedK, rounded up
+    cmp byte [bb_on], 0         ; bill the armed back buffer: exactly 150KB,
+    je .nobb                    ; added after the shift because 153600 bytes
+    add ax, 150                 ; do not fit 16 bits (SPEC.md 32 / 28)
+.nobb:
     mov [tm_usedk], ax
     mov cx, [tm_totkb]          ; barw = usedK*160/totalK (all KB)
     jcxz .nobar
@@ -974,7 +978,16 @@ tm_rows:
     mov al, [tm_pct+bx]
     call tm_cpucol
     mov ax, kernel_bss_end      ; the kernel's own image + bss (bare label)
-    call tm_memcol
+    push cx
+    add ax, 1023                ; to KB here - the 150K back buffer below
+    mov cl, 10                  ; would overflow a 16-bit byte count
+    shr ax, cl
+    pop cx
+    cmp byte [bb_on], 0         ; bill the armed back buffer to System
+    je .sysmem                  ; (SPEC.md 32 / 28)
+    add ax, 150
+.sysmem:
+    call tm_memcol_kb
     jmp .draw
 
 .inst:
@@ -1103,6 +1116,7 @@ tm_memcol:
     add ax, 1023                ; round up; AX <= 0xA000 here, no overflow
     mov cl, 10
     shr ax, cl
+.kb:
     call tm_put3
     mov byte [di], 'K'
     inc di
@@ -1120,6 +1134,19 @@ tm_memcol:
     pop cx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; tm_memcol_kb - tm_memcol's tail for a caller that already has KB in AX
+;                (nonzero) - the System row adds the 150K back buffer,
+;                which cannot be expressed as a 16-bit byte count
+; in:  AX = KB (> 0), DI = dest
+; out: DI advanced by 4
+; clobbers: nothing else (internal helper)
+; -----------------------------------------------------------------------------
+tm_memcol_kb:
+    push ax
+    push cx
+    jmp tm_memcol.kb
 
 ; -----------------------------------------------------------------------------
 ; tm_copy - copy a NUL string (without the NUL) to DI

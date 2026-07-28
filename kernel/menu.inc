@@ -134,6 +134,9 @@ menu_track:
 .found:
     mov [menu_ent], si
     call menu_title_xor         ; highlight the title cell
+    call gfx_flush              ; the whole interaction holds the gfx lock,
+                                ; so feedback must be flushed explicitly
+                                ; (SPEC.md 32; no-op without double buffering)
 
     ; --- menu rect: width = widest item + 16, items are 16px cells -----------
     call menu_widest            ; AX = widest item text, px (SI = entry)
@@ -190,6 +193,7 @@ menu_track:
     add bx, 2
     add dx, MENU_ITEM_H
     loop .item
+    call gfx_flush              ; pull-down + items on screen (SPEC.md 32)
 
     ; --- follow the mouse while the button is down ----------------------------
     mov word [menu_sel], 0xFFFF ; nothing highlighted yet
@@ -211,6 +215,8 @@ menu_track:
     je .same
     call menu_item_xor
 .same:
+    call gfx_flush              ; highlight moves reach the screen; cheap
+                                ; no-op on the iterations that drew nothing
     call task_yield             ; keep the scheduler healthy while we spin
     jmp .poll
 

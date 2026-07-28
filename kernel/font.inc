@@ -96,6 +96,11 @@ font_char:
     shl si, 1
     add si, font_glyphs
 
+    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
+    je .vram
+    call font_char_bb
+    jmp .done
+.vram:
     mov bx, cx                  ; BX = x; free CX for the shift count
     mov ax, ROW_BYTES
     mul dx                      ; AX = y * 80 (DX clobbered, product fits)
@@ -161,6 +166,75 @@ font_char:
     ret
 
 ; -----------------------------------------------------------------------------
+; font_char_bb - back-buffer glyph renderer (SPEC.md 32)
+;
+; The same shifted-row masks as the VRAM path, applied to all four planes
+; in software: the [gfx_color] plane bit picks or (set bits) or and-not
+; (clear bits). When x is byte-aligned the second-byte mask is always 0
+; and that write is skipped, so nothing lands past the row's last byte.
+; in:       CX = x, DX = y (cell fully on screen - font_char clipped),
+;           SI -> 8 glyph row bytes
+; clobbers: ax, bx, cx, dx, si, di, es (font_char's epilogue restores all)
+; -----------------------------------------------------------------------------
+font_char_bb:
+    mov ax, cx                  ; dirty: columns x/8..(x+7)/8, rows y..y+7
+    mov bx, cx
+    add bx, 7
+    mov di, cx
+    and di, 7                   ; DI parks the shift (x & 7) for a moment
+    mov cl, 3
+    shr ax, cl
+    shr bx, cl                  ; same byte column when x & 7 = 0
+    push di
+    push dx
+    mov cx, dx
+    add dx, 7
+    push ax                     ; left column survives bb_dirty for the
+    call bb_dirty               ; offset math below
+    pop bx
+    pop dx
+    mov ax, ROW_BYTES           ; DI = y * 80 + x / 8, CL = x & 7
+    mul dx                      ; (DX clobbered - no longer needed)
+    add ax, bx
+    mov di, ax
+    pop cx                      ; CL = right shift for the 16-bit window
+
+    mov [font_bb_si], si        ; per-plane restart points
+    mov [font_bb_di], di
+    mov dx, BB_SEG              ; DX = plane segment
+    mov ch, [gfx_color]         ; CH = color bits, shifted right per plane
+    mov bl, 4                   ; BL = plane counter
+.plane:
+    mov es, dx
+    mov si, [font_bb_si]
+    mov di, [font_bb_di]
+    mov bh, 8                   ; row counter
+.row:
+    mov ah, [si]                ; glyph row in the window's high byte
+    inc si
+    xor al, al
+    shr ax, cl                  ; AH = first-byte mask, AL = second-byte mask
+    test ch, 1                  ; (zero masks make both writes identity ops -
+    jz .clr                     ;  cheaper than branching around them)
+    or [es:di], ah
+    or [es:di+1], al
+    jmp .adv
+.clr:
+    not ah
+    not al
+    and [es:di], ah
+    and [es:di+1], al
+.adv:
+    add di, ROW_BYTES
+    dec bh
+    jnz .row
+    add dx, BB_PLANE_PARA
+    shr ch, 1
+    dec bl
+    jnz .plane
+    ret
+
+; -----------------------------------------------------------------------------
 ; font_str - draw a NUL-terminated string left to right
 ;
 ; in:       CX = x, DX = y, SI -> ASCIIZ string, color from [gfx_color];
@@ -208,4 +282,6 @@ font_width:
 ; -----------------------------------------------------------------------------
 section .bss
 font_glyphs:    resb 760        ; glyphs 32..126, 8 bytes per row (FONT_BYTES)
+font_bb_si:     resw 1          ; bb path: glyph pointer, reloaded per plane
+font_bb_di:     resw 1          ; bb path: cell offset, reloaded per plane
 section .text

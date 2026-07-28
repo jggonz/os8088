@@ -42,6 +42,11 @@ CDGRAY      equ 8
 APP_LOAD_OFF equ 0xA000         ; where packages load (kernel segment offset)
 APP_MAX_SIZE equ 0x5000         ; image + bss budget, 0xA000..0xEFFF
 
+; double buffering (SPEC.md 32)
+BB_SEG        equ 0x4000        ; back buffer base segment (plane 0)
+BB_PLANE_PARA equ 0x960         ; paragraphs per plane (0x9600 = 480 rows x 80)
+DB_MIN_KB     equ 512           ; int 12h floor: double-buffer only at >= 512KB
+
 ; =============================================================================
 ; Fixed entry points
 ; =============================================================================
@@ -120,6 +125,9 @@ kmain:
     call sched_init             ; pre-emption live from here on
     call evq_init
     call vga_mode12
+    call bb_init                ; RAM probe + back buffer (SPEC.md 32): after
+                                ; the mode set (VRAM just cleared, planes
+                                ; start in sync), before the first drawing
     call font_init              ; needs int 10h, so after the mode is set
     call wm_init
     call inst_init              ; instance table (SPEC.md 29) - clean boot:
@@ -183,6 +191,7 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "splash.inc"           ; FIRST: must be resident within the image's
                                 ; opening SPL_RESIDENT sectors (SPEC.md 15)
 %include "vga12.inc"
+%include "vgabb.inc"
 %include "font.inc"
 %include "mouse.inc"
 %include "sched.inc"

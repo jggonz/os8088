@@ -156,6 +156,9 @@ ico_core:
     mov ch, 8
     sub ch, cl                  ; CH = 8 - shift
 
+    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32) - the bb
+    jne ico_core_bb             ; twin returns straight to the wrapper
+
     mov ax, VGA_SEG
     mov es, ax
 
@@ -255,6 +258,134 @@ ico_pass:
     jnz .row
 .done:
     pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; ico_core_bb - back-buffer icon renderer (SPEC.md 32): the white underlay
+;               ORs the shifted mask-row bits into all four planes, the
+;               black pass AND-NOTs the data-row bits out of them - color
+;               15 under the mask, 0 under the data, like the VRAM passes.
+; in:       DI = row offset, CL/CH = shift pair, ico_* vars set by ico_core
+; out:      returns to icon_draw/icon_draw16's epilogue (ico_core contract)
+; clobbers: everything but DS (the wrappers restore)
+; -----------------------------------------------------------------------------
+ico_core_bb:
+    mov ax, [ico_col0]
+    cmp ax, ROW_BYTES           ; x < 0 (huge unsigned) or entirely off the
+    jae .none                   ; right edge: the passes would skip every
+                                ; byte - skip them and the dirty union too
+    mov bx, [ico_ww]            ; dirty: columns col0..col0+2*ww (the last
+    shl bx, 1                   ; word's 3-byte window), clamped to the row
+    add bx, ax
+    cmp bx, ROW_BYTES
+    jb .rok
+    mov bx, ROW_BYTES-1
+.rok:
+    push cx                     ; CL/CH shift pair survives bb_dirty setup
+    mov cx, [ico_y]
+    mov dx, cx
+    add dx, [ico_rows]
+    dec dx
+    call bb_dirty
+    pop cx
+
+    mov byte [ico_bbop], 0      ; white underlay: OR the mask rows in
+    mov si, [ico_maskp]
+    call ico_pass_bb
+    mov byte [ico_bbop], 1      ; black pixels: AND-NOT the data rows out
+    mov si, [ico_datap]
+    call ico_pass_bb
+.none:
+    ret
+
+; -----------------------------------------------------------------------------
+; ico_pass_bb - one masked pass over all four back-buffer planes: the same
+;               3-byte shifted window and edge clipping as ico_pass, with
+;               [ico_bbop] picking OR (0) or AND-NOT (1) per byte.
+; in:       SI -> word rows, DI = row offset, CL = shift, CH = 8-shift,
+;           [ico_bbop] = 0/1, ico_* vars set
+; out:      none; preserves CX, DI; clobbers ax, bx, dx, si, bp, es
+; -----------------------------------------------------------------------------
+ico_pass_bb:
+    push di
+    cmp word [ico_rows], 0
+    je .done                    ; degenerate record / fully clipped
+    mov [ico_bbsrc], si         ; per-plane restart points
+    mov [ico_bbdi], di
+    mov dx, BB_SEG              ; DX = plane segment
+    mov byte [ico_bbpl], 4
+.plane:
+    mov es, dx
+    mov si, [ico_bbsrc]
+    mov di, [ico_bbdi]
+    mov bp, [ico_rows]
+.row:
+    mov ax, [ico_col0]
+    mov [ico_col], ax           ; running byte column (right-edge clip)
+    mov ax, [ico_ww]
+    mov [ico_wleft], ax
+.word:
+    lodsw                       ; AX = row word, MSB = leftmost pixel
+    mov bx, ax
+    shr bx, cl                  ; BH:BL = B0:B1
+    xchg cl, ch
+    shl ax, cl                  ; AL = B2 (low bits spilling into byte 3)
+    xchg cl, ch
+    mov ah, al                  ; stash B2
+
+    mov al, bh                  ; --- byte 0, column [ico_col] ---
+    or  al, al
+    jz .b1
+    cmp word [ico_col], ROW_BYTES
+    jae .b1
+    call ico_bbop_byte
+.b1:
+    mov al, bl                  ; --- byte 1, column +1 ---
+    or  al, al
+    jz .b2
+    cmp word [ico_col], ROW_BYTES-1
+    jae .b2
+    inc di
+    call ico_bbop_byte
+    dec di
+.b2:
+    mov al, ah                  ; --- byte 2, column +2 ---
+    or  al, al
+    jz .wnext
+    cmp word [ico_col], ROW_BYTES-2
+    jae .wnext
+    inc di
+    inc di
+    call ico_bbop_byte
+    dec di
+    dec di
+.wnext:
+    add di, 2                   ; next word of this row
+    add word [ico_col], 2
+    dec word [ico_wleft]
+    jnz .word
+    add di, [ico_rowadv]        ; next scanline (80 - 2*wwords)
+    dec bp
+    jnz .row
+    add dx, BB_PLANE_PARA
+    dec byte [ico_bbpl]
+    jnz .plane
+.done:
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; ico_bbop_byte - internal: apply [ico_bbop] to [es:di] with mask AL
+;                 (0 = or in, 1 = and-not out); AH and all else preserved
+; -----------------------------------------------------------------------------
+ico_bbop_byte:
+    cmp byte [ico_bbop], 0
+    jne .clr
+    or [es:di], al
+    ret
+.clr:
+    not al
+    and [es:di], al
     ret
 
 ; -----------------------------------------------------------------------------
@@ -391,4 +522,8 @@ ico_col     resw 1              ; running byte column inside ico_pass
 ico_wleft   resw 1              ; words left in the current row
 ico_x       resw 1              ; requested x
 ico_y       resw 1              ; requested y, clamped to 0 after top clip
+ico_bbsrc   resw 1              ; bb pass: row table, reloaded per plane
+ico_bbdi    resw 1              ; bb pass: row offset, reloaded per plane
+ico_bbop    resb 1              ; bb pass: 0 = or (white), 1 = and-not (black)
+ico_bbpl    resb 1              ; bb pass: plane countdown
 section .text
