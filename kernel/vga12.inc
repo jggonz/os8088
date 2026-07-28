@@ -344,6 +344,11 @@ gfx_vline:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 gfx_fill:
+    call bb_mono_chk            ; colour tracking runs in BOTH modes: double
+                                ; buffering can be switched on later, and the
+                                ; buffer it seeds from VRAM is only plane-
+                                ; identical if nothing but 0/15 was ever
+                                ; drawn (SPEC.md 32)
     cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
     jne bb_fill
     push ax

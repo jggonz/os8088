@@ -68,7 +68,7 @@ pre-empted background task, updating live while the user types or drags).
 | 0x1A000       | 0x1000  | `APP_LOAD_OFF` — package pool, 20KB: multi-instance, sector-granular first-fit (§20/§21) |
 | 0x1F000       | 0x1000  | free gap; boot/task-0 stack grows down from 0xFFFE |
 | 0x20000       | 0x2000  | `SAVE_SEG` — save-under heap (menus), raw, via ES  |
-| 0x40000       | 0x4000  | `BB_SEG` — double-buffer back buffer, 4 planes × 0x9600 bytes (§32); armed only when conventional RAM ≥ `DB_MIN_KB` |
+| 0x40000       | 0x4000  | `BB_SEG` — double-buffer back buffer, 4 planes × 0x9600 bytes (§32); touched only while the Control Panel's Display page has it switched on, which needs conventional RAM ≥ `DB_MIN_KB` |
 | 0xA0000       | 0xA000  | VGA planar framebuffer, 80 bytes/row               |
 
 Kernel image + .bss must fit below offset **0xA000** (task stacks included);
@@ -1957,6 +1957,24 @@ repainted within the same UI pass by the `cp_dirty` repaint above, and the
 Task Manager's SCHED field (§28), rewritten at its next sample (≤ 9 ticks)
 and by that repaint.
 
+### 31.3 Display page — double buffering
+
+Second item in the panel list, same two-row radio geometry as §31.2 (it
+shares `cp_glyph` and the `CP_B*Y` hit bands). Heading "Display"; row 0
+"Direct to screen", row 1 "Double buffered"; the filled glyph follows
+`[bb_on]`, which is **0 at boot** — double buffering is opt-in.
+
+Caption: "Smoother; costs 150K" normally, or "Needs 500K of memory" when
+`[bb_avail]` = 0. On such a machine the page is display-only: a click in
+either band is ignored outright rather than moving a dot that `bb_set`
+would refuse to honour.
+
+`cp_disp_click` mirrors `cp_sched_click` — signed comparisons, x ignored,
+a hit on the live row does nothing — and calls `bb_set` (§32), which
+requires the gfx lock the click handler already holds. It then redraws just
+the two glyphs. No `[cp_dirty]`: unlike the scheduler mode, no window quotes
+this setting, and the switch is invisible except as speed.
+
 ## 32. vgabb.inc — optional double buffering
 
 **Why it exists.** The original design drew straight into VRAM because
@@ -1965,15 +1983,35 @@ with more memory can afford one, and get flicker-free updates: everything
 drawn inside one gfx_lock/gfx_unlock burst appears on screen at once.
 Module prefix `bb_`; file included right after `vga12.inc`.
 
-**Probe & arm — `bb_init`** (from kmain, right after `vga_mode12`, before
-any drawing; task 0, so the §7 BIOS rule holds): int 12h → AX =
-conventional KB. If AX < `DB_MIN_KB` (500) the byte `[bb_on]` stays 0 and
-**nothing else in this section applies — every drawing path is exactly the
-pre-§32 direct-VRAM code**. Otherwise set `[bb_on]` = 1, zero all four
-back-buffer planes (the mode set just cleared VRAM, so both start equal)
-and reset the dirty rect to empty. `[bb_on]` is initialized data (db 0,
-next to `gfx_lock_flag`), **not** .bss — nothing zeroes .bss at boot — and
-it never changes after bb_init. Note the EBDA caveat: a BIOS that steals
+**Probe — `bb_init`** (from kmain, right after `vga_mode12`; task 0, so the
+§7 BIOS rule holds): int 12h → AX = conventional KB. If AX ≥ `DB_MIN_KB`
+(500) it sets `[bb_avail]` = 1, and that is all it does — it neither arms
+the buffer nor touches the planes.
+
+**Double buffering is OFF at boot and switched at runtime.** `[bb_on]`
+starts 0, so a fresh boot runs exactly the pre-§32 direct-VRAM code and
+**nothing else in this section applies** until the user turns it on from
+the Control Panel's Display page (§31.3), which calls `bb_set`. `[bb_avail]`
+gates that: below the floor `[bb_on]` can never become 1, and the page says
+why instead of offering a switch that would refuse. Both bytes are
+initialized data (`db`, next to `gfx_lock_flag`), **not** .bss — nothing
+zeroes .bss at boot.
+
+**Switching — `bb_set`** (AL = 0 off / 1 on; caller HOLDS the gfx lock).
+Turning ON calls `bb_sync` first: per plane, Graphics Controller Read Map
+Select (GC4) = that plane, then a straight 0x9600-byte copy from `VGA_SEG`
+to the plane segment at identical offsets, leaving GC4 back at its default
+(§1 rule 7). Seeding is not optional — the buffer has never been written
+while disabled, and after a disable it is arbitrarily stale, so the first
+flush would otherwise push dead pixels over live ones. The cursor must be
+hidden for it (it is — the lock is held), or it would be captured into the
+buffer and smeared by that same flush. `bb_set` then resets the dirty rect
+and publishes `[bb_on]` = 1 **last**, since every drawing entry dispatches
+on it. Turning OFF calls `gfx_flush` first, so nothing drawn under the old
+mode is stranded in RAM, then clears `[bb_on]`. Both directions no-op when
+already in that state, so a repeated click cannot re-copy 150KB.
+
+Note the EBDA caveat: a BIOS that steals
 top-of-memory (SeaBIOS's 640K → 639) still passes, and so does a real 512K
 machine once its BIOS has taken a cut — which is why the floor is 500 and not
 512. The gate is deliberately the reported value.
@@ -2050,13 +2088,18 @@ instead of 1, and the `shl` + `test 0x10` that ends the four-plane loop trips
 on the first iteration (0Fh << 1 = 1Eh).
 
 `bb_mono_chk` retires the flag when `[gfx_color]` is neither 0 nor 15. It is
-called from exactly two places — `bb_fill` (the one solid-colour entry) and
-`font_char_bb` — because those are the only paths a third colour can reach
-the planes by: gray dithers 0/15, XOR flips every plane alike, icons are
+called from exactly two places — `gfx_fill` and `font_char` — because those
+are the only paths a third colour can reach the screen by: gray dithers 0/15, XOR flips every plane alike, icons are
 white-under/black-over, and save/restore only moves plane bytes that were
 already there. Retirement is one-way and needs no repair pass: all four
 planes are always fully rendered, so the flush simply reverts to four passes.
 A Minesweeper digit (§20) is what trips it in practice.
+
+Both call sites sit on the **mode-independent** path, ahead of the `[bb_on]`
+dispatch, so the flag tracks colour even while double buffering is off. That
+is required, not incidental: `bb_set` can arm the buffer at any moment and
+seeds it from VRAM, and those planes are only identical if nothing but 0/15
+was ever drawn — including everything drawn while the buffer was disabled.
 
 **Flush points.** `gfx_unlock` flushes before `cursor_show` (§7) — that
 covers every ordinary lock/draw/unlock burst, including `wm_paint_all` and
@@ -2095,6 +2138,8 @@ while the gfx lock is free, VRAM = back buffer + cursor; while it is held,
 the cursor is hidden and flushes may run at any point. The back buffer
 never contains cursor pixels, so no flush can smear or erase a live cursor.
 
-**Accounting.** The Task Manager bills the armed back buffer as 150KB of
-System memory (§28). The §16 test flow runs QEMU with ≥ 640K conventional,
-so QEMU boots double-buffered; `make xt` (256K) exercises the fallback.
+**Accounting.** The Task Manager bills the back buffer as 150KB of System
+memory (§28) whenever `[bb_on]` is set, so the RAM line and the System row
+both move the moment the Display page switches it (39K ↔ 189K on a 639K
+QEMU). The §16 test flow boots direct-to-screen like every machine; turning
+the buffer on is a deliberate act, and `make xt` (256K) cannot do it at all.

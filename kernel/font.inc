@@ -96,6 +96,9 @@ font_char:
     shl si, 1
     add si, font_glyphs
 
+    call bb_mono_chk            ; both modes - see gfx_fill (SPEC.md 32).
+                                ; Placed after the clip so a glyph that draws
+                                ; nothing cannot retire the flag.
     cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
     je .vram
     call font_char_bb
@@ -177,7 +180,6 @@ font_char:
 ; clobbers: ax, bx, cx, dx, si, di, es (font_char's epilogue restores all)
 ; -----------------------------------------------------------------------------
 font_char_bb:
-    call bb_mono_chk            ; glyphs are the other colour entry (SPEC.md 32)
     mov ax, cx                  ; dirty: columns x/8..(x+7)/8, rows y..y+7
     mov bx, cx
     add bx, 7

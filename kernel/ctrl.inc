@@ -104,6 +104,7 @@ CP_ISTRIDE  equ 8
 
 cp_items:
     dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
+    dw cp_s_disp,  cp_disp_paint,  cp_disp_click,  0
 cp_items_end:
 CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
 
@@ -111,6 +112,12 @@ cp_s_sched: db 'Scheduler', 0   ; list name AND the page heading
 cp_s_pre:   db 'Pre-emptive', 0
 cp_s_coop:  db 'Cooperative', 0
 cp_s_cap:   db 'Takes effect immediately', 0
+
+cp_s_disp:  db 'Display', 0     ; list name AND the page heading
+cp_s_dbof:  db 'Direct to screen', 0
+cp_s_dbon:  db 'Double buffered', 0
+cp_s_dcap:  db 'Smoother; costs 150K', 0
+cp_s_dna:   db 'Needs 500K of memory', 0
 
 ; -----------------------------------------------------------------------------
 ; cp_paint - W_PAINT for the Control Panel window
@@ -559,6 +566,147 @@ cp_radios:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; Display page (SPEC.md 31.3) - double buffering on/off
+;
+; Same two-row radio geometry as the Scheduler page, so it shares cp_glyph
+; and the CP_B*Y hit bands. Row 0 = direct to screen (the boot default),
+; row 1 = double buffered.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; cp_disp_paint - the Display page
+; in:  DI = pane left, BP = pane top; gfx lock held; entry pen is CWHITE
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+cp_disp_paint:
+    push cx
+    push dx
+    push si
+
+    mov byte [gfx_color], CBLACK ; entry pen is CWHITE (cp_page's erase)
+
+    mov si, cp_s_disp           ; heading, same string as the list row
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PHY
+    call font_str
+
+    mov si, cp_s_dbof           ; row 0 label
+    mov cx, di
+    add cx, CP_PLX
+    mov dx, bp
+    add dx, CP_PR0Y + CP_PLDY
+    call font_str
+
+    mov si, cp_s_dbon           ; row 1 label
+    mov cx, di
+    add cx, CP_PLX
+    mov dx, bp
+    add dx, CP_PR0Y + CP_PROWH + CP_PLDY
+    call font_str
+
+    mov si, cp_s_dcap           ; caption: what it costs...
+    cmp byte [bb_avail], 0
+    jne .cap
+    mov si, cp_s_dna            ; ...or why the machine cannot have it
+.cap:
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PCAPY
+    call font_str
+
+    call cp_dbradios            ; both glyphs, filled per the live state
+
+    pop si
+    pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_dbradios - redraw the Display page's two radio glyphs from [bb_on]
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing
+; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
+; -----------------------------------------------------------------------------
+cp_dbradios:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov bl, [bb_on]             ; BL = the row whose glyph is filled
+    mov byte [gfx_color], CBLACK ; the pen cp_glyph draws the bitmap with
+    mov cx, di
+    add cx, CP_PGX
+    mov dx, bp
+    add dx, CP_PR0Y
+
+    mov si, cp_radio_off        ; --- row 0: direct to screen ---
+    cmp bl, 0
+    jne .r0
+    mov si, cp_radio_on
+.r0:
+    call cp_glyph
+
+    add dx, CP_PROWH            ; --- row 1: double buffered ---
+    mov si, cp_radio_off
+    cmp bl, 1
+    jne .r1
+    mov si, cp_radio_on
+.r1:
+    call cp_glyph
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_disp_click - a click inside the Display page
+;
+; in:  DI = pane left, BP = pane top, CX = pane-relative x (ignored),
+;      DX = pane-relative y; gfx lock held by the caller
+; out: nothing
+; clobbers: nothing (flags only)
+;
+; Same band logic and signed comparisons as cp_sched_click. bb_set wants the
+; gfx lock held, which it is here, and does the real work: seeding the buffer
+; from VRAM on the way in, flushing it on the way out. A machine that failed
+; the RAM probe ignores the click entirely - the caption already says why -
+; rather than moving a dot that bb_set would refuse to honour. No [cp_dirty]:
+; no other window quotes this setting, and the buffer state is invisible.
+; -----------------------------------------------------------------------------
+cp_disp_click:
+    push ax
+
+    cmp dx, CP_B0Y1             ; outside both bands: nothing
+    jl .done
+    cmp dx, CP_B1Y2
+    jg .done
+    cmp byte [bb_avail], 0
+    je .done                    ; not offered on this machine
+
+    mov al, 1                   ; lower band = double buffered
+    cmp dx, CP_B0Y2
+    jg .set
+    xor al, al                  ; upper band = direct to screen
+.set:
+    cmp al, [bb_on]
+    je .done                    ; that row is already live: change nothing
+    call bb_set                 ; flips [bb_on]; we hold the lock as required
+    call cp_dbradios            ; the two glyph boxes only
+
+.done:
     pop ax
     ret
 

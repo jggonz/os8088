@@ -24,9 +24,19 @@
 ; vga_save_vram/vga_restore_vram and draws straight to VRAM.
 ; =============================================================================
 
-bb_on           db 0            ; double buffering armed? Initialized data,
-                                ; NOT .bss (nothing zeroes .bss at boot);
-                                ; written once by bb_init, read everywhere.
+bb_on           db 0            ; double buffering live right now? Off at
+                                ; boot by choice - the Control Panel's
+                                ; Display page (SPEC.md 31.3) flips it via
+                                ; bb_set, which may run at any time. Every
+                                ; drawing entry dispatches on this byte, so
+                                ; a flip takes effect from the next call.
+                                ; Initialized data, NOT .bss - nothing
+                                ; zeroes .bss at boot.
+
+bb_avail        db 0            ; did the boot RAM probe clear DB_MIN_KB?
+                                ; Set once by bb_init; gates bb_set, so on a
+                                ; small machine [bb_on] can never become 1
+                                ; and the Display page says why.
 
 bb_mono         db 1            ; are all four back-buffer planes identical?
                                 ; True from boot (bb_init zeroes them) and
@@ -56,40 +66,114 @@ bb_mono         db 1            ; are all four back-buffer planes identical?
 ; -----------------------------------------------------------------------------
 bb_init:
     push ax
-    push cx
-    push di
-    push es
     int 0x12                    ; AX = conventional memory, KB
     cmp ax, DB_MIN_KB
-    jb .done                    ; too small: [bb_on] stays 0, pure VRAM mode
-    mov byte [bb_on], 1
-    push bx
-    mov bx, BB_SEG
-.plane:
-    mov es, bx
-    xor di, di
-    xor ax, ax
-    mov cx, 0x9600 / 2          ; one plane, in words
-    rep stosw
-    add bx, BB_PLANE_PARA
-    cmp bx, BB_SEG + 4*BB_PLANE_PARA
-    jb .plane
-    pop bx
-    call bb_dirty_reset
+    jb .done                    ; too small: the Control Panel will not offer
+    mov byte [bb_avail], 1      ; it, and [bb_on] can never become 1
 .done:
-    pop es
-    pop di
-    pop cx
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; bb_mono_chk - internal: retire [bb_mono] if [gfx_color] is not 0 or 15
+; bb_sync - seed all four back-buffer planes from VRAM
 ;
-; Called from the solid-fill and glyph entries - the only two places a colour
-; other than black or white can reach the planes. Gray fills dither 0/15, XOR
-; flips every plane alike and icons are white-under/black-over, so all three
+; Read Map Select (GC4) picks the plane to read; each pass is a straight
+; 0x9600-byte copy at identical offsets, so the buffer ends up an exact
+; mirror of the screen. GC4 goes back to its default afterwards (SPEC.md 1
+; rule 7). Internal to bb_set.
+; in:       caller HOLDS the gfx lock - the cursor must be hidden, or it
+;           would be captured into the buffer and smeared by the next flush
+; clobbers: flags
+; -----------------------------------------------------------------------------
+bb_sync:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    cld
+    mov ax, VGA_SEG
+    mov ds, ax                  ; source = VRAM, one plane at a time
+    mov bx, BB_SEG              ; BX = destination plane segment
+    mov ah, 0                   ; AH = plane index
+.plane:
+    mov al, 4                   ; GC4: Read Map Select = this plane
+    mov dx, VGA_GC
+    out dx, ax
+    push ax                     ; the copy needs CX, so park the index
+    mov es, bx
+    xor si, si
+    xor di, di
+    mov cx, 0x9600 / 2
+    rep movsw
+    pop ax
+    add bx, BB_PLANE_PARA
+    inc ah
+    cmp ah, 4
+    jb .plane
+    mov dx, VGA_GC
+    mov ax, 0x0004              ; GC4 back to plane 0, the default
+    out dx, ax
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; bb_set - turn double buffering on or off at runtime (SPEC.md 31.3, 32)
+;
+; in:       AL = 0 (off) or 1 (on); caller HOLDS the gfx lock
+; out:      [bb_on] updated (or left alone: turning on needs [bb_avail])
+; clobbers: flags
+;
+; Turning ON seeds the buffer from VRAM first, so the very next flush cannot
+; push stale pixels over live ones - the buffer has never been written while
+; disabled, and after a disable it is arbitrarily out of date. Turning OFF
+; flushes whatever is still dirty, so nothing drawn under the old mode is
+; stranded in RAM. Both directions are no-ops if already in that state, which
+; keeps a repeated click from re-copying 150KB.
+; -----------------------------------------------------------------------------
+bb_set:
+    push ax
+    or al, al
+    je .off
+    cmp byte [bb_avail], 0
+    je .out                     ; not enough RAM: stays off, silently
+    cmp byte [bb_on], 0
+    jne .out                    ; already on
+    call bb_sync
+    call bb_dirty_reset
+    mov byte [bb_on], 1         ; publish last: every bb_* entry keys off it
+    jmp .out
+.off:
+    cmp byte [bb_on], 0
+    je .out                     ; already off
+    call gfx_flush              ; land anything still pending in VRAM
+    mov byte [bb_on], 0
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; bb_mono_chk - retire [bb_mono] if [gfx_color] is not 0 or 15
+;
+; Called from gfx_fill and font_char - the only two places a colour other
+; than black or white can reach the screen. Gray fills dither 0/15, XOR flips
+; every plane alike and icons are white-under/black-over, so all three
 ; preserve the invariant untouched.
+;
+; Deliberately on the mode-independent path, not the bb_* twins: double
+; buffering can be switched on at any time (SPEC.md 31.3) and bb_sync seeds
+; the planes from VRAM, which is only plane-identical if nothing but 0/15
+; has ever been drawn - including while the buffer was off.
 ; clobbers: flags only
 ; -----------------------------------------------------------------------------
 bb_mono_chk:
@@ -284,7 +368,6 @@ BBM_XOR   equ 2
 
 bb_fill:
     mov byte [bb_mode], BBM_SOLID
-    call bb_mono_chk            ; the one solid-colour entry (SPEC.md 32)
     jmp bb_rect
 
 bb_fill_gray:
