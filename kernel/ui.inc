@@ -334,8 +334,6 @@ ui_dispatch:
     je .about
     cmp ax, CMD_CTRL
     je .ctrl
-    cmp ax, CMD_NOTE
-    je .note
     cmp ax, CMD_CLOCK
     je .clock
     cmp ax, CMD_BOUNCE
@@ -356,9 +354,6 @@ ui_dispatch:
     jmp .launch
 .ctrl:
     mov al, KIND_CTRL
-    jmp .launch
-.note:
-    mov al, KIND_NOTE
     jmp .launch
 .clock:
     mov al, KIND_CLOCK

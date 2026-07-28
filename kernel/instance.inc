@@ -34,12 +34,11 @@ I_RECSZ  equ 32                 ; power of two: index<<5 via CL
 INST_MAX equ 12
 
 KIND_ABOUT   equ 0
-KIND_NOTE    equ 1
-KIND_CLOCK   equ 2
-KIND_BOUNCE  equ 3
-KIND_FILES   equ 4
-KIND_TASKMGR equ 5
-KIND_CTRL    equ 6
+KIND_CLOCK   equ 1              ; (Note Pad was kind 1 until it became the
+KIND_BOUNCE  equ 2              ;  NOTEPAD package - SPEC.md 27)
+KIND_FILES   equ 3
+KIND_TASKMGR equ 4
+KIND_CTRL    equ 5
 KIND_PKG     equ 0x80           ; bit 7: package instance
 
 ; --- kind descriptor table (SPEC.md 29.3) -------------------------------------
@@ -60,9 +59,6 @@ inst_kinds:                     ; indexed by KIND_* * 16; caps are binding
     dw app_tpl_about,  0,               0,             0,   0,                app_ttl_about
     dw 0
     db 1, 0                     ; About: stateless singleton
-    dw app_tpl_note,   0,               app_note_pool, 514, app_note_kinit,   app_ttl_note
-    dw 0
-    db 2, 0                     ; Note Pad: 2 x (len word + 512-byte buffer)
     dw app_tpl_clock,  app_clock_task,  app_clk_pool,  8,   app_clock_kinit,  app_ttl_clock
     dw 0
     db 10, 0                    ; Clock: 10 x 8-byte time state, one task each

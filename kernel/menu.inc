@@ -14,16 +14,17 @@
 ; --- commands returned by menu_track (owned here, dispatched by ui.inc) ------
 ; cmd = menu base + item index, so each menu's commands must stay
 ; consecutive from its base (SPEC.md 12) - moving Task Manager into the
-; System menu is what renumbered CMD_NOTE..CMD_CLOSE up by one.
+; System menu is what renumbered CMD_NOTE..CMD_CLOSE up by one, and
+; retiring Note Pad to a package (SPEC.md 27) is what renumbered them
+; back down.
 CMD_ABOUT   equ 1               ; --- System ---
 CMD_CTRL    equ 2
 CMD_TASKS   equ 3
-CMD_NOTE    equ 4               ; --- File ---
-CMD_CLOCK   equ 5
-CMD_BOUNCE  equ 6
-CMD_FILES   equ 7
-CMD_CLOSE   equ 8
-CMD_REBOOT  equ 9               ; --- Special ---
+CMD_CLOCK   equ 4               ; --- File ---
+CMD_BOUNCE  equ 5
+CMD_FILES   equ 6
+CMD_CLOSE   equ 7
+CMD_REBOOT  equ 8               ; --- Special ---
 
 ; --- menu table entry layout --------------------------------------------------
 MENU_TITLE  equ 0               ; word: near ptr to NUL title, 0 = logo glyph
@@ -425,7 +426,6 @@ menu_s_special  db 'Special', 0
 
 menu_s_about    db 'About os8088...', 0
 menu_s_ctrl     db 'Control Panel', 0
-menu_s_note     db 'Note Pad', 0
 menu_s_clock    db 'Clock', 0
 menu_s_bounce   db 'Bounce', 0
 menu_s_disk     db 'Disk', 0
@@ -438,7 +438,6 @@ menu_items_logo:
     dw menu_s_ctrl
     dw menu_s_tasks
 menu_items_file:
-    dw menu_s_note
     dw menu_s_clock
     dw menu_s_bounce
     dw menu_s_disk
@@ -451,7 +450,7 @@ menu_items_special:
 ;           left edge with 12px padding zones around each title.
 menu_table:
     dw 0,              menu_items_logo,    3, CMD_ABOUT,  0,   29,  10
-    dw menu_s_file,    menu_items_file,    5, CMD_NOTE,   30,  85,  42
+    dw menu_s_file,    menu_items_file,    4, CMD_CLOCK,  30,  85,  42
     dw menu_s_special, menu_items_special, 1, CMD_REBOOT, 86, 165,  98
 
 ; -----------------------------------------------------------------------------

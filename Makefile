@@ -95,13 +95,25 @@ $(BUILD)/hello.alt.bin: apps/hello/hello.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/hello.o88: $(BUILD)/hello.bin $(BUILD)/hello.alt.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/hello.bin --alt $(BUILD)/hello.alt.bin -o $@
 
-# The software floppies (drive B:) hold packages, not boot code - os88fs only.
-# Directory order is pinned: mines first, hello second (tests rely on it).
-$(APPSIMG): $(BUILD)/mines.o88 $(BUILD)/hello.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/mines.o88 $(BUILD)/hello.o88
+# Note Pad, formerly the built-in KIND_NOTE app (SPEC.md 27).
+$(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/notepad/notepad.asm
+	@echo "notepad: $(call FILESIZE,$@) bytes"
 
-$(APPSIMG360): $(BUILD)/mines.o88 $(BUILD)/hello.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/mines.o88 $(BUILD)/hello.o88
+$(BUILD)/notepad.alt.bin: apps/notepad/notepad.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xA800 -o $@ apps/notepad/notepad.asm
+
+$(BUILD)/notepad.o88: $(BUILD)/notepad.bin $(BUILD)/notepad.alt.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/notepad.bin --alt $(BUILD)/notepad.alt.bin -o $@
+
+# The software floppies (drive B:) hold packages, not boot code - os88fs only.
+# Directory order is pinned: mines first, hello second (tests rely on it);
+# notepad is appended third so those two keep their indices.
+$(APPSIMG): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88
+
+$(APPSIMG360): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88
 
 # The GUI reads a Microsoft serial mouse on COM1; QEMU emulates one natively.
 MOUSE := -chardev msmouse,id=m0 -serial chardev:m0

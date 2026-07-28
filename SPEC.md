@@ -12,7 +12,7 @@ via the PIT timer interrupt, switchable at run time to cooperative from the
 Control Panel (§8.2/§31). Serial Microsoft mouse on COM1. Boots from floppy
 straight into the GUI: gray dithered desktop, menu bar with pull-down menus,
 draggable overlapping windows with title bars and close boxes. Built-in apps:
-About dialog, Note Pad (typing), Clock and Bounce (each running as its own
+About dialog, Clock and Bounce (each running as its own
 pre-empted background task, updating live while the user types or drags).
 
 ## 1. Hard rules (apply to every module)
@@ -120,7 +120,7 @@ DB_MIN_KB     equ 500        ; int 12h floor: double-buffer only at ≥ 500KB
 | `kernel/instance.inc` | instance table: records, kind descriptors, launch/close lifecycle (§29) |
 | `kernel/menu.inc`   | menu bar, pull-down tracking, command return            |
 | `kernel/ui.inc`     | UI task: event pump, keyboard poll, drag, dispatch      |
-| `kernel/apps.inc`   | built-in app kinds: About, Note Pad, Clock, Bounce — state pools, kinit procs, per-instance tasks |
+| `kernel/apps.inc`   | built-in app kinds: About, Clock, Bounce — state pools, kinit procs, per-instance tasks |
 | `kernel/disk.inc`   | BIOS int 13h floppy reads, os88fs mount + directory (§18–19) |
 | `kernel/loader.inc` | package validation, pool allocation, per-instance load + relocate, launch (§21) |
 | `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22) |
@@ -350,7 +350,7 @@ back-buffer planes (or/and-not per the `[gfx_color]` plane bit).
 - **Charging a stretch of work to something other than a task.** Window
   callbacks run on whichever task drives the repaint or the event — nearly
   always the UI task, which owns no instance — so a task-granular counter
-  alone would report every task-less app (About, Note Pad, Disk, and every
+  alone would report every task-less app (About, Disk, and every
   loaded package, which cannot spawn at all, §20.2) at 0% forever. Two
   public routines bracket such a stretch; both preserve every register
   except their outputs, are callable at any IF, and must sit **outside**
@@ -649,7 +649,7 @@ CMD_REBOOT equ 9   ; --- Special ---
 Menus: **System** (logo): "About os8088..." (CMD_ABOUT), "Control Panel"
 (CMD_CTRL, string `menu_s_ctrl`, §31), "Task Manager" (CMD_TASKS,
 string `menu_s_tasks`, §28) — System's item count in `menu_table` is 3.
-**File**: "Note Pad" (CMD_NOTE), "Clock" (CMD_CLOCK), "Bounce"
+**File**: "Clock" (CMD_CLOCK), "Bounce"
 (CMD_BOUNCE), "Disk" (CMD_FILES), "Close Window" (CMD_CLOSE).
 **Special**: "Restart" (CMD_REBOOT) — one item. Menu bases:
 System = CMD_ABOUT, File = CMD_NOTE, Special = CMD_REBOOT.
@@ -763,7 +763,7 @@ All wm_* calls that repaint are made under gfx_lock by the UI task.
 
 ## 14. apps.inc
 
-The built-in app **kinds**: About, Note Pad, Clock, Bounce. Nothing is
+The built-in app **kinds**: About, Clock, Bounce. Nothing is
 created at boot (there is no `apps_init`) — every instance is launched on
 demand through `app_launch` (§29), which allocates an instance record and
 a per-instance state block from the kind's pool, creates the window from
@@ -772,11 +772,10 @@ stack), runs the kind's init proc, and spawns the kind's task if it has
 one. Closing an instance frees all of it.
 
 Per-instance state pools (.bss; slot stride and cap pinned in the §29
-kind table): `app_note_pool` 2 × 514 (NOTE_LEN word at +0, NOTE_BUF 512
-bytes at +2), `app_clk_pool` 10 × 8 (CLK_H/M/S bytes at +0/+1/+2, pad,
+kind table): `app_clk_pool` 10 × 8 (CLK_H/M/S bytes at +0/+1/+2, pad,
 CLK_LAST word at +4, CLK_ACC word at +6), `app_ball_pool` 10 × 8
 (BAL_X/Y/VX/VY words). About is stateless. Init procs (KD_INIT contract,
-§29): `app_note_kinit` (len = 0), `app_clock_kinit` (h/m/s = 0, last =
+§29): `app_clock_kinit` (h/m/s = 0, last =
 [ticks], acc = 0), `app_bounce_kinit` (x=4, y=4, vx=3, vy=2).
 
 Paint/onkey procs receive SI = window ptr (§11) and find their state via
@@ -793,16 +792,6 @@ the gfx lock) may stay shared. Kind behavior:
   "cooperative" are both exactly 11 characters, so the line's pixel width
   and its centered x are identical in both modes and the existing centering
   math is unchanged. No onkey. Singleton (cap 1).
-- **Note Pad** — 260×180 at (60,60), title "Note Pad". Cap 2. Paint:
-  render the instance's buffer, 8px chars, line wrap at content width,
-  6px left/top margin, then a 1px black caret. Vertical clip: stop before
-  emitting any text row whose bottom (content top + 6 + 8*row + 7) would
-  exceed the content bottom (W_Y + W_H - 2); overflow lines are discarded,
-  not drawn (no scrolling), and if the caret's row does not fit, the caret
-  is not drawn. Onkey: printable ASCII appends (buffer full = beep-less
-  drop), backspace (ASCII 8) deletes, Enter (13) newline. After editing,
-  the handler repaints **its own content only** (white-fill content, redraw
-  text) — caller already holds the lock.
 - **Clock** — 130×60 at (350,60), title "Clock". Cap 10 (the template
   position keeps the whole +16·9 cascade on-screen and above the dock).
   Per-instance
@@ -926,7 +915,8 @@ loaded-program region, §20.)
    cursor — no windows, nothing running. The scheduler boots
    **pre-emptive** (§8.2).
 3. Apps launch from the menus as closable instances — two Clocks tick
-   independently, and they keep ticking **while** typing in Note Pad and
+   independently, and they keep ticking **while** typing in the Note Pad
+   package and
    while a drag outline is being moved (pre-emption visibly working).
 4. Mouse moves cursor; windows drag by title bar; clicking a back window
    raises it; the close box **quits** its instance (window, task and
@@ -950,7 +940,7 @@ loaded-program region, §20.)
     a RAM readout, and the per-instance process list with each row's CPU
     share and memory — all updating twice a second while launched Clocks
     and Bounces keep running, rows appearing and freeing as instances
-    launch and quit. **Task-less apps are listed too**: About, Note Pad,
+    launch and quit. **Task-less apps are listed too**: About,
     Disk and every loaded package show state `evt`, their own region size
     under MEM (`-` for built-ins, which own no region), and a CPU share
     that rises with the work their window callbacks actually do — a
@@ -1273,7 +1263,7 @@ Behaviour:
   row == fm_sel and [ui_click_t]−fm_clkt < 9 (birth ticks, §10) → double-click: set [ld_pending]
   = row+1 (ui.inc runs the loader after the lock drops), repaint content
   (shows "Loading..."). Else select row, stamp fm_clkt, repaint content.
-  Repaint = white-fill own content + redraw (like Note Pad's onkey; the
+  Repaint = white-fill own content + redraw (like the Note Pad package's onkey; the
   caller already holds the lock).
 - `W_ONKEY` (lock held): 'a'/'A' → drive 0, 'b'/'B' → drive 1, 'r'/'R' →
   same drive; all three: `disk_mount`, update fm_mountok, clear selection,
@@ -1417,13 +1407,37 @@ Selection is purely visual bookkeeping; a window covering an icon simply
 paints over it (desk_paint runs before windows in wm_paint_all), and
 clicks over windows never reach desk_click.
 
-## 27. HELLO — the second package (apps/hello/hello.asm)
+## 27. HELLO and NOTEPAD — the second and third packages
 
 Deliberately minimal, to prove the SDK surface and the no-icon fallback:
 `OS88_HEADER 'HELLO', entry` (no icon flag — the Disk window must show
 `ico_app16` for it), one window "Hello" 240×90 at (200,150), paint =
 two centered lines: "Hello from a" / ".o88 package!", no onkey, no
 onclick, no bss. Entry: wm_create, return BX/CF. Prefix `hl_`.
+
+**NOTEPAD** (`apps/notepad/notepad.asm`, prefix `np_`) is the former
+built-in Note Pad kind, moved out of the kernel to reclaim the 1,383 bytes
+it cost there — 281 of code and 1,036 of .bss, nearly all of the latter a
+fixed two-instance text pool. Behaviour is unchanged from §14: one window
+"Note Pad" 260×180 at (60,60); paint renders the buffer at 8px per char
+with a 6px left/top margin, wrapping at the content width, dropping any row
+whose bottom would pass the content bottom (no scrolling) and drawing a 1px
+caret only when its own row fits; onkey appends printable 32..126, deletes
+on backspace, stores 13 on Enter, then white-fills and redraws **its own
+content only**. No icon flag, so the Disk window shows `ico_app16`.
+
+Two things got simpler in the move. The built-in reached its state through
+`inst_of_win` → `I_SPTR` because every instance shared one pool; a package
+addresses its own bss directly (`np_len` word + `np_buf` 512 bytes + three
+paint scratch words = `NP_BSS_TOTAL` 520). And the cap is gone: the pool
+that fixed it at 2 no longer exists, so instances are bounded only by the
+region pool and the instance table like any other package.
+
+Removing the kind renumbered two pinned sets — `KIND_CLOCK`..`KIND_CTRL`
+down by one (§29) and `CMD_CLOCK`..`CMD_REBOOT` down by one (§12), the File
+menu losing its first item and re-basing on `CMD_CLOCK`. Directory order on
+the apps disk stays mines, hello, notepad: the first two keep their indices
+so existing tests are unaffected.
 
 ## 28. taskmgr.inc — the Task Manager window
 
@@ -1459,7 +1473,7 @@ reads 0. The spin phase doubles as the system idle soak; its cycle share
 appears honestly in the list as TaskMgr.
 
 **The list is an INSTANCE list, not a task list.** A task list shows only
-the kinds that own a task; every task-less app — About, Note Pad, Disk,
+the kinds that own a task; every task-less app — About, Disk,
 and every loaded package, which cannot spawn at all (§20.2/§21) — runs
 purely inside window callbacks on the UI task and would never appear.
 Rows are therefore `TM_ROWS = INST_MAX + 1`: row 0 is **System** (the
@@ -1607,7 +1621,6 @@ I_CYC    equ 28   ; dword (lo word first): PIT cycles billed to this
 I_RECSZ  equ 32
 
 KIND_ABOUT   equ 0
-KIND_NOTE    equ 1
 KIND_CLOCK   equ 2
 KIND_BOUNCE  equ 3
 KIND_FILES   equ 4
@@ -1654,7 +1667,7 @@ held, window not yet visible), `KD_NAME` (word, NUL name string),
 `KD_ICON` (word, 16x16 icon body ptr or 0), `KD_CAP` (byte, max
 simultaneous instances), 1 pad byte.
 
-Pinned caps: About 1 (stateless), Note Pad 2 (stride 514), Clock 10
+Pinned caps: About 1 (stateless), Clock 10
 (stride 8), Bounce 10 (stride 8), Files 1 (module-global mount state),
 TaskMgr 1 (one sampler), Control Panel 1 (no per-instance state, §31). The
 per-kind caps deliberately over-subscribe INST_MAX now that Clock and
