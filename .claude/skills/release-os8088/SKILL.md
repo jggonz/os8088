@@ -6,8 +6,12 @@ description: Build os8088 and publish the floppy images to the os8088.com websit
 # Release os8088
 
 Builds the four floppy images, publishes them into the website repository next
-door, opens a pull request there, and cuts a GitHub release on this repo with
-the images attached.
+door along with the notes for its releases page, opens a pull request there,
+and cuts a GitHub release on this repo with the images attached.
+
+The release notes get written once and used twice: `data/releases.json` in the
+website repo (step 4a) and the GitHub release (step 6) say the same thing, and
+the site's /releases/ page is that file rendered.
 
 ## Locating the two repositories
 
@@ -22,7 +26,7 @@ WEB_REPO="${WEB_REPO:-$OS_REPO/../os8088-web}"
 | repo | what it is | role |
 |---|---|---|
 | `$OS_REPO` | this checkout | builds the images, gets the git tag and GitHub release |
-| `$WEB_REPO` | a sibling checkout of the website | receives the images + manifest, gets the pull request |
+| `$WEB_REPO` | a sibling checkout of the website | receives the images, the manifest and the release notes, gets the pull request |
 
 If `$WEB_REPO` does not exist, the website half is simply not available in
 this working copy. Say so plainly, **do the build and the GitHub release
@@ -111,16 +115,76 @@ Pass `--os-repo` explicitly rather than relying on its default, which assumes
 the OS checkout is the sibling directory `../jop`.
 
 `release.py` copies the four images into `public/disk/`, regenerates the
-gzipped copies the browser demo streams, writes `public/releases.json`, and
-rebuilds the site. The download page's table of sizes and checksums is
-generated from that manifest at build time, so it cannot drift.
+gzipped copies the browser demo streams, writes `public/releases.json`, adds
+this release to `data/releases.json`, and rebuilds the site. The download
+page's table of sizes and checksums is generated from that manifest at build
+time, so it cannot drift.
 
-Then verify:
+#### 4a. Write the release notes into `data/releases.json`
+
+**This is yours to write -- the script cannot.** `release.py` fills in only
+what it reads off the build: version, date, commit, kernel size, file list. It
+leaves `summary`, `highlights` and `notes` empty and prints a reminder saying
+so. The releases page (`$WEB_REPO/site/releases.html`, published at
+os8088.com/releases/) renders them, so an unfilled entry ships as a version
+number with no story attached.
+
+Write the same words you are about to put in the GitHub release notes in step
+6 -- write them once, here, and reuse them there:
+
+- `summary` -- one sentence naming what this release is.
+- `highlights` -- one entry per change worth reading about: `title`, the
+  optional PR number as `issue`, and a `body` that explains it rather than
+  restating the title. HTML is allowed in `body`; keep it ASCII, and use `--`
+  the way the rest of the site does.
+- `notes` -- anything that changes how the system is *used* and would
+  otherwise surprise someone (a menu item that moved, a default that flipped).
+  Rendered as a call-out.
+
+The optional `ramBytes` / `ramCap` / `sourceLines` / `modules` fields render
+the size figures on the page. `ramCap` is always 40960 (`0xA000`). The other
+three are not printed by the build, so measure them -- from `$OS_REPO`:
+
+```bash
+# ramBytes: image + .bss, the number the build-time assertion guards.
+# The kernel refuses to assemble over the cap, so bypass the %error to read it.
+sed 's/%error "kernel too big.*/%warning bypassed/' kernel/kernel.asm > /tmp/ksz.asm
+printf '%%assign KT KTEXT_SIZE\n%%assign KB KBSS_SIZE\n%%warning KTEXT=KT KBSS=KB\n' >> /tmp/ksz.asm
+nasm -f bin -I kernel/ -o /dev/null /tmp/ksz.asm     # warning prints both; ramBytes = KT + KB
+
+# sourceLines and modules, counted the way the FAQ counts them: the boot
+# sector, kernel.asm and everything it actually includes, the SDK header and
+# the example packages. The dead .inc files are not included and do not count.
+# Keep the include list as an inline $(...): this shell is zsh, where an
+# unquoted $VAR does NOT word-split and wc would be handed one long filename.
+wc -l boot/boot.asm kernel/kernel.asm \
+      $(grep '%include' kernel/kernel.asm | sed -E 's/.*"(.*)".*/kernel\/\1/') \
+      apps/os88api.inc apps/*/*.asm | tail -1      # sourceLines
+grep -c '%include' kernel/kernel.asm                # modules
+```
+
+If you update these, the same figures are hardcoded in the website's prose --
+`site/index.html`, `site/faq.html`, `site/how-it-works.html`,
+`site/download.html` and `site/how-it-works/graphics.html` all quote the kernel
+size, the RAM footprint, the headroom or the line count. Grep the old numbers
+across `$WEB_REPO/site/` and fix them in the same PR; nothing validates them.
+
+Then rebuild and verify:
 
 ```bash
 python3 tools/build.py        # must report 0 problems
 python3 tools/linkcheck.py    # must report 0 dead
 git status --porcelain
+```
+
+**Look at the releases page before you commit it.** Serve `public/` and read
+it, the same way step 3 makes you look at the smoke screenshot -- a release
+whose entry renders as an empty window is worse than no page at all:
+
+```bash
+(cd "$WEB_REPO/public" && python3 -m http.server 8099 &) && sleep 2
+# then open http://localhost:8099/releases/ and check this release's window
+# has its summary, its highlights, its figures and its four files
 ```
 
 ### 5. Commit and open the pull request
@@ -138,6 +202,10 @@ kernel size and its change since the last release, the four image sizes, and
 whether screenshots were recaptured. If `--shots` ran, say which screenshots
 actually changed (`git diff --stat public/img/shots/`) -- if a UI change was
 expected and nothing changed, that is a signal something is wrong.
+
+Check the diff includes `data/releases.json` with its prose filled in. A
+release PR that touches the images and the manifest but not the release log
+means step 4a was skipped.
 
 End the PR body with:
 
@@ -167,6 +235,11 @@ The notes should name what changed since the previous tag
 page of whatever site this project publishes to (os8088.com/download/ for the
 upstream project).
 
+These are the notes you already wrote in step 4a. Say the same thing in both
+places -- the releases page exists to mirror this, and the two disagreeing is
+worse than either alone. If the wording improved while writing these, go back
+and update `data/releases.json` to match before the website PR is merged.
+
 ### 7. Report
 
 Tell the user: the version, the PR URL, the release URL, the kernel size and
@@ -179,6 +252,10 @@ so, and say the site is not live until that merge happens.
 - **Never publish an unbooted image.** Step 3 is not optional.
 - **Never invent a checksum or a size.** Everything on the download page comes
   from `releases.json`, which `release.py` computes from the actual bytes.
+- **Never ship a release with an empty entry on the releases page.** Step 4a is
+  not optional either: the numbers are generated, the notes are not, and a
+  version with nothing written against it is what an unfilled entry looks like
+  to a reader.
 - **Do not claim a software license.** This repo carries no LICENSE file. If
   the user wants one, that is a separate decision, not part of a release.
 - Both repositories get branches, never direct commits to `main`.
