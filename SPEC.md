@@ -2616,12 +2616,19 @@ caller's explicit second call.
 - **OPL2 at 388h/389h** (Phase 3): all access through `opl_wr` (`.text`,
   ≈40 bytes; in AH = register, AL = value): address select via 388h, 6
   counted status reads, data write to 389h — that much under one
-  `pushf`/`cli` … `popf` — then 35 counted status reads at **IF=1** (the
-  address register is stable, and same-tier interleaving is excluded by
-  the router's ownership, not by cli). Real cost on the floor: ~430–1,300
-  cycles ≈ **90–280 µs per register write**, of which ≤ ~100 µs is the
-  IF=0 window (the 52 µs "datasheet" figure is the chip minimum, not this
-  implementation). A note-on is 2 writes ≈ 0.2–0.6 ms.
+  `pushf`/`cli` … `popf` — then 35 counted status reads at **the caller's
+  IF** (the address register is stable, and same-tier interleaving is
+  excluded by the router's ownership, not by cli). Real cost on the
+  floor: ~430–1,300 cycles ≈ **90–280 µs per register write**, of which
+  ≤ ~100 µs is `opl_wr`'s own IF=0 window when called from task context
+  at IF=1 (the 52 µs "datasheet" figure is the chip minimum, not this
+  implementation). A note-on is 2 writes ≈ 0.2–0.6 ms. Two callers run
+  whole writes — delays included — at IF=0: `snd_tick`'s sanctioned
+  key-off (§8.2), and §34.3's grant-atomicity window, which makes an
+  OPL2-routed **tone grant** one IF=0 stretch of ~0.6–0.7 ms on the
+  floor (two full writes plus the F-Number math) — the accepted cost of
+  the binding single-window grant rule, still well under a tick, and the
+  UART buffers one mouse byte across it.
 - **Sound Blaster** (Phases 4–5): DSP base from the §34.2 reset scan; the
   discovered IRQ's vector hooked mouse_init-style (§34.5); **DMA channel 1
   only — never channel 2, the floppy's**.
@@ -2696,7 +2703,11 @@ documented outputs; callable from task context only unless stated:
   reserved / another requester's channel (§34.3); CF=0 done. Note-on and
   patch-load claim the channel on first touch; note-off leaves the claim
   standing (a melody keeps its channels between notes); all-off keys off
-  and releases everything the requester holds. FM is fire-and-forget — a
+  and releases everything the requester holds. A note-on refused for its
+  frequency **rolls back a claim it just created** — a refusal leaves no
+  side effect, so a requester probing frequencies cannot accumulate
+  silent claimed channels — but never releases a pre-existing claim,
+  including patch-load's. FM is fire-and-forget — a
   note costs ~0.2–0.6 ms once, then zero CPU while it sounds: background
   music under full multitasking even on the floor, which is why the
   preference list routes tones to OPL2 when present.
@@ -2757,8 +2768,10 @@ documented outputs; callable from task context only unless stated:
   clears mode 2 — an unconditional stamp would wedge tone refusal
   forever after the first non-speaker clip.
 - **FM tier**: 9 channels (8 while the tone reservation is active),
-  allocated per requester (bitmap, first-fit); channel handles are the raw
-  0–8 index; the bitmap is force-released by `snd_release_inst`.
+  claimed per requester on first touch of a **caller-named** channel
+  (bitmap + owner stamps — there is no allocator picking channels);
+  channel handles are the raw 0–8 index; the bitmap is force-released by
+  `snd_release_inst`.
 - **PCM_EXCL**: a whole-machine resource, one clip at a time, no queue — a
   second caller gets AX = 1 busy. **Refused (AX = 1) while any PCM_BG
   stream is open**: an exclusive clip raises `sch_lock` for its whole

@@ -106,6 +106,24 @@ $(BUILD)/notepad.alt.bin: apps/notepad/notepad.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/notepad.o88: $(BUILD)/notepad.bin $(BUILD)/notepad.alt.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/notepad.bin --alt $(BUILD)/notepad.alt.bin -o $@
 
+# FMTEST, the sound Phase 3 gate package (docs/SOUND-PLAN.md): drives the FM
+# slot 0x0084 end to end (patch-load, chord, all-off, tone expiry, teardown).
+# Never on the shipped apps disks - their directory order is pinned - it gets
+# its own scratch image, mounted with:
+#   make test-snd ADLIB=1 TESTAPPS=build/fmtest.img
+$(BUILD)/fmtest.bin: apps/fmtest/fmtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/fmtest/fmtest.asm
+	@echo "fmtest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/fmtest.alt.bin: apps/fmtest/fmtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/fmtest/fmtest.asm
+
+$(BUILD)/fmtest.o88: $(BUILD)/fmtest.bin $(BUILD)/fmtest.alt.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/fmtest.bin --alt $(BUILD)/fmtest.alt.bin -o $@
+
+$(BUILD)/fmtest.img: $(BUILD)/fmtest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/fmtest.o88
+
 # The software floppies (drive B:) hold packages, not boot code - os88fs only.
 # Directory order is pinned: mines first, hello second (tests rely on it);
 # notepad is appended third so those two keep their indices.
@@ -148,13 +166,15 @@ test: $(IMG) $(APPSIMG)
 # Verify with tools/sndcheck.py (RMS + dominant-frequency assertions).
 # `make test-snd ADLIB=1` adds an emulated AdLib (OPL2 at 388h) on the same
 # wav audiodev, so sndcheck hears FM output too (Phase 3); without it the
-# boot has no OPL2 and the probe must report absent.
+# boot has no OPL2 and the probe must report absent. TESTAPPS swaps the B:
+# disk for a scratch image (the fmtest gate above).
 ifneq ($(ADLIB),)
 ADLIBDEV = -device adlib,audiodev=snd
 endif
-test-snd: $(IMG) $(APPSIMG)
+TESTAPPS ?= $(APPSIMG)
+test-snd: $(IMG) $(TESTAPPS)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
-		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 \
+		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 \
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
 		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd $(ADLIBDEV)
 

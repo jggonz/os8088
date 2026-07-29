@@ -1172,21 +1172,18 @@ osapi_snd_play:
 ;
 ; Dispatches through the FM-capable row (DRV_OPL) when present; ownership
 ; is the op's job (opl_fm_op stamps claims with the requesting instance,
-; the snd_req_inst rule).
+; the snd_req_inst rule). The dispatch uses absolute memory operands -
+; no register may be borrowed here, because every caller register is op
+; input (verb 2's patch pointer arrives in SI).
 ; -----------------------------------------------------------------------------
 osapi_snd_fm:
-    push si
     cmp byte [snd_live], 0      ; not initialised: no sink can be present
     je .no
-    mov si, snd_drv + SDRV_SIZE*DRV_OPL
-    test byte [si+SDRV_FLAGS], 1
+    test byte [snd_drv + SDRV_SIZE*DRV_OPL + SDRV_FLAGS], 1
     jz .no                      ; no AdLib: the documented refusal
-    call [si+SDRV_NOTE]         ; CF from the op survives the pop below
-    pop si
-    ret
-.no:
+    jmp [snd_drv + SDRV_SIZE*DRV_OPL + SDRV_NOTE]  ; tail: the op's CF/regs
+.no:                            ; are the public contract
     stc
-    pop si
     ret
 
 ; -----------------------------------------------------------------------------

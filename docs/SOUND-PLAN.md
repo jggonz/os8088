@@ -173,10 +173,13 @@ math done inside: F-Number = Hz·2^(20−block)/49716, block chosen so F fits 10
 1 note-off (`CL`), 2 patch-load (`CL`, `DS:SI` → 11-byte patch: 5 operator regs × 2 ops
 + C0h), 3 all-off. Out: CF=1 if no FM sink. Atomicity, sized honestly: `pushf/cli`
 covers only the address select at 388h, its 6 counted status reads, and the data write
-at 389h; the 35-read post-data delay runs at **IF=1** (the address register is stable,
-and same-tier interleaving is excluded by the router's ownership, not by cli). A
-register write is ~430–1,300 cycles ≈ 90–280 µs all-in on the floor, of which ≤ ~100 µs
-is the IF=0 window; a note-on (2 writes) is ~0.2–0.6 ms.
+at 389h; the 35-read post-data delay runs at **the caller's IF** (the address register
+is stable, and same-tier interleaving is excluded by the router's ownership, not by
+cli). A register write is ~430–1,300 cycles ≈ 90–280 µs all-in on the floor, of which
+≤ ~100 µs is `opl_wr`'s own IF=0 window from task context; a note-on (2 writes) is
+~0.2–0.6 ms. Two callers run whole writes at IF=0: `snd_tick`'s sanctioned key-off, and
+the §34.3 grant window — an OPL2-routed tone grant is one ~0.6–0.7 ms IF=0 stretch on
+the floor, the accepted cost of the binding single-window grant rule (SPEC §34.1).
 
 **PCM-out op** — `AL` = verb: 0 start (`ES:SI` buf, `CX` len, `DX` rate Hz),
 1 stop, 2 feed/status. Exclusive drivers (speaker) implement verb 0 as
@@ -226,8 +229,9 @@ losers. All presence flags published **last** after each device is fully configu
   tone. The generation guard is only sound because task-side writers are atomic
   w.r.t. the tick. Same rule covers the PWM steal path (`snd_ch2mode` + generation +
   silence are one unit).
-- **FM tier**: 9 channels (8 when the tone reservation is active), allocated per
-  requester (bitmap, first-fit); channel handles are the raw 0–8 index.
+- **FM tier**: 9 channels (8 when the tone reservation is active), claimed per
+  requester on first touch of a caller-named channel (bitmap + owner stamps — no
+  allocator picks channels); channel handles are the raw 0–8 index.
 - **PCM_EXCL**: whole-machine resource, one clip at a time, no queue — a second caller
   gets busy. **Refused (AX=1 busy) while any PCM_BG stream is open**: an exclusive clip
   raises `sch_lock` for its whole duration, which would freeze the SB refill task and
@@ -486,7 +490,7 @@ tone route) for UI use — menu error, refused clicks.
 
 `opl_wr` (`.text`, ≈40 B): AH = register, AL = value; select via 388h, 6 counted status
 reads, write 389h — that much under one `pushf/cli…popf` — then 35 counted status reads
-at IF=1. Real cost on the floor: ~430–1,300 cycles ≈ **90–280 µs per register write**
+at the caller's IF. Real cost on the floor: ~430–1,300 cycles ≈ **90–280 µs per register write**
 (an `in al,dx` from ISA is ~2–6 µs depending on loop structure — the 52 µs "datasheet"
 figure is the chip minimum, not this implementation). Init (far, once, on probe
 success): zero regs 01h–F5h — ~245 writes ≈ **25–70 ms**, fine in cold boot-time far
@@ -624,7 +628,18 @@ kernel image changes even when nothing sound-side ships on disk).
   package playing a known chord; sndcheck asserts the note fundamentals; a timed tone
   routed to OPL2 expires (the snd_tick key-off test); CP page shows "AdLib: yes"
   (screendump); a no-adlib boot still shows "no" and refuses the radio; closing the
-  package mid-chord silences it (teardown test).
+  package mid-chord silences it (teardown test). The gate package is **committed**:
+  `apps/fmtest` (built into the scratch image `build/fmtest.img`, mounted with
+  `make test-snd ADLIB=1 TESTAPPS=build/fmtest.img` — never on the shipped apps
+  disks, whose directory order is pinned). Its first click patch-loads a carrier
+  MULT=2 voice through slot 0x0084 verb 2 and keys 440 Hz — sounding **880 Hz** iff
+  the caller's DS:SI patch actually reached the chip — its second click adds 660 Hz
+  (the chord), 'b' requests a 3-tick 880 Hz tone (the snd_tick expiry leg), and the
+  close box mid-chord is the teardown leg. Assertion note for future automation: the
+  OPL2 envelope release leaves ~50 ms of tail after a key-off/close (one 10 ms block
+  was measured at rms 0.00515, marginally over sndcheck's default 0.005 silence
+  floor) — allow that tail, or raise `--silence-floor`, before asserting silence at
+  a close boundary.
 - **Phase 4 — Sound Blaster output.** sndsb.inc: far detect (reset scan, E1h version,
   F2h IRQ discovery with confirm-and-retry via the `.text` stubs), `sbl_isr`
   (spurious-IRQ7 guard, 2xEh ACK, half-swap, refill flags, underrun-pause, EOI), DMA

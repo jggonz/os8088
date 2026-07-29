@@ -71,9 +71,10 @@ opl_defpatch:
 ; Select via 388h, 6 counted status reads (the chip's post-address window),
 ; data write to 389h - that much under one pushf/cli..popf - then 35 counted
 ; status reads at the caller's IF (IF=1 from task context; snd_tick's
-; sanctioned key-off runs it at IF=0, bounded and rare - SPEC.md 8.2).
-; ~430-1,300 cycles ~= 90-280us per write on the floor, of which <= ~100us
-; is the IF=0 window.
+; sanctioned key-off and the 34.3 tone-grant window run whole writes at
+; IF=0, bounded and rare - SPEC.md 8.2/34.1). ~430-1,300 cycles ~= 90-280us
+; per write on the floor, of which <= ~100us is this routine's own IF=0
+; window when entered at IF=1.
 ; =============================================================================
 opl_wr:
     push ax
@@ -441,6 +442,9 @@ opl_free:
 ; SPEC.md 34.3). Note-on and patch-load claim the channel on first touch;
 ; note-off leaves the claim standing (a melody keeps its channels between
 ; notes); all-off keys off and releases everything this requester holds.
+; A note-on refused for its frequency ROLLS BACK a claim it just created
+; (a requester probing frequencies must not accumulate silent claims), but
+; leaves a pre-existing claim - including patch-load's - untouched.
 ; The port writes run OUTSIDE the claim's IF=0 window: once the channel is
 ; claimed, same-tier interleaving is excluded by ownership, not by cli
 ; (SPEC.md 34.1).
@@ -471,11 +475,17 @@ opl_fm_op:
     jb .all
     jmp .ok
 .on:                            ; --- verb 0: note-on --------------------------
+    call opl_owned              ; CF = 1: not yet this requester's, so the
+    mov al, 0                   ; claim below would be FRESH - AL remembers
+    adc al, 0                   ; (AL is dead: the verb is decoded)
     call opl_claim
     jc .bad
     call opl_keyon              ; CF = frequency out of 19..6208
-    jc .bad
-    jmp .ok
+    jnc .ok
+    or al, al                   ; a refused note-on leaves no side effect:
+    jz .bad                     ; roll back a claim THIS call created, but
+    call opl_free               ; never one that predates it (SPEC.md 34.2)
+    jmp .bad
 .off:                           ; --- verb 1: note-off -------------------------
     call opl_owned              ; only the owner silences a channel
     jc .bad
@@ -581,6 +591,8 @@ opl_f_probe:
     push bx
     push cx
     push dx
+    push ax                     ; AH is restored on exit - only AL is the
+                                ; documented output (SPEC.md 34.2)
     mov ax, 0x0460              ; 04h <- 60h: mask both timers
     KCALL opl_wr
     mov ax, 0x0480              ; 04h <- 80h: reset the IRQ flags
@@ -613,6 +625,8 @@ opl_f_probe:
 .absent:
     xor al, al
 .out:
+    pop bx                      ; the entry AX (BX itself is restored below)
+    mov ah, bh                  ; put the caller's AH back around the result
     pop dx
     pop cx
     pop bx
