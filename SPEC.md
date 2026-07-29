@@ -1319,7 +1319,7 @@ caller holding several grants is unambiguous by construction):
 | 4 | open-in | DX = rate; a kernel task drains the record ring into the caller's grant (§34.6); out AH = handle. (Phase 5; err 4 until then.) |
 | 5 | read | copy CX recorded bytes from the grant into caller DS:DI (kernel-staged copy). (Phase 5; err 4 until then.) |
 | 6 | stage | copy CX bytes from caller DS:SI into the grant at offset DI (kernel-staged copy — callers never touch ES = SND_SEG, §2.2); the range must sit inside one grant the caller owns. Out AX = 0 / err. |
-| 7 | grant | AH = sub-op (0 alloc, 1 free): CX = bytes → out SI = grant offset, or free (SI = offset, owner only); stamped with the calling instance, force-freed by `snd_release_inst` (§34.3). Out AX = 0 / err. |
+| 7 | grant | AH = sub-op (0 alloc, 1 free): CX = bytes → out SI = grant offset, or free (SI = offset, owner only — **refused with err 7 while an open stream's read offset sits inside the grant**: close the stream first, or the refill task would copy from unowned, re-allocatable bytes); stamped with the calling instance, force-freed by `snd_release_inst` (§34.3 — teardown is safe: it closes the stream before freeing grants). Out AX = 0 / err. |
 
 Error codes, pinned (AX; CF set on any error, and on the stale status):
 0 ok, 1 busy (a stream is already open, or a `PCM_EXCL` clip is running),
@@ -2913,13 +2913,22 @@ end.
   DS = KERNEL_SEG, `cld`, IF=0 throughout, no BIOS, never `sti`, own EOI
   `out 20h, 20h` — the BIOS does not handle this IRQ): first the
   **spurious-IRQ-7 guard** — treat the interrupt as SB only if
-  `snd_sb_expect` is set AND 2xEh bit 7 confirms; a spurious IRQ 7 gets no
-  EOI, just iret (the 8259 sets no ISR bit for it) — **but a non-7 stray
-  IS EOId**: a real unacknowledged ISR bit would block its whole priority
-  level forever, and the close path deliberately leans on this (a block
-  IRQ latched in the PIC just before a close lands on the spurious path
-  after it, because close clears the expectation and retires the SB-side
-  status with its own 2xEh read). The confirm read doubles as the ACK;
+  `snd_sb_expect` is set AND 2xEh bit 7 confirms. An unexpected interrupt
+  on a non-7 line **is always EOId**: a real unacknowledged ISR bit would
+  block its whole priority level forever. An unexpected interrupt on
+  **line 7 asks the 8259** (OCW3 0Bh → the next read of 20h returns the
+  in-service register): ISR bit 7 **clear** is the 8259's spurious-IRQ-7
+  artifact — no ISR bit was set, so no EOI, just iret; ISR bit 7 **set**
+  is a REAL IRQ 7 — the SB Pro's factory default line — and IS EOId.
+  (The naive "line 7 ⇒ no EOI" rule would wedge an IRQ-7 card: a block
+  IRQ latched at the PIC just before a close is delivered after the close
+  clears the expectation and retires the SB-side status with its own 2xEh
+  read, so it lands on this path with bit 7 in service — and no
+  non-specific EOI from the timer/keyboard/mouse handlers can ever retire
+  bit 7, the lowest priority.) The IRQ-discovery stubs apply the same
+  split on their confirm-failed path — during the ~330 ms force-unmask
+  window a stray from an unrelated device on 2/3/5 is real and gets its
+  EOI. The confirm read doubles as the ACK;
   single-cycle mode (DSP < 2.00): re-program DMA ch1 + command 14h for
   the other half of the double buffer (~40 instructions — the
   audible-gap mitigation on 1.x); auto-init (DSP ≥ 2.00, chosen at

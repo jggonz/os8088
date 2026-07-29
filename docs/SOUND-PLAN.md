@@ -581,7 +581,14 @@ owed to 86Box/real hardware: the whole single-cycle (DSP < 2.00) branch —
 floor-gate items. One semantic pinned during the build (now in SPEC
 §20.3/§34.5): data exhaustion reads **underrun-paused**, not "ended" —
 the ABI carries no clip length, so the kernel refuses to guess "finished"
-vs "starved"; "ended" is the watchdog stop.
+vs "starved"; "ended" is the watchdog stop. Assertion note for future
+automation (the SB analogue of Phase 3's OPL2 release-tail note): QEMU's
+wav backend, on `quit`, flushes a ~20 ms residual chunk of stream data at
+the absolute end of the capture — after ~45 ms of silence — whenever an
+SB stream sits underrun-paused at exit. `sndcheck --exclusive` then fails
+("activity outside the burst") even though playback itself was contiguous
+and bounded; assert those sessions with the burst-map method instead, or
+close the stream before quitting.
 
 Post-all-phases slack ≈ 23.6 KB (guard 1) / ≈ 20.4 KB (guard 2) — comfortable even if
 every estimate misses by 2×. `.lowbss` untouched (the refill task's stack is a normal

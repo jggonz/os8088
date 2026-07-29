@@ -18,9 +18,11 @@
 ;
 ; sbl_isr (mou_isr discipline: IF=0 throughout, DS=KERNEL_SEG, no BIOS,
 ; never sti, own EOI): the spurious-IRQ-7 guard first - the interrupt is
-; SB's only if snd_sb_expect is set AND 2xEh bit 7 confirms; a spurious
-; IRQ 7 gets no EOI, just iret (a non-7 stray is EOId so the line cannot
-; wedge at the PIC). The 2xEh confirm read IS the SB-side ACK. Then the
+; SB's only if snd_sb_expect is set AND 2xEh bit 7 confirms; an unexpected
+; IRQ 7 asks the 8259's in-service register (OCW3 0Bh) whether it is real
+; - ISR bit 7 set gets an EOI (the SB's factory default IS line 7), clear
+; is truly spurious and gets none; a non-7 stray is always EOId so the
+; line cannot wedge. The 2xEh confirm read IS the SB-side ACK. Then the
 ; half-swap: the finished half is flagged for the refill task; if the next
 ; half was never refilled the ISR pauses output (D0h) and marks the stream
 ; underrun-paused - bounded silence and a visible status, NEVER stale audio
@@ -292,10 +294,14 @@ sbl_go_on:
 ; handle this IRQ). Never touches VGA, gfx_lock or the switch path.
 ;
 ; Guard first: the interrupt is SB's only if snd_sb_expect is set AND 2xEh
-; bit 7 confirms - and that confirm read IS the SB-side ACK. A spurious
-; IRQ 7 gets no EOI, just iret (the 8259 sets no ISR bit for it); a non-7
-; stray IS EOId, because a real unacknowledged ISR bit would block its
-; whole priority level forever.
+; bit 7 confirms - and that confirm read IS the SB-side ACK. An unexpected
+; IRQ on line 7 may be either spurious (the 8259 sets no ISR bit) or REAL
+; (an SB on line 7 - the factory default - e.g. a block IRQ latched just
+; before a close): the 8259's in-service register decides (OCW3 0Bh, then
+; read 20h) - ISR bit 7 set is EOId, clear irets with no EOI. A non-7
+; stray is always EOId, because a real unacknowledged ISR bit would block
+; its whole priority level forever (a non-specific EOI from a higher-
+; priority handler always retires the higher bit, never this one).
 ;
 ; Then the half-swap: consumed += one block (capped at the valid length),
 ; the finished half is invalidated and left for the refill task, the
@@ -364,9 +370,15 @@ sbl_isr:
     out 0x20, al
     jmp .done
 .spur:
-    cmp byte [sbl_irq], 7       ; spurious IRQ 7: no ISR bit was set, so no
-    je .done                    ; EOI (SPEC.md 34.5, binding)
-    mov al, 0x20                ; any other stray: EOI or the line wedges
+    cmp byte [sbl_irq], 7       ; line 7: real or spurious? only the 8259
+    jne .seoi                   ; knows - a REAL IRQ 7 (the SB's factory
+    mov al, 0x0B                ; default line) sets ISR bit 7. OCW3: the
+    out 0x20, al                ; next read of 0x20 returns the ISR
+    in al, 0x20
+    test al, 0x80               ; bit 7 clear = truly spurious: no EOI
+    jz .done                    ; (SPEC.md 34.5, binding)
+.seoi:
+    mov al, 0x20                ; a real stray, any line: EOI or it wedges
     out 0x20, al
 .done:
     pop es
@@ -380,8 +392,11 @@ sbl_isr:
 ; The IRQ-discovery candidate stubs (.text - interrupt handlers, so SPEC.md
 ; 33 bars them from far even though discovery itself is cold). Each records
 ; its candidate index in sbl_dsc_fired ONLY after the 2xEh bit-7 read
-; confirms the DSP asserted the line - a coincidental spurious IRQ 7 during
-; the window fails the confirm and is ignored without an EOI (SPEC.md 34.5).
+; confirms the DSP asserted the line. A confirm-failed interrupt is still
+; a real one when the 8259 holds its in-service bit - the candidates are
+; force-unmasked for the window, so an unrelated device on 2/3/5 can fire
+; - and gets an EOI; only line 7 can be truly spurious, decided by the
+; OCW3 0Bh in-service read exactly as in sbl_isr (SPEC.md 34.5).
 ; =============================================================================
 sbl_stub7:
     push ax
@@ -408,11 +423,23 @@ sbl_stub_c:
     add dx, 0x0E
     in al, dx                   ; confirm (and ack) via 2xEh bit 7
     test al, 0x80
-    jz .no                      ; not the DSP: ignore, no EOI
+    jz .no                      ; not the DSP
     mov [sbl_dsc_fired], ah     ; accepted: the discovery loop reads this
+    jmp short .eoi
+.no:                            ; confirm failed - but a real stray from an
+    or ah, ah                   ; unrelated device (the lines are force-
+    jnz .eoi                    ; unmasked ~330ms) still needs its EOI, or
+                                ; its whole priority level wedges. Only
+                                ; candidate 0 (IRQ 7) can be spurious:
+    mov al, 0x0B                ; OCW3 - the next 0x20 read returns the
+    out 0x20, al                ; in-service register
+    in al, 0x20
+    test al, 0x80               ; ISR bit 7 clear = spurious: no EOI
+    jz .out                     ; (sbl_isr's split, SPEC.md 34.5)
+.eoi:
     mov al, 0x20
     out 0x20, al
-.no:
+.out:
     pop ds
     pop dx
     pop ax
@@ -631,9 +658,12 @@ sbl_hcheck:
 ; clobbers: nothing else (flags)
 ;
 ; First use runs IRQ discovery (sbl_irq_disc, far) and hooks sbl_isr onto
-; the winner. The record publishes act=1 before the refill task spawns and
-; snd_sb_expect arms only after the hardware starts, so neither the tick
-; nor the ISR can see a half-built stream (the publish-last idiom).
+; the winner. The record publishes act=1 before the refill task spawns,
+; so neither the tick nor the ISR can see a half-built stream (the
+; publish-last idiom) - but snd_sb_expect arms BEFORE sbl_hw_start, the
+; same order sbl_refill's resume uses: the first block IRQ can beat the
+; opener's next instruction, and an unexpected real IRQ never reads 2xEh,
+; leaving the DSP INT latched and the stream permanently silent.
 ; -----------------------------------------------------------------------------
 sbl_v_open:
     push bx
@@ -705,8 +735,16 @@ sbl_v_open:
     mov ax, sbl_refill_task
     call task_spawn
     jc .nospawn
-    call sbl_hw_start           ; TC, speaker on, DMA, go
-    mov byte [snd_sb_expect], 1 ; armed: the ISR owns the IRQ from here
+    mov byte [snd_sb_expect], 1 ; arm BEFORE the hardware starts (the
+    call sbl_hw_start           ; sbl_refill resume order): if the opener
+                                ; is preempted right after 1Ch and stays
+                                ; off-CPU a whole block period, the first
+                                ; block IRQ must not ride the spurious
+                                ; path - unconfirmed via 2xEh, the DSP
+                                ; would keep its INT latched and the edge-
+                                ; triggered line could never re-fire.
+                                ; Arming early is safe: sbl_wd is already
+                                ; loaded, so sbl_tick cannot underflow it
     mov ah, [sbl_gen]           ; out: AH = handle, AL = 0
     mov al, 0
     clc
@@ -898,8 +936,9 @@ sbl_v_stage:
 ;
 ; in:       AH = 0 alloc (CX = bytes; out SI = grant offset) or 1 free
 ;           (SI = grant offset)
-; out:      AX = 0 ok (alloc: SI = offset) / 7 bad size, unknown sub-op or
-;           not the caller's grant / 8 no space; CF mirrors
+; out:      AX = 0 ok (alloc: SI = offset) / 7 bad size, unknown sub-op,
+;           not the caller's grant, or an open stream still reads from the
+;           grant being freed (close it first) / 8 no space; CF mirrors
 ; clobbers: nothing else (flags)
 ; -----------------------------------------------------------------------------
 sbl_v_grant:
@@ -912,6 +951,17 @@ sbl_v_grant:
     call snd_req_inst           ; free: only the owner's own grant
     call sbl_grant_find
     jc .e7
+    cmp byte [sbl_str_act], 1   ; refused while an open stream reads from
+    jne .fok                    ; this grant (SPEC.md 20.3 verb 7): the
+    mov ax, [sbl_str_off]       ; refill task would copy unowned bytes -
+    cmp ax, [sbl_gr_off+bx]     ; and a later alloc's, once re-granted
+    jb .fok
+    mov dx, [sbl_gr_off+bx]
+    add dx, [sbl_gr_size+bx]
+    dec dx                      ; DX = the grant's last byte (off+size can
+    cmp ax, dx                  ; be 0x10000 exactly: compare last bytes)
+    jbe .e7                     ; live stream inside: close it first
+.fok:
     mov word [sbl_gr_act+bx], 0
     xor ax, ax
     clc
@@ -996,14 +1046,17 @@ sbl_fill_half:
 ; -----------------------------------------------------------------------------
 ; sbl_refill - one refill pass (task context)
 ;
-; in:       an open stream this task owns
+; in:       DH = the stream generation this task serves
 ; out:      nothing
 ; clobbers: nothing (flags)
 ;
 ; Fills the half the DSP needs next first, then the other; publishes each
 ; valid flag only after its content is in place. Then the resume check: an
 ; underrun-paused stream whose next half is now valid continues - flags,
-; expectation, watchdog and ports in ONE pushf/cli window (SPEC.md 34.3).
+; expectation, watchdog and ports in ONE pushf/cli window (SPEC.md 34.3),
+; which RE-CHECKS act and generation first: a close (or teardown) that ran
+; between the checks above and the window must not see D4h/14h re-arm a
+; stream it already stopped, nor the ISR scribble a released record.
 ; -----------------------------------------------------------------------------
 sbl_refill:
     push ax
@@ -1021,12 +1074,17 @@ sbl_refill:
     je .done                    ; still starved
     pushf
     cli
+    cmp byte [sbl_str_act], 1   ; re-verify under IF=0: closed since the
+    jne .skip                   ; checks above?
+    cmp dh, [sbl_gen]           ; superseded by a newer open?
+    jne .skip
     mov byte [sbl_paused], 0
     mov byte [sbl_str_state], SBL_ST_PLAY
     mov ax, [sbl_wd_rst]
     mov [sbl_wd], ax
     mov byte [snd_sb_expect], 1
     call sbl_go_on              ; D4h / re-arm (SPEC.md 34.5)
+.skip:
     popf
 .done:
     pop bx
