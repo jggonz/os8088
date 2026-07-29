@@ -171,6 +171,14 @@ all. `tools/os88pkg.py`'s dual-assembly diff would no longer be needed.
 need to be resident at once. Not before: the kernel has 28KB of headroom and
 the current packages are under 2KB each.
 
+**Where the segments come from.** Decided in docs/SOUND-PLAN.md: the sound
+layer claims `SND_SEG` = linear 0x30000–0x3FFFF (the last fully-free 64KB on
+the 256KB floor), and the same SPEC §2 amendment pins the menu save-unders
+to 0x20000–0x2FFFF. So on the floor, Step D's per-package segments carve
+from 0x20000–0x2FFFF (shared with the save-under heap); on bigger machines
+they can range above BB_SEG at 0x40000 instead. Settled now so the conflict
+is not discovered mid-migration.
+
 ## Rejected
 
 - **Shrinking `SCH_STACK` below 1,536.** Would have saved ~5.6KB with no
