@@ -25,7 +25,7 @@ FILESIZE = $$(stat -c%s $(1) 2>/dev/null || stat -f%z $(1))
 KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
-.PHONY: all run run-640 debug test xt xt-640 clean
+.PHONY: all run run-640 debug test test-snd xt xt-640 clean
 
 all: $(IMG) $(IMG360) $(APPSIMG) $(APPSIMG360)
 
@@ -142,6 +142,15 @@ test: $(IMG) $(APPSIMG)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 \
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid
+
+# `make test` plus audio capture (SPEC.md 34 / docs/SOUND-PLAN.md): the PC
+# speaker renders into build/snd.wav, finalized when QMP `quit` stops QEMU.
+# Verify with tools/sndcheck.py (RMS + dominant-frequency assertions).
+test-snd: $(IMG) $(APPSIMG)
+	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 \
+		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
+		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd
 
 # Boot the 360KB image on emulated period hardware in 86Box.
 xt: $(IMG360) $(APPSIMG360)

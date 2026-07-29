@@ -40,6 +40,8 @@ ui_task:
     mov si, bx                  ; W_ONKEY contract: AL=ascii, AH=scan, SI=win
     call inst_win_owner         ; bill the handler to its instance, not to
     push di                     ; this task (SPEC.md 8.1); BX/SI/AX survive
+    push word [snd_inst]        ; stamp the dispatched instance for sound
+    call snd_disp_set           ; grants made inside the handler (SPEC 34.3)
     push ax                     ; the key - task_cycles returns in DX:AX
     call task_cycles            ; DX:AX = start stamp
     mov bx, ax
@@ -49,6 +51,7 @@ ui_task:
     call [si + W_ONKEY]
     pop ax
     pop dx
+    pop word [snd_inst]         ; the outer dispatch's stamp, back
     pop di
     or di, di
     jz .key_done
@@ -106,6 +109,8 @@ ui_task:
     mov bx, si                  ; (CX/DX survived wm_hit/wm_top/gfx_lock)
     call inst_win_owner         ; bill the handler to its instance (8.1)
     push di
+    push word [snd_inst]        ; stamp the dispatched instance for sound
+    call snd_disp_set           ; grants made inside the handler (SPEC 34.3)
     push cx                     ; the click point - task_cycles returns in
     push dx                     ; DX:AX, so CX/DX have to step aside
     call task_cycles            ; DX:AX = start stamp
@@ -118,6 +123,7 @@ ui_task:
     call [si + W_ONCLICK]
     pop ax
     pop dx
+    pop word [snd_inst]         ; the outer dispatch's stamp, back
     pop di
     or di, di
     jz .click_done
@@ -324,8 +330,9 @@ ui_drag_xor:
 ; clobbers: AX, BX (internal helper of the UI task)
 ; Runs on the UI task with NO lock held, so app commands call app_launch
 ; directly (SPEC.md 13/29): a new instance per launch, or - for a kind at
-; its cap - front + un-minimize the existing one. A failed launch (tables
-; full) is a silent no-op. CMD_CLOSE quits the frontmost instance.
+; its cap - front + un-minimize the existing one. A refused command beeps
+; (snd_beep, SPEC.md 34.3): a failed launch (tables full), or CMD_CLOSE -
+; which quits the frontmost instance - with nothing to close.
 ; -----------------------------------------------------------------------------
 ui_dispatch:
     or ax, ax
@@ -364,7 +371,10 @@ ui_dispatch:
 .tasks:
     mov al, KIND_TASKMGR
 .launch:
-    call app_launch             ; takes its own locks; CF (full) ignored
+    call app_launch             ; takes its own locks; out CF = tables full
+    jnc .launched
+    call snd_beep               ; audible refusal (SPEC.md 34.3)
+.launched:
     ret
 
 .files:
@@ -377,7 +387,10 @@ ui_dispatch:
     or bx, bx
     jz .close_none
     call app_close_win          ; in: BX; quit its instance (SPEC.md 29)
+    jmp .close_out
 .close_none:
+    call snd_beep               ; nothing to close: audible refusal (34.3)
+.close_out:
     call gfx_unlock
     ret
 

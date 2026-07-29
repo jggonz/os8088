@@ -514,6 +514,13 @@ comparables (instance.inc) run bigger than a first sketch suggests:
 | P5 recording + staging copies | ~300 B | ~8 B | ~300 B | record ring + grants share SND_SEG |
 | **Total** | **~3.5 KB** | **~0.45 KB** | **~3.7 KB** | |
 
+Phase 1 measured at its gate (§15.1 recipe, 2026-07-29): **861 B .text, 13 B
+.bss, 0 B .fartext** — under the estimate, and the .fartext figure is zero by
+construction, not luck: nothing §34.7 assigns to far code exists yet (the
+speaker needs no probe; the OPL2/SB probes land with their phases), and
+`snd_init` itself is a `.text` routine like every other kmain init. Guard 1
+now 26,691 B free, guard 2 25,919 B free.
+
 Post-all-phases slack ≈ 23.6 KB (guard 1) / ≈ 20.4 KB (guard 2) — comfortable even if
 every estimate misses by 2×. `.lowbss` untouched (the refill task's stack is a normal
 dynamic spawn). SND_SEG folds into the Task Manager's RAM figure via the `KLOWFAR_KB`
@@ -540,9 +547,15 @@ no sound.
 plus `-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd` (Phases 3–4
 add `-device adlib,audiodev=snd` / `-device sb16,audiodev=snd`). New
 `tools/sndcheck.py`: opens the WAV after QMP `quit` flushes it, asserts RMS > threshold
-in a time window and FFT-dominant frequency within ±5% of expected. Both floppy
-geometries rebuilt every phase (the kernel image changes even when nothing sound-side
-ships on disk).
+in a time window and FFT-dominant frequency within ±5% of expected (Goertzel scan,
+stdlib only). Two QEMU realities, measured at the Phase 1 gate and absorbed by the
+tool: (a) the wav backend leaves the RIFF/data size fields zero on exit, so the header
+is parsed by hand; (b) the pcspk stream only runs while the speaker gate is on, so
+file time is speaker-on time, not wall time — "silence before the click" is asserted
+as *an empty capture on a no-input boot* (`--expect-silence`) plus *nothing outside
+the expected burst* (`--exclusive`) on the click run, which is a strictly stronger
+statement than a timeline window. Both floppy geometries rebuilt every phase (the
+kernel image changes even when nothing sound-side ships on disk).
 
 - **Phase 1 — tone core (speaker only).** snd.inc skeleton, ch2/61h ownership + mode
   state machine, `snd_beep`, `snd_tick` beside sch_account behind the `snd_live` gate,

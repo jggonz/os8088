@@ -972,7 +972,8 @@ on top of `.bss` until it runs, §33) →
 must run after the mode set, which clears VRAM, and before the first
 drawing call) → `font_init` → `wm_init` →
 `inst_init` → `mouse_init` → `desk_init` → `files_init` → `loader_init` →
-`tm_init` → gfx_lock → `wm_paint_all` → gfx_unlock → `cursor_show` → jump
+`tm_init` → `snd_init` (§34.7 — publishes `snd_live` last) → gfx_lock →
+`wm_paint_all` → gfx_unlock → `cursor_show` → jump
 into `ui_task` (task 0 never returns). (`dock_init` runs right after
 `desk_init`.) **Clean boot**: no app instances exist — the first paint
 shows only the desktop, drive icons, the empty dock strip and menu bar;

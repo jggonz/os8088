@@ -141,7 +141,7 @@ sched_init:
     ret
 
 ; -----------------------------------------------------------------------------
-; sched_unhook - restore the BIOS int 08h vector, then unhook the mouse
+; sched_unhook - restore the BIOS int 08h vector, then unhook mouse + sound
 ;
 ; Used before reboot so the ROM owns the machine again.
 ;
@@ -164,6 +164,8 @@ sched_unhook:
     popf
 
     call mouse_unhook           ; restores int 0Ch, masks IRQ4
+    call snd_unhook             ; 61h bits 0-1 back to their boot state,
+                                ; ch2 quiescent (SPEC.md 34.7)
 
     ; PIT ch0 back to the BIOS default (mode 3, square wave, divisor
     ; 65536). The vector is already restored so sch_isr can no longer read
@@ -639,6 +641,10 @@ sch_isr:
                                 ; reloaded counter agree (SPEC.md 8.1); and
                                 ; before the sch_lock check, so accounting
                                 ; runs every tick even during floppy reads
+    call snd_tick               ; sound duties (SPEC.md 8.2/34): a called
+                                ; leaf, gated on snd_live until snd_init
+                                ; publishes; runs every tick in both modes,
+                                ; floppy reads included
 
     mov dx, [ticks]             ; wake sleepers whose deadline has passed
     mov bx, sch_tasks

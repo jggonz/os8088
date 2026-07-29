@@ -693,6 +693,8 @@ wm_draw_win:
     mov bx, di                  ; the paint is the owning instance's CPU
     call inst_win_owner         ; time, not the painting task's (SPEC.md 8.1)
     push di
+    push word [snd_inst]        ; stamp the dispatched instance for sound
+    call snd_disp_set           ; grants made inside the paint (SPEC 34.3)
     call task_cycles            ; DX:AX = start stamp
     push dx
     push ax
@@ -700,6 +702,7 @@ wm_draw_win:
     call [bx+W_PAINT]
     pop ax                      ; start stamp
     pop dx
+    pop word [snd_inst]         ; the outer dispatch's stamp, back
     pop di                      ; owning instance record, 0 = unowned window
     or di, di
     jz .done

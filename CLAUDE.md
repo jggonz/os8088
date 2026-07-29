@@ -15,6 +15,10 @@ make          # build all four floppy images into build/
 make run      # boot in QEMU with emulated serial mouse (1.44MB images)
 make run-640  # same, as a maxed-out 640KB machine (-m 1M; QEMU/SeaBIOS can't boot below 1MB, int 12h caps at 640K anyway; SeaBIOS's EBDA makes it 639K)
 make test     # boot headless with QMP socket at build/qmp.sock for scripted testing
+make test-snd # make test + PC speaker captured to build/snd.wav; verify with
+              # tools/sndcheck.py (note: the wav holds speaker-ON time only, not
+              # wall time - a silent boot yields an empty capture, and QEMU leaves
+              # the RIFF sizes zeroed, which sndcheck.py absorbs)
 make debug    # boot QEMU halted, waiting for gdb on :1234
 make xt       # boot 360KB images on an emulated IBM PC/XT in 86Box
 make xt-640   # same XT with a full 640KB RAM (vm/xt640/86box.cfg)

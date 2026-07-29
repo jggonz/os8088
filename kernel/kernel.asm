@@ -147,7 +147,12 @@ osapi_table:
     OSAPI_SLOT osapi_mouse        ; 0x006C
     OSAPI_SLOT osapi_srand        ; 0x0070
     OSAPI_SLOT osapi_rand         ; 0x0074
-osapi_table_end:                 ; 0x0078
+    OSAPI_SLOT osapi_snd_caps     ; 0x0078 - sound (SPEC.md 20.3/34): all
+    OSAPI_SLOT osapi_snd_tone     ; 0x007C   five slots ship in Phase 1;
+    OSAPI_SLOT osapi_snd_play     ; 0x0080   PLAY, FM and STREAM are error
+    OSAPI_SLOT osapi_snd_fm       ; 0x0084   stubs until their phases land
+    OSAPI_SLOT osapi_snd_stream   ; 0x0088   (SPEC.md 34)
+osapi_table_end:                 ; 0x008C
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -155,8 +160,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 26 * 4
-%error "os8088 API jump table must be exactly 26 4-byte slots"
+%if OSAPI_TABLE_LEN != 31 * 4
+%error "os8088 API jump table must be exactly 31 4-byte slots"
 %endif
 
 ; =============================================================================
@@ -191,6 +196,10 @@ kmain:
     call files_init             ; Disk module state (no window at boot)
     call loader_init            ; package loader state
     call tm_init                ; Task Manager total-RAM read (no window)
+    call snd_init               ; sound layer (SPEC.md 34.7): saves the 61h
+                                ; boot bits, stores its .bss state, publishes
+                                ; snd_live LAST - snd_tick has been running
+                                ; gated since sched_init hooked int 08h
 
     call gfx_lock
     call wm_paint_all
@@ -265,6 +274,7 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "dock.inc"
 %include "taskmgr.inc"
 %include "ctrl.inc"
+%include "snd.inc"
 
 ; =============================================================================
 ; Size guards (SPEC.md 15.1). Same-section label differences bound via equ -
