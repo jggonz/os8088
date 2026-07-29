@@ -137,3 +137,6 @@ far_init:
     FARK osapi_snd_play
     FARK opl_wr                 ; sndfm.inc probe + init (SPEC.md 34.2)
     FARK opl_patch
+    FARK sbl_dsp_wr             ; sndsb.inc probe + IRQ discovery (34.2/34.5)
+    FARK sbl_dsp_rd
+    FARK osapi_snd_stream       ; ctrl.inc Sound Test grant (SPEC.md 31.4)

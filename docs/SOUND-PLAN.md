@@ -552,6 +552,37 @@ sustaining a 440+660 Hz chord from its W_ONCLICK went silent at
 close-mid-chord (the `snd_release_inst` → `opl_release_inst` teardown
 leg). Floor-gate items (real-XT probe timing by ear) ride with Phase 2's.
 
+Phase 4 measured at its gate (§15.1 recipe, 2026-07-29): totals now
+**18,432 B .text, 3,700 B .bss, 5,429 B .fartext** — guard 1 **22,924 B
+free**, guard 2 **21,195 B free**. Phase 4 cost ≈ 1,989 B against guard 1,
+≈ 2,294 B against guard 2 (+1,870 .text / +119 .bss / +424 .fartext) —
+over the ~1.0 KB .text estimate (the grant allocator, the verb surface and
+the Test button's move onto it were under-counted) but the far half
+compressed, and the total is well inside the slack. QEMU gate
+(`make test-snd SB16=1 TESTAPPS=build/sbtest.img`, DSP 4.05 → auto-init):
+detect finds base 220h and versions via E1h; first open discovers IRQ 5
+via F2h with the 2xEh-bit-7 stub confirm (QEMU's F2h does set the
+read-buffer status, so the pinned confirm recipe holds there) and hooks
+`sbl_isr`; a fully staged 2 s 1 kHz stream plays gap-free while a window
+drags (wav dominant 1000.0 Hz, one contiguous burst; screendumps show the
+move); exhaustion pauses with verb 3 reading underrun-paused and consumed
+= 16,000; the 2,400-byte never-fed open pauses at 2,400 with **no stale
+audio looping** (the wav burst is bounded); a verb-1 feed of 800 B resumes
+(D4h) and re-pauses at 3,200; close-box teardown mid-stream force-closes
+the stream and frees the grant (`snd_release_inst` leg); the spurious soak
+(IRQ hooked, no stream, menus + clicks) leaves no wedge; and the
+PCM_EXCL exclusion holds (CP Test during an open stream: counters stay 0,
+no freeze). Regressions re-run: refused-close beep 880.0 Hz exclusive,
+CP Sound Test E:12000 R:2 through the new verb-7 grant path, FMTEST patch
+880.0 Hz under `ADLIB=1`, and an untouched boot captures nothing. Still
+owed to 86Box/real hardware: the whole single-cycle (DSP < 2.00) branch —
+`vm/xtsb` does not exist yet, and SPEC §34.5's pinned fallback (refuse
+< 2.00) stands if it proves unmaintainable — plus the standing Phase 2/3
+floor-gate items. One semantic pinned during the build (now in SPEC
+§20.3/§34.5): data exhaustion reads **underrun-paused**, not "ended" —
+the ABI carries no clip length, so the kernel refuses to guess "finished"
+vs "starved"; "ended" is the watchdog stop.
+
 Post-all-phases slack ≈ 23.6 KB (guard 1) / ≈ 20.4 KB (guard 2) — comfortable even if
 every estimate misses by 2×. `.lowbss` untouched (the refill task's stack is a normal
 dynamic spawn). SND_SEG folds into the Task Manager's RAM figure via the `KLOWFAR_KB`

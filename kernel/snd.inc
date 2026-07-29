@@ -103,13 +103,16 @@ snd_drv:                        ; row 0: PC speaker - always present, as data
     dw opl_probe                ; the timer-flag dance, far behind its shim
     dw snd_s_opl
     dw 0
-                                ; row 2: Sound Blaster - lands in Phases 4-5
-    db SND_CAP_PCM_BG | SND_CAP_PCM_EXCL | SND_CAP_PCM_IN
-    db 0                        ; absent until its detect exists
-    dw 0, 0, 0, 0
-    dw 0
+                                ; row 2: Sound Blaster (sndsb.inc, Phase 4)
+    db SND_CAP_PCM_BG           ; PCM_IN joins in Phase 5; no PCM_EXCL op,
+                                ; so exclusive clips keep routing to the
+                                ; speaker (snd_pcm_row wants a PCM op)
+    db 0                        ; absent until sbl_probe publishes (34.2)
+    dw 0, 0, 0, 0               ; streams go through slot 0x0088, not the
+                                ; row ops (SPEC.md 34.5)
+    dw sbl_probe                ; reset scan + E1h gate, far behind its shim
     dw snd_s_sb
-    dw 0
+    dw 0                        ; SDRV_CFG: the probe parks the base here
 
 ; =============================================================================
 ; The PC speaker tone driver (SPEC.md 34.2)
@@ -707,6 +710,9 @@ snd_stop:
 snd_tick:
     cmp byte [snd_live], 0      ; the boot gate - nothing else is readable
     je .done
+    call sbl_tick               ; the SB stream watchdog (SPEC.md 34.5):
+                                ; ~2 compares when no stream is armed;
+                                ; clobbers AX/DX, both free here
     cmp word [snd_town_exp], 0
     je .done
     dec word [snd_town_exp]
@@ -760,7 +766,11 @@ snd_release_inst:
     cmp byte [snd_live], 0      ; the FM leg (SPEC.md 34.3): at most 9
     je .out                     ; single-write key-offs, run OUTSIDE the
     call opl_release_inst       ; tone window - the dying instance can make
-.out:                           ; no new claims, so no race to close
+                                ; no new claims, so no race to close
+    call sbl_release_inst       ; the SB leg (SPEC.md 34.5): close the dying
+                                ; instance's stream (its refill task exits
+                                ; at the next wake) + free its grants
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -864,6 +874,8 @@ snd_init:
     call opl_state_init         ; the FM allocator's .bss (sndfm.inc) -
                                 ; stored ahead of the probe that could
                                 ; publish its row (SPEC.md 34.7)
+    call sbl_state_init         ; likewise the SB driver's (sndsb.inc):
+                                ; its probe fills sbl_base/version on top
 
     mov si, snd_drv             ; probe rows that declare one (SPEC.md 34.2);
     mov cx, SND_NDRV            ; SDRV_PROBE = 0 rows keep their initialised
@@ -896,8 +908,9 @@ snd_init:
 ; clobbers: nothing (flags)
 ;
 ; Called by sched_unhook beside mouse_unhook: 61h bits 0-1 go back to their
-; saved boot state (upper bits preserved), leaving ch2 quiescent. The SB
-; unhook (mask IRQ, reset DSP, restore vector) joins in Phase 4.
+; saved boot state (upper bits preserved), leaving ch2 quiescent; then the
+; SB mirror image (sbl_unhook: mask the IRQ, reset the DSP, restore the
+; vector - SPEC.md 34.7).
 ; -----------------------------------------------------------------------------
 snd_unhook:
     push ax
@@ -910,6 +923,7 @@ snd_unhook:
     or al, [snd_61boot]
     out 0x61, al
     popf
+    call sbl_unhook             ; no-op unless sbl_isr was ever hooked
 .out:
     pop ax
     ret
@@ -1076,8 +1090,12 @@ osapi_snd_play:
 .grant:
     pushf                       ; --- the grant window (SPEC.md 34.3) ------
     cli
-    cmp byte [snd_pcm_busy], 0  ; one clip at a time, no queue; the PCM_BG
-    jne .busyw                  ; exclusion joins here in Phase 4
+    cmp byte [snd_pcm_busy], 0  ; one clip at a time, no queue
+    jne .busyw
+    cmp byte [sbl_str_act], 0   ; refused while a PCM_BG stream is open
+    jne .busyw                  ; (SPEC.md 34.3): the clip's sch_lock would
+                                ; freeze the refill task into its underrun
+                                ; path - refuse the combination instead
     cmp bl, DRV_SPK             ; stealing ch2 only matters on the speaker
     jne .own
     cmp byte [snd_town_act], 0
@@ -1187,14 +1205,15 @@ osapi_snd_fm:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_stream - error stub until its phases land (SPEC.md 20.3): a
-; package built against the full ABI gets the documented "no sink"
-; refusal, never a jump past the table end.
+; osapi_snd_stream - the stream + staging surface (slot 0x0088, SPEC.md
+; 20.3 - live from Phase 4). AL = verb, AH = handle or sub-op; the verb
+; bodies live with the SB driver (sbl_stream_op, SPEC.md 34.5/34.6). The
+; staging verbs (6/7) work on every machine - the pool exists wherever
+; SND_SEG does; the stream verbs (0-3) refuse cleanly (AX = 4) without a
+; card, and 4-5 refuse until recording lands in Phase 5.
 ; -----------------------------------------------------------------------------
-osapi_snd_stream:               ; live in Phases 4-5 (SPEC.md 34.5/34.6)
-    mov ax, 4                   ; err 4: no sink
-    stc
-    ret
+osapi_snd_stream:
+    jmp sbl_stream_op
 
 ; =============================================================================
 ; The PWM rescale-table builder (SPEC.md 34.4): cold per-clip work, so it

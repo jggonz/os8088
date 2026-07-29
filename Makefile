@@ -124,6 +124,24 @@ $(BUILD)/fmtest.o88: $(BUILD)/fmtest.bin $(BUILD)/fmtest.alt.bin tools/os88pkg.p
 $(BUILD)/fmtest.img: $(BUILD)/fmtest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/fmtest.o88
 
+# SBTEST, the sound Phase 4 gate package (docs/SOUND-PLAN.md): drives the
+# stream + staging slot 0x0088 end to end (grant, stage, open, status,
+# underrun, close, teardown). Like fmtest it is never on the shipped apps
+# disks - it gets its own scratch image, mounted with:
+#   make test-snd SB16=1 TESTAPPS=build/sbtest.img
+$(BUILD)/sbtest.bin: apps/sbtest/sbtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/sbtest/sbtest.asm
+	@echo "sbtest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/sbtest.alt.bin: apps/sbtest/sbtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/sbtest/sbtest.asm
+
+$(BUILD)/sbtest.o88: $(BUILD)/sbtest.bin $(BUILD)/sbtest.alt.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/sbtest.bin --alt $(BUILD)/sbtest.alt.bin -o $@
+
+$(BUILD)/sbtest.img: $(BUILD)/sbtest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/sbtest.o88
+
 # The software floppies (drive B:) hold packages, not boot code - os88fs only.
 # Directory order is pinned: mines first, hello second (tests rely on it);
 # notepad is appended third so those two keep their indices.
@@ -171,12 +189,18 @@ test: $(IMG) $(APPSIMG)
 ifneq ($(ADLIB),)
 ADLIBDEV = -device adlib,audiodev=snd
 endif
+# `make test-snd SB16=1` adds an emulated Sound Blaster 16 (iobase 0x220,
+# IRQ 5, DMA 1; DSP reports 4.x, so QEMU only ever exercises the auto-init
+# strategy - SPEC.md 34.5; DSP < 2.00 is 86Box/real-hardware work).
+ifneq ($(SB16),)
+SBDEV = -device sb16,audiodev=snd
+endif
 TESTAPPS ?= $(APPSIMG)
 test-snd: $(IMG) $(TESTAPPS)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 \
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
-		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd $(ADLIBDEV)
+		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd $(ADLIBDEV) $(SBDEV)
 
 # Boot the 360KB image on emulated period hardware in 86Box.
 xt: $(IMG360) $(APPSIMG360)

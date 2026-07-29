@@ -1306,18 +1306,28 @@ CPU-paced — no DMA constraint — so an arbitrary caller buffer is legal
 here, unlike the SB path, §34.5.)
 
 **`osapi_snd_stream` verbs** (AL = verb, AH = stream handle where one
-exists; §34.5–34.6):
+exists; §34.5–34.6). Grant offsets are absolute `SND_SEG` offsets
+everywhere they appear (verb 7 returns one; verbs 0 and 6 take one — a
+caller holding several grants is unambiguous by construction):
 
 | verb | name | contract |
 |------|------|----------|
-| 0 | open-out | DX = rate, SI = grant offset, CX = valid bytes staged so far; spawns the kernel refill task (§34.5); out AH = handle, AX = err (6 = no task slot). Streams must be fully staged before playback (§34.5) — verb 0 checks CX covers the clip, or the caller accepts progressive-feed risk explicitly. |
-| 1 | feed | AH = handle, CX = new total valid length — extends a progressively staged stream. |
-| 2 | close | AH = handle; ends the refill task, frees the stream record. |
-| 3 | status | AH = handle; out AX = state (playing / underrun-paused / ended / stale), DX = bytes consumed — **this poll is the notification mechanism**: callbacks check it; there are no sound events (§34.3). |
-| 4 | open-in | DX = rate; a kernel task drains the record ring into the caller's grant (§34.6); out AH = handle. |
-| 5 | read | copy CX recorded bytes from the grant into caller DS:DI (kernel-staged copy). |
-| 6 | stage | copy CX bytes from caller DS:SI into the grant at offset DI (kernel-staged copy — callers never touch ES = SND_SEG, §2.2). |
-| 7 | grant | AH = sub-op (0 alloc, 1 free): CX = bytes → out SI = grant offset, or free; stamped with the calling instance, force-freed by `snd_release_inst` (§34.3). |
+| 0 | open-out | DX = rate Hz (4000..22222, the §34.5 TC range), SI = grant offset, CX = valid bytes staged so far (> 0, inside the caller's grant); spawns the kernel refill task (§34.5); out AL = 0 with AH = handle, else AX = err. Streams must be fully staged before playback (§34.5) — CX short of the grant **is** the caller explicitly accepting progressive-feed risk. |
+| 1 | feed | AH = handle, CX = new total valid length (never smaller, never past the grant's end) — extends a progressively staged stream; an underrun-paused stream resumes (§34.5). Out AX = 0 / err. |
+| 2 | close | AH = handle; halts playback, frees the stream record (its refill task exits at the next wake). Out AX = 0 / stale. |
+| 3 | status | AH = handle; out AX = state, DX = bytes consumed (capped at the valid length) — **this poll is the notification mechanism**: callbacks check it; there are no sound events (§34.3). States, pinned: **0 playing, 1 underrun-paused (§34.5 — data ran out or the refill starved; resumable by a feed), 2 ended (stopped by the §34.5 watchdog), 0FFFFh stale.** A fully-staged clip that plays out reads underrun-paused with DX = its length — the owner's cue to close; "ended" is reserved for the watchdog stop. |
+| 4 | open-in | DX = rate; a kernel task drains the record ring into the caller's grant (§34.6); out AH = handle. (Phase 5; err 4 until then.) |
+| 5 | read | copy CX recorded bytes from the grant into caller DS:DI (kernel-staged copy). (Phase 5; err 4 until then.) |
+| 6 | stage | copy CX bytes from caller DS:SI into the grant at offset DI (kernel-staged copy — callers never touch ES = SND_SEG, §2.2); the range must sit inside one grant the caller owns. Out AX = 0 / err. |
+| 7 | grant | AH = sub-op (0 alloc, 1 free): CX = bytes → out SI = grant offset, or free (SI = offset, owner only); stamped with the calling instance, force-freed by `snd_release_inst` (§34.3). Out AX = 0 / err. |
+
+Error codes, pinned (AX; CF set on any error, and on the stale status):
+0 ok, 1 busy (a stream is already open, or a `PCM_EXCL` clip is running),
+2 rate out of range, 4 no sink (no card, no IRQ discovered, or the verb's
+phase has not landed), 6 no task slot, 7 bad argument (grant/range/
+length/sub-op), 8 no staging space, 0FFFFh stale handle. The staging
+verbs 6–7 work on every machine — the pool exists wherever `SND_SEG` does
+(§2.2); only the stream verbs need the card.
 
 ### 20.4 osapi helpers (kernel.asm)
 
@@ -2284,13 +2294,15 @@ state of its own, exactly as the Scheduler page reads `sched_mode_get`):
   plays.
 - A **Test** button: synthesises the built-in test clip — 12,000 samples
   of a 1 kHz sine, ~1.5 s at 8,000 Hz (N = 149, the default carrier) —
-  into the `SND_SEG` staging pool's base (§2.2; transient kernel use of
-  the pool base until the Phase 4 allocator lands) and plays it through
-  slot 0x0080's target (`osapi_snd_play`), ES pointing away from DS
-  exactly as a package would. The click **blocks** for the clip — the
-  sanctioned §34.4 `sch_lock` contract, disclosed by the caption — and
-  the result code is deliberately ignored: the counters row below reports
-  what actually happened, which is the point of the button.
+  into a staging grant taken through the public verb-7 surface (§34.6:
+  the Phase 4 allocator; stamped with the panel's own instance, freed on
+  the way out; a refused grant plays nothing and the counters stay 0) and
+  plays it through slot 0x0080's target (`osapi_snd_play`), ES pointing
+  away from DS exactly as a package would. The click **blocks** for the
+  clip — the sanctioned §34.4 `sch_lock` contract, disclosed by the
+  caption — and the result codes are deliberately ignored: the counters
+  row below reports what actually happened, which is the point of the
+  button.
 - Two caption rows, both read live at paint time. The **status row**:
   AdLib presence (`"AdLib: yes"` / `"AdLib: no"` — the caption layer of
   the `bb_avail` idiom) and, in a second column, the exclusive-clips
@@ -2524,18 +2536,19 @@ their data, their `.bss` and their two or three near shims in the kernel
 segment; everything else is far. `tm_init` and `tm_kinit` also stay near —
 they are self-contained and too small to be worth a shim.
 
-**Planned (§34, landing per phase):** the sound layer's cold halves go far
+**The sound layer (§34, landed through Phase 4):** its cold halves are far
 — the device probes (the OPL2 timer dance, the SB reset scan and the SB
 IRQ-discovery *orchestration*) behind the `SDRV_PROBE` FARSHIM stubs
-(§34.2, Phase 1's table with the OPL2/SB probes arriving Phases 3–4), the
-PWM xlat-table builder and the Sound page bodies (Phase 2), OPL2 init +
-patch loader (Phase 3) and SB detect (Phase 4) — each phase adding its
-`FARSHIM`s and the `FARK` entries its far bodies `KCALL` through. The
-hot/ISR halves are barred from moving by the rule above and stay in
-`.text`: `snd_tick`, the tone core, `spk_pcm_run`, `opl_wr`, `sbl_isr`
-**and the IRQ-discovery candidate stubs** (interrupt handlers, even though
-discovery itself is cold), the DSP/DMA primitives, the refill-task body
-and the staging copies (§34.7).
+(§34.2), the PWM xlat-table builder and the Sound page bodies (Phase 2),
+OPL2 init + patch loader (Phase 3), SB detect + IRQ discovery (Phase 4;
+shims `sbl_probe` / `sbl_irq_disc`, `FARK`s `sbl_dsp_wr` / `sbl_dsp_rd` /
+`osapi_snd_stream`) — each phase adding its `FARSHIM`s and the `FARK`
+entries its far bodies `KCALL` through. The hot/ISR halves are barred
+from moving by the rule above and stay in `.text`: `snd_tick`, the tone
+core, `spk_pcm_run`, `opl_wr`, `sbl_isr` **and the IRQ-discovery
+candidate stubs** (interrupt handlers, even though discovery itself is
+cold), the DSP/DMA primitives, the refill-task body and the staging
+copies (§34.7).
 
 **Accounting.** `KLOWFAR_KB` (§15.1) is what the kernel occupies outside its
 own segment — `.lowbss` plus `.fartext` — and both the Task Manager's RAM
@@ -2883,7 +2896,10 @@ end.
 
 - **Init** follows `mouse_init`'s order verbatim: hook the discovered
   IRQ's vector (save old, install under `pushf`/`cli`) while masked at the
-  8259 → program/verify the DSP → unmask. The mirror-image unhook joins
+  8259 → program/verify the DSP → unmask. The hook is made once, at the
+  end of the first successful discovery, and **stays installed until
+  `snd_unhook`** — between streams `snd_sb_expect` is clear and strays
+  ride the ISR's spurious path. The mirror-image unhook joins
   `snd_unhook` (§34.7).
 - **IRQ discovery, deferred to first use**: hook candidates {7, 5, 3, 2}
   onto `.text` discovery stubs (~30 bytes each: record which vector fired,
@@ -2898,12 +2914,17 @@ end.
   `out 20h, 20h` — the BIOS does not handle this IRQ): first the
   **spurious-IRQ-7 guard** — treat the interrupt as SB only if
   `snd_sb_expect` is set AND 2xEh bit 7 confirms; a spurious IRQ 7 gets no
-  EOI, just iret. Then ACK by reading 2xEh; single-cycle mode (DSP <
-  2.00): re-program DMA ch1 + command 14h for the other half of the double
-  buffer (~40 instructions — the audible-gap mitigation on 1.x); auto-init
-  (DSP ≥ 2.00, chosen at detect): nothing to re-arm; flag the consumed
-  half for the refill task; EOI. Never touches VGA, gfx_lock or the
-  switch path.
+  EOI, just iret (the 8259 sets no ISR bit for it) — **but a non-7 stray
+  IS EOId**: a real unacknowledged ISR bit would block its whole priority
+  level forever, and the close path deliberately leans on this (a block
+  IRQ latched in the PIC just before a close lands on the spurious path
+  after it, because close clears the expectation and retires the SB-side
+  status with its own 2xEh read). The confirm read doubles as the ACK;
+  single-cycle mode (DSP < 2.00): re-program DMA ch1 + command 14h for
+  the other half of the double buffer (~40 instructions — the
+  audible-gap mitigation on 1.x); auto-init (DSP ≥ 2.00, chosen at
+  detect): nothing to re-arm; flag the consumed half for the refill task;
+  EOI. Never touches VGA, gfx_lock or the switch path.
 - **DMA recipe (binding)**: channel 1 only. Mask 0Ah = 05h; for each
   16-bit value **clear the flip-flop via 0Ch and write two successive
   bytes (lo, hi)**: offset → 02h/02h, (len − 1) → 03h/03h; page 3 → 83h;
@@ -2923,13 +2944,22 @@ end.
   covers the clip, or the caller accepts progressive-feed risk explicitly
   (§20.3 verb 0).
 - **Underrun contract**: when `sbl_isr` finds the next half not refilled,
-  it pauses output (D0h, bounded write-poll), bumps `snd_sb_under` and
-  marks the stream underrun-paused (visible via the status verb); the
-  refill task resumes with D4h after catching up, or the owner closes.
-  Bounded silence + a visible status — never stale audio looping, never a
-  wedge. `snd_tick`'s **stream watchdog** covers the complementary
-  failure: a block IRQ that fails to arrive within 2× the block period
-  stops the stream instead of hanging the owner.
+  it pauses output (D0h, bounded write-poll; on a single-cycle DSP there
+  is simply no re-arm), bumps `snd_sb_under` and marks the stream
+  underrun-paused (visible via the status verb); the refill task resumes
+  (D4h on auto-init, a fresh half arm on single-cycle) after catching up,
+  or the owner closes. Bounded silence + a visible status — never stale
+  audio looping, never a wedge. **Data exhaustion is the same path,
+  deliberately**: a stream that has consumed every staged byte reads
+  underrun-paused with the consumed count at its valid length — resumable
+  by a feed, closable by its owner — because with no clip-length
+  parameter in the ABI the kernel cannot distinguish "finished" from
+  "starved", and refusing to guess is the honest contract (§20.3 verb 3
+  pins the states). A short final half is padded with 80h silence by the
+  refill copy, so the pause always lands on a block edge. `snd_tick`'s
+  **stream watchdog** covers the complementary failure: a block IRQ that
+  fails to arrive within ~2× the block period (while one is expected)
+  halts the stream and marks it **ended** instead of hanging the owner.
 - **The refill task — the kernel owns stream pacing.** Packages run only
   inside window callbacks and cannot own tasks, so open-out/open-in spawn
   a **transient kernel task** from the existing 12-slot pool (the
@@ -2945,7 +2975,13 @@ end.
   single-cycle DSPs at all; that path is verified on 86Box (`vm/xtsb`, an
   XT with an SB 1.5/2.0). If that config proves unmaintainable, the
   version gate **refuses** DSP < 2.00 (the caps bit stays clear) rather
-  than shipping a permanently unverified branch.
+  than shipping a permanently unverified branch. One known bound of the
+  branch, recorded: the single-cycle re-arm programs the 8237 from the
+  ISR, and the 8237's byte-pair flip-flop is shared with the BIOS's
+  channel-2 programming inside int 13h — a floppy read concurrent with a
+  single-cycle stream can interleave the pairs. Auto-init hardware never
+  programs DMA from the ISR and has no such window; the 86Box gate
+  decides whether the 1.x branch ships or the gate refuses it.
 
 ### 34.6 Recording and staging
 

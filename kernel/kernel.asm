@@ -283,6 +283,7 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "ctrl.inc"
 %include "snd.inc"
 %include "sndfm.inc"            ; the OPL2 driver (SPEC.md 34, Phase 3)
+%include "sndsb.inc"            ; the Sound Blaster driver (SPEC.md 34, P4)
 
 ; =============================================================================
 ; Size guards (SPEC.md 15.1). Same-section label differences bound via equ -

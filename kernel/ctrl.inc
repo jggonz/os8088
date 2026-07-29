@@ -156,10 +156,9 @@ CPS_BTNH  equ 16
 CPS_CAP1Y equ 74                ; status caption row
 CPS_CAP2Y equ 88                ; counters caption row
 CPS_CAP2X equ 92                ; caption 1's second column (the clip note)
-CPS_TESTN equ 12000             ; test clip length: ~1.5s at 8,000 Hz
-CPS_TESTOFF equ 0x3000          ; where it stages: the SND_SEG staging
-                                ; pool's base (SPEC.md 2.2) - transient
-                                ; kernel use, the allocator arrives Phase 4
+CPS_TESTN equ 12000             ; test clip length: ~1.5s at 8,000 Hz;
+                                ; staged in a verb-7 grant since Phase 4
+                                ; brought the allocator (SPEC.md 34.6)
 ; hit bands: generous and contiguous like the Scheduler page's (31.2)
 CPS_B0Y1  equ CPS_R0Y - 4               ; 16: route row 0 top
 CPS_B0Y2  equ CPS_R0Y + CP_GW - 1       ; 31: row 0 bottom = row 1 top - 1
@@ -1201,13 +1200,16 @@ cp_putu16:
 ; out: nothing; [snd_pcm_emitted]/[snd_pcm_resync] hold the clip's tale
 ; clobbers: nothing (flags only)
 ;
-; Replicates the 8-sample 1 kHz sine period into the SND_SEG staging area
-; (transient kernel use of the pool base, SPEC.md 2.2 - the allocator
-; arrives in Phase 4 and nothing else touches the segment yet), then plays
-; it at 8,000 Hz (N = 149, the default carrier) through slot 0x0080's
-; target - the same path a package takes, ES pointing away from DS and
-; all. The result code is deliberately ignored: the counters caption
-; reports what actually happened, which is the point of the button.
+; Takes a staging grant through the public verb-7 surface (SPEC.md 34.6 -
+; the Phase 4 allocator; stamped with the Control Panel's own instance and
+; freed on the way out), replicates the 8-sample 1 kHz sine period into it
+; (direct ES writes - kernel code may hold an ES into SND_SEG, packages
+; may not), then plays it at 8,000 Hz (N = 149, the default carrier)
+; through slot 0x0080's target - the same path a package takes, ES pointing
+; away from DS and all. The result codes are deliberately ignored: the
+; counters caption reports what actually happened, which is the point of
+; the button. A refused grant (pool full) plays nothing and the counters
+; stay 0 - the same honest tale.
 ; -----------------------------------------------------------------------------
 cp_sndclip:
     push ax
@@ -1217,24 +1219,34 @@ cp_sndclip:
     push di
     push es
 
+    mov ax, 0x0007              ; verb 7 grant, sub-op 0 alloc
+    mov cx, CPS_TESTN
+    KCALL osapi_snd_stream       ; out AX = 0 + SI = grant offset
+    or ax, ax
+    jnz .out                    ; no grant, no clip: counters stay 0
+
     mov ax, SND_SEG
     mov es, ax
-    mov di, CPS_TESTOFF
+    mov di, si                  ; fill the grant with the sine pattern
     mov cx, CPS_TESTN / 8
     cld
 .fill:
+    push si
     mov si, cp_snd_pat          ; DS:SI (kernel .text) -> ES:DI (SND_SEG)
     movsw
     movsw
     movsw
     movsw
+    pop si
     loop .fill
 
-    mov si, CPS_TESTOFF
-    mov cx, CPS_TESTN
+    mov cx, CPS_TESTN           ; ES:SI = the grant, exactly as staged
     mov dx, 8000
     KCALL osapi_snd_play         ; BLOCKS for the clip; AX = 0/err ignored
 
+    mov ax, 0x0107              ; verb 7 grant, sub-op 1 free (SI = offset)
+    KCALL osapi_snd_stream
+.out:
     pop es
     pop di
     pop si
