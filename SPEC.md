@@ -57,8 +57,8 @@ pre-empted background task, updating live while the user types or drags).
 5. **Label hygiene.** One flat namespace. Prefix every module-internal label
    with the module's prefix (`vga_`, `font_`, `mou_`, `cur_`, `sch_`, `evq_`,
    `wm_`, `menu_`, `ui_`, `app_`, `inst_`, `dsk_`/`disk_`, `ld_`/`loader_`,
-   `fm_`/`files_`, `ico_`/`icon_`, `desk_`, `dock_`, `tm_`, `cp_`) or use
-   NASM local labels (`.foo`).
+   `fm_`/`files_`, `ico_`/`icon_`, `desk_`, `dock_`, `tm_`, `cp_`, `snd_`,
+   `opl_`, `sbl_`) or use NASM local labels (`.foo`).
 6. Public drawing routines may assume the caller holds the **gfx lock**
    (§7) and that the cursor is hidden. They must not take the lock
    themselves.
@@ -82,7 +82,8 @@ pre-empted background task, updating live while the user types or drags).
 | 0x10000       | 0x1000  | kernel: code, data, .bss                           |
 | 0x1B000       | 0x1000  | `APP_LOAD_OFF` — package pool, 19.5KB: multi-instance, sector-granular first-fit (§20/§21) |
 | 0x1FE00       | 0x1000  | unused: the pool's exclusive end would not fit a 16-bit immediate at 0x10000 |
-| 0x20000       | 0x2000  | `SAVE_SEG` — save-under heap (menus), raw, via ES  |
+| 0x20000       | 0x2000  | `SAVE_SEG` — save-under heap (menus), raw, via ES; **extent pinned to 0x20000..0x2FFFF** (§2.2) |
+| 0x30000       | 0x3000  | `SND_SEG` — sound buffers (§34): SB DMA double buffer, record ring, sample staging pool; raw, via **ES only** (§2.2) |
 | 0x40000       | 0x4000  | `BB_SEG` — double-buffer back buffer, 4 planes × 0x9600 bytes (§32); touched only while the Control Panel's Display page has it switched on, which needs conventional RAM ≥ `DB_MIN_KB` |
 | 0xA0000       | 0xA000  | VGA planar framebuffer, 80 bytes/row               |
 
@@ -121,6 +122,33 @@ clearance above `.lowbss`.
 The full plan this came from, including the step still on the shelf, is
 `docs/MEMORY-PLAN.md`.
 
+### 2.2 SND_SEG — the sound segment (§34)
+
+Linear 0x30000..0x3FFFF is the last fully-free 64KB block on the 256KB
+floor (RAM ends at 0x40000 there), and the sound layer claims all of it:
+`SND_SEG` = 0x3000, reached through **ES only**, never DS, and wholly
+inside 8237 DMA physical page 3, so every buffer in it is
+64KB-page-crossing-safe by construction. Internal region map, pinned — a
+64KB segment with one implicit owner is a bug factory:
+
+```
+0x0000..0x0FFF   SB DMA double buffer, 2 × 2KB   (kernel-owned, §34.5, Phase 4)
+0x1000..0x2FFF   SB record ring, 8KB             (kernel-owned, §34.6, Phase 5)
+0x3000..0xFFFF   staging pool, ~52KB             (granted to instances, §34.6)
+```
+
+Packages never hold an ES pointer into the segment — data crosses through
+kernel-staged copies in both directions (§34.6, the `dsk_get_dir` idiom of
+§18). The Task Manager's RAM figure carries the segment the way it carries
+`KLOWFAR_KB` (§15.1/§28) once the layer claims it (Phase 2).
+
+**In the same breath, `SAVE_SEG`'s extent is pinned to 0x20000..0x2FFFF**:
+the save-under heap may never grow past 0x30000, and `docs/MEMORY-PLAN.md`
+Step D (packages into their own segments) must carve its per-package
+segments from that same block on the floor machine — the bound that keeps
+"SND_SEG is free" true forever. On bigger machines Step D may range above
+0x40000/`BB_SEG` instead.
+
 ## 3. Global constants (defined once in kernel.asm, used everywhere)
 
 ```nasm
@@ -149,6 +177,8 @@ APP_MAX_SIZE equ 0x4E00      ; image + bss budget, 0xB000..0xFDFF
 BB_SEG        equ 0x4000     ; back buffer base segment (plane 0)
 BB_PLANE_PARA equ 0x960      ; paragraphs per plane (0x9600 bytes = 480 rows × 80)
 DB_MIN_KB     equ 500        ; int 12h floor: double-buffer only at ≥ 500KB
+; sound (§34, from Phase 1)
+SND_SEG       equ 0x3000     ; sound buffers: linear 0x30000-0x3FFFF, ES only (§2.2)
 ```
 
 ## 4. Module files and ownership
@@ -176,6 +206,9 @@ DB_MIN_KB     equ 500        ; int 12h floor: double-buffer only at ≥ 500KB
 | `kernel/dock.inc`   | bottom dock strip: one tile per running instance, minimize/restore/activate (§30) |
 | `kernel/taskmgr.inc`| Task Manager window: CPU load gauge + history graph, RAM readout, per-instance process list with CPU + memory (§28) |
 | `kernel/ctrl.inc`   | Control Panel window: two-pane item list + settings pages (§31), prefix `cp_` |
+| `kernel/snd.inc`    | sound core (§34): driver table + router, tone tier, speaker driver (tone + PWM clips), `snd_tick`, the five API slot targets, `snd_release_inst`/`snd_unhook` — prefix `snd_`, lands Phases 1–2 |
+| `kernel/sndfm.inc`  | AdLib/OPL2 driver (§34): probe, init + patch loader, `opl_wr`, FM op — prefix `opl_`, lands Phase 3 |
+| `kernel/sndsb.inc`  | Sound Blaster driver (§34): detect, `sbl_isr`, DMA ch1, streams, recording — prefix `sbl_`, lands Phases 4–5 |
 | `kernel/farcall.inc`| Far-code mechanism (§33): the `FARK`/`KCALL`/`FARSHIM` macros, `far_init`, and the list of kernel routines far code may call |
 
 `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` remain in the
@@ -276,9 +309,19 @@ back-buffer planes (or/and-not per the `[gfx_color]` plane bit).
   tasks (clock, bounce) use only os8088 primitives and `ticks`. The syscall gate
   remains for compatibility but the GUI does not depend on it.
 - **Scheduler lock**: `sch_lock` byte; when non-zero the timer ISR counts
-  ticks but does not switch. Used only inside scheduler internals — normal
-  code uses gfx_lock, which does NOT stop pre-emption (background tasks keep
-  running during drags; they just block on gfx_lock when they try to draw).
+  ticks but does not switch. Normal code uses gfx_lock, which does NOT stop
+  pre-emption (background tasks keep running during drags; they just block
+  on gfx_lock when they try to draw). Outside the scheduler's own
+  internals, exactly **two** routines raise it, both with the same meaning
+  — the tick still runs, the BIOS chain feeds the floppy motor,
+  `sch_account` runs and sleepers mark ready; only involuntary switching
+  pauses: `disk_read` across its int 13h window (§18), and `spk_pcm_run`
+  for the duration of an exclusive speaker clip (§34.4, Phase 2). The clip
+  case adds nothing new for the cursor either: the mouse ISR keeps
+  `mouse_x/y/btn` fresh throughout, and when the clip was started from a
+  window callback — which holds the gfx lock, the normal trigger — the
+  cursor is simply frozen until the clip ends, §7's own cursor rule and
+  not a third state.
 - **Scheduler mode**: multitasking is round-robin in both of the two modes
   of §8.2 — **pre-emptive** (the boot default: every unlocked tick
   switches) and **cooperative** (a task runs until it reaches the switch
@@ -455,8 +498,9 @@ sch_wd_hits  resw 1       ; diagnostic count of watchdog-forced switches;
 
 **sch_isr decision order (binding).** The mode check is the *last* thing in
 the ISR, and the order of everything ahead of it is load-bearing:
-`inc word [ticks]` → `sch_account` (§8.1) → the sleeper-wake scan →
-`sch_lock` → the mode check. So cycle accounting and `task_sleep` deadlines
+`inc word [ticks]` → `sch_account` (§8.1) → `snd_tick` (§34, Phase 1) →
+the sleeper-wake scan → `sch_lock` → the mode check. So cycle accounting,
+the sound layer's tick duties and `task_sleep` deadlines
 keep working on **every** tick in **both** modes (a cooperative task that
 never yields still lets sleepers become ready — they just do not run until
 it yields or the watchdog fires), and because `sch_lock` is tested first, a
@@ -478,6 +522,21 @@ and can never trip the watchdog. The tail of the ISR is exactly:
 
 The `sch_isr` → `sch_switch` → `sch_resume` fall-through run stays intact:
 no routine may be inserted anywhere inside it (§8 `task_exit`).
+
+**`snd_tick` (§34, Phase 1) is a called leaf, not an insertion in the
+run**: `call sch_account` is followed immediately by `call snd_tick`, so
+it runs on every tick, in both modes, even while floppy reads hold
+`sch_lock`. Contract: entered at IF=0 with DS = KERNEL_SEG already loaded
+and the full frame saved (AX/CX/DX free); never touches the switch path;
+never EOIs. Its first instruction tests `[snd_live]` (initialised `.text`
+data, §34.7) and returns while it is clear — int 08h is hooked seconds
+before `snd_init` runs and nothing clears `.bss` at boot (§8). Idle cost
+once live is ~30 cycles; the pinned worst case is one sanctioned OPL2
+key-off (a single register write via `opl_wr`, ~90–280 µs, §34.1) when a
+timed tone routed to OPL2 expires — bounded, rare (at most once per tone
+end at 18.2 Hz) and honest: the alternative, a deferred pend flag, has
+unbounded latency and lets a routed tone drone. Phase 4 adds the SB
+stream watchdog (§34.5), the same bound class.
 
 **`sch_hold` is reset on every entry to `sch_switch`** (`mov byte
 [sch_hold], 0`, at the top of the routine). `sch_switch` is entered three
@@ -1206,6 +1265,57 @@ routines' own (§5, §6, §8, §11). Pinned layout:
 0x0030 gfx_xor_rect    0x0054 wm_content
 ```
 
+**Sound slots (§34), append-only from 0x0078 — all five ship in Phase 1.**
+Only 0x0078/0x007C are live there; the PLAY, FM and STREAM targets are
+3-byte stubs returning the error path (CF=1 / AX = 4 no-sink) until their
+phases land, so a package built against the full ABI never jumps past the
+table end on any kernel from Phase 1 on. The
+kernel.asm table-span assertion goes 26 × 4 → **31 × 4** once, in the same
+change as the slots; `apps/os88api.inc` mirrors the new `OSAPI_*` equs
+(§20.5). The targets live in snd.inc; contracts:
+
+```
+0x0078 osapi_snd_caps    out AX = merged caps word (§34.2), BL = tone route
+                         (0 = speaker, 1 = OPL2), DX = present-driver bits.
+0x007C osapi_snd_tone    in AX = freq Hz (0 = off), CX = duration ticks
+                         (0 = until off), DL = priority (§34.3); out CF=1
+                         refused (higher-priority owner), else CF=0 and
+                         AL = owner generation (matches status queries).
+0x0080 osapi_snd_play    PCM_EXCL clip (§34.4): ES:SI = 8-bit unsigned
+                         mono, CX = count, DX = rate Hz (N = 1193182/rate
+                         must land in 74..255); BLOCKS for the clip; a
+                         mouse click aborts it. out AX = 0 ok / 1 busy
+                         (incl. a PCM_BG stream open) / 2 rate /
+                         3 disabled-by-user / 4 no sink / 5 aborted.
+                         ES restored per §1.            (live Phase 2)
+0x0084 osapi_snd_fm      in AL = verb: 0 note-on / 1 note-off / 2 patch /
+                         3 all-off; CL = channel, BX = freq Hz, DS:SI =
+                         11-byte patch (§34.2); out CF=1 no FM sink.
+                                                        (live Phase 3)
+0x0088 osapi_snd_stream  PCM_BG / PCM_IN + staging: verbs below.
+                                                        (live Phases 4–5)
+```
+
+`osapi_snd_play` takes **ES:SI** (not DS:SI) so a clip staged in `SND_SEG`
+plays in place without copying into the shared kernel segment; packages
+that keep clips in their own image just set ES = DS. (The busy loop is
+CPU-paced — no DMA constraint — so an arbitrary caller buffer is legal
+here, unlike the SB path, §34.5.)
+
+**`osapi_snd_stream` verbs** (AL = verb, AH = stream handle where one
+exists; §34.5–34.6):
+
+| verb | name | contract |
+|------|------|----------|
+| 0 | open-out | DX = rate, SI = grant offset, CX = valid bytes staged so far; spawns the kernel refill task (§34.5); out AH = handle, AX = err (6 = no task slot). Streams must be fully staged before playback (§34.5) — verb 0 checks CX covers the clip, or the caller accepts progressive-feed risk explicitly. |
+| 1 | feed | AH = handle, CX = new total valid length — extends a progressively staged stream. |
+| 2 | close | AH = handle; ends the refill task, frees the stream record. |
+| 3 | status | AH = handle; out AX = state (playing / underrun-paused / ended / stale), DX = bytes consumed — **this poll is the notification mechanism**: callbacks check it; there are no sound events (§34.3). |
+| 4 | open-in | DX = rate; a kernel task drains the record ring into the caller's grant (§34.6); out AH = handle. |
+| 5 | read | copy CX recorded bytes from the grant into caller DS:DI (kernel-staged copy). |
+| 6 | stage | copy CX bytes from caller DS:SI into the grant at offset DI (kernel-staged copy — callers never touch ES = SND_SEG, §2.2). |
+| 7 | grant | AH = sub-op (0 alloc, 1 free): CX = bytes → out SI = grant offset, or free; stamped with the calling instance, force-freed by `snd_release_inst` (§34.3). |
+
 ### 20.4 osapi helpers (kernel.asm)
 
 | symbol           | contract                                            |
@@ -1866,6 +1976,16 @@ init-less:
 | `inst_task_die` | in DI = the CURRENT task's instance record; no lock held; **never returns**: gfx_lock, wm_destroy I_WIN (clears wm_owner), I_WIN ← 0, gfx_unlock, then `jmp task_exit` with BX = record ptr (I_STATE is offset 0 — the release byte). |
 | `inst_launch_post` | in AL = kind: one atomic word store of kind+1 into `inst_launch` — the deferred launch channel for lock-held posters (drained by ui_task step 3, §13). Rapid double posts coalesce (last wins). |
 
+**Sound teardown (§34.3, Phase 1).** Both free points release the
+instance's sound grants inside the teardown window they already own:
+`app_close_win`'s task-less path calls `snd_release_inst` (in: AL =
+instance index) before its final `I_STATE ← 0` store, and `inst_task_die`
+calls it before `task_exit` — so tone ownership, FM channel bits, stream
+ownership and staging grants (§34) join the window, the task slot and the
+package region on the list of what teardown must free. Closing a live
+stream ends its refill task. A closed package can never leave a tone
+droning or a dangling SB stream.
+
 ### 29.5 State (.bss)
 
 `inst_tab` (INST_MAX × I_RECSZ = 384 bytes), `inst_launch` (word: 0 =
@@ -2136,6 +2256,35 @@ requires the gfx lock the click handler already holds. It then redraws just
 the two glyphs. No `[cp_dirty]`: unlike the scheduler mode, no window quotes
 this setting, and the switch is invisible except as speed.
 
+### 31.4 Sound page (§34 — lands Phase 2; the AdLib route arms at Phase 3)
+
+Third item in the panel list, heading "Sound"; like the Display page it is
+one `cp_items` row plus a paint/click pair, and no pane machinery changes.
+Note the far-code shape this relies on: the row's paint/click words are
+**`.fartext` offsets dispatched through the two existing
+`cp_paint`/`cp_onclick` FARSHIMs** — legal because the only code that
+calls through `cp_items` is itself far (§33 rule 5) — so the page adds
+**no new shims**. Contents, all read live at paint time (the page keeps no
+state of its own, exactly as the Scheduler page reads `sched_mode_get`):
+
+- A **tone route** radio pair, "Speaker" / "AdLib", following the live
+  route (`snd_route` override, else the preference list, §34.2). The
+  AdLib row obeys the `bb_avail` idiom (§32) three layers deep: with no
+  OPL2 present the setter refuses, the caption says so ("AdLib: no"), and
+  the click is ignored outright rather than moving a dot the router would
+  refuse.
+- An **exclusive clips** checkbox bound to `snd_excl_ok` (§34.4, default
+  on): unchecked, `osapi_snd_play` returns err 3, and the caption states
+  the trade honestly — an exclusive clip freezes the desktop while it
+  plays.
+- A **Test** button: `snd_beep` through the active tone route.
+- A caption line that doubles as the Phase 2 floor gate's instrument: it
+  renders the `snd_pcm_emitted` / `snd_pcm_resync` counters (§34.4),
+  screendump-readable, which is how the automated test asserts
+  emitted ≈ clip length and resync ≈ 0.
+
+No `[cp_dirty]`: nothing else on screen quotes a sound setting.
+
 ## 32. vgabb.inc — optional double buffering
 
 **Why it exists.** The original design drew straight into VRAM because
@@ -2357,6 +2506,468 @@ their data, their `.bss` and their two or three near shims in the kernel
 segment; everything else is far. `tm_init` and `tm_kinit` also stay near —
 they are self-contained and too small to be worth a shim.
 
+**Planned (§34, landing per phase):** the sound layer's cold halves go far
+— the device probes (the OPL2 timer dance, the SB reset scan and the SB
+IRQ-discovery *orchestration*) behind the `SDRV_PROBE` FARSHIM stubs
+(§34.2, Phase 1's table with the OPL2/SB probes arriving Phases 3–4), the
+PWM xlat-table builder and the Sound page bodies (Phase 2), OPL2 init +
+patch loader (Phase 3) and SB detect (Phase 4) — each phase adding its
+`FARSHIM`s and the `FARK` entries its far bodies `KCALL` through. The
+hot/ISR halves are barred from moving by the rule above and stay in
+`.text`: `snd_tick`, the tone core, `spk_pcm_run`, `opl_wr`, `sbl_isr`
+**and the IRQ-discovery candidate stubs** (interrupt handlers, even though
+discovery itself is cold), the DSP/DMA primitives, the refill-task body
+and the staging copies (§34.7).
+
 **Accounting.** `KLOWFAR_KB` (§15.1) is what the kernel occupies outside its
 own segment — `.lowbss` plus `.fartext` — and both the Task Manager's RAM
 total and its System row add it, so the rows still sum to the total (§28).
+
+## 34. snd.inc / sndfm.inc / sndsb.inc — the sound layer
+
+Multiple outputs, honest routing, speaker first. The layer lands in five
+phases (`docs/SOUND-PLAN.md` is the standing plan: tone core → speaker PCM
++ Control Panel page → OPL2 → Sound Blaster output → SB recording); every
+contract below is binding from the phase marked on it, and the API surface
+— all five §20.3 slots — ships whole in Phase 1, the unbuilt tiers as
+clean error stubs. The lens throughout: every promise is backed by a
+per-device budget on the floor machine (an IBM XT's 4.77 MHz 8088), and
+where the floor cannot deliver, the API says so at call time (CF/AX error)
+and the Control Panel says so in prose — the `bb_avail` idiom (§32), three
+layers deep: the probe flag gates the setter AND the caption AND the
+click. Cycle figures are 8086-nominal; a real 8088's 8-bit bus and
+prefetch stalls inflate them 20–40%, so every margin claim here is a
+*bound to be validated at its phase gate*, not an established fact.
+
+Module split (§4): `snd.inc` (prefix `snd_`) owns the driver table, the
+router, the tone tier, the speaker driver and the API slot targets;
+`sndfm.inc` (`opl_`) the OPL2 driver; `sndsb.inc` (`sbl_`) the Sound
+Blaster driver. `%include`d after `ctrl.inc`; every file ends on
+`section .text` (§1 rule 4). Buffers live in `SND_SEG` (§2.2), never in
+`.bss` or `.lowbss` — rejected, recorded: the kernel window is for code,
+and `.lowbss`'s remaining 4,094 bytes are task-stack clearance, not a
+buffer pool. `SND_SEG` costs the kernel nothing and exists on every
+machine.
+
+**No software mixing.** The router assigns one owner per (sink, tier);
+simultaneity is different tiers on different sinks — FM music on OPL2, a
+tone beep on the speaker and an SB stream all coexist, minus §34.3's PCM
+exclusion. Mixing two PCM streams costs 20+ cycles/sample/stream — a
+fast-machine luxury behind a future `bb_avail`-style gate at most, out of
+scope for all five phases; the ownership contracts are shaped so a future
+mixer changes no caller. And **PCM has two tiers with different
+contracts**, and a request states which it needs: `PCM_BG` (background
+block/IRQ semantics — SB only) and `PCM_EXCL` (exclusive clip: the
+caller's task holds the CPU for the clip — speaker and the SB-direct/Covox
+class). A `PCM_BG` request on a speaker-only machine **fails cleanly**
+(AX = 4); it does not silently freeze the desktop — degradation is the
+caller's explicit second call.
+
+### 34.1 Port ownership
+
+- **PIT channel 2 + port 61h — one owner, one mode at a time.**
+  `snd_ch2mode` (byte: 0 free / 1 tone / 2 PWM) is the state machine; tone
+  and PWM cannot coexist and the router serialises them (a PWM start
+  steals + silences a lower-priority tone; a tone during a clip is refused
+  CF=1). Every 61h access is read-modify-write inside `pushf`/`cli` …
+  `popf` — the upper bits belong to the XT's keyboard/parity logic.
+  `snd_init` saves the boot state of 61h bits 0–1; `snd_unhook` restores
+  it and leaves ch2 quiescent.
+- **PIT channel 0 is never written.** Not re-rated, not re-moded, not
+  "sped up and divided". The speaker PWM pacer *reads* the scheduler's
+  clock by latching ch0 — the same non-destructive operation `sch_account`
+  already performs — so §8.1's 65536 radix, the 0x8000 pending-IRQ
+  threshold, `sched_init`'s seed, `sch_cycles` units and `sched_unhook`'s
+  restore are all untouched by construction. **The ch0 latch-atomicity
+  rule (binding):** every ch0 latch+read triple — that is, every
+  `sch_account` call site (`sch_isr`, `task_cycles`, `task_debit`, the
+  yield/exit save paths) and §34.4's PWM pacer poll — runs inside one
+  `pushf`/`cli` … `popf` window. The 8254 ignores a second latch command
+  while a latched value is unread, so an interleave would feed one reader
+  a stale byte; the IF=0 window makes interleaving impossible in both
+  directions. Every pre-§34 site already complies (each wraps its latch at
+  IF=0 today) — the rule codifies current practice so the invariant stays
+  auditable instead of folklore.
+  **Rejected, recorded so it is never re-litigated:** re-rating ch0 for
+  sample pacing (with a 1-in-N BIOS chain divider) breaks §8.1's radix,
+  the floppy motor countdown and every tick-denominated constant — and
+  even fixed, a minimal per-sample ISR eats 36–50% of the floor CPU and
+  still jitters at tick scale behind the mouse ISR. Interrupt-paced
+  speaker PCM is the same arithmetic and is rejected with it: speaker PCM
+  is the §34.4 busy loop or nothing.
+- **OPL2 at 388h/389h** (Phase 3): all access through `opl_wr` (`.text`,
+  ≈40 bytes; in AH = register, AL = value): address select via 388h, 6
+  counted status reads, data write to 389h — that much under one
+  `pushf`/`cli` … `popf` — then 35 counted status reads at **IF=1** (the
+  address register is stable, and same-tier interleaving is excluded by
+  the router's ownership, not by cli). Real cost on the floor: ~430–1,300
+  cycles ≈ **90–280 µs per register write**, of which ≤ ~100 µs is the
+  IF=0 window (the 52 µs "datasheet" figure is the chip minimum, not this
+  implementation). A note-on is 2 writes ≈ 0.2–0.6 ms.
+- **Sound Blaster** (Phases 4–5): DSP base from the §34.2 reset scan; the
+  discovered IRQ's vector hooked mouse_init-style (§34.5); **DMA channel 1
+  only — never channel 2, the floppy's**.
+
+### 34.2 Driver table, capabilities, ops
+
+Capability bits, published in `snd_caps` (one byte per driver row plus a
+merged word):
+
+```nasm
+SND_CAP_TONE     equ 01h   ; square voice(s): freq on/off
+SND_CAP_FM       equ 02h   ; 9-ch 2-op patch + note-on/off (OPL2 model)
+SND_CAP_PCM_BG   equ 04h   ; self-clocked block PCM out (DMA+IRQ) - background-safe
+SND_CAP_PCM_EXCL equ 08h   ; CPU-paced PCM out - exclusive clip contract
+SND_CAP_PCM_IN   equ 10h   ; block PCM input (recording)
+```
+
+Wire format for all PCM, pinned: **8-bit unsigned mono** — native on the
+SB/Covox class, cheap per-rate rescale for speaker PWM (once per clip via
+the §34.4 xlat table, never a per-sample multiply).
+
+Driver table `snd_drv` (`.text`, stride `SDRV_SIZE` = 16 — the
+`inst_kinds` idiom):
+
+```nasm
+SDRV_CAPS   equ 0   ; db  capability bits the hardware class supports
+SDRV_FLAGS  equ 1   ; db  bit0 = present (probe result; published LAST -
+                    ;     the §29.2 publish-last idiom)
+SDRV_TONE   equ 2   ; dw  near ptr: tone op
+SDRV_NOTE   equ 4   ; dw  near ptr: FM op        (0 if unsupported)
+SDRV_PCM    equ 6   ; dw  near ptr: PCM-out op   (0 if unsupported)
+SDRV_PCMIN  equ 8   ; dw  near ptr: PCM-in op    (0 if unsupported)
+SDRV_PROBE  equ 10  ; dw  near ptr to the probe's FARSHIM stub in .text
+                    ;     (0 = unconditionally present) - §33 rule 3: near
+                    ;     pointers reach far code only through shims;
+                    ;     KCALL/FARK is the reverse direction (probe bodies
+                    ;     calling kernel helpers)
+SDRV_NAME   equ 12  ; dw  .text string ptr ('Speaker','AdLib','Sound Blaster')
+            equ 14  ; dw  reserved (SB: packed base/IRQ/DMA config word)
+```
+
+Rows, indices named `DRV_SPK`/`DRV_OPL`/`DRV_SB`: 0 = speaker (present = 1
+as initialised data — always there), 1 = OPL2, 2 = SB. A future Covox row
+is a fourth entry with `SDRV_PROBE` = 0 and presence set from a Control
+Panel checkbox — announced, not detected (it is undetectable resistors).
+The op pointers (`SDRV_TONE`..`SDRV_PCMIN`) are plain `.text` routines,
+never far.
+
+**Route selection is data, not code**: per-tier preference lists in
+`.text` (`snd_pref_tone db DRV_OPL, DRV_SPK, 0FFh`;
+`snd_pref_pcm db DRV_SB, DRV_SPK, 0FFh`; …) — the first *present* driver
+wins. One override byte per tier (`snd_route`, initialised `.text`,
+default 0FFh = auto) lets the Control Panel pin a tier to a specific sink,
+checked before the list; a route change to an absent driver is refused at
+three layers (setter, caption, click — §31.4). Adding an SN76489 or Covox
+row later is a table row plus a list entry — zero router code changes.
+
+**Ops register contracts.** Every op preserves all registers except its
+documented outputs; callable from task context only unless stated:
+
+- **Tone op** — AX = frequency in Hz (19..20000), or 0 = off. DL = voice
+  (0 for the speaker; 0–2 reserved for a future SN76489 row). Out: CF=0
+  ok, CF=1 unsupported voice/freq. Speaker body: divisor = 1193182/AX via
+  `div`; `pushf`/`cli` … `popf` around the 43h/42h/42h/61h-RMW quad (mode
+  3, 0B6h → 43h, divisor lo/hi → 42h, 61h |= 03h); off = 61h &= 0FCh.
+- **FM op** — AL = verb: 0 note-on (CL = channel 0–8, BX = freq Hz — the
+  F-Number/block math is done inside: F-Number = Hz·2^(20−block)/49716,
+  block chosen so F fits 10 bits), 1 note-off (CL), 2 patch-load (CL,
+  DS:SI → 11-byte patch: 5 operator regs × 2 operators + C0h), 3 all-off.
+  Out: CF=1 no FM sink. FM is fire-and-forget — a note costs ~0.2–0.6 ms
+  once, then zero CPU while it sounds: background music under full
+  multitasking even on the floor, which is why the preference list routes
+  tones to OPL2 when present.
+- **PCM-out op** — AL = verb: 0 start (ES:SI buf, CX len, DX rate Hz),
+  1 stop, 2 feed/status. Exclusive drivers (speaker) implement verb 0 as
+  **run-to-completion** — it returns when the clip ends or aborts;
+  background drivers (SB) return immediately and interrupt per block, and
+  their verb-0 data source is the kernel double buffer only (the refill
+  task feeds it — callers never hand SB a raw pointer). This asymmetry is
+  deliberately **not** papered over: it is the hardware truth, and the
+  public API exposes it as two different calls (§20.3).
+- **PCM-in op** — SB only; verbs mirror PCM-out into the record ring
+  (§34.6); half-duplex with PCM-out enforced by the router, not the
+  driver.
+- **Probe** (far body behind the `.text` FARSHIM; run cold from
+  `snd_init`): out AL = 1 present (+config in the reserved word), 0
+  absent. Order and recipes, pinned: speaker (none needed) → **OPL2
+  timer-flag dance** at 388h (~200 µs: mask/reset via 04h ← 60h/80h, read
+  status s1; timer-1 FFh + start 21h; wait ≥ 80 µs by counted status
+  reads; read s2; present iff (s1 & E0h) == 00h and (s2 & E0h) == C0h;
+  clean up 04h ← 60h/80h) → **SB reset scan** over bases {220h, 240h,
+  210h, 230h, 250h, 260h} with a **10 ms poll timeout per base** (an
+  absent bus floats FFh; the ~100 ms allowance is only for a
+  present-but-slow DSP, retried once on 220h): write 1 → 2x6h, hold
+  ≥ 3 µs, write 0, poll 2xEh bit 7, read 2xAh == 0AAh → SB version via E1h
+  (the auto-init strategy gate at ≥ 2.00, §34.5) → **SB IRQ discovery
+  deferred to first use** (§34.5). Presence flags are published **last**,
+  after each device is fully configured.
+
+### 34.3 Router — ownership, priority, generations
+
+- **Tone tier**: one logical channel, single owner. Owner record =
+  {instance byte, priority byte, generation byte, expiry ticks}. Steal
+  policy: a new request with priority ≥ the current owner's takes the
+  channel (kernel UI beeps use priority 0C0h; the package default is
+  040h); lower priority is refused CF=1. Tone-off (AX = 0) obeys the same
+  compare, so background music cannot silence an alert. Duration-limited
+  tones (CX ≠ 0) self-expire via `snd_tick` — no task needed — and the
+  expiry is **generation-guarded**: the tick silences only if the owner
+  generation still matches the one stamped at grant. Route: speaker by
+  default; the Control Panel can route tones to OPL2 (a square-ish patch
+  on channel 8) to free the speaker — and **whenever OPL2 is in the tone
+  route or preference list, channel 8 is reserved out of the FM
+  allocator's bitmap**, so a package grabbing all FM channels cannot
+  steal the tone channel.
+- **Grant atomicity (binding)**: every grant, steal and release updates
+  its owner record (generation, priority, expiry) *and* its ports inside a
+  **single** `pushf`/`cli` … `popf` window. `snd_tick` runs at IF=0
+  between any two task-context instructions; without this rule a tick
+  landing between the generation stamp and the expiry store sees
+  new-generation-with-stale-expiry and can silence a just-granted tone.
+  The generation guard is only sound because task-side writers are atomic
+  w.r.t. the tick. The same rule covers the PWM steal path: `snd_ch2mode`,
+  the generation stamp and the silencing are one unit.
+- **FM tier**: 9 channels (8 while the tone reservation is active),
+  allocated per requester (bitmap, first-fit); channel handles are the raw
+  0–8 index; the bitmap is force-released by `snd_release_inst`.
+- **PCM_EXCL**: a whole-machine resource, one clip at a time, no queue — a
+  second caller gets AX = 1 busy. **Refused (AX = 1) while any PCM_BG
+  stream is open**: an exclusive clip raises `sch_lock` for its whole
+  duration (§34.4), which would freeze the SB refill task and force the
+  stream through its underrun path — the router refuses the combination
+  instead of shipping the surprise.
+- **PCM_BG / PCM_IN**: per-card owner record {instance, generation};
+  input and output are **mutually exclusive on one SB** (same DSP + DMA
+  channel) — the router models half-duplex, the driver never sees the
+  conflict. Stream handles carry the generation byte: feed/close/status on
+  a stale handle return "stale" instead of acting on a reused stream.
+- **`snd_release_inst`** — in: AL = instance slot; Phase 1. Every grant —
+  tone ownership, FM channel bits, stream ownership, staging grants — is
+  stamped with its owner instance, and this routine force-releases all of
+  them, closing a live stream and ending its refill task. Called from both
+  §29 teardown paths (§29.4); a closed package can never leave a tone
+  droning or a dangling SB stream.
+- **Notification is polling; there is no sound event type.** Rejected,
+  recorded: an `EVT_SND` would enter a queue whose only consumer is the UI
+  task, which discards everything but mouse events and actively drains the
+  queue mid-drag; tasks must never pop the shared queue (a second popper
+  steals mouse events). Sound events would be pure pressure against 16
+  slots, silently eaten. Progress is observed through the STREAM status
+  verb (§20.3), polled from callbacks; the kernel refill task is what acts
+  on block completion.
+- **Who mixes: nobody** (see the §34 intro). Same-tier contention is
+  ownership + priority steal, nothing else.
+- Kernel-internal: `snd_beep` — no arguments, priority 0C0h, a 3-tick
+  880 Hz tone through the active tone route; for UI use (menu error,
+  refused clicks).
+
+### 34.4 Speaker PWM — exclusive clips (Phase 2)
+
+**Modulator**: ch2 in **mode 0, lobyte-only** (90h → 43h once at clip
+start), 61h bits 0–1 held high. One `out 42h, AL` per sample emits a low
+pulse of AL PIT-cycles; the speaker cone integrates the pulse train; the
+sample rate is the carrier. Mode-3-idle + gate low are restored at clip
+end.
+
+- **Rates**: the computed divisor N = 1193182/rate must land in
+  **74..255** (mode-0 lobyte-only ⇒ N ≤ 255 ⇒ rate ≥ 4,679 Hz; N ≥ 74 ⇒
+  rate ≤ 16,124 Hz). A rate whose N falls outside returns **err 2, never a
+  silent clamp** — a 22 kHz clip "clamped" to N = 74 would play 27% slow
+  and flat; refusal is honest, resampling is the caller's job. Default
+  rate: N = 149 → 8,008 Hz carrier, depth log2(149) ≈ 7.2 bits — **a bound
+  to be validated at the Phase 2 floor gate**: if the resync counter shows
+  material drops at N = 149 on the XT (86Box), the default drops to
+  ~6 kHz and this section records the measured figure. One more honesty
+  line, pinned: above ~12 kHz the ±1-poll granularity (~23–27 µs) exceeds
+  a third of the sample period, so quality is jitter-dominated below the
+  nominal depth. The documented audible truth at the default: an 8 kHz
+  carrier whine + telephone-grade audio — that *is* speaker PCM.
+- **Rescale**: far code builds a 256-byte xlat table per clip —
+  t[s] = 1 + s·(N−2)/255, ~8 ms — in `.bss` (DS-addressable for `xlat`).
+  Non-destructive: the caller's clip buffer is never modified, so replay
+  and re-rate work. (Rejected: per-sample `mul` scaling — the table saves
+  ~70 cycles/sample.)
+- **Pacing**: the clip loop reads the scheduler's ch0 (§34.1): latch
+  (0 → 43h), read two bytes from 40h, negate → a free-running 16-bit phase
+  incrementing at 1,193,182 Hz; deadlines advance by N per sample and the
+  compare is wrap-safe signed subtraction; each poll is one atomic latch
+  triple (~110 cycles all-in), IF=1 between polls. **The resync rule**: a
+  sample late by more than one period resets the deadline to now and drops
+  samples — `inc word [snd_pcm_resync]` — never burst catch-up writes, so
+  a long interrupt becomes dropped samples, never a buzz. Jitter is ±1
+  poll plus the surviving IF=0 stretches. `snd_pcm_emitted` /
+  `snd_pcm_resync` are the debug counters the Phase 2 gate reads,
+  surfaced on the §31.4 caption. Budget at N = 149: 4,772,727/8,008 ≈
+  **596 CPU cycles/sample**; fixed work (lodsb + xlat + out + deadline +
+  abort checks + loop, with 8088 fetch stalls) ≈ 120–135, plus typically
+  3–4 polls → ~450–575 total — it fits with little to spare, which is
+  precisely why this is a busy loop and not an ISR.
+- **Abort — a click always skips the clip.** At clip start the loop
+  latches `snd_btn0 = [mouse_btn]`; on each emitted sample it first
+  **folds releases into the baseline** (`mov al, [mouse_btn]` /
+  `and [snd_btn0], al`), then a bit set now but clear in the baseline
+  aborts with err 5. The fold is load-bearing: clips start from W_ONCLICK
+  handlers — dispatched on EVT_MDOWN with the button *still held* — so the
+  baseline starts with bit 0 set; the release retires it and the next
+  press differs from the baseline and aborts. (Without the fold, no left
+  click could ever abort a click-launched clip.) `snd_abort` — set by
+  `snd_stop` and `snd_release_inst` — is checked in the same window. On
+  click-abort the kernel **drains the aborting EVT_MDOWN (and its EVT_MUP)
+  from the event queue** before returning, so the skip gesture cannot fire
+  a menu, close box or icon under the cursor. No code is added to
+  `mou_isr` — the checks are byte loads on the emit path; the mouse module
+  stays sound-free.
+- **Scheduling contract**: `spk_pcm_run` executes on the **caller's task**
+  with IF=1 throughout, wrapped in `inc byte [sch_lock]` …
+  `dec byte [sch_lock]` — the second sanctioned raiser (§7), with exactly
+  `disk_read`'s meaning (§18) and not a new one: ticks advance, the BIOS
+  chain feeds the floppy motor, `sch_account` runs, sleepers mark ready;
+  only involuntary switching pauses. The mouse ISR keeps `mouse_x/y/btn`
+  fresh throughout — but the cursor only *moves* if the caller does not
+  hold the gfx lock; from window callbacks (which run under `gfx_lock`,
+  the normal trigger) it is frozen for the clip, which also shrinks the
+  mouse ISR's worst IF=0 stretch to packet decode. Cap: CX ≤ 65535 samples
+  (≈ 8 s at 8 kHz); callers should chunk at ≤ 2 s, and the click-abort
+  bounds the user's worst case regardless. The desktop freezes for the
+  clip; that is disclosed in the API (`PCM_EXCL`), in the §31.4 caption,
+  and gated by the user policy byte `snd_excl_ok` (default on,
+  CP-flippable) — `osapi_snd_play` returns err 3 while it is off.
+
+### 34.5 Sound Blaster (Phases 4–5)
+
+- **Init** follows `mouse_init`'s order verbatim: hook the discovered
+  IRQ's vector (save old, install under `pushf`/`cli`) while masked at the
+  8259 → program/verify the DSP → unmask. The mirror-image unhook joins
+  `snd_unhook` (§34.7).
+- **IRQ discovery, deferred to first use**: hook candidates {7, 5, 3, 2}
+  onto `.text` discovery stubs (~30 bytes each: record which vector fired,
+  confirm, EOI, iret — interrupt handlers, so §33 bars them from far even
+  though discovery itself is cold), issue DSP command F2h
+  (trigger-8-bit-IRQ, supported by all DSPs), and keep the vector that
+  fired **only after the stub's 2xEh bit-7 read confirms the DSP asserted
+  it** (defeats a coincidental spurious IRQ 7 during the window; retry F2h
+  once if the confirm fails); unhook the losers.
+- **`sbl_isr`** (`.text`, mou_isr discipline: push used regs + DS + ES,
+  DS = KERNEL_SEG, `cld`, IF=0 throughout, no BIOS, never `sti`, own EOI
+  `out 20h, 20h` — the BIOS does not handle this IRQ): first the
+  **spurious-IRQ-7 guard** — treat the interrupt as SB only if
+  `snd_sb_expect` is set AND 2xEh bit 7 confirms; a spurious IRQ 7 gets no
+  EOI, just iret. Then ACK by reading 2xEh; single-cycle mode (DSP <
+  2.00): re-program DMA ch1 + command 14h for the other half of the double
+  buffer (~40 instructions — the audible-gap mitigation on 1.x); auto-init
+  (DSP ≥ 2.00, chosen at detect): nothing to re-arm; flag the consumed
+  half for the refill task; EOI. Never touches VGA, gfx_lock or the
+  switch path.
+- **DMA recipe (binding)**: channel 1 only. Mask 0Ah = 05h; for each
+  16-bit value **clear the flip-flop via 0Ch and write two successive
+  bytes (lo, hi)**: offset → 02h/02h, (len − 1) → 03h/03h; page 3 → 83h;
+  mode 49h out / 45h in (59h/55h auto-init); unmask 0Ah = 01h. Nothing is
+  multiplied by 2 — address doubling is a 16-bit-channel concept that does
+  not exist on the XT. The double buffer is 2 × 2 KB at `SND_SEG`:0
+  (§2.2) — wholly inside 8237 physical page 3, page-crossing-safe by
+  construction. Rates are quantised via TC = 256 − 1e6/rate; ceilings
+  honoured (out ≤ ~22 kHz; in ≤ 13 kHz on 1.x / 15 kHz on 2.0 normal
+  mode). **Every DSP poll (2xCh busy, 2xEh ready) carries a timeout.**
+- **The staged rule (binding), and the floppy truth behind it**: the DMA
+  and `sbl_isr` keep running during int 13h windows (`sch_lock` does not
+  mask interrupts), but the refill task does not — task switching pauses
+  (§18), so after the double buffer drains (~512 ms at 8 kHz) a stream fed
+  live from disk *will* underrun. Therefore **streams must be fully staged
+  into their `SND_SEG` grant before playback starts**: open-out checks CX
+  covers the clip, or the caller accepts progressive-feed risk explicitly
+  (§20.3 verb 0).
+- **Underrun contract**: when `sbl_isr` finds the next half not refilled,
+  it pauses output (D0h, bounded write-poll), bumps `snd_sb_under` and
+  marks the stream underrun-paused (visible via the status verb); the
+  refill task resumes with D4h after catching up, or the owner closes.
+  Bounded silence + a visible status — never stale audio looping, never a
+  wedge. `snd_tick`'s **stream watchdog** covers the complementary
+  failure: a block IRQ that fails to arrive within 2× the block period
+  stops the stream instead of hanging the owner.
+- **The refill task — the kernel owns stream pacing.** Packages run only
+  inside window callbacks and cannot own tasks, so open-out/open-in spawn
+  a **transient kernel task** from the existing 12-slot pool (the
+  Clock/Bounce spawn idiom; a full pool is a clean err 6). It copies
+  grant → double-buffer halves as `sbl_isr` flags them consumed (or
+  ring → grant for recording) and exits at stream end, close or teardown.
+  SB playback DMA never runs from a grant — the copy hop satisfies the DMA
+  contract by construction, not by caller discipline. Rejected, recorded:
+  a *resident* sound task would cost a 1,536-byte `.lowbss` stack for
+  mostly-idle work; tone expiry is a `snd_tick` leaf and stream refills
+  are transient spawns that exit with their stream.
+- **The DSP < 2.00 fallback, pinned now**: QEMU's sb16 cannot exercise
+  single-cycle DSPs at all; that path is verified on 86Box (`vm/xtsb`, an
+  XT with an SB 1.5/2.0). If that config proves unmaintainable, the
+  version gate **refuses** DSP < 2.00 (the caps bit stays clear) rather
+  than shipping a permanently unverified branch.
+
+### 34.6 Recording and staging
+
+- **Recording** (Phase 5): STREAM verbs 4–5 (§20.3) → DSP 24h single-cycle
+  or 2Ch auto-init (DMA modes 45h/55h) into the 8 KB `SND_SEG` record
+  ring; half-duplex with playback enforced by the router's owner record
+  (§34.3); a kernel drain task moves ring → grant; consumers read via the
+  verb-5 staging copy.
+- **The staging pool** (`SND_SEG` 0x3000..0xFFFF, ~52 KB, §2.2) has a tiny
+  allocator: first-fit grants stamped with the owning instance slot — the
+  §21 package-pool idiom: occupancy derived from the grant records, no
+  free list — allocated and freed through verb 7 and force-released by
+  `snd_release_inst` at teardown. **Packages never hold an ES pointer into
+  `SND_SEG`**: data goes in via the stage verb (kernel copies
+  caller → grant) and comes out via the read verb (kernel copies
+  grant → caller) — the `dsk_get_dir` staging idiom (§18), in both
+  directions.
+- What packages get: a Minesweeper explosion is one
+  `call OSAPI_SND_TONE` (reloc class 1 handles it, §20.2); a music player
+  plays FM notes via 0x0084, or staged PCM via 0x0088 on an SB machine —
+  and on a speaker-only machine it *asks* `osapi_snd_caps` first and
+  offers the user the exclusive-clip trade-off instead of pretending. A
+  file-read-into-grant OSAPI call — the missing piece for playing clips
+  from disk that a package didn't ship with — is future work, noted here
+  and not promised: today a package stages data it generated or carries in
+  its image, bounded by its ~19 KB pool budget.
+
+### 34.7 State, boot gate, teardown
+
+- **The `snd_live` boot-gate rule (binding).** `sched_init` hooks int 08h
+  as kmain's second act; `snd_init` runs seconds of ticks later, and
+  nothing clears `.bss` at boot (§8). So `snd_tick`'s first instruction
+  tests `snd_live` — a `db 0` in initialised `.text` data (the
+  `osapi_seed` idiom of §15), set to 1 as `snd_init`'s **last** act
+  (publish-last) — and returns while it is clear. **Every byte `snd_tick`
+  can read must have a defined value from the instant int 08h is hooked**:
+  either initialised `.text` data, or behind the `snd_live` gate.
+- **Initialised `.text` data**: `snd_live`, `snd_route` (0FFh = auto), the
+  preference lists, `snd_excl_ok` (default 1), `snd_drv` (row 0's present
+  bit = 1 as data), the driver name strings, the OPL2 patch bytes and the
+  Sound-page state.
+- **`.bss`** (~100 bytes of state + the 256-byte xlat table): owner
+  records, generations, deadlines, `snd_ch2mode`, the saved 61h boot
+  bits, stream bookkeeping, `snd_btn0`/`snd_abort`, `snd_sb_expect`, and
+  the debug counters `snd_pcm_emitted` / `snd_pcm_resync` /
+  `snd_sb_under`. All stored explicitly by `snd_init` (§8's rule) and
+  unreadable by the tick until `snd_live` publishes.
+- **Buffers**: all in `SND_SEG` (§2.2); the layer claims the segment at
+  Phase 2 and the Task Manager RAM figure carries it via the `KLOWFAR_KB`
+  idiom (§15.1/§28).
+- **Boot**: `snd_init` joins kmain's §15 sequence **after `tm_init`** (it
+  needs `far_init` for its far probes and `sched_init` for tick-based
+  timeouts — both long since run): save the 61h boot bits, run the probes
+  cold, publish presence flags, set `snd_live` last. Boot stays clean —
+  no instances, no tasks, no sound; a machine with no cards boots and runs
+  byte-identically to a soundless kernel until the first sound call.
+- **Teardown**: `sched_unhook` gains a `call snd_unhook` beside
+  `mouse_unhook` (§8) — silence 61h bits 0–1 back to the saved boot state,
+  leave ch2 quiescent, and (if hooked) mask the SB IRQ, reset the DSP and
+  restore its vector.
+- **Sections** (§33): ISRs and their whole call path stay in `.text` — the
+  driver table, caps/route bytes, owner records, the tone core,
+  `snd_beep`, `snd_tick`, the router, all five API slot targets,
+  `snd_release_inst`, `snd_unhook`, `spk_pcm_run`, `opl_wr`, `sbl_isr` +
+  the IRQ-discovery candidate stubs, the DSP/DMA primitives, the
+  refill-task body and the staging copies. Far, behind
+  `FARSHIM`/`KCALL`: the probes, OPL2 init (~245 writes ≈ 25–70 ms — fine
+  cold at boot, never from ISR context) and the patch loader, the Sound
+  page bodies, and the PWM xlat-table builder. Far code keeps
+  DS = KERNEL_SEG, so all of it reads its data from `.text` (§33 rule 2).
