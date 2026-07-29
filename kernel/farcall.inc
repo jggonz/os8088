@@ -123,6 +123,8 @@ far_init:
     FARK sched_mode_set
     FARK bb_set
     FARK gfx_frame              ; taskmgr.inc only
+    FARK gfx_fill_gray
+    FARK gfx_fill_pat
     FARK gfx_lock
     FARK gfx_unlock
     FARK inst_ptr

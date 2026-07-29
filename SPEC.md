@@ -209,6 +209,7 @@ still behave sanely — draw nothing — if the clipped rect is empty).
 | `gfx_fill`      | AX=x1, BX=y1, CX=x2, DX=y2           | solid rect, inclusive corners         |
 | `gfx_frame`     | AX=x1, BX=y1, CX=x2, DX=y2           | 1px outline rect                      |
 | `gfx_fill_gray` | AX=x1, BX=y1, CX=x2, DX=y2           | 50% dither: black/white checkerboard (pixel parity (x+y)&1: even=white, odd=black) — ignores gfx_color |
+| `gfx_fill_pat`  | AX=x1, BX=y1, CX=x2, DX=y2, `[gfx_pat]` = near ptr to 8 pattern bytes | 8×8 dither fill, screen-aligned: row y uses byte `pat[y&7]`, bit 7 = leftmost pixel of each screen byte, bit set = white (15), clear = black (0) — ignores gfx_color. Writes only colors 0/15, so like `gfx_fill_gray` it never retires `[bb_mono]` (§32) |
 | `gfx_xor_rect`  | AX=x1, BX=y1, CX=x2, DX=y2           | 1px outline, XOR 0Fh (drag outline)   |
 | `gfx_xor_fill`  | AX=x1, BX=y1, CX=x2, DX=y2           | filled rect, XOR 0Fh (menu highlight) |
 | `gfx_save`      | AX=x1, BX=y1, CX=x2, DX=y2, ES:DI=buf| copy region to buffer; x1 is rounded **down** to a byte boundary and x2 **up** internally. Buffer layout: plane 0 rows, plane 1 rows, plane 2, plane 3. Returns DI advanced past data. |
@@ -1022,6 +1023,13 @@ window and only leaves it when `far_init` runs. Keep this block last.
     under MEM (`-` for built-ins, which own no region), and a CPU share
     that rises with the work their window callbacks actually do — a
     Minesweeper repainted repeatedly reads double digits.
+    Clicking the content toggles the **memory view** (§28): the RAM line,
+    a 640K conventional-memory map, a kernel-segment map in which each
+    loaded package's region shows in its slot's dither pattern, and the
+    process list with a matching legend square, hex base address and size
+    per package row. Loading a second package grows the map; closing one
+    frees its region on the next sample; clicking again returns to the
+    gauge with a gapless history graph.
 11. System → Control Panel opens a singleton two-pane window: the left pane
     lists the panel items with "Scheduler" already selected (white on a
     black bar), the right pane shows that item's page — a "Scheduler"
@@ -1523,7 +1531,7 @@ so existing tests are unaffected.
 
 Built-in singleton app kind (KIND_TASKMGR, cap 1 — one sampler), window
 "Task Manager", 176×264 at (250,100). Label prefix `tm_`. No onkey, no
-onclick, no boot-time window or task: `tm_init` (from kmain, after
+boot-time window or task: `tm_init` (from kmain, after
 loader_init) only reads total conventional RAM once via int 12h (kmain
 runs on task 0, so §7's only-the-UI-task-calls-BIOS rule holds). The
 window + monitor task exist only while an instance is open: `app_launch`
@@ -1532,6 +1540,19 @@ the gauge calibration restarts from scratch at every launch — and caches
 the window ptr in `tm_win`), then spawns `tm_task` with DX = the instance
 index. `tm_task` checks I_STATE = 2 once per interval (after the spin
 phase) and tears down via `inst_task_die` (§29).
+
+**Two views.** `[tm_view]` (0 = performance, 1 = memory) selects what the
+content shows; both share the sampler, the instance snapshot and the
+process-row geometry. The window's W_ONCLICK is `tm_click`: ANY content
+click toggles the view — the content has no other click targets, ui.inc
+§13 only feeds clicks to the front window (a click that raises the window
+does not toggle), and the handler runs under the gfx lock its caller
+already holds, so it white-fills the whole content rect (174×245 from the
+wm_content origin) and runs the new view's full paint body in place.
+`tm_kinit` zeroes `[tm_view]` with the rest of the module state: every
+launch opens in the performance view. The sampler never looks at the view
+— history keeps accumulating while the memory view is up, so toggling
+back shows a gapless graph.
 
 **Load gauge — idle-spin calibration.** tm_task never sleeps. Each
 interval it spins { 32-bit counter += 1; `task_yield` } until 9 ticks have
@@ -1570,7 +1591,7 @@ account, and the rows partition one total.
 
 - Under ONE `pushf`/`cli` … `popf`: snapshot `sch_cycles`, the MAX_TASKS
   T_STATE bytes, `sch_cur`, and then the whole instance table — per slot
-  its I_STATE, I_TASK, I_SIZE, I_CYC and 16 I_NAME bytes (§29 records
+  its I_STATE, I_TASK, I_SPTR, I_SIZE, I_CYC and 16 I_NAME bytes (§29 records
   free atomically with T_STATE inside task_exit's cli window, so nothing
   read in one block can be torn against itself).
 - Per-task diffs and per-instance diffs, both by the same two rules:
@@ -1609,21 +1630,25 @@ account, and the rows partition one total.
   `tm_hist[tm_pos]`. The ring index IS the graph column — an oscilloscope
   sweep, no scrolling — then tm_pos advances mod 160.
 
-**Drawing.** `tm_paint` (W_PAINT) is a bare, unconditional full redraw —
-no lock, no visibility check (wm_paint_all calls it with the lock already
-held, §11). tm_task's periodic path wraps its drawing Clock-style
-(§14): gfx_lock, re-check visible + not `wm_obscured` under the lock (else
-skip), and touches only what changed — the CPU + scheduler text line (one
-line, redrawn whole every interval, so a mode change shows up within one
-sample period without any extra plumbing), the new sweep
-column plus an all-white gap column at the advanced tm_pos, the RAM line
-and bar, and the process rows. The full 160-column graph render happens
-only in tm_paint, so the periodic lock hold stays small (Bounce-scale).
-All drawing is self-backgrounding (each element white-fills its own rect
-or paints both segments), so tm_paint needs no preceding content clear
-beyond the one wm_paint_all already does.
+**Drawing.** `tm_paint` (W_PAINT) dispatches on `[tm_view]` and runs the
+active view's full body — bare and unconditional, no lock, no visibility
+check (wm_paint_all calls it with the lock already held, §11). tm_task's
+periodic path wraps its drawing Clock-style (§14): gfx_lock, re-check
+visible + not `wm_obscured` under the lock (else skip), and touches only
+what changed. Performance view: the CPU + scheduler text line (one line,
+redrawn whole every interval, so a mode change shows up within one sample
+period without any extra plumbing), the new sweep column plus an all-white
+gap column at the advanced tm_pos, the RAM line and bar, and the process
+rows — the full 160-column graph render happens only in tm_paint, so the
+periodic lock hold stays small (Bounce-scale). Memory view: the RAM line,
+the pool caption, both map interiors and the rows; the two map frames are
+painted only by the full bodies (tm_paint / tm_click). All drawing is
+self-backgrounding (each element white-fills its own rect or paints both
+segments), so tm_paint needs no preceding content clear beyond the one
+wm_paint_all already does.
 
-**Content layout** (content-relative; content is 174×245):
+**Content layout — performance view** (content-relative; content is
+174×245):
 
 - (6,4): the CPU + scheduler line, exactly 20 chars like the process rows
   below, so its last glyph lands at x = 158..165 inside the 174px content
@@ -1659,6 +1684,62 @@ beyond the one wm_paint_all already does.
   is not used.
 - A free slot renders `-` / `---` / `  -` / `   -`: name dash, state
   dashes, no `'%'` and no `'K'`.
+
+**Content layout — memory view** (content-relative; the same 174×245):
+
+- (6,4): the same `"RAM uuuK/tttK"` readout as the performance view
+  (white-fill (6,4)-(167,11) first).
+- Conventional-memory map: 1px black frame (6,14)-(167,29), interior
+  (7,15)-(166,28) = 160×14. KB scale: KB k maps to interior column
+  k·160/totalK; a region [a,b) KB fills columns a·160/totalK ..
+  (b−1)·160/totalK inclusive, clamped so no region drops below 1px.
+  The interior is white-filled (free), then: [0,64) 50% gray
+  (`gfx_fill_gray` — IVT/BDA, the far-code blob at FAR_SEG and LOW_SEG's
+  stacks + disk buffers, §2.1), [64,128) solid black (the kernel segment,
+  detailed by the segment map below), and [256,406) 50% gray while
+  `[bb_on]` is set (the §32 back buffer, read live at draw time).
+- (6,33): `"SEG 64K POOL"` + pool-used KB right-aligned in 3 (ceil of
+  Σ I_SIZE over in-use snapshot slots) + `"K/20K"` — exactly 20 chars
+  (white-fill (6,33)-(167,40) first; 20 = ceil(0x4E00/1024), the §21 pool
+  size).
+- Kernel-segment map: 1px black frame (6,43)-(167,58), interior
+  (7,44)-(166,57) = 160×14. Offset scale: segment offset o maps to
+  interior column o·160/65536 = o·5/2048 (16-bit `mul` by 5 carries into
+  DX; the 32-bit divide by 2048 cannot overflow: DX ≤ 4); a region [a,b)
+  fills a·5/2048 .. (b−1)·5/2048 inclusive, clamped ≥ 1px. The interior
+  is white-filled, then: [0, kernel_bss_end) solid black (kernel text +
+  bss), [0xFE00, 0x10000) 50% gray (above the pool, §21), then per
+  snapshot slot with I_STATE ≠ 0 and I_SIZE ≠ 0 a `gfx_fill_pat` region
+  [I_SPTR, I_SPTR + I_SIZE) in that slot's pattern. The headroom between
+  kernel_bss_end and APP_LOAD_OFF and any unallocated pool read white —
+  free space, drawn honestly.
+- (16,62): header `"NAME    ADDR SIZE"` (17 chars).
+- Process rows r = 0..TM_ROWS−1 at y = 74 + 11·r (white-fill
+  (6,y)-(167,y+7) first): a legend square (6,y)-(13,y+7) — 1px black
+  frame, interior (7,y+1)-(12,y+6) in the row's map fill — then 17 chars
+  at x = 16 (2px clear of the square): `[0..6]` name left-justified in 7
+  (truncated), `[7]` space, `[8..11]` ADDR, `[12]` space, `[13..16]` SIZE.
+- Row 0 (System): square interior solid black; ADDR `0000`; SIZE =
+  kernel_bss_end in KB rounded up — the black map region in numbers. The
+  low-memory keep, the far blob and the back buffer belong to the top RAM
+  line, not to this in-segment column.
+- Row 1+i, in use with I_SIZE ≠ 0 (a package): square interior =
+  pattern i; ADDR = the I_SPTR snapshot as 4 uppercase hex digits;
+  SIZE = I_SIZE in KB rounded up.
+- Row 1+i, in use with I_SIZE = 0 (a built-in kind): no square (the band
+  stays white); name, then `"   -    -"` — it lives in kernel .bss, not
+  the pool.
+- A free slot: no square, name dash, `"   -    -"`.
+- A dying instance (I_STATE 2) still draws its region and its row: the
+  region is still resident (§21).
+
+**Slot patterns.** `tm_pats` — 12 × 8 bytes in .text (far code reads
+data through DS, §33 rule 2); pattern i = `tm_pats + i·8`, fixed
+slot↔pattern for the instance's life (the §30 slot↔tile rule again).
+All twelve are black-on-white dither/hatch textures (§5 bit sense: set =
+white) chosen to stay tellable-apart at a few pixels' width; none is the
+0xAA/0x55 50% checker, which the maps already use to mean
+"system-reserved".
 
 Menu/dispatch: see §12/§13 — "Task Manager" (CMD_TASKS = 3) is the System
 menu's third item, under "Control Panel"; dispatch calls `app_launch`
@@ -2112,6 +2193,10 @@ and 406KB of address space in all, so it clears the 500KB floor with room.
 - `bb_fill_gray`: per row `and dest, ~mask` + `or dest, pat&mask` at the
   edges, `rep stosw` pattern in the interior; 0xAA/0x55 alternating by row
   parity, identical in all four planes (color 15/0 per pixel bit).
+- `bb_fill_pat`: same edge/interior scheme with the row byte fetched from
+  `[gfx_pat]`'s 8-byte table by `y&7` (§5), identical in all four planes;
+  the byte is uniform across a row, so interiors are the same `rep stosw`
+  as the other fills.
 
 Interiors go by word, not byte: the pattern is uniform across a row in both
 solid and dither modes, so AL=AH and one `rep stosw` (plus a `stosb` tail on

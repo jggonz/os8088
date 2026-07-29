@@ -528,6 +528,114 @@ bb_col:
     ret
 
 ; -----------------------------------------------------------------------------
+; bb_fill_pat - back-buffer twin of gfx_fill_pat (SPEC.md 5/32): the 8-row
+;               pattern at [gfx_pat], staged into vga_patbuf, written
+;               identically to all four planes (colors 0/15 per pixel bit,
+;               [bb_mono] untouched). bb_col's fixed-byte/xor-toggle model
+;               cannot index 8 rows, so this brings its own column helper.
+; in:       AX = x1, BX = y1, CX = x2, DX = y2; [gfx_pat] = pattern ptr
+; out:      -
+; clobbers: flags
+; -----------------------------------------------------------------------------
+bb_fill_pat:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    call vga_rect_setup
+    jc .done
+    call bb_dirty_rect
+    call vga_pat_stage          ; vga_patbuf <- the 8 bytes at [gfx_pat]
+    mov dx, BB_SEG              ; DX = plane segment
+    mov bp, 4                   ; BP = plane counter
+.plane:
+    mov es, dx
+    mov di, [vga_off]
+    mov cl, [vga_lmsk]          ; left edge column (whole rect if 1 byte)
+    call bb_patcol
+    mov si, [vga_span]
+    or si, si
+    jz .next
+    mov di, [vga_off]
+    add di, si
+    mov cl, [vga_rmsk]          ; right edge column
+    call bb_patcol
+    dec si                      ; SI = interior bytes per row
+    jz .next
+    mov di, [vga_off]
+    inc di
+    mov bx, [vga_y1]
+    and bx, 7
+    push bp
+    mov bp, [vga_rows]
+.irow:
+    mov al, [vga_patbuf+bx]
+    mov ah, al                  ; byte uniform across the row: stosw + odd
+    mov cx, si                  ; tail via the shr carry, like bb_plane_op
+    shr cx, 1
+    push di
+    rep stosw
+    jnc .ieven
+    stosb
+.ieven:
+    pop di
+    add di, ROW_BYTES
+    inc bx
+    and bx, 7
+    dec bp
+    jnz .irow
+    pop bp
+.next:
+    add dx, BB_PLANE_PARA
+    dec bp
+    jnz .plane
+.done:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; bb_patcol - internal: one masked byte column of [vga_rows] rows at ES:DI,
+;             row byte from vga_patbuf by (y & 7):
+;             dest = dest ^ ((dest ^ pat) & mask)
+; in:       CL = mask, DI = top byte, ES = plane; vga_* rect scratch
+; clobbers: AX, flags (preserves BX, SI, DI and CX)
+; -----------------------------------------------------------------------------
+bb_patcol:
+    push bx
+    push di
+    push si
+    mov si, [vga_rows]
+    mov bx, [vga_y1]
+    and bx, 7
+.row:
+    mov al, [vga_patbuf+bx]
+    mov ah, [es:di]
+    xor al, ah
+    and al, cl
+    xor al, ah
+    mov [es:di], al
+    inc bx
+    and bx, 7
+    add di, ROW_BYTES
+    dec si
+    jnz .row
+    pop si
+    pop di
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; bb_xor_rect - back-buffer twin of gfx_xor_rect: 1px outline, XOR 0Fh.
 ;               Same edge decomposition as the VRAM version - each pixel
 ;               XORed exactly once, degenerate rects collapse - built from

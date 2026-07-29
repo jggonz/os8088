@@ -4,7 +4,11 @@
 ; The Task Manager window (SPEC.md 28): a live CPU load gauge with an
 ; oscilloscope-sweep history graph, a RAM readout, and the process list with
 ; per-instance CPU shares and memory from the PIT cycle accounting
-; (SPEC.md 8.1).
+; (SPEC.md 8.1). A content click toggles a second, memory view: the RAM
+; readout, a conventional-memory map, a kernel-segment map with each
+; resident package's region drawn in its slot's dither pattern, and the
+; process list re-columned as NAME/ADDR/SIZE with a matching legend square
+; per package row.
 ;
 ; The list is an INSTANCE list, not a task list (SPEC.md 29). A task list
 ; would show only the four kinds that own a task; every task-less app -
@@ -50,6 +54,16 @@ TM_HDR_Y    equ 87              ; process-list header line
 TM_ROW_Y    equ 97              ; first process row
 TM_ROW_H    equ 11              ; row pitch, px
 TM_ROWS     equ INST_MAX + 1    ; "System" plus one row per instance slot
+
+; --- memory-view geometry (SPEC.md 28) ---------------------------------------
+TMM_RAM_Y   equ 4               ; "RAM uuuK/tttK" line (same string, new y)
+TMM_M1_Y1   equ 14              ; conventional-memory map frame top
+TMM_M1_Y2   equ 29              ; frame bottom (interior rows 15..28)
+TMM_CAP_Y   equ 33              ; "SEG 64K POOLuuuK/20K" caption line
+TMM_M2_Y1   equ 43              ; kernel-segment map frame top
+TMM_M2_Y2   equ 58              ; frame bottom (interior rows 44..57)
+TMM_HDR_Y   equ 62              ; "NAME    ADDR SIZE" header line
+TMM_ROW_Y   equ 74              ; first process row (same TM_ROW_H pitch)
 
 ; -----------------------------------------------------------------------------
 ; tm_init - read total conventional RAM once (boot thread only)
@@ -100,7 +114,7 @@ tm_kinit:
     ret
 
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
-tm_tpl:     dw 250, 100, 176, 264, tm_ttl, tm_paint, 0, 0
+tm_tpl:     dw 250, 100, 176, 264, tm_ttl, tm_paint, 0, tm_click
 tm_ttl:     db 'Task Manager', 0
 tm_sname:   db 'TaskMgr', 0     ; KD_NAME: fits the 7-char NAME column
 
@@ -120,20 +134,45 @@ tm_s_die:   db 'die', 0         ; I_STATE 2: closing, task not yet reaped
 tm_s_free:  db '---', 0
 tm_s_frtl:  db '  -    -', 0    ; free row's CPU + MEM columns
 
+; --- memory view (SPEC.md 28) ------------------------------------------------
+tm_s_mhdr:  db 'NAME    ADDR SIZE', 0
+tm_s_cap:   db 'SEG 64K POOL', 0 ; + used KB right-aligned in 3 + "K/20K"
+tm_s_cap2:  db 'K/20K', 0
+tm_s_mfr:   db '   -    -', 0   ; ADDR + SIZE dashes (built-in / free rows)
+tm_s_sys0:  db '0000', 0        ; the System row's base offset
+
+; Slot patterns: 12 x 8 row bytes, pattern i = tm_pats + i*8, bit set =
+; white (SPEC.md 5/28). Black-on-white hatch textures, none of them the
+; AA/55 50% checker (that means "system-reserved" in the maps).
+tm_pats:
+    db 0x77, 0xFF, 0xDD, 0xFF, 0x77, 0xFF, 0xDD, 0xFF   ; 0: sparse dots
+    db 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55   ; 1: fine vertical
+    db 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00, 0xFF, 0x00   ; 2: fine horizontal
+    db 0x7F, 0xBF, 0xDF, 0xEF, 0xF7, 0xFB, 0xFD, 0xFE   ; 3: thin diagonal
+    db 0x00, 0x77, 0x77, 0x77, 0x00, 0x77, 0x77, 0x77   ; 4: grid
+    db 0xFE, 0xFD, 0xFB, 0xF7, 0xEF, 0xDF, 0xBF, 0x7F   ; 5: thin diagonal /
+    db 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33   ; 6: thick vertical
+    db 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00   ; 7: thick horizontal
+    db 0x00, 0xF7, 0xF7, 0xF7, 0x00, 0x7F, 0x7F, 0x7F   ; 8: bricks
+    db 0x7E, 0xBD, 0xDB, 0xE7, 0xE7, 0xDB, 0xBD, 0x7E   ; 9: diamond
+    db 0x3F, 0x9F, 0xCF, 0xE7, 0xF3, 0xF9, 0xFC, 0x7E   ; 10: thick diagonal
+    db 0x88, 0x00, 0x22, 0x00, 0x88, 0x00, 0x22, 0x00   ; 11: dense dots
+
 ; -----------------------------------------------------------------------------
 ; Everything above stays in the kernel segment: tm_init and tm_kinit (both
 ; self-contained, ~40 bytes) plus all the strings and the window template,
 ; which far code reaches through DS (SPEC.md 33 rule 2). Everything below is
 ; code and moves to .fartext.
 ;
-; Two entry points keep near names as shims: tm_paint, because tm_tpl and
-; wm's `call [bx+W_PAINT]` want a near pointer, and tm_task, because
-; task_spawn builds a frame with CS = KERNEL_SEG (SPEC.md 8) and can only
-; launch a near entry. tm_task never returns, so the shim's own `ret` is
-; dead code and its `call far` return address is simply abandoned with the
-; rest of the stack at task_exit.
+; Three entry points keep near names as shims: tm_paint and tm_click,
+; because tm_tpl and the wm/ui dispatchers want near pointers, and
+; tm_task, because task_spawn builds a frame with CS = KERNEL_SEG
+; (SPEC.md 8) and can only launch a near entry. tm_task never returns, so
+; the shim's own `ret` is dead code and its `call far` return address is
+; simply abandoned with the rest of the stack at task_exit.
 ; -----------------------------------------------------------------------------
     FARSHIM tm_paint, tmf_paint
+    FARSHIM tm_click, tmf_click
     FARSHIM tm_task,  tmf_task
 
 section .fartext
@@ -322,6 +361,9 @@ tm_sample:
     shl di, 1                   ; DI = index*2
     mov ax, [si+I_SIZE]
     mov [tm_isz+di], ax
+    mov ax, [si+I_SPTR]         ; region base for the memory view's map
+    mov [tm_ispt+di], ax        ; (meaningless for built-ins: I_SIZE 0
+                                ; filters them out, SPEC.md 28)
     shl di, 1                   ; DI = index*4
     mov ax, [si+I_CYC]
     mov [tm_inew+di], ax
@@ -585,13 +627,29 @@ tm_sample:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; tm_paint - W_PAINT: bare, unconditional full redraw
+; tm_paint - W_PAINT: bare, unconditional full redraw of the active view
 ; in:  SI = window ptr (gfx lock held by caller; no lock, no visibility
 ;      check in here - SPEC.md 28)
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
 tmf_paint:
+    call tm_draw_full
+    retf                        ; far body: reached through the tm_paint shim
+
+; -----------------------------------------------------------------------------
+; tm_draw_full - full redraw of whichever view [tm_view] selects (also the
+;                tail of tmf_click's in-place view swap)
+; in:  SI = window ptr (gfx lock held)
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_draw_full:
+    cmp byte [tm_view], 0
+    jne tm_draw_mem
+    ; fall through: performance view
+
+tm_draw_perf:
     push ax
     push bx
     push cx
@@ -659,20 +717,24 @@ tmf_paint:
     pop cx
     pop bx
     pop ax
-    retf                        ; far body: reached through the tm_paint shim
+    ret
 
 ; -----------------------------------------------------------------------------
 ; tm_update - periodic incremental redraw (gfx lock held, window visible)
 ;
 ; Frames and the header are static and already on screen; only the dynamic
-; elements are touched: the CPU + scheduler-mode line, the freshly written
-; column + the advanced sweep gap, RAM line + bar, and the task rows.
+; elements are touched. Performance view: the CPU + scheduler-mode line,
+; the freshly written column + the advanced sweep gap, RAM line + bar, and
+; the task rows. Memory view: the RAM line, the pool caption, both map
+; interiors and the rows (SPEC.md 28).
 ;
 ; in:  nothing ([tm_win] set)
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
 tm_update:
+    cmp byte [tm_view], 0
+    jne tm_upd_mem
     push ax
     push bx
     push dx
@@ -692,6 +754,631 @@ tm_update:
     call tm_rows
 
     pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tmf_click - W_ONCLICK (far body via the tm_click shim): ANY content click
+;             toggles the view (SPEC.md 28). ui.inc only feeds clicks to the
+;             front window, so a raising click never lands here. The lock is
+;             already held: white-fill the whole content and run the new
+;             view's full paint body in place.
+; in:  CX = x, DX = y (absolute, unused), SI = window ptr
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+tmf_click:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    xor byte [tm_view], 1
+    mov bx, si
+    KCALL wm_content             ; AX = content left, DX = content top
+    mov byte [gfx_color], CWHITE
+    mov bx, dx                  ; content is 174x245 (SPEC.md 28)
+    mov cx, ax
+    add cx, 173
+    mov dx, bx
+    add dx, 244
+    KCALL gfx_fill
+    call tm_draw_full           ; SI = window ptr still
+
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    retf                        ; far body: reached through the tm_click shim
+
+; -----------------------------------------------------------------------------
+; tm_upd_mem - the memory view's periodic redraw (gfx lock held): everything
+;              but the two static map frames and the header
+; in:  nothing ([tm_win] set)
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_upd_mem:
+    push ax
+    push bx
+    push dx
+
+    mov bx, [tm_win]
+    KCALL wm_content
+    mov [tm_cx], ax
+    mov [tm_cy], dx
+
+    mov ax, TMM_RAM_Y
+    call tm_txt_ram_y
+    call tm_cap_pool
+    call tm_map_ram
+    call tm_map_seg
+    call tm_rows_mem
+
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_draw_mem - the memory view's full redraw: frames + header + everything
+;               tm_upd_mem redraws
+; in:  SI = window ptr (gfx lock held)
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_draw_mem:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov bx, si
+    KCALL wm_content             ; AX = content left, DX = content top
+    mov [tm_cx], ax
+    mov [tm_cy], dx
+
+    mov ax, TMM_RAM_Y
+    call tm_txt_ram_y
+
+    mov byte [gfx_color], CBLACK
+    mov ax, [tm_cx]             ; RAM map frame (6,14)-(167,29)
+    add ax, 6
+    mov bx, [tm_cy]
+    add bx, TMM_M1_Y1
+    mov cx, [tm_cx]
+    add cx, 167
+    mov dx, [tm_cy]
+    add dx, TMM_M1_Y2
+    KCALL gfx_frame
+
+    mov ax, [tm_cx]             ; segment map frame (6,43)-(167,58)
+    add ax, 6
+    mov bx, [tm_cy]
+    add bx, TMM_M2_Y1
+    mov cx, [tm_cx]
+    add cx, 167
+    mov dx, [tm_cy]
+    add dx, TMM_M2_Y2
+    KCALL gfx_frame
+
+    mov cx, [tm_cx]             ; header, at the rows' text x
+    add cx, 16
+    mov dx, [tm_cy]
+    add dx, TMM_HDR_Y
+    mov si, tm_s_mhdr
+    KCALL font_str
+
+    call tm_cap_pool
+    call tm_map_ram
+    call tm_map_seg
+    call tm_rows_mem
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_cap_pool - white-fill the caption band and draw "SEG 64K POOLuuuK/20K"
+;               (20 chars: put3's leading spaces separate POOL from the
+;               number; 20K = ceil(0x4E00/1024), SPEC.md 21/28)
+; in:  tm_ist/tm_isz snapshot
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_cap_pool:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov byte [gfx_color], CWHITE
+    mov ax, [tm_cx]
+    add ax, 6
+    mov bx, [tm_cy]
+    add bx, TMM_CAP_Y
+    mov cx, [tm_cx]
+    add cx, 167
+    mov dx, [tm_cy]
+    add dx, TMM_CAP_Y + 7
+    KCALL gfx_fill
+
+    xor bx, bx                  ; BX = pool bytes = sum of in-use I_SIZE
+    xor si, si                  ; (the loader keeps it <= APP_MAX_SIZE)
+.sum:
+    cmp byte [tm_ist+si], 0
+    je .next
+    mov di, si
+    shl di, 1
+    add bx, [tm_isz+di]
+.next:
+    inc si
+    cmp si, INST_MAX
+    jb .sum
+
+    mov di, tm_str
+    mov si, tm_s_cap
+    call tm_copy
+    mov ax, bx
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl                  ; pool KB, rounded up
+    call tm_put3
+    mov si, tm_s_cap2
+    call tm_copy
+    mov byte [di], 0
+
+    mov byte [gfx_color], CBLACK
+    mov cx, [tm_cx]
+    add cx, 6
+    mov dx, [tm_cy]
+    add dx, TMM_CAP_Y
+    mov si, tm_str
+    KCALL font_str
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_map_ram - the conventional-memory map interior (SPEC.md 28): white =
+;              free, gray = system-reserved (low memory; the armed back
+;              buffer), black = the kernel segment. KB scale.
+; in:  [tm_totkb]; [bb_on] read live under the lock
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_map_ram:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov byte [gfx_color], CWHITE
+    xor ax, ax                  ; whole interior white first
+    mov cx, TM_GW - 1
+    mov bx, TMM_M1_Y1
+    call tm_map_rect
+    KCALL gfx_fill
+
+    mov ax, 63                  ; [0,64K): IVT/BDA, far blob, LOW_SEG keep
+    call tm_ramkb2x
+    mov cx, ax
+    xor ax, ax
+    mov bx, TMM_M1_Y1
+    call tm_map_rect
+    KCALL gfx_fill_gray
+
+    mov ax, 64                  ; [64,128K): the kernel segment
+    call tm_ramkb2x
+    mov si, ax
+    mov ax, 127
+    call tm_ramkb2x
+    mov cx, ax
+    mov ax, si
+    mov bx, TMM_M1_Y1
+    call tm_map_rect
+    mov byte [gfx_color], CBLACK
+    KCALL gfx_fill
+
+    cmp byte [bb_on], 0         ; [256,406K): the back buffer, when armed
+    je .done
+    mov ax, 256
+    call tm_ramkb2x
+    mov si, ax
+    mov ax, 405
+    call tm_ramkb2x
+    mov cx, ax
+    mov ax, si
+    mov bx, TMM_M1_Y1
+    call tm_map_rect
+    KCALL gfx_fill_gray
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_map_seg - the kernel-segment map interior (SPEC.md 28): black = kernel
+;              text+bss, white = free (the headroom below APP_LOAD_OFF and
+;              the unallocated pool), gray = the reserved 512B above the
+;              pool, one pattern region per resident package. Offset scale.
+; in:  tm_ist/tm_isz/tm_ispt snapshot
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_map_seg:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov byte [gfx_color], CWHITE
+    xor ax, ax                  ; whole interior white first
+    mov cx, TM_GW - 1
+    mov bx, TMM_M2_Y1
+    call tm_map_rect
+    KCALL gfx_fill
+
+    mov ax, kernel_bss_end      ; [0, kernel_bss_end): text + bss
+    dec ax
+    call tm_off2x
+    mov cx, ax
+    xor ax, ax
+    mov bx, TMM_M2_Y1
+    call tm_map_rect
+    mov byte [gfx_color], CBLACK
+    KCALL gfx_fill
+
+    mov ax, 0xFE00              ; [FE00,10000): above the pool (SPEC.md 21)
+    call tm_off2x
+    mov si, ax
+    mov ax, 0xFFFF
+    call tm_off2x
+    mov cx, ax
+    mov ax, si
+    mov bx, TMM_M2_Y1
+    call tm_map_rect
+    KCALL gfx_fill_gray
+
+    xor si, si                  ; SI = instance slot
+.slot:
+    cmp byte [tm_ist+si], 0
+    je .next
+    mov di, si
+    shl di, 1
+    mov ax, [tm_isz+di]
+    or ax, ax                   ; built-ins own no region
+    jz .next
+    mov bx, [tm_ispt+di]        ; BX = base offset
+    add ax, bx
+    dec ax                      ; inclusive end offset
+    call tm_off2x
+    mov cx, ax                  ; CX = end px
+    mov ax, bx
+    call tm_off2x               ; AX = start px
+    mov bx, si                  ; [gfx_pat] = tm_pats + slot*8
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add bx, tm_pats
+    mov [gfx_pat], bx
+    mov bx, TMM_M2_Y1
+    call tm_map_rect
+    KCALL gfx_fill_pat
+.next:
+    inc si
+    cmp si, INST_MAX
+    jb .slot
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_map_rect - map a pair of interior pixel columns + a frame-top constant
+;               to the absolute fill rect of a 14-row map band, clamping so
+;               no region drops below 1px (SPEC.md 28)
+; in:  AX = x1 px (0..159), CX = x2 px, BX = map frame top (TMM_M*_Y1)
+; out: AX = x1, BX = y1, CX = x2, DX = y2, absolute
+; clobbers: flags
+; -----------------------------------------------------------------------------
+tm_map_rect:
+    add ax, 7
+    add ax, [tm_cx]
+    add cx, 7
+    add cx, [tm_cx]
+    cmp cx, ax
+    jae .wok
+    mov cx, ax                  ; sub-pixel region: still show 1px
+.wok:
+    add bx, [tm_cy]
+    inc bx                      ; interior = frame rows +1..+14
+    mov dx, bx
+    add dx, 13
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_ramkb2x - KB -> conventional-map interior pixel column
+; in:  AX = KB
+; out: AX = px = KB*160/totalK, clamped to 0..159
+; clobbers: flags
+; -----------------------------------------------------------------------------
+tm_ramkb2x:
+    push cx
+    push dx
+    mov cx, TM_GW
+    mul cx                      ; DX:AX = KB*160
+    mov cx, [tm_totkb]
+    jcxz .zero                  ; int 12h can't return 0, but stay DIV-safe
+    div cx
+    jmp .clamp
+.zero:
+    xor ax, ax
+.clamp:
+    cmp ax, TM_GW - 1
+    jbe .done
+    mov ax, TM_GW - 1
+.done:
+    pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_off2x - kernel-segment offset -> segment-map interior pixel column
+; in:  AX = offset
+; out: AX = px = offset*160/65536 = offset*5/2048 (<= 159 by construction:
+;      the mul's high word is <= 4, so the divide cannot overflow)
+; clobbers: flags
+; -----------------------------------------------------------------------------
+tm_off2x:
+    push cx
+    push dx
+    mov cx, 5
+    mul cx
+    mov cx, 2048
+    div cx
+    pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_rows_mem - the memory view's process rows (SPEC.md 28): legend square
+;               (6,y)-(15,y+7) + 17 chars "NAME    ADDR SIZE" at x=16
+; in:  the instance snapshot block
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_rows_mem:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    xor si, si                  ; SI = row index
+.row:
+    mov ax, si                  ; y1 = cy + TMM_ROW_Y + 11*row
+    mov cx, TM_ROW_H
+    mul cx
+    add ax, TMM_ROW_Y
+    add ax, [tm_cy]
+    mov [tm_rowy], ax
+
+    mov byte [gfx_color], CWHITE
+    mov bx, ax                  ; white-fill the band (6,y)-(167,y+7)
+    mov dx, ax
+    add dx, 7
+    mov ax, [tm_cx]
+    add ax, 6
+    mov cx, [tm_cx]
+    add cx, 167
+    KCALL gfx_fill
+
+    mov di, tm_str
+    or si, si
+    jnz .inst
+
+    ; row 0: the kernel - solid black square, base 0000, text+bss KB
+    push si
+    mov si, tm_s_sys
+    call tm_copy7
+    mov byte [di], ' '
+    inc di
+    mov si, tm_s_sys0
+    call tm_copy
+    pop si
+    mov byte [di], ' '
+    inc di
+    mov ax, kernel_bss_end
+    call tm_memcol
+    call tm_sq_frame
+    call tm_sq_int
+    mov byte [gfx_color], CBLACK
+    KCALL gfx_fill
+    jmp .draw
+
+.inst:
+    mov bx, si
+    dec bx                      ; BX = instance index
+    cmp byte [tm_ist+bx], 0
+    je .free
+
+    push si                     ; name: the I_NAME snapshot, 7 chars
+    mov ax, bx
+    mov cl, 4
+    shl ax, cl
+    mov si, ax
+    add si, tm_inm
+    call tm_copy7
+    pop si
+    mov byte [di], ' '
+    inc di
+
+    push si                     ; AX = I_SIZE, DX = I_SPTR snapshots
+    mov si, bx
+    shl si, 1
+    mov ax, [tm_isz+si]
+    mov dx, [tm_ispt+si]
+    pop si
+    or ax, ax
+    jz .noreg
+
+    xchg ax, dx                 ; a package: base as hex, size in KB
+    call tm_put4x
+    mov byte [di], ' '
+    inc di
+    xchg ax, dx
+    call tm_memcol
+    call tm_sq_frame            ; legend square in the slot's pattern
+    push si
+    mov si, bx
+    shl si, 1
+    shl si, 1
+    shl si, 1
+    add si, tm_pats
+    mov [gfx_pat], si
+    pop si
+    call tm_sq_int
+    KCALL gfx_fill_pat
+    jmp .draw
+
+.noreg:                         ; a built-in: no region, no square
+    push si
+    mov si, tm_s_mfr
+    call tm_copy
+    pop si
+    jmp .draw
+
+.free:                          ; free slot: "-          -    -"
+    push si
+    mov si, tm_s_dash
+    call tm_copy7
+    mov byte [di], ' '
+    inc di
+    mov si, tm_s_mfr
+    call tm_copy
+    pop si
+
+.draw:
+    mov byte [di], 0
+    mov byte [gfx_color], CBLACK
+    mov cx, [tm_cx]
+    add cx, 16
+    mov dx, [tm_rowy]
+    push si
+    mov si, tm_str
+    KCALL font_str
+    pop si
+
+    inc si
+    cmp si, TM_ROWS
+    jb .row
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_sq_frame - the 1px black frame of the current row's legend square,
+;               (6,rowy)-(13,rowy+7)
+; in:  [tm_cx], [tm_rowy]
+; out: nothing
+; clobbers: flags ([gfx_color] left black)
+; -----------------------------------------------------------------------------
+tm_sq_frame:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [gfx_color], CBLACK
+    mov ax, [tm_cx]
+    add ax, 6
+    mov bx, [tm_rowy]
+    mov cx, ax
+    add cx, 7
+    mov dx, bx
+    add dx, 7
+    KCALL gfx_frame
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_sq_int - the legend square's interior rect, ready for a fill
+; in:  [tm_cx], [tm_rowy]
+; out: AX = x1, BX = y1, CX = x2, DX = y2 = (7,rowy+1)-(12,rowy+6)
+; clobbers: flags
+; -----------------------------------------------------------------------------
+tm_sq_int:
+    mov ax, [tm_cx]
+    add ax, 7
+    mov bx, [tm_rowy]
+    inc bx
+    mov cx, ax
+    add cx, 5
+    mov dx, bx
+    add dx, 5
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_put4x - AX as exactly 4 uppercase hex chars at DI
+; in:  AX = value, DI = dest
+; out: DI advanced by 4
+; clobbers: nothing else (internal helper)
+; -----------------------------------------------------------------------------
+tm_put4x:
+    push ax
+    push bx
+    push cx
+    mov bx, ax
+    mov cx, 0x0404              ; CH = digits left, CL = rotate count
+.dig:
+    rol bx, cl
+    mov al, bl
+    and al, 0x0F
+    add al, '0'
+    cmp al, '9'
+    jbe .put
+    add al, 'A' - '0' - 10
+.put:
+    mov [di], al
+    inc di
+    dec ch
+    jnz .dig
+    pop cx
     pop bx
     pop ax
     ret
@@ -837,11 +1524,20 @@ tm_txt_cpu:
 
 ; -----------------------------------------------------------------------------
 ; tm_txt_ram - white-fill the RAM line's rect and draw "RAM uuuK/tttK"
-; in:  [tm_usedk], [tm_totkb]
+;              (tm_txt_ram_y draws the same line at any y - the memory view
+;              puts it at the top, SPEC.md 28)
+; in:  [tm_usedk], [tm_totkb]; tm_txt_ram_y: AX = content-relative y
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
 tm_txt_ram:
+    push ax
+    mov ax, TM_RAM_Y
+    call tm_txt_ram_y
+    pop ax
+    ret
+
+tm_txt_ram_y:
     push ax
     push bx
     push cx
@@ -849,15 +1545,17 @@ tm_txt_ram:
     push si
     push di
 
+    mov [tm_liny], ax
     mov byte [gfx_color], CWHITE
     mov ax, [tm_cx]
     add ax, 6
     mov bx, [tm_cy]
-    add bx, TM_RAM_Y
+    add bx, [tm_liny]
     mov cx, [tm_cx]
     add cx, 167
     mov dx, [tm_cy]
-    add dx, TM_RAM_Y + 7
+    add dx, [tm_liny]
+    add dx, 7
     KCALL gfx_fill
 
     mov di, tm_str
@@ -879,7 +1577,7 @@ tm_txt_ram:
     mov cx, [tm_cx]
     add cx, 6
     mov dx, [tm_cy]
-    add dx, TM_RAM_Y
+    add dx, [tm_liny]
     mov si, tm_str
     KCALL font_str
 
@@ -1310,6 +2008,8 @@ tm_ist:     resb INST_MAX       ; I_STATE snapshot
 tm_pist:    resb INST_MAX       ; previous sample's I_STATE (appeared rule)
 tm_itsk:    resb INST_MAX       ; I_TASK snapshot (owning task or 0xFF)
 tm_isz:     resw INST_MAX       ; I_SIZE snapshot, bytes
+tm_ispt:    resw INST_MAX       ; I_SPTR snapshot (memory view, SPEC.md 28)
+tm_view:    resb 1              ; 0 = performance view, 1 = memory view
 tm_inm:     resb INST_MAX * 16  ; I_NAME snapshots
 tm_rcyc:    resw TM_ROWS * 2    ; per-ROW cycles: task + instance, dword
 tm_total:   resw 2              ; sum of the rows, dword
@@ -1321,7 +2021,8 @@ tm_zero_end:
 tm_totkb:   resw 1              ; total conventional RAM (int 12h, boot)
 tm_cx:      resw 1              ; cached content origin (draw paths only,
 tm_cy:      resw 1              ; always under the gfx lock)
-tm_rowy:    resw 1              ; tm_rows scratch: current row y
+tm_rowy:    resw 1              ; tm_rows/tm_rows_mem scratch: current row y
+tm_liny:    resw 1              ; tm_txt_ram_y scratch: the line's y
 tm_str:     resb 24             ; line-format scratch
 
 section .text

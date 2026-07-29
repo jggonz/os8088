@@ -26,6 +26,8 @@ VGA_GC      equ 0x3CE           ; Graphics Controller index port (data +1)
 VGA_SEQ     equ 0x3C4           ; Sequencer index port (data +1)
 
 gfx_color       db CBLACK       ; current drawing color for every solid op
+gfx_pat         dw 0            ; gfx_fill_pat: near ptr to 8 row bytes,
+                                ; set by the caller before every call
 gfx_lock_flag   db 0            ; drawing mutex (SPEC.md 7); 0 = free.
                                 ; Initialized data, NOT .bss: nothing zeroes
                                 ; .bss at boot, and this byte must start clear.
@@ -540,6 +542,124 @@ gfx_fill_gray:
     ret
 
 ; -----------------------------------------------------------------------------
+; gfx_fill_pat - 8x8 dither pattern fill, screen-aligned (SPEC.md 5)
+;
+; Row y takes the byte [gfx_pat][y & 7]; bit set = white (15), clear =
+; black (0), bit 7 the leftmost pixel of each screen byte. Ignores
+; [gfx_color] and, like gfx_fill_gray, writes only colors 0/15, so it
+; never retires [bb_mono] (SPEC.md 32). Same masked-edge scheme as
+; gfx_fill_gray, with the row byte fetched from the table instead of the
+; AA/55 toggle. The 8 pattern bytes are staged into vga_patbuf first:
+; [bp+bx] is not an 8086 addressing mode, but [vga_patbuf+bx] is (and the
+; bb twin shares the staging).
+; in:       AX = x1, BX = y1, CX = x2, DX = y2; [gfx_pat] = pattern ptr
+; out:      -
+; clobbers: flags
+; -----------------------------------------------------------------------------
+gfx_fill_pat:
+    cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
+    jne bb_fill_pat
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call vga_rect_setup
+    jc .done
+    call vga_pat_stage          ; vga_patbuf <- the 8 bytes at [gfx_pat]
+    mov ax, VGA_SEG
+    mov es, ax
+    mov dx, VGA_GC
+    mov ah, [vga_lmsk]          ; left edge column
+    mov al, 8
+    out dx, ax
+    mov di, [vga_off]
+    mov si, [vga_rows]
+    mov bx, [vga_y1]
+    and bx, 7
+.lcol:
+    mov ah, [vga_patbuf+bx]     ; row byte first: the masked write must
+    mov al, [es:di]             ; follow the latch load immediately
+    mov [es:di], ah
+    inc bx
+    and bx, 7
+    add di, ROW_BYTES
+    dec si
+    jnz .lcol
+    mov cx, [vga_span]
+    or cx, cx
+    jz .reset
+    mov ah, [vga_rmsk]          ; right edge column
+    mov al, 8
+    out dx, ax
+    mov di, [vga_off]
+    add di, cx
+    mov si, [vga_rows]
+    mov bx, [vga_y1]
+    and bx, 7
+.rcol:
+    mov ah, [vga_patbuf+bx]
+    mov al, [es:di]
+    mov [es:di], ah
+    inc bx
+    and bx, 7
+    add di, ROW_BYTES
+    dec si
+    jnz .rcol
+    dec cx                      ; interior bytes per row
+    jz .reset
+    mov ax, 0xFF08              ; full bytes: latches irrelevant
+    out dx, ax
+    mov di, [vga_off]
+    inc di
+    mov si, [vga_rows]
+    mov bx, [vga_y1]
+    and bx, 7
+.irow:
+    mov al, [vga_patbuf+bx]
+    push cx
+    push di
+    rep stosb
+    pop di
+    pop cx
+    add di, ROW_BYTES
+    inc bx
+    and bx, 7
+    dec si
+    jnz .irow
+.reset:
+    call vga_gc_reset
+.done:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vga_pat_stage - internal: copy the 8 bytes at [gfx_pat] into vga_patbuf
+;                 so the fill loops can index them ([bx+disp] addressing)
+; in:       [gfx_pat]
+; out:      vga_patbuf filled
+; clobbers: SI, DI, ES, flags
+; -----------------------------------------------------------------------------
+vga_pat_stage:
+    push ds                     ; DF=0 per SPEC.md 1
+    pop es
+    mov si, [gfx_pat]
+    mov di, vga_patbuf
+    movsw
+    movsw
+    movsw
+    movsw
+    ret
+
+; -----------------------------------------------------------------------------
 ; vga_xor_hline - internal: horizontal XOR line
 ;
 ; Caller has armed the XOR state (vga_set_xor). Every byte - edges AND
@@ -1004,5 +1124,6 @@ vga_rows        resw 1          ; rect: clipped row count
 vga_span        resw 1          ; rect: right byte - left byte
 vga_off         resw 1          ; rect: VRAM offset of top-left byte
 vga_lcol        resw 1          ; rect: left byte column (bb dirty union)
+vga_patbuf      resb 8          ; gfx_fill_pat: staged pattern rows
 
 section .text
