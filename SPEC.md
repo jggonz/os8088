@@ -1807,7 +1807,9 @@ wm_paint_all already does.
   The interior is white-filled (free), then: [0,64) 50% gray
   (`gfx_fill_gray` — IVT/BDA, the far-code blob at FAR_SEG and LOW_SEG's
   stacks + disk buffers, §2.1), [64,128) solid black (the kernel segment,
-  detailed by the segment map below), and [256,406) 50% gray while
+  detailed by the segment map below), [192,256) 50% gray (`SND_SEG`,
+  §2.2 — claimed whole by the sound layer from boot, so the band is
+  unconditional like the low keep), and [256,406) 50% gray while
   `[bb_on]` is set (the §32 back buffer, read live at draw time).
 - (6,33): `"SEG 64K POOL"` + pool-used KB right-aligned in 3 (ceil of
   Σ I_SIZE over in-use snapshot slots) + `"K/20K"` — exactly 20 chars
@@ -2278,9 +2280,22 @@ state of its own, exactly as the Scheduler page reads `sched_mode_get`):
   on): unchecked, `osapi_snd_play` returns err 3, and the caption states
   the trade honestly — an exclusive clip freezes the desktop while it
   plays.
-- A **Test** button: `snd_beep` through the active tone route.
-- A caption line that doubles as the Phase 2 floor gate's instrument: it
-  renders the `snd_pcm_emitted` / `snd_pcm_resync` counters (§34.4),
+- A **Test** button: synthesises the built-in test clip — 12,000 samples
+  of a 1 kHz sine, ~1.5 s at 8,000 Hz (N = 149, the default carrier) —
+  into the `SND_SEG` staging pool's base (§2.2; transient kernel use of
+  the pool base until the Phase 4 allocator lands) and plays it through
+  slot 0x0080's target (`osapi_snd_play`), ES pointing away from DS
+  exactly as a package would. The click **blocks** for the clip — the
+  sanctioned §34.4 `sch_lock` contract, disclosed by the caption — and
+  the result code is deliberately ignored: the counters row below reports
+  what actually happened, which is the point of the button.
+- Two caption rows, both read live at paint time. The **status row**:
+  AdLib presence (`"AdLib: yes"` / `"AdLib: no"` — the caption layer of
+  the `bb_avail` idiom) and, in a second column, the exclusive-clips
+  trade stated honestly (`"Clips freeze GUI"`, or `"Clips: off"` while
+  `snd_excl_ok` is clear). The **counters row** doubles as the Phase 2
+  floor gate's instrument: it renders `E:`/`R:` followed by the
+  `snd_pcm_emitted` / `snd_pcm_resync` counters (§34.4),
   screendump-readable, which is how the automated test asserts
   emitted ≈ clip length and resync ≈ 0.
 
@@ -2728,7 +2743,12 @@ documented outputs; callable from task context only unless stated:
   new-generation-with-stale-expiry and can silence a just-granted tone.
   The generation guard is only sound because task-side writers are atomic
   w.r.t. the tick. The same rule covers the PWM steal path: `snd_ch2mode`,
-  the generation stamp and the silencing are one unit.
+  the generation stamp and the silencing are one unit. And `snd_ch2mode`
+  = 2 is stamped **only when the resolved PCM route is the speaker**: a
+  clip granted to a non-speaker sink (SB direct, Covox — Phase 4+) must
+  leave ch2 untouched, because only the speaker op's idle path ever
+  clears mode 2 — an unconditional stamp would wedge tone refusal
+  forever after the first non-speaker clip.
 - **FM tier**: 9 channels (8 while the tone reservation is active),
   allocated per requester (bitmap, first-fit); channel handles are the raw
   0–8 index; the bitmap is force-released by `snd_release_inst`.
@@ -2816,9 +2836,13 @@ end.
   `snd_stop` and `snd_release_inst` — is checked in the same window. On
   click-abort the kernel **drains the aborting EVT_MDOWN (and its EVT_MUP)
   from the event queue** before returning, so the skip gesture cannot fire
-  a menu, close box or icon under the cursor. No code is added to
-  `mou_isr` — the checks are byte loads on the emit path; the mouse module
-  stays sound-free.
+  a menu, close box or icon under the cursor. The guarantee is structural,
+  not a property of the caller's identity: `osapi_snd_play` holds its own
+  raise of `sch_lock` from before the driver op runs until the drain
+  completes, so a tick landing between the op's internal release and the
+  drain can never switch to a task that would pop the aborting click
+  first. No code is added to `mou_isr` — the checks are byte loads on the
+  emit path; the mouse module stays sound-free.
 - **Scheduling contract**: `spk_pcm_run` executes on the **caller's task**
   with IF=1 throughout, wrapped in `inc byte [sch_lock]` …
   `dec byte [sch_lock]` — the second sanctioned raiser (§7), with exactly

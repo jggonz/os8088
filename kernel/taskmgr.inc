@@ -957,8 +957,9 @@ tm_cap_pool:
 
 ; -----------------------------------------------------------------------------
 ; tm_map_ram - the conventional-memory map interior (SPEC.md 28): white =
-;              free, gray = system-reserved (low memory; the armed back
-;              buffer), black = the kernel segment. KB scale.
+;              free, gray = system-reserved (low memory; the sound
+;              segment; the armed back buffer), black = the kernel
+;              segment. KB scale.
 ; in:  [tm_totkb]; [bb_on] read live under the lock
 ; out: nothing
 ; clobbers: nothing (flags only)
@@ -997,6 +998,17 @@ tm_map_ram:
     call tm_map_rect
     mov byte [gfx_color], CBLACK
     KCALL gfx_fill
+
+    mov ax, 192                 ; [192,256K): SND_SEG, claimed whole by the
+    call tm_ramkb2x             ; sound layer from boot (SPEC.md 2.2 / 28) -
+    mov si, ax                  ; unconditional, like the low keep; it is
+    mov ax, 255                 ; what SND_SEG_KB adds to the totals above
+    call tm_ramkb2x
+    mov cx, ax
+    mov ax, si
+    mov bx, TMM_M1_Y1
+    call tm_map_rect
+    KCALL gfx_fill_gray
 
     cmp byte [bb_on], 0         ; [256,406K): the back buffer, when armed
     je .done

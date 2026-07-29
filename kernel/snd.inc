@@ -993,13 +993,16 @@ osapi_snd_tone:
 ; is the caller's job. The requesting instance is the dispatched
 ; callback's stamp, else the running task's (the osapi_snd_tone rule).
 ;
-; The grant - busy test, tone steal, ch2 mode, generation, the abort and
-; click-baseline latches, the counter reset - is one pushf/cli..popf
-; window (SPEC.md 34.3, binding). On a click-abort the aborting EVT_MDOWN
-; (and its EVT_MUP) are drained from the event queue before err 5 returns,
-; so the skip gesture cannot fire a menu, close box or icon under the
-; cursor; everything queued while the screen was frozen predates the abort
-; and drains with it.
+; The grant - busy test, tone steal, ch2 mode (speaker route only, SPEC.md
+; 34.3), generation, the abort and click-baseline latches, the counter
+; reset - is one pushf/cli..popf window (SPEC.md 34.3, binding). On a
+; click-abort the aborting EVT_MDOWN (and its EVT_MUP) are drained from
+; the event queue before err 5 returns, so the skip gesture cannot fire a
+; menu, close box or icon under the cursor; everything queued while the
+; screen was frozen predates the abort and drains with it. The drain sits
+; inside this routine's own sch_lock raise, held from before the op call:
+; the guarantee is structural, not an artifact of the caller being the
+; only queue consumer (SPEC.md 34.4).
 ; -----------------------------------------------------------------------------
 osapi_snd_play:
     push bx
@@ -1068,7 +1071,11 @@ osapi_snd_play:
     call snd_town_off           ; clip (SPEC.md 34.1/34.3)
 .own:
     inc byte [snd_gen]          ; ch2 mode, generation and the silencing
-    mov byte [snd_ch2mode], 2   ; above are one unit (SPEC.md 34.3)
+                                ; above are one unit (SPEC.md 34.3)...
+    cmp bl, DRV_SPK             ; ...but ch2 belongs to the grant ONLY on
+    jne .noch2                  ; the speaker route: only spk_pcm_idle ever
+    mov byte [snd_ch2mode], 2   ; clears mode 2, so an SB/Covox clip that
+.noch2:                         ; stamped it would wedge tones forever
     mov byte [snd_pcm_busy], 1
     mov byte [snd_abort], 0
     mov [snd_pcm_inst], bh
@@ -1081,9 +1088,15 @@ osapi_snd_play:
     mov ax, [snd_pcm_n]         ; build the per-clip rescale table: far
     call snd_xlat_build         ; code, ~8ms, non-destructive (SPEC.md 34.4)
 
+    inc byte [sch_lock]         ; the router's own raise, held across the
+                                ; op AND the abort drain: without it a tick
+                                ; between the op's internal release and the
+                                ; drain could switch to a task that pops
+                                ; the aborting click first (SPEC.md 34.4)
     mov al, 0                   ; verb 0: run the clip to completion; the
     call [di+SDRV_PCM]          ; op's epilogue releases ch2 + busy. Out:
     jc .aborted                 ; CF=1 aborted, AL = 1 click / 2 flag
+    dec byte [sch_lock]
     xor ax, ax
     clc
     jmp .out
@@ -1096,7 +1109,8 @@ osapi_snd_play:
     call evq_pop                ; screen was frozen - before returning
     jnc .drain                  ; (SPEC.md 34.4, binding)
 .e5:
-    mov ax, 5
+    dec byte [sch_lock]         ; the router's raise ends here on every
+    mov ax, 5                   ; abort path (drained or flag)
     jmp .err
 .busyw:
     popf
