@@ -531,6 +531,23 @@ page quiescent after (the drain held — no click-through). The **floor
 gate** — the same counters read on 86Box at N = 149 — is still owed; the
 default rate stays 8,008 Hz until that read says otherwise.
 
+Phase 3 measured at its gate (§15.1 recipe, 2026-07-29): totals now
+**16,562 B .text, 3,581 B .bss, 5,005 B .fartext** — guard 1 **24,913 B
+free**, guard 2 **23,489 B free**. Phase 3 cost ≈ 689 B against guard 1,
+≈ 846 B against guard 2 — the split ran opposite the ~300/~16/~1,300
+estimate row (+669 .text, +177 .fartext): the ops, the channel allocator
+and `opl_wr` are all §33-barred from far (ISR-adjacent or
+pointer-dispatched), while the far half (probe + init loop + patch loader)
+compresses to a few loops. Total within the row's sum. QEMU gate: the
+probe's 200 counted status reads detect the emulated OPL2 (and a no-adlib
+boot publishes absent); an 880 Hz beep routed to OPL2 via the CP radio
+reads 880.0 Hz dominant in the wav capture and goes silent ~190 ms after
+grant (3-tick expiry + release tail) — the `snd_tick` single-B0h key-off
+— with `--exclusive` clean over the whole session; a scratch package
+sustaining a 440+660 Hz chord from its W_ONCLICK went silent at
+close-mid-chord (the `snd_release_inst` → `opl_release_inst` teardown
+leg). Floor-gate items (real-XT probe timing by ear) ride with Phase 2's.
+
 Post-all-phases slack ≈ 23.6 KB (guard 1) / ≈ 20.4 KB (guard 2) — comfortable even if
 every estimate misses by 2×. `.lowbss` untouched (the refill task's stack is a normal
 dynamic spawn). SND_SEG folds into the Task Manager's RAM figure via the `KLOWFAR_KB`

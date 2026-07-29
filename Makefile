@@ -146,11 +146,17 @@ test: $(IMG) $(APPSIMG)
 # `make test` plus audio capture (SPEC.md 34 / docs/SOUND-PLAN.md): the PC
 # speaker renders into build/snd.wav, finalized when QMP `quit` stops QEMU.
 # Verify with tools/sndcheck.py (RMS + dominant-frequency assertions).
+# `make test-snd ADLIB=1` adds an emulated AdLib (OPL2 at 388h) on the same
+# wav audiodev, so sndcheck hears FM output too (Phase 3); without it the
+# boot has no OPL2 and the probe must report absent.
+ifneq ($(ADLIB),)
+ADLIBDEV = -device adlib,audiodev=snd
+endif
 test-snd: $(IMG) $(APPSIMG)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 \
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
-		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd
+		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd $(ADLIBDEV)
 
 # Boot the 360KB image on emulated period hardware in 86Box.
 xt: $(IMG360) $(APPSIMG360)

@@ -1291,7 +1291,9 @@ change as the slots; `apps/os88api.inc` mirrors the new `OSAPI_*` equs
                          ES restored per §1.            (live Phase 2)
 0x0084 osapi_snd_fm      in AL = verb: 0 note-on / 1 note-off / 2 patch /
                          3 all-off; CL = channel, BX = freq Hz, DS:SI =
-                         11-byte patch (§34.2); out CF=1 no FM sink.
+                         11-byte patch (§34.2); out CF=1 no FM sink, or
+                         refused: bad verb/channel/frequency, a reserved
+                         or another requester's channel (§34.3).
                                                         (live Phase 3)
 0x0088 osapi_snd_stream  PCM_BG / PCM_IN + staging: verbs below.
                                                         (live Phases 4–5)
@@ -2689,10 +2691,15 @@ documented outputs; callable from task context only unless stated:
   F-Number/block math is done inside: F-Number = Hz·2^(20−block)/49716,
   block chosen so F fits 10 bits), 1 note-off (CL), 2 patch-load (CL,
   DS:SI → 11-byte patch: 5 operator regs × 2 operators + C0h), 3 all-off.
-  Out: CF=1 no FM sink. FM is fire-and-forget — a note costs ~0.2–0.6 ms
-  once, then zero CPU while it sounds: background music under full
-  multitasking even on the floor, which is why the preference list routes
-  tones to OPL2 when present.
+  Out: CF=1 no FM sink or refused — bad verb/channel/frequency (the OPL2
+  voice tops out at 6,208 Hz, block 7's 10-bit F-Number ceiling), or a
+  reserved / another requester's channel (§34.3); CF=0 done. Note-on and
+  patch-load claim the channel on first touch; note-off leaves the claim
+  standing (a melody keeps its channels between notes); all-off keys off
+  and releases everything the requester holds. FM is fire-and-forget — a
+  note costs ~0.2–0.6 ms once, then zero CPU while it sounds: background
+  music under full multitasking even on the floor, which is why the
+  preference list routes tones to OPL2 when present.
 - **PCM-out op** — AL = verb: 0 start (ES:SI buf, CX len, DX rate Hz),
   1 stop, 2 feed/status. Exclusive drivers (speaker) implement verb 0 as
   **run-to-completion** — it returns when the clip ends or aborts;

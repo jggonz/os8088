@@ -5,9 +5,9 @@
 ; selection, the tone tier's owner/priority/generation router, the PC speaker
 ; driver (tone + PWM exclusive clips), snd_tick (the one scheduler
 ; touch-point), and the five os8088 API slot targets at 0x0078..0x0088.
-; Phases 1-2 of docs/SOUND-PLAN.md: tones and speaker PCM - the FM and
-; STREAM surfaces ship as clean error stubs so the jump-table ABI is whole
-; from day one.
+; Phases 1-2 of docs/SOUND-PLAN.md: tones and speaker PCM; Phase 3 wires
+; the FM slot through to sndfm.inc's OPL2 driver - the STREAM surface
+; still ships as a clean error stub so the jump-table ABI is whole.
 ;
 ; Speaker PCM (SPEC.md 34.4): ch2 in mode 0 lobyte-only is the modulator -
 ; one `out 42h, AL` per sample emits a low pulse of AL PIT-cycles and the
@@ -94,11 +94,13 @@ snd_drv:                        ; row 0: PC speaker - always present, as data
     dw 0                        ; no probe needed
     dw snd_s_spk
     dw 0
-                                ; row 1: OPL2 - probe + ops land in Phase 3
+                                ; row 1: OPL2 (sndfm.inc, Phase 3)
     db SND_CAP_TONE | SND_CAP_FM
-    db 0                        ; absent until its probe exists
-    dw 0, 0, 0, 0
-    dw 0
+    db 0                        ; absent until opl_probe publishes (34.2)
+    dw opl_tone                 ; tone op: the reserved channel 8 (34.3)
+    dw opl_fm_op                ; FM op - slot 0x0084's live body
+    dw 0, 0                     ; no PCM out / in
+    dw opl_probe                ; the timer-flag dance, far behind its shim
     dw snd_s_opl
     dw 0
                                 ; row 2: Sound Blaster - lands in Phases 4-5
@@ -755,6 +757,10 @@ snd_release_inst:
     inc byte [snd_gen]          ; a release updates the record (SPEC.md 34.3)
 .done:
     popf
+    cmp byte [snd_live], 0      ; the FM leg (SPEC.md 34.3): at most 9
+    je .out                     ; single-write key-offs, run OUTSIDE the
+    call opl_release_inst       ; tone window - the dying instance can make
+.out:                           ; no new claims, so no race to close
     ret
 
 ; -----------------------------------------------------------------------------
@@ -820,10 +826,11 @@ snd_disp_set:
 ; clobbers: flags
 ;
 ; Saves the boot state of 61h bits 0-1, stores every .bss byte the layer
-; reads (nothing clears .bss at boot, SPEC.md 8), runs any probes the driver
-; table declares (none until Phase 3 - the speaker's presence is initialised
-; data), and sets snd_live LAST: the publish that arms snd_tick and the
-; public entry points (SPEC.md 34.7, the 29.2 publish-last idiom).
+; reads (nothing clears .bss at boot, SPEC.md 8), runs the probes the driver
+; table declares (the speaker's presence is initialised data; the OPL2 row's
+; probe fully initialises the chip before reporting present, SPEC.md 34.2),
+; and sets snd_live LAST: the publish that arms snd_tick and the public
+; entry points (SPEC.md 34.7, the 29.2 publish-last idiom).
 ; -----------------------------------------------------------------------------
 snd_init:
     push ax
@@ -853,6 +860,10 @@ snd_init:
     mov word [snd_pcm_n], 149   ; the default-rate divisor (8,008 Hz)
     mov word [snd_pcm_emitted], 0
     mov word [snd_pcm_resync], 0
+
+    call opl_state_init         ; the FM allocator's .bss (sndfm.inc) -
+                                ; stored ahead of the probe that could
+                                ; publish its row (SPEC.md 34.7)
 
     mov si, snd_drv             ; probe rows that declare one (SPEC.md 34.2);
     mov cx, SND_NDRV            ; SDRV_PROBE = 0 rows keep their initialised
@@ -958,20 +969,32 @@ osapi_snd_caps:
 ; task-owned caller is stamped correctly too. 0xFF = kernel.
 ; -----------------------------------------------------------------------------
 osapi_snd_tone:
-    push bx
     push dx
+    call snd_req_inst           ; DH = the requesting instance (SPEC.md 34.3)
+    call snd_tone_req
+    pop dx
+    ret
+
+; -----------------------------------------------------------------------------
+; snd_req_inst - who is asking? (SPEC.md 34.3, the grant-stamping rule)
+;
+; out:      DH = requesting instance slot: the dispatched callback's stamp
+;           ([snd_inst], set at the I_CYC billing sites), else the running
+;           task's T_INST. 0xFF = kernel.
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+snd_req_inst:
+    push bx
     mov dh, [snd_inst]
     cmp dh, 0xFF
-    jne .go
+    jne .out
     mov bl, [sch_cur]           ; not in a callback: the running task's
     xor bh, bh                  ; instance (0xFF for the UI task)
     shl bx, 1                   ; T_SIZE = 8
     shl bx, 1
     shl bx, 1
     mov dh, [bx+sch_tasks+T_INST]
-.go:
-    call snd_tone_req
-    pop dx
+.out:
     pop bx
     ret
 
@@ -1136,14 +1159,41 @@ osapi_snd_play:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_fm / osapi_snd_stream - error stubs until their phases land
-; (SPEC.md 20.3): a package built against the full ABI gets the documented
-; "no sink" refusal, never a jump past the table end.
+; osapi_snd_fm - the public FM surface (slot 0x0084, SPEC.md 20.3 - live
+;                from Phase 3)
+;
+; in:       AL = verb: 0 note-on / 1 note-off / 2 patch-load / 3 all-off;
+;           CL = channel 0..8, BX = frequency Hz, DS:SI = 11-byte patch
+;           (per verb, SPEC.md 34.2)
+; out:      CF = 1 no FM sink, or the op's refusal (bad verb/channel/
+;           frequency, a reserved or another requester's channel -
+;           SPEC.md 34.2/34.3); CF = 0 done
+; clobbers: nothing else (flags)
+;
+; Dispatches through the FM-capable row (DRV_OPL) when present; ownership
+; is the op's job (opl_fm_op stamps claims with the requesting instance,
+; the snd_req_inst rule).
 ; -----------------------------------------------------------------------------
-osapi_snd_fm:                   ; live in Phase 3 (SPEC.md 34.2)
-    stc                         ; CF = 1: no FM sink
+osapi_snd_fm:
+    push si
+    cmp byte [snd_live], 0      ; not initialised: no sink can be present
+    je .no
+    mov si, snd_drv + SDRV_SIZE*DRV_OPL
+    test byte [si+SDRV_FLAGS], 1
+    jz .no                      ; no AdLib: the documented refusal
+    call [si+SDRV_NOTE]         ; CF from the op survives the pop below
+    pop si
+    ret
+.no:
+    stc
+    pop si
     ret
 
+; -----------------------------------------------------------------------------
+; osapi_snd_stream - error stub until its phases land (SPEC.md 20.3): a
+; package built against the full ABI gets the documented "no sink"
+; refusal, never a jump past the table end.
+; -----------------------------------------------------------------------------
 osapi_snd_stream:               ; live in Phases 4-5 (SPEC.md 34.5/34.6)
     mov ax, 4                   ; err 4: no sink
     stc
