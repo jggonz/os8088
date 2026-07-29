@@ -158,11 +158,12 @@ app_clock_task:
     mov al, dl
     call inst_ptr               ; DI = our instance record
     mov bp, di                  ; BP = record for life
-    mov si, [bp+I_SPTR]         ; SI = time state for life
+    mov si, [ds:bp+I_SPTR]      ; SI = time state for life (BP addresses
+                                ; SS by default - SPEC.md 1 rule 3)
 .loop:
     mov ax, 9
     call task_sleep
-    cmp byte [bp+I_STATE], 2    ; close requested?
+    cmp byte [ds:bp+I_STATE], 2    ; close requested?
     je .die
 
     ; --- time-keeping, every iteration ---
@@ -204,7 +205,7 @@ app_clock_task:
     ; --- drawing, only when the window can actually be seen ---
 .draw:
     call gfx_lock
-    mov bx, [bp+I_WIN]
+    mov bx, [ds:bp+I_WIN]
     test word [bx+W_FLAGS], 2   ; re-check under the lock (SPEC.md 14)
     jz .skip
     call wm_obscured
@@ -332,14 +333,15 @@ app_bounce_task:
     mov al, dl
     call inst_ptr               ; DI = our instance record
     mov bp, di                  ; BP = record for life
-    mov si, [bp+I_SPTR]         ; SI = ball state for life
+    mov si, [ds:bp+I_SPTR]      ; SI = ball state for life (ds: override:
+                                ; BP addresses SS by default, SPEC.md 1)
 .loop:
     mov ax, 2
     call task_sleep
-    cmp byte [bp+I_STATE], 2    ; close requested?
+    cmp byte [ds:bp+I_STATE], 2    ; close requested?
     je .die
     call gfx_lock
-    mov bx, [bp+I_WIN]
+    mov bx, [ds:bp+I_WIN]
     test word [bx+W_FLAGS], 2   ; check under the lock (SPEC.md 14)
     jz .skip
     call wm_obscured

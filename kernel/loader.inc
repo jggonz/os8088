@@ -2,9 +2,9 @@
 ; loader.inc - package loader (SPEC.md 21)
 ;
 ; Validates an os88fs directory entry, allocates a region from the package
-; pool (0xA000..0xEFFF), reads the .o88 v2 file into it, applies the
-; relocation table (SPEC.md 20.2: class 0 entries += base-0xA000, class 1
-; entries -= it), zeroes the package bss, near-calls its entry, and
+; pool (0xB000..0xFDFF), reads the .o88 v2 file into it, applies the
+; relocation table (SPEC.md 20.2: class 0 entries += base-APP_LOAD_OFF,
+; class 1 entries -= it), zeroes the package bss, near-calls its entry, and
 ; registers the new instance in the instance table (SPEC.md 29). There is
 ; NO eviction: any number of package instances can be resident, and a load
 ; that cannot fit fails with "Out of memory" while running instances stay
@@ -37,7 +37,6 @@ LD_ENOMEM   equ 5               ; instance table or pool exhausted
 LD_DE_TYPE  equ 16              ; word: 1 = application package
 LD_DE_LBA   equ 18              ; word: start LBA of file data
 LD_DE_SIZE  equ 20              ; word: size in bytes (image + reloc table)
-LD_DE_SHIFT equ 5               ; entry stride 32 = 1 << 5
 
 ; --- .o88 v2 header field offsets (SPEC.md 20.2) ------------------------------
 LD_H_MAGIC  equ 0               ; word: 0x384F ('O','8')
@@ -50,7 +49,7 @@ LD_H_BSS    equ 10              ; word: bytes to zero after the image
 LD_H_RCNT   equ 12              ; word: relocation count
 LD_HDR_SIZE equ 0x20
 
-APP_POOL_END equ APP_LOAD_OFF + APP_MAX_SIZE    ; 0xF000, exclusive
+APP_POOL_END equ APP_LOAD_OFF + APP_MAX_SIZE    ; 0xFE00, exclusive
 
 ; -----------------------------------------------------------------------------
 ; loader_init - reset loader state
@@ -96,7 +95,7 @@ ld_alloc:
     mov si, [di+I_SPTR]
     cmp si, dx                  ; record starts at/past our end: no overlap
     jae .next
-    add si, [di+I_SIZE]         ; SI = record end (<= 0xF000: no wrap)
+    add si, [di+I_SIZE]         ; SI = record end (<= 0xFE00: no wrap)
     cmp si, bx                  ; record ends at/before our start: ditto
     jbe .next
     mov bx, si                  ; overlap: restart just past this record
@@ -139,7 +138,7 @@ ld_check_hdr:
     cmp dx, APP_MAX_SIZE
     ja .toobig
     mov [ld_bss], dx
-    add dx, ax                              ; img+bss <= 0xA000: no wrap
+    add dx, ax                              ; img+bss <= 0x9C00: no wrap
     cmp dx, APP_MAX_SIZE
     ja .toobig
     mov ax, [si+LD_H_ENTRY]                 ; image-relative entry
@@ -216,10 +215,8 @@ ld_run_body:
     ; --- 1. validate the directory entry --------------------------------------
     cmp ax, [disk_nfiles]
     jae .bad1                   ; index out of range
-    mov si, ax
-    mov cl, LD_DE_SHIFT
-    shl si, cl                  ; index * 32 (index <= 31: no overflow)
-    add si, disk_dir            ; SI -> directory entry
+    call dsk_get_dir            ; SI -> the entry, staged out of LOW_SEG into
+                                ; the kernel segment (SPEC.md 2.1)
     cmp word [si+LD_DE_TYPE], 1
     jne .bad1                   ; not an application package
     mov ax, [si+LD_DE_SIZE]
@@ -240,10 +237,12 @@ ld_run_body:
 
     ; --- 2. peek the header: first sector into dsk_secbuf ---------------------
     ; dsk_secbuf is disk.inc's mount scratch - safe to reuse here because
-    ; both disk_mount and loader_run run only on the UI task.
+    ; both disk_mount and loader_run run only on the UI task. It lives in
+    ; LOW_SEG, so the sector lands there and only the 32 header bytes are
+    ; staged back into the kernel segment for ld_check_hdr to read.
 .peek:
-    push ds
-    pop es
+    mov bx, LOW_SEG
+    mov es, bx
     mov cx, 1
     mov bx, dsk_secbuf
     call disk_read              ; in: AX=LBA, CX=1, ES:BX
@@ -251,6 +250,10 @@ ld_run_body:
 
     ; --- 3. validate the peeked header -----------------------------------------
     mov si, dsk_secbuf
+    mov di, ld_hdr
+    mov cx, LD_HDR_SIZE
+    call dsk_copy_in            ; LOW_SEG:dsk_secbuf -> KERNEL_SEG:ld_hdr
+    mov si, ld_hdr
     call ld_check_hdr           ; fills ld_img/ld_bss/ld_ent/ld_rcnt;
     jc .ret1                    ; AL = LD_EBAD / LD_EBIG on failure
 
@@ -261,7 +264,7 @@ ld_run_body:
     jae .sized
     mov ax, [ld_fsz]
 .sized:
-    add ax, 511                 ; <= 0x5000 + 511: no 16-bit overflow
+    add ax, 511                 ; <= 0x4E00 + 511: no 16-bit overflow
     mov cl, 9
     shr ax, cl
     shl ax, cl
@@ -429,5 +432,7 @@ ld_ent:     resw 1              ; header: image-relative entry
 ld_rcnt:    resw 1              ; header: relocation count
 ld_base:    resw 1              ; allocated region base
 ld_need:    resw 1              ; allocated region size (512-multiple)
+ld_hdr:     resb LD_HDR_SIZE    ; the peeked .o88 header, staged out of the
+                                ; LOW_SEG sector buffer for ld_check_hdr
 
 section .text

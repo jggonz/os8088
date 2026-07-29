@@ -12,7 +12,18 @@
 ; Reads go one sector per int 13h call (AH=02, AL=1) so track boundaries
 ; and DMA alignment never matter; each sector gets up to 3 attempts with
 ; an AH=00 controller reset between attempts.
+;
+; The three big buffers - the directory, the icon table and the sector
+; scratch - live in .lowbss (LOW_SEG, SPEC.md 2.1), not in the kernel's own
+; 64KB window: 3.5KB the kernel no longer spends on them. int 13h writes
+; through ES:BX and needs no help. Everything that READS them goes through
+; dsk_get_dir / dsk_get_icon below, which stage one entry at a time into a
+; kernel-segment buffer, so consumers keep the plain DS:SI pointer they
+; always had and no drawing or parsing code learns about segments.
 ; =============================================================================
+
+DSK_DE_SIZE  equ 32              ; os88fs directory entry stride (SPEC.md 19)
+DSK_ICO_SIZE equ 64              ; os88fs icon table entry stride (SPEC.md 19)
 
 ; --- module data (initialized: lives in .text, not .bss) ---------------------
 disk_drive:  db 1                ; current drive (0 = A:, 1 = B:), init B:
@@ -135,8 +146,9 @@ disk_mount:
     mov word [disk_heads], 2
     mov word [disk_nfiles], 0   ; stays 0 unless the mount fully succeeds
 
-    mov ax, ds                  ; buffers live in the kernel segment
-    mov es, ax
+    mov ax, LOW_SEG             ; the buffers live in low memory (SPEC.md 2.1)
+    mov es, ax                  ; and ES stays on them to the end of the
+                                ; routine - disk_read preserves it
 
     ; --- LBA 0: superblock ---
     xor ax, ax                  ; LBA 0
@@ -145,10 +157,12 @@ disk_mount:
     call disk_read
     jc .fail
 
-    ; magic must be "OS88FS2" + one zero byte
+    ; Magic must be "OS88FS2" + one zero byte. cmpsb reads DS:SI against
+    ; ES:DI, so the kernel-resident string is the SI side and the sector in
+    ; low memory is the DI side - the comparison needs no override at all.
     cld
-    mov si, dsk_secbuf
-    mov di, dsk_magic
+    mov si, dsk_magic
+    mov di, dsk_secbuf
     mov cx, 8
     repe cmpsb
     jne .fail
@@ -158,20 +172,20 @@ disk_mount:
     ; stored: a hostile pair whose product wraps 16 bits (e.g. 0x8000*2)
     ; would make disk_read's CHS divisor zero and divide-fault with
     ; sch_lock held.
-    mov ax, [dsk_secbuf+8]      ; sectors per track
+    mov ax, [es:dsk_secbuf+8]   ; sectors per track (ES = LOW_SEG)
     cmp ax, 18
     je .spt_ok
     cmp ax, 9
     jne .fail
 .spt_ok:
     mov [disk_spt], ax
-    mov ax, [dsk_secbuf+10]     ; heads
+    mov ax, [es:dsk_secbuf+10]  ; heads
     cmp ax, 2
     jne .fail
     mov [disk_heads], ax
 
     ; file count, clamped to the directory's 32 slots
-    mov ax, [dsk_secbuf+12]
+    mov ax, [es:dsk_secbuf+12]
     cmp ax, 32
     jbe .count_ok
     mov ax, 32
@@ -212,12 +226,97 @@ disk_mount:
     ret
 
 ; -----------------------------------------------------------------------------
-section .bss
+; dsk_copy_in - copy CX bytes from LOW_SEG:SI into the kernel segment at DI
+;
+; The one place that reaches into low memory for data. DS is the source
+; segment for the duration, so NO kernel variable is readable between the
+; two segment loads - keep the body to the string move.
+;
+; in:       SI = LOW_SEG offset, DI = kernel offset, CX = byte count (even)
+; out:      nothing
+; clobbers: flags
+; -----------------------------------------------------------------------------
+dsk_copy_in:
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    push cs                     ; destination = the kernel segment (this code
+    pop es                      ; is in .text, so CS is it)
+    mov ax, LOW_SEG
+    mov ds, ax
+    shr cx, 1
+    cld
+    rep movsw
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
 
+; -----------------------------------------------------------------------------
+; dsk_get_dir - stage one os88fs directory entry in the kernel segment
+; in:       AX = entry index (0..31; the caller validates against disk_nfiles)
+; out:      SI -> dsk_ent, holding that entry's 32 bytes
+; clobbers: SI (the output), flags
+; -----------------------------------------------------------------------------
+dsk_get_dir:
+    push ax
+    push cx
+    push di
+    mov cl, 5                   ; index * 32 (index <= 31: no overflow)
+    shl ax, cl
+    add ax, disk_dir
+    mov si, ax
+    mov di, dsk_ent
+    mov cx, DSK_DE_SIZE
+    call dsk_copy_in
+    pop di
+    pop cx
+    pop ax
+    mov si, dsk_ent
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_get_icon - stage one os88fs icon-table entry in the kernel segment
+; in:       AX = entry index (0..31)
+; out:      SI -> dsk_ico, holding that entry's 64 bytes (all-zero = no icon)
+; clobbers: SI (the output), flags
+; -----------------------------------------------------------------------------
+dsk_get_icon:
+    push ax
+    push cx
+    push di
+    mov cl, 6                   ; index * 64
+    shl ax, cl
+    add ax, disk_icons
+    mov si, ax
+    mov di, dsk_ico
+    mov cx, DSK_ICO_SIZE
+    call dsk_copy_in
+    pop di
+    pop cx
+    pop ax
+    mov si, dsk_ico
+    ret
+
+; -----------------------------------------------------------------------------
+section .lowbss                 ; LOW_SEG: written by int 13h through ES:BX,
+                                ; read only through dsk_get_* above
 disk_dir:   resb 1024           ; 32 directory entries x 32 bytes (LBA 1-2)
 disk_icons: resb 2048           ; 32 icon-table entries x 64 bytes (LBA 3-6);
                                 ; entry i belongs to directory entry i,
                                 ; all-zero = no icon (SPEC.md 19)
-dsk_secbuf: resb 512            ; superblock scratch sector for disk_mount
+dsk_secbuf: resb 512            ; superblock scratch sector for disk_mount,
+                                ; reused by the loader's header peek
+
+section .bss
+
+dsk_ent:    resb DSK_DE_SIZE    ; one staged directory entry (dsk_get_dir)
+dsk_ico:    resb DSK_ICO_SIZE   ; one staged icon-table entry (dsk_get_icon)
 
 section .text

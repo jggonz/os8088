@@ -69,8 +69,8 @@ $(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin
 	@echo "image:  $@ (360KB, 9 spt)"
 
 # Minesweeper, the first loadable program: a flat binary with the .o88
-# package header. Each package is assembled TWICE - at the 0xA000 link base
-# and at org 0xA800 - and os88pkg.py diffs the pair into the v2 relocation
+# package header. Each package is assembled TWICE - at the 0xB000 link base
+# and at org 0xB800 - and os88pkg.py diffs the pair into the v2 relocation
 # table (SPEC.md 24), so the kernel can load any number of instances at
 # per-instance bases.
 $(BUILD)/mines.bin: apps/mines/mines.asm apps/os88api.inc | $(BUILD)
@@ -78,7 +78,7 @@ $(BUILD)/mines.bin: apps/mines/mines.asm apps/os88api.inc | $(BUILD)
 	@echo "mines:  $(call FILESIZE,$@) bytes"
 
 $(BUILD)/mines.alt.bin: apps/mines/mines.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xA800 -o $@ apps/mines/mines.asm
+	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/mines/mines.asm
 
 $(BUILD)/mines.o88: $(BUILD)/mines.bin $(BUILD)/mines.alt.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/mines.bin --alt $(BUILD)/mines.alt.bin -o $@
@@ -90,7 +90,7 @@ $(BUILD)/hello.bin: apps/hello/hello.asm apps/os88api.inc | $(BUILD)
 	@echo "hello:  $(call FILESIZE,$@) bytes"
 
 $(BUILD)/hello.alt.bin: apps/hello/hello.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xA800 -o $@ apps/hello/hello.asm
+	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/hello/hello.asm
 
 $(BUILD)/hello.o88: $(BUILD)/hello.bin $(BUILD)/hello.alt.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/hello.bin --alt $(BUILD)/hello.alt.bin -o $@
@@ -101,7 +101,7 @@ $(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc | $(BUILD)
 	@echo "notepad: $(call FILESIZE,$@) bytes"
 
 $(BUILD)/notepad.alt.bin: apps/notepad/notepad.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xA800 -o $@ apps/notepad/notepad.asm
+	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/notepad/notepad.asm
 
 $(BUILD)/notepad.o88: $(BUILD)/notepad.bin $(BUILD)/notepad.alt.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/notepad.bin --alt $(BUILD)/notepad.alt.bin -o $@

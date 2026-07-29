@@ -388,7 +388,7 @@ app_launch:
 .pnext:
     add di, I_RECSZ
     loop .pscan
-    mov [bp+I_SPTR], ax         ; free candidate found
+    mov [ds:bp+I_SPTR], ax      ; free candidate found
     jmp .tpl
 .ptaken:
     inc word [inst_slot]
@@ -421,10 +421,10 @@ app_launch:
 
     ; --- fill + bind + init --------------------------------------------------
     mov al, [inst_knd]
-    mov [bp+I_KIND], al
-    mov byte [bp+I_TASK], 0xFF
+    mov [ds:bp+I_KIND], al
+    mov byte [ds:bp+I_TASK], 0xFF
     mov ax, [si+KD_ICON]
-    mov [bp+I_ICON], ax
+    mov [ds:bp+I_ICON], ax
     push si
     mov si, [si+KD_NAME]
     mov di, bp
@@ -436,14 +436,14 @@ app_launch:
     mov ax, [si+KD_INIT]
     or ax, ax
     jz .noinit
-    mov di, [bp+I_SPTR]         ; DI = state ptr (0 if stateless)
+    mov di, [ds:bp+I_SPTR]      ; DI = state ptr (0 if stateless)
     push si
     mov si, bp                  ; SI = record (KD_INIT contract)
     call ax
     pop si
 .noinit:
 
-    mov byte [bp+I_STATE], 1    ; publish - the LAST record write
+    mov byte [ds:bp+I_STATE], 1    ; publish - the LAST record write
 
     ; --- task, if the kind has one -------------------------------------------
     mov ax, [si+KD_TASK]
@@ -455,11 +455,11 @@ app_launch:
     shr dx, cl
     call task_spawn             ; in AX, DX; out CF / AL = slot
     jc .rollback
-    mov [bp+I_TASK], al
+    mov [ds:bp+I_TASK], al
 
 .show:
     call gfx_lock
-    mov bx, [bp+I_WIN]
+    mov bx, [ds:bp+I_WIN]
     call wm_show
     call gfx_unlock
 .ok:
@@ -467,9 +467,9 @@ app_launch:
     jmp .out
 
 .rollback:                      ; task table full: undo the half-built launch
-    mov byte [bp+I_STATE], 0    ; unpublish first (readers skip state 0)
+    mov byte [ds:bp+I_STATE], 0    ; unpublish first (readers skip state 0)
     call gfx_lock
-    mov bx, [bp+I_WIN]
+    mov bx, [ds:bp+I_WIN]
     call wm_destroy             ; also resets the wm_owner entry
     call gfx_unlock
 .fail:

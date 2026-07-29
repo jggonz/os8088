@@ -452,10 +452,8 @@ fm_draw_core:
     mov bp, ax
 
     ; --- 16x16 icon at x = 4, row top ---
-    mov ax, 64                  ; SI = disk_icons + row*64 (SPEC.md 19)
-    mul di
-    add ax, disk_icons
-    mov si, ax
+    mov ax, di                  ; SI = the row's icon entry, staged into the
+    call dsk_get_icon           ; kernel segment from LOW_SEG (SPEC.md 19)
     mov bx, si                  ; all-zero entry = no icon: OR the 32
     xor ax, ax                  ; words together to find out
     mov cx, 32
@@ -476,10 +474,8 @@ fm_draw_core:
     call icon_draw              ; (library record, with header)
 .icondone:
 
-    mov ax, 32                  ; SI = disk_dir + row*32 (SPEC.md 19)
-    mul di
-    add ax, disk_dir
-    mov si, ax
+    mov ax, di                  ; SI = the row's directory entry, staged into
+    call dsk_get_dir            ; the kernel segment from LOW_SEG (SPEC.md 19)
     add bp, 4                   ; BP = text y: row top + 4 centers the
                                 ; 8px glyphs in the 16px band
 

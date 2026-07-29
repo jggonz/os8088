@@ -3,8 +3,8 @@
 
     python3 tools/os88pkg.py IN.bin --alt ALT.bin -o OUT.o88
 
-IN.bin is the package assembled at the 0xA000 link base; ALT.bin is the
-SAME source assembled at org 0xA800 (the Makefile passes -DOS88_ORG=0xA800).
+IN.bin is the package assembled at the 0xB000 link base; ALT.bin is the
+SAME source assembled at org 0xB800 (the Makefile passes -DOS88_ORG=0xB800).
 The probe delta 0x800 has a zero low byte, so every relocated word differs
 from IN in exactly its high byte - the diff below finds each fixup site
 deterministically. os88pkg verifies the header (SPEC.md section 20.2), diffs
@@ -22,13 +22,13 @@ import sys
 HEADER_SIZE = 32
 MAGIC = 0x384F            # 'O','8' little-endian
 VERSION = 2
-LINK_BASE = 0xA000
-PROBE_ORG = 0xA800
+LINK_BASE = 0xB000
+PROBE_ORG = 0xB800
 PROBE_DELTA = PROBE_ORG - LINK_BASE   # 0x800: low byte zero (see above)
 ENTRY_MIN = 0x20          # image-relative: first byte after the header
 ENTRY_MIN_ICON = 0x60     # first byte after the embedded icon (flags bit 0)
 ICON_END = 96             # header (32) + icon block (64)
-APP_MAX_SIZE = 0x5000     # image + bss budget; also the load-region bound
+APP_MAX_SIZE = 0x4E00     # image + bss budget; also the load-region bound
 SECTOR = 512
 
 
@@ -65,10 +65,10 @@ def main() -> int:
         description="Validate an os8088 v2 package, build its relocation table, "
                     "and write the .o88 file.")
     ap.add_argument("input", metavar="IN.bin",
-                    help="flat binary assembled at the 0xA000 link base")
+                    help="flat binary assembled at the 0xB000 link base")
     ap.add_argument("--alt", metavar="ALT.bin", required=True,
-                    help="the same source assembled at org 0xA800 "
-                         "(-DOS88_ORG=0xA800)")
+                    help="the same source assembled at org 0xB800 "
+                         "(-DOS88_ORG=0xB800)")
     ap.add_argument("-o", "--output", metavar="OUT.o88", required=True,
                     help="package file to write on success")
     args = ap.parse_args()

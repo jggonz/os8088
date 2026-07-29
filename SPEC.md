@@ -21,10 +21,18 @@ pre-empted background task, updating live while the user types or drags).
    anything newer. Consequences: no `pusha/popa`, no `push imm`, no
    `shl reg, imm` other than 1 (use CL), no `movzx`, no 32-bit registers, no
    `imul r,r,imm`. `rep movsb/stosb/lodsb`, `mul`, `div` are fine.
-2. **Tiny model.** CS = DS = SS = 0x1000 for all kernel code and tasks. ES is
-   scratch — any routine may change and use ES freely, but must restore it
-   before returning unless documented otherwise. All calls between modules are
-   **near** calls.
+2. **Near model.** CS = DS = `KERNEL_SEG` (0x1000) for all kernel code and
+   tasks; **SS = `LOW_SEG`** (0x0800), because every task stack lives outside
+   the kernel segment (§2.1). ES is scratch — any routine may change and use
+   ES freely, but must restore it before returning unless documented
+   otherwise. Calls between modules in `.text` are **near** calls; modules in
+   `.fartext` are reached only through the shims of §33.
+
+   **SS ≠ DS has one consequence and it is easy to miss:** a `[bp]`,
+   `[bp+disp]`, `[bp+si]` or `[bp+di]` operand addresses **SS**, not DS. Code
+   that holds a pointer to a kernel structure in BP must write `[ds:bp+…]`.
+   Code that genuinely means the stack (`mov bp, sp`) is correct as written.
+   BP used as a plain scalar is unaffected.
 3. **Register discipline.** Every public routine **preserves all registers**
    except its documented outputs. Callers rely on this. Flags are not
    preserved. Direction flag: assume DF=0 on entry; if you `std`, `cld` before
@@ -42,6 +50,10 @@ pre-empted background task, updating live while the user types or drags).
    kernel.asm's own final `section .bss` block (§15) is the last thing
    assembled. The build runs NASM with `-w+error` so the tell-tale
    "initialize memory in a nobits section" warning fails the build.
+   Two further sections exist and follow the same switch-back rule:
+   `.lowbss` (scratch in `LOW_SEG`, §2.1) and `.fartext` (far code, §33).
+   All four are declared once, with their attributes, at the top of
+   `kernel.asm`; modules switch with a bare `section <name>`.
 5. **Label hygiene.** One flat namespace. Prefix every module-internal label
    with the module's prefix (`vga_`, `font_`, `mou_`, `cur_`, `sch_`, `evq_`,
    `wm_`, `menu_`, `ui_`, `app_`, `inst_`, `dsk_`/`disk_`, `ld_`/`loader_`,
@@ -62,22 +74,52 @@ pre-empted background task, updating live while the user types or drags).
 
 | linear        | segment | contents                                          |
 |---------------|---------|----------------------------------------------------|
-| 0x00500       | —       | free; boot stack grows down from 0x7C00            |
-| 0x07C00       | 0000    | boot sector                                        |
-| 0x10000       | 0x1000  | kernel: code, data, .bss (stacks, buffers)         |
-| 0x1A000       | 0x1000  | `APP_LOAD_OFF` — package pool, 20KB: multi-instance, sector-granular first-fit (§20/§21) |
-| 0x1F000       | 0x1000  | free gap; boot/task-0 stack grows down from 0xFFFE |
+| 0x00500       | —       | free; boot stack grows down from 0x7C00 (dead after handoff) |
+| 0x00600       | 0x0060  | `FAR_SEG` — far code (§33), copied here by `far_init` |
+| 0x07C00       | 0000    | boot sector (dead once it jumps to the kernel)     |
+| 0x08000       | 0x0800  | `LOW_SEG` — `.lowbss`: disk buffers, then task stacks (§2.1) |
+| 0x0FFFE       | 0x0800  | `STK0_TOP` — task 0's stack top, grows down        |
+| 0x10000       | 0x1000  | kernel: code, data, .bss                           |
+| 0x1B000       | 0x1000  | `APP_LOAD_OFF` — package pool, 19.5KB: multi-instance, sector-granular first-fit (§20/§21) |
+| 0x1FE00       | 0x1000  | unused: the pool's exclusive end would not fit a 16-bit immediate at 0x10000 |
 | 0x20000       | 0x2000  | `SAVE_SEG` — save-under heap (menus), raw, via ES  |
 | 0x40000       | 0x4000  | `BB_SEG` — double-buffer back buffer, 4 planes × 0x9600 bytes (§32); touched only while the Control Panel's Display page has it switched on, which needs conventional RAM ≥ `DB_MIN_KB` |
 | 0xA0000       | 0xA000  | VGA planar framebuffer, 80 bytes/row               |
 
-Kernel image + .bss must fit below offset **0xA000** (task stacks included);
-`kernel.asm` ends with a build-time assertion (§15). Loaded programs occupy
-kernel-segment offsets 0xA000..0xEFFF so they share the tiny model: their
-paint/key/click procs are ordinary near pointers. Works in 256KB of RAM:
-the back buffer is the only thing above 0x40000, and a machine that fails
-the §32 RAM probe never touches it — everything below 0x40000 is identical
-in both modes.
+Kernel image + .bss must fit below offset **`APP_LOAD_OFF`** (0xB000);
+`kernel.asm` ends with build-time assertions (§15.1). Loaded programs occupy
+kernel-segment offsets 0xB000..0xFDFF so they share CS and DS with the
+kernel: their paint/key/click procs are ordinary near pointers. Works in
+256KB of RAM: the back buffer is the only thing above 0x40000, and a machine
+that fails the §32 RAM probe never touches it — everything below 0x40000 is
+identical in both modes.
+
+### 2.1 Low memory
+
+Linear 0x00600..0x0FFFF — ~62KB between the BIOS data area and the kernel
+image — is free on every machine once the boot sector has handed off.
+Nothing the kernel keeps there needs to be addressable through DS, which is
+the whole point: it is 24KB the kernel's own 64KB window does not spend.
+
+`LOW_SEG` (0x0800) holds the `.lowbss` section, addressed through **SS** (the
+task stacks) or **ES** (the disk buffers), never DS:
+
+- `sch_stacks` — 11 × 1,536 bytes, task slots 1..11 (§8).
+- Task 0 runs on the same segment at `STK0_TOP`, growing down toward the top
+  of `.lowbss`. All tasks share one SS, so a switch is still an SP swap and
+  SS is not part of the saved frame.
+- `disk_dir`, `disk_icons`, `dsk_secbuf` — written by int 13h through ES:BX,
+  read only through `dsk_get_dir` / `dsk_get_icon`, which stage one entry
+  back into the kernel segment (§18).
+
+`LOW_SEG:0x8000` **is** `KERNEL_SEG:0x0000`. Every `LOW_SEG` offset must stay
+strictly below `LOW_LIMIT`, and the §15.1 assertions keep task 0 8KB of
+clearance above `.lowbss`.
+
+`FAR_SEG` (0x0060) holds the `.fartext` blob — see §33.
+
+The full plan this came from, including the step still on the shelf, is
+`docs/MEMORY-PLAN.md`.
 
 ## 3. Global constants (defined once in kernel.asm, used everywhere)
 
@@ -85,6 +127,11 @@ in both modes.
 KERNEL_SEG   equ 0x1000
 SAVE_SEG     equ 0x2000
 VGA_SEG      equ 0xA000
+; low memory (§2.1)
+FAR_SEG      equ 0x0060      ; linear 0x00600 - far code (.fartext, §33)
+LOW_SEG      equ 0x0800      ; linear 0x08000 - .lowbss: stacks + disk buffers
+LOW_LIMIT    equ 0x8000      ; LOW_SEG:LOW_LIMIT IS KERNEL_SEG:0
+STK0_TOP     equ 0x7FFE      ; task 0's stack top
 SCREEN_W     equ 640
 SCREEN_H     equ 480
 ROW_BYTES    equ 80
@@ -96,8 +143,8 @@ CWHITE  equ 15
 CLGRAY  equ 7
 CDGRAY  equ 8
 ; loadable programs (§20)
-APP_LOAD_OFF equ 0xA000      ; where packages load (kernel segment offset)
-APP_MAX_SIZE equ 0x5000      ; image + bss budget, 0xA000..0xEFFF
+APP_LOAD_OFF equ 0xB000      ; where packages load (kernel segment offset)
+APP_MAX_SIZE equ 0x4E00      ; image + bss budget, 0xB000..0xFDFF
 ; double buffering (§32)
 BB_SEG        equ 0x4000     ; back buffer base segment (plane 0)
 BB_PLANE_PARA equ 0x960      ; paragraphs per plane (0x9600 bytes = 480 rows × 80)
@@ -129,6 +176,7 @@ DB_MIN_KB     equ 500        ; int 12h floor: double-buffer only at ≥ 500KB
 | `kernel/dock.inc`   | bottom dock strip: one tile per running instance, minimize/restore/activate (§30) |
 | `kernel/taskmgr.inc`| Task Manager window: CPU load gauge + history graph, RAM readout, per-instance process list with CPU + memory (§28) |
 | `kernel/ctrl.inc`   | Control Panel window: two-pane item list + settings pages (§31), prefix `cp_` |
+| `kernel/farcall.inc`| Far-code mechanism (§33): the `FARK`/`KCALL`/`FARSHIM` macros, `far_init`, and the list of kernel routines far code may call |
 
 `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` remain in the
 tree but are **no longer included**; the GUI replaces the text shell.
@@ -243,10 +291,12 @@ back-buffer planes (or/and-not per the `[gfx_color]` plane bit).
 ## 8. sched.inc — round-robin, pre-emptive or cooperative (§8.2)
 
 - `MAX_TASKS equ 12`. Task 0 is the boot thread (becomes the UI task); it
-  runs on the boot stack (SS:0xFFFE) and owns **no** slice of `sch_stacks`.
+  runs on the task-0 stack (SS:`STK0_TOP`, §2.1) and owns **no** slice of
+  `sch_stacks`.
   Slots 1..11 are dynamic (spawned by `app_launch`/§29, freed by
   `task_exit`); each has a 1536-byte stack:
-  `sch_stacks resb (MAX_TASKS-1) * SCH_STACK`, slot n's stack top at
+  `sch_stacks resb (MAX_TASKS-1) * SCH_STACK` **in `.lowbss`** (§2.1),
+  slot n's stack top at
   `sch_stacks + n*SCH_STACK` (slot 1 owns bytes 0..1535).
 - Task record (8 bytes): `T_STATE` (0 free, 1 ready, 2 sleeping), `T_SP`
   (saved SP), `T_WAKE` (tick count to wake at), `T_INST` at offset 6
@@ -855,7 +905,9 @@ tick: bar fill = AX×288/DX pixels, right-aligned percentage, and one
 spin step of the vector "8088" (cosine-scaled about its vertical axis,
 angle index = AX mod 16). kmain's own `vga_mode12` then wipes the splash.
 
-kmain: set segments/stack (SP=0xFFFE), `sti`, `cld`, then:
+kmain: set DS/ES = `KERNEL_SEG` and SS:SP = `LOW_SEG:STK0_TOP` (§2.1),
+`sti`, `cld`, then: `far_init` (**first** — the `.fartext` blob is sitting
+on top of `.bss` until it runs, §33) →
 `sched_init` → `evq_init` → `vga_mode12` → `bb_init` (§32 — the RAM probe
 must run after the mode set, which clears VRAM, and before the first
 drawing call) → `font_init` → `wm_init` →
@@ -866,32 +918,57 @@ into `ui_task` (task 0 never returns). (`dock_init` runs right after
 shows only the desktop, drive icons, the empty dock strip and menu bar;
 everything is launched from the menus (§13/§29). Include order:
 `instance.inc` right after `wm.inc`; `icons.inc`, `desk.inc`, `dock.inc`,
-`taskmgr.inc` and then `ctrl.inc` (§31) after `files.inc`. The Control
+`taskmgr.inc` and then `ctrl.inc` (§31) after `files.inc`;
+`farcall.inc` (§33) before all of them, since it defines the macros they use. The Control
 Panel has no init routine — it is task-less and stateless, so nothing runs
 for it at boot; forward references from `instance.inc`'s kind table to
 `cp_tpl`/`cp_sname` resolve at assembly time exactly as `tm_tpl` already
 does.
 
-End of file (after all `%include` lines, with `section .text` in effect):
+### 15.1 Size guards
+
+End of file (after all `%include` lines, with `section .text` in effect).
+`kernel_text_end` **must** be the last thing in `.text`: it is at once the
+image size, the base of `.bss` and the landing address of the `.fartext`
+blob. Each section measures itself against its own `$$` — a label difference
+across two sections is not a constant in `-f bin` and will not assemble.
 
 ```nasm
 kernel_text_end:
 KTEXT_SIZE equ kernel_text_end - $$
+
+section .fartext
+kernel_far_end:
+KFAR_SIZE equ kernel_far_end - $$
+
+section .lowbss
+kernel_low_end:
+KLOW_SIZE equ kernel_low_end - $$
 
 section .bss
 ; (modules already declared their own .bss blocks inside their .inc files;
 ;  NASM accumulates them in declaration order — this block lands last)
 kernel_bss_end:
 KBSS_SIZE equ kernel_bss_end - $$
-%if KTEXT_SIZE + KBSS_SIZE > 0xA000
-%error "kernel too big: image + bss must stay below APP_LOAD_OFF (0xA000)"
+
+%if KTEXT_SIZE + KBSS_SIZE > APP_LOAD_OFF
+%error "kernel too big: image + bss must stay below APP_LOAD_OFF"
 %endif
+%if KTEXT_SIZE + KFAR_SIZE > APP_LOAD_OFF
+%error "kernel too big: image + fartext must stay below APP_LOAD_OFF"
+%endif
+%if KLOW_SIZE > STK0_TOP - 8192
+%error "lowbss too big: task 0's stack needs 8KB of clearance below STK0_TOP"
+%endif
+%if STK0_TOP >= LOW_LIMIT
+%error "STK0_TOP must stay below LOW_LIMIT (LOW_SEG:LOW_LIMIT is the kernel)"
+%endif
+
+KLOWFAR_KB equ (KLOW_SIZE + KFAR_SIZE + 1023) / 1024   ; §28 RAM figure
 ```
 
-(The sizes must be same-section label differences bound via `equ` — a bare
-label in `%if` is a non-scalar and will not assemble. Keep this block last.
-The limit is 0xA000 now, not 0xF000: everything above it belongs to the
-loaded-program region, §20.)
+The second guard exists because the far blob lands *inside* the kernel
+window and only leaves it when `far_init` runs. Keep this block last.
 
 ## 16. Build & test
 
@@ -909,7 +986,7 @@ loaded-program region, §20.)
 
 ## 17. Definition of done
 
-1. `make` builds all images with zero warnings; kernel < 0xA000 with .bss.
+1. `make` builds all images with zero warnings; the §15.1 guards pass.
 2. QEMU boots to a **clean desktop**: gray dither, menu bar (logo + File
    + Special), drive icons, the empty dock strip at the bottom, arrow
    cursor — no windows, nothing running. The scheduler boots
@@ -981,8 +1058,11 @@ failure between attempts.
 | `disk_mount` | in: DL=drive (0=A, 1=B). Sets `[disk_drive]`, reads LBA 0 with the *fallback* geometry spt=9/heads=2 (CHS 0/0/1 — identical under any real floppy geometry), validates the superblock (§19), loads `disk_spt`/`disk_heads`/`disk_nfiles`, then reads the 2 directory sectors (LBA 1–2) into `disk_dir` and the 4 icon-table sectors (LBA 3–6) into `disk_icons`. Out: CF=1 if the disk is unreadable or not os88fs (then `disk_nfiles`=0). |
 | `disk_drive`  | byte variable, current drive (init 1 = B:)                   |
 | `disk_nfiles` | word, valid after a successful mount (else 0)                |
-| `disk_dir`    | 1024-byte .bss buffer: the 32 directory entries              |
-| `disk_icons`  | 2048-byte .bss buffer: the 32 icon-table entries (§19); entry i belongs to directory entry i, 64 bytes each, all-zero = no icon |
+| `disk_dir`    | 1024-byte **`.lowbss`** buffer (§2.1): the 32 directory entries. int 13h writes it through ES:BX; read it only via `dsk_get_dir` |
+| `disk_icons`  | 2048-byte **`.lowbss`** buffer (§2.1): the 32 icon-table entries (§19); entry i belongs to directory entry i, 64 bytes each, all-zero = no icon. Read it only via `dsk_get_icon` |
+| `dsk_get_dir` | in: AX = entry index. Stages that entry's 32 bytes from `LOW_SEG` into the kernel-segment buffer `dsk_ent`; out: SI = `dsk_ent`. Consumers keep an ordinary DS:SI pointer and never see a segment |
+| `dsk_get_icon`| in: AX = entry index. Same, 64 bytes into `dsk_ico`; out: SI = `dsk_ico` |
+| `dsk_copy_in` | in: SI = `LOW_SEG` offset, DI = kernel offset, CX = even byte count. The one routine that reaches into low memory for data |
 
 ## 19. os88fs — on-disk format (data floppies)
 
@@ -1028,13 +1108,13 @@ are packed from index 0; `file count` in the superblock is authoritative.
 
 ### 20.1 The pool
 
-A package is a flat 8086 binary assembled with `org APP_LOAD_OFF` (0xA000
+A package is a flat 8086 binary assembled with `org APP_LOAD_OFF` (0xB000
 — the **link base**) and **relocated at load time** to a per-instance
-region allocated from the 20KB pool 0xA000..0xEFFF (§21). It runs in the
-tiny model exactly like kernel code: CS=DS=SS=KERNEL_SEG, near calls
+region allocated from the 19.5KB pool 0xB000..0xFDFF (§21). It runs in the
+same near model as kernel code: CS=DS=KERNEL_SEG, SS=LOW_SEG, near calls
 everywhere, §1 hard rules apply (cpu 8086, register discipline, no bare
 `sti` in handlers). Its paint/onkey/onclick procs are near pointers into
-its region. Budget: image + zeroed-bss ≤ APP_MAX_SIZE (0x5000). Multiple
+its region. Budget: image + zeroed-bss ≤ APP_MAX_SIZE (0x4E00). Multiple
 package instances can be resident at once — including two instances of
 the same package: each is a fully relocated copy with its own image, data
 and bss, so package state (equ offsets from `os88_image_end`) is
@@ -1048,7 +1128,7 @@ rule 7).
 | 0   | 2    | magic: bytes `'O','8'` (word 0x384F)                      |
 | 2   | 1    | format version = 2 (relocatable; v1 files are rejected)   |
 | 3   | 1    | flags: bit 0 = embedded icon follows the header; bits 1–7 zero |
-| 4   | 2    | link base — must equal 0xA000 (the org the image was assembled at) |
+| 4   | 2    | link base — must equal `APP_LOAD_OFF` (0xB000, the org the image was assembled at) |
 | 6   | 2    | entry offset, **image-relative** (≥ 0x20; ≥ 0x60 with icon; < image size) |
 | 8   | 2    | image size = resident bytes: header + icon + code + data (**excludes** the reloc table) |
 | 10  | 2    | bss size — bytes the loader zeroes after the image        |
@@ -1059,21 +1139,21 @@ rule 7).
 **Relocation table**: appended immediately after the image — n
 little-endian words. Each entry's low 15 bits are the **image offset** of
 a word to patch (in [0x20, image−2], ascending, non-overlapping; image ≤
-0x5000, so bit 15 is free); bit 15 is the fixup **class**:
+0x4E00, so bit 15 is free); bit 15 is the fixup **class**:
 
 - bit 15 = 0 — an embedded package address (imm16 / disp16 / `dw label`):
-  the loader **adds** `base − 0xA000`.
+  the loader **adds** `base − `APP_LOAD_OFF``.
 - bit 15 = 1 — the rel16 displacement of a near call/jmp to a **fixed
   kernel offset** (`call OSAPI_*`): the displacement is target − (site+2),
   and the site moves with the base while the target does not, so the
-  loader **subtracts** `base − 0xA000`. (Package-internal relative
+  loader **subtracts** `base − `APP_LOAD_OFF``. (Package-internal relative
   branches shift with both ends and need no fixup.)
 
 Total file bytes = image + 2n (this is what the os88fs directory size
 field holds; the dir type stays 1). After the patches the table is dead
 (bss zeroing overwrites it). The table is generated host-side by **dual
 assembly** (§24): the Makefile assembles each package twice — at org
-0xA000 and org 0xA800 (`-DOS88_ORG=0xA800`) — and os88pkg.py diffs the two
+0xB000 and org 0xB800 (`-DOS88_ORG=0xB800`) — and os88pkg.py diffs the two
 images: a word whose value grew by 0x800 is class 0, one that shrank by
 0x800 is class 1. **Author rule (binding)**: a package address may only
 ever be embedded as a whole 16-bit word — never byte-truncated, shifted,
@@ -1138,7 +1218,7 @@ emits the §20.2 header (image size via a forward-referenced
 end-of-file macro — exact macro design is the implementer's, but a package
 source must be able to consist of just `%include "os88api.inc"`, the header
 macro, code/data, and an end macro). OS88_HEADER opens with
-`org OS88_ORG` when that macro is defined (`-DOS88_ORG=0xA800`, the §24
+`org OS88_ORG` when that macro is defined (`-DOS88_ORG=0xB800`, the §24
 relocation-probe pass) and `org APP_LOAD_OFF` otherwise; it emits version
 2, the image-relative entry (`entry − $$`), and a zero relocation count
 for os88pkg.py to stamp. The org value must only ever affect emitted
@@ -1164,9 +1244,9 @@ residency.
 range [I_SPTR, I_SPTR + I_SIZE) is occupied iff I_STATE ≠ 0 (§29.2 rule
 7); I_SIZE is the ALLOCATED size (512-multiple). `ld_alloc` (in: AX =
 bytes, a 512-multiple; out: CF=1 no hole, else BX = region base):
-first-fit lowest base over [0xA000, 0xF000) — start at 0xA000; if any
+first-fit lowest base over [0xB000, 0xFE00) — start at 0xB000; if any
 in-use package record overlaps [start, start+AX), set start = that
-record's end and rescan from the top; fail when start + AX > 0xF000.
+record's end and rescan from the top; fail when start + AX > 0xFE00.
 UI-task-only, so allocation never races itself; freeing is the record
 store (task-less close path or task_exit, §29). No compaction — regions
 never move once relocated.
@@ -1174,7 +1254,7 @@ never move once relocated.
 `ld_check_hdr` (module-internal) — in: SI → 32 readable header bytes,
 [ld_fsz] = file size; out: CF=0 + scratch (img/bss/entry/reloc-count)
 filled, or CF=1 + AL = status. Checks: magic; **version = 2** (a v1 file
-→ "Bad package"); link base = 0xA000; image ≥ 0x20; entry in
+→ "Bad package"); link base = `APP_LOAD_OFF`; image ≥ 0x20; entry in
 [0x20, image) (icon rule enforced by os88pkg, not re-checked); image+bss ≤
 APP_MAX_SIZE (else "Too large"); image + 2·count = file size (guards
 truncated files and stale directories).
@@ -1201,7 +1281,7 @@ on entry. Steps:
    peek and the read) → status 2/3.
 7. Relocate: for each of the n table words at base+image (each validated
    in [0x20, image−2] → else status 2): word at base+offset += base −
-   0xA000.
+   `APP_LOAD_OFF`.
 8. Zero bss-size bytes at base+image (this overwrites the reloc table —
    it is disposable).
 9. Near-call base+entry (contract §20.2; DS=ES=KERNEL_SEG, lock free).
@@ -1280,7 +1360,7 @@ Behaviour:
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
-Not kernel code: a .o88 package built with os88api.inc, org 0xA000, all
+Not kernel code: a .o88 package built with os88api.inc, org `APP_LOAD_OFF`, all
 services via the API table. Label prefix `mn_`. Everything below is
 content-relative; the procs fetch the content origin via `wm_content`
 (JAPI) each call.
@@ -1318,14 +1398,14 @@ Python 3, stdlib only, both tools executable with clear argparse `--help`
 and non-zero exit + stderr message on any validation failure.
 
 - `tools/os88pkg.py IN.bin --alt ALT.bin -o OUT.o88` — package
-  validator/reloc-generator/stamper. IN is the org-0xA000 assembly, ALT
-  the same source at org 0xA800 (`-DOS88_ORG=0xA800`; the probe delta
+  validator/reloc-generator/stamper. IN is the org-0xB000 assembly, ALT
+  the same source at org 0xB800 (`-DOS88_ORG=0xB800`; the probe delta
   0x800 has a zero low byte, so every fixup word differs in exactly its
   high byte). Steps, any failure → exit 1, no output: (1) equal lengths
   (an org-dependent encoding would desync the images); (2) header
-  validation — magic, version 2, link base 0xA000, image field == file
+  validation — magic, version 2, link base 0xB000, image field == file
   size (no table yet), entry image-relative in [0x20, image) (≥ 0x60
-  with the icon flag), image+bss ≤ 0x5000, reloc-count field 0, reserved
+  with the icon flag), image+bss ≤ 0x4E00, reloc-count field 0, reserved
   0, flags bits 1–7 zero, name printable ≤15 NUL-padded — plus
   byte-equality of the two headers (and icon blocks); (3) diff scan:
   each differing byte at offset i must satisfy i ≥ 33, fixup site
@@ -1334,7 +1414,7 @@ and non-zero exit + stderr message on any validation failure.
   IN with 0x800 added (class 0) / subtracted (class 1) at every recorded
   fixup word must reconstruct ALT byte-for-byte — this is what catches
   split/truncated addresses (§20.2 author rule); (5) loadable
-  bound: max(image+bss, roundup512(image + 2n)) ≤ 0x5000; (6) emit IN
+  bound: max(image+bss, roundup512(image + 2n)) ≤ 0x4E00; (6) emit IN
   with the count stamped at offset 12 and the n sorted offsets appended.
   Summary line gains `relocs=N`.
 - `tools/os88disk.py -o OUT.img --size {1440,360} [PKG.o88 ...]` — builds a
@@ -1350,7 +1430,7 @@ and non-zero exit + stderr message on any validation failure.
 - Makefile: `build/mines.bin` from `apps/mines/mines.asm` and
   `build/hello.bin` from `apps/hello/hello.asm` (§27), each
   (`nasm -f bin -w+error -I apps/`, dep on apps/os88api.inc), plus a
-  second assembly of each at org 0xA800 (`-DOS88_ORG=0xA800` →
+  second assembly of each at org 0xB800 (`-DOS88_ORG=0xB800` →
   `build/X.alt.bin`); both fed to os88pkg.py (`X.bin --alt X.alt.bin`),
   then `build/apps.img` (1440) + `build/apps360.img` (360) from
   **mines.o88 + hello.o88** via os88disk.py; all built by `all`.
@@ -1602,7 +1682,7 @@ I_KIND   equ 2    ; byte: KIND_* below; bit 7 set = package instance
 I_TASK   equ 3    ; byte: task slot index (§8), 0xFF = task-less
 I_WIN    equ 4    ; word: window record ptr (valid while I_STATE != 0)
 I_SPTR   equ 6    ; word: builtin — per-instance state block ptr (0 = none)
-                  ;       package — region base offset (>= 0xA000)
+                  ;       package — region base offset (>= 0xB000)
 I_SIZE   equ 8    ; word: package — allocated region bytes; 0 for builtins
 I_ICON   equ 10   ; word: near ptr to a 16x16 icon BODY (16 mask + 16 data
                   ;       words, the icon_draw16 layout, §25); 0 = generic
@@ -2143,3 +2223,55 @@ memory (§28) whenever `[bb_on]` is set, so the RAM line and the System row
 both move the moment the Display page switches it (39K ↔ 189K on a 639K
 QEMU). The §16 test flow boots direct-to-screen like every machine; turning
 the buffer on is a deliberate act, and `make xt` (256K) cannot do it at all.
+
+## 33. farcall.inc — far code modules
+
+Cold modules put their **code** in `section .fartext`, which is assembled at
+`vstart=0`, shipped at the tail of the kernel image, and copied to
+`FAR_SEG:0000` by `far_init` — kmain's first act (§15). That code costs the
+kernel's 64KB window nothing at run time; only the shims stay behind.
+
+**Why the blob is free.** `.bss` is declared `vfollows=.text` — *not*
+following `.fartext` — so `.bss` deliberately overlaps the blob's landing
+zone at `kernel_text_end`. The blob is copied out before anything writes
+`.bss`, and `.bss` is uninitialised by definition, so the same addresses
+serve both in turn. This is the same hazard `splash.inc` has always lived
+with (§15: it keeps its state in `.text` because `.bss` is where the last
+sector lands), and it is why `far_init` must run before `sched_init`.
+
+**The contract.** All of it:
+
+1. **DS stays `KERNEL_SEG`.** Far code addresses kernel variables exactly
+   like near code, so every `[var]`, `[si+off]` and `lodsb` works unchanged.
+2. **Therefore all data stays in `.text` or `.bss`.** Strings, tables,
+   window templates, bitmaps — anything reached through DS — must not move.
+   Only executable code moves. A module's data *may* hold pointers to its
+   own far code (see rule 5).
+3. The kernel calls in through `FARSHIM name, far_body`: a 6-byte near stub
+   in `.text` that far-calls the body. Window templates, kind tables and
+   `call [bx+W_PAINT]` keep naming the stub, so no dispatch site changes.
+   A task entry must be a shim too — `task_spawn` builds a frame with
+   CS = `KERNEL_SEG` (§8) and can only launch a near entry.
+4. Far code calls back with `KCALL routine`, which far-calls the 4-byte
+   `call`/`retf` wrapper emitted by `FARK routine`. Neither hop touches a
+   register or a flag, so a routine that returns CF still does. Every
+   `KCALL` target needs a `FARK` entry in the list at the bottom of
+   `farcall.inc`. A tail `jmp` to something that never returns
+   (`inst_task_die`) becomes `jmp far KERNEL_SEG:…` and needs no wrapper.
+5. Calls between routines of the same far module stay near. An indirect
+   near call through a table of `.fartext` labels is legal **only** from far
+   code — a near pointer means nothing without knowing which CS will run it.
+6. Far bodies reached by `FARSHIM` end in `retf`, not `ret`.
+
+**What may not move:** the boot path (`splash.inc` runs before `far_init`),
+any interrupt handler (vectors are seg:off into `KERNEL_SEG`), and anything
+on a hot inner loop — each crossing is a far call, roughly 1.5× a near one.
+
+**Resident so far:** `ctrl.inc` (§31) and `taskmgr.inc` (§28). Both keep
+their data, their `.bss` and their two or three near shims in the kernel
+segment; everything else is far. `tm_init` and `tm_kinit` also stay near —
+they are self-contained and too small to be worth a shim.
+
+**Accounting.** `KLOWFAR_KB` (§15.1) is what the kernel occupies outside its
+own segment — `.lowbss` plus `.fartext` — and both the Task Manager's RAM
+total and its System row add it, so the rows still sum to the total (§28).

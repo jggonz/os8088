@@ -41,8 +41,8 @@
 
 ; --- environment ---------------------------------------------------------------
 KERNEL_SEG   equ 0x1000     ; CS = DS = SS for kernel and packages alike
-APP_LOAD_OFF equ 0xA000     ; where packages load (kernel segment offset)
-APP_MAX_SIZE equ 0x5000     ; image + bss budget, 0xA000..0xEFFF
+APP_LOAD_OFF equ 0xB000     ; where packages load (kernel segment offset)
+APP_MAX_SIZE equ 0x4E00     ; image + bss budget, 0xB000..0xFDFF
 SCREEN_W     equ 640
 SCREEN_H     equ 480
 MBAR_H       equ 20         ; menu bar height, px
@@ -135,7 +135,7 @@ WT_SIZE    equ 16
     bits 16
 %ifdef OS88_ORG
     org OS88_ORG             ; relocation-probe pass (Makefile passes
-%else                       ; -DOS88_ORG=0xA800; os88pkg.py diffs the two
+%else                       ; -DOS88_ORG=0xB800; os88pkg.py diffs the two
     org APP_LOAD_OFF        ; assemblies into the fixup table, SPEC.md 24)
 %endif
     db 'O', '8'             ; +0  magic (word 0x384F)
@@ -209,6 +209,6 @@ OS88_IMAGE_SIZE equ os88_image_end - $$
 OS88_BSS_SIZE equ 0
     %endif
     %if (OS88_IMAGE_SIZE + OS88_BSS_SIZE) > APP_MAX_SIZE
-        %error "package too big: image + bss must fit in APP_MAX_SIZE (0x5000)"
+        %error "package too big: image + bss must fit in APP_MAX_SIZE (0x4E00)"
     %endif
 %endmacro

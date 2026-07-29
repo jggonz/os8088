@@ -17,6 +17,9 @@
 ;
 ; State lives in in-module data words, never .bss: .bss starts at the image
 ; end, where the final sector read lands, and nothing has cleared it yet.
+; Since SPEC.md 33 that address is also where the .fartext blob rides in, and
+; far_init has not run yet - so a .bss write here would corrupt far code as
+; well as itself. This module must stay near, and must stay off .bss.
 ; The build assertion at the bottom guarantees the module is aboard before
 ; the first tick can arrive.
 ; =============================================================================

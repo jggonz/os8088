@@ -2,7 +2,7 @@
 ; os8088 - apps/mines/mines.asm
 ;
 ; Minesweeper, the first software package (SPEC.md 23). Not kernel code: a
-; flat .o88 binary at org 0xA000 that reaches every kernel service through
+; flat .o88 binary at org APP_LOAD_OFF that reaches every kernel service through
 ; the os8088 API jump table (os88api.inc). 9x9 board, 10 mines, 16px cells,
 ; a 20px status strip above the board. Mines are placed lazily on the first
 ; reveal (never under it); zero-count reveals flood-fill through an explicit

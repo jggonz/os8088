@@ -45,11 +45,15 @@ Testing quirks (learned the hard way):
 ### Hard rules (from SPEC.md §1 — these break silently if violated)
 
 - **8086 only.** `kernel.asm` opens with `cpu 8086` and the build uses `-w+error`, so NASM rejects anything newer: no `pusha`, no `push imm`, no `shl reg, imm` other than 1 (use CL), no `movzx`, no 32-bit registers.
-- **Tiny model.** CS = DS = SS = 0x1000 for kernel *and* loaded programs; all inter-module calls are near. ES is scratch but must be restored unless documented.
+- **Near model.** CS = DS = 0x1000 for kernel *and* loaded programs; **SS = 0x0800** (`LOW_SEG`), because every task stack lives outside the kernel segment. Inter-module calls inside `.text` are near; `.fartext` modules go through the shims in SPEC.md §33. ES is scratch but must be restored unless documented. **SS ≠ DS means `[bp+disp]` addresses SS** — code holding a kernel pointer in BP needs `[ds:bp+…]`.
 - **Register discipline.** Every public routine preserves all registers except documented outputs. ISRs push DS/ES, load DS = KERNEL_SEG, `cld` before string ops. Critical sections use `pushf`/`cli` … `popf`, never `cli` … `sti`.
-- **.bss discipline.** Large buffers go in `section .bss` (free on disk with `-f bin`). NASM section state persists across `%include`: any .inc that opens `section .bss` must switch back to `section .text` before it ends, or the next include's code silently lands in .bss. `-w+error` turns the tell-tale warning into a build failure.
+- **Section discipline.** Four sections, all declared with their attributes at the top of `kernel.asm`; modules switch with a bare `section <name>` and **must switch back to `section .text` before the file ends**, or the next include's code silently lands in the wrong one. `-w+error` turns the tell-tale warning into a build failure.
+  - `.text` — kernel image, `KERNEL_SEG`.
+  - `.bss` — kernel scratch. Free on disk with `-f bin`.
+  - `.lowbss` — scratch in `LOW_SEG` (linear 0x08000): task stacks + disk buffers. Reached through SS or ES, **never DS** (SPEC.md §2.1).
+  - `.fartext` — far code, copied to `FAR_SEG` (linear 0x00600) by `far_init`. Costs the kernel window nothing (SPEC.md §33).
 - **Label hygiene.** One flat namespace; every module-internal label carries its module prefix (`vga_`, `mou_`, `sch_`, `wm_`, `inst_`, `menu_`, `ui_`, `dsk_`, `ld_`, `fm_`, `ico_`, `desk_`, `dock_`, …) or is a NASM local label.
-- **Memory budget.** Kernel image + .bss must fit below offset 0xA000 (loaded programs occupy 0xA000..0xEFFF in the same segment); `kernel.asm` ends with a build-time assertion that fails the build if exceeded.
+- **Memory budget.** Kernel image + .bss must fit below `APP_LOAD_OFF` = 0xB000 (loaded programs occupy 0xB000..0xFDFF in the same segment); `kernel.asm` ends with four build-time assertions that fail the build if exceeded (SPEC.md §15.1). Headroom is ~28KB — measure with the recipe in SPEC.md §15.1 before assuming otherwise. `docs/MEMORY-PLAN.md` is the standing plan for where more space comes from, including the one step not yet taken (packages into their own segments).
 
 ### Concurrency (SPEC.md §7 — the crux)
 
@@ -68,10 +72,18 @@ Two things keep it affordable, because the flush (VRAM) costs ~24× the render (
 
 Everything running — built-in kind or loaded package — is a record in `kernel/instance.inc`'s `inst_tab` (12 × 32B). Boot is clean (no instances); menus call `app_launch` (new instance, or front the existing one at the kind's cap), the close box calls `app_close_win` (task-less: synchronous teardown; task-owned: die flag `I_STATE=2` + hide, the task tears down at next wake), and the title bar's right-hand minimize box hides to the dock (`kernel/dock.inc`, bottom strip rows 456..479, one tile per live instance, stable slot↔tile mapping, XOR-inverted when minimized). `wm_owner[]` maps window slot → instance. The Task Manager lists *instances*, not tasks — one row per `inst_tab` slot plus a "System" row — because task-less apps (About, Disk, every package) only ever run inside window callbacks. Those callbacks are timed at the `W_PAINT`/`W_ONKEY`/`W_ONCLICK` dispatch sites and billed to `I_CYC` via `task_cycles`/`task_debit`, which *move* the cycles off the running task so the rows still add to one total.
 
+### Where the memory went (SPEC.md §2.1/§33, `docs/MEMORY-PLAN.md`)
+
+The kernel's 64KB segment is not all the kernel's. Three moves bought it room:
+
+- **Task stacks and disk buffers left the segment** into `LOW_SEG` (linear 0x08000), 20KB of `.lowbss`. Consequence: SS ≠ DS. The disk buffers are read only through `dsk_get_dir`/`dsk_get_icon`, which stage one entry back into the kernel segment so every consumer keeps a plain DS:SI pointer.
+- **The package pool slid up** to 0xB000..0xFDFF, handing the kernel the 4KB task 0's stack used to hold. `APP_LOAD_OFF`/`APP_MAX_SIZE` are mirrored in `kernel/kernel.asm`, `apps/os88api.inc`, `tools/os88pkg.py` and the Makefile's `-DOS88_ORG` probe org — change them together, and rebuild every `.o88` (the link base is in the header).
+- **Cold modules moved to `.fartext`** (`ctrl.inc`, `taskmgr.inc`), copied to `FAR_SEG` at boot by `far_init`. The blob rides at the tail of the kernel image and lands *on top of* `.bss` — which is exactly why `far_init` is kmain's first act and why `splash.inc` has always kept its state in `.text`. Far code keeps DS = `KERNEL_SEG`, so **all its data stays in `.text`**; only code moves. It reaches the kernel via `KCALL`/`FARK` and is reached via `FARSHIM`. The migration recipe is in `docs/MEMORY-PLAN.md`.
+
 ### Layout
 
 - `boot/boot.asm` — 512-byte boot sector; geometry comes from `-DSPT`/`-DHEADS`, sector count from the measured kernel size (both injected by the Makefile).
-- `kernel/kernel.asm` — constants, boot sequence, the os8088 API jump table at 1000:0010, `%include`s of all modules, final .bss and size assertion. Module ownership is the table in SPEC.md §4; each `.inc` owns one subsystem (vga12, font, mouse, sched, events, wm, instance, menu, ui, apps, disk, loader, files, icons, desk, dock, taskmgr).
+- `kernel/kernel.asm` — constants, boot sequence, the os8088 API jump table at 1000:0010, `%include`s of all modules, final .bss and size assertion. Module ownership is the table in SPEC.md §4; each `.inc` owns one subsystem (farcall, vga12, font, mouse, sched, events, wm, instance, menu, ui, apps, disk, loader, files, icons, desk, dock, taskmgr, ctrl).
 - `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` are dead — left in the tree but **no longer included** (relics of the pre-GUI text shell, as is `kernel-shell.asm.bak`).
 - `apps/` — loadable packages. `os88api.inc` is the SDK: `OS88_HEADER` emits the 32-byte package header, `OSAPI_*` constants name jump-table entries, `OS88_IMAGE_END` seals size + bss. `mines/` (embedded icon), `hello/` (proves the generic-icon fallback) and `notepad/` (the former built-in Note Pad kind, moved out to reclaim ~1.4KB of kernel budget — its per-instance bss replaced the fixed 2-instance pool, so the cap is gone).
 - `tools/` — host-side Python: `os88pkg.py` (validates/stamps `.bin` → `.o88`), `os88disk.py` (builds os88fs floppy images), `qmp.py` + `mouse.py` (test drivers).
@@ -79,12 +91,12 @@ Everything running — built-in kind or loaded package — is a record in `kerne
 ### Software package pipeline
 
 ```
-apps/mines/mines.asm --nasm x2--> build/mines.bin (org 0xA000) + build/mines.alt.bin (org 0xA800)
+apps/mines/mines.asm --nasm x2--> build/mines.bin (org 0xB000) + build/mines.alt.bin (org 0xB800)
                     --os88pkg.py--> build/mines.o88   (v2: reloc table diffed from the pair)
 build/*.o88        --os88disk.py--> build/apps.img / apps360.img   (os88fs floppy, drive B:)
 ```
 
-os88fs is a purpose-built read-only filesystem: superblock (magic `OS88FS2`) naming disk geometry, 32-entry directory, icon table at LBA 3–6, file data from LBA 7, sector-aligned. Packages are format v2 (SPEC.md §20.2): assembled at the 0xA000 link base, shipped with a relocation table that os88pkg.py generates by diffing the dual assembly (class 0 = package-address words, +delta at load; class 1 = `call OSAPI_*` rel16 displacements, −delta). The kernel allocates a region from the 0xA000..0xEFFF pool (first-fit; occupancy derived from the instance table), reads, relocates, zeroes bss, and calls the entry, which registers a window and returns; from then on its paint/key/click procs are ordinary near pointers called like any built-in window's. **Multiple packages — or multiple instances of one — run at once**; closing one frees its region. One binding author rule: package addresses only as whole 16-bit words (os88pkg's reconstruction check fails the build otherwise). **Directory order on the apps disk is pinned in the Makefile: mines first, hello second — tests rely on it; notepad is appended third so those indices hold.**
+os88fs is a purpose-built read-only filesystem: superblock (magic `OS88FS2`) naming disk geometry, 32-entry directory, icon table at LBA 3–6, file data from LBA 7, sector-aligned. Packages are format v2 (SPEC.md §20.2): assembled at the 0xB000 link base, shipped with a relocation table that os88pkg.py generates by diffing the dual assembly (class 0 = package-address words, +delta at load; class 1 = `call OSAPI_*` rel16 displacements, −delta). The kernel allocates a region from the 0xB000..0xFDFF pool (first-fit; occupancy derived from the instance table), reads, relocates, zeroes bss, and calls the entry, which registers a window and returns; from then on its paint/key/click procs are ordinary near pointers called like any built-in window's. **Multiple packages — or multiple instances of one — run at once**; closing one frees its region. One binding author rule: package addresses only as whole 16-bit words (os88pkg's reconstruction check fails the build otherwise). **Directory order on the apps disk is pinned in the Makefile: mines first, hello second — tests rely on it; notepad is appended third so those indices hold.**
 
 ### Two geometries of everything
 

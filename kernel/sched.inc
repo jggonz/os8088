@@ -13,12 +13,17 @@
 ; state and needs no rendezvous.
 ;
 ; Up to MAX_TASKS tasks; task 0 is the boot thread (the UI task) and runs on
-; the boot stack (SS:0xFFFE) — it owns no slice of sch_stacks. Slots
+; the task-0 stack (SS:STK0_TOP) — it owns no slice of sch_stacks. Slots
 ; 1..MAX_TASKS-1 are dynamic (task_spawn / task_exit), each with a 1536-byte
-; stack in .bss.
-; All tasks run tiny-model: CS = DS = SS = KERNEL_SEG, so a context
-; switch is nothing more than swapping SP between stacks that share one
-; segment.
+; stack in .lowbss.
+;
+; All tasks run CS = DS = KERNEL_SEG and SS = LOW_SEG (SPEC.md 1/2.1): the
+; stacks live in low memory, outside the kernel's 64KB window, and a context
+; switch is still nothing more than swapping SP because every task shares the
+; one SS. SS is therefore NOT saved in the frame below and never changes
+; after kmain sets it. The consequence for the rest of the kernel is that
+; BP-relative operands address SS, not DS: code that uses BP as a pointer
+; into a kernel structure must carry an explicit `ds:` override.
 ;
 ; Saved-frame layout (top of a suspended task's stack, low address first):
 ;       [SP+ 0] DS      pushed last by the save path
@@ -192,6 +197,10 @@ sched_unhook:
 ; The entry routine must never ret - it terminates only via task_exit
 ; (usually through inst_task_die, SPEC.md 29) or loops forever.
 ;
+; The frame is built through ES, not DS: sch_stacks is in LOW_SEG (.lowbss),
+; which DS does not address. The task record itself is ordinary kernel .bss
+; and stays DS-relative.
+;
 ; in:       AX = entry point (near, kernel segment)
 ;           DX = argument word - lands in the new task's DX; DL is also
 ;                stored to T_INST (instance index, 0xFF = none)
@@ -205,6 +214,7 @@ task_spawn:
     push dx
     push si
     push di
+    push es
 
     mov bx, sch_tasks + T_SIZE  ; scan for a free slot, from slot 1
     mov cx, 1                   ; CX = slot index
@@ -230,19 +240,23 @@ task_spawn:
     mov di, ax
     mov [bx+T_SP], di
 
-    mov word [di], KERNEL_SEG   ; DS slot
-    mov word [di+2], KERNEL_SEG ; ES slot
+    mov ax, LOW_SEG             ; the frame lives in LOW_SEG, so it is built
+    mov es, ax                  ; through ES - DS cannot reach it. AX is dead
+                                ; here: DI already carries the frame address
+                                ; and the xor below is its next use
+    mov word [es:di], KERNEL_SEG   ; DS slot
+    mov word [es:di+2], KERNEL_SEG ; ES slot
     xor ax, ax
-    mov [di+4], ax              ; BP
-    mov [di+6], ax              ; DI
-    mov [di+8], ax              ; SI
-    mov [di+10], ax             ; BX
-    mov [di+12], dx             ; DX = the spawn argument
-    mov [di+14], ax             ; CX
-    mov [di+16], ax             ; AX
-    mov [di+18], si             ; IP = entry
-    mov word [di+20], KERNEL_SEG; CS
-    mov word [di+22], 0x0202    ; FLAGS: IF=1, reserved bit 1 set
+    mov [es:di+4], ax           ; BP
+    mov [es:di+6], ax           ; DI
+    mov [es:di+8], ax           ; SI
+    mov [es:di+10], ax          ; BX
+    mov [es:di+12], dx          ; DX = the spawn argument
+    mov [es:di+14], ax          ; CX
+    mov [es:di+16], ax          ; AX
+    mov [es:di+18], si          ; IP = entry
+    mov word [es:di+20], KERNEL_SEG ; CS
+    mov word [es:di+22], 0x0202 ; FLAGS: IF=1, reserved bit 1 set
     mov [bx+T_INST], dl         ; owning instance (0xFF = none)
 
     mov ax, cx                  ; zero the slot's cycle counter before the
@@ -257,6 +271,7 @@ task_spawn:
     clc
 
 .done:
+    pop es
     pop di
     pop si
     pop dx
@@ -720,12 +735,17 @@ sch_resume:
 ; =============================================================================
 ; scheduler state
 ; =============================================================================
+section .lowbss                         ; LOW_SEG, reached through SS (SPEC.md 2.1)
+
+sch_stacks: resb (MAX_TASKS-1) * SCH_STACK ; slots 1..11 only: slot n's stack
+                                        ; top at n*1536 (slot 0 = the UI task
+                                        ; runs on the task-0 stack, SS:STK0_TOP,
+                                        ; which grows down from above this
+                                        ; section - it needs no reservation)
+
 section .bss
 
 sch_tasks:  resb MAX_TASKS * T_SIZE     ; task records (layout above)
-sch_stacks: resb (MAX_TASKS-1) * SCH_STACK ; slots 1..11 only: slot n's stack
-                                        ; top at n*1536 (slot 0 = the UI task
-                                        ; runs on the boot stack, SS:0xFFFE)
 sch_old08:  resb 4                      ; saved BIOS int 08h vector (off:seg)
 ticks:      resw 1                      ; public tick count, wraps at 65536
 sch_cur:    resb 1                      ; index of the running task

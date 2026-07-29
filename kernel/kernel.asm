@@ -4,10 +4,11 @@
 ; A Macintosh-style GUI for the 8086: 640x480x16 (VGA mode 12h), pre-emptive
 ; round-robin multitasking off the PIT, serial Microsoft mouse on COM1.
 ;
-; Runs in real mode, tiny model: CS = DS = SS = KERNEL_SEG for all kernel code
-; and every task; ES is scratch. All inter-module calls are near. The module
-; contracts (register use, data layouts, concurrency rules) live in SPEC.md;
-; that document is binding.
+; Runs in real mode, near model: CS = DS = KERNEL_SEG for all kernel code and
+; every task, SS = LOW_SEG, ES scratch. Inter-module calls inside .text are
+; near; .fartext modules are reached through the far shims in SPEC.md 33. The
+; module contracts (register use, data layouts, concurrency rules) live in
+; SPEC.md; that document is binding.
 ;
 ; Three fixed entry points:
 ;   1000:0000  cold entry (the boot sector jumps here)
@@ -39,8 +40,31 @@ CLGRAY      equ 7
 CDGRAY      equ 8
 
 ; loadable programs (SPEC.md 20)
-APP_LOAD_OFF equ 0xA000         ; where packages load (kernel segment offset)
-APP_MAX_SIZE equ 0x5000         ; image + bss budget, 0xA000..0xEFFF
+APP_LOAD_OFF equ 0xB000         ; where packages load (kernel segment offset)
+APP_MAX_SIZE equ 0x4E00         ; image + bss budget, 0xB000..0xFDFF
+                                ; The pool sat at 0xA000..0xEFFF until the
+                                ; task stacks left the segment (SPEC.md 2.1)
+                                ; and freed the 4KB that task 0's stack used
+                                ; to occupy above it. Sliding the pool up
+                                ; hands that 4KB to the kernel window. The
+                                ; span gives up 512 bytes on the way: an
+                                ; exclusive end of 0x10000 is not a 16-bit
+                                ; immediate, so the pool stops at 0xFE00 and
+                                ; the last half-sector of the segment is
+                                ; deliberately left unused.
+
+; --- low memory (SPEC.md 2.1) ------------------------------------------------
+; Linear 0x00600..0x0FFFF is free on every machine once the boot sector has
+; handed off: the BIOS data area ends at 0x004FF and the kernel image starts
+; at 0x10000. Two segments carve it up, and everything either of them holds
+; is one thing the kernel's own 64KB window no longer has to.
+FAR_SEG     equ 0x0060          ; linear 0x00600 - far code (section .fartext)
+LOW_SEG     equ 0x0800          ; linear 0x08000 - task stacks + disk buffers
+LOW_LIMIT   equ 0x8000          ; LOW_SEG:0x8000 IS KERNEL_SEG:0 - every
+                                ; LOW_SEG offset must stay strictly below it
+STK0_TOP    equ 0x7FFE          ; task 0's stack top (grows down towards the
+                                ; top of .lowbss; the assertion at the end of
+                                ; this file keeps 8KB of clearance)
 
 ; double buffering (SPEC.md 32)
 BB_SEG        equ 0x4000        ; back buffer base segment (plane 0)
@@ -49,6 +73,29 @@ DB_MIN_KB     equ 500           ; int 12h floor: double-buffer only at >= 500KB
                                 ; (a real 512KB machine reports less once the
                                 ; BIOS takes its cut - 500 lets those in, and
                                 ; the buffer ends at 0x657FF = 406KB anyway)
+
+; =============================================================================
+; Section layout (SPEC.md 2.1) - declared here, once, with attributes; every
+; module afterwards switches with a bare `section .text` / `.bss` / `.fartext`
+; / `.lowbss`. NASM's -f bin resolves the attributes at layout time, so a
+; forward reference to .text below is fine.
+;
+;   .text     the kernel image, org 0, KERNEL_SEG
+;   .fartext  far code (SPEC.md 33). Loaded from the floppy immediately after
+;             .text but ASSEMBLED AT vstart=0, because it is copied down to
+;             FAR_SEG:0000 by kmain before anything uses .bss. Costs the
+;             kernel window nothing at run time.
+;   .bss      kernel scratch, KERNEL_SEG. vfollows=.text - NOT .fartext - so
+;             it deliberately OVERLAPS the far blob's landing zone: the blob
+;             is copied out before .bss is touched, and .bss is uninitialised
+;             by definition, so the same addresses serve both in turn.
+;   .lowbss   scratch in LOW_SEG (SPEC.md 2.1): task stacks and the disk
+;             buffers. vstart=0, addressed through SS or ES, never DS.
+; =============================================================================
+section .fartext follows=.text align=1 vstart=0
+section .lowbss  nobits vstart=0
+section .bss     nobits vfollows=.text valign=1
+section .text
 
 ; =============================================================================
 ; Fixed entry points
@@ -120,11 +167,14 @@ kmain:
     mov ax, KERNEL_SEG          ; the boot sector jumped here with its own
     mov ds, ax                  ; segments; setting ours up is our job
     mov es, ax
-    mov ss, ax
-    mov sp, 0xFFFE
-    sti
+    mov ax, LOW_SEG             ; SS is NOT KERNEL_SEG (SPEC.md 2.1): every
+    mov ss, ax                  ; task stack, task 0's included, lives in low
+    mov sp, STK0_TOP            ; memory so the kernel window keeps the 16KB
+    sti                         ; the stacks used to cost it
     cld
 
+    call far_init               ; FIRST: the .fartext blob is sitting on top
+                                ; of .bss until this moves it (SPEC.md 33)
     call sched_init             ; pre-emption live from here on
     call evq_init
     call vga_mode12
@@ -193,6 +243,9 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 ; -----------------------------------------------------------------------------
 %include "splash.inc"           ; FIRST: must be resident within the image's
                                 ; opening SPL_RESIDENT sectors (SPEC.md 15)
+%include "farcall.inc"          ; far-code macros (SPEC.md 33): needed by
+                                ; every module that lives in .fartext, so it
+                                ; comes before all of them
 %include "vga12.inc"
 %include "vgabb.inc"
 %include "font.inc"
@@ -214,19 +267,53 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "ctrl.inc"
 
 ; =============================================================================
-; Size guard: image + bss must stay below APP_LOAD_OFF (0xA000) - everything
-; above it belongs to the loaded-program region (SPEC.md 20). Same-section
-; label differences bound via equ - a bare label in %if is a non-scalar and
-; will not assemble.
+; Size guards (SPEC.md 15.1). Same-section label differences bound via equ -
+; a bare label in %if is a non-scalar and will not assemble, and a difference
+; across two sections is not a constant at all, which is why each section
+; measures itself against its own $$.
+;
+; kernel_text_end MUST be the last thing in .text: it is simultaneously the
+; size of the image, the base of .bss and the landing address of the .fartext
+; blob (see the section layout at the top of this file).
 ; =============================================================================
 kernel_text_end:
 KTEXT_SIZE equ kernel_text_end - $$
+
+section .fartext
+kernel_far_end:
+KFAR_SIZE equ kernel_far_end - $$
+
+section .lowbss
+kernel_low_end:
+KLOW_SIZE equ kernel_low_end - $$
 
 section .bss
 ; modules declared their own .bss blocks; NASM accumulates them in order,
 ; so this lands last
 kernel_bss_end:
 KBSS_SIZE equ kernel_bss_end - $$
-%if KTEXT_SIZE + KBSS_SIZE > 0xA000
-%error "kernel too big: image + bss must stay below APP_LOAD_OFF (0xA000)"
+
+; What the kernel occupies outside its own segment, in KB, rounded up: the
+; Task Manager's RAM figure adds it (SPEC.md 28). Forward-referenced from
+; taskmgr.inc, which NASM resolves on a later pass exactly as it already
+; does for the bare kernel_bss_end label.
+KLOWFAR_KB equ (KLOW_SIZE + KFAR_SIZE + 1023) / 1024
+
+; 1. image + bss must stay below APP_LOAD_OFF - everything above it belongs
+;    to the loaded-program region (SPEC.md 20).
+%if KTEXT_SIZE + KBSS_SIZE > APP_LOAD_OFF
+%error "kernel too big: image + bss must stay below APP_LOAD_OFF"
+%endif
+; 2. the far blob lands at kernel_text_end and is only copied out once kmain
+;    runs, so image + far must fit in the same window on the way in.
+%if KTEXT_SIZE + KFAR_SIZE > APP_LOAD_OFF
+%error "kernel too big: image + fartext must stay below APP_LOAD_OFF"
+%endif
+; 3. .lowbss must leave task 0 at least 8KB of stack below STK0_TOP, and
+;    LOW_SEG offsets can never reach LOW_LIMIT (that address is the kernel).
+%if KLOW_SIZE > STK0_TOP - 8192
+%error "lowbss too big: task 0's stack needs 8KB of clearance below STK0_TOP"
+%endif
+%if STK0_TOP >= LOW_LIMIT
+%error "STK0_TOP must stay below LOW_LIMIT (LOW_SEG:LOW_LIMIT is the kernel)"
 %endif

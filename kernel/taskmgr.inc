@@ -121,13 +121,31 @@ tm_s_free:  db '---', 0
 tm_s_frtl:  db '  -    -', 0    ; free row's CPU + MEM columns
 
 ; -----------------------------------------------------------------------------
-; tm_task - the monitor task: spin-measure for TM_INT ticks, sample, redraw,
+; Everything above stays in the kernel segment: tm_init and tm_kinit (both
+; self-contained, ~40 bytes) plus all the strings and the window template,
+; which far code reaches through DS (SPEC.md 33 rule 2). Everything below is
+; code and moves to .fartext.
+;
+; Two entry points keep near names as shims: tm_paint, because tm_tpl and
+; wm's `call [bx+W_PAINT]` want a near pointer, and tm_task, because
+; task_spawn builds a frame with CS = KERNEL_SEG (SPEC.md 8) and can only
+; launch a near entry. tm_task never returns, so the shim's own `ret` is
+; dead code and its `call far` return address is simply abandoned with the
+; rest of the stack at task_exit.
+; -----------------------------------------------------------------------------
+    FARSHIM tm_paint, tmf_paint
+    FARSHIM tm_task,  tmf_task
+
+section .fartext
+
+; -----------------------------------------------------------------------------
+; tmf_task - the monitor task: spin-measure for TM_INT ticks, sample, redraw,
 ;           die on request
 ; in:  DX = instance index (the spawn argument, SPEC.md 8); never returns
 ; -----------------------------------------------------------------------------
-tm_task:
+tmf_task:
     mov al, dl
-    call inst_ptr               ; DI = our instance record
+    KCALL inst_ptr               ; DI = our instance record
     mov bp, di                  ; BP = record for life
 .interval:
     mov ax, [ticks]
@@ -137,32 +155,33 @@ tm_task:
 .spin:
     add word [tm_cnt], 1        ; 32-bit spin counter
     adc word [tm_cnt+2], 0
-    call task_yield
+    KCALL task_yield
     mov ax, [ticks]
     sub ax, [tm_t0]             ; wrap-safe interval check
     cmp ax, TM_INT
     jb .spin
 
-    cmp byte [bp+I_STATE], 2    ; close requested? (once per interval)
+    cmp byte [ds:bp+I_STATE], 2    ; close requested? (once per interval)
     je .die
 
     call tm_sample              ; no lock: computes load, shares, RAM
 
-    call gfx_lock
+    KCALL gfx_lock
     mov bx, [tm_win]
     test word [bx+W_FLAGS], 2   ; re-check under the lock (SPEC.md 14)
     jz .skip
-    call wm_obscured
+    KCALL wm_obscured
     jc .skip
     call tm_update              ; incremental redraw, lock held
 .skip:
-    call gfx_unlock
+    KCALL gfx_unlock
     jmp .interval
 
 .die:
     mov di, bp
-    jmp inst_task_die           ; destroys the window, frees the record,
-                                ; task_exit - never returns
+    jmp far KERNEL_SEG:inst_task_die    ; destroys the window, frees the
+                                ; record, task_exit - never returns, so a far
+                                ; jmp needs no wrapper and leaves no frame
 
 ; -----------------------------------------------------------------------------
 ; tm_sample - one measurement pass: load gauge, history push, per-instance CPU
@@ -520,11 +539,16 @@ tm_sample:
     cmp si, INST_MAX
     jb .rsum
     mov ax, kernel_bss_end      ; kernel text+bss footprint (bare label);
-    add ax, bx                  ; max total 0xA000 + 0x5000 = 61440, no
+    add ax, bx                  ; max total 0xB000 + 0x4E00 = 65024, no
                                 ; 16-bit overflow possible
     add ax, 1023
     mov cl, 10
     shr ax, cl                  ; usedK, rounded up
+    add ax, KLOWFAR_KB          ; + what the kernel keeps OUTSIDE its segment
+                                ; (SPEC.md 2.1): the task stacks, the disk
+                                ; buffers and the far-code blob. Added after
+                                ; the shift because the byte total of all
+                                ; four regions does not fit 16 bits.
     cmp byte [bb_on], 0         ; bill the armed back buffer: exactly 150KB,
     je .nobb                    ; added after the shift because 153600 bytes
     add ax, 150                 ; do not fit 16 bits (SPEC.md 32 / 28)
@@ -567,7 +591,7 @@ tm_sample:
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
-tm_paint:
+tmf_paint:
     push ax
     push bx
     push cx
@@ -576,7 +600,7 @@ tm_paint:
     push di
 
     mov bx, si
-    call wm_content             ; AX = content left, DX = content top
+    KCALL wm_content             ; AX = content left, DX = content top
     mov [tm_cx], ax
     mov [tm_cy], dx
 
@@ -591,7 +615,7 @@ tm_paint:
     add cx, 167
     mov dx, [tm_cy]
     add dx, TM_GF_Y2
-    call gfx_frame
+    KCALL gfx_frame
 
     xor bx, bx                  ; all 160 columns; tm_pos is the sweep gap
 .col:
@@ -617,7 +641,7 @@ tm_paint:
     add cx, 167
     mov dx, [tm_cy]
     add dx, TM_BAR_Y2
-    call gfx_frame
+    KCALL gfx_frame
     call tm_bar
 
     mov byte [gfx_color], CBLACK
@@ -626,7 +650,7 @@ tm_paint:
     mov dx, [tm_cy]
     add dx, TM_HDR_Y
     mov si, tm_s_hdr
-    call font_str
+    KCALL font_str
     call tm_rows
 
     pop di
@@ -635,7 +659,7 @@ tm_paint:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                        ; far body: reached through the tm_paint shim
 
 ; -----------------------------------------------------------------------------
 ; tm_update - periodic incremental redraw (gfx lock held, window visible)
@@ -654,7 +678,7 @@ tm_update:
     push dx
 
     mov bx, [tm_win]
-    call wm_content
+    KCALL wm_content
     mov [tm_cx], ax
     mov [tm_cy], dx
 
@@ -703,7 +727,7 @@ tm_col:
     mov dx, cx
     add dx, TM_GF_Y2 - 1
     sub dx, si
-    call gfx_vline
+    KCALL gfx_vline
 .black:
     or si, si                   ; black: rows 55-v..54 (skip when v=0)
     jz .done
@@ -713,7 +737,7 @@ tm_col:
     sub bx, si
     mov dx, cx
     add dx, TM_GF_Y2 - 1
-    call gfx_vline
+    KCALL gfx_vline
 .done:
     pop si
     pop dx
@@ -741,7 +765,7 @@ tm_gapcol:
     add bx, TM_GF_Y1 + 1
     add dx, TM_GF_Y2 - 1
     mov byte [gfx_color], CWHITE
-    call gfx_vline
+    KCALL gfx_vline
 
     pop dx
     pop bx
@@ -775,7 +799,7 @@ tm_txt_cpu:
     add cx, 167
     mov dx, [tm_cy]
     add dx, TM_CPU_Y + 7
-    call gfx_fill
+    KCALL gfx_fill
 
     mov di, tm_str
     mov si, tm_s_cpu
@@ -787,7 +811,7 @@ tm_txt_cpu:
     mov byte [di], ' '
     inc di
     mov si, tm_s_pre            ; chars 9..19: the live scheduler mode
-    call sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
+    KCALL sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
     or al, al
     jz .mode
     mov si, tm_s_coop
@@ -801,7 +825,7 @@ tm_txt_cpu:
     mov dx, [tm_cy]
     add dx, TM_CPU_Y
     mov si, tm_str
-    call font_str
+    KCALL font_str
 
     pop di
     pop si
@@ -834,7 +858,7 @@ tm_txt_ram:
     add cx, 167
     mov dx, [tm_cy]
     add dx, TM_RAM_Y + 7
-    call gfx_fill
+    KCALL gfx_fill
 
     mov di, tm_str
     mov si, tm_s_ram
@@ -857,7 +881,7 @@ tm_txt_ram:
     mov dx, [tm_cy]
     add dx, TM_RAM_Y
     mov si, tm_str
-    call font_str
+    KCALL font_str
 
     pop di
     pop si
@@ -893,7 +917,7 @@ tm_bar:
     dec cx                      ; x2 = 7 + barw - 1
     mov dx, [tm_cy]
     add dx, TM_BAR_Y2 - 1
-    call gfx_fill
+    KCALL gfx_fill
 .rest:
     cmp si, TM_GW
     jae .done
@@ -907,7 +931,7 @@ tm_bar:
     add cx, 166
     mov dx, [tm_cy]
     add dx, TM_BAR_Y2 - 1
-    call gfx_fill
+    KCALL gfx_fill
 .done:
     pop si
     pop dx
@@ -952,7 +976,7 @@ tm_rows:
     add ax, 6
     mov cx, [tm_cx]
     add cx, 167
-    call gfx_fill
+    KCALL gfx_fill
 
     ; --- build "NAME    ST  nnn%mmmK" in tm_str ------------------------------
     mov di, tm_str
@@ -983,6 +1007,10 @@ tm_rows:
     mov cl, 10                  ; would overflow a 16-bit byte count
     shr ax, cl
     pop cx
+    add ax, KLOWFAR_KB          ; + the stacks, disk buffers and far code the
+                                ; kernel keeps in low memory (SPEC.md 2.1).
+                                ; The same term is in the RAM total above, so
+                                ; the rows still sum to it.
     cmp byte [bb_on], 0         ; bill the armed back buffer to System
     je .sysmem                  ; (SPEC.md 32 / 28)
     add ax, 150
@@ -1070,7 +1098,7 @@ tm_rows:
     mov dx, [tm_rowy]
     push si
     mov si, tm_str
-    call font_str
+    KCALL font_str
     pop si
 
     inc si
@@ -1113,7 +1141,7 @@ tm_memcol:
     push cx
     or ax, ax
     jz .none
-    add ax, 1023                ; round up; AX <= 0xA000 here, no overflow
+    add ax, 1023                ; round up; AX <= 0xB000 here, no overflow
     mov cl, 10
     shr ax, cl
 .kb:

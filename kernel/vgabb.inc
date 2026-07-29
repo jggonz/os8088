@@ -324,8 +324,10 @@ gfx_flush:
     sub di, bp
     dec bx
     jnz .row
-    push ss                     ; SS = KERNEL_SEG always (tiny model)
-    pop ds
+    push cs                     ; back to kernel data. NOT `push ss / pop ds`:
+    pop ds                      ; SS is LOW_SEG now (SPEC.md 2.1). CS is the
+                                ; kernel segment for everything in .text, and
+                                ; this costs no register.
     pop si
     pop bx
     add cx, BB_PLANE_PARA
