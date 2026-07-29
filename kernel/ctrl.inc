@@ -105,6 +105,7 @@ CP_ISTRIDE  equ 8
 cp_items:
     dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
     dw cp_s_disp,  cp_disp_paint,  cp_disp_click,  0
+    dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0
 cp_items_end:
 CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
 
@@ -118,6 +119,52 @@ cp_s_dbof:  db 'Direct to screen', 0
 cp_s_dbon:  db 'Double buffered', 0
 cp_s_dcap:  db 'Smoother; costs 150K', 0
 cp_s_dna:   db 'Needs 500K of memory', 0
+
+; --- Sound page (SPEC.md 31.4/34) --------------------------------------------
+cp_s_snd:   db 'Sound', 0       ; list name AND the page heading
+cp_s_sspk:  db 'Speaker', 0     ; tone route, row 0
+cp_s_sopl:  db 'AdLib', 0       ; tone route, row 1 (arms in Phase 3)
+cp_s_sexc:  db 'Exclusive clips', 0
+cp_s_stst:  db 'Test', 0
+cp_s_sano:  db 'AdLib: no', 0   ; caption, read live from the driver table
+cp_s_sayes: db 'AdLib: yes', 0
+cp_s_sfrz:  db 'Clips freeze GUI', 0   ; the trade, stated honestly (34.4)
+cp_s_soff:  db 'Clips: off', 0
+
+; The built-in test clip's waveform: one 8-sample period of a 1 kHz sine
+; (8-bit unsigned), replicated into SND_SEG by cp_sndclip and played at
+; 8,000 Hz through slot 0x0080's target - which is what feeds the
+; emitted/resync counters the caption below reports (SPEC.md 31.4).
+cp_snd_pat: db 128, 218, 255, 218, 128, 38, 1, 38
+
+cp_sndbtn_f: db 0               ; Test button look: 0 normal / 1 pressed
+cp_sndbuf:  times 16 db 0       ; counters caption text ('E:nnnnn R:nnnnn');
+                                ; .text data, not .bss - the panel stays
+                                ; boot-clean with nothing to zero (SPEC.md 31)
+
+; Sound page geometry, PANE-relative. Three control rows at a tighter
+; 16px pitch than the two-row pages (the page holds more), the Test
+; button beside them, two caption rows at the bottom.
+CPS_R0Y   equ 20                ; tone route row 0 glyph top (Speaker)
+CPS_ROWH  equ 16                ; control row pitch
+CPS_R1Y   equ CPS_R0Y + CPS_ROWH        ; 36: row 1 glyph top (AdLib)
+CPS_CBY   equ CPS_R1Y + CPS_ROWH        ; 52: checkbox glyph top
+CPS_BTNX  equ 150               ; Test button, pane-relative rect
+CPS_BTNY  equ 20
+CPS_BTNW  equ 52
+CPS_BTNH  equ 16
+CPS_CAP1Y equ 74                ; status caption row
+CPS_CAP2Y equ 88                ; counters caption row
+CPS_CAP2X equ 92                ; caption 1's second column (the clip note)
+CPS_TESTN equ 12000             ; test clip length: ~1.5s at 8,000 Hz
+CPS_TESTOFF equ 0x3000          ; where it stages: the SND_SEG staging
+                                ; pool's base (SPEC.md 2.2) - transient
+                                ; kernel use, the allocator arrives Phase 4
+; hit bands: generous and contiguous like the Scheduler page's (31.2)
+CPS_B0Y1  equ CPS_R0Y - 4               ; 16: route row 0 top
+CPS_B0Y2  equ CPS_R0Y + CP_GW - 1       ; 31: row 0 bottom = row 1 top - 1
+CPS_B1Y2  equ CPS_R1Y + CP_GW - 1       ; 47: route row 1 bottom
+CPS_CBY2  equ CPS_CBY + CP_GW - 1       ; 63: checkbox band bottom
 
 ; -----------------------------------------------------------------------------
 ; Everything above this line is DATA and stays in the kernel segment, because
@@ -728,6 +775,474 @@ cp_disp_click:
     pop ax
     ret
 
+; =============================================================================
+; Sound page (SPEC.md 31.4/34) - tone route, the exclusive-clips policy, a
+; Test button, and the emitted/resync counters caption (the Phase 2 gate's
+; instrument, SPEC.md 34.4).
+;
+; Everything is read live at paint time - the live tone route from
+; snd_tone_route, presence from the driver table, the policy byte and the
+; counters through DS - so the page keeps no state of its own and can
+; never disagree with the router. The AdLib row obeys the bb_avail idiom
+; three layers deep (SPEC.md 31.4): snd_route_set refuses an absent
+; driver, the caption says 'AdLib: no', and the click is ignored outright.
+;
+; The Test button is the one sanctioned BLOCKING page click (SPEC.md 31.4):
+; it synthesises the built-in clip into SND_SEG and plays it through slot
+; 0x0080's target, which freezes the desktop for the clip - exactly the
+; trade the caption discloses - and is what makes the counters caption a
+; real instrument rather than decoration.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; cp_snd_paint - the Sound page (page contract of SPEC.md 31.1)
+; in:  DI = pane left, BP = pane top; gfx lock held; entry pen is CWHITE
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+cp_snd_paint:
+    push ax
+    push cx
+    push dx
+    push si
+
+    mov byte [gfx_color], CBLACK ; entry pen is CWHITE (cp_page's erase)
+
+    mov si, cp_s_snd            ; heading, same string as the list row
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PHY
+    KCALL font_str
+
+    mov si, cp_s_sspk           ; route row 0 label
+    mov cx, di
+    add cx, CP_PLX
+    mov dx, bp
+    add dx, CPS_R0Y + CP_PLDY
+    KCALL font_str
+
+    mov si, cp_s_sopl           ; route row 1 label
+    mov cx, di
+    add cx, CP_PLX
+    mov dx, bp
+    add dx, CPS_R1Y + CP_PLDY
+    KCALL font_str
+
+    mov si, cp_s_sexc           ; checkbox label
+    mov cx, di
+    add cx, CP_PLX
+    mov dx, bp
+    add dx, CPS_CBY + CP_PLDY
+    KCALL font_str
+
+    call cp_sndradios           ; route glyphs, filled per the live route
+    call cp_sndchk              ; the policy checkbox
+    mov al, 0
+    call cp_sndbtn              ; the Test button, released look
+    call cp_sndcap1             ; 'AdLib: yes/no' + the clip trade
+    call cp_sndcap2             ; the emitted/resync counters
+
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_snd_click - a click inside the Sound page
+;
+; in:  DI = pane left, BP = pane top, CX = pane-relative x, DX = pane-
+;      relative y; gfx lock held by the caller
+; out: nothing
+; clobbers: nothing (flags only)
+;
+; Comparisons SIGNED throughout (SPEC.md 31.2). The pane splits at x =
+; CPS_BTNX: left of it the three control bands (y decides, the gutter's
+; negative x included); at or right of it only the Test button rect. A
+; click on the live route row does nothing; the AdLib row is ignored while
+; no OPL2 is present; the checkbox toggles the policy byte and repaints
+; its glyph + the caption stating the trade. The Test click BLOCKS for the
+; clip (sanctioned, SPEC.md 31.4), then repaints the counters caption -
+; the screendump-readable observable the Phase 2 gate reads.
+; -----------------------------------------------------------------------------
+cp_snd_click:
+    push ax
+    push bx
+    push si
+
+    cmp cx, CPS_BTNX
+    jge .btncol
+
+    cmp dx, CPS_B0Y1            ; above every band: nothing
+    jl .done
+    cmp dx, CPS_B0Y2
+    jle .spk
+    cmp dx, CPS_B1Y2
+    jle .opl
+    cmp dx, CPS_CBY2
+    jg .done
+
+    xor byte [snd_excl_ok], 1   ; the checkbox: flip the policy byte
+    call cp_sndchk              ; (SPEC.md 34.4) and say what it means
+    call cp_sndcap1
+    jmp .done
+
+.spk:
+    KCALL snd_tone_route         ; BL = the live sink
+    cmp bl, DRV_SPK
+    je .done                    ; already the route: change nothing
+    mov al, DRV_SPK
+    mov bl, SND_TIER_TONE
+    KCALL snd_route_set          ; cannot refuse: the speaker is always there
+    call cp_sndradios
+    jmp .done
+
+.opl:
+    test byte [snd_drv + SDRV_SIZE*DRV_OPL + SDRV_FLAGS], 1
+    jz .done                    ; no OPL2: click ignored outright (31.4)
+    KCALL snd_tone_route
+    cmp bl, DRV_OPL
+    je .done
+    mov al, DRV_OPL
+    mov bl, SND_TIER_TONE
+    KCALL snd_route_set          ; presence just checked: stores
+    call cp_sndradios
+    jmp .done
+
+.btncol:
+    cmp cx, CPS_BTNX + CPS_BTNW - 1
+    jg .done
+    cmp dx, CPS_BTNY
+    jl .done
+    cmp dx, CPS_BTNY + CPS_BTNH - 1
+    jg .done
+    mov al, 1                   ; pressed look for the clip's duration -
+    call cp_sndbtn              ; the desktop freezes with it (34.4)
+    call cp_sndclip             ; synthesise + play; BLOCKS for the clip
+    mov al, 0
+    call cp_sndbtn
+    call cp_sndcap2             ; the counters, freshly read
+
+.done:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_sndradios - the tone-route glyph pair, filled per the LIVE route
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing
+; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
+; -----------------------------------------------------------------------------
+cp_sndradios:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    KCALL snd_tone_route         ; BL = the live sink (SI clobber saved)
+    mov byte [gfx_color], CBLACK
+    mov cx, di
+    add cx, CP_PGX
+    mov dx, bp
+    add dx, CPS_R0Y
+
+    mov si, cp_radio_on         ; --- row 0: Speaker ---
+    cmp bl, DRV_OPL
+    jne .r0
+    mov si, cp_radio_off
+.r0:
+    call cp_glyph
+
+    add dx, CPS_ROWH            ; --- row 1: AdLib ---
+    mov si, cp_radio_off
+    cmp bl, DRV_OPL
+    jne .r1
+    mov si, cp_radio_on
+.r1:
+    call cp_glyph
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_sndchk - the exclusive-clips checkbox glyph, from [snd_excl_ok]
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing
+; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
+; -----------------------------------------------------------------------------
+cp_sndchk:
+    push ax
+    push cx
+    push dx
+    push si
+    mov byte [gfx_color], CBLACK
+    mov cx, di
+    add cx, CP_PGX
+    mov dx, bp
+    add dx, CPS_CBY
+    mov si, cp_chk_off
+    cmp byte [snd_excl_ok], 0
+    je .draw
+    mov si, cp_chk_on
+.draw:
+    call cp_glyph
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_sndbtn - draw the Test button
+; in:  AL = 0 released / 1 pressed; DI = pane left, BP = pane top; lock held
+; out: nothing
+; clobbers: nothing (flags only; leaves [gfx_color] = the label pen)
+; -----------------------------------------------------------------------------
+cp_sndbtn:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov [cp_sndbtn_f], al
+    mov byte [gfx_color], CBLACK ; the frame is always black
+    mov ax, di
+    add ax, CPS_BTNX
+    mov bx, bp
+    add bx, CPS_BTNY
+    mov cx, di
+    add cx, CPS_BTNX + CPS_BTNW - 1
+    mov dx, bp
+    add dx, CPS_BTNY + CPS_BTNH - 1
+    KCALL gfx_frame
+
+    mov byte [gfx_color], CWHITE ; interior: white, inverted while pressed
+    cmp byte [cp_sndbtn_f], 0
+    je .fill
+    mov byte [gfx_color], CBLACK
+.fill:
+    inc ax
+    inc bx
+    dec cx
+    dec dx
+    KCALL gfx_fill
+
+    mov byte [gfx_color], CBLACK ; label: the interior's opposite
+    cmp byte [cp_sndbtn_f], 0
+    je .lbl
+    mov byte [gfx_color], CWHITE
+.lbl:
+    mov si, cp_s_stst
+    mov cx, di
+    add cx, CPS_BTNX + 10       ; 'Test' = 32px, centred in the 52px box
+    mov dx, bp
+    add dx, CPS_BTNY + 4
+    KCALL font_str
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_sndcap1 - status caption: AdLib presence + what clips cost
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+cp_sndcap1:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov byte [gfx_color], CWHITE ; erase the caption row first, so the
+    mov ax, di                   ; checkbox toggle redraws in place
+    mov bx, bp
+    add bx, CPS_CAP1Y
+    mov cx, di
+    add cx, CP_CW - CP_RX - 1
+    mov dx, bp
+    add dx, CPS_CAP1Y + 9
+    KCALL gfx_fill
+
+    mov byte [gfx_color], CBLACK
+    mov si, cp_s_sano           ; presence, read live from the table -
+    test byte [snd_drv + SDRV_SIZE*DRV_OPL + SDRV_FLAGS], 1
+    jz .have                    ; the caption layer of the bb_avail idiom
+    mov si, cp_s_sayes
+.have:
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CPS_CAP1Y
+    KCALL font_str
+
+    mov si, cp_s_sfrz           ; the trade, stated honestly (34.4)...
+    cmp byte [snd_excl_ok], 0
+    jne .frz
+    mov si, cp_s_soff           ; ...or that play now returns err 3
+.frz:
+    mov cx, di
+    add cx, CPS_CAP2X
+    KCALL font_str              ; same DX: one text row, two columns
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_sndcap2 - the counters caption: 'E:<emitted> R:<resync>'
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing
+; clobbers: nothing (flags only)
+; The Phase 2 gate's instrument (SPEC.md 34.4): after a Test clip the test
+; asserts emitted ~= clip length and resync ~= 0 from a screendump.
+; -----------------------------------------------------------------------------
+cp_sndcap2:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov bx, cp_sndbuf           ; format into the .text scratch line
+    mov byte [bx], 'E'
+    inc bx
+    mov byte [bx], ':'
+    inc bx
+    mov ax, [snd_pcm_emitted]
+    call cp_putu16
+    mov byte [bx], ' '
+    inc bx
+    mov byte [bx], 'R'
+    inc bx
+    mov byte [bx], ':'
+    inc bx
+    mov ax, [snd_pcm_resync]
+    call cp_putu16
+    mov byte [bx], 0
+
+    mov byte [gfx_color], CWHITE ; erase, then draw - the redraw path
+    mov ax, di                   ; after every Test click
+    mov bx, bp
+    add bx, CPS_CAP2Y
+    mov cx, di
+    add cx, CP_CW - CP_RX - 1
+    mov dx, bp
+    add dx, CPS_CAP2Y + 9
+    KCALL gfx_fill
+
+    mov byte [gfx_color], CBLACK
+    mov si, cp_sndbuf
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CPS_CAP2Y
+    KCALL font_str
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_putu16 - unsigned 16-bit value to decimal text, no padding
+; in:  AX = value, BX -> destination (DS)
+; out: BX advanced past the last digit written
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+cp_putu16:
+    push ax
+    push cx
+    push dx
+    push si
+    mov si, 10
+    xor cx, cx
+.div:
+    xor dx, dx
+    div si                      ; AX = quotient, DX = digit
+    push dx
+    inc cx
+    or ax, ax
+    jnz .div
+.emit:
+    pop dx
+    add dl, '0'
+    mov [bx], dl
+    inc bx
+    loop .emit
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_sndclip - synthesise the built-in test clip into SND_SEG and play it
+; in:  nothing (DI/BP unused); gfx lock held by the caller
+; out: nothing; [snd_pcm_emitted]/[snd_pcm_resync] hold the clip's tale
+; clobbers: nothing (flags only)
+;
+; Replicates the 8-sample 1 kHz sine period into the SND_SEG staging area
+; (transient kernel use of the pool base, SPEC.md 2.2 - the allocator
+; arrives in Phase 4 and nothing else touches the segment yet), then plays
+; it at 8,000 Hz (N = 149, the default carrier) through slot 0x0080's
+; target - the same path a package takes, ES pointing away from DS and
+; all. The result code is deliberately ignored: the counters caption
+; reports what actually happened, which is the point of the button.
+; -----------------------------------------------------------------------------
+cp_sndclip:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    push es
+
+    mov ax, SND_SEG
+    mov es, ax
+    mov di, CPS_TESTOFF
+    mov cx, CPS_TESTN / 8
+    cld
+.fill:
+    mov si, cp_snd_pat          ; DS:SI (kernel .text) -> ES:DI (SND_SEG)
+    movsw
+    movsw
+    movsw
+    movsw
+    loop .fill
+
+    mov si, CPS_TESTOFF
+    mov cx, CPS_TESTN
+    mov dx, 8000
+    KCALL osapi_snd_play         ; BLOCKS for the clip; AX = 0/err ignored
+
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; cp_glyph - blit one 12x12 radio bitmap over a white box
 ;
@@ -827,3 +1342,33 @@ cp_radio_on:
     dw 0x4020                   ;  9  .#........#.
     dw 0x30C0                   ; 10  ..##....##..
     dw 0x0F00                   ; 11  ....####....
+
+; cp_chk_off - open square (the Sound page's unchecked box, SPEC.md 31.4)
+cp_chk_off:
+    dw 0xFFF0                   ;  0  ############
+    dw 0x8010                   ;  1  #..........#
+    dw 0x8010                   ;  2  #..........#
+    dw 0x8010                   ;  3  #..........#
+    dw 0x8010                   ;  4  #..........#
+    dw 0x8010                   ;  5  #..........#
+    dw 0x8010                   ;  6  #..........#
+    dw 0x8010                   ;  7  #..........#
+    dw 0x8010                   ;  8  #..........#
+    dw 0x8010                   ;  9  #..........#
+    dw 0x8010                   ; 10  #..........#
+    dw 0xFFF0                   ; 11  ############
+
+; cp_chk_on - the same square with an X through it (checked)
+cp_chk_on:
+    dw 0xFFF0                   ;  0  ############
+    dw 0xC030                   ;  1  ##........##
+    dw 0xA050                   ;  2  #.#......#.#
+    dw 0x9090                   ;  3  #..#....#..#
+    dw 0x8910                   ;  4  #...#..#...#
+    dw 0x8610                   ;  5  #....##....#
+    dw 0x8610                   ;  6  #....##....#
+    dw 0x8910                   ;  7  #...#..#...#
+    dw 0x9090                   ;  8  #..#....#..#
+    dw 0xA050                   ;  9  #.#......#.#
+    dw 0xC030                   ; 10  ##........##
+    dw 0xFFF0                   ; 11  ############

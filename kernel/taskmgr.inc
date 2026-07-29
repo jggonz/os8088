@@ -591,6 +591,8 @@ tm_sample:
                                 ; buffers and the far-code blob. Added after
                                 ; the shift because the byte total of all
                                 ; four regions does not fit 16 bits.
+    add ax, SND_SEG_KB          ; + the sound segment (SPEC.md 2.2): claimed
+                                ; whole by the sound layer since Phase 2
     cmp byte [bb_on], 0         ; bill the armed back buffer: exactly 150KB,
     je .nobb                    ; added after the shift because 153600 bytes
     add ax, 150                 ; do not fit 16 bits (SPEC.md 32 / 28)
@@ -1709,6 +1711,8 @@ tm_rows:
                                 ; kernel keeps in low memory (SPEC.md 2.1).
                                 ; The same term is in the RAM total above, so
                                 ; the rows still sum to it.
+    add ax, SND_SEG_KB          ; + the sound segment (SPEC.md 2.2), also in
+                                ; the total above - the rows still sum
     cmp byte [bb_on], 0         ; bill the armed back buffer to System
     je .sysmem                  ; (SPEC.md 32 / 28)
     add ax, 150

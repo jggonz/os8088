@@ -66,6 +66,13 @@ STK0_TOP    equ 0x7FFE          ; task 0's stack top (grows down towards the
                                 ; top of .lowbss; the assertion at the end of
                                 ; this file keeps 8KB of clearance)
 
+; sound (SPEC.md 34, claimed in Phase 2)
+SND_SEG     equ 0x3000          ; sound buffers: linear 0x30000..0x3FFFF, the
+                                ; last free 64KB block on the 256KB floor -
+                                ; reached via ES only, never DS (SPEC.md 2.2)
+SND_SEG_KB  equ 64              ; what it adds to the Task Manager RAM figure
+                                ; (SPEC.md 2.2/28, the KLOWFAR_KB idiom)
+
 ; double buffering (SPEC.md 32)
 BB_SEG        equ 0x4000        ; back buffer base segment (plane 0)
 BB_PLANE_PARA equ 0x960         ; paragraphs per plane (0x9600 = 480 rows x 80)

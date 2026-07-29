@@ -132,3 +132,6 @@ far_init:
     FARK task_yield             ; the fake int frame it builds takes CS from
                                 ; the wrapper, i.e. KERNEL_SEG, so a far
                                 ; caller resumes correctly through the retf
+    FARK snd_tone_route         ; ctrl.inc (Sound page, SPEC.md 31.4)
+    FARK snd_route_set
+    FARK osapi_snd_play

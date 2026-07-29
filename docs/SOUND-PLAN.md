@@ -521,6 +521,16 @@ speaker needs no probe; the OPL2/SB probes land with their phases), and
 `snd_init` itself is a `.text` routine like every other kmain init. Guard 1
 now 26,691 B free, guard 2 25,919 B free.
 
+Phase 2 measured at its gate (§15.1 recipe, 2026-07-29): totals now
+**15,893 B .text, 3,561 B .bss, 4,828 B .fartext** — guard 1 **25,602 B
+free**, guard 2 **24,335 B free** (Phase 2 cost ≈ 1,089 B against guard 1,
+≈ 1,584 B against guard 2 — within the ~600/~310/~950 estimate row).
+Counters in QEMU at N = 149: a full 12,000-sample Test clip reads
+**E:12000 R:2–4**; a mid-clip click-abort at ~0.55 s reads E:4389 with the
+page quiescent after (the drain held — no click-through). The **floor
+gate** — the same counters read on 86Box at N = 149 — is still owed; the
+default rate stays 8,008 Hz until that read says otherwise.
+
 Post-all-phases slack ≈ 23.6 KB (guard 1) / ≈ 20.4 KB (guard 2) — comfortable even if
 every estimate misses by 2×. `.lowbss` untouched (the refill task's stack is a normal
 dynamic spawn). SND_SEG folds into the Task Manager's RAM figure via the `KLOWFAR_KB`
@@ -571,15 +581,22 @@ kernel image changes even when nothing sound-side ships on disk).
   sch_lock window, resync rule, release-folding click-abort + event drain), far xlat
   builder, slot 0x0080 live, CP Sound page (route radio, excl checkbox, Test button),
   `snd_excl_ok` policy, `snd_pcm_emitted`/`snd_pcm_resync` debug counters.
-  *Test*: a scratch key binding (or test package) synthesises a 1 kHz sine in a grant
-  and plays at 8,008 Hz; sndcheck asserts ~1 kHz dominant + carrier present (QEMU
-  models mode-0 PWM imperfectly, so this is a smoke check, not the fidelity gate);
-  the counters are the load-bearing check: a screendump-readable field (CP page
+  *Test*: the CP Test button synthesises a 1.5 s 1 kHz sine into SND_SEG and plays
+  it at 8,000 Hz (N = 149) through slot 0x0080. **Measured QEMU reality (11.0.2,
+  worse than "imperfectly")**: the pcspk backend emits *zero* frames while ch2 is
+  in mode 0 — the wav capture stays empty for the whole clip, so no WAV assertion
+  about the clip is possible in QEMU at all. The WAV harness instead proves the
+  *edges*: `sndcheck 880 --exclusive` on a run that plays a clip and then triggers
+  the refused-close beep asserts (a) ch2 came back to tone-idle after PWM — the
+  mode-3 beep still sounds — and (b) nothing else, boot included, ever opened the
+  speaker. PWM fidelity by ear is 86Box/real-hardware work (the floor gate).
+  The counters are the load-bearing check: a screendump-readable field (CP page
   caption) shows emitted/resync counts and the test asserts emitted ≈ clip length,
   resync ≈ 0 in QEMU. **Floor gate**: the same counters read on `make xt` (86Box) —
   if resyncs are material at N=149 on the XT, the default rate drops to ~6 kHz and
   SPEC records the measured figure; fidelity signoff is by ear there. Mid-clip QMP
-  `mouse_button 1` aborts — sndcheck asserts truncated activity AND the screen shows
+  `mouse_button 1` aborts — the counters caption shows the truncated emit count (the
+  WAV cannot show truncation: it never held the clip) AND the screen shows
   no click-through action; after playback QMP-drive the mouse to prove the GUI
   resumed; a screendumped Clock window proves ticks weren't lost; CP page driven by
   `mouse.py` down/to/up, screendump-verified.

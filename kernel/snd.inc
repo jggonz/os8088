@@ -3,10 +3,19 @@
 ;
 ; The sound core (SPEC.md 34): driver table, capability bits, per-tier route
 ; selection, the tone tier's owner/priority/generation router, the PC speaker
-; tone driver, snd_tick (the one scheduler touch-point), and the five os8088
-; API slot targets at 0x0078..0x0088. Phase 1 of docs/SOUND-PLAN.md: tones
-; only - the PCM, FM and STREAM surfaces ship as clean error stubs so the
-; jump-table ABI is whole from day one.
+; driver (tone + PWM exclusive clips), snd_tick (the one scheduler
+; touch-point), and the five os8088 API slot targets at 0x0078..0x0088.
+; Phases 1-2 of docs/SOUND-PLAN.md: tones and speaker PCM - the FM and
+; STREAM surfaces ship as clean error stubs so the jump-table ABI is whole
+; from day one.
+;
+; Speaker PCM (SPEC.md 34.4): ch2 in mode 0 lobyte-only is the modulator -
+; one `out 42h, AL` per sample emits a low pulse of AL PIT-cycles and the
+; cone integrates the train; the pacer READS the scheduler's ch0 by
+; latching, one atomic latch+read triple per poll (SPEC.md 34.1, binding),
+; and ch0 is never written. The clip runs to completion on the caller's
+; task under sch_lock (disk_read's contract, SPEC.md 7) with IF=1; a
+; mouse click always aborts it (the release-folding baseline below).
 ;
 ; Concurrency (SPEC.md 34.3, binding): every grant, steal and release updates
 ; the owner record (generation, priority, expiry) AND its ports inside one
@@ -78,8 +87,10 @@ snd_s_sb:      db 'Sound Blaster', 0
 snd_drv:                        ; row 0: PC speaker - always present, as data
     db SND_CAP_TONE | SND_CAP_PCM_EXCL
     db 1                        ; present
-    dw spk_tone                 ; tone op (SDRV_PCM arrives in Phase 2)
-    dw 0, 0, 0
+    dw spk_tone                 ; tone op
+    dw 0                        ; no FM
+    dw spk_pcm_op               ; PCM-out op (SPEC.md 34.4, Phase 2)
+    dw 0                        ; no PCM-in
     dw 0                        ; no probe needed
     dw snd_s_spk
     dw 0
@@ -163,6 +174,200 @@ spk_tone:
     ret
 
 ; =============================================================================
+; The PC speaker PWM clip driver (SPEC.md 34.4, Phase 2)
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; spk_pcm_op - the speaker row's PCM-out op (SPEC.md 34.2)
+;
+; in:       AL = verb: 0 start (ES:SI = 8-bit unsigned mono, CX = count,
+;           DX = rate Hz; [snd_pcm_n] already validated and the ch2 grant
+;           already taken by the router), 1 stop, 2 status
+; out:      verb 0: CF = 0 clip completed, CF = 1 aborted with AL = 1 (a
+;           mouse click) or 2 (the snd_abort flag); AX clobbered.
+;           verb 1: nothing (flags). verb 2: AX = samples emitted so far.
+; clobbers: verb 0: AX; others nothing else
+;
+; Verb 0 is run-to-completion - the exclusive-clip contract (SPEC.md 34.2):
+; it returns when the clip ends or aborts, never before.
+; -----------------------------------------------------------------------------
+spk_pcm_op:
+    cmp al, 1
+    jb spk_pcm_run              ; verb 0: the clip loop below
+    je .stop
+    mov ax, [snd_pcm_emitted]   ; verb 2: status
+    ret
+.stop:
+    call snd_stop               ; verb 1: flag the running clip down
+    ret
+
+; -----------------------------------------------------------------------------
+; spk_pcm_run - play one PWM clip, run-to-completion (SPEC.md 34.4, binding)
+;
+; in:       ES:SI = samples, CX = count, [snd_pcm_n] = N (74..255),
+;           [snd_xlat] built for this N, [snd_btn0] latched, ch2 granted
+;           (snd_ch2mode = 2, snd_pcm_busy = 1) by osapi_snd_play
+; out:      CF = 0 completed; CF = 1 aborted, AL = 1 click / 2 flag.
+;           The release - ports back to tone-idle AND the ownership bytes -
+;           happens in spk_pcm_idle's single IF=0 window before returning.
+; clobbers: AX
+;
+; Modulator: ch2 mode 0 lobyte-only (90h -> 43h once), 61h bits 0-1 held
+; high; one `out 42h, AL` per sample. Pacer: latch ch0 (0 -> 43h), read two
+; bytes, negate -> a free-running 16-bit phase at 1,193,182 Hz; deadlines
+; advance by N and the compare is wrap-safe signed subtraction. Every
+; latch+read triple sits in its own pushf/cli..popf window (SPEC.md 34.1,
+; binding - the 8254 ignores a second latch while one is unread), IF = 1
+; between polls. THE RESYNC RULE: a sample late by more than one period
+; resets the deadline to now and drops samples - inc [snd_pcm_resync] -
+; never burst catch-up writes, so a long interrupt becomes dropped samples,
+; never a buzz. snd_pcm_emitted counts every pulse; both counters are the
+; Phase 2 gate's instrument, surfaced on the Control Panel caption.
+;
+; Scheduling: executes on the caller's task with IF=1 throughout, inside
+; inc/dec [sch_lock] - the second sanctioned raiser (SPEC.md 7), with
+; exactly disk_read's meaning: ticks advance, the BIOS chain feeds the
+; floppy motor, sch_account and snd_tick run, sleepers mark ready; only
+; involuntary switching pauses. The mouse ISR keeps mouse_x/y/btn fresh,
+; which is what the abort baseline reads.
+;
+; Abort - a click always skips the clip: each emitted sample first FOLDS
+; RELEASES INTO THE BASELINE (mov al,[mouse_btn] / and [snd_btn0],al), then
+; a bit set now but clear in the baseline aborts. The fold is load-bearing:
+; clips start from W_ONCLICK handlers - dispatched on EVT_MDOWN with the
+; button still held - so the baseline starts with bit 0 set; the release
+; retires it and the next press differs. [snd_abort] (snd_stop /
+; snd_release_inst) is checked in the same window. No code in mou_isr.
+; -----------------------------------------------------------------------------
+spk_pcm_run:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    inc byte [sch_lock]         ; the clip owns the CPU (SPEC.md 34.4/7)
+    cld                         ; lodsb below runs forward
+
+    pushf                       ; ch2 -> mode 0 lobyte-only; gate + data
+    cli                         ; high. 61h is RMW under IF=0 - the upper
+    mov al, 0x90                ; bits belong to the XT's keyboard/parity
+    out 0x43, al                ; logic (SPEC.md 34.1)
+    in al, 0x61
+    or al, 0x03
+    out 0x61, al
+    popf
+
+    mov bp, [snd_pcm_n]         ; BP = N, PIT-cycles per sample (a value,
+                                ; never a [bp] operand - SS != DS)
+    mov bx, snd_xlat            ; BX = the rescale table, for xlat
+    jcxz .done                  ; zero samples: restore idle and report ok
+
+    pushf                       ; prime the deadline: one atomic ch0
+    cli                         ; latch+read triple (SPEC.md 34.1, binding)
+    mov al, 0
+    out 0x43, al
+    in al, 0x40
+    mov dl, al
+    in al, 0x40
+    mov dh, al
+    popf
+    neg dx                      ; DX = phase; first sample is due at once
+    mov di, dx                  ; DI = deadline
+
+.next:
+    es lodsb                    ; AL = sample from ES:SI (SPEC.md 20.3)
+    xlat                        ; AL -> 1..N-1, pre-clamped by the table
+    mov [snd_pcm_smp], al       ; park it across the pacer polls
+.wait:
+    pushf                       ; } one atomic ch0 latch+read triple
+    cli                         ; } (SPEC.md 34.1, binding)
+    mov al, 0
+    out 0x43, al
+    in al, 0x40
+    mov dl, al
+    in al, 0x40
+    mov dh, al
+    popf                        ; IF = 1 between polls
+    neg dx                      ; DX = phase, incrementing at 1,193,182 Hz
+    mov ax, dx
+    sub ax, di                  ; wrap-safe signed: phase - deadline
+    js .wait                    ; early: poll again
+    cmp ax, bp                  ; late by more than one period?
+    jbe .emit
+    mov di, dx                  ; RESYNC: drop samples, never a burst
+    inc word [snd_pcm_resync]
+.emit:
+    mov al, [snd_pcm_smp]
+    out 0x42, al                ; the pulse: AL PIT-cycles low
+    add di, bp                  ; next deadline
+    inc word [snd_pcm_emitted]
+    mov al, [mouse_btn]         ; abort checks, emit path only: FOLD
+    and [snd_btn0], al          ; RELEASES INTO THE BASELINE first...
+    mov ah, [snd_btn0]
+    not ah
+    and al, ah                  ; ...then: pressed now, not in the baseline?
+    jnz .click
+    cmp byte [snd_abort], 0     ; snd_stop / snd_release_inst
+    jne .flag
+    loop .next
+
+.done:
+    call spk_pcm_idle           ; ports + ownership, one IF=0 window
+    dec byte [sch_lock]
+    clc
+    jmp .out
+.click:
+    call spk_pcm_idle
+    dec byte [sch_lock]
+    mov al, 1                   ; aborted by a mouse click
+    stc
+    jmp .out
+.flag:
+    call spk_pcm_idle
+    dec byte [sch_lock]
+    mov al, 2                   ; aborted by the flag
+    stc
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; spk_pcm_idle - restore ch2 to tone-idle and release the PWM grant
+;
+; in:       nothing
+; out:      nothing; ch2 gate low, mode 3 latched, snd_ch2mode = 0,
+;           snd_pcm_busy = 0
+; clobbers: nothing (flags)
+;
+; The whole release - the ports AND the ownership record - sits in a single
+; pushf/cli..popf window (SPEC.md 34.3, binding: a release is one unit, so
+; a tick can never see idle ports with a still-armed mode byte or the
+; reverse). The bare mode-3 control word leaves ch2 programmed but silent,
+; awaiting a divisor from the next spk_tone; the gate is already low.
+; -----------------------------------------------------------------------------
+spk_pcm_idle:
+    push ax
+    pushf
+    cli
+    in al, 0x61                 ; gate + speaker data low, upper bits kept
+    and al, 0xFC
+    out 0x61, al
+    mov al, 0xB6                ; ch2 back to mode-3 idle (SPEC.md 34.4)
+    out 0x43, al
+    mov byte [snd_ch2mode], 0
+    mov byte [snd_pcm_busy], 0
+    popf
+    pop ax
+    ret
+
+; =============================================================================
 ; Route selection (SPEC.md 34.2): policy is data, not code
 ; =============================================================================
 
@@ -224,6 +429,100 @@ snd_tone_route:
 .done:
     pop cx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; snd_pcm_route - resolve the PCM_EXCL tier's sink (SPEC.md 34.2)
+;
+; out: CF = 0, BL = driver index, DI = its snd_drv row - the first PRESENT
+;      driver with SND_CAP_PCM_EXCL and a PCM op, the snd_route override
+;      checked before the preference list; CF = 1 = no PCM sink at all
+; clobbers: nothing else (flags)
+;
+; Returns the row in DI, not SI, because the play path holds its sample
+; pointer in SI.
+; -----------------------------------------------------------------------------
+snd_pcm_route:
+    push ax
+    push si
+    mov bl, [snd_route + SND_TIER_PCM]
+    cmp bl, 0FFh
+    je .auto
+    call snd_pcm_row
+    jnc .done                   ; pinned to a usable sink: use it
+.auto:
+    mov si, snd_pref_pcm
+.scan:
+    mov bl, [si]
+    inc si
+    cmp bl, 0FFh
+    je .none                    ; list exhausted: no PCM sink
+    push si
+    call snd_pcm_row
+    pop si
+    jc .scan
+.done:
+    pop si                      ; CF = 0 from snd_pcm_row survives the pops
+    pop ax
+    ret
+.none:
+    stc
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; snd_pcm_row - is driver row BL a usable PCM_EXCL sink? (internal)
+; in:  BL = driver index
+; out: CF = 0 and DI = row ptr if present with the cap and an op, else CF = 1
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+snd_pcm_row:
+    push si
+    call snd_drv_row            ; SI = row
+    mov di, si
+    pop si
+    test byte [di+SDRV_FLAGS], 1
+    jz .no
+    test byte [di+SDRV_CAPS], SND_CAP_PCM_EXCL
+    jz .no
+    cmp word [di+SDRV_PCM], 0
+    je .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; snd_route_set - pin (or unpin) a tier's route override (SPEC.md 34.2)
+;
+; in:       BL = tier (SND_TIER_*), AL = driver row index, or 0FFh = auto
+; out:      CF = 0 stored; CF = 1 refused - the named driver is absent.
+;           This is the setter layer of the bb_avail idiom (SPEC.md 31.4):
+;           the Control Panel's caption and click are the other two.
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+snd_route_set:
+    push bx
+    push si
+    cmp al, 0FFh                ; auto never names a driver: always legal
+    je .store
+    xchg bl, al                 ; snd_drv_row wants the index in BL
+    call snd_drv_row
+    xchg bl, al
+    test byte [si+SDRV_FLAGS], 1
+    jz .refuse
+.store:
+    xor bh, bh                  ; BL = tier; a single byte store needs no
+    mov [snd_route+bx], al      ; window - readers take it whole
+    clc
+    jmp .out
+.refuse:
+    stc
+.out:
+    pop si
+    pop bx
     ret
 
 ; =============================================================================
@@ -372,6 +671,24 @@ snd_beep:
     ret
 
 ; -----------------------------------------------------------------------------
+; snd_stop - abort the running PCM_EXCL clip, if any (SPEC.md 34.4)
+;
+; in:       nothing
+; out:      nothing
+; clobbers: nothing (flags)
+;
+; Sets [snd_abort]; the clip loop sees it on its next emitted sample and
+; exits err 5. A single byte store: safe from any context, including under
+; IF=0 (snd_release_inst calls this pattern inline).
+; -----------------------------------------------------------------------------
+snd_stop:
+    cmp byte [snd_pcm_busy], 0
+    je .out
+    mov byte [snd_abort], 1
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; snd_tick - per-tick sound duties (SPEC.md 8.2/34, Phase 1: tone expiry)
 ;
 ; Called from sch_isr immediately after sch_account - a leaf, never part of
@@ -411,15 +728,21 @@ snd_tick:
 ; clobbers: nothing (flags)
 ;
 ; Called from both SPEC.md 29.4 teardown paths (app_close_win's task-less
-; path and inst_task_die). Phase 1 releases the tone channel; FM channel
-; bits, stream ownership and staging grants join at their phases. The
-; release ignores priority - the owner is gone.
+; path and inst_task_die). Releases the tone channel and flags down a clip
+; the instance owns; FM channel bits, stream ownership and staging grants
+; join at their phases. The release ignores priority - the owner is gone.
 ; -----------------------------------------------------------------------------
 snd_release_inst:
     pushf
     cli
     cmp byte [snd_live], 0
     je .done
+    cmp byte [snd_pcm_busy], 0  ; a clip owned by the dying instance stops
+    je .tone                    ; at its next emitted sample (SPEC.md 34.4)
+    cmp al, [snd_pcm_inst]
+    jne .tone
+    mov byte [snd_abort], 1
+.tone:
     cmp byte [snd_town_act], 0
     je .done
     cmp al, [snd_town_inst]
@@ -521,6 +844,15 @@ snd_init:
     mov byte [snd_texp_gen], 0
     mov byte [snd_town_drv], DRV_SPK
     mov word [snd_town_exp], 0
+
+    mov byte [snd_pcm_busy], 0  ; the PWM clip state (SPEC.md 34.4); the
+    mov byte [snd_abort], 0     ; 256-byte xlat table needs no init - it is
+    mov byte [snd_btn0], 0      ; rebuilt before every clip
+    mov byte [snd_pcm_inst], 0xFF
+    mov byte [snd_pcm_smp], 0
+    mov word [snd_pcm_n], 149   ; the default-rate divisor (8,008 Hz)
+    mov word [snd_pcm_emitted], 0
+    mov word [snd_pcm_resync], 0
 
     mov si, snd_drv             ; probe rows that declare one (SPEC.md 34.2);
     mov cx, SND_NDRV            ; SDRV_PROBE = 0 rows keep their initialised
@@ -644,15 +976,156 @@ osapi_snd_tone:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_play / osapi_snd_fm / osapi_snd_stream - error stubs until their
-; phases land (SPEC.md 20.3): a package built against the full ABI gets the
-; documented "no sink" refusal, never a jump past the table end.
+; osapi_snd_play - PCM_EXCL clip, run-to-completion (slot 0x0080, SPEC.md
+;                  20.3/34.4 - live from Phase 2)
+;
+; in:       ES:SI = 8-bit unsigned mono samples, CX = count (<= 65535),
+;           DX = rate Hz - N = 1193182/rate must land in 74..255
+; out:      AX = 0 ok / 1 busy (incl. a PCM_BG stream open) / 2 rate /
+;           3 disabled-by-user / 4 no sink / 5 aborted; CF mirrors AX != 0.
+;           ES restored per SPEC.md 1; BLOCKS for the whole clip.
+; clobbers: nothing else (flags)
+;
+; Takes ES:SI, not DS:SI, so a clip staged in SND_SEG plays in place;
+; callers keeping clips in their own image just set ES = DS. A rate whose
+; N falls outside 74..255 is ERR 2, NEVER A SILENT CLAMP (SPEC.md 34.4) -
+; a clamped clip would play slow and flat; refusal is honest, resampling
+; is the caller's job. The requesting instance is the dispatched
+; callback's stamp, else the running task's (the osapi_snd_tone rule).
+;
+; The grant - busy test, tone steal, ch2 mode, generation, the abort and
+; click-baseline latches, the counter reset - is one pushf/cli..popf
+; window (SPEC.md 34.3, binding). On a click-abort the aborting EVT_MDOWN
+; (and its EVT_MUP) are drained from the event queue before err 5 returns,
+; so the skip gesture cannot fire a menu, close box or icon under the
+; cursor; everything queued while the screen was frozen predates the abort
+; and drains with it.
 ; -----------------------------------------------------------------------------
-osapi_snd_play:                 ; live in Phase 2 (SPEC.md 34.4)
-    mov ax, 4                   ; err 4: no sink
+osapi_snd_play:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    cmp byte [snd_live], 0      ; not initialised: nothing can sound
+    je .e4
+    cmp byte [snd_excl_ok], 0   ; the user said no (SPEC.md 34.4)
+    je .e3
+
+    call snd_pcm_route          ; BL = row index, DI = row ptr
+    jc .e4                      ; no PCM_EXCL sink on this machine
+
+    ; rate -> divisor N = 1193182/rate, hard range 74..255 (SPEC.md 34.4).
+    ; The range checks double as the div guard: a tiny rate would overflow
+    ; the 32/16 divide (quotient > 16 bits traps to int 0).
+    cmp dx, 4679                ; N <= 255  <=>  rate >= 4,679 Hz
+    jb .e2
+    cmp dx, 16124               ; N >= 74   <=>  rate <= 16,124 Hz
+    ja .e2
+    push cx
+    push dx
+    mov cx, dx
+    mov dx, 0x0012              ; 1193182 = 0x1234DE
+    mov ax, 0x34DE
+    div cx                      ; AX = N, 74..255 by the checks above
+    mov [snd_pcm_n], ax
+    pop dx
+    pop cx
+
+    mov bh, [snd_inst]          ; requesting instance: the dispatched
+    cmp bh, 0xFF                ; callback's stamp, else the running
+    jne .grant                  ; task's T_INST (SPEC.md 34.3)
+    push bx
+    mov bl, [sch_cur]
+    xor bh, bh
+    shl bx, 1                   ; T_SIZE = 8
+    shl bx, 1
+    shl bx, 1
+    mov ah, [bx+sch_tasks+T_INST]
+    pop bx
+    mov bh, ah
+
+.grant:
+    pushf                       ; --- the grant window (SPEC.md 34.3) ------
+    cli
+    cmp byte [snd_pcm_busy], 0  ; one clip at a time, no queue; the PCM_BG
+    jne .busyw                  ; exclusion joins here in Phase 4
+    cmp bl, DRV_SPK             ; stealing ch2 only matters on the speaker
+    jne .own
+    cmp byte [snd_town_act], 0
+    je .own
+    cmp byte [snd_town_drv], DRV_SPK
+    jne .own                    ; tone sounding elsewhere: it coexists
+    mov al, SND_PRI_PKG         ; clip priority: the package default;
+    cmp bh, 0xFF                ; kernel callers steal at UI priority
+    jne .pcmp
+    mov al, SND_PRI_UI
+.pcmp:
+    cmp al, [snd_town_pri]      ; PWM start steals + silences a lower-
+    jb .busyw                   ; priority tone; a higher one refuses the
+    call snd_town_off           ; clip (SPEC.md 34.1/34.3)
+.own:
+    inc byte [snd_gen]          ; ch2 mode, generation and the silencing
+    mov byte [snd_ch2mode], 2   ; above are one unit (SPEC.md 34.3)
+    mov byte [snd_pcm_busy], 1
+    mov byte [snd_abort], 0
+    mov [snd_pcm_inst], bh
+    mov al, [mouse_btn]         ; the click-abort baseline (SPEC.md 34.4)
+    mov [snd_btn0], al
+    mov word [snd_pcm_emitted], 0
+    mov word [snd_pcm_resync], 0
+    popf                        ; --- granted ------------------------------
+
+    mov ax, [snd_pcm_n]         ; build the per-clip rescale table: far
+    call snd_xlat_build         ; code, ~8ms, non-destructive (SPEC.md 34.4)
+
+    mov al, 0                   ; verb 0: run the clip to completion; the
+    call [di+SDRV_PCM]          ; op's epilogue releases ch2 + busy. Out:
+    jc .aborted                 ; CF=1 aborted, AL = 1 click / 2 flag
+    xor ax, ax
+    clc
+    jmp .out
+
+.aborted:
+    cmp al, 1
+    jne .e5                     ; flag abort: nothing queued to drain
+.drain:                         ; click abort: drain the aborting mouse
+    mov di, snd_evtmp           ; events - and everything queued while the
+    call evq_pop                ; screen was frozen - before returning
+    jnc .drain                  ; (SPEC.md 34.4, binding)
+.e5:
+    mov ax, 5
+    jmp .err
+.busyw:
+    popf
+    mov ax, 1
+    jmp .err
+.e2:
+    mov ax, 2
+    jmp .err
+.e3:
+    mov ax, 3
+    jmp .err
+.e4:
+    mov ax, 4
+.err:
     stc
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
 
+; -----------------------------------------------------------------------------
+; osapi_snd_fm / osapi_snd_stream - error stubs until their phases land
+; (SPEC.md 20.3): a package built against the full ABI gets the documented
+; "no sink" refusal, never a jump past the table end.
+; -----------------------------------------------------------------------------
 osapi_snd_fm:                   ; live in Phase 3 (SPEC.md 34.2)
     stc                         ; CF = 1: no FM sink
     ret
@@ -661,6 +1134,61 @@ osapi_snd_stream:               ; live in Phases 4-5 (SPEC.md 34.5/34.6)
     mov ax, 4                   ; err 4: no sink
     stc
     ret
+
+; =============================================================================
+; The PWM rescale-table builder (SPEC.md 34.4): cold per-clip work, so it
+; lives in .fartext behind a FARSHIM (SPEC.md 33/34.7). Far code keeps
+; DS = KERNEL_SEG, so it writes the .bss table directly.
+; =============================================================================
+    FARSHIM snd_xlat_build, snd_f_xlat
+
+section .fartext
+
+; -----------------------------------------------------------------------------
+; snd_f_xlat - build the 256-byte PWM rescale table (far body)
+;
+; in:       AX = N, the clip divisor (74..255, validated by the caller)
+; out:      snd_xlat[s] = 1 + s*(N-2)/255 for s = 0..255
+; clobbers: nothing (flags)
+;
+; Maps 8-bit unsigned samples onto pulse widths 1..N-1: never 0 (a mode-0
+; count of 0 means 65536) and never N or more (the pulse must end inside
+; its own period). ~8ms once per clip; non-destructive - the caller's clip
+; buffer is never modified, so replay and re-rate work (SPEC.md 34.4;
+; per-sample mul scaling is rejected there, the table saves ~70
+; cycles/sample).
+; -----------------------------------------------------------------------------
+snd_f_xlat:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, ax
+    sub bx, 2                   ; BL = N-2 (N <= 255, so it fits a byte)
+    mov di, snd_xlat
+    xor si, si                  ; SI = s, 0..255
+.s:
+    mov ax, si
+    mul bl                      ; AX = s * (N-2)   (<= 255*253 = 64515)
+    mov cl, 255
+    div cl                      ; AL = AX/255 (<= 253), AH = remainder
+    inc al                      ; 1..N-1
+    mov [di], al
+    inc di
+    inc si
+    cmp si, 256
+    jb .s
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    retf                        ; far body: reached through the shim
+
+section .text
 
 ; =============================================================================
 ; state (SPEC.md 34.7) - all stored by snd_init, unreadable until snd_live
@@ -680,5 +1208,21 @@ snd_town_exp:  resw 1           ;   remaining ticks, 0 = no self-expiry
 snd_inst:      resw 1           ; low byte: instance slot being dispatched
                                 ; (0xFF = none); a word so the dispatch
                                 ; sites can push/pop it around callbacks
+
+snd_xlat:      resb 256         ; per-clip PWM rescale table (34.4), built
+                                ; by snd_xlat_build before every clip -
+                                ; write-before-read, needs no boot init
+snd_btn0:      resb 1           ; click-abort baseline; releases fold in
+snd_abort:     resb 1           ; set by snd_stop / snd_release_inst
+snd_pcm_busy:  resb 1           ; a PCM_EXCL clip is running (34.3)
+snd_pcm_inst:  resb 1           ;   the instance that owns it (0xFF kernel)
+snd_pcm_smp:   resb 1           ;   the sample parked across pacer polls
+snd_pcm_n:     resw 1           ;   the clip divisor N (74..255)
+snd_pcm_emitted: resw 1         ; debug counters (34.4), reset per clip:
+snd_pcm_resync:  resw 1         ;   pulses emitted / deadline resyncs -
+                                ;   the Phase 2 gate's instrument, shown
+                                ;   on the Control Panel Sound caption
+snd_evtmp:     resb 8           ; click-abort event drain scratch (evq_pop
+                                ; copies into DS memory)
 
 section .text
