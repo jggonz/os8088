@@ -628,6 +628,22 @@ pause/resume, the capacity-full stop) — unreachable in QEMU because no
 input IRQ ever fires — plus audio-in fidelity by ear, riding with the
 standing Phase 2/3/4 floor-gate items.
 
+The P5 review pass then hardened the drain data path (now in SPEC
+§20.3/§34.6): the ring → grant copy is **teardown-fenced** — 512-byte
+chunks, each one act+generation-verified `pushf`/`cli` unit — because the
+drain WRITES grant bytes, and a close-box teardown preempting a
+whole-half `rep movsb` (~21 ms on an 8088) would have resumed writing
+ring data into freed, re-grantable pool memory (the refill mirror stays
+un-fenced deliberately: its copy only *reads*, and a stale read at
+teardown is a bounded audio glitch). `sbl_consumed` now advances after
+each chunk lands, never before, so verb 3's captured count can never run
+ahead of the bytes verb 5 can actually read. The open verbs'
+busy-check → publish gap is pinned as UI-task serialization (SPEC §20.3
+— a future background-task caller must claim the record under
+`pushf`/`cli` first), and `mouse.py down`/`up` grew optional `X Y`
+arguments (goto-then-press; anything else errors) after the bare-`down`
+footgun cost this pass a retest cycle.
+
 Post-all-phases slack ≈ 21.5 KB (guard 1) / ≈ 19.8 KB (guard 2) — measured,
 not estimated, now that all five phases are in. `.lowbss` untouched (the refill task's stack is a normal
 dynamic spawn). SND_SEG folds into the Task Manager's RAM figure via the `KLOWFAR_KB`

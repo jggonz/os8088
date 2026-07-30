@@ -1319,7 +1319,7 @@ caller holding several grants is unambiguous by construction):
 | 4 | open-in | DX = rate Hz (4000 up to the §34.5 input ceiling: 13,000 on a single-cycle DSP, 15,000 on auto-init), SI = grant offset, CX = capture capacity in bytes (> 0, inside the caller's grant); spawns the kernel drain task, which moves record-ring halves into the grant until CX bytes have landed, then stops the DSP (§34.6). Out AL = 0 with AH = handle, else AX = err. **Half-duplex with playback is err 1 busy** (§34.3): one stream record, either direction. Feed on an input stream is err 7 — a capture has no valid length to extend. |
 | 5 | read | copy CX bytes from the grant at offset SI into caller DS:DI — the kernel-staged copy out, verb 6's exact mirror (§34.6); the range must sit inside one grant the caller owns. **No handle**: the grant owns the bytes, so captured data stays readable after the stream that recorded it closes, until the grant is freed. Works on every machine, like verbs 6–7. Out AX = 0 / err 7. |
 | 6 | stage | copy CX bytes from caller DS:SI into the grant at offset DI (kernel-staged copy — callers never touch ES = SND_SEG, §2.2); the range must sit inside one grant the caller owns. Out AX = 0 / err. |
-| 7 | grant | AH = sub-op (0 alloc, 1 free): CX = bytes → out SI = grant offset, or free (SI = offset, owner only — **refused with err 7 while an open stream's read offset sits inside the grant**: close the stream first, or the refill task would copy from unowned, re-allocatable bytes); stamped with the calling instance, force-freed by `snd_release_inst` (§34.3 — teardown is safe: it closes the stream before freeing grants). Out AX = 0 / err. |
+| 7 | grant | AH = sub-op (0 alloc, 1 free): CX = bytes → out SI = grant offset, or free (SI = offset, owner only — **refused with err 7 while an open stream's read offset sits inside the grant**: close the stream first, or the refill task would copy from unowned, re-allocatable bytes); stamped with the calling instance, force-freed by `snd_release_inst` (§34.3 — teardown is safe: it closes the stream before freeing grants, and the drain copy is teardown-fenced so a mid-copy preempted drain task cannot write into freed bytes, §34.6). Out AX = 0 / err. |
 
 Error codes, pinned (AX; CF set on any error, and on the stale status):
 0 ok, 1 busy (a stream is already open, or a `PCM_EXCL` clip is running),
@@ -1328,6 +1328,17 @@ phase has not landed), 6 no task slot, 7 bad argument (grant/range/
 length/sub-op), 8 no staging space, 0FFFFh stale handle. The staging
 verbs 5–7 work on every machine — the pool exists wherever `SND_SEG` does
 (§2.2); only the stream verbs (0–4) need the card.
+
+**Stream verbs are UI-task/window-callback context only (binding).**
+Every caller — packages and Control Panel alike — runs inside a window
+callback on the single UI task, and the half-duplex/busy refusals of the
+open verbs rest on that serialization: the open-verb busy check and the
+eventual stream-record publish are many IF=1 instructions apart (IRQ
+discovery can even sleep on ticks between them), which two concurrent
+opens would race. A future background-task caller must first make the
+record claim a single `pushf`/`cli` unit (the grant allocator's
+scan+claim standard, §34.6) — it cannot simply start calling these verbs
+from a task.
 
 ### 20.4 osapi helpers (kernel.asm)
 
@@ -3021,6 +3032,24 @@ end.
   ~2× the ring-half period halt the stream as **ended (2)**. Consumers
   read captured bytes via the verb-5 staging copy — no ES pointer ever
   crosses (§2.2).
+- **The drain copy is teardown-fenced (binding)** — the input/output
+  asymmetry, recorded: the refill copy only *reads* its grant, so a
+  teardown that frees the grant mid-copy costs at worst one stale-data
+  audio glitch (bounded, benign); the drain copy *writes* grant bytes,
+  and force-teardown (`snd_release_inst` on the UI task) frees — and a
+  relaunch can re-grant — those pool bytes the instant it stops the
+  stream, so a drain task preempted inside a whole-half `rep movsb`
+  (~21 ms on an 8088) would resume writing ring data into another
+  instance's memory. The ring → grant copy therefore runs in **512-byte
+  chunks, each inside one `pushf`/`cli` window that re-verifies act +
+  generation before writing** (the refill-resume rule applied to the
+  copy itself): every act-clear and grant-free runs in task context and
+  IF=0 excludes the switch, so a chunk that starts writing holds the
+  grant for its whole write — a torn-down stream stops at the chunk edge
+  with nothing written after the free. `sbl_consumed` advances inside
+  the window *after* each chunk lands: verb 3 reports it as *bytes
+  captured into the grant* (§20.3), so the poll-then-read pattern
+  (status, then read) never returns bytes the copy has not written yet.
 - **The staging pool** (`SND_SEG` 0x3000..0xFFFF, ~52 KB, §2.2) has a tiny
   allocator: first-fit grants stamped with the owning instance slot — the
   §21 package-pool idiom: occupancy derived from the grant records, no

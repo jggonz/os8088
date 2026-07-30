@@ -6,9 +6,14 @@
 Commands:
     to X Y          pin to a corner, then walk to (X, Y)
     move DX DY      relative move (split into safe chunks)
-    down / up       left button press / release
+    down [X Y]      left button press (optionally `to X Y` first)
+    up [X Y]        left button release (optionally `to X Y` first)
     click X Y       to X Y + press + release
     shot PATH       screendump (absolute path)
+
+Any other argument shape is an error - historically `down X Y` silently
+pressed at the CURRENT cursor position, a footgun that read as a kernel
+bug.
 
 QEMU's msmouse backend truncates large deltas to the protocol's low bits
 without clamping, so every move is split into chunks of at most 60.
@@ -57,11 +62,14 @@ def main():
         goto(int(args[0]), int(args[1]))
     elif cmd == "move":
         move(int(args[0]), int(args[1]))
-    elif cmd == "down":
-        hmp("mouse_button 1")
-        time.sleep(0.15)
-    elif cmd == "up":
-        hmp("mouse_button 0")
+    elif cmd in ("down", "up"):
+        if len(args) == 2:
+            goto(int(args[0]), int(args[1]))
+        elif args:
+            print(f"mouse.py: {cmd} takes no args or X Y, got {args!r}",
+                  file=sys.stderr)
+            return 2
+        hmp("mouse_button 1" if cmd == "down" else "mouse_button 0")
         time.sleep(0.15)
     elif cmd == "click":
         goto(int(args[0]), int(args[1]))

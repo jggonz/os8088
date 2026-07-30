@@ -48,8 +48,9 @@
 ; record: verb 4 opens an input stream (DSP 24h single-cycle / 2Ch
 ; auto-init per the version gate, DMA modes 45h/55h) capturing into the
 ; 8KB record ring at SND_SEG:0x1000 (2 x 4KB halves); a transient kernel
-; DRAIN task moves completed ring halves into the caller's grant until its
-; stated capacity fills, then stops the DSP - the stream reads paused(1)
+; DRAIN task moves completed ring halves into the caller's grant - in
+; act+gen-guarded IF=0 chunks, the teardown fence (SPEC.md 34.6) - until
+; its stated capacity fills, then stops the DSP - the stream reads paused(1)
 ; with DX = capacity, the input mirror of data exhaustion. The ISR's input
 ; leg flags captured halves and, if the drain starved (the half it must
 ; capture into next is still un-drained), pauses input - bounded loss and
@@ -78,6 +79,9 @@ SBL_RHALF    equ 4096           ; record ring half size (2 x 4KB = 8KB)
 SBL_POOL     equ 0x3000         ; staging pool base offset (SPEC.md 2.2)
 SBL_POOLMAX  equ 0xD000         ; pool bytes (0x3000..0xFFFF)
 SBL_GMAX     equ 8              ; staging-grant records
+SBL_DCHUNK   equ 512            ; drain-copy chunk: one act+gen-guarded
+                                ; IF=0 write unit (SPEC.md 34.6, ~2ms of
+                                ; rep movsb on a 4.77MHz 8088)
 
 SBL_ST_PLAY  equ 0              ; stream states (verb 3, SPEC.md 20.3):
                                 ;   out = playing, in = recording
@@ -840,6 +844,13 @@ sbl_hcheck:
 ; same order sbl_refill's resume uses: the first block IRQ can beat the
 ; opener's next instruction, and an unexpected real IRQ never reads 2xEh,
 ; leaving the DSP INT latched and the stream permanently silent.
+;
+; One serialization assumption, pinned (SPEC.md 20.3): stream verbs run
+; only from window callbacks on the single UI task, so the busy check
+; here and the eventual act=1 publish - ~60 IF=1 instructions apart, and
+; IRQ discovery can even sleep on ticks in between - never race a second
+; open. A future background-task caller would have to claim the record
+; under pushf/cli first (the sbl_grant_alloc single-window standard).
 ; -----------------------------------------------------------------------------
 sbl_v_open:
     push bx
@@ -1086,7 +1097,9 @@ sbl_v_status:
 ; task advances sbl_consumed as ring halves land in the grant, so verb 3
 ; reads {state, bytes captured} with no direction branch. Half-duplex is
 ; enforced HERE, by the router's one owner record - the driver never sees
-; an in/out conflict (SPEC.md 34.3).
+; an in/out conflict (SPEC.md 34.3). The busy check -> act=1 publish gap
+; rests on sbl_v_open's pinned serialization assumption (SPEC.md 20.3:
+; stream verbs are UI-task/window-callback context only).
 ; -----------------------------------------------------------------------------
 sbl_v_open_in:
     push bx
@@ -1484,17 +1497,36 @@ sbl_refill_task:
 ; -----------------------------------------------------------------------------
 ; sbl_drain_half - copy one captured ring half into the caller's grant
 ;
-; in:       BX = half (0/1); [sbl_str_off]/[sbl_consumed]/[sbl_total] current
-; out:      nothing; [sbl_consumed] advanced by min(SBL_RHALF, capacity
-;           remaining) - a half past capacity copies nothing
+; in:       BX = half (0/1), DH = the stream generation this task serves;
+;           [sbl_str_off]/[sbl_consumed]/[sbl_total] current
+; out:      nothing; [sbl_consumed] advanced by the bytes actually landed
+;           (min(SBL_RHALF, capacity remaining); a half past capacity
+;           copies nothing)
 ; clobbers: nothing (flags)
 ;
 ; Both source and destination live in SND_SEG (sbl_fill_half's trick in
-; reverse): DS = ES = SND_SEG for the movs; kernel state is only touched
-; before the switch. The caller clears the half's valid flag afterwards.
+; reverse): DS = ES = SND_SEG for the movs. Unlike the output mirror, this
+; copy WRITES grant bytes, and force-teardown (snd_release_inst on the UI
+; task, or a verb-2 close + verb-7 free) frees - and a relaunch can
+; re-grant - those bytes the moment the stream stops: a whole-half rep
+; movsb (~21ms on an 8088) preempted mid-copy must never resume into
+; freed pool memory. So the copy runs in SBL_DCHUNK pieces, each one
+; pushf/cli window that re-verifies act + generation BEFORE writing (the
+; sbl_refill resume rule): every act-clear and grant-free runs in task
+; context, and IF=0 excludes the switch, so a chunk that starts writing
+; holds the grant for its whole write - a torn-down stream stops at the
+; chunk edge with nothing written after the free. [sbl_consumed] advances
+; inside the window AFTER the chunk lands: verb 3 reports it as "bytes
+; captured into the grant" (SPEC.md 20.3), so the poll-then-read pattern
+; (verb 3, then verb 5) must never see it run ahead of the copy.
+; (sbl_fill_half's pre-copy sbl_fed advance stays as is: that field is
+; internal refill bookkeeping, and the output copy only READS the grant -
+; a stale read at teardown is the documented benign glitch, SPEC.md 34.6.)
+; The caller clears the half's valid flag afterwards.
 ; -----------------------------------------------------------------------------
 sbl_drain_half:
     push ax
+    push bx
     push cx
     push si
     push di
@@ -1513,19 +1545,40 @@ sbl_drain_half:
     jbe .n
     mov cx, SBL_RHALF
 .n:
-    add [sbl_consumed], cx
     cld
+.chunk:
     jcxz .done
+    mov bx, SBL_DCHUNK          ; BX = this chunk's size
+    cmp cx, bx
+    jae .sz
+    mov bx, cx
+.sz:
+    sub cx, bx                  ; CX = remaining after this chunk
+    pushf
+    cli
+    cmp byte [sbl_str_act], 1   ; still the stream's grant? closed / torn
+    jne .dead                   ; down: its pool bytes may be freed
+    cmp dh, [sbl_gen]           ; superseded by a newer open?
+    jne .dead
+    push cx
+    mov cx, bx
     push ds
     push es
     pop ds                      ; DS = SND_SEG for the ring -> grant copy
-    rep movsb
+    rep movsb                   ; one chunk, atomic vs. teardown (IF=0)
     pop ds
+    pop cx
+    add [sbl_consumed], bx      ; landed bytes only (verb 3's contract)
+    popf
+    jmp .chunk
+.dead:
+    popf                        ; stop writing: the grant is not ours
 .done:
     pop es
     pop di
     pop si
     pop cx
+    pop bx
     pop ax
     ret
 
