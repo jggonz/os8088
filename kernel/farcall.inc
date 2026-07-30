@@ -140,3 +140,7 @@ far_init:
     FARK sbl_dsp_wr             ; sndsb.inc probe + IRQ discovery (34.2/34.5)
     FARK sbl_dsp_rd
     FARK osapi_snd_stream       ; ctrl.inc Sound Test grant (SPEC.md 31.4)
+    FARK inst_find_kind         ; ctrl.inc Date/Time page (SPEC.md 31.5/37)
+    FARK clk_snap
+    FARK clk_fld_str
+    FARK clk_fld_adj

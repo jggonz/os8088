@@ -59,6 +59,17 @@ the menus. All of classic Mac's core interactions work:
 - **Dock** — the bottom strip carries one tile per live instance. Click a
   tile to bring that window up; minimized instances show inverted until you
   restore them.
+- **Menu bar clock** — the right end of the bar carries the date and the time
+  of day. It can show 12- or 24-hour time and, optionally, seconds; seconds
+  are **off by default**, and that is not just taste — with them hidden the
+  UI task doesn't take the drawing lock 59 seconds out of 60, so the bar
+  doesn't repaint and the cursor doesn't blink for it. At boot the kernel
+  reads the hardware RTC
+  through int 1Ah — and is fussy about it, because half these machines have
+  no CMOS clock at all: the call is poisoned and CF-guarded, every byte must
+  be valid BCD and in range, and anything short of that falls back to
+  **4 July 2026, 00:00:00**. From then on the PIT is the clock, exactly as
+  DOS does it on the same hardware. Click the cell to set it.
 - **Menus** — press in the bar, drag through pull-downs with live highlight,
   release to choose. System → About os8088 / Control Panel / Task Manager;
   File → Note Pad / Clock / Bounce / Disk / Close Window;
@@ -99,7 +110,14 @@ the menus. All of classic Mac's core interactions work:
   timer tick — the About box's third line and the Task Manager's SCH field
   follow — and cooperative mode still can't hang the machine: the timer keeps
   a watchdog on the running task and forces a switch if one holds the CPU for
-  a second without yielding.
+  a second without yielding. The other pages: **Display** (double buffering
+  on machines with the RAM for it), **Sound**, and **Date/Time** — click a
+  field of the date or the time, then `+` / `-` to set it, with the month
+  lengths and leap years honored (31 March minus a month is 28 February) and
+  the new time written back to the hardware RTC if the machine has one. The
+  same page carries the clock's two display options — **12-hour clock**
+  (which adds an AM/PM field you can click and step, since the hour itself
+  is always kept 0..23) and **seconds in menu bar**.
 
 ## How
 
@@ -152,6 +170,8 @@ kernel/mouse.inc     COM1 UART, IRQ4 ISR, packet decode, cursor
 kernel/sched.inc     PIT hook, context switch, spawn/yield/sleep,
                      pre-emptive/cooperative mode + watchdog
 kernel/events.inc    ISR-safe event ring queue
+kernel/clock.inc     the system clock: RTC probe/read/write, date + time
+                     kept from the PIT, formatting for the bar and the panel
 kernel/wm.inc        window records, z-order, frames, hit test, painter
 kernel/instance.inc  the instance table: app kinds, launch, close, billing
 kernel/menu.inc      menu bar, pull-down tracking

@@ -193,6 +193,7 @@ SND_SEG       equ 0x3000     ; sound buffers: linear 0x30000-0x3FFFF, ES only (�
 | `kernel/mouse.inc`  | COM1 UART, IRQ4 ISR, packet decode, cursor (save-under) |
 | `kernel/sched.inc`  | PIT hook, context switch, task table, spawn/yield/sleep |
 | `kernel/events.inc` | 8-byte event records, system event ring queue           |
+| `kernel/clock.inc`  | system clock (§37): hardware RTC probe/read/write (int 1Ah), the wall-clock date + time advanced from `[ticks]`, field editing and formatting — prefix `clk_` |
 | `kernel/wm.inc`     | window records, z-order, frames, hit test, paint-all, `wm_owner` side table |
 | `kernel/instance.inc` | instance table: records, kind descriptors, launch/close lifecycle (§29) |
 | `kernel/menu.inc`   | menu bar, pull-down tracking, command return            |
@@ -795,6 +796,42 @@ all beyond the XOR itself. The final save-under restore + title un-highlight
 need no flush of their own — the caller's gfx_unlock flushes them (§13
 step 2), and that flush is what clears the last item highlight from VRAM.
 
+### 12.1 The menu-bar clock
+
+The right end of the bar shows the system clock of §37 — the date and the
+time of day, black on the bar's white field. Its **width varies** with the
+two display settings of §37 (12- or 24-hour, seconds shown or not), from 18
+glyphs (`'Mmm DD YYYY  HH:MM'`) to 24 (`'Mmm DD YYYY  HH:MM:SS PM'`), so
+the cell is sized for the longest and **the string is right-aligned in it**:
+
+```nasm
+MENU_CLK_W  equ 24*8                        ; the LONGEST form, not the live one
+MENU_CLK_X  equ SCREEN_W - 8 - MENU_CLK_W   ; 440: cell left, 8px right margin
+MENU_CLK_HX equ MENU_CLK_X - 6              ; 434: hit band left edge
+```
+
+| symbol            | contract                                                  |
+|-------------------|------------------------------------------------------------|
+| `menu_draw_clock` | in: nothing (gfx lock held by the caller). Formats the live clock with `clk_fmt` (§37), white-fills the whole cell — x `MENU_CLK_HX`..`SCREEN_W-1`, rows 0..`MBAR_H-2`, the black rule excluded — and draws the string **right-aligned**: `font_width` gives its pixel width and the pen goes at `SCREEN_W - 8 - width`, `MENU_TEXT_Y`. Preserves all registers. |
+
+Right alignment is what makes a format change a redraw of the same cell
+rather than a relayout: the erase is always the full 24-glyph cell, so a
+shorter string leaves clean white to its left and the time stays pinned to
+the same right margin whichever form it is in.
+
+`menu_draw_bar` ends with a `menu_draw_clock` call, so every `wm_paint_all`
+repaints it; ui_task redraws just the cell when its text changes — once a
+second with seconds shown, **once a minute without** (§13 step 4). No
+`wm_obscured` check is needed anywhere: windows clamp to `y >= MBAR_H`
+(§13), so nothing can ever cover the bar. The cell is ordinary persistent
+content — it goes through the back buffer like everything else (§32) and
+the caller's `gfx_unlock` flushes it.
+
+**Clicking the cell opens the Control Panel on its Date/Time page** (§31.5).
+ui_task hit-tests `x >= MENU_CLK_HX` *before* `menu_track`, so the cell is
+not a menu title and never drops a pull-down; the panel window appearing
+(or coming forward) is the click's feedback.
+
 ## 13. ui.inc — the UI task (task 0)
 
 Loop forever:
@@ -804,6 +841,10 @@ Loop forever:
 2. `evq_pop`; on EVT_MDOWN at (x,y) — first store the event's EV_C into
    the public word `ui_click_t` (the click's birth tick; §22/§26 read it
    during dispatch):
+   - y < MBAR_H and x >= `MENU_CLK_HX` → the menu-bar clock (§12.1): store
+     `CP_ITIME` into `[cp_sel]` and `app_launch` KIND_CTRL (§31.5), no lock
+     held, beeping on refusal like any other launch. Tested **before**
+     `menu_track`, so the cell never drops a pull-down.
    - y < MBAR_H → gfx_lock, `menu_track`, gfx_unlock, then dispatch CMD_*
      (below).
    - else `wm_hit`: close box → **quit**: gfx_lock, `app_close_win` BX
@@ -852,8 +893,32 @@ Loop forever:
    All three run **outside** the gfx lock with the same
    consume-before-run rule — app_launch and loader_run manage their own
    locking, and the repaint takes the lock here rather than inside
-   `cp_onclick`, which already holds it.
-4. `task_yield`.
+   `cp_onclick`, which already holds it. Then, on the same deferred
+   channel, if `[clk_dirty]` is non-zero (§37): zero it and call
+   `clk_rtc_write` — the Control Panel changed the time and the hardware
+   RTC is written **here**, outside the lock, because a page proc may not
+   call BIOS (§31.1).
+4. **The clock (§37/§12.1).** Call `clk_tick`, which advances the wall
+   clock from the `[ticks]` delta and returns **AL = a change mask**:
+   bit 0 = a second passed, bit 1 = the menu bar's *text* changed. AL = 0
+   → nothing to do. Otherwise decide whether taking the gfx lock is worth
+   it, because taking it blinks the cursor and that blink **is** the
+   flicker the seconds setting exists to remove:
+   - bit 1 set → lock, `menu_draw_clock`, `cp_tick`, unlock.
+   - bit 1 clear (a second passed but the bar shows no seconds) → ask
+     `cp_tick_due` (§31.5) whether a Date/Time page is on screen; only
+     then lock, `cp_tick`, unlock. The panel's seconds field runs whatever
+     the bar displays, so it — and only it — still wants the per-second
+     redraw.
+   - bit 1 clear and no page up → **do not take the lock at all**. With
+     seconds hidden and no panel open, the desktop is touched once a
+     minute.
+
+   `clk_tick` itself is unconditional and cheap, so the clock keeps time
+   whether or not anything is drawn. The redraw is **not** billed to any
+   instance (§8.1): it is kernel chrome, drawn by the UI task on its own
+   account, not a window callback dispatch.
+5. `task_yield`.
 
 Command dispatch: CMD_ABOUT/CTRL/NOTE/CLOCK/BOUNCE/TASKS → `call
 app_launch` with AL = the matching KIND_* (§29; CMD_CTRL → KIND_CTRL, the
@@ -968,7 +1033,9 @@ angle index = AX mod 16). kmain's own `vga_mode12` then wipes the splash.
 kmain: set DS/ES = `KERNEL_SEG` and SS:SP = `LOW_SEG:STK0_TOP` (§2.1),
 `sti`, `cld`, then: `far_init` (**first** — the `.fartext` blob is sitting
 on top of `.bss` until it runs, §33) →
-`sched_init` → `evq_init` → `vga_mode12` → `bb_init` (§32 — the RAM probe
+`sched_init` → `evq_init` → `clk_init` (§37 — the RTC probe, before the
+mode set so a machine without one is dated from the fallback constants
+from the first paint onward) → `vga_mode12` → `bb_init` (§32 — the RAM probe
 must run after the mode set, which clears VRAM, and before the first
 drawing call) → `font_init` → `wm_init` →
 `inst_init` → `mouse_init` → `desk_init` → `files_init` → `loader_init` →
@@ -979,7 +1046,8 @@ into `ui_task` (task 0 never returns). (`dock_init` runs right after
 shows only the desktop, drive icons, the empty dock strip and menu bar;
 everything is launched from the menus (§13/§29). Include order:
 `instance.inc` right after `wm.inc`; `icons.inc`, `desk.inc`, `dock.inc`,
-`taskmgr.inc` and then `ctrl.inc` (§31) after `files.inc`;
+`taskmgr.inc` and then `ctrl.inc` (§31) after `files.inc`; `clock.inc`
+(§37) right after `events.inc`, since it reads `[ticks]`;
 `farcall.inc` (§33) before all of them, since it defines the macros they use. The Control
 Panel has no init routine — it is task-less and stateless, so nothing runs
 for it at boot; forward references from `instance.inc`'s kind table to
@@ -2075,8 +2143,10 @@ repaints when the window moves away — desk-icon semantics throughout.
 ## 31. ctrl.inc — the Control Panel window
 
 Built-in singleton app kind (KIND_CTRL = 6, cap 1), window "Control Panel",
-320×120 at (160,130). Label prefix `cp_`. Included from kernel.asm right
-after `taskmgr.inc`.
+**320×140** at (160,130). Label prefix `cp_`. Included from kernel.asm right
+after `taskmgr.inc`. (It was 320×120 until the Date/Time page of §31.5
+needed two more control rows; the frame grew rather than that page being
+cramped, and every other page simply has more white space below it.)
 
 The window is a **two-pane browser**. The **left pane** lists the panel's
 items, one row each, the selected row drawn as a black bar with white text;
@@ -2097,7 +2167,7 @@ indistinguishable from resetting to 0.
 cp_ttl   db 'Control Panel', 0   ; window title
 cp_sname db 'Control', 0         ; KD_NAME: <= 7 chars, fits the Task
                                  ; Manager NAME column (the tm_sname rule)
-cp_tpl:  dw 160, 130, 320, 120, cp_ttl, cp_paint, 0, cp_onclick
+cp_tpl:  dw 160, 130, 320, 140, cp_ttl, cp_paint, 0, cp_onclick
          ;  x    y    w    h     title   paint     onkey  onclick
 cp_dirty db 0                    ; deferred-repaint flag (§31.2)
 cp_sel   db 0                    ; selected item; 0 = Scheduler
@@ -2116,7 +2186,7 @@ third mode and not a setting.
 
 ### 31.1 Content layout (pinned, content-relative)
 
-Content is 318×101 (frame 320×120 minus the 1px borders and the 18px title
+Content is 318×121 (frame 320×140 minus the 1px borders and the 18px title
 bar). Every coordinate below is relative to the window's content origin,
 which `cp_paint`/`cp_onclick` derive from the live `W_X`/`W_Y` — **never
 hardcoded screen coords**, because the window drags. Both callbacks receive
@@ -2127,7 +2197,7 @@ the module takes it in.
 
 ```nasm
 CP_CW    equ 318     ; content width          CP_RX   equ 96   ; right pane x
-CP_CH    equ 101     ; content height
+CP_CH    equ 121     ; content height
 CP_DIVX  equ 88      ; divider column: left pane is x 0..CP_DIVX-1
 CP_IX    equ 6       ; item label x           CP_I0Y  equ 6    ; row 0 top
 CP_IROWH equ 14      ; row pitch = hit band   CP_IBH  equ 12   ; sel bar height
@@ -2156,9 +2226,18 @@ CP_I_PAINT equ 2   ; -> page paint proc   (in DI = pane left, BP = pane top)
 CP_I_CLICK equ 4   ; -> page click proc   (in DI/BP, CX/DX = pane-relative)
 CP_ISTRIDE equ 8   ; 4th word reserved (a future page onkey proc)
 cp_items:  dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
+           dw cp_s_disp,  cp_disp_paint,  cp_disp_click,  0   ; §31.3
+           dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0   ; §31.4
+           dw cp_s_time,  cp_time_paint,  cp_time_click,  0   ; §31.5
 cp_items_end:
 CP_ITEMS   equ (cp_items_end - cp_items) / CP_ISTRIDE
+CP_ITIME   equ 3     ; the Date/Time item's index: §12.1 selects it by name
 ```
+
+**List names are at most 9 characters** (72px): the selection bar runs from
+CP_IBX1 to CP_IBX2 = 85 and the name starts at CP_IX = 6, so a tenth glyph
+would cross the divider. `'Scheduler'` and `'Date/Time'` are both exactly
+at that limit.
 
 **Page contract.** A page proc is called with **DI = pane left (absolute
 screen x), BP = pane top (absolute screen y = the content top)**, the gfx
@@ -2329,6 +2408,107 @@ state of its own, exactly as the Scheduler page reads `sched_mode_get`):
   emitted ≈ clip length and resync ≈ 0.
 
 No `[cp_dirty]`: nothing else on screen quotes a sound setting.
+
+### 31.5 Date/Time page — setting the system clock
+
+Fourth item in the panel list, index `CP_ITIME` = 3, list name and heading
+`'Date/Time'`. It is the editor for the system clock of §37 and the target
+of a click on the menu-bar clock (§12.1). Two rows of fields — the date
+above, the time below — one of which is *selected*, a `+` / `-` button pair
+that steps the selected field, and below them the clock's two **display
+options**. Pane-relative geometry:
+
+```nasm
+CPT_FX    equ 8     ; field text left x       CPT_DY equ 26  ; date row y
+CPT_MONW  equ 24    ; 'Mmm' field width       CPT_TY equ 48  ; time row y
+CPT_NUMW  equ 16    ; 'DD'/'HH' field width   CPT_YRW equ 32 ; 'YYYY' width
+CPT_BX    equ 150   ; button column x         CPT_BW equ 28  ; button size
+CPT_BUY   equ 22    ; '+' button top          CPT_BH equ 18
+CPT_BDY   equ 44    ; '-' button top
+CPT_O0Y   equ 68    ; option row 0 glyph top  CPT_O1Y equ 84 ; option row 1
+CPT_CAP1Y equ 102   ; instruction caption     CPT_CAP2Y equ 112 ; RTC caption
+```
+
+**Field table (binding).** Seven entries, `db x, w, y, 0` — stride 4, so
+index → record is two `shl`-by-1s. The index *is* the field number
+`clk_fld_str` / `clk_fld_adj` take (§37), which is what keeps the page free
+of any knowledge of what a month or an hour is:
+
+```nasm
+cp_tflds:  db CPT_FX,    CPT_MONW, CPT_DY, 0   ; 0 month  'Mmm'
+           db CPT_FX+32, CPT_NUMW, CPT_DY, 0   ; 1 day    'DD'
+           db CPT_FX+56, CPT_YRW,  CPT_DY, 0   ; 2 year   'YYYY'
+           db CPT_FX,    CPT_NUMW, CPT_TY, 0   ; 3 hour   'HH'
+           db CPT_FX+24, CPT_NUMW, CPT_TY, 0   ; 4 minute 'MM'
+           db CPT_FX+48, CPT_NUMW, CPT_TY, 0   ; 5 second 'SS'
+           db CPT_FX+72, CPT_NUMW, CPT_TY, 0   ; 6 AM/PM  — 12-hour only
+cp_tsel   db 0      ; selected field, initialised .text data like cp_sel
+```
+
+**The active field count is `6 + [clk_h12]`** — the meridiem field exists
+only while the clock is in 12-hour mode. Both the draw loop and the hit
+test derive their bound from it, and turning 12-hour mode **off** while
+that field is selected resets `[cp_tsel]` to 0, so the selection can never
+point past the end of the table.
+
+The gaps between the date fields are blank; the two `:` separators of the
+time row are drawn black at `CPT_FX+16` and `CPT_FX+40`. A field is drawn
+by its own string from `clk_fld_str`: black on white, or — when it is the
+selected one — white on a black `gfx_fill` box inset 2px around the glyphs
+(x−2..x+w+1, y−2..y+9), the same look as the item list's selection bar.
+
+- `cp_time_rows` (module-internal, in DI/BP, lock held) white-fills the
+  band the two rows occupy (pane x 0..`CPT_BX`−4, y `CPT_DY`−4..`CPT_TY`+11
+  — the button column excluded), takes ONE `clk_snap` (§37) and redraws
+  both rows from it. It is therefore the redraw path for **every** change:
+  a new selection, a `+`/`-` step, an option toggle, and the once-a-second
+  tick.
+- `cp_time_paint` — heading, `cp_time_rows`, both buttons (`cp_timebtn`,
+  a `gfx_frame` + white interior + centred `'+'`/`'-'` glyph), the two
+  option rows (12×12 `cp_chk_on`/`cp_chk_off` glyph at CP_PGX, label at
+  CP_PLX — the Sound page's checkbox idiom, §31.4), and two captions:
+  `'Click a field, then + or -'` at CPT_CAP1Y and, at CPT_CAP2Y,
+  `'Hardware clock: yes'` or `'Hardware clock: none'` read live from
+  `[clk_rtc]` (§37) — the `bb_avail` caption idiom again, here purely
+  informative: editing works either way.
+- **The option rows** are `'12-hour clock'` (`[clk_h12]`) and
+  `'Seconds in menu bar'` (`[clk_secs]`), both §37 state read live, so the
+  page keeps no copy. A click toggles the byte, redraws the glyph, redraws
+  the field rows (12-hour mode changes what the hour field says and
+  whether the meridiem field is there at all) and sets `[clk_barq]` so
+  ui_task repaints the menu bar in the same pass (§37). Not `[cp_dirty]`:
+  a whole-desktop `wm_paint_all` for a clock-format change would be a
+  visible flash to fix a flicker.
+- `cp_time_click` — signed comparisons throughout (§31.2). **Tested in
+  this order**, because the option rows own the full pane width while the
+  buttons own only their column: y ≥ `CPT_O0Y`−4 → the two option bands
+  (64..81, 82..99); else x ≥ `CPT_BX` → the `'+'` band
+  (`CPT_BUY`..+`CPT_BH`−1) and the `'-'` band (`CPT_BDY`..+`CPT_BH`−1),
+  x ≤ `CPT_BX+CPT_BW`−1 → `clk_fld_adj` with AL = `[cp_tsel]`, BL = +1/−1,
+  then `cp_time_rows`; else the field bands (each x−2..x+w+1 by y−4..y+11)
+  → store the index in `[cp_tsel]` and redraw the rows. A hit on the live
+  field or a miss does nothing. No BIOS call anywhere: `clk_fld_adj` sets
+  `[clk_dirty]` and ui_task writes the RTC outside the lock (§13 step 3).
+- `cp_tick` — the live refresh, called by ui_task step 4 under the gfx
+  lock through a `FARSHIM` like the other two entry points. It returns
+  immediately unless `[cp_sel]` = `CP_ITIME` **and** `inst_find_kind`
+  KIND_CTRL finds a live instance **and** its window is visible **and**
+  `wm_obscured` says clear; only then does it derive DI/BP from
+  `wm_content` and call `cp_time_rows`. Every one of those guards is the
+  §14 background-drawing contract, checked under the lock the caller
+  already holds.
+- `cp_tick_due` — the cheap gate ui_task consults *before* taking the lock
+  (§13 step 4): CF = 1 if the panel is live, visible and showing this
+  page. **Near code, not far** (it runs every second and is a dozen
+  instructions — the `tm_init` precedent of §33), and it reads the
+  instance table with **no lock held**, which is safe because only the UI
+  task allocates or frees a task-less instance and `cp_tick_due` *is* the
+  UI task; a stale answer costs one wasted lock, and `cp_tick` re-checks
+  everything under it anyway.
+
+New `FARK` entries for this page: `inst_find_kind`, `clk_snap`,
+`clk_fld_str`, `clk_fld_adj` (§33; `wm_content`, `wm_obscured`, `gfx_fill`,
+`gfx_frame` and `font_str` already have wrappers).
 
 ## 32. vgabb.inc — optional double buffering
 
@@ -3297,3 +3477,141 @@ which retires `[bb_mono]` (§32) — supported and expected.
   frequencies; replayed songs play tone-to-tone with no speaker-off gap,
   so a whole song is ONE contiguous wav region — per-note assertions
   slice it at the 6-tick note quantum and Goertzel each slice.
+
+## 37. clock.inc — the system clock
+
+The wall clock: one date + time of day for the whole system, seeded from
+the hardware RTC when the machine has one and advanced from the PIT
+afterwards. Label prefix `clk_` (the built-in Clock **app** of §14 keeps
+its own `app_clk_` names and its own per-instance stopwatch state — the two
+are unrelated). Included right after `events.inc`; `clk_init` runs in kmain
+right after `evq_init` (§15). All code is near `.text`: it is called from
+the UI task's inner loop and, through `FARK` wrappers, from the Control
+Panel's far page (§31.5).
+
+**State (`.bss`), the single source of truth.** Broken-down time, because
+every consumer wants fields and nothing wants epoch arithmetic:
+
+```nasm
+clk_sec  resb 1   ; 0..59      clk_day   resb 1   ; 1..31
+clk_min  resb 1   ; 0..59      clk_mon   resb 1   ; 1..12
+clk_hour resb 1   ; 0..23      clk_year  resw 1   ; 1980..2099
+clk_last resw 1   ; last [ticks] sample      clk_rtc   resb 1  ; 1 = RTC found
+clk_acc  resw 1   ; tenth-of-tick remainder  clk_dirty resb 1  ; write RTC
+clk_h12  resb 1   ; 0 = 24-hour (boot default), 1 = 12-hour + AM/PM
+clk_secs resb 1   ; 0 = the bar hides seconds (boot default), 1 = shows them
+clk_barq resb 1   ; sticky "the bar's text is stale" request
+clk_sn_* : a second copy of the six fields, same order and adjacency
+```
+
+**The two display settings** are runtime state like every other Control
+Panel setting (the scheduler mode, double buffering, the tone route): there
+is nowhere to persist them — os88fs is read-only (§19) — so both return to
+their defaults at boot. They change **display only**; the clock itself is
+always kept as a 0..23 hour and a full seconds count, so toggling either
+one loses nothing and the RTC is not rewritten.
+
+`[clk_barq]` is how anything that changes what the bar *should* say asks
+for a redraw without drawing: an edit (`clk_fld_adj`) or a settings toggle
+sets it, and the next `clk_tick` folds it into the change mask and clears
+it. Without it, an edit made while seconds are hidden would leave the bar
+showing the old time for up to a minute.
+
+**Ownership (binding).** Only the UI task **writes** — `clk_tick` from its
+loop, `clk_fld_adj` from a Control Panel click, both on task 0. **Readers
+are not so confined**: `menu_draw_bar` reaches `clk_fmt` from
+`wm_paint_all`, which a *dying background task* runs inside `wm_destroy`
+(§29.4), so a reader can be pre-empted mid-format while the UI task carries
+a second. Two rules make that safe, and both are binding:
+
+1. **Every carrying write is one critical section.** `clk_inc_sec` and
+   `clk_fld_adj` mutate under `pushf`/`cli` … `popf` (§1), so the fields
+   are only ever observed before or after a whole second (or a whole edit),
+   never mid-carry. The guard sits inside `clk_inc_sec`, per second, rather
+   than around `clk_tick`'s catch-up loop — an hour of held-open menu owes
+   3600 seconds and must not hold interrupts off for all of them at once.
+2. **Every reader formats from `clk_snap`**, which copies the six fields
+   under the same guard (sec+min and hour+day as words — that is why they
+   are laid out adjacent). `clk_fmt` snapshots itself; `clk_fld_str` reads
+   the last snapshot *without* taking one, so `cp_time_rows` calls
+   `clk_snap` once and its whole row is a single instant.
+
+Nothing in an ISR touches any of it; the clock is derived from `[ticks]`,
+which the PIT hook already owns (§8).
+
+**Advancing.** `clk_tick` uses the §14 accumulator idiom verbatim, which is
+what makes 18.2 Hz add up to real seconds: delta = `[ticks]` − `clk_last`
+(wrap-safe subtraction), `clk_last` = `[ticks]`, `clk_acc` += delta×10 as a
+32-bit value (a long lock starvation — a held-open menu — can owe more than
+65535 tenths), then `DIV 182` gives whole seconds owed and the new
+remainder. Each owed second is carried through sec → min → hour → day →
+month → year, with month lengths from a 12-byte table and February 29 in a
+leap year (`year AND 3 = 0`, exact over the 1980..2099 range the page
+allows).
+
+**The change mask (binding).** `clk_tick` returns **AL**, and ui_task's
+step 4 (§13) does nothing at all when it is 0:
+
+| bit | meaning |
+|-----|----------|
+| 0 | at least one second was added |
+| 1 | the **menu bar's text** changed, and only then may the bar be redrawn |
+
+Bit 1 is set when bit 0 is set **and** `[clk_secs]` is on; or the minute
+value differs from what it was before the advance; or 60 or more seconds
+were owed in one go (an hour of held-open menu can land on the same minute
+value — comparing the minute alone would miss it); or `[clk_barq]` was
+pending, which `clk_tick` then clears. Splitting the two bits is the whole
+point of the seconds setting: with seconds hidden the bar's text is
+unchanged 59 seconds out of 60, and ui_task must not take the gfx lock —
+the cursor blink that comes with it is the flicker being removed.
+
+**The hardware RTC.** `clk_init` stores the fallback date **first** —
+**4 July 2026, 00:00:00** (`CLK_DEF_Y`/`CLK_DEF_M`/`CLK_DEF_D`) — so any
+probe failure leaves a sane clock, then calls `clk_rtc_read` and sets
+`[clk_rtc]` only if it succeeds. The probe is deliberately paranoid,
+because the machines this OS targets are exactly the ones that may have no
+CMOS clock at all and whose BIOS may simply `iret` out of an unknown
+`int 1Ah` function, leaving CF and the registers as it found them:
+
+1. CX and DX are poisoned to 0FFFFh and CF is **set** before each call, so
+   an unimplemented function is detected by the poison surviving.
+2. `AH=02h` (time: CH/CL/DH = hour/min/sec BCD) then `AH=04h` (date:
+   CH/CL = century/year BCD, DH/DL = month/day) — CF = 1 from either
+   (documented as "clock not operating") fails the probe.
+3. Every byte must be valid packed BCD (`clk_bcd` returns CF = 1 when
+   either nibble exceeds 9) and in range: hour ≤ 23, min/sec ≤ 59, month
+   1..12, day 1..31, century 19 or 20.
+4. Only after all of that are the values committed, out of a scratch
+   buffer, as one set — a probe that fails halfway can never leave a
+   half-RTC, half-fallback clock.
+
+`clk_rtc_write` is the inverse (`AH=03h` + `AH=05h`, values re-encoded with
+`clk_tobcd`) and returns immediately when `[clk_rtc]` is 0. It calls BIOS,
+so it runs **only** from ui_task step 3, outside the gfx lock, draining
+`[clk_dirty]` (§13) — never from a window callback (§31.1).
+
+| symbol | contract |
+|--------|-----------|
+| `clk_init` | Boot: display settings to their defaults (24-hour, no seconds), fallback date, then the RTC probe. Preserves all registers. |
+| `clk_tick` | UI task only. Advances the clock from the `[ticks]` delta. Out: AL = the change mask above. Clobbers AX only. |
+| `clk_snap` | Copies the six fields to `clk_sn_*` under `pushf`/`cli`. Preserves all registers. `FARK`ed for §31.5. |
+| `clk_fmt` | Calls `clk_snap`, then formats the bar's line into `clk_str` in the live form: `'Mmm DD YYYY  HH:MM'`, plus `':SS'` if `[clk_secs]`, and in 12-hour mode the hour drawn 1..12 **without a leading zero** and a trailing `' AM'`/`' PM'`. 18..24 glyphs; `clk_str` is 26 bytes. Out: SI = `clk_str`. Preserves everything else. |
+| `clk_fld_str` | In: AL = field 0..6 (month, day, year, hour, minute, second, meridiem). Out: SI = a NUL string for that field alone in `clk_fbuf` — `'Mmm'`, `'DD'`, `'YYYY'`, `'HH'`, `'MM'`, `'SS'`, `'AM'`/`'PM'`. Always the field's **full width, zero-padded** — unlike `clk_fmt`, because a field is a fixed-width editable cell whose highlight box must not change size under it; in 12-hour mode the hour reads `'12'`, `'01'`..`'11'`. Reads the last `clk_snap` and does **not** take one. Preserves everything else. `FARK`ed for §31.5. |
+| `clk_fld_adj` | In: AL = field 0..6, BL = +1 or −1. Steps that field with wrap (month 1..12, day 1..month length, year 1980..2099, hour 0..23, min/sec 0..59); field 6 flips the meridiem by ±12 hours, either sign. Then re-clamps the day to the new month length (31 Mar − 1 month = 28 Feb, never 31 Feb), zeroes `clk_acc` and re-samples `clk_last` so the new second starts from now, and sets `[clk_dirty]` + `[clk_barq]`. Preserves all registers. `FARK`ed for §31.5. |
+
+**The hour is always stored 0..23** and stepped 0..23 — 12-hour mode is a
+rendering of it, not a second representation. So `+` on an hour showing
+`11 AM` gives `12 PM`, which is what a clock does; and the meridiem field
+is the only thing that jumps by 12.
+| `clk_rtc_write` | Pushes the live time back to the hardware RTC if `[clk_rtc]`; no-op otherwise. **BIOS call** — outside the gfx lock only. Preserves all registers. |
+| `clk_bcd` / `clk_tobcd` | BCD ↔ binary byte helpers; `clk_bcd` returns CF = 1 on a non-decimal nibble. `clk_tobcd` clobbers AH. |
+
+**Month names** are a 12×3 ASCII table (`'Jan'`…`'Dec'`), indexed by
+month−1 ×3 — the same data serves `clk_fmt` and `clk_fld_str`.
+
+**What this deliberately does not do.** No timezone, no DST (the DST byte
+`AH=02h` returns is ignored and `AH=03h` is written 0), no day-of-week (the
+BIOS date call does not return one and nothing displays it), and no
+re-reading of the RTC after boot — the PIT is the clock from then on, which
+is exactly how DOS behaves on the same hardware.

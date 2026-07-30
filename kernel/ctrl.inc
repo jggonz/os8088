@@ -48,7 +48,11 @@
 
 ; --- content geometry, content-relative (pinned in SPEC.md 31.1) -------------
 CP_CW     equ 318               ; content width  (frame 320 - 2 borders)
-CP_CH     equ 101               ; content height (frame 120 - border - title)
+CP_CH     equ 121               ; content height (frame 140 - border - title;
+                                ; the frame grew from 120 when the Date/Time
+                                ; page took its two option rows - SPEC.md
+                                ; 31.5 - rather than that page being cramped.
+                                ; Every other page just has more white below.)
 
 ; --- left pane: the item list -----------------------------------------------
 CP_DIVX   equ 88                ; divider column: left pane is x 0..CP_DIVX-1
@@ -80,8 +84,8 @@ CP_B0Y2   equ CP_PR0Y + CP_GW + 3             ; 41: row 0 bottom = row 1 top-1
 CP_B1Y2   equ CP_PR0Y + CP_PROWH + CP_GW + 3  ; 61: row 1 (Cooperative) bottom
 
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
-; No onkey: the panel is mouse-only. Content is 318x101.
-cp_tpl:     dw 160, 130, 320, 120, cp_ttl, cp_paint, 0, cp_onclick
+; No onkey: the panel is mouse-only. Content is 318x121.
+cp_tpl:     dw 160, 130, 320, 140, cp_ttl, cp_paint, 0, cp_onclick
 cp_ttl:     db 'Control Panel', 0
 cp_sname:   db 'Control', 0     ; KD_NAME: fits the 7-char NAME column
 
@@ -106,8 +110,16 @@ cp_items:
     dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
     dw cp_s_disp,  cp_disp_paint,  cp_disp_click,  0
     dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0
+    dw cp_s_time,  cp_time_paint,  cp_time_click,  0
 cp_items_end:
 CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
+CP_ITIME  equ 3                 ; the Date/Time item: ui.inc selects it by
+                                ; name when the menu bar clock is clicked
+                                ; (SPEC.md 12.1/31.5)
+
+; List names are at most 9 characters (72px): the selection bar ends at
+; CP_IBX2 = 85 and the name starts at CP_IX = 6, so a tenth glyph would
+; cross the divider. 'Scheduler' and 'Date/Time' are both exactly at it.
 
 cp_s_sched: db 'Scheduler', 0   ; list name AND the page heading
 cp_s_pre:   db 'Pre-emptive', 0
@@ -163,6 +175,64 @@ cp_sndbuf:  times 16 db 0       ; counters caption text ('E:nnnnn R:nnnnn');
                                 ; .text data, not .bss - the panel stays
                                 ; boot-clean with nothing to zero (SPEC.md 31)
 
+; --- Date/Time page (SPEC.md 31.5/37) ----------------------------------------
+cp_s_time:  db 'Date/Time', 0   ; list name AND the page heading
+cp_s_tcap:  db 'Click a field, then + or -', 0
+cp_s_trtc:  db 'Hardware clock: yes', 0
+cp_s_tnrt:  db 'Hardware clock: none', 0
+cp_s_t12:   db '12-hour clock', 0       ; option row 0 label
+cp_s_tsec:  db 'Seconds in menu bar', 0 ; option row 1 label
+cp_s_tplus: db '+', 0
+cp_s_tminus: db '-', 0
+cp_s_tcol:  db ':', 0
+
+; Date/Time geometry, PANE-relative: the date row above the time row, the
+; +/- buttons in their own column to the right of both, and the clock's two
+; display options below (SPEC.md 31.5/37).
+CPT_FX    equ 8                 ; field text left x
+CPT_DY    equ 26                ; date row text top
+CPT_TY    equ 48                ; time row text top
+CPT_MONW  equ 24                ; 'Mmm' field width
+CPT_NUMW  equ 16                ; 'DD' / 'HH' field width
+CPT_YRW   equ 32                ; 'YYYY' field width
+CPT_BX    equ 150               ; button column left
+CPT_BW    equ 28                ; button size
+CPT_BH    equ 18
+CPT_BUY   equ 22                ; '+' button top
+CPT_BDY   equ 44                ; '-' button top
+CPT_O0Y   equ 68                ; option row 0 glyph top ('12-hour clock')
+CPT_O1Y   equ 84                ; option row 1 glyph top ('Seconds in...')
+CPT_CAP1Y equ 102               ; instruction caption row
+CPT_CAP2Y equ 112               ; hardware-clock caption row
+
+; Option hit bands: the whole pane width, generous and contiguous like the
+; other pages' (SPEC.md 31.2), and starting BELOW the '-' button's band.
+CPT_OB0Y1 equ CPT_O0Y - 4                   ; 64: row 0 top
+CPT_OB0Y2 equ CPT_O1Y - 3                   ; 81: row 0 bottom = row 1 top-1
+CPT_OB1Y2 equ CPT_O1Y + CP_GW + 3           ; 99: row 1 bottom
+
+; The editable fields, {x, w, y, pad} - stride 4, so index -> record is two
+; shl-by-1s. The INDEX IS the field number clk_fld_str/clk_fld_adj take
+; (SPEC.md 37), which is what keeps this page free of any knowledge of what
+; a month or an hour actually is. The LAST entry exists only in 12-hour
+; mode: the active count is 6 + [clk_h12], and both the draw loop and the
+; hit test take their bound from it.
+cp_tflds:
+    db CPT_FX,    CPT_MONW, CPT_DY, 0       ; 0 month  'Mmm'
+    db CPT_FX+32, CPT_NUMW, CPT_DY, 0       ; 1 day    'DD'
+    db CPT_FX+56, CPT_YRW,  CPT_DY, 0       ; 2 year   'YYYY'
+    db CPT_FX,    CPT_NUMW, CPT_TY, 0       ; 3 hour   'HH'
+    db CPT_FX+24, CPT_NUMW, CPT_TY, 0       ; 4 minute 'MM'
+    db CPT_FX+48, CPT_NUMW, CPT_TY, 0       ; 5 second 'SS'
+    db CPT_FX+72, CPT_NUMW, CPT_TY, 0       ; 6 AM/PM  - 12-hour mode only
+cp_tflds_end:
+CPT_NFLD  equ (cp_tflds_end - cp_tflds) / 4
+
+cp_tsel:  db 0                  ; selected field; initialised .text data like
+                                ; cp_sel, so the panel stays boot-clean
+cp_tendp: dw 0                  ; cp_time_pick scratch: one past the last
+                                ; ACTIVE field record
+
 ; Sound page geometry, PANE-relative. Three control rows at a tighter
 ; 16px pitch than the two-row pages (the page holds more), the Test
 ; button beside them, two caption rows at the bottom.
@@ -204,6 +274,49 @@ CPS_CBY2  equ CPS_CBY + CP_GW - 1       ; 63: checkbox band bottom
 ; -----------------------------------------------------------------------------
     FARSHIM cp_paint,   cpf_paint
     FARSHIM cp_onclick, cpf_onclick
+    FARSHIM cp_tick,    cpf_tick    ; the once-a-second Date/Time refresh,
+                                    ; called by ui_task step 4 (SPEC 31.5)
+
+; -----------------------------------------------------------------------------
+; cp_tick_due - is a live Date/Time page on screen? (SPEC.md 31.5)
+;
+; in:  nothing; NO gfx lock held
+; out: CF = 1 if the Control Panel is live, visible and showing that page
+; clobbers: nothing else
+;
+; The gate ui_task consults BEFORE taking the gfx lock (SPEC.md 13 step 4):
+; with the menu bar's seconds hidden, an open Date/Time page is the only
+; thing that still wants a per-second redraw, and taking the lock to find
+; that out would blink the cursor every second - the very flicker the
+; setting removes.
+;
+; Near code, not far: it runs every second and is a dozen instructions (the
+; tm_init precedent, SPEC.md 33). It reads the instance table with no lock
+; held, which is safe because only the UI task allocates or frees a
+; task-less instance and this IS the UI task; a stale answer costs one
+; wasted lock, and cp_tick re-checks everything under it anyway.
+; -----------------------------------------------------------------------------
+cp_tick_due:
+    push ax
+    push bx
+    push di
+    cmp byte [cp_sel], CP_ITIME
+    jne .no
+    mov al, KIND_CTRL
+    call inst_find_kind         ; CF = 1: no live Control Panel
+    jc .no
+    mov bx, [di+I_WIN]
+    test word [bx+W_FLAGS], 2   ; visible?
+    jz .no
+    stc
+    jmp .out
+.no:
+    clc
+.out:
+    pop di
+    pop bx
+    pop ax
+    ret
 
 section .fartext
 
@@ -1295,6 +1408,500 @@ cp_sndclip:
     pop es
     pop bp
     pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; Date/Time page (SPEC.md 31.5) - the editor for the system clock of
+; SPEC.md 37, and what a click on the menu bar clock opens (SPEC.md 12.1).
+;
+; Two rows of fields - the date above, the time below - one of which is
+; selected, plus a '+' / '-' button pair that steps the selected field. The
+; page keeps exactly one byte of state (cp_tsel, which field is selected):
+; the values themselves are always read live through clk_fld_str, so the
+; page can no more disagree with the clock than the Scheduler page can with
+; sched_mode_get. Nothing here knows what a month is - clk_fld_adj owns the
+; ranges, the wrap and the day clamp - and nothing here calls BIOS: writing
+; the hardware RTC is ui_task's job, off the [clk_dirty] flag (SPEC.md 13).
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; cp_time_paint - the Date/Time page (page contract of SPEC.md 31.1)
+; in:  DI = pane left, BP = pane top; gfx lock held; entry pen is CWHITE
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+cp_time_paint:
+    push ax
+    push cx
+    push dx
+    push si
+
+    mov byte [gfx_color], CBLACK ; entry pen is CWHITE (cp_page's erase)
+
+    mov si, cp_s_time           ; heading, same string as the list row
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PHY
+    KCALL font_str
+
+    call cp_time_rows           ; both field rows, from the live clock
+
+    mov al, 0                   ; the '+' button...
+    call cp_timebtn
+    mov al, 1                   ; ...and the '-' button
+    call cp_timebtn
+
+    mov byte [gfx_color], CBLACK ; the two option labels; their glyphs are
+    mov si, cp_s_t12            ; drawn by cp_timechk, which is also the
+    mov cx, di                  ; redraw path when one is toggled
+    add cx, CP_PLX
+    mov dx, bp
+    add dx, CPT_O0Y + CP_PLDY
+    KCALL font_str
+    mov si, cp_s_tsec
+    mov cx, di
+    add cx, CP_PLX
+    mov dx, bp
+    add dx, CPT_O1Y + CP_PLDY
+    KCALL font_str
+    call cp_timechk
+
+    mov byte [gfx_color], CBLACK
+    mov si, cp_s_tcap           ; caption 1: how the page is worked
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CPT_CAP1Y
+    KCALL font_str
+
+    mov si, cp_s_tnrt           ; caption 2: read live from the probe's
+    cmp byte [clk_rtc], 0       ; verdict (SPEC.md 37) - informative only,
+    je .cap                     ; since editing works either way
+    mov si, cp_s_trtc
+.cap:
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CPT_CAP2Y
+    KCALL font_str
+
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_time_click - a click inside the Date/Time page
+;
+; in:  DI = pane left, BP = pane top, CX = pane-relative x, DX = pane-
+;      relative y; gfx lock held by the caller
+; out: nothing
+; clobbers: nothing (flags only)
+;
+; Comparisons SIGNED throughout (SPEC.md 31.2). Tested in THIS ORDER,
+; because the option rows own the full pane width while the buttons own
+; only their column: the two option bands first, then the button column,
+; then the field bands. A step goes through clk_fld_adj, which also posts
+; [clk_dirty] and [clk_barq] - so the hardware RTC is written by ui_task,
+; outside this held lock, never from here.
+; -----------------------------------------------------------------------------
+cp_time_click:
+    push ax
+    push bx
+
+    cmp dx, CPT_OB0Y1
+    jge .opt                    ; below the buttons: the option rows
+
+    cmp cx, CPT_BX
+    jge .btn
+
+    call cp_time_pick           ; --- the field rows: which field? ---
+    jc .done
+    cmp al, [cp_tsel]
+    je .done                    ; already selected: change nothing
+    mov [cp_tsel], al
+    call cp_time_rows
+    jmp .done
+
+.btn:                           ; --- the button column ---
+    cmp cx, CPT_BX + CPT_BW - 1
+    jg .done
+    mov bl, 1                   ; the '+' band
+    cmp dx, CPT_BUY
+    jl .done
+    cmp dx, CPT_BUY + CPT_BH - 1
+    jle .step
+    mov bl, 0xFF                ; the '-' band
+    cmp dx, CPT_BDY
+    jl .done
+    cmp dx, CPT_BDY + CPT_BH - 1
+    jg .done
+.step:
+    mov al, [cp_tsel]
+    KCALL clk_fld_adj           ; in AL = field, BL = +1/-1 (SPEC.md 37)
+    call cp_time_rows
+    jmp .done
+
+.opt:                           ; --- the two display options (SPEC.md 37) ---
+    cmp dx, CPT_OB1Y2
+    jg .done                    ; below the last band: nothing
+    cmp dx, CPT_OB0Y2
+    jg .osec
+
+    xor byte [clk_h12], 1       ; row 0: 12-hour clock. The hour field reads
+    cmp byte [clk_h12], 0       ; differently now, and the meridiem field
+    jne .oredraw                ; comes or goes with it - so if it was the
+    cmp byte [cp_tsel], 6       ; selected one and just went away, the
+    jb .oredraw                 ; selection has to come back inside the table
+    mov byte [cp_tsel], 0
+    jmp .oredraw
+.osec:
+    xor byte [clk_secs], 1      ; row 1: seconds in the menu bar
+.oredraw:
+    mov byte [clk_barq], 1      ; the bar's text (and width) changed: ui_task
+                                ; redraws it in this same pass (SPEC.md 37).
+                                ; NOT [cp_dirty] - a whole-desktop repaint to
+                                ; fix a flicker would be a worse flash
+    call cp_timechk             ; the glyph...
+    call cp_time_rows           ; ...and the rows it just re-formatted
+
+.done:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_tick - the once-a-second live refresh (far body of the cp_tick shim)
+;
+; in:  nothing; the gfx lock is held by ui_task (SPEC.md 13 step 4)
+; out: nothing
+; clobbers: nothing (flags only)
+;
+; Every guard here is the SPEC.md 14 background-drawing contract, checked
+; under the lock the caller already holds: the page must be the selected
+; one, a Control Panel instance must be live, its window visible, and
+; nothing may be on top of it. Only then is the origin re-derived from the
+; live window rect and the two rows redrawn in place.
+; -----------------------------------------------------------------------------
+cpf_tick:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+
+    cmp byte [cp_sel], CP_ITIME
+    jne .out
+    mov al, KIND_CTRL
+    KCALL inst_find_kind         ; CF = 1: no live Control Panel
+    jc .out
+    mov bx, [di+I_WIN]
+    test word [bx+W_FLAGS], 2   ; visible?
+    jz .out
+    KCALL wm_obscured
+    jc .out
+    KCALL wm_content             ; AX = content left, DX = content top
+    mov di, ax
+    add di, CP_RX               ; DI = pane left, BP = pane top
+    mov bp, dx
+    call cp_time_rows
+
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    retf                        ; far body: reached through the cp_tick shim
+
+; -----------------------------------------------------------------------------
+; cp_time_rows - redraw both field rows from the live clock
+;
+; in:  DI = pane left, BP = pane top; caller holds the gfx lock
+; out: nothing
+; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK or CWHITE)
+;
+; Erases the band the rows occupy first (the button column excluded), so
+; this is the single redraw path for everything that can change here: a new
+; selection, a +/- step, and the once-a-second tick.
+; -----------------------------------------------------------------------------
+cp_time_rows:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov byte [gfx_color], CWHITE
+    mov ax, di
+    mov bx, bp
+    add bx, CPT_DY - 4
+    mov cx, di
+    add cx, CPT_BX - 4
+    mov dx, bp
+    add dx, CPT_TY + 11
+    KCALL gfx_fill
+
+    mov byte [gfx_color], CBLACK ; the time row's two ':' separators (the
+    mov si, cp_s_tcol            ; date row's gaps are simply blank)
+    mov cx, di
+    add cx, CPT_FX + 16
+    mov dx, bp
+    add dx, CPT_TY
+    KCALL font_str
+    mov cx, di
+    add cx, CPT_FX + 40
+    KCALL font_str
+
+    KCALL clk_snap               ; ONE snapshot for all the fields, so the
+                                 ; row cannot straddle a second (SPEC.md 37)
+    mov ah, 6                   ; active field count: the meridiem exists
+    add ah, [clk_h12]           ; only in 12-hour mode (SPEC.md 31.5)
+    xor al, al                  ; then every field, the selected one barred
+.fld:
+    call cp_time_fld
+    inc al
+    cmp al, ah
+    jb .fld
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_time_fld - draw one field, barred if it is the selected one
+;
+; in:  AL = field index, DI = pane left, BP = pane top; gfx lock held
+; out: nothing
+; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK or CWHITE)
+; -----------------------------------------------------------------------------
+cp_time_fld:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov ah, al                  ; AH = the field index; AL is needed below
+    mov bl, al
+    mov bh, 0
+    shl bx, 1
+    shl bx, 1
+    add bx, cp_tflds            ; BX -> {x, w, y, pad}
+
+    mov cl, [bx]                ; CX = the field text's screen x
+    mov ch, 0
+    add cx, di
+    mov dl, [bx+2]              ; DX = its screen y
+    mov dh, 0
+    add dx, bp
+
+    cmp ah, [cp_tsel]
+    jne .plain
+
+    push cx                     ; --- selected: white text on a black box ---
+    push dx
+    push bx
+    push ax                     ; the box math below runs through AX, and AH
+                                ; still has to name the field afterwards
+    mov ax, cx
+    sub ax, 2                   ; x1 = x - 2
+    mov si, cx
+    mov cl, [bx+1]              ; the field's width
+    mov ch, 0
+    add cx, si
+    inc cx                      ; x2 = x + w + 1
+    mov bx, dx
+    sub bx, 2                   ; y1 = y - 2
+    add dx, 9                   ; y2 = y + 9
+    mov byte [gfx_color], CBLACK
+    KCALL gfx_fill
+    pop ax
+    pop bx
+    pop dx
+    pop cx
+    mov byte [gfx_color], CWHITE
+    jmp .text
+.plain:
+    mov byte [gfx_color], CBLACK
+.text:
+    mov al, ah                  ; AL = field index for the formatter
+    KCALL clk_fld_str            ; SI = that field's text (SPEC.md 37)
+    KCALL font_str               ; in SI, CX = x, DX = y
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_time_pick - hit-test the six field bands
+;
+; in:  CX = pane-relative x, DX = pane-relative y
+; out: CF = 0 and AL = field index on a hit, CF = 1 on a miss
+; clobbers: AX
+; Bands are generous: x-2..x+w+1 by y-4..y+11, so the gaps between fields
+; belong to nobody and a click just misses. SIGNED compares (SPEC.md 31.2).
+; -----------------------------------------------------------------------------
+cp_time_pick:
+    push bx
+    push si
+    push di
+    mov al, 6                   ; one past the last ACTIVE record: the
+    add al, [clk_h12]           ; meridiem is only there in 12-hour mode
+    mov ah, 0
+    shl ax, 1
+    shl ax, 1
+    add ax, cp_tflds
+    mov [cp_tendp], ax
+    mov bx, cp_tflds
+.scan:
+    mov ax, [bx]                ; AL = field x, AH = field width
+    mov di, ax
+    and di, 0x00FF              ; DI = x
+    mov al, ah
+    mov ah, 0                   ; AX = w
+    mov si, di
+    add si, ax
+    inc si                      ; SI = x2 = x + w + 1
+    mov ax, di
+    sub ax, 2                   ; AX = x1 = x - 2
+    cmp cx, ax
+    jl .next
+    cmp cx, si
+    jg .next
+    mov al, [bx+2]              ; the field's row y
+    mov ah, 0
+    mov si, ax
+    add si, 11                  ; y2
+    sub ax, 4                   ; y1
+    cmp dx, ax
+    jl .next
+    cmp dx, si
+    jg .next
+    mov ax, bx                  ; hit: index = (record - table) / 4
+    sub ax, cp_tflds
+    shr ax, 1
+    shr ax, 1
+    clc                         ; after the shifts - they write CF
+    jmp .out
+.next:
+    add bx, 4
+    cmp bx, [cp_tendp]
+    jb .scan
+    stc
+.out:
+    pop di
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_timechk - draw both option checkbox glyphs from the live settings
+;
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing
+; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
+; Both are always drawn and cp_glyph white-fills its own box, so this is
+; also the redraw path after a toggle (the Sound page's cp_sndchk idiom).
+; -----------------------------------------------------------------------------
+cp_timechk:
+    push ax
+    push cx
+    push dx
+    push si
+
+    mov byte [gfx_color], CBLACK
+    mov cx, di
+    add cx, CP_PGX
+    mov dx, bp
+    add dx, CPT_O0Y
+    mov si, cp_chk_off          ; --- row 0: 12-hour clock ---
+    cmp byte [clk_h12], 0
+    je .r0
+    mov si, cp_chk_on
+.r0:
+    call cp_glyph
+
+    mov dx, bp
+    add dx, CPT_O1Y
+    mov si, cp_chk_off          ; --- row 1: seconds in the menu bar ---
+    cmp byte [clk_secs], 0
+    je .r1
+    mov si, cp_chk_on
+.r1:
+    call cp_glyph
+
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_timebtn - draw one of the two stepper buttons
+;
+; in:  AL = 0 the '+' button / 1 the '-' button; DI = pane left, BP = pane
+;      top; gfx lock held
+; out: nothing
+; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
+; -----------------------------------------------------------------------------
+cp_timebtn:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov si, cp_s_tplus
+    mov dx, CPT_BUY
+    or al, al
+    jz .have
+    mov si, cp_s_tminus
+    mov dx, CPT_BDY
+.have:
+    mov bx, bp
+    add bx, dx                  ; BX = y1
+    push bx
+    mov ax, di
+    add ax, CPT_BX              ; AX = x1
+    mov cx, di
+    add cx, CPT_BX + CPT_BW - 1 ; CX = x2
+    mov dx, bx
+    add dx, CPT_BH - 1          ; DX = y2
+    mov byte [gfx_color], CBLACK
+    KCALL gfx_frame
+    inc ax                      ; the interior, one pixel in from the frame
+    inc bx
+    dec cx
+    dec dx
+    mov byte [gfx_color], CWHITE
+    KCALL gfx_fill
+    pop bx
+
+    mov byte [gfx_color], CBLACK ; the 8px glyph, centred in the box
+    mov cx, di
+    add cx, CPT_BX + (CPT_BW - 8) / 2
+    mov dx, bx
+    add dx, (CPT_BH - 8) / 2
+    KCALL font_str
+
     pop si
     pop dx
     pop cx

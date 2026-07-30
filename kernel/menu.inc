@@ -9,6 +9,11 @@
 ; (the ISR keeps them fresh; the cursor stays hidden - the highlight is
 ; the feedback). The pixels under the dropped menu are saved to SAVE_SEG:0
 ; and put back on release.
+;
+; The right end of the bar is the system clock (SPEC.md 12.1): drawn by
+; menu_draw_clock, repainted once a second by the UI task, and - because
+; ui.inc hit-tests its cell before menu_track ever sees the click - a
+; shortcut to the Control Panel's Date/Time page rather than a menu title.
 ; =============================================================================
 
 ; --- commands returned by menu_track (owned here, dispatched by ui.inc) ------
@@ -40,6 +45,17 @@ MENU_NUM    equ 3               ; menus in the table
 MENU_TEXT_Y equ 6               ; title text row (8px glyphs in a 19px bar)
 MENU_LOGO_Y equ 4               ; logo glyph top row (11px tall)
 MENU_ITEM_H equ 16              ; pull-down item cell height, px
+
+; --- the clock cell at the right end of the bar (SPEC.md 12.1) --------------
+; The string's width VARIES with the display settings (SPEC.md 37) - 18
+; glyphs for 'Mmm DD YYYY  HH:MM' up to 24 for 'Mmm DD YYYY  HH:MM:SS PM' -
+; so the cell is sized for the longest form and the text is right-aligned
+; inside it: the erase is always the whole cell, and the time stays pinned
+; to the same right margin whichever form it is in.
+MENU_CLK_W  equ 24*8                        ; the LONGEST form, not the live one
+MENU_CLK_X  equ SCREEN_W - 8 - MENU_CLK_W   ; 440: cell left, 8px right margin
+MENU_CLK_HX equ MENU_CLK_X - 6              ; 434: hit band left edge, and the
+                                            ; left edge of the erased cell
 
 ; -----------------------------------------------------------------------------
 ; menu_draw_bar - draw the menu bar: white rows 0..MBAR_H-2, black line at
@@ -89,6 +105,51 @@ menu_draw_bar:
     pop cx
     add si, MENU_ENTSZ
     loop .title
+
+    call menu_draw_clock        ; the right end of the bar (SPEC.md 12.1)
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_draw_clock - draw the system clock at the right end of the menu bar
+; in:  nothing (caller holds the gfx lock)
+; out: nothing
+; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
+;
+; Erases the whole cell first - the longest form's worth, not the live
+; string's - so this doubles as the redraw path ui_task drives when the
+; text changes (SPEC.md 13 step 4), including a change of FORM. No
+; wm_obscured check: windows
+; clamp to y >= MBAR_H, so nothing can ever cover the bar. Ordinary
+; persistent content - it goes through the back buffer like everything else
+; and the caller's gfx_unlock flushes it (SPEC.md 32).
+; -----------------------------------------------------------------------------
+menu_draw_clock:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov byte [gfx_color], CWHITE ; the cell, the black rule below it excluded
+    mov ax, MENU_CLK_HX
+    xor bx, bx
+    mov cx, SCREEN_W - 1
+    mov dx, MBAR_H - 2
+    call gfx_fill
+
+    call clk_fmt                ; SI = the line in its live form (SPEC.md 37)
+    call font_width             ; AX = its width - right-align it, since the
+    mov cx, SCREEN_W - 8        ; form (and so the width) can change
+    sub cx, ax
+    mov byte [gfx_color], CBLACK
+    mov dx, MENU_TEXT_Y
+    call font_str
 
     pop si
     pop dx

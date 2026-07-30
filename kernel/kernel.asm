@@ -189,6 +189,10 @@ kmain:
                                 ; of .bss until this moves it (SPEC.md 33)
     call sched_init             ; pre-emption live from here on
     call evq_init
+    call clk_init               ; system clock (SPEC.md 37): probe the RTC,
+                                ; or fall back to the fixed date - before the
+                                ; mode set, so the very first menu bar paint
+                                ; already carries a valid clock
     call vga_mode12
     call bb_init                ; RAM probe + back buffer (SPEC.md 32): after
                                 ; the mode set (VRAM just cleared, planes
@@ -268,6 +272,8 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "mouse.inc"
 %include "sched.inc"
 %include "events.inc"
+%include "clock.inc"            ; the system clock (SPEC.md 37): after
+                                ; sched.inc, whose [ticks] it advances from
 %include "wm.inc"
 %include "instance.inc"
 %include "menu.inc"

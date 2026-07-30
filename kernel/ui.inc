@@ -6,6 +6,9 @@
 ; instance launch, any pending package load and any posted full repaint (all
 ; outside the gfx lock - app_launch and loader_run manage their own locking),
 ; and yields.
+; Step 4 is the system clock (SPEC.md 37): clk_tick every pass - it is cheap
+; and keeps time whether or not anything is drawn - and, on the second, one
+; gfx_lock around the menu bar's clock cell plus any open Date/Time page.
 ; Mouse-downs in the menu bar run menu_track and dispatch the returned
 ; CMD_*: app commands launch a new instance (or front a full singleton) via
 ; app_launch (SPEC.md 29). Mouse-downs on windows QUIT (close box ->
@@ -73,10 +76,20 @@ ui_task:
 
     cmp dx, MBAR_H              ; in the menu bar?
     jae .on_desktop
+    cmp cx, MENU_CLK_HX         ; the clock cell at the right end (SPEC 12.1)?
+    jae .clock_cell             ; tested BEFORE menu_track: it is not a title
     call gfx_lock               ; menu_track runs the whole interaction
     call menu_track             ; in: CX = mousedown x; out: AX = CMD_* or 0
     call gfx_unlock
     call ui_dispatch
+    jmp .yield
+
+.clock_cell:                    ; open the Control Panel on its Date/Time
+    mov byte [cp_sel], CP_ITIME ; page (SPEC.md 31.5); no lock held here, so
+    mov al, KIND_CTRL           ; app_launch is called directly like any
+    call app_launch             ; other menu command - and fronts + repaints
+    jnc .yield                  ; an already-open panel, which is what makes
+    call snd_beep               ; the page swap visible
     jmp .yield
 
 .on_desktop:
@@ -179,13 +192,41 @@ ui_task:
     call loader_run             ; in: AX = index; does its own locking
 .chk_cp:
     cmp byte [cp_dirty], 0      ; scheduler mode changed in the Control
-    je .idle                    ; Panel (SPEC.md 31.2): windows that quote
+    je .chk_clk                 ; Panel (SPEC.md 31.2): windows that quote
     mov byte [cp_dirty], 0      ; the mode - the About box's third line -
     call gfx_lock               ; are already painted, so repaint them here,
     call wm_paint_all           ; outside cp_onclick's held lock
     call gfx_unlock
+.chk_clk:
+    cmp byte [clk_dirty], 0     ; the clock was set from the Date/Time page
+    je .clock                   ; (SPEC.md 31.5): the hardware RTC is written
+    mov byte [clk_dirty], 0     ; HERE, outside the lock, because a page proc
+    call clk_rtc_write          ; may not call BIOS (SPEC.md 31.1)
 
-    ; --- 4. give everyone else a slice ----------------------------------------
+    ; --- 4. the clock: keep time always, draw only when something changed ----
+    ; Taking the gfx lock blinks the cursor, and that blink IS the flicker
+    ; the "seconds in menu bar" setting exists to remove - so the lock is
+    ; taken only when the bar's text really changed (mask bit 1), or when a
+    ; Date/Time page is on screen and wants its seconds (SPEC.md 13/37).
+.clock:
+    call clk_tick               ; AL: bit0 = a second passed, bit1 = the bar
+    mov bl, al                  ; text changed
+    or al, al
+    jz .idle
+    test al, 2
+    jnz .clk_lock
+    call cp_tick_due            ; CF = 1: a live Date/Time page is showing
+    jnc .idle
+.clk_lock:
+    call gfx_lock
+    test bl, 2
+    jz .clk_cp
+    call menu_draw_clock        ; the menu bar cell (SPEC.md 12.1)...
+.clk_cp:
+    call cp_tick                ; ...and an open Date/Time page (SPEC 31.5),
+    call gfx_unlock             ; which is a no-op unless one is showing
+
+    ; --- 5. give everyone else a slice ----------------------------------------
 .idle:
     call task_yield
     jmp .loop
