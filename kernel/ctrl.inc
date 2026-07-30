@@ -131,11 +131,32 @@ cp_s_sayes: db 'AdLib: yes', 0
 cp_s_sfrz:  db 'Clips freeze GUI', 0   ; the trade, stated honestly (34.4)
 cp_s_soff:  db 'Clips: off', 0
 
-; The built-in test clip's waveform: one 8-sample period of a 1 kHz sine
-; (8-bit unsigned), replicated into SND_SEG by cp_sndclip and played at
-; 8,000 Hz through slot 0x0080's target - which is what feeds the
-; emitted/resync counters the caption below reports (SPEC.md 31.4).
-cp_snd_pat: db 128, 218, 255, 218, 128, 38, 1, 38
+; The built-in test clip is the Recorder demo's 1 s sine sweep (SPEC.md
+; 31.4/35): 400 Hz rising linearly to 800 Hz over the first half second
+; and back down over the second, synthesised by cp_sndclip straight into
+; SND_SEG (8-bit unsigned) and played at 8,000 Hz through slot 0x0080's
+; target - which is what feeds the emitted/resync counters the caption
+; below reports. Its own copy of the recorder's table (kernel code cannot
+; call into a package): 128 + round(88*sin(2*pi*i/256)), range 40..216.
+cp_sine:
+    db 128,130,132,134,137,139,141,143,145,147,149,151,154,156,158,160
+    db 162,164,166,168,169,171,173,175,177,179,180,182,184,185,187,189
+    db 190,192,193,195,196,197,199,200,201,202,203,205,206,207,208,208
+    db 209,210,211,212,212,213,213,214,214,215,215,215,216,216,216,216
+    db 216,216,216,216,216,215,215,215,214,214,213,213,212,212,211,210
+    db 209,208,208,207,206,205,203,202,201,200,199,197,196,195,193,192
+    db 190,189,187,185,184,182,180,179,177,175,173,171,169,168,166,164
+    db 162,160,158,156,154,151,149,147,145,143,141,139,137,134,132,130
+    db 128,126,124,122,119,117,115,113,111,109,107,105,102,100, 98, 96
+    db  94, 92, 90, 88, 87, 85, 83, 81, 79, 77, 76, 74, 72, 71, 69, 67
+    db  66, 64, 63, 61, 60, 59, 57, 56, 55, 54, 53, 51, 50, 49, 48, 48
+    db  47, 46, 45, 44, 44, 43, 43, 42, 42, 41, 41, 41, 40, 40, 40, 40
+    db  40, 40, 40, 40, 40, 41, 41, 41, 42, 42, 43, 43, 44, 44, 45, 46
+    db  47, 48, 48, 49, 50, 51, 53, 54, 55, 56, 57, 59, 60, 61, 63, 64
+    db  66, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 85, 87, 88, 90, 92
+    db  94, 96, 98,100,102,105,107,109,111,113,115,117,119,122,124,126
+cp_swdir:   dw 1                ; sweep direction, +1 up / -1 down (re-armed
+                                ; by cp_sndclip on every click)
 
 cp_sndbtn_f: db 0               ; Test button look: 0 normal / 1 pressed
 cp_sndbuf:  times 16 db 0       ; counters caption text ('E:nnnnn R:nnnnn');
@@ -156,9 +177,12 @@ CPS_BTNH  equ 16
 CPS_CAP1Y equ 74                ; status caption row
 CPS_CAP2Y equ 88                ; counters caption row
 CPS_CAP2X equ 92                ; caption 1's second column (the clip note)
-CPS_TESTN equ 12000             ; test clip length: ~1.5s at 8,000 Hz;
+CPS_TESTN equ 8000              ; test clip length: 1 s at 8,000 Hz (the
+                                ; recorder demo's length, SPEC.md 35);
                                 ; staged in a verb-7 grant since Phase 4
                                 ; brought the allocator (SPEC.md 34.6)
+CPS_INC400 equ 3277             ; sweep phase increment: 400*65536/8000
+CPS_INC800 equ 6554             ; 800*65536/8000
 ; hit bands: generous and contiguous like the Scheduler page's (31.2)
 CPS_B0Y1  equ CPS_R0Y - 4               ; 16: route row 0 top
 CPS_B0Y2  equ CPS_R0Y + CP_GW - 1       ; 31: row 0 bottom = row 1 top - 1
@@ -1196,27 +1220,33 @@ cp_putu16:
 
 ; -----------------------------------------------------------------------------
 ; cp_sndclip - synthesise the built-in test clip into SND_SEG and play it
-; in:  nothing (DI/BP unused); gfx lock held by the caller
+; in:  nothing (DI/BP inputs unused); gfx lock held by the caller
 ; out: nothing; [snd_pcm_emitted]/[snd_pcm_resync] hold the clip's tale
-; clobbers: nothing (flags only)
+; clobbers: nothing (flags only; [cp_swdir] is scratch)
 ;
 ; Takes a staging grant through the public verb-7 surface (SPEC.md 34.6 -
 ; the Phase 4 allocator; stamped with the Control Panel's own instance and
-; freed on the way out), replicates the 8-sample 1 kHz sine period into it
-; (direct ES writes - kernel code may hold an ES into SND_SEG, packages
-; may not), then plays it at 8,000 Hz (N = 149, the default carrier)
-; through slot 0x0080's target - the same path a package takes, ES pointing
-; away from DS and all. The result codes are deliberately ignored: the
-; counters caption reports what actually happened, which is the point of
-; the button. A refused grant (pool full) plays nothing and the counters
-; stay 0 - the same honest tale.
+; freed on the way out), synthesises the sine sweep into it (direct ES
+; writes - kernel code may hold an ES into SND_SEG, packages may not): the
+; recorder demo's generator (SPEC.md 35), a 16-bit phase accumulator whose
+; top byte indexes cp_sine and whose increment is Bresenham-stepped from
+; CPS_INC400 to CPS_INC800 across the first half and back down the second
+; (BP carries the error term, preserved like everything else). Then plays
+; it at 8,000 Hz (N = 149, the default carrier) through slot 0x0080's
+; target - the same path a package takes, ES pointing away from DS and
+; all. The result codes are deliberately ignored: the counters caption
+; reports what actually happened, which is the point of the button. A
+; refused grant (pool full) plays nothing and the counters stay 0 - the
+; same honest tale.
 ; -----------------------------------------------------------------------------
 cp_sndclip:
     push ax
+    push bx
     push cx
     push dx
     push si
     push di
+    push bp
     push es
 
     mov ax, 0x0007              ; verb 7 grant, sub-op 0 alloc
@@ -1227,18 +1257,33 @@ cp_sndclip:
 
     mov ax, SND_SEG
     mov es, ax
-    mov di, si                  ; fill the grant with the sine pattern
-    mov cx, CPS_TESTN / 8
+    mov di, si                  ; ES:DI = the grant
+    push si                     ; the grant offset, back for play/free
+    xor bx, bx                  ; BX = phase accumulator
+    mov dx, CPS_INC400          ; DX = phase increment (400 Hz)
+    xor bp, bp                  ; BP = Bresenham error accumulator
+    mov word [cp_swdir], 1      ; first half sweeps upward
+    mov cx, CPS_TESTN
     cld
-.fill:
-    push si
-    mov si, cp_snd_pat          ; DS:SI (kernel .text) -> ES:DI (SND_SEG)
-    movsw
-    movsw
-    movsw
-    movsw
+.samp:
+    mov al, bh                  ; top phase byte indexes the table
+    xor ah, ah
+    mov si, ax
+    mov al, [cp_sine+si]        ; DS = KERNEL_SEG in far code (SPEC.md 33)
+    stosb
+    add bx, dx                  ; phase += increment
+    add bp, CPS_INC800-CPS_INC400   ; err += span; overflow past the
+    cmp bp, CPS_TESTN/2             ; half-length steps the increment
+    jb .keep                        ; by the sweep direction
+    sub bp, CPS_TESTN/2
+    add dx, [cp_swdir]
+.keep:
+    cmp cx, CPS_TESTN/2 + 1     ; halfway: the sweep turns around
+    jne .on
+    neg word [cp_swdir]
+.on:
+    loop .samp
     pop si
-    loop .fill
 
     mov cx, CPS_TESTN           ; ES:SI = the grant, exactly as staged
     mov dx, 8000
@@ -1248,10 +1293,12 @@ cp_sndclip:
     KCALL osapi_snd_stream
 .out:
     pop es
+    pop bp
     pop di
     pop si
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 

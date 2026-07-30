@@ -644,6 +644,14 @@ busy-check → publish gap is pinned as UI-task serialization (SPEC §20.3
 arguments (goto-then-press; anything else errors) after the bare-`down`
 footgun cost this pass a retest cycle.
 
+Post-phases change (2026-07-30): the CP Test clip is no longer the
+12,000-sample 1 kHz sine — it is the Recorder demo's 1 s 400→800→400 Hz
+sine sweep (8,000 samples, SPEC §31.4/§35, its own kernel-side copy of
+the generator). The gate paragraphs above record what was measured when
+the old clip was live; any regression re-run from here reads **E:8000**,
+and a sndcheck dominant assertion on the Test clip must accept the whole
+400–800 Hz band (a sweep has no single line).
+
 Post-all-phases slack ≈ 21.5 KB (guard 1) / ≈ 19.8 KB (guard 2) — measured,
 not estimated, now that all five phases are in. `.lowbss` untouched (the refill task's stack is a normal
 dynamic spawn). SND_SEG folds into the Task Manager's RAM figure via the `KLOWFAR_KB`

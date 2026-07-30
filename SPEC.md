@@ -2303,8 +2303,12 @@ state of its own, exactly as the Scheduler page reads `sched_mode_get`):
   on): unchecked, `osapi_snd_play` returns err 3, and the caption states
   the trade honestly — an exclusive clip freezes the desktop while it
   plays.
-- A **Test** button: synthesises the built-in test clip — 12,000 samples
-  of a 1 kHz sine, ~1.5 s at 8,000 Hz (N = 149, the default carrier) —
+- A **Test** button: synthesises the built-in test clip — the Recorder
+  demo's 1 s sine sweep (§35): 8,000 samples at 8,000 Hz (N = 149, the
+  default carrier), 400 Hz rising linearly to 800 Hz over the first half
+  second and back down over the second, from the same 256-entry sine
+  table (128 ± 88) and Bresenham-stepped phase increment (3277 → 6554;
+  its own copy — kernel code cannot call into a package) —
   into a staging grant taken through the public verb-7 surface (§34.6:
   the Phase 4 allocator; stamped with the panel's own instance, freed on
   the way out; a refused grant plays nothing and the counters stay 0) and
@@ -3165,12 +3169,17 @@ Directory order on the apps disks stays pinned: mines, hello, notepad —
   CX/DX *after* polling, and verb 3 returns in AX/DX (a leak here cost a
   debug cycle; recorded so it stays fixed). STOP reads the final captured
   count (verb 3) before closing, so a stopped take keeps its bytes.
-- **DEMO** stages a built-in 1 s two-tone as if it had been recorded:
-  0.75 s of 1 kHz + 0.25 s of 2 kHz square (0xD8/0x28) at 8 kHz —
-  8,000 bytes synthesised in 1,000-byte chunks (a multiple of both
-  periods) and verb-6 staged. It exists so the real playback paths are
-  exercisable anywhere — and 1 kHz leads so sndcheck's first-region
-  dominant lands on it.
+- **DEMO** stages a built-in 1 s sine sweep as if it had been recorded:
+  400 Hz rising linearly to 800 Hz over the first half second and back
+  down over the second, at 8 kHz. A 256-entry sine table (128 ± 88 —
+  the old square's 0xD8/0x28 span) indexed by the top byte of a 16-bit
+  phase accumulator; the per-sample increment runs 3277 (400 Hz) to
+  6554 (800 Hz), Bresenham-stepped ±1 so each 4,000-sample half sweeps
+  smoothly. 8,000 bytes synthesised in 1,000-byte chunks (the turnaround
+  lands on a chunk boundary) and verb-6 staged. It exists so the real
+  playback paths are exercisable anywhere — a sweep has no single line,
+  so any sndcheck dominant assertion on it must accept the whole
+  400–800 Hz band.
 - The **waveform strip** decimates the take to its 208 columns (offset =
   column × `rc_len` / 208, one sample per column via verb 5) and draws a
   vertical line from the centerline (positive samples up, span/4 scale:

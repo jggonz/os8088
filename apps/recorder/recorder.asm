@@ -22,9 +22,9 @@
 ;     keeps running) and falls back to OSAPI_SND_PLAY chunks read back via
 ;     verb 5 (PCM_EXCL: blocking, click-aborts) - the status line says
 ;     which device played.
-;   - DEMO stages a built-in 1 s two-tone (0.75 s 1 kHz + 0.25 s 2 kHz
-;     square at 8 kHz) into the grant as if it had been recorded, so the
-;     real playback paths are exercisable on any machine.
+;   - DEMO stages a built-in 1 s sine sweep (400 Hz -> 800 Hz -> 400 Hz
+;     at 8 kHz) into the grant as if it had been recorded, so the real
+;     playback paths are exercisable on any machine.
 ;   - The waveform strip draws the grant's samples read back one per column
 ;     through verb 5, decimated to the strip width.
 ;
@@ -111,8 +111,12 @@ RC_BTN_W    equ 52                  ; buttons at x 4 / 58 / 112 / 166
 ; --- capture / playback parameters ---------------------------------------------
 RC_CAP      equ 40000               ; grant size: 5 s at 8 kHz
 RC_RATE     equ 8000                ; one rate everywhere (PWM N=149, in range)
-RC_CHUNK    equ 1000                ; demo synth/stage chunk (mult. of 4 and 8)
+RC_CHUNK    equ 1000                ; demo synth/stage chunk (divides RC_D_LEN/2,
+                                    ; so the sweep turns on a chunk boundary)
 RC_PBUF_SZ  equ 4000                ; read-back buffer: 0.5 s PCM_EXCL chunks
+RC_D_LEN    equ 8000                ; demo take: 1 s at RC_RATE
+RC_INC400   equ 3277                ; phase increment 400*65536/8000 (400 Hz)
+RC_INC800   equ 6554                ; 800*65536/8000 (800 Hz)
 
 ; --- app states ([rc_st]) -------------------------------------------------------
 RC_IDLE     equ 0                   ; no stream open (rc_len may hold data)
@@ -515,8 +519,9 @@ rc_do_play:
     jmp rc_errmsg
 
 ; -----------------------------------------------------------------------------
-; rc_do_demo - the DEMO button: stage the built-in two-tone as if recorded
-; (0.75 s of 1 kHz + 0.25 s of 2 kHz square at 8 kHz = 8,000 samples)
+; rc_do_demo - the DEMO button: stage the built-in sine sweep as if recorded
+; (1 s at 8 kHz: 400 Hz rising linearly to 800 Hz over the first half
+; second, falling back to 400 Hz over the second = 8,000 samples)
 ; in:  nothing
 ; out: nothing; clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
@@ -526,23 +531,23 @@ rc_do_demo:
     call rc_grant
     jc .out
     mov di, [rc_goff]               ; DI = staging cursor
-    mov al, 8                       ; 8 samples/period = 1 kHz
+    xor bx, bx                      ; BX = phase accumulator
+    mov dx, RC_INC400               ; DX = phase increment (400 Hz)
+    mov word [rc_dstep], 1          ; first half sweeps upward
+    mov word [rc_err], 0
+.chunk:
     call rc_synth
-    mov dx, 6                       ; 6 chunks = 6,000 B = 0.75 s
-.l1:
     call rc_stage
     jc .out
-    dec dx
-    jnz .l1
-    mov al, 4                       ; 4 samples/period = 2 kHz
-    call rc_synth
-    mov dx, 2                       ; 2 chunks = 2,000 B = 0.25 s
-.l2:
-    call rc_stage
-    jc .out
-    dec dx
-    jnz .l2
-    mov word [rc_len], 8000
+    mov ax, di                      ; AX = bytes staged so far
+    sub ax, [rc_goff]
+    cmp ax, RC_D_LEN/2              ; halfway: the sweep turns around
+    jne .on
+    neg word [rc_dstep]
+.on:
+    cmp ax, RC_D_LEN
+    jb .chunk
+    mov word [rc_len], RC_D_LEN
     mov word [rc_msg], rc_s_demo
 .out:
     ret
@@ -572,39 +577,41 @@ rc_stage:
     ret
 
 ; -----------------------------------------------------------------------------
-; rc_synth - fill rc_pbuf's first RC_CHUNK bytes with an 8-bit unsigned
-; square wave (the SPEC.md 34.2 wire format)
-; in:  AL = period in samples (4 or 8; RC_CHUNK is a multiple of both)
-; out: nothing; preserves all registers
+; rc_synth - fill rc_pbuf's first RC_CHUNK bytes of sweeping sine, 8-bit
+; unsigned (the SPEC.md 34.2 wire format): each sample reads the 256-entry
+; table at the phase accumulator's top byte, then the increment is
+; Bresenham-stepped by [rc_dstep] - RC_INC800-RC_INC400 steps spread
+; evenly over RC_D_LEN/2 samples, one linear octave per demo half
+; in:  BX = phase accumulator, DX = increment; [rc_err]/[rc_dstep] live
+; out: BX, DX, [rc_err] advanced; preserves the other registers
 ; -----------------------------------------------------------------------------
 rc_synth:
     push ax
-    push bx
     push cx
+    push si
     push di
-    mov bl, al                      ; BL = period
-    mov bh, al
-    shr bh, 1                       ; BH = half period
     mov di, rc_pbuf
     mov cx, RC_CHUNK
-    mov ah, 0                       ; AH = phase
-.f:
-    mov al, 0xD8                    ; high half...
-    cmp ah, bh
-    jb .put
-    mov al, 0x28                    ; ...low half
-.put:
+.s:
+    mov al, bh                      ; top phase byte indexes the table
+    mov ah, 0
+    mov si, ax
+    mov al, [rc_sine+si]
     mov [di], al
     inc di
-    inc ah
-    cmp ah, bl
-    jb .nowrap
-    mov ah, 0
-.nowrap:
-    loop .f
+    add bx, dx                      ; phase += increment
+    mov ax, [rc_err]                ; err += span; on overflow past the
+    add ax, RC_INC800-RC_INC400     ; half-length the increment takes
+    cmp ax, RC_D_LEN/2              ; one dstep step
+    jb .keep
+    sub ax, RC_D_LEN/2
+    add dx, [rc_dstep]
+.keep:
+    mov [rc_err], ax
+    loop .s
     pop di
+    pop si
     pop cx
-    pop bx
     pop ax
     ret
 
@@ -911,11 +918,31 @@ rc_s_nomem:  db 'NO SOUND MEMORY', 0
 rc_s_spkoff: db 'SPEAKER PCM DISABLED', 0
 rc_s_nosink: db 'NO OUTPUT DEVICE', 0
 rc_s_notrun: db 'NOT RUNNING', 0
-rc_s_demo:   db 'DEMO STAGED - 1S 1+2 KHZ', 0
+rc_s_demo:   db 'DEMO STAGED - 400-800 HZ', 0
 rc_s_err:    db 'ERROR -', 0        ; [+6] patched by rc_errmsg
 rc_s_line2:  db '00000 BYTES  IN:--', 0 ; [+0..4] count, [+16..17] device
 
-    OS88_BSS 4016
+; 256-entry sine table for the demo sweep: 128 + round(88*sin(2*pi*i/256)),
+; range 40..216 - the amplitude the square demo used (0x28/0xD8)
+rc_sine:
+    db 128,130,132,134,137,139,141,143,145,147,149,151,154,156,158,160
+    db 162,164,166,168,169,171,173,175,177,179,180,182,184,185,187,189
+    db 190,192,193,195,196,197,199,200,201,202,203,205,206,207,208,208
+    db 209,210,211,212,212,213,213,214,214,215,215,215,216,216,216,216
+    db 216,216,216,216,216,215,215,215,214,214,213,213,212,212,211,210
+    db 209,208,208,207,206,205,203,202,201,200,199,197,196,195,193,192
+    db 190,189,187,185,184,182,180,179,177,175,173,171,169,168,166,164
+    db 162,160,158,156,154,151,149,147,145,143,141,139,137,134,132,130
+    db 128,126,124,122,119,117,115,113,111,109,107,105,102,100, 98, 96
+    db  94, 92, 90, 88, 87, 85, 83, 81, 79, 77, 76, 74, 72, 71, 69, 67
+    db  66, 64, 63, 61, 60, 59, 57, 56, 55, 54, 53, 51, 50, 49, 48, 48
+    db  47, 46, 45, 44, 44, 43, 43, 42, 42, 41, 41, 41, 40, 40, 40, 40
+    db  40, 40, 40, 40, 40, 41, 41, 41, 42, 42, 43, 43, 44, 44, 45, 46
+    db  47, 48, 48, 49, 50, 51, 53, 54, 55, 56, 57, 59, 60, 61, 63, 64
+    db  66, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 85, 87, 88, 90, 92
+    db  94, 96, 98,100,102,105,107,109,111,113,115,117,119,122,124,126
+
+    OS88_BSS 4020
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -------------------------------------
@@ -932,4 +959,6 @@ rc_st    equ os88_image_end + 13    ; byte: RC_IDLE / RC_REC / RC_PLAY
 rc_have  equ os88_image_end + 14    ; byte: the grant exists
                                     ; +15: pad
 rc_pbuf  equ os88_image_end + 16    ; 4,000 B: synth / read-back / clip buffer
-                                    ; total 4016
+rc_err   equ os88_image_end + 4016  ; word: demo sweep Bresenham error accum
+rc_dstep equ os88_image_end + 4018  ; word: sweep direction, +1 up / -1 down
+                                    ; total 4020
