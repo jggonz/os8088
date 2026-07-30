@@ -424,8 +424,8 @@ an arbitrary caller buffer is legal here, unlike the SB path.)
 | 1 | feed | `AH`=handle, `CX`=new total valid length — extends a progressively-staged stream |
 | 2 | close | `AH`=handle; ends the refill task, frees the stream record |
 | 3 | status | `AH`=handle; out `AX`=state (playing / underrun-paused / ended / stale), `DX`=bytes consumed — **this poll is the notification mechanism**; callbacks check it, there are no sound events |
-| 4 | open-in | `DX`=rate; kernel task drains the record ring into the caller's grant; out `AH`=handle |
-| 5 | read | copy `CX` recorded bytes from the grant into caller `DS:DI` (kernel-staged copy) |
+| 4 | open-in | `DX`=rate (up to the input ceiling), `SI`=grant offset, `CX`=capture capacity; a kernel task drains the record ring into the caller's grant until CX bytes land, then stops the DSP; out `AH`=handle. Half-duplex with open-out is err 1 by the shared owner record |
+| 5 | read | copy `CX` bytes from the grant at offset `SI` into caller `DS:DI` (kernel-staged copy — verb 6's exact mirror; no handle, so captured data outlives its stream until the grant is freed) |
 | 6 | stage | copy `CX` bytes from caller `DS:SI` into the grant at offset `DI` (kernel-staged copy — callers never touch ES=SND_SEG) |
 | 7 | grant | `AL2`(sub-op) alloc/free: `CX`=bytes → out `SI`=grant offset, or free; stamped with the calling instance, force-freed by `snd_release_inst` |
 
@@ -590,8 +590,46 @@ SB stream sits underrun-paused at exit. `sndcheck --exclusive` then fails
 and bounded; assert those sessions with the burst-map method instead, or
 close the stream before quitting.
 
-Post-all-phases slack ≈ 23.6 KB (guard 1) / ≈ 20.4 KB (guard 2) — comfortable even if
-every estimate misses by 2×. `.lowbss` untouched (the refill task's stack is a normal
+Phase 5 measured at its gate (§15.1 recipe, 2026-07-29): totals now
+**19,370 B .text, 3,702 B .bss, 5,429 B .fartext** — guard 1 **21,984 B
+free**, guard 2 **20,257 B free**. Phase 5 cost ≈ 940 B against guard 1
+(+938 .text / +2 .bss / +0 .fartext) — over the ~300 B estimate row for
+the same reason Phase 3 inverted its split: everything recording adds
+(the open-in body, the ISR input leg, the drain machinery, the read verb)
+is §33-barred from far, and nothing new is cold. QEMU gate
+(`make test-snd SB16=1 TESTAPPS=build/sbtest.img`, keys r/d/f/s/c on the
+extended SBTEST): the verb 6 → verb 5 staging round-trip returns the
+16-byte pattern intact (5:Y) with no stream, and again *while a capture
+is live*; open-in reads g:12288/o:R with verb 3 at recording(0); **QEMU's
+sb16 never starts input DMA against a wav audiodev** (no ADC IRQs ever
+arrive), which makes the watchdog leg the deterministic automated test —
+status flips to ended(2) after ~2 ring-half periods with captured = 0;
+feed on the input stream refuses err 7; half-duplex holds in both
+directions (open-in during an out-stream → 1, open-out during the record
+→ 1, both leaving the open stream and its grant untouched); close →
+stale on every later verb; close-box mid-record force-closes the stream
+and frees every grant (memory-verified: `sbl_str_act` = 0, `sbl_gr_act[]`
+all clear; a relaunch re-grants at the pool base). Regressions re-run on
+the same build: the 2 s out-stream plays 1000.0 Hz dominant while a
+window drags (the drag outline is on the screendump), exhaustion reads
+underrun-paused at 16,000, the progressive open resumes on feed
+(2,400 → 3,200), refused-close beep 880.0 Hz `--exclusive` clean on a
+speaker-only boot, CP Sound Test E:12000 R:0 through the verb-7 grant
+path, FMTEST 880.0 Hz under `ADLIB=1`. **One latent Phase 4 bug found and
+fixed by this gate**: `sbl_grant_chk` did its bounds math in DX,
+clobbering DH — its own instance operand — so any record that passed the
+instance compare but failed the range checks poisoned the compare for
+every record after it; with a single live grant (all Phase 4 ever held)
+it was unreachable, with two (a stream's grant + a scratch grant) every
+staging call refused err 7. The math now runs in DI and the SPEC's
+grant_chk note records the rule. Still owed to 86Box/real hardware: the
+entire live-capture data path (ring-half drain copies, the overrun
+pause/resume, the capacity-full stop) — unreachable in QEMU because no
+input IRQ ever fires — plus audio-in fidelity by ear, riding with the
+standing Phase 2/3/4 floor-gate items.
+
+Post-all-phases slack ≈ 21.5 KB (guard 1) / ≈ 19.8 KB (guard 2) — measured,
+not estimated, now that all five phases are in. `.lowbss` untouched (the refill task's stack is a normal
 dynamic spawn). SND_SEG folds into the Task Manager's RAM figure via the `KLOWFAR_KB`
 accounting hook idiom. A 256 KB machine gets: tones, beeps, FM if an AdLib is present,
 click-abortable exclusive-clip PCM, SND_SEG staging — everything except background

@@ -1315,9 +1315,9 @@ caller holding several grants is unambiguous by construction):
 | 0 | open-out | DX = rate Hz (4000..22222, the §34.5 TC range), SI = grant offset, CX = valid bytes staged so far (> 0, inside the caller's grant); spawns the kernel refill task (§34.5); out AL = 0 with AH = handle, else AX = err. Streams must be fully staged before playback (§34.5) — CX short of the grant **is** the caller explicitly accepting progressive-feed risk. |
 | 1 | feed | AH = handle, CX = new total valid length (never smaller, never past the grant's end) — extends a progressively staged stream; an underrun-paused stream resumes (§34.5). Out AX = 0 / err. |
 | 2 | close | AH = handle; halts playback, frees the stream record (its refill task exits at the next wake). Out AX = 0 / stale. |
-| 3 | status | AH = handle; out AX = state, DX = bytes consumed (capped at the valid length) — **this poll is the notification mechanism**: callbacks check it; there are no sound events (§34.3). States, pinned: **0 playing, 1 underrun-paused (§34.5 — data ran out or the refill starved; resumable by a feed), 2 ended (stopped by the §34.5 watchdog), 0FFFFh stale.** A fully-staged clip that plays out reads underrun-paused with DX = its length — the owner's cue to close; "ended" is reserved for the watchdog stop. |
-| 4 | open-in | DX = rate; a kernel task drains the record ring into the caller's grant (§34.6); out AH = handle. (Phase 5; err 4 until then.) |
-| 5 | read | copy CX recorded bytes from the grant into caller DS:DI (kernel-staged copy). (Phase 5; err 4 until then.) |
+| 3 | status | AH = handle; out AX = state, DX = bytes consumed (capped at the valid length; input: bytes captured into the grant) — **this poll is the notification mechanism**: callbacks check it; there are no sound events (§34.3). States, pinned: **0 playing (input: recording), 1 underrun-paused (§34.5 — data ran out or the refill starved; resumable by a feed. Input, §34.6: capacity full, or the drain starved), 2 ended (stopped by the §34.5 watchdog), 0FFFFh stale.** A fully-staged clip that plays out reads underrun-paused with DX = its length — the owner's cue to close, exactly as a capacity-full capture reads paused with DX = its capacity; "ended" is reserved for the watchdog stop. |
+| 4 | open-in | DX = rate Hz (4000 up to the §34.5 input ceiling: 13,000 on a single-cycle DSP, 15,000 on auto-init), SI = grant offset, CX = capture capacity in bytes (> 0, inside the caller's grant); spawns the kernel drain task, which moves record-ring halves into the grant until CX bytes have landed, then stops the DSP (§34.6). Out AL = 0 with AH = handle, else AX = err. **Half-duplex with playback is err 1 busy** (§34.3): one stream record, either direction. Feed on an input stream is err 7 — a capture has no valid length to extend. |
+| 5 | read | copy CX bytes from the grant at offset SI into caller DS:DI — the kernel-staged copy out, verb 6's exact mirror (§34.6); the range must sit inside one grant the caller owns. **No handle**: the grant owns the bytes, so captured data stays readable after the stream that recorded it closes, until the grant is freed. Works on every machine, like verbs 6–7. Out AX = 0 / err 7. |
 | 6 | stage | copy CX bytes from caller DS:SI into the grant at offset DI (kernel-staged copy — callers never touch ES = SND_SEG, §2.2); the range must sit inside one grant the caller owns. Out AX = 0 / err. |
 | 7 | grant | AH = sub-op (0 alloc, 1 free): CX = bytes → out SI = grant offset, or free (SI = offset, owner only — **refused with err 7 while an open stream's read offset sits inside the grant**: close the stream first, or the refill task would copy from unowned, re-allocatable bytes); stamped with the calling instance, force-freed by `snd_release_inst` (§34.3 — teardown is safe: it closes the stream before freeing grants). Out AX = 0 / err. |
 
@@ -1326,8 +1326,8 @@ Error codes, pinned (AX; CF set on any error, and on the stale status):
 2 rate out of range, 4 no sink (no card, no IRQ discovered, or the verb's
 phase has not landed), 6 no task slot, 7 bad argument (grant/range/
 length/sub-op), 8 no staging space, 0FFFFh stale handle. The staging
-verbs 6–7 work on every machine — the pool exists wherever `SND_SEG` does
-(§2.2); only the stream verbs need the card.
+verbs 5–7 work on every machine — the pool exists wherever `SND_SEG` does
+(§2.2); only the stream verbs (0–4) need the card.
 
 ### 20.4 osapi helpers (kernel.asm)
 
@@ -2995,10 +2995,32 @@ end.
 ### 34.6 Recording and staging
 
 - **Recording** (Phase 5): STREAM verbs 4–5 (§20.3) → DSP 24h single-cycle
-  or 2Ch auto-init (DMA modes 45h/55h) into the 8 KB `SND_SEG` record
-  ring; half-duplex with playback enforced by the router's owner record
-  (§34.3); a kernel drain task moves ring → grant; consumers read via the
-  verb-5 staging copy.
+  or 2Ch auto-init (chosen by the same §34.5 version gate as playback;
+  DMA modes 45h/55h — write transfer, everything else per the §34.5
+  recipe) into the 8 KB `SND_SEG` record ring (§2.2), 2 × 4 KB halves; the
+  input rate ceiling is honoured at open (13 kHz single-cycle / 15 kHz
+  auto-init normal mode — err 2, never a clamp). Capture starts with the
+  speaker (DAC) off — a live DAC feeds output back into the capture path
+  on real hardware. **Half-duplex with playback is enforced by the
+  router's owner record** (§34.3): one stream record with a direction
+  byte, so open-in while an out-stream is open — and the reverse — is
+  err 1 busy by construction, and the driver never sees the conflict.
+- **The drain task — the refill task's input mirror** (§34.5's execution
+  model, verbatim): verb 4 spawns a transient kernel task that moves
+  captured ring halves into the owner's grant, oldest first, until the
+  stated capacity fills — then it stops the DSP (halt + exit auto-init)
+  and the stream reads **paused (1) with the captured count at its
+  capacity**, the input mirror of data exhaustion: closable by its owner,
+  not resumable (feed on an input stream is err 7). The ISR's input leg
+  flags each captured half and, if the half it must capture into next is
+  still un-drained (the drain starved), pauses input — bounded loss and a
+  visible status, never a silent overwrite; the drain task resumes
+  (D4h / a fresh 24h arm) after emptying it, under the same IF=0
+  re-verification window as the refill task's resume. The `snd_tick`
+  watchdog covers input identically: block IRQs that stop arriving within
+  ~2× the ring-half period halt the stream as **ended (2)**. Consumers
+  read captured bytes via the verb-5 staging copy — no ES pointer ever
+  crosses (§2.2).
 - **The staging pool** (`SND_SEG` 0x3000..0xFFFF, ~52 KB, §2.2) has a tiny
   allocator: first-fit grants stamped with the owning instance slot — the
   §21 package-pool idiom: occupancy derived from the grant records, no
@@ -3056,7 +3078,7 @@ end.
   `snd_beep`, `snd_tick`, the router, all five API slot targets,
   `snd_release_inst`, `snd_unhook`, `spk_pcm_run`, `opl_wr`, `sbl_isr` +
   the IRQ-discovery candidate stubs, the DSP/DMA primitives, the
-  refill-task body and the staging copies. Far, behind
+  refill- and drain-task bodies and the staging copies. Far, behind
   `FARSHIM`/`KCALL`: the probes, OPL2 init (~245 writes ≈ 25–70 ms — fine
   cold at boot, never from ISR context) and the patch loader, the Sound
   page bodies, and the PWM xlat-table builder. Far code keeps

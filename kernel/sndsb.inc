@@ -44,6 +44,24 @@
 ; a superseding open. Packages never hold an ES pointer into SND_SEG: data
 ; crosses through the verb-6 staging copy (the dsk_get_dir idiom).
 ;
+; Recording (SPEC.md 34.6, Phase 5) is the mirror image on the same stream
+; record: verb 4 opens an input stream (DSP 24h single-cycle / 2Ch
+; auto-init per the version gate, DMA modes 45h/55h) capturing into the
+; 8KB record ring at SND_SEG:0x1000 (2 x 4KB halves); a transient kernel
+; DRAIN task moves completed ring halves into the caller's grant until its
+; stated capacity fills, then stops the DSP - the stream reads paused(1)
+; with DX = capacity, the input mirror of data exhaustion. The ISR's input
+; leg flags captured halves and, if the drain starved (the half it must
+; capture into next is still un-drained), pauses input - bounded loss and
+; a visible status, never silent overwrite. Half-duplex with playback is
+; the ROUTER'S owner record: one stream record with a direction byte, so
+; open-in while an out-stream is open (and vice versa) is AX = 1 busy by
+; construction. Consumers read captured bytes via the verb-5 staging copy
+; (grant -> caller DS:DI - the verb-6 idiom in reverse); verb 1 feed on an
+; input stream is err 7 (a record stream has no valid length to extend).
+; The snd_tick watchdog covers input identically: block IRQs that stop
+; arriving halt the stream as ended(2).
+;
 ; Known bound, recorded: on single-cycle DSPs the re-arm programs the 8237
 ; from the ISR, and the 8237's byte-pair flip-flop is shared with the BIOS's
 ; channel-2 programming inside int 13h - a floppy read concurrent with a
@@ -55,12 +73,17 @@
 
 ; --- geometry and states -----------------------------------------------------
 SBL_HALF     equ 2048           ; double-buffer half size (SPEC.md 2.2)
+SBL_RING     equ 0x1000         ; record ring base offset (SPEC.md 2.2)
+SBL_RHALF    equ 4096           ; record ring half size (2 x 4KB = 8KB)
 SBL_POOL     equ 0x3000         ; staging pool base offset (SPEC.md 2.2)
 SBL_POOLMAX  equ 0xD000         ; pool bytes (0x3000..0xFFFF)
 SBL_GMAX     equ 8              ; staging-grant records
 
-SBL_ST_PLAY  equ 0              ; stream states (verb 3, SPEC.md 20.3)
-SBL_ST_UNDER equ 1              ;   underrun-paused (resumable by feed)
+SBL_ST_PLAY  equ 0              ; stream states (verb 3, SPEC.md 20.3):
+                                ;   out = playing, in = recording
+SBL_ST_UNDER equ 1              ;   out = underrun-paused (resumable by
+                                ;   feed); in = paused (grant capacity
+                                ;   full, or the drain task starved)
 SBL_ST_END   equ 2              ;   stopped by the snd_tick watchdog
 
 SBL_POLLS    equ 4096           ; DSP handshake poll budget (bounded even
@@ -199,6 +222,59 @@ sbl_arm_half:
     ret
 
 ; -----------------------------------------------------------------------------
+; sbl_arm_rec - program a single-cycle capture of one ring half (DSP < 2.00)
+;
+; in:       AL = half (0/1); rate already set via 40h
+; out:      nothing
+; clobbers: nothing (flags)
+;
+; The input mirror of sbl_arm_half: DMA mode 45h (single, write - card to
+; memory), the half's ring offset (SBL_RING + half*4096, page 3), then DSP
+; 24h (8-bit single-cycle ADC) + length. Called from verb-4 start and from
+; sbl_isr's input re-arm branch (SPEC.md 34.6).
+; -----------------------------------------------------------------------------
+sbl_arm_rec:
+    push ax
+    push cx
+    push dx
+    inc al                      ; ring offset = (half+1) << 12: 0x1000 or
+    mov cl, 4                   ; 0x2000 (SPEC.md 2.2) - lo byte is 0,
+    shl al, cl                  ; hi byte = (half+1) * 10h
+    mov dh, al
+    xor dl, dl
+    pushf
+    cli
+    mov al, 0x05
+    out 0x0A, al                ; mask channel 1
+    out 0x0C, al                ; clear the flip-flop (any value)
+    mov al, dl
+    out 0x02, al                ; address lo (0)
+    mov al, dh
+    out 0x02, al                ; address hi
+    out 0x0C, al                ; clear the flip-flop again
+    mov al, (SBL_RHALF-1) & 0xFF
+    out 0x03, al                ; count lo (len - 1)
+    mov al, (SBL_RHALF-1) >> 8
+    out 0x03, al                ; count hi
+    mov al, 0x45                ; single mode, write (card -> memory), ch 1
+    out 0x0B, al
+    mov al, 3
+    out 0x83, al                ; page 3 (SND_SEG, SPEC.md 2.2)
+    mov al, 0x01
+    out 0x0A, al                ; unmask channel 1
+    popf
+    mov al, 0x24                ; DSP: 8-bit single-cycle DMA input
+    call sbl_dsp_wr
+    mov al, (SBL_RHALF-1) & 0xFF
+    call sbl_dsp_wr
+    mov al, (SBL_RHALF-1) >> 8
+    call sbl_dsp_wr
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sbl_hw_start - program the card and start the opened stream's playback
 ;
 ; in:       [sbl_tc], [sbl_auto], the double buffer filled; task context
@@ -256,6 +332,66 @@ sbl_hw_start:
     ret
 
 ; -----------------------------------------------------------------------------
+; sbl_hw_start_in - program the card and start the opened stream's capture
+;
+; in:       [sbl_tc], [sbl_auto]; task context
+; out:      nothing
+; clobbers: nothing (flags)
+;
+; The input mirror of sbl_hw_start: speaker (DAC) OFF first - a live DAC
+; feeds the output back into the capture path on real hardware - then the
+; time constant, then the mode split: auto-init programs DMA once for the
+; whole 8KB ring (55h at SBL_RING) plus the DSP block size (48h, one 4KB
+; half) and 2Ch; single-cycle arms half 0 via sbl_arm_rec (SPEC.md 34.6).
+; -----------------------------------------------------------------------------
+sbl_hw_start_in:
+    push ax
+    mov al, 0xD3                ; speaker (DAC) off for the capture path
+    call sbl_dsp_wr
+    mov al, 0x40                ; time constant
+    call sbl_dsp_wr
+    mov al, [sbl_tc]
+    call sbl_dsp_wr
+    cmp byte [sbl_auto], 0
+    je .single
+    pushf
+    cli
+    mov al, 0x05
+    out 0x0A, al                ; mask channel 1
+    out 0x0C, al                ; flip-flop clear
+    mov al, SBL_RING & 0xFF
+    out 0x02, al                ; address = SBL_RING (0x1000, page 3)
+    mov al, SBL_RING >> 8
+    out 0x02, al
+    out 0x0C, al                ; flip-flop clear
+    mov al, (2*SBL_RHALF-1) & 0xFF
+    out 0x03, al                ; count = the whole ring - 1
+    mov al, (2*SBL_RHALF-1) >> 8
+    out 0x03, al
+    mov al, 0x55                ; auto-init, write (card -> memory), ch 1
+    out 0x0B, al
+    mov al, 3
+    out 0x83, al                ; page 3
+    mov al, 0x01
+    out 0x0A, al                ; unmask
+    popf
+    mov al, 0x48                ; DSP block size = one ring half
+    call sbl_dsp_wr
+    mov al, (SBL_RHALF-1) & 0xFF
+    call sbl_dsp_wr
+    mov al, (SBL_RHALF-1) >> 8
+    call sbl_dsp_wr
+    mov al, 0x2C                ; auto-init 8-bit DMA input
+    call sbl_dsp_wr
+    jmp .out
+.single:
+    mov al, 0
+    call sbl_arm_rec            ; half 0; the ISR re-arms from there
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sbl_halt - pause DSP DMA requests (D0h, bounded write-poll)
 ; in/out: nothing; clobbers nothing (flags)
 ; -----------------------------------------------------------------------------
@@ -269,19 +405,24 @@ sbl_halt:
 ; -----------------------------------------------------------------------------
 ; sbl_go_on - continue a paused stream: D4h on auto-init hardware, a fresh
 ;             half arm on single-cycle (nothing was in flight there)
-; in:  [sbl_play] = the half to sound next
+; in:  [sbl_play] = the half to sound (or capture into) next; [sbl_str_dir]
 ; out: nothing; clobbers nothing (flags)
 ; -----------------------------------------------------------------------------
 sbl_go_on:
     push ax
     cmp byte [sbl_auto], 0
     je .single
-    mov al, 0xD4
+    mov al, 0xD4                ; continue 8-bit DMA, either direction
     call sbl_dsp_wr
     jmp .out
 .single:
     mov al, [sbl_play]
+    cmp byte [sbl_str_dir], 0
+    jne .rec
     call sbl_arm_half
+    jmp .out
+.rec:
+    call sbl_arm_rec
 .out:
     pop ax
     ret
@@ -329,6 +470,8 @@ sbl_isr:
     in al, dx                   ; confirm AND ack: the 2xEh read
     test al, 0x80
     jz .spur
+    cmp byte [sbl_str_dir], 0   ; input streams take the mirror half-swap
+    jne .input
 
     mov ax, [sbl_consumed]      ; one block played (cap at the valid length:
     add ax, SBL_HALF            ; the tail of the last half is silence pad)
@@ -364,6 +507,32 @@ sbl_isr:
     mov byte [sbl_str_state], SBL_ST_UNDER
     mov byte [snd_sb_expect], 0
     inc word [snd_sb_under]
+    jmp .eoi
+
+.input:                         ; the mirror half-swap (SPEC.md 34.6): the
+    mov bl, [sbl_play]          ; half that just finished capturing...
+    xor bh, bh
+    mov byte [sbl_valid+bx], 1  ; ...holds data awaiting the drain task
+    xor bl, 1
+    mov [sbl_play], bl          ; the DSP captures into the other half now
+    mov ax, [sbl_wd_rst]        ; the block IRQ arrived: rewind the watchdog
+    mov [sbl_wd], ax
+    cmp byte [sbl_valid+bx], 0  ; is the new capture half drained yet?
+    je .inok
+    cmp byte [sbl_auto], 0      ; no - the drain starved: pause input
+    je .inoh                    ; rather than overwrite un-drained data
+    call sbl_halt               ; (bounded loss + a visible status, the
+.inoh:                          ; underrun contract's input mirror)
+    mov byte [sbl_paused], 1
+    mov byte [sbl_str_state], SBL_ST_UNDER
+    mov byte [snd_sb_expect], 0
+    inc word [snd_sb_under]
+    jmp .eoi
+.inok:
+    cmp byte [sbl_auto], 0      ; auto-init needs nothing; single-cycle
+    jne .eoi                    ; re-arms the half now capturing
+    mov al, bl
+    call sbl_arm_rec
 
 .eoi:
     mov al, 0x20                ; own EOI - nothing chains behind us
@@ -561,10 +730,15 @@ sbl_grant_find:
 ; out:      CF = 0, AX = bytes from SI to the grant's end (the feed bound);
 ;           CF = 1 refused
 ; clobbers: nothing else (flags)
+;
+; The bounds math runs in DI, never DX: DH is this loop's own instance
+; operand, and an earlier record that passes the instance compare but
+; fails the range checks must not poison the compare for the records
+; after it (the Phase 5 gate caught exactly that with two live grants).
 ; -----------------------------------------------------------------------------
 sbl_grant_chk:
     push bx
-    push dx
+    push di
     mov ax, cx
     dec ax
     add ax, si                  ; AX = the range's last byte
@@ -575,18 +749,18 @@ sbl_grant_chk:
     je .next
     cmp [sbl_gr_inst+bx], dh
     jne .next
-    mov dx, [sbl_gr_off+bx]
-    cmp si, dx
+    mov di, [sbl_gr_off+bx]
+    cmp si, di
     jb .next                    ; starts before this grant
-    add dx, [sbl_gr_size+bx]
-    dec dx                      ; DX = the grant's last byte
-    cmp ax, dx
+    add di, [sbl_gr_size+bx]
+    dec di                      ; DI = the grant's last byte
+    cmp ax, di
     ja .next                    ; ends past it
-    mov ax, dx                  ; inside: AX = grant end - SI + 1
+    mov ax, di                  ; inside: AX = grant end - SI + 1
     sub ax, si
     inc ax
     clc
-    pop dx
+    pop di
     pop bx
     ret
 .next:
@@ -595,7 +769,7 @@ sbl_grant_chk:
     jb .g
 .bad:
     stc
-    pop dx
+    pop di
     pop bx
     ret
 
@@ -615,12 +789,14 @@ sbl_stream_op:
     je sbl_v_close
     cmp al, 3
     je sbl_v_status
+    cmp al, 4
+    je sbl_v_open_in
+    cmp al, 5
+    je sbl_v_read
     cmp al, 6
     je sbl_v_stage
     cmp al, 7
     je sbl_v_grant
-    cmp al, 5                   ; verbs 4-5: recording, lands Phase 5 - the
-    jbe .e4                     ; documented no-sink refusal until then
     mov ax, 7                   ; anything higher: bad verb
     stc
     ret
@@ -717,6 +893,7 @@ sbl_v_open:
     mov byte [sbl_valid], 0
     mov byte [sbl_valid+1], 0
     mov byte [sbl_paused], 0
+    mov byte [sbl_str_dir], 0   ; an OUTPUT stream (SPEC.md 34.6)
     mov byte [sbl_str_state], SBL_ST_PLAY
     inc byte [sbl_gen]
     xor bx, bx                  ; prime the double buffer: half 0 always
@@ -778,7 +955,8 @@ sbl_v_open:
 ;
 ; in:       AH = handle, CX = new total valid length (>= the old, and within
 ;           the grant)
-; out:      AX = 0 ok / 7 bad length / 0FFFFh stale; CF set on both errors
+; out:      AX = 0 ok / 7 bad length or an input stream (SPEC.md 34.6) /
+;           0FFFFh stale; CF set on both errors
 ; clobbers: nothing else (flags)
 ;
 ; A single word store: the ISR and the refill task read [sbl_total] whole.
@@ -788,6 +966,8 @@ sbl_v_open:
 sbl_v_feed:
     call sbl_hcheck
     jc .stale
+    cmp byte [sbl_str_dir], 0   ; a record stream has no valid length to
+    jne .e7                     ; extend (SPEC.md 34.6): err 7
     cmp cx, [sbl_total]
     jb .e7                      ; the valid length never shrinks
     cmp cx, [sbl_str_max]
@@ -885,6 +1065,173 @@ sbl_v_status:
     mov ax, 0xFFFF
     xor dx, dx
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; sbl_v_open_in - verb 4: open a record stream (SPEC.md 20.3/34.6, Phase 5)
+;
+; in:       DX = rate Hz (4000 up to the input ceiling: 13,000 on a
+;           single-cycle DSP, 15,000 on auto-init - SPEC.md 34.5),
+;           SI = grant offset, CX = capture capacity in bytes (> 0, inside
+;           the caller's grant)
+; out:      AL = 0 ok with AH = handle, else AX = 1 busy (half-duplex: any
+;           open stream, or an exclusive clip) / 2 rate / 4 no sink or no
+;           IRQ found / 6 no task slot / 7 bad grant; CF mirrors the error
+; clobbers: nothing else (flags)
+;
+; The mirror of sbl_v_open: same record, direction = in, the same deferred
+; IRQ discovery, the same publish-then-pace order (act = 1 before the
+; drain task spawns, snd_sb_expect armed BEFORE sbl_hw_start_in for the
+; same first-IRQ race). sbl_total holds the capture CAPACITY; the drain
+; task advances sbl_consumed as ring halves land in the grant, so verb 3
+; reads {state, bytes captured} with no direction branch. Half-duplex is
+; enforced HERE, by the router's one owner record - the driver never sees
+; an in/out conflict (SPEC.md 34.3).
+; -----------------------------------------------------------------------------
+sbl_v_open_in:
+    push bx
+    push cx
+    push dx
+    push si
+    test byte [snd_drv + SDRV_SIZE*DRV_SB + SDRV_FLAGS], 1
+    jz .e4                      ; no card: the documented clean failure
+    cmp byte [sbl_str_act], 0
+    jne .e1                     ; half-duplex: one stream record, either
+                                ; direction (SPEC.md 34.3/34.6)
+    cmp byte [snd_pcm_busy], 0
+    jne .e1                     ; an exclusive clip holds the machine
+    cmp dx, 4000                ; TC = 256 - 1e6/rate must fit a byte...
+    jb .e2
+    mov ax, 13000               ; ...and the INPUT ceiling is honoured:
+    cmp byte [sbl_auto], 0      ; 13k on 1.x, 15k on >= 2.00 normal mode
+    je .ceil                    ; (SPEC.md 34.5) - err 2, never a clamp
+    mov ax, 15000
+.ceil:
+    cmp dx, ax
+    ja .e2
+    or cx, cx                   ; zero capacity captures nothing (8086
+    jnz .args                   ; conditionals are short-only: trampoline)
+    jmp .e7
+.args:
+    mov bx, dx                  ; BX = rate (snd_req_inst wants DH)
+    call snd_req_inst           ; DH = the requesting instance (SPEC.md 34.3)
+    call sbl_grant_chk          ; the capture range must sit in the caller's
+    jnc .grantok                ; grant; out AX = bytes to the grant's end
+    jmp .e7
+.grantok:
+    mov [sbl_str_max], ax
+    mov [sbl_str_inst], dh
+    cmp byte [sbl_irq], 0xFF    ; IRQ discovery, deferred to first use
+    jne .irqok                  ; (SPEC.md 34.5)
+    call sbl_irq_disc           ; far orchestration; hooks the winner
+    or al, al
+    jz .e4                      ; no candidate confirmed: no usable card
+.irqok:
+    mov ax, 0x4240              ; TC = 256 - 1,000,000/rate (SPEC.md 34.5)
+    mov dx, 0x000F
+    div bx                      ; AX = 1e6/rate (66..250 by the range check)
+    neg al                      ; AL = 256 - AX (mod 256)
+    mov [sbl_tc], al
+    mov ax, 18023               ; watchdog: 2 ring-half periods in ticks + 3
+    mov dx, 2                   ; = (2*4096*18.2)/rate + 3 = 149095/rate + 3
+    div bx
+    add ax, 3
+    mov [sbl_wd_rst], ax
+    mov [sbl_wd], ax
+    mov [sbl_str_off], si       ; the stream record (not yet published)
+    mov [sbl_total], cx         ; = the capture capacity (SPEC.md 34.6)
+    mov word [sbl_fed], 0
+    mov word [sbl_consumed], 0  ; = bytes drained into the grant
+    mov byte [sbl_play], 0      ; the half the DSP captures into
+    mov byte [sbl_valid], 0     ; input sense: 1 = captured, awaiting drain
+    mov byte [sbl_valid+1], 0
+    mov byte [sbl_drain_h], 0   ; the next half the drain task empties
+    mov byte [sbl_paused], 0
+    mov byte [sbl_str_dir], 1   ; an INPUT stream (SPEC.md 34.6)
+    mov byte [sbl_str_state], SBL_ST_PLAY
+    inc byte [sbl_gen]
+    mov byte [sbl_str_act], 1   ; publish, then pace: the drain task
+    mov dl, [sbl_str_inst]      ; (SPEC.md 34.6 - the kernel owns pacing);
+    mov dh, [sbl_gen]           ; DL -> T_INST, DH = its stream generation
+    mov ax, sbl_drain_task
+    call task_spawn
+    jc .nospawn
+    mov byte [snd_sb_expect], 1 ; arm BEFORE the hardware starts - the
+    call sbl_hw_start_in        ; sbl_v_open first-IRQ order, same race
+    mov ah, [sbl_gen]           ; out: AH = handle, AL = 0
+    mov al, 0
+    clc
+    jmp .out
+.nospawn:
+    mov byte [sbl_str_act], 0   ; unwind: nothing started
+    mov ax, 6                   ; the documented clean pool-full error
+    jmp .err
+.e1:
+    mov ax, 1
+    jmp .err
+.e2:
+    mov ax, 2
+    jmp .err
+.e4:
+    mov ax, 4
+    jmp .err
+.e7:
+    mov ax, 7
+.err:
+    stc
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sbl_v_read - verb 5: copy recorded (or staged) bytes out of a grant
+;
+; in:       SI = source offset in SND_SEG (inside a grant the caller owns),
+;           CX = bytes, DS:DI = destination
+; out:      AX = 0 ok / 7 refused (range not inside the caller's grant);
+;           CF mirrors
+; clobbers: nothing else (flags; ES restored per SPEC.md 1)
+;
+; The kernel-staged copy OUT - verb 6's exact mirror (SPEC.md 34.6):
+; packages never hold an ES pointer into SND_SEG. No handle: the grant
+; owns the bytes, so captured data stays readable after the stream that
+; recorded it closes, until the grant is freed. Works on every machine,
+; like verbs 6-7 - the pool exists wherever SND_SEG does.
+; -----------------------------------------------------------------------------
+sbl_v_read:
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    jcxz .ok                    ; nothing to copy is trivially fine
+    call snd_req_inst           ; DH = calling instance
+    call sbl_grant_chk          ; range-check the SOURCE
+    jc .e7
+    mov ax, ds
+    mov es, ax                  ; ES:DI = the caller's destination
+    mov ax, SND_SEG
+    push ds
+    mov ds, ax                  ; DS:SI = the grant source
+    cld
+    rep movsb                   ; SND_SEG:SI -> caller DI, interruptible
+    pop ds
+.ok:
+    xor ax, ax
+    clc
+    jmp .out
+.e7:
+    mov ax, 7
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1130,6 +1477,170 @@ sbl_refill_task:
     jmp task_exit               ; not this task's to free (SPEC.md 29)
 
 ; =============================================================================
+; The drain machinery (SPEC.md 34.6): the transient kernel task and the
+; record-ring -> grant copies - sbl_refill's input mirror.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; sbl_drain_half - copy one captured ring half into the caller's grant
+;
+; in:       BX = half (0/1); [sbl_str_off]/[sbl_consumed]/[sbl_total] current
+; out:      nothing; [sbl_consumed] advanced by min(SBL_RHALF, capacity
+;           remaining) - a half past capacity copies nothing
+; clobbers: nothing (flags)
+;
+; Both source and destination live in SND_SEG (sbl_fill_half's trick in
+; reverse): DS = ES = SND_SEG for the movs; kernel state is only touched
+; before the switch. The caller clears the half's valid flag afterwards.
+; -----------------------------------------------------------------------------
+sbl_drain_half:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    mov ax, SND_SEG
+    mov es, ax
+    mov si, bx                  ; SI = SBL_RING + half * 4096: the source
+    mov cl, 12
+    shl si, cl
+    add si, SBL_RING
+    mov di, [sbl_str_off]       ; DI = grant + progress: the destination
+    add di, [sbl_consumed]
+    mov cx, [sbl_total]
+    sub cx, [sbl_consumed]      ; CX = capacity remaining
+    cmp cx, SBL_RHALF
+    jbe .n
+    mov cx, SBL_RHALF
+.n:
+    add [sbl_consumed], cx
+    cld
+    jcxz .done
+    push ds
+    push es
+    pop ds                      ; DS = SND_SEG for the ring -> grant copy
+    rep movsb
+    pop ds
+.done:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sbl_drain - one drain pass (task context)
+;
+; in:       DH = the stream generation this task serves
+; out:      nothing
+; clobbers: nothing (flags)
+;
+; Empties captured halves oldest-first (sbl_drain_h tracks the order the
+; ISR fills them). Then two mirror duties, each under ONE pushf/cli window
+; that RE-CHECKS act and generation first (the sbl_refill rule - a close
+; or teardown between the checks and the window must not see the DSP
+; restarted or a released record scribbled):
+;   - capacity full while still capturing: stop the DSP (halt + exit
+;     auto-init) and mark paused(1) - the input mirror of data exhaustion,
+;     with sbl_consumed = capacity visible via verb 3 (SPEC.md 34.6);
+;   - overrun-paused with the capture half now drained: resume (D4h /
+;     re-arm), rewind the watchdog, expect IRQs again.
+; -----------------------------------------------------------------------------
+sbl_drain:
+    push ax
+    push bx
+    call .one                   ; up to both halves, oldest first
+    call .one
+    mov ax, [sbl_total]
+    cmp ax, [sbl_consumed]
+    jne .notfull
+    cmp byte [sbl_str_state], SBL_ST_PLAY
+    jne .done                   ; already stopped / paused / ended
+    pushf                       ; capacity reached while capturing: stop
+    cli
+    cmp byte [sbl_str_act], 1   ; re-verify under IF=0 (the sbl_refill
+    jne .fskip                  ; rule): closed since the checks above?
+    cmp dh, [sbl_gen]           ; superseded by a newer open?
+    jne .fskip
+    call sbl_halt               ; D0h, bounded
+    cmp byte [sbl_auto], 0
+    je .fnoda
+    mov al, 0xDA                ; exit auto-init at the block edge
+    call sbl_dsp_wr
+.fnoda:
+    mov byte [snd_sb_expect], 0
+    mov byte [sbl_str_state], SBL_ST_UNDER  ; paused(1): capacity full -
+.fskip:                                     ; the owner's cue to close
+    popf
+    jmp .done
+.notfull:
+    cmp byte [sbl_paused], 0    ; overrun-paused: can capture continue?
+    je .done
+    mov bl, [sbl_play]
+    xor bh, bh
+    cmp byte [sbl_valid+bx], 0
+    jne .done                   ; the capture half is still un-drained
+    pushf
+    cli
+    cmp byte [sbl_str_act], 1   ; the same re-verification under IF=0
+    jne .rskip
+    cmp dh, [sbl_gen]
+    jne .rskip
+    mov byte [sbl_paused], 0
+    mov byte [sbl_str_state], SBL_ST_PLAY
+    mov ax, [sbl_wd_rst]
+    mov [sbl_wd], ax
+    mov byte [snd_sb_expect], 1
+    call sbl_go_on              ; D4h / re-arm (input-aware)
+.rskip:
+    popf
+.done:
+    pop bx
+    pop ax
+    ret
+.one:                           ; empty half [sbl_drain_h] if captured
+    mov bl, [sbl_drain_h]
+    xor bh, bh
+    cmp byte [sbl_valid+bx], 0
+    je .oout
+    call sbl_drain_half         ; copy (capacity-capped), then retire the
+    mov byte [sbl_valid+bx], 0  ; half and advance oldest-first order
+    xor bl, 1
+    mov [sbl_drain_h], bl
+.oout:
+    ret
+
+; -----------------------------------------------------------------------------
+; sbl_drain_task - the transient record-pacing task (SPEC.md 34.6)
+;
+; Spawned by verb 4 (task_spawn arg: DL = owning instance -> T_INST,
+; DH = the stream generation it serves). Moves ring halves into the
+; owner's grant as the ISR flags them captured, stops the DSP when the
+; grant capacity fills, resumes an overrun-paused capture, and exits - via
+; task_exit, never ret - when the stream is closed, torn down, superseded
+; by a newer open, or stopped by the watchdog. Same pacing bound as
+; sbl_refill_task: a ring half is >= 4.9 ticks even at the 15kHz input
+; ceiling, so one-tick pacing always keeps up.
+; -----------------------------------------------------------------------------
+sbl_drain_task:
+.loop:
+    cmp byte [sbl_str_act], 1   ; closed / torn down?
+    jne .die
+    mov al, [sbl_gen]           ; superseded by a newer stream?
+    cmp al, dh
+    jne .die
+    cmp byte [sbl_str_state], SBL_ST_END
+    je .die                     ; watchdog-stopped: nothing left to drain
+    call sbl_drain
+    mov ax, 1
+    call task_sleep
+    jmp .loop
+.die:
+    xor bx, bx                  ; no release byte: the instance record is
+    jmp task_exit               ; not this task's to free (SPEC.md 29)
+
+; =============================================================================
 ; Tick, teardown and boot glue (called from snd.inc, SPEC.md 34.5/34.7)
 ; =============================================================================
 
@@ -1280,9 +1791,11 @@ sbl_state_init:
     mov byte [sbl_gen], 0
     mov byte [sbl_str_inst], 0xFF
     mov byte [sbl_str_state], 0
+    mov byte [sbl_str_dir], 0
     mov byte [sbl_play], 0
     mov byte [sbl_valid], 0
     mov byte [sbl_valid+1], 0
+    mov byte [sbl_drain_h], 0
     mov byte [sbl_paused], 0
     mov byte [sbl_tc], 0
     mov word [sbl_str_off], 0
@@ -1566,13 +2079,20 @@ sbl_str_act:  resb 1            ; stream record: 1 = open
 sbl_gen:      resb 1            ;   generation = the handle (staleness)
 sbl_str_inst: resb 1            ;   owning instance (0xFF = kernel)
 sbl_str_state: resb 1           ;   SBL_ST_* (verb 3)
+sbl_str_dir:  resb 1            ;   0 = output, 1 = input (SPEC.md 34.6)
 sbl_str_off:  resw 1            ;   grant offset the stream reads from
+                                ;   (input: captures into)
 sbl_str_max:  resw 1            ;   bytes from there to the grant's end
-sbl_total:    resw 1            ;   valid bytes (grows via verb 1)
+sbl_total:    resw 1            ;   valid bytes (grows via verb 1);
+                                ;   input: the capture capacity
 sbl_fed:      resw 1            ;   bytes copied into the double buffer
-sbl_consumed: resw 1            ;   bytes played (capped at sbl_total)
-sbl_play:     resb 1            ;   the half the DSP sounds next
+sbl_consumed: resw 1            ;   bytes played (capped at sbl_total);
+                                ;   input: bytes drained into the grant
+sbl_play:     resb 1            ;   the half the DSP sounds (input:
+                                ;   captures into) next
 sbl_valid:    resb 2            ;   per-half: refilled since last consumed
+                                ;   (input: captured, awaiting drain)
+sbl_drain_h:  resb 1            ;   input: next half the drain task empties
 sbl_paused:   resb 1            ;   D0h issued; sbl_go_on owed
 sbl_tc:       resb 1            ;   DSP time constant for the open rate
 sbl_wd:       resw 1            ;   watchdog countdown (snd_tick, 34.5)

@@ -6,8 +6,8 @@
 ; driver (tone + PWM exclusive clips), snd_tick (the one scheduler
 ; touch-point), and the five os8088 API slot targets at 0x0078..0x0088.
 ; Phases 1-2 of docs/SOUND-PLAN.md: tones and speaker PCM; Phase 3 wires
-; the FM slot through to sndfm.inc's OPL2 driver - the STREAM surface
-; still ships as a clean error stub so the jump-table ABI is whole.
+; the FM slot through to sndfm.inc's OPL2 driver; Phases 4-5 hand the
+; STREAM slot to sndsb.inc's Sound Blaster driver (playback + recording).
 ;
 ; Speaker PCM (SPEC.md 34.4): ch2 in mode 0 lobyte-only is the modulator -
 ; one `out 42h, AL` per sample emits a low pulse of AL PIT-cycles and the
@@ -103,10 +103,11 @@ snd_drv:                        ; row 0: PC speaker - always present, as data
     dw opl_probe                ; the timer-flag dance, far behind its shim
     dw snd_s_opl
     dw 0
-                                ; row 2: Sound Blaster (sndsb.inc, Phase 4)
-    db SND_CAP_PCM_BG           ; PCM_IN joins in Phase 5; no PCM_EXCL op,
-                                ; so exclusive clips keep routing to the
-                                ; speaker (snd_pcm_row wants a PCM op)
+                                ; row 2: Sound Blaster (sndsb.inc, Phase 4-5)
+    db SND_CAP_PCM_BG | SND_CAP_PCM_IN
+                                ; no PCM_EXCL op, so exclusive clips keep
+                                ; routing to the speaker (snd_pcm_row
+                                ; wants a PCM op)
     db 0                        ; absent until sbl_probe publishes (34.2)
     dw 0, 0, 0, 0               ; streams go through slot 0x0088, not the
                                 ; row ops (SPEC.md 34.5)
@@ -1206,11 +1207,11 @@ osapi_snd_fm:
 
 ; -----------------------------------------------------------------------------
 ; osapi_snd_stream - the stream + staging surface (slot 0x0088, SPEC.md
-; 20.3 - live from Phase 4). AL = verb, AH = handle or sub-op; the verb
-; bodies live with the SB driver (sbl_stream_op, SPEC.md 34.5/34.6). The
-; staging verbs (6/7) work on every machine - the pool exists wherever
-; SND_SEG does; the stream verbs (0-3) refuse cleanly (AX = 4) without a
-; card, and 4-5 refuse until recording lands in Phase 5.
+; 20.3 - live from Phase 4; recording from Phase 5). AL = verb, AH =
+; handle or sub-op; the verb bodies live with the SB driver
+; (sbl_stream_op, SPEC.md 34.5/34.6). The staging verbs (5/6/7) work on
+; every machine - the pool exists wherever SND_SEG does; the stream verbs
+; (0-4) refuse cleanly (AX = 4) without a card.
 ; -----------------------------------------------------------------------------
 osapi_snd_stream:
     jmp sbl_stream_op
