@@ -195,6 +195,7 @@ SND_SEG       equ 0x3000     ; sound buffers: linear 0x30000-0x3FFFF, ES only (�
 | `kernel/events.inc` | 8-byte event records, system event ring queue           |
 | `kernel/wm.inc`     | window records, z-order, frames, hit test, paint-all, `wm_owner` side table |
 | `kernel/instance.inc` | instance table: records, kind descriptors, launch/close lifecycle (§29) |
+| `kernel/datetime.inc` | system wall clock: BIOS RTC read/write, PIT-backed fallback calendar, menu-bar clock |
 | `kernel/menu.inc`   | menu bar, pull-down tracking, command return            |
 | `kernel/ui.inc`     | UI task: event pump, keyboard poll, drag, dispatch      |
 | `kernel/apps.inc`   | built-in app kinds: About, Clock, Bounce — state pools, kinit procs, per-instance tasks |
@@ -785,6 +786,13 @@ count only feeds the rect height, the item loop and `menu_hover`'s bound.
 them fresh; cursor stays hidden during tracking since the gfx lock is held —
 acceptable, tracking feedback is the highlight).
 
+The rightmost 80 pixels of the bar are the system wall-clock target, not a
+menu-title dead zone. `datetime.inc` draws `HH:MM:SS` at `DT_BAR_X = 568`;
+`ui_task` handles a mouse-down at `x >= DT_BAR_HIT_X` by storing
+`CP_DT_ITEM` in `cp_sel` and launching/fronting the Control Panel singleton.
+Thus a clock click always opens the existing Control Panel directly on its
+Date & Time page, even when the panel was already open on another item.
+
 Because the whole interaction runs under one gfx_lock, `menu_track` calls
 `gfx_flush` (§32) once, after the pull-down + items are drawn — that is real
 back-buffer content and would otherwise stay invisible while the button is
@@ -804,8 +812,11 @@ Loop forever:
 2. `evq_pop`; on EVT_MDOWN at (x,y) — first store the event's EV_C into
    the public word `ui_click_t` (the click's birth tick; §22/§26 read it
    during dispatch):
-   - y < MBAR_H → gfx_lock, `menu_track`, gfx_unlock, then dispatch CMD_*
-     (below).
+   - y < MBAR_H and x >= `DT_BAR_HIT_X` → set `cp_sel = CP_DT_ITEM`, then
+     launch/front `KIND_CTRL`; the Date & Time page is selected before the
+     window is painted.
+   - y < MBAR_H and x < `DT_BAR_HIT_X` → gfx_lock, `menu_track`, gfx_unlock,
+     then dispatch CMD_* (below).
    - else `wm_hit`: close box → **quit**: gfx_lock, `app_close_win` BX
      (§29 — looks up the owning instance via `wm_ptr2idx` + `wm_owner`
      and runs the close protocol: synchronous teardown for task-less
@@ -853,7 +864,11 @@ Loop forever:
    consume-before-run rule — app_launch and loader_run manage their own
    locking, and the repaint takes the lock here rather than inside
    `cp_onclick`, which already holds it.
-4. `task_yield`.
+4. If `[dt_pending]` is set by the Date & Time page, consume it and call
+   `dt_rtc_write` outside the graphics lock. Then `dt_bar_refresh` advances
+   the PIT-backed wall clock and redraws the rightmost bar field only when
+   its generation changed.
+5. `task_yield`.
 
 Command dispatch: CMD_ABOUT/CTRL/NOTE/CLOCK/BOUNCE/TASKS → `call
 app_launch` with AL = the matching KIND_* (§29; CMD_CTRL → KIND_CTRL, the
@@ -968,7 +983,8 @@ angle index = AX mod 16). kmain's own `vga_mode12` then wipes the splash.
 kmain: set DS/ES = `KERNEL_SEG` and SS:SP = `LOW_SEG:STK0_TOP` (§2.1),
 `sti`, `cld`, then: `far_init` (**first** — the `.fartext` blob is sitting
 on top of `.bss` until it runs, §33) →
-`sched_init` → `evq_init` → `vga_mode12` → `bb_init` (§32 — the RAM probe
+`sched_init` → `dt_init` (§12 — BIOS RTC read, or the July 4, 2026
+fallback) → `evq_init` → `vga_mode12` → `bb_init` (§32 — the RAM probe
 must run after the mode set, which clears VRAM, and before the first
 drawing call) → `font_init` → `wm_init` →
 `inst_init` → `mouse_init` → `desk_init` → `files_init` → `loader_init` →
@@ -978,7 +994,8 @@ into `ui_task` (task 0 never returns). (`dock_init` runs right after
 `desk_init`.) **Clean boot**: no app instances exist — the first paint
 shows only the desktop, drive icons, the empty dock strip and menu bar;
 everything is launched from the menus (§13/§29). Include order:
-`instance.inc` right after `wm.inc`; `icons.inc`, `desk.inc`, `dock.inc`,
+`instance.inc` right after `wm.inc`; `datetime.inc` before `menu.inc`;
+`icons.inc`, `desk.inc`, `dock.inc`,
 `taskmgr.inc` and then `ctrl.inc` (§31) after `files.inc`;
 `farcall.inc` (§33) before all of them, since it defines the macros they use. The Control
 Panel has no init routine — it is task-less and stateless, so nothing runs
@@ -2082,8 +2099,10 @@ The window is a **two-pane browser**. The **left pane** lists the panel's
 items, one row each, the selected row drawn as a black bar with white text;
 the **right pane** is that item's settings page. Item 0 is **"Scheduler"**
 — the scheduler mode of §8.2 as a pair of radio rows — and is the boot
-selection, so the panel opens showing the scheduler page with no click
-needed.
+selection, so a menu-opened panel shows the scheduler page with no click
+needed. Item 3 is **"Date & Time"**. A top-bar clock click stores item 3 in
+`cp_sel` before launching/fronting the singleton, so that entry path always
+opens directly on the clock-management page.
 
 Structurally it is still the simplest kind in the tree — **task-less, no
 KD_INIT, no pool, no .bss**: nothing runs for it at boot and it exists only
@@ -2101,6 +2120,7 @@ cp_tpl:  dw 160, 130, 320, 120, cp_ttl, cp_paint, 0, cp_onclick
          ;  x    y    w    h     title   paint     onkey  onclick
 cp_dirty db 0                    ; deferred-repaint flag (§31.2)
 cp_sel   db 0                    ; selected item; 0 = Scheduler
+cp_dt_sel db 3                   ; selected Date & Time field; 3 = hour
 ```
 
 No onkey (the panel is mouse-only), no icon of its own (KD_ICON 0 → the
@@ -2329,6 +2349,34 @@ state of its own, exactly as the Scheduler page reads `sched_mode_get`):
   emitted ≈ clip length and resync ≈ 0.
 
 No `[cp_dirty]`: nothing else on screen quotes a sound setting.
+
+### 31.5 Date & Time page
+
+The fourth item-table row is:
+
+```nasm
+CP_DT_ITEM equ 3
+dw cp_s_dt, cp_dt_paint, cp_dt_click, 0
+```
+
+The page shows live `YYYY-MM-DD` and `HH:MM:SS` values from
+`datetime.inc`. Clicking one of the six numeric fields selects it; the
+selected field is black with white text. `-` and `+` buttons decrement or
+increment the selected field with calendar-aware wrapping. Year is bounded
+to 1980..2099; month and year changes clamp the day to the new month. Every
+edit calls `dt_adjust`, which advances the software clock first, changes
+the field, increments `dt_gen`, and posts `dt_pending`. The page redraws
+itself in place under its already-held graphics lock and never calls BIOS.
+
+`dt_init` starts with `2026-07-04 00:00:00`, then uses BIOS int 1Ah
+functions 04h and 02h to replace it with validated BCD date/time when a
+hardware RTC is available. Failure or invalid data leaves the fallback and
+`dt_rtc_present = 0`. The clock advances from `[ticks]` at 18.2 Hz, with
+calendar day/month carry. `dt_rtc_write` uses int 1Ah functions 05h and
+03h for a present RTC and is called only by `ui_task`, outside window
+callbacks and outside the graphics lock. A write failure demotes the clock
+to software-only operation. The page caption reads `Hardware RTC` or
+`Software clock` from that live flag.
 
 ## 32. vgabb.inc — optional double buffering
 

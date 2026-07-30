@@ -188,6 +188,7 @@ kmain:
     call far_init               ; FIRST: the .fartext blob is sitting on top
                                 ; of .bss until this moves it (SPEC.md 33)
     call sched_init             ; pre-emption live from here on
+    call dt_init                ; hardware RTC, or 2026-07-04 fallback
     call evq_init
     call vga_mode12
     call bb_init                ; RAM probe + back buffer (SPEC.md 32): after
@@ -270,6 +271,7 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "events.inc"
 %include "wm.inc"
 %include "instance.inc"
+%include "datetime.inc"
 %include "menu.inc"
 %include "ui.inc"
 %include "apps.inc"

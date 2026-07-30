@@ -90,6 +90,8 @@ menu_draw_bar:
     add si, MENU_ENTSZ
     loop .title
 
+    call dt_bar_draw            ; top-right wall clock (lock already held)
+
     pop si
     pop dx
     pop cx

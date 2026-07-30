@@ -100,6 +100,11 @@ the menus. All of classic Mac's core interactions work:
   follow — and cooperative mode still can't hang the machine: the timer keeps
   a watchdog on the running task and forces a switch if one holds the CPU for
   a second without yielding.
+- **System clock** — the top-right menu-bar clock starts from the hardware
+  RTC when one is available, or July 4, 2026 on an RTC-less XT. Click it to
+  open the existing Control Panel directly on **Date & Time**, where each
+  date/time field can be selected and adjusted; changes are written back to
+  the RTC when present.
 
 ## How
 
@@ -154,6 +159,7 @@ kernel/sched.inc     PIT hook, context switch, spawn/yield/sleep,
 kernel/events.inc    ISR-safe event ring queue
 kernel/wm.inc        window records, z-order, frames, hit test, painter
 kernel/instance.inc  the instance table: app kinds, launch, close, billing
+kernel/datetime.inc  BIOS RTC + PIT-backed calendar and top-bar clock
 kernel/menu.inc      menu bar, pull-down tracking
 kernel/ui.inc        UI task: event pump, keyboard, drags, dispatch
 kernel/apps.inc      About, Note Pad, Clock task, Bounce task

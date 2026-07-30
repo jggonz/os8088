@@ -106,8 +106,10 @@ cp_items:
     dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
     dw cp_s_disp,  cp_disp_paint,  cp_disp_click,  0
     dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0
+    dw cp_s_dt,    cp_dt_paint,    cp_dt_click,    0
 cp_items_end:
 CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
+CP_DT_ITEM equ 3
 
 cp_s_sched: db 'Scheduler', 0   ; list name AND the page heading
 cp_s_pre:   db 'Pre-emptive', 0
@@ -130,6 +132,50 @@ cp_s_sano:  db 'AdLib: no', 0   ; caption, read live from the driver table
 cp_s_sayes: db 'AdLib: yes', 0
 cp_s_sfrz:  db 'Clips freeze GUI', 0   ; the trade, stated honestly (34.4)
 cp_s_soff:  db 'Clips: off', 0
+
+; --- Date & Time page (SPEC.md 31.5) -----------------------------------------
+cp_s_dt:     db 'Date & Time', 0 ; list name AND page heading
+cp_s_date:   db 'Date', 0
+cp_s_time:   db 'Time', 0
+cp_s_dt_help: db 'Select field, then - or +', 0
+cp_s_rtc:    db 'Hardware RTC', 0
+cp_s_soft:   db 'Software clock', 0
+cp_s_minus:  db '-', 0
+cp_s_plus:   db '+', 0
+cp_s_colon:  db ':', 0
+
+cp_dt_sel:   db DT_HOUR         ; default selected field when clock opens
+cp_dt_year:  db '0000', 0
+cp_dt_month: db '00', 0
+cp_dt_day:   db '00', 0
+cp_dt_hour:  db '00', 0
+cp_dt_min:   db '00', 0
+cp_dt_sec:   db '00', 0
+
+; Each record is {pane-relative x, y, pixel width, string ptr}. The 8-byte
+; stride keeps selection->record legal on the 8086 with three one-bit shifts.
+CPD_FX     equ 0
+CPD_FY     equ 2
+CPD_FW     equ 4
+CPD_FS     equ 6
+CPD_FSTRIDE equ 8
+cp_dt_fields:
+    dw 48, 24, 32, cp_dt_year
+    dw 88, 24, 16, cp_dt_month
+    dw 112, 24, 16, cp_dt_day
+    dw 48, 44, 16, cp_dt_hour
+    dw 72, 44, 16, cp_dt_min
+    dw 96, 44, 16, cp_dt_sec
+cp_dt_fields_end:
+
+CPD_MINUS_X1 equ 150
+CPD_MINUS_X2 equ 174
+CPD_PLUS_X1  equ 180
+CPD_PLUS_X2  equ 204
+CPD_BTN_Y1   equ 22
+CPD_BTN_Y2   equ 57
+CPD_HELP_Y   equ 68
+CPD_STATUS_Y equ 86
 
 ; The built-in test clip is the Recorder demo's 1 s sine sweep (SPEC.md
 ; 31.4/35): 400 Hz rising linearly to 800 Hz over the first half second
@@ -1299,6 +1345,280 @@ cp_sndclip:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; Date & Time page (SPEC.md 31.5)
+; =============================================================================
+
+; cp_dt_paint - live date/time fields, selector, adjust buttons and RTC status
+; in: DI = pane left, BP = pane top; pane erased and gfx lock held
+cp_dt_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    KCALL dt_update
+    call cp_dt_format
+    mov byte [gfx_color], CBLACK
+
+    mov si, cp_s_dt
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PHY
+    KCALL font_str
+
+    mov si, cp_s_date
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, 24
+    KCALL font_str
+    mov si, cp_s_time
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, 44
+    KCALL font_str
+
+    ; All six field strings in black first.
+    mov si, cp_dt_fields
+.field:
+    mov cx, di
+    add cx, [si + CPD_FX]
+    mov dx, bp
+    add dx, [si + CPD_FY]
+    push si
+    mov si, [si + CPD_FS]
+    KCALL font_str
+    pop si
+    add si, CPD_FSTRIDE
+    cmp si, cp_dt_fields_end
+    jb .field
+
+    ; Separators between the independent numeric field strings.
+    mov si, cp_s_minus
+    mov cx, di
+    add cx, 80
+    mov dx, bp
+    add dx, 24
+    KCALL font_str
+    mov cx, di
+    add cx, 104
+    KCALL font_str
+    mov si, cp_s_colon
+    mov cx, di
+    add cx, 64
+    mov dx, bp
+    add dx, 44
+    KCALL font_str
+    mov cx, di
+    add cx, 88
+    KCALL font_str
+
+    ; Tall -/+ buttons at the right of both value rows.
+    mov ax, di
+    add ax, CPD_MINUS_X1
+    mov bx, bp
+    add bx, CPD_BTN_Y1
+    mov cx, di
+    add cx, CPD_MINUS_X2
+    mov dx, bp
+    add dx, CPD_BTN_Y2
+    KCALL gfx_frame
+    mov ax, di
+    add ax, CPD_PLUS_X1
+    mov cx, di
+    add cx, CPD_PLUS_X2
+    KCALL gfx_frame
+    mov si, cp_s_minus
+    mov cx, di
+    add cx, CPD_MINUS_X1 + 8
+    mov dx, bp
+    add dx, 36
+    KCALL font_str
+    mov si, cp_s_plus
+    mov cx, di
+    add cx, CPD_PLUS_X1 + 8
+    KCALL font_str
+
+    ; Selected field: black box over its first rendering, then white text.
+    mov al, [cp_dt_sel]
+    call cp_dt_entry
+    mov ax, di
+    add ax, [si + CPD_FX]
+    mov bx, bp
+    add bx, [si + CPD_FY]
+    mov cx, ax
+    add cx, [si + CPD_FW]
+    dec cx
+    mov dx, bx
+    add dx, 7
+    mov byte [gfx_color], CBLACK
+    KCALL gfx_fill
+    mov byte [gfx_color], CWHITE
+    mov cx, ax
+    mov dx, bx
+    mov si, [si + CPD_FS]
+    KCALL font_str
+
+    mov byte [gfx_color], CBLACK
+    mov si, cp_s_dt_help
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CPD_HELP_Y
+    KCALL font_str
+    mov si, cp_s_soft
+    cmp byte [dt_rtc_present], 0
+    je .status
+    mov si, cp_s_rtc
+.status:
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CPD_STATUS_Y
+    KCALL font_str
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; cp_dt_click - select a numeric field or adjust the selected one
+; in: DI/BP pane origin, CX/DX pane-relative click; gfx lock held
+cp_dt_click:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    ; The two adjust buttons share one vertical hit band.
+    cmp dx, CPD_BTN_Y1
+    jl .fields
+    cmp dx, CPD_BTN_Y2
+    jg .fields
+    cmp cx, CPD_MINUS_X1
+    jl .fields
+    cmp cx, CPD_MINUS_X2
+    jle .minus
+    cmp cx, CPD_PLUS_X1
+    jl .fields
+    cmp cx, CPD_PLUS_X2
+    jg .fields
+    mov bl, 1
+    jmp .adjust
+.minus:
+    xor bl, bl
+.adjust:
+    mov al, [cp_dt_sel]
+    KCALL dt_adjust              ; software state now; RTC write is deferred
+    call cp_dt_repaint
+    jmp .done
+
+.fields:
+    xor ax, ax                  ; AL = field index
+    mov si, cp_dt_fields
+.scan:
+    mov bx, [si + CPD_FY]
+    sub bx, 4
+    cmp dx, bx
+    jl .next
+    add bx, 15                 ; field y + 11
+    cmp dx, bx
+    jg .next
+    mov bx, [si + CPD_FX]
+    cmp cx, bx
+    jl .next
+    add bx, [si + CPD_FW]
+    dec bx
+    cmp cx, bx
+    jg .next
+    cmp al, [cp_dt_sel]
+    je .done
+    mov [cp_dt_sel], al
+    call cp_dt_repaint
+    jmp .done
+.next:
+    inc al
+    add si, CPD_FSTRIDE
+    cmp si, cp_dt_fields_end
+    jb .scan
+
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; cp_dt_repaint - erase and redraw the right pane through the common machinery
+cp_dt_repaint:
+    push di
+    sub di, CP_RX               ; cp_page takes the content origin
+    call cp_page
+    pop di
+    ret
+
+; cp_dt_entry - AL field index -> SI field record
+cp_dt_entry:
+    push ax
+    xor ah, ah
+    mov si, ax
+    shl si, 1
+    shl si, 1
+    shl si, 1
+    add si, cp_dt_fields
+    pop ax
+    ret
+
+; cp_dt_format - binary wall-clock fields -> the six ASCIIZ field buffers
+cp_dt_format:
+    push ax
+    push bx
+
+    mov ax, [dt_year]
+    mov bx, cp_dt_year
+    call cp_putu16
+    mov byte [bx], 0
+    mov al, [dt_month]
+    mov bx, cp_dt_month
+    call cp_dt_put2
+    mov al, [dt_day]
+    mov bx, cp_dt_day
+    call cp_dt_put2
+    mov al, [dt_hour]
+    mov bx, cp_dt_hour
+    call cp_dt_put2
+    mov al, [dt_minute]
+    mov bx, cp_dt_min
+    call cp_dt_put2
+    mov al, [dt_second]
+    mov bx, cp_dt_sec
+    call cp_dt_put2
+
+    pop bx
+    pop ax
+    ret
+
+; cp_dt_put2 - AL binary -> two digits + NUL at DS:BX
+cp_dt_put2:
+    push ax
+    aam
+    add ax, 0x3030
+    mov [bx], ah
+    mov [bx + 1], al
+    mov byte [bx + 2], 0
     pop ax
     ret
 

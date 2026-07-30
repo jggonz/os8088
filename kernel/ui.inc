@@ -73,6 +73,15 @@ ui_task:
 
     cmp dx, MBAR_H              ; in the menu bar?
     jae .on_desktop
+    cmp cx, DT_BAR_HIT_X        ; rightmost field opens Date & Time directly
+    jb .menu_bar
+    mov byte [cp_sel], CP_DT_ITEM
+    mov al, KIND_CTRL
+    call app_launch             ; singleton: create it or front + repaint it
+    jnc .yield
+    call snd_beep
+    jmp .yield
+.menu_bar:
     call gfx_lock               ; menu_track runs the whole interaction
     call menu_track             ; in: CX = mousedown x; out: AX = CMD_* or 0
     call gfx_unlock
@@ -185,8 +194,15 @@ ui_task:
     call wm_paint_all           ; outside cp_onclick's held lock
     call gfx_unlock
 
-    ; --- 4. give everyone else a slice ----------------------------------------
+    ; --- 4. wall clock: deferred RTC write, then cheap generation refresh -----
 .idle:
+    cmp byte [dt_pending], 0
+    je .clock
+    call dt_rtc_write           ; BIOS only here: no callback and no gfx lock
+.clock:
+    call dt_bar_refresh
+
+    ; --- 5. give everyone else a slice ----------------------------------------
     call task_yield
     jmp .loop
 

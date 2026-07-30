@@ -121,6 +121,8 @@ far_init:
     FARK sched_mode_get
     FARK gfx_pixel              ; ctrl.inc only
     FARK sched_mode_set
+    FARK dt_update              ; ctrl.inc Date & Time page (SPEC.md 31.5)
+    FARK dt_adjust
     FARK bb_set
     FARK gfx_frame              ; taskmgr.inc only
     FARK gfx_fill_gray
