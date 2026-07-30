@@ -3191,3 +3191,100 @@ Directory order on the apps disks stays pinned: mines, hello, notepad —
   a QEMU-testing note, not a behavior bug. And pcspk emits zero frames in
   ch2 mode 0, so the speaker fallback is asserted via its result codes and
   the §31.4 E:/R: counters, never the wav.
+
+## 36. Piano — the fifth package (apps/piano/piano.asm)
+
+A colorful playable piano over the §34 tone tier: 1.5+ octaves of clickable
+keys, a live note viewer (a scrolling mini-staff), a recorded sequence with
+timed replay, and three embedded public-domain songs. Prefix `pn_`,
+embedded piano-keys icon (flags bit 0). Directory order on the apps disks
+stays pinned: mines, hello, notepad, recorder — **piano is appended
+fifth** so the earlier indices hold. Drawing uses colors beyond 0/15,
+which retires `[bb_mono]` (§32) — supported and expected.
+
+- Window: "Piano", 224×177 at (250,100) → content 222×158. Content
+  layout, top to bottom (all coordinates content-relative):
+  - **Note viewer** — a CBLUE 1px frame (2,2)–(219,49), white field, five
+    black staff lines (treble: E4 G4 B4 D5 F5) at y 40/34/28/22/16,
+    x 8..213. Up to **21 note columns**, 10 px apart at x = 8 + col·10;
+    each played note is a 4×3 CBLUE dot centered at y = 46 − 3·step
+    (step = diatonic degree from C4 = 0 … G5 = 11), with a black ledger
+    line (colx+2..colx+11 at y 46) for middle C and a small CLRED
+    hand-drawn sharp glyph (two 6px vlines at colx+1/colx+3, two 5px
+    hlines at y−2/y+1) beside the dot for the five sharps. The viewer
+    shows the **last 21** entries of the first `[pn_vcnt]` sequence
+    entries: live play and song-load set vcnt = count; replay resets
+    vcnt to 0 and advances it note by note, so the viewer fills live
+    during replay too.
+  - **Button row** at y 52..67: REPLAY (x 2, w 56) and CLEAR (x 60,
+    w 48), black 1px frames + centered labels; the message area
+    (white-filled 110..219, text at 112) shows the state: READY /
+    REPLAYING... / REPLAY DONE / STOPPED / CLEARED / SEQ FULL / EMPTY /
+    the loaded song's name.
+  - **Songs row** at y 70..85: the caption "SONGS:" at (2,74) and three
+    colored buttons — TWINKLE (x 52, w 64, CGREEN), ODE (x 118, w 40,
+    CMAGENTA), MARY (x 160, w 48, CRED). The embedded songs (titles,
+    public domain): *Twinkle Twinkle Little Star* (42 notes), *Ode to
+    Joy* (30 notes), *Mary Had a Little Lamb* (26 notes) — all within
+    C4..G4. Loading REPLACES the sequence buffer with the song (viewer
+    filled immediately, message = song name) so the one Replay button
+    plays it.
+  - **Keyboard** at y 88..155: 12 white keys 18 px wide (x = 2 + i·18,
+    black shared 1px frames, white faces) covering C4 D4 E4 F4 G4 A4 B4
+    C5 D5 E5 F5 G5, with 8 overlaid black keys (10 px wide, y 88..129,
+    x = 18·slot + 15 for slot = the left white key's index: 0 1 3 4 5 7
+    8 10) covering C#4 D#4 F#4 G#4 A#4 C#5 D#5 F#5. The QWERTY mapping
+    is printed subtly on the keys themselves: CBLUE letters
+    `a s d f g h j k l ; ' ]` at the foot of the white keys (y 144),
+    CWHITE `w e t y u o p [` on the black keys (y 116). A sounding key
+    fills **CLBLUE** (white keys, letter goes CWHITE) or **CLRED**
+    (black keys) for the note's duration, then repaints normal; a white
+    key repaint re-draws its overlapping black neighbours.
+- **Notes**: equal temperament, one pinned word table `pn_freq`
+  (Hz, note ids 0..19 = semitones from C4): 262 277 294 311 330 349 370
+  392 415 440 466 494 523 554 587 622 659 698 740 784. Every note goes
+  through `OSAPI_SND_TONE` (package priority 40h). Live play (click or
+  key) sounds CX = 5 ticks and holds the key highlight ~4 ticks inside
+  the callback — bounded blocking, the §34.4 PCM_EXCL precedent; a
+  fresh press cuts the hold short so fast playing stays snappy (the
+  tone still self-expires).
+  **In-callback waiting is `pn_wait`, a `task_yield` loop against
+  `osapi_get_ticks` (wrap-safe signed compare) — NOT `task_sleep`**,
+  learned the hard way: from the UI task with no other task ready,
+  §8's sch_switch nothing-ready fallback resumes the sleeper at once,
+  so `task_sleep` from a callback on an otherwise-idle machine returns
+  immediately. `menu_track`'s poll-under-the-lock is the sanctioned
+  pattern and `pn_wait` is its package-side twin (it also carries the
+  release-folded mouse baseline: out CF=1 on a fresh press).
+- **Sequence**: parallel bss arrays, cap **300 notes** — `pn_seqn`
+  (note id bytes) + `pn_seqt` (absolute `osapi_get_ticks` words stamped
+  at play). Policy at the cap, pinned: **full-stop** — further notes
+  still sound but are not recorded and the message reads SEQ FULL
+  (oldest-drop rejected: silently rewriting a recording the user is
+  building is worse than saying it is full). CLEAR empties it. Loading
+  a song synthesizes timestamps from its duration column (t += dur).
+- **Replay** is a blocking loop in the REPLAY click callback — exactly
+  the PCM_EXCL precedent: for each note, advance vcnt + redraw the
+  viewer, highlight the key, `OSAPI_SND_TONE` with CX = the note's
+  duration, then `pn_wait` that duration, polling `osapi_mouse` every
+  pass against the release-folded baseline (latched before the loop,
+  the kernel's §34.4 fold) — a fresh press aborts: tone off, key
+  repainted, vcnt = count, viewer redrawn, message STOPPED. The aborting press is NOT drained (only the kernel
+  can, §34.4), so it also lands as an ordinary click — the recorder's
+  documented gap-abort asymmetry, which is what makes close-box- and
+  key-click-during-replay work naturally. Durations are the timestamp
+  deltas (last note: 6), **clamped to 2..24 ticks** — original relative
+  timing, with long thinking pauses compressed to ~1.3 s.
+- **Song table format**: byte pairs (note id, duration ticks),
+  terminated 0FFh; quarter = 6 ticks, half = 12.
+- Register contracts: entry stamps the READY message (bss is
+  loader-zeroed) and wm_creates; paint/onkey/onclick preserve all
+  registers, fetch the content origin per call, and run under the
+  caller's gfx lock. No caps query, no grants, no streams, no tasks —
+  the tone tier is always present; teardown mid-replay rides
+  `snd_release_inst`'s tone release (§34.3).
+- QEMU truth: the tone tier is PIT ch2 mode 3, which the wav audiodev
+  captures (unlike mode-0 PWM), so sndcheck verifies real key
+  frequencies; replayed songs play tone-to-tone with no speaker-off gap,
+  so a whole song is ONE contiguous wav region — per-note assertions
+  slice it at the 6-tick note quantum and Goertzel each slice.

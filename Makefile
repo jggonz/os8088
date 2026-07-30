@@ -118,6 +118,18 @@ $(BUILD)/recorder.alt.bin: apps/recorder/recorder.asm apps/os88api.inc | $(BUILD
 $(BUILD)/recorder.o88: $(BUILD)/recorder.bin $(BUILD)/recorder.alt.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/recorder.bin --alt $(BUILD)/recorder.alt.bin -o $@
 
+# Piano, the fifth shipped package (SPEC.md 36): a colorful playable piano
+# over the SPEC.md 34 tone tier (note viewer, replay, embedded songs).
+$(BUILD)/piano.bin: apps/piano/piano.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/piano/piano.asm
+	@echo "piano:  $(call FILESIZE,$@) bytes"
+
+$(BUILD)/piano.alt.bin: apps/piano/piano.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/piano/piano.asm
+
+$(BUILD)/piano.o88: $(BUILD)/piano.bin $(BUILD)/piano.alt.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/piano.bin --alt $(BUILD)/piano.alt.bin -o $@
+
 # FMTEST, the sound Phase 3 gate package (docs/SOUND-PLAN.md): drives the FM
 # slot 0x0084 end to end (patch-load, chord, all-off, tone expiry, teardown).
 # Never on the shipped apps disks - their directory order is pinned - it gets
@@ -156,12 +168,13 @@ $(BUILD)/sbtest.img: $(BUILD)/sbtest.o88 tools/os88disk.py
 
 # The software floppies (drive B:) hold packages, not boot code - os88fs only.
 # Directory order is pinned: mines first, hello second (tests rely on it);
-# notepad is appended third and recorder fourth so earlier indices hold.
-$(APPSIMG): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88
+# notepad is appended third, recorder fourth and piano fifth so earlier
+# indices hold.
+$(APPSIMG): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88
 
-$(APPSIMG360): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88
+$(APPSIMG360): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88
 
 # The GUI reads a Microsoft serial mouse on COM1; QEMU emulates one natively.
 MOUSE := -chardev msmouse,id=m0 -serial chardev:m0
