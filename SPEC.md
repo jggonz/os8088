@@ -3112,3 +3112,62 @@ end.
   cold at boot, never from ISR context) and the patch loader, the Sound
   page bodies, and the PWM xlat-table builder. Far code keeps
   DS = KERNEL_SEG, so all of it reads its data from `.text` (§33 rule 2).
+
+## 35. Recorder — the fourth package (apps/recorder/recorder.asm)
+
+A sound wave recorder and player over the §34 layer, and the first
+*shipped* package to touch it (fmtest/sbtest are gate scaffolding, never
+on the apps disks). Prefix `rc_`, embedded microphone icon (flags bit 0).
+Directory order on the apps disks stays pinned: mines, hello, notepad —
+**recorder is appended fourth** so the earlier indices hold.
+
+- Window: "Recorder", 220×140 at (210,150) → content 218×121. Content
+  layout, top to bottom: a **waveform strip** (1px frame (4,2)–(213,69),
+  white field, light-gray centerline at row 36), two status lines at
+  y 76 / 88 (the state message; `NNNNN BYTES  IN:SB|--`), and four
+  52×16 buttons at y 100: **REC / STOP / PLAY / DEMO** at x 4/58/112/166.
+  Disabled buttons draw dark gray; enabled black.
+- One grant, one rate: on first need (REC or DEMO) the app verb-7 allocs
+  a single **40,000-byte** `SND_SEG` grant (5 s at the app's one rate,
+  **8,000 Hz** — PWM N = 149, inside 74..255) and keeps it for the
+  instance's life; `rc_len` is the valid take inside it. All data moves
+  through the staging verbs (6 in, 5 out) — the app never holds an ES
+  pointer into `SND_SEG` (§34.6).
+- **Caps decide, three layers deep** (the `bb_avail` idiom, §32): caps are
+  read once at entry. No `SND_CAP_PCM_IN` → REC draws disabled, a click on
+  it only writes "NO REC DEVICE (SB NEEDED)", and the byte line reads
+  `IN:--` — the app is a full player on speaker-only machines. PLAY
+  prefers `PCM_BG` (verb 0 on the already-staged grant — background, the
+  GUI keeps running) and falls back to `PCM_EXCL`
+  (`osapi_snd_play`, ES = DS, 4,000-byte verb-5 read-back chunks = 0.5 s,
+  blocking, click-aborts mid-chunk per §34.4); the status line names the
+  device that played ("PLAYING (SB)" / "PLAY DONE (SPEAKER)" / …).
+- **Progress is polled** (§34.3 — there are no sound events): every
+  W_PAINT and W_ONCLICK first runs `rc_poll`, which reads verb 3 and
+  retires state changes — recording: capacity-full pauses → "REC STOPPED
+  (FULL)", watchdog "ended" → "REC STOPPED (WATCHDOG)"; playback:
+  data-exhaustion pause (consumed = length) → close + "PLAY DONE (SB)";
+  stale → idle. `rc_poll` preserves all registers — the onclick hit-tests
+  CX/DX *after* polling, and verb 3 returns in AX/DX (a leak here cost a
+  debug cycle; recorded so it stays fixed). STOP reads the final captured
+  count (verb 3) before closing, so a stopped take keeps its bytes.
+- **DEMO** stages a built-in 1 s two-tone as if it had been recorded:
+  0.75 s of 1 kHz + 0.25 s of 2 kHz square (0xD8/0x28) at 8 kHz —
+  8,000 bytes synthesised in 1,000-byte chunks (a multiple of both
+  periods) and verb-6 staged. It exists so the real playback paths are
+  exercisable anywhere — and 1 kHz leads so sndcheck's first-region
+  dominant lands on it.
+- The **waveform strip** decimates the take to its 208 columns (offset =
+  column × `rc_len` / 208, one sample per column via verb 5) and draws a
+  vertical line from the centerline (positive samples up, span/4 scale:
+  ±31 px inside the 66px field). Empty take = centerline only.
+- Teardown needs nothing app-side: close-box mid-record/mid-play rides
+  `snd_release_inst` (§34.3), which closes the stream and frees the grant;
+  a relaunch re-grants cleanly. Task Manager: one ordinary task-less
+  instance row (§28), nothing new.
+- QEMU truth (§34.5/§34.6, and the test plan's pinned limits): sb16 never
+  delivers input IRQs, so REC always lands on the watchdog path — "REC
+  STOPPED (WATCHDOG)" with 0 bytes IS the deterministic automated test;
+  live capture is 86Box/real-hardware work. And pcspk emits zero frames in
+  ch2 mode 0, so the speaker fallback is asserted via its result codes and
+  the §31.4 E:/R: counters, never the wav.

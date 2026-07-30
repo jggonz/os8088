@@ -106,6 +106,18 @@ $(BUILD)/notepad.alt.bin: apps/notepad/notepad.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/notepad.o88: $(BUILD)/notepad.bin $(BUILD)/notepad.alt.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/notepad.bin --alt $(BUILD)/notepad.alt.bin -o $@
 
+# Recorder, the fourth shipped package (SPEC.md 35): sound wave recorder and
+# player over the SPEC.md 34 sound layer (grants, streams, PCM_EXCL fallback).
+$(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/recorder/recorder.asm
+	@echo "recorder: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/recorder.alt.bin: apps/recorder/recorder.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/recorder/recorder.asm
+
+$(BUILD)/recorder.o88: $(BUILD)/recorder.bin $(BUILD)/recorder.alt.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/recorder.bin --alt $(BUILD)/recorder.alt.bin -o $@
+
 # FMTEST, the sound Phase 3 gate package (docs/SOUND-PLAN.md): drives the FM
 # slot 0x0084 end to end (patch-load, chord, all-off, tone expiry, teardown).
 # Never on the shipped apps disks - their directory order is pinned - it gets
@@ -144,12 +156,12 @@ $(BUILD)/sbtest.img: $(BUILD)/sbtest.o88 tools/os88disk.py
 
 # The software floppies (drive B:) hold packages, not boot code - os88fs only.
 # Directory order is pinned: mines first, hello second (tests rely on it);
-# notepad is appended third so those two keep their indices.
-$(APPSIMG): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88
+# notepad is appended third and recorder fourth so earlier indices hold.
+$(APPSIMG): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88
 
-$(APPSIMG360): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88
+$(APPSIMG360): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88
 
 # The GUI reads a Microsoft serial mouse on COM1; QEMU emulates one natively.
 MOUSE := -chardev msmouse,id=m0 -serial chardev:m0
