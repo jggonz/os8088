@@ -263,38 +263,40 @@ rc_poll:
     ; --- playing (PCM_BG) -----------------------------------------------------
     or ax, ax                       ; 0 = still playing
     jz .out
-    cmp ax, SND_ST_UNDER            ; data exhausted: consumed == length -
-    je .pdone                       ; the owner's cue to close (SPEC.md 20.3)
     cmp ax, SND_ST_ENDED            ; watchdog stop
     je .pwdog
-    mov byte [rc_st], RC_IDLE       ; stale: torn down under us
-    mov word [rc_msg], rc_s_stopped
-    jmp .out
-.pdone:
-    call rc_close
+    cmp ax, SND_ST_UNDER            ; state 1 is BOTH pauses (SPEC.md 20.3):
+    jne .pstale
+    cmp dx, [rc_len]                ; consumed < length = refill starve -
+    jb .out                         ; the kernel auto-resumes (SPEC.md 34.5)
+.pdone:                             ; consumed == length: data exhausted -
+    call rc_close                   ; the owner's cue to close
     mov word [rc_msg], rc_s_pdonesb
     jmp .out
 .pwdog:
     call rc_close
     mov word [rc_msg], rc_s_pwdog
     jmp .out
+.pstale:
+    mov byte [rc_st], RC_IDLE       ; stale: torn down under us
+    mov word [rc_msg], rc_s_stopped
+    jmp .out
 
     ; --- recording (PCM_IN) ---------------------------------------------------
 .rec:
     or ax, ax                       ; 0 = still recording
     jnz .r1
+.rlive:
     mov [rc_len], dx                ; live captured count
     jmp .out
 .r1:
-    cmp ax, SND_ST_UNDER            ; capacity full: drain stopped the DSP
-    je .rfull
     cmp ax, SND_ST_ENDED            ; watchdog: input IRQs stopped arriving
     je .rwdog                       ; (on QEMU they never start - SPEC.md 35)
-    mov byte [rc_st], RC_IDLE       ; stale
-    mov word [rc_msg], rc_s_stopped
-    jmp .out
-.rfull:
-    mov [rc_len], dx
+    cmp ax, SND_ST_UNDER            ; state 1 is BOTH pauses (SPEC.md 20.3):
+    jne .pstale                     ; (not 1: stale, torn down under us)
+    cmp dx, RC_CAP                  ; consumed < capacity = drain starve -
+    jb .rlive                       ; track the count, kernel resumes (34.6)
+    mov [rc_len], dx                ; consumed == capacity: full - close
     call rc_close
     mov word [rc_msg], rc_s_rfull
     jmp .out
@@ -414,7 +416,7 @@ rc_do_stop:
 ; PCM_EXCL speaker chunks (blocking, click-aborts) - SPEC.md 34's honest
 ; degradation, chosen by the caller
 ; in:  nothing
-; out: nothing; clobbers AX, CX, DX, SI, DI
+; out: nothing; clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
 rc_do_play:
     cmp byte [rc_st], RC_IDLE
@@ -439,10 +441,14 @@ rc_do_play:
 
     ; --- speaker fallback: verb-5 read-back + PCM_EXCL chunks ------------------
     ; Blocks inside this callback for up to rc_len/8000 seconds - the
-    ; PCM_EXCL contract (SPEC.md 34.4); a mouse click aborts mid-chunk.
+    ; PCM_EXCL contract (SPEC.md 34.4); a mouse click aborts mid-chunk,
+    ; and BL mirrors the kernel's release-folded baseline across the
+    ; chunk gaps so a press landing between chunks aborts too (SPEC.md 35).
 .spk:
     test byte [rc_caps], SND_CAP_PCM_EXCL
     jz .nosink
+    call OSAPI_MOUSE                ; BL = abort baseline: buttons already
+    mov bl, al                      ; down now never abort until re-pressed
     mov di, 0                       ; DI = bytes played so far
 .chunk:
     mov cx, [rc_len]
@@ -475,14 +481,21 @@ rc_do_play:
     or ax, ax
     jnz .pres
     add di, cx
-    jmp .chunk
+    call OSAPI_MOUSE                ; a press in the inter-chunk gap: AH =
+    mov ah, bl                      ; buttons down now that are not in the
+    not ah                          ; baseline = newly pressed -> abort
+    and ah, al
+    jnz .gapab
+    mov bl, al                      ; no new press: fold releases into the
+    jmp .chunk                      ; baseline (AL is a subset of BL here)
 .done:
     mov word [rc_msg], rc_s_pdonesp
     ret
 .pres:
     cmp ax, 5                       ; aborted by a click: the kernel already
     jne .p3                         ; drained the aborting press (SPEC.md 34.4)
-    mov word [rc_msg], rc_s_pabort
+.gapab:                             ; (gap-abort presses are NOT drained -
+    mov word [rc_msg], rc_s_pabort  ; they also land as an ordinary click)
     ret
 .p3:
     cmp ax, 3                       ; disabled by the user (Control Panel)

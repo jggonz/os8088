@@ -3140,13 +3140,27 @@ Directory order on the apps disks stays pinned: mines, hello, notepad —
   prefers `PCM_BG` (verb 0 on the already-staged grant — background, the
   GUI keeps running) and falls back to `PCM_EXCL`
   (`osapi_snd_play`, ES = DS, 4,000-byte verb-5 read-back chunks = 0.5 s,
-  blocking, click-aborts mid-chunk per §34.4); the status line names the
-  device that played ("PLAYING (SB)" / "PLAY DONE (SPEAKER)" / …).
+  blocking, click-aborts mid-chunk per §34.4). §34.4's baseline latch
+  only covers presses *inside* a chunk, so between chunks the app samples
+  `osapi_mouse` against its own release-folded baseline (latched before
+  the first chunk, exactly the kernel's fold) and a button newly down in
+  the inter-chunk gap aborts before the next chunk is issued — no press
+  is ever swallowed by a chunk boundary. One asymmetry, accepted: a
+  gap-abort press is not drained (only the kernel can, §34.4), so it also
+  lands as an ordinary click. The status line names the device that
+  played ("PLAYING (SB)" / "PLAY DONE (SPEAKER)" / …).
 - **Progress is polled** (§34.3 — there are no sound events): every
   W_PAINT and W_ONCLICK first runs `rc_poll`, which reads verb 3 and
-  retires state changes — recording: capacity-full pauses → "REC STOPPED
-  (FULL)", watchdog "ended" → "REC STOPPED (WATCHDOG)"; playback:
-  data-exhaustion pause (consumed = length) → close + "PLAY DONE (SB)";
+  retires state changes. **State 1 is discriminated by its consumed
+  count** — §20.3 pins one state for both the terminal and the transient
+  pause, and only the owner knows the length: recording, capacity-full
+  pause (consumed = capacity) → close + "REC STOPPED (FULL)", while a
+  drain-starve pause (consumed < capacity) just refreshes the live count
+  and leaves the stream for the kernel's resume; playback,
+  data-exhaustion pause (consumed = length) → close + "PLAY DONE (SB)",
+  while a refill-starve pause (consumed < length — e.g. a floppy read
+  paused the refill task, §18) is left open for the auto-resume
+  (§34.5/§34.6). Watchdog "ended" → "REC/PLAY STOPPED (WATCHDOG)";
   stale → idle. `rc_poll` preserves all registers — the onclick hit-tests
   CX/DX *after* polling, and verb 3 returns in AX/DX (a leak here cost a
   debug cycle; recorded so it stays fixed). STOP reads the final captured
@@ -3160,7 +3174,8 @@ Directory order on the apps disks stays pinned: mines, hello, notepad —
 - The **waveform strip** decimates the take to its 208 columns (offset =
   column × `rc_len` / 208, one sample per column via verb 5) and draws a
   vertical line from the centerline (positive samples up, span/4 scale:
-  ±31 px inside the 66px field). Empty take = centerline only.
+  +31/−32 px inside the 66px field — two `sar`s, so the negative side
+  keeps the extra step). Empty take = centerline only.
 - Teardown needs nothing app-side: close-box mid-record/mid-play rides
   `snd_release_inst` (§34.3), which closes the stream and frees the grant;
   a relaunch re-grants cleanly. Task Manager: one ordinary task-less
@@ -3168,6 +3183,11 @@ Directory order on the apps disks stays pinned: mines, hello, notepad —
 - QEMU truth (§34.5/§34.6, and the test plan's pinned limits): sb16 never
   delivers input IRQs, so REC always lands on the watchdog path — "REC
   STOPPED (WATCHDOG)" with 0 bytes IS the deterministic automated test;
-  live capture is 86Box/real-hardware work. And pcspk emits zero frames in
+  live capture is 86Box/real-hardware work. Corollary: the input watchdog
+  (~2× the block period; ~21 ticks ≈ 1.15 s at 8 kHz) retires the
+  recording that fast on QEMU, and `rc_poll` runs before the STOP
+  hit-test — a STOP click landing later reads "NOT RUNNING", not
+  "STOPPED". Real hardware's input IRQs rewind the watchdog, so this is
+  a QEMU-testing note, not a behavior bug. And pcspk emits zero frames in
   ch2 mode 0, so the speaker fallback is asserted via its result codes and
   the §31.4 E:/R: counters, never the wav.
