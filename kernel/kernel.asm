@@ -59,6 +59,10 @@ APP_MAX_SIZE equ 0x4E00         ; image + bss budget, 0xB000..0xFDFF
 ; at 0x10000. Two segments carve it up, and everything either of them holds
 ; is one thing the kernel's own 64KB window no longer has to.
 FAR_SEG     equ 0x0060          ; linear 0x00600 - far code (section .fartext)
+FAT_SEG     equ 0x0300          ; linear 0x03000 - mount-time FAT snapshot
+                                ; (SPEC.md 2.1/18), reached via ES ONLY,
+                                ; never DS; dsk_next_clus is the one reader
+DSK_FAT_SECS equ 32             ; resident FAT cap, sectors (16,384 bytes)
 LOW_SEG     equ 0x0800          ; linear 0x08000 - task stacks + disk buffers
 LOW_LIMIT   equ 0x8000          ; LOW_SEG:0x8000 IS KERNEL_SEG:0 - every
                                 ; LOW_SEG offset must stay strictly below it
@@ -345,4 +349,10 @@ KLOWFAR_KB equ (KLOW_SIZE + KFAR_SIZE + 1023) / 1024
 %endif
 %if STK0_TOP >= LOW_LIMIT
 %error "STK0_TOP must stay below LOW_LIMIT (LOW_SEG:LOW_LIMIT is the kernel)"
+%endif
+; 5. the far blob is copied to FAR_SEG (linear 0x00600) and must end below
+;    FAT_SEG at linear 0x03000, where the FAT snapshot begins (SPEC.md 2.1):
+;    0x00600 + 0x2A00 = 0x03000.
+%if KFAR_SIZE > 0x2A00
+%error "fartext blob would collide with FAT_SEG at linear 0x03000"
 %endif

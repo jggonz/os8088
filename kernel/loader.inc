@@ -1,7 +1,7 @@
 ; =============================================================================
 ; loader.inc - package loader (SPEC.md 21)
 ;
-; Validates an os88fs directory entry, allocates a region from the package
+; Validates a staged directory entry (SPEC.md 19), allocates a region from the package
 ; pool (0xB000..0xFDFF), reads the .o88 v2 file into it, applies the
 ; relocation table (SPEC.md 20.2: class 0 entries += base-APP_LOAD_OFF,
 ; class 1 entries -= it), zeroes the package bss, near-calls its entry, and
@@ -33,9 +33,9 @@ LD_EBIG     equ 3               ; too large (file, image or image+bss)
 LD_EABORT   equ 4               ; package entry returned CF=1
 LD_ENOMEM   equ 5               ; instance table or pool exhausted
 
-; --- os88fs directory entry field offsets (SPEC.md 19) ------------------------
+; --- staged directory entry field offsets (SPEC.md 19) ------------------------
 LD_DE_TYPE  equ 16              ; word: 1 = application package
-LD_DE_LBA   equ 18              ; word: start LBA of file data
+LD_DE_CLUS  equ 18              ; word: first cluster of the file's chain
 LD_DE_SIZE  equ 20              ; word: size in bytes (image + reloc table)
 
 ; --- .o88 v2 header field offsets (SPEC.md 20.2) ------------------------------
@@ -225,8 +225,12 @@ ld_run_body:
     cmp ax, APP_MAX_SIZE
     ja .big1
     mov [ld_fsz], ax
-    mov ax, [si+LD_DE_LBA]
-    mov [ld_lba], ax
+    mov ax, [si+LD_DE_CLUS]     ; first cluster: re-check the range the
+    cmp ax, 2                   ; mount already validated (SPEC.md 21 step
+    jb .bad1                    ; 1 - this check stands alone if the mount
+    cmp ax, [dsk_maxclus]       ; code ever changes)
+    ja .bad1
+    mov [ld_clus], ax
     jmp short .peek
 .bad1:
     mov al, LD_EBAD
@@ -241,6 +245,10 @@ ld_run_body:
     ; LOW_SEG, so the sector lands there and only the 32 header bytes are
     ; staged back into the kernel segment for ld_check_hdr to read.
 .peek:
+    call dsk_clus2lba           ; AX: cluster -> its first LBA; the first
+    jc .bad1                    ; sector of the first cluster IS the file's
+                                ; first 512 bytes, so peek semantics are
+                                ; exact (SPEC.md 21 step 2)
     mov bx, LOW_SEG
     mov es, bx
     mov cx, 1
@@ -297,13 +305,16 @@ ld_run_body:
     add ax, 511
     mov cl, 9
     shr ax, cl
-    mov cx, ax                  ; CX = ceil(fsize/512) sectors
-    mov ax, [ld_lba]
+    mov dx, ax                  ; DX = ceil(fsize/512) sectors
+    mov ax, [ld_clus]
     mov bx, KERNEL_SEG          ; ES stays KERNEL_SEG through step 9 (the
     mov es, bx                  ; caller restores the real ES afterwards)
     mov bx, [ld_base]
-    call disk_read              ; in: AX=LBA, CX=count, ES:BX -> dest
-    jc .disk2
+    call dsk_read_chain         ; in: AX=cluster, DX=sectors, ES:BX -> dest.
+    jc .ret2                    ; on CF, AL is ALREADY the status: 1 =
+                                ; LD_EDISK (disk error), 2 = LD_EBAD (chain
+                                ; corrupt is bad data, not a disk error) -
+                                ; SPEC.md 21 step 6
 
     mov si, [ld_base]           ; re-check against the in-region header -
     call ld_check_hdr           ; the disk could have been swapped between
@@ -341,8 +352,6 @@ ld_run_body:
 .relnext:
     loop .reloc
     jmp short .reloc_done
-.disk2:
-    mov al, LD_EDISK
 .ret2:
     ret
 .bad2:
@@ -424,7 +433,7 @@ section .bss
 ld_pending: resw 1              ; 0 = none, else directory index + 1
                                 ; (set by files.inc, consumed by ui.inc)
 ld_status:  resb 1              ; LD_* result of the last loader_run
-ld_lba:     resw 1              ; loader_run scratch: file start LBA
+ld_clus:    resw 1              ; loader_run scratch: the file's first cluster
 ld_fsz:     resw 1              ; file size, bytes (image + reloc table)
 ld_img:     resw 1              ; header: image size
 ld_bss:     resw 1              ; header: bss size

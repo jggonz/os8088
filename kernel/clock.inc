@@ -853,7 +853,7 @@ clk_pad:    resb 1              ; keeps the words below even-aligned
 clk_year:   resw 1              ; CLK_YMIN..CLK_YMAX
 
 ; --- display settings (SPEC.md 37): runtime state, boot defaults in
-; --- clk_init, nowhere to persist them (os88fs is read-only)
+; --- clk_init, nowhere to persist them (the kernel never writes the data disk)
 clk_h12:    resb 1              ; 0 = 24-hour, 1 = 12-hour + AM/PM
 clk_secs:   resb 1              ; 0 = the menu bar hides seconds, 1 = shows
 clk_barq:   resb 1              ; sticky: the bar's text is stale (an edit or

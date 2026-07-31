@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - files.inc
 ;
-; The Disk window - a minimal file manager for the os88fs data floppy
+; The Disk window - a minimal file manager for the FAT data floppy
 ; (SPEC.md 22). A singleton app kind (KIND_FILES, cap 1 - the mount state
 ; below is module-global): no boot-time window; app_launch creates it on
 ; demand (fm_kinit is the KD_INIT). CMD_FILES dispatch calls files_open and

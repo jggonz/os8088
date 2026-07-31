@@ -61,7 +61,7 @@ icon_draw:
 
 ; -----------------------------------------------------------------------------
 ; icon_draw16 - draw a header-less 16x16 icon body (16 mask words + 16 data
-;               words) - the os88fs icon-table / embedded-icon layout
+;               words) - the harvested-icon / embedded-icon layout
 ;               (SPEC 19 / 20.2).
 ;
 ; in:       CX = x, DX = y, SI -> body; caller holds the gfx lock
