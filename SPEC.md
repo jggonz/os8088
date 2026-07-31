@@ -75,7 +75,8 @@ pre-empted background task, updating live while the user types or drags).
 | linear        | segment | contents                                          |
 |---------------|---------|----------------------------------------------------|
 | 0x00500       | —       | free; boot stack grows down from 0x7C00 (dead after handoff) |
-| 0x00600       | 0x0060  | `FAR_SEG` — far code (§33), copied here by `far_init` |
+| 0x00600       | 0x0060  | `FAR_SEG` — far code (§33), copied here by `far_init`; blob ≤ 0x2A00 bytes (§15.1 guard 5) |
+| 0x03000       | 0x0300  | `FAT_SEG` — mount-time FAT snapshot, up to `DSK_FAT_SECS`×512 bytes, via **ES only** (§18) |
 | 0x07C00       | 0000    | boot sector (dead once it jumps to the kernel)     |
 | 0x08000       | 0x0800  | `LOW_SEG` — `.lowbss`: disk buffers, then task stacks (§2.1) |
 | 0x0FFFE       | 0x0800  | `STK0_TOP` — task 0's stack top, grows down        |
@@ -109,7 +110,9 @@ task stacks) or **ES** (the disk buffers), never DS:
 - Task 0 runs on the same segment at `STK0_TOP`, growing down toward the top
   of `.lowbss`. All tasks share one SS, so a switch is still an SP swap and
   SS is not part of the saved frame.
-- `disk_dir`, `disk_icons`, `dsk_secbuf` — written by int 13h through ES:BX,
+- `disk_dir` (the synthesized directory cache), `disk_icons` (the harvested
+  icon cache) and `dsk_secbuf` (sector scratch) — written through ES
+  (int 13h ES:BX, or `rep movsw` from kernel scratch at mount, §18–19),
   read only through `dsk_get_dir` / `dsk_get_icon`, which stage one entry
   back into the kernel segment (§18).
 
@@ -118,6 +121,21 @@ strictly below `LOW_LIMIT`, and the §15.1 assertions keep task 0 8KB of
 clearance above `.lowbss`.
 
 `FAR_SEG` (0x0060) holds the `.fartext` blob — see §33.
+
+`FAT_SEG` (0x0300) holds the mount-time FAT snapshot: up to `DSK_FAT_SECS`
+(= 32) sectors, 16,384 bytes, rewritten from FAT1 (or the FAT2 fallback,
+§18.3) on **every** mount — no cross-mount state survives. Reached through
+**ES only**, never DS — the `SND_SEG` rule of §2.2: `dsk_next_clus` is the
+single reader, and int 13h writes it via ES:BX at mount only. Internal
+map, pinned:
+
+```
+FAT_SEG:0x0000..0x3FFF   dsk_fat — FAT snapshot, up to 32 sectors
+FAT_SEG:0x4000..0x4FFF   free (4,096 B reserve, unowned)
+```
+
+Linear layout: the `.fartext` blob ends by 0x02FFF (§15.1 guard 5 fences
+it), `FAT_SEG` spans 0x03000..0x07FFF, `LOW_SEG` begins at 0x08000.
 
 The full plan this came from, including the step still on the shelf, is
 `docs/MEMORY-PLAN.md`.
@@ -157,6 +175,8 @@ SAVE_SEG     equ 0x2000
 VGA_SEG      equ 0xA000
 ; low memory (§2.1)
 FAR_SEG      equ 0x0060      ; linear 0x00600 - far code (.fartext, §33)
+FAT_SEG      equ 0x0300      ; linear 0x03000 - FAT snapshot, via ES ONLY (§18)
+DSK_FAT_SECS equ 32          ; resident FAT cap, sectors (16,384 bytes)
 LOW_SEG      equ 0x0800      ; linear 0x08000 - .lowbss: stacks + disk buffers
 LOW_LIMIT    equ 0x8000      ; LOW_SEG:LOW_LIMIT IS KERNEL_SEG:0
 STK0_TOP     equ 0x7FFE      ; task 0's stack top
@@ -199,7 +219,7 @@ SND_SEG       equ 0x3000     ; sound buffers: linear 0x30000-0x3FFFF, ES only (�
 | `kernel/menu.inc`   | menu bar, pull-down tracking, command return            |
 | `kernel/ui.inc`     | UI task: event pump, keyboard poll, drag, dispatch      |
 | `kernel/apps.inc`   | built-in app kinds: About, Clock, Bounce — state pools, kinit procs, per-instance tasks |
-| `kernel/disk.inc`   | BIOS int 13h floppy reads, os88fs mount + directory (§18–19) |
+| `kernel/disk.inc`   | BIOS int 13h floppy reads, FAT12/16 mount + directory + chain walk (§18–19) |
 | `kernel/loader.inc` | package validation, pool allocation, per-instance load + relocate, launch (§21) |
 | `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22) |
 | `kernel/icons.inc`  | 1-bit icon format, draw routine, built-in library (§25) |
@@ -1203,12 +1223,17 @@ KBSS_SIZE equ kernel_bss_end - $$
 %if STK0_TOP >= LOW_LIMIT
 %error "STK0_TOP must stay below LOW_LIMIT (LOW_SEG:LOW_LIMIT is the kernel)"
 %endif
+%if KFAR_SIZE > 0x2A00
+%error "fartext blob would collide with FAT_SEG at linear 0x03000"
+%endif
 
 KLOWFAR_KB equ (KLOW_SIZE + KFAR_SIZE + 1023) / 1024   ; §28 RAM figure
 ```
 
 The second guard exists because the far blob lands *inside* the kernel
-window and only leaves it when `far_init` runs. Keep this block last.
+window and only leaves it when `far_init` runs. The fifth guard fences
+`FAT_SEG` (§2.1): `FAR_SEG` linear 0x00600 + 0x2A00 = 0x03000, where the
+FAT snapshot begins. Keep this block last.
 
 ## 16. Build & test
 
@@ -1217,7 +1242,7 @@ window and only leaves it when `far_init` runs. Keep this block last.
   the software floppy as drive B:
   `-drive file=build/apps.img,format=raw,if=floppy,index=1`.
   `test` target: same, plus `-display none -qmp unix:build/qmp.sock,server,nowait`.
-- New tooling targets: see §24 (apps, packages, os88fs images).
+- New tooling targets: see §24 (apps, packages, FAT12 data-disk images).
 - 86Box config (`vm/xt/86box.cfg`): set the mouse to a serial Microsoft
   mouse on COM1 (best-effort; cannot be verified headless).
 - The kernel may exceed 8 sectors; the two images are already built
@@ -1284,7 +1309,7 @@ window and only leaves it when `far_init` runs. Keep this block last.
     `SCH_WD_TICKS` ticks (`sch_wd_hits` advances, readable with QMP `xp` on
     segment 0x1000).
 
-## 18. disk.inc — floppy reads (BIOS int 13h)
+## 18. disk.inc — floppy reads (BIOS int 13h) + the FAT driver
 
 Only the UI task touches the disk (extends §7's BIOS rule to int 13h).
 During a read, task switching is paused: `inc byte [sch_lock]` before,
@@ -1292,8 +1317,9 @@ During a read, task switching is paused: `inc byte [sch_lock]` before,
 motor logic needs). The gfx lock is NOT held across disk I/O.
 
 Geometry lives in variables so both 1.44MB (18 spt) and 360KB (9 spt) data
-disks work: `disk_spt` (word), `disk_heads` (word) — loaded from the os88fs
-superblock at mount. LBA→CHS: cyl = LBA/(spt×heads); rem = LBA%(spt×heads);
+disks work: `disk_spt` (word), `disk_heads` (word) — loaded from the
+validated BPB at mount (§18.2 rules 11/12), restored to the 9/2 fallback on
+any mount failure. LBA→CHS: cyl = LBA/(spt×heads); rem = LBA%(spt×heads);
 head = rem/spt; sector = rem%spt + 1. Reads go **one sector per int 13h
 call** (AH=02, AL=1) — no multi-sector calls, so track boundaries and DMA
 alignment never matter. Each sector: up to 3 attempts, with AH=00 reset on
@@ -1301,55 +1327,289 @@ failure between attempts.
 
 | symbol       | contract                                                      |
 |--------------|----------------------------------------------------------------|
-| `disk_read`  | in: AX=LBA, CX=sector count, ES:BX → dest (advances BX by 512 per sector; caller's ES:BX budget must cover count×512). Drive from `[disk_drive]`. Out: CF=1 on unrecoverable error. Preserves registers per §1. |
-| `disk_mount` | in: DL=drive (0=A, 1=B). Sets `[disk_drive]`, reads LBA 0 with the *fallback* geometry spt=9/heads=2 (CHS 0/0/1 — identical under any real floppy geometry), validates the superblock (§19), loads `disk_spt`/`disk_heads`/`disk_nfiles`, then reads the 2 directory sectors (LBA 1–2) into `disk_dir` and the 4 icon-table sectors (LBA 3–6) into `disk_icons`. Out: CF=1 if the disk is unreadable or not os88fs (then `disk_nfiles`=0). |
+| `disk_read`  | in: AX=LBA, CX=sector count, ES:BX → dest (advances BX by 512 per sector; caller's ES:BX budget must cover count×512). Drive from `[disk_drive]`. Out: CF=1 on unrecoverable error. Preserves registers per §1. FS-agnostic — it knows nothing of §19. |
+| `disk_mount` | in: DL=drive (0=A, 1=B). Sets `[disk_drive]`, restores the fallback geometry 9/2 with `disk_nfiles`=0, reads LBA 0 with that *fallback* geometry (CHS 0/0/1 — identical under any real floppy geometry) into `dsk_secbuf`, then runs the §18.3 mount sequence: BPB validation (§18.2), FAT snapshot into `FAT_SEG`, root-directory scan into the synthesized `disk_dir` cache, icon harvest into `disk_icons`. Out: CF=0 with `disk_spt`/`disk_heads`/`disk_nfiles`, the §18.1 variables and both caches filled; CF=1 with `disk_nfiles`=0 and fallback 9/2 (unreadable, unformatted, or any §18.2 rule failed). Clobbers CF only. A torn mount is a failed mount; **no cross-mount state survives** — every open/refresh fully remounts, never stale. |
 | `disk_drive`  | byte variable, current drive (init 1 = B:)                   |
 | `disk_nfiles` | word, valid after a successful mount (else 0)                |
-| `disk_dir`    | 1024-byte **`.lowbss`** buffer (§2.1): the 32 directory entries. int 13h writes it through ES:BX; read it only via `dsk_get_dir` |
-| `disk_icons`  | 2048-byte **`.lowbss`** buffer (§2.1): the 32 icon-table entries (§19); entry i belongs to directory entry i, 64 bytes each, all-zero = no icon. Read it only via `dsk_get_icon` |
+| `disk_dir`    | 1024-byte **`.lowbss`** buffer (§2.1): the **synthesized directory cache** — 32 × 32-byte entries in the §19 staged layout, built by `disk_mount` from the FAT root directory (never a raw on-disk image). Written through ES at mount; read only via `dsk_get_dir` |
+| `disk_icons`  | 2048-byte **`.lowbss`** buffer (§2.1): 32 × 64-byte **harvested** icon bodies (§19); entry i belongs to directory entry i, all-zero = no icon. Fully rewritten every mount (the §29.1 I_ICON rule rests on that). Read only via `dsk_get_icon` |
 | `dsk_get_dir` | in: AX = entry index. Stages that entry's 32 bytes from `LOW_SEG` into the kernel-segment buffer `dsk_ent`; out: SI = `dsk_ent`. Consumers keep an ordinary DS:SI pointer and never see a segment |
 | `dsk_get_icon`| in: AX = entry index. Same, 64 bytes into `dsk_ico`; out: SI = `dsk_ico` |
-| `dsk_copy_in` | in: SI = `LOW_SEG` offset, DI = kernel offset, CX = even byte count. The one routine that reaches into low memory for data |
+| `dsk_copy_in` | in: SI = `LOW_SEG` offset, DI = kernel offset, CX = even byte count. With `dsk_copy_low`, one of the two routines that load DS=`LOW_SEG` |
+| `dsk_copy_low`| module-internal. in: SI = source `LOW_SEG` offset, DI = dest `LOW_SEG` offset, CX = even byte count; out: nothing, clobbers flags. DS=ES=`LOW_SEG` for the `rep movsw` — same discipline as `dsk_copy_in` (no kernel variable readable while DS is switched). Used by the icon harvest (`dsk_secbuf` → `disk_icons`, both `LOW_SEG`). Writing `disk_dir` FROM kernel scratch needs no helper: DS stays kernel, ES=`LOW_SEG`, plain `rep movsw` |
 
-## 19. os88fs — on-disk format (data floppies)
+The FAT routines (all UI-task-only like the rest of the module; all in
+`.text` — disk code stays hot and near `disk_read`):
 
-An os88fs floppy is not bootable and holds only packages. All words
+| symbol       | contract                                                      |
+|--------------|----------------------------------------------------------------|
+| `dsk_bpb_check` | module-internal, ~260 B. in: `dsk_secbuf` holds LBA 0. Out: CF=0 — the §18.2 table passed, the §18.1 variables + `disk_spt`/`disk_heads` are filled and `dsk_fattype` is set per §19's detection; CF=1 — reject, nothing guaranteed stored (the caller resets the fallback). Clobbers CF only (internally saves AX,BX,CX,DX,SI,DI). Rule 1 runs via one es: word compare against `dsk_secbuf`+510; the boot sector's first 64 bytes are then staged into `dsk_bpb` via `dsk_copy_in`, and rules 2–16 run on plain DS reads (odd-offset word loads are plain 8086 loads — no alignment requirement exists). |
+| `dsk_clus2lba` | ~50 B. in: AX = cluster number. Out: CF=0, AX = first LBA of that cluster; CF=1 if AX < 2 or AX > `[dsk_maxclus]` (AX undefined). Clobbers AX (output), CF. Math: LBA = `dsk_datalba` + (AX−2) × `dsk_spc`, 16-bit mul; cannot wrap (AX ≤ maxclus ⇒ (AX−2)×spc ≤ TotSec16 − datalba, §18.2 rules 14/15); DX≠0 after the mul is treated as CF=1 anyway (belt and braces). |
+| `dsk_next_clus` | ~80 B. in: AX = cluster number. Out: CF=0, AX = raw FAT entry value (FAT12: 12-bit); CF=1 if the input is outside [2, `dsk_maxclus`]. Clobbers AX (output), CF. The **single reader of `FAT_SEG`** (§2.1): push ES; ES = `FAT_SEG`. FAT12: off = AX + AX>>1; w = word [es:off] (an unaligned straddle read — legal on 8086; the 3-nibble problem dissolves against a resident FAT); odd cluster → AX = w >> 4, even → AX = w AND 0x0FFF. FAT16: off = AX << 1; AX = word [es:off]. §18.2 rule 16 guarantees off+1 < `dsk_fatsz`×512 for every valid cluster. No EOC/bad-cluster decoding — see `dsk_read_chain`. |
+| `dsk_read_chain` | ~170 B. in: AX = first cluster, DX = sectors to read (= ceil(fsize/512), ≥ 1), ES:BX = destination (advances 512/sector, exactly DX sectors). Out: CF=0 all read; CF=1 with AL = 1 (disk error) / 2 (chain corrupt). Clobbers CF; AL on failure (internally saves the rest). **Size-driven walk with run coalescing**, against the unmodified single-sector `disk_read`: keep a (run_lba, run_len) pending run; per cluster, `dsk_clus2lba` (CF → fail AL=2), take = min(`dsk_spc`, DX remaining) — the final cluster may be partial; a cluster whose LBA extends the run grows it, otherwise the run is flushed (`disk_read` AX=run_lba, CX=run_len; CF → fail AL=1) and restarted. When DX reaches 0, flush and return CF=0; else `dsk_next_clus` — the result must be in [2, `dsk_maxclus`], anything else fails AL=2. Bounds: the iteration count is ≤ the caller's DX (each pass consumes ≥ 1 sector) — a looped or cross-linked chain cannot hang the walk, it just yields wrong bytes, which the loader's in-region header recheck rejects (§21). EOC / bad / free / reserved values need **no dedicated constants**: the walk is size-driven, so ANY next-value outside [2, maxclus] while sectors remain is corruption (the FAT spec guarantees bad/EOC marks never collide with valid cluster numbers under correct type detection). On a freshly built (contiguous, §24) image the whole file flushes as ONE `disk_read` call. |
+
+### 18.1 Mount-derived variables (kernel .bss)
+
+Valid only after a successful mount — every consumer is already gated by
+`disk_nfiles` ≠ 0. 80 bytes including `dsk_cherr`, `dsk_read_chain`'s
+failure-code byte carried across its register-restore epilogue.
+
+```nasm
+dsk_bpb:      resb 64  ; staged boot-sector head (mount scratch, §18.2)
+dsk_fattype:  resb 1   ; 0 = FAT12, 1 = FAT16 (§19 detection)
+dsk_spc:      resb 1   ; BPB_SecPerClus (validated power of two)
+dsk_fatlba:   resw 1   ; = RsvdSecCnt (FAT1 start LBA)
+dsk_fatsz:    resw 1   ; = FATSz16 (<= DSK_FAT_SECS)
+dsk_nfats:    resb 1   ; 1 or 2
+dsk_rootlba:  resw 1   ; first root-dir LBA
+dsk_rootsecs: resw 1   ; root-dir sector count (<= 32)
+dsk_datalba:  resw 1   ; FirstDataSec
+dsk_maxclus:  resw 1   ; CountOfClusters+1 = highest valid cluster number
+dsk_cherr:    resb 1   ; dsk_read_chain failure code, carried across the
+                       ; register-restore epilogue
+```
+
+### 18.2 BPB validation (`dsk_bpb_check`, in check order)
+
+The BPB is **hostile** — the data disk is written by foreign machines
+(§19), so every field is attacker-controlled. Each rule protects a
+specific downstream consumer; a single failure = mount failure (CF=1,
+`disk_nfiles`=0, geometry falls back to 9/2). The two in-kernel failure
+modes the table exists to prevent: a divide fault or hang with `sch_lock`
+held, and a read landing outside its destination buffer.
+
+| # | Field / derived | Rule | Protects |
+|---|-----------------|------|----------|
+| 1 | bytes 510..511 | == 0xAA55 | garbage/unformatted-disk gate |
+| 2 | BS_jmpBoot[0] | ∈ {0xEB, 0xE9} | MS-spec first validity test; rejects raw data ending in 55 AA |
+| 3 | BPB_BytsPerSec | == 512 exactly | `disk_read` moves exactly 512 B/sector; all stride and ×512 math |
+| 4 | BPB_SecPerClus | ∈ {1,2,4,8,16,32,64,128} | cluster→LBA mul bounds; 0 ⇒ CountOfClusters div-by-zero |
+| 5 | BPB_RsvdSecCnt | ≥ 1 | FAT LBA math (FAT starts at RsvdSecCnt) |
+| 6 | BPB_NumFATs | ∈ {1,2} | FAT2-fallback logic; layout math |
+| 7 | BPB_RootEntCnt | ≥ 1, ≤ 512, (RootEntCnt×32) mod 512 == 0 | FAT12/16 must have a root dir (spec); ≤512 bounds the mount stall (≤32 root sectors); whole-sector count is a spec MUST |
+| 8 | BPB_TotSec16 | ≠ 0 | 16-bit LBA bound: TotSec16==0 ⇒ the count lives in TotSec32 ⇒ ≥65,536 sectors ⇒ unaddressable by the AX=LBA `disk_read` contract. **Documented rejection.** TotSec32 otherwise ignored (some formatters set both; harmless) |
+| 9 | BPB_Media | ∈ {0xF0, 0xF8..0xFF} | spec-legal set; cheap garbage gate. FAT[0]'s media echo is NOT checked (spec says don't rely on it) |
+| 10 | BPB_FATSz16 | ≥ 1 and ≤ `DSK_FAT_SECS` (32) | ≥1: layout math. ≤32: the FAT snapshot buffer is 16,384 B (§2.1). Covers every real floppy FAT: 360K=2, 720K=3, 1.2M=7, 1.44M=9, 2.88M=9, and every rule-13-reachable FAT16 (≤23 sectors) plus padded hostile FATs. Larger ⇒ documented mount failure |
+| 11 | BPB_SecPerTrk | ∈ {8, 9, 15, 18, 21, 36} | whitelist of real floppy geometries; a hostile spt×heads product past 16 bits would zero `disk_read`'s CHS divisor → divide fault with `sch_lock` held |
+| 12 | BPB_NumHeads | ∈ {1, 2} | same divisor protection |
+| 13 | TotSec16 coherence | TotSec16 ≤ SecPerTrk × NumHeads × 80 | every in-volume LBA is CHS-reachable under `disk_read`'s cyl<80 guard — files can't mount-list then die "Disk error" on geometry grounds |
+| 14 | FirstDataSec | FirstDataSec + SecPerClus ≤ TotSec16 | at least one cluster exists; DataSec underflow guard |
+| 15 | CountOfClusters | ≥ 1 and < 65,525 | empty-data-area rejection; FAT32 insurance (§19) |
+| 16 | FAT capacity | FAT12: ceil((CountOfClusters+2)×1.5) ≤ FATSz16×512; FAT16: (CountOfClusters+2)×2 ≤ FATSz16×512 | a FAT too small for its own cluster count would send `dsk_next_clus` past the snapshot into garbage |
+| 17 | BPB_HiddSec | ignored | floppies are unpartitioned; accepting nonzero keeps odd-but-readable disks mountable |
+
+Rules 3/4/11/12 are the hard no-fault rules; 7/8/10/13/16 bound every loop
+and every LBA the driver ever computes; the rest are spec conformance. On
+success, `disk_spt`/`disk_heads` are loaded from rules 11/12's fields and
+the §18.1 variables from the derived layout.
+
+### 18.3 Mount sequence (`disk_mount`)
+
+1. **Boot sector.** Store DL; set fallback 9/2, `disk_nfiles`=0,
+   `ld_pending`=0 (a queued click indexes the directory being replaced —
+   it must never run against the new one). Read
+   LBA 0 into `dsk_secbuf` with the fallback geometry (CHS 0/0/1 under
+   any geometry — the existing bootstrap trick). `dsk_bpb_check` (§18.2);
+   CF → fail.
+2. **FAT snapshot.** Read `dsk_fatsz` sectors from `dsk_fatlba` into
+   `FAT_SEG`:0 (ES=`FAT_SEG`, one `disk_read` call). On failure and
+   `dsk_nfats`==2, retry once from FAT2 (`dsk_fatlba` + `dsk_fatsz`);
+   both fail → mount fails. (FAT2 is the one redundancy FAT gives for
+   free.)
+3. **Root-dir scan → synthesized directory.** For each root sector
+   (0..`dsk_rootsecs`−1): read it into `dsk_secbuf` (read failure →
+   mount fails); classify each of its 16 raw 32-byte entries per §19's
+   species rules — a 0x00 first name byte **stops the whole scan** — and
+   for each accepted entry synthesize the §19 staged entry in `dsk_ent`
+   (kernel scratch — DS never leaves the kernel segment while parsing;
+   raw fields are read via es: from `dsk_secbuf`), then `rep movsw` it
+   out to `disk_dir` + accepted×32 (ES=`LOW_SEG`). Stop when 32 entries
+   are accepted (§19 cap).
+4. **Icon harvest.** For each accepted entry i: type≠1 → zero the 64-byte
+   slot `disk_icons` + i×64 (ES=`LOW_SEG` `rep stosw`) — the generic-icon
+   sentinel. Type=1 (cluster already validated, §19): `dsk_clus2lba`,
+   `disk_read` 1 sector into `dsk_secbuf`; stage the 32 header bytes into
+   `dsk_ent` via `dsk_copy_in`; if magic word @0 == 0x384F, version byte
+   == 2 and flags bit 0 set, `dsk_copy_low` bytes 32..95 of `dsk_secbuf`
+   → `disk_icons` + i×64; in every other case (read failure included)
+   zero the slot. **Harvest failures are non-fatal** — the entry stays
+   listed; a later load attempt reports the real error. `disk_icons` is
+   fully rewritten every mount (preserves §29.1's rule that I_ICON may
+   never point at it).
+5. Set `disk_nfiles` = accepted count; CF=0.
+
+Mount I/O budget, honest numbers: sectors read = 1 + FATSz (2..32) + root
+sectors actually scanned (early exit at the 0x00 terminator) + one per
+type-1 entry. Shipped apps disk: 1+9+1+5 = **16** (vs 7 under os88fs).
+FAT16 test disk (§19): 1+23+1+5 = 30. Hostile ceiling: 1+32+32+32 = **97**
+one-sector reads — on real hardware at worst one sector per revolution
+that approaches ~20 s, and retries can stretch it further; bounded,
+hostile-media-only, and accepted (§22 notes the user-visible stall). QEMU:
+effectively instant.
+
+## 19. FAT12/FAT16 — the data-disk format (data floppies)
+
+The data floppy (drive B:) is a standard **FAT12** volume — mountable and
+writable by IBM PC DOS 2.0+, Windows, macOS and Linux. That is the point:
+foreign machines write the disk, os8088 reads it. The kernel implements a
+read-only FAT12/FAT16 subset covering exactly what §22 needs — mount,
+enumerate the root directory, walk cluster chains — and **never writes the
+data disk; other machines do**. Consequence: everything on it is
+untrusted, and every field the kernel reads is validated per §18.2. Not
+bootable in earnest (the boot sector is a message stub, below). All words
 little-endian. Sector size 512.
 
-**LBA 0 — superblock:**
+**Shipped geometries** (what §24's os88disk.py emits — canonical DOS
+formats):
 
-| off | size | contents                                  |
-|-----|------|-------------------------------------------|
-| 0   | 8    | magic `"OS88FS2"` then one zero byte       |
-| 8   | 2    | sectors per track (18 or 9)               |
-| 10  | 2    | heads (2)                                 |
-| 12  | 2    | file count (0..32)                        |
-| 14  | 498  | zero                                      |
+| BPB field (off, size)      | 1.44MB            | 360KB             |
+|----------------------------|-------------------|-------------------|
+| BS_jmpBoot (0, 3)          | `EB 3C 90`        | `EB 3C 90`        |
+| BS_OEMName (3, 8)          | `"MSDOS5.0"`      | `"MSDOS5.0"`      |
+| BPB_BytsPerSec (11, 2)     | 512               | 512               |
+| BPB_SecPerClus (13, 1)     | 1                 | 2                 |
+| BPB_RsvdSecCnt (14, 2)     | 1                 | 1                 |
+| BPB_NumFATs (16, 1)        | 2                 | 2                 |
+| BPB_RootEntCnt (17, 2)     | 224               | 112               |
+| BPB_TotSec16 (19, 2)       | 2880              | 720               |
+| BPB_Media (21, 1)          | 0xF0              | 0xFD              |
+| BPB_FATSz16 (22, 2)        | 9                 | 2                 |
+| BPB_SecPerTrk (24, 2)      | 18                | 9                 |
+| BPB_NumHeads (26, 2)       | 2                 | 2                 |
+| BPB_HiddSec (28, 4)        | 0                 | 0                 |
+| BPB_TotSec32 (32, 4)       | 0                 | 0                 |
+| BS_DrvNum (36, 1)          | 0                 | 0                 |
+| BS_Reserved1 (37, 1)       | 0                 | 0                 |
+| BS_BootSig (38, 1)         | 0x29              | 0x29              |
+| BS_VolID (39, 4)           | 0x88000888 fixed  | 0x88000888 fixed  |
+| BS_VolLab (43, 11)         | `"OS8088APPS "`   | `"OS8088APPS "`   |
+| BS_FilSysType (54, 8)      | `"FAT12   "`      | `"FAT12   "`      |
+| boot code (62..509)        | message stub      | message stub      |
+| signature (510, 2)         | 0x55 0xAA         | 0x55 0xAA         |
 
-(Format v2: v1 disks — magic `OS88FS1`, no icon table, data from LBA 3 —
-are no longer accepted; nothing shipped in v1, so no compatibility
-shim.)
+Derived layout (all LBAs volume-relative = disk-absolute; unpartitioned):
 
-**LBA 1–2 — directory**, 32 entries × 32 bytes:
+|                     | 1.44MB                  | 360KB                 |
+|---------------------|-------------------------|-----------------------|
+| FAT1 / FAT2         | LBA 1–9 / 10–18         | LBA 1–2 / 3–4         |
+| Root dir            | LBA 19–32 (14 sec)      | LBA 5–11 (7 sec)      |
+| First data sector   | LBA 33                  | LBA 12                |
+| CountOfClusters     | 2847 (clusters 2..2848) | 354 (clusters 2..355) |
+| FAT type            | FAT12 (2847 < 4085)     | FAT12 (354 < 4085)    |
+| FAT bytes needed    | 2849×1.5 = 4274 ≤ 4608  | 356×1.5 = 534 ≤ 1024  |
+| FAT[0..1] reserved  | `F0 FF FF`              | `FD FF FF`            |
 
-| off | size | contents                                            |
-|-----|------|------------------------------------------------------|
-| 0   | 16   | file name, printable ASCII, NUL-padded (≤15 chars)  |
-| 16  | 2    | type: 1 = application package (.o88)                |
-| 18  | 2    | start LBA of file data                              |
-| 20  | 2    | size in bytes                                       |
-| 22  | 10   | zero                                                |
+**Test-only third geometry** (never built by the Makefile; exists so the
+FAT16 path is positively tested, §24): 2.88M ED — SecPerClus 1, RsvdSecCnt
+1, NumFATs 2, RootEntCnt 240, TotSec16 5760, Media 0xF0, FATSz16 23,
+SecPerTrk 36, NumHeads 2. Layout: FATs LBA 1–23 / 24–46, root 47–61
+(15 sectors), data from LBA 62; CountOfClusters = 5698 ≥ 4085 ⇒ **FAT16**;
+FAT bytes 5700×2 = 11,400 ≤ 11,776; FAT[0..1] reserved `F0 FF FF FF` (two
+16-bit entries).
 
-**LBA 3–6 — icon table**, 32 entries × 64 bytes, entry i belongs to
-directory entry i: 16 words of AND-style mask (white underlay) then 16
-words of data (black pixels), bit 15 = leftmost pixel, row-major (the
-§25 16×16 icon body, without the 2-byte header). An all-zero entry means
-"no icon" — viewers fall back to the built-in `ico_app16`. os88disk.py
-fills entries from each package's embedded icon (§20.2 flags bit 0), or
-zeros.
+**The boot-sector stub**: 62 bytes of BPB, then a fixed hand-assembled
+stub (~40 bytes, a hex blob in os88disk.py) — print "Not a bootable disk.
+Press any key." via int 10h AH=0Eh teletype, int 16h AH=00h wait, int 19h
+reboot. Zero-padded to 510, then 55 AA. Byte-fixed ⇒ deterministic images
+(§24).
 
-File data starts at LBA 7; every file starts on a sector boundary. Entries
-are packed from index 0; `file count` in the superblock is authoritative.
+**Why these choices**: canonical cluster/root/FAT counts — every era of
+DOS recognizes the textbook 1.44M/360K layouts (pre-BPB DOS keys on the
+media byte). NumFATs=2 — DOS and macOS expect it; single-FAT floppies
+confuse CHKDSK. BS_BootSig 0x29 + serial + label — Windows/macOS mount
+heuristics. OEM "MSDOS5.0" — legacy DOS/Windows mount heuristics key on
+it; identity is carried by label+serial, and the kernel never reads OEM.
+The volume-label root entry (attr 0x08) matches BS_VolLab so Windows shows
+"OS8088APPS"; the kernel filters it out of the index space (below).
+
+### FAT type detection (kernel, exactly per the Microsoft FAT spec)
+
+Computed only from the cluster count — never from BS_FilSysType, the media
+byte, or anything else:
+
+```
+RootDirSectors  = (RootEntCnt*32 + 511) / 512
+FirstDataSec    = RsvdSecCnt + NumFATs*FATSz16 + RootDirSectors
+DataSec         = TotSec16 - FirstDataSec
+CountOfClusters = DataSec / SecPerClus
+CountOfClusters <  4085  -> FAT12
+CountOfClusters < 65525  -> FAT16
+else                     -> reject (FAT32 out of scope)
+```
+
+Reachability: detection runs after §18.2 rule 13 has passed, so TotSec16 ≤
+SecPerTrk×NumHeads×80 ≤ 36×2×80 = 5,760 and CountOfClusters ≤ 5,758 <
+65,525 — the FAT32 branch is provably dead, kept only as two-instruction
+insurance against future rule reordering. Genuine FAT16 is reachable only
+on 36-spt (2.88M ED) geometries: clusters ∈ [4,085, 5,758]. All arithmetic
+fits 16 bits: RootEntCnt ≤ 512 ⇒ RootDirSectors ≤ 32; FirstDataSec <
+TotSec16 ≤ 65,535. There is **no separate FAT16 code path**: `dsk_fattype`
+selects the entry decode inside `dsk_next_clus` (12-bit packed vs 16-bit
+array); mount, enumeration, chain walk and loader are width-blind because
+the walk is size-driven and range-checked against `dsk_maxclus` (§18).
+FAT16 media with TotSec16 == 0 (≥32MB partitions) is rejected by rule 8 —
+the documented 16-bit-LBA bound of `disk_read`.
+
+### Root-directory enumeration — species rules (binding, in test order)
+
+Raw root entries are the standard 32-byte FAT directory entries. The scan
+(§18.3 step 3) classifies each one **in this order** (each rule cites the
+FAT-spec species it handles):
+
+- name[0] == 0x00 → **end of directory: stop the whole scan** (spec: no
+  allocated entries follow; entries a hostile writer hides behind a
+  terminator do not exist).
+- name[0] == 0xE5 → deleted; skip.
+- (attr & 0x3F) == 0x0F → LFN entry (mask, then compare, per spec); skip
+  — never counted, never displayed. Orphaned LFN runs handled for free.
+- attr & 0x08 → volume label; skip.
+- attr & 0x10 → subdirectory; skip (non-goal: no navigation — the UI's
+  file currency is a flat 0-based root index).
+- attr & 0x06 (HIDDEN or SYSTEM) → skip (DOS convention; protects the
+  32-slot listing budget from foreign housekeeping files).
+- name[0] == 0x20 → invalid per spec (a name may not start with a
+  space); skip defensively.
+- name[0] == 0x05 → KANJI escape: treat the first byte as 0xE5 (spec)
+  for display; falls through the sanitizer below.
+- Otherwise **accept**, up to the cap of **32 accepted entries** —
+  extras are invisible and the header count equals the listed count
+  (documented cap, §22).
+
+### The synthesized directory entry (the normative staged layout)
+
+Each accepted entry is synthesized into the 32-byte staged shape that
+`dsk_get_dir` serves — this layout, not any on-disk one, is the contract
+every consumer (files.inc, loader.inc) reads:
+
+| off | size | contents                                                    |
+|-----|------|--------------------------------------------------------------|
+| 0   | 16   | display name, NUL-padded: raw name[0..7] with trailing spaces trimmed, then '.', then ext[0..2] trimmed (dot omitted when the ext is blank); **every byte outside 0x21..0x7E replaced with '_'** (OEM-codepage bytes never reach the font renderer). Max 12 chars — fits every §22 truncation budget |
+| 16  | 2    | type: 1 = loadable package, else 0 (rule below)             |
+| 18  | 2    | first cluster = raw FstClusLO (word @26), copied verbatim even when type=0 (harmless; the loader only reads it behind type==1). FstClusHI (@20) is FAT32-only per spec — ignored |
+| 20  | 2    | size in bytes = raw size dword @28, clamped to 0xFFFF when ≥ 65,536 (display-only ceiling) |
+| 22  | 10   | zero                                                        |
+
+**The type word** (binding — defense in depth with §21 step 1): type = 1
+iff ALL of: raw ext bytes 8..10 == `"O88"` (uppercase exact — foreign OSes
+uppercase short names on write); size dword high word == 0; size low word
+≥ 1; raw FstClusLO ∈ [2, `dsk_maxclus`]. Else 0. A garbage entry can never
+reach the loader as type 1. (Recorded tradeoff: a ≥64KB `*.O88` reads "Bad
+package" rather than "Too large" — it cannot be a package (cap 0x4E00), so
+the message is truthful.)
+
+**Icons** have no on-disk table: they are **harvested at mount** (§18.3
+step 4) from each type-1 file's first sector — a v2 `.o88` with the
+embedded-icon flag (§20.2 bit 0) carries its 16×16 body at file offset
+32..95, and that block is copied into `disk_icons` entry i. Everything
+else — type-0 files, iconless packages, harvest read failures — gets the
+all-zero slot, and viewers fall back to the built-in `ico_app16` (§25).
+
+Display names are the 8.3 host filenames (e.g. `"MINES.O88"`), not the
+16-byte header names — 8.3 cannot hold the 15-char header names; a running
+instance still shows its header name (`inst_set_name` reads the loaded
+region, §21). Directory order on the shipped disks is pinned by §24's
+argument order; the volume-label entry is filtered, so index 0 stays the
+first package.
 
 ## 20. Loadable programs — the .o88 package format
 
@@ -1396,8 +1656,9 @@ a word to patch (in [0x20, image−2], ascending, non-overlapping; image ≤
   loader **subtracts** `base − `APP_LOAD_OFF``. (Package-internal relative
   branches shift with both ends and need no fixup.)
 
-Total file bytes = image + 2n (this is what the os88fs directory size
-field holds; the dir type stays 1). After the patches the table is dead
+Total file bytes = image + 2n (this is what the FAT directory size field
+holds, **byte-exact** — cluster rounding would break every load, §21/§24;
+the staged type word stays 1, §19). After the patches the table is dead
 (bss zeroing overwrites it). The table is generated host-side by **dual
 assembly** (§24): the Makefile assembles each package twice — at org
 0xB000 and org 0xB800 (`-DOS88_ORG=0xB800`) — and os88pkg.py diffs the two
@@ -1408,11 +1669,12 @@ split, or folded into a non-address constant. os88pkg's reconstruction
 check refuses the package otherwise, so violations fail the build.
 
 **Embedded icon** (flags bit 0): file offset 32..95 holds the program's
-16×16 icon — 16 mask words then 16 data words (same body layout as the
-os88fs icon table, §19). With the flag set, image size must be ≥ 96 and
-the entry offset ≥ 0x60. os88disk.py copies the block into the disk's icon
-table; the kernel points the instance's dock tile (I_ICON, §29) at the
-block inside the loaded region.
+16×16 icon — 16 mask words then 16 data words (same body layout as §19's
+harvested icon cache). With the flag set, image size must be ≥ 96 and the
+entry offset ≥ 0x60. `disk_mount`'s icon harvest (§18.3/§19) copies the
+block from the file's first sector into `disk_icons`; the kernel points
+the instance's dock tile (I_ICON, §29) at the block inside the loaded
+region.
 
 **Entry contract** (unchanged from v1): near-called by the loader — at
 `base + entry` — with DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held. The code
@@ -1578,10 +1840,13 @@ optional and defaults to 0.
 
 State (.bss, cleared by `loader_init`): `ld_pending` (word: 0 = none, else
 directory index+1 — set by files.inc, consumed by ui.inc §13), `ld_status`
-(byte: 0 ok, 1 disk error, 2 not a valid package, 3 too large, 4 entry
-aborted, 5 out of memory), plus loader_run scratch words (registers run
-out on the 8086). `ld_appwin` is gone — the instance table (§29) tracks
-residency.
+(byte: 0 ok, 1 = `LD_EDISK` disk error, 2 = `LD_EBAD` not a valid package,
+3 too large, 4 entry aborted, 5 out of memory), plus loader_run scratch
+words (registers run out on the 8086), including `ld_clus` (word, the
+pending file's first cluster). `LD_DE_CLUS` equ 18 names the staged
+entry's first-cluster word (§19; it was `LD_DE_LBA` — same offset, renamed
+because the word is a cluster number now). `ld_appwin` is gone — the
+instance table (§29) tracks residency.
 
 **The pool allocator is the instance table.** A package record's byte
 range [I_SPTR, I_SPTR + I_SIZE) is occupied iff I_STATE ≠ 0 (§29.2 rule
@@ -1600,16 +1865,24 @@ filled, or CF=1 + AL = status. Checks: magic; **version = 2** (a v1 file
 → "Bad package"); link base = `APP_LOAD_OFF`; image ≥ 0x20; entry in
 [0x20, image) (icon rule enforced by os88pkg, not re-checked); image+bss ≤
 APP_MAX_SIZE (else "Too large"); image + 2·count = file size (guards
-truncated files and stale directories).
+truncated files and stale directories — sound because FAT directory sizes
+are byte-exact and os88disk.py never pads the size field, §24; cluster
+slack on disk is invisible here).
 
 `loader_run` — in AX = directory index. UI task only, gfx lock not held
 on entry. Steps:
 1. Validate the entry: index < [disk_nfiles], type = 1, size ≤
-   APP_MAX_SIZE and non-zero → else status 2, step 10. **No eviction
-   exists** — a load never disturbs running instances; every failure
-   path below frees whatever it reserved and leaves them untouched.
-2. Peek the header: `disk_read` 1 sector (the file's first) into
-   `dsk_secbuf` (UI-task-only shared scratch). CF → status 1.
+   APP_MAX_SIZE and non-zero, and the first-cluster word at
+   [si+LD_DE_CLUS] ∈ [2, [dsk_maxclus]] (belt and braces under §19's
+   type-word rule — this check stands alone if the mount code ever
+   changes; store it in `ld_clus`) → else status 2, step 10. **No
+   eviction exists** — a load never disturbs running instances; every
+   failure path below frees whatever it reserved and leaves them
+   untouched.
+2. Peek the header: AX = [ld_clus] → `dsk_clus2lba` (CF → status 2), then
+   `disk_read` 1 sector into `dsk_secbuf` (UI-task-only shared scratch) —
+   the first sector of the first cluster IS the file's first 512 bytes,
+   so peek semantics are exact. CF → status 1.
 3. `ld_check_hdr` on the peek → status 2/3.
 4. need = roundup512(max(image+bss, file size)); > APP_MAX_SIZE → status
    3. (Sector-granular allocation makes the whole-file read safe: it
@@ -1618,10 +1891,17 @@ on entry. Steps:
    status 5 (the unpublished instance record stays free). Note the
    record is not yet published, so the region is reserved only by
    single-threadedness (rule §29.2.8).
-6. `disk_read` the whole file — ceil(fsize/512) sectors — to
-   ES=KERNEL_SEG, BX=base. CF → status 1. Re-run `ld_check_hdr` against
-   the in-region header (the disk could have been swapped between the
-   peek and the read) → status 2/3.
+6. `dsk_read_chain` the whole file (§18) — AX = [ld_clus], DX =
+   ceil(fsize/512) sectors — to ES=KERNEL_SEG, BX=base. CF with AL=1
+   (disk error) → status 1 (`LD_EDISK`); AL=2 (chain corrupt: loop,
+   cross-link, premature EOC, bad-cluster mark, out-of-range link) →
+   status 2 (`LD_EBAD` — a corrupt FAT on a disk that reads fine is bad
+   data, not a disk error). The write bound holds even against a corrupt
+   FAT: the walk is size-driven, reading exactly ceil(fsize/512)·512 ≤
+   need bytes — never a neighbour's region. Re-run `ld_check_hdr`
+   against the in-region header (the disk could have been swapped
+   between the peek and the read — and a looped or cross-linked chain
+   can produce plausible-length garbage) → status 2/3.
 7. Relocate: for each of the n table words at base+image (each validated
    in [0x20, image−2] → else status 2): word at base+offset += base −
    `APP_LOAD_OFF`.
@@ -1675,7 +1955,13 @@ All coordinates below are content-relative. Header line at (6,6):
 `"Drive B:  N files"` (drive letter from [disk_drive]) or, when the last
 mount failed, `"No os8088 disk (B:)"` (19 chars — short enough to clear
 the buttons at the default width; it was "No os8088 disk in drive B:"
-until the view toggle claimed that room). Two buttons at the top right,
+until the view toggle claimed that room). The failure string is verbatim;
+its **semantics** are "no readable data disk" — unreadable, unformatted,
+or any §18.2 BPB rule failed. N is the accepted-entry count (≤ 32, §19's
+cap — the header count always equals the listed count). File names are
+the synthesized 8.3 display names of §19 (e.g. `"MINES.O88"`, ≤ 12
+chars); sizes are the §19 staged size word, clamped at 65,535 for ≥64KB
+files. Two buttons at the top right,
 1px black frames, labels centered: **Refresh** from (cw−68, 2) to
 (cw−6, 15) — remounts the current drive so a swapped disk shows its real
 contents — and **the view toggle** from (cw−136, 2) to (cw−74, 15),
@@ -1763,7 +2049,10 @@ Behaviour:
   button. Scan codes: Up/Down (48h/50h) scroll one row, PgUp/PgDn
   (49h/51h) a page — the view, not the selection, clamped like the bar.
   Enter (13) with a valid selection → same as double-click. (disk_mount
-  under the gfx lock stalls painters ~a second; acceptable.)
+  under the gfx lock stalls painters: 16 sectors on the shipped disk —
+  about a second on real hardware — with a hostile-media ceiling of 97
+  one-sector reads, approaching ~20 s at one sector per revolution plus
+  retries; bounded and accepted, §18.3.)
 - `files_refresh` (called by loader_run, no lock held): find the live
   Disk instance via `inst_find_kind` KIND_FILES (§29) — none = nothing to
   do (the user closed the window mid-load); else acquire gfx_lock, and if
@@ -1831,16 +2120,55 @@ and non-zero exit + stderr message on any validation failure.
   bound: max(image+bss, roundup512(image + 2n)) ≤ 0x4E00; (6) emit IN
   with the count stamped at offset 12 and the n sorted offsets appended.
   Summary line gains `relocs=N`.
-- `tools/os88disk.py -o OUT.img --size {1440,360} [PKG.o88 ...]` — builds a
-  os88fs v2 floppy (§19): superblock geometry 18/2 or 9/2, directory
-  entries named from each package's header name field, icon table LBA 3–6
-  (entry i = package i's embedded icon bytes 32..95 when flags bit 0,
-  else 64 zero bytes), data from LBA 7, sector-aligned. Accepts format-v2
-  packages only: version byte 2 and image + 2·reloc-count == file size
-  (a v1 file fails with "rebuild with the v2 toolchain"). The directory
-  size field is the full file length, reloc table included. Zero packages
-  is legal (an empty disk — useful for testing Refresh). Fails if >32
-  files or the disk overflows. Total image size: 1474560 or 368640 bytes.
+- `tools/os88disk.py -o OUT.img --size {1440,360} [PKG.o88 ...]` — builds
+  a FAT12 data floppy per §19. CLI shape unchanged from the os88fs era —
+  the Makefile call sites need zero edits; pure Python 3 stdlib (no
+  mtools). A third `--size 2880` geometry is **test-only** (the §19 FAT16
+  test image; never referenced by the Makefile) — the tool derives the
+  FAT type from the cluster count exactly like the kernel and emits 12- or
+  16-bit FATs accordingly.
+  - Package validation, kept verbatim from the old tool: magic 0x384F,
+    version 2, image field ∈ [32, filesize], image + 2·reloc-count ==
+    file size, non-empty printable header name, size ≤ 0xFFFF (a v1 file
+    fails with "rebuild with the v2 toolchain"). Corruption surfaces on
+    the host, not on the 8086.
+  - 8.3 names derive from the **host filename** (basename, uppercased),
+    not the header name field (8.3 cannot hold the 15-char header names —
+    the Disk window shows "MINES.O88", a deliberate, documented UX
+    change; running instances still show the header name, §19/§21).
+    Validated: stem 1–8 chars, ext exactly `O88` (the kernel only marks
+    `*.O88` entries loadable, §19), charset [A-Z0-9_-]; duplicates, other
+    characters, and reserved DOS device stems (CON, PRN, AUX, NUL,
+    COM1–9, LPT1–9) rejected.
+  - Emission: boot sector per §19 (BPB + the fixed message stub); FAT1
+    with the reserved entries; files allocated **contiguously in argument
+    order from cluster 2** (argument order = root order = index order —
+    QMP tests click by row; the kernel never relies on contiguity, it
+    chain-walks); FAT2 = copy of FAT1; root dir: the volume-label entry
+    first (attr 0x08, `"OS8088APPS "`, fixed timestamp — filtered by the
+    kernel, so index 0 stays the first package), then one entry per
+    package: attr 0x20, NT byte 0, fixed timestamps (date 0x5C21 =
+    2026-01-01, time 0), FstClusHI 0, FstClusLO, **exact byte size —
+    never padded** (§21's truncation guard depends on it). File data is
+    zero-padded to cluster boundaries on disk only.
+  - Determinism: fixed BS_VolID 0x88000888, fixed timestamps, fixed
+    label, contiguous argument-order allocation ⇒ byte-identical images
+    across rebuilds (`make` twice → `cmp` clean).
+  - Zero packages is legal (an empty disk — useful for testing Refresh).
+    Fails (exit 1 + stderr): >32 packages (the §19 listing cap), clusters
+    needed > capacity, duplicate/invalid 8.3 name. Total image size:
+    1474560, 368640 or (test-only) 2949120 bytes.
+  - `--scramble` (hidden test flag): reallocates cluster chains
+    round-robin-interleaved across files — a **legally fragmented** image
+    for chain-walk verification. Never used by the Makefile.
+  - `--verify IMG`: standalone structural fsck — the §18.2 BPB rules, FAT
+    type detection, FAT1==FAT2, every entry's chain walks to EOC with
+    length matching its byte size, no cross-links, no lost clusters.
+    Subdirectories are recursed (their files' clusters count as used —
+    foreign OSes create them freely); a nonzero FstClusHI is a printed
+    note, not an error (FAT32-only field; the kernel ignores it too).
+    Runs on both FAT12 and FAT16 images and on foreign-written disks;
+    doubles as the test-plan oracle.
 - Makefile: `build/mines.bin` from `apps/mines/mines.asm` and
   `build/hello.bin` from `apps/hello/hello.asm` (§27), each
   (`nasm -f bin -w+error -I apps/`, dep on apps/os88api.inc), plus a
@@ -1867,7 +2195,7 @@ db height        ; rows
 | symbol      | contract                                                     |
 |-------------|---------------------------------------------------------------|
 | `icon_draw` | in CX=x, DX=y (top-left), SI → record. Caller holds the gfx lock. Clips to the screen (skip clipped rows/bytes — windows can hang off the bottom edge). Leaves the GC in the default state (§1 rule 7); preserves registers. |
-| `icon_draw16`| in CX=x, DX=y, SI → **body only** (16 mask words + 16 data words, no 2-byte header) — the §19 icon-table / §20.2 embedded-icon layout. |
+| `icon_draw16`| in CX=x, DX=y, SI → **body only** (16 mask words + 16 data words, no 2-byte header) — the §19 harvested-icon / §20.2 embedded-icon layout. |
 | `ico_disk32`| library record: 32×32 floppy disk (rect body, shutter, label area) |
 | `ico_app16` | library record: 16×16 generic application (a recognizable "program" glyph, e.g. a diamond/tool shape) |
 
@@ -3721,7 +4049,8 @@ clk_sn_* : a second copy of the six fields, same order and adjacency
 
 **The two display settings** are runtime state like every other Control
 Panel setting (the scheduler mode, double buffering, the tone route): there
-is nowhere to persist them — os88fs is read-only (§19) — so both return to
+is nowhere to persist them — the kernel never writes the data disk; other
+machines do (§19) — so both return to
 their defaults at boot. They change **display only**; the clock itself is
 always kept as a 0..23 hour and a full seconds count, so toggling either
 one loses nothing and the RTC is not rewritten.
