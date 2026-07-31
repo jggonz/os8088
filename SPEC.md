@@ -1083,11 +1083,33 @@ CMD_CLOSE  equ 7
 CMD_REBOOT equ 8   ; --- Locator: Special ---
 ```
 
+**Locator has two menu sets, and they share one name.** `menu_loc_set` is
+the desktop's, above. `fm_menus` (files.inc data, §22) is the file
+manager's: its `AM_NAME` is the same `menu_loc_name` string, so the bar
+still reads **Locator** and §12.3's identity rule survives, but its
+`AM_ONCMD` is a real handler, `fm_oncmd`. One application, two menu sets —
+which is exactly how a Finder behaves when a window is open versus when the
+desktop is bare, and it is why the file manager's commands do not have to
+exist as `CMD_*` on a desktop where there is no window to act on.
+
+That makes Locator the first **kernel** kind whose set carries a non-zero
+`AM_ONCMD`, so `ui_dispatch`'s `.app` route is no longer package-only. Two
+consequences, both binding:
+
+- The `test word [bx + W_FLAGS], 2` visibility re-check in `.app` stops
+  being unreachable insurance and becomes load-bearing — the lock drops
+  between `menu_track` and the call, and a kernel window can be destroyed
+  by a command the user picked from its own bar.
+- `fm_oncmd` runs under the gfx lock like any window callback, so any
+  command that needs `app_launch` or `ui_cmd` goes through
+  `inst_launch_post` (§29.4) or `ui_post_cmd` (§13). See §22.
+
 The **Disk window is Locator's own window** (§22): `fm_kinit` stores
-`menu_loc_set` into its `W_MENUS`, so fronting the file browser keeps
-"Locator" and its menus in the bar instead of swapping them for a
-one-window app named "Disk". Nothing else in the kernel points at
-`menu_loc_set`; every other built-in kind leaves `W_MENUS` at 0 and shows
+`fm_menus` into its `W_MENUS`, so fronting the file browser keeps
+"Locator" in the bar instead of swapping it for a
+one-window app named "Disk" — it just swaps Locator's desktop menus for its
+file-manager menus. Nothing else in the kernel points at either set; every
+other built-in kind leaves `W_MENUS` at 0 and shows
 its `I_NAME` with no menus of its own.
 
 ## 13. ui.inc — the UI task (task 0)
@@ -1160,18 +1182,42 @@ Loop forever:
 3. If `[inst_launch]` is non-zero (§29): AX = [inst_launch] − 1, zero
    `[inst_launch]`, call `app_launch` with AL = kind. Then if
    `[ld_pending]` is non-zero (§21): AX = [ld_pending] − 1, zero
-   `[ld_pending]`, call `loader_run`. Then if `[cp_dirty]` is non-zero
+   `[ld_pending]`, call `loader_run`. Then if `[ui_pcmd]` is non-zero:
+   AX = [ui_pcmd], zero `[ui_pcmd]`, call `ui_cmd` — a **deferred kernel
+   menu command** (below). Then if `[cp_dirty]` is non-zero
    (§31.2): zero it, gfx_lock, `wm_paint_all`, gfx_unlock — the scheduler
    mode was flipped from the Control Panel and every already-painted
    window that quotes it (the About box's third line, §14) must follow.
-   All three run **outside** the gfx lock with the same
-   consume-before-run rule — app_launch and loader_run manage their own
-   locking, and the repaint takes the lock here rather than inside
+   All four run **outside** the gfx lock with the same
+   consume-before-run rule — app_launch, loader_run and ui_cmd manage their
+   own locking, and the repaint takes the lock here rather than inside
    `cp_onclick`, which already holds it. Then, on the same deferred
    channel, if `[clk_dirty]` is non-zero (§37): zero it and call
    `clk_rtc_write` — the Control Panel changed the time and the hardware
    RTC is written **here**, outside the lock, because a page proc may not
    call BIOS (§31.1).
+
+   ```
+   ui_post_cmd  in:  AX = CMD_* (§12.3)
+                out: nothing (all registers preserved)
+   ```
+
+   `ui_post_cmd` is one word store and is legal **from any lock-held
+   callback** — it is `inst_launch_post`'s counterpart for the commands
+   that are not launches. It exists because `gfx_lock` is a non-recursive
+   spin released only by the UI task (§7): a `W_ONCLICK` or `AM_ONCMD`
+   handler that called `ui_cmd`'s `CMD_CLOSE` or `CMD_REBOOT` directly
+   would take a lock it already holds and hang the machine dead — no beep,
+   no watchdog, no recovery. `[ui_pcmd]` lives in `.text` with a `dw 0`
+   initialiser, not in `.bss`, because ui_task reads it on its very first
+   pass and `-f bin` gives `.bss` no image bytes (§1). Rapid posts coalesce,
+   exactly like `[inst_launch]`; nothing in the system posts two.
+
+   Deferring is also what keeps the billing honest. `ui_dispatch`'s `.app`
+   route captures `DI = inst_win_owner` *before* the handler and calls
+   `inst_charge` *after* it; `CMD_CLOSE` is the first menu command that can
+   free that very record, and running it inline would write cycles into a
+   freed slot.
 4. **The clock (§37/§12.1).** Call `clk_tick`, which advances the wall
    clock from the `[ticks]` delta and returns **AL = a change mask**:
    bit 0 = a second passed, bit 1 = the menu bar's *text* changed. AL = 0
@@ -1654,13 +1700,16 @@ effectively instant.
 
 `disk.inc` reads; **`kernel/diskw.inc` writes**, prefix `dskw_`. It is the
 one module that may modify a data floppy, and the only module that calls
-`disk_write`. Five public routines are the whole surface — the same five
+`disk_write`. Five public routines are the file surface — the same five
 the API exposes to packages (§20.3) — because both the OS and its apps get
-exactly one vocabulary: whole files by name, in the mounted volume's root
-directory. There is no open/seek/handle model, no subdirectory creation, no
-partial rewrite: a file is written in one call from one buffer, and read
-back the same way. That is the largest subset that stays honest in 256KB
-with 12 pre-emptive tasks and no disk cache.
+exactly one vocabulary: whole files by name, in the volume's **current
+directory** (§19.2 — `[dsk_cwd]`, which `dsk_chdir` moves). There is no
+open/seek/handle model, no paths, no partial rewrite: a file is written in
+one call from one buffer, read back the same way, and its name is resolved
+in exactly one directory — the one the volume is currently sitting in.
+`dskw_mkdir` (§18.5) is the sixth routine and the only one that creates a
+directory rather than a file. That is the largest subset that stays honest
+in 256KB with 12 pre-emptive tasks and no disk cache.
 
 **Context (binding).** UI task only, exactly like every other int 13h
 caller (§18). Window callbacks and package entry procs qualify — that is
@@ -1680,9 +1729,11 @@ can never be the mounted volume.
 **Everything the read path validated stays validated.** Writes derive every
 LBA from the §18.1 layout, never from a raw on-disk field: cluster numbers
 come from `dsk_clus2lba` (which enforces [2, `dsk_maxclus`]), FAT offsets
-from `dsk_maxclus` and §18.2 rule 16, directory LBAs from `dsk_rootlba` +
-an index < `dsk_rootsecs`. A hostile disk can make a write **fail**; it can
-never make one land outside the volume.
+from `dsk_maxclus` and §18.2 rule 16, and directory LBAs from
+`dsk_dirw_next` (§19.2), which bounds the root by `dsk_rootsecs` and a
+subdirectory's chain by both `dsk_clus2lba` and a sector-count guard. A
+hostile disk can make a write **fail**; it can never make one land outside
+the volume.
 
 | symbol | contract |
 |--------|-----------|
@@ -1691,6 +1742,7 @@ never make one land outside the volume.
 | `dskw_delete` | in: SI → name. Frees the chain and marks the directory entry deleted (0E5h). Out: CF=0, AX=0; CF=1, AX = `FERR_*`. |
 | `dskw_rename` | in: SI → old name, DI → new name. Same directory, name bytes only — chain, size and timestamps are untouched. Refuses `FERR_EXIST` if the new name already exists. Out: CF/AX as above. |
 | `dskw_dfree` | out: CF=0, DX:AX = free bytes (32-bit), BX = **sectors** per cluster (not bytes — `spc`×512 overflows 16 bits at the §18.2-legal `spc` = 128); CF=1, AX = `FERR_*`. Counts free entries across the resident FAT snapshot; no disk I/O. |
+| `dskw_mkdir` | in: SI → name. Creates a subdirectory in the current directory (§18.5). Out: CF/AX as above. Not an API slot — kernel-internal, because a package has no way to navigate. |
 
 **Error codes (pinned; returned in AX with CF=1, mirrored as `FERR_*` in
 `apps/os88api.inc`):** 0 ok, 1 no mounted disk, 2 disk I/O error, 3 bad
@@ -1763,8 +1815,11 @@ copied out of the caller's ES:BX, the remainder of the 512 **zeroed**, then
 one `disk_write`. The kernel never hands a foreign machine the contents of
 whatever happened to sit after a package's buffer.
 
-**Directory entries.** `dskw_find` scans the root directory one sector at a
-time through `dsk_secbuf`, in the §19 species order, comparing the raw
+**Directory entries.** `dskw_find` scans the **current** directory (§19.2)
+one sector at a time through `dsk_secbuf` — sector LBAs from
+`dsk_dirw_start`/`dsk_dirw_next`, so the root's flat run and a
+subdirectory's cluster chain are the same code — in the §19 species order,
+comparing the raw
 11-byte name field; it reports the entry's (sector LBA, offset) and, on the
 way, the first free slot it saw (a 0xE5 entry, else the 0x00 terminator) so
 a create needs no second scan. A slot taken at the 0x00 terminator also
@@ -1789,7 +1844,14 @@ reason the shipped apps disk and everything os8088 writes use plain 8.3
 names.
 
 **Cache coherence.** A successful `dskw_write` / `dskw_delete` /
-`dskw_rename` ends by **remounting the current drive** (§18.3). It costs
+`dskw_rename` / `dskw_mkdir` ends in `dskw_sync`, which **remounts the
+current drive** (§18.3) with `[dsk_keepcwd]` raised, exactly as `dsk_chdir`
+does (§19.2). Raising it is **binding**, not an optimisation: a bare
+`disk_mount` resets `[dsk_cwd]` to the root by design, so without it every
+successful write performed inside a subdirectory would silently teleport
+the volume back to the root — the file manager would keep showing a folder
+whose contents it was no longer listing, and the *next* write would resolve
+its name in the root instead. It costs
 the §18.3 mount budget (16 sector reads on the shipped disk, instant under
 QEMU) and it keeps the system's single strongest disk invariant intact:
 `disk_dir`, `disk_icons` and `disk_nfiles` are *always* exactly a mount
@@ -1820,8 +1882,10 @@ volume from the host with `tools/os88disk.py --verify` — the in-kernel
 free-space check and the host fsck catch different leaks, and both are part
 of the gate.
 
-**What this deliberately does not do.** No subdirectory creation or
-traversal (§19's directory model is the root, flat), no append or seek, no
+**What this deliberately does not do.** No paths (a name is resolved in the
+current directory and nowhere else), no directory *removal* — `dskw_mkdir`
+has no `dskw_rmdir` counterpart yet, so a folder is `FERR_PROT` to delete
+and rename — no append or seek, no
 truncate-in-place, no FAT32, no volume-label editing, no timestamp
 preservation across a rewrite, and no attempt to defragment: chains are
 allocated first-fit from the rover, so a full disk fragments exactly the
@@ -1829,15 +1893,81 @@ way DOS's did. Files are capped at 65,535 bytes by the 16-bit size and
 buffer contracts (`FERR_BIG`), which is far below the 64KB the near model
 could address anyway.
 
+### 18.5 `dskw_mkdir` — creating a subdirectory
+
+```
+dskw_mkdir   in:  SI -> NUL-terminated 8.3 name (DS), same rules as every
+                  other dskw_* name (dskw_name83, §18.4)
+             out: CF=0 with AX=0, or CF=1 with AX = FERR_*
+             clobbers: nothing else. UI-task/window-callback context, and
+                  gated on [dsk_mntok] like every other write.
+```
+
+Creates one directory in the volume's **current** directory (§19.2). It is
+kernel-internal and deliberately **not** an API slot: a package cannot
+navigate, so a package that could create a folder could never enter it, and
+the slot would only be a way to litter the user's disk.
+
+**Commit order (binding, and it is §18.4's order for the same reason).**
+
+1. `dskw_find` the name — `FERR_EXIST` if it is taken, `FERR_DIRFULL` if
+   the scan reached the end of the directory with no reusable slot.
+2. `dskw_alloc` one cluster (marked end-of-chain in the snapshot on the
+   spot) and **write it in full**: sector 0 is `.` and `..` built by
+   `dskw_dotents` with the rest of the sector zeroed, and every remaining
+   sector of the cluster is written all-zero. Writing the whole cluster is
+   not tidiness: a later slot search that reached uninitialised sectors
+   would read whatever the disk last held there and could match a name that
+   is not in this directory at all.
+3. `dskw_flush` — the FAT is durable, so the cluster is no longer free.
+4. Write the parent's directory entry: one sector, attribute `DSKW_DIR`
+   (0x10), size field 0 per spec, first cluster = the new cluster. **This
+   is the commit point.**
+
+A crash before step 4 leaks a formatted-but-unreferenced cluster, which any
+host `fsck` reclaims. The reverse order — entry first, then contents —
+could leave a directory entry pointing at a cluster that was never
+initialised, which is a directory full of garbage rather than a lost one.
+Every failure ahead of the commit runs `dskw_refat`, so a half-built chain
+never survives in RAM to be flushed by some later, unrelated write.
+
+**`.` and `..` (`dskw_dotents`).** The new directory is born with its own
+two links: `.` → its own cluster, `..` → `[dsk_cwd]`. When the parent *is*
+the root, `[dsk_cwd]` is 0 — which is both the FAT spec's convention for
+"parent is the root" and this kernel's own value for the root, so nothing
+translates. That is what lets `dsk_dotdot` (§19.2) walk back up with no
+path stack and no memory of how the user got here: the disk records it.
+
+**`[dskw_isdir]` lives in `.text` with a `db 0` initialiser, not in
+`.bss`** — the same binding rule, and the same hard-won reason, as
+`[dsk_keepcwd]` (§19.2). It is the flag `dskw_commit` reads to stamp
+`ATTR_DIRECTORY` instead of `ARCHIVE`, and `dskw_mkbody` is the only thing
+that ever *sets* it, so on a system where no folder has yet been created it
+is only ever read. `-f bin` gives `.bss` no image bytes and the `.fartext`
+blob is copied out from on top of `.bss` at boot (§33), so an uninitialised
+`.bss` byte reads back as leftover far code — reliably **non-zero**. Left
+there, this byte made every file the OS created carry attribute 0x10;
+every reader then refused it as `FERR_PROT` (a directory is protected), so
+nothing could be read back or deleted and every chain those writes
+allocated leaked. The `filetest` gate caught it and `--verify` did not,
+which is precisely why §18.4 makes both part of the gate.
+
+**Error set:** `FERR_NODISK`, `FERR_NAME`, `FERR_EXIST`, `FERR_DIRFULL`,
+`FERR_FULL`, `FERR_IO`, `FERR_WPROT`. On success `dskw_sync` remounts with
+`[dsk_keepcwd]` raised (§18.4), so the new folder appears in the listing
+**and the volume stays where it was** — the whole point of creating a
+folder inside another one.
+
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
 The data floppy (drive B:) is a standard **FAT12** volume — mountable and
 writable by IBM PC DOS 2.0+, Windows, macOS and Linux. That is the point:
 the disk is a shared medium, written by foreign machines and by os8088
 alike. The kernel implements a FAT12/FAT16 subset covering exactly what
-§22 and §18.4 need — mount, enumerate the root directory, walk cluster
-chains (`disk.inc`), and create/replace/delete/rename whole files in the
-root directory (`diskw.inc`). It never creates subdirectories and never
+§22 and §18.4 need — mount, enumerate a directory, walk cluster
+chains (`disk.inc`), navigate into and out of subdirectories (§19.2), and
+create/replace/delete/rename whole files plus create subdirectories in the
+current directory (`diskw.inc`). It never
 touches the boot sector or the BPB. Consequence, unchanged by write
 support: everything on the disk is untrusted, and every field the kernel
 reads is validated per §18.2 **before** any write derives an LBA from it.
@@ -1935,9 +2065,11 @@ the walk is size-driven and range-checked against `dsk_maxclus` (§18).
 FAT16 media with TotSec16 == 0 (≥32MB partitions) is rejected by rule 8 —
 the documented 16-bit-LBA bound of `disk_read`.
 
-### Root-directory enumeration — species rules (binding, in test order)
+### Directory enumeration — species rules (binding, in test order)
 
-Raw root entries are the standard 32-byte FAT directory entries. The scan
+Raw entries are the standard 32-byte FAT directory entries, and the scan
+runs over whichever directory is current (§19.2) — the root at mount, a
+subdirectory after `dsk_chdir`. The scan
 (§18.3 step 3) classifies each one **in this order** (each rule cites the
 FAT-spec species it handles):
 
@@ -1948,17 +2080,24 @@ FAT-spec species it handles):
 - (attr & 0x3F) == 0x0F → LFN entry (mask, then compare, per spec); skip
   — never counted, never displayed. Orphaned LFN runs handled for free.
 - attr & 0x08 → volume label; skip.
-- attr & 0x10 → subdirectory; skip (non-goal: no navigation — the UI's
-  file currency is a flat 0-based root index).
 - attr & 0x06 (HIDDEN or SYSTEM) → skip (DOS convention; protects the
   32-slot listing budget from foreign housekeeping files).
 - name[0] == 0x20 → invalid per spec (a name may not start with a
   space); skip defensively.
+- name[0] == '.' → a subdirectory's own `.` and `..` links; skip.
+  Navigation reads `..` through `dsk_dotdot` (§19.2), not through the
+  listing, so surfacing them would only put two undeletable oddities at
+  the top of every folder.
 - name[0] == 0x05 → KANJI escape: treat the first byte as 0xE5 (spec)
   for display; falls through the sanitizer below.
 - Otherwise **accept**, up to the cap of **32 accepted entries** —
   extras are invisible and the header count equals the listed count
   (documented cap, §22).
+
+Note what is *not* here any more: `attr & 0x10` no longer skips. A
+subdirectory is an accepted entry with staged type 2 (below) — that is what
+made §19.2's navigation possible, and it is why the `.`/`..` rule had to be
+added in the same change.
 
 ### The synthesized directory entry (the normative staged layout)
 
@@ -1969,18 +2108,33 @@ every consumer (files.inc, loader.inc) reads:
 | off | size | contents                                                    |
 |-----|------|--------------------------------------------------------------|
 | 0   | 16   | display name, NUL-padded: raw name[0..7] with trailing spaces trimmed, then '.', then ext[0..2] trimmed (dot omitted when the ext is blank); **every byte outside 0x21..0x7E replaced with '_'** (OEM-codepage bytes never reach the font renderer). Max 12 chars — fits every §22 truncation budget |
-| 16  | 2    | type: 1 = loadable package, else 0 (rule below)             |
-| 18  | 2    | first cluster = raw FstClusLO (word @26), copied verbatim even when type=0 (harmless; the loader only reads it behind type==1). FstClusHI (@20) is FAT32-only per spec — ignored |
-| 20  | 2    | size in bytes = raw size dword @28, clamped to 0xFFFF when ≥ 65,536 (display-only ceiling) |
+| 16  | 2    | type: 1 = loadable package, 2 = subdirectory, else 0 (rules below) |
+| 18  | 2    | first cluster = raw FstClusLO (word @26), copied verbatim even when type=0 (harmless; the loader only reads it behind type==1, and `dsk_chdir` only behind type==2). FstClusHI (@20) is FAT32-only per spec — ignored |
+| 20  | 2    | size in bytes = raw size dword @28, clamped to 0xFFFF when ≥ 65,536 (display-only ceiling); forced to 0 for type 2 |
 | 22  | 10   | zero                                                        |
 
-**The type word** (binding — defense in depth with §21 step 1): type = 1
-iff ALL of: raw ext bytes 8..10 == `"O88"` (uppercase exact — foreign OSes
-uppercase short names on write); size dword high word == 0; size low word
-≥ 1; raw FstClusLO ∈ [2, `dsk_maxclus`]. Else 0. A garbage entry can never
-reach the loader as type 1. (Recorded tradeoff: a ≥64KB `*.O88` reads "Bad
-package" rather than "Too large" — it cannot be a package (cap 0x4E00), so
-the message is truthful.)
+**The type word** (binding — defense in depth with §21 step 1), tested in
+this order:
+
+- **type 2 (subdirectory)** iff `attr & 0x10` **and** raw FstClusLO ∈
+  [2, `dsk_maxclus`]. A directory whose first cluster is outside that range
+  is staged as type **0**: it is listed, it is inert, and it can never be
+  entered — the same "listed but never acted on" outcome a garbage file
+  gets. Tested **first**, ahead of the extension rule below, because a
+  folder literally named `X.O88` must never type as a package and reach the
+  loader.
+- **type 1 (loadable package)** iff ALL of: raw ext bytes 8..10 == `"O88"`
+  (uppercase exact — foreign OSes uppercase short names on write); size
+  dword high word == 0; size low word ≥ 1; raw FstClusLO ∈
+  [2, `dsk_maxclus`]. A garbage entry can never reach the loader as type 1.
+  (Recorded tradeoff: a ≥64KB `*.O88` reads "Bad package" rather than "Too
+  large" — it cannot be a package (cap 0x4E00), so the message is truthful.)
+- else **type 0**.
+
+The type word is the *only* thing a consumer branches on: §22's open path
+sends type 1 to the loader and type 2 to `dsk_chdir`, and type 0 to the
+loader as well, where it is rejected as "Bad package" — which is the
+truthful verdict for double-clicking a data file.
 
 **Icons** have no on-disk table: they are **harvested at mount** (§18.3
 step 4) from each type-1 file's first sector — a v2 `.o88` with the
@@ -1988,6 +2142,13 @@ embedded-icon flag (§20.2 bit 0) carries its 16×16 body at file offset
 32..95, and that block is copied into `disk_icons` entry i. Everything
 else — type-0 files, iconless packages, harvest read failures — gets the
 all-zero slot, and viewers fall back to the built-in `ico_app16` (§25).
+**Type-2 entries are the one exception**: a folder has nothing on disk to
+harvest an icon *from*, so `dsk_folder_ico` — a hand-authored 16×16 body in
+`disk.inc`'s `.text`, the only icon in the kernel besides the menu-bar logo
+that is drawn by hand — is copied into the slot instead. Doing it at
+harvest time rather than at draw time means every viewer keeps the one rule
+it already had: read `disk_icons` entry i, fall back to `ico_app16` if it
+is all zero.
 
 Display names are the 8.3 host filenames (e.g. `"MINES.O88"`), not the
 16-byte header names — 8.3 cannot hold the 15-char header names; a running
@@ -1995,6 +2156,95 @@ instance still shows its header name (`inst_set_name` reads the loaded
 region, §21). Directory order on the shipped disks is pinned by §24's
 argument order; the volume-label entry is filtered, so index 0 stays the
 first package.
+
+### 19.2 Subdirectories — the current directory, one walker, and navigation
+
+A FAT12/16 volume has **two** directory shapes, and this is the section
+that keeps that fact from leaking into the rest of the kernel: the root is
+a fixed run of `[dsk_rootsecs]` sectors at `[dsk_rootlba]`, and every
+subdirectory is an ordinary cluster chain.
+
+**State (two variables, both in `.text`, not `.bss`).**
+
+| symbol | contract |
+|--------|----------|
+| `[dsk_cwd]` | word: the current directory's first cluster; **0 = the root**. The directory `disk_dir` lists (§18.3 step 3) and the one every `dskw_*` name resolves inside (§18.4). |
+| `[dsk_keepcwd]` | byte: 1 while a `disk_mount` is being made *on behalf of* navigation or of `dskw_sync`, and only then. A mount with it clear resets `[dsk_cwd]` to 0. |
+
+They live in `.text` with initialisers and **not** in `.bss` for a reason
+worth restating: `-f bin` gives `.bss` no image bytes, so it boots as
+whatever the RAM held, and the very first `disk_mount` reads
+`[dsk_keepcwd]` to decide whether to reset `[dsk_cwd]`. Left in `.bss`, one
+garbage byte at boot sends the mount walking a garbage cluster chain and
+the volume lists two lines of noise. (This is the same trap `dsk_cwd`'s
+comment in `disk.inc` records; it has cost a debug cycle once already.)
+
+**One walker.** Every directory scan in the kernel — the mount listing
+(§18.3 step 3), the write path's slot search and entry patch (§18.4),
+`dsk_dotdot` below — goes through one iterator, so the two shapes are
+spelled out once and cannot drift apart:
+
+```
+dsk_dirw_start  in:  AX = the directory's first cluster (0 = the root)
+                out: nothing (all registers preserved)
+dsk_dirw_next   out: CF=0 with AX = the next sector's LBA, or CF=1 = the
+                     directory ends here
+                clobbers: AX (the output), CF
+```
+
+End-of-chain needs no EOC constants, exactly as in `dsk_read_chain`: any
+next-value outside [2, `dsk_maxclus`] ends the walk, which folds EOC marks,
+free entries and bad marks into one case. A cross-linked FAT could cycle
+forever, though — a directory walk has no file size to bound it the way
+`dsk_read_chain` does — so **`DSK_DIRW_MAX` = 256 sectors** caps any one
+walk. 256 sectors is 4,096 entries, past anything real and far past the
+32-entry listing cap.
+
+**Navigation is a remount.**
+
+```
+dsk_chdir    in:  AX = the directory's first cluster (0 = the root),
+                  DL = drive (0 = A:, 1 = B:)
+             out: CF=0 the volume is listed and [dsk_cwd] = AX; CF=1 the
+                  mount failed — the volume is back at the root and
+                  [dsk_mntok] is closed, exactly as after any failed mount
+             clobbers: nothing else (flags)
+
+dsk_dotdot   in:  nothing; [dsk_cwd] must be non-zero
+             out: CF=0 with AX = the parent's first cluster (0 = the root);
+                  CF=1 = the '..' link is missing or unreadable
+             clobbers: AX (the output), CF
+```
+
+`dsk_chdir` stores `[dsk_cwd]`, raises `[dsk_keepcwd]`, calls `disk_mount`
+and lowers it again. That single instruction's worth of difference is the
+whole of navigation: rather than a second way to fill
+`disk_dir`/`disk_icons`, entering a folder re-runs the one validated
+pipeline — BPB re-checked, FAT re-snapshotted, listing and icon harvest
+rebuilt. It costs a floppy's worth of sectors per navigation and buys the
+property that `disk_dir` is **always** exactly a mount snapshot, with no
+third staleness rule anywhere in the kernel.
+
+`DL` is an input rather than a read of `[disk_drive]` so that a caller can
+name the drive it means; today every caller passes `[disk_drive]`, but the
+day a file-manager window carries its own drive it must not be able to
+navigate the *other* drive's directory by accident.
+
+`dsk_dotdot` reads the current directory's very first sector and decodes
+entry 1, which is `..` by spec, taking its `FstClusLO` as the parent —
+range-checked against `[dsk_maxclus]` first, because a corrupt `..` must
+not become the cwd. The FAT convention that a parent *of* the root is
+written as cluster 0 is exactly this kernel's own value for the root, so
+going up needs no path stack and no memory of how the user got here: **the
+disk itself records the parent**, and that is why there is no path string
+anywhere in os8088.
+
+**Failure is bounded, never fatal.** A `dsk_chdir` into a directory whose
+chain is corrupt fails the mount, which resets `[dsk_cwd]` to 0 and closes
+`[dsk_mntok]`: the volume lands back at the root with the write gate shut,
+which is the same state a bad disk produces. A directory whose entries are
+garbage simply lists nothing. Neither can crash, because no LBA in either
+path is derived from an unvalidated field.
 
 ## 20. Loadable programs — the .o88 package format
 
@@ -2380,16 +2630,30 @@ overwritten" invariant is retired.
 ## 22. files.inc — the Disk window (file manager)
 
 Built-in singleton app kind (KIND_FILES, cap 1 — the mount state below is
-module-global), title "Disk", 320×200 at (110,80), **resizable**
+module-global), 320×200 at (110,80), **resizable**
 (KD_WFLAG = WF_SIZABLE, §11.1/§29.3 — the one built-in that is). No
 background task, no boot-time window: `files_init` (from kmain) only
 resets module state; the window is created on demand by `app_launch`
 (§29), whose KD_INIT is `fm_kinit` (clears `fm_sel`/`fm_clkt`, resets
-`fm_scroll` and `fm_view`). State: `fm_sel` (word, selected **directory
-index** — not a row; 0xFFFF = none), `fm_clkt` (word, birth tick of the
-last entry click), `fm_mountok` (byte, 1 = last mount succeeded),
-`fm_view` (byte, 0 = list view, 1 = icon view), `fm_scroll` (word, first
-visible row — an entry row in list view, a grid row in icon view).
+`fm_scroll`/`fm_view`, cancels any edit, points `W_MENUS` at `fm_menus`
+and `W_TITLE` at the instance's `I_NAME`). State: `fm_sel` (word, selected
+**directory index** — not a row; 0xFFFF = none), `fm_clkt` (word, birth
+tick of the last entry click), `fm_mountok` (byte, 1 = last mount
+succeeded), `fm_view` (byte, 0 = list view, 1 = icon view), `fm_scroll`
+(word, first visible row — an entry row in list view, a grid row in icon
+view), `fm_ferr` (byte, the `FERR_*` of the last file operation, 0 = none),
+and the edit-mode trio `fm_edit` / `fm_ebuf` (13B) / `fm_elen`.
+
+**The window's title is the folder it is showing.** `fm_kinit` points
+`[bx+W_TITLE]` at the instance record's 16-byte `I_NAME` (§29.1) rather
+than at a literal, so one write retitles the window, its dock tile (§30)
+and its Task Manager row (§28) together. Navigation rewrites it: entering a
+folder by name writes that name, and anything that lands at the root writes
+`"Disk"`. Going **up** into a directory that is not the root writes
+`"Folder"` — the honest answer, because naming it would need the
+grandparent's listing, which is a second mount to display a string. Names
+are ≤ 12 chars (§19) and `I_NAME` is 16 with a permanent NUL at byte 15, so
+no bound can be exceeded.
 
 **Live layout (binding).** The window resizes, so nothing may bake in
 320×200: one helper, `fm_layout` (in BX = window ptr), computes the
@@ -2415,7 +2679,8 @@ or any §18.2 BPB rule failed. N is the accepted-entry count (≤ 32, §19's
 cap — the header count always equals the listed count). File names are
 the synthesized 8.3 display names of §19 (e.g. `"MINES.O88"`, ≤ 12
 chars); sizes are the §19 staged size word, clamped at 65,535 for ≥64KB
-files. Two buttons at the top right,
+files. Folders count and list exactly like files — a type-2 entry (§19)
+shows the built-in folder icon and a blank size column. Two buttons at the top right,
 1px black frames, labels centered: **Refresh** from (cw−68, 2) to
 (cw−6, 15) — remounts the current drive so a swapped disk shows its real
 contents — and **the view toggle** from (cw−136, 2) to (cw−74, 15),
@@ -2426,9 +2691,21 @@ frame: each button is drawn — and its click rect tested — only when it
 fits (**Refresh iff cw ≥ 76, the view toggle iff cw ≥ 142**; one
 condition gates both, so nothing invisible is ever clickable), and the
 header is truncated to end 8px short of the leftmost drawn button (or of
-cw). Status line from `[ld_status]` at (6, status_y): "", "Disk error",
-"Bad package", "Too large", "Load failed", "Out of memory" (0..5) — plus
-"Loading..." while a load is pending — truncated to (cw−12)/8 chars
+cw). The status line at (6, status_y) shows the **first** of these that
+applies — the precedence is binding, because all four can be true at once:
+
+1. `[ld_pending]` non-zero → `"Loading..."`.
+2. `[fm_edit]` non-zero → the **edit line** (below).
+3. `[fm_ferr]` non-zero → the `FERR_*` message, from an 11-entry table
+   indexed by the code: (0 unused) `"No disk"`, `"Disk error"`,
+   `"Bad name"`, `"No such file"`, `"Name exists"`, `"Disk full"`,
+   `"Folder full"`, `"Protected"`, `"Write protected"`, `"Too large"`.
+   Without this table every `dskw_*` failure is silent, which for an
+   irreversible operation is the worst possible outcome.
+4. else `[ld_status]`: "", "Disk error", "Bad package", "Too large",
+   "Load failed", "Out of memory" (0..5).
+
+Whichever wins is truncated to (cw−12)/8 chars
 through the same scratch-buffer idiom as the header ("Out of memory" is
 104px and a legal resize can leave cw = 94). In list view the name is
 truncated to the room left of the size column ((cw − 88)/8 chars); every
@@ -2493,16 +2770,38 @@ Behaviour:
   4. Row area → map to an entry index per the current view (icon view:
      reject x past cols·78); y < 22, past the shown rows, or index ≥
      [disk_nfiles] → clear selection. Index == fm_sel and
-     [ui_click_t]−fm_clkt < 9 (birth ticks, §10) → double-click: set
-     [ld_pending] = index+1 (ui.inc runs the loader after the lock
-     drops; the repaint shows "Loading..."). Else select it (fm_sel =
+     [ui_click_t]−fm_clkt < 9 (birth ticks, §10) → double-click:
+     `fm_open_sel` (below). Else select it (fm_sel =
      directory index), stamp fm_clkt.
-- `W_ONKEY` (lock held): 'a'/'A' → drive 0, 'b'/'B' → drive 1, 'r'/'R' →
+
+  A click also **cancels any edit mode** before anything else, on the same
+  reasoning a Mac cancels an in-place rename when you click away.
+- **`fm_open_sel`** (in AX = a directory index already range-checked; lock
+  held) is the one open path, shared by the double-click, by Enter and by
+  **File ▸ Open**. It stages the entry (`dsk_get_dir`) and branches on the
+  §19 type word — reading the first-cluster word into a register *before*
+  it acts, because a `dsk_chdir` remount rebuilds `dsk_ent` underneath it:
+  - type 2 (a folder) → `dsk_chdir` to its first cluster, DL = [disk_drive]
+    (§19.2): the listing, the selection, the scroll position and the window
+    title all follow.
+  - anything else → `[ld_pending]` = index+1, and ui.inc runs the loader
+    after the lock drops (the repaint shows "Loading..."). A type-0 entry
+    still goes here and is rejected as "Bad package", which is the truthful
+    verdict for double-clicking a data file.
+
+  Branching here is not cosmetic: before it existed, a folder double-click
+  reached `ld_run_body`, which rejects `type != 1`, and the status line
+  read "Bad package" for an operation that had nothing to do with packages.
+- `W_ONKEY` (lock held). **While `[fm_edit]` is non-zero the handler
+  swallows every key** and nothing below applies — binding, because the
+  bare-letter shortcuts are live otherwise and typing a folder called
+  `BAK` would switch to drive B: on its first character. See "Naming"
+  below. Otherwise: 'a'/'A' → drive 0, 'b'/'B' → drive 1, 'r'/'R' →
   same drive; all three: `disk_mount`, update fm_mountok, clear selection,
   reset fm_scroll, repaint content. 'v'/'V' → toggle the view like the
   button. Scan codes: Up/Down (48h/50h) scroll one row, PgUp/PgDn
   (49h/51h) a page — the view, not the selection, clamped like the bar.
-  Enter (13) with a valid selection → same as double-click. (disk_mount
+  Enter (13) with a valid selection → `fm_open_sel`. (disk_mount
   under the gfx lock stalls painters: 16 sectors on the shipped disk —
   about a second on real hardware — with a hostile-media ceiling of 97
   one-sector reads, approaching ~20 s at one sector per revolution plus
@@ -2523,6 +2822,90 @@ Behaviour:
   full repaint, not content-only: loader_run calls it right after wm_show
   raised the loaded program's window, which may overlap the Disk window —
   a content-only repaint would paint over the new front window.
+
+### The menu bar — `fm_menus` and `fm_oncmd`
+
+`fm_menus` is an ordinary §12.2 set with `AM_NAME` = `menu_loc_name`
+(so the bar still reads **Locator**, §12.3) and `AM_ONCMD` = `fm_oncmd`.
+`fm_kinit` stores it into `W_MENUS`, so the bar carries the file manager's
+menus exactly while one of its windows is active and Locator's desktop
+menus otherwise. Four menus, and the layout is pinned because
+`menu_relayout` drops any cell that would reach `MENU_CLK_HX` (434):
+`'Locator'` is 56px so the first cell starts at 38+56+16 = **110**, and
+cells are `font_width + MENU_TITLE_PAD`:
+
+| menu | width | x range | items |
+|------|-------|---------|-------|
+| **File** | 44 | 110..153 | Open · New Folder… · Close Window |
+| **Folder** | 60 | 154..213 | Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
+| **View** | 44 | 214..257 | as List · as Icons |
+| **Special** | 68 | 258..325 | Clock · Bounce · Restart |
+
+325 against a 434 limit is 108px of slack — enough that a longer item
+string can never push a *title* off the bar, since item widths do not enter
+the layout at all. `MENU_APPMAX` is 4 and all four are used.
+
+**Dispatch.** `fm_oncmd` turns (menu, item) into one `FMC_*` id —
+`bl = fm_menu_base[ah] + al`, bounds-checked, then `shl bx,1` and
+`call [fm_jmp+bx]` (CALL r/m16 near-indirect, 8086-legal) — and repaints
+afterwards, because the kernel does not repaint after an `AM_ONCMD`
+returns (§12.2). Ids are contiguous **within** a menu, which is what makes
+the base+item arithmetic work; they are internal constants and may be
+renumbered whenever a menu gains an item. Every handler is a near proc that
+preserves nothing but must not clobber the window pointer the repaint needs
+(`fm_oncmd` parks it rather than trusting the handlers).
+
+**Which side of the lock each command is on** is the single most dangerous
+detail in this section, because `gfx_lock` is a non-recursive spin released
+only by the UI task (§7) and `fm_oncmd` runs *inside* it:
+
+| command | how it runs |
+|---------|-------------|
+| Open | `fm_open_sel` — inline (loader is deferred, `dsk_chdir` is I/O under the lock like Refresh) |
+| New Folder… | inline: enters edit mode, draws nothing but the status line |
+| Refresh / Drive A: / Drive B: | inline `disk_mount`, exactly as the button and the a/b/r keys already do |
+| Up One Folder / Root Folder | inline `dsk_dotdot` + `dsk_chdir` / `dsk_chdir` AX=0 |
+| as List / as Icons | inline: set `fm_view`, reset `fm_scroll` |
+| Clock / Bounce | **deferred** — `inst_launch_post` (§29.4); `app_launch` takes the lock |
+| Close Window | **deferred** — `ui_post_cmd` CMD_CLOSE (§13); `ui_cmd` takes the lock |
+| Restart | **deferred** — `ui_post_cmd` CMD_REBOOT; `ui_cmd` takes the lock and never gives it back |
+
+Calling `app_launch`, `files_open`, `files_open_drive`, `files_refresh` or
+`ui_cmd` from here hangs the machine permanently — no beep, no watchdog, no
+recovery — so each entry in the jump table carries a one-line comment
+saying which column of that table it is in.
+
+Up One Folder at the root is a no-op rather than an error; there is nothing
+above the root and nothing useful to say about it.
+
+### Naming — the status-line edit mode
+
+There is no dialog kind and no focus concept, so **New Folder… turns the
+window's own status line into an edit line**: `[fm_edit]` = 1, `[fm_ebuf]`
+(13 bytes) is emptied, and the line reads `New folder: NAME`. Only the
+front window receives `W_ONKEY` (§13), which is precisely the window the
+user is looking at, so this needs neither.
+
+While `[fm_edit]` is non-zero `W_ONKEY` **swallows every key** — that rule
+is binding and is stated twice on purpose. Inside the mode:
+
+- **13 (Enter)** commits: `dskw_mkdir` with SI = `fm_ebuf` (§18.5). Success
+  clears `[fm_ferr]`, `fm_sel` and `fm_scroll` (the remount rebuilt the
+  listing, so a directory index is meaningless); failure stores the
+  `FERR_*` in `[fm_ferr]` for the status line. Either way the mode ends.
+  An empty buffer just cancels.
+- **27 (Esc)** cancels; **8 (Backspace)** removes the last character.
+- **`.`** is accepted once, and only after at least one character.
+- every other character goes through the write path's own **`dskw_char`**
+  (§18.4) — upper-cased, and rejected if it is not in the FAT short-name
+  set — while the length is under 12. Filtering with the *same* routine
+  that will validate the name at commit time is the point: the line shows
+  exactly the bytes that will be stored, so a name can never look accepted
+  and then fail as `FERR_NAME`.
+- a key with no ASCII (a bare scan code) is swallowed and changes nothing.
+
+`fm_kinit` clears the mode, so a closed and reopened window never resumes a
+half-typed name, and a content click cancels it.
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
@@ -3026,11 +3409,11 @@ I_CYC    equ 28   ; dword (lo word first): PIT cycles billed to this
 I_RECSZ  equ 32
 
 KIND_ABOUT   equ 0
-KIND_CLOCK   equ 2
-KIND_BOUNCE  equ 3
-KIND_FILES   equ 4
-KIND_TASKMGR equ 5
-KIND_CTRL    equ 6       ; Control Panel (§31)
+KIND_CLOCK   equ 1       ; (Note Pad was kind 1 until it became the
+KIND_BOUNCE  equ 2       ;  NOTEPAD package, §27 — the numbering closed up)
+KIND_FILES   equ 3
+KIND_TASKMGR equ 4
+KIND_CTRL    equ 5       ; Control Panel (§31)
 KIND_PKG     equ 0x80    ; bit 7: package instance
 ```
 
@@ -3186,7 +3569,7 @@ repaints when the window moves away — desk-icon semantics throughout.
 
 ## 31. ctrl.inc — the Control Panel window
 
-Built-in singleton app kind (KIND_CTRL = 6, cap 1), window "Control Panel",
+Built-in singleton app kind (KIND_CTRL = 5, cap 1), window "Control Panel",
 **320×140** at (160,130). Label prefix `cp_`. Included from kernel.asm right
 after `taskmgr.inc`. (It was 320×120 until the Date/Time page of §31.5
 needed two more control rows; the frame grew rather than that page being

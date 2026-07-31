@@ -981,7 +981,8 @@ dsk_dirw_next:
 
 ; -----------------------------------------------------------------------------
 ; dsk_chdir - make a directory the current one and re-list the volume
-; in:  AX = the directory's first cluster (0 = the root)
+; in:  AX = the directory's first cluster (0 = the root),
+;      DL = drive (0 = A:, 1 = B:)
 ; out: CF=0 listed; CF=1 = the mount failed (the volume is back at the root
 ;      and [dsk_mntok] is closed, exactly as after any failed mount)
 ; clobbers: nothing else (flags)
@@ -994,15 +995,18 @@ dsk_dirw_next:
 ; It costs a floppy's worth of sectors per navigation and buys the property
 ; that disk_dir is ALWAYS exactly a mount snapshot, with no third staleness
 ; rule anywhere in the kernel.
+;
+; DL is an INPUT rather than a read of [disk_drive] so a caller can name the
+; drive it means. Every caller today passes [disk_drive] and the two forms
+; are identical - but the day a file-manager window carries its own drive,
+; the version that read the global would let a background window navigate
+; the OTHER drive's directory, and that is a bug you find by data loss.
 ; -----------------------------------------------------------------------------
 dsk_chdir:
-    push dx
     mov [dsk_cwd], ax
     mov byte [dsk_keepcwd], 1
-    mov dl, [disk_drive]
     call disk_mount
     mov byte [dsk_keepcwd], 0
-    pop dx
     ret
 
 ; -----------------------------------------------------------------------------

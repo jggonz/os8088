@@ -3,9 +3,14 @@
 ;
 ; The UI task (SPEC.md 13): task 0's forever-loop. Each pass polls the BIOS
 ; keyboard, drains one event from the system queue, runs any deferred
-; instance launch, any pending package load and any posted full repaint (all
-; outside the gfx lock - app_launch and loader_run manage their own locking),
-; and yields.
+; instance launch, any pending package load, any deferred kernel menu command
+; and any posted full repaint (all outside the gfx lock - app_launch,
+; loader_run and ui_cmd manage their own locking), and yields.
+;
+; That deferral channel is what lets a handler running UNDER the gfx lock
+; ask for work that needs the lock: inst_launch_post for launches,
+; ui_post_cmd for the kernel's own CMD_* (SPEC.md 13). The lock is a
+; non-recursive spin only this task releases, so the alternative is a hang.
 ; Step 4 is the system clock (SPEC.md 37): clk_tick every pass - it is cheap
 ; and keeps time whether or not anything is drawn - and, on the second, one
 ; gfx_lock around the menu bar's clock cell plus any open Date/Time page.
@@ -218,11 +223,18 @@ ui_task:
     call app_launch             ; in: AL = kind; does its own locking
 .chk_ld:
     cmp word [ld_pending], 0    ; set by files.inc's click handler
-    je .chk_cp
+    je .chk_pcmd
     mov ax, [ld_pending]        ; stored as directory index + 1
     dec ax
     mov word [ld_pending], 0    ; consume before running, not after
     call loader_run             ; in: AX = index; does its own locking
+.chk_pcmd:
+    mov ax, [ui_pcmd]           ; a kernel menu command posted from under
+    or ax, ax                   ; the lock (ui_post_cmd, SPEC.md 13)
+    jz .chk_cp
+    mov word [ui_pcmd], 0       ; consume before running, not after
+    call ui_cmd                 ; in: AX = CMD_*; takes its own locks, and
+                                ; CMD_REBOOT never comes back
 .chk_cp:
     cmp byte [cp_dirty], 0      ; scheduler mode changed in the Control
     je .chk_clk                 ; Panel (SPEC.md 31.2): windows that quote
@@ -560,12 +572,13 @@ ui_dispatch:
     call gfx_lock
     mov bx, [menu_win]          ; the lock dropped between menu_track and
     or bx, bx                   ; here, so re-check the owner before calling
-    jz .app_done                ; into it. Only the UI task can destroy a
-    test word [bx + W_FLAGS], 2 ; package window (packages cannot spawn,
-    jz .app_done                ; SPEC.md 20.2) and only packages reach this
-                                ; path, so this cannot fire today - it is the
-                                ; guard that keeps that from being load-
-                                ; bearing the day a menu-owning kind spawns
+    jz .app_done                ; into it. This guard used to be unreachable
+    test word [bx + W_FLAGS], 2 ; insurance ("only packages reach this path,
+    jz .app_done                ; and packages cannot spawn"); Locator's
+                                ; fm_menus made it LOAD-BEARING (SPEC.md
+                                ; 12.3), because a kernel window can be
+                                ; destroyed by a command picked from its own
+                                ; bar while the lock was down
     call inst_win_owner         ; DI = owning record, 0 = unowned window
     push di
     push word [snd_inst]
@@ -593,6 +606,34 @@ ui_dispatch:
 ; System menu, then Locator's File and Special
 ui_loc_base:
     dw CMD_ABOUT, CMD_CLOCK, CMD_REBOOT
+
+; -----------------------------------------------------------------------------
+; ui_post_cmd - defer one of the kernel's own menu commands (SPEC.md 13)
+; in:  AX = CMD_*
+; out: nothing (all registers preserved)
+;
+; inst_launch_post's counterpart for the commands that are not launches, and
+; it is load-bearing rather than stylistic. gfx_lock is a NON-RECURSIVE spin
+; released only by the UI task (SPEC.md 7), and a window callback - a
+; W_ONCLICK, or an AM_ONCMD handler reached through the bar (SPEC.md 12.2) -
+; already holds it. Such a handler calling ui_cmd's CMD_CLOSE or CMD_REBOOT
+; would take a lock it is standing on and hang the machine dead: no beep, no
+; watchdog, no recovery. One word store here, drained by ui_task step 3 with
+; nothing held.
+;
+; It also keeps the billing honest. ui_dispatch's .app route captures the
+; owning instance BEFORE calling the handler and charges it AFTER; CMD_CLOSE
+; is the first menu command that can free that very record, so running it
+; inline would write cycles into a slot that had just been released.
+;
+; [ui_pcmd] lives in .text, not .bss: ui_task reads it on its first pass and
+; -f bin gives .bss no image bytes (the dsk_cwd lesson, SPEC.md 1).
+; -----------------------------------------------------------------------------
+ui_post_cmd:
+    mov [ui_pcmd], ax
+    ret
+
+ui_pcmd:    dw 0                ; posted CMD_*, 0 = none (see above)
 
 ; -----------------------------------------------------------------------------
 ; ui_cmd - act on one of the kernel's own menu commands

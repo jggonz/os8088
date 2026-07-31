@@ -67,6 +67,20 @@ DSKW_EOC16   equ 0xFFFF        ; (0FF8h / 0FFF8h), so a host fsck walks the
 dskw_syms:  db '$', '%', 0x27, '-', '_', '@', '~', 0x60
             db '!', '(', ')', '{', '}', '^', '#', '&', 0
 
+; dskw_commit stamps ATTR_DIRECTORY instead of ARCHIVE while this is set,
+; and dskw_mkbody is the only thing that ever sets it (SPEC.md 18.5).
+;
+; It lives HERE, in .text, and not in .bss - the same rule, and the same
+; hard-won reason, as [dsk_keepcwd] in disk.inc. -f bin gives .bss no image
+; bytes, and the .fartext blob is copied out from ON TOP of .bss at boot
+; (SPEC.md 33), so an uninitialised .bss byte reads as leftover far code:
+; reliably NON-ZERO. In .bss this byte made dskw_commit stamp attribute 0x10
+; on every file the OS ever created - which every reader then refused as
+; FERR_PROT (a directory is protected), so nothing could be read back or
+; deleted, and every chain those writes allocated leaked. It is exactly the
+; kind of flag that is only ever cleared on a path that has never run.
+dskw_isdir: db 0                ; 1 = dskw_commit is stamping a folder
+
 ; -----------------------------------------------------------------------------
 ; dskw_write - create or replace a whole file (SPEC.md 18.4, slot 0x0098)
 ; in:  SI -> NUL-terminated 8.3 name, ES:BX -> the bytes, CX = byte count
@@ -993,12 +1007,22 @@ dskw_nbody:
 ; staleness rule enters the kernel and a written .o88 gets its icon
 ; harvested for free. It cannot repaint the Disk window (the caller may
 ; hold the gfx lock) - SPEC.md 22 covers what the user sees.
+;
+; [dsk_keepcwd] is raised for the same reason dsk_chdir raises it, and
+; leaving it out was a real bug (SPEC.md 18.4/19.2): a bare disk_mount
+; resets [dsk_cwd] to the root BY DESIGN, so every successful write, delete,
+; rename or mkdir performed inside a subdirectory silently teleported the
+; volume back to the root. The window kept showing a folder it was no longer
+; listing, and the next write resolved its name in the root instead - a
+; wrong-directory write, not just a display glitch.
 ; -----------------------------------------------------------------------------
 dskw_sync:
     push ax
     push dx
     mov dl, [disk_drive]
+    mov byte [dsk_keepcwd], 1   ; stay where the write happened (18.4)
     call disk_mount
+    mov byte [dsk_keepcwd], 0
     pop dx
     pop ax
     ret
@@ -1841,9 +1865,8 @@ dskw_foff:    resw 1
 dskw_cursec:  resw 1            ; dskw_find: the sector being scanned
 dskw_fend:    resb 1            ; 1 = that free slot is the 00h terminator
 dskw_new:     resb 1            ; 1 = this write is creating the entry
-dskw_isdir:   resb 1            ; 1 = dskw_commit is stamping a folder
 dskw_zapnext: resb 1            ; 1 = re-zero the slot after the one written
-dskw_pad2:    resb 1
+dskw_pad2:    resb 1            ; (dskw_isdir is NOT here - see .text above)
 
 ; --- the transfer in progress -------------------------------------------------
 dskw_seg:     resw 1            ; the caller's buffer segment (ES at entry)
