@@ -5,7 +5,11 @@
 ; and player over the SPEC.md 34 sound layer, all of it through the API
 ; table (os88api.inc) - grants, staging, streams and the PCM_EXCL clip.
 ; One window: a waveform strip, two status lines and four buttons
-; (REC / STOP / PLAY / DEMO).
+; (REC / STOP / PLAY / DEMO), plus a "Sound" menu in the bar (SPEC.md 12.2)
+; carrying those same four transitions - Record / Stop / Play / Demo, each
+; item calling the very routine its button calls, guards and all, so a
+; command picked in the wrong state is refused with the same status line a
+; click on the grayed button would have written.
 ;
 ;   - REC needs SND_CAP_PCM_IN (a Sound Blaster): verb 7 grants a 40,000 B
 ;     capture buffer (5 s at 8 kHz), verb 4 opens the input stream, and the
@@ -123,12 +127,22 @@ RC_IDLE     equ 0                   ; no stream open (rc_len may hold data)
 RC_REC      equ 1                   ; input stream open
 RC_PLAY     equ 2                   ; PCM_BG output stream open
 
+; --- Sound menu item indices (must match rc_i_sound's order) --------------------
+RC_CMD_REC  equ 0
+RC_CMD_STOP equ 1
+RC_CMD_PLAY equ 2
+RC_CMD_DEMO equ 3
+
 ; -----------------------------------------------------------------------------
 ; rc_entry - package entry point (SPEC.md 20.2)
 ; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF clear (CF set = abort, propagated from wm_create)
 ; Queries the sound caps once (they are static after boot) and stamps the
 ; status template's input-device field; the loader has zeroed our bss.
+; The menu set is registered here, before the loader shows the window, so
+; the first bar drawn already says "Recorder" and carries Sound (SPEC.md
+; 12.2). A failed wm_create leaves BX meaningless, so the registration sits
+; behind the same CF the entry propagates.
 ; -----------------------------------------------------------------------------
 rc_entry:
     push ax
@@ -143,7 +157,14 @@ rc_entry:
     mov word [rc_msg], rc_s_idle
     mov si, rc_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
-    pop si
+    jc .out
+    mov si, rc_menus                ; BX = the window wm_create just returned
+    call OSAPI_MENU_SET             ; (draws nothing, takes no lock, and
+                                    ; preserves the flags as well as the
+                                    ; registers - SPEC.md 20.3 - so the CF
+                                    ; the branch above cleared still stands)
+.out:                               ; the pops leave CF alone, so a wm_create
+    pop si                          ; failure still propagates unchanged
     pop dx
     pop ax
     ret
@@ -227,8 +248,79 @@ rc_onclick:
     jmp .repaint
 .play:
     call rc_do_play
-.repaint:                           ; white-fill own content + redraw (the
-    mov al, CWHITE                  ; files.inc idiom - lock already held)
+.repaint:
+    call rc_repaint
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; rc_oncmd - the Sound menu's command handler (SPEC.md 12.2)
+; in:  AL = item index, AH = menu index (0 - Sound is our only menu),
+;      SI = the owning window, BX = the menu set. UI task, gfx lock HELD.
+; out: nothing; clobbers AX, BX, CX, DX, SI, DI (a window callback may)
+;
+; The menu is a second set of buttons, so this is rc_onclick with the
+; hit-test replaced by the item index: same content-origin stash, same
+; rc_poll first (a finished stream must be retired before the rc_do_*
+; guards read [rc_st], or a menu pick would see a state one poll stale),
+; the same rc_do_* routines with their own refusals, and the same repaint.
+; Nothing is guarded here that the button path does not guard there:
+; picking Record with no Sound Blaster, or Play with an open stream, lands
+; in exactly the branch the grayed button's click lands in. AH is ignored
+; on purpose - the kernel only ever routes cell 1..AM_COUNT here, and we
+; declare one menu.
+; -----------------------------------------------------------------------------
+rc_oncmd:
+    mov bx, si
+    push ax                         ; the selection: wm_content answers in AX
+    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
+    mov [rc_ox], ax
+    mov [rc_oy], dx
+    call rc_poll                    ; retire a finished stream first, so the
+    pop ax                          ; rc_do_* guards below see the live state
+    cmp al, RC_CMD_REC
+    jne .n1
+    call rc_do_rec
+    jmp .repaint
+.n1:
+    cmp al, RC_CMD_STOP
+    jne .n2
+    call rc_do_stop
+    jmp .repaint
+.n2:
+    cmp al, RC_CMD_PLAY
+    jne .n3
+    call rc_do_play
+    jmp .repaint
+.n3:
+    cmp al, RC_CMD_DEMO             ; a fifth index cannot happen - the pull-
+    jne .repaint                    ; down only offers the AMENU_NITEM items
+    call rc_do_demo                 ; we declared - but the poll above may
+                                    ; have moved the state, so repaint anyway
+.repaint:
+    call rc_repaint
+    ret
+
+; -----------------------------------------------------------------------------
+; rc_repaint - white-fill our own content and draw it again
+; in:  [rc_ox]/[rc_oy] set for this call; caller holds the gfx lock
+; out: nothing; clobbers AX, BX, CX, DX, SI, DI
+;
+; The files.inc idiom: a callback that changed what the window shows repaints
+; it itself, because the kernel repaints after neither W_ONCLICK nor a menu
+; command (SPEC.md 12.2) and the lock is already held, so this is a plain
+; redraw and not a wm_invalidate. Shared by the button path and the menu
+; path - the two ways of asking for the same four transitions have to leave
+; the same pixels behind. Unlike rc_paint's, this content is NOT already
+; white: the previous state's waveform and labels are still under us.
+; -----------------------------------------------------------------------------
+rc_repaint:
+    mov al, CWHITE
     call OSAPI_SET_COLOR
     mov ax, [rc_ox]
     mov bx, [rc_oy]
@@ -238,12 +330,6 @@ rc_onclick:
     add dx, RC_CONT_H-1
     call OSAPI_GFX_FILL
     call rc_draw_all
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -892,6 +978,23 @@ rc_tpl:
     dw rc_ttl, rc_paint, 0, rc_onclick
 
 rc_ttl:      db 'Recorder', 0
+
+; --- app menu set (SPEC.md 12.2) -----------------------------------------------
+; One menu, because the app has exactly one axis: the [rc_st] state machine.
+; The item order is pinned by the RC_CMD_* constants rc_oncmd compares
+; against - the indices ARE the wire format between the two. AM_NAME
+; reuses rc_ttl: the bar label and the window title are the same eight
+; characters by construction, and a package pays for every duplicate byte.
+    OS88_MENUSET rc_menus, rc_ttl, rc_oncmd
+        OS88_MENU rc_m_sound, rc_i_sound, 4
+    OS88_MENUSET_END rc_menus
+
+rc_m_sound:  db 'Sound', 0
+rc_i_sound:  dw rc_it_rec, rc_it_stop, rc_it_play, rc_it_demo
+rc_it_rec:   db 'Record', 0
+rc_it_stop:  db 'Stop', 0
+rc_it_play:  db 'Play', 0
+rc_it_demo:  db 'Demo', 0
 
 ; button labels
 rc_l_rec:    db 'REC', 0

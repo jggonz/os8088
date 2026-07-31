@@ -43,7 +43,7 @@ strip](docs/screenshot.png)
 ## What it does
 
 Boots straight into the GUI, and boots *clean*: a 50%-dither gray desktop, a
-menu bar (System, File, Special), an icon per floppy drive, an empty dock
+menu bar carrying Locator's menus, an icon per floppy drive, an empty dock
 strip along the bottom — and nothing running. Everything is launched from
 the menus. All of classic Mac's core interactions work:
 
@@ -70,15 +70,23 @@ the menus. All of classic Mac's core interactions work:
   be valid BCD and in range, and anything short of that falls back to
   **4 July 2026, 00:00:00**. From then on the PIT is the clock, exactly as
   DOS does it on the same hardware. Click the cell to set it.
-- **Menus** — press in the bar, drag through pull-downs with live highlight,
-  release to choose. System → About os8088 / Control Panel / Task Manager;
-  File → Note Pad / Clock / Bounce / Disk / Close Window;
-  Special → Restart.
-- **Note Pad** — File → Note Pad, then type; wraps lines, Backspace and
-  Return work. Two can be open at once, each with its own buffer.
-  **F2 saves** the note to `NOTES.TXT` on the data floppy and **F3 loads**
-  it back, with DOS line endings both ways — the file opens straight up in
-  Windows Notepad, and one written there opens here.
+- **Menus, and the app that owns them** — press in the bar, drag through
+  pull-downs with live highlight, release to choose. The chip menu on the
+  left is the same in every application (About os8088 / Control Panel /
+  Task Manager); **everything to its right belongs to whatever application
+  is in front** — its name, then its own menus. Bring another window
+  forward and the bar swaps to that app; click the bare desktop and it
+  swaps back to **Locator**, which is what the OS itself is called when it
+  is acting as an application (the desktop, the drive icons, the Disk
+  browser, and the menus that launch everything else): Locator →
+  File → Clock / Bounce / Disk / Close Window, Special → Restart. Apps get
+  their menus from one SDK call, so a loaded `.o88` from the software
+  floppy takes over the bar exactly like a built-in.
+- **Note Pad** — a loadable package on the software floppy. Type; it wraps
+  lines, Backspace and Return work, and every instance has its own buffer.
+  Its **File menu** opens and saves `NOTES.TXT` on the data floppy (F2/F3
+  still do the same thing), with DOS line endings both ways — the file
+  opens straight up in Windows Notepad, and one written there opens here.
 - **Disk icons** — the desktop shows an icon per floppy drive the BIOS
   reports (int 11h). Click to select, double-click to open that drive in
   the Disk window, freshly mounted.
@@ -178,7 +186,8 @@ kernel/clock.inc     the system clock: RTC probe/read/write, date + time
                      kept from the PIT, formatting for the bar and the panel
 kernel/wm.inc        window records, z-order, frames, hit test, painter
 kernel/instance.inc  the instance table: app kinds, launch, close, billing
-kernel/menu.inc      menu bar, pull-down tracking
+kernel/menu.inc      menu bar: the active app's name + menus, runtime bar
+                     layout, pull-down tracking, Locator's own menu set
 kernel/ui.inc        UI task: event pump, keyboard, drags, dispatch
 kernel/apps.inc      About, Note Pad, Clock task, Bounce task
 kernel/disk.inc      int 13h floppy transfers, FAT12/16 mount + chain walk
@@ -273,9 +282,9 @@ clamps `mem_size` back to the board's limit.
 `make test` boots headless with a QMP socket at `build/qmp.sock`:
 
 ```
-python3 tools/mouse.py build/qmp.sock to 42 8           # File in the menu bar
+python3 tools/mouse.py build/qmp.sock to 110 8          # Locator's File menu
 python3 tools/mouse.py build/qmp.sock down              # menus need press...
-python3 tools/mouse.py build/qmp.sock to 60 27          # ...drag to Note Pad...
+python3 tools/mouse.py build/qmp.sock to 110 30         # ...drag to Clock...
 python3 tools/mouse.py build/qmp.sock up                # ...release to choose
 python3 tools/qmp.py build/qmp.sock 'sendkey h' 'sendkey i'
 python3 tools/qmp.py build/qmp.sock 'screendump /abs/path/shot.ppm'
@@ -285,7 +294,9 @@ python3 tools/qmp.py build/qmp.sock 'quit'
 (QEMU's msmouse backend truncates large injected deltas, so `tools/mouse.py`
 splits every move into ≤60px chunks and derives absolute positions by
 pinning against the kernel's edge clamp first. Boot is clean, so anything you
-want to click has to be launched from a menu first.)
+want to click has to be launched from a menu first — and note that the bar
+belongs to whichever app is in front, so a test that clicks a menu by
+coordinate must click the desktop first to get Locator's menus back.)
 
 ## Secret scanning
 

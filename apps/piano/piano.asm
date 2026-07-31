@@ -26,6 +26,12 @@
 ;     loading one REPLACES the sequence and fills the viewer, so the same
 ;     REPLAY button plays it.
 ;
+; Piano owns the menu bar while it is frontmost (SPEC.md 12.2): two menus,
+; "Play" (Replay, Clear) and "Songs" (the three tables). They are a second
+; route to the on-screen buttons, not a replacement - every item calls the
+; very routine pn_onclick's button branch calls, guards and messages
+; included, so the QWERTY keys and the buttons keep working unchanged.
+;
 ; Colors beyond 0/15 retire [bb_mono] (SPEC.md 32) - supported, expected.
 ; Window procs run with the gfx lock held and preserve all registers.
 ; BP is used as a plain register holder only - never dereferenced (SS != DS).
@@ -123,14 +129,22 @@ PN_BSS_TOTAL equ 918                ; see the bss layout after OS88_IMAGE_END
 ; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF clear (CF set = abort, propagated from wm_create)
 ; The loader has zeroed our bss (empty sequence); stamp the READY message
-; before the first paint can read it.
+; before the first paint can read it, and hand the window our menu set
+; (SPEC.md 12.2) - registering here, before the loader shows the window,
+; means the first bar drawn is already ours. OSAPI_MENU_SET preserves the
+; flags as well as every register (SPEC.md 20.3), so the CF = 0 our contract
+; owes the loader is the one the branch below already established.
 ; -----------------------------------------------------------------------------
 pn_entry:
     push si
     mov word [pn_msg], pn_s_ready
     mov si, pn_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
-    pop si
+    jc .out                         ; no window: nothing to attach menus to
+    mov si, pn_menus
+    call OSAPI_MENU_SET             ; BX = window ptr, SI = the set
+.out:
+    pop si                          ; pop leaves the flags alone
     ret
 
 ; -----------------------------------------------------------------------------
@@ -318,6 +332,61 @@ pn_onkey:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pn_oncmd - AM_ONCMD: the menu bar's route to the on-screen buttons
+; in:  AL = item index, AH = menu index (0 = Play, 1 = Songs), SI = the
+;      window that owns the set, BX = the set; gfx lock held, UI task
+; out: nothing; clobbers AX, BX, CX, DX, SI, DI
+;
+; Called exactly like W_ONCLICK (SPEC.md 12.2), so it is the same job as
+; pn_onclick's button branch minus the hit test: stash the content origin
+; the pn_c* helpers add, then call the very routine the button calls. Each
+; of pn_replay / pn_clear / pn_load already carries its own guards (the
+; empty-sequence message, the abort poll) and already repaints the viewer
+; and the message area - which is the whole of what these commands change,
+; and is required, because the kernel does not repaint after a handler
+; returns. The window is not resizable, so no OSAPI_WM_GROW is owed.
+;
+; The kernel clamps the indices to the counts we declared, so the branches
+; below need no range check - only an order that matches the declaration.
+; -----------------------------------------------------------------------------
+pn_oncmd:
+    push ax                         ; wm_content returns in AX/DX
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
+    mov [pn_ox], ax
+    mov [pn_oy], dx
+    pop ax
+    or ah, ah
+    jnz .songs
+
+    or al, al                       ; --- Play: Replay, Clear ---
+    jnz .clear
+    call pn_replay
+    ret
+.clear:
+    call pn_clear
+    ret
+
+.songs:                             ; --- Songs: Twinkle, Ode, Mary ---
+    cmp al, 1
+    je .ode
+    ja .mary
+    mov si, pn_song_twk
+    mov di, pn_s_twk
+    call pn_load
+    ret
+.ode:
+    mov si, pn_song_ode
+    mov di, pn_s_ode
+    call pn_load
+    ret
+.mary:
+    mov si, pn_song_mary
+    mov di, pn_s_mary
+    call pn_load
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1086,6 +1155,26 @@ pn_tpl:
     dw pn_ttl, pn_paint, pn_onkey, pn_onclick
 
 pn_ttl:      db 'Piano', 0
+
+; --- app menu set (SPEC.md 12.2) -----------------------------------------------
+; Two menus, both mirroring button rows the window already draws: "Play" is
+; the REPLAY/CLEAR row, "Songs" is the three song buttons. Titles are kept
+; short on purpose - name + titles must clear the clock's hit band at x 434,
+; and 'Piano' + 'Play' + 'Songs' ends near x 190.
+    OS88_MENUSET pn_menus, pn_ttl, pn_oncmd
+        OS88_MENU pn_m_play,  pn_mi_play,  2
+        OS88_MENU pn_m_songs, pn_mi_songs, 3
+    OS88_MENUSET_END pn_menus
+
+pn_m_play:   db 'Play', 0
+pn_mi_play:  dw pn_mi_replay, pn_mi_clear
+pn_mi_replay: db 'Replay', 0
+pn_mi_clear: db 'Clear', 0
+pn_m_songs:  db 'Songs', 0
+pn_mi_songs: dw pn_mi_twk, pn_mi_ode, pn_mi_mary
+pn_mi_twk:   db 'Twinkle', 0
+pn_mi_ode:   db 'Ode to Joy', 0
+pn_mi_mary:  db 'Mary', 0
 
 ; button labels and messages (message area is 108 px = 13 chars)
 pn_l_replay: db 'REPLAY', 0

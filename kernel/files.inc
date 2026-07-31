@@ -61,6 +61,11 @@ fm_kinit:
     mov word [fm_clkt], 0
     mov byte [fm_view], 0       ; list view, scrolled to the top
     mov word [fm_scroll], 0
+    mov word [bx + W_MENUS], menu_loc_set
+                                ; the Disk browser IS Locator's window
+                                ; (SPEC.md 12.3): fronting it keeps Locator
+                                ; and its menus in the bar rather than
+                                ; swapping them for an app named 'Disk'
     ret
 
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------

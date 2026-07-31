@@ -9,13 +9,20 @@
 ; queue (no recursion - the UI task's stack is 1536 bytes). 'F' toggles flag
 ; mode, 'N' starts a new game.
 ;
-; The entry point only creates the window (wm_create is lock-free) and
-; returns BX = window ptr / CF clear; the loader shows it. Everything else
-; runs inside W_PAINT / W_ONKEY / W_ONCLICK, which the kernel calls with the
-; gfx lock already held - so the handlers draw directly and never lock,
-; block or spawn. Every handler fetches the content origin via wm_content
-; on entry (the window moves). All state lives in loader-zeroed bss after
-; the image; the all-zeroes state is exactly a fresh game.
+; While its window is frontmost it owns the menu bar (SPEC.md 12.2) as
+; "Mines", with one menu - Game: "New Game", "Flag Mode". Both items are the
+; two keys' commands, not copies of them: mn_cmd_new and mn_cmd_flag were
+; factored out of W_ONKEY so key and menu run the identical code, and the
+; keys keep working exactly as before.
+;
+; The entry point only creates the window (wm_create is lock-free), registers
+; the menu set on it and returns BX = window ptr / CF clear; the loader shows
+; it. Everything else runs inside W_PAINT / W_ONKEY / W_ONCLICK and the menu
+; handler, all of which the kernel calls with the gfx lock already held - so
+; they draw directly and never lock, block or spawn. Every handler fetches
+; the content origin via wm_content on entry (the window moves). All state
+; lives in loader-zeroed bss after the image; the all-zeroes state is exactly
+; a fresh game.
 ; =============================================================================
 
 %include "os88api.inc"
@@ -108,12 +115,25 @@ MN_BSS_TOTAL equ 426                ; see the bss layout after OS88_IMAGE_END
 ; out: BX = window ptr, CF clear (CF set = abort, propagated from wm_create)
 ; The loader wm_shows the window; we must not show, draw or spawn here.
 ; The loader has already zeroed our bss, which is a fresh game.
+;
+; The menu set is attached here, while BX still holds the fresh window and
+; before the loader shows it, so the very first bar the kernel draws is ours
+; (SPEC.md 12.2). menu_win_set draws nothing, takes no lock and preserves
+; the flags as well as the registers (SPEC.md 20.3), so the CF = 0 our
+; contract owes the loader is simply the one the branch below already
+; established - and the abort path returns wm_create's CF untouched.
 ; -----------------------------------------------------------------------------
 mn_entry:
     push si
     mov si, mn_tpl
     call OSAPI_WM_CREATE             ; BX = window ptr, CF on table full
+    jc .full
+    mov si, mn_menus
+    call OSAPI_MENU_SET              ; BX = the window, SI = our set
     pop si
+    ret
+.full:
+    pop si                          ; no window: nothing to hang menus on
     ret
 
 ; -----------------------------------------------------------------------------
@@ -162,13 +182,45 @@ mn_onkey:
     je .new
     jmp .out
 
-.flag:                              ; toggle flag mode, refresh the strip text
-    xor byte [mn_flagmode], 1
-    call mn_draw_status
+.flag:
+    call mn_cmd_flag
     jmp .out
 
-.new:                               ; wipe mine/state/adj (contiguous in bss)
-    mov bx, 0
+.new:
+    call mn_cmd_new
+
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mn_cmd_flag - the flag-mode command: toggle it, refresh the strip text
+; in:  nothing ([mn_ox]/[mn_oy] already name the content origin)
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+mn_cmd_flag:
+    xor byte [mn_flagmode], 1
+    call mn_draw_status             ; 'F=FLAG' appears / disappears
+    ret
+
+; -----------------------------------------------------------------------------
+; mn_cmd_new - the new-game command: wipe the board and repaint it
+; in:  nothing ([mn_ox]/[mn_oy] already name the content origin)
+; out: nothing; preserves all registers
+;
+; Both commands are separate routines only so that the 'F'/'N' keys and the
+; Game menu's two items are one code path rather than two that have to be
+; kept in agreement (SPEC.md 12.2). They repaint themselves, which the key
+; path always did and the menu path requires: the kernel does not repaint a
+; window after a menu command returns.
+; -----------------------------------------------------------------------------
+mn_cmd_new:
+    push bx
+    mov bx, 0                       ; wipe mine/state/adj (contiguous in bss)
 .zero:
     mov byte [mn_mine+bx], 0
     inc bx
@@ -179,14 +231,33 @@ mn_onkey:
     mov byte [mn_mode], MN_M_FRESH  ; mines re-placed on the next reveal
     call mn_draw_status
     call mn_draw_board
-
-.out:
-    pop si
-    pop dx
-    pop cx
     pop bx
-    pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; mn_oncmd - AM_ONCMD: run a Game menu item (SPEC.md 12.2)
+; in:  AL = item index, AH = menu index (only 0 exists), SI = our window,
+;      BX = the menu set; caller (the UI task) holds the gfx lock
+; out: nothing; clobbers AX, BX, CX, DX like any window callback
+;
+; Called exactly like W_ONCLICK, so it draws directly and must not lock,
+; block or spawn. The window may have moved since the last paint, so the
+; content origin is re-fetched here for the same reason W_ONKEY re-fetches
+; it - the command routines below draw from [mn_ox]/[mn_oy]. AH is not
+; tested: the kernel only ever routes cells this set actually declares, and
+; the set declares one menu.
+; -----------------------------------------------------------------------------
+mn_oncmd:
+    mov cl, al                      ; keep the item; wm_content returns AX/DX
+    mov bx, si
+    call OSAPI_WM_CONTENT
+    mov [mn_ox], ax
+    mov [mn_oy], dx
+    or cl, cl
+    jz mn_cmd_new                   ; item 0 = New Game
+    dec cl
+    jz mn_cmd_flag                  ; item 1 = Flag Mode
+    ret                             ; unknown item: do nothing
 
 ; -----------------------------------------------------------------------------
 ; mn_onclick - W_ONCLICK: reveal (or flag, in flag mode) the cell hit
@@ -749,6 +820,21 @@ mn_draw_status:
 mn_tpl:
     dw 240, 120, 146, 183           ; x, y, w, h -> content 144 x 164
     dw mn_ttl, mn_paint, mn_onkey, mn_onclick
+
+; --- app menu set (SPEC.md 12.2) -----------------------------------------------
+; One menu, and only commands the game already had: the bar is the same two
+; verbs as the 'N' and 'F' keys, for anyone who never learned them. The bar
+; label is 'Mines' rather than the window's 'Minesweeper' - name plus title
+; is 40+16+32+12 = 100px from MENU_NAME_X, nowhere near the clock at x=434.
+    OS88_MENUSET mn_menus, mn_m_name, mn_oncmd
+        OS88_MENU mn_m_game, mn_mi_game, 2
+    OS88_MENUSET_END mn_menus
+
+mn_m_name:  db 'Mines', 0
+mn_m_game:  db 'Game', 0
+mn_mi_game: dw mn_mi_new, mn_mi_flag   ; item order = mn_oncmd's AL ladder
+mn_mi_new:  db 'New Game', 0
+mn_mi_flag: db 'Flag Mode', 0
 
 mn_ttl:     db 'Minesweeper', 0
 mn_s_flag:  db 'F=FLAG', 0

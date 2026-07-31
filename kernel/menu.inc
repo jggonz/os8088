@@ -1,14 +1,28 @@
 ; =============================================================================
 ; os8088 - menu.inc
 ;
-; The menu bar and pull-down menus (SPEC.md 12). Three menus: the System
-; menu (an 11x11 hand-authored chip silhouette - the os8088 logo, and the
-; one place bitmap data is hand-made), File, and Special. menu_track runs the entire mouse
-; interaction while the button is held: the caller (the UI task) already
-; holds the gfx lock, so tracking reads mouse_x/mouse_y/mouse_btn directly
-; (the ISR keeps them fresh; the cursor stays hidden - the highlight is
-; the feedback). The pixels under the dropped menu are saved to SAVE_SEG:0
-; and put back on release.
+; The menu bar and pull-down menus (SPEC.md 12). The bar is three zones:
+; the System menu (an 11x11 hand-authored chip silhouette - the os8088
+; logo, and the one place bitmap data is hand-made), which is cell 0 in
+; EVERY application; the ACTIVE APPLICATION'S NAME, a label with no hit
+; range; and that application's own menus (SPEC.md 12.2).
+;
+; So the bar is not static data any more. [menu_win] names the window that
+; owns it (0 = Locator, the kernel's own application - SPEC.md 12.3), and
+; menu_layout rebuilds the runtime menu_bar table from that window's
+; W_MENUS set whenever the owner changes. wm_front activates the window it
+; raises; a click on the bare desktop activates Locator; and menu_check -
+; run at the top of every menu_draw_bar - reverts to Locator the moment the
+; owning window stops being visible, which is how close, minimize and hide
+; are handled without any of those paths knowing the bar exists.
+;
+; menu_track runs the entire mouse interaction while the button is held:
+; the caller (the UI task) already holds the gfx lock, so tracking reads
+; mouse_x/mouse_y/mouse_btn directly (the ISR keeps them fresh; the cursor
+; stays hidden - the highlight is the feedback). The pixels under the
+; dropped menu are saved to SAVE_SEG:0 and put back on release. It returns
+; a (cell, item) pair rather than a flat command, because item numbering
+; now has to mean something inside a menu set the kernel has never seen.
 ;
 ; The right end of the bar is the system clock (SPEC.md 12.1): drawn by
 ; menu_draw_clock, repainted once a second by the UI task, and - because
@@ -16,31 +30,48 @@
 ; shortcut to the Control Panel's Date/Time page rather than a menu title.
 ; =============================================================================
 
-; --- commands returned by menu_track (owned here, dispatched by ui.inc) ------
-; cmd = menu base + item index, so each menu's commands must stay
-; consecutive from its base (SPEC.md 12) - moving Task Manager into the
-; System menu is what renumbered CMD_NOTE..CMD_CLOSE up by one, and
-; retiring Note Pad to a package (SPEC.md 27) is what renumbered them
-; back down.
-CMD_ABOUT   equ 1               ; --- System ---
+; --- the kernel's own commands (SPEC.md 12.3; reconstructed by ui.inc) -------
+; The bar no longer carries these: ui_dispatch rebuilds cmd = base + item
+; from ui_loc_base for the System menu and for Locator's own menus, which
+; keeps the "each menu's commands stay consecutive from its base"
+; arithmetic exactly where it always was, just off the data path.
+CMD_ABOUT   equ 1               ; --- System (cell 0, every application) ---
 CMD_CTRL    equ 2
 CMD_TASKS   equ 3
-CMD_CLOCK   equ 4               ; --- File ---
+CMD_CLOCK   equ 4               ; --- Locator: File ---
 CMD_BOUNCE  equ 5
 CMD_FILES   equ 6
 CMD_CLOSE   equ 7
-CMD_REBOOT  equ 8               ; --- Special ---
+CMD_REBOOT  equ 8               ; --- Locator: Special ---
 
-; --- menu table entry layout --------------------------------------------------
-MENU_TITLE  equ 0               ; word: near ptr to NUL title, 0 = logo glyph
-MENU_ITEMS  equ 2               ; word: near ptr to array of item string ptrs
-MENU_NITEM  equ 4               ; word: item count
-MENU_BASE   equ 6               ; word: CMD_* of item 0 (items are consecutive)
-MENU_XL     equ 8               ; word: bar hit range, left x (inclusive)
-MENU_XR     equ 10              ; word: bar hit range, right x (inclusive)
-MENU_TX     equ 12              ; word: title text / glyph left x
-MENU_ENTSZ  equ 14
-MENU_NUM    equ 3               ; menus in the table
+; --- app menu set layout (SPEC.md 12.2; mirrored in apps/os88api.inc) --------
+AM_NAME     equ 0               ; word: NUL app name for the bar label; 0 =
+                                ; fall back to the instance's I_NAME
+AM_ONCMD    equ 2               ; word: near ptr to the command handler, or
+                                ; 0 = dispatched by the kernel (Locator)
+AM_COUNT    equ 4               ; word: menu count, clamped to MENU_APPMAX
+AM_LIST     equ 6               ; AM_COUNT entries of:
+AMENU_TITLE equ 0               ; word: NUL menu title (the bar cell text)
+AMENU_ITEMS equ 2               ; word: array of near ptrs to NUL item strings
+AMENU_NITEM equ 4               ; word: item count
+AMENU_ENTSZ equ 6
+
+; --- runtime bar cell layout (menu_bar[], rebuilt by menu_layout) -----------
+MB_TITLE    equ 0               ; word: near ptr to NUL title, 0 = logo glyph
+MB_ITEMS    equ 2               ; word: near ptr to array of item string ptrs
+MB_NITEM    equ 4               ; word: item count
+MB_XL       equ 6               ; word: bar hit range, left x (inclusive)
+MB_XR       equ 8               ; word: bar hit range, right x (inclusive)
+MB_TX       equ 10              ; word: title text / glyph left x
+MB_ENTSZ    equ 12
+MENU_APPMAX equ 4               ; app menus the bar can host
+MENU_BARMAX equ MENU_APPMAX + 1 ; + the System cell, which is always cell 0
+
+MENU_SYS_XR    equ 29           ; System cell: x 0..29, glyph at MENU_SYS_TX
+MENU_SYS_TX    equ 10
+MENU_NAME_X    equ 38           ; app-name label pen x
+MENU_NAME_PAD  equ 16           ; gap after the name, before the first menu
+MENU_TITLE_PAD equ 12           ; per-title cell padding (6px each side)
 
 MENU_TEXT_Y equ 6               ; title text row (8px glyphs in a 19px bar)
 MENU_LOGO_Y equ 4               ; logo glyph top row (11px tall)
@@ -58,8 +89,219 @@ MENU_CLK_HX equ MENU_CLK_X - 6              ; 434: hit band left edge, and the
                                             ; left edge of the erased cell
 
 ; -----------------------------------------------------------------------------
+; menu_init - boot state: Locator owns the bar (SPEC.md 12)
+; in:  nothing (called from kmain after wm_init, before the first paint)
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+menu_init:
+    push bx
+    xor bx, bx
+    mov [menu_win], bx
+    call menu_relayout
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_activate - hand the menu bar to a window's application (SPEC.md 12)
+; in:  BX = window ptr, or 0 for Locator (the desktop)
+; out: CF = 1 if the active application CHANGED - the caller owes the bar a
+;      repaint; CF = 0 if it was already active. All registers preserved.
+;
+; Draws nothing and takes no lock, so it is safe from wm_front (which
+; repaints anyway) and from the event ladder (which does not).
+; -----------------------------------------------------------------------------
+menu_activate:
+    cmp bx, [menu_win]
+    je .same
+    mov [menu_win], bx
+    call menu_relayout
+    stc
+    ret
+.same:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_win_set - attach an app menu set to a window (API 0x00AC, SPEC 12.2)
+; in:  BX = window ptr, SI = menu set ptr (0 = no menus of its own)
+; out: nothing (all registers preserved, FLAGS INCLUDED)
+;
+; The intended caller is a package's entry proc, which runs before the
+; loader shows the window - so the relayout below is usually redundant and
+; the bar is drawn correctly by the wm_show that follows. Registering later
+; is legal but draws nothing of itself: the bar catches up on the next
+; wm_paint_all.
+;
+; Flags are preserved, unlike most of the kernel: the one place this is
+; meant to be called from is a package entry proc sitting between
+; wm_create and its own `ret`, and that proc owes the loader wm_create's
+; CF (SPEC.md 20.2). Clobbering it here would make every package author
+; discover the same trap.
+; -----------------------------------------------------------------------------
+menu_win_set:
+    pushf
+    mov [bx + W_MENUS], si
+    cmp bx, [menu_win]
+    jne .out
+    call menu_relayout          ; the active application's menus changed
+.out:
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_check - revert to Locator if the bar's owner stopped being visible
+; in:  nothing
+; out: nothing (all registers preserved)
+;
+; One validation covers close, minimize and hide (SPEC.md 12): wm_destroy
+; clears W_FLAGS outright and wm_hide clears the visible bit, so neither
+; path needs to know the menu bar exists.
+; -----------------------------------------------------------------------------
+menu_check:
+    push bx
+    mov bx, [menu_win]
+    or bx, bx
+    jz .out
+    test word [bx + W_FLAGS], 2 ; still visible?
+    jnz .out
+    xor bx, bx
+    call menu_activate          ; back to Locator (CF ignored: our caller
+.out:                           ; is menu_draw_bar, already drawing)
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_relayout - rebuild [menu_set], [menu_namep] and menu_bar from
+;                 [menu_win] (SPEC.md 12)
+; in:  nothing
+; out: nothing (all registers preserved)
+;
+; The name falls back twice: the set's AM_NAME, else the owning instance's
+; I_NAME (an accessory like Clock has no menu set at all), else the
+; window's own title. Locator - [menu_win] = 0 - takes menu_loc_set, whose
+; AM_NAME is the string 'Locator'.
+; -----------------------------------------------------------------------------
+menu_relayout:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov bx, [menu_win]
+    or bx, bx
+    jnz .app
+    mov si, menu_loc_set        ; no window owns the bar: Locator does
+    mov [menu_set], si
+    mov si, [si + AM_NAME]
+    jmp .name_done
+
+.app:
+    mov si, [bx + W_MENUS]      ; 0 = a window with no menus of its own
+    mov [menu_set], si
+    or si, si
+    jz .from_inst
+    mov si, [si + AM_NAME]
+    or si, si
+    jnz .name_done
+.from_inst:
+    call inst_win_owner         ; DI = owning instance record, 0 = unowned
+    or di, di
+    jz .from_title
+    mov si, di
+    add si, I_NAME              ; the 16-byte inline name field
+    jmp .name_done
+.from_title:
+    mov si, [bx + W_TITLE]
+
+.name_done:
+    or si, si                   ; a nameless window still gets a label
+    jnz .have_name
+    mov si, menu_loc_name
+.have_name:
+    mov [menu_namep], si
+
+    ; --- cell 0: the System menu, fixed in every application ---------------
+    mov di, menu_bar
+    mov word [di + MB_TITLE], 0 ; 0 = draw the logo glyph
+    mov word [di + MB_ITEMS], menu_items_logo
+    mov word [di + MB_NITEM], 3
+    mov word [di + MB_XL], 0
+    mov word [di + MB_XR], MENU_SYS_XR
+    mov word [di + MB_TX], MENU_SYS_TX
+    mov word [menu_nbar], 1
+    add di, MB_ENTSZ
+
+    ; --- the app's own menus, left to right after the name label -----------
+    call font_width             ; SI = the name; AX = its pixel width
+    add ax, MENU_NAME_X + MENU_NAME_PAD
+    mov bx, ax                  ; BX = running left edge
+
+    mov si, [menu_set]
+    or si, si
+    jz .done
+    mov cx, [si + AM_COUNT]
+    cmp cx, MENU_APPMAX         ; never trust a package's count (SPEC 12.2)
+    jbe .cnt_ok
+    mov cx, MENU_APPMAX
+.cnt_ok:
+    jcxz .done
+    add si, AM_LIST
+.cell:
+    push cx
+    push si
+    mov si, [si + AMENU_TITLE]
+    call font_width             ; AX = title width
+    pop si
+    add ax, MENU_TITLE_PAD      ; AX = cell width
+    mov dx, bx
+    add dx, ax
+    cmp dx, MENU_CLK_HX         ; would it reach the clock's band (12.1)?
+    ja .full                    ; out of bar: stop here, never clip a cell -
+                                ; and never skip one and keep laying out the
+                                ; rest, or a cell's bar index would stop
+                                ; matching its index in the app's set and
+                                ; ui_dispatch's `dec ah` would hand the
+                                ; handler the wrong menu (SPEC.md 12/12.2)
+    mov ax, [si + AMENU_TITLE]
+    mov [di + MB_TITLE], ax
+    mov ax, [si + AMENU_ITEMS]
+    mov [di + MB_ITEMS], ax
+    mov ax, [si + AMENU_NITEM]
+    mov [di + MB_NITEM], ax
+    mov [di + MB_XL], bx
+    mov ax, bx
+    add ax, 6                   ; half of MENU_TITLE_PAD: the text is centred
+    mov [di + MB_TX], ax
+    mov ax, dx
+    dec ax
+    mov [di + MB_XR], ax        ; xr = left + width - 1
+    mov bx, dx                  ; next cell starts where this one ended
+    inc word [menu_nbar]
+    add di, MB_ENTSZ
+    pop cx
+    add si, AMENU_ENTSZ
+    loop .cell
+    jmp short .done
+
+.full:
+    pop cx                      ; the bar is full: everything from here on
+                                ; is dropped, so the cells that DID fit keep
+                                ; bar index == set index
+.done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; menu_draw_bar - draw the menu bar: white rows 0..MBAR_H-2, black line at
-;                 row MBAR_H-1, logo glyph + titles at their fixed x.
+;                 row MBAR_H-1, then every live cell's title, the active
+;                 application's name label, and the clock.
 ; in:  nothing (caller holds the gfx lock)
 ; out: nothing
 ; clobbers: nothing (flags only)
@@ -70,6 +312,8 @@ menu_draw_bar:
     push cx
     push dx
     push si
+
+    call menu_check             ; the owner may have closed since (SPEC 12)
 
     mov byte [gfx_color], CWHITE
     xor ax, ax                  ; white field, rows 0..MBAR_H-2
@@ -84,14 +328,20 @@ menu_draw_bar:
     mov dx, MBAR_H - 1
     call gfx_hline
 
-    mov si, menu_table          ; titles (gfx_color is already black)
-    mov cx, MENU_NUM
+    mov si, menu_namep          ; the active application's name (SPEC 12)
+    mov si, [si]
+    mov cx, MENU_NAME_X
+    mov dx, MENU_TEXT_Y
+    call font_str
+
+    mov si, menu_bar            ; titles (gfx_color is already black)
+    mov cx, [menu_nbar]
 .title:
     push cx
-    mov ax, [si + MENU_TITLE]
+    mov ax, [si + MB_TITLE]
     test ax, ax
     jz .glyph
-    mov cx, [si + MENU_TX]
+    mov cx, [si + MB_TX]
     mov dx, MENU_TEXT_Y
     push si
     mov si, ax
@@ -99,11 +349,11 @@ menu_draw_bar:
     pop si
     jmp .next
 .glyph:
-    mov cx, [si + MENU_TX]
+    mov cx, [si + MB_TX]
     call menu_logo_glyph
 .next:
     pop cx
-    add si, MENU_ENTSZ
+    add si, MB_ENTSZ
     loop .title
 
     call menu_draw_clock        ; the right end of the bar (SPEC.md 12.1)
@@ -167,7 +417,8 @@ menu_draw_clock:
 ;              iteration so the scheduler stays healthy (background tasks
 ;              block on the gfx lock, which we hold, until we return).
 ; in:  CX = mousedown x (caller holds the gfx lock)
-; out: AX = CMD_* of the selected item, 0 if none
+; out: AX = 0xFFFF if nothing was selected, else AH = bar cell index
+;      (0 = the System menu), AL = item index within that cell (SPEC.md 12)
 ; clobbers: nothing else
 ; -----------------------------------------------------------------------------
 menu_track:
@@ -179,18 +430,20 @@ menu_track:
     push es
 
     ; --- which title was hit? ------------------------------------------------
-    mov si, menu_table
-    mov di, MENU_NUM
+    mov si, menu_bar
+    mov di, [menu_nbar]
+    mov byte [menu_cell], 0
 .find:
-    cmp cx, [si + MENU_XL]
+    cmp cx, [si + MB_XL]
     jb .miss
-    cmp cx, [si + MENU_XR]
+    cmp cx, [si + MB_XR]
     jbe .found
 .miss:
-    add si, MENU_ENTSZ
+    add si, MB_ENTSZ
+    inc byte [menu_cell]
     dec di
     jnz .find
-    xor ax, ax                  ; dead zone between titles: no menu, no work
+    mov ax, 0xFFFF              ; dead zone / the name label: no menu, no work
     jmp .out
 
 .found:
@@ -201,19 +454,17 @@ menu_track:
     ; --- menu rect: width = widest item + 16, items are 16px cells -----------
     call menu_widest            ; AX = widest item text, px (SI = entry)
     add ax, 16
-    mov bx, [si + MENU_XL]
+    mov bx, [si + MB_XL]
     mov [menu_x1], bx
     add bx, ax
     dec bx
     mov [menu_x2], bx           ; x2 = x1 + width - 1
-    mov ax, [si + MENU_NITEM]
+    mov ax, [si + MB_NITEM]
     mov [menu_cnt], ax
     mov cl, 4
     shl ax, cl                  ; count * 16
     add ax, MBAR_H + 1          ; + top frame row; bottom frame is y2 itself
     mov [menu_y2], ax
-    mov ax, [si + MENU_BASE]
-    mov [menu_base], ax
 
     ; --- save the pixels under the menu to SAVE_SEG:0 -------------------------
     mov ax, SAVE_SEG
@@ -240,8 +491,8 @@ menu_track:
     call gfx_frame
 
     mov si, [menu_ent]
-    mov bx, [si + MENU_ITEMS]
-    mov cx, [si + MENU_NITEM]
+    mov bx, [si + MB_ITEMS]
+    mov cx, [si + MB_NITEM]
     mov dx, MBAR_H + 1 + 4      ; first cell top + 4px pad centers 8px glyphs
 .item:
     push cx
@@ -294,13 +545,10 @@ menu_track:
 
     call menu_title_xor         ; un-highlight the title (self-inverting)
 
-    mov ax, [menu_sel]
+    mov ax, [menu_sel]          ; out: AH = cell, AL = item (SPEC.md 12)
     cmp ax, 0xFFFF
-    je .none
-    add ax, [menu_base]
-    jmp .out
-.none:
-    xor ax, ax
+    je .out
+    mov ah, [menu_cell]
 
 .out:
     pop es
@@ -379,9 +627,9 @@ menu_title_xor:
     push dx
     push si
     mov si, [menu_ent]
-    mov ax, [si + MENU_XL]
+    mov ax, [si + MB_XL]
     xor bx, bx
-    mov cx, [si + MENU_XR]
+    mov cx, [si + MB_XR]
     mov dx, MBAR_H - 2          ; the black rule stays black
     call gfx_xor_fill
     pop si
@@ -393,7 +641,7 @@ menu_title_xor:
 
 ; -----------------------------------------------------------------------------
 ; menu_widest - widest item text in a menu, in pixels
-; in:  SI -> menu table entry
+; in:  SI -> bar cell (menu_bar entry)
 ; out: AX = max font_width over the menu's items
 ; clobbers: nothing else
 ; -----------------------------------------------------------------------------
@@ -402,8 +650,8 @@ menu_widest:
     push cx
     push dx
     push si
-    mov bx, [si + MENU_ITEMS]
-    mov cx, [si + MENU_NITEM]
+    mov bx, [si + MB_ITEMS]
+    mov cx, [si + MB_NITEM]
     xor dx, dx                  ; running max
 .next:
     mov si, [bx]
@@ -482,6 +730,7 @@ menu_logo_bmp:
     dw 0x3F80                   ; ..#######..   body bottom
     dw 0x0000                   ; ...........
 
+menu_loc_name   db 'Locator', 0 ; the kernel's own application (SPEC 12.3)
 menu_s_file     db 'File', 0
 menu_s_special  db 'Special', 0
 
@@ -506,23 +755,34 @@ menu_items_file:
 menu_items_special:
     dw menu_s_restart
 
-; per menu: title (0 = logo glyph), items, count, cmd base,
-;           bar hit range [xl..xr], title x. The hit ranges tile the bar's
-;           left edge with 12px padding zones around each title.
-menu_table:
-    dw 0,              menu_items_logo,    3, CMD_ABOUT,  0,   29,  10
-    dw menu_s_file,    menu_items_file,    4, CMD_CLOCK,  30,  85,  42
-    dw menu_s_special, menu_items_special, 1, CMD_REBOOT, 86, 165,  98
+; Locator's menu set (SPEC.md 12.3) - an ordinary SPEC.md 12.2 structure
+; whose AM_ONCMD is 0, the one value reserved to mean "dispatched by the
+; kernel": ui_dispatch recognises it and rebuilds a CMD_* instead of
+; calling through. fm_kinit points the Disk window at this same set, so
+; the file browser keeps Locator's name and menus in the bar.
+menu_loc_set:
+    dw menu_loc_name            ; AM_NAME
+    dw 0                        ; AM_ONCMD: kernel-dispatched
+    dw 2                        ; AM_COUNT
+    dw menu_s_file,    menu_items_file,    4
+    dw menu_s_special, menu_items_special, 1
 
 ; -----------------------------------------------------------------------------
 section .bss
 
-menu_ent:   resw 1              ; -> menu table entry being tracked
+menu_win:   resw 1              ; window owning the bar, 0 = Locator (12)
+menu_set:   resw 1              ; its app menu set (SPEC.md 12.2)
+menu_namep: resw 1              ; the name string drawn at MENU_NAME_X
+menu_bar:   resb 60             ; MENU_BARMAX x MB_ENTSZ (5 x 12; a literal
+                                ; per the no-forward-ref-in-bss rule)
+menu_nbar:  resw 1              ; live cells in menu_bar (>= 1: the System
+                                ; menu is always cell 0)
+menu_ent:   resw 1              ; -> bar cell being tracked
+menu_cell:  resb 1              ; its index (the AH half of menu_track's out)
 menu_x1:    resw 1              ; dropped menu rect, left
 menu_x2:    resw 1              ; dropped menu rect, right
 menu_y2:    resw 1              ; dropped menu rect, bottom (top is MBAR_H)
 menu_cnt:   resw 1              ; item count of the tracked menu
-menu_base:  resw 1              ; CMD_* base of the tracked menu
 menu_sel:   resw 1              ; highlighted item, 0xFFFF = none
 
 section .text

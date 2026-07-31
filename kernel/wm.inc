@@ -12,7 +12,7 @@
 ; every caller of a repainting routine already holds the gfx lock (SPEC 1.6).
 ; =============================================================================
 
-; --- window record, 18 bytes, fixed offsets (SPEC.md 11) ---------------------
+; --- window record, 20 bytes, fixed offsets (SPEC.md 11) ---------------------
 W_FLAGS equ 0                   ; word: bit0 = used, bit1 = visible,
                                 ; bit2 = resizable, bit3 = fullscreen
 W_X     equ 2                   ; word, frame left (screen coords)
@@ -26,7 +26,14 @@ W_ONKEY equ 14                  ; word: near ptr or 0; AL=ascii AH=scan SI=win
 W_ONCLICK equ 16                ; word: near ptr or 0; CX=x DX=y SI=win, called
                                 ; under the gfx lock for content clicks on the
                                 ; front window (SPEC.md 13)
-WIN_SIZE equ 18                 ; NOT a power of two: never shift, multiply
+W_MENUS equ 18                  ; word: near ptr to this window's app menu set
+                                ; (SPEC.md 12.2), 0 = no menus of its own.
+                                ; NOT a template word - wm_create zeroes it;
+                                ; a built-in's KD_INIT or a package's
+                                ; menu_win_set (API 0x00AC) fills it in.
+                                ; Whichever window is frontmost owns the
+                                ; menu bar (SPEC.md 12).
+WIN_SIZE equ 20                 ; NOT a power of two: never shift, multiply
 MAX_WIN  equ 12                 ; mirrored in apps/os88api.inc (SPEC.md 11)
 
 WF_SIZABLE equ 4                ; W_FLAGS bit2: resizable (SPEC.md 11.1)
@@ -96,6 +103,7 @@ wm_create:
     lea di, [bx+W_X]
     mov cx, 8
     rep movsw                   ; copy the template into x..onclick
+    mov word [bx+W_MENUS], 0    ; menus are NOT a template word (SPEC 11/12.2)
     mov ax, bx                  ; index = (ptr - wm_wins) / WIN_SIZE
     sub ax, wm_wins
     mov cl, WIN_SIZE
@@ -284,8 +292,13 @@ wm_fullscreen:
 ; wm_front - raise a window to the front of the z-order, repaint everything
 ; in:  BX = window ptr (caller holds the gfx lock)
 ; out: nothing (all registers preserved)
+;
+; Raising a window also makes its application the menu bar's owner
+; (SPEC.md 12): menu_activate only rebuilds the bar's layout, and the
+; wm_paint_all below draws it in the same pass.
 ; -----------------------------------------------------------------------------
 wm_front:
+    call menu_activate          ; BX owns the menu bar from here (SPEC.md 12)
     push ax
     push cx
     push si
@@ -637,13 +650,11 @@ wm_ptr2idx:
 wm_idx2ptr:
     push ax
     push cx
-    mov ah, 0                   ; index*18 = index*16 + index*2 (8086-legal:
-    mov bx, ax                  ; no shift-by-imm other than 1)
-    mov cl, 4
-    shl ax, cl                  ; AX = index*16
-    shl bx, 1                   ; BX = index*2
-    add bx, ax
-    add bx, wm_wins
+    mov ah, 0                   ; index * WIN_SIZE, spelled as a real 8-bit
+    mov cl, WIN_SIZE            ; multiply rather than a sum of shifts: the
+    mul cl                      ; stride has already changed twice (16 -> 18
+    mov bx, ax                  ; -> 20, SPEC.md 11) and a shift idiom is a
+    add bx, wm_wins             ; silent breakage every time it does
     pop cx
     pop ax
     ret
@@ -953,7 +964,7 @@ wm_grow_paint:
 ; so these three must stay contiguous and in this order)
 ; -----------------------------------------------------------------------------
 section .bss
-wm_wins:    resb MAX_WIN * WIN_SIZE ; 12 windows x 18 bytes
+wm_wins:    resb MAX_WIN * WIN_SIZE ; 12 windows x 20 bytes
 wm_zord:    resb MAX_WIN            ; window indices, [0] = backmost
 wm_zn:      resb 1                  ; entries in wm_zord
 wm_owner:   resb MAX_WIN            ; instance index owning each window slot

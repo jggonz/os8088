@@ -219,7 +219,7 @@ SND_SEG       equ 0x3000     ; sound buffers: linear 0x30000-0x3FFFF, ES only (�
 | `kernel/clock.inc`  | system clock (§37): hardware RTC probe/read/write (int 1Ah), the wall-clock date + time advanced from `[ticks]`, field editing and formatting — prefix `clk_` |
 | `kernel/wm.inc`     | window records, z-order, frames, hit test, paint-all, `wm_owner` side table |
 | `kernel/instance.inc` | instance table: records, kind descriptors, launch/close lifecycle (§29) |
-| `kernel/menu.inc`   | menu bar, pull-down tracking, command return            |
+| `kernel/menu.inc`   | menu bar (System menu + the active application's name and menus), runtime bar layout, pull-down tracking, Locator's own menu set (§12/§12.2/§12.3) |
 | `kernel/ui.inc`     | UI task: event pump, keyboard poll, drag, dispatch      |
 | `kernel/apps.inc`   | built-in app kinds: About, Clock, Bounce — state pools, kinit procs, per-instance tasks |
 | `kernel/disk.inc`   | BIOS int 13h floppy transfers (`disk_read`/`disk_write`), FAT12/16 mount + directory + chain walk (§18–19) |
@@ -675,7 +675,7 @@ Keyboard events are *not* queued — the UI task polls BIOS int 16h directly.
 
 ## 11. wm.inc — windows
 
-Window record, 18 bytes, fixed offsets:
+Window record, 20 bytes, fixed offsets:
 
 ```nasm
 W_FLAGS equ 0    ; word: bit0 = used, bit1 = visible, bit2 = resizable
@@ -693,7 +693,12 @@ W_ONCLICK equ 16 ; word: near ptr or 0, in: CX=x, DX=y (absolute screen
                  ; coords), SI=win ptr. Called under the gfx lock when
                  ; EVT_MDOWN lands in the CONTENT of the FRONT window (§13).
                  ; Same rules as W_PAINT: must not lock, block or spawn.
-WIN_SIZE equ 18
+W_MENUS equ 18   ; word: near ptr to the window's app menu set (§12.2), or
+                 ; 0 = no menus of its own. Zeroed by wm_create (it is NOT
+                 ; a template word); set by a built-in's KD_INIT or by a
+                 ; package through `OSAPI_MENU_SET` (§20.3). Whichever
+                 ; window is frontmost owns the menu bar (§12).
+WIN_SIZE equ 20
 MAX_WIN  equ 12
 
 WF_SIZABLE equ 4  ; W_FLAGS bit2: the window can be resized (§11.1)
@@ -702,8 +707,8 @@ WMIN_W     equ 96 ; smallest frame a resize can leave, outer px (§11.1)
 WMIN_H     equ 64
 ```
 
-(WIN_SIZE grew 16 → 18: any ×16 shift idioms in wm.inc must become a true
-×18 multiply. The wm_create template stays **16 bytes**:
+(WIN_SIZE grew 16 → 18 → 20: never a shift idiom, always a true multiply
+or `div cl`. The wm_create template stays **16 bytes**:
 {x,y,w,h,title,paint,onkey,onclick} words — feature bits like WF_SIZABLE
 are **not** template words; they are OR-ed in after wm_create (KD_WFLAG for
 built-ins, §29.3; `wm_sizable` for packages, §20.3), so every shipped .o88's
@@ -856,51 +861,88 @@ back windowed at its old place.
 
 ## 12. menu.inc
 
-Menu bar: rows 0..MBAR_H-1, white, 1px black line at row MBAR_H-1. First
-menu is the System menu, titled by the os8088 logo: an 11×11 one-color
-DIP-chip silhouette bitmap (7px-wide body with a top notch and four pins
-per side; hand-authored `dw` rows are fine — this is the one place bitmap
-data is hand-made). Others are text titles.
+Menu bar: rows 0..MBAR_H-1, white, 1px black line at row MBAR_H-1. Its
+layout is **three zones, left to right**:
+
+1. the **System menu**, titled by the os8088 logo: an 11×11 one-color
+   DIP-chip silhouette bitmap (7px-wide body with a top notch and four
+   pins per side; hand-authored `dw` rows are fine — this is the one place
+   bitmap data is hand-made). It is the same three items in every
+   application, always cell 0, always x 0..`MENU_SYS_XR`.
+2. the **active application's name**, drawn at `MENU_NAME_X` — a label,
+   not a menu: it has no hit range and drops nothing.
+3. the **active application's own menus** (§12.2), laid out from
+   `MENU_NAME_X + font_width(name) + MENU_NAME_PAD` rightward, each cell
+   `font_width(title) + MENU_TITLE_PAD` wide. The first cell that would
+   reach the clock's hit band (`MENU_CLK_HX`, §12.1) **ends the layout** —
+   it is dropped whole rather than clipped, *and so is everything after
+   it*, even a narrower menu that would have fitted. That is not
+   thriftiness: a cell's bar index must stay equal to its index in the
+   app's set, or `ui_dispatch`'s `dec ah` hands the handler the wrong
+   menu (§12.2). Bar cells are a prefix of the set, always.
+
+**Everything right of the System menu belongs to whichever application is
+active**, so the bar is rebuilt whenever the active application changes —
+`menu_bar` (`MENU_BARMAX` × `MB_ENTSZ`, .bss) is a *runtime* table, not
+static data.
 
 ```nasm
-; menu table (menu.inc data):
-; per menu: { titleptr (0 = logo glyph), itemsptr, item count, cmd base }
-; items: array of near ptrs to NUL strings
-CMD_ABOUT  equ 1   ; --- System ---
-CMD_CTRL   equ 2
-CMD_TASKS  equ 3
-CMD_NOTE   equ 4   ; --- File ---
-CMD_CLOCK  equ 5
-CMD_BOUNCE equ 6
-CMD_FILES  equ 7
-CMD_CLOSE  equ 8
-CMD_REBOOT equ 9   ; --- Special ---
+MENU_APPMAX  equ 4              ; app menus the bar can host
+MENU_BARMAX  equ MENU_APPMAX+1  ; + the System cell, which is always cell 0
+MENU_SYS_XR  equ 29             ; System cell: x 0..29, glyph at MENU_SYS_TX
+MENU_SYS_TX  equ 10
+MENU_NAME_X  equ 38             ; app-name label pen x
+MENU_NAME_PAD equ 16            ; gap after the name, before the first menu
+MENU_TITLE_PAD equ 12           ; per-title cell padding (6px each side)
+
+; one bar cell (menu_bar[], rebuilt by menu_layout):
+MB_TITLE equ 0   ; word: NUL title ptr, 0 = draw the logo glyph
+MB_ITEMS equ 2   ; word: array of near ptrs to NUL item strings
+MB_NITEM equ 4   ; word: item count
+MB_XL    equ 6   ; word: bar hit range, left x (inclusive)
+MB_XR    equ 8   ; word: bar hit range, right x (inclusive)
+MB_TX    equ 10  ; word: title text / glyph left x
+MB_ENTSZ equ 12
 ```
 
-Menus: **System** (logo): "About os8088..." (CMD_ABOUT), "Control Panel"
-(CMD_CTRL, string `menu_s_ctrl`, §31), "Task Manager" (CMD_TASKS,
-string `menu_s_tasks`, §28) — System's item count in `menu_table` is 3.
-**File**: "Clock" (CMD_CLOCK), "Bounce"
-(CMD_BOUNCE), "Disk" (CMD_FILES), "Close Window" (CMD_CLOSE).
-**Special**: "Restart" (CMD_REBOOT) — one item. Menu bases:
-System = CMD_ABOUT, File = CMD_NOTE, Special = CMD_REBOOT.
+**The active application is a window**, tracked in the word `[menu_win]`
+(0 = no window owns the bar). Transitions, all of them one-liners at the
+sites that already exist:
 
-**`cmd = menu base + item index`, so each menu's commands must stay
-consecutive from its base** — that arithmetic is how `menu_track` turns a
-highlighted item index into a CMD_*. Moving "Task Manager" out of Special
-and onto the end of the System menu therefore renumbered the File menu
-(3 → 4, … 7 → 8) and left CMD_REBOOT alone as Special's only item and its
-base, exactly as inserting Disk, Task Manager and Control Panel renumbered
-their successors before. Bar hit ranges in `menu_table` are unchanged (the
-titles did not move); the pull-down's width is computed from the widest
-item by `menu_widest`, so the System menu is as wide as "Control Panel" and
-Special shrinks to "Restart". A one-item menu needs no special case — the
-count only feeds the rect height, the item loop and `menu_hover`'s bound.
+- `wm_front` (and therefore `wm_show`, and every raise in §13) calls
+  `menu_activate` with the raised window: **raising a window makes its
+  application active**, and the `wm_paint_all` that ends `wm_front` draws
+  the new bar in the same pass.
+- **A click on the desktop switches back to Locator** (§12.3): the
+  `.desk_icons` branch of §13's ladder calls `menu_activate` with BX = 0
+  before `desk_click`, and repaints the bar itself if the owner changed
+  (its own gfx_lock — nothing else in that branch holds one). The dock is
+  offered the click first, and a dock tile that fronts an instance
+  re-activates it through `wm_front` like any other raise.
+- `menu_draw_bar` calls `menu_check` first, which reverts the bar to
+  Locator when `[menu_win]` names a window that is no longer visible.
+  That single validation covers close, minimize and hide — none of those
+  sites needs to know about the menu bar at all.
 
 | symbol          | contract                                                   |
 |-----------------|-------------------------------------------------------------|
-| `menu_draw_bar` | draw the bar + titles (gfx lock held by caller)             |
-| `menu_track`    | in: CX = mousedown x. Runs the whole interaction while the button is held (caller holds gfx lock): highlight title (xor), drop the menu (gfx_save under it to SAVE_SEG:0), track item highlight following `mouse_y`, on release restore save-under + unhighlight; out AX = CMD_* or 0. Item cells are 16px tall, menu width = widest item + 16px padding. |
+| `menu_init`     | boot: `[menu_win]` = 0 and one `menu_relayout`, so the very first `wm_paint_all` already draws Locator's bar. Called from kmain after `wm_init`. |
+| `menu_activate` | in: BX = window ptr, or 0 for Locator. Out: **CF = 1 if the active application changed** (the caller owes the bar a repaint), CF = 0 if it was already active. Draws nothing, takes no lock, preserves every register. |
+| `menu_relayout` | recompute `[menu_set]`, `[menu_namep]` and the whole `menu_bar` from `[menu_win]`. Preserves all registers. |
+| `menu_win_set`  | in: BX = window ptr, SI = menu set ptr (0 = none) — stores `[bx+W_MENUS]` and relayouts if BX is the active window. The `OSAPI_MENU_SET` target (§20.3). Preserves every register **and the flags**: its intended call site sits between a package's `wm_create` and the `ret` that owes the loader that call's CF (§20.2). |
+| `menu_draw_bar` | draw the bar: `menu_check`, white field + black rule, every `menu_bar` cell's title (cell 0 = the logo glyph), the app-name label, then `menu_draw_clock`. Gfx lock held by caller. |
+| `menu_track`    | in: CX = mousedown x. Runs the whole interaction while the button is held (caller holds gfx lock): highlight title (xor), drop the menu (gfx_save under it to SAVE_SEG:0), track item highlight following `mouse_y`, on release restore save-under + unhighlight; **out AX = 0xFFFF if nothing was selected, else AH = bar cell index (0 = System), AL = item index within that cell**. Item cells are 16px tall, menu width = widest item + 16px padding. |
+
+`menu_track` polls `mouse_btn`/`mouse_x`/`mouse_y` directly (the ISR keeps
+them fresh; cursor stays hidden during tracking since the gfx lock is held —
+acceptable, tracking feedback is the highlight).
+
+The (cell, item) pair replaced the old flat `CMD_*` return, because item
+numbering now has to mean something inside a menu set the kernel has never
+seen. The `CMD_*` constants survive as **ui.inc's internal encoding of the
+kernel's own menus** (§12.3), reconstructed there as `base + item` from a
+three-entry base table — the same consecutive-commands arithmetic as
+before, just no longer baked into the bar.
 
 `menu_track` polls `mouse_btn`/`mouse_x`/`mouse_y` directly (the ISR keeps
 them fresh; cursor stays hidden during tracking since the gfx lock is held —
@@ -954,6 +996,100 @@ ui_task hit-tests `x >= MENU_CLK_HX` *before* `menu_track`, so the cell is
 not a menu title and never drops a pull-down; the panel window appearing
 (or coming forward) is the click's feedback.
 
+### 12.2 App menu sets — the contract every application implements
+
+An **app menu set** is a read-only structure a window points at through
+`W_MENUS` (§11). It is the whole of the interface: the kernel never learns
+what an application's menus mean, only how to draw them and whom to call.
+
+```nasm
+; app menu set (mirrored verbatim in apps/os88api.inc, §20.5)
+AM_NAME  equ 0   ; word: NUL app name for the bar label (<= 15 chars); 0
+                 ; falls back to the owning instance's I_NAME (§29.1)
+AM_ONCMD equ 2   ; word: near ptr to the command handler, or 0 = this set
+                 ; is dispatched by the kernel itself (Locator only, §12.3)
+AM_COUNT equ 4   ; word: menu count, 0..MENU_APPMAX (anything above is
+                 ; clamped by menu_layout, never trusted)
+AM_LIST  equ 6   ; AM_COUNT entries follow:
+AMENU_TITLE equ 0 ; word: NUL menu title (the bar cell's text)
+AMENU_ITEMS equ 2 ; word: array of near ptrs to NUL item strings
+AMENU_NITEM equ 4 ; word: item count (>= 1)
+AMENU_ENTSZ equ 6
+```
+
+**The command handler** (`AM_ONCMD`) is called exactly like `W_ONCLICK`
+(§11/§13): on the **UI task**, **under the gfx lock**, with
+
+```
+in:  AL = item index within the menu, AH = menu index (0-based, i.e. bar
+     cell - 1 — the System menu is never routed here), SI = the window
+     that owns the set, BX = the menu set ptr
+out: nothing; may clobber AX/BX/CX/DX/SI/DI/ES like any window callback
+```
+
+so it may draw, may call the file API of §18.4, and — like every other
+window callback — **must not** take the gfx lock or spawn, and must never
+wait on something only another task can deliver. A long *self-terminating*
+loop that yields is a different thing and is sanctioned: Piano's song
+playback (§36) and Recorder's speaker-fallback playback (§35) both run one
+under the held lock, on the same footing as `menu_track`'s own
+poll-under-the-lock (§12/§7) — the lock is held throughout, background
+tasks block on it, and the loop ends on its own. Its
+cycles are billed to the owning instance through `task_cycles`/
+`inst_charge` (§8.1), and `snd_disp_set` stamps the instance for sound
+grants (§34.3), because a menu command is a dispatch site exactly like a
+click.
+
+A package registers its set from its entry proc, before the loader shows
+the window:
+
+```nasm
+    mov si, my_menus
+    call OSAPI_MENU_SET         ; BX = the window wm_create just returned
+```
+
+Registering later is legal (`menu_win_set` relayouts when the window is
+active) but draws nothing of itself — the bar catches up on the next
+`wm_paint_all`. A window with `W_MENUS` = 0 owns the bar the same way; it
+simply contributes a name and no menus, which is the correct result for an
+accessory like Clock or Bounce.
+
+### 12.3 Locator — the kernel's own application
+
+**Locator is what the kernel is called when it acts as an application**:
+the desktop, the drive icons, the Disk browser and the menus that launch
+everything else — the os8088 answer to the Macintosh Finder. It is not an
+instance and has no task; it is simply the menu set the bar falls back to
+whenever no window owns it.
+
+`menu_loc_set` (menu.inc data) is an ordinary §12.2 set with
+`AM_NAME` = `'Locator'` and **`AM_ONCMD` = 0**, the one value reserved to
+mean *dispatched by the kernel*: ui.inc recognises it and reconstructs a
+`CMD_*` instead of calling through (§13). Its menus are unchanged from the
+pre-Locator bar — **File**: "Clock" (CMD_CLOCK), "Bounce" (CMD_BOUNCE),
+"Disk" (CMD_FILES), "Close Window" (CMD_CLOSE); **Special**: "Restart"
+(CMD_REBOOT) — and so is the System menu, which is cell 0 for every
+application: "About os8088..." (CMD_ABOUT), "Control Panel" (CMD_CTRL,
+§31), "Task Manager" (CMD_TASKS, §28).
+
+```nasm
+CMD_ABOUT  equ 1   ; --- System (cell 0, every application) ---
+CMD_CTRL   equ 2
+CMD_TASKS  equ 3
+CMD_CLOCK  equ 4   ; --- Locator: File ---
+CMD_BOUNCE equ 5
+CMD_FILES  equ 6
+CMD_CLOSE  equ 7
+CMD_REBOOT equ 8   ; --- Locator: Special ---
+```
+
+The **Disk window is Locator's own window** (§22): `fm_kinit` stores
+`menu_loc_set` into its `W_MENUS`, so fronting the file browser keeps
+"Locator" and its menus in the bar instead of swapping them for a
+one-window app named "Disk". Nothing else in the kernel points at
+`menu_loc_set`; every other built-in kind leaves `W_MENUS` at 0 and shows
+its `I_NAME` with no menus of its own.
+
 ## 13. ui.inc — the UI task (task 0)
 
 Loop forever:
@@ -970,8 +1106,8 @@ Loop forever:
      `CP_ITIME` into `[cp_sel]` and `app_launch` KIND_CTRL (§31.5), no lock
      held, beeping on refusal like any other launch. Tested **before**
      `menu_track`, so the cell never drops a pull-down.
-   - y < MBAR_H → gfx_lock, `menu_track`, gfx_unlock, then dispatch CMD_*
-     (below).
+   - y < MBAR_H → gfx_lock, `menu_track`, gfx_unlock, then `ui_dispatch`
+     on the returned (cell, item) pair — see "menu dispatch" below.
    - else `wm_hit`: close box → **quit**: gfx_lock, `app_close_win` BX
      (§29 — looks up the owning instance via `wm_ptr2idx` + `wm_owner`
      and runs the close protocol: synchronous teardown for task-less
@@ -1012,10 +1148,15 @@ Loop forever:
      (§11 "callback billing"), gfx_unlock; else ignore.
    - no window hit (wm_hit BX=0) → call `dock_click` (§30) with CX=x,
      DX=y, no lock held; CF=1 = the click was consumed (anywhere in the
-     dock strip). Only if it declines (CF=0), call `desk_click` (§26) —
-     dock and desktop icons are hit-tested only after every window has
+     dock strip). Only if it declines (CF=0) this is a click on the bare
+     desktop: **activate Locator** — `menu_activate` with BX = 0 and, if
+     it reports CF=1 (the owner really changed), gfx_lock,
+     `menu_draw_bar`, gfx_unlock — and then call `desk_click` (§26).
+     Dock and desktop icons are hit-tested only after every window has
      declined the click, which gives them correct z-order semantics for
-     free.
+     free; the bar swap happens before `desk_click` so that a
+     double-click that opens the Disk window (§26) still ends with
+     whatever `wm_front` activates.
 3. If `[inst_launch]` is non-zero (§29): AX = [inst_launch] − 1, zero
    `[inst_launch]`, call `app_launch` with AL = kind. Then if
    `[ld_pending]` is non-zero (§21): AX = [ld_pending] − 1, zero
@@ -1055,12 +1196,31 @@ Loop forever:
    account, not a window callback dispatch.
 5. `task_yield`.
 
-Command dispatch: CMD_ABOUT/CTRL/NOTE/CLOCK/BOUNCE/TASKS → `call
+**Menu dispatch** (`ui_dispatch`, in: AX from `menu_track` — 0xFFFF =
+nothing selected). Three routes, decided in this order:
+
+1. **AH = 0** — the System menu, identical in every application (§12.3):
+   command = `CMD_ABOUT + AL`, handled by `ui_cmd` below.
+2. **`[menu_set]` has `AM_ONCMD` = 0** — a kernel-dispatched set, i.e.
+   Locator: command = `ui_loc_base[AH] + AL`, where `ui_loc_base` is the
+   three-word table {CMD_ABOUT, CMD_CLOCK, CMD_REBOOT} that restores the
+   old consecutive-commands arithmetic (§12). Handled by `ui_cmd`.
+3. **otherwise** — an application's own set (§12.2): gfx_lock,
+   `inst_win_owner` on `[menu_win]` for billing, `snd_disp_set`,
+   `task_cycles`, near-call `[menu_set + AM_ONCMD]` with AL = item,
+   AH = menu index (= cell − 1), SI = `[menu_win]`, BX = the set;
+   `inst_charge`, restore the sound stamp, gfx_unlock. Byte for byte the
+   `W_ONCLICK` dispatch of step 2, and for the same reason: it is a
+   window callback that happens to have been reached through the bar.
+
+`ui_cmd` (in: AX = CMD_*, 0 ignored) is the old flat dispatcher, unchanged:
+CMD_ABOUT/CTRL/CLOCK/BOUNCE/TASKS → `call
 app_launch` with AL = the matching KIND_* (§29; CMD_CTRL → KIND_CTRL, the
-Control Panel of §31). ui_dispatch runs on the UI task with
+Control Panel of §31). It runs on the UI task with
 no lock held, so the call is direct — the deferred `inst_launch` channel
-in step 3 exists for lock-held posters (e.g. W_ONCLICK handlers). Note
-Pad/Clock/Bounce launch a **new instance** each time (up to their §29
+in step 3 exists for lock-held posters (e.g. W_ONCLICK handlers, and now
+every app menu handler, which runs under the lock by contract §12.2).
+Clock/Bounce launch a **new instance** each time (up to their §29
 caps); About/Control Panel/Task Manager are singletons — at cap,
 app_launch fronts (and un-minimizes) the existing instance instead. CMD_FILES → call
 `files_open` (§22 — mounts, then launches/fronts the Disk singleton via
@@ -2037,6 +2197,20 @@ sits in between. The kernel.asm table-span assertion goes 34 × 4 → **39 ×
                     snapshot answers it).
 ```
 
+**Menu slot (§12.2), 0x00AC.** One slot; the table-span assertion goes
+39 × 4 → **40 × 4**.
+
+```
+0x00AC menu_win_set  in BX = win ptr, SI = app menu set ptr (0 = none).
+                     Stores [BX+W_MENUS] and relayouts the bar when BX is
+                     the active window. Draws nothing and takes no lock,
+                     so it is callable from the entry proc (the intended
+                     site) as well as from a window callback. Preserves
+                     every register AND the flags, so it can sit between
+                     wm_create and the entry proc's ret without eating
+                     the CF that ret owes the loader.
+```
+
 **These slots are UI-task/window-callback context only (binding)** — the
 same rule as the stream verbs above, and for a stronger reason: they take
 `[sch_lock]` around int 13h and share `dsk_secbuf` and the FAT snapshot
@@ -2095,6 +2269,26 @@ then writes `OS88_ICON16` (asserts, via `%if`-on-equ, that it starts at
 offset 32), 32 hand-authored `dw` rows (16 mask, 16 data), and
 `OS88_ICON16_END` (asserts offset 96). The third OS88_HEADER parameter is
 optional and defaults to 0.
+
+**Menu support (§12.2).** The SDK mirrors the `AM_*`/`AMENU_*` offsets and
+`MENU_APPMAX`, and wraps the structure in three macros so a package never
+hand-counts anything:
+
+```nasm
+OS88_MENUSET my_menus, my_name, my_oncmd
+    OS88_MENU s_file, items_file, 3
+    OS88_MENU s_edit, items_edit, 2
+OS88_MENUSET_END my_menus
+```
+
+`OS88_MENUSET label, namestr, handler` emits `AM_NAME`, `AM_ONCMD` and an
+`AM_COUNT` **computed from the label pair** — `(label_end − label_list) /
+AMENU_ENTSZ` — and `OS88_MENUSET_END label` plants `label_end`. The count
+is a label *difference*, so it is a constant in both relocation passes and
+os88pkg.py never sees it as an address; the three pointer words per menu
+are ordinary whole-word package addresses (§20.2) and relocate normally.
+The handler follows §12.2's contract exactly: near-called under the gfx
+lock with AL = item, AH = menu, SI = window, BX = the set.
 
 ## 21. loader.inc
 

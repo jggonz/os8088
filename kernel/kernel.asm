@@ -172,7 +172,9 @@ osapi_table:
     OSAPI_SLOT dskw_delete        ; 0x00A0   so the slots jump straight at
     OSAPI_SLOT dskw_rename        ; 0x00A4   them - no wrapper in between
     OSAPI_SLOT dskw_dfree         ; 0x00A8
-osapi_table_end:                 ; 0x00AC
+    OSAPI_SLOT menu_win_set       ; 0x00AC - app menus (SPEC.md 12.2): in
+                                  ;          BX = win ptr, SI = menu set
+osapi_table_end:                 ; 0x00B0
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -180,8 +182,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 39 * 4
-%error "os8088 API jump table must be exactly 39 4-byte slots"
+%if OSAPI_TABLE_LEN != 40 * 4
+%error "os8088 API jump table must be exactly 40 4-byte slots"
 %endif
 
 ; =============================================================================
@@ -212,6 +214,8 @@ kmain:
                                 ; start in sync), before the first drawing
     call font_init              ; needs int 10h, so after the mode is set
     call wm_init
+    call menu_init              ; menu bar owner (SPEC.md 12): Locator, so
+                                ; the first wm_paint_all already has a bar
     call inst_init              ; instance table (SPEC.md 29) - clean boot:
                                 ; no app instances exist until launched
     call mouse_init             ; IRQ4 live; cursor stays hidden until shown

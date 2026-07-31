@@ -167,6 +167,19 @@ OSAPI_FILE_RENAME   equ 0x00A4   ; SI = old name, DI = new name; out as above
 OSAPI_FILE_DFREE    equ 0x00A8   ; out CF=0, DX:AX = free bytes, BX =
                                  ; SECTORS per cluster; no disk I/O
 
+; --- menus (SPEC.md 12.2) ------------------------------------------------------
+; Every application owns the menu bar while its window is frontmost: the
+; System (chip) menu stays put, the app's NAME is drawn to its right, and
+; the app's own menus follow. Register the set from the entry proc, with
+; BX = the window OSAPI_WM_CREATE just returned - the loader shows the
+; window afterwards, so the first bar drawn is already yours.
+OSAPI_MENU_SET      equ 0x00AC   ; BX = win ptr, SI = menu set ptr (0 =
+                                 ; none). Draws nothing, takes no lock,
+                                 ; preserves every register AND the flags -
+                                 ; so it can sit between OSAPI_WM_CREATE
+                                 ; and the entry proc's ret without eating
+                                 ; the CF that ret owes the loader.
+
 ; file error codes, pinned (SPEC.md 18.4): returned in AX with CF set
 FERR_OK      equ 0
 FERR_NODISK  equ 1               ; no mounted data disk
@@ -185,7 +198,22 @@ WF_FULL    equ 8                 ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
 WMIN_W     equ 96                ; smallest frame a resize can leave
 WMIN_H     equ 64
 
-; --- window record layout (SPEC.md 11, 18 bytes) -------------------------------
+; --- app menu set layout (SPEC.md 12.2) ----------------------------------------
+; Built with the OS88_MENUSET / OS88_MENU / OS88_MENUSET_END macros below;
+; these offsets are here for code that walks its own set at run time.
+AM_NAME     equ 0           ; word: NUL app name for the bar label (<= 15
+                            ; chars); 0 = fall back to the instance name
+AM_ONCMD    equ 2           ; word: near ptr to the command handler
+AM_COUNT    equ 4           ; word: menu count, 0..MENU_APPMAX
+AM_LIST     equ 6           ; AM_COUNT entries of:
+AMENU_TITLE equ 0           ; word: NUL menu title (the bar cell's text)
+AMENU_ITEMS equ 2           ; word: array of near ptrs to NUL item strings
+AMENU_NITEM equ 4           ; word: item count
+AMENU_ENTSZ equ 6
+MENU_APPMAX equ 4           ; menus the bar can host per app; extras are
+                            ; silently dropped by the kernel's layout pass
+
+; --- window record layout (SPEC.md 11, 20 bytes) -------------------------------
 W_FLAGS   equ 0             ; word: bit0 = used, bit1 = visible, bit2 =
                             ; resizable, bit3 = fullscreen
 W_X       equ 2             ; word: frame left (screen coords)
@@ -197,7 +225,9 @@ W_TITLE   equ 10            ; word: near ptr to NUL title string
 W_PAINT   equ 12            ; word: near ptr, SI = win ptr; content only
 W_ONKEY   equ 14            ; word: near ptr or 0; AL=ascii, AH=scan, SI=win
 W_ONCLICK equ 16            ; word: near ptr or 0; CX=x, DX=y, SI=win
-WIN_SIZE  equ 18
+W_MENUS   equ 18            ; word: app menu set ptr, 0 = none. NOT a
+                            ; template word - set it with OSAPI_MENU_SET
+WIN_SIZE  equ 20
 MAX_WIN   equ 12
 
 ; --- wm_create template layout (SPEC.md 11, 16 bytes, 8 words) -----------------
@@ -269,6 +299,59 @@ WT_SIZE    equ 16
 %macro OS88_ICON16_END 0
     %if ($ - $$) != 96
         %error "OS88_ICON16 block must be exactly 32 dw rows (16 mask + 16 data, ending at offset 96)"
+    %endif
+%endmacro
+
+; -----------------------------------------------------------------------------
+; OS88_MENUSET label, namestr, handler
+; OS88_MENU    titlestr, itemsptr, itemcount        (one per menu, in order)
+; OS88_MENUSET_END label
+;
+; Emit an app menu set (SPEC.md 12.2). AM_COUNT is computed from the label
+; pair, so adding or removing an OS88_MENU line is the whole edit:
+;
+;   OS88_MENUSET my_menus, my_name, my_oncmd
+;       OS88_MENU s_file, items_file, 3
+;       OS88_MENU s_edit, items_edit, 2
+;   OS88_MENUSET_END my_menus
+;
+;   my_name:    db 'Notes', 0
+;   s_file:     db 'File', 0
+;   items_file: dw s_open, s_save, s_quit          ; NUL item strings
+;
+; and, in the entry proc, after OSAPI_WM_CREATE returned BX:
+;
+;   mov si, my_menus
+;   call OSAPI_MENU_SET
+;
+; The handler is near-called by the kernel UNDER THE GFX LOCK on the UI
+; task, with AL = item index, AH = menu index (0-based), SI = the owning
+; window, BX = the set. It obeys the W_ONCLICK rules (SPEC.md 11): it may
+; draw and may call the file slots, but must never take the gfx lock,
+; block or spawn.
+;
+; The count is a label DIFFERENCE, so it is identical in both relocation
+; passes and os88pkg.py never mistakes it for a package address; the three
+; pointer words per menu are ordinary whole-word addresses and relocate.
+; -----------------------------------------------------------------------------
+%macro OS88_MENUSET 3
+%1:
+    dw %2                       ; AM_NAME
+    dw %3                       ; AM_ONCMD
+    dw (%1 %+ _end - %1 %+ _list) / AMENU_ENTSZ      ; AM_COUNT
+%1 %+ _list:                    ; AM_LIST
+%endmacro
+
+%macro OS88_MENU 3
+    dw %1                       ; AMENU_TITLE
+    dw %2                       ; AMENU_ITEMS
+    dw %3                       ; AMENU_NITEM
+%endmacro
+
+%macro OS88_MENUSET_END 1
+%1 %+ _end:
+    %if (%1 %+ _end - %1 %+ _list) / AMENU_ENTSZ > MENU_APPMAX
+        %error "OS88_MENUSET: at most MENU_APPMAX (4) menus fit in the bar"
     %endif
 %endmacro
 

@@ -9,9 +9,16 @@
 ; Step 4 is the system clock (SPEC.md 37): clk_tick every pass - it is cheap
 ; and keeps time whether or not anything is drawn - and, on the second, one
 ; gfx_lock around the menu bar's clock cell plus any open Date/Time page.
-; Mouse-downs in the menu bar run menu_track and dispatch the returned
-; CMD_*: app commands launch a new instance (or front a full singleton) via
-; app_launch (SPEC.md 29). Mouse-downs on windows QUIT (close box ->
+; Mouse-downs in the menu bar run menu_track and route the returned
+; (cell, item) pair three ways (SPEC.md 12/13): the System menu and
+; Locator's own menus become a CMD_*, dispatched by ui_cmd with no lock
+; held so app commands can call app_launch directly (SPEC.md 29); an
+; application's own menu (SPEC.md 12.2) is a window callback reached
+; through the bar, so its handler runs under the gfx lock and is billed to
+; the owning instance exactly like W_ONCLICK.
+; Mouse-downs on windows also hand the clicked window the menu bar
+; (SPEC.md 12 - the raise paths repaint anyway, but a click on the window
+; that is already frontmost never reaches wm_front), and QUIT (close box ->
 ; app_close_win: window, task and state freed), raise, or drag them;
 ; content clicks on the front window feed its W_ONCLICK under the lock.
 ; Every wm_* call that repaints is made under the gfx lock, and the drag
@@ -99,6 +106,14 @@ ui_task:
     call wm_hit                 ; BX = window hit (0 = none), AL = region
     or bx, bx
     jz .desk_icons              ; no window: dock, then desktop icons
+
+    call menu_activate          ; clicking a window hands it the menu bar
+    jnc .region                 ; (SPEC.md 12), CF=1 = the owner changed.
+    call gfx_lock               ; The raise paths below repaint anyway, but
+    call menu_draw_bar          ; a click on the window that is ALREADY
+    call gfx_unlock             ; frontmost never reaches wm_front, and the
+.region:                        ; bar still has to follow. AL/BX/CX/DX all
+                                ; survive: every callee preserves them.
     cmp al, 2
     je .close_box
     cmp al, 3
@@ -154,6 +169,14 @@ ui_task:
 .desk_icons:
     call dock_click             ; CX/DX; CF=1 = consumed (locks internally,
     jc .yield                   ; SPEC.md 30) - the dock gets first look
+
+    xor bx, bx                  ; the bare desktop: clicking it switches back
+    call menu_activate          ; to Locator (SPEC.md 12), CF=1 = it changed
+    jnc .desk_go                ; - so the bar is only repainted when the
+    call gfx_lock               ; owner really moved, and before desk_click,
+    call menu_draw_bar          ; whose double-click-open may front a window
+    call gfx_unlock             ; and activate it in turn
+.desk_go:
     call desk_click             ; CX/DX = click point, no lock held; select /
     jmp .yield                  ; double-click-open is desk.inc's business
 
@@ -488,8 +511,92 @@ ui_grow:
     ret
 
 ; -----------------------------------------------------------------------------
-; ui_dispatch - act on a menu command
-; in:  AX = CMD_* (0 = tracking ended on no item; ignored)
+; ui_dispatch - route one menu selection (SPEC.md 13)
+; in:  AX from menu_track: 0xFFFF = nothing selected, else AH = bar cell
+;      index (0 = the System menu), AL = item index
+; out: nothing (CMD_REBOOT never returns)
+; clobbers: AX, BX, CX, DX, SI, DI (internal helper of the UI task)
+;
+; Three routes, in this order (SPEC.md 12/12.2/12.3):
+;   AH = 0                  the System menu - identical in every
+;                           application; cmd = CMD_ABOUT + item
+;   AM_ONCMD = 0            a kernel-dispatched set, i.e. Locator;
+;                           cmd = ui_loc_base[cell] + item
+;   otherwise               the active application's own handler, called
+;                           exactly like W_ONCLICK: under the gfx lock, on
+;                           this task, billed to the owning instance
+; -----------------------------------------------------------------------------
+ui_dispatch:
+    cmp ax, 0xFFFF
+    je .ret
+    or ah, ah
+    jz .kernel                  ; cell 0: the System menu
+    mov bx, [menu_set]
+    or bx, bx
+    jz .ret                     ; a window with no menus cannot be here
+    cmp word [bx + AM_ONCMD], 0
+    jne .app
+.kernel:
+    mov bl, ah                  ; cmd = the cell's base + the item index
+    xor bh, bh
+    cmp bx, 3                   ; ui_loc_base has three entries; a set with
+    jae .ret                    ; more cells must have had a handler
+    shl bx, 1
+    xor ah, ah
+    add ax, [ui_loc_base + bx]
+    jmp ui_cmd
+.ret:
+    ret
+
+.app:
+    ; The menu handler is a window callback reached through the bar, so it
+    ; gets the W_ONCLICK treatment verbatim (SPEC.md 12.2): gfx lock, the
+    ; owning instance stamped for sound grants (SPEC.md 34.3) and billed
+    ; for the cycles it spends (SPEC.md 8.1). The selection parks in .bss
+    ; rather than on the stack because task_cycles answers in DX:AX and
+    ; the UI task is the only thing that can ever be in here.
+    dec ah                      ; cell -> the app's own 0-based menu index
+    mov [ui_menusel], ax
+    call gfx_lock
+    mov bx, [menu_win]          ; the lock dropped between menu_track and
+    or bx, bx                   ; here, so re-check the owner before calling
+    jz .app_done                ; into it. Only the UI task can destroy a
+    test word [bx + W_FLAGS], 2 ; package window (packages cannot spawn,
+    jz .app_done                ; SPEC.md 20.2) and only packages reach this
+                                ; path, so this cannot fire today - it is the
+                                ; guard that keeps that from being load-
+                                ; bearing the day a menu-owning kind spawns
+    call inst_win_owner         ; DI = owning record, 0 = unowned window
+    push di
+    push word [snd_inst]
+    call snd_disp_set
+    call task_cycles            ; DX:AX = start stamp
+    push dx                     ; start stamp: hi, then lo
+    push ax
+    mov si, [menu_win]          ; the handler's contract: AL = item,
+    mov bx, [menu_set]          ; AH = menu, SI = window, BX = the set
+    mov cx, [bx + AM_ONCMD]
+    mov ax, [ui_menusel]
+    call cx
+    pop ax                      ; start stamp
+    pop dx
+    pop word [snd_inst]         ; the outer dispatch's stamp, back
+    pop di
+    or di, di
+    jz .app_done
+    call inst_charge
+.app_done:
+    call gfx_unlock
+    ret
+
+; the base CMD_* of each kernel-dispatched bar cell (SPEC.md 12.3): the
+; System menu, then Locator's File and Special
+ui_loc_base:
+    dw CMD_ABOUT, CMD_CLOCK, CMD_REBOOT
+
+; -----------------------------------------------------------------------------
+; ui_cmd - act on one of the kernel's own menu commands
+; in:  AX = CMD_* (0 = nothing; ignored)
 ; out: nothing (CMD_REBOOT never returns)
 ; clobbers: AX, BX (internal helper of the UI task)
 ; Runs on the UI task with NO lock held, so app commands call app_launch
@@ -498,7 +605,7 @@ ui_grow:
 ; (snd_beep, SPEC.md 34.3): a failed launch (tables full), or CMD_CLOSE -
 ; which quits the frontmost instance - with nothing to close.
 ; -----------------------------------------------------------------------------
-ui_dispatch:
+ui_cmd:
     or ax, ax
     jz .done
     cmp ax, CMD_ABOUT
@@ -569,6 +676,8 @@ ui_dispatch:
 section .bss
 
 ui_ev:      resb 8              ; popped event record (EV_TYPE/A/B/C)
+ui_menusel: resw 1              ; ui_dispatch scratch: AH = menu, AL = item,
+                                ; held across the billing calls (SPEC 12.2)
 ui_click_t: resw 1              ; EV_C of the event being dispatched: the
                                 ; click's birth tick (valid during dispatch,
                                 ; which always stores before handlers read)

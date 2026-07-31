@@ -24,6 +24,16 @@
 ; Results are reported as a toast in the content's top-right corner, retired
 ; by the next keystroke.
 ;
+; Those two commands now also have a face. SPEC.md 12.2 gives every
+; application the menu bar while its window is frontmost, so Note Pad ships
+; a one-menu set - File: New, Open, Save - registered from the entry proc
+; and dispatched to np_oncmd. The menu is strictly a second door onto the
+; existing routines: "Open" is np_load, "Save" is np_save, F3 and F2 still
+; call exactly the same two, and both doors end at np_redraw. "New" is the
+; one thing here that is genuinely new rather than a second door - emptying
+; the buffer had no key and no button before - and it is menu-only for the
+; same reason it was missing: there was no spare key worth spending on it.
+;
 ; The state lookup is the one thing that got simpler. The built-in reached
 ; its state through inst_of_win -> I_SPTR because all instances shared one
 ; pool; a package addresses its own bss directly.
@@ -39,6 +49,9 @@ NP_BSS_TOTAL equ 532 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
 NP_MARGIN    equ 6              ; left/top text margin inside the content
 NP_KEY_SAVE  equ 0x3C           ; F2 scan code (DOS Editor's keys)
 NP_KEY_LOAD  equ 0x3D           ; F3
+NP_MI_NEW    equ 0              ; File menu item indices - the order of
+NP_MI_OPEN   equ 1              ; np_items_file, which is what the kernel
+NP_MI_SAVE   equ 2              ; hands np_oncmd in AL (SPEC.md 12.2)
 
 ; -----------------------------------------------------------------------------
 ; np_entry - package entry point (SPEC.md 20.2)
@@ -47,6 +60,10 @@ NP_KEY_LOAD  equ 0x3D           ; F3
 ; The loader wm_shows the window; we must not show, draw or spawn here. The
 ; bss arrives zeroed, which is already a fresh empty note - the built-in's
 ; KD_INIT proc (app_note_kinit) had nothing else to do either.
+;
+; The menu set is registered here rather than later because the loader's
+; wm_show is what draws the first bar (SPEC.md 12.2): by the time the window
+; appears, the bar already says "Note Pad  File".
 ; -----------------------------------------------------------------------------
 np_entry:
     push si
@@ -58,7 +75,12 @@ np_entry:
     mov al, 1                       ; resizable (SPEC.md 11.1/27): np_paint
     call OSAPI_WM_SIZABLE           ; already lays out from the live record,
     pop ax                          ; so the next repaint re-wraps for free
-    clc                             ; CF must still report the create result
+    push si
+    mov si, np_menus                ; BX is still the window: hand it our
+    call OSAPI_MENU_SET             ; menus (draws nothing, takes no lock)
+    pop si                          ; CF is still wm_create's: the branch
+                                    ; above consumed it and OSAPI_MENU_SET
+                                    ; preserves flags too (SPEC.md 20.3)
 .out:
     ret
 
@@ -428,6 +450,33 @@ np_onkey:
     mov word [np_msg], 0        ; key leaves both it and the screen alone
 
 .redraw:
+    call np_redraw                  ; SI still = window ptr
+
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_redraw - repaint our own content from the buffer
+; in:  SI = window ptr (gfx lock held by the caller)
+; out: nothing; preserves all registers
+;
+; The self-repaint every dispatch site shares: white-fill the content, run
+; np_paint over it, then put the grow box back, because the fill just erased
+; it (SPEC.md 11.1/27). It exists as a routine rather than a tail of
+; np_onkey because the menu handler needs exactly the same three steps - the
+; kernel does not repaint after a command returns (SPEC.md 12.2), so every
+; command that changes the buffer has to end here.
+; -----------------------------------------------------------------------------
+np_redraw:
+    push ax
+    push bx
+    push cx
+    push dx
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = x1, DX = y1
     mov cx, [bx+W_X]
@@ -446,13 +495,61 @@ np_onkey:
     call np_paint                   ; SI still = window ptr
     mov bx, si                      ; the white fill erased the grow box;
     call OSAPI_WM_GROW              ; restore it (SPEC.md 11.1/27)
-
-.out:
-    pop di
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_new - empty the note (File > New)
+; in:  nothing
+; out: nothing; preserves all registers
+;
+; Only the length and the toast are cleared: np_paint reads exactly [np_len]
+; bytes, so the stale tail of np_buf is unreachable and wiping 512 bytes
+; would buy nothing. The toast goes because "Loaded NOTES.TXT" over an empty
+; note is a lie - the same reason an ordinary keystroke retires it.
+; -----------------------------------------------------------------------------
+np_new:
+    mov word [np_len], 0
+    mov word [np_msg], 0
+    ret
+
+; -----------------------------------------------------------------------------
+; np_oncmd - AM_ONCMD: run a menu command (SPEC.md 12.2)
+; in:  AL = item index, AH = menu index (0 = File), SI = window ptr,
+;      BX = our menu set ptr; gfx lock held by the caller, UI task
+; out: nothing; clobbers AX/BX/CX/DX/DI/ES like any window callback
+;
+; Open and Save are menu-driven twins of F3 and F2 - the same np_load /
+; np_save the keyboard path calls, so the two doors can never drift apart;
+; New is menu-only, and empties the buffer. Every item changes
+; what the window shows - the text, the toast, or both - and the kernel does
+; not repaint for us, so all three tails run through np_redraw. The menu
+; index is tested even though we register only one menu: the argument is
+; kernel input, and an unknown pair must do nothing rather than fall into
+; the first case.
+; -----------------------------------------------------------------------------
+np_oncmd:
+    test ah, ah
+    jnz .out                        ; not File: nothing of ours
+    cmp al, NP_MI_NEW
+    je .new
+    cmp al, NP_MI_OPEN
+    je .open
+    cmp al, NP_MI_SAVE
+    jne .out
+    call np_save
+    jmp short .draw
+.open:
+    call np_load
+    jmp short .draw
+.new:
+    call np_new
+.draw:
+    call np_redraw                  ; SI is still the window ptr
+.out:
     ret
 
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
@@ -462,6 +559,22 @@ np_tpl:
     dw np_ttl, np_paint, np_onkey, 0
 
 np_ttl: db 'Note Pad', 0
+
+; --- the app menu set (SPEC.md 12.2) -------------------------------------------
+; One menu, three items, all of them existing behaviour: New empties the
+; buffer, Open is F3, Save is F2. AM_NAME reuses np_ttl so the bar label and
+; the window title are the same eight characters by construction. The bar
+; runs 38 + 64 ('Note Pad') + 16 = 118 to the File cell's left edge, and
+; 32 + 12 more to its right edge at 162 - nowhere near the clock at 434.
+    OS88_MENUSET np_menus, np_ttl, np_oncmd
+        OS88_MENU np_m_file, np_items_file, 3
+    OS88_MENUSET_END np_menus
+
+np_m_file:     db 'File', 0
+np_items_file: dw np_i_new, np_i_open, np_i_save   ; order = NP_MI_*
+np_i_new:      db 'New', 0
+np_i_open:     db 'Open', 0
+np_i_save:     db 'Save', 0
 
 ; --- the file and what the toast can say (SPEC.md 27.1) ------------------------
 ; One fixed name: a package has no text-entry control to ask for another,
