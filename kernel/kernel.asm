@@ -167,7 +167,12 @@ osapi_table:
     OSAPI_SLOT wm_fullscreen      ; 0x0090 - fullscreen (SPEC.md 11.2)
     OSAPI_SLOT wm_grow_paint      ; 0x0094 - grow-box restore after a
                                   ;          self-repaint (SPEC.md 11.1)
-osapi_table_end:                 ; 0x0098
+    OSAPI_SLOT dskw_write         ; 0x0098 - files (SPEC.md 18.4/20.3): the
+    OSAPI_SLOT dskw_read          ; 0x009C   dskw_* contracts ARE the ABI,
+    OSAPI_SLOT dskw_delete        ; 0x00A0   so the slots jump straight at
+    OSAPI_SLOT dskw_rename        ; 0x00A4   them - no wrapper in between
+    OSAPI_SLOT dskw_dfree         ; 0x00A8
+osapi_table_end:                 ; 0x00AC
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -175,8 +180,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 34 * 4
-%error "os8088 API jump table must be exactly 34 4-byte slots"
+%if OSAPI_TABLE_LEN != 39 * 4
+%error "os8088 API jump table must be exactly 39 4-byte slots"
 %endif
 
 ; =============================================================================
@@ -288,6 +293,8 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "ui.inc"
 %include "apps.inc"
 %include "disk.inc"
+%include "diskw.inc"          ; the FAT write path (SPEC.md 18.4): after
+                                ; disk.inc, whose constants and layout it uses
 %include "loader.inc"
 %include "files.inc"
 %include "icons.inc"

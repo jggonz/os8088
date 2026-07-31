@@ -76,6 +76,9 @@ the menus. All of classic Mac's core interactions work:
   Special → Restart.
 - **Note Pad** — File → Note Pad, then type; wraps lines, Backspace and
   Return work. Two can be open at once, each with its own buffer.
+  **F2 saves** the note to `NOTES.TXT` on the data floppy and **F3 loads**
+  it back, with DOS line endings both ways — the file opens straight up in
+  Windows Notepad, and one written there opens here.
 - **Disk icons** — the desktop shows an icon per floppy drive the BIOS
   reports (int 11h). Click to select, double-click to open that drive in
   the Disk window, freshly mounted.
@@ -130,8 +133,8 @@ the menus. All of classic Mac's core interactions work:
 | cursor        | arrow with save-under, drawn by the mouse ISR itself when it's safe, deferred to the next unlock when a task holds the drawing lock. |
 | keyboard      | BIOS int 16h, polled by the UI task. |
 | font          | the VGA ROM's own 8x8 font, copied out via int 10h AX=1130h at boot. |
-| floppy        | BIOS int 13h, one sector per call with retries; task switching pauses during a read (the tick still runs — the floppy motor needs it). |
-| software      | `.o88` packages on a plain FAT12 data floppy in B: — any PC, Mac or Linux box can write the disk; the kernel only reads it, and validates everything on it. A package is a flat binary loaded into a first-fit region of 1000:A000..1000:EFFF — inside the kernel segment, so its window procs are ordinary near pointers — calling the kernel through a fixed jump table at 1000:0010. It ships with a relocation table, so several packages, or several copies of one, run at once. |
+| floppy        | BIOS int 13h, one sector per call with retries — reads and writes share one routine, so the CHS math and the retry policy can't drift apart; task switching pauses during a transfer (the tick still runs — the floppy motor needs it). |
+| software      | `.o88` packages on a plain FAT12 data floppy in B: — any PC, Mac or Linux box can read and write the disk, and so can os8088: apps create, replace, rename and delete whole files through five API slots, and the kernel validates every byte it reads off the disk before any of it becomes an address (Note Pad's F2/F3 save and load a DOS-readable `NOTES.TXT`). A package is a flat binary loaded into a first-fit region of 1000:A000..1000:EFFF — inside the kernel segment, so its window procs are ordinary near pointers — calling the kernel through a fixed jump table at 1000:0010. It ships with a relocation table, so several packages, or several copies of one, run at once. |
 | concurrency   | one drawing mutex (`gfx_lock`); background tasks re-check visibility *under* the lock; ISRs run IF=0 throughout and never draw over a held lock. SPEC.md is the binding contract. |
 
 The kernel is ~14KB. Everything runs in the tiny model — CS = DS = SS =
@@ -178,7 +181,8 @@ kernel/instance.inc  the instance table: app kinds, launch, close, billing
 kernel/menu.inc      menu bar, pull-down tracking
 kernel/ui.inc        UI task: event pump, keyboard, drags, dispatch
 kernel/apps.inc      About, Note Pad, Clock task, Bounce task
-kernel/disk.inc      int 13h floppy reads, FAT12/16 mount + chain walk
+kernel/disk.inc      int 13h floppy transfers, FAT12/16 mount + chain walk
+kernel/diskw.inc     the FAT write path: allocate, flush, directory entries
 kernel/loader.inc    .o88 package validation, region alloc, relocate, launch
 kernel/files.inc     the Disk window (file manager)
 kernel/icons.inc     1-bit icon format, draw routine, built-in library

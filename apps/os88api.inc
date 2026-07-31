@@ -150,6 +150,36 @@ OSAPI_WM_GROW       equ 0x0094   ; BX=win ptr; caller holds the gfx lock.
                                  ; box. No-op unless BX is the frontmost
                                  ; visible resizable window - always safe.
 
+; --- files (SPEC.md 18.4/20.3) -------------------------------------------------
+; Whole files, by name, in the root of the mounted data disk. UI-task context
+; only - i.e. from a window callback or the entry proc, which is everywhere a
+; package runs anyway. The buffer is ES:BX (like OSAPI_SND_PLAY), so staged
+; sound or an app's own bss both work; set ES = DS for the latter. A write
+; stalls painters for its duration: never call these from a paint proc.
+OSAPI_FILE_WRITE    equ 0x0098   ; SI = NUL 8.3 name, ES:BX = bytes, CX =
+                                 ; count (0 = empty file); creates or
+                                 ; REPLACES. out CF=0 AX=0, else AX = FERR_*
+OSAPI_FILE_READ     equ 0x009C   ; SI = name, ES:BX = buffer, CX = capacity;
+                                 ; out CF=0 AX = bytes read, else AX =
+                                 ; FERR_* (FERR_BIG leaves the buffer alone)
+OSAPI_FILE_DELETE   equ 0x00A0   ; SI = name; out CF=0 AX=0, else FERR_*
+OSAPI_FILE_RENAME   equ 0x00A4   ; SI = old name, DI = new name; out as above
+OSAPI_FILE_DFREE    equ 0x00A8   ; out CF=0, DX:AX = free bytes, BX =
+                                 ; SECTORS per cluster; no disk I/O
+
+; file error codes, pinned (SPEC.md 18.4): returned in AX with CF set
+FERR_OK      equ 0
+FERR_NODISK  equ 1               ; no mounted data disk
+FERR_IO      equ 2               ; unrecoverable read/write error
+FERR_NAME    equ 3               ; malformed 8.3 name / bad argument
+FERR_NOENT   equ 4               ; no such file
+FERR_EXIST   equ 5               ; the target name already exists
+FERR_FULL    equ 6               ; no free clusters
+FERR_DIRFULL equ 7               ; the root directory is full
+FERR_PROT    equ 8               ; read-only/hidden/system/label/directory
+FERR_WPROT   equ 9               ; the media is write-protected
+FERR_BIG     equ 10              ; larger than the buffer (or than 64KB)
+
 WF_SIZABLE equ 4                 ; W_FLAGS bit2: resizable (SPEC.md 11.1)
 WF_FULL    equ 8                 ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
 WMIN_W     equ 96                ; smallest frame a resize can leave

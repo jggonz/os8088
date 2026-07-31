@@ -166,6 +166,37 @@ $(BUILD)/sbtest.o88: $(BUILD)/sbtest.bin $(BUILD)/sbtest.alt.bin tools/os88pkg.p
 $(BUILD)/sbtest.img: $(BUILD)/sbtest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/sbtest.o88
 
+# FILETEST, the file-API gate package (SPEC.md 18.4): drives the file slots
+# 0x0098..0x00A8 end to end (write, read-back, replace, rename, delete,
+# dfree, and the refusals). Never on the shipped apps disks - their
+# directory order is pinned - it gets its own scratch image, mounted with:
+#   make test TESTAPPS=build/filetest.img
+# then, after QMP quit, checked from the host with:
+#   python3 tools/os88disk.py --verify build/filetest.img
+$(BUILD)/filetest.bin: apps/filetest/filetest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/filetest/filetest.asm
+	@echo "filetest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/filetest.alt.bin: apps/filetest/filetest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/filetest/filetest.asm
+
+$(BUILD)/filetest.o88: $(BUILD)/filetest.bin $(BUILD)/filetest.alt.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/filetest.bin --alt $(BUILD)/filetest.alt.bin -o $@
+
+$(BUILD)/filetest.img: $(BUILD)/filetest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/filetest.o88
+
+# The same package on a legally fragmented volume: --scramble interleaves the
+# chains, so the write path's allocator and the free/replace paths meet holes
+# rather than a clean run of clusters.
+$(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 --scramble $(BUILD)/filetest.o88 $(BUILD)/mines.o88 $(BUILD)/piano.o88
+
+# ...and on a FAT16 volume (2.88MB test geometry), which differs only in the
+# FAT entry encoding - the one part of the write path FAT12 cannot exercise.
+$(BUILD)/filetest-fat16.img: $(BUILD)/filetest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 2880 $(BUILD)/filetest.o88
+
 # The software floppies (drive B:) hold packages, not boot code - os88fs only.
 # Directory order is pinned: mines first, hello second (tests rely on it);
 # notepad is appended third, recorder fourth and piano fifth so earlier

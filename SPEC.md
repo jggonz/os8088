@@ -114,7 +114,9 @@ task stacks) or **ES** (the disk buffers), never DS:
   icon cache) and `dsk_secbuf` (sector scratch) — written through ES
   (int 13h ES:BX, or `rep movsw` from kernel scratch at mount, §18–19),
   read only through `dsk_get_dir` / `dsk_get_icon`, which stage one entry
-  back into the kernel segment (§18).
+  back into the kernel segment (§18). `dsk_secbuf` is also the write
+  path's staging sector (§18.4): the directory sector being
+  read-modify-written, and the zero-padded final sector of a file.
 
 `LOW_SEG:0x8000` **is** `KERNEL_SEG:0x0000`. Every `LOW_SEG` offset must stay
 strictly below `LOW_LIMIT`, and the §15.1 assertions keep task 0 8KB of
@@ -126,7 +128,8 @@ clearance above `.lowbss`.
 (= 32) sectors, 16,384 bytes, rewritten from FAT1 (or the FAT2 fallback,
 §18.3) on **every** mount — no cross-mount state survives. Reached through
 **ES only**, never DS — the `SND_SEG` rule of §2.2: `dsk_next_clus` is the
-single reader, and int 13h writes it via ES:BX at mount only. Internal
+single reader and `dskw_setfat` (§18.4) the single writer, and int 13h
+moves it via ES:BX only at mount (in) and at a FAT flush (out). Internal
 map, pinned:
 
 ```
@@ -219,7 +222,8 @@ SND_SEG       equ 0x3000     ; sound buffers: linear 0x30000-0x3FFFF, ES only (�
 | `kernel/menu.inc`   | menu bar, pull-down tracking, command return            |
 | `kernel/ui.inc`     | UI task: event pump, keyboard poll, drag, dispatch      |
 | `kernel/apps.inc`   | built-in app kinds: About, Clock, Bounce — state pools, kinit procs, per-instance tasks |
-| `kernel/disk.inc`   | BIOS int 13h floppy reads, FAT12/16 mount + directory + chain walk (§18–19) |
+| `kernel/disk.inc`   | BIOS int 13h floppy transfers (`disk_read`/`disk_write`), FAT12/16 mount + directory + chain walk (§18–19) |
+| `kernel/diskw.inc`  | the FAT write path (§18.4): name parsing, cluster allocation + free, FAT flush, directory entry create/update/delete, the five whole-file operations — prefix `dskw_`; the ONLY caller of `disk_write` |
 | `kernel/loader.inc` | package validation, pool allocation, per-instance load + relocate, launch (§21) |
 | `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22) |
 | `kernel/icons.inc`  | 1-bit icon format, draw routine, built-in library (§25) |
@@ -1243,6 +1247,12 @@ FAT snapshot begins. Keep this block last.
   `-drive file=build/apps.img,format=raw,if=floppy,index=1`.
   `test` target: same, plus `-display none -qmp unix:build/qmp.sock,server,nowait`.
 - New tooling targets: see §24 (apps, packages, FAT12 data-disk images).
+- Gate packages ride their own scratch images and are mounted in place of
+  the apps disk with `make test-snd TESTAPPS=<img>` (the `test` target's B:
+  drive is fixed): `build/fmtest.img` (§34 Phase 3), `build/sbtest.img`
+  (Phase 4), and `build/filetest.img` / `-frag` / `-fat16` (§18.4). A write
+  test is only half-done in the emulator — finish it on the host with
+  `python3 tools/os88disk.py --verify <img>`.
 - 86Box config (`vm/xt/86box.cfg`): set the mouse to a serial Microsoft
   mouse on COM1 (best-effort; cannot be verified headless).
 - The kernel may exceed 8 sectors; the two images are already built
@@ -1308,26 +1318,44 @@ FAT snapshot begins. Keep this block last.
     (§8.2) — and a runaway package's callback is still cut off after
     `SCH_WD_TICKS` ticks (`sch_wd_hits` advances, readable with QMP `xp` on
     segment 0x1000).
+12. **Writing works and the volume stays a legal FAT volume** (§18.4/§27.1):
+    type into Note Pad, F2 saves ("Saved NOTES.TXT"), F3 in a *second*
+    Note Pad instance loads the same text back; the Disk window's Refresh
+    lists `NOTES.TXT` with its true size; and after QEMU exits,
+    `python3 tools/os88disk.py --verify build/apps.img` passes — FAT1 ≡
+    FAT2, no lost clusters, no cross-links, every chain's length matching
+    its directory size — with the host able to read the file, CRLF line
+    endings and all. Re-saving a longer note replaces it in place without
+    leaking clusters, and a second file written to a **fragmented** disk
+    (`--scramble`) still verifies.
 
-## 18. disk.inc — floppy reads (BIOS int 13h) + the FAT driver
+## 18. disk.inc — floppy I/O (BIOS int 13h) + the FAT driver
 
 Only the UI task touches the disk (extends §7's BIOS rule to int 13h).
-During a read, task switching is paused: `inc byte [sch_lock]` before,
+During a transfer, task switching is paused: `inc byte [sch_lock]` before,
 `dec` after (the timer ISR still chains the BIOS tick, which the floppy
-motor logic needs). The gfx lock is NOT held across disk I/O.
+motor logic needs). The gfx lock is NOT held across disk I/O by `disk.inc`
+itself — a window callback that calls the §18.4 write path holds it, and
+accepts the stall.
 
 Geometry lives in variables so both 1.44MB (18 spt) and 360KB (9 spt) data
 disks work: `disk_spt` (word), `disk_heads` (word) — loaded from the
 validated BPB at mount (§18.2 rules 11/12), restored to the 9/2 fallback on
 any mount failure. LBA→CHS: cyl = LBA/(spt×heads); rem = LBA%(spt×heads);
-head = rem/spt; sector = rem%spt + 1. Reads go **one sector per int 13h
-call** (AH=02, AL=1) — no multi-sector calls, so track boundaries and DMA
+head = rem/spt; sector = rem%spt + 1. Transfers go **one sector per int 13h
+call** (AL=1) — no multi-sector calls, so track boundaries and DMA
 alignment never matter. Each sector: up to 3 attempts, with AH=00 reset on
 failure between attempts.
+
+`disk_read` and `disk_write` are the same routine: both set `[dsk_op]` (02h
+read / 03h write) and fall into the module-internal `dsk_xfer`, so the CHS
+conversion, the cylinder guard and the retry policy exist **once** and can
+never diverge between the two directions.
 
 | symbol       | contract                                                      |
 |--------------|----------------------------------------------------------------|
 | `disk_read`  | in: AX=LBA, CX=sector count, ES:BX → dest (advances BX by 512 per sector; caller's ES:BX budget must cover count×512). Drive from `[disk_drive]`. Out: CF=1 on unrecoverable error. Preserves registers per §1. FS-agnostic — it knows nothing of §19. |
+| `disk_write` | identical contract, source instead of destination: in: AX=LBA, CX=sector count, ES:BX → source. Out: CF=1 on unrecoverable error, and `[dsk_ioerr]` = the last int 13h status byte (AH), which is how §18.4 tells write-protected media (03h) from a real failure. Preserves registers per §1, and is likewise FS-agnostic. **No LBA gate of its own beyond `dsk_xfer`'s cyl<80 rule** — every caller is §18.4, which computes LBAs only from the validated §18.1 layout. |
 | `disk_mount` | in: DL=drive (0=A, 1=B). Sets `[disk_drive]`, restores the fallback geometry 9/2 with `disk_nfiles`=0, reads LBA 0 with that *fallback* geometry (CHS 0/0/1 — identical under any real floppy geometry) into `dsk_secbuf`, then runs the §18.3 mount sequence: BPB validation (§18.2), FAT snapshot into `FAT_SEG`, root-directory scan into the synthesized `disk_dir` cache, icon harvest into `disk_icons`. Out: CF=0 with `disk_spt`/`disk_heads`/`disk_nfiles`, the §18.1 variables and both caches filled; CF=1 with `disk_nfiles`=0 and fallback 9/2 (unreadable, unformatted, or any §18.2 rule failed). Clobbers CF only. A torn mount is a failed mount; **no cross-mount state survives** — every open/refresh fully remounts, never stale. |
 | `disk_drive`  | byte variable, current drive (init 1 = B:)                   |
 | `disk_nfiles` | word, valid after a successful mount (else 0)                |
@@ -1351,8 +1379,9 @@ The FAT routines (all UI-task-only like the rest of the module; all in
 ### 18.1 Mount-derived variables (kernel .bss)
 
 Valid only after a successful mount — every consumer is already gated by
-`disk_nfiles` ≠ 0. 80 bytes including `dsk_cherr`, `dsk_read_chain`'s
-failure-code byte carried across its register-restore epilogue.
+`disk_nfiles` ≠ 0 (readers) or by `[dsk_mntok]` (writers, §18.4). 90 bytes
+including `dsk_cherr`, `dsk_read_chain`'s failure-code byte carried across
+its register-restore epilogue.
 
 ```nasm
 dsk_bpb:      resb 64  ; staged boot-sector head (mount scratch, §18.2)
@@ -1367,6 +1396,17 @@ dsk_datalba:  resw 1   ; FirstDataSec
 dsk_maxclus:  resw 1   ; CountOfClusters+1 = highest valid cluster number
 dsk_cherr:    resb 1   ; dsk_read_chain failure code, carried across the
                        ; register-restore epilogue
+dsk_op:       resb 1   ; int 13h function for dsk_xfer: 02h read / 03h write
+dsk_ioerr:    resb 1   ; last int 13h status (AH) of a FAILED transfer;
+                       ; 03h = write-protected media (§18.4)
+dsk_mntok:    resb 1   ; 1 between a successful mount and the next mount
+                       ; attempt — the §18.4 write gate. A mount that fails
+                       ; (or was never run) leaves 0, so an unformatted, an
+                       ; unreadable or a NON-FAT disk can never be written
+dsk_rover:    resw 1   ; next cluster the allocator examines (§18.4), reset
+                       ; to 2 at every mount
+dsk_fatd0:    resw 1   ; dirty FAT sector range, [lo, hi] inclusive, sector
+dsk_fatd1:    resw 1   ; indices within one FAT; lo = 0FFFFh = clean
 ```
 
 ### 18.2 BPB validation (`dsk_bpb_check`, in check order)
@@ -1406,6 +1446,8 @@ the §18.1 variables from the derived layout.
 ### 18.3 Mount sequence (`disk_mount`)
 
 1. **Boot sector.** Store DL; set fallback 9/2, `disk_nfiles`=0,
+   `dsk_mntok`=0 (the §18.4 write gate closes for the whole mount — a torn
+   mount leaves it closed), `dsk_rover`=2, the FAT dirty range clean, and
    `ld_pending`=0 (a queued click indexes the directory being replaced —
    it must never run against the new one). Read
    LBA 0 into `dsk_secbuf` with the fallback geometry (CHS 0/0/1 under
@@ -1436,7 +1478,8 @@ the §18.1 variables from the derived layout.
    listed; a later load attempt reports the real error. `disk_icons` is
    fully rewritten every mount (preserves §29.1's rule that I_ICON may
    never point at it).
-5. Set `disk_nfiles` = accepted count; CF=0.
+5. Set `disk_nfiles` = accepted count, `dsk_mntok` = 1 (the write gate opens
+   only here, as the last act of a complete mount); CF=0.
 
 Mount I/O budget, honest numbers: sectors read = 1 + FATSz (2..32) + root
 sectors actually scanned (early exit at the 0x00 terminator) + one per
@@ -1447,17 +1490,199 @@ that approaches ~20 s, and retries can stretch it further; bounded,
 hostile-media-only, and accepted (§22 notes the user-visible stall). QEMU:
 effectively instant.
 
+### 18.4 diskw.inc — the FAT write path
+
+`disk.inc` reads; **`kernel/diskw.inc` writes**, prefix `dskw_`. It is the
+one module that may modify a data floppy, and the only module that calls
+`disk_write`. Five public routines are the whole surface — the same five
+the API exposes to packages (§20.3) — because both the OS and its apps get
+exactly one vocabulary: whole files by name, in the mounted volume's root
+directory. There is no open/seek/handle model, no subdirectory creation, no
+partial rewrite: a file is written in one call from one buffer, and read
+back the same way. That is the largest subset that stays honest in 256KB
+with 12 pre-emptive tasks and no disk cache.
+
+**Context (binding).** UI task only, exactly like every other int 13h
+caller (§18). Window callbacks and package entry procs qualify — that is
+where every caller lives, since packages cannot spawn tasks (§20.2) — and a
+callback holds the gfx lock, so a write **stalls painters** for its
+duration, on the same terms as `disk_mount` under the lock in §22. Never
+from an ISR, never from a background task: the write path shares
+`dsk_secbuf`, the FAT snapshot and `[sch_lock]` with the read path and is
+serialized by nothing but the single-task rule.
+
+**Gate.** Every routine refuses unless `[dsk_mntok]` = 1 (§18.1) — i.e. a
+`disk_mount` of *this* drive has fully succeeded, BPB validation and all.
+The boot floppy is protected by construction rather than by a special case:
+its sector 0 is a boot sector with no valid BPB, so drive 0 fails §18.2 and
+can never be the mounted volume.
+
+**Everything the read path validated stays validated.** Writes derive every
+LBA from the §18.1 layout, never from a raw on-disk field: cluster numbers
+come from `dsk_clus2lba` (which enforces [2, `dsk_maxclus`]), FAT offsets
+from `dsk_maxclus` and §18.2 rule 16, directory LBAs from `dsk_rootlba` +
+an index < `dsk_rootsecs`. A hostile disk can make a write **fail**; it can
+never make one land outside the volume.
+
+| symbol | contract |
+|--------|-----------|
+| `dskw_write` | in: SI → NUL-terminated 8.3 name (DS), ES:BX → the bytes, CX = byte count (0 = create an empty file). Creates or **replaces** the file. Out: CF=0, AX=0; CF=1, AX = `FERR_*`. Preserves all other registers, ES included. |
+| `dskw_read` | in: SI → name, ES:BX → destination, CX = destination capacity in bytes. Out: CF=0, AX = bytes read (= the file's size); CF=1, AX = `FERR_*` — `FERR_BIG` when the file does not fit CX, and **nothing is written** to the buffer in that case. |
+| `dskw_delete` | in: SI → name. Frees the chain and marks the directory entry deleted (0E5h). Out: CF=0, AX=0; CF=1, AX = `FERR_*`. |
+| `dskw_rename` | in: SI → old name, DI → new name. Same directory, name bytes only — chain, size and timestamps are untouched. Refuses `FERR_EXIST` if the new name already exists. Out: CF/AX as above. |
+| `dskw_dfree` | out: CF=0, DX:AX = free bytes (32-bit), BX = **sectors** per cluster (not bytes — `spc`×512 overflows 16 bits at the §18.2-legal `spc` = 128); CF=1, AX = `FERR_*`. Counts free entries across the resident FAT snapshot; no disk I/O. |
+
+**Error codes (pinned; returned in AX with CF=1, mirrored as `FERR_*` in
+`apps/os88api.inc`):** 0 ok, 1 no mounted disk, 2 disk I/O error, 3 bad
+name or argument, 4 no such file, 5 name exists, 6 disk full, 7 root
+directory full, 8 entry is protected (read-only, hidden, system, volume
+label or subdirectory), 9 media write-protected, 10 too large.
+
+**Names (`dskw_name83`) — the inverse of §19's synthesis.** A caller
+supplies the display form (`"NOTES.TXT"`); the module produces the raw
+11-byte space-padded field. Rules, all rejections `FERR_NAME`: 1..8 stem
+characters, an optional `.` plus 1..3 extension characters, nothing after
+that, NUL-terminated within 12 characters. Lower case is folded up. The
+legal set is the FAT short-name set — `A-Z 0-9 $ % ' - _ @ ~ \` ! ( ) { } ^ # &`
+— so spaces, path separators, wildcards, `+ , ; = [ ] :` and every byte
+below 0x21 or above 0x7E are refused. A leading 0xE5 byte cannot arise
+(0xE5 is not in the legal set), and neither can `.` or `..`.
+
+**Allocation.** The resident FAT snapshot (`FAT_SEG`, §2.1) is the
+authority: `dskw_alloc` scans it from `[dsk_rover]` (wrapping once through
+2..`dsk_maxclus`), claims the first entry that reads 0 by writing the
+end-of-chain mark **immediately** (0FFFh / 0FFFFh — ≥ the spec's EOC
+floor, so a foreign fsck reads the chain the same way this kernel does),
+advances the rover past it, and returns the cluster. Claiming on the spot
+is what makes the multi-cluster loop safe: a half-built chain can never
+hand the same cluster out twice. `dskw_free_chain` walks a chain writing
+zeros, bounded by `dsk_maxclus` iterations so a looped or cross-linked
+chain (a foreign machine's corruption) terminates instead of hanging with
+`[sch_lock]` held. Every snapshot write goes through `dskw_setfat`, the
+mirror of `dsk_next_clus` — ES-only, FAT12 nibble straddle handled by a
+read-modify-write of the straddling word, FAT16 a plain word store — which
+also widens the dirty range `[dsk_fatd0, dsk_fatd1]` to cover the touched
+sector (**both** sectors when a FAT12 entry straddles a boundary).
+
+**`dskw_flush`** writes the dirty sector range back to FAT1 and, when
+`[dsk_nfats]` = 2, to FAT2 at the same offsets, then marks the range
+clean. Flushing the range rather than the whole FAT is what keeps a save
+down to a couple of sector writes instead of 18. The two copies are always
+written from the same snapshot bytes, so FAT1 ≡ FAT2 holds after every
+operation — `tools/os88disk.py --verify` checks exactly that.
+
+**Write ordering (binding).** `dskw_write` commits in this order and no
+other:
+
+1. allocate the new chain in the snapshot and write its data clusters
+   (partial final sector staged through `dsk_secbuf`, see below);
+2. `dskw_flush` — the new chain is now durable on disk. The old chain, if
+   the file existed, is still allocated and still owned by the still-old
+   directory entry; the two chains are disjoint by construction, so a
+   power failure here leaves **both** files' bytes intact and the volume
+   coherent (the new chain is merely orphaned);
+3. write the directory entry — a single sector write, and **the commit
+   point**: the name now means the new bytes;
+4. free the old chain in the snapshot and `dskw_flush` again.
+
+A crash between 3 and 4 leaks the old chain as lost clusters — recoverable
+by any host `fsck`/`chkdsk`, and never a cross-link and never lost data.
+The reverse order (free first, then write) would risk exactly that, so it
+is forbidden.
+
+**Rollback.** Any failure *before* the commit reloads the FAT snapshot from
+disk (`dskw_refat`, one `disk_read` of `dsk_fatsz` sectors) and clears the
+dirty range, so a partially allocated chain never survives in RAM to be
+flushed by a later, unrelated operation. Failures at or after the commit
+report the error but leave the file switched over — that is what the
+ordering above buys.
+
+**No memory ever leaks past EOF.** When the byte count is not a sector
+multiple, the final sector is staged into `dsk_secbuf`: the tail bytes
+copied out of the caller's ES:BX, the remainder of the 512 **zeroed**, then
+one `disk_write`. The kernel never hands a foreign machine the contents of
+whatever happened to sit after a package's buffer.
+
+**Directory entries.** `dskw_find` scans the root directory one sector at a
+time through `dsk_secbuf`, in the §19 species order, comparing the raw
+11-byte name field; it reports the entry's (sector LBA, offset) and, on the
+way, the first free slot it saw (a 0xE5 entry, else the 0x00 terminator) so
+a create needs no second scan. A slot taken at the 0x00 terminator also
+gets the *following* entry's first byte zeroed when it lies in the same
+sector, so the end-of-directory marker never disappears. Entry writes are
+read-modify-write of the containing sector — read it again, patch the 32
+bytes, write it back — so a stale `dsk_secbuf` can never write back
+neighbouring entries from some other sector. New entries carry attribute
+`ARCHIVE` (0x20) and the current date and time from the system clock (§37),
+encoded in the FAT form (date = (year−1980)<<9 | month<<5 | day; time =
+hour<<11 | minute<<5 | second>>1) in the create-, write- and access-date
+fields; a replace updates size, first cluster and the write timestamp.
+Entries whose attribute byte carries read-only, hidden, system, volume-label
+or subdirectory are never modified — `FERR_PROT`.
+
+**Long file names are invisible here, and that has one visible edge.** LFN
+entries are skipped by the scan, never matched and never reused (§19), so
+the write path only ever sees short names. Deleting or renaming a file a
+host created with a long name therefore leaves that name's LFN entries
+orphaned — harmless (every host ignores or reclaims them) but real, and the
+reason the shipped apps disk and everything os8088 writes use plain 8.3
+names.
+
+**Cache coherence.** A successful `dskw_write` / `dskw_delete` /
+`dskw_rename` ends by **remounting the current drive** (§18.3). It costs
+the §18.3 mount budget (16 sector reads on the shipped disk, instant under
+QEMU) and it keeps the system's single strongest disk invariant intact:
+`disk_dir`, `disk_icons` and `disk_nfiles` are *always* exactly a mount
+snapshot, never a patched one. No new staleness rule enters the kernel, a
+package that writes a `.o88` gets its icon harvested for free, and the
+directory indices the Disk window and loader use stay meaningful. The
+remount cannot repaint the Disk window (the caller may hold the gfx lock),
+so an open Disk window shows the new listing at its next repaint or
+Refresh (§22).
+
+**The cost of that ordering**, stated plainly: a replace holds both chains
+at once, so rewriting a file needs room for the new copy *beside* the old
+one, and a nearly full disk can refuse a save it could have done in place
+(`FERR_FULL`). That is the trade — an in-place rewrite risks the user's
+existing bytes on every power glitch, and this OS has no journal to make
+that safe.
+
+**The gate package.** `apps/filetest/filetest.asm` (§20.3's slots, driven
+end to end: write, read-back-and-compare, oversize-buffer refusal, shrink
+replace, empty file, rename both ways, rename-onto-existing, bad name,
+delete twice, fill-to-refusal, mass delete, free-space equality). Like
+`fmtest`/`sbtest` it never ships on the apps disks — their directory order
+is pinned — and rides its own scratch images: `build/filetest.img` (FAT12),
+`-frag` (`--scramble`d, so allocation and free meet holes), `-fat16` (the
+2.88M test geometry, the only way to exercise the FAT16 entry encoding).
+Run it with `make test-snd TESTAPPS=build/filetest.img`, then check the
+volume from the host with `tools/os88disk.py --verify` — the in-kernel
+free-space check and the host fsck catch different leaks, and both are part
+of the gate.
+
+**What this deliberately does not do.** No subdirectory creation or
+traversal (§19's directory model is the root, flat), no append or seek, no
+truncate-in-place, no FAT32, no volume-label editing, no timestamp
+preservation across a rewrite, and no attempt to defragment: chains are
+allocated first-fit from the rover, so a full disk fragments exactly the
+way DOS's did. Files are capped at 65,535 bytes by the 16-bit size and
+buffer contracts (`FERR_BIG`), which is far below the 64KB the near model
+could address anyway.
+
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
 The data floppy (drive B:) is a standard **FAT12** volume — mountable and
 writable by IBM PC DOS 2.0+, Windows, macOS and Linux. That is the point:
-foreign machines write the disk, os8088 reads it. The kernel implements a
-read-only FAT12/FAT16 subset covering exactly what §22 needs — mount,
-enumerate the root directory, walk cluster chains — and **never writes the
-data disk; other machines do**. Consequence: everything on it is
-untrusted, and every field the kernel reads is validated per §18.2. Not
-bootable in earnest (the boot sector is a message stub, below). All words
-little-endian. Sector size 512.
+the disk is a shared medium, written by foreign machines and by os8088
+alike. The kernel implements a FAT12/FAT16 subset covering exactly what
+§22 and §18.4 need — mount, enumerate the root directory, walk cluster
+chains (`disk.inc`), and create/replace/delete/rename whole files in the
+root directory (`diskw.inc`). It never creates subdirectories and never
+touches the boot sector or the BPB. Consequence, unchanged by write
+support: everything on the disk is untrusted, and every field the kernel
+reads is validated per §18.2 **before** any write derives an LBA from it.
+Not bootable in earnest (the boot sector is a message stub, below). All
+words little-endian. Sector size 512.
 
 **Shipped geometries** (what §24's os88disk.py emits — canonical DOS
 formats):
@@ -1792,6 +2017,40 @@ WMIN_W/WMIN_H (§20.5):
                        always safe to call.
 ```
 
+**File slots (§18.4), append-only from 0x0098.** Five slots, all live from
+the change that adds them; each is a `jmp near` straight at the `dskw_*`
+routine — the register contracts in §18.4 *are* the ABI, and no wrapper
+sits in between. The kernel.asm table-span assertion goes 34 × 4 → **39 ×
+4**; `apps/os88api.inc` mirrors the equs plus the `FERR_*` codes (§20.5).
+
+```
+0x0098 dskw_write   in SI = NUL 8.3 name, ES:BX = bytes, CX = count
+                    (0 = empty file). Creates or replaces. out CF=0 AX=0,
+                    else CF=1 AX = FERR_*.
+0x009C dskw_read    in SI = name, ES:BX = buffer, CX = capacity; out CF=0
+                    AX = bytes read, else CF=1 AX = FERR_* (FERR_BIG
+                    leaves the buffer untouched).
+0x00A0 dskw_delete  in SI = name; out CF=0 AX=0, else CF=1 AX = FERR_*.
+0x00A4 dskw_rename  in SI = old name, DI = new name; out as delete.
+0x00A8 dskw_dfree   out CF=0, DX:AX = free bytes, BX = sectors/cluster;
+                    CF=1 AX = FERR_* (no disk I/O — the resident FAT
+                    snapshot answers it).
+```
+
+**These slots are UI-task/window-callback context only (binding)** — the
+same rule as the stream verbs above, and for a stronger reason: they take
+`[sch_lock]` around int 13h and share `dsk_secbuf` and the FAT snapshot
+with the mount path. Packages cannot spawn tasks (§20.2), so a package's
+paint/key/click proc and its entry proc are the only places this can be
+called from, which is exactly where it is legal. A caller inside a window
+callback holds the gfx lock and stalls painters for the write's duration
+(§18.4) — a save is not a free operation and must never sit in a paint
+path.
+
+The buffer is **ES:BX** (not DS:BX), like `osapi_snd_play`, so a caller can
+write out of `SND_SEG` staging or its own image without a copy; packages
+that keep data in their own bss just set ES = DS. ES is restored per §1.
+
 **Stream verbs are UI-task/window-callback context only (binding).**
 Every caller — packages and Control Panel alike — runs inside a window
 callback on the single UI task, and the half-duplex/busy refusals of the
@@ -1816,7 +2075,8 @@ from a task.
 ### 20.5 apps/os88api.inc — the program-side SDK
 
 NASM include used by packages (not by the kernel). Provides: `OSAPI_*` equs
-for every table offset (§20.3), the window-record W_* / template offsets
+for every table offset (§20.3), the `FERR_*` file error codes (§18.4), the
+window-record W_* / template offsets
 (§11), color constants, and a `OS88_HEADER 'NAME', entry_label` macro that
 emits the §20.2 header (image size via a forward-referenced
 `equ` to an end label the program declares with `OS88_BSS n` /
@@ -2053,6 +2313,15 @@ Behaviour:
   about a second on real hardware — with a hostile-media ceiling of 97
   one-sector reads, approaching ~20 s at one sector per revolution plus
   retries; bounded and accepted, §18.3.)
+- **After someone else writes the disk** (§18.4): the write path remounts
+  the drive itself, so `disk_dir` and `disk_nfiles` are already current —
+  but it cannot repaint (the writing callback holds the gfx lock), so an
+  open Disk window keeps showing what it last painted. Its next repaint
+  from any cause — a click in it, a window moving over it, Refresh — shows
+  the new listing. The window has no notification path and needs none;
+  `fm_sel` is a directory index into a directory that may have changed
+  under it, exactly as it may after a disk swap, and the loader's own
+  validation (§21) is what keeps a stale index harmless.
 - `files_refresh` (called by loader_run, no lock held): find the live
   Disk instance via `inst_find_kind` KIND_FILES (§29) — none = nothing to
   do (the user closed the window mid-load); else acquire gfx_lock, and if
@@ -2258,9 +2527,47 @@ white fill erases the grow box. No icon flag, so the Disk window shows
 Two things got simpler in the move. The built-in reached its state through
 `inst_of_win` → `I_SPTR` because every instance shared one pool; a package
 addresses its own bss directly (`np_len` word + `np_buf` 512 bytes + three
-paint scratch words = `NP_BSS_TOTAL` 520). And the cap is gone: the pool
-that fixed it at 2 no longer exists, so instances are bounded only by the
-region pool and the instance table like any other package.
+paint scratch words + the §27.1 save/load state = `NP_BSS_TOTAL`). And the
+cap is gone: the pool that fixed it at 2 no longer exists, so instances are
+bounded only by the region pool and the instance table like any other
+package.
+
+### 27.1 Save and load — the file API's first caller
+
+NOTEPAD is where §18.4 becomes visible to a user, and the package-side
+proof that the file slots work from a plain window callback. Two keys, DOS
+Editor's: **F2 saves** (scan 3Ch), **F3 loads** (scan 3Dh); both arrive
+through the existing onkey with AL = 0. The file is `NOTES.TXT` in the root
+of the mounted data disk — a fixed name, because a package cannot prompt
+for one (there is no text-entry control in this OS, and inventing one is
+§22's job, not a note pad's). Every instance therefore shares the one file;
+the last save wins, deliberately and visibly.
+
+**Line endings are translated**, which is the point of writing a DOS
+filesystem at all: the buffer stores a bare 13 on Enter (§14), the file
+gets `CR LF`, and a load folds `CR LF` — and a lone `LF` — back to 13. A
+note written here opens correctly in Windows Notepad, and one written there
+opens correctly here. Translation runs through `np_io`, a 2×`NP_CAP`
+staging buffer in the package's own bss, so neither direction can overrun
+`np_buf`: a load stops folding at `NP_CAP` characters and reports the
+truncation.
+
+**Feedback is a toast**: `np_msg` (a near pointer, 0 = none) is drawn by
+`np_paint` as a black-framed white box at the content's top-right — "Saved
+NOTES.TXT", "Loaded NOTES.TXT", "Truncated", or the `FERR_*` code mapped
+through an eleven-entry table indexed by the code itself ("Done", "No
+disk", "Disk error", "Bad name", "Not found", "Name exists", "Disk full",
+"Dir full", "Protected", "Write protected", "Too big"). It is cleared by
+the **next** keystroke — by an edit, or by the next save/load replacing it —
+so it never becomes stale furniture, while a key the app ignores leaves
+both the toast and the screen alone. It is drawn last, so it sits above the
+text.
+
+Save is `ES = DS` + slot 0x0098; load is slot 0x009C with the buffer
+capacity, mapping `FERR_BIG` to the same "Too big" toast the truncation
+path uses. Neither call happens in the paint proc — both run in onkey,
+which already holds the gfx lock, so the write's stall (§18.4) lands on a
+keystroke and not on a repaint.
 
 Removing the kind renumbered two pinned sets — `KIND_CLOCK`..`KIND_CTRL`
 down by one (§29) and `CMD_CLOCK`..`CMD_REBOOT` down by one (§12), the File
@@ -4048,10 +4355,13 @@ clk_sn_* : a second copy of the six fields, same order and adjacency
 ```
 
 **The two display settings** are runtime state like every other Control
-Panel setting (the scheduler mode, double buffering, the tone route): there
-is nowhere to persist them — the kernel never writes the data disk; other
-machines do (§19) — so both return to
-their defaults at boot. They change **display only**; the clock itself is
+Panel setting (the scheduler mode, double buffering, the tone route): they
+return to their defaults at boot. Since §18.4 the kernel *can* write the
+data disk, so a settings file is now buildable — it is deliberately not
+built: it would tie a machine's UI state to whichever floppy happens to sit
+in B:, and the settings would silently change when the disk did. Persisting
+them wants a home the kernel owns, which this OS does not yet have.
+They change **display only**; the clock itself is
 always kept as a 0..23 hour and a full seconds count, so toggling either
 one loses nothing and the RTC is not rewritten.
 

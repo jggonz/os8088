@@ -58,12 +58,20 @@ disk_heads:  dw 2                ; heads              } replaced at mount
 disk_nfiles: dw 0                ; file count, valid after a good mount
 
 ; -----------------------------------------------------------------------------
-; disk_read - read CX sectors starting at LBA AX to ES:BX
-; in:  AX = start LBA, CX = sector count, ES:BX -> destination
+; disk_read  - read  CX sectors starting at LBA AX to   ES:BX
+; disk_write - write CX sectors starting at LBA AX from ES:BX (SPEC.md 18.4)
+; in:  AX = start LBA, CX = sector count, ES:BX -> destination / source
 ;      (the internal pointer advances 512 bytes per sector - the caller's
 ;       ES:BX budget must cover count*512). Drive from [disk_drive].
-; out: CF=1 on unrecoverable error (some sector failed all 3 attempts)
-; clobbers: nothing but CF
+; out: CF=1 on unrecoverable error (some sector failed all 3 attempts, or
+;      the media is write-protected); [dsk_ioerr] = the last int 13h status
+;      byte, which is how diskw.inc tells 03h (write-protected) from a real
+;      failure
+; clobbers: nothing but CF (and the two module bytes above)
+;
+; ONE transfer routine, entered with [dsk_op] = the int 13h function: the
+; CHS conversion, the cylinder guard and the retry policy exist once and
+; cannot drift apart between reading and writing.
 ;
 ; LBA -> CHS with 16-bit div (LBA < 2880 so it never overflows):
 ;   cyl = LBA / (spt*heads); rem = LBA % (spt*heads)
@@ -72,6 +80,11 @@ disk_nfiles: dw 0                ; file count, valid after a good mount
 ; DH = head, DL = drive.
 ; -----------------------------------------------------------------------------
 disk_read:
+    mov byte [dsk_op], 0x02     ; AH=02 read (mov leaves the flags alone)
+    jmp short dsk_xfer
+disk_write:
+    mov byte [dsk_op], 0x03     ; AH=03 write - the ONLY difference
+dsk_xfer:
     push ax
     push bx
     push cx
@@ -111,15 +124,19 @@ disk_read:
 
     mov bp, 3                   ; attempts left for this sector
 .attempt:
-    mov ax, 0x0201              ; AH=02 read, AL=1 sector -> ES:BX
+    mov ah, [dsk_op]            ; 02 read / 03 write
+    mov al, 1                   ; one sector per call, to ES:BX
     int 0x13
     jnc .ok
+    mov [dsk_ioerr], ah         ; keep the status for diskw.inc's mapping
+    cmp ah, 0x03
+    je .fail                    ; write-protected: retrying cannot help
     mov ah, 0x00                ; failed: reset the controller and retry
     mov dl, [disk_drive]
     int 0x13
     dec bp
     jnz .attempt
-    jmp .fail                   ; 3 strikes: unrecoverable
+    jmp short .fail             ; 3 strikes: unrecoverable
 
 .ok:
     add bx, 512                 ; advance destination
@@ -174,6 +191,13 @@ disk_mount:
     mov word [disk_spt], 9      ; fallback geometry for the LBA 0 read
     mov word [disk_heads], 2
     mov word [disk_nfiles], 0   ; stays 0 unless the mount fully succeeds
+    mov byte [dsk_mntok], 0     ; the write gate (SPEC.md 18.4) closes for
+                                ; the whole mount: a torn mount leaves it
+                                ; closed, so nothing can write a volume
+                                ; whose layout was never fully validated
+    mov word [dsk_rover], 2     ; allocator hint + FAT dirty range: no
+    mov word [dsk_fatd0], 0xFFFF    ; snapshot state survives a mount
+    mov word [dsk_fatd1], 0
     mov word [ld_pending], 0    ; a queued click indexes the OLD directory;
                                 ; never let it run against the new one
 
@@ -330,6 +354,7 @@ disk_mount:
 
 .done:
     mov [disk_nfiles], bp       ; publish the count last
+    mov byte [dsk_mntok], 1     ; ...and only now open the write gate
     clc
     jmp .out
 .fail:
@@ -1042,5 +1067,17 @@ dsk_datalba:  resw 1            ; FirstDataSec
 dsk_maxclus:  resw 1            ; CountOfClusters+1 = highest valid cluster
 dsk_cherr:    resb 1            ; dsk_read_chain: failure code across the
                                 ; register-restore epilogue
+dsk_op:       resb 1            ; int 13h function for dsk_xfer: 02h / 03h
+dsk_ioerr:    resb 1            ; status (AH) of the last FAILED transfer;
+                                ; 03h = write-protected media (SPEC.md 18.4)
+
+; --- write-path state (SPEC.md 18.4), all reset by disk_mount ---------------
+dsk_mntok:    resb 1            ; 1 only between a fully successful mount and
+                                ; the next mount attempt - the write gate
+dsk_wpad:     resb 1            ; keeps the words below even-aligned
+dsk_rover:    resw 1            ; next cluster the allocator examines
+dsk_fatd0:    resw 1            ; dirty FAT sector range [lo, hi] inclusive,
+dsk_fatd1:    resw 1            ; sector indices within ONE FAT; lo = FFFFh
+                                ; means clean
 
 section .text
