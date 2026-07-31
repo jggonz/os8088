@@ -57,6 +57,60 @@ disk_spt:    dw 9                ; sectors per track  } fallback geometry,
 disk_heads:  dw 2                ; heads              } replaced at mount
 disk_nfiles: dw 0                ; file count, valid after a good mount
 
+; The current directory (SPEC.md 19.2) - the one disk_dir lists and the one
+; every dskw_* name resolves inside. 0 = the root. These live HERE, in
+; .text, and not in .bss for a reason worth stating: -f bin gives .bss no
+; image bytes, so it boots as whatever the RAM held, and the very first
+; disk_mount reads [dsk_keepcwd] to decide whether to reset [dsk_cwd].
+; Left in .bss, one garbage byte at boot sends the mount walking a garbage
+; cluster chain and the volume lists two lines of noise.
+dsk_cwd:     dw 0                ; current directory's first cluster
+dsk_keepcwd: db 0                ; 1 = this mount is a dsk_chdir: keep it
+
+; The folder icon (SPEC.md 19.2): 16 mask rows then 16 data rows, bit 15 =
+; leftmost, the SPEC.md 20.2 body format the harvest copies into a slot. A
+; folder has nothing on disk to harvest an icon FROM, so this is the one
+; icon body that is built in - hand-authored like the menu-bar logo.
+;
+;   ..#####.........      tab
+;   .#.....#........
+;   .##############.      body
+;   .#............#.
+;   .##############.
+dsk_folder_ico:
+    dw 0x0000                    ; 16 mask rows (white underlay: the body,
+    dw 0x3E00                    ; filled, so the icon reads on the dither)
+    dw 0x7F00
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x0000
+    dw 0x0000
+    dw 0x0000                    ; 16 data rows (black pixels)
+    dw 0x3E00
+    dw 0x4100
+    dw 0x7FFE
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x7FFE
+    dw 0x0000
+    dw 0x0000
+
 ; -----------------------------------------------------------------------------
 ; disk_read  - read  CX sectors starting at LBA AX to   ES:BX
 ; disk_write - write CX sectors starting at LBA AX from ES:BX (SPEC.md 18.4)
@@ -200,6 +254,11 @@ disk_mount:
     mov word [dsk_fatd1], 0
     mov word [ld_pending], 0    ; a queued click indexes the OLD directory;
                                 ; never let it run against the new one
+    cmp byte [dsk_keepcwd], 0   ; a remount always lands at the root, and
+    jne .cwd_kept               ; dskw_* resolve there until dsk_chdir
+    mov word [dsk_cwd], 0       ; moves - EXCEPT when dsk_chdir is the
+.cwd_kept:                      ; caller, which is how navigation reuses
+                                ; this whole validated pipeline (19.2)
 
     ; --- 1. boot sector: read LBA 0, validate the BPB (SPEC.md 18.2) ---
     mov ax, LOW_SEG
@@ -239,12 +298,11 @@ disk_mount:
     mov ax, LOW_SEG
     mov es, ax
     xor bp, bp                  ; BP = accepted entry count
-    xor dx, dx                  ; DX = root sector index
+    mov ax, [dsk_cwd]           ; the current directory (0 = root at mount;
+    call dsk_dirw_start         ; dsk_chdir re-enters here, SPEC.md 19.2)
 .rootsec:
-    cmp dx, [dsk_rootsecs]
-    jae .scan_done
-    mov ax, [dsk_rootlba]
-    add ax, dx
+    call dsk_dirw_next          ; AX = next sector LBA, CF=1 = end of dir
+    jc .scan_done
     mov cx, 1
     mov bx, dsk_secbuf
     call disk_read
@@ -265,12 +323,15 @@ disk_mount:
     je .skip                    ; LFN entry (mask, then compare, per spec)
     test ah, 0x08
     jnz .skip                   ; volume label
-    test ah, 0x10
-    jnz .skip                   ; subdirectory (no navigation)
     test ah, 0x06
     jnz .skip                   ; hidden or system (DOS convention)
     cmp al, 0x20
     je .skip                    ; a name may not start with a space (spec)
+    cmp al, '.'
+    je .skip                    ; a subdirectory's own '.' and '..' links:
+                                ; navigation uses dsk_dotdot, not these
+                                ; (SPEC.md 19.2) - listing them would put
+                                ; two undeletable oddities in every folder
     ; accepted: synthesize in kernel scratch, copy out (DS stays kernel)
     call dsk_synth              ; ES:SI raw entry -> dsk_ent (SPEC.md 19)
     push cx
@@ -294,7 +355,6 @@ disk_mount:
 .skip:
     add si, 32
     loop .entry
-    inc dx
     jmp .rootsec
 .scan_done:
 
@@ -319,6 +379,8 @@ disk_mount:
     jae .done
     mov ax, dx
     call dsk_get_dir            ; SI -> dsk_ent, the synthesized entry
+    cmp word [si+16], 2         ; a folder: the one icon that is not
+    je .h_folder                ; harvested off the disk but built in
     cmp word [si+16], 1         ; type word
     jne .h_zero
     mov ax, [si+18]             ; first cluster (validated at synthesis)
@@ -347,6 +409,19 @@ disk_mount:
     mov cx, DSK_ICO_SIZE
     call dsk_copy_low
     jmp .h_next
+
+.h_folder:                      ; every folder gets the same built-in body.
+    mov si, dsk_folder_ico      ; The one icon not harvested off the disk,
+    mov ax, dx                  ; so it is also the one copied from .text
+    mov cl, 6                   ; rather than through dsk_copy_low (which
+    shl ax, cl                  ; moves LOW_SEG -> LOW_SEG); ES is already
+    add ax, disk_icons          ; LOW_SEG here, so a plain rep movsb does it
+    mov di, ax
+    mov cx, DSK_ICO_SIZE
+    cld
+    rep movsb                   ; DS = kernel -> ES = LOW_SEG
+    jmp .h_next
+
 .h_zero:                        ; no icon: the slot is already blank
 .h_next:
     inc dx
@@ -360,6 +435,8 @@ disk_mount:
 .fail:
     mov word [disk_spt], 9      ; leave sane fallback geometry behind
     mov word [disk_heads], 2
+    mov word [dsk_cwd], 0       ; a failed chdir must not leave the volume
+                                ; pointed inside a directory nothing listed
     stc
 .out:
     pop es
@@ -678,6 +755,24 @@ dsk_synth:
     mov ax, 0xFFFF
 .szok:
     mov [dsk_ent+20], ax
+    ; --- @16: type 2 = subdirectory, and nothing else about it is trusted:
+    ;     a folder's size field is zero by spec, and its first cluster is
+    ;     validated exactly like a file's because dsk_chdir will walk it
+    ;     (SPEC.md 19.2). Tested first - the ext rule below must never see
+    ;     a directory, or a folder literally named "X.O88" would type as a
+    ;     package and reach the loader.
+    test byte [es:si+DSK_R_ATTR], 0x10
+    jz .notdir
+    mov ax, [es:si+DSK_R_CLUS]
+    cmp ax, 2
+    jb .typed                   ; a directory we cannot walk is type 0:
+    cmp ax, [dsk_maxclus]       ; listed, inert, never enterable
+    ja .typed
+    mov word [dsk_ent+16], 2
+    mov word [dsk_ent+20], 0    ; folders have no meaningful size
+    jmp short .typed
+.notdir:
+
     ; --- @16: type word = 1 iff ext == "O88" AND size fits 16 bits AND
     ;     size >= 1 AND first cluster in [2, dsk_maxclus] (SPEC.md 19) -
     ;     a garbage entry can never reach the loader as type 1
@@ -807,6 +902,152 @@ dsk_next_clus:
     stc
 .out:
     pop es
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_dirw_start / dsk_dirw_next - iterate a directory's sectors (SPEC 19.2)
+;
+; A FAT12/16 volume has TWO directory shapes: the root is a fixed region of
+; [dsk_rootsecs] sectors at [dsk_rootlba], and every subdirectory is an
+; ordinary cluster chain. Every directory scan in the kernel - the mount
+; listing (SPEC.md 18.3), the write path's slot search (SPEC.md 18.4) -
+; runs through this one iterator, so the two shapes are spelled out once
+; and cannot drift apart.
+;
+; dsk_dirw_start  in: AX = the directory's first cluster, 0 = the root
+;                 out: nothing (all registers preserved)
+; dsk_dirw_next   out: CF=0 and AX = the next sector's LBA;
+;                      CF=1 = the directory ends here
+;                 clobbers: AX (the output), CF
+;
+; End-of-chain needs no EOC constants, exactly as in dsk_read_chain: any
+; next-value outside [2, dsk_maxclus] ends the walk, which folds EOC marks,
+; free entries and bad marks into one case. A cross-linked FAT could cycle
+; forever, though - a directory walk has no file size to bound it the way
+; dsk_read_chain does - so DSK_DIRW_MAX caps the sectors any one walk will
+; visit. 256 sectors is 4,096 entries, past anything real and far past the
+; 32-entry listing cap.
+; -----------------------------------------------------------------------------
+DSK_DIRW_MAX equ 256             ; hostile-FAT guard: max sectors per walk
+
+dsk_dirw_start:
+    mov [dsk_wclus], ax
+    mov word [dsk_wsec], 0
+    mov word [dsk_wguard], DSK_DIRW_MAX
+    ret
+
+dsk_dirw_next:
+    push bx
+    cmp word [dsk_wguard], 0
+    je .end                     ; a looped chain stops here, not never
+    dec word [dsk_wguard]
+    mov ax, [dsk_wclus]
+    or ax, ax
+    jnz .sub
+
+    mov ax, [dsk_wsec]          ; the root: a flat run of sectors
+    cmp ax, [dsk_rootsecs]
+    jae .end
+    inc word [dsk_wsec]
+    add ax, [dsk_rootlba]
+    clc
+    jmp short .out
+
+.sub:                           ; a subdirectory: spc sectors per cluster
+    mov bl, [dsk_spc]
+    xor bh, bh
+    cmp [dsk_wsec], bx
+    jb .have
+    mov ax, [dsk_wclus]
+    call dsk_next_clus          ; CF=1 only if the CURRENT link is invalid
+    jc .end
+    mov [dsk_wclus], ax         ; the new link is validated by clus2lba
+    mov word [dsk_wsec], 0
+.have:
+    mov ax, [dsk_wclus]
+    call dsk_clus2lba           ; CF=1 = outside [2, dsk_maxclus]: the end
+    jc .end
+    add ax, [dsk_wsec]
+    inc word [dsk_wsec]
+    clc
+    jmp short .out
+.end:
+    stc
+.out:
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_chdir - make a directory the current one and re-list the volume
+; in:  AX = the directory's first cluster (0 = the root)
+; out: CF=0 listed; CF=1 = the mount failed (the volume is back at the root
+;      and [dsk_mntok] is closed, exactly as after any failed mount)
+; clobbers: nothing else (flags)
+;
+; Navigation is a REMOUNT (SPEC.md 19.2), which is the same choice
+; SPEC.md 18.4 already made for metadata writes: rather than a second way
+; to fill disk_dir/disk_icons, entering a folder re-runs the one validated
+; pipeline - BPB re-checked, FAT re-snapshotted, listing and icon harvest
+; rebuilt - with [dsk_keepcwd] the single instruction's worth of difference.
+; It costs a floppy's worth of sectors per navigation and buys the property
+; that disk_dir is ALWAYS exactly a mount snapshot, with no third staleness
+; rule anywhere in the kernel.
+; -----------------------------------------------------------------------------
+dsk_chdir:
+    push dx
+    mov [dsk_cwd], ax
+    mov byte [dsk_keepcwd], 1
+    mov dl, [disk_drive]
+    call disk_mount
+    mov byte [dsk_keepcwd], 0
+    pop dx
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_dotdot - the current directory's parent (SPEC.md 19.2)
+; in:  nothing; [dsk_cwd] must be non-zero (inside a subdirectory)
+; out: CF=0, AX = the parent's first cluster, 0 = the root; CF=1 = the '..'
+;      link is missing or unreadable
+; clobbers: AX (the output), CF
+;
+; Every subdirectory carries '.' and '..' as its first two entries by spec,
+; and '..' holds the parent's first cluster - with the FAT convention that
+; a parent OF the root is written as cluster 0, which is exactly the value
+; this kernel already uses for "the root". So going up needs no path stack
+; and no memory of how we got here: the disk itself records it.
+; -----------------------------------------------------------------------------
+dsk_dotdot:
+    push bx
+    push cx
+    push si
+    push es
+    mov ax, LOW_SEG
+    mov es, ax
+    mov ax, [dsk_cwd]
+    call dsk_dirw_start
+    call dsk_dirw_next          ; the directory's very first sector
+    jc .bad
+    mov cx, 1
+    mov bx, dsk_secbuf
+    call disk_read
+    jc .bad
+    mov si, dsk_secbuf + 32     ; entry 1 = '..' by spec
+    cmp byte [es:si], '.'
+    jne .bad
+    cmp byte [es:si+1], '.'
+    jne .bad
+    mov ax, [es:si+DSK_R_CLUS]
+    cmp ax, [dsk_maxclus]       ; 0 (the root) or a walkable cluster; a
+    ja .bad                     ; corrupt '..' must not become the cwd
+    clc
+    jmp short .out
+.bad:
+    stc
+.out:
+    pop es
+    pop si
     pop cx
     pop bx
     ret
@@ -1067,6 +1308,13 @@ dsk_datalba:  resw 1            ; FirstDataSec
 dsk_maxclus:  resw 1            ; CountOfClusters+1 = highest valid cluster
 dsk_cherr:    resb 1            ; dsk_read_chain: failure code across the
                                 ; register-restore epilogue
+
+; --- the directory walker's scratch (SPEC.md 19.2) --------------------------
+; Safe in .bss: dsk_dirw_start writes all three before any walk reads them.
+; [dsk_cwd] and [dsk_keepcwd] are NOT - see the module data block up top.
+dsk_wclus:    resw 1            ; dirw: the cluster being walked, 0 = root
+dsk_wsec:     resw 1            ; dirw: sector index inside it
+dsk_wguard:   resw 1            ; dirw: sectors left before the walk gives up
 dsk_op:       resb 1            ; int 13h function for dsk_xfer: 02h / 03h
 dsk_ioerr:    resb 1            ; status (AH) of the last FAILED transfer;
                                 ; 03h = write-protected media (SPEC.md 18.4)
