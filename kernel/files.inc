@@ -456,6 +456,23 @@ fmv_sync:
     mov [di+FS_SCRL], bx
     pop bx
     mov [di+FS_SEL], bx
+
+    ; A sync is meant to re-list the window exactly where it already was, so
+    ; the caption normally needs nothing - and MUST get nothing, because we
+    ; have no name to give it here and fm_settitle with SI = 0 would demote
+    ; a perfectly good 'TOOLS' to 'Folder'. There is one case where the
+    ; window did move: the folder was deleted under us, and the mount fell
+    ; back to the root (SPEC.md 19.2). fmv_load records that in FS_CWD, so
+    ; comparing it against where we asked to be is exactly the test - and
+    ; then the root titles itself, which is the one caption fm_settitle can
+    ; always name without help. Every OTHER path that changes FS_CWD is
+    ; navigation and retitles itself with a real name.
+    cmp dx, [di+FS_CWD]
+    je .out
+    push si
+    xor si, si
+    call fm_settitle
+    pop si
 .out:
     pop dx
     pop bx

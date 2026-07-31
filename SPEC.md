@@ -181,6 +181,16 @@ worst case is bounded by `gfx_save`'s formula, 4 planes × rows ×
 the frame, ~130 rows. 4 × 130 × 21 ≈ 10.9KB against 48KB — a factor of
 four in hand.
 
+**This is a measurement over what ships, not an enforced bound.**
+`menu_layout` clamps a menu set's COUNT to `MENU_APPMAX` and `menu_popup`
+clamps a popup's items to `MENU_POPMAX`, but nothing clamps item WIDTH:
+`menu_widest` is taken as-is from the application's own set (§12.2), so a
+package declaring a dozen very long items could ask for more than 48KB and
+would write past the heap into `VIEW_SEG` (§2.3). No shipped package comes
+near it, and none can grow silently — a menu set is `.text` in the `.o88`.
+The honest fix the day it matters is a width clamp in `menu_widest`'s two
+callers; it is recorded here rather than left as folklore.
+
 ### 2.3 VIEW_SEG — the file-manager view cache (§22.1)
 
 Linear 0x2C000..0x2FFFF, `VIEW_SEG` = 0x2C00, four 4,096-byte slots at
@@ -683,6 +693,17 @@ makes the machine slow, and the Task Manager keeps updating.
   changing queues the LEFT event only, so a chord can never steal a left
   press from the drag loop or the double-click detector. One event per
   packet keeps the ISR's IF=0 window the length it already was.
+  That rule covers one packet. A right-press chorded onto an **already
+  running** left tracking loop is a different case and is deliberately
+  allowed: `menu_track` and `ui_drag` poll `mouse_btn` directly and never
+  drain the queue, so the `EVT_RDOWN` survives the loop and `ui_rdown`
+  acts on it afterwards. The visible effect is that a right-press during a
+  pull-down selects the row it was over once the menu closes — defensible,
+  since the user really did right-press that row — and the popup it opens
+  is drawn and restored within one poll iteration because `menu_drop`
+  flushes its body before its first level test. The save-under restores
+  correctly either way; if that one-frame flash is ever judged visible,
+  the fix is an early `test byte [mouse_btn], 2` / `jz` in `ui_rdown`.
   Move the cursor per §7 (draw only when
   `gfx_lock_flag` is clear AND `cur_level` >= 0; otherwise just update
   position and set `cur_dirty`). Send EOI (AL=0x20 → port 0x20) — the BIOS
@@ -1154,10 +1175,15 @@ That makes Locator the first **kernel** kind whose set carries a non-zero
 `AM_ONCMD`, so `ui_dispatch`'s `.app` route is no longer package-only. Two
 consequences, both binding:
 
-- The `test word [bx + W_FLAGS], 2` visibility re-check in `.app` stops
-  being unreachable insurance and becomes load-bearing — the lock drops
-  between `menu_track` and the call, and a kernel window can be destroyed
-  by a command the user picked from its own bar.
+- The `test word [bx + W_FLAGS], 2` visibility re-check in `.app` is worth
+  keeping, but **it is still insurance, not a live guard**. The lock does
+  drop between `menu_track` and the call, so the shape of the hazard is
+  real; what closes it today is that every `fm_oncmd` command able to
+  destroy the window (Close Window, Restart) is *deferred* through
+  `ui_post_cmd` and drained in step 3 — the same task, after `ui_dispatch`
+  has already returned — so no kernel window can currently die inside that
+  window. Anything that later runs a destroying command inline makes this
+  check load-bearing; until then it costs 5 bytes and documents the rule.
 - `fm_oncmd` runs under the gfx lock like any window callback, so any
   command that needs `app_launch` or `ui_cmd` goes through
   `inst_launch_post` (§29.4) or `ui_post_cmd` (§13). See §22.
@@ -1223,9 +1249,16 @@ A popup MAY sit over the dock strip (§30) — the save-under puts it back.
 
 Only one menu can be open at a time — both trackers run on the UI task
 under the gfx lock and both are driven by a held button — so both use
-`SAVE_SEG:0` for the save-under and no allocator appears. The worst-case
-save is a `MENU_POPMAX`-item popup at the widest string: 4 planes × 258
-rows × ~21 bytes ≈ 21KB against the 48KB `SAVE_SEG` heap (§2.3).
+`SAVE_SEG:0` for the save-under and no allocator appears. `MENU_POPMAX` bounds a popup's HEIGHT (258 rows) and nothing bounds its
+width — `menu_widest` is taken as-is — so the honest budget is stated over
+the descriptors that actually exist rather than as a general guarantee.
+All three (`fm_ctx_file` / `fm_ctx_fold` / `fm_ctx_dir`) are immutable
+`.text`, ≤ 8 items of ≤ 18 chars, worst case 4 planes × 130 rows × ~21
+bytes ≈ 5.5KB against the 48KB `SAVE_SEG` heap (§2.3), and there is no API
+slot through which a package could supply another. **A width clamp in
+`menu_popup` is the fix the day that stops being true** — a 16-item popup
+of screen-wide items would want ~83KB and would run off the end of the
+heap into `VIEW_SEG`.
 
 ## 13. ui.inc — the UI task (task 0)
 
@@ -2923,6 +2956,28 @@ grandparent's listing, which is a second mount to display a string. Names
 are ≤ 12 chars (§19) and `I_NAME` is 16 with a permanent NUL at byte 15, so
 no bound can be exceeded.
 
+The rule has one non-navigation case, and it is the one that used to break
+it. `fmv_sync` (§22.1) re-lists a window where it already is, so it
+normally must NOT retitle — it has no name to give and would demote a good
+`"TOOLS"` to `"Folder"`. But a sync can move the window after all: if the
+folder was deleted underneath it, the mount falls back to the root (§19.2).
+`fmv_load` records where it really landed, so **`fmv_sync` compares the
+`FS_CWD` it asked for against the one it got, and retitles only on a
+mismatch** — where the answer is always the root, the one caption that
+names itself. Every other path that changes `FS_CWD` is navigation and
+retitles with a real name.
+
+**The repaint escalation (`[fm_full]`).** `fm_repaint` normally repaints
+content only. A window's CAPTION, though, lives in the frame, which a
+content repaint never touches — so navigation would leave the title bar
+naming the folder just left. `fm_settitle` therefore raises `[fm_full]`,
+and `fm_repaint` consumes it (clearing it *before* the call, so there is no
+recursion) by escalating to `wm_paint_all` under the caller-held lock — the
+`ui_drag` idiom (§13). It is only ever raised on paths that have already
+paid for a whole disk mount, so a full-screen repaint is not the expensive
+part of anything it joins. `files_init` zeroes it, so it is not a `.bss`
+read-before-write (§2.1).
+
 **Live layout (binding).** The window resizes, so nothing may bake in
 320×200: one helper, `fm_layout` (in BX = window ptr), computes the
 frame-derived values both the painter and the hit-tester use — computed in
@@ -2971,7 +3026,7 @@ cw). The status line at (6, status_y) shows the **first** of these that
 applies — the precedence is binding, because all five can be true at once:
 
 1. `[ld_pending]` non-zero → `"Loading..."`.
-2. `[fm_edit]` non-zero → the **edit line** (below).
+2. `FS_EDIT` non-zero → the **edit line** (below).
 3. `FS_FERR` = 255 **and** `[fm_msgwin]` = this window → `fm_msgbuf`, the
    free-space line (`"1423 KB free"`).
 4. `FS_FERR` non-zero → the `FERR_*` message, from an 11-entry table
@@ -2992,17 +3047,21 @@ string the window draws is bounded by the live cw one way or another.
 **The row area** spans x 0..cw−16, y 22..list_bot−1 (a 2px gutter before
 the scroll bar); when `rows_fit` is 0 the row area and the scroll bar are
 simply omitted (a legal degenerate window). Rows shown = min(total −
-fm_scroll, rows_fit), where total = [disk_nfiles] rows in list view,
-ceil(nfiles / cols) grid rows in icon view. `fm_scroll` is clamped to
+`FS_SCRL`, rows_fit), where total = **this window's `FS_N`** (read through
+the `fm_lnf` mirror — never `[disk_nfiles]`, which belongs to whichever
+window last acted and is exactly the bug §22.1 exists to prevent) rows in
+list view, ceil(FS_N / cols) grid rows in icon view. The scroll position is
+clamped to
 0..max(0, total − rows_fit) at every use — paint clamps first, so a
 shrink-resize self-heals.
 
-- **List view** (fm_view = 0): rows 16px tall, entry index = row +
-  fm_scroll. Per row: the file's 16×16 icon at x=4 (from `disk_icons`
-  entry i; all-zero entry → built-in `ico_app16`, §25), name at x=24,
+- **List view** (FS_VIEW = 0): rows 16px tall, entry index = row +
+  FS_SCRL. Per row: the file's 16×16 icon at x=4 (from **this window's
+  cache** via `fmv_get_icon`, §22.1 — never `disk_icons`, which belongs to
+  whichever window last acted; all-zero entry → built-in `ico_app16`, §25), name at x=24,
   size right-aligned ending at cw−22, text baselines at row top + 4.
-- **Icon view** (fm_view = 1): a grid of 78×40 cells, `cols` per grid
-  row, cell (r, c) at (c·78, 22 + (r − fm_scroll)·40), entry index =
+- **Icon view** (FS_VIEW = 1): a grid of 78×40 cells, `cols` per grid
+  row, cell (r, c) at (c·78, 22 + (r − FS_SCRL)·40), entry index =
   r·cols + c. Per cell: the 16×16 icon centered at cell +(31, 3), the
   name below it at cell y+23, truncated to **9 chars** and centered
   (x = cell + (78 − 8·len)/2). Truncation is display-only.
@@ -3017,7 +3076,7 @@ row area is. 1px black frame; an 11-row **up-arrow cell** at the top and
 the track by their own 1px rule); the track between them filled 50% gray.
 When total > rows_fit a white, black-framed **thumb** rides the track:
 height = max(8, rows_fit·track_h/total), top = track_y0 +
-fm_scroll·track_h/total, clamped to the track; otherwise the track is
+FS_SCRL·track_h/total, clamped to the track; otherwise the track is
 bare and the arrows are inert. One degenerate exception: a track shorter
 than the 8px minimum thumb (frame heights 83..89) stays bare and its
 clicks do nothing — the arrows and keys still scroll. There is **no thumb drag** — W_ONCLICK is
@@ -3038,9 +3097,11 @@ Behaviour:
 - `files_open` (from CMD_FILES dispatch, no lock held): the target is
   `([disk_drive], [dsk_cwd])` — where the volume already is — then the same
   rule.
-- `W_ONCLICK` (lock held; every path below ends in the content repaint —
-  white-fill own content from the **live** W_W/W_H + redraw + a closing
-  `wm_grow_paint` (§11), because the white fill erases the grow box):
+- `W_ONCLICK` (lock held; every path below ends in `fm_repaint`, which is
+  normally the content repaint — white-fill own content from the **live**
+  W_W/W_H + redraw + a closing `wm_grow_paint` (§11), because the white
+  fill erases the grow box — but **escalates to a full `wm_paint_all` when
+  `[fm_full]` is set**, see "The repaint escalation" below):
   test order is buttons → scroll bar → rows.
   1. Refresh rect → `fmv_load` on **this window's** `FS_DRV`, root: a
      re-mount from scratch, so a swapped disk shows its real contents.
@@ -3083,7 +3144,7 @@ Behaviour:
   Branching here is not cosmetic: before it existed, a folder double-click
   reached `ld_run_body`, which rejects `type != 1`, and the status line
   read "Bad package" for an operation that had nothing to do with packages.
-- `W_ONKEY` (lock held). **While `[fm_edit]` is non-zero the handler
+- `W_ONKEY` (lock held). **While `FS_EDIT` is non-zero the handler
   swallows every key** and nothing below applies — binding, because the
   bare-letter shortcuts are live otherwise and typing a folder called
   `BAK` would switch to drive B: on its first character. See "Naming"
@@ -3153,11 +3214,11 @@ only by the UI task (§7) and `fm_oncmd` runs *inside* it:
 |---------|-------------|
 | Open | `fm_open_sel` — inline (loader is deferred, `dsk_chdir` is I/O under the lock like Refresh) |
 | New Folder… / Rename… / Delete | inline: enters edit mode, draws nothing but the status line. The disk is touched at **Enter**, not here |
-| Free Space | inline: `dskw_dfree` reads the resident FAT snapshot, no I/O at all |
+| Free Space | `fmv_sync` first (§22.1 — the answer must be about OUR volume, and that sync is a full mount when another window navigated last), then `dskw_dfree`, which reads the resident FAT snapshot with no I/O of its own |
 | Refresh / Drive A: / Drive B: | inline `disk_mount`, exactly as the button and the a/b/r keys already do |
 | Up One Folder / Root Folder | inline: `fmv_sync`, then `dsk_dotdot` + `fmv_load` / `fmv_load` AX=0 |
 | New Window / Open in New Window | **deferred** — seed + `inst_launch_post` (§29.4); at cap, `snd_beep` and nothing else, because `app_launch` would front an existing window and silently drop the seed |
-| as List / as Icons | inline: set `fm_view`, reset `fm_scroll` |
+| as List / as Icons | inline: set `FS_VIEW`, reset `FS_SCRL` |
 | Clock / Bounce | **deferred** — `inst_launch_post` (§29.4); `app_launch` takes the lock |
 | Close Window | **deferred** — `ui_post_cmd` CMD_CLOSE (§13); `ui_cmd` takes the lock |
 | Restart | **deferred** — `ui_post_cmd` CMD_REBOOT; `ui_cmd` takes the lock and never gives it back |
@@ -3175,8 +3236,13 @@ above the root and nothing useful to say about it.
 A right-press inside a file-manager window's content pops a menu at the
 pointer (§12.4). This is **not a convenience**. Under `WF_FULL` (§11.2) the
 UI ladder routes rows 0..19 to `wm_hit` and the bar is neither drawn nor
-clickable, so a fullscreen file-manager window has no menu bar at all: the
-context menu and the keyboard are its entire command surface. That is also
+clickable, so a fullscreen file-manager window would have no menu bar at all: the
+context menu and the keyboard would be its entire command surface. **That
+state is not reachable today** — `wm_fullscreen`'s only caller is API slot
+0x0090, a package can only fullscreen its own window, and no shipped `.o88`
+does; `ui_rdown`'s `[wm_fs]` test is insurance against a Locator Fullscreen
+command that does not exist yet. It is written down because the day that
+command lands, the context menu is what makes the mode usable at all. That is also
 why the in-window Refresh and view-toggle buttons stay — a one-button
 machine queues no `EVT_RDOWN` at all and must still be able to work.
 
@@ -3300,10 +3366,14 @@ and are never duplicated.
 | `fmv_bcast` | after a successful metadata write, re-copies the (already correct, §18.4) global snapshot into **every** live file-manager window on the same `(drive, cwd)` — the acting one included, since its own cache is stale too — and clears their `FS_SEL`/`FS_SCRL`. Pure memory, no extra I/O. |
 
 **`fm_layout` is the sole authority on `[fm_vseg]`** (and `[fm_vp]`): it
-calls `fm_vp_set` at its head, then mirrors the three hot fields —
-`FS_VIEW`, `FS_N`, `FS_SCRL` — into `fm_lview` / `fm_lnf` / `fm_lscr` for the
-painter, which uses every register including BP and has none free to thread a
-pointer through. `fm_clamp_scroll` is the **one** write-back (every scroll
+calls `fm_vp_set` at its head, then mirrors **eight** fields — `FS_VIEW`,
+`FS_MOK`, `FS_DRV`, `FS_EDIT`, `FS_FERR`, `FS_N`, `FS_SCRL`, `FS_SEL` —
+into `fm_lview` / `fm_lmok` / `fm_ldrv` / `fm_ledit` / `fm_lferr` /
+`fm_lnf` / `fm_lscr` / `fm_lsel` for the painter, which uses every register
+including BP and has none free to thread a pointer through. (`fm_lpad`
+exists only to keep the words after it even-aligned.) **The mirror list is
+part of this contract**: a new per-window field that the painter reads and
+that is not mirrored here reads the previous window's value. `fm_clamp_scroll` is the **one** write-back (every scroll
 path already funnels through it). Any painter or hit-tester that reads a
 cache without calling `fm_layout` (or `fm_vp_set`) first reads the *previous*
 window's directory: wrong names, wrong icons, and a double-click that opens
