@@ -291,6 +291,35 @@ disk_mount:
     jmp .fail
 .fat_ok:
 
+    ; --- 2a. is the current directory still ALLOCATED? (SPEC.md 19.2) --------
+    ; A dsk_chdir remount carries [dsk_cwd] across, but the directory that
+    ; cluster names can have stopped existing in the meantime: dskw_rmdir
+    ; removed it from another file-manager window, or the foreign machine
+    ; that had this floppy last deleted it. Removing a directory frees its
+    ; cluster and nothing more - the sectors still hold intact '.' and '..'
+    ; and a 0x00 terminator - so the walk below would mount and list it
+    ; perfectly happily, and the next write would commit a directory entry
+    ; into space the FAT calls free. dskw_alloc would then hand that same
+    ; cluster to the next file and the user's folder would silently
+    ; evaporate.
+    ;
+    ; The FAT is the only witness that can tell the difference, and by now
+    ; it is resident: a live directory's entry is a link or an EOC mark,
+    ; NEVER 0. Falling back to the root is safe in a way that guessing is
+    ; not, and it self-corrects the window too - fmv_load (SPEC.md 22.1)
+    ; already records what really happened rather than what it asked for,
+    ; so the view's FS_CWD follows us here instead of dangling.
+    cmp word [dsk_cwd], 0
+    je .cwd_ok                  ; the root is not a cluster and cannot go
+    mov ax, [dsk_cwd]
+    call dsk_next_clus          ; CF = outside [2, dsk_maxclus]
+    jc .cwd_lost
+    test ax, ax                 ; 0 = free: the directory was removed
+    jnz .cwd_ok
+.cwd_lost:
+    mov word [dsk_cwd], 0
+.cwd_ok:
+
     ; --- 3. root-dir scan -> synthesized directory (SPEC.md 19) ---
     ; One sector at a time through dsk_secbuf. DS never leaves the kernel
     ; segment while parsing: raw fields are read via es:, the staged entry
