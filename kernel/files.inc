@@ -49,12 +49,18 @@
 ; POSTED (inst_launch_post / ui_post_cmd) instead of called: see the jump
 ; table's per-entry comments, and SPEC.md 22 for the binding list.
 ;
-; Naming a new folder happens in the status line rather than in a dialog
-; (there is no dialog kind and no focus concept): FS_EDIT turns W_ONKEY
-; into a line editor that SWALLOWS EVERY KEY - binding, because otherwise
-; the first letter of "BAK" would switch to drive B: - and filters each
-; character through diskw.inc's own dskw_char, so the line shows exactly
-; the bytes dskw_mkdir will store.
+; The three commands that need an answer - New Folder..., Rename... and
+; Delete - ask for it in the status line rather than in a dialog (there is
+; no dialog kind and no focus concept): FS_EDIT turns W_ONKEY into an input
+; line that SWALLOWS EVERY KEY - binding, because otherwise the first letter
+; of "BAK" would switch to drive B: - and the two naming modes filter each
+; character through diskw.inc's own dskw_char, so the line shows exactly the
+; bytes that will be stored.
+;
+; Delete's line is a CONFIRMATION, not an editor, and it is the only thing
+; standing between a menu click and a file that is gone: this system has no
+; undo and no trash. So it names the file, and Enter is the only key that
+; means yes - every other one, and every click, means no.
 ;
 ; The paint/onkey/onclick procs and fm_oncmd all run with the gfx lock
 ; already held by the caller (SPEC.md 11/12.2) and never lock, block or
@@ -98,6 +104,10 @@ FS_SIZE     equ 16              ; = the Disk kind's KD_SSIZE
 
 FM_MAXWIN   equ VIEW_SLOTS      ; = KD_CAP: one cache slot per window
 FV_ICONS    equ 1024            ; icon images start here inside a slot (2.3)
+FM_HDRMAX   equ 48              ; fm_hdrbuf's size: the header and the status
+                                ; line are both staged whole and truncated
+                                ; afterwards, and the longest of them is the
+                                ; delete confirmation (SPEC.md 22)
 
 ; -----------------------------------------------------------------------------
 ; files_init - reset module state (no window is created at boot, SPEC.md 22)
@@ -118,8 +128,12 @@ files_init:
     mov cx, FM_MAXWIN * FS_SIZE
     cld
     rep stosb
-    mov byte [fm_elen], 0       ; nothing is being typed anywhere
-    mov byte [fm_ebuf], 0
+    mov byte [fm_elen], 0       ; nothing is being typed anywhere, nothing is
+    mov byte [fm_ebuf], 0       ; awaiting a confirmation, and no window has
+    mov byte [fm_onam], 0       ; asked how much room is left
+    mov byte [fm_odir], 0
+    mov word [fm_msgwin], 0
+    mov byte [fm_msgbuf], 0
     mov byte [fm_full], 0
     mov word [fm_vp], fm_pool   ; no acting window yet: point the three
     mov word [fm_vseg], VIEW_SEG    ; published words at slot 0 so a stray
@@ -530,8 +544,25 @@ fm_errtab:    dw fm_s_empty,  fm_s_enodisk, fm_s_dskerr, fm_s_ename
               dw fm_s_enoent, fm_s_eexist,  fm_s_efull,  fm_s_edfull
               dw fm_s_eprot,  fm_s_ewprot,  fm_s_toobig
 FM_NERR       equ 11            ; FERR_OK .. FERR_BIG
+FM_FREE       equ 255           ; the one FS_FERR value that is not a FERR_*:
+                                ; "draw fm_msgbuf", the free-space figure.
+                                ; It rides in FS_FERR rather than in a field
+                                ; of its own because it wants exactly that
+                                ; field's lifetime - cleared by fmv_load, by
+                                ; fm_edit_arm and by the next verdict.
 
-fm_s_newfld:  db 'New folder: ', 0  ; the edit line's prompt (SPEC.md 22)
+; --- the status-line input prompts (SPEC.md 22) ------------------------------
+; The delete line is the ONLY thing between a menu click and a file that is
+; gone, so it names the file, states the key that says yes and states the key
+; that says no. Worst case it is 'Delete ' + 12 + 18 = 37 characters, which
+; fits the default window's 38-char status line whole and truncates from the
+; right - which is why the name and the word Enter come before Esc.
+fm_s_newfld:  db 'New folder: ', 0
+fm_s_renam:   db 'Rename ', 0
+fm_s_rento:   db ' to: ', 0
+fm_s_delpr:   db 'Delete ', 0
+fm_s_delq:    db '? Enter=yes Esc=no', 0
+fm_s_kbfree:  db ' KB free', 0      ; Folder > Free Space
 fm_s_root:    db 'Disk', 0      ; window title at the root...
 fm_s_folder:  db 'Folder', 0    ; ...and in a folder we arrived at from
                                 ; below, whose name would cost a second
@@ -556,22 +587,25 @@ fm_s_mspec:   db 'Special', 0
 
 fm_s_open:    db 'Open', 0
 fm_s_mkdir:   db 'New Folder...', 0
+fm_s_rename:  db 'Rename...', 0
+fm_s_delete:  db 'Delete', 0
 fm_s_closew:  db 'Close Window', 0
 fm_s_refr:    db 'Refresh', 0
 fm_s_up:      db 'Up One Folder', 0
 fm_s_rootf:   db 'Root Folder', 0
 fm_s_drva:    db 'Drive A:', 0
 fm_s_drvb:    db 'Drive B:', 0
+fm_s_dfree:   db 'Free Space', 0
 fm_s_aslist:  db 'as List', 0
 fm_s_asicon:  db 'as Icons', 0
 fm_s_newwin:  db 'New Window', 0
 fm_s_opennew: db 'Open in New Window', 0
 
 fm_items_file:
-    dw fm_s_open, fm_s_mkdir, fm_s_closew
+    dw fm_s_open, fm_s_mkdir, fm_s_rename, fm_s_delete, fm_s_closew
 fm_items_fold:
     dw fm_s_newwin, fm_s_opennew
-    dw fm_s_refr, fm_s_up, fm_s_rootf, fm_s_drva, fm_s_drvb
+    dw fm_s_refr, fm_s_up, fm_s_rootf, fm_s_drva, fm_s_drvb, fm_s_dfree
 fm_items_view:
     dw fm_s_aslist, fm_s_asicon
 fm_items_spec:
@@ -581,8 +615,8 @@ fm_menus:
     dw menu_loc_name            ; AM_NAME: still 'Locator' (SPEC.md 12.3)
     dw fm_oncmd                 ; AM_ONCMD: our own handler
     dw 4                        ; AM_COUNT (= MENU_APPMAX, used exactly)
-    dw fm_s_mfile, fm_items_file, 3
-    dw fm_s_mfold, fm_items_fold, 7
+    dw fm_s_mfile, fm_items_file, 5
+    dw fm_s_mfold, fm_items_fold, 8
     dw fm_s_mview, fm_items_view, 2
     dw fm_s_mspec, fm_items_spec, 3
 
@@ -875,6 +909,13 @@ fm_layout:
     mov al, [di+FS_EDIT]
     mov [fm_ledit], al
     mov al, [di+FS_FERR]
+    cmp al, FM_FREE             ; the free-space figure lives in ONE module
+    jne .lferr                  ; buffer: only the window that asked for it
+    mov cx, [fm_msgwin]         ; may draw it, or a second window would show
+    cmp cx, di                  ; the first one's disk
+    je .lferr
+    xor al, al
+.lferr:
     mov [fm_lferr], al
     mov ax, [di+FS_N]
     mov [fm_lnf], ax
@@ -1286,6 +1327,12 @@ fm_onkey:
     je .vtoggle
     cmp al, 'V'
     je .vtoggle
+    cmp al, 8                   ; Backspace goes up, the way it does in every
+    je .updir                   ; file manager since (SPEC.md 22)
+    cmp al, 'n'
+    je .newfld
+    cmp al, 'N'
+    je .newfld
     mov dl, 0
     cmp al, 'a'
     je .mount
@@ -1326,6 +1373,17 @@ fm_onkey:
 .vtoggle:
     xor byte [di+FS_VIEW], 1
     mov word [di+FS_SCRL], 0
+    jmp .redraw
+
+.updir:
+    push si                     ; the menu body clobbers SI, which .redraw
+    call fm_c_up                ; still needs as the window pointer
+    pop si
+    jmp .redraw
+
+.newfld:
+    mov al, 1                   ; DI is still this window's block
+    call fm_edit_arm
     jmp .redraw
 
 .scr_up:
@@ -1546,20 +1604,23 @@ fm_settitle:
 ; module meaning, so a menu that gains an item simply renumbers what follows.
 FMC_OPEN    equ 0               ; File
 FMC_MKDIR   equ 1
-FMC_CLOSEW  equ 2
-FMC_NEWWIN  equ 3               ; Folder
-FMC_OPENNEW equ 4
-FMC_REFRESH equ 5
-FMC_UP      equ 6
-FMC_ROOT    equ 7
-FMC_DRVA    equ 8
-FMC_DRVB    equ 9
-FMC_LIST    equ 10              ; View
-FMC_ICONS   equ 11
-FMC_CLOCK   equ 12              ; Special
-FMC_BOUNCE  equ 13
-FMC_RESTART equ 14
-FMC_COUNT   equ 15
+FMC_RENAME  equ 2
+FMC_DELETE  equ 3
+FMC_CLOSEW  equ 4
+FMC_NEWWIN  equ 5               ; Folder
+FMC_OPENNEW equ 6
+FMC_REFRESH equ 7
+FMC_UP      equ 8
+FMC_ROOT    equ 9
+FMC_DRVA    equ 10
+FMC_DRVB    equ 11
+FMC_FREE    equ 12
+FMC_LIST    equ 13              ; View
+FMC_ICONS   equ 14
+FMC_CLOCK   equ 15              ; Special
+FMC_BOUNCE  equ 16
+FMC_RESTART equ 17
+FMC_COUNT   equ 18
 
 FM_NMENUS   equ 4               ; = fm_menus' AM_COUNT = MENU_APPMAX
 fm_menu_base:
@@ -1576,6 +1637,9 @@ fm_jmp:
                                 ;         disk I/O under the lock, like
                                 ;         Refresh already is)
     dw fm_c_mkdir               ; inline (arms the status-line editor)
+    dw fm_c_rename              ; inline (arms it; the disk is touched at
+                                ;         Enter, not here)
+    dw fm_c_delete              ; inline (arms the CONFIRM line; likewise)
     dw fm_c_closew              ; POSTED - ui_cmd takes the lock
     dw fm_c_newwin              ; POSTED - app_launch takes the lock (29.4)
     dw fm_c_opennew             ; POSTED - ditto
@@ -1584,6 +1648,8 @@ fm_jmp:
     dw fm_c_root                ; inline (fmv_load at the root)
     dw fm_c_drva                ; inline (fmv_load, drive 0)
     dw fm_c_drvb                ; inline (fmv_load, drive 1)
+    dw fm_c_free                ; inline (dskw_dfree reads the resident FAT
+                                ;         snapshot - no I/O at all)
     dw fm_c_list                ; inline (FS_VIEW = 0)
     dw fm_c_icons               ; inline (FS_VIEW = 1)
     dw fm_c_clock               ; POSTED - app_launch takes the lock
@@ -1658,7 +1724,30 @@ fm_c_open:                      ; File > Open - the selection, if any
 
 fm_c_mkdir:                     ; File > New Folder... - arm the editor
     mov di, [fm_vp]
+    mov al, 1
     jmp fm_edit_arm
+
+fm_c_rename:                    ; File > Rename... - arm it on the selection
+    mov al, 2
+    jmp short fm_arm_sel
+fm_c_delete:                    ; File > Delete - arm the CONFIRM line, and
+    mov al, 3                   ; nothing else: the disk is touched at Enter
+fm_arm_sel:
+    ; Both modes need an entry to act on, and both capture it HERE rather
+    ; than re-reading FS_SEL at commit time. fm_name is rewritten for every
+    ; row the painter draws, so the confirm line could not otherwise even
+    ; display the name it is asking about (SPEC.md 22).
+    push ax
+    mov di, [fm_vp]
+    mov ax, [di+FS_SEL]
+    cmp ax, [di+FS_N]           ; 0xFFFF (no selection) also fails this
+    jae .none
+    call fm_stage_onam          ; fm_onam + [fm_odir]
+    pop ax
+    jmp fm_edit_arm
+.none:
+    pop ax                      ; nothing selected: a no-op, like File > Open
+    ret
 
 fm_c_newwin:                    ; Folder > New Window - a second view of here
     mov di, [fm_vp]
@@ -1740,6 +1829,34 @@ fm_c_root:                      ; Folder > Root Folder
     xor si, si
     jmp fm_go
 
+fm_c_free:                      ; Folder > Free Space
+    ; dskw_dfree counts the resident FAT snapshot, which belongs to the
+    ; MOUNTED volume - so the sync is not optional: asked from a window on
+    ; the other drive it would otherwise answer about this one.
+    mov di, [fm_vp]
+    call fmv_sync
+    call dskw_dfree             ; DX:AX = free bytes, BX = spc (18.4)
+    jc .bad
+    mov cx, 10                  ; ...reported in KB: fm_utoa is 16-bit, and
+.kb:                            ; even a 32MB FAT16 volume fits once shifted
+    shr dx, 1
+    rcr ax, 1
+    loop .kb
+    mov di, fm_msgbuf
+    call fm_utoa                ; DI -> the stored NUL
+    mov si, fm_s_kbfree
+    call fm_scat
+    mov ax, [fm_vp]
+    mov [fm_msgwin], ax         ; one buffer, one figure: name its owner, or
+                                ; a second window's status line would show
+                                ; this window's disk (SPEC.md 22)
+    mov di, [fm_vp]
+    mov byte [di+FS_FERR], FM_FREE
+    ret
+.bad:
+    mov [di+FS_FERR], al        ; FERR_NODISK, and it says so
+    ret
+
 fm_c_list:                      ; View > as List
     xor al, al
     jmp short fm_c_setview
@@ -1757,17 +1874,28 @@ fm_c_setview:
 
 ; -----------------------------------------------------------------------------
 ; fm_editkey - one keystroke while the front window's FS_EDIT is armed
-; in:  AL = ascii (non-zero); gfx lock held
+; in:  AL = ascii (non-zero); gfx lock held, [fm_vp] published
 ; out: nothing (all registers preserved)
 ;
-; Characters are filtered through diskw.inc's OWN dskw_char - the same
-; routine dskw_name83 will apply at commit time - so the line shows exactly
-; the bytes that will be stored and a name can never look accepted and then
-; come back FERR_NAME.
+; In the two NAMING modes characters are filtered through diskw.inc's OWN
+; dskw_char - the same routine dskw_name83 will apply at commit time - so the
+; line shows exactly the bytes that will be stored and a name can never look
+; accepted and then come back FERR_NAME.
+;
+; The DELETE confirmation (mode 3) is not a line editor at all and is handled
+; first: Enter says yes and EVERY other key says no. That asymmetry is the
+; point (SPEC.md 22). There is no undo and no trash on this system, so the
+; mode accepts exactly one affirmative keystroke - a stray character can
+; never leave a delete armed, waiting for an Enter the user meant for
+; something else entirely.
 ; -----------------------------------------------------------------------------
 fm_editkey:
     push ax
     push bx
+    push di
+    mov di, [fm_vp]
+    cmp byte [di+FS_EDIT], 3
+    je .confirm
     cmp al, 13
     je .commit
     cmp al, 27
@@ -1806,12 +1934,16 @@ fm_editkey:
     mov byte [fm_ebuf+bx-1], 0
     jmp short .out
 
-.cancel:
-    call fm_edit_end
-    jmp short .out
+.confirm:
+    cmp al, 13
+    jne .cancel                 ; anything but Enter means no (SPEC.md 22)
 .commit:
     call fm_edit_commit
+    jmp short .out
+.cancel:
+    call fm_edit_end
 .out:
+    pop di
     pop bx
     pop ax
     ret
@@ -1841,38 +1973,65 @@ fm_hasdot:
     ret
 
 ; -----------------------------------------------------------------------------
-; fm_edit_commit - Enter in the editor: create the folder (SPEC.md 18.5)
+; fm_edit_commit - Enter in the editor: do whatever was armed (SPEC.md 22)
 ; in:  [fm_vp] published; gfx lock held, UI task - dskw_*'s required context
 ; out: nothing (all registers preserved); the verdict lands in FS_FERR
 ;
-; dskw_mkdir resolves the name in [dsk_cwd], which is whichever window last
+; Every dskw_* resolves its name in [dsk_cwd], which is whichever window last
 ; navigated - so the sync is not a nicety: without it a New Folder typed in
-; a background window would be created in another window's directory, and
-; the only evidence would be that it never appeared in the listing.
+; a background window would be created in another window's directory, and the
+; only evidence would be that it never appeared in the listing. Read that
+; sentence again with "deleted from" in place of "created in" and it is
+; obvious why Delete needs it more than the other two do.
 ;
-; dskw_mkdir remounts on success with [dsk_cwd] preserved, so the globals are
-; already right afterwards and fmv_bcast is a pure memory copy into every
-; window on this folder - ours first, because our own cache is a listing
-; taken before the write.
+; Every dskw_* remounts on success with [dsk_cwd] preserved (SPEC.md 18.4),
+; so the globals are already right afterwards and fmv_bcast is a pure memory
+; copy into every window on this folder - ours first, because our own cache
+; is a listing taken before the write, and it is fmv_bcast that clears the
+; FS_SEL indices that pointed into it.
+;
+; Rename and Delete work from fm_onam, the name captured when the mode was
+; armed, NOT from FS_SEL now: an 8.3 display name is a legal dskw_name83
+; input (SPEC.md 19), and it cannot go stale under us the way an index can.
 ; -----------------------------------------------------------------------------
 fm_edit_commit:
     push ax
     push si
     push di
     mov di, [fm_vp]
+    mov al, [di+FS_EDIT]
+    cmp al, 3
+    je .del
     cmp byte [fm_elen], 0
     je .done                    ; nothing typed: Enter simply cancels
-    call fmv_sync               ; create it in OUR folder (SPEC.md 22.1)
+    call fmv_sync               ; act in OUR folder (SPEC.md 22.1)
+    cmp al, 2
+    je .ren
     mov si, fm_ebuf
     call dskw_mkdir             ; CF=1 with AX = FERR_* (SPEC.md 18.5)
-    jnc .ok
-    mov [di+FS_FERR], al        ; every failure gets visible text (22)
-    jmp short .done
-.ok:
+    jmp short .verdict
+.ren:
+    mov si, fm_onam             ; old name...
+    mov di, fm_ebuf             ; ...new name; the eleven name bytes and
+    call dskw_rename            ; nothing else move (SPEC.md 18.4)
+    jmp short .verdict
+.del:
+    call fmv_sync
+    mov si, fm_onam
+    cmp byte [fm_odir], 0
+    je .delfile
+    call dskw_rmdir             ; an EMPTY folder, else FERR_PROT (18.6)
+    jmp short .verdict
+.delfile:
+    call dskw_delete
+.verdict:
+    mov di, [fm_vp]             ; .ren left DI on the new name (mov: no flags)
+    jc .bad
     mov byte [di+FS_FERR], 0
     call fmv_bcast              ; the new listing reaches every window that
-                                ; is showing this folder, and clears the
-                                ; selections that indexed the old one
+    jmp short .done             ; is showing this folder
+.bad:
+    mov [di+FS_FERR], al        ; every failure gets visible text (22)
 .done:
     call fm_edit_end
     pop di
@@ -1881,18 +2040,58 @@ fm_edit_commit:
     ret
 
 ; -----------------------------------------------------------------------------
+; fm_stage_onam - capture the entry Rename/Delete is about to act on
+; in:  AX = directory index, already checked against FS_N
+; out: fm_onam = its NUL-terminated 8.3 display name, [fm_odir] = 1 when the
+;      SPEC.md 19 type word says folder. All registers preserved.
+;
+; The copy out of fm_name is the whole point: fm_name is rewritten for every
+; row fm_draw_core draws, so a confirm line that merely pointed at it would
+; be asking about whichever entry the last repaint happened to end on.
+; -----------------------------------------------------------------------------
+fm_stage_onam:
+    push ax
+    push cx
+    push si
+    push di
+    call fm_stage_name          ; fm_name + [fm_ftype]
+    mov si, fm_name
+    mov di, fm_onam
+    mov cx, 12                  ; a display name is 12 chars at most (19)
+.cp:
+    lodsb                       ; DF=0 per SPEC.md 1
+    mov [di], al
+    inc di
+    or al, al
+    jz .typed
+    loop .cp
+    mov byte [di], 0
+.typed:
+    mov byte [fm_odir], 0
+    cmp word [fm_ftype], 2
+    jne .out
+    mov byte [fm_odir], 1       ; Delete must call dskw_rmdir for this one
+.out:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; fm_edit_arm - hand the status-line editor to one window (SPEC.md 22)
-; in:  DI = state block
+; in:  DI = state block, AL = mode (1 = new folder, 2 = rename, 3 = delete)
 ; out: nothing (all registers preserved)
 ;
-; Arming disarms every other window, because the name being typed is ONE
-; module-global buffer: only the front window is sent keys, so a second armed
-; window could never receive any, but it WOULD keep drawing "New folder:"
-; with this window's characters in it.
+; Arming disarms every other window, because the name being typed - and the
+; name Rename/Delete was armed on - are ONE module-global buffer each: only
+; the front window is sent keys, so a second armed window could never receive
+; any, but it WOULD keep drawing "New folder:" with this window's characters
+; in it, or a confirmation about this window's file.
 ; -----------------------------------------------------------------------------
 fm_edit_arm:
     call fm_edit_end
-    mov byte [di+FS_EDIT], 1
+    mov [di+FS_EDIT], al
     mov byte [di+FS_FERR], 0    ; the prompt replaces the old verdict
     ret
 
@@ -2116,9 +2315,9 @@ fm_draw_core:
 .hdrpos:
     mov cl, 3
     shr ax, cl                  ; AX = chars that fit
-    cmp ax, 25
-    jae .drawhdr                ; buffer is 26 bytes; never poke past it
-    mov si, ax
+    cmp ax, FM_HDRMAX-1
+    jae .drawhdr                ; a wide window fits the whole staged string;
+    mov si, ax                  ; never poke past the buffer to say so
     mov byte [fm_hdrbuf+si], 0
 .drawhdr:
     mov byte [gfx_color], CBLACK
@@ -2442,18 +2641,43 @@ fm_draw_core:
     mov si, fm_s_loading        ; 1. a pending load trumps everything
     cmp word [ld_pending], 0
     jne .stat
-    cmp byte [fm_ledit], 0       ; 2. the folder name being typed, prompt and
-    je .st_err                  ;    all - the editor IS the status line
+    mov al, [fm_ledit]          ; 2. the input line, prompt and all - the
+    or al, al                   ;    editor IS the status line (SPEC.md 22)
+    jz .st_err
+    cmp al, 3
+    je .st_del
     mov si, fm_s_newfld
+    cmp al, 1
+    je .st_prompt
+    mov si, fm_s_renam          ; "Rename NAME to: NEW"
+    call fm_scat
+    mov si, fm_onam
+    call fm_scat
+    mov si, fm_s_rento
+.st_prompt:
     call fm_scat
     mov si, fm_ebuf
     jmp short .stat
+.st_del:
+    mov si, fm_s_delpr          ; "Delete NAME? Enter=yes Esc=no"
+    call fm_scat
+    mov si, fm_onam
+    call fm_scat
+    mov si, fm_s_delq
+    jmp short .stat
 .st_err:
-    mov al, [fm_lferr]           ; 3. the last file operation's verdict, so
-    mov bx, fm_errtab           ;    no dskw_* failure is ever silent
-    or al, al
-    jnz .st_tab
-    mov al, [ld_status]         ; 4. and finally the loader's
+    mov al, [fm_lferr]          ; 3./4. this window's own last word: the
+    or al, al                   ;    free-space figure, or the FERR_* text
+    jz .st_load                 ;    that keeps no dskw_* failure silent
+    cmp al, FM_FREE
+    je .st_free
+    mov bx, fm_errtab
+    jmp short .st_tab
+.st_free:
+    mov si, fm_msgbuf
+    jmp short .stat
+.st_load:
+    mov al, [ld_status]         ; 5. and finally the loader's
     mov bx, fm_stattab
     cmp al, 5
     ja .statdone                ; out-of-range status: draw nothing
@@ -2473,7 +2697,7 @@ fm_draw_core:
 .stpos:
     mov cl, 3
     shr ax, cl                  ; AX = chars that fit
-    cmp ax, 25
+    cmp ax, FM_HDRMAX-1
     jae .stdraw
     mov bx, ax
     mov byte [fm_hdrbuf+bx], 0
@@ -2580,6 +2804,18 @@ fm_cmdwin:  resw 1              ; fm_oncmd scratch: the acting window ptr
 fm_elen:    resb 1              ; characters typed so far (0..12)
 fm_ebuf:    resb 13             ; the name being typed, NUL-terminated
 
+; What Rename/Delete was armed ON, captured at arm time by fm_stage_onam for
+; the same one-live-editor reason - and because fm_name, the only other copy
+; of a display name in this module, is rewritten for every row the painter
+; draws (SPEC.md 22).
+fm_onam:    resb 13             ; the target's 8.3 display name
+fm_odir:    resb 1              ; 1 = it is a folder, so Delete means rmdir
+
+; The free-space line. FS_FERR = FM_FREE marks the window that asked; this
+; word says which one that was, because the figure itself is one buffer.
+fm_msgwin:  resw 1              ; -> the state block that owns fm_msgbuf
+fm_msgbuf:  resb 16             ; "65535 KB free" + NUL, with room to spare
+
 ; --- fm_layout's mirrors of the acting window's hot fields (SPEC.md 22.1) ---
 ; Read-only snapshots refreshed at the head of every fm_layout, because
 ; fm_draw_core has no register free to carry a state-block pointer through
@@ -2619,7 +2855,12 @@ fm_sby1:    resw 1              ; top row (abs)
 fm_sby2:    resw 1              ; bottom row (abs)
 
 fm_name:    resb 17             ; NUL-safe copy of one 16-byte name field
-fm_hdrbuf:  resb 26             ; header line ("Drive B:  65535 files" max 22)
+fm_hdrbuf:  resb 48             ; = FM_HDRMAX (a literal per the no-forward-
+                                ; ref-in-bss rule). The header is 22 bytes at
+                                ; most; the size comes from the status line's
+                                ; worst case, "Delete NAME? Enter=yes Esc=no"
+                                ; at 38, which is staged whole and truncated
+                                ; afterwards
 fm_numbuf:  resb 6              ; fm_utoa scratch: 5 digits + NUL
 
 section .text

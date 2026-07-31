@@ -1745,9 +1745,11 @@ directory** (§19.2 — `[dsk_cwd]`, which `dsk_chdir` moves). There is no
 open/seek/handle model, no paths, no partial rewrite: a file is written in
 one call from one buffer, read back the same way, and its name is resolved
 in exactly one directory — the one the volume is currently sitting in.
-`dskw_mkdir` (§18.5) is the sixth routine and the only one that creates a
-directory rather than a file. That is the largest subset that stays honest
-in 256KB with 12 pre-emptive tasks and no disk cache.
+`dskw_mkdir` (§18.5) is the sixth routine and `dskw_rmdir` (§18.6) the
+seventh: the only two that act on a directory rather than on a file, and
+both kernel-internal for the same reason (a package cannot navigate). That
+is the largest subset that stays honest in 256KB with 12 pre-emptive tasks
+and no disk cache.
 
 **Context (binding).** UI task only, exactly like every other int 13h
 caller (§18). Window callbacks and package entry procs qualify — that is
@@ -1778,15 +1780,18 @@ the volume.
 | `dskw_write` | in: SI → NUL-terminated 8.3 name (DS), ES:BX → the bytes, CX = byte count (0 = create an empty file). Creates or **replaces** the file. Out: CF=0, AX=0; CF=1, AX = `FERR_*`. Preserves all other registers, ES included. |
 | `dskw_read` | in: SI → name, ES:BX → destination, CX = destination capacity in bytes. Out: CF=0, AX = bytes read (= the file's size); CF=1, AX = `FERR_*` — `FERR_BIG` when the file does not fit CX, and **nothing is written** to the buffer in that case. |
 | `dskw_delete` | in: SI → name. Frees the chain and marks the directory entry deleted (0E5h). Out: CF=0, AX=0; CF=1, AX = `FERR_*`. |
-| `dskw_rename` | in: SI → old name, DI → new name. Same directory, name bytes only — chain, size and timestamps are untouched. Refuses `FERR_EXIST` if the new name already exists. Out: CF/AX as above. |
+| `dskw_rename` | in: SI → old name, DI → new name. Same directory, name bytes only — chain, size, attribute and timestamps are untouched. Refuses `FERR_EXIST` if the new name already exists. Its protection mask is **0x0F, not 0x1F** (see below), so a *subdirectory* may be renamed. Out: CF/AX as above. |
 | `dskw_dfree` | out: CF=0, DX:AX = free bytes (32-bit), BX = **sectors** per cluster (not bytes — `spc`×512 overflows 16 bits at the §18.2-legal `spc` = 128); CF=1, AX = `FERR_*`. Counts free entries across the resident FAT snapshot; no disk I/O. |
 | `dskw_mkdir` | in: SI → name. Creates a subdirectory in the current directory (§18.5). Out: CF/AX as above. Not an API slot — kernel-internal, because a package has no way to navigate. |
+| `dskw_rmdir` | in: SI → name. Removes an **empty** subdirectory of the current directory (§18.6): `FERR_PROT` if it holds anything, if it is not a directory, or if it is read-only/hidden/system/label. Out: CF/AX as above. Not an API slot, for `dskw_mkdir`'s reason. |
 
 **Error codes (pinned; returned in AX with CF=1, mirrored as `FERR_*` in
 `apps/os88api.inc`):** 0 ok, 1 no mounted disk, 2 disk I/O error, 3 bad
 name or argument, 4 no such file, 5 name exists, 6 disk full, 7 root
 directory full, 8 entry is protected (read-only, hidden, system, volume
-label or subdirectory), 9 media write-protected, 10 too large.
+label or subdirectory — *except* under `dskw_rename`, whose mask is 0x0F,
+and under `dskw_rmdir`, where it also means "the folder is not empty"),
+9 media write-protected, 10 too large.
 
 **Names (`dskw_name83`) — the inverse of §19's synthesis.** A caller
 supplies the display form (`"NOTES.TXT"`); the module produces the raw
@@ -1873,6 +1878,21 @@ fields; a replace updates size, first cluster and the write timestamp.
 Entries whose attribute byte carries read-only, hidden, system, volume-label
 or subdirectory are never modified — `FERR_PROT`.
 
+**The protection mask is 0x1F everywhere except rename, where it is 0x0F
+(binding).** Replace and delete must keep the subdirectory bit in the mask:
+overwriting a folder's entry with a file's would strand its whole subtree,
+and freeing a folder's chain as if it were a file's would free the children's
+directory sectors while leaving the children's own chains allocated — that is
+what `dskw_rmdir` (§18.6) exists to do properly. **Rename is different in
+kind**: it moves the eleven name bytes and nothing else — not the attribute,
+not the first cluster, not the size, not a timestamp. Nothing on the volume
+records a directory by *name*: a child's `..` holds the parent's first
+**cluster**, its own `.` holds its own, and the parent's entry keeps pointing
+at the same cluster it always did. So renaming a folder cannot break the walk
+back up, and the mask drops the 0x10 bit for that one path. The other four
+bits stay: a read-only, hidden or system entry is still refused, and the
+volume-label entry (0x08) is emphatically not a file to be renamed.
+
 **Long file names are invisible here, and that has one visible edge.** LFN
 entries are skipped by the scan, never matched and never reused (§19), so
 the write path only ever sees short names. Deleting or renaming a file a
@@ -1882,7 +1902,7 @@ reason the shipped apps disk and everything os8088 writes use plain 8.3
 names.
 
 **Cache coherence.** A successful `dskw_write` / `dskw_delete` /
-`dskw_rename` / `dskw_mkdir` ends in `dskw_sync`, which **remounts the
+`dskw_rename` / `dskw_mkdir` / `dskw_rmdir` ends in `dskw_sync`, which **remounts the
 current drive** (§18.3) with `[dsk_keepcwd]` raised, exactly as `dsk_chdir`
 does (§19.2). Raising it is **binding**, not an optimisation: a bare
 `disk_mount` resets `[dsk_cwd]` to the root by design, so without it every
@@ -1921,9 +1941,9 @@ free-space check and the host fsck catch different leaks, and both are part
 of the gate.
 
 **What this deliberately does not do.** No paths (a name is resolved in the
-current directory and nowhere else), no directory *removal* — `dskw_mkdir`
-has no `dskw_rmdir` counterpart yet, so a folder is `FERR_PROT` to delete
-and rename — no append or seek, no
+current directory and nowhere else), no *recursive* directory removal —
+`dskw_rmdir` (§18.6) takes an empty folder and refuses anything else, so
+emptying a subtree is the user's job one level at a time — no append or seek, no
 truncate-in-place, no FAT32, no volume-label editing, no timestamp
 preservation across a rewrite, and no attempt to defragment: chains are
 allocated first-fit from the rover, so a full disk fragments exactly the
@@ -1996,6 +2016,66 @@ which is precisely why §18.4 makes both part of the gate.
 **and the volume stays where it was** — the whole point of creating a
 folder inside another one.
 
+### 18.6 `dskw_rmdir` — removing an empty subdirectory
+
+```
+dskw_rmdir   in:  SI -> NUL-terminated 8.3 name (DS), same rules as every
+                  other dskw_* name (dskw_name83, §18.4)
+             out: CF=0 with AX=0, or CF=1 with AX = FERR_*
+             clobbers: nothing else. UI-task/window-callback context, and
+                  gated on [dsk_mntok] like every other write.
+```
+
+The counterpart to §18.5, and the reason **Delete** in §22 is not an item
+that can only ever fail. It removes one *empty* subdirectory of the volume's
+current directory (§19.2). `.` and `..` cannot be named (`dskw_name83`
+refuses a leading dot), and the root has no directory entry, so neither can
+be the target.
+
+**Refusals, all `FERR_PROT`:** the entry is not a directory (attribute bit
+0x10 clear — the caller wanted `dskw_delete`); it carries read-only, hidden,
+system or volume-label (0x0F); or **it is not empty**. A first cluster
+outside [2, `dsk_maxclus`] is `FERR_IO`: a directory entry always has a real
+cluster, so anything else is corruption, and refusing beats walking it.
+
+**The emptiness scan is the whole safety argument, so it is conservative by
+construction.** The target's own chain is walked with
+`dsk_dirw_start`/`dsk_dirw_next` (§19.2 — bounded by `DSK_DIRW_MAX`, so a
+cross-linked chain terminates the scan instead of hanging it with
+`[sch_lock]` raised) and every 32-byte slot must be one of exactly four
+things: `0x00` (end of directory — the scan stops there and the folder is
+empty), `0xE5` (a deleted entry), or a name whose first byte is `.` **and
+whose second is `.` or a pad space** — i.e. one of the two dot links, and not
+a foreign disk's file called `.XT`. **Anything else means occupied**,
+including an LFN entry a host left behind. That is deliberately stricter than a host `rmdir`: the cost
+of refusing a folder someone else could delete is one message, and the cost
+of deleting an occupied one is every child's clusters leaked at once — the
+children's directory *sectors* live in the cluster being freed, so once it is
+gone nothing on the volume names them any more.
+
+**Commit order (binding — it is `dskw_delete`'s, and for `dskw_delete`'s
+reason).**
+
+1. `dskw_find` + `dskw_ent_load` the parent's entry; run the checks above.
+2. Write `0xE5` into that entry — one sector, **the commit point**.
+3. `dskw_free_chain` the directory's own cluster chain, then `dskw_flush`.
+
+A crash between 2 and 3 leaks the folder's cluster as lost clusters, which
+any host `fsck` reclaims. The reverse order would leave a live directory
+entry pointing at free space that the next write could hand to someone else.
+Nothing is allocated before the commit, so — exactly as in `dskw_delete` —
+there is no half-built chain and therefore no `dskw_refat` rollback to run;
+the FAT snapshot is only ever touched *after* the entry is already gone.
+
+**Error set:** `FERR_NODISK`, `FERR_NAME`, `FERR_NOENT`, `FERR_PROT`,
+`FERR_IO`, `FERR_WPROT`. On success `dskw_sync` remounts with `[dsk_keepcwd]`
+raised (§18.4), so the parent listing loses the folder and the volume stays
+where it was.
+
+**What it does not do:** no recursion. Deleting `TOOLS` that holds `SUB` is
+two operations in the user's hands, in that order, and `os8088` will not
+guess at the second.
+
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
 The data floppy (drive B:) is a standard **FAT12** volume — mountable and
@@ -2004,7 +2084,7 @@ the disk is a shared medium, written by foreign machines and by os8088
 alike. The kernel implements a FAT12/FAT16 subset covering exactly what
 §22 and §18.4 need — mount, enumerate a directory, walk cluster
 chains (`disk.inc`), navigate into and out of subdirectories (§19.2), and
-create/replace/delete/rename whole files plus create subdirectories in the
+create/replace/delete/rename whole files plus create and remove empty subdirectories in the
 current directory (`diskw.inc`). It never
 touches the boot sector or the BPB. Consequence, unchanged by write
 support: everything on the disk is untrusted, and every field the kernel
@@ -2706,8 +2786,8 @@ allocated and cascaded by `app_launch` and handed to `fm_kinit` in DI:
 | 11 | `FS_MOK` b | 1 = that listing came from a fully successful mount |
 | 12 | `FS_VIEW` b | 0 = list view, 1 = icon view |
 | 13 | `FS_IDX` b | its `VIEW_SEG` slot, 0..3 — derived once by `fm_kinit` |
-| 14 | `FS_EDIT` b | status-line editor: 0 = off, 1 = new folder |
-| 15 | `FS_FERR` b | `FERR_*` of the last file operation **in this window**, 0 = none |
+| 14 | `FS_EDIT` b | status-line editor: 0 = off, 1 = new folder, 2 = rename, 3 = delete confirm |
+| 15 | `FS_FERR` b | `FERR_*` of the last file operation **in this window**, 0 = none; 255 = "show the free-space line" (below) |
 
 `FS_CLKT` moves with `FS_SEL` or not at all: shared, a click on row 3 in
 window A followed within 9 ticks by a click on row 3 in window B would
@@ -2716,9 +2796,15 @@ compose into a double-click and launch a package.
 Module-global state that deliberately did **not** become per-window:
 `fm_ebuf` (13B) and `fm_elen`, the name being typed — only the front window
 receives `W_ONKEY` (§13), so exactly one editor can be live, and arming one
-window's editor clears every other block's `FS_EDIT`; and `fm_full` (byte,
-"the next `fm_repaint` owes the frame too"), which is set and consumed
-inside a single held lock.
+window's editor clears every other block's `FS_EDIT`; `fm_onam` (13B) and
+`fm_odir` (byte), the name and folder-ness of the entry Rename/Delete was
+armed **on**, captured at arm time for the same reason (one live editor) and
+because `fm_name` is reused by every row the painter draws; and `fm_full`
+(byte, "the next `fm_repaint` owes the frame too"), which is set and consumed
+inside a single held lock. `fm_msgbuf` (16B) plus `fm_msgwin` (word, the
+state block that asked) carry the free-space line, which is why `FS_FERR` =
+255 alone does not draw it: the buffer holds one figure and it belongs to one
+window.
 
 **The window's title is the folder it is showing.** `fm_kinit` points
 `[bx+W_TITLE]` at the instance record's 16-byte `I_NAME` (§29.1) rather
@@ -2776,17 +2862,19 @@ fits (**Refresh iff cw ≥ 76, the view toggle iff cw ≥ 142**; one
 condition gates both, so nothing invisible is ever clickable), and the
 header is truncated to end 8px short of the leftmost drawn button (or of
 cw). The status line at (6, status_y) shows the **first** of these that
-applies — the precedence is binding, because all four can be true at once:
+applies — the precedence is binding, because all five can be true at once:
 
 1. `[ld_pending]` non-zero → `"Loading..."`.
 2. `[fm_edit]` non-zero → the **edit line** (below).
-3. `[fm_ferr]` non-zero → the `FERR_*` message, from an 11-entry table
+3. `FS_FERR` = 255 **and** `[fm_msgwin]` = this window → `fm_msgbuf`, the
+   free-space line (`"1423 KB free"`).
+4. `FS_FERR` non-zero → the `FERR_*` message, from an 11-entry table
    indexed by the code: (0 unused) `"No disk"`, `"Disk error"`,
    `"Bad name"`, `"No such file"`, `"Name exists"`, `"Disk full"`,
    `"Folder full"`, `"Protected"`, `"Write protected"`, `"Too large"`.
    Without this table every `dskw_*` failure is silent, which for an
    irreversible operation is the worst possible outcome.
-4. else `[ld_status]`: "", "Disk error", "Bad package", "Too large",
+5. else `[ld_status]`: "", "Disk error", "Bad package", "Too large",
    "Load failed", "Out of memory" (0..5).
 
 Whichever wins is truncated to (cw−12)/8 chars
@@ -2896,9 +2984,11 @@ Behaviour:
   below. Otherwise: 'a'/'A' → drive 0, 'b'/'B' → drive 1, 'r'/'R' →
   this window's own drive; all three: `fmv_load` at that drive's root,
   repaint content. 'v'/'V' → toggle the view like the
-  button. Scan codes: Up/Down (48h/50h) scroll one row, PgUp/PgDn
+  button. 'n'/'N' → New Folder…. **Backspace (8) → Up One Folder**, the
+  `FMC_UP` body verbatim. Scan codes: Up/Down (48h/50h) scroll one row, PgUp/PgDn
   (49h/51h) a page — the view, not the selection, clamped like the bar.
-  Enter (13) with a valid selection → `fm_open_sel`. (disk_mount
+  Enter (13) with a valid selection → `fm_open_sel`. Rename and Delete have
+  **no key** — see the policy under "Naming and confirming". (disk_mount
   under the gfx lock stalls painters: 16 sectors on the shipped disk —
   about a second on real hardware — with a hostile-media ceiling of 97
   one-sector reads, approaching ~20 s at one sector per revolution plus
@@ -2930,8 +3020,8 @@ cells are `font_width + MENU_TITLE_PAD`:
 
 | menu | width | x range | items |
 |------|-------|---------|-------|
-| **File** | 44 | 110..153 | Open · New Folder… · Close Window |
-| **Folder** | 60 | 154..213 | New Window · Open in New Window · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
+| **File** | 44 | 110..153 | Open · New Folder… · Rename… · Delete · Close Window |
+| **Folder** | 60 | 154..213 | New Window · Open in New Window · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: · Free Space |
 | **View** | 44 | 214..257 | as List · as Icons |
 | **Special** | 68 | 258..325 | Clock · Bounce · Restart |
 
@@ -2956,7 +3046,8 @@ only by the UI task (§7) and `fm_oncmd` runs *inside* it:
 | command | how it runs |
 |---------|-------------|
 | Open | `fm_open_sel` — inline (loader is deferred, `dsk_chdir` is I/O under the lock like Refresh) |
-| New Folder… | inline: enters edit mode, draws nothing but the status line |
+| New Folder… / Rename… / Delete | inline: enters edit mode, draws nothing but the status line. The disk is touched at **Enter**, not here |
+| Free Space | inline: `dskw_dfree` reads the resident FAT snapshot, no I/O at all |
 | Refresh / Drive A: / Drive B: | inline `disk_mount`, exactly as the button and the a/b/r keys already do |
 | Up One Folder / Root Folder | inline: `fmv_sync`, then `dsk_dotdot` + `fmv_load` / `fmv_load` AX=0 |
 | New Window / Open in New Window | **deferred** — seed + `inst_launch_post` (§29.4); at cap, `snd_beep` and nothing else, because `app_launch` would front an existing window and silently drop the seed |
@@ -2973,22 +3064,38 @@ saying which column of that table it is in.
 Up One Folder at the root is a no-op rather than an error; there is nothing
 above the root and nothing useful to say about it.
 
-### Naming — the status-line edit mode
+### Naming and confirming — the status-line edit mode
 
-There is no dialog kind and no focus concept, so **New Folder… turns the
-window's own status line into an edit line**: `[fm_edit]` = 1, `[fm_ebuf]`
-(13 bytes) is emptied, and the line reads `New folder: NAME`. Only the
-front window receives `W_ONKEY` (§13), which is precisely the window the
-user is looking at, so this needs neither.
+There is no dialog kind and no focus concept, so **the three commands that
+need an answer turn the window's own status line into an input line**:
+`FS_EDIT` = 1 (New Folder…), 2 (Rename…) or 3 (Delete). Only the front
+window receives `W_ONKEY` (§13), which is precisely the window the user is
+looking at, so this needs neither concept. Arming clears `FS_FERR` (the
+prompt replaces the old verdict) and every *other* block's `FS_EDIT`, because
+the buffers below are module-global.
 
-While `[fm_edit]` is non-zero `W_ONKEY` **swallows every key** — that rule
-is binding and is stated twice on purpose. Inside the mode:
+| mode | armed by | line | Enter does |
+|------|----------|------|------------|
+| 1 | File ▸ New Folder…, or `n` | `New folder: NAME` | `dskw_mkdir` SI = `fm_ebuf` (§18.5) |
+| 2 | File ▸ Rename… | `Rename NAME to: NEW` | `dskw_rename` SI = `fm_onam`, DI = `fm_ebuf` |
+| 3 | File ▸ Delete | `Delete NAME? Enter=yes Esc=no` | `dskw_delete`, or `dskw_rmdir` (§18.6) if `fm_odir` |
 
-- **13 (Enter)** commits: `dskw_mkdir` with SI = `fm_ebuf` (§18.5). Success
-  clears `[fm_ferr]`, `fm_sel` and `fm_scroll` (the remount rebuilt the
-  listing, so a directory index is meaningless); failure stores the
-  `FERR_*` in `[fm_ferr]` for the status line. Either way the mode ends.
-  An empty buffer just cancels.
+Modes 2 and 3 require a selection; without one the command is a no-op, like
+File ▸ Open. **The target is captured at arm time**, not read at commit time:
+`fm_stage_name` fills `fm_onam` (the 8.3 display name — itself a legal
+`dskw_name83` input, §19) and `fm_odir` (1 = the §19 type word was 2). That
+is not defensive: `fm_name` is overwritten by every row the painter draws, so
+the confirm line could not even display the name it is asking about without a
+private copy.
+
+While `FS_EDIT` is non-zero `W_ONKEY` **swallows every key** — that rule
+is binding and is stated twice on purpose. In modes 1 and 2:
+
+- **13 (Enter)** commits. Success clears `FS_FERR` and calls `fmv_bcast`
+  (§22.1), which reloads every window on this folder and clears their
+  `FS_SEL`/`FS_SCRL` — the remount rebuilt the listing, so a directory index
+  is meaningless. Failure stores the `FERR_*` in `FS_FERR` for the status
+  line. Either way the mode ends. An empty buffer just cancels.
 - **27 (Esc)** cancels; **8 (Backspace)** removes the last character.
 - **`.`** is accepted once, and only after at least one character.
 - every other character goes through the write path's own **`dskw_char`**
@@ -2999,8 +3106,24 @@ is binding and is stated twice on purpose. Inside the mode:
   and then fail as `FERR_NAME`.
 - a key with no ASCII (a bare scan code) is swallowed and changes nothing.
 
+**Mode 3 is different, and deliberately so: Enter confirms and *every other
+key cancels*.** There is no undo and no trash on this system — the confirm
+line is the entire distance between a menu click and a file that is gone —
+so the mode accepts exactly one affirmative keystroke and treats anything
+else, Esc included, as "no". A stray character cannot leave a delete armed
+and waiting for an Enter the user meant for something else. A click anywhere
+cancels it too, through the same `fm_edit_end` that cancels a half-typed
+name.
+
+**Binding policy: no destructive command gets a bare-letter shortcut.** The
+only key source is int 16h AH=00 and shift states are never read, so there
+are no modifiers to hide behind — `d` on a stray keypress would be a deleted
+file. Delete and Rename are reachable from the menu only. The keys that do
+exist are `n` (New Folder…, harmless: it opens an input line) and
+**Backspace = Up One Folder**, alongside the a/b/r/v and scroll keys above.
+
 `fm_kinit` clears the mode, so a closed and reopened window never resumes a
-half-typed name, and a content click cancels it.
+half-typed name or a pending confirmation.
 
 ### 22.1 The view cache — `VIEW_SEG` and the `fmv_*` routines
 
