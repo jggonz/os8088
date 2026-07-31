@@ -58,6 +58,7 @@ APP_POOL_END equ APP_LOAD_OFF + APP_MAX_SIZE    ; 0xFE00, exclusive
 ; -----------------------------------------------------------------------------
 loader_init:
     mov word [ld_pending], 0
+    mov word [ld_pwin], 0
     mov byte [ld_status], LD_OK
     ret
 
@@ -168,9 +169,18 @@ ld_check_hdr:
 
 ; -----------------------------------------------------------------------------
 ; loader_run - load, relocate and launch the package at a directory index
-; in:  AX = directory index (0-based)
+; in:  AX = directory index (0-based), into the listing of the file-manager
+;      window named by [ld_pwin] (SPEC.md 22.1) - which may not be the one
+;      currently mounted
 ; out: nothing (all registers preserved); result in [ld_status]; on success
 ;      a new package instance is live in the instance table (SPEC.md 29)
+;
+; The sync comes first and the index is banked across it, in that order and
+; for a hard reason: disk_mount deliberately zeroes [ld_pending] (SPEC.md
+; 18.3), so anything that reads the pending word AFTER a sync reads zero. The
+; index arrives here in AX, already consumed by ui.inc, which is what makes
+; the order safe - and [ld_pwin] is read before the sync too, so this stays
+; true if the drain ever changes.
 ; -----------------------------------------------------------------------------
 loader_run:
     push ax
@@ -182,6 +192,14 @@ loader_run:
     push bp
     push es
 
+    mov di, [ld_pwin]           ; the window whose listing this index means
+    or di, di
+    jz .body                    ; no poster (a package's own request): the
+                                ; globals are the only listing there is
+    push ax
+    call fmv_sync               ; ...make the globals BE that listing
+    pop ax
+.body:
     call ld_run_body            ; out: AL = LD_* status
     mov [ld_status], al
     call files_refresh          ; no lock held; it takes its own
@@ -432,6 +450,11 @@ section .bss
 
 ld_pending: resw 1              ; 0 = none, else directory index + 1
                                 ; (set by files.inc, consumed by ui.inc)
+ld_pwin:    resw 1              ; -> the state block of the file-manager
+                                ; window that posted it, 0 = none. The index
+                                ; above is meaningless anywhere else, and a
+                                ; BACKGROUND window's listing is a real one it
+                                ; is entitled to act on (SPEC.md 22.1)
 ld_status:  resb 1              ; LD_* result of the last loader_run
 ld_clus:    resw 1              ; loader_run scratch: the file's first cluster
 ld_fsz:     resw 1              ; file size, bytes (image + reloc table)

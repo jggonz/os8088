@@ -87,7 +87,9 @@ desk_paint:
 ;
 ;              Zone hit: same zone as desk_sel and click-tick delta < 9
 ;              -> double-click: clear the selection (redraw under lock,
-;              release), then files_open_drive AL=drive (locks internally).
+;              release), then files_open_drive AL=drive (locks internally):
+;              it fronts a window already showing that drive's root, or
+;              opens one, or at the cap moves the front one (SPEC.md 22.1).
 ;              Else select it, stamp desk_clkt. Miss: clear any selection.
 ; ins:  CX = x, DX = y (absolute screen px)
 ; outs: none (all registers preserved)

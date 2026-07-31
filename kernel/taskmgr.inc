@@ -593,6 +593,8 @@ tm_sample:
                                 ; four regions does not fit 16 bits.
     add ax, SND_SEG_KB          ; + the sound segment (SPEC.md 2.2): claimed
                                 ; whole by the sound layer since Phase 2
+    add ax, VIEW_SEG_KB         ; + the file manager's four view caches
+                                ; (SPEC.md 2.3), resident from boot
     cmp byte [bb_on], 0         ; bill the armed back buffer: exactly 150KB,
     je .nobb                    ; added after the shift because 153600 bytes
     add ax, 150                 ; do not fit 16 bits (SPEC.md 32 / 28)
@@ -1725,6 +1727,7 @@ tm_rows:
                                 ; the rows still sum to it.
     add ax, SND_SEG_KB          ; + the sound segment (SPEC.md 2.2), also in
                                 ; the total above - the rows still sum
+    add ax, VIEW_SEG_KB         ; + the view caches (SPEC.md 2.3), ditto
     cmp byte [bb_on], 0         ; bill the armed back buffer to System
     je .sysmem                  ; (SPEC.md 32 / 28)
     add ax, 150

@@ -2,13 +2,29 @@
 ; os8088 - files.inc
 ;
 ; The Disk window - a minimal file manager for the FAT data floppy
-; (SPEC.md 22). A singleton app kind (KIND_FILES, cap 1 - the mount state
-; below is module-global): no boot-time window; app_launch creates it on
-; demand (fm_kinit is the KD_INIT). CMD_FILES dispatch calls files_open and
-; desk_click calls files_open_drive - both ALWAYS remount (that is the
-; disk-swap story: a swapped disk must never show stale contents) and end
-; in app_launch, which creates the window or fronts + un-minimizes the
-; existing instance.
+; (SPEC.md 22). FOUR windows may be open at once (KIND_FILES, cap 4), each
+; on its own drive and its own folder. No boot-time window; app_launch
+; creates one on demand (fm_kinit is the KD_INIT), and CMD_FILES dispatch /
+; desk_click reach it through files_open / files_open_drive, which front an
+; existing window on the target, or create one, or - at the cap - move the
+; frontmost one there.
+;
+; THE RULE THE WHOLE MODULE RESTS ON (SPEC.md 22): paints read the window's
+; cache; actions re-sync the global snapshot first. disk_dir / disk_icons /
+; disk_nfiles stay exactly ONE global mount snapshot, and are still the only
+; thing loader.inc and diskw.inc ever resolve an index against. Every window
+; additionally owns a byte-for-byte copy of a snapshot in its VIEW_SEG slot
+; (SPEC.md 2.3/22.1) - that is what W_PAINT, fm_layout and the hit-tester
+; read, so a repaint, a drag, a raise or a wm_paint_all costs ZERO floppy
+; I/O. Anything that acts calls fmv_sync first, which remounts only when the
+; acting window's (drive, cwd) is not the one currently mounted.
+;
+; Per-window state is a 16-byte KD_POOL block (fm_pool, 4 x 16) that
+; app_launch allocates and hands to fm_kinit in DI. fm_vp_set publishes the
+; acting window's block, cache segment and instance record into [fm_vp] /
+; [fm_vseg] / [fm_vinst], and fm_layout mirrors the fields the 400-line
+; painter reads on its hot path - it uses every register including BP and
+; has none free to thread a pointer through.
 ;
 ; The window is RESIZABLE (KD_WFLAG = WF_SIZABLE, the one built-in that is)
 ; and the directory SCROLLS, in either of two views: a list (16px rows:
@@ -19,9 +35,11 @@
 ;
 ; Opening an entry - a double-click, Enter, or File > Open - goes through
 ; ONE routine, fm_open_sel, which branches on the SPEC.md 19 type word: a
-; package posts index+1 to [ld_pending] (ui.inc runs loader_run after the
-; lock drops and reports through [ld_status]), a FOLDER calls dsk_chdir and
-; the whole window follows it - listing, title, selection, scroll.
+; package posts index+1 to [ld_pending] AND its own state block to
+; [ld_pwin] (ui.inc runs loader_run after the lock drops, and loader_run
+; syncs to that window before resolving the index - the index means nothing
+; anywhere else); a FOLDER re-lists this window and nothing else - listing,
+; cache, title, selection, scroll.
 ;
 ; The window also owns the menu bar. fm_menus (below) is Locator's SECOND
 ; SPEC.md 12.2 menu set: same AM_NAME, so the bar still reads 'Locator',
@@ -32,7 +50,7 @@
 ; table's per-entry comments, and SPEC.md 22 for the binding list.
 ;
 ; Naming a new folder happens in the status line rather than in a dialog
-; (there is no dialog kind and no focus concept): [fm_edit] turns W_ONKEY
+; (there is no dialog kind and no focus concept): FS_EDIT turns W_ONKEY
 ; into a line editor that SWALLOWS EVERY KEY - binding, because otherwise
 ; the first letter of "BAK" would switch to drive B: - and filters each
 ; character through diskw.inc's own dskw_char, so the line shows exactly
@@ -55,6 +73,32 @@ FMI_CELL_H  equ 40
 ; Everything else - buttons, status line, rows that fit, columns - comes
 ; from fm_layout at run time (the window resizes).
 
+; --- per-window state block (KD_POOL, 4 x 16 bytes; SPEC.md 22/29.3) ---------
+; One block per open window, allocated and cascaded by app_launch, handed to
+; fm_kinit in DI, and reached everywhere else through [fm_vp]. FS_CLKT moves
+; with FS_SEL or not at all: shared, a click on row 3 in one window followed
+; within FM_DBLCLK ticks by a click on row 3 in ANOTHER would compose into a
+; double-click and launch a package.
+FS_SEL      equ 0               ; word: selected DIRECTORY index (not a row),
+                                ; 0xFFFF = none
+FS_SCRL     equ 2               ; word: first visible row
+FS_CLKT     equ 4               ; word: birth tick of this window's last click
+FS_N        equ 6               ; word: entries in this window's cache, 0..32
+FS_CWD      equ 8               ; word: the folder it shows (first cluster,
+                                ; 0 = the root)
+FS_DRV      equ 10              ; byte: the drive it shows
+FS_MOK      equ 11              ; byte: 1 = that listing came from a good mount
+FS_VIEW     equ 12              ; byte: 0 = list, 1 = icon grid
+FS_IDX      equ 13              ; byte: its VIEW_SEG slot, 0..3 - derived once
+                                ; by fm_kinit and never again
+FS_EDIT     equ 14              ; byte: the status-line editor is armed here
+FS_FERR     equ 15              ; byte: FERR_* of the last file operation IN
+                                ; THIS WINDOW, 0 = none
+FS_SIZE     equ 16              ; = the Disk kind's KD_SSIZE
+
+FM_MAXWIN   equ VIEW_SLOTS      ; = KD_CAP: one cache slot per window
+FV_ICONS    equ 1024            ; icon images start here inside a slot (2.3)
+
 ; -----------------------------------------------------------------------------
 ; files_init - reset module state (no window is created at boot, SPEC.md 22)
 ; in:  nothing
@@ -63,51 +107,384 @@ FMI_CELL_H  equ 40
 ; .bss is not zeroed by the loader: every state variable is set here.
 ; -----------------------------------------------------------------------------
 files_init:
-    mov word [fm_sel], 0xFFFF   ; no selection
-    mov word [fm_clkt], 0
-    mov byte [fm_mountok], 0
-    mov byte [fm_view], 0       ; list view
-    mov word [fm_scroll], 0
-    mov byte [fm_ferr], 0       ; no file-operation error to report
-    mov byte [fm_edit], 0       ; not naming anything
-    mov byte [fm_elen], 0
+    push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    xor al, al                  ; every block reads as a window that never
+    mov di, fm_pool             ; existed until fm_kinit fills one
+    mov cx, FM_MAXWIN * FS_SIZE
+    cld
+    rep stosb
+    mov byte [fm_elen], 0       ; nothing is being typed anywhere
     mov byte [fm_ebuf], 0
     mov byte [fm_full], 0
-    mov word [fm_titlep], 0     ; no window, so nothing to retitle
+    mov word [fm_vp], fm_pool   ; no acting window yet: point the three
+    mov word [fm_vseg], VIEW_SEG    ; published words at slot 0 so a stray
+    mov word [fm_vinst], 0          ; read cannot leave the pool or the cache
+    mov byte [fm_seed_drv], 1   ; the seed the first launch would consume
+    mov word [fm_seed_cwd], 0
+    mov word [fm_seed_nam], 0
+    pop es
+    pop di
+    pop cx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; fm_kinit - KD_INIT for the Disk kind (SPEC.md 29.3): fresh instance state
-; in:  BX = window ptr, DI = state ptr (0 - stateless), SI = instance record
+; fm_kinit - KD_INIT for the Disk kind (SPEC.md 29.3): a whole new window
+; in:  BX = window ptr, DI = state ptr, SI = instance record
 ; out: nothing (all registers preserved)
 ;
 ; The title is aimed at the INSTANCE RECORD's I_NAME rather than at the
 ; template's literal, which is what makes the window's caption, its dock
 ; tile (SPEC.md 30) and its Task Manager row (SPEC.md 28) all follow the
 ; folder from one 16-byte write. app_launch has already copied KD_NAME
-; ('Disk') in there, so the initial caption is unchanged.
+; ('Disk') in there, so the caption is never blank even if the mount fails.
+;
+; This is also where the new window's listing comes from: app_launch has no
+; argument channel, so the caller parked the target in fm_seed_* (the
+; [cp_sel]-before-KIND_CTRL precedent, SPEC.md 31) and fmv_load pulls it in
+; here. KD_INIT runs on the UI task with NO lock held, which is exactly the
+; context a mount needs.
 ; -----------------------------------------------------------------------------
 fm_kinit:
     push ax
-    mov word [fm_sel], 0xFFFF   ; a fresh window starts with no selection
-    mov word [fm_clkt], 0
-    mov byte [fm_view], 0       ; list view, scrolled to the top
-    mov word [fm_scroll], 0
-    mov byte [fm_ferr], 0
-    mov byte [fm_edit], 0       ; a reopened window never resumes a
-    mov byte [fm_elen], 0       ; half-typed name
-    mov byte [fm_ebuf], 0
-    mov byte [fm_full], 0
+    push cx
+    push dx
+    push si
+
+    mov ax, di                  ; the cache slot IS the pool slot: derive it
+    sub ax, fm_pool             ; once, here, so nothing else has to know how
+    mov cl, 4                   ; app_launch picked the block
+    shr ax, cl
+    mov [di+FS_IDX], al
+
+    mov word [di+FS_SEL], 0xFFFF    ; a fresh window has no selection,
+    mov word [di+FS_CLKT], 0        ; nothing listed, list view, scrolled to
+    mov word [di+FS_SCRL], 0        ; the top, and no half-typed name - a
+    mov word [di+FS_N], 0           ; reopened window never resumes one
+    mov byte [di+FS_VIEW], 0
+    mov byte [di+FS_EDIT], 0
+    mov byte [di+FS_FERR], 0
+
     mov ax, si
     add ax, I_NAME              ; the record's 16-byte name field, which
-    mov [fm_titlep], ax         ; inst_set_name zero-filled and NUL-capped
-    mov [bx + W_TITLE], ax
+    mov [bx + W_TITLE], ax      ; inst_set_name zero-filled and NUL-capped
     mov word [bx + W_MENUS], fm_menus
                                 ; the Disk browser IS Locator's window
                                 ; (SPEC.md 12.3): fronting it keeps Locator
                                 ; in the bar rather than swapping it for an
                                 ; app named 'Disk' - it just swaps Locator's
                                 ; desktop menus for its file-manager ones
+
+    call fm_vp_set              ; BX = the window: make it the acting one, so
+                                ; fm_settitle below finds its record
+    mov al, [fm_seed_drv]
+    mov dx, [fm_seed_cwd]
+    call fmv_load               ; DI = block: mount, then fill its own cache
+    mov si, [fm_seed_nam]       ; the folder's name when the caller knew it
+    call fm_settitle
+    mov byte [fm_full], 0       ; app_launch's wm_show repaints everything
+                                ; anyway - do not make the first self-repaint
+                                ; pay for a second full pass
+
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; =============================================================================
+; The view cache (SPEC.md 2.3/22.1)
+;
+; Each window owns one 4KB VIEW_SEG slot holding a byte-for-byte image of
+; disk_dir (at slot offset 0) and disk_icons (at FV_ICONS). Neither end of
+; that copy is addressable through DS - the source is LOW_SEG, the
+; destination VIEW_SEG - which is why it goes through disk.inc's
+; dsk_copy_out / dsk_copy_seg rather than a plain rep movsw.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; fm_vp_set - publish the acting window's view
+; in:  BX = window ptr
+; out: nothing (all registers preserved); [fm_vp] = its state block,
+;      [fm_vseg] = its cache segment, [fm_vinst] = its instance record (0 if
+;      the window is unowned)
+;
+; Everything in this module that reads per-window state reads it through
+; [fm_vp], and every listing read goes through [fm_vseg]. Both are published
+; HERE and nowhere else - the same "computed in one place so they can never
+; disagree" rule fm_layout already lives by. A painter or hit-tester that
+; skips this reads the PREVIOUS window's directory: wrong names, wrong icons,
+; and a double-click that opens the wrong file.
+; -----------------------------------------------------------------------------
+fm_vp_set:
+    push bx
+    push di
+    call inst_win_owner         ; DI = record, or 0; BX preserved
+    mov [fm_vinst], di
+    or di, di
+    jz .none
+    mov di, [di+I_SPTR]         ; the kind's KD_POOL block...
+    cmp di, fm_pool             ; ...which for a file-manager window is one
+    jb .none                    ; of ours. Bounded rather than trusted: every
+    cmp di, fm_pool + FM_MAXWIN*FS_SIZE     ; write below goes through it.
+    jb .have
+.none:
+    mov di, fm_pool             ; cannot happen - app_launch binds the window
+                                ; before it runs KD_INIT - but slot 0 keeps
+                                ; every access below inside the pool if it does
+.have:
+    mov [fm_vp], di
+    mov bl, [di+FS_IDX]
+    and bl, VIEW_SLOTS-1        ; whatever that byte holds, the segment must
+    add bl, VIEW_SEG >> 8       ; land inside the block SPEC.md 2.3 pins
+    mov bh, bl
+    xor bl, bl
+    mov [fm_vseg], bx
+    pop di
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fmv_copy_in - CX bytes from the acting window's cache into kernel scratch
+; in:  SI = slot offset, DI = kernel offset, CX = byte count (even)
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fmv_copy_in:
+    push ax
+    push dx
+    mov dx, [fm_vseg]
+    mov ax, cs                  ; this code is .text, so CS is the kernel
+    call dsk_copy_seg
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fmv_get_dir - stage one entry out of THIS window's cache
+; in:  AX = entry index (0..31; callers bound it by FS_N)
+; out: SI -> dsk_ent, holding that entry's 32 bytes
+; clobbers: SI (the output), flags
+;
+; Deliberately lands in disk.inc's OWN dsk_ent rather than a second buffer:
+; every consumer in this module keeps the plain "SI ->" pointer it had back
+; when the listing was a single global.
+; -----------------------------------------------------------------------------
+fmv_get_dir:
+    push ax
+    push cx
+    push di
+    mov cl, 5                   ; index * 32
+    shl ax, cl
+    mov si, ax
+    mov di, dsk_ent
+    mov cx, DSK_DE_SIZE
+    call fmv_copy_in
+    pop di
+    pop cx
+    pop ax
+    mov si, dsk_ent
+    ret
+
+; -----------------------------------------------------------------------------
+; fmv_get_icon - stage one icon slot out of THIS window's cache
+; in:  AX = entry index (0..31)
+; out: SI -> dsk_ico, holding 64 bytes (all-zero = no icon)
+; clobbers: SI (the output), flags
+; -----------------------------------------------------------------------------
+fmv_get_icon:
+    push ax
+    push cx
+    push di
+    mov cl, 6                   ; index * 64, past the entry images
+    shl ax, cl
+    add ax, FV_ICONS
+    mov si, ax
+    mov di, dsk_ico
+    mov cx, DSK_ICO_SIZE
+    call fmv_copy_in
+    pop di
+    pop cx
+    pop ax
+    mov si, dsk_ico
+    ret
+
+; -----------------------------------------------------------------------------
+; fmv_store - copy the global mount snapshot into one window's slot
+; in:  DI = state block
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fmv_store:
+    push ax
+    push cx
+    push si
+    push di
+    mov al, [di+FS_IDX]
+    and al, VIEW_SLOTS-1
+    add al, VIEW_SEG >> 8
+    mov ah, al
+    xor al, al                  ; AX = this window's slot segment
+    mov si, disk_dir            ; both ends are LOW_SEG offsets (SPEC.md 2.1)
+    xor di, di
+    mov cx, 1024
+    call dsk_copy_out
+    mov si, disk_icons
+    mov di, FV_ICONS
+    mov cx, 2048
+    call dsk_copy_out
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fmv_load - mount a directory and fill ONE window's cache (SPEC.md 22.1)
+; in:  AL = drive, DX = the directory's first cluster (0 = root),
+;      DI = state block. Real floppy I/O; UI task only.
+; out: nothing (all registers preserved)
+;
+; The global snapshot is rebuilt by the one validated pipeline (dsk_chdir ->
+; disk_mount) and then copied into the window's slot. What lands in the block
+; afterwards is what the mount ACTUALLY produced, not what was asked for: a
+; failed mount leaves the volume at the root with the write gate shut
+; (SPEC.md 19.2), and a window claiming to be inside a folder it never
+; entered is a lie the user could act on.
+; -----------------------------------------------------------------------------
+fmv_load:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov bl, al                  ; dsk_chdir wants the drive in DL and the
+    mov ax, dx                  ; cluster in AX
+    mov dl, bl
+    call dsk_chdir              ; a remount with [dsk_keepcwd] raised
+
+    mov al, [disk_drive]        ; ...and now record what really happened
+    mov [di+FS_DRV], al
+    mov ax, [dsk_cwd]
+    mov [di+FS_CWD], ax
+    mov byte [di+FS_MOK], 0
+    cmp byte [dsk_mntok], 0     ; the write gate IS the mount's verdict, and
+    je .listed                  ; unlike CF it survives the stores above
+    mov byte [di+FS_MOK], 1
+.listed:
+    mov ax, [disk_nfiles]
+    mov [di+FS_N], ax
+    mov word [di+FS_SEL], 0xFFFF    ; every index into the old listing is
+    mov word [di+FS_SCRL], 0        ; meaningless now
+    mov byte [di+FS_FERR], 0
+    call fmv_store
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fmv_sync - make the global snapshot BE this window's directory (SPEC.md 22.1)
+; in:  DI = state block
+; out: nothing (all registers preserved)
+;
+; The other half of "paints read the cache, actions re-sync". Everything that
+; resolves against disk_dir / disk_nfiles / [dsk_cwd] - the loader, every
+; dskw_*, dsk_dotdot - has to run against the ACTING window's directory, not
+; against whichever window happened to navigate last. In the common case (you
+; act in the window you last moved) this is a compare and a ret; when it is
+; not, it costs exactly the mount that operation would have needed anyway.
+;
+; The selection and the scroll position are banked across the reload, which
+; fmv_load itself would clear. A sync is NOT navigation - the window is being
+; re-listed at exactly the place it already was - and clearing them would
+; mean that double-clicking a package in a scrolled background window
+; silently scrolled it back to the top. Both are bounds-checked at every use
+; (FS_SEL against FS_N, FS_SCRL by fm_clamp_scroll), so restoring an index
+; that a changed directory has invalidated is harmless.
+; -----------------------------------------------------------------------------
+fmv_sync:
+    push ax
+    push bx
+    push dx
+    mov al, [di+FS_DRV]
+    cmp al, [disk_drive]
+    jne .load
+    mov dx, [di+FS_CWD]
+    cmp dx, [dsk_cwd]
+    je .out
+.load:
+    mov al, [di+FS_DRV]
+    mov dx, [di+FS_CWD]
+    mov bx, [di+FS_SEL]
+    push bx
+    mov bx, [di+FS_SCRL]
+    push bx
+    call fmv_load
+    pop bx
+    mov [di+FS_SCRL], bx
+    pop bx
+    mov [di+FS_SEL], bx
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fmv_bcast - push the current snapshot into every window showing it (22.1)
+; in:  nothing; the globals must ALREADY be the new truth - every dskw_*
+;      remounts on success (SPEC.md 18.4)
+; out: nothing (all registers preserved)
+;
+; The acting window is included on purpose: its own cache is a listing taken
+; before the write, so without this the folder it just created would not
+; appear in the window that created it. Pure memory, no extra floppy I/O -
+; which is what makes fixing the sibling case affordable at all.
+; -----------------------------------------------------------------------------
+fmv_bcast:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    mov si, inst_tab
+    mov cx, INST_MAX
+.scan:
+    cmp byte [si+I_STATE], 1
+    jne .next
+    cmp byte [si+I_KIND], KIND_FILES
+    jne .next
+    mov di, [si+I_SPTR]
+    mov al, [di+FS_DRV]
+    cmp al, [disk_drive]
+    jne .next
+    mov dx, [di+FS_CWD]
+    cmp dx, [dsk_cwd]
+    jne .next
+    mov ax, [disk_nfiles]
+    mov [di+FS_N], ax
+    mov byte [di+FS_MOK], 1     ; we only get here after a successful write,
+                                ; which ended in a successful remount (18.4)
+    mov word [di+FS_SEL], 0xFFFF    ; the listing was rebuilt: indices into
+    mov word [di+FS_SCRL], 0        ; the old one mean nothing
+    call fmv_store
+.next:
+    add si, I_RECSZ
+    loop .scan
+    pop di
+    pop si
+    pop dx
+    pop cx
     pop ax
     ret
 
@@ -187,10 +564,13 @@ fm_s_drva:    db 'Drive A:', 0
 fm_s_drvb:    db 'Drive B:', 0
 fm_s_aslist:  db 'as List', 0
 fm_s_asicon:  db 'as Icons', 0
+fm_s_newwin:  db 'New Window', 0
+fm_s_opennew: db 'Open in New Window', 0
 
 fm_items_file:
     dw fm_s_open, fm_s_mkdir, fm_s_closew
 fm_items_fold:
+    dw fm_s_newwin, fm_s_opennew
     dw fm_s_refr, fm_s_up, fm_s_rootf, fm_s_drva, fm_s_drvb
 fm_items_view:
     dw fm_s_aslist, fm_s_asicon
@@ -202,7 +582,7 @@ fm_menus:
     dw fm_oncmd                 ; AM_ONCMD: our own handler
     dw 4                        ; AM_COUNT (= MENU_APPMAX, used exactly)
     dw fm_s_mfile, fm_items_file, 3
-    dw fm_s_mfold, fm_items_fold, 5
+    dw fm_s_mfold, fm_items_fold, 7
     dw fm_s_mview, fm_items_view, 2
     dw fm_s_mspec, fm_items_spec, 3
 
@@ -211,45 +591,228 @@ fm_menus:
 ; in:  nothing
 ; out: nothing
 ; clobbers: nothing (flags only)
-; Re-opens the current drive: AL = [disk_drive], fall into files_open_drive
-; (SPEC.md 22). Every open remounts - that is the disk-swap story.
+; Opens where the volume already is - ([disk_drive], [dsk_cwd]) - and lets
+; fm_choose decide whether that means fronting a window, creating one, or
+; moving one (SPEC.md 22.1).
 ; -----------------------------------------------------------------------------
 files_open:
     push ax
+    push dx
     mov al, [disk_drive]
-    jmp fm_open_body            ; files_open_drive body; pops the AX above
+    mov dx, [dsk_cwd]
+    jmp short fm_open_body      ; files_open_drive's body; pops the two above
 
 ; -----------------------------------------------------------------------------
-; files_open_drive - mount a drive and show the Disk window
+; files_open_drive - show a drive's top level in a file-manager window
 ; in:  AL = drive (0 = A:, 1 = B:); no lock held on entry
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; Callers: CMD_FILES dispatch (via files_open) and desk_click (SPEC.md 26).
-; ALWAYS mounts - a swapped or newly chosen disk must never show stale
-; contents; fm_mountok records the result for the header line and the
-; selection and scroll are cleared. disk_mount runs OUTSIDE the gfx lock
-; (SPEC.md 18).
+;
+; A drive icon always means that drive's ROOT. It no longer mounts
+; unconditionally: an existing window already showing that root is fronted
+; instead, which is the "one window per place" rule the Finder has - and
+; Refresh, one click away, is still the disk-swap answer it always was.
 ; -----------------------------------------------------------------------------
 files_open_drive:
     push ax
+    push dx
+    xor dx, dx
 fm_open_body:
     push bx
-    push dx
-
-    mov dl, al
-    call disk_mount             ; sets [disk_drive]; CF = failure
-    mov byte [fm_mountok], 0
-    jc .fail
-    mov byte [fm_mountok], 1
-.fail:
-    mov word [fm_sel], 0xFFFF   ; directory (re)read: selection is stale
-    mov word [fm_scroll], 0     ; and so is the scroll position
-
-    mov al, KIND_FILES          ; create the window, or front + un-minimize
-    call app_launch             ; the existing instance (SPEC.md 29)
-
-    pop dx
+    push cx
+    push si
+    push di
+    xor si, si                  ; no name known: the title derives (SPEC 22)
+    call fm_choose
+    pop di
+    pop si
+    pop cx
     pop bx
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_choose - front, create, or move a window onto a directory (SPEC.md 22.1)
+; in:  AL = drive, DX = first cluster (0 = root), SI = a NUL display name or
+;      0 to derive one; NO gfx lock held, UI task
+; out: nothing; clobbers AX, BX, CX, SI, DI (the callers save them)
+;
+; Three outcomes and no failure path: already open there, so front it; room
+; for another, so seed and launch; or at the cap, in which case the
+; frontmost file-manager window goes there instead. A dialog saying "too
+; many windows" would be the only alternative and it would be useless -
+; there is exactly one thing the user could do about it.
+; -----------------------------------------------------------------------------
+fm_choose:
+    call fm_find_view           ; already showing (AL, DX)?
+    jc .notopen
+    call gfx_lock               ; front + un-minimize, exactly as app_launch's
+    and byte [di+I_FLAGS], 0xFE ; own at-cap path does (SPEC.md 29.4)
+    mov bx, [di+I_WIN]
+    call wm_show
+    call gfx_unlock
+    ret
+.notopen:
+    call fm_count               ; CX = live file-manager instances
+    cmp cx, FM_MAXWIN
+    jae .inplace
+    call fm_seed                ; park the target for fm_kinit
+    mov al, KIND_FILES
+    jmp app_launch              ; tail call; it takes its own locks
+.inplace:
+    call gfx_lock
+    call fm_front_win           ; BX = the frontmost visible one
+    jc .unlock                  ; every window minimized: nothing to move
+    call fm_vp_set
+    mov di, [fm_vp]
+    call fmv_load               ; AL = drive, DX = cwd, DI = block
+    call fm_settitle            ; SI = the name, still untouched
+    mov si, bx
+    call fm_repaint
+.unlock:
+    call gfx_unlock
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_find_view - a live window already showing a directory
+; in:  AL = drive, DX = first cluster
+; out: CF = 0 and DI = its INSTANCE record; CF = 1 = none. AX/BX/CX/DX/SI
+;      preserved.
+; -----------------------------------------------------------------------------
+fm_find_view:
+    push ax
+    push cx
+    push si
+    mov si, inst_tab
+    mov cx, INST_MAX
+.scan:
+    cmp byte [si+I_STATE], 1
+    jne .next
+    cmp byte [si+I_KIND], KIND_FILES
+    jne .next
+    mov di, [si+I_SPTR]
+    cmp al, [di+FS_DRV]
+    jne .next
+    cmp dx, [di+FS_CWD]
+    jne .next
+    mov di, si                  ; the record, not the block: the caller wants
+    clc                         ; I_WIN and I_FLAGS
+    jmp short .out
+.next:
+    add si, I_RECSZ
+    loop .scan
+    stc
+.out:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_count - file-manager instances in use
+; in:  nothing
+; out: CX = the count; all other registers preserved
+; Counts I_STATE != 0, dying instances included, because that is exactly what
+; app_launch's cap check counts: seeding a launch that then fronts an
+; existing window would silently drop the seed.
+; -----------------------------------------------------------------------------
+fm_count:
+    push dx
+    push si
+    xor cx, cx
+    mov si, inst_tab
+    mov dx, INST_MAX
+.scan:
+    cmp byte [si+I_STATE], 0
+    je .next
+    cmp byte [si+I_KIND], KIND_FILES
+    jne .next
+    inc cx
+.next:
+    add si, I_RECSZ
+    dec dx
+    jnz .scan
+    pop si
+    pop dx
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_front_win - the frontmost VISIBLE file-manager window
+; in:  nothing
+; out: CF = 0 and BX = window ptr; CF = 1 = none. All else preserved.
+;
+; "Is this a file-manager window" is the W_MENUS test, not an instance walk:
+; fm_kinit is the only thing in the kernel that ever stores fm_menus, so the
+; comparison is exact and costs one word.
+; -----------------------------------------------------------------------------
+fm_front_win:
+    push ax
+    push cx
+    push si
+    mov ch, 0
+    mov cl, [wm_zn]
+    mov si, wm_zord
+    add si, cx
+    jcxz .none
+.next:
+    dec si                      ; front to back (SPEC.md 11)
+    mov al, [si]
+    call wm_idx2ptr             ; BX = window ptr
+    test word [bx+W_FLAGS], 2   ; visible?
+    jz .cont
+    cmp word [bx+W_MENUS], fm_menus
+    je .found
+.cont:
+    loop .next
+.none:
+    stc
+    jmp short .out
+.found:
+    clc
+.out:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_seed - park a target directory for the next fm_kinit (SPEC.md 22.1)
+; in:  AL = drive, DX = first cluster, SI = a NUL display name or 0
+; out: nothing (all registers preserved)
+;
+; app_launch has no argument channel, so the target rides in .bss between the
+; request and the KD_INIT that consumes it. The NAME is COPIED rather than
+; pointed at: the only caller that has one (Open in New Window) posts its
+; launch from under the gfx lock and then repaints, and that repaint reuses
+; fm_name for every row it draws.
+; -----------------------------------------------------------------------------
+fm_seed:
+    push ax
+    push cx
+    push si
+    push di
+    mov [fm_seed_drv], al
+    mov [fm_seed_cwd], dx
+    mov word [fm_seed_nam], 0
+    or si, si
+    jz .out
+    mov di, fm_snam
+    mov [fm_seed_nam], di
+    mov cx, 16
+.cp:
+    lodsb                       ; DF=0 per SPEC.md 1
+    mov [di], al
+    inc di
+    or al, al
+    jz .out
+    loop .cp
+    mov byte [di], 0
+.out:
+    pop di
+    pop si
+    pop cx
     pop ax
     ret
 
@@ -258,33 +821,18 @@ fm_open_body:
 ; in:  nothing; no lock held on entry
 ; out: nothing
 ; clobbers: nothing (flags only)
-; No live Disk instance (the user closed it mid-load) = nothing to do; else
-; takes the gfx lock itself; hidden window = nothing to do. This must be a
-; FULL wm_paint_all, not a content-only repaint: loader_run calls it right
-; after wm_show raised the loaded program's window, which may overlap the
-; Disk window - painting only our content would draw over the new front
-; window. Rare (once per load attempt), so the full repaint is cheap enough.
+;
+; A bare wm_paint_all under its own lock. It used to look up "the" Disk
+; instance with inst_find_kind and skip when that window was hidden; with
+; four possible windows "the first one" is the wrong window, and the call was
+; never about our window anyway - loader_run makes it right after wm_show
+; raised the LOADED program's window, which may overlap any of them, so the
+; repaint has to be the full back-to-front pass regardless.
 ; -----------------------------------------------------------------------------
 files_refresh:
-    push ax
-    push si
-    push di
-
-    mov al, KIND_FILES
-    call inst_find_kind         ; DI = the live Disk instance (SPEC.md 29)
-    jc .closed
     call gfx_lock
-    mov si, [di+I_WIN]
-    test word [si+W_FLAGS], 2   ; visible?
-    jz .skip
     call wm_paint_all
-.skip:
     call gfx_unlock
-.closed:
-
-    pop di
-    pop si
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -301,11 +849,39 @@ files_refresh:
 ;        fm_cols        grid columns (1 in list view)
 ;        fm_total       total rows (entries, or grid rows)
 ;        fm_nch         list-view name chars that fit
+;
+; It ALSO publishes the acting window (fm_vp_set) and mirrors the eight
+; per-window fields the painter and the hit-tester read on their hot paths
+; into fm_l* scratch. That is not a convenience: fm_draw_core uses AX, BX,
+; CX, DX, SI, DI and BP - BP is the row-band cursor - and has no register
+; left to carry a state-block pointer through 400 lines. The mirrors are
+; read-only snapshots refreshed here; fm_lscr is the one that is written,
+; and fm_clamp_scroll is the one place it is written BACK.
 ; -----------------------------------------------------------------------------
 fm_layout:
     push ax
     push cx
     push dx
+    push di
+
+    call fm_vp_set              ; BX = window ptr -> [fm_vp]/[fm_vseg]
+    mov di, [fm_vp]
+    mov al, [di+FS_VIEW]
+    mov [fm_lview], al
+    mov al, [di+FS_MOK]
+    mov [fm_lmok], al
+    mov al, [di+FS_DRV]
+    mov [fm_ldrv], al
+    mov al, [di+FS_EDIT]
+    mov [fm_ledit], al
+    mov al, [di+FS_FERR]
+    mov [fm_lferr], al
+    mov ax, [di+FS_N]
+    mov [fm_lnf], ax
+    mov ax, [di+FS_SCRL]
+    mov [fm_lscr], ax
+    mov ax, [di+FS_SEL]
+    mov [fm_lsel], ax
 
     call wm_content             ; AX = content left, DX = content top
     mov [fm_cx], ax
@@ -331,7 +907,7 @@ fm_layout:
     jmp .fit
 .roompos:
     mov cx, FM_ROW_H
-    cmp byte [fm_view], 0
+    cmp byte [fm_lview], 0
     je .fitdiv
     mov cx, FMI_CELL_H
 .fitdiv:
@@ -342,7 +918,7 @@ fm_layout:
 
     ; cols = 1 (list) or max(1, (cw-16)/78) (icons)
     mov ax, 1
-    cmp byte [fm_view], 0
+    cmp byte [fm_lview], 0
     je .cols
     mov ax, [fm_cw]
     sub ax, 16
@@ -358,8 +934,8 @@ fm_layout:
     mov [fm_cols], ax
 
     ; total rows = nfiles (list) or ceil(nfiles / cols) (icons)
-    mov ax, [disk_nfiles]
-    cmp byte [fm_view], 0
+    mov ax, [fm_lnf]
+    cmp byte [fm_lview], 0
     je .tot
     add ax, [fm_cols]
     dec ax
@@ -387,32 +963,43 @@ fm_layout:
 
     call fm_clamp_scroll        ; a shrink-resize self-heals here
 
+    pop di
     pop dx
     pop cx
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; fm_clamp_scroll - clamp fm_scroll into [0, max(total - fit, 0)]
+; fm_clamp_scroll - clamp fm_lscr into [0, max(total - fit, 0)], then commit
 ; in:  fm_total/fm_fit valid (fm_layout ran)
 ; out: nothing (all registers preserved)
 ; Signed on purpose: click paths subtract a page first and clamp after.
+;
+; This is the ONE write-back of the scroll mirror into the window's own state
+; block, and it is affordable to make it the only one because every scroll
+; path already funnels through here - the arrows, the track pages, the four
+; scan codes, and the shrink-resize self-heal above.
 ; -----------------------------------------------------------------------------
 fm_clamp_scroll:
     push ax
+    push di
     mov ax, [fm_total]
     sub ax, [fm_fit]
     jns .max
     xor ax, ax
 .max:
-    cmp [fm_scroll], ax
+    cmp [fm_lscr], ax
     jle .low
-    mov [fm_scroll], ax
+    mov [fm_lscr], ax
 .low:
-    cmp word [fm_scroll], 0
+    cmp word [fm_lscr], 0
     jge .done
-    mov word [fm_scroll], 0
+    mov word [fm_lscr], 0
 .done:
+    mov di, [fm_vp]
+    mov ax, [fm_lscr]
+    mov [di+FS_SCRL], ax
+    pop di
     pop ax
     ret
 
@@ -443,7 +1030,7 @@ fm_thumb:
     mov ax, 8
 .hok:
     mov cx, ax                  ; CX = thumb height
-    mov ax, [fm_scroll]
+    mov ax, [fm_lscr]
     mul bx
     div word [fm_total]         ; AX = thumb offset in the track
     add ax, FM_ROW_Y0+11        ; track top, content-relative (= 33)
@@ -485,12 +1072,14 @@ fm_paint:
 ; clobbers: nothing (flags only)
 ; Test order (SPEC.md 22): buttons -> scroll bar -> rows. Buttons are
 ; tested only when wide enough to be drawn (the same cw guards as the
-; painter - nothing invisible is ever clickable). fm_sel holds a DIRECTORY
-; index; the row math adds fm_scroll and, in icon view, the column.
+; painter - nothing invisible is ever clickable). FS_SEL holds a DIRECTORY
+; index; the row math adds the scroll position and, in icon view, the column.
 ;
 ; A click anywhere cancels an in-place name (SPEC.md 22), on the reasoning
 ; that clicking away from a rename is how every desktop abandons one - and
-; because leaving the editor armed would swallow the next keystroke too.
+; because leaving the editor armed would swallow the next keystroke too. It
+; cancels one armed in ANOTHER window too: the buffer is shared, so a name
+; half-typed somewhere else has nowhere left to land.
 ; -----------------------------------------------------------------------------
 fm_onclick:
     push ax
@@ -498,6 +1087,9 @@ fm_onclick:
     push cx
     push dx
     push di
+
+    mov bx, si                  ; publish the clicked window BEFORE anything
+    call fm_vp_set              ; reads or writes per-window state
 
     call fm_edit_end            ; clicking away abandons a half-typed name
 
@@ -524,7 +1116,7 @@ fm_onclick:
     jl .viewbtn
     cmp cx, 15
     jg .viewbtn
-    mov dl, [disk_drive]        ; remount the current drive in place
+    mov dl, [fm_ldrv]           ; remount THIS window's drive in place
     call fm_mount               ; (under the gfx lock: stalls painters
     jmp .redraw                 ;  briefly; accepted by SPEC.md 22)
 
@@ -543,8 +1135,9 @@ fm_onclick:
     jl .sbar
     cmp cx, 15
     jg .sbar
-    xor byte [fm_view], 1       ; flip the view, back to the top; the
-    mov word [fm_scroll], 0     ; selection is kept (SPEC.md 22)
+    mov di, [fm_vp]             ; flip the view, back to the top; the
+    xor byte [di+FS_VIEW], 1    ; selection is kept (SPEC.md 22). The mirrors
+    mov word [di+FS_SCRL], 0    ; are re-read by the repaint's own fm_layout
     jmp .redraw
 
     ; --- scroll bar (present iff the row area is) ---
@@ -571,17 +1164,17 @@ fm_onclick:
     cmp cx, ax
     jl .sb_pgup
     mov ax, [fm_fit]            ; at/below the thumb top: page down
-    add [fm_scroll], ax
+    add [fm_lscr], ax
     jmp .sb_clamp
 .sb_pgup:
     mov ax, [fm_fit]
-    sub [fm_scroll], ax
+    sub [fm_lscr], ax
     jmp .sb_clamp
 .sb_up:
-    dec word [fm_scroll]
+    dec word [fm_lscr]
     jmp .sb_clamp
 .sb_down:
-    inc word [fm_scroll]
+    inc word [fm_lscr]
 .sb_clamp:
     call fm_clamp_scroll
     jmp .redraw
@@ -593,7 +1186,7 @@ fm_onclick:
     sub ax, FM_ROW_Y0           ; rebase y to row 0
     js .clear                   ; header band clears the selection
     mov cx, FM_ROW_H
-    cmp byte [fm_view], 0
+    cmp byte [fm_lview], 0
     je .rowdiv
     mov cx, FMI_CELL_H
 .rowdiv:
@@ -601,7 +1194,7 @@ fm_onclick:
     div cx                      ; AX = visible row
     cmp ax, [fm_fit]
     jae .clear                  ; below the row area
-    cmp byte [fm_view], 0
+    cmp byte [fm_lview], 0
     je .listidx
     push ax                     ; icon view: column from x
     mov ax, di
@@ -612,34 +1205,39 @@ fm_onclick:
     pop ax
     cmp di, [fm_cols]
     jae .clear                  ; right of the last column
-    add ax, [fm_scroll]
+    add ax, [fm_lscr]
     mul word [fm_cols]
     add ax, di                  ; AX = directory index
     jmp .chk
 .listidx:
-    add ax, [fm_scroll]         ; AX = directory index
+    add ax, [fm_lscr]           ; AX = directory index
 .chk:
-    cmp ax, [disk_nfiles]
-    jae .clear                  ; past the directory
+    cmp ax, [fm_lnf]
+    jae .clear                  ; past THIS window's listing
 
-    cmp ax, [fm_sel]            ; second click on the selected entry?
+    mov bx, [fm_vp]             ; BX = the state block from here on: DI is
+                                ; the icon-view column and AX the index
+    cmp ax, [bx+FS_SEL]         ; second click on the selected entry?
     jne .select
     mov dx, [ui_click_t]        ; click birth tick (EV_C), not [ticks]:
-    sub dx, [fm_clkt]           ; wrap-safe (SPEC.md 8); queued clicks
-                                ; must not collapse into double-clicks
+    sub dx, [bx+FS_CLKT]        ; wrap-safe (SPEC.md 8); queued clicks
+                                ; must not collapse into double-clicks.
+                                ; PER WINDOW, or a click on row 3 here and
+                                ; one on row 3 next door would compose
     cmp dx, FM_DBLCLK
     jae .select
     call fm_open_sel            ; double-click: a package goes to the
-    jmp .redraw                 ; loader, a folder to dsk_chdir (22)
+    jmp .redraw                 ; loader, a folder re-lists this window (22)
 
 .select:
-    mov [fm_sel], ax
+    mov [bx+FS_SEL], ax
     mov dx, [ui_click_t]
-    mov [fm_clkt], dx
+    mov [bx+FS_CLKT], dx
     jmp .redraw
 
 .clear:
-    mov word [fm_sel], 0xFFFF
+    mov bx, [fm_vp]
+    mov word [bx+FS_SEL], 0xFFFF
 
 .redraw:
     call fm_repaint             ; SI still = window ptr
@@ -656,23 +1254,30 @@ fm_onclick:
 ; in:  AL = ascii, AH = scan, SI = window ptr (gfx lock held by caller)
 ; out: nothing
 ; clobbers: nothing (flags only)
-; While [fm_edit] is set this handler SWALLOWS EVERY KEY and none of the
-; shortcuts below apply (SPEC.md 22). That is binding, not defensive: with
-; the bare-letter shortcuts live, typing a folder named 'BAK' would switch
-; to drive B: on its very first character and the name would be half-eaten.
+; While this window's FS_EDIT is set the handler SWALLOWS EVERY KEY and none
+; of the shortcuts below apply (SPEC.md 22). That is binding, not defensive:
+; with the bare-letter shortcuts live, typing a folder named 'BAK' would
+; switch to drive B: on its very first character and the name would be
+; half-eaten.
 ;
-; Otherwise: 'a'/'A' mounts drive 0, 'b'/'B' drive 1, 'r'/'R' remounts the
-; current drive (disk_mount under the gfx lock stalls painters briefly;
+; Otherwise: 'a'/'A' mounts drive 0, 'b'/'B' drive 1, 'r'/'R' remounts THIS
+; window's drive (disk_mount under the gfx lock stalls painters briefly;
 ; accepted by SPEC.md 22). 'v'/'V' toggles the view. Up/Down/PgUp/PgDn (scan
 ; 48h/50h/49h/51h) scroll the view. Enter opens the selection like a
-; double-click.
+; double-click. Only the front window is sent keys at all (SPEC.md 13), so
+; there is no focus concept to get wrong.
 ; -----------------------------------------------------------------------------
 fm_onkey:
     push ax
     push bx
     push dx
+    push di
 
-    cmp byte [fm_edit], 0
+    mov bx, si                  ; publish the window this key belongs to
+    call fm_vp_set
+    mov di, [fm_vp]
+
+    cmp byte [di+FS_EDIT], 0
     jne .editing                ; naming: nothing below is reachable
 
     cmp al, 13
@@ -712,45 +1317,45 @@ fm_onkey:
     jmp .redraw
 
 .remount:
-    mov dl, [disk_drive]
+    mov dl, [di+FS_DRV]         ; ours, not whichever drive is mounted
 
 .mount:
     call fm_mount               ; DL = drive; the same body the Refresh
     jmp .redraw                 ; button and the Folder menu use
 
 .vtoggle:
-    xor byte [fm_view], 1
-    mov word [fm_scroll], 0
+    xor byte [di+FS_VIEW], 1
+    mov word [di+FS_SCRL], 0
     jmp .redraw
 
 .scr_up:
     mov bx, si                  ; the scroll keys clamp against the live
-    call fm_layout              ; layout (fm_fit/fm_total)
-    dec word [fm_scroll]
+    call fm_layout              ; layout (fm_fit/fm_total) and move the
+    dec word [fm_lscr]          ; mirror; fm_clamp_scroll commits it
     jmp .scr_clamp
 .scr_dn:
     mov bx, si
     call fm_layout
-    inc word [fm_scroll]
+    inc word [fm_lscr]
     jmp .scr_clamp
 .scr_pgup:
     mov bx, si
     call fm_layout
     mov ax, [fm_fit]
-    sub [fm_scroll], ax
+    sub [fm_lscr], ax
     jmp .scr_clamp
 .scr_pgdn:
     mov bx, si
     call fm_layout
     mov ax, [fm_fit]
-    add [fm_scroll], ax
+    add [fm_lscr], ax
 .scr_clamp:
     call fm_clamp_scroll
     jmp .redraw
 
 .enter:
-    mov ax, [fm_sel]
-    cmp ax, [disk_nfiles]       ; 0xFFFF (none) also fails this
+    mov ax, [di+FS_SEL]
+    cmp ax, [di+FS_N]           ; 0xFFFF (none) also fails this
     jae .out
     call fm_open_sel            ; same as a double-click
 
@@ -758,6 +1363,7 @@ fm_onkey:
     call fm_repaint             ; SI still = window ptr
 
 .out:
+    pop di
     pop dx
     pop bx
     pop ax
@@ -769,33 +1375,44 @@ fm_onkey:
 
 ; -----------------------------------------------------------------------------
 ; fm_open_sel - open one directory entry: THE open path (SPEC.md 22)
-; in:  AX = directory index, already checked against [disk_nfiles];
-;      gfx lock held
+; in:  AX = index into THIS window's listing, already checked against FS_N;
+;      gfx lock held, [fm_vp] published
 ; out: nothing (all registers preserved)
 ;
 ; Shared by the double-click, by Enter and by File > Open, so those three can
-; never drift apart. The SPEC.md 19 type word decides: 2 is a folder and gets
-; dsk_chdir; anything else goes to the loader, which rejects a type-0 file as
-; "Bad package" - the truthful verdict for double-clicking a data file.
+; never drift apart. The SPEC.md 19 type word decides: 2 is a folder and
+; re-lists this window; anything else goes to the loader, which rejects a
+; type-0 file as "Bad package" - the truthful verdict for double-clicking a
+; data file.
 ;
 ; Before this branch existed a folder double-click reached ld_run_body, which
 ; rejects type != 1, and the window reported "Bad package" for an operation
 ; that had nothing to do with packages.
 ;
+; The loader gets the poster's state block in [ld_pwin] as well as the index,
+; and that pairing is binding: the index means nothing except inside this
+; window's listing, and a background window's listing is a real listing it is
+; entitled to act on. Without it a click here would load whichever file sits
+; at that index in whatever happens to be mounted - and it would pass every
+; SPEC.md 21 validation on the way.
+;
 ; Both the cluster and the name are taken out of the staged entry BEFORE
 ; anything acts: fm_go remounts, and a mount rebuilds dsk_ent - the very
-; buffer dsk_get_dir just handed back a pointer into.
+; buffer fmv_get_dir just handed back a pointer into.
 ; -----------------------------------------------------------------------------
 fm_open_sel:
     push ax
     push bx
     push si
-    call dsk_get_dir            ; SI -> the staged 32-byte entry
+    push di
+    mov di, [fm_vp]
+    call fmv_get_dir            ; SI -> the staged 32-byte entry
     mov bx, [si+18]             ; its first cluster, banked before the mount
     cmp word [si+16], 2
     je .folder
     inc ax                      ; index + 1: ui.inc runs the loader once the
     mov [ld_pending], ax        ; lock drops (SPEC.md 21)
+    mov [ld_pwin], di           ; ...resolved against THIS window (22.1)
     jmp short .out
 .folder:
     call fm_stage_name          ; fm_name = the folder's display name, out
@@ -803,76 +1420,76 @@ fm_open_sel:
     mov si, fm_name
     call fm_go
 .out:
+    pop di
     pop si
     pop bx
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; fm_go - move the window to a directory (SPEC.md 19.2/22)
+; fm_go - move THIS window to a directory (SPEC.md 19.2/22)
 ; in:  AX = the directory's first cluster (0 = the root), SI = a NUL display
-;      name to title the window with, or 0 = derive it; gfx lock held
+;      name to title the window with, or 0 = derive it; gfx lock held,
+;      [fm_vp] published
 ; out: nothing (all registers preserved)
+;
+; Navigation is per window and nothing else moves: the drive comes out of the
+; block, and fmv_load re-lists the volume, refills THIS window's cache and
+; resets its selection, scroll and error line. Another window sitting in the
+; folder we just left keeps painting its own cache, untouched.
 ; -----------------------------------------------------------------------------
 fm_go:
+    push ax
     push dx
-    mov dl, [disk_drive]
-    call dsk_chdir              ; a remount with [dsk_keepcwd] raised; CF=1
-    call fm_relist              ; leaves the volume back at the root (19.2)
+    push di
+    mov dx, ax
+    mov di, [fm_vp]
+    mov al, [di+FS_DRV]
+    call fmv_load
+    call fm_settitle            ; SI is still the caller's name (or 0)
+    pop di
     pop dx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; fm_mount - mount a drive from scratch (SPEC.md 22)
-; in:  DL = drive (0 = A:, 1 = B:); gfx lock held
+; fm_mount - point THIS window at a drive's root, from scratch (SPEC.md 22)
+; in:  DL = drive (0 = A:, 1 = B:); gfx lock held, [fm_vp] published
 ; out: nothing (all registers preserved)
 ;
 ; The body behind the Refresh button, the a/b/r keys and the Folder menu's
 ; Refresh / Drive A: / Drive B: - one copy, so a drive change can never mean
-; three slightly different things. Unlike fm_go this is NOT navigation:
-; [dsk_keepcwd] stays clear, so the volume lands at the root, deliberately -
-; a swapped disk has no meaningful "current folder".
+; three slightly different things. Unlike fm_go this is NOT navigation: it
+; lands at the ROOT deliberately, because a swapped disk has no meaningful
+; "current folder".
 ; -----------------------------------------------------------------------------
 fm_mount:
+    push ax
+    push dx
     push si
-    call disk_mount             ; sets [disk_drive]; CF = failure
-    mov si, 0                   ; back at the root: the title derives. NOT
-                                ; `xor si,si` - that clears CF, which is
-                                ; fm_relist's input and the mount's verdict
-    call fm_relist
+    push di
+    mov al, dl
+    xor dx, dx                  ; the root
+    mov di, [fm_vp]
+    call fmv_load
+    xor si, si                  ; ...which titles itself
+    call fm_settitle
+    pop di
     pop si
+    pop dx
+    pop ax
     ret
-
-; -----------------------------------------------------------------------------
-; fm_relist - the tail every (re)listing shares (module-internal)
-; in:  CF = the mount's verdict, SI = a NUL title name or 0 to derive one
-; out: nothing (all registers preserved)
-;
-; Everything the window shows is a function of the current listing, so one
-; routine resets all of it: the flag the header reads, the selection and the
-; scroll position (both are indices into a listing that has just been
-; replaced), the stale error text, and the title.
-; -----------------------------------------------------------------------------
-fm_relist:
-    mov byte [fm_mountok], 0    ; mov does not touch CF, so the carry the
-    jc .listed                  ; caller handed us is still live here
-    mov byte [fm_mountok], 1
-.listed:
-    mov word [fm_sel], 0xFFFF
-    mov word [fm_scroll], 0
-    mov byte [fm_ferr], 0
-    jmp fm_settitle             ; tail call; preserves everything
 
 ; -----------------------------------------------------------------------------
 ; fm_settitle - point the window's caption at where the volume now is
 ; in:  SI = a NUL display name, or 0
 ; out: nothing (all registers preserved)
 ;
-; [dsk_cwd] is the authority, not SI. A failed dsk_chdir leaves the volume at
-; the root (SPEC.md 19.2), and titling the window with the folder we failed
-; to ENTER would be a lie the user could act on - so the root always reads
-; 'Disk'. Inside a folder SI names it when the caller knows the name, and
-; 'Folder' when it does not, which is only the Up case: naming that
+; The window's own FS_CWD is the authority, not SI. A failed mount leaves it
+; at the root (SPEC.md 19.2), and titling the window with the folder we
+; failed to ENTER would be a lie the user could act on - so the root always
+; reads 'Disk'. Inside a folder SI names it when the caller knows the name,
+; and 'Folder' when it does not, which is only the Up case: naming that
 ; directory would need the GRANDparent's listing, i.e. a second whole mount
 ; to display a string (SPEC.md 22).
 ;
@@ -884,10 +1501,14 @@ fm_settitle:
     push cx
     push si
     push di
-    mov di, [fm_titlep]
+    mov di, [fm_vinst]
     or di, di
-    jz .out                     ; no window yet: nothing to retitle
-    cmp word [dsk_cwd], 0
+    jz .out                     ; unowned window: nothing to retitle
+    add di, I_NAME              ; DI -> the 16 bytes the caption points at
+    push di
+    mov di, [fm_vp]
+    cmp word [di+FS_CWD], 0
+    pop di                      ; pop leaves the flags alone
     jne .named
     mov si, fm_s_root
     jmp short .copy
@@ -926,21 +1547,23 @@ fm_settitle:
 FMC_OPEN    equ 0               ; File
 FMC_MKDIR   equ 1
 FMC_CLOSEW  equ 2
-FMC_REFRESH equ 3               ; Folder
-FMC_UP      equ 4
-FMC_ROOT    equ 5
-FMC_DRVA    equ 6
-FMC_DRVB    equ 7
-FMC_LIST    equ 8               ; View
-FMC_ICONS   equ 9
-FMC_CLOCK   equ 10              ; Special
-FMC_BOUNCE  equ 11
-FMC_RESTART equ 12
-FMC_COUNT   equ 13
+FMC_NEWWIN  equ 3               ; Folder
+FMC_OPENNEW equ 4
+FMC_REFRESH equ 5
+FMC_UP      equ 6
+FMC_ROOT    equ 7
+FMC_DRVA    equ 8
+FMC_DRVB    equ 9
+FMC_LIST    equ 10              ; View
+FMC_ICONS   equ 11
+FMC_CLOCK   equ 12              ; Special
+FMC_BOUNCE  equ 13
+FMC_RESTART equ 14
+FMC_COUNT   equ 15
 
 FM_NMENUS   equ 4               ; = fm_menus' AM_COUNT = MENU_APPMAX
 fm_menu_base:
-    db FMC_OPEN, FMC_REFRESH, FMC_LIST, FMC_CLOCK
+    db FMC_OPEN, FMC_NEWWIN, FMC_LIST, FMC_CLOCK
 
 ; The jump table. Every entry records WHICH SIDE OF THE GFX LOCK it is on,
 ; because fm_oncmd runs under that lock and the lock is a non-recursive spin
@@ -954,13 +1577,15 @@ fm_jmp:
                                 ;         Refresh already is)
     dw fm_c_mkdir               ; inline (arms the status-line editor)
     dw fm_c_closew              ; POSTED - ui_cmd takes the lock
-    dw fm_c_refresh             ; inline (disk_mount, like the button)
-    dw fm_c_up                  ; inline (dsk_dotdot + dsk_chdir)
-    dw fm_c_root                ; inline (dsk_chdir AX = 0)
-    dw fm_c_drva                ; inline (disk_mount DL = 0)
-    dw fm_c_drvb                ; inline (disk_mount DL = 1)
-    dw fm_c_list                ; inline ([fm_view] = 0)
-    dw fm_c_icons               ; inline ([fm_view] = 1)
+    dw fm_c_newwin              ; POSTED - app_launch takes the lock (29.4)
+    dw fm_c_opennew             ; POSTED - ditto
+    dw fm_c_refresh             ; inline (fmv_load, like the button)
+    dw fm_c_up                  ; inline (fmv_sync + dsk_dotdot + fmv_load)
+    dw fm_c_root                ; inline (fmv_load at the root)
+    dw fm_c_drva                ; inline (fmv_load, drive 0)
+    dw fm_c_drvb                ; inline (fmv_load, drive 1)
+    dw fm_c_list                ; inline (FS_VIEW = 0)
+    dw fm_c_icons               ; inline (FS_VIEW = 1)
     dw fm_c_clock               ; POSTED - app_launch takes the lock
     dw fm_c_bounce              ; POSTED - app_launch takes the lock
     dw fm_c_restart             ; POSTED - ui_cmd takes the lock, forever
@@ -991,6 +1616,8 @@ fm_oncmd:
     push di
 
     mov [fm_cmdwin], si
+    mov bx, si
+    call fm_vp_set              ; the command acts on THIS window (SPEC 22.1)
     mov bl, ah
     xor bh, bh
     cmp bx, FM_NMENUS
@@ -1021,18 +1648,49 @@ fm_oncmd:
 ; anything (fm_oncmd saved it all), and draws nothing: fm_oncmd repaints.
 
 fm_c_open:                      ; File > Open - the selection, if any
-    mov ax, [fm_sel]
-    cmp ax, [disk_nfiles]       ; 0xFFFF (no selection) also fails this
+    mov di, [fm_vp]
+    mov ax, [di+FS_SEL]
+    cmp ax, [di+FS_N]           ; 0xFFFF (no selection) also fails this
     jae .none
     call fm_open_sel
 .none:
     ret
 
 fm_c_mkdir:                     ; File > New Folder... - arm the editor
-    mov byte [fm_edit], 1
-    mov byte [fm_elen], 0
-    mov byte [fm_ebuf], 0
-    mov byte [fm_ferr], 0       ; the prompt replaces the old verdict
+    mov di, [fm_vp]
+    jmp fm_edit_arm
+
+fm_c_newwin:                    ; Folder > New Window - a second view of here
+    mov di, [fm_vp]
+    mov al, [di+FS_DRV]
+    mov dx, [di+FS_CWD]
+    xor si, si                  ; same folder, so the same derived title
+    jmp short fm_newwin
+
+fm_c_opennew:                   ; Folder > Open in New Window - the selection
+    mov di, [fm_vp]
+    mov ax, [di+FS_SEL]
+    cmp ax, [di+FS_N]
+    jae fm_nw_none              ; 0xFFFF (no selection) also fails this
+    call fmv_get_dir            ; SI -> the staged entry
+    cmp word [si+16], 2
+    jne fm_nw_none              ; only a folder has somewhere to open INTO
+    mov dx, [si+18]             ; its first cluster
+    call fm_stage_name          ; AX is still the index
+    mov si, fm_name
+    mov al, [di+FS_DRV]
+fm_newwin:
+    call fm_count               ; CX = windows already open
+    cmp cx, FM_MAXWIN
+    jae fm_nw_full
+    call fm_seed                ; park the target for the new window's
+    mov al, KIND_FILES          ; fm_kinit, then let ui_task do the launch
+    jmp inst_launch_post        ; NOT app_launch: it takes the lock we hold
+fm_nw_full:
+    jmp snd_beep                ; at the cap app_launch would front an
+                                ; existing window and silently drop the seed,
+                                ; which reads as "the menu did nothing"
+fm_nw_none:
     ret
 
 fm_c_closew:                    ; File > Close Window
@@ -1052,7 +1710,8 @@ fm_c_bounce:                    ; Special > Bounce
     jmp inst_launch_post
 
 fm_c_refresh:                   ; Folder > Refresh
-    mov dl, [disk_drive]
+    mov di, [fm_vp]
+    mov dl, [di+FS_DRV]
     jmp short fm_c_mount
 fm_c_drva:                      ; Folder > Drive A:
     xor dl, dl
@@ -1063,9 +1722,12 @@ fm_c_mount:
     jmp fm_mount
 
 fm_c_up:                        ; Folder > Up One Folder
-    cmp word [dsk_cwd], 0
+    mov di, [fm_vp]
+    cmp word [di+FS_CWD], 0
     je .none                    ; already at the root: nothing is above it,
                                 ; and saying so is not worth an error line
+    call fmv_sync               ; dsk_dotdot walks [dsk_cwd], so that had
+                                ; better be OUR folder (SPEC.md 22.1)
     call dsk_dotdot             ; AX = the parent's first cluster (19.2)
     jc .none                    ; a missing or corrupt '..': stay put
     xor si, si                  ; the parent cannot be named without the
@@ -1084,8 +1746,9 @@ fm_c_list:                      ; View > as List
 fm_c_icons:                     ; View > as Icons
     mov al, 1
 fm_c_setview:
-    mov [fm_view], al
-    mov word [fm_scroll], 0     ; row heights changed: the old first row is
+    mov di, [fm_vp]
+    mov [di+FS_VIEW], al
+    mov word [di+FS_SCRL], 0    ; row heights changed: the old first row is
     ret                         ; not this view's first row
 
 ; =============================================================================
@@ -1093,7 +1756,7 @@ fm_c_setview:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; fm_editkey - one keystroke while [fm_edit] is armed
+; fm_editkey - one keystroke while the front window's FS_EDIT is armed
 ; in:  AL = ascii (non-zero); gfx lock held
 ; out: nothing (all registers preserved)
 ;
@@ -1179,42 +1842,82 @@ fm_hasdot:
 
 ; -----------------------------------------------------------------------------
 ; fm_edit_commit - Enter in the editor: create the folder (SPEC.md 18.5)
-; in:  nothing; gfx lock held, UI task - dskw_*'s required context (18.4)
-; out: nothing (all registers preserved); the verdict lands in [fm_ferr]
+; in:  [fm_vp] published; gfx lock held, UI task - dskw_*'s required context
+; out: nothing (all registers preserved); the verdict lands in FS_FERR
 ;
-; dskw_mkdir remounts on success with [dsk_cwd] preserved, so the new folder
-; appears in the listing and the volume stays exactly where it was - which is
-; the entire point of being able to create a folder inside another one.
+; dskw_mkdir resolves the name in [dsk_cwd], which is whichever window last
+; navigated - so the sync is not a nicety: without it a New Folder typed in
+; a background window would be created in another window's directory, and
+; the only evidence would be that it never appeared in the listing.
+;
+; dskw_mkdir remounts on success with [dsk_cwd] preserved, so the globals are
+; already right afterwards and fmv_bcast is a pure memory copy into every
+; window on this folder - ours first, because our own cache is a listing
+; taken before the write.
 ; -----------------------------------------------------------------------------
 fm_edit_commit:
     push ax
     push si
+    push di
+    mov di, [fm_vp]
     cmp byte [fm_elen], 0
     je .done                    ; nothing typed: Enter simply cancels
+    call fmv_sync               ; create it in OUR folder (SPEC.md 22.1)
     mov si, fm_ebuf
     call dskw_mkdir             ; CF=1 with AX = FERR_* (SPEC.md 18.5)
     jnc .ok
-    mov [fm_ferr], al           ; every failure gets visible text (22)
+    mov [di+FS_FERR], al        ; every failure gets visible text (22)
     jmp short .done
 .ok:
-    mov byte [fm_ferr], 0
-    mov word [fm_sel], 0xFFFF   ; the remount rebuilt the listing, so a
-    mov word [fm_scroll], 0     ; directory index means nothing any more
+    mov byte [di+FS_FERR], 0
+    call fmv_bcast              ; the new listing reaches every window that
+                                ; is showing this folder, and clears the
+                                ; selections that indexed the old one
 .done:
     call fm_edit_end
+    pop di
     pop si
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_edit_arm - hand the status-line editor to one window (SPEC.md 22)
+; in:  DI = state block
+; out: nothing (all registers preserved)
+;
+; Arming disarms every other window, because the name being typed is ONE
+; module-global buffer: only the front window is sent keys, so a second armed
+; window could never receive any, but it WOULD keep drawing "New folder:"
+; with this window's characters in it.
+; -----------------------------------------------------------------------------
+fm_edit_arm:
+    call fm_edit_end
+    mov byte [di+FS_EDIT], 1
+    mov byte [di+FS_FERR], 0    ; the prompt replaces the old verdict
     ret
 
 ; -----------------------------------------------------------------------------
 ; fm_edit_end - leave the editor (internal; also the "cancel" path)
 ; in:  nothing
 ; out: nothing (all registers preserved)
+;
+; Clears EVERY block's flag rather than the acting window's: the buffer is
+; shared, so a click that cancels an edit may well land in a different window
+; from the one that armed it.
 ; -----------------------------------------------------------------------------
 fm_edit_end:
-    mov byte [fm_edit], 0
+    push cx
+    push di
+    mov di, fm_pool
+    mov cx, FM_MAXWIN
+.clr:
+    mov byte [di+FS_EDIT], 0
+    add di, FS_SIZE
+    loop .clr
     mov byte [fm_elen], 0
     mov byte [fm_ebuf], 0
+    pop di
+    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1275,15 +1978,15 @@ fm_repaint:
 ; fm_draw_icon16 - one entry's 16x16 icon, with the generic fallback
 ; in:  AX = directory index, CX = x, DX = y (absolute, gfx lock held)
 ; out: nothing (all registers preserved)
-; dsk_get_icon stages the entry from LOW_SEG (SPEC.md 19); an all-zero
-; entry (the 32 words OR to 0) falls back to the built-in ico_app16.
+; fmv_get_icon stages the entry from THIS window's cache (SPEC.md 22.1); an
+; all-zero entry (the 32 words OR to 0) falls back to built-in ico_app16.
 ; -----------------------------------------------------------------------------
 fm_draw_icon16:
     push ax
     push bx
     push cx
     push si
-    call dsk_get_icon           ; SI -> staged 64-byte icon body
+    call fmv_get_icon           ; SI -> staged 64-byte icon body
     mov bx, si
     push cx                     ; the x coordinate must survive the loop
     xor ax, ax                  ; counter below
@@ -1324,7 +2027,8 @@ fm_stage_name:
     push bx
     push cx
     push si
-    call dsk_get_dir            ; SI -> staged 32-byte entry (SPEC.md 19)
+    call fmv_get_dir            ; SI -> staged 32-byte entry (SPEC.md 19),
+                                ; out of this window's cache (SPEC.md 22.1)
     mov bx, fm_name
     mov cx, 16
 .copy:
@@ -1367,17 +2071,17 @@ fm_draw_core:
 
     ; --- header line ---
     mov di, fm_hdrbuf
-    cmp byte [fm_mountok], 0
+    cmp byte [fm_lmok], 0
     je .badhdr
     mov si, fm_s_drive          ; "Drive X:  N files"
     call fm_scat
-    mov al, [disk_drive]
+    mov al, [fm_ldrv]
     add al, 'A'
     mov [di], al
     inc di
     mov si, fm_s_colsp
     call fm_scat
-    mov ax, [disk_nfiles]
+    mov ax, [fm_lnf]
     call fm_utoa
     mov si, fm_s_files
     call fm_scat
@@ -1385,7 +2089,7 @@ fm_draw_core:
 .badhdr:
     mov si, fm_s_nodisk         ; "No os8088 disk (X:)"
     call fm_scat
-    mov al, [disk_drive]
+    mov al, [fm_ldrv]
     add al, 'A'
     mov [di], al
     inc di
@@ -1459,7 +2163,7 @@ fm_draw_core:
     mov cx, ax
     add cx, 11                  ; "Icons" = 40px -> x1+11
     mov si, fm_s_icons
-    cmp byte [fm_view], 0
+    cmp byte [fm_lview], 0
     je .vlabel
     add cx, 4                   ; "List" = 32px -> x1+15
     mov si, fm_s_list
@@ -1474,7 +2178,7 @@ fm_draw_core:
     je .norows
 
     mov ax, [fm_total]          ; shown = min(total - scroll, fit)
-    sub ax, [fm_scroll]
+    sub ax, [fm_lscr]
     jns .sh
     xor ax, ax
 .sh:
@@ -1484,7 +2188,7 @@ fm_draw_core:
 .shok:
     mov [fm_shown], ax
 
-    cmp byte [fm_view], 0
+    cmp byte [fm_lview], 0
     jne .icons
 
     ; --- list rows ---
@@ -1498,7 +2202,7 @@ fm_draw_core:
     add ax, FM_ROW_Y0
     mov bp, ax
     mov ax, di
-    add ax, [fm_scroll]         ; AX = directory index
+    add ax, [fm_lscr]         ; AX = directory index
 
     push ax
     mov cx, [fm_cx]             ; 16x16 icon at x=4, row top
@@ -1542,10 +2246,10 @@ fm_draw_core:
 
 .lsel:
     ; selection bar (inverted row band), only when scrolled into view
-    mov ax, [fm_sel]
-    cmp ax, [disk_nfiles]       ; 0xFFFF (none) also fails this
+    mov ax, [fm_lsel]
+    cmp ax, [fm_lnf]       ; 0xFFFF (none) also fails this
     jae .bar
-    sub ax, [fm_scroll]
+    sub ax, [fm_lscr]
     js .bar
     cmp ax, [fm_shown]
     jae .bar
@@ -1572,10 +2276,10 @@ fm_draw_core:
     mov word [fm_vcol], 0
 .icell:
     mov ax, [fm_vrow]
-    add ax, [fm_scroll]
+    add ax, [fm_lscr]
     mul word [fm_cols]
     add ax, [fm_vcol]           ; AX = directory index
-    cmp ax, [disk_nfiles]
+    cmp ax, [fm_lnf]
     jae .isel                   ; past the last entry: grid done
     push ax
     mov ax, FMI_CELL_W
@@ -1618,13 +2322,13 @@ fm_draw_core:
 
 .isel:
     ; selection cell (inverted), only when scrolled into view
-    mov ax, [fm_sel]
-    cmp ax, [disk_nfiles]
+    mov ax, [fm_lsel]
+    cmp ax, [fm_lnf]
     jae .bar
     xor dx, dx
     div word [fm_cols]          ; AX = grid row, DX = column
     mov cx, dx                  ; CX = column
-    sub ax, [fm_scroll]
+    sub ax, [fm_lscr]
     js .bar
     cmp ax, [fm_shown]
     jae .bar
@@ -1738,14 +2442,14 @@ fm_draw_core:
     mov si, fm_s_loading        ; 1. a pending load trumps everything
     cmp word [ld_pending], 0
     jne .stat
-    cmp byte [fm_edit], 0       ; 2. the folder name being typed, prompt and
+    cmp byte [fm_ledit], 0       ; 2. the folder name being typed, prompt and
     je .st_err                  ;    all - the editor IS the status line
     mov si, fm_s_newfld
     call fm_scat
     mov si, fm_ebuf
     jmp short .stat
 .st_err:
-    mov al, [fm_ferr]           ; 3. the last file operation's verdict, so
+    mov al, [fm_lferr]           ; 3. the last file operation's verdict, so
     mov bx, fm_errtab           ;    no dskw_* failure is ever silent
     or al, al
     jnz .st_tab
@@ -1849,19 +2553,47 @@ fm_utoa:
 ; -----------------------------------------------------------------------------
 section .bss
 
-fm_sel:     resw 1              ; selected directory index, 0xFFFF = none
-fm_clkt:    resw 1              ; click birth tick (EV_C) of the last click
-fm_mountok: resb 1              ; non-zero when the last mount succeeded
-fm_view:    resb 1              ; 0 = list view, 1 = icon view
-fm_scroll:  resw 1              ; first visible row (entry row / grid row)
-fm_ferr:    resb 1              ; FERR_* of the last file operation, 0 = none
-fm_full:    resb 1              ; 1 = the next fm_repaint owes the frame too
-fm_titlep:  resw 1              ; -> the instance's I_NAME, 0 = no window
+; --- per-window state (SPEC.md 22): the kind's KD_POOL, one block per window
+fm_pool:    resb 64             ; FM_MAXWIN x FS_SIZE (4 x 16; a literal per
+                                ; the no-forward-ref-in-bss rule)
+
+; --- the acting window, published by fm_vp_set and read everywhere ----------
+fm_vp:      resw 1              ; -> its 16-byte state block above
+fm_vseg:    resw 1              ; its VIEW_SEG cache segment (SPEC.md 2.3)
+fm_vinst:   resw 1              ; -> its instance record, 0 = unowned
+
+; --- app_launch has no argument channel: the target rides here (SPEC 22.1) --
+fm_seed_drv: resb 1             ; drive for the next fm_kinit
+fm_seed_cwd: resw 1             ; its directory's first cluster
+fm_seed_nam: resw 1             ; -> fm_snam, or 0 = derive the title
+fm_snam:     resb 17            ; the seeded folder name, COPIED (fm_name is
+                                ; reused by the repaint before the drain)
+
+fm_full:    resb 1              ; 1 = the next fm_repaint owes the frame too.
+                                ; Module-global on purpose: it is raised and
+                                ; consumed inside one held lock, by one window
 fm_cmdwin:  resw 1              ; fm_oncmd scratch: the acting window ptr
 
-fm_edit:    resb 1              ; status-line editor: 0 = off, 1 = new folder
+; The name being typed is ONE buffer for all four windows: only the front
+; window receives W_ONKEY (SPEC.md 13), so only one editor can ever be live,
+; and fm_edit_arm clears every other block's FS_EDIT to keep it that way.
 fm_elen:    resb 1              ; characters typed so far (0..12)
 fm_ebuf:    resb 13             ; the name being typed, NUL-terminated
+
+; --- fm_layout's mirrors of the acting window's hot fields (SPEC.md 22.1) ---
+; Read-only snapshots refreshed at the head of every fm_layout, because
+; fm_draw_core has no register free to carry a state-block pointer through
+; 400 lines. fm_lscr is the one that is written, and fm_clamp_scroll is the
+; one place it is written back into the block.
+fm_lview:   resb 1              ; FS_VIEW
+fm_lmok:    resb 1              ; FS_MOK
+fm_ldrv:    resb 1              ; FS_DRV
+fm_ledit:   resb 1              ; FS_EDIT
+fm_lferr:   resb 1              ; FS_FERR
+fm_lpad:    resb 1              ; keeps the words below even-aligned
+fm_lnf:     resw 1              ; FS_N
+fm_lscr:    resw 1              ; FS_SCRL
+fm_lsel:    resw 1              ; FS_SEL
 
 fm_cx:      resw 1              ; fm_layout: content left (abs)
 fm_cy:      resw 1              ; fm_layout: content top (abs)

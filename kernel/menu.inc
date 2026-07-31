@@ -758,8 +758,9 @@ menu_items_special:
 ; Locator's menu set (SPEC.md 12.3) - an ordinary SPEC.md 12.2 structure
 ; whose AM_ONCMD is 0, the one value reserved to mean "dispatched by the
 ; kernel": ui_dispatch recognises it and rebuilds a CMD_* instead of
-; calling through. fm_kinit points the Disk window at this same set, so
-; the file browser keeps Locator's name and menus in the bar.
+; calling through. It is the set the bar falls back to when no window owns
+; it; a file-manager window carries fm_menus instead, which shares this
+; set's AM_NAME so the bar still reads 'Locator' either way (SPEC.md 12.3).
 menu_loc_set:
     dw menu_loc_name            ; AM_NAME
     dw 0                        ; AM_ONCMD: kernel-dispatched

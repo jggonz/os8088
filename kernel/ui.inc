@@ -690,8 +690,8 @@ ui_cmd:
     ret
 
 .files:
-    call files_open             ; mounts + launches/fronts the Disk window;
-    ret                         ; takes its own locks (SPEC 22)
+    call files_open             ; fronts, creates or moves a file-manager
+    ret                         ; window (SPEC.md 22.1); locks internally
 
 .close:
     call gfx_lock

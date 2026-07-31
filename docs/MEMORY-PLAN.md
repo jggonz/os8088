@@ -183,9 +183,20 @@ the current packages are under 2KB each.
 layer claims `SND_SEG` = linear 0x30000–0x3FFFF (the last fully-free 64KB on
 the 256KB floor), and the same SPEC §2 amendment pins the menu save-unders
 to 0x20000–0x2FFFF. So on the floor, Step D's per-package segments carve
-from 0x20000–0x2FFFF (shared with the save-under heap); on bigger machines
+from that block (shared with the save-under heap); on bigger machines
 they can range above BB_SEG at 0x40000 instead. Settled now so the conflict
-is not discovered mid-migration. And there is no slack to steal below
+is not discovered mid-migration.
+
+**Since then that block has lost its top 16KB.** SPEC §2.3's `VIEW_SEG`
+(linear 0x2C000–0x2FFFF) holds the file manager's four per-window listing
+caches, and §2.2 narrowed `SAVE_SEG`'s pinned extent to 0x20000–0x2BFFF to
+make room. So Step D's floor-machine budget is **48KB**, not 64KB, shared
+with a save-under heap whose measured high-water is ~11KB. That is room for
+roughly two per-package segments where Step D's own trigger is "a package
+needs more than ~19KB" — enough once, not twice. If Step D ever needs the
+16KB back, the honest move is to cap the file manager at two windows
+(`VIEW_SLOTS`, `KD_CAP` and `fm_pool` are one number wearing three hats,
+SPEC §29.3), not to overlap the two users. And there is no slack to steal below
 0x10000 either: `FAT_SEG`'s snapshot owns linear 0x03000–0x07FFF (Step A),
 so Step D — or anything else hunting for low memory — must not assume the
 old gap between the `.fartext` blob and `LOW_SEG` is free.

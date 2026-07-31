@@ -83,7 +83,8 @@ pre-empted background task, updating live while the user types or drags).
 | 0x10000       | 0x1000  | kernel: code, data, .bss                           |
 | 0x1B000       | 0x1000  | `APP_LOAD_OFF` — package pool, 19.5KB: multi-instance, sector-granular first-fit (§20/§21) |
 | 0x1FE00       | 0x1000  | unused: the pool's exclusive end would not fit a 16-bit immediate at 0x10000 |
-| 0x20000       | 0x2000  | `SAVE_SEG` — save-under heap (menus), raw, via ES; **extent pinned to 0x20000..0x2FFFF** (§2.2) |
+| 0x20000       | 0x2000  | `SAVE_SEG` — save-under heap (menus), raw, via ES; **extent pinned to 0x20000..0x2BFFF** (§2.2) |
+| 0x2C000       | 0x2C00  | `VIEW_SEG` — per-window file-manager listing cache, 4 × 4KB slots (§22.1); raw, via **ES only** |
 | 0x30000       | 0x3000  | `SND_SEG` — sound buffers (§34): SB DMA double buffer, record ring, sample staging pool; raw, via **ES only** (§2.2) |
 | 0x40000       | 0x4000  | `BB_SEG` — double-buffer back buffer, 4 planes × 0x9600 bytes (§32); touched only while the Control Panel's Display page has it switched on, which needs conventional RAM ≥ `DB_MIN_KB` |
 | 0xA0000       | 0xA000  | VGA planar framebuffer, 80 bytes/row               |
@@ -163,12 +164,44 @@ kernel-staged copies in both directions (§34.6, the `dsk_get_dir` idiom of
 §18). The Task Manager's RAM figure carries the segment the way it carries
 `KLOWFAR_KB` (§15.1/§28) once the layer claims it (Phase 2).
 
-**In the same breath, `SAVE_SEG`'s extent is pinned to 0x20000..0x2FFFF**:
-the save-under heap may never grow past 0x30000, and `docs/MEMORY-PLAN.md`
+**In the same breath, `SAVE_SEG`'s extent is pinned to 0x20000..0x2BFFF**:
+the save-under heap may never grow past `VIEW_SEG`, and `docs/MEMORY-PLAN.md`
 Step D (packages into their own segments) must carve its per-package
 segments from that same block on the floor machine — the bound that keeps
 "SND_SEG is free" true forever. On bigger machines Step D may range above
 0x40000/`BB_SEG` instead.
+
+The extent used to run to 0x2FFFF; the file manager's per-window listing
+cache (§22.1) took the top 16KB. That is affordable because `SAVE_SEG` has
+exactly **one** user with exactly **one** save live at a time — `menu_track`'s
+save-under at `SAVE_SEG:0`, since only one menu can be down at once — and its
+worst case is bounded by `gfx_save`'s formula, 4 planes × rows ×
+(byte span + 1). The widest pull-down in the tree is 160px (18 chars ×
+8 + 16), which is 21 bytes/row; the tallest is 8 items × `MENU_ITEM_H` plus
+the frame, ~130 rows. 4 × 130 × 21 ≈ 10.9KB against 48KB — a factor of
+four in hand.
+
+### 2.3 VIEW_SEG — the file-manager view cache (§22.1)
+
+Linear 0x2C000..0x2FFFF, `VIEW_SEG` = 0x2C00, four 4,096-byte slots at
+segments 0x2C00 / 0x2D00 / 0x2E00 / 0x2F00 (slot *i* is
+`VIEW_SEG + i·VIEW_SLOT_SEG`, so the segment is three byte-ops, no `mul` and
+no table). Reached through **ES only**, never DS, and read only through
+`fmv_get_dir` / `fmv_get_icon`, which stage one entry back into the kernel
+segment — the `dsk_get_dir` idiom of §2.1 verbatim. Slot map, pinned:
+
+```
+slot:0x0000..0x03FF   32 × 32B  image of disk_dir   (§19 synthesized entries)
+slot:0x0400..0x0BFF   32 × 64B  image of disk_icons (§19 harvested icons)
+slot:0x0C00..0x0FFF   free (1,024 B reserve, unowned)
+```
+
+Each slot belongs permanently to one file-manager state-pool slot (§22.1's
+`FS_IDX`), so no allocator exists and no slot is ever shared. 16KB buys the
+property that a background file-manager window paints from memory: three
+windows on three folders cost **zero** floppy I/O per repaint, and
+`wm_paint_all` (which has no clip rect and runs on every window move) would
+otherwise mean three full mounts per drag pass, under the gfx lock.
 
 ## 3. Global constants (defined once in kernel.asm, used everywhere)
 
@@ -202,6 +235,11 @@ BB_PLANE_PARA equ 0x960      ; paragraphs per plane (0x9600 bytes = 480 rows × 
 DB_MIN_KB     equ 500        ; int 12h floor: double-buffer only at ≥ 500KB
 ; sound (§34, from Phase 1)
 SND_SEG       equ 0x3000     ; sound buffers: linear 0x30000-0x3FFFF, ES only (§2.2)
+; the file manager's per-window view cache (§2.3/§22.1)
+VIEW_SEG      equ 0x2C00     ; linear 0x2C000-0x2FFFF, ES only, 4 x 4KB slots
+VIEW_SLOTS    equ 4          ; = the Disk kind's KD_CAP (§29.3)
+VIEW_SLOT_SEG equ 0x0100     ; 4,096 bytes per slot, in paragraphs
+VIEW_SEG_KB   equ 16         ; what it adds to the Task Manager RAM figure (§28)
 ```
 
 ## 4. Module files and ownership
@@ -2543,7 +2581,11 @@ lock with AL = item, AH = menu, SI = window, BX = the set.
 ## 21. loader.inc
 
 State (.bss, cleared by `loader_init`): `ld_pending` (word: 0 = none, else
-directory index+1 — set by files.inc, consumed by ui.inc §13), `ld_status`
+directory index+1 — set by files.inc, consumed by ui.inc §13), `ld_pwin`
+(word: the state block of the file-manager window that posted it, 0 =
+none — §22.1; the index is into *that* window's listing, so `loader_run`
+latches `ld_pwin` and calls `fmv_sync` on it **before** `ld_run_body`
+resolves the index against the globals), `ld_status`
 (byte: 0 ok, 1 = `LD_EDISK` disk error, 2 = `LD_EBAD` not a valid package,
 3 too large, 4 entry aborted, 5 out of memory), plus loader_run scratch
 words (registers run out on the 8086), including `ld_clus` (word, the
@@ -2629,20 +2671,54 @@ overwritten" invariant is retired.
 
 ## 22. files.inc — the Disk window (file manager)
 
-Built-in singleton app kind (KIND_FILES, cap 1 — the mount state below is
-module-global), 320×200 at (110,80), **resizable**
+Built-in app kind (KIND_FILES), **cap 4** — up to four windows, each on its
+own drive and its own folder — 320×200 at (110,80), **resizable**
 (KD_WFLAG = WF_SIZABLE, §11.1/§29.3 — the one built-in that is). No
 background task, no boot-time window: `files_init` (from kmain) only
-resets module state; the window is created on demand by `app_launch`
-(§29), whose KD_INIT is `fm_kinit` (clears `fm_sel`/`fm_clkt`, resets
-`fm_scroll`/`fm_view`, cancels any edit, points `W_MENUS` at `fm_menus`
-and `W_TITLE` at the instance's `I_NAME`). State: `fm_sel` (word, selected
-**directory index** — not a row; 0xFFFF = none), `fm_clkt` (word, birth
-tick of the last entry click), `fm_mountok` (byte, 1 = last mount
-succeeded), `fm_view` (byte, 0 = list view, 1 = icon view), `fm_scroll`
-(word, first visible row — an entry row in list view, a grid row in icon
-view), `fm_ferr` (byte, the `FERR_*` of the last file operation, 0 = none),
-and the edit-mode trio `fm_edit` / `fm_ebuf` (13B) / `fm_elen`.
+resets module state; a window is created on demand by `app_launch` (§29),
+whose KD_INIT is `fm_kinit`.
+
+**The binding rule of this whole section, one sentence: paints read the
+window's cache; actions re-sync the global snapshot first.** `disk_dir`,
+`disk_icons` and `disk_nfiles` (§18/§19) stay exactly one global mount
+snapshot and remain the only thing `loader.inc` and `diskw.inc` ever
+resolve a directory index against. Each window additionally owns a
+byte-for-byte **copy** of that snapshot in its `VIEW_SEG` slot (§2.3/§22.1),
+which is what `W_PAINT`, `fm_layout` and the hit-tester read — so a repaint,
+a drag, a raise, a resize or a `wm_paint_all` never touches the floppy. Any
+*action* that resolves against the globals (open a package, `dsk_chdir`,
+`dskw_mkdir`, and in general every `dskw_*`) first calls `fmv_sync`, which
+remounts **only** if the acting window's `(drive, cwd)` differs from
+`([disk_drive], [dsk_cwd])` — in the common case, where you act in the
+window you last navigated, a compare and a `ret`.
+
+**Per-window state** is a 16-byte `KD_POOL` block (`fm_pool`, 4 × 16, §29.3),
+allocated and cascaded by `app_launch` and handed to `fm_kinit` in DI:
+
+| off | field | meaning |
+|-----|-------|---------|
+| 0 | `FS_SEL` w | selected **directory index** — not a row; 0xFFFF = none |
+| 2 | `FS_SCRL` w | first visible row (entry row in list view, grid row in icon view) |
+| 4 | `FS_CLKT` w | birth tick (§10) of this window's last entry click |
+| 6 | `FS_N` w | entries in this window's cache, 0..32 |
+| 8 | `FS_CWD` w | the folder it is showing: first cluster, 0 = root |
+| 10 | `FS_DRV` b | the drive it is showing, 0 = A:, 1 = B: |
+| 11 | `FS_MOK` b | 1 = that listing came from a fully successful mount |
+| 12 | `FS_VIEW` b | 0 = list view, 1 = icon view |
+| 13 | `FS_IDX` b | its `VIEW_SEG` slot, 0..3 — derived once by `fm_kinit` |
+| 14 | `FS_EDIT` b | status-line editor: 0 = off, 1 = new folder |
+| 15 | `FS_FERR` b | `FERR_*` of the last file operation **in this window**, 0 = none |
+
+`FS_CLKT` moves with `FS_SEL` or not at all: shared, a click on row 3 in
+window A followed within 9 ticks by a click on row 3 in window B would
+compose into a double-click and launch a package.
+
+Module-global state that deliberately did **not** become per-window:
+`fm_ebuf` (13B) and `fm_elen`, the name being typed — only the front window
+receives `W_ONKEY` (§13), so exactly one editor can be live, and arming one
+window's editor clears every other block's `FS_EDIT`; and `fm_full` (byte,
+"the next `fm_repaint` owes the frame too"), which is set and consumed
+inside a single held lock.
 
 **The window's title is the folder it is showing.** `fm_kinit` points
 `[bx+W_TITLE]` at the instance record's 16-byte `I_NAME` (§29.1) rather
@@ -2669,14 +2745,22 @@ rows_fit = (list_bot - 22) / row_h ; row_h: 16 list, 40 icons; 0 if negative
 cols     = 1 (list) | max(1, (cw-16)/78) (icons)
 ```
 
+`fm_layout` also calls `fm_vp_set` and mirrors `FS_VIEW` / `FS_N` /
+`FS_SCRL` into `fm_lview` / `fm_lnf` / `fm_lscr` (§22.1) — everything below
+that says "the view", "the entry count" or "the scroll position" means
+those mirrors, and `fm_clamp_scroll` is the one routine that writes the
+scroll position back into the block.
+
 All coordinates below are content-relative. Header line at (6,6):
-`"Drive B:  N files"` (drive letter from [disk_drive]) or, when the last
-mount failed, `"No os8088 disk (B:)"` (19 chars — short enough to clear
+`"Drive B:  N files"` (drive letter from this window's `FS_DRV`) or, when
+its listing came from a failed mount (`FS_MOK` = 0),
+`"No os8088 disk (B:)"` (19 chars — short enough to clear
 the buttons at the default width; it was "No os8088 disk in drive B:"
 until the view toggle claimed that room). The failure string is verbatim;
 its **semantics** are "no readable data disk" — unreadable, unformatted,
 or any §18.2 BPB rule failed. N is the accepted-entry count (≤ 32, §19's
-cap — the header count always equals the listed count). File names are
+cap — the header count always equals the listed count), read from this
+window's `FS_N`, not from the global `[disk_nfiles]`. File names are
 the synthesized 8.3 display names of §19 (e.g. `"MINES.O88"`, ≤ 12
 chars); sizes are the §19 staged size word, clamped at 65,535 for ≥64KB
 files. Folders count and list exactly like files — a type-2 entry (§19)
@@ -2750,44 +2834,57 @@ thumb's top = a page (rows_fit rows) up, anywhere else in the track = a
 page down.
 
 Behaviour:
-- `files_open_drive` (public; in AL = drive 0/1, no lock held): **always**
-  `disk_mount` DL=AL — a swapped or newly chosen disk must never show
-  stale contents — record success in fm_mountok, clear the selection,
-  then `app_launch` KIND_FILES (creates the window, or fronts +
-  un-minimizes the existing instance at cap; §29). Callers: CMD_FILES
-  dispatch and desk_click (§26).
-- `files_open` (from CMD_FILES dispatch, no lock held): AL = [disk_drive],
-  fall into files_open_drive.
+- `files_open_drive` (public; in AL = drive 0/1, no lock held): the target
+  is (AL, root) — a drive icon always means that drive's top level — and it
+  goes through the choose-or-create rule of §22.1. Callers: CMD_FILES
+  dispatch (via `files_open`) and desk_click (§26). It no longer mounts
+  unconditionally: an existing window already showing that drive's root is
+  fronted, which is the same "one window per place" rule the Finder has, and
+  a Refresh is one click away if the disk was swapped.
+- `files_open` (from CMD_FILES dispatch, no lock held): the target is
+  `([disk_drive], [dsk_cwd])` — where the volume already is — then the same
+  rule.
 - `W_ONCLICK` (lock held; every path below ends in the content repaint —
   white-fill own content from the **live** W_W/W_H + redraw + a closing
   `wm_grow_paint` (§11), because the white fill erases the grow box):
   test order is buttons → scroll bar → rows.
-  1. Refresh rect → `disk_mount` the current drive, update fm_mountok,
-     clear selection, reset fm_scroll.
-  2. View-toggle rect → flip fm_view, reset fm_scroll (selection kept).
-  3. Scroll bar (only when the row area is drawn) → adjust fm_scroll per
-     the arrow/track rules above, clamped; nothing else changes.
+  1. Refresh rect → `fmv_load` on **this window's** `FS_DRV`, root: a
+     re-mount from scratch, so a swapped disk shows its real contents.
+  2. View-toggle rect → flip `FS_VIEW`, reset `FS_SCRL` (selection kept).
+  3. Scroll bar (only when the row area is drawn) → adjust the scroll
+     position per the arrow/track rules above, clamped; nothing else
+     changes.
   4. Row area → map to an entry index per the current view (icon view:
      reject x past cols·78); y < 22, past the shown rows, or index ≥
-     [disk_nfiles] → clear selection. Index == fm_sel and
-     [ui_click_t]−fm_clkt < 9 (birth ticks, §10) → double-click:
-     `fm_open_sel` (below). Else select it (fm_sel =
-     directory index), stamp fm_clkt.
+     `FS_N` → clear selection. Index == `FS_SEL` and
+     [ui_click_t]−`FS_CLKT` < 9 (birth ticks, §10) → double-click:
+     `fm_open_sel` (below). Else select it (`FS_SEL` =
+     directory index), stamp `FS_CLKT`.
 
   A click also **cancels any edit mode** before anything else, on the same
   reasoning a Mac cancels an in-place rename when you click away.
 - **`fm_open_sel`** (in AX = a directory index already range-checked; lock
   held) is the one open path, shared by the double-click, by Enter and by
-  **File ▸ Open**. It stages the entry (`dsk_get_dir`) and branches on the
-  §19 type word — reading the first-cluster word into a register *before*
-  it acts, because a `dsk_chdir` remount rebuilds `dsk_ent` underneath it:
-  - type 2 (a folder) → `dsk_chdir` to its first cluster, DL = [disk_drive]
-    (§19.2): the listing, the selection, the scroll position and the window
-    title all follow.
-  - anything else → `[ld_pending]` = index+1, and ui.inc runs the loader
-    after the lock drops (the repaint shows "Loading..."). A type-0 entry
-    still goes here and is rejected as "Bad package", which is the truthful
-    verdict for double-clicking a data file.
+  **File ▸ Open**. It stages the entry from **this window's cache**
+  (`fmv_get_dir`) and branches on the §19 type word — reading the
+  first-cluster word into a register *before* it acts, because a `dsk_chdir`
+  remount rebuilds `dsk_ent` underneath it:
+  - type 2 (a folder) → `fmv_load` on this window's `FS_DRV` and that
+    cluster (§19.2): the listing, its cache, the selection, the scroll
+    position and the window title all follow, and no other window moves.
+  - anything else → `[ld_pending]` = index+1 **and `[ld_pwin]` = this
+    window's state block**, and ui.inc runs the loader after the lock drops
+    (the repaint shows "Loading..."). A type-0 entry still goes here and is
+    rejected as "Bad package", which is the truthful verdict for
+    double-clicking a data file.
+
+  `[ld_pwin]` is not optional once there are several windows: the index is
+  into the *poster's* listing, and `loader_run` must `fmv_sync` that window
+  before `ld_run_body` resolves it against the globals. Without it a click
+  in a background window loads a **different** file — one that passes every
+  §21 validation, because the index is in range for whatever is mounted.
+  `loader_run` latches `[ld_pwin]` before the sync, because `disk_mount`
+  deliberately zeroes `[ld_pending]` (§18.3).
 
   Branching here is not cosmetic: before it existed, a folder double-click
   reached `ld_run_body`, which rejects `type != 1`, and the status line
@@ -2797,8 +2894,8 @@ Behaviour:
   bare-letter shortcuts are live otherwise and typing a folder called
   `BAK` would switch to drive B: on its first character. See "Naming"
   below. Otherwise: 'a'/'A' → drive 0, 'b'/'B' → drive 1, 'r'/'R' →
-  same drive; all three: `disk_mount`, update fm_mountok, clear selection,
-  reset fm_scroll, repaint content. 'v'/'V' → toggle the view like the
+  this window's own drive; all three: `fmv_load` at that drive's root,
+  repaint content. 'v'/'V' → toggle the view like the
   button. Scan codes: Up/Down (48h/50h) scroll one row, PgUp/PgDn
   (49h/51h) a page — the view, not the selection, clamped like the bar.
   Enter (13) with a valid selection → `fm_open_sel`. (disk_mount
@@ -2806,22 +2903,19 @@ Behaviour:
   about a second on real hardware — with a hostile-media ceiling of 97
   one-sector reads, approaching ~20 s at one sector per revolution plus
   retries; bounded and accepted, §18.3.)
-- **After someone else writes the disk** (§18.4): the write path remounts
-  the drive itself, so `disk_dir` and `disk_nfiles` are already current —
-  but it cannot repaint (the writing callback holds the gfx lock), so an
-  open Disk window keeps showing what it last painted. Its next repaint
-  from any cause — a click in it, a window moving over it, Refresh — shows
-  the new listing. The window has no notification path and needs none;
-  `fm_sel` is a directory index into a directory that may have changed
-  under it, exactly as it may after a disk swap, and the loader's own
-  validation (§21) is what keeps a stale index harmless.
-- `files_refresh` (called by loader_run, no lock held): find the live
-  Disk instance via `inst_find_kind` KIND_FILES (§29) — none = nothing to
-  do (the user closed the window mid-load); else acquire gfx_lock, and if
-  its window is visible call `wm_paint_all`; unlock. It must be a
-  full repaint, not content-only: loader_run calls it right after wm_show
-  raised the loaded program's window, which may overlap the Disk window —
-  a content-only repaint would paint over the new front window.
+- **After the OS itself writes the disk** (§18.4): the write path remounts,
+  so the globals are already current, and the acting command calls
+  `fmv_bcast` (§22.1) to push that snapshot into every window on the same
+  folder — including its own, whose cache is otherwise a listing without
+  the file it just created. It still cannot repaint the others (the writing
+  callback holds the gfx lock), so a sibling shows the new listing at its
+  next repaint from any cause: a click in it, a window moving over it,
+  Refresh. A window somewhere *else* is untouched and correct. `FS_SEL` is a
+  directory index into a listing that may have changed under it, exactly as
+  it may after a disk swap, and the loader's own validation (§21) plus
+  `fmv_bcast`'s selection clear are what keep a stale index harmless.
+- **A package written by another package** (`OSAPI_WRITE`, §20.3) does not
+  go through `fmv_bcast` and no window learns of it. Refresh, as before.
 
 ### The menu bar — `fm_menus` and `fm_oncmd`
 
@@ -2837,7 +2931,7 @@ cells are `font_width + MENU_TITLE_PAD`:
 | menu | width | x range | items |
 |------|-------|---------|-------|
 | **File** | 44 | 110..153 | Open · New Folder… · Close Window |
-| **Folder** | 60 | 154..213 | Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
+| **Folder** | 60 | 154..213 | New Window · Open in New Window · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: |
 | **View** | 44 | 214..257 | as List · as Icons |
 | **Special** | 68 | 258..325 | Clock · Bounce · Restart |
 
@@ -2864,7 +2958,8 @@ only by the UI task (§7) and `fm_oncmd` runs *inside* it:
 | Open | `fm_open_sel` — inline (loader is deferred, `dsk_chdir` is I/O under the lock like Refresh) |
 | New Folder… | inline: enters edit mode, draws nothing but the status line |
 | Refresh / Drive A: / Drive B: | inline `disk_mount`, exactly as the button and the a/b/r keys already do |
-| Up One Folder / Root Folder | inline `dsk_dotdot` + `dsk_chdir` / `dsk_chdir` AX=0 |
+| Up One Folder / Root Folder | inline: `fmv_sync`, then `dsk_dotdot` + `fmv_load` / `fmv_load` AX=0 |
+| New Window / Open in New Window | **deferred** — seed + `inst_launch_post` (§29.4); at cap, `snd_beep` and nothing else, because `app_launch` would front an existing window and silently drop the seed |
 | as List / as Icons | inline: set `fm_view`, reset `fm_scroll` |
 | Clock / Bounce | **deferred** — `inst_launch_post` (§29.4); `app_launch` takes the lock |
 | Close Window | **deferred** — `ui_post_cmd` CMD_CLOSE (§13); `ui_cmd` takes the lock |
@@ -2906,6 +3001,65 @@ is binding and is stated twice on purpose. Inside the mode:
 
 `fm_kinit` clears the mode, so a closed and reopened window never resumes a
 half-typed name, and a content click cancels it.
+
+### 22.1 The view cache — `VIEW_SEG` and the `fmv_*` routines
+
+The slot layout is §2.3's. Slot *i* holds a plain image of `disk_dir` at
+offset 0 and of `disk_icons` at offset 1024, so staging one entry is the
+same `idx<<5` / `(idx<<6)+1024` arithmetic `dsk_get_dir` / `dsk_get_icon`
+already contain, and filling a slot is two flat `rep movsw` (1,024 + 2,048
+bytes, ≈14 ms on a 4.77 MHz 8088) after a mount that already cost tens of
+sector reads. There is no per-slot header: the state block and the slot are
+1:1 and permanent through `FS_IDX`, so drive/cwd/count/mok live in the block
+and are never duplicated.
+
+| symbol | contract |
+|--------|----------|
+| `fm_vp_set` | in BX = window ptr. Publishes the three module words every routine below reads: `[fm_vp]` = that window's state block, `[fm_vseg]` = its cache segment, `[fm_vinst]` = its instance record (0 = unowned). Preserves all registers. Called at the head of `fm_layout` and of every window callback. |
+| `fmv_get_dir` | in AX = entry index (< `FS_N`); out SI → `dsk_ent` — the **existing** buffer, so every consumer keeps the plain `SI ->` pointer it has today. Reads `[fm_vseg]`. |
+| `fmv_get_icon` | in AX = entry index; out SI → `dsk_ico`. Same. |
+| `fmv_load` | in AL = drive, DX = cwd cluster, DI = state block; **no gfx lock requirement, but real floppy I/O**. `dsk_chdir` (DL = AL, AX = DX), then copy the fresh global snapshot into the block's slot and write back `FS_DRV`/`FS_CWD`/`FS_MOK`/`FS_N` from what the mount actually produced (a failed mount lands at the root with `FS_MOK` = 0 — §19.2). Clears `FS_SEL`/`FS_SCRL`/`FS_FERR`: every index into the old listing is meaningless. Preserves all registers. |
+| `fmv_sync` | in DI = state block. Returns immediately when `(FS_DRV, FS_CWD)` already equals `([disk_drive], [dsk_cwd])`; otherwise `fmv_load` on the block's own drive and cwd, **banking `FS_SEL` and `FS_SCRL` across it** — a sync is not navigation, the window is re-listed where it already was, and clearing them would scroll a background window back to the top on a double-click. **Every action calls this first.** Preserves all registers. |
+| `fmv_bcast` | after a successful metadata write, re-copies the (already correct, §18.4) global snapshot into **every** live file-manager window on the same `(drive, cwd)` — the acting one included, since its own cache is stale too — and clears their `FS_SEL`/`FS_SCRL`. Pure memory, no extra I/O. |
+
+**`fm_layout` is the sole authority on `[fm_vseg]`** (and `[fm_vp]`): it
+calls `fm_vp_set` at its head, then mirrors the three hot fields —
+`FS_VIEW`, `FS_N`, `FS_SCRL` — into `fm_lview` / `fm_lnf` / `fm_lscr` for the
+painter, which uses every register including BP and has none free to thread a
+pointer through. `fm_clamp_scroll` is the **one** write-back (every scroll
+path already funnels through it). Any painter or hit-tester that reads a
+cache without calling `fm_layout` (or `fm_vp_set`) first reads the *previous*
+window's directory: wrong names, wrong icons, and a double-click that opens
+the wrong file.
+
+**Staleness is the accepted compromise, and it is bounded.** A background
+window shows the listing from when it was last loaded or refreshed. Siblings
+on the same folder are repaired for free by `fmv_bcast`. A swapped floppy
+leaves every window showing the old disk until Refresh — identical to the
+single-window behaviour, no new rule. A window on A: while the front window
+works B: is stale by construction; there is no way to know without spinning
+the other drive, and that is what a 1984 Finder did too. **A folder deleted
+under a live window**: its `FS_CWD` now names a freed chain, `dsk_chdir`'s
+mount validates it (§19.2), and `fmv_load`'s failure path leaves the window
+at the root with `FS_MOK` = 0 — bounded, never a crash, but it does mean the
+window silently jumps to the root.
+
+**Choose or create** (`files_open`, `files_open_drive`; no lock held):
+1. a live file-manager instance already on the target `(drive, cwd)` → front
+   and un-minimize it;
+2. else below `KD_CAP` → park the target in `fm_seed_drv` / `fm_seed_cwd`
+   (`app_launch` has no argument channel — the `[cp_sel]`-before-`KIND_CTRL`
+   precedent of §31) and `app_launch` KIND_FILES, whose `fm_kinit` consumes
+   the seed and loads the window's cache;
+3. else at cap → navigate the **frontmost** file-manager window in place.
+   Nothing can fail, so there is no error path and no dialog.
+
+`files_refresh` (called by `loader_run`, no lock held) is now just
+gfx_lock / `wm_paint_all` / gfx_unlock. It used to look up "the" Disk
+instance with `inst_find_kind` and check its visibility; with N instances
+"the first one" is the wrong window, and `wm_paint_all` repaints every
+visible window anyway — which is what the call was always for (the loaded
+program's window may overlap any of them).
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
@@ -3245,9 +3399,12 @@ account, and the rows partition one total.
   `kernel_bss_end` (bare label = the kernel text+bss footprint, org 0) +
   that sum. usedK = (used+1023) >> 10, **plus 150 when `[bb_on]` is set**
   (§32: the 4 × 0x9600-byte back buffer is exactly 150KB — added after the
-  shift because 153600 does not fit a 16-bit byte count). The System row's
-  memory cell adds the same 150K (via `tm_memcol_kb`, the KB-input tail of
-  `tm_memcol`), so the rows still sum to the bar. Total KB is the
+  shift because 153600 does not fit a 16-bit byte count), **plus
+  `KLOWFAR_KB` (§15.1), `SND_SEG_KB` (§2.2) and `VIEW_SEG_KB` (§2.3)** —
+  every block the kernel owns outside its own segment, each added after the
+  shift for the same reason. The System row's memory cell adds all four
+  terms too (via `tm_memcol_kb`, the KB-input tail of `tm_memcol`), so the
+  rows still sum to the bar. Total KB is the
   boot-time int 12h value. **All bar math is in KB**: barw =
   usedK·160/totalK (`mul` then `div`; totalK cannot be 0 from int 12h,
   but a 0 check that skips the bar is required anyway).
@@ -3460,8 +3617,11 @@ sense at create time). The Disk kind sets WF_SIZABLE (§22); every other
 row keeps 0.
 
 Pinned caps: About 1 (stateless), Clock 10
-(stride 8), Bounce 10 (stride 8), Files 1 (module-global mount state),
+(stride 8), Bounce 10 (stride 8), **Files 4 (stride 16, pool `fm_pool`)**,
 TaskMgr 1 (one sampler), Control Panel 1 (no per-instance state, §31). The
+Files cap is 4 because each window owns one 4KB `VIEW_SEG` slot (§2.3) and
+there are four; `KD_CAP`, `VIEW_SLOTS` and the `fm_pool` size are one
+number wearing three hats and must move together. The
 per-kind caps deliberately over-subscribe INST_MAX now that Clock and
 Bounce allow 10 each — `INST_MAX` (and MAX_TASKS, §8) is the real ceiling,
 and a launch on a full table simply fails with CF=1.

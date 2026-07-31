@@ -26,7 +26,9 @@ org 0x0000
 
 ; --- global constants (SPEC.md 3) -------------------------------------------
 KERNEL_SEG  equ 0x1000
-SAVE_SEG    equ 0x2000          ; save-under heap (menus), via ES
+SAVE_SEG    equ 0x2000          ; save-under heap (menus), via ES; extent
+                                ; pinned to 0x20000..0x2BFFF (SPEC.md 2.2) -
+                                ; VIEW_SEG owns the top 16KB of the block
 VGA_SEG     equ 0xA000          ; mode 12h planar framebuffer
 SCREEN_W    equ 640
 SCREEN_H    equ 480
@@ -76,6 +78,18 @@ SND_SEG     equ 0x3000          ; sound buffers: linear 0x30000..0x3FFFF, the
                                 ; reached via ES only, never DS (SPEC.md 2.2)
 SND_SEG_KB  equ 64              ; what it adds to the Task Manager RAM figure
                                 ; (SPEC.md 2.2/28, the KLOWFAR_KB idiom)
+
+; the file manager's per-window view cache (SPEC.md 2.3/22.1)
+; Four 4KB slots carved off the TOP of the SAVE_SEG block, which has exactly
+; one user with exactly one save live at a time (menu_track's save-under) and
+; a ~11KB worst case against the 48KB it keeps. What the 16KB buys is that a
+; background file-manager window paints from memory: wm_paint_all has no clip
+; rect and runs on every window move, so re-listing on demand would mean one
+; full floppy mount per visible window per drag pass, under the gfx lock.
+VIEW_SEG      equ 0x2C00        ; linear 0x2C000..0x2FFFF, reached via ES ONLY
+VIEW_SLOTS    equ 4             ; = the Disk kind's KD_CAP (SPEC.md 29.3)
+VIEW_SLOT_SEG equ 0x0100        ; 4,096 bytes per slot, in paragraphs
+VIEW_SEG_KB   equ 16            ; Task Manager RAM figure (SPEC.md 28)
 
 ; double buffering (SPEC.md 32)
 BB_SEG        equ 0x4000        ; back buffer base segment (plane 0)

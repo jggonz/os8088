@@ -1167,27 +1167,28 @@ dsk_read_chain:
     ret
 
 ; -----------------------------------------------------------------------------
-; dsk_copy_in - copy CX bytes from LOW_SEG:SI into the kernel segment at DI
+; dsk_copy_seg - copy CX bytes between two arbitrary segments
 ;
-; The one place that reaches into low memory for data. DS is the source
-; segment for the duration, so NO kernel variable is readable between the
-; two segment loads - keep the body to the string move.
+; The one body that reaches outside the kernel segment for data. DS is the
+; SOURCE segment for the duration, so NO kernel variable is readable between
+; the segment loads - keep the body to the string move, and pass everything
+; in registers. The three wrappers below name the segment pairs the kernel
+; actually uses; nothing else may call this with DS left dangling.
 ;
-; in:       SI = LOW_SEG offset, DI = kernel offset, CX = byte count (even)
+; in:       DX = source segment, AX = destination segment,
+;           SI = source offset, DI = destination offset, CX = bytes (even)
 ; out:      nothing
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
-dsk_copy_in:
+dsk_copy_seg:
     push ax
     push cx
     push si
     push di
     push ds
     push es
-    push cs                     ; destination = the kernel segment (this code
-    pop es                      ; is in .text, so CS is it)
-    mov ax, LOW_SEG
-    mov ds, ax
+    mov es, ax
+    mov ds, dx                  ; last: no kernel variable is legible below
     shr cx, 1
     cld
     rep movsw
@@ -1200,12 +1201,26 @@ dsk_copy_in:
     ret
 
 ; -----------------------------------------------------------------------------
+; dsk_copy_in - copy CX bytes from LOW_SEG:SI into the kernel segment at DI
+; in:       SI = LOW_SEG offset, DI = kernel offset, CX = byte count (even)
+; out:      nothing
+; clobbers: flags
+; -----------------------------------------------------------------------------
+dsk_copy_in:
+    push ax
+    push dx
+    mov dx, LOW_SEG
+    mov ax, cs                  ; destination = the kernel segment (this code
+    call dsk_copy_seg           ; is in .text, so CS is it)
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; dsk_copy_low - copy CX bytes between two LOW_SEG offsets (module-internal)
 ;
-; Same discipline as dsk_copy_in: DS = ES = LOW_SEG for the string move, so
-; NO kernel variable is readable while DS is switched. Used by the icon
-; harvest (dsk_secbuf -> disk_icons, both LOW_SEG). Writing disk_dir FROM
-; kernel scratch needs no helper: DS stays kernel, ES = LOW_SEG.
+; Used by the icon harvest (dsk_secbuf -> disk_icons, both LOW_SEG). Writing
+; disk_dir FROM kernel scratch needs no helper: DS stays kernel, ES = LOW_SEG.
 ;
 ; in:       SI = source LOW_SEG offset, DI = dest LOW_SEG offset,
 ;           CX = byte count (even)
@@ -1214,23 +1229,31 @@ dsk_copy_in:
 ; -----------------------------------------------------------------------------
 dsk_copy_low:
     push ax
-    push cx
-    push si
-    push di
-    push ds
-    push es
-    mov ax, LOW_SEG
-    mov ds, ax
-    mov es, ax
-    shr cx, 1
-    cld
-    rep movsw
-    pop es
-    pop ds
-    pop di
-    pop si
-    pop cx
+    push dx
+    mov dx, LOW_SEG
+    mov ax, dx
+    call dsk_copy_seg
+    pop dx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_copy_out - copy CX bytes from LOW_SEG:SI into an arbitrary segment
+;
+; The file manager's cache filler (SPEC.md 22.1): disk_dir / disk_icons live
+; in LOW_SEG and the per-window slots live in VIEW_SEG, so neither end is
+; addressable through DS and a plain rep movsw will not do.
+;
+; in:       AX = destination segment, SI = LOW_SEG offset, DI = dest offset,
+;           CX = byte count (even)
+; out:      nothing
+; clobbers: flags
+; -----------------------------------------------------------------------------
+dsk_copy_out:
+    push dx
+    mov dx, LOW_SEG
+    call dsk_copy_seg
+    pop dx
     ret
 
 ; -----------------------------------------------------------------------------
