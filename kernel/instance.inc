@@ -53,7 +53,10 @@ KD_INIT  equ 8                  ; word: init proc or 0 - in: BX = window,
 KD_NAME  equ 10                 ; word: NUL name string (copied to I_NAME)
 KD_ICON  equ 12                 ; word: 16x16 icon body ptr, 0 = generic
 KD_CAP   equ 14                 ; byte: max simultaneous instances
-KD_SIZE  equ 16                 ; stride (1 pad byte)
+KD_WFLAG equ 15                 ; byte: extra W_FLAGS bits OR-ed into the new
+                                ; window after wm_create (SPEC.md 29.3) -
+                                ; feature bits only (WF_SIZABLE), never 0/1
+KD_SIZE  equ 16                 ; stride
 
 inst_kinds:                     ; indexed by KIND_* * 16; caps are binding
     dw app_tpl_about,  0,               0,             0,   0,                app_ttl_about
@@ -67,7 +70,7 @@ inst_kinds:                     ; indexed by KIND_* * 16; caps are binding
     db 10, 0                    ; Bounce: 10 x 8-byte ball state, one task each
     dw fm_tpl,         0,               0,             0,   fm_kinit,         fm_ttl
     dw 0
-    db 1, 0                     ; Disk: singleton (module-global mount state)
+    db 1, WF_SIZABLE            ; Disk: singleton, resizable (SPEC.md 22)
     dw tm_tpl,         tm_task,         0,             0,   tm_kinit,         tm_sname
     dw 0
     db 1, 0                     ; Task Manager: singleton (one sampler task)
@@ -418,6 +421,9 @@ app_launch:
     call wm_create              ; BX = window (hidden), CF = table full
     pop si
     jc .fail                    ; record was never published: still free
+    mov al, [si+KD_WFLAG]       ; the kind's feature bits (WF_SIZABLE) join
+    mov ah, 0                   ; W_FLAGS right after create (SPEC.md 29.3)
+    or [bx+W_FLAGS], ax
 
     ; --- fill + bind + init --------------------------------------------------
     mov al, [inst_knd]

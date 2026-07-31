@@ -74,6 +74,9 @@ ui_task:
     mov ax, [ui_ev + EV_C]      ; publish the click's birth tick for the
     mov [ui_click_t], ax        ; double-click detectors (SPEC 22, 26)
 
+    cmp word [wm_fs], 0         ; a fullscreen window (SPEC.md 11.2) sits
+    jne .on_desktop             ; over the bar: route rows 0..19 to wm_hit
+                                ; like any other point
     cmp dx, MBAR_H              ; in the menu bar?
     jae .on_desktop
     cmp cx, MENU_CLK_HX         ; the clock cell at the right end (SPEC 12.1)?
@@ -100,6 +103,9 @@ ui_task:
     je .close_box
     cmp al, 3
     je .min_box
+    cmp al, 4
+    je .grow_box                ; wm_hit reports AL=4 on the frontmost
+                                ; resizable window only (SPEC.md 11.1)
     cmp al, 1
     je .title_bar
 
@@ -163,6 +169,10 @@ ui_task:
     call gfx_unlock             ; hides - its dock tile inverts (SPEC.md 30)
     jmp .yield
 
+.grow_box:
+    call ui_grow                ; in: BX = window, CX/DX = mousedown x/y
+    jmp .yield
+
 .title_bar:
     mov si, bx                  ; keep the hit window; wm_top returns in BX
     call wm_top
@@ -213,6 +223,9 @@ ui_task:
     mov bl, al                  ; text changed
     or al, al
     jz .idle
+    cmp word [wm_fs], 0         ; fullscreen (SPEC.md 11.2): the bar and any
+    jne .idle                   ; Date/Time page are covered - time is kept,
+                                ; nothing is drawn
     test al, 2
     jnz .clk_lock
     call cp_tick_due            ; CF = 1: a live Date/Time page is showing
@@ -362,6 +375,116 @@ ui_drag_xor:
                                 ; anyone else can draw. Going through the back
                                 ; buffer instead would dirty the whole window
                                 ; rect and flush it twice per pass.
+    ret
+
+; -----------------------------------------------------------------------------
+; ui_grow - grow-box resize: XOR outline anchored at the window's top-left,
+;           its SIZE follows the mouse; W_W/W_H commit on release
+;           (SPEC.md 11.1/13 - ui_drag's binding lock/XOR ordering, verbatim)
+; in:  BX = window ptr (frontmost, WF_SIZABLE), CX = mousedown x, DX = " y
+; out: nothing; W_W/W_H updated (clamped WMIN_W/H .. screen edge), full
+;      repaint done
+; clobbers: AX, BX, CX, DX, DI (internal helper of the UI task)
+;
+; Reuses ui_drag's statics - one tracker runs at a time on the single UI
+; task: ui_curx/ui_cury hold the FIXED outline origin (W_X/W_Y),
+; ui_origx/ui_origy the frame size at mousedown, ui_dragw/ui_dragh the
+; tracked size ui_drag_xor draws. The low clamp applies every pass (the
+; XOR rect must stay well-formed); the screen-edge clamp applies at
+; release. The gfx lock is only ever released while the outline is erased,
+; and the release path never re-takes the held lock (SPEC.md 7/13).
+; -----------------------------------------------------------------------------
+ui_grow:
+    mov [ui_dragwin], bx
+    mov [ui_startx], cx         ; mousedown point
+    mov [ui_starty], dx
+    mov ax, [bx + W_X]
+    mov [ui_curx], ax           ; outline origin: fixed for the whole grow
+    mov ax, [bx + W_Y]
+    mov [ui_cury], ax
+    mov ax, [bx + W_W]
+    mov [ui_origx], ax          ; frame size at mousedown...
+    mov [ui_dragw], ax          ; ...and the tracked outline size
+    mov ax, [bx + W_H]
+    mov [ui_origy], ax
+    mov [ui_dragh], ax
+
+    call gfx_lock
+    call ui_drag_xor            ; draw the outline (VRAM-direct, SPEC.md 32)
+
+.track:
+    mov di, ui_ev               ; button tracked by EDGE, like ui_drag: a
+    call evq_pop                ; release + fast re-press inside one pass
+    jc .no_evt                  ; must still end the resize
+    cmp word [ui_ev + EV_TYPE], EVT_MUP
+    jne .track                  ; drain anything else queued mid-resize
+    jmp .release                ; exits with outline drawn + lock held
+.no_evt:
+    test byte [mouse_btn], 1    ; fallback: the EVT_MUP was dropped
+    jz .release
+    call ui_drag_xor            ; erase...
+    call gfx_unlock             ; ...only then may the lock drop
+    call task_yield
+    call gfx_lock
+    mov ax, [mouse_x]           ; tracked size = orig + (mouse - start),
+    sub ax, [ui_startx]         ; clamped low so the XOR rect stays
+    add ax, [ui_origx]          ; well-formed
+    cmp ax, WMIN_W
+    jge .wok
+    mov ax, WMIN_W
+.wok:
+    mov [ui_dragw], ax
+    mov ax, [mouse_y]
+    sub ax, [ui_starty]
+    add ax, [ui_origy]
+    cmp ax, WMIN_H
+    jge .hok
+    mov ax, WMIN_H
+.hok:
+    mov [ui_dragh], ax
+    call ui_drag_xor            ; redraw every pass, moved or not
+
+    mov ax, [ticks]             ; linger lit until the next tick (the same
+.linger:                        ; duty-cycle fix as ui_drag)
+    call task_yield
+    cmp ax, [ticks]
+    je .linger
+    jmp .track
+
+.release:
+    call ui_drag_xor            ; erase; lock stays held to the end
+    mov bx, [ui_dragwin]
+
+    ; clamp w: WMIN_W <= w <= SCREEN_W - W_X (high bound first, low wins)
+    mov ax, [ui_dragw]
+    mov dx, SCREEN_W
+    sub dx, [bx + W_X]
+    cmp ax, dx
+    jle .w_high_ok
+    mov ax, dx
+.w_high_ok:
+    cmp ax, WMIN_W
+    jge .w_low_ok
+    mov ax, WMIN_W
+.w_low_ok:
+    mov [bx + W_W], ax
+
+    ; clamp h: WMIN_H <= h <= SCREEN_H - W_Y
+    mov ax, [ui_dragh]
+    mov dx, SCREEN_H
+    sub dx, [bx + W_Y]
+    cmp ax, dx
+    jle .h_high_ok
+    mov ax, dx
+.h_high_ok:
+    cmp ax, WMIN_H
+    jge .h_low_ok
+    mov ax, WMIN_H
+.h_low_ok:
+    mov [bx + W_H], ax
+
+    call wm_paint_all           ; caller-held lock, per the wm contract
+    call gfx_unlock             ; NO second gfx_lock here - already held (§7)
     ret
 
 ; -----------------------------------------------------------------------------

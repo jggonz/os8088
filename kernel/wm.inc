@@ -13,9 +13,11 @@
 ; =============================================================================
 
 ; --- window record, 18 bytes, fixed offsets (SPEC.md 11) ---------------------
-W_FLAGS equ 0                   ; word: bit0 = used, bit1 = visible
+W_FLAGS equ 0                   ; word: bit0 = used, bit1 = visible,
+                                ; bit2 = resizable, bit3 = fullscreen
 W_X     equ 2                   ; word, frame left (screen coords)
-W_Y     equ 4                   ; word, frame top (below menu bar: y >= MBAR_H)
+W_Y     equ 4                   ; word, frame top (below menu bar: y >=
+                                ; MBAR_H - except under WF_FULL, SPEC 11.2)
 W_W     equ 6                   ; word, frame width  (outer, includes border)
 W_H     equ 8                   ; word, frame height (includes title bar)
 W_TITLE equ 10                  ; word: near ptr to NUL title string
@@ -26,6 +28,11 @@ W_ONCLICK equ 16                ; word: near ptr or 0; CX=x DX=y SI=win, called
                                 ; front window (SPEC.md 13)
 WIN_SIZE equ 18                 ; NOT a power of two: never shift, multiply
 MAX_WIN  equ 12                 ; mirrored in apps/os88api.inc (SPEC.md 11)
+
+WF_SIZABLE equ 4                ; W_FLAGS bit2: resizable (SPEC.md 11.1)
+WF_FULL    equ 8                ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
+WMIN_W     equ 96               ; smallest frame a resize can leave, outer px
+WMIN_H     equ 64               ; (SPEC.md 11.1; mirrored in apps/os88api.inc)
 
 ; -----------------------------------------------------------------------------
 ; wm_init - zero the window table, z-order array and count; orphan wm_owner
@@ -47,6 +54,9 @@ wm_init:
     mov di, wm_owner            ; empty value is 0xFF (unowned, SPEC.md 11)
     mov cx, MAX_WIN
     rep stosb
+    mov word [wm_fs], 0         ; no fullscreen window (SPEC.md 11.2); .bss
+                                ; is never zeroed at boot, so this is not
+                                ; redundant
     pop es
     pop di
     pop cx
@@ -119,6 +129,8 @@ wm_destroy:
     push ax
     push cx
     push si
+    call wm_fs_drop             ; a dying fullscreen window must release the
+                                ; screen (SPEC.md 11.2)
     mov word [bx+W_FLAGS], 0    ; free the record slot
     mov ax, bx                  ; AL = window index
     sub ax, wm_wins
@@ -168,8 +180,105 @@ wm_show:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 wm_hide:
+    call wm_fs_drop             ; a hidden fullscreen window releases the
+                                ; screen and re-shows windowed (SPEC.md 11.2)
     and word [bx+W_FLAGS], 0xFFFD
     jmp wm_paint_all            ; same register contract
+
+; -----------------------------------------------------------------------------
+; wm_fs_drop - release the fullscreen latch if BX holds it (module internal)
+; in:  BX = window ptr
+; out: nothing (all registers preserved)
+; If BX is [wm_fs]: restore the saved windowed geometry into the record,
+; clear WF_FULL, zero the latch (SPEC.md 11.2). Does not repaint - every
+; caller repaints right after.
+; -----------------------------------------------------------------------------
+wm_fs_drop:
+    cmp bx, [wm_fs]
+    jne .out
+    push ax
+    mov ax, [wm_fs_save]
+    mov [bx+W_X], ax
+    mov ax, [wm_fs_save+2]
+    mov [bx+W_Y], ax
+    mov ax, [wm_fs_save+4]
+    mov [bx+W_W], ax
+    mov ax, [wm_fs_save+6]
+    mov [bx+W_H], ax
+    and word [bx+W_FLAGS], 0xFFF7
+    mov word [wm_fs], 0
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_sizable - set or clear a window's WF_SIZABLE bit (public; API 0x008C)
+; in:  BX = window ptr, AL = 0 clear / non-zero set
+; out: nothing (all registers preserved)
+; No repaint: the grow box appears at the next paint. UI-task context only
+; (entry procs and window callbacks qualify, SPEC.md 11.1).
+; -----------------------------------------------------------------------------
+wm_sizable:
+    or al, al
+    jz .clear
+    or word [bx+W_FLAGS], WF_SIZABLE
+    ret
+.clear:
+    and word [bx+W_FLAGS], 0xFFFB
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_fullscreen - enter or leave fullscreen (public; API 0x0090, SPEC.md 11.2)
+; in:  AL = 1 enter (BX = window ptr) / 0 exit; caller HOLDS the gfx lock
+; out: CF = 1 enter refused (another window owns the screen), else CF = 0.
+;      All registers preserved.
+; Enter saves the windowed geometry, grows the frame to the whole screen,
+; sets WF_FULL and raises (wm_front repaints under the held lock).
+; Re-entering with the same window is a CF=0 no-op, as is exiting with no
+; owner. Exit restores through wm_fs_drop and repaints.
+; -----------------------------------------------------------------------------
+wm_fullscreen:
+    push ax
+    push bx
+    or al, al
+    jz .exit
+    mov ax, [wm_fs]
+    or ax, ax
+    jz .claim
+    cmp ax, bx
+    je .ok                      ; already ours: no-op
+    stc                         ; someone else owns the screen
+    jmp .out
+.claim:
+    mov [wm_fs], bx
+    mov ax, [bx+W_X]
+    mov [wm_fs_save], ax
+    mov ax, [bx+W_Y]
+    mov [wm_fs_save+2], ax
+    mov ax, [bx+W_W]
+    mov [wm_fs_save+4], ax
+    mov ax, [bx+W_H]
+    mov [wm_fs_save+6], ax
+    xor ax, ax
+    mov [bx+W_X], ax
+    mov [bx+W_Y], ax
+    mov word [bx+W_W], SCREEN_W
+    mov word [bx+W_H], SCREEN_H
+    or word [bx+W_FLAGS], WF_FULL
+    call wm_front               ; raise + repaint, lock already held
+    jmp .ok
+.exit:
+    mov bx, [wm_fs]
+    or bx, bx
+    jz .ok                      ; nothing fullscreen: no-op
+    call wm_fs_drop             ; restore geometry, clear latch
+    call wm_paint_all
+.ok:
+    clc
+.out:
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; wm_front - raise a window to the front of the z-order, repaint everything
@@ -282,6 +391,9 @@ wm_hit:
     add ax, [bx+W_H]
     cmp dx, ax
     jge .next
+    test word [bx+W_FLAGS], WF_FULL
+    jnz .plain                  ; fullscreen: no chrome - every point is
+                                ; content (SPEC.md 11.2)
     mov ax, dx                  ; hit: AX = dy within the frame
     sub ax, [bx+W_Y]
     cmp ax, TITLE_H
@@ -316,6 +428,29 @@ wm_hit:
     mov al, 1
     jmp .out
 .content:
+    test bp, bp                 ; grow box: frontmost + WF_SIZABLE only
+    jz .plain                   ; (SPEC.md 11.1; WF_FULL was peeled off
+    test word [bx+W_FLAGS], WF_SIZABLE ; above)
+    jz .plain
+    mov ax, [bx+W_X]            ; 13x13 rect: cols W_X+W_W-14 .. W_X+W_W-2
+    add ax, [bx+W_W]
+    sub ax, 14
+    cmp cx, ax
+    jl .plain
+    add ax, 12
+    cmp cx, ax
+    jg .plain
+    mov ax, [bx+W_Y]            ; rows W_Y+W_H-14 .. W_Y+W_H-2
+    add ax, [bx+W_H]
+    sub ax, 14
+    cmp dx, ax
+    jl .plain
+    add ax, 12
+    cmp dx, ax
+    jg .plain
+    mov al, 4
+    jmp .out
+.plain:
     mov al, 0
     jmp .out
 .none:
@@ -346,6 +481,12 @@ wm_paint_all:
     push si
     push di
     push bp
+    mov bx, [wm_fs]             ; a visible fullscreen window covers the
+    or bx, bx                   ; desktop, dock and menu bar - painting
+    jz .chrome                  ; them under it is pure waste (SPEC.md 11.2)
+    test word [bx+W_FLAGS], 2
+    jnz .wins
+.chrome:
     xor ax, ax                  ; desktop: 50% dither under the bar
     mov bx, MBAR_H
     mov cx, SCREEN_W-1
@@ -355,6 +496,7 @@ wm_paint_all:
                                 ; every window (SPEC.md 26)
     call dock_paint             ; so does the dock strip (SPEC.md 30)
     call menu_draw_bar
+.wins:
     call wm_top
     mov bp, bx                  ; BP = frontmost visible (0 if none)
     mov si, wm_zord
@@ -385,13 +527,17 @@ wm_paint_all:
 ; -----------------------------------------------------------------------------
 ; wm_content - content-area origin of a window
 ; in:  BX = window ptr
-; out: AX = content left (W_X+1), DX = content top (W_Y+TITLE_H)
+; out: AX = content left (W_X+1), DX = content top (W_Y+TITLE_H);
+;      WF_FULL set: AX = W_X, DX = W_Y - no border, no title bar (SPEC 11.2)
 ; -----------------------------------------------------------------------------
 wm_content:
     mov ax, [bx+W_X]
-    inc ax
     mov dx, [bx+W_Y]
+    test word [bx+W_FLAGS], WF_FULL
+    jnz .full
+    inc ax
     add dx, TITLE_H
+.full:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -527,6 +673,21 @@ wm_draw_win:
     push di
     mov di, bx                  ; DI = window ptr for the duration
 
+    test word [di+W_FLAGS], WF_FULL
+    jz .chrome                  ; fullscreen: no chrome at all - the whole
+    mov byte [gfx_color], CWHITE; frame is content, white-filled, then
+    mov ax, [di+W_X]            ; W_PAINT (SPEC.md 11.2)
+    mov bx, [di+W_Y]
+    mov cx, ax
+    add cx, [di+W_W]
+    dec cx
+    mov dx, bx
+    add dx, [di+W_H]
+    dec dx
+    call gfx_fill
+    jmp .paint
+
+.chrome:
     mov byte [gfx_color], CBLACK
     mov ax, [di+W_X]            ; 1px outline around the whole frame
     mov bx, [di+W_Y]
@@ -688,8 +849,9 @@ wm_draw_win:
     sub dx, 2
     call gfx_fill
 
+.paint:
     cmp word [di+W_PAINT], 0
-    je .done
+    je .growbox
     mov bx, di                  ; the paint is the owning instance's CPU
     call inst_win_owner         ; time, not the painting task's (SPEC.md 8.1)
     push di
@@ -705,11 +867,81 @@ wm_draw_win:
     pop word [snd_inst]         ; the outer dispatch's stamp, back
     pop di                      ; owning instance record, 0 = unowned window
     or di, di
-    jz .done
+    jz .uncharged
     call inst_charge
-.done:
+.uncharged:
+    mov di, bx                  ; DI = window ptr again (BX survived the
+                                ; paint proc - SPEC.md 1 register discipline)
+.growbox:
+    mov bx, di                  ; grow box AFTER W_PAINT (SPEC.md 11.1) -
+    call wm_grow_paint          ; a no-op unless frontmost + WF_SIZABLE
     pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_grow_paint - draw a window's grow box if it deserves one (SPEC.md 11.1)
+; in:  BX = window ptr (caller holds the gfx lock)
+; out: nothing (all registers preserved)
+;
+; Draws only when BX is the frontmost visible window with WF_SIZABLE set
+; and WF_FULL clear - a no-op otherwise, so it is always safe to call.
+; wm_draw_win calls it after W_PAINT, and a resizable window's
+; self-initiated content repaint must end with it: the white-fill idiom
+; (SPEC.md 22) erases the corner, and wm_hit reports AL=4 from geometry
+; alone, so the box must never be left invisible-but-clickable.
+; -----------------------------------------------------------------------------
+wm_grow_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, bx
+    call wm_top                 ; BX = frontmost visible (0 if none)
+    cmp di, bx
+    jne .out
+    mov ax, [di+W_FLAGS]
+    and ax, WF_SIZABLE | WF_FULL
+    cmp ax, WF_SIZABLE
+    jne .out
+    mov ax, [di+W_X]            ; 13x13 white square, black frame, at
+    add ax, [di+W_W]            ; (W_X+W_W-14, W_Y+W_H-14)..(+W_W-2, +W_H-2)
+    sub ax, 14
+    mov bx, [di+W_Y]
+    add bx, [di+W_H]
+    sub bx, 14
+    mov cx, ax
+    add cx, 12
+    mov dx, bx
+    add dx, 12
+    mov byte [gfx_color], CWHITE
+    call gfx_fill
+    mov byte [gfx_color], CBLACK
+    call gfx_frame
+    add ax, 4                   ; the big square of the glyph: 8x8 frame
+    add bx, 4                   ; at inset (+4,+4)..(+11,+11)
+    mov cx, ax
+    add cx, 7
+    mov dx, bx
+    add dx, 7
+    call gfx_frame
+    sub ax, 2                   ; the small square: 7x7 at inset (+2,+2)..
+    sub bx, 2                   ; (+8,+8), white-filled (it overlaps the
+    mov cx, ax                  ; big one's top-left), black-framed
+    add cx, 6
+    mov dx, bx
+    add dx, 6
+    mov byte [gfx_color], CWHITE
+    call gfx_fill
+    mov byte [gfx_color], CBLACK
+    call gfx_frame
+.out:
+    pop di
     pop dx
     pop cx
     pop bx
@@ -727,4 +959,7 @@ wm_zn:      resb 1                  ; entries in wm_zord
 wm_owner:   resb MAX_WIN            ; instance index owning each window slot
                                     ; (SPEC.md 29), 0xFF = unowned; NOT part
                                     ; of wm_init's zero run (fill is 0xFF)
+wm_fs:      resw 1                  ; fullscreen window ptr, 0 = none
+                                    ; (SPEC.md 11.2); zeroed by wm_init
+wm_fs_save: resw 4                  ; its windowed x/y/w/h, restored on exit
 section .text

@@ -159,7 +159,11 @@ osapi_table:
     OSAPI_SLOT osapi_snd_play     ; 0x0080   PLAY, FM and STREAM are error
     OSAPI_SLOT osapi_snd_fm       ; 0x0084   stubs until their phases land
     OSAPI_SLOT osapi_snd_stream   ; 0x0088   (SPEC.md 34)
-osapi_table_end:                 ; 0x008C
+    OSAPI_SLOT wm_sizable         ; 0x008C - window features (SPEC.md 11.1)
+    OSAPI_SLOT wm_fullscreen      ; 0x0090 - fullscreen (SPEC.md 11.2)
+    OSAPI_SLOT wm_grow_paint      ; 0x0094 - grow-box restore after a
+                                  ;          self-repaint (SPEC.md 11.1)
+osapi_table_end:                 ; 0x0098
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -167,8 +171,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 31 * 4
-%error "os8088 API jump table must be exactly 31 4-byte slots"
+%if OSAPI_TABLE_LEN != 34 * 4
+%error "os8088 API jump table must be exactly 34 4-byte slots"
 %endif
 
 ; =============================================================================

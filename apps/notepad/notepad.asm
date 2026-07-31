@@ -41,6 +41,13 @@ np_entry:
     mov si, np_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     pop si
+    jc .out                         ; table full: nothing to flag
+    push ax
+    mov al, 1                       ; resizable (SPEC.md 11.1/27): np_paint
+    call OSAPI_WM_SIZABLE           ; already lays out from the live record,
+    pop ax                          ; so the next repaint re-wraps for free
+    clc                             ; CF must still report the create result
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -188,6 +195,8 @@ np_onkey:
     pop ax
     call OSAPI_GFX_FILL             ; white-fill the content
     call np_paint                   ; SI still = window ptr
+    mov bx, si                      ; the white fill erased the grow box;
+    call OSAPI_WM_GROW              ; restore it (SPEC.md 11.1/27)
 
 .out:
     pop di

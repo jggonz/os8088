@@ -654,9 +654,12 @@ Keyboard events are *not* queued — the UI task polls BIOS int 16h directly.
 Window record, 18 bytes, fixed offsets:
 
 ```nasm
-W_FLAGS equ 0    ; word: bit0 = used, bit1 = visible
+W_FLAGS equ 0    ; word: bit0 = used, bit1 = visible, bit2 = resizable
+                 ; (WF_SIZABLE, §11.1), bit3 = fullscreen (WF_FULL, §11.2)
 W_X     equ 2    ; word, frame left (screen coords)
-W_Y     equ 4    ; word, frame top (below menu bar: y >= MBAR_H)
+W_Y     equ 4    ; word, frame top (below menu bar: y >= MBAR_H - except
+                 ; the one window holding WF_FULL, whose frame is the
+                 ; whole screen, §11.2)
 W_W     equ 6    ; word, frame width  (outer, includes 1px border)
 W_H     equ 8    ; word, frame height (includes title bar)
 W_TITLE equ 10   ; word: near ptr to NUL title string
@@ -668,12 +671,23 @@ W_ONCLICK equ 16 ; word: near ptr or 0, in: CX=x, DX=y (absolute screen
                  ; Same rules as W_PAINT: must not lock, block or spawn.
 WIN_SIZE equ 18
 MAX_WIN  equ 12
+
+WF_SIZABLE equ 4  ; W_FLAGS bit2: the window can be resized (§11.1)
+WF_FULL    equ 8  ; W_FLAGS bit3: the window is fullscreen (§11.2)
+WMIN_W     equ 96 ; smallest frame a resize can leave, outer px (§11.1)
+WMIN_H     equ 64
 ```
 
 (WIN_SIZE grew 16 → 18: any ×16 shift idioms in wm.inc must become a true
 ×18 multiply. The wm_create template stays **16 bytes**:
-{x,y,w,h,title,paint,onkey,onclick} words. MAX_WIN grew 8 → 12 for
-instancing (§29); `apps/os88api.inc` mirrors it.)
+{x,y,w,h,title,paint,onkey,onclick} words — feature bits like WF_SIZABLE
+are **not** template words; they are OR-ed in after wm_create (KD_WFLAG for
+built-ins, §29.3; `wm_sizable` for packages, §20.3), so every shipped .o88's
+16-byte template stays valid. MAX_WIN grew 8 → 12 for instancing (§29);
+`apps/os88api.inc` mirrors it. **W_W/W_H are no longer set-once**: `ui_grow`
+(§13) and `wm_fullscreen` (§11.2) rewrite them at runtime, so a resizable or
+fullscreen window's W_PAINT/W_ONCLICK must derive their layout from the live
+record every call — never from constants that bake in the template size.)
 
 Storage: `wm_wins` (MAX_WIN × WIN_SIZE, .bss), z-order byte array
 `wm_zord` (window indices, index 0 = backmost) + `wm_zn` count. Those
@@ -714,6 +728,15 @@ Frame drawing (paint-all does this before calling W_PAINT):
   each side of the text (so stripes don't touch it).
 - 1px black separator line at row W_Y+TITLE_H-1. Content area =
   x+1 .. x+w-2, y+TITLE_H .. y+h-2, filled white before W_PAINT is called.
+- **Grow box** (frontmost + WF_SIZABLE only, and never when WF_FULL is
+  set): drawn **after** W_PAINT returns, over the content's bottom-right
+  corner — a 13×13 white square at cols W_X+W_W−14 .. W_X+W_W−2, rows
+  W_Y+W_H−14 .. W_Y+W_H−2, 1px black frame, containing the classic
+  two-overlapping-squares glyph: an 8×8 black frame at inset (+4,+4) ..
+  (+11,+11), then a 7×7 white fill at inset (+2,+2) .. (+8,+8) with a
+  black frame on it — the small square overlaps the big one's top-left.
+  Drawing after W_PAINT is what keeps it visible without asking every
+  paint proc to avoid the corner.
 
 | symbol         | contract                                                     |
 |----------------|--------------------------------------------------------------|
@@ -724,15 +747,88 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | `wm_hide`      | in BX = win ptr: clear visible, repaint all                  |
 | `wm_front`     | in BX = win ptr: raise to front of z-order, repaint all      |
 | `wm_top`       | out BX = frontmost visible window ptr, 0 if none             |
-| `wm_hit`       | in CX=x, DX=y; out BX = topmost visible window ptr containing the point (0 if none), AL = 0 content, 1 title bar, 2 close box, 3 minimize box. AL=2/AL=3 only when BX is the frontmost visible window (the only one with the boxes drawn); on any other window those regions report AL=1. |
+| `wm_hit`       | in CX=x, DX=y; out BX = topmost visible window ptr containing the point (0 if none), AL = 0 content, 1 title bar, 2 close box, 3 minimize box, 4 grow box. AL=2/AL=3 only when BX is the frontmost visible window (the only one with the boxes drawn); on any other window those regions report AL=1. AL=4 only when BX is the frontmost visible window **and** has WF_SIZABLE (and not WF_FULL): the 13×13 grow-box rect of the frame drawing above; anywhere else that region is plain content (AL=0). A WF_FULL window reports AL=0 for every point — it has no chrome. |
 | `wm_paint_all` | full repaint: desktop gray (below menu bar), then `desk_paint` (§26 — desktop icons sit on the desktop, under every window), then `dock_paint` (§30 — the dock strip sits on the desktop under every window, like the icons), menu bar, every visible window back→front (frame + white content + W_PAINT). Caller holds gfx lock. |
-| `wm_content`   | in BX = win ptr; out AX = content left, DX = content top     |
+| `wm_content`   | in BX = win ptr; out AX = content left, DX = content top. WF_FULL set → AX = W_X, DX = W_Y (no border, no title bar — §11.2). |
+| `wm_sizable`   | in BX = win ptr, AL = 0 clear / non-zero set WF_SIZABLE. No repaint (the grow box appears at the next paint). UI-task context only (entry procs and window callbacks qualify); safe with or without the gfx lock there — every W_FLAGS writer runs on the UI task or under the lock. API slot 0x008C (§20.3). |
+| `wm_grow_paint`| in BX = win ptr (caller holds the gfx lock): draw the grow box **iff** BX is the frontmost visible window with WF_SIZABLE set and WF_FULL clear; a no-op otherwise, so it is always safe to call. wm_draw_win uses it after W_PAINT, and a resizable window's **self-initiated content repaint must end with it** — the white-fill idiom (§22) erases the corner, and without the call the box vanishes until the next full repaint while wm_hit still reports AL=4 there. Packages reach it through API slot 0x0094 (§20.3). |
+| `wm_fullscreen`| in AL = 1 enter (BX = win ptr) / AL = 0 exit; **caller holds the gfx lock** (the intended callers are W_ONKEY/W_ONCLICK handlers, which already do). See §11.2. Out CF=1 refused (enter while another window owns the screen), CF=0 done. API slot 0x0090 (§20.3). |
 | `wm_ptr2idx`   | in BX = win ptr (record-aligned); out AL = window index, AH = 0. Clobbers nothing else. The one public home of the `(ptr − wm_wins) / WIN_SIZE` idiom. |
 | `wm_obscured`  | in BX = win ptr; out CF=1 if any visible window above BX in z-order overlaps its frame rect (background tasks use this to skip live updates when covered). Result is only trustworthy while the caller holds the gfx lock — the UI task mutates `wm_zord`/window rects under it. |
 
 Paint procs and key handlers run on the **UI task** (via wm_paint_all /
 dispatch) or on the window's own background task — in all cases the caller
 of W_PAINT already holds the gfx lock. W_PAINT must not lock, block or spawn.
+
+### 11.1 Resizing
+
+A window is resizable iff W_FLAGS bit2 (`WF_SIZABLE`) is set. The bit is
+**not** part of the 16-byte template: built-ins get it from their kind row's
+`KD_WFLAG` byte (§29.3, OR-ed into W_FLAGS by app_launch right after
+wm_create), packages call `wm_sizable` (API slot 0x008C) from their entry
+proc after OSAPI_WM_CREATE. Fixed-layout windows — dialogs, the Control
+Panel, Minesweeper — simply never set it and nothing about them changes.
+
+What the bit buys: the frontmost window draws the grow box (frame drawing
+above), `wm_hit` reports AL=4 inside it, and ui.inc answers with the
+**resize loop** `ui_grow` (§13) — a sibling of the title-bar drag loop with
+the identical binding lock/XOR ordering, tracking an outline anchored at
+(W_X, W_Y) whose size follows the mouse: cur = orig + (mouse − start),
+clamped to at least WMIN_W×WMIN_H while tracking (the XOR rect must stay
+well-formed). On release it clamps again — WMIN_W ≤ w ≤ SCREEN_W − W_X,
+WMIN_H ≤ h ≤ SCREEN_H − W_Y (the frame stays on screen; position never
+changes) — writes W_W/W_H, and calls wm_paint_all under the still-held
+lock. There is no resize callback: the full repaint re-enters W_PAINT,
+and a resizable window's procs are required to lay out from the live
+record (record note above). Self-initiated repaints (the fm_repaint idiom,
+§22) must white-fill using the live W_W/W_H for the same reason.
+
+`ui_drag`'s release clamp is unchanged (x + w ≤ SCREEN_W with the live
+width), so a grown window still cannot be dragged off screen.
+
+### 11.2 Fullscreen
+
+The SDK/kernel foundation for apps that want the whole 640×480: a
+fullscreen surface **is a real window** — that one decision buys almost
+everything, because wm_obscured (which gates every unbidden background
+drawer: Clock, Bounce, the Task Manager sampler) sees a frame covering the
+entire screen and reports "covered" to everyone beneath it.
+
+`wm_fullscreen` (API slot 0x0090; caller holds the gfx lock):
+
+- **Enter** (AL=1, BX = win ptr): another window already owns the screen
+  (`[wm_fs]` non-zero and ≠ BX) → CF=1, nothing changes. Else save
+  W_X/W_Y/W_W/W_H into `wm_fs_save` (4 words, .bss), store BX in `wm_fs`
+  (word, .bss, 0 = none — **the** fullscreen latch), set the frame to
+  (0, 0, SCREEN_W, SCREEN_H), set WF_FULL, `wm_front` (raises + repaints
+  under the held lock). Re-entering with the same window is CF=0 no-op.
+- **Exit** (AL=0): `[wm_fs]` zero → CF=0 no-op. Else restore the saved
+  geometry into the record, clear WF_FULL, zero `wm_fs`, `wm_paint_all`.
+
+While WF_FULL is set: `wm_draw_win` draws **no chrome at all** — no frame,
+shadow, title bar, boxes or grow box; the content area is the whole frame
+rect, white-filled, then W_PAINT as usual. `wm_content` returns (W_X, W_Y).
+`wm_hit` reports every point as content, so clicks flow to W_ONCLICK and
+keys to W_ONKEY exactly as in a window (the app needs no second input
+model). `wm_paint_all` skips the desktop fill, desk_paint, dock_paint and
+menu_draw_bar whenever `[wm_fs]` names a **visible** window — painting
+chrome under an opaque surface is pure waste and the §12.1 "nothing covers
+the bar" assumption is suspended — and the window loop itself is unchanged.
+
+The two drawers wm_obscured does not govern get explicit `[wm_fs]` gates
+(§13): the UI task's unbidden menu-bar clock redraw (step 4) is skipped,
+and the menu-bar branch of the event ladder (step 2) is bypassed so a
+click in rows 0..19 routes to wm_hit like any other. The mouse cursor
+stays live — a fullscreen app that wants it hidden draws its own.
+
+Leaving fullscreen is **the app's job** (recommend Esc in its W_ONKEY →
+`wm_fullscreen` AL=0; the menu bar is unreachable while it holds the
+screen). The kernel's safety net: `wm_destroy` and `wm_hide` both check
+BX against `[wm_fs]` and, on a match, restore the saved geometry, clear
+WF_FULL and zero `wm_fs` before repainting — closing, minimizing (no box
+is drawn, but app_close_win's die-flag path hides) or killing a
+fullscreen window can never strand the latch, and a re-shown window comes
+back windowed at its old place.
 
 ## 12. menu.inc
 
@@ -823,7 +919,9 @@ the same right margin whichever form it is in.
 repaints it; ui_task redraws just the cell when its text changes — once a
 second with seconds shown, **once a minute without** (§13 step 4). No
 `wm_obscured` check is needed anywhere: windows clamp to `y >= MBAR_H`
-(§13), so nothing can ever cover the bar. The cell is ordinary persistent
+(§13), so nothing can ever cover the bar — **except a fullscreen window
+(§11.2), which is why step 4's redraw and the ladder's menu-bar branch are
+gated on `[wm_fs]` being zero.** The cell is ordinary persistent
 content — it goes through the back buffer like everything else (§32) and
 the caller's `gfx_unlock` flushes it.
 
@@ -841,6 +939,9 @@ Loop forever:
 2. `evq_pop`; on EVT_MDOWN at (x,y) — first store the event's EV_C into
    the public word `ui_click_t` (the click's birth tick; §22/§26 read it
    during dispatch):
+   - `[wm_fs]` non-zero (§11.2) → skip both menu-bar branches below and go
+     straight to `wm_hit`: the bar is under the fullscreen surface, and
+     the fullscreen window claims every point as content.
    - y < MBAR_H and x >= `MENU_CLK_HX` → the menu-bar clock (§12.1): store
      `CP_ITIME` into `[cp_sel]` and `app_launch` KIND_CTRL (§31.5), no lock
      held, beeping on refusal like any other launch. Tested **before**
@@ -873,6 +974,14 @@ Loop forever:
      y >= MBAR_H), call `wm_paint_all`, then gfx_unlock. Do **not** call
      gfx_lock again in the release step — the lock is non-reentrant (§7)
      and task 0 already holds it; re-acquiring would deadlock the GUI.
+   - grow box (AL=4, frontmost + WF_SIZABLE only, §11.1) → the **resize
+     loop** `ui_grow`: identical structure, lock discipline and binding
+     erase-before-unlock ordering as the drag loop, but the outline stays
+     anchored at (W_X, W_Y) and its **size** follows the mouse:
+     cur w/h = orig w/h + (mouse − start), clamped to ≥ WMIN_W/WMIN_H
+     every pass. On release (outline drawn, lock held): xor-erase, clamp
+     w to WMIN_W..SCREEN_W−W_X and h to WMIN_H..SCREEN_H−W_Y, write
+     W_W/W_H, `wm_paint_all`, gfx_unlock — same no-relock rule.
    - content of non-front window → `wm_front`.
    - content of front window → if its `W_ONCLICK` is non-zero: gfx_lock,
      near-call it (CX=x, DX=y, SI=win ptr) billed to the window's instance
@@ -901,9 +1010,11 @@ Loop forever:
 4. **The clock (§37/§12.1).** Call `clk_tick`, which advances the wall
    clock from the `[ticks]` delta and returns **AL = a change mask**:
    bit 0 = a second passed, bit 1 = the menu bar's *text* changed. AL = 0
-   → nothing to do. Otherwise decide whether taking the gfx lock is worth
-   it, because taking it blinks the cursor and that blink **is** the
-   flicker the seconds setting exists to remove:
+   → nothing to do. `[wm_fs]` non-zero (§11.2) → also nothing to draw
+   (the bar and any Date/Time page are under the fullscreen surface;
+   clk_tick has already kept time). Otherwise decide whether taking the
+   gfx lock is worth it, because taking it blinks the cursor and that
+   blink **is** the flicker the seconds setting exists to remove:
    - bit 1 set → lock, `menu_draw_clock`, `cp_tick`, unlock.
    - bit 1 clear (a second passed but the bar shows no seconds) → ask
      `cp_tick_due` (§31.5) whether a Date/Time page is on screen; only
@@ -1397,6 +1508,28 @@ length/sub-op), 8 no staging space, 0FFFFh stale handle. The staging
 verbs 5–7 work on every machine — the pool exists wherever `SND_SEG` does
 (§2.2); only the stream verbs (0–4) need the card.
 
+**Window-management slots (§11.1/§11.2), append-only from 0x008C.** The
+kernel.asm table-span assertion goes 31 × 4 → **34 × 4** across these
+additions; `apps/os88api.inc` mirrors the equs plus WF_SIZABLE/WF_FULL and
+WMIN_W/WMIN_H (§20.5):
+
+```
+0x008C wm_sizable      in BX = win ptr, AL = 0 clear / non-zero set
+                       WF_SIZABLE (§11.1). UI-task context only (entry
+                       procs and window callbacks qualify).
+0x0090 wm_fullscreen   in AL = 1 enter (BX = win ptr) / 0 exit; caller
+                       holds the gfx lock (window callbacks do); out
+                       CF=1 = enter refused, screen already owned
+                       (§11.2).
+0x0094 wm_grow_paint   in BX = win ptr; caller holds the gfx lock. The
+                       grow-box restore of §11: a resizable package's
+                       self-initiated content repaint must end with this
+                       call (the white-fill idiom erases the corner). A
+                       no-op unless BX is the frontmost visible window
+                       with WF_SIZABLE set and WF_FULL clear, so it is
+                       always safe to call.
+```
+
 **Stream verbs are UI-task/window-callback context only (binding).**
 Every caller — packages and Control Panel alike — runs inside a window
 callback on the single UI task, and the half-duplex/busy refusals of the
@@ -1513,29 +1646,91 @@ overwritten" invariant is retired.
 ## 22. files.inc — the Disk window (file manager)
 
 Built-in singleton app kind (KIND_FILES, cap 1 — the mount state below is
-module-global), title "Disk", 320×200 at (110,80). No background task, no
-boot-time window: `files_init` (from kmain) only resets module state;
-the window is created on demand by `app_launch` (§29), whose KD_INIT is
-`fm_kinit` (clears `fm_sel`/`fm_clkt`). State: `fm_sel` (word, selected
-row, 0xFFFF = none), `fm_clkt` (word, [ticks] at last row click),
-`fm_mountok` (byte, 1 = last mount succeeded).
+module-global), title "Disk", 320×200 at (110,80), **resizable**
+(KD_WFLAG = WF_SIZABLE, §11.1/§29.3 — the one built-in that is). No
+background task, no boot-time window: `files_init` (from kmain) only
+resets module state; the window is created on demand by `app_launch`
+(§29), whose KD_INIT is `fm_kinit` (clears `fm_sel`/`fm_clkt`, resets
+`fm_scroll` and `fm_view`). State: `fm_sel` (word, selected **directory
+index** — not a row; 0xFFFF = none), `fm_clkt` (word, birth tick of the
+last entry click), `fm_mountok` (byte, 1 = last mount succeeded),
+`fm_view` (byte, 0 = list view, 1 = icon view), `fm_scroll` (word, first
+visible row — an entry row in list view, a grid row in icon view).
 
-Content layout (coords relative to content top-left): header line at
-(6,6): `"Drive B:  N files"` (drive letter from [disk_drive]) or, when the
-last mount failed, `"No os8088 disk in drive B:"`. A **Refresh button** at
-the top right: 1px black frame from (content_w−68, 2) to (content_w−6,
-15), label "Refresh" centered inside — remounts the current drive so a
-swapped disk shows its real contents. Status line from
-`[ld_status]` at (6,182-TITLE_H): "", "Disk error", "Bad package",
-"Too large", "Load failed", "Out of memory" (0..5) — plus "Loading..."
-while a load is pending.
-File rows: **16 px tall**, first at y=22, at most **8** rows shown
-(entries beyond are mounted but not listed; row 8 ends at y=149, clear of
-the status line at 164). Per row: the file's 16×16 icon at x=4 (from
-`disk_icons` entry i; all-zero entry → built-in `ico_app16`, §25), name
-at x=24, size right-aligned at content right minus 6, text baselines at
-row top + 4. Selected row: drawn inverted (`gfx_xor_fill` over the row
-band after drawing is acceptable).
+**Live layout (binding).** The window resizes, so nothing may bake in
+320×200: one helper, `fm_layout` (in BX = window ptr), computes the
+frame-derived values both the painter and the hit-tester use — computed in
+one place precisely so they can never disagree:
+
+```
+cw       = W_W - 2                 ; content width
+ch       = W_H - TITLE_H - 1      ; content height (rows 0..ch-1)
+status_y = ch - 17                 ; status line text top
+list_bot = status_y - 2            ; first row BELOW the row area
+rows_fit = (list_bot - 22) / row_h ; row_h: 16 list, 40 icons; 0 if negative
+cols     = 1 (list) | max(1, (cw-16)/78) (icons)
+```
+
+All coordinates below are content-relative. Header line at (6,6):
+`"Drive B:  N files"` (drive letter from [disk_drive]) or, when the last
+mount failed, `"No os8088 disk (B:)"` (19 chars — short enough to clear
+the buttons at the default width; it was "No os8088 disk in drive B:"
+until the view toggle claimed that room). Two buttons at the top right,
+1px black frames, labels centered: **Refresh** from (cw−68, 2) to
+(cw−6, 15) — remounts the current drive so a swapped disk shows its real
+contents — and **the view toggle** from (cw−136, 2) to (cw−74, 15),
+labelled with the view a click switches **to** ("Icons" in list view,
+"List" in icon view). The primitives clip to the *screen*, not the
+window, so a shrunken window must not let the strip bleed past its own
+frame: each button is drawn — and its click rect tested — only when it
+fits (**Refresh iff cw ≥ 76, the view toggle iff cw ≥ 142**; one
+condition gates both, so nothing invisible is ever clickable), and the
+header is truncated to end 8px short of the leftmost drawn button (or of
+cw). Status line from `[ld_status]` at (6, status_y): "", "Disk error",
+"Bad package", "Too large", "Load failed", "Out of memory" (0..5) — plus
+"Loading..." while a load is pending — truncated to (cw−12)/8 chars
+through the same scratch-buffer idiom as the header ("Out of memory" is
+104px and a legal resize can leave cw = 94). In list view the name is
+truncated to the room left of the size column ((cw − 88)/8 chars); every
+string the window draws is bounded by the live cw one way or another.
+
+**The row area** spans x 0..cw−16, y 22..list_bot−1 (a 2px gutter before
+the scroll bar); when `rows_fit` is 0 the row area and the scroll bar are
+simply omitted (a legal degenerate window). Rows shown = min(total −
+fm_scroll, rows_fit), where total = [disk_nfiles] rows in list view,
+ceil(nfiles / cols) grid rows in icon view. `fm_scroll` is clamped to
+0..max(0, total − rows_fit) at every use — paint clamps first, so a
+shrink-resize self-heals.
+
+- **List view** (fm_view = 0): rows 16px tall, entry index = row +
+  fm_scroll. Per row: the file's 16×16 icon at x=4 (from `disk_icons`
+  entry i; all-zero entry → built-in `ico_app16`, §25), name at x=24,
+  size right-aligned ending at cw−22, text baselines at row top + 4.
+- **Icon view** (fm_view = 1): a grid of 78×40 cells, `cols` per grid
+  row, cell (r, c) at (c·78, 22 + (r − fm_scroll)·40), entry index =
+  r·cols + c. Per cell: the 16×16 icon centered at cell +(31, 3), the
+  name below it at cell y+23, truncated to **9 chars** and centered
+  (x = cell + (78 − 8·len)/2). Truncation is display-only.
+
+Selected entry: inverted (`gfx_xor_fill` over the row band x 0..cw−16 /
+the full cell) — **only when its row/cell is inside the visible band**; a
+selection scrolled out of view stays selected, just not drawn.
+
+**The scroll bar**: x cw−14..cw−1, y 22..list_bot−1, drawn whenever the
+row area is. 1px black frame; an 11-row **up-arrow cell** at the top and
+**down-arrow cell** at the bottom (black triangle glyphs, separated from
+the track by their own 1px rule); the track between them filled 50% gray.
+When total > rows_fit a white, black-framed **thumb** rides the track:
+height = max(8, rows_fit·track_h/total), top = track_y0 +
+fm_scroll·track_h/total, clamped to the track; otherwise the track is
+bare and the arrows are inert. One degenerate exception: a track shorter
+than the 8px minimum thumb (frame heights 83..89) stays bare and its
+clicks do nothing — the arrows and keys still scroll. There is **no thumb drag** — W_ONCLICK is
+a one-shot dispatch under the held lock, and a tracking loop belongs to
+the UI task (§13), so the bar scrolls by clicks alone (a deliberate,
+recorded scope cut): up/down arrow = one row; a track click above the
+thumb's top = a page (rows_fit rows) up, anywhere else in the track = a
+page down.
 
 Behaviour:
 - `files_open_drive` (public; in AL = drive 0/1, no lock held): **always**
@@ -1546,20 +1741,29 @@ Behaviour:
   dispatch and desk_click (§26).
 - `files_open` (from CMD_FILES dispatch, no lock held): AL = [disk_drive],
   fall into files_open_drive.
-- `W_ONCLICK` (lock held): the Refresh button rect is tested first —
-  inside it: `disk_mount` the current drive, update fm_mountok, clear
-  selection, repaint content. Otherwise map DX to a row ((y−22)/16, guard
-  y<22); row ≥ [disk_nfiles] or ≥ 8 → clear selection, repaint. Else if
-  row == fm_sel and [ui_click_t]−fm_clkt < 9 (birth ticks, §10) → double-click: set [ld_pending]
-  = row+1 (ui.inc runs the loader after the lock drops), repaint content
-  (shows "Loading..."). Else select row, stamp fm_clkt, repaint content.
-  Repaint = white-fill own content + redraw (like the Note Pad package's onkey; the
-  caller already holds the lock).
+- `W_ONCLICK` (lock held; every path below ends in the content repaint —
+  white-fill own content from the **live** W_W/W_H + redraw + a closing
+  `wm_grow_paint` (§11), because the white fill erases the grow box):
+  test order is buttons → scroll bar → rows.
+  1. Refresh rect → `disk_mount` the current drive, update fm_mountok,
+     clear selection, reset fm_scroll.
+  2. View-toggle rect → flip fm_view, reset fm_scroll (selection kept).
+  3. Scroll bar (only when the row area is drawn) → adjust fm_scroll per
+     the arrow/track rules above, clamped; nothing else changes.
+  4. Row area → map to an entry index per the current view (icon view:
+     reject x past cols·78); y < 22, past the shown rows, or index ≥
+     [disk_nfiles] → clear selection. Index == fm_sel and
+     [ui_click_t]−fm_clkt < 9 (birth ticks, §10) → double-click: set
+     [ld_pending] = index+1 (ui.inc runs the loader after the lock
+     drops; the repaint shows "Loading..."). Else select it (fm_sel =
+     directory index), stamp fm_clkt.
 - `W_ONKEY` (lock held): 'a'/'A' → drive 0, 'b'/'B' → drive 1, 'r'/'R' →
   same drive; all three: `disk_mount`, update fm_mountok, clear selection,
-  repaint content. Enter (13) with a valid selection → same as
-  double-click. (disk_mount under the gfx lock stalls painters ~a second;
-  acceptable.)
+  reset fm_scroll, repaint content. 'v'/'V' → toggle the view like the
+  button. Scan codes: Up/Down (48h/50h) scroll one row, PgUp/PgDn
+  (49h/51h) a page — the view, not the selection, clamped like the bar.
+  Enter (13) with a valid selection → same as double-click. (disk_mount
+  under the gfx lock stalls painters ~a second; acceptable.)
 - `files_refresh` (called by loader_run, no lock held): find the live
   Disk instance via `inst_find_kind` KIND_FILES (§29) — none = nothing to
   do (the user closed the window mid-load); else acquire gfx_lock, and if
@@ -1708,13 +1912,20 @@ onclick, no bss. Entry: wm_create, return BX/CF. Prefix `hl_`.
 **NOTEPAD** (`apps/notepad/notepad.asm`, prefix `np_`) is the former
 built-in Note Pad kind, moved out of the kernel to reclaim the 1,383 bytes
 it cost there — 281 of code and 1,036 of .bss, nearly all of the latter a
-fixed two-instance text pool. Behaviour is unchanged from §14: one window
-"Note Pad" 260×180 at (60,60); paint renders the buffer at 8px per char
-with a 6px left/top margin, wrapping at the content width, dropping any row
-whose bottom would pass the content bottom (no scrolling) and drawing a 1px
-caret only when its own row fits; onkey appends printable 32..126, deletes
-on backspace, stores 13 on Enter, then white-fills and redraws **its own
-content only**. No icon flag, so the Disk window shows `ico_app16`.
+fixed two-instance text pool. Behaviour matches §14 plus resizing: one
+window "Note Pad" 260×180 at (60,60), **resizable** — the entry calls
+`wm_sizable` (slot 0x008C) right after wm_create, making it the first
+package to exercise §11.1 and the proof that the SDK path works. Paint
+renders the buffer at 8px per char with a 6px left/top margin, wrapping at
+the content width, dropping any row whose bottom would pass the content
+bottom (no scrolling) and drawing a 1px caret only when its own row fits —
+all computed from the **live** window record each call, which is exactly
+why resizing costs the paint proc nothing: the next repaint re-wraps at
+the new width. Onkey appends printable 32..126, deletes on backspace,
+stores 13 on Enter, then white-fills (live W_W/W_H) and redraws **its own
+content only**, ending with `wm_grow_paint` (slot 0x0094) per §11.1 — the
+white fill erases the grow box. No icon flag, so the Disk window shows
+`ico_app16`.
 
 Two things got simpler in the move. The built-in reached its state through
 `inst_of_win` → `I_SPTR` because every instance shared one pool; a package
@@ -2030,7 +2241,11 @@ proc or 0 — in: BX = window ptr, DI = state ptr or 0, SI = instance
 record ptr; preserves all registers; runs on the UI task with no lock
 held, window not yet visible), `KD_NAME` (word, NUL name string),
 `KD_ICON` (word, 16x16 icon body ptr or 0), `KD_CAP` (byte, max
-simultaneous instances), 1 pad byte.
+simultaneous instances), `KD_WFLAG` (byte — the former pad byte): extra
+W_FLAGS bits app_launch ORs into the new window right after wm_create;
+only feature bits (WF_SIZABLE — never bits 0/1, and WF_FULL makes no
+sense at create time). The Disk kind sets WF_SIZABLE (§22); every other
+row keeps 0.
 
 Pinned caps: About 1 (stateless), Clock 10
 (stride 8), Bounce 10 (stride 8), Files 1 (module-global mount state),
@@ -2046,8 +2261,8 @@ init-less:
 ```nasm
     dw cp_tpl, 0, 0, 0, 0, cp_sname   ; tpl, task, pool, ssize, init, name
     dw 0                              ; icon: generic fallback
-    db 1, 0                           ; Control Panel: stateless task-less
-                                      ; singleton
+    db 1, 0                           ; cap 1, KD_WFLAG 0: stateless
+                                      ; task-less singleton, not resizable
 ```
 
 ### 29.4 Routines
@@ -2063,7 +2278,7 @@ init-less:
 | `inst_alloc` | out CF=0 + DI = free record with I_FLAGS/I_SPTR/I_SIZE/I_ICON/I_CYC zeroed, CF=1 table full. Does NOT publish. UI task only. |
 | `inst_set_name` | in DI = record, SI = name source (NUL-terminated or NUL-padded; at most 15 chars taken). Zero-fills all 16 I_NAME bytes first. Safe on a package header's 16-byte name field. |
 | `inst_bind_win` | in DI = record, BX = window ptr: I_WIN ← BX, `wm_owner[window index]` ← record index. |
-| `app_launch` | in AL = kind (built-in). UI task only, no lock held; takes its own locks. out CF=1 failed (instance/window/task table full — silent no-op for the caller), CF=0 done. Order: cap check (at cap → gfx_lock, clear the live instance's minimized bit, wm_show it, gfx_unlock — i.e. "launch" of a full singleton fronts it; only-dying-instances → CF=1, retry after a task period) → inst_alloc → pool-slot pick (first candidate `pool + s·stride` not held by a same-kind record with I_STATE != 0) → template copied to scratch with x/y cascaded +16·s → wm_create (CF → fail; record was never published) → fill record (I_KIND, I_TASK=0xFF, I_ICON, name) + inst_bind_win → KD_INIT → **publish I_STATE ← 1** → if KD_TASK: task_spawn (AX = entry, DX = instance index), I_TASK ← returned slot; spawn CF → rollback (I_STATE ← 0, then locked wm_destroy) → gfx_lock, wm_show, gfx_unlock. |
+| `app_launch` | in AL = kind (built-in). UI task only, no lock held; takes its own locks. out CF=1 failed (instance/window/task table full — silent no-op for the caller), CF=0 done. Order: cap check (at cap → gfx_lock, clear the live instance's minimized bit, wm_show it, gfx_unlock — i.e. "launch" of a full singleton fronts it; only-dying-instances → CF=1, retry after a task period) → inst_alloc → pool-slot pick (first candidate `pool + s·stride` not held by a same-kind record with I_STATE != 0) → template copied to scratch with x/y cascaded +16·s → wm_create (CF → fail; record was never published), then OR the kind's `KD_WFLAG` byte into the new window's W_FLAGS (§29.3/§11.1) → fill record (I_KIND, I_TASK=0xFF, I_ICON, name) + inst_bind_win → KD_INIT → **publish I_STATE ← 1** → if KD_TASK: task_spawn (AX = entry, DX = instance index), I_TASK ← returned slot; spawn CF → rollback (I_STATE ← 0, then locked wm_destroy) → gfx_lock, wm_show, gfx_unlock. |
 | `app_close_win` | in BX = window ptr; **caller holds the gfx lock**; UI task only. Unowned window → wm_hide (fallback). I_STATE = 2 already → wm_hide (idempotent). Task-less (I_TASK = 0xFF) → I_STATE ← 2, wm_destroy (clears wm_owner, repaints), I_WIN ← 0, I_STATE ← 0 — for a package instance that final store frees the region (rule 29.2.7). Task-owned → I_STATE ← 2 (the die flag), wm_hide (instant feedback); the task tears down at its next wake. |
 | `inst_minimize` | in BX = window ptr, lock held: set I_FLAGS bit0 (unowned → skip), wm_hide. |
 | `inst_restore` | in DI = record, lock held: clear I_FLAGS bit0, wm_show I_WIN. |

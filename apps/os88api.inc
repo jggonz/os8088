@@ -130,10 +130,37 @@ SND_ST_UNDER     equ 1           ; underrun-paused: resumable by a feed
 SND_ST_ENDED     equ 2           ; stopped by the stream watchdog
 SND_ST_STALE     equ 0FFFFh      ; the handle's stream is gone
 
+; --- window management (SPEC.md 11.1/11.2) -------------------------------------
+OSAPI_WM_SIZABLE    equ 0x008C   ; BX=win ptr, AL = 0 clear / non-zero set
+                                 ; WF_SIZABLE; call from the entry proc
+                                 ; after OSAPI_WM_CREATE. A resizable
+                                 ; window's paint/click procs MUST lay out
+                                 ; from the live W_W/W_H every call.
+OSAPI_FULLSCREEN    equ 0x0090   ; AL = 1 enter (BX=win ptr) / 0 exit;
+                                 ; caller holds the gfx lock (window
+                                 ; callbacks do); out CF=1 enter refused
+                                 ; (screen already owned). Exiting is the
+                                 ; app's job (Esc in its onkey is the
+                                 ; convention) - the menu bar is
+                                 ; unreachable while it holds the screen.
+OSAPI_WM_GROW       equ 0x0094   ; BX=win ptr; caller holds the gfx lock.
+                                 ; A resizable window's self-initiated
+                                 ; content repaint must END with this:
+                                 ; the white-fill idiom erases the grow
+                                 ; box. No-op unless BX is the frontmost
+                                 ; visible resizable window - always safe.
+
+WF_SIZABLE equ 4                 ; W_FLAGS bit2: resizable (SPEC.md 11.1)
+WF_FULL    equ 8                 ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
+WMIN_W     equ 96                ; smallest frame a resize can leave
+WMIN_H     equ 64
+
 ; --- window record layout (SPEC.md 11, 18 bytes) -------------------------------
-W_FLAGS   equ 0             ; word: bit0 = used, bit1 = visible
+W_FLAGS   equ 0             ; word: bit0 = used, bit1 = visible, bit2 =
+                            ; resizable, bit3 = fullscreen
 W_X       equ 2             ; word: frame left (screen coords)
-W_Y       equ 4             ; word: frame top (y >= MBAR_H)
+W_Y       equ 4             ; word: frame top (y >= MBAR_H - except under
+                            ; WF_FULL, SPEC.md 11.2)
 W_W       equ 6             ; word: frame width, outer
 W_H       equ 8             ; word: frame height, includes title bar
 W_TITLE   equ 10            ; word: near ptr to NUL title string
