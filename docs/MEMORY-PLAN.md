@@ -52,9 +52,15 @@ every byte still lives below 0x10000 or inside the kernel segment, so a
 
 Linear 0x00600–0x0FFFF is free on every PC once the boot sector has handed
 off: the BIOS data area ends at 0x004FF and the kernel image starts at
-0x10000. That is ~62KB nobody was using. Two segments now carve it up
-(SPEC.md §2.1): `FAR_SEG` = 0x0060 for far code, `LOW_SEG` = 0x0800 for
-stacks and disk buffers.
+0x10000. That is ~62KB nobody was using. Three segments now carve it up
+(SPEC.md §2.1): `FAR_SEG` = 0x0060 for far code, `FAT_SEG` = 0x0300 for
+the FAT driver's mount-time FAT snapshot, and `LOW_SEG` = 0x0800 for
+stacks and disk buffers. `FAT_SEG` was claimed after this step by the
+FAT12/16 migration: its snapshot owns linear 0x03000–0x07FFF (16KB used,
+4KB reserve), reached through ES only, and size guard 5 in `kernel.asm`
+fences the `.fartext` blob below 0x03000 so far-code growth cannot collide
+with it. The former gap between the blob and `LOW_SEG` is therefore no
+longer free memory.
 
 ### A1 — task stacks → `LOW_SEG` (−16,896 bytes)
 
@@ -80,9 +86,11 @@ into the kernel segment, so every consumer keeps the plain DS:SI pointer it
 always had and no drawing or parsing code learned about segments. The
 staging buffers cost 128 bytes, against 3,584 recovered.
 
-The superblock's own field reads use explicit `es:` overrides, and the magic
-compare was reordered so the kernel-resident string is the `cmpsb` DS:SI
-side — which needs no override at all.
+The FAT driver keeps the same discipline: the boot sector's 0xAA55
+signature is the one check made with an `es:` override against
+`dsk_secbuf`; the BPB's first 64 bytes are then staged into `dsk_bpb` in
+the kernel segment, so the other sixteen validation rules run on plain DS
+reads (SPEC.md §18.2).
 
 ## Step B — slide the package pool up ✅ done
 
@@ -177,7 +185,10 @@ the 256KB floor), and the same SPEC §2 amendment pins the menu save-unders
 to 0x20000–0x2FFFF. So on the floor, Step D's per-package segments carve
 from 0x20000–0x2FFFF (shared with the save-under heap); on bigger machines
 they can range above BB_SEG at 0x40000 instead. Settled now so the conflict
-is not discovered mid-migration.
+is not discovered mid-migration. And there is no slack to steal below
+0x10000 either: `FAT_SEG`'s snapshot owns linear 0x03000–0x07FFF (Step A),
+so Step D — or anything else hunting for low memory — must not assume the
+old gap between the `.fartext` blob and `LOW_SEG` is free.
 
 ## Rejected
 

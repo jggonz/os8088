@@ -86,9 +86,10 @@ the menus. All of classic Mac's core interactions work:
   re-reads the directory after you swap disks; A/B/R keys switch drives.
 - **Icons** — a 1-bit icon system, classic Mac style: a built-in library
   (32×32 floppy, 16×16 generic application) plus per-application icons
-  that ship inside each `.o88` package and get copied onto the disk's
-  icon table by the packaging tools. Minesweeper carries a mine glyph;
-  packages without one fall back to the generic icon.
+  that ship inside each `.o88` package; when a disk is mounted the kernel
+  harvests them by peeking each package's first sector. Minesweeper
+  carries a mine glyph; packages without one — and any file that isn't a
+  package at all — fall back to the generic icon.
 - **Minesweeper** — the first software package: a colorful 9×9
   minesweeper that ships on `build/apps.img`, loaded through the Disk
   window. Blue 1s, green 2s, red flags, first-click-safe mine placement,
@@ -130,7 +131,7 @@ the menus. All of classic Mac's core interactions work:
 | keyboard      | BIOS int 16h, polled by the UI task. |
 | font          | the VGA ROM's own 8x8 font, copied out via int 10h AX=1130h at boot. |
 | floppy        | BIOS int 13h, one sector per call with retries; task switching pauses during a read (the tick still runs — the floppy motor needs it). |
-| software      | `.o88` packages on an os88fs data floppy in B:. A package is a flat binary loaded into a first-fit region of 1000:A000..1000:EFFF — inside the kernel segment, so its window procs are ordinary near pointers — calling the kernel through a fixed jump table at 1000:0010. It ships with a relocation table, so several packages, or several copies of one, run at once. |
+| software      | `.o88` packages on a plain FAT12 data floppy in B: — any PC, Mac or Linux box can write the disk; the kernel only reads it, and validates everything on it. A package is a flat binary loaded into a first-fit region of 1000:A000..1000:EFFF — inside the kernel segment, so its window procs are ordinary near pointers — calling the kernel through a fixed jump table at 1000:0010. It ships with a relocation table, so several packages, or several copies of one, run at once. |
 | concurrency   | one drawing mutex (`gfx_lock`); background tasks re-check visibility *under* the lock; ISRs run IF=0 throughout and never draw over a held lock. SPEC.md is the binding contract. |
 
 The kernel is ~14KB. Everything runs in the tiny model — CS = DS = SS =
@@ -177,7 +178,7 @@ kernel/instance.inc  the instance table: app kinds, launch, close, billing
 kernel/menu.inc      menu bar, pull-down tracking
 kernel/ui.inc        UI task: event pump, keyboard, drags, dispatch
 kernel/apps.inc      About, Note Pad, Clock task, Bounce task
-kernel/disk.inc      int 13h floppy reads, os88fs mount + directory
+kernel/disk.inc      int 13h floppy reads, FAT12/16 mount + chain walk
 kernel/loader.inc    .o88 package validation, region alloc, relocate, launch
 kernel/files.inc     the Disk window (file manager)
 kernel/icons.inc     1-bit icon format, draw routine, built-in library
@@ -189,22 +190,27 @@ apps/os88api.inc      the package SDK: API offsets, header + icon macros
 apps/mines/          Minesweeper, the first software package
 apps/hello/          HELLO, a minimal second package (no icon)
 tools/os88pkg.py       package validator/stamper (.bin -> .o88)
-tools/os88disk.py     os88fs floppy image builder
+tools/os88disk.py     FAT12 data floppy builder (+ --verify fsck)
 tools/qmp.py         QMP client for scripted control of a test boot
 tools/mouse.py       absolute mouse positioning over the QMP socket
 ```
 
 ## Software packages
 
-Programs live on a second floppy (drive B:) with a purpose-built
-read-only filesystem, **os88fs**: a superblock that names the disk
-geometry, a 32-entry directory, sector-aligned file data. The build:
+Programs live on a second floppy (drive B:) that is a plain **FAT12**
+volume — DOS, Windows, macOS and Linux can all mount it, read it and
+write files onto it. os8088 only ever reads the disk, and treats
+everything on it as untrusted: the boot sector's BPB is validated rule by
+rule before any number off it is used, and files are read by walking
+their real FAT cluster chains, so a `.o88` a host OS wrote back
+fragmented still loads. Files that aren't packages just list with a
+generic icon. The build:
 
 ```
-apps/mines/mines.asm --nasm x2--> build/mines.bin      org 0xA000, header baked in
-                                  build/mines.alt.bin  the same source at org 0xA800
+apps/mines/mines.asm --nasm x2--> build/mines.bin      org 0xB000, header baked in
+                                  build/mines.alt.bin  the same source at org 0xB800
 build/mines.bin + .alt --os88pkg.py--> build/mines.o88   package + relocation table
-build/*.o88 --tools/os88disk.py--> build/apps.img       os88fs floppy (and apps360.img)
+build/*.o88 --tools/os88disk.py--> build/apps.img       FAT12 floppy (and apps360.img)
 ```
 
 A package is written against `apps/os88api.inc`: `OS88_HEADER 'NAME', entry`
@@ -227,8 +233,8 @@ called like any built-in window's. Closing a package frees its region.
 |----------------------|-------------------------|---------------------------------|
 | `build/os8088.img`      | 1.44MB, 18 spt, 2 heads | QEMU boot floppy (A:)           |
 | `build/os8088-360.img`   | 360KB, 9 spt, 2 heads   | 86Box / real XT boot floppy     |
-| `build/apps.img`     | 1.44MB os88fs            | QEMU software floppy (B:)       |
-| `build/apps360.img`  | 360KB os88fs             | 86Box / real XT software floppy |
+| `build/apps.img`     | 1.44MB FAT12             | QEMU software floppy (B:)       |
+| `build/apps360.img`  | 360KB FAT12              | 86Box / real XT software floppy |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.

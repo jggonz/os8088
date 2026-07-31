@@ -226,7 +226,8 @@ Quirks that have cost real time, all of them still true:
 - **Boot is clean** — nothing is running. Anything you want to click has to be
   launched from a menu first.
 - **Both geometries.** Every image is built twice, 1.44MB (QEMU) and 360KB
-  (86Box / a real XT). If you touched the boot path or os88fs, check both.
+  (86Box / a real XT). If you touched the boot path or the FAT driver,
+  check both.
   Only QEMU is routinely verified; `vm/xt/86box.cfg` keys are best-effort
   guesses and 86Box rewrites its own preference keys on exit.
 
@@ -246,9 +247,9 @@ with the contract named, produce patches:
 > Write a new loadable package in apps/, modelled on apps/hello/. It should
 > register one window that draws a rotating line. Use apps/os88api.inc for
 > every kernel call, remember packages are relocatable so addresses may only
-> appear as whole 16-bit words, and add it to the Makefile after hello (the
-> apps-disk directory order is pinned — mines first, hello second, tests rely
-> on it).
+> appear as whole 16-bit words, and append it to the Makefile's apps-disk
+> package list (the root-directory order is pinned — mines first, hello
+> second, and so on — because tests click files by row).
 
 > `make test`, open File → Note Pad, type "hi", screendump it, and show me the
 > cropped text area. Use tools/mouse.py, not raw mouse_move.
