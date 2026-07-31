@@ -24,6 +24,14 @@
 ; a (cell, item) pair rather than a flat command, because item numbering
 ; now has to mean something inside a menu set the kernel has never seen.
 ;
+; Only the bar-specific half of that is menu_track's own. The tracker is
+; menu_drop, anchored by variables rather than by MBAR_H and polling
+; whichever mouse button [menu_btn] names, so menu_popup can drop the same
+; menu machinery anywhere on screen under the RIGHT button (SPEC.md 12.4).
+; That split exists for one reason: the SPEC.md 32 rule about what goes
+; through the back buffer and what goes straight to VRAM is subtle, and two
+; copies of it would drift.
+;
 ; The right end of the bar is the system clock (SPEC.md 12.1): drawn by
 ; menu_draw_clock, repainted once a second by the UI task, and - because
 ; ui.inc hit-tests its cell before menu_track ever sees the click - a
@@ -76,6 +84,9 @@ MENU_TITLE_PAD equ 12           ; per-title cell padding (6px each side)
 MENU_TEXT_Y equ 6               ; title text row (8px glyphs in a 19px bar)
 MENU_LOGO_Y equ 4               ; logo glyph top row (11px tall)
 MENU_ITEM_H equ 16              ; pull-down item cell height, px
+MENU_POPMAX equ 16              ; items a context menu may have (SPEC.md 12.4)
+                                ; - 16 cells plus frame is 258px, which still
+                                ; fits under the bar on a 480-row screen
 
 ; --- the clock cell at the right end of the bar (SPEC.md 12.1) --------------
 ; The string's width VARIES with the display settings (SPEC.md 37) - 18
@@ -409,17 +420,19 @@ menu_draw_clock:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_track - run one full menu interaction. Finds the title under the
-;              mousedown, xor-highlights it, drops the menu (save-under to
-;              SAVE_SEG:0), follows the mouse with an item highlight, and on
-;              release restores the screen and un-highlights the title.
-;              Polls mouse_btn/mouse_x/mouse_y directly and yields every
-;              iteration so the scheduler stays healthy (background tasks
-;              block on the gfx lock, which we hold, until we return).
+; menu_track - run one full BAR menu interaction. Finds the title under the
+;              mousedown, xor-highlights it, hands the drop to menu_drop, and
+;              un-highlights the title on the way out.
 ; in:  CX = mousedown x (caller holds the gfx lock)
 ; out: AX = 0xFFFF if nothing was selected, else AH = bar cell index
 ;      (0 = the System menu), AL = item index within that cell (SPEC.md 12)
 ; clobbers: nothing else
+;
+; Everything left here is bar-specific: the cell find, the title highlight,
+; and the (cell, item) pack. The tracker itself moved into menu_drop so the
+; context menu (SPEC.md 12.4) runs the same code - and, far more to the
+; point, the same SPEC.md 32 back-buffer discipline. Two copies of that
+; would drift.
 ; -----------------------------------------------------------------------------
 menu_track:
     push bx
@@ -427,7 +440,6 @@ menu_track:
     push dx
     push si
     push di
-    push es
 
     ; --- which title was hit? ------------------------------------------------
     mov si, menu_bar
@@ -444,7 +456,7 @@ menu_track:
     dec di
     jnz .find
     mov ax, 0xFFFF              ; dead zone / the name label: no menu, no work
-    jmp .out
+    jmp short .out
 
 .found:
     mov [menu_ent], si
@@ -452,26 +464,169 @@ menu_track:
                                 ; no flush needed - SPEC.md 32)
 
     ; --- menu rect: width = widest item + 16, items are 16px cells -----------
-    call menu_widest            ; AX = widest item text, px (SI = entry)
+    mov bx, [si + MB_ITEMS]
+    mov [menu_iptr], bx
+    mov cx, [si + MB_NITEM]
+    mov [menu_cnt], cx
+    call menu_widest            ; AX = widest item text, px (BX/CX in)
     add ax, 16
-    mov bx, [si + MB_XL]
+    mov bx, [si + MB_XL]        ; the pull-down hangs off the title's left
     mov [menu_x1], bx
     add bx, ax
     dec bx
     mov [menu_x2], bx           ; x2 = x1 + width - 1
-    mov ax, [si + MB_NITEM]
-    mov [menu_cnt], ax
+    mov word [menu_y1], MBAR_H  ; it always hangs from the bar
+    mov ax, [menu_cnt]
     mov cl, 4
     shl ax, cl                  ; count * 16
     add ax, MBAR_H + 1          ; + top frame row; bottom frame is y2 itself
     mov [menu_y2], ax
+    mov byte [menu_btn], 1      ; the LEFT button keeps a bar menu open
+
+    call menu_drop              ; AX = item index, or 0xFFFF
+    call menu_title_xor         ; un-highlight the title (self-inverting)
+    cmp ax, 0xFFFF
+    je .out
+    mov ah, [menu_cell]         ; out: AH = cell, AL = item (SPEC.md 12)
+
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_popup - drop a menu anywhere on screen and track it under the right
+;              button (SPEC.md 12.4)
+; in:  CX = anchor x, DX = anchor y (absolute screen), BX = array of near
+;      pointers to NUL item strings, AX = item count. Caller holds the gfx
+;      lock.
+; out: CF = 1 nothing was chosen; CF = 0 and AL = the item index
+; clobbers: AX (the result); everything else preserved
+;
+; The rect is sized exactly as a bar menu's is, then SHIFTED rather than
+; clipped: right overflow moves x1 left (floor 0), bottom overflow moves y1
+; up (floor MBAR_H). Clipping would cut items in half and leave the ones
+; below unreachable, which is why a right-click in the bottom-right corner
+; would otherwise be useless. The popup MAY cover the dock strip - the
+; save-under puts it back.
+; -----------------------------------------------------------------------------
+menu_popup:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    or ax, ax
+    jz .none                    ; an empty descriptor drops nothing
+    cmp ax, MENU_POPMAX
+    jbe .cnt_ok                 ; never trust a caller's count - the rect has
+    mov ax, MENU_POPMAX         ; to fit on the screen (menu_relayout's rule)
+.cnt_ok:
+    mov [menu_cnt], ax
+    mov [menu_iptr], bx
+
+    ; --- width, and the left shift off the right edge ------------------------
+    push cx                     ; the anchor: menu_widest wants CX = count
+    mov cx, ax
+    call menu_widest            ; AX = widest item text, px (BX = the array)
+    add ax, 16                  ; AX = menu width, and stays there
+    pop cx                      ; CX = anchor x again
+
+    mov bx, cx                  ; BX = candidate x1
+    mov si, SCREEN_W
+    sub si, ax                  ; SI = rightmost x1 that still fits
+    cmp bx, si
+    jle .x_hi
+    mov bx, si
+.x_hi:
+    or bx, bx                   ; low bound last so it wins (a menu wider
+    jns .x_lo                   ; than the screen cannot happen, but the
+    xor bx, bx                  ; floor costs 4 bytes and removes the doubt)
+.x_lo:
+    mov [menu_x1], bx
+    add bx, ax
+    dec bx
+    mov [menu_x2], bx
+
+    ; --- height, and the upward shift off the bottom edge --------------------
+    mov ax, [menu_cnt]
+    mov cl, 4
+    shl ax, cl                  ; count * 16 ...
+    add ax, 2                   ; ... + the top and bottom frame rows
+    mov bx, dx                  ; BX = candidate y1 (DX = anchor y)
+    mov cx, SCREEN_H
+    sub cx, ax                  ; CX = lowest y1 that still fits
+    cmp bx, cx
+    jle .y_hi
+    mov bx, cx
+.y_hi:
+    cmp bx, MBAR_H              ; never over the menu bar: it is the one
+    jge .y_lo                   ; surface no window may cover either
+    mov bx, MBAR_H
+.y_lo:
+    mov [menu_y1], bx
+    add bx, ax
+    dec bx
+    mov [menu_y2], bx
+
+    mov byte [menu_btn], 2      ; the RIGHT button keeps a popup open
+    call menu_drop              ; AX = item index, or 0xFFFF
+    cmp ax, 0xFFFF
+    je .none
+    clc
+    jmp short .out
+.none:
+    mov ax, 0xFFFF
+    stc
+.out:
+    pop di                      ; pop does not touch the flags
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_drop - the tracker both menus share (SPEC.md 12.4): save the pixels
+;             under the rect, draw the menu, follow the mouse with an item
+;             highlight while the button is held, restore on release.
+;             Polls mouse_btn/mouse_x/mouse_y directly and yields every
+;             iteration so the scheduler stays healthy (background tasks
+;             block on the gfx lock, which we hold, until we return).
+; in:  [menu_x1]/[menu_x2]/[menu_y1]/[menu_y2] = the menu rect
+;      [menu_cnt]  = item count
+;      [menu_iptr] = array of near pointers to NUL item strings
+;      [menu_btn]  = the mouse_btn bit mask that keeps the menu open
+;      caller holds the gfx lock
+; out: AX = item index, or 0xFFFF if released outside every item
+; clobbers: nothing else
+;
+; This is the one copy of the SPEC.md 32 discipline for dropped menus: the
+; body is real persistent content and goes through the back buffer with one
+; gfx_flush (it would otherwise stay invisible for as long as the button is
+; held), while the item highlight is a transient overlay drawn VRAM-direct
+; like the cursor. Only one menu is ever open - both callers run on the UI
+; task and both are driven by a held button - so SAVE_SEG:0 needs no
+; allocator.
+; -----------------------------------------------------------------------------
+menu_drop:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
 
     ; --- save the pixels under the menu to SAVE_SEG:0 -------------------------
     mov ax, SAVE_SEG
     mov es, ax
     xor di, di
     mov ax, [menu_x1]
-    mov bx, MBAR_H
+    mov bx, [menu_y1]
     mov cx, [menu_x2]
     mov dx, [menu_y2]
     call gfx_save
@@ -479,21 +634,22 @@ menu_track:
     ; --- draw the menu: white fill, black frame, items 8px in from the left --
     mov byte [gfx_color], CWHITE
     mov ax, [menu_x1]
-    mov bx, MBAR_H
+    mov bx, [menu_y1]
     mov cx, [menu_x2]
     mov dx, [menu_y2]
     call gfx_fill
     mov byte [gfx_color], CBLACK
     mov ax, [menu_x1]
-    mov bx, MBAR_H
+    mov bx, [menu_y1]
     mov cx, [menu_x2]
     mov dx, [menu_y2]
     call gfx_frame
 
-    mov si, [menu_ent]
-    mov bx, [si + MB_ITEMS]
-    mov cx, [si + MB_NITEM]
-    mov dx, MBAR_H + 1 + 4      ; first cell top + 4px pad centers 8px glyphs
+    mov bx, [menu_iptr]
+    mov cx, [menu_cnt]
+    mov dx, [menu_y1]
+    add dx, 1 + 4               ; first cell top + 4px pad centers 8px glyphs
+    jcxz .drawn
 .item:
     push cx
     mov si, [bx]
@@ -504,12 +660,14 @@ menu_track:
     add bx, 2
     add dx, MENU_ITEM_H
     loop .item
+.drawn:
     call gfx_flush              ; pull-down + items on screen (SPEC.md 32)
 
     ; --- follow the mouse while the button is down ----------------------------
     mov word [menu_sel], 0xFFFF ; nothing highlighted yet
 .poll:
-    test byte [mouse_btn], 1
+    mov al, [menu_btn]
+    test [mouse_btn], al
     jz .up
     call menu_hover             ; AX = hovered item, 0xFFFF if outside
     cmp ax, [menu_sel]
@@ -538,19 +696,13 @@ menu_track:
     mov es, ax
     xor si, si
     mov ax, [menu_x1]
-    mov bx, MBAR_H
+    mov bx, [menu_y1]
     mov cx, [menu_x2]
     mov dx, [menu_y2]
     call gfx_restore
 
-    call menu_title_xor         ; un-highlight the title (self-inverting)
+    mov ax, [menu_sel]
 
-    mov ax, [menu_sel]          ; out: AH = cell, AL = item (SPEC.md 12)
-    cmp ax, 0xFFFF
-    je .out
-    mov ah, [menu_cell]
-
-.out:
     pop es
     pop di
     pop si
@@ -561,7 +713,7 @@ menu_track:
 
 ; -----------------------------------------------------------------------------
 ; menu_hover - which item cell is the mouse inside right now?
-; in:  [menu_x1]/[menu_x2]/[menu_cnt] set up by menu_track
+; in:  [menu_x1]/[menu_x2]/[menu_y1]/[menu_cnt] set up by menu_drop's caller
 ; out: AX = item index, 0xFFFF if the mouse is outside the menu rect
 ; clobbers: nothing else
 ; -----------------------------------------------------------------------------
@@ -572,8 +724,10 @@ menu_hover:
     jb .none
     cmp ax, [menu_x2]
     ja .none
+    mov cx, [menu_y1]
+    inc cx                      ; the top frame row is not an item cell
     mov ax, [mouse_y]
-    sub ax, MBAR_H + 1          ; rows above the first cell borrow out
+    sub ax, cx                  ; rows above the first cell borrow out
     jb .none
     mov cl, 4
     shr ax, cl                  ; / 16 -> cell index
@@ -588,7 +742,7 @@ menu_hover:
 
 ; -----------------------------------------------------------------------------
 ; menu_item_xor - toggle the highlight on one item cell (xor is its own undo)
-; in:  AX = item index; [menu_x1]/[menu_x2] set up by menu_track
+; in:  AX = item index; [menu_x1]/[menu_x2]/[menu_y1] set up as above
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
@@ -599,7 +753,8 @@ menu_item_xor:
     push dx
     mov cl, 4
     shl ax, cl                  ; index * 16
-    add ax, MBAR_H + 1          ; cell top row
+    add ax, [menu_y1]
+    inc ax                      ; cell top row (the frame row is not a cell)
     mov bx, ax
     mov dx, ax
     add dx, MENU_ITEM_H - 1     ; cell bottom row
@@ -641,18 +796,21 @@ menu_title_xor:
 
 ; -----------------------------------------------------------------------------
 ; menu_widest - widest item text in a menu, in pixels
-; in:  SI -> bar cell (menu_bar entry)
-; out: AX = max font_width over the menu's items
+; in:  BX = array of near pointers to NUL item strings, CX = item count
+; out: AX = max font_width over them (0 when CX = 0)
 ; clobbers: nothing else
+;
+; Parameterized by the array rather than by a bar cell (which is what it took
+; before) precisely so menu_popup can size a menu that has no bar cell at all
+; - a context menu's items live in a descriptor, not in menu_bar (SPEC 12.4).
 ; -----------------------------------------------------------------------------
 menu_widest:
     push bx
     push cx
     push dx
     push si
-    mov bx, [si + MB_ITEMS]
-    mov cx, [si + MB_NITEM]
     xor dx, dx                  ; running max
+    jcxz .done                  ; `loop` would wrap CX to 0xFFFF
 .next:
     mov si, [bx]
     call font_width             ; AX = 8 * strlen
@@ -662,6 +820,7 @@ menu_widest:
 .keep:
     add bx, 2
     loop .next
+.done:
     mov ax, dx
     pop si
     pop dx
@@ -782,8 +941,13 @@ menu_ent:   resw 1              ; -> bar cell being tracked
 menu_cell:  resb 1              ; its index (the AH half of menu_track's out)
 menu_x1:    resw 1              ; dropped menu rect, left
 menu_x2:    resw 1              ; dropped menu rect, right
-menu_y2:    resw 1              ; dropped menu rect, bottom (top is MBAR_H)
+menu_y1:    resw 1              ; dropped menu rect, top - MBAR_H from the
+                                ; bar, the shifted anchor from a popup (12.4)
+menu_y2:    resw 1              ; dropped menu rect, bottom
 menu_cnt:   resw 1              ; item count of the tracked menu
+menu_iptr:  resw 1              ; its array of near item-string pointers
+menu_btn:   resb 1              ; mouse_btn mask that keeps it open: 1 = the
+                                ; bar's left button, 2 = a popup's right one
 menu_sel:   resw 1              ; highlighted item, 0xFFFF = none
 
 section .text

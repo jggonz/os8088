@@ -15,8 +15,17 @@ EV_B        equ 4               ; word: payload b (mouse events: y)
 EV_C        equ 6               ; word: payload c (unused so far)
 
 EVT_NONE    equ 0
-EVT_MDOWN   equ 1               ; a=x, b=y
-EVT_MUP     equ 2               ; a=x, b=y
+EVT_MDOWN   equ 1               ; a=x, b=y, c=birth tick
+EVT_MUP     equ 2               ; a=x, b=y, c=birth tick
+EVT_RDOWN   equ 3               ; a=x, b=y, c=birth tick; RIGHT button PRESS.
+                                ; There is no EVT_RUP on purpose: the only
+                                ; consumer is the context-menu tracker, which
+                                ; polls mouse_btn bit 1 for its whole life
+                                ; (SPEC.md 12.4), so a release record would
+                                ; be one nobody ever pops. EV_C rides along
+                                ; for record symmetry and is read by nobody -
+                                ; a right double-click would need no format
+                                ; change to arrive.
 
 EVQ_RECSIZE equ 8               ; bytes per record
 EVQ_CAP     equ 16              ; records in the ring

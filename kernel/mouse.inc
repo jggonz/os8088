@@ -4,8 +4,9 @@
 ; Serial Microsoft mouse on COM1 (0x3F8, IRQ4 -> int 0x0C) plus the arrow
 ; cursor with save-under. The ISR decodes the 3-byte Microsoft packet, keeps
 ; mouse_x/mouse_y/mouse_btn fresh, queues EVT_MDOWN/EVT_MUP on left-button
-; changes, and moves the cursor itself only when the gfx lock is free and the
-; cursor is refcount-visible (SPEC 7); otherwise it just sets cur_dirty.
+; changes and EVT_RDOWN on the right button's PRESS edge, and moves the
+; cursor itself only when the gfx lock is free and the cursor is
+; refcount-visible (SPEC 7); otherwise it just sets cur_dirty.
 ;
 ; cursor_show/cursor_hide are refcounted via cur_level (-1 = hidden at boot,
 ; classic Show/HideCursor style) and guard their draw/restore sections with
@@ -243,14 +244,31 @@ mou_isr:
     mov [mouse_btn], bl
     xor bh, bl                  ; changed bits
     test bh, 0x01               ; left button changed?
-    jz .move
+    jz .rbtn
 
-    mov si, mou_evrec           ; queue EVT_MDOWN / EVT_MUP, a=x b=y (SPEC 10)
-    mov word [si], EVT_MUP
+    mov ax, EVT_MUP             ; queue EVT_MDOWN / EVT_MUP, a=x b=y (SPEC 10)
     test bl, 0x01
     jz .fill
-    mov word [si], EVT_MDOWN
+    mov ax, EVT_MDOWN
+    jmp short .fill
+
+    ; The right button is tested on the LEFT test's fall-through, and that
+    ; ordering is binding (SPEC.md 9): a packet reporting both buttons
+    ; changed queues the left event ONLY, so a chord can never steal a left
+    ; press from the drag loop or the double-click detector. Only the press
+    ; edge is queued - the context menu it opens lives on a level poll of
+    ; mouse_btn bit 1 (SPEC.md 12.4), so an EVT_RUP would be a record
+    ; nobody ever pops.
+.rbtn:
+    test bh, 0x02               ; right button changed?
+    jz .move
+    test bl, 0x02
+    jz .move                    ; a right RELEASE queues nothing
+    mov ax, EVT_RDOWN
+
 .fill:
+    mov si, mou_evrec
+    mov [si], ax
     mov ax, [mouse_x]
     mov [si+2], ax
     mov ax, [mouse_y]

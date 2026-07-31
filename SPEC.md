@@ -669,10 +669,21 @@ makes the machine slow, and the Task Manager keeps updating.
 - ISR: save all registers used + DS/ES, load DS=KERNEL_SEG, then: read port
   0x3F8, assemble packet (resync: any byte with bit 6 set restarts the
   packet), update `mouse_x` (clamp 0..639), `mouse_y` (0..479), `mouse_btn`
-  (bit 0 = left). On button *change*, push an event (§10): EVT_MDOWN /
-  EVT_MUP with a=x, b=y, c=[ticks] — the click's birth time; double-click
+  (bit 0 = left, bit 1 = right). On button *change*, push an event (§10):
+  EVT_MDOWN / EVT_MUP with a=x, b=y, c=[ticks] — the click's birth time;
+  double-click
   detection compares birth ticks, never processing time, so clicks queued
-  behind a slow disk mount cannot collapse into a double-click. Move the cursor per §7 (draw only when
+  behind a slow disk mount cannot collapse into a double-click.
+  **The right button queues EVT_RDOWN on its PRESS edge only** — same
+  record shape, same birth tick — and nothing at all on release: the
+  context menu it opens ends on a *level* poll of `mouse_btn` bit 1,
+  exactly as `menu_track` ends on bit 0 (§12.4), so a queued release
+  would be a record nobody pops. **The right test sits on the fall-through
+  of the left test**, which is binding: a packet that reports both buttons
+  changing queues the LEFT event only, so a chord can never steal a left
+  press from the drag loop or the double-click detector. One event per
+  packet keeps the ISR's IF=0 window the length it already was.
+  Move the cursor per §7 (draw only when
   `gfx_lock_flag` is clear AND `cur_level` >= 0; otherwise just update
   position and set `cur_dirty`). Send EOI (AL=0x20 → port 0x20) — the BIOS
   does not handle IRQ4 for us. `cld` before any string op; never `sti`.
@@ -701,7 +712,13 @@ Event record, 8 bytes: `EV_TYPE` dw, `EV_A` dw, `EV_B` dw, `EV_C` dw.
 EVT_NONE  equ 0
 EVT_MDOWN equ 1     ; a=x, b=y, c=birth tick
 EVT_MUP   equ 2     ; a=x, b=y, c=birth tick
+EVT_RDOWN equ 3     ; a=x, b=y, c=birth tick - RIGHT button press (§9/§12.4)
 ```
+
+There is deliberately no `EVT_RUP`: the only consumer of the right button
+is the context-menu tracker, which polls `mouse_btn` bit 1 for its whole
+life (§12.4). `EV_C` is carried on `EVT_RDOWN` for record symmetry and is
+read by nobody — a right double-click would need no format change.
 
 Single system queue, 16 records, ring buffer in .bss. Producers may be ISRs:
 `evq_push` (SI → record; copies 8 bytes; guards the copy + index update with
@@ -969,7 +986,10 @@ sites that already exist:
 | `menu_relayout` | recompute `[menu_set]`, `[menu_namep]` and the whole `menu_bar` from `[menu_win]`. Preserves all registers. |
 | `menu_win_set`  | in: BX = window ptr, SI = menu set ptr (0 = none) — stores `[bx+W_MENUS]` and relayouts if BX is the active window. The `OSAPI_MENU_SET` target (§20.3). Preserves every register **and the flags**: its intended call site sits between a package's `wm_create` and the `ret` that owes the loader that call's CF (§20.2). |
 | `menu_draw_bar` | draw the bar: `menu_check`, white field + black rule, every `menu_bar` cell's title (cell 0 = the logo glyph), the app-name label, then `menu_draw_clock`. Gfx lock held by caller. |
-| `menu_track`    | in: CX = mousedown x. Runs the whole interaction while the button is held (caller holds gfx lock): highlight title (xor), drop the menu (gfx_save under it to SAVE_SEG:0), track item highlight following `mouse_y`, on release restore save-under + unhighlight; **out AX = 0xFFFF if nothing was selected, else AH = bar cell index (0 = System), AL = item index within that cell**. Item cells are 16px tall, menu width = widest item + 16px padding. |
+| `menu_track`    | in: CX = mousedown x. Runs the whole interaction while the button is held (caller holds gfx lock): highlight title (xor), drop the menu (gfx_save under it to SAVE_SEG:0), track item highlight following `mouse_y`, on release restore save-under + unhighlight; **out AX = 0xFFFF if nothing was selected, else AH = bar cell index (0 = System), AL = item index within that cell**. Item cells are 16px tall, menu width = widest item + 16px padding. Only the bar-specific half is its own: the cell find, `menu_title_xor` and the (cell, item) pack. The drop itself is `menu_drop` (§12.4). |
+| `menu_drop`     | the tracker, anchored by variables so it serves both the bar and a context menu (§12.4). |
+| `menu_popup`    | drop a menu anywhere on screen under the right button (§12.4). |
+| `menu_widest`   | in: BX = array of near item-string ptrs, CX = count. Out: AX = the widest `font_width` over them, 0 when CX = 0. Parameterized by array rather than by bar cell precisely so `menu_popup` can size a menu that has no bar cell. |
 
 `menu_track` polls `mouse_btn`/`mouse_x`/`mouse_y` directly (the ISR keeps
 them fresh; cursor stays hidden during tracking since the gfx lock is held —
@@ -1150,6 +1170,63 @@ file-manager menus. Nothing else in the kernel points at either set; every
 other built-in kind leaves `W_MENUS` at 0 and shows
 its `I_NAME` with no menus of its own.
 
+### 12.4 Context menus — `menu_drop` and `menu_popup`
+
+A menu dropped from the bar and a menu popped up under the pointer differ
+in exactly three things: where the rect is, which `mouse_btn` bit ends it,
+and where the item array comes from. Everything else — the save-under, the
+white fill and black frame, the 16px item cells, the XOR highlight that
+follows `mouse_y`, the `task_yield` in the poll loop, the restore — is the
+same code and, more to the point, the same §32 back-buffer discipline.
+**Two copies of that discipline would drift**, so there is one:
+`menu_track` was split, and `menu_drop` is the half both callers share.
+
+```nasm
+MENU_POPMAX equ 16              ; items a popup may have (rect must fit)
+
+; menu_drop  in:  [menu_x1] [menu_x2] [menu_y1] [menu_y2]  the menu rect
+;                 [menu_cnt]   item count
+;                 [menu_iptr]  array of near ptrs to NUL item strings
+;                 [menu_btn]   the mouse_btn bit mask that keeps it open
+;                 gfx lock held by the caller
+;            out: AX = item index, or 0xFFFF if released outside
+;            clobbers: nothing else
+```
+
+`menu_drop` is the body of the old `menu_track` from the save-under to the
+restore, with three literals lifted into variables: `MBAR_H` became
+`[menu_y1]`, `test byte [mouse_btn], 1` became a test against `[menu_btn]`,
+and the item array is read from `[menu_iptr]` instead of the bar cell.
+`menu_hover` and `menu_item_xor` follow — both derive the first cell's top
+row from `[menu_y1] + 1` now rather than `MBAR_H + 1`. `menu_track` keeps
+the bar-specific half: find the cell under the mousedown x, `menu_title_xor`,
+set the rect from `MB_XL`/`MBAR_H`, `[menu_btn]` = 1, call `menu_drop`,
+un-highlight, and pack (cell, item).
+
+```nasm
+; menu_popup in:  CX = anchor x, DX = anchor y (absolute screen)
+;                 BX = array of near ptrs to NUL item strings
+;                 AX = item count (clamped to MENU_POPMAX; 0 = nothing)
+;                 gfx lock held by the caller
+;            out: CF = 1 nothing was chosen; CF = 0 and AL = item index
+;            clobbers: AX; everything else preserved
+```
+
+The rect is `menu_widest + 16` wide and `count·16 + 2` tall — the same
+arithmetic the bar uses — anchored at the pointer and then **shifted, never
+clipped**: right overflow moves x1 left (floor 0), bottom overflow moves y1
+up (floor `MBAR_H`). Clipping would cut items in half and leave the ones
+below unreachable; shifting is what a Mac does, and it is the reason a
+right-click in the bottom-right corner is as usable as one in the middle.
+A popup MAY sit over the dock strip (§30) — the save-under puts it back.
+`[menu_btn]` = 2, so it lives exactly as long as the right button is held.
+
+Only one menu can be open at a time — both trackers run on the UI task
+under the gfx lock and both are driven by a held button — so both use
+`SAVE_SEG:0` for the save-under and no allocator appears. The worst-case
+save is a `MENU_POPMAX`-item popup at the widest string: 4 planes × 258
+rows × ~21 bytes ≈ 21KB against the 48KB `SAVE_SEG` heap (§2.3).
+
 ## 13. ui.inc — the UI task (task 0)
 
 Loop forever:
@@ -1217,6 +1294,35 @@ Loop forever:
      free; the bar swap happens before `desk_click` so that a
      double-click that opens the Disk window (§26) still ends with
      whatever `wm_front` activates.
+
+   On **EVT_RDOWN** at (x,y) → `ui_rdown`, which is deliberately much
+   narrower than the ladder above and shares none of it:
+   - **`[ui_click_t]` is NOT stamped.** Binding. The double-click
+     detectors of §22/§26 compare a stored click tick against it, so a
+     right-press that stamped it would let a right-click followed within
+     9 ticks by a left click on the same row read as a double-click and
+     launch a package the user never opened. For the same reason
+     `fm_rclick` moves `FS_SEL` without touching `FS_CLKT` (§22).
+   - y < MBAR_H (and no fullscreen window) → **nothing**. The bar has no
+     right-button behaviour, and neither does the clock cell.
+   - `wm_hit` reports no window → **nothing**. `dock_click` is never
+     reached from here: it toggles minimize, and a right-press must not
+     do that. Nor is `desk_click`.
+   - a window that is not frontmost → raise it (`wm_front` under the
+     lock) and stop. A right-click brings a window forward but opens
+     nothing: the popup always belongs to the window you can see.
+   - the frontmost window, region 0 (content), with `W_MENUS` =
+     `fm_menus` → gfx_lock, `fm_rclick` then `fm_rcmd` (§22), gfx_unlock.
+     Any other window ignores the press. There is no `W_ONCTX` field and
+     no API slot: a package's window keeps its bar menus and nothing
+     else, and no shipped `.o88` changes.
+
+   Billing follows §12.2's split exactly. `fm_rclick` — the row select and
+   the whole tracking loop — is **unbilled**, like `menu_track`: the time
+   a user spends holding the button is nobody's CPU cost, and charging it
+   would make one long press dominate the Task Manager's row. `fm_rcmd`,
+   the command that follows, gets the `W_ONCLICK` treatment verbatim:
+   `inst_win_owner`, `snd_disp_set`, `task_cycles`/`inst_charge` (§8.1).
 3. If `[inst_launch]` is non-zero (§29): AX = [inst_launch] − 1, zero
    `[inst_launch]`, call `app_launch` with AL = kind. Then if
    `[ld_pending]` is non-zero (§21): AX = [ld_pending] − 1, zero
@@ -3063,6 +3169,54 @@ saying which column of that table it is in.
 
 Up One Folder at the root is a no-op rather than an error; there is nothing
 above the root and nothing useful to say about it.
+
+### The context menu — `fm_rclick` and `fm_rcmd`
+
+A right-press inside a file-manager window's content pops a menu at the
+pointer (§12.4). This is **not a convenience**. Under `WF_FULL` (§11.2) the
+UI ladder routes rows 0..19 to `wm_hit` and the bar is neither drawn nor
+clickable, so a fullscreen file-manager window has no menu bar at all: the
+context menu and the keyboard are its entire command surface. That is also
+why the in-window Refresh and view-toggle buttons stay — a one-button
+machine queues no `EVT_RDOWN` at all and must still be able to work.
+
+`fm_rclick` (in CX/DX = absolute press point, SI = window; gfx lock held;
+out CF = 1 nothing chosen) does, in order: publish the window (`fm_vp_set`),
+`fm_edit_end` — a right-click abandons a half-typed name exactly as a left
+one does — `wm_content` + `fm_layout` + **`fm_hit`**, then
+
+- **on an entry**: `FS_SEL` = that index and repaint, so the row the menu
+  is about is visibly the row under the pointer. `FS_CLKT` is deliberately
+  **not** stamped (§13). Descriptor = `fm_ctx_fold` for a §19 type-2 entry,
+  `fm_ctx_file` for anything else.
+- **off an entry**: clear `FS_SEL`, repaint, descriptor = `fm_ctx_dir`.
+
+then `menu_popup`, and it latches the chosen command in `[fm_rcmdid]`.
+`fm_rcmd` runs that id through the **same `fm_jmp` table the bar uses** and
+repaints — so every command has exactly one implementation and one
+lock-side answer, and the table's per-entry comments cover both callers.
+`ui_rdown` calls the two separately because only the second is billed
+(§13).
+
+| descriptor | when | items |
+|------------|------|-------|
+| `fm_ctx_file` | the row is a file | Open · Rename… · Delete |
+| `fm_ctx_fold` | the row is a folder | Open · Open in New Window · Rename… · Delete |
+| `fm_ctx_dir`  | empty space, the header band, below the last row | New Folder… · Refresh · Up One Folder · Root Folder · Drive A: · Drive B: · as List · as Icons |
+
+A descriptor is three words in `.text` — the item-string array, a parallel
+array of `FMC_*` bytes, and the count — and is **immutable**: several
+windows share one, so nothing per-window may live in it. There is no
+disabled-item mask; a command that has nothing to do (Up One Folder at the
+root, Rename with the disk gone) is the same no-op it is from the bar, and
+one rule beats two.
+
+**`fm_hit`** (in CX = content-relative y, DX = content-relative x, after
+`fm_layout`; out CF = 0 and AX = directory index, CF = 1 = not on an entry)
+is `fm_onclick`'s row-area mapping, extracted so the click handler and the
+context menu cannot disagree about which row a point is in — the same
+argument `fm_layout` already won for the painter and the hit-tester. It
+handles both views, including the icon grid's column rejection.
 
 ### Naming and confirming — the status-line edit mode
 

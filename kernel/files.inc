@@ -49,6 +49,14 @@
 ; POSTED (inst_launch_post / ui_post_cmd) instead of called: see the jump
 ; table's per-entry comments, and SPEC.md 22 for the binding list.
 ;
+; A RIGHT-press in the content pops a context menu at the pointer instead
+; (fm_rclick, SPEC.md 12.4). Three static descriptors - file row, folder
+; row, empty space - feed the SAME FMC_* ids through the SAME fm_jmp table,
+; so no command has a second implementation and none can drift into
+; disagreeing with itself about which side of the lock it is on. That
+; matters most where there is no bar at all: a WF_FULL window (SPEC.md
+; 11.2) has no menu bar, and the popup plus the keyboard are all it has.
+;
 ; The three commands that need an answer - New Folder..., Rename... and
 ; Delete - ask for it in the status line rather than in a dialog (there is
 ; no dialog kind and no focus concept): FS_EDIT turns W_ONKEY into an input
@@ -1222,42 +1230,11 @@ fm_onclick:
 
     ; --- the row area ---
 .rows:
-    mov di, dx                  ; DI = content-relative x
-    mov ax, cx
-    sub ax, FM_ROW_Y0           ; rebase y to row 0
-    js .clear                   ; header band clears the selection
-    mov cx, FM_ROW_H
-    cmp byte [fm_lview], 0
-    je .rowdiv
-    mov cx, FMI_CELL_H
-.rowdiv:
-    xor dx, dx
-    div cx                      ; AX = visible row
-    cmp ax, [fm_fit]
-    jae .clear                  ; below the row area
-    cmp byte [fm_lview], 0
-    je .listidx
-    push ax                     ; icon view: column from x
-    mov ax, di
-    mov cx, FMI_CELL_W
-    xor dx, dx
-    div cx
-    mov di, ax                  ; DI = column
-    pop ax
-    cmp di, [fm_cols]
-    jae .clear                  ; right of the last column
-    add ax, [fm_lscr]
-    mul word [fm_cols]
-    add ax, di                  ; AX = directory index
-    jmp .chk
-.listidx:
-    add ax, [fm_lscr]           ; AX = directory index
-.chk:
-    cmp ax, [fm_lnf]
-    jae .clear                  ; past THIS window's listing
+    call fm_hit                 ; AX = directory index, CF = 1 = not a row
+    jc .clear
 
-    mov bx, [fm_vp]             ; BX = the state block from here on: DI is
-                                ; the icon-view column and AX the index
+    mov bx, [fm_vp]             ; BX = the state block from here on, AX the
+                                ; directory index
     cmp ax, [bx+FS_SEL]         ; second click on the selected entry?
     jne .select
     mov dx, [ui_click_t]        ; click birth tick (EV_C), not [ticks]:
@@ -1288,6 +1265,61 @@ fm_onclick:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_hit - which directory entry is a content point in? (SPEC.md 22)
+; in:  CX = content-relative y, DX = content-relative x; fm_layout already
+;      run for the acting window
+; out: CF = 0 and AX = directory index; CF = 1 = not on an entry (the header
+;      band, past the last shown row, or - in icon view - right of the last
+;      column)
+; clobbers: AX, CX, DX, DI
+;
+; Extracted from fm_onclick so the left-click ladder and the context menu
+; (SPEC.md 12.4/22) cannot disagree about which row a point is in - the same
+; "computed in one place" argument fm_layout already won for the painter and
+; the hit-tester. It reads the layout mirrors, so it is only meaningful
+; between an fm_layout and the next one.
+; -----------------------------------------------------------------------------
+fm_hit:
+    mov di, dx                  ; DI = content-relative x
+    mov ax, cx
+    sub ax, FM_ROW_Y0           ; rebase y to row 0
+    js .none                    ; the header band is not a row
+    mov cx, FM_ROW_H
+    cmp byte [fm_lview], 0
+    je .rowdiv
+    mov cx, FMI_CELL_H
+.rowdiv:
+    xor dx, dx
+    div cx                      ; AX = visible row
+    cmp ax, [fm_fit]
+    jae .none                   ; below the row area
+    cmp byte [fm_lview], 0
+    je .listidx
+    push ax                     ; icon view: column from x
+    mov ax, di
+    mov cx, FMI_CELL_W
+    xor dx, dx
+    div cx
+    mov di, ax                  ; DI = column
+    pop ax
+    cmp di, [fm_cols]
+    jae .none                   ; right of the last column
+    add ax, [fm_lscr]
+    mul word [fm_cols]
+    add ax, di                  ; AX = directory index
+    jmp short .chk
+.listidx:
+    add ax, [fm_lscr]           ; AX = directory index
+.chk:
+    cmp ax, [fm_lnf]
+    jae .none                   ; past THIS window's listing
+    clc
+    ret
+.none:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1693,13 +1725,7 @@ fm_oncmd:
     mov bl, [fm_menu_base+bx]   ; the menu's first id...
     add bl, al                  ; ...plus the item (menu_hover bounds AL by
                                 ; the menu's own item count, SPEC.md 12)
-    cmp bx, FMC_COUNT
-    jae .out
-    shl bx, 1
-    call [fm_jmp+bx]            ; CALL r/m16 near-indirect: 8086-legal
-
-    mov si, [fm_cmdwin]
-    call fm_repaint
+    call fm_docmd
 .out:
     pop di
     pop si
@@ -1709,9 +1735,35 @@ fm_oncmd:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; fm_docmd - run one FMC_* against the published window and repaint it
+; in:  BX = FMC_*, [fm_cmdwin] = the acting window, [fm_vp] published.
+;      gfx lock HELD, on the UI task.
+; out: nothing; clobbers AX, BX, CX, DX, SI, DI (both callers saved them)
+;
+; The bar (fm_oncmd) and the context menu (fm_rcmd) both land here, which is
+; the entire point of the single FMC_* id space: every command has exactly
+; one implementation and exactly one answer to "which side of the gfx lock
+; is it on", so the per-entry comments in fm_jmp cover both surfaces at once.
+; The closing repaint is not optional - the kernel does not repaint after an
+; AM_ONCMD returns (SPEC.md 12.2), and a popup's command has no repaint of
+; its own either.
+; -----------------------------------------------------------------------------
+fm_docmd:
+    cmp bx, FMC_COUNT
+    jae .out
+    shl bx, 1
+    call [fm_jmp+bx]            ; CALL r/m16 near-indirect: 8086-legal
+    mov si, [fm_cmdwin]
+    call fm_repaint
+.out:
+    ret
+
 ; --- the command bodies ------------------------------------------------------
-; Each is near-called by fm_oncmd with the gfx lock held, may clobber
-; anything (fm_oncmd saved it all), and draws nothing: fm_oncmd repaints.
+; Each is near-called by fm_docmd with the gfx lock held, may clobber
+; anything (both of its callers saved it all), and draws nothing: fm_docmd
+; repaints. A body may not assume WHICH surface picked it - the bar and the
+; context menu (SPEC.md 12.4) reach every one of them.
 
 fm_c_open:                      ; File > Open - the selection, if any
     mov di, [fm_vp]
@@ -1867,6 +1919,177 @@ fm_c_setview:
     mov [di+FS_VIEW], al
     mov word [di+FS_SCRL], 0    ; row heights changed: the old first row is
     ret                         ; not this view's first row
+
+; =============================================================================
+; The context menu (SPEC.md 12.4/22)
+;
+; A right-press in a file-manager window's content pops a menu at the
+; pointer. This is not a convenience: under WF_FULL (SPEC.md 11.2) the ui
+; ladder routes rows 0..19 to wm_hit and the bar is neither drawn nor
+; clickable, so a FULLSCREEN file-manager window has no menu bar at all and
+; the context menu plus the keyboard are its entire command surface. It is
+; also why the in-window Refresh and view-toggle buttons stay: a one-button
+; machine queues no EVT_RDOWN at all and must still be able to work.
+;
+; Three descriptors, chosen by what is under the pointer, all dispatching
+; the same FMC_* ids the bar does through the same fm_jmp table - so no
+; command gains a second implementation, and no command can drift into
+; disagreeing with itself about which side of the gfx lock it is on.
+; =============================================================================
+
+MC_ITEMS    equ 0               ; word: array of near ptrs to NUL item strings
+MC_CMDS     equ 2               ; word: parallel array of FMC_* bytes
+MC_NITEM    equ 4               ; word: item count
+
+; A descriptor is IMMUTABLE .text: four windows share these three, so
+; nothing per-window (a selection, a disabled mask) may live in one. There
+; is no disabled-item mask at all - a command with nothing to do (Up One
+; Folder at the root, Rename with no disk) is the same silent no-op it
+; already is from the bar, and one rule beats two.
+fm_ctx_file:                    ; the row under the pointer is a file
+    dw fm_cxi_file, fm_cxc_file, 3
+fm_ctx_fold:                    ; ...or a folder, which can also be opened
+    dw fm_cxi_fold, fm_cxc_fold, 4
+fm_ctx_dir:                     ; empty space: the folder's own commands
+    dw fm_cxi_dir,  fm_cxc_dir,  8
+
+fm_cxi_file:
+    dw fm_s_open, fm_s_rename, fm_s_delete
+fm_cxc_file:
+    db FMC_OPEN, FMC_RENAME, FMC_DELETE
+
+fm_cxi_fold:
+    dw fm_s_open, fm_s_opennew, fm_s_rename, fm_s_delete
+fm_cxc_fold:
+    db FMC_OPEN, FMC_OPENNEW, FMC_RENAME, FMC_DELETE
+
+fm_cxi_dir:
+    dw fm_s_mkdir, fm_s_refr, fm_s_up, fm_s_rootf
+    dw fm_s_drva, fm_s_drvb, fm_s_aslist, fm_s_asicon
+fm_cxc_dir:
+    db FMC_MKDIR, FMC_REFRESH, FMC_UP, FMC_ROOT
+    db FMC_DRVA, FMC_DRVB, FMC_LIST, FMC_ICONS
+
+; -----------------------------------------------------------------------------
+; fm_rclick - select what the right-press is about, then run the popup
+; in:  CX = x, DX = y (absolute), SI = window ptr; gfx lock HELD, UI task
+; out: CF = 0 and a command latched in [fm_rcmdid]; CF = 1 nothing chosen
+; clobbers: nothing else (flags aside)
+;
+; Split from fm_rcmd for one reason: only the command is billed. The time a
+; user spends holding the button is nobody's CPU cost, and charging the
+; tracking loop to the instance would let one long press dominate its Task
+; Manager row - which is exactly why menu_track is unbilled too (SPEC 13).
+;
+; FS_SEL moves so the row the menu is about is visibly the row under the
+; pointer. FS_CLKT does NOT: it is the double-click detector's other half,
+; and stamping it here would make a right-click followed within FM_DBLCLK
+; ticks by a left click on the same row read as a double-click and launch a
+; package the user never opened (SPEC.md 13).
+; -----------------------------------------------------------------------------
+fm_rclick:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov [fm_cmdwin], si         ; fm_rcmd acts on this window; fm_docmd's
+    mov bx, si                  ; repaint needs it too
+    call fm_vp_set
+
+    call fm_edit_end            ; a right-click abandons a half-typed name
+                                ; exactly as a left one does (SPEC.md 22)
+
+    push cx                     ; the popup anchors on the ABSOLUTE press
+    push dx                     ; point; everything between here and the pop
+                                ; works in content coordinates
+
+    mov bx, si                  ; the same content-relative transform
+    push cx                     ; fm_onclick makes: save press x...
+    mov cx, dx                  ; CX = press y
+    call wm_content             ; AX = content left, DX = content top
+    sub cx, dx                  ; CX = content-relative y
+    pop dx
+    sub dx, ax                  ; DX = content-relative x
+    call fm_layout              ; BX = window ptr; publishes the mirrors
+                                ; fm_hit reads
+
+    call fm_hit                 ; AX = directory index, CF = 1 = not a row
+    mov di, [fm_vp]
+    jc .empty
+
+    mov [di+FS_SEL], ax         ; the row under the pointer, selected
+    mov di, fm_ctx_file
+    call fmv_get_dir            ; SI -> the staged entry (SPEC.md 19)
+    cmp word [si+16], 2
+    jne .have
+    mov di, fm_ctx_fold         ; a folder has somewhere to open INTO
+    jmp short .have
+.empty:
+    mov word [di+FS_SEL], 0xFFFF
+    mov di, fm_ctx_dir
+.have:
+    push di                     ; fm_draw_core is the 400-line painter and
+                                ; uses every register there is - the chosen
+                                ; descriptor does not survive it
+    mov si, [fm_cmdwin]
+    call fm_repaint             ; show the new selection BEFORE the popup -
+                                ; the save-under would otherwise capture the
+                                ; old one and put it straight back
+    pop di
+    pop dx                      ; the absolute press point again
+    pop cx
+
+    mov bx, [di+MC_ITEMS]
+    mov ax, [di+MC_NITEM]
+    call menu_popup             ; CF = 1 nothing chosen; CF = 0 and AL = the
+    jc .out                     ; item index (DI, the descriptor, survives)
+
+    xor ah, ah                  ; AL is bounded by MC_NITEM (menu_hover), so
+    mov bx, [di+MC_CMDS]        ; the parallel command array is in range
+    add bx, ax
+    mov al, [bx]
+    mov [fm_rcmdid], al
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_rcmd - run the command fm_rclick latched
+; in:  nothing ([fm_rcmdid], [fm_cmdwin] and [fm_vp] set by fm_rclick);
+;      gfx lock HELD, UI task, billed to the owning instance
+; out: nothing (all registers preserved)
+;
+; The billed half of the pair. It goes through fm_docmd, so a command picked
+; from the popup is byte-for-byte the command picked from the bar - same
+; body, same deferral through inst_launch_post / ui_post_cmd for the ones
+; that need the lock this handler is standing on.
+; -----------------------------------------------------------------------------
+fm_rcmd:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bl, [fm_rcmdid]
+    xor bh, bh
+    call fm_docmd
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; =============================================================================
 ; The status-line name editor (SPEC.md 22)
@@ -2796,7 +3019,12 @@ fm_snam:     resb 17            ; the seeded folder name, COPIED (fm_name is
 fm_full:    resb 1              ; 1 = the next fm_repaint owes the frame too.
                                 ; Module-global on purpose: it is raised and
                                 ; consumed inside one held lock, by one window
-fm_cmdwin:  resw 1              ; fm_oncmd scratch: the acting window ptr
+fm_cmdwin:  resw 1              ; fm_oncmd/fm_rclick scratch: the acting
+                                ; window ptr, held across the dispatch
+fm_rcmdid:  resb 1              ; the FMC_* a context menu chose, handed from
+                                ; fm_rclick to fm_rcmd. Module-global for the
+                                ; same reason fm_cmdwin is: one UI task, one
+                                ; popup at a time (SPEC.md 12.4)
 
 ; The name being typed is ONE buffer for all four windows: only the front
 ; window receives W_ONKEY (SPEC.md 13), so only one editor can ever be live,

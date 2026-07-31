@@ -21,6 +21,12 @@
 ; application's own menu (SPEC.md 12.2) is a window callback reached
 ; through the bar, so its handler runs under the gfx lock and is billed to
 ; the owning instance exactly like W_ONCLICK.
+; A RIGHT mouse-down takes none of that ladder: ui_rdown swallows the bar,
+; the dock and the desktop, raises a background window without opening
+; anything, and pops a context menu (SPEC.md 12.4) only on the frontmost
+; file-manager window's content. It never stamps [ui_click_t], which is what
+; keeps a right-click from composing with the next left click into a
+; double-click.
 ; Mouse-downs on windows also hand the clicked window the menu bar
 ; (SPEC.md 12 - the raise paths repaint anyway, but a click on the window
 ; that is already frontmost never reaches wm_front), and QUIT (close box ->
@@ -79,7 +85,10 @@ ui_task:
     mov di, ui_ev
     call evq_pop
     jc .yield                   ; queue empty
-    cmp word [ui_ev + EV_TYPE], EVT_MDOWN
+    mov ax, [ui_ev + EV_TYPE]
+    cmp ax, EVT_RDOWN           ; the right button goes its own, much
+    je .rdown                   ; narrower way (SPEC.md 12.4/13)
+    cmp ax, EVT_MDOWN
     jne .yield                  ; only mouse-downs matter here
     mov cx, [ui_ev + EV_A]      ; CX = click x
     mov dx, [ui_ev + EV_B]      ; DX = click y
@@ -212,6 +221,10 @@ ui_task:
     call gfx_unlock
 .drag:
     call ui_drag                ; in: BX = window, CX/DX = mousedown x/y
+    jmp short .yield
+
+.rdown:
+    call ui_rdown               ; in: [ui_ev]; the context-menu path (12.4)
 
     ; --- 3. deferred work (SPEC.md 13/21/29): OUTSIDE the gfx lock ------------
 .yield:
@@ -278,6 +291,87 @@ ui_task:
 .idle:
     call task_yield
     jmp .loop
+
+; -----------------------------------------------------------------------------
+; ui_rdown - act on one EVT_RDOWN: the context-menu path (SPEC.md 12.4/13)
+; in:  [ui_ev] holds the record
+; out: nothing
+; clobbers: AX, BX, CX, DX, SI, DI (internal helper of the UI task)
+;
+; Deliberately far narrower than the mouse-down ladder above, and it shares
+; none of it. Three things it must NOT do, each one a bug waiting to happen:
+;
+;   - stamp [ui_click_t]. Binding. The double-click detectors of SPEC.md
+;     22/26 compare a stored tick against that word, so a right-press that
+;     stamped it would let a right-click followed within 9 ticks by a left
+;     click on the same row read as a double-click and launch a package the
+;     user never opened. (fm_rclick keeps the other half of that rule: it
+;     moves FS_SEL without touching FS_CLKT.)
+;   - reach dock_click. A dock tile toggles minimize; a right-press must
+;     not. The bare desktop and desk_click are out for the same reason -
+;     there is nothing here a right button should mean.
+;   - open anything on a background window. It raises it and stops: the
+;     popup always belongs to the window you can already see.
+;
+; The bar is skipped whole, clock cell included. Only a file-manager window
+; answers - the ones carrying fm_menus - so no package's window changes
+; behaviour and no shipped .o88 needs rebuilding.
+; -----------------------------------------------------------------------------
+ui_rdown:
+    mov cx, [ui_ev + EV_A]      ; CX = press x, DX = press y. NO [ui_click_t]
+    mov dx, [ui_ev + EV_B]      ; store - see above.
+
+    cmp word [wm_fs], 0         ; a fullscreen window (SPEC.md 11.2) owns the
+    jne .hit                    ; bar's rows like any other point
+    cmp dx, MBAR_H
+    jb .ret                     ; the menu bar has no right-button behaviour
+.hit:
+    call wm_hit                 ; BX = window hit (0 = none), AL = region
+    or bx, bx
+    jz .ret                     ; desktop and dock: nothing at all
+
+    mov si, bx                  ; keep the hit window; wm_top returns in BX
+    call wm_top                 ; AL, the region, survives it
+    cmp bx, si
+    je .front
+    mov bx, si                  ; a background window: raise it and stop
+    call gfx_lock
+    call wm_front               ; activates it too, so the bar follows
+    call gfx_unlock
+    ret
+
+.front:
+    or al, al
+    jnz .ret                    ; title bar, close/minimize/grow box: the
+                                ; chrome has no context menu
+    cmp word [si + W_MENUS], fm_menus
+    jne .ret                    ; only Locator's file-manager windows
+
+    call gfx_lock
+    call fm_rclick              ; select + track the popup: UNBILLED, exactly
+    jc .ctx_done                ; like menu_track (SPEC.md 13) - the dwell
+                                ; time of a held button is nobody's CPU cost
+
+    mov bx, si                  ; the command itself gets the W_ONCLICK
+    call inst_win_owner         ; treatment verbatim (SPEC.md 8.1/12.2)
+    push di
+    push word [snd_inst]        ; stamp the dispatched instance for sound
+    call snd_disp_set           ; grants made inside it (SPEC.md 34.3)
+    call task_cycles            ; DX:AX = start stamp
+    push dx                     ; start stamp: hi, then lo
+    push ax
+    call fm_rcmd
+    pop ax
+    pop dx
+    pop word [snd_inst]         ; the outer dispatch's stamp, back
+    pop di
+    or di, di
+    jz .ctx_done
+    call inst_charge
+.ctx_done:
+    call gfx_unlock
+.ret:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; ui_drag - title-bar drag: XOR outline follows the mouse, window moves on
