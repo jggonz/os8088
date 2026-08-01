@@ -274,6 +274,7 @@ VIEW_SEG_KB   equ 16         ; what it adds to the Task Manager RAM figure (§28
 | `kernel/diskw.inc`  | the FAT write path (§18.4): name parsing, cluster allocation + free, FAT flush, directory entry create/update/delete, the five whole-file operations — prefix `dskw_`; the ONLY caller of `disk_write` |
 | `kernel/loader.inc` | package validation, pool allocation, per-instance load + relocate, launch (§21) |
 | `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22) |
+| `kernel/fdlg.inc`   | the Standard File dialog (§38): the kernel's Open/Save chooser, its modality gate and the completion callback — prefix `fdlg_` |
 | `kernel/icons.inc`  | 1-bit icon format, draw routine, built-in library (§25) |
 | `kernel/desk.inc`   | desktop drive icons: detect, paint, click/open (§26)    |
 | `kernel/dock.inc`   | bottom dock strip: one tile per running instance, minimize/restore/activate (§30) |
@@ -1265,10 +1266,17 @@ heap into `VIEW_SEG`.
 Loop forever:
 1. Poll keyboard: int 16h AH=01; if a key, fetch (AH=00) and near-call the
    front window's W_ONKEY (if any) under gfx_lock, billed to the window's
-   instance (§11 "callback billing").
+   instance (§11 "callback billing"). "Front window" is `wm_top` passed
+   through **`fdlg_top`** (§38.1), which substitutes an open file dialog:
+   while one is up it takes every key, and the window behind it takes none.
 2. `evq_pop`; on EVT_MDOWN at (x,y) — first store the event's EV_C into
    the public word `ui_click_t` (the click's birth tick; §22/§26 read it
-   during dispatch):
+   during dispatch), then call **`fdlg_grab`** and, on CF=1, drop the event
+   and yield: a Standard File dialog (§38.1) is up and everything outside
+   its frame is inert. This test sits ahead of every branch below —
+   fullscreen, the bar, the clock cell, `wm_hit` — because modality is not
+   a window property and a press on the menu bar must be swallowed as
+   firmly as a press on another window:
    - `[wm_fs]` non-zero (§11.2) → skip both menu-bar branches below and go
      straight to `wm_hit`: the bar is under the fullscreen surface, and
      the fullscreen window claims every point as content.
@@ -1328,8 +1336,10 @@ Loop forever:
      double-click that opens the Disk window (§26) still ends with
      whatever `wm_front` activates.
 
-   On **EVT_RDOWN** at (x,y) → `ui_rdown`, which is deliberately much
-   narrower than the ladder above and shares none of it:
+   On **EVT_RDOWN** at (x,y) → `fdlg_grab` first, on the same terms as the
+   left button (a modal dialog swallows the right button too — there is no
+   context menu it could usefully open), then `ui_rdown`, which is
+   deliberately much narrower than the ladder above and shares none of it:
    - **`[ui_click_t]` is NOT stamped.** Binding. The double-click
      detectors of §22/§26 compare a stored click tick against it, so a
      right-press that stamped it would let a right-click followed within
@@ -2705,7 +2715,8 @@ sits in between. The kernel.asm table-span assertion goes 34 × 4 → **39 ×
 ```
 
 **Menu slot (§12.2), 0x00AC.** One slot; the table-span assertion goes
-39 × 4 → **40 × 4**.
+39 × 4 → **40 × 4**.  **File-dialog slot (§38.5), 0x00B0**, adds the next
+one: 40 × 4 → **41 × 4**.
 
 ```
 0x00AC menu_win_set  in BX = win ptr, SI = app menu set ptr (0 = none).
@@ -3615,11 +3626,31 @@ package.
 NOTEPAD is where §18.4 becomes visible to a user, and the package-side
 proof that the file slots work from a plain window callback. Two keys, DOS
 Editor's: **F2 saves** (scan 3Ch), **F3 loads** (scan 3Dh); both arrive
-through the existing onkey with AL = 0. The file is `NOTES.TXT` in the root
-of the mounted data disk — a fixed name, because a package cannot prompt
-for one (there is no text-entry control in this OS, and inventing one is
-§22's job, not a note pad's). Every instance therefore shares the one file;
-the last save wins, deliberately and visibly.
+through the existing onkey with AL = 0.
+
+**The file used to be a fixed `NOTES.TXT`** — not because one note is
+enough, but because a package had no way to ask for a name. §38 removed
+that excuse, and NOTEPAD is the file dialog's first caller exactly as it was
+the file API's. Each instance now carries `np_name`, a 13-byte current
+document name seeded to `NOTES.TXT` at launch, and four File commands:
+
+| command | behaviour |
+|---------|-----------|
+| **New** | empties the buffer and resets the name to `NOTES.TXT` |
+| **Open…** | slot 0x00B0 in Open mode, default = the current name; the callback stores the chosen name and loads it |
+| **Save** (F2) | writes `np_name` — no dialog, the second and later saves of a document are silent |
+| **Save As…** | slot 0x00B0 in Save mode; the callback stores the chosen name and writes it |
+
+F3 is **Open…**, i.e. it now raises the dialog rather than re-reading a
+fixed file — the one behaviour change to an existing key, and the reason
+for it is that a load with no way to say *what* was never the useful half.
+Both dialog commands go through one completion proc, `np_ondlg` (AL = mode,
+SI = our window, DI = the name): it copies the name into `np_name`, runs
+`np_load` or `np_save`, and repaints its own content, which §38.5 requires
+and the kernel does not do for it.
+
+Instances no longer share one file, so the last-save-wins note is gone with
+it; two Note Pads on two documents are now the ordinary case.
 
 **Line endings are translated**, which is the point of writing a DOS
 filesystem at all: the buffer stores a bare 13 on Enter (§14), the file
@@ -3632,7 +3663,9 @@ truncation.
 
 **Feedback is a toast**: `np_msg` (a near pointer, 0 = none) is drawn by
 `np_paint` as a black-framed white box at the content's top-right — "Saved
-NOTES.TXT", "Loaded NOTES.TXT", "Truncated", or the `FERR_*` code mapped
+<name>", "Loaded <name>" (both composed into `np_tbuf` around the live
+`np_name`, since the name is no longer a constant), "Truncated", or the
+`FERR_*` code mapped
 through an eleven-entry table indexed by the code itself ("Done", "No
 disk", "Disk error", "Bad name", "Not found", "Name exists", "Disk full",
 "Dir full", "Protected", "Write protected", "Too big"). It is cleared by
@@ -3920,6 +3953,10 @@ KIND_TASKMGR equ 4
 KIND_CTRL    equ 5       ; Control Panel (§31)
 KIND_PKG     equ 0x80    ; bit 7: package instance
 ```
+
+The Standard File dialog (§38) is deliberately **not** here: it is a modal
+interaction the kernel runs on behalf of the front application, not an
+application, and §38 explains what that buys.
 
 ### 29.2 Concurrency rules (binding)
 
@@ -5553,3 +5590,279 @@ month−1 ×3 — the same data serves `clk_fmt` and `clk_fld_str`.
 BIOS date call does not return one and nothing displays it), and no
 re-reading of the RTC after boot — the PIT is the clock from then on, which
 is exactly how DOS behaves on the same hardware.
+
+## 38. fdlg.inc — the Standard File dialog
+
+The kernel's file chooser: **one** window that lists a directory and hands
+a chosen 8.3 name back to whichever application asked for it, in an **Open**
+form and a **Save** form. Label prefix `fdlg_`.
+
+It exists because §18.4 gave packages five file slots and no way to name a
+file: Note Pad's F2/F3 wrote a hard-coded `NOTES.TXT` (§27.1) not because
+one note is enough but because there was nothing to ask a filename with,
+and the Disk window (§22) can launch a package but cannot return a name to
+a caller. This is the missing half of the file API, and the kernel owns it
+for the same reason the kernel owns the menu bar: it is the one piece of UI
+every application needs to look identical.
+
+### 38.1 It is not an application (binding)
+
+The dialog is **not an instance** — no `KIND_*`, no `inst_tab` record, no
+kind-descriptor row, no dock tile, no Task Manager row. It is a bare window
+created with `wm_create` and destroyed with `wm_destroy`, owned by
+`fdlg.inc` and by nothing else, and `wm_owner` never names it.
+
+That is a deliberate reading of §29, not a shortcut around it. The instance
+table answers "what is running", and a modal dialog is not something that
+runs: it is a question the kernel asks on the front application's behalf and
+then forgets, the same species as a `menu_track` pull-down. Making it an
+instance would put a "Files" tile in the dock that cannot usefully be
+clicked, a row in the Task Manager for a thing with no CPU, a minimize box
+with nowhere to minimize *to*, and one more consumer of `INST_MAX` at the
+exact moment the user is trying to save their work.
+
+Three consequences follow, all wanted:
+
+- **No callback billing.** `inst_win_owner` returns 0 for an unowned
+  window, so the §11 dispatch sites skip `inst_charge` and the dialog's
+  paint/key/click time stays on the UI task — unbilled, exactly like
+  `menu_track` and `fm_rclick` (§12.4). Time the user spends deciding is
+  nobody's CPU cost.
+- **The close box is Cancel, for free.** `app_close_win` on an unowned
+  window degrades to a plain `wm_hide` (§29.4), and §38.2's gate check turns
+  a hidden dialog into a cancelled one on the next input. No close-path code
+  exists in this module at all.
+- **So is the minimize box**, by the same route and with the same result.
+  A modal dialog that could be minimized would strand the machine behind an
+  invisible modal; instead it simply cancels.
+
+### 38.2 Modality — the whole design rests on it (binding)
+
+`[fdlg_win]` non-zero means a dialog is on screen and the system is
+**input-modal to it**. Enforced at exactly two points in the UI ladder
+(§13), and nowhere else in the kernel:
+
+- `fdlg_grab` — called on every `EVT_MDOWN` and `EVT_RDOWN` before the
+  ladder branches. `CF=1` (swallow, with a `snd_beep`) for any press whose
+  point lies outside the dialog's window rect: the menu bar, the dock, the
+  desktop, and every other window are inert. A press **inside** the rect
+  returns `CF=0` and takes the ordinary ladder, so the dialog's title-bar
+  drag and content clicks work with no code of their own.
+- `fdlg_top` — called right after `wm_top` in the keyboard poll: it
+  substitutes the dialog for the frontmost window. Belt to `wm_hit`'s
+  braces (nothing can be raised above a dialog while `fdlg_grab` is
+  swallowing clicks), and it costs ten bytes to stop a keystroke from ever
+  reaching the window behind.
+
+**Self-validating (this is what makes §38.1 safe).** Both helpers begin at
+`fdlg_gate`, which clears `[fdlg_win]` — and destroys the window — the
+moment the gate names a record that is no longer *used and visible*. The
+`menu_check` discipline of §12.3, with teeth: a dialog hidden by any route
+whatsoever is a **cancelled** dialog, and no path can wedge the system
+behind a dead modal.
+
+A third call site, `fdlg_reap`, sits in the UI task's deferred section and
+runs the same collection **once per loop pass**. It is not part of
+modality — the two filters above are already correct without it — it is
+about latency: the close box and the minimize box only *hide* the window,
+and until the gate is collected `[menu_win]` still names a window nobody can
+see, so §12.3 reverts the bar to Locator and leaves it there until the user
+happens to click something. Reaping on the idle path makes the cancel, the
+bar and the released gate all land on the same tick. It costs three
+instructions when no dialog is up.
+
+**The payoff is §38.4.** Because nothing else is clickable, no other window
+can navigate the volume while a dialog is up, so the dialog needs **no
+listing cache of its own**: it reads the global mount snapshot directly.
+That is the exact opposite of the Disk window's rule (§22.1) and it holds
+for exactly this reason — remove modality and the dialog needs a fifth
+`VIEW_SEG` slot, which does not exist.
+
+### 38.3 Layout — fixed size, so constants and not a `fm_layout`
+
+`WF_SIZABLE` is deliberately **not** set: a dialog is a question, not a
+workspace, and a fixed frame turns §22's whole live-layout apparatus into
+eleven `equ`s. Window 300×170 at (90, 60); content 298×151 after the border
+and `TITLE_H`. All values below are content-relative:
+
+```
+(6,6)     header: 'A:'/'B:' + two spaces + the folder's caption
+(6,20)    list frame .. (213,120)   file list, 14px scroll bar inside its
+                                    right edge (x 200..213), 6 rows of 16px
+                                    starting at y 22, names at x 10,
+                                    right-aligned size (or 'folder') ending
+                                    at x 196
+(224,20)  [ Open ] / [ Save ]       62x14 buttons, the right column;
+(224,40)  [ Cancel ]                Open/Save carries a second frame 2px
+(224,60)  [ Drive ]                 out — the default-button convention
+(6,126)   'Save as:' + name box (72,124)..(213,140), text at x 76, caret
+          after it; in Open mode the same box shows the selected name
+          without a caret
+```
+
+The selected row is an XOR bar across the list interior, exactly as §22
+draws its own (`gfx_xor_fill` under the held lock).
+
+### 38.4 The listing and navigation
+
+The dialog lists **the mounted volume's current directory** — `disk_dir` /
+`disk_nfiles`, the §19 mount snapshot, read one staged entry at a time
+through `dsk_get_dir`. It never touches `VIEW_SEG` and never copies the
+listing anywhere (§38.2).
+
+**Display rows** are the directory entries, with one synthetic row `..`
+prepended when `[dsk_cwd]` ≠ 0. So `fdlg_rows` = `disk_nfiles` + (cwd ≠ 0),
+and display row *r* maps to directory index *r* − (cwd ≠ 0). The `..` row is
+the only navigation affordance the list carries; `.` and `..` are filtered
+out of the listing itself by §19's species rules and are not re-surfaced.
+
+**Acting on a row** (double-click, or Enter, or the Open/Save button):
+
+- `..` → `dsk_dotdot` then `dsk_chdir` — §19.2's walk, no path stack.
+- type 2 (subdirectory) → `dsk_chdir` into it.
+- type 0/1 (a file) → **Open**: that is the answer, commit it. **Save**:
+  copy the name into the edit field, do not commit — replacing a file is a
+  thing the user must still press Save for.
+
+Navigation runs `disk_mount` under the held lock, like §22's Refresh, and
+resets selection and scroll. A mount that fails leaves the row area empty
+and the header saying `no disk`; there is no error line, because every
+failure reachable here is that one and the empty list already says it.
+
+**Choosing sets the current directory (binding).** The dialog navigates
+with `dsk_chdir`, so by the time the callback runs, `[disk_drive]` and
+`[dsk_cwd]` **are** the folder the user chose in — and that is where §19.2
+resolves the file slots. A chooser that returned a bare name without moving
+the volume would be handing the caller a name it could not open. The Disk
+windows are unaffected: they re-sync from their own caches before every
+action (§22.1), which is what that machinery is for.
+
+### 38.5 State (`.bss`, singleton)
+
+```nasm
+fdlg_win   resw 1   ; the live dialog window, 0 = none — ALSO the modal gate
+fdlg_mode  resb 1   ; 0 = Open, 1 = Save
+fdlg_rqwin resw 1   ; requester: window ptr...
+fdlg_rqcb  resw 1   ; ...near completion proc...
+fdlg_rqrec resw 1   ; ...instance record...
+fdlg_rqsp  resw 1   ; ...and its I_SPTR, the staleness triple (§38.6)
+fdlg_sel   resw 1   ; selected DISPLAY row, 0FFFFh = none
+fdlg_scrl  resw 1   ; first visible row
+fdlg_clkt  resw 1   ; birth tick of the last click (double-click window)
+fdlg_name  resb 16  ; the name: default in, chosen out, edited in Save mode
+fdlg_nlen  resb 1   ; its length, 0..12
+fdlg_hdr   resb 28  ; header line scratch
+fdlg_row   resb 20  ; one row's name, staged out of dsk_ent
+fdlg_num   resb 8   ; the size column
+```
+
+`fdlg_name` is the one buffer the caller's default arrives in and the
+chosen name leaves in; it is valid to the callback for the duration of the
+call and no longer.
+
+**Name editing** (Save mode only) reuses §22's rules verbatim so that what
+the box shows is exactly what will be stored: every character goes through
+`dskw_char` (upper-cases, rejects anything outside the FAT set), a `.` is
+allowed once and never first, and the budget is 12 — 8 + `.` + 3. Enter is
+Save, Esc is Cancel. In **Open** mode the keyboard drives the list instead
+(Up/Down/PgUp/PgDn, Enter, Esc); there is no field to type in, which is
+what the Standard File dialog this is modelled on did too.
+
+### 38.6 The API slot 0x00B0 and the completion callback
+
+The table-span assertion in `kernel.asm` goes 40 × 4 → **41 × 4**;
+`apps/os88api.inc` mirrors the equ (§20.5).
+
+```
+0x00B0 fdlg_open   in AL = 0 Open / 1 Save, BX = requester window ptr,
+                   DI = completion proc (near, in the caller's image),
+                   SI = default name (NUL, <= 12) or 0 for none.
+                   out CF=0 accepted — the dialog is ON SCREEN when this
+                   returns; CF=1 refused (one is already up, BX is not a
+                   live owned window, or the window table is full).
+                   Preserves every register.
+```
+
+**The caller must hold the gfx lock** — which every legal caller does,
+because the only legal callers are a window callback and an `AM_ONCMD`
+handler (§12.2), the §20.3 UI-task rule. That is what lets `fdlg_open`
+`wm_create` + `wm_show` **inline** and put the dialog on screen before it
+returns: no `inst_launch_post`, no deferral, no next-UI-pass delay. The
+handler that called it simply finishes and unlocks with the dialog already
+drawn.
+
+**The completion callback (binding).** Near-called on the UI task with the
+gfx lock **held**, *after* the dialog window has been destroyed:
+
+```
+in   AL = mode (0 Open, 1 Save)
+     SI = the requester window ptr it registered
+     DI = the chosen name, NUL-terminated, <= 12 chars (fdlg_name)
+out  nothing; no register need be preserved
+```
+
+Same rules as `AM_ONCMD` (§12.2): it may draw, it may call the file slots,
+it must **not** take the lock, and it **must repaint itself** — the kernel
+does not repaint after it returns. That is precisely why the order is
+**teardown, then callback** and never the reverse: `wm_destroy`'s repaint
+has already restored everything the dialog covered, so the callback paints
+onto a clean window instead of over a dialog that is still on screen.
+
+It is legal for a callback to open another dialog; the gate is clear by
+then and the whole sequence is one lock hold deeper, which nothing in this
+module minds.
+
+**Staleness (binding).** The request records the requester's instance
+record, its `I_WIN` and its `I_SPTR`. The callback is skipped, silently, if
+any of the three no longer matches a live (`I_STATE` = 1) record: a package
+whose window was closed while the dialog was up has had its region freed
+(§29.2 rule 7), and its near pointer no longer means anything. Checking the
+window pointer alone would not do — window slots are reused.
+
+### 38.7 Lifecycle
+
+1. **Ask.** The application calls slot 0x00B0 from a menu command or a key
+   handler, under the lock it already holds. `fdlg_open` refuses if
+   `[fdlg_win]` ≠ 0, else records the request, seeds `fdlg_name` from SI,
+   re-mounts the current directory, creates the window and `wm_show`s it.
+2. **Interact.** Ordinary `W_PAINT`/`W_ONKEY`/`W_ONCLICK` under the lock,
+   with §38.2 keeping every other click and key away from them.
+3. **Commit.** The Open/Save button, Enter, or a double-click on a file
+   runs `fdlg_commit` — still inside the dialog's own callback, still under
+   that callback's lock: `fdlg_close` (destroy the window, drop the gate,
+   hand the menu bar back to the requester with `menu_activate` +
+   `menu_draw_bar` — `wm_front` gave it to the dialog on the way in, and
+   the dialog has no menus), then the staleness check, then the callback.
+
+   Destroying the window from inside its own `W_ONCLICK` is safe and is the
+   point: the §11/§13 dispatch sites read `W_ONCLICK`/`W_ONKEY` *before* the
+   call and touch nothing but the saved owner word and the lock afterwards
+   — and that owner word is 0 for this window (§38.1), so there is not even
+   an `inst_charge` to land in a freed record.
+4. **Cancel** — the Cancel button, Esc, the close box, or the minimize box
+   — is step 3 without the callback: the first two call `fdlg_close`
+   directly, the last two go through `wm_hide` and are collected by
+   `fdlg_check` at the next input (§38.2).
+
+### 38.8 Symbols
+
+| symbol | contract |
+|--------|-----------|
+| `fdlg_open` | API slot 0x00B0, above. The only entry point applications have. Caller holds the gfx lock. |
+| `fdlg_gate` | Internal. Drops the gate (and destroys the window) if `[fdlg_win]` is not used-and-visible. In: AL = 1 if the caller holds the gfx lock, 0 if not — it needs the lock to destroy and takes its own when it must. Out: CF=0 and BX = the dialog if one is live, CF=1 if none. |
+| `fdlg_reap` | UI task, no lock held. `fdlg_gate` for its side effect alone, once per loop pass. Preserves all registers. |
+| `fdlg_grab` | In: CX/DX = press point. Out: CF=1 = swallow (beeped). Preserves all registers. Called with no lock held. |
+| `fdlg_top` | In: BX = `wm_top`'s answer. Out: BX = the dialog window if one is live. Preserves everything else. Called with the lock held by the key path, so it uses the non-destroying half of the check. |
+| `fdlg_close` | Destroy the window, drop the gate, return the bar to the requester. Caller holds the lock. Preserves all registers. |
+| `fdlg_commit` | `fdlg_close`, staleness check, then the callback. Caller holds the lock. |
+| `fdlg_paint` / `fdlg_onkey` / `fdlg_onclick` | The window procs; all three assume the held lock and never take it. |
+| `fdlg_rows` | Out: AX = display rows = `disk_nfiles` + (`[dsk_cwd]` ≠ 0), CX = the `..` offset (0 or 1). The one place that offset is decided. |
+| `fdlg_stage` | In: AX = display row. Out: `fdlg_row` = its name, `fdlg_type` / `fdlg_size` its §19 type and size words; the `..` row is synthesized as type 2. |
+| `fdlg_go` | In: AX = first cluster. `dsk_chdir` + reset selection and scroll. |
+
+**What this deliberately does not do.** No filtering by extension (an Open
+dialog that hid `.TXT` from Note Pad would be a lie about what is on the
+disk), no icon view (the Disk window is where you browse; this is where you
+choose), no new-folder button (§22 has one, one implementation is enough),
+no multiple selection, and no second dialog on top of the first — the gate
+is a single word for the same reason `[menu_win]` is.

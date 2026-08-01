@@ -188,7 +188,13 @@ osapi_table:
     OSAPI_SLOT dskw_dfree         ; 0x00A8
     OSAPI_SLOT menu_win_set       ; 0x00AC - app menus (SPEC.md 12.2): in
                                   ;          BX = win ptr, SI = menu set
-osapi_table_end:                 ; 0x00B0
+    OSAPI_SLOT fdlg_open          ; 0x00B0 - the Standard File dialog
+                                  ;          (SPEC.md 38.6): in AL = mode,
+                                  ;          BX = win, DI = callback,
+                                  ;          SI = default name. The caller
+                                  ;          holds the lock, so this shows
+                                  ;          the window before it returns
+osapi_table_end:                 ; 0x00B4
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -196,8 +202,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 40 * 4
-%error "os8088 API jump table must be exactly 40 4-byte slots"
+%if OSAPI_TABLE_LEN != 41 * 4
+%error "os8088 API jump table must be exactly 41 4-byte slots"
 %endif
 
 ; =============================================================================
@@ -315,6 +321,7 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
                                 ; disk.inc, whose constants and layout it uses
 %include "loader.inc"
 %include "files.inc"
+%include "fdlg.inc"             ; the Standard File dialog (SPEC.md 38)
 %include "icons.inc"
 %include "desk.inc"
 %include "dock.inc"

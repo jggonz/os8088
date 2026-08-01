@@ -91,6 +91,36 @@ Three one-line hooks move it, and nothing else in the kernel knows the bar exist
 
 For an application, the whole interface is `OSAPI_MENU_SET` (slot 0x00AC) plus the `OS88_MENUSET`/`OS88_MENU`/`OS88_MENUSET_END` macros in `apps/os88api.inc`. The command handler is **a window callback reached through the bar**: near-called on the UI task under the gfx lock, billed to the instance, same rules as `W_ONCLICK` — it may draw and may call the file API, must never take the lock, and **must repaint itself**, because the kernel does not repaint after it returns.
 
+### The Standard File dialog is modal, and that is what makes it cheap (SPEC.md §38)
+
+`kernel/fdlg.inc` is the kernel's Open/Save chooser — the other half of the
+file API, which until it existed gave packages five whole-file operations and
+no way to *name* a file (which is why Note Pad wrote a hard-coded `NOTES.TXT`).
+Two things about it are load-bearing and easy to undo by accident:
+
+- **It is not an instance.** No `KIND_*`, no `inst_tab` record — a bare
+  `wm_create`d window this module owns, the same species as a `menu_track`
+  pull-down rather than an application. So it has no dock tile, no Task
+  Manager row and no callback billing (`inst_win_owner` answers 0 for an
+  unowned window), and its close **and minimize** boxes reduce to `wm_hide`,
+  which `fdlg_gate` reads as *cancelled*. That is why this module has no
+  close-path code at all.
+- **`[fdlg_win]` is the modal gate**, enforced at three call sites and nowhere
+  else: `fdlg_grab` (every button press, swallowed unless it lands in the
+  dialog's rect), `fdlg_top` (the keyboard poll) and `fdlg_reap` (the UI
+  task's idle pass, which only affects latency). Because nothing else is
+  clickable while it is up, no other window can navigate the volume — which
+  is precisely why the dialog reads the global mount snapshot directly and
+  needs no `VIEW_SEG` cache of its own, the exact opposite of the Disk
+  window's rule. The gate lives in `.text` as a `dw 0`, not in `.bss`: `-f
+  bin` zeroes nothing and `fdlg_grab` reads it on the machine's very first
+  mouse press.
+
+`fdlg_open` (API slot 0x00B0) is called from a window callback that already
+holds the gfx lock, so it creates and shows the window inline and returns; the
+answer comes back later through a completion callback, run after the dialog is
+destroyed so the app repaints onto clean screen.
+
 ### Where the memory went (SPEC.md §2.1/§33, `docs/MEMORY-PLAN.md`)
 
 The kernel's 64KB segment is not all the kernel's. Three moves bought it room:
@@ -103,7 +133,7 @@ The kernel's 64KB segment is not all the kernel's. Three moves bought it room:
 ### Layout
 
 - `boot/boot.asm` — 512-byte boot sector; geometry comes from `-DSPT`/`-DHEADS`, sector count from the measured kernel size (both injected by the Makefile).
-- `kernel/kernel.asm` — constants, boot sequence, the os8088 API jump table at 1000:0010, `%include`s of all modules, final .bss and size assertion. Module ownership is the table in SPEC.md §4; each `.inc` owns one subsystem (farcall, vga12, font, mouse, sched, events, wm, instance, menu, ui, apps, disk, diskw, loader, files, icons, desk, dock, taskmgr, ctrl).
+- `kernel/kernel.asm` — constants, boot sequence, the os8088 API jump table at 1000:0010, `%include`s of all modules, final .bss and size assertion. Module ownership is the table in SPEC.md §4; each `.inc` owns one subsystem (farcall, vga12, font, mouse, sched, events, wm, instance, menu, ui, apps, disk, diskw, loader, files, fdlg, icons, desk, dock, taskmgr, ctrl).
 - `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` are dead — left in the tree but **no longer included** (relics of the pre-GUI text shell, as is `kernel-shell.asm.bak`).
 - `apps/` — loadable packages. `os88api.inc` is the SDK: `OS88_HEADER` emits the 32-byte package header, `OSAPI_*` constants name jump-table entries, `OS88_IMAGE_END` seals size + bss. `mines/` (embedded icon), `hello/` (proves the generic-icon fallback), `notepad/` (the former built-in Note Pad kind, moved out to reclaim ~1.4KB of kernel budget — its per-instance bss replaced the fixed 2-instance pool, so the cap is gone), plus the sound-layer packages `recorder/` and `piano/` (SPEC.md §35/§36) and the gate packages `fmtest/`, `sbtest/` and `filetest/`, which never ship on the apps disks and ride their own scratch images.
 - `tools/` — host-side Python: `os88pkg.py` (validates/stamps `.bin` → `.o88`), `os88disk.py` (builds FAT12 data-floppy images; `--verify` is a structural fsck, `--scramble` builds a legally fragmented test image), `qmp.py` + `mouse.py` (test drivers).

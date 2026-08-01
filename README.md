@@ -84,9 +84,12 @@ the menus. All of classic Mac's core interactions work:
   floppy takes over the bar exactly like a built-in.
 - **Note Pad** — a loadable package on the software floppy. Type; it wraps
   lines, Backspace and Return work, and every instance has its own buffer.
-  Its **File menu** opens and saves `NOTES.TXT` on the data floppy (F2/F3
-  still do the same thing), with DOS line endings both ways — the file
-  opens straight up in Windows Notepad, and one written there opens here.
+  Its **File menu** opens and saves files on the data floppy — Open… and
+  Save As… put up the kernel's **Standard File dialog** (a modal window
+  that lists the disk, walks into folders and takes a typed 8.3 name), F2
+  saves to the current document and F3 asks. DOS line endings both ways:
+  the file opens straight up in Windows Notepad, and one written there
+  opens here.
 - **Disk icons** — the desktop shows an icon per floppy drive the BIOS
   reports (int 11h). Click to select, double-click to open that drive in
   the Disk window, freshly mounted.
@@ -142,7 +145,7 @@ the menus. All of classic Mac's core interactions work:
 | keyboard      | BIOS int 16h, polled by the UI task. |
 | font          | the VGA ROM's own 8x8 font, copied out via int 10h AX=1130h at boot. |
 | floppy        | BIOS int 13h, one sector per call with retries — reads and writes share one routine, so the CHS math and the retry policy can't drift apart; task switching pauses during a transfer (the tick still runs — the floppy motor needs it). |
-| software      | `.o88` packages on a plain FAT12 data floppy in B: — any PC, Mac or Linux box can read and write the disk, and so can os8088: apps create, replace, rename and delete whole files through five API slots, and the kernel validates every byte it reads off the disk before any of it becomes an address (Note Pad's F2/F3 save and load a DOS-readable `NOTES.TXT`). A package is a flat binary loaded into a first-fit region of 1000:A000..1000:EFFF — inside the kernel segment, so its window procs are ordinary near pointers — calling the kernel through a fixed jump table at 1000:0010. It ships with a relocation table, so several packages, or several copies of one, run at once. |
+| software      | `.o88` packages on a plain FAT12 data floppy in B: — any PC, Mac or Linux box can read and write the disk, and so can os8088: apps create, replace, rename and delete whole files through five API slots, and the kernel validates every byte it reads off the disk before any of it becomes an address (Note Pad saves and loads DOS-readable text files, named through the kernel's Standard File dialog). A package is a flat binary loaded into a first-fit region of 1000:A000..1000:EFFF — inside the kernel segment, so its window procs are ordinary near pointers — calling the kernel through a fixed jump table at 1000:0010. It ships with a relocation table, so several packages, or several copies of one, run at once. |
 | concurrency   | one drawing mutex (`gfx_lock`); background tasks re-check visibility *under* the lock; ISRs run IF=0 throughout and never draw over a held lock. SPEC.md is the binding contract. |
 
 The kernel is ~14KB. Everything runs in the tiny model — CS = DS = SS =

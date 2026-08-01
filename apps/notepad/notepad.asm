@@ -45,13 +45,15 @@
 
 NP_CAP       equ 512            ; text buffer capacity, bytes
 NP_IOCAP     equ NP_CAP * 2     ; staging capacity: every char may become CR LF
-NP_BSS_TOTAL equ 532 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
+NP_BSS_TOTAL equ 570 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
 NP_MARGIN    equ 6              ; left/top text margin inside the content
 NP_KEY_SAVE  equ 0x3C           ; F2 scan code (DOS Editor's keys)
 NP_KEY_LOAD  equ 0x3D           ; F3
 NP_MI_NEW    equ 0              ; File menu item indices - the order of
 NP_MI_OPEN   equ 1              ; np_items_file, which is what the kernel
 NP_MI_SAVE   equ 2              ; hands np_oncmd in AL (SPEC.md 12.2)
+NP_MI_SAVEAS equ 3
+NP_NAMEMAX   equ 12             ; 8 + '.' + 3, as SPEC.md 38.6 hands it over
 
 ; -----------------------------------------------------------------------------
 ; np_entry - package entry point (SPEC.md 20.2)
@@ -81,6 +83,11 @@ np_entry:
     pop si                          ; CF is still wm_create's: the branch
                                     ; above consumed it and OSAPI_MENU_SET
                                     ; preserves flags too (SPEC.md 20.3)
+    pushf                           ; ...and so must this: the bss arrives
+    call np_defname                 ; zeroed and an empty name is not a file
+    popf                            ; (SPEC.md 27.1), but np_defname is an
+                                    ; ordinary routine and the CF we owe the
+                                    ; loader is still riding in the flags
 .out:
     ret
 
@@ -291,7 +298,8 @@ np_save:
     mov si, np_name
     call OSAPI_FILE_WRITE
     jc .err
-    mov word [np_msg], np_m_saved
+    mov si, np_m_saved
+    call np_setmsg
     jmp short .out
 .err:
     call np_errmsg              ; AX = FERR_* -> the toast
@@ -364,7 +372,8 @@ np_load:
     jmp short .fold
 .folded:
     mov [np_len], di
-    mov word [np_msg], np_m_loaded
+    mov si, np_m_loaded
+    call np_setmsg
     test dh, dh
     jz .out
     mov word [np_msg], np_m_trunc
@@ -421,8 +430,9 @@ np_onkey:
 .nosave:
     cmp ah, NP_KEY_LOAD
     jne .noload
-    call np_load
-    jmp short .redraw
+    mov al, FDLG_OPEN           ; F3 ASKS now (SPEC.md 27.1): a load with no
+    call np_dlgopen             ; way to say what was never the useful half.
+    jmp .out                    ; No repaint - the dialog is on top of us
 .noload:
     cmp al, 8
     je .bksp
@@ -514,7 +524,9 @@ np_redraw:
 np_new:
     mov word [np_len], 0
     mov word [np_msg], 0
-    ret
+    jmp np_defname              ; a new note is a new document: leaving the
+                                ; old name would make the next F2 overwrite
+                                ; the file the user just walked away from
 
 ; -----------------------------------------------------------------------------
 ; np_oncmd - AM_ONCMD: run a menu command (SPEC.md 12.2)
@@ -538,18 +550,153 @@ np_oncmd:
     je .new
     cmp al, NP_MI_OPEN
     je .open
+    cmp al, NP_MI_SAVEAS
+    je .saveas
     cmp al, NP_MI_SAVE
     jne .out
     call np_save
-    jmp short .draw
-.open:
-    call np_load
     jmp short .draw
 .new:
     call np_new
 .draw:
     call np_redraw                  ; SI is still the window ptr
 .out:
+    ret
+.open:
+    mov al, FDLG_OPEN
+    jmp short .dlg
+.saveas:
+    mov al, FDLG_SAVE
+.dlg:
+    jmp np_dlgopen                  ; tail call, and NO repaint after it:
+                                    ; the dialog is on screen and on top of
+                                    ; us, so the usual "commands repaint
+                                    ; themselves" tail would draw straight
+                                    ; over it. The repaint happens in
+                                    ; np_ondlg instead, once it is gone
+
+; -----------------------------------------------------------------------------
+; np_dlgopen - raise the Standard File dialog (SPEC.md 38.6)
+; in:  AL = FDLG_OPEN or FDLG_SAVE, SI = our window ptr; gfx lock held
+; out: nothing; preserves all registers
+;
+; The current document is handed over as the default, so Save As on a note
+; loaded from LETTER.TXT opens with LETTER.TXT already in the box. A refusal
+; (CF=1: one is already up) is silently nothing - the dialog the user
+; already has IS the answer to the command they just picked.
+; -----------------------------------------------------------------------------
+np_dlgopen:
+    push bx
+    push si
+    push di
+    mov bx, si                      ; the window we want to hear back about
+    mov di, np_ondlg
+    mov si, np_name
+    call OSAPI_FILE_DLG
+    pop di
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; np_ondlg - the file dialog's completion callback (SPEC.md 38.6)
+; in:  AL = the mode it ran in, SI = our window ptr, DI = the chosen name;
+;      UI task, gfx lock HELD, the dialog window already destroyed
+; out: nothing; no register need be preserved (the kernel saved its own)
+;
+; One proc for both commands, because the only difference between them is
+; which way the bytes move afterwards. It must repaint: the kernel does not
+; repaint after a callback returns, and the window under the dialog has just
+; been uncovered by wm_destroy.
+; -----------------------------------------------------------------------------
+np_ondlg:
+    mov bl, al                      ; BL = the mode; AL becomes a name byte
+    mov dx, si                      ; DX = our window: SI is about to be the
+                                    ; kernel's buffer, and np_redraw wants
+                                    ; the window back in SI
+    mov si, di
+    mov di, np_name
+    mov cx, NP_NAMEMAX
+.copy:
+    mov al, [si]                    ; bounded even though SPEC.md 38.6
+    mov [di], al                    ; promises <= 12: a package that trusts
+    or al, al                       ; a promise is a package with an
+    jz .copied                      ; overrun in it
+    inc si
+    inc di
+    loop .copy
+    mov byte [di], 0
+.copied:
+    mov si, dx                      ; SI = our window again
+    or bl, bl
+    jz .load
+    call np_save
+    jmp short .draw
+.load:
+    call np_load
+.draw:
+    jmp np_redraw                   ; tail call; SI is the window ptr
+
+; -----------------------------------------------------------------------------
+; np_defname - seed the current document name (internal)
+; in:  nothing
+; out: np_name = 'NOTES.TXT'; preserves all registers
+; The loader zeroes our bss (SPEC.md 21 step 5), and an empty name would
+; make F2 fail with FERR_NAME on a brand-new note - so a fresh Note Pad
+; still has the document the fixed-name version always had.
+; -----------------------------------------------------------------------------
+np_defname:
+    push ax
+    push si
+    push di
+    mov si, np_s_default
+    mov di, np_name
+.copy:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .copy
+    pop di
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_setmsg - compose a toast around the live document name (internal)
+; in:  SI = a NUL prefix ('Saved ' / 'Loaded ')
+; out: np_tbuf holds prefix + np_name and [np_msg] points at it; preserves
+;      all registers
+; -----------------------------------------------------------------------------
+np_setmsg:
+    push ax
+    push si
+    push di
+    mov di, np_tbuf
+.pre:
+    mov al, [si]
+    or al, al
+    jz .name
+    mov [di], al
+    inc si
+    inc di
+    jmp short .pre
+.name:
+    mov si, np_name
+.copy:
+    mov al, [si]
+    mov [di], al
+    or al, al
+    jz .done
+    inc si
+    inc di
+    jmp short .copy
+.done:
+    mov word [np_msg], np_tbuf
+    pop di
+    pop si
+    pop ax
     ret
 
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
@@ -567,22 +714,26 @@ np_ttl: db 'Note Pad', 0
 ; runs 38 + 64 ('Note Pad') + 16 = 118 to the File cell's left edge, and
 ; 32 + 12 more to its right edge at 162 - nowhere near the clock at 434.
     OS88_MENUSET np_menus, np_ttl, np_oncmd
-        OS88_MENU np_m_file, np_items_file, 3
+        OS88_MENU np_m_file, np_items_file, 4
     OS88_MENUSET_END np_menus
 
 np_m_file:     db 'File', 0
-np_items_file: dw np_i_new, np_i_open, np_i_save   ; order = NP_MI_*
+np_items_file: dw np_i_new, np_i_open, np_i_save, np_i_saveas  ; = NP_MI_*
 np_i_new:      db 'New', 0
-np_i_open:     db 'Open', 0
-np_i_save:     db 'Save', 0
+np_i_open:     db 'Open...', 0      ; the ellipsis is the convention and it
+np_i_save:     db 'Save', 0         ; is honest: these two ask a question
+np_i_saveas:   db 'Save As...', 0   ; first (SPEC.md 38), Save never does
 
 ; --- the file and what the toast can say (SPEC.md 27.1) ------------------------
-; One fixed name: a package has no text-entry control to ask for another,
-; and every instance sharing the one file is visible, predictable behaviour.
-np_name:     db 'NOTES.TXT', 0
-np_m_saved:  db 'Saved NOTES.TXT', 0
-np_m_loaded: db 'Loaded NOTES.TXT', 0
-np_m_trunc:  db 'Truncated', 0
+; The name is per-instance state now (np_name in bss), seeded from this at
+; launch and replaced by whatever the file dialog returns. The two verbs are
+; PREFIXES: np_setmsg composes them with the live name into np_tbuf, because
+; a toast that still said NOTES.TXT after a Save As would be worse than no
+; toast at all.
+np_s_default: db 'NOTES.TXT', 0
+np_m_saved:   db 'Saved ', 0
+np_m_loaded:  db 'Loaded ', 0
+np_m_trunc:   db 'Truncated', 0
 
 ; FERR_* (SPEC.md 18.4) -> string, indexed by the code itself
 np_errtab:
@@ -615,7 +766,13 @@ np_bx1      equ os88_image_end + 522   ; word: the toast box, computed in
 np_by1      equ os88_image_end + 524   ; np_toast and used by three calls
 np_bx2      equ os88_image_end + 526
 np_by2      equ os88_image_end + 528
-np_pad      equ os88_image_end + 530   ; word: keeps np_io on an even offset
-np_io       equ os88_image_end + 532   ; NP_IOCAP bytes: the CR LF staging
-                                       ; buffer, both directions
-                                       ; total 532 + NP_IOCAP = NP_BSS_TOTAL
+np_name     equ os88_image_end + 530   ; 14: the current document, 8.3 + NUL
+                                       ; (SPEC.md 27.1) - per INSTANCE, so
+                                       ; two Note Pads hold two documents
+np_tbuf     equ os88_image_end + 544   ; 26: 'Saved ' / 'Loaded ' + np_name
+np_io       equ os88_image_end + 570   ; NP_IOCAP bytes: the CR LF staging
+                                       ; buffer, both directions. Even by
+                                       ; construction - both blocks above
+                                       ; are even-sized, which is what the
+                                       ; old np_pad word was for
+                                       ; total 570 + NP_IOCAP = NP_BSS_TOTAL

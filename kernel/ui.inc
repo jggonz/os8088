@@ -54,6 +54,8 @@ ui_task:
     int 0x16
     call gfx_lock               ; handler draws; it runs under the lock
     call wm_top                 ; BX = frontmost visible window, 0 if none
+    call fdlg_top               ; ...unless a modal file dialog is up, which
+                                ; takes every key (SPEC.md 38.2)
     or bx, bx
     jz .key_done
     cmp word [bx + W_ONKEY], 0  ; window may not take keys
@@ -94,6 +96,13 @@ ui_task:
     mov dx, [ui_ev + EV_B]      ; DX = click y
     mov ax, [ui_ev + EV_C]      ; publish the click's birth tick for the
     mov [ui_click_t], ax        ; double-click detectors (SPEC 22, 26)
+
+    call fdlg_grab              ; a modal file dialog swallows every press
+    jc .yield                   ; outside its own frame (SPEC.md 38.2).
+                                ; AHEAD of every branch below - modality is
+                                ; not a window property, and a press on the
+                                ; menu bar must die as firmly as one on
+                                ; another window
 
     cmp word [wm_fs], 0         ; a fullscreen window (SPEC.md 11.2) sits
     jne .on_desktop             ; over the bar: route rows 0..19 to wm_hit
@@ -224,10 +233,21 @@ ui_task:
     jmp short .yield
 
 .rdown:
+    mov cx, [ui_ev + EV_A]      ; the right button is swallowed by a modal
+    mov dx, [ui_ev + EV_B]      ; dialog too (SPEC.md 38.2) - there is no
+    call fdlg_grab              ; context menu it could usefully open. The
+    jc .yield                   ; point is loaded here rather than above
+                                ; because this branch is taken before the
+                                ; left button's own load
     call ui_rdown               ; in: [ui_ev]; the context-menu path (12.4)
 
     ; --- 3. deferred work (SPEC.md 13/21/29): OUTSIDE the gfx lock ------------
 .yield:
+    call fdlg_reap              ; a file dialog cancelled by its close or
+                                ; minimize box is only HIDDEN by that route
+                                ; (SPEC.md 38.1) - collect it here rather
+                                ; than leaving the menu bar on Locator
+                                ; until the user next clicks something
     mov ax, [inst_launch]       ; deferred instance launch (posted by
     or ax, ax                   ; lock-held handlers via inst_launch_post)
     jz .chk_ld

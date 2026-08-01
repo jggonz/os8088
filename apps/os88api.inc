@@ -180,6 +180,40 @@ OSAPI_MENU_SET      equ 0x00AC   ; BX = win ptr, SI = menu set ptr (0 =
                                  ; and the entry proc's ret without eating
                                  ; the CF that ret owes the loader.
 
+; --- the Standard File dialog (SPEC.md 38) -------------------------------------
+; The other half of the file slots above: they operate on a name, and this is
+; how you get one from the user. The kernel puts up a modal window listing the
+; mounted disk, and calls you back when a name has been chosen.
+;
+; It does NOT block. A window callback runs under the gfx lock on the UI task,
+; so a dialog that pumped events inside your `ret` would have to release a lock
+; it does not own. Instead this returns immediately - with the dialog already
+; on screen, because you were holding the lock it needed - and your completion
+; proc is called much later. Cancel calls nothing at all.
+;
+; Call it from a menu command or a key handler, never from a paint proc.
+OSAPI_FILE_DLG      equ 0x00B0   ; AL = 0 Open / 1 Save, BX = your window ptr,
+                                 ; DI = completion proc, SI = default name
+                                 ; (NUL, <= 12) or 0. out CF=0 accepted, CF=1
+                                 ; refused (one is already up, or no room)
+FDLG_OPEN  equ 0                 ; the two modes, in AL going in and in AL
+FDLG_SAVE  equ 1                 ; coming back
+;
+; Your completion proc is called on the UI task with the gfx lock HELD, after
+; the dialog window is gone:
+;
+;     in   AL = the mode it ran in, SI = your window ptr, DI = the chosen
+;          name (NUL, <= 12 chars). No register need be preserved.
+;
+; Same rules as a menu command (SPEC.md 12.2): you may draw, you may call the
+; file slots above, you must NOT take the lock, and you MUST repaint your own
+; content - the kernel does not repaint for you. The name buffer belongs to the
+; kernel and is valid for the duration of the call only: copy it.
+;
+; The dialog navigates the volume, so by the time you are called the current
+; directory IS the folder the user chose in, which is where the file slots
+; resolve names (SPEC.md 19.2). Just pass the name straight through.
+
 ; file error codes, pinned (SPEC.md 18.4): returned in AX with CF set
 FERR_OK      equ 0
 FERR_NODISK  equ 1               ; no mounted data disk
