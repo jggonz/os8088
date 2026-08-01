@@ -258,12 +258,24 @@ test-snd: $(IMG) $(TESTAPPS)
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
 		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd $(ADLIBDEV) $(SBDEV)
 
+# 86Box rewrites its own config file on exit, and twice now it has put the
+# wp:// (write-protect) prefix back on the DATA floppy - which makes every
+# SPEC.md 18.4 write fail as FERR_WPROT and reads, from inside the OS, as a
+# filesystem bug rather than an emulator setting. Strip it at launch so the
+# setting cannot silently regress. The BOOT floppy keeps its wp:// on
+# purpose: its sector 0 has no valid BPB, so the kernel refuses to write it
+# anyway, and the prefix is a second lock on the disk carrying the loader.
+# perl -pi behaves identically on GNU and BSD/macOS, unlike sed -i.
+UNPROTECT_B = perl -pi -e 's{^fdd_02_fn = wp://}{fdd_02_fn = }'
+
 # Boot the 360KB image on emulated period hardware in 86Box.
 xt: $(IMG360) $(APPSIMG360)
+	@$(UNPROTECT_B) $(VM)/86box.cfg
 	$(BOX) -P $(VM) -N
 
 # The same XT with a full 640KB of RAM instead of 256KB.
 xt-640: $(IMG360) $(APPSIMG360)
+	@$(UNPROTECT_B) $(VM640)/86box.cfg
 	$(BOX) -P $(VM640) -N
 
 clean:
