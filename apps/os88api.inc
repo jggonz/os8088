@@ -296,6 +296,34 @@ OSAPI_TASK_ALIVE    equ 0x00BC   ; BX = YOUR window ptr; the gfx lock must
                                  ; window, frees your instance and
                                  ; releases your region, and your task
                                  ; ends inside this call.
+
+; --- the clip region (SPEC.md 11.3) -------------------------------------------
+; What replaced the wm_obscured veto for background painters. Arm it under
+; the lock and every gfx_*/font_* call you make is cut to the part of YOUR
+; content nothing is covering; a window with one corner buried keeps drawing
+; the rest instead of skipping the frame.
+OSAPI_WM_CLIP_SET   equ 0x00C0   ; BX = YOUR window ptr; the gfx lock must be
+                                 ; HELD. out CF = 1: not one pixel of your
+                                 ; content is visible - draw nothing this
+                                 ; frame (the answer wm_obscured used to
+                                 ; give for a single covered pixel). CF = 0:
+                                 ; clipping is armed. Preserves every
+                                 ; register. It dies at your next
+                                 ; OSAPI_GFX_UNLOCK, so it is one call per
+                                 ; lock hold and there is nothing to undo.
+OSAPI_WM_CLIP_CLEAR equ 0x00C4   ; disarm early, to draw unclipped again
+                                 ; inside the same lock hold. Preserves
+                                 ; every register.
+OSAPI_WM_CLIP_TEST  equ 0x00C8   ; AX=x1, BX=y1, CX=x2, DX=y2 (inclusive);
+                                 ; out CF=0 the whole rect is drawable (also
+                                 ; when no clip is armed), CF=1 it is not.
+                                 ; Preserves every register. Ask this before
+                                 ; you ERASE a rect you are about to draw
+                                 ; text into: the gfx_* fills clip per pixel
+                                 ; but font_char clips per whole 8x8 cell, so
+                                 ; a wide erase followed by glyphs can white
+                                 ; out a band the glyphs then refuse to
+                                 ; repaint. Erase per cell, or skip the pair.
 ;
 ; Your worker gets DX = your instance index, DS = ES = CS = KERNEL_SEG,
 ; IF = 1 and the gfx lock free. The binding rules, none of them enforced:
@@ -315,13 +343,20 @@ OSAPI_TASK_ALIVE    equ 0x00BC   ; BX = YOUR window ptr; the gfx lock must
 ;  4. gfx_lock is NOT reentrant: calling OSAPI_TASK_ALIVE while holding it
 ;     deadlocks - nothing ever draws again.
 ;  5. Under the lock, re-check that your window is still visible
-;     (test word [bx+W_FLAGS], 2) and not covered (OSAPI_WM_OBSCURED)
-;     before drawing. Windows move and get buried while you sleep.
+;     (test word [bx+W_FLAGS], 2) and then call OSAPI_WM_CLIP_SET before
+;     drawing. Windows move and get buried while you sleep, and the gfx_*
+;     primitives take absolute screen coordinates: without one of these two
+;     answers you paint over whatever is on top of you. CF = 1 means draw
+;     nothing this frame; CF = 0 means draw normally and the kernel cuts
+;     every call to the part of your content that shows. OSAPI_WM_OBSCURED
+;     is still there and still correct, but it vetoes the whole frame for
+;     one covered pixel - prefer the clip.
 ;  6. Your stack is 1536 bytes in LOW_SEG and SS != DS (see the header of
 ;     this file). No deep recursion, no big stack buffers, and BP-relative
 ;     operands address SS.
 ;  7. You may call: the gfx_* and font_* slots, OSAPI_SET_COLOR,
-;     OSAPI_WM_CONTENT, OSAPI_WM_OBSCURED, OSAPI_VIDEO, OSAPI_GET_TICKS,
+;     OSAPI_WM_CONTENT, OSAPI_WM_OBSCURED, OSAPI_WM_CLIP_SET,
+;     OSAPI_WM_CLIP_CLEAR, OSAPI_WM_CLIP_TEST, OSAPI_VIDEO, OSAPI_GET_TICKS,
 ;     OSAPI_MOUSE, OSAPI_SRAND/RAND, OSAPI_TASK_SLEEP, OSAPI_TASK_YIELD and
 ;     OSAPI_TASK_ALIVE. OSAPI_SET_COLOR writes ONE global pen shared by the
 ;     whole machine, so set it only inside the same lock hold as the drawing

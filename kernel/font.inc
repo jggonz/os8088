@@ -78,7 +78,11 @@ font_init:
 ;
 ; Characters outside 32..126 draw nothing (the caller's pen still advances).
 ; Clipping is whole-char: if any part of the 8x8 cell would leave the screen
-; the glyph is skipped entirely (acceptable v1 behavior per SPEC.md 6).
+; the glyph is skipped entirely (acceptable v1 behavior per SPEC.md 6) - and,
+; while a background task's clip region is armed, if any part of the cell
+; would leave THAT (SPEC.md 11.3). A glyph is one shape or none; the region
+; is the only thing here that could produce half of one, and half an 8x8
+; glyph is unreadable anyway.
 ; -----------------------------------------------------------------------------
 font_char:
     push ax
@@ -97,6 +101,21 @@ font_char:
     ja .done
     cmp dx, [vid_hm8]
     ja .done
+    cmp word [wm_clip_n], 0     ; the cell whole against the clip region too
+    je .noclip                  ; (SPEC.md 11.3)
+    push ax
+    mov ax, cx
+    mov bx, dx
+    mov cx, ax
+    add cx, 7
+    mov dx, bx
+    add dx, 7
+    call wm_clip_test
+    mov cx, ax                  ; MOV and POP leave CF alone
+    mov dx, bx
+    pop ax
+    jc .done
+.noclip:
 
     sub al, FONT_FIRST          ; SI = glyph row data
     mov ah, 0

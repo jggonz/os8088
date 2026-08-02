@@ -12,14 +12,14 @@
 ; Paint procs and key handlers run with the gfx lock already held by the
 ; caller (SPEC.md 11), find their instance state via inst_of_win + I_SPTR,
 ; and never lock, block or spawn; the Clock/Bounce tasks take the lock
-; themselves and re-check visibility + wm_obscured under it before touching
+; themselves and arm a clip region under it (SPEC.md 11.3) before touching
 ; the screen. Background tasks use only os8088 primitives and [ticks] - no
 ; BIOS calls (SPEC.md 7).
 ;
 ; app_bounce_task below is the REFERENCE IMPLEMENTATION for a package's
-; worker task (SPEC.md 20.6): sleep, take the lock, re-check visibility and
-; wm_obscured under it, draw briefly, release, check the die flag. Keep its
-; shape - the author rules point at it.
+; worker task (SPEC.md 20.6): sleep, take the lock, wm_clip_set under it,
+; draw briefly, release, check the die flag. Keep its shape - the author
+; rules point at it.
 ; =============================================================================
 
 ; --- geometry ----------------------------------------------------------------
@@ -171,9 +171,11 @@ app_about_center:
 ; The accumulator design is binding (SPEC.md 14): delta ticks since the last
 ; sample (wrap-safe subtraction) are added to CLK_ACC in tenths of a tick;
 ; every 182 tenths (18.2 ticks) advances one second with carries. The
-; time-keeping runs every iteration; only the drawing is conditional on
-; visible + not wm_obscured, re-checked under the gfx lock. I_STATE = 2 at
-; wake = close requested: tear down via inst_task_die (SPEC.md 29).
+; time-keeping runs every iteration; only the drawing is conditional, on the
+; window being visible and on wm_clip_set finding any of it uncovered, both
+; under the gfx lock (SPEC.md 11.3). A half-covered Clock now redraws the
+; half you can see instead of freezing. I_STATE = 2 at wake = close
+; requested: tear down via inst_task_die (SPEC.md 29).
 ; -----------------------------------------------------------------------------
 app_clock_task:
     mov al, dl
@@ -229,21 +231,13 @@ app_clock_task:
     mov bx, [ds:bp+I_WIN]
     test word [bx+W_FLAGS], 2   ; re-check under the lock (SPEC.md 14)
     jz .skip
-    call wm_obscured
+    call wm_clip_set            ; CF = 1: not one visible pixel (SPEC 11.3)
     jc .skip
     call app_clk_pos            ; CX = string x, DX = string y
-    push cx
-    push dx
-    mov ax, cx                  ; white-fill the 64x8 string rect (font
-    mov bx, dx                  ; background is transparent, SPEC.md 6)
-    add cx, 63
-    add dx, 7
-    mov byte [gfx_color], CWHITE
-    call gfx_fill
-    pop dx
-    pop cx
     mov di, si                  ; DI = time state for the renderer
-    call app_clk_render         ; black HH:MM:SS at CX,DX
+    call app_clk_render         ; black HH:MM:SS on white at CX,DX - the
+                                ; background is erased per glyph cell in
+                                ; there, NOT as one 64x8 rect (SPEC.md 11.3)
 .skip:
     call gfx_unlock
     jmp .loop
@@ -306,10 +300,20 @@ app_clk_pos:
 
 ; -----------------------------------------------------------------------------
 ; app_clk_render - format an instance's time as "HH:MM:SS" and draw it black
+;                  on white, one 8x8 cell at a time
 ; in:  CX = x, DX = y, DI = time state ptr (gfx lock held by caller)
 ; out: nothing
 ; clobbers: AX (internal helper; SI is preserved - the clock task keeps its
 ;           state ptr there for life, so a clobber would scramble the state)
+;
+; The white background is erased PER CELL rather than as one 64x8 rect, and
+; that is a clipping requirement, not a style choice (SPEC.md 11.3): gfx_fill
+; clips per pixel and font_char per whole cell, so a wide erase followed by
+; glyphs can white out a band the glyphs then refuse to repaint - a Clock cut
+; horizontally by another window's edge would blank the half you can see and
+; keep blanking it twice a second. Per cell the two cannot disagree: a cell is
+; either wholly drawable, and then erased and redrawn, or not, and then left
+; entirely alone.
 ; -----------------------------------------------------------------------------
 app_clk_render:
     push si
@@ -331,10 +335,54 @@ app_clk_render:
     mov [app_clk_str+6], ah
     mov [app_clk_str+7], al
     mov byte [app_clk_str+8], 0
-    mov byte [gfx_color], CBLACK
     mov si, app_clk_str
-    call font_str
+    push cx
+.cell:
+    mov al, [si]
+    or al, al
+    jz .done
+    call app_clk_cell
+    add cx, 8
+    inc si
+    jmp short .cell
+.done:
+    pop cx
     pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; app_clk_cell - one character: white 8x8 background, then the black glyph
+; in:  AL = character, CX = x, DX = y (gfx lock held)
+; out: nothing
+; clobbers: flags (internal helper)
+;
+; wm_clip_test asks font_char's own question ahead of the erase - see
+; app_clk_render's banner.
+; -----------------------------------------------------------------------------
+app_clk_cell:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, cx                  ; the cell rect, inclusive
+    mov bx, dx
+    add cx, 7
+    add dx, 7
+    call wm_clip_test
+    jc .out                     ; not wholly drawable: erase nothing
+    mov byte [gfx_color], CWHITE
+    call gfx_fill               ; font backgrounds are transparent (SPEC.md 6)
+    mov byte [gfx_color], CBLACK
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jmp font_char               ; CX = x, DX = y, AL = char
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; =============================================================================
@@ -346,9 +394,16 @@ app_clk_render:
 ;                   content, dies on request
 ; in:  DX = instance index (the spawn argument); never returns
 ; Ball position/velocity are content-relative words in the instance state.
-; If the visible + not-obscured check fails under the lock, the frame is
-; skipped WITHOUT erasing or stepping (SPEC.md 14) - the square stays put
-; until the window can be seen again. Edges: content w = 148, h = 111.
+;
+; The ball ALWAYS steps (SPEC.md 14/11.3). Only the erase and the redraw are
+; conditional: wm_clip_set under the lock either arms the visible region -
+; and then the two 8x8 fills are cut to it, so a half-covered Bounce shows
+; the ball crossing the half you can see - or answers CF = 1, and the frame
+; steps invisibly. Stepping while covered is safe because app_bounce_paint
+; draws from state, so the repaint on uncover shows the square where it now
+; is rather than where it was when the window was buried. (Until SPEC.md
+; 11.3 the frame was skipped without stepping, which is why a covered Bounce
+; used to look frozen.) Edges: content w = 148, h = 111.
 ; -----------------------------------------------------------------------------
 app_bounce_task:
     mov al, dl
@@ -364,20 +419,41 @@ app_bounce_task:
     call gfx_lock
     mov bx, [ds:bp+I_WIN]
     test word [bx+W_FLAGS], 2   ; check under the lock (SPEC.md 14)
-    jz .skip
-    call wm_obscured
-    jc .skip
+    jz .blind
+    call wm_clip_set            ; CF = 1: not one visible pixel (SPEC 11.3)
+    jc .blind
 
     mov di, si                  ; DI = ball state for app_ball_fill
     mov byte [gfx_color], CWHITE
     call app_ball_fill          ; erase at the old position
+    call app_ball_step
+    mov byte [gfx_color], CBLACK
+    call app_ball_fill          ; draw at the new position
+    jmp short .skip
+.blind:
+    call app_ball_step          ; nothing on screen to keep in step with
+.skip:
+    call gfx_unlock             ; ...which also disarms the clip (SPEC 11.3)
+    jmp .loop
 
+.die:
+    mov di, bp
+    jmp inst_task_die           ; never returns
+
+; -----------------------------------------------------------------------------
+; app_ball_step - advance one instance's ball, bouncing off the content edges
+; in:  SI = ball state ptr
+; out: nothing
+; clobbers: nothing (flags only; internal helper)
+; -----------------------------------------------------------------------------
+app_ball_step:
+    push ax
     mov ax, [si+BAL_X]          ; step + bounce, x axis
     add ax, [si+BAL_VX]
     jns .xhigh
     mov ax, 0                   ; hit the left wall
     neg word [si+BAL_VX]
-    jmp .xdone
+    jmp short .xdone
 .xhigh:
     cmp ax, APP_BALL_XMAX
     jle .xdone
@@ -391,7 +467,7 @@ app_bounce_task:
     jns .yhigh
     mov ax, 0                   ; hit the top
     neg word [si+BAL_VY]
-    jmp .ydone
+    jmp short .ydone
 .yhigh:
     cmp ax, APP_BALL_YMAX
     jle .ydone
@@ -399,16 +475,8 @@ app_bounce_task:
     neg word [si+BAL_VY]
 .ydone:
     mov [si+BAL_Y], ax
-
-    mov byte [gfx_color], CBLACK
-    call app_ball_fill          ; draw at the new position
-.skip:
-    call gfx_unlock
-    jmp .loop
-
-.die:
-    mov di, bp
-    jmp inst_task_die           ; never returns
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; app_bounce_paint - W_PAINT for a Bounce window

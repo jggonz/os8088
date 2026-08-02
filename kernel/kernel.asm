@@ -41,6 +41,19 @@ CWHITE      equ 15
 CLGRAY      equ 7
 CDGRAY      equ 8
 
+; --- the clip region (SPEC.md 11.3) ------------------------------------------
+; wm.inc builds it; vga12.inc, font.inc and icons.inc consume it. The layout
+; is therefore a cross-module contract and lives here rather than in wm.inc,
+; which NASM only reaches five includes later.
+WM_CLIP_MAX equ 16              ; rects; more than this and the frame is
+                                ; skipped instead, which is exactly what the
+                                ; wm_obscured veto used to do
+WCR_X1  equ 0                   ; one clip rect, 8 bytes, inclusive corners
+WCR_Y1  equ 2
+WCR_X2  equ 4
+WCR_Y2  equ 6
+WCR_SZ  equ 8
+
 ; loadable programs (SPEC.md 20)
 APP_LOAD_OFF equ 0xB000         ; where packages load (kernel segment offset)
 APP_MAX_SIZE equ 0x4E00         ; image + bss budget, 0xB000..0xFDFF
@@ -201,7 +214,13 @@ osapi_table:
                                   ;          a reference, not a promise
     OSAPI_SLOT inst_pkg_spawn     ; 0x00B8 - package worker tasks (SPEC.md
     OSAPI_SLOT inst_pkg_alive     ; 0x00BC   20.6): AX = entry, BX = own win
-osapi_table_end:                 ; 0x00C0
+    OSAPI_SLOT wm_clip_set        ; 0x00C0 - the clip region (SPEC.md 11.3):
+    OSAPI_SLOT wm_clip_clear      ; 0x00C4   what a worker may draw, in place
+                                  ;          of the wm_obscured veto...
+    OSAPI_SLOT wm_clip_test       ; 0x00C8   ...and the whole-shape question,
+                                  ;          for anything that erases a rect
+                                  ;          and then draws glyphs into it
+osapi_table_end:                 ; 0x00CC
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -209,8 +228,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 44 * 4
-%error "os8088 API jump table must be exactly 44 4-byte slots"
+%if OSAPI_TABLE_LEN != 47 * 4
+%error "os8088 API jump table must be exactly 47 4-byte slots"
 %endif
 
 ; =============================================================================

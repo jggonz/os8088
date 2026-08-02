@@ -313,7 +313,12 @@ used for XOR operations (it is fine for the interior of solid replace-mode
 fills, where the latches are irrelevant).
 
 All coordinates are absolute screen pixels, x1<=x2, y1<=y2 (routines must
-still behave sanely — draw nothing — if the clipped rect is empty).
+still behave sanely — draw nothing — if the clipped rect is empty). The
+only clip is the screen edge, except while a background task has a clip
+region armed (§11.3), in which case `gfx_fill`, `gfx_fill_gray`,
+`gfx_xor_fill` and `gfx_xor_rect` are additionally cut to it — at the
+public entry, above the `[bb_on]` dispatch, so the same hook serves both
+renderers and all three adapters.
 **Color for every drawing op comes from the byte variable `[gfx_color]`.**
 Mode set and teardown are not in this module: `vid_setmode` / `vid_text` in
 `viddet.inc` own them (§39.6).
@@ -371,7 +376,11 @@ bytes are hard-coded.
 | `font_str`   | CX=x, DX=y, SI=NUL str   | draw string left→right               |
 | `font_width` | SI=NUL str               | out AX = pixel width (8 × length)    |
 
-Characters outside 32..126 draw as space. Glyph rows may straddle two VRAM
+Characters outside 32..126 draw as space. Clipping is **whole-cell**: a
+glyph whose 8x8 cell would cross a screen edge is skipped entirely, and so
+is one whose cell is not wholly inside a single fragment of an armed clip
+region (§11.3) — a glyph is one shape or none, and half an 8x8 glyph is
+unreadable. Glyph rows may straddle two VRAM
 bytes; use Set/Reset + Bit Mask with the glyph row shifted across a 16-bit
 window. Under `[bb_on]` (§32/§39.5) `font_char` branches after clipping to
 the software renderer, which applies the same shifted row masks to every
@@ -399,6 +408,15 @@ white to black, because a dithered 8x8 glyph is unreadable, §39.4).
   draw at new). The ISR runs with IF=0 throughout — it cannot race a task
   that is *inside* the lock's cli window (and nothing it calls may `sti`,
   see §1 rule 3).
+- **Background drawing**: a task that draws its own window outside
+  `wm_paint_all` takes the lock, re-checks the visible bit, calls
+  `wm_clip_set` (§11.3) and draws only if it answers CF=0 — every `gfx_*`
+  and `font_*` call it then makes is cut to the part of its content nothing
+  is covering. The region is built and consumed inside that one lock hold
+  and `gfx_unlock` clears it, so it can neither go stale nor leak into the
+  next painter. The `gfx_*` primitives take absolute screen coordinates and
+  have no other clip, which is the whole reason this rule exists: without
+  it, a covered window paints over the window on top of it.
 - **BIOS calls**: only the UI task calls int 10h/16h after boot. Background
   tasks (clock, bounce) use only os8088 primitives and `ticks` — as does a
   package's §20.6 worker, which reaches those primitives through the API
@@ -942,7 +960,10 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | `wm_grow_paint`| in BX = win ptr (caller holds the gfx lock): draw the grow box **iff** BX is the frontmost visible window with WF_SIZABLE set and WF_FULL clear; a no-op otherwise, so it is always safe to call. wm_draw_win uses it after W_PAINT, and a resizable window's **self-initiated content repaint must end with it** — the white-fill idiom (§22) erases the corner, and without the call the box vanishes until the next full repaint while wm_hit still reports AL=4 there. Packages reach it through API slot 0x0094 (§20.3). |
 | `wm_fullscreen`| in AL = 1 enter (BX = win ptr) / AL = 0 exit; **caller holds the gfx lock** (the intended callers are W_ONKEY/W_ONCLICK handlers, which already do). See §11.2. Out CF=1 refused (enter while another window owns the screen), CF=0 done. API slot 0x0090 (§20.3). |
 | `wm_ptr2idx`   | in BX = win ptr (record-aligned); out AL = window index, AH = 0. Clobbers nothing else. The one public home of the `(ptr − wm_wins) / WIN_SIZE` idiom. |
-| `wm_obscured`  | in BX = win ptr; out CF=1 if any visible window above BX in z-order overlaps its frame rect (background tasks use this to skip live updates when covered). Result is only trustworthy while the caller holds the gfx lock — the UI task mutates `wm_zord`/window rects under it. |
+| `wm_obscured`  | in BX = win ptr; out CF=1 if any visible window above BX in z-order overlaps its frame rect. Result is only trustworthy while the caller holds the gfx lock — the UI task mutates `wm_zord`/window rects under it. Kept, but **no longer the right answer for a background painter**: it vetoes a whole frame for one covered pixel. Use `wm_clip_set` (§11.3). |
+| `wm_clip_set`  | in BX = win ptr; **caller holds the gfx lock**. Builds BX's visible region — its content rect less every visible window above it in `wm_zord`, drop shadows included — into the clip list, and arms clipping. out CF=1 the window is entirely invisible: nothing is armed, draw nothing this frame (also the answer when the region needs more than 16 rects). CF=0 armed. Preserves every register. The region is valid only until the next `gfx_unlock`, which clears it (§11.3). API slot 0x00C0 (§20.3). |
+| `wm_clip_clear`| disarm clipping. Preserves every register. `gfx_unlock` already does this, so a painter only needs it to go back to drawing unclipped inside the same lock hold. API slot 0x00C4 (§20.3). |
+| `wm_clip_test` | in AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); out CF=0 the whole rect lies inside **one** clip fragment, or nothing is armed; CF=1 it does not. Preserves every register. This is the question `font_char` and `icon_draw16` ask themselves, exposed so a caller that **erases a rect and then draws glyphs into it** can ask it first — see the granularity rule in §11.3. API slot 0x00C8 (§20.3). |
 
 Paint procs and key handlers run on the **UI task** (via wm_paint_all /
 dispatch) or on the window's own background task — which, since §20.6, may
@@ -1024,6 +1045,121 @@ WF_FULL and zero `wm_fs` before repainting — closing, minimizing (no box
 is drawn, but app_close_win's die-flag path hides) or killing a
 fullscreen window can never strand the latch, and a re-shown window comes
 back windowed at its old place.
+
+### 11.3 The clip region — what a background task may draw
+
+Until this section a background painter had one question it could ask —
+`wm_obscured` — and one answer it could act on: *anything on top of me at
+all, skip the whole frame*. It had to be that blunt, because the `gfx_*`
+primitives draw in absolute screen coordinates with no clipping beyond the
+screen edge, so a covered window that drew would paint over the window on
+top of it. The visible consequence was that a Bounce with one covered pixel
+looked frozen, a Clock's digits stopped, and a fractal that takes two
+minutes on an XT stopped rendering the moment anything touched its corner.
+
+The region replaces the veto. `wm_clip_set` builds the window's **visible
+region** and arms it; while it is armed, the six clipped primitives below
+draw only inside it.
+
+**Building the region.** Start with the window's content rect — the same
+one `wm_draw_win` white-fills before `W_PAINT`; under WF_FULL that is the
+whole frame (§11.2). For every visible window later in `wm_zord`, subtract
+its occupied rect **including the 1px drop shadow**: (x, y) to (x+w, y+h)
+inclusive, exactly the extent `wm_obscured` has always tested against. Each
+subtraction replaces one rect with up to four fragments — above, below,
+left and right of the occluder.
+
+**Storage.** `wm_clip_tab`, 16 rects of {x1, y1, x2, y2} inclusive (128
+bytes of .bss), plus `wm_clip_n` — the live count, and **initialized data in
+.text, not .bss**, because every `gfx_fill` reads it including the machine's
+first and `-f bin` zeroes nothing. `MAX_WIN` is 12, so at most 11 occluders,
+and 16 rects covers every realistic arrangement; past that `wm_clip_set`
+answers CF=1 and the frame is skipped, which is exactly what `wm_obscured`
+used to do and therefore cannot regress anything.
+
+**Validity.** The region is computed from `wm_zord` and the window rects,
+both of which the UI task mutates only under the gfx lock. Within one lock
+hold they cannot change, so a region built at `wm_clip_set` is valid until
+`gfx_unlock` — and meaningless after. That is the same argument that makes
+`wm_obscured` trustworthy, and it is why the region is rebuilt on every
+lock hold rather than cached across one. There is deliberately **no**
+`wm_obscured` fast path inside `wm_clip_set`: the region build *is*
+`wm_obscured`'s z-order walk plus a subtraction that does nothing when
+nothing overlaps, so a pre-test would only walk it twice.
+
+**Where the hook goes.** `gfx_pixel`, `gfx_hline`, `gfx_vline` and
+`gfx_frame` all funnel into `gfx_fill` (§5) — a pixel is a 1×1 rect, an
+hline a 1-row rect, a frame two hlines and two vlines — so the whole
+rectangle vocabulary is one choke point. The clipped set is six:
+
+| entry | how it clips |
+|-------|--------------|
+| `gfx_fill` | per fragment; covers pixel, hline, vline and frame |
+| `gfx_fill_gray` | per fragment (the dither is screen-parity, so fragments align) |
+| `gfx_xor_fill` | per fragment |
+| `gfx_xor_rect` | **decomposed first**: an outline is not the intersection of its bounding rect with anything, so it becomes four `gfx_xor_fill` strips (the same decomposition `bb_xor_rect` uses, each pixel touched once, still self-inverting) |
+| `font_char` | whole-cell; covers `font_str` |
+| `icon_draw16` | whole-icon; covers `icon_draw` and `ico_core` |
+
+Each hook sits at the **public entry, above the `[bb_on]` dispatch**, so one
+implementation covers the VRAM path, the back-buffer path, VGA and both mono
+adapters — on a 1bpp adapter the software renderer *is* the direct path
+(§39.5), and a hook below the dispatch would work on VGA and silently do
+nothing on Hercules. This is the same reasoning that places `bb_mono_chk`
+where it is. Disarmed, the hook is one compare and a taken branch: the
+repaint path pays nothing measurable. Armed, `gfx_clip_run` intersects the
+primitive's rect with each fragment and re-enters the raw body per surviving
+fragment.
+
+`font_char` and `icon_draw16` cannot draw a partial shape, so they take the
+whole-cell answer instead: the glyph or icon is drawn iff its cell lies
+wholly inside **one** fragment, and skipped otherwise. That is the same
+decision both already make at a screen edge (§6), one region in, and half an
+8x8 glyph is unreadable anyway.
+
+**The granularity rule (binding, and the sharp edge of this section).** The
+fills clip **per pixel** and the glyphs clip **per whole cell**, so the two
+do not agree, and a caller that **erases a rect and then draws glyphs into
+it** must not let them disagree in the same frame. Ungated, a window cut
+horizontally by another window's edge has its visible rows white-filled and
+then gets no text back in them: the display does not freeze, it goes *blank*,
+and it is re-blanked on every update. Two ways out, both in the tree:
+
+- **Erase per cell.** Ask `wm_clip_test` for the 8x8 cell; if it answers yes,
+  fill that cell and draw the glyph; if no, touch neither. The two decisions
+  are then the same decision. `app_clk_render` (§14) does this, which is why
+  a half-covered Clock shows whole digits on clean white rather than a blank
+  band.
+- **Gate the whole thing.** When the erased rect is one unit — a status
+  strip, a pane — ask `wm_clip_test` for the whole rect and skip both
+  operations when it says no, leaving the last good pixels alone.
+  `apps/fractal`'s `fr_status` (§40) does this.
+
+Solid-only drawing is unaffected: Bounce erases and redraws with `gfx_fill`
+at both ends, so its two operations clip alike by construction.
+
+**Rules (binding).**
+
+1. **`gfx_unlock` clears the clip.** Making the clip state die with the lock
+   hold is what stops a leaked region from silently truncating the next
+   painter. Nothing relies on callers to clear it.
+2. **Transient overlays are never clipped.** The drag outline and the menu
+   highlights call `vga_xor_rect_vram` / `vga_xor_fill_vram` direct,
+   deliberately bypassing the back buffer (§32). They are drawn by the UI
+   task in a different lock hold, and rule 1 is what makes that structural
+   rather than a convention.
+3. **Clipping is for background tasks only.** `wm_paint_all` draws visible
+   windows back to front, so the painter's algorithm resolves overlap for
+   free and the repaint path must stay unclipped. A painter that arms a
+   region must not call `wm_paint_all` inside the same lock hold.
+4. **`wm_obscured` stays.** It is still correct and still the cheaper answer
+   for a drawer that repaints its whole content in one go — `cp_tick`'s
+   Date/Time rows (§31.5) and `tm_update` (§28) both keep it.
+
+**What changed in the applications.** Bounce (§14) now **always steps** and
+only the erase and the redraw are conditional; Clock (§14) substitutes
+`wm_clip_set` for its veto; and `apps/fractal`'s `fr_emit_body` (§40) does
+the same, so a partly covered fractal keeps rendering the part you can see.
 
 ## 12. menu.inc
 
@@ -1614,21 +1750,31 @@ the gfx lock) may stay shared. Kind behavior:
   += delta*10; while CLK_ACC >= 182: CLK_ACC −= 182 and advance seconds
   with carries (s 60→0/m+1, m 60→0/h+1, h 24→0). This time-keeping runs
   every iteration; only drawing is conditional: gfx_lock; **re-check
-  under the lock** window (I_WIN) visible and not `wm_obscured` — if it
-  fails, gfx_unlock and skip; else white-fill the string rect (font
-  background is transparent, §6), set `[gfx_color]` = CBLACK, draw
-  HH:MM:SS from the instance's CLK_H/M/S centered in content;
-  gfx_unlock }. Paint proc renders the same string from the state block.
-  The accumulator design is binding.
+  under the lock** that the window (I_WIN) is visible, then `wm_clip_set`
+  (§11.3) — if either fails, gfx_unlock and skip; else draw HH:MM:SS from
+  the instance's CLK_H/M/S centered in content; gfx_unlock }. A half-covered
+  Clock therefore redraws the half that shows, whole glyphs only, instead of
+  stopping. **The white background is erased one 8x8 cell at a time**, inside
+  `app_clk_render`, each cell gated on the `wm_clip_test` answer `font_char`
+  is about to give: that is §11.3's granularity rule, and a single 64x8 fill
+  followed by `font_str` would blank the visible band of a horizontally cut
+  Clock twice a second. Paint proc renders the same string from the state
+  block. The accumulator design is binding.
 - **Bounce** — 150×130 at (300,150), title "Bounce". Cap 10 (on VGA the
   template position keeps the whole +16·9 cascade on-screen and above the
   dock; on a shorter screen `wm_fit` clamps its tail back onto it, §39.7).
   Per-instance task: loop { task_sleep 2; **if I_STATE = 2 → `inst_task_die`**;
-  gfx_lock; **check under the lock** visible and not obscured — if the
-  check fails, gfx_unlock and skip the frame without erasing or stepping;
-  else erase 8×8 black square at old pos (white fill), step x/y by
-  velocity, bounce off content edges, draw at new pos; gfx_unlock }.
-  Paint proc: square at the instance's current pos.
+  gfx_lock; **check under the lock** that the window is visible, then
+  `wm_clip_set` (§11.3); if both hold, erase the 8×8 black square at the old
+  pos (white fill), step, draw at the new pos — both fills cut to the
+  visible region, so a half-covered Bounce shows the square crossing the
+  half you can see. If either fails, **step anyway** and draw nothing;
+  gfx_unlock }. Paint proc: square at the instance's current pos.
+  **The step is unconditional**, which is what makes a fully covered or
+  minimized Bounce come back where it now is rather than where it was
+  buried; it is safe precisely because the paint proc draws from state.
+  (Before §11.3 the frame was skipped without erasing *or* stepping, and a
+  covered Bounce looked frozen. That rule is retired.)
 
 The close protocol for these tasks is §29's: the UI task never destroys a
 task-owned instance's window — it sets I_STATE = 2 and hides; the task
@@ -2880,9 +3026,10 @@ sits in between. The kernel.asm table-span assertion goes 34 × 4 → **39 ×
 **Menu slot (§12.2), 0x00AC.** One slot; the table-span assertion goes
 39 × 4 → **40 × 4**.  **File-dialog slot (§38.5), 0x00B0**, adds the next
 one: 40 × 4 → **41 × 4**; **`osapi_video` (§39.8), 0x00B4** the one
-after: 41 × 4 → **42 × 4**; and the two **worker-task slots of §20.6**
-(0x00B8, 0x00BC) the ones after that: 42 × 4 → **44 × 4**, the table's span
-today.
+after: 41 × 4 → **42 × 4**; the two **worker-task slots of §20.6**
+(0x00B8, 0x00BC) the ones after that: 42 × 4 → **44 × 4**; and the three
+**clip-region slots of §11.3** (0x00C0, 0x00C4, 0x00C8) the ones after
+those: 44 × 4 → **47 × 4**, the table's span today.
 
 ```
 0x00AC menu_win_set  in BX = win ptr, SI = app menu set ptr (0 = none).
@@ -2915,6 +3062,31 @@ rules they belong to.
                        the flags preserved while the instance is live;
                        otherwise NEVER RETURNS — it tears the instance
                        down through inst_task_die (§29.4).
+```
+
+**Clip-region slots (§11.3), 0x00C0, 0x00C4 and 0x00C8.** What replaced the
+`wm_obscured` veto for background painters, so a partly covered window can
+go on drawing the part that shows. All three are gfx-lock-held context,
+which in practice means a worker's draw burst; the table-span assertion goes
+44 × 4 → **47 × 4**.
+
+```
+0x00C0 wm_clip_set    in BX = the package's own window ptr; the caller
+                      HOLDS the gfx lock. Builds that window's visible
+                      region and arms clipping for every gfx_*/font_*
+                      call until the next gfx_unlock. out CF=1 nothing
+                      of it is visible — draw nothing this frame; CF=0
+                      armed. Preserves every register.
+0x00C4 wm_clip_clear  disarm early, to draw unclipped again inside the
+                      same lock hold. Preserves every register.
+                      gfx_unlock does this anyway (§11.3 rule 1).
+0x00C8 wm_clip_test   in AX = x1, BX = y1, CX = x2, DX = y2 (inclusive);
+                      out CF=0 the whole rect is drawable (also when
+                      nothing is armed), CF=1 it is not. Preserves every
+                      register. Ask this BEFORE erasing a rect you are
+                      about to draw text into — the fills clip per pixel
+                      and the glyphs per whole cell, and §11.3's
+                      granularity rule is what happens if you don't.
 ```
 
 **These slots are UI-task/window-callback context only (binding)** — the
@@ -3147,9 +3319,16 @@ Two teardown corollaries, both about not trading a crash for a leak:
    never returns. `gfx_lock` is a byte with no owner field, so there is no
    kernel defence — the same reason a `W_PAINT` proc has always been
    forbidden to take it.
-5. **Re-check visibility under the lock.** Before drawing, confirm the
-   window is still visible (`test word [bx+W_FLAGS], 2`) and not obscured
-   (`OSAPI_WM_OBSCURED`) — the §14 Bounce idiom, and `app_bounce_task` in
+5. **Re-check visibility under the lock, then set a clip.** Before
+   drawing, confirm the window is still visible (`test word [bx+W_FLAGS],
+   2`) and call `OSAPI_WM_CLIP_SET` (§11.3). CF=1 means not one pixel of
+   your content shows — draw nothing this frame. CF=0 means draw normally,
+   and the kernel cuts every `gfx_*`/`font_*` call to the part of your
+   content nothing is covering; the region dies at your next
+   `OSAPI_GFX_UNLOCK`, so there is nothing to undo. `OSAPI_WM_OBSCURED` is
+   still there and still correct, but it vetoes the whole frame for one
+   covered pixel, which for a worker that spends minutes on a frame is the
+   wrong trade. This is the §14 Bounce idiom, and `app_bounce_task` in
    `kernel/apps.inc` is the reference implementation for everything a
    worker does.
 6. **The worker's stack is 1536 bytes in `LOW_SEG`, and SS ≠ DS** (§2.1).
@@ -3157,7 +3336,8 @@ Two teardown corollaries, both about not trading a crash for a leak:
    `[bp+disp]` addresses SS — a kernel or package pointer held in BP needs
    an explicit `ds:` override.
 7. **What a worker may call.** Only the background-task surface: `gfx_*`,
-   `osapi_set_color`, `font_*`, `wm_content`, `wm_obscured`, `osapi_video`,
+   `osapi_set_color`, `font_*`, `wm_content`, `wm_obscured`,
+   `wm_clip_set`/`wm_clip_clear`, `osapi_video`,
    `osapi_get_ticks`, `osapi_mouse`, `osapi_srand`/`osapi_rand`,
    `task_sleep`, `task_yield` and `OSAPI_TASK_ALIVE`. `osapi_set_color`
    comes with a condition, and it is the same one that makes `gfx_*` safe:
@@ -3960,7 +4140,7 @@ db height        ; rows
 
 | symbol      | contract                                                     |
 |-------------|---------------------------------------------------------------|
-| `icon_draw` | in CX=x, DX=y (top-left), SI → record. Caller holds the gfx lock. Clips to the screen (skip clipped rows/bytes — windows can hang off the bottom edge). Leaves the GC in the default state (§1 rule 7); preserves registers. |
+| `icon_draw` | in CX=x, DX=y (top-left), SI → record. Caller holds the gfx lock. Clips to the screen (skip clipped rows/bytes — windows can hang off the bottom edge). Against an armed clip region (§11.3) the clip is instead **whole-icon**, like `font_char`'s cell: drawn iff the whole body lies inside one fragment, skipped otherwise. Leaves the GC in the default state (§1 rule 7); preserves registers. |
 | `icon_draw16`| in CX=x, DX=y, SI → **body only** (16 mask words + 16 data words, no 2-byte header) — the §19 harvested-icon / §20.2 embedded-icon layout. |
 | `ico_disk32`| library record: 32×32 floppy disk (rect body, shutter, label area) |
 | `ico_app16` | library record: 16×16 generic application (a recognizable "program" glyph, e.g. a diamond/tool shape) |
@@ -5026,6 +5206,16 @@ after clipping; empty is encoded as dx1 > dx2 (reset: 0x7FFF/0/0x7FFF/0).
 Byte-column granularity is deliberate — the flush copies whole bytes
 anyway, and it spares the union any pixel↔byte conversions.
 
+**Clipping and the dirty rect (§11.3).** A clipped primitive re-enters its
+own body once per surviving fragment, so it produces several `bb_*` calls
+where it used to produce one. That is correct by construction and needed no
+change here: the union only ever widens, and the only resets are `bb_set`
+turning the buffer on and the tail of `gfx_flush`. N sub-rects therefore
+accumulate into one enclosing box and one flush pushes exactly that box.
+The clip hook itself sits **above** the `[bb_on]` dispatch, at the public
+entry, so the buffered and direct paths clip identically and the mono
+adapters — where that dispatch is the only path — get it for free (§39.5).
+
 **Flush — `gfx_flush`.** Public, callable only with the gfx lock held
 (cursor hidden). No-op when `[bb_dbl]` = 0 (single `cmp`/`je` — **not**
 `[bb_on]`, which is 1 on mono with no buffer behind it, §39.5) or the rect
@@ -5080,7 +5270,11 @@ their feedback **VRAM-direct** instead (see below), so the back buffer stays
 clean through both and there is nothing to push. `menu_track` keeps one
 flush, for the pull-down itself, which is real back-buffer content.
 
-**Transient overlays bypass the back buffer.** The drag outline and the two
+**Transient overlays bypass the back buffer — and the clip region.** Rule 2
+of §11.3 is the same statement one level up: these bodies are entered below
+both dispatches, and `gfx_unlock` clears the clip, so a background task's
+region can never survive into the UI task's drag or menu hold.
+The drag outline and the two
 menu highlights are XOR overlays: drawn, then erased, never meant to persist
 — the cursor's contract, not a window's. They call `vga_xor_rect_vram` /
 `vga_xor_fill_vram`, the VRAM bodies of `gfx_xor_rect` / `gfx_xor_fill` under
@@ -6528,6 +6722,13 @@ Double buffering is **unavailable** on mono, by design and not by omission:
 the renderer already writes the framebuffer directly, so there is nothing to
 double.
 
+The same reasoning is why the clip hooks of §11.3 sit at the **public**
+entry of each primitive rather than in its VRAM body: above the `[bb_on]`
+dispatch one hook serves both renderers, and below it a clip would work on
+VGA and silently do nothing on Hercules and CGA. That is the expected
+failure mode of getting the placement wrong, and `make test VIDEO=cga` plus
+`tools/hercshot.py` are what catch it.
+
 ### 39.6 Mode set and teardown
 
 `vid_setmode` is idempotent and safe to re-run with the card already in
@@ -6619,8 +6820,9 @@ On CGA the usable desktop is 156 rows, so windows authored at 640x480 meet
   content y 20/40/60 and is untouched; only the name box loses the bottom
   pixels of its border.
 - **A window that paints from fixed constants draws past its own frame**,
-  because nothing in the kernel clips a draw to a *window* — `vga_rect_setup`
-  clips to the **screen**. Minesweeper and Piano are clipped at the dock and
+  because nothing clips an ordinary paint to a *window* — `vga_rect_setup`
+  clips to the **screen**, and §11.3's clip region is armed only by a
+  background task, never on the `wm_paint_all` path. Minesweeper and Piano are clipped at the dock and
   still play. The Task Manager was the one case where this defaced the dock
   strip once a second, so its two fixed-pitch row lists now stop at
   `[tm_ylim]` (`tm_ylim_set`, §28) rather than at `TM_ROWS`.
@@ -6628,3 +6830,121 @@ On CGA the usable desktop is 156 rows, so windows authored at 640x480 meet
 The general rule this leaves for any new window: **the clamp is not a clip.**
 If a paint proc lays out from constants rather than from `W_W`/`W_H`, it can
 write outside its frame on a short screen, and only the screen edge stops it.
+
+## 40. apps/fractal — the progressive renderer and its restore cache
+
+The reference §20.6 worker, and the first shipped package whose window is
+worth more than the state behind it. Menus (§12.2) pick one of five types,
+one of four palettes, and zoom/reset/redraw; a click recentres. All of that
+is a couple of word stores plus `fr_kick` — the app never draws the picture
+from a callback, the worker does.
+
+**Numerics (binding).** Q4.12 fixed point throughout, iteration cap 48, and
+the escape count *is* the palette index. `fr_clamp` bounds the centre on
+both axes unconditionally inside `fr_setup`, because the clamp is what keeps
+the core's arithmetic from wrapping. Zoom is a shift count (step = step0 >>
+z) so there is no per-frame division except the single step0 = span / cw.
+`FT_SYM` — 0 none / 1 x-axis / 2 origin — is declared in the type table and
+**still not exploited**; exploiting it is a free 2× on four of the five
+types and the one optimisation here that can silently corrupt half a frame,
+so it wants a byte-compare harness against the reference model first.
+
+**Progressive refinement.** `fr_advance` runs three passes over the canvas:
+pass 0 computes rows 0, 4, 8 … and paints each as a **4-row band**, pass 1
+fills rows 2, 6, 10 … as 2-row bands, pass 2 the rest as single rows.
+ch/4 + ch/4 + ch/2 = ch, so no pixel is computed twice — only painted twice
+— and the finished image is exactly the non-progressive image, with a full
+chunky preview after a quarter of the work. `fr_rowcalc` computes one row
+into `fr_line` **with no lock held**; `fr_emit` then takes the lock for a
+run-coalesced band paint and releases it (rule 3 of §20.6).
+
+### 40.1 The pass-0 restore cache
+
+**Why there is no frame buffer.** The canvas is 320×170. Raw at 4bpp that is
+27,200 bytes against a **19,968-byte package pool shared by every resident
+package**; a run-length copy of a whole frame measures 11,712–13,928, most
+of the pool for one instance. A run-length copy of **pass 0 alone** is
+~3,300 bytes, and it is the right quarter of the work to keep, because pass 0
+already covers the whole canvas.
+
+**Format.** One word per run: colour in bits 15..12, the run's last column in
+bits 11..0. A colour index is 0..15 and a column 0..319, so they cannot
+collide and the pack is an OR. Runs start at column 0 and each begins where
+the last ended, so the start column is implied and a row ends with the run
+whose last column is cw−1; the row is implied too, because pass 0 emits rows
+0, 4, 8 … in order. `fr_cache` is 4,000 bytes = 2,000 runs, and the ceiling
+is not that number — it is that image + bss must stay inside one 512-rounded
+7,168-byte region, because two Fractals plus Minesweeper plus Note Pad is
+19,456 of the pool and the next step up does not fit.
+
+**One lock hold owns "this row was consumed".** `fr_emit_body` does the cache
+append, the progress count *and* `fr_advance`, all behind its one restart
+check. None of them may live in the worker's loop, because the worker runs
+them with the lock released and `fr_redraw` publishes the (pass, row) to
+resume from: a stale `fr_advance` out there steps straight past that row, and
+then no pass ever paints it — pass 1 covers rows 2 mod 4 and pass 2 the odd
+ones — while `fr_crow` can never match `fr_row` again, freezing the cache for
+the rest of the frame. While `fr_restart` only ever meant "restart" this was
+harmless, because the worker's loop top rewrote pass and row anyway; the
+resume value 2 deliberately keeps them, which is exactly what makes the
+placement binding.
+
+**Recording — `fr_cache_row`.** Called from `fr_emit_body`, under the gfx
+lock and *after* its restart check but *before* the visibility check. Under
+the lock because it must be atomic against `fr_kick` for the same reason the
+paint is: a row computed for the old view must not be cached for the new
+one. Before the visibility check because a row that cannot be seen is still
+worth keeping — the cache is exactly what makes uncovering the window cheap.
+A row is committed **whole or not at all**; a partial row would desync every
+row after it, since each run's start column is implied by the previous run's
+end. On overflow the cache simply stops growing: `fr_crow` stays put, every
+later row fails its test, and the cached prefix stays replayable.
+
+**Replay — `fr_redraw`.** `W_PAINT` no longer calls `fr_kick`. A repaint is
+not a view change: the content arrived white-filled but the view state is
+untouched, so `fr_redraw` replays the cached bands (`fr_replay` — the emit
+loop with the arithmetic removed) and then tells the worker to **resume**
+rather than restart. `fr_restart` therefore carries three values: 0 nothing
+pending, 1 restart from row 0, 2 resume with the pass and row the UI just
+set. The worker reads it with a read-and-clear `xchg`, not a test then a
+store, because with two values a separate test and clear could see the
+resume, have `fr_kick` overwrite it with a restart, and then clear the
+restart away.
+
+Resume lands at pass 0 row `fr_crow` if pass 0 was interrupted, or at pass 1
+row 2 if it completed — passes 1 and 2 are recomputed, which is why the
+percentage comes back at ~25% and climbs rather than at 0%. `fr_redraw` also
+compares the cached canvas size against the live one, because `fr_setup`
+re-reads W_W/W_H every time and `wm_fit` can clamp them (§39.7); a cache
+built for a different canvas would replay runs at the wrong columns.
+
+**Invalidation is one point.** `fr_kick` empties the cache, and every
+user-side view change — type, palette, centre, zoom, reset — funnels through
+it. There is nowhere else to get it wrong, and with the cache empty
+`fr_redraw` is exactly the old behaviour, spelled `fr_kick`.
+
+### 40.2 Drawing while covered
+
+`fr_emit_body` arms a clip region (§11.3) instead of vetoing on
+`wm_obscured`, so a fractal with a corner — or most of itself — under
+another window goes on rendering the part that shows. The status strip is
+the exception and takes §11.3's granularity rule the other way: it is
+white-filled and then written over with four strings, so `fr_status` asks
+`wm_clip_test` for the whole strip rect first and leaves the old strip alone
+when the answer is no, rather than erasing rows it would then refuse to put
+text back into. Combined with §40.1
+the two halves cover the two ways a window loses its pixels: covering costs
+nothing because the worker keeps drawing what is visible and caching what is
+not, and moving costs one replay because the cache survives the repaint.
+
+### 40.3 Acceptance
+
+- Drag the window mid-render: the coarse image is back within one frame of
+  the drop and the percentage resumes rather than restarting at 0%.
+- Change type: the canvas clears and the render restarts at 0%.
+- Bury it behind another window: it keeps rendering the visible strips and
+  paints nothing outside them; raise it and the whole picture is there.
+- Two instances alongside Minesweeper and Note Pad all load (`ld_alloc` must
+  not refuse the fourth package), and `python3 tools/os88disk.py --verify
+  build/apps.img` passes.
+- All three adapters, and the back buffer both off and on.

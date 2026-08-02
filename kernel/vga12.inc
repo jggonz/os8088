@@ -33,6 +33,93 @@ gfx_lock_flag   db 0            ; drawing mutex (SPEC.md 7); 0 = free.
                                 ; .bss at boot, and this byte must start clear.
 
 ; -----------------------------------------------------------------------------
+; GFXCLIP - the clip hook, at a public rect entry (SPEC.md 11.3)
+;
+; Placed at the PUBLIC entry, above the [bb_on] dispatch, so one hook covers
+; the VRAM path, the back-buffer path, VGA and both mono adapters at once -
+; on a 1bpp adapter the software renderer IS the direct path (SPEC.md 39.5),
+; and a hook below the dispatch would work on VGA and silently do nothing on
+; Hercules. Same reasoning that places bb_mono_chk where it is.
+;
+; Disarmed (the whole repaint path) it costs one compare and a taken branch;
+; nothing else changes. Armed, gfx_clip_run re-enters the raw body once per
+; visible fragment.
+; -----------------------------------------------------------------------------
+%macro GFXCLIP 1
+    cmp word [wm_clip_n], 0     ; clipped background draw? (SPEC.md 11.3)
+    je %1
+    push di
+    mov di, %1
+    call gfx_clip_run
+    pop di
+    ret
+%endmacro
+
+; -----------------------------------------------------------------------------
+; gfx_clip_run - internal: run a rect primitive once per visible fragment
+; in:       AX = x1, BX = y1, CX = x2, DX = y2, DI = near ptr to the raw body
+;           (the entry just below that primitive's GFXCLIP); clip is armed
+; out:      -
+; clobbers: flags
+;
+; The loop's state lives in module scratch rather than registers because the
+; raw bodies preserve everything and there is nothing left to spare anyway.
+; That is safe for the same reason vga12's rect scratch is: this only ever
+; runs with the gfx lock held, and no clipped primitive calls another.
+; -----------------------------------------------------------------------------
+gfx_clip_run:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [gfx_cl_x1], ax
+    mov [gfx_cl_y1], bx
+    mov [gfx_cl_x2], cx
+    mov [gfx_cl_y2], dx
+    mov [gfx_cl_fn], di
+    mov si, wm_clip_tab
+    mov di, [wm_clip_n]
+.frag:
+    mov ax, [si+WCR_X1]         ; AX/CX = the fragment's x span, clipped to
+    cmp ax, [gfx_cl_x1]         ; the primitive's
+    jge .x1
+    mov ax, [gfx_cl_x1]
+.x1:
+    mov cx, [si+WCR_X2]
+    cmp cx, [gfx_cl_x2]
+    jle .x2
+    mov cx, [gfx_cl_x2]
+.x2:
+    cmp ax, cx
+    jg .next
+    mov bx, [si+WCR_Y1]
+    cmp bx, [gfx_cl_y1]
+    jge .y1
+    mov bx, [gfx_cl_y1]
+.y1:
+    mov dx, [si+WCR_Y2]
+    cmp dx, [gfx_cl_y2]
+    jle .y2
+    mov dx, [gfx_cl_y2]
+.y2:
+    cmp bx, dx
+    jg .next
+    call word [gfx_cl_fn]
+.next:
+    add si, WCR_SZ
+    dec di
+    jnz .frag
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; vga_set_color - internal: arm Set/Reset with [gfx_color] on all planes
 ; in:       -
 ; out:      GC0 = [gfx_color], GC1 = 0Fh
@@ -292,6 +379,8 @@ gfx_vline:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 gfx_fill:
+    GFXCLIP gfx_fill_raw
+gfx_fill_raw:
     call bb_mono_chk            ; colour tracking runs in BOTH modes: double
                                 ; buffering can be switched on later, and the
                                 ; buffer it seeds from VRAM is only plane-
@@ -408,6 +497,8 @@ gfx_frame:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 gfx_fill_gray:
+    GFXCLIP gfx_fill_gray_raw
+gfx_fill_gray_raw:
     cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
     jne bb_fill_gray
     push ax
@@ -708,6 +799,11 @@ vga_xor_hline:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 gfx_xor_rect:
+    cmp word [wm_clip_n], 0     ; clipped background draw? (SPEC.md 11.3)
+    jne gfx_xor_rect_clip       ; an OUTLINE is not the intersection of its
+                                ; bounding rect with anything - clipping it
+                                ; that way would draw edges through the
+                                ; middle of it, so it decomposes first
     cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
     jne bb_xor_rect
 vga_xor_rect_vram:              ; VRAM body under its own name: transient
@@ -752,6 +848,56 @@ vga_xor_rect_vram:              ; VRAM body under its own name: transient
     ret
 
 ; -----------------------------------------------------------------------------
+; gfx_xor_rect_clip - internal: the outline as four filled strips
+; in:       AX = x1, BX = y1, CX = x2, DX = y2; the clip is armed
+; out:      -
+; clobbers: flags
+;
+; The same decomposition bb_xor_rect uses, with the same degenerate cases -
+; each pixel is touched exactly once, so the result is still self-inverting.
+; Every strip goes through the PUBLIC gfx_xor_fill, which is where it meets
+; the clip region (SPEC.md 11.3).
+; -----------------------------------------------------------------------------
+gfx_xor_rect_clip:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, bx                  ; SI = y1, DI = y2
+    mov di, dx
+    mov dx, si
+    call gfx_xor_fill           ; top row
+    cmp di, si
+    je .out                     ; y1 = y2: one line, done
+    mov bx, di
+    mov dx, di
+    call gfx_xor_fill           ; bottom row
+    mov bx, si                  ; verticals span y1+1 .. y2-1
+    inc bx
+    mov dx, di
+    dec dx
+    cmp dx, bx
+    jl .out                     ; only two rows: no vertical part
+    push cx
+    mov cx, ax
+    call gfx_xor_fill           ; left column
+    pop cx
+    cmp cx, ax
+    je .out                     ; x1 = x2: one column, done
+    mov ax, cx
+    call gfx_xor_fill           ; right column
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; gfx_xor_fill - filled rectangle, XOR 0Fh (menu highlight)
 ;
 ; Every byte read-before-write; no rep stosb anywhere (SPEC.md 5).
@@ -760,6 +906,8 @@ vga_xor_rect_vram:              ; VRAM body under its own name: transient
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 gfx_xor_fill:
+    GFXCLIP gfx_xor_fill_raw
+gfx_xor_fill_raw:
     cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
     jne bb_xor_fill
 vga_xor_fill_vram:              ; VRAM body under its own name (see
@@ -1003,11 +1151,17 @@ gfx_lock:
 ; cursor_show then redraws at the latest mouse position - its save-under
 ; captures the freshly flushed pixels - while we still own the screen;
 ; only then may the ISR draw again.
+;
+; The clip region dies here too (SPEC.md 11.3 rule 1). Making it die with
+; the lock hold is what stops a leaked region from silently truncating the
+; next painter - and it is what keeps the drag outline and the menu
+; highlights unclipped without any of them knowing the region exists.
 ; in:       -
 ; out:      -
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 gfx_unlock:
+    mov word [wm_clip_n], 0
     call gfx_flush
     call cursor_show
     mov byte [gfx_lock_flag], 0
@@ -1025,5 +1179,10 @@ vga_span        resw 1          ; rect: right byte - left byte
 vga_off         resw 1          ; rect: VRAM offset of top-left byte
 vga_lcol        resw 1          ; rect: left byte column (bb dirty union)
 vga_patbuf      resb 8          ; gfx_fill_pat: staged pattern rows
+gfx_cl_x1       resw 1          ; gfx_clip_run: the primitive's own rect,
+gfx_cl_y1       resw 1          ; held while the raw body runs per fragment
+gfx_cl_x2       resw 1
+gfx_cl_y2       resw 1
+gfx_cl_fn       resw 1          ; ...and the raw body's near pointer
 
 section .text
