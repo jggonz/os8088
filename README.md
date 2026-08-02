@@ -111,8 +111,18 @@ the menus. All of classic Mac's core interactions work:
 - **Clock** and **Bounce** — each instance runs as its *own pre-empted task*,
   up to ten of each. The clocks tick and the balls bounce while you type or
   hold a drag: that is the PIT timer interrupt switching tasks out from under
-  each other, on an 8086. When another window covers them they stop drawing
-  (and the clocks keep time silently); uncover them and they resume.
+  each other, on an 8086. Cover half of one and it keeps going in the half
+  you can see — the kernel hands a background task the *visible region* of
+  its window and clips every draw to it. Cover it entirely and the ball still
+  steps, invisibly, so it turns up where it now is rather than where it was
+  buried.
+- **Fractal** — five fractals, four palettes, five zoom levels, rendered by
+  a package's own background task while the rest of the desktop stays live.
+  It renders in three progressive passes, so a coarse full image lands after
+  a quarter of the work, and it keeps a run-length copy of that first pass:
+  move the window and the picture is back instantly and the render *resumes*
+  instead of starting over. On a 4.77MHz XT a frame takes about two minutes,
+  which is exactly why that matters.
 - **Task Manager** — System → Task Manager: a live CPU load gauge with a
   scrolling history graph, a RAM readout with a usage bar, and one row per
   instance with its state, CPU share and memory. Apps with no task of their own
@@ -147,7 +157,7 @@ the menus. All of classic Mac's core interactions work:
 | font          | the VGA ROM's own 8x8 font, copied out via int 10h AX=1130h at boot. |
 | floppy        | BIOS int 13h, one sector per call with retries — reads and writes share one routine, so the CHS math and the retry policy can't drift apart; task switching pauses during a transfer (the tick still runs — the floppy motor needs it). |
 | software      | `.o88` packages on a plain FAT12 data floppy in B: — any PC, Mac or Linux box can read and write the disk, and so can os8088: apps create, replace, rename and delete whole files through five API slots, and the kernel validates every byte it reads off the disk before any of it becomes an address (Note Pad saves and loads DOS-readable text files, named through the kernel's Standard File dialog). A package is a flat binary loaded into a first-fit region of 1000:A000..1000:EFFF — inside the kernel segment, so its window procs are ordinary near pointers — calling the kernel through a fixed jump table at 1000:0010. It ships with a relocation table, so several packages, or several copies of one, run at once. |
-| concurrency   | one drawing mutex (`gfx_lock`); background tasks re-check visibility *under* the lock; ISRs run IF=0 throughout and never draw over a held lock. SPEC.md is the binding contract. |
+| concurrency   | one drawing mutex (`gfx_lock`); background tasks re-check visibility *under* the lock and then arm a clip region — their window's content rect less every window above it — so a covered window draws the part that shows instead of skipping the frame; ISRs run IF=0 throughout and never draw over a held lock. SPEC.md is the binding contract. |
 
 The kernel is ~14KB. Everything runs in the tiny model — CS = DS = SS =
 0x1000, all near calls, no linker: NASM `-f bin` flat binaries only, which

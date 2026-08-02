@@ -100,6 +100,26 @@ ico_core:
     mov [ico_x], cx
     mov [ico_y], dx
 
+    cmp word [wm_clip_n], 0     ; whole-icon against a background task's clip
+    je .noclip                  ; region, the font_char rule (SPEC.md 11.3):
+    mov ax, cx                  ; an icon is one shape or none
+    mov bx, dx
+    mov cx, [ico_ww]            ; CX = 16 * wwords = the body's pixel width
+    shl cx, 1                   ; (a "word" of an icon row is 16 pixels, not
+    shl cx, 1                   ; 8 - four shifts, not three)
+    shl cx, 1
+    shl cx, 1
+    add cx, ax
+    dec cx
+    mov dx, [ico_h]
+    add dx, bx
+    dec dx
+    call wm_clip_test
+    mov cx, [ico_x]
+    mov dx, [ico_y]
+    jc .none
+.noclip:
+
     mov ax, [ico_ww]            ; source/VRAM stride bookkeeping
     shl ax, 1
     mov [ico_rb], ax            ; bytes per icon row (= 2 * wwords)

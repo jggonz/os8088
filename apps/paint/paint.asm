@@ -128,16 +128,21 @@
     dw 0x0000
     OS88_ICON16_END
 
-; --- the four segments we claim above BB_SEG (see the header) -------------------
-PT_CVSEG    equ 0x6600              ; canvas: BMP header + bottom-up rows
-PT_UNSEG    equ 0x7600              ; undo image, identical layout
-PT_CBSEG    equ 0x8600              ; clipboard, and the load staging buffer
-PT_SCSEG    equ 0x9600              ; claim record + flood-fill stack
-PT_NEED_KB  equ 620                 ; int 12h floor: PT_SCSEG + 19.5KB of use
-                                    ; ends at linear 0x9AC00 = 619.0KB, so a
-                                    ; 640KB machine (int 12h says 639 or 640
-                                    ; once the BIOS takes its EBDA) clears it
-                                    ; and nothing smaller does
+; --- the memory we claim above BB_SEG (see the header) --------------------------
+; All of it is sized from int 12h at startup, because the canvas is not a
+; fixed size: the picture, its undo image and the clipboard are three
+; runtime-sized buffers, and how big a picture the machine can hold is one
+; division. Only the base is a constant.
+PT_BASE     equ 0x6600              ; canvas base segment - the first paragraph
+                                    ; above BB_SEG's four planes
+PT_SC_KB    equ 12                  ; scratch (claim record + fill stack), taken
+                                    ; off the TOP of usable memory so its
+                                    ; address is deterministic for the claim
+PT_CLIPMINP equ 1024                ; the clipboard's floor, in paragraphs
+PT_MINP     equ 2000                ; ...and a canvas under 32,000 bytes
+                                    ; (320x200) is not worth starting
+PT_MEMTOP   equ 640                 ; the int 12h answer we cap at: an 8086 has
+                                    ; no more conventional memory than this
 
 PT_MAGIC1   equ 0x3850              ; 'P8' - the claim record's signature...
 PT_MAGIC2   equ 0x5A17              ; ...in two words, so stale RAM cannot
@@ -152,11 +157,12 @@ PT_FSTK_MAX equ 1024                ; entries of 8 bytes (y, x1, x2, dy)
 ; HEIGHT varies, because the desktop between the menu bar and the dock does
 ; (436 / 300 / 152 rows on VGA / Hercules / CGA), and pt_entry derives it
 ; from the live geometry rather than from a constant.
-PT_CW       equ 448                 ; canvas width, pixels
-PT_STRIDE   equ PT_CW / 2           ; 224 bytes per row - a multiple of 4, so
-                                    ; it is already a legal 4bpp BMP stride
-PT_CH_MAX   equ 280                 ; canvas height cap (fits VGA's desktop)
-PT_CH_MIN   equ 64                  ; below this we refuse rather than crop
+PT_CW_DEF   equ 448                 ; the canvas a fresh Paint starts with...
+PT_CH_DEF   equ 280                 ; ...clamped to the screen and to memory
+PT_CW_MIN   equ 32                  ; the smallest a resize may leave
+PT_CH_MIN   equ 16
+PT_CW_MAX   equ 736                 ; row-table sizing: the widest screen
+PT_CH_MAX   equ 464                 ; os8088 drives is 720, the tallest 480
 PT_BMPHDR   equ 118                 ; 14 + 40 + 16*4: the DIB in front of row 0
 
 ; --- content layout (all content-relative; SPEC.md 11's content rect) ----------
@@ -167,12 +173,15 @@ PT_PAL_Y0   equ 1                   ; first button row
 PT_PAL_DY   equ 21                  ; button pitch
 PT_SEPX     equ 43                  ; the black vline between palette and canvas
 PT_CV_X     equ 44                  ; canvas left edge
-PT_CONT_W   equ PT_CV_X + PT_CW     ; 492 - content width
-PT_FRAME_W  equ PT_CONT_W + 2       ; 494 - frame width (1px border each side)
 PT_STRIP_H  equ 22                  ; bottom strip: colours, widths, toggles
 PT_CHROME_H equ PT_STRIP_H + 1 + 19 ; canvas height -> frame height (the +1 is
                                     ; the separator row, the 19 is TITLE_H+1)
+PT_CHROME_W equ PT_CV_X + 2         ; canvas width  -> frame width
 PT_WIN_Y    equ MBAR_H + 4          ; frame top
+PT_GROW     equ 15                  ; the grow box owns the content's last 13
+                                    ; columns and rows (SPEC.md 11) - which is
+                                    ; inside the strip, so the strip's
+                                    ; right-hand controls stop short of it
 
 ; strip contents, content-relative x (the strip's own top is [pt_stripy])
 PT_TH_X     equ 2                   ; four thickness buttons, pitch 21
@@ -180,9 +189,8 @@ PT_TH_DX    equ 21
 PT_CUR_X    equ 90                  ; current-colour well
 PT_SW_X     equ 116                 ; colour swatches, pitch 21
 PT_SW_DX    equ 21
-PT_FIL_X    equ 455                 ; filled-shapes toggle (16 wide)
-PT_FNT_X    equ 473                 ; font-scale cycle (16 wide)
-PT_BTN_W16  equ 16
+PT_BTN_W16  equ 16                  ; the two toggles are right-anchored, so
+                                    ; their x is [pt_filx] / [pt_fntx]
 
 ; --- tools ---------------------------------------------------------------------
 PT_T_PENCIL equ 0
@@ -197,7 +205,7 @@ PT_NTOOL    equ 8
 
 ; --- modes: anything but PT_M_LIVE draws a notice and eats every input ---------
 PT_M_LIVE   equ 0
-PT_M_NOMEM  equ 1                   ; int 12h below PT_NEED_KB
+PT_M_NOMEM  equ 1                   ; int 12h cannot fund a minimum canvas
 PT_M_DUP    equ 2                   ; another Paint owns the canvas
 PT_M_SMALL  equ 3                   ; the desktop cannot hold a usable canvas
 
@@ -224,8 +232,7 @@ pt_entry:
     mov byte [pt_ethick], 1         ; text scale; the eraser starts at 16px
                                     ; against the pencil's 1px, which is what
                                     ; "much thicker by default" means here
-    call pt_geom                    ; window size + [pt_ch] + [pt_mono]
-    call pt_memchk                  ; int 12h -> PT_M_NOMEM or nothing
+    call pt_geom                    ; screen limits, memory budget, canvas
     cmp byte [pt_mode], PT_M_LIVE
     jne .make                       ; already refusing: do not read the claim
     call pt_dupchk                  ; CF=1: another live Paint has the canvas
@@ -240,7 +247,11 @@ pt_entry:
                                     ; claim - the region stays untouched
     mov [pt_win], bx
     cmp byte [pt_mode], PT_M_LIVE
-    jne .menus                      ; a notice window gets the menu bar too,
+    jne .menus
+    push ax
+    mov al, 1                       ; resizable: the canvas IS the content, so
+    call OSAPI_WM_SIZABLE           ; dragging the grow box sizes the picture
+    pop ax                      ; a notice window gets the menu bar too,
                                     ; so its name shows and File/Edit are
                                     ; visibly inert rather than absent
     pushf                           ; the CF wm_create owes the loader rides
@@ -257,70 +268,317 @@ pt_entry:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_geom - size the window from the live screen (SPEC.md 39.2/39.8)
+; pt_geom - the screen's limits, the memory budget, and the first canvas
 ; in:  nothing
-; out: pt_tpl patched, [pt_ch] set, [pt_mono] / [pt_ncol] set,
-;      [pt_mode] = PT_M_SMALL if no usable canvas fits; preserves nothing
+; out: pt_tpl patched; [pt_cwmax]/[pt_chmax] = the biggest canvas this SCREEN
+;      can show; [pt_smaxp] = the biggest this MACHINE can hold, in paragraphs;
+;      the three buffer bases; [pt_cw]/[pt_ch] = the starting canvas;
+;      [pt_mode] = PT_M_NOMEM or PT_M_SMALL when a bound cannot be met
 ;
-; The canvas height is whatever is left of the desktop after the title bar,
-; the separator and the strip. CX from OSAPI_VIDEO is the first row the dock
-; owns, so rows PT_WIN_Y..CX-1 are ours. On a 1bpp adapter the palette drops
-; to the three colours that survive SPEC.md 39.4's reduction as distinct
-; classes - black, the 50% dither, white - because sixteen swatches of which
-; fourteen are indistinguishable is a worse lie than three that are honest.
+; Both bounds are real and neither is a constant. The screen bound comes from
+; OSAPI_VIDEO (SPEC.md 39.2): the window sits at PT_WIN_Y and may reach the
+; row the dock owns. The memory bound comes from int 12h: the canvas and its
+; undo image are always the same size and the clipboard has a floor, so the
+; largest canvas is (usable - clipboard floor) / 2.
+;
+; The buffer bases are fixed here, once, from that MAXIMUM rather than from the
+; starting canvas - which is what makes a later resize safe: no base ever
+; moves, so pt_resize can stage the old picture in the undo buffer and lay the
+; new one out with no overlap to reason about.
 ; -----------------------------------------------------------------------------
 pt_geom:
     call OSAPI_VIDEO                ; AX=w, BX=h, CX=dock row, DL=kind, DH=bpp
+    mov [pt_scrw], ax
     mov byte [pt_ncol], 16
     cmp dh, 1
     jne .colour
     mov byte [pt_mono], 1
     mov byte [pt_ncol], 3
 .colour:
-    ; --- height: CX - PT_WIN_Y is the tallest frame that clears the dock ---
-    ; Signed compares throughout: a screen short enough to make this negative
-    ; would otherwise read as an enormous unsigned canvas.
-    sub cx, PT_WIN_Y + PT_CHROME_H  ; ...and this is the canvas inside it
+    ; --- what the screen allows ---------------------------------------------
+    sub cx, PT_WIN_Y + PT_CHROME_H  ; the tallest canvas from y = PT_WIN_Y
     cmp cx, PT_CH_MAX
-    jle .h_ok
+    jle .h_cap
     mov cx, PT_CH_MAX
-.h_ok:
+.h_cap:
+    mov [pt_chmax], cx
+    sub ax, PT_CHROME_W             ; ...and the widest the screen leaves
+    cmp ax, PT_CW_MAX
+    jle .w_cap
+    mov ax, PT_CW_MAX
+.w_cap:
+    mov [pt_cwmax], ax
     cmp cx, PT_CH_MIN
-    jge .h_fits
+    jl .small
+    cmp ax, PT_CW_MIN
+    jge .mem
+.small:
     mov byte [pt_mode], PT_M_SMALL
-    mov cx, PT_CH_MIN               ; still make a window, just an inert one
-.h_fits:
-    mov [pt_ch], cx
-    add cx, PT_CHROME_H
-    mov [pt_tpl + WT_H], cx
-    mov word [pt_tpl + WT_Y], PT_WIN_Y
-    ; --- width is fixed; centre it, and refuse a screen too narrow for it ---
-    mov word [pt_tpl + WT_W], PT_FRAME_W
-    sub ax, PT_FRAME_W
-    jns .w_ok
-    mov byte [pt_mode], PT_M_SMALL
-    xor ax, ax
-.w_ok:
-    shr ax, 1
-    mov [pt_tpl + WT_X], ax
+    mov word [pt_cwmax], PT_CW_MIN  ; the window will only carry a notice, but
+    mov word [pt_chmax], PT_CH_MIN  ; the arithmetic below still has to run
+    ; --- what memory allows -------------------------------------------------
+.mem:
+    int 0x12                        ; AX = KB of conventional memory
+    cmp ax, PT_MEMTOP
+    jbe .kb_ok
+    mov ax, PT_MEMTOP
+.kb_ok:
+    sub ax, PT_SC_KB
+    jbe .nomem
+    mov cl, 6
+    shl ax, cl                      ; KB -> paragraphs, at most 40,192
+    mov [pt_scseg], ax              ; scratch: the claim record + fill stack
+    sub ax, PT_BASE
+    jbe .nomem
+    cmp ax, PT_CLIPMINP + 2 * PT_MINP
+    jb .nomem
+    sub ax, PT_CLIPMINP
+    shr ax, 1                       ; canvas and undo image, equal halves
+    mov [pt_smaxp], ax
+    mov dx, PT_BASE
+    add dx, ax
+    mov [pt_unseg], dx              ; the undo image, one whole canvas up
+    add dx, ax
+    mov [pt_cbseg], dx              ; the clipboard takes the remainder
+    mov ax, [pt_scseg]
+    sub ax, dx
+    mov [pt_cbparas], ax
+    jmp short .first
+.nomem:
+    mov byte [pt_mode], PT_M_NOMEM
+    mov word [pt_smaxp], PT_MINP    ; nothing is allocated or drawn, but the
+                                    ; layout arithmetic still runs once
+    ; --- the starting canvas: the default, held inside both bounds ----------
+.first:
+    mov ax, PT_CW_DEF
+    cmp ax, [pt_cwmax]
+    jle .cw_ok
+    mov ax, [pt_cwmax]
+.cw_ok:
+    mov dx, PT_CH_DEF
+    cmp dx, [pt_chmax]
+    jle .ch_ok
+    mov dx, [pt_chmax]
+.ch_ok:
+    call pt_fit                     ; shrink it until memory can hold it
+    call pt_layout                  ; stride, row tables, buffer offsets
+    call pt_wsize                   ; ...and the window that shows it
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_memchk - int 12h against PT_NEED_KB
-; in:  nothing
-; out: [pt_mode] = PT_M_NOMEM when short; preserves all registers
-;
-; int 12h is the same probe bb_init uses for double buffering (SPEC.md 32) and
-; the only one available to a package: there is no memory service in the API.
+; pt_wsize - size pt_tpl (and, after creation, the record) from the canvas
+; in:  [pt_cw], [pt_ch], [pt_scrw]
+; out: pt_tpl WT_W/WT_H/WT_X/WT_Y set; preserves all registers
 ; -----------------------------------------------------------------------------
-pt_memchk:
+pt_wsize:
     push ax
-    int 0x12                        ; AX = KB of conventional memory
-    cmp ax, PT_NEED_KB
-    jae .out
-    mov byte [pt_mode], PT_M_NOMEM
-.out:
+    mov ax, [pt_ch]
+    add ax, PT_CHROME_H
+    mov [pt_tpl + WT_H], ax
+    mov word [pt_tpl + WT_Y], PT_WIN_Y
+    mov ax, [pt_cw]
+    add ax, PT_CHROME_W
+    mov [pt_tpl + WT_W], ax
+    mov ax, [pt_scrw]
+    sub ax, [pt_tpl + WT_W]
+    jns .x_ok
+    xor ax, ax
+.x_ok:
+    shr ax, 1
+    mov [pt_tpl + WT_X], ax
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_fit - shrink a candidate canvas until memory can hold it
+; in:  AX = width, DX = height
+; out: AX/DX clamped, both at least the minimums; CF=1 if something had to
+;      give (which a load reports as a truncated picture)
+;
+; Height gives first: a picture that loses rows off the bottom stays more
+; recognisable than one losing columns off the right AND rows off the bottom.
+; Only with the height already at the floor does the width start to give.
+; -----------------------------------------------------------------------------
+pt_fit:
+    push bx
+    push cx
+    mov byte [pt_fitcut], 0
+.retry:
+    call pt_paras                   ; BX = stride, CX = paragraphs needed
+    cmp cx, [pt_smaxp]
+    jbe .out
+    mov byte [pt_fitcut], 1
+    cmp dx, PT_CH_MIN
+    jbe .narrow
+    mov cx, dx
+    shr cx, 1                       ; an eighth of the height at a time (the
+    shr cx, 1                       ; 8086 shifts by one or by CL, nothing
+    shr cx, 1                       ; else)
+    or cx, cx
+    jnz .cuth
+    mov cx, 1
+.cuth:
+    sub dx, cx
+    cmp dx, PT_CH_MIN
+    jge .retry
+    mov dx, PT_CH_MIN
+    jmp short .retry
+.narrow:
+    cmp ax, PT_CW_MIN
+    jbe .out                        ; both floors reached: nothing left to give
+    mov cx, ax
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    or cx, cx
+    jnz .cutw
+    mov cx, 1
+.cutw:
+    sub ax, cx
+    cmp ax, PT_CW_MIN
+    jge .retry
+    mov ax, PT_CW_MIN
+    jmp short .retry
+.out:
+    cmp byte [pt_fitcut], 0
+    pop cx
+    pop bx
+    je .clean
+    stc
+    ret
+.clean:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_paras - the stride and the paragraph cost of a canvas
+; in:  AX = width, DX = height
+; out: BX = row stride in bytes, CX = paragraphs including the DIB header;
+;      AX and DX preserved
+;
+; The stride is the BMP one - ceil(w/2) rounded up to 4 - because the canvas IS
+; the file (SPEC.md 41). The byte total needs 32 bits: a 736x464 canvas is
+; 171,000 bytes, so MUL's DX:AX is shifted down to paragraphs as a pair.
+; -----------------------------------------------------------------------------
+pt_paras:
+    push ax
+    push dx
+    inc ax
+    shr ax, 1                       ; ceil(w/2)...
+    add ax, 3
+    and ax, 0xFFFC                  ; ...rounded up to 4
+    mov bx, ax
+    mov ax, dx
+    mul bx                          ; DX:AX = stride * height
+    add ax, PT_BMPHDR + 15
+    adc dx, 0
+    mov cx, ax
+    mov ax, dx
+    mov dx, cx                      ; AX = high word, DX = low word
+    mov cl, 12
+    shl ax, cl
+    mov cl, 4
+    shr dx, cl
+    or ax, dx
+    mov cx, ax                      ; CX = paragraphs
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_layout - adopt a canvas size: stride, row tables, undo offset
+; in:  AX = width, DX = height (already through pt_fit)
+; out: [pt_cw], [pt_ch], [pt_stride], [pt_cvparas], pt_rowseg/pt_rowoff built,
+;      [pt_undelta] set; preserves all registers
+;
+; The row tables are the whole of the addressing story. A canvas can be bigger
+; than one 64KB segment - a 636x326 picture is 104KB - so a row is named by a
+; (segment, offset) pair instead of a 16-bit offset: rowseg[y] is the paragraph
+; it starts in, rowoff[y] the 0..15 bytes into that paragraph. The undo image
+; has the identical layout one whole canvas higher, so its row segment is
+; rowseg[y] + [pt_undelta] and there is no second table.
+; -----------------------------------------------------------------------------
+pt_layout:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [pt_cw], ax
+    mov [pt_ch], dx
+    call pt_paras                   ; BX = stride, CX = paragraphs
+    mov [pt_stride], bx
+    mov [pt_cvparas], cx
+    mov ax, [pt_smaxp]
+    mov [pt_undelta], ax
+    call pt_titleset                ; the size lives in the title bar
+    ; --- row 0 is the LAST row in the file, so the walk runs downward -------
+    mov ax, [pt_ch]
+    dec ax
+    mul bx                          ; DX:AX = (ch-1) * stride
+    add ax, PT_BMPHDR
+    adc dx, 0
+    mov si, ax                      ; DI:SI = row 0's byte offset, 32 bits
+    mov di, dx
+    xor bx, bx                      ; BX = y*2, the table index
+    mov cx, [pt_ch]
+.row:
+    mov ax, si
+    and ax, 15
+    mov [pt_rowoff+bx], ax          ; 0..15 bytes into its paragraph...
+    mov ax, di
+    mov dx, si
+    push cx
+    mov cl, 12
+    shl ax, cl
+    mov cl, 4
+    shr dx, cl
+    pop cx
+    or ax, dx
+    add ax, PT_BASE
+    mov [pt_rowseg+bx], ax          ; ...whose segment is PT_BASE + off>>4
+    sub si, [pt_stride]             ; one row up in the file is one row down
+    sbb di, 0                       ; in the picture
+    inc bx
+    inc bx
+    loop .row
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_rowset  - point ES:DI at the first byte of canvas row AX
+; pt_urowset - the same row of the undo image
+; in:  AX = row (inside the canvas)
+; out: ES:DI = that row's first byte; AX preserved, clobbers BX and flags
+;
+; Every loop that walks a row calls one of these once per row and then indexes
+; ES:[DI + x>>1], so the table pair costs six instructions a row and nothing
+; a pixel.
+; -----------------------------------------------------------------------------
+pt_rowset:
+    push bx
+    mov bx, ax
+    add bx, bx
+    mov di, [pt_rowoff+bx]
+    mov es, [pt_rowseg+bx]
+    pop bx
+    ret
+
+pt_urowset:
+    push bx
+    mov bx, ax
+    add bx, bx
+    mov di, [pt_rowoff+bx]
+    mov bx, [pt_rowseg+bx]
+    add bx, [pt_undelta]
+    mov es, bx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -344,7 +602,7 @@ pt_dupchk:
     push si
     push di
     push es
-    mov ax, PT_SCSEG
+    mov ax, [pt_scseg]
     mov es, ax
     cmp word [es:PT_SC_CLAIM], PT_MAGIC1
     jne .free
@@ -358,13 +616,13 @@ pt_dupchk:
     test word [bx + W_FLAGS], 1     ; still a used window slot?
     jz .free
     mov si, [bx + W_TITLE]          ; ...and still called what we call ours?
-    mov di, pt_title
-.cmp:
-    mov al, [si]
-    cmp al, [di]
-    jne .free
+    mov di, pt_s_title              ; The PREFIX only: the live title carries
+.cmp:                               ; the canvas size after it, and two Paints
+    mov al, [di]                    ; need not be the same size to collide
     or al, al
     jz .taken
+    cmp al, [si]
+    jne .free
     inc si
     inc di
     jmp short .cmp
@@ -389,7 +647,7 @@ pt_dupchk:
 pt_claim:
     push ax
     push es
-    mov ax, PT_SCSEG
+    mov ax, [pt_scseg]
     mov es, ax
     mov word [es:PT_SC_CLAIM], PT_MAGIC1
     mov word [es:PT_SC_CLAIM+2], PT_MAGIC2
@@ -400,44 +658,15 @@ pt_claim:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_canvas_init - build the row table and the BMP header, then white the canvas
-; in:  [pt_ch]
+; pt_canvas_init - stamp the DIB header, white the picture
+; in:  a layout already adopted (pt_layout)
 ; out: nothing; preserves all registers
-;
-; pt_rowtab is the whole of the bottom-up story: row y of the picture lives
-; at PT_BMPHDR + (ch-1-y)*PT_STRIDE, and every access in the app is
-; `mov di, [pt_rowtab+bx]` with bx = y*2. Nothing else in the file knows the
-; rows are upside down.
 ; -----------------------------------------------------------------------------
 pt_canvas_init:
     push ax
-    push bx
-    push cx
-    push dx
-    push di
-    push es
-    mov di, [pt_ch]
-    dec di                          ; DI = ch-1-y, counted down to 0
-    xor bx, bx                      ; BX = y*2, the table index
-.row:
-    mov ax, di
-    mov cx, PT_STRIDE
-    mul cx                          ; AX = (ch-1-y)*stride; DX = 0, since the
-    add ax, PT_BMPHDR               ; whole picture is 62,720 bytes at most
-    mov [pt_rowtab+bx], ax
-    inc bx
-    inc bx
-    dec di
-    jns .row
-
-    call pt_bmp_hdr                 ; the DIB in front of row 0
+    call pt_bmp_hdr
     mov al, CWHITE
-    call pt_wipe                    ; ...and a blank picture behind it
-    pop es
-    pop di
-    pop dx
-    pop cx
-    pop bx
+    call pt_wipe
     pop ax
     ret
 
@@ -445,12 +674,16 @@ pt_canvas_init:
 ; pt_wipe - fill the whole canvas with colour AL, without touching undo
 ; in:  AL = colour 0..15
 ; out: nothing; preserves all registers
+;
+; Row by row, because the canvas may span segments: one long rep stosw would
+; wrap at 64KB and paint the start of the picture again.
 ; -----------------------------------------------------------------------------
 pt_wipe:
     push ax
     push bx
     push cx
     push dx
+    push si
     push di
     push es
     mov bl, al
@@ -458,20 +691,22 @@ pt_wipe:
     shl al, cl
     or al, bl
     mov ah, al                      ; AX = the colour in all four nibbles
-    mov bx, PT_CVSEG
-    mov es, bx
-    mov di, PT_BMPHDR
-    push ax
-    mov ax, [pt_ch]
-    mov cx, PT_STRIDE
-    mul cx                          ; AX = pixel bytes (DX = 0, < 64K)
-    shr ax, 1                       ; ...as words: PT_STRIDE is even
-    mov cx, ax
-    pop ax
+    mov dx, ax
+    xor si, si                      ; SI = row
     cld
+.row:
+    mov ax, si
+    call pt_rowset                  ; ES:DI = the row
+    mov cx, [pt_stride]
+    shr cx, 1                       ; whole words: the stride is a multiple of 4
+    mov ax, dx
     rep stosw
+    inc si
+    cmp si, [pt_ch]
+    jb .row
     pop es
     pop di
+    pop si
     pop dx
     pop cx
     pop bx
@@ -496,25 +731,28 @@ pt_bmp_hdr:
     push si
     push di
     push es
-    mov ax, PT_CVSEG
+    mov ax, PT_BASE
     mov es, ax
     xor di, di
     mov ax, [pt_ch]
-    mov dx, PT_STRIDE
-    mul dx
-    mov cx, ax                      ; CX = pixel bytes
+    mul word [pt_stride]            ; DX:AX = pixel bytes - 32 bits, because a
+    mov cx, ax                      ; big canvas is more than 64KB and bfSize
+    mov si, dx                      ; has to carry all of it
     mov word [es:di], 0x4D42        ; 'BM'
     mov ax, cx
     add ax, PT_BMPHDR
-    mov [es:di+2], ax               ; bfSize
-    mov word [es:di+4], 0
+    mov [es:di+2], ax               ; bfSize, low word...
+    mov ax, si
+    adc ax, 0
+    mov [es:di+4], ax               ; ...and high
     mov word [es:di+6], 0
     mov word [es:di+8], 0
     mov word [es:di+10], PT_BMPHDR  ; bfOffBits
     mov word [es:di+12], 0
     mov word [es:di+14], 40         ; biSize
     mov word [es:di+16], 0
-    mov word [es:di+18], PT_CW      ; biWidth
+    mov ax, [pt_cw]
+    mov [es:di+18], ax              ; biWidth
     mov word [es:di+20], 0
     mov ax, [pt_ch]
     mov [es:di+22], ax              ; biHeight (positive = bottom-up)
@@ -523,8 +761,8 @@ pt_bmp_hdr:
     mov word [es:di+28], 4          ; biBitCount
     mov word [es:di+30], 0          ; biCompression = BI_RGB
     mov word [es:di+32], 0
-    mov [es:di+34], cx              ; biSizeImage
-    mov word [es:di+36], 0
+    mov [es:di+34], cx              ; biSizeImage, both words
+    mov [es:di+36], si
     mov word [es:di+38], 0          ; biXPelsPerMeter
     mov word [es:di+40], 0
     mov word [es:di+42], 0          ; biYPelsPerMeter
@@ -621,6 +859,7 @@ pt_font_init:
 ; -----------------------------------------------------------------------------
 pt_org:
     push ax
+    push bx
     push dx
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
     mov [pt_ox], ax
@@ -628,12 +867,43 @@ pt_org:
     add ax, PT_CV_X
     mov [pt_cx0], ax
     mov [pt_cy0], dx
+    mov ax, [bx + W_W]              ; the live record is the truth about size,
+    sub ax, 2                       ; and a resizable window's is rewritten
+    mov [pt_contw], ax              ; under us by ui_grow (SPEC.md 11.1)
+    mov ax, [bx + W_H]
+    sub ax, TITLE_H + 1
+    mov [pt_conth], ax
     mov ax, [pt_ch]
     inc ax
     mov [pt_stripy], ax
+    ; --- the strip's right-hand controls are anchored to the right edge, clear
+    ; --- of the grow box, and the swatch row takes what is left -------------
+    mov ax, [pt_contw]
+    sub ax, PT_GROW + PT_BTN_W16
+    mov [pt_fntx], ax
+    sub ax, PT_BTN_W16 + 2
+    mov [pt_filx], ax
+    sub ax, PT_SW_X + 4             ; pixels available to the swatches
+    js .nosw
+    mov bx, PT_SW_DX
+    xor dx, dx
+    div bx                          ; AX = how many fit
+    mov dl, [pt_ncol]
+    xor dh, dh
+    cmp ax, dx
+    jbe .nsw
+    mov ax, dx
+.nsw:
+    mov [pt_nsw], ax
+    jmp short .out
+.nosw:
+    mov word [pt_nsw], 0
+.out:
     pop dx
+    pop bx
     pop ax
     ret
+
 
 ; -----------------------------------------------------------------------------
 ; pt_clip - clip the pending rectangle to the canvas
@@ -650,7 +920,7 @@ pt_org:
 pt_clip:
     push ax
     mov ax, [pt_rx1]
-    cmp ax, PT_CW
+    cmp ax, [pt_cw]
     jge .empty
     or ax, ax
     jns .x1ok
@@ -660,9 +930,10 @@ pt_clip:
     mov ax, [pt_rx2]
     or ax, ax
     js .empty
-    cmp ax, PT_CW
+    cmp ax, [pt_cw]
     jl .x2ok
-    mov ax, PT_CW - 1
+    mov ax, [pt_cw]
+    dec ax
 .x2ok:
     mov [pt_cx2], ax
     mov ax, [pt_ry1]
@@ -766,13 +1037,11 @@ pt_rect:
     and al, bl
     mov [pt_rval], al
 
-    mov ax, PT_CVSEG
-    mov es, ax
     cld
-    mov bx, [pt_cy1]
-    add bx, bx                      ; BX = y*2, the row-table index
+    mov bx, [pt_cy1]                ; BX = the row being filled
 .row:
-    mov di, [pt_rowtab+bx]
+    mov ax, bx
+    call pt_rowset                  ; ES:DI = the row's first byte
     add di, [pt_lb]
     mov al, [es:di]                 ; left (or only) byte
     and al, [pt_lmask]
@@ -792,10 +1061,7 @@ pt_rect:
     mov [es:di], al
 .rowdone:
     inc bx
-    inc bx
-    mov ax, [pt_cy2]
-    add ax, ax
-    cmp bx, ax
+    cmp bx, [pt_cy2]
     jbe .row
 
     cmp byte [pt_noscr], 0
@@ -851,11 +1117,6 @@ pt_umark:
     cmp byte [pt_undo_off], 0
     jne .out                        ; we ARE the undo: do not re-snapshot
     mov bx, ax                      ; BX = row counter
-    mov si, bx
-    add si, si
-    mov bp, [pt_rowtab+si]          ; BP = this row's byte offset
-    mov ax, PT_UNSEG
-    mov es, ax
     cld
 .loop:
     mov si, bx
@@ -868,16 +1129,22 @@ pt_umark:
     test [pt_umask+si], ah
     jnz .next
     or [pt_umask+si], ah
-    mov si, bp
-    mov di, bp
-    mov cx, PT_STRIDE / 2
+    ; --- copy the row. The two images share a row OFFSET and differ only by
+    ; --- [pt_undelta] paragraphs, which is what keeps this to one table.
+    mov ax, bx
+    call pt_rowset                  ; ES:DI = the canvas row
+    mov si, di                      ; the undo row sits at the same offset
+    mov cx, [pt_stride]             ; read through DS while DS is still ours
+    shr cx, 1
+    mov ax, es
+    mov bp, ax                      ; BP = source segment (a value, not a ptr)
+    add ax, [pt_undelta]
+    mov es, ax                      ; ES = the undo image's row
     push ds
-    mov ax, PT_CVSEG
-    mov ds, ax
+    mov ds, bp
     rep movsw
     pop ds
 .next:
-    sub bp, PT_STRIDE
     inc bx
     cmp bx, dx
     jbe .loop
@@ -893,6 +1160,7 @@ pt_umark:
     pop ax
     ret
 
+
 ; -----------------------------------------------------------------------------
 ; pt_undo_new - open a fresh undo generation (called at the start of every
 ;               operation that changes pixels)
@@ -903,7 +1171,7 @@ pt_undo_new:
     push cx
     push di
     mov di, pt_umask
-    mov cx, 36
+    mov cx, PT_CH_MAX / 8
 .z:
     mov byte [di], 0
     inc di
@@ -936,12 +1204,9 @@ pt_undo_swap:
     push es
     cmp byte [pt_undo_ok], 0
     je .out
-    mov ax, PT_CVSEG
-    mov es, ax
     mov dx, [pt_ch]
     dec dx                          ; DX = last row
     xor bx, bx                      ; BX = row counter
-    mov bp, [pt_rowtab]             ; row 0's offset
     mov word [pt_uy1], -1
     mov word [pt_uy2], -1
 .loop:
@@ -959,11 +1224,14 @@ pt_undo_swap:
     mov [pt_uy1], bx
 .have1:
     mov [pt_uy2], bx
-    mov si, bp
-    mov di, bp
-    mov cx, PT_STRIDE / 2
+    mov ax, bx
+    call pt_rowset                  ; ES:DI = the canvas row
+    mov si, di
+    mov cx, [pt_stride]
+    shr cx, 1
+    mov ax, es                      ; ES stays the canvas and DS becomes the
+    add ax, [pt_undelta]            ; undo image, so the exchange is one loop
     push ds
-    mov ax, PT_UNSEG
     mov ds, ax
 .word:
     mov ax, [si]                    ; DS = the undo image
@@ -976,14 +1244,15 @@ pt_undo_swap:
     loop .word
     pop ds
 .next:
-    sub bp, PT_STRIDE
     inc bx
     cmp bx, dx
     jbe .loop
     cmp word [pt_uy1], -1
     je .out
     mov word [pt_rx1], 0
-    mov word [pt_rx2], PT_CW - 1
+    mov ax, [pt_cw]
+    dec ax
+    mov [pt_rx2], ax
     mov ax, [pt_uy1]
     mov [pt_ry1], ax
     mov ax, [pt_uy2]
@@ -999,6 +1268,7 @@ pt_undo_swap:
     pop bx
     pop ax
     ret
+
 
 ; -----------------------------------------------------------------------------
 ; pt_runend - extend a run of one colour along a canvas row
@@ -1092,13 +1362,11 @@ pt_blit:
     push es
     call pt_clip
     jc .out
-    mov ax, PT_CVSEG
-    mov es, ax
     mov si, [pt_cy1]                ; SI = canvas row
 .row:
-    mov bx, si
-    add bx, bx
-    mov bp, [pt_rowtab+bx]
+    mov ax, si
+    call pt_rowset                  ; ES = the row's segment...
+    mov bp, di                      ; ...and BP its offset, for pt_runend
     mov dx, [pt_cx1]
 .run:
     mov bx, dx
@@ -1149,7 +1417,9 @@ pt_blit_all:
     push ax
     mov word [pt_rx1], 0
     mov word [pt_ry1], 0
-    mov word [pt_rx2], PT_CW - 1
+    mov ax, [pt_cw]
+    dec ax
+    mov [pt_rx2], ax
     mov ax, [pt_ch]
     dec ax
     mov [pt_ry2], ax
@@ -1165,16 +1435,14 @@ pt_blit_all:
 pt_getpx:
     push bx
     push cx
+    push di
     push es
-    mov bx, PT_CVSEG
-    mov es, bx
-    mov bx, dx
-    add bx, bx
-    mov bx, [pt_rowtab+bx]
+    mov ax, dx
+    call pt_rowset                  ; ES:DI = the row
     mov ax, cx
     shr ax, 1
-    add bx, ax
-    mov al, [es:bx]
+    add di, ax
+    mov al, [es:di]
     test cl, 1
     jnz .lo
     mov cl, 4
@@ -1182,9 +1450,11 @@ pt_getpx:
 .lo:
     and al, 0x0F
     pop es
+    pop di
     pop cx
     pop bx
     ret
+
 
 ; =============================================================================
 ; Chrome - the tool palette, the bottom strip, and the notice window
@@ -1365,7 +1635,11 @@ pt_draw_pal:
     xor di, di                      ; DI = tool index
 .tool:
     call pt_btn_xy                  ; CX = x, DX = y for button DI
-    mov [pt_bx], cx
+    mov ax, dx
+    add ax, PT_BW - 1
+    cmp ax, [pt_ch]
+    jge .done                       ; a short window shows fewer tools rather
+    mov [pt_bx], cx                 ; than drawing over its own strip
     mov [pt_by], dx
     mov byte [pt_pen], CWHITE       ; the well: black when this tool is in hand
     xor ax, ax
@@ -1401,6 +1675,7 @@ pt_draw_pal:
     inc di
     cmp di, PT_NTOOL
     jb .tool
+.done:
     pop di
     pop si
     pop dx
@@ -1468,13 +1743,15 @@ pt_draw_strip:
     mov byte [pt_pen], CBLACK
     xor ax, ax
     mov bx, [pt_ch]
-    mov cx, PT_CONT_W - 1
+    mov cx, [pt_contw]
+    dec cx
     mov dx, bx
     call pt_cfill
     mov byte [pt_pen], CWHITE
     xor ax, ax
     mov bx, [pt_stripy]
-    mov cx, PT_CONT_W - 1
+    mov cx, [pt_contw]
+    dec cx
     mov dx, bx
     add dx, PT_STRIP_H - 1
     call pt_cfill
@@ -1587,14 +1864,12 @@ pt_draw_strip:
     call pt_cframe
 .swnext:
     inc di
-    xor ax, ax
-    mov al, [pt_ncol]
-    cmp di, ax
+    cmp di, [pt_nsw]
     jb .sw
 
     ; --- filled-shapes toggle, and the font scale -------------------------
     mov byte [pt_pen], CWHITE
-    mov ax, PT_FIL_X
+    mov ax, [pt_filx]
     mov bx, [pt_stripy]
     inc bx
     mov cx, ax
@@ -1604,7 +1879,8 @@ pt_draw_strip:
     call pt_cfill
     mov byte [pt_pen], CBLACK
     call pt_cframe
-    mov ax, PT_FIL_X + 4
+    mov ax, [pt_filx]
+    add ax, 4
     mov bx, [pt_stripy]
     add bx, 6
     mov cx, ax
@@ -1619,7 +1895,7 @@ pt_draw_strip:
     call pt_cframe
 .fnt:
     mov byte [pt_pen], CWHITE
-    mov ax, PT_FNT_X
+    mov ax, [pt_fntx]
     mov bx, [pt_stripy]
     inc bx
     mov cx, ax
@@ -1633,7 +1909,8 @@ pt_draw_strip:
     add al, '0'
     mov [pt_fdigit], al
     mov si, pt_fdigit
-    mov cx, PT_FNT_X + 4
+    mov cx, [pt_fntx]
+    add cx, 4
     mov dx, [pt_stripy]
     add dx, 7
     call pt_ctext
@@ -1725,6 +2002,7 @@ pt_paint:
     call pt_org
     cmp byte [pt_mode], PT_M_LIVE
     jne .notice
+    call pt_track                   ; did ui_grow resize the window under us?
     mov byte [pt_msgon], 0          ; the toast does not survive a repaint
     call pt_draw_pal
     call pt_draw_strip
@@ -1738,6 +2016,8 @@ pt_paint:
     call pt_blit_all
     mov byte [pt_selshown], 0
     call pt_marq                    ; the marquee, if a selection is live
+    mov bx, [pt_win]
+    call OSAPI_WM_GROW              ; a resizable window owes the grow box a
     jmp short .out
 .notice:
     xor bx, bx
@@ -1976,6 +2256,10 @@ pt_pal_click:
     js .next
     cmp ax, PT_BW
     jge .next
+    mov ax, dx
+    add ax, PT_BW - 1
+    cmp ax, [pt_ch]
+    jge .out                        ; not drawn, so not clickable
     mov ax, [pt_hity]
     sub ax, dx
     js .next
@@ -2042,9 +2326,7 @@ pt_strip_click:
     mov bx, PT_SW_DX
     xor dx, dx
     div bx
-    xor bx, bx
-    mov bl, [pt_ncol]
-    cmp ax, bx
+    cmp ax, [pt_nsw]
     jge .toggles
     cmp dx, PT_BW
     jge .out
@@ -2054,7 +2336,7 @@ pt_strip_click:
     jmp short .out
 .toggles:
     mov ax, cx
-    sub ax, PT_FIL_X
+    sub ax, [pt_filx]
     js .out
     cmp ax, PT_BTN_W16
     jge .fontbtn
@@ -2063,7 +2345,7 @@ pt_strip_click:
     jmp short .out
 .fontbtn:
     mov ax, cx
-    sub ax, PT_FNT_X
+    sub ax, [pt_fntx]
     js .out
     cmp ax, PT_BTN_W16
     jge .out
@@ -2405,9 +2687,10 @@ pt_clampx:
     xor ax, ax
     ret
 .hi:
-    cmp ax, PT_CW
+    cmp ax, [pt_cw]
     jl .out
-    mov ax, PT_CW - 1
+    mov ax, [pt_cw]
+    dec ax
 .out:
     ret
 
@@ -2915,7 +3198,28 @@ pt_copy:
     sub ax, [pt_sely1]
     inc ax
     mov [pt_cbh], ax
-    mov ax, PT_CBSEG
+    mov ax, [pt_cbw]                ; will it fit the clipboard? The buffer is
+    inc ax                          ; whatever was left over after the canvas
+    shr ax, 1                       ; and its undo image, at least 16KB
+    mov dx, [pt_cbh]
+    mul dx                          ; DX:AX = packed bytes
+    add ax, 4 + 15
+    adc dx, 0
+    mov cx, ax
+    mov ax, dx
+    mov dx, cx
+    mov cl, 12
+    shl ax, cl
+    mov cl, 4
+    shr dx, cl
+    or ax, dx                       ; AX = paragraphs
+    cmp ax, [pt_cbparas]
+    jbe .room
+    mov word [pt_cbw], 0            ; too big: no clipboard rather than a
+    mov word [pt_msgp], pt_s_bigsel ; corrupted one
+    jmp short .out
+.room:
+    mov ax, [pt_cbseg]
     mov es, ax
     mov ax, [pt_cbw]
     mov [es:0], ax
@@ -3008,7 +3312,7 @@ pt_paste:
     shr ax, 1
     mov [pt_pstr], ax
     mov word [pt_pbase], 4
-    mov ax, PT_CBSEG
+    mov ax, [pt_cbseg]
     mov es, ax
     xor dx, dx                      ; DX = clipboard row
 .row:
@@ -3086,16 +3390,15 @@ pt_setpx:
     jge .out
     or cx, cx
     js .out
-    cmp cx, PT_CW
+    cmp cx, [pt_cw]
     jge .out
-    mov bx, PT_CVSEG
-    mov es, bx
-    mov bx, dx
-    add bx, bx
-    mov di, [pt_rowtab+bx]
+    mov [pt_setval], al             ; pt_rowset wants AX for the row
+    mov ax, dx
+    call pt_rowset                  ; ES:DI = the row
     mov bx, cx
     shr bx, 1
     add di, bx
+    mov al, [pt_setval]
     mov ah, [es:di]
     test cl, 1
     jnz .low
@@ -3118,6 +3421,7 @@ pt_setpx:
     pop ax
     ret
 
+
 ; -----------------------------------------------------------------------------
 ; pt_upix - one pixel of the UNDO image (the picture as it was when this
 ;           operation began)
@@ -3127,16 +3431,14 @@ pt_setpx:
 pt_upix:
     push bx
     push cx
+    push di
     push es
-    mov bx, PT_UNSEG
-    mov es, bx
-    mov bx, dx
-    add bx, bx
-    mov bx, [pt_rowtab+bx]
+    mov ax, dx
+    call pt_urowset                 ; ES:DI = the undo image's row
     mov ax, cx
     shr ax, 1
-    add bx, ax
-    mov al, [es:bx]
+    add di, ax
+    mov al, [es:di]
     test cl, 1
     jnz .lo
     mov cl, 4
@@ -3144,9 +3446,11 @@ pt_upix:
 .lo:
     and al, 0x0F
     pop es
+    pop di
     pop cx
     pop bx
     ret
+
 
 ; -----------------------------------------------------------------------------
 ; pt_urestore - put a rectangle back the way this operation found it
@@ -3276,11 +3580,9 @@ pt_frow:
     push dx
     push bp
     push es
-    mov ax, PT_CVSEG
-    mov es, ax
-    mov bx, [pt_fy]
-    add bx, bx
-    mov bp, [pt_rowtab+bx]          ; BP = the row's byte offset
+    mov ax, [pt_fy]
+    call pt_rowset                  ; ES = the row's segment...
+    mov bp, di                      ; ...and BP its offset
     mov ax, [pt_fx1]
     mov [pt_fx], ax
 .scan:
@@ -3309,7 +3611,9 @@ pt_frow:
     mov ax, [pt_fx]                 ; --- grow right ---
     mov [pt_fr], ax
 .right:
-    cmp word [pt_fr], PT_CW - 1
+    mov ax, [pt_cw]
+    dec ax
+    cmp [pt_fr], ax
     jae .rend
     mov ax, [pt_fr]
     inc ax
@@ -3326,9 +3630,10 @@ pt_frow:
     mov ax, [pt_fy]
     mov [pt_ry1], ax
     mov [pt_ry2], ax
-    call pt_rect
-    mov ax, PT_CVSEG                ; pt_rect left ES alone, but be explicit
-    mov es, ax
+    call pt_rect                    ; pt_rect preserves ES, but it walked other
+    mov ax, [pt_fy]                 ; rows through it: re-point at ours
+    call pt_rowset
+    mov bp, di
     mov ax, [pt_fy]                 ; --- the run's continuation ---
     add ax, [pt_fdy]
     mov bx, [pt_fl]
@@ -3414,7 +3719,7 @@ pt_fpush:
     shl si, 1                       ; eight bytes an entry
     add si, PT_SC_STACK
     push ax
-    mov ax, PT_SCSEG
+    mov ax, [pt_scseg]
     mov es, ax
     pop ax
     mov [es:si], ax
@@ -3445,7 +3750,7 @@ pt_fpop:
     shl si, 1
     shl si, 1
     add si, PT_SC_STACK
-    mov ax, PT_SCSEG
+    mov ax, [pt_scseg]
     mov es, ax
     mov ax, [es:si]
     mov bx, [es:si+2]
@@ -3613,7 +3918,7 @@ pt_type:
     mov [pt_gbox], ax               ; the glyph's box, both ways
     mov ax, [pt_txtx]
     add ax, [pt_gbox]
-    cmp ax, PT_CW
+    cmp ax, [pt_cw]
     jle .fits
     call pt_crlf                    ; no room on this line: wrap
 .fits:
@@ -3887,6 +4192,13 @@ pt_oncmd:
 .save:
     cmp byte [pt_name], 0
     je .saveas                      ; never named: ask, do not guess
+    cmp byte [pt_trunc], 0
+    je .save_go
+    mov word [pt_msgp], pt_s_trunc  ; the file holds more than we loaded: one
+    mov si, [pt_msgp]               ; click must not throw the rest away
+    call pt_msg_show
+    ret
+.save_go:
     mov si, pt_name
     call pt_save
     ret
@@ -3961,6 +4273,254 @@ pt_new:
     ret
 
 ; -----------------------------------------------------------------------------
+; pt_track - has the window been resized under us? then resize the canvas
+; in:  [pt_contw]/[pt_conth] from pt_org; gfx lock held
+; out: the canvas matches the content (or is as close as memory allows);
+;      preserves all registers
+;
+; There is no resize callback in the window ABI (SPEC.md 11.1): ui_grow
+; rewrites W_W/W_H and repaints, and a resizable window's paint proc is
+; required to lay out from the live record. So this runs at the top of every
+; W_PAINT, and a drag of the grow box arrives here as a content size that no
+; longer matches the picture.
+; -----------------------------------------------------------------------------
+pt_track:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [pt_contw]
+    sub ax, PT_CV_X                 ; the canvas the content asks for
+    cmp ax, PT_CW_MIN
+    jge .w_ok
+    mov ax, PT_CW_MIN
+.w_ok:
+    cmp ax, [pt_cwmax]
+    jle .w_cap
+    mov ax, [pt_cwmax]
+.w_cap:
+    mov dx, [pt_conth]
+    sub dx, PT_STRIP_H + 1
+    cmp dx, PT_CH_MIN
+    jge .h_ok
+    mov dx, PT_CH_MIN
+.h_ok:
+    cmp dx, [pt_chmax]
+    jle .h_cap
+    mov dx, [pt_chmax]
+.h_cap:
+    call pt_fit                     ; what memory will actually fund
+    cmp ax, [pt_cw]
+    jne .change
+    cmp dx, [pt_ch]
+    je .out
+.change:
+    call pt_resize
+    mov ax, [pt_ch]                 ; a canvas memory would not fund leaves the
+    inc ax                          ; strip where the canvas ends, not where
+    mov [pt_stripy], ax             ; the window ends - pt_org ran before this
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_resize - adopt a new canvas size, keeping the picture's top-left corner
+; in:  AX = new width, DX = new height (both already through pt_fit)
+; out: the canvas relaid out and repopulated; undo, clipboard and selection
+;      dropped; preserves all registers
+;
+; The old picture is staged in the UNDO IMAGE, which is why the buffer bases
+; are sized for the biggest canvas the machine allows and never move
+; (pt_geom): staging and the new layout then live in different segments and
+; there is no overlap to reason about. The old row geometry is recomputed
+; arithmetically for the read-back, because the tables now describe the new
+; one.
+; -----------------------------------------------------------------------------
+pt_resize:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    push ax                         ; the new size, held across the staging
+    push dx
+    ; --- stage every old row in the undo image ------------------------------
+    mov byte [pt_undo_off], 0
+    call pt_undo_new
+    xor ax, ax
+    mov dx, [pt_ch]
+    dec dx
+    call pt_umark
+    mov ax, [pt_cw]                 ; the old geometry, for the read-back
+    mov [pt_ocw], ax
+    mov ax, [pt_ch]
+    mov [pt_och], ax
+    mov ax, [pt_stride]
+    mov [pt_ostride], ax
+    pop dx
+    pop ax
+    call pt_layout                  ; the new geometry, tables and all
+    call pt_bmp_hdr
+    mov al, CWHITE
+    call pt_wipe                    ; whatever the old picture does not reach
+    ; --- copy the overlap back, row by row ----------------------------------
+    mov bp, [pt_och]                ; BP = rows to carry across
+    cmp bp, [pt_ch]
+    jbe .rows
+    mov bp, [pt_ch]
+.rows:
+    mov dx, [pt_ostride]            ; DX = bytes a row can carry
+    cmp dx, [pt_stride]
+    jbe .bytes
+    mov dx, [pt_stride]
+.bytes:
+    xor si, si                      ; SI = row
+.row:
+    cmp si, bp
+    jae .done
+    mov ax, si
+    call pt_orowset                 ; ES:DI = the staged old row
+    mov bx, di                      ; BX = its offset; [pt_orseg] its segment
+    mov ax, si
+    call pt_rowset                  ; ES:DI = the new row
+    mov cx, dx
+    shr cx, 1
+    mov ax, [pt_orseg]              ; read it while DS is still ours
+    push ds
+    mov ds, ax
+    xchg si, bx                     ; SI = source offset, BX = the row
+    cld
+    rep movsw
+    xchg si, bx                     ; ...and back
+    pop ds
+    inc si
+    jmp short .row
+.done:
+    mov byte [pt_undo_ok], 0        ; the staging overwrote the undo image
+    mov word [pt_cbw], 0
+    mov byte [pt_selon], 0
+    mov byte [pt_selshown], 0
+    call pt_text_end
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_orowset - ES:DI = row AX of the staged OLD picture in the undo image
+; in:  AX = row, [pt_och]/[pt_ostride]
+; out: ES:DI, and [pt_orseg] = ES; clobbers BX, flags
+; -----------------------------------------------------------------------------
+pt_orowset:
+    push ax
+    push cx
+    push dx
+    mov bx, [pt_och]
+    dec bx
+    sub bx, ax                      ; the file row this picture row is
+    mov ax, bx
+    mul word [pt_ostride]           ; DX:AX = its byte offset
+    add ax, PT_BMPHDR
+    adc dx, 0
+    mov bx, ax
+    and bx, 15
+    mov di, bx                      ; DI = offset inside the paragraph
+    mov cx, dx
+    mov dx, ax
+    mov ax, cx
+    mov cl, 12
+    shl ax, cl
+    mov cl, 4
+    shr dx, cl
+    or ax, dx
+    add ax, PT_BASE
+    add ax, [pt_undelta]            ; ...in the undo image
+    mov es, ax
+    mov [pt_orseg], ax
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_titleset - "Paint 521x390": the canvas size, in the title bar
+; in:  [pt_cw], [pt_ch]
+; out: pt_titlebuf rewritten; preserves all registers
+;
+; The title is the one place with room for it that no layout can crowd out,
+; and the kernel redraws it from W_TITLE on every repaint (SPEC.md 11) - so a
+; resize updates it with no work here beyond rebuilding the string. pt_dupchk
+; compares only the "Paint" prefix for exactly this reason.
+; -----------------------------------------------------------------------------
+pt_titleset:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, pt_s_title
+    mov di, pt_titlebuf
+.name:
+    mov al, [si]
+    or al, al
+    jz .dims
+    mov [di], al
+    inc si
+    inc di
+    jmp short .name
+.dims:
+    cmp byte [pt_mode], PT_M_LIVE
+    jne .done                       ; a notice window has no canvas to report
+    mov byte [di], ' '
+    inc di
+    mov ax, [pt_cw]
+    call pt_num
+    mov byte [di], 'x'
+    inc di
+    mov ax, [pt_ch]
+    call pt_num
+.done:
+    mov byte [di], 0
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; pt_num - AX in decimal at DS:DI, DI advanced; clobbers AX, BX, CX, DX
+pt_num:
+    mov bx, 10
+    xor cx, cx
+.div:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    or ax, ax
+    jnz .div
+.emit:
+    pop ax
+    add al, '0'
+    mov [di], al
+    inc di
+    loop .emit
+    ret
+
+; -----------------------------------------------------------------------------
 ; pt_repaint - a self-initiated repaint of our whole content
 ; in:  gfx lock held; out: nothing; preserves all registers
 ;
@@ -3988,6 +4548,9 @@ pt_repaint:
     mov byte [pt_msgon], 0
     mov byte [pt_careton], 0
     call pt_marq
+    mov bx, [pt_win]
+    call OSAPI_WM_GROW              ; the white-fill idiom ate the grow box
+                                    ; (SPEC.md 11.1) - put it back
     pop dx
     pop cx
     pop bx
@@ -4061,7 +4624,15 @@ pt_ondlg:
 .save:
     call pt_save
 .draw:
+    cmp byte [pt_wchg], 0           ; a load that resized the window has to
+    je .plain                       ; repaint the DESKTOP too, not just us:
+    mov byte [pt_wchg], 0           ; the old frame is still on the glass
+    mov bx, [pt_win]
+    call OSAPI_WM_FRONT             ; raise + repaint all (SPEC.md 11), which
+    jmp short .toast                ; re-enters our W_PAINT with the new size
+.plain:
     call pt_repaint
+.toast:
     mov si, [pt_msgp]               ; the outcome, on top of the fresh picture
     or si, si
     jz .out
@@ -4152,18 +4723,27 @@ pt_save:
     mov word [pt_msgp], pt_s_nofmt  ; GIF and JPEG: see docs/PAINT-NOTES.md
     jmp short .out
 .bmp:
-    call pt_bmp_hdr                 ; re-stamp it: [pt_ch] is the truth
-    mov ax, PT_CVSEG
+    ; --- one write, so the whole file must fit the API's 64KB (SPEC.md 18.4)
+    mov ax, [pt_ch]
+    mul word [pt_stride]            ; DX:AX = pixel bytes
+    add ax, PT_BMPHDR
+    adc dx, 0
+    or dx, dx
+    jnz .toobig
+    mov cx, ax
+    call pt_bmp_hdr                 ; re-stamp it: the live size is the truth
+    mov ax, PT_BASE
     mov es, ax
     xor bx, bx                      ; ES:BX = the DIB, header and all
-    mov ax, [pt_ch]
-    mov cx, PT_STRIDE
-    mul cx
-    add ax, PT_BMPHDR
-    mov cx, ax
     call OSAPI_FILE_WRITE           ; SI is still the name
-    jnc .out
+    jnc .wrote
     call pt_ferr
+    jmp short .out
+.wrote:
+    mov byte [pt_trunc], 0          ; what is on disk now IS what we hold
+    jmp short .out
+.toobig:
+    mov word [pt_msgp], pt_s_toobig
 .out:
     pop es
     pop si
@@ -4188,16 +4768,23 @@ pt_load:
     push di
     push es
     mov word [pt_msgp], pt_s_opened
-    mov ax, PT_CBSEG
-    mov es, ax
-    xor bx, bx
-    mov cx, 0xFFFF                  ; the staging segment holds any legal file
-    call OSAPI_FILE_READ            ; (the API caps a file at 64KB anyway)
+    mov ax, [pt_unseg]              ; the file is staged in the UNDO image: it
+    mov es, ax                      ; is the biggest single buffer we have, and
+    xor bx, bx                      ; a load invalidates undo anyway
+    mov cx, [pt_smaxp]              ; its capacity, in bytes, capped at what a
+    cmp cx, 4096                    ; 16-bit count can express
+    jb .cap
+    mov cx, 0xFFFF
+    jmp short .rd
+.cap:
+    mov cl, 4
+    shl cx, cl
+.rd:
+    call OSAPI_FILE_READ
     jnc .got
     call pt_ferr
     jmp short .out
 .got:
-    mov word [pt_cbw], 0            ; the clipboard IS the staging buffer
     cmp ax, 64
     jb .bad
     cmp word [es:0], 0x4D42         ; 'BM'
@@ -4337,21 +4924,46 @@ pt_bmp_in:
     ja .big
     ; --- the palette, mapped to our sixteen -------------------------------
     cmp word [pt_bpp], 24
-    je .rows
+    je .size
     call pt_bmp_pal
-    ; --- undo, then the rows ----------------------------------------------
-.rows:
+    ; --- the canvas becomes the picture's size, as far as it can go --------
+.size:
     call pt_text_end
     call pt_sel_drop
+    mov byte [pt_trunc], 0
+    mov ax, [pt_bw]                 ; what the SCREEN can show...
+    cmp ax, [pt_cwmax]
+    jbe .w_ok
+    mov ax, [pt_cwmax]
+    mov byte [pt_trunc], 1
+.w_ok:
+    cmp ax, PT_CW_MIN
+    jae .w_min
+    mov ax, PT_CW_MIN
+.w_min:
+    mov dx, [pt_bh]
+    cmp dx, [pt_chmax]
+    jbe .h_ok
+    mov dx, [pt_chmax]
+    mov byte [pt_trunc], 1
+.h_ok:
+    cmp dx, PT_CH_MIN
+    jae .h_min
+    mov dx, PT_CH_MIN
+.h_min:
+    call pt_fit                     ; ...and then what MEMORY can hold
+    jnc .fits
+    mov byte [pt_trunc], 1          ; cropped: File > Save must not overwrite
+.fits:                              ; the original with less than it held
+    call pt_layout
+    call pt_bmp_hdr
     call pt_undo_new
-    xor ax, ax
-    mov dx, [pt_ch]
-    dec dx
-    call pt_umark                   ; the whole old picture: Open is undoable
+    mov byte [pt_undo_ok], 0        ; the staging buffer IS the undo image, so
+    mov word [pt_cbw], 0            ; neither undo nor the clipboard survives
     mov ax, [pt_bw]                 ; columns we will actually take
-    cmp ax, PT_CW
+    cmp ax, [pt_cw]
     jbe .cols
-    mov ax, PT_CW
+    mov ax, [pt_cw]
 .cols:
     mov [pt_cols], ax
     mov al, CWHITE                  ; anything the file does not cover
@@ -4377,7 +4989,17 @@ pt_bmp_in:
     inc di
     jmp short .row
 .done:
-    call pt_blit_all
+    call pt_wsize                   ; the window follows the picture's size...
+    mov bx, [pt_win]
+    mov ax, [pt_tpl + WT_W]
+    mov [bx + W_W], ax
+    mov ax, [pt_tpl + WT_H]
+    mov [bx + W_H], ax
+    mov ax, [pt_tpl + WT_X]
+    mov [bx + W_X], ax
+    mov ax, [pt_tpl + WT_Y]
+    mov [bx + W_Y], ax
+    mov byte [pt_wchg], 1           ; ...and the caller repaints the desktop
     pop di
     pop dx
     pop cx
@@ -4631,11 +5253,9 @@ pt_line_put:
     push si
     push di
     push es
-    mov ax, PT_CVSEG
-    mov es, ax
-    mov bx, di
-    add bx, bx
-    mov bx, [pt_rowtab+bx]          ; BX = the row's byte offset
+    mov ax, di
+    call pt_rowset                  ; ES:DI = the row...
+    mov bx, di                      ; ...and BX its offset, for the packing
     xor si, si                      ; SI = column
 .col:
     mov al, [pt_line+si]
@@ -4680,7 +5300,8 @@ pt_line_put:
 ; Data
 ; =============================================================================
 
-pt_title:    db 'Paint', 0          ; also the duplicate check's fingerprint
+pt_s_title:  db 'Paint', 0          ; the title's stem, and the fingerprint
+                                    ; pt_dupchk matches on
 pt_appname:  db 'Paint', 0          ; the menu bar's app label (SPEC.md 12.2)
 pt_s_defname: db 'PICTURE.BMP', 0
 
@@ -4688,9 +5309,9 @@ pt_s_defname: db 'PICTURE.BMP', 0
 pt_tpl:
     dw 0                            ; WT_X
     dw PT_WIN_Y                     ; WT_Y
-    dw PT_FRAME_W                   ; WT_W
-    dw PT_CH_MAX + PT_CHROME_H      ; WT_H
-    dw pt_title                     ; WT_TITLE
+    dw PT_CW_DEF + PT_CHROME_W      ; WT_W
+    dw PT_CH_DEF + PT_CHROME_H      ; WT_H
+    dw pt_titlebuf                  ; WT_TITLE - built by pt_titleset
     dw pt_paint                     ; WT_PAINT
     dw pt_onkey                     ; WT_ONKEY
     dw pt_click                     ; WT_ONCLICK
@@ -4736,6 +5357,9 @@ pt_s_nofmt:   db 'Only BMP is supported', 0
 pt_s_badpic:  db 'Not a picture we can read', 0
 pt_s_nocomp:  db 'Compressed BMP not supported', 0
 pt_s_nodepth: db 'Need a 1, 4, 8 or 24-bit BMP', 0
+pt_s_toobig:  db 'Too big to save (64KB limit)', 0
+pt_s_trunc:   db 'Cropped on load - use Save As', 0
+pt_s_bigsel:  db 'Selection too big to copy', 0
 
 ; FERR_* -> toast, indexed by the code (SPEC.md 18.4)
 pt_ferrtab:  dw pt_s_wrote, pt_fe_nodisk, pt_fe_io, pt_fe_name, pt_fe_noent
@@ -4969,6 +5593,31 @@ pt_ic_text:
     PTWORD pt_srow                  ; the source row being read
     PTWORD pt_cols                  ; columns we take from it
 
+    ; the canvas, its geometry and the memory that funds it
+    PTWORD pt_cw                    ; canvas width in pixels
+    PTWORD pt_stride                ; ...and the BMP row stride that implies
+    PTWORD pt_cvparas               ; what the canvas costs, in paragraphs
+    PTWORD pt_cwmax                 ; the biggest canvas this SCREEN can show
+    PTWORD pt_chmax
+    PTWORD pt_smaxp                 ; ...and this MACHINE can hold, paragraphs
+    PTWORD pt_scrw                  ; screen width, for centring the window
+    PTWORD pt_unseg                 ; the undo image's base segment
+    PTWORD pt_cbseg                 ; the clipboard's
+    PTWORD pt_cbparas               ; ...and how many paragraphs it got
+    PTWORD pt_scseg                 ; scratch: claim record + fill stack
+    PTWORD pt_undelta               ; canvas segment -> undo segment
+    PTWORD pt_contw                 ; the live content rect, from the record
+    PTWORD pt_conth
+    PTWORD pt_filx                  ; the strip's right-anchored controls
+    PTWORD pt_fntx
+    PTWORD pt_nsw                   ; colour swatches that fit
+    PTWORD pt_ocw                   ; pt_resize: the outgoing geometry
+    PTWORD pt_och
+    PTWORD pt_ostride
+    PTWORD pt_orseg                 ; pt_orowset's answer
+    PTWORD pt_rtseg                 ; pt_resize scratch
+    PTWORD pt_rtoff
+
     PTBYTE pt_mode                  ; PT_M_*
     PTBYTE pt_tool                  ; PT_T_*
     PTBYTE pt_col                   ; the colour the user picked
@@ -5002,13 +5651,21 @@ pt_ic_text:
     PTBYTE pt_mbi                   ; pt_map16's best index so far
     PTBYTE pt_btd                   ; the BMP is top-down
     PTBYTE pt_dmode                 ; the mode the file dialog ran in
+    PTBYTE pt_trunc                 ; the loaded picture was cropped: File >
+                                    ; Save must not overwrite the original
+    PTBYTE pt_fitcut                ; pt_fit had to give something up
+    PTBYTE pt_setval                ; pt_setpx's colour, across pt_rowset
+    PTBYTE pt_wchg                  ; the window was resized: repaint the lot
     PTBUF  pt_fdigit, 2             ; the strip's scale digit, NUL-terminated
 
-    PTBUF  pt_umask, 36             ; one bit per canvas row (280 -> 35 bytes)
-    PTBUF  pt_rowtab, PT_CH_MAX * 2 ; canvas row -> byte offset (the whole of
-                                    ; the bottom-up story)
+    PTBUF  pt_umask, PT_CH_MAX / 8  ; one bit per canvas row
+    PTBUF  pt_rowseg, PT_CH_MAX * 2 ; canvas row -> the paragraph it starts in
+    PTBUF  pt_rowoff, PT_CH_MAX * 2 ; ...and the 0..15 bytes into it. Together
+                                    ; they are the whole of the bottom-up
+                                    ; story AND of spanning segments
     PTBUF  pt_glyphs, 95 * 8        ; the ROM 8x8 font, chars 32..126
-    PTBUF  pt_line, PT_CW           ; one decoded source pixel per column
+    PTBUF  pt_line, PT_CW_MAX       ; one decoded source pixel per column
+    PTBUF  pt_titlebuf, 20          ; "Paint 736x464", NUL - the live W_TITLE
     PTBUF  pt_pmap, 256             ; a loaded palette -> our sixteen
     PTBUF  pt_name, 14              ; the current document
 

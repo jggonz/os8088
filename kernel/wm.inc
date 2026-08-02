@@ -685,6 +685,384 @@ wm_obscured:
     pop ax
     ret
 
+; =============================================================================
+; The clip region (SPEC.md 11.3) - what a background task may draw
+;
+; wm_obscured above answers a boolean, and every background painter used it
+; as a veto: one covered pixel and the whole frame was skipped, because the
+; gfx_* primitives draw in absolute screen coordinates and would otherwise
+; paint straight over the window on top. The region replaces the veto: it is
+; the window's content rect with every visible window above it subtracted,
+; and while it is armed the six clipped primitives (SPEC.md 5/6/25) draw
+; only inside it.
+;
+; Three properties are binding:
+;   - It is built and consumed inside ONE gfx lock hold. wm_zord and the
+;     window rects are mutated only under the lock, so a region built at
+;     wm_clip_set is valid until gfx_unlock - and stale the moment after,
+;     which is why gfx_unlock clears it rather than trusting callers.
+;   - Overflow degrades to "skip the frame" (CF = 1), which is exactly the
+;     old wm_obscured behaviour and therefore cannot regress anything.
+;   - Nothing here needs an interrupt guard, for the same reason vga12's
+;     rect scratch does not: the mouse ISR never draws while the lock is set.
+;
+; There is no wm_obscured fast path in wm_clip_set, deliberately: the region
+; build IS wm_obscured's z-order walk plus a rect subtraction that does
+; nothing when nothing overlaps, so a pre-test would only walk it twice.
+; =============================================================================
+
+; WM_CLIP_MAX and the WCR_* rect offsets are in kernel.asm: vga12.inc,
+; font.inc and icons.inc read this list and NASM sees them first.
+
+wm_clip_n   dw 0                ; rects in wm_clip_tab; 0 = disarmed.
+                                ; Initialized data, NOT .bss: every gfx_fill
+                                ; reads it, including the machine's first,
+                                ; and -f bin zeroes nothing.
+
+; -----------------------------------------------------------------------------
+; wm_clip_set - arm clipping to a window's visible region
+; in:  BX = window ptr; caller HOLDS the gfx lock
+; out: CF = 1 the window is entirely invisible - nothing armed, skip the
+;      frame; CF = 0 clipping is armed and dies at the next gfx_unlock
+; clobbers: flags
+; -----------------------------------------------------------------------------
+wm_clip_set:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov word [wm_clip_n], 0
+
+    mov ax, [bx+W_X]            ; seed with the content rect - the same one
+    mov dx, [bx+W_Y]            ; wm_draw_win white-fills before W_PAINT
+    mov cx, ax
+    add cx, [bx+W_W]
+    dec cx
+    mov si, dx
+    add si, [bx+W_H]
+    dec si
+    test word [bx+W_FLAGS], WF_FULL
+    jnz .seed                   ; fullscreen: the frame IS the content
+    inc ax                      ; else x+1 .. x+w-2, y+TITLE_H .. y+h-2
+    dec cx
+    add dx, TITLE_H
+    dec si
+.seed:
+    cmp ax, cx
+    jg .none                    ; degenerate content rect
+    cmp dx, si
+    jg .none
+    mov [wm_clip_tab+WCR_X1], ax
+    mov [wm_clip_tab+WCR_Y1], dx
+    mov [wm_clip_tab+WCR_X2], cx
+    mov [wm_clip_tab+WCR_Y2], si
+    mov word [wm_clip_n], 1
+
+    mov ax, bx                  ; AL = our index
+    sub ax, wm_wins
+    mov cl, WIN_SIZE
+    div cl                      ; AL = index (AH = 0: ptr is record-aligned)
+    mov ch, 0
+    mov cl, [wm_zn]
+    mov si, wm_zord
+    jcxz .done
+.find:
+    cmp [si], al
+    je .found
+    inc si
+    loop .find
+    jmp .done                   ; not in z-order (cannot happen)
+.found:
+    inc si                      ; first entry above us
+    dec cx
+.scan:
+    jcxz .done
+    dec cx
+    mov al, [si]
+    inc si
+    call wm_idx2ptr             ; BX = window above (AX and CX preserved)
+    test word [bx+W_FLAGS], 2
+    jz .scan
+    call wm_clip_sub            ; subtract it, shadow included
+    jc .none                    ; the list overflowed: degrade to a skip
+    cmp word [wm_clip_n], 0
+    jne .scan
+.none:
+    mov word [wm_clip_n], 0
+    stc
+    jmp short .out
+.done:
+    clc
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_clip_clear - disarm clipping
+; in:  nothing
+; out: nothing
+; clobbers: flags
+;
+; gfx_unlock calls this, so a background painter never has to. It exists for
+; the case of a task that wants to draw unclipped again inside the same lock
+; hold - and it is what SPEC.md 11.3 rule 3 points at.
+; -----------------------------------------------------------------------------
+wm_clip_clear:
+    mov word [wm_clip_n], 0
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_clip_sub - internal: subtract one window's occupied rect from the list
+; in:  BX = the occluding window ptr; the list holds at least one rect
+; out: CF = 1 the list overflowed (nothing about it is valid afterwards)
+; clobbers: flags
+;
+; The occupied rect is (x, y) to (x+w, y+h) INCLUSIVE - the 1px drop shadow
+; wm_draw_win puts at (+1,+1) is the caller's problem too, exactly as
+; wm_obscured has always counted it. A fullscreen window has no shadow, but
+; it covers the screen anyway and one row past the edge costs nothing:
+; vga_rect_setup clips.
+; -----------------------------------------------------------------------------
+wm_clip_sub:
+    push ax
+    push si
+    push di
+    mov ax, [bx+W_X]
+    mov [wm_cl_ox1], ax
+    add ax, [bx+W_W]
+    mov [wm_cl_ox2], ax
+    mov ax, [bx+W_Y]
+    mov [wm_cl_oy1], ax
+    add ax, [bx+W_H]
+    mov [wm_cl_oy2], ax
+    mov si, wm_clip_tab
+    xor di, di                  ; DI = index of the rect under test
+.rect:
+    cmp di, [wm_clip_n]
+    jae .ok
+    mov ax, [si+WCR_X2]
+    cmp ax, [wm_cl_ox1]
+    jl .keep
+    mov ax, [si+WCR_X1]
+    cmp ax, [wm_cl_ox2]
+    jg .keep
+    mov ax, [si+WCR_Y2]
+    cmp ax, [wm_cl_oy1]
+    jl .keep
+    mov ax, [si+WCR_Y1]
+    cmp ax, [wm_cl_oy2]
+    jg .keep
+    call wm_clip_split          ; overlap: up to four fragments replace it
+    jc .bad
+    jmp short .rect             ; slot DI now holds the rect moved down into
+                                ; it, so re-test the same index
+.keep:
+    inc di
+    add si, WCR_SZ
+    jmp short .rect
+.ok:
+    clc
+    jmp short .out
+.bad:
+    stc
+.out:
+    pop di
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_clip_split - internal: replace one overlapped rect with its fragments
+; in:  SI -> the rect (index DI), wm_cl_o* = the occluder, overlap proven
+; out: CF = 1 the list is full
+; clobbers: flags
+;
+; Removal is "move the last rect down into this slot and shorten the list",
+; so the order of the list is not preserved - nothing depends on it. The
+; fragments are appended at the end, where wm_clip_sub's own walk will reach
+; them and find (by construction) that they do not touch the occluder.
+; -----------------------------------------------------------------------------
+wm_clip_split:
+    push ax
+    push bx
+    mov ax, [si+WCR_X1]         ; the rect is about to be overwritten
+    mov [wm_cl_rx1], ax
+    mov ax, [si+WCR_Y1]
+    mov [wm_cl_ry1], ax
+    mov ax, [si+WCR_X2]
+    mov [wm_cl_rx2], ax
+    mov ax, [si+WCR_Y2]
+    mov [wm_cl_ry2], ax
+
+    mov ax, [wm_clip_n]         ; drop it: the last rect moves into its slot
+    dec ax                      ; (a self-copy when it WAS the last)
+    mov [wm_clip_n], ax
+    call wm_clip_ptr            ; BX -> the last rect
+    mov ax, [bx+WCR_X1]
+    mov [si+WCR_X1], ax
+    mov ax, [bx+WCR_Y1]
+    mov [si+WCR_Y1], ax
+    mov ax, [bx+WCR_X2]
+    mov [si+WCR_X2], ax
+    mov ax, [bx+WCR_Y2]
+    mov [si+WCR_Y2], ax
+
+    mov ax, [wm_cl_rx1]         ; above: full width, r.y1 .. o.y1-1
+    mov [wm_cl_fx1], ax
+    mov ax, [wm_cl_rx2]
+    mov [wm_cl_fx2], ax
+    mov ax, [wm_cl_ry1]
+    mov [wm_cl_fy1], ax
+    mov ax, [wm_cl_oy1]
+    dec ax
+    mov [wm_cl_fy2], ax
+    call wm_clip_add
+    jc .full
+    mov ax, [wm_cl_oy2]         ; below: full width, o.y2+1 .. r.y2
+    inc ax
+    mov [wm_cl_fy1], ax
+    mov ax, [wm_cl_ry2]
+    mov [wm_cl_fy2], ax
+    call wm_clip_add
+    jc .full
+
+    mov ax, [wm_cl_ry1]         ; the band the occluder shares with us
+    cmp ax, [wm_cl_oy1]
+    jge .my1
+    mov ax, [wm_cl_oy1]
+.my1:
+    mov [wm_cl_fy1], ax
+    mov ax, [wm_cl_ry2]
+    cmp ax, [wm_cl_oy2]
+    jle .my2
+    mov ax, [wm_cl_oy2]
+.my2:
+    mov [wm_cl_fy2], ax
+    mov ax, [wm_cl_rx1]         ; left of it
+    mov [wm_cl_fx1], ax
+    mov ax, [wm_cl_ox1]
+    dec ax
+    mov [wm_cl_fx2], ax
+    call wm_clip_add
+    jc .full
+    mov ax, [wm_cl_ox2]         ; and right of it
+    inc ax
+    mov [wm_cl_fx1], ax
+    mov ax, [wm_cl_rx2]
+    mov [wm_cl_fx2], ax
+    call wm_clip_add
+    jc .full
+    clc
+    jmp short .out
+.full:
+    stc
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_clip_add - internal: append wm_cl_f* to the list if it is non-empty
+; in:  wm_cl_fx1/fy1/fx2/fy2
+; out: CF = 1 the list is full (nothing appended)
+; clobbers: flags
+; -----------------------------------------------------------------------------
+wm_clip_add:
+    push ax
+    push bx
+    mov ax, [wm_cl_fx1]
+    cmp ax, [wm_cl_fx2]
+    jg .empty
+    mov ax, [wm_cl_fy1]
+    cmp ax, [wm_cl_fy2]
+    jg .empty
+    mov ax, [wm_clip_n]
+    cmp ax, WM_CLIP_MAX
+    jae .full
+    inc word [wm_clip_n]
+    call wm_clip_ptr            ; BX -> the new slot
+    mov ax, [wm_cl_fx1]
+    mov [bx+WCR_X1], ax
+    mov ax, [wm_cl_fy1]
+    mov [bx+WCR_Y1], ax
+    mov ax, [wm_cl_fx2]
+    mov [bx+WCR_X2], ax
+    mov ax, [wm_cl_fy2]
+    mov [bx+WCR_Y2], ax
+.empty:
+    clc
+    jmp short .out
+.full:
+    stc
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_clip_ptr - internal: clip-list index to rect pointer
+; in:  AX = index
+; out: BX = wm_clip_tab + index*WCR_SZ
+; clobbers: flags
+; -----------------------------------------------------------------------------
+wm_clip_ptr:
+    push cx
+    mov bx, ax
+    mov cl, 3                   ; WCR_SZ is 8, and it is meant to stay 8
+    shl bx, cl
+    add bx, wm_clip_tab
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_clip_test - may a whole rect be drawn?
+; in:  AX = x1, BX = y1, CX = x2, DX = y2 (inclusive)
+; out: CF = 0 the rect lies wholly inside one clip fragment, or the clip is
+;      disarmed; CF = 1 it does not - the caller must draw NOTHING
+; clobbers: flags
+;
+; This is the answer for the two primitives that cannot draw a partial
+; shape: font_char's 8x8 cell and ico_core's icon body (SPEC.md 6/25). Both
+; already skip a glyph that would cross a SCREEN edge; a clip edge is the
+; same decision one region in.
+; -----------------------------------------------------------------------------
+wm_clip_test:
+    cmp word [wm_clip_n], 0
+    je .free
+    push si
+    push di
+    mov si, wm_clip_tab
+    mov di, [wm_clip_n]
+.frag:
+    cmp ax, [si+WCR_X1]
+    jl .next
+    cmp cx, [si+WCR_X2]
+    jg .next
+    cmp bx, [si+WCR_Y1]
+    jl .next
+    cmp dx, [si+WCR_Y2]
+    jle .in
+.next:
+    add si, WCR_SZ
+    dec di
+    jnz .frag
+    stc
+    jmp short .out
+.in:
+    clc
+.out:
+    pop di
+    pop si
+    ret
+.free:
+    clc
+    ret
+
 ; -----------------------------------------------------------------------------
 ; wm_ptr2idx - window record pointer to index (public, SPEC.md 11)
 ; in:  BX = window ptr (record-aligned)
@@ -1031,4 +1409,22 @@ wm_owner:   resb MAX_WIN            ; instance index owning each window slot
 wm_fs:      resw 1                  ; fullscreen window ptr, 0 = none
                                     ; (SPEC.md 11.2); zeroed by wm_init
 wm_fs_save: resw 4                  ; its windowed x/y/w/h, restored on exit
+
+; --- the clip region (SPEC.md 11.3) ------------------------------------------
+; Uninitialized on purpose: wm_clip_n lives in .text as a dw 0 and is the
+; only thing that says how much of this is meaningful, so nothing here needs
+; a value before wm_clip_set writes one.
+wm_clip_tab: resw 4 * WM_CLIP_MAX   ; 16 rects x {x1, y1, x2, y2}, inclusive
+wm_cl_ox1:  resw 1                  ; wm_clip_sub: the occluder's rect, its
+wm_cl_oy1:  resw 1                  ; drop shadow included
+wm_cl_ox2:  resw 1
+wm_cl_oy2:  resw 1
+wm_cl_rx1:  resw 1                  ; wm_clip_split: the rect being replaced
+wm_cl_ry1:  resw 1
+wm_cl_rx2:  resw 1
+wm_cl_ry2:  resw 1
+wm_cl_fx1:  resw 1                  ; wm_clip_add: the fragment to append
+wm_cl_fy1:  resw 1
+wm_cl_fx2:  resw 1
+wm_cl_fy2:  resw 1
 section .text
