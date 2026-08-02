@@ -190,14 +190,24 @@ sched_unhook:
 ;
 ; Builds a complete saved frame at the top of the slot's stack: DX = the
 ; spawn argument, other GP regs zero, DS = ES = KERNEL_SEG, CS = KERNEL_SEG,
-; IP = entry, FLAGS with IF=1. The timer ISR is live while we work, so the
-; T_STATE=1 store is the LAST write to the record - a byte store is atomic,
-; publishing a fully built frame. The slot's sch_cycles counter is zeroed
+; IP = entry, FLAGS with IF=1. The slot's sch_cycles counter is zeroed
 ; before the publish (the ISR only charges the RUNNING slot, so a
 ; pre-publish write cannot race - SPEC.md 8.1). The scan starts at slot 1:
 ; slot 0 is the UI task, never free, and runs on the boot stack.
 ; The entry routine must never ret - it terminates only via task_exit
 ; (usually through inst_task_die, SPEC.md 29) or loops forever.
+;
+; ATOMIC, and it has to be (SPEC.md 8): the whole of "find a slot with
+; T_STATE = 0" ... "publish T_STATE = 1" runs under IF=0. A byte store being
+; atomic only makes the record safe to READ mid-build - it does nothing
+; about two spawners picking the SAME free slot, and since SPEC.md 20.6
+; every task, not just the UI task, can reach this routine (a package's
+; W_PAINT may spawn its worker, and W_PAINT is dispatched by whichever task
+; drives the repaint). Pre-empted between the scan and the publish, the
+; second spawner would overwrite the first's T_SP/T_INST and both callers
+; would be handed the same slot number - one task lost, one instance record
+; leaked for the session. The window is ~30 stores with no I/O, shorter than
+; task_exit's.
 ;
 ; The frame is built through ES, not DS: sch_stacks is in LOW_SEG (.lowbss),
 ; which DS does not address. The task record itself is ordinary kernel .bss
@@ -217,6 +227,8 @@ task_spawn:
     push si
     push di
     push es
+    pushf                       ; the caller's IF, banked across the window
+    cli
 
     mov bx, sch_tasks + T_SIZE  ; scan for a free slot, from slot 1
     mov cx, 1                   ; CX = slot index
@@ -227,8 +239,9 @@ task_spawn:
     inc cx
     cmp cx, MAX_TASKS
     jb .find
-    stc                         ; table full
-    jmp .done
+    xor ax, ax                  ; table full: AL = 0, which is never a valid
+    jmp .done                   ; slot (slot 0 is the UI task) - .done turns
+                                ; it back into CF = 1 after the popf
 
 .found:
     mov si, ax                  ; SI = entry (AX becomes scratch)
@@ -269,10 +282,13 @@ task_spawn:
     mov word [di+sch_cycles+2], 0
 
     mov byte [bx+T_STATE], 1    ; publish - MUST be the last record write
-    mov ax, cx                  ; AL = slot index
-    clc
+    mov ax, cx                  ; AL = slot index (1..MAX_TASKS-1)
 
 .done:
+    popf                        ; IF back - and the caller's CF with it, so
+    cmp al, 1                   ; the answer is re-derived from AL here:
+                                ; AL = 0 -> CF = 1 (table full), else CF = 0.
+                                ; The pops below touch no flags.
     pop es
     pop di
     pop si

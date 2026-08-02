@@ -25,7 +25,15 @@
 ; bytes after the image, so a package addresses its bss with equ offsets
 ; from the os88_image_end label that OS88_IMAGE_END defines.
 ;
-; Packages run in the kernel's tiny model (CS = DS = SS = KERNEL_SEG),
+; Packages run in the kernel's near model: CS = DS = KERNEL_SEG, but
+; SS = LOW_SEG (0x0800) - every task stack lives OUTSIDE the kernel segment,
+; so SS != DS and `[bp+disp]` addresses SS, not your data. A pointer held in
+; BP needs an explicit `ds:` override. That has always been true inside a
+; callback (you run on the UI task's stack) and matters more now that a
+; package can own a worker task of its own (OSAPI_TASK_SPAWN below), whose
+; 1536-byte stack is likewise in LOW_SEG.
+;
+; A package is
 ; assembled at the APP_LOAD_OFF link base and RELOCATED at load time to a
 ; per-instance region - several packages (or several instances of one) can
 ; be resident at once, each a fully relocated copy with its own bss
@@ -40,7 +48,8 @@
 ; =============================================================================
 
 ; --- environment ---------------------------------------------------------------
-KERNEL_SEG   equ 0x1000     ; CS = DS = SS for kernel and packages alike
+KERNEL_SEG   equ 0x1000     ; CS = DS for kernel and packages alike; SS is
+                            ; LOW_SEG (0x0800), NOT this - see above
 APP_LOAD_OFF equ 0xB000     ; where packages load (kernel segment offset)
 APP_MAX_SIZE equ 0x4E00     ; image + bss budget, 0xB000..0xFDFF
 ; The REFERENCE screen, not a promise. Since SPEC.md 39 the kernel drives
@@ -118,6 +127,10 @@ OSAPI_SND_PLAY      equ 0x0080   ; PCM_EXCL clip (SPEC.md 34.4): ES:SI, CX,
                                  ; (err 4 no-sink until Phase 2)
 OSAPI_SND_FM        equ 0x0084   ; FM verbs (SPEC.md 34.2); out CF=1 no FM
                                  ; sink (always, until Phase 3)
+; NEVER call OSAPI_SND_STREAM from your worker task - any verb, staging
+; included (SPEC.md 20.3/34.5). The open verbs' busy/half-duplex refusals
+; rest on every caller being serialized on the UI task, and teardown is not
+; fenced against a task. Poll status from a callback instead.
 OSAPI_SND_STREAM    equ 0x0088   ; PCM_BG streams + staging (SPEC.md 20.3):
                                  ; AL = verb (0 open / 1 feed / 2 close /
                                  ; 3 status / 6 stage / 7 grant), AH =
@@ -159,9 +172,14 @@ OSAPI_WM_GROW       equ 0x0094   ; BX=win ptr; caller holds the gfx lock.
                                  ; visible resizable window - always safe.
 
 ; --- files (SPEC.md 18.4/20.3) -------------------------------------------------
-; Whole files, by name, in the root of the mounted data disk. UI-task context
-; only - i.e. from a window callback or the entry proc, which is everywhere a
-; package runs anyway. The buffer is ES:BX (like OSAPI_SND_PLAY), so staged
+; Whole files, by name, in the volume's CURRENT DIRECTORY (SPEC.md 19.2 -
+; wherever the Disk window or the file dialog last navigated), not the root.
+; UI-task context only: the entry proc, a window callback, a menu handler or
+; a file-dialog completion proc. NEVER from your worker task
+; (OSAPI_TASK_SPAWN). The kernel cannot enforce this and a second concurrent
+; caller corrupts the FAT - the write path shares one sector buffer and the
+; FAT snapshot with every read and with the Disk window's mount.
+; The buffer is ES:BX (like OSAPI_SND_PLAY), so staged
 ; sound or an app's own bss both work; set ES = DS for the latter. A write
 ; stalls painters for its duration: never call these from a paint proc.
 OSAPI_FILE_WRITE    equ 0x0098   ; SI = NUL 8.3 name, ES:BX = bytes, CX =
@@ -238,6 +256,82 @@ VID_CGA    equ 2
 ; The dialog navigates the volume, so by the time you are called the current
 ; directory IS the folder the user chose in, which is where the file slots
 ; resolve names (SPEC.md 19.2). Just pass the name straight through.
+
+; --- your worker task (SPEC.md 20.6) -------------------------------------------
+; Your package may own EXACTLY ONE background task, so the work you do
+; between clicks is pre-empted instead of crammed into a callback. This is
+; the only place package code runs off the UI task.
+;
+OSAPI_TASK_SPAWN    equ 0x00B8   ; AX = your worker's near entry (a plain
+                                 ; `mov ax, my_worker` - a whole-word
+                                 ; package address, relocated for you),
+                                 ; BX = YOUR window ptr (what
+                                 ; OSAPI_WM_CREATE gave you). Call it from
+                                 ; a window callback, a menu handler or a
+                                 ; file-dialog completion proc, i.e. with
+                                 ; the gfx lock HELD - that is required,
+                                 ; not merely allowed. BX must be YOUR OWN
+                                 ; window and AX an entry inside YOUR OWN
+                                 ; image: the kernel checks that the entry
+                                 ; falls in the region of the instance BX
+                                 ; belongs to, and refuses otherwise, so
+                                 ; a borrowed window ptr buys nothing.
+                                 ; out CF=1 refused and nothing was
+                                 ; created (you already have a worker, or
+                                 ; the 12-slot task table is full - a
+                                 ; normal outcome: degrade, do not abort,
+                                 ; and DO retry later, it is transient);
+                                 ; else CF=0 and AL = the task slot. Every
+                                 ; other register, AH included, is
+                                 ; preserved. NOT callable from your entry
+                                 ; proc: the loader has not published your
+                                 ; instance yet, so it would simply refuse.
+OSAPI_TASK_ALIVE    equ 0x00BC   ; BX = YOUR window ptr; the gfx lock must
+                                 ; NOT be held, and it must be YOUR WORKER
+                                 ; calling - never a window callback.
+                                 ; Returns with every register AND the
+                                 ; flags preserved while you are still
+                                 ; alive. If your close box was clicked it
+                                 ; NEVER RETURNS: the kernel destroys your
+                                 ; window, frees your instance and
+                                 ; releases your region, and your task
+                                 ; ends inside this call.
+;
+; Your worker gets DX = your instance index, DS = ES = CS = KERNEL_SEG,
+; IF = 1 and the gfx lock free. The binding rules, none of them enforced:
+;
+;  1. ONE worker per instance. A second OSAPI_TASK_SPAWN just refuses.
+;  2. NEVER return and NEVER exit on your own. Call OSAPI_TASK_ALIVE at
+;     least once per outer-loop iteration and sleep when idle. This is the
+;     sharp edge: a worker that exits by itself leaves the kernel holding a
+;     dead task slot, and your close box then hides the window but never
+;     frees the instance record - your region leaks for the rest of the
+;     session. A worker that falls off the end and executes `ret` is worse:
+;     it jumps to a near-random kernel offset.
+;  3. NEVER hold the gfx lock across a long computation. Compute lock-free,
+;     then take the lock for a short burst of drawing and release it. A
+;     worker spinning under the lock wedges the whole machine, in either
+;     scheduler mode, and no watchdog can break it.
+;  4. gfx_lock is NOT reentrant: calling OSAPI_TASK_ALIVE while holding it
+;     deadlocks - nothing ever draws again.
+;  5. Under the lock, re-check that your window is still visible
+;     (test word [bx+W_FLAGS], 2) and not covered (OSAPI_WM_OBSCURED)
+;     before drawing. Windows move and get buried while you sleep.
+;  6. Your stack is 1536 bytes in LOW_SEG and SS != DS (see the header of
+;     this file). No deep recursion, no big stack buffers, and BP-relative
+;     operands address SS.
+;  7. You may call: the gfx_* and font_* slots, OSAPI_SET_COLOR,
+;     OSAPI_WM_CONTENT, OSAPI_WM_OBSCURED, OSAPI_VIDEO, OSAPI_GET_TICKS,
+;     OSAPI_MOUSE, OSAPI_SRAND/RAND, OSAPI_TASK_SLEEP, OSAPI_TASK_YIELD and
+;     OSAPI_TASK_ALIVE. OSAPI_SET_COLOR writes ONE global pen shared by the
+;     whole machine, so set it only inside the same lock hold as the drawing
+;     it colours - lock-free, it repaints someone else's window in your
+;     colour. You may NOT call the file slots, OSAPI_FILE_DLG,
+;     OSAPI_SND_STREAM or OSAPI_SND_PLAY from a worker - those are
+;     UI-task-only and the kernel cannot stop you.
+;
+; The kernel's own app_bounce_task is the reference implementation of all
+; of this.
 
 ; file error codes, pinned (SPEC.md 18.4): returned in AX with CF set
 FERR_OK      equ 0
@@ -386,8 +480,9 @@ WT_SIZE    equ 16
 ; The handler is near-called by the kernel UNDER THE GFX LOCK on the UI
 ; task, with AL = item index, AH = menu index (0-based), SI = the owning
 ; window, BX = the set. It obeys the W_ONCLICK rules (SPEC.md 11): it may
-; draw and may call the file slots, but must never take the gfx lock,
-; block or spawn.
+; draw and may call the file slots, but must never take the gfx lock or
+; block. It MAY call OSAPI_TASK_SPAWN - a menu command is the natural place
+; to start your worker.
 ;
 ; The count is a label DIFFERENCE, so it is identical in both relocation
 ; passes and os88pkg.py never mistakes it for a package address; the three

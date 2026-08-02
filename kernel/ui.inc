@@ -687,12 +687,20 @@ ui_dispatch:
     mov bx, [menu_win]          ; the lock dropped between menu_track and
     or bx, bx                   ; here, so re-check the owner before calling
     jz .app_done                ; into it. This guard used to be unreachable
-    test word [bx + W_FLAGS], 2 ; insurance ("only packages reach this path,
-    jz .app_done                ; and packages cannot spawn"); Locator's
-                                ; fm_menus made it LOAD-BEARING (SPEC.md
-                                ; 12.3), because a kernel window can be
-                                ; destroyed by a command picked from its own
-                                ; bar while the lock was down
+    test word [bx + W_FLAGS], 2 ; insurance once - the old reasoning was
+    jz .app_done                ; "only packages reach this path, and
+                                ; packages had no tasks then", false twice
+                                ; over now. Locator's fm_menus made it
+                                ; LOAD-BEARING (SPEC.md 12.3): a kernel
+                                ; window can be destroyed by a command
+                                ; picked from its own bar while the lock
+                                ; was down - and a package's own worker
+                                ; (SPEC.md 20.6) can tear its window down
+                                ; from inst_task_die in that same gap.
+                                ; wm_destroy clears the bit under the lock
+                                ; we hold, and only the UI task (us) calls
+                                ; wm_create, so the slot cannot be recycled
+                                ; behind this test.
     call inst_win_owner         ; DI = owning record, 0 = unowned window
     push di
     push word [snd_inst]

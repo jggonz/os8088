@@ -199,7 +199,9 @@ osapi_table:
                                   ;          longer always 640x480, so the
                                   ;          SCREEN_* equs in os88api.inc are
                                   ;          a reference, not a promise
-osapi_table_end:                 ; 0x00B8
+    OSAPI_SLOT inst_pkg_spawn     ; 0x00B8 - package worker tasks (SPEC.md
+    OSAPI_SLOT inst_pkg_alive     ; 0x00BC   20.6): AX = entry, BX = own win
+osapi_table_end:                 ; 0x00C0
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -207,8 +209,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 42 * 4
-%error "os8088 API jump table must be exactly 42 4-byte slots"
+%if OSAPI_TABLE_LEN != 44 * 4
+%error "os8088 API jump table must be exactly 44 4-byte slots"
 %endif
 
 ; =============================================================================

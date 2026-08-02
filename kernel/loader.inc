@@ -396,7 +396,10 @@ ld_run_body:
     ; --- 10. register + publish the instance, show the window ------------------
     mov di, bp
     mov byte [di+I_KIND], KIND_PKG
-    mov byte [di+I_TASK], 0xFF  ; packages cannot spawn (SPEC.md 20.2)
+    mov byte [di+I_TASK], 0xFF  ; born task-less; a callback may claim one
+                                ; worker later (SPEC.md 20.6). The entry
+                                ; proc cannot: neither I_STATE nor
+                                ; wm_owner is published until right here.
     mov ax, [ld_base]
     mov [di+I_SPTR], ax
     mov ax, [ld_need]

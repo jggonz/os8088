@@ -115,9 +115,10 @@ the menus. All of classic Mac's core interactions work:
   (and the clocks keep time silently); uncover them and they resume.
 - **Task Manager** — System → Task Manager: a live CPU load gauge with a
   scrolling history graph, a RAM readout with a usage bar, and one row per
-  instance with its state, CPU share and memory. Task-less apps only ever run
-  inside their window callbacks, so those callbacks are timed at the dispatch
-  site and billed to the instance — the rows still add up to one total.
+  instance with its state, CPU share and memory. Apps with no task of their own
+  only ever run inside their window callbacks, so those callbacks are timed at
+  the dispatch site and billed to the instance; an app that *does* own a task
+  adds that task's time to the same row — the rows still add up to one total.
 - **Control Panel** — System → Control Panel: a two-pane browser, the item
   list on the left and the selected item's settings on the right. It opens
   on **Scheduler**, a two-way toggle between **Pre-emptive** (the boot
@@ -238,10 +239,11 @@ Packages are **relocatable**, which is what lets several run at once. Each is
 assembled twice, at two different link bases; `os88pkg.py` diffs the two
 binaries to recover exactly which words are addresses, and ships that as a
 relocation table. At load time the kernel picks a free region out of the
-`0xA000..0xEFFF` pool, reads the file in, walks the table adding the load
+`0xB000..0xFDFF` pool, reads the file in, walks the table adding the load
 delta, zeroes bss, and calls the entry, which registers a window and returns;
 from then on the program is event-driven — its paint/key/click procs are
-called like any built-in window's. Closing a package frees its region.
+called like any built-in window's — and from one of those it can claim a
+single pre-empted worker task of its own. Closing a package frees its region.
 
 ## Two geometries of everything
 

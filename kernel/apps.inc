@@ -15,6 +15,11 @@
 ; themselves and re-check visibility + wm_obscured under it before touching
 ; the screen. Background tasks use only os8088 primitives and [ticks] - no
 ; BIOS calls (SPEC.md 7).
+;
+; app_bounce_task below is the REFERENCE IMPLEMENTATION for a package's
+; worker task (SPEC.md 20.6): sleep, take the lock, re-check visibility and
+; wm_obscured under it, draw briefly, release, check the die flag. Keep its
+; shape - the author rules point at it.
 ; =============================================================================
 
 ; --- geometry ----------------------------------------------------------------

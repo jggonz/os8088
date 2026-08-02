@@ -21,6 +21,12 @@
 ; lock, so a save stalls painters for its duration - by design, on the same
 ; terms as a Refresh remount (SPEC.md 22).
 ;
+; That now includes a HARD PROHIBITION on package worker tasks (SPEC.md
+; 20.6): a package may own one, and nothing here can tell. A second
+; concurrent caller cross-links the FAT through the shared dsk_secbuf and
+; FAT snapshot - the commit order below defends against a crash, not
+; against a second writer.
+;
 ; The disk stays hostile. No LBA is ever computed from a raw on-disk field:
 ; clusters go through dsk_clus2lba (which bounds them to [2, dsk_maxclus]),
 ; FAT offsets rest on SPEC.md 18.2 rule 16, and directory LBAs come from

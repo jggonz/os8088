@@ -15,6 +15,11 @@
 ; same hold; the Task Manager snapshots under pushf/cli. Only the UI task
 ; allocates records. Only the owning task destroys a task-owned instance's
 ; window - the UI task merely hides it and sets the die flag.
+;
+; A package instance can be on EITHER side of that split since SPEC.md 20.6:
+; it is born task-less, and a window callback may claim it one worker task
+; through inst_pkg_spawn. Once it has one, its region is freed by
+; task_exit's release byte from the worker, not by the UI task.
 ; =============================================================================
 
 ; --- instance record, 32 bytes (SPEC.md 29.1) ---------------------------------
@@ -286,8 +291,8 @@ inst_win_owner:
 ;
 ; Window callbacks (W_PAINT / W_ONKEY / W_ONCLICK) run on whichever task
 ; drives the repaint or the event - nearly always the UI task, which owns no
-; instance. Without this, every task-less app - About, Note Pad, Disk, and
-; EVERY loaded package (SPEC.md 21 - packages cannot spawn) - would read 0%
+; instance. Without this, every task-less app - About, Disk, and every
+; loaded package that owns no worker (SPEC.md 20.6) - would read 0%
 ; forever while its cost showed up as kernel time. task_debit moves the
 ; cycles instead of copying them, so instance rows and task rows still add
 ; up to one total (SPEC.md 8.1/28).
@@ -502,10 +507,12 @@ app_launch:
 ;
 ; Unowned window: plain wm_hide (defensive fallback). Task-less instance:
 ; synchronous teardown under the held lock - destroy the window, free the
-; record (for a package instance that final store frees its region,
-; SPEC.md 29.2 rule 7). Task-owned instance: set the die flag and hide for
-; instant feedback; the task notices at its next wake and tears itself
-; down via inst_task_die.
+; record. Task-owned instance: set the die flag and hide for instant
+; feedback; the task notices at its next wake and tears itself down via
+; inst_task_die. For a PACKAGE instance the record store frees its region
+; too (SPEC.md 29.2 rule 7) - on either branch: a package that took a
+; worker (SPEC.md 20.6) reaches the second one, and there the freeing store
+; is task_exit's release byte instead.
 ; -----------------------------------------------------------------------------
 app_close_win:
     push di
@@ -563,6 +570,9 @@ inst_restore:
 ; in:  DI = the CURRENT task's instance record (I_STATE = 2); gfx lock NOT
 ;      held
 ; out: NEVER RETURNS - ends in task_exit
+;
+; Reached from Clock's and Bounce's own loops (SPEC.md 14) and, for a
+; package that took a worker, from inst_pkg_alive below (SPEC.md 20.6).
 ; -----------------------------------------------------------------------------
 inst_task_die:
     call snd_release_rec        ; free every sound grant before the record
@@ -574,6 +584,209 @@ inst_task_die:
     call gfx_unlock
     mov bx, di                  ; I_STATE is offset 0: the release byte
     jmp task_exit
+
+; =============================================================================
+; Package worker tasks (SPEC.md 20.6)
+;
+; The two API-table targets that let a LOADED PACKAGE own exactly one
+; background task - the first time package code is pre-empted against
+; anything but the UI task. Everything in this pair's design falls out of
+; one property: while a worker exists, the ONLY code that can free its
+; instance record is the worker's own task_exit. app_close_win reads
+; I_TASK != 0xFF and takes the die-flag path, which frees nothing; the
+; task-less path that would free the record (and with it the package
+; region, SPEC.md 29.2 rule 7) is unreachable for a worker-owning instance.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; inst_wchk - is BX a plausible window record pointer? (module-internal)
+;
+; in:  BX = a window ptr that came from a PACKAGE (never trusted)
+; out: CF = 0 BX is inside wm_wins and record-aligned; CF = 1 it is not
+; clobbers: nothing else (flags)
+;
+; The two routines below are the first API slots that hand a package-supplied
+; pointer to inst_of_win, and inst_of_win is not defensive: wm_ptr2idx's
+; `div cl` FAULTS (int 0, no handler installed) once BX - wm_wins exceeds
+; 255*WIN_SIZE, and the `wm_owner+si` load that follows is unbounded. The
+; loader already refuses to wm_destroy an aborting entry's BX without exactly
+; this test (SPEC.md 21 step 9) - this is that test, factored out.
+; -----------------------------------------------------------------------------
+inst_wchk:
+    push ax
+    push cx
+    mov ax, bx
+    sub ax, wm_wins
+    jc .bad                     ; below the window table
+    cmp ax, MAX_WIN * WIN_SIZE
+    jae .bad                    ; past its end
+    mov cl, WIN_SIZE            ; AX <= 239 here, so the 8-bit div is safe
+    div cl                      ; AH = offset mod WIN_SIZE
+    test ah, ah
+    jnz .bad                    ; not record-aligned
+    clc
+    jmp short .out
+.bad:
+    stc
+.out:
+    pop cx                      ; POP touches no flags: CF survives
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; inst_pkg_spawn - give a package instance its one worker task (SPEC.md 20.6)
+;
+; in:  AX = near entry point inside the package image (a whole-word package
+;           address, relocated as class 0 by os88pkg.py, SPEC.md 20.2)
+;      BX = the package's own window ptr (what OSAPI_WM_CREATE returned)
+; out: CF = 1 refused, nothing created; CF = 0 and AL = the task slot
+; clobbers: AL (an output) and the flags - every other register preserved,
+;           AH included
+;
+; Context (binding): the caller MUST HOLD THE GFX LOCK. Every sanctioned
+; site does - W_PAINT / W_ONKEY / W_ONCLICK (SPEC.md 11), an AM_ONCMD menu
+; handler (SPEC.md 12.2) and a file-dialog completion proc (SPEC.md 38.6)
+; are all dispatched under it. Holding it is not a convenience: it is what
+; excludes app_close_win, which also runs under the lock and which would
+; otherwise be free to read I_TASK = 0xFF, take its task-less path and free
+; the record while the brand-new worker is starting up inside the region.
+; Nothing on this path takes a lock or yields, so a held lock is safe.
+; (Exclusion against another SPAWNER is task_spawn's own IF=0 window, not
+; this lock - W_PAINT is dispatched by whichever task drives the repaint,
+; while app_launch spawns lock-free on the UI task. See SPEC.md 8.)
+;
+; OWNERSHIP FENCE (SPEC.md 20.6). BX is package input, so finding a live
+; record is not enough: the record found must be a PACKAGE instance whose
+; own region contains the entry point in AX. Without that test a package
+; could hand over a stranger's window - a stale pointer, or one harvested
+; from wm_wins - and the kernel would write the STRANGER's I_TASK, flipping
+; that instance onto the die-flag close path (its close box would then hide
+; it forever, waiting on a worker it does not own) while the caller's own
+; record stayed task-less and its close took the synchronous path, freeing
+; the region its worker is still executing in. Region containment is the
+; cheap way to say "this entry belongs to this record": a second instance
+; of the same package lives at a different base, so it is refused too.
+;
+; NOT callable from the package entry proc: the loader publishes I_STATE=1
+; and binds wm_owner only AFTER the entry returns (SPEC.md 21 step 9), so
+; inst_of_win would find nothing and this would answer CF=1.
+; -----------------------------------------------------------------------------
+inst_pkg_spawn:
+    push bx
+    push cx
+    push dx
+    push di
+    call inst_wchk              ; a package pointer: bound it before any deref
+    jc .fail
+    call inst_of_win            ; DI = the record owning BX; CF = unowned
+    jc .fail
+    cmp byte [di+I_STATE], 1    ; live only - a dying instance spawns nothing
+    jne .fail
+    cmp byte [di+I_TASK], 0xFF  ; one worker per instance: I_TASK is a single
+    jne .fail                   ; byte and is never cleared once set
+    test byte [di+I_KIND], KIND_PKG ; the fence: a package instance...
+    jz .fail
+    cmp ax, [di+I_SPTR]         ; ...whose own region holds the entry point,
+    jb .fail                    ; which is what ties this spawn to the
+    mov cx, [di+I_SPTR]         ; CALLING instance (I_SIZE = image + bss,
+    add cx, [di+I_SIZE]         ; end <= 0xFE00, so no wrap here)
+    cmp ax, cx
+    jae .fail
+    mov ch, ah                  ; bank the caller's AH: task_spawn rebuilds
+                                ; the whole of AX but preserves CX
+    mov dx, di                  ; DX = instance index = (rec - inst_tab) >> 5,
+    sub dx, inst_tab            ; the app_launch idiom (SPEC.md 29.4). It
+    mov cl, 5                   ; lands in the worker's DX and its DL in
+    shr dx, cl                  ; T_INST, so the Task Manager attributes the
+                                ; task to this instance (SPEC.md 8/28)
+    call task_spawn             ; in AX = entry, DX = arg; out CF, AL = slot
+    mov ah, ch                  ; caller's AH back - MOV touches no flags, so
+                                ; task_spawn's CF is still the live answer
+    jc .out                     ; task table full: nothing was created
+    mov [di+I_TASK], al         ; the record now owns the worker
+    clc
+    jmp short .out
+.fail:
+    stc
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; inst_pkg_alive - the worker's liveness check, and its only way to die
+;                  (SPEC.md 20.6)
+;
+; in:  BX = the package's own window ptr; the gfx lock must NOT be held
+; out: returns with EVERY register AND the flags preserved if the instance
+;      is still live - otherwise NEVER RETURNS: it tears the instance down
+;      through inst_task_die (gfx_lock, wm_destroy, gfx_unlock, task_exit
+;      with BX = the record, which frees the record and with it the package
+;      region inside one IF=0 window)
+;
+; Called by the worker at least once per outer-loop iteration. gfx_lock is
+; NOT reentrant, and inst_task_die takes it - calling this while holding the
+; lock deadlocks the drawing of the whole machine (SPEC.md 7).
+;
+; The liveness QUESTION is asked of BX, per the ABI. The teardown IDENTITY
+; is taken from the running task's T_INST instead, and that split is
+; deliberate: BX may name nothing at all (a destroyed window reads as
+; wm_owner = 0xFF), and answering "no record" by simply exiting would leave
+; I_TASK naming a freed slot with the instance record and the package region
+; leaked for the rest of the session - the exact failure this routine exists
+; to prevent. T_INST is authoritative: task_spawn stored it from
+; inst_pkg_spawn's own DL and nothing else ever writes it.
+;
+; The one caller T_INST cannot speak for is the UI TASK, whose T_INST is a
+; hard 0xFF (sched_init) - so a package calling this from a window callback
+; with a stale BX would reach .orphan and task_exit slot 0. The UI task
+; never sleeps and never exits: that is the invariant task_exit's own
+; "resume the outgoing task" fallback rests on, and killing it takes the
+; event ladder, menu tracking and every future gfx_unlock with it. Calling
+; ALIVE off the worker is a contract violation; the bounded answer to it is
+; to return, which is what the guard at .die does.
+; -----------------------------------------------------------------------------
+inst_pkg_alive:
+    pushf                       ; the contract includes the flags: this call
+    push di                     ; sits inside the worker's inner loop
+    call inst_wchk
+    jc .die
+    call inst_of_win            ; DI = the record owning BX; CF = unowned
+    jc .die
+    cmp byte [di+I_STATE], 1    ; 2 = close requested, 0 = already gone
+    jne .die
+.live:
+    pop di
+    popf
+    ret
+
+.die:                           ; NEVER RETURNS - the frame above is abandoned
+    cmp byte [sch_cur], 0       ; ...unless we are the UI task, which must
+    je .live                    ; never exit (see the banner)
+    mov bl, [sch_cur]           ; our OWN record, via the task record's
+    xor bh, bh                  ; T_INST (T_SIZE = 8; the snd.inc idiom)
+    mov cl, 3
+    shl bx, cl
+    mov al, [bx+sch_tasks+T_INST]
+    cmp al, INST_MAX
+    jae .orphan                 ; no record of ours at all - cannot happen
+    call inst_ptr               ; DI = inst_tab + index*32
+    cmp word [di+I_WIN], 0
+    je .winless                 ; nothing to destroy; wm_destroy with BX = 0
+                                ; would zero the cold-entry jmp at 1000:0000
+    jmp inst_task_die           ; never returns
+.winless:
+    call snd_release_rec        ; the inst_task_die order, minus the window
+    mov bx, di                  ; no window, but the record is real: release
+    jmp task_exit               ; it anyway (I_STATE is offset 0), or its
+                                ; region, dock tile and tm row leak for the
+                                ; session - the failure this routine exists
+                                ; to prevent
+.orphan:
+    xor bx, bx                  ; no release byte - the sbl_refill_task
+    jmp task_exit               ; precedent (SPEC.md 34.5); never returns
 
 ; -----------------------------------------------------------------------------
 ; inst_launch_post - post a deferred launch request (SPEC.md 29.4)

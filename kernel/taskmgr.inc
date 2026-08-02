@@ -11,9 +11,9 @@
 ; per package row.
 ;
 ; The list is an INSTANCE list, not a task list (SPEC.md 29). A task list
-; would show only the four kinds that own a task; every task-less app -
-; About, Note Pad, Disk, and every loaded package, which cannot spawn at all
-; (SPEC.md 20.2/21) - runs purely inside window callbacks on the UI task and
+; would show only the kinds that own a task; every task-less app - About,
+; Disk, and every loaded package that has not claimed a worker (SPEC.md
+; 20.6) - runs purely inside window callbacks on the UI task and
 ; would be invisible. Each instance's row therefore adds two counters: the
 ; I_CYC that wm.inc/ui.inc bill to it around every W_PAINT / W_ONKEY /
 ; W_ONCLICK, and, if it owns a task, that task's sch_cycles. Row 0 is
@@ -129,7 +129,7 @@ tm_s_dash:  db '-', 0
 tm_s_run:   db 'run', 0
 tm_s_rdy:   db 'rdy', 0
 tm_s_slp:   db 'slp', 0
-tm_s_evt:   db 'evt', 0         ; task-less: runs only in window callbacks
+tm_s_evt:   db 'evt', 0         ; no worker task: runs only in callbacks
 tm_s_die:   db 'die', 0         ; I_STATE 2: closing, task not yet reaped
 tm_s_free:  db '---', 0
 tm_s_frtl:  db '  -    -', 0    ; free row's CPU + MEM columns
@@ -1789,7 +1789,7 @@ tm_rows:
     cmp byte [tm_ist+bx], 2
     je .stdie
     mov cl, [tm_itsk+bx]
-    cmp cl, MAX_TASKS           ; 0xFF = task-less: lives in callbacks only
+    cmp cl, MAX_TASKS           ; 0xFF = no worker: lives in callbacks only
     jae .stevt
     cmp cl, [tm_self]
     je .strun

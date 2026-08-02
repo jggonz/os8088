@@ -170,6 +170,19 @@ $(BUILD)/piano.alt.bin: apps/piano/piano.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/piano.o88: $(BUILD)/piano.bin $(BUILD)/piano.alt.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/piano.bin --alt $(BUILD)/piano.alt.bin -o $@
 
+# Fractal, the sixth shipped package: five escape-time fractals in Q4.12
+# fixed point, rendered by a background WORKER TASK (SPEC.md 20.6) while the
+# GUI stays live. The first client of OSAPI_TASK_SPAWN / OSAPI_TASK_ALIVE.
+$(BUILD)/fractal.bin: apps/fractal/fractal.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/fractal/fractal.asm
+	@echo "fractal: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/fractal.alt.bin: apps/fractal/fractal.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/fractal/fractal.asm
+
+$(BUILD)/fractal.o88: $(BUILD)/fractal.bin $(BUILD)/fractal.alt.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/fractal.bin --alt $(BUILD)/fractal.alt.bin -o $@
+
 # FMTEST, the sound Phase 3 gate package (docs/SOUND-PLAN.md): drives the FM
 # slot 0x0084 end to end (patch-load, chord, all-off, tone expiry, teardown).
 # Never on the shipped apps disks - their directory order is pinned - it gets
@@ -239,13 +252,14 @@ $(BUILD)/filetest-fat16.img: $(BUILD)/filetest.o88 tools/os88disk.py
 
 # The software floppies (drive B:) hold packages, not boot code - os88fs only.
 # Directory order is pinned: mines first, hello second (tests rely on it);
-# notepad is appended third, recorder fourth and piano fifth so earlier
-# indices hold.
-$(APPSIMG): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88
+# notepad is appended third, recorder fourth, piano fifth and fractal sixth,
+# so earlier indices hold. New packages ALWAYS append at the end - the
+# scripted tests click the Disk window by row index.
+$(APPSIMG): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88
 
-$(APPSIMG360): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88
+$(APPSIMG360): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88
 
 # The GUI reads a Microsoft serial mouse on COM1; QEMU emulates one natively.
 MOUSE := -chardev msmouse,id=m0 -serial chardev:m0

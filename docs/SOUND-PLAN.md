@@ -46,7 +46,9 @@ Consequences baked into the abstraction:
 - **Streams sourced from the floppy must be fully staged before playback.** Task
   switching pauses during floppy reads (`sch_lock`), so no refill task runs while
   int 13h is in flight. This is a pinned rule, not a footnote (SB section below).
-- **The kernel owns stream pacing.** Packages cannot own tasks and cannot receive queue
+- **The kernel owns stream pacing.** Packages may own at most one worker task
+  (SPEC.md §20.6) and that worker may not call the stream verbs; they also cannot
+  receive queue
   events (the event queue's only consumer is the UI task, and it discards everything
   but mouse events). So opening a background stream spawns a *transient kernel task*
   from the existing 12-slot pool that paces the buffer refills; packages observe
@@ -430,7 +432,8 @@ an arbitrary caller buffer is legal here, unlike the SB path.)
 | 7 | grant | `AL2`(sub-op) alloc/free: `CX`=bytes → out `SI`=grant offset, or free; stamped with the calling instance, force-freed by `snd_release_inst` |
 
 **Execution model, pinned (this is what makes the SB phases usable at all)**: packages
-run only inside window callbacks and cannot own tasks, so verb 0/4 spawn a **transient
+may own one worker task but may not call the stream verbs from it (SPEC.md §20.3),
+so verb 0/4 spawn a **transient
 kernel task** from the existing 12-slot pool (the Clock/Bounce spawn idiom — no
 resident sound task, no new `.lowbss` stack reservation). The task copies
 grant→double-buffer halves as `sbl_isr` flags them consumed (or ring→grant for
