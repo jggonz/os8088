@@ -90,6 +90,7 @@ pre-empted background task, updating live while the user types or drags).
 | 0x2C000       | 0x2C00  | `VIEW_SEG` — per-window file-manager listing cache, 4 × 4KB slots (§22.1); raw, via **ES only** |
 | 0x30000       | 0x3000  | `SND_SEG` — sound buffers (§34): SB DMA double buffer, record ring, sample staging pool; raw, via **ES only** (§2.2) |
 | 0x40000       | 0x4000  | `BB_SEG` — double-buffer back buffer, 4 planes × 0x9600 bytes (§32); touched only while the Control Panel's Display page has it switched on, which needs conventional RAM ≥ `DB_MIN_KB` |
+| 0x66000       | 0x6600  | **not kernel memory**: `apps/paint` claims four 64KB windows here (canvas, undo image, clipboard, scratch) when int 12h reports ≥ 620KB — see §40 and `docs/PAINT-NOTES.md`. Nothing in the kernel may take 0x66000..0x9FFFF without retiring that claim |
 | 0xA0000       | 0xA000  | VGA planar framebuffer, 80 bytes/row               |
 | 0xB0000       | 0xB000  | Hercules framebuffer, 4 banks × 0x2000, 90 bytes/row (§39) — mono adapters only |
 | 0xB8000       | 0xB800  | CGA framebuffer, 2 banks × 0x2000, 80 bytes/row (§39) — mono adapters only |
@@ -6628,3 +6629,66 @@ On CGA the usable desktop is 156 rows, so windows authored at 640x480 meet
 The general rule this leaves for any new window: **the clamp is not a clip.**
 If a paint proc lays out from constants rather than from `W_W`/`W_H`, it can
 write outside its frame on a short screen, and only the screen edge stops it.
+
+## 40. Paint — the seventh package (apps/paint/paint.asm)
+
+A bitmap editor over the published package ABI: **no kernel change of any
+kind**, no new API slot, every pixel through the `gfx_*` table. Prefix
+`pt_`, embedded palette icon (flags bit 0). Directory order on the apps
+disks stays pinned: mines, hello, notepad, recorder, piano, fractal —
+**paint is appended seventh** so the earlier indices hold. It uses colours
+beyond 0/15, which retires `[bb_mono]` (§32) — supported and expected; on a
+1bpp adapter its palette drops to §39.4's three ink classes.
+
+Eight tools (pencil, eraser, dropper, rectangle, ellipse, selection, flood
+fill, text), a per-tool line width, filled or outlined shapes, one-level
+undo that doubles as redo, an internal clipboard, and BMP load/save through
+the Standard File dialog (§38). The full design record, including the four
+kernel capabilities whose absence shaped it, is `docs/PAINT-NOTES.md`.
+
+- **Window:** "Paint", `PT_FRAME_W` = 494 wide, height = canvas + 42,
+  centred at y = `MBAR_H` + 4. Not resizable. The canvas is **448 wide on
+  every adapter** (the narrowest screen os8088 drives is 640) and as tall as
+  the desktop allows, capped at 280: 280 rows on VGA, 258 on Hercules, 110
+  on CGA. `pt_geom` derives the frame from `OSAPI_VIDEO` *before*
+  `wm_create`, so §39.7's clamp never fires, and re-derives `[pt_ch]` from
+  the record afterwards because the record is the truth.
+- **Content layout** (content-relative): tool palette, two columns of four
+  20×20 buttons at x 1/22, y 1 + row·21; a black divider at x 43; the canvas
+  at x 44; a 22-row strip below the canvas holding four width buttons, the
+  current-colour well, the colour swatches (16, or 3 at 1bpp), a
+  filled-shapes toggle and a text-size cycle. The strip spans the **whole**
+  content width, including the columns under the palette, so the click
+  ladder tests y before x.
+- **The canvas is a BMP.** 4bpp packed, high nibble = left pixel, rows
+  stored **bottom-up behind a 118-byte DIB header** — the canvas segment
+  *is* a `BITMAPINFOHEADER` file. Saving is one `OSAPI_FILE_WRITE` of that
+  segment with no staging pass, and a full-size picture is 62,838 bytes,
+  inside the file API's 64KB ceiling (§18.4) by 2,698. `pt_rowtab` maps
+  canvas y to a byte offset once at startup; nothing else in the file knows
+  the rows are upside down.
+- **Memory (the one unsanctioned thing).** The canvas, the undo image, the
+  clipboard and a scratch area live at linear 0x66000 / 0x76000 / 0x86000 /
+  0x96000 — the first paragraph above `BB_SEG`'s four planes, so double
+  buffering may be armed or disarmed underneath it. `pt_entry` gates the
+  whole app on int 12h ≥ 620KB and otherwise opens a window that says "Not
+  enough memory" and touches nothing. A claim record at `PT_SCSEG:0` (magic
+  pair + owner window pointer, believed only while that pointer still names
+  a used window slot titled "Paint") keeps a second instance off the same
+  canvas; in practice the loader refuses first, two 11KB regions not fitting
+  the 19.5KB pool.
+- **Drag loops invert `ui_drag`'s lock ordering (§13), and must.** A
+  package's `gfx_*` output goes through the back buffer when double
+  buffering is armed (§32), so a tracking loop that held the lock would show
+  nothing until the button came up. `pt_wait`/`pt_wait_tick` therefore draw
+  under the lock, *release* it so `gfx_unlock`'s flush reaches VRAM, yield,
+  and re-take it. The window is frontmost while it tracks and every
+  background painter checks `wm_obscured` (§7), so the XOR overlay is safe
+  across the gap.
+- **BMP reader:** 1, 4, 8 and 24bpp, uncompressed, top-down or bottom-up.
+  Every header field is validated before it is believed — magic, both halves
+  of every dword that must be zero, the depth, `biCompression`, and that the
+  pixel data the header describes fits inside the bytes actually read
+  (§19's rule: every byte off the disk is hostile). Source palettes map to
+  the sixteen by weighted city-block distance. GIF and JPEG are recognised
+  by magic and refused with a message; the reasons are in the notes.
