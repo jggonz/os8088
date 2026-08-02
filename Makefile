@@ -19,6 +19,9 @@ VM    := $(CURDIR)/vm/xt
 VM640 := $(CURDIR)/vm/xt640
 VMCGA := $(CURDIR)/vm/xt-cga
 VMHERC := $(CURDIR)/vm/xt-hercules
+VM286 := $(CURDIR)/vm/286
+VM386SX := $(CURDIR)/vm/386sx
+VM386DX := $(CURDIR)/vm/386dx
 
 # VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
 # 39.1). The shipped images are always built without it, so they auto-detect;
@@ -60,7 +63,8 @@ FILESIZE = $$(stat -c%s $(1) 2>/dev/null || stat -f%z $(1))
 KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
-.PHONY: all run run-640 debug test test-snd xt xt-640 xt-cga xt-hercules clean
+.PHONY: all run run-640 debug test test-snd xt xt-640 xt-cga xt-hercules \
+        286 386sx 386 clean
 
 all: $(IMG) $(IMG360) $(APPSIMG) $(APPSIMG360)
 
@@ -343,6 +347,40 @@ xt-cga: $(IMG360) $(APPSIMG360)
 xt-hercules: $(IMG360) $(APPSIMG360)
 	@$(UNPROTECT_B) $(VMHERC)/86box.cfg
 	$(BOX) -P $(VMHERC) -N
+
+# The other end of the range: an AT-class machine, VGA, more RAM than the OS
+# can reach. os8088 is 8086 code in real mode, so a 286/386 runs it verbatim -
+# these targets exist to prove exactly that, and to see the same 640KB ceiling
+# on a machine that has megabytes behind it (int 12h still answers 640).
+#
+#   286    AMI 286 clone board, 286 @ 12.5MHz, 1MB
+#   386sx  Shuttle HOT-304, 386SX @ 16MHz, 2MB
+#   386    Micronics 386 board, 386DX @ 25MHz, 2MB
+#
+# All three carry an OTI-067 VGA, a serial Microsoft mouse on COM1 and 1.44MB
+# drives (so they boot the same images QEMU does), and all three are
+# interactive: 86Box has no automation socket.
+#
+# The 286 is deliberately NOT `ibmat`: 86Box caps the real 5170 planar at
+# 512KB and clamps mem_size down to it SILENTLY, the same trap `vm/xt640`
+# hit with `ibmxt`. A clone AT board takes the full megabyte.
+#
+# Unlike the XT, an AT-class machine has a CMOS, and on the very first launch
+# it is empty: the BIOS stops at its setup screen (the AMI board offers
+# "EXIT FOR BOOT / RUN CMOS SETUP"). Pick EXIT FOR BOOT once - 86Box saves
+# the CMOS to vm/<machine>/nvr/ (gitignored) and every later boot goes
+# straight to the desktop.
+286: $(IMG) $(APPSIMG)
+	@$(UNPROTECT_B) $(VM286)/86box.cfg
+	$(BOX) -P $(VM286) -N
+
+386sx: $(IMG) $(APPSIMG)
+	@$(UNPROTECT_B) $(VM386SX)/86box.cfg
+	$(BOX) -P $(VM386SX) -N
+
+386: $(IMG) $(APPSIMG)
+	@$(UNPROTECT_B) $(VM386DX)/86box.cfg
+	$(BOX) -P $(VM386DX) -N
 
 clean:
 	rm -rf $(BUILD)

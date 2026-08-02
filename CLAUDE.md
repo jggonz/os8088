@@ -24,6 +24,9 @@ make xt       # boot 360KB images on an emulated IBM PC/XT in 86Box
 make xt-640   # same XT with a full 640KB RAM (vm/xt640/86box.cfg)
 make xt-cga      # XT + real CGA card, 256KB (vm/xt-cga)
 make xt-hercules # XT + real Hercules card, 256KB (vm/xt-hercules)
+make 286         # 86Box AT clone: 286 @ 12.5MHz, 1MB, VGA (vm/286)
+make 386sx       # 86Box Shuttle HOT-304: 386SX @ 16MHz, 2MB, VGA (vm/386sx)
+make 386         # 86Box Micronics: 386DX @ 25MHz, 2MB, VGA (vm/386dx)
 make clean
 ```
 
@@ -64,7 +67,8 @@ Testing quirks (learned the hard way):
 - Run `tools/sndcheck.py` only after QMP `quit` — a still-running QEMU's wav capture is partial and under-reports duration (and quitting with an SB stream underrun-paused flushes a residual ~20 ms blip at the file's very end; see docs/SOUND-PLAN.md Phase 4).
 - **QEMU emulates no CGA and no Hercules card** — only VGA-class devices. `make test VIDEO=cga` works because SeaVGABIOS's `int 10h AX=0006h` is a byte-exact CGA framebuffer, but it never exercises the detection probe. Hercules has no automatable path at all: `HERCSEG` + `tools/hercshot.py` verifies its pixels out of RAM, and `make xt-hercules` is the only real test.
 - `tools/mouse.py` paces its moves explicitly (one connection, `sleep` between packets) because the msmouse backend runs at 1200 baud and drops a move whose predecessor is still in flight. On a fast host the old one-process-per-move spacing was not enough, and the symptom is a cursor that never moves while every screendump still looks plausible.
-- Only QEMU is routinely verified. `vm/xt/86box.cfg` keys are best-effort guesses and 86Box rewrites its own preference keys on exit (harmless drift — except that it silently clamps `mem_size` to the machine's maximum: `ibmxt` caps at 256K, which is why `vm/xt640` uses `ibmxt86`, the 1986 board revision).
+- Only QEMU is routinely verified. `vm/xt/86box.cfg` keys are best-effort guesses and 86Box rewrites its own preference keys on exit (harmless drift — except that it silently clamps `mem_size` to the machine's maximum: `ibmxt` caps at 256K, which is why `vm/xt640` uses `ibmxt86`, the 1986 board revision; the same trap rules out `ibmat` for the 1MB 286, which 86Box clamps to 512K). The cheap way to test a candidate machine without booting it: launch 86Box on a throwaway copy of the config, `kill -TERM` it, and read the config back — 86Box rewrites it on exit with whatever it actually accepted.
+- The AT-class targets (`286`, `386sx`, `386`) boot the **1.44MB** images, not the 360KB ones, and they have a CMOS the XT does not: on a fresh `vm/<machine>/nvr/` the BIOS stops at its setup screen and wants "EXIT FOR BOOT" picked once. That is a one-time cost per VM directory, not a failure.
 - 86Box's `wp://` prefix on an `fdd_0N_fn` path mounts that floppy **write-protected**, and int 13h then answers status 03h — which the OS faithfully reports as "Write protected" (`FERR_WPROT`). The data floppy carried `wp://` from the read-only-filesystem era and had to lose it before SPEC.md §18.4 writes could work on the XT; the **boot** floppy keeps it deliberately. If saving to B: starts failing on 86Box again, check this before suspecting `diskw.inc` — 86Box may have rewritten the key on exit.
 
 ## Architecture

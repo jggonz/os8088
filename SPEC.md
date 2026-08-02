@@ -1915,6 +1915,16 @@ FAT snapshot begins. Keep this block last.
   adapter it was built for and would otherwise not rebuild. `xt-cga` /
   `xt-hercules` (`vm/xt-cga`, `vm/xt-hercules`) boot 86Box with the real
   cards; every shipped image is built with neither knob set.
+- AT-class 86Box targets: `286` (`vm/286`, AMI 286 clone board, 286 @
+  12.5MHz, 1MB), `386sx` (`vm/386sx`, Shuttle HOT-304, 386SX @ 16MHz, 2MB)
+  and `386` (`vm/386dx`, Micronics 386, 386DX @ 25MHz, 2MB), all with an
+  OTI-067 VGA, a serial mouse and 1.44MB drives — they boot `$(IMG)` /
+  `$(APPSIMG)`, not the 360KB pair. Nothing in the OS changes: it is 8086
+  code in real mode, int 12h still caps at 640K, and the RAM above it is
+  unreachable by design. Two 86Box traps apply: `mem_size` is clamped to the
+  board maximum without a word (which is why the 286 is not `ibmat` — the
+  5170 planar stops at 512KB), and an empty CMOS makes the BIOS stop at its
+  setup screen once, until `vm/<machine>/nvr/` exists.
 - Gate packages ride their own scratch images and are mounted in place of
   the apps disk with `make test-snd TESTAPPS=<img>` (the `test` target's B:
   drive is fixed): `build/fmtest.img` (§34 Phase 3), `build/sbtest.img`
