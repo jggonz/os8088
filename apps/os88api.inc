@@ -43,6 +43,14 @@
 KERNEL_SEG   equ 0x1000     ; CS = DS = SS for kernel and packages alike
 APP_LOAD_OFF equ 0xB000     ; where packages load (kernel segment offset)
 APP_MAX_SIZE equ 0x4E00     ; image + bss budget, 0xB000..0xFDFF
+; The REFERENCE screen, not a promise. Since SPEC.md 39 the kernel drives
+; three adapters and picks one at boot: VGA 640x480x16, Hercules 720x348
+; mono, or CGA 640x200 mono. Ask OSAPI_VIDEO for the one you actually got.
+; A window template is still authored against these numbers - wm_create
+; clamps the frame onto the live screen, so an oversized window is placed
+; and clipped rather than lost - but anything that reads the screen edge at
+; RUN time (a right-anchored control, a bottom-anchored status line) must
+; use OSAPI_VIDEO or it will be wrong on two adapters out of three.
 SCREEN_W     equ 640
 SCREEN_H     equ 480
 MBAR_H       equ 20         ; menu bar height, px
@@ -198,6 +206,23 @@ OSAPI_FILE_DLG      equ 0x00B0   ; AL = 0 Open / 1 Save, BX = your window ptr,
                                  ; refused (one is already up, or no room)
 FDLG_OPEN  equ 0                 ; the two modes, in AL going in and in AL
 FDLG_SAVE  equ 1                 ; coming back
+;
+OSAPI_VIDEO         equ 0x00B4   ; the screen this machine actually has
+                                 ; (SPEC.md 39.2). No inputs. Out: AX = width,
+                                 ; BX = height, CX = the first row the dock
+                                 ; owns (so the usable desktop is rows MBAR_H
+                                 ; .. CX-1), DL = 0 VGA / 1 Hercules / 2 CGA,
+                                 ; DH = bits per pixel, 4 or 1. Callable from
+                                 ; any context, lock held or not.
+VID_VGA    equ 0                 ; the DL values
+VID_HERC   equ 1
+VID_CGA    equ 2
+;
+; On a 1bpp adapter every colour you pass is reduced to black, white or a
+; 50% dither (SPEC.md 39.4): 0..6 go black, 12/14/15 go white, and 7..11
+; plus 13 dither. Two colours from the same class are indistinguishable, so
+; if a control's state is carried by colour alone, check DH and carry it
+; some other way - the shipped apps' palettes were chosen to survive this.
 ;
 ; Your completion proc is called on the UI task with the gfx lock HELD, after
 ; the dialog window is gone:

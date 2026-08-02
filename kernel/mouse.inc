@@ -200,13 +200,13 @@ mou_isr:
     or  al, ah
     cbw                         ; AX = dx, signed
     add ax, [mouse_x]
-    or  ax, ax                  ; clamp 0..SCREEN_W-1
+    or  ax, ax                  ; clamp 0..[vid_wm1]
     jns .xlo
     xor ax, ax
 .xlo:
-    cmp ax, SCREEN_W-1
+    cmp ax, [vid_wm1]
     jle .xok
-    mov ax, SCREEN_W-1
+    mov ax, [vid_wm1]
 .xok:
     mov [mouse_x], ax
 
@@ -219,13 +219,13 @@ mou_isr:
     or  al, bl
     cbw                         ; AX = dy, signed
     add ax, [mouse_y]
-    or  ax, ax                  ; clamp 0..SCREEN_H-1
+    or  ax, ax                  ; clamp 0..[vid_hm1]
     jns .ylo
     xor ax, ax
 .ylo:
-    cmp ax, SCREEN_H-1
+    cmp ax, [vid_hm1]
     jle .yok
-    mov ax, SCREEN_H-1
+    mov ax, [vid_hm1]
 .yok:
     mov [mouse_y], ax
 
@@ -454,13 +454,9 @@ cur_restoreu:
 ; clobbers: ax, bx, cx, dx, si, di, bp, es
 ; -----------------------------------------------------------------------------
 cur_draw:
-    mov ax, [cur_drawn_y]       ; DI = y*80 + x/8
-    mov cl, 4
-    shl ax, cl                  ; y*16
+    mov ax, [cur_drawn_y]       ; DI = rowbase(y) + x/8. CL and DX are both
+    call gfx_rowbase            ; loaded below, and BX after that
     mov di, ax
-    shl ax, 1
-    shl ax, 1                   ; y*64
-    add di, ax
     mov bx, [cur_drawn_x]
     mov ax, bx
     mov cl, 3
@@ -472,9 +468,9 @@ cur_draw:
     sub ch, cl                  ; CH = 8 - shift
 
     ; --- clip the cell at the right and bottom screen edges ------------------
-    ; AX still holds the byte column (x/8). bytes-in-row = 80 - column; skip
-    ; the DI+1 / DI+2 writes that would wrap onto the next scanline.
-    mov dx, ROW_BYTES
+    ; AX still holds the byte column (x/8). bytes-in-row = stride - column;
+    ; skip the DI+1 / DI+2 writes that would wrap onto the next scanline.
+    mov dx, [vid_stride]
     sub dx, ax                  ; DX = bytes available in this row (>= 1)
     mov byte [cur_b1ok], 0
     mov byte [cur_b2ok], 0
@@ -485,17 +481,28 @@ cur_draw:
     jb .cols_done
     mov byte [cur_b2ok], 1
 .cols_done:
-    mov ax, SCREEN_H
-    sub ax, [cur_drawn_y]       ; rows on screen at this y (>= 1)
+    mov ax, [vid_h]             ; UNSIGNED - vid_apply homes the cursor into
+    sub ax, [cur_drawn_y]       ; the new screen precisely so this cannot
+                                ; borrow. rows on screen at this y (>= 1)
     cmp ax, CUR_H
     jbe .rows_set
     mov ax, CUR_H
 .rows_set:
     mov [cur_rows], al
 
-    mov ax, VGA_SEG
+    mov ax, [vid_seg]
     mov es, ax
 
+    cmp byte [vid_mono], 0      ; 1bpp: no Set/Reset, no bit mask, no ports -
+    je .planar                  ; the mask bits go in with plain CPU logic
+    mov byte [cur_ink], 1       ; white outline and fill
+    mov si, cur_and
+    call cur_pass_mono
+    mov byte [cur_ink], 0       ; black body on top
+    mov si, cur_data
+    call cur_pass_mono
+    ret
+.planar:
     mov dx, 0x3CE               ; GC1: enable Set/Reset on all planes
     mov ax, 0x0F01
     out dx, ax
@@ -579,6 +586,82 @@ cur_pass:
     ret
 
 ; -----------------------------------------------------------------------------
+; cur_pass_mono - cur_pass for a 1bpp adapter: the same 16-row, 3-byte
+;                 shifted window and the same cur_b1ok/cur_b2ok/cur_rows
+;                 clipping, with each masked write done by the CPU - OR the
+;                 bits in for the white pass, AND them out for the black one
+;                 - and the row advance following the banked layout through
+;                 gfx_nextrow (SPEC.md 39.3).
+;
+; This is the only genuinely new renderer loop in the multi-adapter port:
+; the cursor is the one drawing path with no bb_* twin to borrow, because
+; cur_saveu/cur_restoreu deliberately bypass the buffer (SPEC.md 32). It runs
+; inside IRQ4, so it cannot live in .fartext either (farcall.inc forbids far
+; code in an interrupt handler).
+; in:   SI -> 16-word row table, DI = offset of the top-left byte, CL =
+;       shift, CH = 8-shift, ES = [vid_seg], [cur_ink] = 1 white / 0 black
+; out:  none; preserves CX, DI; clobbers ax, bx, dx, si, bp
+; -----------------------------------------------------------------------------
+cur_pass_mono:
+    push di
+    xor ax, ax
+    mov al, [cur_rows]          ; clipped row count from cur_draw
+    mov bp, ax
+.row:
+    lodsw                       ; AX = row bits, MSB = leftmost pixel
+    mov bx, ax
+    shr bx, cl                  ; BH:BL = B0:B1
+    xchg cl, ch
+    shl ax, cl                  ; AL = B2
+    xchg cl, ch
+    mov ah, al                  ; stash B2
+
+    mov al, bh                  ; --- byte 0 ---
+    or  al, al
+    jz .b1
+    call cur_ink_byte
+.b1:
+    mov al, bl                  ; --- byte 1 ---
+    or  al, al
+    jz .b2
+    cmp byte [cur_b1ok], 0      ; clipped off the right screen edge?
+    je .b2
+    inc di
+    call cur_ink_byte
+    dec di
+.b2:
+    mov al, ah                  ; --- byte 2 ---
+    or  al, al
+    jz .next
+    cmp byte [cur_b2ok], 0
+    je .next
+    inc di
+    inc di
+    call cur_ink_byte
+    dec di
+    dec di
+.next:
+    call gfx_nextrow
+    dec bp
+    jnz .row
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; cur_ink_byte - internal: merge the mask in AL into [es:di] per [cur_ink].
+;                clobbers AL and flags; AH (the stashed B2) survives.
+; -----------------------------------------------------------------------------
+cur_ink_byte:
+    cmp byte [cur_ink], 0
+    je .clr
+    or [es:di], al
+    ret
+.clr:
+    not al
+    and [es:di], al
+    ret
+
+; -----------------------------------------------------------------------------
 ; cursor bitmap - classic Mac arrow, hot spot (0,0), black body 11 rows tall
 ; with a 1px white outline. cur_and is the white pass (outline + fill),
 ; cur_data the black body drawn on top. MSB = leftmost pixel.
@@ -640,6 +723,8 @@ mou_evrec   times 8 db 0        ; scratch event record for evq_push (ISR only)
 
 section .bss
 cur_save    resb CUR_SAVE_SZ    ; save-under: 3 bytes x 16 rows x 4 planes
+cur_ink     resb 1              ; cur_pass_mono: 1 = OR the white in,
+                                ; 0 = AND the black out
 cur_rows    resb 1              ; edge clipping, set per draw by cur_draw:
 cur_b1ok    resb 1              ; rows on screen, and whether the DI+1/DI+2
 cur_b2ok    resb 1              ; bytes of each row are still inside the row

@@ -17,6 +17,41 @@ APPSIMG360 := $(BUILD)/apps360.img
 BOX   := /Applications/86Box.app/Contents/MacOS/86Box
 VM    := $(CURDIR)/vm/xt
 VM640 := $(CURDIR)/vm/xt640
+VMCGA := $(CURDIR)/vm/xt-cga
+VMHERC := $(CURDIR)/vm/xt-hercules
+
+# VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
+# 39.1). The shipped images are always built without it, so they auto-detect;
+# this exists because QEMU emulates no CGA and no Hercules card, and forcing
+# the CGA path onto a VGA - whose int 10h mode 6 IS a CGA framebuffer, same
+# segment, same two banks, same stride - is the only way to drive the mono
+# renderer under the QMP harness.
+VIDFORCE_vga  := 1
+VIDFORCE_herc := 2
+VIDFORCE_cga  := 3
+ifneq ($(VIDEO),)
+VIDDEF := -DVID_FORCE=$(VIDFORCE_$(VIDEO))
+endif
+# HERCSEG=0x7000 relocates the Hercules framebuffer into spare RAM so the
+# renderer can be read back and checked without a Hercules card - B0000 is
+# unmapped under QEMU and swallows every write (SPEC.md 39.9).
+ifneq ($(HERCSEG),)
+VIDDEF += -DVID_HERC_SEG=$(HERCSEG)
+endif
+# ...and a stamp so that CHANGING VIDEO rebuilds the kernel. Without it make
+# sees an up-to-date kernel.bin, skips it, and boots the PREVIOUS adapter -
+# which reads exactly like the probe or the renderer being broken.
+#
+# The invalidation runs at PARSE time, not as a rule. A rule that deletes
+# kernel.bin is worse than no rule at all: make has already stat'd the target
+# by the time the prerequisite's recipe runs, so it can conclude "up to date"
+# about a file that recipe just removed, and then build the floppy image from
+# a kernel that is not there. Doing it here means the file is simply gone
+# before make builds its graph.
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))
+$(shell mkdir -p $(BUILD); \
+        [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin; \
+                                touch $(VIDSTAMP); })
 
 # "size of this file in bytes" is spelled differently by GNU coreutils and by
 # BSD/macOS stat, and this gets built on both. Try GNU first, fall back to BSD.
@@ -25,7 +60,7 @@ FILESIZE = $$(stat -c%s $(1) 2>/dev/null || stat -f%z $(1))
 KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
-.PHONY: all run run-640 debug test test-snd xt xt-640 clean
+.PHONY: all run run-640 debug test test-snd xt xt-640 xt-cga xt-hercules clean
 
 all: $(IMG) $(IMG360) $(APPSIMG) $(APPSIMG360)
 
@@ -35,8 +70,13 @@ $(BUILD):
 # The kernel is a flat binary loaded at 1000:0000. No linker is involved,
 # which keeps Apple's Mach-O-only toolchain out of the picture entirely.
 $(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) | $(BUILD)
-	$(NASM) -f bin -w+error -I kernel/ -o $@ $(KERNEL_SRC)
+	$(NASM) -f bin -w+error -I kernel/ $(VIDDEF) -o $@ $(KERNEL_SRC)
 	@echo "kernel: $(call FILESIZE,$@) bytes"
+ifneq ($(VIDDEF),)
+	@echo "  *** VIDEO=$(VIDEO): this kernel has the adapter probe FORCED. ***"
+	@echo "  *** build/ is git-tracked - rebuild with plain \`make\` before  ***"
+	@echo "  *** committing, or every machine boots as $(VIDEO).             ***"
+endif
 
 # The boot sector needs to know how many sectors to read, so we measure the
 # kernel at build time and assemble the count in. Reading exactly what exists
@@ -277,6 +317,18 @@ xt: $(IMG360) $(APPSIMG360)
 xt-640: $(IMG360) $(APPSIMG360)
 	@$(UNPROTECT_B) $(VM640)/86box.cfg
 	$(BOX) -P $(VM640) -N
+
+# The two monochrome machines (SPEC.md 39), both 256KB - which is all an
+# ibmxt takes anyway, and the floor os8088 targets. These are the ONLY way to
+# exercise the detection probe and the Hercules renderer: QEMU has no such
+# card, so `make test VIDEO=cga` covers the mono renderer but never the probe.
+xt-cga: $(IMG360) $(APPSIMG360)
+	@$(UNPROTECT_B) $(VMCGA)/86box.cfg
+	$(BOX) -P $(VMCGA) -N
+
+xt-hercules: $(IMG360) $(APPSIMG360)
+	@$(UNPROTECT_B) $(VMHERC)/86box.cfg
+	$(BOX) -P $(VMHERC) -N
 
 clean:
 	rm -rf $(BUILD)

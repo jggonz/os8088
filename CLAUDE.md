@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-os8088: a Macintosh System 1-style GUI OS for the Intel 8086, written entirely in real-mode NASM assembly, booted from floppy. Pre-emptive multitasking, overlapping windows, serial mouse, a bottom dock, and loadable software packages that run as closable, multi-instance apps — all in 256KB of RAM.
+os8088: a Macintosh System 1-style GUI OS for the Intel 8086, written entirely in real-mode NASM assembly, booted from floppy. Pre-emptive multitasking, overlapping windows, serial mouse, a bottom dock, and loadable software packages that run as closable, multi-instance apps — all in 256KB of RAM. One binary drives VGA, Hercules or CGA, picked at boot.
 
 **SPEC.md is the binding contract.** Every symbol name, register contract, constant, and data layout is pinned there. Update SPEC.md *before* changing any interface, not after.
 
@@ -22,8 +22,22 @@ make test-snd # make test + PC speaker captured to build/snd.wav; verify with
 make debug    # boot QEMU halted, waiting for gdb on :1234
 make xt       # boot 360KB images on an emulated IBM PC/XT in 86Box
 make xt-640   # same XT with a full 640KB RAM (vm/xt640/86box.cfg)
+make xt-cga      # XT + real CGA card, 256KB (vm/xt-cga)
+make xt-hercules # XT + real Hercules card, 256KB (vm/xt-hercules)
 make clean
 ```
+
+Two build knobs exist only for testing the video fallbacks (SPEC.md §39.9):
+
+```
+make test VIDEO=cga                    # force the CGA path on a VGA machine
+make test VIDEO=herc HERCSEG=0x7000    # force Hercules, framebuffer in RAM
+python3 tools/hercshot.py build/qmp.sock 0x70000 out.png
+```
+
+`VIDEO=` is tracked by a stamp file, so changing it rebuilds the kernel — without that,
+make sees an up-to-date `kernel.bin`, boots the previous adapter, and it reads exactly
+like the probe being broken.
 
 Requires `nasm`, `qemu-system-i386`, `python3`. No linker anywhere — everything is `nasm -f bin` flat binaries (deliberately, to avoid Apple's Mach-O-only toolchain).
 
@@ -32,6 +46,8 @@ There are no unit tests. Testing = boot `make test`, then drive it over QMP:
 ```
 python3 tools/mouse.py build/qmp.sock click 180 150      # absolute mouse click
 python3 tools/mouse.py build/qmp.sock to X Y / down / up      # for menus: position, press, drag (`to` while held), release
+python3 tools/mouse.py --screen 640x200 build/qmp.sock ...    # MUST match the adapter (SPEC.md §39): the harness
+                                                              # pins against the kernel's own edge clamp
 python3 tools/qmp.py build/qmp.sock 'sendkey h'
 python3 tools/qmp.py build/qmp.sock 'screendump /abs/path/shot.ppm'
 python3 tools/qmp.py build/qmp.sock 'quit'
@@ -46,6 +62,8 @@ Testing quirks (learned the hard way):
 - Unpaced `mouse_move`/`mouse_button` sequences over one QMP connection outrun the 1200-baud msmouse: the button packet is processed at a stale position and drags silently do nothing — interleave `'sleep 0.1'` (or more) between moves and presses.
 - `mouse.py`'s derived absolute position can be 1–2px off after a run of moves. On narrow targets (the Disk window's 14px scroll bar) a click can silently land just outside the rect — aim at the visual center of the glyph, and when a click "does nothing", screendump and check where the drawn cursor actually sits before suspecting the hit-test.
 - Run `tools/sndcheck.py` only after QMP `quit` — a still-running QEMU's wav capture is partial and under-reports duration (and quitting with an SB stream underrun-paused flushes a residual ~20 ms blip at the file's very end; see docs/SOUND-PLAN.md Phase 4).
+- **QEMU emulates no CGA and no Hercules card** — only VGA-class devices. `make test VIDEO=cga` works because SeaVGABIOS's `int 10h AX=0006h` is a byte-exact CGA framebuffer, but it never exercises the detection probe. Hercules has no automatable path at all: `HERCSEG` + `tools/hercshot.py` verifies its pixels out of RAM, and `make xt-hercules` is the only real test.
+- `tools/mouse.py` paces its moves explicitly (one connection, `sleep` between packets) because the msmouse backend runs at 1200 baud and drops a move whose predecessor is still in flight. On a fast host the old one-process-per-move spacing was not enough, and the symptom is a cursor that never moves while every screendump still looks plausible.
 - Only QEMU is routinely verified. `vm/xt/86box.cfg` keys are best-effort guesses and 86Box rewrites its own preference keys on exit (harmless drift — except that it silently clamps `mem_size` to the machine's maximum: `ibmxt` caps at 256K, which is why `vm/xt640` uses `ibmxt86`, the 1986 board revision).
 - 86Box's `wp://` prefix on an `fdd_0N_fn` path mounts that floppy **write-protected**, and int 13h then answers status 03h — which the OS faithfully reports as "Write protected" (`FERR_WPROT`). The data floppy carried `wp://` from the read-only-filesystem era and had to lose it before SPEC.md §18.4 writes could work on the XT; the **boot** floppy keeps it deliberately. If saving to B: starts failing on 86Box again, check this before suspecting `diskw.inc` — 86Box may have rewritten the key on exit.
 
@@ -53,6 +71,12 @@ Testing quirks (learned the hard way):
 
 ### Hard rules (from SPEC.md §1 — these break silently if violated)
 
+- **Three video adapters, one binary (SPEC.md §39).** VGA 640x480x16 planar, else
+  Hercules 720x348 mono, else CGA 640x200 mono, probed at boot by `kernel/viddet.inc`.
+  **`SCREEN_W`/`SCREEN_H`/`ROW_BYTES` are VGA reference values, not the truth** — the live
+  screen is `[vid_w]`/`[vid_h]`/`[vid_stride]` and the derived words in §39.2. New code that
+  clips, centres or anchors to a screen edge must read those, or it is wrong on two adapters
+  out of three.
 - **8086 only.** `kernel.asm` opens with `cpu 8086` and the build uses `-w+error`, so NASM rejects anything newer: no `pusha`, no `push imm`, no `shl reg, imm` other than 1 (use CL), no `movzx`, no 32-bit registers.
 - **Near model.** CS = DS = 0x1000 for kernel *and* loaded programs; **SS = 0x0800** (`LOW_SEG`), because every task stack lives outside the kernel segment. Inter-module calls inside `.text` are near; `.fartext` modules go through the shims in SPEC.md §33. ES is scratch but must be restored unless documented. **SS ≠ DS means `[bp+disp]` addresses SS** — code holding a kernel pointer in BP needs `[ds:bp+…]`.
 - **Register discipline.** Every public routine preserves all registers except documented outputs. ISRs push DS/ES, load DS = KERNEL_SEG, `cld` before string ops. Critical sections use `pushf`/`cli` … `popf`, never `cli` … `sti`.
@@ -68,7 +92,38 @@ Testing quirks (learned the hard way):
 
 Pre-emptive round-robin scheduling: the int 08h PIT hook chains the BIOS tick, saves the register frame on the task stack, swaps SP, and irets into the next ready task. Tasks are dynamic (MAX_TASKS=12): `task_spawn` takes an argument word (delivered in the task's DX) and returns the slot; a task terminates only via `task_exit` (self-exit; usually through `inst_task_die`), which frees the task slot and the instance record inside one IF=0 window. One drawing mutex (`gfx_lock`) guards all VGA access and hides the cursor; public drawing routines *assume* the caller holds it. Background tasks (Clock, Bounce instances) re-check window visibility *under* the lock. The mouse ISR draws the cursor itself only when the lock is free, deferring to the next unlock otherwise. Task switching pauses during floppy transfers (the tick still runs — the motor needs it).
 
-### Double buffering (SPEC.md §32 — conditional)
+### The mono adapters reuse the back-buffer renderer (SPEC.md §39)
+
+There is **no second graphics driver**. `kernel/vgabb.inc` was written as a latch-free,
+port-free *software* renderer over `vga12.inc`'s coordinate core, targeting a RAM back
+buffer — and nothing in it cares that the target is RAM. Point it at the framebuffer
+(`[vid_rseg]`), tell it there is one plane instead of four (`[vid_planes]`), and route its
+row advances through `gfx_nextrow`, and it *is* the Hercules/CGA renderer. The planar bodies
+in `vga12.inc` are simply unreachable on mono and keep their assembly-time constants.
+
+Consequences that are easy to undo by accident:
+
+- **`[bb_on]` means "use the software renderer"** — permanently 1 on mono. The narrower
+  `[bb_dbl]` means "a back buffer is armed and must be flushed", and is what `gfx_flush`, the
+  Control Panel and the Task Manager's RAM figures read. Conflating them makes a mono machine
+  claim double buffering and bill 150KB it never allocated.
+- **`gfx_rowbase` and `gfx_nextrow` read their parameters through `CS`, not `DS`.**
+  `bb_xfer` runs with DS pointed at the framebuffer (save) or the caller's buffer (restore);
+  through DS they would fetch framebuffer bytes as a scan-line stride.
+- **`gfx_nextrow` touches DI and flags and nothing else.** Several callers are inner loops
+  with no spare register and one is inside IRQ4.
+- **The banked layout needs a bank's rows to stay inside its own 0x2000 window.** Hercules
+  uses 7,830 of 8,192 and CGA 8,000. `viddet.inc` asserts it; a stride or height change
+  breaks it silently.
+- The cursor is the one path with no `bb_*` twin (its save-under bypasses the buffer by
+  contract), so `cur_pass_mono` is the only genuinely new renderer loop in the port.
+- Colours reduce to black / white / a 50% dither (§39.4). The shipped apps' palettes were
+  chosen so every distinction they carry in colour survives the reduction.
+
+### Double buffering (SPEC.md §32 — conditional, VGA only)
+
+Unavailable on a mono adapter by design: the renderer already writes the framebuffer
+directly, so there is nothing to double, and `bb_init` refuses to set `[bb_avail]` there.
 
 **Off by default, switched at runtime.** `bb_init` only probes int 12h and sets `bb_avail` if conventional RAM ≥ 500KB (500 not 512, so a real 512KB machine still qualifies after the BIOS takes its cut). `bb_on` starts 0, so every machine boots drawing straight to VRAM; the Control Panel's **Display** page (SPEC.md §31.3) flips it via `bb_set`, which seeds the buffer from VRAM (`bb_sync`, GC4 Read Map Select per plane) on the way in and flushes it on the way out. While on, every `gfx_*`/font/icon draw renders into a 4-plane back buffer at segment 0x4000 (`kernel/vgabb.inc`, software or/and/xor — RAM has no VGA latches) and `gfx_unlock` flushes the dirty rect to VRAM before the cursor reappears; `menu_track` flushes once for the pull-down because it draws while holding the lock. Below the floor `bb_avail` stays 0, the page says so and refuses the click, and a 256KB machine can never leave the VRAM path.
 
@@ -133,7 +188,8 @@ The kernel's 64KB segment is not all the kernel's. Three moves bought it room:
 ### Layout
 
 - `boot/boot.asm` — 512-byte boot sector; geometry comes from `-DSPT`/`-DHEADS`, sector count from the measured kernel size (both injected by the Makefile).
-- `kernel/kernel.asm` — constants, boot sequence, the os8088 API jump table at 1000:0010, `%include`s of all modules, final .bss and size assertion. Module ownership is the table in SPEC.md §4; each `.inc` owns one subsystem (farcall, vga12, font, mouse, sched, events, wm, instance, menu, ui, apps, disk, diskw, loader, files, fdlg, icons, desk, dock, taskmgr, ctrl).
+- `kernel/kernel.asm` — constants, boot sequence, the os8088 API jump table at 1000:0010, `%include`s of all modules, final .bss and size assertion. Module ownership is the table in SPEC.md §4; each `.inc` owns one subsystem (viddet, farcall, vga12, font, mouse, sched, events, wm, instance, menu, ui, apps, disk, diskw, loader, files, fdlg, icons, desk, dock, taskmgr, ctrl).
+- `kernel/viddet.inc` — adapter detection, runtime geometry, `gfx_rowbase`/`gfx_nextrow`/`gfx_ink`. Included **before** `splash.inc`: the splash probes and sets the mode on its first tick, so this must be resident in the first `SPL_RESIDENT` sectors and all its data lives in `.text`, never `.bss`.
 - `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` are dead — left in the tree but **no longer included** (relics of the pre-GUI text shell, as is `kernel-shell.asm.bak`).
 - `apps/` — loadable packages. `os88api.inc` is the SDK: `OS88_HEADER` emits the 32-byte package header, `OSAPI_*` constants name jump-table entries, `OS88_IMAGE_END` seals size + bss. `mines/` (embedded icon), `hello/` (proves the generic-icon fallback), `notepad/` (the former built-in Note Pad kind, moved out to reclaim ~1.4KB of kernel budget — its per-instance bss replaced the fixed 2-instance pool, so the cap is gone), plus the sound-layer packages `recorder/` and `piano/` (SPEC.md §35/§36) and the gate packages `fmtest/`, `sbtest/` and `filetest/`, which never ship on the apps disks and ride their own scratch images.
 - `tools/` — host-side Python: `os88pkg.py` (validates/stamps `.bin` → `.o88`), `os88disk.py` (builds FAT12 data-floppy images; `--verify` is a structural fsck, `--scramble` builds a legally fragmented test image), `qmp.py` + `mouse.py` (test drivers).

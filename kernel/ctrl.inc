@@ -131,6 +131,12 @@ cp_s_dbof:  db 'Direct to screen', 0
 cp_s_dbon:  db 'Double buffered', 0
 cp_s_dcap:  db 'Smoother; costs 150K', 0
 cp_s_dna:   db 'Needs 500K of memory', 0
+cp_s_dmono: db 'Not on this adapter', 0     ; a 1bpp adapter draws straight
+                                            ; to the framebuffer and has no
+                                            ; buffer to double (SPEC.md 39.5)
+                                            ; - saying "needs 500K" here
+                                            ; would be a lie on a 640K
+                                            ; Hercules machine
 
 ; --- Sound page (SPEC.md 31.4/34) --------------------------------------------
 cp_s_snd:   db 'Sound', 0       ; list name AND the page heading
@@ -815,7 +821,10 @@ cp_disp_paint:
     mov si, cp_s_dcap           ; caption: what it costs...
     cmp byte [bb_avail], 0
     jne .cap
-    mov si, cp_s_dna            ; ...or why the machine cannot have it
+    mov si, cp_s_dna            ; ...or why the machine cannot have it:
+    cmp byte [vid_mono], 0      ; too little RAM, or the wrong kind of card
+    je .cap
+    mov si, cp_s_dmono
 .cap:
     mov cx, di
     add cx, CP_PMX
@@ -831,7 +840,7 @@ cp_disp_paint:
     ret
 
 ; -----------------------------------------------------------------------------
-; cp_dbradios - redraw the Display page's two radio glyphs from [bb_on]
+; cp_dbradios - redraw the Display page's two radio glyphs from [bb_dbl]
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing
 ; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
@@ -843,7 +852,9 @@ cp_dbradios:
     push dx
     push si
 
-    mov bl, [bb_on]             ; BL = the row whose glyph is filled
+    mov bl, [bb_dbl]            ; BL = the row whose glyph is filled. NOT
+                                ; [bb_on], which is 1 on a mono adapter and
+                                ; means only "software renderer" there
     mov byte [gfx_color], CBLACK ; the pen cp_glyph draws the bitmap with
     mov cx, di
     add cx, CP_PGX
@@ -902,9 +913,9 @@ cp_disp_click:
     jg .set
     xor al, al                  ; upper band = direct to screen
 .set:
-    cmp al, [bb_on]
+    cmp al, [bb_dbl]
     je .done                    ; that row is already live: change nothing
-    KCALL bb_set                 ; flips [bb_on]; we hold the lock as required
+    KCALL bb_set                 ; flips both flags; we hold the lock
     call cp_dbradios            ; the two glyph boxes only
 
 .done:

@@ -17,9 +17,13 @@
 ; =============================================================================
 
 ; --- geometry (SPEC.md 30) ----------------------------------------------------
-DOCK_H      equ 24              ; strip rows 456..479
-DOCK_Y0     equ SCREEN_H - DOCK_H   ; 456: 1px black rule, full width
-DOCK_TY0    equ DOCK_Y0 + 3     ; tile top row = 459 (tiles rows 459..478)
+DOCK_H      equ 24              ; strip height: 1px black rule + 23 white
+                                ; rows, pinned to the BOTTOM of whatever
+                                ; screen the adapter gave us. The top row and
+                                ; the tile top row therefore move with it and
+                                ; live in [vid_dock_y0] / [vid_dock_ty0]
+                                ; (SPEC.md 39.2) - 456/459 on VGA, 324/327 on
+                                ; Hercules, 176/179 on CGA.
 DOCK_TILE_W equ 24
 DOCK_TILE_H equ 20
 DOCK_X0     equ 8               ; first tile's left edge
@@ -50,16 +54,17 @@ dock_paint:
     mov [dock_gcol], al         ; door (see desk_draw_zone's precedent)
 
     mov byte [gfx_color], CBLACK
-    xor ax, ax                  ; the rule: full-width hline at row 456
-    mov bx, SCREEN_W-1
-    mov dx, DOCK_Y0
+    xor ax, ax                  ; the rule: full-width hline at the top of
+    mov bx, [vid_wm1]           ; the strip
+    mov dx, [vid_dock_y0]
     call gfx_hline
 
     mov byte [gfx_color], CWHITE
-    xor ax, ax                  ; the strip: white rows 457..479
-    mov bx, DOCK_Y0+1
-    mov cx, SCREEN_W-1
-    mov dx, SCREEN_H-1
+    xor ax, ax                  ; the strip: white, down to the last row
+    mov bx, [vid_dock_y0]
+    inc bx
+    mov cx, [vid_wm1]
+    mov dx, [vid_hm1]
     call gfx_fill
 
     mov di, inst_tab            ; one tile per live record, stable slots
@@ -105,15 +110,17 @@ dock_draw_tile:
 
     mov byte [gfx_color], CBLACK
     mov ax, si                  ; 1px tile frame
-    mov bx, DOCK_TY0
+    mov bx, [vid_dock_ty0]
     mov cx, si
     add cx, DOCK_TILE_W-1
-    mov dx, DOCK_TY0 + DOCK_TILE_H-1
+    mov dx, [vid_dock_ty0]
+    add dx, DOCK_TILE_H-1
     call gfx_frame
 
     mov cx, si                  ; icon at (left+4, top+2): 16x16 body
     add cx, 4
-    mov dx, DOCK_TY0 + 2
+    mov dx, [vid_dock_ty0]
+    add dx, 2
     push si
     mov si, [di+I_ICON]
     or si, si
@@ -127,10 +134,12 @@ dock_draw_tile:
     jz .done
     mov ax, si
     inc ax
-    mov bx, DOCK_TY0 + 1
+    mov bx, [vid_dock_ty0]
+    inc bx
     mov cx, si
     add cx, DOCK_TILE_W-2
-    mov dx, DOCK_TY0 + DOCK_TILE_H-2
+    mov dx, [vid_dock_ty0]
+    add dx, DOCK_TILE_H-2
     call gfx_xor_fill
 
 .done:
@@ -156,7 +165,7 @@ dock_click:
     push cx
     push di
 
-    cmp dx, DOCK_Y0             ; below the rule?
+    cmp dx, [vid_dock_y0]       ; below the rule?
     jl .miss
 
     cmp cx, DOCK_X0             ; left of the first tile: consumed no-op

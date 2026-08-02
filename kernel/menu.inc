@@ -268,7 +268,7 @@ menu_relayout:
     add ax, MENU_TITLE_PAD      ; AX = cell width
     mov dx, bx
     add dx, ax
-    cmp dx, MENU_CLK_HX         ; would it reach the clock's band (12.1)?
+    cmp dx, [vid_clk_hx]        ; would it reach the clock's band (12.1)?
     ja .full                    ; out of bar: stop here, never clip a cell -
                                 ; and never skip one and keep laying out the
                                 ; rest, or a cell's bar index would stop
@@ -329,13 +329,13 @@ menu_draw_bar:
     mov byte [gfx_color], CWHITE
     xor ax, ax                  ; white field, rows 0..MBAR_H-2
     xor bx, bx
-    mov cx, SCREEN_W - 1
+    mov cx, [vid_wm1]
     mov dx, MBAR_H - 2
     call gfx_fill
 
     mov byte [gfx_color], CBLACK
     xor ax, ax                  ; the black rule along the bottom
-    mov bx, SCREEN_W - 1
+    mov bx, [vid_wm1]
     mov dx, MBAR_H - 1
     call gfx_hline
 
@@ -398,15 +398,15 @@ menu_draw_clock:
     push si
 
     mov byte [gfx_color], CWHITE ; the cell, the black rule below it excluded
-    mov ax, MENU_CLK_HX
+    mov ax, [vid_clk_hx]
     xor bx, bx
-    mov cx, SCREEN_W - 1
+    mov cx, [vid_wm1]
     mov dx, MBAR_H - 2
     call gfx_fill
 
     call clk_fmt                ; SI = the line in its live form (SPEC.md 37)
     call font_width             ; AX = its width - right-align it, since the
-    mov cx, SCREEN_W - 8        ; form (and so the width) can change
+    mov cx, [vid_wm8]           ; form (and so the width) can change
     sub cx, ax
     mov byte [gfx_color], CBLACK
     mov dx, MENU_TEXT_Y
@@ -522,9 +522,11 @@ menu_popup:
 
     or ax, ax
     jz .none                    ; an empty descriptor drops nothing
-    cmp ax, MENU_POPMAX
+    cmp ax, [vid_popmax]
     jbe .cnt_ok                 ; never trust a caller's count - the rect has
-    mov ax, MENU_POPMAX         ; to fit on the screen (menu_relayout's rule)
+    mov ax, [vid_popmax]        ; to fit on the screen (menu_relayout's rule),
+                                ; and how many fit depends on the adapter:
+                                ; 16 at 480 or 348 rows, 11 at CGA's 200
 .cnt_ok:
     mov [menu_cnt], ax
     mov [menu_iptr], bx
@@ -537,7 +539,7 @@ menu_popup:
     pop cx                      ; CX = anchor x again
 
     mov bx, cx                  ; BX = candidate x1
-    mov si, SCREEN_W
+    mov si, [vid_w]
     sub si, ax                  ; SI = rightmost x1 that still fits
     cmp bx, si
     jle .x_hi
@@ -558,7 +560,7 @@ menu_popup:
     shl ax, cl                  ; count * 16 ...
     add ax, 2                   ; ... + the top and bottom frame rows
     mov bx, dx                  ; BX = candidate y1 (DX = anchor y)
-    mov cx, SCREEN_H
+    mov cx, [vid_h]
     sub cx, ax                  ; CX = lowest y1 that still fits
     cmp bx, cx
     jle .y_hi

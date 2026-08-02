@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Drive the emulated serial mouse to absolute positions.
 
-    python3 tools/mouse.py <socket> <cmd> [args]
+    python3 tools/mouse.py [--screen WxH] <socket> <cmd> [args]
 
 Commands:
     to X Y          pin to a corner, then walk to (X, Y)
@@ -14,6 +14,12 @@ Commands:
     rclick X Y      to X Y + right press + release
     shot PATH       screendump (absolute path)
 
+--screen WxH names the guest's screen, default 640x480. It MUST match the
+adapter the kernel detected (SPEC.md 39), because the absolute position is
+derived by pinning against the kernel's own edge clamp - so on a
+`make test VIDEO=cga` boot this has to be `--screen 640x200` or every y
+lands 280 pixels off, silently.
+
 Any other argument shape is an error - historically `down X Y` silently
 pressed at the CURRENT cursor position, a footgun that read as a kernel
 bug.
@@ -21,7 +27,8 @@ bug.
 QEMU's msmouse backend truncates large deltas to the protocol's low bits
 without clamping, so every move is split into chunks of at most 60.
 Position is made absolute by first pinning against the bottom-right clamp
-(kernel clamps mouse_x/y to 639/479), then walking back with exact deltas.
+(the kernel clamps mouse_x/y to [vid_wm1]/[vid_hm1]), then walking back with
+exact deltas.
 
 BTN_L / BTN_R are the HMP `mouse_button` bitmask, and the mask is NOT what
 QEMU's own help string says. hmp-commands.hx documents "1=L, 2=M, 4=R", but
@@ -35,8 +42,15 @@ import subprocess
 import sys
 import time
 
-SOCK = sys.argv[1]
+ARGV = sys.argv[1:]
+SCREEN_W, SCREEN_H = 640, 480
+if ARGV and ARGV[0] == "--screen":
+    SCREEN_W, SCREEN_H = (int(v) for v in ARGV[1].split("x"))
+    ARGV = ARGV[2:]
+
+SOCK = ARGV[0]
 STEP = 60
+PACE = 0.06                             # seconds between packets, see paced()
 BTN_L = 1                               # HMP mouse_button bitmask, see above
 BTN_R = 2
 
@@ -52,25 +66,41 @@ def chunks(d):
         d -= c
 
 
+def paced(moves):
+    """Emit moves down ONE connection with a sleep between each.
+
+    The msmouse backend runs at 1200 baud - about 25ms per 3-byte packet -
+    and a move whose packet is still in flight when the next one is queued
+    is simply lost. Spawning one qmp.py per move used to be slow enough to
+    hide that on its own; on a fast host it is not, and the symptom is a
+    cursor that does not move at all while every screendump still looks
+    plausible. Pace it explicitly instead (CLAUDE.md's documented rule).
+    """
+    cmds = []
+    for cx, cy in moves:
+        cmds += [f"mouse_move {cx} {cy}", f"sleep {PACE}"]
+    for i in range(0, len(cmds), 60):   # keep argv a sane length
+        hmp(*cmds[i:i + 60])
+
+
 def move(dx, dy):
     xs, ys = list(chunks(dx)), list(chunks(dy))
     while len(xs) < len(ys):
         xs.append(0)
     while len(ys) < len(xs):
         ys.append(0)
-    for cx, cy in zip(xs, ys):
-        hmp(f"mouse_move {cx} {cy}")
+    paced(list(zip(xs, ys)))
     time.sleep(0.15)
 
 
 def goto(x, y):
-    for _ in range(12):                 # pin at (639,479)
-        hmp("mouse_move 60 60")
-    move(x - 639, y - 479)
+    pins = (max(SCREEN_W, SCREEN_H) + STEP - 1) // STEP
+    paced([(STEP, STEP)] * pins)        # pin at the bottom-right clamp
+    move(x - (SCREEN_W - 1), y - (SCREEN_H - 1))
 
 
 def main():
-    cmd, args = sys.argv[2], sys.argv[3:]
+    cmd, args = ARGV[1], ARGV[2:]
     if cmd == "to":
         goto(int(args[0]), int(args[1]))
     elif cmd == "move":

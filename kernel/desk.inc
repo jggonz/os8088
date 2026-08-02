@@ -6,7 +6,8 @@
 ; selection, and open the Disk window on double-click via files_open_drive.
 ;
 ; Layout, per drive i (0 = A, 1 = B):
-;   hit zone   x 584..631, y (32+60*i)..(75+60*i)   (48 x 44 px)
+;   hit zone   x zx..zx+47, y (32+60*i)..(75+60*i)   (48 x 44 px), where
+;              zx = [vid_desk_zx] = screen width - 56 (584 at 640 wide)
 ;   icon       ico_disk32 at (592, 32+60*i)          (32 x 32 px)
 ;   label      8px text at (584, 66+60*i), black on a white gap 2px around
 ;              the text, centered in the 48px zone (the 6-char label is
@@ -20,8 +21,14 @@
 ; pixel-parity based, so it aligns with the surrounding desktop.
 ; =============================================================================
 
-DESK_ZX1    equ 584             ; hit zone left
-DESK_ZX2    equ 631             ; hit zone right
+; The drive column hangs off the RIGHT edge of the screen, so its left
+; column is derived at boot rather than pinned: [vid_desk_zx] = width - 56,
+; which is 584 on both 640-wide adapters - exactly where it has always been -
+; and 664 on a 720-wide Hercules, where a fixed 584 would leave the icons
+; stranded 88px shy of the edge. Everything below derives from that ONE word,
+; including the redraw-overlap test, which used to open-code 582 and 634.
+DESK_ZW     equ 48              ; hit zone width (zx .. zx+47)
+DESK_ZOVER  equ 2               ; label overhang each side
 DESK_ZY0    equ 32              ; first zone top
 DESK_ZSTEP  equ 60              ; zone-to-zone vertical pitch
 DESK_ZH     equ 44              ; zone height (top..top+43)
@@ -99,9 +106,11 @@ desk_click:
     push bx
     push si
 
-    cmp cx, DESK_ZX1            ; horizontal band first
+    cmp cx, [vid_desk_zx]       ; horizontal band first
     jb .miss
-    cmp cx, DESK_ZX2
+    mov bx, [vid_desk_zx]
+    add bx, DESK_ZW-1
+    cmp cx, bx
     ja .miss
 
     mov bx, DESK_ZY0            ; walk the zones: BX = zone top
@@ -205,10 +214,10 @@ desk_zone_redraw:
     test word [si+W_FLAGS], 2   ; visible?
     jz .next
     mov ax, [si+W_X]
-    cmp ax, 634                 ; window left past the rect's right edge?
-    jae .next
+    cmp ax, [vid_desk_zr]       ; window left past the rect's right edge?
+    jae .next                   ; (zx + 47 + 2 + 1, the shadow included)
     add ax, [si+W_W]            ; right edge + the 1px drop shadow
-    cmp ax, 582
+    cmp ax, [vid_desk_zl]
     jb .next
     mov ax, [si+W_Y]
     cmp ax, dx                  ; top below the rect?
@@ -261,12 +270,14 @@ desk_draw_zone:
     mov bx, ax                  ; y1 = top
     mov dx, ax
     add dx, DESK_ZH-1           ; y2 = top+43
-    mov ax, DESK_ZX1-2          ; 582 (covers the label overhang)
-    mov cx, DESK_ZX2+2          ; 633
+    mov ax, [vid_desk_zl]       ; covers the label overhang
+    mov cx, [vid_desk_zr]
+    dec cx
     call gfx_fill_gray
 
-    ; --- 32x32 disk icon at (592, top) ---------------------------------------
-    mov cx, DESK_ZX1+8          ; 592
+    ; --- 32x32 disk icon, 8px in from the zone's left ------------------------
+    mov cx, [vid_desk_zx]
+    add cx, 8
     mov dx, [desk_zy]
     mov si, ico_disk32
     call icon_draw
@@ -276,8 +287,9 @@ desk_draw_zone:
     add bx, 32                  ; y1: just under the icon
     mov dx, bx
     add dx, 11                  ; y2: 12 rows = 2px gap + 8px text + 2px gap
-    mov ax, DESK_ZX1-2
-    mov cx, DESK_ZX2+2
+    mov ax, [vid_desk_zl]
+    mov cx, [vid_desk_zr]
+    dec cx
     mov byte [gfx_color], CWHITE
     call gfx_fill
 
@@ -288,7 +300,7 @@ desk_draw_zone:
     je .label
     mov si, desk_lbl_b
 .label:
-    mov cx, DESK_ZX1            ; 584
+    mov cx, [vid_desk_zx]
     mov dx, [desk_zy]
     add dx, 34                  ; text rows top+34..top+41
     call font_str
@@ -297,9 +309,10 @@ desk_draw_zone:
     mov al, [desk_sel]
     cmp al, byte [desk_zdrv]
     jne .done
-    mov ax, DESK_ZX1
+    mov ax, [vid_desk_zx]
     mov bx, [desk_zy]
-    mov cx, DESK_ZX2
+    mov cx, ax
+    add cx, DESK_ZW-1
     mov dx, [desk_zy]
     add dx, DESK_ZH-1
     call gfx_xor_fill

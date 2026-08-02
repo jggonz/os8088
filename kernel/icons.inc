@@ -103,9 +103,11 @@ ico_core:
     mov ax, [ico_ww]            ; source/VRAM stride bookkeeping
     shl ax, 1
     mov [ico_rb], ax            ; bytes per icon row (= 2 * wwords)
-    mov bx, ROW_BYTES
+    mov bx, [vid_stride]
     sub bx, ax
-    mov [ico_rowadv], bx        ; DI advance after a row's words
+    mov [ico_rowadv], bx        ; DI advance after a row's words (the planar
+                                ; pass only - the banked one goes through
+                                ; gfx_nextrow instead)
 
     mov [ico_maskp], si         ; mask rows first, data rows after
     mov ax, [ico_ww]
@@ -114,7 +116,7 @@ ico_core:
     add ax, si
     mov [ico_datap], ax
 
-    ; --- vertical clip to 0..SCREEN_H-1 (y is signed here) -------------------
+    ; --- vertical clip to 0..[vid_hm1] (y is signed here) --------------------
     mov bx, [ico_h]             ; BX = rows to draw
     mov ax, [ico_y]
     or  ax, ax
@@ -129,28 +131,28 @@ ico_core:
     mov word [ico_y], 0
 .top_ok:
     mov ax, [ico_y]
-    cmp ax, SCREEN_H
+    cmp ax, [vid_h]
     jae .none                   ; fully below the screen
     add ax, bx
-    cmp ax, SCREEN_H
+    cmp ax, [vid_h]
     jbe .rows_ok
-    mov bx, SCREEN_H
+    mov bx, [vid_h]
     sub bx, [ico_y]             ; hang off the bottom edge: draw what fits
 .rows_ok:
     mov [ico_rows], bx
 
     ; --- horizontal setup: byte column, shift pair, VRAM offset --------------
-    ; A base column >= ROW_BYTES (x > 639, or negative x seen as huge
-    ; unsigned) makes ico_pass skip every byte write.
+    ; A base column >= the row stride (x past the right edge, or negative x
+    ; seen as huge unsigned) makes ico_pass skip every byte write.
     mov bx, [ico_x]
     mov ax, bx
     mov cl, 3
     shr ax, cl
     mov [ico_col0], ax          ; base byte column (x / 8)
     mov di, ax
-    mov ax, ROW_BYTES
-    mul word [ico_y]            ; AX = y * 80 (DX clobbered)
-    add di, ax                  ; DI = y*80 + x/8
+    mov ax, [ico_y]             ; AX = the row's base offset (DX clobbered;
+    call gfx_rowbase            ; CX is loaded below, BX is preserved)
+    add di, ax                  ; DI = rowbase(y) + x/8
     mov cl, bl
     and cl, 7                   ; CL = shift (x & 7)
     mov ch, 8
@@ -271,23 +273,30 @@ ico_pass:
 ; -----------------------------------------------------------------------------
 ico_core_bb:
     mov ax, [ico_col0]
-    cmp ax, ROW_BYTES           ; x < 0 (huge unsigned) or entirely off the
+    cmp ax, [vid_stride]        ; x < 0 (huge unsigned) or entirely off the
     jae .none                   ; right edge: the passes would skip every
                                 ; byte - skip them and the dirty union too
     mov bx, [ico_ww]            ; dirty: columns col0..col0+2*ww (the last
     shl bx, 1                   ; word's 3-byte window), clamped to the row
     add bx, ax
-    cmp bx, ROW_BYTES
+    cmp bx, [vid_stride]
     jb .rok
-    mov bx, ROW_BYTES-1
+    mov bx, [vid_strm1]
 .rok:
     push cx                     ; CL/CH shift pair survives bb_dirty setup
     mov cx, [ico_y]
     mov dx, cx
     add dx, [ico_rows]
     dec dx
-    call bb_dirty
-    pop cx
+    call bb_dirty               ; AX is STILL the left byte column here - do
+    pop cx                      ; not borrow it before this call
+
+    mov al, [vid_strm1]         ; the three right-edge limits ico_pass_bb
+    mov [ico_lim1], al          ; needs as BYTES - see the compares there
+    dec al
+    mov [ico_lim2], al
+    mov al, [vid_stride]
+    mov [ico_lim0], al
 
     mov byte [ico_bbop], 0      ; white underlay: OR the mask rows in
     mov si, [ico_maskp]
@@ -312,16 +321,18 @@ ico_pass_bb:
     je .done                    ; degenerate record / fully clipped
     mov [ico_bbsrc], si         ; per-plane restart points
     mov [ico_bbdi], di
-    mov dx, BB_SEG              ; DX = plane segment
-    mov byte [ico_bbpl], 4
+    mov dx, [vid_rseg]          ; DX = plane segment - the framebuffer on
+    mov al, [vid_planes]        ; mono (SPEC.md 39.3)
+    mov [ico_bbpl], al
 .plane:
     mov es, dx
     mov si, [ico_bbsrc]
     mov di, [ico_bbdi]
     mov bp, [ico_rows]
 .row:
-    mov ax, [ico_col0]
-    mov [ico_col], ax           ; running byte column (right-edge clip)
+    mov al, [ico_col0]          ; running byte column (right-edge clip); a
+    mov [ico_bcol], al          ; byte - ico_core_bb proved it is below the
+                                ; stride, which is 90 at most
     mov ax, [ico_ww]
     mov [ico_wleft], ax
 .word:
@@ -336,14 +347,16 @@ ico_pass_bb:
     mov al, bh                  ; --- byte 0, column [ico_col] ---
     or  al, al
     jz .b1
-    cmp word [ico_col], ROW_BYTES
+    mov bh, [ico_lim0]          ; BH is dead from here - .b1 wants only BL
+    cmp [ico_bcol], bh
     jae .b1
     call ico_bbop_byte
 .b1:
     mov al, bl                  ; --- byte 1, column +1 ---
     or  al, al
     jz .b2
-    cmp word [ico_col], ROW_BYTES-1
+    mov bl, [ico_lim1]          ; BL is dead from here - .b2 reads AH
+    cmp [ico_bcol], bl
     jae .b2
     inc di
     call ico_bbop_byte
@@ -352,7 +365,8 @@ ico_pass_bb:
     mov al, ah                  ; --- byte 2, column +2 ---
     or  al, al
     jz .wnext
-    cmp word [ico_col], ROW_BYTES-2
+    mov bl, [ico_lim2]          ; BX is entirely dead from here
+    cmp [ico_bcol], bl
     jae .wnext
     inc di
     inc di
@@ -361,13 +375,14 @@ ico_pass_bb:
     dec di
 .wnext:
     add di, 2                   ; next word of this row
-    add word [ico_col], 2
+    add byte [ico_bcol], 2
     dec word [ico_wleft]
     jnz .word
-    add di, [ico_rowadv]        ; next scanline (80 - 2*wwords)
+    sub di, [ico_rb]            ; back to the row's first byte, then down one
+    call gfx_nextrow            ; scan line the adapter's way (SPEC.md 39.3)
     dec bp
     jnz .row
-    add dx, BB_PLANE_PARA
+    add dx, [vid_rpara]
     dec byte [ico_bbpl]
     jnz .plane
 .done:
@@ -519,6 +534,11 @@ ico_maskp   resw 1              ; -> first (unclipped) mask row
 ico_datap   resw 1              ; -> first (unclipped) data row
 ico_col0    resw 1              ; base byte column (x / 8)
 ico_col     resw 1              ; running byte column inside ico_pass
+ico_bcol    resb 1              ; ...and inside ico_pass_bb, where it must be
+ico_lim0    resb 1              ; a byte; with the three right-edge limits it
+ico_lim1    resb 1              ; is compared against (stride, stride-1,
+ico_lim2    resb 1              ; stride-2), which must be bytes for the same
+                                ; reason
 ico_wleft   resw 1              ; words left in the current row
 ico_x       resw 1              ; requested x
 ico_y       resw 1              ; requested y, clamped to 0 after top clip

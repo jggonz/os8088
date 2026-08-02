@@ -34,7 +34,7 @@ org 0x7C00
 KERNEL_SEG   equ 0x1000         ; kernel lands at linear 0x10000
 STACK_TOP    equ 0x7C00         ; stack grows down, away from our code
 SPLASH_OFF   equ 0x0008         ; the kernel's boot splash far entry (SPEC.md 15)
-SPL_RESIDENT equ 4              ; splash is fully aboard after this many
+SPL_RESIDENT equ 6              ; splash is fully aboard after this many
                                 ; sectors - must match kernel/splash.inc
 
 ; -----------------------------------------------------------------------------
@@ -49,9 +49,15 @@ start:
 
     mov [boot_drive], dl        ; BIOS told us where we came from; believe it
 
-    mov ax, 0x0003              ; clean, cursorless text screen while the
-    int 0x10                    ; first sectors land; the kernel splash takes
-    mov ah, 0x01                ; over in mode 12h the moment it is resident
+    int 0x11                    ; clean, cursorless text screen while the
+    and al, 0x30                ; first sectors land; the kernel splash takes
+    cmp al, 0x30                ; over in graphics the moment it is resident.
+    mov ax, 0x0003              ; A monochrome card has no mode 3 - equipment
+    jne .tmode                  ; word bits 5:4 = 11b means mode 7 instead.
+    mov al, 0x07
+.tmode:
+    int 0x10
+    mov ah, 0x01
     mov cx, 0x2000
     int 0x10
 

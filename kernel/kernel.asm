@@ -194,7 +194,12 @@ osapi_table:
                                   ;          SI = default name. The caller
                                   ;          holds the lock, so this shows
                                   ;          the window before it returns
-osapi_table_end:                 ; 0x00B4
+    OSAPI_SLOT osapi_video        ; 0x00B4 - runtime screen geometry
+                                  ;          (SPEC.md 39.2): the screen is no
+                                  ;          longer always 640x480, so the
+                                  ;          SCREEN_* equs in os88api.inc are
+                                  ;          a reference, not a promise
+osapi_table_end:                 ; 0x00B8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -202,8 +207,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 41 * 4
-%error "os8088 API jump table must be exactly 41 4-byte slots"
+%if OSAPI_TABLE_LEN != 42 * 4
+%error "os8088 API jump table must be exactly 42 4-byte slots"
 %endif
 
 ; =============================================================================
@@ -228,7 +233,10 @@ kmain:
                                 ; or fall back to the fixed date - before the
                                 ; mode set, so the very first menu bar paint
                                 ; already carries a valid clock
-    call vga_mode12
+    call vid_init               ; video adapter (SPEC.md 39): probe, publish
+                                ; the runtime geometry, set the mode. Re-runs
+                                ; what the splash already did, which is what
+                                ; wipes the loading screen.
     call bb_init                ; RAM probe + back buffer (SPEC.md 32): after
                                 ; the mode set (VRAM just cleared, planes
                                 ; start in sync), before the first drawing
@@ -295,11 +303,30 @@ osapi_rand:
     pop dx
     ret
 
+; ---- osapi_video - the screen the program actually got (SPEC.md 39.2) --------
+; out: AX = width, BX = height, CX = first row the dock owns (so the usable
+;      desktop is rows MBAR_H..CX-1), DL = 0 VGA / 1 Hercules / 2 CGA,
+;      DH = bits per pixel, 4 or 1
+osapi_video:
+    mov ax, [vid_w]
+    mov bx, [vid_h]
+    mov cx, [vid_dock_y0]
+    mov dl, [vid_kind]
+    mov dh, 4
+    cmp byte [vid_mono], 0
+    je .r
+    mov dh, 1
+.r:
+    ret
+
 osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 
 ; -----------------------------------------------------------------------------
-%include "splash.inc"           ; FIRST: must be resident within the image's
-                                ; opening SPL_RESIDENT sectors (SPEC.md 15)
+%include "viddet.inc"           ; video adapters (SPEC.md 39): the splash
+                                ; probes and sets the mode on its first tick,
+                                ; so this must be resident with it
+%include "splash.inc"           ; must be resident within the image's opening
+                                ; SPL_RESIDENT sectors (SPEC.md 15)
 %include "farcall.inc"          ; far-code macros (SPEC.md 33): needed by
                                 ; every module that lives in .fartext, so it
                                 ; comes before all of them

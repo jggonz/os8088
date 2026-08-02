@@ -595,7 +595,7 @@ tm_sample:
                                 ; whole by the sound layer since Phase 2
     add ax, VIEW_SEG_KB         ; + the file manager's four view caches
                                 ; (SPEC.md 2.3), resident from boot
-    cmp byte [bb_on], 0         ; bill the armed back buffer: exactly 150KB,
+    cmp byte [bb_dbl], 0        ; bill the armed back buffer: exactly 150KB,
     je .nobb                    ; added after the shift because 153600 bytes
     add ax, 150                 ; do not fit 16 bits (SPEC.md 32 / 28)
 .nobb:
@@ -648,6 +648,30 @@ tmf_paint:
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; tm_ylim_set - cache the lowest row top this window can still hold
+;
+; The row lists are fixed-pitch and TM_ROWS long, and nothing in the kernel
+; clips a draw to a WINDOW - vga_rect_setup clips to the SCREEN. That was
+; harmless while every template fitted, but since SPEC.md 39.7 wm_create
+; clamps a frame onto the live screen, and on a 200-row CGA this window's
+; 264px template becomes 156px: unbounded, the last rows would be white-filled
+; and lettered over the dock strip, once a second.
+; in:       BX = window ptr
+; out:      [tm_ylim] = the largest row top whose 8px band stays inside the
+;           frame's bottom border
+; clobbers: flags
+; -----------------------------------------------------------------------------
+tm_ylim_set:
+    push ax
+    mov ax, [bx+W_Y]
+    add ax, [bx+W_H]
+    sub ax, 9                   ; 1px bottom border + the row's 8px band
+    mov [tm_ylim], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 tm_draw_full:
     cmp byte [tm_view], 0
     jne tm_draw_mem
@@ -665,6 +689,7 @@ tm_draw_perf:
     KCALL wm_content             ; AX = content left, DX = content top
     mov [tm_cx], ax
     mov [tm_cy], dx
+    call tm_ylim_set
 
     call tm_txt_cpu
 
@@ -747,6 +772,7 @@ tm_update:
     KCALL wm_content
     mov [tm_cx], ax
     mov [tm_cy], dx
+    call tm_ylim_set
 
     call tm_txt_cpu
     mov bx, [tm_lastcol]
@@ -812,6 +838,7 @@ tm_upd_mem:
     KCALL wm_content
     mov [tm_cx], ax
     mov [tm_cy], dx
+    call tm_ylim_set
 
     mov ax, TMM_RAM_Y
     call tm_txt_ram_y
@@ -844,6 +871,7 @@ tm_draw_mem:
     KCALL wm_content             ; AX = content left, DX = content top
     mov [tm_cx], ax
     mov [tm_cy], dx
+    call tm_ylim_set
 
     mov ax, TMM_RAM_Y
     call tm_txt_ram_y
@@ -962,7 +990,7 @@ tm_cap_pool:
 ;              free, gray = system-reserved (low memory; the sound
 ;              segment; the armed back buffer), black = the kernel
 ;              segment. KB scale.
-; in:  [tm_totkb]; [bb_on] read live under the lock
+; in:  [tm_totkb]; [bb_dbl] read live under the lock
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
@@ -1012,7 +1040,7 @@ tm_map_ram:
     call tm_map_rect
     KCALL gfx_fill_gray
 
-    cmp byte [bb_on], 0         ; [256,406K): the back buffer, when armed
+    cmp byte [bb_dbl], 0        ; [256,406K): the back buffer, when armed
     je .done
     mov ax, 256
     call tm_ramkb2x
@@ -1315,7 +1343,12 @@ tm_rows_mem:
 
     inc si
     cmp si, TM_ROWS
-    jb .row
+    jae .rdone
+    mov ax, [tm_rowy]           ; and stop at the bottom of the FRAME, not the
+    add ax, TM_ROW_H            ; screen (tm_ylim_set)
+    cmp ax, [tm_ylim]
+    jbe .row
+.rdone:
 
     pop di
     pop si
@@ -1728,7 +1761,7 @@ tm_rows:
     add ax, SND_SEG_KB          ; + the sound segment (SPEC.md 2.2), also in
                                 ; the total above - the rows still sum
     add ax, VIEW_SEG_KB         ; + the view caches (SPEC.md 2.3), ditto
-    cmp byte [bb_on], 0         ; bill the armed back buffer to System
+    cmp byte [bb_dbl], 0        ; bill the armed back buffer to System
     je .sysmem                  ; (SPEC.md 32 / 28)
     add ax, 150
 .sysmem:
@@ -1820,7 +1853,12 @@ tm_rows:
 
     inc si
     cmp si, TM_ROWS
-    jb .row
+    jae .rdone
+    mov ax, [tm_rowy]           ; and stop at the bottom of the FRAME, not the
+    add ax, TM_ROW_H            ; screen (tm_ylim_set)
+    cmp ax, [tm_ylim]
+    jbe .row
+.rdone:
 
     pop di
     pop si
@@ -2041,6 +2079,9 @@ tm_totkb:   resw 1              ; total conventional RAM (int 12h, boot)
 tm_cx:      resw 1              ; cached content origin (draw paths only,
 tm_cy:      resw 1              ; always under the gfx lock)
 tm_rowy:    resw 1              ; tm_rows/tm_rows_mem scratch: current row y
+tm_ylim:    resw 1              ; ...and the lowest row top the frame holds
+                                ; (tm_ylim_set): the row lists are fixed-pitch
+                                ; and nothing clips a draw to a window
 tm_liny:    resw 1              ; tm_txt_ram_y scratch: the line's y
 tm_str:     resb 24             ; line-format scratch
 

@@ -109,7 +109,7 @@ ui_task:
                                 ; like any other point
     cmp dx, MBAR_H              ; in the menu bar?
     jae .on_desktop
-    cmp cx, MENU_CLK_HX         ; the clock cell at the right end (SPEC 12.1)?
+    cmp cx, [vid_clk_hx]        ; the clock cell at the right end (SPEC 12.1)?
     jae .clock_cell             ; tested BEFORE menu_track: it is not a title
     call gfx_lock               ; menu_track runs the whole interaction
     call menu_track             ; in: CX = mousedown x; out: AX = CMD_* or 0
@@ -469,9 +469,9 @@ ui_drag:
 .release:
     call ui_drag_xor            ; erase; lock stays held to the end
 
-    ; clamp x: 0 <= x and x + w <= SCREEN_W (signed - x may have gone negative)
+    ; clamp x: 0 <= x and x + w <= [vid_w] (signed - x may have gone negative)
     mov ax, [ui_curx]
-    mov bx, SCREEN_W
+    mov bx, [vid_w]
     sub bx, [ui_dragw]          ; BX = rightmost legal x
     cmp ax, bx
     jle .x_high_ok
@@ -484,11 +484,11 @@ ui_drag:
     mov bx, [ui_dragwin]
     mov [bx + W_X], ax
 
-    ; clamp y: MBAR_H <= y and y + TITLE_H <= SCREEN_H (title bar on screen)
+    ; clamp y: MBAR_H <= y and y + TITLE_H <= [vid_h] (title bar on screen)
     mov ax, [ui_cury]
-    cmp ax, SCREEN_H - TITLE_H
+    cmp ax, [vid_ymax]
     jle .y_high_ok
-    mov ax, SCREEN_H - TITLE_H
+    mov ax, [vid_ymax]
 .y_high_ok:
     cmp ax, MBAR_H
     jge .y_low_ok
@@ -604,9 +604,9 @@ ui_grow:
     call ui_drag_xor            ; erase; lock stays held to the end
     mov bx, [ui_dragwin]
 
-    ; clamp w: WMIN_W <= w <= SCREEN_W - W_X (high bound first, low wins)
+    ; clamp w: WMIN_W <= w <= [vid_w] - W_X (high bound first, low wins)
     mov ax, [ui_dragw]
-    mov dx, SCREEN_W
+    mov dx, [vid_w]
     sub dx, [bx + W_X]
     cmp ax, dx
     jle .w_high_ok
@@ -618,9 +618,9 @@ ui_grow:
 .w_low_ok:
     mov [bx + W_W], ax
 
-    ; clamp h: WMIN_H <= h <= SCREEN_H - W_Y
+    ; clamp h: WMIN_H <= h <= [vid_h] - W_Y
     mov ax, [ui_dragh]
-    mov dx, SCREEN_H
+    mov dx, [vid_h]
     sub dx, [bx + W_Y]
     cmp ax, dx
     jle .h_high_ok
@@ -822,7 +822,7 @@ ui_cmd:
 
 .reboot:
     call gfx_lock               ; never released - the GUI is done
-    call vga_text
+    call vid_text
     call sched_unhook           ; restores int 08h/0Ch (unhooks the mouse too)
     int 0x19
     jmp .reboot                 ; unreachable; int 19h does not return

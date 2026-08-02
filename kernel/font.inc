@@ -17,7 +17,7 @@ FONT_BYTES  equ (FONT_LAST - FONT_FIRST + 1) * 8    ; 95 glyphs x 8 rows = 760
 ; -----------------------------------------------------------------------------
 ; font_init - copy the ROM 8x8 font's printable range into RAM
 ;
-; in:       nothing (must run after vga_mode12; uses int 10h)
+; in:       nothing (must run after vid_init; uses int 10h)
 ; out:      nothing
 ; clobbers: nothing
 ; -----------------------------------------------------------------------------
@@ -32,9 +32,19 @@ font_init:
     push ds
     push es
 
+    xor ax, ax                  ; zero the answer first: on a pre-EGA BIOS
+    mov es, ax                  ; AH=11h is not implemented and returns with
+    xor bp, bp                  ; ES:BP untouched
     mov ax, 0x1130              ; get font information
     mov bh, 0x03                ; pointer wanted: ROM 8x8 character set
     int 0x10                    ; -> ES:BP = font table
+    mov ax, es
+    or ax, bp
+    jnz .have
+    mov ax, 0xF000              ; the IBM PC/XT ROM's own 8x8 set, which is
+    mov es, ax                  ; where a CGA or Hercules machine gets it
+    mov bp, 0xFA6E
+.have:
 
     mov si, bp
     add si, FONT_FIRST * 8      ; skip the control-character glyphs
@@ -83,9 +93,9 @@ font_char:
     jb .done
     cmp al, FONT_LAST
     ja .done
-    cmp cx, SCREEN_W - 8        ; unsigned: negative x fails this too
+    cmp cx, [vid_wm8]           ; unsigned: negative x fails this too
     ja .done
-    cmp dx, SCREEN_H - 8
+    cmp dx, [vid_hm8]
     ja .done
 
     sub al, FONT_FIRST          ; SI = glyph row data
@@ -196,17 +206,19 @@ font_char_bb:
     call bb_dirty               ; offset math below
     pop bx
     pop dx
-    mov ax, ROW_BYTES           ; DI = y * 80 + x / 8, CL = x & 7
-    mul dx                      ; (DX clobbered - no longer needed)
+    mov ax, dx                  ; DI = rowbase(y) + x / 8, CL = x & 7
+    call gfx_rowbase            ; (CX is popped back below, DX is dead)
     add ax, bx
     mov di, ax
     pop cx                      ; CL = right shift for the 16-bit window
 
     mov [font_bb_si], si        ; per-plane restart points
     mov [font_bb_di], di
-    mov dx, BB_SEG              ; DX = plane segment
-    mov ch, [gfx_color]         ; CH = color bits, shifted right per plane
-    mov bl, 4                   ; BL = plane counter
+    mov dx, [vid_rseg]          ; DX = plane segment - the framebuffer on
+    mov ch, [gfx_color]         ; mono (SPEC.md 39.3)
+    call font_ink               ; CH = colour bits, shifted right per plane;
+                                ; on mono, 00 or FF so `test ch,1` still works
+    mov bl, [vid_planes]        ; BL = plane counter: 4 or 1
 .plane:
     mov es, dx
     mov si, [font_bb_si]
@@ -228,13 +240,41 @@ font_char_bb:
     and [es:di], ah
     and [es:di+1], al
 .adv:
-    add di, ROW_BYTES
+    call gfx_nextrow
     dec bh
     jnz .row
-    add dx, BB_PLANE_PARA
+    add dx, [vid_rpara]
     shr ch, 1
     dec bl
     jnz .plane
+    ret
+
+; -----------------------------------------------------------------------------
+; font_ink - internal: font_char_bb's per-plane colour register
+;
+; The glyph loop tests bit 0 of CH once per plane and shifts, so on VGA the
+; colour index goes in untouched. On mono there is one plane and one bit to
+; give it: gfx_ink's black or white. Glyphs never dither - a dithered 8x8
+; glyph is unreadable - so the middle greys round to black, which is right
+; for every string the UI draws (dark grey disabled text on white stays
+; legible, and Piano's coloured letters keep their contrast).
+; in:       CH = [gfx_color]
+; out:      CH = the colour index (VGA) or 00/FF (mono)
+; clobbers: flags
+; -----------------------------------------------------------------------------
+font_ink:
+    cmp byte [vid_mono], 0
+    je .out
+    push ax
+    mov al, ch
+    call gfx_ink
+    cmp al, 0xFF                ; only pure white lights a mono pixel
+    je .white
+    xor al, al
+.white:
+    mov ch, al
+    pop ax
+.out:
     ret
 
 ; -----------------------------------------------------------------------------

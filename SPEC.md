@@ -6,8 +6,9 @@ exactly what is written; put questions in your report, not in the code.
 
 ## 0. Goal
 
-A Macintosh System 1-style graphical OS for an 8086/8088 XT-class machine with
-an ISA VGA card. 640x480, 16 colors (VGA mode 12h). Pre-emptive multitasking
+A Macintosh System 1-style graphical OS for an 8086/8088 XT-class machine. The
+display adapter is detected at boot (§39): VGA 640x480 in 16 colors (mode
+12h), or Hercules 720x348 / CGA 640x200, both 1bpp. Pre-emptive multitasking
 via the PIT timer interrupt, switchable at run time to cooperative from the
 Control Panel (§8.2/§31). Serial Microsoft mouse on COM1. Boots from floppy
 straight into the GUI: gray dithered desktop, menu bar with pull-down menus,
@@ -58,17 +59,19 @@ pre-empted background task, updating live while the user types or drags).
    with the module's prefix (`vga_`, `font_`, `mou_`, `cur_`, `sch_`, `evq_`,
    `wm_`, `menu_`, `ui_`, `app_`, `inst_`, `dsk_`/`disk_`, `ld_`/`loader_`,
    `fm_`/`files_`, `ico_`/`icon_`, `desk_`, `dock_`, `tm_`, `cp_`, `snd_`,
-   `opl_`, `sbl_`) or use NASM local labels (`.foo`).
+   `opl_`, `sbl_`, `vid_`) or use NASM local labels (`.foo`).
 6. Public drawing routines may assume the caller holds the **gfx lock**
    (§7) and that the cursor is hidden. They must not take the lock
    themselves.
-7. Every gfx routine clips to the screen (0..639, 0..479) and leaves the VGA
-   Graphics Controller in the default state on return: Set/Reset enable = 0,
-   Bit Mask = FF, Function = replace, Data Rotate = 0, Map Mask = 0Fh,
-   Read Map = 0, write mode 0 / read mode 0. When double buffering is
-   active (§32) the drawing routines render into the back buffer and touch
-   no VGA register at all; only `gfx_flush` (Sequencer Map Mask) and the
-   cursor path program the hardware, and both restore the same defaults.
+7. Every gfx routine clips to the live screen (§39.2 — 0..639, 0..479 on
+   VGA) and leaves the VGA Graphics Controller in the default state on
+   return: Set/Reset enable = 0, Bit Mask = FF, Function = replace, Data
+   Rotate = 0, Map Mask = 0Fh, Read Map = 0, write mode 0 / read mode 0.
+   When drawing is routed through the software renderer (§32/§39.3 — always
+   on a 1bpp adapter, on VGA only while double buffering is active) the
+   drawing routines render into `[vid_rseg]` and touch no VGA register at
+   all; only `gfx_flush` (Sequencer Map Mask) and the cursor path program
+   the hardware, and both restore the same defaults.
 
 ## 2. Memory map
 
@@ -88,6 +91,8 @@ pre-empted background task, updating live while the user types or drags).
 | 0x30000       | 0x3000  | `SND_SEG` — sound buffers (§34): SB DMA double buffer, record ring, sample staging pool; raw, via **ES only** (§2.2) |
 | 0x40000       | 0x4000  | `BB_SEG` — double-buffer back buffer, 4 planes × 0x9600 bytes (§32); touched only while the Control Panel's Display page has it switched on, which needs conventional RAM ≥ `DB_MIN_KB` |
 | 0xA0000       | 0xA000  | VGA planar framebuffer, 80 bytes/row               |
+| 0xB0000       | 0xB000  | Hercules framebuffer, 4 banks × 0x2000, 90 bytes/row (§39) — mono adapters only |
+| 0xB8000       | 0xB800  | CGA framebuffer, 2 banks × 0x2000, 80 bytes/row (§39) — mono adapters only |
 
 Kernel image + .bss must fit below offset **`APP_LOAD_OFF`** (0xB000);
 `kernel.asm` ends with build-time assertions (§15.1). Loaded programs occupy
@@ -183,7 +188,8 @@ four in hand.
 
 **This is a measurement over what ships, not an enforced bound.**
 `menu_layout` clamps a menu set's COUNT to `MENU_APPMAX` and `menu_popup`
-clamps a popup's items to `MENU_POPMAX`, but nothing clamps item WIDTH:
+clamps a popup's items to `[vid_popmax]` (§39.2), but nothing clamps item
+WIDTH:
 `menu_widest` is taken as-is from the application's own set (§12.2), so a
 package declaring a dozen very long items could ask for more than 48KB and
 would write past the heap into `VIEW_SEG` (§2.3). No shipped package comes
@@ -226,6 +232,8 @@ DSK_FAT_SECS equ 32          ; resident FAT cap, sectors (16,384 bytes)
 LOW_SEG      equ 0x0800      ; linear 0x08000 - .lowbss: stacks + disk buffers
 LOW_LIMIT    equ 0x8000      ; LOW_SEG:LOW_LIMIT IS KERNEL_SEG:0
 STK0_TOP     equ 0x7FFE      ; task 0's stack top
+; VGA reference geometry, and the initializers of the live block (§39.2);
+; the live screen is [vid_w] / [vid_h] / [vid_stride]
 SCREEN_W     equ 640
 SCREEN_H     equ 480
 ROW_BYTES    equ 80
@@ -257,10 +265,11 @@ VIEW_SEG_KB   equ 16         ; what it adds to the Task Manager RAM figure (§28
 | file                | owns                                                    |
 |---------------------|---------------------------------------------------------|
 | `kernel/kernel.asm` | entry, constants, init order, includes, .bss layout, **os8088 API jump table at 0x0010** (§20.3) + osapi helper routines, **boot splash entry at 0x0008** (§15) |
-| `kernel/splash.inc` | boot-time loading screen (§15): mode 12h welcome dialog, pixel progress bar, spinning vector "8088"; far-ticked by the boot sector per sector read; self-contained, no .bss |
-| `kernel/vga12.inc`  | mode set, planar primitives, save/restore, gfx lock     |
-| `kernel/vgabb.inc`  | double buffering (§32): RAM probe, back buffer, software planar primitives, dirty rect, `gfx_flush` |
-| `kernel/font.inc`   | 8x8 font (copied from VGA BIOS ROM at init), text draw  |
+| `kernel/viddet.inc` | video adapters (§39): the boot probe, the live geometry block, mode set/teardown (`vid_setmode`/`vid_text`/`vid_init`), the shared addressing helpers `gfx_rowbase`/`gfx_nextrow`, the 1bpp colour map `gfx_ink` — prefix `vid_`; included **before** `splash.inc`, and all its data lives in `.text` |
+| `kernel/splash.inc` | boot-time loading screen (§15): the first adapter probe and mode set, welcome dialog, pixel progress bar, spinning vector "8088" — on a 1bpp adapter the progress bar alone (§39.6); far-ticked by the boot sector per sector read; self-contained, no .bss |
+| `kernel/vga12.inc`  | mode 12h planar primitives, save/restore, gfx lock; the coordinate core `vga_rect_setup` that both renderers share (§39.3) — the mode set left for `viddet.inc` |
+| `kernel/vgabb.inc`  | the software renderer (§32/§39.3): RAM probe, back buffer, software planar primitives, dirty rect, `gfx_flush` — VGA's optional double buffer, and the only driver on a 1bpp adapter |
+| `kernel/font.inc`   | 8x8 font (copied at init from the BIOS ROM set, or the IBM ROM's own on a pre-EGA machine), text draw |
 | `kernel/mouse.inc`  | COM1 UART, IRQ4 ISR, packet decode, cursor (save-under) |
 | `kernel/sched.inc`  | PIT hook, context switch, task table, spawn/yield/sleep |
 | `kernel/events.inc` | 8-byte event records, system event ring queue           |
@@ -290,7 +299,9 @@ tree but are **no longer included**; the GUI replaces the text shell.
 
 ## 5. vga12.inc
 
-Mode 12h planar programming: GC index port 0x3CE / data 0x3CF, Sequencer
+Mode 12h planar programming — the VGA path only: on a 1bpp adapter every
+planar body here is unreachable and the software renderer draws instead
+(§39.3). GC index port 0x3CE / data 0x3CF, Sequencer
 0x3C4/0x3C5. Solid fills use Set/Reset (GC0=color, GC1=0Fh) with Bit Mask
 (GC8) for edge bytes; a read of each VRAM byte loads the latches before the
 write. XOR ops use GC3 function = XOR (bits 4:3 = 11, value 0x18) with
@@ -304,11 +315,11 @@ fills, where the latches are irrelevant).
 All coordinates are absolute screen pixels, x1<=x2, y1<=y2 (routines must
 still behave sanely — draw nothing — if the clipped rect is empty).
 **Color for every drawing op comes from the byte variable `[gfx_color]`.**
+Mode set and teardown are not in this module: `vid_setmode` / `vid_text` in
+`viddet.inc` own them (§39.6).
 
 | symbol          | in                                   | effect                                |
 |-----------------|--------------------------------------|---------------------------------------|
-| `vga_mode12`    | —                                    | BIOS int 10h AX=0012h                 |
-| `vga_text`      | —                                    | BIOS int 10h AX=0003h                 |
 | `gfx_color`     | byte variable                        | current drawing color                 |
 | `gfx_pixel`     | CX=x, DX=y                           | plot pixel                            |
 | `gfx_hline`     | AX=x1, BX=x2, DX=y                   | horizontal line, inclusive            |
@@ -319,32 +330,39 @@ still behave sanely — draw nothing — if the clipped rect is empty).
 | `gfx_fill_pat`  | AX=x1, BX=y1, CX=x2, DX=y2, `[gfx_pat]` = near ptr to 8 pattern bytes | 8×8 dither fill, screen-aligned: row y uses byte `pat[y&7]`, bit 7 = leftmost pixel of each screen byte, bit set = white (15), clear = black (0) — ignores gfx_color. Writes only colors 0/15, so like `gfx_fill_gray` it never retires `[bb_mono]` (§32) |
 | `gfx_xor_rect`  | AX=x1, BX=y1, CX=x2, DX=y2           | 1px outline, XOR 0Fh (drag outline)   |
 | `gfx_xor_fill`  | AX=x1, BX=y1, CX=x2, DX=y2           | filled rect, XOR 0Fh (menu highlight) |
-| `gfx_save`      | AX=x1, BX=y1, CX=x2, DX=y2, ES:DI=buf| copy region to buffer; x1 is rounded **down** to a byte boundary and x2 **up** internally. Buffer layout: plane 0 rows, plane 1 rows, plane 2, plane 3. Returns DI advanced past data. |
+| `gfx_save`      | AX=x1, BX=y1, CX=x2, DX=y2, ES:DI=buf| copy region to buffer; x1 is rounded **down** to a byte boundary and x2 **up** internally. Buffer layout: plane 0 rows, plane 1 rows, plane 2, plane 3 — all four on VGA, the single plane at 1bpp (§39.3). Returns DI advanced past data. |
 | `gfx_restore`   | AX=x1, BX=y1, CX=x2, DX=y2, ES:SI=buf| write region back (same rounding/layout). Returns SI advanced. |
 | `gfx_lock`      | —                                    | acquire drawing mutex + hide cursor (§7) |
 | `gfx_unlock`    | —                                    | flush the back buffer (§32), show cursor, release mutex |
 | `gfx_flush`     | —                                    | copy the dirty back-buffer rect to VRAM; no-op when double buffering is off or nothing is dirty (§32) |
 
 Save/restore for a W-px-wide, H-px-tall rect uses
-`bytes = ((x2/8) - (x1/8) + 1) * H * 4`; provide `gfx_save_size`
-(same rect regs in, AX = byte count out) so callers can budget buffers.
+`bytes = ((x2/8) - (x1/8) + 1) * H * [vid_planes]` — ×4 on VGA, ×1 on a 1bpp
+adapter (§39.2). Buffers are budgeted for the VGA worst case, so no routine
+computes the size at run time.
 
-**Double-buffer dispatch (§32).** Every public drawing entry above
+**Software-renderer dispatch (§32/§39.5).** Every public drawing entry above
 (`gfx_pixel` … `gfx_restore`) starts with a `[bb_on]` test and branches to
-its `bb_*` twin in vgabb.inc when double buffering is active; contracts,
-clipping and buffer layouts are identical in both paths. Four VRAM bodies
-remain reachable under their own names, for callers that must not touch the
-back buffer: `vga_save_vram`/`vga_restore_vram` (the mouse cursor's
-save-under, §9) and `vga_xor_rect_vram`/`vga_xor_fill_vram` (the drag
-outline and the menu highlights, §12/§13). All four are transient overlays —
-drawn and erased within one held lock — so they live in VRAM only, never in
-the back buffer (§32).
+its `bb_*` twin in vgabb.inc when the renderer is in use — a back buffer on
+VGA, permanently on a 1bpp adapter, where that renderer *is* the driver;
+contracts, clipping and buffer layouts are identical in both paths. Four
+VRAM bodies remain reachable under their own names, for callers that must
+not touch the back buffer: `vga_save_vram`/`vga_restore_vram` (the mouse
+cursor's save-under, §9) and `vga_xor_rect_vram`/`vga_xor_fill_vram` (the
+drag outline and the menu highlights, §12/§13). All four are transient
+overlays — drawn and erased within one held lock — so they live in VRAM
+only, never in the back buffer (§32); each still opens with a `[vid_mono]`
+test into its `bb_*` twin, because at 1bpp "direct to VRAM" and "through the
+renderer" are the same place (§39.5).
 
 ## 6. font.inc
 
-`font_init` runs **after** `vga_mode12`: int 10h AX=1130h BH=03h returns
-ES:BP → the ROM 8x8 font; copy glyphs 32..126 (95 glyphs × 8 bytes) into a
-kernel buffer. No font bytes are hard-coded.
+`font_init` runs **after** `vid_setmode` (§39.6): zero ES:BP, then int 10h
+AX=1130h BH=03h returns ES:BP → the ROM 8x8 font; copy glyphs 32..126
+(95 glyphs × 8 bytes) into a kernel buffer. A pre-EGA BIOS does not
+implement AH=11h and leaves the pair as we set it, which is why it is zeroed
+first — that case falls back to the IBM ROM 8x8 set at F000:FA6E. No font
+bytes are hard-coded.
 
 | symbol       | in                       | effect                              |
 |--------------|--------------------------|--------------------------------------|
@@ -355,9 +373,11 @@ kernel buffer. No font bytes are hard-coded.
 
 Characters outside 32..126 draw as space. Glyph rows may straddle two VRAM
 bytes; use Set/Reset + Bit Mask with the glyph row shifted across a 16-bit
-window. Under double buffering (§32) `font_char` branches after clipping to
-a software renderer that applies the same shifted row masks to all four
-back-buffer planes (or/and-not per the `[gfx_color]` plane bit).
+window. Under `[bb_on]` (§32/§39.5) `font_char` branches after clipping to
+the software renderer, which applies the same shifted row masks to every
+plane the adapter has (or/and-not per the `[gfx_color]` plane bit — at 1bpp
+there is one plane and one bit, and `font_ink` rounds everything but pure
+white to black, because a dithered 8x8 glyph is unreadable, §39.4).
 
 ## 7. Concurrency model (read carefully — this is the crux)
 
@@ -679,7 +699,8 @@ makes the machine slow, and the Task Manager keeps updating.
   dx = sign-extended {X7X6,X5..X0}, dy likewise (positive = down).
 - ISR: save all registers used + DS/ES, load DS=KERNEL_SEG, then: read port
   0x3F8, assemble packet (resync: any byte with bit 6 set restarts the
-  packet), update `mouse_x` (clamp 0..639), `mouse_y` (0..479), `mouse_btn`
+  packet), update `mouse_x` (clamp 0..`[vid_wm1]`), `mouse_y`
+  (0..`[vid_hm1]`; the live screen, §39.2), `mouse_btn`
   (bit 0 = left, bit 1 = right). On button *change*, push an event (§10):
   EVT_MDOWN / EVT_MUP with a=x, b=y, c=[ticks] — the click's birth time;
   double-click
@@ -712,8 +733,10 @@ makes the machine slow, and the Task Manager keeps updating.
 - `mouse_unhook` — restore int 0x0C vector, mask IRQ4 again, IER=0.
 - Cursor: classic Mac arrow, 11 px tall, hot spot (0,0) — black body,
   1px white outline. Two 16-row × 16-bit tables: `cur_and` (white outline
-  mask) and `cur_data` (black body). Draw: white pass = Set/Reset white,
-  Bit Mask = mask row bits; black pass likewise. Save-under buffer in .bss:
+  mask) and `cur_data` (black body). Draw on VGA: white pass = Set/Reset
+  white, Bit Mask = mask row bits; black pass likewise. On a 1bpp adapter
+  (§39) the same two passes go in with plain CPU OR/AND — no Set/Reset, no
+  Bit Mask, no ports. Save-under buffer in .bss:
   3 bytes wide × 16 rows × 4 planes = 192 bytes. The cursor is **always
   VRAM-direct**, double buffering or not: save/restore go through
   `vga_save_vram`/`vga_restore_vram` (§5, §32), never the dispatching
@@ -790,10 +813,11 @@ or `div cl`. The wm_create template stays **16 bytes**:
 are **not** template words; they are OR-ed in after wm_create (KD_WFLAG for
 built-ins, §29.3; `wm_sizable` for packages, §20.3), so every shipped .o88's
 16-byte template stays valid. MAX_WIN grew 8 → 12 for instancing (§29);
-`apps/os88api.inc` mirrors it. **W_W/W_H are no longer set-once**: `ui_grow`
-(§13) and `wm_fullscreen` (§11.2) rewrite them at runtime, so a resizable or
-fullscreen window's W_PAINT/W_ONCLICK must derive their layout from the live
-record every call — never from constants that bake in the template size.)
+`apps/os88api.inc` mirrors it. **W_W/W_H are no longer set-once**: `wm_create`
+clamps them through `wm_fit` (§39.7), and `ui_grow` (§13) and `wm_fullscreen`
+(§11.2) rewrite them at runtime, so a window's W_PAINT/W_ONCLICK must derive
+their layout from the live record every call — never from constants that bake
+in the template size.)
 
 Storage: `wm_wins` (MAX_WIN × WIN_SIZE, .bss), z-order byte array
 `wm_zord` (window indices, index 0 = backmost) + `wm_zn` count. Those
@@ -847,7 +871,7 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | symbol         | contract                                                     |
 |----------------|--------------------------------------------------------------|
 | `wm_init`      | zero table                                                   |
-| `wm_create`    | in SI → 16-byte template {x,y,w,h,title,paint,onkey,onclick} words; out BX = window ptr, CF on table full. Created **hidden**; appends the window's index to `wm_zord` (frontmost) and increments `wm_zn`. Does not repaint — callable without the gfx lock. |
+| `wm_create`    | in SI → 16-byte template {x,y,w,h,title,paint,onkey,onclick} words; out BX = window ptr, CF on table full. Calls `wm_fit`, which clamps the frame onto the live screen (§39.7) — every template in the tree is authored for 640x480, so the record, not the template, is the truth. Created **hidden**; appends the window's index to `wm_zord` (frontmost) and increments `wm_zn`. Does not repaint — callable without the gfx lock. |
 | `wm_destroy`   | in BX = win ptr: clear W_FLAGS (used+visible), reset the slot's `wm_owner` entry to 0xFF, remove its index from `wm_zord` (compact the array, decrement `wm_zn`), repaint all. Caller holds the gfx lock. The record slot becomes reusable by wm_create. |
 | `wm_show`      | in BX = win ptr: set visible, bring to front, repaint all    |
 | `wm_hide`      | in BX = win ptr: clear visible, repaint all                  |
@@ -881,20 +905,21 @@ above), `wm_hit` reports AL=4 inside it, and ui.inc answers with the
 the identical binding lock/XOR ordering, tracking an outline anchored at
 (W_X, W_Y) whose size follows the mouse: cur = orig + (mouse − start),
 clamped to at least WMIN_W×WMIN_H while tracking (the XOR rect must stay
-well-formed). On release it clamps again — WMIN_W ≤ w ≤ SCREEN_W − W_X,
-WMIN_H ≤ h ≤ SCREEN_H − W_Y (the frame stays on screen; position never
+well-formed). On release it clamps again — WMIN_W ≤ w ≤ `[vid_w]` − W_X,
+WMIN_H ≤ h ≤ `[vid_h]` − W_Y (the frame stays on screen; position never
 changes) — writes W_W/W_H, and calls wm_paint_all under the still-held
 lock. There is no resize callback: the full repaint re-enters W_PAINT,
 and a resizable window's procs are required to lay out from the live
 record (record note above). Self-initiated repaints (the fm_repaint idiom,
 §22) must white-fill using the live W_W/W_H for the same reason.
 
-`ui_drag`'s release clamp is unchanged (x + w ≤ SCREEN_W with the live
-width), so a grown window still cannot be dragged off screen.
+`ui_drag`'s release clamp is unchanged (x + w ≤ `[vid_w]` — the live screen
+width, §39.2 — with the live window width), so a grown window still cannot be dragged off screen.
 
 ### 11.2 Fullscreen
 
-The SDK/kernel foundation for apps that want the whole 640×480: a
+The SDK/kernel foundation for apps that want the whole screen (640×480 on
+VGA, §39): a
 fullscreen surface **is a real window** — that one decision buys almost
 everything, because wm_obscured (which gates every unbidden background
 drawer: Clock, Bounce, the Task Manager sampler) sees a frame covering the
@@ -906,7 +931,7 @@ entire screen and reports "covered" to everyone beneath it.
   (`[wm_fs]` non-zero and ≠ BX) → CF=1, nothing changes. Else save
   W_X/W_Y/W_W/W_H into `wm_fs_save` (4 words, .bss), store BX in `wm_fs`
   (word, .bss, 0 = none — **the** fullscreen latch), set the frame to
-  (0, 0, SCREEN_W, SCREEN_H), set WF_FULL, `wm_front` (raises + repaints
+  (0, 0, `[vid_w]`, `[vid_h]`), set WF_FULL, `wm_front` (raises + repaints
   under the held lock). Re-entering with the same window is CF=0 no-op.
 - **Exit** (AL=0): `[wm_fs]` zero → CF=0 no-op. Else restore the saved
   geometry into the record, clear WF_FULL, zero `wm_fs`, `wm_paint_all`.
@@ -951,7 +976,7 @@ layout is **three zones, left to right**:
 3. the **active application's own menus** (§12.2), laid out from
    `MENU_NAME_X + font_width(name) + MENU_NAME_PAD` rightward, each cell
    `font_width(title) + MENU_TITLE_PAD` wide. The first cell that would
-   reach the clock's hit band (`MENU_CLK_HX`, §12.1) **ends the layout** —
+   reach the clock's hit band (`[vid_clk_hx]`, §12.1) **ends the layout** —
    it is dropped whole rather than clipped, *and so is everything after
    it*, even a narrower menu that would have fitted. That is not
    thriftiness: a cell's bar index must stay equal to its index in the
@@ -1052,9 +1077,14 @@ MENU_CLK_X  equ SCREEN_W - 8 - MENU_CLK_W   ; 440: cell left, 8px right margin
 MENU_CLK_HX equ MENU_CLK_X - 6              ; 434: hit band left edge
 ```
 
+Those three are the **VGA reference**: nothing reads them at run time. The
+live cell is the derived word `[vid_clk_hx]` = `vid_w - 206` (§39.2), and the
+layout limit, the erase and the hit test all read that — the clock hangs off
+the right edge of whatever screen the boot probe found.
+
 | symbol            | contract                                                  |
 |-------------------|------------------------------------------------------------|
-| `menu_draw_clock` | in: nothing (gfx lock held by the caller). Formats the live clock with `clk_fmt` (§37), white-fills the whole cell — x `MENU_CLK_HX`..`SCREEN_W-1`, rows 0..`MBAR_H-2`, the black rule excluded — and draws the string **right-aligned**: `font_width` gives its pixel width and the pen goes at `SCREEN_W - 8 - width`, `MENU_TEXT_Y`. Preserves all registers. |
+| `menu_draw_clock` | in: nothing (gfx lock held by the caller). Formats the live clock with `clk_fmt` (§37), white-fills the whole cell — x `[vid_clk_hx]`..`[vid_wm1]`, rows 0..`MBAR_H-2`, the black rule excluded — and draws the string **right-aligned**: `font_width` gives its pixel width and the pen goes at `[vid_wm8] - width`, `MENU_TEXT_Y`. Preserves all registers. |
 
 Right alignment is what makes a format change a redraw of the same cell
 rather than a relayout: the erase is always the full 24-glyph cell, so a
@@ -1072,7 +1102,7 @@ content — it goes through the back buffer like everything else (§32) and
 the caller's `gfx_unlock` flushes it.
 
 **Clicking the cell opens the Control Panel on its Date/Time page** (§31.5).
-ui_task hit-tests `x >= MENU_CLK_HX` *before* `menu_track`, so the cell is
+ui_task hit-tests `x >= [vid_clk_hx]` *before* `menu_track`, so the cell is
 not a menu title and never drops a pull-down; the panel window appearing
 (or coming forward) is the click's feedback.
 
@@ -1209,7 +1239,9 @@ same code and, more to the point, the same §32 back-buffer discipline.
 `menu_track` was split, and `menu_drop` is the half both callers share.
 
 ```nasm
-MENU_POPMAX equ 16              ; items a popup may have (rect must fit)
+MENU_POPMAX equ 16              ; items a popup may have on a 480-row screen;
+                                ; the live cap is [vid_popmax] (§39.2) - 11 on
+                                ; CGA, because the rect must still fit
 
 ; menu_drop  in:  [menu_x1] [menu_x2] [menu_y1] [menu_y2]  the menu rect
 ;                 [menu_cnt]   item count
@@ -1233,7 +1265,7 @@ un-highlight, and pack (cell, item).
 ```nasm
 ; menu_popup in:  CX = anchor x, DX = anchor y (absolute screen)
 ;                 BX = array of near ptrs to NUL item strings
-;                 AX = item count (clamped to MENU_POPMAX; 0 = nothing)
+;                 AX = item count (clamped to [vid_popmax]; 0 = nothing)
 ;                 gfx lock held by the caller
 ;            out: CF = 1 nothing was chosen; CF = 0 and AL = item index
 ;            clobbers: AX; everything else preserved
@@ -1250,7 +1282,7 @@ A popup MAY sit over the dock strip (§30) — the save-under puts it back.
 
 Only one menu can be open at a time — both trackers run on the UI task
 under the gfx lock and both are driven by a held button — so both use
-`SAVE_SEG:0` for the save-under and no allocator appears. `MENU_POPMAX` bounds a popup's HEIGHT (258 rows) and nothing bounds its
+`SAVE_SEG:0` for the save-under and no allocator appears. `[vid_popmax]` bounds a popup's HEIGHT (258 rows at `MENU_POPMAX`) and nothing bounds its
 width — `menu_widest` is taken as-is — so the honest budget is stated over
 the descriptors that actually exist rather than as a general guarantee.
 All three (`fm_ctx_file` / `fm_ctx_fold` / `fm_ctx_dir`) are immutable
@@ -1280,7 +1312,7 @@ Loop forever:
    - `[wm_fs]` non-zero (§11.2) → skip both menu-bar branches below and go
      straight to `wm_hit`: the bar is under the fullscreen surface, and
      the fullscreen window claims every point as content.
-   - y < MBAR_H and x >= `MENU_CLK_HX` → the menu-bar clock (§12.1): store
+   - y < MBAR_H and x >= `[vid_clk_hx]` → the menu-bar clock (§12.1): store
      `CP_ITIME` into `[cp_sel]` and `app_launch` KIND_CTRL (§31.5), no lock
      held, beeping on refusal like any other launch. Tested **before**
      `menu_track`, so the cell never drops a pull-down.
@@ -1318,7 +1350,7 @@ Loop forever:
      anchored at (W_X, W_Y) and its **size** follows the mouse:
      cur w/h = orig w/h + (mouse − start), clamped to ≥ WMIN_W/WMIN_H
      every pass. On release (outline drawn, lock held): xor-erase, clamp
-     w to WMIN_W..SCREEN_W−W_X and h to WMIN_H..SCREEN_H−W_Y, write
+     w to WMIN_W..`[vid_w]`−W_X and h to WMIN_H..`[vid_h]`−W_Y, write
      W_W/W_H, `wm_paint_all`, gfx_unlock — same no-relock rule.
    - content of non-front window → `wm_front`.
    - content of front window → if its `W_ONCLICK` is non-zero: gfx_lock,
@@ -1459,7 +1491,8 @@ app_launch fronts (and un-minimizes) the existing instance instead. CMD_FILES �
 `files_open` (§22 — mounts, then launches/fronts the Disk singleton via
 app_launch; does its own locking). CMD_CLOSE → **quit** the frontmost:
 gfx_lock, `wm_top`, and if BX ≠ 0 `app_close_win` under the same lock,
-gfx_unlock. CMD_REBOOT → gfx_lock (never released), `vga_text`,
+gfx_unlock. CMD_REBOOT → gfx_lock (never released), `vid_text` (§39.6 —
+mode 3, or mode 7 with the Hercules graphics bit cleared),
 `sched_unhook`, `int 0x19`.
 
 All wm_* calls that repaint are made under gfx_lock by the UI task.
@@ -1485,18 +1518,18 @@ Paint/onkey procs receive SI = window ptr (§11) and find their state via
 `inst_of_win` (§29) + `I_SPTR`; module-level draw scratch (used only under
 the gfx lock) may stay shared. Kind behavior:
 
-- **About** — 300×120 at (170,140), title "About os8088". Paint: centered
-  lines "os8088 1.0", "a graphical OS for the 8086", and a third line whose
-  scheduling word **tracks the live mode** (§8.2, read with
-  `sched_mode_get`): "pre-emptive - 640x480 - 16 colors" or
-  "cooperative - 640x480 - 16 colors". Either implementation is fine — two
-  whole alternative strings picked by mode, or the mode word drawn ahead of
-  a shared " - 640x480 - 16 colors" tail — because "pre-emptive" and
-  "cooperative" are both exactly 11 characters, so the line's pixel width
-  and its centered x are identical in both modes and the existing centering
-  math is unchanged. No onkey. Singleton (cap 1).
-- **Clock** — 130×60 at (350,60), title "Clock". Cap 10 (the template
-  position keeps the whole +16·9 cascade on-screen and above the dock).
+- **About** — 300×120 at (170,140), title "About os8088". Paint: four
+  centered lines — "os8088 1.0", "a graphical OS for the 8086", the bare
+  scheduling word, which **tracks the live mode** (§8.2, read with
+  `sched_mode_get`): "pre-emptive" or "cooperative", and the adapter the
+  boot probe found (§39.1): "VGA - 640x480 - 16 colors",
+  "Hercules - 720x348 - mono" or "CGA - 640x200 - mono". The geometry cannot
+  be a constant in the third line any more, which is why it moved into a
+  fourth; `app_about_center` re-measures every string, so unequal line
+  lengths cost nothing. No onkey. Singleton (cap 1).
+- **Clock** — 130×60 at (350,60), title "Clock". Cap 10 (on VGA the template
+  position keeps the whole +16·9 cascade on-screen and above the dock; on a
+  shorter screen `wm_fit` clamps its tail back onto it, §39.7).
   Per-instance
   task (`app_clock_task`; entry receives DX = instance index, caches the
   record and state ptrs): loop { task_sleep 9; **if I_STATE = 2 →
@@ -1511,8 +1544,9 @@ the gfx lock) may stay shared. Kind behavior:
   HH:MM:SS from the instance's CLK_H/M/S centered in content;
   gfx_unlock }. Paint proc renders the same string from the state block.
   The accumulator design is binding.
-- **Bounce** — 150×130 at (300,150), title "Bounce". Cap 10 (the template
-  position keeps the whole +16·9 cascade on-screen and above the dock).
+- **Bounce** — 150×130 at (300,150), title "Bounce". Cap 10 (on VGA the
+  template position keeps the whole +16·9 cascade on-screen and above the
+  dock; on a shorter screen `wm_fit` clamps its tail back onto it, §39.7).
   Per-instance task: loop { task_sleep 2; **if I_STATE = 2 → `inst_task_die`**;
   gfx_lock; **check under the lock** visible and not obscured — if the
   check fails, gfx_unlock and skip the frame without erasing or stepping;
@@ -1535,35 +1569,44 @@ pinned offsets. kernel.asm also owns the tiny osapi helper routines
 **Boot splash entry — 1000:0008.** A third fixed entry point sits between
 the cold entry and the API table: a `jmp near spl_tick` at offset 0x0008,
 **far-called by the boot sector after every sector it reads** once at least
-`SPL_RESIDENT` (= 4) sectors are in memory. Contract: AX = sectors loaded
+`SPL_RESIDENT` (= 6) sectors are in memory. Contract: AX = sectors loaded
 so far, DX = total sectors to load; `spl_tick` preserves every register and
 segment (flags clobbered), runs on the boot stack with the boot sector's
 segments, and returns with `retf`. The boot sector defines the same
 `SPL_RESIDENT` constant; the two must agree with this section.
 
 The splash module (`splash.inc`, prefix `spl_`) is **included first, before
-every other module**, and ends with a build assertion that its last byte
-lies below `SPL_RESIDENT * 512` — it must be fully resident before the
+every other module but `viddet.inc`** — which it calls on its first tick
+(§39.1/§39.6) and which is therefore included immediately ahead of it — and
+ends with a build assertion that its last byte
+lies below `SPL_RESIDENT * 512` (the label difference is against `$$`, so
+the assertion covers `viddet.inc` and everything else ahead of it) — it must be fully resident before the
 first tick can arrive. Because it runs mid-load it is **self-contained**:
-it calls int 10h (mode set 12h, cursor set, teletype text — BIOS text is
+it calls int 10h (cursor set, teletype text — BIOS text is
 legal here; the "only the UI task calls int 10h after boot" rule of §8
-starts at kmain) and its own planar drawing primitives, never another
-module's routines (they are not yet resident). Its state lives in
+starts at kmain), `viddet.inc` and its own planar drawing primitives, never
+a later module's routines (they are not yet resident). Its state lives in
 in-module data words, **never .bss**: .bss begins at the image's end, so
 the final sector read lands on top of it, and nothing has cleared it yet.
 The splash must never delay loading — no waits, no timing loops; it only
 draws, once per completed sector, inside the disk's own rotational latency.
-First tick: mode 12h + chrome (welcome dialog, bar trough, title). Every
-tick: bar fill = AX×288/DX pixels, right-aligned percentage, and one
+First tick: the §39.1 probe and the mode set, then — on VGA — the chrome
+(welcome dialog, bar trough, title). Every tick: bar fill = AX×288/DX
+pixels, the one stage that runs on every adapter (its origin computed at
+run time, §39.6), plus on VGA the right-aligned percentage and one
 spin step of the vector "8088" (cosine-scaled about its vertical axis,
-angle index = AX mod 16). kmain's own `vga_mode12` then wipes the splash.
+angle index = AX mod 16). Mono gets the bar alone: the dialog does not fit
+in 200 rows, and int 10h teletype into a Hercules already in graphics
+writes character/attribute pairs into the bitmap. kmain's own `vid_init`
+then wipes the splash.
 
 kmain: set DS/ES = `KERNEL_SEG` and SS:SP = `LOW_SEG:STK0_TOP` (§2.1),
 `sti`, `cld`, then: `far_init` (**first** — the `.fartext` blob is sitting
 on top of `.bss` until it runs, §33) →
 `sched_init` → `evq_init` → `clk_init` (§37 — the RTC probe, before the
 mode set so a machine without one is dated from the fallback constants
-from the first paint onward) → `vga_mode12` → `bb_init` (§32 — the RAM probe
+from the first paint onward) → `vid_init` (§39 — re-runs the splash's probe,
+apply and mode set) → `bb_init` (§32 — the RAM probe
 must run after the mode set, which clears VRAM, and before the first
 drawing call) → `font_init` → `wm_init` →
 `inst_init` → `mouse_init` → `desk_init` → `files_init` → `loader_init` →
@@ -1640,6 +1683,12 @@ FAT snapshot begins. Keep this block last.
   `-drive file=build/apps.img,format=raw,if=floppy,index=1`.
   `test` target: same, plus `-display none -qmp unix:build/qmp.sock,server,nowait`.
 - New tooling targets: see §24 (apps, packages, FAT12 data-disk images).
+- Adapter knobs (§39.9): `VIDEO=cga|herc|vga` skips the probe and `HERCSEG=`
+  relocates the Hercules framebuffer into RAM QEMU actually maps. Both go
+  through a stamp file, because the image itself carries no record of which
+  adapter it was built for and would otherwise not rebuild. `xt-cga` /
+  `xt-hercules` (`vm/xt-cga`, `vm/xt-hercules`) boot 86Box with the real
+  cards; every shipped image is built with neither knob set.
 - Gate packages ride their own scratch images and are mounted in place of
   the apps disk with `make test-snd TESTAPPS=<img>` (the `test` target's B:
   drive is fixed): `build/fmtest.img` (§34 Phase 3), `build/sbtest.img`
@@ -1721,6 +1770,15 @@ FAT snapshot begins. Keep this block last.
     endings and all. Re-saving a longer note replaces it in place without
     leaking clusters, and a second file written to a **fragmented** disk
     (`--scramble`) still verifies.
+13. **All three adapters come up** (§39). `make test VIDEO=cga` and `make
+    test VIDEO=herc HERCSEG=0x7000` (read back with `tools/hercshot.py`)
+    reach the same desktop, cursor tracking, menus pulling down and packages
+    launching; `make xt-cga` / `make xt-hercules` boot the real cards on
+    86Box and are the only test of the §39.1 probe. On CGA the usable
+    desktop is 156 rows, so `wm_fit` (§39.7) clips the Task Manager,
+    Minesweeper and Piano at the dock — they launch, run and close anyway,
+    which is the documented outcome and not a bug. VGA output stays
+    bit-for-bit what it was, and is checked first (§39.9).
 
 ## 18. disk.inc — floppy I/O (BIOS int 13h) + the FAT driver
 
@@ -2716,7 +2774,8 @@ sits in between. The kernel.asm table-span assertion goes 34 × 4 → **39 ×
 
 **Menu slot (§12.2), 0x00AC.** One slot; the table-span assertion goes
 39 × 4 → **40 × 4**.  **File-dialog slot (§38.5), 0x00B0**, adds the next
-one: 40 × 4 → **41 × 4**.
+one: 40 × 4 → **41 × 4**, and **`osapi_video` (§39.8), 0x00B4** the one
+after: 41 × 4 → **42 × 4**, the table's span today.
 
 ```
 0x00AC menu_win_set  in BX = win ptr, SI = app menu set ptr (0 = none).
@@ -3192,7 +3251,8 @@ Behaviour:
 `fm_kinit` stores it into `W_MENUS`, so the bar carries the file manager's
 menus exactly while one of its windows is active and Locator's desktop
 menus otherwise. Four menus, and the layout is pinned because
-`menu_relayout` drops any cell that would reach `MENU_CLK_HX` (434):
+`menu_relayout` drops any cell that would reach `[vid_clk_hx]` (§39.2 — 434
+on either 640-wide adapter and more on Hercules, so 434 is the binding case):
 `'Locator'` is 56px so the first cell starts at 38+56+16 = **110**, and
 cells are `font_width + MENU_TITLE_PAD`:
 
@@ -3426,13 +3486,18 @@ services via the API table. Label prefix `mn_`. Everything below is
 content-relative; the procs fetch the content origin via `wm_content`
 (JAPI) each call.
 
-- Window: "Minesweeper", 146×183 at (240,120) → content 144×164.
+- Window: "Minesweeper", 146×183 at (240,120) → content 144×164 — the
+  template. The board is laid out from these constants, so on a screen too
+  short for it `wm_fit` clamps the frame (§39.7) and the bottom rows are
+  clipped at the dock; it still plays and closes (§39.9).
 - Board: 9×9 cells, 16×16 px each, at content (0,20). 10 mines.
 - Status strip (content rows 0..19, light gray): mines-remaining counter
   "10" minus flags placed (may go negative → clamp display at 0) at left;
   center text: playing → "F=FLAG" when flag mode is ON else blank;
   lost → "BOOM! N=NEW"; won → "YOU WIN!". Keep every string ≤ 17 chars.
-- Cell rendering, 16 colors, Mac-meets-Win31: covered = light gray face,
+- Cell rendering, 16 colors (on a 1bpp adapter §39.4 reduces them to black,
+  white and the dither class — its map is chosen so exactly these
+  distinctions survive), Mac-meets-Win31: covered = light gray face,
   2px white bevel top/left, 2px dark gray bevel bottom/right; flag = red
   (12) pennant + black mast on a covered cell; revealed = white face, 1px
   dark gray grid border, centered colored digit; digit colors:
@@ -3560,11 +3625,14 @@ db height        ; rows
 Bitmaps are hand-authored `dw` rows (like the menu-bar logo, the one
 sanctioned place for hand-made bitmap data — icons are the second).
 
-Under double buffering (§32) `ico_core` branches after its clip/shift
+Under the software renderer (`[bb_on]`: double buffering on VGA, always set
+on a 1bpp adapter — §32/§39.5) `ico_core` branches after its clip/shift
 setup to a software pass pair: the white underlay ORs the shifted mask-row
-bits into all four back-buffer planes, the black pass AND-NOTs the data-row
-bits out of them — same 3-byte window, same edge clipping as the VRAM
-passes.
+bits into all `[vid_planes]` planes at `[vid_rseg]` — the back buffer on
+VGA, the framebuffer itself on mono — the black pass AND-NOTs the data-row
+bits out of them, same 3-byte window and same edge clipping as the VRAM
+passes. Its row advance goes through `gfx_nextrow` (§39.3), because the
+mono framebuffers are banked.
 
 ## 26. desk.inc — desktop drive icons
 
@@ -3573,15 +3641,18 @@ State: `desk_ndrives` (byte), `desk_sel` (byte, 0xFF = none),
 if bit 0 is set, drives = ((AX>>6) & 3) + 1, else 0; clamp to 2. QEMU
 with two floppy `-drive`s reports 2.
 
-Layout, per drive i (0 = A, 1 = B): hit zone x 584..631, y
-(32+60·i)..(75+60·i); inside it the 32×32 `ico_disk32` at x=592,
+Layout, per drive i (0 = A, 1 = B): the column hangs off the RIGHT edge, so
+its left column zx is derived at boot — `[vid_desk_zx]` = screen width − 56
+(§39.2), 584 at 640 wide and 664 on a 720-wide Hercules, where a pinned 584
+would strand the icons 88px shy of the edge. Hit zone x zx..zx+47, y
+(32+60·i)..(75+60·i); inside it the 32×32 `ico_disk32` at x=zx+8,
 y=32+60·i, and below it the label "Disk A"/"Disk B" (48px), black text
 on a white gap 2px around the text, centered in the zone.
 
 | symbol       | contract                                                    |
 |--------------|--------------------------------------------------------------|
 | `desk_paint` | draw every drive's icon + label; the selected one (desk_sel) gets `gfx_xor_fill` over its hit zone. Called by wm_paint_all after the desktop fill (lock held by caller). |
-| `desk_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window and `dock_click` declined the click, §30). Zone hit: if same zone as desk_sel and [ui_click_t]−desk_clkt < 9 (birth ticks, §10) → clear the selection and call `files_open_drive` with AL = drive. Else select it, stamp desk_clkt. Miss: clear any selection. All its own drawing (selection flips) happens under gfx_lock/gfx_unlock acquired internally, redrawing only the affected zones — EXCEPT when a visible window overlaps a zone's drawn rect (x 582..633 with the label overhang, window rect incl. the 1px shadow): a partial redraw would paint desktop over that window, so the flip falls back to a full wm_paint_all under the same lock. |
+| `desk_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window and `dock_click` declined the click, §30). Zone hit: if same zone as desk_sel and [ui_click_t]−desk_clkt < 9 (birth ticks, §10) → clear the selection and call `files_open_drive` with AL = drive. Else select it, stamp desk_clkt. Miss: clear any selection. All its own drawing (selection flips) happens under gfx_lock/gfx_unlock acquired internally, redrawing only the affected zones — EXCEPT when a visible window overlaps a zone's drawn rect (x `[vid_desk_zl]`..`[vid_desk_zr]`−1 = zx−2..zx+49 with the label overhang — 582..633 at 640 wide, §39.2 — window rect incl. the 1px shadow): a partial redraw would paint desktop over that window, so the flip falls back to a full wm_paint_all under the same lock. |
 
 Selection is purely visual bookkeeping; a window covering an icon simply
 paints over it (desk_paint runs before windows in wm_paint_all), and
@@ -3777,8 +3848,9 @@ account, and the rows partition one total.
   because their region is still resident. The loader keeps ΣI_SIZE ≤
   APP_MAX_SIZE, so the 16-bit sum cannot overflow. used bytes =
   `kernel_bss_end` (bare label = the kernel text+bss footprint, org 0) +
-  that sum. usedK = (used+1023) >> 10, **plus 150 when `[bb_on]` is set**
-  (§32: the 4 × 0x9600-byte back buffer is exactly 150KB — added after the
+  that sum. usedK = (used+1023) >> 10, **plus 150 when `[bb_dbl]` is set**
+  (§32/§39.5 — the armed-buffer flag, not `[bb_on]`, which is 1 on any mono
+  adapter: the 4 × 0x9600-byte back buffer is exactly 150KB — added after the
   shift because 153600 does not fit a 16-bit byte count), **plus
   `KLOWFAR_KB` (§15.1), `SND_SEG_KB` (§2.2) and `VIEW_SEG_KB` (§2.3)** —
   every block the kernel owns outside its own segment, each added after the
@@ -3861,7 +3933,8 @@ wm_paint_all already does.
   detailed by the segment map below), [192,256) 50% gray (`SND_SEG`,
   §2.2 — claimed whole by the sound layer from boot, so the band is
   unconditional like the low keep), and [256,406) 50% gray while
-  `[bb_on]` is set (the §32 back buffer, read live at draw time).
+  `[bb_dbl]` is set (the §32 back buffer, read live at draw time — the
+  armed-buffer flag, so a mono machine draws no band, §39.5).
 - (6,33): `"SEG 64K POOL"` + pool-used KB right-aligned in 3 (ceil of
   Σ I_SIZE over in-use snapshot slots) + `"K/20K"` — exactly 20 chars
   (white-fill (6,33)-(167,40) first; 20 = ceil(0x4E00/1024), the §21 pool
@@ -4068,24 +4141,28 @@ Label prefix `dock_`. The dock is not exposed to packages.
 ### Geometry (pinned)
 
 ```nasm
-DOCK_H      equ 24              ; strip rows 456..479
-DOCK_Y0     equ SCREEN_H - DOCK_H   ; 456: 1px black rule, full width
-DOCK_TY0    equ DOCK_Y0 + 3     ; tile top row = 459 (tiles rows 459..478)
+DOCK_H      equ 24              ; 1px black rule + 23 white rows
+; The strip is pinned to the BOTTOM of the live screen, so its top row and
+; its tile top row are runtime words, not constants (§39.2):
+;   [vid_dock_y0]  = vid_h - DOCK_H  ; 456 VGA, 324 Hercules, 176 CGA
+;   [vid_dock_ty0] = [vid_dock_y0]+3 ; tile top row (459 / 327 / 179)
 DOCK_TILE_W equ 24
 DOCK_TILE_H equ 20
 DOCK_X0     equ 8               ; first tile's left edge
 DOCK_STEP   equ 28              ; tile + 4px gap; 8 + 12*28 = 344 < 640
 ```
 
-Look: black `gfx_hline` across row DOCK_Y0, white fill rows DOCK_Y0+1..479
+Look: black `gfx_hline` across row `[vid_dock_y0]`, white fill from the row
+below it to `[vid_hm1]`, the screen's last (§39.2)
 (an inverted menu bar). Tile i (= instance index i — **stable slot↔tile
 mapping**, holes stay; quitting one instance never moves another's tile):
 1px black frame DOCK_TILE_W × DOCK_TILE_H at x = DOCK_X0 + i·DOCK_STEP,
-row DOCK_TY0; the instance's 16×16 icon body (`I_ICON`, via `icon_draw16`)
-at (x+4, DOCK_TY0+2); I_ICON = 0 → the generic `ico_app16` **body** (the
+row `[vid_dock_ty0]`; the instance's 16×16 icon body (`I_ICON`, via
+`icon_draw16`) at (x+4, `[vid_dock_ty0]`+2); I_ICON = 0 → the generic `ico_app16` **body** (the
 library record's data at `ico_app16+2` — icon_draw16 takes a header-less
 body, §25). Minimized (I_FLAGS bit0): `gfx_xor_fill` over the tile
-interior (x+1..x+DOCK_TILE_W−2, DOCK_TY0+1..DOCK_TY0+DOCK_TILE_H−2).
+interior (x+1..x+DOCK_TILE_W−2, rows `[vid_dock_ty0]`+1 through
+`[vid_dock_ty0]`+DOCK_TILE_H−2).
 
 The dock renders ONLY records read as I_STATE = 1 during the same lock
 hold (§29.2 rule 3); dying records are skipped, so a closing instance's
@@ -4098,7 +4175,7 @@ tile vanishes with the `wm_hide` repaint. Icon pointers must satisfy
 |--------------|--------------------------------------------------------------|
 | `dock_init`  | reset module scratch. From kmain, right after desk_init.    |
 | `dock_paint` | draw the rule, the strip and every live instance's tile. Called by wm_paint_all after `desk_paint`, before the menu bar and windows (lock held by caller) — windows cover the dock exactly like desktop icons (§26). |
-| `dock_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window, BEFORE desk_click). Out: CF=1 = consumed (any click with y ≥ DOCK_Y0 — strip background clicks are consumed no-ops), CF=0 = not in the dock. Tile hit on a live instance: minimized → gfx_lock, `inst_restore`, gfx_unlock; else → gfx_lock, `wm_front` on I_WIN, gfx_unlock. Single click activates; no double-click logic. |
+| `dock_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window, BEFORE desk_click). Out: CF=1 = consumed (any click with y ≥ `[vid_dock_y0]` — strip background clicks are consumed no-ops), CF=0 = not in the dock. Tile hit on a live instance: minimized → gfx_lock, `inst_restore`, gfx_unlock; else → gfx_lock, `wm_front` on I_WIN, gfx_unlock. Single click activates; no double-click logic. |
 
 Every dock-state transition (launch, quit, minimize, restore) rides a
 `wm_show`/`wm_hide`/`wm_destroy` full repaint, so dock_paint needs no
@@ -4319,10 +4396,13 @@ and by that repaint.
 Second item in the panel list, same two-row radio geometry as §31.2 (it
 shares `cp_glyph` and the `CP_B*Y` hit bands). Heading "Display"; row 0
 "Direct to screen", row 1 "Double buffered"; the filled glyph follows
-`[bb_on]`, which is **0 at boot** — double buffering is opt-in.
+`[bb_dbl]`, the armed-buffer flag and **not** `[bb_on]` (1 on any mono
+adapter, §39.5); it is **0 at boot** — double buffering is opt-in.
 
-Caption: "Smoother; costs 150K" normally, or "Needs 500K of memory" when
-`[bb_avail]` = 0. On such a machine the page is display-only: a click in
+Caption: "Smoother; costs 150K" normally, "Needs 500K of memory" when
+`[bb_avail]` = 0, or "Not on this adapter" on a 1bpp card, which has no
+buffer to double at any memory size and never arms `[bb_avail]` at all
+(§39.5). On such a machine the page is display-only: a click in
 either band is ignored outright rather than moving a dot that `bb_set`
 would refuse to honour.
 
@@ -4481,26 +4561,29 @@ New `FARK` entries for this page: `inst_find_kind`, `clk_snap`,
 `clk_fld_str`, `clk_fld_adj` (§33; `wm_content`, `wm_obscured`, `gfx_fill`,
 `gfx_frame` and `font_str` already have wrappers).
 
-## 32. vgabb.inc — optional double buffering
+## 32. vgabb.inc — the software renderer (double buffering, and §39's 1bpp driver)
 
 **Why it exists.** The original design drew straight into VRAM because
 256KB of RAM leaves no room for a 640×480×4-plane shadow (150KB). Machines
 with more memory can afford one, and get flicker-free updates: everything
 drawn inside one gfx_lock/gfx_unlock burst appears on screen at once.
-Module prefix `bb_`; file included right after `vga12.inc`.
+Module prefix `bb_`; file included right after `vga12.inc`. The same code is
+also the kernel's 1bpp driver — on a Hercules or CGA card it renders straight
+to the framebuffer and nothing below applies (§39.3/§39.5).
 
-**Probe — `bb_init`** (from kmain, right after `vga_mode12`; task 0, so the
-§7 BIOS rule holds): int 12h → AX = conventional KB. If AX ≥ `DB_MIN_KB`
-(500) it sets `[bb_avail]` = 1, and that is all it does — it neither arms
-the buffer nor touches the planes.
+**Probe — `bb_init`** (from kmain, right after `vid_init`; task 0, so the
+§7 BIOS rule holds): on a mono adapter it returns at once, leaving
+`[bb_avail]` 0 (§39.5); else int 12h → AX = conventional KB. If AX ≥
+`DB_MIN_KB` (500) it sets `[bb_avail]` = 1, and that is all it does — it
+neither arms the buffer nor touches the planes.
 
-**Double buffering is OFF at boot and switched at runtime.** `[bb_on]`
-starts 0, so a fresh boot runs exactly the pre-§32 direct-VRAM code and
-**nothing else in this section applies** until the user turns it on from
-the Control Panel's Display page (§31.3), which calls `bb_set`. `[bb_avail]`
-gates that: below the floor `[bb_on]` can never become 1, and the page says
-why instead of offering a switch that would refuse. Both bytes are
-initialized data (`db`, next to `gfx_lock_flag`), **not** .bss — nothing
+**Double buffering is OFF at boot and switched at runtime.** On VGA `[bb_on]`
+and `[bb_dbl]` start 0, so a fresh boot runs exactly the pre-§32 direct-VRAM
+code and **nothing else in this section applies** until the user turns it on
+from the Control Panel's Display page (§31.3), which calls `bb_set`.
+`[bb_avail]` gates that: below the floor `[bb_dbl]` can never become 1, and
+the page says why instead of offering a switch that would refuse. All three
+bytes are initialized data (`db`, next to `gfx_lock_flag`), **not** .bss — nothing
 zeroes .bss at boot.
 
 **Switching — `bb_set`** (AL = 0 off / 1 on; caller HOLDS the gfx lock).
@@ -4512,9 +4595,10 @@ while disabled, and after a disable it is arbitrarily stale, so the first
 flush would otherwise push dead pixels over live ones. The cursor must be
 hidden for it (it is — the lock is held), or it would be captured into the
 buffer and smeared by that same flush. `bb_set` then resets the dirty rect
-and publishes `[bb_on]` = 1 **last**, since every drawing entry dispatches
-on it. Turning OFF calls `gfx_flush` first, so nothing drawn under the old
-mode is stranded in RAM, then clears `[bb_on]`. Both directions no-op when
+and arms `[bb_dbl]`, then publishes `[bb_on]` = 1 **last**, since every
+drawing entry dispatches on it. Turning OFF calls `gfx_flush` first, so
+nothing drawn under the old mode is stranded in RAM, then clears both. Both
+directions no-op when
 already in that state, so a repeated click cannot re-copy 150KB.
 
 Note the EBDA caveat: a BIOS that steals
@@ -4530,7 +4614,9 @@ worlds. Linear span 0x40000..0x657FF: untouchable on a 256KB machine,
 and 406KB of address space in all, so it clears the 500KB floor with room.
 
 **Rendering.** RAM has no latches, no Set/Reset, no write modes — the
-`bb_*` twins do in software, per plane, what the VGA ALU did in hardware:
+`bb_*` twins do in software, per plane, what the VGA ALU did in hardware
+(on a mono adapter there is one plane and `bb_ink` reduces the colour first,
+§39.3/§39.4):
 
 - solid ops (`bb_pixel/hline/vline/fill`): plane byte value from
   `[gfx_color]`'s plane bit — set bits with `or dest, mask`, clear with
@@ -4553,7 +4639,8 @@ cycles on any 16-bit part.
   exactly like the hardware XOR path.
 - `bb_save`/`bb_restore`: plain rect copies between the planes and the
   caller's buffer, same layout and rounding as `gfx_save`/`gfx_restore`
-  (§5) — `gfx_save_size` budgets are valid for both paths.
+  (§5) — the §5 size formula budgets both paths, over-generously on mono,
+  where there is one plane to copy instead of four.
 - `font_char` (§6) and `ico_core` (§25) branch after their clip/shift
   setup to plane-loop twins using the same shifted masks.
 
@@ -4568,7 +4655,8 @@ Byte-column granularity is deliberate — the flush copies whole bytes
 anyway, and it spares the union any pixel↔byte conversions.
 
 **Flush — `gfx_flush`.** Public, callable only with the gfx lock held
-(cursor hidden). No-op when `[bb_on]` = 0 (single `cmp`/`je`) or the rect
+(cursor hidden). No-op when `[bb_dbl]` = 0 (single `cmp`/`je` — **not**
+`[bb_on]`, which is 1 on mono with no buffer behind it, §39.5) or the rect
 is empty. Otherwise: for each plane, Sequencer Map Mask (SEQ2) = that
 plane's bit, copy the dirty rows (`rep movsw` + odd-byte tail) from the
 plane segment to `VGA_SEG` at the same offsets, then Map Mask back to 0Fh
@@ -4577,7 +4665,8 @@ primitives). Interrupts stay enabled — the tick may switch tasks mid-flush,
 but any drawer blocks on the gfx lock and the mouse ISR defers the cursor
 while the lock is held, so nobody else touches VRAM or the Map Mask.
 
-**The monochrome fast path — `[bb_mono]`.** The flush is the expensive half
+**The monochrome fast path — `[bb_mono]`** (a plane-identity flag; **not**
+`[vid_mono]`, the adapter kind, §39). The flush is the expensive half
 of double buffering: back-buffer rendering is plain RAM, but the flush is
 four passes of VRAM writes, and VRAM is the slow side on every target
 (measured on QEMU: a full-screen 4-plane flush costs ~3.7× a one-plane one
@@ -4649,7 +4738,8 @@ the cursor is hidden and flushes may run at any point. The back buffer
 never contains cursor pixels, so no flush can smear or erase a live cursor.
 
 **Accounting.** The Task Manager bills the back buffer as 150KB of System
-memory (§28) whenever `[bb_on]` is set, so the RAM line and the System row
+memory (§28) whenever `[bb_dbl]` is set — never on mono, which allocates
+none (§39.5) — so the RAM line and the System row
 both move the moment the Display page switches it (39K ↔ 189K on a 639K
 QEMU). The §16 test flow boots direct-to-screen like every machine; turning
 the buffer on is a deliberate act, and `make xt` (256K) cannot do it at all.
@@ -4693,7 +4783,8 @@ sector lands), and it is why `far_init` must run before `sched_init`.
    code — a near pointer means nothing without knowing which CS will run it.
 6. Far bodies reached by `FARSHIM` end in `retf`, not `ret`.
 
-**What may not move:** the boot path (`splash.inc` runs before `far_init`),
+**What may not move:** the boot path (`splash.inc` and `viddet.inc` both run
+before `far_init`, §39),
 any interrupt handler (vectors are seg:off into `KERNEL_SEG`), and anything
 on a hot inner loop — each crossing is a far call, roughly 1.5× a near one.
 
@@ -5360,10 +5451,13 @@ timed replay, and three embedded public-domain songs. Prefix `pn_`,
 embedded piano-keys icon (flags bit 0). Directory order on the apps disks
 stays pinned: mines, hello, notepad, recorder — **piano is appended
 fifth** so the earlier indices hold. Drawing uses colors beyond 0/15,
-which retires `[bb_mono]` (§32) — supported and expected.
+which retires `[bb_mono]` (§32) — supported and expected; on a 1bpp adapter
+they reduce to §39.4's three inks.
 
-- Window: "Piano", 224×177 at (250,100) → content 222×158. Content
-  layout, top to bottom (all coordinates content-relative):
+- Window: "Piano", 224×177 at (250,100) → content 222×158 — the authored
+  frame, which `wm_fit` clamps onto the live screen (§39.7), so at 640x200
+  the keyboard row is cut off at the dock (§39.9). Content layout, top to
+  bottom (all coordinates content-relative):
   - **Note viewer** — a CBLUE 1px frame (2,2)–(219,49), white field, five
     black staff lines (treble: E4 G4 B4 D5 F5) at y 40/34/28/22/16,
     x 8..213. Up to **21 note columns**, 10 px apart at x = 8 + col·10;
@@ -5371,7 +5465,9 @@ which retires `[bb_mono]` (§32) — supported and expected.
     (step = diatonic degree from C4 = 0 … G5 = 11), with a black ledger
     line (colx+2..colx+11 at y 46) for middle C and a small CLRED
     hand-drawn sharp glyph (two 6px vlines at colx+1/colx+3, two 5px
-    hlines at y−2/y+1) beside the dot for the five sharps. The viewer
+    hlines at y−2/y+1) beside the dot for the five sharps — the one mark
+    §39.4's 1bpp reduction loses, CLRED going white on a white field. The
+    viewer
     shows the **last 21** entries of the first `[pn_vcnt]` sequence
     entries: live play and song-load set vcnt = count; replay resets
     vcnt to 0 and advances it note by note, so the viewer fills live
@@ -5683,7 +5779,10 @@ for exactly this reason — remove modality and the dialog needs a fifth
 `WF_SIZABLE` is deliberately **not** set: a dialog is a question, not a
 workspace, and a fixed frame turns §22's whole live-layout apparatus into
 eleven `equ`s. Window 300×170 at (90, 60); content 298×151 after the border
-and `TITLE_H`. All values below are content-relative:
+and `TITLE_H` — the authored frame, which `wm_fit` clamps onto the live
+screen (§39.7), so on a 200-row adapter the record is shorter than these
+constants and the bottom of the layout is cut. All values below are
+content-relative:
 
 ```
 (6,6)     header: 'A:'/'B:' + two spaces + the folder's caption
@@ -5770,8 +5869,9 @@ what the Standard File dialog this is modelled on did too.
 
 ### 38.6 The API slot 0x00B0 and the completion callback
 
-The table-span assertion in `kernel.asm` goes 40 × 4 → **41 × 4**;
-`apps/os88api.inc` mirrors the equ (§20.5).
+The table-span assertion in `kernel.asm` goes 40 × 4 → **41 × 4** (and 42 × 4
+since §39.8 appended `OSAPI_VIDEO`); `apps/os88api.inc` mirrors the equ
+(§20.5).
 
 ```
 0x00B0 fdlg_open   in AL = 0 Open / 1 Save, BX = requester window ptr,
@@ -5866,3 +5966,285 @@ disk), no icon view (the Disk window is where you browse; this is where you
 choose), no new-folder button (§22 has one, one implementation is enough),
 no multiple selection, and no second dialog on top of the first — the gate
 is a single word for the same reason `[menu_win]` is.
+
+## 39. viddet.inc — video adapters, runtime geometry, the mono renderer
+
+The kernel drives three display adapters and picks one at boot. One binary,
+one set of drawing entry points, three very different framebuffers:
+
+| kind | resolution | colour | framebuffer | stride | banks | mode set |
+|---|---|---|---|---|---|---|
+| `VID_VGA` (0) | 640x480 | 16, 4 planes | A000:0000 | 80 | — | int 10h AX=0012h |
+| `VID_HERC` (1) | 720x348 | mono, 1bpp | B000:0000 | 90 | 4 x 0x2000 | 6845, direct |
+| `VID_CGA` (2) | 640x200 | mono, 1bpp | B800:0000 | 80 | 2 x 0x2000 | int 10h AX=0006h |
+
+Module `kernel/viddet.inc`, prefix `vid_`. It is `%include`d **before**
+`splash.inc` because the boot splash probes and sets the mode on its first
+tick, which means everything in it must be resident inside the first
+`SPL_RESIDENT` sectors and **all of its data must live in `.text`** — `.bss`
+is not cleared at that point and still has the `.fartext` blob on top of it
+(§15/§33). `[vid_mono]` is **not** `[bb_mono]`: the latter means "all four
+back-buffer planes hold identical bytes" (§32) and the two must never be
+conflated.
+
+### 39.1 Detection — `vid_detect`
+
+Probe order is binding, and the equipment word is consulted **last**:
+
+1. `int 10h AX=1A00h` (VGA/MCGA Display Combination Code). A pre-EGA BIOS
+   does not implement `AH=1Ah` and returns with AL as we set it, 00h;
+   `AL = 1Ah` means VGA. → `VID_VGA`.
+2. `int 10h AH=12h BL=10h` (EGA "get EGA info"). An EGA or VGA BIOS
+   overwrites BL with the card's memory size; an XT BIOS leaves 10h alone.
+   An EGA does mode 12h, so it counts. → `VID_VGA`.
+3. `int 11h` equipment word bits 5:4. `11b` = a monochrome card at B000 →
+   `VID_HERC`; anything else → `VID_CGA`.
+
+Step 3 is last because an EGA or VGA driving a monochrome monitor **also**
+reports `11b`, and those machines belong on the mode 12h path.
+
+**Documented scope cut:** no Hercules-versus-plain-MDA discrimination (the
+0x3BA vertical-sync toggle). A plain MDA is text-only, so no better action
+exists; driving it as a Hercules is strictly less wrong than driving it as a
+CGA at B800.
+
+`VID_FORCE` (build-time, `-DVID_FORCE=1|2|3`) skips the probe. It exists for
+testing only and every shipped image is built without it — see §39.9.
+
+### 39.2 Runtime geometry
+
+`SCREEN_W`, `SCREEN_H` and `ROW_BYTES` (§3) survive as the **VGA reference
+values** and as the initializers of the live block; they are no longer the
+truth about the screen. The truth is:
+
+**The live block — nine contiguous words, in `vid_tab`'s column order.**
+`vid_apply` `rep movsw`s an 18-byte `vid_tab` record straight over them, so
+reordering one without the other silently corrupts all nine:
+
+`vid_seg`, `vid_w`, `vid_h`, `vid_stride`, `vid_bmask`, `vid_bshift`,
+`vid_rowadd`, `vid_wrapbit`, `vid_wrapfix`
+
+**Derived by `vid_apply`**, because the sites that want them are inner loops
+or single instructions with no register to spare for the arithmetic:
+`vid_wm1`, `vid_hm1`, `vid_wm8`, `vid_hm8`, `vid_strm1`, `vid_rseg`,
+`vid_rpara`, `vid_rend`, `vid_dock_y0`, `vid_dock_ty0`, `vid_clk_hx`,
+`vid_ymax`, `vid_popmax`, `vid_desk_zx`, `vid_desk_zl`, `vid_desk_zr`, and
+the bytes `vid_kind`, `vid_mono`, `vid_planes`, `vid_planes_w`.
+
+```
+vid_mono   = (kind != VID_VGA)          vid_planes = mono ? 1 : 4
+vid_rseg   = mono ? vid_seg : BB_SEG
+vid_rpara  = mono ? 1 : BB_PLANE_PARA   ; MUST be nonzero - see 39.3
+vid_rend   = vid_rseg + (mono ? 1 : 4*BB_PLANE_PARA)
+vid_popmax = min(MENU_POPMAX, (vid_h - MBAR_H - 2) >> 4)    ; 16 / 16 / 11
+vid_desk_zx = vid_w - 56                ; 584 at 640 wide, as it always was
+[bb_on]    = vid_mono                   ; see 39.5
+[mouse_x]/[mouse_y] = centre of the new screen
+```
+
+**Homing the cursor is load-bearing, not cosmetic.** `mouse_x`/`mouse_y` are
+initialized data sized for 640x480, and `cur_draw` computes its bottom clip
+as an *unsigned* `[vid_h] - y`. Left at 240 on a 200-row screen that
+subtraction wraps to ~65,500, the row count stays 16, and the first cursor
+draw writes past the end of the framebuffer.
+
+`MBAR_H` (20) and `TITLE_H` (18) stay assembly-time constants: they are font
+and chrome dimensions, not screen-derived. Only `SCREEN_H - TITLE_H`
+combined them, and that is the precomputed `[vid_ymax]`.
+
+### 39.3 The parameterized software renderer
+
+**There is no second graphics driver.** `vgabb.inc` (§32) was written as a
+latch-free, port-free *software* renderer over `vga_rect_setup`'s coordinate
+core, targeting a RAM back buffer — and nothing in it cares that the target
+is RAM. Four changes make it the 1bpp driver:
+
+- its plane segment is `[vid_rseg]` — the back buffer on VGA, the
+  **framebuffer itself** on mono;
+- its plane count is `[vid_planes]` — 4 or 1;
+- its plane step is `[vid_rpara]`, which **must stay nonzero even at one
+  plane**: `bb_xfer` terminates on a segment compare against `[vid_rend]`,
+  and a step of 0 never terminates;
+- every row advance goes through `gfx_nextrow`.
+
+The planar bodies in `vga12.inc` are simply unreachable on mono, so they keep
+their assembly-time `ROW_BYTES` and `VGA_SEG`, and `gfx_flush` keeps them
+too — it only ever runs on VGA.
+
+**`gfx_rowbase`** — in AX = y, out AX = that row's byte offset. Clobbers AX,
+CX, DX; **preserves BX**, which `ico_core` depends on.
+
+**`gfx_nextrow`** — in DI, out DI one scan line down. **Touches DI and flags
+and nothing else**: several callers are inner loops with no spare register,
+and one runs inside the IRQ4 cursor path.
+
+```
+addr(y)  = (y & bmask) * 0x2000 + (y >> bshift) * stride
+nextrow  = di += rowadd; if (di & wrapbit) di += wrapfix
+```
+
+`wrapfix` is `stride - nbanks*0x2000` as a 16-bit add, and `wrapbit` is the
+bit the unconditional add carries into once it steps off the last bank. On
+VGA `bmask`/`bshift`/`wrapbit` are all 0, so `gfx_rowbase` reduces to exactly
+`y * 80` and `gfx_nextrow` to `add di, 80` — **with no adapter test on either
+path**, which is why the VGA output is bit-for-bit what it was before.
+
+**Both read their parameters through `CS`, not `DS`.** Two callers run with
+DS pointed elsewhere entirely: `bb_xfer`'s save path sets DS to the
+framebuffer segment for its `movsb`, and its restore path sets DS to the
+caller's buffer (`SAVE_SEG` for a menu's save-under). Reading the stride
+through DS there fetches framebuffer bytes as a scan-line step. CS is
+`KERNEL_SEG` for everything in `.text`, and `.fartext` reaches these only
+through the `.text` shims, so the override is always correct.
+
+**Invariant, with a build assertion:** the bank number must live in DI's own
+high bits, which requires a bank's rows never to reach into the next bank's
+0x2000 window. Hercules uses 87x90 = 7,830 and CGA 100x80 = 8,000 of 8,192.
+A change of stride or height breaks this silently, so `viddet.inc` asserts it.
+
+### 39.4 Colour reduction at 1bpp
+
+`gfx_ink` maps a 16-colour index to `00h` black, `FFh` white, or `01h` — the
+50% dither class, which costs nothing extra because `bb_rect` has already
+computed the row-parity AA/55 byte for `BBM_GRAY`; arming `[bb_altm]` is the
+whole implementation.
+
+```
+0..6 -> black      7,8,9,10,11,13 -> dither      12,14,15 -> white
+```
+
+Chosen so every distinction the shipped UI carries in colour survives:
+Minesweeper's covered `CLGRAY` against its open `CWHITE`, its exploded
+`CLRED` mine against the `CLGRAY` ones, Piano's pressed `CLBLUE` key against
+an idle `CWHITE` one, Recorder's `CDGRAY` disabled text on white.
+**Accepted losses:** light grey and dark grey are indistinguishable, and
+Piano's decorative sharp glyph (`CLRED` on white) disappears — no flat map
+can give it black while the black-key core needs white.
+
+Glyphs never dither — a dithered 8x8 glyph is unreadable — so `font_ink`
+rounds everything but pure white to black.
+
+### 39.5 Dispatch: `[bb_on]` and `[bb_dbl]`
+
+`[bb_on]` now means **"route drawing through the software renderer"**. It is
+permanently 1 on a mono adapter, set by `vid_apply` before anything draws.
+The new `[bb_dbl]` carries the narrower old meaning, **"a back buffer is
+armed and must be flushed"**, and is what `gfx_flush`, the Control Panel's
+Display page and the Task Manager's RAM figures read — otherwise a mono
+machine would claim double buffering and bill 150KB that was never
+allocated. `bb_init` refuses to set `[bb_avail]` on mono, so the Display page
+cannot arm it, and its caption says *"Not on this adapter"* rather than
+lying about memory.
+
+This is why the nine existing `[bb_on]` dispatch sites needed **no new
+dispatch bytes**. The four that did are the escape hatches — the callers that
+bypass `[bb_on]` by contract because their output is transient and must never
+enter the back buffer (§32): `vga_xor_rect_vram` (the drag outline),
+`vga_xor_fill_vram` (menu highlights), and `vga_save_vram` /
+`vga_restore_vram` (the cursor's save-under, from inside IRQ4). On mono
+"direct to VRAM" and "through the software renderer" are the same place, so
+each gets a `[vid_mono]` prefix into its `bb_*` twin.
+
+Double buffering is **unavailable** on mono, by design and not by omission:
+the renderer already writes the framebuffer directly, so there is nothing to
+double.
+
+### 39.6 Mode set and teardown
+
+`vid_setmode` is idempotent and safe to re-run with the card already in
+graphics. VGA and CGA get their mode — and their clear — from the BIOS.
+Hercules has no BIOS mode at all:
+
+```
+out 3BFh, 3                     ; configuration: graphics allowed, both pages
+6845 at 3B4h/3B5h, R0..R11 = 35 2D 2E 07 5B 02 57 57 02 03 00 00
+out 3B8h, 0Ah                   ; graphics, video on, display page 0
+rep stosw  0x4000 words at B000:0000
+```
+
+The 32KB clear is **load-bearing**: `bb_init`'s ordering and the first
+desktop paint both assume a cleared framebuffer, and no BIOS will do it. Its
+`cld` is explicit because on the splash path this runs on the boot sector's
+flags and `spl_tick` never issues one.
+
+`vid_text` (`CMD_REBOOT`) returns VGA and CGA to mode 3; Hercules gets
+`out 3BFh, 0` and mode 7.
+
+### 39.7 Window placement — `wm_fit`
+
+Every window template in the tree — built-in, dialog and package alike — is
+authored against 640x480. `wm_create` therefore clamps the frame onto the
+live screen at the single point all four creation paths funnel through
+(`inst_tplbuf` and its per-slot cascade, `fdlg_tpl`, every built-in template,
+and every already-built third-party `.o88`, with zero app rebuilds). Size
+first, then position, and the y floor last so it wins:
+
+```
+w = min(w, vid_w)               h = min(h, vid_dock_y0 - MBAR_H)
+x = min(x, vid_w - w), floor 0  y = min(y, vid_dock_y0 - h), floor MBAR_H
+```
+
+On VGA it is a no-op. **Consequence for §11:** the record may differ from the
+template it was created from, so a package that lays out from its own
+constants rather than re-reading `W_W`/`W_H` will draw clipped. That is the
+accepted outcome — clipped but launchable — and the per-adapter acceptance
+criteria in §17 record which apps it affects.
+
+### 39.8 The package ABI
+
+`OSAPI_VIDEO` (slot **0x00B4**; the table is now 42 slots) — no inputs;
+out AX = width, BX = height, CX = the first row the dock owns (so the usable
+desktop is rows `MBAR_H`..CX-1), DL = `vid_kind`, DH = bits per pixel (4 or
+1). Callable from any context, lock held or not — the first slot for which
+that is true.
+
+`SCREEN_W`/`SCREEN_H`/`MBAR_H`/`TITLE_H` remain in `apps/os88api.inc` as the
+**reference** geometry: fine for authoring a template, wrong for anything
+that reads a screen edge at run time. Appending a slot is invisible to
+already-built packages, so no `.o88` needs rebuilding.
+
+### 39.9 Testing
+
+**QEMU emulates no CGA and no Hercules card** (verified: `-device help`
+offers only VGA-class devices), and 86Box has no automation socket. So:
+
+- `make test VIDEO=cga` — the CGA path under the QMP harness. SeaVGABIOS's
+  `int 10h AX=0006h` is a byte-exact CGA framebuffer (B800, two banks,
+  80-byte stride), so this exercises the entire mono renderer, the banked
+  row walk, the mono cursor and the colour map. It does **not** exercise
+  detection: the machine is still a VGA. Drive it with
+  `tools/mouse.py --screen 640x200`.
+- `make test VIDEO=herc HERCSEG=0x7000` plus
+  `python3 tools/hercshot.py build/qmp.sock 0x70000 out.png` — B000 is
+  unmapped under QEMU and swallows every write, so `HERCSEG` relocates the
+  framebuffer into spare RAM and `hercshot.py` reads it back and applies the
+  §39.3 layout on the host. A wrong stride shears the picture sideways;
+  wrong bank arithmetic shears it into four interleaved combs.
+- `make xt-cga` / `make xt-hercules` — 86Box, `ibmxt`, 256KB, real `cga` and
+  `hercules` cards. The **only** way to exercise the §39.1 probe and the
+  Hercules 6845 programming. Interactive; no automation exists.
+- **VGA first, always.** `vga_rect_setup` is shared and its row base now goes
+  through `gfx_rowbase`, which must reduce to exactly `y * 80`. Screendump
+  and byte-compare against a pre-change baseline before trusting anything
+  else; a one-pixel VGA regression found later gets blamed on the mono work.
+
+### 39.10 Per-adapter acceptance
+
+On CGA the usable desktop is 156 rows, so windows authored at 640x480 meet
+§39.7's clamp. Two different outcomes follow, and the difference matters:
+
+- **A window that paints from its own live record clips correctly.** Note Pad
+  (which recomputes its right/bottom edge every paint) and the Standard File
+  dialog are fully usable — the dialog's Save/Cancel/Drive column sits at
+  content y 20/40/60 and is untouched; only the name box loses the bottom
+  pixels of its border.
+- **A window that paints from fixed constants draws past its own frame**,
+  because nothing in the kernel clips a draw to a *window* — `vga_rect_setup`
+  clips to the **screen**. Minesweeper and Piano are clipped at the dock and
+  still play. The Task Manager was the one case where this defaced the dock
+  strip once a second, so its two fixed-pitch row lists now stop at
+  `[tm_ylim]` (`tm_ylim_set`, §28) rather than at `TM_ROWS`.
+
+The general rule this leaves for any new window: **the clamp is not a clip.**
+If a paint proc lays out from constants rather than from `W_W`/`W_H`, it can
+write outside its frame on a short screen, and only the screen edge stops it.

@@ -45,11 +45,17 @@ app_ttl_bounce: db 'Bounce', 0
 
 app_about_s1:   db 'os8088 1.0', 0
 app_about_s2:   db 'a graphical OS for the 8086', 0
-; third line, one whole string per scheduler mode (SPEC.md 8.2/14): both
-; scheduling words are exactly 11 chars, so the line width - and therefore
-; the centered x app_about_center computes - is identical either way
-app_about_s3p:  db 'pre-emptive - 640x480 - 16 colors', 0
-app_about_s3c:  db 'cooperative - 640x480 - 16 colors', 0
+; third line, one word per scheduler mode (SPEC.md 8.2/14)
+app_about_s3p:  db 'pre-emptive', 0
+app_about_s3c:  db 'cooperative', 0
+; fourth line: the screen this machine actually got (SPEC.md 39). Indexed by
+; [vid_kind], so it can never disagree with what is on the glass - the old
+; third line asserted '640x480 - 16 colors' unconditionally, which stopped
+; being true the moment the kernel learned to drive a mono card.
+app_about_vid:  dw app_about_v0, app_about_v1, app_about_v2
+app_about_v0:   db 'VGA - 640x480 - 16 colors', 0
+app_about_v1:   db 'Hercules - 720x348 - mono', 0
+app_about_v2:   db 'CGA - 640x200 - mono', 0
 
 ; =============================================================================
 ; Kind init procs (KD_INIT contract, SPEC.md 29.3): in BX = window ptr,
@@ -86,9 +92,10 @@ app_bounce_kinit:
 ; in:  SI = window ptr (content already white-filled, gfx lock held)
 ; out: nothing
 ; clobbers: nothing (flags only)
-; Three black lines, each centered in the content; the block of three
-; (8px lines, 8px gaps) is centered vertically in the 101px content. The
-; third line's scheduling word tracks the live mode (sched_mode_get).
+; Four black lines, each centered in the content. The third line's
+; scheduling word tracks the live mode (sched_mode_get) and the fourth names
+; the video adapter the boot probe found (SPEC.md 39.1). app_about_center
+; re-measures every string, so unequal lengths are fine.
 ; -----------------------------------------------------------------------------
 app_about_paint:
     push ax
@@ -100,7 +107,8 @@ app_about_paint:
     mov byte [gfx_color], CBLACK
     mov bx, si                  ; window ptr for the centering helper
     mov dx, [bx+W_Y]
-    add dx, TITLE_H + 30        ; first line: content top + 30
+    add dx, TITLE_H + 22        ; first line: content top + 22 (four lines of
+                                ; 8px on 16px pitch, centred in 101px)
     mov si, app_about_s1
     call app_about_center
     add dx, 16
@@ -113,6 +121,14 @@ app_about_paint:
     jz .s3
     mov si, app_about_s3c
 .s3:
+    call app_about_center
+    add dx, 16
+    push bx                     ; fourth line: the adapter in use. BX is the
+    mov bl, [vid_kind]          ; window ptr app_about_center wants, so it
+    xor bh, bh                  ; only borrows it as the table index
+    shl bx, 1
+    mov si, [bx + app_about_vid]
+    pop bx
     call app_about_center
 
     pop si

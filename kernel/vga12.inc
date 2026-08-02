@@ -33,60 +33,6 @@ gfx_lock_flag   db 0            ; drawing mutex (SPEC.md 7); 0 = free.
                                 ; .bss at boot, and this byte must start clear.
 
 ; -----------------------------------------------------------------------------
-; vga_mode12 - enter mode 12h via the BIOS
-; in:       -
-; out:      -
-; clobbers: flags
-; -----------------------------------------------------------------------------
-vga_mode12:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push es
-    mov ax, 0x0012
-    int 0x10
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; vga_text - back to 80x25 text via the BIOS (used by CMD_REBOOT)
-; in:       -
-; out:      -
-; clobbers: flags
-; -----------------------------------------------------------------------------
-vga_text:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push es
-    mov ax, 0x0003
-    int 0x10
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; vga_set_color - internal: arm Set/Reset with [gfx_color] on all planes
 ; in:       -
 ; out:      GC0 = [gfx_color], GC1 = 0Fh
@@ -160,9 +106,9 @@ vga_rect_setup:
     jns .y1ok
     xor bx, bx
 .y1ok:
-    cmp dx, SCREEN_H            ; y2 > 479 -> 479
+    cmp dx, [vid_h]             ; y2 past the last row -> the last row
     jl .y2ok
-    mov dx, SCREEN_H-1
+    mov dx, [vid_hm1]
 .y2ok:
     cmp dx, bx
     jl .empty
@@ -170,9 +116,9 @@ vga_rect_setup:
     jns .x1ok
     xor ax, ax
 .x1ok:
-    cmp cx, SCREEN_W            ; x2 > 639 -> 639
+    cmp cx, [vid_w]             ; x2 past the last column -> the last column
     jl .x2ok
-    mov cx, SCREEN_W-1
+    mov cx, [vid_wm1]
 .x2ok:
     cmp cx, ax
     jl .empty
@@ -209,9 +155,9 @@ vga_rect_setup:
     and [vga_lmsk], dl
 .offs:
     push ax                     ; left byte
-    mov ax, ROW_BYTES
-    mul bx                      ; ax = y1 * 80
-    pop dx
+    mov ax, bx                  ; this one call re-bases every rect primitive
+    call gfx_rowbase            ; in BOTH renderers - on VGA it is still just
+    pop dx                      ; y1 * 80 (SPEC.md 39.3)
     add ax, dx
     mov [vga_off], ax
     clc
@@ -767,6 +713,9 @@ gfx_xor_rect:
 vga_xor_rect_vram:              ; VRAM body under its own name: transient
                                 ; overlays (the drag outline) call it direct
                                 ; so they never enter the back buffer
+    cmp byte [vid_mono], 0      ; ...but "direct" means the framebuffer, and
+    jne bb_xor_rect             ; on a 1bpp adapter the software renderer IS
+                                ; the direct path (SPEC.md 39.5)
     push bx
     push dx
     push si
@@ -815,6 +764,8 @@ gfx_xor_fill:
     jne bb_xor_fill
 vga_xor_fill_vram:              ; VRAM body under its own name (see
                                 ; vga_xor_rect_vram) - the menu highlights
+    cmp byte [vid_mono], 0
+    jne bb_xor_fill
     push ax
     push bx
     push cx
@@ -903,6 +854,9 @@ gfx_save:
     cmp byte [bb_on], 0
     jne bb_save
 vga_save_vram:
+    cmp byte [vid_mono], 0      ; the cursor's save-under, from inside IRQ4:
+    jne bb_save                 ; on mono the framebuffer IS the renderer's
+                                ; target, so one "plane" of bb_xfer is it
     push ax
     push bx
     push cx
@@ -965,6 +919,8 @@ gfx_restore:
     cmp byte [bb_on], 0
     jne bb_restore
 vga_restore_vram:
+    cmp byte [vid_mono], 0      ; see vga_save_vram
+    jne bb_restore
     push ax
     push bx
     push cx
@@ -1013,62 +969,6 @@ vga_restore_vram:
     pop cx
     pop bx
     pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; gfx_save_size - buffer size a gfx_save of this rect will need
-;
-; bytes = ((x2/8) - (x1/8) + 1) * rows * 4, after the same clipping as
-; gfx_save. Uses no module scratch variables, so it is safe to call without
-; holding the gfx lock.
-; in:       AX = x1, BX = y1, CX = x2, DX = y2
-; out:      AX = byte count (0 if the clipped rect is empty)
-; clobbers: flags
-; -----------------------------------------------------------------------------
-gfx_save_size:
-    push bx
-    push cx
-    push dx
-    or bx, bx
-    jns .y1ok
-    xor bx, bx
-.y1ok:
-    cmp dx, SCREEN_H
-    jl .y2ok
-    mov dx, SCREEN_H-1
-.y2ok:
-    cmp dx, bx
-    jl .empty
-    or ax, ax
-    jns .x1ok
-    xor ax, ax
-.x1ok:
-    cmp cx, SCREEN_W
-    jl .x2ok
-    mov cx, SCREEN_W-1
-.x2ok:
-    cmp cx, ax
-    jl .empty
-    sub dx, bx                  ; dx = rows
-    inc dx
-    push cx
-    mov cl, 3
-    shr ax, cl                  ; ax = left byte
-    pop bx                      ; bx = x2
-    shr bx, cl                  ; bx = right byte
-    sub bx, ax
-    inc bx                      ; bx = bytes per row
-    mov ax, bx
-    mul dx                      ; ax = bytes per plane
-    add ax, ax                  ; * 4 planes
-    add ax, ax
-    jmp .out
-.empty:
-    xor ax, ax
-.out:
-    pop dx
-    pop cx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------

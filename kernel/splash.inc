@@ -24,7 +24,7 @@
 ; the first tick can arrive.
 ; =============================================================================
 
-SPL_RESIDENT equ 4              ; sectors the boot sector waits for before
+SPL_RESIDENT equ 6              ; sectors the boot sector waits for before
                                 ; ticking us (must match boot/boot.asm)
 SPL_GC      equ 0x3CE           ; VGA Graphics Controller index port
 
@@ -34,9 +34,12 @@ SPL_GC      equ 0x3CE           ; VGA Graphics Controller index port
 SPL_TOP     equ 118
 SPL_HALFW   equ 52
 
-; Dialog and bar geometry (all inside 640x480).
+; Dialog and bar geometry. The dialog is VGA-only and stays at its 640x480
+; coordinates; the BAR is the one thing that draws on all three adapters, so
+; its origin is computed at run time by spl_chrome (SPEC.md 39.6).
 SPL_BAR_PX  equ 288             ; bar interior width in pixels
-SPL_BAR_ADR equ 264 * 80 + 22   ; bar interior top-left (x=176, y=264)
+SPL_BAR_Y   equ 264             ; bar interior top row on VGA - inside the
+                                ; trough spl_chrome draws at rows 262..281
 SPL_BAR_H   equ 16
 
 ; -----------------------------------------------------------------------------
@@ -65,9 +68,13 @@ spl_tick:
     mov byte [spl_on], 1
     call spl_chrome
 .running:
-    call spl_bar
+    call spl_bar                ; the ONE stage that runs on all three
+                                ; adapters - see spl_chrome
+    cmp byte [vid_mono], 0
+    jne .painted
     call spl_pct
     call spl_spin
+.painted:
 
     pop es
     pop ds
@@ -85,10 +92,37 @@ spl_tick:
 ;              the bar trough, the title. clobbers: ax, bx, cx, dx, si, es
 ; -----------------------------------------------------------------------------
 spl_chrome:
-    mov ax, 0x0012              ; 640x480x16; also wipes the BIOS boot text
-    int 0x10
-    mov ax, VGA_SEG
+    call vid_detect             ; the adapter probe happens HERE, before any
+    call vid_apply              ; other kernel module is even resident: the
+    call vid_setmode            ; splash owns the first mode set, and kmain's
+                                ; vid_init later re-runs all three (SPEC 39.1)
+
+    mov ax, [vid_h]             ; the bar's origin, centred on whatever screen
+    shr ax, 1                   ; we got. On VGA this would be row 232, but
+    cmp byte [vid_mono], 0      ; the bar has to sit inside the dialog's
+    je .barv                    ; trough at 264, so VGA keeps its constant.
+    sub ax, 8
+    jmp short .bary
+.barv:
+    mov ax, SPL_BAR_Y
+.bary:
+    call gfx_rowbase
+    mov bx, [vid_w]             ; x = (width - bar) / 2, in whole bytes: 22 at
+    sub bx, SPL_BAR_PX          ; 640 (which is what SPL_BAR_ADR always was),
+    mov cl, 4                   ; 27 at Hercules' 720
+    shr bx, cl
+    add ax, bx
+    mov [spl_bar_adr], ax
+
+    mov ax, [vid_seg]
     mov es, ax
+
+    cmp byte [vid_mono], 0      ; everything below is 640x480 chrome drawn
+    jne .mono                   ; with BIOS text: the dialog does not fit in
+                                ; 200 rows, and int 10h teletype into a
+                                ; Hercules card already in graphics writes
+                                ; character/attribute pairs into the bitmap.
+                                ; The bar alone carries the mono splash.
 
     mov cx, 152                 ; dialog: two nested 1px frames, the mode 3
     mov si, 487                 ; splash's double-line box reborn in pixels
@@ -113,6 +147,8 @@ spl_chrome:
     int 0x10
     mov si, spl_s_welcome
     jmp spl_print               ; tail call
+.mono:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; spl_bar - fill the bar to done*SPL_BAR_PX/total pixels. The fill only ever
@@ -120,7 +156,7 @@ spl_chrome:
 ; clobbers: ax, bx, cx, dx, si, di, es
 ; -----------------------------------------------------------------------------
 spl_bar:
-    mov ax, VGA_SEG
+    mov ax, [vid_seg]
     mov es, ax
 
     mov ax, [spl_done]
@@ -131,7 +167,7 @@ spl_bar:
     mov cl, 3
     shr ax, cl                  ; AX = whole bytes of fill
 
-    mov di, SPL_BAR_ADR
+    mov di, [spl_bar_adr]
     mov cx, ax
     mov bx, SPL_BAR_H
     mov al, 0xFF
@@ -149,9 +185,8 @@ spl_bar:
     call spl_bitmask
     mov bx, SPL_BAR_H
 .prow:
-    mov al, [es:di]             ; load latches so the masked bits merge
-    mov byte [es:di], 0xFF
-    add di, 80
+    call spl_wrbyte             ; merge white through the armed mask
+    call gfx_nextrow
     dec bx
     jnz .prow
     mov al, 0xFF
@@ -215,7 +250,7 @@ spl_print:
 ;            renders itself. clobbers: ax, bx, cx, dx, si, di, bp, es
 ; -----------------------------------------------------------------------------
 spl_spin:
-    mov ax, VGA_SEG
+    mov ax, [vid_seg]           ; VGA only - spl_tick gates the call
     mov es, ax
 
     mov di, SPL_TOP * 80 + 33   ; bounding box: x 264..383, 41 rows
@@ -300,10 +335,10 @@ spl_hline:
     push di
     push bp
 
-    mov si, dx                  ; SI = x2 (mul is about to eat DX)
-    mov ax, 80
-    mul bx
-    mov bx, cx                  ; BX = x1
+    mov si, dx                  ; SI = x2 (gfx_rowbase eats CX and DX)
+    mov ax, bx                  ; AX = y
+    mov bx, cx                  ; BX = x1 - gfx_rowbase preserves it
+    call gfx_rowbase
     mov bp, ax                  ; BP = row base
 
     mov ax, bx
@@ -369,12 +404,14 @@ spl_vline:
     push di
 
     mov di, dx
-    mov ax, 80
-    mul bx
     sub di, bx                  ; DI = row count - 1
-    mov bx, di
-    inc bx
-    mov di, ax
+    inc di                      ; DI = row count
+    push cx                     ; CX = x, and gfx_rowbase eats CX
+    mov ax, bx
+    call gfx_rowbase
+    mov bx, di                  ; BX = row count
+    mov di, ax                  ; DI = row base
+    pop cx
     mov ax, cx
     push cx
     mov cl, 3
@@ -387,9 +424,8 @@ spl_vline:
     shr al, cl                  ; single-pixel mask
     call spl_bitmask
 .row:
-    mov al, [es:di]             ; latch, then merge the masked bit
-    mov byte [es:di], 0xFF
-    add di, 80
+    call spl_wrbyte             ; latch, then merge the masked bit
+    call gfx_nextrow
     dec bx
     jnz .row
     mov al, 0xFF
@@ -438,7 +474,7 @@ spl_fill:
     rep stosb
     pop di
     pop cx
-    add di, 80
+    call gfx_nextrow
     dec bx
     jnz .row
     pop di
@@ -452,11 +488,18 @@ spl_fill:
 spl_bitmask:
     push ax
     push dx
+    cmp byte [vid_mono], 0
+    jne .mono
     mov ah, al
     mov al, 8                   ; GC index 8 = bit mask
     mov dx, SPL_GC
     out dx, ax
     pop dx
+    pop ax
+    ret
+.mono:
+    mov [spl_mask], al          ; no GC to arm: spl_wrbyte applies it in
+    pop dx                      ; software
     pop ax
     ret
 
@@ -466,9 +509,25 @@ spl_bitmask:
 ; -----------------------------------------------------------------------------
 spl_maskbyte:
     call spl_bitmask
+    call spl_wrbyte
+    inc di
+    ret
+
+; -----------------------------------------------------------------------------
+; spl_wrbyte - merge white pixels through the armed mask at ES:DI, without
+;              advancing. VGA: read to load the latches, then write FF and
+;              let the Bit Mask decide which bits land. Mono: the mask is a
+;              byte in RAM and the merge is an OR. clobbers: al
+; -----------------------------------------------------------------------------
+spl_wrbyte:
+    cmp byte [vid_mono], 0
+    jne .mono
     mov al, [es:di]             ; load latches
     mov byte [es:di], 0xFF
-    inc di
+    ret
+.mono:
+    mov al, [spl_mask]
+    or [es:di], al
     ret
 
 ; -----------------------------------------------------------------------------
@@ -501,6 +560,8 @@ spl_cos_tab:                    ; cos(k/16 rev) * 64, k = 0..15
     dw 64, 59, 45, 24, 0, -24, -45, -59
     dw -64, -59, -45, -24, 0, 24, 45, 59
 
+spl_bar_adr dw 0            ; the bar's top-left byte, set by spl_chrome
+spl_mask    db 0xFF          ; mono: what the GC's Bit Mask holds on VGA
 spl_on      db 0
 spl_done    dw 0
 spl_total   dw 1

@@ -3,3 +3,7 @@ build/
 
 # 86Box writes NVRAM and dumped BIOS ROMs next to the VM config
 vm/xt/nvr/
+vm/xt640/nvr/
+vm/xt-cga/nvr/
+vm/xt-hercules/nvr/
+vm/*/screenshots/

@@ -71,6 +71,59 @@ wm_init:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_fit - clamp a just-created window's frame onto the live screen
+;
+; Every window template in the tree - built-in, dialog and package alike -
+; was authored against 640x480, and a Hercules screen is 132 rows shorter
+; while a CGA one is 280 rows shorter. Rather than make every caller
+; adapter-aware (which would mean rebuilding every .o88), the geometry is
+; clamped once, here, at the single point all four creation paths funnel
+; through. On VGA it is a no-op.
+;
+; Size first, then position, and the y floor last so it wins: a window taller
+; than the desktop is better pinned under the menu bar and clipped at the
+; dock than pushed up behind the bar.
+; in:       BX -> the window record, W_X..W_H already filled
+; out:      W_X/W_Y/W_W/W_H clamped
+; clobbers: flags
+; -----------------------------------------------------------------------------
+wm_fit:
+    push ax
+    mov ax, [vid_w]             ; w = min(w, screen width)
+    cmp [bx+W_W], ax
+    jle .wok
+    mov [bx+W_W], ax
+.wok:
+    mov ax, [vid_dock_y0]       ; h = min(h, desktop height)
+    sub ax, MBAR_H
+    cmp [bx+W_H], ax
+    jle .hok
+    mov [bx+W_H], ax
+.hok:
+    mov ax, [vid_w]             ; x = min(x, screen width - w), floor 0
+    sub ax, [bx+W_W]
+    cmp [bx+W_X], ax
+    jle .xok
+    mov [bx+W_X], ax
+.xok:
+    cmp word [bx+W_X], 0
+    jge .yc
+    mov word [bx+W_X], 0
+.yc:
+    mov ax, [vid_dock_y0]       ; y = min(y, dock top - h), floor MBAR_H
+    sub ax, [bx+W_H]
+    cmp [bx+W_Y], ax
+    jle .yok
+    mov [bx+W_Y], ax
+.yok:
+    cmp word [bx+W_Y], MBAR_H
+    jge .out
+    mov word [bx+W_Y], MBAR_H
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_create - allocate a window from a template
 ; in:  SI -> 16-byte template {x, y, w, h, title, paint, onkey, onclick}
 ;      (8 words)
@@ -104,6 +157,9 @@ wm_create:
     mov cx, 8
     rep movsw                   ; copy the template into x..onclick
     mov word [bx+W_MENUS], 0    ; menus are NOT a template word (SPEC 11/12.2)
+    call wm_fit                 ; templates are authored for 640x480; on a
+                                ; smaller screen the record, not the template,
+                                ; is the truth (SPEC.md 39.7)
     mov ax, bx                  ; index = (ptr - wm_wins) / WIN_SIZE
     sub ax, wm_wins
     mov cl, WIN_SIZE
@@ -270,8 +326,10 @@ wm_fullscreen:
     xor ax, ax
     mov [bx+W_X], ax
     mov [bx+W_Y], ax
-    mov word [bx+W_W], SCREEN_W
-    mov word [bx+W_H], SCREEN_H
+    mov ax, [vid_w]
+    mov [bx+W_W], ax
+    mov ax, [vid_h]
+    mov [bx+W_H], ax
     or word [bx+W_FLAGS], WF_FULL
     call wm_front               ; raise + repaint, lock already held
     jmp .ok
@@ -502,8 +560,8 @@ wm_paint_all:
 .chrome:
     xor ax, ax                  ; desktop: 50% dither under the bar
     mov bx, MBAR_H
-    mov cx, SCREEN_W-1
-    mov dx, SCREEN_H-1
+    mov cx, [vid_wm1]
+    mov dx, [vid_hm1]
     call gfx_fill_gray
     call desk_paint             ; drive icons live on the desktop, under
                                 ; every window (SPEC.md 26)

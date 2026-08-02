@@ -1,7 +1,25 @@
 ; =============================================================================
 ; os8088 - vgabb.inc
 ;
-; Optional double buffering (SPEC.md 32). bb_init probes conventional RAM
+; The software renderer. It has two jobs, and the second one is why the
+; kernel can drive a Hercules or a CGA card at all (SPEC.md 39.3).
+;
+;   1. Optional double buffering on VGA (SPEC.md 32) - what it was written
+;      for: four planes of RAM at BB_SEG, flushed to VRAM by gfx_flush.
+;   2. THE 1BPP DRIVER. Nothing in here touches a VGA port or a latch - it
+;      was written against RAM, so it already does the ALU's work with plain
+;      CPU instructions. Point it at the framebuffer instead of a back
+;      buffer ([vid_rseg]), tell it there is one plane instead of four
+;      ([vid_planes]), and route its row advances through gfx_nextrow so
+;      they follow the banked layout, and it IS the Hercules/CGA renderer.
+;      No second driver exists.
+;
+; Hence [bb_on] means "route drawing through this module", which is
+; permanently 1 on a mono adapter, and [bb_dbl] carries the narrower "a back
+; buffer is armed and must be flushed" - the two were one flag until the
+; mono path needed the first without the second.
+;
+; bb_init probes conventional RAM
 ; via int 12h: at >= DB_MIN_KB it arms [bb_on] and from then on every public
 ; drawing entry in vga12.inc (plus font_char and ico_core) renders into a
 ; 4-plane back buffer at BB_SEG instead of VRAM, and gfx_flush copies the
@@ -24,7 +42,11 @@
 ; vga_save_vram/vga_restore_vram and draws straight to VRAM.
 ; =============================================================================
 
-bb_on           db 0            ; double buffering live right now? Off at
+bb_on           db 0            ; route drawing through this module? On a
+                                ; mono adapter vid_apply sets this to 1
+                                ; before anything draws and it never changes.
+                                ; On VGA it means what it always did:
+                                ; double buffering live right now? Off at
                                 ; boot by choice - the Control Panel's
                                 ; Display page (SPEC.md 31.3) flips it via
                                 ; bb_set, which may run at any time. Every
@@ -32,6 +54,15 @@ bb_on           db 0            ; double buffering live right now? Off at
                                 ; a flip takes effect from the next call.
                                 ; Initialized data, NOT .bss - nothing
                                 ; zeroes .bss at boot.
+
+bb_dbl          db 0            ; is TRUE double buffering armed - i.e. is
+                                ; [vid_rseg] a back buffer that has to be
+                                ; flushed? On a 1bpp adapter [bb_on] is 1 but
+                                ; this stays 0: the renderer writes the
+                                ; framebuffer directly, there is nothing to
+                                ; flush, and the Control Panel and Task
+                                ; Manager must not claim otherwise
+                                ; (SPEC.md 39.5). Initialized data, as below.
 
 bb_avail        db 0            ; did the boot RAM probe clear DB_MIN_KB?
                                 ; Set once by bb_init; gates bb_set, so on a
@@ -57,7 +88,7 @@ bb_mono         db 1            ; are all four back-buffer planes identical?
 ; -----------------------------------------------------------------------------
 ; bb_init - probe conventional RAM; arm and clear the back buffer at >= 512KB
 ;
-; Called from kmain right after vga_mode12 (the mode set cleared VRAM, so
+; Called from kmain right after vid_init (the mode set cleared VRAM, so
 ; zeroed planes start in sync) and before the first drawing call. Runs on
 ; task 0, so the int 12h BIOS call honors SPEC.md 7.
 ; in:       -
@@ -66,6 +97,9 @@ bb_mono         db 1            ; are all four back-buffer planes identical?
 ; -----------------------------------------------------------------------------
 bb_init:
     push ax
+    cmp byte [vid_mono], 0      ; a 1bpp adapter has no back buffer to offer:
+    jne .done                   ; [bb_on] is already 1 and means something
+                                ; else entirely (SPEC.md 39.5)
     int 0x12                    ; AX = conventional memory, KB
     cmp ax, DB_MIN_KB
     jb .done                    ; too small: the Control Panel will not offer
@@ -151,12 +185,14 @@ bb_set:
     jne .out                    ; already on
     call bb_sync
     call bb_dirty_reset
-    mov byte [bb_on], 1         ; publish last: every bb_* entry keys off it
+    mov byte [bb_dbl], 1        ; publish last: every bb_* entry keys off
+    mov byte [bb_on], 1         ; bb_on, and gfx_flush off bb_dbl
     jmp .out
 .off:
     cmp byte [bb_on], 0
     je .out                     ; already off
     call gfx_flush              ; land anything still pending in VRAM
+    mov byte [bb_dbl], 0
     mov byte [bb_on], 0
 .out:
     pop ax
@@ -211,6 +247,8 @@ bb_dirty_reset:
 ; clobbers: flags only
 ; -----------------------------------------------------------------------------
 bb_dirty:
+    cmp byte [bb_dbl], 0        ; nothing is flushed on mono, so nothing needs
+    je .b_ok                    ; tracking - and this runs per fill and glyph
     cmp ax, [bb_dx1]
     jge .l_ok
     mov [bb_dx1], ax
@@ -260,8 +298,8 @@ bb_dirty_rect:
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 gfx_flush:
-    cmp byte [bb_on], 0
-    je .off
+    cmp byte [bb_dbl], 0        ; NOT [bb_on]: on mono that is 1 and there is
+    je .off                     ; no back buffer to copy from
     push ax
     push bx
     push cx
@@ -403,19 +441,17 @@ bb_rect:
     jne .planes
     mov byte [bb_altm], 0xFF    ; gray: AA <-> 55 each row
 .planes:
-    mov dx, BB_SEG              ; DX = plane segment
-    mov bl, [gfx_color]         ; BL = color bits, consumed LSB-first
-    mov bh, 4                   ; BH = plane counter
+    mov dx, [vid_rseg]          ; DX = plane segment - the back buffer on VGA,
+    mov bl, [gfx_color]         ; the framebuffer itself on mono (SPEC.md 39.3)
+    mov bh, [vid_planes]        ; BH = plane counter: 4 or 1
 .plane:
     mov es, dx
     cmp byte [bb_mode], BBM_SOLID
     jne .go
-    shr bl, 1                   ; solid: 00/FF from this plane's color bit
-    sbb al, al
-    mov [bb_pat], al
+    call bb_ink                 ; solid: this pass's 00/FF byte
 .go:
     call bb_plane_op
-    add dx, BB_PLANE_PARA
+    add dx, [vid_rpara]
     dec bh
     jnz .plane
 .done:
@@ -427,6 +463,40 @@ bb_rect:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; bb_ink - internal: solid mode's byte pattern for the pass about to run
+;
+; VGA: the plane's own bit of [gfx_color], consumed LSB-first out of BL -
+; exactly what the open-coded shr/sbb did before.
+;
+; Mono: gfx_ink's reduction of the colour. Black and white become 00/FF; the
+; middle greys become the 50% dither, which costs nothing extra because
+; bb_rect has ALREADY put the row-parity AA/55 byte in [bb_pat] - arming
+; [bb_altm] is all it takes to make BBM_GRAY's machinery do the work
+; (SPEC.md 39.4).
+;
+; in:       BL = the colour's remaining bits (VGA path only)
+; out:      [bb_pat], possibly [bb_altm]; BL shifted on the VGA path
+; clobbers: AL, flags
+; -----------------------------------------------------------------------------
+bb_ink:
+    cmp byte [vid_mono], 0
+    jne .mono
+    shr bl, 1
+    sbb al, al
+    mov [bb_pat], al
+    ret
+.mono:
+    mov al, [gfx_color]
+    call gfx_ink
+    cmp al, 1
+    je .dither
+    mov [bb_pat], al
+    ret
+.dither:
+    mov byte [bb_altm], 0xFF    ; keep bb_rect's AA/55 and alternate it
     ret
 
 ; -----------------------------------------------------------------------------
@@ -465,7 +535,7 @@ bb_plane_op:
     stosb                       ; odd interior width: one tail byte
 .ieven:
     pop di
-    add di, ROW_BYTES
+    call gfx_nextrow
     xor ah, [bb_altm]           ; gray alternates, solid stays
     dec si
     jnz .irow
@@ -478,7 +548,7 @@ bb_plane_op:
     inc di
     loop .xbyte
     pop di
-    add di, ROW_BYTES
+    call gfx_nextrow
     dec si
     jnz .xrow
 .out:
@@ -510,13 +580,13 @@ bb_col:
     and [es:di], bl
     or  [es:di], al
     xor ch, cl
-    add di, ROW_BYTES
+    call gfx_nextrow
     dec dx
     jnz .row
     jmp .out
 .xrow:
     xor [es:di], ah
-    add di, ROW_BYTES
+    call gfx_nextrow
     dec dx
     jnz .xrow
 .out:
@@ -550,8 +620,8 @@ bb_fill_pat:
     jc .done
     call bb_dirty_rect
     call vga_pat_stage          ; vga_patbuf <- the 8 bytes at [gfx_pat]
-    mov dx, BB_SEG              ; DX = plane segment
-    mov bp, 4                   ; BP = plane counter
+    mov dx, [vid_rseg]          ; DX = plane segment (see bb_rect)
+    mov bp, [vid_planes_w]      ; BP = plane counter
 .plane:
     mov es, dx
     mov di, [vga_off]
@@ -583,14 +653,14 @@ bb_fill_pat:
     stosb
 .ieven:
     pop di
-    add di, ROW_BYTES
+    call gfx_nextrow
     inc bx
     and bx, 7
     dec bp
     jnz .irow
     pop bp
 .next:
-    add dx, BB_PLANE_PARA
+    add dx, [vid_rpara]
     dec bp
     jnz .plane
 .done:
@@ -627,7 +697,7 @@ bb_patcol:
     mov [es:di], al
     inc bx
     and bx, 7
-    add di, ROW_BYTES
+    call gfx_nextrow
     dec si
     jnz .row
     pop si
@@ -715,7 +785,7 @@ bb_xfer:
 .geom:
     mov bp, [vga_span]
     inc bp                      ; BP = bytes per row
-    mov bx, BB_SEG
+    mov bx, [vid_rseg]
 .plane:
     mov ax, [vga_off]           ; this plane's walking offset
     mov dx, [vga_rows]
@@ -729,8 +799,10 @@ bb_xfer:
 .srow:
     mov cx, bp
     rep movsb                   ; buffer DI advances contiguously
-    add si, ROW_BYTES
     sub si, bp
+    xchg si, di                 ; gfx_nextrow walks DI by contract, and here
+    call gfx_nextrow            ; the framebuffer pointer is SI
+    xchg si, di
     dec dx
     jnz .srow
     pop si
@@ -744,16 +816,16 @@ bb_xfer:
 .rrow:
     mov cx, bp
     rep movsb
-    add di, ROW_BYTES
     sub di, bp
+    call gfx_nextrow
     dec dx
     jnz .rrow
     pop di
 .pnext:
     pop es
     pop ds
-    add bx, BB_PLANE_PARA
-    cmp bx, BB_SEG + 4*BB_PLANE_PARA
+    add bx, [vid_rpara]         ; nonzero even at one plane, or this loop
+    cmp bx, [vid_rend]          ; would never terminate
     jb .plane
 .done:
     pop bp
