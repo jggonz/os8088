@@ -132,6 +132,10 @@ far_init:
     FARK task_yield             ; the fake int frame it builds takes CS from
                                 ; the wrapper, i.e. KERNEL_SEG, so a far
                                 ; caller resumes correctly through the retf
+    FARK mem_claimed_kb         ; taskmgr.inc RAM figure (SPEC.md 28/42)
+    FARK mem_kernel_kb
+    FARK mem_avail              ; ctrl.inc Display page: is there room for a
+                                ; back buffer? (SPEC.md 31.3/42)
     FARK inst_find_kind         ; ctrl.inc Date/Time page (SPEC.md 31.5/37)
     FARK clk_snap
     FARK clk_fld_str

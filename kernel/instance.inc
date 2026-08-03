@@ -73,10 +73,10 @@ inst_kinds:                     ; indexed by KIND_* * 16; caps are binding
     dw app_tpl_bounce, app_bounce_task, app_ball_pool, 8,   app_bounce_kinit, app_ttl_bounce
     dw 0
     db 10, 0                    ; Bounce: 10 x 8-byte ball state, one task each
-    dw fm_tpl,         0,               fm_pool,       16,  fm_kinit,         fm_ttl
+    dw fm_tpl,         0,               fm_pool,       18,  fm_kinit,         fm_ttl
     dw 0
     db VIEW_SLOTS, WF_SIZABLE   ; Disk: FOUR windows, each with its own
-                                ; 16-byte state block and its own VIEW_SEG
+                                ; 18-byte state block and its own claimed
                                 ; listing cache; resizable (SPEC.md 22/22.1).
                                 ; The cap, VIEW_SLOTS and fm_pool's size are
                                 ; one number wearing three hats.
@@ -524,7 +524,8 @@ app_close_win:
     jne .tasked
     mov byte [di+I_STATE], 2    ; dying: lock-held readers skip it from here
     call snd_release_rec        ; free every sound grant before the record
-                                ; goes (SPEC.md 29.4/34.3)
+    call mem_free_rec           ; goes (SPEC.md 29.4/34.3), and every heap
+                                ; claim with it (SPEC.md 42.4)
     call wm_destroy             ; frees the wm slot + wm_owner, repaints
     mov word [di+I_WIN], 0
     mov byte [di+I_STATE], 0    ; record (and any package region) free
@@ -576,7 +577,8 @@ inst_restore:
 ; -----------------------------------------------------------------------------
 inst_task_die:
     call snd_release_rec        ; free every sound grant before the record
-                                ; goes (SPEC.md 29.4/34.3)
+    call mem_free_rec           ; goes (SPEC.md 29.4/34.3), and every heap
+                                ; claim with it (SPEC.md 42.4)
     call gfx_lock
     mov bx, [di+I_WIN]
     call wm_destroy             ; frees the wm slot + wm_owner, repaints
@@ -779,6 +781,7 @@ inst_pkg_alive:
     jmp inst_task_die           ; never returns
 .winless:
     call snd_release_rec        ; the inst_task_die order, minus the window
+    call mem_free_rec
     mov bx, di                  ; no window, but the record is real: release
     jmp task_exit               ; it anyway (I_STATE is offset 0), or its
                                 ; region, dock tile and tm row leak for the

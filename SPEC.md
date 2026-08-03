@@ -75,47 +75,60 @@ pre-empted background task, updating live while the user types or drags).
 
 ## 2. Memory map
 
+**A ladder, not a set of addresses.** Every region is defined as "the one
+below it, plus its size", so changing a size slides everything above it and
+there are no gaps to lose track of. The sizes are the only numbers, and all
+of them live in one block at the top of `kernel.asm`.
+
 | linear        | segment | contents                                          |
 |---------------|---------|----------------------------------------------------|
-| 0x00500       | —       | free; boot stack grows down from 0x7C00 (dead after handoff) |
-| 0x00600       | 0x0060  | `FAR_SEG` — far code (§33), copied here by `far_init`; blob ≤ 0x2A00 bytes (§15.1 guard 5) |
-| 0x03000       | 0x0300  | `FAT_SEG` — mount-time FAT snapshot, up to `DSK_FAT_SECS`×512 bytes, via **ES only** (§18) |
-| 0x07C00       | 0000    | boot sector (dead once it jumps to the kernel)     |
-| 0x08000       | 0x0800  | `LOW_SEG` — `.lowbss`: disk buffers, then task stacks (§2.1) |
-| 0x0FFFE       | 0x0800  | `STK0_TOP` — task 0's stack top, grows down        |
-| 0x10000       | 0x1000  | kernel: code, data, .bss                           |
-| 0x1B000       | 0x1000  | `APP_LOAD_OFF` — package pool, 19.5KB: multi-instance, sector-granular first-fit (§20/§21) |
-| 0x1FE00       | 0x1000  | unused: the pool's exclusive end would not fit a 16-bit immediate at 0x10000 |
-| 0x20000       | 0x2000  | `SAVE_SEG` — save-under heap (menus), raw, via ES; **extent pinned to 0x20000..0x2BFFF** (§2.2) |
-| 0x2C000       | 0x2C00  | `VIEW_SEG` — per-window file-manager listing cache, 4 × 4KB slots (§22.1); raw, via **ES only** |
-| 0x40000       | 0x4000  | `BB_SEG` — double-buffer back buffer, 4 planes × 0x9600 bytes (§32); touched only while the Control Panel's Display page has it switched on, which needs a colour adapter and conventional RAM ≥ `DB_MIN_KB`. **When either is missing, `apps/paint` claims this block instead of 0x66000** (§41), because nothing else in the tree can ever touch it |
-| 0x66000       | 0x6600  | **not kernel memory**: `apps/paint` claims from here up to the top of conventional memory (canvas, undo image, clipboard, scratch), sized from int 12h — see §41 and `docs/PAINT-NOTES.md`. On a machine where the back buffer above can never be armed it starts at `BB_SEG` instead, 150KB lower. Nothing in the kernel may take 0x66000..0x9FFFF without retiring that claim |
+| 0x00000       | 0x0000  | IVT + BIOS data area — theirs, 1,536 bytes         |
+| 0x00600       | `FAR_SEG` | far code (§33), copied here by `far_init`; `FAR_PARA` paragraphs reserved (§15.1 guard 5) |
+| 0x03000       | `FAT_SEG` | mount-time FAT snapshot, `DSK_FAT_SECS`×512 bytes, via **ES only** (§18) |
+| 0x06000       | `LOW_SEG` | `.lowbss`: disk buffers + task stacks, then task 0's stack growing down from `STK0_TOP` (§2.1) |
+| 0x10000       | `KERNEL_SEG` | kernel: code, data, .bss — ceiling `KERN_MAX` (0xB000 = 45,056 B) |
+| 0x1B000       | 0x1000  | `APP_LOAD_OFF` — package pool, 19.5KB, inside the kernel segment (§20/§21) |
+| 0x20000       | `HEAP_SEG` | **the claim heap (§42)** — everything from here to the top of conventional memory, handed out on demand |
 | 0xA0000       | 0xA000  | VGA planar framebuffer, 80 bytes/row               |
 | 0xB0000       | 0xB000  | Hercules framebuffer, 4 banks × 0x2000, 90 bytes/row (§39) — mono adapters only |
 | 0xB8000       | 0xB800  | CGA framebuffer, 2 banks × 0x2000, 80 bytes/row (§39) — mono adapters only |
 
-Kernel image + .bss must fit below offset **`APP_LOAD_OFF`** (0xB000);
-`kernel.asm` ends with build-time assertions (§15.1). Loaded programs occupy
-kernel-segment offsets 0xB000..0xFDFF so they share CS and DS with the
-kernel: their paint/key/click procs are ordinary near pointers. Works in
-256KB of RAM: the back buffer is the only thing above 0x40000, and a machine
-that fails the §32 RAM probe never touches it — everything below 0x40000 is
-identical in both modes.
+**Above `HEAP_SEG` nothing has a fixed address.** There used to be four
+pinned blocks up there — `SND_SEG` (64KB), `SAVE_SEG` (48KB), `VIEW_SEG`
+(16KB) and `BB_SEG` (150KB) — reserved from boot whether or not a byte of
+each was ever written, 278KB of a 256KB floor machine's address space
+spoken for by constants. The sound segment went with the sound cards (§34);
+the other three became claims (§42), taken when they are used and released
+when they are not. A package that wants memory outside its own region asks
+the same allocator, which is what retires `apps/paint`'s unsanctioned grab
+of linear 0x66000 (§41).
+
+The floor machine is 256KB and the ladder fits it with room: BIOS 1.5KB,
+low memory 62.5KB, the kernel segment 64KB (45KB budget + the pool), and
+128KB of heap.
 
 ### 2.1 Low memory
 
 Linear 0x00600..0x0FFFF — ~62KB between the BIOS data area and the kernel
 image — is free on every machine once the boot sector has handed off.
 Nothing the kernel keeps there needs to be addressable through DS, which is
-the whole point: it is 24KB the kernel's own 64KB window does not spend.
+the whole point: it is memory the kernel's own 64KB window does not spend.
 
-`LOW_SEG` (0x0800) holds the `.lowbss` section, addressed through **SS** (the
-task stacks) or **ES** (the disk buffers), never DS:
+The three regions are a ladder (§2): `FAR_SEG` + `FAR_PARA` paragraphs is
+`FAT_SEG`; `FAT_SEG` + `FAT_PARA` is `LOW_SEG`; and `LOW_LIMIT` — the offset
+at which `LOW_SEG` reaches `KERNEL_SEG:0000` — falls out of where `LOW_SEG`
+landed. Guard 7 (§15.1) proves the second link has no gap.
+
+`LOW_SEG` holds the `.lowbss` section, addressed through **SS** (the task
+stacks) or **ES** (the disk buffers), never DS:
 
 - `sch_stacks` — 11 × 1,536 bytes, task slots 1..11 (§8).
 - Task 0 runs on the same segment at `STK0_TOP`, growing down toward the top
   of `.lowbss`. All tasks share one SS, so a switch is still an SP swap and
-  SS is not part of the saved frame.
+  SS is not part of the saved frame. **This is the reservation that lets a
+  built-in app run at all**: About, Disk, the Control Panel and the Task
+  Manager have no task of their own — they execute inside window callbacks
+  on the UI task, on this stack.
 - `disk_dir` (the synthesized directory cache), `disk_icons` (the harvested
   icon cache) and `dsk_secbuf` (sector scratch) — written through ES
   (int 13h ES:BX, or `rep movsw` from kernel scratch at mount, §18–19),
@@ -124,30 +137,30 @@ task stacks) or **ES** (the disk buffers), never DS:
   path's staging sector (§18.4): the directory sector being
   read-modify-written, and the zero-padded final sector of a file.
 
-`LOW_SEG:0x8000` **is** `KERNEL_SEG:0x0000`. Every `LOW_SEG` offset must stay
-strictly below `LOW_LIMIT`, and the §15.1 assertions keep task 0 8KB of
+`LOW_SEG:LOW_LIMIT` **is** `KERNEL_SEG:0x0000`. Every `LOW_SEG` offset must
+stay strictly below it, and the §15.1 assertions keep task 0 8KB of
 clearance above `.lowbss`.
 
-`FAR_SEG` (0x0060) holds the `.fartext` blob — see §33.
+`FAR_SEG` holds the `.fartext` blob — see §33.
 
-`FAT_SEG` (0x0300) holds the mount-time FAT snapshot: up to `DSK_FAT_SECS`
-(= 32) sectors, 16,384 bytes, rewritten from FAT1 (or the FAT2 fallback,
-§18.3) on **every** mount — no cross-mount state survives. Reached through
-**ES only**, never DS: `dsk_next_clus` is the
-single reader and `dskw_setfat` (§18.4) the single writer, and int 13h
-moves it via ES:BX only at mount (in) and at a FAT flush (out). Internal
-map, pinned:
+`FAT_SEG` holds the mount-time FAT snapshot: up to `DSK_FAT_SECS` (= **24**)
+sectors, 12,288 bytes, rewritten from FAT1 (or the FAT2 fallback, §18.3) on
+**every** mount — no cross-mount state survives. Reached through **ES
+only**, never DS: `dsk_next_clus` is the single reader and `dskw_setfat`
+(§18.4) the single writer, and int 13h moves it via ES:BX only at mount (in)
+and at a FAT flush (out). The whole region is the snapshot; there is no
+reserve, and `FAT_PARA` is derived from `DSK_FAT_SECS` so the two can never
+disagree.
 
-```
-FAT_SEG:0x0000..0x3FFF   dsk_fat — FAT snapshot, up to 32 sectors
-FAT_SEG:0x4000..0x4FFF   free (4,096 B reserve, unowned)
-```
+**Why 24 and not 32.** `DSK_FAT_SECS` is an *acceptance* threshold, not a
+buffer size: §18.2 rule 10 refuses to mount a volume whose declared FAT is
+larger, before a byte of it is read. 32 accepted four sectors more than any
+self-consistent volume can declare — the largest FAT12 is 12 sectors and
+the largest FAT16 reachable on the 2.88MB test geometry is 23 — so the top
+8KB could only ever have held a hostile BPB's padding. Every geometry this
+project builds still mounts: 360KB = 2 sectors, 1.44MB = 9, 2.88MB = 23.
 
-Linear layout: the `.fartext` blob ends by 0x02FFF (§15.1 guard 5 fences
-it), `FAT_SEG` spans 0x03000..0x07FFF, `LOW_SEG` begins at 0x08000.
-
-The full plan this came from, including the step still on the shelf, is
-`docs/MEMORY-PLAN.md`.
+The full plan this came from is `docs/MEMORY-PLAN.md`.
 
 ### 2.2 SND_SEG — retired
 
@@ -162,41 +175,50 @@ Nothing may quietly re-claim 0x30000 by name. The block is part of the
 one heap §42 hands out, like every other free paragraph above the package
 pool, and the only way to hold memory there is to claim it.
 
-### 2.3 VIEW_SEG — the file-manager view cache (§22.1)
+### 2.3 The file-manager view cache (§22.1)
 
-Linear 0x2C000..0x2FFFF, `VIEW_SEG` = 0x2C00, four 4,096-byte slots at
-segments 0x2C00 / 0x2D00 / 0x2E00 / 0x2F00 (slot *i* is
-`VIEW_SEG + i·VIEW_SLOT_SEG`, so the segment is three byte-ops, no `mul` and
-no table). Reached through **ES only**, never DS, and read only through
+Each open Disk window owns a **claim** of `VIEW_KB` (3KB) — 1KB of
+synthesized directory entries plus 2KB of harvested icons, a byte-for-byte
+image of `disk_dir` + `disk_icons` (§19). It is reached through a segment
+the window's state block carries (`FS_VSEG`), read only through
 `fmv_get_dir` / `fmv_get_icon`, which stage one entry back into the kernel
-segment — the `dsk_get_dir` idiom of §2.1 verbatim. Slot map, pinned:
+segment — the `dsk_get_dir` idiom of §2.1 verbatim. Slot map:
 
 ```
-slot:0x0000..0x03FF   32 × 32B  image of disk_dir   (§19 synthesized entries)
-slot:0x0400..0x0BFF   32 × 64B  image of disk_icons (§19 harvested icons)
-slot:0x0C00..0x0FFF   free (1,024 B reserve, unowned)
+cache:0x0000..0x03FF   32 × 32B  image of disk_dir   (§19 synthesized entries)
+cache:0x0400..0x0BFF   32 × 64B  image of disk_icons (§19 harvested icons)
 ```
 
-Each slot belongs permanently to one file-manager state-pool slot (§22.1's
-`FS_IDX`), so no allocator exists and no slot is ever shared. 16KB buys the
-property that a background file-manager window paints from memory: three
-windows on three folders cost **zero** floppy I/O per repaint, and
-`wm_paint_all` (which has no clip rect and runs on every window move) would
-otherwise mean three full mounts per drag pass, under the gfx lock.
+What it buys is unchanged: a background file-manager window paints from
+memory, so `wm_paint_all` — which has no clip rect and runs on every window
+move — costs zero floppy I/O per repaint. What changed is that it is 3KB
+per **open window** instead of four 4KB slots reserved from boot, that the
+Task Manager bills it to the window that holds it, and that the instance's
+teardown (§42.4) releases it with no close hook in `files.inc` at all.
+
+**The no-cache fallback is a real path, not a panic.** `fm_kinit` takes the
+claim; if the heap cannot fund 3KB the window still opens with
+`FS_VSEG` = 0 and every reader falls through to the global mount snapshot in
+`LOW_SEG`. That is correct — it is the same data — and merely costs a
+re-mount when another window has moved the globals. `VIEW_SLOTS` (4) stays
+the Disk kind's `KD_CAP`.
 
 ## 3. Global constants (defined once in kernel.asm, used everywhere)
 
 ```nasm
 KERNEL_SEG   equ 0x1000
-SAVE_SEG     equ 0x2000
 VGA_SEG      equ 0xA000
-; low memory (§2.1)
-FAR_SEG      equ 0x0060      ; linear 0x00600 - far code (.fartext, §33)
-FAT_SEG      equ 0x0300      ; linear 0x03000 - FAT snapshot, via ES ONLY (§18)
-DSK_FAT_SECS equ 32          ; resident FAT cap, sectors (16,384 bytes)
-LOW_SEG      equ 0x0800      ; linear 0x08000 - .lowbss: stacks + disk buffers
-LOW_LIMIT    equ 0x8000      ; LOW_SEG:LOW_LIMIT IS KERNEL_SEG:0
-STK0_TOP     equ 0x7FFE      ; task 0's stack top
+; the memory ladder (§2) - each rung is the one below plus its size
+FAR_SEG      equ 0x0060                ; linear 0x00600 - far code (§33)
+FAR_PARA     equ 0x02A0                ; 10,752 bytes reserved for the blob
+FAT_SEG      equ FAR_SEG + FAR_PARA    ; FAT snapshot, via ES ONLY (§18)
+DSK_FAT_SECS equ 24                    ; resident FAT cap, sectors (12,288 B)
+FAT_PARA     equ DSK_FAT_SECS * 32     ; 512 bytes = 32 paragraphs
+LOW_SEG      equ FAT_SEG + FAT_PARA    ; .lowbss: stacks + disk buffers
+LOW_LIMIT    equ (KERNEL_SEG - LOW_SEG) * 16   ; LOW_SEG:LOW_LIMIT IS
+STK0_TOP     equ LOW_LIMIT - 2                 ; KERNEL_SEG:0
+KERN_MAX     equ 0xB000                ; the kernel's own ceiling (45,056 B)
+HEAP_SEG     equ KERNEL_SEG + 0x1000   ; the claim heap (§42)
 ; VGA reference geometry, and the initializers of the live block (§39.2);
 ; the live screen is [vid_w] / [vid_h] / [vid_stride]
 SCREEN_W     equ 640
@@ -212,16 +234,12 @@ CDGRAY  equ 8
 ; loadable programs (§20)
 APP_LOAD_OFF equ 0xB000      ; where packages load (kernel segment offset)
 APP_MAX_SIZE equ 0x4E00      ; image + bss budget, 0xB000..0xFDFF
-; double buffering (§32)
-BB_SEG        equ 0x4000     ; back buffer base segment (plane 0)
+; double buffering (§32) - a heap claim, so there is no BB_SEG
 BB_PLANE_PARA equ 0x960      ; paragraphs per plane (0x9600 bytes = 480 rows × 80)
-DB_MIN_KB     equ 500        ; int 12h floor: double-buffer only at ≥ 500KB
-; sound (§34, from Phase 1)
+BB_KB         equ 150        ; what bb_set claims to arm it
 ; the file manager's per-window view cache (§2.3/§22.1)
-VIEW_SEG      equ 0x2C00     ; linear 0x2C000-0x2FFFF, ES only, 4 x 4KB slots
-VIEW_SLOTS    equ 4          ; = the Disk kind's KD_CAP (§29.3)
-VIEW_SLOT_SEG equ 0x0100     ; 4,096 bytes per slot, in paragraphs
-VIEW_SEG_KB   equ 16         ; what it adds to the Task Manager RAM figure (§28)
+VIEW_SLOTS    equ 4          ; max Disk windows = the kind's KD_CAP (§29.3)
+VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 ```
 
 ## 4. Module files and ownership
@@ -240,6 +258,7 @@ VIEW_SEG_KB   equ 16         ; what it adds to the Task Manager RAM figure (§28
 | `kernel/clock.inc`  | system clock (§37): hardware RTC probe/read/write (int 1Ah), the wall-clock date + time advanced from `[ticks]`, field editing and formatting — prefix `clk_` |
 | `kernel/wm.inc`     | window records, z-order, frames, hit test, paint-all, `wm_owner` side table |
 | `kernel/instance.inc` | instance table: records, kind descriptors, launch/close lifecycle (§29) |
+| `kernel/memory.inc` | the claim heap (§42): the map, `mem_claim`/`mem_free`/`mem_avail`, the teardown fence — prefix `mem_` |
 | `kernel/menu.inc`   | menu bar (System menu + the active application's name and menus), runtime bar layout, pull-down tracking, Locator's own menu set (§12/§12.2/§12.3) |
 | `kernel/ui.inc`     | UI task: event pump, keyboard poll, drag, dispatch      |
 | `kernel/apps.inc`   | built-in app kinds: About, Clock, Bounce — state pools, kinit procs, per-instance tasks |
@@ -6694,3 +6713,121 @@ allow, from 32x16 up, and everything else follows from that:
   during one: the "Loading..." toast a file dialog's completion callback puts up
   is followed by one `pt_wait`, or the buffered machine flushes it only after
   the load it was announcing.
+
+## 42. memory.inc — the claim heap
+
+Everything above the package pool, in one map the kernel owns.
+`HEAP_SEG` (§2/§3) to the top of conventional memory as int 12h reports it;
+KB-granular, segment-aligned blocks; a record per live claim; and one rule
+that makes the whole thing worth having — **a claim is taken when it is
+used and released when it is not**.
+
+### 42.1 Why it exists
+
+Before it, memory outside the pool was carved up by *constants*: `SND_SEG`
+(64KB), `SAVE_SEG` (48KB), `VIEW_SEG` (16KB), `BB_SEG` (150KB). Each was
+spoken for from boot whether or not a byte was ever written, none of them
+could be reclaimed, and two of them were mostly empty in every configuration
+that ever shipped. On the 256KB floor machine that is 278KB of address
+space promised out of 256KB — the reason `docs/RAM-FIGURE-AUDIT.md` found
+the Task Manager reporting 145K on a machine that was really 224K committed.
+
+And a package that needed more than its 19.5KB region had **no way to ask**.
+`apps/paint` therefore took linear 0x66000 unilaterally and read
+`DB_MIN_KB` — a kernel policy constant — to guess whether the back buffer
+would ever want that block (`docs/PAINT-NOTES.md` calls this "the least
+defensible thing in this file"). One allocator retires the whole class of
+problem: two packages cannot pick the same address, an app cannot outlive
+its claim, a kernel feature and a package cannot both believe they own a
+block, and the Task Manager can bill every byte to whoever holds it.
+
+**The kernel owns the map, not the memory.** There is no per-access gating:
+a claim is a segment and a length, and what the holder does inside it is its
+own business, exactly as with a package's own region. Gating individual
+accesses would need hardware this machine does not have.
+
+### 42.2 The map
+
+`mem_tab` — `MEM_MAX` (16) records × 6 bytes, kernel `.bss`:
+
+```
+MC_SEG   0  word  base segment, 0 = free record
+MC_PARA  2  word  size in paragraphs (KB << 6)
+MC_OWN   4  word  owner: 0..INST_MAX-1 = instance slot;
+                  0xFF00 | tag = the kernel's own (MEM_K_SAVE, MEM_K_BB)
+```
+
+The record **is** the allocator, the `inst_tab` idiom of §29.2 rule 7:
+occupancy is derived by walking the table, so freeing is one word store and
+no free list can disagree with reality. First fit, lowest address, with the
+`ld_alloc` restart-past-the-overlap scan of §21.
+
+The kernel's own claims, and what each replaced:
+
+| tag / owner | KB | taken by | replaces |
+|-------------|----|----------|----------|
+| `MEM_K_SAVE` | `MENU_SAVE_KB` = 16 | `menu_init`, held for the session | `SAVE_SEG`, 48KB pinned |
+| `MEM_K_BB` | `BB_KB` = 150 | `bb_set` when the Display page arms it; **freed when it is switched off** | `BB_SEG`, 150KB pinned |
+| the Disk instance's slot | `VIEW_KB` = 3 | `fm_kinit`, per open window | `VIEW_SEG`, 4 × 4KB pinned |
+
+Each has a documented "then don't" path, because a claim can be refused:
+the save-under falls back to repainting on menu dismissal (§12.4), the back
+buffer stays off and the Control Panel says **"Not Enough Ram"** (§31.3),
+and a Disk window reads the global mount snapshot instead of a cache
+(§2.3). None of them is a boot failure.
+
+**Concurrency (binding).** Every operation runs inside one
+`pushf`/`cli` … `popf` window — the `task_spawn` precedent (§8). Claims are
+made from the UI task in practice, but `mem_free_owner` runs on a dying
+package's own worker task inside `inst_task_die` (§29.4), so the two really
+can meet.
+
+### 42.3 The API (§20.3 slots)
+
+```
+osapi_mem_claim   AX = KB wanted, BX = YOUR window ptr
+                  out CF=0 and DX = base segment; CF=1 refused
+osapi_mem_free    DX = the segment you were given, BX = YOUR window ptr
+                  out CF=0 released; CF=1 not yours / no such claim
+osapi_mem_avail   out AX = largest free run in KB, BX = total free KB
+```
+
+`BX` is the **ownership fence**, the same one `OSAPI_TASK_SPAWN` uses
+(§20.6): the window must be a plausible `wm_wins` pointer, owned by a live
+instance, and that instance becomes the claim's owner. A borrowed window
+pointer buys nothing — it would spend, and could only free, that instance's
+memory, and the loader would then free it anyway at the *other* instance's
+teardown.
+
+`osapi_mem_avail` is what a package sizes itself from. `apps/paint` used to
+divide an int 12h figure and hope; asking the allocator is the difference
+between "how much RAM does this machine have" and "how much can I have".
+
+Rules for a package (none enforceable, all binding):
+
+1. **Claim at startup, from a window callback or your entry proc.** The
+   fence needs your window to exist and — for the entry proc — the loader
+   publishes your instance before it calls you (§21), so both work.
+2. **Handle refusal.** CF=1 is a normal outcome on a small machine. Give up
+   a feature, or put up a notice and stay running; do not read memory you
+   were not given.
+3. **Never assume a claim's address.** It is wherever the map had room.
+4. **You do not have to free it.** Teardown does (§42.4). Freeing early is
+   how you hand memory back mid-session.
+
+### 42.4 Teardown
+
+`mem_free_rec` sits beside `snd_release_rec` at all three §29.4 teardown
+sites — `app_close_win`'s task-less path, `inst_task_die`, and
+`inst_pkg_alive`'s window-less case — and releases every claim the dying
+instance holds. That is what makes rule 4 above true, and it is the reason
+`files.inc` needs no close hook for its view cache: the Disk window's claim
+is owned by the Disk *instance*, and the instance's death frees it.
+
+### 42.5 What the Task Manager shows
+
+The heap is the RAM figure's fourth term (§28), and unlike the constants it
+replaced it is *live*: arm double buffering and the figure rises 150K, close
+Paint and it falls by whatever Paint held. `mem_claimed_kb` sums every
+claim; `mem_kernel_kb` sums only the `0xFFxx`-tagged ones, so a package's
+claim lands on the package's row rather than on System's.

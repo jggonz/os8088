@@ -84,7 +84,20 @@ MENU_TITLE_PAD equ 12           ; per-title cell padding (6px each side)
 MENU_TEXT_Y equ 6               ; title text row (8px glyphs in a 19px bar)
 MENU_LOGO_Y equ 4               ; logo glyph top row (11px tall)
 MENU_ITEM_H equ 16              ; pull-down item cell height, px
-MENU_POPMAX equ 16              ; items a context menu may have (SPEC.md 12.4)
+MENU_POPMAX equ 11              ; items ANY pull-down may have (SPEC.md 12.4)
+
+; The save-under bound (SPEC.md 2.2/42.2). gfx_save costs
+; planes x rows x (byte span + 1), and until these two clamps existed
+; nothing in the kernel bounded either factor: a package's menu set could
+; declare items of any width and any count, and the heap it wrote into was
+; 48KB of pinned address space chosen to be "probably enough". Now the
+; pull-down is clamped to MENU_MAXW pixels wide and MENU_POPMAX items tall,
+; strings are TRUNCATED to fit (menu_trunc - a clamp that only narrowed the
+; rect would leave glyphs outside it that the restore can never erase), and
+; kernel.asm asserts the product against MENU_SAVE_KB at build time.
+MENU_MAXW   equ 160             ; widest pull-down, px (frame + 8px padding)
+MENU_MAXCH  equ (MENU_MAXW - 16) / 8    ; ...so 18 glyphs of item text
+MENU_SAVE_KB equ 16             ; the claim menu_init takes for the save-under
                                 ; - 16 cells plus frame is 258px, which still
                                 ; fits under the bar on a 480-row screen
 
@@ -105,11 +118,22 @@ MENU_CLK_HX equ MENU_CLK_X - 6              ; 434: hit band left edge, and the
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 menu_init:
+    push ax
     push bx
+    push dx
     xor bx, bx
     mov [menu_win], bx
+    mov word [menu_sseg], 0
     call menu_relayout
+    mov ax, MENU_SAVE_KB        ; the save-under buffer, claimed once and
+    mov bx, MEM_K_SAVE          ; held for the session (SPEC.md 42.2)
+    call mem_claim
+    jc .nosave                  ; menu_drop falls back to repainting
+    mov [menu_sseg], dx
+.nosave:
+    pop dx
     pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -467,6 +491,10 @@ menu_track:
     mov bx, [si + MB_ITEMS]
     mov [menu_iptr], bx
     mov cx, [si + MB_NITEM]
+    cmp cx, [vid_popmax]        ; the height clamp a bar menu never had: a
+    jbe .cnt_ok                 ; package's set is not trusted for count any
+    mov cx, [vid_popmax]        ; more than for width (SPEC.md 12.2/2.2)
+.cnt_ok:
     mov [menu_cnt], cx
     call menu_widest            ; AX = widest item text, px (BX/CX in)
     add ax, 16
@@ -612,8 +640,12 @@ menu_popup:
 ; gfx_flush (it would otherwise stay invisible for as long as the button is
 ; held), while the item highlight is a transient overlay drawn VRAM-direct
 ; like the cursor. Only one menu is ever open - both callers run on the UI
-; task and both are driven by a held button - so SAVE_SEG:0 needs no
-; allocator.
+; task and both are driven by a held button - so the one save-under buffer
+; needs no allocator of its own. It IS a heap claim (SPEC.md 42.2), taken
+; once at menu_init and held for the session: MENU_SAVE_KB, bounded at build
+; time by the clamps below and asserted in kernel.asm. If the claim failed -
+; only possible on a machine whose heap cannot spare 16KB at boot - the save
+; is skipped and the restore repaints instead, which is slower and correct.
 ; -----------------------------------------------------------------------------
 menu_drop:
     push bx
@@ -623,8 +655,10 @@ menu_drop:
     push di
     push es
 
-    ; --- save the pixels under the menu to SAVE_SEG:0 -------------------------
-    mov ax, SAVE_SEG
+    ; --- save the pixels under the menu to the claimed buffer -----------------
+    mov ax, [menu_sseg]
+    or ax, ax
+    jz .nosave                  ; no buffer: the restore repaints instead
     mov es, ax
     xor di, di
     mov ax, [menu_x1]
@@ -632,6 +666,7 @@ menu_drop:
     mov cx, [menu_x2]
     mov dx, [menu_y2]
     call gfx_save
+.nosave:
 
     ; --- draw the menu: white fill, black frame, items 8px in from the left --
     mov byte [gfx_color], CWHITE
@@ -655,7 +690,8 @@ menu_drop:
 .item:
     push cx
     mov si, [bx]
-    mov cx, [menu_x1]
+    call menu_trunc             ; SI = the item, truncated to MENU_MAXCH so
+    mov cx, [menu_x1]           ; no glyph lands outside the saved rect
     add cx, 8
     call font_str
     pop cx
@@ -694,7 +730,9 @@ menu_drop:
 
     ; --- released: put the screen back, report the selection -------------------
 .up:
-    mov ax, SAVE_SEG            ; restore erases the menu and any highlight
+    mov ax, [menu_sseg]         ; restore erases the menu and any highlight
+    or ax, ax
+    jz .repaint
     mov es, ax
     xor si, si
     mov ax, [menu_x1]
@@ -702,7 +740,11 @@ menu_drop:
     mov cx, [menu_x2]
     mov dx, [menu_y2]
     call gfx_restore
-
+    jmp short .sel
+.repaint:
+    call wm_paint_all           ; the no-buffer fallback: desktop, icons,
+    call gfx_flush              ; dock, bar and every window, under the lock
+.sel:
     mov ax, [menu_sel]
 
     pop es
@@ -797,6 +839,52 @@ menu_title_xor:
     ret
 
 ; -----------------------------------------------------------------------------
+; menu_trunc - stage an item string, truncated to MENU_MAXCH glyphs
+;
+; in:  SI = NUL string
+; out: SI = a NUL string of at most MENU_MAXCH characters (the original if it
+;      already fits, else a copy in menu_tbuf)
+; clobbers: SI (the output) and the flags
+;
+; The other half of the width clamp. menu_widest narrows the RECT; without
+; this the items would still be drawn full length, and font_char clips only
+; whole cells against the screen edge - so the overhang would land outside
+; the rect gfx_save captured and gfx_restore would never erase it. Permanent
+; garbage on the desktop after one menu use.
+; -----------------------------------------------------------------------------
+menu_trunc:
+    push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    mov cx, MENU_MAXCH
+    mov di, si                  ; does it already fit?
+.len:
+    cmp byte [di], 0
+    je .fits
+    inc di
+    loop .len
+    cmp byte [di], 0            ; exactly MENU_MAXCH characters also fits
+    je .fits
+    mov cx, MENU_MAXCH          ; no: copy the prefix
+    mov di, menu_tbuf
+    cld
+.copy:
+    lodsb
+    stosb
+    loop .copy
+    mov byte [es:di], 0
+    mov si, menu_tbuf
+.fits:
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; menu_widest - widest item text in a menu, in pixels
 ; in:  BX = array of near pointers to NUL item strings, CX = item count
 ; out: AX = max font_width over them (0 when CX = 0)
@@ -823,6 +911,10 @@ menu_widest:
     add bx, 2
     loop .next
 .done:
+    cmp dx, MENU_MAXW - 16      ; the clamp both callers need (above): the
+    jbe .clamped                ; save-under's width factor, bounded here
+    mov dx, MENU_MAXW - 16      ; once instead of at two call sites
+.clamped:
     mov ax, dx
     pop si
     pop dx
@@ -951,5 +1043,8 @@ menu_iptr:  resw 1              ; its array of near item-string pointers
 menu_btn:   resb 1              ; mouse_btn mask that keeps it open: 1 = the
                                 ; bar's left button, 2 = a popup's right one
 menu_sel:   resw 1              ; highlighted item, 0xFFFF = none
+menu_sseg:  resw 1              ; the save-under claim's segment, 0 = none
+                                ; (menu_drop then repaints instead)
+menu_tbuf:  resb MENU_MAXCH + 1 ; menu_trunc's staging buffer
 
 section .text

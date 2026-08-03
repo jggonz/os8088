@@ -26,9 +26,6 @@ org 0x0000
 
 ; --- global constants (SPEC.md 3) -------------------------------------------
 KERNEL_SEG  equ 0x1000
-SAVE_SEG    equ 0x2000          ; save-under heap (menus), via ES; extent
-                                ; pinned to 0x20000..0x2BFFF (SPEC.md 2.2) -
-                                ; VIEW_SEG owns the top 16KB of the block
 VGA_SEG     equ 0xA000          ; mode 12h planar framebuffer
 SCREEN_W    equ 640
 SCREEN_H    equ 480
@@ -68,42 +65,67 @@ APP_MAX_SIZE equ 0x4E00         ; image + bss budget, 0xB000..0xFDFF
                                 ; the last half-sector of the segment is
                                 ; deliberately left unused.
 
-; --- low memory (SPEC.md 2.1) ------------------------------------------------
-; Linear 0x00600..0x0FFFF is free on every machine once the boot sector has
-; handed off: the BIOS data area ends at 0x004FF and the kernel image starts
-; at 0x10000. Two segments carve it up, and everything either of them holds
-; is one thing the kernel's own 64KB window no longer has to.
+; =============================================================================
+; The memory stack (SPEC.md 2). ONE ladder, bottom to top, and every rung is
+; derived from the one below it: change a size and everything above it slides.
+; There are no gaps and no fixed addresses above the kernel segment - what
+; used to be four pinned constants up there (SND_SEG, SAVE_SEG, VIEW_SEG,
+; BB_SEG) is now the claim heap of SPEC.md 42, handed out on demand.
+;
+;   0x00000  IVT + BIOS data area                     (theirs, 1,536 B)
+;   0x00600  FAR_SEG   .fartext blob                  FAR_PARA paragraphs
+;            FAT_SEG   mount-time FAT snapshot        FAT_PARA
+;            LOW_SEG   .lowbss, then task 0's stack   up to KERNEL_SEG
+;   0x10000  KERNEL_SEG  kernel image + .bss          KERN_MAX bytes
+;            (the package pool rides in the same segment above the kernel
+;             until SPEC.md 20's segment move; see APP_LOAD_OFF below)
+;   0x20000  HEAP_SEG  the claim heap                 up to int 12h's top
+; =============================================================================
 FAR_SEG     equ 0x0060          ; linear 0x00600 - far code (section .fartext)
-FAT_SEG     equ 0x0300          ; linear 0x03000 - mount-time FAT snapshot
-                                ; (SPEC.md 2.1/18), reached via ES ONLY,
-                                ; never DS; dsk_next_clus is the one reader
-DSK_FAT_SECS equ 32             ; resident FAT cap, sectors (16,384 bytes)
-LOW_SEG     equ 0x0800          ; linear 0x08000 - task stacks + disk buffers
-LOW_LIMIT   equ 0x8000          ; LOW_SEG:0x8000 IS KERNEL_SEG:0 - every
-                                ; LOW_SEG offset must stay strictly below it
-STK0_TOP    equ 0x7FFE          ; task 0's stack top (grows down towards the
+FAR_PARA    equ 0x02A0          ; 10,752 bytes; guard 5 fences the blob
+FAT_SEG     equ FAR_SEG + FAR_PARA   ; mount-time FAT snapshot (SPEC.md 2.1/18),
+                                ; reached via ES ONLY, never DS;
+                                ; dsk_next_clus is the one reader
+DSK_FAT_SECS equ 24             ; resident FAT cap, sectors (12,288 bytes).
+                                ; Every geometry this OS builds fits: 360KB
+                                ; = 2 sectors, 1.44MB = 9, and the 2.88MB
+                                ; FAT16 test image = 23. It was 32 - four
+                                ; more sectors than any self-consistent
+                                ; volume can declare - and the difference
+                                ; was 8KB of low memory nothing could reach
+FAT_PARA    equ DSK_FAT_SECS * 32     ; 512 bytes = 32 paragraphs
+LOW_SEG     equ FAT_SEG + FAT_PARA    ; .lowbss: task stacks + disk buffers
+LOW_LIMIT   equ (KERNEL_SEG - LOW_SEG) * 16   ; LOW_SEG:LOW_LIMIT IS
+                                ; KERNEL_SEG:0 - every LOW_SEG offset must
+                                ; stay strictly below it
+STK0_TOP    equ LOW_LIMIT - 2   ; task 0's stack top (grows down towards the
                                 ; top of .lowbss; the assertion at the end of
                                 ; this file keeps 8KB of clearance)
 
-; the file manager's per-window view cache (SPEC.md 2.3/22.1)
-; Four 4KB slots carved off the TOP of the SAVE_SEG block, which has exactly
-; one user with exactly one save live at a time (menu_track's save-under) and
-; a ~11KB worst case against the 48KB it keeps. What the 16KB buys is that a
-; background file-manager window paints from memory: wm_paint_all has no clip
-; rect and runs on every window move, so re-listing on demand would mean one
-; full floppy mount per visible window per drag pass, under the gfx lock.
-VIEW_SEG      equ 0x2C00        ; linear 0x2C000..0x2FFFF, reached via ES ONLY
-VIEW_SLOTS    equ 4             ; = the Disk kind's KD_CAP (SPEC.md 29.3)
-VIEW_SLOT_SEG equ 0x0100        ; 4,096 bytes per slot, in paragraphs
-VIEW_SEG_KB   equ 16            ; Task Manager RAM figure (SPEC.md 28)
+KERN_MAX    equ 0xB000          ; the kernel's own ceiling: image + .bss and
+                                ; image + .fartext both stay below it (the
+                                ; guards at the end of this file). 45,056
+                                ; bytes, and the package pool starts there
 
-; double buffering (SPEC.md 32)
-BB_SEG        equ 0x4000        ; back buffer base segment (plane 0)
+; the file manager's per-window view cache (SPEC.md 2.3/22.1) - a heap claim
+; per open Disk window now, not four pinned 4KB slots reserved from boot.
+; What it buys is unchanged: a background file-manager window paints from
+; memory, so wm_paint_all (no clip rect, on every window move) costs no
+; floppy I/O. What changed is that a machine with no Disk window open pays
+; nothing for it, and the Task Manager can bill the 3KB to the window.
+VIEW_SLOTS  equ 4               ; max Disk windows = the kind's KD_CAP
+VIEW_KB     equ 3               ; each cache: 1KB of entries + 2KB of icons
+
+HEAP_SEG    equ KERNEL_SEG + 0x1000   ; the claim heap (SPEC.md 42): the
+                                ; paragraph after the kernel's 64KB segment,
+                                ; up to whatever int 12h reports. Nothing up
+                                ; there has a fixed address any more
+
+; double buffering (SPEC.md 32) - the back buffer is a heap CLAIM now, so
+; there is no BB_SEG constant: bb_init asks for BB_KB and remembers what it
+; got, and on a machine that cannot fund it the Control Panel says so.
 BB_PLANE_PARA equ 0x960         ; paragraphs per plane (0x9600 = 480 rows x 80)
-DB_MIN_KB     equ 500           ; int 12h floor: double-buffer only at >= 500KB
-                                ; (a real 512KB machine reports less once the
-                                ; BIOS takes its cut - 500 lets those in, and
-                                ; the buffer ends at 0x657FF = 406KB anyway)
+BB_KB         equ 150           ; 4 planes x 0x9600 bytes, in KB
 
 ; =============================================================================
 ; Section layout (SPEC.md 2.1) - declared here, once, with attributes; every
@@ -213,7 +235,14 @@ osapi_table:
     OSAPI_SLOT wm_clip_test       ; 0x00C8   ...and the whole-shape question,
                                   ;          for anything that erases a rect
                                   ;          and then draws glyphs into it
-osapi_table_end:                 ; 0x00CC
+    OSAPI_SLOT osapi_mem_claim    ; 0x00CC - the claim heap (SPEC.md 42.3):
+    OSAPI_SLOT osapi_mem_free     ; 0x00D0   AX = KB, BX = your own window;
+    OSAPI_SLOT osapi_mem_avail    ; 0x00D4   out DX = segment / CF. How a
+                                  ;          package gets memory it cannot
+                                  ;          fit in its own region - and the
+                                  ;          kernel force-frees it at
+                                  ;          teardown, like a sound grant
+osapi_table_end:                 ; 0x00D8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -221,8 +250,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 45 * 4
-%error "os8088 API jump table must be exactly 45 4-byte slots"
+%if OSAPI_TABLE_LEN != 48 * 4
+%error "os8088 API jump table must be exactly 48 4-byte slots"
 %endif
 
 ; =============================================================================
@@ -251,9 +280,12 @@ kmain:
                                 ; the runtime geometry, set the mode. Re-runs
                                 ; what the splash already did, which is what
                                 ; wipes the loading screen.
-    call bb_init                ; RAM probe + back buffer (SPEC.md 32): after
-                                ; the mode set (VRAM just cleared, planes
-                                ; start in sync), before the first drawing
+    call mem_init               ; the claim heap (SPEC.md 42): int 12h, the
+                                ; empty map. FIRST of the memory users -
+                                ; every claim below goes through it
+    call bb_init                ; back buffer (SPEC.md 32): can this ADAPTER
+                                ; double-buffer? The memory question is asked
+                                ; of the heap when the buffer is armed
     call font_init              ; needs int 10h, so after the mode is set
     call wm_init
     call menu_init              ; menu bar owner (SPEC.md 12): Locator, so
@@ -353,6 +385,8 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "clock.inc"            ; the system clock (SPEC.md 37): after
                                 ; sched.inc, whose [ticks] it advances from
 %include "wm.inc"
+%include "memory.inc"           ; the claim heap (SPEC.md 42): after
+                                ; instance.inc, whose records own the claims
 %include "instance.inc"
 %include "menu.inc"
 %include "ui.inc"
@@ -403,15 +437,15 @@ KBSS_SIZE equ kernel_bss_end - $$
 ; does for the bare kernel_bss_end label.
 KLOWFAR_KB equ (KLOW_SIZE + KFAR_SIZE + 1023) / 1024
 
-; 1. image + bss must stay below APP_LOAD_OFF - everything above it belongs
-;    to the loaded-program region (SPEC.md 20).
-%if KTEXT_SIZE + KBSS_SIZE > APP_LOAD_OFF
-%error "kernel too big: image + bss must stay below APP_LOAD_OFF"
+; 1. image + bss must stay below KERN_MAX - everything above it belongs to
+;    the loaded-program region (SPEC.md 20).
+%if KTEXT_SIZE + KBSS_SIZE > KERN_MAX
+%error "kernel too big: image + bss must stay below KERN_MAX"
 %endif
 ; 2. the far blob lands at kernel_text_end and is only copied out once kmain
 ;    runs, so image + far must fit in the same window on the way in.
-%if KTEXT_SIZE + KFAR_SIZE > APP_LOAD_OFF
-%error "kernel too big: image + fartext must stay below APP_LOAD_OFF"
+%if KTEXT_SIZE + KFAR_SIZE > KERN_MAX
+%error "kernel too big: image + fartext must stay below KERN_MAX"
 %endif
 ; 3. .lowbss must leave task 0 at least 8KB of stack below STK0_TOP, and
 ;    LOW_SEG offsets can never reach LOW_LIMIT (that address is the kernel).
@@ -421,9 +455,22 @@ KLOWFAR_KB equ (KLOW_SIZE + KFAR_SIZE + 1023) / 1024
 %if STK0_TOP >= LOW_LIMIT
 %error "STK0_TOP must stay below LOW_LIMIT (LOW_SEG:LOW_LIMIT is the kernel)"
 %endif
-; 5. the far blob is copied to FAR_SEG (linear 0x00600) and must end below
-;    FAT_SEG at linear 0x03000, where the FAT snapshot begins (SPEC.md 2.1):
-;    0x00600 + 0x2A00 = 0x03000.
-%if KFAR_SIZE > 0x2A00
-%error "fartext blob would collide with FAT_SEG at linear 0x03000"
+; 5. the far blob is copied to FAR_SEG and must end below FAT_SEG, where the
+;    FAT snapshot begins (SPEC.md 2.1). FAR_PARA is the reservation; this is
+;    what makes growing it a one-constant edit that slides everything above.
+%if KFAR_SIZE > FAR_PARA * 16
+%error "fartext blob would collide with FAT_SEG - raise FAR_PARA"
+%endif
+; 6. the menu save-under (SPEC.md 2.2/12.4) must fit the claim menu_init
+;    takes for it. gfx_save costs planes x rows x (byte span + 1); the two
+;    clamps in menu.inc bound both factors, and this is where they are
+;    checked against the buffer they write into.
+%if 4 * (MENU_POPMAX*MENU_ITEM_H + 2) * (MENU_MAXW/8 + 2) > MENU_SAVE_KB*1024
+%error "menu save-under can overflow its claim - lower MENU_POPMAX/MENU_MAXW"
+%endif
+; 7. low memory is a ladder with no gaps (SPEC.md 2.1): the FAT snapshot must
+;    end at LOW_SEG exactly, and .lowbss + task 0's stack must end at the
+;    kernel segment.
+%if FAT_SEG + FAT_PARA != LOW_SEG
+%error "low-memory ladder has a gap: FAT_PARA does not reach LOW_SEG"
 %endif

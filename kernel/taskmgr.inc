@@ -591,12 +591,12 @@ tm_sample:
                                 ; buffers and the far-code blob. Added after
                                 ; the shift because the byte total of all
                                 ; four regions does not fit 16 bits.
-    add ax, VIEW_SEG_KB         ; + the file manager's four view caches
-                                ; (SPEC.md 2.3), resident from boot
-    cmp byte [bb_dbl], 0        ; bill the armed back buffer: exactly 150KB,
-    je .nobb                    ; added after the shift because 153600 bytes
-    add ax, 150                 ; do not fit 16 bits (SPEC.md 32 / 28)
-.nobb:
+    KCALL mem_claimed_kb        ; + everything claimed out of the heap
+                                ; (SPEC.md 42): the back buffer while it is
+                                ; armed, the menu save-under, each open Disk
+                                ; window's listing cache, and every package
+                                ; claim. One term now instead of three
+                                ; constants and a conditional 150
     mov [tm_usedk], ax
     mov cx, [tm_totkb]          ; barw = usedK*160/totalK (all KB)
     jcxz .nobar
@@ -1745,11 +1745,9 @@ tm_rows:
                                 ; kernel keeps in low memory (SPEC.md 2.1).
                                 ; The same term is in the RAM total above, so
                                 ; the rows still sum to it.
-    add ax, VIEW_SEG_KB         ; + the view caches (SPEC.md 2.3), ditto
-    cmp byte [bb_dbl], 0        ; bill the armed back buffer to System
-    je .sysmem                  ; (SPEC.md 32 / 28)
-    add ax, 150
-.sysmem:
+    KCALL mem_kernel_kb         ; + the kernel's OWN heap claims (SPEC.md
+                                ; 42.2): the save-under and the back buffer.
+                                ; A package's claim belongs to its own row.
     call tm_memcol_kb
     jmp .draw
 

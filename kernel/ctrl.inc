@@ -129,13 +129,16 @@ cp_s_disp:  db 'Display', 0     ; list name AND the page heading
 cp_s_dbof:  db 'Direct to screen', 0
 cp_s_dbon:  db 'Double buffered', 0
 cp_s_dcap:  db 'Smoother; costs 150K', 0
-cp_s_dna:   db 'Needs 500K of memory', 0
+cp_s_dna:   db 'Not Enough Ram', 0          ; the heap cannot fund 150KB
+                                            ; RIGHT NOW - it is a claim, not
+                                            ; a reservation, so this can
+                                            ; change while the panel is open
+                                            ; (close an app and it comes back)
 cp_s_dmono: db 'Not on this adapter', 0     ; a 1bpp adapter draws straight
                                             ; to the framebuffer and has no
                                             ; buffer to double (SPEC.md 39.5)
-                                            ; - saying "needs 500K" here
-                                            ; would be a lie on a 640K
-                                            ; Hercules machine
+                                            ; - a memory answer would be a lie
+                                            ; on a 640K Hercules machine
 
 ; --- Date/Time page (SPEC.md 31.5/37) ----------------------------------------
 cp_s_time:  db 'Date/Time', 0   ; list name AND the page heading
@@ -767,18 +770,26 @@ cp_disp_paint:
     add dx, CP_PR0Y + CP_PLDY
     KCALL font_str
 
+    call cpf_dbok               ; CF = 1: the option cannot be taken now, so
+    mov byte [gfx_color], CBLACK    ; its label is drawn greyed (SPEC.md
+    jnc .lbl1                       ; 31.3/42.5). CDGRAY is the tree's only
+    mov byte [gfx_color], CDGRAY    ; disabled colour; on a 1bpp adapter
+.lbl1:                              ; font_ink rounds it to black, which is
+                                    ; why the caption below carries the
+                                    ; reason in words as well
     mov si, cp_s_dbon           ; row 1 label
     mov cx, di
     add cx, CP_PLX
     mov dx, bp
     add dx, CP_PR0Y + CP_PROWH + CP_PLDY
     KCALL font_str
+    mov byte [gfx_color], CBLACK
 
     mov si, cp_s_dcap           ; caption: what it costs...
-    cmp byte [bb_avail], 0
-    jne .cap
-    mov si, cp_s_dna            ; ...or why the machine cannot have it:
-    cmp byte [vid_mono], 0      ; too little RAM, or the wrong kind of card
+    call cpf_dbok
+    jnc .cap
+    mov si, cp_s_dna            ; ...or why it cannot be had right now:
+    cmp byte [vid_mono], 0      ; no room in the heap, or the wrong adapter
     je .cap
     mov si, cp_s_dmono
 .cap:
@@ -793,6 +804,35 @@ cp_disp_paint:
     pop si
     pop dx
     pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; cpf_dbok - can double buffering be turned on right now? (far, internal)
+; in:  nothing
+; out: CF = 0 yes, CF = 1 no (wrong adapter, or the heap has no 150KB run)
+; clobbers: nothing (flags)
+;
+; Three layers, the bb_avail idiom of SPEC.md 31.3: this is the question the
+; caption answers, the label greys on and the click refuses on - so all three
+; agree by construction rather than by three copies of the test.
+; -----------------------------------------------------------------------------
+cpf_dbok:
+    cmp byte [bb_avail], 0
+    je .no                      ; the adapter can never do it
+    cmp byte [bb_dbl], 0
+    jne .yes                    ; already armed: the memory is ours
+    push ax
+    push bx
+    KCALL mem_avail             ; AX = largest free run, KB
+    cmp ax, BB_KB
+    pop bx
+    pop ax
+    jb .no
+.yes:
+    clc
+    ret
+.no:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -840,6 +880,48 @@ cp_dbradios:
     ret
 
 ; -----------------------------------------------------------------------------
+; cpf_disp_cap - redraw the Display page's caption line only (far, internal)
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+cpf_disp_cap:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [gfx_color], CWHITE    ; erase the whole caption line first -
+    mov ax, di                      ; the strings differ in length
+    add ax, CP_PMX
+    mov bx, bp
+    add bx, CP_PCAPY
+    mov cx, di
+    add cx, CP_CW - 2
+    mov dx, bx
+    add dx, 7
+    KCALL gfx_fill
+    mov byte [gfx_color], CBLACK
+    mov si, cp_s_dcap
+    call cpf_dbok
+    jnc .draw
+    mov si, cp_s_dna
+    cmp byte [vid_mono], 0
+    je .draw
+    mov si, cp_s_dmono
+.draw:
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PCAPY
+    KCALL font_str
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; cp_disp_click - a click inside the Display page
 ;
 ; in:  DI = pane left, BP = pane top, CX = pane-relative x (ignored),
@@ -861,8 +943,6 @@ cp_disp_click:
     jl .done
     cmp dx, CP_B1Y2
     jg .done
-    cmp byte [bb_avail], 0
-    je .done                    ; not offered on this machine
 
     mov al, 1                   ; lower band = double buffered
     cmp dx, CP_B0Y2
@@ -871,8 +951,16 @@ cp_disp_click:
 .set:
     cmp al, [bb_dbl]
     je .done                    ; that row is already live: change nothing
-    KCALL bb_set                 ; flips both flags; we hold the lock
+    or al, al
+    jz .doit
+    call cpf_dbok               ; arming: refuse if it cannot be funded, and
+    jc .done                    ; leave the dot where it is (the caption and
+.doit:                          ; the greyed label already say why)
+    KCALL bb_set                ; flips both flags; we hold the lock
     call cp_dbradios            ; the two glyph boxes only
+    call cpf_disp_cap           ; the caption can change with the claim:
+                                ; turning it OFF hands 150KB back, which may
+                                ; un-grey it for the next machine state
 
 .done:
     pop ax

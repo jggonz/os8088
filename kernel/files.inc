@@ -19,7 +19,7 @@
 ; I/O. Anything that acts calls fmv_sync first, which remounts only when the
 ; acting window's (drive, cwd) is not the one currently mounted.
 ;
-; Per-window state is a 16-byte KD_POOL block (fm_pool, 4 x 16) that
+; Per-window state is an 18-byte KD_POOL block (fm_pool, 4 x 18) that
 ; app_launch allocates and hands to fm_kinit in DI. fm_vp_set publishes the
 ; acting window's block, cache segment and instance record into [fm_vp] /
 ; [fm_vseg] / [fm_vinst], and fm_layout mirrors the fields the 400-line
@@ -103,12 +103,14 @@ FS_CWD      equ 8               ; word: the folder it shows (first cluster,
 FS_DRV      equ 10              ; byte: the drive it shows
 FS_MOK      equ 11              ; byte: 1 = that listing came from a good mount
 FS_VIEW     equ 12              ; byte: 0 = list, 1 = icon grid
-FS_IDX      equ 13              ; byte: its VIEW_SEG slot, 0..3 - derived once
-                                ; by fm_kinit and never again
-FS_EDIT     equ 14              ; byte: the status-line editor is armed here
-FS_FERR     equ 15              ; byte: FERR_* of the last file operation IN
+FS_EDIT     equ 13              ; byte: the status-line editor is armed here
+FS_FERR     equ 14              ; byte: FERR_* of the last file operation IN
                                 ; THIS WINDOW, 0 = none
-FS_SIZE     equ 16              ; = the Disk kind's KD_SSIZE
+FS_VSEG     equ 16              ; word: this window's listing-cache claim
+                                ; (SPEC.md 42.2), 0 = none - fm_kinit claims
+                                ; VIEW_KB and the instance's teardown frees
+                                ; it, so nothing here has a close hook
+FS_SIZE     equ 18              ; = the Disk kind's KD_SSIZE
 
 FM_MAXWIN   equ VIEW_SLOTS      ; = KD_CAP: one cache slot per window
 FV_ICONS    equ 1024            ; icon images start here inside a slot (2.3)
@@ -144,8 +146,8 @@ files_init:
     mov byte [fm_msgbuf], 0
     mov byte [fm_full], 0
     mov word [fm_vp], fm_pool   ; no acting window yet: point the three
-    mov word [fm_vseg], VIEW_SEG    ; published words at slot 0 so a stray
-    mov word [fm_vinst], 0          ; read cannot leave the pool or the cache
+    mov word [fm_vseg], 0           ; published words at slot 0, and at the
+    mov word [fm_vinst], 0          ; global snapshot rather than a cache
     mov byte [fm_seed_drv], 1   ; the seed the first launch would consume
     mov word [fm_seed_cwd], 0
     mov word [fm_seed_nam], 0
@@ -178,11 +180,21 @@ fm_kinit:
     push dx
     push si
 
-    mov ax, di                  ; the cache slot IS the pool slot: derive it
-    sub ax, fm_pool             ; once, here, so nothing else has to know how
-    mov cl, 4                   ; app_launch picked the block
+    mov word [di+FS_VSEG], 0    ; the listing cache: VIEW_KB of the heap,
+    push bx                     ; owned by THIS instance so its teardown
+    push dx                     ; frees it (SPEC.md 42.2/42.4)
+    mov ax, si                  ; SI = our record -> the owner word
+    sub ax, inst_tab
+    mov cl, 5
     shr ax, cl
-    mov [di+FS_IDX], al
+    mov bx, ax
+    mov ax, VIEW_KB
+    call mem_claim
+    jc .nocache                 ; no room: the window still works, it just
+    mov [di+FS_VSEG], dx        ; re-reads the global snapshot to paint
+.nocache:
+    pop dx
+    pop bx
 
     mov word [di+FS_SEL], 0xFFFF    ; a fresh window has no selection,
     mov word [di+FS_CLKT], 0        ; nothing listed, list view, scrolled to
@@ -261,12 +273,8 @@ fm_vp_set:
                                 ; every access below inside the pool if it does
 .have:
     mov [fm_vp], di
-    mov bl, [di+FS_IDX]
-    and bl, VIEW_SLOTS-1        ; whatever that byte holds, the segment must
-    add bl, VIEW_SEG >> 8       ; land inside the block SPEC.md 2.3 pins
-    mov bh, bl
-    xor bl, bl
-    mov [fm_vseg], bx
+    mov bx, [di+FS_VSEG]        ; 0 = this window has no cache; every reader
+    mov [fm_vseg], bx           ; below falls back to the global snapshot
     pop di
     pop bx
     ret
@@ -279,9 +287,22 @@ fm_vp_set:
 fmv_copy_in:
     push ax
     push dx
+    push si
     mov dx, [fm_vseg]
+    or dx, dx
+    jnz .have                   ; no cache (the claim was refused): read the
+    mov dx, LOW_SEG             ; global snapshot at the matching offset -
+    cmp si, FV_ICONS            ; correct, just not free of floppy I/O when
+    jb .dir                     ; another window has moved the globals
+    sub si, FV_ICONS
+    add si, disk_icons
+    jmp short .have
+.dir:
+    add si, disk_dir
+.have:
     mov ax, cs                  ; this code is .text, so CS is the kernel
     call dsk_copy_seg
+    pop si
     pop dx
     pop ax
     ret
@@ -345,11 +366,9 @@ fmv_store:
     push cx
     push si
     push di
-    mov al, [di+FS_IDX]
-    and al, VIEW_SLOTS-1
-    add al, VIEW_SEG >> 8
-    mov ah, al
-    xor al, al                  ; AX = this window's slot segment
+    mov ax, [di+FS_VSEG]        ; AX = this window's cache segment
+    or ax, ax
+    jz .none                    ; no cache: nothing to write it into
     mov si, disk_dir            ; both ends are LOW_SEG offsets (SPEC.md 2.1)
     xor di, di
     mov cx, 1024
@@ -358,6 +377,7 @@ fmv_store:
     mov di, FV_ICONS
     mov cx, 2048
     call dsk_copy_out
+.none:
     pop di
     pop si
     pop cx
@@ -3018,7 +3038,7 @@ fm_utoa:
 section .bss
 
 ; --- per-window state (SPEC.md 22): the kind's KD_POOL, one block per window
-fm_pool:    resb 64             ; FM_MAXWIN x FS_SIZE (4 x 16; a literal per
+fm_pool:    resb 72             ; FM_MAXWIN x FS_SIZE (4 x 18; a literal per
                                 ; the no-forward-ref-in-bss rule)
 
 ; --- the acting window, published by fm_vp_set and read everywhere ----------
