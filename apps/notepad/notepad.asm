@@ -5,9 +5,9 @@
 ; Note Pad app (KIND_NOTE). Moved out of the kernel to reclaim the 1,317
 ; bytes it cost there: 281 of code and 1,036 of .bss, nearly all of the
 ; latter a fixed two-instance text pool. As a package that pool disappears
-; entirely - every instance is its own relocated copy with its own bss
-; (SPEC.md 20.1), so the buffer below is simply per-instance, and the
-; instance count is bounded by the region pool instead of a hard-coded 2.
+; entirely - every instance is its own copy in its own segment with its own
+; bss (SPEC.md 20.1), so the buffer below is simply per-instance, and the
+; instance count is bounded by the arena instead of a hard-coded 2.
 ;
 ; Editing behaviour is unchanged from the built-in (SPEC.md 14): printable
 ; 32..126 append, backspace deletes, Enter stores a newline byte; text wraps
@@ -57,7 +57,7 @@ NP_NAMEMAX   equ 12             ; 8 + '.' + 3, as SPEC.md 38.6 hands it over
 
 ; -----------------------------------------------------------------------------
 ; np_entry - package entry point (SPEC.md 20.2)
-; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
+; in:  CS=DS=ES = our own segment, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF clear (CF set = abort, propagated from wm_create)
 ; The loader wm_shows the window; we must not show, draw or spawn here. The
 ; bss arrives zeroed, which is already a fresh empty note - the built-in's
@@ -75,8 +75,8 @@ np_entry:
     jc .out                         ; table full: nothing to flag
     push ax
     mov al, 1                       ; resizable (SPEC.md 11.1/27): np_paint
-    call OSAPI_WM_SIZABLE           ; already lays out from the live record,
-    pop ax                          ; so the next repaint re-wraps for free
+    call OSAPI_WM_SIZABLE           ; lays out from the live OSAPI_WM_GEOM
+    pop ax                          ; answer, so a repaint re-wraps for free
     push si
     mov si, np_menus                ; BX is still the window: hand it our
     call OSAPI_MENU_SET             ; menus (draws nothing, takes no lock)
@@ -89,7 +89,7 @@ np_entry:
                                     ; ordinary routine and the CF we owe the
                                     ; loader is still riding in the flags
 .out:
-    ret
+    retf                            ; far-called by the loader (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; np_paint - W_PAINT: draw the buffer, then the caret
@@ -107,19 +107,21 @@ np_paint:
 
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
+    push dx                         ; the top: wm_geom answers height in DX
+    push ax
+    call OSAPI_WM_GEOM              ; CX = content width, DX = content height
+    pop ax                          ; AX = content left again
+    add cx, ax
+    dec cx
+    mov [np_rgt], cx                ; content right (inclusive) = left+w-1
     add ax, NP_MARGIN
     mov [np_tx], ax                 ; text origin x = the wrap column
     mov di, ax                      ; DI = pen x
-    add dx, NP_MARGIN
-    mov bp, dx                      ; BP = pen y
-    mov ax, [bx+W_X]
-    add ax, [bx+W_W]
-    sub ax, 2
-    mov [np_rgt], ax                ; content right (inclusive)
-    mov ax, [bx+W_Y]
-    add ax, [bx+W_H]
-    sub ax, 2
-    mov [np_bot], ax                ; content bottom (inclusive)
+    pop bp                          ; BP = content top
+    add dx, bp
+    dec dx
+    mov [np_bot], dx                ; content bottom (inclusive) = top+h-1
+    add bp, NP_MARGIN               ; BP = pen y
 
     mov al, CBLACK
     call OSAPI_SET_COLOR
@@ -183,7 +185,7 @@ np_paint:
     pop bx
     pop ax
     call np_toast               ; last, so it sits above the text
-    ret
+    retf                        ; far-called W_PAINT (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; np_toast - draw the save/load result over the content's top-right corner
@@ -210,10 +212,11 @@ np_toast:
     mov [np_by1], dx
     add dx, 11
     mov [np_by2], dx
-    mov ax, [bx+W_X]
-    add ax, [bx+W_W]
-    sub ax, 4                   ; 2px frame + a 2px gap from the edge
-    mov [np_bx2], ax
+    call OSAPI_WM_GEOM          ; CX = content width (DX is stored already)
+    mov ax, di
+    add ax, cx
+    sub ax, 3                   ; 2px frame + a 2px gap from the edge
+    mov [np_bx2], ax            ; = content left + width - 3 = W_X+W_W-4
     push ax
     mov si, [np_msg]
     call OSAPI_FONT_WIDTH       ; AX = the string's pixel width
@@ -468,7 +471,7 @@ np_onkey:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_ONKEY (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; np_redraw - repaint our own content from the buffer
@@ -489,20 +492,20 @@ np_redraw:
     push dx
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = x1, DX = y1
-    mov cx, [bx+W_X]
-    add cx, [bx+W_W]
-    sub cx, 2                       ; CX = x2
-    push dx
-    mov dx, [bx+W_Y]
-    add dx, [bx+W_H]
-    sub dx, 2                       ; DX = y2
+    push dx                         ; y1: wm_geom answers height in DX
+    call OSAPI_WM_GEOM              ; CX = content width, DX = content height
     pop bx                          ; BX = y1
+    add cx, ax
+    dec cx                          ; CX = x2 = x1 + width - 1
+    add dx, bx
+    dec dx                          ; DX = y2 = y1 + height - 1
     push ax                         ; the pen is a register here, not a
     mov al, CWHITE                  ; variable - keep x1 across the call
     call OSAPI_SET_COLOR
     pop ax
     call OSAPI_GFX_FILL             ; white-fill the content
-    call np_paint                   ; SI still = window ptr
+    push cs                         ; np_paint returns with retf (it is the
+    call np_paint                   ; far-called W_PAINT); SI still = win ptr
     mov bx, si                      ; the white fill erased the grow box;
     call OSAPI_WM_GROW              ; restore it (SPEC.md 11.1/27)
     pop dx
@@ -561,19 +564,19 @@ np_oncmd:
 .draw:
     call np_redraw                  ; SI is still the window ptr
 .out:
-    ret
+    retf                            ; far-called menu handler (SPEC.md 20.5)
 .open:
     mov al, FDLG_OPEN
     jmp short .dlg
 .saveas:
     mov al, FDLG_SAVE
 .dlg:
-    jmp np_dlgopen                  ; tail call, and NO repaint after it:
-                                    ; the dialog is on screen and on top of
-                                    ; us, so the usual "commands repaint
-                                    ; themselves" tail would draw straight
-                                    ; over it. The repaint happens in
-                                    ; np_ondlg instead, once it is gone
+    call np_dlgopen                 ; NO repaint after it: the dialog is on
+    retf                            ; screen and on top of us, so the usual
+                                    ; "commands repaint themselves" tail
+                                    ; would draw straight over it. The
+                                    ; repaint happens in np_ondlg instead,
+                                    ; once it is gone
 
 ; -----------------------------------------------------------------------------
 ; np_dlgopen - raise the Standard File dialog (SPEC.md 38.6)
@@ -600,8 +603,10 @@ np_dlgopen:
 
 ; -----------------------------------------------------------------------------
 ; np_ondlg - the file dialog's completion callback (SPEC.md 38.6)
-; in:  AL = the mode it ran in, SI = our window ptr, DI = the chosen name;
-;      UI task, gfx lock HELD, the dialog window already destroyed
+; in:  AL = the mode it ran in, SI = our window ptr, ES:DI = the chosen name
+;      (ES = KERNEL_SEG - the buffer is the kernel's, read it through ES,
+;      never through DS); UI task, gfx lock HELD, the dialog window already
+;      destroyed
 ; out: nothing; no register need be preserved (the kernel saved its own)
 ;
 ; One proc for both commands, because the only difference between them is
@@ -614,11 +619,11 @@ np_ondlg:
     mov dx, si                      ; DX = our window: SI is about to be the
                                     ; kernel's buffer, and np_redraw wants
                                     ; the window back in SI
-    mov si, di
+    mov si, di                      ; ES:SI = the kernel's name buffer
     mov di, np_name
     mov cx, NP_NAMEMAX
 .copy:
-    mov al, [si]                    ; bounded even though SPEC.md 38.6
+    mov al, [es:si]                 ; bounded even though SPEC.md 38.6
     mov [di], al                    ; promises <= 12: a package that trusts
     or al, al                       ; a promise is a package with an
     jz .copied                      ; overrun in it
@@ -635,7 +640,8 @@ np_ondlg:
 .load:
     call np_load
 .draw:
-    jmp np_redraw                   ; tail call; SI is the window ptr
+    call np_redraw                  ; SI is the window ptr
+    retf                            ; far-called completion (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; np_defname - seed the current document name (internal)

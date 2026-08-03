@@ -425,8 +425,8 @@ disk_mount:
     call dsk_copy_in
     cmp word [dsk_ent+0], 0x384F    ; .o88 magic 'O','8'
     jne .h_zero
-    cmp byte [dsk_ent+2], 2         ; format version
-    jne .h_zero
+    cmp byte [dsk_ent+2], 3         ; format version (v3, SPEC.md 18.3/20.2:
+    jne .h_zero                     ; a v2 file shows the generic icon)
     test byte [dsk_ent+3], 1        ; embedded-icon flag
     jz .h_zero
     mov si, dsk_secbuf+32       ; icon body -> disk_icons + i*64, both

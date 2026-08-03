@@ -126,7 +126,7 @@ PN_BSS_TOTAL equ 918                ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; pn_entry - package entry point (SPEC.md 20.2)
-; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
+; in:  CS=DS=ES = our own segment, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF clear (CF set = abort, propagated from wm_create)
 ; The loader has zeroed our bss (empty sequence); stamp the READY message
 ; before the first paint can read it, and hand the window our menu set
@@ -145,7 +145,7 @@ pn_entry:
     call OSAPI_MENU_SET             ; BX = window ptr, SI = the set
 .out:
     pop si                          ; pop leaves the flags alone
-    ret
+    retf                            ; far-called by the loader (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; pn_paint - W_PAINT: full content repaint (content arrives white)
@@ -172,7 +172,7 @@ pn_paint:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_PAINT (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; pn_onclick - W_ONCLICK: hit-test keys and buttons, act
@@ -292,7 +292,7 @@ pn_onclick:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_ONCLICK (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; pn_onkey - W_ONKEY: the QWERTY map printed on the keys themselves
@@ -332,7 +332,7 @@ pn_onkey:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_ONKEY (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; pn_oncmd - AM_ONCMD: the menu bar's route to the on-screen buttons
@@ -365,10 +365,10 @@ pn_oncmd:
     or al, al                       ; --- Play: Replay, Clear ---
     jnz .clear
     call pn_replay
-    ret
+    retf                            ; far-called menu handler (SPEC.md 20.5)
 .clear:
     call pn_clear
-    ret
+    retf
 
 .songs:                             ; --- Songs: Twinkle, Ode, Mary ---
     cmp al, 1
@@ -377,17 +377,17 @@ pn_oncmd:
     mov si, pn_song_twk
     mov di, pn_s_twk
     call pn_load
-    ret
+    retf
 .ode:
     mov si, pn_song_ode
     mov di, pn_s_ode
     call pn_load
-    ret
+    retf
 .mary:
     mov si, pn_song_mary
     mov di, pn_s_mary
     call pn_load
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; pn_note - play one note live: record it (full-stop at the cap), append to

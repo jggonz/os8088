@@ -58,7 +58,7 @@ SB_CHUNK  equ 800                   ; one staged chunk (100 square periods)
 
 ; -----------------------------------------------------------------------------
 ; sb_entry - package entry point (SPEC.md 20.2)
-; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
+; in:  CS=DS=ES = our own segment, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF clear (CF set = abort, from wm_create)
 ; -----------------------------------------------------------------------------
 sb_entry:
@@ -66,7 +66,7 @@ sb_entry:
     mov si, sb_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     pop si
-    ret
+    retf                            ; far-called by the loader (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; sb_paint - W_PAINT: the three status lines
@@ -99,7 +99,7 @@ sb_paint:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_PAINT (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; sb_onclick - W_ONCLICK: toggle the full 2s stream open/closed
@@ -129,13 +129,14 @@ sb_onclick:
     add cx, SB_CONT_W-1             ; x2
     add dx, SB_CONT_H-1             ; y2
     call OSAPI_GFX_FILL
-    call sb_paint                   ; SI = window ptr still
+    push cs                         ; sb_paint returns with retf (it is the
+    call sb_paint                   ; far-called W_PAINT); SI = win ptr still
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_ONCLICK (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; sb_onkey - W_ONKEY: 'u' underrun, 'p' progressive, 'f' feed, 'r' open-in,
@@ -201,6 +202,7 @@ sb_onkey:
     add cx, SB_CONT_W-1
     add dx, SB_CONT_H-1
     call OSAPI_GFX_FILL
+    push cs                         ; same push-cs idiom: sb_paint retfs
     call sb_paint
 .out:
     pop si
@@ -208,7 +210,7 @@ sb_onkey:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_ONKEY (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; sb_start - grant + synthesise + stage + open one stream

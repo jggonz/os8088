@@ -547,6 +547,8 @@ fm_s_badpkg:  db 'Bad package', 0
 fm_s_toobig:  db 'Too large', 0
 fm_s_ldfail:  db 'Load failed', 0
 fm_s_nomem:   db 'Out of memory', 0
+fm_s_needs:   db 'Needs ', 0    ; + the KB figure + 'K': status 6, LD_ENEED
+fm_s_kaych:   db 'K', 0         ; (SPEC.md 21/22) - built live, see .st_need
 fm_stattab:   dw fm_s_empty, fm_s_dskerr, fm_s_badpkg, fm_s_toobig, fm_s_ldfail
               dw fm_s_nomem
 
@@ -798,13 +800,53 @@ fm_count:
     ret
 
 ; -----------------------------------------------------------------------------
+; fm_is_fmwin - is BX one of Locator's file-manager windows? (SPEC.md 13/22)
+; in:  BX = window ptr
+; out: CF = 0 yes, CF = 1 no. Preserves everything else.
+;
+; The W_MENUS = fm_menus identity test, made OWNER-AWARE - binding since v3
+; (SPEC.md 13) at THIS routine's two callers and anywhere else the question
+; is ever asked. fm_kinit is the only KERNEL code that ever stores
+; fm_menus, so the word compare used to be exact on its own; but a v3
+; package's W_MENUS is an org-0 offset in its OWN segment (SPEC.md 12.2)
+; and can equal fm_menus by numeric coincidence, and such a window would be
+; misclassified as Locator's and handed fm_rclick / fm_oncmd, which
+; dereference FS_* state it does not have. A package owner (I_KIND bit 7)
+; refuses the match - and so does an UNOWNED window whose wm_wseg creator
+; stamp is not KERNEL_SEG (SPEC.md 11): since packages can wm_create
+; through the API, "unowned" alone no longer proves "not a package's".
+; -----------------------------------------------------------------------------
+fm_is_fmwin:
+    push di
+    cmp word [bx+W_MENUS], fm_menus
+    jne .no
+    call inst_win_owner         ; DI = owning record, 0 = unowned
+    or di, di
+    jz .unowned
+    test byte [di+I_KIND], KIND_PKG
+    jnz .no
+.yes:
+    clc
+    jmp short .out
+.unowned:                       ; no fm window is unowned - but a package's
+    push ax                     ; extra window can be (SPEC.md 11): only a
+    call inst_cb_seg            ; KERNEL-created one passes. AX = the
+    cmp ax, KERNEL_SEG          ; creator's segment (DI = 0, BX = window)
+    pop ax                      ; POP touches no flags: the compare holds
+    je .yes
+.no:
+    stc
+.out:
+    pop di                      ; POP touches no flags: CF survives
+    ret
+
+; -----------------------------------------------------------------------------
 ; fm_front_win - the frontmost VISIBLE file-manager window
 ; in:  nothing
 ; out: CF = 0 and BX = window ptr; CF = 1 = none. All else preserved.
 ;
-; "Is this a file-manager window" is the W_MENUS test, not an instance walk:
-; fm_kinit is the only thing in the kernel that ever stores fm_menus, so the
-; comparison is exact and costs one word.
+; "Is this a file-manager window" is fm_is_fmwin's owner-aware W_MENUS
+; test, not an instance walk (see above).
 ; -----------------------------------------------------------------------------
 fm_front_win:
     push ax
@@ -821,8 +863,8 @@ fm_front_win:
     call wm_idx2ptr             ; BX = window ptr
     test word [bx+W_FLAGS], 2   ; visible?
     jz .cont
-    cmp word [bx+W_MENUS], fm_menus
-    je .found
+    call fm_is_fmwin
+    jnc .found
 .cont:
     loop .next
 .none:
@@ -2918,6 +2960,8 @@ fm_draw_core:
     jmp short .stat
 .st_load:
     mov al, [ld_status]         ; 5. and finally the loader's
+    cmp al, LD_ENEED            ; status 6 carries a live number (SPEC.md
+    je .st_need                 ; 21/22): "Needs nnnK", nnn = [ld_needkb]
     mov bx, fm_stattab
     cmp al, 5
     ja .statdone                ; out-of-range status: draw nothing
@@ -2928,6 +2972,13 @@ fm_draw_core:
     shl ax, 1
     add bx, ax
     mov si, [bx]
+    jmp short .stat
+.st_need:
+    mov si, fm_s_needs          ; "Needs " + the refusing package's KB
+    call fm_scat                ; figure + "K" (SPEC.md 21/22) - the one
+    mov ax, [ld_needkb]         ; status string with a live number in it
+    call fm_utoa                ; appends the decimal at DI
+    mov si, fm_s_kaych
 .stat:
     call fm_scat                ; stage it, then truncate to the live cw
     mov ax, [fm_cw]             ; ("Out of memory" is 104px and cw can

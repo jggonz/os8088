@@ -15,9 +15,11 @@
 ;   1000:0008  boot splash tick (SPEC.md 15): far-called by the boot sector
 ;              after every sector it reads, while the rest of this image is
 ;              still coming off the floppy
-;   1000:0010  os8088 API jump table (SPEC.md 20.3): 4-byte near-jmp slots at
-;              pinned offsets, called by loaded programs (replaces the
-;              retired syscall gate)
+;   1000:0010  os8088 API jump table (SPEC.md 20.3): 8-byte far slots at
+;              pinned offsets, far-called by loaded programs (replaces the
+;              retired syscall gate). Each slot switches DS to KERNEL_SEG
+;              itself: a v3 package runs CS = DS = ES = its own segment
+;              (SPEC.md 20.1) and reaches the kernel only through here
 ; =============================================================================
 
 cpu 8086
@@ -54,19 +56,34 @@ WCR_X2  equ 4
 WCR_Y2  equ 6
 WCR_SZ  equ 8
 
-; loadable programs (SPEC.md 20)
-APP_LOAD_OFF equ 0xB000         ; where packages load (kernel segment offset)
-APP_MAX_SIZE equ 0x4E00         ; image + bss budget, 0xB000..0xFDFF
-                                ; The pool sat at 0xA000..0xEFFF until the
-                                ; task stacks left the segment (SPEC.md 2.1)
-                                ; and freed the 4KB that task 0's stack used
-                                ; to occupy above it. Sliding the pool up
-                                ; hands that 4KB to the kernel window. The
-                                ; span gives up 512 bytes on the way: an
-                                ; exclusive end of 0x10000 is not a 16-bit
-                                ; immediate, so the pool stops at 0xFE00 and
-                                ; the last half-sector of the segment is
-                                ; deliberately left unused.
+; loadable programs (SPEC.md 20) - v3: every package in its OWN segment,
+; allocated from the conventional arena (SPEC.md 2.5). The kernel-segment
+; pool at 0xB000..0xFDFF is gone; the whole 64KB window is the kernel's
+; again (guards 1-2 at the end of this file).
+ARENA_SEG     equ 0x6580        ; arena base paragraph - linear 0x65800,
+                                ; exactly one paragraph past the back
+                                ; buffer's pinned 0x40000..0x657FF extent
+                                ; (BB_SEG + 4 x BB_PLANE_PARA). Deliberately
+                                ; NOT a function of bb state, so packages
+                                ; and bb_set can never fight over a
+                                ; paragraph at run time (SPEC.md 2.5). The
+                                ; top is [ld_arena_top], probed from int 12h
+                                ; by loader_init; below 407KB of RAM the
+                                ; arena is empty and package loads refuse
+                                ; with a message, never a crash.
+PKG_MAX_PARA  equ 0x0FFF        ; region cap, paragraphs (65,520 bytes):
+                                ; keeps every I_SIZE*16 product inside 16
+                                ; bits (SPEC.md 20.6's ownership fence
+                                ; does that multiply)
+OSAPI_STR_MAX equ 63            ; staged-string cap, chars, NUL excluded
+                                ; (SPEC.md 20.3 marshalling)
+OSAPI_NAME_MAX equ 13           ; staged 8.3-NAME cap, chars: one MORE than
+                                ; a legal name's 12, ON PURPOSE - a 13+ char
+                                ; name keeps at least 13 chars in the stage,
+                                ; which dskw_name83/fdlg reject as illegal,
+                                ; so an over-long name is REFUSED, never
+                                ; silently truncated into some OTHER legal
+                                ; name it happens to prefix (SPEC.md 20.3)
 
 ; --- low memory (SPEC.md 2.1) ------------------------------------------------
 ; Linear 0x00600..0x0FFFF is free on every machine once the boot sector has
@@ -112,6 +129,32 @@ DB_MIN_KB     equ 500           ; int 12h floor: double-buffer only at >= 500KB
                                 ; BIOS takes its cut - 500 lets those in, and
                                 ; the buffer ends at 0x657FF = 406KB anyway)
 
+; --- CPU tiers and memory above 1MB (SPEC.md 41) -----------------------------
+; None of this exists on tier 0, which is the target machine: an 8088 has no
+; A20 line, nothing above linear 0x0FFFFF, and every routine keyed off these
+; constants returns having touched no port. The tier is INFORMATION, not
+; permission - kernel code branches on the verified feature bits and packages
+; branch on the KB figure from osapi_xmem_caps (SPEC.md 41.1/41.8).
+CPU_8086    equ 0               ; tier 0: 8086/8088. No A20, no HMA, no store.
+                                ; The default [cpu_tier] and the fallback.
+CPU_286     equ 1               ; tier 1: A20 gate + HMA, int 15h AH=88h
+                                ; sizing and AH=87h block move (SPEC.md 41.5)
+CPU_386     equ 2               ; tier 2: all of tier 1, plus unreal mode -
+                                ; a 4GB data limit on FS/GS (SPEC.md 41.4)
+HMA_SEG     equ 0xFFFF          ; the one segment above 1MB: HMA_SEG:0010 is
+HMA_MIN_OFF equ 0x0010          ; linear 0x100000 (0xFFFF0 + 0x10) and
+HMA_BYTES   equ 0xFFF0          ; HMA_SEG:FFFF is linear 0x10FFEF - the
+                                ; highest byte real mode can name at all.
+                                ; 65,520 bytes, DATA ONLY: the near model
+                                ; pins CS = DS = KERNEL_SEG, so no code ever
+                                ; lives up there (SPEC.md 41.3/41.9 rule 3)
+XM_HMA_KB   equ 64              ; what a successful cpu_hma_claim takes off
+                                ; the xm pool - the HMA is the first 64KB of
+                                ; exactly the RAM AH=88h sizes (SPEC.md 2.4)
+XM_MAX_BLKS equ 8               ; xm_alloc's fixed block table, entries: a
+                                ; bulk store for a handful of large claims,
+                                ; not a malloc (SPEC.md 41.5)
+
 ; =============================================================================
 ; Section layout (SPEC.md 2.1) - declared here, once, with attributes; every
 ; module afterwards switches with a bare `section .text` / `.bss` / `.fartext`
@@ -147,80 +190,137 @@ cold_entry:
     times 0x10 - ($ - $$) db 0  ; the table must land exactly at 0x0010
 
 ; =============================================================================
-; os8088 API jump table (SPEC.md 20.3)
+; os8088 API jump table (SPEC.md 20.3) - v3: 8-byte FAR slots
 ;
-; Loaded programs `call` these pinned absolute offsets; each slot is a 4-byte
-; cell: `jmp near target` (3 bytes) + 1 pad byte. Register contracts are the
-; target routines' own. The slot order below IS the ABI - never reorder.
+; Loaded programs `call far` these pinned absolute seg:off addresses (the
+; OSAPI_* %defines in os88api.inc spell them); each slot is an 8-byte
+; DS-switching stub, 1E 0E 1F E8 rr rr 1F CB - exactly 8 bytes, no pad:
+;
+;     push ds        ; the caller's segment, recoverable by a marshalling
+;     push cs        ; wrapper at SS:SP+2 (SS = LOW_SEG on every task)
+;     pop  ds        ; ...this pair is the `mov ds, imm` the 8086 lacks:
+;     call target    ; every kernel body assumes DS = KERNEL_SEG, and the
+;     pop  ds        ; table is .text, so CS here IS KERNEL_SEG
+;     retf
+;
+; Neither `pop ds` nor `retf` touches flags, so every CF-returning slot
+; (wm_create, wm_obscured, the dskw_* five, fdlg_open, inst_pkg_spawn, the
+; clip trio, wm_geom, the xm_* trio) keeps its contract through the stub,
+; and menu_win_set's stronger all-flags promise survives too. Register
+; contracts are the target routines' own. The slot ORDER below IS the ABI
+; and is preserved from v2 exactly - never reorder; only the stride changed,
+; 4 -> 8, so slot i sits at 0x0010 + 8*i (SPEC.md 20.3 pins the layout).
+;
+; Slots that take a DS-relative POINTER (font_str/font_width SI, wm_create's
+; template, the dskw_* names, fdlg_open's default name, snd_fm's patch,
+; snd_stream's verb-5/6 buffers) point at kernel-side osapi_w_* marshalling
+; wrappers (SPEC.md 20.3/20.4, bodies at the tail of this file): each
+; recovers the caller's segment from the DS word this stub saved - at
+; SS:[bp+4] once the wrapper frames - stages the operand into kernel
+; scratch, and near-calls the raw routine on a plain kernel pointer.
+; Kernel-internal callers keep near-calling the raw routines and never see
+; any of it. ES-relative buffer contracts (dskw data ES:BX, snd_play ES:SI,
+; xm_copy ES:SI) already carry their segment and need nothing.
+;
+; inst_pkg_alive may NEVER RETURN (SPEC.md 20.6): its teardown path ends in
+; task_exit, abandoning the stub's saved caller-DS word on the dying
+; worker's stack - harmless, the stack dies with the task.
 ; =============================================================================
 %macro OSAPI_SLOT 1
-    jmp near %1                 ; E9 rel16 = 3 bytes
-    db 0                        ; pad to a 4-byte cell
+    push ds
+    push cs                     ; CS = KERNEL_SEG: the table lives in .text
+    pop ds
+    call %1                     ; near, inside the kernel
+    pop ds
+    retf                        ; 8 bytes exactly - no pad byte
 %endmacro
 
 osapi_table:
     OSAPI_SLOT gfx_lock          ; 0x0010
-    OSAPI_SLOT gfx_unlock        ; 0x0014
-    OSAPI_SLOT gfx_pixel         ; 0x0018
-    OSAPI_SLOT gfx_hline         ; 0x001C
-    OSAPI_SLOT gfx_vline         ; 0x0020
-    OSAPI_SLOT gfx_fill          ; 0x0024
-    OSAPI_SLOT gfx_frame         ; 0x0028
-    OSAPI_SLOT gfx_fill_gray     ; 0x002C
-    OSAPI_SLOT gfx_xor_rect      ; 0x0030
-    OSAPI_SLOT gfx_xor_fill      ; 0x0034
-    OSAPI_SLOT font_char         ; 0x0038
-    OSAPI_SLOT font_str          ; 0x003C
-    OSAPI_SLOT font_width        ; 0x0040
-    OSAPI_SLOT wm_create         ; 0x0044
-    OSAPI_SLOT wm_show           ; 0x0048
-    OSAPI_SLOT wm_hide           ; 0x004C
-    OSAPI_SLOT wm_front          ; 0x0050
-    OSAPI_SLOT wm_content        ; 0x0054
-    OSAPI_SLOT wm_obscured       ; 0x0058
-    OSAPI_SLOT task_yield        ; 0x005C
-    OSAPI_SLOT task_sleep        ; 0x0060
-    OSAPI_SLOT osapi_get_ticks    ; 0x0064
-    OSAPI_SLOT osapi_set_color    ; 0x0068
-    OSAPI_SLOT osapi_mouse        ; 0x006C
-    OSAPI_SLOT osapi_srand        ; 0x0070
-    OSAPI_SLOT osapi_rand         ; 0x0074
-    OSAPI_SLOT osapi_snd_caps     ; 0x0078 - sound (SPEC.md 20.3/34): all
-    OSAPI_SLOT osapi_snd_tone     ; 0x007C   five slots ship in Phase 1;
-    OSAPI_SLOT osapi_snd_play     ; 0x0080   PLAY, FM and STREAM are error
-    OSAPI_SLOT osapi_snd_fm       ; 0x0084   stubs until their phases land
-    OSAPI_SLOT osapi_snd_stream   ; 0x0088   (SPEC.md 34)
-    OSAPI_SLOT wm_sizable         ; 0x008C - window features (SPEC.md 11.1)
-    OSAPI_SLOT wm_fullscreen      ; 0x0090 - fullscreen (SPEC.md 11.2)
-    OSAPI_SLOT wm_grow_paint      ; 0x0094 - grow-box restore after a
+    OSAPI_SLOT gfx_unlock        ; 0x0018
+    OSAPI_SLOT gfx_pixel         ; 0x0020
+    OSAPI_SLOT gfx_hline         ; 0x0028
+    OSAPI_SLOT gfx_vline         ; 0x0030
+    OSAPI_SLOT gfx_fill          ; 0x0038
+    OSAPI_SLOT gfx_frame         ; 0x0040
+    OSAPI_SLOT gfx_fill_gray     ; 0x0048
+    OSAPI_SLOT gfx_xor_rect      ; 0x0050
+    OSAPI_SLOT gfx_xor_fill      ; 0x0058
+    OSAPI_SLOT font_char         ; 0x0060
+    OSAPI_SLOT osapi_w_font_str  ; 0x0068 - SI string, staged to osapi_sbuf
+    OSAPI_SLOT osapi_w_font_width; 0x0070   (SPEC.md 20.3 marshalling)
+    OSAPI_SLOT osapi_w_wm_create ; 0x0078 - SI template, staged whole
+    OSAPI_SLOT wm_show           ; 0x0080
+    OSAPI_SLOT wm_hide           ; 0x0088
+    OSAPI_SLOT wm_front          ; 0x0090
+    OSAPI_SLOT wm_content        ; 0x0098
+    OSAPI_SLOT wm_obscured       ; 0x00A0
+    OSAPI_SLOT task_yield        ; 0x00A8
+    OSAPI_SLOT task_sleep        ; 0x00B0
+    OSAPI_SLOT osapi_get_ticks    ; 0x00B8
+    OSAPI_SLOT osapi_set_color    ; 0x00C0
+    OSAPI_SLOT osapi_mouse        ; 0x00C8
+    OSAPI_SLOT osapi_srand        ; 0x00D0
+    OSAPI_SLOT osapi_rand         ; 0x00D8
+    OSAPI_SLOT osapi_snd_caps     ; 0x00E0 - sound (SPEC.md 20.3/34): all
+    OSAPI_SLOT osapi_snd_tone     ; 0x00E8   five slots ship in Phase 1;
+    OSAPI_SLOT osapi_snd_play     ; 0x00F0   PLAY takes ES:SI (unchanged);
+    OSAPI_SLOT osapi_w_snd_fm     ; 0x00F8   FM verb 2's patch is staged;
+    OSAPI_SLOT osapi_w_snd_stream ; 0x0100   STREAM records the caller's
+                                  ;          segment for verbs 5/6, whose
+                                  ;          staging copy IS the boundary
+    OSAPI_SLOT wm_sizable         ; 0x0108 - window features (SPEC.md 11.1)
+    OSAPI_SLOT wm_fullscreen      ; 0x0110 - fullscreen (SPEC.md 11.2)
+    OSAPI_SLOT wm_grow_paint      ; 0x0118 - grow-box restore after a
                                   ;          self-repaint (SPEC.md 11.1)
-    OSAPI_SLOT dskw_write         ; 0x0098 - files (SPEC.md 18.4/20.3): the
-    OSAPI_SLOT dskw_read          ; 0x009C   dskw_* contracts ARE the ABI,
-    OSAPI_SLOT dskw_delete        ; 0x00A0   so the slots jump straight at
-    OSAPI_SLOT dskw_rename        ; 0x00A4   them - no wrapper in between
-    OSAPI_SLOT dskw_dfree         ; 0x00A8
-    OSAPI_SLOT menu_win_set       ; 0x00AC - app menus (SPEC.md 12.2): in
+    OSAPI_SLOT osapi_w_dskw_write ; 0x0120 - files (SPEC.md 18.4/20.3): the
+    OSAPI_SLOT osapi_w_dskw_read  ; 0x0128   dskw_* contracts ARE the ABI;
+    OSAPI_SLOT osapi_w_dskw_delete; 0x0130   the SI/DI NAMES are staged to
+    OSAPI_SLOT osapi_w_dskw_rename; 0x0138   osapi_nbuf/osapi_nbuf2;
+    OSAPI_SLOT dskw_dfree         ; 0x0140   the ES:BX data needs nothing
+    OSAPI_SLOT menu_win_set       ; 0x0148 - app menus (SPEC.md 12.2): in
                                   ;          BX = win ptr, SI = menu set
-    OSAPI_SLOT fdlg_open          ; 0x00B0 - the Standard File dialog
+                                  ;          OFFSET in the caller's segment,
+                                  ;          stored, never dereferenced here
+                                  ;          (the set is copied kernel-side
+                                  ;          at relayout) - no wrapper needed
+    OSAPI_SLOT osapi_w_fdlg_open  ; 0x0150 - the Standard File dialog
                                   ;          (SPEC.md 38.6): in AL = mode,
-                                  ;          BX = win, DI = callback,
-                                  ;          SI = default name. The caller
+                                  ;          BX = win, DI = callback OFFSET
+                                  ;          in the caller's segment,
+                                  ;          SI = default name, staged (or
+                                  ;          0, passed through). The caller
                                   ;          holds the lock, so this shows
                                   ;          the window before it returns
-    OSAPI_SLOT osapi_video        ; 0x00B4 - runtime screen geometry
+    OSAPI_SLOT osapi_video        ; 0x0158 - runtime screen geometry
                                   ;          (SPEC.md 39.2): the screen is no
                                   ;          longer always 640x480, so the
                                   ;          SCREEN_* equs in os88api.inc are
                                   ;          a reference, not a promise
-    OSAPI_SLOT inst_pkg_spawn     ; 0x00B8 - package worker tasks (SPEC.md
-    OSAPI_SLOT inst_pkg_alive     ; 0x00BC   20.6): AX = entry, BX = own win
-    OSAPI_SLOT wm_clip_set        ; 0x00C0 - the clip region (SPEC.md 11.3):
-    OSAPI_SLOT wm_clip_clear      ; 0x00C4   what a worker may draw, in place
+    OSAPI_SLOT inst_pkg_spawn     ; 0x0160 - package worker tasks (SPEC.md
+    OSAPI_SLOT inst_pkg_alive     ; 0x0168   20.6): AX = entry, BX = own win
+    OSAPI_SLOT wm_clip_set        ; 0x0170 - the clip region (SPEC.md 11.3):
+    OSAPI_SLOT wm_clip_clear      ; 0x0178   what a worker may draw, in place
                                   ;          of the wm_obscured veto...
-    OSAPI_SLOT wm_clip_test       ; 0x00C8   ...and the whole-shape question,
+    OSAPI_SLOT wm_clip_test       ; 0x0180   ...and the whole-shape question,
                                   ;          for anything that erases a rect
                                   ;          and then draws glyphs into it
-osapi_table_end:                 ; 0x00CC
+    OSAPI_SLOT cpu_info           ; 0x0188 - CPU tiers and memory above 1MB
+    OSAPI_SLOT xm_caps            ; 0x0190   (SPEC.md 41): each body already
+    OSAPI_SLOT xm_alloc           ; 0x0198   answers its SPEC.md 20.3 contract
+    OSAPI_SLOT xm_free            ; 0x01A0   exactly, so the slots call
+    OSAPI_SLOT xm_copy            ; 0x01A8   straight at them - no wrapper in
+                                  ;          between, the dskw_* arrangement.
+                                  ;          All five answer honestly on tier
+                                  ;          0: CPU_8086, zero KB, and three
+                                  ;          CF=1 refusals.
+    OSAPI_SLOT wm_geom            ; 0x01B0 - new in v3 (SPEC.md 11/20.3):
+                                  ;          in BX = win ptr; out CX/DX =
+                                  ;          content w/h, CF=1 not visible -
+                                  ;          the package-side replacement for
+                                  ;          reading W_W/W_H/W_FLAGS out of a
+                                  ;          record its DS can no longer reach
+osapi_table_end:                 ; 0x01B8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -228,8 +328,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 47 * 4
-%error "os8088 API jump table must be exactly 47 4-byte slots"
+%if OSAPI_TABLE_LEN != 53 * 8
+%error "os8088 API jump table must be exactly 53 8-byte far slots"
 %endif
 
 ; =============================================================================
@@ -248,6 +348,26 @@ kmain:
 
     call far_init               ; FIRST: the .fartext blob is sitting on top
                                 ; of .bss until this moves it (SPEC.md 33)
+
+    call cpu_detect             ; CPU tier + memory above 1MB (SPEC.md 41),
+                                ; here and nowhere else: after far_init,
+                                ; because xm_init writes .bss, and before
+                                ; sched_init, because this is the last moment
+                                ; at which no kernel ISR is installed - the
+                                ; unreal-mode window inside xm_init runs with
+                                ; CR0.PE set and a real-mode IVT, so the only
+                                ; handlers that may fire in it are the BIOS's
+                                ; own, and a tick lost here costs nothing
+                                ; ([ticks] is zeroed by sched_init anyway).
+    call cpu_a20_enable         ; ...and VERIFY it: the feature bit is set by
+                                ; the wraparound probe, never by the poke
+                                ; (SPEC.md 41.2). A no-op on tier 0 - an 8088
+                                ; has no gate and port 0x92 belongs to
+                                ; something else there.
+    call xm_init                ; size the store (int 15h AH=88h, on task 0
+                                ; per SPEC.md 7), claim the HMA, arm unreal
+                                ; mode on tier 2, publish [xm_kb] LAST.
+
     call sched_init             ; pre-emption live from here on
     call evq_init
     call clk_init               ; system clock (SPEC.md 37): probe the RTC,
@@ -271,7 +391,8 @@ kmain:
     call desk_init              ; count floppy drives for the desktop icons
     call dock_init              ; dock strip scratch (SPEC.md 30)
     call files_init             ; Disk module state (no window at boot)
-    call loader_init            ; package loader state
+    call loader_init            ; package loader state - also probes int 12h
+                                ; for the arena top, on task 0 (SPEC.md 2.5)
     call tm_init                ; Task Manager total-RAM read (no window)
     call snd_init               ; sound layer (SPEC.md 34.7): saves the 61h
                                 ; boot bits, stores its .bss state, publishes
@@ -351,6 +472,13 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "farcall.inc"          ; far-code macros (SPEC.md 33): needed by
                                 ; every module that lives in .fartext, so it
                                 ; comes before all of them
+%include "cpudet.inc"           ; CPU tiers + the A20 line (SPEC.md 41.1-41.3)
+%include "xmem.inc"             ; memory above 1MB (SPEC.md 41.4/41.5): after
+                                ; cpudet.inc, whose tier and feature bits it
+                                ; reads. Both are AFTER splash.inc on purpose:
+                                ; nothing here runs during the boot splash, so
+                                ; neither may eat the SPL_RESIDENT window, and
+                                ; being past it is what lets them use .bss.
 %include "vga12.inc"
 %include "vgabb.inc"
 %include "font.inc"
@@ -378,6 +506,382 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "snd.inc"
 %include "sndfm.inc"            ; the OPL2 driver (SPEC.md 34, Phase 3)
 %include "sndsb.inc"            ; the Sound Blaster driver (SPEC.md 34, P4)
+
+; =============================================================================
+; osapi_w_* - the API marshalling wrappers (SPEC.md 20.3/20.4)
+;
+; A v3 caller's DS is its own segment, so every slot whose contract carries
+; a DS-relative pointer points its table entry HERE instead of at the raw
+; body. The shape is uniform:
+;
+;   push bp / mov bp, sp        ; on wrapper entry the stack is
+;                               ;   [sp] = the slot stub's near return
+;                               ;   [sp+2] = the CALLER's DS, saved by the
+;                               ;            stub's opening `push ds`
+;                               ; so after the frame, SS:[bp+4] = caller DS
+;                               ; (BP-relative operands address SS, which
+;                               ; IS the stack - SS = LOW_SEG on every task)
+;   stage the operand           ; through ES = the caller's segment, into
+;                               ; kernel scratch (.bss below), bounded and
+;                               ; NUL-forced - a package string is hostile
+;                               ; input and may not be terminated at all
+;   call the raw routine        ; on a plain kernel DS pointer
+;
+; Kernel-internal callers never come through here: they near-call the raw
+; routines with kernel pointers (font_str, wm_create and the dskw_* name
+; parser are all heavily used from inside the kernel, which is exactly why
+; the copies could not live in the bodies - SPEC.md 20.3). Every wrapper
+; preserves all registers except the raw routine's documented outputs, and
+; nothing after the raw call touches flags, so CF contracts (wm_create,
+; the dskw_* five, fdlg_open, snd_fm, snd_stream) pass through.
+;
+; The single UI task serializes every caller (window callbacks and AM_ONCMD
+; handlers are the only legal API contexts, SPEC.md 20.3), so one set of
+; staging buffers suffices; a nested kernel repaint inside a raw routine
+; never re-enters a wrapper, because kernel code does not call the table.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; osapi_copy_str - stage a NUL string across a segment boundary
+; in:  ES:SI = source (hostile: may not be terminated), DI = kernel dest,
+;      CX = cap in chars, NUL excluded (dest must hold CX+1 bytes)
+; out: dest holds at most CX chars + a FORCED NUL; longer sources are
+;      truncated at CX, never refused (SPEC.md 20.3); at most CX source
+;      bytes are read
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+osapi_copy_str:
+    push ax
+    push cx
+    push si
+    push di
+    jcxz .done
+.copy:
+    mov al, [es:si]
+    inc si
+    or al, al
+    jz .done
+    mov [di], al
+    inc di
+    loop .copy
+.done:
+    mov byte [di], 0            ; the forced NUL
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; osapi_copy_n - stage exactly CX bytes across a segment boundary
+; in:  ES:SI = source, DI = kernel dest, CX = byte count (may be 0)
+; out: the bytes copied
+; clobbers: nothing (flags only)
+;
+; The fixed-length twin: templates, patches and icon bodies have no
+; terminator to honour. Also the loader's header/icon re-stage (SPEC.md 21
+; steps 6 and 9), whose source ES is the package segment.
+; -----------------------------------------------------------------------------
+osapi_copy_n:
+    push ax
+    push cx
+    push si
+    push di
+    jcxz .done
+.copy:
+    mov al, [es:si]
+    inc si
+    mov [di], al
+    inc di
+    loop .copy
+.done:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; ---- font_str (slot 0x0068): SI string -> osapi_sbuf -------------------------
+osapi_w_font_str:
+    push bp
+    mov bp, sp                  ; SS:[bp+4] = the caller's DS (see banner)
+    push es
+    push si
+    push di
+    push cx
+    mov es, [bp+4]
+    mov di, osapi_sbuf
+    mov cx, OSAPI_STR_MAX
+    call osapi_copy_str
+    pop cx
+    pop di
+    mov si, osapi_sbuf
+    call font_str
+    pop si
+    pop es
+    pop bp
+    ret
+
+; ---- font_width (slot 0x0070): SI string -> osapi_wbuf; out AX ---------------
+; Its OWN stage, never osapi_sbuf, and the stage + measure run with IF=0:
+; WIDTH is legal WITHOUT the gfx lock (it draws nothing), so a worker may
+; race the UI task - or another worker - right here. The private buffer
+; keeps a lock-free WIDTH from clobbering a preempted FONT_STR stage (the
+; lock serializes the DRAW slots, not this one), and the cli window keeps
+; two concurrent WIDTHs from measuring each other's strings. Bounded:
+; OSAPI_STR_MAX bytes copied + measured, well under a tick (SPEC.md 20.3).
+osapi_w_font_width:
+    push bp
+    mov bp, sp
+    push es
+    push si
+    push di
+    push cx
+    mov es, [bp+4]
+    mov di, osapi_wbuf
+    mov cx, OSAPI_STR_MAX
+    pushf
+    cli
+    call osapi_copy_str
+    mov si, osapi_wbuf
+    call font_width             ; AX = the answer (a truncated stage answers
+                                ; for at most OSAPI_STR_MAX chars, the same
+                                ; cap every staged DRAW is under)
+    popf                        ; IF back (font_width has no flag contract)
+    pop cx
+    pop di
+    pop si
+    pop es
+    pop bp
+    ret
+
+; ---- wm_create (slot 0x0078): the 16-byte template, staged whole -------------
+; The staged copy is what wm_create's rep movsw reads, so the record's
+; title/paint/onkey/onclick words END UP as caller-segment offsets exactly
+; as SPEC.md 11 defines them - the stage moves the template, not its
+; meaning. Out: BX + CF, untouched by the pops.
+; On success the new slot's wm_wseg is re-stamped from KERNEL_SEG to the
+; CALLER's segment (SPEC.md 11): that stamp is what lets an unowned
+; package window - one the loader has not (or never will have) bound -
+; dispatch far at its creator instead of near at a kernel offset, and
+; what the teardown sweep (wm_destroy_seg) matches.
+osapi_w_wm_create:
+    push bp
+    mov bp, sp
+    push es
+    push si
+    push di
+    push cx
+    mov es, [bp+4]
+    mov di, osapi_tbuf
+    mov cx, 16
+    call osapi_copy_n
+    pop cx
+    pop di
+    mov si, osapi_tbuf
+    call wm_create              ; out: BX = window ptr, CF
+    jc .done
+    push ax
+    push si
+    call wm_ptr2idx             ; AL = window index (BX is wm_create's own
+    mov si, ax                  ; answer: aligned by construction)
+    shl si, 1
+    mov ax, [bp+4]              ; the caller's segment
+    mov [wm_wseg+si], ax
+    pop si
+    pop ax
+    clc                         ; wm_create's success answer, restated (the
+                                ; div/shl above left flags behind)
+.done:
+    pop si
+    pop es
+    pop bp
+    ret
+
+; ---- dskw_write (slot 0x0120): SI name staged; ES:BX data untouched ----------
+; ES is BOTH things here: the caller's DS (fetched from the stack) for the
+; name read, then the caller's own ES - saved first thing, restored from
+; SS:[bp-2] - because ES:BX is the DATA argument and must arrive intact.
+osapi_w_dskw_write:
+    push bp
+    mov bp, sp
+    push es                     ; the caller's ES = the data segment: [bp-2]
+    push si
+    push di
+    push cx
+    mov es, [bp+4]
+    mov di, osapi_nbuf
+    mov cx, OSAPI_NAME_MAX
+    call osapi_copy_str
+    pop cx
+    pop di
+    mov es, [bp-2]              ; the data segment back (ES:BX contract)
+    mov si, osapi_nbuf
+    call dskw_write             ; out: CF + AX
+    pop si
+    pop es
+    pop bp
+    ret
+
+; ---- dskw_read (slot 0x0128): same shape as dskw_write -----------------------
+osapi_w_dskw_read:
+    push bp
+    mov bp, sp
+    push es
+    push si
+    push di
+    push cx
+    mov es, [bp+4]
+    mov di, osapi_nbuf
+    mov cx, OSAPI_NAME_MAX
+    call osapi_copy_str
+    pop cx
+    pop di
+    mov es, [bp-2]              ; ES:BX = the caller's destination buffer
+    mov si, osapi_nbuf
+    call dskw_read              ; out: CF + AX
+    pop si
+    pop es
+    pop bp
+    ret
+
+; ---- dskw_delete (slot 0x0130): SI name staged -------------------------------
+osapi_w_dskw_delete:
+    push bp
+    mov bp, sp
+    push es
+    push si
+    push di
+    push cx
+    mov es, [bp+4]
+    mov di, osapi_nbuf
+    mov cx, OSAPI_NAME_MAX
+    call osapi_copy_str
+    pop cx
+    pop di
+    mov si, osapi_nbuf
+    call dskw_delete            ; out: CF + AX
+    pop si
+    pop es
+    pop bp
+    ret
+
+; ---- dskw_rename (slot 0x0138): SI old + DI new, both staged -----------------
+osapi_w_dskw_rename:
+    push bp
+    mov bp, sp
+    push es
+    push si
+    push di
+    push cx
+    mov es, [bp+4]
+    push di                     ; the caller's DI = the NEW name's offset
+    mov di, osapi_nbuf
+    mov cx, OSAPI_NAME_MAX
+    call osapi_copy_str         ; old name -> osapi_nbuf
+    pop si                      ; SI = the new name's caller offset
+    mov di, osapi_nbuf2
+    call osapi_copy_str         ; new name -> osapi_nbuf2 (CX preserved)
+    pop cx
+    mov si, osapi_nbuf
+    mov di, osapi_nbuf2
+    call dskw_rename            ; out: CF + AX
+    pop di
+    pop si
+    pop es
+    pop bp
+    ret
+
+; ---- fdlg_open (slot 0x0150): SI default name staged, 0 passed through -------
+; DI is a completion OFFSET in the caller's segment - a value, stored by
+; fdlg_open as-is (SPEC.md 38.6) - and needs nothing here.
+osapi_w_fdlg_open:
+    or si, si
+    jnz .stage
+    jmp fdlg_open               ; no default name: nothing to stage (the
+                                ; tail-jmp keeps the stub's return)
+.stage:
+    push bp
+    mov bp, sp
+    push es
+    push si
+    push di
+    push cx
+    mov es, [bp+4]
+    mov di, osapi_nbuf
+    mov cx, OSAPI_NAME_MAX
+    call osapi_copy_str
+    pop cx
+    pop di
+    mov si, osapi_nbuf
+    call fdlg_open              ; out: CF
+    pop si
+    pop es
+    pop bp
+    ret
+
+; ---- osapi_snd_fm (slot 0x00F8): verb 2's 11-byte patch staged ---------------
+osapi_w_snd_fm:
+    cmp al, 2
+    je .stage
+    jmp osapi_snd_fm            ; only verb 2 carries a pointer: tail-jmp
+                                ; keeps the stub's return for the rest
+.stage:
+    push bp
+    mov bp, sp
+    push es
+    push si
+    push di
+    push cx
+    mov es, [bp+4]
+    mov di, osapi_fmbuf
+    mov cx, 11
+    call osapi_copy_n
+    pop cx
+    pop di
+    mov si, osapi_fmbuf
+    call osapi_snd_fm           ; out: CF
+    pop si
+    pop es
+    pop bp
+    ret
+
+; ---- osapi_snd_stream (slot 0x0100): record the caller's segment -------------
+; Verbs 5/6's staging copy IS the boundary (SPEC.md 20.3/34.6): sbl_v_read
+; writes the caller's DI destination and sbl_v_stage reads the caller's SI
+; source THROUGH [osapi_dseg] instead of DS. This store is the only writer,
+; and those two verb bodies are the only readers - reachable exclusively
+; through this wrapper, which is what stands in for a .bss hand-init
+; (kernel-internal stream use is verbs 0-4/7, which carry no pointer;
+; kernel code that ever needed 5/6 would set [osapi_dseg] itself first).
+osapi_w_snd_stream:
+    push bp
+    mov bp, sp
+    push ax
+    mov ax, [bp+4]
+    mov [osapi_dseg], ax        ; the caller's segment, for the verb bodies
+    pop ax
+    call osapi_snd_stream       ; out: CF + AX (pop bp touches neither)
+    pop bp
+    ret
+
+section .bss
+; the marshalling stages (SPEC.md 20.3/20.4) - written by the wrappers
+; above (and osapi_dseg read by sndsb.inc's verb-5/6 bodies); every buffer
+; is written before it is read on every path, so none needs a boot init
+osapi_sbuf:  resb 64            ; OSAPI_STR_MAX chars + the forced NUL
+osapi_wbuf:  resb 64            ; font_width's OWN stage (SPEC.md 20.3):
+                                ; WIDTH is legal without the gfx lock, so
+                                ; it may never share osapi_sbuf with a
+                                ; lock-held FONT_STR in flight
+osapi_nbuf:  resb 14            ; OSAPI_NAME_MAX chars + NUL (8.3 names)
+osapi_nbuf2: resb 14            ; dskw_rename's second name
+osapi_tbuf:  resb 16            ; wm_create's staged template
+osapi_fmbuf: resb 11            ; snd_fm verb 2's staged patch
+osapi_dseg:  resw 1             ; the segment snd_stream's caller passed its
+                                ; verb-5/6 pointers in (see the wrapper)
+
+section .text
 
 ; =============================================================================
 ; Size guards (SPEC.md 15.1). Same-section label differences bound via equ -
@@ -412,15 +916,21 @@ KBSS_SIZE equ kernel_bss_end - $$
 ; does for the bare kernel_bss_end label.
 KLOWFAR_KB equ (KLOW_SIZE + KFAR_SIZE + 1023) / 1024
 
-; 1. image + bss must stay below APP_LOAD_OFF - everything above it belongs
-;    to the loaded-program region (SPEC.md 20).
-%if KTEXT_SIZE + KBSS_SIZE > APP_LOAD_OFF
-%error "kernel too big: image + bss must stay below APP_LOAD_OFF"
+; 1. image + bss must fit the kernel's 64KB segment. Guards 1 and 2 were
+;    bounded by APP_LOAD_OFF (0xB000) until v3 evicted the package pool
+;    (SPEC.md 20.1): the whole segment is the kernel's now, and the
+;    reclaimed 19,968 bytes are what paid for the fatter far table, the
+;    marshalling wrappers, the SPEC.md 12.2 menu copy and the inst_icons
+;    cache. The 0x10000 bound is an assembly-time integer, not a 16-bit
+;    immediate - the old "0x1FE00 unused" map row existed only for a
+;    run-time comparison that died with ld_alloc's pool scan (SPEC.md 15.1).
+%if KTEXT_SIZE + KBSS_SIZE > 0x10000
+%error "kernel too big: image + bss must fit the 64KB segment"
 %endif
 ; 2. the far blob lands at kernel_text_end and is only copied out once kmain
 ;    runs, so image + far must fit in the same window on the way in.
-%if KTEXT_SIZE + KFAR_SIZE > APP_LOAD_OFF
-%error "kernel too big: image + fartext must stay below APP_LOAD_OFF"
+%if KTEXT_SIZE + KFAR_SIZE > 0x10000
+%error "kernel too big: image + fartext must fit the 64KB segment"
 %endif
 ; 3. .lowbss must leave task 0 at least 8KB of stack below STK0_TOP, and
 ;    LOW_SEG offsets can never reach LOW_LIMIT (that address is the kernel).

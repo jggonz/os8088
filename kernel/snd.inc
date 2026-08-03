@@ -98,7 +98,7 @@ snd_drv:                        ; row 0: PC speaker - always present, as data
     db SND_CAP_TONE | SND_CAP_FM
     db 0                        ; absent until opl_probe publishes (34.2)
     dw opl_tone                 ; tone op: the reserved channel 8 (34.3)
-    dw opl_fm_op                ; FM op - slot 0x0084's live body
+    dw opl_fm_op                ; FM op - slot 0x00F8's live body
     dw 0, 0                     ; no PCM out / in
     dw opl_probe                ; the timer-flag dance, far behind its shim
     dw snd_s_opl
@@ -109,7 +109,7 @@ snd_drv:                        ; row 0: PC speaker - always present, as data
                                 ; routing to the speaker (snd_pcm_row
                                 ; wants a PCM op)
     db 0                        ; absent until sbl_probe publishes (34.2)
-    dw 0, 0, 0, 0               ; streams go through slot 0x0088, not the
+    dw 0, 0, 0, 0               ; streams go through slot 0x0100, not the
                                 ; row ops (SPEC.md 34.5)
     dw sbl_probe                ; reset scan + E1h gate, far behind its shim
     dw snd_s_sb
@@ -970,7 +970,7 @@ osapi_snd_caps:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_tone - the public tone request (slot 0x007C, SPEC.md 20.3)
+; osapi_snd_tone - the public tone request (slot 0x00E8, SPEC.md 20.3)
 ;
 ; in:       AX = frequency Hz (0 = off), CX = duration ticks (0 = until off),
 ;           DL = priority
@@ -1014,7 +1014,7 @@ snd_req_inst:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_play - PCM_EXCL clip, run-to-completion (slot 0x0080, SPEC.md
+; osapi_snd_play - PCM_EXCL clip, run-to-completion (slot 0x00F0, SPEC.md
 ;                  20.3/34.4 - live from Phase 2)
 ;
 ; in:       ES:SI = 8-bit unsigned mono samples, CX = count (<= 65535),
@@ -1178,7 +1178,7 @@ osapi_snd_play:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_fm - the public FM surface (slot 0x0084, SPEC.md 20.3 - live
+; osapi_snd_fm - the public FM surface (slot 0x00F8, SPEC.md 20.3 - live
 ;                from Phase 3)
 ;
 ; in:       AL = verb: 0 note-on / 1 note-off / 2 patch-load / 3 all-off;
@@ -1206,7 +1206,7 @@ osapi_snd_fm:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_stream - the stream + staging surface (slot 0x0088, SPEC.md
+; osapi_snd_stream - the stream + staging surface (slot 0x0100, SPEC.md
 ; 20.3 - live from Phase 4; recording from Phase 5). AL = verb, AH =
 ; handle or sub-op; the verb bodies live with the SB driver
 ; (sbl_stream_op, SPEC.md 34.5/34.6). The staging verbs (5/6/7) work on

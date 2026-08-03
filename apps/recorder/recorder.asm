@@ -135,7 +135,7 @@ RC_CMD_DEMO equ 3
 
 ; -----------------------------------------------------------------------------
 ; rc_entry - package entry point (SPEC.md 20.2)
-; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
+; in:  CS=DS=ES = our own segment, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF clear (CF set = abort, propagated from wm_create)
 ; Queries the sound caps once (they are static after boot) and stamps the
 ; status template's input-device field; the loader has zeroed our bss.
@@ -167,7 +167,7 @@ rc_entry:
     pop si                          ; failure still propagates unchanged
     pop dx
     pop ax
-    ret
+    retf                            ; far-called by the loader (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; rc_paint - W_PAINT: poll the stream, then draw the full content
@@ -193,7 +193,7 @@ rc_paint:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_PAINT (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; rc_onclick - W_ONCLICK: poll, hit-test the buttons, act, repaint content
@@ -256,7 +256,7 @@ rc_onclick:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_ONCLICK (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; rc_oncmd - the Sound menu's command handler (SPEC.md 12.2)
@@ -304,7 +304,7 @@ rc_oncmd:
                                     ; have moved the state, so repaint anyway
 .repaint:
     call rc_repaint
-    ret
+    retf                            ; far-called menu handler (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; rc_repaint - white-fill our own content and draw it again

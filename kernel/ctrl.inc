@@ -152,7 +152,7 @@ cp_s_soff:  db 'Clips: off', 0
 ; The built-in test clip is the Recorder demo's 1 s sine sweep (SPEC.md
 ; 31.4/35): 400 Hz rising linearly to 800 Hz over the first half second
 ; and back down over the second, synthesised by cp_sndclip straight into
-; SND_SEG (8-bit unsigned) and played at 8,000 Hz through slot 0x0080's
+; SND_SEG (8-bit unsigned) and played at 8,000 Hz through slot 0x00F0's
 ; target - which is what feeds the emitted/resync counters the caption
 ; below reports. Its own copy of the recorder's table (kernel code cannot
 ; call into a package): 128 + round(88*sin(2*pi*i/256)), range 40..216.
@@ -271,7 +271,8 @@ CPS_CBY2  equ CPS_CBY + CP_GW - 1       ; 63: checkbox band bottom
 ; code and lives in .fartext, outside the kernel's 64KB window. The two entry
 ; points the kernel dispatches to - the window template's paint and onclick
 ; procs - keep their near names here as 6-byte shims, so instance.inc's kind
-; table and wm's `call [bx+W_PAINT]` are unchanged.
+; table and wm's W_PAINT dispatch (near at KERNEL_SEG for a kernel-owned
+; window, SPEC.md 11) are unchanged.
 ;
 ; Note that cp_items (above) holds .fartext offsets in its paint/click words.
 ; That is legal because the only code that calls through them, cp_page and
@@ -1356,7 +1357,7 @@ cp_putu16:
 ; top byte indexes cp_sine and whose increment is Bresenham-stepped from
 ; CPS_INC400 to CPS_INC800 across the first half and back down the second
 ; (BP carries the error term, preserved like everything else). Then plays
-; it at 8,000 Hz (N = 149, the default carrier) through slot 0x0080's
+; it at 8,000 Hz (N = 149, the default carrier) through slot 0x00F0's
 ; target - the same path a package takes, ES pointing away from DS and
 ; all. The result codes are deliberately ignored: the counters caption
 ; reports what actually happened, which is the point of the button. A

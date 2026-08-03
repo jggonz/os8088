@@ -17,13 +17,19 @@
 ; 1..MAX_TASKS-1 are dynamic (task_spawn / task_exit), each with a 1536-byte
 ; stack in .lowbss.
 ;
-; All tasks run CS = DS = KERNEL_SEG and SS = LOW_SEG (SPEC.md 1/2.1): the
-; stacks live in low memory, outside the kernel's 64KB window, and a context
-; switch is still nothing more than swapping SP because every task shares the
-; one SS. SS is therefore NOT saved in the frame below and never changes
-; after kmain sets it. The consequence for the rest of the kernel is that
-; BP-relative operands address SS, not DS: code that uses BP as a pointer
-; into a kernel structure must carry an explicit `ds:` override.
+; Every task runs SS = LOW_SEG (SPEC.md 1/2.1): the stacks live in low
+; memory, outside the kernel's 64KB window, and a context switch is still
+; nothing more than swapping SP because every task shares the one SS. SS is
+; therefore NOT saved in the frame below and never changes after kmain sets
+; it. A task's CODE/DATA segment travels in the frame instead (v3, SPEC.md
+; 7/8): the DS, ES and CS words are saved and restored generically by the
+; one switch path and are seeded by task_spawn from its CX argument -
+; KERNEL_SEG for every kernel task, the owning instance's segment for a
+; package's worker (SPEC.md 20.6). The consequence for the rest of the
+; kernel is that BP-relative operands address SS, not DS: code that uses BP
+; as a pointer into a kernel structure must carry an explicit `ds:`
+; override - and since v3 that SS != DS footgun covers package workers
+; verbatim (SPEC.md 1).
 ;
 ; Saved-frame layout (top of a suspended task's stack, low address first):
 ;       [SP+ 0] DS      pushed last by the save path
@@ -186,11 +192,17 @@ sched_unhook:
     ret
 
 ; -----------------------------------------------------------------------------
-; task_spawn - create a task that iret-launches into a near entry point
+; task_spawn - create a task that iret-launches into CX:AX
 ;
 ; Builds a complete saved frame at the top of the slot's stack: DX = the
-; spawn argument, other GP regs zero, DS = ES = KERNEL_SEG, CS = KERNEL_SEG,
-; IP = entry, FLAGS with IF=1. The slot's sch_cycles counter is zeroed
+; spawn argument, other GP regs zero, DS = ES = CS = the CX segment,
+; IP = entry, FLAGS with IF=1. The frame's three segment words were
+; hardcoded KERNEL_SEG before v3; the context switch has always saved and
+; restored them generically, so seeding them from CX is the whole scheduler
+; cost of the SPEC.md 20 ABI break. SS stays LOW_SEG whatever the segment:
+; the stack is the slot's sch_stacks slice, the switch path is untouched,
+; and SS != DS holds for the new task on day one (SPEC.md 8).
+; The slot's sch_cycles counter is zeroed
 ; before the publish (the ISR only charges the RUNNING slot, so a
 ; pre-publish write cannot race - SPEC.md 8.1). The scan starts at slot 1:
 ; slot 0 is the UI task, never free, and runs on the boot stack.
@@ -213,7 +225,10 @@ sched_unhook:
 ; which DS does not address. The task record itself is ordinary kernel .bss
 ; and stays DS-relative.
 ;
-; in:       AX = entry point (near, kernel segment)
+; in:       AX = entry point (an offset in the CX segment)
+;           CX = the new task's code/data segment (SPEC.md 8): KERNEL_SEG
+;                from every kernel caller, the instance's I_SPTR segment
+;                from inst_pkg_spawn (SPEC.md 20.6/29.4)
 ;           DX = argument word - lands in the new task's DX; DL is also
 ;                stored to T_INST (instance index, 0xFF = none)
 ; out:      CF = 1 if no free slot (task not created)
@@ -226,9 +241,14 @@ task_spawn:
     push dx
     push si
     push di
+    push bp
     push es
     pushf                       ; the caller's IF, banked across the window
     cli
+    mov bp, cx                  ; BP = the new task's segment: CX itself is
+                                ; the slot-scan counter below. BP is data
+                                ; only here - no [bp+disp] operand, so the
+                                ; SS-addressing footgun never engages
 
     mov bx, sch_tasks + T_SIZE  ; scan for a free slot, from slot 1
     mov cx, 1                   ; CX = slot index
@@ -259,8 +279,8 @@ task_spawn:
     mov es, ax                  ; through ES - DS cannot reach it. AX is dead
                                 ; here: DI already carries the frame address
                                 ; and the xor below is its next use
-    mov word [es:di], KERNEL_SEG   ; DS slot
-    mov word [es:di+2], KERNEL_SEG ; ES slot
+    mov [es:di], bp             ; DS slot - the caller's CX segment
+    mov [es:di+2], bp           ; ES slot
     xor ax, ax
     mov [es:di+4], ax           ; BP
     mov [es:di+6], ax           ; DI
@@ -270,7 +290,8 @@ task_spawn:
     mov [es:di+14], ax          ; CX
     mov [es:di+16], ax          ; AX
     mov [es:di+18], si          ; IP = entry
-    mov word [es:di+20], KERNEL_SEG ; CS
+    mov [es:di+20], bp          ; CS - the iret lands at CX:AX with
+                                ; DS = ES = CX (SPEC.md 8)
     mov word [es:di+22], 0x0202 ; FLAGS: IF=1, reserved bit 1 set
     mov [bx+T_INST], dl         ; owning instance (0xFF = none)
 
@@ -290,6 +311,7 @@ task_spawn:
                                 ; AL = 0 -> CF = 1 (table full), else CF = 0.
                                 ; The pops below touch no flags.
     pop es
+    pop bp
     pop di
     pop si
     pop dx

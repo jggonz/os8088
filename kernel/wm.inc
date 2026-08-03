@@ -20,17 +20,29 @@ W_Y     equ 4                   ; word, frame top (below menu bar: y >=
                                 ; MBAR_H - except under WF_FULL, SPEC 11.2)
 W_W     equ 6                   ; word, frame width  (outer, includes border)
 W_H     equ 8                   ; word, frame height (includes title bar)
-W_TITLE equ 10                  ; word: near ptr to NUL title string
-W_PAINT equ 12                  ; word: near ptr, in: SI = window ptr
-W_ONKEY equ 14                  ; word: near ptr or 0; AL=ascii AH=scan SI=win
-W_ONCLICK equ 16                ; word: near ptr or 0; CX=x DX=y SI=win, called
-                                ; under the gfx lock for content clicks on the
-                                ; front window (SPEC.md 13)
-W_MENUS equ 18                  ; word: near ptr to this window's app menu set
-                                ; (SPEC.md 12.2), 0 = no menus of its own.
+W_TITLE equ 10                  ; word: OFFSET of the NUL title string in the
+                                ; OWNER's segment (SPEC.md 11) - a kernel
+                                ; pointer for kernel/built-in windows, a
+                                ; package-segment offset for a package's
+W_PAINT equ 12                  ; word: proc OFFSET, in: SI = window ptr.
+                                ; The three proc words are offsets in the
+                                ; owner's segment, deliberately (the record
+                                ; did not grow, v3): every dispatch site
+                                ; resolves the segment through inst_cb_seg
+                                ; and transfers through inst_cb_call
+                                ; (SPEC.md 11 - near + `ret` for the kernel,
+                                ; far + `retf` for a package)
+W_ONKEY equ 14                  ; word: proc offset or 0; AL=ascii AH=scan
+                                ; SI=win
+W_ONCLICK equ 16                ; word: proc offset or 0; CX=x DX=y SI=win,
+                                ; called under the gfx lock for content
+                                ; clicks on the front window (SPEC.md 13)
+W_MENUS equ 18                  ; word: this window's app menu set OFFSET in
+                                ; the owner's segment (SPEC.md 12.2), 0 = no
+                                ; menus of its own.
                                 ; NOT a template word - wm_create zeroes it;
                                 ; a built-in's KD_INIT or a package's
-                                ; menu_win_set (API 0x00AC) fills it in.
+                                ; menu_win_set (API 0x0148) fills it in.
                                 ; Whichever window is frontmost owns the
                                 ; menu bar (SPEC.md 12).
 WIN_SIZE equ 20                 ; NOT a power of two: never shift, multiply
@@ -61,6 +73,10 @@ wm_init:
     mov di, wm_owner            ; empty value is 0xFF (unowned, SPEC.md 11)
     mov cx, MAX_WIN
     rep stosb
+    mov ax, KERNEL_SEG          ; every slot's creator stamp starts kernel
+    mov di, wm_wseg             ; (SPEC.md 11): only osapi_w_wm_create ever
+    mov cx, MAX_WIN             ; stores anything else
+    rep stosw
     mov word [wm_fs], 0         ; no fullscreen window (SPEC.md 11.2); .bss
                                 ; is never zeroed at boot, so this is not
                                 ; redundant
@@ -164,6 +180,9 @@ wm_create:
     sub ax, wm_wins
     mov cl, WIN_SIZE
     div cl                      ; AL = index (AH = 0: ptr is record-aligned)
+    mov di, ax                  ; stamp the creator segment KERNEL_SEG
+    shl di, 1                   ; (SPEC.md 11): a package creation is
+    mov word [wm_wseg+di], KERNEL_SEG ; re-stamped by osapi_w_wm_create
     mov ch, 0
     mov cl, [wm_zn]
     mov di, wm_zord
@@ -202,6 +221,9 @@ wm_destroy:
     div cl                      ; AL = index (AH = 0: ptr is record-aligned)
     mov si, ax                  ; orphan the slot's owner entry so a future
     mov byte [wm_owner+si], 0xFF; wm_create reuse starts unowned (SPEC.md 11)
+    shl si, 1                   ; ...and reset its creator stamp: a freed
+    mov word [wm_wseg+si], KERNEL_SEG ; slot must never match a package
+                                ; segment again (SPEC.md 11)
     mov ch, 0
     mov cl, [wm_zn]
     jcxz .paint                 ; empty z-order: nothing to remove
@@ -226,6 +248,48 @@ wm_destroy:
     call wm_paint_all
     pop si
     pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_destroy_seg - destroy every window a package segment created (SPEC.md 11)
+; in:  AX = the creator SEGMENT, never KERNEL_SEG (a package region's, or an
+;      aborted load's); caller holds the gfx lock
+; out: nothing (all registers preserved)
+;
+; The teardown sweep for windows the loader never bound: a package may
+; wm_create more windows than the one it returned to the loader (SPEC.md
+; 20.2), and those carry no wm_owner - only the wm_wseg stamp ties them to
+; their creator. Called with the dying instance's I_SPTR (app_close_win /
+; inst_task_die, packages only) and with an aborted load's region segment
+; (SPEC.md 21 step 9), so no window can outlive the segment its callback
+; procs live in - the region is about to be freed for reuse.
+; -----------------------------------------------------------------------------
+wm_destroy_seg:
+    push ax
+    push bx
+    push cx
+    push si
+    xor si, si                  ; SI = index * 2 into wm_wseg
+    mov cx, MAX_WIN
+.scan:
+    cmp [wm_wseg+si], ax
+    jne .next
+    push ax
+    mov ax, si
+    shr ax, 1                   ; AL = window index (AH = 0: SI <= 22)
+    call wm_idx2ptr             ; BX = window ptr
+    pop ax
+    call wm_destroy             ; resets wm_owner AND the wm_wseg stamp, so
+                                ; a used slot cannot match twice - and a
+                                ; free slot's stamp is KERNEL_SEG, which AX
+                                ; never is, so no guard on W_FLAGS is needed
+.next:
+    add si, 2
+    loop .scan
+    pop si
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -276,7 +340,7 @@ wm_fs_drop:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_sizable - set or clear a window's WF_SIZABLE bit (public; API 0x008C)
+; wm_sizable - set or clear a window's WF_SIZABLE bit (public; API 0x0108)
 ; in:  BX = window ptr, AL = 0 clear / non-zero set
 ; out: nothing (all registers preserved)
 ; No repaint: the grow box appears at the next paint. UI-task context only
@@ -292,7 +356,7 @@ wm_sizable:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_fullscreen - enter or leave fullscreen (public; API 0x0090, SPEC.md 11.2)
+; wm_fullscreen - enter or leave fullscreen (public; API 0x0110, SPEC.md 11.2)
 ; in:  AL = 1 enter (BX = window ptr) / 0 exit; caller HOLDS the gfx lock
 ; out: CF = 1 enter refused (another window owns the screen), else CF = 0.
 ;      All registers preserved.
@@ -609,6 +673,37 @@ wm_content:
     inc ax
     add dx, TITLE_H
 .full:
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_geom - content size of a window (SPEC.md 11; API slot 0x01B0, new in v3)
+; in:  BX = window ptr
+; out: CX = content width, DX = content height (inner px - the box whose
+;      ORIGIN wm_content answers); CF = 1 the window is not visible.
+;      Preserves everything else.
+;
+; The package-side replacement for reading W_W/W_H/W_FLAGS bit 1 out of a
+; record a package's DS can no longer reach (SPEC.md 20.1): window pointers
+; are opaque handles since v3, and both the live-layout rule (SPEC.md 11.1)
+; and worker rule 5 (SPEC.md 20.6) are phrased on this call. Callable from
+; any context, lock held or not, like osapi_video - but the answer is only
+; STABLE under the gfx lock, which is when painters ask. Pure reads, so an
+; implausible BX misinforms only its caller.
+; -----------------------------------------------------------------------------
+wm_geom:
+    mov cx, [bx+W_W]
+    mov dx, [bx+W_H]
+    test word [bx+W_FLAGS], WF_FULL
+    jnz .full                   ; fullscreen: the whole frame is content
+    sub cx, 2                   ; content cols x+1 .. x+w-2 (SPEC.md 11)
+    sub dx, TITLE_H + 1         ; content rows y+TITLE_H .. y+h-2
+.full:
+    test word [bx+W_FLAGS], 2   ; visible?
+    jz .hidden
+    clc
+    ret
+.hidden:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1107,9 +1202,11 @@ wm_idx2ptr:
 ; mirrored at W_X+W_W-19 with a collapse bar across row W_Y+9 - stripes
 ; broken by white 2px around each box and 6px around the centered black
 ; title; black separator at row W_Y+TITLE_H-1; content white-filled, then
-; W_PAINT is called with SI=window - bracketed by task_cycles/inst_charge so
-; the paint is billed to the window's instance, not to the painting task
-; (SPEC.md 8.1/28).
+; W_PAINT is called with SI=window - dispatched at the OWNER's segment via
+; inst_cb_seg/inst_cb_call (SPEC.md 11: near for a kernel window, far for a
+; package's) and bracketed by task_cycles/inst_charge so the paint is
+; billed to the window's instance, not to the painting task (SPEC.md
+; 8.1/28).
 ; -----------------------------------------------------------------------------
 wm_draw_win:
     push ax
@@ -1257,9 +1354,26 @@ wm_draw_win:
     call gfx_hline
 
 .title:
-    mov si, [di+W_TITLE]        ; centered title on a 6px white gap
-    test si, si
-    jz .content
+    mov si, [di+W_TITLE]        ; centered title on a 6px white gap. The
+    test si, si                 ; word is an OFFSET in the OWNER's segment
+    jz .content                 ; (SPEC.md 11), so it is STAGED kernel-side
+                                ; before font_* sees it - the dsk_get_dir
+                                ; idiom, never a segment override:
+    mov bx, di
+    push di
+    call inst_win_owner         ; DI = owning record, 0 = unowned
+    call inst_cb_seg            ; AX = the owner's segment (KERNEL_SEG for
+    pop di                      ; kernel and built-in windows - the copy is
+                                ; then kernel-to-kernel, one code path)
+    push es
+    mov es, ax
+    push di
+    mov di, wm_tbuf
+    mov cx, OSAPI_STR_MAX
+    call osapi_copy_str         ; ES:SI -> wm_tbuf, capped, NUL forced
+    pop di
+    pop es
+    mov si, wm_tbuf
     call font_width             ; AX = text width, px
     mov cx, [di+W_W]
     sub cx, ax
@@ -1307,8 +1421,13 @@ wm_draw_win:
     call task_cycles            ; DX:AX = start stamp
     push dx
     push ax
+    call inst_cb_seg            ; AX = the owner's segment (DI = the record
+    push ax                     ; inst_win_owner answered; AX is free - the
+    push word [bx+W_PAINT]      ; stamp is already on the stack). Dispatch
+                                ; per SPEC.md 11: near for KERNEL_SEG, far
+                                ; with DS = ES = the package segment else
     mov si, bx                  ; SI = window ptr for the paint proc
-    call [bx+W_PAINT]
+    call inst_cb_call
     pop ax                      ; start stamp
     pop dx
     pop word [snd_inst]         ; the outer dispatch's stamp, back
@@ -1406,9 +1525,25 @@ wm_zn:      resb 1                  ; entries in wm_zord
 wm_owner:   resb MAX_WIN            ; instance index owning each window slot
                                     ; (SPEC.md 29), 0xFF = unowned; NOT part
                                     ; of wm_init's zero run (fill is 0xFF)
+wm_wseg:    resw MAX_WIN            ; per-slot CREATOR segment (SPEC.md 11):
+                                    ; KERNEL_SEG for every kernel-made
+                                    ; window, the caller's segment when the
+                                    ; slot was claimed through the API
+                                    ; wrapper. What inst_cb_seg answers for
+                                    ; an UNOWNED window - since v3 "unowned"
+                                    ; no longer implies "kernel procs" - and
+                                    ; what the teardown sweep matches. Not
+                                    ; part of the zero run: fill is
+                                    ; KERNEL_SEG, and 0 would read as a
+                                    ; segment
 wm_fs:      resw 1                  ; fullscreen window ptr, 0 = none
                                     ; (SPEC.md 11.2); zeroed by wm_init
 wm_fs_save: resw 4                  ; its windowed x/y/w/h, restored on exit
+wm_tbuf:    resb 64                 ; W_TITLE staged through the owner's
+                                    ; segment at every wm_draw_win (SPEC.md
+                                    ; 11/20.3): OSAPI_STR_MAX chars + the
+                                    ; forced NUL. Written before every read,
+                                    ; so it needs no boot init
 
 ; --- the clip region (SPEC.md 11.3) ------------------------------------------
 ; Uninitialized on purpose: wm_clip_n lives in .text as a dw 0 and is the

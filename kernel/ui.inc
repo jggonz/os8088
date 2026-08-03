@@ -67,11 +67,18 @@ ui_task:
     call snd_disp_set           ; grants made inside the handler (SPEC 34.3)
     push ax                     ; the key - task_cycles returns in DX:AX
     call task_cycles            ; DX:AX = start stamp
-    mov bx, ax
-    pop ax                      ; key back for the handler's contract
+    mov cx, ax                  ; stamp lo steps aside into CX: BX must
+                                ; still name the WINDOW here, which
+                                ; inst_cb_seg's unowned fallback consults
+                                ; (SPEC.md 11)
+    call inst_cb_seg            ; AX = the owner's segment (DI = the record)
+    mov bx, ax                  ; segment steps aside...
+    pop ax                      ; ...key back for the handler's contract
     push dx                     ; start stamp: hi, then lo
-    push bx
-    call [si + W_ONKEY]
+    push cx
+    push bx                     ; the resolved segment above the offset:
+    push word [si + W_ONKEY]    ; inst_cb_call's argument pair
+    call inst_cb_call
     pop ax
     pop dx
     pop word [snd_inst]         ; the outer dispatch's stamp, back
@@ -177,7 +184,14 @@ ui_task:
     pop cx                      ; click x
     push ax                     ; start stamp: hi, then lo
     push bx
-    call [si + W_ONCLICK]
+    mov bx, si                  ; BX = the window again for inst_cb_seg's
+                                ; unowned fallback (the stamp lo it banked
+                                ; is already on the stack - SPEC.md 11)
+    call inst_cb_seg            ; AX = the owner's segment (DI = the record;
+    push ax                     ; both stamps are already banked, so AX is
+    push word [si + W_ONCLICK]  ; free). SPEC.md 11 dispatch: near for the
+                                ; kernel, far at the package's segment else
+    call inst_cb_call
     pop ax
     pop dx
     pop word [snd_inst]         ; the outer dispatch's stamp, back
@@ -364,8 +378,12 @@ ui_rdown:
     or al, al
     jnz .ret                    ; title bar, close/minimize/grow box: the
                                 ; chrome has no context menu
-    cmp word [si + W_MENUS], fm_menus
-    jne .ret                    ; only Locator's file-manager windows
+    call fm_is_fmwin            ; only Locator's file-manager windows - the
+    jc .ret                     ; W_MENUS = fm_menus identity test made
+                                ; OWNER-AWARE (SPEC.md 13, binding since
+                                ; v3: a package's org-0 set offset can
+                                ; equal fm_menus by coincidence). BX = SI =
+                                ; the frontmost window here
 
     call gfx_lock
     call fm_rclick              ; select + track the popup: UNBILLED, exactly
@@ -660,8 +678,9 @@ ui_dispatch:
     mov bx, [menu_set]
     or bx, bx
     jz .ret                     ; a window with no menus cannot be here
-    cmp word [bx + AM_ONCMD], 0
-    jne .app
+    cmp word [menu_kset + AM_ONCMD], 0  ; the KERNEL COPY (SPEC.md 12.2) -
+    jne .app                    ; [menu_set] is an owner-segment offset the
+                                ; kernel no longer dereferences
 .kernel:
     mov bl, ah                  ; cmd = the cell's base + the item index
     xor bh, bh
@@ -708,11 +727,21 @@ ui_dispatch:
     call task_cycles            ; DX:AX = start stamp
     push dx                     ; start stamp: hi, then lo
     push ax
+    call inst_cb_seg            ; AX = the owner's segment (DI = the record
+                                ; captured above; SPEC.md 11/12.2 dispatch)
     mov si, [menu_win]          ; the handler's contract: AL = item,
-    mov bx, [menu_set]          ; AH = menu, SI = window, BX = the set
-    mov cx, [bx + AM_ONCMD]
+    mov bx, [menu_set]          ; AH = menu, SI = window, BX = the set as
+                                ; the application registered it (its own
+                                ; offset in its own segment, SPEC.md 12.2 -
+                                ; a handler may keep indexing its own
+                                ; tables through it)
+    push ax                     ; the resolved segment above the offset:
+    push word [menu_kset + AM_ONCMD]    ; inst_cb_call's argument pair -
+                                ; the handler OFFSET from the kernel copy
+                                ; (SPEC.md 12.2: the registered set is
+                                ; never dereferenced at dispatch)
     mov ax, [ui_menusel]
-    call cx
+    call inst_cb_call
     pop ax                      ; start stamp
     pop dx
     pop word [snd_inst]         ; the outer dispatch's stamp, back

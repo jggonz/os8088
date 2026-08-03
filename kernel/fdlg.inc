@@ -127,9 +127,11 @@ fdlg_s_drvb:   db 'B:', 0
 fdlg_win:   dw 0
 
 ; -----------------------------------------------------------------------------
-; fdlg_open - API slot 0x00B0 (SPEC.md 38.6)
+; fdlg_open - API slot 0x0150 (SPEC.md 38.6)
 ; in:  AL = 0 Open / 1 Save, BX = requester window ptr, DI = completion proc
-;      (near, in the caller's image), SI = default name (NUL, <= 12) or 0.
+;      OFFSET in the caller's segment (stored as a value; the SEGMENT is
+;      resolved from the requester's instance when the callback is invoked,
+;      never stored - SPEC.md 38.6/11), SI = default name (NUL, <= 12) or 0.
 ;      THE CALLER HOLDS THE GFX LOCK - every legal caller is a window
 ;      callback or an AM_ONCMD handler, which is what lets this create and
 ;      show the window inline instead of posting a launch.
@@ -139,8 +141,10 @@ fdlg_win:   dw 0
 ;
 ; The staleness triple (record, I_WIN, I_SPTR) is captured here and checked
 ; again at commit time: a package whose window closes while the dialog is up
-; has had its region freed, and its near callback pointer stops meaning
-; anything. The window pointer alone would not do - window slots are reused.
+; has had its region freed, and its callback offset stops meaning anything.
+; The window pointer alone would not do - window slots are reused. I_SPTR is
+; a segment since v3 (SPEC.md 29.1); the triple only ever compares it for
+; equality, so the unit change costs it nothing.
 ; -----------------------------------------------------------------------------
 fdlg_open:
     push ax
@@ -409,13 +413,35 @@ fdlg_commit:
     mov cx, [fdlg_rqcb]
     or cx, cx
     jz .out
+    call inst_cb_seg            ; AX = the requester's segment (DI = the
+                                ; record the triple just validated) -
+                                ; resolved at INVOKE time, never stored
+                                ; (SPEC.md 38.6/11)
+    push word [snd_inst]        ; stamp the dispatched instance, like every
+    call snd_disp_set           ; other callback site (SPEC.md 34.3): sound
+                                ; grants made inside the completion proc,
+                                ; and inst_pkg_spawn's identity fence
+                                ; (SPEC.md 20.6), both read it. DI = the
+                                ; requester's record
+    push es                     ; the callback owes us nothing (SPEC.md
+                                ; 38.6), and ES is the one register the
+                                ; kernel cannot shrug off (SPEC.md 1)
+    push ds
+    pop es                      ; ES = KERNEL_SEG: the name travels as
+                                ; ES:DI since v3 - a package's DS is its
+                                ; own segment and cannot read fdlg_name
+                                ; flat any more (SPEC.md 38.6)
+    push ax                     ; the resolved segment above the offset:
+    push cx                     ; inst_cb_call_es's argument pair
     mov al, [fdlg_mode]         ; the callback's contract: AL = mode,
-    mov ah, 0                   ; SI = its window, DI = the name
+    mov ah, 0                   ; SI = its window, ES:DI = the name
     mov si, [fdlg_rqwin]
     mov di, fdlg_name
-    push es                     ; the callback owes us nothing (SPEC.md
-    call cx                     ; 38.6), and ES is the one register the
-    pop es                      ; kernel cannot shrug off (SPEC.md 1)
+    call inst_cb_call_es        ; near for a kernel requester, far with
+                                ; DS = the package segment else - ES stays
+                                ; KERNEL_SEG on both legs (SPEC.md 38.6)
+    pop es
+    pop word [snd_inst]         ; the outer dispatch's stamp, back
 .out:
     pop di
     pop si
@@ -1454,10 +1480,12 @@ section .bss
                                 ; `dw 0` up in .text; see the note there)
 fdlg_mode:  resb 1              ; 0 = Open, 1 = Save
 fdlg_rqwin: resw 1              ; the requester's window...
-fdlg_rqcb:  resw 1              ; ...its near completion proc...
+fdlg_rqcb:  resw 1              ; ...its completion proc OFFSET (the segment
+                                ; is resolved at invoke time, SPEC.md 38.6)
 fdlg_rqrec: resw 1              ; ...its instance record...
-fdlg_rqsp:  resw 1              ; ...and that record's I_SPTR: the staleness
-                                ; triple of SPEC.md 38.6
+fdlg_rqsp:  resw 1              ; ...and that record's I_SPTR (a segment
+                                ; since v3, compared only for equality): the
+                                ; staleness triple of SPEC.md 38.6
 fdlg_sel:   resw 1              ; selected DISPLAY row, 0FFFFh = none
 fdlg_scrl:  resw 1              ; first visible row
 fdlg_clkt:  resw 1              ; birth tick of the last click on the

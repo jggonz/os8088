@@ -90,18 +90,15 @@ def validate_o88(path: str) -> bytes:
     magic, = struct.unpack_from("<H", data, 0)
     if magic != 0x384F:
         fail(f"{path}: bad magic 0x{magic:04X} (not a .o88 package)")
-    if data[2] != 2:
-        fail(f"{path}: format version {data[2]}; this is the v2 toolchain "
-             "(rebuild the package)")
+    if data[2] != 3:
+        fail(f"{path}: format version {data[2]}; this is the v3 toolchain "
+             "(rebuild with the v3 toolchain)")
     if len(data) > 0xFFFF:
         fail(f"{path}: {len(data)} bytes overflows the 16-bit size field")
-    image, rcount = struct.unpack_from("<H", data, 8)[0], \
-        struct.unpack_from("<H", data, 12)[0]
-    if not 32 <= image <= len(data):
-        fail(f"{path}: header image size {image} out of range")
-    if image + 2 * rcount != len(data):
-        fail(f"{path}: image {image} + {rcount} reloc words != file size "
-             f"{len(data)} (run os88pkg.py first)")
+    image, = struct.unpack_from("<H", data, 8)
+    if image != len(data):
+        fail(f"{path}: header image size {image} != file size {len(data)} "
+             "(they must be equal since v3 - run os88pkg.py first)")
     hname = data[16:32].split(b"\0", 1)[0]
     if not hname:
         fail(f"{path}: empty name field in header")

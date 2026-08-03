@@ -100,7 +100,7 @@ dskw_syms:  db '$', '%', 0x27, '-', '_', '@', '~', 0x60
 dskw_isdir: db 0                ; 1 = dskw_commit is stamping a folder
 
 ; -----------------------------------------------------------------------------
-; dskw_write - create or replace a whole file (SPEC.md 18.4, slot 0x0098)
+; dskw_write - create or replace a whole file (SPEC.md 18.4, slot 0x0120)
 ; in:  SI -> NUL-terminated 8.3 name, ES:BX -> the bytes, CX = byte count
 ;      (0 = an empty file)
 ; out: CF=0, AX = 0; CF=1, AX = FERR_*
@@ -128,7 +128,7 @@ dskw_write:
     ret
 
 ; -----------------------------------------------------------------------------
-; dskw_read - read a whole file by name (SPEC.md 18.4, slot 0x009C)
+; dskw_read - read a whole file by name (SPEC.md 18.4, slot 0x0128)
 ; in:  SI -> name, ES:BX -> destination, CX = destination capacity
 ; out: CF=0, AX = bytes read (the file's size); CF=1, AX = FERR_* - and on
 ;      FERR_BIG the destination is untouched
@@ -156,7 +156,7 @@ dskw_read:
     ret
 
 ; -----------------------------------------------------------------------------
-; dskw_delete - delete a file by name (SPEC.md 18.4, slot 0x00A0)
+; dskw_delete - delete a file by name (SPEC.md 18.4, slot 0x0130)
 ; in:  SI -> name
 ; out: CF=0, AX = 0; CF=1, AX = FERR_*
 ; clobbers: AX (the output), CF
@@ -180,7 +180,7 @@ dskw_delete:
     ret
 
 ; -----------------------------------------------------------------------------
-; dskw_rename - rename a file in place (SPEC.md 18.4, slot 0x00A4)
+; dskw_rename - rename a file in place (SPEC.md 18.4, slot 0x0138)
 ; in:  SI -> old name, DI -> new name
 ; out: CF=0, AX = 0; CF=1, AX = FERR_*
 ; clobbers: AX (the output), CF
@@ -204,7 +204,7 @@ dskw_rename:
     ret
 
 ; -----------------------------------------------------------------------------
-; dskw_dfree - free space on the mounted volume (SPEC.md 18.4, slot 0x00A8)
+; dskw_dfree - free space on the mounted volume (SPEC.md 18.4, slot 0x0140)
 ; in:  nothing
 ; out: CF=0, DX:AX = free bytes, BX = SECTORS per cluster (spc*512 overflows
 ;      16 bits at the SPEC.md 18.2-legal spc = 128); CF=1, AX = FERR_*

@@ -28,8 +28,11 @@ I_FLAGS  equ 1                  ; byte: bit0 = minimized
 I_KIND   equ 2                  ; byte: KIND_*; bit 7 = package
 I_TASK   equ 3                  ; byte: task slot (SPEC.md 8), 0xFF = none
 I_WIN    equ 4                  ; word: window record ptr
-I_SPTR   equ 6                  ; word: builtin state ptr / package base
-I_SIZE   equ 8                  ; word: package region bytes; 0 for builtins
+I_SPTR   equ 6                  ; word: builtin state ptr / package region
+                                ; SEGMENT (v3, SPEC.md 29.1 - also the
+                                ; segment its callbacks dispatch at, 11)
+I_SIZE   equ 8                  ; word: package region PARAGRAPHS (v3, <=
+                                ; PKG_MAX_PARA); 0 for builtins
 I_ICON   equ 10                 ; word: 16x16 icon body ptr, 0 = generic
 I_NAME   equ 12                 ; 16 bytes: NUL-terminated copy (<= 15 chars)
 I_CYC    equ 28                 ; dword: CPU cycles billed to this instance's
@@ -103,6 +106,10 @@ inst_init:
     mov di, inst_tab
     mov cx, INST_MAX * I_RECSZ
     rep stosb
+    mov di, inst_icons          ; the icon cache too (SPEC.md 29.5): a slot
+    mov cx, INST_MAX * 64       ; is only ever read through a live record's
+    rep stosb                   ; I_ICON, but a zeroed cache draws as the
+                                ; blank-body icon if a bug ever gets there
     mov word [inst_launch], 0
     pop es
     pop di
@@ -312,6 +319,141 @@ inst_charge:
     pop ax
     ret
 
+; =============================================================================
+; Callback dispatch (SPEC.md 11, binding since v3)
+;
+; W_PAINT / W_ONKEY / W_ONCLICK, the AM_ONCMD menu handler, the fdlg
+; completion proc and the loader's entry call are all near OFFSETS - the
+; window record did not grow - and the SEGMENT comes from the owner at
+; every dispatch site. The three routines below are the ONE implementation
+; of that rule: inst_cb_seg answers the segment question, and the two call
+; thunks do the transfer - near for KERNEL_SEG (the callee `ret`s, exactly
+; as before v3), far with the callee's DS switched for a package (the
+; callee `retf`s, SPEC.md 20.2). A wrong answer here is a call into
+; hyperspace, which is why no site open-codes any of it.
+;
+; The thunks take the target on the STACK (seg above off) rather than in
+; registers because no register is free at every site - W_ONKEY owns AX,
+; W_ONCLICK owns CX/DX, AM_ONCMD owns AX and BX - and because the stack
+; makes them re-entrant by construction: a package's W_ONCLICK that calls
+; an API slot that repaints (wm_show -> wm_paint_all -> other windows'
+; W_PAINT) nests dispatches, and a static scratch far pointer would need
+; a critical section the callee's run time forbids.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; inst_cb_seg - resolve a callback's code/data segment from its owner
+; in:  DI = owning instance record ptr, or 0 (an UNOWNED window);
+;      BX = the window ptr, record-aligned - consulted ONLY when DI = 0
+;      (0 = no window at all: a kernel context)
+; out: AX = the segment: the record's I_SPTR when DI names a PACKAGE record
+;      (I_KIND bit 7 - since v3 I_SPTR is that package's region SEGMENT,
+;      SPEC.md 29.1); KERNEL_SEG for a built-in's record (its I_SPTR is a
+;      kernel state ptr, not a segment); for DI = 0, the window's wm_wseg
+;      CREATOR stamp (SPEC.md 11) - KERNEL_SEG for every kernel-created
+;      window (the file dialog's included), the creating package's segment
+;      for a window that came through osapi_w_wm_create and was never (or
+;      not yet) bound by the loader. "Unowned" stopped implying "kernel
+;      procs" the moment packages could wm_create through the API: an
+;      org-0 paint offset dispatched near at KERNEL_SEG is a wild call
+;      into kernel text, which this fallback is what prevents.
+; clobbers: nothing else (flags)
+;
+; Valid under the same conditions the DI answer itself is (SPEC.md 29.2):
+; the dispatch sites all hold the gfx lock, a package record's I_SPTR
+; never changes between publish and free, and wm_wseg is written only by
+; the UI task (wm_create / wm_destroy / the create wrapper).
+; -----------------------------------------------------------------------------
+inst_cb_seg:
+    mov ax, KERNEL_SEG
+    or di, di
+    jz .unowned
+    test byte [di+I_KIND], KIND_PKG
+    jz .out
+    mov ax, [di+I_SPTR]
+.out:
+    ret
+.unowned:
+    or bx, bx                   ; no window either: kernel context
+    jz .out
+    push si
+    call wm_ptr2idx             ; AL = window index, AH = 0 (every dispatch
+    mov si, ax                  ; site's BX is a kernel-produced, aligned
+    shl si, 1                   ; window ptr - SPEC.md 11)
+    mov ax, [wm_wseg+si]
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; inst_cb_call - transfer to a callback at a resolved segment (SPEC.md 11)
+; in:  two words pushed by the caller, seg first: the target SEGMENT
+;      (inst_cb_seg's answer, or the loader's fresh allocation) above the
+;      target OFFSET; every contract register already loaded - all GP
+;      registers pass through to the callee untouched
+; out: whatever the callee answers - registers AND flags pass straight
+;      back (nothing on either return path touches flags, so a CF answer
+;      like the entry proc's survives, the SPEC.md 20.3 stub argument
+;      pointing the other way). The two argument words are consumed.
+; clobbers: nothing of its own (BP is saved around the frame)
+;
+; KERNEL_SEG -> the near call it always was: DS/ES untouched, the callee
+; returns with `ret`. Anything else is a package segment: DS = ES = that
+; segment around a far call (SPEC.md 20.2 - CS = DS = ES = the package
+; segment on entry, `retf` to return), the caller's DS/ES restored after.
+; The far pointer is BUILT IN PLACE by the argument order: off sits at
+; [bp+4] with seg at [bp+6], which is exactly the m16:16 that
+; `call far [bp+4]` wants - and BP-relative operands address SS, which IS
+; the stack on every task (SS = LOW_SEG, SPEC.md 1), the one place the
+; SS != DS footgun works for us instead of against.
+; -----------------------------------------------------------------------------
+inst_cb_call:
+    push bp
+    mov bp, sp                  ; [bp+2] = ret, [bp+4] = off, [bp+6] = seg
+    cmp word [bp+6], KERNEL_SEG
+    je .near
+    push ds
+    push es
+    mov ds, [bp+6]              ; the callee's world: DS = ES = CS = its
+    mov es, [bp+6]              ; own segment (SPEC.md 20.1)
+    call far [bp+4]             ; m16:16 at SS:[bp+4] = off, [bp+6] = seg
+    pop es
+    pop ds
+    pop bp
+    ret 4                       ; consume off + seg; RET imm touches no flags
+.near:
+    call [bp+4]                 ; near indirect through SS - the kernel leg,
+                                ; `ret` and all, exactly as before v3
+    pop bp
+    ret 4
+
+; -----------------------------------------------------------------------------
+; inst_cb_call_es - inst_cb_call, but the CALLER's ES is delivered to the
+;                   callee instead of the package segment
+; in/out: exactly inst_cb_call; the far leg switches DS only
+;
+; For the one callback whose contract carries an ES:DI pointer INTO the
+; kernel: the fdlg completion proc receives the chosen name as ES:DI with
+; ES = KERNEL_SEG (SPEC.md 38.6) - fdlg_commit sets ES before pushing the
+; target. Everything else about the transfer is identical, the near leg
+; included (a kernel requester reads the name flat, ES = DS there).
+; -----------------------------------------------------------------------------
+inst_cb_call_es:
+    push bp
+    mov bp, sp                  ; [bp+2] = ret, [bp+4] = off, [bp+6] = seg
+    cmp word [bp+6], KERNEL_SEG
+    je .near
+    push ds
+    mov ds, [bp+6]              ; DS = the package segment; ES stays the
+                                ; caller's (KERNEL_SEG at the fdlg site)
+    call far [bp+4]
+    pop ds
+    pop bp
+    ret 4
+.near:
+    call [bp+4]
+    pop bp
+    ret 4
+
 ; -----------------------------------------------------------------------------
 ; app_launch - launch (or front) a built-in app kind (SPEC.md 29.4)
 ; in:  AL = kind (0..6); UI task only, gfx lock NOT held (takes its own)
@@ -468,7 +610,10 @@ app_launch:
     sub dx, inst_tab
     mov cl, 5
     shr dx, cl
-    call task_spawn             ; in AX, DX; out CF / AL = slot
+    mov cx, KERNEL_SEG          ; a built-in's task runs in the kernel
+                                ; segment (SPEC.md 8: CX = the frame's
+                                ; DS/ES/CS)
+    call task_spawn             ; in AX, CX, DX; out CF / AL = slot
     jc .rollback
     mov [ds:bp+I_TASK], al
 
@@ -525,8 +670,17 @@ app_close_win:
     mov byte [di+I_STATE], 2    ; dying: lock-held readers skip it from here
     call snd_release_rec        ; free every sound grant before the record
                                 ; goes (SPEC.md 29.4/34.3)
+    call xm_release_rec         ; ...and every extended-memory block, or the
+                                ; claim is stranded for the session (41.5)
     call wm_destroy             ; frees the wm slot + wm_owner, repaints
     mov word [di+I_WIN], 0
+    test byte [di+I_KIND], KIND_PKG
+    jz .swept                   ; a package may have wm_created windows the
+    push ax                     ; loader never bound (SPEC.md 11/20.2):
+    mov ax, [di+I_SPTR]         ; sweep them by their wm_wseg creator stamp
+    call wm_destroy_seg         ; BEFORE the region below is freed for
+    pop ax                      ; reuse - their procs live in it
+.swept:
     mov byte [di+I_STATE], 0    ; record (and any package region) free
     jmp .out
 .tasked:
@@ -577,10 +731,16 @@ inst_restore:
 inst_task_die:
     call snd_release_rec        ; free every sound grant before the record
                                 ; goes (SPEC.md 29.4/34.3)
+    call xm_release_rec         ; ...and every extended-memory block (41.5)
     call gfx_lock
     mov bx, [di+I_WIN]
     call wm_destroy             ; frees the wm slot + wm_owner, repaints
     mov word [di+I_WIN], 0
+    test byte [di+I_KIND], KIND_PKG
+    jz .swept                   ; the app_close_win sweep, same reason
+    mov ax, [di+I_SPTR]         ; (SPEC.md 11/20.2): unbound windows die
+    call wm_destroy_seg         ; with the instance, before task_exit frees
+.swept:                         ; the region they point into
     call gfx_unlock
     mov bx, di                  ; I_STATE is offset 0: the release byte
     jmp task_exit
@@ -636,8 +796,8 @@ inst_wchk:
 ; -----------------------------------------------------------------------------
 ; inst_pkg_spawn - give a package instance its one worker task (SPEC.md 20.6)
 ;
-; in:  AX = near entry point inside the package image (a whole-word package
-;           address, relocated as class 0 by os88pkg.py, SPEC.md 20.2)
+; in:  AX = the worker's entry OFFSET in the package's own segment (org 0,
+;           SPEC.md 20.1/20.6)
 ;      BX = the package's own window ptr (what OSAPI_WM_CREATE returned)
 ; out: CF = 1 refused, nothing created; CF = 0 and AL = the task slot
 ; clobbers: AL (an output) and the flags - every other register preserved,
@@ -655,17 +815,24 @@ inst_wchk:
 ; this lock - W_PAINT is dispatched by whichever task drives the repaint,
 ; while app_launch spawns lock-free on the UI task. See SPEC.md 8.)
 ;
-; OWNERSHIP FENCE (SPEC.md 20.6). BX is package input, so finding a live
-; record is not enough: the record found must be a PACKAGE instance whose
-; own region contains the entry point in AX. Without that test a package
-; could hand over a stranger's window - a stale pointer, or one harvested
-; from wm_wins - and the kernel would write the STRANGER's I_TASK, flipping
-; that instance onto the die-flag close path (its close box would then hide
-; it forever, waiting on a worker it does not own) while the caller's own
-; record stayed task-less and its close took the synchronous path, freeing
-; the region its worker is still executing in. Region containment is the
-; cheap way to say "this entry belongs to this record": a second instance
-; of the same package lives at a different base, so it is refused too.
+; OWNERSHIP FENCE (SPEC.md 20.6), two halves. BX is package input, so
+; finding a live record is not enough. Half one: the record found must be
+; a PACKAGE instance whose own region contains the entry in AX -
+; `AX >> 4 < I_SIZE`, compared in PARAGRAPHS precisely so a full-segment
+; region cannot wrap the compare (SPEC.md 2.5) - so the frame's CS/DS/ES
+; are seeded from the NAMED record's I_SPTR with the offset bounded by its
+; size, and task_spawn can never iret into kernel code or past that
+; region. Half two: the record found must BE the caller's own instance.
+; At org 0 every package's offsets start at 0x20 and every region is at
+; least 32 paragraphs, so the offset test alone passes against essentially
+; ANY package record - v2's distinct bases proved identity for free, v3's
+; shared org cannot - and a package handing a stranger's (or sibling's)
+; window would put a task in the STRANGER's segment and flip the
+; stranger's record onto the die-flag close path, leaking record and
+; region for the session. The identity the kernel already holds is the
+; DISPATCH stamp: every sanctioned call site is a dispatched callback,
+; and snd_disp_set stamped its instance index into [snd_inst] (SPEC.md
+; 34.3) - the record's index must match it, full stop.
 ;
 ; NOT callable from the package entry proc: the loader publishes I_STATE=1
 ; and binds wm_owner only AFTER the entry returns (SPEC.md 21 step 9), so
@@ -686,21 +853,40 @@ inst_pkg_spawn:
     jne .fail                   ; byte and is never cleared once set
     test byte [di+I_KIND], KIND_PKG ; the fence: a package instance...
     jz .fail
-    cmp ax, [di+I_SPTR]         ; ...whose own region holds the entry point,
-    jb .fail                    ; which is what ties this spawn to the
-    mov cx, [di+I_SPTR]         ; CALLING instance (I_SIZE = image + bss,
-    add cx, [di+I_SIZE]         ; end <= 0xFE00, so no wrap here)
-    cmp ax, cx
-    jae .fail
-    mov ch, ah                  ; bank the caller's AH: task_spawn rebuilds
-                                ; the whole of AX but preserves CX
+    push ax                     ; ...whose own region contains the entry:
+    mov cl, 4                   ; AX >> 4 < I_SIZE, in PARAGRAPHS - a
+    shr ax, cl                  ; full-segment region (I_SIZE up to
+    cmp ax, [di+I_SIZE]         ; PKG_MAX_PARA) cannot wrap this compare
+    pop ax                      ; (POP touches no flags: CMP's answer is
+    jae .fail                   ; still live at the JAE)
+    mov bh, ah                  ; bank the caller's AH: task_spawn rebuilds
+                                ; the whole of AX, CX carries the segment
+                                ; below, and BX - pushed at entry - is done
+                                ; serving as the window ptr
     mov dx, di                  ; DX = instance index = (rec - inst_tab) >> 5,
     sub dx, inst_tab            ; the app_launch idiom (SPEC.md 29.4). It
     mov cl, 5                   ; lands in the worker's DX and its DL in
     shr dx, cl                  ; T_INST, so the Task Manager attributes the
                                 ; task to this instance (SPEC.md 8/28)
-    call task_spawn             ; in AX = entry, DX = arg; out CF, AL = slot
-    mov ah, ch                  ; caller's AH back - MOV touches no flags, so
+    cmp dl, [snd_inst]          ; the fence's OTHER half (SPEC.md 20.6): the
+    jne .fail                   ; record found must BE the instance whose
+                                ; callback is running. Every sanctioned call
+                                ; site is a dispatched callback, and the
+                                ; dispatch stamped its instance index into
+                                ; [snd_inst] (SPEC.md 34.3) - without this,
+                                ; at org 0 the offset test above passes for
+                                ; essentially ANY package record (every
+                                ; region starts at 0x20), and a stranger's
+                                ; window would flip the STRANGER's I_TASK,
+                                ; putting a foreign task in its segment and
+                                ; its record on the die-flag close path
+                                ; nobody will ever complete
+    mov cx, [di+I_SPTR]         ; the worker's DS/ES/CS = the instance's own
+                                ; segment (SPEC.md 8/20.6): the frame can
+                                ; only iret into THIS record's region
+    call task_spawn             ; in AX = entry, CX = segment, DX = arg;
+                                ; out CF, AL = slot
+    mov ah, bh                  ; caller's AH back - MOV touches no flags, so
                                 ; task_spawn's CF is still the live answer
     jc .out                     ; task table full: nothing was created
     mov [di+I_TASK], al         ; the record now owns the worker
@@ -779,6 +965,7 @@ inst_pkg_alive:
     jmp inst_task_die           ; never returns
 .winless:
     call snd_release_rec        ; the inst_task_die order, minus the window
+    call xm_release_rec
     mov bx, di                  ; no window, but the record is real: release
     jmp task_exit               ; it anyway (I_STATE is offset 0), or its
                                 ; region, dock tile and tm row leak for the
@@ -807,6 +994,15 @@ section .bss
 
 inst_tab:    resb 384           ; INST_MAX x I_RECSZ (12 x 32; literal per
                                 ; the no-forward-ref-in-bss rule)
+inst_icons:  resb 768           ; INST_MAX x 64: the per-instance embedded-
+                                ; icon cache (SPEC.md 29.5). The loader
+                                ; copies a package's icon body out of its
+                                ; segment into slot i and points I_ICON at
+                                ; it (SPEC.md 21 step 9), so the dock's
+                                ; read stays a plain kernel DS pointer -
+                                ; the "side table, not a fatter record"
+                                ; answer to SPEC.md 20.7 rule 2. Zeroed by
+                                ; inst_init
 inst_launch: resw 1             ; deferred launch: 0 = none, else kind + 1
 inst_knd:    resb 1             ; app_launch scratch: kind being launched
 inst_slot:   resw 1             ; app_launch scratch: state-pool slot

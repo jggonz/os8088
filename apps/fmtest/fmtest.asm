@@ -37,7 +37,7 @@ FT_CONT_H equ 59                    ; 78 outer - TITLE_H - 1px border
 
 ; -----------------------------------------------------------------------------
 ; ft_entry - package entry point (SPEC.md 20.2)
-; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
+; in:  CS=DS=ES = our own segment, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF clear (CF set = abort, from wm_create)
 ; -----------------------------------------------------------------------------
 ft_entry:
@@ -45,7 +45,7 @@ ft_entry:
     mov si, ft_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     pop si
-    ret
+    retf                            ; far-called by the loader (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; ft_paint - W_PAINT: the patch result line and the stage line
@@ -83,7 +83,7 @@ ft_paint:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_PAINT (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; ft_onclick - W_ONCLICK: advance the gate stage (see file header)
@@ -126,13 +126,14 @@ ft_onclick:
     add cx, FT_CONT_W-1             ; x2
     add dx, FT_CONT_H-1             ; y2
     call OSAPI_GFX_FILL
-    call ft_paint                   ; SI = window ptr still
+    push cs                         ; ft_paint returns with retf (it is the
+    call ft_paint                   ; far-called W_PAINT); SI = win ptr still
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_ONCLICK (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; ft_voice - patch-load ft_patch onto one channel, then key a note
@@ -177,7 +178,7 @@ ft_onkey:
     pop dx
     pop cx
     pop ax
-    ret
+    retf                            ; far-called W_ONKEY (SPEC.md 20.5)
 
 ; --- the gate patch (11 bytes, SPEC.md 34.2 layout) --------------------------
 ; A near-sine voice whose carrier runs at TWICE the keyed frequency: the

@@ -158,48 +158,37 @@ module.
 
 ---
 
-## Step D — packages out of the kernel segment ⏸ not started
+## Step D — packages out of the kernel segment ✅ done (format v3, SPEC §20)
 
-The last big lever, deliberately deferred. It would give the kernel the full
-64KB and give every package its own segment instead of a shared 20KB pool.
+The last big lever. The kernel got the full 64KB back (guards 1–2 now bound
+against 0x10000 — the reclaimed 19,968 bytes paid for the far API table,
+the marshalling wrappers, the §12.2 menu-set copy and the icon cache), and
+every package gets its own segment.
 
-**What it costs.** Packages stop sharing the tiny model. OSAPI near calls
-become far calls; the paint/key/click pointers the kernel stores go from
-word to dword; DS has to switch on every crossing of the boundary in both
-directions. It rewrites `wm.inc`'s dispatch, `apps/os88api.inc`,
-`tools/os88pkg.py` and all three packages.
+**What shipped.** The API table's slots are 8 bytes and far
+(`push ds / push cs / pop ds / call near / pop ds / retf`); package sources
+call them as `call KERNEL_SEG:offset` immediates via the redefined
+`OSAPI_*` constants, with no package-source edits beyond `retf` returns.
+Callback procs stayed near OFFSETS — the segment is resolved from the
+owning instance's I_SPTR at every dispatch, or from the window's `wm_wseg`
+creator stamp when unowned (SPEC §11). Near-pointer API arguments are
+staged kernel-side at the slot boundary (the `dsk_get_dir` idiom), and the
+menu set is copied whole at relayout. Relocation died entirely: packages
+assemble once at org 0 (a flat image plus a segment, no fixups), and
+`tools/os88pkg.py`'s dual-assembly diff is gone — it validates and stamps.
 
-**What it buys beyond the space.** Relocation gets simpler, not harder:
-class 1 (the `call OSAPI_*` rel16 fixups) disappears entirely, and if
-packages are assembled at org 0 and loaded on a paragraph boundary, class 0
-goes too — a package becomes a flat image plus a segment, with no fixups at
-all. `tools/os88pkg.py`'s dual-assembly diff would no longer be needed.
-
-**Do it when** a package needs more than ~19KB, or several large packages
-need to be resident at once. Not before: the kernel has 28KB of headroom and
-the current packages are under 2KB each.
-
-**Where the segments come from.** Decided in docs/SOUND-PLAN.md: the sound
-layer claims `SND_SEG` = linear 0x30000–0x3FFFF (the last fully-free 64KB on
-the 256KB floor), and the same SPEC §2 amendment pins the menu save-unders
-to 0x20000–0x2FFFF. So on the floor, Step D's per-package segments carve
-from that block (shared with the save-under heap); on bigger machines
-they can range above BB_SEG at 0x40000 instead. Settled now so the conflict
-is not discovered mid-migration.
-
-**Since then that block has lost its top 16KB.** SPEC §2.3's `VIEW_SEG`
-(linear 0x2C000–0x2FFFF) holds the file manager's four per-window listing
-caches, and §2.2 narrowed `SAVE_SEG`'s pinned extent to 0x20000–0x2BFFF to
-make room. So Step D's floor-machine budget is **48KB**, not 64KB, shared
-with a save-under heap whose measured high-water is ~11KB. That is room for
-roughly two per-package segments where Step D's own trigger is "a package
-needs more than ~19KB" — enough once, not twice. If Step D ever needs the
-16KB back, the honest move is to cap the file manager at two windows
-(`VIEW_SLOTS`, `KD_CAP` and `fm_pool` are one number wearing three hats,
-SPEC §29.3), not to overlap the two users. And there is no slack to steal below
-0x10000 either: `FAT_SEG`'s snapshot owns linear 0x03000–0x07FFF (Step A),
-so Step D — or anything else hunting for low memory — must not assume the
-old gap between the `.fartext` blob and `LOW_SEG` is free.
+**Where the segments come from — as decided, not as once planned.** The
+conventional **arena**: linear 0x65800 (one byte past the back buffer's
+pinned extent, so `bb_set` and packages can never fight) up to the boot
+int 12h top. 512KB machine → ~107KB; 640KB → ~233KB; 256KB floor → **zero
+arena**: the floor machine loads no packages at all, refusing each with a
+precise message ("Out of memory" / "Needs nnnK") while built-ins run
+untouched. The earlier idea of carving floor-machine package segments from
+the SAVE_SEG block was **rejected** in the v3 design — the floor keeps its
+save-under heap and its file-manager caches, and packages simply require a
+bigger machine. There is still no slack to steal below 0x10000:
+`FAT_SEG`'s snapshot owns linear 0x03000–0x07FFF (Step A), and nothing may
+assume the old gap between the `.fartext` blob and `LOW_SEG` is free.
 
 ## Rejected
 

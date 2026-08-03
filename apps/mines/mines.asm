@@ -2,8 +2,9 @@
 ; os8088 - apps/mines/mines.asm
 ;
 ; Minesweeper, the first software package (SPEC.md 23). Not kernel code: a
-; flat .o88 binary at org APP_LOAD_OFF that reaches every kernel service through
-; the os8088 API jump table (os88api.inc). 9x9 board, 10 mines, 16px cells,
+; flat .o88 binary assembled at org 0 and loaded into its own segment, that
+; reaches every kernel service through the os8088 far API table
+; (os88api.inc). 9x9 board, 10 mines, 16px cells,
 ; a 20px status strip above the board. Mines are placed lazily on the first
 ; reveal (never under it); zero-count reveals flood-fill through an explicit
 ; queue (no recursion - the UI task's stack is 1536 bytes). 'F' toggles flag
@@ -111,7 +112,7 @@ MN_BSS_TOTAL equ 426                ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; mn_entry - package entry point (SPEC.md 20.2)
-; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
+; in:  CS=DS=ES = our own segment, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF clear (CF set = abort, propagated from wm_create)
 ; The loader wm_shows the window; we must not show, draw or spawn here.
 ; The loader has already zeroed our bss, which is a fresh game.
@@ -131,10 +132,10 @@ mn_entry:
     mov si, mn_menus
     call OSAPI_MENU_SET              ; BX = the window, SI = our set
     pop si
-    ret
+    retf                            ; far-called by the loader (SPEC.md 20.5)
 .full:
     pop si                          ; no window: nothing to hang menus on
-    ret
+    retf
 
 ; -----------------------------------------------------------------------------
 ; mn_paint - W_PAINT: full content repaint
@@ -154,7 +155,7 @@ mn_paint:
     pop dx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_PAINT (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; mn_onkey - W_ONKEY: 'f'/'F' toggles flag mode, 'n'/'N' starts a new game
@@ -195,7 +196,7 @@ mn_onkey:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_ONKEY (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; mn_cmd_flag - the flag-mode command: toggle it, refresh the strip text
@@ -254,10 +255,16 @@ mn_oncmd:
     mov [mn_ox], ax
     mov [mn_oy], dx
     or cl, cl
-    jz mn_cmd_new                   ; item 0 = New Game
+    jnz .notnew
+    call mn_cmd_new                 ; item 0 = New Game (near: the command
+    retf                            ; routines stay shared with W_ONKEY)
+.notnew:
     dec cl
-    jz mn_cmd_flag                  ; item 1 = Flag Mode
-    ret                             ; unknown item: do nothing
+    jnz .out
+    call mn_cmd_flag                ; item 1 = Flag Mode
+.out:
+    retf                            ; far-called menu handler (SPEC.md 20.5);
+                                    ; an unknown item does nothing
 
 ; -----------------------------------------------------------------------------
 ; mn_onclick - W_ONCLICK: reveal (or flag, in flag mode) the cell hit
@@ -353,7 +360,7 @@ mn_onclick:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_ONCLICK (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; mn_place - place the 10 mines, excluding the first-clicked cell, and build

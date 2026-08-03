@@ -22,12 +22,22 @@ pre-empted background task, updating live while the user types or drags).
    anything newer. Consequences: no `pusha/popa`, no `push imm`, no
    `shl reg, imm` other than 1 (use CL), no `movzx`, no 32-bit registers, no
    `imul r,r,imm`. `rep movsb/stosb/lodsb`, `mul`, `div` are fine.
+   The **only** exception is a scoped `cpu 386` island closed by `cpu 8086`
+   (§41.4): the assembler guard is lifted for a handful of instructions that
+   may execute only after §41.1 detection has reported tier 2. An island is
+   an assembly-time permission, never a run-time one — the branch that
+   guarantees the tier is what makes the code legal, and the 8086 rule is
+   otherwise unchanged for every module in the tree.
 2. **Near model.** CS = DS = `KERNEL_SEG` (0x1000) for all kernel code and
-   tasks; **SS = `LOW_SEG`** (0x0800), because every task stack lives outside
-   the kernel segment (§2.1). ES is scratch — any routine may change and use
-   ES freely, but must restore it before returning unless documented
+   kernel tasks; **SS = `LOW_SEG`** (0x0800), because every task stack lives
+   outside the kernel segment (§2.1). ES is scratch — any routine may change
+   and use ES freely, but must restore it before returning unless documented
    otherwise. Calls between modules in `.text` are **near** calls; modules in
-   `.fartext` are reached only through the shims of §33.
+   `.fartext` are reached only through the shims of §33. A loaded package is
+   the one exception, and it is a segment, not a rule change: it runs with
+   CS = DS = ES = its **own** segment (§20.1), reaches the kernel only
+   through the far API table (§20.3), and keeps SS = `LOW_SEG` like every
+   task — so the SS ≠ DS consequence below applies to package code verbatim.
 
    **SS ≠ DS has one consequence and it is easy to miss:** a `[bp]`,
    `[bp+disp]`, `[bp+si]` or `[bp+di]` operand addresses **SS**, not DS. Code
@@ -59,7 +69,7 @@ pre-empted background task, updating live while the user types or drags).
    with the module's prefix (`vga_`, `font_`, `mou_`, `cur_`, `sch_`, `evq_`,
    `wm_`, `menu_`, `ui_`, `app_`, `inst_`, `dsk_`/`disk_`, `ld_`/`loader_`,
    `fm_`/`files_`, `ico_`/`icon_`, `desk_`, `dock_`, `tm_`, `cp_`, `snd_`,
-   `opl_`, `sbl_`, `vid_`) or use NASM local labels (`.foo`).
+   `opl_`, `sbl_`, `vid_`, `cpu_`, `xm_`) or use NASM local labels (`.foo`).
 6. Public drawing routines may assume the caller holds the **gfx lock**
    (§7) and that the cursor is hidden. They must not take the lock
    themselves.
@@ -83,24 +93,34 @@ pre-empted background task, updating live while the user types or drags).
 | 0x07C00       | 0000    | boot sector (dead once it jumps to the kernel)     |
 | 0x08000       | 0x0800  | `LOW_SEG` — `.lowbss`: disk buffers, then task stacks (§2.1) |
 | 0x0FFFE       | 0x0800  | `STK0_TOP` — task 0's stack top, grows down        |
-| 0x10000       | 0x1000  | kernel: code, data, .bss                           |
-| 0x1B000       | 0x1000  | `APP_LOAD_OFF` — package pool, 19.5KB: multi-instance, sector-granular first-fit (§20/§21) |
-| 0x1FE00       | 0x1000  | unused: the pool's exclusive end would not fit a 16-bit immediate at 0x10000 |
+| 0x10000       | 0x1000  | kernel: code, data, .bss — the whole 64KB segment is the kernel's (the 0xB000..0xFDFF package pool is gone, §20.1) |
 | 0x20000       | 0x2000  | `SAVE_SEG` — save-under heap (menus), raw, via ES; **extent pinned to 0x20000..0x2BFFF** (§2.2) |
 | 0x2C000       | 0x2C00  | `VIEW_SEG` — per-window file-manager listing cache, 4 × 4KB slots (§22.1); raw, via **ES only** |
 | 0x30000       | 0x3000  | `SND_SEG` — sound buffers (§34): SB DMA double buffer, record ring, sample staging pool; raw, via **ES only** (§2.2) |
 | 0x40000       | 0x4000  | `BB_SEG` — double-buffer back buffer, 4 planes × 0x9600 bytes (§32); touched only while the Control Panel's Display page has it switched on, which needs conventional RAM ≥ `DB_MIN_KB` |
+| 0x65800       | 0x6580  | `ARENA_SEG` — package-segment arena (§2.5/§20.1): whole-paragraph first-fit up to the int 12h top; empty below 407KB of RAM |
 | 0xA0000       | 0xA000  | VGA planar framebuffer, 80 bytes/row               |
 | 0xB0000       | 0xB000  | Hercules framebuffer, 4 banks × 0x2000, 90 bytes/row (§39) — mono adapters only |
 | 0xB8000       | 0xB800  | CGA framebuffer, 2 banks × 0x2000, 80 bytes/row (§39) — mono adapters only |
+| 0xF0000       | 0xF000  | system BIOS ROM — read only, the pre-EGA 8x8 font (§6)  |
+| 0x100000      | 0xFFFF  | `HMA_SEG` — the High Memory Area, offsets 0x0010..0xFFFF = 65,520 bytes (§41.3); **tier 1+ only, and only once A20 has been verified open** |
+| 0x110000      | —       | extended-memory store, sized by int 15h AH=88h, handed out by `xm_alloc` as 32-bit linear bases (§41.5); **tier 1+ only, DATA ONLY — never addressable by CS** |
 
-Kernel image + .bss must fit below offset **`APP_LOAD_OFF`** (0xB000);
-`kernel.asm` ends with build-time assertions (§15.1). Loaded programs occupy
-kernel-segment offsets 0xB000..0xFDFF so they share CS and DS with the
-kernel: their paint/key/click procs are ordinary near pointers. Works in
-256KB of RAM: the back buffer is the only thing above 0x40000, and a machine
-that fails the §32 RAM probe never touches it — everything below 0x40000 is
-identical in both modes.
+Everything from 0x100000 up is **conditional and off the map on tier 0**: an
+8086/8088 has no A20 line and no memory there, so the last two rows simply do
+not exist on the floor machine and nothing in the kernel's cold path may
+assume they do (§41).
+
+Kernel image + .bss must fit its own 64KB segment; `kernel.asm` ends with
+build-time assertions (§15.1). Loaded programs live in **their own
+segments**, allocated from the arena (§2.5): their paint/key/click procs
+are near offsets in the owning instance's segment, and the kernel resolves
+the segment through `wm_owner` at every dispatch (§11/§20.3). The kernel
+itself still boots and runs in 256KB of RAM: the back buffer and the arena
+are the only things above 0x40000, a machine that fails the §32 RAM probe
+never touches the buffer, and a machine whose RAM ends at or below 0x65800
+simply has no arena — built-ins run exactly as before, and every package
+load is refused with a message, never a crash (§21).
 
 ### 2.1 Low memory
 
@@ -170,11 +190,12 @@ kernel-staged copies in both directions (§34.6, the `dsk_get_dir` idiom of
 `KLOWFAR_KB` (§15.1/§28) once the layer claims it (Phase 2).
 
 **In the same breath, `SAVE_SEG`'s extent is pinned to 0x20000..0x2BFFF**:
-the save-under heap may never grow past `VIEW_SEG`, and `docs/MEMORY-PLAN.md`
-Step D (packages into their own segments) must carve its per-package
-segments from that same block on the floor machine — the bound that keeps
-"SND_SEG is free" true forever. On bigger machines Step D may range above
-0x40000/`BB_SEG` instead.
+the save-under heap may never grow past `VIEW_SEG` — the bound that keeps
+"SND_SEG is free" true forever. (`docs/MEMORY-PLAN.md` Step D once planned
+to carve per-package segments from this same block on the floor machine;
+the decided v3 design does not — package segments come only from the arena
+of §2.5, and the floor machine loads no packages at all. The extent pin
+stands on its own.)
 
 The extent used to run to 0x2FFFF; the file manager's per-window listing
 cache (§22.1) took the top 16KB. That is affordable because `SAVE_SEG` has
@@ -186,16 +207,17 @@ worst case is bounded by `gfx_save`'s formula, 4 planes × rows ×
 the frame, ~130 rows. 4 × 130 × 21 ≈ 10.9KB against 48KB — a factor of
 four in hand.
 
-**This is a measurement over what ships, not an enforced bound.**
+**The bound is enforced since v3, and this is where that is recorded.**
 `menu_layout` clamps a menu set's COUNT to `MENU_APPMAX` and `menu_popup`
-clamps a popup's items to `[vid_popmax]` (§39.2), but nothing clamps item
-WIDTH:
-`menu_widest` is taken as-is from the application's own set (§12.2), so a
-package declaring a dozen very long items could ask for more than 48KB and
-would write past the heap into `VIEW_SEG` (§2.3). No shipped package comes
-near it, and none can grow silently — a menu set is `.text` in the `.o88`.
-The honest fix the day it matters is a width clamp in `menu_widest`'s two
-callers; it is recorded here rather than left as folklore.
+clamps a popup's items to `[vid_popmax]` (§39.2); item WIDTH used to be
+unenforced — `menu_widest` read the application's own set in place, so a
+package declaring a dozen very long items could have asked for more than
+48KB and written past the heap into `VIEW_SEG` (§2.3). The §12.2
+kernel-side copy retired that hole as a side effect of retiring the
+cross-segment traversal: every string the tracker can measure is ≤
+`MENU_STRMAX` chars and every menu ≤ `MENU_ITEMMAX` items, so the worst
+pull-down is bounded by constants and the arithmetic above is a guarantee,
+not a measurement over what ships.
 
 ### 2.3 VIEW_SEG — the file-manager view cache (§22.1)
 
@@ -218,6 +240,77 @@ property that a background file-manager window paints from memory: three
 windows on three folders cost **zero** floppy I/O per repaint, and
 `wm_paint_all` (which has no clip rect and runs on every window move) would
 otherwise mean three full mounts per drag pass, under the gfx lock.
+
+### 2.4 Above 1MB — the HMA and the extended-memory store (§41)
+
+Two regions, both **absent on tier 0** and both reached only after
+`cpu_a20_enable` has *verified* the A20 line open (§41.2):
+
+```
+0x100000..0x10FFEF   HMA_SEG (0xFFFF) offsets 0x0010..0xFFFF, 65,520 bytes
+0x110000..           extended-memory store, int 15h AH=88h KB minus the HMA
+```
+
+The HMA is the only part of the region a real-mode segment can address, and
+it is the **first 64KB of exactly the same RAM that AH=88h sizes**. So the
+two allocators would hand out the same physical bytes if left alone:
+whenever `cpu_hma_claim` succeeds, `xm_init` starts its pool at
+0x110000 and subtracts 64 from the KB figure; when the claim fails (no tier,
+no A20, or AH=88h reports less than 64KB — the 1MB AT is exactly this case)
+the pool starts at 0x100000 and the HMA does not exist. One of the two owns
+those 64KB, never both.
+
+Neither region is conventional memory and neither is ever added to the Task
+Manager's `[tm_totkb]` or `[tm_usedk]` (§28/§41.6): that bar is scaled by the
+boot-time int 12h value, and folding a megabyte of extended memory into it
+would break the rule that the rows sum to the bar.
+
+**The hard ceiling, stated once and binding everywhere:** real mode forms an
+address as `seg<<4 + off`, so the highest byte any CS:IP can name is
+0x10FFEF. Extended memory above the HMA is a **data store only** — no code,
+no jump table, no callback, no package image, on any tier. Unreal
+mode (§41.4) does not change this: it widens a *data* segment's limit and
+touches neither the width of CS nor of IP.
+
+### 2.5 The package arena (§20/§21)
+
+Linear 0x65800 up to the int 12h top of conventional RAM — the block every
+v3 package segment is allocated from, in whole paragraphs, first-fit
+(`ld_alloc`, §21). The base is `ARENA_SEG` = 0x6580, a constant: exactly
+one paragraph past the back buffer's pinned extent 0x40000..0x657FF
+(`BB_SEG` + 4 × `BB_PLANE_PARA` × 16 bytes, §32). Starting above the
+buffer rather than sharing 0x40000 with it is the load-bearing decision:
+the base is **not** a function of `[bb_avail]` or `[bb_on]`, so packages
+and `bb_set` can never fail each other at run time — a machine between
+407KB and 500KB wastes the buffer's 150KB (`bb_init` refuses below
+`DB_MIN_KB` there anyway) and buys the property that no runtime state
+anywhere decides who owns which paragraph. The top is probed once, at
+boot, on task 0: `loader_init` runs int 12h (§7's only-the-UI-task-calls-
+BIOS rule, the `tm_init` precedent) and stores KB × 64 to
+`[ld_arena_top]`, in paragraphs. Never assume 0xA000: SeaBIOS's EBDA
+makes it 0x9FC0.
+
+Sizing follows from the two numbers and nothing else: 256KB → top 0x4000
+< `ARENA_SEG`, **zero arena**; 512KB → ~106KB; 640KB → ~233KB. A
+zero-arena machine is a supported machine, not an error state: it boots,
+runs every built-in identically, and refuses every package load with a
+message (§21) — never a crash, the §41.10 tier-0 standard applied here.
+
+Occupancy is **derived from the instance table**, exactly as the old
+pool's was (§29.2 rule 7): the paragraph range [I_SPTR, I_SPTR + I_SIZE)
+of every package record (I_KIND bit 7) with I_STATE ≠ 0 is occupied, and
+the store that frees the record frees the region — no allocator state
+exists to leak or to race teardown. Regions cap at `PKG_MAX_PARA` (0x0FFF
+paragraphs = 65,520 bytes): a package is one segment of code + data +
+bss, and the cap is what keeps every `I_SIZE × 16` product inside 16 bits
+(§20.6's ownership fence does that multiply).
+
+One test-only hazard, recorded: `make test VIDEO=herc HERCSEG=0x7000`
+(§39.9) relocates a fake Hercules framebuffer to linear 0x70000..0x77FFF
+— inside the arena on any QEMU boot. When `VID_HERC_SEG` is defined the
+build clamps `[ld_arena_top]` to that segment, trading arena for a
+working harness; the knob is never a production configuration, so no real
+machine loses a byte.
 
 ## 3. Global constants (defined once in kernel.asm, used everywhere)
 
@@ -244,9 +337,17 @@ CBLACK  equ 0
 CWHITE  equ 15
 CLGRAY  equ 7
 CDGRAY  equ 8
-; loadable programs (§20)
-APP_LOAD_OFF equ 0xB000      ; where packages load (kernel segment offset)
-APP_MAX_SIZE equ 0x4E00      ; image + bss budget, 0xB000..0xFDFF
+; loadable programs (§20) - v3: every package in its own segment (§2.5)
+ARENA_SEG     equ 0x6580     ; arena base paragraph - linear 0x65800, one
+                             ; past the back buffer's 0x40000..0x657FF
+PKG_MAX_PARA  equ 0x0FFF     ; region cap, paragraphs (65,520 bytes):
+                             ; I_SIZE*16 must never wrap 16 bits (§20.6)
+OSAPI_STR_MAX equ 63         ; staged-string cap, chars, NUL excluded
+                             ; (§20.3 marshalling)
+OSAPI_NAME_MAX equ 13        ; staged 8.3-name cap: one MORE than a legal
+                             ; name's 12, so an over-long name stays
+                             ; illegal in the stage and is refused by the
+                             ; name parser, never silently aliased (§20.3)
 ; double buffering (§32)
 BB_SEG        equ 0x4000     ; back buffer base segment (plane 0)
 BB_PLANE_PARA equ 0x960      ; paragraphs per plane (0x9600 bytes = 480 rows × 80)
@@ -258,13 +359,22 @@ VIEW_SEG      equ 0x2C00     ; linear 0x2C000-0x2FFFF, ES only, 4 x 4KB slots
 VIEW_SLOTS    equ 4          ; = the Disk kind's KD_CAP (§29.3)
 VIEW_SLOT_SEG equ 0x0100     ; 4,096 bytes per slot, in paragraphs
 VIEW_SEG_KB   equ 16         ; what it adds to the Task Manager RAM figure (§28)
+; CPU tiers and memory above 1MB (§41) - none of it exists on tier 0
+CPU_8086      equ 0          ; tier 0: 8086/8088. No A20 line, no HMA, no XMS
+CPU_286       equ 1          ; tier 1: A20 + HMA + int 15h AH=88h/87h
+CPU_386       equ 2          ; tier 2: the above, plus unreal mode (§41.4)
+HMA_SEG       equ 0xFFFF     ; linear 0x100000 at offset HMA_MIN_OFF (§41.3)
+HMA_MIN_OFF   equ 0x0010     ; the lowest offset in it that is above 1MB
+HMA_BYTES     equ 0xFFF0     ; 65,520 - the whole addressable HMA
+XM_HMA_KB     equ 64         ; what cpu_hma_claim takes off the xm pool (§2.4)
+XM_MAX_BLKS   equ 8          ; xm_alloc's fixed table, entries (§41.5)
 ```
 
 ## 4. Module files and ownership
 
 | file                | owns                                                    |
 |---------------------|---------------------------------------------------------|
-| `kernel/kernel.asm` | entry, constants, init order, includes, .bss layout, **os8088 API jump table at 0x0010** (§20.3) + osapi helper routines, **boot splash entry at 0x0008** (§15) |
+| `kernel/kernel.asm` | entry, constants, init order, includes, .bss layout, **os8088 far API table at 0x0010** (§20.3) + osapi helper routines and the per-slot marshalling wrappers (§20.3), **boot splash entry at 0x0008** (§15) |
 | `kernel/viddet.inc` | video adapters (§39): the boot probe, the live geometry block, mode set/teardown (`vid_setmode`/`vid_text`/`vid_init`), the shared addressing helpers `gfx_rowbase`/`gfx_nextrow`, the 1bpp colour map `gfx_ink` — prefix `vid_`; included **before** `splash.inc`, and all its data lives in `.text` |
 | `kernel/splash.inc` | boot-time loading screen (§15): the first adapter probe and mode set, welcome dialog, pixel progress bar, spinning vector "8088" — on a 1bpp adapter the progress bar alone (§39.6); far-ticked by the boot sector per sector read; self-contained, no .bss |
 | `kernel/vga12.inc`  | mode 12h planar primitives, save/restore, gfx lock; the coordinate core `vga_rect_setup` that both renderers share (§39.3) — the mode set left for `viddet.inc` |
@@ -276,12 +386,12 @@ VIEW_SEG_KB   equ 16         ; what it adds to the Task Manager RAM figure (§28
 | `kernel/clock.inc`  | system clock (§37): hardware RTC probe/read/write (int 1Ah), the wall-clock date + time advanced from `[ticks]`, field editing and formatting — prefix `clk_` |
 | `kernel/wm.inc`     | window records, z-order, frames, hit test, paint-all, `wm_owner` side table |
 | `kernel/instance.inc` | instance table: records, kind descriptors, launch/close lifecycle (§29) |
-| `kernel/menu.inc`   | menu bar (System menu + the active application's name and menus), runtime bar layout, pull-down tracking, Locator's own menu set (§12/§12.2/§12.3) |
+| `kernel/menu.inc`   | menu bar (System menu + the active application's name and menus), runtime bar layout, the kernel-side copy of the active app menu set (§12.2), pull-down tracking, Locator's own menu set (§12/§12.2/§12.3) |
 | `kernel/ui.inc`     | UI task: event pump, keyboard poll, drag, dispatch      |
 | `kernel/apps.inc`   | built-in app kinds: About, Clock, Bounce — state pools, kinit procs, per-instance tasks |
 | `kernel/disk.inc`   | BIOS int 13h floppy transfers (`disk_read`/`disk_write`), FAT12/16 mount + directory + chain walk (§18–19) |
 | `kernel/diskw.inc`  | the FAT write path (§18.4): name parsing, cluster allocation + free, FAT flush, directory entry create/update/delete, the five whole-file operations — prefix `dskw_`; the ONLY caller of `disk_write` |
-| `kernel/loader.inc` | package validation, pool allocation, per-instance load + relocate, launch (§21) |
+| `kernel/loader.inc` | package validation, arena allocation (§2.5), per-instance load into its own segment, launch (§21) |
 | `kernel/files.inc`  | Disk window: file list UI, selection, open, refresh (§22) |
 | `kernel/fdlg.inc`   | the Standard File dialog (§38): the kernel's Open/Save chooser, its modality gate and the completion callback — prefix `fdlg_` |
 | `kernel/icons.inc`  | 1-bit icon format, draw routine, built-in library (§25) |
@@ -293,6 +403,8 @@ VIEW_SEG_KB   equ 16         ; what it adds to the Task Manager RAM figure (§28
 | `kernel/sndfm.inc`  | AdLib/OPL2 driver (§34): probe, init + patch loader, `opl_wr`, FM op — prefix `opl_`, lands Phase 3 |
 | `kernel/sndsb.inc`  | Sound Blaster driver (§34): detect, `sbl_isr`, DMA ch1, streams, recording — prefix `sbl_`, lands Phases 4–5 |
 | `kernel/farcall.inc`| Far-code mechanism (§33): the `FARK`/`KCALL`/`FARSHIM` macros, `far_init`, and the list of kernel routines far code may call |
+| `kernel/cpudet.inc` | CPU tier detection and the A20 line (§41.1–41.3): `cpu_detect` (the FLAGS discriminator, 8086-safe), `cpu_a20_enable` (fast gate, keyboard-controller fallback, **mandatory wraparound verify**), `cpu_hma_claim`, and the published `[cpu_tier]` — prefix `cpu_`; `.text` only, since `cpu_detect` runs before anything else may key off the tier |
+| `kernel/xmem.inc`   | Extended memory (§41.4–41.5): `xm_init` (int 15h AH=88h sizing, and the one-time unreal-mode entry on tier 2), the fixed-table first-fit allocator `xm_alloc`/`xm_free` over 32-bit linear bases, and `xm_copy` — one ABI over two transports, an unreal 32-bit load/store loop through FS/GS on tier 2 and int 15h AH=87h on tier 1 — prefix `xm_` |
 
 `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` remain in the
 tree but are **no longer included**; the GUI replaces the text shell.
@@ -445,6 +557,15 @@ white to black, because a dithered 8x8 glyph is unreadable, §39.4).
   Every rule in this section holds unchanged in both modes: the locks, the
   cursor/ISR protocol and the BIOS restriction are about who may touch
   what, not about when the CPU is taken away.
+- **Per-task segments** (v3): a task's saved frame carries its own DS, ES
+  and CS (§8) — `KERNEL_SEG` for every kernel task, the owning instance's
+  segment for a package's §20.6 worker. SS is `LOW_SEG` for every task
+  without exception, so a context switch is still an SP swap and SS is
+  still not part of the frame; §1's SS ≠ DS consequence now covers package
+  code too. Nothing else in this section changes: the locks, the cursor
+  protocol and the BIOS restriction are segment-blind, and the ISRs always
+  reloaded DS themselves (§1 rule 3), so interrupting a task whose DS is a
+  package segment was already handled the day the rule was written.
 
 ## 8. sched.inc — round-robin, pre-emptive or cooperative (§8.2)
 
@@ -481,11 +602,20 @@ white to black, because a dithered 8x8 glyph is unreadable, §39.4).
   module's init routine.
 - `task_spawn` — three callers: `app_launch` (a built-in kind's `KD_TASK`,
   §29.4), `inst_pkg_spawn` (a package's worker, §20.6) and the SB
-  refill/drain spawns (§34.5). In: AX = entry point (near), DX = argument
-  word — delivered
+  refill/drain spawns (§34.5). In: AX = entry offset, **CX = the new
+  task's code/data segment** — `KERNEL_SEG` from every kernel caller, the
+  instance's `I_SPTR` segment from `inst_pkg_spawn` (§20.6/§29.4) — DX =
+  argument word, delivered
   in the new task's DX register; DL is additionally stored to `T_INST`
   (instance index, 0xFF = none). Builds a fresh stack frame that `iret`s
-  into the entry with IF=1, DS=ES=KERNEL_SEG, all other GP regs zero.
+  into CX:AX with IF=1 and DS = ES = CX — the frame's DS, ES and CS words
+  are all seeded from CX; they were hardcoded `KERNEL_SEG` before v3, and
+  the context switch has always saved and restored them generically, so
+  parameterising the three stores is the whole scheduler cost of §20's
+  ABI break. SS stays `LOW_SEG`: the stack is the slot's `sch_stacks`
+  slice whatever the segment, the switch path is untouched, and §1's
+  SS ≠ DS footgun holds for the new task on day one. All other GP regs
+  zero.
   Out: CF set if no free slot, else CF clear and **AL = slot index**
   (1..MAX_TASKS-1; the scan starts at slot 1 — slot 0 is the UI task and is
   never free). Clobbers AX. Zeroes the slot's `sch_cycles` dword **before**
@@ -859,17 +989,23 @@ W_Y     equ 4    ; word, frame top (below menu bar: y >= MBAR_H - except
                  ; whole screen, §11.2)
 W_W     equ 6    ; word, frame width  (outer, includes 1px border)
 W_H     equ 8    ; word, frame height (includes title bar)
-W_TITLE equ 10   ; word: near ptr to NUL title string
-W_PAINT equ 12   ; word: near ptr, in: SI = window ptr. Draws CONTENT only.
-W_ONKEY equ 14   ; word: near ptr or 0, in: AL=ascii, AH=scan, SI=win ptr
-W_ONCLICK equ 16 ; word: near ptr or 0, in: CX=x, DX=y (absolute screen
+W_TITLE equ 10   ; word: offset of the NUL title string IN THE OWNER'S
+                 ; SEGMENT (§20.3): a kernel pointer for kernel windows, a
+                 ; package offset for package windows — wm_draw_win and
+                 ; menu.inc stage it through the owner's segment into
+                 ; kernel scratch before font_width/font_str see it
+W_PAINT equ 12   ; word: proc OFFSET in the owner's segment (dispatch
+                 ; below), in: SI = window ptr. Draws CONTENT only.
+W_ONKEY equ 14   ; word: proc offset or 0, in: AL=ascii, AH=scan, SI=win ptr
+W_ONCLICK equ 16 ; word: proc offset or 0, in: CX=x, DX=y (absolute screen
                  ; coords), SI=win ptr. Called under the gfx lock when
                  ; EVT_MDOWN lands in the CONTENT of the FRONT window (§13).
                  ; Same rules as W_PAINT: must not lock and must not
                  ; block. It MAY call OSAPI_TASK_SPAWN (§20.6) - the one
                  ; sanctioned spawn a callback can make; nothing else in
                  ; the tree may spawn from a callback.
-W_MENUS equ 18   ; word: near ptr to the window's app menu set (§12.2), or
+W_MENUS equ 18   ; word: the window's app menu set OFFSET, in the owner's
+                 ; segment — copied kernel-side at relayout (§12.2) — or
                  ; 0 = no menus of its own. Zeroed by wm_create (it is NOT
                  ; a template word); set by a built-in's KD_INIT or by a
                  ; package through `OSAPI_MENU_SET` (§20.3). Whichever
@@ -892,8 +1028,9 @@ built-ins, §29.3; `wm_sizable` for packages, §20.3), so every shipped .o88's
 `apps/os88api.inc` mirrors it. **W_W/W_H are no longer set-once**: `wm_create`
 clamps them through `wm_fit` (§39.7), and `ui_grow` (§13) and `wm_fullscreen`
 (§11.2) rewrite them at runtime, so a window's W_PAINT/W_ONCLICK must derive
-their layout from the live record every call — never from constants that bake
-in the template size.)
+their layout from the live record — kernel windows read it, packages ask
+`wm_geom` (§20.3) — every call, never from constants that bake in the
+template size.)
 
 Storage: `wm_wins` (MAX_WIN × WIN_SIZE, .bss), z-order byte array
 `wm_zord` (window indices, index 0 = backmost) + `wm_zn` count. Those
@@ -902,7 +1039,21 @@ three must stay contiguous and in that order — wm_init zeroes them as one
 of the zero run): the instance index (§29) owning each window slot,
 0xFF = unowned; wm_init fills it with 0xFF separately. Writers:
 `inst_bind_win` at instance creation, `wm_destroy` (resets the destroyed
-slot's entry to 0xFF). Every used window is always present in `wm_zord` —
+slot's entry to 0xFF). After `wm_owner` sits **`wm_wseg`** (MAX_WIN
+words, also outside the zero run): the slot's **creator segment** —
+`KERNEL_SEG` for every window the kernel creates, the calling package's
+segment when the slot was claimed through `osapi_w_wm_create` (§20.3).
+Writers: wm_init and `wm_create` stamp `KERNEL_SEG`, the create wrapper
+re-stamps the caller's segment on success, `wm_destroy` resets to
+`KERNEL_SEG` so a freed slot can never match a package segment again.
+It exists because "unowned" stopped implying "kernel procs" the moment
+packages could `wm_create` through the API (v3): it is what the unowned
+leg of callback dispatch resolves through, and what the teardown sweep
+`wm_destroy_seg` (in AX = a package segment, lock held) matches — called
+with a dying package instance's I_SPTR (`app_close_win` / `inst_task_die`)
+and with an aborted load's region segment (§21 step 9), so no window
+ever outlives the segment its procs live in. Every used window is always
+present in `wm_zord` —
 membership is established at wm_create and removed only by `wm_destroy`;
 `wm_hide` clears only the visible bit, and `wm_show`/`wm_front` only
 reorder. The visible flag alone decides whether a window is painted,
@@ -910,13 +1061,43 @@ hit-tested, or counted by `wm_top`/`wm_obscured`.
 
 **Callback billing (binding).** All three dispatch sites — `wm_draw_win`'s
 W_PAINT call, and ui.inc's W_ONKEY / W_ONCLICK calls (§13) — bracket the
-near-call with `inst_win_owner` → `task_cycles` → callback →
+call with `inst_win_owner` → `task_cycles` → callback →
 `inst_charge` (§8.1/§29.4), so the work lands on the window's instance
 instead of on the task that happened to drive it. An unowned window
 (record ptr 0) skips the charge. The stamp lives on the stack across the
 callback, never in a static, so nested paints (a W_ONCLICK that repaints
 every window) bill correctly. The callbacks' own register contracts below
 are unchanged — the sites restore AX/CX/DX/SI before calling.
+
+**Callback dispatch is segment-resolving (binding, v3).** W_PAINT, W_ONKEY
+and W_ONCLICK are near OFFSETS, deliberately — the window record did not
+grow — and the SEGMENT comes from the window's owner at every dispatch
+site: when `inst_win_owner` answers a package record (I_KIND bit 7), the
+proc runs at that record's `I_SPTR`:offset, entered with CS = DS = ES =
+the package segment and returning with `retf`; a built-in's record
+resolves to `KERNEL_SEG`, and the call stays the near call it always was,
+`ret` and all. An UNOWNED window (record ptr 0) resolves through its
+`wm_wseg` creator stamp instead — `KERNEL_SEG` for every kernel-created
+window (the file dialog's included: near, unchanged), the creating
+package's segment for a window that came through `osapi_w_wm_create` and
+was never (or not yet) bound by the loader — so a package window shown
+before §21 step 9's bind, or one the entry never returned, still
+dispatches far at its creator, never near at a kernel offset (that near
+call would land an org-0 offset inside kernel text). `inst_cb_seg`
+therefore takes BX = the window ptr alongside DI = the record, and
+consults BX only when DI = 0. The far leg brackets itself with a DS
+save/restore, the
+register contracts are identical on both legs, and a package can
+therefore never be entered on a segment it does not own: an offset is
+only ever paired with its own instance's base, which is also why the
+offsets could stay 16-bit. The same owner resolution serves W_TITLE
+(staged through the owner's segment into kernel scratch before
+`font_width`/`font_str`), the `AM_ONCMD` handler (§12.2) and the fdlg
+completion proc (§38.6). Packages, for their part, treat the SI/BX window
+pointers as OPAQUE HANDLES: they name kernel memory a package's DS cannot
+reach, so the live-layout rule above is served by `wm_geom` (slot 0x01B0)
+and never by reading `W_W`/`W_H`/`W_FLAGS` out of the record — the v2
+idiom that died with the shared segment (§20.6 rule 5).
 
 Frame drawing (paint-all does this before calling W_PAINT):
 - 1px black outline around the whole frame; 1px black drop shadow along the
@@ -956,14 +1137,15 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | `wm_hit`       | in CX=x, DX=y; out BX = topmost visible window ptr containing the point (0 if none), AL = 0 content, 1 title bar, 2 close box, 3 minimize box, 4 grow box. AL=2/AL=3 only when BX is the frontmost visible window (the only one with the boxes drawn); on any other window those regions report AL=1. AL=4 only when BX is the frontmost visible window **and** has WF_SIZABLE (and not WF_FULL): the 13×13 grow-box rect of the frame drawing above; anywhere else that region is plain content (AL=0). A WF_FULL window reports AL=0 for every point — it has no chrome. |
 | `wm_paint_all` | full repaint: desktop gray (below menu bar), then `desk_paint` (§26 — desktop icons sit on the desktop, under every window), then `dock_paint` (§30 — the dock strip sits on the desktop under every window, like the icons), menu bar, every visible window back→front (frame + white content + W_PAINT). Caller holds gfx lock. |
 | `wm_content`   | in BX = win ptr; out AX = content left, DX = content top. WF_FULL set → AX = W_X, DX = W_Y (no border, no title bar — §11.2). |
-| `wm_sizable`   | in BX = win ptr, AL = 0 clear / non-zero set WF_SIZABLE. No repaint (the grow box appears at the next paint). UI-task context only (entry procs and window callbacks qualify); safe with or without the gfx lock there — every W_FLAGS writer runs on the UI task or under the lock. API slot 0x008C (§20.3). |
-| `wm_grow_paint`| in BX = win ptr (caller holds the gfx lock): draw the grow box **iff** BX is the frontmost visible window with WF_SIZABLE set and WF_FULL clear; a no-op otherwise, so it is always safe to call. wm_draw_win uses it after W_PAINT, and a resizable window's **self-initiated content repaint must end with it** — the white-fill idiom (§22) erases the corner, and without the call the box vanishes until the next full repaint while wm_hit still reports AL=4 there. Packages reach it through API slot 0x0094 (§20.3). |
-| `wm_fullscreen`| in AL = 1 enter (BX = win ptr) / AL = 0 exit; **caller holds the gfx lock** (the intended callers are W_ONKEY/W_ONCLICK handlers, which already do). See §11.2. Out CF=1 refused (enter while another window owns the screen), CF=0 done. API slot 0x0090 (§20.3). |
+| `wm_sizable`   | in BX = win ptr, AL = 0 clear / non-zero set WF_SIZABLE. No repaint (the grow box appears at the next paint). UI-task context only (entry procs and window callbacks qualify); safe with or without the gfx lock there — every W_FLAGS writer runs on the UI task or under the lock. API slot 0x0108 (§20.3). |
+| `wm_grow_paint`| in BX = win ptr (caller holds the gfx lock): draw the grow box **iff** BX is the frontmost visible window with WF_SIZABLE set and WF_FULL clear; a no-op otherwise, so it is always safe to call. wm_draw_win uses it after W_PAINT, and a resizable window's **self-initiated content repaint must end with it** — the white-fill idiom (§22) erases the corner, and without the call the box vanishes until the next full repaint while wm_hit still reports AL=4 there. Packages reach it through API slot 0x0118 (§20.3). |
+| `wm_fullscreen`| in AL = 1 enter (BX = win ptr) / AL = 0 exit; **caller holds the gfx lock** (the intended callers are W_ONKEY/W_ONCLICK handlers, which already do). See §11.2. Out CF=1 refused (enter while another window owns the screen), CF=0 done. API slot 0x0110 (§20.3). |
 | `wm_ptr2idx`   | in BX = win ptr (record-aligned); out AL = window index, AH = 0. Clobbers nothing else. The one public home of the `(ptr − wm_wins) / WIN_SIZE` idiom. |
 | `wm_obscured`  | in BX = win ptr; out CF=1 if any visible window above BX in z-order overlaps its frame rect. Result is only trustworthy while the caller holds the gfx lock — the UI task mutates `wm_zord`/window rects under it. Kept, but **no longer the right answer for a background painter**: it vetoes a whole frame for one covered pixel. Use `wm_clip_set` (§11.3). |
-| `wm_clip_set`  | in BX = win ptr; **caller holds the gfx lock**. Builds BX's visible region — its content rect less every visible window above it in `wm_zord`, drop shadows included — into the clip list, and arms clipping. out CF=1 the window is entirely invisible: nothing is armed, draw nothing this frame (also the answer when the region needs more than 16 rects). CF=0 armed. Preserves every register. The region is valid only until the next `gfx_unlock`, which clears it (§11.3). API slot 0x00C0 (§20.3). |
-| `wm_clip_clear`| disarm clipping. Preserves every register. `gfx_unlock` already does this, so a painter only needs it to go back to drawing unclipped inside the same lock hold. API slot 0x00C4 (§20.3). |
-| `wm_clip_test` | in AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); out CF=0 the whole rect lies inside **one** clip fragment, or nothing is armed; CF=1 it does not. Preserves every register. This is the question `font_char` and `icon_draw16` ask themselves, exposed so a caller that **erases a rect and then draws glyphs into it** can ask it first — see the granularity rule in §11.3. API slot 0x00C8 (§20.3). |
+| `wm_clip_set`  | in BX = win ptr; **caller holds the gfx lock**. Builds BX's visible region — its content rect less every visible window above it in `wm_zord`, drop shadows included — into the clip list, and arms clipping. out CF=1 the window is entirely invisible: nothing is armed, draw nothing this frame (also the answer when the region needs more than 16 rects). CF=0 armed. Preserves every register. The region is valid only until the next `gfx_unlock`, which clears it (§11.3). API slot 0x0170 (§20.3). |
+| `wm_clip_clear`| disarm clipping. Preserves every register. `gfx_unlock` already does this, so a painter only needs it to go back to drawing unclipped inside the same lock hold. API slot 0x0178 (§20.3). |
+| `wm_clip_test` | in AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); out CF=0 the whole rect lies inside **one** clip fragment, or nothing is armed; CF=1 it does not. Preserves every register. This is the question `font_char` and `icon_draw16` ask themselves, exposed so a caller that **erases a rect and then draws glyphs into it** can ask it first — see the granularity rule in §11.3. API slot 0x0180 (§20.3). |
+| `wm_geom`      | in BX = win ptr; out CX = content width, DX = content height (inner px — the box whose origin `wm_content` answers), CF=1 the window is not visible. Preserves everything else. New in v3: the package-side replacement for reading `W_W`/`W_H`/`W_FLAGS` bit 1 out of a record its DS can no longer reach — §11.1's live-layout rule and §20.6 rule 5 are both phrased on it. Callable from any context, lock held or not, like `osapi_video`; the answer is only *stable* under the lock, which is when painters ask. API slot 0x01B0 (§20.3). |
 
 Paint procs and key handlers run on the **UI task** (via wm_paint_all /
 dispatch) or on the window's own background task — which, since §20.6, may
@@ -980,7 +1162,7 @@ guarded by the package's own once-flag.
 A window is resizable iff W_FLAGS bit2 (`WF_SIZABLE`) is set. The bit is
 **not** part of the 16-byte template: built-ins get it from their kind row's
 `KD_WFLAG` byte (§29.3, OR-ed into W_FLAGS by app_launch right after
-wm_create), packages call `wm_sizable` (API slot 0x008C) from their entry
+wm_create), packages call `wm_sizable` (API slot 0x0108) from their entry
 proc after OSAPI_WM_CREATE. Fixed-layout windows — dialogs, the Control
 Panel, Minesweeper — simply never set it and nothing about them changes.
 
@@ -995,7 +1177,8 @@ WMIN_H ≤ h ≤ `[vid_h]` − W_Y (the frame stays on screen; position never
 changes) — writes W_W/W_H, and calls wm_paint_all under the still-held
 lock. There is no resize callback: the full repaint re-enters W_PAINT,
 and a resizable window's procs are required to lay out from the live
-record (record note above). Self-initiated repaints (the fm_repaint idiom,
+record (record note above) — kernel windows by reading it, packages
+through `wm_geom` (§20.3). Self-initiated repaints (the fm_repaint idiom,
 §22) must white-fill using the live W_W/W_H for the same reason.
 
 `ui_drag`'s release clamp is unchanged (x + w ≤ `[vid_w]` — the live screen
@@ -1010,7 +1193,7 @@ everything, because wm_obscured (which gates every unbidden background
 drawer: Clock, Bounce, the Task Manager sampler) sees a frame covering the
 entire screen and reports "covered" to everyone beneath it.
 
-`wm_fullscreen` (API slot 0x0090; caller holds the gfx lock):
+`wm_fullscreen` (API slot 0x0110; caller holds the gfx lock):
 
 - **Enter** (AL=1, BX = win ptr): another window already owns the screen
   (`[wm_fs]` non-zero and ≠ BX) → CF=1, nothing changes. Else save
@@ -1199,7 +1382,8 @@ MENU_TITLE_PAD equ 12           ; per-title cell padding (6px each side)
 
 ; one bar cell (menu_bar[], rebuilt by menu_layout):
 MB_TITLE equ 0   ; word: NUL title ptr, 0 = draw the logo glyph
-MB_ITEMS equ 2   ; word: array of near ptrs to NUL item strings
+MB_ITEMS equ 2   ; word: array of near ptrs to NUL item strings (into the
+                 ; §12.2 kernel copy — always kernel memory)
 MB_NITEM equ 4   ; word: item count
 MB_XL    equ 6   ; word: bar hit range, left x (inclusive)
 MB_XR    equ 8   ; word: bar hit range, right x (inclusive)
@@ -1232,8 +1416,8 @@ sites that already exist:
 |-----------------|-------------------------------------------------------------|
 | `menu_init`     | boot: `[menu_win]` = 0 and one `menu_relayout`, so the very first `wm_paint_all` already draws Locator's bar. Called from kmain after `wm_init`. |
 | `menu_activate` | in: BX = window ptr, or 0 for Locator. Out: **CF = 1 if the active application changed** (the caller owes the bar a repaint), CF = 0 if it was already active. Draws nothing, takes no lock, preserves every register. |
-| `menu_relayout` | recompute `[menu_set]`, `[menu_namep]` and the whole `menu_bar` from `[menu_win]`. Preserves all registers. |
-| `menu_win_set`  | in: BX = window ptr, SI = menu set ptr (0 = none) — stores `[bx+W_MENUS]` and relayouts if BX is the active window. The `OSAPI_MENU_SET` target (§20.3). Preserves every register **and the flags**: its intended call site sits between a package's `wm_create` and the `ret` that owes the loader that call's CF (§20.2). |
+| `menu_relayout` | recompute `[menu_set]`, `[menu_namep]` and the whole `menu_bar` from `[menu_win]` — since v3, by first copying the active window's set into the kernel-side `menu_kset` through the owner's segment (§12.2); everything downstream reads the copy. Preserves all registers. |
+| `menu_win_set`  | in: BX = window ptr, SI = menu set offset in the caller's segment (0 = none) — stores `[bx+W_MENUS]` and relayouts if BX is the active window; SI is never dereferenced here (the copy happens at relayout, §12.2). The `OSAPI_MENU_SET` target, slot 0x0148 (§20.3). Preserves every register **and the flags**: its intended call site sits between a package's `wm_create` and the `retf` that owes the loader that call's CF (§20.2). |
 | `menu_draw_bar` | draw the bar: `menu_check`, white field + black rule, every `menu_bar` cell's title (cell 0 = the logo glyph), the app-name label, then `menu_draw_clock`. Gfx lock held by caller. |
 | `menu_track`    | in: CX = mousedown x. Runs the whole interaction while the button is held (caller holds gfx lock): highlight title (xor), drop the menu (gfx_save under it to SAVE_SEG:0), track item highlight following `mouse_y`, on release restore save-under + unhighlight; **out AX = 0xFFFF if nothing was selected, else AH = bar cell index (0 = System), AL = item index within that cell**. Item cells are 16px tall, menu width = widest item + 16px padding. Only the bar-specific half is its own: the cell find, `menu_title_xor` and the (cell, item) pack. The drop itself is `menu_drop` (§12.4). |
 | `menu_drop`     | the tracker, anchored by variables so it serves both the bar and a context menu (§12.4). |
@@ -1318,7 +1502,8 @@ what an application's menus mean, only how to draw them and whom to call.
 ; app menu set (mirrored verbatim in apps/os88api.inc, §20.5)
 AM_NAME  equ 0   ; word: NUL app name for the bar label (<= 15 chars); 0
                  ; falls back to the owning instance's I_NAME (§29.1)
-AM_ONCMD equ 2   ; word: near ptr to the command handler, or 0 = this set
+AM_ONCMD equ 2   ; word: the command handler's offset (in the set's own
+                 ; segment — dispatched per §11), or 0 = this set
                  ; is dispatched by the kernel itself (Locator only, §12.3)
 AM_COUNT equ 4   ; word: menu count, 0..MENU_APPMAX (anything above is
                  ; clamped by menu_layout, never trusted)
@@ -1329,17 +1514,76 @@ AMENU_NITEM equ 4 ; word: item count (>= 1)
 AMENU_ENTSZ equ 6
 ```
 
+Every pointer in the structure is an offset **in the set's own segment**:
+the kernel's for a built-in set, the package's for a package's (§20.1) —
+which is exactly why the kernel stopped traversing it in place.
+
+**The kernel reads a set once per activation, by copying it (binding,
+v3).** `W_MENUS` stores the set's offset and nothing in menu.inc or
+ui.inc ever walks the original during drawing or tracking:
+`menu_relayout` resolves the set's segment from the window's owner
+(`wm_owner` → a package record's `I_SPTR`, anything else →
+`KERNEL_SEG` — §11's dispatch resolution) and copies the WHOLE set —
+AM_NAME string, AM_ONCMD, every AMENU entry, every item-pointer array,
+every title and item string — into `menu_kset`, one fixed kernel-side
+structure with the same `AM_*`/`AMENU_*` shape whose pointers point into
+its own string pool. The bar cells, `menu_draw_bar`, `menu_track`,
+`menu_drop`, `menu_widest` and `ui_dispatch` then read kernel memory and
+nothing else, which retires the entire nested-pointer traversal in one
+move; no segment override ever threads through the tracker (§20.7 rule
+3). ONE copy suffices because exactly one set is ever active — the
+bar's — and the copy is remade whenever the owner changes. Only
+`menu_relayout` ever touches package memory, and always through a
+segment `inst_cb_seg` resolved (§11): the owning record's I_SPTR for a
+bound package window, and the `wm_wseg` creator stamp for an UNOWNED
+one — so even a package window made active before its instance is
+published (an entry proc that shows its own window in violation of
+§20.2, or an extra window the loader never binds) is copied from the
+right segment, never traversed as kernel pointers. The same resolution
+guards the name fallback: an unowned window's W_TITLE is staged through
+its creator's segment (`menu_nbuf`) when that stamp is not
+`KERNEL_SEG`. The normal path is still the trivial one: `menu_win_set`
+from an entry proc stores the offset and relayouts nothing (a hidden
+window is never the active one), and a conforming package window first
+becomes *active* at the `wm_show` of §21 step 9, after publish.
+
+A fixed copy needs stated caps, and they double as the §2.2 save-under
+bound:
+
+```nasm
+MENU_ITEMMAX equ 8    ; items per menu the copy keeps (fm_menus' Folder
+                      ; menu uses all 8; §2.2's height figure assumes it)
+MENU_STRMAX  equ 19   ; chars per name/title/item string, NUL excluded
+                      ; ('Open in New Window' is 18, the shipped widest,
+                      ; and 19*8 + 16 px is §2.2's width measurement)
+```
+
+Overflow is a **silent clamp, never an error** — the existing
+`menu_layout` behaviour extended: menus past `MENU_APPMAX` were always
+dropped whole; items past `MENU_ITEMMAX` are dropped from the copy the
+same way, and a longer string is truncated at `MENU_STRMAX` with the NUL
+forced. Kernel sets ride the identical copy path (one code path, and
+`fm_menus` — 4 menus, an 8-item menu, an 18-char item — is what the caps
+were sized from).
+
 **The command handler** (`AM_ONCMD`) is called exactly like `W_ONCLICK`
 (§11/§13): on the **UI task**, **under the gfx lock**, with
 
 ```
 in:  AL = item index within the menu, AH = menu index (0-based, i.e. bar
      cell - 1 — the System menu is never routed here), SI = the window
-     that owns the set, BX = the menu set ptr
+     that owns the set, BX = the menu set ptr AS THE APPLICATION
+     REGISTERED IT — for a package, its own set's offset in its own
+     segment, never a pointer into the kernel's copy, so a handler may
+     keep indexing its own tables through it
 out: nothing; may clobber AX/BX/CX/DX/SI/DI/ES like any window callback
 ```
 
-so it may draw, may call the file API of §18.4, and — like every other
+and it is dispatched exactly like the callbacks it is equated to: the
+handler offset comes from the kernel copy, the segment from the owner —
+near for a kernel set, far at the owner's segment with CS = DS = ES =
+that segment for a package's, `retf`-returning (§11).
+So it may draw, may call the file API of §18.4, and — like every other
 window callback — **must not** take the gfx lock, and must never
 wait on something only another task can deliver. It **may** call
 `OSAPI_TASK_SPAWN` (§20.6): a menu command is the canonical place a package
@@ -1507,8 +1751,9 @@ heap into `VIEW_SEG`.
 ## 13. ui.inc — the UI task (task 0)
 
 Loop forever:
-1. Poll keyboard: int 16h AH=01; if a key, fetch (AH=00) and near-call the
-   front window's W_ONKEY (if any) under gfx_lock, billed to the window's
+1. Poll keyboard: int 16h AH=01; if a key, fetch (AH=00) and call the
+   front window's W_ONKEY (if any) under gfx_lock — dispatched at the
+   owner's segment per §11 — billed to the window's
    instance (§11 "callback billing"). "Front window" is `wm_top` passed
    through **`fdlg_top`** (§38.1), which substitutes an open file dialog:
    while one is up it takes every key, and the window behind it takes none.
@@ -1566,7 +1811,8 @@ Loop forever:
      W_W/W_H, `wm_paint_all`, gfx_unlock — same no-relock rule.
    - content of non-front window → `wm_front`.
    - content of front window → if its `W_ONCLICK` is non-zero: gfx_lock,
-     near-call it (CX=x, DX=y, SI=win ptr) billed to the window's instance
+     call it (CX=x, DX=y, SI=win ptr — dispatched at the owner's segment
+     per §11) billed to the window's instance
      (§11 "callback billing"), gfx_unlock; else ignore.
    - no window hit (wm_hit BX=0) → call `dock_click` (§30) with CX=x,
      DX=y, no lock held; CF=1 = the click was consumed (anywhere in the
@@ -1599,10 +1845,19 @@ Loop forever:
      lock) and stop. A right-click brings a window forward but opens
      nothing: the popup always belongs to the window you can see.
    - the frontmost window, region 0 (content), with `W_MENUS` =
-     `fm_menus` → gfx_lock, `fm_rclick` then `fm_rcmd` (§22), gfx_unlock.
-     Any other window ignores the press. There is no `W_ONCTX` field and
-     no API slot: a package's window keeps its bar menus and nothing
-     else, and no shipped `.o88` changes.
+     `fm_menus` **and a KERNEL identity** (an owner that is not a
+     package — I_KIND bit 7 clear — or, when unowned, a `wm_wseg`
+     creator stamp of `KERNEL_SEG`, §11) → gfx_lock, `fm_rclick` then
+     `fm_rcmd` (§22), gfx_unlock. The identity half of the test is
+     binding since v3, here and at every other `W_MENUS = fm_menus`
+     identity test in the tree: a package's set offset is an org-0
+     number that can equal `fm_menus` by coincidence — and an UNOWNED
+     window can still be a package's (one it wm_created and the loader
+     never bound), which is what the creator stamp catches. Without the
+     test such a window would be misclassified as a Locator file-manager
+     window and handed `fm_rclick`. Any other window ignores the press. There is no
+     `W_ONCTX` field and no API slot: a package's window keeps its bar
+     menus and nothing else, and no shipped `.o88` changes.
 
    Billing follows §12.2's split exactly. `fm_rclick` — the row select and
    the whole tracking loop — is **unbilled**, like `menu_track`: the time
@@ -1684,8 +1939,12 @@ nothing selected). Three routes, decided in this order:
    old consecutive-commands arithmetic (§12). Handled by `ui_cmd`.
 3. **otherwise** — an application's own set (§12.2): gfx_lock,
    `inst_win_owner` on `[menu_win]` for billing, `snd_disp_set`,
-   `task_cycles`, near-call `[menu_set + AM_ONCMD]` with AL = item,
-   AH = menu index (= cell − 1), SI = `[menu_win]`, BX = the set;
+   `task_cycles`, then the handler — the AM_ONCMD offset read from the
+   kernel copy `menu_kset`, dispatched at the owner's segment per §11
+   (near for a kernel set, far with CS = DS = ES = the package segment
+   for a package's) — with AL = item, AH = menu index (= cell − 1),
+   SI = `[menu_win]`, BX = the set as the application registered it
+   (`[si+W_MENUS]`, its own offset);
    `inst_charge`, restore the sound stamp, gfx_unlock. Byte for byte the
    `W_ONCLICK` dispatch of step 2, and for the same reason: it is a
    window callback that happens to have been reached through the bar.
@@ -1788,9 +2047,10 @@ per outer-loop iteration.
 ## 15. kernel.asm — boot sequence
 
 Keep the 0x0000 cold entry. At 0x0010 the retired syscall gate is replaced
-by the **os8088 API jump table** (§20.3) — a run of 4-byte `jmp near` slots at
-pinned offsets. kernel.asm also owns the tiny osapi helper routines
-(§20.4) and the `osapi_seed` word. `cpu 8086` + `bits 16` + `org 0`.
+by the **os8088 API table** (§20.3) — a run of 8-byte far slots at pinned
+offsets, each a DS-switching stub around a near call. kernel.asm also owns
+the tiny osapi helper routines (§20.4), the per-slot marshalling wrappers
+(§20.3) and the `osapi_seed` word. `cpu 8086` + `bits 16` + `org 0`.
 
 **Boot splash entry — 1000:0008.** A third fixed entry point sits between
 the cold entry and the API table: a `jmp near spl_tick` at offset 0x0008,
@@ -1829,13 +2089,21 @@ then wipes the splash.
 kmain: set DS/ES = `KERNEL_SEG` and SS:SP = `LOW_SEG:STK0_TOP` (§2.1),
 `sti`, `cld`, then: `far_init` (**first** — the `.fartext` blob is sitting
 on top of `.bss` until it runs, §33) →
+`cpu_detect` → `cpu_a20_enable` → `xm_init` (§41 — after `far_init` because
+all three write `.bss`, and **before** `sched_init` because that is the last
+moment at which no kernel ISR is installed: the tier-2 protected-mode window
+runs with the real-mode IVT still loaded and must not take an interrupt, and
+a tick lost inside it costs nothing since `sched_init` zeroes `[ticks]`
+anyway. All three run on task 0, so the int 15h probes honour §7's
+only-the-UI-task-calls-BIOS rule the same way `tm_init`'s int 12h does) →
 `sched_init` → `evq_init` → `clk_init` (§37 — the RTC probe, before the
 mode set so a machine without one is dated from the fallback constants
 from the first paint onward) → `vid_init` (§39 — re-runs the splash's probe,
 apply and mode set) → `bb_init` (§32 — the RAM probe
 must run after the mode set, which clears VRAM, and before the first
 drawing call) → `font_init` → `wm_init` →
-`inst_init` → `mouse_init` → `desk_init` → `files_init` → `loader_init` →
+`inst_init` → `mouse_init` → `desk_init` → `files_init` → `loader_init`
+(which also probes int 12h for the arena top on task 0, §2.5) →
 `tm_init` → `snd_init` (§34.7 — publishes `snd_live` last) → gfx_lock →
 `wm_paint_all` → gfx_unlock → `cursor_show` → jump
 into `ui_task` (task 0 never returns). (`dock_init` runs right after
@@ -1845,7 +2113,11 @@ everything is launched from the menus (§13/§29). Include order:
 `instance.inc` right after `wm.inc`; `icons.inc`, `desk.inc`, `dock.inc`,
 `taskmgr.inc` and then `ctrl.inc` (§31) after `files.inc`; `clock.inc`
 (§37) right after `events.inc`, since it reads `[ticks]`;
-`farcall.inc` (§33) before all of them, since it defines the macros they use. The Control
+`farcall.inc` (§33) before all of them, since it defines the macros they use;
+`cpudet.inc` then `xmem.inc` (§41) immediately after it — `xmem.inc` reads
+the tier `cpudet.inc` publishes, and both must land **after** `splash.inc` so
+they cost nothing against the `SPL_RESIDENT` window and may use `.bss` at
+all. The Control
 Panel has no init routine — it is task-less and stateless, so nothing runs
 for it at boot; forward references from `instance.inc`'s kind table to
 `cp_tpl`/`cp_sname` resolve at assembly time exactly as `tm_tpl` already
@@ -1877,11 +2149,11 @@ section .bss
 kernel_bss_end:
 KBSS_SIZE equ kernel_bss_end - $$
 
-%if KTEXT_SIZE + KBSS_SIZE > APP_LOAD_OFF
-%error "kernel too big: image + bss must stay below APP_LOAD_OFF"
+%if KTEXT_SIZE + KBSS_SIZE > 0x10000
+%error "kernel too big: image + bss must fit the 64KB segment"
 %endif
-%if KTEXT_SIZE + KFAR_SIZE > APP_LOAD_OFF
-%error "kernel too big: image + fartext must stay below APP_LOAD_OFF"
+%if KTEXT_SIZE + KFAR_SIZE > 0x10000
+%error "kernel too big: image + fartext must fit the 64KB segment"
 %endif
 %if KLOW_SIZE > STK0_TOP - 8192
 %error "lowbss too big: task 0's stack needs 8KB of clearance below STK0_TOP"
@@ -1899,7 +2171,14 @@ KLOWFAR_KB equ (KLOW_SIZE + KFAR_SIZE + 1023) / 1024   ; §28 RAM figure
 The second guard exists because the far blob lands *inside* the kernel
 window and only leaves it when `far_init` runs. The fifth guard fences
 `FAT_SEG` (§2.1): `FAR_SEG` linear 0x00600 + 0x2A00 = 0x03000, where the
-FAT snapshot begins. Keep this block last.
+FAT snapshot begins. Keep this block last. Guards 1 and 2 were bounded by
+`APP_LOAD_OFF` until v3 evicted the package pool (§20.1); the whole
+segment is the kernel's now, and the reclaimed 19,968 bytes are what paid
+for the fatter far table, the marshalling wrappers, the §12.2 menu copy
+and the `inst_icons` cache (§29.5). The 0x10000 bound is an assembly-time
+integer, not a 16-bit immediate — the old "0x1FE00 unused" map row
+existed only for a run-time comparison that died with `ld_alloc`'s pool
+scan (§21).
 
 ## 16. Build & test
 
@@ -1919,12 +2198,29 @@ FAT snapshot begins. Keep this block last.
   12.5MHz, 1MB), `386sx` (`vm/386sx`, Shuttle HOT-304, 386SX @ 16MHz, 2MB)
   and `386` (`vm/386dx`, Micronics 386, 386DX @ 25MHz, 2MB), all with an
   OTI-067 VGA, a serial mouse and 1.44MB drives — they boot `$(IMG)` /
-  `$(APPSIMG)`, not the 360KB pair. Nothing in the OS changes: it is 8086
-  code in real mode, int 12h still caps at 640K, and the RAM above it is
-  unreachable by design. Two 86Box traps apply: `mem_size` is clamped to the
+  `$(APPSIMG)`, not the 360KB pair. The OS is still 8086 code in real mode
+  and int 12h still caps at 640K; what these three machines add is that they
+  are the **only** way to exercise §41's tiers 1 and 2 on period hardware —
+  the A20 gate, the HMA and int 15h AH=87h/88h. Two 86Box traps apply:
+  `mem_size` is clamped to the
   board maximum without a word (which is why the 286 is not `ibmat` — the
   5170 planar stops at 512KB), and an empty CMOS makes the BIOS stop at its
-  setup screen once, until `vm/<machine>/nvr/` exists.
+  setup screen once, until `vm/<machine>/nvr/` exists. A third bites §41
+  specifically: a machine configured with 1MB *total* has zero bytes above
+  linear 0x0FFFFF, so AH=88h answers 0, `cpu_hma_claim` must refuse and the
+  tier-1 store is empty — testing the HMA at all means raising `mem_size`
+  first, and verifying 86Box accepted the value by launching it, `kill
+  -TERM`, and reading the config back.
+- **Tier coverage is uneven and that is a fact about the harness, not a
+  gap in the code (§41.7).** QEMU presents no 8086 and no 286 — `-cpu help`
+  offers 486 and up — so `make test` exercises **tier 2 only**, and it does
+  so with A20 *already open* (SeaBIOS opens it), which means neither the
+  fast-gate path nor the keyboard-controller fallback is ever really run
+  there. Tier 1 belongs to `make 286`, tier 0 to `make xt` / `xt-640` /
+  `xt-cga` / `xt-hercules`, and all of them are interactive. QEMU's default
+  128MB gives ~63MB of extended memory with no `-m` at all; run the `test`
+  recipe by hand with `-m 1M` for the zero-extended-memory branch and `-m
+  2M` for a small non-zero one.
 - Gate packages ride their own scratch images and are mounted in place of
   the apps disk with `make test-snd TESTAPPS=<img>` (the `test` target's B:
   drive is fixed): `build/fmtest.img` (§34 Phase 3), `build/sbtest.img`
@@ -1979,9 +2275,10 @@ FAT snapshot begins. Keep this block last.
     that rises with the work their window callbacks actually do — a
     Minesweeper repainted repeatedly reads double digits.
     Clicking the content toggles the **memory view** (§28): the RAM line,
-    a 640K conventional-memory map, a kernel-segment map in which each
-    loaded package's region shows in its slot's dither pattern, and the
-    process list with a matching legend square, hex base address and size
+    a 640K conventional-memory map in which each loaded package's arena
+    region shows in its slot's dither pattern (the kernel-segment map
+    shows the kernel alone since v3, §28), the ARENA caption, and the
+    process list with a matching legend square, segment address and size
     per package row. Loading a second package grows the map; closing one
     frees its region on the next sample; clicking again returns to the
     gauge with a gapless history graph.
@@ -2022,10 +2319,16 @@ FAT snapshot begins. Keep this block last.
     window is dragged — the proof that package code is now pre-empted
     against the UI task — and its Task Manager row shows `run`/`rdy`/`slp`
     rather than `evt`. Closing it frees the region: the memory view's RAM
-    figure and kernel-segment map return to their pre-launch values within
-    one sample after the worker's next wake, and a re-launch reuses the
-    freed hole. The same holds with the Control Panel set to cooperative
-    mode, where only the teardown latency grows.
+    figure and conventional-memory map return to their pre-launch values
+    within one sample after the worker's next wake, and a re-launch reuses
+    the freed hole. The same holds with the Control Panel set to
+    cooperative mode, where only the teardown latency grows.
+15. **Four or more Fractal instances launch and render at once** on
+    `make test` (§2.5/§40.3) — the v3 acceptance: the v2 pool refused the
+    third with "Out of memory", and the arena must not. On a 256KB
+    machine (`make xt`) every package load refuses with a message and the
+    desktop, the built-ins and every guard figure are exactly what they
+    were — the zero-arena machine is a supported machine.
 
 ## 18. disk.inc — floppy I/O (BIOS int 13h) + the FAT driver
 
@@ -2170,7 +2473,8 @@ the §18.1 variables from the derived layout.
    sentinel. Type=1 (cluster already validated, §19): `dsk_clus2lba`,
    `disk_read` 1 sector into `dsk_secbuf`; stage the 32 header bytes into
    `dsk_ent` via `dsk_copy_in`; if magic word @0 == 0x384F, version byte
-   == 2 and flags bit 0 set, `dsk_copy_low` bytes 32..95 of `dsk_secbuf`
+   == 3 (v2 files harvest nothing — they cannot load either, §20.2) and
+   flags bit 0 set, `dsk_copy_low` bytes 32..95 of `dsk_secbuf`
    → `disk_icons` + i×64; in every other case (read failure included)
    zero the slot. **Harvest failures are non-fatal** — the entry stays
    listed; a later load attempt reports the real error. `disk_icons` is
@@ -2706,7 +3010,8 @@ this order:
   dword high word == 0; size low word ≥ 1; raw FstClusLO ∈
   [2, `dsk_maxclus`]. A garbage entry can never reach the loader as type 1.
   (Recorded tradeoff: a ≥64KB `*.O88` reads "Bad package" rather than "Too
-  large" — it cannot be a package (cap 0x4E00), so the message is truthful.)
+  large" — it cannot be a package (a region caps at `PKG_MAX_PARA`
+  paragraphs, §2.5), so the message is truthful.)
 - else **type 0**.
 
 The type word is the *only* thing a consumer branches on: §22's open path
@@ -2715,7 +3020,7 @@ loader as well, where it is rejected as "Bad package" — which is the
 truthful verdict for double-clicking a data file.
 
 **Icons** have no on-disk table: they are **harvested at mount** (§18.3
-step 4) from each type-1 file's first sector — a v2 `.o88` with the
+step 4) from each type-1 file's first sector — a v3 `.o88` with the
 embedded-icon flag (§20.2 bit 0) carries its 16×16 body at file offset
 32..95, and that block is copied into `disk_icons` entry i. Everything
 else — type-0 files, iconless packages, harvest read failures — gets the
@@ -2826,78 +3131,97 @@ path is derived from an unvalidated field.
 
 ## 20. Loadable programs — the .o88 package format
 
-### 20.1 The pool
+### 20.1 The segment (v3 — the pool is gone)
 
-A package is a flat 8086 binary assembled with `org APP_LOAD_OFF` (0xB000
-— the **link base**) and **relocated at load time** to a per-instance
-region allocated from the 19.5KB pool 0xB000..0xFDFF (§21). It runs in the
-same near model as kernel code: CS=DS=KERNEL_SEG, SS=LOW_SEG, near calls
-everywhere, §1 hard rules apply (cpu 8086, register discipline, no bare
-`sti` in handlers). Its paint/onkey/onclick procs are near pointers into
-its region. Budget: image + zeroed-bss ≤ APP_MAX_SIZE (0x4E00). Multiple
-package instances can be resident at once — including two instances of
-the same package: each is a fully relocated copy with its own image, data
-and bss, so package state (equ offsets from `os88_image_end`) is
-per-instance automatically. Closing an instance frees its region (§29.2
-rule 7).
+A package is a flat 8086 binary assembled at **`org 0`** and loaded,
+unmodified, onto a paragraph boundary in **its own segment**, allocated
+from the conventional-memory arena of §2.5 (`ld_alloc`, §21). Inside that
+segment it is the near model all over again: CS = DS = ES = the package
+segment at entry, SS = `LOW_SEG`, near calls between its own routines, §1
+hard rules apply (cpu 8086, register discipline, no bare `sti` in
+handlers, and SS ≠ DS with its `[bp]` consequence). Its
+paint/onkey/onclick procs are near OFFSETS in that segment, paired with
+the segment by the kernel at every dispatch (§11); the kernel is reached
+only through the far API table (§20.3); and every routine the kernel
+calls in a package returns with **`retf`**. Package code lives **below
+1MB by construction** — the arena is conventional memory, and §2.4's
+ceiling (no code above 0x10FFEF; extended memory is data-only) is
+restated as §20.7 rule 1 because this section is where authors look.
+
+Budget: image + zeroed-bss ≤ `PKG_MAX_PARA` × 16 = 65,520 bytes — one
+segment, minus the wrap guard (§2.5). Multiple package instances are
+resident at once — including two instances of the same package: each is a
+fresh copy of the image in a fresh segment with its own data and bss, so
+package state is per-instance automatically, and *identically* so — with
+no relocation, every instance of a package carries the same offsets.
+Closing an instance frees its region (§29.2 rule 7).
+
+Against v2, three things vanished outright: the 0xB000 **link base** (the
+segment base does its work), the **relocation table** (§20.2 — a far API
+call encodes an absolute seg:off that never moves, and an org-0 internal
+address is correct wherever the segment lands), and the 19,968-byte
+**shared pool** whose arithmetic capped the system at two Fractals
+(§40.1). The arena holds four and more on any machine that has one —
+`INST_MAX` and `MAX_TASKS` are the ceilings that remain — and the
+reclaimed pool bytes went back to the kernel segment (§15.1), which is
+what paid for the marshalling this section's ABI needs.
 
 ### 20.2 Header — first 32 bytes of the file (and of each loaded region)
 
 | off | size | contents                                                  |
 |-----|------|------------------------------------------------------------|
 | 0   | 2    | magic: bytes `'O','8'` (word 0x384F)                      |
-| 2   | 1    | format version = 2 (relocatable; v1 files are rejected)   |
+| 2   | 1    | format version = 3 (own-segment, org 0; v1/v2 files are rejected) |
 | 3   | 1    | flags: bit 0 = embedded icon follows the header; bits 1–7 zero |
-| 4   | 2    | link base — must equal `APP_LOAD_OFF` (0xB000, the org the image was assembled at) |
-| 6   | 2    | entry offset, **image-relative** (≥ 0x20; ≥ 0x60 with icon; < image size) |
-| 8   | 2    | image size = resident bytes: header + icon + code + data (**excludes** the reloc table) |
+| 4   | 2    | zero (was the v2 link base — org 0 has none)              |
+| 6   | 2    | entry offset, **image-relative** (≥ 0x20; ≥ 0x60 with icon; < image size) — at org 0 image-relative IS the plain segment offset |
+| 8   | 2    | image size = resident bytes: header + icon + code + data — **equals the file size exactly** (the §21 truncation guard) |
 | 10  | 2    | bss size — bytes the loader zeroes after the image        |
-| 12  | 2    | relocation count n (0 legal). NASM emits 0; **os88pkg.py stamps the real count** |
-| 14  | 2    | zero (reserved)                                           |
+| 12  | 2    | zero (was the v2 relocation count — relocation is retired) |
+| 14  | 2    | **memory requirement**: minimum conventional RAM, KB (**500** unless the author says otherwise — `OS88_HEADER` emits it, §20.5; 500, not 512, because the check compares the RAW int 12h KB and a real 512KB machine reports less once its BIOS/EBDA takes a cut — the §32 double-buffer-floor precedent). Not a promise of fit — the arena can still be full of other packages — but the precise refusal: a machine below the figure reads "Needs nnnK" instead of "Out of memory" (§21) |
 | 16  | 16   | program name, printable, NUL-padded (shown by tools)      |
 
-**Relocation table**: appended immediately after the image — n
-little-endian words. Each entry's low 15 bits are the **image offset** of
-a word to patch (in [0x20, image−2], ascending, non-overlapping; image ≤
-0x4E00, so bit 15 is free); bit 15 is the fixup **class**:
-
-- bit 15 = 0 — an embedded package address (imm16 / disp16 / `dw label`):
-  the loader **adds** `base − `APP_LOAD_OFF``.
-- bit 15 = 1 — the rel16 displacement of a near call/jmp to a **fixed
-  kernel offset** (`call OSAPI_*`): the displacement is target − (site+2),
-  and the site moves with the base while the target does not, so the
-  loader **subtracts** `base − `APP_LOAD_OFF``. (Package-internal relative
-  branches shift with both ends and need no fixup.)
-
-Total file bytes = image + 2n (this is what the FAT directory size field
-holds, **byte-exact** — cluster rounding would break every load, §21/§24;
-the staged type word stays 1, §19). After the patches the table is dead
-(bss zeroing overwrites it). The table is generated host-side by **dual
-assembly** (§24): the Makefile assembles each package twice — at org
-0xB000 and org 0xB800 (`-DOS88_ORG=0xB800`) — and os88pkg.py diffs the two
-images: a word whose value grew by 0x800 is class 0, one that shrank by
-0x800 is class 1. **Author rule (binding)**: a package address may only
-ever be embedded as a whole 16-bit word — never byte-truncated, shifted,
-split, or folded into a non-address constant. os88pkg's reconstruction
-check refuses the package otherwise, so violations fail the build.
+**There is no relocation table and no relocation pass.** Class 0 of the
+v2 table (embedded package addresses) is unnecessary because the segment
+base does the work — an org-0 `dw label` is correct wherever the segment
+lands; class 1 (the rel16 displacements of `call OSAPI_*`) is unnecessary
+because a v3 API call is a **far call to an absolute seg:off immediate**
+(§20.3/§20.5), which does not move at all. With the table gone go the
+dual-assembly probe (§24), the reloc-count stamp, the image+2n file-size
+arithmetic (file size now equals the image field, still byte-exact in the
+FAT directory — cluster rounding would break every load, §21/§24), and
+the v2 "package addresses only as whole 16-bit words" author rule: an
+author may split, shift or fold its own offsets freely; they are plain
+numbers now.
 
 **Embedded icon** (flags bit 0): file offset 32..95 holds the program's
 16×16 icon — 16 mask words then 16 data words (same body layout as §19's
 harvested icon cache). With the flag set, image size must be ≥ 96 and the
 entry offset ≥ 0x60. `disk_mount`'s icon harvest (§18.3/§19) copies the
-block from the file's first sector into `disk_icons`; the kernel points
-the instance's dock tile (I_ICON, §29) at the block inside the loaded
-region.
+block from the file's first sector into `disk_icons`; **at load the
+kernel copies the block again**, out of the package segment into the
+per-instance `inst_icons` cache (§21 step 9/§29.5), and points I_ICON at
+the cache slot — so I_ICON stays a plain kernel DS pointer and
+`dock.inc`/`icon_draw16` never learn that packages moved.
 
-**Entry contract** (unchanged from v1): near-called by the loader — at
-`base + entry` — with DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held. The code
-is fully relocated, so its own labels already encode the base; no base
-register is passed. The program creates its window(s) via the API table
-(wm_create is lock-free) and **returns** BX = window ptr with CF clear;
-the loader registers the instance (§29) and wm_shows it. CF set = abort
-(loader reports "load failed"); an aborting entry must return BX = its
-already-created window ptr (or 0 if it created none) so the loader can
-wm_destroy it — otherwise aborted loads would leak window records.
+**Entry contract**: **far-called** by the loader at pkgseg:entry with
+CS = DS = ES = the package segment, IF=1, gfx lock NOT held; it returns
+with **`retf`**. No base register is passed and none is needed — the
+code's own labels are correct org-0 offsets in its own segment. The
+program creates its window(s) via the API table (wm_create is lock-free)
+and returns BX = window ptr — an opaque kernel handle (§11) — with CF
+clear; the loader registers the instance (§29) and wm_shows it. Every
+window a package creates is stamped with its creator's segment
+(`wm_wseg`, §11): the one returned in BX is the instance's bound window
+(dock tile, Task Manager row, menu-bar identity); any OTHERS stay
+unowned, dispatch through the stamp, and are destroyed by the kernel's
+sweep when the instance dies or the load aborts (§11/§21 step 9) — they
+can never outlive the segment their procs live in. CF set =
+abort (loader reports "Load failed"); an aborting entry must return BX =
+its already-created window ptr (or 0 if it created none) so the loader
+can wm_destroy it — otherwise aborted loads would leak window records.
+The CF answer survives the far mechanics because nothing on the return
+path touches flags (the §20.3 stub argument, pointing the other way).
 The entry must not call wm_show/wm_hide/wm_front, spawn tasks, or draw.
 The spawn prohibition is mechanical, not stylistic: `OSAPI_TASK_SPAWN`
 (§20.6) would refuse anyway, because the loader publishes `I_STATE = 1` and
@@ -2905,65 +3229,143 @@ binds `wm_owner` only *after* the entry returns (§21 step 9), so
 `inst_of_win` finds nothing and answers CF=1. The first legal spawn site is
 a window callback.
 After entry returns, the program is event-driven code: its W_PAINT /
-W_ONKEY / W_ONCLICK procs run under the gfx lock per §11. From any of them
-it may claim **one** worker task (§20.6), which then runs pre-emptively
-alongside them under the §7 rules — the first time two packages can be
-pre-empted against each other.
+W_ONKEY / W_ONCLICK procs run under the gfx lock per §11 — far-called at
+the package's segment, `retf`-returning, register contracts unchanged.
+From any of them it may claim **one** worker task (§20.6), which then runs
+pre-emptively alongside them, in the package's own segment, under the §7
+rules — the first time two packages can be pre-empted against each other.
 
-### 20.3 The os8088 API jump table (kernel.asm, fixed offsets)
+### 20.3 The os8088 API table (kernel.asm, fixed offsets)
 
-At KERNEL_SEG:0x0010, 4-byte slots, each `jmp near target` + 1 pad byte.
-Programs `call` these absolute offsets; register contracts are the target
-routines' own (§5, §6, §8, §11). Pinned layout:
+At KERNEL_SEG:0x0010, **8-byte far slots**. A v3 package reaches a slot by
+a `call far` to an absolute seg:off immediate (§20.5 makes that spelling
+invisible to authors), and the slot switches DS itself, because the
+caller's DS is its own segment while every kernel body assumes
+DS = KERNEL_SEG:
+
+```nasm
+%macro OSAPI_SLOT 1
+    push ds
+    push cs        ; the table is .text, so CS = KERNEL_SEG here - this
+    pop  ds        ; pair is the 'mov ds, imm' the 8086 does not have
+    call %1        ; near, inside the kernel
+    pop  ds
+    retf
+%endmacro          ; 1E 0E 1F E8 rr rr 1F CB - exactly 8 bytes, no pad
+```
+
+Neither `pop ds` nor `retf` touches flags, so every CF-returning slot —
+wm_create, wm_obscured, wm_fullscreen, the file slots, fdlg_open,
+inst_pkg_spawn, wm_clip_set/test, wm_geom, the xm_* trio — keeps its
+contract through the stub, and `menu_win_set`'s stronger all-flags promise
+survives too. **Slot ORDER is the ABI and is preserved from v2 exactly**;
+only the stride changed, 4 → 8, so slot i sits at 0x0010 + 8·i.
+`OSAPI_TABLE_OFF` stays 0x0010; the table-span assertion is **53 × 8** —
+the 52 v2 slots plus `wm_geom`, appended in the same change because a
+package can no longer read a window record (§11). Register contracts are
+the target routines' own (§5, §6, §8, §11). Pinned layout:
 
 ```
-0x0010 gfx_lock        0x0034 gfx_xor_fill    0x0058 wm_obscured
-0x0014 gfx_unlock      0x0038 font_char       0x005C task_yield
-0x0018 gfx_pixel       0x003C font_str        0x0060 task_sleep
-0x001C gfx_hline       0x0040 font_width      0x0064 osapi_get_ticks
-0x0020 gfx_vline       0x0044 wm_create       0x0068 osapi_set_color
-0x0024 gfx_fill        0x0048 wm_show         0x006C osapi_mouse
-0x0028 gfx_frame       0x004C wm_hide         0x0070 osapi_srand
-0x002C gfx_fill_gray   0x0050 wm_front        0x0074 osapi_rand
-0x0030 gfx_xor_rect    0x0054 wm_content
+0x0010 gfx_lock        0x0100 osapi_snd_stream
+0x0018 gfx_unlock      0x0108 wm_sizable
+0x0020 gfx_pixel       0x0110 wm_fullscreen
+0x0028 gfx_hline       0x0118 wm_grow_paint
+0x0030 gfx_vline       0x0120 dskw_write
+0x0038 gfx_fill        0x0128 dskw_read
+0x0040 gfx_frame       0x0130 dskw_delete
+0x0048 gfx_fill_gray   0x0138 dskw_rename
+0x0050 gfx_xor_rect    0x0140 dskw_dfree
+0x0058 gfx_xor_fill    0x0148 menu_win_set
+0x0060 font_char       0x0150 fdlg_open
+0x0068 font_str        0x0158 osapi_video
+0x0070 font_width      0x0160 inst_pkg_spawn
+0x0078 wm_create       0x0168 inst_pkg_alive
+0x0080 wm_show         0x0170 wm_clip_set
+0x0088 wm_hide         0x0178 wm_clip_clear
+0x0090 wm_front        0x0180 wm_clip_test
+0x0098 wm_content      0x0188 osapi_cpu_info
+0x00A0 wm_obscured     0x0190 osapi_xmem_caps
+0x00A8 task_yield      0x0198 osapi_xmem_alloc
+0x00B0 task_sleep      0x01A0 osapi_xmem_free
+0x00B8 osapi_get_ticks 0x01A8 osapi_xmem_copy
+0x00C0 osapi_set_color 0x01B0 wm_geom (§11 - new in v3)
+0x00C8 osapi_mouse
+0x00D0 osapi_srand
+0x00D8 osapi_rand
+0x00E0 osapi_snd_caps
+0x00E8 osapi_snd_tone
+0x00F0 osapi_snd_play
+0x00F8 osapi_snd_fm
 ```
 
-**Sound slots (§34), append-only from 0x0078 — all five ship in Phase 1.**
-Only 0x0078/0x007C are live there; the PLAY, FM and STREAM targets are
-3-byte stubs returning the error path (CF=1 / AX = 4 no-sink) until their
+**Marshalling (binding).** No register contract changed, but a v3
+caller's pointer arguments live in *its* segment, so every slot that
+takes a DS-relative pointer is fronted by a kernel-side **wrapper** that
+copies the operand across the boundary — the `dsk_get_dir` idiom of §2.1,
+never a segment override threaded through the shared body (§20.7 rule 3).
+The wrapper recovers the caller's segment from the DS word the slot stub
+saved — at SS:SP+2 on wrapper entry, and SS = `LOW_SEG` on every task, so
+the read is one `mov bp, sp` away — stages the bytes into kernel scratch,
+and near-calls the raw routine on a plain kernel pointer. Kernel-internal
+callers never see any of it: they keep near-calling the raw routines with
+kernel pointers, which is why the copies could not live in the bodies
+(font_str, the dskw name parser and wm_create are all heavily used from
+inside the kernel). The staged operands, pinned:
+
+| slot | operand and rule |
+|------|-------------------|
+| `font_str` / `font_width` | SI string → kernel scratch, at most `OSAPI_STR_MAX` chars + NUL; longer strings are truncated, not refused. The two slots do NOT share a stage: `font_str` (→ `osapi_sbuf`) draws, so its callers hold the gfx lock and the lock serializes the stage; `font_width` is legal WITHOUT the lock (it draws nothing), so it stages into its own `osapi_wbuf` — a lock-free WIDTH may never clobber a preempted lock-held STR stage — and runs stage + measure under `pushf`/`cli`…`popf` (bounded: `OSAPI_STR_MAX` bytes), so two lock-free callers cannot measure each other's strings either. |
+| `wm_create` | SI 16-byte template → staged whole. The template's title/paint/onkey/onclick words are stored as CALLER-SEGMENT offsets (§11): the code offsets are paired with the owner's segment at dispatch, the title is staged through it at draw. |
+| `dskw_write` / `dskw_read` / `dskw_delete` | SI name → staged (a NUL 8.3 name, ≤ 12 + NUL). The stage caps at `OSAPI_NAME_MAX` = **13** chars, one MORE than a legal name, on purpose: a 13+-char source keeps at least 13 chars in the stage, which `dskw_name83` rejects as an illegal name (`FERR_BADNAME`) — an over-long name is REFUSED, never silently truncated into some *other* legal name it happens to prefix. The data buffer is ES:BX and already carries its segment — unchanged. |
+| `dskw_rename` | SI old + DI new → both staged, same cap and refusal rule. |
+| `fdlg_open` | SI default name → staged (≤ 12 + NUL; same 13-char stage — the dialog's own `FD_NAMEMAX` edit-box truncation applies after, harmless for a default that is only a seed). SI = 0 passes through unstaged. DI is a completion OFFSET in the caller's segment, stored as a value (§38.6). |
+| `menu_win_set` | SI is STORED, never dereferenced here: the whole set is copied at `menu_relayout` time through the owner's segment (§12.2), so this slot needs no wrapper at all. |
+| `osapi_snd_fm` verb 2 | DS:SI 11-byte patch → staged. |
+| `osapi_snd_stream` verbs 5/6 | the staging copy IS the boundary: the slot records the caller's segment and verb 6 reads its SI source / verb 5 writes its DI destination through that segment (§34.6); the grant-offset arguments are values and never were pointers. |
+
+Everything else in the table takes values, opaque handles, or an
+**ES-relative buffer** (`dskw_write`/`dskw_read` data ES:BX,
+`osapi_snd_play` ES:SI, `osapi_xmem_copy` ES:SI) — the ES contracts
+already carry a segment and change **not at all**: a package sets ES = DS
+exactly as before, and that now names its own segment, which is precisely
+what the kernel wants to read from or write to.
+
+**Sound slots (§34), 0x00E0..0x0100 — all five ship in Phase 1.**
+Only CAPS and TONE are live there; the PLAY, FM and STREAM targets are
+stubs returning the error path (CF=1 / AX = 4 no-sink) until their
 phases land, so a package built against the full ABI never jumps past the
-table end on any kernel from Phase 1 on. The
-kernel.asm table-span assertion goes 26 × 4 → **31 × 4** once, in the same
-change as the slots; `apps/os88api.inc` mirrors the new `OSAPI_*` equs
-(§20.5). The targets live in snd.inc; contracts:
+table end on any kernel from Phase 1 on. `apps/os88api.inc` mirrors the
+`OSAPI_*` constants (§20.5). The targets live in snd.inc; contracts:
 
 ```
-0x0078 osapi_snd_caps    out AX = merged caps word (§34.2), BL = tone route
+0x00E0 osapi_snd_caps    out AX = merged caps word (§34.2), BL = tone route
                          (0 = speaker, 1 = OPL2), DX = present-driver bits.
-0x007C osapi_snd_tone    in AX = freq Hz (0 = off), CX = duration ticks
+0x00E8 osapi_snd_tone    in AX = freq Hz (0 = off), CX = duration ticks
                          (0 = until off), DL = priority (§34.3); out CF=1
                          refused (higher-priority owner), else CF=0 and
                          AL = owner generation (matches status queries).
-0x0080 osapi_snd_play    PCM_EXCL clip (§34.4): ES:SI = 8-bit unsigned
+0x00F0 osapi_snd_play    PCM_EXCL clip (§34.4): ES:SI = 8-bit unsigned
                          mono, CX = count, DX = rate Hz (N = 1193182/rate
                          must land in 74..255); BLOCKS for the clip; a
                          mouse click aborts it. out AX = 0 ok / 1 busy
                          (incl. a PCM_BG stream open) / 2 rate /
                          3 disabled-by-user / 4 no sink / 5 aborted.
                          ES restored per §1.            (live Phase 2)
-0x0084 osapi_snd_fm      in AL = verb: 0 note-on / 1 note-off / 2 patch /
-                         3 all-off; CL = channel, BX = freq Hz, DS:SI =
-                         11-byte patch (§34.2); out CF=1 no FM sink, or
-                         refused: bad verb/channel/frequency, a reserved
-                         or another requester's channel (§34.3).
+0x00F8 osapi_snd_fm      in AL = verb: 0 note-on / 1 note-off / 2 patch /
+                         3 all-off; CL = channel, BX = freq Hz, SI =
+                         11-byte patch in the caller's segment (staged by
+                         the slot wrapper, above) (§34.2); out CF=1 no FM
+                         sink, or refused: bad verb/channel/frequency, a
+                         reserved or another requester's channel (§34.3).
                                                         (live Phase 3)
-0x0088 osapi_snd_stream  PCM_BG / PCM_IN + staging: verbs below.
+0x0100 osapi_snd_stream  PCM_BG / PCM_IN + staging: verbs below.
                                                         (live Phases 4–5)
 ```
 
 `osapi_snd_play` takes **ES:SI** (not DS:SI) so a clip staged in `SND_SEG`
-plays in place without copying into the shared kernel segment; packages
-that keep clips in their own image just set ES = DS. (The busy loop is
+plays in place without an extra copy; packages
+that keep clips in their own image just set ES = DS — which in v3 names
+their own segment, exactly right. (The busy loop is
 CPU-paced — no DMA constraint — so an arbitrary caller buffer is legal
 here, unlike the SB path, §34.5.)
 
@@ -2979,8 +3381,8 @@ caller holding several grants is unambiguous by construction):
 | 2 | close | AH = handle; halts playback, frees the stream record (its refill task exits at the next wake). Out AX = 0 / stale. |
 | 3 | status | AH = handle; out AX = state, DX = bytes consumed (capped at the valid length; input: bytes captured into the grant) — **this poll is the notification mechanism**: callbacks check it; there are no sound events (§34.3). States, pinned: **0 playing (input: recording), 1 underrun-paused (§34.5 — data ran out or the refill starved; resumable by a feed. Input, §34.6: capacity full, or the drain starved), 2 ended (stopped by the §34.5 watchdog), 0FFFFh stale.** A fully-staged clip that plays out reads underrun-paused with DX = its length — the owner's cue to close, exactly as a capacity-full capture reads paused with DX = its capacity; "ended" is reserved for the watchdog stop. |
 | 4 | open-in | DX = rate Hz (4000 up to the §34.5 input ceiling: 13,000 on a single-cycle DSP, 15,000 on auto-init), SI = grant offset, CX = capture capacity in bytes (> 0, inside the caller's grant); spawns the kernel drain task, which moves record-ring halves into the grant until CX bytes have landed, then stops the DSP (§34.6). Out AL = 0 with AH = handle, else AX = err. **Half-duplex with playback is err 1 busy** (§34.3): one stream record, either direction. Feed on an input stream is err 7 — a capture has no valid length to extend. |
-| 5 | read | copy CX bytes from the grant at offset SI into caller DS:DI — the kernel-staged copy out, verb 6's exact mirror (§34.6); the range must sit inside one grant the caller owns. **No handle**: the grant owns the bytes, so captured data stays readable after the stream that recorded it closes, until the grant is freed. Works on every machine, like verbs 6–7. Out AX = 0 / err 7. |
-| 6 | stage | copy CX bytes from caller DS:SI into the grant at offset DI (kernel-staged copy — callers never touch ES = SND_SEG, §2.2); the range must sit inside one grant the caller owns. Out AX = 0 / err. |
+| 5 | read | copy CX bytes from the grant at offset SI into the caller's DI (in the caller's own segment — the slot records it, §20.3 marshalling) — the kernel-staged copy out, verb 6's exact mirror (§34.6); the range must sit inside one grant the caller owns. **No handle**: the grant owns the bytes, so captured data stays readable after the stream that recorded it closes, until the grant is freed. Works on every machine, like verbs 6–7. Out AX = 0 / err 7. |
+| 6 | stage | copy CX bytes from the caller's SI (in the caller's own segment — the slot records it, §20.3 marshalling) into the grant at offset DI (kernel-staged copy — callers never touch ES = SND_SEG, §2.2); the range must sit inside one grant the caller owns. Out AX = 0 / err. |
 | 7 | grant | AH = sub-op (0 alloc, 1 free): CX = bytes → out SI = grant offset, or free (SI = offset, owner only — **refused with err 7 while an open stream's read offset sits inside the grant**: close the stream first, or the refill task would copy from unowned, re-allocatable bytes); stamped with the calling instance, force-freed by `snd_release_inst` (§34.3 — teardown is safe: it closes the stream before freeing grants, and the drain copy is teardown-fenced so a mid-copy preempted drain task cannot write into freed bytes, §34.6). Out AX = 0 / err. |
 
 Error codes, pinned (AX; CF set on any error, and on the stale status):
@@ -2991,20 +3393,19 @@ length/sub-op), 8 no staging space, 0FFFFh stale handle. The staging
 verbs 5–7 work on every machine — the pool exists wherever `SND_SEG` does
 (§2.2); only the stream verbs (0–4) need the card.
 
-**Window-management slots (§11.1/§11.2), append-only from 0x008C.** The
-kernel.asm table-span assertion goes 31 × 4 → **34 × 4** across these
-additions; `apps/os88api.inc` mirrors the equs plus WF_SIZABLE/WF_FULL and
+**Window-management slots (§11.1/§11.2), 0x0108..0x0118.**
+`apps/os88api.inc` mirrors the constants plus WF_SIZABLE/WF_FULL and
 WMIN_W/WMIN_H (§20.5):
 
 ```
-0x008C wm_sizable      in BX = win ptr, AL = 0 clear / non-zero set
+0x0108 wm_sizable      in BX = win ptr, AL = 0 clear / non-zero set
                        WF_SIZABLE (§11.1). UI-task context only (entry
                        procs and window callbacks qualify).
-0x0090 wm_fullscreen   in AL = 1 enter (BX = win ptr) / 0 exit; caller
+0x0110 wm_fullscreen   in AL = 1 enter (BX = win ptr) / 0 exit; caller
                        holds the gfx lock (window callbacks do); out
                        CF=1 = enter refused, screen already owned
                        (§11.2).
-0x0094 wm_grow_paint   in BX = win ptr; caller holds the gfx lock. The
+0x0118 wm_grow_paint   in BX = win ptr; caller holds the gfx lock. The
                        grow-box restore of §11: a resizable package's
                        self-initiated content repaint must end with this
                        call (the white-fill idiom erases the corner). A
@@ -3013,84 +3414,94 @@ WMIN_W/WMIN_H (§20.5):
                        always safe to call.
 ```
 
-**File slots (§18.4), append-only from 0x0098.** Five slots, all live from
-the change that adds them; each is a `jmp near` straight at the `dskw_*`
-routine — the register contracts in §18.4 *are* the ABI, and no wrapper
-sits in between. The kernel.asm table-span assertion goes 34 × 4 → **39 ×
-4**; `apps/os88api.inc` mirrors the equs plus the `FERR_*` codes (§20.5).
+**File slots (§18.4), 0x0120..0x0140.** Five slots, all live from
+the change that adds them. The register contracts in §18.4 *are* the ABI;
+since v3 the four name-taking slots are fronted by the marshalling
+wrapper above — the SI/DI names are staged out of the caller's segment
+before the `dskw_*` body parses them, and the bodies themselves keep
+their plain-DS contracts for the kernel's own save/delete/rename paths
+(§22). `apps/os88api.inc` mirrors the constants plus the `FERR_*` codes
+(§20.5).
 
 ```
-0x0098 dskw_write   in SI = NUL 8.3 name, ES:BX = bytes, CX = count
+0x0120 dskw_write   in SI = NUL 8.3 name, ES:BX = bytes, CX = count
                     (0 = empty file). Creates or replaces. out CF=0 AX=0,
                     else CF=1 AX = FERR_*.
-0x009C dskw_read    in SI = name, ES:BX = buffer, CX = capacity; out CF=0
+0x0128 dskw_read    in SI = name, ES:BX = buffer, CX = capacity; out CF=0
                     AX = bytes read, else CF=1 AX = FERR_* (FERR_BIG
                     leaves the buffer untouched).
-0x00A0 dskw_delete  in SI = name; out CF=0 AX=0, else CF=1 AX = FERR_*.
-0x00A4 dskw_rename  in SI = old name, DI = new name; out as delete.
-0x00A8 dskw_dfree   out CF=0, DX:AX = free bytes, BX = sectors/cluster;
+0x0130 dskw_delete  in SI = name; out CF=0 AX=0, else CF=1 AX = FERR_*.
+0x0138 dskw_rename  in SI = old name, DI = new name; out as delete.
+0x0140 dskw_dfree   out CF=0, DX:AX = free bytes, BX = sectors/cluster;
                     CF=1 AX = FERR_* (no disk I/O — the resident FAT
                     snapshot answers it).
 ```
 
-**Menu slot (§12.2), 0x00AC.** One slot; the table-span assertion goes
-39 × 4 → **40 × 4**.  **File-dialog slot (§38.5), 0x00B0**, adds the next
-one: 40 × 4 → **41 × 4**; **`osapi_video` (§39.8), 0x00B4** the one
-after: 41 × 4 → **42 × 4**; the two **worker-task slots of §20.6**
-(0x00B8, 0x00BC) the ones after that: 42 × 4 → **44 × 4**; and the three
-**clip-region slots of §11.3** (0x00C0, 0x00C4, 0x00C8) the ones after
-those: 44 × 4 → **47 × 4**, the table's span today.
+**Menu slot (§12.2), 0x0148.** Then the **file-dialog slot (§38.6),
+0x0150**, **`osapi_video` (§39.8), 0x0158**, the two **worker-task slots
+of §20.6** (0x0160, 0x0168), the three **clip-region slots of §11.3**
+(0x0170, 0x0178, 0x0180), the five **CPU-tier and extended-memory slots
+of §41.8** (0x0188..0x01A8), and **`wm_geom` (§11), 0x01B0** — the
+table's end today, 53 × 8.
 
 ```
-0x00AC menu_win_set  in BX = win ptr, SI = app menu set ptr (0 = none).
-                     Stores [BX+W_MENUS] and relayouts the bar when BX is
-                     the active window. Draws nothing and takes no lock,
-                     so it is callable from the entry proc (the intended
-                     site) as well as from a window callback. Preserves
-                     every register AND the flags, so it can sit between
-                     wm_create and the entry proc's ret without eating
-                     the CF that ret owes the loader.
+0x0148 menu_win_set  in BX = win ptr, SI = the app menu set's offset in
+                     the CALLER's segment (0 = none). Stores
+                     [BX+W_MENUS] and relayouts the bar when BX is the
+                     active window; the set itself is copied kernel-side
+                     at relayout, not here (§12.2), which is why this
+                     slot needs no marshalling wrapper. Draws nothing and
+                     takes no lock, so it is callable from the entry proc
+                     (the intended site) as well as from a window
+                     callback. Preserves every register AND the flags, so
+                     it can sit between wm_create and the entry proc's
+                     retf without eating the CF that retf owes the
+                     loader.
 ```
 
-**Worker-task slots (§20.6), 0x00B8 and 0x00BC.** The first pair whose
+**Worker-task slots (§20.6), 0x0160 and 0x0168.** The first pair whose
 context rules point in *opposite* directions — SPAWN is
 lock-held-callback-only, ALIVE is worker-only — so neither can be described
 as "UI-task context" and both contracts live in §20.6 with the seven author
 rules they belong to.
 
 ```
-0x00B8 inst_pkg_spawn  in AX = near entry inside the package image (a
-                       whole-word package address: reloc class 0), BX =
-                       the package's own window ptr. Caller HOLDS the gfx
+0x0160 inst_pkg_spawn  in AX = the worker's entry OFFSET in the package's
+                       own segment (an org-0 label, a plain number since
+                       relocation retired), BX = the package's own window
+                       ptr. Caller HOLDS the gfx
                        lock (every sanctioned site does). out CF=1
                        refused (BX names no live instance / the instance
                        already owns a task / task table full), else CF=0
                        and AL = the task slot. Preserves every register
                        but AL and the flags.
-0x00BC inst_pkg_alive  in BX = the package's own window ptr; the gfx lock
+0x0168 inst_pkg_alive  in BX = the package's own window ptr; the gfx lock
                        must NOT be held. Returns with every register AND
                        the flags preserved while the instance is live;
                        otherwise NEVER RETURNS — it tears the instance
-                       down through inst_task_die (§29.4).
+                       down through inst_task_die (§29.4). (One far
+                       footnote: on the death path the DS word the slot
+                       stub pushed is abandoned on the dying worker's
+                       stack — freed with the task, harmless, and
+                       recorded here so nobody "fixes" it.)
 ```
 
-**Clip-region slots (§11.3), 0x00C0, 0x00C4 and 0x00C8.** What replaced the
+**Clip-region slots (§11.3), 0x0170, 0x0178 and 0x0180.** What replaced the
 `wm_obscured` veto for background painters, so a partly covered window can
 go on drawing the part that shows. All three are gfx-lock-held context,
-which in practice means a worker's draw burst; the table-span assertion goes
-44 × 4 → **47 × 4**.
+which in practice means a worker's draw burst.
 
 ```
-0x00C0 wm_clip_set    in BX = the package's own window ptr; the caller
+0x0170 wm_clip_set    in BX = the package's own window ptr; the caller
                       HOLDS the gfx lock. Builds that window's visible
                       region and arms clipping for every gfx_*/font_*
                       call until the next gfx_unlock. out CF=1 nothing
                       of it is visible — draw nothing this frame; CF=0
                       armed. Preserves every register.
-0x00C4 wm_clip_clear  disarm early, to draw unclipped again inside the
+0x0178 wm_clip_clear  disarm early, to draw unclipped again inside the
                       same lock hold. Preserves every register.
                       gfx_unlock does this anyway (§11.3 rule 1).
-0x00C8 wm_clip_test   in AX = x1, BX = y1, CX = x2, DX = y2 (inclusive);
+0x0180 wm_clip_test   in AX = x1, BX = y1, CX = x2, DX = y2 (inclusive);
                       out CF=0 the whole rect is drawable (also when
                       nothing is armed), CF=1 it is not. Preserves every
                       register. Ask this BEFORE erasing a rect you are
@@ -3129,6 +3540,54 @@ record claim a single `pushf`/`cli` unit (the grant allocator's
 scan+claim standard, §34.6) — it cannot simply start calling these verbs
 from a task.
 
+**CPU-tier and extended-memory slots (§41), 0x0188..0x01A8.** Five slots;
+`apps/os88api.inc` mirrors the constants plus the `CPU_*` tier enum
+(§20.5). All
+five are live from the change that adds them and all five answer honestly on
+a tier-0 machine — `osapi_cpu_info` reports `CPU_8086`, `osapi_xmem_caps`
+reports zero KB, and the three allocator/copy slots refuse with CF=1. **A
+package must branch on the caps, never on the tier**: the tier is
+information, the KB figure is the permission.
+
+```
+0x0188 osapi_cpu_info   no inputs; out AL = CPU_8086 / CPU_286 / CPU_386
+                        (§3), AH = feature bits: bit 0 A20 verified open,
+                        bit 1 HMA claimed, bit 2 unreal mode armed.
+                        Callable from any context, lock held or not.
+                        Preserves every register but AX.
+0x0190 osapi_xmem_caps  no inputs; out AX = extended-memory KB the pool
+                        can still hand out (0 = none, and the three slots
+                        below will refuse), DX:CX = the pool's 32-bit
+                        linear base, BL = free block-table entries of
+                        XM_MAX_BLKS. Any context. Preserves BH, SI, DI.
+0x0198 osapi_xmem_alloc in DX:AX = bytes wanted (rounded up to 1KB); out
+                        CF=0 with DX:AX = the 32-bit linear base of the
+                        block, else CF=1 and AX = 0 no store / 1 no free
+                        block-table entry / 2 no contiguous run that big.
+                        Stamped with the calling instance and force-freed
+                        at teardown, exactly like a §34.6 sound grant.
+0x01A0 osapi_xmem_free  in DX:AX = a base this instance owns; out CF=0
+                        freed, CF=1 not yours or not a base. Freeing
+                        merges with the neighbouring free runs.
+0x01A8 osapi_xmem_copy  in ES:SI = conventional source or destination,
+                        DX:AX = the 32-bit linear other end, CX = bytes
+                        (even, ≤ 32KB), DI = direction (0 = out to
+                        extended, 1 = in from extended). out CF=0 done,
+                        CF=1 AX = 1 no store / 2 range not inside a block
+                        this instance owns / 3 bad length. Preserves ES
+                        per §1. Same ABI on both tiers — the transport
+                        (§41.5) is not the caller's business.
+```
+
+**These five are UI-task/window-callback context only (binding)**, for the
+`dskw_*` reason rather than the `sch_lock` one: on tier 1 `osapi_xmem_copy`
+goes through int 15h AH=87h, and some 286 BIOSes implement that call by
+**resetting the CPU** to get back to real mode. A worker task calling it —
+or any caller holding the gfx lock while it runs — is a machine that stops.
+`osapi_cpu_info` and `osapi_xmem_caps` touch no BIOS and are exempt; the
+allocator slots are not, because the honest rule is one rule for the whole
+group.
+
 That future is now *reachable*: §20.6 lets a package own a worker task, and
 nothing in `inst_pkg_spawn` stops that worker from calling
 `osapi_snd_stream`. So this is an **author rule** now rather than a
@@ -3137,6 +3596,21 @@ staging verbs 5–7 are likewise UI-task-only — the grant allocator's
 scan+claim is a single `cli` unit, but `snd_release_inst` teardown is not
 fenced against a worker. Nothing about the design changes; only what stands
 behind it does.
+
+**Window-geometry slot (§11), 0x01B0 — the one slot v3 added.** A package
+treats its SI/BX window pointers as opaque handles (§11): the record lives
+in kernel memory its DS cannot reach, so the §11.1 live-layout rule and
+§20.6 rule 5 needed a kernel answer to replace the v2 idiom of reading
+`W_W`/`W_H`/`W_FLAGS` directly.
+
+```
+0x01B0 wm_geom   in BX = win ptr; out CX = content width, DX = content
+                 height (inner px — the box whose origin wm_content
+                 answers), CF=1 the window is not visible. Preserves
+                 everything else. Any context, lock held or not, like
+                 osapi_video; only stable under the lock, which is when
+                 painters ask.
+```
 
 ### 20.4 osapi helpers (kernel.asm)
 
@@ -3148,23 +3622,48 @@ behind it does.
 | `osapi_srand`     | in AX → [osapi_seed]                                  |
 | `osapi_rand`      | seed = seed×25173 + 13849; out AX = seed             |
 
+kernel.asm also owns the marshalling wrappers of §20.3 — `osapi_w_*`, one
+per pointer-taking slot: the table's slot targets the wrapper, the wrapper
+stages and near-calls the raw routine, and every kernel-internal caller
+keeps near-calling the raw routine directly, wrapper-free.
+
 ### 20.5 apps/os88api.inc — the program-side SDK
 
-NASM include used by packages (not by the kernel). Provides: `OSAPI_*` equs
-for every table offset (§20.3), the `FERR_*` file error codes (§18.4), the
-window-record W_* / template offsets
-(§11), color constants, and a `OS88_HEADER 'NAME', entry_label` macro that
+NASM include used by packages (not by the kernel). Provides: an `OSAPI_*`
+constant for every table slot — **as a far seg:off immediate**,
+`%define OSAPI_GFX_LOCK KERNEL_SEG:0x0010` and so on at the §20.3
+offsets, so an existing `call OSAPI_*` assembles as a 5-byte ptr16:16 far
+call (`9A off seg` — verified encoding) **with no edit to the package
+source**. Two consequences are the SDK's to document: a slot constant is
+no longer a number, so it can appear only as a `call`/`jmp` target, never
+in a `dw` or an expression (no shipped package ever did); and every call
+site grew 3 → 5 bytes, which is part of why v3 rebuilt every `.o88`.
+Also provided: the `FERR_*` file error codes (§18.4), the window-record
+W_* / template offsets
+(§11) — kept for authoring templates, with the loud comment that a v3
+package must never DEREFERENCE a window pointer (`wm_geom`/`wm_content`
+answer geometry, §11) — color constants, and a
+`OS88_HEADER 'NAME', entry_label` macro that
 emits the §20.2 header (image size via a forward-referenced
 `equ` to an end label the program declares with `OS88_BSS n` /
 end-of-file macro — exact macro design is the implementer's, but a package
 source must be able to consist of just `%include "os88api.inc"`, the header
-macro, code/data, and an end macro). OS88_HEADER opens with
-`org OS88_ORG` when that macro is defined (`-DOS88_ORG=0xB800`, the §24
-relocation-probe pass) and `org APP_LOAD_OFF` otherwise; it emits version
-2, the image-relative entry (`entry − $$`), and a zero relocation count
-for os88pkg.py to stamp. The org value must only ever affect emitted
-addresses, never instruction selection — os88pkg verifies this (equal
-lengths, whole-word diffs).
+macro, code/data, and an end macro). OS88_HEADER opens with **`org 0`**
+unconditionally — the `OS88_ORG` conditional died with the §24 dual
+assembly — and emits version 3, the image-relative entry (`entry − $$`),
+zero at +4 and +12, and the +14 memory-requirement word (an optional
+parameter, default 500 KB — the "512KB machine" as the raw int 12h
+reports it, §20.2). `OS88_IMAGE_END`'s budget check compares
+image + bss against 65,520 (`PKG_MAX_PARA` × 16, §20.1).
+
+**The retf rule (binding, and the SDK carries it as a comment block):**
+every routine the kernel calls in a package — the entry proc, W_PAINT,
+W_ONKEY, W_ONCLICK, the AM_ONCMD handler, the fdlg completion proc —
+returns with `retf`, because the kernel far-called it (§11/§20.2). A near
+`ret` there resumes at a garbage offset inside the package's own segment.
+The worker entry is exempt: it never returns (§20.6 rule 2). The v2
+author rule "package addresses only as whole 16-bit words" is deleted —
+with no relocation there is nothing for a split address to break.
 
 Icon support: `OS88_HEADER 'NAME', entry, 1` sets flags bit 0; the author
 then writes `OS88_ICON16` (asserts, via `%if`-on-equ, that it starts at
@@ -3185,18 +3684,31 @@ OS88_MENUSET_END my_menus
 
 `OS88_MENUSET label, namestr, handler` emits `AM_NAME`, `AM_ONCMD` and an
 `AM_COUNT` **computed from the label pair** — `(label_end − label_list) /
-AMENU_ENTSZ` — and `OS88_MENUSET_END label` plants `label_end`. The count
-is a label *difference*, so it is a constant in both relocation passes and
-os88pkg.py never sees it as an address; the three pointer words per menu
-are ordinary whole-word package addresses (§20.2) and relocate normally.
-The handler follows §12.2's contract exactly: near-called under the gfx
-lock with AL = item, AH = menu, SI = window, BX = the set.
+AMENU_ENTSZ` — and `OS88_MENUSET_END label` plants `label_end`. The
+emissions are unchanged from v2: the pointer words are org-0 offsets in
+the package's own segment, which is exactly what the §12.2 kernel-side
+copy expects to read at relayout, and the caps it applies
+(`MENU_ITEMMAX`, `MENU_STRMAX`) are mirrored here so an author sees the
+clamp at authoring time. The handler follows §12.2's contract exactly:
+called under the gfx lock with AL = item, AH = menu, SI = window, BX =
+the set — and returns with `retf` like every kernel-called proc.
 
-**Worker support (§20.6).** The SDK mirrors `OSAPI_TASK_SPAWN` (0x00B8)
-and `OSAPI_TASK_ALIVE` (0x00BC) and carries the seven author rules as a
+**Worker support (§20.6).** The SDK mirrors `OSAPI_TASK_SPAWN` (0x0160)
+and `OSAPI_TASK_ALIVE` (0x0168) and carries the seven author rules as a
 comment block beside them — rule 2 (never return, never self-exit) and rule
 4 (ALIVE under the lock deadlocks) especially, because neither is
 detectable from the kernel and both are unrecoverable.
+
+**Extended memory (§41).** The SDK mirrors the five slots of §20.3 and the
+`CPU_8086`/`CPU_286`/`CPU_386` tier enum, and nothing else: no `HMA_SEG`, no
+`XM_*` internal, and **no 32-bit anything**. A package is 8086 code with no
+scoped island of its own (§1) — it never touches FS, GS, unreal mode or a
+386 instruction, it holds a linear base only as the opaque DX:AX pair the
+kernel gave it, and every byte it moves crosses through `osapi_xmem_copy`.
+That is the whole point of the copy slot carrying one ABI over two
+transports. (These five appended to the v2 table without a rebuild; the
+v3 restride later moved every slot's offset and rebuilt every `.o88` in
+one stroke, §20.3 — appending is once again invisible from here on.)
 
 ### 20.6 Worker tasks — one background task per package instance
 
@@ -3209,8 +3721,8 @@ both are instance-lifecycle verbs.
 
 | slot | routine | contract |
 |------|---------|----------|
-| 0x00B8 | `inst_pkg_spawn` | in AX = near entry point inside the package image, BX = the package's own window ptr (what `wm_create` returned). **Caller holds the gfx lock.** out CF=1 refused and nothing created — BX names no live instance; that instance is not a package (`I_KIND` bit 7 clear); AX is outside that record's own `[I_SPTR, I_SPTR+I_SIZE)` region; the instance already owns a task (`I_TASK != 0xFF`); or the task table is full. Else CF=0 and AL = the task slot. Preserves every register except AL and the flags. |
-| 0x00BC | `inst_pkg_alive` | in BX = the package's own window ptr; **called from the worker**, with the gfx lock **NOT** held. Returns with every register **and the flags** preserved while the owning instance is live — and also, unconditionally, when the caller is the UI task (§8: task 0 never exits, so a wrong-context call is refused rather than obeyed). Otherwise **never returns**: it tears the instance down via `inst_task_die` (gfx_lock, `wm_destroy`, gfx_unlock, `task_exit` with BX = the record, which frees the record and with it the package region inside one IF=0 window). |
+| 0x0160 | `inst_pkg_spawn` | in AX = the worker's entry OFFSET in the package's own segment, BX = the package's own window ptr (what `wm_create` returned). **Caller holds the gfx lock.** out CF=1 refused and nothing created — BX names no live instance; that instance is not a package (`I_KIND` bit 7 clear); AX lies outside that record's region (`AX >> 4 ≥ I_SIZE`, compared in paragraphs so a full-segment region cannot wrap — §2.5); the instance already owns a task (`I_TASK != 0xFF`); or the task table is full. Else CF=0 and AL = the task slot. Preserves every register except AL and the flags. |
+| 0x0168 | `inst_pkg_alive` | in BX = the package's own window ptr; **called from the worker**, with the gfx lock **NOT** held. Returns with every register **and the flags** preserved while the owning instance is live — and also, unconditionally, when the caller is the UI task (§8: task 0 never exits, so a wrong-context call is refused rather than obeyed). Otherwise **never returns**: it tears the instance down via `inst_task_die` (gfx_lock, `wm_destroy`, gfx_unlock, `task_exit` with BX = the record, which frees the record and with it the package region inside one IF=0 window). |
 
 `inst_wchk` (module-internal, in BX; out CF=1 if BX is not a
 record-aligned pointer inside `wm_wins`) fences both. These are the first
@@ -3240,21 +3752,30 @@ exclusion is `task_spawn`'s own IF=0 window (§8), which is what makes the
 slot scan and the publish one step. Before §20.6 every caller was UI-task
 only and single-threading did the job; it no longer does.
 
-**The ownership fence.** BX is package input, so "it names *a* live
-instance" is not enough. The record `inst_of_win` returns must additionally
-be a **package** instance (`I_KIND` bit 7) whose own region contains the
-entry point: `I_SPTR ≤ AX < I_SPTR + I_SIZE`. That is the cheap statement of
-"this entry belongs to this record", and it is what ties the spawn to the
-*calling* instance — the kernel has no other handle on who is calling.
-Without it, a package handing over a stranger's window (a stale pointer, or
-one harvested from `wm_wins`) would write the **stranger's** `I_TASK`, which
-flips *both* instances onto the wrong teardown path: the stranger's close
-box would take the die-flag branch and hide it forever, waiting on a worker
-it does not own, while the caller's own record stayed task-less and its
-close took the synchronous path — freeing, per §29.2 rule 7, the region its
-worker is still executing in, for `ld_alloc` to hand to the next package.
-A second instance of the same package is refused by the same test: it lives
-at a different base, so the caller's relocated entry is not inside it.
+**The ownership fence, two halves.** BX is package input, so "it names *a*
+live instance" is not enough. Half one — containment: the record
+`inst_of_win` returns must be a **package** instance (`I_KIND` bit 7)
+whose own region contains the entry, `AX >> 4 < I_SIZE`, done in
+paragraphs precisely so a full-segment region cannot wrap the compare
+(§2.5). That is the half the kernel's memory safety needs: `task_spawn`
+can never be made to `iret` into kernel code or past the named record's
+region, because the frame's CS/DS/ES are seeded from **that record's**
+`I_SPTR` (§8) and the offset is bounded by its size. Half two — identity:
+the record's index must equal the **`[snd_inst]` dispatch stamp**
+(§34.3). Containment alone stopped proving identity at org 0: under v2
+two instances lived at different bases, so a relocated entry could only
+be inside its own region; at org 0 every package's offsets start at 0x20
+and every region is at least 32 paragraphs, so the offset test passes
+against essentially *any* package record — a stranger's window would
+put a task in the STRANGER's segment and flip the stranger's record onto
+a die-flag close path nobody will ever complete, leaking its record and
+region for the session. The identity the kernel already holds is the
+dispatch stamp: every sanctioned call site is a dispatched callback
+(W_PAINT / W_ONKEY / W_ONCLICK / AM_ONCMD / the fdlg completion proc),
+and each dispatch site brackets the callback with `snd_disp_set`, so
+`[snd_inst]` names the one instance whose code is legitimately running.
+Spawning is therefore strictly *self*-service — a sibling's window is
+refused the same as a stranger's.
 
 **The invariant everything rests on.** Once `I_TASK != 0xFF`,
 `app_close_win` can only take its task-owned path: `I_STATE ← 2` plus
@@ -3330,8 +3851,10 @@ Two teardown corollaries, both about not trading a crash for a leak:
    kernel defence — the same reason a `W_PAINT` proc has always been
    forbidden to take it.
 5. **Re-check visibility under the lock, then set a clip.** Before
-   drawing, confirm the window is still visible (`test word [bx+W_FLAGS],
-   2`) and call `OSAPI_WM_CLIP_SET` (§11.3). CF=1 means not one pixel of
+   drawing, confirm the window still shows — `OSAPI_WM_GEOM` answers CF=1
+   when it is hidden (the v2 idiom, `test word [bx+W_FLAGS], 2`, is dead:
+   BX names kernel memory a v3 package's DS cannot reach, §11) — and call
+   `OSAPI_WM_CLIP_SET` (§11.3). CF=1 means not one pixel of
    your content shows — draw nothing this frame. CF=0 means draw normally,
    and the kernel cuts every `gfx_*`/`font_*` call to the part of your
    content nothing is covering; the region dies at your next
@@ -3346,7 +3869,7 @@ Two teardown corollaries, both about not trading a crash for a leak:
    `[bp+disp]` addresses SS — a kernel or package pointer held in BP needs
    an explicit `ds:` override.
 7. **What a worker may call.** Only the background-task surface: `gfx_*`,
-   `osapi_set_color`, `font_*`, `wm_content`, `wm_obscured`,
+   `osapi_set_color`, `font_*`, `wm_content`, `wm_geom`, `wm_obscured`,
    `wm_clip_set`/`wm_clip_clear`, `osapi_video`,
    `osapi_get_ticks`, `osapi_mouse`, `osapi_srand`/`osapi_rand`,
    `task_sleep`, `task_yield` and `OSAPI_TASK_ALIVE`. `osapi_set_color`
@@ -3356,8 +3879,8 @@ Two teardown corollaries, both about not trading a crash for a leak:
    lock-free repaints some other window's next fill in the wrong colour.
    Everything the SPEC
    marks *UI-task/window-callback context only* is forbidden to it: the
-   file slots 0x0098..0x00A8 (§18.4 — shared `dsk_secbuf`, FAT snapshot and
-   `sch_lock`), the file dialog 0x00B0 (§38.6), and every verb of
+   file slots 0x0120..0x0140 (§18.4 — shared `dsk_secbuf`, FAT snapshot and
+   `sch_lock`), the file dialog 0x0150 (§38.6), and every verb of
    `osapi_snd_stream` including the staging verbs (§20.3);
    `osapi_snd_play` blocks with `sch_lock` raised and is likewise out.
    None of this is enforced.
@@ -3379,16 +3902,53 @@ that renders under the *caller's* lock either loses its band to the next
 repaint or holds the lock for a whole frame, which rule 3 forbids.
 
 **The entry point in AX is bounded, not verified.** The ownership fence
-above requires AX to lie inside the calling record's own region, so
-`task_spawn` cannot be made to `iret` into kernel code — but *which* byte of
-the region it lands on is the package's business, exactly like the
-`W_PAINT`/`W_ONKEY`/`W_ONCLICK` near pointers a package plants in its own
-window record and the kernel calls blind (§11). The entry is a plain near
-label inside the package's relocated region, so it satisfies §33 rule 3 by
-construction and needs no shim.
+above requires AX to lie inside the named record's region, so
+`task_spawn` cannot be made to `iret` into kernel code — but *which* byte
+of the region it lands on is the package's business, exactly like the
+`W_PAINT`/`W_ONKEY`/`W_ONCLICK` offsets a package plants in its own
+window record and the kernel dispatches blind (§11). The entry is a plain
+org-0 label in the package's own segment, and the frame's CS is that
+segment, so offset and segment can never disagree.
 
-On entry the worker gets DX = its instance index, DS = ES = CS =
-`KERNEL_SEG`, IF = 1, gfx lock free — the ordinary `task_spawn` frame (§8).
+On entry the worker gets DX = its instance index, **DS = ES = CS = the
+instance's segment** (`task_spawn`'s frame words, seeded from the
+record's I_SPTR via CX — §8), SS = `LOW_SEG`, IF = 1, gfx lock free — the
+ordinary `task_spawn` frame with the one v3 difference that the segment
+is its own.
+
+### 20.7 Forbidden (binding)
+
+1. **No package code above 1MB, ever.** Package segments come from the
+   §2.5 arena — conventional memory — and nowhere else. Extended memory is
+   a data store (§2.4/§41.9 rule 3): no entry, no callback, no worker
+   entry, no "just this one proc" in the HMA or above it. The highest byte
+   any CS:IP can name is 0x10FFEF, and this design leans on that ceiling.
+2. **The instance record does not grow.** `I_RECSZ` = 32 is load-bearing
+   (index↔ptr via CL shifts, §29.1) and the record is exactly full — I_CYC
+   ends at byte 31. The v3 re-unit of I_SPTR/I_SIZE exists precisely so
+   the record would NOT grow; anything needing a new per-instance word
+   finds a side table instead (the `inst_icons` precedent, §29.5).
+3. **No segment overrides in place of marshalling.** A caller pointer
+   crosses the boundary by being COPIED — at the API-slot layer (§20.3) or
+   at relayout (§12.2), the `dsk_get_dir` idiom — never by threading a
+   "which segment" answer through `font_str`, `menu_track`, `menu_drop` or
+   the `dskw_*` name parsers. ES is the most contended register in the
+   kernel, and those bodies serve kernel-internal callers whose pointers
+   are plain DS; the override version of this feature is where the bugs
+   would have lived.
+4. **No reordering, no re-striding, no repurposing of API slots.** The
+   table is append-only at 8 bytes per slot from 0x0010; a slot, once
+   shipped, keeps its offset and its contract forever (retired
+   functionality gets a refusing stub — the §20.3 sound-slot precedent).
+5. **No near `ret` from a package proc the kernel calls.** Entry, paint,
+   onkey, onclick, menu handler, completion proc: `retf`, every one — a
+   near `ret` under a far call resumes at a garbage offset in the
+   package's own segment with the kernel's CS:IP still on the stack. The
+   worker entry is the one exception because it never returns (§20.6
+   rule 2).
+6. **No relocation, reintroduced by any name.** A change that seems to
+   need a load-time fixup pass means the org-0, own-segment model is being
+   violated somewhere else first; fix that instead.
 
 ## 21. loader.inc
 
@@ -3399,40 +3959,57 @@ none — §22.1; the index is into *that* window's listing, so `loader_run`
 latches `ld_pwin` and calls `fmv_sync` on it **before** `ld_run_body`
 resolves the index against the globals), `ld_status`
 (byte: 0 ok, 1 = `LD_EDISK` disk error, 2 = `LD_EBAD` not a valid package,
-3 too large, 4 entry aborted, 5 out of memory), plus loader_run scratch
+3 too large, 4 entry aborted, 5 out of memory, 6 = `LD_ENEED` the machine
+is below the package's §20.2 memory-requirement KB), `ld_arena_top`
+(word: the arena's top in paragraphs — the boot int 12h KB × 64, probed
+once by `loader_init` on task 0, §2.5; clamped to `VID_HERC_SEG` when
+that test knob is defined), `ld_needkb` (word: the refusing package's
+requirement, for the status-6 message), plus loader_run scratch
 words (registers run out on the 8086), including `ld_clus` (word, the
-pending file's first cluster). `LD_DE_CLUS` equ 18 names the staged
-entry's first-cluster word (§19; it was `LD_DE_LBA` — same offset, renamed
-because the word is a cluster number now). `ld_appwin` is gone — the
+pending file's first cluster) and `ld_hdr` (32 bytes: the staged header —
+in v3 the loaded header lives in a segment DS cannot reach, so it is
+staged back into kernel scratch wherever the loader must read it).
+`LD_DE_CLUS` equ 18 names the staged
+entry's first-cluster word (§19). `ld_appwin` is gone — the
 instance table (§29) tracks residency.
 
-**The pool allocator is the instance table.** A package record's byte
-range [I_SPTR, I_SPTR + I_SIZE) is occupied iff I_STATE ≠ 0 (§29.2 rule
-7); I_SIZE is the ALLOCATED size (512-multiple). `ld_alloc` (in: AX =
-bytes, a 512-multiple; out: CF=1 no hole, else BX = region base):
-first-fit lowest base over [0xB000, 0xFE00) — start at 0xB000; if any
-in-use package record overlaps [start, start+AX), set start = that
-record's end and rescan from the top; fail when start + AX > 0xFE00.
-UI-task-only, so allocation never races itself; freeing is the record
+**The arena allocator is the instance table.** A package record's
+paragraph range [I_SPTR, I_SPTR + I_SIZE) is occupied iff I_STATE ≠ 0
+(§29.2 rule 7); I_SIZE is the ALLOCATED size in paragraphs. `ld_alloc`
+(in: AX = paragraphs, a 32-multiple, ≤ `PKG_MAX_PARA`; out: CF=1 no hole,
+else BX = the region's SEGMENT): first-fit lowest segment over
+[`ARENA_SEG`, `[ld_arena_top]`) — start at `ARENA_SEG`; if any in-use
+package record overlaps [start, start+AX), set start = that record's end
+and rescan from the top; fail when start + AX > `[ld_arena_top]` —
+including immediately, on a zero arena (§2.5), which is how a 256KB
+machine refuses. All the arithmetic is paragraphs, where nothing wraps:
+the largest possible top is 0xA000. UI-task-only, so allocation never
+races itself; freeing is the record
 store (task-less close path or task_exit, §29) — and since §20.6 the
 `task_exit` half is reachable for packages too, so a region can be
 released from a worker task under IF=0 rather than from the UI task under
-the lock. No compaction — regions never move once relocated.
+the lock. No compaction — a region's segment never changes while the
+instance lives.
 
-`ld_check_hdr` (module-internal) — in: SI → 32 readable header bytes,
-[ld_fsz] = file size; out: CF=0 + scratch (img/bss/entry/reloc-count)
-filled, or CF=1 + AL = status. Checks: magic; **version = 2** (a v1 file
-→ "Bad package"); link base = `APP_LOAD_OFF`; image ≥ 0x20; entry in
-[0x20, image) (icon rule enforced by os88pkg, not re-checked); image+bss ≤
-APP_MAX_SIZE (else "Too large"); image + 2·count = file size (guards
-truncated files and stale directories — sound because FAT directory sizes
-are byte-exact and os88disk.py never pads the size field, §24; cluster
-slack on disk is invisible here).
+`ld_check_hdr` (module-internal) — in: SI → 32 readable header bytes
+(kernel scratch, always — `dsk_secbuf`-staged at the peek, `ld_hdr`-staged
+at the re-check), [ld_fsz] = file size; out: CF=0 + scratch
+(img/bss/entry/memreq) filled, or CF=1 + AL = status. Checks: magic;
+**version = 3** (a v1/v2 file → "Bad package"); words +4 and +12 zero (a
+stale v2 layout must not slip past a bumped version byte); image ≥ 0x20;
+entry in [0x20, image) (icon rule enforced by os88pkg, not re-checked);
+**image = file size** (the truncation guard — sound because FAT directory
+sizes are byte-exact and os88disk.py never pads the size field, §24;
+cluster slack on disk is invisible here); image+bss ≤ `PKG_MAX_PARA`×16
+(else "Too large"); the +14 memory requirement against the boot int 12h
+KB — below it → status 6 with `[ld_needkb]` set, the precise refusal
+§20.2 exists to buy ("Needs 512K", not a shrug).
 
 `loader_run` — in AX = directory index. UI task only, gfx lock not held
 on entry. Steps:
-1. Validate the entry: index < [disk_nfiles], type = 1, size ≤
-   APP_MAX_SIZE and non-zero, and the first-cluster word at
+1. Validate the entry: index < [disk_nfiles], type = 1, size non-zero
+   (the §19 size word caps at 0xFFFF by construction), and the
+   first-cluster word at
    [si+LD_DE_CLUS] ∈ [2, [dsk_maxclus]] (belt and braces under §19's
    type-word rule — this check stands alone if the mount code ever
    changes; store it in `ld_clus`) → else status 2, step 10. **No
@@ -3443,53 +4020,73 @@ on entry. Steps:
    `disk_read` 1 sector into `dsk_secbuf` (UI-task-only shared scratch) —
    the first sector of the first cluster IS the file's first 512 bytes,
    so peek semantics are exact. CF → status 1.
-3. `ld_check_hdr` on the peek → status 2/3.
-4. need = roundup512(max(image+bss, file size)); > APP_MAX_SIZE → status
-   3. (Sector-granular allocation makes the whole-file read safe: it
-   writes ceil(fsize/512)·512 ≤ need bytes, never a neighbour's region.)
-5. `inst_alloc` (§29) → CF → status 5. `ld_alloc` need bytes → CF →
+3. `ld_check_hdr` on the peek → status 2/3/6.
+4. need = ceil(max(image+bss, file size) / 512) × 32 paragraphs; >
+   `PKG_MAX_PARA` → status 3. (Keeping the 512-byte rounding inside the
+   paragraph unit is what makes the whole-file read safe: the chain walk
+   writes ceil(fsize/512)·512 bytes ≤ need×16, never a neighbour's
+   region.)
+5. `inst_alloc` (§29) → CF → status 5. `ld_alloc` need → CF →
    status 5 (the unpublished instance record stays free). Note the
    record is not yet published, so the region is reserved only by
    single-threadedness (rule §29.2.8).
 6. `dsk_read_chain` the whole file (§18) — AX = [ld_clus], DX =
-   ceil(fsize/512) sectors — to ES=KERNEL_SEG, BX=base. CF with AL=1
-   (disk error) → status 1 (`LD_EDISK`); AL=2 (chain corrupt: loop,
+   ceil(fsize/512) sectors — to **ES = the new segment, BX = 0**. CF with
+   AL=1 (disk error) → status 1 (`LD_EDISK`); AL=2 (chain corrupt: loop,
    cross-link, premature EOC, bad-cluster mark, out-of-range link) →
    status 2 (`LD_EBAD` — a corrupt FAT on a disk that reads fine is bad
    data, not a disk error). The write bound holds even against a corrupt
    FAT: the walk is size-driven, reading exactly ceil(fsize/512)·512 ≤
-   need bytes — never a neighbour's region. Re-run `ld_check_hdr`
-   against the in-region header (the disk could have been swapped
-   between the peek and the read — and a looped or cross-linked chain
-   can produce plausible-length garbage) → status 2/3.
-7. Relocate: for each of the n table words at base+image (each validated
-   in [0x20, image−2] → else status 2): word at base+offset += base −
-   `APP_LOAD_OFF`.
-8. Zero bss-size bytes at base+image (this overwrites the reloc table —
-   it is disposable).
-9. Near-call base+entry (contract §20.2; DS=ES=KERNEL_SEG, lock free).
-   CF → the abort path (BX sanity-checked exactly as before: inside
-   wm_wins, record-aligned, then locked wm_destroy), status 4. Else:
-   fill the reserved instance record — I_KIND = KIND_PKG, I_TASK = 0xFF
-   (a package is *born* task-less; §20.6 lets a later callback claim one
-   worker, which is also why the entry proc itself cannot spawn: neither
-   `I_STATE = 1` nor `wm_owner` is published yet),
-   I_SPTR = base, I_SIZE = need, `inst_set_name` from base+16, I_ICON =
-   base+32 when header flags bit 0 else 0 — `inst_bind_win` BX, publish
+   need×16 bytes — never a neighbour's region. Stage the loaded header's
+   32 bytes back into `ld_hdr` (out of the package segment, into kernel
+   scratch) and re-run `ld_check_hdr` on it (the disk could have been
+   swapped between the peek and the read — and a looped or cross-linked
+   chain can produce plausible-length garbage) → status 2/3/6. The
+   guard's LAST clause: the re-check refilled `ld_img`/`ld_bss`, so
+   **re-derive the step-4 paragraph need from the re-checked values and
+   refuse (status 2) anything larger than what step 5 reserved** — a
+   swapped disk's otherwise-valid header may carry a larger bss than the
+   peeked one, and step 8's zeroing is bounded by `ld_bss`, not by the
+   allocation; without this clause it could zero a neighbour's region.
+7. (Retired. The v2 relocation pass — deleted outright, §20.2. Nothing
+   between the read and the bss zero touches a byte of the image.)
+8. Zero bss-size bytes at ES = the segment, DI = image size.
+9. **Far-call** pkgseg:entry (contract §20.2: the loader sets DS = ES =
+   the package segment for the call and restores DS = KERNEL_SEG after;
+   lock free). CF → the abort path: BX sanity-checked exactly as before
+   (inside wm_wins, record-aligned, then locked wm_destroy), then a
+   locked `wm_destroy_seg` sweep of `[ld_base]` (§11) — the entry may
+   have wm_created windows it did not return, their `wm_wseg` stamps
+   name the region being freed, and no instance record will ever exist
+   to sweep them later — status 4.
+   Else: fill the reserved instance record — I_KIND = KIND_PKG,
+   I_TASK = 0xFF (a package is *born* task-less; §20.6 lets a later
+   callback claim one worker, which is also why the entry proc itself
+   cannot spawn: neither `I_STATE = 1` nor `wm_owner` is published yet),
+   **I_SPTR = the segment, I_SIZE = need in paragraphs** (§29.1 — the
+   same two words as v2 in new units), `inst_set_name` from `ld_hdr`+16
+   (kernel scratch, so `inst_set_name` keeps its plain-DS contract), and
+   the icon: header flags bit 0 → copy the 64-byte body at segment
+   offset 32 out of the package segment into this instance's
+   `inst_icons` slot and point I_ICON at that slot (§29.5 — the cache is
+   what keeps I_ICON a kernel DS pointer the dock can draw from), else
+   I_ICON = 0 — `inst_bind_win` BX, publish
    I_STATE = 1, then gfx_lock, `wm_show` BX, gfx_unlock, status 0.
    (`wm_create` failing inside the entry surfaces as CF = status 4.)
 10. Set `[ld_status]`, call `files_refresh` (§22).
 
 Closing a package instance follows whichever §29 path its I_TASK selects.
-With no worker it is the task-less path: locked wm_destroy + I_STATE ← 0 —
-that store frees the region. With a §20.6 worker it is the die-flag path,
-and the worker's next `OSAPI_TASK_ALIVE` runs `inst_task_die`; then
-`task_exit`'s release byte frees the record **and with it the region**,
-inside one IF=0 window (§29.2 rules 2 and 7). Identical effect, different
+With no worker it is the task-less path: locked wm_destroy + the
+`wm_destroy_seg` sweep of I_SPTR (§11 — any windows the package created
+beyond the bound one die here) + I_STATE ← 0 — that store frees the
+region. With a §20.6 worker it is the die-flag path, and the worker's
+next `OSAPI_TASK_ALIVE` runs `inst_task_die` (same locked destroy +
+sweep); then `task_exit`'s release byte frees the record **and with it
+the region**, inside one IF=0 window (§29.2 rules 2 and 7). Identical effect, different
 task and different fence. The Task Manager's RAM readout
-sums package records' I_SIZE under one cli (§28) and no longer peeks at
-package headers; the old "`ld_appwin` zeroed before the region is
-overwritten" invariant is retired.
+sums package records' I_SIZE — paragraphs, §28 — under one cli and no
+longer peeks at package headers; the old "`ld_appwin` zeroed before the
+region is overwritten" invariant is retired.
 
 ## 22. files.inc — the Disk window (file manager)
 
@@ -3639,7 +4236,10 @@ applies — the precedence is binding, because all five can be true at once:
    Without this table every `dskw_*` failure is silent, which for an
    irreversible operation is the worst possible outcome.
 5. else `[ld_status]`: "", "Disk error", "Bad package", "Too large",
-   "Load failed", "Out of memory" (0..5).
+   "Load failed", "Out of memory", "Needs nnnK" (0..6 — the last
+   composes `[ld_needkb]` into scratch, §21: the precise refusal for a
+   machine below the package's §20.2 memory floor, which is every
+   package on a 256KB machine).
 
 Whichever wins is truncated to (cw−12)/8 chars
 through the same scratch-buffer idiom as the header ("Out of memory" is
@@ -4014,7 +4614,8 @@ program's window may overlap any of them).
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
-Not kernel code: a .o88 package built with os88api.inc, org `APP_LOAD_OFF`, all
+Not kernel code: a .o88 package built with os88api.inc, org 0 in its own
+segment (§20.1), all
 services via the API table. Label prefix `mn_`. Everything below is
 content-relative; the procs fetch the content origin via `wm_content`
 (JAPI) each call.
@@ -4056,26 +4657,19 @@ content-relative; the procs fetch the content origin via `wm_content`
 Python 3, stdlib only, both tools executable with clear argparse `--help`
 and non-zero exit + stderr message on any validation failure.
 
-- `tools/os88pkg.py IN.bin --alt ALT.bin -o OUT.o88` — package
-  validator/reloc-generator/stamper. IN is the org-0xB000 assembly, ALT
-  the same source at org 0xB800 (`-DOS88_ORG=0xB800`; the probe delta
-  0x800 has a zero low byte, so every fixup word differs in exactly its
-  high byte). Steps, any failure → exit 1, no output: (1) equal lengths
-  (an org-dependent encoding would desync the images); (2) header
-  validation — magic, version 2, link base 0xB000, image field == file
-  size (no table yet), entry image-relative in [0x20, image) (≥ 0x60
-  with the icon flag), image+bss ≤ 0x4E00, reloc-count field 0, reserved
-  0, flags bits 1–7 zero, name printable ≤15 NUL-padded — plus
-  byte-equality of the two headers (and icon blocks); (3) diff scan:
-  each differing byte at offset i must satisfy i ≥ 33, fixup site
-  o = i−1, (ALT[i] − IN[i]) & 0xFF ∈ {8 (class 0), 0xF8 (class 1)},
-  IN[o] == ALT[o], o ≤ image−2, o ≥ previous o + 2; (4) **hard verify**:
-  IN with 0x800 added (class 0) / subtracted (class 1) at every recorded
-  fixup word must reconstruct ALT byte-for-byte — this is what catches
-  split/truncated addresses (§20.2 author rule); (5) loadable
-  bound: max(image+bss, roundup512(image + 2n)) ≤ 0x4E00; (6) emit IN
-  with the count stamped at offset 12 and the n sorted offsets appended.
-  Summary line gains `relocs=N`.
+- `tools/os88pkg.py IN.bin -o OUT.o88` — package **validator/stamper**,
+  and nothing more since v3: the dual-assembly reloc generator died with
+  relocation itself (§20.2) — no `--alt`, no probe org, no diff scan, no
+  reconstruction verify, no table append, no reloc-count stamp. What
+  remains is worth keeping on the host, where the error messages are
+  cheap: header validation — magic, version 3, words +4 and +12 zero,
+  **image field == file size**, entry image-relative in [0x20, image)
+  (≥ 0x60 with the icon flag), image+bss ≤ 65,520 (`PKG_MAX_PARA`×16),
+  memory-requirement word plausible (256..640), flags bits 1–7 zero,
+  name printable ≤15 NUL-padded. The stamp: `--needs KB` overrides the
+  header's +14 word; the default is whatever `OS88_HEADER` emitted
+  (§20.5). Any failure → exit 1, no output. The summary line drops
+  `relocs=N`.
 - `tools/os88disk.py -o OUT.img --size {1440,360} [PKG.o88 ...]` — builds
   a FAT12 data floppy per §19. CLI shape unchanged from the os88fs era —
   the Makefile call sites need zero edits; pure Python 3 stdlib (no
@@ -4083,10 +4677,10 @@ and non-zero exit + stderr message on any validation failure.
   test image; never referenced by the Makefile) — the tool derives the
   FAT type from the cluster count exactly like the kernel and emits 12- or
   16-bit FATs accordingly.
-  - Package validation, kept verbatim from the old tool: magic 0x384F,
-    version 2, image field ∈ [32, filesize], image + 2·reloc-count ==
-    file size, non-empty printable header name, size ≤ 0xFFFF (a v1 file
-    fails with "rebuild with the v2 toolchain"). Corruption surfaces on
+  - Package validation, kept in step with the kernel's (§21): magic
+    0x384F, version 3, image field == file size, file size ∈ [32,
+    0xFFFF], non-empty printable header name (a v1/v2 file fails with
+    "rebuild with the v3 toolchain"). Corruption surfaces on
     the host, not on the 8086.
   - 8.3 names derive from the **host filename** (basename, uppercased),
     not the header name field (8.3 cannot hold the 15-char header names —
@@ -4127,13 +4721,16 @@ and non-zero exit + stderr message on any validation failure.
     doubles as the test-plan oracle.
 - Makefile: `build/mines.bin` from `apps/mines/mines.asm` and
   `build/hello.bin` from `apps/hello/hello.asm` (§27), each
-  (`nasm -f bin -w+error -I apps/`, dep on apps/os88api.inc), plus a
-  second assembly of each at org 0xB800 (`-DOS88_ORG=0xB800` →
-  `build/X.alt.bin`); both fed to os88pkg.py (`X.bin --alt X.alt.bin`),
+  (`nasm -f bin -w+error -I apps/`, dep on apps/os88api.inc) — **one
+  assembly per package**: the `-DOS88_ORG=0xB800` second pass and every
+  `X.alt.bin` rule died with the reloc diff, for all nine packages and
+  the three gate images alike — fed to os88pkg.py,
   then `build/apps.img` (1440) + `build/apps360.img` (360) from
   **mines.o88 + hello.o88** via os88disk.py; all built by `all`.
-  `run`/`debug`/`test` attach build/apps.img as floppy index 1. 86Box's
-  fdd_02 gets apps360.img (best-effort config keys).
+  Root-directory order on the apps disks stays pinned — mines, hello,
+  notepad, recorder, piano, fractal — because scripted tests click by
+  row (§22). `run`/`debug`/`test` attach build/apps.img as floppy index
+  1. 86Box's fdd_02 gets apps360.img (best-effort config keys).
 
 ## 25. icons.inc — icon format, draw routine, built-in library
 
@@ -4204,7 +4801,7 @@ built-in Note Pad kind, moved out of the kernel to reclaim the 1,383 bytes
 it cost there — 281 of code and 1,036 of .bss, nearly all of the latter a
 fixed two-instance text pool. Behaviour matches §14 plus resizing: one
 window "Note Pad" 260×180 at (60,60), **resizable** — the entry calls
-`wm_sizable` (slot 0x008C) right after wm_create, making it the first
+`wm_sizable` (slot 0x0108) right after wm_create, making it the first
 package to exercise §11.1 and the proof that the SDK path works. Paint
 renders the buffer at 8px per char with a 6px left/top margin, wrapping at
 the content width, dropping any row whose bottom would pass the content
@@ -4213,7 +4810,7 @@ all computed from the **live** window record each call, which is exactly
 why resizing costs the paint proc nothing: the next repaint re-wraps at
 the new width. Onkey appends printable 32..126, deletes on backspace,
 stores 13 on Enter, then white-fills (live W_W/W_H) and redraws **its own
-content only**, ending with `wm_grow_paint` (slot 0x0094) per §11.1 — the
+content only**, ending with `wm_grow_paint` (slot 0x0118) per §11.1 — the
 white fill erases the grow box. No icon flag, so the Disk window shows
 `ico_app16`.
 
@@ -4241,15 +4838,17 @@ document name seeded to `NOTES.TXT` at launch, and four File commands:
 | command | behaviour |
 |---------|-----------|
 | **New** | empties the buffer and resets the name to `NOTES.TXT` |
-| **Open…** | slot 0x00B0 in Open mode, default = the current name; the callback stores the chosen name and loads it |
+| **Open…** | slot 0x0150 in Open mode, default = the current name; the callback stores the chosen name and loads it |
 | **Save** (F2) | writes `np_name` — no dialog, the second and later saves of a document are silent |
-| **Save As…** | slot 0x00B0 in Save mode; the callback stores the chosen name and writes it |
+| **Save As…** | slot 0x0150 in Save mode; the callback stores the chosen name and writes it |
 
 F3 is **Open…**, i.e. it now raises the dialog rather than re-reading a
 fixed file — the one behaviour change to an existing key, and the reason
 for it is that a load with no way to say *what* was never the useful half.
 Both dialog commands go through one completion proc, `np_ondlg` (AL = mode,
-SI = our window, DI = the name): it copies the name into `np_name`, runs
+SI = our window, **ES:DI = the name** — a kernel pointer since §38.6's v3
+contract, read through ES because the package's own DS can no longer
+reach kernel memory): it copies the name into `np_name`, runs
 `np_load` or `np_save`, and repaints its own content, which §38.5 requires
 and the kernel does not do for it.
 
@@ -4278,7 +4877,7 @@ so it never becomes stale furniture, while a key the app ignores leaves
 both the toast and the screen alone. It is drawn last, so it sits above the
 text.
 
-Save is `ES = DS` + slot 0x0098; load is slot 0x009C with the buffer
+Save is `ES = DS` + slot 0x0120; load is slot 0x0128 with the buffer
 capacity, mapping `FERR_BIG` to the same "Too big" toast the truncation
 path uses. Neither call happens in the paint proc — both run in onkey,
 which already holds the gfx lock, so the write's stall (§18.4) lands on a
@@ -4384,10 +4983,13 @@ account, and the rows partition one total.
 - RAM, straight off the same snapshot (no second cli window): sum I_SIZE
   over slots with I_STATE ≠ 0 — built-ins carry I_SIZE 0, so this counts
   exactly the resident package regions, and dying instances still count
-  because their region is still resident. The loader keeps ΣI_SIZE ≤
-  APP_MAX_SIZE, so the 16-bit sum cannot overflow. used bytes =
-  `kernel_bss_end` (bare label = the kernel text+bss footprint, org 0) +
-  that sum. usedK = (used+1023) >> 10, **plus 150 when `[bb_dbl]` is set**
+  because their region is still resident. **The sum is in PARAGRAPHS**
+  (§29.1's v3 unit), which is what keeps it 16-bit: a 233KB arena's byte
+  total would overflow the moment resident regions passed 64KB, while the
+  paragraph total tops out below 0x4000. regionK = (Σ paragraphs + 63)
+  >> 6. used bytes =
+  `kernel_bss_end` (bare label = the kernel text+bss footprint, org 0).
+  usedK = (used+1023) >> 10, **plus regionK, plus 150 when `[bb_dbl]` is set**
   (§32/§39.5 — the armed-buffer flag, not `[bb_on]`, which is 1 on any mono
   adapter: the 4 × 0x9600-byte back buffer is exactly 150KB — added after the
   shift because 153600 does not fit a 16-bit byte count), **plus
@@ -4396,7 +4998,11 @@ account, and the rows partition one total.
   shift for the same reason. The System row's memory cell adds all four
   terms too (via `tm_memcol_kb`, the KB-input tail of `tm_memcol`), so the
   rows still sum to the bar. Total KB is the
-  boot-time int 12h value. **All bar math is in KB**: barw =
+  boot-time int 12h value. **Extended memory is never one of these terms**
+  (§2.4/§41.6): int 12h caps at 640K, the bar and the conventional map are
+  scaled by it, and folding megabytes into `[tm_usedk]` would both blow the
+  bar and break the sum. It gets its own line, not a term. **All bar math is
+  in KB**: barw =
   usedK·160/totalK (`mul` then `div`; totalK cannot be 0 from int 12h,
   but a 0 check that skips the bar is required anyway).
 - History: load% scaled to 0..40 (·40 then /100), stored at
@@ -4414,7 +5020,7 @@ period without any extra plumbing), the new sweep column plus an all-white
 gap column at the advanced tm_pos, the RAM line and bar, and the process
 rows — the full 160-column graph render happens only in tm_paint, so the
 periodic lock hold stays small (Bounce-scale). Memory view: the RAM line,
-the pool caption, both map interiors and the rows; the two map frames are
+the arena caption, both map interiors and the rows; the two map frames are
 painted only by the full bodies (tm_paint / tm_click). All drawing is
 self-backgrounding (each element white-fills its own rect or paints both
 segments), so tm_paint needs no preceding content clear beyond the one
@@ -4454,7 +5060,8 @@ wm_paint_all already does.
   claimed a §20.6 worker renders `run`/`rdy`/`slp` here like Clock, which
   is correct and not a bug); else its task's slot
   = `sch_cur` → `run`, T_STATE 2 → `slp`, otherwise `rdy`. Memory =
-  I_SIZE rounded up to KB, or `"   -"` (no `'K'`) when I_SIZE is 0 —
+  I_SIZE — paragraphs, §29.1 — rounded up to KB ((I_SIZE + 63) >> 6), or
+  `"   -"` (no `'K'`) when I_SIZE is 0 —
   every built-in kind, which owns no region of its own; a misleading `0K`
   is not used.
 - A free slot renders `-` / `---` / `  -` / `   -`: name dash, state
@@ -4475,22 +5082,28 @@ wm_paint_all already does.
   §2.2 — claimed whole by the sound layer from boot, so the band is
   unconditional like the low keep), and [256,406) 50% gray while
   `[bb_dbl]` is set (the §32 back buffer, read live at draw time — the
-  armed-buffer flag, so a mono machine draws no band, §39.5).
-- (6,33): `"SEG 64K POOL"` + pool-used KB right-aligned in 3 (ceil of
-  Σ I_SIZE over in-use snapshot slots) + `"K/20K"` — exactly 20 chars
-  (white-fill (6,33)-(167,40) first; 20 = ceil(0x4E00/1024), the §21 pool
-  size).
+  armed-buffer flag, so a mono machine draws no band, §39.5). Then, above
+  406K, **the package regions** — per snapshot slot with I_STATE ≠ 0 and
+  I_SIZE ≠ 0, a `gfx_fill_pat` band [I_SPTR >> 6, (I_SPTR + I_SIZE) >> 6)
+  KB in that slot's pattern (segment→KB is one shift): the regions moved
+  to this map when they left the kernel segment for the §2.5 arena, and
+  the arena's unallocated remainder reads white — free space, drawn
+  honestly.
+- (6,33): `"ARENA"` + used KB right-aligned in 4 (ceil of Σ I_SIZE
+  paragraphs over in-use snapshot slots, >> 6) + `"K/"` + the arena total
+  right-aligned in 4 (`([ld_arena_top] − ARENA_SEG) >> 6`, clamped at 0 —
+  a 256KB machine honestly reads `ARENA    0K/   0K`) + `"K"`, padded to
+  exactly 20 chars (white-fill (6,33)-(167,40) first). The
+  `"SEG 64K POOL uuuK/20K"` caption died with the pool (§20.1).
 - Kernel-segment map: 1px black frame (6,43)-(167,58), interior
   (7,44)-(166,57) = 160×14. Offset scale: segment offset o maps to
   interior column o·160/65536 = o·5/2048 (16-bit `mul` by 5 carries into
-  DX; the 32-bit divide by 2048 cannot overflow: DX ≤ 4); a region [a,b)
-  fills a·5/2048 .. (b−1)·5/2048 inclusive, clamped ≥ 1px. The interior
-  is white-filled, then: [0, kernel_bss_end) solid black (kernel text +
-  bss), [0xFE00, 0x10000) 50% gray (above the pool, §21), then per
-  snapshot slot with I_STATE ≠ 0 and I_SIZE ≠ 0 a `gfx_fill_pat` region
-  [I_SPTR, I_SPTR + I_SIZE) in that slot's pattern. The headroom between
-  kernel_bss_end and APP_LOAD_OFF and any unallocated pool read white —
-  free space, drawn honestly.
+  DX; the 32-bit divide by 2048 cannot overflow: DX ≤ 4). The interior
+  is white-filled, then [0, kernel_bss_end) solid black (kernel text +
+  bss) — and that is all: the per-package bands and the gray
+  above-the-pool strip left this map for the conventional one when v3
+  evicted the pool (§20.1). Everything above kernel_bss_end reads white —
+  free space, drawn honestly, and all of it the kernel's now.
 - (16,62): header `"NAME    ADDR SIZE"` (17 chars).
 - Process rows r = 0..TM_ROWS−1 at y = 74 + 11·r (white-fill
   (6,y)-(167,y+7) first): a legend square (6,y)-(13,y+7) — 1px black
@@ -4502,14 +5115,29 @@ wm_paint_all already does.
   low-memory keep, the far blob and the back buffer belong to the top RAM
   line, not to this in-segment column.
 - Row 1+i, in use with I_SIZE ≠ 0 (a package): square interior =
-  pattern i; ADDR = the I_SPTR snapshot as 4 uppercase hex digits;
-  SIZE = I_SIZE in KB rounded up.
+  pattern i; ADDR = the I_SPTR snapshot as 4 uppercase hex digits — a
+  SEGMENT since v3 (§29.1): the same four glyphs with an honest new
+  meaning; SIZE = I_SIZE paragraphs in KB rounded up.
 - Row 1+i, in use with I_SIZE = 0 (a built-in kind): no square (the band
   stays white); name, then `"   -    -"` — it lives in kernel .bss, not
-  the pool.
+  the arena.
 - A free slot: no square, name dash, `"   -    -"`.
 - A dying instance (I_STATE 2) still draws its region and its row: the
   region is still resident (§21).
+- (6,225): the CPU-tier and extended-memory line (§41.6), exactly 20 chars
+  (white-fill (6,225)-(167,232) first) — the last row band ends at y = 213,
+  so it sits below the list without moving a single pinned constant above
+  it: `[0..2]` `"CPU"`, `[3]` space, `[4..8]` the tier name left-justified
+  and space-padded to 5 — `"8086 "`, `"286  "` or `"386+ "`, padded for the
+  `"SCH preempt"` reason (§28's performance line: the padding is what erases
+  the longer word) — `[9]` space, `[10..12]` `"XMS"`, `[13]` space,
+  `[14..18]` extended-memory KB right-aligned in 5, `[19]` `'K'`. Five
+  digits, not three: AH=88h answers up to 65,535 and `tm_put3` would emit a
+  non-digit above 999. On tier 0 the line reads `CPU 8086  XMS     0K` —
+  drawn, not suppressed, because "none" is the answer the floor machine
+  should show. Like the two row lists it is gated on `[tm_ylim]` (§39.10):
+  on CGA the content is 156 rows and an ungated line at y = 225 would write
+  across the dock strip once a second.
 
 **Slot patterns.** `tm_pats` — 12 × 8 bytes in .text (far code reads
 data through DS, §33 rule 2); pattern i = `tm_pats + i·8`, fixed
@@ -4546,14 +5174,23 @@ I_TASK   equ 3    ; byte: task slot index (§8), 0xFF = task-less. Set by
                   ;       while the record lives
 I_WIN    equ 4    ; word: window record ptr (valid while I_STATE != 0)
 I_SPTR   equ 6    ; word: builtin — per-instance state block ptr (0 = none)
-                  ;       package — region base offset (>= 0xB000)
-I_SIZE   equ 8    ; word: package — allocated region bytes; 0 for builtins
+                  ;       package — the region's SEGMENT (>= ARENA_SEG,
+                  ;       §2.5). v2 stored a kernel-segment offset: same
+                  ;       word, new unit, and every reader changed with
+                  ;       it (§20.6, §21, §28)
+I_SIZE   equ 8    ; word: package — allocated region size in PARAGRAPHS
+                  ;       (<= PKG_MAX_PARA, so I_SIZE*16 never wraps 16
+                  ;       bits); 0 for builtins. v2 stored bytes: same
+                  ;       word, new unit
 I_ICON   equ 10   ; word: near ptr to a 16x16 icon BODY (16 mask + 16 data
                   ;       words, the icon_draw16 layout, §25); 0 = generic
-                  ;       fallback. Must outlive the instance (static data
-                  ;       for builtins; inside the region for packages) —
-                  ;       never a disk_icons index (disk_mount overwrites
-                  ;       that buffer on every mount).
+                  ;       fallback. Must outlive the instance AND stay
+                  ;       kernel-DS-readable: static data for builtins,
+                  ;       the instance's inst_icons slot for packages
+                  ;       (§21 step 9 copies the embedded icon out of the
+                  ;       package segment precisely so dock.inc keeps a
+                  ;       plain DS pointer) — never a disk_icons index
+                  ;       (disk_mount overwrites that buffer every mount).
 I_NAME   equ 12   ; 16 bytes: NUL-terminated copy, <= 15 chars; byte
                   ;       I_NAME+15 is always 0
 I_CYC    equ 28   ; dword (lo word first): PIT cycles billed to this
@@ -4572,6 +5209,13 @@ KIND_TASKMGR equ 4
 KIND_CTRL    equ 5       ; Control Panel (§31)
 KIND_PKG     equ 0x80    ; bit 7: package instance
 ```
+
+The record is **exactly full** — I_CYC's dword ends at byte 31 — and
+§20.7 rule 2 forbids growing it: the CL-shift index math is load-bearing
+in this module, snd.inc and xmem.inc. The v3 segment move fit only
+because I_SPTR and I_SIZE changed *units* (offset → segment, bytes →
+paragraphs) instead of gaining company; new per-instance state goes in a
+side table, as `inst_icons` (§29.5) does.
 
 The Standard File dialog (§38) is deliberately **not** here: it is a modal
 interaction the kernel runs on behalf of the front application, not an
@@ -4604,10 +5248,10 @@ application, and §38 explains what that buys.
    only thing that ever runs the destroy half for a package instance.
 6. Fields are immutable after publish, except I_FLAGS bit0 (written only
    by the UI task under the gfx lock) and I_STATE (atomic byte stores).
-7. **Package region occupancy is derived** (format v2, §21): the byte
-   range [I_SPTR, I_SPTR + I_SIZE) is occupied iff I_STATE != 0. There is
-   no explicit region-free call — the store that frees the record frees
-   the region.
+7. **Package region occupancy is derived** (§21): the paragraph range
+   [I_SPTR, I_SPTR + I_SIZE) — a slice of the §2.5 arena since v3 — is
+   occupied iff I_STATE != 0. There is no explicit region-free call —
+   the store that frees the record frees the region.
 8. Only the UI task allocates instance records, so allocation never races
    itself; the only non-UI transition is task_exit's 2 → 0 under cli.
 
@@ -4664,14 +5308,14 @@ init-less:
 | `inst_alloc` | out CF=0 + DI = free record with I_FLAGS/I_SPTR/I_SIZE/I_ICON/I_CYC zeroed, CF=1 table full. Does NOT publish. UI task only. |
 | `inst_set_name` | in DI = record, SI = name source (NUL-terminated or NUL-padded; at most 15 chars taken). Zero-fills all 16 I_NAME bytes first. Safe on a package header's 16-byte name field. |
 | `inst_bind_win` | in DI = record, BX = window ptr: I_WIN ← BX, `wm_owner[window index]` ← record index. |
-| `app_launch` | in AL = kind (built-in). UI task only, no lock held; takes its own locks. out CF=1 failed (instance/window/task table full — silent no-op for the caller), CF=0 done. Order: cap check (at cap → gfx_lock, clear the live instance's minimized bit, wm_show it, gfx_unlock — i.e. "launch" of a full singleton fronts it; only-dying-instances → CF=1, retry after a task period) → inst_alloc → pool-slot pick (first candidate `pool + s·stride` not held by a same-kind record with I_STATE != 0) → template copied to scratch with x/y cascaded +16·s → wm_create (CF → fail; record was never published), then OR the kind's `KD_WFLAG` byte into the new window's W_FLAGS (§29.3/§11.1) → fill record (I_KIND, I_TASK=0xFF, I_ICON, name) + inst_bind_win → KD_INIT → **publish I_STATE ← 1** → if KD_TASK: task_spawn (AX = entry, DX = instance index), I_TASK ← returned slot; spawn CF → rollback (I_STATE ← 0, then locked wm_destroy) → gfx_lock, wm_show, gfx_unlock. |
+| `app_launch` | in AL = kind (built-in). UI task only, no lock held; takes its own locks. out CF=1 failed (instance/window/task table full — silent no-op for the caller), CF=0 done. Order: cap check (at cap → gfx_lock, clear the live instance's minimized bit, wm_show it, gfx_unlock — i.e. "launch" of a full singleton fronts it; only-dying-instances → CF=1, retry after a task period) → inst_alloc → pool-slot pick (first candidate `pool + s·stride` not held by a same-kind record with I_STATE != 0) → template copied to scratch with x/y cascaded +16·s → wm_create (CF → fail; record was never published), then OR the kind's `KD_WFLAG` byte into the new window's W_FLAGS (§29.3/§11.1) → fill record (I_KIND, I_TASK=0xFF, I_ICON, name) + inst_bind_win → KD_INIT → **publish I_STATE ← 1** → if KD_TASK: task_spawn (AX = entry, CX = KERNEL_SEG — a built-in runs in the kernel segment, §8 — DX = instance index), I_TASK ← returned slot; spawn CF → rollback (I_STATE ← 0, then locked wm_destroy) → gfx_lock, wm_show, gfx_unlock. |
 | `app_close_win` | in BX = window ptr; **caller holds the gfx lock**; UI task only. Unowned window → wm_hide (fallback). I_STATE = 2 already → wm_hide (idempotent). Task-less (I_TASK = 0xFF) → I_STATE ← 2, wm_destroy (clears wm_owner, repaints), I_WIN ← 0, I_STATE ← 0 — for a package instance that final store frees the region (rule 29.2.7). Task-owned → I_STATE ← 2 (the die flag), wm_hide (instant feedback); the task tears down at its next wake — and for a package instance that took a §20.6 worker, `task_exit`'s release-byte store is what frees the region. A package instance reaches this second branch exactly when it owns a worker. |
 | `inst_minimize` | in BX = window ptr, lock held: set I_FLAGS bit0 (unowned → skip), wm_hide. |
 | `inst_restore` | in DI = record, lock held: clear I_FLAGS bit0, wm_show I_WIN. |
 | `inst_task_die` | in DI = the CURRENT task's instance record; no lock held; **never returns**: gfx_lock, wm_destroy I_WIN (clears wm_owner), I_WIN ← 0, gfx_unlock, then `jmp task_exit` with BX = record ptr (I_STATE is offset 0 — the release byte). Reached from Clock's and Bounce's own loops (§14) and, for packages, from `inst_pkg_alive` (§20.6). |
 | `inst_wchk` | module-internal (§20.6). in BX = an untrusted window ptr; out CF=0 if BX lies inside `wm_wins` and is record-aligned, CF=1 otherwise. Preserves everything but the flags. The fence in front of `inst_of_win` for package-supplied pointers, whose `div cl` would otherwise fault. |
-| `inst_pkg_spawn` | API slot 0x00B8 (§20.6). in AX = near worker entry, BX = the package's own window ptr; **caller holds the gfx lock** (exclusion against another *spawner* is `task_spawn`'s own IF=0 window, §8, not this lock). Refuses (CF=1, nothing created) when BX fails `inst_wchk`, names no owner, names a record with I_STATE ≠ 1, that record already has I_TASK ≠ 0xFF, or the **ownership fence** rejects it — the record must be a package (I_KIND bit 7) and AX must satisfy I_SPTR ≤ AX < I_SPTR + I_SIZE, which is what ties the spawn to the *calling* instance — or when `task_spawn` finds the table full. Else `task_spawn` (AX = entry, DX = instance index derived as (record − inst_tab) >> 5, the `app_launch` idiom), I_TASK ← slot, CF=0, AL = slot. Preserves every register but AL and the flags. No rollback exists or is needed — the instance is already published and stays live on refusal. |
-| `inst_pkg_alive` | API slot 0x00BC (§20.6). in BX = the package's own window ptr; **gfx lock NOT held**; called from the worker only. Returns with every register and the flags preserved while BX names a record with I_STATE = 1 — and returns unconditionally, without exiting anything, when `sch_cur` = 0: the UI task must never `task_exit` (§8), so a wrong-context call is refused. Otherwise recovers the *running task's* record from `T_INST` (§8) and `jmp inst_task_die` — never returns. A record with I_WIN = 0 (corrupt table: nothing to `wm_destroy`, and BX = 0 there would zero the cold-entry `jmp` at 1000:0000) still exits with BX = the record, so the record, its region and its dock/tm rows are released. Only T_INST ≥ INST_MAX exits with BX = 0 — no release byte because there is no record — the `sbl_refill_task` precedent (§34.5). |
+| `inst_pkg_spawn` | API slot 0x0160 (§20.6). in AX = the worker's entry offset in the package's own segment, BX = the package's own window ptr; **caller holds the gfx lock** (exclusion against another *spawner* is `task_spawn`'s own IF=0 window, §8, not this lock). Refuses (CF=1, nothing created) when BX fails `inst_wchk`, names no owner, names a record with I_STATE ≠ 1, that record already has I_TASK ≠ 0xFF, or the **two-half ownership fence** rejects it — the record must be a package (I_KIND bit 7) whose region contains the entry (AX >> 4 < I_SIZE, compared in paragraphs so a full-segment region cannot wrap it, §2.5/§20.6), AND the record's index must equal the `[snd_inst]` dispatch stamp (§34.3): at org 0 the offset test alone passes against essentially any package record, so the caller must be spawning into its OWN dispatched instance, never a sibling's or a stranger's (§20.6) — or when `task_spawn` finds the table full. Else `task_spawn` (AX = entry, **CX = the record's I_SPTR segment** — the frame's CS/DS/ES words, §8 — DX = instance index derived as (record − inst_tab) >> 5, the `app_launch` idiom), I_TASK ← slot, CF=0, AL = slot. Preserves every register but AL and the flags. No rollback exists or is needed — the instance is already published and stays live on refusal. |
+| `inst_pkg_alive` | API slot 0x0168 (§20.6). in BX = the package's own window ptr; **gfx lock NOT held**; called from the worker only. Returns with every register and the flags preserved while BX names a record with I_STATE = 1 — and returns unconditionally, without exiting anything, when `sch_cur` = 0: the UI task must never `task_exit` (§8), so a wrong-context call is refused. Otherwise recovers the *running task's* record from `T_INST` (§8) and `jmp inst_task_die` — never returns. A record with I_WIN = 0 (corrupt table: nothing to `wm_destroy`, and BX = 0 there would zero the cold-entry `jmp` at 1000:0000) still exits with BX = the record, so the record, its region and its dock/tm rows are released. Only T_INST ≥ INST_MAX exits with BX = 0 — no release byte because there is no record — the `sbl_refill_task` precedent (§34.5). |
 | `inst_launch_post` | in AL = kind: one atomic word store of kind+1 into `inst_launch` — the deferred launch channel for lock-held posters (drained by ui_task step 3, §13). Rapid double posts coalesce (last wins). |
 
 **Sound teardown (§34.3, Phase 1).** Both free points release the
@@ -4689,7 +5333,12 @@ worker is safe to close mid-tone.
 ### 29.5 State (.bss)
 
 `inst_tab` (INST_MAX × I_RECSZ = 384 bytes), `inst_launch` (word: 0 =
-none, else kind + 1), plus module scratch (template copy buffer, pool-slot
+none, else kind + 1), **`inst_icons`** (INST_MAX × 64 = 768 bytes: the
+per-instance embedded-icon cache — §21 step 9 copies a package's icon
+body out of its segment into slot i, and I_ICON points there, keeping the
+dock's read a plain DS pointer; §20.7 rule 2's "side table, not a fatter
+record" made flesh, paid for by the reclaimed pool, §15.1), plus module
+scratch (template copy buffer, pool-slot
 cursor — UI task only). All zeroed by `inst_init`.
 
 ## 30. dock.inc — the dock strip
@@ -5004,7 +5653,7 @@ state of its own, exactly as the Scheduler page reads `sched_mode_get`):
   into a staging grant taken through the public verb-7 surface (§34.6:
   the Phase 4 allocator; stamped with the panel's own instance, freed on
   the way out; a refused grant plays nothing and the counters stay 0) and
-  plays it through slot 0x0080's target (`osapi_snd_play`), ES pointing
+  plays it through slot 0x00F0's target (`osapi_snd_play`), ES pointing
   away from DS exactly as a package would. The click **blocks** for the
   clip — the sanctioned §34.4 `sch_lock` contract, disclosed by the
   caption — and the result codes are deliberately ignored: the counters
@@ -5346,10 +5995,12 @@ sector lands), and it is why `far_init` must run before `sched_init`.
 3. The kernel calls in through `FARSHIM name, far_body`: a 6-byte near stub
    in `.text` that far-calls the body. Window templates, kind tables and
    `call [bx+W_PAINT]` keep naming the stub, so no dispatch site changes.
-   A task entry must be a shim too — `task_spawn` builds a frame with
-   CS = `KERNEL_SEG` (§8) and can only launch a near entry. Which is
-   exactly why a package's worker entry (§20.6) is a plain near label
-   inside its own relocated region — reloc class 0 — and needs no shim.
+   A KERNEL task entry must be a shim too — `task_spawn`'s frame CS is
+   the caller-supplied segment (§8), `KERNEL_SEG` for every kernel
+   caller, so a kernel entry is still a near offset in the kernel window
+   and a `.fartext` body still needs its stub. A package's worker entry
+   (§20.6) needs no shim for the opposite reason: its frame CS is the
+   package's own segment, and the entry is a plain org-0 label inside it.
 4. Far code calls back with `KCALL routine`, which far-calls the 4-byte
    `call`/`retf` wrapper emitted by `FARK routine`. Neither hop touches a
    register or a flag, so a routine that returns CF still does. Every
@@ -5887,8 +6538,9 @@ end.
   grant → caller) — the `dsk_get_dir` staging idiom (§18), in both
   directions.
 - What packages get: a Minesweeper explosion is one
-  `call OSAPI_SND_TONE` (reloc class 1 handles it, §20.2); a music player
-  plays FM notes via 0x0084, or staged PCM via 0x0088 on an SB machine —
+  `call OSAPI_SND_TONE` (a far immediate since v3 — nothing to fix up,
+  §20.3/§20.5); a music player
+  plays FM notes via 0x00F8, or staged PCM via 0x0100 on an SB machine —
   and on a speaker-only machine it *asks* `osapi_snd_caps` first and
   offers the user the exclusive-clip trade-off instead of pretending. A
   file-read-into-grant OSAPI call — the missing piece for playing clips
@@ -6450,16 +7102,20 @@ Save, Esc is Cancel. In **Open** mode the keyboard drives the list instead
 (Up/Down/PgUp/PgDn, Enter, Esc); there is no field to type in, which is
 what the Standard File dialog this is modelled on did too.
 
-### 38.6 The API slot 0x00B0 and the completion callback
+### 38.6 The API slot 0x0150 and the completion callback
 
-The table-span assertion in `kernel.asm` goes 40 × 4 → **41 × 4** (42 × 4
-since §39.8 appended `OSAPI_VIDEO`, and 44 × 4 since §20.6 appended the
-worker-task pair); `apps/os88api.inc` mirrors the equ (§20.5).
+`apps/os88api.inc` mirrors the constant (§20.5); the slot rode the v3
+restride from 0x00B0 to **0x0150** like every other (§20.3).
 
 ```
-0x00B0 fdlg_open   in AL = 0 Open / 1 Save, BX = requester window ptr,
-                   DI = completion proc (near, in the caller's image),
-                   SI = default name (NUL, <= 12) or 0 for none.
+0x0150 fdlg_open   in AL = 0 Open / 1 Save, BX = requester window ptr,
+                   DI = completion proc OFFSET in the caller's segment
+                   (stored as a value; the SEGMENT is resolved from the
+                   requester's instance when the callback is invoked,
+                   never stored — §11),
+                   SI = default name (NUL, <= 12) or 0 for none — staged
+                   out of the caller's segment by the slot wrapper
+                   (§20.3).
                    out CF=0 accepted — the dialog is ON SCREEN when this
                    returns; CF=1 refused (one is already up, BX is not a
                    live owned window, or the window table is full).
@@ -6474,13 +7130,26 @@ returns: no `inst_launch_post`, no deferral, no next-UI-pass delay. The
 handler that called it simply finishes and unlocks with the dialog already
 drawn.
 
-**The completion callback (binding).** Near-called on the UI task with the
-gfx lock **held**, *after* the dialog window has been destroyed:
+**The completion callback (binding).** Called on the UI task with the
+gfx lock **held**, *after* the dialog window has been destroyed —
+dispatched like every window callback (§11): near for a kernel-owned
+requester, far at the owner's segment with CS = DS = ES = that segment
+for a package's, `retf`-returning, and bracketed with the `snd_disp_set`
+dispatch stamp like every other callback site (§34.3) — so sound grants
+made inside it are attributed to the requester, and `inst_pkg_spawn`'s
+identity fence (§20.6) accepts a spawn made from it:
 
 ```
 in   AL = mode (0 Open, 1 Save)
      SI = the requester window ptr it registered
-     DI = the chosen name, NUL-terminated, <= 12 chars (fdlg_name)
+     ES:DI = the chosen name, NUL-terminated, <= 12 chars (fdlg_name;
+     ES = KERNEL_SEG, set by the kernel around the call). v2 passed a
+     bare DI — a kernel pointer, readable through the caller's own DS
+     when packages shared the kernel segment; a v3 package's DS is its
+     own segment, so the name now carries its segment and a package
+     callback copies it out through ES (np_ondlg is the shipped
+     consumer, §27.1). A kernel requester may still read it flat —
+     ES = DS there.
 out  nothing; no register need be preserved
 ```
 
@@ -6496,15 +7165,17 @@ then and the whole sequence is one lock hold deeper, which nothing in this
 module minds.
 
 **Staleness (binding).** The request records the requester's instance
-record, its `I_WIN` and its `I_SPTR`. The callback is skipped, silently, if
+record, its `I_WIN` and its `I_SPTR` (a segment since v3, §29.1 — the
+triple is equality-compared, so the unit change costs it nothing). The
+callback is skipped, silently, if
 any of the three no longer matches a live (`I_STATE` = 1) record: a package
 whose window was closed while the dialog was up has had its region freed
-(§29.2 rule 7), and its near pointer no longer means anything. Checking the
-window pointer alone would not do — window slots are reused.
+(§29.2 rule 7), and its callback offset no longer means anything. Checking
+the window pointer alone would not do — window slots are reused.
 
 ### 38.7 Lifecycle
 
-1. **Ask.** The application calls slot 0x00B0 from a menu command or a key
+1. **Ask.** The application calls slot 0x0150 from a menu command or a key
    handler, under the lock it already holds. `fdlg_open` refuses if
    `[fdlg_win]` ≠ 0, else records the request, seeds `fdlg_name` from SI,
    re-mounts the current directory, creates the window and `wm_show`s it.
@@ -6531,7 +7202,7 @@ window pointer alone would not do — window slots are reused.
 
 | symbol | contract |
 |--------|-----------|
-| `fdlg_open` | API slot 0x00B0, above. The only entry point applications have. Caller holds the gfx lock. |
+| `fdlg_open` | API slot 0x0150, above. The only entry point applications have. Caller holds the gfx lock. |
 | `fdlg_gate` | Internal. Drops the gate (and destroys the window) if `[fdlg_win]` is not used-and-visible. In: AL = 1 if the caller holds the gfx lock, 0 if not — it needs the lock to destroy and takes its own when it must. Out: CF=0 and BX = the dialog if one is live, CF=1 if none. |
 | `fdlg_reap` | UI task, no lock held. `fdlg_gate` for its side effect alone, once per loop pass. Preserves all registers. |
 | `fdlg_grab` | In: CX/DX = press point. Out: CF=1 = swallow (beeped). Preserves all registers. Called with no lock held. |
@@ -6782,8 +7453,7 @@ criteria in §17 record which apps it affects.
 
 ### 39.8 The package ABI
 
-`OSAPI_VIDEO` (slot **0x00B4**; the table is 44 slots since the §20.6
-worker-task pair) — no inputs;
+`OSAPI_VIDEO` (slot **0x0158** since the v3 restride, §20.3) — no inputs;
 out AX = width, BX = height, CX = the first row the dock owns (so the usable
 desktop is rows `MBAR_H`..CX-1), DL = `vid_kind`, DH = bits per pixel (4 or
 1). Callable from any context, lock held or not — the first slot for which
@@ -6792,7 +7462,9 @@ that is true.
 `SCREEN_W`/`SCREEN_H`/`MBAR_H`/`TITLE_H` remain in `apps/os88api.inc` as the
 **reference** geometry: fine for authoring a template, wrong for anything
 that reads a screen edge at run time. Appending a slot is invisible to
-already-built packages, so no `.o88` needs rebuilding.
+already-built packages within one format generation — the v3 restride
+itself rebuilt every `.o88` once (§20.3), and appending is invisible again
+from there on.
 
 ### 39.9 Testing
 
@@ -6870,22 +7542,26 @@ run-coalesced band paint and releases it (rule 3 of §20.6).
 
 ### 40.1 The pass-0 restore cache
 
-**Why there is no frame buffer.** The canvas is 320×170. Raw at 4bpp that is
-27,200 bytes against a **19,968-byte package pool shared by every resident
-package**; a run-length copy of a whole frame measures 11,712–13,928, most
-of the pool for one instance. A run-length copy of **pass 0 alone** is
+**Why there is no frame buffer.** The canvas is 320×170. Raw at 4bpp that
+is 27,200 bytes — designed against the v2 era's **19,968-byte pool shared
+by every resident package**, where a run-length copy of a whole frame
+(11,712–13,928 bytes) was most of the pool for one instance. A run-length
+copy of **pass 0 alone** is
 ~3,300 bytes, and it is the right quarter of the work to keep, because pass 0
-already covers the whole canvas.
+already covers the whole canvas. The v3 arena (§2.5) retired the shared
+pool, not the reasoning: a package still fits one segment, and the cache
+still buys the same replay for a fortieth of a frame buffer.
 
 **Format.** One word per run: colour in bits 15..12, the run's last column in
 bits 11..0. A colour index is 0..15 and a column 0..319, so they cannot
 collide and the pack is an OR. Runs start at column 0 and each begins where
 the last ended, so the start column is implied and a row ends with the run
 whose last column is cw−1; the row is implied too, because pass 0 emits rows
-0, 4, 8 … in order. `fr_cache` is 4,000 bytes = 2,000 runs, and the ceiling
-is not that number — it is that image + bss must stay inside one 512-rounded
-7,168-byte region, because two Fractals plus Minesweeper plus Note Pad is
-19,456 of the pool and the next step up does not fit.
+0, 4, 8 … in order. `fr_cache` is 4,000 bytes = 2,000 runs — sized,
+historically, so the 512-rounded v2 region stayed 7,168 bytes and two
+Fractals still fit the 19,968-byte pool. The pool is gone (§2.5) and that
+pressure with it; the size stays because it already holds every run pass 0
+can emit across a 320-column canvas.
 
 **One lock hold owns "this row was consumed".** `fr_emit_body` does the cache
 append, the progress count *and* `fr_advance`, all behind its one restart
@@ -6954,7 +7630,385 @@ not, and moving costs one replay because the cache survives the repaint.
 - Change type: the canvas clears and the render restarts at 0%.
 - Bury it behind another window: it keeps rendering the visible strips and
   paints nothing outside them; raise it and the whole picture is there.
-- Two instances alongside Minesweeper and Note Pad all load (`ld_alloc` must
-  not refuse the fourth package), and `python3 tools/os88disk.py --verify
-  build/apps.img` passes.
+- **Four or more Fractal instances at once all load and render** on a
+  machine with an arena (`make test` reports 639K → ~233KB, §2.5) — the
+  acceptance that motivated v3: under the v2 pool the third instance
+  failed "Out of memory", and `INST_MAX`/`MAX_TASKS` are now the only
+  ceilings. Minesweeper and Note Pad still load alongside, and
+  `python3 tools/os88disk.py --verify build/apps.img` passes.
+- On a 256KB machine (`make xt`) every package load refuses with the §21
+  message and nothing crashes — the zero-arena half of the same
+  acceptance.
 - All three adapters, and the back buffer both off and on.
+
+## 41. cpudet.inc / xmem.inc — CPU tiers and memory above 1MB
+
+The target machine is still an 8086 with 256KB, and nothing here changes it.
+The whole of this section is **conditional**: it is switched off on tier 0 by
+detection, not by configuration, and a floor machine reaches the desktop
+through exactly the code path and the timing it had before any of it existed.
+What the section buys is that a 286 or a 386 stops pretending to be an 8088
+with a faster clock — its memory above 1MB becomes a store the kernel can
+lend out, on one ABI, without a single 32-bit instruction escaping into the
+8086 path.
+
+**The hard ceiling first, because it is the rule most likely to be violated
+later.** Real mode forms an address as `seg<<4 + off`, so the highest byte
+any CS:IP can name is **0x10FFEF**. Everything above that is a **data store
+only** — no code, no jump table, no callback, no package image, on
+any tier, forever. Unreal mode (§41.4) does not move this line by one byte:
+it widens a *data* segment's limit and touches neither the width of CS nor
+of IP. And the sliver that *is* code-addressable — the HMA, §41.3 — is
+unusable for code anyway, because the near model pins CS = DS = `KERNEL_SEG`
+(§1 rule 2). Above 1MB, os8088 stores bytes and nothing else.
+
+### 41.1 The three tiers, and how they are detected
+
+| tier | CPU | what exists |
+|------|-----|-------------|
+| `CPU_8086` (0) | 8086/8088 | nothing. No A20 line, no HMA, no extended memory, no islands executed. **The default and the fallback.** |
+| `CPU_286` (1) | 286 | A20 gate + HMA (§41.2/§41.3); int 15h AH=88h sizing and AH=87h block move (§41.5) |
+| `CPU_386` (2) | 386 and up | all of tier 1, plus unreal mode and the 32-bit FS/GS transport (§41.4) |
+
+`cpu_detect` is the only routine in either module that runs before the tier
+is known, so it is plain 8086 code with no island in it. The discriminator is
+the FLAGS register's top nibble, which the three generations answer
+differently in real mode, and the order of the two tests is binding:
+
+1. `pushf` / `pop ax`, clear bits 12..15, `push ax` / `popf`, `pushf` /
+   `pop ax`. If bits 12..15 read back **set**, this is an **8086/8088** —
+   its `pushf` writes ones there unconditionally and they cannot be cleared.
+2. Otherwise set bits 12..15 the same way and read them back. A **286** in
+   real mode forces all four to **zero** (IOPL and NT are not writable
+   there, and bit 15 is reserved zero on every CPU from the 286 on); a
+   **386+** keeps IOPL and NT, so a non-zero read means tier 2.
+
+`[cpu_tier]` is a `.text` `db CPU_8086`, not a `.bss` cell: `-f bin` zeroes
+nothing and the safe answer must be the one a machine reads even if the probe
+never ran — the `bb_avail` / `snd_live` idiom of §32/§34.7. `cpu_detect`
+writes it on **every** path.
+
+The tier is **information, not permission.** Kernel code branches on the
+published feature bits (A20 verified, HMA claimed, unreal armed) and packages
+branch on the KB figure from `osapi_xmem_caps` (§41.8). A 386 whose A20 gate
+does not answer is still tier 2 and still has no extended memory, and code
+that keys off the tier alone would walk straight into it.
+
+### 41.2 A20 — the gate, and the verification that is not optional
+
+On tier 0 `cpu_a20_enable` returns immediately, having done nothing. There is
+no A20 line on an 8088: the wrap at 1MB is the width of the address bus, not
+a gate, and port 0x92 on an XT decodes to whatever that machine happens to
+put there. **Poking it is forbidden** (§41.9).
+
+On tier 1+, three steps in this order:
+
+1. **Test before enabling.** Every machine the QMP harness boots comes up
+   with A20 already open (SeaBIOS opens it), and so do many later AT BIOSes.
+   If the probe says open, the routine is done — no gate is touched at all.
+2. **The fast gate.** Read port 0x92, set bit 1, write it back. **Never
+   write bit 0**: that is the fast-reset line and a 1 there reboots the
+   machine. Re-run the probe.
+3. **The keyboard controller.** Command D1h to port 0x64, data DFh to port
+   0x60, each preceded by a bounded poll of the input-buffer-full bit — the
+   poll must have a counted timeout, because a controller that never empties
+   is a machine that would otherwise hang at boot. Re-run the probe.
+   **The whole D1h/DFh sequence, both polls included, is one `pushf`/`cli` …
+   `popf` window, and that one is a correctness rule rather than a hygiene
+   rule.** Between the command and the data byte the 8042 is armed to take
+   the *next* byte written to 0x60 as its output port; the kernel does not
+   hook int 09h, so the BIOS keyboard handler is live and a key down at that
+   instant makes it read 0x60 and write a keyboard command back. The 8042
+   consumes that as the output port value, and bit 0 of that port is the
+   active-low CPU RESET line — an ordinary byte like 0xF4 reboots the machine
+   mid-boot. The benign version of the same race satisfies the pending D1h
+   with something harmless and leaves A20 shut. The window is bounded by the
+   poll timeouts (~180ms worst case, once, before `sched_init` installs any
+   kernel ISR), which is a cost a boot can pay and a reset is not.
+
+**The verification is the contract.** Both enable methods are advisory: a
+machine may have neither, may decode 0x92 to something else, may have a
+controller that accepts the command and does nothing. So the "A20 verified
+open" feature bit is set by the **probe** and by nothing else, and every
+consumer above — `cpu_hma_claim`, `xm_init`, both allocators — keys off that
+bit rather than off "we wrote to the gate".
+
+**The probe.** Write a known word to 0000:0500, write a different word to
+`HMA_SEG:0510` — linear 0x100500 with A20 open, linear 0x00500 with it shut —
+and read 0000:0500 back. Unchanged means open; mutated means the second write
+wrapped and the line is shut. Linear 0x00500..0x005FF is the 256 free bytes
+of §2 (the boot stack that grew down from 0x7C00 is dead by kmain), which is
+why the probe goes there and not at 0000:0000: the kernel hooks int 08h and
+IRQ4 and the IVT is live. Save and restore the bytes regardless, and run the
+gate poke *and* the probe inside one `pushf`/`cli` … `popf` — an interrupt
+that touched conventional memory between the write and the read-back would
+make the probe lie.
+
+### 41.3 HMA_SEG — the one segment above 1MB, and who owns it
+
+`HMA_SEG` = 0xFFFF. Offsets `HMA_MIN_OFF` (0x0010) through 0xFFFF are linear
+0x100000..0x10FFEF — `HMA_BYTES` = 65,520. The lower bound is arithmetic, not
+convention: 0xFFFF:0x0000 is linear 0x0FFFF0, still below 1MB, so offsets
+0x0000..0x000F alias conventional memory and are not part of the region.
+
+`cpu_hma_claim` refuses — leaving the "HMA claimed" bit clear — on tier 0, on
+any machine where A20 did not *verify* open, and when int 15h AH=88h reports
+fewer than 64KB. The last case is not hypothetical: a 1MB AT has zero bytes
+above 0x0FFFFF, the BIOS answers 0, and claiming an HMA there would hand out
+64KB of nothing.
+
+**One owner, named in the source.** There is no HMA allocator. A 65,520-byte
+region with two implicit owners is the bug factory §2.2 refuses to build, so
+the claim is all-or-nothing and the claimant names itself. The region is not
+exposed to packages: an ordinary real-mode segment above 1MB is a *data*
+segment here (§41's ceiling — the near model pins CS), and a package that
+wants bytes above 1MB gets them from `xm_alloc`, which is transport-agnostic
+and works on both tiers.
+
+**The two allocators must not overlap, and the rule is one line:** the HMA is
+the first 64KB of exactly the RAM AH=88h sizes, so if the claim succeeds
+`xm_init` starts its pool at 0x110000 and subtracts `XM_HMA_KB`; if it fails
+the pool starts at 0x100000 (§2.4).
+
+### 41.4 Unreal mode, and why it is FS and GS
+
+Tier 2 only, entered first at boot, inside `xm_init`, on task 0, and
+**re-entered before every use of the widened registers** (the re-arm rule
+below) — always inside one `pushf`/`cli` … `popf` with NMI masked (CMOS index
+port 0x70 bit 7) across the window and restored after. Nothing else in the
+kernel touches 0x70 outside `clock.inc`'s int 1Ah calls, so there is no
+conflict. The transition itself is idempotent and register-preserving, which
+is what makes calling it more than once a non-event.
+
+The sequence, pinned: `lgdt` a **2-entry** GDT that lives in `.text` (null
+descriptor, one 4GB read/write data descriptor — base 0, limit 0xFFFFFFFF,
+type 0x92, granularity byte 0xCF, and the `lgdt` base is computed as
+`KERNEL_SEG<<4` plus the table's offset), set CR0 bit 0, flush the prefetch
+queue with a short jump, load **FS and GS** with the data selector, clear CR0
+bit 0, flush again. **There is no far jump and CS is never reloaded** — the
+whole point is the hidden descriptor caches of FS and GS, and CS must keep
+its real-mode base throughout, since the instruction after the `mov cr0` is
+the next one in the same segment. Every access through the widened registers
+carries an address-size override, because the offset is now 32-bit.
+
+**The FS/GS rule (binding).** A segment register's hidden descriptor cache
+holds its limit until the register is *reloaded*; a plain real-mode
+`mov fs, ax` anywhere would reset that limit to 0xFFFF and the 4GB window
+would be gone — silently, with no fault, as a copy that wraps inside 64KB.
+So: **only unreal-aware code in `xmem.inc` may ever write FS or GS**, in the
+kernel, in a package, or in the boot sector. That is a rule the tree can
+actually keep, and the reason the design chose those two registers: a
+case-insensitive search for FS or GS across every kernel module, every
+shipped package and `boot/boot.asm` finds **nothing**. DS and ES were never
+candidates — ES is the most contended register in the kernel (cursor
+save-unders, `SAVE_SEG`, `FAT_SEG`, `VIEW_SEG`, `SND_SEG`, int 13h ES:BX) and
+DS is the kernel's own segment; either would be reloaded with a real-mode
+value within microseconds of the transition and the limit would be gone
+before the first copy.
+
+**BIOS re-arms, and this is not optional either.** The kernel enters the BIOS
+constantly after boot — int 16h AH=01h on *every* pass of the UI loop (§13),
+plus int 13h, int 10h, int 1Ah, int 12h. Nothing in os8088 touches FS or GS,
+but BIOS code is not os8088 code, and a 386-aware BIOS may load them for its
+own purposes and hand them back with real-mode limits. Therefore **`xm_copy`
+re-arms FS and GS from the resident GDT on tier 2 — and the arm and the
+accesses that depend on it are inside the same `cli` window.**
+
+That last clause is the binding part, and it is why the tier-2 copy is
+**chunked**. A re-arm followed by a long copy with IF=1 protects nothing: the
+BIOS is re-entered by *interrupts*, not only by kernel calls. `sch_isr`
+chains `call far [sch_old08]` into the BIOS timer handler on every tick,
+before it so much as looks at `[sch_lock]`, and IRQ1 reaches the BIOS
+keyboard handler the same way — so the very hazard the re-arm exists for can
+land in the middle of the loop the re-arm was supposed to cover. `[sch_lock]`
+does not close that hole either: it stops **task switches**, not interrupts.
+So the copy runs in `XM_UCHUNK`-byte pieces (1KB), each piece re-armed and
+moved inside one `pushf`/`cli` … `popf`; `[sch_lock]` is still raised across
+the whole transfer, but for what it actually does — keeping the shared
+`[xm_src]`/`[xm_dst]` scratch to one copy at a time and keeping a switch out
+of the gap between chunks. The chunk size is the same trade-off as §41.5's
+32KB cap: ~0.3ms of IF=0 on the slowest tier-2 machine, well inside one PIT
+tick and one 1200-baud mouse byte, while a single `cli` around a whole 32KB
+move would drop both. An interrupt taken *between* chunks is harmless — the
+loop's state is in memory and the next chunk re-arms anyway. The alternative
+to all of this is a copy that wraps at 64KB and corrupts conventional memory
+without a fault, or a #GP into an IVT slot the kernel never fills.
+
+### 41.5 xmem.inc — sizing, the allocator, and the copy
+
+`xm_init` runs from kmain after `cpu_detect`/`cpu_a20_enable` and before
+`sched_init` (§15). It **hand-zeroes** its block table and its size word —
+nothing clears `.bss` at boot, and an uninitialised first-fit table would
+hand out garbage 32-bit bases (§15). On tier 0 it publishes zero KB and
+returns; the module never does anything else on that machine. On tier 1+ it
+sizes the store with int 15h AH=88h (CF set, or AX = 0, both mean none),
+subtracts the HMA if §41.3 claimed it, sets the pool base accordingly, enters
+unreal mode on tier 2, and publishes `[xm_kb]` **last** — the `snd_live`
+ordering of §34.7, for the same reason.
+
+**The allocator is deliberately small.** `XM_MAX_BLKS` = 8 entries of
+{32-bit base, size in KB, owner instance}, first-fit, 1KB granularity.
+Extended memory here is a bulk store for a handful of large claims — a
+render buffer, a captured sample, a package's own heap — not a `malloc`. A
+caller that wants many small pieces takes one block and subdivides it
+itself, exactly as a §34.6 sound grant is subdivided. Blocks are stamped with
+the calling instance and force-freed at teardown, like grants; a claim made
+outside any instance is stamped `XM_OWN_KERN` = **0xFF**, the value
+`snd_req_inst` already spells the kernel with — **not 0, which is a real
+instance slot** (the first app launched). A released entry is stamped
+`XM_OWN_KERN` too, so a free entry never carries a live instance slot.
+
+**Every mutation of the block table is inside `pushf`/`cli` … `popf`** — the
+publish in `xm_alloc` (offset, size and owner are one operation as far as any
+other task is concerned), the match-and-clear in `xm_free`, and the whole
+scan in `xm_release_inst`. This is the `snd_release_inst` rule and it is here
+for the same reason: the allocator runs on the UI task while the release leg
+runs on a *dying worker task* (`inst_task_die`, §29.4, gfx lock not held). A
+teardown interleaved with a half-published entry sees a live block carrying a
+stale owner byte, frees it out from under the allocator, and the next
+`xm_alloc` hands the same extended-memory range to a second package.
+
+```
+xm_init     in:       -                  (tier already published, §41.1)
+            out:      [xm_kb] = KB the pool can hand out, [xm_base] =
+                      its 32-bit linear base, feature bits published last
+            clobbers: nothing (flags). kmain, task 0, exactly once.
+
+xm_alloc    in:       DX:AX = bytes wanted (rounded up to 1KB)
+            out:      CF=0 and DX:AX = the block's 32-bit linear base;
+                      CF=1 and AX = 0 no store / 1 table full / 2 no
+                      contiguous run that big
+            clobbers: nothing else (flags).
+
+xm_free     in:       DX:AX = a base this caller owns
+            out:      CF=0 freed, merged with the adjacent free runs;
+                      CF=1 not a base, or not the caller's
+            clobbers: nothing else (flags).
+
+xm_copy     in:       ES:SI = the conventional end, DX:AX = the extended
+                      end (32-bit linear), CX = bytes (even, ≤ 32768),
+                      DI = 0 conventional → extended, 1 the other way
+            out:      CF=0 done; CF=1 and AX = 1 no store / 2 the range
+                      is not inside a block this caller owns / 3 bad
+                      length
+            clobbers: nothing else (flags). ES restored per §1.
+                      UI-task/window-callback context ONLY (§41.9).
+```
+
+**One ABI, two transports.** On tier 2 the copy is a 32-bit **load/store
+loop** — `mov eax, [fs:esi]` / `mov [gs:edi], eax` — run in the chunked,
+re-armed `cli` windows of §41.4, with an odd tail moved as a word. It is
+deliberately *not* `rep movsd`: MOVS takes its destination from ES:(E)DI and
+ES is the one segment a string move cannot override, so a flat destination
+would mean widening ES — which §41.4 forbids precisely because ES is reloaded
+constantly. Two moves per dword cost a few clocks and keep the FS/GS rule
+intact. On tier 1 it is int 15h AH=87h with the **48-byte** descriptor block
+the routine builds in its own `.bss` — six 8-byte descriptors (dummy, GDT,
+source, destination, BIOS CS, stack) of which the caller fills only source
+(+0x10) and destination (+0x18); the BIOS writes the other four itself, which
+is why the whole block is zeroed first and every reserved byte is left at 0.
+The block must itself live in conventional memory. CX = the
+word count — which is where the **even length** requirement comes from. The
+caller cannot tell which ran, and must not care: that is what makes the slot
+safe to hand to an 8086-only package (§41.8).
+
+**The 32KB cap is a scheduler rule, not a BIOS one.** AH=87h runs with
+interrupts off inside the BIOS; a 64KB move at AT speeds drops PIT ticks and
+overruns the mouse UART's receive buffer (§9). Half a segment per call keeps
+the stall inside one tick, and a caller moving more calls twice.
+
+**Bounds first, on both transports.** The extended end must lie wholly inside
+a block the caller owns before a single byte moves. That check is the only
+thing between a package and every byte of the machine's RAM, so it precedes
+the tier branch rather than living in either arm of it.
+
+### 41.6 What the Task Manager reports
+
+One line in the memory view, pinned in §28: tier name and extended-memory KB,
+20 characters, gated on `[tm_ylim]` like the row lists.
+
+**Extended memory is never a term in the RAM figures** (§2.4/§28). The bar,
+the "RAM uuuK/tttK" line and the conventional map are all scaled by the
+boot-time int 12h total, which caps at 640K; the System row and the instance
+rows are required to sum to that bar. Folding megabytes into `[tm_usedk]`
+would blow the bar and break the sum in the same stroke. The `*_KB` idiom of
+§15.1/§2.2/§2.3 does not apply here — those constants name blocks *inside*
+conventional memory that the kernel owns. This is a different store and it
+gets its own figure.
+
+### 41.7 Testing
+
+The coverage matrix is in §16 and it is uneven by construction: QEMU
+presents no 8086 and no 286, so `make test` exercises **tier 2 only**, and
+with A20 already open — neither gate path in §41.2 is genuinely run there.
+Tier 1 belongs to `make 286` (after raising its `mem_size`, §16), tier 0 to
+`make xt` / `xt-640` / `xt-cga` / `xt-hercules`, and all of those are
+interactive.
+
+Two branches are cheap to reach under the harness and must both be checked:
+run the `test` recipe by hand with `-m 1M` for **no extended memory at all**
+(AH=88h answers 0 — the claim refuses, the caps slot reports 0, the three
+allocator slots refuse, and the Task Manager line reads `0K`) and with
+`-m 2M` for a small non-zero store, where an allocator that gets its
+subtraction wrong will hand out a base past the top of RAM.
+
+### 41.8 The package ABI
+
+Five slots, §20.3, at **0x0188/0x0190/0x0198/0x01A0/0x01A8** since the v3
+restride. They appended to the v2 table without rebuilding an `.o88`; v3
+itself rebuilt everything (§20), and from there on appending is once again
+invisible.
+
+What a package sees is deliberately narrow: a tier byte, a KB figure, an
+opaque 32-bit base it never dereferences, and a copy call. **A package holds
+no 32-bit register, writes no FS or GS, assembles no island and never learns
+the HMA exists.** It is 8086 code under §1 rule 1 with no exception, and
+every byte it moves above 1MB crosses through `osapi_xmem_copy` — which is
+precisely why that slot carries one ABI over two transports.
+
+**Branch on the caps, never on the tier**: `osapi_xmem_caps` returning 0 KB
+is the only answer that means "do not try", and it is the answer on a 386
+whose A20 gate did not verify just as much as on an 8088.
+
+### 41.9 Forbidden (binding)
+
+1. **No A20 access on tier 0.** No port 0x92, no 0x64/0x60 gate command. The
+   line does not exist and those ports belong to something else there.
+2. **No 386 instruction executes before detection reports tier 2.** A scoped
+   `cpu 386` island is an *assembly-time* permission; the run-time branch
+   that guarantees the tier is what makes the code legal, and an island
+   reached on a 286 is an illegal-opcode trap on a machine with no handler
+   for it.
+3. **No code above 0x10FFEF, ever**, and none in the HMA either — the near
+   model pins CS = DS = `KERNEL_SEG` (§1 rule 2). Extended memory is a data
+   store. Anything that "just relocates a little code up there" is wrong on
+   both counts.
+4. **int 15h AH=87h: never from an ISR, never under the gfx lock, never on a
+   hot path.** Some 286 BIOSes implement it by *resetting the CPU* to get
+   back to real mode; a reset taken with the gfx lock held and the cursor
+   hidden is not a slow frame, it is a dead machine. This is what makes the
+   whole slot group UI-task/window-callback context (§20.3).
+5. **No real-mode load of FS or GS anywhere in the tree** (§41.4). It costs
+   nothing to obey and there is no way to detect having broken it.
+6. **No extended memory in the conventional RAM figures** (§41.6).
+7. **Nothing in the boot path may assume any of this exists.** On tier 0 the
+   three inits reduce to a stored byte and two immediate returns; the
+   desktop, the timing and every guard figure must be what they were.
+
+### 41.10 Acceptance
+
+- `make xt` and `make xt-640`: identical boot, identical desktop, identical
+  Task Manager figures except the new line, which reads
+  `CPU 8086  XMS     0K`. This is the regression that matters most — tier 0
+  is the target machine.
+- `make test`: the line reads `386+` with a five-digit KB figure; allocate,
+  copy out, copy back and compare, and the bytes match.
+- The same `test` recipe with `-m 1M`: `386+` and `0K`, and every allocator
+  slot refuses cleanly rather than handing out a base above the top of RAM.
+- `make 286` on a VM with more than 1MB: the line reads `286`, the HMA claim
+  succeeds, the AH=87h transport round-trips the same buffer the tier-2 path
+  did, and the caps figure is 64KB short of what AH=88h reported.
+- All three adapters (§39.9), because the new line is drawn text like any
+  other and clips at `[tm_ylim]` on CGA.
+- `make clean && make`: both geometries, zero warnings, all five §15.1 guards
+  still passing.

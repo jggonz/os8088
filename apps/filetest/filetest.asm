@@ -30,7 +30,7 @@ FT_BSS_TOTAL equ 3064         ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; ft_entry - run the suite, then create the window that reports it
-; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
+; in:  CS=DS=ES = our own segment, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF from wm_create
 ; -----------------------------------------------------------------------------
 ft_entry:
@@ -39,7 +39,7 @@ ft_entry:
     mov si, ft_tpl
     call OSAPI_WM_CREATE
     pop si
-    ret
+    retf                            ; far-called by the loader (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; ft_run - the checks, in order
@@ -490,7 +490,7 @@ ft_paint:
     pop cx
     pop bx
     pop ax
-    ret
+    retf                            ; far-called W_PAINT (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; ft_num2 / ft_num5 - AX -> a NUL-terminated decimal string in ft_num

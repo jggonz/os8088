@@ -778,7 +778,7 @@ sbl_grant_chk:
     ret
 
 ; =============================================================================
-; The stream surface: slot 0x0088's live body (SPEC.md 20.3/34.5/34.6).
+; The stream surface: slot 0x0100's live body (SPEC.md 20.3/34.5/34.6).
 ; osapi_snd_stream (snd.inc) tail-jumps here. AL = verb, AH = handle or
 ; sub-op; every verb preserves all registers except its documented outputs.
 ; =============================================================================
@@ -921,6 +921,9 @@ sbl_v_open:
     mov dl, [sbl_str_inst]      ; (SPEC.md 34.5 - the kernel owns pacing);
     mov dh, [sbl_gen]           ; DL -> T_INST, DH = its stream generation
     mov ax, sbl_refill_task
+    mov cx, KERNEL_SEG          ; a kernel task (SPEC.md 8: CX = the frame's
+                                ; DS/ES/CS; the caller's CX is banked on the
+                                ; stack by the prologue)
     call task_spawn
     jc .nospawn
     mov byte [snd_sb_expect], 1 ; arm BEFORE the hardware starts (the
@@ -1167,6 +1170,9 @@ sbl_v_open_in:
     mov dl, [sbl_str_inst]      ; (SPEC.md 34.6 - the kernel owns pacing);
     mov dh, [sbl_gen]           ; DL -> T_INST, DH = its stream generation
     mov ax, sbl_drain_task
+    mov cx, KERNEL_SEG          ; a kernel task (SPEC.md 8: CX = the frame's
+                                ; DS/ES/CS; the caller's CX is banked on the
+                                ; stack by the prologue)
     call task_spawn
     jc .nospawn
     mov byte [snd_sb_expect], 1 ; arm BEFORE the hardware starts - the
@@ -1203,7 +1209,8 @@ sbl_v_open_in:
 ; sbl_v_read - verb 5: copy recorded (or staged) bytes out of a grant
 ;
 ; in:       SI = source offset in SND_SEG (inside a grant the caller owns),
-;           CX = bytes, DS:DI = destination
+;           CX = bytes, DI = destination offset in the CALLER's segment
+;           ([osapi_dseg], recorded by slot 0x0100's wrapper - SPEC.md 20.3)
 ; out:      AX = 0 ok / 7 refused (range not inside the caller's grant);
 ;           CF mirrors
 ; clobbers: nothing else (flags; ES restored per SPEC.md 1)
@@ -1224,8 +1231,11 @@ sbl_v_read:
     call snd_req_inst           ; DH = calling instance
     call sbl_grant_chk          ; range-check the SOURCE
     jc .e7
-    mov ax, ds
-    mov es, ax                  ; ES:DI = the caller's destination
+    mov es, [osapi_dseg]        ; ES:DI = the caller's destination, in the
+                                ; segment the slot wrapper recorded - the
+                                ; staging copy IS the v3 boundary (SPEC.md
+                                ; 20.3/34.6; a package's DI is an offset in
+                                ; its OWN segment, not the kernel's)
     mov ax, SND_SEG
     push ds
     mov ds, ax                  ; DS:SI = the grant source
@@ -1250,8 +1260,10 @@ sbl_v_read:
 ; -----------------------------------------------------------------------------
 ; sbl_v_stage - verb 6: copy caller data into a grant (SPEC.md 34.6)
 ;
-; in:       DS:SI = source, CX = bytes, DI = destination offset in SND_SEG
-;           (inside a grant the caller owns)
+; in:       SI = source offset in the CALLER's segment ([osapi_dseg],
+;           recorded by slot 0x0100's wrapper - SPEC.md 20.3), CX = bytes,
+;           DI = destination offset in SND_SEG (inside a grant the caller
+;           owns)
 ; out:      AX = 0 ok / 7 refused (range not inside the caller's grant);
 ;           CF mirrors
 ; clobbers: nothing else (flags; ES restored per SPEC.md 1)
@@ -1274,8 +1286,12 @@ sbl_v_stage:
     jc .e7
     mov ax, SND_SEG
     mov es, ax
-    cld
-    rep movsb                   ; DS:SI -> SND_SEG:DI, interruptible
+    mov ax, [osapi_dseg]        ; the caller's segment (slot wrapper): the
+    cld                         ; source pointer lives THERE since v3
+    push ds
+    mov ds, ax
+    rep movsb                   ; callerseg:SI -> SND_SEG:DI, interruptible
+    pop ds
 .ok:
     xor ax, ax
     clc

@@ -5,10 +5,13 @@
 ; oscilloscope-sweep history graph, a RAM readout, and the process list with
 ; per-instance CPU shares and memory from the PIT cycle accounting
 ; (SPEC.md 8.1). A content click toggles a second, memory view: the RAM
-; readout, a conventional-memory map, a kernel-segment map with each
-; resident package's region drawn in its slot's dither pattern, and the
-; process list re-columned as NAME/ADDR/SIZE with a matching legend square
-; per package row.
+; readout, a conventional-memory map with each resident package's arena
+; region (SPEC.md 2.5) drawn in its slot's dither pattern, the ARENA
+; caption, a kernel-segment map (the kernel alone since v3 - the package
+; pool is gone, SPEC.md 20.1), and the process list re-columned as
+; NAME/ADDR/SIZE with a matching legend square per package row. All region
+; sums are in PARAGRAPHS (SPEC.md 29.1): a 233KB arena's byte total would
+; not fit 16 bits.
 ;
 ; The list is an INSTANCE list, not a task list (SPEC.md 29). A task list
 ; would show only the kinds that own a task; every task-less app - About,
@@ -59,11 +62,15 @@ TM_ROWS     equ INST_MAX + 1    ; "System" plus one row per instance slot
 TMM_RAM_Y   equ 4               ; "RAM uuuK/tttK" line (same string, new y)
 TMM_M1_Y1   equ 14              ; conventional-memory map frame top
 TMM_M1_Y2   equ 29              ; frame bottom (interior rows 15..28)
-TMM_CAP_Y   equ 33              ; "SEG 64K POOLuuuK/20K" caption line
+TMM_CAP_Y   equ 33              ; "ARENA uuuK/ tttK" caption line (SPEC 28)
 TMM_M2_Y1   equ 43              ; kernel-segment map frame top
 TMM_M2_Y2   equ 58              ; frame bottom (interior rows 44..57)
 TMM_HDR_Y   equ 62              ; "NAME    ADDR SIZE" header line
 TMM_ROW_Y   equ 74              ; first process row (same TM_ROW_H pitch)
+TMM_XM_Y    equ 225             ; "CPU 386+  XMS 63488K" line (SPEC.md 41.6):
+                                ; the last row band ends at y = 213, so this
+                                ; sits below the list without moving a single
+                                ; pinned constant above it
 
 ; -----------------------------------------------------------------------------
 ; tm_init - read total conventional RAM once (boot thread only)
@@ -136,10 +143,23 @@ tm_s_frtl:  db '  -    -', 0    ; free row's CPU + MEM columns
 
 ; --- memory view (SPEC.md 28) ------------------------------------------------
 tm_s_mhdr:  db 'NAME    ADDR SIZE', 0
-tm_s_cap:   db 'SEG 64K POOL', 0 ; + used KB right-aligned in 3 + "K/20K"
-tm_s_cap2:  db 'K/20K', 0
+tm_s_cap:   db 'ARENA', 0       ; + used KB right-aligned in 4 + "K/" +
+tm_s_cap2:  db 'K/', 0          ; total KB right-aligned in 4 + "K", padded
+                                ; to exactly 20 chars (SPEC.md 28 - the
+                                ; "SEG 64K POOL" caption died with the pool)
 tm_s_mfr:   db '   -    -', 0   ; ADDR + SIZE dashes (built-in / free rows)
 tm_s_sys0:  db '0000', 0        ; the System row's base offset
+
+; --- the CPU-tier / extended-memory line (SPEC.md 41.6) ----------------------
+; "CPU " + a 5-char tier name + " XMS " + 5 digits + 'K' = exactly 20 chars.
+; The three names are all 5 wide for the tm_s_pre/tm_s_coop reason: the
+; padding is what erases the longer word, and although the tier cannot change
+; while the machine runs, the line redraws on the same cadence as everything
+; else and a short name would leave the tail of a long one behind.
+tm_s_t86:   db '8086 ', 0
+tm_s_t286:  db '286  ', 0
+tm_s_t386:  db '386+ ', 0
+tm_s_xms:   db ' XMS ', 0       ; [9] space, [10..12] XMS, [13] space
 
 ; Slot patterns: 12 x 8 row bytes, pattern i = tm_pats + i*8, bit set =
 ; white (SPEC.md 5/28). Black-on-white hatch textures, none of them the
@@ -165,11 +185,13 @@ tm_pats:
 ; code and moves to .fartext.
 ;
 ; Three entry points keep near names as shims: tm_paint and tm_click,
-; because tm_tpl and the wm/ui dispatchers want near pointers, and
-; tm_task, because task_spawn builds a frame with CS = KERNEL_SEG
-; (SPEC.md 8) and can only launch a near entry. tm_task never returns, so
-; the shim's own `ret` is dead code and its `call far` return address is
-; simply abandoned with the rest of the stack at task_exit.
+; because tm_tpl and the wm/ui dispatchers want kernel-segment offsets
+; (SPEC.md 11 - a kernel-owned window's procs dispatch near at
+; KERNEL_SEG), and tm_task, because app_launch spawns it with
+; CX = KERNEL_SEG (SPEC.md 8) so the frame irets to a kernel-segment
+; entry. tm_task never returns, so the shim's own `ret` is dead code and
+; its `call far` return address is simply abandoned with the rest of the
+; stack at task_exit.
 ; -----------------------------------------------------------------------------
     FARSHIM tm_paint, tmf_paint
     FARSHIM tm_click, tmf_click
@@ -359,11 +381,12 @@ tm_sample:
     mov [tm_itsk+bx], al
     mov di, bx
     shl di, 1                   ; DI = index*2
-    mov ax, [si+I_SIZE]
-    mov [tm_isz+di], ax
-    mov ax, [si+I_SPTR]         ; region base for the memory view's map
-    mov [tm_ispt+di], ax        ; (meaningless for built-ins: I_SIZE 0
-                                ; filters them out, SPEC.md 28)
+    mov ax, [si+I_SIZE]         ; PARAGRAPHS for a package since v3
+    mov [tm_isz+di], ax         ; (SPEC.md 29.1); 0 for every built-in
+    mov ax, [si+I_SPTR]         ; region SEGMENT for the memory view's map
+    mov [tm_ispt+di], ax        ; (meaningless for built-ins - a kernel
+                                ; state ptr there: I_SIZE 0 filters them
+                                ; out, SPEC.md 28)
     shl di, 1                   ; DI = index*4
     mov ax, [si+I_CYC]
     mov [tm_inew+di], ax
@@ -566,8 +589,10 @@ tm_sample:
     ; --- RAM: kernel footprint + resident package regions (SPEC.md 28) -------
     ; Straight off the snapshot above - built-ins carry I_SIZE 0, so summing
     ; every in-use record counts exactly the resident package regions. Dying
-    ; instances still count: their region is still resident. The loader keeps
-    ; the sum <= APP_MAX_SIZE, so the 16-bit total cannot overflow.
+    ; instances still count: their region is still resident. The sum is in
+    ; PARAGRAPHS (SPEC.md 29.1's v3 unit), which is what keeps it 16-bit: a
+    ; 233KB arena's byte total would overflow the moment resident regions
+    ; passed 64KB, while the paragraph total tops out below 0x4000.
     xor bx, bx
     xor si, si
 .rsum:
@@ -580,12 +605,16 @@ tm_sample:
     inc si
     cmp si, INST_MAX
     jb .rsum
-    mov ax, kernel_bss_end      ; kernel text+bss footprint (bare label);
-    add ax, bx                  ; max total 0xB000 + 0x4E00 = 65024, no
-                                ; 16-bit overflow possible
-    add ax, 1023
+    add bx, 63                  ; regionK = ceil(paragraphs / 64)
+    mov cl, 6
+    shr bx, cl
+    mov ax, kernel_bss_end      ; kernel text+bss footprint (bare label;
+    add ax, 1023                ; ~42KB against guard 1's 64KB cap, so the
+                                ; round-up cannot wrap)
     mov cl, 10
-    shr ax, cl                  ; usedK, rounded up
+    shr ax, cl                  ; kernel KB, rounded up
+    add ax, bx                  ; + the package regions, added after the
+                                ; shift like every cross-segment term below
     add ax, KLOWFAR_KB          ; + what the kernel keeps OUTSIDE its segment
                                 ; (SPEC.md 2.1): the task stacks, the disk
                                 ; buffers and the far-code blob. Added after
@@ -842,10 +871,11 @@ tm_upd_mem:
 
     mov ax, TMM_RAM_Y
     call tm_txt_ram_y
-    call tm_cap_pool
+    call tm_cap_arena
     call tm_map_ram
     call tm_map_seg
     call tm_rows_mem
+    call tm_txt_xm              ; the tier/XMS line, below the list (41.6)
 
     pop dx
     pop bx
@@ -904,10 +934,12 @@ tm_draw_mem:
     mov si, tm_s_mhdr
     KCALL font_str
 
-    call tm_cap_pool
+    call tm_cap_arena
     call tm_map_ram
     call tm_map_seg
     call tm_rows_mem
+    call tm_txt_xm              ; drawn from BOTH bodies, or it appears once
+                                ; and never updates
 
     pop di
     pop si
@@ -918,14 +950,18 @@ tm_draw_mem:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_cap_pool - white-fill the caption band and draw "SEG 64K POOLuuuK/20K"
-;               (20 chars: put3's leading spaces separate POOL from the
-;               number; 20K = ceil(0x4E00/1024), SPEC.md 21/28)
-; in:  tm_ist/tm_isz snapshot
+; tm_cap_arena - white-fill the caption band and draw "ARENA uuuK/ tttK"
+;                (SPEC.md 28: "ARENA" + used KB right-aligned in 4 + "K/" +
+;                total KB right-aligned in 4 + "K", space-padded to exactly
+;                20 chars; put4's leading spaces separate ARENA from the
+;                number). Used = ceil of the in-use I_SIZE PARAGRAPH sum
+;                >> 6; total = ([ld_arena_top] - ARENA_SEG) >> 6, clamped
+;                at 0 - a 256KB machine honestly reads "ARENA   0K/   0K".
+; in:  tm_ist/tm_isz snapshot; [ld_arena_top]
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
-tm_cap_pool:
+tm_cap_arena:
     push ax
     push bx
     push cx
@@ -944,9 +980,9 @@ tm_cap_pool:
     add dx, TMM_CAP_Y + 7
     KCALL gfx_fill
 
-    xor bx, bx                  ; BX = pool bytes = sum of in-use I_SIZE
-    xor si, si                  ; (the loader keeps it <= APP_MAX_SIZE)
-.sum:
+    xor bx, bx                  ; BX = in-use region PARAGRAPHS (the .rsum
+    xor si, si                  ; argument: bytes would overflow, paragraphs
+.sum:                           ; top out below 0x4000)
     cmp byte [tm_ist+si], 0
     je .next
     mov di, si
@@ -961,12 +997,27 @@ tm_cap_pool:
     mov si, tm_s_cap
     call tm_copy
     mov ax, bx
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl                  ; pool KB, rounded up
-    call tm_put3
-    mov si, tm_s_cap2
+    add ax, 63                  ; used KB = ceil(paragraphs / 64)
+    mov cl, 6
+    shr ax, cl
+    call tm_put4
+    mov si, tm_s_cap2           ; "K/" - the used figure's K rides in it
     call tm_copy
+    mov ax, [ld_arena_top]      ; total KB = (top - base) >> 6, clamped: on
+    sub ax, ARENA_SEG           ; a 256KB machine the int 12h top sits BELOW
+    jnc .tot                    ; the base (SPEC.md 2.5) and the honest
+    xor ax, ax                  ; answer is 0
+.tot:
+    mov cl, 6
+    shr ax, cl
+    call tm_put4
+    mov byte [di], 'K'
+    inc di
+    mov cx, 4                   ; pad to exactly 20 chars: the fixed part is
+.pad:                           ; 16, and the padding is what erases a stale
+    mov byte [di], ' '          ; tail if the band fill is ever skipped
+    inc di
+    loop .pad
     mov byte [di], 0
 
     mov byte [gfx_color], CBLACK
@@ -986,11 +1037,102 @@ tm_cap_pool:
     ret
 
 ; -----------------------------------------------------------------------------
+; tm_txt_xm - the CPU-tier and extended-memory line (SPEC.md 41.6)
+;
+; "CPU 8086  XMS     0K" on the floor machine - drawn, not suppressed,
+; because "none" is the answer that machine should show.
+;
+; [xm_kb] is the POOL total, which is 64KB short of what int 15h AH=88h
+; reported whenever the HMA claim succeeded: what the line reports is what
+; is lendable, not what the BIOS counted.
+;
+; Extended memory is deliberately NOT a term in [tm_usedk] or [tm_totkb]
+; (SPEC.md 41.6/41.9 rule 6). Those are the boot-time int 12h conventional
+; figures that scale the RAM bar and the map, and the System row plus the
+; instance rows are required to sum to that bar; folding megabytes in would
+; blow the bar and break the sum in the same stroke. This is a different
+; store and it gets its own figure - the *_KB idiom names blocks INSIDE
+; conventional memory and does not reach up here.
+;
+; Gated on [tm_ylim] like the two row lists: on a 200-row CGA this window's
+; 264px template is clamped to 156px, nothing clips a draw to a WINDOW, and
+; an ungated line at y = 225 would letter across the dock strip once a
+; second (SPEC.md 39.10).
+;
+; in:  [tm_cx]/[tm_cy]/[tm_ylim] set (gfx lock held)
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+tm_txt_xm:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov ax, [tm_cy]
+    add ax, TMM_XM_Y
+    cmp ax, [tm_ylim]
+    ja .out                     ; the frame does not reach this line
+
+    mov byte [gfx_color], CWHITE
+    mov ax, [tm_cx]
+    add ax, 6
+    mov bx, [tm_cy]
+    add bx, TMM_XM_Y
+    mov cx, [tm_cx]
+    add cx, 167
+    mov dx, [tm_cy]
+    add dx, TMM_XM_Y + 7
+    KCALL gfx_fill
+
+    mov di, tm_str
+    mov si, tm_s_cpu            ; "CPU " - the same 4 chars as the perf line
+    call tm_copy
+    mov si, tm_s_t86
+    cmp byte [cpu_tier], CPU_286
+    jb .tier
+    mov si, tm_s_t286
+    je .tier
+    mov si, tm_s_t386
+.tier:
+    call tm_copy
+    mov si, tm_s_xms
+    call tm_copy
+    mov ax, [xm_kb]             ; five digits, not three: AH=88h answers up
+    call tm_put5                ; to 65,535 and tm_put3 emits a non-digit
+    mov byte [di], 'K'          ; above 999
+    inc di
+    mov byte [di], 0
+
+    mov byte [gfx_color], CBLACK
+    mov cx, [tm_cx]
+    add cx, 6
+    mov dx, [tm_cy]
+    add dx, TMM_XM_Y
+    mov si, tm_str
+    KCALL font_str
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; tm_map_ram - the conventional-memory map interior (SPEC.md 28): white =
 ;              free, gray = system-reserved (low memory; the sound
 ;              segment; the armed back buffer), black = the kernel
-;              segment. KB scale.
-; in:  [tm_totkb]; [bb_dbl] read live under the lock
+;              segment, one pattern band per resident package region
+;              above 406K - the regions moved to THIS map when they left
+;              the kernel segment for the SPEC.md 2.5 arena, and the
+;              arena's unallocated remainder reads white: free space,
+;              drawn honestly. KB scale.
+; in:  [tm_totkb]; tm_ist/tm_isz/tm_ispt snapshot; [bb_dbl] read live under
+;      the lock
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
@@ -1041,7 +1183,7 @@ tm_map_ram:
     KCALL gfx_fill_gray
 
     cmp byte [bb_dbl], 0        ; [256,406K): the back buffer, when armed
-    je .done
+    je .pkgs
     mov ax, 256
     call tm_ramkb2x
     mov si, ax
@@ -1052,7 +1194,50 @@ tm_map_ram:
     mov bx, TMM_M1_Y1
     call tm_map_rect
     KCALL gfx_fill_gray
-.done:
+
+.pkgs:
+    ; The package regions (SPEC.md 28): per snapshot slot with I_STATE != 0
+    ; and I_SIZE != 0, a pattern band [I_SPTR >> 6, (I_SPTR + I_SIZE) >> 6)
+    ; KB - segment -> KB is one shift, both fields carry the v3 units
+    ; (SPEC.md 29.1). tm_map_rect's 1px clamp keeps a small region visible.
+    xor si, si                  ; SI = instance slot
+.slot:
+    cmp byte [tm_ist+si], 0
+    je .next
+    mov di, si
+    shl di, 1
+    mov ax, [tm_isz+di]
+    or ax, ax                   ; built-ins own no region
+    jz .next
+    mov bx, [tm_ispt+di]        ; BX = region segment
+    add ax, bx                  ; end segment (<= 0xAFFF: SPEC.md 2.5)
+    mov cl, 6
+    shr ax, cl                  ; exclusive end KB...
+    dec ax                      ; ...to the inclusive column (the [a,b) ->
+                                ; a..b-1 rule of the fixed bands above;
+                                ; tm_map_rect clamps a sub-KB region)
+    call tm_ramkb2x
+    mov cx, ax                  ; CX = end px
+    mov ax, bx
+    push cx
+    mov cl, 6
+    shr ax, cl                  ; start KB
+    pop cx
+    call tm_ramkb2x             ; AX = start px
+    mov bx, si                  ; [gfx_pat] = tm_pats + slot*8
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add bx, tm_pats
+    mov [gfx_pat], bx
+    mov bx, TMM_M1_Y1
+    call tm_map_rect
+    KCALL gfx_fill_pat
+.next:
+    inc si
+    cmp si, INST_MAX
+    jb .slot
+
     pop di
     pop si
     pop dx
@@ -1063,10 +1248,11 @@ tm_map_ram:
 
 ; -----------------------------------------------------------------------------
 ; tm_map_seg - the kernel-segment map interior (SPEC.md 28): black = kernel
-;              text+bss, white = free (the headroom below APP_LOAD_OFF and
-;              the unallocated pool), gray = the reserved 512B above the
-;              pool, one pattern region per resident package. Offset scale.
-; in:  tm_ist/tm_isz/tm_ispt snapshot
+;              text+bss, white = free space - and all of it the kernel's
+;              now. The per-package bands and the gray above-the-pool strip
+;              left this map for the conventional one when v3 evicted the
+;              0xB000..0xFDFF pool (SPEC.md 20.1). Offset scale.
+; in:  nothing (kernel_bss_end is an assembly-time label)
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
@@ -1094,47 +1280,6 @@ tm_map_seg:
     call tm_map_rect
     mov byte [gfx_color], CBLACK
     KCALL gfx_fill
-
-    mov ax, 0xFE00              ; [FE00,10000): above the pool (SPEC.md 21)
-    call tm_off2x
-    mov si, ax
-    mov ax, 0xFFFF
-    call tm_off2x
-    mov cx, ax
-    mov ax, si
-    mov bx, TMM_M2_Y1
-    call tm_map_rect
-    KCALL gfx_fill_gray
-
-    xor si, si                  ; SI = instance slot
-.slot:
-    cmp byte [tm_ist+si], 0
-    je .next
-    mov di, si
-    shl di, 1
-    mov ax, [tm_isz+di]
-    or ax, ax                   ; built-ins own no region
-    jz .next
-    mov bx, [tm_ispt+di]        ; BX = base offset
-    add ax, bx
-    dec ax                      ; inclusive end offset
-    call tm_off2x
-    mov cx, ax                  ; CX = end px
-    mov ax, bx
-    call tm_off2x               ; AX = start px
-    mov bx, si                  ; [gfx_pat] = tm_pats + slot*8
-    shl bx, 1
-    shl bx, 1
-    shl bx, 1
-    add bx, tm_pats
-    mov [gfx_pat], bx
-    mov bx, TMM_M2_Y1
-    call tm_map_rect
-    KCALL gfx_fill_pat
-.next:
-    inc si
-    cmp si, INST_MAX
-    jb .slot
 
     pop di
     pop si
@@ -1294,12 +1439,12 @@ tm_rows_mem:
     or ax, ax
     jz .noreg
 
-    xchg ax, dx                 ; a package: base as hex, size in KB
-    call tm_put4x
-    mov byte [di], ' '
-    inc di
+    xchg ax, dx                 ; a package: ADDR = the region SEGMENT as 4
+    call tm_put4x               ; hex digits (the same glyphs with an honest
+    mov byte [di], ' '          ; new meaning, SPEC.md 28/29.1), SIZE from
+    inc di                      ; paragraphs
     xchg ax, dx
-    call tm_memcol
+    call tm_memcol_par
     call tm_sq_frame            ; legend square in the slot's pattern
     push si
     mov si, bx
@@ -1819,11 +1964,11 @@ tm_rows:
     mov bx, si                  ; share, right-aligned in 3, then '%'
     mov al, [tm_pct+bx]
     call tm_cpucol
-    mov bx, si                  ; region bytes (0 for a built-in kind)
+    mov bx, si                  ; region paragraphs (0 for a built-in kind)
     dec bx
     shl bx, 1
     mov ax, [tm_isz+bx]
-    call tm_memcol
+    call tm_memcol_par
     jmp .draw
 
 .free:                          ; free slot: "-       ---   -    -"
@@ -1896,8 +2041,8 @@ tm_memcol:
     push cx
     or ax, ax
     jz .none
-    add ax, 1023                ; round up; AX <= 0xB000 here, no overflow
-    mov cl, 10
+    add ax, 1023                ; round up; the one bytes caller left is
+    mov cl, 10                  ; kernel_bss_end (~42KB), so no overflow
     shr ax, cl
 .kb:
     call tm_put3
@@ -1929,6 +2074,24 @@ tm_memcol:
 tm_memcol_kb:
     push ax
     push cx
+    jmp tm_memcol.kb
+
+; -----------------------------------------------------------------------------
+; tm_memcol_par - tm_memcol for a caller holding PARAGRAPHS (the I_SIZE
+;                 snapshot's v3 unit, SPEC.md 29.1): 0 still shows "   -"
+;                 (every built-in kind), else KB = ceil(paragraphs / 64)
+; in:  AX = paragraphs, DI = dest
+; out: DI advanced by 4
+; clobbers: nothing else (internal helper)
+; -----------------------------------------------------------------------------
+tm_memcol_par:
+    push ax
+    push cx
+    or ax, ax
+    jz tm_memcol.none           ; same frame shape: .none pops CX then AX
+    add ax, 63                  ; round up; <= PKG_MAX_PARA + 63, no overflow
+    mov cl, 6
+    shr ax, cl
     jmp tm_memcol.kb
 
 ; -----------------------------------------------------------------------------
@@ -2038,6 +2201,93 @@ tm_put3:
     ret
 
 ; -----------------------------------------------------------------------------
+; tm_put5 - decimal 0..65535 as 5 chars at DI, right-aligned, space-padded
+;
+; tm_put3's shape does not extend: it emits one digit per hard-coded place,
+; and extended memory needs five of them. This fills the field with spaces
+; and writes digits leftward from the ones column instead, so the padding
+; falls out of the division rather than out of a chain of special cases.
+;
+; in:  AX = value, DI = dest
+; out: DI advanced by 5
+; clobbers: nothing else (internal helper)
+; -----------------------------------------------------------------------------
+tm_put5:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+
+    mov bx, di
+    mov cx, 5
+.pad:
+    mov byte [bx], ' '
+    inc bx
+    loop .pad
+    dec bx                      ; BX = the ones column
+
+    mov cx, 10
+.dig:
+    xor dx, dx
+    div cx                      ; AX = quotient, DX = this digit
+    add dl, '0'
+    mov [bx], dl
+    dec bx
+    or ax, ax
+    jnz .dig                    ; at most 5 passes: AX <= 65535
+
+    pop di
+    add di, 5
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_put4 - decimal 0..9999 as 4 chars at DI, right-aligned, space-padded
+;           (tm_put5's shape, one column narrower: the arena caption's two
+;           KB figures top out at 3 digits - 640KB machines - and SPEC.md
+;           28 pins the field at 4)
+; in:  AX = value (<= 9999 for a clean field; higher values overrun left)
+; out: DI advanced by 4
+; clobbers: nothing else (internal helper)
+; -----------------------------------------------------------------------------
+tm_put4:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+
+    mov bx, di
+    mov cx, 4
+.pad:
+    mov byte [bx], ' '
+    inc bx
+    loop .pad
+    dec bx                      ; BX = the ones column
+
+    mov cx, 10
+.dig:
+    xor dx, dx
+    div cx                      ; AX = quotient, DX = this digit
+    add dl, '0'
+    mov [bx], dl
+    dec bx
+    or ax, ax
+    jnz .dig                    ; at most 4 passes for values <= 9999
+
+    pop di
+    add di, 4
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 section .bss
 
 tm_win:     resw 1              ; window record ptr (ui.inc dispatches on it)
@@ -2064,8 +2314,9 @@ tm_idif:    resw INST_MAX * 2   ; per-instance interval callback cycles
 tm_ist:     resb INST_MAX       ; I_STATE snapshot
 tm_pist:    resb INST_MAX       ; previous sample's I_STATE (appeared rule)
 tm_itsk:    resb INST_MAX       ; I_TASK snapshot (owning task or 0xFF)
-tm_isz:     resw INST_MAX       ; I_SIZE snapshot, bytes
-tm_ispt:    resw INST_MAX       ; I_SPTR snapshot (memory view, SPEC.md 28)
+tm_isz:     resw INST_MAX       ; I_SIZE snapshot, PARAGRAPHS (SPEC.md 29.1)
+tm_ispt:    resw INST_MAX       ; I_SPTR snapshot - a region SEGMENT for a
+                                ; package (memory view, SPEC.md 28)
 tm_view:    resb 1              ; 0 = performance view, 1 = memory view
 tm_inm:     resb INST_MAX * 16  ; I_NAME snapshots
 tm_rcyc:    resw TM_ROWS * 2    ; per-ROW cycles: task + instance, dword

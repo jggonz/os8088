@@ -428,7 +428,7 @@ opl_free:
     ret
 
 ; =============================================================================
-; opl_fm_op - the OPL2 row's FM op (SDRV_NOTE) and slot 0x0084's live body
+; opl_fm_op - the OPL2 row's FM op (SDRV_NOTE) and slot 0x00F8's live body
 ;
 ; in:       AL = verb: 0 note-on (CL = channel 0..8, BX = frequency Hz),
 ;           1 note-off (CL), 2 patch-load (CL, DS:SI -> 11 bytes),

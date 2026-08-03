@@ -75,6 +75,21 @@ MB_ENTSZ    equ 12
 MENU_APPMAX equ 4               ; app menus the bar can host
 MENU_BARMAX equ MENU_APPMAX + 1 ; + the System cell, which is always cell 0
 
+; --- the kernel-side copy's caps (SPEC.md 12.2, binding since v3) ------------
+; A package's set lives in its own segment, so the kernel reads it once per
+; activation, by copying the WHOLE structure into menu_kset/menu_kitems/
+; menu_kstr (menu_copy_set below); everything that draws or tracks then
+; reads kernel memory and nothing else. A fixed copy needs stated caps, and
+; overflow is a SILENT CLAMP, never an error - menus past MENU_APPMAX were
+; always dropped whole, items past MENU_ITEMMAX drop the same way, and a
+; longer string truncates with the NUL forced. Kernel sets ride the
+; identical path (one code path; fm_menus is what the caps were sized from).
+MENU_ITEMMAX equ 8              ; items per menu the copy keeps
+MENU_STRMAX  equ 19             ; chars per name/title/item string, NUL excl.
+MENU_KSLOT   equ MENU_STRMAX+1  ; one string slot in menu_kstr, NUL included
+MENU_KSTRN   equ 1 + MENU_APPMAX + MENU_APPMAX*MENU_ITEMMAX ; 37 slots: the
+                                ; name, 4 titles, up to 32 item strings
+
 MENU_SYS_XR    equ 29           ; System cell: x 0..29, glyph at MENU_SYS_TX
 MENU_SYS_TX    equ 10
 MENU_NAME_X    equ 38           ; app-name label pen x
@@ -133,8 +148,11 @@ menu_activate:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_win_set - attach an app menu set to a window (API 0x00AC, SPEC 12.2)
-; in:  BX = window ptr, SI = menu set ptr (0 = no menus of its own)
+; menu_win_set - attach an app menu set to a window (API 0x0148, SPEC 12.2)
+; in:  BX = window ptr, SI = menu set OFFSET in the caller's segment (0 =
+;      no menus of its own) - STORED, never dereferenced here: the whole
+;      set is copied kernel-side at menu_relayout time (SPEC.md 12.2), so
+;      this slot needs no marshalling wrapper
 ; out: nothing (all registers preserved, FLAGS INCLUDED)
 ;
 ; The intended caller is a package's entry proc, which runs before the
@@ -182,15 +200,25 @@ menu_check:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_relayout - rebuild [menu_set], [menu_namep] and menu_bar from
-;                 [menu_win] (SPEC.md 12)
+; menu_relayout - rebuild [menu_set], the kernel-side set copy, [menu_namep]
+;                 and menu_bar from [menu_win] (SPEC.md 12/12.2)
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ;
-; The name falls back twice: the set's AM_NAME, else the owning instance's
-; I_NAME (an accessory like Clock has no menu set at all), else the
-; window's own title. Locator - [menu_win] = 0 - takes menu_loc_set, whose
-; AM_NAME is the string 'Locator'.
+; The ONE place package memory is ever read for menus (SPEC.md 12.2): the
+; owner's segment is resolved via inst_win_owner/inst_cb_seg and the whole
+; registered set is copied into menu_kset/menu_kitems/menu_kstr by
+; menu_copy_set; the bar cells, menu_draw_bar, menu_track, menu_drop,
+; menu_widest and ui_dispatch all read the copy and learn nothing about
+; segments. Safe by construction: a package window can first become active
+; no earlier than the loader's wm_show, after its instance is published.
+;
+; The name falls back twice: the set's AM_NAME (now the staged copy), else
+; the owning instance's I_NAME (an accessory like Clock has no menu set at
+; all), else the window's own title - reachable only for UNOWNED windows
+; (an owned window took the I_NAME branch), which are kernel windows, so
+; that W_TITLE is a plain kernel pointer. Locator - [menu_win] = 0 - takes
+; menu_loc_set, whose AM_NAME is the string 'Locator'.
 ; -----------------------------------------------------------------------------
 menu_relayout:
     push ax
@@ -204,19 +232,25 @@ menu_relayout:
     or bx, bx
     jnz .app
     mov si, menu_loc_set        ; no window owns the bar: Locator does
-    mov [menu_set], si
-    mov si, [si + AM_NAME]
-    jmp .name_done
+    mov ax, KERNEL_SEG
+    jmp .copy
 
 .app:
     mov si, [bx + W_MENUS]      ; 0 = a window with no menus of its own
-    mov [menu_set], si
-    or si, si
-    jz .from_inst
-    mov si, [si + AM_NAME]
+    call inst_win_owner         ; DI = owning instance record, 0 = unowned
+    call inst_cb_seg            ; AX = the owner's segment (SPEC.md 11)
+.copy:
+    mov [menu_set], si          ; the set AS REGISTERED - ui_dispatch hands
+                                ; this offset back to the handler in BX
+                                ; (SPEC.md 12.2), never the copy
+    call menu_copy_set          ; SI + AX -> menu_kset/menu_kitems/menu_kstr
+
+    mov si, [menu_kset + AM_NAME]   ; a kernel pointer (or 0) since the copy
     or si, si
     jnz .name_done
-.from_inst:
+    mov bx, [menu_win]
+    or bx, bx
+    jz .name_fb                 ; Locator's set always carries a name; belt
     call inst_win_owner         ; DI = owning instance record, 0 = unowned
     or di, di
     jz .from_title
@@ -224,11 +258,32 @@ menu_relayout:
     add si, I_NAME              ; the 16-byte inline name field
     jmp .name_done
 .from_title:
-    mov si, [bx + W_TITLE]
+    mov si, [bx + W_TITLE]      ; DI = 0 here, but since v3 an unowned
+                                ; window is NOT necessarily a kernel window
+                                ; (SPEC.md 11): a package can wm_create one
+                                ; the loader never binds, and its title is
+                                ; an org-0 offset in the CREATOR's segment.
+                                ; inst_cb_seg's fallback answers wm_wseg -
+                                ; kernel-created windows keep the flat read
+    or si, si
+    jz .name_done               ; no title at all: the .name_fb label wins
+    call inst_cb_seg            ; AX = the creator's segment (DI=0, BX=win)
+    cmp ax, KERNEL_SEG
+    je .name_done
+    push es                     ; a package creator: stage the title kernel-
+    push di                     ; side, the wm_tbuf idiom (SPEC.md 11/20.3)
+    mov es, ax
+    mov di, menu_nbuf
+    mov cx, MENU_STRMAX
+    call osapi_copy_str         ; ES:SI -> menu_nbuf, capped, NUL forced
+    pop di
+    pop es
+    mov si, menu_nbuf
 
 .name_done:
     or si, si                   ; a nameless window still gets a label
     jnz .have_name
+.name_fb:
     mov si, menu_loc_name
 .have_name:
     mov [menu_namep], si
@@ -249,14 +304,9 @@ menu_relayout:
     add ax, MENU_NAME_X + MENU_NAME_PAD
     mov bx, ax                  ; BX = running left edge
 
-    mov si, [menu_set]
-    or si, si
-    jz .done
-    mov cx, [si + AM_COUNT]
-    cmp cx, MENU_APPMAX         ; never trust a package's count (SPEC 12.2)
-    jbe .cnt_ok
-    mov cx, MENU_APPMAX
-.cnt_ok:
+    mov si, menu_kset           ; lay out from the KERNEL COPY (SPEC 12.2):
+    mov cx, [si + AM_COUNT]     ; the count was clamped by menu_copy_set,
+                                ; and every pointer below is kernel memory
     jcxz .done
     add si, AM_LIST
 .cell:
@@ -301,6 +351,139 @@ menu_relayout:
                                 ; is dropped, so the cells that DID fit keep
                                 ; bar index == set index
 .done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_copy_set - copy a whole app menu set kernel-side (SPEC.md 12.2)
+; in:  SI = the set's offset (0 = no set), AX = its segment (KERNEL_SEG for
+;      a kernel set - one code path for both)
+; out: menu_kset holds the same AM_*/AMENU_* shape with every pointer aimed
+;      at kernel memory: strings in menu_kstr's 20-byte slots, item-pointer
+;      arrays in menu_kitems. AM_COUNT clamped to MENU_APPMAX, AMENU_NITEM
+;      to MENU_ITEMMAX, strings truncated at MENU_STRMAX with the NUL
+;      forced - the silent-clamp rule (SPEC.md 12.2). All registers
+;      preserved.
+;
+; Every source read goes through ES = the set's segment - the set header,
+; the AMENU entries, the item-pointer arrays and the strings are ALL in the
+; owner's segment (SPEC.md 12.2) and none can be trusted: a hostile count
+; is clamped, a hostile pointer reads bounded garbage from the package's
+; own segment (osapi_copy_str caps every string), and nothing here can
+; write anywhere but the fixed kernel buffers.
+;
+; String slots are handed out sequentially: slot 0 = the name, then one per
+; title and per kept item, at most MENU_KSTRN in total by the caps above.
+; -----------------------------------------------------------------------------
+menu_copy_set:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+
+    mov es, ax
+    or si, si
+    jnz .have
+    xor ax, ax                  ; no set: an empty copy (no name, kernel-
+    mov [menu_kset + AM_NAME], ax   ; dispatched, no menus) - ui_dispatch
+    mov [menu_kset + AM_ONCMD], ax  ; and the layout loop both read 0s
+    mov [menu_kset + AM_COUNT], ax
+    jmp .out
+
+.have:
+    ; --- the header: name string, handler offset, clamped count -------------
+    mov ax, [es:si + AM_NAME]
+    or ax, ax
+    jz .noname
+    push si
+    mov si, ax
+    mov di, menu_kstr           ; slot 0: the bar label
+    mov cx, MENU_STRMAX
+    call osapi_copy_str         ; ES:SI -> DS:DI, capped, NUL forced
+    pop si
+    mov ax, menu_kstr
+.noname:
+    mov [menu_kset + AM_NAME], ax
+    mov ax, [es:si + AM_ONCMD]  ; the handler's OFFSET in the set's own
+    mov [menu_kset + AM_ONCMD], ax  ; segment - a value here (SPEC.md 12.2)
+    mov ax, [es:si + AM_COUNT]
+    cmp ax, MENU_APPMAX         ; never trust a package's count (SPEC 12.2)
+    jbe .cok
+    mov ax, MENU_APPMAX
+.cok:
+    mov [menu_kset + AM_COUNT], ax
+
+    ; --- the menus: title + item array + count per entry ---------------------
+    mov dx, ax                  ; DX = menus still to copy
+    or dx, dx
+    jz .out
+    add si, AM_LIST             ; ES:SI walks the source entries
+    mov di, menu_kset + AM_LIST ; DS:DI walks the copy's entries
+    mov bx, menu_kitems         ; DS:BX walks the kernel item-ptr arrays
+    mov bp, menu_kstr + MENU_KSLOT  ; BP = next free string slot (slot 0
+                                ; was the name; a plain value, never a
+                                ; [bp+disp] operand - SS != DS, SPEC.md 1)
+.menu:
+    push si
+    mov si, [es:si + AMENU_TITLE]
+    push di
+    mov di, bp
+    mov cx, MENU_STRMAX
+    call osapi_copy_str         ; the title -> its slot
+    pop di
+    pop si
+    mov [di + AMENU_TITLE], bp
+    add bp, MENU_KSLOT
+
+    mov ax, [es:si + AMENU_NITEM]
+    cmp ax, MENU_ITEMMAX        ; the clamp that makes the copy finite
+    jbe .iok
+    mov ax, MENU_ITEMMAX
+.iok:
+    mov [di + AMENU_NITEM], ax
+    mov [di + AMENU_ITEMS], bx  ; this menu's kernel-side pointer array
+
+    push si
+    mov si, [es:si + AMENU_ITEMS]   ; ES:SI = the source pointer array
+    mov cx, ax
+    jcxz .items_done
+.item:
+    push cx
+    mov ax, [es:si]             ; one item string's offset
+    add si, 2
+    push si
+    mov si, ax
+    push di
+    mov di, bp
+    mov cx, MENU_STRMAX
+    call osapi_copy_str         ; the item -> its slot
+    pop di
+    pop si
+    mov [bx], bp                ; the kernel array points at the copy
+    add bx, 2
+    add bp, MENU_KSLOT
+    pop cx
+    loop .item
+.items_done:
+    pop si
+
+    add si, AMENU_ENTSZ
+    add di, AMENU_ENTSZ
+    dec dx
+    jnz .menu
+
+.out:
+    pop es
+    pop bp
     pop di
     pop si
     pop dx
@@ -933,8 +1116,33 @@ menu_loc_set:
 section .bss
 
 menu_win:   resw 1              ; window owning the bar, 0 = Locator (12)
-menu_set:   resw 1              ; its app menu set (SPEC.md 12.2)
+menu_set:   resw 1              ; its app menu set AS REGISTERED: an OFFSET
+                                ; in the owner's segment (SPEC.md 12.2) -
+                                ; handed back to the AM_ONCMD handler in
+                                ; BX, and never dereferenced by the kernel
+                                ; outside menu_relayout's copy
 menu_namep: resw 1              ; the name string drawn at MENU_NAME_X
+                                ; (always kernel memory: menu_kstr slot 0,
+                                ; an I_NAME field, a kernel W_TITLE,
+                                ; menu_nbuf, or menu_loc_name)
+menu_nbuf:  resb 20             ; MENU_STRMAX + NUL: the W_TITLE fallback
+                                ; staged out of a package CREATOR's segment
+                                ; (SPEC.md 11/12.2) - an unowned window is
+                                ; not necessarily a kernel window since v3.
+                                ; Written before every read, no boot init
+
+; --- the kernel-side copy of the active set (SPEC.md 12.2, v3) --------------
+; Filled by menu_copy_set at every relayout, before anything reads it: the
+; boot menu_init relayouts first, so none of this needs a .bss init. One
+; copy suffices because exactly one set is ever active - the bar's.
+menu_kset:  resb 6 + 4*6        ; AM_* header + MENU_APPMAX AMENU entries
+                                ; (literals per the no-forward-ref-in-bss
+                                ; rule: 6 + MENU_APPMAX*AMENU_ENTSZ)
+menu_kitems: resw 32            ; MENU_APPMAX*MENU_ITEMMAX item pointers,
+                                ; packed per menu, aimed at menu_kstr
+menu_kstr:  resb 740            ; MENU_KSTRN x MENU_KSLOT (37 x 20): slot 0
+                                ; the name, then titles and items in copy
+                                ; order, each capped + NUL-forced
 menu_bar:   resb 60             ; MENU_BARMAX x MB_ENTSZ (5 x 12; a literal
                                 ; per the no-forward-ref-in-bss rule)
 menu_nbar:  resw 1              ; live cells in menu_bar (>= 1: the System
