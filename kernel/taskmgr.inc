@@ -413,6 +413,28 @@ tm_sample:
     jb .isnap
     popf
 
+    ; --- the arena grants each instance holds (SPEC.md 2.6/28) ---------------
+    ; Outside the cli window on purpose: this is one far call per slot, the
+    ; block table is only ever mutated by the UI task and by teardown, and a
+    ; sampler that reads it a few microseconds later than the records is
+    ; still a sampler. Inside, it would be twelve far calls of IF=0 against
+    ; a 1200-baud mouse.
+    ;
+    ; Without this, a package's grants - which can be an order of magnitude
+    ; larger than its region - are invisible in the readout whose entire job
+    ; is to show where the machine's memory went.
+    xor si, si
+.gsnap:
+    mov ax, si
+    KCALL cm_inst_mem           ; in AL = slot; out AX = paragraphs, BX = the
+    mov di, si                  ; largest block's base segment (0 = none)
+    shl di, 1
+    mov [tm_igr+di], ax
+    mov [tm_igp+di], bx
+    inc si
+    cmp si, INST_MAX
+    jb .gsnap
+
     ; --- per-task diffs ------------------------------------------------------
     xor bx, bx
 .tdiff:
@@ -586,13 +608,15 @@ tm_sample:
     cmp bx, TM_ROWS * 4
     jb .pct
 
-    ; --- RAM: kernel footprint + resident package regions (SPEC.md 28) -------
+    ; --- RAM: kernel footprint + everything the arena has handed out (28) ----
     ; Straight off the snapshot above - built-ins carry I_SIZE 0, so summing
-    ; every in-use record counts exactly the resident package regions. Dying
-    ; instances still count: their region is still resident. The sum is in
-    ; PARAGRAPHS (SPEC.md 29.1's v3 unit), which is what keeps it 16-bit: a
-    ; 233KB arena's byte total would overflow the moment resident regions
-    ; passed 64KB, while the paragraph total tops out below 0x4000.
+    ; every in-use record counts exactly the resident package regions, plus
+    ; (SPEC.md 2.6) the grants those packages asked for, which are the same
+    ; arena and can dwarf the regions. Dying instances still count: nothing
+    ; is released until teardown runs. The sum is in PARAGRAPHS (SPEC.md
+    ; 29.1's v3 unit), which is what keeps it 16-bit: a 233KB arena's byte
+    ; total would overflow the moment it passed 64KB in use, while the
+    ; paragraph total tops out below 0x4000.
     xor bx, bx
     xor si, si
 .rsum:
@@ -601,6 +625,7 @@ tm_sample:
     mov di, si
     shl di, 1
     add bx, [tm_isz+di]
+    add bx, [tm_igr+di]
 .rnext:
     inc si
     cmp si, INST_MAX
@@ -980,14 +1005,15 @@ tm_cap_arena:
     add dx, TMM_CAP_Y + 7
     KCALL gfx_fill
 
-    xor bx, bx                  ; BX = in-use region PARAGRAPHS (the .rsum
-    xor si, si                  ; argument: bytes would overflow, paragraphs
-.sum:                           ; top out below 0x4000)
-    cmp byte [tm_ist+si], 0
+    xor bx, bx                  ; BX = in-use arena PARAGRAPHS - regions AND
+    xor si, si                  ; grants (SPEC.md 2.6), the .rsum argument:
+.sum:                           ; bytes would overflow, paragraphs top out
+    cmp byte [tm_ist+si], 0     ; below 0x4000
     je .next
     mov di, si
     shl di, 1
     add bx, [tm_isz+di]
+    add bx, [tm_igr+di]
 .next:
     inc si
     cmp si, INST_MAX
@@ -1196,10 +1222,14 @@ tm_map_ram:
     KCALL gfx_fill_gray
 
 .pkgs:
-    ; The package regions (SPEC.md 28): per snapshot slot with I_STATE != 0
-    ; and I_SIZE != 0, a pattern band [I_SPTR >> 6, (I_SPTR + I_SIZE) >> 6)
-    ; KB - segment -> KB is one shift, both fields carry the v3 units
-    ; (SPEC.md 29.1). tm_map_rect's 1px clamp keeps a small region visible.
+    ; Everything the arena has handed out (SPEC.md 28), per snapshot slot
+    ; with I_STATE != 0: the package's REGION, [I_SPTR, I_SPTR + I_SIZE),
+    ; and the arena GRANT it asked for on top (SPEC.md 2.6) - the same
+    ; pattern for both, because they are the same instance's memory and the
+    ; two are usually adjacent anyway (the grant is first-fit and the region
+    ; was allocated a moment earlier). A package's grant is routinely an
+    ; order of magnitude bigger than its region; omitted, the map would show
+    ; a 1px sliver where a quarter of the machine actually went.
     xor si, si                  ; SI = instance slot
 .slot:
     cmp byte [tm_ist+si], 0
@@ -1208,14 +1238,40 @@ tm_map_ram:
     shl di, 1
     mov ax, [tm_isz+di]
     or ax, ax                   ; built-ins own no region
-    jz .next
+    jz .grant
     mov bx, [tm_ispt+di]        ; BX = region segment
+    call .band
+.grant:
+    mov di, si
+    shl di, 1
+    mov ax, [tm_igr+di]
+    or ax, ax                   ; and nothing granted is the common case
+    jz .next
+    mov bx, [tm_igp+di]         ; BX = the largest grant's base segment
+    call .band
+.next:
+    inc si
+    cmp si, INST_MAX
+    jb .slot
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; One band, [BX, BX+AX) paragraphs, in slot SI's pattern. Segment -> KB is
+; one shift, both units being v3 paragraphs (SPEC.md 29.1); tm_map_rect's
+; 1px clamp keeps a sub-KB claim visible. Clobbers AX, BX, CX, DI - SI, the
+; caller's loop cursor, is the one thing it must not touch.
+.band:
     add ax, bx                  ; end segment (<= 0xAFFF: SPEC.md 2.5)
     mov cl, 6
     shr ax, cl                  ; exclusive end KB...
     dec ax                      ; ...to the inclusive column (the [a,b) ->
-                                ; a..b-1 rule of the fixed bands above;
-                                ; tm_map_rect clamps a sub-KB region)
+                                ; a..b-1 rule of the fixed bands above)
     call tm_ramkb2x
     mov cx, ax                  ; CX = end px
     mov ax, bx
@@ -1233,17 +1289,6 @@ tm_map_ram:
     mov bx, TMM_M1_Y1
     call tm_map_rect
     KCALL gfx_fill_pat
-.next:
-    inc si
-    cmp si, INST_MAX
-    jb .slot
-
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1430,10 +1475,14 @@ tm_rows_mem:
     mov byte [di], ' '
     inc di
 
-    push si                     ; AX = I_SIZE, DX = I_SPTR snapshots
+    push si                     ; AX = I_SIZE + grants, DX = I_SPTR snapshots
     mov si, bx
     shl si, 1
     mov ax, [tm_isz+si]
+    add ax, [tm_igr+si]         ; the row's SIZE is everything the instance
+                                ; holds in the arena (SPEC.md 2.6), so it
+                                ; adds to the RAM line above it; ADDR stays
+                                ; the REGION, which is where its code is
     mov dx, [tm_ispt+si]
     pop si
     or ax, ax
@@ -1964,10 +2013,11 @@ tm_rows:
     mov bx, si                  ; share, right-aligned in 3, then '%'
     mov al, [tm_pct+bx]
     call tm_cpucol
-    mov bx, si                  ; region paragraphs (0 for a built-in kind)
-    dec bx
+    mov bx, si                  ; arena paragraphs: region + grants (SPEC.md
+    dec bx                      ; 2.6), 0 for a built-in kind
     shl bx, 1
     mov ax, [tm_isz+bx]
+    add ax, [tm_igr+bx]
     call tm_memcol_par
     jmp .draw
 
@@ -2314,6 +2364,11 @@ tm_idif:    resw INST_MAX * 2   ; per-instance interval callback cycles
 tm_ist:     resb INST_MAX       ; I_STATE snapshot
 tm_pist:    resb INST_MAX       ; previous sample's I_STATE (appeared rule)
 tm_itsk:    resb INST_MAX       ; I_TASK snapshot (owning task or 0xFF)
+tm_igr:     resw INST_MAX       ; arena grants held, PARAGRAPHS (SPEC.md 2.6):
+                                ; the memory a package ASKED for, which its
+                                ; I_SIZE region does not include
+tm_igp:     resw INST_MAX       ; and the base SEGMENT of the largest of them,
+                                ; for the memory view's band (0 = none)
 tm_isz:     resw INST_MAX       ; I_SIZE snapshot, PARAGRAPHS (SPEC.md 29.1)
 tm_ispt:    resw INST_MAX       ; I_SPTR snapshot - a region SEGMENT for a
                                 ; package (memory view, SPEC.md 28)

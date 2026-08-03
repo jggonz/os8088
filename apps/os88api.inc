@@ -44,7 +44,7 @@
 ; equally to your worker task (OSAPI_TASK_SPAWN below), whose 1536-byte
 ; stack is likewise in LOW_SEG.
 ;
-; THE RETF RULE (binding, SPEC.md 20.5/20.7 rule 5): every routine the
+; THE RETF RULE (binding, SPEC.md 20.5/20.8 rule 5): every routine the
 ; kernel calls in your package returns with `retf`, never `ret` - the
 ; entry proc, W_PAINT, W_ONKEY, W_ONCLICK, the AM_ONCMD menu handler and
 ; the file-dialog completion proc, all of them, because the kernel
@@ -461,7 +461,7 @@ VID_CGA    equ 2
 ; seg<<4 + off, so the highest byte any CS:IP can name is 0x10FFEF - no code
 ; up there, no jump table, no callback, no second copy of your image, on any
 ; tier, ever. (Your own segment comes from the conventional arena below
-; 640KB for exactly this reason, SPEC.md 2.5/20.7.) And you never address
+; 640KB for exactly this reason, SPEC.md 2.5/20.8.) And you never address
 ; extended memory DIRECTLY at all: the 32-bit base OSAPI_XMEM_ALLOC hands
 ; you is an OPAQUE TOKEN, not a pointer you can build a segment from. Every
 ; byte you move crosses through OSAPI_XMEM_COPY, which is exactly why that
@@ -544,6 +544,91 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                                 ; OSAPI_VIDEO; the answer is only
                                                 ; STABLE under the lock, which is
                                                 ; when painters ask.
+
+; --- conventional memory (SPEC.md 2.6/20.8, new in v3) -------------------------
+; Your own segment is capped at one segment and holds your image and your
+; bss (SPEC.md 20.1). When your DATA is bigger than that - a canvas, a
+; captured sample, a render target - this is where it comes from: the same
+; conventional ARENA your region was carved out of, in paragraphs, addressed
+; with a plain real-mode segment you build yourself. Unlike extended memory
+; above, there is no transport and no opaque token: the answer IS a segment,
+; and `mov es, ax` reaches the bytes.
+;
+; THREE RULES, and the first two are the ones that bite.
+;
+;  1. ASK, NEVER ASSUME. Do not compute an address from int 12h, from
+;     BB_SEG, or from any constant in the kernel. The arena is shared with
+;     every other loaded package and with the loader itself; an address you
+;     picked is an address somebody else was granted.
+;  2. A GRANT MAY BE REFUSED, and refusal is the normal case on a small
+;     machine - the arena is EMPTY on the 256KB floor. Ask CAPS first, size
+;     yourself to the answer, and have a window that explains itself when
+;     the answer is zero. Do not refuse to load; load and say so.
+;  3. THE TABLE IS SMALL (8 entries for the whole machine). Take ONE block
+;     and subdivide it yourself - the sound-grant idiom - rather than one
+;     per buffer.
+;
+; You do not have to free. A grant is stamped with your instance and
+; force-freed when you close, which is what makes this safe for a task-less
+; package: nothing tells you your window is going away (SPEC.md 21), so
+; nothing could have been relied on to give it back. Freeing early is still
+; worth doing if you can shrink - it is what lets the NEXT app run.
+;
+; A block can be larger than 64KB and usually is: it is a paragraph COUNT,
+; not an offset, so walk it as seg:off with the segment advancing, never as
+; one flat 16-bit offset off a single base.
+;
+; CONTEXT, BINDING: UI task only - your entry proc, a window callback, a
+; menu handler or a file-dialog completion proc. NEVER from your worker
+; task: the allocator reads the instance table, which the UI task mutates.
+%define OSAPI_MEM_ALLOC     KERNEL_SEG:0x01B8   ; AX = PARAGRAPHS wanted (16 bytes
+                                                ; each; 0 is rounded up to 1); out
+                                                ; CF=0 and AX = the block's base
+                                                ; SEGMENT, else CF=1 and AX = 0 no
+                                                ; arena on this machine / 1 no free
+                                                ; block-table entry / 2 no
+                                                ; contiguous run that big.
+                                                ; Preserves everything else.
+%define OSAPI_MEM_FREE      KERNEL_SEG:0x01C0   ; AX = a base segment YOU own; out
+                                                ; CF=0 freed (and merged with the
+                                                ; neighbouring free runs), CF=1 not
+                                                ; a base or not yours. Preserves
+                                                ; AX and every other register.
+%define OSAPI_MEM_AVAIL     KERNEL_SEG:0x01C8   ; no inputs; out AX = the LARGEST
+                                                ; contiguous free run in
+                                                ; PARAGRAPHS (this is the number to
+                                                ; size yourself from - DX can be far
+                                                ; bigger and still not fit one
+                                                ; buffer), DX = total free
+                                                ; paragraphs, BL = free block-table
+                                                ; entries of 8. Preserves BH, CX,
+                                                ; SI, DI. UI task like the other
+                                                ; two: it walks the instance table.
+
+; --- asking for a different window size (SPEC.md 11.1, new in v3) --------------
+; For an app whose CONTENT has a size of its own: a picture the user just
+; opened, a document that must not be cropped. Until this slot existed the
+; only things that could resize a window were the grow box and fullscreen,
+; both kernel-internal, so such an app had to write W_W/W_H in the record
+; behind the kernel's back - which your DS cannot even reach any more.
+;
+; It DRAWS NOTHING. You are inside your own callback under the gfx lock and
+; you know what you are about to repaint; call OSAPI_WM_FRONT afterwards if
+; you want the screen back. This is also how a grow-box drag is REFUSED: the
+; kernel has already resized and repainted by the time your paint proc sees
+; the new geometry, so put the size back here and repaint over it.
+%define OSAPI_WM_RESIZE     KERNEL_SEG:0x01D0   ; BX = win ptr, CX = FRAME width,
+                                                ; DX = FRAME height (outer px,
+                                                ; not content); out CF=0 adopted,
+                                                ; CF=1 BX is not a window.
+                                                ; Clamped to WMIN_W/WMIN_H below
+                                                ; and to the screen, and the
+                                                ; position re-clamped with it, so
+                                                ; no value you can pass puts a
+                                                ; window off screen or under the
+                                                ; dock. Preserves every register.
+WMIN_W  equ 96                   ; the smallest frame a resize can leave, outer
+WMIN_H  equ 64                   ; px (SPEC.md 11.1; kernel/wm.inc's own equs)
 
 ; file error codes, pinned (SPEC.md 18.4): returned in AX with CF set
 FERR_OK      equ 0

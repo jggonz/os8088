@@ -47,6 +47,13 @@ Xcode Command Line Tools supply `make` and `git` (`xcode-select --install`).
 Apple's linker only speaks Mach-O, which is part of why this project uses
 `nasm -f bin` and no linker at all — so there is nothing else to install.
 
+**nasm must be 3.0 or newer.** `kernel/farcall.inc` and `kernel/taskmgr.inc`
+spell their far jumps `call far SEG:OFF` / `jmp far SEG:OFF`, and every nasm
+2.x — 2.11 through 2.16.03 — rejects that form with *mismatch in operand
+sizes*; 3.x accepts it and encodes the 9A/EA you expect. If your
+distribution only has 2.16, the deb from Ubuntu's universe pool
+(`pool/universe/n/nasm/nasm_3.01-1_amd64.deb`) installs standalone.
+
 ### Linux
 
 Debian / Ubuntu:

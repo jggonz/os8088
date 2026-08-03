@@ -128,6 +128,8 @@ far_init:
     FARK gfx_lock
     FARK gfx_unlock
     FARK inst_ptr
+    FARK cm_inst_mem            ; taskmgr.inc: the arena grants an instance
+                                ; holds beyond its region (SPEC.md 2.6/28)
     FARK wm_obscured
     FARK task_yield             ; the fake int frame it builds takes CS from
                                 ; the wrapper, i.e. KERNEL_SEG, so a far

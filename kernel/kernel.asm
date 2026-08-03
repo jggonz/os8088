@@ -320,7 +320,27 @@ osapi_table:
                                   ;          the package-side replacement for
                                   ;          reading W_W/W_H/W_FLAGS out of a
                                   ;          record its DS can no longer reach
-osapi_table_end:                 ; 0x01B8
+    OSAPI_SLOT cm_alloc           ; 0x01B8 - conventional memory (SPEC.md
+    OSAPI_SLOT cm_free            ; 0x01C0   2.6/20.8): the same arena the
+    OSAPI_SLOT cm_caps            ; 0x01C8   package's own region came out of,
+                                  ;          asked for in paragraphs and given
+                                  ;          back by base segment. Grants are
+                                  ;          stamped with the calling instance
+                                  ;          and force-freed at teardown, so a
+                                  ;          package that never frees - and a
+                                  ;          task-less one is never TOLD it is
+                                  ;          closing - strands nothing. All
+                                  ;          three answer honestly on the
+                                  ;          256KB floor, where the arena is
+                                  ;          empty: zeros, and a refusal.
+    OSAPI_SLOT wm_resize          ; 0x01D0 - in BX = win ptr, CX/DX = frame
+                                  ;          w/h; clamped (WMIN_* .. screen)
+                                  ;          and re-positioned by wm_fit,
+                                  ;          drawing nothing. The sanctioned
+                                  ;          form of the record write a
+                                  ;          content-sized app used to do by
+                                  ;          hand (SPEC.md 11.1/20.3)
+osapi_table_end:                 ; 0x01D8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -328,8 +348,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 53 * 8
-%error "os8088 API jump table must be exactly 53 8-byte far slots"
+%if OSAPI_TABLE_LEN != 57 * 8
+%error "os8088 API jump table must be exactly 57 8-byte far slots"
 %endif
 
 ; =============================================================================
@@ -393,6 +413,8 @@ kmain:
     call files_init             ; Disk module state (no window at boot)
     call loader_init            ; package loader state - also probes int 12h
                                 ; for the arena top, on task 0 (SPEC.md 2.5)
+    call cm_init                ; the arena's block table (SPEC.md 2.6): after
+                                ; loader_init, whose [ld_arena_top] bounds it
     call tm_init                ; Task Manager total-RAM read (no window)
     call snd_init               ; sound layer (SPEC.md 34.7): saves the 61h
                                 ; boot bits, stores its .bss state, publishes
@@ -496,6 +518,11 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "diskw.inc"          ; the FAT write path (SPEC.md 18.4): after
                                 ; disk.inc, whose constants and layout it uses
 %include "loader.inc"
+%include "cmem.inc"             ; the arena's second claim map (SPEC.md 2.6/
+                                ; 20.8): conventional memory a package asks
+                                ; for and gives back. After instance.inc for
+                                ; the record layout it enumerates, and beside
+                                ; loader.inc because ld_alloc IS cm_fit now.
 %include "files.inc"
 %include "fdlg.inc"             ; the Standard File dialog (SPEC.md 38)
 %include "icons.inc"

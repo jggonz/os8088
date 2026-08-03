@@ -672,6 +672,7 @@ app_close_win:
                                 ; goes (SPEC.md 29.4/34.3)
     call xm_release_rec         ; ...and every extended-memory block, or the
                                 ; claim is stranded for the session (41.5)
+    call cm_release_rec         ; ...and every arena grant (SPEC.md 2.6/20.8)
     call wm_destroy             ; frees the wm slot + wm_owner, repaints
     mov word [di+I_WIN], 0
     test byte [di+I_KIND], KIND_PKG
@@ -732,6 +733,7 @@ inst_task_die:
     call snd_release_rec        ; free every sound grant before the record
                                 ; goes (SPEC.md 29.4/34.3)
     call xm_release_rec         ; ...and every extended-memory block (41.5)
+    call cm_release_rec         ; ...and every arena grant (SPEC.md 2.6/20.8)
     call gfx_lock
     mov bx, [di+I_WIN]
     call wm_destroy             ; frees the wm slot + wm_owner, repaints
@@ -966,6 +968,7 @@ inst_pkg_alive:
 .winless:
     call snd_release_rec        ; the inst_task_die order, minus the window
     call xm_release_rec
+    call cm_release_rec
     mov bx, di                  ; no window, but the record is real: release
     jmp task_exit               ; it anyway (I_STATE is offset 0), or its
                                 ; region, dock tile and tm row leak for the
@@ -1001,7 +1004,7 @@ inst_icons:  resb 768           ; INST_MAX x 64: the per-instance embedded-
                                 ; it (SPEC.md 21 step 9), so the dock's
                                 ; read stays a plain kernel DS pointer -
                                 ; the "side table, not a fatter record"
-                                ; answer to SPEC.md 20.7 rule 2. Zeroed by
+                                ; answer to SPEC.md 20.8 rule 2. Zeroed by
                                 ; inst_init
 inst_launch: resw 1             ; deferred launch: 0 = none, else kind + 1
 inst_knd:    resb 1             ; app_launch scratch: kind being launched

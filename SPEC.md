@@ -312,6 +312,77 @@ build clamps `[ld_arena_top]` to that segment, trading arena for a
 working harness; the knob is never a production configuration, so no real
 machine loses a byte.
 
+### 2.6 The arena's second claim map — package memory grants (`cmem.inc`)
+
+The same arena, asked for directly. A package's region caps at one segment
+and holds its image and bss (§20.1), so an app whose *data* is measured in
+hundreds of KB — a bitmap editor's canvas, a captured sample, a render
+target — has nowhere to put it. Extended memory (§41) is not the answer:
+tier 0 does not have any, and every byte of it has to be copied through
+`xm_copy`. `kernel/cmem.inc` (prefix `cm_`) lends out the arena instead,
+in whole paragraphs, addressed with a plain real-mode segment:
+
+```
+cm_alloc(AX = paragraphs) -> AX = base SEGMENT      OSAPI_MEM_ALLOC  0x01B8
+cm_free(AX = base segment)                          OSAPI_MEM_FREE   0x01C0
+cm_caps -> AX largest free, DX total, BL entries    OSAPI_MEM_AVAIL  0x01C8
+```
+
+**One walk, two maps.** `cm_fit` is the single first-fit search, and
+`ld_alloc` *is* `cm_fit` — the loader kept its name and lost its body.
+A candidate is rejected if it overlaps any in-use package region
+(§29.2 rule 7) **or** any in-use block-table entry, enumerated together by
+`cm_claim` over one index space. Two allocators over one arena that
+searched separately would eventually hand out the same paragraph; there
+are not two allocators.
+
+**The table is 8 entries for the whole machine** (`CM_MAX_BLKS`), and that
+is a stated design, not a limit to grow past: this is a bulk store for a
+handful of large claims, not a malloc. A caller wanting many pieces takes
+one block and subdivides it — the §34.6 sound-grant idiom. Entry layout is
+`CB_SEG`/`CB_PARA`/`CB_OWN` in 8 bytes; **`CB_PARA` = 0 is free**, there is
+no separate in-use flag, and freeing therefore merges with the neighbouring
+gaps for nothing, because nothing records the gaps.
+
+**Grants are owned and force-freed.** Every block is stamped with the
+requesting instance (`cm_owner` → `snd_req_inst`, the §34.3 rule reused
+verbatim) and released by `cm_release_rec` at all three §29.4 teardown
+sites, beside the sound and extended-memory releases. This is what makes
+the API safe for a **task-less** package, which is never told its window is
+closing (§21) and so could never have been relied on to give anything back.
+The publish (`CB_SEG`/`CB_PARA`/`CB_OWN`) and the match-and-release both run
+inside `pushf`/`cli`, `xm_alloc`'s reasoning exactly: a teardown landing
+between the size and owner stores would otherwise see a live entry carrying
+a stale owner and free the block out from under a live caller.
+
+**The loader's hold (binding, and the bug it exists for).** `ld_alloc`
+reserves a region at §21 step 5, but the instance record is not *published*
+until step 10 — after the entry proc has returned — because a half-built
+instance must not be visible to the dock, the Task Manager or a close. For
+the whole of the entry proc, therefore, the loading package's own region
+reads as **free** to the walk above, whose only evidence is I_STATE. The
+first package to call `OSAPI_MEM_ALLOC` from its entry was handed
+`ARENA_SEG`: the segment it was executing in. It filled its canvas with
+white and the machine wedged mid-repaint on the first 0xFF opcode, with the
+gfx lock held. `cm_hold`/`cm_unhold` — one word pair, claim index
+`CM_HOLD`, set by the loader around `inst_cb_call` and cleared the
+instruction after — is the reservation for that window. Both routines are
+MOV-only so the entry proc's CF survives to the loader's `jc`. It is not a
+lock and cannot nest: exactly one load is ever in flight (§21).
+
+**Refusal is normal.** The arena is empty on the 256KB floor, so `cm_caps`
+answers zero and `cm_alloc` refuses, on a machine that is fully supported
+(§2.5). A package sizes itself from `cm_caps`'s **largest run** — never the
+total, which can be far bigger and still not hold one buffer — and puts up
+a window that explains itself when the answer is zero. It does not refuse
+to load.
+
+**The Task Manager bills grants** (§28): `cm_inst_mem` answers an
+instance's total granted paragraphs and the base of its largest block, and
+`tm_sample` snapshots both. Without it a package's grant — routinely an
+order of magnitude larger than its region — would be invisible in the one
+readout whose job is to show where the machine's memory went.
+
 ## 3. Global constants (defined once in kernel.asm, used everywhere)
 
 ```nasm
@@ -405,6 +476,7 @@ XM_MAX_BLKS   equ 8          ; xm_alloc's fixed table, entries (§41.5)
 | `kernel/farcall.inc`| Far-code mechanism (§33): the `FARK`/`KCALL`/`FARSHIM` macros, `far_init`, and the list of kernel routines far code may call |
 | `kernel/cpudet.inc` | CPU tier detection and the A20 line (§41.1–41.3): `cpu_detect` (the FLAGS discriminator, 8086-safe), `cpu_a20_enable` (fast gate, keyboard-controller fallback, **mandatory wraparound verify**), `cpu_hma_claim`, and the published `[cpu_tier]` — prefix `cpu_`; `.text` only, since `cpu_detect` runs before anything else may key off the tier |
 | `kernel/xmem.inc`   | Extended memory (§41.4–41.5): `xm_init` (int 15h AH=88h sizing, and the one-time unreal-mode entry on tier 2), the fixed-table first-fit allocator `xm_alloc`/`xm_free` over 32-bit linear bases, and `xm_copy` — one ABI over two transports, an unreal 32-bit load/store loop through FS/GS on tier 2 and int 15h AH=87h on tier 1 — prefix `xm_` |
+| `kernel/cmem.inc`   | Conventional-memory grants out of the §2.5 arena (§2.6/§20.7): `cm_fit`, the ONE first-fit walk (`ld_alloc` is now a jump to it) consulting the instance table, the block table and the loader's hold together through `cm_claim`; `cm_alloc`/`cm_free`/`cm_caps` behind API slots 0x01B8..0x01C8; `cm_hold`/`cm_unhold`; `cm_release_inst`/`cm_release_rec` at the §29.4 teardowns; `cm_inst_mem` for §28's billing — prefix `cm_` |
 
 `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` remain in the
 tree but are **no longer included**; the GUI replaces the text shell.
@@ -1184,6 +1256,32 @@ through `wm_geom` (§20.3). Self-initiated repaints (the fm_repaint idiom,
 `ui_drag`'s release clamp is unchanged (x + w ≤ `[vid_w]` — the live screen
 width, §39.2 — with the live window width), so a grown window still cannot be dragged off screen.
 
+**`wm_resize` (API slot 0x01D0) — the other direction.** `ui_grow` is the
+user resizing a window; this is the *application* doing it, for an app
+whose content has a size of its own: a picture the user just opened, a
+canvas whose grow-box drag has to be **refused** because shrinking it
+would crop artwork. In BX = win ptr, CX/DX = the new FRAME size; the size
+is clamped to WMIN_W/WMIN_H and the screen and the position re-clamped by
+`wm_fit` (§39.7), so no argument a package can pass puts a window off
+screen, under the dock or too small to close. BX is package input and goes
+through `inst_wchk` before any dereference (§20.6's rule).
+
+It **draws nothing**, deliberately: the caller is inside its own callback
+under the gfx lock and knows what it is about to repaint, so a repaint
+from in here would be a second one. `OSAPI_WM_FRONT` is the sanctioned way
+to ask for the screen back afterwards. And because there is still no
+resize *callback* — `ui_grow` has already rewritten the record and
+repainted by the time the app sees anything — a refusal is expressed by
+resizing back and saying so, not by returning "no" from a hook that does
+not exist.
+
+Before this slot the only things that could resize a window were `ui_grow`
+and `wm_fullscreen`, both kernel-internal, so such an app wrote W_W/W_H in
+the record by hand. In v2 that merely read badly; since v3 a package's DS
+cannot reach the record at all, and the same trick would need a segment
+override onto kernel memory — §20.8 rule 3's exact prohibition. The slot
+is what retires it (`docs/PAINT-NOTES.md`).
+
 ### 11.2 Fullscreen
 
 The SDK/kernel foundation for apps that want the whole screen (640×480 on
@@ -1530,7 +1628,7 @@ structure with the same `AM_*`/`AMENU_*` shape whose pointers point into
 its own string pool. The bar cells, `menu_draw_bar`, `menu_track`,
 `menu_drop`, `menu_widest` and `ui_dispatch` then read kernel memory and
 nothing else, which retires the entire nested-pointer traversal in one
-move; no segment override ever threads through the tracker (§20.7 rule
+move; no segment override ever threads through the tracker (§20.8 rule
 3). ONE copy suffices because exactly one set is ever active — the
 bar's — and the copy is remade whenever the owner changes. Only
 `menu_relayout` ever touches package memory, and always through a
@@ -2117,7 +2215,9 @@ everything is launched from the menus (§13/§29). Include order:
 `cpudet.inc` then `xmem.inc` (§41) immediately after it — `xmem.inc` reads
 the tier `cpudet.inc` publishes, and both must land **after** `splash.inc` so
 they cost nothing against the `SPL_RESIDENT` window and may use `.bss` at
-all. The Control
+all. `cmem.inc` (§2.6) goes after `loader.inc` — it needs
+`instance.inc`'s record equs to enumerate them and `[ld_arena_top]` to bound
+them, and `ld_alloc` is a forward jump into it. The Control
 Panel has no init routine — it is task-less and stateless, so nothing runs
 for it at boot; forward references from `instance.inc`'s kind table to
 `cp_tpl`/`cp_sname` resolve at assembly time exactly as `tm_tpl` already
@@ -3146,7 +3246,7 @@ only through the far API table (§20.3); and every routine the kernel
 calls in a package returns with **`retf`**. Package code lives **below
 1MB by construction** — the arena is conventional memory, and §2.4's
 ceiling (no code above 0x10FFEF; extended memory is data-only) is
-restated as §20.7 rule 1 because this section is where authors look.
+restated as §20.8 rule 1 because this section is where authors look.
 
 Budget: image + zeroed-bss ≤ `PKG_MAX_PARA` × 16 = 65,520 bytes — one
 segment, minus the wrap guard (§2.5). Multiple package instances are
@@ -3289,10 +3389,10 @@ the target routines' own (§5, §6, §8, §11). Pinned layout:
 0x00B0 task_sleep      0x01A0 osapi_xmem_free
 0x00B8 osapi_get_ticks 0x01A8 osapi_xmem_copy
 0x00C0 osapi_set_color 0x01B0 wm_geom (§11 - new in v3)
-0x00C8 osapi_mouse
-0x00D0 osapi_srand
-0x00D8 osapi_rand
-0x00E0 osapi_snd_caps
+0x00C8 osapi_mouse     0x01B8 cm_alloc (§2.6/20.8)
+0x00D0 osapi_srand     0x01C0 cm_free
+0x00D8 osapi_rand      0x01C8 cm_caps
+0x00E0 osapi_snd_caps  0x01D0 wm_resize (§11.1)
 0x00E8 osapi_snd_tone
 0x00F0 osapi_snd_play
 0x00F8 osapi_snd_fm
@@ -3302,7 +3402,7 @@ the target routines' own (§5, §6, §8, §11). Pinned layout:
 caller's pointer arguments live in *its* segment, so every slot that
 takes a DS-relative pointer is fronted by a kernel-side **wrapper** that
 copies the operand across the boundary — the `dsk_get_dir` idiom of §2.1,
-never a segment override threaded through the shared body (§20.7 rule 3).
+never a segment override threaded through the shared body (§20.8 rule 3).
 The wrapper recovers the caller's segment from the DS word the slot stub
 saved — at SS:SP+2 on wrapper entry, and SS = `LOW_SEG` on every task, so
 the read is one `mov bp, sp` away — stages the bytes into kernel scratch,
@@ -3441,8 +3541,9 @@ their plain-DS contracts for the kernel's own save/delete/rename paths
 0x0150**, **`osapi_video` (§39.8), 0x0158**, the two **worker-task slots
 of §20.6** (0x0160, 0x0168), the three **clip-region slots of §11.3**
 (0x0170, 0x0178, 0x0180), the five **CPU-tier and extended-memory slots
-of §41.8** (0x0188..0x01A8), and **`wm_geom` (§11), 0x01B0** — the
-table's end today, 53 × 8.
+of §41.8** (0x0188..0x01A8), **`wm_geom` (§11), 0x01B0**, the three
+**arena-memory slots of §2.6/§20.8** (0x01B8, 0x01C0, 0x01C8) and
+**`wm_resize` (§11.1), 0x01D0** — the table's end today, 57 × 8.
 
 ```
 0x0148 menu_win_set  in BX = win ptr, SI = the app menu set's offset in
@@ -3610,6 +3711,37 @@ in kernel memory its DS cannot reach, so the §11.1 live-layout rule and
                  everything else. Any context, lock held or not, like
                  osapi_video; only stable under the lock, which is when
                  painters ask.
+```
+
+**Arena-memory slots (§2.6/§20.8), 0x01B8..0x01C8.** Conventional memory
+out of the same arena the caller's own region came from, in paragraphs,
+answered as a plain segment. Unlike §41's extended memory there is no
+transport and no opaque token: `mov es, ax` reaches the bytes.
+
+```
+0x01B8 cm_alloc  in AX = paragraphs (0 rounds up to 1); out CF=0 and
+                 AX = the block's base SEGMENT, else CF=1 and AX = 0 no
+                 arena on this machine / 1 no free block-table entry /
+                 2 no contiguous run that big. Preserves everything else.
+0x01C0 cm_free   in AX = a base segment the CALLER owns; out CF=0 freed,
+                 CF=1 not a base or not yours. Preserves AX and the rest.
+0x01C8 cm_caps   out AX = the LARGEST contiguous free run in paragraphs,
+                 DX = total free paragraphs, BL = free block-table entries
+                 of CM_MAX_BLKS. Preserves BH, CX, SI, DI. UI task like the
+                 other two — it walks the instance table.
+```
+
+**`wm_resize` (§11.1), 0x01D0.** The sanctioned form of a record write an
+app whose content has a size of its own used to do by hand.
+
+```
+0x01D0 wm_resize in BX = win ptr, CX = FRAME width, DX = FRAME height
+                 (outer px, not content); out CF=0 adopted, CF=1 BX is
+                 not a window record (inst_wchk). Clamps the size to
+                 WMIN_W/WMIN_H and the screen and re-clamps the position
+                 with wm_fit (§39.7), so no argument a package can pass
+                 puts a window off screen, under the dock or too small to
+                 close. DRAWS NOTHING. Preserves every register.
 ```
 
 ### 20.4 osapi helpers (kernel.asm)
@@ -3916,7 +4048,45 @@ record's I_SPTR via CX — §8), SS = `LOW_SEG`, IF = 1, gfx lock free — the
 ordinary `task_spawn` frame with the one v3 difference that the segment
 is its own.
 
-### 20.7 Forbidden (binding)
+### 20.7 Memory a package asks for (§2.6)
+
+A package's own segment is capped at one segment and holds its image and
+its bss (§20.1). When its **data** is bigger than that, it asks the kernel
+for arena memory through `OSAPI_MEM_ALLOC` / `OSAPI_MEM_FREE` /
+`OSAPI_MEM_AVAIL` (§20.3). Five rules, author-facing:
+
+1. **Ask, never assume.** No address is computed from int 12h, from
+   `BB_SEG`, or from any kernel constant. The arena is shared with every
+   other loaded package and with the loader itself; an address a package
+   picked is an address somebody else was granted. This retires the last
+   place in the tree where an app read a kernel *policy* constant to
+   predict what the kernel would want (Paint's `DB_MIN_KB` mirror, §42.8).
+2. **Refusal is the normal case, not the error path.** The arena is empty
+   on the 256KB floor and can be nearly full on any machine. Size from
+   `MEM_AVAIL`'s **largest run** — never its total — give up features in
+   tiers, and put up a window that explains itself when the answer is
+   zero. Do not refuse to load.
+3. **One block, subdivided by the caller.** The table is 8 entries for
+   the whole machine (§2.6). Take one grant and slice it, the §34.6
+   sound-grant idiom; do not take one per buffer.
+4. **A block can be bigger than 64KB and usually is.** It is a paragraph
+   COUNT, so walk it as seg:off with the segment advancing, never as one
+   flat 16-bit offset off a single base.
+5. **You need not free.** A grant is stamped with the calling instance and
+   force-freed at teardown (§29.4), which is what makes this safe for a
+   task-less package — nothing tells it the window is going away (§21).
+   Freeing early is still worth doing when a package can shrink: it is
+   what lets the next app run.
+
+**Context (binding): UI task only** — the entry proc, a window callback, a
+menu handler or a file-dialog completion proc. Never a worker task: the
+walk reads the instance table, which the UI task mutates. The entry proc
+qualifies because the loader stamps that call as a dispatched site (§21
+step 9) and holds the loading region across it (§2.6's `cm_hold`) — which
+is what lets an app size and claim its memory before its first repaint
+instead of after.
+
+### 20.8 Forbidden (binding)
 
 1. **No package code above 1MB, ever.** Package segments come from the
    §2.5 arena — conventional memory — and nowhere else. Extended memory is
@@ -4981,9 +5151,20 @@ account, and the rows partition one total.
   0 (no DIV ever executes with a zero divisor)**; else
   share_i = row_i·100/total (≤ 100 since row_i ≤ total).
 - RAM, straight off the same snapshot (no second cli window): sum I_SIZE
-  over slots with I_STATE ≠ 0 — built-ins carry I_SIZE 0, so this counts
-  exactly the resident package regions, and dying instances still count
-  because their region is still resident. **The sum is in PARAGRAPHS**
+  **plus the arena grants that instance holds** over slots with I_STATE ≠ 0
+  — built-ins carry I_SIZE 0 and no grants, so this counts exactly the
+  resident package regions and what those packages asked for on top of them
+  (§2.6), and dying instances still count because nothing is released until
+  teardown runs. The grant figures come from `cm_inst_mem`, sampled by
+  `tm_sample` into `tm_igr` (paragraphs) and `tm_igp` (the base of the
+  instance's largest block) in a second pass **outside** the cli window —
+  one far call per slot, against a table only the UI task and teardown
+  mutate, is a sampler reading a few microseconds late, not a torn read,
+  and inside it would be twelve far calls of IF=0 against a 1200-baud
+  mouse. Omitting grants would leave a package's largest claim — routinely
+  an order of magnitude bigger than its region — invisible in the one
+  readout whose job is to show where the machine's memory went.
+  **The sum is in PARAGRAPHS**
   (§29.1's v3 unit), which is what keeps it 16-bit: a 233KB arena's byte
   total would overflow the moment resident regions passed 64KB, while the
   paragraph total tops out below 0x4000. regionK = (Σ paragraphs + 63)
@@ -5083,14 +5264,22 @@ wm_paint_all already does.
   unconditional like the low keep), and [256,406) 50% gray while
   `[bb_dbl]` is set (the §32 back buffer, read live at draw time — the
   armed-buffer flag, so a mono machine draws no band, §39.5). Then, above
-  406K, **the package regions** — per snapshot slot with I_STATE ≠ 0 and
-  I_SIZE ≠ 0, a `gfx_fill_pat` band [I_SPTR >> 6, (I_SPTR + I_SIZE) >> 6)
-  KB in that slot's pattern (segment→KB is one shift): the regions moved
-  to this map when they left the kernel segment for the §2.5 arena, and
-  the arena's unallocated remainder reads white — free space, drawn
+  406K, **everything the arena has handed out** — per snapshot slot with
+  I_STATE ≠ 0, a `gfx_fill_pat` band in that slot's pattern for its REGION,
+  [I_SPTR >> 6, (I_SPTR + I_SIZE) >> 6) KB, and a second band, same
+  pattern, for the arena GRANT it holds (§2.6): [tm_igp >> 6, (tm_igp +
+  tm_igr) >> 6) KB. Segment→KB is one shift, both being v3 paragraphs
+  (§29.1). The regions moved to this map when they left the kernel segment
+  for the §2.5 arena; the grants had to join them because a grant is
+  routinely an order of magnitude larger than the region beside it, and
+  omitting them drew a 1px sliver where a quarter of the machine had gone.
+  Where an instance holds several blocks the band names its LARGEST — the
+  total is still exact, so the caption and the rows never lie; only the
+  picture approximates, and never over memory the instance does not hold.
+  The arena's unallocated remainder reads white — free space, drawn
   honestly.
-- (6,33): `"ARENA"` + used KB right-aligned in 4 (ceil of Σ I_SIZE
-  paragraphs over in-use snapshot slots, >> 6) + `"K/"` + the arena total
+- (6,33): `"ARENA"` + used KB right-aligned in 4 (ceil of Σ (I_SIZE +
+  grants) paragraphs over in-use snapshot slots, >> 6) + `"K/"` + the arena total
   right-aligned in 4 (`([ld_arena_top] − ARENA_SEG) >> 6`, clamped at 0 —
   a 256KB machine honestly reads `ARENA    0K/   0K`) + `"K"`, padded to
   exactly 20 chars (white-fill (6,33)-(167,40) first). The
@@ -5117,7 +5306,9 @@ wm_paint_all already does.
 - Row 1+i, in use with I_SIZE ≠ 0 (a package): square interior =
   pattern i; ADDR = the I_SPTR snapshot as 4 uppercase hex digits — a
   SEGMENT since v3 (§29.1): the same four glyphs with an honest new
-  meaning; SIZE = I_SIZE paragraphs in KB rounded up.
+  meaning; SIZE = (I_SIZE + the instance's grants, §2.6) paragraphs in KB
+  rounded up, so the column adds to the RAM line above it. ADDR stays the
+  REGION, which is where the package's code is.
 - Row 1+i, in use with I_SIZE = 0 (a built-in kind): no square (the band
   stays white); name, then `"   -    -"` — it lives in kernel .bss, not
   the arena.
@@ -5211,7 +5402,7 @@ KIND_PKG     equ 0x80    ; bit 7: package instance
 ```
 
 The record is **exactly full** — I_CYC's dword ends at byte 31 — and
-§20.7 rule 2 forbids growing it: the CL-shift index math is load-bearing
+§20.8 rule 2 forbids growing it: the CL-shift index math is load-bearing
 in this module, snd.inc and xmem.inc. The v3 segment move fit only
 because I_SPTR and I_SIZE changed *units* (offset → segment, bytes →
 paragraphs) instead of gaining company; new per-instance state goes in a
@@ -5336,7 +5527,7 @@ worker is safe to close mid-tone.
 none, else kind + 1), **`inst_icons`** (INST_MAX × 64 = 768 bytes: the
 per-instance embedded-icon cache — §21 step 9 copies a package's icon
 body out of its segment into slot i, and I_ICON points there, keeping the
-dock's read a plain DS pointer; §20.7 rule 2's "side table, not a fatter
+dock's read a plain DS pointer; §20.8 rule 2's "side table, not a fatter
 record" made flesh, paid for by the reclaimed pool, §15.1), plus module
 scratch (template copy buffer, pool-slot
 cursor — UI task only). All zeroed by `inst_init`.
@@ -8012,3 +8203,266 @@ whose A20 gate did not verify just as much as on an 8088.
   other and clips at `[tm_ylim]` on CGA.
 - `make clean && make`: both geometries, zero warnings, all five §15.1 guards
   still passing.
+
+## 42. Paint — the seventh package (apps/paint/paint.asm)
+
+A bitmap editor over the published package ABI, and the first client of two
+slots that exist because of it: `OSAPI_MEM_ALLOC` (§2.6/§20.7), which is
+where its canvas comes from, and `OSAPI_WM_RESIZE` (§11.1), which is how it
+refuses a crop. Every pixel still goes through the `gfx_*` table. Prefix
+`pt_`, embedded palette icon (flags bit 0). Directory order on the apps disks
+stays pinned: mines, hello, notepad, recorder, piano, fractal — **paint is
+appended seventh** so the earlier indices hold. It uses colours beyond 0/15,
+which retires `[bb_mono]` (§32) — supported and expected; on a 1bpp adapter
+its palette drops to §39.4's three ink classes.
+
+The app arrived as a fork (`github.com/Elendilon`) written against the v2
+ABI, where a package shared the kernel's segment and took the memory it
+needed by picking an address above `BB_SEG`. Both of those are gone: the port
+is the v3 far-call ABI (§20.5's retf rule, opaque window handles, `wm_geom`)
+plus the two slots above, which retire the exact two liberties
+`docs/PAINT-NOTES.md` was written to record.
+
+Eight tools (pencil, eraser, dropper, rectangle, ellipse, selection, flood
+fill, text), a per-tool line width that also sets an unfilled shape's border
+thickness, one-level undo that doubles as redo, an internal clipboard, and
+BMP and GIF load/save through the Standard File dialog (§38). The full design
+record, including the kernel capabilities whose absence shaped it, is
+`docs/PAINT-NOTES.md`.
+
+**The canvas is not a fixed size.** It is whatever the screen and memory
+allow, from 32x16 up, and everything else follows from that:
+
+- **The window is `WF_SIZABLE` and the canvas IS its content.** Dragging the
+  grow box resizes the picture: existing pixels keep the top-left corner, new
+  area comes up white, and a shrink crops. There is no resize callback in the
+  ABI (§11.1) — `ui_grow` rewrites W_W/W_H and repaints — so `pt_track` runs
+  at the top of every W_PAINT and notices when the content no longer matches
+  the picture. `pt_geom` therefore fixes the three buffer bases **once**, from
+  the largest canvas the machine can fund, so no base ever moves and
+  `pt_resize` can stage the old rows in the undo image with no overlap to
+  reason about.
+- **A shrink that would throw away ink is refused, per axis.** Before adopting
+  a smaller size `pt_track` asks `pt_lose_w`/`pt_lose_h` whether the columns or
+  rows about to go are all white — `repe scasb` against 0xFF over the packed
+  bytes, half a compare per pixel, with the boundary nibble handled only when
+  the surviving width is odd. A dirty axis keeps its old size while the other
+  one still moves, so widening-while-shortening does the half that is safe.
+  The refusal is then made visible two ways: `pt_wfix` asks
+  `OSAPI_WM_RESIZE` (§11.1) for the frame the canvas needs — the kernel
+  clamps it on screen and above the dock — and the toast says why. **Both happen at the END of the paint, not
+  from inside `pt_track`**, with `[pt_apend]` carrying the intent the few
+  hundred instructions between. `ui_grow` has already drawn the frame at the
+  dragged size by then, so exactly one repaint is owed — `OSAPI_WM_FRONT`,
+  which also takes the menu bar back — and a toast drawn before it would be
+  wiped by it. A toast rather than a dialog is deliberate: a modal window costs
+  a repaint to raise, another to dismiss, a window slot and a click, and says
+  no more than one line of the app's own status text does.
+- **Rows are addressed by a (segment, offset) pair.** A canvas may exceed one
+  64KB segment — 636x326 is 104KB — so `pt_rowseg[y]` names the paragraph a
+  row starts in and `pt_rowoff[y]` the 0..15 bytes into it; the undo image has
+  the identical layout `[pt_undelta]` paragraphs higher, so one table serves
+  both. Every loop that walks a row goes through `pt_rowset`/`pt_urowset`,
+  which cost six instructions a row and nothing a pixel.
+- **The canvas is still a BMP.** 4bpp packed, high nibble = left pixel, rows
+  **bottom-up behind a 118-byte DIB header**, stride = the BMP stride
+  (ceil(w/2) rounded up to 4). Saving is one `OSAPI_FILE_WRITE` of the canvas
+  base with no staging pass — *provided the whole file fits 64KB*, which is
+  `dskw_write`'s ceiling (§18.4). A larger canvas can be edited but not
+  saved, and Paint says so rather than writing a truncated file.
+- **The canvas comes from the arena, and Paint asks for it.** One
+  `OSAPI_MEM_ALLOC` grant (§2.6/§20.7), sliced here into canvas, undo image,
+  clipboard and a 12KB scratch area (the flood fill's span stack), in that
+  order. Nothing below is a fixed address: `pt_geom` asks `OSAPI_MEM_AVAIL`
+  for the **largest contiguous free run** — not the total, which can be far
+  bigger and still not hold one buffer — divides that, and asks for exactly
+  what it decided. Two instances therefore get two canvases rather than
+  fighting over one, which is why the v2 claim record and `pt_dupchk` are
+  gone; and a closed Paint's grant is force-freed by the kernel at teardown,
+  which is what a task-less package needs, never being told it is closing.
+  `ARENA_SEG` sits one paragraph above the back buffer's pinned extent by
+  construction (§2.5), so the Control Panel can arm or disarm double
+  buffering underneath the app — and this file no longer has to know
+  `DB_MIN_KB`, or predict it, to be sure of that.
+- **It deliberately does not take everything.** A canvas plus an equal undo
+  image will eat a 233KB arena whole, and then no other package can load at
+  all while Paint is open. `PT_RESERVEP` (4096 paragraphs, one whole package
+  region) is left behind — but **only when doing so still funds the top
+  tier**, so a small machine is never made smaller for the sake of an app it
+  could not have run. On a 640KB machine the default 448x280 canvas still
+  fits inside the reserve and Minesweeper still launches beside it.
+- **Memory is budgeted in three tiers, decided once.** With room for all
+  three, the canvas and its equally-sized undo image split what remains after
+  the scratch area and a 16KB clipboard floor. Below that the **clipboard**
+  goes first (`[pt_haveclip]` = 0: no Cut/Copy/Paste, and no GIF either — the
+  codec's tables are what the clipboard's floor is reserved for), and the
+  canvas and undo image split the rest. Below *that* **undo** goes too
+  (`[pt_haveundo]` = 0) and the whole grant is canvas, which is why the
+  tightest machines get the *biggest* picture. With no minimum canvas
+  fundable at all — the 256KB floor, where the arena is empty, or simply an
+  arena another package has filled — the window carries a "Not enough
+  memory" notice instead and touches nothing. **Loading is never refused for
+  this reason**: with no undo image to stage a file in, the reader borrows
+  the scratch area's flood-fill stack, idle during a load and re-initialised
+  by the next fill.
+
+  Three things follow from the third tier and are load-bearing:
+  **the window is not `WF_SIZABLE`** (`pt_resize` stages the old picture in the
+  undo image, so with no undo image a size change cannot preserve anything, and
+  a grow box that silently wiped the picture is worse than no grow box);
+  **`pt_umark` early-outs**, so `[pt_undo_ok]` is never set and both
+  `pt_undo_swap` and `pt_urestore` are no-ops by construction rather than by
+  separate tests; and **the file reader falls back to the scratch area** one
+  paragraph in, so the buffer still starts at offset 0 of a segment, which is
+  what both decoders assume.
+
+  The tiers are decided **once**. Because `pt_geom` fixes the buffer bases from
+  the largest canvas the grant can fund, the undo image is always big enough
+  for any canvas `pt_fit` will allow and the clipboard's size is a constant —
+  so there is deliberately no re-check on load or resize, because nothing that
+  could have changed exists. What the tiers cost is expressed two ways, and both
+  are needed: the menu item **keeps its own label and gains "(no RAM)"**
+  (the kernel's menus have no disabled state, §12.2, and an item still has to
+  say what it would do — the suffix is short because `MENU_STRMAX` is 19
+  characters and the kernel truncates past it in silence), and the command
+  itself answers with a toast, which is what the Ctrl-key shortcut hits since
+  it never goes near a menu.
+- **Content layout** (content-relative): tool palette, two columns of four
+  20x20 buttons at x 1/22, buttons past the canvas bottom simply not drawn and
+  not clickable; the canvas size printed under them; a black divider at x 43;
+  the canvas at x 44; a 22-row strip below it holding four width buttons, the
+  current-colour well, as many colour swatches as fit, and two toggles
+  right-anchored clear of the grow box (which owns the content's last 13
+  columns and rows, §11). The strip spans the **whole** content width,
+  including the columns under the palette, so the click ladder tests y first.
+  **The grow box lives in that strip**, and `wm_draw_win` draws it *before*
+  W_PAINT (§11.1), so the strip's white bed erases it: `pt_draw_strip` ends with
+  `OSAPI_WM_GROW` for that reason. Leaving the redraw to the paint proc alone
+  left the box missing after every tool, colour, width or toggle click until the
+  next full repaint.
+  The size readout lives in the palette rather than the title bar for a
+  structural reason: `wm_draw_win` draws the title *before* calling W_PAINT,
+  so a size adopted during that paint would be one repaint stale there and the
+  only cure would be a second full repaint.
+- **The canvas size is typed, not only dragged.** Under the tool buttons sit a
+  `W` field, an `H` field and an Apply button, all inside the palette column's
+  42 pixels; Enter in either field applies, Escape abandons the edit, the first
+  digit after a field is clicked replaces its value rather than appending, and
+  an empty field means "leave this axis alone". They need 41 rows below the last
+  tool button, which a 110-row CGA canvas does not have, so `pt_szon` answers
+  for the painter and the hit test both — a control that is not drawn is not
+  clickable — and the two-line readout is what shows when they do not fit (as it
+  is on a machine with no undo image, where the canvas cannot be resized at
+  all). Apply and a grow-box drag both go through **`pt_setsize`**, the one place
+  a size is decided: it clamps to the screen, then to what memory will fund
+  (`pt_fit`), then to what the picture will stand to lose (`pt_lose_w` /
+  `pt_lose_h`), so typing 900 into a field is exactly a drag that asked for too
+  much and produces the same crop toast. The two differ only in what they owe
+  afterwards: a drag arrives with the frame already redrawn at the dragged size,
+  so a refusal owes a repaint; Apply changes the frame itself, so a *success*
+  owes one and a refusal owes nothing but the toast.
+- **The swatches narrow before any of them go.** `pt_org` divides the pixels
+  left over after the right-anchored toggles by the live colour count and
+  clamps the quotient into `[PT_SW_MIN, PT_SW_DX]` = [11, 21] pixels, publishing
+  the result as `[pt_swdx]` (pitch) and `[pt_swsz]` (body, pitch − 1); only once
+  the pitch has bottomed out does `[pt_nsw]` start dropping colours off the
+  right. `pt_draw_strip` and `pt_strip_click` both read those two words — the
+  hit test also rejects the inter-swatch gap — so a colour is clickable exactly
+  where it is drawn at every width. `pt_org` is called from `pt_click` with the
+  click point still in CX/DX, so like every other routine here it preserves all
+  registers; the arithmetic needs CX, and forgetting to push it turned every
+  content click into a stray palette click.
+- **Keyboard shortcuts** are the control codes int 16h already delivers, so
+  W_ONKEY needs no scan codes: Ctrl+Z undo/redo (the same exchange either way),
+  Ctrl+C / Ctrl+X / Ctrl+V, and Delete, all routed to the very routines the
+  Edit menu calls so the two doors cannot drift. Ctrl+Z ends an open text run
+  first — the caret is screen-only and would otherwise be left over a picture
+  that no longer has the text under it. Copy and cut are no-ops without a
+  selection and paste without a clipboard, so no tool gating is needed.
+- **Loading takes the file's own dimensions** as far as the screen and memory
+  allow, then crops — a 700x440 picture opens as 594x342 on a 640KB VGA
+  machine — and the window follows through `OSAPI_WM_RESIZE` (§11.1) plus
+  `OSAPI_WM_FRONT` for the repaint. A crop sets a flag that makes **File >
+  Save refuse**: one click must not overwrite the original with less than it
+  held. Save As, a deliberate act on a name the user picks, is allowed and
+  clears the flag on success. The reader takes 1, 4, 8 and 24bpp
+  uncompressed BMPs, top-down or bottom-up, validating every header field
+  before believing it — magic, both halves of every dword that must be zero,
+  the depth, `biCompression`, and that the pixel data the header describes
+  fits inside the bytes actually read (§19: every byte off the disk is
+  hostile). Source palettes map to the sixteen by weighted city-block
+  distance. A file over 64KB cannot be read at all (`FERR_BIG`); JPEG is
+  recognised by magic and refused with a message, and the reason is in the notes.
+- **GIF is implemented both ways, and lives in borrowed memory.** An LZW
+  dictionary is 16KB by itself, so the codec's tables go where a load or a save
+  has already invalidated something: **reading** stages the file in the undo
+  image (as the BMP reader does) and puts `prefix[4096]` words +
+  `suffix[4096]` bytes + a 4096-byte output stack in the clipboard, filling its
+  reserved floor (`PT_CLIPMINP`) exactly — two build-time assertions keep that
+  true; **writing** puts child/sibling/suffix for 2048 codes in the clipboard,
+  builds the GIF in the undo image, and reads the canvas a row at a time through
+  `pt_line`. What decides those placements is that DS must stay on the kernel
+  segment for the bss, so ES is the only far pointer there is and **no inner
+  loop may need two**: the reader's bit window borrows ES for three bytes and
+  gives it straight back, and the writer's output goes through a 255-byte block
+  in bss, flushed once per GIF sub-block — the shape the format wants anyway.
+  The reader flattens the sub-blocks in place first (each block's data copied
+  back over the byte that announced it, so the destination trails the source and
+  one `rep movsb` per block is safe), which is what lets the bit reader be three
+  bytes and a shift rather than a state machine. It takes 2..8-bit minimum code
+  sizes, global or local colour tables, interlacing (the four passes), and skips
+  extension blocks; every offset is bounded by the byte count actually read, and
+  dimensions are capped at `PT_GDIM_MAX` so a header claiming 60,000 rows is
+  refused rather than decoded into nothing for a very long time.
+  **The writer stops at 11-bit codes**, which halves its tables, and the one
+  place the two directions are not mirror images is documented at `pt_gadd`: a
+  writer defines its new string as it emits the code before it, a reader cannot
+  until it has seen the code after it, so the reader's table runs one entry
+  behind and the two code-width rules are deliberately off by one to compensate
+  (writer widens when free *passes* 1<<size, reader when it *reaches* it). The
+  same offset is why the writer's ceiling is 2047 and not 2048. Both halves are
+  verified by round-tripping flat, banded, striped and pure-noise pictures
+  through a host decoder.
+- **The save verb owns the format, and the extension follows it.** File carries
+  Save Bmp / Save as Bmp… / Save Gif / Save as Gif…; each sets `[pt_sfmt]` and
+  `pt_setext` rewrites the name's extension to match, so "Save Gif" on
+  PICTURE.BMP writes PICTURE.GIF rather than GIF bytes into a file whose name
+  promises a bitmap, and the Save-as dialog is offered the corrected name so
+  what the user sees is what gets written. **Loading ignores the extension
+  entirely** — the magic decides, because a name is a wish and a magic number is
+  a fact. A canvas edited on a 1bpp adapter still saves its full 4-bit indices
+  in either format: the reduction to §39.4's three ink classes is a property of
+  the screen, not of the picture.
+- **Drag loops invert `ui_drag`'s lock ordering (§13), and must.** A package's
+  `gfx_*` output goes through the back buffer when double buffering is armed
+  (§32), so a tracking loop that held the lock would show nothing until the
+  button came up. `pt_wait`/`pt_wait_tick` draw under the lock, *release* it so
+  `gfx_unlock`'s flush reaches VRAM, yield, and re-take it. The window is
+  frontmost while it tracks, and since §11.3 a background painter under it
+  draws its own visible region rather than over the top — so the released-lock
+  window is safer than it was when this was written against `wm_obscured`.
+  The same rule applies to anything drawn *before* a long operation rather than
+  during one: the "Loading..." toast a file dialog's completion callback puts up
+  is followed by one `pt_wait`, or the buffered machine flushes it only after
+  the load it was announcing.
+- **The app's NAME in the menu bar is a menu, and About lives in it.** §12.2
+  draws `AM_NAME` at `MENU_NAME_X` and hangs the app's cells to its right, so
+  a set whose name is the **empty string** and whose first menu is titled
+  "Paint" puts a pull-down exactly where the label would have been — which is
+  where a Macintosh keeps About and the only place a user looks for it. No
+  kernel change: nothing else identifies the app by `AM_NAME` (the dock tile,
+  the Task Manager row and the loader all read the package header's name,
+  §29.1). `MENU_APPMAX` is 4 and Paint now uses all four — Paint, File, Edit,
+  Draw — so anything new goes *inside* one of them; a fifth would be dropped
+  whole and silently.
+  **About Paint** is a second window of the file dialog's species (§38):
+  `wm_create`d by the app, never bound to `inst_tab`, so it has no dock tile,
+  no Task Manager row and no teardown path — its close and minimize boxes
+  both reduce to `wm_hide`, the record is reused on every reopen, and when
+  Paint itself closes the loader sweeps the window by its `wm_wseg` creator
+  stamp (§11/§21). It is created and shown inline because the menu handler
+  already holds the gfx lock, exactly as `fdlg_open` does. Its command is
+  dispatched **ahead of the mode test**: a machine that could not fund a
+  canvas still gets a window, still owns the bar, and is still entitled to be
+  told what the program is and who wrote it — Paint and the fork it came from
+  were contributed by `github.com/Elendilon`.

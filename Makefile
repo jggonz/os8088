@@ -169,6 +169,20 @@ $(BUILD)/fractal.bin: apps/fractal/fractal.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/fractal.o88: $(BUILD)/fractal.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/fractal.bin -o $@
 
+# Paint, the seventh shipped package: a bitmap editor - eight tools, a 4bpp
+# offscreen canvas, one-level undo/redo, an internal clipboard and BMP + GIF
+# load/save through the Standard File dialog. The first client of
+# OSAPI_MEM_ALLOC (SPEC.md 2.6/20.7): its canvas, undo image and clipboard
+# are one arena grant, sized from what OSAPI_MEM_AVAIL actually answers, so
+# a machine that cannot fund one gets a notice window instead of a canvas.
+# `make run-640` is the way to see it at full size.
+$(BUILD)/paint.bin: apps/paint/paint.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/paint/paint.asm
+	@echo "paint:  $(call FILESIZE,$@) bytes"
+
+$(BUILD)/paint.o88: $(BUILD)/paint.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/paint.bin -o $@
+
 # FMTEST, the sound Phase 3 gate package (docs/SOUND-PLAN.md): drives the FM
 # slot 0x0084 end to end (patch-load, chord, all-off, tone expiry, teardown).
 # Never on the shipped apps disks - their directory order is pinned - it gets
@@ -229,14 +243,14 @@ $(BUILD)/filetest-fat16.img: $(BUILD)/filetest.o88 tools/os88disk.py
 
 # The software floppies (drive B:) hold packages, not boot code - os88fs only.
 # Directory order is pinned: mines first, hello second (tests rely on it);
-# notepad is appended third, recorder fourth, piano fifth and fractal sixth,
-# so earlier indices hold. New packages ALWAYS append at the end - the
-# scripted tests click the Disk window by row index.
-$(APPSIMG): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88
+# notepad is appended third, recorder fourth, piano fifth, fractal sixth and
+# paint seventh, so earlier indices hold. New packages ALWAYS append at the
+# end - the scripted tests click the Disk window by row index.
+$(APPSIMG): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88
 
-$(APPSIMG360): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88
+$(APPSIMG360): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88
 
 # The GUI reads a Microsoft serial mouse on COM1; QEMU emulates one natively.
 MOUSE := -chardev msmouse,id=m0 -serial chardev:m0

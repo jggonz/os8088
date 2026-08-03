@@ -115,60 +115,23 @@ loader_init:
 ;
 ; ALL the arithmetic is PARAGRAPHS, where nothing wraps: the largest
 ; possible top is 0xA000 (640KB) and a region caps at PKG_MAX_PARA, so a
-; candidate end never exceeds 0xAFFF. The allocator IS the instance table
-; (SPEC.md 29.2 rule 7): a package record's [I_SPTR, I_SPTR+I_SIZE) - both
-; in paragraph units since v3 (SPEC.md 29.1) - is occupied iff I_STATE != 0,
-; so the store that frees a record frees its region and no allocator state
-; exists to leak or to race teardown (since SPEC.md 20.6 that store can be
-; a worker's task_exit under IF=0, not just the UI task under the lock).
+; candidate end never exceeds 0xAFFF. The allocator WAS the instance table
+; alone (SPEC.md 29.2 rule 7): a package record's [I_SPTR, I_SPTR+I_SIZE) -
+; both in paragraph units since v3 (SPEC.md 29.1) - is occupied iff
+; I_STATE != 0, so the store that frees a record frees its region and no
+; allocator state exists to leak or to race teardown (since SPEC.md 20.6
+; that store can be a worker's task_exit under IF=0, not just the UI task
+; under the lock).
 ;
-; start = ARENA_SEG; while any in-use package record overlaps
-; [start, start+AX), start = that record's end, rescan from the top (each
-; bump lands on a record end, so the loop terminates); fail when
-; start + AX > [ld_arena_top]. No compaction - a region's segment never
-; changes while the instance lives.
+; Since SPEC.md 2.6 there is a SECOND claim map over the same arena -
+; cmem.inc's block table, the memory a package asks for and gives back -
+; and the walk that consults both lives there, in cm_fit, precisely so the
+; two allocators cannot disagree about what is occupied. This entry point
+; survives as the loader's name for it: same contract, same first-fit
+; order, one caller.
 ; -----------------------------------------------------------------------------
 ld_alloc:
-    push cx
-    push dx
-    push si
-    push di
-    mov bx, ARENA_SEG           ; BX = candidate base (paragraph = segment)
-.retry:
-    mov dx, bx
-    add dx, ax                  ; DX = candidate end, paragraphs (<= 0xAFFF:
-                                ; see above - the add cannot wrap)
-    cmp dx, [ld_arena_top]
-    ja .full                    ; past the int 12h top - or a zero arena,
-                                ; where even the first candidate fails
-    mov di, inst_tab            ; overlap scan over in-use package records
-    mov cx, INST_MAX
-.scan:
-    cmp byte [di+I_STATE], 0
-    je .next
-    test byte [di+I_KIND], 0x80 ; packages only (builtins keep I_SPTR as a
-    jz .next                    ; kernel state ptr and I_SIZE = 0)
-    mov si, [di+I_SPTR]         ; SI = record base segment
-    cmp si, dx                  ; record starts at/past our end: no overlap
-    jae .next
-    add si, [di+I_SIZE]         ; SI = record end in paragraphs (<= 0xAFFF)
-    cmp si, bx                  ; record ends at/before our start: ditto
-    jbe .next
-    mov bx, si                  ; overlap: restart just past this record
-    jmp .retry
-.next:
-    add di, I_RECSZ
-    loop .scan
-    clc
-    jmp .out
-.full:
-    stc
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    ret
+    jmp cm_fit                  ; in AX = paragraphs; out BX = segment, CF
 
 ; -----------------------------------------------------------------------------
 ; ld_check_hdr - validate a .o88 v3 header (module-internal, SPEC.md 21)
@@ -456,9 +419,36 @@ ld_run_body:
     ; [ld_base] is the region SEGMENT (SPEC.md 21 step 5); it can never
     ; equal KERNEL_SEG (the arena starts at ARENA_SEG, 0x6580), so
     ; inst_cb_call always takes its far leg for an entry.
+    ;
+    ; The entry is a DISPATCHED SITE like every other package callback
+    ; (SPEC.md 34.3): stamp the reserved record so a grant made in here -
+    ; conventional memory (SPEC.md 2.6), a sound grant, an extended-memory
+    ; block - is stamped with the instance that will own it rather than
+    ; with the kernel. Without the stamp snd_req_inst answers 0xFF (the UI
+    ; task's T_INST) and the claim could never be released. The record is
+    ; still UNPUBLISHED, which is exactly right: inst_pkg_spawn tests
+    ; I_STATE = 1 independently and still refuses a worker from here.
+    push word [snd_inst]
+    mov di, bp
+    call snd_disp_set
+    ;
+    ; ...and HOLD the region while it runs. The record above is still
+    ; unpublished, so the arena walk (SPEC.md 2.6) has no evidence this
+    ; region is taken and would hand the entry proc's own OSAPI_MEM_ALLOC
+    ; the segment it is executing in. cm_hold is what says otherwise for the
+    ; length of this one call; see the note at cm_hold for what it looked
+    ; like when it was missing.
+    mov bx, [ld_base]
+    mov ax, [ld_need]
+    call cm_hold
     push word [ld_base]         ; the segment above the offset:
     push word [ld_ent]          ; inst_cb_call's argument pair
     call inst_cb_call
+    call cm_unhold              ; step 10 below publishes the record, which
+                                ; is the permanent form of the same claim
+    pop word [snd_inst]         ; the outer stamp back - cm_unhold, MOV and
+                                ; POP all touch no flags, so the entry's CF
+                                ; is still live at the jc
     jc .abort
 
     ; --- 10. register + publish the instance, show the window ------------------
@@ -529,6 +519,14 @@ ld_run_body:
     call gfx_unlock             ; (SPEC.md 11) - the region is about to be
                                 ; free for reuse, and no instance record
                                 ; will ever exist to sweep them later
+    mov di, bp                  ; and release whatever the entry claimed
+    call snd_release_rec        ; against the record it was stamped with
+    call xm_release_rec         ; (step 9's dispatch stamp): the record goes
+    call cm_release_rec         ; back to free without ever being published,
+                                ; so no teardown path will ever see it and
+                                ; the claims would be stranded for the
+                                ; session - an arena grant permanently, and
+                                ; the arena is where the next package goes
     mov al, LD_EABORT
     ret
 

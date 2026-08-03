@@ -140,6 +140,55 @@ wm_fit:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_resize - a package asks for a new FRAME size (osapi slot 0x01D0's body)
+;
+; in:  BX = window ptr (package input: never trusted), CX = frame width,
+;      DX = frame height
+; out: CF = 0 adopted - W_W/W_H rewritten and W_X/W_Y re-clamped by wm_fit;
+;      CF = 1 refused, nothing written (BX is not a window record)
+; clobbers: nothing else (flags)
+;
+; DRAWS NOTHING, deliberately. The caller is inside its own callback under
+; the gfx lock and knows what it is about to repaint; a repaint from in here
+; would be a second one. OSAPI_WM_FRONT is the sanctioned way to ask for the
+; screen back afterwards.
+;
+; Until this existed, ui_grow and wm_fullscreen were the only things that
+; could resize a window and both are kernel-internal, so an app whose CONTENT
+; has a size of its own - a picture the user just opened, a canvas whose
+; resize has to be REFUSED because shrinking it would crop artwork - had to
+; write W_W/W_H in the record behind the kernel's back. In v2 that merely
+; read badly. Since v3 a package's DS cannot reach the record at all, so the
+; same trick needs a segment override onto kernel memory, and the honest
+; answer is a slot rather than a documented liberty (docs/PAINT-NOTES.md).
+;
+; The size is clamped exactly as a grow-box drag is (WMIN_W/WMIN_H below,
+; the screen above) and the position by wm_fit, so no argument a package can
+; pass puts a window off screen, under the dock or too small to close.
+; -----------------------------------------------------------------------------
+wm_resize:
+    call inst_wchk              ; a package pointer: bound it before any deref
+    jc .out
+    push ax
+    mov ax, cx
+    cmp ax, WMIN_W
+    jge .wok
+    mov ax, WMIN_W
+.wok:
+    mov [bx+W_W], ax
+    mov ax, dx
+    cmp ax, WMIN_H
+    jge .hok
+    mov ax, WMIN_H
+.hok:
+    mov [bx+W_H], ax
+    call wm_fit                 ; the screen bounds, and the position with
+    pop ax                      ; them (SPEC.md 39.7) - one clamp, not two
+    clc
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_create - allocate a window from a template
 ; in:  SI -> 16-byte template {x, y, w, h, title, paint, onkey, onclick}
 ;      (8 words)
