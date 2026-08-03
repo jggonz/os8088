@@ -103,11 +103,22 @@ MENU_POPMAX equ 11              ; items ANY pull-down may have (SPEC.md 12.4)
 ; strings are TRUNCATED to fit (menu_trunc - a clamp that only narrowed the
 ; rect would leave glyphs outside it that the restore can never erase), and
 ; kernel.asm asserts the product against MENU_SAVE_KB at build time.
-MENU_MAXW   equ 160             ; widest pull-down, px (frame + 8px padding)
-MENU_MAXCH  equ (MENU_MAXW - 16) / 8    ; ...so 18 glyphs of item text
-MENU_SAVE_KB equ 16             ; the claim menu_init takes for the save-under
+MENU_MAXW   equ 208             ; widest pull-down, px (frame + 8px padding)
+MENU_MAXCH  equ (MENU_MAXW - 16) / 8    ; ...so 24 glyphs of item text
+MENU_SAVE_KB equ 20             ; the claim menu_init takes for the save-under
                                 ; - 16 cells plus frame is 258px, which still
                                 ; fits under the bar on a 480-row screen
+
+; --- disabled items (SPEC.md 12.2) -------------------------------------------
+; An item string that BEGINS with this byte is unavailable: the kernel draws
+; the rest of it in grey and menu_hover never lands on it, so it cannot be
+; highlighted and cannot be selected. It is a string prefix and not a flags
+; array on purpose - an application that wants an item disabled already has
+; to decide that per repaint, and it already had to point AM_ITEMS at a
+; different string to say so ("Save Gif" vs "Save Gif (NoRam)"). One byte in
+; front of that string costs no structure change, no ABI change, and works
+; for a built-in's menus exactly as it does for a package's.
+MENU_DIS    equ 1
 
 ; --- the clock cell at the right end of the bar (SPEC.md 12.1) --------------
 ; The string's width VARIES with the display settings (SPEC.md 37) - 18
@@ -775,10 +786,17 @@ menu_drop:
     mov si, [es:bx]             ; are that cell's (SPEC.md 12.2/20.1); ES is
                                 ; re-established per pass because menu_trunc
                                 ; may repoint it at the kernel's copy
+    mov byte [gfx_color], CBLACK
+    cmp byte [es:si], MENU_DIS  ; disabled: grey, and skip the marker byte
+    jne .live
+    inc si
+    mov byte [gfx_color], CDGRAY
+.live:
     call menu_trunc             ; ES:SI = the item, truncated to MENU_MAXCH,
     mov cx, [menu_x1]           ; so no glyph lands outside the saved rect
     add cx, 8
     call font_str_x
+    mov byte [gfx_color], CBLACK
     pop cx
     add bx, 2
     add dx, MENU_ITEM_H
@@ -863,11 +881,40 @@ menu_hover:
     shr ax, cl                  ; / 16 -> cell index
     cmp ax, [menu_cnt]
     jae .none                   ; below the last cell (or on the frame)
-    pop cx
-    ret
+    call menu_item_dis          ; a disabled item is not hoverable, which is
+    jc .none                    ; also what makes it unselectable: the whole
+    pop cx                      ; of the feature is this one call plus the
+    ret                         ; grey in menu_drop
 .none:
     mov ax, 0xFFFF
     pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_item_dis - is item AX of the dropped menu disabled? (SPEC.md 12.2)
+; in:  AX = item index (< [menu_cnt])
+; out: CF = 1 if its string starts with MENU_DIS
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+menu_item_dis:
+    push bx
+    push si
+    push es
+    mov bx, ax
+    add bx, bx
+    add bx, [menu_iptr]
+    call menu_des               ; ES = the dropped cell's segment
+    mov si, [es:bx]
+    cmp byte [es:si], MENU_DIS
+    jne .no
+    stc
+    jmp short .out
+.no:
+    clc
+.out:
+    pop es
+    pop si
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -990,6 +1037,10 @@ menu_widest:
     jcxz .done                  ; `loop` would wrap CX to 0xFFFF
 .next:
     mov si, [es:bx]
+    cmp byte [es:si], MENU_DIS  ; the marker byte is not a glyph
+    jne .meas
+    inc si
+.meas:
     call font_width_x           ; AX = 8 * strlen
     cmp ax, dx
     jbe .keep

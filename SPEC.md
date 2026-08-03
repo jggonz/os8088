@@ -1450,6 +1450,18 @@ active) but draws nothing of itself — the bar catches up on the next
 simply contributes a name and no menus, which is the correct result for an
 accessory like Clock or Bounce.
 
+**Disabled items.** An item string that begins with the byte `MENU_DIS` (1)
+is unavailable: `menu_drop` draws the rest of it in `CDGRAY` and skips the
+marker, `menu_widest` does not measure the marker, and `menu_hover` refuses
+to land on the cell — so it cannot be highlighted and cannot be selected, and
+the whole feature is those three places. It is a **string prefix**, not a
+flags array, because an application that wants an item disabled already had
+to point `AMENU_ITEMS` at a different string to relabel it ("Save Gif" vs
+"Save Gif (NoRam)"); one byte in front of that string costs no structure
+change, no ABI change, and works for a built-in's menus exactly as for a
+package's. An app must still answer the command itself — a keyboard shortcut
+never goes near a menu.
+
 **Every string in a set is an offset in the OWNING WINDOW'S segment**
 (§11's W_SEG, §20.1) — the app name, the menu titles and every item. So the
 bar's runtime table `menu_bar` carries a **`MB_SEG`** word per cell
@@ -1597,7 +1609,7 @@ width — `menu_widest` is taken as-is — so the honest budget is stated over
 the descriptors that actually exist rather than as a general guarantee.
 All three (`fm_ctx_file` / `fm_ctx_fold` / `fm_ctx_dir`) are immutable
 `.text`, ≤ 8 items of ≤ 18 chars, worst case 4 planes × 130 rows × ~21
-bytes ≈ 5.5KB against the 48KB `SAVE_SEG` heap (§2.3), and there is no API
+bytes against the `MENU_SAVE_KB` claim, and there is no API
 slot through which a package could supply another. **A width clamp in
 `menu_popup` is the fix the day that stops being true** — a 16-item popup
 of screen-wide items would want ~83KB and would run off the end of the

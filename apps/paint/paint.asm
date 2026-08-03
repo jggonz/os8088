@@ -4734,11 +4734,12 @@ pt_oncmd:
 ; clipboard's size is a constant. There is deliberately no re-check on load or
 ; resize - there is nothing that could have changed.
 ;
-; The kernel's menus have no disabled state (SPEC.md 12.2), so an unavailable
-; command KEEPS its own label and gains "(Not Enough Ram)" after it - the item
-; still has to say what it would do - and the command itself answers with a
-; toast. Both doors have to be closed: the label is what the user sees, and the
-; toast is what the keyboard shortcut hits.
+; An unavailable command KEEPS its own label, gains "(NoRam)" after it and is
+; marked MENU_DIS so the kernel greys it and refuses to select it (SPEC.md
+; 12.2). The label still has to say what the command would do, and the greying
+; is what says it cannot right now. The command itself still answers with a
+; toast, because the keyboard shortcut never goes near a menu - both doors
+; have to be closed.
 ;
 ; Open is never one of them. The reader needs somewhere to put the file, and
 ; when there is no undo image it borrows the scratch area's flood-fill stack,
@@ -7353,12 +7354,16 @@ pt_i_saveas: db 'Save as Bmp...', 0
 pt_i_saveg:  db 'Save Gif', 0
 pt_i_saveag: db 'Save as Gif...', 0
 ; --- and the same items on a machine that cannot fund them (SPEC.md 41.8) -----
-pt_i_undo2:   db 'Undo / Redo (Not Enough Ram)', 0
-pt_i_cut2:    db 'Cut (Not Enough Ram)', 0
-pt_i_copy2:   db 'Copy (Not Enough Ram)', 0
-pt_i_paste2:  db 'Paste (Not Enough Ram)', 0
-pt_i_saveg2:  db 'Save Gif (Not Enough Ram)', 0
-pt_i_saveag2: db 'Save as Gif (Not Enough Ram)', 0
+; The leading MENU_DIS byte is the kernel's disabled marker (SPEC.md 12.2):
+; the item draws grey and cannot be highlighted or picked. The suffix stays,
+; shortened - greying says "not now", the words say why - and at 24 glyphs
+; the longest of them fits the pull-down without truncation.
+pt_i_undo2:   db MENU_DIS, 'Undo / Redo (NoRam)', 0
+pt_i_cut2:    db MENU_DIS, 'Cut (NoRam)', 0
+pt_i_copy2:   db MENU_DIS, 'Copy (NoRam)', 0
+pt_i_paste2:  db MENU_DIS, 'Paste (NoRam)', 0
+pt_i_saveg2:  db MENU_DIS, 'Save Gif (NoRam)', 0
+pt_i_saveag2: db MENU_DIS, 'Save as Gif... (NoRam)', 0
 pt_i_undo:   db 'Undo / Redo', 0
 pt_i_cut:    db 'Cut', 0
 pt_i_copy:   db 'Copy', 0

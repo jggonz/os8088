@@ -42,7 +42,10 @@
 ; --- geometry / cadence (SPEC.md 28) -----------------------------------------
 TM_INT      equ 9               ; sample interval, ticks (~0.5s)
 TM_EPOCH    equ 20              ; samples per calibration epoch (~10s)
-TM_GW       equ 160             ; graph interior width = history ring size
+TM_GW       equ 184             ; graph interior width = history ring size
+                                ; (7..TM_RW-1 inclusive; the rows are 22
+                                ; chars = 176px, so both stop clear of the
+                                ; scroll-free right edge at TM_RW)
 TM_GH       equ 40              ; graph interior height, px
 TM_CPU_Y    equ 4               ; "CPU nnn% SCH xxxxxxx" line, content-rel y
 TM_GF_Y1    equ 14              ; graph frame top (interior rows 15..54)
@@ -145,9 +148,11 @@ tm_s_pre:   db 'SCH preempt', 0 ; read-only scheduler-mode field, chars 9..19
 tm_s_coop:  db 'SCH coop   ', 0 ; both exactly 11: the padding erases the
                                 ; longer word when the mode changes
 tm_s_ram:   db 'RAM ', 0
-tm_s_hdr:   db 'NAME     ST  CPU MEM', 0    ; 9-char NAME field: 7 for the
+tm_s_hdr:   db 'NAME     ST  CPU  MEM', 0   ; 9-char NAME field: 7 for the
                                 ; name, one for the built-ins' indent, one
-                                ; separator (tm_name9)
+                                ; separator (tm_name9). Two spaces before
+                                ; MEM, not one: 100% next to 335K ran the
+                                ; two figures together
 tm_s_sys:   db 'System', 0      ; row 0: the kernel's own share
 tm_s_dash:  db '-', 0
 tm_s_run:   db 'run', 0
@@ -156,7 +161,7 @@ tm_s_slp:   db 'slp', 0
 tm_s_evt:   db 'evt', 0         ; no worker task: runs only in callbacks
 tm_s_die:   db 'die', 0         ; I_STATE 2: closing, task not yet reaped
 tm_s_free:  db '---', 0
-tm_s_frtl:  db '  -    -', 0    ; free row's CPU + MEM columns
+tm_s_frtl:  db '  -     -', 0   ; free row's CPU + MEM columns
 
 ; --- memory view (SPEC.md 28) ------------------------------------------------
 tm_s_mhdr:  db 'NAME    ADDR SIZE  CLM', 0    ; 22 chars, the row width
@@ -632,7 +637,7 @@ tm_sample:
                                 ; unallocated pool and the unclaimed heap
                                 ; are the only two things not counted here,
                                 ; and both can be handed out on demand
-    mov cx, [tm_totkb]          ; barw = usedK*160/totalK (all KB)
+    mov cx, [tm_totkb]          ; barw = usedK*TM_GW/totalK (all KB)
     jcxz .nobar
     mov si, TM_GW
     mul si                      ; DX:AX = usedK*160 (<= 10240)
@@ -726,17 +731,17 @@ tm_draw_perf:
     call tm_txt_cpu
 
     mov byte [gfx_color], CBLACK
-    mov ax, [tm_cx]             ; graph frame (6,14)-(167,55)
+    mov ax, [tm_cx]             ; graph frame (6,14)-(TM_RW,55)
     add ax, 6
     mov bx, [tm_cy]
     add bx, TM_GF_Y1
     mov cx, [tm_cx]
-    add cx, 167
+    add cx, TM_RW
     mov dx, [tm_cy]
     add dx, TM_GF_Y2
     KCALL gfx_frame
 
-    xor bx, bx                  ; all 160 columns; tm_pos is the sweep gap
+    xor bx, bx                  ; every column; tm_pos is the sweep gap
 .col:
     cmp bx, [tm_pos]
     je .gap
@@ -752,12 +757,12 @@ tm_draw_perf:
     call tm_txt_ram
 
     mov byte [gfx_color], CBLACK
-    mov ax, [tm_cx]             ; bar frame (6,71)-(167,80)
+    mov ax, [tm_cx]             ; bar frame (6,71)-(TM_RW,80)
     add ax, 6
     mov bx, [tm_cy]
     add bx, TM_BAR_Y1
     mov cx, [tm_cx]
-    add cx, 167
+    add cx, TM_RW
     mov dx, [tm_cy]
     add dx, TM_BAR_Y2
     KCALL gfx_frame
@@ -909,22 +914,22 @@ tm_draw_mem:
     call tm_txt_ram_y
 
     mov byte [gfx_color], CBLACK
-    mov ax, [tm_cx]             ; RAM map frame (6,14)-(167,29)
+    mov ax, [tm_cx]             ; RAM map frame (6,14)-(TM_RW,29)
     add ax, 6
     mov bx, [tm_cy]
     add bx, TMM_M1_Y1
     mov cx, [tm_cx]
-    add cx, 167
+    add cx, TM_RW
     mov dx, [tm_cy]
     add dx, TMM_M1_Y2
     KCALL gfx_frame
 
-    mov ax, [tm_cx]             ; segment map frame (6,43)-(167,58)
+    mov ax, [tm_cx]             ; pool map frame (6,43)-(TM_RW,58)
     add ax, 6
     mov bx, [tm_cy]
     add bx, TMM_M2_Y1
     mov cx, [tm_cx]
-    add cx, 167
+    add cx, TM_RW
     mov dx, [tm_cy]
     add dx, TMM_M2_Y2
     KCALL gfx_frame
@@ -1642,7 +1647,7 @@ tm_put4x:
 
 ; -----------------------------------------------------------------------------
 ; tm_col - draw one graph column from the history ring
-; in:  BX = column index 0..159; value 0..40 from tm_hist
+; in:  BX = column index 0..TM_GW-1; value 0..40 from tm_hist
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; White vline above the value, black vline below - self-backgrounding, so
@@ -1740,7 +1745,7 @@ tm_txt_cpu:
     mov bx, [tm_cy]
     add bx, TM_CPU_Y
     mov cx, [tm_cx]
-    add cx, 167
+    add cx, TM_RW
     mov dx, [tm_cy]
     add dx, TM_CPU_Y + 7
     KCALL gfx_fill
@@ -1809,7 +1814,7 @@ tm_txt_ram_y:
     mov bx, [tm_cy]
     add bx, [tm_liny]
     mov cx, [tm_cx]
-    add cx, 167
+    add cx, TM_RW
     mov dx, [tm_cy]
     add dx, [tm_liny]
     add dx, 7
@@ -1848,7 +1853,7 @@ tm_txt_ram_y:
 
 ; -----------------------------------------------------------------------------
 ; tm_bar - the RAM bar interior: black for barw px from the left, white rest
-; in:  [tm_barw] = 0..160
+; in:  [tm_barw] = 0..TM_GW
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
@@ -1883,7 +1888,7 @@ tm_bar:
     mov bx, [tm_cy]
     add bx, TM_BAR_Y1 + 1
     mov cx, [tm_cx]
-    add cx, 166
+    add cx, TM_RW - 1
     mov dx, [tm_cy]
     add dx, TM_BAR_Y2 - 1
     KCALL gfx_fill
@@ -2152,6 +2157,8 @@ tm_cpucol:
     call tm_put3
     mov byte [di], '%'
     inc di
+    mov byte [di], ' '          ; the gap MEM needs: 100% against 335K with
+    inc di                      ; nothing between reads as one number
     pop ax
     ret
 
@@ -2394,7 +2401,7 @@ tm_rcyc:    resw TM_ROWS * 2    ; per-ROW cycles: task + instance, dword
 tm_total:   resw 2              ; sum of the rows, dword
 tm_pct:     resb TM_ROWS        ; per-row share, 0..100
 tm_usedk:   resw 1              ; used RAM, KB
-tm_barw:    resw 1              ; RAM bar black width, 0..160
+tm_barw:    resw 1              ; RAM bar black width, 0..TM_GW
 tm_zero_end:
 
 tm_totkb:   resw 1              ; total conventional RAM (int 12h, boot)

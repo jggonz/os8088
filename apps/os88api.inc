@@ -466,6 +466,22 @@ AMENU_NITEM equ 4           ; word: item count
 AMENU_ENTSZ equ 6
 MENU_APPMAX equ 4           ; menus the bar can host per app; extras are
                             ; silently dropped by the kernel's layout pass
+MENU_MAXCH  equ 24          ; glyphs of item text a pull-down shows; longer
+                            ; items are TRUNCATED, not wrapped
+MENU_DIS    equ 1           ; an item string that BEGINS with this byte is
+                            ; DISABLED: the kernel draws the rest of it grey
+                            ; and never highlights or selects it. Point the
+                            ; item at a different string to switch, exactly
+                            ; as you already would to relabel it:
+                            ;
+                            ;   it_edit: dw i_paste
+                            ;   i_paste:  db 'Paste', 0
+                            ;   i_paste0: db MENU_DIS, 'Paste (NoRam)', 0
+                            ;   ...
+                            ;   mov word [it_edit + 2*ME_PASTE], i_paste0
+                            ;
+                            ; Still answer the command itself: a keyboard
+                            ; shortcut never goes near a menu.
 
 ; --- window record layout (SPEC.md 11, 20 bytes) -------------------------------
 W_FLAGS   equ 0             ; word: bit0 = used, bit1 = visible, bit2 =
