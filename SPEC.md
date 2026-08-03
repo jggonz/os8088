@@ -258,7 +258,7 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/mouse.inc`  | COM1 UART, IRQ4 ISR, packet decode, cursor (save-under) |
 | `kernel/sched.inc`  | PIT hook, context switch, task table, spawn/yield/sleep |
 | `kernel/events.inc` | 8-byte event records, system event ring queue           |
-| `kernel/clock.inc`  | system clock (§37): hardware RTC probe/read/write (int 1Ah), the wall-clock date + time advanced from `[ticks]`, field editing and formatting — prefix `clk_` |
+| `kernel/clock.inc`  | system clock (§37): the RTC ladder (§37.1 — MC146818 at 70h/71h, MM58167 and RP5C01 at 2C0h, int 1Ah last), the wall-clock date + time advanced from `[ticks]`, field editing and formatting — prefix `clk_` |
 | `kernel/wm.inc`     | window records, z-order, frames, hit test, paint-all, `wm_owner` side table |
 | `kernel/instance.inc` | instance table: records, kind descriptors, launch/close lifecycle (§29) |
 | `kernel/memory.inc` | the claim heap (§42): the map, `mem_claim`/`mem_free`/`mem_avail`, the teardown fence — prefix `mem_` |
@@ -5266,9 +5266,12 @@ selected one — white on a black `gfx_fill` box inset 2px around the glyphs
   option rows (12×12 `cp_chk_on`/`cp_chk_off` glyph at CP_PGX, label at
   CP_PLX — the Sound page's checkbox idiom, §31.4), and two captions:
   `'Click a field, then + or -'` at CPT_CAP1Y and, at CPT_CAP2Y,
-  `'Hardware clock: yes'` or `'Hardware clock: none'` read live from
-  `[clk_rtc]` (§37) — the `bb_avail` caption idiom again, here purely
-  informative: editing works either way.
+  the `cp_rtcnam` row for `[clk_tier]` — `'Hardware clock: none'`,
+  `'... AT 70h'`, `'... 58167 2C0h'`, `'... 5C01 2C0h'` or `'... BIOS'`,
+  read live from `[clk_rtc]`/`[clk_tier]` (§37.1). The `bb_avail` caption
+  idiom again, and it names the RUNG rather than answering yes/no because
+  on a machine whose clock will not hold a setting that is the diagnosis.
+  Purely informative: editing works either way.
 - **The option rows** are `'12-hour clock'` (`[clk_h12]`) and
   `'Seconds in menu bar'` (`[clk_secs]`), both §37 state read live, so the
   page keeps no copy. A click toggles the byte, redraws the glyph, redraws
@@ -6034,28 +6037,13 @@ the cursor blink that comes with it is the flicker being removed.
 
 **The hardware RTC.** `clk_init` stores the fallback date **first** —
 **4 July 2026, 00:00:00** (`CLK_DEF_Y`/`CLK_DEF_M`/`CLK_DEF_D`) — so any
-probe failure leaves a sane clock, then calls `clk_rtc_read` and sets
-`[clk_rtc]` only if it succeeds. The probe is deliberately paranoid,
-because the machines this OS targets are exactly the ones that may have no
-CMOS clock at all and whose BIOS may simply `iret` out of an unknown
-`int 1Ah` function, leaving CF and the registers as it found them:
-
-1. CX and DX are poisoned to 0FFFFh and CF is **set** before each call, so
-   an unimplemented function is detected by the poison surviving.
-2. `AH=02h` (time: CH/CL/DH = hour/min/sec BCD) then `AH=04h` (date:
-   CH/CL = century/year BCD, DH/DL = month/day) — CF = 1 from either
-   (documented as "clock not operating") fails the probe.
-3. Every byte must be valid packed BCD (`clk_bcd` returns CF = 1 when
-   either nibble exceeds 9) and in range: hour ≤ 23, min/sec ≤ 59, month
-   1..12, day 1..31, century 19 or 20.
-4. Only after all of that are the values committed, out of a scratch
-   buffer, as one set — a probe that fails halfway can never leave a
-   half-RTC, half-fallback clock.
-
-`clk_rtc_write` is the inverse (`AH=03h` + `AH=05h`, values re-encoded with
-`clk_tobcd`) and returns immediately when `[clk_rtc]` is 0. It calls BIOS,
-so it runs **only** from ui_task step 3, outside the gfx lock, draining
-`[clk_dirty]` (§13) — never from a window callback (§31.1).
+probe failure leaves a sane clock, then calls `clk_probe` and sets
+`[clk_rtc]` only if it succeeds. `clk_probe` walks the four-rung ladder of
+§37.1; `clk_rtc_write` dispatches on which rung answered and returns
+immediately when `[clk_rtc]` is 0. It runs **only** from ui_task step 3,
+outside the gfx lock, draining `[clk_dirty]` (§13) — never from a window
+callback (§31.1). Only the last rung calls BIOS now, but the rule stays:
+the caller cannot know which rung answered.
 
 | symbol | contract |
 |--------|-----------|
@@ -6070,17 +6058,131 @@ so it runs **only** from ui_task step 3, outside the gfx lock, draining
 rendering of it, not a second representation. So `+` on an hour showing
 `11 AM` gives `12 PM`, which is what a clock does; and the meridiem field
 is the only thing that jumps by 12.
-| `clk_rtc_write` | Pushes the live time back to the hardware RTC if `[clk_rtc]`; no-op otherwise. **BIOS call** — outside the gfx lock only. Preserves all registers. |
+| `clk_probe` | Boot, from `clk_init`. Walks the §37.1 ladder, seeds the fields from whatever answers and publishes `[clk_tier]`. Out: CF = 1 = no clock, nothing written. Preserves all registers. |
+| `clk_rtc_write` | Pushes the live time back to the hardware RTC if `[clk_rtc]`, through the rung `[clk_tier]` names; no-op otherwise. Outside the gfx lock only. Preserves all registers. |
+| `clk_dow` | The day of the week for the live date, Sakamoto's method. Out: AL = 0..6, 0 = Sunday. Preserves everything else. Both XT chips have a weekday counter they do not derive themselves. |
 | `clk_bcd` / `clk_tobcd` | BCD ↔ binary byte helpers; `clk_bcd` returns CF = 1 on a non-decimal nibble. `clk_tobcd` clobbers AH. |
 
 **Month names** are a 12×3 ASCII table (`'Jan'`…`'Dec'`), indexed by
 month−1 ×3 — the same data serves `clk_fmt` and `clk_fld_str`.
 
 **What this deliberately does not do.** No timezone, no DST (the DST byte
-`AH=02h` returns is ignored and `AH=03h` is written 0), no day-of-week (the
-BIOS date call does not return one and nothing displays it), and no
-re-reading of the RTC after boot — the PIT is the clock from then on, which
-is exactly how DOS behaves on the same hardware.
+`AH=02h` returns is ignored and `AH=03h` is written 0), nothing *displays*
+a day-of-week (`clk_dow` exists only because two of the chips have a
+weekday counter that must be written), and no re-reading of the RTC after
+boot — the PIT is the clock from then on, which is exactly how DOS behaves
+on the same hardware.
+
+## 37.1 The RTC ladder
+
+`int 1Ah` AH=02h..05h is the **last** rung, not the only one. An XT BIOS
+implements AH=00h/01h and nothing else, so on an IBM 5150 with an AST
+SixPakPlus the BIOS knows nothing about a clock that is sitting right
+there; and a BIOS that implements the two *read* functions may still `iret`
+out of the two *write* ones, which is a clock you can read and never set.
+So `clk_probe` walks four rungs and `clk_rtc_write` dispatches on
+`[clk_tier]`.
+
+| tier | `CLK_T_*` | chip | where | caption |
+|------|-----------|------|-------|---------|
+| 0 | `NONE` | — | — | `Hardware clock: none` |
+| 1 | `AT`   | MC146818 / DS12885 | index 70h, data 71h | `Hardware clock: AT 70h` |
+| 2 | `NS`   | National MM58167 | 2C0h, 32 direct ports | `Hardware clock: 58167 2C0h` |
+| 3 | `RP`   | Ricoh RP5C01 / Toshiba TC8521 | 2C0h, 16 direct 4-bit ports | `Hardware clock: 5C01 2C0h` |
+| 4 | `BIOS` | — | int 1Ah AH=02h..05h | `Hardware clock: BIOS` |
+
+`[clk_rtc]` is still the yes/no everything else tests; `[clk_tier]` is the
+diagnosis, and the Date/Time page prints it (§31.4) because on a machine
+whose clock will not hold a setting, *which* rung answered is the whole
+answer and there is nowhere else to see it.
+
+**Probe order is the design**, and it is chosen so that no rung ever writes
+to a chip a later rung might have identified differently:
+
+1. **Rung 1, read-only.** Register D reading 0FFh is the floating bus, so
+   that is rejected first — but *not* the tighter "bits 6..0 must be zero"
+   test, which two generations of chipset have since broken. Presence is
+   then the **UIP-stuck test**: Status Register A bit 7 is high for at most
+   2.228 ms per second on a live chip and permanently on an absent one.
+   Bounded by a plain counter (`CLK_UIP_MAX`), never by `[ticks]` —
+   `clk_init` runs before the PIT hook has done anything (§15) — and the
+   guard is taken **per access**, not around the poll, because 2.3 ms with
+   interrupts off is forty tick periods. An AT-class machine stops here and
+   never looks at 2C0h, which matters: 2B0h–2DFh is the alternate-EGA range.
+2. **int 1Ah**, which is not yet a rung: it is the *reference* rung 3 is
+   checked against.
+3. **Rung 3**, claimed **only** when the digits at 2C0h decode to the same
+   hour, day, month and year the BIOS just reported. That one test confirms
+   the chip, the base, the direct (rather than latched) addressing mode and
+   the MODE page at once, **with no writes**; seconds and minutes are left
+   out because they can tick between the two reads. A machine whose BIOS
+   cannot read the clock cannot pass it, which is exactly what keeps this
+   rung off a SixPakPlus. A chip parked on any page but 0 is refused rather
+   than moved — moving it is a write, and this runs before identification.
+4. **Rung 2.** Two half-registers physically do not exist on an MM58167 —
+   register 00h has no units digit and RAM 0Dh no high nibble — and that is
+   what every driver since ASTCLOCK has recognised it by. The read-only
+   halves run first and the counters must read as a date before either
+   write happens; then 0AAh → 0Dh must read back 0Ah, and 0FFh → 08h must
+   read back with its low nibble **clear**, which is the deterministic
+   rejection of a 4-bit part at the same address (a TC8521's 08h is the
+   10-day counter and stores 3). Both bytes are restored on the single path
+   out of `clk_ns_half`, so no verdict can skip the restore.
+5. **Rung 4**, for a machine whose BIOS is the only thing that knows where
+   its clock is.
+
+Both 2C0h probes charge the ISA bus off a driven port (`in al, 21h`, the
+master PIC's mask) first, so an unclaimed read settles to 0FFh instead of
+to whatever the last `out` drove.
+
+**Reading.** Rung 1 uses the hybrid guard Linux converged on: the payload
+is bracketed **both** by UIP and by a seconds comparison, the seconds value
+stashed *before* the first UIP test (an NMI landing just after it could
+otherwise hide a whole update cycle) and both re-checked afterwards. Every
+70h/71h pair runs with IF = 0 and every index write carries bit 7 (NMI
+masked) — the index is global state shared with the BIOS, and this kernel
+pre-empts every 55 ms (§7). `clk_at_done` ends each burst by parking the
+index at 0Dh, read-only, with NMI back on. Register B's **DM** (0 = BCD)
+and **24/12** (1 = 24-hour) are read and obeyed, never rewritten; a DM bit
+that lies is a known failure mode, so a decode that fails is retried the
+other way round. 12-hour mode's PM bit is stripped *before* BCD decoding
+(1 PM is 81h, which is legal BCD for 81) and re-applied *after* BCD
+encoding. The century comes from CMOS 32h only if it decodes to 19 or 20,
+otherwise from a window over §37's own 1980..2099 range; `[clk_cent]` = 0
+means this BIOS keeps no century byte and `clk_at_write` must not invent
+one. Rung 2 brackets its read with the rollover status bit at 14h (read to
+clear, read the fields, read again; set = discard), bounded by
+`CLK_RETRY` because the loop is inside a critical section. Rung 3 has no
+status bit at all, so its guard is the 1-second digit before and after.
+
+**Writing.** Rung 1 asserts Register B's **SET** bit across the burst — the
+once-a-second update cycle would otherwise land between two of the six
+writes and run its carry logic against a half-written value — and restores
+`save_control` whole. It deliberately does **not** touch Register A's
+divider bits: the upside is sub-second phase this OS never displays and the
+downside of getting it wrong is a stopped clock that no emulator here
+models. Rung 2 has no halt bit of any kind, so it writes coarse to fine
+with seconds last, and stamps the year into **both** conventions (0Ah, the
+ASTCLOCK one, and 0Eh, what 86Box's cards read) plus GLaTICK's 222 magic at
+0Bh and a last-month shadow at 09h — the chip has no year register, and the
+shadow is what lets a machine switched off over New Year come back right.
+Rung 3 stops the timer (MODE bit 3) across its writes, preserves
+alarm-enable through all three MODE writes, and leaves TEST and RESET
+alone: RESET is write-only, so its other bits cannot be read back, and two
+of them *enable* pulse outputs when clear.
+
+**Every loop is bounded.** The one way to hang on this hardware is to wait
+forever for a bit that will never change on a machine where every read is
+0FFh, and rungs 2 and 3 do their waiting with interrupts off.
+
+**Testing.** QEMU models an MC146818 and nothing else, so rungs 2, 3 and 4
+would be unreachable under the QMP harness. `RTC=none|at|ns|rp|bios` in the
+Makefile forces one rung, exactly as `VIDEO=` forces the adapter (§39.1),
+and shares its stamp-file invalidation. `RTC=ns` and `RTC=rp` on a machine
+with nothing at 2C0h are the negative test: the probe must reject and boot
+to the fallback date rather than hang or claim a phantom clock. Rungs 2 and
+3 have no positive test outside 86Box (`isartc_type = a6pak`) and real
+hardware.
 
 ## 38. fdlg.inc — the Standard File dialog
 

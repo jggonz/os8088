@@ -143,8 +143,17 @@ cp_s_dmono: db 'Not on this adapter', 0     ; a 1bpp adapter draws straight
 ; --- Date/Time page (SPEC.md 31.5/37) ----------------------------------------
 cp_s_time:  db 'Date/Time', 0   ; list name AND the page heading
 cp_s_tcap:  db 'Click a field, then + or -', 0
-cp_s_trtc:  db 'Hardware clock: yes', 0
+; The Date/Time page names the RTC ladder tier that answered (SPEC.md 37.1),
+; not just yes/no: on a machine whose clock will not hold a setting, which of
+; the four answered is the whole diagnosis, and there is nowhere else to see
+; it. **Indexed by [clk_tier], i.e. by the CLK_T_* enum - NOT by the order
+; clk_probe tries them in, which is a different order.**
 cp_s_tnrt:  db 'Hardware clock: none', 0
+cp_s_trt1:  db 'Hardware clock: AT 70h', 0
+cp_s_trt2:  db 'Hardware clock: 58167 2C0h', 0
+cp_s_trt3:  db 'Hardware clock: 5C01 2C0h', 0
+cp_s_trt4:  db 'Hardware clock: BIOS', 0
+cp_rtcnam:  dw cp_s_tnrt, cp_s_trt1, cp_s_trt2, cp_s_trt3, cp_s_trt4
 cp_s_t12:   db '12-hour clock', 0       ; option row 0 label
 cp_s_tsec:  db 'Seconds in menu bar', 0 ; option row 1 label
 cp_s_tplus: db '+', 0
@@ -1032,9 +1041,14 @@ cp_time_paint:
     KCALL font_str
 
     mov si, cp_s_tnrt           ; caption 2: read live from the probe's
-    cmp byte [clk_rtc], 0       ; verdict (SPEC.md 37) - informative only,
+    cmp byte [clk_rtc], 0       ; verdict (SPEC.md 37.1) - informative only,
     je .cap                     ; since editing works either way
-    mov si, cp_s_trtc
+    push bx
+    mov bl, [clk_tier]
+    xor bh, bh
+    add bx, bx
+    mov si, [cp_rtcnam+bx]
+    pop bx
 .cap:
     mov cx, di
     add cx, CP_PMX

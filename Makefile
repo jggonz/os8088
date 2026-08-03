@@ -41,6 +41,18 @@ endif
 ifneq ($(HERCSEG),)
 VIDDEF += -DVID_HERC_SEG=$(HERCSEG)
 endif
+# RTC=none|at|ns|rp|bios forces one rung of the clock ladder instead of
+# walking it (SPEC.md 37.1). Same reason as VIDEO=: QEMU has an MC146818 and
+# nothing else, so rung 1 always wins there and the other three would never
+# be reached under the QMP harness. `none` exercises the fallback date.
+RTCFORCE_none := 5
+RTCFORCE_at   := 1
+RTCFORCE_ns   := 2
+RTCFORCE_rp   := 3
+RTCFORCE_bios := 4
+ifneq ($(RTC),)
+VIDDEF += -DCLK_FORCE=$(RTCFORCE_$(RTC))
+endif
 # ...and a stamp so that CHANGING VIDEO rebuilds the kernel. Without it make
 # sees an up-to-date kernel.bin, skips it, and boots the PREVIOUS adapter -
 # which reads exactly like the probe or the renderer being broken.
@@ -51,7 +63,7 @@ endif
 # about a file that recipe just removed, and then build the floppy image from
 # a kernel that is not there. Doing it here means the file is simply gone
 # before make builds its graph.
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin; \
                                 touch $(VIDSTAMP); })
@@ -77,9 +89,9 @@ $(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) | $(BUILD)
 	$(NASM) -f bin -w+error -I kernel/ $(VIDDEF) -o $@ $(KERNEL_SRC)
 	@echo "kernel: $(call FILESIZE,$@) bytes"
 ifneq ($(VIDDEF),)
-	@echo "  *** VIDEO=$(VIDEO): this kernel has the adapter probe FORCED. ***"
+	@echo "  *** VIDEO=$(VIDEO) RTC=$(RTC): this kernel has a probe FORCED. ***"
 	@echo "  *** build/ is git-tracked - rebuild with plain \`make\` before  ***"
-	@echo "  *** committing, or every machine boots as $(VIDEO).             ***"
+	@echo "  *** committing, or every machine boots that way.               ***"
 endif
 
 # The boot sector needs to know how many sectors to read, so we measure the

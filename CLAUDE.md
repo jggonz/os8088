@@ -38,6 +38,19 @@ make test VIDEO=herc HERCSEG=0x7000    # force Hercules, framebuffer in RAM
 python3 tools/hercshot.py build/qmp.sock 0x70000 out.png
 ```
 
+A third does the same for the clock (SPEC.md §37.1) — QEMU has an MC146818 and
+nothing else, so the other three rungs of the RTC ladder are unreachable without it:
+
+```
+make test RTC=bios     # int 1Ah instead of the chip
+make test RTC=none     # no clock at all: the 4 July 2026 fallback
+make test RTC=ns       # the MM58167 probe against a machine that has none -
+                       # it must REJECT and boot, not hang or invent a clock
+```
+
+`RTC=` shares `VIDEO=`'s stamp file, so changing it rebuilds the kernel; the
+shipped images are always built without either.
+
 `VIDEO=` is tracked by a stamp file, so changing it rebuilds the kernel — without that,
 make sees an up-to-date `kernel.bin`, boots the previous adapter, and it reads exactly
 like the probe being broken.
@@ -239,6 +252,42 @@ Three things carry the boundary, and each is solved once rather than per call si
 - **Reading what you were handed.** **ES = KERNEL_SEG on entry to every callback**, because the window record and the file dialog's name buffer live there. `[es:bx+W_W]`, not `[bx+W_W]` — without the override a package reads its own image at that offset, which assembles cleanly and runs wrong.
 
 Each instance may own one worker task, spawned from a callback and torn down through `OSAPI_TASK_ALIVE`. **Multiple packages — or multiple instances of one — run at once**; closing one frees its region *and every heap claim it held*. **Root-directory order on the apps disk is pinned in the Makefile: mines, hello, notepad, piano, fractal, paint — the kernel filters the volume-label entry, so mines stays index 0; tests click by row, and new packages append at the end so the indices hold.**
+
+### The clock is a ladder, not a BIOS call (SPEC.md §37.1)
+
+`int 1Ah` AH=02h..05h is the **last** rung. An XT BIOS implements AH=00h/01h and
+nothing else, so on a 5150 with an AST SixPakPlus the BIOS knows nothing about a
+clock that is sitting right there; and a BIOS that implements the two *read*
+functions may still `iret` out of the two *write* ones — a clock you can read and
+never set. `clk_probe` walks four rungs (MC146818 at 70h/71h, then RP5C01/TC8521
+at 2C0h, then MM58167 at 2C0h, then the BIOS) and `clk_rtc_write` dispatches on
+`[clk_tier]`.
+
+Three things about it are load-bearing:
+
+- **Probe order exists so that no rung writes to a chip a later rung would have
+  identified differently.** Two different parts live at 2C0h. The RP5C01 rung is
+  claimed **only** when its digits decode to the same hour, day, month and year
+  `int 1Ah` just reported — one test that confirms the chip, the base, the
+  addressing mode and the MODE page with **no writes at all** — so it runs first
+  and a machine whose BIOS cannot read the clock can never reach it. The MM58167
+  rung, which does write (a scratch nibble, restored on the single path out of
+  `clk_ns_half`), runs after.
+- **Every loop is bounded.** The one way to hang is to wait forever for a bit that
+  never changes on a machine where every read is 0FFh — the exact bug Linux
+  shipped until v5.11. The UIP poll takes its `pushf`/`cli` **per access**, not
+  around the loop: 2.3 ms with interrupts off is forty tick periods.
+- **The chip's own settings are obeyed, never rewritten.** Register B's DM
+  (0 = BCD) and 24/12 (1 = 24-hour) polarities are both counterintuitive and both
+  belong to the machine's BIOS; flipping them behind its back makes the clock read
+  wrong from DOS afterwards. 12-hour mode's PM bit is stripped *before* BCD
+  decoding and re-applied *after* BCD encoding — the other order feeds 8Ch to
+  `clk_tobcd`.
+
+`RTC=` in the Makefile forces one rung so the other three are testable at all
+(see Commands above); the Control Panel's Date/Time page names the rung that
+answered, because on a machine whose clock will not hold a setting that is the
+whole diagnosis.
 
 ### The claim heap (SPEC.md §42, `kernel/memory.inc`)
 
