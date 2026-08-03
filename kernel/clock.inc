@@ -962,7 +962,18 @@ clk_ns_probe:
     call clk_ns_scan            ; the counters, with the same rollover
     jc .no                      ; retries the read gets - a ripple caught
                                 ; mid-carry is not "no card"
-    mov al, CLK_NS_SIG          ; 0Dh: no HIGH nibble, so AAh reads back 0Ah
+    ; --- 0Dh has no HIGH nibble, so AAh must read back exactly 0Ah --------
+    ; IF THE USER'S SIXPAKPLUS IS NEVER DETECTED, THIS IS THE FIRST LINE TO
+    ; SUSPECT. The datasheet says unused bits "are held at a logical zero
+    ; during a read", 86Box masks reg 0Dh with 0Fh, and GLaTICK's code
+    ; requires exactly 0Ah - but GLaTICK's own COMMENT says "if 0FAh or 0AAh,
+    ; then likely NS", i.e. its author expected real silicon to float the
+    ; absent nibble to ones. Three sources say 0Ah and one comment says
+    ; maybe not. Relaxing this to "the low nibble is A" would then let a
+    ; 4-bit part through here, and the whole 4-bit rejection would rest on
+    ; the 08h test below - which has the same unused-nibble question in
+    ; mirror image. So: strict, and documented, rather than quietly loose.
+    mov al, CLK_NS_SIG
     mov ah, 0xAA
     call clk_ns_half
     cmp al, 0x0A
@@ -985,7 +996,7 @@ clk_ns_probe:
 ; -----------------------------------------------------------------------------
 ; clk_ns_half - write AH to register AL, read it back, put the original back
 ; in:  AL = register, AH = the pattern
-; out: AL = what it read back; preserves every other register
+; out: AL = what it read back; clobbers AH; preserves every other register
 ;
 ; The restore is on the ONE path out, so no verdict can skip it.
 ; -----------------------------------------------------------------------------
@@ -1744,7 +1755,12 @@ clk_rp_write:
 ; -----------------------------------------------------------------------------
 ; clk_bios_read - read the BIOS clock into clk_tb_*
 ; in:  nothing
-; out: CF = 0 and the scratch filled, CF = 1 and nothing written
+; out: CF = 0 and the scratch filled; CF = 1 and the scratch is PARTLY
+;      written - the fields validated before the failing one are already in
+;      it. That is harmless and deliberate: clk_tb_* is module-private and
+;      clk_commit is its only reader, and clk_commit runs only after a CF = 0
+;      read. The "nothing written" guarantee belongs to the LIVE clock, not
+;      to this buffer.
 ; clobbers: nothing else (flags)
 ;
 ; Deliberately paranoid (SPEC.md 37): the machines this OS targets are
