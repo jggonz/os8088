@@ -7,6 +7,16 @@
 ;
 ; Four things shape it:
 ;
+;  - **The paddle reflects, it does not re-launch.** A bounce mirrors vy and
+;    KEEPS vx, then adds where along the paddle it landed (ark_zbias) and how
+;    the paddle itself was moving (ark_english) to the vx it kept. An earlier
+;    version assigned both from a zone table instead, and that is what made
+;    the game feel arbitrary: a ball arriving steeply from the left and one
+;    drifting in from the right left the paddle identically if they landed in
+;    the same zone, so a rally had no continuity at all. A serve is thrown the
+;    way the paddle is moving, at twice english's weight, because it has no
+;    incoming direction to build on - the flick IS the aim.
+;
 ;  - **The game IS the worker task.** A ball has to keep moving between
 ;    keystrokes, and a window callback only runs when something happens to the
 ;    window, so the loop lives in ark_worker (SPEC.md 20.6) - the same shape as
@@ -121,6 +131,10 @@ ARK_PKEEP   equ 11                  ; ticks a keypress keeps the paddle moving.
                                     ; anything shorter stalls a held key
 ARK_PSTEP   equ 4                   ; paddle pixels a tick, tapped...
 ARK_PFAST   equ 8                   ; ...and held
+ARK_VXMAX   equ 4                   ; the flattest angle the ball may reach.
+                                    ; vx accumulates across bounces, so it
+                                    ; needs a ceiling or a rally converges on
+                                    ; horizontal and stops coming down
 
 ; powerup kinds, and the letter each capsule carries
 PU_NONE     equ 0
@@ -567,7 +581,8 @@ ark_do_paddle:
     push ax
     push bx
     push dx
-    cmp word [ark_pkeep], 0
+    mov word [ark_pvel], 0          ; how far the paddle moves THIS frame,
+    cmp word [ark_pkeep], 0         ; signed - the ball reads it on contact
     jle .out
     dec word [ark_pkeep]
     mov al, [ark_pdir]
@@ -587,13 +602,92 @@ ark_do_paddle:
     jle .set
     mov ax, bx
 .set:
-    cmp ax, [ark_px]
-    je .out
+    mov bx, ax                      ; what it ACTUALLY moved, after the clamps:
+    sub bx, [ark_px]                ; a paddle pinned against a rail is not
+    mov [ark_pvel], bx              ; moving, and must impart nothing
+    or bx, bx
+    jz .out
     mov [ark_px], ax
     mov byte [ark_padwipe], 1
 .out:
     pop dx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_english - the sideways kick the paddle's own motion imparts
+; out: AX = -2..+2; preserves all other registers
+;
+; The paddle moves 4 pixels a tick tapped and 8 held (ARK_PSTEP/ARK_PFAST), so
+; a quarter of that is a clean -2..+2 without a table. idiv truncates toward
+; zero, which is what makes a rail-clamped part-move round down to nothing.
+; -----------------------------------------------------------------------------
+ark_english:
+    push bx
+    push dx
+    mov ax, [ark_pvel]
+    cwd
+    mov bx, 4
+    idiv bx
+    cmp ax, 2
+    jle .lo
+    mov ax, 2
+.lo:
+    cmp ax, -2
+    jge .out
+    mov ax, -2
+.out:
+    pop dx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_throw - the sideways speed a SERVE gets from the paddle's motion
+; out: AX = -3..+3; preserves all other registers
+;
+; Twice ark_english's weight, because a serve has no incoming direction to
+; build on: the flick IS the aim. A paddle standing still serves straight up,
+; which is honest rather than a hidden default - the player who wants an angle
+; flicks, and the one who does not gets to choose after the first bounce.
+; -----------------------------------------------------------------------------
+ark_throw:
+    push bx
+    push dx
+    mov ax, [ark_pvel]
+    cwd
+    mov bx, 2
+    idiv bx
+    cmp ax, 3
+    jle .lo
+    mov ax, 3
+.lo:
+    cmp ax, -3
+    jge .out
+    mov ax, -3
+.out:
+    pop dx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_setspeed - the rally's vertical speed for this level
+; out: [ark_vymag] = 3..5; preserves all registers
+;
+; |vy| is the authority, not [ark_bvy]: a paddle bounce restores it rather
+; than inventing one, so the vertical rhythm of a rally stays constant while
+; the ANGLE is free to change. It is also the one number Slow reduces.
+; -----------------------------------------------------------------------------
+ark_setspeed:
+    push ax
+    mov al, [ark_level]
+    mov ah, 0
+    add ax, 2
+    cmp ax, 5
+    jbe .set
+    mov ax, 5
+.set:
+    mov [ark_vymag], ax
     pop ax
     ret
 
@@ -608,9 +702,12 @@ ark_do_launch:
     mov byte [ark_launch], 0
     cmp byte [ark_stuck], 0
     je .laser
-    mov byte [ark_stuck], 0         ; off the paddle, upward and slightly out
-    mov word [ark_bvy], -3
-    mov word [ark_bvx], 2
+    mov byte [ark_stuck], 0         ; thrown the way the paddle is going
+    mov ax, [ark_vymag]
+    neg ax
+    mov [ark_bvy], ax
+    call ark_throw
+    mov [ark_bvx], ax
     mov byte [ark_mode], M_PLAY
     mov byte [ark_msg], 1           ; the READY line has to come off
     mov ax, 660
@@ -877,6 +974,10 @@ ark_padbounce:
     call ark_beep
     jmp .out
 .bounce:
+    mov ax, [ark_vymag]             ; up again at the rally's speed: the
+    neg ax                          ; bounce CONTINUES, it does not restart
+    mov [ark_bvy], ax
+
     mov ax, [ark_bx]                ; the ball's centre, paddle-relative
     mov bx, [ark_bsz]
     shr bx, 1
@@ -899,10 +1000,19 @@ ark_padbounce:
 .have:
     mov bx, ax
     add bx, bx
-    mov ax, [ark_zonex+bx]
+    mov dx, [ark_zbias+bx]          ; where along the paddle it landed
+    call ark_english                ; ...and which way the paddle was going
+    add ax, dx
+    add ax, [ark_bvx]               ; both ADDED to the incoming vx
+    cmp ax, ARK_VXMAX
+    jle .hi
+    mov ax, ARK_VXMAX
+.hi:
+    cmp ax, -ARK_VXMAX
+    jge .setvx
+    mov ax, -ARK_VXMAX
+.setvx:
     mov [ark_bvx], ax
-    mov ax, [ark_zoney+bx]
-    mov [ark_bvy], ax
     mov ax, 880
     call ark_beep
 .out:
@@ -1213,24 +1323,25 @@ ark_apply:
     ret
 
 ; -----------------------------------------------------------------------------
-; ark_slower - knock the ball's vertical velocity down one notch, never to
-;              zero (a ball with no vy would never come back down)
+; ark_slower - knock the rally's vertical speed down one notch, never below 2
+;              (a ball with no vy would never come back down)
 ; preserves all registers
+;
+; It moves [ark_vymag] rather than [ark_bvy], because vymag is what every
+; paddle bounce restores - changing only the live velocity would last exactly
+; until the next one.
 ; -----------------------------------------------------------------------------
 ark_slower:
     push ax
-    mov ax, [ark_bvy]
-    or ax, ax
-    jz .out
-    jns .pos
-    cmp ax, -2
-    jge .out
-    inc word [ark_bvy]
-    jmp .out
-.pos:
-    cmp ax, 2
+    cmp word [ark_vymag], 2
     jle .out
-    dec word [ark_bvy]
+    dec word [ark_vymag]
+    mov ax, [ark_vymag]             ; ...and take the live ball with it, in
+    cmp word [ark_bvy], 0           ; whichever direction it is already going
+    jge .set
+    neg ax
+.set:
+    mov [ark_bvy], ax
 .out:
     pop ax
     ret
@@ -1341,6 +1452,7 @@ ark_die:
 ; -----------------------------------------------------------------------------
 ark_respawn:
     push ax
+    call ark_setspeed
     mov byte [ark_stuck], 1
     mov byte [ark_catch], 0
     mov byte [ark_laser], 0
@@ -1368,6 +1480,7 @@ ark_cleared:
 ark_nextwall:
     push ax
     inc byte [ark_level]
+    call ark_setspeed
     call ark_build
     mov byte [ark_stuck], 1
     mov byte [ark_catch], 0
@@ -1419,6 +1532,7 @@ ark_newgame:
     mov word [ark_score], 0
     mov byte [ark_lives], ARK_LIVES
     mov byte [ark_level], 1
+    call ark_setspeed               ; AFTER the level is 1: it reads it
     mov ax, [ark_pw0]
     mov [ark_pw], ax
     mov ax, [ark_cwid]              ; the paddle starts centred
@@ -2331,10 +2445,11 @@ ark_s_over:  db 'GAME OVER - N', 0
 ark_s_clear: db 'WALL CLEARED', 0
 ark_s_lv:    db 'LV', 0
 
-; The outgoing velocity per paddle zone: shallow at the ends, steep in the
-; middle, and the total speed roughly even across all five.
-ark_zonex:   dw -3, -2,  0,  2,  3
-ark_zoney:   dw -2, -3, -4, -3, -2
+; What each fifth of the paddle ADDS to the ball's existing vx. Not a velocity
+; to replace it with: replacing is what made the bounce feel arbitrary, because
+; a ball arriving steeply from the left and one drifting in from the right left
+; the paddle identically if they landed in the same zone.
+ark_zbias:   dw -2, -1, 0, 1, 2
 
 ; Brick colours by row. Not free choices: every one is drawn on the BLACK
 ; background, so none of them may fall in SPEC.md 39.4's black class (0..6) or
@@ -2414,6 +2529,8 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     AWORD ark_pw                    ; ...and its live width
     AWORD ark_pkeep                 ; ticks the paddle keeps moving
     AWORD ark_pspd
+    AWORD ark_pvel                  ; pixels the paddle moved this frame
+    AWORD ark_vymag                 ; the rally's vertical speed, 2..5
     ABYTE ark_pdir
     ABYTE ark_bpp
     ABYTE ark_mode

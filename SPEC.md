@@ -7518,8 +7518,42 @@ which moves under a parked ball, so the paddle is redrawn whenever the erased
 rect reaches its lane. `ark_reflect` needs no geometry for the same reason:
 exactly one coordinate changed, so that is the axis to reverse.
 
-Where the ball lands across the paddle picks the outgoing angle — five zones,
-shallowest at the ends — and that is the whole of the game's control.
+### 44.3.1 The paddle reflects, it does not re-launch
+
+A paddle bounce **mirrors** — `vy` flips to `-[ark_vymag]` and `vx` is *kept* —
+and then two things are **added** to the vx it kept:
+
+- **Where along the paddle it landed**, `ark_zbias`, five zones of −2..+2.
+- **How the paddle itself was moving**, `ark_english`, −2..+2 from
+  `[ark_pvel]` — the pixels the paddle actually moved that frame, measured
+  after its rail clamps so a paddle pinned against a rail imparts nothing.
+
+The sum is clamped to ±`ARK_VXMAX`, because vx accumulates across bounces and
+without a ceiling a rally converges on horizontal and stops coming down.
+
+This replaced a zone table that **assigned** both components outright, and the
+difference is the whole feel of the game: with the old table a ball arriving
+steeply from the left and one drifting in from the right left the paddle
+identically if they landed in the same zone, so a rally had no continuity and
+read as arbitrary. `[ark_vymag]` exists for the same reason — it is the
+authority on the rally's vertical speed, so a bounce restores the tempo it
+already had instead of inventing one per zone, and it is the single number
+Slow reduces.
+
+**The serve is thrown, not aimed.** `ark_throw` gives it `vx` from
+`[ark_pvel]` at twice `ark_english`'s weight, because a serve has no incoming
+direction to build on — the flick *is* the aim. A paddle standing still serves
+straight up, which is honest rather than a hidden default: the player who
+wants an angle flicks, and the one who does not chooses after the first
+bounce. It also means the ball can be walked along the paddle before release.
+
+Measured on the running game (with `ark_zbias` zeroed, so only preservation
+and english can move vx): a stationary serve leaves with dx exactly 0; a
+serve flicked right leaves at +21px per 0.18s sample and one flicked left at
+−21; `|vy|` holds at 3px a frame across fifty-five samples and every kind of
+bounce, where the old table would have swung it between 2 and 4 per zone; and
+a ball that arrives at vx=0 leaves a paddle held right at vx=+2, which is
+`ark_english` exactly.
 
 ### 44.4 Powerups
 
