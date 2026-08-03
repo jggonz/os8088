@@ -5652,9 +5652,11 @@ pt_load:
     mov cx, 0xFFFF
     jmp short .rd
 .cap:
-    mov cl, 4
-    shl cx, cl
-    jmp short .rd
+    shl cx, 1                       ; paragraphs -> bytes. NOT `mov cl,4` and a
+    shl cx, 1                       ; shift by CL: that overwrites the low byte
+    shl cx, 1                       ; of the very value being shifted, which on
+    shl cx, 1                       ; a small-canvas machine handed the reader a
+    jmp short .rd                   ; capacity up to 64 bytes past its buffer
 .scratch:
     ; No undo image (SPEC.md 41.8), so the scratch area lends its flood-fill
     ; stack - idle during a load, and re-initialised by the next fill. One

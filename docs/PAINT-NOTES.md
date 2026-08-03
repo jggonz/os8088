@@ -341,4 +341,15 @@ Measured under QEMU with `make run-640`: a full-canvas flood fill of a picture
 with obstacles completes in about four seconds of wall clock, opening a 448×280
 4bpp BMP (read, decode, blit) in about eight, and a stroke keeps up with the
 1200-baud mouse with the CPU to spare. A real 8MHz machine will be several
-times slower; a 4.77MHz 8088 slower again.
+times slower; a 4.77MHz 8088 slower again. The AT-class 86Box targets
+(`make 286`, `make 386sx`, `make 386` — SPEC.md §16) are the other end of that
+range and the honest place to judge whether a full repaint is tolerable.
+
+**One thing to know before running this on a 286 or a 386.** The tree is 8086
+code and those machines execute it verbatim, with one divergence: an 8086 uses a
+shift count in full, while a 286 and later mask it to five bits, so `shl reg, cl`
+with CL ≥ 32 does something different. Every one of Paint's 38 variable shifts
+was audited against that; the largest possible count is 24 (`pt_bmp_pal`'s
+`1 << biBitCount`), so none of them can diverge. Worth re-checking if a shift
+count ever becomes a computed value rather than a small constant or a validated
+field.
