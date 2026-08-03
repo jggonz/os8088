@@ -145,7 +145,9 @@ tm_s_pre:   db 'SCH preempt', 0 ; read-only scheduler-mode field, chars 9..19
 tm_s_coop:  db 'SCH coop   ', 0 ; both exactly 11: the padding erases the
                                 ; longer word when the mode changes
 tm_s_ram:   db 'RAM ', 0
-tm_s_hdr:   db 'NAME    ST  CPU MEM', 0
+tm_s_hdr:   db 'NAME     ST  CPU MEM', 0    ; 9-char NAME field: 7 for the
+                                ; name, one for the built-ins' indent, one
+                                ; separator (tm_name9)
 tm_s_sys:   db 'System', 0      ; row 0: the kernel's own share
 tm_s_dash:  db '-', 0
 tm_s_run:   db 'run', 0
@@ -1894,15 +1896,73 @@ tm_bar:
     ret
 
 ; -----------------------------------------------------------------------------
+; tm_order - the performance view's row order: built-ins first, then packages,
+;            then the free slots (SPEC.md 28)
+; in:  the tm_ist/tm_iknd snapshot
+; out: tm_ord[0..INST_MAX-1] = instance indices, grouped
+; clobbers: nothing (flags)
+;
+; This is the one place the Task Manager stops mirroring the instance table
+; slot for slot. Grouping is what makes the list readable: the built-ins the
+; user cannot close sit together under System, everything they launched sits
+; below, and the free slots fall to the bottom instead of punching holes
+; through the middle. The cost is that a row can move when an instance dies -
+; the dock is what keeps the stable slot<->tile mapping (SPEC.md 30), and this
+; list never used it for anything, it only inherited it.
+; -----------------------------------------------------------------------------
+tm_order:
+    push ax
+    push bx
+    push cx
+    push si
+    xor bx, bx                  ; BX = write cursor into tm_ord
+    xor cx, cx                  ; CX = the pass: 0 built-ins, 1 packages, 2 free
+.pass:
+    xor si, si
+.scan:
+    mov al, [tm_ist+si]
+    or al, al
+    jz .isfree
+    mov al, [tm_iknd+si]
+    and al, KIND_PKG
+    jz .isbuilt
+    mov al, 1
+    jmp short .cls
+.isbuilt:
+    xor al, al
+    jmp short .cls
+.isfree:
+    mov al, 2
+.cls:
+    cmp al, cl
+    jne .next
+    mov ax, si
+    mov [tm_ord+bx], al
+    inc bx
+.next:
+    inc si
+    cmp si, INST_MAX
+    jb .scan
+    inc cx
+    cmp cx, 3
+    jb .pass
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; tm_rows - the TM_ROWS process rows: white-fill each band, build the 20-char
 ;           row string, draw it (SPEC.md 28 pins the format)
 ; in:  tm_self/tm_state/tm_pct + the instance snapshot block
 ; out: nothing
 ; clobbers: nothing (flags only)
 ;
-; Row 0 is "System"; row 1+i mirrors instance slot i, so a row's position is
-; stable for as long as the instance lives (same slot<->row rule as the dock,
-; SPEC.md 30).
+; Row 0 is "System"; rows 1.. walk tm_order's grouping, so the built-ins are
+; indented directly under it and the packages follow. The share in tm_pct is
+; still indexed by INSTANCE (row = instance + 1 when it was built), which is
+; why every read of it goes through [tm_rowi] rather than the loop counter.
 ; -----------------------------------------------------------------------------
 tm_rows:
     push ax
@@ -1912,6 +1972,7 @@ tm_rows:
     push si
     push di
 
+    call tm_order               ; group the rows before laying any of them out
     xor si, si                  ; SI = row index
 .row:
     mov ax, si                  ; y1 = cy + TM_ROW_Y + 11*row
@@ -1922,16 +1983,16 @@ tm_rows:
     mov [tm_rowy], ax
 
     mov byte [gfx_color], CWHITE
-    mov bx, ax                  ; white-fill the band (6,y)-(167,y+7)
+    mov bx, ax                  ; white-fill the band (6,y)-(TM_RW,y+7)
     mov dx, ax
     add dx, 7
     mov ax, [tm_cx]
     add ax, 6
     mov cx, [tm_cx]
-    add cx, 167
+    add cx, TM_RW
     KCALL gfx_fill
 
-    ; --- build "NAME    ST  nnn%mmmK" in tm_str ------------------------------
+    ; --- build "NAME     ST  nnn%mmmK" in tm_str -----------------------------
     mov di, tm_str
     or si, si
     jnz .inst
@@ -1939,9 +2000,8 @@ tm_rows:
     ; row 0: the kernel - task 0 minus everything debited to an instance
     push si
     mov si, tm_s_sys
-    call tm_copy7
-    mov byte [di], ' '
-    inc di
+    xor al, al                  ; the one row that is never indented
+    call tm_name9
     mov si, tm_s_rdy            ; task 0 never sleeps; it shows "run" only
     cmp byte [tm_self], 0       ; when it happened to be current at snapshot
     jne .sysst
@@ -1967,7 +2027,10 @@ tm_rows:
 
 .inst:
     mov bx, si
-    dec bx                      ; BX = instance index, held to the end
+    dec bx
+    mov bl, [tm_ord+bx]         ; BX = the instance this ROW shows, held to
+    xor bh, bh                  ; the end; [tm_rowi] is the same thing for the
+    mov [tm_rowi], bl           ; stretches where BX is needed for something
     cmp byte [tm_ist+bx], 0
     je .free
 
@@ -1977,10 +2040,11 @@ tm_rows:
     shl ax, cl
     mov si, ax
     add si, tm_inm
-    call tm_copy7
+    mov al, [tm_iknd+bx]        ; a built-in sits indented under System, a
+    not al                      ; package at the top level with it
+    and al, KIND_PKG
+    call tm_name9
     pop si
-    mov byte [di], ' '
-    inc di
 
     push si                     ; state (SPEC.md 28)
     cmp byte [tm_ist+bx], 2
@@ -2013,22 +2077,33 @@ tm_rows:
     mov byte [di], ' '
     inc di
 
-    mov bx, si                  ; share, right-aligned in 3, then '%'
+    mov bl, [tm_rowi]           ; share, right-aligned in 3, then '%'
+    xor bh, bh                  ; (tm_pct is indexed by instance + 1, not by
+    inc bx                      ; the display row - see tm_order)
     mov al, [tm_pct+bx]
     call tm_cpucol
-    mov bx, si                  ; region bytes (0 for a built-in kind)
-    dec bx
+    mov bl, [tm_rowi]           ; region bytes (0 for a built-in kind)...
+    xor bh, bh
     shl bx, 1
     mov ax, [tm_isz+bx]
-    call tm_memcol
-    jmp .draw
+    add ax, 1023                ; ...as KB, rounded up; 0 stays 0
+    mov cl, 10
+    shr ax, cl
+    mov dx, ax
+    push si
+    mov si, bx
+    shr si, 1                   ; SI = instance slot
+    call tm_inst_claim          ; ...plus everything it holds off the claim
+    pop si                      ; heap (SPEC.md 42.5). The MEM column is what
+    add ax, dx                  ; this app COSTS, and a package that claimed a
+    call tm_memcol_kb0          ; canvas costs far more than its region - the
+    jmp .draw                   ; same sum the System row already shows
 
-.free:                          ; free slot: "-       ---   -    -"
+.free:                          ; free slot: "-        ---   -    -"
     push si
     mov si, tm_s_dash
-    call tm_copy7
-    mov byte [di], ' '
-    inc di
+    xor al, al
+    call tm_name9
     mov si, tm_s_free
     call tm_copy
     mov byte [di], ' '
@@ -2127,6 +2202,51 @@ tm_memcol_kb:
     push ax
     push cx
     jmp tm_memcol.kb
+
+; -----------------------------------------------------------------------------
+; tm_memcol_kb0 - the same, but 0 KB still means "owns nothing" and prints "-"
+; in:  AX = KB, DI = dest
+; out: DI advanced by 4
+; clobbers: nothing else (internal helper)
+; -----------------------------------------------------------------------------
+tm_memcol_kb0:
+    push ax
+    push cx
+    or ax, ax
+    jnz tm_memcol.kb
+    jmp tm_memcol.none
+
+; -----------------------------------------------------------------------------
+; tm_name9 - the performance view's NAME field: an optional one-space indent,
+;            the name in 7, then padding out to exactly 9 columns
+; in:  SI = name, AL = 0 top level / non-zero indented, DI = dest
+; out: DI advanced by 9
+; clobbers: nothing else (internal helper)
+;
+; Nine rather than eight because the indent has to come from somewhere and
+; the alternative was taking it out of the name - which truncated "TaskMgr"
+; to "TaskMg", the one name in the tree that uses all seven.
+; -----------------------------------------------------------------------------
+tm_name9:
+    push ax
+    push cx
+    mov cl, al
+    or al, al
+    jz .noind
+    mov byte [di], ' '
+    inc di
+.noind:
+    call tm_copy7
+    mov byte [di], ' '
+    inc di
+    or cl, cl
+    jnz .out
+    mov byte [di], ' '          ; not indented: the column the indent would
+    inc di                      ; have taken is padding instead
+.out:
+    pop cx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; tm_copy - copy a NUL string (without the NUL) to DI
@@ -2280,6 +2400,8 @@ tm_zero_end:
 tm_totkb:   resw 1              ; total conventional RAM (int 12h, boot)
 tm_cx:      resw 1              ; cached content origin (draw paths only,
 tm_cy:      resw 1              ; always under the gfx lock)
+tm_ord:     resb INST_MAX       ; tm_order: display row - 1 -> instance slot
+tm_rowi:    resb 1              ; ...the one tm_rows is drawing right now
 tm_rowy:    resw 1              ; tm_rows/tm_rows_mem scratch: current row y
 tm_ylim:    resw 1              ; ...and the lowest row top the frame holds
                                 ; (tm_ylim_set): the row lists are fixed-pitch

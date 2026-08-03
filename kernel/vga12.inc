@@ -290,6 +290,131 @@ gfx_hline:
     ret
 
 ; -----------------------------------------------------------------------------
+; gfx_blit4 - draw a block of packed 4bpp pixels (SPEC.md 5.4/41)
+;
+; in:       ES:SI = source, packed 4 bits per pixel, 2 pixels per byte, the
+;                   HIGH nibble leftmost - the layout apps/paint's canvas
+;                   already uses, and the one a 16-colour BMP row uses
+;           BP    = source stride in bytes (one row to the next)
+;           AX    = destination x, BX = destination y (screen coords)
+;           CX    = width in pixels (> 0), DX = height in rows (> 0)
+; out:      nothing; every register preserved. [gfx_color] is left holding
+;           the last colour drawn.
+; clobbers: nothing else (flags)
+;
+; What this is, and what it deliberately is not. It coalesces runs of equal
+; pixels and emits one gfx_fill per run - the same thing apps/paint's pt_blit
+; did in the package, and therefore the same pixels - but from INSIDE the
+; kernel. That is the whole win and it is a large one: since packages own a
+; segment (SPEC.md 20.1) every gfx call from one is a FAR call, so a canvas
+; repaint that cost N far calls plus N run scans now costs ONE call and a
+; near loop. It also means the primitive works on all three adapters, in
+; front of and behind the back buffer, and inside a clip region, without one
+; line of adapter-specific code - because gfx_fill already does.
+;
+; A plane-parallel VGA fast path (build a byte-per-8-pixels mask per plane
+; and write it through the Map Mask) would beat this on detailed pictures and
+; lose to it on flat ones, and it would need its own back-buffer and 1bpp
+; twins. It is a worthwhile future optimisation and it changes no caller;
+; docs/PAINT-NOTES.md records why it was not the first one.
+;
+; Colour reduction on a 1bpp adapter happens in gfx_fill, per run (SPEC.md
+; 39.4), so a 16-colour picture reads as black/dither/white there exactly as
+; the rest of the UI does.
+; -----------------------------------------------------------------------------
+gfx_blit4:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    or cx, cx
+    jz .out
+    or dx, dx
+    jz .out
+    mov [gfx_blit_w], cx        ; lock-held scratch, like vga12's rect block:
+    mov [gfx_blit_x], ax        ; every drawing entry runs under the gfx lock
+    mov [gfx_blit_h], dx        ; (SPEC.md 1 rule 6), so one copy serves
+    mov [gfx_blit_sv], si
+.row:
+    mov si, [gfx_blit_sv]
+    mov di, [gfx_blit_x]        ; DI = the run's start x
+    mov ah, 0FFh                ; AH = the run's colour, 0FFh = none yet
+    xor dx, dx                  ; DX = pixel index within the row
+.px:
+    mov al, [es:si]             ; the byte holding pixel DX
+    test dl, 1
+    jz .hi
+    and al, 0Fh
+    inc si                      ; the low nibble ends this byte
+    jmp short .have
+.hi:
+    mov cl, 4
+    shr al, cl
+.have:
+    cmp ah, 0FFh
+    je .start                   ; first pixel of the row
+    cmp al, ah
+    je .same                    ; the run continues
+    call gfx_blit_run           ; colour changed: emit what we had...
+    mov di, [gfx_blit_x]        ; ...and start a new one at this pixel
+    add di, dx
+.start:
+    mov ah, al
+.same:
+    inc dx
+    cmp dx, [gfx_blit_w]
+    jb .px
+    call gfx_blit_run           ; the row's last run
+
+    mov ax, [gfx_blit_sv]       ; next source row
+    add ax, bp
+    mov [gfx_blit_sv], ax
+    inc bx                      ; next destination row
+    dec word [gfx_blit_h]
+    jnz .row
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; gfx_blit_run - emit one coalesced run (module-internal to gfx_blit4)
+; in:  DI = run start x, DX = one past the run's last pixel (row-relative),
+;      AH = colour, BX = y, [gfx_blit_x] = the block's left edge
+; out: nothing (AX/BX/CX/DX/SI/DI/BP preserved)
+; -----------------------------------------------------------------------------
+gfx_blit_run:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov al, ah
+    mov [gfx_color], al
+    mov ax, di                  ; x1 = the run's start
+    mov cx, [gfx_blit_x]
+    add cx, dx
+    dec cx                      ; x2 = the last pixel drawn
+    cmp ax, cx
+    ja .out                     ; empty run (cannot happen; cheap to guard)
+    mov dx, bx                  ; gfx_hline wants y in DX
+    mov bx, cx
+    call gfx_hline              ; clips, dispatches and reduces for us
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; vga_vline_core - internal: vertical run of masked byte writes
 ;
 ; Shared by gfx_pixel / gfx_vline / gfx_xor_rect: the caller has already
@@ -1169,6 +1294,11 @@ gfx_unlock:
 
 ; -----------------------------------------------------------------------------
 section .bss
+
+gfx_blit_x:  resw 1             ; gfx_blit4's row cursor (SPEC.md 5.4):
+gfx_blit_w:  resw 1             ; destination left, width, rows left and the
+gfx_blit_h:  resw 1             ; current source row's base. Lock-held
+gfx_blit_sv: resw 1             ; scratch, like the rect block below.
 
 vga_plane       resb 1          ; save/restore plane counter / mask bit
 vga_lmsk        resb 1          ; rect: left edge bit mask

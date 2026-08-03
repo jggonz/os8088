@@ -339,6 +339,42 @@ VID_CGA    equ 2
                                  ; a wide erase followed by glyphs can white
                                  ; out a band the glyphs then refuse to
                                  ; repaint. Erase per cell, or skip the pair.
+%define OSAPI_GFX_BLIT4     KERNEL_SEG:0x0190   ; ES:SI = packed 4bpp pixels (two
+                                 ; per byte, high nibble leftmost), BP = source
+                                 ; stride in BYTES, AX/BX = destination x/y,
+                                 ; CX/DX = width/height in pixels. Draws the
+                                 ; block, coalescing equal-coloured runs into
+                                 ; horizontal lines. ES is yours here - no stub
+                                 ; is involved, so point it at your own data.
+                                 ; This is the call to reach for when you have
+                                 ; an image in memory: your gfx calls are FAR
+                                 ; calls now, and one of these replaces the
+                                 ; hundreds of OSAPI_GFX_HLINE calls a
+                                 ; hand-rolled run-length blitter would make.
+                                 ; Honours the clip region and the back buffer.
+%define OSAPI_WM_RESIZE     KERNEL_SEG:0x0198   ; BX = win ptr, CX = new width,
+                                 ; DX = new height, in pixels, of the WHOLE
+                                 ; window (frame included). Clamps to the
+                                 ; kernel's minimum and to the live screen,
+                                 ; nudges x/y so the window still fits, and
+                                 ; repaints everything. Call it INSTEAD of
+                                 ; writing W_W/W_H yourself: the fields are
+                                 ; readable by contract, not writable, and an
+                                 ; app that sets them leaves the shadow, the
+                                 ; z-order damage and the dock out of step.
+                                 ; Do NOT hold the gfx lock.
+%define OSAPI_FONT_GLYPHS   KERNEL_SEG:0x01A0   ; out SI = the offset of the
+                                 ; kernel's 8x8 glyph table in KERNEL_SEG,
+                                 ; AL = first character code it covers,
+                                 ; AH = last, CX = bytes per glyph (8). Read
+                                 ; it with ES = KERNEL_SEG. For an app that
+                                 ; needs the BITMAP of a character rather than
+                                 ; a drawn one - scaling it, stamping it into
+                                 ; a canvas, measuring a cell. It is the same
+                                 ; table OSAPI_FONT_CHAR draws from, which is
+                                 ; the point: no int 10h ROM probe, no second
+                                 ; typeface, and it works on all three
+                                 ; adapters.
 ;
 ; Your worker gets DX = your instance index, DS = ES = CS = KERNEL_SEG,
 ; IF = 1 and the gfx lock free. The binding rules, none of them enforced:

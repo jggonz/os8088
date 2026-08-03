@@ -266,6 +266,72 @@ wm_create:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_resize - set a window's size from its owner (SPEC.md 11.1)
+;
+; in:  BX = window ptr, CX = new outer width, DX = new outer height;
+;      caller HOLDS the gfx lock (a window callback does)
+; out: nothing (all registers preserved); the record carries the clamped
+;      size and everything is repainted
+;
+; The sanctioned version of what apps/paint had to do behind the kernel's
+; back (docs/PAINT-NOTES.md): an app that adopts a picture's dimensions has
+; to move its own frame, and ui_grow and wm_fullscreen were the only things
+; that could. Clamps exactly as a drag does - never smaller than WMIN_W/
+; WMIN_H, never past the screen edge or the dock - and then re-fits the
+; origin the way ui_drag does, so a window that grew at the right edge slides
+; left instead of hanging off it.
+; -----------------------------------------------------------------------------
+wm_resize:
+    push ax
+    push cx
+    push dx
+    cmp cx, WMIN_W
+    jae .wok
+    mov cx, WMIN_W
+.wok:
+    mov ax, [vid_w]             ; never wider than the screen
+    cmp cx, ax
+    jbe .wok2
+    mov cx, ax
+.wok2:
+    cmp dx, WMIN_H
+    jae .hok
+    mov dx, WMIN_H
+.hok:
+    mov ax, [vid_dock_y0]       ; ...nor taller than the desktop band
+    sub ax, MBAR_H
+    cmp dx, ax
+    jbe .hok2
+    mov dx, ax
+.hok2:
+    mov [bx+W_W], cx
+    mov [bx+W_H], dx
+    mov ax, [vid_w]             ; x + w <= screen width
+    sub ax, cx
+    jns .xc
+    xor ax, ax
+.xc:
+    cmp [bx+W_X], ax
+    jle .yc
+    mov [bx+W_X], ax
+.yc:
+    mov ax, [vid_dock_y0]       ; y + h <= the row the dock owns
+    sub ax, dx
+    cmp ax, MBAR_H
+    jge .yc2
+    mov ax, MBAR_H
+.yc2:
+    cmp [bx+W_Y], ax
+    jle .paint
+    mov [bx+W_Y], ax
+.paint:
+    call wm_paint_all
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_destroy - free a window record and repaint everything
 ; in:  BX = window ptr (caller holds the gfx lock)
 ; out: nothing (all registers preserved)

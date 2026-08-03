@@ -260,7 +260,21 @@ osapi_table:
     OSAPI_JSLOT api_mem_claim     ; 0x0178 - the claim heap (SPEC.md 42.3):
     OSAPI_JSLOT api_mem_free      ; 0x0180   X, same fence as the spawn
     OSAPI_SLOT osapi_mem_avail    ; 0x0188
-osapi_table_end:                  ; 0x0190
+    OSAPI_SLOT gfx_blit4          ; 0x0190 - packed 4bpp block (SPEC.md 5.4):
+                                  ;          ES:SI = source, BP = stride,
+                                  ;          AX/BX = dest, CX/DX = w/h. ES is
+                                  ;          the caller's own choice here, so
+                                  ;          no stub is needed
+    OSAPI_SLOT wm_resize          ; 0x0198 - resize a window (SPEC.md 11.1):
+                                  ;          BX = win, CX = w, DX = h; lock
+                                  ;          held. Retires the last liberty
+                                  ;          in docs/PAINT-NOTES.md - an app
+                                  ;          writing W_W/W_H itself
+    OSAPI_SLOT osapi_font_glyphs  ; 0x01A0 - the kernel's 8x8 glyph table
+                                  ;          (SPEC.md 6): out SI = its offset
+                                  ;          in KERNEL_SEG, AL = first code,
+                                  ;          AH = last, CX = bytes per glyph
+osapi_table_end:                  ; 0x01A8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -268,8 +282,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 48 * 8
-%error "os8088 API jump table must be exactly 48 8-byte slots"
+%if OSAPI_TABLE_LEN != 51 * 8
+%error "os8088 API jump table must be exactly 51 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -477,6 +491,22 @@ osapi_rand:
     add ax, 13849
     mov [osapi_seed], ax
     pop dx
+    ret
+
+; ---- osapi_font_glyphs - the kernel's own 8x8 font (SPEC.md 6/20.3) ---------
+; out: SI = font_glyphs (an offset in KERNEL_SEG - read it through ES, which
+;      is KERNEL_SEG on entry to every callback), AL = FONT_FIRST, AH =
+;      FONT_LAST, CX = 8 bytes per glyph, row 0 first, bit 7 leftmost.
+;
+; For an app that draws text into its OWN pixels rather than onto the screen
+; (apps/paint's text tool). Before this it re-probed the ROM font through
+; int 10h and carried the kernel's F000:FA6E fallback - 40 lines to arrive
+; at a table the kernel already had.
+osapi_font_glyphs:
+    mov si, font_glyphs
+    mov al, FONT_FIRST
+    mov ah, FONT_LAST
+    mov cx, 8
     ret
 
 ; ---- osapi_video - the screen the program actually got (SPEC.md 39.2) --------
