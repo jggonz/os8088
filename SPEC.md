@@ -6736,33 +6736,41 @@ allow, from 32x16 up, and everything else follows from that:
   duplicate-instance guard (`pt_dupchk`, a magic record at the scratch base
   believed only while its window pointer still named a live Paint window) went
   with it: two instances now get two different claims by construction.
-- **The claim is bounded by the SCREEN, not by the machine.** `pt_want`
-  computes what two canvases at `[pt_cwmax]` × `[pt_chmax]` plus the clipboard
-  floor plus the scratch would cost, and `pt_geom` asks for the smaller of
-  that and the largest free run. The canvas can never exceed what the screen
-  will show (`pt_setsize` clamps there first), so that product is a hard upper
-  bound on anything the instance can ever address — about 260KB on VGA, and
-  much less on Hercules or CGA, whose desktops are shorter. Asking for "the
-  largest free run" instead meant taking 318KB on a 640KB machine whatever the
-  screen was, and denying it to the back buffer and to every other package;
-  with the bound in place a **second Paint** starts and takes what is left.
-  It is still the *maximum* rather than the default canvas's cost, and that is
-  deliberate: the buffer bases are fixed once, so the undo image has to be big
-  enough for any canvas the user can later drag to. Claiming for 448×280 and
-  re-basing on every grow would mean moving a live picture between segments,
-  which is the one thing this layout exists to avoid.
-- **What is claimed is then divided in three tiers.** Scratch (the flood-fill
-  span stack, 12KB) comes off the top, and what is left is divided in the
-  order the features are worth least. With room for all three, the canvas and its equally-sized
-  undo image split what remains after a 16KB clipboard floor — a 101KB canvas
-  ceiling on a 640KB machine. Below that the **clipboard** goes first
-  (`[pt_haveclip]` = 0: no Cut/Copy/Paste, and no GIF either — the codec's
-  tables are what the clipboard's floor is reserved for), and the canvas and
-  undo image split the whole region. Below *that* **undo** goes too
-  (`[pt_haveundo]` = 0) and the entire region is canvas, which is why the
-  smallest machines get the *biggest* picture: 448x166 at 460KB against 448x146
-  at 490KB. Only below ~452KB is there no minimum canvas at all, and the window
-  then carries a "Not enough memory" notice instead, touching nothing.
+- **Four claims, sized for the canvas that is actually up.** `pt_alloc` takes
+  them separately (§42.3): a fixed 12KB **scratch** (the flood-fill stack and
+  the file readers' fallback buffer, claimed once and never moved), the
+  **canvas**, an **undo image** the same size, and a **clipboard** at
+  `PT_CLIPMINP`'s floor. Only the canvas must succeed; each of the other two
+  is worth exactly one feature, so a refusal switches that feature off and
+  nothing else — which is the three-tier degradation the single-block version
+  produced by arithmetic, expressed as what it is. A fresh 448×280 Paint holds
+  about 150KB on any machine, where the single block held 260KB on a 640KB one
+  and left no room for the back buffer or a second instance.
+- **A resize re-claims; nothing is staged.** `pt_resize` frees the undo image
+  and the clipboard (a resize drops both anyway), claims a new canvas, copies
+  the picture across block to block, frees the old canvas, and asks for undo
+  and clipboard again at the new size. The peak is the old canvas plus the new
+  one. This is what retires the constraint that shaped the whole of the old
+  design: the old picture used to be staged **in the undo image**, so the undo
+  image had to be big enough for any canvas that could ever be adopted, so
+  every buffer had to be sized for the screen's maximum and the bases had to
+  be fixed for the staging to be safe. Copying block to block needs no staging
+  area, so a machine that could not fund an undo image can still resize, and
+  `WF_SIZABLE` no longer depends on there being one. A refused claim re-fits
+  the size against the block already held and falls back to the old staging
+  path, so a resize can degrade but never fail half-done.
+- **The clipboard grows on demand.** It starts at the floor — which is what
+  the GIF codec's tables need, and a paste needs nothing until something has
+  been copied — and `pt_clip_need` claims a bigger one the first time a Copy
+  asks for more, taking the new block before releasing the old. A canvas-sized
+  clipboard nobody has used is 60KB of dead claim.
+- **What a grow is allowed to ask for** is `pt_growmax`: the largest free
+  **run**, not the total free, because re-basing needs the new block and the
+  old one live at the same time. `pt_fit` clamps against that or against the
+  block already held, whichever is larger.
+- **What is claimed is then divided in three tiers.** Below the point where
+  the undo image can be funded, undo goes; below where the clipboard can,
+  Cut/Copy/Paste and GIF go with it.
 
   Three things follow from the third tier and are load-bearing:
   **the window is not `WF_SIZABLE`** (`pt_resize` stages the old picture in the

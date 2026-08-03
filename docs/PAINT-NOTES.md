@@ -80,17 +80,23 @@ next paragraph is what would make that impossible rather than merely unlikely.
 
 Three consequences are handled rather than hoped about:
 
-- **It asks for what the screen could use, not for what is free.** `pt_want`
-  bounds the claim at two canvases of `[pt_cwmax]` × `[pt_chmax]` plus the
-  clipboard floor plus the scratch — about 260KB on VGA and much less on a
-  mono adapter. The first version took the largest free run capped at a
-  constant, which on a 640KB machine was 318KB whatever the screen was: it
-  left no room for the back buffer and none for a second instance. It is
-  still the maximum rather than the default canvas's cost, because the buffer
-  bases are fixed once and the undo image has to cover any canvas the user
-  can drag to; claiming for the default and re-basing on a grow would mean
-  copying a live picture between segments, and both blocks would have to
-  exist at once while it happened.
+- **It holds four claims, sized for the canvas that is up.** Scratch (fixed
+  12KB), canvas, undo image, clipboard — each asked for on its own, so each
+  refusal costs exactly the feature it funds. A resize frees undo and
+  clipboard, re-claims the canvas, copies block to block, frees the old one
+  and asks for the other two again; the clipboard starts at its floor and
+  grows the first time a Copy needs more. A fresh 448×280 Paint therefore
+  holds about 150KB where the first version held 318KB, and the figure tracks
+  what the picture actually is: 236K after growing the window to 514×371, 245K
+  after copying a 240×210 selection.
+
+  The first version took one block sized for the largest canvas the machine
+  (later, the screen) could hold, because `pt_resize` staged the old picture
+  **in the undo image** — so the undo image had to cover any canvas that could
+  ever be adopted, and the bases had to be fixed for the staging to be safe.
+  Copying between two claims removes the staging area entirely, and with it
+  both constraints. It also means a machine that cannot fund an undo image can
+  still resize, which is why `WF_SIZABLE` is no longer conditional.
 - **The memory may not be there.** `pt_entry` asks the allocator first and
   gives up features rather than refusing outright. The thresholds below are for a
   machine whose back buffer is live; where it is not, the base drops to

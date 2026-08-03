@@ -1202,9 +1202,9 @@ fm_onclick:
     jl .viewbtn
     cmp cx, 15
     jg .viewbtn
-    mov dl, [fm_ldrv]           ; remount THIS window's drive in place
-    call fm_mount               ; (under the gfx lock: stalls painters
-    jmp .redraw                 ;  briefly; accepted by SPEC.md 22)
+    call fm_reload              ; re-list where we ARE, folder included
+    jmp .redraw                 ; (under the gfx lock: stalls painters
+                                ;  briefly; accepted by SPEC.md 22)
 
     ; --- view toggle (drawn iff cw >= 142) ---
 .viewbtn:
@@ -1433,7 +1433,8 @@ fm_onkey:
     jmp .redraw
 
 .remount:
-    mov dl, [di+FS_DRV]         ; ours, not whichever drive is mounted
+    call fm_reload              ; r: re-list, without leaving the folder
+    jmp .redraw
 
 .mount:
     call fm_mount               ; DL = drive; the same body the Refresh
@@ -1584,11 +1585,11 @@ fm_go:
 ; in:  DL = drive (0 = A:, 1 = B:); gfx lock held, [fm_vp] published
 ; out: nothing (all registers preserved)
 ;
-; The body behind the Refresh button, the a/b/r keys and the Folder menu's
-; Refresh / Drive A: / Drive B: - one copy, so a drive change can never mean
-; three slightly different things. Unlike fm_go this is NOT navigation: it
-; lands at the ROOT deliberately, because a swapped disk has no meaningful
-; "current folder".
+; The body behind the a/b keys and the Folder menu's Drive A: / Drive B: -
+; one copy, so a drive CHANGE can never mean two slightly different things.
+; Unlike fm_go this is not navigation: it lands at the ROOT deliberately,
+; because a disk you just put in the other drive has no meaningful "current
+; folder".
 ; -----------------------------------------------------------------------------
 fm_mount:
     push ax
@@ -1603,6 +1604,38 @@ fm_mount:
     call fm_settitle
     pop di
     pop si
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_reload - re-list this window WHERE IT IS (SPEC.md 22)
+; in:  gfx lock held, [fm_vp] published
+; out: nothing (all registers preserved)
+;
+; The body behind the Refresh button, the r key and Folder > Refresh. It used
+; to be fm_mount, which meant every refresh silently walked the user back to
+; the root - the one thing a refresh must not do, since the reason to press
+; it is that the folder you are LOOKING at may have changed. The cwd is
+; re-entered through the same validated pipeline a navigation uses, so a disk
+; swapped underneath it fails the mount and lands at the root with the write
+; gate shut (SPEC.md 19.2) - bounded, and the same answer a bad disk has
+; always given.
+;
+; The title is left alone on purpose. fm_settitle takes the folder's NAME
+; from the caller, and a refresh has no caller who knows it: re-deriving it
+; would need the parent's listing, i.e. a second whole mount to print a
+; string. The caption is already right, because nothing moved.
+; -----------------------------------------------------------------------------
+fm_reload:
+    push ax
+    push dx
+    push di
+    mov di, [fm_vp]
+    mov al, [di+FS_DRV]
+    mov dx, [di+FS_CWD]
+    call fmv_load
+    pop di
     pop dx
     pop ax
     ret
@@ -1888,9 +1921,7 @@ fm_c_bounce:                    ; Special > Bounce
     jmp inst_launch_post
 
 fm_c_refresh:                   ; Folder > Refresh
-    mov di, [fm_vp]
-    mov dl, [di+FS_DRV]
-    jmp short fm_c_mount
+    jmp fm_reload
 fm_c_drva:                      ; Folder > Drive A:
     xor dl, dl
     jmp short fm_c_mount
@@ -2189,10 +2220,13 @@ fm_editkey:
     xor bh, bh
     or bl, bl
     jz .out
-    dec bl
-    mov [fm_elen], bl
-    mov byte [fm_ebuf+bx-1], 0
-    jmp short .out
+    dec bl                      ; `dec bl` IS `dec bx` here (BH is 0), so BX
+    mov [fm_elen], bl           ; is the NEW length and the terminator lands
+    mov byte [fm_ebuf+bx], 0    ; on the character just dropped - the -1 that
+    jmp short .out              ; used to be here punched a NUL one byte
+                                ; EARLIER, so the name displayed short and
+                                ; every character typed after a backspace
+                                ; landed behind that NUL and never appeared
 
 .confirm:
     cmp al, 13

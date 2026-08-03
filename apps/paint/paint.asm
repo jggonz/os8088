@@ -271,11 +271,11 @@ pt_entry:
     jne .menus
     push ax
     mov al, 1                       ; resizable: the canvas IS the content, so
-    cmp byte [pt_haveundo], 0       ; dragging the grow box sizes the picture -
-    jne .sizable                    ; except with no undo image to stage the
-    xor al, al                      ; old picture in, when the size is fixed
-.sizable:
-    call OSAPI_WM_SIZABLE
+    call OSAPI_WM_SIZABLE           ; dragging the grow box sizes the picture.
+                                    ; It used to be conditional on there being
+                                    ; an undo image to stage the old picture
+                                    ; in; pt_resize copies block to block now
+                                    ; and needs no staging area at all
     mov ax, pt_onsize               ; ...and the kernel asks us before it
     call OSAPI_WM_ONSIZE            ; commits one (SPEC.md 11.1)
     pop ax
@@ -295,23 +295,26 @@ pt_entry:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_geom - the screen's limits, the memory budget, and the first canvas
+; pt_geom - the screen's limits, the memory claims, and the first canvas
 ; in:  nothing
 ; out: pt_tpl patched; [pt_cwmax]/[pt_chmax] = the biggest canvas this SCREEN
-;      can show; [pt_smaxp] = the biggest this MACHINE can hold, in paragraphs;
-;      the three buffer bases; [pt_cw]/[pt_ch] = the starting canvas;
+;      can show; [pt_smaxp] = what the canvas CLAIM holds, in paragraphs; the
+;      four claim segments; [pt_cw]/[pt_ch] = the starting canvas;
 ;      [pt_mode] = PT_M_NOMEM or PT_M_SMALL when a bound cannot be met
 ;
-; Both bounds are real and neither is a constant. The screen bound comes from
-; OSAPI_VIDEO (SPEC.md 39.2): the window sits at PT_WIN_Y and may reach the
-; row the dock owns. The memory bound comes from int 12h: the canvas and its
-; undo image are always the same size and the clipboard has a floor, so the
-; largest canvas is (usable - clipboard floor) / 2.
+; The screen bound comes from OSAPI_VIDEO (SPEC.md 39.2): the window sits at
+; PT_WIN_Y and may reach the row the dock owns.
 ;
-; The buffer bases are fixed here, once, from that MAXIMUM rather than from the
-; starting canvas - which is what makes a later resize safe: no base ever
-; moves, so pt_resize can stage the old picture in the undo buffer and lay the
-; new one out with no overlap to reason about.
+; **FOUR separate claims, sized for the canvas we are about to show** - not
+; one block sized for the biggest canvas the screen could ever show. The
+; difference is the whole memory story: a package may hold several claims
+; (SPEC.md 42.2) and the kernel frees all of them at teardown, so there is no
+; reason to reserve the maximum up front. What made the old version do it was
+; that pt_resize staged the old picture in the undo image, which therefore had
+; to be big enough for any canvas that could ever be adopted - and the bases
+; had to be fixed for the staging to be safe. pt_resize re-claims now, so
+; both constraints are gone and a fresh 448x280 Paint holds about 150KB on a
+; 640KB machine instead of 260KB.
 ; -----------------------------------------------------------------------------
 pt_geom:
     call OSAPI_VIDEO                ; AX=w, BX=h, CX=dock row, DL=kind, DH=bpp
@@ -344,78 +347,28 @@ pt_geom:
     mov byte [pt_mode], PT_M_SMALL
     mov word [pt_cwmax], PT_CW_MIN  ; the window will only carry a notice, but
     mov word [pt_chmax], PT_CH_MIN  ; the arithmetic below still has to run
-    ; --- what memory allows, and what has to be given up to fit -------------
-    ; Three tiers, in the order the features are worth least: the clipboard
-    ; goes first, then undo. Each is a whole canvas's worth of paragraphs (the
-    ; clipboard a fixed floor), so dropping one is what lets a machine that can
-    ; hold a picture but not two of them run the program at all.
+    ; --- what memory allows -------------------------------------------------
+    ; Four claims (SPEC.md 42.3), each independently refusable, and each
+    ; refusal costs exactly the feature it funds. That is the tier system the
+    ; old single block emulated with arithmetic, expressed as what it is.
 .mem:
-    ; --- ask the kernel what it can give us, then take it (SPEC.md 42.3) -----
-    ; This is the whole memory story now. OSAPI_MEM_AVAIL answers with what is
-    ; actually free - not what the machine has - so it already accounts for
-    ; the back buffer if it is armed, for another Paint's canvas, and for
-    ; every other package's claim. We ask for the largest run, capped at what
-    ; we could ever use, and the kernel frees it when this instance dies.
-    call OSAPI_MEM_AVAIL            ; AX = largest free run, KB
-    push ax
-    call pt_want                    ; AX = what THIS screen could ever use
-    mov dx, ax
-    pop ax
-    cmp ax, dx                      ; ...and take the smaller of the two
-    jbe .want_ok
-    mov ax, dx
-.want_ok:
-    cmp ax, PT_SC_KB + 32           ; below this even the smallest canvas and
-    jb .nomem                       ; the scratch cannot both fit
-    push ax
-    call OSAPI_MEM_CLAIM            ; out DX = base segment, CF = refused
-    pop ax
-    jc .nomem
-    mov [pt_base], dx
-    sub ax, PT_SC_KB
-    mov cl, 6
-    shl ax, cl                      ; KB -> paragraphs of usable block
-    add dx, ax
-    mov [pt_scseg], dx              ; scratch: the flood-fill stack, at the top
-                                    ; of the block so its address is fixed
-    or ax, ax
-    jz .nomem
-    mov byte [pt_haveundo], 1
-    mov byte [pt_haveclip], 1
-    cmp ax, PT_CLIPMINP + 2 * PT_MINP
-    jb .noclip
-    sub ax, PT_CLIPMINP
-    shr ax, 1                       ; canvas and undo image, equal halves
-    jmp short .split
-.noclip:
-    mov byte [pt_haveclip], 0       ; no Cut/Copy/Paste - and no GIF either, the
-    cmp ax, 2 * PT_MINP             ; codec's tables live in the clipboard
-    jb .noundo
-    shr ax, 1
-    jmp short .split
-.noundo:
-    mov byte [pt_haveundo], 0       ; no Undo/Redo, no resize (pt_resize stages
-    cmp ax, PT_MINP                 ; the old picture there) and no Open (so
-    jb .nomem                       ; does the file reader) - but the whole of
-                                    ; memory is canvas, so the picture is bigger
-.split:
-    mov [pt_smaxp], ax
-    mov dx, [pt_base]
-    add dx, ax
-    mov [pt_unseg], dx              ; the undo image, one whole canvas up
-    add dx, ax
-    mov [pt_cbseg], dx              ; the clipboard takes the remainder
-    xor ax, ax
-    cmp byte [pt_haveclip], 0
-    je .cbdone                      ; without one, its base is past the scratch
-    mov ax, [pt_scseg]              ; and its size is meaningless
-    sub ax, dx
-.cbdone:
-    mov [pt_cbparas], ax
-    jmp short .first
+    mov ax, PT_CW_DEF               ; the canvas we are about to show, which is
+    cmp ax, [pt_cwmax]              ; what we size the claims for
+    jle .dw_ok
+    mov ax, [pt_cwmax]
+.dw_ok:
+    mov dx, PT_CH_DEF
+    cmp dx, [pt_chmax]
+    jle .dh_ok
+    mov dx, [pt_chmax]
+.dh_ok:
+    call pt_growmax                 ; what one canvas could be, given the heap
+    call pt_fit                     ; ...and shrink the request until it fits
+    call pt_alloc                   ; scratch, canvas, undo image, clipboard
+    jnc .first
 .nomem:
     mov byte [pt_mode], PT_M_NOMEM
-    mov word [pt_smaxp], PT_MINP    ; nothing is allocated or drawn, but the
+    mov word [pt_smaxp], PT_MINP    ; nothing is claimed or drawn, but the
                                     ; layout arithmetic still runs once
     ; --- the starting canvas: the default, held inside both bounds ----------
 .first:
@@ -475,7 +428,9 @@ pt_fit:
 .retry:
     call pt_paras                   ; BX = stride, CX = paragraphs needed
     cmp cx, [pt_smaxp]
-    jbe .out
+    jbe .out                        ; the block we hold carries it...
+    cmp cx, [pt_growp]
+    jbe .out                        ; ...or a bigger one we could claim does
     mov byte [pt_fitcut], 1
     cmp dx, PT_CH_MIN
     jbe .narrow
@@ -520,51 +475,250 @@ pt_fit:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_want - how much memory could this screen ever make us use, in KB
-; in:  [pt_cwmax], [pt_chmax] (already clamped to the live screen)
-; out: AX = KB; preserves every other register
-;
-; The claim used to be "the largest free run, capped at PT_WANT_KB" - which on
-; a 640KB machine meant taking 318KB whatever the screen was, and leaving the
-; back buffer and every other package to share what was left. It is not what
-; the app can use: the canvas can never be bigger than the screen will show
-; (pt_setsize clamps to [pt_cwmax] x [pt_chmax] before it clamps to memory),
-; so two of THAT canvas plus the clipboard floor plus the scratch is a hard
-; upper bound on anything this instance can ever address. On VGA that is about
-; 260KB rather than 318; on Hercules and CGA it is dramatically less, because
-; those screens are shorter.
-;
-; It is still the MAXIMUM and not the default canvas's cost, and that is
-; deliberate: pt_geom fixes the buffer bases once, so the undo image has to be
-; big enough for any canvas the user can later drag to. Claiming for the
-; default (448x280) and re-basing on every grow would mean moving a live
-; picture between segments, which is the one thing this layout is built to
-; avoid.
+; pt_kb_of - KB a claim of CX paragraphs needs
+; in:  CX = paragraphs
+; out: AX = KB, rounded UP (a claim a paragraph short is a claim that
+;      corrupts); preserves every other register
 ; -----------------------------------------------------------------------------
-pt_want:
+pt_kb_of:
+    push cx
+    mov ax, cx
+    add ax, 63
+    jnc .ok
+    mov ax, 0xFFFF                  ; cannot happen: pt_fit caps the canvas
+.ok:
+    mov cl, 6
+    shr ax, cl
+    or ax, ax
+    jnz .out
+    inc ax
+.out:
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_alloc - claim everything a canvas of AX x DX needs (SPEC.md 42.3)
+; in:  AX = width, DX = height (already through pt_fit)
+; out: CF=1 nothing usable could be claimed; else the four claim segments are
+;      published and [pt_haveundo]/[pt_haveclip] say what was funded.
+;      Preserves AX and DX.
+;
+; The canvas is the only claim that must succeed. The undo image and the
+; clipboard are each worth exactly one feature, so each is asked for on its
+; own and a refusal simply switches that feature off - which is the same three
+; tiers the single-block version produced by arithmetic, without the
+; arithmetic. The scratch is a fixed 12KB and comes first, because the flood
+; fill and the file readers borrow it and neither can be given up.
+; -----------------------------------------------------------------------------
+pt_alloc:
     push bx
     push cx
     push dx
-    mov ax, [pt_cwmax]
-    mov dx, [pt_chmax]
-    call pt_paras                   ; CX = paragraphs of one biggest canvas
-    mov ax, cx
-    add ax, cx                      ; ...twice: the picture and the undo image
-    jc .cap                         ; (a screen that overflowed 1MB cannot
-    add ax, PT_CLIPMINP             ; exist, but the add is free)
-    jc .cap
+    push ax
+    call pt_paras                   ; CX = paragraphs one canvas needs
+    mov [pt_needp], cx
+
+    cmp word [pt_scseg], 0          ; scratch is claimed once and never moves
+    jne .canvas
+    mov ax, PT_SC_KB
+    call OSAPI_MEM_CLAIM
+    jc .fail
+    mov [pt_scseg], dx
+
+.canvas:
+    mov cx, [pt_needp]
+    call pt_kb_of
+    call OSAPI_MEM_CLAIM
+    jc .fail
+    mov [pt_base], dx
     mov cl, 6
-    shr ax, cl                      ; paragraphs -> KB
-    inc ax                          ; round up
-    add ax, PT_SC_KB
-    cmp ax, PT_WANT_KB
-    jbe .out
-.cap:
-    mov ax, PT_WANT_KB
-.out:
+    shl ax, cl                      ; what the claim actually holds...
+    mov [pt_smaxp], ax              ; ...which is >= [pt_needp]
+
+    call pt_alloc_undo
+    call pt_alloc_clip
+    pop ax
     pop dx
     pop cx
     pop bx
+    clc
+    ret
+.fail:
+    pop ax
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_alloc_undo - claim an undo image the size of the canvas claim
+; out: [pt_unseg]/[pt_undelta]/[pt_haveundo]; preserves all registers
+;
+; [pt_undelta] is a paragraph DELTA and not an address, so pt_urowset stays
+; one add per row even though the two blocks are now unrelated claims that
+; may sit either way round in memory (16-bit wraparound makes a negative
+; delta work unchanged).
+; -----------------------------------------------------------------------------
+pt_alloc_undo:
+    push ax
+    push cx
+    push dx
+    mov byte [pt_haveundo], 0
+    mov word [pt_unseg], 0
+    mov cx, [pt_smaxp]
+    call pt_kb_of
+    call OSAPI_MEM_CLAIM
+    jc .out
+    mov [pt_unseg], dx
+    sub dx, [pt_base]
+    mov [pt_undelta], dx
+    mov byte [pt_haveundo], 1
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_alloc_clip - claim a clipboard: the canvas size if the heap will fund it,
+;                 the floor if not, nothing if not even that
+; out: [pt_cbseg]/[pt_cbparas]/[pt_haveclip]; preserves all registers
+;
+; The floor is what the GIF codec's tables need (PT_CLIPMINP), so a clipboard
+; that shrank to it still leaves Save Gif working while Cut/Copy of a large
+; selection starts refusing - which is what [pt_cbparas] already gates.
+; -----------------------------------------------------------------------------
+pt_alloc_clip:
+    push ax
+    push cx
+    push dx
+    mov byte [pt_haveclip], 0
+    mov word [pt_cbseg], 0
+    mov word [pt_cbparas], 0
+    mov cx, PT_CLIPMINP             ; the FLOOR to start with: the GIF codec's
+.try:                               ; tables need it and a paste needs nothing
+                                    ; until something has been copied, so a
+                                    ; canvas-sized clipboard nobody has used
+                                    ; is 60KB of dead claim (pt_clip_need
+                                    ; grows it when a Copy actually asks)
+    call pt_kb_of
+    call OSAPI_MEM_CLAIM
+    jnc .got
+    cmp cx, PT_CLIPMINP             ; already at the floor: no clipboard
+    jbe .out
+    mov cx, PT_CLIPMINP
+    jmp short .try
+.got:
+    mov [pt_cbseg], dx
+    mov cl, 6
+    shl ax, cl
+    mov [pt_cbparas], ax
+    mov byte [pt_haveclip], 1
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_clip_need - make the clipboard claim at least AX paragraphs
+; in:  AX = paragraphs a Copy is about to need
+; out: CF=0 the claim is big enough (it may have been replaced), CF=1 it could
+;      not be grown and the old one is still intact; preserves all registers
+;
+; The clipboard starts at PT_CLIPMINP and grows here, the first time a Copy
+; asks for more. Growing means claiming the bigger block BEFORE freeing the
+; smaller one - the reverse would hand the memory back and then discover it
+; had gone to someone else - so the peak is old + new, both of which are small.
+; What is in the old clipboard is discarded either way, which is fine: this
+; runs at the top of the Copy that is about to overwrite it.
+; -----------------------------------------------------------------------------
+pt_clip_need:
+    push ax
+    push cx
+    push dx
+    cmp ax, [pt_cbparas]
+    jbe .ok
+    mov cx, ax
+    call pt_kb_of
+    call OSAPI_MEM_CLAIM            ; the bigger one first...
+    jc .no
+    push dx
+    call pt_free_clip               ; ...then give the smaller one back
+    pop dx
+    mov [pt_cbseg], dx
+    mov cl, 6
+    shl ax, cl
+    mov [pt_cbparas], ax
+    mov byte [pt_haveclip], 1
+.ok:
+    pop dx
+    pop cx
+    pop ax
+    clc
+    ret
+.no:
+    pop dx
+    pop cx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_free_undo / pt_free_clip - hand a claim back (SPEC.md 42.3)
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+pt_free_undo:
+    push dx
+    mov dx, [pt_unseg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+    mov word [pt_unseg], 0
+    mov byte [pt_haveundo], 0
+    mov byte [pt_undo_ok], 0
+.out:
+    pop dx
+    ret
+
+pt_free_clip:
+    push dx
+    mov dx, [pt_cbseg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+    mov word [pt_cbseg], 0
+    mov word [pt_cbparas], 0
+    mov byte [pt_haveclip], 0
+    mov word [pt_cbw], 0
+.out:
+    pop dx
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_growmax - the biggest canvas a NEW claim could fund, in paragraphs
+; out: [pt_growp] set; preserves all registers
+;
+; What bounds a GROW, as opposed to what the block we already hold can carry.
+; A grow re-bases (pt_resize), and re-basing needs the new block and the old
+; one live at the same time - so the bound is the largest free RUN, not the
+; total free. Assumes the clipboard survives, which it does at every size
+; this can return.
+; -----------------------------------------------------------------------------
+pt_growmax:
+    push ax
+    push cx
+    call OSAPI_MEM_AVAIL            ; AX = largest free run, KB
+    cmp ax, PT_WANT_KB
+    jbe .capped
+    mov ax, PT_WANT_KB
+.capped:
+    mov cl, 6
+    shl ax, cl                      ; KB -> paragraphs
+    mov [pt_growp], ax
+    pop cx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3648,10 +3802,10 @@ pt_copy:
     mov cl, 4
     shr dx, cl
     or ax, dx                       ; AX = paragraphs
-    cmp ax, [pt_cbparas]
-    jbe .room
-    mov word [pt_cbw], 0            ; too big: no clipboard rather than a
-    mov word [pt_msgp], pt_s_bigsel ; corrupted one
+    call pt_clip_need               ; grow the claim if this needs more
+    jnc .room
+    mov word [pt_cbw], 0            ; it would not grow: no clipboard rather
+    mov word [pt_msgp], pt_s_bigsel ; than a corrupted one
     jmp short .out
 .room:
     mov ax, [pt_cbseg]
@@ -4944,11 +5098,6 @@ pt_track:
     push bx
     push cx
     push dx
-    cmp byte [pt_haveundo], 0
-    jne .live
-    call pt_wfix                    ; no staging buffer: the frame is not
-    jmp short .out                  ; allowed to move the canvas at all
-.live:
     mov ax, [pt_contw]              ; the canvas the content asks for
     sub ax, PT_CV_X
     mov dx, [pt_conth]
@@ -4993,6 +5142,10 @@ pt_track:
 pt_sizeask:
     push bx
     push cx
+    call pt_growmax                 ; what a NEW canvas claim could fund right
+                                    ; now - the bound on a GROW, since
+                                    ; pt_resize re-claims (the block we hold
+                                    ; is [pt_smaxp], and pt_fit takes either)
     cmp ax, PT_CW_MIN               ; signed: a tiny window makes this negative
     jge .w_ok
     mov ax, PT_CW_MIN
@@ -5041,8 +5194,8 @@ pt_sizeask:
 pt_onsize:
     push ax
     push dx
-    cmp byte [pt_haveundo], 0       ; no staging buffer, no resize: pt_resize
-    je .fixed                       ; needs somewhere to hold the old picture
+    cmp byte [pt_mode], PT_M_LIVE   ; a notice window has no canvas to resize
+    jne .fixed
     mov ax, cx
     sub ax, PT_CHROME_W             ; the canvas the proposal implies
     sub dx, PT_CHROME_H
@@ -5103,12 +5256,24 @@ pt_setsize:
 ; out: the canvas relaid out and repopulated; undo, clipboard and selection
 ;      dropped; preserves all registers
 ;
-; The old picture is staged in the UNDO IMAGE, which is why the buffer bases
-; are sized for the biggest canvas the machine allows and never move
-; (pt_geom): staging and the new layout then live in different segments and
-; there is no overlap to reason about. The old row geometry is recomputed
-; arithmetically for the read-back, because the tables now describe the new
-; one.
+; **It re-claims.** The undo image and the clipboard go back to the kernel
+; first - a resize drops both anyway - then a NEW canvas claim is taken, the
+; picture is copied across, the old claim is freed, and undo and clipboard are
+; asked for again at the new size. So the peak is the old canvas plus the new
+; one, and the steady state is what the picture actually needs.
+;
+; The version this replaces staged the old picture in the undo image, which is
+; what forced every claim to be sized for the largest canvas the screen could
+; ever show: the undo image had to be able to hold any canvas that could be
+; adopted later, and the bases had to be fixed for the staging to be safe.
+; Copying block-to-block needs no staging area at all, which also means a
+; resize no longer depends on there being an undo image - a machine that could
+; not fund one can still resize.
+;
+; If the new claim is refused the size is re-fitted against the block we
+; already hold and the old path runs, so a resize can degrade but never fail
+; half-done. The old row geometry is recomputed arithmetically for the
+; read-back, because the tables describe the new layout by then.
 ; -----------------------------------------------------------------------------
 pt_resize:
     push ax
@@ -5119,15 +5284,54 @@ pt_resize:
     push di
     push bp
     push es
-    push ax                         ; the new size, held across the staging
+    push ax                         ; the new size, held across the move
     push dx
-    ; --- stage every old row in the undo image ------------------------------
-    mov byte [pt_undo_off], 0
+
+    call pt_paras                   ; CX = paragraphs the new canvas needs
+    cmp cx, [pt_smaxp]
+    jbe .inplace                    ; the claim we hold already carries it
+
+    ; --- grow: give back what a resize drops, then claim the new canvas -----
+    call pt_free_undo
+    call pt_free_clip
+    call pt_kb_of                   ; AX = KB for CX paragraphs
+    call OSAPI_MEM_CLAIM            ; DX = the new base, CF = refused
+    jc .refit
+    mov bx, [pt_base]
+    mov [pt_obase], bx              ; the old canvas: source, then freed
+    mov [pt_osrc], bx
+    mov [pt_base], dx
+    mov cl, 6
+    shl ax, cl
+    mov [pt_smaxp], ax
+    jmp short .geom
+
+.refit:
+    pop dx                          ; no bigger block after all: take what the
+    pop ax                          ; one we hold can carry
+    mov word [pt_growp], 0
+    call pt_fit
+    push ax
+    push dx
+
+.inplace:
+    mov word [pt_obase], 0          ; no move: stage in the undo image, the
+    mov ax, [pt_base]               ; way this always did
+    add ax, [pt_undelta]
+    mov [pt_osrc], ax
+    cmp byte [pt_haveundo], 0
+    je .nostage                     ; nowhere to stage: the picture cannot be
+    mov byte [pt_undo_off], 0       ; carried across, so it is redrawn white
     call pt_undo_new
     xor ax, ax
     mov dx, [pt_ch]
     dec dx
     call pt_umark
+    jmp short .geom
+.nostage:
+    mov word [pt_osrc], 0
+
+.geom:
     mov ax, [pt_cw]                 ; the old geometry, for the read-back
     mov [pt_ocw], ax
     mov ax, [pt_ch]
@@ -5140,8 +5344,11 @@ pt_resize:
     call pt_bmp_hdr
     mov al, CWHITE
     call pt_wipe                    ; whatever the old picture does not reach
+
     ; --- copy the overlap back, row by row ----------------------------------
-    mov bp, [pt_och]                ; BP = rows to carry across
+    cmp word [pt_osrc], 0
+    je .done                        ; nothing to carry across
+    mov bp, [pt_och]                ; BP = rows to carry
     cmp bp, [pt_ch]
     jbe .rows
     mov bp, [pt_ch]
@@ -5156,7 +5363,7 @@ pt_resize:
     cmp si, bp
     jae .done
     mov ax, si
-    call pt_orowset                 ; ES:DI = the staged old row
+    call pt_orowset                 ; ES:DI = the old row
     mov bx, di                      ; BX = its offset; [pt_orseg] its segment
     mov ax, si
     call pt_rowset                  ; ES:DI = the new row
@@ -5173,8 +5380,16 @@ pt_resize:
     inc si
     jmp short .row
 .done:
-    mov byte [pt_undo_ok], 0        ; the staging overwrote the undo image
-    mov word [pt_cbw], 0
+    mov dx, [pt_obase]              ; the old canvas has been read out of
+    or dx, dx
+    jz .kept
+    call OSAPI_MEM_FREE
+    mov word [pt_obase], 0
+    call pt_alloc_undo              ; ...and the two claims a resize drops come
+    call pt_alloc_clip              ; back at the new size, best effort
+.kept:
+    mov byte [pt_undo_ok], 0        ; a resize is never undoable (the image it
+    mov word [pt_cbw], 0            ; would need was just reused or replaced)
     mov byte [pt_selon], 0
     mov byte [pt_selshown], 0
     call pt_text_end
@@ -5354,8 +5569,8 @@ pt_wfix:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_orowset - ES:DI = row AX of the staged OLD picture in the undo image
-; in:  AX = row, [pt_och]/[pt_ostride]
+; pt_orowset - ES:DI = row AX of the OLD picture, wherever pt_resize left it
+; in:  AX = row, [pt_och]/[pt_ostride], [pt_osrc] = its base segment
 ; out: ES:DI, and [pt_orseg] = ES; clobbers BX, flags
 ; -----------------------------------------------------------------------------
 pt_orowset:
@@ -5380,9 +5595,8 @@ pt_orowset:
     mov cl, 4
     shr dx, cl
     or ax, dx
-    add ax, [pt_base]
-    add ax, [pt_undelta]            ; ...in the undo image
-    mov es, ax
+    add ax, [pt_osrc]               ; the old canvas claim, or the undo image
+    mov es, ax                      ; it was staged in (pt_resize)
     mov [pt_orseg], ax
     pop dx
     pop cx
@@ -7702,7 +7916,11 @@ pt_ic_text:
     PTWORD pt_cvparas               ; what the canvas costs, in paragraphs
     PTWORD pt_cwmax                 ; the biggest canvas this SCREEN can show
     PTWORD pt_chmax
-    PTWORD pt_smaxp                 ; ...and this MACHINE can hold, paragraphs
+    PTWORD pt_smaxp                 ; ...and what the canvas CLAIM holds, paras
+    PTWORD pt_growp                 ; ...and what a NEW claim could hold, paras
+    PTWORD pt_needp                 ; pt_alloc scratch: paragraphs per canvas
+    PTWORD pt_obase                 ; pt_resize: the canvas claim being replaced
+    PTWORD pt_osrc                  ; ...the segment pt_orowset reads through
     PTWORD pt_scrw                  ; screen width, for centring the window
     PTWORD pt_unseg                 ; the undo image's base segment
     PTWORD pt_cbseg                 ; the clipboard's
