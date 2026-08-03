@@ -420,6 +420,12 @@ pt_wsize:
 ; Height gives first: a picture that loses rows off the bottom stays more
 ; recognisable than one losing columns off the right AND rows off the bottom.
 ; Only with the height already at the floor does the width start to give.
+;
+; [pt_pinw]/[pt_pinh] take an axis out of the ladder. pt_sizeask sets one when
+; its ink guard has just put that axis back to the size it already has: the
+; guard's answer must not then be undone by the very routine whose cut it was
+; overruling, so the OTHER axis gives the ground instead. Both pinned means
+; nothing can give, and the CF=1 that comes back says exactly that.
 ; -----------------------------------------------------------------------------
 pt_fit:
     push bx
@@ -432,7 +438,9 @@ pt_fit:
     cmp cx, [pt_growp]
     jbe .out                        ; ...or a bigger one we could claim does
     mov byte [pt_fitcut], 1
-    cmp dx, PT_CH_MIN
+    cmp byte [pt_pinh], 0
+    jne .narrow                     ; an axis the ink guard put back is not
+    cmp dx, PT_CH_MIN               ; this routine's to cut (pt_sizeask)
     jbe .narrow
     mov cx, dx
     shr cx, 1                       ; an eighth of the height at a time (the
@@ -448,6 +456,8 @@ pt_fit:
     mov dx, PT_CH_MIN
     jmp short .retry
 .narrow:
+    cmp byte [pt_pinw], 0
+    jne .out
     cmp ax, PT_CW_MIN
     jbe .out                        ; both floors reached: nothing left to give
     mov cx, ax
@@ -757,17 +767,23 @@ pt_paras:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_layout - adopt a canvas size: stride, row tables, undo offset
+; pt_layout - adopt a canvas size: stride and the row tables
 ; in:  AX = width, DX = height (already through pt_fit)
-; out: [pt_cw], [pt_ch], [pt_stride], [pt_cvparas], pt_rowseg/pt_rowoff built,
-;      [pt_undelta] set; preserves all registers
+; out: [pt_cw], [pt_ch], [pt_stride], [pt_cvparas], pt_rowseg/pt_rowoff built;
+;      preserves all registers
 ;
 ; The row tables are the whole of the addressing story. A canvas can be bigger
 ; than one 64KB segment - a 636x326 picture is 104KB - so a row is named by a
 ; (segment, offset) pair instead of a 16-bit offset: rowseg[y] is the paragraph
 ; it starts in, rowoff[y] the 0..15 bytes into that paragraph. The undo image
-; has the identical layout one whole canvas higher, so its row segment is
+; has the identical layout [pt_undelta] paragraphs away, so its row segment is
 ; rowseg[y] + [pt_undelta] and there is no second table.
+;
+; **[pt_undelta] is pt_alloc_undo's to set, not this routine's.** It used to be
+; stamped here as [pt_smaxp], from the era when one claim held the canvas and
+; the undo image back to back; they are two independent claims now and may sit
+; either way round, so writing the old constant here sent every undo row into
+; whatever the heap put after the canvas.
 ; -----------------------------------------------------------------------------
 pt_layout:
     push ax
@@ -781,8 +797,6 @@ pt_layout:
     call pt_paras                   ; BX = stride, CX = paragraphs
     mov [pt_stride], bx
     mov [pt_cvparas], cx
-    mov ax, [pt_smaxp]
-    mov [pt_undelta], ax
     ; --- row 0 is the LAST row in the file, so the walk runs downward -------
     mov ax, [pt_ch]
     dec ax
@@ -2113,23 +2127,23 @@ pt_szapply:
     mov dx, ax
     mov ax, bx
     call pt_setsize
-    jc .refused
-    cmp byte [pt_szchg], 0
-    je .redraw                      ; nothing moved: just drop the caret
-    mov bx, [pt_win]                ; the window follows the canvas, and one
-    mov cx, [pt_cw]                 ; repaint shows both (SPEC.md 11.1)
-    add cx, PT_CHROME_W
+    pushf                           ; CF = an axis was held back. That is NOT
+    cmp byte [pt_szchg], 0          ; the same as "nothing happened": a grow
+    je .nomove                      ; that shortens too takes the half it can,
+    mov bx, [pt_win]                ; and skipping the frame here left the
+    mov cx, [pt_cw]                 ; window at one size and the canvas at
+    add cx, PT_CHROME_W             ; another (SPEC.md 11.1)
     mov dx, [pt_ch]
     add dx, PT_CHROME_H
     call OSAPI_WM_RESIZE
-    jmp short .out
-.refused:
+    jmp short .said
+.nomove:
     call pt_draw_dims               ; the boxes go back to the live size
-    mov si, pt_s_crop
-    call pt_msg_show
-    jmp short .out
-.redraw:
-    call pt_draw_dims
+.said:
+    popf
+    jnc .out
+    call pt_szsi                    ; ...and the toast goes on top of whichever
+    call pt_msg_show                ; of the two just drew
 .out:
     pop di
     pop si
@@ -2552,12 +2566,12 @@ pt_paint:
     mov byte [pt_apend], 0
     mov bx, [pt_win]
     call OSAPI_WM_FRONT             ; the corrected frame, over a clean desktop
-    mov si, pt_s_crop               ; ...and the toast on top of the picture
+    call pt_szsi                    ; ...and the toast on top of the picture
     call pt_msg_show
     jmp short .out
 .justsay:
     mov byte [pt_apend], 0
-    mov si, pt_s_crop
+    call pt_szsi
     call pt_msg_show
     jmp short .out
 .notice:
@@ -5167,12 +5181,15 @@ pt_sizeask:
     ; A shrink that would throw away ink is refused per axis: the other axis
     ; still moves, so widening while shortening does the half that is safe.
     mov byte [pt_kept], 0
+    mov byte [pt_pinw], 0
+    mov byte [pt_pinh], 0
     cmp ax, [pt_cw]
     jae .w_ok2                      ; growing (or level): nothing to lose
     call pt_lose_w
     jnc .w_ok2
     mov ax, [pt_cw]
     mov byte [pt_kept], 1
+    mov byte [pt_pinw], 1
 .w_ok2:
     cmp dx, [pt_ch]
     jae .h_ok2
@@ -5180,7 +5197,34 @@ pt_sizeask:
     jnc .h_ok2
     mov dx, [pt_ch]
     mov byte [pt_kept], 1
+    mov byte [pt_pinh], 1
 .h_ok2:
+    ; --- and it has to FIT again ------------------------------------------
+    ; The guards above put an axis back to a size pt_fit had already ruled
+    ; out, so the pair may no longer be one memory can fund - and pt_resize
+    ; would then discover that, fail its claim and re-fit blindly, cropping
+    ; the very rows the guard just saved. Re-fit with the held axis pinned so
+    ; the other one gives instead, and never below what we already have, which
+    ; is fundable by definition. That makes typing 600 into the width box on a
+    ; machine that cannot fund it a partial grow, not a wipe.
+    cmp byte [pt_kept], 0
+    je .out
+    call pt_paras                   ; CX = paragraphs the pair now needs
+    cmp cx, [pt_smaxp]
+    jbe .out
+    cmp cx, [pt_growp]
+    jbe .out
+    call pt_fit
+    cmp ax, [pt_cw]
+    jae .w_ok3
+    mov ax, [pt_cw]
+.w_ok3:
+    cmp dx, [pt_ch]
+    jae .out
+    mov dx, [pt_ch]
+.out:
+    mov byte [pt_pinw], 0
+    mov byte [pt_pinh], 0
     pop cx
     pop bx
     ret
@@ -5220,12 +5264,25 @@ pt_onsize:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; pt_szsi - SI = the toast that explains the last refused resize
+; out: SI; clobbers flags and nothing else
+; -----------------------------------------------------------------------------
+pt_szsi:
+    mov si, pt_s_crop
+    cmp byte [pt_szmem], 0
+    je .out
+    mov si, pt_s_noram              ; refused for want of memory, not ink
+.out:
+    ret
+
 pt_setsize:
     push ax
     push bx
     push cx
     push dx
     mov byte [pt_szchg], 0
+    mov byte [pt_szmem], 0
     call pt_sizeask                 ; AX/DX = the size we will take
     cmp ax, [pt_cw]
     jne .go
@@ -5233,10 +5290,15 @@ pt_setsize:
     je .done                        ; nothing moved; [pt_kept] says whether
 .go:                                ; that was a refusal
     call pt_resize
+    jc .noram                       ; no staging room: the canvas is untouched
     mov ax, [pt_ch]                 ; a canvas memory would not fund leaves the
     inc ax                          ; strip where the canvas ends, not where
     mov [pt_stripy], ax             ; the window ends - pt_org ran before this
     mov byte [pt_szchg], 1
+    jmp short .done
+.noram:
+    mov byte [pt_kept], 1           ; refused, and for a different reason than
+    mov byte [pt_szmem], 1          ; cropping - the toast says which
 .done:
     pop dx
     pop cx
@@ -5253,8 +5315,9 @@ pt_setsize:
 ; -----------------------------------------------------------------------------
 ; pt_resize - adopt a new canvas size, keeping the picture's top-left corner
 ; in:  AX = new width, DX = new height (both already through pt_fit)
-; out: the canvas relaid out and repopulated; undo, clipboard and selection
-;      dropped; preserves all registers
+; out: CF=0 the canvas is relaid out and repopulated, undo, clipboard and
+;      selection dropped; CF=1 nothing changed at all (see .nostage);
+;      preserves all registers
 ;
 ; **It re-claims.** The undo image and the clipboard go back to the kernel
 ; first - a resize drops both anyway - then a NEW canvas claim is taken, the
@@ -5274,6 +5337,13 @@ pt_setsize:
 ; already hold and the old path runs, so a resize can degrade but never fail
 ; half-done. The old row geometry is recomputed arithmetically for the
 ; read-back, because the tables describe the new layout by then.
+;
+; The in-place path DOES need a staging area, and the refused grow above has
+; just handed the undo image back to make room for a claim that did not
+; happen - so it asks for one again before staging. If there is genuinely
+; none to be had the resize is REFUSED (CF=1), because the alternative is the
+; pt_wipe below erasing a picture there was nowhere to carry across, which is
+; exactly what typing an unfundable width into the size box used to do.
 ; -----------------------------------------------------------------------------
 pt_resize:
     push ax
@@ -5316,19 +5386,42 @@ pt_resize:
 
 .inplace:
     mov word [pt_obase], 0          ; no move: stage in the undo image, the
-    mov ax, [pt_base]               ; way this always did
+    cmp byte [pt_haveundo], 0       ; way this always did
+    jne .stage
+    call pt_alloc_undo              ; ...so ASK for one, because the grow just
+    cmp byte [pt_haveundo], 0       ; handed it back to make room and was
+    je .nostage                     ; refused anyway (and a machine that could
+.stage:                             ; not fund one at startup may be able to)
+    mov ax, [pt_base]
     add ax, [pt_undelta]
     mov [pt_osrc], ax
-    cmp byte [pt_haveundo], 0
-    je .nostage                     ; nowhere to stage: the picture cannot be
-    mov byte [pt_undo_off], 0       ; carried across, so it is redrawn white
+    mov byte [pt_undo_off], 0
     call pt_undo_new
     xor ax, ax
     mov dx, [pt_ch]
     dec dx
     call pt_umark
-    jmp short .geom
+    jmp .geom
+
+    ; --- nowhere to stage the old picture ----------------------------------
+    ; A blank canvas has nothing to carry, so the resize goes ahead. Anything
+    ; else would be wiped white by the pt_wipe below and the artwork silently
+    ; destroyed - which is what a 384KB machine (no undo image) or a refused
+    ; grow used to do - so refuse the resize instead and leave the picture
+    ; exactly where it is. The caller reports it like any other refusal.
 .nostage:
+    xor ax, ax
+    call pt_lose_w                  ; is there any ink at all to lose?
+    jnc .blank
+    cmp byte [pt_haveclip], 0
+    jne .nocb
+    call pt_alloc_clip              ; put back what the grow attempt gave away
+.nocb:                              ; (pt_alloc_undo above already tried)
+    pop dx
+    pop ax
+    stc
+    jmp .out
+.blank:
     mov word [pt_osrc], 0
 
 .geom:
@@ -5388,11 +5481,18 @@ pt_resize:
     call pt_alloc_undo              ; ...and the two claims a resize drops come
     call pt_alloc_clip              ; back at the new size, best effort
 .kept:
+    cmp byte [pt_haveclip], 0
+    jne .kept2
+    call pt_alloc_clip              ; the grow attempt gave it away; without
+.kept2:                             ; this a refused grow disabled Copy for
+                                    ; the rest of the session
     mov byte [pt_undo_ok], 0        ; a resize is never undoable (the image it
     mov word [pt_cbw], 0            ; would need was just reused or replaced)
     mov byte [pt_selon], 0
     mov byte [pt_selshown], 0
     call pt_text_end
+    clc
+.out:
     pop es
     pop bp
     pop di
@@ -7580,6 +7680,7 @@ pt_g_magic:   db 'GIF87a'
 pt_gstep:     db 8, 8, 4, 2         ; the interlaced row passes: step...
 pt_gstart:    db 0, 4, 2, 1         ; ...and where each one starts
 pt_s_crop:   db 'Would crop artwork - erase it first', 0
+pt_s_noram:  db 'Not enough memory to resize', 0
 pt_s_loading: db 'Loading...', 0
 pt_s_saving: db 'Saving...', 0
 pt_s_wlab:   db 'W', 0
@@ -7991,6 +8092,9 @@ pt_ic_text:
     PTBYTE pt_fresh                 ; the next digit replaces the value
     PTBYTE pt_szi                   ; pt_szdraw's box counter
     PTBYTE pt_szchg                 ; pt_setsize moved the canvas
+    PTBYTE pt_szmem                 ; ...and refused for want of memory, not ink
+    PTBYTE pt_pinw                  ; pt_fit: an axis pt_sizeask's ink guard
+    PTBYTE pt_pinh                  ; has already settled - do not cut it
     PTWORD pt_szy                   ; the box being drawn: its top row...
     PTWORD pt_szp                   ; ...and the text it shows
     PTBUF  pt_wtxt, 4               ; the two edit buffers, three digits and a
