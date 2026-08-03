@@ -6101,8 +6101,11 @@ The selected row is an XOR bar across the list interior, exactly as §22
 draws its own (`gfx_xor_fill` under the held lock).
 
 **The button column** carries Open/Save, Cancel, Drive and — in **save mode
-only** — **New**, which makes a folder here named by whatever is in the name
-box and then navigates into it (`fdlg_newfolder`). The dialog could enter
+only** — a **two-line New / Folder** button (`FD_BH2`, drawn by `fdlg_btn2`),
+which makes a folder here named by whatever is in the name box and then
+navigates into it (`fdlg_newfolder`). Two lines because 63px of button holds
+seven glyphs, and "New" on its own under Save/Cancel/Drive reads as new
+*what*. The dialog could enter
 folders and leave them and had no way to make one, so saving into a new
 folder meant cancelling, opening a Disk window, pressing `n`, and starting
 again. The name box is already a line editor with the FAT character set

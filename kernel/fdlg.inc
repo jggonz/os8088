@@ -76,6 +76,13 @@ FD_BY1      equ 40              ; Cancel
 FD_BY2      equ 60              ; Drive
 FD_BY3      equ 80              ; New Folder - SAVE MODE ONLY (SPEC.md 38.3)
 FD_BH       equ 13
+FD_BH2      equ 24              ; ...and it is TWO lines tall: 'New' over
+                                ; 'Folder' says what the button does, where
+                                ; 'New' alone next to Save/Cancel/Drive reads
+                                ; as new WHAT. 63px of button holds 7 glyphs,
+                                ; so the two words cannot share a line
+FD_BT1      equ 4               ; the two text rows inside it, 8px glyphs
+FD_BT2      equ 13              ; with 3px of margin above and below
 
 FD_NBX1     equ 72              ; the name box
 FD_NBX2     equ 213
@@ -100,7 +107,8 @@ fdlg_s_open:   db 'Open', 0
 fdlg_s_save:   db 'Save', 0
 fdlg_s_cancel: db 'Cancel', 0
 fdlg_s_drive:  db 'Drive', 0
-fdlg_s_newf:   db 'New', 0     ; 63px of button holds 7 glyphs, not 8
+fdlg_s_newf:   db 'New', 0      ; the two-line New Folder button (FD_BH2)
+fdlg_s_newf2:  db 'Folder', 0
 fdlg_s_lopen:  db 'Open:', 0
 fdlg_s_lsave:  db 'Save as:', 0
 fdlg_s_dotdot: db '..', 0
@@ -734,6 +742,70 @@ fdlg_btn:
     call fdlg_off
     call gfx_frame
 .label:
+    mov dx, bp
+    add dx, 3
+    call fdlg_blabel
+    pop bp
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_btn2 - a TWO-LINE button of the same column (internal)
+; in:  BX = its top (content-relative), SI = the upper label, DI = the lower
+; out: nothing (all registers preserved)
+;
+; Never the default button, so there is no outer frame to draw and no AL to
+; read. It exists for one button - New / Folder - because 'New' on its own,
+; sitting under Save, Cancel and Drive, reads as new *what*, and the two
+; words do not fit one 63px line.
+; -----------------------------------------------------------------------------
+fdlg_btn2:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov bp, bx                  ; BP = the button top (a value, never an
+                                ; address: SS is not DS, SPEC.md 1)
+    mov byte [gfx_color], CBLACK
+    mov ax, FD_BX1
+    mov bx, bp
+    mov cx, FD_BX2
+    mov dx, bp
+    add dx, FD_BH2
+    call fdlg_off
+    call gfx_frame
+    mov dx, bp
+    add dx, FD_BT1
+    call fdlg_blabel            ; SI = the upper label
+    mov si, di
+    mov dx, bp
+    add dx, FD_BT2
+    call fdlg_blabel
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_blabel - one line of button text, centred in the button column
+; in:  SI = the string, DX = its top row (content-relative), [gfx_color] set
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fdlg_blabel:
+    push ax
+    push cx
+    push si
     call font_width             ; AX = 8 * length
     mov cx, FD_BX2-FD_BX1+1
     sub cx, ax
@@ -742,14 +814,9 @@ fdlg_btn:
 .pad:                           ; put the text off screen entirely
     shr cx, 1
     add cx, FD_BX1              ; centered in the 63px rect
-    mov dx, bp
-    add dx, 3
     call fdlg_text
-    pop bp
     pop si
-    pop dx
     pop cx
-    pop bx
     pop ax
     ret
 
@@ -827,9 +894,9 @@ fdlg_paint:
     cmp byte [fdlg_mode], 0     ; New Folder is a SAVE-mode button: opening a
     je .nonewf                  ; file has no use for one, and the fourth
     mov si, fdlg_s_newf         ; frame would be clutter in the common case
+    mov di, fdlg_s_newf2
     mov bx, FD_BY3
-    xor al, al
-    call fdlg_btn
+    call fdlg_btn2
 .nonewf:
 
     ; --- the name box ---
@@ -1508,8 +1575,8 @@ fdlg_onclick:
     je .out                     ; not drawn in Open mode, so not clickable
     cmp cx, FD_BY3
     jl .out
-    cmp cx, FD_BY3+FD_BH
-    jg .out
+    cmp cx, FD_BY3+FD_BH2       ; the two-line button is FD_BH2 tall, and the
+    jg .out                     ; hit band has to be the drawn one
     call fdlg_newfolder
     jmp .redraw
 
