@@ -33,18 +33,19 @@
 ; package can own a worker task of its own (OSAPI_TASK_SPAWN below), whose
 ; 1536-byte stack is likewise in LOW_SEG.
 ;
-; A package is
-; assembled at the APP_LOAD_OFF link base and RELOCATED at load time to a
-; per-instance region - several packages (or several instances of one) can
-; be resident at once, each a fully relocated copy with its own bss
-; (SPEC.md 20.1). This imposes ONE coding rule (SPEC.md 20.2): a package
-; address may only be embedded as a whole 16-bit word (imm16, disp16,
-; dw label) - never byte-split, shifted or folded into other constants;
-; os88pkg.py's reconstruction check fails the build otherwise. Every OSAPI_*
-; symbol below is a fixed near-call target (4-byte jump-table slots in
-; kernel.asm). Register contracts are the target routines' own (SPEC.md
-; 5, 6, 8, 11, 20.4); all of them preserve every register except their
-; documented outputs.
+; A package is assembled at org 0 and OWNS A SEGMENT (SPEC.md 20.1): the
+; loader puts it on a paragraph boundary and hands it its own CS = DS, so
+; nothing in the image depends on where it landed. There is no relocation
+; table, no dual assembly, and no rule about how you may embed an address -
+; all three were the price of the shared pool and went with it. Several
+; packages, or several instances of one, can be resident at once; each is
+; its own copy with its own bss.
+;
+; Every OSAPI_* symbol below is a %define of KERNEL_SEG:offset, so
+; `call OSAPI_X` is a FAR call and you write it exactly as you always did.
+; Register contracts are the target routines' own (SPEC.md 5, 6, 8, 11,
+; 20.4); all of them preserve every register except their documented
+; outputs, and all of them restore DS.
 ; =============================================================================
 
 ; --- environment ---------------------------------------------------------------
@@ -512,8 +513,11 @@ WT_SIZE    equ 16
 
 ; -----------------------------------------------------------------------------
 ; OS88_HEADER 'NAME', entry [, flags] - open the package and emit the 32-byte
-; header (SPEC.md 20.2). Emits cpu 8086 / bits 16 / org APP_LOAD_OFF first,
-; so this must be the first thing after the %include. The image-size and
+; header (SPEC.md 20.2). Emits cpu 8086 / bits 16 / org 0 first, so this must
+; be the first thing after the %include. It also emits the three-byte
+; DISPATCHER at offset 12 that the kernel far-calls to reach any of your
+; callbacks - that is why your paint/key/click procs stay ordinary near
+; procs ending in a near `ret`, and why you never write `retf`. The image-size and
 ; bss-size words are forward references resolved by OS88_IMAGE_END / OS88_BSS
 ; at the end of the source. The name is NUL-padded to exactly 16 bytes.
 ; The optional third parameter is the flags byte (default 0); flags bit 0
@@ -595,16 +599,18 @@ WT_SIZE    equ 16
 ;   mov si, my_menus
 ;   call OSAPI_MENU_SET
 ;
-; The handler is near-called by the kernel UNDER THE GFX LOCK on the UI
+; The handler is called by the kernel UNDER THE GFX LOCK on the UI
 ; task, with AL = item index, AH = menu index (0-based), SI = the owning
 ; window, BX = the set. It obeys the W_ONCLICK rules (SPEC.md 11): it may
 ; draw and may call the file slots, but must never take the gfx lock or
 ; block. It MAY call OSAPI_TASK_SPAWN - a menu command is the natural place
 ; to start your worker.
 ;
-; The count is a label DIFFERENCE, so it is identical in both relocation
-; passes and os88pkg.py never mistakes it for a package address; the three
-; pointer words per menu are ordinary whole-word addresses and relocate.
+; Every string a set points at - the app name, the menu titles, the items -
+; is an offset in YOUR segment. The kernel reads them through the segment
+; the owning window carries, so there is nothing for you to do about it;
+; it is worth knowing only because it means a set may not point at a
+; string that lives anywhere else.
 ; -----------------------------------------------------------------------------
 %macro OS88_MENUSET 3
 %1:

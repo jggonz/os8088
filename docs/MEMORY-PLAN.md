@@ -29,22 +29,27 @@ Before this work (release v1.0.20260728, commit 698b587):
 were 41% of the entire window. The kernel was not short of segment; it was
 spending its segment on scratch that never needed to be addressable by DS.
 
-## After A + B + C
+## After A + B + C + D
 
 | region                        | bytes  |
 |-------------------------------|--------|
-| kernel window (0x0000–0xB000) | 45,056 |
-| — .text                       | 13,691 |
-| — .bss                        |  3,238 |
-| — **free**                    | **28,127** |
-| package pool (0xB000–0xFDFF)  | 19,968 |
-| `.fartext` @ FAR_SEG          |  2,922 |
-| `.lowbss` @ LOW_SEG           | 20,480 |
+| kernel window (0x0000–`KERN_MAX`) | 45,056 |
+| — .text + .bss                | see `make` — measure, do not guess |
+| — **free**                    | the rest |
+| package pool @ `PKG_SEG`      | 61,440 |
+| `.fartext` @ `FAR_SEG`        | `FAR_PARA`×16 |
+| FAT snapshot @ `FAT_SEG`      | `DSK_FAT_SECS`×512 |
+| `.lowbss` @ `LOW_SEG`         | up to `KERNEL_SEG` |
+| the claim heap @ `HEAP_SEG`   | everything above, on demand |
 
-Headroom went from 1,089 bytes to 28,127 — room for roughly 25× the code the
-next feature is likely to need. Nothing moved out of conventional memory:
-every byte still lives below 0x10000 or inside the kernel segment, so a
-256KB machine is unaffected.
+Headroom went from 1,089 bytes to five figures, and the package pool from
+19,968 bytes inside the kernel's own segment to 61,440 outside it. What
+changed most is not any single number: it is that **nothing above the pool
+has a fixed address any more**. The four pinned blocks that used to sit up
+there — `SND_SEG`, `SAVE_SEG`, `VIEW_SEG`, `BB_SEG`, 278KB of a 256KB
+machine's address space spoken for by constants — are gone or are claims
+(SPEC.md §42), and the ladder below is derived rung by rung so a size change
+slides everything above it with no gaps to lose track of.
 
 ---
 
@@ -158,48 +163,59 @@ module.
 
 ---
 
-## Step D — packages out of the kernel segment ⏸ not started
+## Step D — packages out of the kernel segment ✅ done
 
-The last big lever, deliberately deferred. It would give the kernel the full
-64KB and give every package its own segment instead of a shared 20KB pool.
+The last big lever, and it landed with the claim heap rather than before it.
+The kernel now has its full `KERN_MAX` budget to itself and every package
+owns a segment out of `PKG_SEG`'s 60KB pool.
 
-**What it costs.** Packages stop sharing the tiny model. OSAPI near calls
-become far calls; the paint/key/click pointers the kernel stores go from
-word to dword; DS has to switch on every crossing of the boundary in both
-directions. It rewrites `wm.inc`'s dispatch, `apps/os88api.inc`,
-`tools/os88pkg.py` and all three packages.
+**What it cost, against what was predicted.** Packages did stop sharing the
+tiny model, and the boundary crossings all needed mechanism — but less of it
+than this section feared, because two of the three crossings were solved
+once each rather than per call site:
 
-**What it buys beyond the space.** Relocation gets simpler, not harder:
-class 1 (the `call OSAPI_*` rel16 fixups) disappears entirely, and if
-packages are assembled at org 0 and loaded on a paragraph boundary, class 0
-goes too — a package becomes a flat image plus a segment, with no fixups at
-all. `tools/os88pkg.py`'s dual-assembly diff would no longer be needed.
+- *OSAPI near calls became far calls* — but the SDK turns `OSAPI_X` into a
+  `%define KERNEL_SEG:offset`, so `call OSAPI_X` is a far call and **not one
+  package call site changed**. The table's cells went 4 bytes to 8 (SPEC.md
+  §20.3) and that was the whole of it.
+- *The paint/key/click pointers going word → dword* did not happen. The
+  record carries **one** far pointer, `W_DISP`/`W_SEG`, aimed at a three-byte
+  **dispatcher** in the package's own header — `call bp / retf`. Every
+  callback stays a near proc with a near `ret`, so a package author never
+  writes `retf` and a missing one cannot exist. It also makes dispatch
+  re-entrant across packages for free, because the pointer is read out of the
+  record and not a global.
+- *DS switching in both directions* is `wm_pkgcall` going in and the table
+  cells coming out. What was genuinely new is **data** crossing: the X stub
+  family (ES = the caller's DS, for a template / string / fence) and the N
+  stub family (stage a file name into the kernel's own buffer), plus the
+  standing rule that **ES = KERNEL_SEG on entry to every callback** so a
+  package can read the window record it was handed.
 
-**Do it when** a package needs more than ~19KB, or several large packages
-need to be resident at once. Not before: the kernel has 28KB of headroom and
-the current packages are under 2KB each.
+**What it bought beyond the space** was exactly what was predicted, and more
+of it: relocation did not get simpler, it **disappeared**. Packages assemble
+at org 0 and load on a paragraph boundary, so there are no fixups of either
+class, no dual assembly, no diff scan, no byte-exact reconstruction check,
+and no author rule about whole-word package addresses — and with that rule
+went the class of bug where an address folded into a constant assembled
+cleanly and relocated wrong. `tools/os88pkg.py` is now a validator, not a
+generator.
 
-**Where the segments come from.** Decided in docs/SOUND-PLAN.md: the sound
-layer claims `SND_SEG` = linear 0x30000–0x3FFFF (the last fully-free 64KB on
-the 256KB floor), and the same SPEC §2 amendment pins the menu save-unders
-to 0x20000–0x2FFFF. So on the floor, Step D's per-package segments carve
-from that block (shared with the save-under heap); on bigger machines
-they can range above BB_SEG at 0x40000 instead. Settled now so the conflict
-is not discovered mid-migration.
+**Where the segments came from** is not where this section expected. The
+plan was to carve them out of a block shared with the save-under heap on a
+256KB floor machine, and to worry about `VIEW_SEG` having taken 16KB off the
+top of it. None of that survived: `SND_SEG` went with the sound cards,
+`SAVE_SEG` and `VIEW_SEG` became **claims** (SPEC.md §42) taken when they
+are used, and the pool is simply the paragraph after the kernel's ceiling —
+`PKG_SEG` = `KERNEL_SEG` + `KERN_MAX`/16, with the heap starting the
+paragraph after the pool. The ladder has no gaps and nothing above the pool
+has a fixed address at all. The floor machine's budget is not 48KB shared
+with a heap; it is 60KB of pool plus whatever the heap can fund on the day.
 
-**Since then that block has lost its top 16KB.** SPEC §2.3's `VIEW_SEG`
-(linear 0x2C000–0x2FFFF) holds the file manager's four per-window listing
-caches, and §2.2 narrowed `SAVE_SEG`'s pinned extent to 0x20000–0x2BFFF to
-make room. So Step D's floor-machine budget is **48KB**, not 64KB, shared
-with a save-under heap whose measured high-water is ~11KB. That is room for
-roughly two per-package segments where Step D's own trigger is "a package
-needs more than ~19KB" — enough once, not twice. If Step D ever needs the
-16KB back, the honest move is to cap the file manager at two windows
-(`VIEW_SLOTS`, `KD_CAP` and `fm_pool` are one number wearing three hats,
-SPEC §29.3), not to overlap the two users. And there is no slack to steal below
-0x10000 either: `FAT_SEG`'s snapshot owns linear 0x03000–0x07FFF (Step A),
-so Step D — or anything else hunting for low memory — must not assume the
-old gap between the `.fartext` blob and `LOW_SEG` is free.
+**What is left.** `APP_MAX_SIZE` is the whole pool, so a single package may
+be 60KB — but the pool is shared, so a package that takes all of it is a
+package nothing else can run beside. The next lever, if one is ever needed,
+is a second pool segment; nothing today wants it.
 
 ## Rejected
 

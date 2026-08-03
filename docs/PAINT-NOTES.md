@@ -3,9 +3,25 @@
 `apps/paint/paint.asm` is a bitmap editor written entirely against the
 published package ABI (SPEC.md §20.3). **No kernel file was changed to make
 it work** — not one byte of `kernel/`, and no new API slot. This document
-records the two liberties it takes that the ABI does not sanction, the
+records the two liberties it took that the ABI did not sanction, the
 capabilities whose absence cost the most, and how the picture formats it reads
 and writes were arrived at.
+
+## What has since landed
+
+Four of the things below are now in the kernel, and the sections that asked
+for them are marked **RESOLVED** where that is so. In short:
+
+| asked for | shipped as |
+|-----------|------------|
+| `alloc(paragraphs)`/`free`, a `largest_free` query, and the same map governing the kernel's own speculative RAM | the **claim heap**, SPEC.md §42 — `OSAPI_MEM_CLAIM` / `OSAPI_MEM_FREE` / `OSAPI_MEM_AVAIL`, freed at instance teardown, billed by the Task Manager, and `bb_set` asking it for the back buffer like anyone else |
+| a `gfx_blit4` slot | SPEC.md §5.4 — packed 4bpp, adapter- and back-buffer- and clip-aware |
+| the kernel's glyph table | `OSAPI_FONT_GLYPHS`, SPEC.md §6 |
+| `wm_resize(BX, w, h)`, and a resize callback whose refusal `ui_grow` honours | `OSAPI_WM_RESIZE` and `W_ONSIZE`/`OSAPI_WM_ONSIZE`, SPEC.md §11.1 |
+
+The rest — positioned file I/O, a teardown callback, mouse-motion events,
+menu item state, a package-visible modal gate — is still outstanding, and the
+sections below still describe why each one costs what it costs.
 
 ## What it is
 
@@ -33,6 +49,8 @@ back to fit the canvas and the status toast says why.
 ## The two liberties it takes
 
 **1. It claims conventional memory above `BB_SEG`** — from linear 0x66000 up —
+**(RESOLVED — it now calls `OSAPI_MEM_CLAIM`; the rest of this section is
+kept as the record of what the absence cost.)**
 for the canvas, an equally-sized undo image, the clipboard and a 12KB scratch
 area. There is no other place for them: a package's whole world is
 `APP_MAX_SIZE` = 19.5KB of image + bss (SPEC.md §20.1), and even a modest
@@ -93,9 +111,13 @@ Three consequences are handled rather than hoped about:
   before the app runs at all.
 - **The claim is invisible to the Task Manager**, which sums package regions
   and the kernel's own segments. Paint's quarter-megabyte does not appear in
-  its RAM figure.
+  its RAM figure. *(Resolved: a claim is billed to the instance that holds it,
+  in both Task Manager views — SPEC.md §28/§42.5.)*
 
-**2. It writes W_W/W_H in the window record.** Opening a picture makes the
+**2. It writes W_W/W_H in the window record.** **(RESOLVED — `OSAPI_WM_RESIZE`
+and `W_ONSIZE`. `pt_wfix` survives only for `wm_fullscreen`, which does not
+negotiate, and because it runs inside W_PAINT where anything that repaints
+would re-enter the app.)** Opening a picture makes the
 window match the picture, and there is no `wm_resize` slot to ask for that —
 `ui_grow` and `wm_fullscreen` are the only things that resize a window, and
 both are kernel-internal. So Paint stores the new frame in the record and calls
@@ -145,7 +167,7 @@ their own segments) is the adjacent step and wants the same allocator.
 
 ## The three capabilities whose absence cost the most
 
-### 1. No bitmap blit
+### 1. No bitmap blit — RESOLVED
 
 `gfx_*` draws rectangles, lines and glyphs. There is no way to hand the
 kernel a block of pixels. Every canvas repaint therefore goes through
@@ -160,6 +182,25 @@ back-buffer-aware — would make a full repaint 3–5× faster on VGA and would
 let any future imaging app skip the coalescer entirely. It is also the one
 addition that would let the canvas be larger than the screen without the
 repaint becoming the bottleneck.
+
+**It landed as SPEC.md §5.4**, and the argument got stronger in the
+meantime: since packages own a segment every gfx call from one is a FAR
+call, so the coalescer's "one call a run" became one *far* call a run.
+`pt_blit` now makes one call per band of rows — usually one for the whole
+rectangle — and the kernel runs the identical scan. Two things about the
+geometry were worth the trouble: the source must start on an **even** pixel,
+because gfx_blit4 takes the first byte's high nibble as pixel 0, so an odd
+left edge is widened one column (harmless — that column is inside the canvas
+and inside the window, and is redrawn with what it held); and the stride is
+**negative**, because the canvas is stored as the BMP it will be written as,
+so a band is addressed from its *last* row's segment and no row's offset can
+go below zero.
+
+The plane-parallel VGA path is still unbuilt and still worth building: build
+a byte-per-8-pixels mask per plane and write it through the Map Mask. It
+would beat the run coalescer on photographs and lose on flat drawings, and it
+would need its own back-buffer and 1bpp twins — which is exactly why the
+coalescer went first.
 
 ### 2. The file API is whole-file and caps at 64KB
 
@@ -187,7 +228,7 @@ A positioned read/write (`read(name, offset, len, buf)`) or a real
 open/seek/close would lift both limits, and would also let a decoder stream
 instead of demanding the whole file in RAM at once.
 
-### 3. No teardown callback for a package
+### 3. No teardown callback for a package — half resolved
 
 Closing a task-less package's window is a synchronous `wm_destroy` +
 `I_STATE = 0` (SPEC.md §21/§29). The package is never told. Anything it
@@ -198,9 +239,19 @@ the package header, called under the lock before the region is freed, would
 cost the kernel one indirect call and would make an allocator (above) safe
 by construction.
 
+**The allocator case is closed without the callback**: `mem_free_rec`
+(SPEC.md §42.4) runs at all three teardown sites and returns every claim the
+instance held, so `OSAPI_MEM_CLAIM` needs no hook and `pt_dupchk` is gone —
+two instances get two claims by construction. What is still missing is
+everything else a package might want to finish: flushing a file it was
+writing, telling a peer instance it is going. Nothing in the tree needs that
+today, which is why it has not been built.
+
 ## Smaller gaps, in order of how much they cost here
 
-- **No access to the kernel's font bitmaps.** `font_char` draws to the
+- **No access to the kernel's font bitmaps — RESOLVED** (`OSAPI_FONT_GLYPHS`,
+  SPEC.md §6; the probe and the fallback are both gone, and the text tool
+  stamps the same typeface the UI draws on every adapter). `font_char` draws to the
   screen; the text tool has to write glyph pixels into its own canvas, so
   `pt_font_init` re-probes the ROM 8×8 font through int 10h AX=1130h (with the
   kernel's own F000:FA6E fallback) and keeps the pointer. Glyphs are then read
@@ -228,7 +279,11 @@ by construction.
   thing for free: a background painter *underneath* Paint now draws its own
   visible part instead of skipping the frame, which makes the drag loops'
   released-lock windows better behaved than when this was written.
-- **No resize callback.** A resizable window learns it was resized by finding
+- **No resize callback — RESOLVED** (`W_ONSIZE`, SPEC.md §11.1: `ui_grow`
+  asks before it commits, the answer is a size rather than a yes/no so a
+  refusal can be per-axis, and a refused drag now costs no repaint at all —
+  only the toast). The rest of this note is why it mattered.
+  A resizable window learns it was resized by finding
   a different W_W/W_H at its next paint (SPEC.md §11.1). That works, but the
   size is adopted *during* the paint — after the kernel has already drawn the
   title bar — which is why the canvas dimensions are printed in the tool
@@ -294,8 +349,11 @@ worse. The 64KB file ceiling also means the only JPEGs that could be opened at
 all are small ones. The app recognises it by magic and says so rather than
 guessing.
 
-(The package is 13,866 bytes of image + 3,562 of bss against the 19,968
-budget today, so about 2.5KB is still free.)
+(The package is about 13.8KB of image + 3.6KB of bss. The budget is
+`APP_MAX_SIZE` = 61,440 now — a package owns a segment (SPEC.md §20.1) — so
+size stopped being the constraint it was when this was written; the pool is
+shared, so a package that takes all of it is still a package nothing else can
+run beside.)
 
 ## Performance notes
 
