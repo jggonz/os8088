@@ -376,14 +376,20 @@ clk_at_done:
 ;
 ; Two structural tests, no writes, both bounded:
 ;
-;  - Register D reads bits 6..0 as zero on every genuine part. An absent chip
-;    floats the bus to FFh, which fails. Its bit 7 (VRT) is deliberately NOT
-;    used as the presence test - FFh has bit 7 set, so "no chip" and "battery
-;    fine" are the same answer.
+;  - Register A's divider bits must read 010 - the ONLY pattern that runs the
+;    oscillator, and what every BIOS leaves there. This is the cheap early-out,
+;    and it has to be a structural test rather than "is it 0FFh", because an
+;    absent chip does not reliably float: an unclaimed IN returns the last
+;    byte DRIVEN on the bus, and one instruction earlier we drove the index
+;    ourselves. So a bare 70h/71h pair on a 5150 answers 8Ah, not 0FFh, and an
+;    0FFh test would never fire while the UIP poll below burned its whole
+;    budget on a machine that has no clock at all. 0FFh gives 0x70 and the
+;    held index gives 0x00; neither is 0x20.
 ;  - UIP must be observed LOW. On a live chip it is high for at most 2.228 ms
-;    per second; on an absent one every read is FFh and it appears stuck
-;    forever. This is the test modern Linux settled on after the Register D
-;    one turned out to be too tight on later chipsets.
+;    per second; on an absent one it appears stuck forever. This is the test
+;    modern Linux settled on, after the "Register D bits 6..0 must be zero"
+;    one turned out to be too tight on later chipsets - which is why that
+;    test is not here.
 ;
 ; The poll is bounded by a plain counter, not by [ticks]: clk_init runs
 ; before the PIT hook has done anything (SPEC.md 15). And it takes the guard
@@ -393,14 +399,11 @@ clk_at_done:
 clk_at_probe:
     push ax
     push cx
-    mov al, 0x0D
+    mov al, 0x0A
     call clk_at_lock
-    cmp al, 0xFF                ; the floating bus, rejected before the poll
-    je .no                      ; spends its whole budget on it. NOT the
-                                ; tighter "bits 6..0 must be zero" test: two
-                                ; generations of chipset have since used
-                                ; those bits and Linux walked that check back
-                                ; twice before dropping it
+    and al, 0x70
+    cmp al, 0x20
+    jne .no
     mov cx, CLK_UIP_MAX
 .uip:
     mov al, 0x0A
@@ -940,13 +943,20 @@ clk_ns_probe:
     call clk_ns_get
     test al, 0x0F               ; RAM 08h likewise has no low nibble
     jnz .no
-    ; --- and a positive exclusion of the 4-bit part, before ANY write ------
+    ; --- and a veto against the 4-bit part, before ANY write ---------------
     ; Rung 3 having looked is not the same as rung 3 having claimed: it is
     ; skipped outright when the BIOS could not read the clock, and refused
     ; whenever the digits disagree with it. In both of those cases control
-    ; arrives here, and the two writes below land on a TC8521's MODE
+    ; arrives here, and the two writes below would land on a TC8521's MODE
     ; register and its 10-day counter. So the veto is structural: if the
     ; ports read as a plausible RP5C01 page 0, this is not our chip.
+    ;
+    ; It is a veto and not a proof, and it deliberately does NOT include
+    ; rung 3's MODE-page-0 test. On an MM58167 that same port is RAM 0Dh -
+    ; arbitrary battery-backed bytes - so "the low two bits are not zero"
+    ; would refuse a genuine SixPakPlus three boots in four. A chip parked
+    ; off page 0 is therefore left to the two half-register gates above and
+    ; to the restore, which is where the residual risk sits.
     call clk_rp_fields
     jnc .no
     call clk_ns_scan            ; the counters, with the same rollover
@@ -1158,6 +1168,17 @@ clk_ns_stamp:
     push ax
     push bx
     push dx
+    pushf
+    cli                         ; every other 2C0h burst runs guarded, and
+                                ; this one is reached from clk_probe
+    cmp ax, CLK_YMIN            ; clamp BEFORE the subtraction: clk_commit's
+    jae .ylo                    ; clamp happens later and would not save a
+    mov ax, CLK_YMIN            ; card stamped 120 from being unreadable by
+.ylo:                           ; both of the readers next boot
+    cmp ax, CLK_YMAX
+    jbe .yok
+    mov ax, CLK_YMAX
+.yok:
     sub ax, CLK_YMIN
     mov bl, al                  ; BL = the year byte, both conventions
     mov ah, bl
@@ -1174,6 +1195,7 @@ clk_ns_stamp:
     mov ah, CLK_NS_MAGIC
     mov al, CLK_NS_OK
     call clk_ns_put
+    popf
     pop dx
     pop bx
     pop ax
@@ -1295,14 +1317,16 @@ clk_rp_digit:
 ; clk_rp_digits - the thirteen page-0 digits into clk_tb_*
 ; out: CF = 1 = a digit is outside its range; preserves all registers
 ;
-; The hour tens are required to be 0..2. That does NOT prove 24-hour mode -
-; in 12-hour mode the same register's bit 1 is the PM flag, so a morning
-; reading is indistinguishable - and it does not need to: reading the 12/24
-; bit means switching to page 1, and a page switch is a WRITE, which this
-; routine may not do before the chip has been identified. The BIOS
-; comparison sorts it out in the afternoon (a 12-hour chip disagrees) and in
-; the morning it does not matter, because clk_rp_write reads the bit for
-; real and encodes to match rather than forcing a mode on the machine.
+; The hour tens are allowed the chip's full 0..3 and the joined hour is NOT
+; range-checked, which looks lax and is deliberate. In 12-hour mode bit 1 of
+; that register is the PM flag, so an afternoon reading gives tens of 2 or 3
+; and joins to 20..39; reading the 12/24 bit to tell would mean switching to
+; page 1, and a page switch is a WRITE, which this routine may not do before
+; the chip is identified. Rung 3's real gate is the BIOS comparison, and no
+; joined hour above 23 can ever equal a BIOS hour - so nothing is let
+; through. What the wider range buys is rung 2: it uses this routine as its
+; "could this be a 4-bit part?" veto, and a range check that rejected every
+; PM reading would switch that veto off for nine hours a day.
 ; -----------------------------------------------------------------------------
 clk_rp_digits:
     push ax
@@ -1330,8 +1354,8 @@ clk_rp_digits:
     jc .no
     call clk_rp_join
     mov [clk_tb_mi], al
-    mov al, 0x05                ; 10-hour: 0..2, so 24-hour mode as well
-    mov ah, 2
+    mov al, 0x05                ; 10-hour: the chip's full 0..3, PM bit and
+    mov ah, 3                   ; all (see the note above)
     call clk_rp_digit
     jc .no
     mov bl, al
@@ -1340,8 +1364,6 @@ clk_rp_digits:
     call clk_rp_digit
     jc .no
     call clk_rp_join
-    cmp al, 23
-    ja .no
     mov [clk_tb_h], al
     mov al, CLK_RP_DOW          ; 0..6, and 0 IS legal here (Sunday)
     mov ah, 6

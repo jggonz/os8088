@@ -6092,16 +6092,19 @@ So `clk_probe` walks four rungs and `clk_rtc_write` dispatches on
 | 4 | `BIOS` | — | int 1Ah AH=02h..05h | `Hardware clock: BIOS` |
 
 `[clk_rtc]` is still the yes/no everything else tests; `[clk_tier]` is the
-diagnosis, and the Date/Time page prints it (§31.4) because on a machine
+diagnosis, and the Date/Time page prints it (§31.5) because on a machine
 whose clock will not hold a setting, *which* rung answered is the whole
 answer and there is nowhere else to see it.
 
 **Probe order is the design**, and it is chosen so that no rung ever writes
 to a chip a later rung might have identified differently:
 
-1. **Rung 1, read-only.** Register D reading 0FFh is the floating bus, so
-   that is rejected first — but *not* the tighter "bits 6..0 must be zero"
-   test, which two generations of chipset have since broken. Presence is
+1. **Rung 1, read-only.** Status Register A's divider bits must read 010 —
+   the only pattern that runs the oscillator, and what every BIOS leaves
+   there. That is the early-out, and it is structural rather than a test
+   for 0FFh because an absent chip does not reliably float (see the bus
+   note below). Register D's "bits 6..0 must be zero" is deliberately *not*
+   used: two generations of chipset have since broken it. Presence is
    then the **UIP-stuck test**: Status Register A bit 7 is high for at most
    2.228 ms per second on a live chip and permanently on an absent one.
    Bounded by a plain counter (`CLK_UIP_MAX`), never by `[ticks]` —
@@ -6131,9 +6134,13 @@ to a chip a later rung might have identified differently:
 5. **Rung 4**, for a machine whose BIOS is the only thing that knows where
    its clock is.
 
-Both 2C0h probes charge the ISA bus off a driven port (`in al, 21h`, the
-master PIC's mask) first, so an unclaimed read settles to 0FFh instead of
-to whatever the last `out` drove.
+Both 2C0h probes drive all-ones onto the ISA bus first (`out 80h, 0FFh` —
+the POST diagnostic port, an unused DMA page slot that every BIOS writes),
+because an unclaimed IN returns the last byte *driven*, not 0FFh, and every
+gate below is built on "an absent card reads 0FFh". Rung 1 cannot use that
+trick — its own index write to 70h is the last thing on the bus — so it
+rejects structurally instead: Register A's divider bits must read 010, which
+neither 0FFh nor a held index byte can satisfy.
 
 **Reading.** Rung 1 uses the hybrid guard Linux converged on: the payload
 is bracketed **both** by UIP and by a seconds comparison, the seconds value

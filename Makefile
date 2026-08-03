@@ -51,6 +51,9 @@ RTCFORCE_ns   := 2
 RTCFORCE_rp   := 3
 RTCFORCE_bios := 4
 ifneq ($(RTC),)
+ifeq ($(RTCFORCE_$(RTC)),)
+$(error RTC must be one of: none at ns rp bios)
+endif
 VIDDEF += -DCLK_FORCE=$(RTCFORCE_$(RTC))
 endif
 # ...and a stamp so that CHANGING VIDEO rebuilds the kernel. Without it make
