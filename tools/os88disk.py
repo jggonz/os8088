@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """os88disk: build (or verify) a FAT data floppy image from .o88 packages.
 
-    python3 tools/os88disk.py -o OUT.img --size {1440,360} [PKG.o88 ...]
+    python3 tools/os88disk.py -o OUT.img --size {1440,360} [[DIR:]PKG.o88 ...]
     python3 tools/os88disk.py --verify IMG
 
 The image is a canonical DOS FAT floppy (SPEC.md section 19): boot sector
@@ -14,6 +14,18 @@ truncation guard depends on it) and fixed timestamps (date 0x5C21 =
 2026-01-01, time 0). File data is allocated contiguously from cluster 2 in
 argument order; every field is fixed, so rebuilds are byte-identical.
 Directory display names are the host filenames (8.3, uppercased).
+
+A package argument may carry a FOLDER prefix -- "GAMES:build/mines.o88" --
+which puts it in a first-level subdirectory of that name (SPEC.md 19.2:
+the kernel lists folders as type-2 entries and enters them with the same
+validated mount path). Folders are emitted in first-appearance order and
+come BEFORE any root-level packages, so a disk built entirely out of
+folders has the folders at root indices 0..n-1. Each folder is a real FAT
+subdirectory: its own cluster chain, '.' and '..' as the first two entries
+('..' carries cluster 0, meaning the root, exactly as the spec requires),
+then its members in argument order. The 32-entry listing cap is per
+DIRECTORY, and so is the duplicate-name check -- two folders may each hold
+a MINES.O88.
 
 Geometries: 1440 (1.44MB, FAT12) and 360 (360KB, FAT12) are the shipped
 disks; 2880 (2.88MB ED, 5,698 clusters => FAT16) is test-only -- it exists
@@ -223,57 +235,137 @@ def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
     return bytes(bs)
 
 
+def folder83(name: str) -> bytes:
+    """Derive the 11-byte FAT short name of a subdirectory (no extension)."""
+    up = name.upper()
+    if not 1 <= len(up) <= 8:
+        fail(f"folder '{name}': 1-8 characters (an 8.3 stem, no extension)")
+    if up in RESERVED_STEMS:
+        fail(f"folder '{name}': reserved DOS device name")
+    for ch in up.encode("ascii", "replace"):
+        if ch not in NAME_CHARS:
+            fail(f"folder '{name}': characters outside A-Z 0-9 _ -")
+    return up.encode().ljust(11)
+
+
+def split_spec(arg: str):
+    """'GAMES:build/mines.o88' -> ('GAMES', 'build/mines.o88')."""
+    folder, sep, path = arg.partition(":")
+    if not sep:
+        return None, arg
+    if not path:
+        fail(f"'{arg}': folder prefix with no package after it")
+    return folder.upper(), path
+
+
 def build(args) -> int:
     spt, heads, tot, spc, fatsz, root_ent, media = GEOMETRY[args.size]
     lay = Layout(spc, 1, 2, root_ent, tot, fatsz)
-    if len(args.packages) > MAX_FILES:
-        fail(f"{len(args.packages)} files; the kernel lists at most "
-             f"{MAX_FILES}")
 
-    seen: set = set()
-    files = []                                   # (name11, data, nclusters)
-    for path in args.packages:
-        name11 = name83(path, seen)
+    # Group by folder, keeping first-appearance order. Names are checked
+    # for duplicates PER DIRECTORY: two folders may each hold a MINES.O88.
+    groups: dict = {}                            # folder ('' = root) -> list
+    seen: dict = {}                              # folder -> set of name11
+    for arg in args.packages:
+        folder, path = split_spec(arg)
+        key = folder or ""
+        if key not in groups:
+            groups[key] = []
+            seen[key] = set()
+            if folder:
+                folder83(folder)                 # validate once, on creation
+        name11 = name83(path, seen[key])
         data = validate_o88(path)
         nclusters = (len(data) + lay.cluster_bytes - 1) // lay.cluster_bytes
-        files.append((name11, data, nclusters))
+        groups[key].append((name11, data, nclusters))
 
-    need = sum(n for _, _, n in files)
+    # Root order: every folder first, in first-appearance order, then the
+    # root-level packages. Folders cost one root entry each.
+    dirs = [k for k in groups if k]
+    root_files = groups.get("", [])
+    for key in dirs:
+        if len(groups[key]) > MAX_FILES:
+            fail(f"{len(groups[key])} entries in folder {key}; the kernel "
+                 f"lists at most {MAX_FILES} per directory")
+    if len(dirs) + len(root_files) > MAX_FILES:
+        fail(f"{len(dirs) + len(root_files)} root entries; the kernel lists "
+             f"at most {MAX_FILES} per directory")
+
+    # A folder's own directory is a cluster chain like any other file: two
+    # link entries ('.', '..') plus its members, rounded up to clusters.
+    dir_nclus = {k: max(1, ((2 + len(groups[k])) * 32 + lay.cluster_bytes - 1)
+                        // lay.cluster_bytes) for k in dirs}
+
+    files = [f for k in dirs for f in groups[k]] + root_files
+    need = sum(n for _, _, n in files) + sum(dir_nclus.values())
     if need > lay.nclus:
         fail(f"packages need {need} clusters; disk holds {lay.nclus}")
 
-    # Allocate chains: contiguous in argument order from cluster 2, or
-    # round-robin interleaved under --scramble (legally fragmented).
+    # Allocate the directory chains first, contiguously and in root order,
+    # so a folder's listing is one seek away from the root's.
+    nxt = 2
+    dir_chains = {}
+    for k in dirs:
+        dir_chains[k] = list(range(nxt, nxt + dir_nclus[k]))
+        nxt += dir_nclus[k]
+
+    # Then the file chains: contiguous in argument order, or round-robin
+    # interleaved under --scramble (legally fragmented).
     chains = [[] for _ in files]
     if args.scramble:
-        nxt = 2
         while any(len(c) < f[2] for c, f in zip(chains, files)):
             for c, f in zip(chains, files):
                 if len(c) < f[2]:
                     c.append(nxt)
                     nxt += 1
     else:
-        nxt = 2
         for c, f in zip(chains, files):
             c.extend(range(nxt, nxt + f[2]))
             nxt += f[2]
 
     fat = Fat(lay, media)
     data_area = bytearray((tot - lay.data_lba) * SECTOR)
-    for chain, (_, body, _) in zip(chains, files):
+
+    def link(chain):
         for k, cl in enumerate(chain):
             fat.set(cl, chain[k + 1] if k + 1 < len(chain)
                     else (0xFFF if lay.fat12 else 0xFFFF))
+
+    def put(chain, body):
+        link(chain)
+        for k, cl in enumerate(chain):
             dst = (cl - 2) * lay.cluster_bytes
             chunk = body[k * lay.cluster_bytes:(k + 1) * lay.cluster_bytes]
             data_area[dst:dst + len(chunk)] = chunk
 
+    for chain, (_, body, _) in zip(chains, files):
+        put(chain, body)
+
+    # Each folder's directory contents, now that its members have clusters.
+    at = 0
+    for k in dirs:
+        raw = bytearray(len(dir_chains[k]) * lay.cluster_bytes)
+        raw[0:32] = dirent(b".".ljust(11), 0x10, dir_chains[k][0], 0)
+        raw[32:64] = dirent(b"..".ljust(11), 0x10, 0, 0)   # 0 = the root
+        for i, (name11, body, _) in enumerate(groups[k]):
+            off = (i + 2) * 32
+            raw[off:off + 32] = dirent(name11, 0x20, chains[at + i][0],
+                                       len(body))
+        at += len(groups[k])
+        put(dir_chains[k], bytes(raw))
+
     root = bytearray(lay.root_secs * SECTOR)
-    root[0:32] = dirent(VOL_LABEL, 0x08, 0, 0)   # label first: kernel
-    for i, (chain, (name11, body, _)) in enumerate(   # filters it, so
-            zip(chains, files)):                      # index 0 = argv[0]
-        root[(i + 1) * 32:(i + 2) * 32] = dirent(
+    root[0:32] = dirent(VOL_LABEL, 0x08, 0, 0)   # label first: the kernel
+    slot = 1                                     # filters it, so the first
+    for k in dirs:                               # listed entry is index 0
+        root[slot * 32:(slot + 1) * 32] = dirent(
+            folder83(k), 0x10, dir_chains[k][0], 0)
+        slot += 1
+    for i, (name11, body, _) in enumerate(root_files):
+        chain = chains[len(files) - len(root_files) + i]
+        root[slot * 32:(slot + 1) * 32] = dirent(
             name11, 0x20, chain[0], len(body))
+        slot += 1
 
     image = bytearray(boot_sector(spt, heads, tot, spc, fatsz, root_ent,
                                   media, lay))
@@ -289,8 +381,9 @@ def build(args) -> int:
         fail(f"cannot write {args.output}: {e}")
 
     print(f"os88disk: {args.output} ({args.size}KB, {spt} spt, "
-          f"{lay.type_name}) {len(files)} file(s), "
-          f"{need}/{lay.nclus} clusters"
+          f"{lay.type_name}) {len(files)} file(s)"
+          + (f" in {len(dirs)} folder(s)" if dirs else "")
+          + f", {need}/{lay.nclus} clusters"
           + (", scrambled" if args.scramble and files else ""))
     return 0
 
@@ -485,9 +578,10 @@ def main() -> int:
                     help="fragment cluster chains round-robin (test only)")
     ap.add_argument("--verify", metavar="IMG",
                     help="structural fsck of an existing image (no build)")
-    ap.add_argument("packages", metavar="PKG.o88", nargs="*",
-                    help="package files, in directory order "
-                         "(none = empty disk)")
+    ap.add_argument("packages", metavar="[DIR:]PKG.o88", nargs="*",
+                    help="package files, in directory order (none = empty "
+                         "disk); a DIR: prefix puts one in a first-level "
+                         "folder of that name")
     args = ap.parse_args()
 
     if args.verify:

@@ -108,8 +108,9 @@ the menus. All of classic Mac's core interactions work:
   carries a mine glyph; packages without one — and any file that isn't a
   package at all — fall back to the generic icon.
 - **Minesweeper** — the first software package: a colorful 9×9
-  minesweeper that ships on `build/apps.img`, loaded through the Disk
-  window. Blue 1s, green 2s, red flags, first-click-safe mine placement,
+  minesweeper that ships on `build/apps.img` in its `GAMES` folder
+  (the software floppy is organized into `APPS` and `GAMES`), loaded
+  through the Disk window. Blue 1s, green 2s, red flags, first-click-safe mine placement,
   flood fill; `F` toggles flag mode, `N` starts a new game.
 - **Clock** and **Bounce** — each instance runs as its *own pre-empted task*,
   up to ten of each. The clocks tick and the balls bounce while you type or
@@ -126,6 +127,13 @@ the menus. All of classic Mac's core interactions work:
   move the window and the picture is back instantly and the render *resumes*
   instead of starting over. On a 4.77MHz XT a frame takes about two minutes,
   which is exactly why that matters.
+- **Arkanoid** — a brick-breaker whose *game loop is a background task*, so
+  the ball keeps moving between keystrokes and the desktop stays live around
+  it. Powerup capsules, a laser paddle, PC-speaker effects driven straight
+  from the worker, and a paddle that reflects the ball rather than
+  re-launching it — where you hit it and how you were moving both go into
+  the bounce. Contributed, like Paint and Solitaire, by
+  [github.com/Elendilon](https://github.com/Elendilon).
 - **Task Manager** — System → Task Manager: a live CPU load gauge with a
   scrolling history graph, a RAM readout with a usage bar, and one row per
   instance with its state, CPU share and memory. Apps with no task of their own

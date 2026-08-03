@@ -203,6 +203,23 @@ $(BUILD)/solitair.bin: apps/solitaire/solitaire.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/solitair.o88: $(BUILD)/solitair.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/solitair.bin -o $@
 
+# Arkanoid, the ninth shipped package (SPEC.md 44): a brick-breaker whose game
+# loop is a WORKER TASK (SPEC.md 20.6) rather than a callback, because a ball
+# has to keep moving between keystrokes. Arrow keys steer on a deadline (int
+# 16h has no key-up, so a held key is inferred from typematic repeat), the
+# capsules are caught with the paddle, and the PC speaker (SPEC.md 34) is
+# driven FROM the worker - which snd_req_inst attributes correctly by falling
+# back to the running task's instance. Contributed as a fork by
+# github.com/Elendilon, like Paint and Solitaire before it, and its
+# OSAPI_ABOUT_SET panel says so. 'ARKANOID' is exactly eight characters, so
+# unlike SOLITAIR.O88 the file name needs no truncating.
+$(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/arkanoid/arkanoid.asm
+	@echo "arkanoid: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/arkanoid.o88: $(BUILD)/arkanoid.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/arkanoid.bin -o $@
+
 # FMTEST, the sound Phase 3 gate package (docs/SOUND-PLAN.md): drives the FM
 # slot 0x0084 end to end (patch-load, chord, all-off, tone expiry, teardown).
 # Never on the shipped apps disks - their directory order is pinned - it gets
@@ -262,20 +279,28 @@ $(BUILD)/filetest-fat16.img: $(BUILD)/filetest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 2880 $(BUILD)/filetest.o88
 
 # The software floppies (drive B:) hold packages, not boot code - os88fs only.
-# Directory order is pinned: mines first, hello second (tests rely on it);
-# notepad is appended third, recorder fourth, piano fifth, fractal sixth,
-# paint seventh and solitaire eighth, so earlier indices hold. New packages
-# ALWAYS append at the end - the scripted tests click the Disk window by row
-# index.
-APPS := $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 \
-        $(BUILD)/recorder.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88 \
-        $(BUILD)/paint.o88 $(BUILD)/solitair.o88
+# The volume is FOLDERED (SPEC.md 19.2): the root holds APPS and GAMES and
+# nothing else, so the root indices are 0 = APPS, 1 = GAMES and a package is
+# two double-clicks away rather than one. Order inside each folder is pinned
+# and new packages ALWAYS append at the end of their folder - the scripted
+# tests click the Disk window by row index, and every index inside a folder
+# is now independent of what the other folder holds.
+APPS_TOOLS := $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 \
+              $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88
+APPS_GAMES := $(BUILD)/mines.o88 $(BUILD)/solitair.o88 $(BUILD)/arkanoid.o88
+APPS := $(APPS_TOOLS) $(APPS_GAMES)
+
+# ...and the same list with the folder each package lands in. os88disk.py
+# reads a "DIR:" prefix per package, so the grouping lives here rather than
+# in the tool.
+APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
+            $(addprefix GAMES:,$(APPS_GAMES))
 
 $(APPSIMG): $(APPS) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(APPS)
+	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS)
 
 $(APPSIMG360): $(APPS) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(APPS)
+	python3 tools/os88disk.py -o $@ --size 360 $(APPSARGS)
 
 # The GUI reads a Microsoft serial mouse on COM1; QEMU emulates one natively.
 MOUSE := -chardev msmouse,id=m0 -serial chardev:m0

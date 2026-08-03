@@ -447,13 +447,25 @@ VID_CGA    equ 2
 ;     OSAPI_WM_CONTENT, OSAPI_WM_GEOM, OSAPI_WM_OBSCURED,
 ;     OSAPI_WM_CLIP_SET, OSAPI_WM_CLIP_CLEAR, OSAPI_WM_CLIP_TEST,
 ;     OSAPI_VIDEO, OSAPI_GET_TICKS, OSAPI_MOUSE, OSAPI_SRAND/RAND,
-;     OSAPI_TASK_SLEEP, OSAPI_TASK_YIELD and OSAPI_TASK_ALIVE.
+;     OSAPI_SND_CAPS, OSAPI_SND_TONE, OSAPI_TASK_SLEEP, OSAPI_TASK_YIELD
+;     and OSAPI_TASK_ALIVE.
 ;     OSAPI_SET_COLOR writes ONE global pen shared by the whole machine,
 ;     so set it only inside the same lock hold as the drawing it colours -
-;     lock-free, it repaints someone else's window in your colour. You may
-;     NOT call the file slots, OSAPI_FILE_DLG, OSAPI_SND_STREAM or
-;     OSAPI_SND_PLAY from a worker - those are UI-task-only and the kernel
-;     cannot stop you.
+;     lock-free, it repaints someone else's window in your colour.
+;     OSAPI_SND_TONE is worker-safe by construction, not by luck: the
+;     grant is stamped with the instance `snd_req_inst` resolves, and
+;     outside a dispatched callback that is the RUNNING TASK's own
+;     instance (SPEC.md 34.3) - which is yours - so the tone is
+;     attributed to you and released by `snd_release_inst` when you are
+;     torn down. Ask for a DURATION and it self-expires through
+;     `snd_tick`, so a worker need never come back to silence it
+;     (apps/arkanoid drives the whole game's sound this way, SPEC.md
+;     44.5). You may NOT call the file slots, OSAPI_FILE_DLG,
+;     OSAPI_SND_STREAM or OSAPI_SND_PLAY from a worker - those are
+;     UI-task-only and the kernel cannot stop you, and the two sound
+;     ones are barred for a different reason than misattribution: they
+;     run with the scheduler locked, so a worker calling one freezes the
+;     desktop for the length of the clip.
 ;
 ; The kernel's own app_bounce_task is the reference implementation of all
 ; of this.

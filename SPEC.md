@@ -3278,7 +3278,16 @@ Display names are the 8.3 host filenames (e.g. `"MINES.O88"`), not the
 instance still shows its header name (`inst_set_name` reads the loaded
 region, §21). Directory order on the shipped disks is pinned by §24's
 argument order; the volume-label entry is filtered, so index 0 stays the
-first package.
+first *listed* entry.
+
+Since the shipped volume gained folders (§24), that first entry is a
+**folder**, not a package: the apps disks carry `APPS` and `GAMES` at the
+root and nothing else, so root index 0 is `APPS` and index 1 is `GAMES`,
+and every package index is an index *inside* a folder. Nothing in the
+kernel changed for it — a folder is the type-2 entry §19.2 already
+described, entered by the same validated mount — but scripted tests that
+click by row (§22) now click twice, and the two folders' indices are
+independent of each other.
 
 ### 19.2 Subdirectories — the current directory, one walker, and navigation
 
@@ -5029,15 +5038,29 @@ and non-zero exit + stderr message on any validation failure.
     COM1–9, LPT1–9) rejected.
   - Emission: boot sector per §19 (BPB + the fixed message stub); FAT1
     with the reserved entries; files allocated **contiguously in argument
-    order from cluster 2** (argument order = root order = index order —
-    QMP tests click by row; the kernel never relies on contiguity, it
-    chain-walks); FAT2 = copy of FAT1; root dir: the volume-label entry
-    first (attr 0x08, `"OS8088APPS "`, fixed timestamp — filtered by the
-    kernel, so index 0 stays the first package), then one entry per
-    package: attr 0x20, NT byte 0, fixed timestamps (date 0x5C21 =
-    2026-01-01, time 0), FstClusHI 0, FstClusLO, **exact byte size —
-    never padded** (§21's truncation guard depends on it). File data is
-    zero-padded to cluster boundaries on disk only.
+    order from cluster 2** (argument order = directory order = index
+    order — QMP tests click by row; the kernel never relies on
+    contiguity, it chain-walks); FAT2 = copy of FAT1; root dir: the
+    volume-label entry first (attr 0x08, `"OS8088APPS "`, fixed timestamp
+    — filtered by the kernel, so index 0 stays the first listed entry),
+    then one entry per package: attr 0x20, NT byte 0, fixed timestamps
+    (date 0x5C21 = 2026-01-01, time 0), FstClusHI 0, FstClusLO, **exact
+    byte size — never padded** (§21's truncation guard depends on it).
+    File data is zero-padded to cluster boundaries on disk only.
+  - **Folders.** A package argument may carry a `DIR:` prefix —
+    `GAMES:build/mines.o88` — putting it in a first-level subdirectory of
+    that name (§19.2). Folder names are 8.3 stems with no extension,
+    validated like a file stem. Emission order: the **directory chains
+    first**, contiguously from cluster 2 in first-appearance order, then
+    the file data; the root then carries the label, every folder (attr
+    0x10, size 0), and finally any root-level packages — so a
+    fully-foldered disk has its folders at root indices 0..n−1. A
+    folder's own directory is `'.'` then `'..'` (the latter with cluster
+    **0**, meaning the root, as the FAT spec requires) then its members
+    in argument order, rounded up to whole clusters. The 32-entry listing
+    cap and the duplicate-name check are **per directory**, so two
+    folders may each hold a `MINES.O88`. Determinism is unaffected: the
+    allocation order is still fixed by the argument list.
   - Determinism: fixed BS_VolID 0x88000888, fixed timestamps, fixed
     label, contiguous argument-order allocation ⇒ byte-identical images
     across rebuilds (`make` twice → `cmp` clean).
@@ -5063,11 +5086,16 @@ and non-zero exit + stderr message on any validation failure.
   `X.alt.bin` rule died with the reloc diff, for all nine packages and
   the three gate images alike — fed to os88pkg.py,
   then `build/apps.img` (1440) + `build/apps360.img` (360) from
-  **mines.o88 + hello.o88** via os88disk.py; all built by `all`.
-  Root-directory order on the apps disks stays pinned — mines, hello,
-  notepad, recorder, piano, fractal — because scripted tests click by
-  row (§22). `run`/`debug`/`test` attach build/apps.img as floppy index
-  1. 86Box's fdd_02 gets apps360.img (best-effort config keys).
+  every `.o88` via os88disk.py; all built by `all`.
+  Directory order on the apps disks stays pinned, because scripted tests
+  click by row (§22) — but it is pinned **per folder** now: the root is
+  `APPS` then `GAMES`, `APPS` holds hello, notepad, recorder, piano,
+  fractal, paint and `GAMES` holds mines, solitaire, arkanoid, each new
+  package appending at the end of its own folder. The grouping lives in
+  the Makefile (`APPS_TOOLS`/`APPS_GAMES` → the `DIR:`-prefixed
+  `APPSARGS`), not in the tool. `run`/`debug`/`test` attach
+  build/apps.img as floppy index 1. 86Box's fdd_02 gets apps360.img
+  (best-effort config keys).
 
 ## 25. icons.inc — icon format, draw routine, built-in library
 
@@ -8825,3 +8853,172 @@ and the line count from the credit table and clamps both to the content, so
 one block of text is right on a 640x480 screen and on CGA's 220px-wide
 window (§39). Lines are centred on the panel rather than on the content, so
 the block still reads as one card when the clamp has narrowed it.
+
+## 44. Arkanoid — the ninth package (apps/arkanoid/arkanoid.asm)
+
+A brick-breaker over the published package ABI. Prefix `ark_`, embedded icon,
+**no kernel change of any kind**. Contributed as a fork by
+github.com/Elendilon, who also wrote Solitaire (§43) — which is what its
+`OSAPI_ABOUT_SET` panel (§44.7) says. On the apps disks it lives in the
+`GAMES` folder (§24), appended after solitaire.
+
+### 44.1 The game is the worker task
+
+A ball has to keep moving between keystrokes, and a window callback only runs
+when something happens to the window, so the loop lives in `ark_worker`
+(§20.6) — the same shape as apps/fractal. One frame per `osapi_task_sleep 1`,
+about 18 fps. The sleep is the frame rate *and* what keeps the machine usable:
+a worker that spun would starve the UI task it shares the scheduler with.
+
+Everything the UI task does is set a word the worker reads — `[ark_launch]`,
+`[ark_pdir]`, `[ark_pkeep]` — with no protocol at all, because the 8086
+recognises interrupts only at instruction boundaries and every one of them is
+a plain word access. It is the same no-lock sharing apps/fractal uses for its
+restart flag.
+
+`ark_render` is the one lock hold per frame, and it obeys rule 5: re-read the
+origin (the window may have been dragged while we slept), ask
+`OSAPI_WM_GEOM` whether the window is even visible — a v3 window pointer is
+an opaque handle, so the v2 `test word [es:bx+W_FLAGS], 2` is dead (§11/§20.5)
+— then `osapi_wm_clip_set`. CF=1 means not one pixel shows, so the frame is
+skipped and the game keeps running invisibly — what the kernel's own Bounce
+does. `[ark_full]` survives a skip, so whatever repaint was owed still happens
+on the first frame that shows.
+
+### 44.2 The keyboard has no key-up, so the paddle glides on a deadline
+
+int 16h delivers keypresses and nothing else, so "is left held" cannot be
+asked. Each arrow key sets a direction and refills `[ark_pkeep]` with a
+deadline in **ticks**; the worker moves the paddle while the deadline lasts and
+decrements it. Typematic repeat keeps refilling it, so a held key glides and a
+tap is one short nudge.
+
+Two constants are load-bearing. `ARK_PKEEP` is 11 ticks because the BIOS
+typematic **delay** is about 9 — a shorter deadline makes a held key stall for
+half a second before the first repeat arrives, which reads as the game
+ignoring the keyboard. And a repeat that arrives *while the deadline still
+stands* is the only available evidence that the key is held rather than
+tapped, which is what promotes the paddle from `ARK_PSTEP` to `ARK_PFAST`.
+
+The `or al, al` gate on the scan code is not optional: the numeric keypad
+sends '4' and '6' with the arrow scan codes, so without it typing a digit
+steers the paddle — the trap apps/notepad documents.
+
+### 44.3 The ball steps one pixel at a time
+
+`ark_do_ball` walks the velocity with Bresenham, one axis per step, testing
+after **each single pixel** — not one jump of (vx,vy) per frame. At four
+pixels a tick a whole-vector jump steps straight over a brick's edge and out
+the other side, and the ball tunnels through what it should have bounced off.
+
+Stepping buys a second property that the drawing depends on: the ball is never
+*inside* anything, because `ark_move1` reflects instead of taking the step that
+would put it there. That is what lets the ball be erased with a plain
+background fill. The one thing that can still overlap it is the **paddle**,
+which moves under a parked ball, so the paddle is redrawn whenever the erased
+rect reaches its lane. `ark_reflect` needs no geometry for the same reason:
+exactly one coordinate changed, so that is the axis to reverse.
+
+### 44.3.1 The paddle reflects, it does not re-launch
+
+A paddle bounce **mirrors** — `vy` flips to `-[ark_vymag]` and `vx` is *kept* —
+and then two things are **added** to the vx it kept:
+
+- **Where along the paddle it landed**, `ark_zbias`, five zones of −2..+2.
+- **How the paddle itself was moving**, `ark_english`, −2..+2 from
+  `[ark_pvel]` — the pixels the paddle actually moved that frame, measured
+  after its rail clamps so a paddle pinned against a rail imparts nothing.
+
+The sum is clamped to ±`ARK_VXMAX`, because vx accumulates across bounces and
+without a ceiling a rally converges on horizontal and stops coming down.
+
+This replaced a zone table that **assigned** both components outright, and the
+difference is the whole feel of the game: with the old table a ball arriving
+steeply from the left and one drifting in from the right left the paddle
+identically if they landed in the same zone, so a rally had no continuity and
+read as arbitrary. `[ark_vymag]` exists for the same reason — it is the
+authority on the rally's vertical speed, so a bounce restores the tempo it
+already had instead of inventing one per zone, and it is the single number
+Slow reduces.
+
+**The serve is thrown, not aimed.** `ark_throw` gives it `vx` from
+`[ark_pvel]` at twice `ark_english`'s weight, because a serve has no incoming
+direction to build on — the flick *is* the aim. A paddle standing still serves
+straight up, which is honest rather than a hidden default: the player who
+wants an angle flicks, and the one who does not chooses after the first
+bounce. It also means the ball can be walked along the paddle before release.
+
+### 44.4 Powerups
+
+One broken brick in `ARK_PUCHANCE` drops a capsule, up to three falling at
+once; catching it with the paddle applies it. Five kinds: **E** expand, **C**
+catch (the ball sticks until Space), **L** laser (Space fires, two bolts at a
+time, each breaking one brick), **S** slow, **X** extra life.
+
+A capsule is identified by the **letter** drawn on it from the kernel font,
+not by its colour — five colours cannot survive §39.4's reduction to three
+inks. Its height must *contain* that glyph: an 8px letter drawn one row into
+an 8px box hangs a row below the rect that erases it, and every frame leaves a
+slice of the last one behind. The laser bolt spawns clear of the paddle for
+the same class of reason — spawned *on* it, the bolt's first erase punches a
+hole in the paddle it was fired from.
+
+### 44.5 Sound comes from the worker
+
+Every game event is a duration-limited `osapi_snd_tone` (§34): the rails and
+ceiling, the paddle, a chipped brick, a broken one, the serve, a caught
+capsule, the laser, a lost life, a cleared wall.
+
+**Calling it from a worker is correct by construction**, and the SDK's
+worker-safe list did not say so until this package needed it. `snd_req_inst`
+(§34.3) stamps a grant with `[snd_inst]` when a callback is being dispatched
+and with the **running task's own `T_INST`** when one is not — which is
+exactly the worker's case — so the tone is attributed to this instance and
+`snd_release_inst` releases it at teardown like any other. A duration-limited
+tone self-expires through `snd_tick`, so the worker never has to come back and
+turn it off. `osapi_snd_play` stays UI-task-only for a different reason: it
+runs the clip with the scheduler locked, so a worker calling it freezes the
+desktop rather than merely misattributing a grant.
+
+### 44.6 Two metric sets, and a palette that cannot go black
+
+24x10 bricks over six rows on VGA and Hercules, 20x7 over five on CGA's 200
+rows, chosen by screen height exactly as apps/solitaire chooses cards, with
+the paddle, the ball and the strip all scaling with them.
+
+The brick palette is **not** a free choice. Everything is drawn on a black
+field, so a row colour from §39.4's black class (0..6) makes that whole row
+invisible on a 1bpp adapter — which is what `CBROWN` did to row 1 until a CGA
+screenshot showed the row missing. The table is therefore drawn only from the
+white class (12, 14, 15) and the dither class (7..11, 13), and alternates
+between them so two touching rows stay apart once colour has reduced to three
+inks. The rest of the palette follows the same rule: a two-hit brick carries a
+white **notch** rather than a second colour, and an armed paddle grows two
+**muzzles** rather than merely turning red.
+
+### 44.7 The credits are a panel, and the worker must be held off it
+
+`OSAPI_ABOUT_SET` (§12.2) puts *About Arkanoid* under the app's name in the
+bar; `ark_about` draws a measured white panel over the game field, exactly as
+`sol_about` does (§43) — a package cannot open a second window, and the field
+is the rectangle a notice wants anyway. Sizing is measured from the strings
+(`ark_abmeas`) because the two metric sets give two content widths and CGA's
+is the narrower.
+
+Two rules make it safe here that Solitaire never needed, because Solitaire has
+no worker:
+
+- **`[ark_abon]` is checked inside `ark_render`, under the lock and right
+  after the clip is armed**, and the whole frame is dropped while it is set.
+  Anywhere else the worker would repaint the field eighteen times a second
+  straight over the panel. Every full repaint (`ark_draw_all`) draws the panel
+  **last**, so a `W_PAINT` from the window manager restores it too.
+- **A live ball is paused while the panel is up.** A dropped frame does not
+  stop the game — that is the whole point of §44.1 — so without the pause a
+  player would read the credits and lose a life doing it. Only `M_PLAY` is
+  frozen; every other mode is already still, and its banner comes back
+  untouched when the panel goes.
+
+A click or a key takes the panel down and is **spent** doing it
+(`ark_abdismiss` answers CF=1), which is why `ark_onclick` exists at all —
+nothing in this game steers with the mouse.
