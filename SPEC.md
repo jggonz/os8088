@@ -6736,9 +6736,24 @@ allow, from 32x16 up, and everything else follows from that:
   duplicate-instance guard (`pt_dupchk`, a magic record at the scratch base
   believed only while its window pointer still named a live Paint window) went
   with it: two instances now get two different claims by construction.
-- **Memory is budgeted from `OSAPI_MEM_AVAIL` at startup, in three tiers.**
-  Scratch (the flood-fill span stack, 12KB) comes off the top of the claim,
-  and what is left is divided in the order the features are worth least. With room for all three, the canvas and its equally-sized
+- **The claim is bounded by the SCREEN, not by the machine.** `pt_want`
+  computes what two canvases at `[pt_cwmax]` × `[pt_chmax]` plus the clipboard
+  floor plus the scratch would cost, and `pt_geom` asks for the smaller of
+  that and the largest free run. The canvas can never exceed what the screen
+  will show (`pt_setsize` clamps there first), so that product is a hard upper
+  bound on anything the instance can ever address — about 260KB on VGA, and
+  much less on Hercules or CGA, whose desktops are shorter. Asking for "the
+  largest free run" instead meant taking 318KB on a 640KB machine whatever the
+  screen was, and denying it to the back buffer and to every other package;
+  with the bound in place a **second Paint** starts and takes what is left.
+  It is still the *maximum* rather than the default canvas's cost, and that is
+  deliberate: the buffer bases are fixed once, so the undo image has to be big
+  enough for any canvas the user can later drag to. Claiming for 448×280 and
+  re-basing on every grow would mean moving a live picture between segments,
+  which is the one thing this layout exists to avoid.
+- **What is claimed is then divided in three tiers.** Scratch (the flood-fill
+  span stack, 12KB) comes off the top, and what is left is divided in the
+  order the features are worth least. With room for all three, the canvas and its equally-sized
   undo image split what remains after a 16KB clipboard floor — a 101KB canvas
   ceiling on a 640KB machine. Below that the **clipboard** goes first
   (`[pt_haveclip]` = 0: no Cut/Copy/Paste, and no GIF either — the codec's

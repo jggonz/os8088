@@ -404,13 +404,21 @@ ui_rdown:
 ;           release (SPEC.md 13 - the ordering below is binding)
 ; in:  BX = window ptr, CX = mousedown x, DX = mousedown y
 ; out: nothing; window's W_X/W_Y updated (clamped: title bar fully on screen),
-;      full repaint done
-; clobbers: AX, BX, CX, DX (internal helper of the UI task)
+;      and a full repaint IF it moved
+; clobbers: AX, BX, CX, DX, DI (internal helper of the UI task)
 ;
 ; The gfx lock is only released while the outline is erased: XOR draw/erase is
 ; self-inverting only if nothing touches the covered pixels in between, and
 ; the background tasks repaint the instant the lock drops. The release path
 ; runs entirely under the lock already held - re-locking would deadlock.
+;
+; **A drag that did not move the window repaints nothing**, and that is not a
+; micro-optimisation: clicking a background window's title bar to focus it
+; comes through here, and the caller has ALREADY repainted everything to
+; raise it (.title_bar's wm_front). Repainting again on release made every
+; focus change cost two full screen redraws - visible as a double flash, and
+; on a 4.77MHz machine as a wait. The outline is XOR-erased before the clamps
+; below, so when neither coordinate changes the screen is already correct.
 ; -----------------------------------------------------------------------------
 ui_drag:
     mov [ui_dragwin], bx
@@ -488,6 +496,11 @@ ui_drag:
     xor ax, ax
 .x_low_ok:
     mov bx, [ui_dragwin]
+    xor di, di                  ; DI = "the window actually moved"
+    cmp [bx + W_X], ax
+    je .x_same
+    inc di
+.x_same:
     mov [bx + W_X], ax
 
     ; clamp y: MBAR_H <= y and y + TITLE_H <= [vid_h] (title bar on screen)
@@ -500,9 +513,16 @@ ui_drag:
     jge .y_low_ok
     mov ax, MBAR_H
 .y_low_ok:
+    cmp [bx + W_Y], ax
+    je .y_same
+    inc di
+.y_same:
     mov [bx + W_Y], ax
 
+    or di, di                   ; a click that only raised the window (above)
+    jz .done                    ; leaves the screen already correct
     call wm_paint_all           ; caller-held lock, per the wm contract
+.done:
     call gfx_unlock             ; NO second gfx_lock here - already held (§7)
     ret
 

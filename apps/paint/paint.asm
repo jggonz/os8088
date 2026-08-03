@@ -143,11 +143,12 @@ PT_SC_KB    equ 12                  ; scratch (the flood-fill stack), taken off
 PT_CLIPMINP equ 1024                ; the clipboard's floor, in paragraphs
 PT_MINP     equ 2000                ; ...and a canvas under 32,000 bytes
                                     ; (320x200) is not worth starting
-PT_WANT_KB  equ 318                 ; the most we can ever use: two canvases at
-                                    ; the 640x464 ceiling (145KB each), the
-                                    ; clipboard floor (16KB) and the scratch.
-                                    ; Asking for more would just deny it to
-                                    ; the back buffer and to other packages
+PT_WANT_KB  equ 318                 ; the hard ceiling: two canvases at the
+                                    ; 736x464 row-table limit, the clipboard
+                                    ; floor and the scratch. pt_geom asks for
+                                    ; far less than this in practice - see
+                                    ; pt_want - and this only stops the
+                                    ; arithmetic there running away
 PT_SC_STACK equ 16                  ; flood-fill span stack starts here
 PT_FSTK_MAX equ 1024                ; entries of 8 bytes (y, x1, x2, dy)
 
@@ -356,9 +357,13 @@ pt_geom:
     ; every other package's claim. We ask for the largest run, capped at what
     ; we could ever use, and the kernel frees it when this instance dies.
     call OSAPI_MEM_AVAIL            ; AX = largest free run, KB
-    cmp ax, PT_WANT_KB
+    push ax
+    call pt_want                    ; AX = what THIS screen could ever use
+    mov dx, ax
+    pop ax
+    cmp ax, dx                      ; ...and take the smaller of the two
     jbe .want_ok
-    mov ax, PT_WANT_KB
+    mov ax, dx
 .want_ok:
     cmp ax, PT_SC_KB + 32           ; below this even the smallest canvas and
     jb .nomem                       ; the scratch cannot both fit
@@ -512,6 +517,54 @@ pt_fit:
     ret
 .clean:
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_want - how much memory could this screen ever make us use, in KB
+; in:  [pt_cwmax], [pt_chmax] (already clamped to the live screen)
+; out: AX = KB; preserves every other register
+;
+; The claim used to be "the largest free run, capped at PT_WANT_KB" - which on
+; a 640KB machine meant taking 318KB whatever the screen was, and leaving the
+; back buffer and every other package to share what was left. It is not what
+; the app can use: the canvas can never be bigger than the screen will show
+; (pt_setsize clamps to [pt_cwmax] x [pt_chmax] before it clamps to memory),
+; so two of THAT canvas plus the clipboard floor plus the scratch is a hard
+; upper bound on anything this instance can ever address. On VGA that is about
+; 260KB rather than 318; on Hercules and CGA it is dramatically less, because
+; those screens are shorter.
+;
+; It is still the MAXIMUM and not the default canvas's cost, and that is
+; deliberate: pt_geom fixes the buffer bases once, so the undo image has to be
+; big enough for any canvas the user can later drag to. Claiming for the
+; default (448x280) and re-basing on every grow would mean moving a live
+; picture between segments, which is the one thing this layout is built to
+; avoid.
+; -----------------------------------------------------------------------------
+pt_want:
+    push bx
+    push cx
+    push dx
+    mov ax, [pt_cwmax]
+    mov dx, [pt_chmax]
+    call pt_paras                   ; CX = paragraphs of one biggest canvas
+    mov ax, cx
+    add ax, cx                      ; ...twice: the picture and the undo image
+    jc .cap                         ; (a screen that overflowed 1MB cannot
+    add ax, PT_CLIPMINP             ; exist, but the add is free)
+    jc .cap
+    mov cl, 6
+    shr ax, cl                      ; paragraphs -> KB
+    inc ax                          ; round up
+    add ax, PT_SC_KB
+    cmp ax, PT_WANT_KB
+    jbe .out
+.cap:
+    mov ax, PT_WANT_KB
+.out:
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
