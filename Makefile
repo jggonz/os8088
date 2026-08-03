@@ -177,6 +177,25 @@ $(BUILD)/paint.bin: apps/paint/paint.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/paint.o88: $(BUILD)/paint.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/paint.bin -o $@
 
+# Solitaire, the eighth shipped package (SPEC.md 43): Klondike, with the drag
+# done as an XOR outline the way the window manager drags a window - nothing
+# is repainted until the button comes up, so a hand of seven cards costs four
+# thin XOR strips a tick. Card backs are rendered once into a packed 4bpp
+# image and blitted with gfx_blit4; faces are drawn from the kernel font plus
+# 1-bit suit masks, hollow for the red suits on a 1bpp adapter.
+# The package file is SOLITAIR.O88, not SOLITAIRE.O88: the data disk is
+# FAT12 (SPEC.md 19) and an 8.3 stem is eight characters, so the name is
+# truncated the way DOS would truncate it. The name INSIDE the header - what
+# the Task Manager and the dock show - is still 'SOLITAIRE'; that field is 16
+# bytes (SPEC.md 20.2) and has nothing to do with the file name.
+$(BUILD)/solitair.bin: apps/solitaire/solitaire.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/solitaire/solitaire.asm
+	@echo "solitaire: $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/solitair.o88: $(BUILD)/solitair.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/solitair.bin -o $@
+
 # FILETEST, the file-API gate package (SPEC.md 18.4): drives the file slots
 # 0x0098..0x00A8 end to end (write, read-back, replace, rename, delete,
 # dfree, and the refusals). Never on the shipped apps disks - their
@@ -208,16 +227,20 @@ $(BUILD)/filetest-fat16.img: $(BUILD)/filetest.o88 tools/os88disk.py
 
 # The software floppies (drive B:) hold packages, not boot code - os88fs only.
 # Directory order is pinned: mines first, hello second (tests rely on it);
-# notepad third, piano fourth, fractal fifth and paint sixth, so earlier
-# indices hold. New packages ALWAYS append at the end - the scripted tests
-# click the Disk window by row index. (Recorder was the fourth entry until
-# the sound cards were removed - SPEC.md 34 - so everything after it moved
-# down one row.)
-$(APPSIMG): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88
+# notepad third, piano fourth, fractal fifth, paint sixth and solitaire
+# seventh, so earlier indices hold. New packages ALWAYS append at the end -
+# the scripted tests click the Disk window by row index. (Recorder was the
+# fourth entry until the sound cards were removed - SPEC.md 34 - so
+# everything after it moved down one row.)
+APPS := $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 \
+        $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88 \
+        $(BUILD)/solitair.o88
 
-$(APPSIMG360): $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88
+$(APPSIMG): $(APPS) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(APPS)
+
+$(APPSIMG360): $(APPS) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(APPS)
 
 # The GUI reads a Microsoft serial mouse on COM1; QEMU emulates one natively.
 MOUSE := -chardev msmouse,id=m0 -serial chardev:m0
