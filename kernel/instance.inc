@@ -65,27 +65,343 @@ KD_SIZE  equ 16                 ; stride
 
 inst_kinds:                     ; indexed by KIND_* * 16; caps are binding
     dw app_tpl_about,  0,               0,             0,   0,                app_ttl_about
-    dw 0
+    dw inst_ico_about
     db 1, 0                     ; About: stateless singleton
     dw app_tpl_clock,  app_clock_task,  app_clk_pool,  8,   app_clock_kinit,  app_ttl_clock
-    dw 0
+    dw inst_ico_clock
     db 10, 0                    ; Clock: 10 x 8-byte time state, one task each
     dw app_tpl_bounce, app_bounce_task, app_ball_pool, 8,   app_bounce_kinit, app_ttl_bounce
-    dw 0
+    dw inst_ico_bounce
     db 10, 0                    ; Bounce: 10 x 8-byte ball state, one task each
     dw fm_tpl,         0,               fm_pool,       18,  fm_kinit,         fm_ttl
-    dw 0
+    dw inst_ico_disk
     db VIEW_SLOTS, WF_SIZABLE   ; Disk: FOUR windows, each with its own
                                 ; 18-byte state block and its own claimed
                                 ; listing cache; resizable (SPEC.md 22/22.1).
                                 ; The cap, VIEW_SLOTS and fm_pool's size are
                                 ; one number wearing three hats.
     dw tm_tpl,         tm_task,         0,             0,   tm_kinit,         tm_sname
-    dw 0
+    dw inst_ico_tm
     db 1, 0                     ; Task Manager: singleton (one sampler task)
     dw cp_tpl,         0,               0,             0,   0,                cp_sname
-    dw 0
+    dw inst_ico_ctrl
     db 1, 0                     ; Control Panel: stateless task-less singleton
+
+; --- the built-in kinds' icons (SPEC.md 25/29.3) -----------------------------
+; 16 mask words then 16 data words, bit 15 leftmost - icon_draw16's layout,
+; the same one a package embeds in its header (SPEC.md 20.2). They show in
+; the dock (SPEC.md 30). KD_ICON 0 still means "the generic icon" and still
+; works; nothing in the tree uses it now except a package that ships without
+; one, which apps/hello does deliberately.
+; inst_ico_about - the os8088 DIP chip, the same logo the System menu
+; carries (menu_logo_bmp) at icon size
+;   ................
+;   ................
+;   ...####oo####...
+;   .##############.
+;   ...##########...
+;   .##############.
+;   ...##########...
+;   .##############.
+;   ...##########...
+;   .##############.
+;   ...##########...
+;   .##############.
+;   ...##########...
+;   ................
+;   ................
+;   ................
+inst_ico_about:
+    dw 0x0000                       ; 16 mask rows
+    dw 0x3FFC
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0x3FFC
+    dw 0x0000
+    dw 0x0000
+    dw 0x0000                       ; 16 data rows
+    dw 0x0000
+    dw 0x1E78
+    dw 0x7FFE
+    dw 0x1FF8
+    dw 0x7FFE
+    dw 0x1FF8
+    dw 0x7FFE
+    dw 0x1FF8
+    dw 0x7FFE
+    dw 0x1FF8
+    dw 0x7FFE
+    dw 0x1FF8
+    dw 0x0000
+    dw 0x0000
+    dw 0x0000
+
+; inst_ico_clock - a clock face, hour hand at 12 and minute hand at 4
+;   ................
+;   .....######.....
+;   ....##oooo##....
+;   ...##oooooo##...
+;   ..##ooo#oooo##..
+;   .##oooo#ooooo##.
+;   .#ooooo#oooooo#.
+;   .#ooooo#oooooo#.
+;   .#ooooo##ooooo#.
+;   .#ooooooo#oooo#.
+;   .##ooooooo#oo##.
+;   ..##oooooooo##..
+;   ...##oooooo##...
+;   ....##oooo##....
+;   .....######.....
+;   ................
+inst_ico_clock:
+    dw 0x0FF0                       ; 16 mask rows
+    dw 0x1FF8
+    dw 0x3FFC
+    dw 0x7FFE
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0x7FFE
+    dw 0x3FFC
+    dw 0x1FF8
+    dw 0x0FF0
+    dw 0x0000                       ; 16 data rows
+    dw 0x07E0
+    dw 0x0C30
+    dw 0x1818
+    dw 0x310C
+    dw 0x6106
+    dw 0x4102
+    dw 0x4102
+    dw 0x4182
+    dw 0x4042
+    dw 0x6026
+    dw 0x300C
+    dw 0x1818
+    dw 0x0C30
+    dw 0x07E0
+    dw 0x0000
+
+; inst_ico_bounce - a ball, its trajectory and the floor it will come off
+;   ................
+;   ..####..........
+;   .######.........
+;   .######.........
+;   ..####..........
+;   .......#........
+;   ........#.......
+;   .........#......
+;   ..........#.....
+;   ...........#....
+;   ............#...
+;   .............#..
+;   ..............#.
+;   ................
+;   .##############.
+;   ................
+inst_ico_bounce:
+    dw 0x7E00                       ; 16 mask rows
+    dw 0xFF00
+    dw 0xFF00
+    dw 0xFF00
+    dw 0xFF80
+    dw 0x7FC0
+    dw 0x03E0
+    dw 0x01F0
+    dw 0x00F8
+    dw 0x007C
+    dw 0x003E
+    dw 0x001F
+    dw 0x000F
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0x0000                       ; 16 data rows
+    dw 0x3C00
+    dw 0x7E00
+    dw 0x7E00
+    dw 0x3C00
+    dw 0x0100
+    dw 0x0080
+    dw 0x0040
+    dw 0x0020
+    dw 0x0010
+    dw 0x0008
+    dw 0x0004
+    dw 0x0002
+    dw 0x0000
+    dw 0x7FFE
+    dw 0x0000
+
+; inst_ico_disk - a folder: the Disk window browses a volume, so it is
+; the browser that gets an icon here, not the drive - desk.inc
+; already draws the floppy on the desktop
+;   ................
+;   .######.........
+;   .#oooo#########.
+;   .#oooooooooooo#.
+;   .#oooooooooooo#.
+;   .#oooooooooooo#.
+;   .#oooooooooooo#.
+;   .#oooooooooooo#.
+;   .#oooooooooooo#.
+;   .#oooooooooooo#.
+;   .#oooooooooooo#.
+;   .#oooooooooooo#.
+;   .#oooooooooooo#.
+;   .##############.
+;   ................
+;   ................
+inst_ico_disk:
+    dw 0xFF00                       ; 16 mask rows
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0x0000
+    dw 0x0000                       ; 16 data rows
+    dw 0x7E00
+    dw 0x43FE
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x4002
+    dw 0x7FFE
+    dw 0x0000
+    dw 0x0000
+
+; inst_ico_tm - a bar chart on an axis: distinct from the Control Panel's
+; slider panel at 16px, which a framed list of bars was not
+;   ................
+;   ................
+;   ..#.............
+;   ..#.........##..
+;   ..#.........##..
+;   ..#.....##..##..
+;   ..#.....##..##..
+;   ..#.##..##..##..
+;   ..#.##..##..##..
+;   ..#.##..##..##..
+;   ..#.##..##..##..
+;   ..############..
+;   ................
+;   ................
+;   ................
+;   ................
+inst_ico_tm:
+    dw 0x0000                       ; 16 mask rows
+    dw 0x7000
+    dw 0x701E
+    dw 0x701E
+    dw 0x71FE
+    dw 0x71FE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x0000
+    dw 0x0000
+    dw 0x0000
+    dw 0x0000                       ; 16 data rows
+    dw 0x0000
+    dw 0x2000
+    dw 0x200C
+    dw 0x200C
+    dw 0x20CC
+    dw 0x20CC
+    dw 0x2CCC
+    dw 0x2CCC
+    dw 0x2CCC
+    dw 0x2CCC
+    dw 0x3FFC
+    dw 0x0000
+    dw 0x0000
+    dw 0x0000
+    dw 0x0000
+
+; inst_ico_ctrl - a panel of three sliders, each knob somewhere else
+;   ................
+;   .##############.
+;   .#oooooooooooo#.
+;   .#o##########o#.
+;   .#oo##oooooooo#.
+;   .#oooooooooooo#.
+;   .#o##########o#.
+;   .#oooooooo##oo#.
+;   .#oooooooooooo#.
+;   .#o##########o#.
+;   .#ooooo##ooooo#.
+;   .#oooooooooooo#.
+;   .##############.
+;   ................
+;   ................
+;   ................
+inst_ico_ctrl:
+    dw 0xFFFF                       ; 16 mask rows
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0xFFFF
+    dw 0x0000
+    dw 0x0000
+    dw 0x0000                       ; 16 data rows
+    dw 0x7FFE
+    dw 0x4002
+    dw 0x5FFA
+    dw 0x4C02
+    dw 0x4002
+    dw 0x5FFA
+    dw 0x4032
+    dw 0x4002
+    dw 0x5FFA
+    dw 0x4182
+    dw 0x4002
+    dw 0x7FFE
+    dw 0x0000
+    dw 0x0000
+    dw 0x0000
 
 ; -----------------------------------------------------------------------------
 ; inst_init - clear the instance table and the deferred-launch word

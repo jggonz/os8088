@@ -41,7 +41,65 @@
 
 %include "os88api.inc"
 
-    OS88_HEADER 'NOTEPAD', np_entry
+    OS88_HEADER 'NOTEPAD', np_entry, 1
+
+; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
+; A page with a folded top-right corner and five lines of writing, two of
+; them short - the ragged right edge is what reads as text rather than as a
+; grille at 16px. The mask is the page silhouette dilated 1px, so it sits on
+; a clean white underlay over the desktop grey and over a selected row.
+;
+;   data                             mask
+;   ................   .###########....
+;   ..#########.....   .############...
+;   ..#.......##....   .#############..
+;   ..#.......#.#...   .##############.
+;   ..#.#####.####..   .##############.
+;   ..#..........#..   .##############.
+;   ..#.########.#..   .##############.
+;   ..#..........#..   .##############.
+;   ..#.########.#..   .##############.
+;   ..#..........#..   .##############.
+;   ..#.########.#..   .##############.
+;   ..#..........#..   .##############.
+;   ..#.#####....#..   .##############.
+;   ..#..........#..   .##############.
+;   ..############..   .##############.
+;   ................   .##############.
+    OS88_ICON16
+    dw 0x7FF0                       ; 16 mask rows
+    dw 0x7FF8
+    dw 0x7FFC
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x7FFE
+    dw 0x0000                       ; 16 data rows
+    dw 0x3FE0
+    dw 0x2030
+    dw 0x2028
+    dw 0x2FBC
+    dw 0x2004
+    dw 0x2FF4
+    dw 0x2004
+    dw 0x2FF4
+    dw 0x2004
+    dw 0x2FF4
+    dw 0x2004
+    dw 0x2F84
+    dw 0x2004
+    dw 0x3FFC
+    dw 0x0000
+    OS88_ICON16_END
 
 NP_CAP       equ 512            ; text buffer capacity, bytes
 NP_IOCAP     equ NP_CAP * 2     ; staging capacity: every char may become CR LF
