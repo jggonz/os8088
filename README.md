@@ -31,6 +31,9 @@ make run      # boot it in QEMU (with an emulated serial mouse)
 make run-640  # the same, on a 640KB machine
 make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make xt-640   # the same XT with a full 640KB of RAM
+make 286      # 86Box: 286 @ 12.5MHz, 1MB, VGA
+make 386sx    # 86Box: 386SX @ 16MHz, 2MB, VGA
+make 386      # 86Box: 386DX @ 25MHz, 2MB, VGA
 make test     # boot headless with a QMP socket for scripted testing
 make debug    # boot with QEMU halted, waiting for gdb on :1234
 make clean
@@ -291,6 +294,18 @@ you can watch. `make xt-640` boots the same setup with a full 640KB of
 RAM (`vm/xt640/86box.cfg`) — on the 1986 XT board revision (`ibmxt86`),
 because the original 1982 planar maxes out at 256KB and 86Box silently
 clamps `mem_size` back to the board's limit.
+
+The other end of the range: `make 286`, `make 386sx` and `make 386` boot the
+1.44MB image on AT-class 86Box machines — an AMI 286 clone board at 12.5MHz
+with 1MB (`vm/286`), a Shuttle HOT-304 386SX at 16MHz with 2MB
+(`vm/386sx`) and a Micronics 386DX at 25MHz with 2MB (`vm/386dx`) — all
+three with the same OTI-067 VGA and serial mouse. os8088 is 8086 code in
+real mode, so a 286 or a 386 runs it verbatim, just faster; the extra
+megabytes stay invisible, because int 12h still answers 640K and the OS
+never leaves real mode. (Not `ibmat` for the 286: 86Box caps the real 5170
+planar at 512KB, the same silent clamp as the XT. And unlike an XT, these
+machines have a CMOS — on the first launch the BIOS stops at its setup
+screen, and picking "EXIT FOR BOOT" once writes `vm/<machine>/nvr/`.)
 
 ## Scripted testing
 
