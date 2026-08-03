@@ -79,7 +79,7 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
 .PHONY: all run run-640 debug test test-snd xt xt-640 xt-cga xt-hercules \
-        286 386sx 386 clean
+        286 386sx 386 check-images clean
 
 all: $(IMG) $(IMG360) $(APPSIMG) $(APPSIMG360)
 
@@ -361,6 +361,81 @@ xt-hercules: $(IMG360) $(APPSIMG360)
 386: $(IMG) $(APPSIMG)
 	@$(UNPROTECT_B) $(VM386DX)/86box.cfg
 	$(BOX) -P $(VM386DX) -N
+
+# check-images - are the git-tracked binaries in build/ what the sources
+# actually produce?
+#
+# build/ is gitignored, but a handful of artifacts inside it are force-added
+# and shipped: the kernel, the two boot sectors, the two bootable floppies and
+# the two software floppies. Nothing makes them follow a source change, so
+# they go stale in silence - edit a package, skip the rebuild, and the tree
+# still builds, still boots, and still looks right while carrying a floppy
+# image that no longer holds what the source says it does. That is not
+# hypothetical: two "Rebuild the shipped images" commits exist because someone
+# caught it by hand, and a merge shipped a Paint two fixes out of date until
+# the merge rebuilt it.
+#
+# This is the mechanical version of catching it. Every shipped artifact is
+# built a SECOND time into a scratch directory and compared byte for byte.
+# That is only meaningful because the toolchain is deterministic on purpose -
+# tools/os88disk.py pins the volume serial and every FAT timestamp for exactly
+# this reason - so a difference is always staleness and never noise.
+#
+# Three things are deliberate:
+#
+#  - **The tracked set comes from git, not from a list here.** A list would
+#    drift from what is actually tracked, and the drift would be invisible.
+#  - **A tracked file the build does NOT produce is reported too**, and so is
+#    a tracked VIDEO=/RTC= stamp. Both are the other half of the same problem:
+#    build/ has been force-added wholesale more than once, which swept in a
+#    stamp twice and, on the occasion the parse-time hook had just deleted it,
+#    took kernel.bin OUT of the repo. The stamp needs naming specially because
+#    it would otherwise pass - the scratch build makes one too, and two empty
+#    files compare equal.
+#  - **The scratch build is knob-free.** The shipped images must be built with
+#    no VIDEO=/HERCSEG=/RTC= forcing - the kernel recipe already says so in a
+#    comment it prints at you - so building the comparison without them turns
+#    that comment into a check: a forced kernel that reached the tree reads as
+#    stale, which is exactly what it is.
+#
+# It is not part of `all`: it costs a second full build, and it is a
+# pre-commit gate rather than something every build should pay for.
+CHECKDIR := $(BUILD)/.check
+
+check-images:
+	@rm -rf $(CHECKDIR)
+	@$(MAKE) BUILD=$(CHECKDIR) VIDEO= HERCSEG= RTC= all >/dev/null
+	@stale=0; bogus=0; n=0; \
+	for t in $$(git ls-files $(BUILD) 2>/dev/null); do \
+	    n=$$((n+1)); \
+	    b=$$(basename $$t); \
+	    case $$b in .video-*) \
+	        echo "  SCRATCH $$t - a build stamp, not a shipped artifact"; \
+	        bogus=1; continue;; \
+	    esac; \
+	    if [ ! -f $(CHECKDIR)/$$b ]; then \
+	        echo "  ORPHAN  $$t - tracked, but no build rule produces it"; \
+	        bogus=1; \
+	    elif cmp -s $$t $(CHECKDIR)/$$b; then \
+	        :; \
+	    else \
+	        echo "  STALE   $$t - does not match what the sources build"; \
+	        stale=1; \
+	    fi; \
+	done; \
+	rm -rf $(CHECKDIR); \
+	if [ $$n -eq 0 ]; then \
+	    echo "check-images: nothing tracked in $(BUILD)/ - is this a git checkout?"; \
+	    exit 1; \
+	fi; \
+	if [ $$stale -ne 0 ]; then \
+	    echo "check-images: STALE above - run \`make\`, then commit $(BUILD)/"; \
+	fi; \
+	if [ $$bogus -ne 0 ]; then \
+	    echo "check-images: SCRATCH/ORPHAN above - untrack it: git rm --cached <path>"; \
+	fi; \
+	if [ $$stale -ne 0 ] || [ $$bogus -ne 0 ]; then exit 1; fi; \
+	echo "check-images: $$n tracked artifact(s) match the sources"
 
 clean:
 	rm -rf $(BUILD)

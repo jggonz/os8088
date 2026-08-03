@@ -27,8 +27,29 @@ make xt-hercules # XT + real Hercules card, 256KB (vm/xt-hercules)
 make 286         # 86Box AT clone: 286 @ 12.5MHz, 1MB, VGA (vm/286)
 make 386sx       # 86Box Shuttle HOT-304: 386SX @ 16MHz, 2MB, VGA (vm/386sx)
 make 386         # 86Box Micronics: 386DX @ 25MHz, 2MB, VGA (vm/386dx)
+make check-images # are the git-tracked binaries in build/ what the sources build?
 make clean
 ```
+
+**`make check-images` before committing anything under `build/`.** `build/` is
+gitignored, but ~21 artifacts inside it are force-added and shipped — the kernel,
+both boot sectors, both bootable floppies, both software floppies, and every
+package's `.bin`/`.o88`. Nothing makes them follow a source change, so they go
+stale in silence: the tree still builds, still boots, and still looks right while
+carrying a floppy image that no longer holds what the source says it does. That
+is not hypothetical — two "Rebuild the shipped images" commits exist because
+someone caught it by hand, and a merge shipped a Paint two fixes out of date
+until the merge rebuilt it. The target builds everything a second time into
+`build/.check` and compares byte for byte, which only works because the
+toolchain is deterministic on purpose (`tools/os88disk.py` pins the volume
+serial and every FAT timestamp for exactly this reason). It reads its list from
+`git ls-files build`, so it cannot drift from what is actually tracked, and it
+fails three ways: **STALE** (rebuild and commit), **ORPHAN** (tracked, nothing
+builds it) and **SCRATCH** (a tracked `VIDEO=`/`RTC=` stamp — which has been
+force-added twice, and which needs naming specially because two empty files
+compare equal). Its comparison build is always knob-free, so a kernel built with
+`VIDEO=`/`RTC=` that reached the tree reads as stale — which mechanizes the
+warning the kernel recipe already prints.
 
 Two build knobs exist only for testing the video fallbacks (SPEC.md §39.9):
 

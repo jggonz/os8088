@@ -2058,6 +2058,23 @@ FAT snapshot begins. Keep this block last.
   drive is fixed):  and `build/filetest.img` / `-frag` / `-fat16` (§18.4). A write
   test is only half-done in the emulator — finish it on the host with
   `python3 tools/os88disk.py --verify <img>`.
+- **`check-images`**: `build/` is gitignored but a curated set inside it is
+  force-added and shipped — the kernel, both boot sectors, both bootable
+  floppies, both software floppies, and every package's `.bin`/`.o88`.
+  Nothing makes those follow a source change, so this target builds every
+  one of them a second time into `build/.check` and compares byte for byte.
+  It is only meaningful because the toolchain is deterministic by design
+  (§24: `os88disk.py` pins the volume serial and every FAT timestamp), so a
+  difference is staleness and never noise. The set is read from
+  `git ls-files build` rather than listed, so it cannot drift from what is
+  tracked. Three failures: **STALE** (rebuild and commit), **ORPHAN**
+  (tracked, but nothing builds it) and **SCRATCH** (a tracked `VIDEO=`/`RTC=`
+  stamp — named specially because the scratch build makes one too and two
+  empty files compare equal). The comparison build is always knob-free, so
+  a kernel carrying a forced probe reads as stale, which is what the rule
+  above ("every shipped image is built with neither knob set") needs to stop
+  being a comment nobody executes. Not part of `all`: it costs a second full
+  build and is a pre-commit gate.
 - 86Box config (`vm/xt/86box.cfg`): set the mouse to a serial Microsoft
   mouse on COM1 (best-effort; cannot be verified headless).
 - The kernel may exceed 8 sectors; the two images are already built
