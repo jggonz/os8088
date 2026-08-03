@@ -312,6 +312,22 @@ gfx_hline:
 ; front of and behind the back buffer, and inside a clip region, without one
 ; line of adapter-specific code - because gfx_fill already does.
 ;
+; **The run scan compares BYTES, not pixels, and that is the whole speed of
+; it.** A run of colour c is a run of bytes equal to c|c<<4, so `repe scasb`
+; walks it two pixels at a time at about 15 clocks a byte - roughly seven and
+; a half clocks a pixel. The odd ends are handled by hand: the first pixel
+; when the run starts on a low nibble, the last when it ends on a high one.
+;
+; The first version of this routine decoded every pixel individually instead
+; - read the byte, test the parity, `shr al, cl` by four, compare, branch -
+; and that is 75 to 90 clocks a pixel on an 8086, because a 4-bit shift by CL
+; alone is 24 of them. It kept the SHAPE of the optimisation (one call per
+; run) and threw away the optimisation, so a 448x280 repaint went from about
+; a quarter of a second on a 4.77MHz 8088 to over two, and the far calls it
+; saved were noise against that. QEMU cannot show this - it does not model
+; 8086 timing at all - which is exactly why the cycle counts are written down
+; here rather than measured.
+;
 ; A plane-parallel VGA fast path (build a byte-per-8-pixels mask per plane
 ; and write it through the Map Mask) would beat this on detailed pictures and
 ; lose to it on flat ones, and it would need its own back-buffer and 1bpp
@@ -339,35 +355,82 @@ gfx_blit4:
     mov [gfx_blit_h], dx        ; (SPEC.md 1 rule 6), so one copy serves
     mov [gfx_blit_sv], si
 .row:
-    mov si, [gfx_blit_sv]
-    mov di, [gfx_blit_x]        ; DI = the run's start x
-    mov ah, 0FFh                ; AH = the run's colour, 0FFh = none yet
-    xor dx, dx                  ; DX = pixel index within the row
-.px:
-    mov al, [es:si]             ; the byte holding pixel DX
+    mov si, [gfx_blit_sv]       ; ES:SI = this row's first byte
+    xor dx, dx                  ; DX = the pixel the next run starts at
+.run:
+    ; --- the run's colour, and the byte a matching PAIR would hold ---------
+    mov di, dx
+    shr di, 1
+    add di, si
+    mov al, [es:di]
     test dl, 1
-    jz .hi
-    and al, 0Fh
-    inc si                      ; the low nibble ends this byte
-    jmp short .have
-.hi:
+    jnz .lo                     ; an even pixel is the HIGH nibble
     mov cl, 4
     shr al, cl
-.have:
-    cmp ah, 0FFh
-    je .start                   ; first pixel of the row
-    cmp al, ah
-    je .same                    ; the run continues
-    call gfx_blit_run           ; colour changed: emit what we had...
-    mov di, [gfx_blit_x]        ; ...and start a new one at this pixel
-    add di, dx
-.start:
+.lo:
+    and al, 0Fh
+    mov [gfx_blit_c], al
     mov ah, al
-.same:
-    inc dx
+    mov cl, 4
+    shl ah, cl
+    or ah, al
+    mov [gfx_blit_pb], ah
+
+    ; --- walk it two pixels at a time -------------------------------------
+    mov cx, dx
+    test cl, 1
+    jz .aligned
+    inc cx                      ; an odd start: the pair scan begins at the
+.aligned:                       ; next pixel, and this one is already in
+    mov [gfx_blit_e], cx
+    mov ax, [gfx_blit_w]
+    sub ax, cx
+    jbe .tail                   ; nothing left to scan in pairs
+    shr ax, 1                   ; whole pairs remaining in the row
+    jz .tail
+    mov di, cx
+    shr di, 1
+    add di, si                  ; ES:DI = the first pair byte
+    mov [gfx_blit_s0], di       ; SI belongs to the row, so the scan's origin
+    mov cx, ax                  ; is parked in memory
+    mov al, [gfx_blit_pb]
+    cld
+    repe scasb
+    mov ax, di                  ; `mov` leaves scasb's ZF alone, and the
+    jne .mism                   ; branch has to read it before anything else
+    sub ax, [gfx_blit_s0]       ; does: every byte matched
+    jmp short .have
+.mism:
+    dec ax                      ; the mismatch sits at DI-1, so it is not
+    sub ax, [gfx_blit_s0]       ; part of the run
+.have:
+    add ax, ax                  ; bytes matched -> pixels
+    add [gfx_blit_e], ax
+.tail:
+    mov cx, [gfx_blit_e]        ; the odd final nibble, by hand
+    cmp cx, [gfx_blit_w]
+    jae .emit
+    mov di, cx
+    shr di, 1
+    add di, si
+    mov al, [es:di]
+    test cl, 1
+    jnz .tlo
+    mov cl, 4
+    shr al, cl
+.tlo:
+    and al, 0Fh
+    cmp al, [gfx_blit_c]
+    jne .emit
+    inc word [gfx_blit_e]       ; it matches too
+.emit:
+    mov di, [gfx_blit_x]
+    add di, dx                  ; DI = the run's first x, on screen
+    mov ah, [gfx_blit_c]
+    mov dx, [gfx_blit_e]        ; DX = one past its last pixel, row-relative
+    call gfx_blit_run           ; (which is where the next run starts)
     cmp dx, [gfx_blit_w]
-    jb .px
-    call gfx_blit_run           ; the row's last run
+    jb .run
 
     mov ax, [gfx_blit_sv]       ; next source row
     add ax, bp
@@ -1299,6 +1362,10 @@ gfx_blit_x:  resw 1             ; gfx_blit4's row cursor (SPEC.md 5.4):
 gfx_blit_w:  resw 1             ; destination left, width, rows left and the
 gfx_blit_h:  resw 1             ; current source row's base. Lock-held
 gfx_blit_sv: resw 1             ; scratch, like the rect block below.
+gfx_blit_e:  resw 1             ; ...and the run scanner's state: one past the
+gfx_blit_s0: resw 1             ; run's last pixel, where `repe scasb` began,
+gfx_blit_c:  resb 1             ; the run's colour, and the byte a matching
+gfx_blit_pb: resb 1             ; PAIR of that colour holds (c | c<<4)
 
 vga_plane       resb 1          ; save/restore plane counter / mask bit
 vga_lmsk        resb 1          ; rect: left edge bit mask

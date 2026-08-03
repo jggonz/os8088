@@ -204,7 +204,16 @@ repaint becoming the bottleneck.
 meantime: since packages own a segment every gfx call from one is a FAR
 call, so the coalescer's "one call a run" became one *far* call a run.
 `pt_blit` now makes one call per band of rows — usually one for the whole
-rectangle — and the kernel runs the identical scan. Two things about the
+rectangle — and the kernel runs the identical scan.
+
+**"Identical" is the load-bearing word, and the first version was not.** It
+decoded every pixel one at a time rather than comparing byte pairs, which is
+75–90 clocks a pixel against `repe scasb`'s seven and a half — so a full
+repaint got about nine times *slower* while appearing, in QEMU, to be exactly
+as fast, because QEMU does not model 8086 timing. The `repe scasb` pair scan
+described below is now what `gfx_blit4` does; it is the same algorithm this
+section is about, and the reason the section exists is that it is easy to
+keep the shape of an optimisation and lose the optimisation. Two things about the
 geometry were worth the trouble: the source must start on an **even** pixel,
 because gfx_blit4 takes the first byte's high nibble as pixel 0, so an odd
 left edge is widened one column (harmless — that column is inside the canvas

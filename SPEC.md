@@ -363,6 +363,23 @@ in `gfx_fill` (§39.4), so a 16-colour picture reads as black/dither/white
 exactly as the rest of the UI does. `[gfx_color]` is left holding the last
 colour drawn; every register is preserved.
 
+**The run scan compares BYTES, not pixels, and that is the whole speed of
+it.** A run of colour c is a run of bytes equal to `c|c<<4`, so `repe scasb`
+walks it two pixels at a time at about 15 clocks a byte — roughly seven and a
+half clocks a pixel — with the odd ends handled by hand: the first pixel when
+the run starts on a low nibble, the last when it ends on a high one. This is
+`apps/paint`'s own `pt_runend` moved into the kernel, unchanged.
+
+The first version of this routine decoded every pixel individually instead —
+read the byte, test the parity, `shr al, cl` by four, compare, branch — which
+is 75 to 90 clocks a pixel on an 8086, a 4-bit shift by CL being 24 of them
+on its own. It kept the *shape* of the optimisation (one call per run) and
+threw away the optimisation: a 448×280 repaint went from about a quarter of a
+second on a 4.77MHz 8088 to over two, and the far calls it saved were noise
+against that. **QEMU cannot show this — it does not model 8086 timing at all**
+— which is why the cycle counts are written down rather than measured, and
+why a change to this loop wants a cycle count in the commit message.
+
 Why it exists at all: a package owns a segment (§20.1), so every gfx call
 from one is a FAR call. The identical run scan written inside the package
 cost one far call per run — hundreds to thousands per canvas repaint — and
