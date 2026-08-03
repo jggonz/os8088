@@ -7290,3 +7290,151 @@ replaced it is *live*: arm double buffering and the figure rises 150K, close
 Paint and it falls by whatever Paint held. `mem_claimed_kb` sums every
 claim; `mem_kernel_kb` sums only the `0xFFxx`-tagged ones, so a package's
 claim lands on the package's row rather than on System's.
+
+## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
+
+Klondike over the published package ABI. Prefix `sol_`, embedded two-card
+icon (flags bit 0), no kernel change of any kind. Directory order on the apps
+disks stays pinned: mines, hello, notepad, piano, fractal, paint — **solitaire
+is appended last** so the earlier indices hold. The file is `SOLITAIR.O88`,
+truncated to an 8.3 stem (§19); the 16-byte name inside the header, which is
+what the Task Manager and the dock show, is still `SOLITAIRE`.
+
+It owns no worker task and claims no heap. Everything it does happens inside
+`W_PAINT`, `W_ONKEY`, `W_ONCLICK` and its `AM_ONCMD`, under the caller's lock.
+
+### 43.1 The card
+
+One byte: rank in bits 0..3 (0 = ace .. 12 = king), suit in bits 4..5, bit 6
+(`C_FACEUP`) set when the card shows. Suit order is **spade, heart, diamond,
+club**, which is also the foundations' left-to-right order, so "is it red" is
+`suit - 1 < 2` unsigned — one subtract and one compare (`sol_isred`).
+
+Thirteen piles of at most 24 cards each, tableau first so a tableau pile index
+*is* its column index: 0..6 tableau, 7..10 foundations (one per suit, in suit
+order), 11 stock, 12 waste. 24 is not arbitrary — a tableau column tops out at
+6 face-down plus a K..A run = 19, and the stock starts at 52 − 28 = 24.
+
+### 43.2 Two metric sets and a per-column fan
+
+`sol_met_big` (VGA 640x480, Hercules 720x348) is 32x44 cards, 4px gaps, a 5px
+face-down fan and a 14px face-up one. `sol_met_sml` (CGA 640x200, which has
+156 rows of desktop) is 28x28, 3px gaps, 3px and 12px. `sol_entry` picks by
+screen height ≥ 300 and copies the record over thirteen contiguous bss words —
+**those words must stay in the record's order**, it is one loop.
+
+The face-up fan must clear the rank glyph's 8 rows or a buried card cannot be
+read. Both records do, and the layout is sized so the deepest column the game
+can build — 6 face-down + 13 face-up — fits the window at full stretch on VGA.
+
+It does not fit on CGA, and that is what `sol_colfan` is for. Given a column it
+answers the fan steps *that column* will be drawn at: the metrics' values when
+the last card's offset lands inside `[sol_avail]`, and otherwise the face-up
+step tightened by division until it does, then the face-down one, never below
+one pixel. **Nothing is cached per pile.** The draw pass and the hit test both
+call it, so they cannot end up disagreeing about where a card is.
+
+### 43.3 Faces are drawn, backs are blitted
+
+A face is a white fill, three or four black edges, one or two `font_char`
+glyphs and two suit pips. The pips are 1-bit masks run-coalesced by
+`sol_maskrun` — one `gfx_hline` per run of set bits — because a pip goes on a
+card that is already drawn and `gfx_blit4` is opaque.
+
+A back is a lattice, which has a run every two or three pixels and would cost
+several hundred far calls a card. `sol_mkback` renders it **once** into a
+packed 4bpp image at start-up — black edge, white margin, a field of diamonds
+white wherever `(x+y)` or `(x−y)` lands on a multiple of 8 — and every later
+draw is a single `gfx_blit4` (§5.4). The field colour is the only thing that
+changes with the adapter: index 1 on VGA, index 9 on 1bpp so it reduces to the
+50% dither with the white lattice still crossing it.
+
+Every card is drawn with a **visible height**, which is what the next card in
+the fan leaves showing, clamped to the content bottom. A buried card costs
+only the rows that survive, its bottom edge is not drawn (the next card's top
+edge is one row below it and two black rules would show), and each glyph and
+pip is gated on that height — so a two-pixel sliver draws its top edge and
+nothing else, and nothing can spill past the card onto the desktop.
+
+### 43.4 Colour is never the only carrier
+
+On a 1bpp adapter (§39.4) index 12 reduces to **white**, so a red pip on a
+white face would be nothing at all. There, the two red suits are drawn with
+**hollow** masks and the two black suits solid — the trick the black-and-white
+Macintosh card games used — and the rank text goes black for every suit. On
+four bits the colour does that job and every pip is solid.
+
+The ghost pips in the empty foundations are the exception: they take
+`sol_pipsold`, which is always solid, because they are drawn in the dither
+class and a 50% dither eats every other pixel of a 1px outline. A ghost says
+which suit belongs here, not what colour it is.
+
+The felt is index 2 — green on VGA, black on Hercules and CGA. White cards on
+black read as well as white cards on green, and the black card edges that
+vanish into the felt are exactly the ones the white card silhouette replaces.
+
+### 43.5 The drag is an XOR outline
+
+`sol_drag` is `ui_drag`'s loop (§13) written against the API, and its ordering
+is binding for the same reason: **the outline is XOR-erased before the lock is
+released and redrawn after it is taken again**, because XOR is self-inverting
+only while nothing else touches the pixels underneath. `sol_linger` holds it
+lit for a whole tick so the cursor blits inside the unlock/lock pair cannot
+dominate the loop.
+
+No card moves while the pointer does, so a drag costs one `gfx_xor_rect` plus
+one `gfx_xor_fill` per card boundary, per tick, however many cards are in the
+hand — and those rules are what make a hand of seven read as seven cards.
+Nothing is repainted until the button comes up; an illegal drop repaints
+nothing at all, because the cards never moved and the screen is already right.
+
+Two things differ from `ui_drag`, both deliberate:
+
+- **The button is sampled by level, not by event.** The kernel's drag cannot
+  do that (it must not swallow a re-press). Here it is what makes a press and
+  release too quick to register as movement land on the drop path with the
+  outline still over the card it came from — which is the auto-play gesture
+  below, and it needs no double-click timer.
+- **The drop target is chosen by the centre of the hand's TOP CARD**, not by
+  the pointer, which may be anywhere inside a seven-card outline. The column
+  is `(centre_x − margin + gap/2) / pitch`; above `sol_taby` only a foundation
+  takes a drop, and only one card.
+
+### 43.6 Rules and gestures
+
+Standard Klondike. A tableau run may only be lifted whole and only if it is
+*already* a descending alternating sequence — the same rule the drop applies,
+checked in `sol_grab` before the outline goes up rather than after it comes
+down. An empty column takes a king; a foundation takes an ace, then its own
+suit in order. `sol_move` is the one place a card changes hands, so it is also
+the one place that turns a newly uncovered tableau card face up and that
+shrinks the waste's fan.
+
+- **Click the stock** to deal one or three; **click it empty** to turn the
+  whole waste back over, face down, unlimited times.
+- **Click a face-down top card** to turn it over.
+- **Press and release without moving** sends that one card to a foundation if
+  any will take it.
+- **Menus**: Game — New Game, Restart Deal (the same shuffle again, kept in
+  `sol_deck`), Auto Finish (send everything that will go, a move a tick, with
+  the lock dropped between them so each one reaches the glass); Deal — Draw
+  One, Draw Three, as a **radio pair made out of `MENU_DIS`** (§12.2): the
+  mode already in force points at its disabled twin and is drawn grey.
+- **Keys**: N, R, A, Space for the same four commands.
+
+The RNG is seeded **once**, from `get_ticks` in the entry proc. Every later
+New Game walks on down the same stream, so two deals inside one tick still
+differ — which re-seeding from the clock would not give.
+
+### 43.7 Repaint
+
+`sol_drawpile` is the unit: erase one pile's slot back to felt and redraw it.
+A move touches two piles and costs two of them. A tableau column's slot runs
+the full height of the content; the waste's is two fan steps wider than a card,
+which is what the empty column between it and the foundations is for.
+
+The win plaque is the exception — it sits on the felt between the piles and no
+pile owns its rectangle — so a move that puts it up **or takes it down** costs
+the whole content instead. `sol_checkwin` therefore clears the flag as well as
+setting it: a won game is not a dead end, the foundations can still be dragged
+back off, and `sol_domove` tests the flag on both sides of the check.
