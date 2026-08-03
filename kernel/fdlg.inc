@@ -74,6 +74,7 @@ FD_BX2      equ 286
 FD_BY0      equ 20              ; Open / Save (the default button)
 FD_BY1      equ 40              ; Cancel
 FD_BY2      equ 60              ; Drive
+FD_BY3      equ 80              ; New Folder - SAVE MODE ONLY (SPEC.md 38.3)
 FD_BH       equ 13
 
 FD_NBX1     equ 72              ; the name box
@@ -99,6 +100,7 @@ fdlg_s_open:   db 'Open', 0
 fdlg_s_save:   db 'Save', 0
 fdlg_s_cancel: db 'Cancel', 0
 fdlg_s_drive:  db 'Drive', 0
+fdlg_s_newf:   db 'New', 0     ; 63px of button holds 7 glyphs, not 8
 fdlg_s_lopen:  db 'Open:', 0
 fdlg_s_lsave:  db 'Save as:', 0
 fdlg_s_dotdot: db '..', 0
@@ -735,6 +737,9 @@ fdlg_btn:
     call font_width             ; AX = 8 * length
     mov cx, FD_BX2-FD_BX1+1
     sub cx, ax
+    jns .pad                    ; a label wider than the button would make the
+    xor cx, cx                  ; halved padding a huge unsigned number and
+.pad:                           ; put the text off screen entirely
     shr cx, 1
     add cx, FD_BX1              ; centered in the 63px rect
     mov dx, bp
@@ -819,6 +824,13 @@ fdlg_paint:
     mov bx, FD_BY2
     xor al, al
     call fdlg_btn
+    cmp byte [fdlg_mode], 0     ; New Folder is a SAVE-mode button: opening a
+    je .nonewf                  ; file has no use for one, and the fourth
+    mov si, fdlg_s_newf         ; frame would be clutter in the common case
+    mov bx, FD_BY3
+    xor al, al
+    call fdlg_btn
+.nonewf:
 
     ; --- the name box ---
     mov si, fdlg_s_lopen
@@ -1125,6 +1137,129 @@ fdlg_act:
     ret
 
 ; -----------------------------------------------------------------------------
+; fdlg_newfolder - make a folder here, named by the box, and go into it
+; in:  fdlg_name / fdlg_nlen hold the typed name; SI = window ptr; lock held
+; out: nothing (all registers preserved)
+;
+; The dialog could navigate INTO folders and out of them and had no way to
+; make one, so saving into a new folder meant closing the dialog, opening a
+; Disk window, pressing n, and starting again. The name box is already a
+; line editor with the FAT character set enforced on every keystroke
+; (fdlg_onkey), so the whole button is: take what is in it, dskw_mkdir, and
+; dive - which leaves the dialog where the user wants to save, with the box
+; still holding the folder's name for them to overwrite with the file's.
+;
+; An 8.3 name with an extension is legal for a directory and is not rejected
+; here; `dskw_mkdir` applies the same name rules as every other write, and
+; its FERR_* comes back in the status line the same way a failed save's does.
+; -----------------------------------------------------------------------------
+fdlg_newfolder:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [fdlg_nlen], 0
+    je .beep                    ; an empty name is not a folder name
+    mov si, fdlg_name
+    call dskw_mkdir             ; CF=1 with AX = FERR_*; on success it has
+    jc .beep                    ; already remounted (SPEC.md 18.5), so the
+    mov si, fdlg_name           ; listing below is the fresh one
+    call fdlg_findname          ; AX = its first cluster, CF=1 = not found
+    jc .out
+    mov dl, [disk_drive]
+    call fdlg_go
+    jmp short .out
+.beep:
+    call snd_beep               ; refused (a bad name, a full disk, a
+.out:                           ; write-protected volume) - the same answer
+                                ; every other refusal in this dialog gives
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_findname - the first cluster of the directory named SI, in this listing
+; in:  SI = a NUL 8.3 name; the volume already listed
+; out: CF=0 with AX = its first cluster; CF=1 = no such folder
+; clobbers: AX (the output), CF
+; -----------------------------------------------------------------------------
+fdlg_findname:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov cx, [disk_nfiles]
+    jcxz .no
+    xor bx, bx                  ; BX = entry index
+.scan:
+    push cx
+    push bx
+    mov ax, bx
+    call dsk_get_dir            ; SI -> the staged entry: name, then the type
+    cmp word [si+16], 2         ; word at +16 and the first cluster at +18
+    jne .next                   ; (SPEC.md 19) - only a folder can match
+    mov di, si
+    mov si, fdlg_name
+    call fdlg_streq             ; CF=0 = same name
+    jc .next
+    pop bx
+    pop cx
+    mov ax, bx
+    call dsk_get_dir
+    mov ax, [si+18]
+    clc
+    jmp short .out
+.next:
+    pop bx
+    pop cx
+    inc bx
+    loop .scan
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_streq - do the NUL strings at DS:SI and DS:DI match? (internal)
+; out: CF=0 = equal; preserves all registers
+; -----------------------------------------------------------------------------
+fdlg_streq:
+    push ax
+    push si
+    push di
+.c:
+    mov al, [si]
+    cmp al, [di]
+    jne .no
+    or al, al
+    jz .yes
+    inc si
+    inc di
+    jmp short .c
+.no:
+    stc
+    jmp short .out
+.yes:
+    clc
+.out:
+    pop di
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; fdlg_dive - enter the staged row's directory and repaint (internal)
 ; in:  fdlg_row / fdlg_type staged and type 2, SI = window ptr; lock held
 ; out: nothing (all registers preserved)
@@ -1362,11 +1497,20 @@ fdlg_onclick:
     cmp cx, FD_BY2
     jl .out
     cmp cx, FD_BY2+FD_BH
-    jg .out
+    jg .b_newf
     mov dl, [disk_drive]        ; the other drive, at its root; disk_mount
     xor dl, 1                   ; is what publishes [disk_drive]
     xor ax, ax
     call fdlg_go
+    jmp .redraw
+.b_newf:
+    cmp byte [fdlg_mode], 0
+    je .out                     ; not drawn in Open mode, so not clickable
+    cmp cx, FD_BY3
+    jl .out
+    cmp cx, FD_BY3+FD_BH
+    jg .out
+    call fdlg_newfolder
     jmp .redraw
 
     ; --- the scroll bar ---

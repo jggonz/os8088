@@ -6100,6 +6100,23 @@ content-relative:
 The selected row is an XOR bar across the list interior, exactly as §22
 draws its own (`gfx_xor_fill` under the held lock).
 
+**The button column** carries Open/Save, Cancel, Drive and — in **save mode
+only** — **New**, which makes a folder here named by whatever is in the name
+box and then navigates into it (`fdlg_newfolder`). The dialog could enter
+folders and leave them and had no way to make one, so saving into a new
+folder meant cancelling, opening a Disk window, pressing `n`, and starting
+again. The name box is already a line editor with the FAT character set
+enforced per keystroke, so the whole feature is: take what is in it,
+`dskw_mkdir`, find it in the listing the mkdir's remount just rebuilt, and
+dive. A refusal — empty name, bad name, full or write-protected disk —
+beeps, the same answer every other refusal in this dialog gives. It is
+absent in open mode because opening a file has no use for it.
+
+**Selecting a folder and pressing Enter navigates into it in BOTH modes.**
+`fdlg_act` used to test the selection's type only in open mode, so in save
+mode the same keystroke committed a save under whatever name the box still
+held.
+
 ### 38.4 The listing and navigation
 
 The dialog lists **the mounted volume's current directory** — `disk_dir` /
