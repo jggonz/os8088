@@ -4377,11 +4377,38 @@ the content width, dropping any row whose bottom would pass the content
 bottom (no scrolling) and drawing a 1px caret only when its own row fits —
 all computed from the **live** window record each call, which is exactly
 why resizing costs the paint proc nothing: the next repaint re-wraps at
-the new width. Onkey appends printable 32..126, deletes on backspace,
-stores 13 on Enter, then white-fills (live W_W/W_H) and redraws **its own
-content only**, ending with `wm_grow_paint` (slot 0x0094) per §11.1 — the
-white fill erases the grow box. No icon flag, so the Disk window shows
-`ico_app16`.
+the new width. Onkey edits at the caret, then white-fills (live W_W/W_H) and
+redraws **its own content only**, ending with `wm_grow_paint` per §11.1 — the
+white fill erases the grow box. It carries the page icon of §25; `apps/hello`
+is the one package that still ships without one.
+
+**The caret moves** (`[np_cur]`, the character index it sits in front of).
+Left/Right step it, Up/Down keep the pixel column across rows, Home/End go to
+the ends of the display row, Delete removes what is in front of it, backspace
+what is behind, and a **click puts it where the user pointed** — `np_onclick`
+is the window's W_ONCLICK. Typing inserts at the caret rather than appending,
+and the gap is opened by hand rather than with `rep movsb`, because a callback
+is entered with ES = KERNEL_SEG (§20.1) and a string move would open that gap
+in the kernel's memory at the package's offsets.
+
+**One walk answers all of it** (`np_walk`). Painting the text, finding the
+pixel a caret index sits at, turning a click into an index and finding the
+index at a column of a neighbouring row are the same traversal asked four
+questions, and the wrap rule they share — an 8px cell that would cross the
+right edge moves to the next row, a row that would cross the bottom is skipped
+while the pen keeps advancing — is subtle enough that a second copy of it
+would be wrong within one edit. `[np_draw]` selects paint or measure; every
+index 0..`[np_len]` is visited, **including the one past the last character**,
+because that is where the caret lives in a note that ends in text. The caret
+occupies a cell and therefore wraps like one, which keeps it in front of the
+character it precedes instead of stranded at the end of the row above.
+
+The half-cell rule places a click: the left half of a character puts the caret
+before it, the right half after — with **newlines excluded from the right
+half**, which is what makes End land before the line break rather than at the
+start of the next line. An extended key is recognised by AL = 0 before AH is
+looked at, because the numeric keypad sends `4 6 8 2 7 1 .` with exactly the
+scan codes of Left, Right, Up, Down, Home, End and Delete.
 
 Two things got simpler in the move. The built-in reached its state through
 `inst_of_win` → `I_SPTR` because every instance shared one pool; a package
@@ -6206,6 +6233,20 @@ resolves the file slots. A chooser that returned a bare name without moving
 the volume would be handing the caller a name it could not open. The Disk
 windows are unaffected: they re-sync from their own caches before every
 action (§22.1), which is what that machinery is for.
+
+**The name box is a line editor, not an append-only field.** `[fdlg_ncur]`
+is the caret — the character index it sits in front of, 0..`[fdlg_nlen]`.
+Left/Right/Home/End move it, Delete removes what is in front of it, backspace
+what is behind, typing inserts at it (`fdlg_nins`/`fdlg_ndel`), and a click in
+the box positions it by the same half-cell rule the Disk window's rows use.
+The five movement keys are gated on **AL = 0** first: the numeric keypad sends
+`4 6 7 1 .` with the scan codes of Left, Right, Home, End and Delete, so
+without the gate NumLock would turn typing a digit into moving the caret.
+
+The name-box hit test is the **first** thing a click that missed the button
+column sees, and that placement is load-bearing: the button column jumps to
+that label when it misses, so a test reached only by falling out of the column
+would never see a click on the left half of the dialog.
 
 ### 38.5 State (`.bss`, singleton)
 

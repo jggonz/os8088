@@ -177,6 +177,7 @@ fdlg_open:
     mov [fdlg_rqsp], ax
 
     mov byte [fdlg_nlen], 0     ; seed the name box from the caller's default
+    mov byte [fdlg_ncur], 0
     mov byte [fdlg_name], 0
     or si, si
     jz .fresh
@@ -465,7 +466,8 @@ fdlg_setname:
 .done:
     mov byte [bx+fdlg_name], 0
     mov [fdlg_nlen], bl
-    pop si
+    mov [fdlg_ncur], bl         ; a name arriving whole puts the caret after
+    pop si                      ; it, which is where typing continues
     pop bx
     pop ax
     ret
@@ -922,9 +924,12 @@ fdlg_paint:
     cmp byte [fdlg_mode], 0
     je .done                    ; no caret in Open mode: there is nothing
                                 ; to type there (SPEC.md 38.5)
-    call font_width             ; AX = 8 * length; SI is still fdlg_name
+    mov al, [fdlg_ncur]         ; a 1px caret AT the caret index - 8px cells,
+    xor ah, ah                  ; so its column is the index times eight
+    mov cl, 3
+    shl ax, cl
     add ax, FD_NTX
-    add ax, [fdlg_cx]           ; a 1px caret right after the text
+    add ax, [fdlg_cx]
     mov bx, FD_NTY
     add bx, [fdlg_cy]
     mov dx, FD_NTY+7
@@ -1392,6 +1397,19 @@ fdlg_onkey:
     je .kpgdn
     cmp byte [fdlg_mode], 0
     je .out                     ; Open mode: nothing else is typing
+    or al, al
+    jnz .typing                 ; an EXTENDED key has AL = 0. The numeric
+    cmp ah, 0x4B                ; keypad sends '4' '6' '7' '1' '.' with these
+    je .kleft                   ; very scan codes, so without this gate
+    cmp ah, 0x4D                ; NumLock would turn typing a digit into
+    je .kright                  ; moving the caret
+    cmp ah, 0x47
+    je .khome
+    cmp ah, 0x4F
+    je .kend
+    cmp ah, 0x53
+    je .kdel
+.typing:
     cmp al, 8
     je .bksp
     cmp al, 32
@@ -1403,8 +1421,8 @@ fdlg_onkey:
     jae .out
     cmp al, '.'
     jne .plain
-    or bl, bl
-    jz .out                     ; a short name may not start with the dot...
+    cmp byte [fdlg_ncur], 0
+    je .out                     ; a short name may not start with the dot...
     call fdlg_hasdot
     jc .out                     ; ...and may not carry a second one
     jmp short .store
@@ -1412,21 +1430,37 @@ fdlg_onkey:
     call dskw_char              ; upper-cases, CF = 1 = not in the FAT set
     jc .out
 .store:
-    mov [bx+fdlg_name], al
-    inc bx
-    mov byte [bx+fdlg_name], 0
-    mov [fdlg_nlen], bl
+    call fdlg_nins              ; at the caret, which moves past it
     jmp short .redraw
 
 .bksp:
-    mov bl, [fdlg_nlen]
-    xor bh, bh
-    or bl, bl
-    jz .out
-    dec bl
-    mov [fdlg_nlen], bl
-    mov byte [bx+fdlg_name], 0  ; BX is the NEW length: the terminator lands
-    jmp short .redraw           ; on the character just dropped
+    cmp byte [fdlg_ncur], 0
+    je .out                     ; nothing to the left of the caret
+    dec byte [fdlg_ncur]
+    call fdlg_ndel
+    jmp short .redraw
+
+.kdel:
+    call fdlg_ndel              ; forward delete: the caret stays put
+    jmp short .redraw
+.kleft:
+    cmp byte [fdlg_ncur], 0
+    je .out
+    dec byte [fdlg_ncur]
+    jmp short .redraw
+.kright:
+    mov al, [fdlg_ncur]
+    cmp al, [fdlg_nlen]
+    jae .out
+    inc byte [fdlg_ncur]
+    jmp short .redraw
+.khome:
+    mov byte [fdlg_ncur], 0
+    jmp short .redraw
+.kend:
+    mov al, [fdlg_nlen]
+    mov [fdlg_ncur], al
+    jmp short .redraw
 
 .kup:
     mov ax, [fdlg_sel]
@@ -1464,6 +1498,68 @@ fdlg_onkey:
     pop di
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_nins - insert AL at the caret, which then sits after it (internal)
+; in:  AL = the character, already through dskw_char; [fdlg_nlen] < FD_NAMEMAX
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fdlg_nins:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov dl, al
+    mov bl, [fdlg_nlen]
+    xor bh, bh
+    mov cl, bl
+    sub cl, [fdlg_ncur]
+    xor ch, ch                  ; CX = the characters right of the caret
+    inc bx                      ; ...and the terminator moves with them
+.mv:
+    mov al, [bx+fdlg_name-1]
+    mov [bx+fdlg_name], al
+    dec bx
+    jcxz .place
+    dec cx
+    jmp short .mv
+.place:
+    mov bl, [fdlg_ncur]
+    xor bh, bh
+    mov [bx+fdlg_name], dl
+    inc byte [fdlg_nlen]
+    inc byte [fdlg_ncur]
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_ndel - delete the character the caret sits in front of (internal)
+; out: nothing (all registers preserved). A caret at the end deletes nothing.
+; -----------------------------------------------------------------------------
+fdlg_ndel:
+    push ax
+    push bx
+    mov al, [fdlg_ncur]
+    cmp al, [fdlg_nlen]
+    jae .out
+    mov bl, al
+    xor bh, bh
+.mv:
+    mov al, [bx+fdlg_name+1]    ; pull the tail down over it, terminator
+    mov [bx+fdlg_name], al      ; included
+    or al, al
+    jz .done
+    inc bx
+    jmp short .mv
+.done:
+    dec byte [fdlg_nlen]
+.out:
     pop bx
     pop ax
     ret
@@ -1580,8 +1676,38 @@ fdlg_onclick:
     call fdlg_newfolder
     jmp .redraw
 
-    ; --- the scroll bar ---
+    ; --- the name box: put the caret where the user pointed ---
+    ; This is the first thing every click that missed the button column sees,
+    ; which is why the scroll bar's own test is a label further down: the
+    ; button column jumps HERE when it misses, so anything reached only by
+    ; falling out of it would never see a click on the left of the dialog.
 .sbar:
+    cmp byte [fdlg_mode], 0
+    je .sbar2                   ; nothing to type there in Open mode
+    cmp cx, FD_NBY1
+    jl .sbar2
+    cmp cx, FD_NBY2
+    jg .sbar2
+    cmp dx, FD_NBX1
+    jl .sbar2
+    cmp dx, FD_NBX2
+    jg .sbar2
+    mov ax, dx                  ; column = (x - the text origin + half a
+    sub ax, FD_NTX - 4          ; cell) / 8, so a click in the left half of a
+    jns .nb_ok                  ; character puts the caret before it
+    xor ax, ax
+.nb_ok:
+    mov cl, 3
+    shr ax, cl
+    cmp al, [fdlg_nlen]
+    jbe .nb_set
+    mov al, [fdlg_nlen]         ; past the text: the caret goes after it
+.nb_set:
+    mov [fdlg_ncur], al
+    jmp .redraw
+
+    ; --- the scroll bar ---
+.sbar2:
     cmp dx, FD_SBX
     jl .rows
     cmp dx, FD_LX2
@@ -1685,6 +1811,11 @@ fdlg_clkt:  resw 1              ; birth tick of the last click on the
 fdlg_name:  resb 16             ; the answer: the caller's default in, the
                                 ; chosen name out, the edit buffer between
 fdlg_nlen:  resb 1              ; its length, 0..12
+fdlg_ncur:  resb 1              ; ...and the CARET, 0..[fdlg_nlen]: the
+                                ; character it sits in front of. Typing,
+                                ; backspace and delete all act here, which is
+                                ; what makes the box an editor rather than an
+                                ; append-only field (SPEC.md 38.5)
 fdlg_cx:    resw 1              ; content origin, cached by paint and click
 fdlg_cy:    resw 1
 fdlg_total: resw 1              ; display rows, and how many of them show -

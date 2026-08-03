@@ -103,10 +103,17 @@
 
 NP_CAP       equ 512            ; text buffer capacity, bytes
 NP_IOCAP     equ NP_CAP * 2     ; staging capacity: every char may become CR LF
-NP_BSS_TOTAL equ 574 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
+NP_BSS_TOTAL equ 600 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
 NP_MARGIN    equ 6              ; left/top text margin inside the content
 NP_KEY_SAVE  equ 0x3C           ; F2 scan code (DOS Editor's keys)
 NP_KEY_LOAD  equ 0x3D           ; F3
+NP_K_HOME    equ 0x47           ; the caret keys, int 16h scan codes
+NP_K_UP      equ 0x48
+NP_K_LEFT    equ 0x4B
+NP_K_RIGHT   equ 0x4D
+NP_K_END     equ 0x4F
+NP_K_DOWN    equ 0x50
+NP_K_DEL     equ 0x53
 NP_MI_NEW    equ 0              ; File menu item indices - the order of
 NP_MI_OPEN   equ 1              ; np_items_file, which is what the kernel
 NP_MI_SAVE   equ 2              ; hands np_oncmd in AL (SPEC.md 12.2)
@@ -150,11 +157,67 @@ np_entry:
     ret
 
 ; -----------------------------------------------------------------------------
-; np_paint - W_PAINT: draw the buffer, then the caret
-; in:  SI = window ptr (content already white-filled, gfx lock held)
-; out: nothing; preserves all registers
+; np_bounds - the content rectangle and the text origin, from the live record
+; in:  SI = window ptr, ES = KERNEL_SEG (as every callback is entered)
+; out: [np_tx] = the wrap column and left margin, [np_ty] = the first text
+;      row, [np_rgt]/[np_bot] = the content's inclusive right and bottom;
+;      preserves all registers
+;
+; A resizable window lays out from the record every time (SPEC.md 11.1), and
+; BOTH passes of np_walk need the same four numbers, so they are read once
+; here rather than twice in slightly different words.
 ; -----------------------------------------------------------------------------
-np_paint:
+np_bounds:
+    push ax
+    push bx
+    push dx
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
+    add ax, NP_MARGIN
+    mov [np_tx], ax
+    add dx, NP_MARGIN
+    mov [np_ty], dx
+    mov ax, [es:bx+W_X]             ; the window record is KERNEL memory and
+    add ax, [es:bx+W_W]             ; ES points at it on entry (SPEC.md 20.1)
+    sub ax, 2
+    mov [np_rgt], ax
+    mov ax, [es:bx+W_Y]
+    add ax, [es:bx+W_H]
+    sub ax, 2
+    mov [np_bot], ax
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_walk - THE layout pass: one loop, two jobs (SPEC.md 27)
+; in:  [np_bounds] already run; [np_draw] = 1 to paint, 0 to measure only;
+;      [np_cur]; the two optional queries below
+; out: [np_curx]/[np_cury] = where the caret sits, in pixels
+;      [np_hiti]  = the character index the point [np_hitx],[np_hity] falls
+;                   on ([np_hity] = 0xFFFF disables the test)
+;      [np_wanti] = the index at column [np_wantx] of row [np_wanty]
+;                   (0xFFFF disables it, and is also the "no such row" answer)
+;      preserves all registers
+;
+; **One walk, because two would drift.** Painting the text, finding the pixel
+; a caret index sits at, turning a mouse click into an index and moving the
+; caret a row up or down are the same traversal asked four questions, and the
+; wrap rule they share is subtle enough (an 8px cell that would cross the
+; right edge moves to the next row, and a row that would cross the bottom is
+; skipped while the pen keeps advancing) that a second copy of it would be
+; wrong within one edit of this file.
+;
+; Every index 0..[np_len] is visited, including the one PAST the last
+; character - that is where the caret lives in a note that ends in text, so
+; it has to be a position the queries can return.
+;
+; The caret occupies a cell and therefore wraps like one, which is what keeps
+; it in front of the character it precedes rather than stranded at the end of
+; the row above.
+; -----------------------------------------------------------------------------
+np_walk:
     push ax
     push bx
     push cx
@@ -163,84 +226,218 @@ np_paint:
     push di
     push bp
 
-    mov bx, si
-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
-    add ax, NP_MARGIN
-    mov [np_tx], ax                 ; text origin x = the wrap column
-    mov di, ax                      ; DI = pen x
-    add dx, NP_MARGIN
-    mov bp, dx                      ; BP = pen y
-    mov ax, [es:bx+W_X]             ; the window record is KERNEL memory and
-    add ax, [es:bx+W_W]             ; ES points at it on entry (SPEC.md 20.1)
-    sub ax, 2
-    mov [np_rgt], ax                ; content right (inclusive)
-    mov ax, [es:bx+W_Y]
-    add ax, [es:bx+W_H]
-    sub ax, 2
-    mov [np_bot], ax                ; content bottom (inclusive)
+    mov word [np_curx], 0
+    mov word [np_cury], 0
+    mov ax, [np_len]
+    mov [np_hiti], ax               ; a click past the end lands at the end
+    mov word [np_wanti], 0xFFFF     ; ...but a row that does not exist has no
+    mov byte [np_hitset], 0         ; answer, and the caller keeps its caret
+    mov byte [np_wantset], 0
 
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
+    mov di, [np_tx]                 ; DI = pen x
+    mov bp, [np_ty]                 ; BP = pen y
+    mov word [np_i], 0
     mov bx, [np_len]                ; BX = characters remaining
     mov si, np_buf
+    cmp byte [np_draw], 0
+    je .loop
+    push ax
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    pop ax
 
-.chloop:
-    test bx, bx
-    jz .caret
-    lodsb                           ; DF=0 per SPEC.md 1
-    dec bx
-    cmp al, 13
-    jne .glyph
-    mov di, [np_tx]                 ; newline: carriage return + line feed
-    add bp, 8
-    jmp .chloop
-
-.glyph:
-    mov cx, di                      ; wrap if the 8px cell would pass the edge
+.loop:
+    ; --- the wrap rule, applied to the cell this index will occupy ---------
+    mov cx, di
     add cx, 7
     cmp cx, [np_rgt]
     jbe .fits
     mov di, [np_tx]
     add bp, 8
 .fits:
+    call np_ask                     ; the queries, at the settled pen
+    cmp byte [np_draw], 0
+    je .body
+    call np_carets                  ; ...and the caret, if this is its index
+.body:
+    test bx, bx
+    jz .done                        ; the index past the last character: the
+                                    ; queries have seen it, and there is no
+                                    ; character to draw
+    lodsb                           ; DF=0 per SPEC.md 1
+    dec bx
+    inc word [np_i]
+    cmp al, 13
+    jne .glyph
+    mov di, [np_tx]                 ; newline: carriage return + line feed,
+    add bp, 8                       ; and it occupies no cell
+    jmp short .loop
+.glyph:
+    cmp byte [np_draw], 0
+    je .advance
     mov cx, bp                      ; vertical clip: drop rows that overflow,
-    add cx, 7                       ; but keep advancing the pen so the caret
-    cmp cx, [np_bot]                ; position stays true
+    add cx, 7                       ; but keep advancing the pen so every
+    cmp cx, [np_bot]                ; position below stays true
     ja .advance
     mov cx, di
     mov dx, bp
     call OSAPI_FONT_CHAR            ; AL still holds the character
 .advance:
     add di, 8
-    jmp .chloop
+    jmp short .loop
 
-.caret:
-    mov cx, di                      ; the caret occupies the next cell, so it
-    add cx, 7                       ; wraps exactly like a character would
-    cmp cx, [np_rgt]
-    jbe .cfits
-    mov di, [np_tx]
-    add bp, 8
-.cfits:
+.done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_ask - answer the walk's queries at the settled pen (module-internal)
+; in:  DI/BP = the pen, [np_i] = this index, SI -> its character, BX = the
+;      characters left (0 = we are past the end)
+; out: the np_curx/np_cury/np_hiti/np_wanti fields updated; preserves all
+;
+; The "+4" is the half-cell rule every text editor uses: a click in the left
+; half of a character puts the caret before it, one in the right half after.
+; A NEWLINE is excluded from the "after" half, and that is what makes End
+; land before the line break instead of at the start of the next line - the
+; character occupies no cell, so there is no right half of it to click in.
+; -----------------------------------------------------------------------------
+np_ask:
+    push ax
+    push cx
+    mov ax, [np_i]
+    cmp ax, [np_cur]
+    jne .hit
+    mov [np_curx], di
+    mov [np_cury], bp
+.hit:
+    mov cx, [np_hity]
+    cmp cx, 0xFFFF
+    je .want
+    cmp cx, bp                      ; the click row is this pen row?
+    jb .want
+    mov cx, bp
+    add cx, 7
+    cmp cx, [np_hity]
+    jb .want
+    cmp byte [np_hitset], 0
+    jne .hit2
+    mov [np_hiti], ax               ; the first index on the row, until a
+    mov byte [np_hitset], 1         ; later cell claims it
+.hit2:
+    mov cx, di
+    add cx, 4
+    cmp [np_hitx], cx
+    jb .want                        ; the left half: the caret goes before it
+    call np_isnl
+    jc .want                        ; a newline has no right half
+    inc ax
+    mov [np_hiti], ax
+    dec ax
+.want:
+    cmp word [np_wanty], 0xFFFF
+    je .out
+    mov cx, [np_wanty]
+    cmp cx, bp
+    jne .out
+    cmp byte [np_wantset], 0
+    jne .want2
+    mov [np_wanti], ax
+    mov byte [np_wantset], 1
+.want2:
+    mov cx, di
+    add cx, 4
+    cmp [np_wantx], cx
+    jb .out
+    call np_isnl
+    jc .out
+    inc ax
+    mov [np_wanti], ax
+.out:
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_isnl - is the character at this index a newline (or past the end)?
+; in:  BX = characters remaining, SI -> the character
+; out: CF=1 = yes, or there is no character here; preserves all registers
+; -----------------------------------------------------------------------------
+np_isnl:
+    push ax
+    test bx, bx
+    jz .yes
+    mov al, [si]
+    cmp al, 13
+    je .yes
+    clc
+    jmp short .out
+.yes:
+    stc
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_carets - draw the caret when the walk is standing on its index
+; in:  DI/BP = the pen, [np_i], [np_cur]
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_carets:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [np_i]
+    cmp ax, [np_cur]
+    jne .out
     mov cx, bp
     add cx, 7
     cmp cx, [np_bot]
-    ja .done                        ; caret row does not fit: no caret
+    ja .out                         ; its row does not fit: no caret
     mov ax, di                      ; 1px black caret, 8 rows tall
     mov bx, bp
     mov dx, bp
     add dx, 7
     call OSAPI_GFX_VLINE
-
-.done:
-    pop bp
-    pop di
-    pop si                      ; SI is the window pointer again
+.out:
     pop dx
     pop cx
     pop bx
     pop ax
-    call np_toast               ; last, so it sits above the text
+    ret
+
+; -----------------------------------------------------------------------------
+; np_measure - run the walk without drawing
+; in:  SI = window ptr; the query fields already set
+; out: as np_walk; preserves all registers
+; -----------------------------------------------------------------------------
+np_measure:
+    call np_bounds
+    mov byte [np_draw], 0
+    call np_walk
+    ret
+
+; -----------------------------------------------------------------------------
+; np_paint - W_PAINT: draw the buffer and the caret
+; in:  SI = window ptr (content already white-filled, gfx lock held)
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_paint:
+    push ax
+    call np_bounds
+    mov word [np_hity], 0xFFFF      ; no queries: this pass is here to draw
+    mov word [np_wanty], 0xFFFF
+    mov byte [np_draw], 1
+    call np_walk
+    pop ax
+    call np_toast                   ; last, so it sits above the text
     ret
 
 ; -----------------------------------------------------------------------------
@@ -432,6 +629,8 @@ np_load:
     jmp short .fold
 .folded:
     mov [np_len], di
+    call np_clamp               ; a shorter file must not leave the caret
+                                ; past the end of it
     mov si, np_m_loaded
     call np_setmsg
     test dh, dh
@@ -471,6 +670,190 @@ np_errmsg:
     ret
 
 ; -----------------------------------------------------------------------------
+; np_ins - insert AL at the caret, which then sits after it
+; in:  AL = the character; out: nothing; preserves all registers
+;
+; The gap is opened right to left because source and destination overlap, and
+; by hand rather than with `rep movsb` for a reason that is easy to forget: a
+; callback is entered with ES = KERNEL_SEG (SPEC.md 20.1), so a string move
+; would write the gap into the KERNEL's memory at our offsets.
+; -----------------------------------------------------------------------------
+np_ins:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov dl, al
+    mov bx, [np_len]
+    cmp bx, NP_CAP
+    jae .out                        ; full: drop the keystroke silently
+    mov cx, bx
+    sub cx, [np_cur]                ; CX = the bytes to the right of the caret
+    mov si, np_buf
+    add si, bx
+    dec si                          ; SI = the last live byte
+    mov di, si
+    inc di
+    jcxz .place
+.mv:
+    mov al, [si]
+    mov [di], al
+    dec si
+    dec di
+    loop .mv
+.place:
+    mov bx, [np_cur]
+    mov [bx+np_buf], dl
+    inc word [np_len]
+    inc word [np_cur]
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_del - delete the character the caret sits in front of
+; out: nothing; preserves all registers. A caret at the end deletes nothing.
+; -----------------------------------------------------------------------------
+np_del:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov bx, [np_cur]
+    cmp bx, [np_len]
+    jae .out
+    mov cx, [np_len]
+    sub cx, bx
+    dec cx                          ; CX = the bytes that move down
+    mov di, np_buf
+    add di, bx
+    mov si, di
+    inc si
+    jcxz .close
+.mv:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .mv
+.close:
+    dec word [np_len]
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_move - put the caret on the row [np_wanty] at column [np_wantx]
+; in:  SI = window ptr, the two query fields set
+; out: [np_cur] moved if that row exists; preserves all registers
+; -----------------------------------------------------------------------------
+np_move:
+    push ax
+    mov word [np_hity], 0xFFFF      ; one query at a time
+    call np_measure
+    mov ax, [np_wanti]
+    cmp ax, 0xFFFF
+    je .out                         ; no such row: the caret stays put, which
+    mov [np_cur], ax                ; is what Up on the first line should do
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_vmove - Up / Down: the same column, one row away
+; in:  SI = window ptr, DX = -8 (up) or +8 (down)
+; out: nothing; preserves all registers
+;
+; It measures twice: once to find the pixel the caret is at, then again for
+; the index at that column on the neighbouring row. Two walks of at most 512
+; characters, once per keystroke.
+; -----------------------------------------------------------------------------
+np_vmove:
+    push ax
+    push dx
+    mov word [np_hity], 0xFFFF
+    mov word [np_wanty], 0xFFFF
+    call np_measure                 ; [np_curx]/[np_cury]
+    mov ax, [np_cury]
+    add ax, dx
+    mov [np_wanty], ax
+    mov ax, [np_curx]
+    mov [np_wantx], ax
+    call np_move
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_hmove - Home / End: the same row, the far left or the far right
+; in:  SI = window ptr, DX = the column to aim at (0 or 0x7FFF)
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_hmove:
+    push ax
+    mov word [np_hity], 0xFFFF
+    mov word [np_wanty], 0xFFFF
+    call np_measure                 ; [np_cury] = the row we are on
+    mov ax, [np_cury]
+    mov [np_wanty], ax
+    mov [np_wantx], dx
+    call np_move
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_onclick - W_ONCLICK: put the caret where the user pointed
+; in:  CX = x, DX = y (absolute screen), SI = window ptr; gfx lock held
+; out: nothing; clobbers what any window callback may
+;
+; The kernel only sends content clicks on the front window (SPEC.md 13), so
+; there is no rect to test: every click that arrives here is ours, and the
+; walk answers with the nearest character boundary - or with the end of the
+; note for a click below the last line.
+; -----------------------------------------------------------------------------
+np_onclick:
+    push ax
+    mov [np_hitx], cx
+    mov [np_hity], dx
+    mov word [np_wanty], 0xFFFF
+    call np_measure
+    mov ax, [np_hiti]
+    cmp ax, [np_cur]
+    je .out                         ; the caret did not move: no repaint
+    mov [np_cur], ax
+    mov word [np_msg], 0
+    call np_redraw
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_clamp - hold the caret inside the buffer after a load or a New
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_clamp:
+    push ax
+    mov ax, [np_len]
+    cmp [np_cur], ax
+    jbe .out
+    mov [np_cur], ax
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; np_onkey - W_ONKEY: edit the buffer, then repaint our own content
 ; in:  AL = ascii, AH = scan, SI = window ptr (gfx lock held by caller)
 ; out: nothing; preserves all registers
@@ -486,14 +869,35 @@ np_onkey:
     cmp ah, NP_KEY_SAVE
     jne .nosave
     call np_save
-    jmp short .redraw
-.nosave:
+    jmp .redraw                 ; near: the key ladder below outruns a short
+.nosave:                        ; jump
     cmp ah, NP_KEY_LOAD
     jne .noload
     mov al, FDLG_OPEN           ; F3 ASKS now (SPEC.md 27.1): a load with no
     call np_dlgopen             ; way to say what was never the useful half.
     jmp .out                    ; No repaint - the dialog is on top of us
 .noload:
+    ; --- moving the caret: no edit, but the screen changes ------------------
+    ; An EXTENDED key has AL = 0, and the gate matters: the numeric keypad
+    ; sends '4' '6' '8' '2' '7' '1' '.' with exactly these scan codes, so
+    ; without it NumLock would turn typing a digit into moving the caret.
+    or al, al
+    jnz .typing
+    cmp ah, NP_K_LEFT
+    je .left
+    cmp ah, NP_K_RIGHT
+    je .right
+    cmp ah, NP_K_UP
+    je .up
+    cmp ah, NP_K_DOWN
+    je .down
+    cmp ah, NP_K_HOME
+    je .home
+    cmp ah, NP_K_END
+    je .end
+    cmp ah, NP_K_DEL
+    je .del
+.typing:
     cmp al, 8
     je .bksp
     cmp al, 13
@@ -504,17 +908,49 @@ np_onkey:
     ja .out
 
 .append:
-    mov bx, [np_len]
-    cmp bx, NP_CAP
-    jae .out                        ; full: drop silently
-    mov [bx+np_buf], al
-    inc word [np_len]
-    jmp .edited
+    call np_ins                     ; at the caret, which follows it
+    jmp short .edited
 
 .bksp:
-    cmp word [np_len], 0
+    cmp word [np_cur], 0
+    je .out                         ; nothing to the left of the caret
+    dec word [np_cur]
+    call np_del
+    jmp short .edited
+
+.del:
+    mov ax, [np_cur]                ; forward delete: the caret stays put
+    cmp ax, [np_len]
+    jae .out
+    call np_del
+    jmp short .edited
+
+.left:
+    cmp word [np_cur], 0
     je .out
-    dec word [np_len]
+    dec word [np_cur]
+    jmp short .edited
+.right:
+    mov ax, [np_cur]
+    cmp ax, [np_len]
+    jae .out
+    inc word [np_cur]
+    jmp short .edited
+.up:
+    mov dx, -8
+    call np_vmove
+    jmp short .edited
+.down:
+    mov dx, 8
+    call np_vmove
+    jmp short .edited
+.home:
+    xor dx, dx
+    call np_hmove
+    jmp short .edited
+.end:
+    mov dx, 0x7FFF
+    call np_hmove
 
 .edited:                        ; an edit retires the toast; an unhandled
     mov word [np_msg], 0        ; key leaves both it and the screen alone
@@ -583,6 +1019,7 @@ np_redraw:
 ; -----------------------------------------------------------------------------
 np_new:
     mov word [np_len], 0
+    mov word [np_cur], 0
     mov word [np_msg], 0
     jmp np_defname              ; a new note is a new document: leaving the
                                 ; old name would make the next F2 overwrite
@@ -806,7 +1243,7 @@ np_setmsg:
 ; Same geometry the built-in used: 260x180 outer -> 258x160 content.
 np_tpl:
     dw 60, 60, 260, 180
-    dw np_ttl, np_paint, np_onkey, 0
+    dw np_ttl, np_paint, np_onkey, np_onclick
 
 np_ttl: db 'Note Pad', 0
 
@@ -878,6 +1315,25 @@ np_io       equ os88_image_end + 570   ; NP_IOCAP bytes: the CR LF staging
                                        ; construction - both blocks above
                                        ; are even-sized, which is what the
                                        ; old np_pad word was for
+np_cur      equ os88_image_end + 574 + NP_IOCAP    ; word: THE CARET - the
+                                       ; character index it sits in front of,
+                                       ; 0..[np_len]. Everything below exists
+                                       ; to move it or to answer where it is
+np_ty       equ os88_image_end + 576 + NP_IOCAP    ; word: the first text row
+np_i        equ os88_image_end + 578 + NP_IOCAP    ; word: np_walk's index
+np_curx     equ os88_image_end + 580 + NP_IOCAP    ; word: the caret in pixels
+np_cury     equ os88_image_end + 582 + NP_IOCAP
+np_hitx     equ os88_image_end + 584 + NP_IOCAP    ; word: a click to resolve,
+np_hity     equ os88_image_end + 586 + NP_IOCAP    ; 0xFFFF in y = no query
+np_hiti     equ os88_image_end + 588 + NP_IOCAP    ; word: ...and its answer
+np_wantx    equ os88_image_end + 590 + NP_IOCAP    ; word: a row and column to
+np_wanty    equ os88_image_end + 592 + NP_IOCAP    ; find, 0xFFFF = no query
+np_wanti    equ os88_image_end + 594 + NP_IOCAP    ; word: ...and its answer,
+                                       ; 0xFFFF = there is no such row
+np_draw     equ os88_image_end + 596 + NP_IOCAP    ; byte: np_walk paints
+np_hitset   equ os88_image_end + 597 + NP_IOCAP    ; byte: the click row was
+np_wantset  equ os88_image_end + 598 + NP_IOCAP    ; byte: ...the target row
+np_pad2     equ os88_image_end + 599 + NP_IOCAP    ; byte: keeps the total even
 np_dir      equ os88_image_end + 570 + NP_IOCAP    ; word: the folder the
 np_drv      equ os88_image_end + 572 + NP_IOCAP    ; document lives in, byte:
 np_dirok    equ os88_image_end + 573 + NP_IOCAP    ; its drive, byte: whether
@@ -889,4 +1345,4 @@ np_dirok    equ os88_image_end + 573 + NP_IOCAP    ; its drive, byte: whether
                                        ; volume back where 'Save As' left it,
                                        ; or it writes into whatever folder
                                        ; something else navigated to since
-                                       ; total 574 + NP_IOCAP = NP_BSS_TOTAL
+                                       ; total 600 + NP_IOCAP = NP_BSS_TOTAL
