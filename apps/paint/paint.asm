@@ -275,6 +275,8 @@ pt_entry:
     xor al, al                      ; old picture in, when the size is fixed
 .sizable:
     call OSAPI_WM_SIZABLE
+    mov ax, pt_onsize               ; ...and the kernel asks us before it
+    call OSAPI_WM_ONSIZE            ; commits one (SPEC.md 11.1)
     pop ax
     call pt_menufix                 ; and the menus say what is unavailable                      ; a notice window gets the menu bar too,
                                     ; so its name shows and File/Edit are
@@ -765,60 +767,31 @@ pt_bmp_hdr:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_font_init - find the ROM 8x8 font and remember where it is
+; pt_font_init - remember where the kernel keeps its 8x8 glyphs
 ; in:  nothing
-; out: [pt_fseg]:[pt_foff] -> glyph 0; preserves all registers
+; out: [pt_fseg]:[pt_foff] -> glyph 32 (the space); preserves all registers
 ;
-; The kernel's own font buffer is not in the API table, and the text tool
-; has to write glyph pixels into the CANVAS rather than onto the screen, so
-; it needs the bitmaps themselves. This is font_init's probe verbatim
-; (SPEC.md 6): zero ES:BP, ask int 10h AX=1130h BH=03h, and fall back to the
-; IBM ROM 8x8 set at F000:FA6E when a pre-EGA BIOS leaves the pair alone.
-; int 10h AH=11h reads a table pointer and touches no adapter register, so it
-; is safe long after the mode was set.
+; The text tool writes glyph pixels into the CANVAS rather than onto the
+; screen, so it needs the bitmaps themselves, not font_char. This used to be
+; font_init's probe re-run inside the package - int 10h AX=1130h with the
+; kernel's own F000:FA6E fallback behind it - forty lines to arrive at the
+; table the kernel had already built. OSAPI_FONT_GLYPHS hands it over
+; (SPEC.md 6/20.3), which also means the picture gets the same typeface the
+; UI does on every adapter, rather than whatever the BIOS happens to hold.
+;
+; The glyphs stay where they are and are fetched eight bytes at a time
+; (pt_gfetch) rather than copied into 760 bytes of our own bss, which is 3.8%
+; of everything this package is allowed to be.
 ; -----------------------------------------------------------------------------
 pt_font_init:
     push ax
-    push bx
     push cx
-    push dx
     push si
-    push di
-    push bp
-    push es
-    xor ax, ax
-    mov es, ax
-    xor bp, bp
-    mov ax, 0x1130
-    mov bh, 3
-    int 0x10                        ; ES:BP -> 8x8 font, if the BIOS has one
-    mov ax, es
-    or ax, bp
-    jnz .got
-    mov ax, 0xF000
-    mov es, ax
-    mov bp, 0xFA6E
-.got:
-    ; The font stays in ROM and glyphs are fetched eight bytes at a time
-    ; (pt_gfetch), rather than copied into 760 bytes of our own bss - which is
-    ; 3.8% of everything this package is allowed to be. Normalising the offset
-    ; into the segment first means the per-glyph `add` can never carry out of a
-    ; word, whatever the BIOS hands back.
-    mov ax, bp
-    mov cl, 4
-    shr ax, cl
-    mov bx, es
-    add bx, ax
-    mov [pt_fseg], bx
-    and bp, 15
-    mov [pt_foff], bp
-    pop es
-    pop bp
-    pop di
+    call OSAPI_FONT_GLYPHS          ; SI = the table's offset in KERNEL_SEG,
+    mov [pt_foff], si               ; AL = the first code it covers (32)
+    mov word [pt_fseg], KERNEL_SEG
     pop si
-    pop dx
     pop cx
-    pop bx
     pop ax
     ret
 
@@ -1271,85 +1244,34 @@ pt_undo_swap:
 
 
 ; -----------------------------------------------------------------------------
-; pt_runend - extend a run of one colour along a canvas row
-; in:  AL = the run's colour, DX = its first x, BP = the row's byte offset,
-;      [pt_cx2] = last x to consider, ES = PT_CVSEG
-; out: DX = the run's last x, AL = the colour again
-; clobbers: BX, CX, DI, flags
-;
-; The blit's inner loop, and the reason a repaint is affordable at all: a run
-; of colour c is a run of BYTES equal to c|c<<4, so `repe scasb` walks it two
-; pixels at a time at 15 clocks a byte instead of a decode per pixel. The odd
-; ends are handled by hand - the first pixel when the run starts on a low
-; nibble, the last when it ends on a high one.
-; -----------------------------------------------------------------------------
-pt_runend:
-    mov bl, al
-    mov cl, 4
-    shl bl, cl
-    or bl, al                       ; BL = the byte a matching pair holds
-    mov cx, dx
-    test cl, 1
-    jz .even
-    inc cx                          ; the run's first pixel is a low nibble:
-.even:                              ; pair scanning starts at the next pixel
-    mov ax, [pt_cx2]
-    sub ax, cx
-    js .tail
-    inc ax
-    shr ax, 1                       ; AX = whole pairs available from CX
-    jz .tail
-    mov di, cx
-    shr di, 1
-    add di, bp                      ; ES:DI = the first pair's byte
-    mov dx, cx                      ; DX = the first pixel not yet in the run
-    mov [pt_scan0], di              ; SI belongs to the caller's row loop, so
-    mov cx, ax                      ; the scan's origin is parked in memory
-    mov al, bl
-    cld
-    repe scasb
-    mov ax, di                      ; `mov` leaves scasb's ZF alone, and the
-    jne .mism                       ; branch has to read it before anything
-    sub ax, [pt_scan0]              ; else does: every byte matched
-    jmp short .have
-.mism:
-    dec ax                          ; the mismatch sits at DI-1, so it is not
-    sub ax, [pt_scan0]              ; part of the run
-.have:
-    add ax, ax                      ; bytes matched -> pixels
-    add dx, ax                      ; DX = first pixel beyond the pair run
-.tail:
-    mov al, bl
-    and al, 0x0F                    ; the colour, back from the pair byte
-    cmp dx, [pt_cx2]
-    jg .done
-    mov di, dx
-    shr di, 1
-    add di, bp
-    mov ah, [es:di]
-    test dl, 1
-    jnz .lo
-    mov cl, 4
-    shr ah, cl
-.lo:
-    and ah, 0x0F
-    cmp ah, al
-    jne .done
-    inc dx                          ; the odd final nibble matches too
-.done:
-    dec dx                          ; DX = the last pixel IN the run
-    ret
-
-; -----------------------------------------------------------------------------
-; pt_blit - put a canvas rectangle on screen, run-coalesced
+; pt_blit - put a canvas rectangle on screen
 ; in:  [pt_rx1]..[pt_ry2] = canvas rect; gfx lock held
 ; out: nothing; preserves all registers
 ;
 ; The path for everything that cannot know what it changed: W_PAINT, undo,
-; paste, a file load, and erasing the text caret. One gfx_hline per run of
-; equal pixels, so a flat picture costs a call per row and a dithered one
-; costs more - which is the right shape for a paint program, where the
-; expensive case is also the rare one.
+; paste, a file load, and erasing the text caret. It is one OSAPI_GFX_BLIT4
+; per BAND of rows - usually one call for the whole rectangle - and the
+; kernel does the run coalescing, the clipping, the adapter dispatch and the
+; back buffer.
+;
+; This used to be the app's own coalescer (pt_runend, `repe scasb` over the
+; packed bytes) emitting one OSAPI_GFX_HLINE per run. That was the right
+; shape when a gfx call was near; since packages own a segment (SPEC.md 20.1)
+; every one of them is a FAR call, and a detailed picture makes thousands per
+; repaint. gfx_blit4 runs the identical scan from inside the kernel.
+;
+; Two things about the geometry:
+;
+;  - the source pointer must start on an EVEN pixel, because gfx_blit4 takes
+;    the first byte's high nibble as pixel 0. An odd left edge is therefore
+;    widened by one column to the left. That column is inside the canvas and
+;    inside the window (the frame always fits the picture, pt_wfollow), so it
+;    is redrawn with what it already held.
+;  - row y+1 sits one stride BELOW row y in memory - the canvas is stored as
+;    the BMP it will be written as, bottom row first - so the stride handed
+;    over is negative, and the band is addressed from its LAST row's
+;    segment so no row's offset can go below zero. [pt_brmax] is how many
+;    rows can share one segment that way; a 448x280 canvas is one band.
 ; -----------------------------------------------------------------------------
 pt_blit:
     push ax
@@ -1362,41 +1284,57 @@ pt_blit:
     push es
     call pt_clip
     jc .out
-    mov si, [pt_cy1]                ; SI = canvas row
-.row:
-    mov ax, si
-    call pt_rowset                  ; ES = the row's segment...
-    mov bp, di                      ; ...and BP its offset, for pt_runend
-    mov dx, [pt_cx1]
-.run:
-    mov bx, dx
+    mov ax, [pt_cx1]
+    and ax, 0xFFFE                  ; even left edge (see above)
+    mov [pt_bx0], ax
+    mov bx, [pt_cx2]
+    sub bx, ax
+    inc bx
+    mov [pt_bwid], bx               ; width in pixels
+    mov ax, 65520                   ; rows that fit one segment, worst-case
+    xor dx, dx                      ; 15-byte row offset included
+    div word [pt_stride]
+    or ax, ax
+    jnz .rmok
+    inc ax                          ; a stride past 64KB cannot happen (the
+.rmok:                              ; canvas is clamped well below), but a
+    mov [pt_brmax], ax              ; zero band height would not terminate
+    mov ax, [pt_cy1]
+    mov [pt_bsi], ax                ; the band's first row
+.band:
+    mov ax, [pt_cy2]
+    sub ax, [pt_bsi]
+    inc ax                          ; AX = rows left
+    cmp ax, [pt_brmax]
+    jbe .nok
+    mov ax, [pt_brmax]
+.nok:
+    mov [pt_bn], ax                 ; AX = rows in this band
+    add ax, [pt_bsi]
+    dec ax                          ; ...whose LAST row is the lowest address
+    call pt_rowset                  ; in it: ES:DI, and every other row of the
+    mov ax, [pt_bn]                 ; band is a positive offset from there
+    dec ax
+    mul word [pt_stride]            ; AX = (n-1) strides (bounded by pt_brmax,
+    add ax, di                      ; so DX is 0 and this cannot wrap)
+    mov bx, [pt_bx0]
     shr bx, 1
-    add bx, bp
-    mov al, [es:bx]
-    test dl, 1
-    jnz .lo
-    mov cl, 4
-    shr al, cl
-.lo:
-    and al, 0x0F                    ; AL = the run's colour
-    mov [pt_runx], dx
-    call pt_runend                  ; DX = run end, AL = colour
-    mov [pt_runy], dx
-    call OSAPI_SET_COLOR
-    mov ax, [pt_runx]
+    add ax, bx                      ; + the left edge, two pixels to a byte
+    mov si, ax                      ; ES:SI = the band's FIRST row
+    mov bp, [pt_stride]
+    neg bp                          ; down the picture is up the file
+    mov cx, [pt_bwid]
+    mov dx, [pt_bn]
+    mov ax, [pt_bx0]
     add ax, [pt_cx0]
-    mov bx, [pt_runy]
-    add bx, [pt_cx0]
-    mov dx, si
-    add dx, [pt_cy0]
-    call OSAPI_GFX_HLINE
-    mov dx, [pt_runy]
-    inc dx
-    cmp dx, [pt_cx2]
-    jbe .run
-    inc si
-    cmp si, [pt_cy2]
-    jbe .row
+    mov bx, [pt_bsi]
+    add bx, [pt_cy0]
+    call OSAPI_GFX_BLIT4
+    mov ax, [pt_bsi]
+    add ax, [pt_bn]
+    mov [pt_bsi], ax
+    cmp ax, [pt_cy2]
+    jbe .band
 .out:
     pop es
     pop bp
@@ -1971,9 +1909,12 @@ pt_szapply:
     jc .refused
     cmp byte [pt_szchg], 0
     je .redraw                      ; nothing moved: just drop the caret
-    call pt_wfix                    ; the window follows the canvas...
-    mov bx, [pt_win]
-    call OSAPI_WM_FRONT             ; ...and one repaint shows both
+    mov bx, [pt_win]                ; the window follows the canvas, and one
+    mov cx, [pt_cw]                 ; repaint shows both (SPEC.md 11.1)
+    add cx, PT_CHROME_W
+    mov dx, [pt_ch]
+    add dx, PT_CHROME_H
+    call OSAPI_WM_RESIZE
     jmp short .out
 .refused:
     call pt_draw_dims               ; the boxes go back to the live size
@@ -2397,12 +2338,19 @@ pt_paint:
     call pt_blit_all
     mov byte [pt_selshown], 0
     call pt_marq                    ; the marquee, if a selection is live
-    cmp byte [pt_apend], 0          ; a refused resize (pt_track), deferred to
-    je .out                         ; here - see the note there
+    cmp byte [pt_apend], 0          ; a refused resize, deferred to here
+    je .out
+    cmp byte [pt_apend], 2          ; 2 = pt_onsize held an axis back, so the
+    je .justsay                     ; frame the kernel drew is already right
     mov byte [pt_apend], 0
     mov bx, [pt_win]
     call OSAPI_WM_FRONT             ; the corrected frame, over a clean desktop
     mov si, pt_s_crop               ; ...and the toast on top of the picture
+    call pt_msg_show
+    jmp short .out
+.justsay:
+    mov byte [pt_apend], 0
+    mov si, pt_s_crop
     call pt_msg_show
     jmp short .out
 .notice:
@@ -4407,8 +4355,8 @@ pt_type:
     shl ax, 1
     shl ax, 1
     shl ax, 1
-    add ax, 32 * 8                  ; [pt_gch] counts from the space
-    add ax, [pt_foff]
+    add ax, [pt_foff]               ; [pt_gch] counts from the space, and so
+                                    ; does the kernel's table (FONT_FIRST)
     call pt_gfetch                  ; ES belongs to the canvas the moment
     mov si, pt_gl8                  ; pt_rect starts drawing, so the glyph
                                     ; comes out of ROM before that, not during
@@ -4972,16 +4920,25 @@ pt_track:
 ; out: CF=1 if a shrink was refused on either axis, [pt_szchg] = 1 if the canvas
 ;      actually changed; preserves all registers
 ;
-; The one place a size is decided, whichever way it was asked for: the grow box,
-; the Apply button, or Enter in a size box. Clamps to the screen, then to what
-; memory will fund, then to what the picture will stand to lose.
+; The one place a size is COMMITTED, whichever way it was asked for: the grow
+; box, the Apply button, or Enter in a size box. Deciding it is pt_sizeask's
+; job, because the kernel asks that question a step earlier now.
 ; -----------------------------------------------------------------------------
-pt_setsize:
-    push ax
+; pt_sizeask - what canvas size will we take, given this one was asked for?
+; in:  AX = wanted width, DX = wanted height (unclamped, may be negative)
+; out: AX/DX = the size we will accept, [pt_kept] = 1 if an axis was held back
+;      to save artwork; preserves every other register
+;
+; Clamps to the screen, then to what memory will fund, then to what the
+; picture will stand to lose. It decides and commits nothing, which is what
+; lets OSAPI_WM_ONSIZE (SPEC.md 11.1) run it before the kernel has drawn a
+; frame at either size - the answer and the commit used to be the same
+; routine, and that is the whole reason a refused drag needed a second
+; repaint to undo.
+; -----------------------------------------------------------------------------
+pt_sizeask:
     push bx
     push cx
-    push dx
-    mov byte [pt_szchg], 0
     cmp ax, PT_CW_MIN               ; signed: a tiny window makes this negative
     jge .w_ok
     mov ax, PT_CW_MIN
@@ -5017,6 +4974,52 @@ pt_setsize:
     mov dx, [pt_ch]
     mov byte [pt_kept], 1
 .h_ok2:
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_onsize - the resize negotiator the kernel calls before it commits a drag
+; in:  SI = our window, CX = proposed frame width, DX = proposed frame height;
+;      gfx lock held, nothing drawn yet
+; out: CX/DX = the frame size we will take; preserves every other register
+; -----------------------------------------------------------------------------
+pt_onsize:
+    push ax
+    push dx
+    cmp byte [pt_haveundo], 0       ; no staging buffer, no resize: pt_resize
+    je .fixed                       ; needs somewhere to hold the old picture
+    mov ax, cx
+    sub ax, PT_CHROME_W             ; the canvas the proposal implies
+    sub dx, PT_CHROME_H
+    call pt_sizeask
+    add ax, PT_CHROME_W             ; ...and the frame the answer implies
+    mov cx, ax
+    add dx, PT_CHROME_H
+    mov [pt_wanth], dx
+    cmp byte [pt_kept], 0
+    je .out
+    mov byte [pt_apend], 2          ; held an axis back: the toast is owed, but
+    jmp short .out                  ; not the repaint that used to undo the
+.fixed:                             ; frame - there is nothing to undo now
+    mov cx, [pt_cw]
+    add cx, PT_CHROME_W
+    mov ax, [pt_ch]
+    add ax, PT_CHROME_H
+    mov [pt_wanth], ax
+.out:
+    pop dx
+    mov dx, [pt_wanth]
+    pop ax
+    ret
+
+pt_setsize:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [pt_szchg], 0
+    call pt_sizeask                 ; AX/DX = the size we will take
     cmp ax, [pt_cw]
     jne .go
     cmp dx, [pt_ch]
@@ -5249,10 +5252,13 @@ pt_lose_h:
 ; pt_wfix - put the frame back where the canvas needs it
 ; in:  [pt_cw], [pt_ch]; out: the window record's W_* updated; preserves all
 ;
-; The second of this app's two liberties (docs/PAINT-NOTES.md): a package
-; cannot ask the kernel to resize its window, so a refused drag is undone by
-; writing the record and letting the next repaint carry it. The position is
-; clamped as ui_drag would: fully on screen, above the dock.
+; The last place this app still writes the record itself, and the only one it
+; cannot give up: it runs from pt_track, which runs at the TOP of W_PAINT, and
+; OSAPI_WM_RESIZE repaints - calling it there would re-enter our own paint
+; proc. The grow box no longer arrives here at all (pt_onsize settles the size
+; before the kernel commits it); what does is a size change with no
+; negotiation in front of it, wm_fullscreen being the one in the tree. The
+; position is clamped as ui_drag would: fully on screen, above the dock.
 ; -----------------------------------------------------------------------------
 pt_wfix:
     push ax
@@ -5468,8 +5474,11 @@ pt_ondlg:
     je .plain                       ; repaint the DESKTOP too, not just us:
     mov byte [pt_wchg], 0           ; the old frame is still on the glass
     mov bx, [pt_win]
-    call OSAPI_WM_FRONT             ; raise + repaint all (SPEC.md 11), which
-    jmp short .toast                ; re-enters our W_PAINT with the new size
+    mov cx, [pt_tpl + WT_W]
+    mov dx, [pt_tpl + WT_H]
+    call OSAPI_WM_RESIZE            ; clamp, re-fit and repaint the lot
+    jmp short .toast                ; (SPEC.md 11.1), which re-enters our
+                                    ; W_PAINT at the picture's size
 .plain:
     call pt_repaint
 .toast:
@@ -6118,29 +6127,19 @@ pt_adopt:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_wfollow - the window takes the canvas's size and position
-; out: [pt_wchg] = 1, so the caller repaints the desktop too; preserves all
+; pt_wfollow - the window is to take the canvas's size
+; out: pt_tpl sized from the canvas, [pt_wchg] = 1 so the caller asks the
+;      kernel for it; preserves all registers
+;
+; It used to write W_W/W_H/W_X/W_Y in the record itself - the second of the
+; two liberties docs/PAINT-NOTES.md recorded - and OSAPI_WM_RESIZE
+; (SPEC.md 11.1) retired it. The caller does the asking rather than this
+; routine, because it is deep inside a decoder and the answer is a full
+; repaint.
 ; -----------------------------------------------------------------------------
 pt_wfollow:
-    push ax
-    push bx
-    push es
-    mov ax, KERNEL_SEG
-    mov es, ax
     call pt_wsize
-    mov bx, [pt_win]
-    mov ax, [pt_tpl + WT_W]
-    mov [es:bx + W_W], ax
-    mov ax, [pt_tpl + WT_H]
-    mov [es:bx + W_H], ax
-    mov ax, [pt_tpl + WT_X]
-    mov [es:bx + W_X], ax
-    mov ax, [pt_tpl + WT_Y]
-    mov [es:bx + W_Y], ax
     mov byte [pt_wchg], 1
-    pop es
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -7534,9 +7533,11 @@ pt_ic_text:
     PTWORD pt_cy2
     PTWORD pt_lb                    ; left byte index within a row
     PTWORD pt_span                  ; right byte - left byte
-    PTWORD pt_scan0                 ; pt_runend: where the pair scan began
-    PTWORD pt_runx                  ; pt_blit: the run's first and last column
-    PTWORD pt_runy
+    PTWORD pt_bx0                   ; pt_blit: the band's (even) left edge...
+    PTWORD pt_bwid                  ; ...its width in pixels...
+    PTWORD pt_bsi                   ; ...its first canvas row...
+    PTWORD pt_bn                    ; ...how many rows it covers...
+    PTWORD pt_brmax                 ; ...and the most that fit one segment
 
     PTWORD pt_ax                    ; the press point, canvas coords
     PTWORD pt_ay
@@ -7704,6 +7705,8 @@ pt_ic_text:
     PTBYTE pt_wchg                  ; the window was resized: repaint the lot
     PTBYTE pt_kept                  ; a resize was refused to save the artwork
     PTBYTE pt_apend                 ; ...and the notice for it is owed
+    PTWORD pt_wanth                 ; pt_onsize: the height it settled on, held
+                                    ; over the register shuffle on the way out
     PTWORD pt_base                  ; the claimed block's base (SPEC.md 42.3)
     PTBYTE pt_haveundo              ; this machine can fund an undo image...
     PTBYTE pt_haveclip              ; ...and a clipboard (SPEC.md 41.8)

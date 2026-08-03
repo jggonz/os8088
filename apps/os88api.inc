@@ -363,6 +363,20 @@ VID_CGA    equ 2
                                  ; app that sets them leaves the shadow, the
                                  ; z-order damage and the dock out of step.
                                  ; Do NOT hold the gfx lock.
+%define OSAPI_WM_ONSIZE     KERNEL_SEG:0x01A8   ; BX = win ptr, AX = a near proc
+                                 ; in YOUR segment (0 clears it). The kernel
+                                 ; calls it BEFORE it commits a size the user
+                                 ; dragged out of your grow box, with
+                                 ; SI = your window, CX/DX = the proposed
+                                 ; frame size; you answer with the size you
+                                 ; will accept, in CX/DX. Answer with the size
+                                 ; you already have to refuse outright, or
+                                 ; change one axis and leave the other, which
+                                 ; is what an editor refusing to crop wants.
+                                 ; It runs under the gfx lock with nothing yet
+                                 ; drawn at either size, so DO NOT draw in it -
+                                 ; decide, return, and draw in the W_PAINT the
+                                 ; kernel is about to make.
 %define OSAPI_FONT_GLYPHS   KERNEL_SEG:0x01A0   ; out SI = the offset of the
                                  ; kernel's 8x8 glyph table in KERNEL_SEG,
                                  ; AL = first character code it covers,
@@ -470,7 +484,10 @@ W_DISP    equ 20            ; dword: the kernel's far pointer to your
 W_SEG     equ 22            ; dispatcher, and the segment every near
                             ; pointer in this record belongs to (yours).
                             ; Both are the kernel's business, not yours.
-WIN_SIZE  equ 24
+W_ONSIZE  equ 24            ; word: near ptr or 0 - your resize negotiator.
+                            ; NOT a template word - set it with
+                            ; OSAPI_WM_ONSIZE
+WIN_SIZE  equ 26
 MAX_WIN   equ 12
 
 ; THE RECORD LIVES IN KERNEL_SEG. On entry to any callback ES points there

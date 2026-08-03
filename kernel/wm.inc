@@ -41,7 +41,16 @@ W_SEG   equ 22                  ; reach this window's procs - {PKG_DISP, the
                                 ; and zero is what makes the dispatch near
                                 ; again for About/Clock/Disk/TaskMgr/Ctrl and
                                 ; the file dialog (SPEC.md 11/20.1).
-WIN_SIZE equ 24                 ; NOT a power of two: never shift, multiply
+W_ONSIZE equ 24                 ; word: near ptr or 0 - the resize negotiator
+                                ; (SPEC.md 11.1). Called BEFORE a new size is
+                                ; committed, with SI = window, CX/DX = the
+                                ; proposed frame size; it returns the size it
+                                ; will accept in CX/DX, which may be the one
+                                ; the window already has (a refusal) or
+                                ; anything in between. NOT a template word:
+                                ; wm_create zeroes it and wm_onsize sets it,
+                                ; so no existing window template changes.
+WIN_SIZE equ 26                 ; NOT a power of two: never shift, multiply
 MAX_WIN  equ 12                 ; mirrored in apps/os88api.inc (SPEC.md 11)
 
 WF_SIZABLE equ 4                ; W_FLAGS bit2: resizable (SPEC.md 11.1)
@@ -233,6 +242,7 @@ wm_create:
     pop ds
     pop es
     mov word [bx+W_MENUS], 0    ; menus are NOT a template word (SPEC 11/12.2)
+    mov word [bx+W_ONSIZE], 0   ; ...and neither is the resize negotiator
     mov word [bx+W_DISP], PKG_DISP  ; the far pointer wm_pkgcall uses: the
     mov ax, es                      ; dispatcher's fixed offset, and the
     mov cx, cs                      ; segment the caller called us in. Ours
@@ -262,6 +272,47 @@ wm_create:
     pop di
     pop si
     pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_onsize - install (or clear) a window's resize negotiator (SPEC.md 11.1)
+; in:  BX = window ptr, AX = near ptr in the window's OWN segment, 0 to clear
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+wm_onsize:
+    mov [bx+W_ONSIZE], ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_ask_size - put a proposed size to the window before committing it
+; in:  BX = window ptr, CX = proposed width, DX = proposed height
+; out: CX/DX = the size the window will accept; every other register
+;      preserved
+; clobbers: nothing else (flags)
+;
+; The other half of what docs/PAINT-NOTES.md asked for. wm_resize is how an
+; app changes its OWN size; this is how the kernel asks before changing it
+; for them - and the answer is a size rather than a yes/no, because the case
+; that motivated it (apps/paint refusing to crop artwork) is per-axis: a drag
+; that would lose columns but not rows should still get its rows.
+;
+; A window with no negotiator - every kernel window, and every package that
+; never called OSAPI_WM_ONSIZE - answers by leaving CX/DX alone, so the cost
+; of the feature to everything that does not use it is one compare.
+; -----------------------------------------------------------------------------
+wm_ask_size:
+    push ax
+    push si
+    push bp
+    cmp word [bx+W_ONSIZE], 0
+    je .out
+    mov si, bx
+    mov bp, [bx+W_ONSIZE]
+    call wm_pkgcall             ; SI = window, CX/DX = the proposal
+.out:
+    pop bp
+    pop si
     pop ax
     ret
 

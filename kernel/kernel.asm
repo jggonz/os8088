@@ -274,7 +274,13 @@ osapi_table:
                                   ;          (SPEC.md 6): out SI = its offset
                                   ;          in KERNEL_SEG, AL = first code,
                                   ;          AH = last, CX = bytes per glyph
-osapi_table_end:                  ; 0x01A8
+    OSAPI_SLOT wm_onsize          ; 0x01A8 - install the resize negotiator
+                                  ;          (SPEC.md 11.1): BX = win, AX =
+                                  ;          near proc. The other half of
+                                  ;          docs/PAINT-NOTES.md's resize
+                                  ;          complaint - wm_resize is the app
+                                  ;          asking, this is the app answering
+osapi_table_end:                  ; 0x01B0
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -282,8 +288,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 51 * 8
-%error "os8088 API jump table must be exactly 51 8-byte slots"
+%if OSAPI_TABLE_LEN != 52 * 8
+%error "os8088 API jump table must be exactly 52 8-byte slots"
 %endif
 
 ; =============================================================================

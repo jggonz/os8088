@@ -622,7 +622,7 @@ ui_grow:
     jge .w_low_ok
     mov ax, WMIN_W
 .w_low_ok:
-    mov [bx + W_W], ax
+    mov cx, ax
 
     ; clamp h: WMIN_H <= h <= [vid_h] - W_Y
     mov ax, [ui_dragh]
@@ -636,7 +636,12 @@ ui_grow:
     jge .h_low_ok
     mov ax, WMIN_H
 .h_low_ok:
-    mov [bx + W_H], ax
+    mov dx, ax
+
+    call wm_ask_size            ; the window gets a say BEFORE the record
+    mov [bx + W_W], cx          ; changes (SPEC.md 11.1): it answers with the
+    mov [bx + W_H], dx          ; size it will take, per axis, and by then
+                                ; nothing has been drawn at the other one
 
     call wm_paint_all           ; caller-held lock, per the wm contract
     call gfx_unlock             ; NO second gfx_lock here - already held (§7)
