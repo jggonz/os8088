@@ -6953,62 +6953,86 @@ not, and moving costs one replay because the cache survives the repaint.
 ## 41. Paint — the seventh package (apps/paint/paint.asm)
 
 A bitmap editor over the published package ABI: **no kernel change of any
-kind**, no new API slot, every pixel through the `gfx_*` table. Prefix
-`pt_`, embedded palette icon (flags bit 0). Directory order on the apps
-disks stays pinned: mines, hello, notepad, recorder, piano, fractal —
-**paint is appended seventh** so the earlier indices hold. It uses colours
-beyond 0/15, which retires `[bb_mono]` (§32) — supported and expected; on a
-1bpp adapter its palette drops to §39.4's three ink classes.
+kind**, no new API slot, every pixel through the `gfx_*` table. Prefix `pt_`,
+embedded palette icon (flags bit 0). Directory order on the apps disks stays
+pinned: mines, hello, notepad, recorder, piano, fractal — **paint is appended
+seventh** so the earlier indices hold. It uses colours beyond 0/15, which
+retires `[bb_mono]` (§32) — supported and expected; on a 1bpp adapter its
+palette drops to §39.4's three ink classes.
 
 Eight tools (pencil, eraser, dropper, rectangle, ellipse, selection, flood
-fill, text), a per-tool line width, filled or outlined shapes, one-level
-undo that doubles as redo, an internal clipboard, and BMP load/save through
-the Standard File dialog (§38). The full design record, including the four
-kernel capabilities whose absence shaped it, is `docs/PAINT-NOTES.md`.
+fill, text), a per-tool line width that also sets an unfilled shape's border
+thickness, one-level undo that doubles as redo, an internal clipboard, and BMP
+load/save through the Standard File dialog (§38). The full design record,
+including the four kernel capabilities whose absence shaped it, is
+`docs/PAINT-NOTES.md`.
 
-- **Window:** "Paint", `PT_FRAME_W` = 494 wide, height = canvas + 42,
-  centred at y = `MBAR_H` + 4. Not resizable. The canvas is **448 wide on
-  every adapter** (the narrowest screen os8088 drives is 640) and as tall as
-  the desktop allows, capped at 280: 280 rows on VGA, 258 on Hercules, 110
-  on CGA. `pt_geom` derives the frame from `OSAPI_VIDEO` *before*
-  `wm_create`, so §39.7's clamp never fires, and re-derives `[pt_ch]` from
-  the record afterwards because the record is the truth.
+**The canvas is not a fixed size.** It is whatever the screen and memory
+allow, from 32x16 up, and everything else follows from that:
+
+- **The window is `WF_SIZABLE` and the canvas IS its content.** Dragging the
+  grow box resizes the picture: existing pixels keep the top-left corner, new
+  area comes up white, and a shrink crops. There is no resize callback in the
+  ABI (§11.1) — `ui_grow` rewrites W_W/W_H and repaints — so `pt_track` runs
+  at the top of every W_PAINT and notices when the content no longer matches
+  the picture. `pt_geom` therefore fixes the three buffer bases **once**, from
+  the largest canvas the machine can fund, so no base ever moves and
+  `pt_resize` can stage the old rows in the undo image with no overlap to
+  reason about.
+- **Rows are addressed by a (segment, offset) pair.** A canvas may exceed one
+  64KB segment — 636x326 is 104KB — so `pt_rowseg[y]` names the paragraph a
+  row starts in and `pt_rowoff[y]` the 0..15 bytes into it; the undo image has
+  the identical layout `[pt_undelta]` paragraphs higher, so one table serves
+  both. Every loop that walks a row goes through `pt_rowset`/`pt_urowset`,
+  which cost six instructions a row and nothing a pixel.
+- **The canvas is still a BMP.** 4bpp packed, high nibble = left pixel, rows
+  **bottom-up behind a 118-byte DIB header**, stride = the BMP stride
+  (ceil(w/2) rounded up to 4). Saving is one `OSAPI_FILE_WRITE` of the canvas
+  base with no staging pass — *provided the whole file fits 64KB*, which is
+  `dskw_write`'s ceiling (§18.4). A larger canvas can be edited but not
+  saved, and Paint says so rather than writing a truncated file.
+- **Memory is budgeted from int 12h at startup.** Scratch (the claim record
+  and the flood-fill span stack, 12KB) comes off the top of usable memory; the
+  canvas and its equally-sized undo image split what is left above 0x66000
+  after a 16KB clipboard floor. On a 640KB machine that is a 101KB canvas
+  ceiling; below ~499KB no minimum canvas can be funded and the window carries
+  a "Not enough memory" notice instead, touching nothing. The claim record
+  (magic pair + owner window pointer, believed only while that pointer still
+  names a used window slot whose title starts "Paint") keeps a second instance
+  off the same canvas; in practice the loader refuses first, two 12KB regions
+  not fitting the 19.5KB pool.
 - **Content layout** (content-relative): tool palette, two columns of four
-  20×20 buttons at x 1/22, y 1 + row·21; a black divider at x 43; the canvas
-  at x 44; a 22-row strip below the canvas holding four width buttons, the
-  current-colour well, the colour swatches (16, or 3 at 1bpp), a
-  filled-shapes toggle and a text-size cycle. The strip spans the **whole**
-  content width, including the columns under the palette, so the click
-  ladder tests y before x.
-- **The canvas is a BMP.** 4bpp packed, high nibble = left pixel, rows
-  stored **bottom-up behind a 118-byte DIB header** — the canvas segment
-  *is* a `BITMAPINFOHEADER` file. Saving is one `OSAPI_FILE_WRITE` of that
-  segment with no staging pass, and a full-size picture is 62,838 bytes,
-  inside the file API's 64KB ceiling (§18.4) by 2,698. `pt_rowtab` maps
-  canvas y to a byte offset once at startup; nothing else in the file knows
-  the rows are upside down.
-- **Memory (the one unsanctioned thing).** The canvas, the undo image, the
-  clipboard and a scratch area live at linear 0x66000 / 0x76000 / 0x86000 /
-  0x96000 — the first paragraph above `BB_SEG`'s four planes, so double
-  buffering may be armed or disarmed underneath it. `pt_entry` gates the
-  whole app on int 12h ≥ 620KB and otherwise opens a window that says "Not
-  enough memory" and touches nothing. A claim record at `PT_SCSEG:0` (magic
-  pair + owner window pointer, believed only while that pointer still names
-  a used window slot titled "Paint") keeps a second instance off the same
-  canvas; in practice the loader refuses first, two 11KB regions not fitting
-  the 19.5KB pool.
-- **Drag loops invert `ui_drag`'s lock ordering (§13), and must.** A
-  package's `gfx_*` output goes through the back buffer when double
-  buffering is armed (§32), so a tracking loop that held the lock would show
-  nothing until the button came up. `pt_wait`/`pt_wait_tick` therefore draw
-  under the lock, *release* it so `gfx_unlock`'s flush reaches VRAM, yield,
-  and re-take it. The window is frontmost while it tracks and every
-  background painter checks `wm_obscured` (§7), so the XOR overlay is safe
-  across the gap.
-- **BMP reader:** 1, 4, 8 and 24bpp, uncompressed, top-down or bottom-up.
-  Every header field is validated before it is believed — magic, both halves
-  of every dword that must be zero, the depth, `biCompression`, and that the
-  pixel data the header describes fits inside the bytes actually read
-  (§19's rule: every byte off the disk is hostile). Source palettes map to
-  the sixteen by weighted city-block distance. GIF and JPEG are recognised
-  by magic and refused with a message; the reasons are in the notes.
+  20x20 buttons at x 1/22, buttons past the canvas bottom simply not drawn and
+  not clickable; the canvas size printed under them; a black divider at x 43;
+  the canvas at x 44; a 22-row strip below it holding four width buttons, the
+  current-colour well, as many colour swatches as fit, and two toggles
+  right-anchored clear of the grow box (which owns the content's last 13
+  columns and rows, §11). The strip spans the **whole** content width,
+  including the columns under the palette, so the click ladder tests y first.
+  The size readout lives in the palette rather than the title bar for a
+  structural reason: `wm_draw_win` draws the title *before* calling W_PAINT,
+  so a size adopted during that paint would be one repaint stale there and the
+  only cure would be a second full repaint.
+- **Loading takes the file's own dimensions** as far as the screen and memory
+  allow, then crops — a 700x440 picture opens as 594x342 on a 640KB VGA
+  machine — and the window follows by writing W_W/W_H and calling
+  `OSAPI_WM_FRONT` for the repaint. A crop sets a flag that makes **File >
+  Save refuse**: one click must not overwrite the original with less than it
+  held. Save As, a deliberate act on a name the user picks, is allowed and
+  clears the flag on success. The reader takes 1, 4, 8 and 24bpp
+  uncompressed BMPs, top-down or bottom-up, validating every header field
+  before believing it — magic, both halves of every dword that must be zero,
+  the depth, `biCompression`, and that the pixel data the header describes
+  fits inside the bytes actually read (§19: every byte off the disk is
+  hostile). Source palettes map to the sixteen by weighted city-block
+  distance. A file over 64KB cannot be read at all (`FERR_BIG`), GIF and JPEG
+  are recognised by magic and refused with a message, and the reasons for all
+  three are in the notes.
+- **Drag loops invert `ui_drag`'s lock ordering (§13), and must.** A package's
+  `gfx_*` output goes through the back buffer when double buffering is armed
+  (§32), so a tracking loop that held the lock would show nothing until the
+  button came up. `pt_wait`/`pt_wait_tick` draw under the lock, *release* it so
+  `gfx_unlock`'s flush reaches VRAM, yield, and re-take it. The window is
+  frontmost while it tracks, and since §11.3 a background painter under it
+  draws its own visible region rather than over the top — so the released-lock
+  window is safer than it was when this was written against `wm_obscured`.

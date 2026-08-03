@@ -512,7 +512,6 @@ pt_layout:
     mov [pt_cvparas], cx
     mov ax, [pt_smaxp]
     mov [pt_undelta], ax
-    call pt_titleset                ; the size lives in the title bar
     ; --- row 0 is the LAST row in the file, so the walk runs downward -------
     mov ax, [pt_ch]
     dec ax
@@ -1676,6 +1675,65 @@ pt_draw_pal:
     cmp di, PT_NTOOL
     jb .tool
 .done:
+    call pt_draw_dims               ; the canvas size, under the last button
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_draw_dims - the canvas size, stacked in the palette column
+; in:  [pt_cw], [pt_ch]; gfx lock held
+; out: nothing; preserves all registers
+;
+; Here rather than in the title bar, and the reason is worth keeping: the
+; kernel draws the title BEFORE it calls W_PAINT (SPEC.md 11), so a size
+; discovered during the paint - which is exactly when a grow-box resize is
+; discovered - would be one repaint stale there, and the only cure would be a
+; second full repaint. This is content, painted by the same pass that adopted
+; the new size, and it costs two font_str calls.
+; -----------------------------------------------------------------------------
+PT_DIM_Y    equ PT_PAL_Y0 + 4 * PT_PAL_DY + 2   ; below the last button row
+
+pt_draw_dims:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov ax, PT_DIM_Y + 17
+    cmp ax, [pt_ch]
+    jge .out                        ; a short window has no room for it
+    mov byte [pt_pen], CWHITE       ; erase first: 488 over 1024 would read as
+    xor ax, ax                      ; 4884 otherwise
+    mov bx, PT_DIM_Y
+    mov cx, PT_SEPX - 1
+    mov dx, PT_DIM_Y + 17
+    call pt_cfill
+    mov byte [pt_pen], CBLACK
+    mov di, pt_dimbuf
+    mov ax, [pt_cw]
+    call pt_num
+    mov byte [di], 0
+    mov si, pt_dimbuf
+    mov cx, 2
+    mov dx, PT_DIM_Y
+    call pt_ctext
+    mov di, pt_dimbuf
+    mov byte [di], 'x'
+    inc di
+    mov ax, [pt_ch]
+    call pt_num
+    mov byte [di], 0
+    mov si, pt_dimbuf
+    mov cx, 2
+    mov dx, PT_DIM_Y + 9
+    call pt_ctext
+.out:
     pop di
     pop si
     pop dx
@@ -2018,7 +2076,7 @@ pt_paint:
     call pt_marq                    ; the marquee, if a selection is live
     mov bx, [pt_win]
     call OSAPI_WM_GROW              ; a resizable window owes the grow box a
-    jmp short .out
+    jmp short .out                  ; redraw after its own content painting
 .notice:
     xor bx, bx
     mov bl, [pt_mode]
@@ -4453,54 +4511,6 @@ pt_orowset:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; pt_titleset - "Paint 521x390": the canvas size, in the title bar
-; in:  [pt_cw], [pt_ch]
-; out: pt_titlebuf rewritten; preserves all registers
-;
-; The title is the one place with room for it that no layout can crowd out,
-; and the kernel redraws it from W_TITLE on every repaint (SPEC.md 11) - so a
-; resize updates it with no work here beyond rebuilding the string. pt_dupchk
-; compares only the "Paint" prefix for exactly this reason.
-; -----------------------------------------------------------------------------
-pt_titleset:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov si, pt_s_title
-    mov di, pt_titlebuf
-.name:
-    mov al, [si]
-    or al, al
-    jz .dims
-    mov [di], al
-    inc si
-    inc di
-    jmp short .name
-.dims:
-    cmp byte [pt_mode], PT_M_LIVE
-    jne .done                       ; a notice window has no canvas to report
-    mov byte [di], ' '
-    inc di
-    mov ax, [pt_cw]
-    call pt_num
-    mov byte [di], 'x'
-    inc di
-    mov ax, [pt_ch]
-    call pt_num
-.done:
-    mov byte [di], 0
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 ; pt_num - AX in decimal at DS:DI, DI advanced; clobbers AX, BX, CX, DX
 pt_num:
     mov bx, 10
@@ -5311,7 +5321,7 @@ pt_tpl:
     dw PT_WIN_Y                     ; WT_Y
     dw PT_CW_DEF + PT_CHROME_W      ; WT_W
     dw PT_CH_DEF + PT_CHROME_H      ; WT_H
-    dw pt_titlebuf                  ; WT_TITLE - built by pt_titleset
+    dw pt_s_title                   ; WT_TITLE
     dw pt_paint                     ; WT_PAINT
     dw pt_onkey                     ; WT_ONKEY
     dw pt_click                     ; WT_ONCLICK
@@ -5665,7 +5675,7 @@ pt_ic_text:
                                     ; story AND of spanning segments
     PTBUF  pt_glyphs, 95 * 8        ; the ROM 8x8 font, chars 32..126
     PTBUF  pt_line, PT_CW_MAX       ; one decoded source pixel per column
-    PTBUF  pt_titlebuf, 20          ; "Paint 736x464", NUL - the live W_TITLE
+    PTBUF  pt_dimbuf, 8             ; "x464", NUL - the palette's size readout
     PTBUF  pt_pmap, 256             ; a loaded palette -> our sixteen
     PTBUF  pt_name, 14              ; the current document
 

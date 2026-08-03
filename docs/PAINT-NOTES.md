@@ -3,14 +3,16 @@
 `apps/paint/paint.asm` is a bitmap editor written entirely against the
 published package ABI (SPEC.md §20.3). **No kernel file was changed to make
 it work** — not one byte of `kernel/`, and no new API slot. This document
-records the two things that could not follow from the ABI alone, the four
+records the two liberties it takes that the ABI does not sanction, the
 capabilities whose absence cost the most, and the formats that were dropped
 and why.
 
 ## What it is
 
-448×280 canvas (shorter on a short screen), 4bpp packed, eight tools:
-pencil, eraser, dropper, rectangle, ellipse, selection, flood fill and text.
+A canvas of any size the screen and memory allow — 448×280 by default,
+resized by dragging the window's grow box, or set by opening a picture of its
+own dimensions — 4bpp packed, with eight tools: pencil, eraser, dropper,
+rectangle, ellipse, selection, flood fill and text.
 Sixteen colours on VGA, three on a 1bpp adapter (SPEC.md §39.4's black /
 dither / white classes — the only three that survive the reduction as
 distinct). Selectable line width, per-tool: the pencil's 1/2/4/8 and the
@@ -20,38 +22,50 @@ unfilled rectangle or ellipse. Text is drawn into the picture from the ROM
 clipboard (cut/copy/paste), and BMP load/save through the Standard File
 dialog (SPEC.md §38).
 
-## The one thing it does that the ABI does not sanction
+## The two liberties it takes
 
-**It claims four 64KB windows of conventional memory above `BB_SEG`** —
-linear 0x66000, 0x76000, 0x86000, 0x96000 — for the canvas, the undo image,
-the clipboard and a scratch area. There is no other place for them: a
-package's whole world is `APP_MAX_SIZE` = 19.5KB of image + bss (SPEC.md
-§20.1), and the canvas alone is 62,720 bytes.
+**1. It claims conventional memory above `BB_SEG`** — from linear 0x66000 up —
+for the canvas, an equally-sized undo image, the clipboard and a 12KB scratch
+area. There is no other place for them: a package's whole world is
+`APP_MAX_SIZE` = 19.5KB of image + bss (SPEC.md §20.1), and even a modest
+canvas is 60KB. Nothing is a fixed size any more: `pt_geom` divides what int
+12h reports, so the same binary runs a 101KB canvas on a 640KB machine, a
+39KB one at 512KB, and refuses below about 499KB.
 
-0x66000 is the first paragraph above the four back-buffer planes (SPEC.md
-§2: `BB_SEG` + 4 × 0x9600 ends at 0x657FF), so the Control Panel can arm or
-disarm double buffering underneath the app with no effect. Nothing else in
-the tree touches memory above 0x40000.
+0x66000 is the first paragraph above the four back-buffer planes (SPEC.md §2:
+`BB_SEG` + 4 × 0x9600 ends at 0x657FF), so the Control Panel can arm or disarm
+double buffering underneath the app with no effect. Nothing else in the tree
+touches memory above 0x40000.
 
 Three consequences are handled rather than hoped about:
 
-- **The memory only exists on a large machine.** `pt_entry` asks int 12h
-  first and, below 620KB, opens a window that says "Not enough memory" and
-  touches nothing. A 256KB or 512KB machine gets that notice; `make run-640`
-  and any real 640KB XT get the app.
-- **Two instances would share one canvas.** The claim record at
-  `PT_SCSEG:0` holds a magic pair and the owner's window pointer, and
-  `pt_dupchk` believes it only if that pointer still names a used window
-  slot whose `W_TITLE` string is ours. A closed Paint leaves the magic
-  behind — there is no close hook (see below) — and that test is what keeps
-  the staleness harmless. In practice the loader refuses first: two 11KB
-  regions do not fit the 19.5KB pool, so the second launch fails with "Out
-  of memory" in the Disk window before the app runs at all.
-- **The claim is invisible to the Task Manager**, which sums package
-  regions and the kernel's own segments. Paint's 250KB does not appear in
+- **The memory may not be there.** `pt_entry` asks int 12h first and, when the
+  answer cannot fund a minimum canvas, opens a window that says "Not enough
+  memory" and touches nothing. A 256KB or 384KB machine gets that notice;
+  `make run-640`, a 512KB machine and any real 640KB XT get the app, with the
+  canvas ceiling scaled to what they have.
+- **Two instances would share one canvas.** The claim record at the scratch
+  base holds a magic pair and the owner's window pointer, and `pt_dupchk`
+  believes it only if that pointer still names a used window slot whose title
+  starts "Paint". A closed Paint leaves the magic behind — there is no close
+  hook (see below) — and that test is what keeps the staleness harmless. In
+  practice the loader refuses first: two 12KB regions do not fit the 19.5KB
+  pool, so the second launch fails with "Out of memory" in the Disk window
+  before the app runs at all.
+- **The claim is invisible to the Task Manager**, which sums package regions
+  and the kernel's own segments. Paint's quarter-megabyte does not appear in
   its RAM figure.
 
-**What the kernel should provide instead:** a memory slot in the API table —
+**2. It writes W_W/W_H in the window record.** Opening a picture makes the
+window match the picture, and there is no `wm_resize` slot to ask for that —
+`ui_grow` and `wm_fullscreen` are the only things that resize a window, and
+both are kernel-internal. So Paint stores the new frame in the record and calls
+`OSAPI_WM_FRONT` for the repaint, which *is* sanctioned. The record's geometry
+is documented as no longer set-once (SPEC.md §11), so this is a small liberty
+rather than a violation — but it is a liberty, and a one-line
+`wm_resize(BX, w, h)` that clamped to the screen and repainted would retire it.
+
+**What the kernel should provide for the memory:** a slot in the API table —
 `alloc(paragraphs) → segment` / `free(segment)`, stamped with the calling
 instance and force-freed by `inst_release` the way sound grants already are
 (SPEC.md §34.6 verb 7 is the exact precedent, including the teardown fence).
@@ -81,15 +95,28 @@ repaint becoming the bottleneck.
 ### 2. The file API is whole-file and caps at 64KB
 
 `dskw_read`/`dskw_write` (SPEC.md §18.4) move an entire file through one
-buffer, and `FERR_BIG` refuses anything over 64KB. That single constant is
-what fixes the canvas at 448×280: a 4bpp BMP of that size is 62,838 bytes,
-and the canvas is laid out *as* that BMP — a 118-byte DIB header in front
-of bottom-up rows — so a save is one `OSAPI_FILE_WRITE` of the segment with
-no staging copy at all. One pixel wider and the file would not fit.
+buffer with a 16-bit count, and `FERR_BIG` refuses anything over 64KB. Since
+the canvas became resizable this is the limit users meet first, and it cuts
+twice:
+
+- **A picture larger than 64KB cannot be read at all.** Not "read partially" —
+  there is no positioned read, so a 155KB BMP is simply refused. The request
+  that motivated the resizable canvas ("load as much of an oversized bitmap as
+  will fit") is therefore honoured for *dimensions* — a 700×440 file opens
+  cropped to what the screen and memory allow — but cannot be honoured for
+  *file size*.
+- **A canvas whose BMP would pass 64KB cannot be saved.** Paint edits a
+  594×342 picture (102KB) perfectly well; writing it needs a call the API does
+  not have, so it reports "Too big to save (64KB limit)" rather than writing a
+  truncated file.
+
+The canvas is still laid out *as* the file — a 118-byte DIB header in front of
+bottom-up rows — so a save that does fit is one `OSAPI_FILE_WRITE` of the
+canvas base with no staging copy at all.
 
 A positioned read/write (`read(name, offset, len, buf)`) or a real
-open/seek/close would lift both limits: bigger canvases, and formats whose
-decoder wants to stream rather than see the whole file at once.
+open/seek/close would lift both limits, and would also let a decoder stream
+instead of demanding the whole file in RAM at once.
 
 ### 3. No teardown callback for a package
 
@@ -119,18 +146,31 @@ by construction.
   no radio group, so "Filled Shapes" and the text size are mirrored as
   clickable indicators in the app's own strip and the menu items are
   write-only twins of them.
-- **No clipping to a window.** `vga_rect_setup` clips to the screen
-  (SPEC.md §39.10), so every canvas coordinate is clipped by the app before
-  it becomes a gfx call. That is `pt_clip`, and it is called on every dab.
+- **No clipping to a window** for foreground drawing. SPEC.md §11.3's clip
+  region is for background painters (its rule 3), and Paint has no worker
+  task, so every canvas coordinate is still clipped by the app before it
+  becomes a gfx call — `pt_clip`, on every dab. The region did improve one
+  thing for free: a background painter *underneath* Paint now draws its own
+  visible part instead of skipping the frame, which makes the drag loops'
+  released-lock windows better behaved than when this was written.
+- **No resize callback.** A resizable window learns it was resized by finding
+  a different W_W/W_H at its next paint (SPEC.md §11.1). That works, but the
+  size is adopted *during* the paint — after the kernel has already drawn the
+  title bar — which is why the canvas dimensions are printed in the tool
+  palette rather than the title, where they would always be one repaint
+  stale, at the cost of a second full repaint to fix.
 
 ## Formats
 
 **BMP is implemented both ways.** Save writes a 16-colour 4bpp DIB with the
-standard EGA palette, which round-trips through any host paint program.
+standard EGA palette, at whatever size the canvas is, which round-trips
+through any host paint program — verified byte-exact against a Pillow reader.
 Load accepts 1, 4, 8 and 24bpp uncompressed BMPs, top-down or bottom-up,
-mapping any source palette (or true colour) to the nearest of the sixteen
-by a weighted city-block distance. Compressed (RLE4/RLE8) BMPs are refused
-with a message rather than misread.
+adopts the file's dimensions as far as the screen and memory allow, crops the
+rest, and maps any source palette (or true colour) to the nearest of the
+sixteen by a weighted city-block distance. A cropped load blocks File > Save,
+so one click cannot overwrite the original with less than it held. Compressed
+(RLE4/RLE8) BMPs are refused with a message rather than misread.
 
 **GIF and JPEG are not implemented.** The app recognises both by their
 magic bytes and says "Only BMP is supported" instead of guessing.
@@ -170,8 +210,14 @@ The two decisions that carry the app:
   rows are *exchanged* with the undo image, so the two states alternate
   forever from one buffer.
 
-Measured under QEMU with `make run-640`: a full-canvas flood fill of a
-picture with obstacles completes in about four seconds of wall clock,
-opening a 448×280 4bpp BMP (read, decode, blit) in about eight, and a
-stroke keeps up with the 1200-baud mouse with the CPU to spare. A real
-8MHz machine will be several times slower; a 4.77MHz 8088 slower again.
+A third decision arrived with the resizable canvas: **the size readout is
+content, not chrome.** In the title bar it cost a second full repaint per
+resize, because the kernel draws the title before calling W_PAINT — and a full
+repaint is the most expensive thing this app does. Two `font_str` calls in the
+palette column cost nothing and are never stale.
+
+Measured under QEMU with `make run-640`: a full-canvas flood fill of a picture
+with obstacles completes in about four seconds of wall clock, opening a 448×280
+4bpp BMP (read, decode, blit) in about eight, and a stroke keeps up with the
+1200-baud mouse with the CPU to spare. A real 8MHz machine will be several
+times slower; a 4.77MHz 8088 slower again.
