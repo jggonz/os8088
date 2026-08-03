@@ -602,11 +602,18 @@ FM_FREE       equ 255           ; the one FS_FERR value that is not a FERR_*:
 ; that says no. Worst case it is 'Delete ' + 12 + 18 = 37 characters, which
 ; fits the default window's 38-char status line whole and truncates from the
 ; right - which is why the name and the word Enter come before Esc.
+;
+; A FOLDER gets a different tail, because Delete on one now removes
+; everything under it (SPEC.md 18.6) and the line is the only place that can
+; say so. It costs nine characters, so a maximal 12-character folder name
+; overflows the default width by a few and clips the tail of 'Esc=no'; that
+; is the right thing to lose, and widening the window shows it whole.
 fm_s_newfld:  db 'New folder: ', 0
 fm_s_renam:   db 'Rename ', 0
 fm_s_rento:   db ' to: ', 0
 fm_s_delpr:   db 'Delete ', 0
 fm_s_delq:    db '? Enter=yes Esc=no', 0
+fm_s_delq2:   db ' +contents? Enter=yes Esc=no', 0   ; ...for a folder
 fm_s_kbfree:  db ' KB free', 0      ; Folder > Free Space
 fm_s_root:    db 'Disk', 0      ; window title at the root...
 fm_s_folder:  db 'Folder', 0    ; ...and in a folder we arrived at from
@@ -2314,7 +2321,10 @@ fm_edit_commit:
     mov si, fm_onam
     cmp byte [fm_odir], 0
     je .delfile
-    call dskw_rmdir             ; an EMPTY folder, else FERR_PROT (18.6)
+    call dskw_rmtree            ; a folder AND everything under it (18.6) -
+                                ; the confirmation line says so, and there is
+                                ; no undo on this system, which is exactly
+                                ; why it is a confirmation and not a click
     jmp short .verdict
 .delfile:
     call dskw_delete
@@ -2953,11 +2963,14 @@ fm_draw_core:
     mov si, fm_ebuf
     jmp short .stat
 .st_del:
-    mov si, fm_s_delpr          ; "Delete NAME? Enter=yes Esc=no"
-    call fm_scat
+    mov si, fm_s_delpr          ; "Delete NAME? Enter=yes Esc=no", or
+    call fm_scat                ; "Delete NAME +contents? ..." for a folder
     mov si, fm_onam
     call fm_scat
     mov si, fm_s_delq
+    cmp byte [fm_odir], 0
+    je .stat
+    mov si, fm_s_delq2
     jmp short .stat
 .st_err:
     mov al, [fm_lferr]          ; 3./4. this window's own last word: the

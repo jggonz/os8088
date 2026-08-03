@@ -540,6 +540,10 @@ dskw_rmbody:
     stc
     ret
 .named:
+dskw_rmbody_n83:                ; the same pipeline with dskw_n83 already
+                                ; filled - what dskw_rmtree calls, because it
+                                ; works from raw 11-byte names it read off the
+                                ; disk rather than from display names
     call dskw_find              ; in the CURRENT directory (SPEC.md 19.2)
     jc .out                     ; AX = FERR_NOENT / FERR_IO already
     call dskw_ent_load
@@ -585,6 +589,423 @@ dskw_rmbody:
     call dskw_sync
     pop ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_rmtree - remove a subdirectory AND EVERYTHING UNDER IT (SPEC.md 18.6)
+; in:  SI = NUL 8.3 name of a subdirectory of the current directory;
+;      UI-task/window-callback context like every dskw_*
+; out: CF=0 AX=0, else CF=1 AX = FERR_*; the volume is back in the directory
+;      the call started in either way
+; clobbers: nothing else
+;
+; **Iterative, and it uses the disk's own parent links instead of a stack.**
+; A recursive descent would need one frame per level on a 1,536-byte task
+; stack (SPEC.md 8) and a depth bound nobody could justify; but every
+; subdirectory records its parent in its own '..' entry (SPEC.md 19.2), so
+; the walk can go down with dsk_chdir and come back up with dsk_dotdot,
+; carrying nothing between iterations but the volume's position.
+;
+; The loop is one rule: look at the directory we are standing in, and
+;
+;   a file      -> delete it            (dskw_dbody_n83)
+;   a folder    -> step into it         (dsk_chdir)
+;   nothing     -> step out and remove the folder we just emptied
+;
+; so the tree empties depth-first with no memory of where it has been. The
+; folder we just left is re-found in the parent BY ITS FIRST CLUSTER
+; (dskw_rt_byclus) rather than by a name we would have had to keep: the
+; cluster is what we already hold, and it cannot be ambiguous the way a name
+; that failed to convert to 8.3 could.
+;
+; Two things are deliberately kept from the empty-folder path. Each removal
+; goes through dskw_rmbody_n83, which re-runs the emptiness scan - so if the
+; scan below and the scan there ever disagreed, the answer is a refusal and
+; not a lost subtree. And dskw_dbody_n83 still refuses a read-only, hidden
+; or system file: a tree with one of those in it stops there, partially
+; deleted, with FERR_PROT - the same thing any rm -r does when it meets a
+; permission it does not have, and much better than silently removing files
+; the user's other operating system marked.
+;
+; LFN fragments (attr exactly 0x0F) are the one species this handles that
+; dskw_rmdir will not: they carry no cluster chain, so removing one is
+; marking its slot 0xE5 and nothing else. Without that, no folder a host OS
+; wrote a long name into could ever be deleted, which would have made this
+; feature useless on exactly the disks it is for.
+;
+; DSKW_RT_MAX bounds the whole operation. A cross-linked or cyclic directory
+; tree cannot be detected locally - the '..' link that walks you in a circle
+; looks exactly like a legitimate one - so the guard is the answer, and it is
+; generous enough that no real floppy can reach it.
+; -----------------------------------------------------------------------------
+DSKW_RT_MAX equ 4096            ; iterations: one per entry removed or level
+                                ; crossed. A 1.44MB volume cannot legitimately
+                                ; need this many; a cyclic '..' would spin
+                                ; forever without it
+
+dskw_rmtree:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    call dskw_rtbody
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_rtbody - the recursive-delete pipeline (module-internal)
+; in:  SI = the name; out: CF/AX as dskw_rmtree
+; -----------------------------------------------------------------------------
+dskw_rtbody:
+    cmp byte [dsk_mntok], 1
+    je .gated
+    mov ax, FERR_NODISK
+    stc
+    ret
+.gated:
+    mov ax, [dsk_cwd]           ; where we must end up, whatever happens
+    mov [dskw_rt_home], ax
+    mov di, dskw_rt_name        ; keep the caller's name: the last removal
+    call dskw_name83            ; happens back here, and by then the walk has
+                                ; overwritten dskw_n83 many times over
+    jnc .named
+    mov ax, FERR_NAME
+    stc
+    ret
+.named:
+    mov si, dskw_rt_name        ; dskw_find matches through dskw_n83
+    mov di, dskw_n83
+    mov cx, 11
+    call dskw_rt_copy
+    call dskw_find
+    jc .out                     ; AX = FERR_NOENT / FERR_IO already
+    call dskw_ent_load
+    jc .out
+    mov al, [dskw_raw+DSK_R_ATTR]
+    test al, DSKW_NPROT
+    jnz .prot                   ; read-only, hidden, system or volume label
+    test al, DSKW_DIR
+    jz .prot                    ; a file: the caller wanted dskw_delete
+    mov ax, [dskw_raw+DSK_R_CLUS]
+    call dskw_rt_clchk
+    jc .corrupt
+    mov [dskw_rt_top], ax
+    call dskw_chdir_dl           ; into the folder we are about to empty
+    jc .ioerr
+
+    mov word [dskw_rt_guard], DSKW_RT_MAX
+.loop:
+    dec word [dskw_rt_guard]
+    jz .corrupt                 ; a cycle, or a tree past any real disk
+    call dskw_rt_scan           ; CF=1 = this directory holds nothing
+    jc .empty
+    cmp byte [dskw_rt_attr], 0x0F
+    je .lfn
+    test byte [dskw_rt_attr], DSKW_DIR
+    jnz .down
+    call dskw_dbody_n83         ; a file: delete it where we stand
+    jc .home                    ; FERR_PROT included - stop, and go home
+    jmp short .loop
+.lfn:
+    call dskw_rt_zap            ; an orphaned long-name fragment: no chain,
+    jc .home                    ; so the slot is the whole of it
+    jmp short .loop
+.down:
+    mov ax, [dskw_rt_clus]
+    call dskw_rt_clchk
+    jc .corrupt_home
+    call dskw_chdir_dl
+    jc .iohome
+    jmp short .loop
+
+.empty:
+    cmp byte [dskw_rt_ioerr], 0 ; the scan stopped on a read error: that is
+    jne .iohome                 ; not the same as a directory with nothing in
+    mov ax, [dsk_cwd]           ; it, and treating it as one would free the
+    cmp ax, [dskw_rt_top]       ; clusters of files we simply could not see
+    je .finish                  ; the folder the caller named is empty now
+    mov [dskw_rt_clus], ax      ; the child we are leaving...
+    call dsk_dotdot             ; ...and the parent the disk says it has
+    jc .corrupt_home
+    call dskw_chdir_dl
+    jc .iohome
+    call dskw_rt_byclus         ; find that child again, by cluster
+    jc .corrupt_home
+    call dskw_rmbody_n83        ; and remove it, emptiness re-checked
+    jc .home
+    jmp short .loop
+
+.finish:
+    call dskw_rt_go_home
+    jc .ioerr
+    mov si, dskw_rt_name
+    mov di, dskw_n83
+    mov cx, 11
+    call dskw_rt_copy
+    call dskw_rmbody_n83        ; the target itself, from where we began
+    ret
+
+.corrupt_home:
+    call dskw_rt_go_home
+.corrupt:
+    mov ax, FERR_IO
+    stc
+    ret
+.iohome:
+    call dskw_rt_go_home
+.ioerr:
+    mov ax, FERR_IO
+    stc
+    ret
+.prot:
+    mov ax, FERR_PROT
+    stc
+.out:
+    ret
+.home:                          ; a failure part-way down: report it from
+    push ax                     ; where the caller left us, not from wherever
+    call dskw_rt_go_home        ; the walk happened to stop
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_rt_go_home - put the volume back where dskw_rmtree was called
+; out: CF=1 = even that failed (the mount has landed at the root, SPEC 19.2)
+; clobbers: AX, CF
+; -----------------------------------------------------------------------------
+dskw_rt_go_home:
+    mov ax, [dskw_rt_home]
+    ; fall through
+
+; -----------------------------------------------------------------------------
+; dskw_chdir_dl - dsk_chdir on the drive that is mounted (module-internal)
+; in:  AX = the directory's first cluster; out: CF as dsk_chdir
+; clobbers: AX, CF
+; -----------------------------------------------------------------------------
+dskw_chdir_dl:
+    push dx
+    mov dl, [disk_drive]
+    call dsk_chdir
+    pop dx
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_rt_clchk - is AX a plausible first cluster?
+; in:  AX; out: CF=1 = no. Preserves AX.
+; -----------------------------------------------------------------------------
+dskw_rt_clchk:
+    cmp ax, 2
+    jb .bad
+    cmp ax, [dsk_maxclus]
+    ja .bad
+    clc
+    ret
+.bad:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_rt_copy - CX bytes from DS:SI to DS:DI (module-internal)
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+dskw_rt_copy:
+    push ax
+    push cx
+    push si
+    push di
+.b:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .b
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_rt_scan - the first entry of the CURRENT directory that is not '.',
+;                '..' or free
+; out: CF=0 with dskw_n83 = its 11 raw name bytes, [dskw_rt_attr] = its
+;      attribute and [dskw_rt_clus] = its first cluster; CF=1 = the directory
+;      holds nothing else (or could not be read - AX = FERR_IO then, and
+;      [dskw_rt_ioerr] says which)
+; clobbers: AX, CF
+;
+; Species rules are dskw_isempty's, because the two answers have to agree:
+; anything that routine calls "occupied" this one has to be able to name.
+; -----------------------------------------------------------------------------
+dskw_rt_scan:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov byte [dskw_rt_ioerr], 0
+    mov ax, LOW_SEG
+    mov es, ax
+    mov ax, [dsk_cwd]
+    call dsk_dirw_start
+.sector:
+    call dsk_dirw_next          ; AX = the next sector's LBA
+    jc .none                    ; the chain ended with nothing found
+    mov [dskw_rt_sec], ax
+    mov cx, 1
+    mov bx, dsk_secbuf
+    call disk_read
+    jc .ioerr
+    mov si, dsk_secbuf
+    mov cx, 16                  ; entries per sector
+.entry:
+    mov al, [es:si]
+    test al, al
+    jz .none                    ; end of directory: nothing past it counts
+    cmp al, 0xE5
+    je .next                    ; a deleted entry
+    cmp al, '.'
+    jne .found
+    mov al, [es:si+1]           ; a dot link's second byte is the other dot
+    cmp al, '.'                 ; or a pad space (SPEC.md 18.6)
+    je .next
+    cmp al, ' '
+    je .next
+.found:
+    mov di, dskw_raw            ; the WHOLE entry - dsk_copy_in halves the
+    mov cx, 32                  ; count into words, so 11 would drop a byte
+    call dsk_copy_in
+    mov ax, si                  ; publish where it is, exactly as dskw_find
+    sub ax, dsk_secbuf          ; does, so dskw_rt_zap can rewrite the slot
+    mov [dskw_doff], ax         ; without a name lookup (dskw_find refuses to
+    mov ax, [dskw_rt_sec]       ; match an LFN entry at all, by design)
+    mov [dskw_dsec], ax
+    mov si, dskw_raw
+    mov di, dskw_n83
+    mov cx, 11
+    call dskw_rt_copy
+    mov al, [dskw_raw+DSK_R_ATTR]
+    mov [dskw_rt_attr], al
+    mov ax, [dskw_raw+DSK_R_CLUS]
+    mov [dskw_rt_clus], ax
+    clc
+    jmp short .out
+.next:
+    add si, 32
+    loop .entry
+    jmp short .sector
+.ioerr:
+    mov byte [dskw_rt_ioerr], 1
+.none:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_rt_byclus - find the subdirectory of the CURRENT directory whose first
+;                  cluster is [dskw_rt_clus]
+; out: CF=0 with dskw_n83 = its 11 raw name bytes; CF=1 = no such entry
+; clobbers: AX, CF
+;
+; How the walk gets back the name of the folder it just emptied without
+; having carried one down. The cluster is the identity: two directory entries
+; cannot legitimately share one, and if a corrupt volume makes them, removing
+; either is removing the thing this cluster is.
+; -----------------------------------------------------------------------------
+dskw_rt_byclus:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, LOW_SEG
+    mov es, ax
+    mov ax, [dsk_cwd]
+    call dsk_dirw_start
+.sector:
+    call dsk_dirw_next
+    jc .none
+    mov cx, 1
+    mov bx, dsk_secbuf
+    call disk_read
+    jc .none
+    mov si, dsk_secbuf
+    mov cx, 16
+.entry:
+    mov al, [es:si]
+    test al, al
+    jz .none
+    cmp al, 0xE5
+    je .next
+    cmp al, '.'
+    je .next                    ; never the dot links, whatever they point at
+    test byte [es:si+DSK_R_ATTR], DSKW_DIR
+    jz .next
+    mov ax, [es:si+DSK_R_CLUS]
+    cmp ax, [dskw_rt_clus]
+    jne .next
+    mov di, dskw_raw            ; 32, not 11: dsk_copy_in copies WORDS
+    mov cx, 32
+    call dsk_copy_in
+    mov si, dskw_raw
+    mov di, dskw_n83
+    mov cx, 11
+    call dskw_rt_copy
+    clc
+    jmp short .out
+.next:
+    add si, 32
+    loop .entry
+    jmp short .sector
+.none:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_rt_zap - mark the entry dskw_n83 names deleted, and free no chain
+; out: CF=0, or CF=1 with AX = FERR_*
+; clobbers: AX, CF
+;
+; For an LFN fragment (attr 0x0F), whose FstClusLO is a name checksum field
+; and not a cluster. Marking the slot is the whole removal; going anywhere
+; near dskw_free_chain with that word would free somebody else's data.
+; -----------------------------------------------------------------------------
+dskw_rt_zap:
+    call dskw_ent_load          ; [dskw_dsec]/[dskw_doff], published by the
+    jc .out                     ; scan - dskw_find would refuse to look
+    mov byte [dskw_raw], 0xE5
+    mov byte [dskw_zapnext], 0
+    call dskw_ent_store
+    jc .out
+    call dskw_sync
+    xor ax, ax
+    clc
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1072,6 +1493,7 @@ dskw_dbody:
     stc
     ret
 .named:
+dskw_dbody_n83:                 ; dskw_n83 already filled (dskw_rmtree)
     call dskw_find
     jc .out
     call dskw_ent_load
@@ -2074,6 +2496,15 @@ dskw_lba:     resw 1            ; this cluster's first LBA
 dskw_cur:     resw 1            ; the cluster being written / read
 dskw_prev:    resw 1            ; the one before it, awaiting its link
 dskw_first:   resw 1            ; the new chain's head (0 = empty file)
+dskw_rt_home:  resw 1           ; dskw_rmtree: the directory it was called in
+dskw_rt_top:   resw 1           ; ...the folder it was asked to remove
+dskw_rt_clus:  resw 1           ; ...the entry the scan last named
+dskw_rt_guard: resw 1           ; ...iterations left (DSKW_RT_MAX)
+dskw_rt_attr:  resb 1           ; ...that entry's attribute byte
+dskw_rt_ioerr: resb 1           ; ...the scan ended on a read error
+dskw_rt_sec:   resw 1           ; ...the sector the scan is reading
+dskw_rt_name:  resb 12          ; ...the caller's name as 11 RAW bytes (the
+                                ; 12th keeps the buffer even-sized)
 dskw_oldclus: resw 1            ; the replaced chain's head, freed after the
                                 ; commit (0 = there was none)
 dskw_date:    resw 1            ; dskw_now: the FAT-encoded date...

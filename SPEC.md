@@ -2646,6 +2646,59 @@ where it was.
 two operations in the user's hands, in that order, and `os8088` will not
 guess at the second.
 
+
+### 18.7 `dskw_rmtree` — removing a subdirectory and everything under it
+
+`dskw_rmdir` refuses an occupied folder, which is the right answer for a
+primitive and the wrong answer for File > Delete — the Disk window is where a
+user deletes things, and "Protected" was all it could say about a folder with
+one file in it. `dskw_rmtree` is what that menu item calls now; the
+confirmation line says `+contents` when the target is a folder, and there is
+no undo on this system, which is exactly why the line is a confirmation and
+not a click.
+
+**It is iterative, and the stack it does not have is the disk's own.** A
+recursive descent would need a frame per level on a 1,536-byte task stack (§8)
+and a depth bound nobody could justify. Every subdirectory records its parent
+in its `..` entry (§19.2), so the walk goes down with `dsk_chdir` and comes
+back up with `dsk_dotdot`, carrying nothing between iterations but the
+volume's position. One rule, applied to whatever directory it is standing in:
+
+- a **file** → delete it (`dskw_dbody_n83`)
+- a **folder** → step into it (`dsk_chdir`)
+- **nothing** → step out, and remove the folder just emptied
+
+The folder just left is re-found in the parent **by its first cluster**
+(`dskw_rt_byclus`), not by a name the walk would have had to carry: the
+cluster is what it already holds, and it cannot be ambiguous the way a name
+that failed to convert to 8.3 could.
+
+Four properties are load-bearing:
+
+- **Every removal still goes through `dskw_rmbody_n83`**, which re-runs the
+  emptiness scan. If the scan in `dskw_rt_scan` and the one in `dskw_isempty`
+  ever disagreed, the outcome is a refusal — never a lost subtree.
+- **A protected file stops it.** `dskw_dbody_n83` still refuses read-only,
+  hidden and system entries, so a tree containing one stops there, partially
+  deleted, with `FERR_PROT`. That is what any `rm -r` does when it meets a
+  permission it does not have, and it is much better than silently removing
+  files another operating system marked.
+- **LFN fragments are removed, and only they are removed by slot.** An entry
+  whose attribute is exactly 0x0F carries no cluster chain — its FstClusLO is
+  part of a checksum field — so `dskw_rt_zap` marks the slot 0xE5 and frees
+  nothing. `dskw_find` refuses to match an LFN entry at all (§18.4), which is
+  why the scan publishes `[dskw_dsec]`/`[dskw_doff]` itself and the zap works
+  from the location rather than the name. Without this, no folder a host wrote
+  a long name into could ever be deleted — which is most of them.
+- **`DSKW_RT_MAX` (4,096 iterations) bounds the whole operation.** A cyclic
+  `..` link looks exactly like a legitimate one from where the walk stands, so
+  a guard is the only answer; no real floppy can reach it.
+
+An unreadable directory is not an empty one: the scan records the I/O error
+and the walk fails rather than freeing the clusters of files it could not see.
+Whatever happens — success, refusal, or a read error half way down — the
+volume is put back in the directory the call started in.
+
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
 The data floppy (drive B:) is a standard **FAT12** volume — mountable and
