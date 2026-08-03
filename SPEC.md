@@ -143,6 +143,10 @@ task stacks) or **ES** (the disk buffers), never DS:
   back into the kernel segment (§18). `dsk_secbuf` is also the write
   path's staging sector (§18.4): the directory sector being
   read-modify-written, and the zero-padded final sector of a file.
+- `dsk_dmabuf` (512 bytes) — the 64KB-DMA-page staging sector (§18.1). It
+  lives here precisely because everything in `LOW_SEG` is far from a page
+  boundary, so a transfer through it can never be the thing it exists to
+  prevent.
 
 `LOW_SEG:0x8000` **is** `KERNEL_SEG:0x0000`. Every `LOW_SEG` offset must stay
 strictly below `LOW_LIMIT`, and the §15.1 assertions keep task 0 8KB of
@@ -2444,9 +2448,38 @@ disks work: `disk_spt` (word), `disk_heads` (word) — loaded from the
 validated BPB at mount (§18.2 rules 11/12), restored to the 9/2 fallback on
 any mount failure. LBA→CHS: cyl = LBA/(spt×heads); rem = LBA%(spt×heads);
 head = rem/spt; sector = rem%spt + 1. Transfers go **one sector per int 13h
-call** (AL=1) — no multi-sector calls, so track boundaries and DMA
-alignment never matter. Each sector: up to 3 attempts, with AH=00 reset on
-failure between attempts.
+call** (AL=1) — no multi-sector calls, so track boundaries never matter.
+Each sector: up to 3 attempts, with AH=00 reset on failure between
+attempts, all in `dsk_try` so the retry policy exists once.
+
+**The 64KB DMA page rule (binding).** One sector per call is *not* enough to
+make DMA alignment a non-issue, and this section said for a long time that it
+was. The floppy controller transfers through the 8237, whose 16-bit address
+register is paired with a **page register that does not increment**: a
+transfer may not cross a 64KB PHYSICAL boundary, and a BIOS asked to do it
+anyway answers AH=09h instead of wrapping the buffer. A single 512-byte
+transfer straddles iff the low 16 bits of its linear address exceed
+0x10000−512 — which `dsk_xfer` computes as `(ES << 4) + BX` in 16-bit
+arithmetic, the wrap *being* the mod-64K the test wants, so no 20-bit
+arithmetic is needed on an 8086.
+
+When it would straddle, the sector goes through **`dsk_dmabuf`**, a 512-byte
+staging sector of its own in `.lowbss` (linear 0x08000.., where nothing can
+straddle): a read lands there and is copied out, a write is copied in and
+sent from there. Its own buffer and not `dsk_secbuf`, because `dsk_secbuf` is
+live across a whole `dskw_*` operation and this runs *inside* one. The cost
+is one extra 512-byte copy at most once per 64KB of transfer.
+
+This is a KERNEL obligation, not a caller's. ES:BX is caller memory — since
+§18.4 that means a *package's* memory, and since §2.6 a package's memory can
+be an arena grant at any paragraph. Nothing in the ES:BX contract mentions
+alignment and nothing should: an application cannot be asked to know about
+the 8237. The bug hid for as long as it did because every earlier buffer was
+512-aligned by accident — package regions are 32-paragraph aligned with
+32-paragraph sizes, so a package's bss starts on a 512 boundary — and the
+first buffer that was not was a bitmap editor's undo image, `pt_base +
+pt_smaxp` paragraphs up, which reported "Disk error" on every load of a file
+long enough to reach the next page boundary.
 
 `disk_read` and `disk_write` are the same routine: both set `[dsk_op]` (02h
 read / 03h write) and fall into the module-internal `dsk_xfer`, so the CHS

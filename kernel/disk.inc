@@ -176,22 +176,49 @@ dsk_xfer:
     mov dh, al                  ; DH = head
     mov dl, [disk_drive]        ; DL = drive
 
-    mov bp, 3                   ; attempts left for this sector
-.attempt:
-    mov ah, [dsk_op]            ; 02 read / 03 write
-    mov al, 1                   ; one sector per call, to ES:BX
-    int 0x13
-    jnc .ok
-    mov [dsk_ioerr], ah         ; keep the status for diskw.inc's mapping
-    cmp ah, 0x03
-    je .fail                    ; write-protected: retrying cannot help
-    mov ah, 0x00                ; failed: reset the controller and retry
-    mov dl, [disk_drive]
-    int 0x13
-    dec bp
-    jnz .attempt
-    jmp short .fail             ; 3 strikes: unrecoverable
-
+    ; --- the 64KB DMA page rule (SPEC.md 18.1) ------------------------------
+    ; The floppy controller transfers through the 8237, whose address
+    ; register is 16 bits plus a separate PAGE register that DOES NOT
+    ; INCREMENT: a transfer may not cross a 64KB PHYSICAL boundary, and a
+    ; BIOS that is asked to anyway answers AH=09h rather than wrapping the
+    ; buffer. ES:BX is caller memory here - a package's, since SPEC.md 18.4
+    ; - so this is not a rule the caller can be asked to know.
+    ;
+    ; A 512-byte transfer straddles iff the low 16 bits of its linear
+    ; address exceed 0x10000-512. Those bits are (ES << 4) + BX computed in
+    ; 16 bits, where the wrap IS the mod-64K the test wants, so no 20-bit
+    ; arithmetic is needed on an 8086.
+    mov ax, es
+    shl ax, 1                   ; NOT `mov cl,4` + `shl ax,cl`: CL is the
+    shl ax, 1                   ; SECTOR number, computed six instructions
+    shl ax, 1                   ; ago and needed by the int 13h below
+    shl ax, 1                   ; (the low 16 bits of ES:0000, mod 64K)
+    add ax, bx                  ; ...and of ES:BX (the carry out is the page,
+    cmp ax, 0x10000 - 512       ; which is exactly what we must not change)
+    ja .bounce                  ; ends past this page: go the long way round
+    call dsk_try                ; ES:BX, three attempts; CF=1 = give up
+    jc .fail
+    jmp short .ok
+.bounce:
+    ; Through dsk_dmabuf in LOW_SEG, which is 512-aligned inside linear
+    ; 0x08000..0x0CFFF and can therefore never straddle anything. One extra
+    ; 512-byte copy, at most once per 64KB of transfer.
+    push es
+    push bx
+    cmp byte [dsk_op], 0x03     ; a WRITE has to stage its data first...
+    jne .bounce_go
+    call dsk_bounce_out
+.bounce_go:
+    mov ax, LOW_SEG
+    mov es, ax
+    mov bx, dsk_dmabuf
+    call dsk_try
+    pop bx                      ; POP touches no flags: dsk_try's CF is still
+    pop es                      ; the live answer at the jc below
+    jc .fail
+    cmp byte [dsk_op], 0x03
+    je .ok                      ; ...and a READ has to fetch it afterwards
+    call dsk_bounce_in
 .ok:
     add bx, 512                 ; advance destination
     inc di                      ; next LBA
@@ -212,6 +239,101 @@ dsk_xfer:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_try - one sector at ES:BX, CHS already in CH/CL/DH, three attempts
+; in:  ES:BX = the buffer, CH/CL/DH = CHS, [dsk_op] = 02 read / 03 write
+; out: CF = 0 done; CF = 1 unrecoverable, [dsk_ioerr] = the last BIOS status
+; clobbers: AX, BP, DL and the flags (the dsk_xfer body's own set)
+;
+; Factored out of dsk_xfer's loop when the bounce path arrived: the retry
+; policy must be identical whether the buffer is the caller's or the DMA
+; staging one, and two copies of it would eventually stop being identical.
+; -----------------------------------------------------------------------------
+dsk_try:
+    mov bp, 3                   ; attempts left for this sector
+.attempt:
+    mov ah, [dsk_op]            ; 02 read / 03 write
+    mov al, 1                   ; one sector per call, to ES:BX
+    mov dl, [disk_drive]        ; a retry's controller reset takes DL, and
+    int 0x13                    ; some BIOSes do not give it back
+    jnc .ok
+    mov [dsk_ioerr], ah         ; keep the status for diskw.inc's mapping
+    cmp ah, 0x03
+    je .bad                     ; write-protected: retrying cannot help
+    mov ah, 0x00                ; failed: reset the controller and retry
+    mov dl, [disk_drive]
+    int 0x13
+    dec bp
+    jnz .attempt
+.bad:
+    stc
+    ret
+.ok:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_bounce_in  - dsk_dmabuf -> the caller's ES:BX (after a read)
+; dsk_bounce_out - the caller's ES:BX -> dsk_dmabuf (before a write)
+; in:  ES:BX = the caller's sector
+; out: nothing; both preserve EVERY register and the flags
+;
+; DS is swapped to the far end for the move, so no kernel variable is
+; readable in either body - the dsk_copy_in discipline (SPEC.md 18). Both
+; ends are word-aligned 512-byte buffers, so `rep movsw` moves 256 words.
+; -----------------------------------------------------------------------------
+dsk_bounce_in:
+    pushf
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    pop ds                      ; DS = the caller's segment...
+    push ds
+    pop es                      ; ...and ES with it: this is a DS->ES move
+    mov di, bx                  ; ES:DI = the caller's sector
+    mov ax, LOW_SEG             ; DS:SI = the staging buffer
+    mov ds, ax
+    mov si, dsk_dmabuf
+    mov cx, 256
+    cld
+    rep movsw
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop ax
+    popf
+    ret
+
+dsk_bounce_out:
+    pushf
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    push es
+    pop ds                      ; DS:SI = the caller's sector
+    mov si, bx
+    mov ax, LOW_SEG             ; ES:DI = the staging buffer
+    mov es, ax
+    mov di, dsk_dmabuf
+    mov cx, 256
+    cld
+    rep movsw
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop ax
+    popf
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1343,6 +1465,11 @@ disk_icons: resb 2048           ; 32 harvested icon slots x 64 bytes; slot i
                                 ; no icon; fully rewritten every mount
 dsk_secbuf: resb 512            ; sector scratch: BPB read, root-dir scan,
                                 ; icon harvest, and the loader's header peek
+dsk_dmabuf: resb 512            ; the 64KB-DMA-page staging sector (dsk_xfer).
+                                ; Its own: dsk_secbuf is live across a whole
+                                ; dskw_* operation, and this is used INSIDE
+                                ; one. LOW_SEG puts it at linear 0x08000+,
+                                ; where nothing can straddle a page.
 
 section .bss
 

@@ -91,7 +91,7 @@ a closed Paint left a stale magic word behind) are gone outright. A closed
 Paint's grant is force-freed by the kernel, which is the only thing that
 could have freed it: nothing tells a task-less package it is closing.
 
-**One bug this shook out of the kernel, worth knowing.** `ld_alloc` reserves
+**Two bugs this shook out of the kernel, worth knowing.** `ld_alloc` reserves
 a package's region at SPEC.md §21 step 5, but the instance record is not
 published until step 10, after the entry proc returns. Paint was the first
 package to call `OSAPI_MEM_ALLOC` from its entry — and the allocator, whose
@@ -99,6 +99,18 @@ only evidence is `I_STATE`, handed it `ARENA_SEG`: the segment it was
 executing in. It filled its canvas with white and the machine wedged
 mid-repaint on the first `0xFF` opcode, gfx lock held. `cm_hold`/`cm_unhold`
 (SPEC.md §2.6) is the reservation for that window.
+
+And the canvas is the first disk buffer in the tree that is not 512-aligned
+by accident. `dsk_xfer` does one sector per int 13h call, which the spec took
+to mean "DMA alignment never matters" — but the 8237's page register does not
+increment, so a single 512-byte transfer that straddles a 64KB physical
+boundary is refused with AH=09h. The undo image sits `pt_smaxp` paragraphs
+above the grant base, `pt_smaxp` is an arbitrary paragraph count, and opening
+any file long enough to reach the next page boundary answered "Disk error".
+`dsk_xfer` now stages such a sector through `dsk_dmabuf` in `LOW_SEG`
+(SPEC.md §18.1). Worth knowing because it is the caller's *address*, not its
+size or its content, that decides — so it reproduces on exactly one file in
+several and looks like flaky hardware.
 
 ## The three capabilities whose absence cost the most
 
