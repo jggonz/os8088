@@ -7583,3 +7583,154 @@ pile owns its rectangle — so a move that puts it up **or takes it down** costs
 the whole content instead. `sol_checkwin` therefore clears the flag as well as
 setting it: a won game is not a dead end, the foundations can still be dragged
 back off, and `sol_domove` tests the flag on both sides of the check.
+
+## 44. Arkanoid — the ninth package (apps/arkanoid/arkanoid.asm)
+
+A brick-breaker over the published package ABI. Prefix `ark_`, embedded icon,
+**no kernel change of any kind**. Directory order on the apps disks stays
+pinned; arkanoid is appended last. `ARKANOID` is exactly eight characters, so
+unlike `SOLITAIR.O88` the file name needs no truncating.
+
+### 44.1 The game is the worker task
+
+A ball has to keep moving between keystrokes, and a window callback only runs
+when something happens to the window, so the loop lives in `ark_worker`
+(§20.6) — the same shape as apps/fractal. One frame per `osapi_task_sleep 1`,
+about 18 fps. The sleep is the frame rate *and* what keeps the machine usable:
+a worker that spun would starve the UI task it shares the scheduler with.
+
+Everything the UI task does is set a word the worker reads — `[ark_launch]`,
+`[ark_pdir]`, `[ark_pkeep]` — with no protocol at all, because the 8086
+recognises interrupts only at instruction boundaries and every one of them is
+a plain word access. It is the same no-lock sharing apps/fractal uses for its
+restart flag.
+
+`ark_render` is the one lock hold per frame, and it obeys rule 5: re-read the
+origin (the window may have been dragged while we slept), check `W_FLAGS`
+bit 1, then `osapi_wm_clip_set`. CF=1 means not one pixel shows, so the frame
+is skipped and the game keeps running invisibly — what the kernel's own Bounce
+does. `[ark_full]` survives a skip, so whatever repaint was owed still happens
+on the first frame that shows.
+
+### 44.2 The keyboard has no key-up, so the paddle glides on a deadline
+
+int 16h delivers keypresses and nothing else, so "is left held" cannot be
+asked. Each arrow key sets a direction and refills `[ark_pkeep]` with a
+deadline in **ticks**; the worker moves the paddle while the deadline lasts and
+decrements it. Typematic repeat keeps refilling it, so a held key glides and a
+tap is one short nudge.
+
+Two constants are load-bearing. `ARK_PKEEP` is 11 ticks because the BIOS
+typematic **delay** is about 9 — a shorter deadline makes a held key stall for
+half a second before the first repeat arrives, which reads as the game
+ignoring the keyboard. And a repeat that arrives *while the deadline still
+stands* is the only available evidence that the key is held rather than
+tapped, which is what promotes the paddle from `ARK_PSTEP` to `ARK_PFAST`.
+
+The `or al, al` gate on the scan code is not optional: the numeric keypad
+sends '4' and '6' with the arrow scan codes, so without it typing a digit
+steers the paddle — the trap apps/notepad documents.
+
+### 44.3 The ball steps one pixel at a time
+
+`ark_do_ball` walks the velocity with Bresenham, one axis per step, testing
+after **each single pixel** — not one jump of (vx,vy) per frame. At four
+pixels a tick a whole-vector jump steps straight over a brick's edge and out
+the other side, and the ball tunnels through what it should have bounced off.
+
+Stepping buys a second property that the drawing depends on: the ball is never
+*inside* anything, because `ark_move1` reflects instead of taking the step that
+would put it there. That is what lets the ball be erased with a plain
+background fill. The one thing that can still overlap it is the **paddle**,
+which moves under a parked ball, so the paddle is redrawn whenever the erased
+rect reaches its lane. `ark_reflect` needs no geometry for the same reason:
+exactly one coordinate changed, so that is the axis to reverse.
+
+### 44.3.1 The paddle reflects, it does not re-launch
+
+A paddle bounce **mirrors** — `vy` flips to `-[ark_vymag]` and `vx` is *kept* —
+and then two things are **added** to the vx it kept:
+
+- **Where along the paddle it landed**, `ark_zbias`, five zones of −2..+2.
+- **How the paddle itself was moving**, `ark_english`, −2..+2 from
+  `[ark_pvel]` — the pixels the paddle actually moved that frame, measured
+  after its rail clamps so a paddle pinned against a rail imparts nothing.
+
+The sum is clamped to ±`ARK_VXMAX`, because vx accumulates across bounces and
+without a ceiling a rally converges on horizontal and stops coming down.
+
+This replaced a zone table that **assigned** both components outright, and the
+difference is the whole feel of the game: with the old table a ball arriving
+steeply from the left and one drifting in from the right left the paddle
+identically if they landed in the same zone, so a rally had no continuity and
+read as arbitrary. `[ark_vymag]` exists for the same reason — it is the
+authority on the rally's vertical speed, so a bounce restores the tempo it
+already had instead of inventing one per zone, and it is the single number
+Slow reduces.
+
+**The serve is thrown, not aimed.** `ark_throw` gives it `vx` from
+`[ark_pvel]` at twice `ark_english`'s weight, because a serve has no incoming
+direction to build on — the flick *is* the aim. A paddle standing still serves
+straight up, which is honest rather than a hidden default: the player who
+wants an angle flicks, and the one who does not chooses after the first
+bounce. It also means the ball can be walked along the paddle before release.
+
+Measured on the running game (with `ark_zbias` zeroed, so only preservation
+and english can move vx): a stationary serve leaves with dx exactly 0; a
+serve flicked right leaves at +21px per 0.18s sample and one flicked left at
+−21; `|vy|` holds at 3px a frame across fifty-five samples and every kind of
+bounce, where the old table would have swung it between 2 and 4 per zone; and
+a ball that arrives at vx=0 leaves a paddle held right at vx=+2, which is
+`ark_english` exactly.
+
+### 44.4 Powerups
+
+One broken brick in `ARK_PUCHANCE` drops a capsule, up to three falling at
+once; catching it with the paddle applies it. Five kinds: **E** expand, **C**
+catch (the ball sticks until Space), **L** laser (Space fires, two bolts at a
+time, each breaking one brick), **S** slow, **X** extra life.
+
+A capsule is identified by the **letter** drawn on it from the kernel font,
+not by its colour — five colours cannot survive §39.4's reduction to three
+inks. Its height must *contain* that glyph: an 8px letter drawn one row into
+an 8px box hangs a row below the rect that erases it, and every frame leaves a
+slice of the last one behind. The laser bolt spawns clear of the paddle for
+the same class of reason — spawned *on* it, the bolt's first erase punches a
+hole in the paddle it was fired from.
+
+### 44.5 Sound comes from the worker
+
+Every game event is a duration-limited `osapi_snd_tone` (§34): the rails and
+ceiling, the paddle, a chipped brick, a broken one, the serve, a caught
+capsule, the laser, a lost life, a cleared wall.
+
+**Calling it from a worker is correct by construction**, and the SDK's
+worker-safe list did not say so until this package needed it. `snd_req_inst`
+(§34.3) stamps a grant with `[snd_inst]` when a callback is being dispatched
+and with the **running task's own `T_INST`** when one is not — which is
+exactly the worker's case — so the tone is attributed to this instance and
+`snd_release_inst` releases it at teardown like any other. A duration-limited
+tone self-expires through `snd_tick`, so the worker never has to come back and
+turn it off. `osapi_snd_play` stays UI-task-only for a different reason: it
+runs the clip with the scheduler locked, so a worker calling it freezes the
+desktop rather than merely misattributing a grant.
+
+A refusal (CF=1, something louder owns the speaker) is ignored on purpose:
+sound is decoration here, and a game that stalled for it would be worse than a
+quiet one.
+
+### 44.6 Two metric sets, and a palette that cannot go black
+
+24x10 bricks over six rows on VGA and Hercules, 20x7 over five on CGA's 200
+rows, chosen by screen height exactly as apps/solitaire chooses cards, with
+the paddle, the ball and the strip all scaling with them.
+
+The brick palette is **not** a free choice. Everything is drawn on a black
+field, so a row colour from §39.4's black class (0..6) makes that whole row
+invisible on a 1bpp adapter — which is what `CBROWN` did to row 1 until a CGA
+screenshot showed the row missing. The table is therefore drawn only from the
+white class (12, 14, 15) and the dither class (7..11, 13), and alternates
+between them so two touching rows stay apart once colour has reduced to three
+inks. The rest of the palette follows the same rule: a two-hit brick carries a
+white **notch** rather than a second colour, and an armed paddle grows two
+**muzzles** rather than merely turning red.

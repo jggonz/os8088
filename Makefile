@@ -211,6 +211,22 @@ $(BUILD)/solitair.bin: apps/solitaire/solitaire.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/solitair.o88: $(BUILD)/solitair.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/solitair.bin -o $@
 
+# Arkanoid, the ninth shipped package (SPEC.md 44): a brick-breaker whose game
+# loop is a WORKER TASK (SPEC.md 20.6) rather than a callback, because a ball
+# has to keep moving between keystrokes. Arrow keys steer on a deadline (int
+# 16h has no key-up, so a held key is inferred from typematic repeat), the
+# capsules are caught with the paddle, and the PC speaker (SPEC.md 34) is
+# driven FROM the worker - which snd_req_inst attributes correctly by falling
+# back to the running task's instance. 'ARKANOID' is exactly eight characters,
+# so unlike SOLITAIR.O88 the file name needs no truncating.
+$(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/arkanoid/arkanoid.asm
+	@echo "arkanoid: $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/arkanoid.o88: $(BUILD)/arkanoid.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/arkanoid.bin -o $@
+
 # FILETEST, the file-API gate package (SPEC.md 18.4): drives the file slots
 # 0x0098..0x00A8 end to end (write, read-back, replace, rename, delete,
 # dfree, and the refusals). Never on the shipped apps disks - their
@@ -251,7 +267,7 @@ $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 tools/os88disk.py
 # everything after it moved down one row.)
 APPS := $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 \
         $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88 \
-        $(BUILD)/solitair.o88
+        $(BUILD)/solitair.o88 $(BUILD)/arkanoid.o88
 
 $(APPSIMG): $(APPS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(APPS)
