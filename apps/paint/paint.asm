@@ -276,8 +276,13 @@ pt_entry:
     jne .menus
     push ax
     mov al, 1                       ; resizable: the canvas IS the content, so
-    call OSAPI_WM_SIZABLE           ; dragging the grow box sizes the picture
-    pop ax                      ; a notice window gets the menu bar too,
+    cmp byte [pt_haveundo], 0       ; dragging the grow box sizes the picture -
+    jne .sizable                    ; except with no undo image to stage the
+    xor al, al                      ; old picture in, when the size is fixed
+.sizable:
+    call OSAPI_WM_SIZABLE
+    pop ax
+    call pt_menufix                 ; and the menus say what is unavailable                      ; a notice window gets the menu bar too,
                                     ; so its name shows and File/Edit are
                                     ; visibly inert rather than absent
     pushf                           ; the CF wm_create owes the loader rides
@@ -343,7 +348,11 @@ pt_geom:
     mov byte [pt_mode], PT_M_SMALL
     mov word [pt_cwmax], PT_CW_MIN  ; the window will only carry a notice, but
     mov word [pt_chmax], PT_CH_MIN  ; the arithmetic below still has to run
-    ; --- what memory allows -------------------------------------------------
+    ; --- what memory allows, and what has to be given up to fit -------------
+    ; Three tiers, in the order the features are worth least: the clipboard
+    ; goes first, then undo. Each is a whole canvas's worth of paragraphs (the
+    ; clipboard a fixed floor), so dropping one is what lets a machine that can
+    ; hold a picture but not two of them run the program at all.
 .mem:
     int 0x12                        ; AX = KB of conventional memory
     cmp ax, PT_MEMTOP
@@ -357,18 +366,37 @@ pt_geom:
     mov [pt_scseg], ax              ; scratch: the claim record + fill stack
     sub ax, PT_BASE
     jbe .nomem
+    mov byte [pt_haveundo], 1
+    mov byte [pt_haveclip], 1
     cmp ax, PT_CLIPMINP + 2 * PT_MINP
-    jb .nomem
+    jb .noclip
     sub ax, PT_CLIPMINP
     shr ax, 1                       ; canvas and undo image, equal halves
+    jmp short .split
+.noclip:
+    mov byte [pt_haveclip], 0       ; no Cut/Copy/Paste - and no GIF either, the
+    cmp ax, 2 * PT_MINP             ; codec's tables live in the clipboard
+    jb .noundo
+    shr ax, 1
+    jmp short .split
+.noundo:
+    mov byte [pt_haveundo], 0       ; no Undo/Redo, no resize (pt_resize stages
+    cmp ax, PT_MINP                 ; the old picture there) and no Open (so
+    jb .nomem                       ; does the file reader) - but the whole of
+                                    ; memory is canvas, so the picture is bigger
+.split:
     mov [pt_smaxp], ax
     mov dx, PT_BASE
     add dx, ax
     mov [pt_unseg], dx              ; the undo image, one whole canvas up
     add dx, ax
     mov [pt_cbseg], dx              ; the clipboard takes the remainder
-    mov ax, [pt_scseg]
+    xor ax, ax
+    cmp byte [pt_haveclip], 0
+    je .cbdone                      ; without one, its base is past the scratch
+    mov ax, [pt_scseg]              ; and its size is meaningless
     sub ax, dx
+.cbdone:
     mov [pt_cbparas], ax
     jmp short .first
 .nomem:
@@ -1163,6 +1191,8 @@ pt_umark:
     push di
     push bp
     push es
+    cmp byte [pt_haveundo], 0
+    je .out                         ; no undo image on this machine (SPEC 41.8)
     cmp byte [pt_undo_off], 0
     jne .out                        ; we ARE the undo: do not re-snapshot
     mov bx, ax                      ; BX = row counter
@@ -1746,7 +1776,19 @@ pt_draw_pal:
 ; second full repaint. This is content, painted by the same pass that adopted
 ; the new size, and it costs two font_str calls.
 ; -----------------------------------------------------------------------------
-PT_DIM_Y    equ PT_PAL_Y0 + 4 * PT_PAL_DY + 2   ; below the last button row
+PT_DIM_Y    equ PT_PAL_Y0 + 4 * PT_PAL_DY + 2
+; --- the size boxes, under the tools: two typable fields and Apply -------------
+; They need 41 rows below the last tool button, which a 110-row CGA canvas does
+; not have, so pt_szon decides per repaint whether they appear at all and the
+; two-line readout is what shows when they do not (SPEC.md 41.6).
+PT_SZ_Y     equ PT_DIM_Y            ; the width box's top row
+PT_SZ_DY    equ 13                  ; ...and the height box's, one pitch down
+PT_SZ_BH    equ 11                  ; box height (an 8px cell plus its border)
+PT_SZ_BX    equ 10                  ; box left: the label sits to its left
+PT_SZ_BW    equ 32                  ; three digits and a caret, framed
+PT_SZ_AY    equ PT_SZ_Y + 2 * PT_SZ_DY + 2
+PT_SZ_AH    equ 13                  ; the Apply button
+PT_SZ_END   equ PT_SZ_AY + PT_SZ_AH ; rows the whole group needs   ; below the last button row
 
 pt_draw_dims:
     push ax
@@ -1755,6 +1797,11 @@ pt_draw_dims:
     push dx
     push si
     push di
+    call pt_szon
+    jc .plain
+    call pt_szdraw                  ; room for the real thing
+    jmp .out
+.plain:
     mov ax, PT_DIM_Y + 17
     cmp ax, [pt_ch]
     jge .out                        ; a short window has no room for it
@@ -1790,6 +1837,304 @@ pt_draw_dims:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_szon - are the size boxes on screen?
+; out: CF=0 drawn and clickable, CF=1 not; preserves all registers
+;
+; One answer for the painter and the hit test both, which is what keeps a
+; control that is not drawn from being clickable.
+; -----------------------------------------------------------------------------
+pt_szon:
+    cmp byte [pt_haveundo], 0
+    je .no                          ; a fixed canvas has nothing to type into
+    push ax
+    mov ax, PT_SZ_END
+    cmp ax, [pt_ch]
+    pop ax
+    jg .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_szdraw - the two size boxes and the Apply button
+; out: nothing; preserves all registers
+;
+; A box that is being typed into shows its edit buffer and a caret; every other
+; box shows the live canvas size, so an abandoned edit is discarded the moment
+; the focus moves and there is no second copy of the truth to keep in step.
+; -----------------------------------------------------------------------------
+pt_szdraw:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov byte [pt_pen], CWHITE       ; a clean bed: 488 over 1024 would read as
+    xor ax, ax                      ; 4884 otherwise
+    mov bx, PT_SZ_Y
+    mov cx, PT_SEPX - 1
+    mov dx, PT_SZ_END - 1
+    call pt_cfill
+    mov byte [pt_szi], 1
+.box:
+    ; --- the value: typed, or the canvas's own --------------------------------
+    mov si, pt_wtxt
+    mov ax, [pt_cw]
+    cmp byte [pt_szi], 1
+    je .val
+    mov si, pt_htxt
+    mov ax, [pt_ch]
+.val:
+    mov [pt_szp], si
+    mov cl, [pt_fbox]
+    cmp cl, [pt_szi]
+    je .drawn
+    mov di, si
+    call pt_num
+    mov byte [di], 0
+.drawn:
+    mov ax, PT_SZ_Y
+    cmp byte [pt_szi], 1
+    je .at
+    add ax, PT_SZ_DY
+.at:
+    mov [pt_szy], ax
+    ; --- the label ------------------------------------------------------------
+    mov byte [pt_pen], CBLACK
+    mov si, pt_s_wlab
+    cmp byte [pt_szi], 1
+    je .lab
+    mov si, pt_s_hlab
+.lab:
+    mov cx, 1
+    mov dx, [pt_szy]
+    add dx, 2
+    call pt_ctext
+    ; --- the field ------------------------------------------------------------
+    mov ax, PT_SZ_BX
+    mov bx, [pt_szy]
+    mov cx, PT_SZ_BX + PT_SZ_BW - 1
+    mov dx, bx
+    add dx, PT_SZ_BH - 1
+    call pt_cframe
+    mov si, [pt_szp]
+    mov cx, PT_SZ_BX + 2
+    mov dx, [pt_szy]
+    add dx, 2
+    call pt_ctext
+    ; --- and the caret, on the box that has the keyboard ----------------------
+    mov cl, [pt_fbox]
+    cmp cl, [pt_szi]
+    jne .next
+    mov si, [pt_szp]
+    call OSAPI_FONT_WIDTH           ; AX = the digits' pixel width
+    add ax, PT_SZ_BX + 2
+    mov bx, [pt_szy]
+    inc bx
+    mov cx, ax
+    mov dx, bx
+    add dx, PT_SZ_BH - 3
+    call pt_cfill
+.next:
+    inc byte [pt_szi]
+    cmp byte [pt_szi], 3
+    jb .box
+    ; --- Apply, the full width of the column ----------------------------------
+    mov byte [pt_pen], CBLACK
+    xor ax, ax
+    mov bx, PT_SZ_AY
+    mov cx, PT_SEPX - 2
+    mov dx, bx
+    add dx, PT_SZ_AH - 1
+    call pt_cframe
+    mov si, pt_s_apply
+    mov cx, 1
+    mov dx, PT_SZ_AY + 3
+    call pt_ctext
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_szval - a NUL digit string at SI as a number
+; out: AX = the value, 0 if the string is empty; preserves all other registers
+; -----------------------------------------------------------------------------
+pt_szval:
+    push bx
+    push cx
+    push dx
+    push si
+    xor ax, ax
+    mov cx, 10
+.d:
+    mov bl, [si]
+    or bl, bl
+    jz .out
+    cmp bl, '0'
+    jb .out
+    cmp bl, '9'
+    ja .out
+    mul cx                          ; three digits at most, so DX stays 0
+    sub bl, '0'
+    xor bh, bh
+    add ax, bx
+    inc si
+    jmp short .d
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_szapply - the Apply button, and Enter in either box
+; in:  gfx lock held; out: nothing; preserves all registers
+;
+; The same pt_setsize a grow-box drag goes through, so the crop guard, the
+; clamps and the toast are all shared - typing 900 into a box on a machine that
+; cannot fund it is exactly a drag that asked for too much.
+; -----------------------------------------------------------------------------
+pt_szapply:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov byte [pt_fbox], 0
+    mov si, pt_wtxt
+    call pt_szval
+    or ax, ax
+    jnz .havew
+    mov ax, [pt_cw]                 ; an empty box means "leave this one"
+.havew:
+    mov bx, ax
+    mov si, pt_htxt
+    call pt_szval
+    or ax, ax
+    jnz .haveh
+    mov ax, [pt_ch]
+.haveh:
+    mov dx, ax
+    mov ax, bx
+    call pt_setsize
+    jc .refused
+    cmp byte [pt_szchg], 0
+    je .redraw                      ; nothing moved: just drop the caret
+    call pt_wfix                    ; the window follows the canvas...
+    mov bx, [pt_win]
+    call OSAPI_WM_FRONT             ; ...and one repaint shows both
+    jmp short .out
+.refused:
+    call pt_draw_dims               ; the boxes go back to the live size
+    mov si, pt_s_crop
+    call pt_msg_show
+    jmp short .out
+.redraw:
+    call pt_draw_dims
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_szkey - a keystroke into the focused size box
+; in:  AL = ascii; gfx lock held; out: nothing; preserves all registers
+;
+; Digits, backspace, Enter to apply and Escape to give up. The first digit after
+; a box is clicked REPLACES what is there ([pt_fresh]), which is what makes
+; retyping a size two keystrokes instead of four.
+; -----------------------------------------------------------------------------
+pt_szkey:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp al, 13
+    je .apply
+    cmp al, 27
+    je .cancel
+    cmp al, 8
+    je .bs
+    cmp al, '0'
+    jb .out
+    cmp al, '9'
+    ja .out
+    call pt_szbuf                   ; SI = this box's buffer
+    cmp byte [pt_fresh], 0
+    je .append
+    mov byte [si], 0
+    mov byte [pt_fresh], 0
+.append:
+    xor bx, bx
+.len:
+    cmp byte [si+bx], 0
+    je .put
+    inc bx
+    cmp bx, 3
+    jb .len
+    jmp short .out                  ; three digits covers the whole range
+.put:
+    mov [si+bx], al
+    inc bx
+    mov byte [si+bx], 0
+    call pt_draw_dims
+    jmp short .out
+.bs:
+    call pt_szbuf
+    mov byte [pt_fresh], 0
+    xor bx, bx
+.blen:
+    cmp byte [si+bx], 0
+    je .bcut
+    inc bx
+    jmp short .blen
+.bcut:
+    or bx, bx
+    jz .out
+    dec bx
+    mov byte [si+bx], 0
+    call pt_draw_dims
+    jmp short .out
+.cancel:
+    mov byte [pt_fbox], 0
+    call pt_draw_dims
+    jmp short .out
+.apply:
+    call pt_szapply
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; pt_szbuf - SI = the focused box's edit buffer; clobbers SI and flags
+pt_szbuf:
+    mov si, pt_wtxt
+    cmp byte [pt_fbox], 1
+    je .out
+    mov si, pt_htxt
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2329,6 +2674,8 @@ pt_click:
     mov bx, si
     call pt_org
     call pt_msg_hide
+    mov al, [pt_fbox]               ; a click may move the keyboard focus, and
+    mov [pt_fbold], al              ; the group has to be redrawn if it does
     sub cx, [pt_ox]                 ; -> content-relative
     sub dx, [pt_oy]
     mov ax, [pt_ch]                 ; the strip spans the WHOLE content width,
@@ -2341,14 +2688,21 @@ pt_click:
     call pt_pal_click
     jmp short .out
 .strip:
+    mov byte [pt_fbox], 0
     call pt_strip_click
     jmp short .out
 .canvas:
     sub cx, PT_CV_X                 ; -> canvas coords
     mov [pt_ax], cx
     mov [pt_ay], dx
+    mov byte [pt_fbox], 0
     call pt_canvas_click
 .out:
+    mov al, [pt_fbox]
+    cmp al, [pt_fbold]
+    je .done
+    call pt_draw_dims
+.done:
     pop di
     pop si
     pop dx
@@ -2390,6 +2744,7 @@ pt_pal_click:
     ; hit: switch tool
     call pt_text_end
     call pt_sel_drop
+    mov byte [pt_fbox], 0           ; and the size boxes lose the keyboard
     mov ax, di
     mov [pt_tool], al
     call pt_draw_pal
@@ -2399,6 +2754,43 @@ pt_pal_click:
     inc di
     cmp di, PT_NTOOL
     jb .tool
+    ; --- below the tools: the size boxes and Apply ---------------------------
+    call pt_szon
+    jc .drop
+    mov ax, [pt_hitx]
+    sub ax, PT_SZ_BX
+    js .apply
+    cmp ax, PT_SZ_BW
+    jge .apply
+    mov ax, [pt_hity]
+    sub ax, PT_SZ_Y
+    js .apply
+    cmp ax, PT_SZ_BH
+    jl .fw
+    sub ax, PT_SZ_DY
+    js .apply
+    cmp ax, PT_SZ_BH
+    jge .apply
+    mov byte [pt_fbox], 2
+    jmp short .focus
+.fw:
+    mov byte [pt_fbox], 1
+.focus:
+    mov byte [pt_fresh], 1          ; the first digit replaces the value
+    jmp short .out
+.apply:
+    mov ax, [pt_hity]
+    sub ax, PT_SZ_AY
+    js .drop
+    cmp ax, PT_SZ_AH
+    jge .drop
+    mov ax, [pt_hitx]
+    cmp ax, PT_SEPX - 1
+    jge .drop
+    call pt_szapply
+    jmp short .out
+.drop:
+    mov byte [pt_fbox], 0           ; anywhere else in the column
 .out:
     pop di
     pop dx
@@ -3591,7 +3983,9 @@ pt_urestore:
     push cx
     push dx
     push si
-    call pt_clip
+    cmp byte [pt_undo_ok], 0
+    je .out                         ; nothing was ever snapshotted: with no undo
+    call pt_clip                    ; image, backspace cannot uncover anything
     jc .out
     mov si, [pt_cy1]
 .row:
@@ -4213,6 +4607,11 @@ pt_onkey:
     call pt_org
     call pt_msg_hide
     mov ax, [pt_key]
+    cmp byte [pt_fbox], 0           ; a size box has the keyboard: it gets the
+    je .canvas                      ; digits, not the text tool
+    call pt_szkey
+    jmp .out
+.canvas:
     cmp al, 27
     je .esc
     cmp al, 8
@@ -4260,14 +4659,13 @@ pt_onkey:
     call pt_undo_cmd
     jmp short .out
 .copy:
-    call pt_copy
+    call pt_cmd_copy
     jmp short .out
 .cut:
-    call pt_copy
-    call pt_sel_clear
+    call pt_cmd_cut
     jmp short .out
 .paste:
-    call pt_paste
+    call pt_cmd_paste
 .out:
     pop di
     pop si
@@ -4343,7 +4741,7 @@ pt_oncmd:
     ret
 .save_gif:
     mov byte [pt_sfmt], 1
-    jmp short .save
+    jmp short .gifchk
 .save_bmp:
     mov byte [pt_sfmt], 0
 .save:
@@ -4356,14 +4754,30 @@ pt_oncmd:
     call pt_msg_show
     ret
 .save_go:
-    call pt_save
+    call pt_save                    ; pt_save only SETS the toast: the dialog's
+    mov si, [pt_msgp]               ; completion callback is what shows it on the
+    or si, si                       ; Save As path, and this path has none
+    jz .out
+    call pt_msg_show
     ret
 .open:
     mov al, FDLG_OPEN
     jmp short .dlg
 .saveas_gif:
     mov byte [pt_sfmt], 1
+    push ax
+    mov al, 1
+    call pt_gate
+    pop ax
+    jc .out
     jmp short .saveas
+.gifchk:
+    push ax
+    mov al, 1
+    call pt_gate
+    pop ax
+    jc .out
+    jmp short .save
 .saveas_bmp:
     mov byte [pt_sfmt], 0
 .saveas:
@@ -4392,12 +4806,11 @@ pt_oncmd:
 .undo:
     jmp pt_undo_cmd
 .cut:
-    call pt_copy
-    jmp pt_sel_clear
+    jmp pt_cmd_cut
 .copy:
-    jmp pt_copy
+    jmp pt_cmd_copy
 .paste:
-    jmp pt_paste
+    jmp pt_cmd_paste
 .clear:
     jmp pt_sel_clear
 ; --- Draw ------------------------------------------------------------------
@@ -4413,17 +4826,131 @@ pt_oncmd:
     call pt_setscale
     jmp pt_draw_strip
 
+; =============================================================================
+; What a smaller machine does without (SPEC.md 41.8)
+;
+; `pt_geom` decides once, from int 12h, and nothing can change it later: the
+; buffer bases are fixed from the largest canvas the machine can fund, so the
+; undo image is always big enough for any canvas `pt_fit` will allow and the
+; clipboard's size is a constant. There is deliberately no re-check on load or
+; resize - there is nothing that could have changed.
+;
+; The kernel's menus have no disabled state (SPEC.md 12.2), so an unavailable
+; command KEEPS its own label and gains "(Not Enough Ram)" after it - the item
+; still has to say what it would do - and the command itself answers with a
+; toast. Both doors have to be closed: the label is what the user sees, and the
+; toast is what the keyboard shortcut hits.
+;
+; Open is never one of them. The reader needs somewhere to put the file, and
+; when there is no undo image it borrows the scratch area's flood-fill stack,
+; which is idle during a load: 12KB still opens a small picture, and a file too
+; big for it comes back as the file API's own FERR_BIG.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; pt_menufix - relabel the commands this machine cannot run
+; out: nothing; preserves all registers
+;
+; The item tables are ordinary words in our own image, so this is a handful of
+; stores; the kernel reads them at draw time, so any point before the first
+; paint will do.
+; -----------------------------------------------------------------------------
+pt_menufix:
+    cmp byte [pt_haveclip], 0
+    jne .undo
+    mov word [pt_it_edit + 2 * PT_ME_CUT], pt_i_cut2
+    mov word [pt_it_edit + 2 * PT_ME_COPY], pt_i_copy2
+    mov word [pt_it_edit + 2 * PT_ME_PASTE], pt_i_paste2
+    mov word [pt_it_file + 2 * PT_MF_SAVEG], pt_i_saveg2
+    mov word [pt_it_file + 2 * PT_MF_SAVEAG], pt_i_saveag2
+.undo:
+    cmp byte [pt_haveundo], 0
+    jne .out
+    mov word [pt_it_edit + 2 * PT_ME_UNDO], pt_i_undo2
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gate - is this feature funded on this machine?
+; in:  AL = 0 undo / 1 clipboard
+; out: CF=0 go ahead; CF=1 and the toast is already up; preserves all registers
+; -----------------------------------------------------------------------------
+pt_gate:
+    push si
+    or al, al
+    jnz .clip
+    mov si, pt_s_nu
+    cmp byte [pt_haveundo], 0
+    jmp short .test
+.clip:
+    mov si, pt_s_nc
+    cmp byte [pt_haveclip], 0
+.test:
+    jne .ok
+    call pt_msg_show
+    pop si
+    stc
+    ret
+.ok:
+    pop si
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_cmd_copy / pt_cmd_cut / pt_cmd_paste - the gated Edit commands
+; in:  gfx lock held; out: nothing; preserves all registers
+;
+; One routine per command, reached by BOTH the menu item and the Ctrl key, so
+; the gate cannot be present on one path and missing on the other.
+; -----------------------------------------------------------------------------
+pt_cmd_copy:
+    push ax
+    mov al, 1
+    call pt_gate
+    jc .out
+    call pt_copy
+.out:
+    pop ax
+    ret
+
+pt_cmd_cut:
+    push ax
+    mov al, 1
+    call pt_gate
+    jc .out
+    call pt_copy
+    call pt_sel_clear
+.out:
+    pop ax
+    ret
+
+pt_cmd_paste:
+    push ax
+    mov al, 1
+    call pt_gate
+    jc .out
+    call pt_paste
+.out:
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; pt_undo_cmd - Undo, or Redo: the same exchange either way (Ctrl+Z, Edit menu)
 ; in:  gfx lock held; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
 pt_undo_cmd:
+    push ax
+    xor al, al
+    call pt_gate
+    jc .out
     call pt_text_end                ; Ctrl+Z lands mid-sentence otherwise, and
                                     ; the caret would be left on a picture that
                                     ; no longer has the text under it
     call pt_marq_hide
     call pt_undo_swap
     call pt_marq
+.out:
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -4464,9 +4991,47 @@ pt_track:
     push bx
     push cx
     push dx
-    mov ax, [pt_contw]
-    sub ax, PT_CV_X                 ; the canvas the content asks for
-    cmp ax, PT_CW_MIN
+    cmp byte [pt_haveundo], 0
+    jne .live
+    call pt_wfix                    ; no staging buffer: the frame is not
+    jmp short .out                  ; allowed to move the canvas at all
+.live:
+    mov ax, [pt_contw]              ; the canvas the content asks for
+    sub ax, PT_CV_X
+    mov dx, [pt_conth]
+    sub dx, PT_STRIP_H + 1
+    call pt_setsize
+    jnc .out
+    call pt_wfix                    ; the frame follows the canvas, not the drag
+    mov byte [pt_apend], 1          ; and the toast goes up at the END of this
+                                    ; paint, not here: the frame ui_grow already
+                                    ; drew is the wrong size, so one repaint is
+                                    ; owed, and a toast drawn before it would be
+                                    ; wiped by it (SPEC.md 41.6)
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_setsize - adopt a canvas size, or refuse it to save the artwork
+; in:  AX = wanted width, DX = wanted height (unclamped, may be negative)
+; out: CF=1 if a shrink was refused on either axis, [pt_szchg] = 1 if the canvas
+;      actually changed; preserves all registers
+;
+; The one place a size is decided, whichever way it was asked for: the grow box,
+; the Apply button, or Enter in a size box. Clamps to the screen, then to what
+; memory will fund, then to what the picture will stand to lose.
+; -----------------------------------------------------------------------------
+pt_setsize:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [pt_szchg], 0
+    cmp ax, PT_CW_MIN               ; signed: a tiny window makes this negative
     jge .w_ok
     mov ax, PT_CW_MIN
 .w_ok:
@@ -4474,8 +5039,6 @@ pt_track:
     jle .w_cap
     mov ax, [pt_cwmax]
 .w_cap:
-    mov dx, [pt_conth]
-    sub dx, PT_STRIP_H + 1
     cmp dx, PT_CH_MIN
     jge .h_ok
     mov dx, PT_CH_MIN
@@ -4504,31 +5067,26 @@ pt_track:
     mov byte [pt_kept], 1
 .h_ok2:
     cmp ax, [pt_cw]
-    jne .change
+    jne .go
     cmp dx, [pt_ch]
-    jne .change
-    cmp byte [pt_kept], 0           ; nothing moved: was that a refusal?
-    je .out
-    jmp short .refuse
-.change:
+    je .done                        ; nothing moved; [pt_kept] says whether
+.go:                                ; that was a refusal
     call pt_resize
     mov ax, [pt_ch]                 ; a canvas memory would not fund leaves the
     inc ax                          ; strip where the canvas ends, not where
     mov [pt_stripy], ax             ; the window ends - pt_org ran before this
-    cmp byte [pt_kept], 0
-    je .out
-.refuse:
-    call pt_wfix                    ; the frame follows the canvas, not the drag
-    mov byte [pt_apend], 1          ; and the toast goes up at the END of this
-                                    ; paint, not here: the frame ui_grow already
-                                    ; drew is the wrong size, so one repaint is
-                                    ; owed, and a toast drawn before it would be
-                                    ; wiped by it (SPEC.md 41.6)
-.out:
+    mov byte [pt_szchg], 1
+.done:
     pop dx
     pop cx
     pop bx
     pop ax
+    cmp byte [pt_kept], 0
+    je .clc
+    stc
+    ret
+.clc:
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -4979,6 +5537,11 @@ pt_save:
     mov si, pt_name
     cmp byte [pt_sfmt], 0
     je .bmp
+    cmp byte [pt_haveclip], 0       ; the LZW tables live in the clipboard
+    jne .gif
+    mov word [pt_msgp], pt_s_ng
+    jmp .out
+.gif:
     call pt_gif_out
     jmp .out
 .bmp:
@@ -5027,6 +5590,8 @@ pt_load:
     push di
     push es
     mov word [pt_msgp], pt_s_opened
+    cmp byte [pt_haveundo], 0
+    je .scratch
     mov ax, [pt_unseg]              ; the file is staged in the UNDO image: it
     mov es, ax                      ; is the biggest single buffer we have, and
     xor bx, bx                      ; a load invalidates undo anyway
@@ -5038,6 +5603,17 @@ pt_load:
 .cap:
     mov cl, 4
     shl cx, cl
+    jmp short .rd
+.scratch:
+    ; No undo image (SPEC.md 41.8), so the scratch area lends its flood-fill
+    ; stack - idle during a load, and re-initialised by the next fill. One
+    ; paragraph in, so the claim record survives, and the buffer still starts at
+    ; offset 0 of a segment, which is what both decoders assume.
+    mov ax, [pt_scseg]
+    inc ax
+    mov es, ax
+    xor bx, bx
+    mov cx, PT_SC_KB * 1024 - 16
 .rd:
     call OSAPI_FILE_READ
     jnc .got
@@ -5049,7 +5625,7 @@ pt_load:
     cmp word [es:0], 0x4D42         ; 'BM'
     je .bmp
     cmp word [es:0], 0x4947         ; 'GI'
-    je .gif
+    je .gifin
     cmp word [es:0], 0xD8FF         ; JPEG SOI
     je .nofmt
 .bad:
@@ -5057,6 +5633,11 @@ pt_load:
     jmp short .out
 .nofmt:
     mov word [pt_msgp], pt_s_nofmt
+    jmp short .out
+.gifin:
+    cmp byte [pt_haveclip], 0       ; the LZW tables live in the clipboard
+    jne .gif
+    mov word [pt_msgp], pt_s_ng
     jmp short .out
 .gif:
     call pt_gif_in                  ; the magic decides, not the extension
@@ -6769,6 +7350,12 @@ pt_g_magic:   db 'GIF87a'
 pt_gstep:     db 8, 8, 4, 2         ; the interlaced row passes: step...
 pt_gstart:    db 0, 4, 2, 1         ; ...and where each one starts
 pt_s_crop:   db 'Would crop artwork - erase it first', 0
+pt_s_wlab:   db 'W', 0
+pt_s_hlab:   db 'H', 0
+pt_s_apply:  db 'Apply', 0
+pt_s_nu:     db 'Not enough RAM for undo here', 0
+pt_s_nc:     db 'Not enough RAM for the clipboard', 0
+pt_s_ng:     db 'Not enough RAM for GIF here', 0
 
 ; --- the window template (SPEC.md 11; x/y/w/h patched by pt_geom) -------------
 pt_tpl:
@@ -6801,6 +7388,13 @@ pt_i_save:   db 'Save Bmp', 0
 pt_i_saveas: db 'Save as Bmp...', 0
 pt_i_saveg:  db 'Save Gif', 0
 pt_i_saveag: db 'Save as Gif...', 0
+; --- and the same items on a machine that cannot fund them (SPEC.md 41.8) -----
+pt_i_undo2:   db 'Undo / Redo (Not Enough Ram)', 0
+pt_i_cut2:    db 'Cut (Not Enough Ram)', 0
+pt_i_copy2:   db 'Copy (Not Enough Ram)', 0
+pt_i_paste2:  db 'Paste (Not Enough Ram)', 0
+pt_i_saveg2:  db 'Save Gif (Not Enough Ram)', 0
+pt_i_saveag2: db 'Save as Gif (Not Enough Ram)', 0
 pt_i_undo:   db 'Undo / Redo', 0
 pt_i_cut:    db 'Cut', 0
 pt_i_copy:   db 'Copy', 0
@@ -7130,6 +7724,17 @@ pt_ic_text:
     PTBYTE pt_wchg                  ; the window was resized: repaint the lot
     PTBYTE pt_kept                  ; a resize was refused to save the artwork
     PTBYTE pt_apend                 ; ...and the notice for it is owed
+    PTBYTE pt_haveundo              ; this machine can fund an undo image...
+    PTBYTE pt_haveclip              ; ...and a clipboard (SPEC.md 41.8)
+    PTBYTE pt_fbox                  ; the size box with the keyboard, 0 = none
+    PTBYTE pt_fbold                 ; ...as it was before this click
+    PTBYTE pt_fresh                 ; the next digit replaces the value
+    PTBYTE pt_szi                   ; pt_szdraw's box counter
+    PTBYTE pt_szchg                 ; pt_setsize moved the canvas
+    PTWORD pt_szy                   ; the box being drawn: its top row...
+    PTWORD pt_szp                   ; ...and the text it shows
+    PTBUF  pt_wtxt, 4               ; the two edit buffers, three digits and a
+    PTBUF  pt_htxt, 4               ; NUL
     PTBYTE pt_lwn                   ; pt_lose_w: the boundary nibble matters
     PTBYTE pt_sfmt                  ; the save verb's format: 0 BMP, 1 GIF
     PTWORD pt_pw                    ; a loaded picture's own width

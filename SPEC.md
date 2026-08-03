@@ -7007,12 +7007,43 @@ allow, from 32x16 up, and everything else follows from that:
   base with no staging pass — *provided the whole file fits 64KB*, which is
   `dskw_write`'s ceiling (§18.4). A larger canvas can be edited but not
   saved, and Paint says so rather than writing a truncated file.
-- **Memory is budgeted from int 12h at startup.** Scratch (the claim record
-  and the flood-fill span stack, 12KB) comes off the top of usable memory; the
-  canvas and its equally-sized undo image split what is left above 0x66000
-  after a 16KB clipboard floor. On a 640KB machine that is a 101KB canvas
-  ceiling; below ~499KB no minimum canvas can be funded and the window carries
-  a "Not enough memory" notice instead, touching nothing. The claim record
+- **Memory is budgeted from int 12h at startup, in three tiers.** Scratch (the
+  claim record and the flood-fill span stack, 12KB) comes off the top of usable
+  memory, and what is left above 0x66000 is divided in the order the features
+  are worth least. With room for all three, the canvas and its equally-sized
+  undo image split what remains after a 16KB clipboard floor — a 101KB canvas
+  ceiling on a 640KB machine. Below that the **clipboard** goes first
+  (`[pt_haveclip]` = 0: no Cut/Copy/Paste, and no GIF either — the codec's
+  tables are what the clipboard's floor is reserved for), and the canvas and
+  undo image split the whole region. Below *that* **undo** goes too
+  (`[pt_haveundo]` = 0) and the entire region is canvas, which is why the
+  smallest machines get the *biggest* picture: 448x166 at 460KB against 448x146
+  at 490KB. Only below ~452KB is there no minimum canvas at all, and the window
+  then carries a "Not enough memory" notice instead, touching nothing.
+
+  Three things follow from the third tier and are load-bearing:
+  **the window is not `WF_SIZABLE`** (`pt_resize` stages the old picture in the
+  undo image, so with no undo image a size change cannot preserve anything, and
+  a grow box that silently wiped the picture is worse than no grow box);
+  **`pt_umark` early-outs**, so `[pt_undo_ok]` is never set and both
+  `pt_undo_swap` and `pt_urestore` are no-ops by construction rather than by
+  separate tests; and **the file reader falls back to the scratch area**,
+  borrowing the flood-fill stack — idle during a load, re-initialised by the
+  next fill — one paragraph in so the claim record survives and the buffer
+  still starts at offset 0 of a segment, which is what both decoders assume.
+  12KB still opens a small picture, and a file too big for it comes back as the
+  file API's own `FERR_BIG`. **Open is therefore never disabled**, on any
+  machine that can run the app at all.
+
+  The tiers are decided **once**. Because `pt_geom` fixes the buffer bases from
+  the largest canvas the machine can fund, the undo image is always big enough
+  for any canvas `pt_fit` will allow and the clipboard's size is a constant —
+  so there is deliberately no re-check on load or resize, because nothing that
+  could have changed exists. What the tiers cost is expressed two ways, and both
+  are needed: the menu item **keeps its own label and gains "(Not Enough Ram)"**
+  (the kernel's menus have no disabled state, §12.2, and an item still has to
+  say what it would do), and the command itself answers with a toast — which is
+  what the Ctrl-key shortcut hits, since it never goes near a menu. The claim record
   (magic pair + owner window pointer, believed only while that pointer still
   names a used window slot whose title starts "Paint") keeps a second instance
   off the same canvas; in practice the loader refuses first, two 12KB regions
@@ -7034,6 +7065,23 @@ allow, from 32x16 up, and everything else follows from that:
   structural reason: `wm_draw_win` draws the title *before* calling W_PAINT,
   so a size adopted during that paint would be one repaint stale there and the
   only cure would be a second full repaint.
+- **The canvas size is typed, not only dragged.** Under the tool buttons sit a
+  `W` field, an `H` field and an Apply button, all inside the palette column's
+  42 pixels; Enter in either field applies, Escape abandons the edit, the first
+  digit after a field is clicked replaces its value rather than appending, and
+  an empty field means "leave this axis alone". They need 41 rows below the last
+  tool button, which a 110-row CGA canvas does not have, so `pt_szon` answers
+  for the painter and the hit test both — a control that is not drawn is not
+  clickable — and the two-line readout is what shows when they do not fit (as it
+  is on a machine with no undo image, where the canvas cannot be resized at
+  all). Apply and a grow-box drag both go through **`pt_setsize`**, the one place
+  a size is decided: it clamps to the screen, then to what memory will fund
+  (`pt_fit`), then to what the picture will stand to lose (`pt_lose_w` /
+  `pt_lose_h`), so typing 900 into a field is exactly a drag that asked for too
+  much and produces the same crop toast. The two differ only in what they owe
+  afterwards: a drag arrives with the frame already redrawn at the dragged size,
+  so a refusal owes a repaint; Apply changes the frame itself, so a *success*
+  owes one and a refusal owes nothing but the toast.
 - **The swatches narrow before any of them go.** `pt_org` divides the pixels
   left over after the right-anchored toggles by the live colour count and
   clamps the quotient into `[PT_SW_MIN, PT_SW_DX]` = [11, 21] pixels, publishing

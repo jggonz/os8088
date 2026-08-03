@@ -9,10 +9,11 @@ and writes were arrived at.
 
 ## What it is
 
-A canvas of any size the screen and memory allow — 448×280 by default,
-resized by dragging the window's grow box, or set by opening a picture of its
-own dimensions — 4bpp packed, with eight tools: pencil, eraser, dropper,
-rectangle, ellipse, selection, flood fill and text.
+A canvas of any size the screen and memory allow — 448×280 by default, resized
+by dragging the window's grow box or by typing into the `W`/`H` fields under the
+tools, or set by opening a picture of its own dimensions — 4bpp packed, with
+eight tools: pencil, eraser, dropper, rectangle, ellipse, selection, flood fill
+and text.
 Sixteen colours on VGA, three on a 1bpp adapter (SPEC.md §39.4's black /
 dither / white classes — the only three that survive the reduction as
 distinct). Selectable line width, per-tool: the pencil's 1/2/4/8 and the
@@ -46,11 +47,24 @@ touches memory above 0x40000.
 
 Three consequences are handled rather than hoped about:
 
-- **The memory may not be there.** `pt_entry` asks int 12h first and, when the
-  answer cannot fund a minimum canvas, opens a window that says "Not enough
-  memory" and touches nothing. A 256KB or 384KB machine gets that notice;
-  `make run-640`, a 512KB machine and any real 640KB XT get the app, with the
-  canvas ceiling scaled to what they have.
+- **The memory may not be there.** `pt_entry` asks int 12h first and gives up
+  features rather than refusing outright: below about 499KB the clipboard goes
+  (no Cut/Copy/Paste, and no GIF — the LZW tables are what the clipboard's
+  reserved floor is for), and below about 483KB undo goes too, along with the
+  ability to resize the canvas, since `pt_resize` stages the old picture in the
+  undo image. The whole region is then canvas, so the smallest machines get the
+  *largest* picture. Only below about 452KB is no canvas fundable at all, and the
+  window then says "Not enough memory" and touches nothing. Opening files keeps
+  working in every tier: with no undo image to stage the file in, the reader
+  borrows the scratch area's flood-fill stack, which is idle during a load.
+
+  A command that is unavailable keeps its menu label and gains "(Not Enough
+  Ram)" — the kernel's menus have no disabled state — and answers with a toast,
+  which is what the Ctrl-key shortcut hits. All of it is decided once, at
+  startup: because the buffer bases are fixed from the largest canvas the
+  machine can fund, the undo image is always big enough for any canvas that can
+  be adopted and the clipboard's size is a constant, so there is nothing a later
+  load or resize could invalidate.
 - **Two instances would share one canvas.** The claim record at the scratch
   base holds a magic pair and the owner's window pointer, and `pt_dupchk`
   believes it only if that pointer still names a used window slot whose title
@@ -256,6 +270,13 @@ The two decisions that carry the app:
   pays 62,720 bytes. Undo and redo are the same instruction: the marked
   rows are *exchanged* with the undo image, so the two states alternate
   forever from one buffer.
+
+**One place decides a size.** The grow box, the Apply button and Enter in a size
+field all land in `pt_setsize`, which clamps to the screen, then to memory, then
+to what the picture will stand to lose. Typing 900 into a field is therefore
+indistinguishable from dragging too far, down to the toast it produces — and the
+crop guard could not have been bolted onto one entry point and forgotten on the
+other.
 
 A third decision arrived with the resizable canvas: **the size readout is
 content, not chrome.** In the title bar it cost a second full repaint per
