@@ -5492,9 +5492,15 @@ pt_ondlg:
 .copied:
     mov bx, [pt_win]
     call pt_org                     ; the window moved while the dialog was up
-    mov si, pt_name
     cmp byte [pt_dmode], FDLG_SAVE
     je .save
+    mov si, pt_s_loading            ; a floppy read and a decode is seconds of
+    call pt_msg_show                ; silence: say so BEFORE starting, not after
+    call pt_wait                    ; and let go of the lock once, or a
+                                    ; double-buffered machine (SPEC.md 32) would
+                                    ; flush the toast only after the load it
+                                    ; announces
+    mov si, pt_name
     call pt_load
     jmp short .draw
 .save:
@@ -7350,6 +7356,7 @@ pt_g_magic:   db 'GIF87a'
 pt_gstep:     db 8, 8, 4, 2         ; the interlaced row passes: step...
 pt_gstart:    db 0, 4, 2, 1         ; ...and where each one starts
 pt_s_crop:   db 'Would crop artwork - erase it first', 0
+pt_s_loading: db 'Loading...', 0
 pt_s_wlab:   db 'W', 0
 pt_s_hlab:   db 'H', 0
 pt_s_apply:  db 'Apply', 0

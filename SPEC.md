@@ -7162,3 +7162,7 @@ allow, from 32x16 up, and everything else follows from that:
   frontmost while it tracks, and since §11.3 a background painter under it
   draws its own visible region rather than over the top — so the released-lock
   window is safer than it was when this was written against `wm_obscured`.
+  The same rule applies to anything drawn *before* a long operation rather than
+  during one: the "Loading..." toast a file dialog's completion callback puts up
+  is followed by one `pt_wait`, or the buffered machine flushes it only after
+  the load it was announcing.
