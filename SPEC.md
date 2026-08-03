@@ -6979,6 +6979,31 @@ allow, from 32x16 up, and everything else follows from that:
   the largest canvas the machine can fund, so no base ever moves and
   `pt_resize` can stage the old rows in the undo image with no overlap to
   reason about.
+- **A shrink that would throw away ink is refused, per axis.** Before adopting
+  a smaller size `pt_track` asks `pt_lose_w`/`pt_lose_h` whether the columns or
+  rows about to go are all white — `repe scasb` against 0xFF over the packed
+  bytes, half a compare per pixel, with the boundary nibble handled only when
+  the surviving width is odd. A dirty axis keeps its old size while the other
+  one still moves, so widening-while-shortening does the half that is safe.
+  The refusal is then made visible two ways: `pt_wfix` writes the frame back
+  to what the canvas needs (clamped on screen and above the dock, as `ui_drag`
+  would), and a notice window says so. **The notice is put up at the END of the
+  paint, not from inside `pt_track`**: `pt_alert` shows a window, which
+  repaints the world, and from the middle of a paint the rest of that paint
+  would draw straight over it. `[pt_apend]` carries the intent the few hundred
+  instructions between.
+- **The notice window is the file dialog's species (§38.1), not an
+  application.** A bare `wm_create`d window this package owns, never bound to
+  the instance, created on first need because a window slot is scarce
+  (MAX_WIN 12) and most sessions never see one; `wm_owner` answers none for it,
+  so its close *and* minimize boxes reduce to `wm_hide`, which is also what its
+  OK button does. It carries no menu set, so while it is up the bar shows its
+  title and no menus — and after it is dismissed the bar stays on Locator
+  until the user next clicks the picture, because `menu_activate` is not an API
+  slot and the only way for a package to take the bar back is
+  `OSAPI_WM_FRONT`, i.e. another full repaint. A click on the picture costs a
+  bar redraw instead, so that is what Paint leaves it to. If `wm_create`
+  fails the message degrades to the on-canvas toast.
 - **Rows are addressed by a (segment, offset) pair.** A canvas may exceed one
   64KB segment — 636x326 is 104KB — so `pt_rowseg[y]` names the paragraph a
   row starts in and `pt_rowoff[y]` the 0..15 bytes into it; the undo image has
@@ -7013,6 +7038,24 @@ allow, from 32x16 up, and everything else follows from that:
   structural reason: `wm_draw_win` draws the title *before* calling W_PAINT,
   so a size adopted during that paint would be one repaint stale there and the
   only cure would be a second full repaint.
+- **The swatches narrow before any of them go.** `pt_org` divides the pixels
+  left over after the right-anchored toggles by the live colour count and
+  clamps the quotient into `[PT_SW_MIN, PT_SW_DX]` = [11, 21] pixels, publishing
+  the result as `[pt_swdx]` (pitch) and `[pt_swsz]` (body, pitch − 1); only once
+  the pitch has bottomed out does `[pt_nsw]` start dropping colours off the
+  right. `pt_draw_strip` and `pt_strip_click` both read those two words — the
+  hit test also rejects the inter-swatch gap — so a colour is clickable exactly
+  where it is drawn at every width. `pt_org` is called from `pt_click` with the
+  click point still in CX/DX, so like every other routine here it preserves all
+  registers; the arithmetic needs CX, and forgetting to push it turned every
+  content click into a stray palette click.
+- **Keyboard shortcuts** are the control codes int 16h already delivers, so
+  W_ONKEY needs no scan codes: Ctrl+Z undo/redo (the same exchange either way),
+  Ctrl+C / Ctrl+X / Ctrl+V, and Delete, all routed to the very routines the
+  Edit menu calls so the two doors cannot drift. Ctrl+Z ends an open text run
+  first — the caret is screen-only and would otherwise be left over a picture
+  that no longer has the text under it. Copy and cut are no-ops without a
+  selection and paste without a clipboard, so no tool gating is needed.
 - **Loading takes the file's own dimensions** as far as the screen and memory
   allow, then crops — a 700x440 picture opens as 594x342 on a 640KB VGA
   machine — and the window follows by writing W_W/W_H and calling

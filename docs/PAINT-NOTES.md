@@ -20,7 +20,14 @@ eraser's 8/16/24/32, and the same selection sets the border thickness of an
 unfilled rectangle or ellipse. Text is drawn into the picture from the ROM
 8×8 font at 1×, 2× or 4×. One-level undo that doubles as redo, an internal
 clipboard (cut/copy/paste), and BMP load/save through the Standard File
-dialog (SPEC.md §38).
+dialog (SPEC.md §38). Ctrl+Z, Ctrl+C, Ctrl+X, Ctrl+V and Delete reach the same
+routines the Edit menu does — they are the control codes int 16h already
+hands W_ONKEY, so no scan-code decoding is involved.
+
+Shrinking the window never silently eats the picture: the rows or columns
+about to go are checked for ink first, per axis, and a dirty axis keeps its
+size while the other one still moves. When that happens the frame is written
+back to fit the canvas and a notice window says why.
 
 ## The two liberties it takes
 
@@ -64,6 +71,15 @@ both are kernel-internal. So Paint stores the new frame in the record and calls
 is documented as no longer set-once (SPEC.md §11), so this is a small liberty
 rather than a violation — but it is a liberty, and a one-line
 `wm_resize(BX, w, h)` that clamped to the screen and repainted would retire it.
+
+The same write is what lets a resize be *refused*: when shrinking the window
+would crop artwork, `pt_wfix` puts the frame back to what the canvas needs
+(clamping x/y on screen and above the dock the way `ui_drag` does) and the
+notice window explains why. There is no sanctioned way to say no to `ui_grow`
+— it has already rewritten the record and repainted by the time the app sees
+anything — so the app corrects it afterwards and the correction rides the
+notice's repaint. A resize callback that could return "refused" would be the
+clean version; see the smaller gaps below.
 
 **What the kernel should provide for the memory:** a slot in the API table —
 `alloc(paragraphs) → segment` / `free(segment)`, stamped with the calling
@@ -158,7 +174,25 @@ by construction.
   size is adopted *during* the paint — after the kernel has already drawn the
   title bar — which is why the canvas dimensions are printed in the tool
   palette rather than the title, where they would always be one repaint
-  stale, at the cost of a second full repaint to fix.
+  stale, at the cost of a second full repaint to fix. A callback that ran
+  *before* the paint, and whose refusal `ui_grow` honoured, would also let the
+  crop guard reject a drag without the app having to rewrite the record behind
+  the kernel's back and put the notice up a paint later.
+- **No way to hand the menu bar back.** `menu_activate` is kernel-internal;
+  the only slot that reaches it is `OSAPI_WM_FRONT`, which repaints
+  everything. So when Paint's notice window is dismissed the bar stays on
+  Locator until the user next clicks the picture — a click that costs a bar
+  redraw and nothing more (`ui.inc`'s already-frontmost branch), which is why
+  Paint leaves it to that click rather than spending a whole repaint. The
+  kernel's own file dialog does not have this problem: `fdlg_close` calls
+  `menu_activate` + `menu_draw_bar` directly. A `menu_activate(BX)` slot, or a
+  dismissal that restored the previous owner, would close the gap for one jump
+  table entry.
+- **No modal gate for a package.** `fdlg_grab` swallows every press outside
+  the file dialog's rect (SPEC.md §38), and nothing equivalent exists for a
+  window a package creates. Paint's notice is therefore advisory: a click on
+  the picture behind it carries on painting, which is the right answer for
+  *this* dialog but would not be for a destructive confirmation.
 
 ## Formats
 
@@ -190,6 +224,9 @@ magic bytes and says "Only BMP is supported" instead of guessing.
   nothing over BMP for round-tripping — a non-compressing LZW stream is
   *larger* than the raw 4bpp bytes, so a real compressor is the only useful
   version. Say the word and it goes in.
+
+(Those figures move as the app grows; it is 10,812 bytes of image + 3,991 of
+bss today, so about 5.1KB of the 19,968 budget is still free.)
 
 ## Performance notes
 

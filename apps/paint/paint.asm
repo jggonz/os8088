@@ -187,8 +187,9 @@ PT_GROW     equ 15                  ; the grow box owns the content's last 13
 PT_TH_X     equ 2                   ; four thickness buttons, pitch 21
 PT_TH_DX    equ 21
 PT_CUR_X    equ 90                  ; current-colour well
-PT_SW_X     equ 116                 ; colour swatches, pitch 21
-PT_SW_DX    equ 21
+PT_SW_X     equ 116                 ; colour swatches: the design pitch, and
+PT_SW_DX    equ 21                  ; the tightest one still worth aiming at.
+PT_SW_MIN   equ 11                  ; The live pitch is [pt_swdx] (SPEC.md 41)
 PT_BTN_W16  equ 16                  ; the two toggles are right-anchored, so
                                     ; their x is [pt_filx] / [pt_fntx]
 
@@ -289,6 +290,7 @@ pt_entry:
 pt_geom:
     call OSAPI_VIDEO                ; AX=w, BX=h, CX=dock row, DL=kind, DH=bpp
     mov [pt_scrw], ax
+    mov [pt_dockr], cx
     mov byte [pt_ncol], 16
     cmp dh, 1
     jne .colour
@@ -859,7 +861,8 @@ pt_font_init:
 pt_org:
     push ax
     push bx
-    push dx
+    push cx                         ; CX too: pt_click calls this while CX/DX
+    push dx                         ; still hold the click point
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
     mov [pt_ox], ax
     mov [pt_oy], dx
@@ -884,21 +887,43 @@ pt_org:
     mov [pt_filx], ax
     sub ax, PT_SW_X + 4             ; pixels available to the swatches
     js .nosw
-    mov bx, PT_SW_DX
+    ; --- narrow the swatches before dropping any of them ---------------------
+    ; A colour you cannot see is worse than a colour you have to aim at, so the
+    ; pitch shrinks from PT_SW_DX down to PT_SW_MIN first and only then does the
+    ; count start to give.
+    mov bx, ax                      ; BX = pixels available
     xor dx, dx
-    div bx                          ; AX = how many fit
-    mov dl, [pt_ncol]
-    xor dh, dh
-    cmp ax, dx
+    mov cx, dx
+    mov cl, [pt_ncol]
+    mov ax, bx
+    div cx                          ; AX = pitch that would fit them all
+    cmp ax, PT_SW_DX
+    jbe .pitch
+    mov ax, PT_SW_DX                ; never wider than the design pitch
+.pitch:
+    cmp ax, PT_SW_MIN
+    jae .havep
+    mov ax, PT_SW_MIN               ; ...and never tighter than a fingertip
+.havep:
+    mov [pt_swdx], ax
+    dec ax
+    mov [pt_swsz], ax               ; one pixel of gap between them
+    mov ax, bx
+    xor dx, dx
+    div word [pt_swdx]              ; how many fit at that pitch
+    cmp ax, cx
     jbe .nsw
-    mov ax, dx
+    mov ax, cx
 .nsw:
     mov [pt_nsw], ax
     jmp short .out
 .nosw:
     mov word [pt_nsw], 0
+    mov word [pt_swdx], PT_SW_DX
+    mov word [pt_swsz], PT_BW
 .out:
     pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -1891,8 +1916,7 @@ pt_draw_strip:
     xor di, di
 .sw:
     mov ax, di
-    mov cx, PT_SW_DX
-    mul cx
+    mul word [pt_swdx]
     add ax, PT_SW_X
     mov [pt_bx], ax
     mov ax, di
@@ -1902,7 +1926,8 @@ pt_draw_strip:
     mov bx, [pt_stripy]
     inc bx
     mov cx, ax
-    add cx, PT_BW - 1
+    add cx, [pt_swsz]
+    dec cx
     mov dx, bx
     add dx, PT_BW - 1
     call pt_cfill
@@ -1916,7 +1941,8 @@ pt_draw_strip:
     dec ax
     mov bx, [pt_stripy]
     mov cx, ax
-    add cx, PT_BW + 1
+    add cx, [pt_swsz]
+    inc cx
     mov dx, bx
     add dx, PT_BW + 1
     call pt_cframe
@@ -2076,7 +2102,13 @@ pt_paint:
     call pt_marq                    ; the marquee, if a selection is live
     mov bx, [pt_win]
     call OSAPI_WM_GROW              ; a resizable window owes the grow box a
-    jmp short .out                  ; redraw after its own content painting
+                                    ; redraw after its own content painting
+    cmp byte [pt_apend], 0          ; a refused resize, deferred to here so the
+    je .out                         ; notice lands on a finished picture
+    mov byte [pt_apend], 0
+    mov si, pt_s_crop
+    call pt_alert
+    jmp short .out
 .notice:
     xor bx, bx
     mov bl, [pt_mode]
@@ -2381,12 +2413,13 @@ pt_strip_click:
     mov ax, cx
     sub ax, PT_SW_X
     js .out
-    mov bx, PT_SW_DX
     xor dx, dx
-    div bx
+    div word [pt_swdx]
     cmp ax, [pt_nsw]
     jge .toggles
     cmp dx, PT_BW
+    jge .out
+    cmp dx, [pt_swsz]               ; in the gap between two swatches
     jge .out
     call pt_swcol                   ; AX = swatch index -> AL = colour
     mov [pt_col], al
@@ -4156,6 +4189,15 @@ pt_onkey:
     je .del
     cmp al, 13
     je .enter
+    ; --- the control codes int 16h hands us for Ctrl+letter ------------------
+    cmp al, 0x1A                    ; Ctrl+Z
+    je .undo
+    cmp al, 0x03                    ; Ctrl+C
+    je .copy
+    cmp al, 0x18                    ; Ctrl+X
+    je .cut
+    cmp al, 0x16                    ; Ctrl+V
+    je .paste
     cmp al, 32
     jb .out
     cmp al, 126
@@ -4180,6 +4222,20 @@ pt_onkey:
     jmp short .out
 .bs:
     call pt_bs
+    jmp short .out
+    ; --- the same routines the Edit menu calls, so the two doors cannot drift
+.undo:
+    call pt_undo_cmd
+    jmp short .out
+.copy:
+    call pt_copy
+    jmp short .out
+.cut:
+    call pt_copy
+    call pt_sel_clear
+    jmp short .out
+.paste:
+    call pt_paste
 .out:
     pop di
     pop si
@@ -4283,10 +4339,7 @@ pt_oncmd:
     je .clear
     ret
 .undo:
-    call pt_marq_hide
-    call pt_undo_swap
-    call pt_marq
-    ret
+    jmp pt_undo_cmd
 .cut:
     call pt_copy
     jmp pt_sel_clear
@@ -4308,6 +4361,19 @@ pt_oncmd:
     dec al                          ; item 1/2/3 -> shift 0/1/2 -> scale 1/2/4
     call pt_setscale
     jmp pt_draw_strip
+
+; -----------------------------------------------------------------------------
+; pt_undo_cmd - Undo, or Redo: the same exchange either way (Ctrl+Z, Edit menu)
+; in:  gfx lock held; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+pt_undo_cmd:
+    call pt_text_end                ; Ctrl+Z lands mid-sentence otherwise, and
+                                    ; the caret would be left on a picture that
+                                    ; no longer has the text under it
+    call pt_marq_hide
+    call pt_undo_swap
+    call pt_marq
+    ret
 
 ; -----------------------------------------------------------------------------
 ; pt_new - a blank picture, undoably
@@ -4368,15 +4434,45 @@ pt_track:
     mov dx, [pt_chmax]
 .h_cap:
     call pt_fit                     ; what memory will actually fund
+    ; --- and what the picture will stand to lose ----------------------------
+    ; A shrink that would throw away ink is refused per axis: the other axis
+    ; still moves, so widening while shortening does the half that is safe.
+    mov byte [pt_kept], 0
+    cmp ax, [pt_cw]
+    jae .w_ok2                      ; growing (or level): nothing to lose
+    call pt_lose_w
+    jnc .w_ok2
+    mov ax, [pt_cw]
+    mov byte [pt_kept], 1
+.w_ok2:
+    cmp dx, [pt_ch]
+    jae .h_ok2
+    call pt_lose_h                  ; against the width we just settled on
+    jnc .h_ok2
+    mov dx, [pt_ch]
+    mov byte [pt_kept], 1
+.h_ok2:
     cmp ax, [pt_cw]
     jne .change
     cmp dx, [pt_ch]
+    jne .change
+    cmp byte [pt_kept], 0           ; nothing moved: was that a refusal?
     je .out
+    jmp short .refuse
 .change:
     call pt_resize
     mov ax, [pt_ch]                 ; a canvas memory would not fund leaves the
     inc ax                          ; strip where the canvas ends, not where
     mov [pt_stripy], ax             ; the window ends - pt_org ran before this
+    cmp byte [pt_kept], 0
+    je .out
+.refuse:
+    call pt_wfix                    ; the frame follows the canvas, not the drag
+    mov byte [pt_apend], 1          ; and the notice goes up at the END of this
+                                    ; paint, not here: pt_alert repaints the
+                                    ; world, and from the middle of a paint that
+                                    ; repaint would be overdrawn by the rest of
+                                    ; it (SPEC.md 41.6)
 .out:
     pop dx
     pop cx
@@ -4474,6 +4570,306 @@ pt_resize:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; pt_lose_w - would dropping the columns from AX rightwards lose ink?
+; in:  AX = the proposed width
+; out: CF=1 if any pixel in columns AX..[pt_cw]-1 is not white; preserves all
+;
+; Scanned as bytes with `repe scasb` against 0xFF, so a clean band costs half a
+; byte-compare per pixel. Only the boundary byte needs nibble treatment, and
+; only when the new width is odd: its high nibble is the last column kept.
+; The stride padding beyond the canvas width is always white (pt_wipe fills the
+; whole stride and pt_rect clips to the width), so whole-byte tests are safe.
+; -----------------------------------------------------------------------------
+pt_lose_w:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov bx, ax
+    shr bx, 1
+    mov [pt_lwb], bx
+    mov byte [pt_lwn], 0
+    test al, 1
+    jz .rows
+    mov byte [pt_lwn], 1            ; odd: byte [pt_lwb]'s LOW nibble is lost
+.rows:
+    xor si, si                      ; SI = row
+.row:
+    mov ax, si
+    call pt_rowset
+    add di, [pt_lwb]
+    cmp byte [pt_lwn], 0
+    je .bytes
+    mov al, [es:di]
+    and al, 0x0F
+    cmp al, 0x0F
+    jne .dirty
+    inc di
+.bytes:
+    mov cx, [pt_stride]
+    sub cx, [pt_lwb]
+    cmp byte [pt_lwn], 0
+    je .cnt
+    dec cx
+.cnt:
+    jcxz .next
+    mov al, 0xFF
+    cld
+    repe scasb
+    jne .dirty
+.next:
+    inc si
+    cmp si, [pt_ch]
+    jb .row
+    clc
+    jmp short .out
+.dirty:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_lose_h - would dropping the rows from DX downwards lose ink?
+; in:  AX = the width that will survive, DX = the proposed height
+; out: CF=1 if any pixel in rows DX..[pt_ch]-1 (within that width) is not
+;      white; preserves all registers
+; -----------------------------------------------------------------------------
+pt_lose_h:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    inc ax
+    shr ax, 1                       ; bytes the surviving width occupies
+    mov [pt_lwb], ax
+    mov si, dx                      ; SI = first row to be dropped
+.row:
+    mov ax, si
+    call pt_rowset
+    mov cx, [pt_lwb]
+    jcxz .next
+    mov al, 0xFF
+    cld
+    repe scasb
+    jne .dirty
+.next:
+    inc si
+    cmp si, [pt_ch]
+    jb .row
+    clc
+    jmp short .out
+.dirty:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_wfix - put the frame back where the canvas needs it
+; in:  [pt_cw], [pt_ch]; out: the window record's W_* updated; preserves all
+;
+; The second of this app's two liberties (docs/PAINT-NOTES.md): a package
+; cannot ask the kernel to resize its window, so a refused drag is undone by
+; writing the record and letting the next repaint carry it. The position is
+; clamped as ui_drag would: fully on screen, above the dock.
+; -----------------------------------------------------------------------------
+pt_wfix:
+    push ax
+    push bx
+    push dx
+    mov bx, [pt_win]
+    mov ax, [pt_cw]
+    add ax, PT_CHROME_W
+    mov [bx + W_W], ax
+    mov dx, [pt_ch]
+    add dx, PT_CHROME_H
+    mov [bx + W_H], dx
+    mov ax, [pt_scrw]               ; x + w <= screen width
+    sub ax, [bx + W_W]
+    jns .xc
+    xor ax, ax
+.xc:
+    cmp [bx + W_X], ax
+    jle .yc
+    mov [bx + W_X], ax
+.yc:
+    mov ax, [pt_dockr]              ; y + h <= the row the dock owns
+    sub ax, dx
+    cmp ax, MBAR_H
+    jge .yc2
+    mov ax, MBAR_H
+.yc2:
+    cmp [bx + W_Y], ax
+    jle .out
+    mov [bx + W_Y], ax
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; The notice window
+;
+; A second window this instance creates for itself, and the same species as the
+; kernel's own file dialog (SPEC.md 38.1): `wm_create`d, never bound to the
+; instance, so `wm_owner` answers 0xFF for it and its close box reduces to
+; wm_hide instead of closing the app. It carries no menu set, so while it is up
+; the bar falls back to Locator - exactly what fdlg does.
+;
+; It is not modal (there is no fdlg_grab for packages), which is right for an
+; advisory: a click on the picture behind it carries on painting.
+; =============================================================================
+
+PT_A_W      equ 300                 ; frame, outer
+PT_A_H      equ 84
+PT_A_BW     equ 44                  ; the OK button
+PT_A_BH     equ 16
+
+; -----------------------------------------------------------------------------
+; pt_alert - put the notice up with SI as its first line
+; in:  SI = NUL message; gfx lock held
+; out: nothing; preserves all registers
+;
+; The window is created on first need rather than at startup, because a window
+; slot is a scarce shared resource (MAX_WIN is 12) and most sessions never see
+; a notice. If the table is full the message degrades to the canvas toast,
+; which is always available.
+; -----------------------------------------------------------------------------
+pt_alert:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [pt_amsg], si
+    cmp word [pt_awin], 0
+    jne .show
+    mov ax, [pt_scrw]
+    sub ax, PT_A_W
+    jns .cx
+    xor ax, ax
+.cx:
+    shr ax, 1
+    mov [pt_atpl + WT_X], ax
+    mov ax, [pt_dockr]              ; and clear of the dock, which on a 200-row
+    sub ax, PT_A_H                  ; CGA screen the default Y would sit in
+    cmp ax, [pt_atpl + WT_Y]
+    jge .cy
+    cmp ax, MBAR_H + 2
+    jge .setcy
+    mov ax, MBAR_H + 2
+.setcy:
+    mov [pt_atpl + WT_Y], ax
+.cy:
+    mov si, pt_atpl
+    call OSAPI_WM_CREATE
+    jc .toast                       ; no slot: say it on the canvas instead
+    mov [pt_awin], bx
+.show:
+    mov bx, [pt_awin]
+    call OSAPI_WM_SHOW              ; shows, fronts and repaints everything -
+    jmp short .out                  ; which is also how the corrected frame
+.toast:                             ; gets drawn
+    mov si, [pt_amsg]
+    call pt_msg_show
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_apaint - the notice's W_PAINT
+; in:  SI = its window ptr (content white-filled, gfx lock held)
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+pt_apaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
+    mov di, ax
+    mov bp, dx
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov cx, di
+    add cx, 10
+    mov dx, bp
+    add dx, 10
+    mov si, [pt_amsg]
+    call OSAPI_FONT_STR
+    mov cx, di
+    add cx, 10
+    mov dx, bp
+    add dx, 26
+    mov si, pt_s_crop2
+    call OSAPI_FONT_STR
+    ; --- the OK button ------------------------------------------------------
+    mov ax, di
+    add ax, PT_A_W - 2 - PT_A_BW - 8
+    mov bx, bp
+    add bx, PT_A_H - 19 - PT_A_BH - 6
+    mov cx, ax
+    add cx, PT_A_BW
+    mov dx, bx
+    add dx, PT_A_BH
+    call OSAPI_GFX_FRAME
+    add ax, 14
+    add bx, 4
+    mov cx, ax
+    mov dx, bx
+    mov si, pt_s_ok
+    call OSAPI_FONT_STR
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_aonclick / pt_aonkey - anywhere, or any key, dismisses it
+; in:  SI = its window ptr; gfx lock held
+; out: nothing
+; -----------------------------------------------------------------------------
+pt_aonclick:
+pt_aonkey:
+    mov bx, si
+    call OSAPI_WM_HIDE              ; hides and repaints, so the picture and
+    ret                             ; its corrected frame come straight back
 
 ; -----------------------------------------------------------------------------
 ; pt_orowset - ES:DI = row AX of the staged OLD picture in the undo image
@@ -5314,6 +5710,21 @@ pt_s_title:  db 'Paint', 0          ; the title's stem, and the fingerprint
                                     ; pt_dupchk matches on
 pt_appname:  db 'Paint', 0          ; the menu bar's app label (SPEC.md 12.2)
 pt_s_defname: db 'PICTURE.BMP', 0
+pt_a_title:  db 'Notice', 0
+pt_s_ok:     db 'OK', 0
+pt_s_crop:   db 'Resize would crop artwork.', 0
+pt_s_crop2:  db 'Erase the area before shrinking.', 0
+
+; --- the notice window's template (x patched by pt_alert) ---------------------
+pt_atpl:
+    dw 0                            ; WT_X
+    dw 96                           ; WT_Y
+    dw PT_A_W                       ; WT_W
+    dw PT_A_H                       ; WT_H
+    dw pt_a_title                   ; WT_TITLE
+    dw pt_apaint                    ; WT_PAINT
+    dw pt_aonkey                    ; WT_ONKEY
+    dw pt_aonclick                  ; WT_ONCLICK
 
 ; --- the window template (SPEC.md 11; x/y/w/h patched by pt_geom) -------------
 pt_tpl:
@@ -5620,13 +6031,19 @@ pt_ic_text:
     PTWORD pt_conth
     PTWORD pt_filx                  ; the strip's right-anchored controls
     PTWORD pt_fntx
-    PTWORD pt_nsw                   ; colour swatches that fit
+    PTWORD pt_nsw                   ; colour swatches that fit...
+    PTWORD pt_swdx                  ; ...at this pitch, this wide
+    PTWORD pt_swsz
     PTWORD pt_ocw                   ; pt_resize: the outgoing geometry
     PTWORD pt_och
     PTWORD pt_ostride
     PTWORD pt_orseg                 ; pt_orowset's answer
     PTWORD pt_rtseg                 ; pt_resize scratch
     PTWORD pt_rtoff
+    PTWORD pt_dockr                 ; the first row the dock owns
+    PTWORD pt_awin                  ; the notice window, 0 = not created yet
+    PTWORD pt_amsg                  ; ...and the line it is showing
+    PTWORD pt_lwb                   ; pt_lose_*: first byte of the doomed band
 
     PTBYTE pt_mode                  ; PT_M_*
     PTBYTE pt_tool                  ; PT_T_*
@@ -5666,6 +6083,9 @@ pt_ic_text:
     PTBYTE pt_fitcut                ; pt_fit had to give something up
     PTBYTE pt_setval                ; pt_setpx's colour, across pt_rowset
     PTBYTE pt_wchg                  ; the window was resized: repaint the lot
+    PTBYTE pt_kept                  ; a resize was refused to save the artwork
+    PTBYTE pt_apend                 ; ...and the notice for it is owed
+    PTBYTE pt_lwn                   ; pt_lose_w: the boundary nibble matters
     PTBUF  pt_fdigit, 2             ; the strip's scale digit, NUL-terminated
 
     PTBUF  pt_umask, PT_CH_MAX / 8  ; one bit per canvas row
