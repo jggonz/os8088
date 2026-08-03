@@ -14,8 +14,8 @@
 ;
 ; Up to MAX_TASKS tasks; task 0 is the boot thread (the UI task) and runs on
 ; the task-0 stack (SS:STK0_TOP) — it owns no slice of sch_stacks. Slots
-; 1..MAX_TASKS-1 are dynamic (task_spawn / task_exit), each with a 1536-byte
-; stack in .lowbss.
+; 1..MAX_TASKS-1 are dynamic (task_spawn / task_exit), each with an
+; SCH_STACK-byte stack in .lowbss.
 ;
 ; All tasks run CS = DS = KERNEL_SEG and SS = LOW_SEG (SPEC.md 1/2.1): the
 ; stacks live in low memory, outside the kernel's 64KB window, and a context
@@ -51,7 +51,16 @@ T_INST      equ 6               ; byte: owning instance index (SPEC.md 29),
                                 ; 0xFF = none (the UI task)
 T_SIZE      equ 8               ; record stride (1 byte padding)
 
-SCH_STACK   equ 1536            ; per-task stack bytes
+SCH_STACK   equ 512             ; per-task stack bytes. It was 1,536, chosen
+                                ; when the stacks were the only thing in
+                                ; .lowbss and nothing competed with them. A
+                                ; 0xCC fill probe under the heaviest load the
+                                ; machine can carry - Clock, two Bounces and
+                                ; the Fractal's worker all live at once, with
+                                ; the tick and mouse ISRs landing on top of
+                                ; them - left its deepest mark 150 bytes down.
+                                ; 512 is 3.4x that, and it is what buys task 0
+                                ; the 6KB it now has (SPEC.md 2.1)
 SCH_FRAME   equ 24              ; saved-frame size: 9 regs + IP/CS/FLAGS
 
 SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
@@ -259,9 +268,9 @@ task_spawn:
 .found:
     mov si, ax                  ; SI = entry (AX becomes scratch)
     mov ax, cx                  ; stack top = sch_stacks + slot*SCH_STACK
-    mov di, SCH_STACK           ; (slot 1 owns sch_stacks[0..1535]; slot 0
-    push dx                     ; has no slice - it runs on the boot stack)
-    mul di                      ; DX:AX = AX * 1536 (high half discarded)
+    mov di, SCH_STACK           ; (slot 1 owns the FIRST slice; slot 0 has no
+    push dx                     ; slice - it runs on the task-0 stack)
+    mul di                      ; DX:AX = AX * SCH_STACK (high half discarded)
     pop dx
     add ax, sch_stacks
     sub ax, SCH_FRAME           ; carve the fake frame at the very top
@@ -778,7 +787,7 @@ sch_resume:
 section .lowbss                         ; LOW_SEG, reached through SS (SPEC.md 2.1)
 
 sch_stacks: resb (MAX_TASKS-1) * SCH_STACK ; slots 1..11 only: slot n's stack
-                                        ; top at n*1536 (slot 0 = the UI task
+                                        ; top at n*SCH_STACK (slot 0 = the UI task
                                         ; runs on the task-0 stack, SS:STK0_TOP,
                                         ; which grows down from above this
                                         ; section - it needs no reservation)
@@ -807,7 +816,7 @@ sch_newseg: resw 1                      ; task_spawn scratch: the code segment
                                         ; of the task being built (IF=0, so
                                         ; it cannot race a second spawner)
 sch_wd_hits: resw 1                     ; watchdog-forced switches; diagnostic
-                                        ; only (QMP xp on segment 0x1000),
+                                        ; only (QMP xp on segment 0x0800),
                                         ; wraps mod 65536, never reset
 
 section .text

@@ -10,14 +10,13 @@
 ; module contracts (register use, data layouts, concurrency rules) live in
 ; SPEC.md; that document is binding.
 ;
-; Three fixed entry points:
-;   1000:0000  cold entry (the boot sector jumps here)
-;   1000:0008  boot splash tick (SPEC.md 15): far-called by the boot sector
+; Three fixed entry points, at KERNEL_SEG (0x0800 - see the ladder below):
+;   0800:0000  cold entry (the boot sector jumps here)
+;   0800:0008  boot splash tick (SPEC.md 15): far-called by the boot sector
 ;              after every sector it reads, while the rest of this image is
 ;              still coming off the floppy
-;   1000:0010  os8088 API jump table (SPEC.md 20.3): 4-byte near-jmp slots at
-;              pinned offsets, called by loaded programs (replaces the
-;              retired syscall gate)
+;   0800:0010  os8088 API jump table (SPEC.md 20.3): 8-byte DS-switching cells
+;              at pinned offsets, far-called by loaded packages
 ; =============================================================================
 
 cpu 8086
@@ -25,7 +24,13 @@ bits 16
 org 0x0000
 
 ; --- global constants (SPEC.md 3) -------------------------------------------
-KERNEL_SEG  equ 0x1000
+KERNEL_SEG  equ 0x0800          ; linear 0x08000. It was 0x1000, and the 32KB
+                                ; between the two was low memory nothing could
+                                ; reach: the ladder below it needs 30,464
+                                ; bytes, not 62,976. The floor is the boot
+                                ; sector, which the BIOS puts at 0x7C00 and
+                                ; which is still executing while the kernel
+                                ; lands - guard 8 at the end of this file
 VGA_SEG     equ 0xA000          ; mode 12h planar framebuffer
 SCREEN_W    equ 640
 SCREEN_H    equ 480
@@ -74,26 +79,40 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; BB_SEG) is now the claim heap of SPEC.md 42, handed out on demand.
 ;
 ;   0x00000  IVT + BIOS data area                     (theirs, 1,536 B)
-;   0x00600  FAR_SEG   .fartext blob                  FAR_PARA paragraphs
-;            FAT_SEG   mount-time FAT snapshot        FAT_PARA
-;            LOW_SEG   .lowbss, then task 0's stack   up to KERNEL_SEG
-;   0x10000  KERNEL_SEG  kernel image + .bss          KERN_MAX bytes
-;            (the package pool rides in the same segment above the kernel
-;             until SPEC.md 20's segment move; see APP_LOAD_OFF below)
-;   0x20000  HEAP_SEG  the claim heap                 up to int 12h's top
+;   0x00600  FAR_SEG   .fartext blob                  FAR_PARA = 10,752 B
+;   0x03000  FAT_SEG   mount-time FAT snapshot        FAT_PARA  =  5,120 B
+;   0x04400  LOW_SEG   .lowbss                                     9,216 B
+;            then task 0's stack, growing down       up to KERNEL_SEG
+;   0x08000  KERNEL_SEG  kernel image + .bss          KERN_MAX bytes
+;   0x13000  PKG_SEG   the package pool               PKG_PARA
+;   0x22000  HEAP_SEG  the claim heap                 up to int 12h's top
+;
+; The ladder is sized, not guessed. With a 0xCC fill in every low byte and the
+; machine driven hard - Clock, two Bounces, About, the Control Panel on both
+; its pages, the Task Manager with a window drag, a Disk window, the Fractal
+; with its worker task, and Paint saving a GIF into a folder it created from
+; the file dialog - the deepest mark left was 246 bytes on task 0's stack and
+; 150 on a background task's. The reservations below are 25x and 3.4x those,
+; and the guards at the end of this file are what keep them honest as the
+; sections grow.
 ; =============================================================================
 FAR_SEG     equ 0x0060          ; linear 0x00600 - far code (section .fartext)
 FAR_PARA    equ 0x02A0          ; 10,752 bytes; guard 5 fences the blob
 FAT_SEG     equ FAR_SEG + FAR_PARA   ; mount-time FAT snapshot (SPEC.md 2.1/18),
                                 ; reached via ES ONLY, never DS;
                                 ; dsk_next_clus is the one reader
-DSK_FAT_SECS equ 24             ; resident FAT cap, sectors (12,288 bytes).
-                                ; Every geometry this OS builds fits: 360KB
-                                ; = 2 sectors, 1.44MB = 9, and the 2.88MB
-                                ; FAT16 test image = 23. It was 32 - four
-                                ; more sectors than any self-consistent
-                                ; volume can declare - and the difference
-                                ; was 8KB of low memory nothing could reach
+DSK_FAT_SECS equ 10             ; resident FAT cap, sectors (5,120 bytes).
+                                ; Every geometry this OS boots or builds
+                                ; fits with one sector to spare: 360KB = 2,
+                                ; 720KB = 3, 1.2MB = 7, 1.44MB = 9. It was
+                                ; 24, sized for a 2.88MB FAT16 test image
+                                ; (23 sectors) that no longer exists - and
+                                ; since FAT16 needs 4,085 clusters to be
+                                ; FAT16 at all, i.e. 16 FAT sectors minimum,
+                                ; rule 10 of SPEC.md 18.2 now rejects every
+                                ; FAT16 volume structurally. dsk_next_clus
+                                ; keeps its four-instruction FAT16 decode;
+                                ; nothing can reach it
 FAT_PARA    equ DSK_FAT_SECS * 32     ; 512 bytes = 32 paragraphs
 LOW_SEG     equ FAT_SEG + FAT_PARA    ; .lowbss: task stacks + disk buffers
 LOW_LIMIT   equ (KERNEL_SEG - LOW_SEG) * 16   ; LOW_SEG:LOW_LIMIT IS
@@ -101,7 +120,7 @@ LOW_LIMIT   equ (KERNEL_SEG - LOW_SEG) * 16   ; LOW_SEG:LOW_LIMIT IS
                                 ; stay strictly below it
 STK0_TOP    equ LOW_LIMIT - 2   ; task 0's stack top (grows down towards the
                                 ; top of .lowbss; the assertion at the end of
-                                ; this file keeps 8KB of clearance)
+                                ; this file keeps 4KB of clearance)
 
 KERN_MAX    equ 0xB000          ; the kernel's own ceiling: image + .bss and
                                 ; image + .fartext both stay below it (the
@@ -160,7 +179,7 @@ cold_entry:
     jmp kmain
 
     times 0x08 - ($ - $$) db 0
-    jmp near spl_tick           ; 1000:0008 - boot splash tick (SPEC.md 15)
+    jmp near spl_tick           ; 0800:0008 - boot splash tick (SPEC.md 15)
 
     times 0x10 - ($ - $$) db 0  ; the table must land exactly at 0x0010
 
@@ -651,10 +670,13 @@ KLOWFAR_KB equ (KLOW_SIZE + KFAR_SIZE + 1023) / 1024
 %if KTEXT_SIZE + KFAR_SIZE > KERN_MAX
 %error "kernel too big: image + fartext must stay below KERN_MAX"
 %endif
-; 3. .lowbss must leave task 0 at least 8KB of stack below STK0_TOP, and
+; 3. .lowbss must leave task 0 at least 4KB of stack below STK0_TOP, and
 ;    LOW_SEG offsets can never reach LOW_LIMIT (that address is the kernel).
-%if KLOW_SIZE > STK0_TOP - 8192
-%error "lowbss too big: task 0's stack needs 8KB of clearance below STK0_TOP"
+;    The floor was 8KB when the whole low region was 20KB of slack; it is 4KB
+;    now that the region is sized to what the stacks were measured to use, and
+;    4,096 is still twenty times task 0's observed high-water mark.
+%if KLOW_SIZE > STK0_TOP - 4096
+%error "lowbss too big: task 0's stack needs 4KB of clearance below STK0_TOP"
 %endif
 %if STK0_TOP >= LOW_LIMIT
 %error "STK0_TOP must stay below LOW_LIMIT (LOW_SEG:LOW_LIMIT is the kernel)"
@@ -677,4 +699,14 @@ KLOWFAR_KB equ (KLOW_SIZE + KFAR_SIZE + 1023) / 1024
 ;    kernel segment.
 %if FAT_SEG + FAT_PARA != LOW_SEG
 %error "low-memory ladder has a gap: FAT_PARA does not reach LOW_SEG"
+%endif
+; 8. the kernel cannot land on the boot sector. The BIOS puts boot/boot.asm at
+;    0000:7C00 and that code is still RUNNING while the kernel's sectors are
+;    read in - it far-calls the splash at KERNEL_SEG:0008 after every one - so
+;    KERNEL_SEG:0000 must start at or above 0x7E00, the byte after it. The
+;    boot sector's own stack grows DOWN from 0x7C00 and is therefore safe by
+;    the same test. boot/boot.asm carries its own copy of KERNEL_SEG (it is
+;    assembled separately); change one and change the other.
+%if KERNEL_SEG < 0x07E0
+%error "KERNEL_SEG would overlap the boot sector at 0000:7C00"
 %endif

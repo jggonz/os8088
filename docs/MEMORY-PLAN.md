@@ -3,13 +3,13 @@
 **Status board for the work that buys the kernel room to grow.** SPEC.md is
 the binding contract for what the kernel *is*; this document is the standing
 plan for how it gets more space, why each step is shaped the way it is, and
-what is deliberately still on the shelf. Steps A, B and C have landed; step D
-has not. Read this before assuming the kernel is out of room again.
+what is deliberately still on the shelf. Steps A through E have landed. Read
+this before assuming the kernel is out of room again.
 
 ## The constraint
 
-The kernel runs in one real-mode segment, `KERNEL_SEG` = 0x1000, so 64KB is
-the hard ceiling on everything addressable through CS/DS at once. Inside that
+The kernel runs in one real-mode segment (`KERNEL_SEG`, 0x1000 then and
+0x0800 since step E), so 64KB is the hard ceiling on everything addressable through CS/DS at once. Inside that
 ceiling the kernel never had 64KB to spend — the package pool took the top
 20KB and task 0's stack the 4KB above it, leaving a 40KB window for image +
 `.bss`, enforced by the assertion at the end of `kernel/kernel.asm`.
@@ -29,7 +29,7 @@ Before this work (release v1.0.20260728, commit 698b587):
 were 41% of the entire window. The kernel was not short of segment; it was
 spending its segment on scratch that never needed to be addressable by DS.
 
-## After A + B + C + D
+## After A + B + C + D + E
 
 | region                        | bytes  |
 |-------------------------------|--------|
@@ -37,9 +37,9 @@ spending its segment on scratch that never needed to be addressable by DS.
 | — .text + .bss                | see `make` — measure, do not guess |
 | — **free**                    | the rest |
 | package pool @ `PKG_SEG`      | 61,440 |
-| `.fartext` @ `FAR_SEG`        | `FAR_PARA`×16 |
-| FAT snapshot @ `FAT_SEG`      | `DSK_FAT_SECS`×512 |
-| `.lowbss` @ `LOW_SEG`         | up to `KERNEL_SEG` |
+| `.fartext` @ `FAR_SEG`        | `FAR_PARA`×16 = 10,752 |
+| FAT snapshot @ `FAT_SEG`      | `DSK_FAT_SECS`×512 = 5,120 |
+| `.lowbss` @ `LOW_SEG`         | 9,216, then 6,142 for task 0's stack |
 | the claim heap @ `HEAP_SEG`   | everything above, on demand |
 
 Headroom went from 1,089 bytes to five figures, and the package pool from
@@ -59,13 +59,12 @@ Linear 0x00600–0x0FFFF is free on every PC once the boot sector has handed
 off: the BIOS data area ends at 0x004FF and the kernel image starts at
 0x10000. That is ~62KB nobody was using. Three segments now carve it up
 (SPEC.md §2.1): `FAR_SEG` = 0x0060 for far code, `FAT_SEG` = 0x0300 for
-the FAT driver's mount-time FAT snapshot, and `LOW_SEG` = 0x0800 for
-stacks and disk buffers. `FAT_SEG` was claimed after this step by the
-FAT12/16 migration: its snapshot owns linear 0x03000–0x07FFF (16KB used,
-4KB reserve), reached through ES only, and size guard 5 in `kernel.asm`
-fences the `.fartext` blob below 0x03000 so far-code growth cannot collide
-with it. The former gap between the blob and `LOW_SEG` is therefore no
-longer free memory.
+the FAT driver's mount-time FAT snapshot, and `LOW_SEG` for stacks and disk
+buffers. `FAT_SEG` was claimed after this step by the FAT12/16 migration,
+reached through ES only, and size guard 5 in `kernel.asm` fences the
+`.fartext` blob below it so far-code growth cannot collide. Step E later
+sized all three against what they were measured to use and moved the kernel
+down onto them; the addresses in this paragraph are the step-A ones.
 
 ### A1 — task stacks → `LOW_SEG` (−16,896 bytes)
 
@@ -217,12 +216,67 @@ be 60KB — but the pool is shared, so a package that takes all of it is a
 package nothing else can run beside. The next lever, if one is ever needed,
 is a second pool segment; nothing today wants it.
 
+## Step E — size low memory, then move the kernel down onto it ✅ done
+
+Steps A–D treated linear 0x00600–0x0FFFF as *somewhere to put things*. Nobody
+had asked the opposite question: how much of it is actually used? The answer,
+measured rather than argued, is that most of it was not.
+
+The measurement is a 0xCC fill of every low byte at the top of `kmain`, then
+the machine driven as hard as it goes — Clock, two Bounces, About, the
+Control Panel on both its pages, the Task Manager with a window drag, a Disk
+window, the Fractal with its worker task, and Paint saving a GIF into a
+folder it created from the file dialog — then `pmemsave` and read the deepest
+mark in each region. ISR frames are included, because the tick and mouse
+handlers run on whichever stack they interrupt.
+
+| region             | reserved before | high-water | reserved after |
+|--------------------|-----------------|------------|----------------|
+| `.fartext` blob    | 10,752          | 5,455      | 10,752 (kept)  |
+| FAT snapshot       | 12,288 (24 sec) | 4,608 (9)  | 5,120 (10 sec) |
+| `sch_stacks`       | 16,896 (11×1536)| 150        | 5,632 (11×512) |
+| disk buffers       | 3,584           | 3,584      | 3,584          |
+| task 0's stack     | 20,478          | 246        | 6,142          |
+
+The `.fartext` reserve is deliberately **not** cut. Its 5,297 spare bytes are
+where the next cold module goes when the kernel segment needs relief again —
+worth more than 2.5KB of heap. Everything else was sized to a multiple of the
+measurement and the total came to 30,464 bytes, so `KERNEL_SEG` moved from
+0x1000 to **0x0800** and the 32,768 bytes between them went to the claim
+heap. On the 639K test machine the Task Manager's kernel figure fell from
+107K to 75K and the heap rose from 471K to 503K; a 256KB floor machine gains
+the same 32KB.
+
+**The floor is the boot sector, not the ladder.** The BIOS loads
+`boot/boot.asm` to 0000:7C00 and that code is still executing while the
+kernel's sectors arrive — it far-calls the splash at `KERNEL_SEG:0008` after
+every one — so `KERNEL_SEG:0000` cannot begin below 0x7E00. 0x0800 is the
+first round paragraph that clears it, and guard 8 in `kernel.asm` asserts it.
+Three files carry the constant: `kernel/kernel.asm`, `boot/boot.asm` (it is
+assembled separately) and `apps/os88api.inc` (it is baked into every
+package's far-call targets, so **every `.o88` must be rebuilt** — a package
+built against the old value far-calls into empty memory).
+
+**What it cost.** FAT16. `DSK_FAT_SECS` = 10 is below the 16 FAT sectors a
+volume must have before it can be FAT16 at all, so mount rule 10 (SPEC.md
+§18.2) now rejects the whole class structurally. The 2.88MB test geometry
+that existed to give the FAT16 encoding a positive test is gone from
+`tools/os88disk.py` and the `filetest-fat16.img` target is gone from the
+Makefile; the FAT16 halves of `dsk_next_clus` and `dskw_setfat` stay in the
+tree, unreachable. Every geometry this OS boots or builds still mounts with a
+sector to spare: 360KB = 2, 720KB = 3, 1.2MB = 7, 1.44MB = 9.
+
+**What to redo before trusting a smaller number.** Guard 3 only catches
+`.lowbss` crowding task 0; nothing catches a task stack that outgrows its own
+512-byte slice. Re-run the fill probe.
+
 ## Rejected
 
-- **Shrinking `SCH_STACK` below 1,536.** Would have saved ~5.6KB with no
-  model change, and was the fallback if A1 proved too invasive. A1 saved 3×
-  that and the stacks no longer compete with anything, so there is no reason
-  to run them tighter.
+- ~~**Shrinking `SCH_STACK` below 1,536.**~~ Rejected at step A1 on the
+  grounds that the stacks no longer competed with anything. They did: they
+  competed with how far down the kernel segment could move. Done in step E,
+  measured rather than guessed — 512 bytes, 3.4× the observed high-water
+  mark.
 - **Moving `font_glyphs` (764 bytes) to `LOW_SEG`.** It is read per glyph on
   the drawing hot path; an inner-loop segment override is not worth 764
   bytes while 28KB is free.

@@ -235,10 +235,12 @@ $(BUILD)/filetest.img: $(BUILD)/filetest.o88 tools/os88disk.py
 $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 --scramble $(BUILD)/filetest.o88 $(BUILD)/mines.o88 $(BUILD)/piano.o88
 
-# ...and on a FAT16 volume (2.88MB test geometry), which differs only in the
-# FAT entry encoding - the one part of the write path FAT12 cannot exercise.
-$(BUILD)/filetest-fat16.img: $(BUILD)/filetest.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 2880 $(BUILD)/filetest.o88
+# There WAS a third image here - the same package on a FAT16 volume, built on
+# the 2.88MB test geometry, which exercised the one part of the write path
+# FAT12 cannot. It went with DSK_FAT_SECS: at 10 sectors the mount's rule 10
+# rejects every FAT16 volume there can be (a FAT is only FAT16 with >= 4,085
+# clusters, i.e. >= 16 FAT sectors), so the image would build and refuse to
+# mount. dsk_next_clus / dskw_setfat keep their FAT16 halves, unreachable.
 
 # The software floppies (drive B:) hold packages, not boot code - os88fs only.
 # Directory order is pinned: mines first, hello second (tests rely on it);

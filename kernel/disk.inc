@@ -565,7 +565,10 @@ dsk_bpb_check:
 .jfail1:                        ; relay: the early rules' jumps land here
     jmp .fail
 .r10:
-    ; rule 10: 1 <= FATSz16 <= DSK_FAT_SECS (the snapshot buffer's size)
+    ; rule 10: 1 <= FATSz16 <= DSK_FAT_SECS (the snapshot buffer's size).
+    ; Since DSK_FAT_SECS fell to 10 this also rejects every FAT16 volume:
+    ; a FAT is only FAT16 with >= 4,085 clusters, which needs >= 16 FAT
+    ; sectors. The .fat16 decode below stays; nothing reaches it.
     mov ax, [dsk_bpb+DSK_B_FATSZ]
     test ax, ax
     jz .jfail1
@@ -890,9 +893,11 @@ dsk_clus2lba:
 ; off = clus + clus/2, then the word straddling that offset (an unaligned
 ; word load - legal on 8086; the 3-nibble problem dissolves against a
 ; resident FAT): odd cluster takes the top 12 bits, even the bottom.
-; FAT16 entry: a plain word array. Rule 16 guarantees off+1 stays inside
-; the snapshot for every valid cluster. No EOC/bad-mark decoding lives
-; here - dsk_read_chain's walk is size-driven (SPEC.md 18).
+; FAT16 entry: a plain word array - kept for the shape of the thing, but
+; unreachable since DSK_FAT_SECS fell to 10 (a FAT16 volume needs at least
+; 16 FAT sectors, so mount rule 10 turns it away first). Rule 16 guarantees
+; off+1 stays inside the snapshot for every valid cluster. No EOC/bad-mark
+; decoding lives here - dsk_read_chain's walk is size-driven (SPEC.md 18).
 ; -----------------------------------------------------------------------------
 dsk_next_clus:
     push bx

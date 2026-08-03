@@ -174,8 +174,13 @@ has read a lot of modern x86:
   no `pusha`/`popa`, no `push imm`, no `shl reg, imm` other than 1 (use CL), no
   `movzx`, no 32-bit registers. If the build fails with a warning-as-error
   about the CPU level, the agent reached for a 186+ instruction.
-- **Tiny model.** CS = DS = SS = 0x1000 for the kernel *and* every loaded
-  program. All calls are near. ES is scratch but must be restored.
+- **Near model.** CS = DS = `KERNEL_SEG` (0x0800) for the kernel and every
+  task; **SS = `LOW_SEG`**, because the task stacks live outside the kernel
+  segment — so `[bp+disp]` addresses SS, and a kernel pointer held in BP needs
+  an explicit `ds:` override. Kernel calls are near; a loaded package owns its
+  own segment and crosses the boundary by far call in one direction and
+  through its header's dispatcher in the other. ES is scratch but must be
+  restored.
 - **Register discipline.** Every public routine preserves all registers except
   its documented outputs. ISRs push DS/ES, load DS = KERNEL_SEG and `cld`
   before string ops. Critical sections are `pushf`/`cli` … `popf` — never

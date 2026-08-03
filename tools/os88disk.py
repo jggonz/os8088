@@ -16,10 +16,11 @@ argument order; every field is fixed, so rebuilds are byte-identical.
 Directory display names are the host filenames (8.3, uppercased).
 
 Geometries: 1440 (1.44MB, FAT12) and 360 (360KB, FAT12) are the shipped
-disks; 2880 (2.88MB ED, 5,698 clusters => FAT16) is test-only -- it exists
-so the kernel's FAT16 path is positively tested and is never referenced by
-the Makefile. The FAT width is derived from the cluster count exactly like
-the kernel does (< 4085 clusters => FAT12, else FAT16).
+disks, and now the only ones. A 2880 (2.88MB ED, 5,698 clusters => FAT16)
+geometry lived here so the kernel's FAT16 path had a positive test; it went
+when DSK_FAT_SECS fell to 10 sectors, which is below the 16 a FAT has to
+have to be FAT16 at all, so mount rule 10 (SPEC.md 18.2) now turns every
+FAT16 volume away and there is nothing left to test with.
 
 Boot-sector stub (offset 62): fixed hand-assembled bytes that print
 "Not a bootable disk. Press any key." via int 10h AH=0Eh teletype, wait
@@ -58,7 +59,6 @@ NAME_CHARS = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 GEOMETRY = {
     1440: (18, 2, 2880, 1, 9, 224, 0xF0),
     360: (9, 2, 720, 2, 2, 112, 0xFD),
-    2880: (36, 2, 5760, 1, 23, 240, 0xF0),   # test-only: FAT16
 }
 
 # Hand-assembled A.4 stub (verified against nasm; see module docstring):
@@ -343,8 +343,8 @@ def verify(path: str) -> int:
     if media != 0xF0 and not 0xF8 <= media <= 0xFF:
         fail(f"{path}: BPB_Media 0x{media:02X} not spec-legal")
     fatsz, = struct.unpack_from("<H", bs, 22)
-    if not 1 <= fatsz <= 32:
-        fail(f"{path}: BPB_FATSz16 {fatsz} outside 1..32 (DSK_FAT_SECS)")
+    if not 1 <= fatsz <= 10:
+        fail(f"{path}: BPB_FATSz16 {fatsz} outside 1..10 (DSK_FAT_SECS)")
     spt, = struct.unpack_from("<H", bs, 24)
     if spt not in (8, 9, 15, 18, 21, 36):
         fail(f"{path}: BPB_SecPerTrk {spt} not a real floppy geometry")
@@ -480,9 +480,8 @@ def main() -> int:
         description="Build or verify a FAT data floppy of .o88 packages.")
     ap.add_argument("-o", "--output", metavar="OUT.img",
                     help="floppy image to write")
-    ap.add_argument("--size", type=int, choices=(1440, 360, 2880),
-                    help="disk size in KB: 1440 (18 spt), 360 (9 spt), "
-                         "or 2880 (36 spt, FAT16 -- test only)")
+    ap.add_argument("--size", type=int, choices=(1440, 360),
+                    help="disk size in KB: 1440 (18 spt) or 360 (9 spt)")
     ap.add_argument("--scramble", action="store_true",
                     help="fragment cluster chains round-robin (test only)")
     ap.add_argument("--verify", metavar="IMG",

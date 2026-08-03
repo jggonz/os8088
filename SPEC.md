@@ -83,12 +83,12 @@ of them live in one block at the top of `kernel.asm`.
 | linear        | segment | contents                                          |
 |---------------|---------|----------------------------------------------------|
 | 0x00000       | 0x0000  | IVT + BIOS data area — theirs, 1,536 bytes         |
-| 0x00600       | `FAR_SEG` | far code (§33), copied here by `far_init`; `FAR_PARA` paragraphs reserved (§15.1 guard 5) |
-| 0x03000       | `FAT_SEG` | mount-time FAT snapshot, `DSK_FAT_SECS`×512 bytes, via **ES only** (§18) |
-| 0x06000       | `LOW_SEG` | `.lowbss`: disk buffers + task stacks, then task 0's stack growing down from `STK0_TOP` (§2.1) |
-| 0x10000       | `KERNEL_SEG` | kernel: code, data, .bss — ceiling `KERN_MAX` (0xB000 = 45,056 B) |
-| 0x1B000       | `PKG_SEG` | the package pool, `PKG_PARA` paragraphs (60KB) — **its own address space** now, one segment per loaded package (§20.1) |
-| 0x2A000       | `HEAP_SEG` | **the claim heap (§42)** — everything from here to the top of conventional memory, handed out on demand |
+| 0x00600       | `FAR_SEG` | far code (§33), copied here by `far_init`; `FAR_PARA` paragraphs (10,752 B) reserved (§15.1 guard 5) |
+| 0x03000       | `FAT_SEG` | mount-time FAT snapshot, `DSK_FAT_SECS`×512 = 5,120 bytes, via **ES only** (§18) |
+| 0x04400       | `LOW_SEG` | `.lowbss`: task stacks + disk buffers (9,216 B), then task 0's stack growing down from `STK0_TOP` (§2.1) |
+| 0x08000       | `KERNEL_SEG` | kernel: code, data, .bss — ceiling `KERN_MAX` (0xB000 = 45,056 B) |
+| 0x13000       | `PKG_SEG` | the package pool, `PKG_PARA` paragraphs (60KB) — **its own address space** now, one segment per loaded package (§20.1) |
+| 0x22000       | `HEAP_SEG` | **the claim heap (§42)** — everything from here to the top of conventional memory, handed out on demand |
 | 0xA0000       | 0xA000  | VGA planar framebuffer, 80 bytes/row               |
 | 0xB0000       | 0xB000  | Hercules framebuffer, 4 banks × 0x2000, 90 bytes/row (§39) — mono adapters only |
 | 0xB8000       | 0xB800  | CGA framebuffer, 2 banks × 0x2000, 80 bytes/row (§39) — mono adapters only |
@@ -104,13 +104,29 @@ the same allocator, which is what retires `apps/paint`'s unsanctioned grab
 of linear 0x66000 (§41).
 
 The floor machine is 256KB and the ladder fits it with room: BIOS 1.5KB,
-low memory 22.5KB, the kernel's 45KB, the 60KB pool — and about 128KB of
+low memory 29.75KB, the kernel's 45KB, the 60KB pool — and about 120KB of
 heap left over for whoever asks first.
+
+**`KERNEL_SEG` is 0x0800, and the boot sector is why it is not lower.** It
+was 0x1000 for as long as low memory was a place to put things rather than a
+sized ladder; once the four rungs below it were measured (below, and §8) they
+came to 30,464 bytes, not 62,976, and the 32KB difference was memory nothing
+could address. The floor is `0x07E0`: the BIOS loads `boot/boot.asm` to
+0000:7C00 and that code is *still running* while the kernel's sectors arrive
+— it far-calls the splash at `KERNEL_SEG:0008` after every one — so
+`KERNEL_SEG:0000` must begin at or above 0x7E00, the byte after it. (The boot
+sector's stack grows *down* from 0x7C00, so it is safe by the same test, and
+both are dead ground by the time `kmain` points SS at `LOW_SEG`.) 0x0800 is
+the first round paragraph that clears it. `boot/boot.asm` carries its own
+`KERNEL_SEG` because it is assembled separately, and `apps/os88api.inc`
+carries a third copy because it is baked into every package's far-call
+targets: **all three move together, and every `.o88` must be rebuilt**, since
+a package built against the old value far-calls into empty memory.
 
 ### 2.1 Low memory
 
-Linear 0x00600..0x0FFFF — ~62KB between the BIOS data area and the kernel
-image — is free on every machine once the boot sector has handed off.
+Linear 0x00600..0x07FFF — 30,464 bytes between the BIOS data area and the
+kernel image — is free on every machine once the boot sector has handed off.
 Nothing the kernel keeps there needs to be addressable through DS, which is
 the whole point: it is memory the kernel's own 64KB window does not spend.
 
@@ -122,13 +138,15 @@ landed. Guard 7 (§15.1) proves the second link has no gap.
 `LOW_SEG` holds the `.lowbss` section, addressed through **SS** (the task
 stacks) or **ES** (the disk buffers), never DS:
 
-- `sch_stacks` — 11 × 1,536 bytes, task slots 1..11 (§8).
+- `sch_stacks` — 11 × `SCH_STACK` (512) = 5,632 bytes, task slots 1..11 (§8).
 - Task 0 runs on the same segment at `STK0_TOP`, growing down toward the top
-  of `.lowbss`. All tasks share one SS, so a switch is still an SP swap and
-  SS is not part of the saved frame. **This is the reservation that lets a
-  built-in app run at all**: About, Disk, the Control Panel and the Task
-  Manager have no task of their own — they execute inside window callbacks
-  on the UI task, on this stack.
+  of `.lowbss` — 6,142 bytes of room. All tasks share one SS, so a switch is
+  still an SP swap and SS is not part of the saved frame. **This is the
+  reservation that lets a built-in app run at all**: About, Disk, the Control
+  Panel and the Task Manager have no task of their own — they execute inside
+  window callbacks on the UI task, on this stack. So does every package
+  callback, the menu tracker and the Standard File dialog (§38), which is
+  why task 0 gets the larger share of the two.
 - `disk_dir` (the synthesized directory cache), `disk_icons` (the harvested
   icon cache) and `dsk_secbuf` (sector scratch) — written through ES
   (int 13h ES:BX, or `rep movsw` from kernel scratch at mount, §18–19),
@@ -138,13 +156,27 @@ stacks) or **ES** (the disk buffers), never DS:
   read-modify-written, and the zero-padded final sector of a file.
 
 `LOW_SEG:LOW_LIMIT` **is** `KERNEL_SEG:0x0000`. Every `LOW_SEG` offset must
-stay strictly below it, and the §15.1 assertions keep task 0 8KB of
+stay strictly below it, and the §15.1 assertions keep task 0 4KB of
 clearance above `.lowbss`.
 
-`FAR_SEG` holds the `.fartext` blob — see §33.
+**The stack numbers are measured, not guessed.** Every byte of low memory was
+filled with 0xCC at the top of `kmain` and the machine driven as hard as it
+goes — Clock, two Bounces, About, the Control Panel on both its pages, the
+Task Manager with a window drag, a Disk window, the Fractal with its worker
+task, and Paint saving a GIF into a folder it created from the file dialog.
+The deepest mark left was **246 bytes** on task 0's stack and **150** on a
+background task's, ISR frames included (the tick and mouse handlers run on
+whichever stack they interrupt). The reservations above are 25× and 3.4×
+those. Redo the fill probe before lowering either; guard 3 (§15.1) only
+catches `.lowbss` eating task 0's room, not a stack that outgrows its slice.
 
-`FAT_SEG` holds the mount-time FAT snapshot: up to `DSK_FAT_SECS` (= **24**)
-sectors, 12,288 bytes, rewritten from FAT1 (or the FAT2 fallback, §18.3) on
+`FAR_SEG` holds the `.fartext` blob — see §33. 10,752 bytes reserved against
+a blob of 5,455 (`taskmgr.inc` 3,622 + `ctrl.inc` 1,790 + shims), and the
+5,297-byte remainder is deliberate: it is where the *next* cold module goes
+when the kernel segment needs relief again.
+
+`FAT_SEG` holds the mount-time FAT snapshot: up to `DSK_FAT_SECS` (= **10**)
+sectors, 5,120 bytes, rewritten from FAT1 (or the FAT2 fallback, §18.3) on
 **every** mount — no cross-mount state survives. Reached through **ES
 only**, never DS: `dsk_next_clus` is the single reader and `dskw_setfat`
 (§18.4) the single writer, and int 13h moves it via ES:BX only at mount (in)
@@ -152,13 +184,16 @@ and at a FAT flush (out). The whole region is the snapshot; there is no
 reserve, and `FAT_PARA` is derived from `DSK_FAT_SECS` so the two can never
 disagree.
 
-**Why 24 and not 32.** `DSK_FAT_SECS` is an *acceptance* threshold, not a
-buffer size: §18.2 rule 10 refuses to mount a volume whose declared FAT is
-larger, before a byte of it is read. 32 accepted four sectors more than any
-self-consistent volume can declare — the largest FAT12 is 12 sectors and
-the largest FAT16 reachable on the 2.88MB test geometry is 23 — so the top
-8KB could only ever have held a hostile BPB's padding. Every geometry this
-project builds still mounts: 360KB = 2 sectors, 1.44MB = 9, 2.88MB = 23.
+**Why 10.** `DSK_FAT_SECS` is an *acceptance* threshold, not a buffer size:
+§18.2 rule 10 refuses to mount a volume whose declared FAT is larger, before
+a byte of it is read. 10 covers every geometry this OS boots or builds with a
+sector to spare — 360KB = 2, 720KB = 3, 1.2MB = 7, 1.44MB = 9 — and nothing
+else. It was 24, sized for a 2.88MB FAT16 test image (23 sectors) that no
+longer exists; **the consequence is that FAT16 is now unreachable**, because
+a FAT is only FAT16 with ≥ 4,085 clusters and that needs ≥ 16 FAT sectors, so
+rule 10 turns every FAT16 volume away structurally. The FAT16 halves of
+`dsk_next_clus` and `dskw_setfat` stay in the tree, and nothing can call
+them.
 
 The full plan this came from is `docs/MEMORY-PLAN.md`.
 
@@ -206,19 +241,20 @@ the Disk kind's `KD_CAP`.
 ## 3. Global constants (defined once in kernel.asm, used everywhere)
 
 ```nasm
-KERNEL_SEG   equ 0x1000
-VGA_SEG      equ 0xA000
+KERNEL_SEG   equ 0x0800                ; linear 0x08000 - guard 8 fences it
+VGA_SEG      equ 0xA000                ; against the boot sector at 0x7C00
 ; the memory ladder (§2) - each rung is the one below plus its size
 FAR_SEG      equ 0x0060                ; linear 0x00600 - far code (§33)
 FAR_PARA     equ 0x02A0                ; 10,752 bytes reserved for the blob
 FAT_SEG      equ FAR_SEG + FAR_PARA    ; FAT snapshot, via ES ONLY (§18)
-DSK_FAT_SECS equ 24                    ; resident FAT cap, sectors (12,288 B)
+DSK_FAT_SECS equ 10                    ; resident FAT cap, sectors (5,120 B)
 FAT_PARA     equ DSK_FAT_SECS * 32     ; 512 bytes = 32 paragraphs
 LOW_SEG      equ FAT_SEG + FAT_PARA    ; .lowbss: stacks + disk buffers
 LOW_LIMIT    equ (KERNEL_SEG - LOW_SEG) * 16   ; LOW_SEG:LOW_LIMIT IS
 STK0_TOP     equ LOW_LIMIT - 2                 ; KERNEL_SEG:0
 KERN_MAX     equ 0xB000                ; the kernel's own ceiling (45,056 B)
-HEAP_SEG     equ KERNEL_SEG + 0x1000   ; the claim heap (§42)
+PKG_SEG      equ KERNEL_SEG + KERN_MAX/16    ; the package pool (§20.1)
+HEAP_SEG     equ PKG_SEG + PKG_PARA          ; the claim heap (§42)
 ; VGA reference geometry, and the initializers of the live block (§39.2);
 ; the live screen is [vid_w] / [vid_h] / [vid_stride]
 SCREEN_W     equ 640
@@ -497,10 +533,10 @@ white to black, because a dithered 8x8 glyph is unreadable, §39.4).
   for eleven slots: a refused `OSAPI_TASK_SPAWN` (CF=1) and a stream
   open's err 6 are ordinary outcomes, not edge cases, and a package must
   degrade rather than abort when it cannot have its worker. Each slot has
-  a 1536-byte stack:
+  an `SCH_STACK`-byte stack — **512**, measured (§2.1), not guessed:
   `sch_stacks resb (MAX_TASKS-1) * SCH_STACK` **in `.lowbss`** (§2.1),
   slot n's stack top at
-  `sch_stacks + n*SCH_STACK` (slot 1 owns bytes 0..1535).
+  `sch_stacks + n*SCH_STACK` (slot 1 owns bytes 0..511).
 - Task record (8 bytes): `T_STATE` (0 free, 1 ready, 2 sleeping), `T_SP`
   (saved SP), `T_WAKE` (tick count to wake at), `T_INST` at offset 6
   (byte: owning instance index, §29; 0xFF = none — the Task Manager
@@ -670,7 +706,7 @@ sch_hold     resb 1       ; ticks the running task has held the CPU since the
                           ; last entry to sch_switch
 sch_wd_hits  resw 1       ; diagnostic count of watchdog-forced switches;
                           ; wraps mod 65536, never reset after init, read
-                          ; only by a debugger (QMP `xp` on segment 0x1000)
+                          ; only by a debugger (QMP `xp` on segment 0x0800)
 ```
 
 **sch_isr decision order (binding).** The mode check is the *last* thing in
@@ -1985,7 +2021,7 @@ by the **os8088 API jump table** (§20.3) — a run of 4-byte `jmp near` slots a
 pinned offsets. kernel.asm also owns the tiny osapi helper routines
 (§20.4) and the `osapi_seed` word. `cpu 8086` + `bits 16` + `org 0`.
 
-**Boot splash entry — 1000:0008.** A third fixed entry point sits between
+**Boot splash entry — 0800:0008.** A third fixed entry point sits between
 the cold entry and the API table: a `jmp near spl_tick` at offset 0x0008,
 **far-called by the boot sector after every sector it reads** once at least
 `SPL_RESIDENT` (= 6) sectors are in memory. Contract: AX = sectors loaded
@@ -2076,23 +2112,32 @@ KBSS_SIZE equ kernel_bss_end - $$
 %if KTEXT_SIZE + KFAR_SIZE > KERN_MAX
 %error "kernel too big: image + fartext must stay below KERN_MAX"
 %endif
-%if KLOW_SIZE > STK0_TOP - 8192
-%error "lowbss too big: task 0's stack needs 8KB of clearance below STK0_TOP"
+%if KLOW_SIZE > STK0_TOP - 4096
+%error "lowbss too big: task 0's stack needs 4KB of clearance below STK0_TOP"
 %endif
 %if STK0_TOP >= LOW_LIMIT
 %error "STK0_TOP must stay below LOW_LIMIT (LOW_SEG:LOW_LIMIT is the kernel)"
 %endif
-%if KFAR_SIZE > 0x2A00
-%error "fartext blob would collide with FAT_SEG at linear 0x03000"
+%if KFAR_SIZE > FAR_PARA * 16
+%error "fartext blob would collide with FAT_SEG - raise FAR_PARA"
+%endif
+%if FAT_SEG + FAT_PARA != LOW_SEG
+%error "low-memory ladder has a gap: FAT_PARA does not reach LOW_SEG"
+%endif
+%if KERNEL_SEG < 0x07E0
+%error "KERNEL_SEG would overlap the boot sector at 0000:7C00"
 %endif
 
 KLOWFAR_KB equ (KLOW_SIZE + KFAR_SIZE + 1023) / 1024   ; §28 RAM figure
 ```
 
 The second guard exists because the far blob lands *inside* the kernel
-window and only leaves it when `far_init` runs. The fifth guard fences
-`FAT_SEG` (§2.1): `FAR_SEG` linear 0x00600 + 0x2A00 = 0x03000, where the
-FAT snapshot begins. Keep this block last.
+window and only leaves it when `far_init` runs. The fifth fences `FAT_SEG`
+(§2.1) — `FAR_SEG` linear 0x00600 + `FAR_PARA` is where the FAT snapshot
+begins — and the seventh proves the rung above it has no gap. The eighth is
+the boot sector: the kernel is read in *while boot.asm is still executing*
+at 0000:7C00, so `KERNEL_SEG` can never fall below 0x07E0 (§2). Keep this
+block last.
 
 ## 16. Build & test
 
@@ -2120,7 +2165,7 @@ FAT snapshot begins. Keep this block last.
   setup screen once, until `vm/<machine>/nvr/` exists.
 - Gate packages ride their own scratch images and are mounted in place of
   the apps disk with `make test-snd TESTAPPS=<img>` (the `test` target's B:
-  drive is fixed):  and `build/filetest.img` / `-frag` / `-fat16` (§18.4). A write
+  drive is fixed):  and `build/filetest.img` / `-frag` (§18.4). A write
   test is only half-done in the emulator — finish it on the host with
   `python3 tools/os88disk.py --verify <img>`.
 - **`check-images`**: `build/` is gitignored but a curated set inside it is
@@ -2207,7 +2252,7 @@ FAT snapshot begins. Keep this block last.
     still pull down and Note Pad still types — every wait loop yields
     (§8.2) — and a runaway package's callback is still cut off after
     `SCH_WD_TICKS` ticks (`sch_wd_hits` advances, readable with QMP `xp` on
-    segment 0x1000).
+    segment 0x0800).
 12. **Writing works and the volume stays a legal FAT volume** (§18.4/§27.1):
     type into Note Pad, F2 saves ("Saved NOTES.TXT"), F3 in a *second*
     Note Pad instance loads the same text back; the Disk window's Refresh
@@ -2336,7 +2381,7 @@ held, and a read landing outside its destination buffer.
 | 7 | BPB_RootEntCnt | ≥ 1, ≤ 512, (RootEntCnt×32) mod 512 == 0 | FAT12/16 must have a root dir (spec); ≤512 bounds the mount stall (≤32 root sectors); whole-sector count is a spec MUST |
 | 8 | BPB_TotSec16 | ≠ 0 | 16-bit LBA bound: TotSec16==0 ⇒ the count lives in TotSec32 ⇒ ≥65,536 sectors ⇒ unaddressable by the AX=LBA `disk_read` contract. **Documented rejection.** TotSec32 otherwise ignored (some formatters set both; harmless) |
 | 9 | BPB_Media | ∈ {0xF0, 0xF8..0xFF} | spec-legal set; cheap garbage gate. FAT[0]'s media echo is NOT checked (spec says don't rely on it) |
-| 10 | BPB_FATSz16 | ≥ 1 and ≤ `DSK_FAT_SECS` (32) | ≥1: layout math. ≤32: the FAT snapshot buffer is 16,384 B (§2.1). Covers every real floppy FAT: 360K=2, 720K=3, 1.2M=7, 1.44M=9, 2.88M=9, and every rule-13-reachable FAT16 (≤23 sectors) plus padded hostile FATs. Larger ⇒ documented mount failure |
+| 10 | BPB_FATSz16 | ≥ 1 and ≤ `DSK_FAT_SECS` (10) | ≥1: layout math. ≤10: the FAT snapshot buffer is 5,120 B (§2.1). Covers every real floppy FAT this OS boots or builds: 360K=2, 720K=3, 1.2M=7, 1.44M=9. Larger ⇒ documented mount failure — **including every FAT16 volume**, which needs ≥ 4,085 clusters and so ≥ 16 FAT sectors (§2.1) |
 | 11 | BPB_SecPerTrk | ∈ {8, 9, 15, 18, 21, 36} | whitelist of real floppy geometries; a hostile spt×heads product past 16 bits would zero `disk_read`'s CHS divisor → divide fault with `sch_lock` held |
 | 12 | BPB_NumHeads | ∈ {1, 2} | same divisor protection |
 | 13 | TotSec16 coherence | TotSec16 ≤ SecPerTrk × NumHeads × 80 | every in-volume LBA is CHS-reachable under `disk_read`'s cyl<80 guard — files can't mount-list then die "Disk error" on geometry grounds |
@@ -2602,8 +2647,10 @@ replace, empty file, rename both ways, rename-onto-existing, bad name,
 delete twice, fill-to-refusal, mass delete, free-space equality). Like
 `fmtest`/`sbtest` it never ships on the apps disks — their directory order
 is pinned — and rides its own scratch images: `build/filetest.img` (FAT12),
-`-frag` (`--scramble`d, so allocation and free meet holes), `-fat16` (the
-2.88M test geometry, the only way to exercise the FAT16 entry encoding).
+and `-frag` (`--scramble`d, so allocation and free meet holes). There was a
+third, `-fat16`, on the 2.88M test geometry — the only way to exercise the
+FAT16 entry encoding; it went when `DSK_FAT_SECS` fell to 10 and rule 10
+(§18.2) began rejecting every FAT16 volume there can be (§2.1).
 Run it with `make test-snd TESTAPPS=build/filetest.img`, then check the
 volume from the host with `tools/os88disk.py --verify` — the in-kernel
 free-space check and the host fsck catch different leaks, and both are part
@@ -2854,13 +2901,15 @@ Derived layout (all LBAs volume-relative = disk-absolute; unpartitioned):
 | FAT bytes needed    | 2849×1.5 = 4274 ≤ 4608  | 356×1.5 = 534 ≤ 1024  |
 | FAT[0..1] reserved  | `F0 FF FF`              | `FD FF FF`            |
 
-**Test-only third geometry** (never built by the Makefile; exists so the
-FAT16 path is positively tested, §24): 2.88M ED — SecPerClus 1, RsvdSecCnt
-1, NumFATs 2, RootEntCnt 240, TotSec16 5760, Media 0xF0, FATSz16 23,
-SecPerTrk 36, NumHeads 2. Layout: FATs LBA 1–23 / 24–46, root 47–61
-(15 sectors), data from LBA 62; CountOfClusters = 5698 ≥ 4085 ⇒ **FAT16**;
-FAT bytes 5700×2 = 11,400 ≤ 11,776; FAT[0..1] reserved `F0 FF FF FF` (two
-16-bit entries).
+**There was a test-only third geometry** — 2.88M ED, 23 FAT sectors,
+CountOfClusters 5698 ≥ 4085 ⇒ FAT16 — built by neither the Makefile nor the
+shipped disks, and it existed for one reason: to give the FAT16 entry
+encoding a positive test. It is gone (§2.1). `DSK_FAT_SECS` is 10 now, below
+the 16 FAT sectors a volume must have before it can be FAT16 at all, so
+rule 10 rejects the whole class before a byte of the FAT is read. The FAT16
+halves of `dsk_next_clus` and `dskw_setfat` remain in the tree, unreachable;
+restoring the geometry means raising `DSK_FAT_SECS` back to ≥ 23, which the
+low-memory ladder no longer has room for.
 
 **The boot-sector stub**: 62 bytes of BPB, then a fixed hand-assembled
 stub (~40 bytes, a hex blob in os88disk.py) — print "Not a bootable disk.
@@ -3527,7 +3576,7 @@ Two teardown corollaries, both about not trading a crash for a leak:
 - **The record is released even when it has no window.** `I_WIN = 0` (a
   corrupt table; not otherwise reachable) means there is nothing to
   `wm_destroy` — `wm_destroy` with BX = 0 would zero the cold-entry `jmp` at
-  `1000:0000` — but the record itself is real, so the exit still passes it
+  `0800:0000` — but the record itself is real, so the exit still passes it
   to `task_exit` as the release byte. Only a `T_INST` outside the table
   exits with no release byte at all, the `sbl_refill_task` precedent
   (§34.5).
@@ -3584,7 +3633,8 @@ Two teardown corollaries, both about not trading a crash for a leak:
    wrong trade. This is the §14 Bounce idiom, and `app_bounce_task` in
    `kernel/apps.inc` is the reference implementation for everything a
    worker does.
-6. **The worker's stack is 1536 bytes in `LOW_SEG`, and SS ≠ DS** (§2.1).
+6. **The worker's stack is `SCH_STACK` (512) bytes in `LOW_SEG`, and
+   SS ≠ DS** (§2.1).
    No deep recursion, no large stack buffers, and remember that
    `[bp+disp]` addresses SS — a kernel or package pointer held in BP needs
    an explicit `ds:` override.
@@ -4313,7 +4363,7 @@ content-relative; the procs fetch the content origin via `wm_content`
   first reveal (osapi_srand with osapi_get_ticks, then osapi_rand), excluding
   the clicked cell. Reveal of a 0-count cell flood-fills neighbours
   (iterative, explicit queue in the package's own buffer — no recursion;
-  stack budget is the UI task's 1536 bytes). Flags block reveal. Reveal of
+  stack budget is the UI task's, §2.1). Flags block reveal. Reveal of
   a mine → lost (reveal all mines, mark wrong flags). All 71 safe cells
   revealed → won. After win/lose, clicks are dead until 'N'.
 - Handlers repaint only what changed (single cells; whole board on
@@ -4344,10 +4394,12 @@ and non-zero exit + stderr message on any validation failure.
 - `tools/os88disk.py -o OUT.img --size {1440,360} [PKG.o88 ...]` — builds
   a FAT12 data floppy per §19. CLI shape unchanged from the os88fs era —
   the Makefile call sites need zero edits; pure Python 3 stdlib (no
-  mtools). A third `--size 2880` geometry is **test-only** (the §19 FAT16
-  test image; never referenced by the Makefile) — the tool derives the
-  FAT type from the cluster count exactly like the kernel and emits 12- or
-  16-bit FATs accordingly.
+  mtools). These two are the only geometries: a `--size 2880` (2.88M ED,
+  FAT16) existed so the kernel's FAT16 path had a positive test and went
+  with it (§2.1). The tool still derives the FAT type from the cluster
+  count exactly like the kernel does, and its `--verify` fsck carries the
+  same `1 ≤ FATSz16 ≤ 10` bound as mount rule 10, so a volume the kernel
+  would refuse fails on the host too.
   - Package validation, kept in step with os88pkg: magic 0x384F,
     version 3, image field ∈ [32, filesize], image == file size, non-empty
     printable header name, size ≤ 0xFFFF (an older file fails with
@@ -4974,7 +5026,7 @@ init-less:
 | `inst_task_die` | in DI = the CURRENT task's instance record; no lock held; **never returns**: gfx_lock, wm_destroy I_WIN (clears wm_owner), I_WIN ← 0, gfx_unlock, then `jmp task_exit` with BX = record ptr (I_STATE is offset 0 — the release byte). Reached from Clock's and Bounce's own loops (§14) and, for packages, from `inst_pkg_alive` (§20.6). |
 | `inst_wchk` | module-internal (§20.6). in BX = an untrusted window ptr; out CF=0 if BX lies inside `wm_wins` and is record-aligned, CF=1 otherwise. Preserves everything but the flags. The fence in front of `inst_of_win` for package-supplied pointers, whose `div cl` would otherwise fault. |
 | `inst_pkg_spawn` | API slot 0x00B8 (§20.6). in AX = near worker entry, BX = the package's own window ptr; **caller holds the gfx lock** (exclusion against another *spawner* is `task_spawn`'s own IF=0 window, §8, not this lock). Refuses (CF=1, nothing created) when BX fails `inst_wchk`, names no owner, names a record with I_STATE ≠ 1, that record already has I_TASK ≠ 0xFF, or the **ownership fence** rejects it — the record must be a package (I_KIND bit 7) and AX must satisfy I_SPTR ≤ AX < I_SPTR + I_SIZE, which is what ties the spawn to the *calling* instance — or when `task_spawn` finds the table full. Else `task_spawn` (AX = entry, DX = instance index derived as (record − inst_tab) >> 5, the `app_launch` idiom), I_TASK ← slot, CF=0, AL = slot. Preserves every register but AL and the flags. No rollback exists or is needed — the instance is already published and stays live on refusal. |
-| `inst_pkg_alive` | API slot 0x00BC (§20.6). in BX = the package's own window ptr; **gfx lock NOT held**; called from the worker only. Returns with every register and the flags preserved while BX names a record with I_STATE = 1 — and returns unconditionally, without exiting anything, when `sch_cur` = 0: the UI task must never `task_exit` (§8), so a wrong-context call is refused. Otherwise recovers the *running task's* record from `T_INST` (§8) and `jmp inst_task_die` — never returns. A record with I_WIN = 0 (corrupt table: nothing to `wm_destroy`, and BX = 0 there would zero the cold-entry `jmp` at 1000:0000) still exits with BX = the record, so the record, its region and its dock/tm rows are released. Only T_INST ≥ INST_MAX exits with BX = 0 — no release byte because there is no record — the `sbl_refill_task` precedent (§34.5). |
+| `inst_pkg_alive` | API slot 0x00BC (§20.6). in BX = the package's own window ptr; **gfx lock NOT held**; called from the worker only. Returns with every register and the flags preserved while BX names a record with I_STATE = 1 — and returns unconditionally, without exiting anything, when `sch_cur` = 0: the UI task must never `task_exit` (§8), so a wrong-context call is refused. Otherwise recovers the *running task's* record from `T_INST` (§8) and `jmp inst_task_die` — never returns. A record with I_WIN = 0 (corrupt table: nothing to `wm_destroy`, and BX = 0 there would zero the cold-entry `jmp` at 0800:0000) still exits with BX = the record, so the record, its region and its dock/tm rows are released. Only T_INST ≥ INST_MAX exits with BX = 0 — no release byte because there is no record — the `sbl_refill_task` precedent (§34.5). |
 | `inst_launch_post` | in AL = kind: one atomic word store of kind+1 into `inst_launch` — the deferred launch channel for lock-held posters (drained by ui_task step 3, §13). Rapid double posts coalesce (last wins). |
 
 **Sound teardown (§34.3, Phase 1).** Both free points release the

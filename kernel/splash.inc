@@ -2,7 +2,7 @@
 ; splash.inc - boot-time loading screen (SPEC.md 15)
 ;
 ; While the boot sector is still pulling the rest of this kernel off the
-; floppy, it far-calls spl_tick (via the pinned 1000:0008 entry) after every
+; floppy, it far-calls spl_tick (via the pinned 0800:0008 entry) after every
 ; sector that lands. The first tick switches to mode 12h and draws the
 ; welcome dialog; every tick advances a pixel-granular progress bar, a
 ; percentage, and a spinning vector "8088" - stroke digits coin-flipped
@@ -43,7 +43,7 @@ SPL_BAR_Y   equ 264             ; bar interior top row on VGA - inside the
 SPL_BAR_H   equ 16
 
 ; -----------------------------------------------------------------------------
-; spl_tick - the 1000:0008 far entry (SPEC.md 15).
+; spl_tick - the 0800:0008 far entry (SPEC.md 15).
 ; in: AX = sectors loaded, DX = total sectors. Preserves every register and
 ; segment; flags clobbered. Runs on the boot stack, boot sector's segments.
 ; -----------------------------------------------------------------------------

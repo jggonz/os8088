@@ -1115,7 +1115,7 @@ inst_pkg_alive:
     call inst_ptr               ; DI = inst_tab + index*32
     cmp word [di+I_WIN], 0
     je .winless                 ; nothing to destroy; wm_destroy with BX = 0
-                                ; would zero the cold-entry jmp at 1000:0000
+                                ; would zero the cold-entry jmp at 0800:0000
     jmp inst_task_die           ; never returns
 .winless:
     call snd_release_rec        ; the inst_task_die order, minus the window

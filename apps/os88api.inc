@@ -60,7 +60,11 @@
 ; Your image is linked at org 0 and loaded at a paragraph boundary, so it is
 ; position-independent: there are no relocations, and two instances of one
 ; package differ only in the segment they run in.
-KERNEL_SEG   equ 0x1000     ; where the kernel is, and what ES holds on entry
+KERNEL_SEG   equ 0x0800     ; where the kernel is, and what ES holds on entry.
+                            ; It is baked into every OSAPI_* far call, so a
+                            ; package built against a different value calls
+                            ; into empty memory: rebuild EVERY .o88 (and the
+                            ; apps floppies) whenever the kernel moves
 APP_MAX_SIZE equ 0xF000     ; image + bss budget: the whole 60KB pool, if
                             ; nothing else is loaded
 ; The REFERENCE screen, not a promise. Since SPEC.md 39 the kernel drives

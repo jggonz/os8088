@@ -3,9 +3,9 @@
 ;
 ; The BIOS loads this single 512-byte sector to 0000:7C00 and jumps to it with
 ; DL set to the drive we came from. Our only job is to pull the kernel off the
-; floppy into 1000:0000 and hand control over. The loading screen itself lives
+; floppy into 0800:0000 and hand control over. The loading screen itself lives
 ; in the kernel (kernel/splash.inc, SPEC.md 15): once its opening SPL_RESIDENT
-; sectors are aboard we far-call its pinned 1000:0008 entry after every
+; sectors are aboard we far-call its pinned 0800:0008 entry after every
 ; further sector, and it draws the welcome dialog, progress bar and spinning
 ; 8088. Strictly event-driven - a completed read is the only thing that ever
 ; advances it, so the animation costs no load time.
@@ -31,8 +31,14 @@ org 0x7C00
 %define HEADS 2
 %endif
 
-KERNEL_SEG   equ 0x1000         ; kernel lands at linear 0x10000
-STACK_TOP    equ 0x7C00         ; stack grows down, away from our code
+KERNEL_SEG   equ 0x0800         ; kernel lands at linear 0x08000 - the first
+                                ; round paragraph above THIS sector, which the
+                                ; BIOS put at 0x7C00 and which keeps running
+                                ; (splash far calls, below) while the kernel
+                                ; arrives. Must match kernel/kernel.asm, whose
+                                ; guard 8 asserts the 0x07E0 floor
+STACK_TOP    equ 0x7C00         ; stack grows down, away from our code - and
+                                ; away from the kernel, which lands above us
 SPLASH_OFF   equ 0x0008         ; the kernel's boot splash far entry (SPEC.md 15)
 SPL_RESIDENT equ 6              ; splash is fully aboard after this many
                                 ; sectors - must match kernel/splash.inc
