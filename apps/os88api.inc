@@ -113,58 +113,41 @@ OSAPI_MOUSE         equ 0x006C   ; out CX=mouse_x, DX=mouse_y, AL=mouse_btn
 OSAPI_SRAND         equ 0x0070   ; AX -> [osapi_seed]
 OSAPI_RAND          equ 0x0074   ; out AX = next pseudo-random word
 
-; --- sound (SPEC.md 20.3/34): the whole surface exists from Phase 1; the
-; --- unbuilt tiers return their documented error paths until they land.
-OSAPI_SND_CAPS      equ 0x0078   ; out AX = merged caps word (SND_CAP_*),
-                                 ; BL = tone route (0 = speaker, 1 = OPL2),
-                                 ; DX = present-driver bits
+; --- sound (SPEC.md 20.3/34): the PC speaker, which is the whole of it.
+; The FM and STREAM slots went with the sound cards they drove; a package
+; that wants to play a sample does it through PLAY, out of its own buffer.
+OSAPI_SND_CAPS      equ 0x0078   ; out AX = caps word (SND_CAP_*), BL = 0
+                                 ; (the speaker), DX = 1 (it is present)
 OSAPI_SND_TONE      equ 0x007C   ; AX = freq Hz (0 = off), CX = duration
                                  ; ticks (0 = until off), DL = priority
                                  ; (default 0x40); out CF=1 refused, else
                                  ; AL = owner generation
-OSAPI_SND_PLAY      equ 0x0080   ; PCM_EXCL clip (SPEC.md 34.4): ES:SI, CX,
-                                 ; DX = rate; out AX = 0 ok / 1..5 err
-                                 ; (err 4 no-sink until Phase 2)
-OSAPI_SND_FM        equ 0x0084   ; FM verbs (SPEC.md 34.2); out CF=1 no FM
-                                 ; sink (always, until Phase 3)
-; NEVER call OSAPI_SND_STREAM from your worker task - any verb, staging
-; included (SPEC.md 20.3/34.5). The open verbs' busy/half-duplex refusals
-; rest on every caller being serialized on the UI task, and teardown is not
-; fenced against a task. Poll status from a callback instead.
-OSAPI_SND_STREAM    equ 0x0088   ; PCM_BG streams + staging (SPEC.md 20.3):
-                                 ; AL = verb (0 open / 1 feed / 2 close /
-                                 ; 3 status / 6 stage / 7 grant), AH =
-                                 ; handle or sub-op; out AX = 0 ok / err /
-                                 ; SND_ST_* state (verb 3); recording
-                                 ; (verbs 4-5) err 4 until Phase 5
+OSAPI_SND_PLAY      equ 0x0080   ; PCM_EXCL clip (SPEC.md 34.4): ES:SI =
+                                 ; your 8-bit unsigned samples, CX = count,
+                                 ; DX = rate 4,679..16,124 Hz; out AX = 0 ok
+                                 ; / 1..5 err. Runs on your task with the
+                                 ; scheduler locked: it FREEZES the desktop
+                                 ; for the length of the clip, and a mouse
+                                 ; click aborts it (err 5)
 
 ; capability bits returned by OSAPI_SND_CAPS (SPEC.md 34.2)
 SND_CAP_TONE     equ 01h
-SND_CAP_FM       equ 02h
-SND_CAP_PCM_BG   equ 04h
 SND_CAP_PCM_EXCL equ 08h
-SND_CAP_PCM_IN   equ 10h
-
-; stream states returned by OSAPI_SND_STREAM verb 3 (SPEC.md 20.3/34.5)
-SND_ST_PLAYING   equ 0
-SND_ST_UNDER     equ 1           ; underrun-paused: resumable by a feed
-SND_ST_ENDED     equ 2           ; stopped by the stream watchdog
-SND_ST_STALE     equ 0FFFFh      ; the handle's stream is gone
 
 ; --- window management (SPEC.md 11.1/11.2) -------------------------------------
-OSAPI_WM_SIZABLE    equ 0x008C   ; BX=win ptr, AL = 0 clear / non-zero set
+OSAPI_WM_SIZABLE    equ 0x0084   ; BX=win ptr, AL = 0 clear / non-zero set
                                  ; WF_SIZABLE; call from the entry proc
                                  ; after OSAPI_WM_CREATE. A resizable
                                  ; window's paint/click procs MUST lay out
                                  ; from the live W_W/W_H every call.
-OSAPI_FULLSCREEN    equ 0x0090   ; AL = 1 enter (BX=win ptr) / 0 exit;
+OSAPI_FULLSCREEN    equ 0x0088   ; AL = 1 enter (BX=win ptr) / 0 exit;
                                  ; caller holds the gfx lock (window
                                  ; callbacks do); out CF=1 enter refused
                                  ; (screen already owned). Exiting is the
                                  ; app's job (Esc in its onkey is the
                                  ; convention) - the menu bar is
                                  ; unreachable while it holds the screen.
-OSAPI_WM_GROW       equ 0x0094   ; BX=win ptr; caller holds the gfx lock.
+OSAPI_WM_GROW       equ 0x008C   ; BX=win ptr; caller holds the gfx lock.
                                  ; A resizable window's self-initiated
                                  ; content repaint must END with this:
                                  ; the white-fill idiom erases the grow
@@ -182,15 +165,15 @@ OSAPI_WM_GROW       equ 0x0094   ; BX=win ptr; caller holds the gfx lock.
 ; The buffer is ES:BX (like OSAPI_SND_PLAY), so staged
 ; sound or an app's own bss both work; set ES = DS for the latter. A write
 ; stalls painters for its duration: never call these from a paint proc.
-OSAPI_FILE_WRITE    equ 0x0098   ; SI = NUL 8.3 name, ES:BX = bytes, CX =
+OSAPI_FILE_WRITE    equ 0x0090   ; SI = NUL 8.3 name, ES:BX = bytes, CX =
                                  ; count (0 = empty file); creates or
                                  ; REPLACES. out CF=0 AX=0, else AX = FERR_*
-OSAPI_FILE_READ     equ 0x009C   ; SI = name, ES:BX = buffer, CX = capacity;
+OSAPI_FILE_READ     equ 0x0094   ; SI = name, ES:BX = buffer, CX = capacity;
                                  ; out CF=0 AX = bytes read, else AX =
                                  ; FERR_* (FERR_BIG leaves the buffer alone)
-OSAPI_FILE_DELETE   equ 0x00A0   ; SI = name; out CF=0 AX=0, else FERR_*
-OSAPI_FILE_RENAME   equ 0x00A4   ; SI = old name, DI = new name; out as above
-OSAPI_FILE_DFREE    equ 0x00A8   ; out CF=0, DX:AX = free bytes, BX =
+OSAPI_FILE_DELETE   equ 0x0098   ; SI = name; out CF=0 AX=0, else FERR_*
+OSAPI_FILE_RENAME   equ 0x009C   ; SI = old name, DI = new name; out as above
+OSAPI_FILE_DFREE    equ 0x00A0   ; out CF=0, DX:AX = free bytes, BX =
                                  ; SECTORS per cluster; no disk I/O
 
 ; --- menus (SPEC.md 12.2) ------------------------------------------------------
@@ -199,7 +182,7 @@ OSAPI_FILE_DFREE    equ 0x00A8   ; out CF=0, DX:AX = free bytes, BX =
 ; the app's own menus follow. Register the set from the entry proc, with
 ; BX = the window OSAPI_WM_CREATE just returned - the loader shows the
 ; window afterwards, so the first bar drawn is already yours.
-OSAPI_MENU_SET      equ 0x00AC   ; BX = win ptr, SI = menu set ptr (0 =
+OSAPI_MENU_SET      equ 0x00A4   ; BX = win ptr, SI = menu set ptr (0 =
                                  ; none). Draws nothing, takes no lock,
                                  ; preserves every register AND the flags -
                                  ; so it can sit between OSAPI_WM_CREATE
@@ -218,14 +201,14 @@ OSAPI_MENU_SET      equ 0x00AC   ; BX = win ptr, SI = menu set ptr (0 =
 ; proc is called much later. Cancel calls nothing at all.
 ;
 ; Call it from a menu command or a key handler, never from a paint proc.
-OSAPI_FILE_DLG      equ 0x00B0   ; AL = 0 Open / 1 Save, BX = your window ptr,
+OSAPI_FILE_DLG      equ 0x00A8   ; AL = 0 Open / 1 Save, BX = your window ptr,
                                  ; DI = completion proc, SI = default name
                                  ; (NUL, <= 12) or 0. out CF=0 accepted, CF=1
                                  ; refused (one is already up, or no room)
 FDLG_OPEN  equ 0                 ; the two modes, in AL going in and in AL
 FDLG_SAVE  equ 1                 ; coming back
 ;
-OSAPI_VIDEO         equ 0x00B4   ; the screen this machine actually has
+OSAPI_VIDEO         equ 0x00AC   ; the screen this machine actually has
                                  ; (SPEC.md 39.2). No inputs. Out: AX = width,
                                  ; BX = height, CX = the first row the dock
                                  ; owns (so the usable desktop is rows MBAR_H
@@ -262,7 +245,7 @@ VID_CGA    equ 2
 ; between clicks is pre-empted instead of crammed into a callback. This is
 ; the only place package code runs off the UI task.
 ;
-OSAPI_TASK_SPAWN    equ 0x00B8   ; AX = your worker's near entry (a plain
+OSAPI_TASK_SPAWN    equ 0x00B0   ; AX = your worker's near entry (a plain
                                  ; `mov ax, my_worker` - a whole-word
                                  ; package address, relocated for you),
                                  ; BX = YOUR window ptr (what
@@ -286,7 +269,7 @@ OSAPI_TASK_SPAWN    equ 0x00B8   ; AX = your worker's near entry (a plain
                                  ; preserved. NOT callable from your entry
                                  ; proc: the loader has not published your
                                  ; instance yet, so it would simply refuse.
-OSAPI_TASK_ALIVE    equ 0x00BC   ; BX = YOUR window ptr; the gfx lock must
+OSAPI_TASK_ALIVE    equ 0x00B4   ; BX = YOUR window ptr; the gfx lock must
                                  ; NOT be held, and it must be YOUR WORKER
                                  ; calling - never a window callback.
                                  ; Returns with every register AND the
@@ -302,7 +285,7 @@ OSAPI_TASK_ALIVE    equ 0x00BC   ; BX = YOUR window ptr; the gfx lock must
 ; the lock and every gfx_*/font_* call you make is cut to the part of YOUR
 ; content nothing is covering; a window with one corner buried keeps drawing
 ; the rest instead of skipping the frame.
-OSAPI_WM_CLIP_SET   equ 0x00C0   ; BX = YOUR window ptr; the gfx lock must be
+OSAPI_WM_CLIP_SET   equ 0x00B8   ; BX = YOUR window ptr; the gfx lock must be
                                  ; HELD. out CF = 1: not one pixel of your
                                  ; content is visible - draw nothing this
                                  ; frame (the answer wm_obscured used to
@@ -311,10 +294,10 @@ OSAPI_WM_CLIP_SET   equ 0x00C0   ; BX = YOUR window ptr; the gfx lock must be
                                  ; register. It dies at your next
                                  ; OSAPI_GFX_UNLOCK, so it is one call per
                                  ; lock hold and there is nothing to undo.
-OSAPI_WM_CLIP_CLEAR equ 0x00C4   ; disarm early, to draw unclipped again
+OSAPI_WM_CLIP_CLEAR equ 0x00BC   ; disarm early, to draw unclipped again
                                  ; inside the same lock hold. Preserves
                                  ; every register.
-OSAPI_WM_CLIP_TEST  equ 0x00C8   ; AX=x1, BX=y1, CX=x2, DX=y2 (inclusive);
+OSAPI_WM_CLIP_TEST  equ 0x00C0   ; AX=x1, BX=y1, CX=x2, DX=y2 (inclusive);
                                  ; out CF=0 the whole rect is drawable (also
                                  ; when no clip is armed), CF=1 it is not.
                                  ; Preserves every register. Ask this before

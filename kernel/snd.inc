@@ -1,13 +1,19 @@
 ; =============================================================================
 ; os8088 - snd.inc
 ;
-; The sound core (SPEC.md 34): driver table, capability bits, per-tier route
-; selection, the tone tier's owner/priority/generation router, the PC speaker
-; driver (tone + PWM exclusive clips), snd_tick (the one scheduler
-; touch-point), and the five os8088 API slot targets at 0x0078..0x0088.
-; Phases 1-2 of docs/SOUND-PLAN.md: tones and speaker PCM; Phase 3 wires
-; the FM slot through to sndfm.inc's OPL2 driver; Phases 4-5 hand the
-; STREAM slot to sndsb.inc's Sound Blaster driver (playback + recording).
+; The sound layer (SPEC.md 34), and all of it: the tone tier's
+; owner/priority/generation router, the PC speaker driver (tone + PWM
+; exclusive clips), snd_tick (the one scheduler touch-point), and the three
+; os8088 API slot targets - caps, tone, play.
+;
+; THE PC SPEAKER IS THE ONLY SINK. The Sound Blaster and OPL2 drivers, the
+; driver table that chose between them, the per-tier route overrides and the
+; Control Panel page that set them are all gone, and with them the 64KB
+; SND_SEG they needed for DMA buffers, a record ring and a staging pool. What
+; is left needs no buffer at all: osapi_snd_play takes the caller's ES:SI and
+; paces it out of the caller's own memory, which is the shape a future
+; play-a-WAV package wants - the samples are the app's problem, not the
+; kernel's.
 ;
 ; Speaker PCM (SPEC.md 34.4): ch2 in mode 0 lobyte-only is the modulator -
 ; one `out 42h, AL` per sample emits a low pulse of AL PIT-cycles and the
@@ -37,34 +43,11 @@
 ; =============================================================================
 
 ; --- capability bits (SPEC.md 34.2) ------------------------------------------
-SND_CAP_TONE     equ 01h        ; square voice(s): freq on/off
-SND_CAP_FM       equ 02h        ; 9-ch 2-op patch + note-on/off (OPL2 model)
-SND_CAP_PCM_BG   equ 04h        ; self-clocked block PCM out - background-safe
+; Two survive the sound-card removal, because the PC speaker is the only sink
+; there is: a square voice, and the CPU-paced clip contract of SPEC.md 34.4.
+; The FM / background-PCM / input bits went with the hardware that had them.
+SND_CAP_TONE     equ 01h        ; square voice: freq on/off
 SND_CAP_PCM_EXCL equ 08h        ; CPU-paced PCM out - exclusive clip contract
-SND_CAP_PCM_IN   equ 10h        ; block PCM input (recording)
-
-; --- driver table record (SPEC.md 34.2, the inst_kinds idiom) -----------------
-SDRV_CAPS   equ 0               ; db: capability bits the hardware class has
-SDRV_FLAGS  equ 1               ; db: bit0 = present (published LAST, 29.2)
-SDRV_TONE   equ 2               ; dw: near ptr, tone op
-SDRV_NOTE   equ 4               ; dw: near ptr, FM op       (0 = unsupported)
-SDRV_PCM    equ 6               ; dw: near ptr, PCM-out op  (0 = unsupported)
-SDRV_PCMIN  equ 8               ; dw: near ptr, PCM-in op   (0 = unsupported)
-SDRV_PROBE  equ 10              ; dw: near ptr to the probe's FARSHIM stub in
-                                ;     .text (0 = presence comes from the
-                                ;     row's initialised data, not a probe)
-SDRV_NAME   equ 12              ; dw: .text name string
-SDRV_CFG    equ 14              ; dw: reserved (SB: packed base/IRQ/DMA)
-SDRV_SIZE   equ 16
-
-DRV_SPK     equ 0               ; row indices (SPEC.md 34.2)
-DRV_OPL     equ 1
-DRV_SB      equ 2
-SND_NDRV    equ 3
-
-SND_TIER_TONE equ 0             ; snd_route indices, one override per tier
-SND_TIER_FM   equ 1
-SND_TIER_PCM  equ 2
 
 SND_PRI_UI  equ 0C0h            ; kernel UI beeps (SPEC.md 34.3)
 SND_PRI_PKG equ 040h            ; documented package default priority
@@ -75,45 +58,9 @@ SND_PRI_PKG equ 040h            ; documented package default priority
 ; =============================================================================
 
 snd_live:      db 0             ; the boot gate: set LAST by snd_init (34.7)
-snd_excl_ok:   db 1             ; user policy: exclusive clips allowed (34.4)
-snd_route:     db 0FFh, 0FFh, 0FFh  ; per-tier override, 0FFh = auto (34.2)
-snd_pref_tone: db DRV_OPL, DRV_SPK, 0FFh   ; first PRESENT driver wins
-snd_pref_pcm:  db DRV_SB, DRV_SPK, 0FFh
+snd_excl_ok:   db 1             ; policy: exclusive clips allowed (34.4)
 
-snd_s_spk:     db 'Speaker', 0
-snd_s_opl:     db 'AdLib', 0
-snd_s_sb:      db 'Sound Blaster', 0
-
-snd_drv:                        ; row 0: PC speaker - always present, as data
-    db SND_CAP_TONE | SND_CAP_PCM_EXCL
-    db 1                        ; present
-    dw spk_tone                 ; tone op
-    dw 0                        ; no FM
-    dw spk_pcm_op               ; PCM-out op (SPEC.md 34.4, Phase 2)
-    dw 0                        ; no PCM-in
-    dw 0                        ; no probe needed
-    dw snd_s_spk
-    dw 0
-                                ; row 1: OPL2 (sndfm.inc, Phase 3)
-    db SND_CAP_TONE | SND_CAP_FM
-    db 0                        ; absent until opl_probe publishes (34.2)
-    dw opl_tone                 ; tone op: the reserved channel 8 (34.3)
-    dw opl_fm_op                ; FM op - slot 0x0084's live body
-    dw 0, 0                     ; no PCM out / in
-    dw opl_probe                ; the timer-flag dance, far behind its shim
-    dw snd_s_opl
-    dw 0
-                                ; row 2: Sound Blaster (sndsb.inc, Phase 4-5)
-    db SND_CAP_PCM_BG | SND_CAP_PCM_IN
-                                ; no PCM_EXCL op, so exclusive clips keep
-                                ; routing to the speaker (snd_pcm_row
-                                ; wants a PCM op)
-    db 0                        ; absent until sbl_probe publishes (34.2)
-    dw 0, 0, 0, 0               ; streams go through slot 0x0088, not the
-                                ; row ops (SPEC.md 34.5)
-    dw sbl_probe                ; reset scan + E1h gate, far behind its shim
-    dw snd_s_sb
-    dw 0                        ; SDRV_CFG: the probe parks the base here
+snd_s_spk:     db 'Speaker', 0  ; the only sink's name (osapi_snd_caps)
 
 ; =============================================================================
 ; The PC speaker tone driver (SPEC.md 34.2)
@@ -374,164 +321,6 @@ spk_pcm_idle:
     ret
 
 ; =============================================================================
-; Route selection (SPEC.md 34.2): policy is data, not code
-; =============================================================================
-
-; -----------------------------------------------------------------------------
-; snd_drv_row - driver index to table row
-; in:  BL = driver index
-; out: SI = snd_drv + BL*16
-; clobbers: nothing else (flags)
-; -----------------------------------------------------------------------------
-snd_drv_row:
-    push ax
-    push cx
-    mov al, bl
-    mov ah, 0
-    mov cl, 4
-    shl ax, cl
-    add ax, snd_drv
-    mov si, ax
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; snd_tone_route - resolve the tone tier's sink
-;
-; out: BL = driver index, SI = its snd_drv row
-; clobbers: nothing else (flags)
-;
-; The snd_route override wins if it names a PRESENT driver; otherwise the
-; preference list, first present driver. The speaker row is present as
-; initialised data, so resolution cannot fail.
-; -----------------------------------------------------------------------------
-snd_tone_route:
-    push ax
-    push cx
-    mov bl, [snd_route + SND_TIER_TONE]
-    cmp bl, 0FFh
-    je .auto
-    call snd_drv_row
-    test byte [si+SDRV_FLAGS], 1
-    jnz .done                   ; pinned to a present sink: use it
-.auto:
-    mov si, snd_pref_tone
-.scan:
-    mov bl, [si]
-    inc si
-    cmp bl, 0FFh
-    je .fall                    ; list exhausted (unreachable: speaker row)
-    push si
-    call snd_drv_row
-    test byte [si+SDRV_FLAGS], 1
-    pop si
-    jz .scan
-    call snd_drv_row            ; found: SI = the winning row
-    jmp .done
-.fall:
-    mov bl, DRV_SPK
-    call snd_drv_row
-.done:
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; snd_pcm_route - resolve the PCM_EXCL tier's sink (SPEC.md 34.2)
-;
-; out: CF = 0, BL = driver index, DI = its snd_drv row - the first PRESENT
-;      driver with SND_CAP_PCM_EXCL and a PCM op, the snd_route override
-;      checked before the preference list; CF = 1 = no PCM sink at all
-; clobbers: nothing else (flags)
-;
-; Returns the row in DI, not SI, because the play path holds its sample
-; pointer in SI.
-; -----------------------------------------------------------------------------
-snd_pcm_route:
-    push ax
-    push si
-    mov bl, [snd_route + SND_TIER_PCM]
-    cmp bl, 0FFh
-    je .auto
-    call snd_pcm_row
-    jnc .done                   ; pinned to a usable sink: use it
-.auto:
-    mov si, snd_pref_pcm
-.scan:
-    mov bl, [si]
-    inc si
-    cmp bl, 0FFh
-    je .none                    ; list exhausted: no PCM sink
-    push si
-    call snd_pcm_row
-    pop si
-    jc .scan
-.done:
-    pop si                      ; CF = 0 from snd_pcm_row survives the pops
-    pop ax
-    ret
-.none:
-    stc
-    pop si
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; snd_pcm_row - is driver row BL a usable PCM_EXCL sink? (internal)
-; in:  BL = driver index
-; out: CF = 0 and DI = row ptr if present with the cap and an op, else CF = 1
-; clobbers: nothing else (flags)
-; -----------------------------------------------------------------------------
-snd_pcm_row:
-    push si
-    call snd_drv_row            ; SI = row
-    mov di, si
-    pop si
-    test byte [di+SDRV_FLAGS], 1
-    jz .no
-    test byte [di+SDRV_CAPS], SND_CAP_PCM_EXCL
-    jz .no
-    cmp word [di+SDRV_PCM], 0
-    je .no
-    clc
-    ret
-.no:
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; snd_route_set - pin (or unpin) a tier's route override (SPEC.md 34.2)
-;
-; in:       BL = tier (SND_TIER_*), AL = driver row index, or 0FFh = auto
-; out:      CF = 0 stored; CF = 1 refused - the named driver is absent.
-;           This is the setter layer of the bb_avail idiom (SPEC.md 31.4):
-;           the Control Panel's caption and click are the other two.
-; clobbers: nothing else (flags)
-; -----------------------------------------------------------------------------
-snd_route_set:
-    push bx
-    push si
-    cmp al, 0FFh                ; auto never names a driver: always legal
-    je .store
-    xchg bl, al                 ; snd_drv_row wants the index in BL
-    call snd_drv_row
-    xchg bl, al
-    test byte [si+SDRV_FLAGS], 1
-    jz .refuse
-.store:
-    xor bh, bh                  ; BL = tier; a single byte store needs no
-    mov [snd_route+bx], al      ; window - readers take it whole
-    clc
-    jmp .out
-.refuse:
-    stc
-.out:
-    pop si
-    pop bx
-    ret
-
-; =============================================================================
 ; The tone tier router (SPEC.md 34.3): one logical channel, single owner,
 ; priority steal, generation-guarded expiry.
 ; =============================================================================
@@ -569,36 +358,22 @@ snd_tone_req:
     jz .off
 
     ; --- tone on ------------------------------------------------------------
-    call snd_tone_route         ; BL = driver index, SI = row
-    cmp bl, DRV_SPK
-    jne .prog
     cmp byte [snd_ch2mode], 2   ; a PWM clip holds ch2: tone refused (34.1)
     je .refuse
-.prog:
     push dx
     xor dl, dl                  ; voice 0
-    call [si+SDRV_TONE]         ; program the ports; CF = bad frequency
+    call spk_tone               ; program the ports; CF = bad frequency
     pop dx
     jc .refuse                  ; nothing changed: the old owner still sounds
-    cmp byte [snd_town_act], 0  ; a tone left sounding on a DIFFERENT sink
-    je .stamp                   ; (route changed since its grant) stops now
-    cmp bl, [snd_town_drv]
-    je .stamp
-    call snd_town_off
-.stamp:
     inc byte [snd_gen]          ; stamp the owner record - same IF=0 window
     mov al, [snd_gen]           ; as the port writes (SPEC.md 34.3)
     mov [snd_town_gen], al
     mov [snd_texp_gen], al
     mov [snd_town_pri], dl
     mov [snd_town_inst], dh
-    mov [snd_town_drv], bl
     mov [snd_town_exp], cx
     mov byte [snd_town_act], 1
-    cmp bl, DRV_SPK
-    jne .granted
     mov byte [snd_ch2mode], 1
-.granted:
     popf
     clc
     jmp .out
@@ -635,13 +410,9 @@ snd_town_off:
     push si
     cmp byte [snd_town_act], 0
     je .clear
-    mov bl, [snd_town_drv]      ; silence on the sink that is sounding, which
-    call snd_drv_row            ; need not be the tier's CURRENT route
-    xor ax, ax
+    xor ax, ax                  ; the speaker is the only sink there is
     xor dl, dl
-    call [si+SDRV_TONE]
-    cmp bl, DRV_SPK
-    jne .clear
+    call spk_tone
     mov byte [snd_ch2mode], 0
 .clear:
     mov byte [snd_town_act], 0
@@ -711,9 +482,6 @@ snd_stop:
 snd_tick:
     cmp byte [snd_live], 0      ; the boot gate - nothing else is readable
     je .done
-    call sbl_tick               ; the SB stream watchdog (SPEC.md 34.5):
-                                ; ~2 compares when no stream is armed;
-                                ; clobbers AX/DX, both free here
     cmp word [snd_town_exp], 0
     je .done
     dec word [snd_town_exp]
@@ -738,8 +506,8 @@ snd_tick:
 ;
 ; Called from both SPEC.md 29.4 teardown paths (app_close_win's task-less
 ; path and inst_task_die). Releases the tone channel and flags down a clip
-; the instance owns; FM channel bits, stream ownership and staging grants
-; join at their phases. The release ignores priority - the owner is gone.
+; the instance owns - the whole of what a speaker-only layer can hold. The
+; release ignores priority: the owner is gone.
 ; -----------------------------------------------------------------------------
 snd_release_inst:
     pushf
@@ -764,14 +532,6 @@ snd_release_inst:
     inc byte [snd_gen]          ; a release updates the record (SPEC.md 34.3)
 .done:
     popf
-    cmp byte [snd_live], 0      ; the FM leg (SPEC.md 34.3): at most 9
-    je .out                     ; single-write key-offs, run OUTSIDE the
-    call opl_release_inst       ; tone window - the dying instance can make
-                                ; no new claims, so no race to close
-    call sbl_release_inst       ; the SB leg (SPEC.md 34.5): close the dying
-                                ; instance's stream (its refill task exits
-                                ; at the next wake) + free its grants
-.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -846,7 +606,6 @@ snd_disp_set:
 snd_init:
     push ax
     push cx
-    push si
 
     in al, 0x61                 ; the boot state of the gate/data bits -
     and al, 0x03                ; snd_unhook restores exactly these
@@ -860,7 +619,6 @@ snd_init:
     mov byte [snd_town_pri], 0
     mov byte [snd_town_gen], 0
     mov byte [snd_texp_gen], 0
-    mov byte [snd_town_drv], DRV_SPK
     mov word [snd_town_exp], 0
 
     mov byte [snd_pcm_busy], 0  ; the PWM clip state (SPEC.md 34.4); the
@@ -872,31 +630,8 @@ snd_init:
     mov word [snd_pcm_emitted], 0
     mov word [snd_pcm_resync], 0
 
-    call opl_state_init         ; the FM allocator's .bss (sndfm.inc) -
-                                ; stored ahead of the probe that could
-                                ; publish its row (SPEC.md 34.7)
-    call sbl_state_init         ; likewise the SB driver's (sndsb.inc):
-                                ; its probe fills sbl_base/version on top
-
-    mov si, snd_drv             ; probe rows that declare one (SPEC.md 34.2);
-    mov cx, SND_NDRV            ; SDRV_PROBE = 0 rows keep their initialised
-.probe:                         ; presence (speaker: 1; OPL2/SB: 0 until
-    mov ax, [si+SDRV_PROBE]     ; their phases bring probes)
-    or ax, ax
-    jz .next
-    call ax                     ; out AL = 1 present / 0 absent
-    and al, 1
-    mov ah, [si+SDRV_FLAGS]     ; presence published after the device is
-    and ah, 0xFE                ; fully configured (SPEC.md 34.2)
-    or al, ah
-    mov [si+SDRV_FLAGS], al
-.next:
-    add si, SDRV_SIZE
-    loop .probe
-
     mov byte [snd_live], 1      ; publish-last (SPEC.md 34.7, binding)
 
-    pop si
     pop cx
     pop ax
     ret
@@ -909,9 +644,8 @@ snd_init:
 ; clobbers: nothing (flags)
 ;
 ; Called by sched_unhook beside mouse_unhook: 61h bits 0-1 go back to their
-; saved boot state (upper bits preserved), leaving ch2 quiescent; then the
-; SB mirror image (sbl_unhook: mask the IRQ, reset the DSP, restore the
-; vector - SPEC.md 34.7).
+; saved boot state (upper bits preserved), leaving ch2 quiescent. That is the
+; whole of it - the speaker owns no vector, no IRQ and no DMA channel.
 ; -----------------------------------------------------------------------------
 snd_unhook:
     push ax
@@ -924,49 +658,30 @@ snd_unhook:
     or al, [snd_61boot]
     out 0x61, al
     popf
-    call sbl_unhook             ; no-op unless sbl_isr was ever hooked
 .out:
     pop ax
     ret
 
 ; =============================================================================
-; The five API slot targets (SPEC.md 20.3, 0x0078..0x0088) - the whole sound
-; ABI ships in Phase 1; the unbuilt tiers return their error paths.
+; The three API slot targets (SPEC.md 20.3) - caps, tone and the exclusive
+; clip. There is one sink, so there is nothing to select and nothing to probe.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
 ; osapi_snd_caps - what can this machine's sound hardware do?
 ;
-; out:      AX = merged caps word (OR of every present row's SDRV_CAPS),
-;           BL = tone route (0 = speaker, 1 = OPL2),
-;           DX = present-driver bits (bit n = snd_drv row n present)
+; out:      AX = capability bits (SND_CAP_*), BL = 0 (the speaker; the value
+;           is kept so a package written against the old ABI still reads
+;           "not FM"), DX = 1 (bit 0 = the speaker is present)
 ; clobbers: nothing else (flags)
+;
+; A constant answer since the sound-card tiers were retired: every machine
+; this OS boots on has a PC speaker and nothing else it can drive.
 ; -----------------------------------------------------------------------------
 osapi_snd_caps:
-    push cx
-    push si
-    xor ax, ax
-    xor dx, dx
-    mov cl, 1                   ; CL = this row's presence bit
-    mov si, snd_drv
-.row:
-    test byte [si+SDRV_FLAGS], 1
-    jz .next
-    or al, [si+SDRV_CAPS]
-    or dl, cl
-.next:
-    shl cl, 1
-    add si, SDRV_SIZE
-    cmp si, snd_drv + SND_NDRV * SDRV_SIZE
-    jb .row
-    call snd_tone_route         ; BL = winning driver index (SI clobbered -
-    cmp bl, DRV_OPL             ; it is restored below)
-    mov bl, 1                   ; flags survive the mov
-    je .have
+    mov ax, SND_CAP_TONE | SND_CAP_PCM_EXCL
     mov bl, 0
-.have:
-    pop si
-    pop cx
+    mov dx, 1
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1055,9 +770,6 @@ osapi_snd_play:
     cmp byte [snd_excl_ok], 0   ; the user said no (SPEC.md 34.4)
     je .e3
 
-    call snd_pcm_route          ; BL = row index, DI = row ptr
-    jc .e4                      ; no PCM_EXCL sink on this machine
-
     ; rate -> divisor N = 1193182/rate, hard range 74..255 (SPEC.md 34.4).
     ; The range checks double as the div guard: a tiny rate would overflow
     ; the 32/16 divide (quotient > 16 bits traps to int 0).
@@ -1093,16 +805,8 @@ osapi_snd_play:
     cli
     cmp byte [snd_pcm_busy], 0  ; one clip at a time, no queue
     jne .busyw
-    cmp byte [sbl_str_act], 0   ; refused while a PCM_BG stream is open
-    jne .busyw                  ; (SPEC.md 34.3): the clip's sch_lock would
-                                ; freeze the refill task into its underrun
-                                ; path - refuse the combination instead
-    cmp bl, DRV_SPK             ; stealing ch2 only matters on the speaker
-    jne .own
-    cmp byte [snd_town_act], 0
+    cmp byte [snd_town_act], 0  ; the clip and the tone share channel 2
     je .own
-    cmp byte [snd_town_drv], DRV_SPK
-    jne .own                    ; tone sounding elsewhere: it coexists
     mov al, SND_PRI_PKG         ; clip priority: the package default;
     cmp bh, 0xFF                ; kernel callers steal at UI priority
     jne .pcmp
@@ -1113,11 +817,7 @@ osapi_snd_play:
     call snd_town_off           ; clip (SPEC.md 34.1/34.3)
 .own:
     inc byte [snd_gen]          ; ch2 mode, generation and the silencing
-                                ; above are one unit (SPEC.md 34.3)...
-    cmp bl, DRV_SPK             ; ...but ch2 belongs to the grant ONLY on
-    jne .noch2                  ; the speaker route: only spk_pcm_idle ever
-    mov byte [snd_ch2mode], 2   ; clears mode 2, so an SB/Covox clip that
-.noch2:                         ; stamped it would wedge tones forever
+    mov byte [snd_ch2mode], 2   ; above are one unit (SPEC.md 34.3)
     mov byte [snd_pcm_busy], 1
     mov byte [snd_abort], 0
     mov [snd_pcm_inst], bh
@@ -1136,7 +836,7 @@ osapi_snd_play:
                                 ; drain could switch to a task that pops
                                 ; the aborting click first (SPEC.md 34.4)
     mov al, 0                   ; verb 0: run the clip to completion; the
-    call [di+SDRV_PCM]          ; op's epilogue releases ch2 + busy. Out:
+    call spk_pcm_op             ; op's epilogue releases ch2 + busy. Out:
     jc .aborted                 ; CF=1 aborted, AL = 1 click / 2 flag
     dec byte [sch_lock]
     xor ax, ax
@@ -1176,45 +876,6 @@ osapi_snd_play:
     pop cx
     pop bx
     ret
-
-; -----------------------------------------------------------------------------
-; osapi_snd_fm - the public FM surface (slot 0x0084, SPEC.md 20.3 - live
-;                from Phase 3)
-;
-; in:       AL = verb: 0 note-on / 1 note-off / 2 patch-load / 3 all-off;
-;           CL = channel 0..8, BX = frequency Hz, DS:SI = 11-byte patch
-;           (per verb, SPEC.md 34.2)
-; out:      CF = 1 no FM sink, or the op's refusal (bad verb/channel/
-;           frequency, a reserved or another requester's channel -
-;           SPEC.md 34.2/34.3); CF = 0 done
-; clobbers: nothing else (flags)
-;
-; Dispatches through the FM-capable row (DRV_OPL) when present; ownership
-; is the op's job (opl_fm_op stamps claims with the requesting instance,
-; the snd_req_inst rule). The dispatch uses absolute memory operands -
-; no register may be borrowed here, because every caller register is op
-; input (verb 2's patch pointer arrives in SI).
-; -----------------------------------------------------------------------------
-osapi_snd_fm:
-    cmp byte [snd_live], 0      ; not initialised: no sink can be present
-    je .no
-    test byte [snd_drv + SDRV_SIZE*DRV_OPL + SDRV_FLAGS], 1
-    jz .no                      ; no AdLib: the documented refusal
-    jmp [snd_drv + SDRV_SIZE*DRV_OPL + SDRV_NOTE]  ; tail: the op's CF/regs
-.no:                            ; are the public contract
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; osapi_snd_stream - the stream + staging surface (slot 0x0088, SPEC.md
-; 20.3 - live from Phase 4; recording from Phase 5). AL = verb, AH =
-; handle or sub-op; the verb bodies live with the SB driver
-; (sbl_stream_op, SPEC.md 34.5/34.6). The staging verbs (5/6/7) work on
-; every machine - the pool exists wherever SND_SEG does; the stream verbs
-; (0-4) refuse cleanly (AX = 4) without a card.
-; -----------------------------------------------------------------------------
-osapi_snd_stream:
-    jmp sbl_stream_op
 
 ; =============================================================================
 ; The PWM rescale-table builder (SPEC.md 34.4): cold per-clip work, so it
@@ -1284,7 +945,6 @@ snd_town_inst: resb 1           ;   owning instance slot (0xFF = kernel)
 snd_town_pri:  resb 1           ;   owner priority
 snd_town_gen:  resb 1           ;   generation stamped at grant
 snd_texp_gen:  resb 1           ;   generation the pending expiry belongs to
-snd_town_drv:  resb 1           ;   driver row the tone is sounding on
 snd_town_exp:  resw 1           ;   remaining ticks, 0 = no self-expiry
 snd_inst:      resw 1           ; low byte: instance slot being dispatched
                                 ; (0xFF = none); a word so the dispatch
@@ -1300,9 +960,7 @@ snd_pcm_inst:  resb 1           ;   the instance that owns it (0xFF kernel)
 snd_pcm_smp:   resb 1           ;   the sample parked across pacer polls
 snd_pcm_n:     resw 1           ;   the clip divisor N (74..255)
 snd_pcm_emitted: resw 1         ; debug counters (34.4), reset per clip:
-snd_pcm_resync:  resw 1         ;   pulses emitted / deadline resyncs -
-                                ;   the Phase 2 gate's instrument, shown
-                                ;   on the Control Panel Sound caption
+snd_pcm_resync:  resw 1         ;   pulses emitted / deadline resyncs
 snd_evtmp:     resb 8           ; click-abort event drain scratch (evq_pop
                                 ; copies into DS memory)
 

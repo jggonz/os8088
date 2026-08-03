@@ -85,13 +85,6 @@ STK0_TOP    equ 0x7FFE          ; task 0's stack top (grows down towards the
                                 ; top of .lowbss; the assertion at the end of
                                 ; this file keeps 8KB of clearance)
 
-; sound (SPEC.md 34, claimed in Phase 2)
-SND_SEG     equ 0x3000          ; sound buffers: linear 0x30000..0x3FFFF, the
-                                ; last free 64KB block on the 256KB floor -
-                                ; reached via ES only, never DS (SPEC.md 2.2)
-SND_SEG_KB  equ 64              ; what it adds to the Task Manager RAM figure
-                                ; (SPEC.md 2.2/28, the KLOWFAR_KB idiom)
-
 ; the file manager's per-window view cache (SPEC.md 2.3/22.1)
 ; Four 4KB slots carved off the TOP of the SAVE_SEG block, which has exactly
 ; one user with exactly one save live at a time (menu_track's save-under) and
@@ -185,11 +178,11 @@ osapi_table:
     OSAPI_SLOT osapi_mouse        ; 0x006C
     OSAPI_SLOT osapi_srand        ; 0x0070
     OSAPI_SLOT osapi_rand         ; 0x0074
-    OSAPI_SLOT osapi_snd_caps     ; 0x0078 - sound (SPEC.md 20.3/34): all
-    OSAPI_SLOT osapi_snd_tone     ; 0x007C   five slots ship in Phase 1;
-    OSAPI_SLOT osapi_snd_play     ; 0x0080   PLAY, FM and STREAM are error
-    OSAPI_SLOT osapi_snd_fm       ; 0x0084   stubs until their phases land
-    OSAPI_SLOT osapi_snd_stream   ; 0x0088   (SPEC.md 34)
+    OSAPI_SLOT osapi_snd_caps     ; 0x0078 - sound (SPEC.md 20.3/34): what
+    OSAPI_SLOT osapi_snd_tone     ; 0x007C   the PC speaker can do, a tone,
+    OSAPI_SLOT osapi_snd_play     ; 0x0080   and a clip out of the caller's
+                                  ;          own buffer. The FM and STREAM
+                                  ;          slots went with the sound cards
     OSAPI_SLOT wm_sizable         ; 0x008C - window features (SPEC.md 11.1)
     OSAPI_SLOT wm_fullscreen      ; 0x0090 - fullscreen (SPEC.md 11.2)
     OSAPI_SLOT wm_grow_paint      ; 0x0094 - grow-box restore after a
@@ -228,8 +221,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 47 * 4
-%error "os8088 API jump table must be exactly 47 4-byte slots"
+%if OSAPI_TABLE_LEN != 45 * 4
+%error "os8088 API jump table must be exactly 45 4-byte slots"
 %endif
 
 ; =============================================================================
@@ -375,9 +368,7 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "dock.inc"
 %include "taskmgr.inc"
 %include "ctrl.inc"
-%include "snd.inc"
-%include "sndfm.inc"            ; the OPL2 driver (SPEC.md 34, Phase 3)
-%include "sndsb.inc"            ; the Sound Blaster driver (SPEC.md 34, P4)
+%include "snd.inc"              ; the sound layer (SPEC.md 34): PC speaker
 
 ; =============================================================================
 ; Size guards (SPEC.md 15.1). Same-section label differences bound via equ -

@@ -218,7 +218,7 @@ tmf_task:
 
 .die:
     mov di, bp
-    jmp far KERNEL_SEG:inst_task_die    ; destroys the window, frees the
+    jmp KERNEL_SEG:inst_task_die    ; destroys the window, frees the
                                 ; record, task_exit - never returns, so a far
                                 ; jmp needs no wrapper and leaves no frame
 
@@ -591,8 +591,6 @@ tm_sample:
                                 ; buffers and the far-code blob. Added after
                                 ; the shift because the byte total of all
                                 ; four regions does not fit 16 bits.
-    add ax, SND_SEG_KB          ; + the sound segment (SPEC.md 2.2): claimed
-                                ; whole by the sound layer since Phase 2
     add ax, VIEW_SEG_KB         ; + the file manager's four view caches
                                 ; (SPEC.md 2.3), resident from boot
     cmp byte [bb_dbl], 0        ; bill the armed back buffer: exactly 150KB,
@@ -1028,17 +1026,6 @@ tm_map_ram:
     call tm_map_rect
     mov byte [gfx_color], CBLACK
     KCALL gfx_fill
-
-    mov ax, 192                 ; [192,256K): SND_SEG, claimed whole by the
-    call tm_ramkb2x             ; sound layer from boot (SPEC.md 2.2 / 28) -
-    mov si, ax                  ; unconditional, like the low keep; it is
-    mov ax, 255                 ; what SND_SEG_KB adds to the totals above
-    call tm_ramkb2x
-    mov cx, ax
-    mov ax, si
-    mov bx, TMM_M1_Y1
-    call tm_map_rect
-    KCALL gfx_fill_gray
 
     cmp byte [bb_dbl], 0        ; [256,406K): the back buffer, when armed
     je .done
@@ -1758,8 +1745,6 @@ tm_rows:
                                 ; kernel keeps in low memory (SPEC.md 2.1).
                                 ; The same term is in the RAM total above, so
                                 ; the rows still sum to it.
-    add ax, SND_SEG_KB          ; + the sound segment (SPEC.md 2.2), also in
-                                ; the total above - the rows still sum
     add ax, VIEW_SEG_KB         ; + the view caches (SPEC.md 2.3), ditto
     cmp byte [bb_dbl], 0        ; bill the armed back buffer to System
     je .sysmem                  ; (SPEC.md 32 / 28)

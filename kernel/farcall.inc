@@ -55,7 +55,7 @@
 ; KCALL - from .fartext, call kernel routine %1 (which needs a FARK wrapper)
 ; -----------------------------------------------------------------------------
 %macro KCALL 1
-    call far KERNEL_SEG:%1_k
+    call KERNEL_SEG:%1_k
 %endmacro
 
 ; -----------------------------------------------------------------------------
@@ -66,7 +66,7 @@
 ; -----------------------------------------------------------------------------
 %macro FARSHIM 2
 %1:
-    call far FAR_SEG:%2
+    call FAR_SEG:%2
     ret
 %endmacro
 
@@ -132,14 +132,6 @@ far_init:
     FARK task_yield             ; the fake int frame it builds takes CS from
                                 ; the wrapper, i.e. KERNEL_SEG, so a far
                                 ; caller resumes correctly through the retf
-    FARK snd_tone_route         ; ctrl.inc (Sound page, SPEC.md 31.4)
-    FARK snd_route_set
-    FARK osapi_snd_play
-    FARK opl_wr                 ; sndfm.inc probe + init (SPEC.md 34.2)
-    FARK opl_patch
-    FARK sbl_dsp_wr             ; sndsb.inc probe + IRQ discovery (34.2/34.5)
-    FARK sbl_dsp_rd
-    FARK osapi_snd_stream       ; ctrl.inc Sound Test grant (SPEC.md 31.4)
     FARK inst_find_kind         ; ctrl.inc Date/Time page (SPEC.md 31.5/37)
     FARK clk_snap
     FARK clk_fld_str
