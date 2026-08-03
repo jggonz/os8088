@@ -2566,11 +2566,15 @@ pt_paint:
     mov byte [pt_apend], 0
     mov bx, [pt_win]
     call OSAPI_WM_FRONT             ; the corrected frame, over a clean desktop
-    call pt_szsi                    ; ...and the toast on top of the picture
+    cmp byte [pt_apsay], 0
+    je .out                         ; the frame was corrected but the canvas
+    call pt_szsi                    ; moved: no notice is owed (pt_track)
     call pt_msg_show
     jmp short .out
 .justsay:
     mov byte [pt_apend], 0
+    cmp byte [pt_apsay], 0
+    je .out
     call pt_szsi
     call pt_msg_show
     jmp short .out
@@ -5119,6 +5123,12 @@ pt_track:
     call pt_setsize
     jnc .out
     call pt_wfix                    ; the frame follows the canvas, not the drag
+    mov al, 1
+    cmp byte [pt_szchg], 0
+    je .say
+    xor al, al                      ; the canvas DID move, so the frame just
+.say:                               ; followed it - and that is the answer,
+    mov [pt_apsay], al              ; without a notice contradicting it
     mov byte [pt_apend], 1          ; and the toast goes up at the END of this
                                     ; paint, not here: the frame ui_grow already
                                     ; drew is the wrong size, so one repaint is
@@ -5237,6 +5247,7 @@ pt_sizeask:
 ; -----------------------------------------------------------------------------
 pt_onsize:
     push ax
+    push bx
     push dx
     cmp byte [pt_mode], PT_M_LIVE   ; a notice window has no canvas to resize
     jne .fixed
@@ -5244,13 +5255,29 @@ pt_onsize:
     sub ax, PT_CHROME_W             ; the canvas the proposal implies
     sub dx, PT_CHROME_H
     call pt_sizeask
+    ; --- is a notice owed? ONLY if nothing at all moved ---------------------
+    ; The guards are per axis, so a drag that narrows the window and refuses
+    ; to shorten it is a drag that was largely honoured - and a toast reading
+    ; "Would crop artwork" on top of a window that visibly just got smaller
+    ; says the opposite of what happened. The unshrunk axis is its own
+    ; explanation; the toast is for the case where the drag did nothing.
+    xor bl, bl
+    cmp byte [pt_kept], 0
+    je .sized
+    cmp ax, [pt_cw]
+    jne .sized
+    cmp dx, [pt_ch]
+    jne .sized
+    mov bl, 1
+.sized:
     add ax, PT_CHROME_W             ; ...and the frame the answer implies
     mov cx, ax
     add dx, PT_CHROME_H
     mov [pt_wanth], dx
-    cmp byte [pt_kept], 0
-    je .out
-    mov byte [pt_apend], 2          ; held an axis back: the toast is owed, but
+    mov [pt_apsay], bl
+    or bl, bl
+    jz .out
+    mov byte [pt_apend], 2          ; refused outright: the toast is owed, but
     jmp short .out                  ; not the repaint that used to undo the
 .fixed:                             ; frame - there is nothing to undo now
     mov cx, [pt_cw]
@@ -5261,6 +5288,7 @@ pt_onsize:
 .out:
     pop dx
     mov dx, [pt_wanth]
+    pop bx
     pop ax
     ret
 
@@ -8093,6 +8121,7 @@ pt_ic_text:
     PTBYTE pt_szi                   ; pt_szdraw's box counter
     PTBYTE pt_szchg                 ; pt_setsize moved the canvas
     PTBYTE pt_szmem                 ; ...and refused for want of memory, not ink
+    PTBYTE pt_apsay                 ; 1 = pt_apend also owes the user a notice
     PTBYTE pt_pinw                  ; pt_fit: an axis pt_sizeask's ink guard
     PTBYTE pt_pinh                  ; has already settled - do not cut it
     PTWORD pt_szy                   ; the box being drawn: its top row...
