@@ -6962,9 +6962,9 @@ palette drops to §39.4's three ink classes.
 
 Eight tools (pencil, eraser, dropper, rectangle, ellipse, selection, flood
 fill, text), a per-tool line width that also sets an unfilled shape's border
-thickness, one-level undo that doubles as redo, an internal clipboard, and BMP
-load/save through the Standard File dialog (§38). The full design record,
-including the four kernel capabilities whose absence shaped it, is
+thickness, one-level undo that doubles as redo, an internal clipboard, and
+BMP and GIF load/save through the Standard File dialog (§38). The full design
+record, including the kernel capabilities whose absence shaped it, is
 `docs/PAINT-NOTES.md`.
 
 **The canvas is not a fixed size.** It is whatever the screen and memory
@@ -6985,25 +6985,16 @@ allow, from 32x16 up, and everything else follows from that:
   bytes, half a compare per pixel, with the boundary nibble handled only when
   the surviving width is odd. A dirty axis keeps its old size while the other
   one still moves, so widening-while-shortening does the half that is safe.
-  The refusal is then made visible two ways: `pt_wfix` writes the frame back
-  to what the canvas needs (clamped on screen and above the dock, as `ui_drag`
-  would), and a notice window says so. **The notice is put up at the END of the
-  paint, not from inside `pt_track`**: `pt_alert` shows a window, which
-  repaints the world, and from the middle of a paint the rest of that paint
-  would draw straight over it. `[pt_apend]` carries the intent the few hundred
-  instructions between.
-- **The notice window is the file dialog's species (§38.1), not an
-  application.** A bare `wm_create`d window this package owns, never bound to
-  the instance, created on first need because a window slot is scarce
-  (MAX_WIN 12) and most sessions never see one; `wm_owner` answers none for it,
-  so its close *and* minimize boxes reduce to `wm_hide`, which is also what its
-  OK button does. It carries no menu set, so while it is up the bar shows its
-  title and no menus — and after it is dismissed the bar stays on Locator
-  until the user next clicks the picture, because `menu_activate` is not an API
-  slot and the only way for a package to take the bar back is
-  `OSAPI_WM_FRONT`, i.e. another full repaint. A click on the picture costs a
-  bar redraw instead, so that is what Paint leaves it to. If `wm_create`
-  fails the message degrades to the on-canvas toast.
+  The refusal is then made visible two ways: `pt_wfix` writes the frame back to
+  what the canvas needs (clamped on screen and above the dock, as `ui_drag`
+  would), and the toast says why. **Both happen at the END of the paint, not
+  from inside `pt_track`**, with `[pt_apend]` carrying the intent the few
+  hundred instructions between. `ui_grow` has already drawn the frame at the
+  dragged size by then, so exactly one repaint is owed — `OSAPI_WM_FRONT`,
+  which also takes the menu bar back — and a toast drawn before it would be
+  wiped by it. A toast rather than a dialog is deliberate: a modal window costs
+  a repaint to raise, another to dismiss, a window slot and a click, and says
+  no more than one line of the app's own status text does.
 - **Rows are addressed by a (segment, offset) pair.** A canvas may exceed one
   64KB segment — 636x326 is 104KB — so `pt_rowseg[y]` names the paragraph a
   row starts in and `pt_rowoff[y]` the 0..15 bytes into it; the undo image has
@@ -7034,6 +7025,11 @@ allow, from 32x16 up, and everything else follows from that:
   right-anchored clear of the grow box (which owns the content's last 13
   columns and rows, §11). The strip spans the **whole** content width,
   including the columns under the palette, so the click ladder tests y first.
+  **The grow box lives in that strip**, and `wm_draw_win` draws it *before*
+  W_PAINT (§11.1), so the strip's white bed erases it: `pt_draw_strip` ends with
+  `OSAPI_WM_GROW` for that reason. Leaving the redraw to the paint proc alone
+  left the box missing after every tool, colour, width or toggle click until the
+  next full repaint.
   The size readout lives in the palette rather than the title bar for a
   structural reason: `wm_draw_win` draws the title *before* calling W_PAINT,
   so a size adopted during that paint would be one repaint stale there and the
@@ -7068,9 +7064,48 @@ allow, from 32x16 up, and everything else follows from that:
   the depth, `biCompression`, and that the pixel data the header describes
   fits inside the bytes actually read (§19: every byte off the disk is
   hostile). Source palettes map to the sixteen by weighted city-block
-  distance. A file over 64KB cannot be read at all (`FERR_BIG`), GIF and JPEG
-  are recognised by magic and refused with a message, and the reasons for all
-  three are in the notes.
+  distance. A file over 64KB cannot be read at all (`FERR_BIG`); JPEG is
+  recognised by magic and refused with a message, and the reason is in the notes.
+- **GIF is implemented both ways, and lives in borrowed memory.** An LZW
+  dictionary is 16KB by itself, so the codec's tables go where a load or a save
+  has already invalidated something: **reading** stages the file in the undo
+  image (as the BMP reader does) and puts `prefix[4096]` words +
+  `suffix[4096]` bytes + a 4096-byte output stack in the clipboard, filling its
+  reserved floor (`PT_CLIPMINP`) exactly — two build-time assertions keep that
+  true; **writing** puts child/sibling/suffix for 2048 codes in the clipboard,
+  builds the GIF in the undo image, and reads the canvas a row at a time through
+  `pt_line`. What decides those placements is that DS must stay on the kernel
+  segment for the bss, so ES is the only far pointer there is and **no inner
+  loop may need two**: the reader's bit window borrows ES for three bytes and
+  gives it straight back, and the writer's output goes through a 255-byte block
+  in bss, flushed once per GIF sub-block — the shape the format wants anyway.
+  The reader flattens the sub-blocks in place first (each block's data copied
+  back over the byte that announced it, so the destination trails the source and
+  one `rep movsb` per block is safe), which is what lets the bit reader be three
+  bytes and a shift rather than a state machine. It takes 2..8-bit minimum code
+  sizes, global or local colour tables, interlacing (the four passes), and skips
+  extension blocks; every offset is bounded by the byte count actually read, and
+  dimensions are capped at `PT_GDIM_MAX` so a header claiming 60,000 rows is
+  refused rather than decoded into nothing for a very long time.
+  **The writer stops at 11-bit codes**, which halves its tables, and the one
+  place the two directions are not mirror images is documented at `pt_gadd`: a
+  writer defines its new string as it emits the code before it, a reader cannot
+  until it has seen the code after it, so the reader's table runs one entry
+  behind and the two code-width rules are deliberately off by one to compensate
+  (writer widens when free *passes* 1<<size, reader when it *reaches* it). The
+  same offset is why the writer's ceiling is 2047 and not 2048. Both halves are
+  verified by round-tripping flat, banded, striped and pure-noise pictures
+  through a host decoder.
+- **The save verb owns the format, and the extension follows it.** File carries
+  Save Bmp / Save as Bmp… / Save Gif / Save as Gif…; each sets `[pt_sfmt]` and
+  `pt_setext` rewrites the name's extension to match, so "Save Gif" on
+  PICTURE.BMP writes PICTURE.GIF rather than GIF bytes into a file whose name
+  promises a bitmap, and the Save-as dialog is offered the corrected name so
+  what the user sees is what gets written. **Loading ignores the extension
+  entirely** — the magic decides, because a name is a wish and a magic number is
+  a fact. A canvas edited on a 1bpp adapter still saves its full 4-bit indices
+  in either format: the reduction to §39.4's three ink classes is a property of
+  the screen, not of the picture.
 - **Drag loops invert `ui_drag`'s lock ordering (§13), and must.** A package's
   `gfx_*` output goes through the back buffer when double buffering is armed
   (§32), so a tracking loop that held the lock would show nothing until the

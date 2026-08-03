@@ -4,8 +4,8 @@
 published package ABI (SPEC.md §20.3). **No kernel file was changed to make
 it work** — not one byte of `kernel/`, and no new API slot. This document
 records the two liberties it takes that the ABI does not sanction, the
-capabilities whose absence cost the most, and the formats that were dropped
-and why.
+capabilities whose absence cost the most, and how the picture formats it reads
+and writes were arrived at.
 
 ## What it is
 
@@ -19,15 +19,15 @@ distinct). Selectable line width, per-tool: the pencil's 1/2/4/8 and the
 eraser's 8/16/24/32, and the same selection sets the border thickness of an
 unfilled rectangle or ellipse. Text is drawn into the picture from the ROM
 8×8 font at 1×, 2× or 4×. One-level undo that doubles as redo, an internal
-clipboard (cut/copy/paste), and BMP load/save through the Standard File
-dialog (SPEC.md §38). Ctrl+Z, Ctrl+C, Ctrl+X, Ctrl+V and Delete reach the same
-routines the Edit menu does — they are the control codes int 16h already
+clipboard (cut/copy/paste), and BMP **and GIF** load/save through the Standard
+File dialog (SPEC.md §38). Ctrl+Z, Ctrl+C, Ctrl+X, Ctrl+V and Delete reach the
+same routines the Edit menu does — they are the control codes int 16h already
 hands W_ONKEY, so no scan-code decoding is involved.
 
 Shrinking the window never silently eats the picture: the rows or columns
 about to go are checked for ink first, per axis, and a dirty axis keeps its
 size while the other one still moves. When that happens the frame is written
-back to fit the canvas and a notice window says why.
+back to fit the canvas and the status toast says why.
 
 ## The two liberties it takes
 
@@ -75,11 +75,11 @@ rather than a violation — but it is a liberty, and a one-line
 The same write is what lets a resize be *refused*: when shrinking the window
 would crop artwork, `pt_wfix` puts the frame back to what the canvas needs
 (clamping x/y on screen and above the dock the way `ui_drag` does) and the
-notice window explains why. There is no sanctioned way to say no to `ui_grow`
-— it has already rewritten the record and repainted by the time the app sees
-anything — so the app corrects it afterwards and the correction rides the
-notice's repaint. A resize callback that could return "refused" would be the
-clean version; see the smaller gaps below.
+toast explains why. There is no sanctioned way to say no to `ui_grow` — it has
+already rewritten the record and repainted by the time the app sees anything —
+so the app corrects it afterwards and pays one `OSAPI_WM_FRONT` to put the
+corrected frame up. A resize callback that could return "refused" would be the
+clean version, and would cost nothing; see the smaller gaps below.
 
 **What the kernel should provide for the memory:** a slot in the API table —
 `alloc(paragraphs) → segment` / `free(segment)`, stamped with the calling
@@ -178,21 +178,18 @@ by construction.
   *before* the paint, and whose refusal `ui_grow` honoured, would also let the
   crop guard reject a drag without the app having to rewrite the record behind
   the kernel's back and put the notice up a paint later.
-- **No way to hand the menu bar back.** `menu_activate` is kernel-internal;
-  the only slot that reaches it is `OSAPI_WM_FRONT`, which repaints
-  everything. So when Paint's notice window is dismissed the bar stays on
-  Locator until the user next clicks the picture — a click that costs a bar
-  redraw and nothing more (`ui.inc`'s already-frontmost branch), which is why
-  Paint leaves it to that click rather than spending a whole repaint. The
-  kernel's own file dialog does not have this problem: `fdlg_close` calls
-  `menu_activate` + `menu_draw_bar` directly. A `menu_activate(BX)` slot, or a
-  dismissal that restored the previous owner, would close the gap for one jump
-  table entry.
-- **No modal gate for a package.** `fdlg_grab` swallows every press outside
-  the file dialog's rect (SPEC.md §38), and nothing equivalent exists for a
-  window a package creates. Paint's notice is therefore advisory: a click on
-  the picture behind it carries on painting, which is the right answer for
-  *this* dialog but would not be for a destructive confirmation.
+- **No way to hand the menu bar back, and no modal gate.** `menu_activate` is
+  kernel-internal; the only slot that reaches it is `OSAPI_WM_FRONT`, which
+  repaints everything. And `fdlg_grab`, which swallows every press outside the
+  file dialog's rect (SPEC.md §38), has no equivalent for a window a package
+  creates. Between them those two gaps are why the crop refusal ended up as a
+  toast rather than a dialog: a package's own modal-ish window would have cost a
+  repaint to raise, another to dismiss, a window slot, a click, and would still
+  have left the bar reading "Locator" afterwards. The kernel's own dialog has
+  neither problem — `fdlg_close` calls `menu_activate` + `menu_draw_bar`
+  directly. A `menu_activate(BX)` slot and a package-visible modal gate would
+  make an app-authored dialog affordable; until then a status line is the
+  cheaper and better-behaved answer, which is worth knowing before writing one.
 
 ## Formats
 
@@ -206,27 +203,40 @@ sixteen by a weighted city-block distance. A cropped load blocks File > Save,
 so one click cannot overwrite the original with less than it held. Compressed
 (RLE4/RLE8) BMPs are refused with a message rather than misread.
 
-**GIF and JPEG are not implemented.** The app recognises both by their
-magic bytes and says "Only BMP is supported" instead of guessing.
+**GIF is implemented both ways.** Reading takes 2..8-bit minimum code sizes,
+global or local colour tables, interlaced or sequential, and skips extension
+blocks; writing emits GIF87a with our sixteen colours as the global table and a
+4-bit minimum code size. Verified pixel-exact in both directions against a host
+decoder — including files a host tool wrote interlaced, a 256-colour gradient
+mapped down to sixteen, an oversized picture cropped on load, and pictures Paint
+wrote and read back itself.
 
-- **JPEG is out of reach**, and not because of code size: a baseline
-  decoder is Huffman + dequantise + IDCT + upsample + colour convert, and
-  on a 4.77MHz 8088 with no hardware multiply worth the name that is tens
-  of seconds for a single 448×280 frame, before the dither to sixteen
-  colours. An encoder is worse. The 64KB file ceiling also means the only
-  JPEGs that could be opened at all are small ones.
-- **GIF is feasible and was deferred, not refused.** The LZW decoder is
-  about 700 bytes of code plus a 16KB dictionary, and the scratch segment
-  already has room for the dictionary; the current package is 8,899 bytes
-  of image + 2,314 of bss against the 19,968 budget, so roughly 8.7KB is
-  free. Read support would fit comfortably. Writing needs a ~20KB hash
-  table (also affordable) and about 600 more bytes of code, and buys
-  nothing over BMP for round-tripping — a non-compressing LZW stream is
-  *larger* than the raw 4bpp bytes, so a real compressor is the only useful
-  version. Say the word and it goes in.
+Two things about it are worth knowing before touching it:
 
-(Those figures move as the app grows; it is 10,812 bytes of image + 3,991 of
-bss today, so about 5.1KB of the 19,968 budget is still free.)
+- **The dictionary is 16KB, so it lives in borrowed memory.** The clipboard's
+  reserved floor holds the read tables exactly (prefix, suffix, output stack)
+  and the smaller write tables with room over; the file being read, or built,
+  goes in the undo image. Both are already invalidated by the operation, and two
+  build-time assertions fail the build if that floor stops being big enough.
+- **Writing and reading are not mirror images**, and the asymmetry is real
+  rather than a bug: a writer defines a new string as it emits the code before
+  it, a reader cannot until it has seen the code after it, so the reader's table
+  runs one entry behind and the two code-width rules are off by one on purpose.
+  It is written up in full at `pt_gadd`. Pure noise is the input that exercises
+  it, because it is the only kind that fills the table fast enough to force a
+  Clear code mid-stream — flat drawings never get there, which is exactly why
+  that bug survived the first three test pictures.
+
+**JPEG is still out of reach**, and not because of code size: a baseline
+decoder is Huffman + dequantise + IDCT + upsample + colour convert, and on a
+4.77MHz 8088 with no hardware multiply worth the name that is tens of seconds
+for a single 448×280 frame, before the dither to sixteen colours. An encoder is
+worse. The 64KB file ceiling also means the only JPEGs that could be opened at
+all are small ones. The app recognises it by magic and says so rather than
+guessing.
+
+(The package is 12,631 bytes of image + 4,293 of bss against the 19,968
+budget today, so about 3KB is still free.)
 
 ## Performance notes
 
@@ -252,6 +262,14 @@ content, not chrome.** In the title bar it cost a second full repaint per
 resize, because the kernel draws the title before calling W_PAINT — and a full
 repaint is the most expensive thing this app does. Two `font_str` calls in the
 palette column cost nothing and are never stale.
+
+What GIF costs in time, and what it buys: LZW is per-pixel work in both
+directions, so a 448×280 picture is about 125,000 trips through a dictionary
+walk — a few seconds either way under QEMU, comparable to the BMP path, which
+spends its time on the floppy instead. In return, the 448×280 test picture is
+62,838 bytes as a BMP and 1,285 as a GIF; since the file API refuses anything
+over 64KB (above), GIF is the only format in which a large canvas can be saved
+at all.
 
 Measured under QEMU with `make run-640`: a full-canvas flood fill of a picture
 with obstacles completes in about four seconds of wall clock, opening a 448×280

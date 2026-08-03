@@ -151,6 +151,31 @@ PT_SC_CLAIM equ 0                   ; claim record: magic1, magic2, win ptr
 PT_SC_STACK equ 16                  ; flood-fill span stack starts here
 PT_FSTK_MAX equ 1024                ; entries of 8 bytes (y, x1, x2, dy)
 
+; --- the GIF codec's work areas (SPEC.md 41.7) ---------------------------------
+; Both directions borrow buffers a load or a save has already invalidated, which
+; is the whole reason an LZW dictionary fits an app whose own world is 19.5KB.
+; The clipboard's floor exists to be borrowed here; the assertion below is what
+; keeps that true if PT_CLIPMINP ever moves.
+PT_GD_PREF  equ 0                   ; read: prefix[4096] words
+PT_GD_SUFF  equ 8192                ; read: suffix[4096] bytes
+PT_GD_STK   equ 12288               ; read: the output stack, 4096 bytes
+PT_GD_END   equ 16384
+PT_GE_CHILD equ 0                   ; write: child[2048] words, 0xFFFF = none
+PT_GE_SIB   equ 4096                ; write: next-sibling[2048] words
+PT_GE_SUF   equ 8192                ; write: suffix[2048] bytes
+PT_GE_END   equ 10240
+PT_GE_MAXC  equ 2047                ; the writer's code ceiling: 11 bits, minus
+                                    ; one so the READER never crosses 2048 either
+                                    ; (see pt_gadd - its table runs one behind)
+PT_GDIM_MAX equ 4096                ; a GIF bigger than this in either axis is
+                                    ; refused, not decoded row by row to nowhere
+%if PT_GD_END > PT_CLIPMINP * 16
+%error "the GIF read tables no longer fit the clipboard's reserved floor"
+%endif
+%if PT_GE_END > PT_CLIPMINP * 16
+%error "the GIF write tables no longer fit the clipboard's reserved floor"
+%endif
+
 ; --- canvas geometry -----------------------------------------------------------
 ; The width is fixed on every adapter: the narrowest screen os8088 drives is
 ; 640 (SPEC.md 39), and 448 + the palette + the frame fits there. Only the
@@ -1998,6 +2023,14 @@ pt_draw_strip:
     mov dx, [pt_stripy]
     add dx, 7
     call pt_ctext
+    ; --- and the grow box, which lives in this strip -------------------------
+    ; The white bed above erases it, and the kernel draws it BEFORE W_PAINT
+    ; (SPEC.md 11.1), so every path that repaints the strip owes it a redraw -
+    ; not just the paint proc. Putting it here covers the tool, colour, width
+    ; and toggle clicks in one place; leaving it to pt_paint alone made the box
+    ; vanish until the next full repaint.
+    mov bx, [pt_win]
+    call OSAPI_WM_GROW
     pop di
     pop si
     pop dx
@@ -2100,14 +2133,13 @@ pt_paint:
     call pt_blit_all
     mov byte [pt_selshown], 0
     call pt_marq                    ; the marquee, if a selection is live
-    mov bx, [pt_win]
-    call OSAPI_WM_GROW              ; a resizable window owes the grow box a
-                                    ; redraw after its own content painting
-    cmp byte [pt_apend], 0          ; a refused resize, deferred to here so the
-    je .out                         ; notice lands on a finished picture
+    cmp byte [pt_apend], 0          ; a refused resize (pt_track), deferred to
+    je .out                         ; here - see the note there
     mov byte [pt_apend], 0
-    mov si, pt_s_crop
-    call pt_alert
+    mov bx, [pt_win]
+    call OSAPI_WM_FRONT             ; the corrected frame, over a clean desktop
+    mov si, pt_s_crop               ; ...and the toast on top of the picture
+    call pt_msg_show
     jmp short .out
 .notice:
     xor bx, bx
@@ -4257,8 +4289,10 @@ pt_onkey:
 
 PT_MF_NEW    equ 0                  ; File
 PT_MF_OPEN   equ 1
-PT_MF_SAVE   equ 2
-PT_MF_SAVEAS equ 3
+PT_MF_SAVE   equ 2                  ; the format is the VERB, not the extension:
+PT_MF_SAVEAS equ 3                  ; each of these four sets [pt_sfmt] and the
+PT_MF_SAVEG  equ 4                  ; name's extension follows it (pt_setext)
+PT_MF_SAVEAG equ 5
 PT_ME_UNDO   equ 0                  ; Edit
 PT_ME_CUT    equ 1
 PT_ME_COPY   equ 2
@@ -4295,14 +4329,23 @@ pt_oncmd:
     cmp al, PT_MF_OPEN
     je .open
     cmp al, PT_MF_SAVE
-    je .save
+    je .save_bmp
     cmp al, PT_MF_SAVEAS
-    je .saveas
+    je .saveas_bmp
+    cmp al, PT_MF_SAVEG
+    je .save_gif
+    cmp al, PT_MF_SAVEAG
+    je .saveas_gif
 .out:
     ret
 .new:
     call pt_new
     ret
+.save_gif:
+    mov byte [pt_sfmt], 1
+    jmp short .save
+.save_bmp:
+    mov byte [pt_sfmt], 0
 .save:
     cmp byte [pt_name], 0
     je .saveas                      ; never named: ask, do not guess
@@ -4313,13 +4356,21 @@ pt_oncmd:
     call pt_msg_show
     ret
 .save_go:
-    mov si, pt_name
     call pt_save
     ret
 .open:
     mov al, FDLG_OPEN
     jmp short .dlg
+.saveas_gif:
+    mov byte [pt_sfmt], 1
+    jmp short .saveas
+.saveas_bmp:
+    mov byte [pt_sfmt], 0
 .saveas:
+    cmp byte [pt_name], 0           ; offer the dialog the name the verb will
+    je .askfmt                      ; actually write, extension and all
+    call pt_setext
+.askfmt:
     mov al, FDLG_SAVE
 .dlg:
     mov si, [pt_win]
@@ -4468,11 +4519,11 @@ pt_track:
     je .out
 .refuse:
     call pt_wfix                    ; the frame follows the canvas, not the drag
-    mov byte [pt_apend], 1          ; and the notice goes up at the END of this
-                                    ; paint, not here: pt_alert repaints the
-                                    ; world, and from the middle of a paint that
-                                    ; repaint would be overdrawn by the rest of
-                                    ; it (SPEC.md 41.6)
+    mov byte [pt_apend], 1          ; and the toast goes up at the END of this
+                                    ; paint, not here: the frame ui_grow already
+                                    ; drew is the wrong size, so one repaint is
+                                    ; owed, and a toast drawn before it would be
+                                    ; wiped by it (SPEC.md 41.6)
 .out:
     pop dx
     pop cx
@@ -4729,148 +4780,6 @@ pt_wfix:
     pop ax
     ret
 
-; =============================================================================
-; The notice window
-;
-; A second window this instance creates for itself, and the same species as the
-; kernel's own file dialog (SPEC.md 38.1): `wm_create`d, never bound to the
-; instance, so `wm_owner` answers 0xFF for it and its close box reduces to
-; wm_hide instead of closing the app. It carries no menu set, so while it is up
-; the bar falls back to Locator - exactly what fdlg does.
-;
-; It is not modal (there is no fdlg_grab for packages), which is right for an
-; advisory: a click on the picture behind it carries on painting.
-; =============================================================================
-
-PT_A_W      equ 300                 ; frame, outer
-PT_A_H      equ 84
-PT_A_BW     equ 44                  ; the OK button
-PT_A_BH     equ 16
-
-; -----------------------------------------------------------------------------
-; pt_alert - put the notice up with SI as its first line
-; in:  SI = NUL message; gfx lock held
-; out: nothing; preserves all registers
-;
-; The window is created on first need rather than at startup, because a window
-; slot is a scarce shared resource (MAX_WIN is 12) and most sessions never see
-; a notice. If the table is full the message degrades to the canvas toast,
-; which is always available.
-; -----------------------------------------------------------------------------
-pt_alert:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov [pt_amsg], si
-    cmp word [pt_awin], 0
-    jne .show
-    mov ax, [pt_scrw]
-    sub ax, PT_A_W
-    jns .cx
-    xor ax, ax
-.cx:
-    shr ax, 1
-    mov [pt_atpl + WT_X], ax
-    mov ax, [pt_dockr]              ; and clear of the dock, which on a 200-row
-    sub ax, PT_A_H                  ; CGA screen the default Y would sit in
-    cmp ax, [pt_atpl + WT_Y]
-    jge .cy
-    cmp ax, MBAR_H + 2
-    jge .setcy
-    mov ax, MBAR_H + 2
-.setcy:
-    mov [pt_atpl + WT_Y], ax
-.cy:
-    mov si, pt_atpl
-    call OSAPI_WM_CREATE
-    jc .toast                       ; no slot: say it on the canvas instead
-    mov [pt_awin], bx
-.show:
-    mov bx, [pt_awin]
-    call OSAPI_WM_SHOW              ; shows, fronts and repaints everything -
-    jmp short .out                  ; which is also how the corrected frame
-.toast:                             ; gets drawn
-    mov si, [pt_amsg]
-    call pt_msg_show
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; pt_apaint - the notice's W_PAINT
-; in:  SI = its window ptr (content white-filled, gfx lock held)
-; out: nothing; preserves all registers
-; -----------------------------------------------------------------------------
-pt_apaint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    mov bx, si
-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
-    mov di, ax
-    mov bp, dx
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov cx, di
-    add cx, 10
-    mov dx, bp
-    add dx, 10
-    mov si, [pt_amsg]
-    call OSAPI_FONT_STR
-    mov cx, di
-    add cx, 10
-    mov dx, bp
-    add dx, 26
-    mov si, pt_s_crop2
-    call OSAPI_FONT_STR
-    ; --- the OK button ------------------------------------------------------
-    mov ax, di
-    add ax, PT_A_W - 2 - PT_A_BW - 8
-    mov bx, bp
-    add bx, PT_A_H - 19 - PT_A_BH - 6
-    mov cx, ax
-    add cx, PT_A_BW
-    mov dx, bx
-    add dx, PT_A_BH
-    call OSAPI_GFX_FRAME
-    add ax, 14
-    add bx, 4
-    mov cx, ax
-    mov dx, bx
-    mov si, pt_s_ok
-    call OSAPI_FONT_STR
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; pt_aonclick / pt_aonkey - anywhere, or any key, dismisses it
-; in:  SI = its window ptr; gfx lock held
-; out: nothing
-; -----------------------------------------------------------------------------
-pt_aonclick:
-pt_aonkey:
-    mov bx, si
-    call OSAPI_WM_HIDE              ; hides and repaints, so the picture and
-    ret                             ; its corrected frame come straight back
-
 ; -----------------------------------------------------------------------------
 ; pt_orowset - ES:DI = row AX of the staged OLD picture in the undo image
 ; in:  AX = row, [pt_och]/[pt_ostride]
@@ -4990,6 +4899,9 @@ pt_dlg:
     cmp byte [pt_name], 0
     jne .named
     mov si, pt_s_defname
+    cmp byte [pt_sfmt], 0
+    je .named
+    mov si, pt_s_defgif
 .named:
     call OSAPI_FILE_DLG
     pop di
@@ -5047,73 +4959,13 @@ pt_ondlg:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_fmt - which format does this name ask for?
-; in:  SI = NUL name
-; out: AL = 0 BMP, 1 GIF, 2 JPEG; preserves all other registers
-;
-; The extension decides on the way out. On the way in the file's own first
-; bytes decide instead - a name is a wish, a magic number is a fact.
-; -----------------------------------------------------------------------------
-pt_fmt:
-    push bx
-    push si
-    xor bx, bx                      ; BX = the last '.' seen + 1
-.find:
-    mov al, [si]
-    or al, al
-    jz .end
-    inc si
-    cmp al, '.'
-    jne .find
-    mov bx, si
-    jmp short .find
-.end:
-    xor al, al
-    or bx, bx
-    jz .out
-    mov si, bx
-    call pt_upcase3                 ; AX = 3 upper-cased chars, AL first
-    cmp al, 'G'
-    jne .jpg
-    cmp ah, 'I'
-    jne .out
-    mov al, 1
-    jmp short .out
-.jpg:
-    cmp al, 'J'
-    jne .bmp
-    mov al, 2
-    jmp short .out
-.bmp:
-    xor al, al
-.out:
-    pop si
-    pop bx
-    ret
-
-; pt_upcase3 - the first two extension characters, upper-cased
-; in:  SI = extension; out: AL, AH; clobbers flags
-pt_upcase3:
-    mov al, [si]
-    mov ah, [si+1]
-    cmp al, 'a'
-    jb .a
-    cmp al, 'z'
-    ja .a
-    sub al, 32
-.a:
-    cmp ah, 'a'
-    jb .b
-    cmp ah, 'z'
-    ja .b
-    sub ah, 32
-.b:
-    ret
-
-; -----------------------------------------------------------------------------
-; pt_save - write the picture out under the name in SI
-; in:  SI = NUL 8.3 name; UI task, gfx lock held
+; pt_save - write pt_name out in the format the menu verb asked for
+; in:  [pt_sfmt] = 0 BMP / 1 GIF; UI task, gfx lock held
 ; out: [pt_msgp] = the toast to show; preserves all registers
+;
+; The name is coerced to the verb's extension first (pt_setext), so "Save Gif"
+; on PICTURE.BMP writes PICTURE.GIF rather than GIF bytes into a file whose
+; name promises a bitmap.
 ; -----------------------------------------------------------------------------
 pt_save:
     push ax
@@ -5123,11 +4975,12 @@ pt_save:
     push si
     push es
     mov word [pt_msgp], pt_s_wrote
-    call pt_fmt
-    or al, al
-    jz .bmp
-    mov word [pt_msgp], pt_s_nofmt  ; GIF and JPEG: see docs/PAINT-NOTES.md
-    jmp short .out
+    call pt_setext
+    mov si, pt_name
+    cmp byte [pt_sfmt], 0
+    je .bmp
+    call pt_gif_out
+    jmp .out
 .bmp:
     ; --- one write, so the whole file must fit the API's 64KB (SPEC.md 18.4)
     mov ax, [pt_ch]
@@ -5196,7 +5049,7 @@ pt_load:
     cmp word [es:0], 0x4D42         ; 'BM'
     je .bmp
     cmp word [es:0], 0x4947         ; 'GI'
-    je .nofmt
+    je .gif
     cmp word [es:0], 0xD8FF         ; JPEG SOI
     je .nofmt
 .bad:
@@ -5204,6 +5057,11 @@ pt_load:
     jmp short .out
 .nofmt:
     mov word [pt_msgp], pt_s_nofmt
+    jmp short .out
+.gif:
+    call pt_gif_in                  ; the magic decides, not the extension
+    jnc .out
+    mov [pt_msgp], si
     jmp short .out
 .bmp:
     call pt_bmp_in                  ; AX = the byte count read
@@ -5334,46 +5192,9 @@ pt_bmp_in:
     call pt_bmp_pal
     ; --- the canvas becomes the picture's size, as far as it can go --------
 .size:
-    call pt_text_end
-    call pt_sel_drop
-    mov byte [pt_trunc], 0
-    mov ax, [pt_bw]                 ; what the SCREEN can show...
-    cmp ax, [pt_cwmax]
-    jbe .w_ok
-    mov ax, [pt_cwmax]
-    mov byte [pt_trunc], 1
-.w_ok:
-    cmp ax, PT_CW_MIN
-    jae .w_min
-    mov ax, PT_CW_MIN
-.w_min:
+    mov ax, [pt_bw]
     mov dx, [pt_bh]
-    cmp dx, [pt_chmax]
-    jbe .h_ok
-    mov dx, [pt_chmax]
-    mov byte [pt_trunc], 1
-.h_ok:
-    cmp dx, PT_CH_MIN
-    jae .h_min
-    mov dx, PT_CH_MIN
-.h_min:
-    call pt_fit                     ; ...and then what MEMORY can hold
-    jnc .fits
-    mov byte [pt_trunc], 1          ; cropped: File > Save must not overwrite
-.fits:                              ; the original with less than it held
-    call pt_layout
-    call pt_bmp_hdr
-    call pt_undo_new
-    mov byte [pt_undo_ok], 0        ; the staging buffer IS the undo image, so
-    mov word [pt_cbw], 0            ; neither undo nor the clipboard survives
-    mov ax, [pt_bw]                 ; columns we will actually take
-    cmp ax, [pt_cw]
-    jbe .cols
-    mov ax, [pt_cw]
-.cols:
-    mov [pt_cols], ax
-    mov al, CWHITE                  ; anything the file does not cover
-    call pt_wipe
+    call pt_adopt
     xor di, di                      ; DI = destination row
 .row:
     cmp di, [pt_ch]
@@ -5395,17 +5216,7 @@ pt_bmp_in:
     inc di
     jmp short .row
 .done:
-    call pt_wsize                   ; the window follows the picture's size...
-    mov bx, [pt_win]
-    mov ax, [pt_tpl + WT_W]
-    mov [bx + W_W], ax
-    mov ax, [pt_tpl + WT_H]
-    mov [bx + W_H], ax
-    mov ax, [pt_tpl + WT_X]
-    mov [bx + W_X], ax
-    mov ax, [pt_tpl + WT_Y]
-    mov [bx + W_Y], ax
-    mov byte [pt_wchg], 1           ; ...and the caller repaints the desktop
+    call pt_wfollow                 ; the window follows the picture's size
     pop di
     pop dx
     pop cx
@@ -5702,6 +5513,1247 @@ pt_line_put:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; pt_adopt - make the canvas the picture's size, as far as it can go
+; in:  AX = the picture's width, DX = its height
+; out: the canvas relaid out and wiped white, [pt_cols] = columns to take,
+;      [pt_trunc] = 1 if anything had to be given up; preserves all registers
+;
+; Shared by both readers, which is the point: one place decides what "as far as
+; it can go" means, so a GIF and a BMP of the same size open the same way.
+; -----------------------------------------------------------------------------
+pt_adopt:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [pt_pw], ax
+    call pt_text_end
+    call pt_sel_drop
+    mov byte [pt_trunc], 0
+    mov ax, [pt_pw]                 ; what the SCREEN can show...
+    cmp ax, [pt_cwmax]
+    jbe .w_ok
+    mov ax, [pt_cwmax]
+    mov byte [pt_trunc], 1
+.w_ok:
+    cmp ax, PT_CW_MIN
+    jae .w_min
+    mov ax, PT_CW_MIN
+.w_min:
+    cmp dx, [pt_chmax]
+    jbe .h_ok
+    mov dx, [pt_chmax]
+    mov byte [pt_trunc], 1
+.h_ok:
+    cmp dx, PT_CH_MIN
+    jae .h_min
+    mov dx, PT_CH_MIN
+.h_min:
+    call pt_fit                     ; ...and then what MEMORY can hold
+    jnc .fits
+    mov byte [pt_trunc], 1          ; cropped: File > Save must not overwrite
+.fits:                              ; the original with less than it held
+    call pt_layout
+    call pt_bmp_hdr
+    call pt_undo_new
+    mov byte [pt_undo_ok], 0        ; the staging buffer IS the undo image, and
+    mov word [pt_cbw], 0            ; the clipboard is the codec's table space
+    mov ax, [pt_pw]                 ; columns we will actually take
+    cmp ax, [pt_cw]
+    jbe .cols
+    mov ax, [pt_cw]
+.cols:
+    mov [pt_cols], ax
+    mov al, CWHITE                  ; anything the file does not cover
+    call pt_wipe
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_wfollow - the window takes the canvas's size and position
+; out: [pt_wchg] = 1, so the caller repaints the desktop too; preserves all
+; -----------------------------------------------------------------------------
+pt_wfollow:
+    push ax
+    push bx
+    call pt_wsize
+    mov bx, [pt_win]
+    mov ax, [pt_tpl + WT_W]
+    mov [bx + W_W], ax
+    mov ax, [pt_tpl + WT_H]
+    mov [bx + W_H], ax
+    mov ax, [pt_tpl + WT_X]
+    mov [bx + W_X], ax
+    mov ax, [pt_tpl + WT_Y]
+    mov [bx + W_Y], ax
+    mov byte [pt_wchg], 1
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_setext - make pt_name carry the extension [pt_sfmt] asks for
+; out: nothing; preserves all registers
+;
+; Left alone if there is no room for one, which cannot happen with a name the
+; Standard File dialog produced (SPEC.md 38.6 promises 8.3) but is checked
+; anyway - the buffer is 14 bytes and this writes four.
+; -----------------------------------------------------------------------------
+pt_setext:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov si, pt_name
+    xor bx, bx                      ; BX = the last '.' seen
+.find:
+    mov al, [si]
+    or al, al
+    jz .end
+    cmp al, '.'
+    jne .next
+    mov bx, si
+.next:
+    inc si
+    jmp short .find
+.end:
+    or bx, bx
+    jnz .have
+    mov bx, si                      ; no extension at all: append one
+    mov byte [bx], '.'
+.have:
+    mov ax, bx
+    sub ax, pt_name
+    cmp ax, PT_NAMEMAX - 4          ; '.' + three characters + the NUL
+    ja .out
+    mov byte [bx], '.'
+    mov di, bx
+    inc di
+    mov si, pt_s_ebmp
+    cmp byte [pt_sfmt], 0
+    je .cp
+    mov si, pt_s_egif
+.cp:
+    mov cx, 4
+.c:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .c
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; GIF - LZW in both directions (SPEC.md 41.7)
+;
+; Where everything lives, and why:
+;
+;   READ   the staged file is in the undo image, exactly as the BMP reader's is.
+;          prefix[4096] words + suffix[4096] bytes + a 4096-byte output stack
+;          fill the clipboard's reserved floor to the byte.
+;   WRITE  child/sibling/suffix for 2048 codes (10KB) go in the clipboard, the
+;          GIF being built goes in the undo image, and the canvas is read one
+;          row at a time into pt_line.
+;
+; What decides those placements is that DS must stay on the kernel segment for
+; the bss, so ES is the only far pointer there is and no inner loop may need
+; two. The reader's bit window borrows ES for three bytes and gives it straight
+; back; the writer's output goes through a 255-byte block in bss, flushed once
+; per GIF sub-block - which is the shape the format wants anyway.
+;
+; The writer stops growing codes at 11 bits rather than the format's 12. That
+; halves its tables and costs a Clear code every 2030 strings, which for
+; flat-shaded drawings is nothing. The READER is full 12-bit: it has to take
+; whatever a host tool wrote.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; pt_gif_in - decode the staged GIF into the canvas
+; in:  ES = the staging segment, AX = bytes read; gfx lock held
+; out: CF=0 done, CF=1 with SI = the reason; preserves all other registers
+;
+; Every offset is checked against the byte count actually read before it is
+; used, because the file came off someone else's floppy (SPEC.md 19). The
+; dimensions are capped at PT_GDIM_MAX as well: a header claiming 60000 rows
+; would otherwise be decoded row by row into nothing for a very long time.
+; -----------------------------------------------------------------------------
+pt_gif_in:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov [pt_fsz], ax
+    cmp ax, 14
+    jb .bad
+    cmp byte [es:2], 'F'
+    jne .bad
+    mov byte [pt_ghavp], 0
+    mov si, 13                      ; past the logical screen descriptor
+    mov al, [es:10]
+    test al, 0x80                   ; a global colour table?
+    jz .blk
+    call pt_gctsz                   ; CX = entries
+    call pt_gif_pal
+    jc .bad
+; --- the block stream ---------------------------------------------------------
+.blk:
+    cmp si, [pt_fsz]
+    jae .bad
+    mov al, [es:si]
+    inc si
+    cmp al, 0x2C                    ; the image descriptor: what we came for
+    je .img
+    cmp al, 0x21                    ; an extension: skip its sub-blocks
+    jne .bad
+    cmp si, [pt_fsz]
+    jae .bad
+    inc si                          ; the label byte
+.skip:
+    cmp si, [pt_fsz]
+    jae .bad
+    mov al, [es:si]
+    inc si
+    or al, al
+    jz .blk
+    mov ah, 0
+    add si, ax
+    jmp short .skip
+; --- the image descriptor -----------------------------------------------------
+.img:
+    mov ax, si
+    add ax, 9
+    jc .bad
+    cmp ax, [pt_fsz]
+    ja .bad
+    mov ax, [es:si+4]               ; width and height; left/top are ignored,
+    mov [pt_gw], ax                 ; the picture goes at the corner
+    or ax, ax
+    jz .bad
+    cmp ax, PT_GDIM_MAX
+    ja .bad
+    mov ax, [es:si+6]
+    mov [pt_gh], ax
+    or ax, ax
+    jz .bad
+    cmp ax, PT_GDIM_MAX
+    ja .bad
+    mov al, [es:si+8]
+    mov ah, al
+    and ah, 0x40
+    mov [pt_gilace], ah
+    add si, 9
+    test al, 0x80                   ; a local colour table wins
+    jz .pal_ok
+    call pt_gctsz
+    call pt_gif_pal
+    jc .bad
+.pal_ok:
+    cmp byte [pt_ghavp], 0
+    je .bad                         ; no table anywhere: nothing to map from
+    cmp si, [pt_fsz]
+    jae .bad
+    mov al, [es:si]                 ; the LZW minimum code size
+    inc si
+    cmp al, 2
+    jb .bad
+    cmp al, 8
+    ja .bad
+    mov [pt_gmin], al
+    call pt_gdeblk                  ; the sub-blocks, flattened in place
+    cmp word [pt_glen], 0
+    je .bad
+    mov ax, [pt_gw]                 ; the canvas takes the picture's size...
+    mov dx, [pt_gh]
+    call pt_adopt
+    call pt_gdec                    ; ...and the stream fills it
+    call pt_wfollow
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.bad:
+    mov si, pt_s_badpic
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gctsz - colour table entries from a packed descriptor byte
+; in:  AL = the packed field; out: CX = 2 << (AL & 7); preserves all others
+; -----------------------------------------------------------------------------
+pt_gctsz:
+    push ax
+    and al, 7
+    mov cl, al
+    xor ch, ch
+    mov ax, 2
+    shl ax, cl
+    mov cx, ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gif_pal - a GIF colour table into pt_pmap
+; in:  ES = the file, SI = the table's offset, CX = entries
+; out: CF=1 if the table runs past the file (nothing written); else SI is
+;      advanced past it and [pt_ghavp] = 1; preserves all other registers
+;
+; Indices the table does not define map to WHITE rather than to colour 0: an
+; index out of range is a corrupt file, and paper is a safer guess than ink.
+; -----------------------------------------------------------------------------
+pt_gif_pal:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov ax, cx
+    mov bx, 3
+    mul bx                          ; DX:AX = the table's bytes
+    or dx, dx
+    jnz .over
+    add ax, si
+    jc .over
+    cmp ax, [pt_fsz]
+    ja .over
+    mov [pt_gpend], ax
+    mov di, 0
+    mov bx, 256
+    mov al, CWHITE
+.pre:
+    mov [pt_pmap+di], al
+    inc di
+    dec bx
+    jnz .pre
+    xor di, di
+.ent:
+    push cx                         ; CX is the counter AND pt_map16's green
+    mov cl, [es:si]                 ; GIF orders them red, green, blue
+    mov ch, [es:si+1]
+    mov dl, [es:si+2]
+    call pt_map16
+    mov [pt_pmap+di], al
+    pop cx
+    add si, 3
+    inc di
+    loop .ent
+    mov byte [pt_ghavp], 1
+    mov si, [pt_gpend]
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.over:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gdeblk - flatten the LZW sub-blocks in place
+; in:  ES = the file, SI = the first sub-block's length byte
+; out: [pt_gbase] = where the flattened stream starts (SI as passed),
+;      [pt_glen] = its length; preserves all registers
+;
+; Each block's data is copied back over the byte that announced it, so the
+; destination always trails the source and one `rep movsb` per block is safe.
+; Flattening first is what lets the bit reader be three bytes and a shift
+; instead of a sub-block state machine inside the hot loop, and it costs one
+; pass over a file that cannot exceed 64KB.
+; -----------------------------------------------------------------------------
+pt_gdeblk:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    mov [pt_gbase], si
+    mov dx, [pt_fsz]                ; the limit, read before DS moves
+    mov ax, es
+    mov ds, ax                      ; both halves of the copy are the file
+    mov di, si
+    cld
+.blk:
+    cmp si, dx
+    jae .done
+    mov cl, [si]
+    inc si
+    xor ch, ch
+    jcxz .done                      ; the block terminator
+    mov ax, si
+    add ax, cx
+    jc .trunc
+    cmp ax, dx
+    jbe .copy
+.trunc:
+    mov cx, dx                      ; a truncated last block: take what is
+    sub cx, si                      ; there, then stop
+    rep movsb
+    jmp short .done
+.copy:
+    rep movsb
+    jmp short .blk
+.done:
+    pop ds
+    mov ax, di
+    sub ax, [pt_gbase]
+    mov [pt_glen], ax
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gbits - the next [pt_gcsize] bits of the flattened stream
+; in:  [pt_gbyte]/[pt_gbit]
+; out: AX = the code, CF=1 at the end of the stream; preserves all others
+;
+; A code spans at most three bytes (7 leftover bits plus twelve), so the window
+; is a word and a byte shifted down as a pair. ES is borrowed and given back:
+; the caller keeps it on the table segment.
+; -----------------------------------------------------------------------------
+pt_gbits:
+    push bx
+    push cx
+    push dx
+    push es
+    mov bx, [pt_gbyte]
+    cmp bx, [pt_glen]
+    jae .end
+    add bx, [pt_gbase]
+    mov ax, [pt_unseg]
+    mov es, ax
+    mov ax, [es:bx]
+    mov dl, [es:bx+2]
+    xor dh, dh
+    xor ch, ch
+    mov cl, [pt_gbit]
+    jcxz .aligned
+.sh:
+    shr dx, 1
+    rcr ax, 1
+    loop .sh
+.aligned:
+    mov cl, [pt_gcsize]
+    mov bx, 1
+    shl bx, cl
+    dec bx
+    and ax, bx                      ; AX = the code
+    add cl, [pt_gbit]               ; and on past it
+    mov bl, cl
+    and cl, 7
+    mov [pt_gbit], cl
+    mov cl, 3
+    shr bl, cl
+    xor bh, bh
+    add [pt_gbyte], bx
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.end:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_greset - the reader's table back to its initial state (a Clear code)
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+pt_greset:
+    push ax
+    push cx
+    xor ch, ch
+    mov cl, [pt_gmin]
+    mov ax, 1
+    shl ax, cl
+    mov [pt_gclr], ax               ; 1 << min
+    inc ax
+    mov [pt_geoi], ax
+    inc ax
+    mov [pt_gfree], ax              ; the first code a string can take
+    inc cl
+    mov [pt_gcsize], cl
+    mov word [pt_gold], 0xFFFF
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gpush / pt_gpop - the reader's output stack
+; in:  AL = a colour index (push); ES = the table segment
+; out: nothing; preserves all registers
+;
+; LZW hands a string back last character first, so it is unwound onto a stack
+; and emitted in reverse. The stack is bounded at 4096 - one entry per possible
+; code - and a chain that would overrun it is a corrupt file, cut short rather
+; than followed.
+; -----------------------------------------------------------------------------
+pt_gpush:
+    push bx
+    mov bx, [pt_gsp]
+    cmp bx, 4096
+    jae .full
+    mov [es:bx+PT_GD_STK], al
+    inc bx
+    mov [pt_gsp], bx
+.full:
+    pop bx
+    ret
+
+pt_gpop:
+    push ax
+    push bx
+.more:
+    mov bx, [pt_gsp]
+    or bx, bx
+    jz .out
+    dec bx
+    mov [pt_gsp], bx
+    mov al, [es:bx+PT_GD_STK]
+    call pt_gemit
+    jmp short .more
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gemit - one decoded pixel into the picture
+; in:  AL = the file's colour index
+; out: nothing; preserves all registers
+;
+; Columns the canvas does not have are counted but not stored, because the
+; stream has to stay in step whether the picture was cropped or not; rows it
+; does not have are decoded and dropped for the same reason.
+; -----------------------------------------------------------------------------
+pt_gemit:
+    push ax
+    push bx
+    push cx
+    push di
+    cmp byte [pt_gdone], 0
+    jne .out
+    mov bx, [pt_gcol]
+    cmp bx, [pt_cols]
+    jae .skip
+    mov cl, al
+    xor ch, ch
+    mov di, cx
+    mov al, [pt_pmap+di]
+    mov [pt_line+bx], al
+.skip:
+    inc bx
+    mov [pt_gcol], bx
+    cmp bx, [pt_gw]
+    jb .out
+    mov word [pt_gcol], 0           ; the row is complete
+    mov di, [pt_grw]
+    cmp di, [pt_ch]
+    jae .adv
+    call pt_line_put
+.adv:
+    call pt_gnrow
+.out:
+    pop di
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gnrow - the next destination row, interlace and all
+; out: [pt_gdone] = 1 once every row has been placed; preserves all registers
+; -----------------------------------------------------------------------------
+pt_gnrow:
+    push ax
+    push bx
+    cmp byte [pt_gilace], 0
+    jne .ilace
+    inc word [pt_grw]
+    mov ax, [pt_grw]
+    cmp ax, [pt_gh]
+    jb .out
+    mov byte [pt_gdone], 1
+    jmp short .out
+.ilace:
+    xor bh, bh
+    mov bl, [pt_gpass]
+    mov al, [pt_gstep+bx]
+    xor ah, ah
+    add [pt_grw], ax
+.chk:
+    mov ax, [pt_grw]
+    cmp ax, [pt_gh]
+    jb .out
+    inc byte [pt_gpass]
+    cmp byte [pt_gpass], 4
+    jb .pass
+    mov byte [pt_gdone], 1
+    jmp short .out
+.pass:
+    xor bh, bh
+    mov bl, [pt_gpass]
+    mov al, [pt_gstart+bx]
+    xor ah, ah
+    mov [pt_grw], ax
+    jmp short .chk                  ; a pass starting past the bottom is empty
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gdec - the reader's LZW loop
+; in:  the header fields, the canvas laid out and wiped
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+pt_gdec:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, [pt_cbseg]
+    mov es, ax                      ; the tables, for the whole loop
+    mov word [pt_gbyte], 0
+    mov byte [pt_gbit], 0
+    mov word [pt_gcol], 0
+    mov byte [pt_gpass], 0
+    mov word [pt_grw], 0
+    mov byte [pt_gdone], 0
+    call pt_greset
+.next:
+    cmp byte [pt_gdone], 0
+    jne .out
+    call pt_gbits
+    jc .out
+    cmp ax, [pt_gclr]
+    je .clear
+    cmp ax, [pt_geoi]
+    je .out
+    mov [pt_gcode], ax
+    cmp word [pt_gold], 0xFFFF
+    jne .chain
+    mov [pt_gold], ax               ; the first code after a Clear is a root
+    mov [pt_gfirst], ax
+    call pt_gemit
+    jmp .next
+.chain:
+    mov word [pt_gsp], 0
+    cmp ax, [pt_gfree]
+    jb .walk
+    mov ax, [pt_gfirst]             ; the code about to be defined: its own
+    call pt_gpush                   ; first character closes the string
+    mov ax, [pt_gold]
+.walk:
+    cmp word [pt_gsp], 4096
+    jae .root                       ; a cyclic chain: stop unwinding
+    cmp ax, [pt_gclr]
+    jb .root
+    mov bx, ax
+    add bx, bx
+    mov dx, [es:bx+PT_GD_PREF]      ; the prefix first: BX is about to move
+    mov bx, ax
+    mov al, [es:bx+PT_GD_SUFF]
+    call pt_gpush
+    mov ax, dx
+    jmp short .walk
+.root:
+    mov [pt_gfirst], ax
+    call pt_gpush
+    call pt_gpop                    ; and out, top of the stack first
+    mov bx, [pt_gfree]
+    cmp bx, 4096
+    jae .noadd
+    mov ax, bx
+    add ax, ax
+    mov di, ax
+    mov ax, [pt_gold]
+    mov [es:di+PT_GD_PREF], ax
+    mov ax, [pt_gfirst]
+    mov [es:bx+PT_GD_SUFF], al
+    inc bx
+    mov [pt_gfree], bx
+    cmp byte [pt_gcsize], 12
+    jae .noadd
+    xor ch, ch
+    mov cl, [pt_gcsize]
+    mov ax, 1
+    shl ax, cl
+    cmp bx, ax                      ; the table crossed a power of two
+    jb .noadd
+    inc byte [pt_gcsize]
+.noadd:
+    mov ax, [pt_gcode]
+    mov [pt_gold], ax
+    jmp .next
+.clear:
+    call pt_greset
+    jmp .next
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_line_get - canvas row DI into pt_line, one colour index per column
+; in:  DI = canvas row; out: pt_line holds [pt_cw] indices; preserves all
+; -----------------------------------------------------------------------------
+pt_line_get:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, di
+    call pt_rowset                  ; ES:DI = the row
+    mov bx, di
+    xor si, si
+.col:
+    mov di, si
+    shr di, 1
+    add di, bx
+    mov al, [es:di]
+    test si, 1
+    jnz .lo
+    mov cl, 4
+    shr al, cl                      ; the high nibble is the left pixel
+    jmp short .put
+.lo:
+    and al, 0x0F
+.put:
+    mov [pt_line+si], al
+    inc si
+    cmp si, [pt_cw]
+    jb .col
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gwr - one byte into the GIF being built
+; in:  AL; out: nothing ([pt_govf] set if it does not fit); preserves all
+; -----------------------------------------------------------------------------
+pt_gwr:
+    push ax
+    push bx
+    push cx
+    push es
+    mov cl, al                      ; the byte, before AX becomes the segment
+    mov bx, [pt_gout]
+    cmp bx, [pt_gcap]
+    jae .full
+    mov ax, [pt_unseg]
+    mov es, ax
+    mov [es:bx], cl
+    inc bx
+    mov [pt_gout], bx
+    jmp short .done
+.full:
+    mov byte [pt_govf], 1
+.done:
+    pop es
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; pt_gwrw - a little-endian word; preserves all registers
+pt_gwrw:
+    push ax
+    call pt_gwr
+    mov al, ah
+    call pt_gwr
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_ghdr - magic, screen descriptor, our palette, image descriptor
+; out: nothing; preserves all registers
+;
+; The logical screen IS the picture and the global table IS our sixteen, in the
+; order pt_pal_rgb already keeps them - which is GIF's own red, green, blue.
+; -----------------------------------------------------------------------------
+pt_ghdr:
+    push ax
+    push cx
+    push si
+    mov si, pt_g_magic
+    mov cx, 6
+.mag:
+    mov al, [si]
+    call pt_gwr
+    inc si
+    loop .mag
+    mov ax, [pt_cw]
+    call pt_gwrw
+    mov ax, [pt_ch]
+    call pt_gwrw
+    mov al, 0x83                    ; a global table of 2 << 3 entries
+    call pt_gwr
+    xor al, al                      ; background index
+    call pt_gwr
+    xor al, al                      ; no aspect ratio given
+    call pt_gwr
+    mov si, pt_pal_rgb
+    mov cx, 48
+.pal:
+    mov al, [si]
+    call pt_gwr
+    inc si
+    loop .pal
+    mov al, 0x2C                    ; the image descriptor
+    call pt_gwr
+    xor ax, ax
+    call pt_gwrw                    ; left
+    xor ax, ax
+    call pt_gwrw                    ; top
+    mov ax, [pt_cw]
+    call pt_gwrw
+    mov ax, [pt_ch]
+    call pt_gwrw
+    xor al, al                      ; no local table, not interlaced
+    call pt_gwr
+    mov al, 4                       ; LZW minimum code size: sixteen colours
+    call pt_gwr
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gbo / pt_gflush - the writer's sub-block staging
+; in:  AL = one data byte (pt_gbo)
+; out: nothing; preserves all registers
+;
+; GIF wants its LZW data in blocks of at most 255 bytes, so the natural staging
+; unit is one block in bss - which is also what keeps ES on the table segment
+; through the whole encode: the far write happens once per block, not per byte.
+; -----------------------------------------------------------------------------
+pt_gbo:
+    push bx
+    xor bx, bx
+    mov bl, [pt_gbn]
+    mov [pt_gbuf+bx], al
+    inc bl
+    mov [pt_gbn], bl
+    cmp bl, 255
+    jb .out
+    call pt_gflush
+.out:
+    pop bx
+    ret
+
+pt_gflush:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    xor cx, cx
+    mov cl, [pt_gbn]
+    jcxz .out
+    mov ax, [pt_gout]
+    add ax, cx
+    inc ax
+    cmp ax, [pt_gcap]
+    ja .full
+    mov ax, [pt_unseg]
+    mov es, ax
+    mov di, [pt_gout]
+    mov al, cl
+    mov [es:di], al                 ; the block's own length byte
+    inc di
+    mov si, pt_gbuf
+    cld
+    rep movsb
+    mov [pt_gout], di
+    mov byte [pt_gbn], 0
+    jmp short .out
+.full:
+    mov byte [pt_govf], 1
+    mov byte [pt_gbn], 0
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gput - one code into the bit stream, [pt_gcsize] bits wide
+; in:  AX = the code; out: nothing; preserves all registers
+;
+; Up to 7 pending bits plus a 12-bit code is 19, so the accumulator is a word
+; and a spill word shifted down as a pair - two iterations at most.
+; -----------------------------------------------------------------------------
+pt_gput:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov dx, ax                      ; DX = the code
+    xor ch, ch
+    mov cl, [pt_gaccn]
+    mov ax, dx
+    shl ax, cl                      ; the low sixteen bits of code << pending
+    or ax, [pt_gacc]
+    mov bx, dx
+    neg cl
+    add cl, 16
+    shr bx, cl                      ; and whatever spilled past them
+    mov cl, [pt_gaccn]
+    add cl, [pt_gcsize]             ; CL = bits now held
+.byte:
+    cmp cl, 8
+    jb .rest
+    push cx
+    call pt_gbo                     ; AL goes out
+    pop cx
+    mov al, ah                      ; BX:AX >>= 8
+    mov ah, bl
+    mov bl, bh
+    mov bh, 0
+    sub cl, 8
+    jmp short .byte
+.rest:
+    mov [pt_gacc], ax
+    mov [pt_gaccn], cl
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gtclr - the writer's roots back to childless
+; out: nothing; preserves all registers
+;
+; Only the eighteen initial codes need clearing, however full the table got:
+; every code above them has its child word written when it is created. That is
+; what makes a Clear cheap enough to do as often as an 11-bit ceiling asks for.
+; -----------------------------------------------------------------------------
+pt_gtclr:
+    push ax
+    push bx
+    push cx
+    xor bx, bx
+    mov cx, 18
+    mov ax, 0xFFFF
+.z:
+    mov [es:bx+PT_GE_CHILD], ax
+    inc bx
+    inc bx
+    loop .z
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gfind - the child of [pt_gent] whose suffix is BL
+; in:  BL = the suffix, ES = the tables
+; out: CF=0 with AX = that code, CF=1 if there is none; preserves all others
+;
+; A sibling chain, not a hash table: with a 4-bit minimum code size a node has
+; at most sixteen children, so the walk is bounded by sixteen byte compares and
+; needs no probe sequence, no load factor and no third array of codes.
+; -----------------------------------------------------------------------------
+pt_gfind:
+    push bx
+    push dx
+    mov dl, bl
+    mov bx, [pt_gent]
+    add bx, bx
+    mov ax, [es:bx+PT_GE_CHILD]
+.walk:
+    cmp ax, 0xFFFF
+    je .none
+    mov bx, ax
+    cmp [es:bx+PT_GE_SUF], dl
+    je .found
+    add bx, bx
+    mov ax, [es:bx+PT_GE_SIB]
+    jmp short .walk
+.found:
+    pop dx
+    pop bx
+    clc
+    ret
+.none:
+    pop dx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gadd - give [pt_gent] a child for suffix BL, or start the table over
+; in:  BL = the suffix, ES = the tables
+; out: nothing; preserves all registers
+;
+; The one place where writing and reading LZW are NOT mirror images, and the
+; only place it matters. A writer defines its new string as it emits the code
+; before it; a reader cannot define that string until it has seen the code
+; AFTER it (which is what the KwKwK case in pt_gdec covers). So the reader's
+; table is permanently one entry behind the writer's, and the two rules that
+; decide the code WIDTH have to be off by one to compensate: the writer widens
+; when free passes 1<<size, the reader when free reaches it. Both then widen
+; before the same code, which is the only thing that has to be true.
+;
+; The same offset is why PT_GE_MAXC is 2047 and not 2048: the writer must Clear
+; one string early, or the reader's trailing entry lands on 2048 and it widens
+; to twelve bits for a Clear code the writer emitted in eleven. Verified by
+; round-tripping flat, banded, striped and pure-noise pictures through a host
+; decoder - noise is what fills the table fast enough to reach a Clear at all.
+; -----------------------------------------------------------------------------
+pt_gadd:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov al, bl                      ; AL = the suffix, BX is about to be an index
+    mov di, [pt_gfree]
+    cmp di, PT_GE_MAXC
+    jae .full
+    mov bx, di
+    mov [es:bx+PT_GE_SUF], al
+    mov si, di
+    add si, si
+    mov word [es:si+PT_GE_CHILD], 0xFFFF
+    mov bx, [pt_gent]
+    add bx, bx
+    mov cx, [es:bx+PT_GE_CHILD]
+    mov [es:si+PT_GE_SIB], cx       ; the parent's old first child...
+    mov [es:bx+PT_GE_CHILD], di     ; ...now hangs off us
+    inc di
+    mov [pt_gfree], di
+    cmp byte [pt_gcsize], 12
+    jae .out
+    xor ch, ch
+    mov cl, [pt_gcsize]
+    mov ax, 1
+    shl ax, cl
+    cmp di, ax                      ; STRICTLY greater: see the note above
+    jbe .out
+    inc byte [pt_gcsize]
+    jmp short .out
+.full:
+    mov ax, 16                      ; Clear, and everything starts again
+    call pt_gput
+    call pt_gtclr
+    mov word [pt_gfree], 18
+    mov byte [pt_gcsize], 5
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_genc - the writer's LZW loop, one canvas row at a time
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+pt_genc:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, [pt_cbseg]
+    mov es, ax                      ; the tables, for the whole loop
+    mov byte [pt_gbn], 0
+    mov word [pt_gacc], 0
+    mov byte [pt_gaccn], 0
+    mov word [pt_gfree], 18
+    mov byte [pt_gcsize], 5
+    call pt_gtclr
+    mov word [pt_gent], 0xFFFF
+    mov ax, 16                      ; a leading Clear, as every writer emits
+    call pt_gput
+    xor di, di
+.row:
+    cmp di, [pt_ch]
+    jae .last
+    call pt_line_get
+    xor si, si
+.px:
+    cmp si, [pt_cw]
+    jae .nextrow
+    xor bh, bh
+    mov bl, [pt_line+si]
+    and bl, 0x0F
+    cmp word [pt_gent], 0xFFFF
+    jne .have
+    mov [pt_gent], bx               ; the picture's first pixel
+    jmp short .adv
+.have:
+    call pt_gfind
+    jc .miss
+    mov [pt_gent], ax               ; the string grows by one
+    jmp short .adv
+.miss:
+    mov ax, [pt_gent]               ; the longest match goes out...
+    call pt_gput
+    call pt_gadd                    ; ...and gains a child for this pixel
+    mov [pt_gent], bx
+.adv:
+    inc si
+    jmp short .px
+.nextrow:
+    inc di
+    jmp short .row
+.last:
+    cmp word [pt_gent], 0xFFFF
+    je .eoi
+    mov ax, [pt_gent]
+    call pt_gput
+.eoi:
+    mov ax, 17                      ; End Of Information
+    call pt_gput
+    cmp byte [pt_gaccn], 0          ; the last partial byte...
+    je .blk
+    mov al, [pt_gacc]
+    call pt_gbo
+    mov word [pt_gacc], 0
+    mov byte [pt_gaccn], 0
+.blk:
+    call pt_gflush                  ; ...and the block holding it
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_gif_out - write the canvas as a GIF under the name in SI
+; in:  SI = NUL 8.3 name; UI task, gfx lock held
+; out: [pt_msgp] = the toast; preserves all registers
+;
+; The file is built in the undo image, so its ceiling is that buffer or the
+; file API's 64KB, whichever is lower (SPEC.md 18.4). LZW normally beats the
+; raw 4bpp rows by a wide margin on drawings, but it can expand noise, so the
+; capacity is checked at every block and an overflow reports rather than
+; writing a truncated GIF.
+; -----------------------------------------------------------------------------
+pt_gif_out:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, [pt_smaxp]
+    cmp ax, 4095
+    jae .big
+    mov cl, 4
+    shl ax, cl
+    jmp short .cap
+.big:
+    mov ax, 65520
+.cap:
+    mov [pt_gcap], ax
+    mov word [pt_gout], 0
+    mov byte [pt_govf], 0
+    mov byte [pt_undo_ok], 0        ; the GIF is built in the undo image, and
+    mov word [pt_cbw], 0            ; its tables are in the clipboard
+    call pt_ghdr
+    call pt_genc
+    xor al, al                      ; the LZW block terminator...
+    call pt_gwr
+    mov al, 0x3B                    ; ...and the trailer
+    call pt_gwr
+    cmp byte [pt_govf], 0
+    jne .toobig
+    mov cx, [pt_gout]
+    mov ax, [pt_unseg]
+    mov es, ax
+    xor bx, bx
+    call OSAPI_FILE_WRITE           ; SI is still the name
+    jnc .wrote
+    call pt_ferr
+    jmp short .out
+.wrote:
+    mov word [pt_msgp], pt_s_wrote
+    mov byte [pt_trunc], 0          ; what is on disk now IS what we hold
+    jmp short .out
+.toobig:
+    mov word [pt_msgp], pt_s_toobig
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; =============================================================================
 ; Data
 ; =============================================================================
@@ -5710,21 +6762,13 @@ pt_s_title:  db 'Paint', 0          ; the title's stem, and the fingerprint
                                     ; pt_dupchk matches on
 pt_appname:  db 'Paint', 0          ; the menu bar's app label (SPEC.md 12.2)
 pt_s_defname: db 'PICTURE.BMP', 0
-pt_a_title:  db 'Notice', 0
-pt_s_ok:     db 'OK', 0
-pt_s_crop:   db 'Resize would crop artwork.', 0
-pt_s_crop2:  db 'Erase the area before shrinking.', 0
-
-; --- the notice window's template (x patched by pt_alert) ---------------------
-pt_atpl:
-    dw 0                            ; WT_X
-    dw 96                           ; WT_Y
-    dw PT_A_W                       ; WT_W
-    dw PT_A_H                       ; WT_H
-    dw pt_a_title                   ; WT_TITLE
-    dw pt_apaint                    ; WT_PAINT
-    dw pt_aonkey                    ; WT_ONKEY
-    dw pt_aonclick                  ; WT_ONCLICK
+pt_s_defgif:  db 'PICTURE.GIF', 0
+pt_s_ebmp:    db 'BMP', 0
+pt_s_egif:    db 'GIF', 0
+pt_g_magic:   db 'GIF87a'
+pt_gstep:     db 8, 8, 4, 2         ; the interlaced row passes: step...
+pt_gstart:    db 0, 4, 2, 1         ; ...and where each one starts
+pt_s_crop:   db 'Would crop artwork - erase it first', 0
 
 ; --- the window template (SPEC.md 11; x/y/w/h patched by pt_geom) -------------
 pt_tpl:
@@ -5739,7 +6783,7 @@ pt_tpl:
 
 ; --- menus (SPEC.md 12.2) ----------------------------------------------------
     OS88_MENUSET pt_menus, pt_appname, pt_oncmd
-        OS88_MENU pt_s_file, pt_it_file, 4
+        OS88_MENU pt_s_file, pt_it_file, 6
         OS88_MENU pt_s_edit, pt_it_edit, 5
         OS88_MENU pt_s_draw, pt_it_draw, 4
     OS88_MENUSET_END pt_menus
@@ -5748,12 +6792,15 @@ pt_s_file:   db 'File', 0
 pt_s_edit:   db 'Edit', 0
 pt_s_draw:   db 'Draw', 0
 pt_it_file:  dw pt_i_new, pt_i_open, pt_i_save, pt_i_saveas
+             dw pt_i_saveg, pt_i_saveag
 pt_it_edit:  dw pt_i_undo, pt_i_cut, pt_i_copy, pt_i_paste, pt_i_clear
 pt_it_draw:  dw pt_i_fill, pt_i_f1, pt_i_f2, pt_i_f4
 pt_i_new:    db 'New', 0
 pt_i_open:   db 'Open...', 0
-pt_i_save:   db 'Save', 0
-pt_i_saveas: db 'Save As...', 0
+pt_i_save:   db 'Save Bmp', 0
+pt_i_saveas: db 'Save as Bmp...', 0
+pt_i_saveg:  db 'Save Gif', 0
+pt_i_saveag: db 'Save as Gif...', 0
 pt_i_undo:   db 'Undo / Redo', 0
 pt_i_cut:    db 'Cut', 0
 pt_i_copy:   db 'Copy', 0
@@ -5774,7 +6821,7 @@ pt_s_note2:  db 'Close this window.', 0
 ; --- toasts ------------------------------------------------------------------
 pt_s_wrote:   db 'Saved', 0
 pt_s_opened:  db 'Opened', 0
-pt_s_nofmt:   db 'Only BMP is supported', 0
+pt_s_nofmt:   db 'Only BMP and GIF are supported', 0
 pt_s_badpic:  db 'Not a picture we can read', 0
 pt_s_nocomp:  db 'Compressed BMP not supported', 0
 pt_s_nodepth: db 'Need a 1, 4, 8 or 24-bit BMP', 0
@@ -6041,8 +7088,6 @@ pt_ic_text:
     PTWORD pt_rtseg                 ; pt_resize scratch
     PTWORD pt_rtoff
     PTWORD pt_dockr                 ; the first row the dock owns
-    PTWORD pt_awin                  ; the notice window, 0 = not created yet
-    PTWORD pt_amsg                  ; ...and the line it is showing
     PTWORD pt_lwb                   ; pt_lose_*: first byte of the doomed band
 
     PTBYTE pt_mode                  ; PT_M_*
@@ -6086,6 +7131,38 @@ pt_ic_text:
     PTBYTE pt_kept                  ; a resize was refused to save the artwork
     PTBYTE pt_apend                 ; ...and the notice for it is owed
     PTBYTE pt_lwn                   ; pt_lose_w: the boundary nibble matters
+    PTBYTE pt_sfmt                  ; the save verb's format: 0 BMP, 1 GIF
+    PTWORD pt_pw                    ; a loaded picture's own width
+    PTWORD pt_gw                    ; --- GIF (SPEC.md 41.7) ---
+    PTWORD pt_gh                    ; the image descriptor's own size
+    PTWORD pt_gpend                 ; one past a colour table
+    PTWORD pt_gbase                 ; the flattened LZW stream: where...
+    PTWORD pt_glen                  ; ...and how long
+    PTWORD pt_gbyte                 ; the bit reader's position
+    PTBYTE pt_gbit
+    PTBYTE pt_gmin                  ; the stream's minimum code size
+    PTBYTE pt_gcsize                ; the code width in force
+    PTWORD pt_gclr                  ; the Clear code...
+    PTWORD pt_geoi                  ; ...and End Of Information
+    PTWORD pt_gfree                 ; the next code to hand out
+    PTWORD pt_gold                  ; the previous code, 0xFFFF = none
+    PTWORD pt_gfirst                ; its string's first character
+    PTWORD pt_gcode                 ; the code as it arrived
+    PTWORD pt_gsp                   ; the output stack's depth
+    PTWORD pt_gcol                  ; where in the row we are
+    PTWORD pt_grw                   ; and which row that is
+    PTBYTE pt_gpass                 ; the interlace pass
+    PTBYTE pt_gilace                ; non-zero if interlaced
+    PTBYTE pt_gdone                 ; every row placed
+    PTBYTE pt_ghavp                 ; a colour table was found
+    PTWORD pt_gent                  ; the writer's longest match so far
+    PTWORD pt_gacc                  ; its bit accumulator...
+    PTBYTE pt_gaccn                 ; ...and how many bits are in it
+    PTWORD pt_gout                  ; the write cursor in the undo image
+    PTWORD pt_gcap                  ; and what it may not pass
+    PTBYTE pt_govf                  ; it tried to
+    PTBYTE pt_gbn                   ; bytes staged for the current sub-block
+    PTBUF  pt_gbuf, 255             ; the sub-block itself
     PTBUF  pt_fdigit, 2             ; the strip's scale digit, NUL-terminated
 
     PTBUF  pt_umask, PT_CH_MAX / 8  ; one bit per canvas row
