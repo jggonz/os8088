@@ -455,6 +455,187 @@ gfx_fill_raw:
     ret
 
 ; -----------------------------------------------------------------------------
+; gfx_blit4 - draw a block of packed 4bpp pixels (SPEC.md 5.4)
+;
+; in:       ES:SI = source, packed 4 bits per pixel, 2 pixels per byte, the
+;                   HIGH nibble leftmost - the layout apps/paint's canvas
+;                   already uses, and the one a 16-colour BMP row uses
+;           BP    = source stride in bytes (one row to the next)
+;           AX    = destination x, BX = destination y (screen coords)
+;           CX    = width in pixels (> 0), DX = height in rows (> 0)
+; out:      nothing; every register preserved. [gfx_color] is left holding
+;           the last colour drawn.
+; clobbers: nothing else (flags)
+;
+; What this is, and what it deliberately is not. It coalesces runs of equal
+; pixels and emits one gfx_hline per run - the same thing apps/paint's
+; pt_blit does inside the package, and therefore the same pixels - but from
+; INSIDE the kernel. That is the whole win and it is a large one: since
+; packages own a segment (SPEC.md 20.1) every gfx call from one is a FAR
+; call, so a block that cost N far calls plus N run scans now costs ONE call
+; and a near loop. It also works on all three adapters, in front of and
+; behind the back buffer, and inside a clip region, without one line of
+; adapter-specific code - because gfx_fill already does.
+;
+; **The run scan compares BYTES, not pixels, and that is the whole speed of
+; it.** A run of colour c is a run of bytes equal to c|c<<4, so `repe scasb`
+; walks it two pixels at a time at about 15 clocks a byte - roughly seven and
+; a half clocks a pixel. The odd ends are handled by hand: the first pixel
+; when the run starts on a low nibble, the last when it ends on a high one.
+; Decoding every pixel individually instead - read the byte, test the parity,
+; `shr al, cl` by four, compare, branch - is 75 to 90 clocks a pixel on an
+; 8086, because a 4-bit shift by CL alone is 24 of them. It would keep the
+; SHAPE of the optimisation (one call per run) and throw the optimisation
+; away. QEMU cannot show this - it does not model 8086 timing at all - which
+; is why the cycle counts are written down here rather than measured.
+;
+; Colour reduction on a 1bpp adapter happens in gfx_fill, per run (SPEC.md
+; 39.4), so a 16-colour block reads as black/dither/white there exactly as
+; the rest of the UI does.
+;
+; The scratch below is lock-held, like vga12's rect block: every drawing
+; entry runs under the gfx lock (SPEC.md 1 rule 6), so one copy serves.
+; -----------------------------------------------------------------------------
+gfx_blit4:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    or cx, cx
+    jz .out
+    or dx, dx
+    jz .out
+    mov [gfx_blit_w], cx
+    mov [gfx_blit_x], ax
+    mov [gfx_blit_h], dx
+    mov [gfx_blit_sv], si
+.row:
+    mov si, [gfx_blit_sv]       ; ES:SI = this row's first byte
+    xor dx, dx                  ; DX = the pixel the next run starts at
+.run:
+    ; --- the run's colour, and the byte a matching PAIR would hold ---------
+    mov di, dx
+    shr di, 1
+    add di, si
+    mov al, [es:di]
+    test dl, 1
+    jnz .lo                     ; an even pixel is the HIGH nibble
+    mov cl, 4
+    shr al, cl
+.lo:
+    and al, 0Fh
+    mov [gfx_blit_c], al
+    mov ah, al
+    mov cl, 4
+    shl ah, cl
+    or ah, al
+    mov [gfx_blit_pb], ah
+
+    ; --- walk it two pixels at a time --------------------------------------
+    mov cx, dx
+    test cl, 1
+    jz .aligned
+    inc cx                      ; an odd start: the pair scan begins at the
+.aligned:                       ; next pixel, and this one is already in
+    mov [gfx_blit_e], cx
+    mov ax, [gfx_blit_w]
+    sub ax, cx
+    jbe .tail                   ; nothing left to scan in pairs
+    shr ax, 1                   ; whole pairs remaining in the row
+    jz .tail
+    mov di, cx
+    shr di, 1
+    add di, si                  ; ES:DI = the first pair byte
+    mov [gfx_blit_s0], di       ; SI belongs to the row, so the scan's origin
+    mov cx, ax                  ; is parked in memory
+    mov al, [gfx_blit_pb]
+    cld
+    repe scasb
+    mov ax, di                  ; `mov` leaves scasb's ZF alone, and the
+    jne .mism                   ; branch has to read it before anything else
+    sub ax, [gfx_blit_s0]       ; does: every byte matched
+    jmp short .have
+.mism:
+    dec ax                      ; the mismatch sits at DI-1, so it is not
+    sub ax, [gfx_blit_s0]       ; part of the run
+.have:
+    add ax, ax                  ; bytes matched -> pixels
+    add [gfx_blit_e], ax
+.tail:
+    mov cx, [gfx_blit_e]        ; the odd final nibble, by hand
+    cmp cx, [gfx_blit_w]
+    jae .emit
+    mov di, cx
+    shr di, 1
+    add di, si
+    mov al, [es:di]
+    test cl, 1
+    jnz .tlo
+    mov cl, 4
+    shr al, cl
+.tlo:
+    and al, 0Fh
+    cmp al, [gfx_blit_c]
+    jne .emit
+    inc word [gfx_blit_e]       ; it matches too
+.emit:
+    mov di, [gfx_blit_x]
+    add di, dx                  ; DI = the run's first x, on screen
+    mov ah, [gfx_blit_c]
+    mov dx, [gfx_blit_e]        ; DX = one past its last pixel, row-relative
+    call gfx_blit_run           ; (which is where the next run starts)
+    cmp dx, [gfx_blit_w]
+    jb .run
+
+    mov ax, [gfx_blit_sv]       ; next source row
+    add ax, bp
+    mov [gfx_blit_sv], ax
+    inc bx                      ; next destination row
+    dec word [gfx_blit_h]
+    jnz .row
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; gfx_blit_run - emit one coalesced run (module-internal to gfx_blit4)
+; in:  DI = run start x, DX = one past the run's last pixel (row-relative),
+;      AH = colour, BX = y, [gfx_blit_x] = the block's left edge
+; out: nothing (AX/BX/CX/DX/SI/DI/BP preserved)
+; -----------------------------------------------------------------------------
+gfx_blit_run:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov al, ah
+    mov [gfx_color], al
+    mov ax, di                  ; x1 = the run's start
+    mov cx, [gfx_blit_x]
+    add cx, dx
+    dec cx                      ; x2 = the last pixel drawn
+    cmp ax, cx
+    ja .out                     ; empty run (cannot happen; cheap to guard)
+    mov dx, bx                  ; gfx_hline wants y in DX
+    mov bx, cx
+    call gfx_hline              ; clips, dispatches and reduces for us
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; gfx_frame - 1px outline rectangle in [gfx_color]
 ; in:       AX = x1, BX = y1, CX = x2, DX = y2  (x1<=x2, y1<=y2)
 ; out:      -
@@ -1184,5 +1365,13 @@ gfx_cl_y1       resw 1          ; held while the raw body runs per fragment
 gfx_cl_x2       resw 1
 gfx_cl_y2       resw 1
 gfx_cl_fn       resw 1          ; ...and the raw body's near pointer
+gfx_blit_x      resw 1          ; gfx_blit4 (SPEC.md 5.4): the block's left
+gfx_blit_w      resw 1          ; edge, width in pixels, rows still to draw,
+gfx_blit_h      resw 1          ; and the row cursor into the source - all
+gfx_blit_sv     resw 1          ; lock-held, like the rect block above
+gfx_blit_e      resw 1          ; the run's end, one past its last pixel
+gfx_blit_s0     resw 1          ; where `repe scasb` started, to subtract
+gfx_blit_c      resb 1          ; the run's colour...
+gfx_blit_pb     resb 1          ; ...and the byte a matching PAIR would hold
 
 section .text

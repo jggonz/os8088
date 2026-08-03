@@ -340,7 +340,18 @@ osapi_table:
                                   ;          form of the record write a
                                   ;          content-sized app used to do by
                                   ;          hand (SPEC.md 11.1/20.3)
-osapi_table_end:                 ; 0x01D8
+    OSAPI_SLOT gfx_blit4          ; 0x01D8 - packed 4bpp block (SPEC.md 5.4):
+                                  ;          ES:SI = your pixels, BP = stride,
+                                  ;          AX/BX = where, CX/DX = how big.
+                                  ;          Run-coalesced INSIDE the kernel,
+                                  ;          so a picture costs one far call
+                                  ;          instead of one per run
+    OSAPI_SLOT wm_about_set       ; 0x01E0 - in BX = win ptr, SI = your About
+                                  ;          handler's offset (0 = none): the
+                                  ;          opt-in that turns the app-name
+                                  ;          label into a real bar menu
+                                  ;          (SPEC.md 12.2)
+osapi_table_end:                 ; 0x01E8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -348,8 +359,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 57 * 8
-%error "os8088 API jump table must be exactly 57 8-byte far slots"
+%if OSAPI_TABLE_LEN != 59 * 8
+%error "os8088 API jump table must be exactly 59 8-byte far slots"
 %endif
 
 ; =============================================================================

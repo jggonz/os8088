@@ -661,18 +661,36 @@ ui_grow:
 ; out: nothing (CMD_REBOOT never returns)
 ; clobbers: AX, BX, CX, DX, SI, DI (internal helper of the UI task)
 ;
-; Three routes, in this order (SPEC.md 12/12.2/12.3):
+; Four routes, in this order (SPEC.md 12/12.2/12.3):
 ;   AH = 0                  the System menu - identical in every
 ;                           application; cmd = CMD_ABOUT + item
+;   AH = [menu_abcell]      the NAME cell: the window's own About handler,
+;                           dispatched exactly like the one below but with
+;                           no selection to hand it
 ;   AM_ONCMD = 0            a kernel-dispatched set, i.e. Locator;
 ;                           cmd = ui_loc_base[cell] + item
 ;   otherwise               the active application's own handler, called
 ;                           exactly like W_ONCLICK: under the gfx lock, on
 ;                           this task, billed to the owning instance
+;
+; The last two share one body - the gfx lock, the re-check of the owner, the
+; sound stamp and the billing are the same work whichever offset is called -
+; and [ui_about] is which of the two offsets it resolves at the end of it.
 ; -----------------------------------------------------------------------------
 ui_dispatch:
     cmp ax, 0xFFFF
     je .ret
+    mov word [ui_about], 0
+    mov bx, [menu_abcell]
+    or bx, bx
+    jz .no_about                ; the active application declared none
+    cmp ah, bl
+    jne .no_about
+    mov word [ui_about], 1      ; the name cell: About, and nothing else is
+    xor ax, ax                  ; in it - the handler gets no selection
+    mov [ui_menusel], ax
+    jmp .call
+.no_about:
     or ah, ah
     jz .kernel                  ; cell 0: the System menu
     mov bx, [menu_set]
@@ -702,6 +720,7 @@ ui_dispatch:
     ; the UI task is the only thing that can ever be in here.
     dec ah                      ; cell -> the app's own 0-based menu index
     mov [ui_menusel], ax
+.call:
     call gfx_lock
     mov bx, [menu_win]          ; the lock dropped between menu_track and
     or bx, bx                   ; here, so re-check the owner before calling
@@ -720,6 +739,14 @@ ui_dispatch:
                                 ; we hold, and only the UI task (us) calls
                                 ; wm_create, so the slot cannot be recycled
                                 ; behind this test.
+    mov ax, [menu_kset + AM_ONCMD]  ; the offset to call: the command handler
+    cmp word [ui_about], 0          ; from the kernel copy (SPEC.md 12.2), or
+    je .have_ofs                    ; the window's About handler - resolved
+    call wm_about_get               ; HERE, with BX = the re-checked window,
+    or ax, ax                       ; because the lock was down until a moment
+    jz .app_done                    ; ago and a handler withdrawn in that gap
+.have_ofs:                          ; must not be called at offset 0
+    mov [ui_cbofs], ax
     call inst_win_owner         ; DI = owning record, 0 = unowned window
     push di
     push word [snd_inst]
@@ -736,10 +763,11 @@ ui_dispatch:
                                 ; a handler may keep indexing its own
                                 ; tables through it)
     push ax                     ; the resolved segment above the offset:
-    push word [menu_kset + AM_ONCMD]    ; inst_cb_call's argument pair -
-                                ; the handler OFFSET from the kernel copy
-                                ; (SPEC.md 12.2: the registered set is
-                                ; never dereferenced at dispatch)
+    push word [ui_cbofs]        ; inst_cb_call's argument pair - the handler
+                                ; OFFSET banked above, out of the kernel copy
+                                ; or out of wm_about (SPEC.md 12.2: the
+                                ; registered set is never dereferenced at
+                                ; dispatch)
     mov ax, [ui_menusel]
     call inst_cb_call
     pop ax                      ; start stamp
@@ -870,6 +898,11 @@ section .bss
 ui_ev:      resb 8              ; popped event record (EV_TYPE/A/B/C)
 ui_menusel: resw 1              ; ui_dispatch scratch: AH = menu, AL = item,
                                 ; held across the billing calls (SPEC 12.2)
+ui_about:   resw 1              ; ui_dispatch scratch: 1 = this selection is
+                                ; the name cell's About, so the offset called
+                                ; comes from wm_about and not from AM_ONCMD
+ui_cbofs:   resw 1              ; ...and the offset itself, resolved after the
+                                ; owner re-check and banked for inst_cb_call
 ui_click_t: resw 1              ; EV_C of the event being dispatched: the
                                 ; click's birth tick (valid during dispatch,
                                 ; which always stores before handlers read)

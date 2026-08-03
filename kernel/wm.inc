@@ -77,6 +77,10 @@ wm_init:
     mov di, wm_wseg             ; (SPEC.md 11): only osapi_w_wm_create ever
     mov cx, MAX_WIN             ; stores anything else
     rep stosw
+    xor ax, ax                  ; no window declares an About at boot
+    mov di, wm_about            ; (SPEC.md 12.2)
+    mov cx, MAX_WIN
+    rep stosw
     mov word [wm_fs], 0         ; no fullscreen window (SPEC.md 11.2); .bss
                                 ; is never zeroed at boot, so this is not
                                 ; redundant
@@ -232,6 +236,8 @@ wm_create:
     mov di, ax                  ; stamp the creator segment KERNEL_SEG
     shl di, 1                   ; (SPEC.md 11): a package creation is
     mov word [wm_wseg+di], KERNEL_SEG ; re-stamped by osapi_w_wm_create
+    mov word [wm_about+di], 0   ; and a reused slot never inherits the last
+                                ; tenant's About handler (SPEC.md 12.2)
     mov ch, 0
     mov cl, [wm_zn]
     mov di, wm_zord
@@ -402,6 +408,59 @@ wm_sizable:
     ret
 .clear:
     and word [bx+W_FLAGS], 0xFFFB
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_about_set - register a window's About handler (public; API 0x01E0)
+; in:  BX = window ptr, SI = the handler's OFFSET in the caller's segment
+;      (0 = this window has no About)
+; out: nothing (all registers preserved, FLAGS INCLUDED)
+;
+; The whole of the opt-in for the name menu (SPEC.md 12.2): a window that
+; declares a handler gets its application's NAME in the bar as a real
+; pull-down carrying one item, 'About <Name>', and picking it dispatches
+; this offset exactly like W_ONCLICK - near for a kernel window, far at the
+; owner's segment for a package's (SPEC.md 11). A window that declares none
+; keeps the plain label the bar always drew, which is why every existing
+; application is unaffected and no package can be handed a menu index it was
+; never written for.
+;
+; STORED, never dereferenced here - like menu_win_set, whose flag-preserving
+; contract this shares for the same reason: the one place it is meant to be
+; called from is a package entry proc sitting between wm_create and its own
+; retf, which owes the loader wm_create's CF (SPEC.md 20.2).
+; -----------------------------------------------------------------------------
+wm_about_set:
+    pushf
+    push ax
+    push di
+    call wm_ptr2idx             ; AX = window index (AH = 0)
+    mov di, ax
+    shl di, 1
+    mov [wm_about+di], si
+    cmp bx, [menu_win]
+    jne .out
+    call menu_relayout          ; the active application's bar changed
+.out:
+    pop di
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_about_get - a window's About handler offset, 0 = none (module internal
+;                to the bar: menu_relayout and ui_dispatch)
+; in:  BX = window ptr
+; out: AX = the offset registered by wm_about_set, 0 = none
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+wm_about_get:
+    push di
+    call wm_ptr2idx             ; AX = window index (AH = 0)
+    mov di, ax
+    shl di, 1
+    mov ax, [wm_about+di]
+    pop di
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1585,6 +1644,15 @@ wm_wseg:    resw MAX_WIN            ; per-slot CREATOR segment (SPEC.md 11):
                                     ; part of the zero run: fill is
                                     ; KERNEL_SEG, and 0 would read as a
                                     ; segment
+wm_about:   resw MAX_WIN            ; per-slot About handler offset, 0 = none
+                                    ; (SPEC.md 12.2): what makes the app-name
+                                    ; label a real bar menu. Resolved through
+                                    ; the SAME segment as every other callback
+                                    ; in the record, so it needs no stamp of
+                                    ; its own. Not part of wm_init's zero run
+                                    ; (see the loop there); cleared per slot
+                                    ; by wm_create, so a reused slot starts
+                                    ; without one
 wm_fs:      resw 1                  ; fullscreen window ptr, 0 = none
                                     ; (SPEC.md 11.2); zeroed by wm_init
 wm_fs_save: resw 4                  ; its windowed x/y/w/h, restored on exit

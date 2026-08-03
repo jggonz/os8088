@@ -267,6 +267,12 @@ SND_ST_STALE     equ 0FFFFh      ; the handle's stream is gone
                                                 ; is laid out, clamped to the caps
                                                 ; below (MENU_APPMAX / MENU_ITEMMAX /
                                                 ; MENU_STRMAX)
+; THE COPY IS WHY YOU CALL THIS TWICE. Repointing an item at a different
+; string - relabelling one, or disabling it with MENU_DIS below - changes
+; YOUR set, which the kernel is no longer reading: the bar draws and tracks
+; from its copy. Call OSAPI_MENU_SET again, with the same set, and the copy
+; is remade. It is a store and a relayout, draws nothing, and is safe from
+; inside a menu handler or any other window callback.
 
 ; --- the Standard File dialog (SPEC.md 38) -------------------------------------
 ; The other half of the file slots above: they operate on a name, and this is
@@ -630,6 +636,48 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
 WMIN_W  equ 96                   ; the smallest frame a resize can leave, outer
 WMIN_H  equ 64                   ; px (SPEC.md 11.1; kernel/wm.inc's own equs)
 
+; --- a picture, in one call (SPEC.md 5.4) --------------------------------------
+; The primitive for anything you have already rendered into RAM: a canvas, a
+; sprite, a card back. It coalesces runs of equal pixels and emits one fill
+; per run FROM INSIDE THE KERNEL, so a block that would cost one far call per
+; run costs exactly one, and it clips, dispatches through the back buffer and
+; reduces to black/dither/white on a 1bpp adapter for free - because
+; gfx_fill already does. Draw the same block twice and you get the same
+; pixels the primitives would have given you.
+;
+; The source is YOURS: set ES = DS (or any segment you own) and pass the
+; offset in SI. Nothing is staged - this is the one bulk path, like
+; OSAPI_SND_PLAY's samples.
+%define OSAPI_GFX_BLIT4     KERNEL_SEG:0x01D8   ; ES:SI = packed 4bpp pixels (two
+                                                ; per byte, HIGH nibble leftmost -
+                                                ; a 16-colour BMP row's layout),
+                                                ; BP = source stride in bytes,
+                                                ; AX/BX = destination x/y (screen
+                                                ; coords), CX = width in pixels,
+                                                ; DX = height in rows. Caller holds
+                                                ; the gfx lock. Preserves every
+                                                ; register; leaves [gfx_color]
+                                                ; holding the last run's colour
+
+; --- 'About <you>', under your name in the bar (SPEC.md 12.2) ------------------
+; The app-name label the bar draws for the active application is a plain
+; label until you call this: register a handler and the name becomes a real
+; pull-down carrying one item, 'About <Name>'. Picking it calls your handler
+; exactly like W_ONCLICK - on the UI task, UNDER THE GFX LOCK, far-called at
+; your segment, billed to your instance - with SI = your window and no
+; selection to decode. Same rules, therefore: it may draw and may call the
+; file slots, it must never take the lock or block, it must repaint whatever
+; it drew over, and it returns with `retf`.
+;
+; Call it from your entry proc, after OSAPI_WM_CREATE, like OSAPI_MENU_SET
+; (whose flag-preserving contract it shares, so it is safe between wm_create
+; and the CF you owe the loader). An application that never calls it is
+; exactly as it was: a label, no cell, no menu.
+%define OSAPI_ABOUT_SET     KERNEL_SEG:0x01E0   ; BX = win ptr, SI = your About
+                                                ; handler's offset (0 = none).
+                                                ; Preserves every register and
+                                                ; the flags
+
 ; file error codes, pinned (SPEC.md 18.4): returned in AX with CF set
 FERR_OK      equ 0
 FERR_NODISK  equ 1               ; no mounted data disk
@@ -668,6 +716,23 @@ MENU_ITEMMAX equ 8          ; items per menu the kernel keeps; extras are
                             ; silently dropped (SPEC.md 12.2)
 MENU_STRMAX  equ 19         ; chars per name/title/item string the kernel
                             ; keeps; longer strings are silently truncated
+                            ; (a MENU_DIS marker spends one of them)
+MENU_DIS     equ 1          ; an item string that BEGINS with this byte is
+                            ; DISABLED: the kernel draws the rest of it grey
+                            ; and never highlights or selects it. Point the
+                            ; item at a different string to switch, exactly
+                            ; as you already would to relabel it:
+                            ;
+                            ;   it_deal: dw i_one, i_three
+                            ;   i_one:   db 'Draw One', 0
+                            ;   i_onex:  db MENU_DIS, 'Draw One', 0
+                            ;   ...
+                            ;   mov word [it_deal], i_onex
+                            ;
+                            ; Two items pointing at their own disabled twins
+                            ; is a radio pair, and it needs nothing else.
+                            ; Still answer the command itself: a keyboard
+                            ; shortcut never goes near a menu.
 
 ; --- window record layout (SPEC.md 11, 20 bytes) -------------------------------
 ; AUTHORING REFERENCE ONLY. Since v3 a window pointer is an OPAQUE HANDLE:

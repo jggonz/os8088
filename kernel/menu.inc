@@ -73,7 +73,10 @@ MB_XR       equ 8               ; word: bar hit range, right x (inclusive)
 MB_TX       equ 10              ; word: title text / glyph left x
 MB_ENTSZ    equ 12
 MENU_APPMAX equ 4               ; app menus the bar can host
-MENU_BARMAX equ MENU_APPMAX + 1 ; + the System cell, which is always cell 0
+MENU_BARMAX equ MENU_APPMAX + 2 ; + the System cell, which is always cell 0,
+                                ; + the NAME cell, appended LAST so that the
+                                ; app's own menus keep bar index == set index
+                                ; + 1 whether it exists or not (SPEC.md 12.2)
 
 ; --- the kernel-side copy's caps (SPEC.md 12.2, binding since v3) ------------
 ; A package's set lives in its own segment, so the kernel reads it once per
@@ -86,9 +89,21 @@ MENU_BARMAX equ MENU_APPMAX + 1 ; + the System cell, which is always cell 0
 ; identical path (one code path; fm_menus is what the caps were sized from).
 MENU_ITEMMAX equ 8              ; items per menu the copy keeps
 MENU_STRMAX  equ 19             ; chars per name/title/item string, NUL excl.
+                                ; (a MENU_DIS marker byte spends one of them)
 MENU_KSLOT   equ MENU_STRMAX+1  ; one string slot in menu_kstr, NUL included
 MENU_KSTRN   equ 1 + MENU_APPMAX + MENU_APPMAX*MENU_ITEMMAX ; 37 slots: the
                                 ; name, 4 titles, up to 32 item strings
+
+; --- disabled items (SPEC.md 12.2) ------------------------------------------
+; An item string that BEGINS with this byte is unavailable: menu_drop draws
+; the rest of it grey and menu_hover never lands on it, so it cannot be
+; highlighted and cannot be selected. A string prefix rather than a flags
+; array, because an application that wants an item disabled already had to
+; point its item array at a different string to say so ('Draw One' vs its
+; disabled twin) - one byte in front of that string costs no structure
+; change, no ABI change, and rides the menu_copy_set path unaltered, so it
+; works for a package's set exactly as it does for a built-in's.
+MENU_DIS    equ 1
 
 MENU_SYS_XR    equ 29           ; System cell: x 0..29, glyph at MENU_SYS_TX
 MENU_SYS_TX    equ 10
@@ -351,11 +366,98 @@ menu_relayout:
                                 ; is dropped, so the cells that DID fit keep
                                 ; bar index == set index
 .done:
+    call menu_ab_cell           ; the NAME cell goes LAST (DI = next slot)
     pop di
     pop si
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_ab_cell - turn the app-name label into a bar cell, if the owning
+;                window declared an About handler (SPEC.md 12.2)
+; in:  DI = the next free menu_bar slot, [menu_namep] = the label
+; out: [menu_abcell] = the cell's bar index, 0 = no cell (all regs preserved)
+;
+; It is APPENDED, after the application's own menus, and that is the whole
+; trick: hit-testing and drawing both walk menu_bar by XL/XR and TX, so
+; where a cell sits in the array has nothing to do with where it sits on the
+; bar - while the app's menus keep bar index == set index + 1 and
+; ui_dispatch's `dec ah` needs no adjustment. Its rect is the label's own,
+; padded 6px either side like a title cell, so it highlights the way every
+; other cell does and still clears the first menu by MENU_NAME_PAD - 6.
+;
+; Locator never gets one: the kernel's own About is CMD_ABOUT, in the System
+; menu, which is cell 0 of every application including this one.
+; -----------------------------------------------------------------------------
+menu_ab_cell:
+    push ax
+    push bx
+    push si
+    push di
+    mov word [menu_abcell], 0
+    mov bx, [menu_win]
+    or bx, bx
+    jz .out                     ; Locator: the System menu is its About
+    call wm_about_get           ; AX = the window's handler offset, 0 = none
+    or ax, ax
+    jz .out
+
+    push di                     ; --- 'About ' + the name, into menu_abstr ---
+    mov si, menu_s_abpfx
+    mov di, menu_abstr
+    call menu_ab_cat
+    mov si, [menu_namep]
+    call menu_ab_cat            ; DI advanced past the prefix
+    mov byte [di], 0
+    pop di
+    mov word [menu_abitems], menu_abstr
+
+    mov si, [menu_namep]        ; --- the cell, over the label's own rect ---
+    call font_width             ; AX = the label's pixel width
+    mov [di + MB_TITLE], si
+    mov word [di + MB_ITEMS], menu_abitems
+    mov word [di + MB_NITEM], 1
+    mov word [di + MB_XL], MENU_NAME_X - 6
+    add ax, MENU_NAME_X + 5
+    mov [di + MB_XR], ax
+    mov word [di + MB_TX], MENU_NAME_X
+    mov ax, [menu_nbar]
+    mov [menu_abcell], ax
+    inc word [menu_nbar]
+.out:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_ab_cat - append a NUL string to a buffer (internal to menu_ab_cell)
+; in:  SI = source, DI = destination
+; out: DI = one past the last byte copied (no NUL written), at most
+;      MENU_STRMAX+1 bytes taken from any one source - menu_abstr is a fixed
+;      28 bytes and neither of its two sources is the kernel's own
+; clobbers: DI (SI preserved)
+; -----------------------------------------------------------------------------
+menu_ab_cat:
+    push ax
+    push cx
+    push si
+    mov cx, MENU_STRMAX + 1
+.next:
+    mov al, [si]
+    or al, al
+    jz .done
+    mov [di], al
+    inc si
+    inc di
+    loop .next
+.done:
+    pop si
+    pop cx
     pop ax
     ret
 
@@ -522,12 +624,17 @@ menu_draw_bar:
     mov dx, MBAR_H - 1
     call gfx_hline
 
+    cmp word [menu_abcell], 0   ; the name is a CELL when the application
+    jne .cells                  ; declared an About (SPEC.md 12.2), and the
+                                ; loop below draws it at the same pen x -
+                                ; drawing it here too would double-strike it
     mov si, menu_namep          ; the active application's name (SPEC 12)
     mov si, [si]
     mov cx, MENU_NAME_X
     mov dx, MENU_TEXT_Y
     call font_str
 
+.cells:
     mov si, menu_bar            ; titles (gfx_color is already black)
     mov cx, [menu_nbar]
 .title:
@@ -838,9 +945,16 @@ menu_drop:
 .item:
     push cx
     mov si, [bx]
+    mov byte [gfx_color], CBLACK
+    cmp byte [si], MENU_DIS     ; disabled: grey, and skip the marker byte
+    jne .live
+    inc si
+    mov byte [gfx_color], CDGRAY
+.live:
     mov cx, [menu_x1]
     add cx, 8
     call font_str
+    mov byte [gfx_color], CBLACK
     pop cx
     add bx, 2
     add dx, MENU_ITEM_H
@@ -918,11 +1032,37 @@ menu_hover:
     shr ax, cl                  ; / 16 -> cell index
     cmp ax, [menu_cnt]
     jae .none                   ; below the last cell (or on the frame)
-    pop cx
-    ret
+    call menu_item_dis          ; a disabled item is not hoverable, which is
+    jc .none                    ; also what makes it unselectable: the whole
+    pop cx                      ; of the feature is this one call plus the
+    ret                         ; grey in menu_drop
 .none:
     mov ax, 0xFFFF
     pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_item_dis - is item AX of the dropped menu disabled? (SPEC.md 12.2)
+; in:  AX = item index (< [menu_cnt])
+; out: CF = 1 if its string starts with MENU_DIS
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+menu_item_dis:
+    push bx
+    push si
+    mov bx, ax
+    add bx, bx
+    add bx, [menu_iptr]
+    mov si, [bx]
+    cmp byte [si], MENU_DIS
+    jne .no
+    stc
+    jmp short .out
+.no:
+    clc
+.out:
+    pop si
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -998,6 +1138,10 @@ menu_widest:
     jcxz .done                  ; `loop` would wrap CX to 0xFFFF
 .next:
     mov si, [bx]
+    cmp byte [si], MENU_DIS     ; the marker byte is not a glyph
+    jne .meas
+    inc si
+.meas:
     call font_width             ; AX = 8 * strlen
     cmp ax, dx
     jbe .keep
@@ -1087,6 +1231,8 @@ menu_s_close    db 'Close Window', 0
 menu_s_tasks    db 'Task Manager', 0
 menu_s_restart  db 'Restart', 0
 
+menu_s_abpfx    db 'About ', 0  ; + the app's name -> menu_abstr (SPEC 12.2)
+
 menu_items_logo:
     dw menu_s_about
     dw menu_s_ctrl
@@ -1143,8 +1289,15 @@ menu_kitems: resw 32            ; MENU_APPMAX*MENU_ITEMMAX item pointers,
 menu_kstr:  resb 740            ; MENU_KSTRN x MENU_KSLOT (37 x 20): slot 0
                                 ; the name, then titles and items in copy
                                 ; order, each capped + NUL-forced
-menu_bar:   resb 60             ; MENU_BARMAX x MB_ENTSZ (5 x 12; a literal
+menu_bar:   resb 72             ; MENU_BARMAX x MB_ENTSZ (6 x 12; a literal
                                 ; per the no-forward-ref-in-bss rule)
+menu_abcell: resw 1             ; bar index of the NAME cell, 0 = the active
+                                ; application declared no About handler and
+                                ; its name is the plain label it always was
+                                ; (SPEC.md 12.2). 0 can never be the name
+                                ; cell: cell 0 is the System menu
+menu_abitems: resw 1            ; the name cell's item array: one entry
+menu_abstr: resb 28             ; 'About ' + MENU_STRMAX chars + the NUL
 menu_nbar:  resw 1              ; live cells in menu_bar (>= 1: the System
                                 ; menu is always cell 0)
 menu_ent:   resw 1              ; -> bar cell being tracked

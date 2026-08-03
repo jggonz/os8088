@@ -452,16 +452,16 @@ XM_MAX_BLKS   equ 8          ; xm_alloc's fixed table, entries (§41.5)
 | `kernel/kernel.asm` | entry, constants, init order, includes, .bss layout, **os8088 far API table at 0x0010** (§20.3) + osapi helper routines and the per-slot marshalling wrappers (§20.3), **boot splash entry at 0x0008** (§15) |
 | `kernel/viddet.inc` | video adapters (§39): the boot probe, the live geometry block, mode set/teardown (`vid_setmode`/`vid_text`/`vid_init`), the shared addressing helpers `gfx_rowbase`/`gfx_nextrow`, the 1bpp colour map `gfx_ink` — prefix `vid_`; included **before** `splash.inc`, and all its data lives in `.text` |
 | `kernel/splash.inc` | boot-time loading screen (§15): the first adapter probe and mode set, welcome dialog, pixel progress bar, spinning vector "8088" — on a 1bpp adapter the progress bar alone (§39.6); far-ticked by the boot sector per sector read; self-contained, no .bss |
-| `kernel/vga12.inc`  | mode 12h planar primitives, save/restore, gfx lock; the coordinate core `vga_rect_setup` that both renderers share (§39.3) — the mode set left for `viddet.inc` |
+| `kernel/vga12.inc`  | mode 12h planar primitives, save/restore, gfx lock; the coordinate core `vga_rect_setup` that both renderers share (§39.3); `gfx_blit4`, the run-coalescing 4bpp block draw (§5.4) — the mode set left for `viddet.inc` |
 | `kernel/vgabb.inc`  | the software renderer (§32/§39.3): RAM probe, back buffer, software planar primitives, dirty rect, `gfx_flush` — VGA's optional double buffer, and the only driver on a 1bpp adapter |
 | `kernel/font.inc`   | 8x8 font (copied at init from the BIOS ROM set, or the IBM ROM's own on a pre-EGA machine), text draw |
 | `kernel/mouse.inc`  | COM1 UART, IRQ4 ISR, packet decode, cursor (save-under) |
 | `kernel/sched.inc`  | PIT hook, context switch, task table, spawn/yield/sleep |
 | `kernel/events.inc` | 8-byte event records, system event ring queue           |
 | `kernel/clock.inc`  | system clock (§37): hardware RTC probe/read/write (int 1Ah), the wall-clock date + time advanced from `[ticks]`, field editing and formatting — prefix `clk_` |
-| `kernel/wm.inc`     | window records, z-order, frames, hit test, paint-all, `wm_owner` side table |
+| `kernel/wm.inc`     | window records, z-order, frames, hit test, paint-all, the `wm_owner`/`wm_wseg`/`wm_about` side tables (§11/§12.2) |
 | `kernel/instance.inc` | instance table: records, kind descriptors, launch/close lifecycle (§29) |
-| `kernel/menu.inc`   | menu bar (System menu + the active application's name and menus), runtime bar layout, the kernel-side copy of the active app menu set (§12.2), pull-down tracking, Locator's own menu set (§12/§12.2/§12.3) |
+| `kernel/menu.inc`   | menu bar (System menu + the active application's name and menus), runtime bar layout including the About name cell and disabled items (§12.2), the kernel-side copy of the active app menu set, pull-down tracking, Locator's own menu set (§12/§12.2/§12.3) |
 | `kernel/ui.inc`     | UI task: event pump, keyboard poll, drag, dispatch      |
 | `kernel/apps.inc`   | built-in app kinds: About, Clock, Bounce — state pools, kinit procs, per-instance tasks |
 | `kernel/disk.inc`   | BIOS int 13h floppy transfers (`disk_read`/`disk_write`), FAT12/16 mount + directory + chain walk (§18–19) |
@@ -528,6 +528,7 @@ Mode set and teardown are not in this module: `vid_setmode` / `vid_text` in
 | `gfx_lock`      | —                                    | acquire drawing mutex + hide cursor (§7) |
 | `gfx_unlock`    | —                                    | flush the back buffer (§32), show cursor, release mutex |
 | `gfx_flush`     | —                                    | copy the dirty back-buffer rect to VRAM; no-op when double buffering is off or nothing is dirty (§32) |
+| `gfx_blit4`     | ES:SI=source, BP=source stride, AX=x, BX=y, CX=width px, DX=height rows | draw a packed-4bpp block, run-coalesced (§5.4) |
 
 Save/restore for a W-px-wide, H-px-tall rect uses
 `bytes = ((x2/8) - (x1/8) + 1) * H * [vid_planes]` — ×4 on VGA, ×1 on a 1bpp
@@ -547,6 +548,38 @@ overlays — drawn and erased within one held lock — so they live in VRAM
 only, never in the back buffer (§32); each still opens with a `[vid_mono]`
 test into its `bb_*` twin, because at 1bpp "direct to VRAM" and "through the
 renderer" are the same place (§39.5).
+
+### 5.4 `gfx_blit4` — a rendered picture, in one call
+
+The primitive for pixels an application has already built in RAM: a canvas,
+a sprite sheet, a card back. The source is **packed 4 bits per pixel, two
+pixels per byte, high nibble leftmost** — a 16-colour BMP row's layout, and
+the one `apps/paint`'s canvas already used — with `BP` the byte stride from
+one row to the next, so a sub-rectangle of a larger image is a pointer and a
+stride, not a copy.
+
+It **coalesces runs of equal pixels and emits one `gfx_hline` per run**, and
+that is the whole of it: it clips, dispatches through the back buffer, obeys
+an armed clip region and reduces to black/dither/white on a 1bpp adapter
+without one line of its own, because `gfx_fill` beneath it already does. The
+pixels are exactly the ones a caller would have got emitting the runs
+itself; what changes is who pays for the calls. Since a package owns a
+segment (§20.1) every drawing call it makes is a **far** call, so a picture
+that cost one far call per run costs one, plus a near loop.
+
+**The run scan compares BYTES, not pixels.** A run of colour `c` is a run of
+bytes equal to `c | c<<4`, so `repe scasb` walks it two pixels at a time at
+about 15 clocks a byte on an 8086; the odd ends — a run starting on a low
+nibble, or ending on a high one — are handled by hand either side of the
+scan. Decoding pixel by pixel instead (`shr al, cl` by four is 24 clocks
+alone) is 75–90 clocks a pixel and throws the optimisation away while
+keeping its shape. QEMU models no 8086 timing, so this is written down
+rather than measured.
+
+Scratch is the lock-held block in vga12's `.bss`, like the rect geometry
+above it: every drawing entry runs under the gfx lock (§1 rule 6), so one
+copy serves. All registers are preserved; `[gfx_color]` is left holding the
+last run's colour.
 
 ## 6. font.inc
 
@@ -1667,6 +1700,80 @@ same way, and a longer string is truncated at `MENU_STRMAX` with the NUL
 forced. Kernel sets ride the identical copy path (one code path, and
 `fm_menus` — 4 menus, an 8-item menu, an 18-char item — is what the caps
 were sized from).
+
+**The copy is also why relabelling an item takes two steps.** An
+application that repoints an item at a different string has changed *its*
+set, which the bar is no longer reading. Calling `menu_win_set`
+(`OSAPI_MENU_SET`) **again**, with the same set, is how it says so: the
+store is followed by a `menu_relayout` whenever the window is the active
+one, and the copy is remade. It draws nothing, takes no lock and preserves
+the flags, so it is legal from inside a menu handler — which is exactly
+where it is needed.
+
+**Disabled items.** An item string that **begins with the byte `MENU_DIS`
+(1)** is unavailable: `menu_drop` draws the rest of it in `CDGRAY` and
+skips the marker, `menu_widest` does not measure the marker, and
+`menu_hover` refuses to land on it — which is what makes it both
+un-highlightable and unselectable, since the selection *is* the last hover.
+That is the whole implementation, and it is a string prefix rather than a
+flags array on purpose: an application that wants an item disabled already
+had to point its item array at a different string to say so, so one byte in
+front of that string costs no structure change and no ABI change, rides the
+copy path unaltered, and works for a built-in's set exactly as for a
+package's. Two items pointing at their own disabled twins are a **radio
+pair** — Solitaire's Deal menu (§43) is built out of nothing else. A
+disabled item still spends one of its string's `MENU_STRMAX` chars on the
+marker, and disabling an item never excuses an application from answering
+the command itself: a keyboard shortcut never goes near a menu.
+
+**The name cell, and `About <App>` (`wm_about_set`, API 0x01E0).** The
+active application's name is drawn as a plain label at `MENU_NAME_X` — with
+no hit range — until the window that owns the bar registers an **About
+handler**:
+
+```nasm
+    mov si, my_about            ; a callback in my segment, 0 = none
+    call OSAPI_ABOUT_SET        ; BX = the window wm_create returned
+```
+
+The label then becomes a real bar cell whose pull-down carries one item,
+the string `'About '` + the same name the label draws, built kernel-side
+into `menu_abstr`. Picking it dispatches the registered offset **exactly
+like `AM_ONCMD` above** — UI task, gfx lock held, near for a kernel window
+and far at the owner's segment for a package's, billed to the owning
+instance and stamped for sound grants — with `SI` = the window and no
+selection to decode. It obeys every `W_ONCLICK` rule, including the one
+that matters most here: it **must repaint whatever it drew over**, because
+the kernel does not repaint after it returns.
+
+Three properties are load-bearing:
+
+- **It is opt-in, and silence is the old behaviour.** A window that
+  registers nothing has no cell, so every application that predates this —
+  and any package built against an older SDK — is untouched, and no handler
+  can be handed a menu index it was never written for.
+- **The cell is APPENDED to `menu_bar`, after the application's own
+  menus.** Hit-testing and drawing both walk the array by `MB_XL`/`MB_XR`
+  and `MB_TX`, so array order has nothing to do with bar order; putting it
+  last keeps every app menu's bar index equal to its set index + 1, and
+  `ui_dispatch`'s `dec ah` needs no adjustment. `MENU_BARMAX` is therefore
+  `MENU_APPMAX + 2`, and `[menu_abcell]` holds the cell's index (0 = none —
+  never ambiguous, because cell 0 is the System menu).
+- **Locator never gets one** (§12.3). The kernel's own About is
+  `CMD_ABOUT`, in the System menu, which is cell 0 of every application
+  including Locator's own windows.
+
+`menu_draw_bar` draws the label itself only when there is no name cell; when
+there is, the cell loop draws it at the same pen x, and drawing it twice
+would double-strike the glyphs. `wm_about` is a per-slot word array in
+wm.inc — the `wm_owner`/`wm_wseg` pattern — cleared by `wm_create`, so a
+reused window slot never inherits the last tenant's handler.
+
+Paint (§42) reached the same *place* on the bar before this existed, by
+declaring an **empty** `AM_NAME` and titling its first menu "Paint" — a
+pull-down where the label would have been. That still works and is
+untouched; it costs one of the four `MENU_APPMAX` cells, which is the
+difference. Solitaire (§43) is the first application on the new mechanism.
 
 **The command handler** (`AM_ONCMD`) is called exactly like `W_ONCLICK`
 (§11/§13): on the **UI task**, **under the gfx lock**, with
@@ -3426,8 +3533,8 @@ the target routines' own (§5, §6, §8, §11). Pinned layout:
 0x00D0 osapi_srand     0x01C0 cm_free
 0x00D8 osapi_rand      0x01C8 cm_caps
 0x00E0 osapi_snd_caps  0x01D0 wm_resize (§11.1)
-0x00E8 osapi_snd_tone
-0x00F0 osapi_snd_play
+0x00E8 osapi_snd_tone   0x01D8 gfx_blit4 (§5.4)
+0x00F0 osapi_snd_play   0x01E0 wm_about_set (§12.2)
 0x00F8 osapi_snd_fm
 ```
 
@@ -3575,8 +3682,9 @@ their plain-DS contracts for the kernel's own save/delete/rename paths
 of §20.6** (0x0160, 0x0168), the three **clip-region slots of §11.3**
 (0x0170, 0x0178, 0x0180), the five **CPU-tier and extended-memory slots
 of §41.8** (0x0188..0x01A8), **`wm_geom` (§11), 0x01B0**, the three
-**arena-memory slots of §2.6/§20.8** (0x01B8, 0x01C0, 0x01C8) and
-**`wm_resize` (§11.1), 0x01D0** — the table's end today, 57 × 8.
+**arena-memory slots of §2.6/§20.8** (0x01B8, 0x01C0, 0x01C8),
+**`wm_resize` (§11.1), 0x01D0**, **`gfx_blit4` (§5.4), 0x01D8** and
+**`wm_about_set` (§12.2), 0x01E0** — the table's end today, 59 × 8.
 
 ```
 0x0148 menu_win_set  in BX = win ptr, SI = the app menu set's offset in
@@ -3775,6 +3883,32 @@ app whose content has a size of its own used to do by hand.
                  with wm_fit (§39.7), so no argument a package can pass
                  puts a window off screen, under the dock or too small to
                  close. DRAWS NOTHING. Preserves every register.
+```
+
+**`gfx_blit4` (§5.4), 0x01D8, and `wm_about_set` (§12.2), 0x01E0.**
+Neither takes a DS-relative pointer, so neither is wrapped: the blit's
+source is `ES:SI` — an explicit segment, like `snd_play`'s samples — and
+the About handler's `SI` is an *offset* the kernel stores and pairs with
+the owner's segment at dispatch, exactly as `menu_win_set` treats a menu
+set.
+
+```
+0x01D8 gfx_blit4     in ES:SI = packed 4bpp pixels (two per byte, high
+                     nibble leftmost), BP = source stride in bytes,
+                     AX/BX = destination x/y, CX = width px, DX = height
+                     rows. Caller holds the gfx lock. One gfx_hline per
+                     coalesced run, so it clips, back-buffer-dispatches
+                     and 1bpp-reduces exactly as gfx_fill does.
+                     Preserves every register; leaves [gfx_color] at the
+                     last run's colour.
+0x01E0 wm_about_set  in BX = win ptr, SI = the About handler's offset in
+                     the CALLER's segment (0 = none). Stores it in
+                     wm_about[] and relayouts the bar when BX is the
+                     active window - which is what puts the 'About <App>'
+                     pull-down under the name label (§12.2). Draws
+                     nothing, takes no lock, preserves every register AND
+                     the flags, so like menu_win_set it can sit between
+                     wm_create and the entry proc's retf.
 ```
 
 ### 20.4 osapi helpers (kernel.asm)
@@ -8499,3 +8633,195 @@ allow, from 32x16 up, and everything else follows from that:
   canvas still gets a window, still owns the bar, and is still entitled to be
   told what the program is and who wrote it — Paint and the fork it came from
   were contributed by `github.com/Elendilon`.
+
+## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
+
+Klondike over the published package ABI, ported from the fork it was
+written in (`github.com/Elendilon`). Prefix `sol_`, embedded two-card icon
+(flags bit 0), format v3: org 0, its own segment, `retf` out of every
+kernel-called proc, window pointers treated as the opaque handles they are
+(§20.1). Directory order on the apps disks stays pinned: mines, hello,
+notepad, recorder, piano, fractal, paint — **solitaire is appended last** so
+the earlier indices hold. The file is `SOLITAIR.O88`, truncated to an 8.3
+stem (§19); the 16-byte name inside the header, which is what the Task
+Manager and the dock show, is still `SOLITAIRE`.
+
+It owns no worker task and asks for no arena memory: image + bss are 5.5KB
+and 1.2KB, so the one segment the loader gives it (§20.1) holds everything,
+card back included. Everything it does happens inside `W_PAINT`, `W_ONKEY`,
+`W_ONCLICK`, its `AM_ONCMD` and its About handler, under the caller's lock.
+
+Three kernel-side pieces are the price of the port, and each one is a
+general facility rather than a favour: **`gfx_blit4`** (§5.4), because the
+card back is a blit; **`MENU_DIS`** (§12.2), because the Deal menu is a
+radio pair; and **`wm_about_set`** (§12.2), because the credit belongs under
+the app's own name. Nothing else about the kernel moved.
+
+### 43.1 The card
+
+One byte: rank in bits 0..3 (0 = ace .. 12 = king), suit in bits 4..5, bit 6
+(`C_FACEUP`) set when the card shows. Suit order is **spade, heart, diamond,
+club**, which is also the foundations' left-to-right order, so "is it red" is
+`suit - 1 < 2` unsigned — one subtract and one compare (`sol_isred`).
+
+Thirteen piles of at most 24 cards each, tableau first so a tableau pile index
+*is* its column index: 0..6 tableau, 7..10 foundations (one per suit, in suit
+order), 11 stock, 12 waste. 24 is not arbitrary — a tableau column tops out at
+6 face-down plus a K..A run = 19, and the stock starts at 52 − 28 = 24.
+
+### 43.2 Two metric sets and a per-column fan
+
+`sol_met_big` (VGA 640x480, Hercules 720x348) is 32x44 cards, 4px gaps, a 5px
+face-down fan and a 14px face-up one. `sol_met_sml` (CGA 640x200, which has
+156 rows of desktop) is 28x28, 3px gaps, 3px and 12px. `sol_entry` picks by
+screen height ≥ 300 and copies the record over thirteen contiguous bss words —
+**those words must stay in the record's order**, it is one loop.
+
+The face-up fan must clear the rank glyph's 8 rows or a buried card cannot be
+read. Both records do, and the layout is sized so the deepest column the game
+can build — 6 face-down + 13 face-up — fits the window at full stretch on VGA.
+
+It does not fit on CGA, and that is what `sol_colfan` is for. Given a column it
+answers the fan steps *that column* will be drawn at: the metrics' values when
+the last card's offset lands inside `[sol_avail]`, and otherwise the face-up
+step tightened by division until it does, then the face-down one, never below
+one pixel. **Nothing is cached per pile.** The draw pass and the hit test both
+call it, so they cannot end up disagreeing about where a card is.
+
+`sol_track` re-reads the geometry at the top of every callback, through
+`OSAPI_WM_CONTENT` and `OSAPI_WM_GEOM` (§11) rather than out of the record:
+the window moves, and `wm_fit` may have clamped what the entry proc asked
+for. Since v3 the record is kernel memory a package's DS cannot reach, so
+asking is not a style choice.
+
+### 43.3 Faces are drawn, backs are blitted
+
+A face is a white fill, three or four black edges, one or two `font_char`
+glyphs and two suit pips. The pips are 1-bit masks run-coalesced by
+`sol_maskrun` — one `gfx_hline` per run of set bits — because a pip goes on a
+card that is already drawn and `gfx_blit4` is opaque.
+
+A back is a lattice, which has a run every two or three pixels and would cost
+several hundred far calls a card. `sol_mkback` renders it **once** into a
+packed 4bpp image at start-up — black edge, white margin, a field of diamonds
+white wherever `(x+y)` or `(x−y)` lands on a multiple of 8 — and every later
+draw is a single `gfx_blit4` (§5.4), one far call instead of several hundred,
+twenty-one times over on a full repaint. The field colour is the only thing
+that changes with the adapter: index 1 on VGA, index 9 on 1bpp so it reduces
+to the 50% dither with the white lattice still crossing it.
+
+Every card is drawn with a **visible height**, which is what the next card in
+the fan leaves showing, clamped to the content bottom. A buried card costs
+only the rows that survive, its bottom edge is not drawn (the next card's top
+edge is one row below it and two black rules would show), and each glyph and
+pip is gated on that height — so a two-pixel sliver draws its top edge and
+nothing else, and nothing can spill past the card onto the desktop.
+
+### 43.4 Colour is never the only carrier
+
+On a 1bpp adapter (§39.4) index 12 reduces to **white**, so a red pip on a
+white face would be nothing at all. There, the two red suits are drawn with
+**hollow** masks and the two black suits solid — the trick the black-and-white
+Macintosh card games used — and the rank text goes black for every suit. On
+four bits the colour does that job and every pip is solid.
+
+The ghost pips in the empty foundations are the exception: they take
+`sol_pipsold`, which is always solid, because they are drawn in the dither
+class and a 50% dither eats every other pixel of a 1px outline. A ghost says
+which suit belongs here, not what colour it is.
+
+The felt is index 2 — green on VGA, black on Hercules and CGA. White cards on
+black read as well as white cards on green, and the black card edges that
+vanish into the felt are exactly the ones the white card silhouette replaces.
+
+### 43.5 The drag is an XOR outline
+
+`sol_drag` is `ui_drag`'s loop (§13) written against the API, and its ordering
+is binding for the same reason: **the outline is XOR-erased before the lock is
+released and redrawn after it is taken again**, because XOR is self-inverting
+only while nothing else touches the pixels underneath. `sol_linger` holds it
+lit for a whole tick so the cursor blits inside the unlock/lock pair cannot
+dominate the loop.
+
+No card moves while the pointer does, so a drag costs one `gfx_xor_rect` plus
+one `gfx_xor_fill` per card boundary, per tick, however many cards are in the
+hand — and those rules are what make a hand of seven read as seven cards.
+Nothing is repainted until the button comes up; an illegal drop repaints
+nothing at all, because the cards never moved and the screen is already right.
+
+Two things differ from `ui_drag`, both deliberate:
+
+- **The button is sampled by level, not by event.** The kernel's drag cannot
+  do that (it must not swallow a re-press). Here it is what makes a press and
+  release too quick to register as movement land on the drop path with the
+  outline still over the card it came from — which is the auto-play gesture
+  below, and it needs no double-click timer.
+- **The drop target is chosen by the centre of the hand's TOP CARD**, not by
+  the pointer, which may be anywhere inside a seven-card outline. The column
+  is `(centre_x − margin + gap/2) / pitch`; above `sol_taby` only a foundation
+  takes a drop, and only one card.
+
+### 43.6 Rules and gestures
+
+Standard Klondike. A tableau run may only be lifted whole and only if it is
+*already* a descending alternating sequence — the same rule the drop applies,
+checked in `sol_grab` before the outline goes up rather than after it comes
+down. An empty column takes a king; a foundation takes an ace, then its own
+suit in order. `sol_move` is the one place a card changes hands, so it is also
+the one place that turns a newly uncovered tableau card face up and that
+shrinks the waste's fan.
+
+- **Click the stock** to deal one or three; **click it empty** to turn the
+  whole waste back over, face down, unlimited times.
+- **Click a face-down top card** to turn it over.
+- **Press and release without moving** sends that one card to a foundation if
+  any will take it.
+- **Menus**: Game — New Game, Restart Deal (the same shuffle again, kept in
+  `sol_deck`), Auto Finish (send everything that will go, a move a tick, with
+  the lock dropped between them so each one reaches the glass); Deal — Draw
+  One, Draw Three, as a **radio pair made out of `MENU_DIS`** (§12.2): the
+  mode already in force points at its disabled twin and is drawn grey.
+  `sol_dealmenu` repoints the two item words **and then re-registers the set**
+  with `OSAPI_MENU_SET`, because since v3 the bar draws from the kernel's copy
+  and the two stores alone would change nothing anyone can see (§12.2).
+- **Keys**: N, R, A, Space for the same four commands.
+
+The RNG is seeded **once**, from `get_ticks` in the entry proc. Every later
+New Game walks on down the same stream, so two deals inside one tick still
+differ — which re-seeding from the clock would not give.
+
+### 43.7 Repaint
+
+`sol_drawpile` is the unit: erase one pile's slot back to felt and redraw it.
+A move touches two piles and costs two of them. A tableau column's slot runs
+the full height of the content; the waste's is two fan steps wider than a card,
+which is what the empty column between it and the foundations is for.
+
+The win plaque is the exception — it sits on the felt between the piles and no
+pile owns its rectangle — so a move that puts it up **or takes it down** costs
+the whole content instead. `sol_checkwin` therefore clears the flag as well as
+setting it: a won game is not a dead end, the foundations can still be dragged
+back off, and `sol_domove` tests the flag on both sides of the check.
+
+### 43.8 About Solitaire
+
+The first client of `wm_about_set` (§12.2): `sol_entry` registers
+`sol_about` right after `OSAPI_MENU_SET`, so the name in the bar becomes a
+pull-down carrying "About Solitaire", and picking it credits
+`github.com/Elendilon` — who forked os8088 and wrote both this game and
+Paint (§42).
+
+**It is state, not a modal loop.** The handler sets `[sol_abon]`, re-tracks
+the geometry and repaints; `sol_drawall` draws the panel last, over the win
+plaque if both are up; and the next click or key anywhere in the window is
+spent taking it down again (`sol_abdismiss` answers CF=1 and the caller
+stops there). A handler that instead pumped its own event loop would hold
+the gfx lock — which every window callback is standing on (§12.2) — for as
+long as the player left the credits up, blocking every background task in
+the machine.
+
+The panel is **measured, never pinned**: `sol_abmeas` takes the widest line
+and the line count from the credit table and clamps both to the content, so
+one block of text is right on a 640x480 screen and on CGA's 220px-wide
+window (§39). Lines are centred on the panel rather than on the content, so
+the block still reads as one card when the clamp has narrowed it.
