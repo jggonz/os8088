@@ -808,46 +808,31 @@ pt_bmp_hdr:
     push si
     push di
     push es
+    ; The 54 fixed bytes come from a template rather than two dozen immediate
+    ; stores: the same bytes, a third of the code, and a header you can read as
+    ; a header. Only four fields are not constant.
     mov ax, [pt_base]
     mov es, ax
     xor di, di
+    mov si, pt_hdrtpl
+    mov cx, 27
+    cld
+    rep movsw
     mov ax, [pt_ch]
     mul word [pt_stride]            ; DX:AX = pixel bytes - 32 bits, because a
     mov cx, ax                      ; big canvas is more than 64KB and bfSize
     mov si, dx                      ; has to carry all of it
-    mov word [es:di], 0x4D42        ; 'BM'
-    mov ax, cx
     add ax, PT_BMPHDR
-    mov [es:di+2], ax               ; bfSize, low word...
+    mov [es:2], ax                  ; bfSize, low word...
     mov ax, si
     adc ax, 0
-    mov [es:di+4], ax               ; ...and high
-    mov word [es:di+6], 0
-    mov word [es:di+8], 0
-    mov word [es:di+10], PT_BMPHDR  ; bfOffBits
-    mov word [es:di+12], 0
-    mov word [es:di+14], 40         ; biSize
-    mov word [es:di+16], 0
+    mov [es:4], ax                  ; ...and high
     mov ax, [pt_cw]
-    mov [es:di+18], ax              ; biWidth
-    mov word [es:di+20], 0
+    mov [es:18], ax                 ; biWidth
     mov ax, [pt_ch]
-    mov [es:di+22], ax              ; biHeight (positive = bottom-up)
-    mov word [es:di+24], 0
-    mov word [es:di+26], 1          ; biPlanes
-    mov word [es:di+28], 4          ; biBitCount
-    mov word [es:di+30], 0          ; biCompression = BI_RGB
-    mov word [es:di+32], 0
-    mov [es:di+34], cx              ; biSizeImage, both words
-    mov [es:di+36], si
-    mov word [es:di+38], 0          ; biXPelsPerMeter
-    mov word [es:di+40], 0
-    mov word [es:di+42], 0          ; biYPelsPerMeter
-    mov word [es:di+44], 0
-    mov word [es:di+46], 16         ; biClrUsed
-    mov word [es:di+48], 0
-    mov word [es:di+50], 0          ; biClrImportant
-    mov word [es:di+52], 0
+    mov [es:22], ax                 ; biHeight (positive = bottom-up)
+    mov [es:34], cx                 ; biSizeImage, both words
+    mov [es:36], si
     mov si, pt_pal_rgb              ; 16 x RGB -> 16 x BGRA
     mov di, 54
     mov cx, 16
@@ -872,9 +857,9 @@ pt_bmp_hdr:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_font_init - copy the ROM 8x8 font into pt_glyphs
+; pt_font_init - find the ROM 8x8 font and remember where it is
 ; in:  nothing
-; out: pt_glyphs = glyphs for 32..126; preserves all registers
+; out: [pt_fseg]:[pt_foff] -> glyph 0; preserves all registers
 ;
 ; The kernel's own font buffer is not in the API table, and the text tool
 ; has to write glyph pixels into the CANVAS rather than onto the screen, so
@@ -906,15 +891,19 @@ pt_font_init:
     mov es, ax
     mov bp, 0xFA6E
 .got:
-    mov si, 32 * 8                  ; first glyph we keep is the space
-    mov di, pt_glyphs
-    mov cx, 95 * 8
-.copy:
-    mov al, [es:bp+si]
-    mov [di], al
-    inc si
-    inc di
-    loop .copy
+    ; The font stays in ROM and glyphs are fetched eight bytes at a time
+    ; (pt_gfetch), rather than copied into 760 bytes of our own bss - which is
+    ; 3.8% of everything this package is allowed to be. Normalising the offset
+    ; into the segment first means the per-glyph `add` can never carry out of a
+    ; word, whatever the BIOS hands back.
+    mov ax, bp
+    mov cl, 4
+    shr ax, cl
+    mov bx, es
+    add bx, ax
+    mov [pt_fseg], bx
+    and bp, 15
+    mov [pt_foff], bp
     pop es
     pop bp
     pop di
@@ -1598,6 +1587,28 @@ pt_cframe:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; pt_cwell - a filled, framed box: the chrome's one repeated shape
+; in:  AX = x, BX = y, CX = width-1, DX = height-1 (content coords);
+;      [pt_pen] = the fill colour
+; out: [pt_pen] = CBLACK (the frame's colour, which every caller wanted next);
+;      preserves all registers
+;
+; Every button, well and swatch in the palette and the strip is this: fill in
+; some colour, frame in black. Six sites, twelve bytes each.
+; -----------------------------------------------------------------------------
+pt_cwell:
+    push cx
+    push dx
+    add cx, ax
+    add dx, bx
+    call pt_cfill
+    mov byte [pt_pen], CBLACK
+    call pt_cframe
+    pop dx
+    pop cx
+    ret
+
 ; pt_cprep - content coords -> screen coords, and load the pen
 ; in:  AX/BX/CX/DX = content rect
 ; out: AX/BX/CX/DX = screen rect, [gfx_color] = [pt_pen]
@@ -1752,13 +1763,9 @@ pt_draw_pal:
 .well:
     mov ax, cx
     mov bx, dx
-    mov cx, ax
-    add cx, PT_BW - 1
-    mov dx, bx
-    add dx, PT_BW - 1
-    call pt_cfill
-    mov byte [pt_pen], CBLACK
-    call pt_cframe
+    mov cx, PT_BW - 1
+    mov dx, PT_BW - 1
+    call pt_cwell
     mov byte [pt_pen], CBLACK       ; ...and the glyph inverts with it
     xor ax, ax
     mov al, [pt_tool]
@@ -2252,13 +2259,9 @@ pt_draw_strip:
 .wbg:
     mov ax, [pt_bx]
     mov bx, [pt_by]
-    mov cx, ax
-    add cx, PT_BW - 1
-    mov dx, bx
-    add dx, PT_BW - 1
-    call pt_cfill
-    mov byte [pt_pen], CBLACK
-    call pt_cframe
+    mov cx, PT_BW - 1
+    mov dx, PT_BW - 1
+    call pt_cwell
     ; the glyph: a centred square whose side is the width itself, capped so
     ; the 32px eraser still fits in a 20px button
     call pt_thsel
@@ -2297,13 +2300,9 @@ pt_draw_strip:
     mov ax, PT_CUR_X
     mov bx, [pt_stripy]
     inc bx
-    mov cx, ax
-    add cx, PT_BW - 1
-    mov dx, bx
-    add dx, PT_BW - 1
-    call pt_cfill
-    mov byte [pt_pen], CBLACK
-    call pt_cframe
+    mov cx, PT_BW - 1
+    mov dx, PT_BW - 1
+    call pt_cwell
 
     ; --- the palette ------------------------------------------------------
     xor di, di
@@ -2318,14 +2317,10 @@ pt_draw_strip:
     mov ax, [pt_bx]
     mov bx, [pt_stripy]
     inc bx
-    mov cx, ax
-    add cx, [pt_swsz]
+    mov cx, [pt_swsz]
     dec cx
-    mov dx, bx
-    add dx, PT_BW - 1
-    call pt_cfill
-    mov byte [pt_pen], CBLACK
-    call pt_cframe
+    mov dx, PT_BW - 1
+    call pt_cwell
     mov ax, di                      ; the swatch in use gets a second frame
     call pt_swcol
     cmp al, [pt_col]
@@ -2349,13 +2344,9 @@ pt_draw_strip:
     mov ax, [pt_filx]
     mov bx, [pt_stripy]
     inc bx
-    mov cx, ax
-    add cx, PT_BTN_W16 - 1
-    mov dx, bx
-    add dx, PT_BW - 1
-    call pt_cfill
-    mov byte [pt_pen], CBLACK
-    call pt_cframe
+    mov cx, PT_BTN_W16 - 1
+    mov dx, PT_BW - 1
+    call pt_cwell
     mov ax, [pt_filx]
     add ax, 4
     mov bx, [pt_stripy]
@@ -2375,13 +2366,9 @@ pt_draw_strip:
     mov ax, [pt_fntx]
     mov bx, [pt_stripy]
     inc bx
-    mov cx, ax
-    add cx, PT_BTN_W16 - 1
-    mov dx, bx
-    add dx, PT_BW - 1
-    call pt_cfill
-    mov byte [pt_pen], CBLACK
-    call pt_cframe
+    mov cx, PT_BTN_W16 - 1
+    mov dx, PT_BW - 1
+    call pt_cwell
     mov al, [pt_fscale]
     add al, '0'
     mov [pt_fdigit], al
@@ -4403,6 +4390,32 @@ pt_caret_hide:
     ret
 
 ; -----------------------------------------------------------------------------
+; pt_gfetch - one glyph's eight rows, out of the ROM font into pt_gl8
+; in:  AX = its byte offset within [pt_fseg]
+; out: pt_gl8 filled; preserves all registers
+; -----------------------------------------------------------------------------
+pt_gfetch:
+    push ax
+    push bx
+    push si
+    push es
+    mov si, ax
+    mov es, [pt_fseg]
+    xor bx, bx
+.b:
+    mov al, [es:si]
+    mov [pt_gl8+bx], al
+    inc si
+    inc bx
+    cmp bx, 8
+    jb .b
+    pop es
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; pt_setscale - set the text scale from a shift count
 ; in:  AL = 0, 1 or 2
 ; out: [pt_gsh] = AL and [pt_fscale] = 1/2/4; preserves all registers
@@ -4485,8 +4498,11 @@ pt_type:
     shl ax, 1
     shl ax, 1
     shl ax, 1
-    add ax, pt_glyphs
-    mov si, ax                      ; SI = the eight glyph rows
+    add ax, 32 * 8                  ; [pt_gch] counts from the space
+    add ax, [pt_foff]
+    call pt_gfetch                  ; ES belongs to the canvas the moment
+    mov si, pt_gl8                  ; pt_rect starts drawing, so the glyph
+                                    ; comes out of ROM before that, not during
     xor di, di                      ; DI = row
 .row:
     mov ah, [si]
@@ -5992,14 +6008,14 @@ pt_bmp_row:
     push si
     push di
     xor di, di                      ; DI = column
-    cmp word [pt_bpp], 24
-    je .rgb
-    cmp word [pt_bpp], 8
+.col:                               ; ONE dispatch, at the loop top: the depth
+    cmp word [pt_bpp], 24           ; cannot change inside a row, but a second
+    je .rgb                         ; copy of this ladder at the bottom cost 21
+    cmp word [pt_bpp], 8            ; bytes to say so
     je .idx8
     cmp word [pt_bpp], 4
     je .idx4
 ; --- 1bpp -------------------------------------------------------------------
-.idx1:
     mov bx, di
     shr bx, 1
     shr bx, 1
@@ -6056,14 +6072,7 @@ pt_bmp_row:
 .next:
     inc di
     cmp di, [pt_cols]
-    jae .out
-    cmp word [pt_bpp], 24
-    je .rgb
-    cmp word [pt_bpp], 8
-    je .idx8
-    cmp word [pt_bpp], 4
-    je .idx4
-    jmp .idx1
+    jb .col
 .out:
     pop di
     pop si
@@ -7491,6 +7500,24 @@ pt_mono_pal: db CBLACK, CLGRAY, CWHITE
 ; --- the standard EGA/VGA palette, R,G,B per entry --------------------------
 ; Written into every BMP we save, and the target of pt_map16 for every one we
 ; load, so a file round-trips through a host paint program unchanged.
+; --- the BMP header's fixed 54 bytes; pt_bmp_hdr patches the other four fields
+pt_hdrtpl:
+    db 'BM'
+    dd 0                            ; bfSize (patched)
+    dw 0, 0                         ; bfReserved1/2
+    dd PT_BMPHDR                    ; bfOffBits
+    dd 40                           ; biSize: BITMAPINFOHEADER
+    dd 0                            ; biWidth (patched)
+    dd 0                            ; biHeight (patched, positive = bottom-up)
+    dw 1                            ; biPlanes
+    dw 4                            ; biBitCount
+    dd 0                            ; biCompression = BI_RGB
+    dd 0                            ; biSizeImage (patched)
+    dd 0                            ; biXPelsPerMeter
+    dd 0                            ; biYPelsPerMeter
+    dd 16                           ; biClrUsed
+    dd 0                            ; biClrImportant
+
 pt_pal_rgb:
     db 0x00,0x00,0x00               ; 0  black
     db 0x00,0x00,0xAA               ; 1  blue
@@ -7716,8 +7743,6 @@ pt_ic_text:
     PTWORD pt_och
     PTWORD pt_ostride
     PTWORD pt_orseg                 ; pt_orowset's answer
-    PTWORD pt_rtseg                 ; pt_resize scratch
-    PTWORD pt_rtoff
     PTWORD pt_dockr                 ; the first row the dock owns
     PTWORD pt_lwb                   ; pt_lose_*: first byte of the doomed band
 
@@ -7813,7 +7838,9 @@ pt_ic_text:
     PTBUF  pt_rowoff, PT_CH_MAX * 2 ; ...and the 0..15 bytes into it. Together
                                     ; they are the whole of the bottom-up
                                     ; story AND of spanning segments
-    PTBUF  pt_glyphs, 95 * 8        ; the ROM 8x8 font, chars 32..126
+    PTWORD pt_fseg                  ; the ROM 8x8 font, where the BIOS keeps it
+    PTWORD pt_foff
+    PTBUF  pt_gl8, 8                ; ...and the one glyph being drawn
     PTBUF  pt_line, PT_CW_MAX       ; one decoded source pixel per column
     PTBUF  pt_dimbuf, 8             ; "x464", NUL - the palette's size readout
     PTBUF  pt_pmap, 256             ; a loaded palette -> our sixteen

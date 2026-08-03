@@ -202,9 +202,15 @@ by construction.
 
 - **No access to the kernel's font bitmaps.** `font_char` draws to the
   screen; the text tool has to write glyph pixels into its own canvas, so
-  `pt_font_init` re-fetches the ROM 8×8 font through int 10h AX=1130h and
-  keeps a second 760-byte copy of what the kernel already has in `.bss`. A
-  slot returning the glyph table pointer would remove both.
+  `pt_font_init` re-probes the ROM 8×8 font through int 10h AX=1130h (with the
+  kernel's own F000:FA6E fallback) and keeps the pointer. Glyphs are then read
+  eight bytes at a time straight out of ROM — a second copy in bss was 760
+  bytes, 3.8% of everything this package is allowed to be, and buying it back
+  was the single largest saving available. The eight-byte staging buffer is
+  there because ES belongs to the canvas the moment `pt_rect` starts drawing,
+  so the glyph has to leave ROM before that and not during. A slot returning
+  the kernel's glyph table pointer would remove the probe and the fallback
+  both.
 - **No mouse-motion events.** `W_ONCLICK` fires on the press and nothing
   else, so every drag is a poll loop that owns the gfx lock — and, because
   a package's drawing goes through the back buffer, the loop must
@@ -288,8 +294,8 @@ worse. The 64KB file ceiling also means the only JPEGs that could be opened at
 all are small ones. The app recognises it by magic and says so rather than
 guessing.
 
-(The package is 12,631 bytes of image + 4,293 of bss against the 19,968
-budget today, so about 3KB is still free.)
+(The package is 13,866 bytes of image + 3,562 of bss against the 19,968
+budget today, so about 2.5KB is still free.)
 
 ## Performance notes
 
