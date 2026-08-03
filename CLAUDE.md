@@ -144,39 +144,92 @@ Four things are load-bearing:
 
 Overflow (more than 16 rects) degrades to CF=1, "skip this frame" — exactly what `wm_obscured` used to say, so it cannot regress anything. `wm_obscured` stays, and `cp_tick` and `tm_update` still use it: it is the cheaper answer for a drawer that repaints its whole pane in one go.
 
-### Showing a window costs one window, not one screen (SPEC.md §11.4)
+### Coming to the front costs one window; going away costs a rectangle (SPEC.md §11.4/§11.5)
 
-`wm_show` does **not** call `wm_paint_all`. Showing a window is the one z-order
-change that **reveals nothing** — it lands on top, so everything already on
-screen either stays as it is or gets drawn over — and the full pass was a
-whole-screen planar dither plus every visible window's frame and `W_PAINT`,
-paid to put one window up. `wm_front`, `wm_hide` and `wm_destroy` still do the
-full pass: those three can *uncover* something, and what is underneath is not
-knowable from the window being moved.
+Neither `wm_show` nor `wm_front` calls `wm_paint_all`. **Coming to the front
+reveals nothing** — the window moves up, so for every other window the covered
+area can only grow — and the full pass was a whole-screen planar dither plus
+every visible window's frame and `W_PAINT`, paid to raise one window. Both go
+through `wm_raise`, which draws four things in order: the menu bar
+(`menu_activate` just handed it over), the dock (the owning instance may be new,
+and the *active* tile moves), **the outgoing front window's title bar**
+(`wm_draw_title` — the pinstripes and the two boxes belong to the frontmost
+window alone), then this window, last and therefore on top.
 
-Four things change on a show and `wm_show` draws all four, in order: the menu
-bar (`menu_activate` just handed it over), the dock (the owning instance may be
-new), **the outgoing front window's title bar** (`wm_draw_title` — the
-pinstripes and the two boxes belong to the frontmost window alone), then the
-window itself, last and therefore on top. Two traps:
+How much of *this* window is drawn is the one thing the two entry points
+disagree about. `wm_show` always draws it whole: a newly visible window has no
+pixels on screen. `wm_front` asks **`wm_obscured` before `wm_lift`**, while the
+z-order still says what was on top — nothing was, so only the pinstripes
+changed, so only `wm_draw_title` runs. A click on a background window's title
+bar is that case, and it now costs two title bars and the chrome. Raising a
+window that is *already* frontmost repaints no window at all.
 
-- **`wm_top` is read BEFORE the visible bit goes on.** `wm_create` has already
-  appended the new window to `wm_zord`, so once it is visible `wm_top` answers
-  with *itself* and the outgoing front never loses its stripes.
-- **The dock is the reason for `wm_dock_clear`.** `wm_fit` keeps a window above
-  the dock but `ui_grow`'s clamp is looser, so a grown window can hang over it —
-  and `dock_paint` would then draw on top of a window instead of under it. The
-  cheap path declines and falls back rather than reorder itself. Fullscreen
-  (§11.2) falls back too, since it suppresses the chrome entirely.
+Three traps:
 
-The one consumer that had to follow is the file manager: a window that posted a
-load has `'Loading...'` in its status line, and nothing repaints it any more.
-`files_poster` arms `wm_clip_set` on that window and calls `fm_repaint` — one
-window's content, clipped to what the new window has not covered, which is
-exactly what the clip region exists for. It needs `fm_win_of`, the reverse of
-`fm_vp_set`, because `[ld_pwin]` holds the poster's **state block**, not its
-window — a distinction that silently draws a Disk window's contents through a
-garbage rect if you miss it.
+- **`wm_top` is read BEFORE the visible bit goes on** in `wm_show`. `wm_create`
+  has already appended the new window to `wm_zord`, so once it is visible
+  `wm_top` answers with *itself* and the outgoing front never loses its stripes.
+- **The dock is the reason for `wm_dock_clear`** (inside `wm_fast_ok`). `wm_fit`
+  keeps a window above the dock but `ui_grow`'s clamp is looser, so a grown
+  window can hang over it — and `dock_paint` would then draw on top of a window
+  instead of under it. The cheap path declines and falls back rather than
+  reorder itself. Fullscreen (§11.2) falls back too.
+- **`wm_front` on a hidden window falls back** rather than draw a window that
+  has no pixels on screen. `wm_show` is the entry point for that.
+
+**Hiding, destroying and dragging do reveal — but only inside the rect the
+window vacated**, and `wm_paint_dmg` is that argument (SPEC.md §11.5). It takes
+an inclusive damage rect and repaints the desktop dither clipped to it, the
+drive zones it touches, the chrome (always — a tile leaves, the focus cue moves,
+the bar may lose its owner), and then the windows. `wm_hide` and `wm_destroy`
+pass the window's frame rect; `ui_drag` passes the union of where the window was
+and where it is. A window closing on the left of the screen no longer redraws a
+window on the right.
+
+Four things hold it up:
+
+- **A window is marked if it overlaps the damage — *or* overlaps a window
+  already marked below it.** The second half is not optional: a marked window is
+  redrawn *whole*, so it would paint over anything it overlaps. Marking runs
+  bottom-to-top over `wm_zord`, so one pass reaches the transitive closure. And
+  nothing in that pass may keep a loop counter in a general register —
+  `wm_win_rect` writes all four.
+- **Whole-drawn things get folded into the rect, not special-cased in the
+  marking.** A drive zone the rect touches (`desk_dmg_zones` grows the rect to
+  it), and the dock rows — but only when `wm_dock_clear` says a window hangs
+  over the strip, so the usual case pays nothing.
+- **A wholly covered window is not drawn at all.** `wm_covered` is §11.3's
+  region arithmetic seeded with the *frame* rect instead of the content rect;
+  empty means every pixel it would write is written again by something above it.
+  `wm_paint_all` uses it too. The visible consequence is that **`W_PAINT` does
+  not run on a wholly covered window**, so a paint proc must be a repaint and
+  nothing else. The overflow degradation is the *opposite* of `wm_clip_set`'s:
+  more than 16 fragments means "not covered, draw it", because skipping on a
+  maybe loses pixels. This is not the old `wm_obscured` veto coming back — a
+  *partly* covered window is still redrawn in full.
+- **Hiding the front window promotes the one underneath**, and the promotion is
+  visible. After the marked windows are drawn, `wm_paint_dmg` re-asks `wm_top`
+  and owes it one `wm_draw_title` if it was not redrawn in this pass. Forget it
+  and the new front window sits there looking inactive until something else
+  repaints the world.
+
+An empty damage rect is legal and means "nothing was revealed, but the chrome
+changed": `wm_destroy` passes one when the window was **already hidden**, which
+is the second half of closing a task-owned app (the close box hides, the worker
+destroys a moment later). That used to be a second whole-screen repaint for two
+strips' worth of change.
+
+The one consumer that had to follow is the file manager, and it got cheaper at
+both ends. A window that posted a load has `'Loading...'` in its status line,
+and nothing repaints it any more; `files_poster` arms `wm_clip_set` on that
+window and calls **`fm_status_only`** — one *line*, not the window's whole
+content. The double-click that posted the load does the same. Both fall back to
+`fm_repaint` when `wm_clip_test` says a clip edge crosses the line, because a
+fill clips per pixel and glyphs clip per cell, so the line would go blank rather
+than stale (the granularity rule). `files_poster` also needs `fm_win_of`, the
+reverse of `fm_vp_set`, because `[ld_pwin]` holds the poster's **state block**,
+not its window — a distinction that silently draws a Disk window's contents
+through a garbage rect if you miss it.
 
 ### The mono adapters reuse the back-buffer renderer (SPEC.md §39)
 
@@ -220,7 +273,7 @@ Two things keep it affordable, because the flush (VRAM) costs ~24× the render (
 
 ### Instances (SPEC.md §29 — how apps live and die)
 
-Everything running — built-in kind or loaded package — is a record in `kernel/instance.inc`'s `inst_tab` (12 × 32B). Boot is clean (no instances); menus call `app_launch` (new instance, or front the existing one at the kind's cap), the close box calls `app_close_win` (task-less: synchronous teardown; task-owned: die flag `I_STATE=2` + hide, the task tears down at next wake), and the title bar's right-hand minimize box hides to the dock (`kernel/dock.inc`, bottom strip rows 456..479, one tile per live instance, stable slot↔tile mapping, XOR-inverted when minimized). `wm_owner[]` maps window slot → instance. The Task Manager lists *instances*, not tasks — one row per `inst_tab` slot plus a "System" row — because task-less apps (About, Disk, and any package that has not claimed a worker) only ever run inside window callbacks. Those callbacks are timed at the `W_PAINT`/`W_ONKEY`/`W_ONCLICK` dispatch sites and billed to `I_CYC` via `task_cycles`/`task_debit`, which *move* the cycles off the running task so the rows still add to one total.
+Everything running — built-in kind or loaded package — is a record in `kernel/instance.inc`'s `inst_tab` (12 × 32B). Boot is clean (no instances); menus call `app_launch` (new instance, or front the existing one at the kind's cap), the close box calls `app_close_win` (task-less: synchronous teardown; task-owned: die flag `I_STATE=2` + hide, the task tears down at next wake), and the title bar's right-hand minimize box hides to the dock (`kernel/dock.inc`, bottom strip rows 456..479, one tile per live instance, stable slot↔tile mapping). A tile carries two independent marks: **minimized** XOR-inverts its interior, **active** — the instance owning the frontmost visible window — doubles its border. Two different kinds of mark on purpose, and a heavier border is the one that survives the 1bpp reduction. `wm_owner[]` maps window slot → instance. The Task Manager lists *instances*, not tasks — one row per `inst_tab` slot plus a "System" row — because task-less apps (About, Disk, and any package that has not claimed a worker) only ever run inside window callbacks. Those callbacks are timed at the `W_PAINT`/`W_ONKEY`/`W_ONCLICK` dispatch sites and billed to `I_CYC` via `task_cycles`/`task_debit`, which *move* the cycles off the running task so the rows still add to one total.
 
 A package may claim **one** worker task from a callback (`OSAPI_TASK_SPAWN`/`OSAPI_TASK_ALIVE`, SPEC.md §20.6 → `inst_pkg_spawn`/`inst_pkg_alive`) — the first time two packages can be pre-empted against each other, and the first time a package instance takes the *task-owned* close path instead of the synchronous one. The trap: a worker that returns or exits on its own leaks its instance record and its region for the session, because `app_close_win` then sets a die flag nobody ever reads. It must call `OSAPI_TASK_ALIVE` every loop, and that call is where it dies. Two kernel-side rules hold the feature up: `inst_pkg_spawn` fences the package's BX with an **ownership test** (the record must be a package whose own `[I_SPTR, I_SPTR+I_SIZE)` contains the entry in AX), because attaching a worker to a stranger's record puts *both* instances on the wrong teardown path; and `task_spawn` runs its slot scan and its `T_STATE` publish under one `cli`, because this is the first time two different tasks can spawn at once.
 

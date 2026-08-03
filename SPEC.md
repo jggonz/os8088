@@ -1052,13 +1052,17 @@ Frame drawing (paint-all does this before calling W_PAINT):
 |----------------|--------------------------------------------------------------|
 | `wm_init`      | zero table                                                   |
 | `wm_create`    | in SI → 16-byte template {x,y,w,h,title,paint,onkey,onclick} words; out BX = window ptr, CF on table full. Calls `wm_fit`, which clamps the frame onto the live screen (§39.7) — every template in the tree is authored for 640x480, so the record, not the template, is the truth. Created **hidden**; appends the window's index to `wm_zord` (frontmost) and increments `wm_zn`. Does not repaint — callable without the gfx lock. |
-| `wm_destroy`   | in BX = win ptr: clear W_FLAGS (used+visible), reset the slot's `wm_owner` entry to 0xFF, remove its index from `wm_zord` (compact the array, decrement `wm_zn`), repaint all. Caller holds the gfx lock. The record slot becomes reusable by wm_create. |
-| `wm_show`      | in BX = win ptr: set visible, bring to front, repaint all    |
-| `wm_hide`      | in BX = win ptr: clear visible, repaint all                  |
-| `wm_front`     | in BX = win ptr: raise to front of z-order, repaint all      |
+| `wm_destroy`   | in BX = win ptr: clear W_FLAGS (used+visible), reset the slot's `wm_owner` entry to 0xFF, remove its index from `wm_zord` (compact the array, decrement `wm_zn`), then `wm_paint_dmg` over the rect it vacated — an **empty** rect when it was already hidden, which costs only the chrome (§11.5). Caller holds the gfx lock. The record slot becomes reusable by wm_create. |
+| `wm_show`      | in BX = win ptr: set visible, bring to front, draw **just it** plus the chrome and the outgoing front's title bar (§11.4) |
+| `wm_hide`      | in BX = win ptr: clear visible, then `wm_paint_dmg` over the rect it vacated (§11.5) |
+| `wm_front`     | in BX = win ptr: raise to front of z-order and repaint what that changed — nothing at all if it was already frontmost, one title bar if nothing was covering it, otherwise the window (§11.4) |
+| `wm_paint_dmg` | in AX,BX,CX,DX = an inclusive damage rect (may hang off the screen; empty = chrome only): repaint the desktop, the drive zones, the chrome and every window the rect reaches, plus every window those reach. Caller holds the gfx lock; all registers preserved. §11.5. |
+| `wm_paint_chrome` | the dock and the menu bar and nothing else, for a change that revealed no pixels. Declines to `wm_paint_dmg` over the dock strip when a window hangs over it. Caller holds the gfx lock. |
+| `wm_covered`   | in BX = win ptr; out CF=1 = every pixel of its **frame** rect (drop shadow included) is covered by visible windows above it, so a back-to-front painter may skip it entirely — **W_PAINT included**. Overflow of the 16-rect list answers "not covered". Leaves the clip list disarmed. Caller holds the gfx lock. §11.5. |
+| `wm_win_rect`  | in SI = win ptr; out AX,BX,CX,DX = its occupied rect, inclusive, drop shadow included (WF_FULL: no shadow). Clobbers only those four. |
 | `wm_top`       | out BX = frontmost visible window ptr, 0 if none             |
 | `wm_hit`       | in CX=x, DX=y; out BX = topmost visible window ptr containing the point (0 if none), AL = 0 content, 1 title bar, 2 close box, 3 minimize box, 4 grow box. AL=2/AL=3 only when BX is the frontmost visible window (the only one with the boxes drawn); on any other window those regions report AL=1. AL=4 only when BX is the frontmost visible window **and** has WF_SIZABLE (and not WF_FULL): the 13×13 grow-box rect of the frame drawing above; anywhere else that region is plain content (AL=0). A WF_FULL window reports AL=0 for every point — it has no chrome. |
-| `wm_paint_all` | full repaint: desktop gray (below menu bar), then `desk_paint` (§26 — desktop icons sit on the desktop, under every window), then `dock_paint` (§30 — the dock strip sits on the desktop under every window, like the icons), menu bar, every visible window back→front (frame + white content + W_PAINT). Caller holds gfx lock. |
+| `wm_paint_all` | full repaint: desktop gray (below menu bar), then `desk_paint` (§26 — desktop icons sit on the desktop, under every window), then `dock_paint` (§30 — the dock strip sits on the desktop under every window, like the icons), menu bar, every visible window back→front (frame + white content + W_PAINT) — **except** one `wm_covered` answers yes about, which is skipped whole (§11.5). Caller holds gfx lock. |
 | `wm_content`   | in BX = win ptr; out AX = content left, DX = content top. WF_FULL set → AX = W_X, DX = W_Y (no border, no title bar — §11.2). |
 | `wm_sizable`   | in BX = win ptr, AL = 0 clear / non-zero set WF_SIZABLE. No repaint (the grow box appears at the next paint). UI-task context only (entry procs and window callbacks qualify); safe with or without the gfx lock there — every W_FLAGS writer runs on the UI task or under the lock. API slot 0x008C (§20.3). |
 | `wm_grow_paint`| in BX = win ptr (caller holds the gfx lock): draw the grow box **iff** BX is the frontmost visible window with WF_SIZABLE set and WF_FULL clear; a no-op otherwise, so it is always safe to call. wm_draw_win uses it after W_PAINT, and a resizable window's **self-initiated content repaint must end with it** — the white-fill idiom (§22) erases the corner, and without the call the box vanishes until the next full repaint while wm_hit still reports AL=4 there. Packages reach it through API slot 0x0094 (§20.3). |
@@ -1304,14 +1308,13 @@ full back-to-front pass — a whole-screen planar dither, the drive icons,
 the dock, the bar, and every visible window's frame and `W_PAINT` — was
 being paid to put one window on screen.
 
-Raising an **already visible** window through `wm_show` is the same
-argument (it moves up, so it can only cover more), which is why the path
-does not care whether the visible bit was already set. `wm_front` on its
-own still does the full pass, and so do `wm_hide` and `wm_destroy`: those
-three can **uncover** something, and what is underneath is not knowable
-from the window being moved.
+Raising an **already visible** window is the same argument — it moves up,
+so it can only cover more — so **`wm_front` shares this path**, through
+`wm_raise`. `wm_hide` and `wm_destroy` genuinely do uncover something, and
+they answer it with a damage rect rather than the whole screen (§11.5).
 
-Four things change on a show, and `wm_show` draws all four, in this order:
+Four things change when a window comes to the front, and `wm_raise` draws
+all four, in this order:
 
 1. **The menu bar** — `menu_activate` has just handed it to this window
    (§12), so `menu_draw_bar`. Safe unclipped: `wm_fit` floors every
@@ -1325,14 +1328,27 @@ Four things change on a show, and `wm_show` draws all four, in this order:
    then covers whatever of it it overlaps. `wm_top` is read **before** the
    visible bit goes on — `wm_create` has already appended the new window to
    `wm_zord`, so once it is visible `wm_top` answers with itself.
-4. **The window**, `wm_draw_win` with BP = itself, last and therefore on
-   top, drop shadow included.
+4. **The window**, last and therefore on top, drop shadow included — either
+   `wm_draw_win` (BP = itself) or, when only its rank changed, just
+   `wm_draw_title`. `wm_show` always draws the whole window: a newly
+   visible one has no pixels on screen. `wm_front` asks **`wm_obscured`
+   before `wm_lift`**, while the z-order still says what was on top: if
+   nothing was, then nothing of this window was hidden and the pinstripes
+   are the only thing the raise changes. That is the common case, because
+   a click on a background window's title bar comes through here.
 
-The desktop and its drive icons are deliberately not redrawn: showing a
-window cannot change them, and `desk_zone_redraw` (§26) already owns the
+The desktop and its drive icons are deliberately not redrawn: coming to the
+front cannot change them, and `desk_zone_redraw` (§26) already owns the
 one thing that can.
 
-**Two fallbacks to the full pass**, both structural:
+**`wm_front` on a window that is already frontmost repaints no window at
+all** — not even a title bar. It is not a no-op (`menu_activate`, the bar
+and the dock still run, because the caller may be re-asserting ownership),
+but nothing under the bar is touched. **`wm_front` on a window that is not
+visible** takes the full pass: `wm_show` is the entry point for that, and
+declining is better than drawing a hidden window.
+
+**Two fallbacks to the full pass**, both structural (`wm_fast_ok`):
 
 - Anything to do with a fullscreen window — `[wm_fs]` set, or the window
   itself carrying `WF_FULL` — because §11.2 suppresses the chrome entirely
@@ -1345,19 +1361,98 @@ one thing that can.
 
 **`wm_lift`** is the z-order move split out of `wm_front` so `wm_show` can
 reorder without committing to the repaint that used to be welded to it.
+**`wm_raise`** is the paint half both entry points share, and **`wm_fast_ok`**
+the eligibility test.
 
 **One consumer had to follow.** A file-manager window that posts a load
 draws `'Loading...'` in its status line while `[ld_pending]` is set (§22).
 The load clears the flag, and with `wm_show` no longer repainting anything
 but the window it put up, that line would sit stale. `files_poster`
 (§21 step 10) is the correction: `wm_clip_set` on the poster window, then
-`fm_repaint`, then `gfx_unlock` — one window's content, clipped to whatever
-of it the new window has not covered, which is exactly what §11.3 exists
-for. `fm_win_of` is the reverse of `fm_vp_set` it needs, because
-`[ld_pwin]` holds the poster's **state block** and not its window. It falls
-back to `files_refresh`'s full pass when there is no poster (a package
-asked for the load itself, §22.1), when `[fm_full]` says the caption
-changed too, or when the poster's window is no longer visible.
+`fm_status_only`, then `gfx_unlock` — one **line**, clipped to whatever of
+it the new window has not covered, which is exactly what §11.3 exists for.
+`fm_win_of` is the reverse of `fm_vp_set` it needs, because `[ld_pwin]`
+holds the poster's **state block** and not its window. It falls back to
+`files_refresh`'s full pass when there is no poster (a package asked for
+the load itself, §22.1), when `[fm_full]` says the caption changed too, or
+when the poster's window is no longer visible — and to `fm_repaint` when
+`fm_status_only` refuses (§22).
+
+The **other** end of the same round trip is `fm_onclick`'s double-click:
+posting a load turns the status line into `'Loading...'` and changes
+nothing else on screen, so it too draws one line rather than the window's
+whole content. A double-click on a *folder* still repaints everything —
+`fm_go` replaced the listing.
+
+### 11.5 Hiding, destroying and moving cost a rectangle, not a screen
+
+The mirror of §11.4. Hiding a window, destroying one and dragging one to a
+new place all **do** reveal — but only inside the rect the window vacated,
+and every pixel outside that rect is already correct on screen.
+`wm_paint_dmg` is that argument: in AX/BX/CX/DX, an inclusive damage rect;
+out, a screen as correct as `wm_paint_all` would have left it.
+
+```nasm
+wm_hide     damage = the window's frame rect, drop shadow included
+wm_destroy  same - and an EMPTY rect when the window was already hidden,
+            because its pixels went at the wm_hide and only the chrome is
+            owed (wm_paint_chrome). That is the second half of closing a
+            task-owned app (§29): close box hides, the worker destroys.
+ui_drag     damage = union(where it was, where it is) - the two overlap on
+            any short drag, and the union is still a fraction of a screen
+```
+
+What it draws, in `wm_paint_all`'s order so the layering is identical:
+
+1. the desktop dither, **clipped to the damage rect** and to the band below
+   the menu bar;
+2. every drive zone the rect touches (`desk_dmg_zones` / `desk_paint_mask`,
+   §26), drawn whole;
+3. the dock and the menu bar, **always** — both carry state that a hide or a
+   destroy has just changed (a tile leaves, the focus cue moves, the bar
+   may lose its owner);
+4. every window that needs it, back to front.
+
+**"Needs it" is a two-part rule, and the second part is what makes it
+safe.** A window is marked if its rect overlaps the damage — *and also* if
+it overlaps a window already marked below it, because that window is
+redrawn **whole** and would otherwise paint over this one. The marking pass
+runs bottom-to-top over `wm_zord`, so one pass reaches the whole transitive
+closure. Nothing in that pass may keep a loop counter in a general
+register: `wm_win_rect` writes all four.
+
+Two things are folded into the damage rect before the marking pass rather
+than special-cased inside it, and for the same reason in both cases —
+something is about to be drawn **whole** in a place a window might be:
+
+- a drive zone the rect touches (drawn whole: gray fill, icon, label);
+- the dock rows, but **only** when `wm_dock_clear` says a window hangs over
+  the strip. `wm_fit` keeps windows above it, so the usual case pays
+  nothing.
+
+**A wholly covered window is not drawn at all.** `wm_covered` seeds §11.3's
+region arithmetic with the **frame** rect instead of the content rect — a
+title bar peeking out is still a pixel this window owns — and subtracts
+every visible window above it. Empty means every pixel this window would
+write is written again by something later in `wm_zord`, whether that window
+is being redrawn in this pass or is merely still on screen, so a
+back-to-front painter may skip it. `wm_paint_all` uses it too. Overflow of
+the 16-rect list degrades the **opposite** way from `wm_clip_set`: not
+covered, i.e. draw it, because skipping on a maybe loses pixels.
+`wm_clip_occl` is the shared walk; the two callers differ only in the seed
+rect and in what an empty list means.
+
+The consequence a package author can see is that **`W_PAINT` does not run
+on a wholly covered window**. A paint proc must therefore be a repaint and
+nothing else — anything else it does has to tolerate being skipped. (This
+is *not* the old `wm_obscured` veto coming back: a **partly** covered
+window is redrawn in full, exactly as before.)
+
+**Promotion.** Hiding or destroying the frontmost window promotes whatever
+was under it, and the promotion is visible — the pinstripes and the two
+boxes belong to the front window alone (§11). After the marked windows are
+drawn, `wm_paint_dmg` asks `wm_top` again; if the answer was **not** redrawn
+in this pass, it owes exactly one `wm_draw_title` with DI = BP.
 
 ## 12. menu.inc
 
@@ -1782,7 +1877,10 @@ Loop forever:
      not a window, so wm_obscured does not protect it). On release (the
      loop exits with the outline drawn and the lock held): xor-erase the
      outline, update W_X/W_Y (clamp: title bar fully on screen,
-     y >= MBAR_H), call `wm_paint_all`, then gfx_unlock. Do **not** call
+     y >= MBAR_H), call `wm_paint_dmg` over the **union** of the rect it
+     left and the rect it now occupies (§11.5 — `wm_dmg_union` builds it),
+     then gfx_unlock. A drag that did not move the window still repaints
+     nothing at all. Do **not** call
      gfx_lock again in the release step — the lock is non-reentrant (§7)
      and task 0 already holds it; re-acquiring would deadlock the GUI.
    - grow box (AL=4, frontmost + WF_SIZABLE only, §11.1) → the **resize
@@ -3783,7 +3881,9 @@ on entry. Steps:
     success path has already published the status and drawn the new window
     itself (§11.4), and all that is left is the poster's own status line,
     which still reads `'Loading...'`: call `files_poster` instead, which
-    repaints that ONE window clipped to what is still visible of it.
+    repaints that ONE LINE of that one window, clipped to what is still
+    visible of it (`fm_status_only`, §22), and falls back to the window's
+    whole content only when a clip edge crosses the line.
 
 Closing a package instance follows whichever §29 path its I_TASK selects.
 With no worker it is the task-less path: locked wm_destroy + I_STATE ← 0 —
@@ -3887,6 +3987,25 @@ recursion) by escalating to `wm_paint_all` under the caller-held lock — the
 paid for a whole disk mount, so a full-screen repaint is not the expensive
 part of anything it joins. `files_init` zeroes it, so it is not a `.bss`
 read-before-write (§2.1).
+
+**The status line alone (`fm_status_only`).** The loader round trip changes
+exactly one line of text — `'Loading...'` on when the load is posted, off
+when it finishes — and both ends used to cost a whole `fm_repaint`: a white
+fill of the content plus every row, every icon, the header and the buttons,
+to correct eight pixel rows. `fm_draw_status` is that line split out of
+`fm_draw_core` (which still calls it, and still white-fills first);
+`fm_status_only` is the standalone version, which erases the line's own
+rect and redraws it. In SI = the window, out CF = 1 **refused**.
+
+The refusal is the §11.3 granularity rule, not caution. The erase is a fill
+(per-pixel clipping) and the text is glyphs (whole-cell clipping), so a clip
+edge crossing that rect would erase rows the text could not be put back
+into — the line would go **blank**, not stale. `wm_clip_test` on the whole
+rect answers it in one call, the `fr_status` idiom of §40.1, and CF = 1
+sends the caller back to `fm_repaint`, which is what it did before this
+existed. The status line's rect is the full content width at
+`fm_cy`+`fm_staty`, 8 rows: the scroll bar stops at `fm_listb`, two rows
+above it, so nothing else lives there.
 
 **Live layout (binding).** The window resizes, so nothing may bake in
 320×200: one helper, `fm_layout` (in BX = window ptr), computes the
@@ -4025,6 +4144,11 @@ Behaviour:
      [ui_click_t]−`FS_CLKT` < 9 (birth ticks, §10) → double-click:
      `fm_open_sel` (below). Else select it (`FS_SEL` =
      directory index), stamp `FS_CLKT`.
+     A double-click that posted a **load** (`[ld_pending]` non-zero on the
+     way back) exits through `fm_status_only` instead: the only thing it
+     changed on screen is `'Loading...'` in the status line. A double-click
+     on a **folder** still takes the full `fm_repaint` — `fm_go` replaced
+     the whole listing.
 
   A click also **cancels any edit mode** before anything else, on the same
   reasoning a Mac cancels an in-place rename when you click away.
@@ -4513,6 +4637,9 @@ on a white gap 2px around the text, centered in the zone.
 | symbol       | contract                                                    |
 |--------------|--------------------------------------------------------------|
 | `desk_paint` | draw every drive's icon + label; the selected one (desk_sel) gets `gfx_xor_fill` over its hit zone. Called by wm_paint_all after the desktop fill (lock held by caller). |
+| `desk_zone_rect` | in AL = zone index; out AX,BX,CX,DX = that zone's **drawn** rect, inclusive — `[vid_desk_zl]`..`[vid_desk_zr]`−1 horizontally, so the label's 2px overhang each side is inside it, not the 48px hit zone. Clobbers all four. |
+| `desk_dmg_zones` | in `[wm_dmg_*]` (§11.5); out AL = bit n set = zone n is inside the damage rect, **and the damage rect grown to cover every one of them**. The growth is not slack: a zone is redrawn whole, so a window sitting over it has to be marked too. |
+| `desk_paint_mask` | in AL = the bitmask `desk_dmg_zones` returned; draw those zones. All registers preserved. |
 | `desk_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window and `dock_click` declined the click, §30). Zone hit: if same zone as desk_sel and [ui_click_t]−desk_clkt < 9 (birth ticks, §10) → clear the selection and call `files_open_drive` with AL = drive. Else select it, stamp desk_clkt. Miss: clear any selection. All its own drawing (selection flips) happens under gfx_lock/gfx_unlock acquired internally, redrawing only the affected zones — EXCEPT when a visible window overlaps a zone's drawn rect (x `[vid_desk_zl]`..`[vid_desk_zr]`−1 = zx−2..zx+49 with the label overhang — 582..633 at 640 wide, §39.2 — window rect incl. the 1px shadow): a partial redraw would paint desktop over that window, so the flip falls back to a full wm_paint_all under the same lock. |
 
 Selection is purely visual bookkeeping; a window covering an icon simply
@@ -5050,10 +5177,19 @@ cursor — UI task only). All zeroed by `inst_init`.
 ## 30. dock.inc — the dock strip
 
 A taskbar-style strip along the bottom of the screen showing one tile per
-**running** instance (I_STATE = 1, §29), built-in or package. Minimized
-instances stay in the dock with an inverted tile; clicking a tile restores
-a minimized instance (`inst_restore`) or fronts a visible one (`wm_front`).
-Label prefix `dock_`. The dock is not exposed to packages.
+**running** instance (I_STATE = 1, §29), built-in or package. Clicking a
+tile restores a minimized instance (`inst_restore`) or fronts a visible one
+(`wm_front`). Label prefix `dock_`. The dock is not exposed to packages.
+
+A tile carries **two independent states**, drawn as two different kinds of
+mark on purpose. **Minimized** (I_FLAGS bit0) inverts the tile's interior —
+the app is not on screen at all. **Active** — the instance that owns the
+frontmost visible window (`wm_top` → `inst_win_owner`, resolved once per
+`dock_paint` into `[dock_act]`) — doubles the tile's border instead. They
+are mutually exclusive in practice, since a minimized window is not visible
+and so cannot be frontmost, but nothing depends on that; and a heavier
+border survives the reduction to three inks (§39.4) where a second colour
+would not.
 
 ### Geometry (pinned)
 
@@ -5077,9 +5213,11 @@ mapping**, holes stay; quitting one instance never moves another's tile):
 row `[vid_dock_ty0]`; the instance's 16×16 icon body (`I_ICON`, via
 `icon_draw16`) at (x+4, `[vid_dock_ty0]`+2); I_ICON = 0 → the generic `ico_app16` **body** (the
 library record's data at `ico_app16+2` — icon_draw16 takes a header-less
-body, §25). Minimized (I_FLAGS bit0): `gfx_xor_fill` over the tile
-interior (x+1..x+DOCK_TILE_W−2, rows `[vid_dock_ty0]`+1 through
-`[vid_dock_ty0]`+DOCK_TILE_H−2).
+body, §25). Active (the tile's record == `[dock_act]`): a second 1px black
+`gfx_frame` one pixel inside the first, x+1..x+DOCK_TILE_W−2, rows
+`[vid_dock_ty0]`+1 through `[vid_dock_ty0]`+DOCK_TILE_H−2 — the icon body
+sits at (+4,+2) and 16×16, so it clears both new edges. Minimized (I_FLAGS
+bit0): `gfx_xor_fill` over that same interior rect.
 
 The dock renders ONLY records read as I_STATE = 1 during the same lock
 hold (§29.2 rule 3); dying records are skipped, so a closing instance's
@@ -5094,8 +5232,10 @@ tile vanishes with the `wm_hide` repaint. Icon pointers must satisfy
 | `dock_paint` | draw the rule, the strip and every live instance's tile. Called by wm_paint_all after `desk_paint`, before the menu bar and windows (lock held by caller) — windows cover the dock exactly like desktop icons (§26). |
 | `dock_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window, BEFORE desk_click). Out: CF=1 = consumed (any click with y ≥ `[vid_dock_y0]` — strip background clicks are consumed no-ops), CF=0 = not in the dock. Tile hit on a live instance: minimized → gfx_lock, `inst_restore`, gfx_unlock; else → gfx_lock, `wm_front` on I_WIN, gfx_unlock. Single click activates; no double-click logic. |
 
-Every dock-state transition (launch, quit, minimize, restore) rides a
-`wm_show`/`wm_hide`/`wm_destroy` full repaint, so dock_paint needs no
+Every dock-state transition (launch, quit, minimize, restore) — and every
+change of the ACTIVE tile, which is every raise — rides a `wm_show`,
+`wm_front`, `wm_hide` or `wm_destroy` repaint, all four of which call
+`dock_paint` unconditionally (§11.4/§11.5). So dock_paint needs no
 partial-redraw path; if a future teardown path ever changes dock state
 without a repainting wm_* call, it must add a desk_zone_redraw-style
 partial redraw (overlap check against all windows, full wm_paint_all
