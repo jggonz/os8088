@@ -89,8 +89,8 @@ pre-empted background task, updating live while the user types or drags).
 | 0x20000       | 0x2000  | `SAVE_SEG` — save-under heap (menus), raw, via ES; **extent pinned to 0x20000..0x2BFFF** (§2.2) |
 | 0x2C000       | 0x2C00  | `VIEW_SEG` — per-window file-manager listing cache, 4 × 4KB slots (§22.1); raw, via **ES only** |
 | 0x30000       | 0x3000  | `SND_SEG` — sound buffers (§34): SB DMA double buffer, record ring, sample staging pool; raw, via **ES only** (§2.2) |
-| 0x40000       | 0x4000  | `BB_SEG` — double-buffer back buffer, 4 planes × 0x9600 bytes (§32); touched only while the Control Panel's Display page has it switched on, which needs conventional RAM ≥ `DB_MIN_KB` |
-| 0x66000       | 0x6600  | **not kernel memory**: `apps/paint` claims four 64KB windows here (canvas, undo image, clipboard, scratch) when int 12h reports ≥ 620KB — see §40 and `docs/PAINT-NOTES.md`. Nothing in the kernel may take 0x66000..0x9FFFF without retiring that claim |
+| 0x40000       | 0x4000  | `BB_SEG` — double-buffer back buffer, 4 planes × 0x9600 bytes (§32); touched only while the Control Panel's Display page has it switched on, which needs a colour adapter and conventional RAM ≥ `DB_MIN_KB`. **When either is missing, `apps/paint` claims this block instead of 0x66000** (§41), because nothing else in the tree can ever touch it |
+| 0x66000       | 0x6600  | **not kernel memory**: `apps/paint` claims from here up to the top of conventional memory (canvas, undo image, clipboard, scratch), sized from int 12h — see §41 and `docs/PAINT-NOTES.md`. On a machine where the back buffer above can never be armed it starts at `BB_SEG` instead, 150KB lower. Nothing in the kernel may take 0x66000..0x9FFFF without retiring that claim |
 | 0xA0000       | 0xA000  | VGA planar framebuffer, 80 bytes/row               |
 | 0xB0000       | 0xB000  | Hercules framebuffer, 4 banks × 0x2000, 90 bytes/row (§39) — mono adapters only |
 | 0xB8000       | 0xB800  | CGA framebuffer, 2 banks × 0x2000, 80 bytes/row (§39) — mono adapters only |
@@ -7007,10 +7007,23 @@ allow, from 32x16 up, and everything else follows from that:
   base with no staging pass — *provided the whole file fits 64KB*, which is
   `dskw_write`'s ceiling (§18.4). A larger canvas can be edited but not
   saved, and Paint says so rather than writing a truncated file.
+- **The canvas base is one of two segments.** Normally 0x66000, the first
+  paragraph above the four back-buffer planes. But `bb_init` sets `[bb_avail]`
+  only on a colour adapter with `DB_MIN_KB` (500) or more (§32), and when it
+  does not, those 150KB at `BB_SEG` are dead for the whole session — no
+  `bb_set` can ever arm them — so `pt_geom` puts the canvas there instead
+  (`[pt_base]`, mirroring the kernel's own floor and its mono test). It is worth
+  a tier or two on every small machine: 460KB goes from *no undo, no clipboard,
+  448x166* to the **full** app at 448x280, and the floor for running at all
+  drops from about 452KB to about 300KB. Reading a kernel policy constant from
+  a package is a coupling and is called out as one in
+  `docs/PAINT-NOTES.md` — an allocator the kernel owned would retire it, and
+  `bb_set` could then refuse on a conflict instead of the app having to predict
+  it.
 - **Memory is budgeted from int 12h at startup, in three tiers.** Scratch (the
   claim record and the flood-fill span stack, 12KB) comes off the top of usable
-  memory, and what is left above 0x66000 is divided in the order the features
-  are worth least. With room for all three, the canvas and its equally-sized
+  memory, and what is left above `[pt_base]` is divided in the order the
+  features are worth least. With room for all three, the canvas and its equally-sized
   undo image split what remains after a 16KB clipboard floor — a 101KB canvas
   ceiling on a 640KB machine. Below that the **clipboard** goes first
   (`[pt_haveclip]` = 0: no Cut/Copy/Paste, and no GIF either — the codec's

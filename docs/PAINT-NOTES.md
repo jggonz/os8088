@@ -45,10 +45,28 @@ canvas is 60KB. Nothing is a fixed size any more: `pt_geom` divides what int
 double buffering underneath the app with no effect. Nothing else in the tree
 touches memory above 0x40000.
 
+**Except when it never will.** `bb_init` sets `[bb_avail]` only on a colour
+adapter with `DB_MIN_KB` (500) KB or more, and nothing can arm the buffer
+without it — so on a smaller machine, or any 1bpp adapter, those 150KB at
+`BB_SEG` are dead for the entire session. Paint therefore starts at `BB_SEG`
+in that case, and it is worth a tier or two everywhere it applies: a 460KB
+machine goes from *no undo, no clipboard, 448×166* to the full app at 448×280,
+and the floor for running at all drops from about 452KB to about 300KB.
+
+That is the app reading a kernel *policy* constant, and it is the least
+defensible thing in this file. It is correct today and it is checked in the one
+place the kernel states it — but if `DB_MIN_KB` ever drops, or `bb_init` grows a
+third way to succeed, Paint will be sitting inside the back buffer's planes and
+the failure will look like random corruption during a Control Panel toggle. The
+next paragraph is what would make that impossible rather than merely unlikely.
+
 Three consequences are handled rather than hoped about:
 
 - **The memory may not be there.** `pt_entry` asks int 12h first and gives up
-  features rather than refusing outright: below about 499KB the clipboard goes
+  features rather than refusing outright. The thresholds below are for a
+  machine whose back buffer is live; where it is not, the base drops to
+  `BB_SEG` and every one of them moves down by 150KB. Below about 499KB the
+  clipboard goes
   (no Cut/Copy/Paste, and no GIF — the LZW tables are what the clipboard's
   reserved floor is for), and below about 483KB undo goes too, along with the
   ability to resize the canvas, since `pt_resize` stages the old picture in the
@@ -95,14 +113,35 @@ so the app corrects it afterwards and pays one `OSAPI_WM_FRONT` to put the
 corrected frame up. A resize callback that could return "refused" would be the
 clean version, and would cost nothing; see the smaller gaps below.
 
-**What the kernel should provide for the memory:** a slot in the API table —
-`alloc(paragraphs) → segment` / `free(segment)`, stamped with the calling
-instance and force-freed by `inst_release` the way sound grants already are
-(SPEC.md §34.6 verb 7 is the exact precedent, including the teardown fence).
-The allocator itself is a handful of records; what matters is that the
-*kernel* owns the map, so two packages cannot pick the same address and the
-Task Manager can bill it. `docs/MEMORY-PLAN.md` Step D (packages into their
-own segments) is the adjacent step and would want the same allocator.
+**What the kernel should provide for the memory.** The whole of this section
+exists because there is no way to ask. What is missing is small and it is one
+thing, not several:
+
+- **`alloc(paragraphs) → segment` and `free(segment)`**, stamped with the
+  calling instance and force-freed by `inst_release` the way sound grants
+  already are (SPEC.md §34.6 verb 7 is the exact precedent, including the
+  teardown fence). The allocator itself is a handful of records; what matters
+  is that the *kernel* owns the map, so two packages cannot pick the same
+  address, an app cannot outlive its claim, and the Task Manager can bill it —
+  Paint's quarter-megabyte is invisible in its RAM figure today.
+- **A `largest_free` query**, so an app can size itself to what is actually
+  there instead of dividing an int 12h figure and hoping nothing else wants
+  any. Paint's three tiers are that arithmetic done blind.
+- **And the reciprocal half, which is the part usually forgotten: the same map
+  has to govern the kernel's own speculative uses of RAM.** `bb_set` should ask
+  the allocator for `BB_SEG`'s 150KB when double buffering is switched on and
+  **refuse if a package already holds it** — the Control Panel would then say
+  "not available while Paint is open" instead of the app having to predict, from
+  a constant it should not be reading, whether the kernel is ever going to want
+  that block. Reserved-but-unarmed regions are the same problem in the other
+  direction: a package cannot tell "spoken for" from "dead", and 150KB of dead
+  RAM is the difference between running on a 320KB machine and refusing to
+  start.
+
+With those three, every liberty in this section reduces to two API calls and
+the memory map stops being a thing two pieces of software have to agree about
+by reading each other's source. `docs/MEMORY-PLAN.md` Step D (packages into
+their own segments) is the adjacent step and wants the same allocator.
 
 ## The three capabilities whose absence cost the most
 

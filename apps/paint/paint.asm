@@ -133,8 +133,15 @@
 ; fixed size: the picture, its undo image and the clipboard are three
 ; runtime-sized buffers, and how big a picture the machine can hold is one
 ; division. Only the base is a constant.
-PT_BASE     equ 0x6600              ; canvas base segment - the first paragraph
-                                    ; above BB_SEG's four planes
+; The canvas base is one of two segments, chosen at startup by [pt_base]:
+PT_BASE_HI  equ 0x6600              ; the first paragraph above BB_SEG's four
+                                    ; back-buffer planes - the safe answer
+PT_BASE_LO  equ 0x4000              ; BB_SEG itself, when the kernel can never
+                                    ; arm a back buffer to put there (below)
+PT_BB_KB    equ 500                 ; kernel/kernel.asm's DB_MIN_KB, mirrored:
+                                    ; bb_init refuses below it, and on any 1bpp
+                                    ; adapter, so in either case those 150KB are
+                                    ; dead and worth more to us (SPEC.md 41.8)
 PT_SC_KB    equ 12                  ; scratch (claim record + fill stack), taken
                                     ; off the TOP of usable memory so its
                                     ; address is deterministic for the claim
@@ -359,12 +366,28 @@ pt_geom:
     jbe .kb_ok
     mov ax, PT_MEMTOP
 .kb_ok:
+    ; --- where the canvas starts, which is the whole low-RAM story -----------
+    ; The kernel's four back-buffer planes occupy 0x40000..0x657FF, but bb_init
+    ; only claims them on a colour adapter with DB_MIN_KB or more (SPEC.md 32).
+    ; When it cannot, nothing in the tree touches that 150KB - and 150KB is the
+    ; difference between a 300KB machine running this program and not. Reading
+    ; the kernel's own floor is a coupling, and docs/PAINT-NOTES.md says what
+    ; would retire it.
+    mov word [pt_base], PT_BASE_HI
+    cmp ax, PT_BB_KB
+    jae .basefix
+    mov word [pt_base], PT_BASE_LO
+.basefix:
+    cmp byte [pt_mono], 0           ; ...and a 1bpp adapter never gets one at all
+    je .based
+    mov word [pt_base], PT_BASE_LO
+.based:
     sub ax, PT_SC_KB
     jbe .nomem
     mov cl, 6
     shl ax, cl                      ; KB -> paragraphs, at most 40,192
     mov [pt_scseg], ax              ; scratch: the claim record + fill stack
-    sub ax, PT_BASE
+    sub ax, [pt_base]
     jbe .nomem
     mov byte [pt_haveundo], 1
     mov byte [pt_haveclip], 1
@@ -386,7 +409,7 @@ pt_geom:
                                     ; memory is canvas, so the picture is bigger
 .split:
     mov [pt_smaxp], ax
-    mov dx, PT_BASE
+    mov dx, [pt_base]
     add dx, ax
     mov [pt_unseg], dx              ; the undo image, one whole canvas up
     add dx, ax
@@ -590,8 +613,8 @@ pt_layout:
     shr dx, cl
     pop cx
     or ax, dx
-    add ax, PT_BASE
-    mov [pt_rowseg+bx], ax          ; ...whose segment is PT_BASE + off>>4
+    add ax, [pt_base]
+    mov [pt_rowseg+bx], ax          ; ...whose segment is [pt_base] + off>>4
     sub si, [pt_stride]             ; one row up in the file is one row down
     sbb di, 0                       ; in the picture
     inc bx
@@ -785,7 +808,7 @@ pt_bmp_hdr:
     push si
     push di
     push es
-    mov ax, PT_BASE
+    mov ax, [pt_base]
     mov es, ax
     xor di, di
     mov ax, [pt_ch]
@@ -4754,11 +4777,14 @@ pt_oncmd:
     call pt_msg_show
     ret
 .save_go:
-    call pt_save                    ; pt_save only SETS the toast: the dialog's
+    mov si, pt_s_saving
+    call pt_msg_show
+    call pt_wait                    ; let it reach the glass before we go quiet
+    call pt_save                    ; pt_save only SETS its toast: the dialog's
     mov si, [pt_msgp]               ; completion callback is what shows it on the
     or si, si                       ; Save As path, and this path has none
     jz .out
-    call pt_msg_show
+    call pt_msg_show                ; (which hides "Saving..." on the way in)
     ret
 .open:
     mov al, FDLG_OPEN
@@ -5365,7 +5391,7 @@ pt_orowset:
     mov cl, 4
     shr dx, cl
     or ax, dx
-    add ax, PT_BASE
+    add ax, [pt_base]
     add ax, [pt_undelta]            ; ...in the undo image
     mov es, ax
     mov [pt_orseg], ax
@@ -5504,6 +5530,9 @@ pt_ondlg:
     call pt_load
     jmp short .draw
 .save:
+    mov si, pt_s_saving             ; and a write is no quicker than a read: a
+    call pt_msg_show                ; GIF encodes 125,000 pixels before the
+    call pt_wait                    ; floppy even starts
     call pt_save
 .draw:
     cmp byte [pt_wchg], 0           ; a load that resized the window has to
@@ -5560,7 +5589,7 @@ pt_save:
     jnz .toobig
     mov cx, ax
     call pt_bmp_hdr                 ; re-stamp it: the live size is the truth
-    mov ax, PT_BASE
+    mov ax, [pt_base]
     mov es, ax
     xor bx, bx                      ; ES:BX = the DIB, header and all
     call OSAPI_FILE_WRITE           ; SI is still the name
@@ -7357,6 +7386,7 @@ pt_gstep:     db 8, 8, 4, 2         ; the interlaced row passes: step...
 pt_gstart:    db 0, 4, 2, 1         ; ...and where each one starts
 pt_s_crop:   db 'Would crop artwork - erase it first', 0
 pt_s_loading: db 'Loading...', 0
+pt_s_saving: db 'Saving...', 0
 pt_s_wlab:   db 'W', 0
 pt_s_hlab:   db 'H', 0
 pt_s_apply:  db 'Apply', 0
@@ -7731,6 +7761,7 @@ pt_ic_text:
     PTBYTE pt_wchg                  ; the window was resized: repaint the lot
     PTBYTE pt_kept                  ; a resize was refused to save the artwork
     PTBYTE pt_apend                 ; ...and the notice for it is owed
+    PTWORD pt_base                  ; PT_BASE_HI or PT_BASE_LO (SPEC.md 41.8)
     PTBYTE pt_haveundo              ; this machine can fund an undo image...
     PTBYTE pt_haveclip              ; ...and a clipboard (SPEC.md 41.8)
     PTBYTE pt_fbox                  ; the size box with the keyboard, 0 = none
