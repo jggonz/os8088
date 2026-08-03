@@ -922,6 +922,105 @@ files_refresh:
     ret
 
 ; -----------------------------------------------------------------------------
+; fm_win_of - the visible window that owns the state block in [ld_pwin]
+; in:  nothing ([ld_pwin])
+; out: BX = its window ptr, CF = 0; CF = 1 = no visible window owns it
+; clobbers: nothing else (flags)
+;
+; The reverse of fm_vp_set, and it exists because [ld_pwin] is the poster's
+; STATE BLOCK (SPEC.md 22.1) - the loader needs the block, files_poster
+; needs the window. Walking wm_zord rather than wm_wins means a window that
+; has been closed or hidden since the load was posted simply is not found,
+; which is the answer that path wants anyway.
+; -----------------------------------------------------------------------------
+fm_win_of:
+    push ax
+    push cx
+    push si
+    push di
+    mov si, wm_zord
+    mov cl, [wm_zn]
+    xor ch, ch
+    jcxz .no
+.scan:
+    mov al, [si]
+    inc si
+    call wm_idx2ptr             ; BX = window ptr; CX preserved
+    test word [bx+W_FLAGS], 2
+    jz .next
+    push cx
+    call inst_win_owner         ; DI = its instance record, or 0
+    pop cx
+    or di, di
+    jz .next
+    mov di, [di+I_SPTR]
+    cmp di, [ld_pwin]
+    je .found
+.next:
+    loop .scan
+.no:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    xor bx, bx
+    stc
+    ret
+.found:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; files_poster - repaint JUST the window that posted a load (loader_run)
+; in:  nothing ([ld_pwin]); no lock held on entry
+; out: nothing
+; clobbers: nothing (flags only)
+;
+; The window that posted the load has "Loading..." in its status line, drawn
+; because [ld_pending] was set (SPEC.md 22). The load clears it, and since
+; SPEC.md 11.4 the successful path's wm_show draws only the window it just
+; put up - so that one line would sit there stale until something else
+; repainted. This is the cheap correction: one window's content, and the
+; SPEC.md 11.3 clip region is what makes it safe to draw a window that the
+; new one may now be sitting on top of.
+;
+; [fm_full] and a poster-less load (a package asking for one, SPEC.md 22.1)
+; both fall back to the whole screen: the first because the caption changed
+; and fm_repaint would escalate to wm_paint_all anyway - which under an
+; armed clip would be clipped to one window's content rect - and the second
+; because there is no window to aim at.
+; -----------------------------------------------------------------------------
+files_poster:
+    push ax
+    push bx
+    push si
+    cmp word [ld_pwin], 0
+    je .full
+    cmp byte [fm_full], 0
+    jne .full
+    call fm_win_of              ; [ld_pwin] is a STATE BLOCK, not a window
+    jc .full                    ; ptr - its window has gone since it posted
+    call gfx_lock
+    call wm_clip_set            ; CF = 1: none of it is visible any more
+    jc .unlock
+    mov si, bx
+    call fm_repaint
+.unlock:
+    call gfx_unlock             ; ...which also disarms the clip
+    jmp short .out
+.full:
+    call files_refresh
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; fm_layout - derive every layout value from the live window record
 ; in:  BX = window ptr
 ; out: nothing (all registers preserved); fills the fm_* layout scratch

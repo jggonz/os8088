@@ -433,13 +433,127 @@ wm_destroy:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_show - make a window visible, raise it, repaint everything
+; wm_show - make a window visible, raise it, and draw JUST it (SPEC.md 11.4)
 ; in:  BX = window ptr (caller holds the gfx lock)
 ; out: nothing (all registers preserved)
+;
+; Showing a window is the one z-order change that REVEALS NOTHING. The
+; window lands on top, so every pixel that changes is either its own or
+; chrome it does not cover; everything already on screen either stays as it
+; is or gets drawn over. That makes the full back-to-front pass avoidable,
+; and the pass is expensive: a 640x480 planar desktop dither plus every
+; visible window's frame and W_PAINT, to put one window on screen.
+;
+; Raising an ALREADY visible window is the same argument - it moves up, so
+; it can only cover more - which is why this path does not care whether the
+; visible bit was already set. wm_front on its own still does the full pass,
+; because a raise there is reached from a click that may also have to
+; UNCOVER something, and that is genuinely unknown.
+;
+; Four things change and all four are drawn here:
+;   - the menu bar, because menu_activate just handed it to this window;
+;   - the dock, because the instance that owns this window may be new;
+;   - the OUTGOING front window's title bar, which loses its pinstripes and
+;     its two boxes to us (wm_draw_title, drawn BEFORE us so we cover it);
+;   - the window itself, drawn last and therefore on top.
+;
+; The desktop and its drive icons are deliberately not redrawn: showing a
+; window cannot change them, and desk_zone_redraw (SPEC.md 26) already owns
+; the one thing that can.
+;
+; It falls back to the full pass in the two cases where "nothing else moved"
+; stops being true: anything to do with a fullscreen window (SPEC.md 11.2
+; suppresses the chrome entirely), and a visible window whose frame or drop
+; shadow hangs over the dock strip, where dock_paint would draw on top of a
+; window instead of under it.
 ; -----------------------------------------------------------------------------
 wm_show:
+    test word [bx+W_FLAGS], WF_FULL
+    jnz .slow
+    cmp word [wm_fs], 0
+    jne .slow
+    call wm_dock_clear
+    jc .slow
+
+    push ax
+    push bx
+    push bp
+    push di
+    mov di, bx                  ; DI = the window being shown
+    call wm_top                 ; BX = the OUTGOING front window (0 if none).
+    mov bp, bx                  ; BEFORE the visible bit goes on: wm_create
+    mov bx, di                  ; already appended us to wm_zord, so once we
+    or word [bx+W_FLAGS], 2     ; are visible wm_top answers with US
+    call menu_activate          ; BX owns the menu bar from here (SPEC.md 12)
+    call wm_lift                ; ...and the top of the z-order
+    call menu_draw_bar
+    call dock_paint
+    cmp bp, di
+    je .self                    ; already the front window: no outgoing one
+    or bp, bp
+    jz .self
+    xchg bp, di                 ; DI = the outgoing front, BP = the incoming
+    call wm_draw_title          ; DI != BP now, so it loses its stripes
+    xchg bp, di
+.self:
+    mov bx, di
+    mov bp, di                  ; we ARE the front window now
+    call wm_draw_win
+    pop di
+    pop bp
+    pop bx
+    pop ax
+    ret
+.slow:
     or word [bx+W_FLAGS], 2
     jmp wm_front                ; raise + repaint; same register contract
+
+; -----------------------------------------------------------------------------
+; wm_dock_clear - is the dock strip free of window pixels?
+; in:  nothing
+; out: CF = 0 = no visible window's frame or drop shadow reaches the dock
+; clobbers: nothing else (flags)
+;
+; wm_fit keeps a window above the dock, but ui_grow's own clamp is looser
+; (it stops at the screen edge), so a grown window CAN hang over it. Where
+; that happens the dock has to be drawn before that window and the cheap
+; path cannot order it, so it declines instead.
+; -----------------------------------------------------------------------------
+wm_dock_clear:
+    push ax
+    push bx
+    push cx
+    push si
+    mov si, wm_zord
+    mov cl, [wm_zn]
+    xor ch, ch
+    jcxz .clear
+.scan:
+    mov al, [si]
+    inc si
+    call wm_idx2ptr
+    test word [bx+W_FLAGS], 2
+    jz .next
+    mov ax, [bx+W_Y]
+    add ax, [bx+W_H]            ; the drop shadow's own row, y+h
+    cmp ax, [vid_dock_y0]
+    jae .dirty
+.next:
+    loop .scan
+.clear:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.dirty:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
 
 ; -----------------------------------------------------------------------------
 ; wm_hide - clear the visible bit and repaint everything
@@ -560,6 +674,18 @@ wm_fullscreen:
 ; -----------------------------------------------------------------------------
 wm_front:
     call menu_activate          ; BX owns the menu bar from here (SPEC.md 12)
+    call wm_lift
+    jmp wm_paint_all            ; tail call; same register contract
+
+; -----------------------------------------------------------------------------
+; wm_lift - move a window to the top of the z-order, drawing nothing
+; in:  BX = window ptr
+; out: nothing (all registers preserved)
+;
+; Split out of wm_front so wm_show can reorder without committing to the
+; full repaint that used to be welded to it.
+; -----------------------------------------------------------------------------
+wm_lift:
     push ax
     push cx
     push si
@@ -569,14 +695,14 @@ wm_front:
     div cl                      ; AL = index (AH = 0: ptr is record-aligned)
     mov ch, 0
     mov cl, [wm_zn]
-    jcxz .paint                 ; empty z-order: nothing to reorder
+    jcxz .out                   ; empty z-order: nothing to reorder
     mov si, wm_zord
 .find:
     cmp [si], al
     je .lift
     inc si
     loop .find
-    jmp .paint                  ; not found (cannot happen for a used window)
+    jmp short .out              ; not found (cannot happen for a used window)
 .lift:
     dec cx                      ; entries above us; shift them back one slot
     jcxz .place
@@ -587,8 +713,7 @@ wm_front:
     loop .shift
 .place:
     mov [si], al                ; and we land on top
-.paint:
-    call wm_paint_all
+.out:
     pop si
     pop cx
     pop ax
@@ -1299,71 +1424,24 @@ wm_idx2ptr:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_draw_win - draw one window's frame and content (module internal)
-; in:  BX = window ptr (visible), BP = frontmost visible window ptr (or 0)
-; out: nothing (all registers preserved; caller holds the gfx lock)
+; wm_draw_title - one window's title bar, in the form its rank calls for
+; in:  DI = window ptr, BP = the frontmost visible window (or 0); gfx lock
+;      held by the caller
+; out: nothing (all registers preserved)
 ;
-; Exact frame per SPEC.md 11: 1px black outline; drop shadow offset (+1,+1)
-; along the right and bottom edges; title bar rows W_Y+1..W_Y+TITLE_H-2
-; white; frontmost window gets 6 black pinstripes inset 3px, an 11x11
-; close box at W_X+8, rows W_Y+4..W_Y+14, and an 11x11 minimize box
-; mirrored at W_X+W_W-19 with a collapse bar across row W_Y+9 - stripes
-; broken by white 2px around each box and 6px around the centered black
-; title; black separator at row W_Y+TITLE_H-1; content white-filled, then
-; W_PAINT is called with SI=window - bracketed by task_cycles/inst_charge so
-; the paint is billed to the window's instance, not to the painting task
-; (SPEC.md 8.1/28).
+; Split out of wm_draw_win because it is the ONLY part of a window that
+; changes when some OTHER window is raised: the pinstripes, the close box
+; and the minimize box belong to the frontmost window alone (DI == BP), so
+; the outgoing front window needs exactly this rect redrawn and nothing
+; else. wm_show's fast path (SPEC.md 11.4) is the caller that cares; every
+; other path reaches it through wm_draw_win and never notices.
 ; -----------------------------------------------------------------------------
-wm_draw_win:
+wm_draw_title:
     push ax
     push bx
     push cx
     push dx
     push si
-    push di
-    mov di, bx                  ; DI = window ptr for the duration
-
-    test word [di+W_FLAGS], WF_FULL
-    jz .chrome                  ; fullscreen: no chrome at all - the whole
-    mov byte [gfx_color], CWHITE; frame is content, white-filled, then
-    mov ax, [di+W_X]            ; W_PAINT (SPEC.md 11.2)
-    mov bx, [di+W_Y]
-    mov cx, ax
-    add cx, [di+W_W]
-    dec cx
-    mov dx, bx
-    add dx, [di+W_H]
-    dec dx
-    call gfx_fill
-    jmp .paint
-
-.chrome:
-    mov byte [gfx_color], CBLACK
-    mov ax, [di+W_X]            ; 1px outline around the whole frame
-    mov bx, [di+W_Y]
-    mov cx, ax
-    add cx, [di+W_W]
-    dec cx
-    mov dx, bx
-    add dx, [di+W_H]
-    dec dx
-    call gfx_frame
-
-    mov ax, [di+W_X]            ; drop shadow, right edge: x+w, y+1..y+h
-    add ax, [di+W_W]
-    mov bx, [di+W_Y]
-    inc bx
-    mov dx, [di+W_Y]
-    add dx, [di+W_H]
-    call gfx_vline
-    mov ax, [di+W_X]            ; drop shadow, bottom edge: y+h, x+1..x+w
-    inc ax
-    mov bx, [di+W_X]
-    add bx, [di+W_W]
-    mov dx, [di+W_Y]
-    add dx, [di+W_H]
-    call gfx_hline
-
     mov byte [gfx_color], CWHITE
     mov ax, [di+W_X]            ; title bar interior, 16 white rows
     inc ax
@@ -1462,7 +1540,7 @@ wm_draw_win:
 .title:
     mov si, [di+W_TITLE]        ; centered title on a 6px white gap
     test si, si
-    jz .content
+    jz .out                     ; no title string: nothing more to draw
     push es                     ; the title is the OWNER's string, so it is
     call wm_strseg              ; read through ES: the package's segment for
     call font_width_x           ; a package window, ours for everything else
@@ -1490,6 +1568,81 @@ wm_draw_win:
     call wm_strseg
     call font_str_x
     pop es
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_draw_win - draw one window's frame and content (module internal)
+; in:  BX = window ptr (visible), BP = frontmost visible window ptr (or 0)
+; out: nothing (all registers preserved; caller holds the gfx lock)
+;
+; Exact frame per SPEC.md 11: 1px black outline; drop shadow offset (+1,+1)
+; along the right and bottom edges; title bar rows W_Y+1..W_Y+TITLE_H-2
+; white; frontmost window gets 6 black pinstripes inset 3px, an 11x11
+; close box at W_X+8, rows W_Y+4..W_Y+14, and an 11x11 minimize box
+; mirrored at W_X+W_W-19 with a collapse bar across row W_Y+9 - stripes
+; broken by white 2px around each box and 6px around the centered black
+; title; black separator at row W_Y+TITLE_H-1; content white-filled, then
+; W_PAINT is called with SI=window - bracketed by task_cycles/inst_charge so
+; the paint is billed to the window's instance, not to the painting task
+; (SPEC.md 8.1/28).
+; -----------------------------------------------------------------------------
+wm_draw_win:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov di, bx                  ; DI = window ptr for the duration
+
+    test word [di+W_FLAGS], WF_FULL
+    jz .chrome                  ; fullscreen: no chrome at all - the whole
+    mov byte [gfx_color], CWHITE; frame is content, white-filled, then
+    mov ax, [di+W_X]            ; W_PAINT (SPEC.md 11.2)
+    mov bx, [di+W_Y]
+    mov cx, ax
+    add cx, [di+W_W]
+    dec cx
+    mov dx, bx
+    add dx, [di+W_H]
+    dec dx
+    call gfx_fill
+    jmp .paint
+
+.chrome:
+    mov byte [gfx_color], CBLACK
+    mov ax, [di+W_X]            ; 1px outline around the whole frame
+    mov bx, [di+W_Y]
+    mov cx, ax
+    add cx, [di+W_W]
+    dec cx
+    mov dx, bx
+    add dx, [di+W_H]
+    dec dx
+    call gfx_frame
+
+    mov ax, [di+W_X]            ; drop shadow, right edge: x+w, y+1..y+h
+    add ax, [di+W_W]
+    mov bx, [di+W_Y]
+    inc bx
+    mov dx, [di+W_Y]
+    add dx, [di+W_H]
+    call gfx_vline
+    mov ax, [di+W_X]            ; drop shadow, bottom edge: y+h, x+1..x+w
+    inc ax
+    mov bx, [di+W_X]
+    add bx, [di+W_W]
+    mov dx, [di+W_Y]
+    add dx, [di+W_H]
+    call gfx_hline
+
+    call wm_draw_title          ; the title bar, active or not (BP decides)
 
 .content:
     mov byte [gfx_color], CWHITE

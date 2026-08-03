@@ -13,7 +13,8 @@
 ; the desktop icons (SPEC.md 26/30). dock_click is called by the UI task
 ; with no lock held, only after wm_hit declined the click, and takes the
 ; lock itself around wm calls. Every dock-state transition rides a
-; wm_show/wm_hide/wm_destroy full repaint, so no partial-redraw path exists.
+; wm_hide/wm_destroy full repaint, or wm_show's own dock_paint (SPEC.md
+; 11.4), so no partial-redraw path exists.
 ; =============================================================================
 
 ; --- geometry (SPEC.md 30) ----------------------------------------------------

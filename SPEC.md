@@ -1258,6 +1258,71 @@ only the erase and the redraw are conditional; Clock (§14) substitutes
 `wm_clip_set` for its veto; and `apps/fractal`'s `fr_emit_body` (§40) does
 the same, so a partly covered fractal keeps rendering the part you can see.
 
+### 11.4 Showing a window costs one window, not one screen
+
+`wm_show` does **not** call `wm_paint_all`. Showing a window is the one
+z-order change that **reveals nothing**: the window lands on top, so every
+pixel that changes is either its own or chrome it does not cover, and
+everything already on screen either stays as it is or is drawn over. The
+full back-to-front pass — a whole-screen planar dither, the drive icons,
+the dock, the bar, and every visible window's frame and `W_PAINT` — was
+being paid to put one window on screen.
+
+Raising an **already visible** window through `wm_show` is the same
+argument (it moves up, so it can only cover more), which is why the path
+does not care whether the visible bit was already set. `wm_front` on its
+own still does the full pass, and so do `wm_hide` and `wm_destroy`: those
+three can **uncover** something, and what is underneath is not knowable
+from the window being moved.
+
+Four things change on a show, and `wm_show` draws all four, in this order:
+
+1. **The menu bar** — `menu_activate` has just handed it to this window
+   (§12), so `menu_draw_bar`. Safe unclipped: `wm_fit` floors every
+   window's y at `MBAR_H`, so no window is ever over the bar.
+2. **The dock** — the instance owning this window may be new (§30), so
+   `dock_paint`.
+3. **The outgoing front window's title bar**, via `wm_draw_title`. The
+   pinstripes, the close box and the minimize box belong to the frontmost
+   window alone, so the window losing the front needs exactly that rect
+   redrawn and nothing else. It is drawn **before** the new window, which
+   then covers whatever of it it overlaps. `wm_top` is read **before** the
+   visible bit goes on — `wm_create` has already appended the new window to
+   `wm_zord`, so once it is visible `wm_top` answers with itself.
+4. **The window**, `wm_draw_win` with BP = itself, last and therefore on
+   top, drop shadow included.
+
+The desktop and its drive icons are deliberately not redrawn: showing a
+window cannot change them, and `desk_zone_redraw` (§26) already owns the
+one thing that can.
+
+**Two fallbacks to the full pass**, both structural:
+
+- Anything to do with a fullscreen window — `[wm_fs]` set, or the window
+  itself carrying `WF_FULL` — because §11.2 suppresses the chrome entirely
+  and the ordering above stops describing the screen.
+- `wm_dock_clear` finding a visible window whose frame or drop shadow
+  reaches `[vid_dock_y0]`. `wm_fit` keeps a window above the dock but
+  `ui_grow`'s own clamp is looser, so a grown window can hang over it —
+  and there `dock_paint` would draw *on top of* a window instead of under
+  it. The cheap path declines rather than reorder itself.
+
+**`wm_lift`** is the z-order move split out of `wm_front` so `wm_show` can
+reorder without committing to the repaint that used to be welded to it.
+
+**One consumer had to follow.** A file-manager window that posts a load
+draws `'Loading...'` in its status line while `[ld_pending]` is set (§22).
+The load clears the flag, and with `wm_show` no longer repainting anything
+but the window it put up, that line would sit stale. `files_poster`
+(§21 step 10) is the correction: `wm_clip_set` on the poster window, then
+`fm_repaint`, then `gfx_unlock` — one window's content, clipped to whatever
+of it the new window has not covered, which is exactly what §11.3 exists
+for. `fm_win_of` is the reverse of `fm_vp_set` it needs, because
+`[ld_pwin]` holds the poster's **state block** and not its window. It falls
+back to `files_refresh`'s full pass when there is no poster (a package
+asked for the load itself, §22.1), when `[fm_full]` says the caption
+changed too, or when the poster's window is no longer visible.
+
 ## 12. menu.inc
 
 Menu bar: rows 0..MBAR_H-1, white, 1px black line at row MBAR_H-1. Its
@@ -3663,10 +3728,12 @@ on entry. Steps:
    Disk window's status line draws `[ld_status]` (§22), so setting it in
    step 10 instead forced a second whole-screen pass on every successful
    launch, purely to correct one line of text.
-10. Set `[ld_status]`, and call `files_refresh` (§22) **only when
-    `[ld_painted]` is 0** — the success path has already published the
-    status and done the full back-to-front pass. Failure paths still need
-    it: they set the status here, after whatever repaint they did.
+10. Set `[ld_status]`. When `[ld_painted]` is 0 — the failure paths — call
+    `files_refresh` (§22), the full pass, as before. When it is 1, the
+    success path has already published the status and drawn the new window
+    itself (§11.4), and all that is left is the poster's own status line,
+    which still reads `'Loading...'`: call `files_poster` instead, which
+    repaints that ONE window clipped to what is still visible of it.
 
 Closing a package instance follows whichever §29 path its I_TASK selects.
 With no worker it is the task-less path: locked wm_destroy + I_STATE ← 0 —

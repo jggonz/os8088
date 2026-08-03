@@ -144,6 +144,40 @@ Four things are load-bearing:
 
 Overflow (more than 16 rects) degrades to CF=1, "skip this frame" — exactly what `wm_obscured` used to say, so it cannot regress anything. `wm_obscured` stays, and `cp_tick` and `tm_update` still use it: it is the cheaper answer for a drawer that repaints its whole pane in one go.
 
+### Showing a window costs one window, not one screen (SPEC.md §11.4)
+
+`wm_show` does **not** call `wm_paint_all`. Showing a window is the one z-order
+change that **reveals nothing** — it lands on top, so everything already on
+screen either stays as it is or gets drawn over — and the full pass was a
+whole-screen planar dither plus every visible window's frame and `W_PAINT`,
+paid to put one window up. `wm_front`, `wm_hide` and `wm_destroy` still do the
+full pass: those three can *uncover* something, and what is underneath is not
+knowable from the window being moved.
+
+Four things change on a show and `wm_show` draws all four, in order: the menu
+bar (`menu_activate` just handed it over), the dock (the owning instance may be
+new), **the outgoing front window's title bar** (`wm_draw_title` — the
+pinstripes and the two boxes belong to the frontmost window alone), then the
+window itself, last and therefore on top. Two traps:
+
+- **`wm_top` is read BEFORE the visible bit goes on.** `wm_create` has already
+  appended the new window to `wm_zord`, so once it is visible `wm_top` answers
+  with *itself* and the outgoing front never loses its stripes.
+- **The dock is the reason for `wm_dock_clear`.** `wm_fit` keeps a window above
+  the dock but `ui_grow`'s clamp is looser, so a grown window can hang over it —
+  and `dock_paint` would then draw on top of a window instead of under it. The
+  cheap path declines and falls back rather than reorder itself. Fullscreen
+  (§11.2) falls back too, since it suppresses the chrome entirely.
+
+The one consumer that had to follow is the file manager: a window that posted a
+load has `'Loading...'` in its status line, and nothing repaints it any more.
+`files_poster` arms `wm_clip_set` on that window and calls `fm_repaint` — one
+window's content, clipped to what the new window has not covered, which is
+exactly what the clip region exists for. It needs `fm_win_of`, the reverse of
+`fm_vp_set`, because `[ld_pwin]` holds the poster's **state block**, not its
+window — a distinction that silently draws a Disk window's contents through a
+garbage rect if you miss it.
+
 ### The mono adapters reuse the back-buffer renderer (SPEC.md §39)
 
 There is **no second graphics driver**. `kernel/vgabb.inc` was written as a latch-free,

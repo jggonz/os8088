@@ -274,8 +274,11 @@ loader_run:
     mov [ld_status], al
     cmp byte [ld_painted], 0
     jne .painted                ; the success path published the status and
-    call files_refresh          ; repainted itself; a second full pass would
-.painted:                       ; only redraw what is already on screen
+    call files_refresh          ; drew the new window itself; all that is
+    jmp short .done             ; left is the poster's own status line, which
+.painted:                       ; still reads "Loading..."
+    call files_poster
+.done:
 
     pop es
     pop bp
