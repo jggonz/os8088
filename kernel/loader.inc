@@ -269,9 +269,13 @@ loader_run:
     call fmv_sync               ; ...make the globals BE that listing
     pop ax
 .body:
+    mov byte [ld_painted], 0
     call ld_run_body            ; out: AL = LD_* status
     mov [ld_status], al
-    call files_refresh          ; no lock held; it takes its own
+    cmp byte [ld_painted], 0
+    jne .painted                ; the success path published the status and
+    call files_refresh          ; repainted itself; a second full pass would
+.painted:                       ; only redraw what is already on screen
 
     pop es
     pop bp
@@ -475,6 +479,13 @@ ld_run_body:
     call ld_icon                ; copy an embedded icon into kernel .bss
     call inst_bind_win          ; DI = record, BX = window (from the entry)
     mov byte [di+I_STATE], 1    ; publish - the LAST record write
+    ; --- the status BEFORE the repaint, not after ---------------------------
+    ; A Disk window's status line draws [ld_status] (SPEC.md 22), so the
+    ; value has to be published before the pass that draws it. Setting it in
+    ; loader_run afterwards is what forced a SECOND full-screen repaint on
+    ; every successful launch, purely to correct one line of text.
+    mov byte [ld_status], LD_OK
+    mov byte [ld_painted], 1    ; ...and this pass IS the repaint
     call gfx_lock
     call wm_show                ; in: BX = window ptr; repaints all
     call gfx_unlock
@@ -517,6 +528,8 @@ ld_pwin:    resw 1              ; -> the state block of the file-manager
                                 ; BACKGROUND window's listing is a real one it
                                 ; is entitled to act on (SPEC.md 22.1)
 ld_status:  resb 1              ; LD_* result of the last loader_run
+ld_painted: resb 1              ; 1 = ld_run_body already did the full pass
+                                ; (its wm_show), so loader_run must not
 ld_clus:    resw 1              ; loader_run scratch: the file's first cluster
 ld_fsz:     resw 1              ; file size, bytes (image + reloc table)
 ld_img:     resw 1              ; header: image size

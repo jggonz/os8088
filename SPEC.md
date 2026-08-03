@@ -3656,10 +3656,17 @@ on entry. Steps:
    so the ES-reading twin), I_ICON = a pointer into `inst_icons` with the
    header's 64 icon bytes **copied there** when flags bit 0 is set, else 0
    — the dock draws icons from KERNEL_SEG and cannot follow a pointer into
-   a package. Then `inst_bind_win` BX, publish I_STATE = 1, gfx_lock,
-   `wm_show` BX, gfx_unlock, status 0. (`wm_create` failing inside the entry
-   surfaces as CF = status 4.)
-10. Set `[ld_status]`, call `files_refresh` (§22).
+   a package. Then `inst_bind_win` BX, publish I_STATE = 1, **`[ld_status]`
+   = LD_OK and `[ld_painted]` = 1**, gfx_lock, `wm_show` BX, gfx_unlock,
+   status 0. (`wm_create` failing inside the entry surfaces as CF =
+   status 4.) The status is published **before** the repaint on purpose: a
+   Disk window's status line draws `[ld_status]` (§22), so setting it in
+   step 10 instead forced a second whole-screen pass on every successful
+   launch, purely to correct one line of text.
+10. Set `[ld_status]`, and call `files_refresh` (§22) **only when
+    `[ld_painted]` is 0** — the success path has already published the
+    status and done the full back-to-front pass. Failure paths still need
+    it: they set the status here, after whatever repaint they did.
 
 Closing a package instance follows whichever §29 path its I_TASK selects.
 With no worker it is the task-less path: locked wm_destroy + I_STATE ← 0 —
@@ -4197,12 +4204,14 @@ window silently jumps to the root.
 3. else at cap → navigate the **frontmost** file-manager window in place.
    Nothing can fail, so there is no error path and no dialog.
 
-`files_refresh` (called by `loader_run`, no lock held) is now just
-gfx_lock / `wm_paint_all` / gfx_unlock. It used to look up "the" Disk
-instance with `inst_find_kind` and check its visibility; with N instances
-"the first one" is the wrong window, and `wm_paint_all` repaints every
-visible window anyway — which is what the call was always for (the loaded
-program's window may overlap any of them).
+`files_refresh` (called by `loader_run` when `[ld_painted]` is 0, no lock
+held) is just gfx_lock / `wm_paint_all` / gfx_unlock. It used to look up
+"the" Disk instance with `inst_find_kind` and check its visibility; with N
+instances "the first one" is the wrong window, and `wm_paint_all` repaints
+every visible window anyway — which is what the call was always for (the
+loaded program's window may overlap any of them). It no longer runs on the
+**successful** path at all: `ld_run_body`'s own `wm_show` is that pass, and
+running both was the second whole-screen redraw a launch used to show.
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
