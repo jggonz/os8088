@@ -136,6 +136,9 @@ far_init:
     FARK mem_kernel_kb
     FARK mem_avail              ; ctrl.inc Display page: is there room for a
                                 ; back buffer? (SPEC.md 31.3/42)
+    FARK mem_total_kb           ; taskmgr.inc memory view (SPEC.md 28/42.5)
+    FARK mem_owned_kb
+    FARK mem_claim_get
     FARK inst_find_kind         ; ctrl.inc Date/Time page (SPEC.md 31.5/37)
     FARK clk_snap
     FARK clk_fld_str

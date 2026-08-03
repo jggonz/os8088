@@ -71,7 +71,15 @@ MB_NITEM    equ 4               ; word: item count
 MB_XL       equ 6               ; word: bar hit range, left x (inclusive)
 MB_XR       equ 8               ; word: bar hit range, right x (inclusive)
 MB_TX       equ 10              ; word: title text / glyph left x
-MB_ENTSZ    equ 12
+MB_SEG      equ 12              ; word: the SEGMENT this cell's title and
+                                ; item strings live in, 0 = the kernel's own
+                                ; (SPEC.md 12.2/20.1). Per CELL and not per
+                                ; SET, because cell 0 is the System menu and
+                                ; its items are always the kernel's however
+                                ; foreign the rest of the bar is - reading
+                                ; them through a package's segment lands on
+                                ; the .o88 header and every item draws "O8"
+MB_ENTSZ    equ 14
 MENU_APPMAX equ 4               ; app menus the bar can host
 MENU_BARMAX equ MENU_APPMAX + 1 ; + the System cell, which is always cell 0
 
@@ -286,6 +294,7 @@ menu_relayout:
     mov word [di + MB_XL], 0
     mov word [di + MB_XR], MENU_SYS_XR
     mov word [di + MB_TX], MENU_SYS_TX
+    mov word [di + MB_SEG], 0   ; the System menu is the kernel's, always
     mov word [menu_nbar], 1
     add di, MB_ENTSZ
 
@@ -327,6 +336,8 @@ menu_relayout:
     mov [di + MB_ITEMS], ax
     mov ax, [es:si + AMENU_NITEM]
     mov [di + MB_NITEM], ax
+    mov ax, [menu_seg]          ; ...and these are the owner's
+    mov [di + MB_SEG], ax
     mov [di + MB_XL], bx
     mov ax, bx
     add ax, 6                   ; half of MENU_TITLE_PAD: the text is centred
@@ -372,6 +383,20 @@ menu_es:
     cmp word [menu_seg], 0
     je .out
     mov es, [menu_seg]
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_des - point ES at the segment the DROPPED menu's items live in
+; in:  nothing ([menu_dseg], set by menu_track from the cell / menu_popup)
+; out: ES; nothing else (flags untouched)
+; -----------------------------------------------------------------------------
+menu_des:
+    push cs
+    pop es
+    cmp word [menu_dseg], 0
+    je .out
+    mov es, [menu_dseg]
 .out:
     ret
 
@@ -424,7 +449,12 @@ menu_draw_bar:
     mov dx, MENU_TEXT_Y
     push si
     push es
-    call menu_es
+    push cs
+    pop es                      ; this cell's own segment (SPEC.md 12.2):
+    cmp word [si + MB_SEG], 0   ; cell 0's title is never drawn (it is the
+    je .tseg                    ; logo), but the rule is the same for all
+    mov es, [si + MB_SEG]
+.tseg:
     mov si, ax
     call font_str_x
     pop es
@@ -537,6 +567,8 @@ menu_track:
     ; --- menu rect: width = widest item + 16, items are 16px cells -----------
     mov bx, [si + MB_ITEMS]
     mov [menu_iptr], bx
+    mov ax, [si + MB_SEG]       ; the dropped menu's segment: this CELL's,
+    mov [menu_dseg], ax         ; not the bar owner's (SPEC.md 12.2)
     mov cx, [si + MB_NITEM]
     cmp cx, [vid_popmax]        ; the height clamp a bar menu never had: a
     jbe .cnt_ok                 ; package's set is not trusted for count any
@@ -605,6 +637,8 @@ menu_popup:
 .cnt_ok:
     mov [menu_cnt], ax
     mov [menu_iptr], bx
+    mov word [menu_dseg], 0     ; every popup descriptor in the tree is the
+                                ; kernel's own (SPEC.md 12.4)
 
     ; --- width, and the left shift off the right edge ------------------------
     push cx                     ; the anchor: menu_widest wants CX = count
@@ -737,8 +771,8 @@ menu_drop:
     push es
 .item:
     push cx
-    call menu_es                ; the item array AND the strings it points at
-    mov si, [es:bx]             ; are the owner's (SPEC.md 12.2/20.1); ES is
+    call menu_des               ; the item array AND the strings it points at
+    mov si, [es:bx]             ; are that cell's (SPEC.md 12.2/20.1); ES is
                                 ; re-established per pass because menu_trunc
                                 ; may repoint it at the kernel's copy
     call menu_trunc             ; ES:SI = the item, truncated to MENU_MAXCH,
@@ -951,7 +985,7 @@ menu_widest:
     push dx
     push si
     push es
-    call menu_es                ; the owner's segment (SPEC.md 12.2/20.1)
+    call menu_des               ; the dropped menu's segment (SPEC.md 12.2)
     xor dx, dx                  ; running max
     jcxz .done                  ; `loop` would wrap CX to 0xFFFF
 .next:
@@ -1081,7 +1115,7 @@ section .bss
 menu_win:   resw 1              ; window owning the bar, 0 = Locator (12)
 menu_set:   resw 1              ; its app menu set (SPEC.md 12.2)
 menu_namep: resw 1              ; the name string drawn at MENU_NAME_X
-menu_bar:   resb 60             ; MENU_BARMAX x MB_ENTSZ (5 x 12; a literal
+menu_bar:   resb 70             ; MENU_BARMAX x MB_ENTSZ (5 x 14; a literal
                                 ; per the no-forward-ref-in-bss rule)
 menu_nbar:  resw 1              ; live cells in menu_bar (>= 1: the System
                                 ; menu is always cell 0)
@@ -1097,9 +1131,12 @@ menu_iptr:  resw 1              ; its array of near item-string pointers
 menu_btn:   resb 1              ; mouse_btn mask that keeps it open: 1 = the
                                 ; bar's left button, 2 = a popup's right one
 menu_sel:   resw 1              ; highlighted item, 0xFFFF = none
-menu_seg:   resw 1              ; the segment [menu_set] and every string it
-                                ; points at live in; 0 = the kernel's own
+menu_seg:   resw 1              ; the segment [menu_set] and the app's own
+                                ; strings live in; 0 = the kernel's own
                                 ; (Locator, and any built-in window)
+menu_dseg:  resw 1              ; ...and the segment of the menu being
+                                ; DROPPED, which is that cell's MB_SEG: 0
+                                ; for the System menu even under a package
 menu_sseg:  resw 1              ; the save-under claim's segment, 0 = none
                                 ; (menu_drop then repaints instead)
 menu_tbuf:  resb MENU_MAXCH + 1 ; menu_trunc's staging buffer

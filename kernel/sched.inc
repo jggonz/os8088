@@ -271,9 +271,12 @@ task_spawn:
     mov ax, LOW_SEG             ; the frame lives in LOW_SEG, so it is built
     mov es, ax                  ; through ES - DS cannot reach it. AX is dead
                                 ; here: DI already carries the frame address
-                                ; and the xor below is its next use
-    mov cx, [sch_newseg]
-    mov [es:di], cx                ; DS slot = the task's own segment
+                                ; and the xor below is its next use. CX IS
+                                ; NOT DEAD - it is the slot index, and it is
+                                ; still needed for the cycle counter and the
+                                ; return value below
+    mov ax, [sch_newseg]
+    mov [es:di], ax                ; DS slot = the task's own segment
     mov word [es:di+2], KERNEL_SEG ; ES slot: the kernel, always (SPEC 20.1)
     xor ax, ax
     mov [es:di+4], ax           ; BP
@@ -284,8 +287,8 @@ task_spawn:
     mov [es:di+14], ax          ; CX
     mov [es:di+16], ax          ; AX
     mov [es:di+18], si          ; IP = entry
-    mov cx, [sch_newseg]
-    mov [es:di+20], cx          ; CS = the task's own segment
+    mov ax, [sch_newseg]
+    mov [es:di+20], ax          ; CS = the task's own segment
     mov word [es:di+22], 0x0202 ; FLAGS: IF=1, reserved bit 1 set
     mov [bx+T_INST], dl         ; owning instance (0xFF = none)
 

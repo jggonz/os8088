@@ -372,6 +372,40 @@ mem_run:
     ret
 
 ; -----------------------------------------------------------------------------
+; mem_claim_get - read one claim record by index (SPEC.md 42.5)
+; in:  AX = record index (0..MEM_MAX-1)
+; out: CF = 0 and DX = base segment, CX = paragraphs, BX = owner word;
+;      CF = 1 if that record is free
+; clobbers: BX/CX/DX (outputs) and the flags
+;
+; The Task Manager's memory map walks these to draw every live claim at its
+; real address - the one thing the old map could not do, because the blocks
+; it drew were constants and there was nothing to walk.
+; -----------------------------------------------------------------------------
+mem_claim_get:
+    push si
+    cmp ax, MEM_MAX
+    jae .none
+    mov si, ax
+    add si, si                  ; *2
+    add si, si                  ; *4
+    add si, ax
+    add si, ax                  ; *6 = MC_SIZE
+    add si, mem_tab
+    cmp word [si+MC_SEG], 0
+    je .none
+    mov dx, [si+MC_SEG]
+    mov cx, [si+MC_PARA]
+    mov bx, [si+MC_OWN]
+    clc
+    pop si
+    ret
+.none:
+    stc
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
 ; mem_owned_kb - how many KB does one owner hold? (SPEC.md 42.5)
 ; in:  BX = owner word
 ; out: AX = KB claimed by that owner (0 if none)

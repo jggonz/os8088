@@ -5436,9 +5436,9 @@ pt_ondlg:
     mov di, pt_name
     mov cx, PT_NAMEMAX              ; bounded even though SPEC.md 38.6 promises
 .copy:                              ; 12 or fewer: a package that trusts a
-    mov al, [si]                    ; promise is a package with an overrun
-    mov [di], al
-    or al, al
+    mov al, [es:si]                 ; promise is a package with an overrun.
+    mov [di], al                    ; The name buffer is the KERNEL's and ES
+    or al, al                       ; points there on entry (SPEC.md 20.1/38.6)
     jz .copied
     inc si
     inc di
