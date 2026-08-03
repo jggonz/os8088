@@ -280,7 +280,10 @@ osapi_table:
                                   ;          docs/PAINT-NOTES.md's resize
                                   ;          complaint - wm_resize is the app
                                   ;          asking, this is the app answering
-osapi_table_end:                  ; 0x01B0
+    OSAPI_SLOT osapi_file_here    ; 0x01B0 - where the file API's names
+                                  ;          resolve (SPEC.md 18.4/19.2)
+    OSAPI_SLOT osapi_file_goto    ; 0x01B8 - ...and how to put it back
+osapi_table_end:                  ; 0x01C0
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -288,8 +291,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 52 * 8
-%error "os8088 API jump table must be exactly 52 8-byte slots"
+%if OSAPI_TABLE_LEN != 54 * 8
+%error "os8088 API jump table must be exactly 54 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -513,6 +516,41 @@ osapi_font_glyphs:
     mov al, FONT_FIRST
     mov ah, FONT_LAST
     mov cx, 8
+    ret
+
+; ---- osapi_file_here / osapi_file_goto - the volume's location (SPEC.md 19.2)
+;
+; The file API resolves every name in the volume's CURRENT directory, which is
+; one global word shared by every window and by the Standard File dialog
+; (SPEC.md 18.4/19.2). That is fine while a save is happening - the dialog
+; leaves the volume in the folder the user picked, so the write lands there -
+; and wrong the moment the app wants to write to the SAME PLACE again later,
+; because any Disk window navigating anywhere has moved it since.
+;
+; So an app that means "where I saved last time" has to say so:
+;
+;   osapi_file_here   out DX = the current directory's first cluster (0 = the
+;                     root), BL = the drive (0 = A:, 1 = B:). No disk I/O.
+;   osapi_file_goto   in  DX = a cluster from osapi_file_here, BL = its drive;
+;                     out CF=1 the volume could not be listed there and is
+;                     back at the root with the write gate shut. This is a
+;                     REMOUNT (SPEC.md 19.2) - real floppy I/O, UI-task
+;                     context only, exactly like the other file slots.
+;
+; Storing the pair beside the file name is what makes an app's "Save" mean
+; the same file its "Save As" chose.
+; -----------------------------------------------------------------------------
+osapi_file_here:
+    mov dx, [dsk_cwd]
+    mov bl, [disk_drive]
+    ret
+
+osapi_file_goto:
+    push ax
+    mov ax, dx
+    mov dl, bl
+    call dsk_chdir              ; CF = the mount failed; it has already put
+    pop ax                      ; the volume back at the root
     ret
 
 ; ---- osapi_video - the screen the program actually got (SPEC.md 39.2) --------

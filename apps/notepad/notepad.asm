@@ -103,7 +103,7 @@
 
 NP_CAP       equ 512            ; text buffer capacity, bytes
 NP_IOCAP     equ NP_CAP * 2     ; staging capacity: every char may become CR LF
-NP_BSS_TOTAL equ 570 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
+NP_BSS_TOTAL equ 574 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
 NP_MARGIN    equ 6              ; left/top text margin inside the content
 NP_KEY_SAVE  equ 0x3C           ; F2 scan code (DOS Editor's keys)
 NP_KEY_LOAD  equ 0x3D           ; F3
@@ -330,7 +330,8 @@ np_save:
     push si
     push di
     push es
-    mov si, np_buf
+    call np_goto                ; the folder this document belongs to, if the
+    mov si, np_buf              ; volume has been moved since (SPEC.md 19.2)
     mov di, np_io
     mov cx, [np_len]
     xor bx, bx                  ; BX = staged byte count
@@ -389,6 +390,7 @@ np_load:
     push si
     push di
     push es
+    call np_goto                ; ...and the same on the way back in
     push ds
     pop es
     mov bx, np_io
@@ -685,6 +687,14 @@ np_ondlg:
     loop .copy
     mov byte [di], 0
 .copied:
+    push dx                         ; the window: FILE_HERE answers in DX
+    push bx                         ; ...and the mode is in BL
+    call OSAPI_FILE_HERE            ; where the dialog left the volume IS the
+    mov [np_dir], dx                ; folder the user chose, and it is the one
+    mov [np_drv], bl                ; this document belongs to from here on
+    mov byte [np_dirok], 1
+    pop bx
+    pop dx
     mov si, dx                      ; SI = our window again
     or bl, bl
     jz .load
@@ -694,6 +704,41 @@ np_ondlg:
     call np_load
 .draw:
     jmp np_redraw                   ; tail call; SI is the window ptr
+
+; -----------------------------------------------------------------------------
+; np_goto - put the volume back in this document's folder (SPEC.md 19.2)
+; out: nothing; preserves all registers
+;
+; A file name resolves in the volume's CURRENT directory, and that is one
+; global word shared by every Disk window and by the file dialog. Right after
+; Save As it still names the folder the user picked - which is why saving
+; into a folder worked - but by the next Save anything that navigated has
+; moved it, and the write landed in the root. The pair OSAPI_FILE_HERE
+; recorded is what says otherwise.
+;
+; A remount is real floppy I/O, so it is skipped when the volume is already
+; there, which is the common case.
+; -----------------------------------------------------------------------------
+np_goto:
+    push ax
+    push bx
+    push dx
+    cmp byte [np_dirok], 0
+    je .out                     ; never saved anywhere in particular
+    call OSAPI_FILE_HERE
+    cmp dx, [np_dir]
+    jne .move
+    cmp bl, [np_drv]
+    je .out
+.move:
+    mov dx, [np_dir]
+    mov bl, [np_drv]
+    call OSAPI_FILE_GOTO        ; CF = it could not be listed; the file call
+.out:                           ; that follows will say so in its own words
+    pop dx
+    pop bx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; np_defname - seed the current document name (internal)
@@ -833,4 +878,15 @@ np_io       equ os88_image_end + 570   ; NP_IOCAP bytes: the CR LF staging
                                        ; construction - both blocks above
                                        ; are even-sized, which is what the
                                        ; old np_pad word was for
-                                       ; total 570 + NP_IOCAP = NP_BSS_TOTAL
+np_dir      equ os88_image_end + 570 + NP_IOCAP    ; word: the folder the
+np_drv      equ os88_image_end + 572 + NP_IOCAP    ; document lives in, byte:
+np_dirok    equ os88_image_end + 573 + NP_IOCAP    ; its drive, byte: whether
+                                       ; the pair has been recorded at all.
+                                       ; A file name resolves in the VOLUME's
+                                       ; current directory - one global every
+                                       ; Disk window and the file dialog
+                                       ; share - so 'Save' has to put the
+                                       ; volume back where 'Save As' left it,
+                                       ; or it writes into whatever folder
+                                       ; something else navigated to since
+                                       ; total 574 + NP_IOCAP = NP_BSS_TOTAL

@@ -378,6 +378,27 @@ VID_CGA    equ 2
                                  ; drawn at either size, so DO NOT draw in it -
                                  ; decide, return, and draw in the W_PAINT the
                                  ; kernel is about to make.
+%define OSAPI_FILE_HERE     KERNEL_SEG:0x01B0   ; out DX = the current
+                                 ; directory's first cluster (0 = the root),
+                                 ; BL = the drive. No disk I/O.
+%define OSAPI_FILE_GOTO     KERNEL_SEG:0x01B8   ; in DX = a cluster from
+                                 ; OSAPI_FILE_HERE, BL = its drive; out CF=1
+                                 ; it could not be listed and the volume is
+                                 ; back at the root with the write gate shut.
+                                 ; A REMOUNT: real floppy I/O, UI-task
+                                 ; context only, like the other file slots.
+                                 ;
+                                 ; Every file name you pass the file API
+                                 ; resolves in the volume's CURRENT
+                                 ; directory, and that is ONE GLOBAL shared
+                                 ; with every Disk window and with the file
+                                 ; dialog. Right after the dialog closes it
+                                 ; still names the folder the user picked, so
+                                 ; your write lands there. Later it does not,
+                                 ; because anything else that navigated has
+                                 ; moved it. If your Save means "the same
+                                 ; place my Save As chose", store the pair
+                                 ; these two slots trade in beside the name.
 %define OSAPI_FONT_GLYPHS   KERNEL_SEG:0x01A0   ; out SI = the offset of the
                                  ; kernel's 8x8 glyph table in KERNEL_SEG,
                                  ; AL = first character code it covers,

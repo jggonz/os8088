@@ -1098,16 +1098,18 @@ fdlg_repaint:
 ; -----------------------------------------------------------------------------
 fdlg_act:
     push ax
-    cmp byte [fdlg_mode], 0
-    jne .save
     mov ax, [fdlg_sel]
     cmp ax, 0xFFFF
-    je .refuse                  ; nothing chosen: the button is inert
+    je .nosel
     call fdlg_stage
     cmp word [fdlg_type], 2
-    jne .save                   ; a file: commit it like Save does
-    call fdlg_dive
-    jmp short .stay
+    jne .nosel                  ; a file: commit it the way Save does
+    call fdlg_dive              ; a FOLDER is navigated into, in EITHER mode -
+    jmp short .stay             ; selecting one and pressing Enter used to
+.nosel:                         ; save a FILE under whatever name the box
+    cmp byte [fdlg_mode], 0     ; still held, which is how PAINT.O88 got
+    jne .save                   ; overwritten with a text note during testing
+    jmp short .refuse           ; open mode, nothing chosen: the button is inert
 .save:
     cmp byte [fdlg_nlen], 0
     je .refuse                  ; an empty name is not an answer

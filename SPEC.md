@@ -3074,7 +3074,7 @@ below the table. There are two families:
   `fdlg_open`, plus a hand-written `api_file_rename` that stages both names.
 
 The table's start (0x0010) and its span are proved by two build-time
-assertions in kernel.asm; the span is **52 × 8** today. `apps/os88api.inc`
+assertions in kernel.asm; the span is **54 × 8** today. `apps/os88api.inc`
 mirrors every offset as an `OSAPI_*` `%define` (§20.5).
 
 ```
@@ -3098,6 +3098,8 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
                                                 0x0198 wm_resize
                                                 0x01A0 osapi_font_glyphs
                                                 0x01A8 wm_onsize
+                                                0x01B0 osapi_file_here
+                                                0x01B8 osapi_file_goto
 ```
 
 **Offsets are not stable across kernel versions, and never were pretended
@@ -3191,7 +3193,24 @@ Slot-specific contracts that are not simply their target routine's:
                          AL = 32, AH = 126, CX = 8 (§6). Read through ES.
 0x01A8 wm_onsize         in BX = win, AX = a near proc in the window's own
                          segment (0 clears). The resize negotiator (§11.1).
+0x01B0 osapi_file_here   out DX = the current directory's first cluster
+                         (0 = the root), BL = the drive. No disk I/O.
+0x01B8 osapi_file_goto   in DX = a cluster from `osapi_file_here`, BL = its
+                         drive; out CF=1 it could not be listed and the
+                         volume is back at the root with the write gate
+                         shut. A REMOUNT (§19.2) - real floppy I/O, and
+                         UI-task context like every other file slot.
 ```
+
+**Why the last pair exists.** Every file name resolves in the volume's
+CURRENT directory (§19.2), and that is one global word shared by every Disk
+window and by the file dialog. Immediately after the dialog closes it still
+names the folder the user picked, so an app's Save As lands there — and its
+next *Save* does not, because anything that navigated in between has moved
+it. An app whose Save means "the same place my Save As chose" has to say so,
+and this is the pair it says it with. `apps/notepad` stores them beside the
+document name and puts the volume back before every read and write, skipping
+the remount when the volume is already there.
 
 **The file slots are UI-task/window-callback context only (binding).**
 They take `[sch_lock]` around int 13h and share `dsk_secbuf` and the FAT
