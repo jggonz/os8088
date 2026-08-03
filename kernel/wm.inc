@@ -30,16 +30,85 @@ W_MENUS equ 18                  ; word: near ptr to this window's app menu set
                                 ; (SPEC.md 12.2), 0 = no menus of its own.
                                 ; NOT a template word - wm_create zeroes it;
                                 ; a built-in's KD_INIT or a package's
-                                ; menu_win_set (API 0x00AC) fills it in.
-                                ; Whichever window is frontmost owns the
-                                ; menu bar (SPEC.md 12).
-WIN_SIZE equ 20                 ; NOT a power of two: never shift, multiply
+                                ; menu_win_set fills it in. Whichever window
+                                ; is frontmost owns the menu bar (SPEC.md 12)
+W_DISP  equ 20                  ; dword: the far pointer wm_pkgcall calls to
+W_SEG   equ 22                  ; reach this window's procs - {PKG_DISP, the
+                                ; owning package's segment}. W_SEG doubles as
+                                ; the SEGMENT every near pointer in this
+                                ; record is relative to: title, paint, onkey,
+                                ; onclick, menus. Zero for a kernel window,
+                                ; and zero is what makes the dispatch near
+                                ; again for About/Clock/Disk/TaskMgr/Ctrl and
+                                ; the file dialog (SPEC.md 11/20.1).
+WIN_SIZE equ 24                 ; NOT a power of two: never shift, multiply
 MAX_WIN  equ 12                 ; mirrored in apps/os88api.inc (SPEC.md 11)
 
 WF_SIZABLE equ 4                ; W_FLAGS bit2: resizable (SPEC.md 11.1)
 WF_FULL    equ 8                ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
 WMIN_W     equ 96               ; smallest frame a resize can leave, outer px
 WMIN_H     equ 64               ; (SPEC.md 11.1; mirrored in apps/os88api.inc)
+
+; -----------------------------------------------------------------------------
+; wm_strseg - point ES at the segment a window's strings live in
+; in:  DI = window record
+; out: ES = [DI+W_SEG], or KERNEL_SEG when that is 0
+; clobbers: ES (the output) and nothing else
+;
+; W_TITLE, and every string a package's menu set points at, are offsets in
+; the OWNER's segment. One place decides which that is.
+; -----------------------------------------------------------------------------
+wm_strseg:
+    push cs
+    pop es
+    cmp word [di+W_SEG], 0
+    je .out
+    mov es, [di+W_SEG]
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_pkgcall - invoke one of a window's callbacks, wherever its code lives
+;
+; in:  SI = window record, BP = the callback's offset (non-zero), every other
+;      register = that callback's own arguments. SI rather than BX because
+;      EVERY callback contract in SPEC.md 11/12.2/38.6 already passes the
+;      window in SI - so the dispatch site has nothing to shuffle, and BX
+;      stays free for the one callback that wants it (AM_ONCMD's menu set).
+; out: whatever the callback returns, CF included
+; clobbers: BP (it is the input) - DS and ES are restored
+;
+; W_SEG = 0 is a kernel window and the call is an ordinary near one. Anything
+; else is a package: DS becomes its segment, ES is pointed at KERNEL_SEG (the
+; window record it was handed lives there, and so does the file dialog's name
+; buffer - a package reads both through ES, SPEC.md 20.5), and the far call
+; goes to the DISPATCHER at PKG_DISP in the package's own image, which is a
+; three-byte `call bp / retf`. That indirection is what lets every package
+; callback stay an ordinary near proc with an ordinary near `ret`: a package
+; author never writes `retf`, and a missed one cannot exist.
+;
+; Re-entrant by construction - the far pointer is read out of the record, not
+; out of a global - which it has to be: a package's callback may call
+; OSAPI_WM_SHOW, which repaints, which dispatches another package's paint
+; proc.
+; -----------------------------------------------------------------------------
+wm_pkgcall:
+    push ds
+    push es
+    push cs
+    pop es                      ; ES = KERNEL_SEG: the record lives here and
+                                ; the callback may read it
+    cmp word [es:si+W_SEG], 0
+    je .near
+    mov ds, [es:si+W_SEG]       ; DS = the package's own segment
+    call far [es:si+W_DISP]     ; ...and off to its dispatcher
+    jmp short .out
+.near:
+    call bp                     ; a kernel window: DS is already ours
+.out:
+    pop es
+    pop ds
+    ret
 
 ; -----------------------------------------------------------------------------
 ; wm_init - zero the window table, z-order array and count; orphan wm_owner
@@ -150,13 +219,30 @@ wm_create:
     stc
     jmp .out
 .free:
-    push ds
-    pop es
     mov word [bx+W_FLAGS], 1    ; used, not visible
     lea di, [bx+W_X]
     mov cx, 8
+    push ds                     ; the template is at ES:SI - the CALLER's
+    push es                     ; segment (SPEC.md 11) - and the record is
+    pop ds                      ; ours, so swap the two for the movsw and
+    pop es                      ; swap them straight back
+    cld
     rep movsw                   ; copy the template into x..onclick
+    push ds
+    push es
+    pop ds
+    pop es
     mov word [bx+W_MENUS], 0    ; menus are NOT a template word (SPEC 11/12.2)
+    mov word [bx+W_DISP], PKG_DISP  ; the far pointer wm_pkgcall uses: the
+    mov ax, es                      ; dispatcher's fixed offset, and the
+    mov cx, cs                      ; segment the caller called us in. Ours
+    cmp ax, cx                      ; means a KERNEL window, which is what
+    jne .pkgseg                     ; W_SEG = 0 says (SPEC.md 20.1)
+    xor ax, ax
+.pkgseg:
+    mov [bx+W_SEG], ax
+    mov cx, 8                   ; (wm_fit and the index math below want CX
+                                ; free; the rep consumed it)
     call wm_fit                 ; templates are authored for 640x480; on a
                                 ; smaller screen the record, not the template,
                                 ; is the truth (SPEC.md 39.7)
@@ -1260,7 +1346,10 @@ wm_draw_win:
     mov si, [di+W_TITLE]        ; centered title on a 6px white gap
     test si, si
     jz .content
-    call font_width             ; AX = text width, px
+    push es                     ; the title is the OWNER's string, so it is
+    call wm_strseg              ; read through ES: the package's segment for
+    call font_width_x           ; a package window, ours for everything else
+    pop es
     mov cx, [di+W_W]
     sub cx, ax
     sar cx, 1
@@ -1280,7 +1369,10 @@ wm_draw_win:
     pop cx
     mov dx, [di+W_Y]
     add dx, 5                   ; 8px glyphs centered in the 16-row bar
-    call font_str
+    push es
+    call wm_strseg
+    call font_str_x
+    pop es
 
 .content:
     mov byte [gfx_color], CWHITE
@@ -1308,7 +1400,12 @@ wm_draw_win:
     push dx
     push ax
     mov si, bx                  ; SI = window ptr for the paint proc
-    call [bx+W_PAINT]
+    push bp
+    mov bp, [bx+W_PAINT]
+    call wm_pkgcall             ; near for a kernel window, far into the
+    pop bp                      ; package's dispatcher otherwise (SPEC 20.1)
+    mov bx, si                  ; (wm_pkgcall preserves both, but the paint
+                                ; proc need not preserve BX)
     pop ax                      ; start stamp
     pop dx
     pop word [snd_inst]         ; the outer dispatch's stamp, back

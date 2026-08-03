@@ -48,10 +48,20 @@
 ; =============================================================================
 
 ; --- environment ---------------------------------------------------------------
-KERNEL_SEG   equ 0x1000     ; CS = DS for kernel and packages alike; SS is
-                            ; LOW_SEG (0x0800), NOT this - see above
-APP_LOAD_OFF equ 0xB000     ; where packages load (kernel segment offset)
-APP_MAX_SIZE equ 0x4E00     ; image + bss budget, 0xB000..0xFDFF
+; A package owns a SEGMENT (SPEC.md 20.1). CS = DS = that segment, which the
+; loader picks out of the pool; SS = LOW_SEG, shared with every task, so
+; `[bp+disp]` still addresses SS and a BP-held pointer still needs a `ds:`
+; override. ES is YOURS to use - but on entry to any callback the kernel
+; points it at KERNEL_SEG, because the two things it hands you live there:
+; the window record OSAPI_WM_CREATE returned, and the file dialog's name
+; buffer. Read them with an `es:` override; clobber ES freely afterwards.
+;
+; Your image is linked at org 0 and loaded at a paragraph boundary, so it is
+; position-independent: there are no relocations, and two instances of one
+; package differ only in the segment they run in.
+KERNEL_SEG   equ 0x1000     ; where the kernel is, and what ES holds on entry
+APP_MAX_SIZE equ 0xF000     ; image + bss budget: the whole 60KB pool, if
+                            ; nothing else is loaded
 ; The REFERENCE screen, not a promise. Since SPEC.md 39 the kernel drives
 ; three adapters and picks one at boot: VGA 640x480x16, Hercules 720x348
 ; mono, or CGA 640x200 mono. Ask OSAPI_VIDEO for the one you actually got.
@@ -84,70 +94,72 @@ CYELLOW   equ 14
 CWHITE    equ 15
 
 ; --- the os8088 API jump table (SPEC.md 20.3, pinned offsets) ---------------------
-; Each slot is a near jmp; `call OSAPI_*` from package code is a plain near
-; call into the kernel routine named in the comment.
-OSAPI_GFX_LOCK      equ 0x0010   ; acquire drawing mutex + hide cursor
-OSAPI_GFX_UNLOCK    equ 0x0014   ; show cursor + release mutex
-OSAPI_GFX_PIXEL     equ 0x0018   ; CX=x, DX=y
-OSAPI_GFX_HLINE     equ 0x001C   ; AX=x1, BX=x2, DX=y
-OSAPI_GFX_VLINE     equ 0x0020   ; AX=x, BX=y1, DX=y2
-OSAPI_GFX_FILL      equ 0x0024   ; AX=x1, BX=y1, CX=x2, DX=y2
-OSAPI_GFX_FRAME     equ 0x0028   ; AX=x1, BX=y1, CX=x2, DX=y2
-OSAPI_GFX_FILL_GRAY equ 0x002C   ; AX=x1, BX=y1, CX=x2, DX=y2 (50% dither)
-OSAPI_GFX_XOR_RECT  equ 0x0030   ; AX=x1, BX=y1, CX=x2, DX=y2
-OSAPI_GFX_XOR_FILL  equ 0x0034   ; AX=x1, BX=y1, CX=x2, DX=y2
-OSAPI_FONT_CHAR     equ 0x0038   ; CX=x, DX=y, AL=char
-OSAPI_FONT_STR      equ 0x003C   ; CX=x, DX=y, SI=NUL string
-OSAPI_FONT_WIDTH    equ 0x0040   ; SI=NUL string; out AX = pixel width
-OSAPI_WM_CREATE     equ 0x0044   ; SI=template; out BX = win ptr, CF on full
-OSAPI_WM_SHOW       equ 0x0048   ; BX=win ptr
-OSAPI_WM_HIDE       equ 0x004C   ; BX=win ptr
-OSAPI_WM_FRONT      equ 0x0050   ; BX=win ptr
-OSAPI_WM_CONTENT    equ 0x0054   ; BX=win ptr; out AX=content left, DX=top
-OSAPI_WM_OBSCURED   equ 0x0058   ; BX=win ptr; out CF=1 if covered
-OSAPI_TASK_YIELD    equ 0x005C   ; give up the time slice
-OSAPI_TASK_SLEEP    equ 0x0060   ; AX = ticks to sleep (18 ~ 1 second)
-OSAPI_GET_TICKS     equ 0x0064   ; out AX = [ticks]
-OSAPI_SET_COLOR     equ 0x0068   ; AL -> [gfx_color]
-OSAPI_MOUSE         equ 0x006C   ; out CX=mouse_x, DX=mouse_y, AL=mouse_btn
-OSAPI_SRAND         equ 0x0070   ; AX -> [osapi_seed]
-OSAPI_RAND          equ 0x0074   ; out AX = next pseudo-random word
+; Each slot is an 8-byte cell at 0x0010 + 8n, and `call OSAPI_*` is a FAR
+; call: the %defines below expand to `call KERNEL_SEG:0xNNNN`, so package
+; source is written exactly as it always was and the segment change is
+; invisible. Every cell switches DS to the kernel's on the way in and back to
+; yours on the way out; every register except a documented output is
+; preserved, flags included.
+%define OSAPI_GFX_LOCK      KERNEL_SEG:0x0010   ; acquire drawing mutex + hide cursor
+%define OSAPI_GFX_UNLOCK    KERNEL_SEG:0x0018   ; show cursor + release mutex
+%define OSAPI_GFX_PIXEL     KERNEL_SEG:0x0020   ; CX=x, DX=y
+%define OSAPI_GFX_HLINE     KERNEL_SEG:0x0028   ; AX=x1, BX=x2, DX=y
+%define OSAPI_GFX_VLINE     KERNEL_SEG:0x0030   ; AX=x, BX=y1, DX=y2
+%define OSAPI_GFX_FILL      KERNEL_SEG:0x0038   ; AX=x1, BX=y1, CX=x2, DX=y2
+%define OSAPI_GFX_FRAME     KERNEL_SEG:0x0040   ; AX=x1, BX=y1, CX=x2, DX=y2
+%define OSAPI_GFX_FILL_GRAY KERNEL_SEG:0x0048   ; AX=x1, BX=y1, CX=x2, DX=y2 (50% dither)
+%define OSAPI_GFX_XOR_RECT  KERNEL_SEG:0x0050   ; AX=x1, BX=y1, CX=x2, DX=y2
+%define OSAPI_GFX_XOR_FILL  KERNEL_SEG:0x0058   ; AX=x1, BX=y1, CX=x2, DX=y2
+%define OSAPI_FONT_CHAR     KERNEL_SEG:0x0060   ; CX=x, DX=y, AL=char
+%define OSAPI_FONT_STR      KERNEL_SEG:0x0068   ; CX=x, DX=y, SI=NUL string
+%define OSAPI_FONT_WIDTH    KERNEL_SEG:0x0070   ; SI=NUL string; out AX = pixel width
+%define OSAPI_WM_CREATE     KERNEL_SEG:0x0078   ; SI=template; out BX = win ptr, CF on full
+%define OSAPI_WM_SHOW       KERNEL_SEG:0x0080   ; BX=win ptr
+%define OSAPI_WM_HIDE       KERNEL_SEG:0x0088   ; BX=win ptr
+%define OSAPI_WM_FRONT      KERNEL_SEG:0x0090   ; BX=win ptr
+%define OSAPI_WM_CONTENT    KERNEL_SEG:0x0098   ; BX=win ptr; out AX=content left, DX=top
+%define OSAPI_WM_OBSCURED   KERNEL_SEG:0x00A0   ; BX=win ptr; out CF=1 if covered
+%define OSAPI_TASK_YIELD    KERNEL_SEG:0x00A8   ; give up the time slice
+%define OSAPI_TASK_SLEEP    KERNEL_SEG:0x00B0   ; AX = ticks to sleep (18 ~ 1 second)
+%define OSAPI_GET_TICKS     KERNEL_SEG:0x00B8   ; out AX = [ticks]
+%define OSAPI_SET_COLOR     KERNEL_SEG:0x00C0   ; AL -> [gfx_color]
+%define OSAPI_MOUSE         KERNEL_SEG:0x00C8   ; out CX=mouse_x, DX=mouse_y, AL=mouse_btn
+%define OSAPI_SRAND         KERNEL_SEG:0x00D0   ; AX -> [osapi_seed]
+%define OSAPI_RAND          KERNEL_SEG:0x00D8   ; out AX = next pseudo-random word
 
 ; --- sound (SPEC.md 20.3/34): the PC speaker, which is the whole of it.
-; The FM and STREAM slots went with the sound cards they drove; a package
-; that wants to play a sample does it through PLAY, out of its own buffer.
-OSAPI_SND_CAPS      equ 0x0078   ; out AX = caps word (SND_CAP_*), BL = 0
-                                 ; (the speaker), DX = 1 (it is present)
-OSAPI_SND_TONE      equ 0x007C   ; AX = freq Hz (0 = off), CX = duration
-                                 ; ticks (0 = until off), DL = priority
-                                 ; (default 0x40); out CF=1 refused, else
-                                 ; AL = owner generation
-OSAPI_SND_PLAY      equ 0x0080   ; PCM_EXCL clip (SPEC.md 34.4): ES:SI =
-                                 ; your 8-bit unsigned samples, CX = count,
-                                 ; DX = rate 4,679..16,124 Hz; out AX = 0 ok
-                                 ; / 1..5 err. Runs on your task with the
-                                 ; scheduler locked: it FREEZES the desktop
-                                 ; for the length of the clip, and a mouse
-                                 ; click aborts it (err 5)
+%define OSAPI_SND_CAPS      KERNEL_SEG:0x00E0   ; out AX = caps word (SND_CAP_*),
+                                 ; BL = 0 (the speaker), DX = 1 (present)
+%define OSAPI_SND_TONE      KERNEL_SEG:0x00E8   ; AX = freq Hz (0 = off), CX =
+                                 ; duration ticks (0 = until off), DL =
+                                 ; priority (default 0x40); out CF=1 refused,
+                                 ; else AL = owner generation
+%define OSAPI_SND_PLAY      KERNEL_SEG:0x00F0   ; PCM_EXCL clip (SPEC.md 34.4):
+                                 ; ES:SI = your 8-bit unsigned samples, CX =
+                                 ; count, DX = rate 4,679..16,124 Hz; out
+                                 ; AX = 0 ok / 1..5 err. Runs on your task
+                                 ; with the scheduler locked: it FREEZES the
+                                 ; desktop for the length of the clip, and a
+                                 ; mouse click aborts it (err 5)
 
 ; capability bits returned by OSAPI_SND_CAPS (SPEC.md 34.2)
 SND_CAP_TONE     equ 01h
 SND_CAP_PCM_EXCL equ 08h
 
 ; --- window management (SPEC.md 11.1/11.2) -------------------------------------
-OSAPI_WM_SIZABLE    equ 0x0084   ; BX=win ptr, AL = 0 clear / non-zero set
+%define OSAPI_WM_SIZABLE    KERNEL_SEG:0x00F8   ; BX=win ptr, AL = 0 clear / non-zero set
                                  ; WF_SIZABLE; call from the entry proc
                                  ; after OSAPI_WM_CREATE. A resizable
                                  ; window's paint/click procs MUST lay out
                                  ; from the live W_W/W_H every call.
-OSAPI_FULLSCREEN    equ 0x0088   ; AL = 1 enter (BX=win ptr) / 0 exit;
+%define OSAPI_FULLSCREEN    KERNEL_SEG:0x0100   ; AL = 1 enter (BX=win ptr) / 0 exit;
                                  ; caller holds the gfx lock (window
                                  ; callbacks do); out CF=1 enter refused
                                  ; (screen already owned). Exiting is the
                                  ; app's job (Esc in its onkey is the
                                  ; convention) - the menu bar is
                                  ; unreachable while it holds the screen.
-OSAPI_WM_GROW       equ 0x008C   ; BX=win ptr; caller holds the gfx lock.
+%define OSAPI_WM_GROW       KERNEL_SEG:0x0108   ; BX=win ptr; caller holds the gfx lock.
                                  ; A resizable window's self-initiated
                                  ; content repaint must END with this:
                                  ; the white-fill idiom erases the grow
@@ -165,15 +177,15 @@ OSAPI_WM_GROW       equ 0x008C   ; BX=win ptr; caller holds the gfx lock.
 ; The buffer is ES:BX (like OSAPI_SND_PLAY), so staged
 ; sound or an app's own bss both work; set ES = DS for the latter. A write
 ; stalls painters for its duration: never call these from a paint proc.
-OSAPI_FILE_WRITE    equ 0x0090   ; SI = NUL 8.3 name, ES:BX = bytes, CX =
+%define OSAPI_FILE_WRITE    KERNEL_SEG:0x0110   ; SI = NUL 8.3 name, ES:BX = bytes, CX =
                                  ; count (0 = empty file); creates or
                                  ; REPLACES. out CF=0 AX=0, else AX = FERR_*
-OSAPI_FILE_READ     equ 0x0094   ; SI = name, ES:BX = buffer, CX = capacity;
+%define OSAPI_FILE_READ     KERNEL_SEG:0x0118   ; SI = name, ES:BX = buffer, CX = capacity;
                                  ; out CF=0 AX = bytes read, else AX =
                                  ; FERR_* (FERR_BIG leaves the buffer alone)
-OSAPI_FILE_DELETE   equ 0x0098   ; SI = name; out CF=0 AX=0, else FERR_*
-OSAPI_FILE_RENAME   equ 0x009C   ; SI = old name, DI = new name; out as above
-OSAPI_FILE_DFREE    equ 0x00A0   ; out CF=0, DX:AX = free bytes, BX =
+%define OSAPI_FILE_DELETE   KERNEL_SEG:0x0120   ; SI = name; out CF=0 AX=0, else FERR_*
+%define OSAPI_FILE_RENAME   KERNEL_SEG:0x0128   ; SI = old name, DI = new name; out as above
+%define OSAPI_FILE_DFREE    KERNEL_SEG:0x0130   ; out CF=0, DX:AX = free bytes, BX =
                                  ; SECTORS per cluster; no disk I/O
 
 ; --- menus (SPEC.md 12.2) ------------------------------------------------------
@@ -182,7 +194,7 @@ OSAPI_FILE_DFREE    equ 0x00A0   ; out CF=0, DX:AX = free bytes, BX =
 ; the app's own menus follow. Register the set from the entry proc, with
 ; BX = the window OSAPI_WM_CREATE just returned - the loader shows the
 ; window afterwards, so the first bar drawn is already yours.
-OSAPI_MENU_SET      equ 0x00A4   ; BX = win ptr, SI = menu set ptr (0 =
+%define OSAPI_MENU_SET      KERNEL_SEG:0x0138   ; BX = win ptr, SI = menu set ptr (0 =
                                  ; none). Draws nothing, takes no lock,
                                  ; preserves every register AND the flags -
                                  ; so it can sit between OSAPI_WM_CREATE
@@ -201,14 +213,14 @@ OSAPI_MENU_SET      equ 0x00A4   ; BX = win ptr, SI = menu set ptr (0 =
 ; proc is called much later. Cancel calls nothing at all.
 ;
 ; Call it from a menu command or a key handler, never from a paint proc.
-OSAPI_FILE_DLG      equ 0x00A8   ; AL = 0 Open / 1 Save, BX = your window ptr,
+%define OSAPI_FILE_DLG      KERNEL_SEG:0x0140   ; AL = 0 Open / 1 Save, BX = your window ptr,
                                  ; DI = completion proc, SI = default name
                                  ; (NUL, <= 12) or 0. out CF=0 accepted, CF=1
                                  ; refused (one is already up, or no room)
 FDLG_OPEN  equ 0                 ; the two modes, in AL going in and in AL
 FDLG_SAVE  equ 1                 ; coming back
 ;
-OSAPI_VIDEO         equ 0x00AC   ; the screen this machine actually has
+%define OSAPI_VIDEO         KERNEL_SEG:0x0148   ; the screen this machine actually has
                                  ; (SPEC.md 39.2). No inputs. Out: AX = width,
                                  ; BX = height, CX = the first row the dock
                                  ; owns (so the usable desktop is rows MBAR_H
@@ -245,7 +257,7 @@ VID_CGA    equ 2
 ; between clicks is pre-empted instead of crammed into a callback. This is
 ; the only place package code runs off the UI task.
 ;
-OSAPI_TASK_SPAWN    equ 0x00B0   ; AX = your worker's near entry (a plain
+%define OSAPI_TASK_SPAWN    KERNEL_SEG:0x0150   ; AX = your worker's near entry (a plain
                                  ; `mov ax, my_worker` - a whole-word
                                  ; package address, relocated for you),
                                  ; BX = YOUR window ptr (what
@@ -269,7 +281,7 @@ OSAPI_TASK_SPAWN    equ 0x00B0   ; AX = your worker's near entry (a plain
                                  ; preserved. NOT callable from your entry
                                  ; proc: the loader has not published your
                                  ; instance yet, so it would simply refuse.
-OSAPI_TASK_ALIVE    equ 0x00B4   ; BX = YOUR window ptr; the gfx lock must
+%define OSAPI_TASK_ALIVE    KERNEL_SEG:0x0158   ; BX = YOUR window ptr; the gfx lock must
                                  ; NOT be held, and it must be YOUR WORKER
                                  ; calling - never a window callback.
                                  ; Returns with every register AND the
@@ -285,7 +297,7 @@ OSAPI_TASK_ALIVE    equ 0x00B4   ; BX = YOUR window ptr; the gfx lock must
 ; the lock and every gfx_*/font_* call you make is cut to the part of YOUR
 ; content nothing is covering; a window with one corner buried keeps drawing
 ; the rest instead of skipping the frame.
-OSAPI_WM_CLIP_SET   equ 0x00B8   ; BX = YOUR window ptr; the gfx lock must be
+%define OSAPI_WM_CLIP_SET   KERNEL_SEG:0x0160   ; BX = YOUR window ptr; the gfx lock must be
                                  ; HELD. out CF = 1: not one pixel of your
                                  ; content is visible - draw nothing this
                                  ; frame (the answer wm_obscured used to
@@ -294,10 +306,30 @@ OSAPI_WM_CLIP_SET   equ 0x00B8   ; BX = YOUR window ptr; the gfx lock must be
                                  ; register. It dies at your next
                                  ; OSAPI_GFX_UNLOCK, so it is one call per
                                  ; lock hold and there is nothing to undo.
-OSAPI_WM_CLIP_CLEAR equ 0x00BC   ; disarm early, to draw unclipped again
+%define OSAPI_WM_CLIP_CLEAR KERNEL_SEG:0x0168   ; disarm early, to draw unclipped again
                                  ; inside the same lock hold. Preserves
                                  ; every register.
-OSAPI_WM_CLIP_TEST  equ 0x00C0   ; AX=x1, BX=y1, CX=x2, DX=y2 (inclusive);
+%define OSAPI_MEM_CLAIM     KERNEL_SEG:0x0178   ; the claim heap (SPEC.md 42.3):
+                                 ; AX = KB wanted; out CF=0 and DX = the base
+                                 ; segment, CF=1 refused. This is how you get
+                                 ; memory your region cannot hold - a canvas,
+                                 ; a sound clip, a decoder's tables. You are
+                                 ; identified by the segment you run in, so
+                                 ; there is nothing to pass and nothing to
+                                 ; forge, and it works from your ENTRY PROC
+                                 ; (where you have no window yet) - which is
+                                 ; where an app sizes itself. The kernel frees
+                                 ; your claims when your instance dies, so you
+                                 ; need no teardown hook; free them yourself
+                                 ; only to hand memory back mid-session.
+%define OSAPI_MEM_FREE      KERNEL_SEG:0x0180   ; DX = the segment you were
+                                 ; given; out CF=0 released, CF=1 not yours
+%define OSAPI_MEM_AVAIL     KERNEL_SEG:0x0188   ; out AX = largest free run in
+                                 ; KB, BX = total free KB. Size yourself from
+                                 ; THIS, not from int 12h: it is the only
+                                 ; number that accounts for what the kernel
+                                 ; and every other package already hold.
+%define OSAPI_WM_CLIP_TEST  KERNEL_SEG:0x0170   ; AX=x1, BX=y1, CX=x2, DX=y2 (inclusive);
                                  ; out CF=0 the whole rect is drawable (also
                                  ; when no clip is armed), CF=1 it is not.
                                  ; Preserves every register. Ask this before
@@ -398,8 +430,21 @@ W_ONKEY   equ 14            ; word: near ptr or 0; AL=ascii, AH=scan, SI=win
 W_ONCLICK equ 16            ; word: near ptr or 0; CX=x, DX=y, SI=win
 W_MENUS   equ 18            ; word: app menu set ptr, 0 = none. NOT a
                             ; template word - set it with OSAPI_MENU_SET
-WIN_SIZE  equ 20
+W_DISP    equ 20            ; dword: the kernel's far pointer to your
+W_SEG     equ 22            ; dispatcher, and the segment every near
+                            ; pointer in this record belongs to (yours).
+                            ; Both are the kernel's business, not yours.
+WIN_SIZE  equ 24
 MAX_WIN   equ 12
+
+; THE RECORD LIVES IN KERNEL_SEG. On entry to any callback ES points there
+; (SPEC.md 20.1), so read and write it with an override:
+;
+;     test word [es:bx + W_FLAGS], 2      ; still visible?
+;     mov ax, [es:bx + W_W]               ; the live width
+;
+; Without the override you are reading your own image at that offset, which
+; assembles cleanly and runs wrong - the one sharp edge of owning a segment.
 
 ; --- wm_create template layout (SPEC.md 11, 16 bytes, 8 words) -----------------
 WT_X       equ 0
@@ -425,25 +470,27 @@ WT_SIZE    equ 16
 %macro OS88_HEADER 2-3
     cpu 8086
     bits 16
-%ifdef OS88_ORG
-    org OS88_ORG             ; relocation-probe pass (Makefile passes
-%else                       ; -DOS88_ORG=0xB800; os88pkg.py diffs the two
-    org APP_LOAD_OFF        ; assemblies into the fixup table, SPEC.md 24)
-%endif
+    org 0                   ; v3: you own a segment, so you link at zero and
+                            ; the loader puts you on a paragraph boundary.
+                            ; No relocation table, no dual assembly, no rule
+                            ; about whole-word addresses (SPEC.md 20.2)
     db 'O', '8'             ; +0  magic (word 0x384F)
-    db 2                    ; +2  format version 2: relocatable (SPEC.md 20.2)
+    db 3                    ; +2  format version 3: segment-per-package
     %if %0 >= 3
     db %3                   ; +3  flags (bit 0 = embedded icon)
     %else
     db 0                    ; +3  flags
     %endif
-    dw APP_LOAD_OFF         ; +4  link base (constant across both passes)
-    dw (%2) - $$            ; +6  entry offset, image-relative
-    dw OS88_IMAGE_SIZE       ; +8  image size (resident bytes; the reloc
-                            ;     table os88pkg appends is excluded)
+    dw 0                    ; +4  link base: 0, and the loader checks it
+    dw (%2) - $$            ; +6  entry offset
+    dw OS88_IMAGE_SIZE       ; +8  image size (the whole file)
     dw OS88_BSS_SIZE         ; +10 bytes the loader zeroes after the image
-    dw 0                    ; +12 relocation count - stamped by os88pkg.py
-    dw 0                    ; +14 reserved
+    db 0FFh, 0D5h           ; +12 THE DISPATCHER: `call bp`...
+    db 0CBh                 ; +14 ...`retf`. The kernel far-calls this fixed
+    db 0                    ; +15 offset with BP = the callback it wants,
+                            ;     which is why your paint/key/click procs are
+                            ;     ordinary near procs ending in `ret` and you
+                            ;     never write `retf` (SPEC.md 20.1/20.2)
     %strlen %%len %1
     %if %%len > 15
         %error "OS88_HEADER: program name must be at most 15 characters (the 16-byte field is NUL-padded)"

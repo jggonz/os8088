@@ -112,12 +112,12 @@ np_paint:
     mov di, ax                      ; DI = pen x
     add dx, NP_MARGIN
     mov bp, dx                      ; BP = pen y
-    mov ax, [bx+W_X]
-    add ax, [bx+W_W]
+    mov ax, [es:bx+W_X]             ; the window record is KERNEL memory and
+    add ax, [es:bx+W_W]             ; ES points at it on entry (SPEC.md 20.1)
     sub ax, 2
     mov [np_rgt], ax                ; content right (inclusive)
-    mov ax, [bx+W_Y]
-    add ax, [bx+W_H]
+    mov ax, [es:bx+W_Y]
+    add ax, [es:bx+W_H]
     sub ax, 2
     mov [np_bot], ax                ; content bottom (inclusive)
 
@@ -210,8 +210,8 @@ np_toast:
     mov [np_by1], dx
     add dx, 11
     mov [np_by2], dx
-    mov ax, [bx+W_X]
-    add ax, [bx+W_W]
+    mov ax, [es:bx+W_X]
+    add ax, [es:bx+W_W]
     sub ax, 4                   ; 2px frame + a 2px gap from the edge
     mov [np_bx2], ax
     push ax
@@ -489,12 +489,12 @@ np_redraw:
     push dx
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = x1, DX = y1
-    mov cx, [bx+W_X]
-    add cx, [bx+W_W]
+    mov cx, [es:bx+W_X]
+    add cx, [es:bx+W_W]
     sub cx, 2                       ; CX = x2
     push dx
-    mov dx, [bx+W_Y]
-    add dx, [bx+W_H]
+    mov dx, [es:bx+W_Y]
+    add dx, [es:bx+W_H]
     sub dx, 2                       ; DX = y2
     pop bx                          ; BX = y1
     push ax                         ; the pen is a register here, not a
@@ -618,11 +618,11 @@ np_ondlg:
     mov di, np_name
     mov cx, NP_NAMEMAX
 .copy:
-    mov al, [si]                    ; bounded even though SPEC.md 38.6
-    mov [di], al                    ; promises <= 12: a package that trusts
-    or al, al                       ; a promise is a package with an
-    jz .copied                      ; overrun in it
-    inc si
+    mov al, [es:si]                 ; the name buffer is the KERNEL's, and ES
+    mov [di], al                    ; points there on entry (SPEC.md 38.6).
+    or al, al                       ; Bounded even though 38.6 promises <= 12:
+    jz .copied                      ; a package that trusts a promise is a
+    inc si                          ; package with an overrun in it
     inc di
     loop .copy
     mov byte [di], 0

@@ -113,19 +113,16 @@ $(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin
 	@echo "image:  $@ (360KB, 9 spt)"
 
 # Minesweeper, the first loadable program: a flat binary with the .o88
-# package header. Each package is assembled TWICE - at the 0xB000 link base
-# and at org 0xB800 - and os88pkg.py diffs the pair into the v2 relocation
-# table (SPEC.md 24), so the kernel can load any number of instances at
-# per-instance bases.
+# package header. ONE assembly per package since SPEC.md 20.1 - a package
+# links at org 0 and owns a segment, so it is position-independent and there
+# is no relocation table to build (os88pkg.py validates and stamps).
 $(BUILD)/mines.bin: apps/mines/mines.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/mines/mines.asm
 	@echo "mines:  $(call FILESIZE,$@) bytes"
 
-$(BUILD)/mines.alt.bin: apps/mines/mines.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/mines/mines.asm
 
-$(BUILD)/mines.o88: $(BUILD)/mines.bin $(BUILD)/mines.alt.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/mines.bin --alt $(BUILD)/mines.alt.bin -o $@
+$(BUILD)/mines.o88: $(BUILD)/mines.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/mines.bin -o $@
 
 # HELLO, the second package: minimal, no embedded icon (proves the
 # generic-icon fallback in the Disk window).
@@ -133,22 +130,18 @@ $(BUILD)/hello.bin: apps/hello/hello.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/hello/hello.asm
 	@echo "hello:  $(call FILESIZE,$@) bytes"
 
-$(BUILD)/hello.alt.bin: apps/hello/hello.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/hello/hello.asm
 
-$(BUILD)/hello.o88: $(BUILD)/hello.bin $(BUILD)/hello.alt.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/hello.bin --alt $(BUILD)/hello.alt.bin -o $@
+$(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/hello.bin -o $@
 
 # Note Pad, formerly the built-in KIND_NOTE app (SPEC.md 27).
 $(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/notepad/notepad.asm
 	@echo "notepad: $(call FILESIZE,$@) bytes"
 
-$(BUILD)/notepad.alt.bin: apps/notepad/notepad.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/notepad/notepad.asm
 
-$(BUILD)/notepad.o88: $(BUILD)/notepad.bin $(BUILD)/notepad.alt.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/notepad.bin --alt $(BUILD)/notepad.alt.bin -o $@
+$(BUILD)/notepad.o88: $(BUILD)/notepad.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/notepad.bin -o $@
 
 # Piano, the fifth shipped package (SPEC.md 36): a colorful playable piano
 # over the SPEC.md 34 tone tier (note viewer, replay, embedded songs).
@@ -156,11 +149,9 @@ $(BUILD)/piano.bin: apps/piano/piano.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/piano/piano.asm
 	@echo "piano:  $(call FILESIZE,$@) bytes"
 
-$(BUILD)/piano.alt.bin: apps/piano/piano.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/piano/piano.asm
 
-$(BUILD)/piano.o88: $(BUILD)/piano.bin $(BUILD)/piano.alt.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/piano.bin --alt $(BUILD)/piano.alt.bin -o $@
+$(BUILD)/piano.o88: $(BUILD)/piano.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/piano.bin -o $@
 
 # Fractal, the sixth shipped package: five escape-time fractals in Q4.12
 # fixed point, rendered by a background WORKER TASK (SPEC.md 20.6) while the
@@ -169,11 +160,9 @@ $(BUILD)/fractal.bin: apps/fractal/fractal.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/fractal/fractal.asm
 	@echo "fractal: $(call FILESIZE,$@) bytes"
 
-$(BUILD)/fractal.alt.bin: apps/fractal/fractal.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/fractal/fractal.asm
 
-$(BUILD)/fractal.o88: $(BUILD)/fractal.bin $(BUILD)/fractal.alt.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/fractal.bin --alt $(BUILD)/fractal.alt.bin -o $@
+$(BUILD)/fractal.o88: $(BUILD)/fractal.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/fractal.bin -o $@
 
 # Paint, the seventh shipped package: a bitmap editor - eight tools, a 4bpp
 # offscreen canvas above BB_SEG, one-level undo/redo, an internal clipboard and
@@ -184,11 +173,9 @@ $(BUILD)/paint.bin: apps/paint/paint.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/paint/paint.asm
 	@echo "paint:  $(call FILESIZE,$@) bytes"
 
-$(BUILD)/paint.alt.bin: apps/paint/paint.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/paint/paint.asm
 
-$(BUILD)/paint.o88: $(BUILD)/paint.bin $(BUILD)/paint.alt.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/paint.bin --alt $(BUILD)/paint.alt.bin -o $@
+$(BUILD)/paint.o88: $(BUILD)/paint.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/paint.bin -o $@
 
 # FILETEST, the file-API gate package (SPEC.md 18.4): drives the file slots
 # 0x0098..0x00A8 end to end (write, read-back, replace, rename, delete,
@@ -201,11 +188,9 @@ $(BUILD)/filetest.bin: apps/filetest/filetest.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/filetest/filetest.asm
 	@echo "filetest: $(call FILESIZE,$@) bytes"
 
-$(BUILD)/filetest.alt.bin: apps/filetest/filetest.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -DOS88_ORG=0xB800 -o $@ apps/filetest/filetest.asm
 
-$(BUILD)/filetest.o88: $(BUILD)/filetest.bin $(BUILD)/filetest.alt.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/filetest.bin --alt $(BUILD)/filetest.alt.bin -o $@
+$(BUILD)/filetest.o88: $(BUILD)/filetest.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/filetest.bin -o $@
 
 $(BUILD)/filetest.img: $(BUILD)/filetest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/filetest.o88

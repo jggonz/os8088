@@ -181,8 +181,12 @@ fdlg_open:
     call dsk_chdir              ; (SPEC.md 22.1), and from here until the
                                 ; dialog closes nothing else can move it
 
-    mov si, fdlg_tpl
+    mov si, fdlg_tpl            ; wm_create reads the template at ES:SI, and
+    push es                     ; ours is kernel data - which is also what
+    push ds                     ; tells it this is a KERNEL window (W_SEG 0)
+    pop es
     call wm_create              ; BX = window ptr, CF = table full
+    pop es
     jc .refuse
     mov ax, fdlg_s_topen
     cmp byte [fdlg_mode], 0
@@ -410,12 +414,15 @@ fdlg_commit:
     or cx, cx
     jz .out
     mov al, [fdlg_mode]         ; the callback's contract: AL = mode,
-    mov ah, 0                   ; SI = its window, DI = the name
-    mov si, [fdlg_rqwin]
-    mov di, fdlg_name
+    mov ah, 0                   ; SI = its window, ES:DI = the name - ES,
+    mov si, [fdlg_rqwin]        ; because for a package DS is its own
+    mov di, fdlg_name           ; segment and this buffer is ours (20.1)
     push es                     ; the callback owes us nothing (SPEC.md
-    call cx                     ; 38.6), and ES is the one register the
-    pop es                      ; kernel cannot shrug off (SPEC.md 1)
+    push bp                     ; 38.6), and ES is the one register the
+    mov bp, cx                  ; kernel cannot shrug off (SPEC.md 1)
+    call wm_pkgcall             ; SI = its window, BP = the completion proc
+    pop bp
+    pop es
 .out:
     pop di
     pop si

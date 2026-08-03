@@ -218,6 +218,23 @@ inst_alloc:
 ;      byte I_NAME+15 is always 0
 ; -----------------------------------------------------------------------------
 inst_set_name:
+    push es
+    push ds
+    pop es                      ; the kernel's own strings; the ES-taking
+    call inst_set_name_x        ; body below is the one that copies
+    pop es
+    ret
+
+; -----------------------------------------------------------------------------
+; inst_set_name_x - inst_set_name with the source at ES:SI (SPEC.md 20.1)
+; in:  DI = record, ES:SI = the name; at most 15 chars are taken
+; out: nothing (all registers preserved)
+;
+; The loader's copy of a package's header name crosses a segment boundary
+; now that a package owns its segment, and this is the one place that has to
+; know it.
+; -----------------------------------------------------------------------------
+inst_set_name_x:
     push ax
     push cx
     push si
@@ -233,7 +250,8 @@ inst_set_name:
     pop di
     mov cx, 15
 .copy:
-    lodsb                       ; DF=0 per SPEC.md 1
+    mov al, [es:si]
+    inc si
     or al, al
     jz .done
     mov [di], al
@@ -468,7 +486,8 @@ app_launch:
     sub dx, inst_tab
     mov cl, 5
     shr dx, cl
-    call task_spawn             ; in AX, DX; out CF / AL = slot
+    xor bx, bx                  ; a built-in kind's task is kernel code
+    call task_spawn             ; in AX, BX, DX; out CF / AL = slot
     jc .rollback
     mov [ds:bp+I_TASK], al
 
@@ -688,11 +707,13 @@ inst_pkg_spawn:
     jne .fail                   ; byte and is never cleared once set
     test byte [di+I_KIND], KIND_PKG ; the fence: a package instance...
     jz .fail
-    cmp ax, [di+I_SPTR]         ; ...whose own region holds the entry point,
-    jb .fail                    ; which is what ties this spawn to the
-    mov cx, [di+I_SPTR]         ; CALLING instance (I_SIZE = image + bss,
-    add cx, [di+I_SIZE]         ; end <= 0xFE00, so no wrap here)
-    cmp ax, cx
+    mov cx, es                  ; ...whose SEGMENT is the one calling us.
+    cmp cx, [di+I_SPTR]         ; ES is the caller's DS, stamped by the API
+    jne .fail                   ; stub (SPEC.md 20.3), and a package's DS is
+                                ; its own segment - so this is an identity
+                                ; test, not the containment approximation it
+                                ; had to be while every package shared one
+    cmp ax, [di+I_SIZE]         ; ...and an entry inside its own image+bss
     jae .fail
     mov ch, ah                  ; bank the caller's AH: task_spawn rebuilds
                                 ; the whole of AX but preserves CX
@@ -701,7 +722,8 @@ inst_pkg_spawn:
     mov cl, 5                   ; lands in the worker's DX and its DL in
     shr dx, cl                  ; T_INST, so the Task Manager attributes the
                                 ; task to this instance (SPEC.md 8/28)
-    call task_spawn             ; in AX = entry, DX = arg; out CF, AL = slot
+    mov bx, [di+I_SPTR]         ; the worker runs in the package's segment
+    call task_spawn             ; in AX = entry, BX = seg, DX = arg
     mov ah, ch                  ; caller's AH back - MOV touches no flags, so
                                 ; task_spawn's CF is still the live answer
     jc .out                     ; task table full: nothing was created
@@ -810,6 +832,9 @@ section .bss
 
 inst_tab:    resb 384           ; INST_MAX x I_RECSZ (12 x 32; literal per
                                 ; the no-forward-ref-in-bss rule)
+inst_icons:  resb 768           ; INST_MAX x 64: a per-slot copy of each
+                                ; package's embedded icon body, staged out
+                                ; of its segment at load (SPEC.md 20.2/25)
 inst_launch: resw 1             ; deferred launch: 0 = none, else kind + 1
 inst_knd:    resb 1             ; app_launch scratch: kind being launched
 inst_slot:   resw 1             ; app_launch scratch: state-pool slot

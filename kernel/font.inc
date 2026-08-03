@@ -305,11 +305,35 @@ font_ink:
 ; clobbers: nothing
 ; -----------------------------------------------------------------------------
 font_str:
+    push es                     ; the kernel's own strings live in DS; the
+    push ds                     ; ES-taking body below is the one that draws
+    pop es                      ; (SPEC.md 20.1: a package's are in its own
+    call font_str_x             ; segment, and wm/menu pass that in ES)
+    pop es
+    ret
+
+; -----------------------------------------------------------------------------
+; font_str_x - font_str with the string at ES:SI
+;
+; in:       CX = x, DX = y, ES:SI -> ASCIIZ, [gfx_color] = pen
+; out:      nothing
+; clobbers: nothing else (flags)
+;
+; Since packages left the kernel segment (SPEC.md 20.1) a drawn string can
+; belong to the kernel or to any loaded package, and the caller is the only
+; one who knows which. Five call sites in the tree pass a package segment -
+; the window title (wm_draw_win), the app name and menu titles
+; (menu_draw_bar), and the item strings (menu_drop, menu_widest); every other
+; caller reaches this through font_str above with ES = DS.
+; -----------------------------------------------------------------------------
+font_str_x:
     push ax
     push cx
     push si
+    cld
 .next:
-    lodsb
+    mov al, [es:si]
+    inc si
     or al, al
     jz .done
     call font_char              ; out-of-range chars draw nothing; pen still
@@ -329,10 +353,24 @@ font_str:
 ; clobbers: nothing else
 ; -----------------------------------------------------------------------------
 font_width:
+    push es
+    push ds
+    pop es
+    call font_width_x
+    pop es
+    ret
+
+; -----------------------------------------------------------------------------
+; font_width_x - font_width with the string at ES:SI (SPEC.md 20.1)
+; in:       ES:SI -> ASCIIZ string
+; out:      AX = 8 * length
+; clobbers: nothing else
+; -----------------------------------------------------------------------------
+font_width_x:
     push si
     xor ax, ax
 .next:
-    cmp byte [si], 0
+    cmp byte [es:si], 0
     je .done
     inc si
     add ax, 8

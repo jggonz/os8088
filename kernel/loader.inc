@@ -36,21 +36,22 @@ LD_ENOMEM   equ 5               ; instance table or pool exhausted
 ; --- staged directory entry field offsets (SPEC.md 19) ------------------------
 LD_DE_TYPE  equ 16              ; word: 1 = application package
 LD_DE_CLUS  equ 18              ; word: first cluster of the file's chain
-LD_DE_SIZE  equ 20              ; word: size in bytes (image + reloc table)
+LD_DE_SIZE  equ 20              ; word: size in bytes
 
-; --- .o88 v2 header field offsets (SPEC.md 20.2) ------------------------------
+; --- .o88 v3 header field offsets (SPEC.md 20.2) ------------------------------
 LD_H_MAGIC  equ 0               ; word: 0x384F ('O','8')
-LD_H_VER    equ 2               ; byte: format version = 2
+LD_H_VER    equ 2               ; byte: format version = 3
 LD_H_FLAGS  equ 3               ; byte: bit 0 = embedded 16x16 icon
-LD_H_LINK   equ 4               ; word: link base, must equal APP_LOAD_OFF
-LD_H_ENTRY  equ 6               ; word: entry offset, image-relative
-LD_H_IMG    equ 8               ; word: image size (reloc table excluded)
+LD_H_LINK   equ 4               ; word: link base, must be 0 (org 0 - a v3
+                                ; package is position-independent because it
+                                ; owns its segment, SPEC.md 20.1)
+LD_H_ENTRY  equ 6               ; word: entry offset
+LD_H_IMG    equ 8               ; word: image size
 LD_H_BSS    equ 10              ; word: bytes to zero after the image
-LD_H_RCNT   equ 12              ; word: relocation count
+LD_H_DISP   equ PKG_DISP        ; 12: the three-byte dispatcher, IN the
+                                ; header - `call bp / retf`. Every kernel to
+                                ; package call goes through it (SPEC.md 20.1)
 LD_HDR_SIZE equ 0x20
-
-APP_POOL_END equ APP_LOAD_OFF + APP_MAX_SIZE    ; 0xFE00, exclusive
-
 ; -----------------------------------------------------------------------------
 ; loader_init - reset loader state
 ; in:  nothing
@@ -64,27 +65,31 @@ loader_init:
 
 ; -----------------------------------------------------------------------------
 ; ld_alloc - claim a pool region, first-fit lowest base (SPEC.md 21)
-; in:  AX = bytes needed (a 512-multiple)
-; out: CF = 0, BX = region base; CF = 1 no hole fits
+; in:  AX = paragraphs needed (a 32-multiple: regions are 512-granular)
+; out: CF = 0, BX = region base SEGMENT; CF = 1 no hole fits
 ; clobbers: nothing else. UI task only (occupancy is derived from the
 ;           instance table, which only this task grows).
 ;
-; start = APP_LOAD_OFF; while any in-use package record overlaps
+; start = PKG_SEG; while any in-use package record overlaps
 ; [start, start+AX), start = that record's end, rescan from the top (each
 ; bump lands on a record end, so the loop terminates); fail when
-; start + AX > APP_POOL_END.
+; start + AX > PKG_SEG + PKG_PARA.
+;
+; Segments, not offsets, since SPEC.md 20.1: a package is loaded at a
+; paragraph boundary and addresses itself from 0, so what the allocator hands
+; out IS the package's CS and DS.
 ; -----------------------------------------------------------------------------
 ld_alloc:
     push cx
     push dx
     push si
     push di
-    mov bx, APP_LOAD_OFF        ; BX = candidate base
+    mov bx, PKG_SEG             ; BX = candidate base segment
 .retry:
     mov dx, bx
     add dx, ax                  ; DX = candidate end
     jc .full                    ; wrapped past 0xFFFF
-    cmp dx, APP_POOL_END
+    cmp dx, PKG_SEG + PKG_PARA
     ja .full
     mov di, inst_tab            ; overlap scan over in-use package records
     mov cx, INST_MAX
@@ -93,10 +98,18 @@ ld_alloc:
     je .next
     test byte [di+I_KIND], 0x80 ; packages only (builtins have I_SIZE 0)
     jz .next
-    mov si, [di+I_SPTR]
+    mov si, [di+I_SPTR]         ; SI = that region's base segment
     cmp si, dx                  ; record starts at/past our end: no overlap
     jae .next
-    add si, [di+I_SIZE]         ; SI = record end (<= 0xFE00: no wrap)
+    push cx
+    mov cl, 4
+    mov cx, [di+I_SIZE]         ; bytes -> paragraphs (I_SIZE is a 512-
+    shr cx, 1                   ; multiple, so this is exact)
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    add si, cx                  ; SI = the region's end segment
+    pop cx
     cmp si, bx                  ; record ends at/before our start: ditto
     jbe .next
     mov bx, si                  ; overlap: restart just past this record
@@ -116,46 +129,51 @@ ld_alloc:
     ret
 
 ; -----------------------------------------------------------------------------
-; ld_check_hdr - validate a .o88 v2 header (module-internal)
-; in:  SI -> 32 readable header bytes; [ld_fsz] = the file's byte count
-; out: CF = 0 and [ld_img]/[ld_bss]/[ld_ent]/[ld_rcnt] filled, or
-;      CF = 1 and AL = LD_EBAD / LD_EBIG
+; ld_check_hdr - validate a .o88 v3 header (module-internal)
+; in:  SI -> 32 readable header bytes (kernel segment); [ld_fsz] = the file's
+;      byte count
+; out: CF = 0 and [ld_img]/[ld_bss]/[ld_ent] filled, or CF = 1 and
+;      AL = LD_EBAD / LD_EBIG
 ; clobbers: AX, DX
+;
+; v3 (SPEC.md 20.2) has no relocation table: a package is linked at org 0 and
+; loaded at a paragraph boundary in its own segment, so the file IS the
+; image. The three dispatcher bytes are checked here too - they are how the
+; kernel calls in, and a package whose header does not carry them would jump
+; the kernel into its data on the first paint.
 ; -----------------------------------------------------------------------------
 ld_check_hdr:
     cmp word [si+LD_H_MAGIC], 0x384F        ; 'O','8'
     jne .bad
-    cmp byte [si+LD_H_VER], 2               ; v1 files: "Bad package"
+    cmp byte [si+LD_H_VER], 3               ; v1/v2 files: "Bad package"
     jne .bad
-    cmp word [si+LD_H_LINK], APP_LOAD_OFF
+    cmp word [si+LD_H_LINK], 0              ; org 0 or it is not v3
+    jne .bad
+    cmp word [si+LD_H_DISP], 0D5FFh         ; call bp
+    jne .bad
+    cmp byte [si+LD_H_DISP+2], 0CBh         ; retf
     jne .bad
     mov ax, [si+LD_H_IMG]
     cmp ax, LD_HDR_SIZE
     jb .bad                                 ; image smaller than the header
     cmp ax, APP_MAX_SIZE
     ja .toobig
+    cmp ax, [ld_fsz]                        ; the image IS the file now
+    jne .bad
     mov [ld_img], ax
     mov dx, [si+LD_H_BSS]
     cmp dx, APP_MAX_SIZE
     ja .toobig
     mov [ld_bss], dx
-    add dx, ax                              ; img+bss <= 0x9C00: no wrap
+    add dx, ax                              ; img+bss <= 0x1E000: no wrap
     cmp dx, APP_MAX_SIZE
     ja .toobig
-    mov ax, [si+LD_H_ENTRY]                 ; image-relative entry
+    mov ax, [si+LD_H_ENTRY]
     cmp ax, LD_HDR_SIZE
     jb .bad
     cmp ax, [ld_img]
     jae .bad
     mov [ld_ent], ax
-    mov ax, [si+LD_H_RCNT]
-    cmp ax, APP_MAX_SIZE / 2                ; bound before the shift below
-    ja .bad
-    mov [ld_rcnt], ax
-    shl ax, 1                               ; img + 2*count must equal the
-    add ax, [ld_img]                        ; file size (truncation guard)
-    cmp ax, [ld_fsz]
-    jne .bad
     clc
     ret
 .bad:
@@ -165,6 +183,57 @@ ld_check_hdr:
 .toobig:
     mov al, LD_EBIG
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; ld_icon - stage an embedded icon out of the package image (SPEC.md 20.2)
+;
+; in:  DI = the instance record, [ld_base] = the package's segment
+; out: [DI+I_ICON] = a kernel pointer to the 64-byte body, or 0
+; clobbers: nothing (flags)
+;
+; The icon used to be I_ICON pointing straight into the region, which worked
+; while the region was kernel memory. It is another segment now, and the two
+; icon renderers (VRAM and back-buffer, SPEC.md 25) read the body with plain
+; lodsw - so the 64 bytes are COPIED into a per-slot kernel buffer instead of
+; segment-qualifying two inner loops. 768 bytes of .bss for the whole table,
+; and the dock and the Disk window keep the near pointer they always had.
+; -----------------------------------------------------------------------------
+ld_icon:
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    mov word [di+I_ICON], 0
+    mov es, [ld_base]
+    test byte [es:LD_H_FLAGS], 1
+    jz .out
+    mov ax, di                  ; destination = inst_icons + slot*64
+    sub ax, inst_tab
+    mov cl, 5
+    shr ax, cl
+    mov cl, 6
+    shl ax, cl
+    add ax, inst_icons
+    mov [di+I_ICON], ax
+    mov di, ax
+    mov si, LD_HDR_SIZE         ; the body rides right after the header
+    push ds
+    push es
+    pop ds                      ; DS = the package, ES = ours: the movsb
+    pop es                      ; direction the copy needs
+    mov cx, 64
+    cld
+    rep movsb
+.out:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -280,17 +349,13 @@ ld_run_body:
     mov cx, LD_HDR_SIZE
     call dsk_copy_in            ; LOW_SEG:dsk_secbuf -> KERNEL_SEG:ld_hdr
     mov si, ld_hdr
-    call ld_check_hdr           ; fills ld_img/ld_bss/ld_ent/ld_rcnt;
+    call ld_check_hdr           ; fills ld_img/ld_bss/ld_ent;
     jc .ret1                    ; AL = LD_EBAD / LD_EBIG on failure
 
     ; --- 4. size the allocation -------------------------------------------------
-    mov ax, [ld_img]            ; need = roundup512(max(img+bss, fsize))
+    mov ax, [ld_img]            ; need = roundup512(img + bss)
     add ax, [ld_bss]
-    cmp ax, [ld_fsz]
-    jae .sized
-    mov ax, [ld_fsz]
-.sized:
-    add ax, 511                 ; <= 0x4E00 + 511: no 16-bit overflow
+    add ax, 511                 ; <= 0xF000 + 511: no 16-bit overflow
     mov cl, 9
     shr ax, cl
     shl ax, cl
@@ -301,8 +366,13 @@ ld_run_body:
     ; --- 5. reserve an instance record + a pool region -------------------------
     call inst_alloc             ; DI = record (unpublished: still free on
     jc .nomem                   ; any later failure)
-    mov bp, di                  ; BP = the record for the duration
-    call ld_alloc               ; in: AX = need; out: BX = region base
+    mov [ld_rec], di            ; banked in .bss, not in BP: BP carries the
+                                ; entry offset into the dispatcher below,
+                                ; and loader_run is UI-task-only and one
+                                ; load at a time (SPEC.md 21)
+    mov cl, 4
+    shr ax, cl                  ; AX = paragraphs (the 512-multiple divides)
+    call ld_alloc               ; out: BX = region base SEGMENT
     jc .nomem
     mov [ld_base], bx
     jmp short .read
@@ -325,96 +395,84 @@ ld_run_body:
     shr ax, cl
     mov dx, ax                  ; DX = ceil(fsize/512) sectors
     mov ax, [ld_clus]
-    mov bx, KERNEL_SEG          ; ES stays KERNEL_SEG through step 9 (the
-    mov es, bx                  ; caller restores the real ES afterwards)
-    mov bx, [ld_base]
+    mov es, [ld_base]           ; the package's OWN segment, offset 0
+    xor bx, bx
     call dsk_read_chain         ; in: AX=cluster, DX=sectors, ES:BX -> dest.
     jc .ret2                    ; on CF, AL is ALREADY the status: 1 =
                                 ; LD_EDISK (disk error), 2 = LD_EBAD (chain
                                 ; corrupt is bad data, not a disk error) -
                                 ; SPEC.md 21 step 6
 
-    mov si, [ld_base]           ; re-check against the in-region header -
-    call ld_check_hdr           ; the disk could have been swapped between
-    jc .ret2                    ; the peek and the read
+    mov si, ld_hdr              ; re-check against the in-region header - the
+    mov di, si                  ; disk could have been swapped between the
+    push ds                     ; peek and the read. It lives in the package
+    push es                     ; segment now, so it is staged like any other
+    pop ds                      ; cross-segment read (SPEC.md 20.1)
+    xor si, si
+    push cx
+    mov cx, LD_HDR_SIZE
+    push cs
+    pop es
+    cld
+    rep movsb
+    pop cx
+    pop ds
+    push ds
+    pop es                      ; ES = KERNEL again for the zero below
+    mov si, ld_hdr
+    call ld_check_hdr
+    jc .ret2
 
-    ; --- 7. apply the relocation table ------------------------------------------
-    ; Table at base+img: [ld_rcnt] words. Low 15 bits = image offset of the
-    ; word to patch (validated into [0x20, img-2]); bit 15 = class: 0 = an
-    ; embedded package address (+= delta), 1 = a kernel-bound rel16
-    ; displacement (-= delta) - SPEC.md 20.2.
-    mov si, [ld_base]
-    add si, [ld_img]            ; SI -> reloc table
-    mov cx, [ld_rcnt]
-    mov dx, [ld_base]
-    sub dx, APP_LOAD_OFF        ; DX = delta (0 for a base-of-pool load)
-    jcxz .reloc_done
-    cld                         ; DF=0 for lodsw (SPEC.md 1)
-.reloc:
-    lodsw                       ; AX = table entry
-    mov di, ax
-    and di, 0x7FFF              ; DI = image offset
-    cmp di, LD_HDR_SIZE
-    jb .bad2                    ; a fixup may never touch the header
-    mov bx, [ld_img]
-    sub bx, 2
-    cmp di, bx
-    ja .bad2                    ; or run past the image end
-    add di, [ld_base]           ; DI -> the word to patch
-    test ax, 0x8000
-    jnz .relsub
-    add [di], dx                ; class 0: embedded package address
-    jmp short .relnext
-.relsub:
-    sub [di], dx                ; class 1: rel16 displacement into the kernel
-.relnext:
-    loop .reloc
-    jmp short .reloc_done
-.ret2:
-    ret
-.bad2:
-    mov al, LD_EBAD
-    ret
-
-    ; --- 8. zero the package bss (overwrites the dead reloc table) -------------
-.reloc_done:
-    mov di, [ld_base]
-    add di, [ld_img]
+    ; --- 7. zero the package bss ------------------------------------------------
+    mov es, [ld_base]
+    mov di, [ld_img]
     mov cx, [ld_bss]
     xor al, al
     cld
-    rep stosb                   ; ES=KERNEL_SEG; CX may be 0 (no-op)
+    rep stosb                   ; CX may be 0 (no-op)
+    push ds
+    pop es                      ; ES = KERNEL again (SPEC.md 1 rule 3)
 
-    ; --- 9. launch ---------------------------------------------------------------
-    ; DS = ES = KERNEL_SEG, IF=1, gfx lock not held (SPEC.md 20.2). The entry
-    ; creates its window(s) lock-free and returns BX = window ptr / CF set.
-    mov bx, [ld_base]
-    add bx, [ld_ent]
-    call bx
+    ; --- 8. launch ---------------------------------------------------------------
+    ; The entry runs with CS = DS = its own segment, ES = KERNEL_SEG, IF = 1
+    ; and the gfx lock NOT held (SPEC.md 20.2). It is reached the same way
+    ; every other package callback is - through the dispatcher in its header
+    ; (SPEC.md 20.1) - so an entry proc is an ordinary near proc ending in an
+    ; ordinary `ret`, and returns BX = its window / CF set.
+    mov ax, [ld_base]
+    mov [ld_fp+2], ax           ; a module-local far pointer: loader_run is
+    mov word [ld_fp], PKG_DISP  ; UI-task-only and one load at a time
+    mov bp, [ld_ent]
+    push ds
+    push cs
+    pop es                      ; ES = KERNEL_SEG, per the callback contract
+    mov ds, ax                  ; DS = the package's own segment - and the
+    call far [cs:ld_fp]         ; far pointer is therefore read through CS,
+    pop ds                      ; the gfx_nextrow idiom of SPEC.md 39.3
     jc .abort
 
-    ; --- 10. register + publish the instance, show the window ------------------
-    mov di, bp
+    ; --- 9. register + publish the instance, show the window ---------------------
+    jmp short .reg
+.ret2:
+    ret
+
+.reg:
+    mov di, [ld_rec]
     mov byte [di+I_KIND], KIND_PKG
     mov byte [di+I_TASK], 0xFF  ; born task-less; a callback may claim one
                                 ; worker later (SPEC.md 20.6). The entry
                                 ; proc cannot: neither I_STATE nor
                                 ; wm_owner is published until right here.
     mov ax, [ld_base]
-    mov [di+I_SPTR], ax
+    mov [di+I_SPTR], ax         ; the region's base SEGMENT (SPEC.md 20.1)
     mov ax, [ld_need]
     mov [di+I_SIZE], ax         ; allocated bytes: pool occupancy + RAM sum
-    mov si, [ld_base]
-    add si, 16                  ; header name field (NUL-pad-safe copy)
-    call inst_set_name
-    xor ax, ax
-    mov si, [ld_base]
-    test byte [si+LD_H_FLAGS], 1
-    jz .noicon
-    mov ax, si
-    add ax, LD_HDR_SIZE         ; embedded icon body rides in the region
-.noicon:
-    mov [di+I_ICON], ax
+    push es
+    mov es, [ld_base]           ; the name field is in the package's image
+    mov si, 16
+    call inst_set_name_x        ; ES:SI -> the 16-byte NUL-padded name
+    pop es
+    call ld_icon                ; copy an embedded icon into kernel .bss
     call inst_bind_win          ; DI = record, BX = window (from the entry)
     mov byte [di+I_STATE], 1    ; publish - the LAST record write
     call gfx_lock
@@ -464,10 +522,11 @@ ld_fsz:     resw 1              ; file size, bytes (image + reloc table)
 ld_img:     resw 1              ; header: image size
 ld_bss:     resw 1              ; header: bss size
 ld_ent:     resw 1              ; header: image-relative entry
-ld_rcnt:    resw 1              ; header: relocation count
 ld_base:    resw 1              ; allocated region base
 ld_need:    resw 1              ; allocated region size (512-multiple)
 ld_hdr:     resb LD_HDR_SIZE    ; the peeked .o88 header, staged out of the
                                 ; LOW_SEG sector buffer for ld_check_hdr
+ld_rec:     resw 1              ; the reserved instance record
+ld_fp:      resw 2              ; far pointer to the package's dispatcher
 
 section .text

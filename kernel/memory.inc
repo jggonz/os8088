@@ -256,8 +256,13 @@ mem_free_rec:
     sub ax, inst_tab
     mov cl, 5                   ; I_RECSZ = 32
     shr ax, cl
-    mov bx, ax
-    call mem_free_owner
+    mov bx, ax                  ; a built-in's claims are stamped with its
+    call mem_free_owner         ; instance slot (the Disk window's cache)
+    test byte [di+I_KIND], KIND_PKG
+    jz .done
+    mov bx, [di+I_SPTR]         ; ...and a package's with its segment, which
+    call mem_free_owner         ; is what it could name itself by
+.done:
     pop cx
     pop bx
     pop ax
@@ -475,20 +480,23 @@ mem_total_kb:
     ret
 
 ; =============================================================================
-; The API slot targets (SPEC.md 20.3/42.3). A package names itself by its own
-; window, exactly as OSAPI_TASK_SPAWN does (SPEC.md 20.6): the ownership
-; fence is the same one, and for the same reason - a borrowed window pointer
-; must not let one instance spend or free another's memory.
+; The API slot targets (SPEC.md 20.3/42.3).
+;
+; A package does not name itself: its SEGMENT is its identity, and the API
+; stub hands that over in ES (SPEC.md 20.3). Nothing can be spoofed - a
+; package cannot forge the CS/DS it runs in - and, unlike a window-pointer
+; fence, it works from the ENTRY PROC, where there is no window and no
+; published instance yet. That matters: sizing yourself to the memory you can
+; actually get is the first thing an app does, before it creates its window.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; osapi_mem_claim - in: AX = KB, BX = the caller's own window ptr
+; osapi_mem_claim - in: AX = KB, ES = the caller's segment (the stub's doing)
 ;                   out: CF = 0 and DX = segment, CF = 1 refused
 ; -----------------------------------------------------------------------------
 osapi_mem_claim:
     push bx
-    push di
-    call mem_own                ; BX = owner word for this caller
+    call mem_own                ; BX = owner word = the calling segment
     jc .fail
     call mem_claim
     jmp short .out
@@ -496,22 +504,19 @@ osapi_mem_claim:
     xor dx, dx
     stc
 .out:
-    pop di
     pop bx
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_mem_free - in: DX = segment, BX = the caller's own window ptr
-;                  out: CF = 0 released, CF = 1 refused
+; osapi_mem_free - in: DX = segment, ES = the caller's segment
+;                  out: CF = 0 released, CF = 1 refused (not yours)
 ; -----------------------------------------------------------------------------
 osapi_mem_free:
     push bx
-    push di
     call mem_own
     jc .out                     ; CF = 1 already
     call mem_free
 .out:
-    pop di
     pop bx
     ret
 
@@ -522,25 +527,24 @@ osapi_mem_avail:
     jmp mem_avail
 
 ; -----------------------------------------------------------------------------
-; mem_own - window pointer to owner word (module-internal)
-; in:  BX = a window pointer that came from a package (never trusted)
-; out: CF = 0 and BX = the owning instance's slot; CF = 1 if BX is not a
-;      plausible window, is unowned, or names a dying instance
-; clobbers: BX (the output), DI, flags
+; mem_own - the calling package's owner word (module-internal)
+; in:  ES = the caller's segment, stamped by the API stub
+; out: CF = 0 and BX = the owner word (that same segment); CF = 1 if the
+;      caller is not a loaded package
+; clobbers: BX (the output), flags
+;
+; The pool bound is the whole test. A segment inside [PKG_SEG, PKG_SEG +
+; PKG_PARA) is a loaded package and nothing else can be, so it is a unique,
+; unforgeable owner - two instances of one package live at different bases.
+; The kernel's own claims use 0xFFxx tags and a built-in's use its instance
+; slot (0..11); all three ranges are disjoint by construction.
 ; -----------------------------------------------------------------------------
 mem_own:
-    call inst_wchk              ; bound it before any deref (SPEC.md 20.6)
-    jc .bad
-    call inst_of_win            ; DI = the record owning BX
-    jc .bad
-    cmp byte [di+I_STATE], 1
-    jne .bad
-    mov bx, di                  ; record ptr -> slot index
-    sub bx, inst_tab
-    push cx
-    mov cl, 5
-    shr bx, cl
-    pop cx
+    mov bx, es
+    cmp bx, PKG_SEG
+    jb .bad
+    cmp bx, PKG_SEG + PKG_PARA
+    jae .bad
     clc
     ret
 .bad:

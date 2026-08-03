@@ -51,19 +51,20 @@ WCR_X2  equ 4
 WCR_Y2  equ 6
 WCR_SZ  equ 8
 
-; loadable programs (SPEC.md 20)
-APP_LOAD_OFF equ 0xB000         ; where packages load (kernel segment offset)
-APP_MAX_SIZE equ 0x4E00         ; image + bss budget, 0xB000..0xFDFF
-                                ; The pool sat at 0xA000..0xEFFF until the
-                                ; task stacks left the segment (SPEC.md 2.1)
-                                ; and freed the 4KB that task 0's stack used
-                                ; to occupy above it. Sliding the pool up
-                                ; hands that 4KB to the kernel window. The
-                                ; span gives up 512 bytes on the way: an
-                                ; exclusive end of 0x10000 is not a 16-bit
-                                ; immediate, so the pool stops at 0xFE00 and
-                                ; the last half-sector of the segment is
-                                ; deliberately left unused.
+; loadable programs (SPEC.md 20) - the pool is its own address space now
+PKG_PARA     equ 0x0F00         ; 61,440 bytes: the package pool, SPEC.md
+                                ; 20.1. It was 19,968 bytes at the top of the
+                                ; kernel's own segment, which is all that was
+                                ; left there; a package now owns a SEGMENT,
+                                ; links at org 0, and is loaded at a
+                                ; paragraph boundary inside this block
+APP_MAX_SIZE equ 0xF000         ; the biggest single package: the whole pool
+PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
+                                ; .o88 header (SPEC.md 20.2): three bytes,
+                                ; `call bp / retf`. Every kernel-to-package
+                                ; call lands here with BP = the real target,
+                                ; which is what lets every package callback
+                                ; stay a near proc with a near `ret`
 
 ; =============================================================================
 ; The memory stack (SPEC.md 2). ONE ladder, bottom to top, and every rung is
@@ -116,10 +117,12 @@ KERN_MAX    equ 0xB000          ; the kernel's own ceiling: image + .bss and
 VIEW_SLOTS  equ 4               ; max Disk windows = the kind's KD_CAP
 VIEW_KB     equ 3               ; each cache: 1KB of entries + 2KB of icons
 
-HEAP_SEG    equ KERNEL_SEG + 0x1000   ; the claim heap (SPEC.md 42): the
-                                ; paragraph after the kernel's 64KB segment,
-                                ; up to whatever int 12h reports. Nothing up
-                                ; there has a fixed address any more
+PKG_SEG     equ KERNEL_SEG + (KERN_MAX / 16)  ; the pool starts where the
+                                ; kernel's own budget ends - no gap
+HEAP_SEG    equ PKG_SEG + PKG_PARA    ; the claim heap (SPEC.md 42): the
+                                ; paragraph after the pool, up to whatever
+                                ; int 12h reports. Nothing up there has a
+                                ; fixed address any more
 
 ; double buffering (SPEC.md 32) - the back buffer is a heap CLAIM now, so
 ; there is no BB_SEG constant: bb_init asks for BB_KB and remembers what it
@@ -164,85 +167,100 @@ cold_entry:
 ; =============================================================================
 ; os8088 API jump table (SPEC.md 20.3)
 ;
-; Loaded programs `call` these pinned absolute offsets; each slot is a 4-byte
-; cell: `jmp near target` (3 bytes) + 1 pad byte. Register contracts are the
-; target routines' own. The slot order below IS the ABI - never reorder.
+; Loaded programs FAR-call these pinned absolute offsets: 8-byte cells at
+; 0x0010 + 8n, each one a complete DS switch around a near call into the
+; kernel routine named in the comment. The slot order below IS the ABI -
+; never reorder.
+;
+; Why 8 bytes and a DS switch. Since SPEC.md 20.1 a package lives in its OWN
+; segment, so CS and DS are the package's on the way in and must be the
+; KERNEL's while kernel code runs. `push cs / pop ds` is the two-byte way to
+; say that (the table is .text, so CS is KERNEL_SEG here), and it clobbers no
+; register - which matters, because every register in this ABI is an argument
+; to something. The cell is exactly:
+;
+;       push ds / push cs / pop ds / call near target / pop ds / retf
+;
+; POP and RETF touch no flags, so a routine's CF answer survives the return
+; (menu_win_set and inst_pkg_alive contractually preserve the FLAGS word).
+;
+; Three cells need more than that and jump to a stub below instead:
+;   X  the caller's DS must reach the kernel routine (a package pointer it
+;      has to dereference) - the stub puts it in ES
+;   N  the caller passes a NUL name at DS:SI while ES:BX is already spoken
+;      for by a data buffer - the stub STAGES the name into kernel scratch,
+;      the dsk_get_dir idiom of SPEC.md 2.1
 ; =============================================================================
-%macro OSAPI_SLOT 1
-    jmp near %1                 ; E9 rel16 = 3 bytes
-    db 0                        ; pad to a 4-byte cell
+%macro OSAPI_SLOT 1                 ; 8 bytes exactly
+    push ds
+    push cs
+    pop ds
+    call %1
+    pop ds
+    retf
+%endmacro
+
+%macro OSAPI_JSLOT 1                ; a cell that defers to a longer stub
+    jmp near %1                     ; E9 rel16 = 3 bytes
+    times 5 db 0
 %endmacro
 
 osapi_table:
-    OSAPI_SLOT gfx_lock          ; 0x0010
-    OSAPI_SLOT gfx_unlock        ; 0x0014
-    OSAPI_SLOT gfx_pixel         ; 0x0018
-    OSAPI_SLOT gfx_hline         ; 0x001C
-    OSAPI_SLOT gfx_vline         ; 0x0020
-    OSAPI_SLOT gfx_fill          ; 0x0024
-    OSAPI_SLOT gfx_frame         ; 0x0028
-    OSAPI_SLOT gfx_fill_gray     ; 0x002C
-    OSAPI_SLOT gfx_xor_rect      ; 0x0030
-    OSAPI_SLOT gfx_xor_fill      ; 0x0034
-    OSAPI_SLOT font_char         ; 0x0038
-    OSAPI_SLOT font_str          ; 0x003C
-    OSAPI_SLOT font_width        ; 0x0040
-    OSAPI_SLOT wm_create         ; 0x0044
-    OSAPI_SLOT wm_show           ; 0x0048
-    OSAPI_SLOT wm_hide           ; 0x004C
-    OSAPI_SLOT wm_front          ; 0x0050
-    OSAPI_SLOT wm_content        ; 0x0054
-    OSAPI_SLOT wm_obscured       ; 0x0058
-    OSAPI_SLOT task_yield        ; 0x005C
-    OSAPI_SLOT task_sleep        ; 0x0060
-    OSAPI_SLOT osapi_get_ticks    ; 0x0064
-    OSAPI_SLOT osapi_set_color    ; 0x0068
-    OSAPI_SLOT osapi_mouse        ; 0x006C
-    OSAPI_SLOT osapi_srand        ; 0x0070
-    OSAPI_SLOT osapi_rand         ; 0x0074
-    OSAPI_SLOT osapi_snd_caps     ; 0x0078 - sound (SPEC.md 20.3/34): what
-    OSAPI_SLOT osapi_snd_tone     ; 0x007C   the PC speaker can do, a tone,
-    OSAPI_SLOT osapi_snd_play     ; 0x0080   and a clip out of the caller's
-                                  ;          own buffer. The FM and STREAM
-                                  ;          slots went with the sound cards
-    OSAPI_SLOT wm_sizable         ; 0x008C - window features (SPEC.md 11.1)
-    OSAPI_SLOT wm_fullscreen      ; 0x0090 - fullscreen (SPEC.md 11.2)
-    OSAPI_SLOT wm_grow_paint      ; 0x0094 - grow-box restore after a
-                                  ;          self-repaint (SPEC.md 11.1)
-    OSAPI_SLOT dskw_write         ; 0x0098 - files (SPEC.md 18.4/20.3): the
-    OSAPI_SLOT dskw_read          ; 0x009C   dskw_* contracts ARE the ABI,
-    OSAPI_SLOT dskw_delete        ; 0x00A0   so the slots jump straight at
-    OSAPI_SLOT dskw_rename        ; 0x00A4   them - no wrapper in between
-    OSAPI_SLOT dskw_dfree         ; 0x00A8
-    OSAPI_SLOT menu_win_set       ; 0x00AC - app menus (SPEC.md 12.2): in
-                                  ;          BX = win ptr, SI = menu set
-    OSAPI_SLOT fdlg_open          ; 0x00B0 - the Standard File dialog
-                                  ;          (SPEC.md 38.6): in AL = mode,
-                                  ;          BX = win, DI = callback,
-                                  ;          SI = default name. The caller
-                                  ;          holds the lock, so this shows
-                                  ;          the window before it returns
-    OSAPI_SLOT osapi_video        ; 0x00B4 - runtime screen geometry
-                                  ;          (SPEC.md 39.2): the screen is no
-                                  ;          longer always 640x480, so the
-                                  ;          SCREEN_* equs in os88api.inc are
-                                  ;          a reference, not a promise
-    OSAPI_SLOT inst_pkg_spawn     ; 0x00B8 - package worker tasks (SPEC.md
-    OSAPI_SLOT inst_pkg_alive     ; 0x00BC   20.6): AX = entry, BX = own win
-    OSAPI_SLOT wm_clip_set        ; 0x00C0 - the clip region (SPEC.md 11.3):
-    OSAPI_SLOT wm_clip_clear      ; 0x00C4   what a worker may draw, in place
-                                  ;          of the wm_obscured veto...
-    OSAPI_SLOT wm_clip_test       ; 0x00C8   ...and the whole-shape question,
-                                  ;          for anything that erases a rect
-                                  ;          and then draws glyphs into it
-    OSAPI_SLOT osapi_mem_claim    ; 0x00CC - the claim heap (SPEC.md 42.3):
-    OSAPI_SLOT osapi_mem_free     ; 0x00D0   AX = KB, BX = your own window;
-    OSAPI_SLOT osapi_mem_avail    ; 0x00D4   out DX = segment / CF. How a
-                                  ;          package gets memory it cannot
-                                  ;          fit in its own region - and the
-                                  ;          kernel force-frees it at
-                                  ;          teardown, like a sound grant
-osapi_table_end:                 ; 0x00D8
+    OSAPI_SLOT gfx_lock           ; 0x0010
+    OSAPI_SLOT gfx_unlock         ; 0x0018
+    OSAPI_SLOT gfx_pixel          ; 0x0020
+    OSAPI_SLOT gfx_hline          ; 0x0028
+    OSAPI_SLOT gfx_vline          ; 0x0030
+    OSAPI_SLOT gfx_fill           ; 0x0038
+    OSAPI_SLOT gfx_frame          ; 0x0040
+    OSAPI_SLOT gfx_fill_gray      ; 0x0048
+    OSAPI_SLOT gfx_xor_rect       ; 0x0050
+    OSAPI_SLOT gfx_xor_fill       ; 0x0058
+    OSAPI_SLOT font_char          ; 0x0060
+    OSAPI_JSLOT api_font_str      ; 0x0068  X: the string is package data
+    OSAPI_JSLOT api_font_width    ; 0x0070  X
+    OSAPI_JSLOT api_wm_create     ; 0x0078  X: so is the template
+    OSAPI_SLOT wm_show            ; 0x0080
+    OSAPI_SLOT wm_hide            ; 0x0088
+    OSAPI_SLOT wm_front           ; 0x0090
+    OSAPI_SLOT wm_content         ; 0x0098
+    OSAPI_SLOT wm_obscured        ; 0x00A0
+    OSAPI_SLOT task_yield         ; 0x00A8
+    OSAPI_SLOT task_sleep         ; 0x00B0
+    OSAPI_SLOT osapi_get_ticks    ; 0x00B8
+    OSAPI_SLOT osapi_set_color    ; 0x00C0
+    OSAPI_SLOT osapi_mouse        ; 0x00C8
+    OSAPI_SLOT osapi_srand        ; 0x00D0
+    OSAPI_SLOT osapi_rand         ; 0x00D8
+    OSAPI_SLOT osapi_snd_caps     ; 0x00E0 - sound (SPEC.md 34): what the PC
+    OSAPI_SLOT osapi_snd_tone     ; 0x00E8   speaker can do, a tone, and a
+    OSAPI_SLOT osapi_snd_play     ; 0x00F0   clip out of the caller's buffer
+    OSAPI_SLOT wm_sizable         ; 0x00F8 - window features (SPEC.md 11.1)
+    OSAPI_SLOT wm_fullscreen      ; 0x0100 - fullscreen (SPEC.md 11.2)
+    OSAPI_SLOT wm_grow_paint      ; 0x0108 - grow-box restore (SPEC.md 11.1)
+    OSAPI_JSLOT api_file_write    ; 0x0110 - files (SPEC.md 18.4/20.3): N,
+    OSAPI_JSLOT api_file_read     ; 0x0118   because ES:BX is the data buffer
+    OSAPI_JSLOT api_file_delete   ; 0x0120   and the name still has to cross
+    OSAPI_JSLOT api_file_rename   ; 0x0128   (two names, this one)
+    OSAPI_SLOT dskw_dfree         ; 0x0130
+    OSAPI_SLOT menu_win_set       ; 0x0138 - app menus (SPEC.md 12.2): the
+                                  ;          set's segment comes from the
+                                  ;          window, so no stub is needed
+    OSAPI_JSLOT api_fdlg_open     ; 0x0140 - the Standard File dialog
+                                  ;          (SPEC.md 38.6): N, for the
+                                  ;          default name
+    OSAPI_SLOT osapi_video        ; 0x0148 - runtime screen geometry (39.2)
+    OSAPI_JSLOT api_pkg_spawn     ; 0x0150 - worker tasks (SPEC.md 20.6): X,
+                                  ;          the ownership fence needs to
+                                  ;          know which segment is calling
+    OSAPI_SLOT inst_pkg_alive     ; 0x0158
+    OSAPI_SLOT wm_clip_set        ; 0x0160 - the clip region (SPEC.md 11.3)
+    OSAPI_SLOT wm_clip_clear      ; 0x0168
+    OSAPI_SLOT wm_clip_test       ; 0x0170
+    OSAPI_JSLOT api_mem_claim     ; 0x0178 - the claim heap (SPEC.md 42.3):
+    OSAPI_JSLOT api_mem_free      ; 0x0180   X, same fence as the spawn
+    OSAPI_SLOT osapi_mem_avail    ; 0x0188
+osapi_table_end:                  ; 0x0190
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -250,9 +268,121 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 48 * 4
-%error "os8088 API jump table must be exactly 48 4-byte slots"
+%if OSAPI_TABLE_LEN != 48 * 8
+%error "os8088 API jump table must be exactly 48 8-byte slots"
 %endif
+
+; =============================================================================
+; The stubs the X and N cells jump to (SPEC.md 20.3). Each ends in retf and
+; restores every segment register it borrowed.
+; =============================================================================
+
+; X: ES = the caller's DS, so the kernel routine can reach package data
+%macro OSAPI_XSTUB 2
+%1:
+    push ds                     ; the caller's DS...
+    push es                     ; ...and its ES
+    push ds
+    pop es                      ; ES = the caller's DS
+    push cs
+    pop ds                      ; DS = KERNEL_SEG
+    call %2
+    pop es
+    pop ds
+    retf
+%endmacro
+
+    OSAPI_XSTUB api_font_str,   font_str_x
+    OSAPI_XSTUB api_font_width, font_width_x
+    OSAPI_XSTUB api_wm_create,  wm_create
+    OSAPI_XSTUB api_pkg_spawn,  inst_pkg_spawn
+    OSAPI_XSTUB api_mem_claim,  osapi_mem_claim
+    OSAPI_XSTUB api_mem_free,   osapi_mem_free
+
+; N: the name at the caller's DS:SI is staged into kernel scratch first,
+; because ES:BX belongs to the caller's data buffer and cannot carry it
+%macro OSAPI_NSTUB 2
+%1:
+    push ds
+    push si
+    push di
+    push es
+    push cs
+    pop es                      ; ES = KERNEL for the copy destination
+    mov di, api_name
+    call api_copyname           ; caller DS:SI -> ES:DI, at most 13 bytes
+    pop es                      ; the caller's ES back: it is the buffer
+    pop di                      ; and its DI, which fdlg_open needs as an
+                                ; input (the completion proc's offset)
+    push cs
+    pop ds                      ; DS = KERNEL
+    mov si, api_name
+    call %2
+    pop si
+    pop ds
+    retf
+%endmacro
+
+    OSAPI_NSTUB api_file_write,  dskw_write
+    OSAPI_NSTUB api_file_read,   dskw_read
+    OSAPI_NSTUB api_file_delete, dskw_delete
+    OSAPI_NSTUB api_fdlg_open,   fdlg_open
+
+; ...and the two-name case, which needs DI as well and so is written out
+api_file_rename:
+    push ds
+    push si
+    push di
+    push es
+    push cs
+    pop es                      ; ES = KERNEL
+    push di                     ; bank the new-name pointer across the first
+    mov di, api_name            ; copy, which needs DI itself
+    call api_copyname           ; old name
+    pop si                      ; SI = the caller's DI = the new name
+    mov di, api_name2
+    call api_copyname           ; new name
+    pop es
+    push cs
+    pop ds                      ; DS = KERNEL
+    mov si, api_name
+    mov di, api_name2
+    call dskw_rename
+    pop di
+    pop si
+    pop ds
+    retf
+
+; -----------------------------------------------------------------------------
+; api_copyname - stage a NUL 8.3 name across the segment boundary
+; in:  DS:SI = the caller's name, ES:DI = kernel scratch (13 bytes)
+; out: nothing (all registers preserved); the copy is NUL-terminated even if
+;      the source was not - a package cannot make this run on
+; -----------------------------------------------------------------------------
+api_copyname:
+    push ax
+    push cx
+    push si
+    push di
+    cld
+    mov cx, 13
+.c:
+    lodsb
+    stosb
+    or al, al
+    jz .done
+    loop .c
+    mov byte [es:di-1], 0
+.done:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+api_name:   times 13 db 0       ; staged names (.text, not .bss: the file
+api_name2:  times 13 db 0       ; slots are reachable before anything clears
+                                ; .bss, and -f bin clears nothing)
 
 ; =============================================================================
 ; Boot (SPEC.md 15)
@@ -437,8 +567,8 @@ KBSS_SIZE equ kernel_bss_end - $$
 ; does for the bare kernel_bss_end label.
 KLOWFAR_KB equ (KLOW_SIZE + KFAR_SIZE + 1023) / 1024
 
-; 1. image + bss must stay below KERN_MAX - everything above it belongs to
-;    the loaded-program region (SPEC.md 20).
+; 1. image + bss must stay below KERN_MAX - the package pool starts there
+;    (SPEC.md 20.1).
 %if KTEXT_SIZE + KBSS_SIZE > KERN_MAX
 %error "kernel too big: image + bss must stay below KERN_MAX"
 %endif

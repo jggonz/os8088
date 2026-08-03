@@ -821,14 +821,18 @@ fr_setup:
     jnz .have
     jmp .out
 .have:
-    mov ax, [bx+W_W]                ; content = w-2 by h-TITLE_H-1, less the
-    sub ax, 2                       ; status strip
+    mov ax, [es:bx+W_W]             ; content = w-2 by h-TITLE_H-1, less the
+    sub ax, 2                       ; status strip. The record is KERNEL
+                                    ; memory and ES points there both in a
+                                    ; callback and in our worker's frame
+                                    ; (SPEC.md 20.1/20.6) - and this package
+                                    ; never loads ES with anything else
     cmp ax, 1
     jge .cwok
     mov ax, 1                       ; never 0: it is a divisor below
 .cwok:
     mov [fr_cw], ax
-    mov ax, [bx+W_H]
+    mov ax, [es:bx+W_H]
     sub ax, TITLE_H+1+FR_STRIP_H
     cmp ax, 1
     jge .chok
@@ -1230,7 +1234,7 @@ fr_emit_body:
     mov bx, [fr_win]
     or bx, bx
     jz .step
-    test word [bx+W_FLAGS], 2       ; still visible?
+    test word [es:bx+W_FLAGS], 2    ; still visible?
     jz .step
     call OSAPI_WM_CLIP_SET          ; how much of it shows? (SPEC.md 11.3)
     jc .step

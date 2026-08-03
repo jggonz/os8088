@@ -398,7 +398,7 @@ disk_mount:
 
     ; --- 4. icon harvest (SPEC.md 18.3 step 4; failures are NON-fatal) ---
     ; Type-1 entries carry a validated first cluster: peek the file's first
-    ; sector, and if it is a v2 .o88 with the embedded-icon flag, its bytes
+    ; sector, and if it is a v3 .o88 with the embedded-icon flag, its bytes
     ; 32..95 are the 16x16 icon body. Everything else - type 0, iconless,
     ; read failure - gets the all-zero slot (the generic-icon sentinel).
     ; disk_icons is fully rewritten every mount (SPEC.md 29.1).
@@ -425,7 +425,7 @@ disk_mount:
     call dsk_copy_in
     cmp word [dsk_ent+0], 0x384F    ; .o88 magic 'O','8'
     jne .h_zero
-    cmp byte [dsk_ent+2], 2         ; format version
+    cmp byte [dsk_ent+2], 3         ; format version (SPEC.md 20.2)
     jne .h_zero
     test byte [dsk_ent+3], 1        ; embedded-icon flag
     jz .h_zero

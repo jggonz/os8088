@@ -213,7 +213,13 @@ sched_unhook:
 ; which DS does not address. The task record itself is ordinary kernel .bss
 ; and stays DS-relative.
 ;
-; in:       AX = entry point (near, kernel segment)
+; in:       AX = entry point (an offset in the code segment below)
+;           BX = the code segment the task runs in, or 0 for KERNEL_SEG.
+;                A package's worker runs with CS = DS = its own segment and
+;                ES = KERNEL_SEG (SPEC.md 20.1/20.6), which is exactly what
+;                the frame below sets up - the scheduler itself needs no
+;                change, because DS, ES and CS are already part of the saved
+;                frame and sch_resume pops all three.
 ;           DX = argument word - lands in the new task's DX; DL is also
 ;                stored to T_INST (instance index, 0xFF = none)
 ; out:      CF = 1 if no free slot (task not created)
@@ -229,6 +235,13 @@ task_spawn:
     push es
     pushf                       ; the caller's IF, banked across the window
     cli
+    or bx, bx                   ; BX = 0 means the kernel's own segment
+    jnz .haveseg
+    mov bx, KERNEL_SEG
+.haveseg:
+    mov [sch_newseg], bx        ; banked: BX is the scan pointer below, and
+                                ; this whole routine runs at IF=0 so no
+                                ; second spawner can be in here with us
 
     mov bx, sch_tasks + T_SIZE  ; scan for a free slot, from slot 1
     mov cx, 1                   ; CX = slot index
@@ -259,8 +272,9 @@ task_spawn:
     mov es, ax                  ; through ES - DS cannot reach it. AX is dead
                                 ; here: DI already carries the frame address
                                 ; and the xor below is its next use
-    mov word [es:di], KERNEL_SEG   ; DS slot
-    mov word [es:di+2], KERNEL_SEG ; ES slot
+    mov cx, [sch_newseg]
+    mov [es:di], cx                ; DS slot = the task's own segment
+    mov word [es:di+2], KERNEL_SEG ; ES slot: the kernel, always (SPEC 20.1)
     xor ax, ax
     mov [es:di+4], ax           ; BP
     mov [es:di+6], ax           ; DI
@@ -270,7 +284,8 @@ task_spawn:
     mov [es:di+14], ax          ; CX
     mov [es:di+16], ax          ; AX
     mov [es:di+18], si          ; IP = entry
-    mov word [es:di+20], KERNEL_SEG ; CS
+    mov cx, [sch_newseg]
+    mov [es:di+20], cx          ; CS = the task's own segment
     mov word [es:di+22], 0x0202 ; FLAGS: IF=1, reserved bit 1 set
     mov [bx+T_INST], dl         ; owning instance (0xFF = none)
 
@@ -785,6 +800,9 @@ sch_hold:   resb 1                      ; ticks the running task has held the
                                         ; and is compared against
                                         ; SCH_WD_TICKS (18) on the tick that
                                         ; incremented it, so it cannot pass 18
+sch_newseg: resw 1                      ; task_spawn scratch: the code segment
+                                        ; of the task being built (IF=0, so
+                                        ; it cannot race a second spawner)
 sch_wd_hits: resw 1                     ; watchdog-forced switches; diagnostic
                                         ; only (QMP xp on segment 0x1000),
                                         ; wraps mod 65536, never reset

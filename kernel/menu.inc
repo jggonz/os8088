@@ -223,21 +223,36 @@ menu_relayout:
     push dx
     push si
     push di
+    push es
 
     mov bx, [menu_win]
     or bx, bx
     jnz .app
-    mov si, menu_loc_set        ; no window owns the bar: Locator does
+    mov word [menu_seg], 0      ; no window owns the bar: Locator does, and
+    push cs                     ; its set is kernel data
+    pop es
+    mov si, menu_loc_set
     mov [menu_set], si
-    mov si, [si + AM_NAME]
+    mov si, [es:si + AM_NAME]
     jmp .name_done
 
 .app:
+    push di                     ; the owner's segment, once, for every read
+    mov di, bx                  ; of the set below AND for menu_draw_bar,
+    call wm_strseg              ; menu_drop and menu_widest afterwards
+    pop di                      ; (SPEC.md 12.2/20.1)
+    mov ax, es
+    mov cx, cs
+    cmp ax, cx
+    jne .pkgset
+    xor ax, ax
+.pkgset:
+    mov [menu_seg], ax
     mov si, [bx + W_MENUS]      ; 0 = a window with no menus of its own
     mov [menu_set], si
     or si, si
     jz .from_inst
-    mov si, [si + AM_NAME]
+    mov si, [es:si + AM_NAME]
     or si, si
     jnz .name_done
 .from_inst:
@@ -245,7 +260,10 @@ menu_relayout:
     or di, di
     jz .from_title
     mov si, di
-    add si, I_NAME              ; the 16-byte inline name field
+    add si, I_NAME              ; the 16-byte inline name field - KERNEL data,
+    mov word [menu_seg], 0      ; so the label's segment is ours after all
+    push cs
+    pop es
     jmp .name_done
 .from_title:
     mov si, [bx + W_TITLE]
@@ -254,6 +272,9 @@ menu_relayout:
     or si, si                   ; a nameless window still gets a label
     jnz .have_name
     mov si, menu_loc_name
+    mov word [menu_seg], 0
+    push cs
+    pop es
 .have_name:
     mov [menu_namep], si
 
@@ -269,14 +290,15 @@ menu_relayout:
     add di, MB_ENTSZ
 
     ; --- the app's own menus, left to right after the name label -----------
-    call font_width             ; SI = the name; AX = its pixel width
+    call font_width_x           ; SI = the name at ES:SI; AX = its width
     add ax, MENU_NAME_X + MENU_NAME_PAD
     mov bx, ax                  ; BX = running left edge
 
     mov si, [menu_set]
     or si, si
     jz .done
-    mov cx, [si + AM_COUNT]
+    call menu_es                ; ES = the set's segment (0 = ours)
+    mov cx, [es:si + AM_COUNT]
     cmp cx, MENU_APPMAX         ; never trust a package's count (SPEC 12.2)
     jbe .cnt_ok
     mov cx, MENU_APPMAX
@@ -286,8 +308,8 @@ menu_relayout:
 .cell:
     push cx
     push si
-    mov si, [si + AMENU_TITLE]
-    call font_width             ; AX = title width
+    mov si, [es:si + AMENU_TITLE]
+    call font_width_x           ; AX = title width
     pop si
     add ax, MENU_TITLE_PAD      ; AX = cell width
     mov dx, bx
@@ -299,11 +321,11 @@ menu_relayout:
                                 ; matching its index in the app's set and
                                 ; ui_dispatch's `dec ah` would hand the
                                 ; handler the wrong menu (SPEC.md 12/12.2)
-    mov ax, [si + AMENU_TITLE]
+    mov ax, [es:si + AMENU_TITLE]
     mov [di + MB_TITLE], ax
-    mov ax, [si + AMENU_ITEMS]
+    mov ax, [es:si + AMENU_ITEMS]
     mov [di + MB_ITEMS], ax
-    mov ax, [si + AMENU_NITEM]
+    mov ax, [es:si + AMENU_NITEM]
     mov [di + MB_NITEM], ax
     mov [di + MB_XL], bx
     mov ax, bx
@@ -325,12 +347,32 @@ menu_relayout:
                                 ; is dropped, so the cells that DID fit keep
                                 ; bar index == set index
 .done:
+    pop es
     pop di
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_es - point ES at the segment the active menu set's data lives in
+; in:  nothing ([menu_seg] is the answer, 0 = the kernel's own)
+; out: ES; nothing else (flags untouched)
+;
+; Every string and every word of an app menu set is an offset in the OWNING
+; package's segment (SPEC.md 12.2/20.1). One window owns the bar at a time,
+; so one word answers for the whole set - there is no per-entry segment in
+; menu_bar, and there does not need to be.
+; -----------------------------------------------------------------------------
+menu_es:
+    push cs
+    pop es
+    cmp word [menu_seg], 0
+    je .out
+    mov es, [menu_seg]
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -363,11 +405,13 @@ menu_draw_bar:
     mov dx, MBAR_H - 1
     call gfx_hline
 
-    mov si, menu_namep          ; the active application's name (SPEC 12)
-    mov si, [si]
+    push es                     ; the name and every cell title belong to the
+    call menu_es                ; owner (SPEC.md 12.2/20.1)
+    mov si, [menu_namep]        ; the active application's name (SPEC 12)
     mov cx, MENU_NAME_X
     mov dx, MENU_TEXT_Y
-    call font_str
+    call font_str_x
+    pop es
 
     mov si, menu_bar            ; titles (gfx_color is already black)
     mov cx, [menu_nbar]
@@ -379,8 +423,11 @@ menu_draw_bar:
     mov cx, [si + MB_TX]
     mov dx, MENU_TEXT_Y
     push si
+    push es
+    call menu_es
     mov si, ax
-    call font_str
+    call font_str_x
+    pop es
     pop si
     jmp .next
 .glyph:
@@ -687,17 +734,22 @@ menu_drop:
     mov dx, [menu_y1]
     add dx, 1 + 4               ; first cell top + 4px pad centers 8px glyphs
     jcxz .drawn
+    push es
 .item:
     push cx
-    mov si, [bx]
-    call menu_trunc             ; SI = the item, truncated to MENU_MAXCH so
-    mov cx, [menu_x1]           ; no glyph lands outside the saved rect
+    call menu_es                ; the item array AND the strings it points at
+    mov si, [es:bx]             ; are the owner's (SPEC.md 12.2/20.1); ES is
+                                ; re-established per pass because menu_trunc
+                                ; may repoint it at the kernel's copy
+    call menu_trunc             ; ES:SI = the item, truncated to MENU_MAXCH,
+    mov cx, [menu_x1]           ; so no glyph lands outside the saved rect
     add cx, 8
-    call font_str
+    call font_str_x
     pop cx
     add bx, 2
     add dx, MENU_ITEM_H
     loop .item
+    pop es
 .drawn:
     call gfx_flush              ; pull-down + items on screen (SPEC.md 32)
 
@@ -856,29 +908,28 @@ menu_trunc:
     push ax
     push cx
     push di
-    push es
-    push ds
-    pop es
     mov cx, MENU_MAXCH
     mov di, si                  ; does it already fit?
 .len:
-    cmp byte [di], 0
+    cmp byte [es:di], 0
     je .fits
     inc di
     loop .len
-    cmp byte [di], 0            ; exactly MENU_MAXCH characters also fits
+    cmp byte [es:di], 0         ; exactly MENU_MAXCH characters also fits
     je .fits
-    mov cx, MENU_MAXCH          ; no: copy the prefix
-    mov di, menu_tbuf
-    cld
-.copy:
-    lodsb
-    stosb
+    mov cx, MENU_MAXCH          ; no: copy the prefix into our own buffer.
+    mov di, menu_tbuf           ; The source is ES:SI (the owner's) and the
+.copy:                          ; destination is kernel .bss, so the store
+    mov al, [es:si]             ; goes through CS - which IS KERNEL_SEG here,
+    inc si                      ; the gfx_nextrow idiom of SPEC.md 39.3
+    mov [cs:di], al
+    inc di
     loop .copy
-    mov byte [es:di], 0
+    mov byte [cs:di], 0
     mov si, menu_tbuf
+    push cs
+    pop es                      ; the copy is ours: so is the segment now
 .fits:
-    pop es
     pop di
     pop cx
     pop ax
@@ -899,11 +950,13 @@ menu_widest:
     push cx
     push dx
     push si
+    push es
+    call menu_es                ; the owner's segment (SPEC.md 12.2/20.1)
     xor dx, dx                  ; running max
     jcxz .done                  ; `loop` would wrap CX to 0xFFFF
 .next:
-    mov si, [bx]
-    call font_width             ; AX = 8 * strlen
+    mov si, [es:bx]
+    call font_width_x           ; AX = 8 * strlen
     cmp ax, dx
     jbe .keep
     mov dx, ax
@@ -911,6 +964,7 @@ menu_widest:
     add bx, 2
     loop .next
 .done:
+    pop es
     cmp dx, MENU_MAXW - 16      ; the clamp both callers need (above): the
     jbe .clamped                ; save-under's width factor, bounded here
     mov dx, MENU_MAXW - 16      ; once instead of at two call sites
@@ -1043,6 +1097,9 @@ menu_iptr:  resw 1              ; its array of near item-string pointers
 menu_btn:   resb 1              ; mouse_btn mask that keeps it open: 1 = the
                                 ; bar's left button, 2 = a popup's right one
 menu_sel:   resw 1              ; highlighted item, 0xFFFF = none
+menu_seg:   resw 1              ; the segment [menu_set] and every string it
+                                ; points at live in; 0 = the kernel's own
+                                ; (Locator, and any built-in window)
 menu_sseg:  resw 1              ; the save-under claim's segment, 0 = none
                                 ; (menu_drop then repaints instead)
 menu_tbuf:  resb MENU_MAXCH + 1 ; menu_trunc's staging buffer

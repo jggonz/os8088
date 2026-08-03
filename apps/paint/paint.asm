@@ -128,33 +128,26 @@
     dw 0x0000
     OS88_ICON16_END
 
-; --- the memory we claim above BB_SEG (see the header) --------------------------
-; All of it is sized from int 12h at startup, because the canvas is not a
-; fixed size: the picture, its undo image and the clipboard are three
-; runtime-sized buffers, and how big a picture the machine can hold is one
-; division. Only the base is a constant.
-; The canvas base is one of two segments, chosen at startup by [pt_base]:
-PT_BASE_HI  equ 0x6600              ; the first paragraph above BB_SEG's four
-                                    ; back-buffer planes - the safe answer
-PT_BASE_LO  equ 0x4000              ; BB_SEG itself, when the kernel can never
-                                    ; arm a back buffer to put there (below)
-PT_BB_KB    equ 500                 ; kernel/kernel.asm's DB_MIN_KB, mirrored:
-                                    ; bb_init refuses below it, and on any 1bpp
-                                    ; adapter, so in either case those 150KB are
-                                    ; dead and worth more to us (SPEC.md 41.8)
-PT_SC_KB    equ 12                  ; scratch (claim record + fill stack), taken
-                                    ; off the TOP of usable memory so its
-                                    ; address is deterministic for the claim
+; --- the memory we CLAIM from the kernel (SPEC.md 42) ---------------------------
+; One contiguous block, asked for at startup and carved into four: canvas,
+; undo image, clipboard, scratch. Nothing here is a fixed address any more -
+; the kernel owns the map and hands us a segment, which is the whole of what
+; docs/PAINT-NOTES.md asked for. What used to be here instead: two hard-coded
+; bases (0x66000, or BB_SEG when the kernel could never arm a back buffer),
+; a mirror of the kernel's DB_MIN_KB policy constant to choose between them,
+; and a magic-word claim record so two Paints could not silently share one
+; canvas. All three are gone: OSAPI_MEM_CLAIM cannot hand the same paragraph
+; to two instances, so two Paints now simply both run.
+PT_SC_KB    equ 12                  ; scratch (the flood-fill stack), taken off
+                                    ; the TOP of the block
 PT_CLIPMINP equ 1024                ; the clipboard's floor, in paragraphs
 PT_MINP     equ 2000                ; ...and a canvas under 32,000 bytes
                                     ; (320x200) is not worth starting
-PT_MEMTOP   equ 640                 ; the int 12h answer we cap at: an 8086 has
-                                    ; no more conventional memory than this
-
-PT_MAGIC1   equ 0x3850              ; 'P8' - the claim record's signature...
-PT_MAGIC2   equ 0x5A17              ; ...in two words, so stale RAM cannot
-                                    ; plausibly pass for a live owner
-PT_SC_CLAIM equ 0                   ; claim record: magic1, magic2, win ptr
+PT_WANT_KB  equ 318                 ; the most we can ever use: two canvases at
+                                    ; the 640x464 ceiling (145KB each), the
+                                    ; clipboard floor (16KB) and the scratch.
+                                    ; Asking for more would just deny it to
+                                    ; the back buffer and to other packages
 PT_SC_STACK equ 16                  ; flood-fill span stack starts here
 PT_FSTK_MAX equ 1024                ; entries of 8 bytes (y, x1, x2, dy)
 
@@ -238,9 +231,8 @@ PT_NTOOL    equ 8
 
 ; --- modes: anything but PT_M_LIVE draws a notice and eats every input ---------
 PT_M_LIVE   equ 0
-PT_M_NOMEM  equ 1                   ; int 12h cannot fund a minimum canvas
-PT_M_DUP    equ 2                   ; another Paint owns the canvas
-PT_M_SMALL  equ 3                   ; the desktop cannot hold a usable canvas
+PT_M_NOMEM  equ 1                   ; the heap cannot fund a minimum canvas
+PT_M_SMALL  equ 2                   ; the desktop cannot hold a usable canvas
 
 PT_NAMEMAX  equ 12                  ; 8 + '.' + 3, as SPEC.md 38.6 hands it over
 
@@ -265,12 +257,7 @@ pt_entry:
     mov byte [pt_ethick], 1         ; text scale; the eraser starts at 16px
                                     ; against the pencil's 1px, which is what
                                     ; "much thicker by default" means here
-    call pt_geom                    ; screen limits, memory budget, canvas
-    cmp byte [pt_mode], PT_M_LIVE
-    jne .make                       ; already refusing: do not read the claim
-    call pt_dupchk                  ; CF=1: another live Paint has the canvas
-    jnc .make
-    mov byte [pt_mode], PT_M_DUP
+    call pt_geom                    ; screen limits, the memory claim, canvas
 .make:
     push si
     mov si, pt_tpl
@@ -293,8 +280,7 @@ pt_entry:
                                     ; so its name shows and File/Edit are
                                     ; visibly inert rather than absent
     pushf                           ; the CF wm_create owes the loader rides
-    call pt_claim                   ; through every one of these
-    call pt_canvas_init
+    call pt_canvas_init             ; through every one of these
     call pt_font_init
     popf
 .menus:
@@ -361,34 +347,32 @@ pt_geom:
     ; clipboard a fixed floor), so dropping one is what lets a machine that can
     ; hold a picture but not two of them run the program at all.
 .mem:
-    int 0x12                        ; AX = KB of conventional memory
-    cmp ax, PT_MEMTOP
-    jbe .kb_ok
-    mov ax, PT_MEMTOP
-.kb_ok:
-    ; --- where the canvas starts, which is the whole low-RAM story -----------
-    ; The kernel's four back-buffer planes occupy 0x40000..0x657FF, but bb_init
-    ; only claims them on a colour adapter with DB_MIN_KB or more (SPEC.md 32).
-    ; When it cannot, nothing in the tree touches that 150KB - and 150KB is the
-    ; difference between a 300KB machine running this program and not. Reading
-    ; the kernel's own floor is a coupling, and docs/PAINT-NOTES.md says what
-    ; would retire it.
-    mov word [pt_base], PT_BASE_HI
-    cmp ax, PT_BB_KB
-    jae .basefix
-    mov word [pt_base], PT_BASE_LO
-.basefix:
-    cmp byte [pt_mono], 0           ; ...and a 1bpp adapter never gets one at all
-    je .based
-    mov word [pt_base], PT_BASE_LO
-.based:
+    ; --- ask the kernel what it can give us, then take it (SPEC.md 42.3) -----
+    ; This is the whole memory story now. OSAPI_MEM_AVAIL answers with what is
+    ; actually free - not what the machine has - so it already accounts for
+    ; the back buffer if it is armed, for another Paint's canvas, and for
+    ; every other package's claim. We ask for the largest run, capped at what
+    ; we could ever use, and the kernel frees it when this instance dies.
+    call OSAPI_MEM_AVAIL            ; AX = largest free run, KB
+    cmp ax, PT_WANT_KB
+    jbe .want_ok
+    mov ax, PT_WANT_KB
+.want_ok:
+    cmp ax, PT_SC_KB + 32           ; below this even the smallest canvas and
+    jb .nomem                       ; the scratch cannot both fit
+    push ax
+    call OSAPI_MEM_CLAIM            ; out DX = base segment, CF = refused
+    pop ax
+    jc .nomem
+    mov [pt_base], dx
     sub ax, PT_SC_KB
-    jbe .nomem
     mov cl, 6
-    shl ax, cl                      ; KB -> paragraphs, at most 40,192
-    mov [pt_scseg], ax              ; scratch: the claim record + fill stack
-    sub ax, [pt_base]
-    jbe .nomem
+    shl ax, cl                      ; KB -> paragraphs of usable block
+    add dx, ax
+    mov [pt_scseg], dx              ; scratch: the flood-fill stack, at the top
+                                    ; of the block so its address is fixed
+    or ax, ax
+    jz .nomem
     mov byte [pt_haveundo], 1
     mov byte [pt_haveclip], 1
     cmp ax, PT_CLIPMINP + 2 * PT_MINP
@@ -659,82 +643,6 @@ pt_urowset:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_dupchk - is another live Paint holding the canvas? (see the file header)
-; in:  nothing (reads the claim record at PT_SCSEG:PT_SC_CLAIM)
-; out: CF=1 yes; preserves all registers
-;
-; The record is only believed when all four tests pass: both magic words, a
-; window pointer inside the kernel's own data range, W_FLAGS bit 0 (the slot
-; is still in use, SPEC.md 11) and a W_TITLE string equal to ours. A Paint
-; that has been closed fails the third or fourth test - its slot is free, or
-; some other app has since taken it - which is exactly why a stale claim
-; cannot lock the app out of the machine for the rest of the session.
-; The pointer range test comes first: without it a garbage word would be
-; dereferenced, and although a read of a random kernel word is harmless, a
-; read of one below the API table is not obviously so.
-; -----------------------------------------------------------------------------
-pt_dupchk:
-    push ax
-    push bx
-    push si
-    push di
-    push es
-    mov ax, [pt_scseg]
-    mov es, ax
-    cmp word [es:PT_SC_CLAIM], PT_MAGIC1
-    jne .free
-    cmp word [es:PT_SC_CLAIM+2], PT_MAGIC2
-    jne .free
-    mov bx, [es:PT_SC_CLAIM+4]      ; the claimed window record
-    cmp bx, 0x0100                  ; below the API table: not a record
-    jb .free
-    cmp bx, APP_LOAD_OFF            ; inside the package pool: not a record
-    jae .free
-    test word [bx + W_FLAGS], 1     ; still a used window slot?
-    jz .free
-    mov si, [bx + W_TITLE]          ; ...and still called what we call ours?
-    mov di, pt_s_title              ; The PREFIX only: the live title carries
-.cmp:                               ; the canvas size after it, and two Paints
-    mov al, [di]                    ; need not be the same size to collide
-    or al, al
-    jz .taken
-    cmp al, [si]
-    jne .free
-    inc si
-    inc di
-    jmp short .cmp
-.taken:
-    stc
-    jmp short .out
-.free:
-    clc
-.out:
-    pop es
-    pop di
-    pop si
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; pt_claim - publish the claim record (magic pair + our window pointer)
-; in:  [pt_win]
-; out: nothing; preserves all registers
-; -----------------------------------------------------------------------------
-pt_claim:
-    push ax
-    push es
-    mov ax, [pt_scseg]
-    mov es, ax
-    mov word [es:PT_SC_CLAIM], PT_MAGIC1
-    mov word [es:PT_SC_CLAIM+2], PT_MAGIC2
-    mov ax, [pt_win]
-    mov [es:PT_SC_CLAIM+4], ax
-    pop es
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; pt_canvas_init - stamp the DIB header, white the picture
 ; in:  a layout already adopted (pt_layout)
 ; out: nothing; preserves all registers
@@ -934,10 +842,11 @@ pt_org:
     add ax, PT_CV_X
     mov [pt_cx0], ax
     mov [pt_cy0], dx
-    mov ax, [bx + W_W]              ; the live record is the truth about size,
+    mov ax, [es:bx + W_W]           ; the live record is the truth about size,
     sub ax, 2                       ; and a resizable window's is rewritten
-    mov [pt_contw], ax              ; under us by ui_grow (SPEC.md 11.1)
-    mov ax, [bx + W_H]
+    mov [pt_contw], ax              ; under us by ui_grow (SPEC.md 11.1).
+                                    ; It is KERNEL memory: ES (SPEC.md 20.1)
+    mov ax, [es:bx + W_H]
     sub ax, TITLE_H + 1
     mov [pt_conth], ax
     mov ax, [pt_ch]
@@ -5349,21 +5258,24 @@ pt_wfix:
     push ax
     push bx
     push dx
+    push es
+    mov ax, KERNEL_SEG          ; the record we are about to rewrite is the
+    mov es, ax                  ; kernel's (SPEC.md 20.1)
     mov bx, [pt_win]
     mov ax, [pt_cw]
     add ax, PT_CHROME_W
-    mov [bx + W_W], ax
+    mov [es:bx + W_W], ax
     mov dx, [pt_ch]
     add dx, PT_CHROME_H
-    mov [bx + W_H], dx
+    mov [es:bx + W_H], dx
     mov ax, [pt_scrw]               ; x + w <= screen width
-    sub ax, [bx + W_W]
+    sub ax, [es:bx + W_W]
     jns .xc
     xor ax, ax
 .xc:
-    cmp [bx + W_X], ax
+    cmp [es:bx + W_X], ax
     jle .yc
-    mov [bx + W_X], ax
+    mov [es:bx + W_X], ax
 .yc:
     mov ax, [pt_dockr]              ; y + h <= the row the dock owns
     sub ax, dx
@@ -5371,10 +5283,11 @@ pt_wfix:
     jge .yc2
     mov ax, MBAR_H
 .yc2:
-    cmp [bx + W_Y], ax
+    cmp [es:bx + W_Y], ax
     jle .out
-    mov [bx + W_Y], ax
+    mov [es:bx + W_Y], ax
 .out:
+    pop es
     pop dx
     pop bx
     pop ax
@@ -6211,17 +6124,21 @@ pt_adopt:
 pt_wfollow:
     push ax
     push bx
+    push es
+    mov ax, KERNEL_SEG
+    mov es, ax
     call pt_wsize
     mov bx, [pt_win]
     mov ax, [pt_tpl + WT_W]
-    mov [bx + W_W], ax
+    mov [es:bx + W_W], ax
     mov ax, [pt_tpl + WT_H]
-    mov [bx + W_H], ax
+    mov [es:bx + W_H], ax
     mov ax, [pt_tpl + WT_X]
-    mov [bx + W_X], ax
+    mov [es:bx + W_X], ax
     mov ax, [pt_tpl + WT_Y]
-    mov [bx + W_Y], ax
+    mov [es:bx + W_Y], ax
     mov byte [pt_wchg], 1
+    pop es
     pop bx
     pop ax
     ret
@@ -7454,9 +7371,8 @@ pt_i_f2:     db 'Text Size 2x', 0
 pt_i_f4:     db 'Text Size 4x', 0
 
 ; --- the notice windows (indexed by [pt_mode] - 1) ---------------------------
-pt_notice:   dw pt_s_nomem, pt_s_dup, pt_s_small
+pt_notice:   dw pt_s_nomem, pt_s_small
 pt_s_nomem:  db 'Not enough memory.', 0
-pt_s_dup:    db 'Paint is already running.', 0
 pt_s_small:  db 'The screen is too small.', 0
 pt_s_note2:  db 'Close this window.', 0
 
@@ -7788,7 +7704,7 @@ pt_ic_text:
     PTBYTE pt_wchg                  ; the window was resized: repaint the lot
     PTBYTE pt_kept                  ; a resize was refused to save the artwork
     PTBYTE pt_apend                 ; ...and the notice for it is owed
-    PTWORD pt_base                  ; PT_BASE_HI or PT_BASE_LO (SPEC.md 41.8)
+    PTWORD pt_base                  ; the claimed block's base (SPEC.md 42.3)
     PTBYTE pt_haveundo              ; this machine can fund an undo image...
     PTBYTE pt_haveclip              ; ...and a clipboard (SPEC.md 41.8)
     PTBYTE pt_fbox                  ; the size box with the keyboard, 0 = none

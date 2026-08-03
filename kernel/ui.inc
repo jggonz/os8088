@@ -71,7 +71,10 @@ ui_task:
     pop ax                      ; key back for the handler's contract
     push dx                     ; start stamp: hi, then lo
     push bx
-    call [si + W_ONKEY]
+    push bp
+    mov bp, [si + W_ONKEY]      ; wm_pkgcall: record in SI (where the
+    call wm_pkgcall             ; contract already puts it), offset in BP
+    pop bp
     pop ax
     pop dx
     pop word [snd_inst]         ; the outer dispatch's stamp, back
@@ -177,7 +180,10 @@ ui_task:
     pop cx                      ; click x
     push ax                     ; start stamp: hi, then lo
     push bx
-    call [si + W_ONCLICK]
+    push bp
+    mov bp, [si + W_ONCLICK]    ; wm_pkgcall: record in SI, offset in BP
+    call wm_pkgcall
+    pop bp
     pop ax
     pop dx
     pop word [snd_inst]         ; the outer dispatch's stamp, back
@@ -710,9 +716,18 @@ ui_dispatch:
     push ax
     mov si, [menu_win]          ; the handler's contract: AL = item,
     mov bx, [menu_set]          ; AH = menu, SI = window, BX = the set
-    mov cx, [bx + AM_ONCMD]
+    push es                     ; the set is the OWNER's data (SPEC.md 12.2),
+    push di                     ; so AM_ONCMD is read through its segment
+    mov di, si
+    call wm_strseg              ; ES = the window's string/data segment
+    mov cx, [es:bx + AM_ONCMD]
+    pop di
+    pop es
     mov ax, [ui_menusel]
-    call cx
+    push bp
+    mov bp, cx
+    call wm_pkgcall             ; SI = window, BP = the handler
+    pop bp
     pop ax                      ; start stamp
     pop dx
     pop word [snd_inst]         ; the outer dispatch's stamp, back
