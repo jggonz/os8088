@@ -111,6 +111,7 @@ fdlg_s_newf:   db 'New', 0      ; the two-line New Folder button (FD_BH2)
 fdlg_s_newf2:  db 'Folder', 0
 fdlg_s_lopen:  db 'Open:', 0
 fdlg_s_lsave:  db 'Save as:', 0
+fdlg_s_lfold:  db 'Folder:', 0 ; 8 glyphs is what fits before the box
 fdlg_s_dotdot: db '..', 0
 fdlg_s_folder: db 'folder', 0
 fdlg_s_up:     db 'up', 0
@@ -178,7 +179,8 @@ fdlg_open:
 
     mov byte [fdlg_nlen], 0     ; seed the name box from the caller's default
     mov byte [fdlg_ncur], 0
-    mov byte [fdlg_name], 0
+    mov byte [fdlg_nmode], 0    ; ...as a FILE name; the New Folder button is
+    mov byte [fdlg_name], 0     ; what switches the box to naming a folder
     or si, si
     jz .fresh
     call fdlg_setname
@@ -553,8 +555,11 @@ fdlg_go:
     call dsk_chdir
     mov word [fdlg_sel], 0xFFFF
     mov word [fdlg_scrl], 0
-    pop ax
-    ret
+    call fdlg_unfold            ; a folder name half typed here would be made
+    pop ax                      ; THERE - abandon it with the location it was
+    ret                         ; meant for (fdlg_newfolder calls this itself,
+                                ; and unfolds again after: both are no-ops the
+                                ; second time)
 
 ; -----------------------------------------------------------------------------
 ; fdlg_setsel - move the selection and scroll it into view (internal)
@@ -906,7 +911,11 @@ fdlg_paint:
     cmp byte [fdlg_mode], 0
     je .nlabel
     mov si, fdlg_s_lsave
-.nlabel:
+    cmp byte [fdlg_nmode], 0
+    je .nlabel
+    mov si, fdlg_s_lfold        ; the box is naming a folder: say so, or the
+.nlabel:                        ; user is typing a folder name into a field
+                                ; labelled 'Save as:'
     mov byte [gfx_color], CBLACK
     mov cx, 6
     mov dx, FD_NTY
@@ -1182,18 +1191,19 @@ fdlg_repaint:
 ; -----------------------------------------------------------------------------
 fdlg_act:
     push ax
+    cmp byte [fdlg_nmode], 0
+    jne .mkfolder               ; the box is naming a FOLDER, not a file
     mov ax, [fdlg_sel]
     cmp ax, 0xFFFF
     je .nosel
     call fdlg_stage
     cmp word [fdlg_type], 2
-    jne .nosel                  ; a file: commit it the way Save does
-    call fdlg_dive              ; a FOLDER is navigated into, in EITHER mode -
-    jmp short .stay             ; selecting one and pressing Enter used to
-.nosel:                         ; save a FILE under whatever name the box
-    cmp byte [fdlg_mode], 0     ; still held, which is how PAINT.O88 got
-    jne .save                   ; overwritten with a text note during testing
-    jmp short .refuse           ; open mode, nothing chosen: the button is inert
+    jne .save                   ; a FILE: commit it, in either mode
+    call fdlg_dive              ; a FOLDER: navigate into it, in either mode.
+    jmp short .stay             ; Selecting one and pressing Enter in Save mode
+.nosel:                         ; used to save a file under whatever name the
+    cmp byte [fdlg_mode], 0     ; box still held
+    je .refuse                  ; Open with nothing chosen: the button is inert
 .save:
     cmp byte [fdlg_nlen], 0
     je .refuse                  ; an empty name is not an answer
@@ -1201,6 +1211,9 @@ fdlg_act:
     call fdlg_commit
     stc
     ret
+.mkfolder:
+    call fdlg_newfolder         ; Enter finishes naming it, the same as
+    jmp short .stay             ; clicking the button again does
 .refuse:
     call snd_beep
 .stay:
@@ -1209,21 +1222,23 @@ fdlg_act:
     ret
 
 ; -----------------------------------------------------------------------------
-; fdlg_newfolder - make a folder here, named by the box, and go into it
-; in:  fdlg_name / fdlg_nlen hold the typed name; SI = window ptr; lock held
+; fdlg_newfolder - the New Folder button, both halves of it
+; in:  SI = window ptr; lock held
 ; out: nothing (all registers preserved)
 ;
-; The dialog could navigate INTO folders and out of them and had no way to
-; make one, so saving into a new folder meant closing the dialog, opening a
-; Disk window, pressing n, and starting again. The name box is already a
-; line editor with the FAT character set enforced on every keystroke
-; (fdlg_onkey), so the whole button is: take what is in it, dskw_mkdir, and
-; dive - which leaves the dialog where the user wants to save, with the box
-; still holding the folder's name for them to overwrite with the file's.
+; **The name box holds the FILE name**, which is the whole point of a Save As
+; dialog - so using it as the folder name, which the first version of this
+; did, created a folder called PICTURE.GIF and then saved the picture inside
+; it. The button is therefore a two-step: the first click parks the file name
+; and turns the box into a folder-name field (the label changes to say so),
+; the second click - or Enter - creates the folder, navigates into it, and
+; puts the file name back so the user can carry on saving. Escape backs out
+; the same way.
 ;
-; An 8.3 name with an extension is legal for a directory and is not rejected
-; here; `dskw_mkdir` applies the same name rules as every other write, and
-; its FERR_* comes back in the status line the same way a failed save's does.
+; This is the same shape the Disk window's New Folder already has (SPEC.md
+; 22: `n` arms a status-line prompt), which is why it needs no new input
+; path: the box is already a line editor with the FAT character set enforced
+; per keystroke.
 ; -----------------------------------------------------------------------------
 fdlg_newfolder:
     push ax
@@ -1232,6 +1247,23 @@ fdlg_newfolder:
     push dx
     push si
     push di
+    cmp byte [fdlg_nmode], 0
+    jne .create
+
+    ; --- first click: park the file name and empty the box ------------------
+    mov si, fdlg_name
+    mov di, fdlg_nsave
+    call fdlg_ncopy
+    mov al, [fdlg_nlen]
+    mov [fdlg_nslen], al
+    mov byte [fdlg_nlen], 0
+    mov byte [fdlg_ncur], 0
+    mov byte [fdlg_name], 0
+    mov byte [fdlg_nmode], 1
+    jmp short .out
+
+    ; --- second click: make it, go into it, and restore the file name -------
+.create:
     cmp byte [fdlg_nlen], 0
     je .beep                    ; an empty name is not a folder name
     mov si, fdlg_name
@@ -1239,19 +1271,70 @@ fdlg_newfolder:
     jc .beep                    ; already remounted (SPEC.md 18.5), so the
     mov si, fdlg_name           ; listing below is the fresh one
     call fdlg_findname          ; AX = its first cluster, CF=1 = not found
-    jc .out
+    jc .restore
     mov dl, [disk_drive]
     call fdlg_go
+.restore:
+    call fdlg_unfold
     jmp short .out
 .beep:
     call snd_beep               ; refused (a bad name, a full disk, a
 .out:                           ; write-protected volume) - the same answer
-                                ; every other refusal in this dialog gives
+    pop di                      ; every other refusal in this dialog gives.
+    pop si                      ; SI first: the folder work above pointed it
+    call fdlg_repaint           ; at fdlg_name, and fdlg_repaint wants the
+    pop dx                      ; WINDOW - through the name it silently draws
+    pop cx                      ; nothing and the dialog shows a stale screen
+    pop bx                      ; while the volume really has moved. The
+    pop ax                      ; repaint is here and not at the call sites
+    ret                         ; because both halves of the button change
+                                ; what the box says, and one of the two ways
+                                ; in (Enter, through fdlg_act) has none
+
+; -----------------------------------------------------------------------------
+; fdlg_unfold - leave folder-naming mode, putting the file name back
+; out: nothing (all registers preserved). A no-op when the box is already a
+;      file name, so every caller can call it unconditionally.
+; -----------------------------------------------------------------------------
+fdlg_unfold:
+    push ax
+    push si
+    push di
+    cmp byte [fdlg_nmode], 0
+    je .out
+    mov si, fdlg_nsave
+    mov di, fdlg_name
+    call fdlg_ncopy
+    mov al, [fdlg_nslen]
+    mov [fdlg_nlen], al
+    mov [fdlg_ncur], al
+    mov byte [fdlg_nmode], 0
+.out:
     pop di
     pop si
-    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_ncopy - copy a NUL name between the box and its parking space
+; in:  SI = source, DI = destination (both 16 bytes, in our own segment)
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fdlg_ncopy:
+    push ax
+    push cx
+    push si
+    push di
+    mov cx, 16
+.b:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .b
+    pop di
+    pop si
     pop cx
-    pop bx
     pop ax
     ret
 
@@ -1431,18 +1514,18 @@ fdlg_onkey:
     jc .out
 .store:
     call fdlg_nins              ; at the caret, which moves past it
-    jmp short .redraw
+    jmp .redraw
 
 .bksp:
     cmp byte [fdlg_ncur], 0
     je .out                     ; nothing to the left of the caret
     dec byte [fdlg_ncur]
     call fdlg_ndel
-    jmp short .redraw
+    jmp .redraw
 
 .kdel:
     call fdlg_ndel              ; forward delete: the caret stays put
-    jmp short .redraw
+    jmp .redraw
 .kleft:
     cmp byte [fdlg_ncur], 0
     je .out
@@ -1490,6 +1573,11 @@ fdlg_onkey:
     call fdlg_act               ; CF = 1: the window is gone, do not repaint
     jmp short .out
 .cancel:
+    cmp byte [fdlg_nmode], 0    ; Escape while naming a folder backs OUT of
+    je .close                   ; that, not out of the dialog: the user asked
+    call fdlg_unfold            ; for a folder, changed their mind, and still
+    jmp .redraw           ; wants to save
+.close:
     call fdlg_close
     jmp short .out
 .redraw:
@@ -1600,7 +1688,9 @@ fdlg_hasdot:
 fdlg_pick:
     push ax
     push si
-    mov ax, [fdlg_sel]
+    cmp byte [fdlg_nmode], 0
+    jne .out                    ; the box is a folder name being typed: a
+    mov ax, [fdlg_sel]          ; selection must not overwrite it
     cmp ax, 0xFFFF
     je .out
     call fdlg_stage
@@ -1673,8 +1763,8 @@ fdlg_onclick:
     jl .out
     cmp cx, FD_BY3+FD_BH2       ; the two-line button is FD_BH2 tall, and the
     jg .out                     ; hit band has to be the drawn one
-    call fdlg_newfolder
-    jmp .redraw
+    call fdlg_newfolder         ; repaints itself, both halves
+    jmp .out
 
     ; --- the name box: put the caret where the user pointed ---
     ; This is the first thing every click that missed the button column sees,
@@ -1727,19 +1817,19 @@ fdlg_onclick:
     add ax, dx
     cmp cx, ax
     jge .s_pgdn
-    jmp short .redraw           ; on the thumb itself: nothing to do
+    jmp .redraw           ; on the thumb itself: nothing to do
 .s_up:
     dec word [fdlg_scrl]
-    jmp short .redraw
+    jmp .redraw
 .s_dn:
     inc word [fdlg_scrl]
-    jmp short .redraw
+    jmp .redraw
 .s_pgup:
     sub word [fdlg_scrl], FD_ROWS
-    jmp short .redraw
+    jmp .redraw
 .s_pgdn:
     add word [fdlg_scrl], FD_ROWS
-    jmp short .redraw
+    jmp .redraw
 
     ; --- the rows ---
 .rows:
@@ -1811,6 +1901,10 @@ fdlg_clkt:  resw 1              ; birth tick of the last click on the
 fdlg_name:  resb 16             ; the answer: the caller's default in, the
                                 ; chosen name out, the edit buffer between
 fdlg_nlen:  resb 1              ; its length, 0..12
+fdlg_nmode: resb 1              ; 0 = the box holds the FILE name, 1 = it is
+                                ; naming a new folder (SPEC.md 38.3)
+fdlg_nsave: resb 16             ; ...and the file name parked while it does
+fdlg_nslen: resb 1
 fdlg_ncur:  resb 1              ; ...and the CARET, 0..[fdlg_nlen]: the
                                 ; character it sits in front of. Typing,
                                 ; backspace and delete all act here, which is
