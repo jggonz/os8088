@@ -2219,7 +2219,12 @@ tm_row_draw:
     mov bx, [tm_ckb]
     call tm_elchk               ; changed? (BX = this chunk's check word)
     jc .next                    ; no - its pixels are already right
-
+    call tm_row_lead            ; the FIRST chunk owns the band's LEAD-IN too
+    jc .rect                    ; - and erasing it counts as a draw, because
+    pop si                      ; the legend square lives in it and the caller
+    inc si                      ; has to know to put it back
+    push si
+.rect:
     mov ax, [tm_ci]             ; the chunk's band: [penx + i*TM_CW, +TM_CW)
     mov cl, TM_CW
     mul cl
@@ -2293,6 +2298,63 @@ tm_row_draw:
     ret
 .drew:
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_row_lead - erase the row band's lead-in: the inset between the band's
+;               left edge and the pen, which belongs to no chunk
+; in:  [tm_ci] (acts only on chunk 0), [tm_rowx]/[tm_penx]/[tm_rowy]
+; out: CF = 0 it filled, CF = 1 it did not; all registers preserved
+;
+; The band is [rowx+6, rowx+TM_RW] and the memory list letters from rowx+16,
+; leaving ten pixels at the left that no chunk covers - and that is exactly
+; where the legend square goes. tm_rowfill used to erase the whole band, so
+; the square went with the text and came back with it; chunks start at the
+; PEN, so nothing erased it any more and a row that went away left its square
+; behind forever. Closing a package was the way to see it: the name vanished
+; and its little swatch stayed, on a row that no longer existed.
+;
+; It is the mirror of the last chunk's fill running on to the band's right
+; edge, and for the same reason - the pen is inset, so the band is wider than
+; the chunks at both ends. The process list letters from rowx+6 and has no
+; lead-in at all, which the width test below answers with CF=1.
+;
+; The clip needs no thought here: this is a plain fill, fills clip per pixel,
+; and there are no glyphs in the lead-in for the granularity rule to disagree
+; with. The square that goes back into it is a pattern fill, which clips the
+; same way.
+; -----------------------------------------------------------------------------
+tm_row_lead:
+    cmp word [tm_ci], 0
+    jne .no
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [tm_rowx]
+    add ax, 6
+    mov cx, [tm_penx]
+    dec cx
+    cmp cx, ax
+    jb .none                    ; the pen IS the band's left edge: no lead-in
+    mov bx, [tm_rowy]
+    mov dx, bx
+    add dx, 7
+    mov byte [gfx_color], CWHITE
+    call gfx_fill
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.none:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.no:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------

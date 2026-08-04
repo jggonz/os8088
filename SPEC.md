@@ -5550,11 +5550,21 @@ at all on a row nothing covers. The cut chunk's key is forgotten afterwards
 whatever happened, because a chunk that took this path was by definition not
 drawn whole.
 
-The last chunk's fill runs on to the row band's right edge, because the pen
-is inset from the band and no chunk covers the tail; the string is
-zero-padded first so every chunk hashes deterministically and a row that got
-*shorter* changes the chunk it lost its characters from, which is what erases
-them.
+**The band is wider than its chunks at BOTH ends, because the pen is inset
+from it**, and each end has to be erased by something. The last chunk's fill
+runs on to the band's right edge. The first chunk's is preceded by
+`tm_row_lead`, which erases the band's left inset — and that one is
+load-bearing rather than tidy, because the memory list letters from
+`rowx+16` and its **legend square sits at `rowx+6`**. `tm_rowfill` used to
+erase the whole band, so a row's square went with its text and came back with
+it; chunks start at the pen, so nothing erased it any more and a row that
+went away left its square behind on a line that no longer existed. Closing a
+package was the way to see it. Erasing the lead-in therefore counts as a
+draw, because the caller has to know to put the square back.
+
+The string is zero-padded before any of this, so every chunk hashes
+deterministically and a row that got *shorter* changes the chunk it lost its
+characters from, which is what erases them.
 
 **The CPU + scheduler caption is drawn through the same routine**, as the
 virtual row `TMR_CPU` — one past the last row either list can show. Its first
