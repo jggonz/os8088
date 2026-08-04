@@ -1000,6 +1000,32 @@ osapi_mem_free:
     ret
 
 ; -----------------------------------------------------------------------------
+; osapi_mem_regrow - in: DX = the claim, AX = new size in KB, ES = the
+;                    caller's segment; out: mem_regrow's, CF=1 if not yours
+;
+; The slot needs this wrapper for the same reason osapi_mem_free does, and
+; went without it: mem_regrow's fence is `cmp [si+MC_OWN], bx`, and nothing
+; put an owner in BX. OSAPI_XSTUB stamps ES from the caller's DS and stops
+; there, so what the fence actually compared was whatever the package left in
+; BX - a size, a loop counter - against an owner segment. It never matched,
+; so the slot ALWAYS answered CF=1 and no package could resize a claim.
+;
+; apps/paint is the one shipped caller and passes BX = the KB it wants, so
+; its fragmentation fallback - the entire reason mem_regrow was written - has
+; never once run. That is the failure mode of a fence with an implicit input:
+; the refusal is indistinguishable from an honest "no room", which is exactly
+; what the caller reports and the user believes.
+; -----------------------------------------------------------------------------
+osapi_mem_regrow:
+    push bx
+    call mem_own                ; BX = the owner ES names (CF=1 = not a
+    jc .out                     ; region or driver image we know)
+    call mem_regrow
+.out:
+    pop bx                      ; pop leaves CF and DX alone
+    ret
+
+; -----------------------------------------------------------------------------
 ; osapi_mem_avail - in: nothing; out: AX = largest free KB, BX = total free KB
 ; -----------------------------------------------------------------------------
 osapi_mem_avail:

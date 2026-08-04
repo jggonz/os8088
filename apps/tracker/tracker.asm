@@ -528,6 +528,60 @@ trk_do_open:
     ret
 
 ; -----------------------------------------------------------------------------
+; trk_trim - give back the part of the blob claim the file did not need
+;
+; in:  [trk_modseg] = the claim, [mp_bloblen_hi]:[mp_bloblen_lo] = bytes read
+; out: [trk_modseg] / [trk_capk] updated; preserves every register
+;
+; The claim is sized BEFORE the file's size is known - the dialog's completion
+; proc is handed a name, not a directory entry - so it is min(largest run,
+; 128KB) and a 5.6KB module would sit on 128KB of heap until the next load or
+; teardown. One call gives the difference back.
+;
+; This is a call and not a redesign because OSAPI_MEM_REGROW SHRINKS IN PLACE
+; (SPEC.md 50.3.1): the record's length changes and nothing moves. Claim-copy-
+; free could not do it - it needs both blocks at once, and may hand back a
+; different base - which is why the tree this came from documented the
+; over-claim as a thing it could not fix rather than a thing it had not.
+;
+; Called before mp_load, so no sample pointer exists yet to be invalidated
+; even on the impossible path where a shrink relocated. mp_load bounds every
+; read against [mp_bloblen_*] rather than the claim, so a claim trimmed to
+; exactly those bytes cannot narrow what it may look at.
+; -----------------------------------------------------------------------------
+trk_trim:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [mp_bloblen_lo]
+    mov dx, [mp_bloblen_hi]
+    add ax, 1023                    ; round UP: the heap's granularity is KB,
+    adc dx, 0                       ; and a truncating divide would hand back
+    mov cl, 10                      ; the tail of the file with the tail of
+    shr ax, cl                      ; the claim
+    mov bx, dx
+    mov cl, 6
+    shl bx, cl                      ; DX:AX >> 10 = (DX << 6) + (AX >> 10),
+    or ax, bx                       ; and the 128KB cap keeps it under 129
+    jnz .go
+    inc ax                          ; 0 KB is a refusal, not a claim
+.go:
+    cmp ax, [trk_capk]
+    jae .out                        ; the file filled it: nothing to give back
+    mov dx, [trk_modseg]
+    call OSAPI_MEM_REGROW
+    jc .out                         ; refused: keep the oversized claim, which
+    mov [trk_modseg], dx            ; costs heap and breaks nothing
+    mov [trk_capk], ax
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; trk_fdone - the file-dialog completion proc (SPEC.md 38.6). UI task, gfx
 ;             lock held, ES:DI = the chosen name with ES = KERNEL_SEG, valid
 ;             for this call only - so it is copied out FIRST.
@@ -600,8 +654,9 @@ trk_fdone:
     jc .rderr
     mov [mp_bloblen_lo], ax
     mov [mp_bloblen_hi], dx
-    mov ax, [trk_modseg]
-    mov [mp_blobseg], ax
+    call trk_trim                   ; ...and hand back what it did not need
+    mov ax, [trk_modseg]            ; AFTER the trim, so a claim that somehow
+    mov [mp_blobseg], ax            ; moved is still the one mp_load indexes
     call mp_load                    ; CF=1, AX = offset of a NUL error string
     jc .lderr
     mov si, mp_title                ; the loaded title becomes the status line

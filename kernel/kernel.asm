@@ -498,7 +498,7 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
     OSAPI_XSTUB api_mem_claim,  osapi_mem_claim
     OSAPI_XSTUB api_mem_claim_dma, osapi_mem_claim_dma
     OSAPI_XSTUB api_mem_free,   osapi_mem_free
-    OSAPI_XSTUB api_mem_regrow, mem_regrow
+    OSAPI_XSTUB api_mem_regrow, osapi_mem_regrow
     OSAPI_XSTUB api_snd_fm,     osapi_snd_fm_x
     OSAPI_XSTUB api_drv_task,   drv_task
     OSAPI_XSTUB api_snd_stream, osapi_snd_stream
