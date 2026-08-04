@@ -214,7 +214,7 @@ menu_win_set:
 ; The bar goes to the window PROMOTED in its place, not to Locator. Losing
 ; the front window promotes whatever was under it - wm_paint_dmg redraws
 ; that window's title bar with the pinstripes and the two boxes for exactly
-; that reason (SPEC.md 11.5) - and the bar has to name the same application
+; that reason (SPEC.md 11.91) - and the bar has to name the same application
 ; the pinstripes do, or the screen says two different things about which app
 ; is active. wm_top answers 0 when no visible window is left, and 0 IS
 ; Locator, so the old fallback is still the last rung of this one.

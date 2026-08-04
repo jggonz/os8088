@@ -1534,7 +1534,7 @@ sites that already exist:
 
 - `wm_front` (and therefore `wm_show`, and every raise in §13) calls
   `menu_activate` with the raised window: **raising a window makes its
-  application active**, and `wm_raise` (§11.4) draws the new bar in the
+  application active**, and `wm_raise` (§11.90) draws the new bar in the
   same pass.
 - **A click on the desktop switches back to Locator** (§12.3): the
   `.desk_icons` branch of §13's ladder calls `menu_activate` with BX = 0
@@ -1554,7 +1554,7 @@ sites that already exist:
   **It promotes rather than reverting because the title bar does.** Losing
   the front window promotes whatever was under it, and `wm_paint_dmg`
   redraws that window's title bar with the pinstripes and the two boxes for
-  exactly that reason (§11.5). A bar that fell back to Locator instead left
+  exactly that reason (§11.91). A bar that fell back to Locator instead left
   the screen saying two different things about which application is active.
   A **deliberate** switch to Locator is unaffected and stays put: the
   `.desk_icons` branch sets `[menu_win]` = 0, and `menu_check` leaves at its
