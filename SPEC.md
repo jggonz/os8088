@@ -587,6 +587,38 @@ above it: every drawing entry runs under the gfx lock (§1 rule 6), so one
 copy serves. All registers are preserved; `[gfx_color]` is left holding the
 last run's colour.
 
+### 5.5 `gfx_scroll` — pixels that already exist move, they are not redrawn
+
+A scrolling view redraws content the screen already holds eight rows away —
+the Tracker's pattern scroll re-rendered ~1,600 glyphs per row change to
+reproduce it (§45.12). `gfx_scroll` (API slot 0x01F8, `kernel/vgabb.inc`)
+moves it instead:
+
+- **in** AX = x1, BX = y1, CX = x2, DX = y2 (inclusive, absolute screen
+  coords), SI = dy **signed**: positive moves the rect's content UP dy
+  rows, negative down. Caller holds the gfx lock — which is also what
+  makes the blit cursor-safe: the cursor is hidden under the lock, so a
+  save-under can never be captured and smeared.
+- **out** CF=0 done; the |dy| vacated rows keep UNSPECIFIED content and
+  the caller repaints them. CF=1 refused with nothing moved: x1 or x2+1
+  not a multiple of 8 (byte-column granularity on every adapter), an
+  empty/inverted rect, |dy| = 0 or ≥ the rect height, the rect off the
+  live `[vid_w]`×`[vid_h]` screen, or an armed §11.3 clip region that
+  does not contain the whole rect — **whole-shape clipping**, the
+  `font_char`/`ico_core` class, because a blit cannot be cut per pixel.
+  A refusal is the caller's cue to fall back to a full repaint (which
+  clips correctly per strip). Preserves every register.
+- **Three backends, one contract (§39), all coherent.** VGA direct: GC
+  write mode 1 — each `movsb` moves 8 pixels across all four planes
+  through the latches, mode restored to 0 after (§1 rule 7). VGA with
+  the §32 buffer armed: `gfx_flush` runs FIRST (a pending dirty rect
+  inside the region would scroll stale VRAM against fresh RAM), then the
+  four buffer planes AND VRAM scroll in step — and nothing is marked
+  dirty, because buffer and VRAM stay coherent by construction, which is
+  what keeps a scroll cheap under §45.11's Smooth. Mono: a per-row
+  `rep movsb` through `gfx_rowbase`, immune to the banked layouts by
+  construction (no dy-alignment rule needed).
+
 ## 6. font.inc
 
 `font_init` runs **after** `vid_setmode` (§39.6): zero ES:BP, then int 10h
@@ -3523,7 +3555,7 @@ only the stride changed, 4 → 8, so slot i sits at 0x0010 + 8·i.
 `OSAPI_TABLE_OFF` stays 0x0010; the table-span assertion became **53 × 8**
 at that change — the 52 v2 slots plus `wm_geom`, appended because a
 package can no longer read a window record (§11) — and tracks the table's
-end as slots append (61 × 8 today). Register contracts are
+end as slots append (62 × 8 today). Register contracts are
 the target routines' own (§5, §6, §8, §11). Pinned layout:
 
 ```
@@ -3715,8 +3747,8 @@ of §41.8** (0x0188..0x01A8), **`wm_geom` (§11), 0x01B0**, the three
 **arena-memory slots of §2.6/§20.8** (0x01B8, 0x01C0, 0x01C8),
 **`wm_resize` (§11.1), 0x01D0**, **`gfx_blit4` (§5.4), 0x01D8** and
 **`wm_about_set` (§12.2), 0x01E0**, **`dskw_readbig` (§18.4),
-0x01E8** and **`osapi_gfx_dbuf` (§32), 0x01F0** — the table's end
-today, 61 × 8.
+0x01E8**, **`osapi_gfx_dbuf` (§32), 0x01F0** and **`gfx_scroll` (§5.5),
+0x01F8** — the table's end today, 62 × 8.
 
 ```
 0x01F0 osapi_gfx_dbuf  in AL = 1 arm the §32 back buffer / 0 disarm;
@@ -9598,3 +9630,24 @@ compose well; and a close **while fullscreen** takes the kernel's
 `wm_destroy` safety net, which the app never sees — the buffer then stays
 armed, a legal user-settable mode the Control Panel's Display page shows
 and can disarm, recorded here rather than fenced with kernel machinery.
+
+### 45.12 The scroll path and the delta-drawn VU bars
+
+Two updates stopped repainting what had not changed. **The row scroll**:
+when the view moves by exactly one row inside one pattern and position,
+the row area's content is the same pixels eight rows away, so the redraw
+collapses to two `gfx_scroll` calls (§5.5 — the upper and lower row
+regions move separately, because the 11-row band between them breaks the
+8-row rhythm) plus **three** `tui_row1` strips: the band, the strip that
+just left it (band colours back to normal), and the row entering at the
+region's far edge. Both directions work — Down while stopped scrolls the
+other way with the mirrored three strips. Any other change (position,
+pattern, a seek, the compact layouts' pagination) takes `tui_draw_pat` as
+before, and so does a `gfx_scroll` refusal — the §5.5 whole-shape clip
+answer while the file dialog covers the area, which is exactly when the
+per-strip path's own clip gates are the correct renderer. XT mode never
+reaches any of this (§45.9's band relight short-circuits first).
+**The VU bars** keep a last-drawn width per channel and paint only the
+difference — a rising bar fills its growth, a falling one erases its
+shrinkage, a steady one costs nothing; `tui_el_scopes` zeroes the four
+widths whenever it repaints the cells under them.

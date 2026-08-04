@@ -735,6 +735,19 @@ WMIN_H  equ 64                   ; px (SPEC.md 11.1; kernel/wm.inc's own equs)
                                                 ; the gfx lock. Preserves every
                                                 ; register; leaves [gfx_color]
                                                 ; holding the last run's colour
+%define OSAPI_GFX_SCROLL    KERNEL_SEG:0x01F8   ; vertical scroll blit (SPEC.md
+                                                ; 5.5): AX/BX/CX/DX = inclusive
+                                                ; rect (absolute screen coords,
+                                                ; x1 and x2+1 multiples of 8),
+                                                ; SI = dy SIGNED (positive moves
+                                                ; content UP). Lock held. CF=0
+                                                ; done, the |dy| vacated rows are
+                                                ; UNSPECIFIED - repaint them;
+                                                ; CF=1 refused (bad geometry, or
+                                                ; a clip region that cuts the
+                                                ; rect - whole-shape rule): fall
+                                                ; back to a full repaint, which
+                                                ; clips per strip. Preserves all.
 %define OSAPI_GFX_DBUF      KERNEL_SEG:0x01F0   ; arm (AL=1) / disarm (AL=0) the
                                                 ; SPEC.md 32 back buffer from a
                                                 ; lock-held callback: while armed,

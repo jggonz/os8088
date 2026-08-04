@@ -930,6 +930,11 @@ tui_el_scopes:
     mov [tui_lmute], ax             ; can see a toggle
     mov ax, [mp_mute + 2]
     mov [tui_lmute + 2], ax
+    xor ax, ax                      ; the cells were just repainted: the
+    mov [tui_vupx], ax              ; delta-drawn bars restart from empty
+    mov [tui_vupx + 2], ax          ; (SPEC.md 45.12)
+    mov [tui_vupx + 4], ax
+    mov [tui_vupx + 6], ax
     pop di
     pop si
     pop dx
@@ -1445,11 +1450,8 @@ tui_row1:
 ; tui_draw_pat - the whole row area around the view row, and the change
 ;                markers tui_draw_dyn compares against
 ; -----------------------------------------------------------------------------
-tui_draw_pat:
+tui_marks:
     push ax
-    push bx
-    push cx
-    push dx
     call tui_viewrow
     mov al, [mp_row]
     mov [tui_lrow], al
@@ -1459,6 +1461,17 @@ tui_draw_pat:
     mov [tui_lpat], al
     mov al, [tui_vrow]
     mov [tui_lvrow], al
+    mov al, [tui_cvr]
+    mov [tui_lcvr], al              ; the scroll path's delta baseline (45.12)
+    pop ax
+    ret
+
+tui_draw_pat:
+    push ax
+    push bx
+    push cx
+    push dx
+    call tui_marks
     mov byte [tui_band], 0
     mov cx, [tui_lay + TL_RAB]
     mov al, [tui_cvr]
@@ -1487,6 +1500,117 @@ tui_draw_pat:
     add dx, 8
     pop cx
     loop .lo
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tui_scrl - the one-row scroll path (SPEC.md 45.12): when the view moved by
+; exactly one row inside one pattern/position, the row area's content is the
+; same pixels eight rows away - scroll the upper and lower regions (the band
+; between them breaks the 8-row rhythm, so they move separately) and repaint
+; three strips: band, the strip that left it, the row entering at the far
+; edge. out CF=0 done (markers updated); CF=1 not eligible, or gfx_scroll
+; refused (a clip cutting the area - the dialog) - caller runs tui_draw_pat,
+; whose per-strip gates are then the correct renderer.
+; -----------------------------------------------------------------------------
+tui_scrl:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov al, [mp_songpos]
+    cmp al, [tui_lpos]
+    jne .no
+    mov al, [mp_pattern]
+    cmp al, [tui_lpat]
+    jne .no
+    call tui_viewrow                ; [tui_cvr] = the row the band shows now
+    mov al, [tui_cvr]
+    sub al, [tui_lcvr]
+    cmp al, 1
+    je .up
+    cmp al, -1
+    jne .no
+    mov si, -8                      ; view moved up: content moves down
+    jmp .go
+.up:
+    mov si, 8                       ; view advanced: content moves up
+.go:
+    mov ax, [tui_lay + TL_RAB]      ; upper region: ROWT .. ROWT + RAB*8 - 1
+    mov cl, 3
+    shl ax, cl
+    mov bx, [tui_lay + TL_ROWT]
+    mov dx, bx
+    add dx, ax
+    dec dx
+    xor ax, ax                      ; full width: x2+1 = vid_w, a multiple
+    mov cx, [tui_vw]                ; of 8 on all three adapters
+    dec cx
+    call OSAPI_GFX_SCROLL
+    jc .no
+    mov ax, [tui_lay + TL_RBE]      ; lower region: LOWY .. LOWY + RBE*8 - 1
+    mov cl, 3
+    shl ax, cl
+    mov bx, [tui_lay + TL_LOWY]
+    mov dx, bx
+    add dx, ax
+    dec dx
+    xor ax, ax
+    mov cx, [tui_vw]
+    dec cx
+    call OSAPI_GFX_SCROLL
+    jc .no                          ; half-scrolled: the full repaint the
+                                    ; caller falls back to repairs it whole
+    mov al, [tui_cvr]               ; the three strips (SPEC.md 45.12)
+    cbw
+    mov byte [tui_band], 0
+    or si, si
+    js .dstrips
+    mov bx, ax                      ; up: the strip that LEFT the band is
+    dec bx                          ; row view-1, the last upper strip...
+    mov dx, [tui_lay + TL_RAB]
+    dec dx
+    mov cl, 3
+    shl dx, cl
+    add dx, [tui_lay + TL_ROWT]
+    call tui_row1
+    mov bx, ax                      ; ...and row view+RBE enters at the
+    add bx, [tui_lay + TL_RBE]      ; last lower strip
+    mov dx, [tui_lay + TL_RBE]
+    dec dx
+    mov cl, 3
+    shl dx, cl
+    add dx, [tui_lay + TL_LOWY]
+    call tui_row1
+    jmp .band
+.dstrips:
+    mov bx, ax                      ; down: row view-RAB enters at the first
+    sub bx, [tui_lay + TL_RAB]      ; upper strip...
+    mov dx, [tui_lay + TL_ROWT]
+    call tui_row1
+    mov bx, ax                      ; ...and the strip that LEFT the band is
+    inc bx                          ; row view+1, the first lower strip
+    mov dx, [tui_lay + TL_LOWY]
+    call tui_row1
+.band:
+    mov bx, ax                      ; the band itself, on the new view row
+    mov byte [tui_band], 1
+    mov dx, [tui_lay + TL_BANDY]
+    call tui_row1
+    mov byte [tui_band], 0
+    call tui_marks
+    clc
+    jmp .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
     pop dx
     pop cx
     pop bx
@@ -1570,30 +1694,33 @@ tui_draw_vu:
                                     ; still left of the 'M' flag at t1+146
                                     ; (12 + 128-wide bar ends at t1+139)
 .yb:
-    or si, si
-    jz .off
-    mov ax, di
-    mov bx, dx
-    mov cx, di
-    add cx, si
+    mov bl, [tui_chn]               ; delta-draw (SPEC.md 45.12): paint only
+    xor bh, bh                      ; the difference against the last drawn
+    shl bx, 1                       ; width - a steady bar costs nothing
+    mov ax, [tui_vupx + bx]
+    cmp ax, si
+    je .next
+    mov [tui_vupx + bx], si
+    jb .grow
+    mov cx, di                      ; falling: erase [new .. old-1]
+    add cx, ax
     dec cx
-    push dx
-    add dx, 7
-    TSETC TC_VU
-    call tui_fillc                  ; the lit part...
-    pop dx
-.off:
-    cmp si, [tui_vuw]
-    jae .next
     mov ax, di
     add ax, si
     mov bx, dx
-    mov cx, di
-    add cx, [tui_vuw]
-    dec cx
     add dx, 7
     TSETC TC_BG
-    call tui_fillc                  ; ...and the erase behind a falling bar
+    call tui_fillc
+    jmp .next
+.grow:
+    mov cx, di                      ; rising: light [old .. new-1]
+    add cx, si
+    dec cx
+    add ax, di
+    mov bx, dx
+    add dx, 7
+    TSETC TC_VU
+    call tui_fillc
 .next:
     inc byte [tui_chn]
     cmp byte [tui_chn], 4
@@ -1882,6 +2009,9 @@ tui_draw_dyn:
     call tui_row_lt
     jmp .norows
 .rfull:
+    call tui_scrl                   ; one-row delta: scroll + three strips
+    jnc .norows                     ; (SPEC.md 45.12; no readouts change on
+                                    ; a row-only move)
     call tui_draw_pat
     test byte [tui_lay + TL_FLAGS], TLF_CMPCT
     jnz .rowc
@@ -2144,6 +2274,10 @@ tui_ab5:     db 'Any key closes', 0
     TRKB tui_lspd
     TRKBUF tui_lmute, 4
     TRKBUF tui_vu, 4                ; decaying VU levels
+    TRKBUF tui_vupx, 8              ; last-drawn bar widths, px (SPEC.md
+                                    ; 45.12 - the delta-draw baseline)
+    TRKB tui_lcvr                   ; last-drawn view row (the scroll path's
+                                    ; one-row-delta detector, SPEC.md 45.12)
     TRKW tui_msgp                   ; status-line string, 0 = the key hint
     TRKB tui_tcol                   ; tui_rdout scratch
     TRKB tui_ecol

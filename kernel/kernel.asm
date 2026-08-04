@@ -366,7 +366,11 @@ osapi_table:
                                   ;          nothing changed (BOTH ways -
                                   ;          the mono bb_on guard, 32/39.3),
                                   ;          CF=0 AL = the previous state
-osapi_table_end:                 ; 0x01F8
+    OSAPI_SLOT gfx_scroll         ; 0x01F8 - vertical scroll blit (SPEC.md
+                                  ;          5.5): AX..DX rect, SI = signed
+                                  ;          dy (positive = content up);
+                                  ;          CF=1 refused, caller repaints
+osapi_table_end:                 ; 0x0200
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -374,7 +378,7 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 61 * 8
+%if OSAPI_TABLE_LEN != 62 * 8
 %error "os8088 API jump table must be exactly 60 8-byte far slots"
 %endif
 
