@@ -9,10 +9,13 @@
 ; Detection (far, behind the SDRV_PROBE FARSHIM): reset scan over the base
 ; list with a bounded poll budget per base, DSP version via E1h, auto-init
 ; strategy gate at DSP >= 2.00. IRQ discovery is DEFERRED TO FIRST USE
-; (SPEC.md 34.5): candidates {7,5,3,2} are hooked onto the .text stubs below,
-; F2h triggers an 8-bit IRQ, and a candidate is accepted only after its
-; stub's 2xEh bit-7 read confirms the DSP asserted it (retried once); the
-; losers are unhooked, and the winner is hooked mouse_init-style (save old
+; (SPEC.md 34.5), two tiers: a DSP >= 4.00 reads the line straight from
+; CT1745 mixer register 80h (deterministic, nothing fired); older DSPs hook
+; candidates {7,5,3,2} onto the .text stubs below, F2h triggers an 8-bit
+; IRQ, and the candidate that fires is accepted (retried once; 2xEh bit 7
+; is NOT a confirm - it means "response byte waiting" and F2h queues none
+; outside QEMU); the losers are unhooked, and the winner is hooked
+; mouse_init-style (save old
 ; vector, install while masked, unmask) onto sbl_isr, staying hooked until
 ; snd_unhook.
 ;
@@ -487,9 +490,11 @@ sbl_isr:
     je .spur
     mov dx, [sbl_base]
     add dx, 0x0E
-    in al, dx                   ; confirm AND ack: the 2xEh read
-    test al, 0x80
-    jz .spur
+    in al, dx                   ; the mandatory 8-bit ACK - and ONLY that:
+                                ; bit 7 is "response byte waiting", which a
+                                ; block IRQ never sets on real DSPs/86Box
+                                ; (SPEC.md 34.5; gating on it wedged every
+                                ; stream outside QEMU)
     cmp byte [sbl_str_dir], 0   ; input streams take the mirror half-swap
     jne .input
 
@@ -611,29 +616,27 @@ sbl_stub2:
 sbl_stub_c:
     push dx
     push ds
-    mov ah, al                  ; AH = candidate index (AL becomes the port)
+    mov ah, al                  ; AH = candidate index (AL becomes scratch)
     mov dx, KERNEL_SEG
     mov ds, dx
-    mov dx, [sbl_base]
-    add dx, 0x0E
-    in al, dx                   ; confirm (and ack) via 2xEh bit 7
-    test al, 0x80
-    jz .no                      ; not the DSP
-    mov [sbl_dsc_fired], ah     ; accepted: the discovery loop reads this
-    jmp short .eoi
-.no:                            ; confirm failed - but a real stray from an
-    or ah, ah                   ; unrelated device (the lines are force-
-    jnz .eoi                    ; unmasked ~330ms) still needs its EOI, or
-                                ; its whole priority level wedges. Only
-                                ; candidate 0 (IRQ 7) can be spurious:
+    or ah, ah                   ; candidate 0 (IRQ 7) first proves it is not
+    jnz .accept                 ; the 8259's spurious-IRQ-7 artifact:
     mov al, 0x0B                ; OCW3 - the next 0x20 read returns the
     out 0x20, al                ; in-service register
     in al, 0x20
-    test al, 0x80               ; ISR bit 7 clear = spurious: no EOI
-    jz .out                     ; (sbl_isr's split, SPEC.md 34.5)
-.eoi:
-    mov al, 0x20
-    out 0x20, al
+    test al, 0x80               ; ISR bit 7 clear = spurious: no ack, no
+    jz .out                     ; EOI, no record (sbl_isr's split, 34.5)
+.accept:
+    mov dx, [sbl_base]          ; accept-on-fire: 2xEh is read as the SB-
+    add dx, 0x0E                ; side ACK and nothing else - its bit 7
+    in al, dx                   ; means "response byte waiting" and F2h
+                                ; queues none on real DSPs or 86Box
+                                ; (SPEC.md 34.5 - the QEMU-only 0xAA is
+                                ; why a bit-7 "confirm" once shipped)
+    mov [sbl_dsc_fired], ah     ; the discovery loop reads this
+    mov al, 0x20                ; a stray from an unrelated device on
+    out 0x20, al                ; 2/3/5 still needs its EOI either way,
+                                ; or its whole priority level wedges
 .out:
     pop ds
     pop dx
@@ -2319,6 +2322,24 @@ sbl_f_irqdisc:
     push es
     xor ax, ax
     mov es, ax
+    cmp byte [sbl_verhi], 4     ; SB16-class DSP: the CT1745 mixer reads
+    jb .probe                   ; the configured line back - register 80h
+    mov dx, [sbl_base]          ; via index 2x4h / data 2x5h, magic bits
+    add dx, 4                   ; 1 = IRQ2, 2 = IRQ5, 4 = IRQ7, 8 = IRQ10
+    mov al, 0x80                ; (QEMU and 86Box agree; SPEC.md 34.5).
+    out dx, al                  ; Deterministic: no F2h, nothing hooked or
+    inc dx                      ; unmasked until the winner is.
+    in al, dx
+    mov bl, 3                   ; IRQ2 -> candidate 3 of {7,5,3,2}
+    cmp al, 1
+    je .win
+    mov bl, 1                   ; IRQ5 -> candidate 1
+    cmp al, 2
+    je .win
+    mov bl, 0                   ; IRQ7 -> candidate 0
+    cmp al, 4
+    je .win                     ; IRQ10 (slave PIC) or garbage: fall back
+.probe:                         ; to the firing probe below
     xor si, si                  ; hook the 4 candidates onto the stubs
 .hook:
     mov bx, [sbl_dsc_vec+si]
@@ -2377,6 +2398,7 @@ sbl_f_irqdisc:
     mov bl, [sbl_dsc_fired]
     cmp bl, 0xFF
     je .none
+.win:
     xor bh, bh                  ; the winner: BX = candidate index
     mov al, [sbl_dsc_irqn+bx]
     mov [sbl_irq], al

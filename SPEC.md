@@ -6862,19 +6862,36 @@ end.
   `snd_unhook`** — between streams `snd_sb_expect` is clear and strays
   ride the ISR's spurious path. The mirror-image unhook joins
   `snd_unhook` (§34.7).
-- **IRQ discovery, deferred to first use**: hook candidates {7, 5, 3, 2}
-  onto `.text` discovery stubs (~30 bytes each: record which vector fired,
-  confirm, EOI, iret — interrupt handlers, so §33 bars them from far even
-  though discovery itself is cold), issue DSP command F2h
-  (trigger-8-bit-IRQ, supported by all DSPs), and keep the vector that
-  fired **only after the stub's 2xEh bit-7 read confirms the DSP asserted
-  it** (defeats a coincidental spurious IRQ 7 during the window; retry F2h
-  once if the confirm fails); unhook the losers.
+- **IRQ discovery, deferred to first use — two tiers, decided by the E1h
+  version already in hand.** On a DSP ≥ 4.00 the mixer KNOWS: CT1745
+  register 80h reads back the configured line as a magic bit (1 = IRQ2,
+  2 = IRQ5, 4 = IRQ7, 8 = IRQ10 — QEMU and 86Box implement the read
+  identically), so discovery is index 80h → 2x4h, read 2x5h, map, and
+  refuse anything but 2/5/7 (IRQ10 needs the slave PIC, out of scope) —
+  deterministic, no interrupt fired, nothing hooked until the winner is.
+  Older DSPs have no readback, so they keep the firing probe: hook
+  candidates {7, 5, 3, 2} onto `.text` discovery stubs (~30 bytes each:
+  record which vector fired, ack via 2xEh, EOI, iret — interrupt
+  handlers, so §33 bars them from far even though discovery itself is
+  cold), issue DSP command F2h (trigger-8-bit-IRQ, supported by all
+  DSPs), and **accept the candidate that fires** (retry F2h once if none
+  does); unhook the losers. The stub's only rejection is the 8259's
+  spurious-IRQ-7 artifact, decided by the OCW3 0Bh in-service read — a
+  candidate is NOT confirmed by 2xEh bit 7, because that bit means "a DSP
+  response byte is waiting", and **F2h queues no response byte on real
+  hardware or 86Box**. (It does on QEMU — and since nothing ever consumed
+  that 0xAA from 2xAh, the stale bit held the old bit-7 "confirm" green
+  for the whole session, which is exactly how the confirm bug shipped:
+  recorded here so nobody reinstates it.)
 - **`sbl_isr`** (`.text`, mou_isr discipline: push used regs + DS + ES,
   DS = KERNEL_SEG, `cld`, IF=0 throughout, no BIOS, never `sti`, own EOI
   `out 20h, 20h` — the BIOS does not handle this IRQ): first the
   **spurious-IRQ-7 guard** — treat the interrupt as SB only if
-  `snd_sb_expect` is set AND 2xEh bit 7 confirms. An unexpected interrupt
+  `snd_sb_expect` is set; the 2xEh read that follows is the mandatory
+  8-bit ACK and nothing more — its bit 7 ("response byte waiting") is
+  NOT an attribution signal, because a block-completion IRQ queues no
+  response byte on real silicon or 86Box (see the discovery bullet for
+  how the old bit-7 gate survived QEMU). An unexpected interrupt
   on a non-7 line **is always EOId**: a real unacknowledged ISR bit would
   block its whole priority level forever. An unexpected interrupt on
   **line 7 asks the 8259** (OCW3 0Bh → the next read of 20h returns the
@@ -6887,9 +6904,10 @@ end.
   read, so it lands on this path with bit 7 in service — and no
   non-specific EOI from the timer/keyboard/mouse handlers can ever retire
   bit 7, the lowest priority.) The IRQ-discovery stubs apply the same
-  split on their confirm-failed path — during the ~330 ms force-unmask
-  window a stray from an unrelated device on 2/3/5 is real and gets its
-  EOI. The confirm read doubles as the ACK;
+  split to candidate 7 before accepting it — during the ~330 ms
+  force-unmask window a stray from an unrelated device on 2/3/5 is real,
+  is accepted as the (wrong) winner only if the SB genuinely never fires,
+  and gets its EOI regardless;
   single-cycle mode (DSP < 2.00): re-program DMA ch1 + command 14h for
   the other half of the double buffer (~40 instructions — the
   audible-gap mitigation on 1.x); auto-init (DSP ≥ 2.00, chosen at
