@@ -2539,10 +2539,14 @@ fm_edit_end:
 ; [fm_full] escalates to the whole screen, and only navigation raises it
 ; (fm_settitle): the window's CAPTION lives in the frame, which a content
 ; repaint never touches, so a folder change would otherwise leave the title
-; bar naming the folder we just left. wm_paint_all under the caller's held
-; lock is the ui_drag idiom (SPEC.md 13), and it is affordable precisely
-; because the only thing that raises the flag has just paid for a whole
-; disk mount - 16 sector reads that dwarf any repaint.
+; bar naming the folder we just left.
+;
+; That is OUR RECT, not the screen. It was wm_paint_all, on the reasoning
+; that the only thing raising the flag has just paid for a disk mount - true,
+; but it meant every step into a folder and every step back out redrew the
+; desktop, both drive zones, the chrome and every other window. wm_paint_dmg
+; over the window's own rect redraws this window whole, plus whatever
+; overlaps it (SPEC.md 11.91), and leaves the rest of the screen alone.
 ; -----------------------------------------------------------------------------
 fm_repaint:
     push ax
@@ -2553,7 +2557,8 @@ fm_repaint:
     cmp byte [fm_full], 0
     je .content
     mov byte [fm_full], 0
-    call wm_paint_all           ; the frame too: the caption just changed
+    call wm_win_rect            ; SI = our window: the frame too, because the
+    call wm_paint_dmg           ; caption just changed - but only OUR rect
     jmp .done
 .content:
 

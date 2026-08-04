@@ -32,8 +32,18 @@
 ; Locking follows the Clock pattern (SPEC.md 14): tm_paint is a bare,
 ; unconditional full redraw (wm_paint_all calls it with the gfx lock already
 ; held); the task's periodic path takes the lock itself, re-checks visible +
-; not wm_obscured under it, and redraws only what changed (one graph column,
+; arms wm_clip_set under it, and redraws only what changed (one graph column,
 ; the text lines, the bar, the rows) so the lock hold stays Bounce-scale.
+;
+; **A region, not the wm_obscured veto.** The veto was the right answer while
+; this repainted its whole pane in one go; it has not done that since the
+; refresh became per-element, and the cost was a window that stopped updating
+; because something overlapped a corner. SPEC.md 11.3's granularity rule
+; applies in return: a fill clips per PIXEL and a glyph per whole CELL, so
+; anything that erases a band and then letters it gates BOTH on one
+; wm_clip_test of that band - tm_rowok - or a row crossed by a clip edge goes
+; blank rather than stale, and re-blanks every refresh. The maps and the
+; graph are fills only and need no gate.
 ; tm_sample runs without the lock and only touches module state; a sample
 ; landing mid-tm_paint can at worst misplace the sweep gap by one column for
 ; one frame.
@@ -474,8 +484,13 @@ tm_task:
     mov bx, [tm_win]
     test word [bx+W_FLAGS], 2   ; re-check under the lock (SPEC.md 14)
     jz .skip
-    call wm_obscured
-    jc .skip
+    call wm_clip_set            ; a REGION, not wm_obscured's veto (SPEC.md
+    jc .skip                    ; 11.3): one covered pixel used to skip the
+                                ; whole refresh, so a Task Manager with a
+                                ; corner under something stopped updating at
+                                ; all. CF=1 here is "wholly invisible" or
+                                ; "more than 16 fragments", which genuinely
+                                ; do mean skip. gfx_unlock disarms it
     call tm_update              ; incremental redraw, lock held
 .skip:
     call gfx_unlock
@@ -1319,6 +1334,7 @@ tm_cap_xms:
 
     mov ax, TMM_XMS_Y
     call tm_lfill
+    jc .out                     ; a clip edge crosses it: neither half
     mov byte [gfx_color], CBLACK
     mov cx, [tm_cx]
     add cx, 6
@@ -2001,6 +2017,8 @@ tm_mrow_close:
     cmp byte [tm_mfit], 0       ; off the bottom: nothing was drawn, and
     je .forget                  ; forget what used to be here so it comes
     mov byte [di], 0            ; back if the window ever grows
+    call tm_rowok               ; clipped across? then draw nothing, and do
+    jc .out                     ; NOT record it as drawn
     call tm_rowsum              ; AX = this row's content, in one word
     add bx, tm_rowck            ; ...through tm_elchk, for the never-zero rule
     call tm_elchk
@@ -2051,7 +2069,40 @@ tm_lfill:
     push ax
     add ax, [tm_cy]
     mov [tm_rowy], ax
-    call tm_rowfill
+    call tm_rowok               ; a caption erases a band and then letters it,
+    jc .out                     ; so BOTH halves answer to one test and the
+    call tm_rowfill             ; caller skips its font_str on CF=1 (SPEC.md
+.out:                           ; 11.3's granularity rule)
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_rowok - may the band at [tm_rowy] be drawn at all?
+; out: CF = 0 draw it; CF = 1 a clip edge crosses it, so draw NOTHING - not
+;      the fill, not the square, not the letters
+; clobbers: nothing else (flags)
+;
+; Asked BEFORE the row's check word is updated, so a row skipped for being
+; clipped is still owed a draw when the thing covering it goes away. It gets
+; one either way: uncovering is a wm_paint_dmg repaint, which reaches
+; tm_draw_full and clears every check word.
+; -----------------------------------------------------------------------------
+tm_rowok:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, [tm_rowy]
+    mov dx, bx
+    add dx, 7
+    mov ax, [tm_rowx]
+    add ax, 6
+    mov cx, [tm_rowx]
+    add cx, TM_RW
+    call wm_clip_test
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -2491,6 +2542,7 @@ tm_txt_ram_y:
 
     mov ax, [tm_liny]
     call tm_lfill               ; only NOW is the line worth erasing
+    jc .out                     ; ...unless a clip edge crosses it
     mov byte [gfx_color], CBLACK
     mov cx, [tm_cx]
     add cx, 6
@@ -2844,6 +2896,8 @@ tm_rows:
 
 .draw:
     mov byte [di], 0
+    call tm_rowok               ; clipped across? then draw nothing, and do
+    jc .rnext                   ; NOT record it as drawn
     call tm_rowsum              ; unchanged since the last refresh? then the
     mov bx, si                  ; pixels on screen are already right. Through
     shl bx, 1                   ; tm_elchk, not an open-coded compare, so this
