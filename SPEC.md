@@ -92,6 +92,12 @@ pre-empted background task, updating live while the user types or drags).
    drawing routines render into `[vid_rseg]` and touch no VGA register at
    all; only `gfx_flush` (Sequencer Map Mask) and the cursor path program
    the hardware, and both restore the same defaults.
+8. **A control that can refuse a click is greyed the way §46 says**, whether
+   it is the kernel's or a package's: `CDGRAY`, the whole control and not just
+   its caption, one predicate shared by the greying and the refusal, and words
+   as well for anything drawn only as text — because `font_ink` rounds
+   `CDGRAY` to black and a greyed *string* is invisible as such on two
+   adapters out of three (§39.4).
 
 ## 2. Memory map
 
@@ -2011,6 +2017,20 @@ change, no ABI change, and works for a built-in's menus exactly as for a
 package's. An app must still answer the command itself — a keyboard shortcut
 never goes near a menu.
 
+**The grey is the whole of the visual signal, and it survives 1bpp** — but only
+because `menu_drop` draws the item through `gfx_pen_dis` rather than storing
+`CDGRAY`, and `font_ink` masks a flagged glyph to a checkerboard (§39.4/§46).
+Grey text alone rounds to black on mono, and a disabled item used to be
+pixel-identical to a live one there, silently declining to highlight and never
+saying why. It is a checkerboard now, the way the 1bpp Macintosh drew a
+greyed-out item, so `MENU_DIS` needs nothing from the app to be *visible* on
+any adapter — including when it is used as a radio mark (§43, §45), where the
+dithered item is the one that is currently selected.
+
+Relabelling is still worth doing. `'Save Gif (NoRam)'` says **why** the item is
+unavailable, which the grey cannot; the grey says **that** it is, which the
+words alone did unreliably. Paint does both (§46.3).
+
 **Every string in a set is an offset in the OWNING WINDOW'S segment**
 (§11's W_SEG, §20.1) — the app name, the menu titles and every item. So the
 bar's runtime table `menu_bar` carries a **`MB_SEG`** word per cell
@@ -2046,6 +2066,16 @@ pre-Locator bar — **File**: "Clock" (CMD_CLOCK), "Bounce" (CMD_BOUNCE),
 (CMD_REBOOT) — and so is the System menu, which is cell 0 for every
 application: "About os8088..." (CMD_ABOUT), "Control Panel" (CMD_CTRL,
 §31), "Task Manager" (CMD_TASKS, §28).
+
+**"Close Window" greys when there is nothing to close.** `ui_loc_gate` points
+that item at its `MENU_DIS` twin from `wm_top`, on the press that opens the
+bar — the item list is static `.text` and nothing relays the bar out when the
+last window goes, so layout time is too early. It is the §46 rule 5 case in
+its purest form (a stable, one-word fact) and the one a user meets on the
+desktop at boot before meeting any other; it used to be a live item that
+answered with a beep. The tables-full refusals beside it — Clock, Bounce and
+Disk at the instance cap — stay beeps on purpose: `MAX_TASKS` is 12, and the
+predicate is per-kind rather than one word.
 
 ```nasm
 CMD_ABOUT  equ 1   ; --- System (cell 0, every application) ---
@@ -5057,7 +5087,15 @@ content-relative; the procs fetch the content origin via `wm_content`
   (12) pennant + black mast on a covered cell; revealed = white face, 1px
   dark gray grid border, centered colored digit; digit colors:
   1=1 (blue), 2=2 (green), 3=4 (red), 4=5 (magenta), 5=6 (brown),
-  6=3 (cyan), 7=0 (black), 8=8 (dark gray). Mine = black disc with spokes;
+  6=3 (cyan), 7=0 (black), 8=8 (dark gray) — the 8 is the one digit that cannot
+  reduce to black, because 1..7 use all seven indices that do. It keeps dark
+  gray because that is the only one of the six dither-class colours with enough
+  contrast on a white cell face; the alternatives are light gray (too faint to
+  read) and three bright colours (worse), and light blue collides with the 1.
+  **This digit is why the disabled state is a flag and not a colour** (§46): a
+  first cut had `font_ink` dither every `CDGRAY` glyph on mono, which made a
+  Minesweeper 8 come out looking exactly like a menu item you cannot pick.
+  Mine = black disc with spokes;
   the one you clicked sits on a light-red (12) cell, others (shown on
   loss) on light gray. Wrong flags on loss: mine + black X.
 - Input: W_ONCLICK reveals (or flags, in flag mode) the cell under the
@@ -8088,6 +8126,20 @@ its own):
 | `fdlg_draw_list` → `fdlg_list_body` | inside the list frame | `fdlg_clamp` + `fdlg_draw_rows` + `fdlg_draw_sbar` |
 | `fdlg_draw_both` | both | both — a selection move changes the listing *and* takes the new name (`fdlg_pick`) |
 
+**The default button is the fourth thing a keystroke can change**, and it is
+redrawn on an *edge* rather than per key. `fdlg_actok` is the one predicate
+behind the button's pen, the click on it and the Enter key (§46 rule 4) — a
+chosen row always acts, and with no row chosen an empty name box is not an
+answer — so typing the first character or deleting the last one flips it, and
+`fdlg_draw_name` compares the answer against `[fdlg_actl]` and calls
+`fdlg_defbtn` only when it moved. Every caret move comes down the same path,
+and a frame plus a label per keypress is real money on the machines this runs
+on.
+
+`fdlg_btn` takes the **caller's** pen rather than forcing `CBLACK`, so the
+disabled frame greys with the label — which is what shows on a mono adapter,
+where a package's grey text alone would round to black (§46 rule 2/3).
+
 `fdlg_paint` calls the **bodies**, because `wm_paint_all` already handed it a
 white content; everything else calls the wrappers. Neither erase touches its
 frame: the frames are chrome and never move.
@@ -8292,8 +8344,29 @@ an idle `CWHITE` one.
 Piano's decorative sharp glyph (`CLRED` on white) disappears — no flat map
 can give it black while the black-key core needs white.
 
-Glyphs never dither — a dithered 8x8 glyph is unreadable — so `font_ink`
-rounds everything but pure white to black.
+Glyphs round to black rather than dithering — a dithered glyph costs half its
+strokes, and Piano's coloured letters want contrast, not texture — **with one
+exception: `[gfx_dis]`**, the disabled flag (§46 rule 1). `font_ink` sets
+`[font_dith]`, which selects a third row loop in `font_char_bb` that ANDs the
+shifted glyph with an alternating AA/55.
+
+Without it a disabled string came out **black — pixel-identical to a live
+one** — so a greyed menu item simply stopped saying it was greyed, and
+`MENU_DIS`'s entire visual signal was missing on two adapters out of three
+(§12.2). Half a stroke is a real cost and it is the right one to pay here: it
+is what the 1bpp Macintosh did to a greyed-out menu item, and it is legible for
+the same reason.
+
+The trigger is the **flag and not the colour** because the renderer cannot ask
+whether a string is a control. Keyed off `CDGRAY` it caught Minesweeper's digit
+8 (§23), which is dark gray for contrast and has nothing to do with being
+disabled.
+
+The phase restarts at `AA` for every cell rather than tracking absolute y, so a
+line of text is in step with itself; text rows are 8px apart, which is even, so
+lines are in step with each other too. It is a **separate loop** and not an
+`and` inside `.crow` because that is the innermost loop of every string on the
+slowest machines we support, and almost no glyph wants this.
 
 ### 39.5 Dispatch: `[bb_on]` and `[bb_dbl]`
 
@@ -8909,9 +8982,20 @@ allow, from 32x16 up, and everything else follows from that:
   an empty field means "leave this axis alone". They need 41 rows below the last
   tool button, which a 110-row CGA canvas does not have, so `pt_szon` answers
   for the painter and the hit test both — a control that is not drawn is not
-  clickable — and the two-line readout is what shows when they do not fit (as it
-  is on a machine with no undo image, where the canvas cannot be resized at
-  all). Apply and a grow-box drag both go through **`pt_setsize`**, the one place
+  clickable — and the two-line readout is what shows when they do not fit.
+
+  **The canvas height therefore has a floor of `PT_SZ_END`, not `PT_CH_MIN`.**
+  The fields are the only way to make a canvas taller — there is no menu item
+  and no key — so a canvas short enough to hide them could never be grown
+  again, and typing 100 into the height field, or dragging the grow box up, was
+  a one-way trip for the rest of the session. It is a minimum window size and
+  nothing more exotic. The floor is held against `[pt_chmax]` first: where the
+  *screen* is what cannot fund the controls — CGA, whose 110 rows are 18 short —
+  no floor can, and `PT_CH_MIN` is the honest answer. **Paint on a CGA machine
+  cannot be resized at all**, which is a layout limit rather than a memory one
+  and is not new.
+
+  Apply and a grow-box drag both go through **`pt_setsize`**, the one place
   a size is decided: it clamps to the screen, then to what memory will fund
   (`pt_fit`), then to what the picture will stand to lose (`pt_lose_w` /
   `pt_lose_h`), so typing 900 into a field is exactly a drag that asked for too
@@ -10006,6 +10090,168 @@ difference — a rising bar fills its growth, a falling one erases its
 shrinkage, a steady one costs nothing; `tui_el_scopes` zeroes the four
 widths whenever it repaints the cells under them.
 
+## 46. Disabled controls — the greying standard (binding)
+
+Every part of the UI that can refuse a click has to say so the same way. This
+section is the whole of how, and it is binding on the kernel and on packages
+alike. **It breaks silently**: get it wrong and the control still works, still
+refuses, and still looks fine on the machine you tested it on — it just stops
+saying anything on the other two adapters, or says the opposite of what it
+means.
+
+### 46.1 The seven rules
+
+1. **Disabled is a FLAG, not a colour: `gfx_pen_dis` / `gfx_pen_live` /
+   `gfx_pen_cf`.** They set `[gfx_color]` = `CDGRAY` *and* `[gfx_dis]` = 1
+   together, and nothing in the kernel sets either half by hand. `gfx_pen_cf`
+   takes the answer in CF, which is the shape every greying predicate already
+   returns, so a call site is `call <ok-test>` then `call gfx_pen_cf`.
+
+   It is a flag because the renderer has to do something a colour cannot
+   express — `font_ink` masks a disabled glyph to a checkerboard on mono
+   (rule 3) — and because inferring it from `CDGRAY` catches every other use of
+   that colour. The first cut did exactly that and made Minesweeper's digit 8
+   (§23) look like a menu item you cannot pick. A flag says what is *meant*;
+   a colour only says what was *picked*.
+
+   `gfx_unlock` clears `[gfx_dis]`, for the reason it clears the clip region
+   (§11.3): it is valid for exactly one lock hold, so a site that forgets
+   `gfx_pen_live` cannot leak dithered text into whatever draws next.
+
+   `CLGRAY` remains a *decoration* colour — Minesweeper's covered cells,
+   Arkanoid's rails, Recorder's centre line — and is never a disabled state.
+
+2. **Grey the whole control, not its caption.** Every mark the control is made
+   of takes the disabled pen: the radio ring, the checkbox square, the button
+   frame, the icon, and the label. A black ring with faint writing beside it
+   reads as a live control that someone mislabelled — which is exactly what the
+   Sound page shipped as until it was reported.
+
+3. **Grey does not survive 1bpp; the flag does.** Every middle grey rounds to
+   black in text (§39.4) — a dithered 8x8 glyph costs half its strokes, which
+   is the wrong trade for Piano's coloured letters and right for nothing —
+   so a `CDGRAY` label used to be *pixel-identical* to a live one on Hercules
+   and CGA. `[gfx_dis]` is the carve-out: `font_ink` masks a disabled glyph to
+   a checkerboard, exactly as the 1bpp Macintosh drew a greyed-out menu item,
+   and just as readable.
+
+   Shapes never needed it — `gfx_ink` maps `CDGRAY` to the 50% dither, so a
+   ring or a frame comes out dotted on mono — which is why rule 2's "grey the
+   whole control" was load-bearing before this existed and remains the rule for
+   **packages**, which have no way to reach the flag (§20.3 publishes no slot
+   for it, deliberately: nothing has needed one). A package's disabled *label*
+   still rounds to black on mono, so a package's disabled control must include
+   a non-text mark — a frame, a box, an icon — and `rc_btn` (Recorder) is the
+   reference.
+
+   Words are still worth adding — `'Save Gif (NoRam)'` (§12.2), or a caption
+   that says why (§31.3) — but they say *why not*, not *whether*. They stopped
+   being load-bearing for kernel-drawn text when the renderer took the state.
+
+4. **One predicate, three consumers.** The test that greys the control, the
+   test that refuses the click and the text that explains it are the *same
+   call* — `cpf_dbok` (§31.3), `cp_snd_rowok` (§31.7) — never three copies of
+   the condition. Copies drift, and both drifts are bad: a control that looks
+   available and refuses, or looks unavailable and works.
+
+5. **Grey a fact, never a guess.** Grey when the answer is stable and knowable
+   without doing the thing — no hardware (§51.2's `DSV_TIERS`), the wrong
+   adapter, a driver that is not loaded. When the only way to know is to *try*,
+   do not grey: attempt it and report what came back. Memory is the case that
+   splits: `mem_avail` is a real predicate for an ordinary claim, so the
+   back-buffer row greys on it (§31.3); `mem_claim_dma` has no predicate at all
+   because the 64KB page rule is inside its scan (§50.3), so the Sound Blaster
+   row does not grey on memory and the click reports instead (§34.8).
+
+   The corollary is a cost rule: **a greying test runs on every paint**, so it
+   must be cheap. If answering it means probing hardware, the answer belongs in
+   a value someone already computed — that is what `DSV_TIERS` is for, and
+   §31.7 records what re-probing cost when the page did it on a click instead.
+
+6. **A refused click says exactly one thing.** Greyed → say nothing more; the
+   control already said it, and a second explanation for something the user can
+   see is disabled is noise. Not greyed but refused → the page owes words at
+   the point of refusal, in the vocabulary it already uses for that failure
+   (the Sound page reports `drv_errstr`, the loader's own strings).
+
+7. **Every redraw path applies the same pen.** A page that repaints part of
+   itself after a click — glyphs only, one row, one line — must run the same
+   predicate the full paint runs. Miss it and a control's two halves disagree
+   about being disabled, which is worse than either answer alone.
+
+### 46.2 Verifying it
+
+**A greying change is not done until it has been looked at on a 1bpp adapter.**
+The two adapters differ in *kind*, not just in colour depth — a glyph becomes a
+checkerboard, a ring becomes dotted — and VGA will show a perfectly convincing
+grey for something that renders quite differently, or not at all, on the other
+two:
+
+```
+python3 tools/hercshot.py build/qmp.sock 0x70000 out.png   # after make test VIDEO=herc HERCSEG=0x7000
+make test VIDEO=cga                                        # and screendump normally
+```
+
+One trap on the CGA path: **QEMU double-scans mode 6 to 640x400**, so a
+screendump cropped at 640x200 shows the top half of the guest screen and
+nothing else. Take every second row.
+
+### 46.3 Where the tree stands
+
+Conformant, and worth reading as the reference:
+
+- **`cp_snd_rowok` / `cp_snd_radios` / `cp_snd_paint`** (§31.7) — one
+  predicate, glyph and label both, dotted ring on mono.
+- **`rc_btn`** (Recorder) — greys the button frame with the label, so the
+  frame dithers and the button reads as disabled on every adapter.
+- **Paint's menu items** (§12.2) — text-only controls that also carry the state
+  in words, `'Save Gif (NoRam)'` and five more. Since `font_ink` learned the
+  dither those words say *why not* rather than *whether*, which is still worth
+  having.
+- **The Display page's back-buffer row** (§31.3) — `cp_dbradios` takes
+  `cpf_dbok`'s pen for row 1's glyph. It used to draw it `CBLACK` beside a grey
+  label, which rule 2 forbids and §31.3 had *already* described correctly; the
+  code was the thing that disagreed.
+- **Every disabled menu item everywhere** (§12.2, `MENU_DIS`) — fixed in the
+  renderer rather than per app, which is why there is nothing to list. It was
+  text and nothing else, so on Hercules and CGA it was pixel-identical to a live
+  item and merely declined to highlight; `font_ink`'s `CDGRAY` dither made all
+  of them, in the kernel and in every package at once, say so. The same change
+  covers **`MENU_DIS` used as a RADIO MARK** — Solitaire's Draw One / Draw Three
+  (§43) and Tracker's 11/22/44 kHz (§45), where grey means "this is the
+  setting": the current item is now the dithered one, so a mono user can see
+  which is which without a checkmark glyph and without spending a character of
+  `MENU_MAXCH`.
+- **"Close Window"** (§12.3) — greys from `wm_top` rather than beeping.
+- **The file dialog's default button** (§38.8) — `fdlg_actok` behind the pen,
+  the click and the Enter key alike, greyed while the name box is empty and no
+  row is chosen. `fdlg_btn` stopped forcing `CBLACK` so the frame greys too.
+
+**Left as beeps, deliberately.** The second half of the sweep asked which
+refusals *ought* to grey and do not, and three answer no:
+
+- **A press outside the modal dialog** (`fdlg_grab`, §38.2). Greying the whole
+  desktop is not a control state, and the dialog's presence is the explanation.
+- **Clock / Bounce / Disk at the instance cap** (§12.3). `MAX_TASKS` is 12 and
+  the predicate is per-kind rather than one word; the cost is not worth a fact
+  a user meets about never.
+- **The Disk window's context menus** (`files.inc`, §22). Up One Folder at the
+  root, Rename with no disk: silent no-ops. The recorded reason — four windows
+  share an immutable `.text` descriptor, so nothing per-window can live in one
+  — **is now obsolete**, because `ui_loc_gate` shows the swap can happen just
+  before the menu drops, when exactly one window is relevant. It stays a
+  no-op because it is a feature rather than a correction, not because it
+  cannot be done. Whoever picks it up should read this paragraph first.
+
+**Owed:** nothing else identified. §46.2 is the standing obligation — a greying
+change is not finished until it has been looked at on a mono adapter.
+
+**Packages have no `[gfx_dis]`, on purpose.** §20.3 publishes no slot for it
+because nothing has needed one: a package's disabled control is covered by rule
+2, whose non-text mark dithers through `gfx_ink` without help. If an app ever
+needs disabled *text* with no shape beside it, that is when the slot gets
+added — and adding one is an append, which §20.8 allows.
+
 ## 50. memory.inc — the claim heap
 
 Everything above the kernel, in one map the kernel owns.
@@ -10207,6 +10453,29 @@ else's block down would hand them a pointer into memory that stopped being
 theirs. Real compaction needs a relocation callback every holder implements.
 Until there is one, the fix is to stop *creating* the fragmentation, which is
 what path 2 does: a claim that grows in place never leaves a hole behind it.
+
+**So "`mem_claim` refuses while the total free would have sufficed" has exactly
+two cures, and they are a decision rather than a bug fix:**
+
+1. **A relocation callback.** The only thing that makes real compaction safe,
+   and it is an ABI addition every holder has to implement — a package, the
+   back buffer, the menu save-under, the sound driver's DMA claim (which
+   additionally may not move at all, §50.3's page rule). It is not a change
+   `memory.inc` can make on its own, and it is not one to make speculatively.
+2. **Better placement, which needs no ABI at all.** `mem_claim` is a
+   bump-and-retry **first fit** going up and a highest fit going down; a
+   **best fit** would put a small claim in the smallest hole that takes it and
+   leave the big runs whole. That is contained to one scan — but the retry
+   loop's termination rests on the candidate base only ever moving *forward*
+   (past an overlapping claim, or up to the next 64KB page floor, §50.3), and
+   best fit means visiting every hole rather than stopping at the first. It is
+   a real option and a real rewrite of the one routine in the kernel that must
+   not be subtly wrong.
+
+Neither is written. The measurement that should come first is whether the
+refusal actually happens in practice: `mem_avail` already answers with the
+largest run *and* the total, so the two are distinguishable today, and nothing
+in the tree has yet reported a refusal where they differed.
 
 ### 50.4 Teardown
 

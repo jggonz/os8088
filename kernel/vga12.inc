@@ -26,6 +26,25 @@ VGA_GC      equ 0x3CE           ; Graphics Controller index port (data +1)
 VGA_SEQ     equ 0x3C4           ; Sequencer index port (data +1)
 
 gfx_color       db CBLACK       ; current drawing color for every solid op
+gfx_dis         db 0            ; 1 = what is being drawn is a DISABLED
+                                ; control (SPEC.md 46). It is a FLAG and not
+                                ; a colour because the renderer has to do
+                                ; something a colour cannot express: on a
+                                ; mono adapter font_ink masks the glyph to a
+                                ; checkerboard, which is the only way a
+                                ; disabled STRING is distinguishable from a
+                                ; live one at 1bpp. Keying that off CDGRAY
+                                ; instead would catch every other use of the
+                                ; colour - Minesweeper's digit 8 came out
+                                ; looking like a menu item you cannot pick -
+                                ; and would make "never use this colour for
+                                ; anything else" a rule the tree has to keep
+                                ; by hand. Set it through gfx_pen_* and it
+                                ; cannot disagree with gfx_color.
+                                ; Initialized data, NOT .bss (nothing zeroes
+                                ; .bss), and gfx_unlock clears it for the
+                                ; reason it clears the clip region: it is
+                                ; valid for exactly one lock hold.
 gfx_pat         dw 0            ; gfx_fill_pat: near ptr to 8 row bytes,
                                 ; set by the caller before every call
 gfx_lock_flag   db 0            ; drawing mutex (SPEC.md 7); 0 = free.
@@ -1322,6 +1341,38 @@ vga_restore_vram:
     ret
 
 ; -----------------------------------------------------------------------------
+; gfx_pen_live / gfx_pen_dis / gfx_pen_cf - the enabled and disabled pens
+;
+; in:       gfx_pen_cf only: CF = 0 live, CF = 1 disabled - which is the shape
+;           EVERY greying predicate in the tree already answers in, so a call
+;           site is `call <ok-test>` then `call gfx_pen_cf` and nothing else
+; out:      nothing
+; clobbers: nothing (flags)
+;
+; SPEC.md 46 makes a disabled control two things at once - the CDGRAY pen and
+; the [gfx_dis] flag - and these exist so no call site can set one without the
+; other. That is not hypothetical tidiness: the bug this whole section came
+; out of was a row whose LABEL was greyed and whose GLYPH was not, and "two
+; halves of one control disagreeing" is the failure mode the flag would
+; otherwise invite a second time.
+;
+; gfx_pen_live returns the pen to CBLACK, which is what every site in the tree
+; wants back. A site that needs some other colour afterwards sets it itself -
+; but it must still come through here, or the flag stays armed and the next
+; string on this lock hold draws dithered.
+; -----------------------------------------------------------------------------
+gfx_pen_cf:
+    jc gfx_pen_dis
+gfx_pen_live:
+    mov byte [gfx_color], CBLACK
+    mov byte [gfx_dis], 0
+    ret
+gfx_pen_dis:
+    mov byte [gfx_color], CDGRAY
+    mov byte [gfx_dis], 1
+    ret
+
+; -----------------------------------------------------------------------------
 ; gfx_lock - acquire the drawing mutex, then hide the cursor (SPEC.md 7)
 ;
 ; Spins with task_yield while another task holds it, so background tasks
@@ -1364,6 +1415,10 @@ gfx_lock:
 ; -----------------------------------------------------------------------------
 gfx_unlock:
     mov word [wm_clip_n], 0
+    mov byte [gfx_dis], 0       ; the disabled pen dies with the lock, for the
+                                ; clip region's reason (SPEC.md 11.3/46): a
+                                ; site that forgets gfx_pen_live cannot leak
+                                ; dithered text into whatever draws next
     call gfx_flush
     call cursor_show
     mov byte [gfx_lock_flag], 0

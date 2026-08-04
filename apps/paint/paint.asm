@@ -5277,9 +5277,29 @@ pt_sizeask:
     jle .w_cap
     mov ax, [pt_cwmax]
 .w_cap:
-    cmp dx, PT_CH_MIN
+    ; The height floor is "tall enough to still show the size boxes", not
+    ; PT_CH_MIN. A canvas shorter than PT_SZ_END hides them (pt_szon), and
+    ; they are the ONLY way to make the canvas taller again - no menu item, no
+    ; key - so typing 100 into the height box, or dragging the grow box up,
+    ; left the window stuck at that size for the rest of the session. This is
+    ; a minimum window size and nothing more exotic.
+    ;
+    ; Held against [pt_chmax] first, because on a 640x200 CGA screen the band
+    ; between the menu bar and the dock is barely taller than the tool column:
+    ; where the SCREEN is what cannot fund the controls, no floor can, and
+    ; PT_CH_MIN is the honest answer.
+    mov bx, PT_SZ_END
+    cmp bx, [pt_chmax]
+    jle .h_fl
+    mov bx, [pt_chmax]
+.h_fl:
+    cmp bx, PT_CH_MIN
+    jge .h_fl2
+    mov bx, PT_CH_MIN
+.h_fl2:
+    cmp dx, bx                      ; signed: a tiny window makes this negative
     jge .h_ok
-    mov dx, PT_CH_MIN
+    mov dx, bx
 .h_ok:
     cmp dx, [pt_chmax]
     jle .h_cap

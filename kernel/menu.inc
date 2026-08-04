@@ -1027,17 +1027,17 @@ menu_drop:
     mov si, [es:bx]             ; are that cell's (SPEC.md 12.2/20.1); ES is
                                 ; re-established per pass because menu_trunc
                                 ; may repoint it at the kernel's copy
-    mov byte [gfx_color], CBLACK
-    cmp byte [es:si], MENU_DIS  ; disabled: grey, and skip the marker byte
-    jne .live
-    inc si
-    mov byte [gfx_color], CDGRAY
-.live:
+    call gfx_pen_live
+    cmp byte [es:si], MENU_DIS  ; disabled: the disabled pen, and skip the
+    jne .live                   ; marker byte. gfx_pen_dis and not a bare
+    inc si                      ; CDGRAY store, because on a mono adapter
+    call gfx_pen_dis            ; grey text IS black text - the flag is what
+.live:                          ; buys the checkerboard (SPEC.md 46)
     call menu_trunc             ; ES:SI = the item, truncated to MENU_MAXCH,
     mov cx, [menu_x1]           ; so no glyph lands outside the saved rect
     add cx, 8
     call font_str_x
-    mov byte [gfx_color], CBLACK
+    call gfx_pen_live
     pop cx
     add bx, 2
     add dx, MENU_ITEM_H
@@ -1412,6 +1412,9 @@ menu_s_clock    db 'Clock', 0
 menu_s_bounce   db 'Bounce', 0
 menu_s_disk     db 'Disk', 0
 menu_s_close    db 'Close Window', 0
+menu_s_closex   db MENU_DIS, 'Close Window', 0  ; ...with nothing to close;
+                                ; ui_loc_gate points the item at one or the
+                                ; other before the menu can drop (SPEC.md 46)
 menu_s_tasks    db 'Task Manager', 0
 menu_s_restart  db 'Restart', 0
 
