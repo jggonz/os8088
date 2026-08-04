@@ -1506,20 +1506,31 @@ sites that already exist:
 
 - `wm_front` (and therefore `wm_show`, and every raise in §13) calls
   `menu_activate` with the raised window: **raising a window makes its
-  application active**, and the `wm_paint_all` that ends `wm_front` draws
-  the new bar in the same pass.
+  application active**, and `wm_raise` (§11.4) draws the new bar in the
+  same pass.
 - **A click on the desktop switches back to Locator** (§12.3): the
   `.desk_icons` branch of §13's ladder calls `menu_activate` with BX = 0
   before `desk_click`, and repaints the bar itself if the owner changed
   (its own gfx_lock — nothing else in that branch holds one). The dock is
   offered the click first, and a dock tile that fronts an instance
   re-activates it through `wm_front` like any other raise.
-- `menu_draw_bar` calls `menu_check` first, which reverts the bar to
-  Locator when `[menu_win]` names a window that is no longer visible.
-  That single validation covers close, minimize and hide — none of those
-  sites needs to know about the menu bar at all, and since §20.6 that
-  includes the first non-UI-task trigger: a package worker tearing its own
-  window down repaints from `wm_destroy`, and the same check catches it.
+- `menu_draw_bar` calls `menu_check` first, which hands the bar **to the
+  window promoted in the vacated one's place** when `[menu_win]` names a
+  window that is no longer visible — `wm_top`, which answers 0 (= Locator)
+  only when nothing visible is left. That single validation covers close,
+  minimize and hide — none of those sites needs to know about the menu bar
+  at all, and since §20.6 that includes the first non-UI-task trigger: a
+  package worker tearing its own window down repaints from `wm_destroy`,
+  and the same check catches it.
+
+  **It promotes rather than reverting because the title bar does.** Losing
+  the front window promotes whatever was under it, and `wm_paint_dmg`
+  redraws that window's title bar with the pinstripes and the two boxes for
+  exactly that reason (§11.5). A bar that fell back to Locator instead left
+  the screen saying two different things about which application is active.
+  A **deliberate** switch to Locator is unaffected and stays put: the
+  `.desk_icons` branch sets `[menu_win]` = 0, and `menu_check` leaves at its
+  first test, so a later hide cannot drag the bar back onto a window.
 
 | symbol          | contract                                                   |
 |-----------------|-------------------------------------------------------------|
@@ -1527,6 +1538,7 @@ sites that already exist:
 | `menu_activate` | in: BX = window ptr, or 0 for Locator. Out: **CF = 1 if the active application changed** (the caller owes the bar a repaint), CF = 0 if it was already active. Draws nothing, takes no lock, preserves every register. |
 | `menu_relayout` | recompute `[menu_set]`, `[menu_namep]` and the whole `menu_bar` from `[menu_win]`. Preserves all registers. |
 | `menu_win_set`  | in: BX = window ptr, SI = menu set ptr (0 = none) — stores `[bx+W_MENUS]` and relayouts if BX is the active window. The `OSAPI_MENU_SET` target (§20.3). Preserves every register **and the flags**: its intended call site sits between a package's `wm_create` and the `ret` that owes the loader that call's CF (§20.2). |
+| `menu_check`    | if `[menu_win]` names a window that is no longer visible, `menu_activate` on `wm_top` — the promoted window, or 0 for Locator when none is left. No-op while the owner is visible or already Locator. Preserves every register. Called only from `menu_draw_bar`, so it always runs under the gfx lock on the UI task. |
 | `menu_draw_bar` | draw the bar: `menu_check`, white field + black rule, every `menu_bar` cell's title (cell 0 = the logo glyph), the app-name label, then `menu_draw_clock`. Gfx lock held by caller. |
 | `menu_track`    | in: CX = mousedown x. Runs the whole interaction while the button is held (caller holds gfx lock): highlight title (xor), drop the menu (gfx_save under it to the save-under claim, `[menu_sseg]:0`), track item highlight following `mouse_y`, on release restore save-under + unhighlight; **out AX = 0xFFFF if nothing was selected, else AH = bar cell index (0 = System), AL = item index within that cell**. Item cells are 16px tall, menu width = widest item + 16px padding. Only the bar-specific half is its own: the cell find, `menu_title_xor` and the (cell, item) pack. The drop itself is `menu_drop` (§12.4). |
 | `menu_drop`     | the tracker, anchored by variables so it serves both the bar and a context menu (§12.4). |
