@@ -2058,16 +2058,19 @@ tm_mrow_close:
     cmp byte [tm_mfit], 0       ; off the bottom: nothing was drawn, and
     je .forget                  ; forget what used to be here so it comes
     mov byte [di], 0            ; back if the window ever grows
-    call tm_rowok               ; cut by the region? then draw it a cell at a
-    jnc .mwhole                 ; time instead of not at all (tm_row_cells),
-    call tm_row_cells           ; and do NOT record it as drawn
-    jmp short .out
-.mwhole:
     call tm_rowsum              ; AX = this row's content, in one word
     add bx, tm_rowck            ; ...through tm_elchk, for the never-zero rule
     call tm_elchk
-    jc .out                     ; byte for byte what is already on screen
+    jc .out                     ; byte for byte what is already on screen,
+                                ; whatever the clip says (see tm_rows)
 
+    call tm_rowok               ; changed: can the whole band go at once?
+    jnc .mwhole
+    call tm_row_cells           ; no - cell by cell (SPEC.md 11.3)
+    jnc .out
+    mov word [bx], 0            ; it drew nothing: forget the record
+    jmp short .out
+.mwhole:
     call tm_rowfill             ; only NOW is the band worth erasing
     mov si, [tm_sqp]            ; the legend square the row asked for, drawn
     or si, si                   ; after the fill that would have erased it
@@ -2123,7 +2126,8 @@ tm_lfill:
 ; -----------------------------------------------------------------------------
 ; tm_row_cells - draw one row CELL BY CELL, for a row the clip region cuts
 ; in:  [tm_rowx]/[tm_rowy] placed, tm_str composed; gfx lock held, clip armed
-; out: nothing (all registers preserved)
+; out: CF = 0 at least one glyph cell was drawn; CF = 1 none was (every cell
+;      cut - what a HORIZONTAL cut does). All registers preserved.
 ;
 ; The other half of the granularity rule (SPEC.md 11.3). tm_rowok vetoes a row
 ; the region does not wholly contain, because a fill clips per PIXEL and a
@@ -2155,6 +2159,8 @@ tm_row_cells:
     push dx
     push si
     push di
+    push bp
+    xor bp, bp                  ; BP = glyph cells actually drawn
     mov byte [gfx_color], CWHITE
     mov ax, [tm_rowx]           ; the band's LEAD-IN, ahead of the first glyph
     add ax, 6                   ; cell: no glyph ever lands here, so a plain
@@ -2191,6 +2197,7 @@ tm_row_cells:
     mov dx, [tm_rowy]
     mov al, [si]
     call font_char
+    inc bp
 .next:
     add di, 8
     inc si
@@ -2207,12 +2214,19 @@ tm_row_cells:
     add dx, 7
     call gfx_fill
 .tdone:
-    pop di
+    or bp, bp                   ; CF = 1 when NOTHING was drawn - every cell
+    pop bp                      ; cut, which is what a HORIZONTAL cut does.
+    pop di                      ; pop leaves the flags alone
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
+    jnz .drew
+    stc
+    ret
+.drew:
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3035,18 +3049,23 @@ tm_rows:
 
 .draw:
     mov byte [di], 0
-    call tm_rowok               ; cut by the region? then draw it a cell at a
-    jnc .rwhole                 ; time instead of not at all, and do NOT
-    call tm_row_cells           ; record it - it is re-examined every refresh
-    jmp short .rnext
-.rwhole:
     call tm_rowsum              ; unchanged since the last refresh? then the
     mov bx, si                  ; pixels on screen are already right. Through
     shl bx, 1                   ; tm_elchk, not an open-coded compare, so this
     add bx, tm_rowck            ; row gets the never-zero rule too
     call tm_elchk
-    jc .rnext
+    jc .rnext                   ; ...WHATEVER the clip says. This test is a
+                                ; 20-byte hash and it comes FIRST, so a Task
+                                ; Manager with something over it costs one
+                                ; hash per row per refresh, not one redraw
 
+    call tm_rowok               ; changed: can the whole band go at once?
+    jnc .rwhole
+    call tm_row_cells           ; no - cell by cell (SPEC.md 11.3)
+    jnc .rnext
+    mov word [bx], 0            ; it drew NOTHING: forget the record just made
+    jmp short .rnext            ; so the row is tried again next refresh
+.rwhole:
     call tm_rowfill             ; only now is the band worth erasing
     mov byte [gfx_color], CBLACK
     mov cx, [tm_rowx]
