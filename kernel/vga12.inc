@@ -780,8 +780,22 @@ gfx_fill_gray_raw:
 ; in:       AX = x1, BX = y1, CX = x2, DX = y2; [gfx_pat] = pattern ptr
 ; out:      -
 ; clobbers: flags
+;
+; Clipped like the other rect fills, and it re-enters per fragment for free
+; because the pattern is SCREEN-aligned: the row byte is [vga_y1] & 7 off a
+; table staged from [gfx_pat] on every call, so a fragment starting at any y
+; picks the same byte the whole rect would have. It was the one rect
+; primitive without the hook, and the Task Manager's memory map is drawn
+; almost entirely out of it - the claim bands, the buffer texture and each
+; package's region pattern - so a map redrawn behind another window painted
+; its full width straight across whatever was on top. The kernel's own band
+; stopped at the right place, because gfx_fill_gray had the hook, which is
+; what made it look like the map was drawing the wrong SHAPE rather than in
+; the wrong PLACE.
 ; -----------------------------------------------------------------------------
 gfx_fill_pat:
+    GFXCLIP gfx_fill_pat_raw
+gfx_fill_pat_raw:
     cmp byte [bb_on], 0         ; double-buffered? (SPEC.md 32)
     jne bb_fill_pat
     push ax

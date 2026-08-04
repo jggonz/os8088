@@ -1309,7 +1309,7 @@ looked frozen, a Clock's digits stopped, and a fractal that takes two
 minutes on an XT stopped rendering the moment anything touched its corner.
 
 The region replaces the veto. `wm_clip_set` builds the window's **visible
-region** and arms it; while it is armed, the six clipped primitives below
+region** and arms it; while it is armed, the clipped primitives below
 draw only inside it.
 
 **Building the region.** Start with the window's content rect — the same
@@ -1341,16 +1341,36 @@ nothing overlaps, so a pre-test would only walk it twice.
 **Where the hook goes.** `gfx_pixel`, `gfx_hline`, `gfx_vline` and
 `gfx_frame` all funnel into `gfx_fill` (§5) — a pixel is a 1×1 rect, an
 hline a 1-row rect, a frame two hlines and two vlines — so the whole
-rectangle vocabulary is one choke point. The clipped set is six:
+rectangle vocabulary is one choke point. The clipped set is seven:
 
 | entry | how it clips |
 |-------|--------------|
 | `gfx_fill` | per fragment; covers pixel, hline, vline and frame |
 | `gfx_fill_gray` | per fragment (the dither is screen-parity, so fragments align) |
+| `gfx_fill_pat` | per fragment (the pattern is screen-aligned for the same reason: the row byte is `y & 7` off a table staged from `[gfx_pat]` on every call, so a fragment starting at any y picks the byte the whole rect would have) |
 | `gfx_xor_fill` | per fragment |
 | `gfx_xor_rect` | **decomposed first**: an outline is not the intersection of its bounding rect with anything, so it becomes four `gfx_xor_fill` strips (the same decomposition `bb_xor_rect` uses, each pixel touched once, still self-inverting) |
 | `font_char` | whole-cell; covers `font_str` |
 | `icon_draw16` | whole-icon; covers `icon_draw` and `ico_core` |
+
+`gfx_fill_pat` was missing from this list for as long as the list existed,
+and the Task Manager's memory map is drawn almost entirely out of it — every
+claim band, the kernel's buffer texture and each package's region pattern —
+so a map redrawn behind another window painted its full width straight
+across whatever was on top. The kernel's own band stopped at the right
+place, `gfx_fill_gray` having the hook, which is what made it read as the
+map drawing the wrong SHAPE rather than in the wrong PLACE. A primitive not
+in this table is not "unclipped by design"; it is a hole.
+
+**Two are still holes, and they are named here so they are not silent.**
+`gfx_blit4` (0x01C0) and `gfx_scroll` (0x01E0) take no hook, because
+`GFXCLIP` re-enters a body with a sub-rect and neither can honour one
+without also advancing its SOURCE to match — a blit is not a fill. Nothing
+in the tree reaches them from a clipped context today: both are package
+slots, packages draw from callbacks where nothing is armed, and the one
+package that blits (Solitaire, §43) has no worker. A package that arms
+`OSAPI_WM_CLIP_SET` from a worker and then blits **will** paint over the
+window on top of it.
 
 Each hook sits at the **public entry, above the `[bb_on]` dispatch**, so one
 implementation covers the VRAM path, the back-buffer path, VGA and both mono

@@ -165,7 +165,7 @@ Pre-emptive round-robin scheduling: the int 08h PIT hook chains the BIOS tick, s
 
 ### The clip region (SPEC.md §11.3 — how a covered window keeps drawing)
 
-`wm_obscured` answers a boolean, and every background painter used it as a veto: one covered pixel and the whole frame was skipped, because the `gfx_*` primitives take **absolute screen coordinates and clip only to the screen edge**, so a covered window that drew would paint over the window on top of it. `wm_clip_set` replaces the veto with a region — the window's content rect minus every visible window above it in `wm_zord`, drop shadows included, into a 16-rect list. While it is armed the six clipped primitives draw only inside it.
+`wm_obscured` answers a boolean, and every background painter used it as a veto: one covered pixel and the whole frame was skipped, because the `gfx_*` primitives take **absolute screen coordinates and clip only to the screen edge**, so a covered window that drew would paint over the window on top of it. `wm_clip_set` replaces the veto with a region — the window's content rect minus every visible window above it in `wm_zord`, drop shadows included, into a 16-rect list. While it is armed the seven clipped primitives draw only inside it — and a primitive that is *not* on that list is a hole, not a design decision: `gfx_fill_pat` was off it for as long as it existed, which let the Task Manager's memory map (claim bands, buffer texture, region patterns — nearly all of it) paint its full width across whatever window was on top. `gfx_blit4` and `gfx_scroll` are still off it, deliberately and documented in SPEC.md 11.3, because a blit cannot take a sub-rect without advancing its source to match.
 
 Four things are load-bearing:
 
