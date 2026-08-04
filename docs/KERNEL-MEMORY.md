@@ -60,6 +60,21 @@ span in its own texture on the RAM bar. Every figure there is an
 assembly-time constant, so the once-a-second refresh does no arithmetic to
 produce them.
 
+Each row's legend square is the texture its memory is drawn in on the maps
+above, so the two can be read against each other:
+
+| square | band | rows |
+|---|---|---|
+| 50% gray | the kernel's own span | `System`, `Code+data` |
+| horizontal bars | its buffers | `Stacks`, `Disk bufs`, `FAT snap` |
+| solid black | the package pool | `Packages` |
+| 2px diagonal | a live heap claim | *(the CLM column)* |
+| per-slot pattern | one package's region | each package row |
+
+`Builtins` has no square on purpose: a built-in owns no band on either map —
+its code is already inside `Code+data`, and its memory is heap claims billed
+to its own row.
+
 ---
 
 ## Each region in detail

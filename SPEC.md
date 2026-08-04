@@ -5051,12 +5051,16 @@ in-segment map would show one black block and nothing else.
   (`tm_pat_buf`, 2-on-2-off horizontal bars — the band is 14 rows tall and,
   on a 640KB machine, four pixels wide, so a texture has to carry its
   signature vertically or it has nowhere to show it), the **package pool**
-  solid black, and **each live heap claim** as its own 50% band (§50) — read
-  live at draw time from the claim table, so arming double buffering or
-  opening a Disk window makes a band appear. The buffer band is what makes
-  the bar say the same thing the rows do: the kernel is not one lump, and
-  the part of it that is scratch rather than program is the part these
-  figures are steered by (`docs/KERNEL-MEMORY.md`).
+  solid black, and **each live heap claim** in `tm_pat_clm`, a 2px diagonal
+  (§50) — read live at draw time from the claim table, so arming double
+  buffering or opening a Disk window makes a band appear. The buffer band is
+  what makes the bar say the same thing the rows do: the kernel is not one
+  lump, and the part of it that is scratch rather than program is the part
+  these figures are steered by (`docs/KERNEL-MEMORY.md`). A claim gets its
+  own texture rather than the kernel's gray because the two are unrelated —
+  memory reserved at build time and memory asked for at run time — and one
+  texture for both made the map unreadable in exactly the place the CLM
+  column points at.
 - (6,33): `"HEAP nnnK/nnnK"` — claimed and total heap KB (§50).
 - Package-pool map: 1px black frame (6,43)-(167,58), interior
   (7,44)-(166,57) = 160×14. Paragraph scale across `PKG_PARA`; the interior
@@ -5072,9 +5076,17 @@ in-segment map would show one black block and nothing else.
   (`tm_ylim_set`), for the screens where §39.7 shrinks the window — nothing
   in the kernel clips a draw to a window, and on a 200-row CGA this one is
   156px tall.
-- Row 0 (System): legend square solid black; ADDR `0600` (where the kernel
-  starts — `KERNEL_SEG`); SIZE = `TM_KERN_KB`; CLM = the kernel's own heap
-  claims.
+- **The legend squares key the rows to the maps, and there is exactly one
+  per texture.** A row may only wear the square its memory is actually drawn
+  in: `tm_sq_gray` (the kernel's own span), `tm_sq_black` (the package pool),
+  `tm_sq_pat` (a kernel buffer, or one package's pool region in its slot
+  pattern). This is checkable by eye and it has been wrong: row 0 carried a
+  solid black square from before the maps were reworked, by which time solid
+  black had become the *package pool's* band — the legend was pointing at
+  the wrong region entirely.
+- Row 0 (System): legend square 50% gray, the kernel's band; ADDR `0600`
+  (where the kernel starts — `KERNEL_SEG`); SIZE = `TM_KERN_KB`; CLM = the
+  kernel's own heap claims.
 - **Four indented buffer rows under it** — `Code+data`, `Stacks`,
   `Disk bufs`, `FAT snap` — each with its size in the SIZE column and a dash
   in CLM, because a buffer is part of the kernel and not a claim. Between
@@ -5085,12 +5097,18 @@ in-segment map would show one black block and nothing else.
   them; the kernel's footprint is fixed at build time down to the paragraph
   (§2), so there is nothing to check at run time. They give up the ADDR
   column to have twelve characters of name, and land SIZE and CLM exactly
-  where row 0 puts them.
-- `Builtins` heading, then one indented row per built-in instance: no square, `"   -    -"` for ADDR and
+  where row 0 puts them. `Code+data` wears the **gray** square and the other
+  three the **`tm_pat_buf`** one, which is the same split the RAM bar draws
+  across the kernel span.
+- `Builtins` heading — **no square, and that is the information**: a
+  built-in owns no band on either map. Its code is already inside
+  `Code+data` and its memory is heap claims, billed to its own row. Then one
+  indented row per built-in instance: no square, `"   -    -"` for ADDR and
   SIZE (they own no region), and a real CLM figure — the Disk window's
   listing cache shows up here (§2.3).
-- `Packages` heading + used/max of the pool, then one row per package
-  instance: square = pattern i; ADDR = the I_SPTR snapshot (a **segment**,
+- `Packages` heading + used/max of the pool, its square **solid black** for
+  the pool's own band, then one row per package instance: square = pattern i,
+  which is how the row keys the pool map below it; ADDR = the I_SPTR snapshot (a **segment**,
   four hex digits); SIZE = I_SIZE in KB rounded up; CLM = its claims.
 - A dying instance (I_STATE 2) still draws its region and its row: the
   region is still resident (§21).

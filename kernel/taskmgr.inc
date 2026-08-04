@@ -206,6 +206,14 @@ tm_s_bfat:  db '  FAT snap', 0
 tm_pat_buf:
     db 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00
 
+; ...and one for a live heap claim (SPEC.md 50). Claims used to be drawn in
+; the same 50% checker as the kernel span, which made the RAM map say "gray"
+; about two unrelated things: memory the kernel reserved at build time and
+; memory something asked for at run time. A 2px diagonal is the third
+; signature that survives a 4px-wide band next to the other two.
+tm_pat_clm:
+    db 0xCC, 0x66, 0x33, 0x99, 0xCC, 0x66, 0x33, 0x99
+
 ; Slot patterns: 12 x 8 row bytes, pattern i = tm_pats + i*8, bit set =
 ; white (SPEC.md 5/28). Black-on-white hatch textures, none of them the
 ; AA/55 50% checker (that means "system-reserved" in the maps).
@@ -1138,7 +1146,8 @@ tm_map_ram:
     push si
     mov bx, TMM_M1_Y1
     call tm_map_rect
-    call gfx_fill_gray
+    mov word [gfx_pat], tm_pat_clm      ; a claim's own texture, not the
+    call gfx_fill_pat                   ; kernel's gray (tm_pat_clm above)
     pop si
 .cnext:
     inc si
@@ -1333,10 +1342,7 @@ tm_rows_mem:
     xor ax, ax
     call mem_kernel_kb         ; AX += the kernel's own heap claims, KB
     call tm_kcol
-    call tm_sq_frame            ; solid black legend square
-    call tm_sq_int
-    mov byte [gfx_color], CBLACK
-    call gfx_fill
+    call tm_sq_gray             ; the kernel's band on the RAM map above
     call tm_mrow_close
 
     ; --- the kernel's own buffers, one row each -------------------------------
@@ -1345,17 +1351,21 @@ tm_rows_mem:
     ; snapshot are the whole of KERN_SIZE (SPEC.md 2). All four figures are
     ; assembly-time constants, so this is four string copies on a path that
     ; runs once a second.
-    mov bx, tm_s_bimg
-    mov cx, TM_KIMG_KB
+    mov bx, tm_s_bimg           ; the image is the GRAY part of the kernel's
+    mov cx, TM_KIMG_KB          ; band; the other three are the striped part
+    xor dx, dx
     call tm_buf_row
     mov bx, tm_s_bstk
     mov cx, TM_KSTK_KB + TM_K0_KB
+    mov dx, tm_pat_buf
     call tm_buf_row
     mov bx, tm_s_bdsk
     mov cx, TM_KDSK_KB
+    mov dx, tm_pat_buf
     call tm_buf_row
     mov bx, tm_s_bfat
     mov cx, TM_KFAT_KB
+    mov dx, tm_pat_buf
     call tm_buf_row
 
     ; --- the Builtins heading, then every live built-in -----------------------
@@ -1364,7 +1374,10 @@ tm_rows_mem:
     mov si, tm_s_bhdr
     call tm_copy
     pop si
-    call tm_mrow_close
+    call tm_mrow_close          ; NO square, and that is the information: a
+                                ; built-in owns no band on either map. Its
+                                ; code is already inside Code+data and its
+                                ; memory is heap claims, billed to its own row
 
     xor si, si
 .blt:
@@ -1411,6 +1424,7 @@ tm_rows_mem:
     call tm_put3
     mov byte [di], 'K'
     inc di
+    call tm_sq_black            ; the pool's band on the RAM map above
     call tm_mrow_close
 
     xor si, si
@@ -1482,16 +1496,13 @@ tm_inst_row:
     mov cl, 10
     shr ax, cl
     call tm_kcol
-    call tm_sq_frame            ; legend square in the slot's pattern, which
-    push si                     ; is how the row keys the pool map above
-    mov si, bx
+    push si                     ; legend square in the slot's pattern, which
+    mov si, bx                  ; is how the row keys the pool map above
     shl si, 1
     shl si, 1
     add si, tm_pats
-    mov [gfx_pat], si
+    call tm_sq_pat
     pop si
-    call tm_sq_int
-    call gfx_fill_pat
     jmp short .claim
 .noreg:                         ; a built-in: it owns no region, and says so
     push si
@@ -1531,8 +1542,9 @@ tm_inst_claim:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_buf_row - one indented kernel-buffer row: name and size
-; in:  BX = the buffer's NUL name, CX = its size in KB
+; tm_buf_row - one indented kernel-buffer row: name, size and legend square
+; in:  BX = the buffer's NUL name, CX = its size in KB, DX = the pattern its
+;      band is drawn in on the RAM map, or 0 for the kernel's 50% gray
 ; out: nothing (all registers preserved)
 ;
 ; The name is given the ADDR column's width as well as its own, because a
@@ -1555,6 +1567,14 @@ tm_buf_row:
     push di
     push cx                     ; the size, banked across tm_mrow_open
     call tm_mrow_open
+    or dx, dx                   ; the square first: it keys this row to its
+    jz .gray                    ; band on the RAM map above (tm_sq_*)
+    mov si, dx
+    call tm_sq_pat
+    jmp short .name
+.gray:
+    call tm_sq_gray
+.name:
     pop ax
     push ax
     mov si, bx
@@ -1702,6 +1722,62 @@ tm_sq_frame:
     mov dx, bx
     add dx, 7
     call gfx_frame
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_sq_gray / tm_sq_black / tm_sq_pat - a legend square in one of the three
+; textures the RAM map uses, plus the per-slot patterns the pool map uses
+; in:  [tm_cx], [tm_rowy]; tm_sq_pat also SI = an 8-byte pattern
+; out: nothing (all registers preserved)
+;
+; **The square keys the row to a band**, so there is exactly one of these per
+; texture in the two maps and a row may only wear the one its memory is drawn
+; in. That is not decoration: the System row used to carry a solid black
+; square, and solid black became the PACKAGE POOL's band when the maps were
+; reworked - so the legend was pointing at the wrong region entirely.
+; -----------------------------------------------------------------------------
+tm_sq_gray:                     ; the kernel's own span (SPEC.md 2)
+    push ax
+    push bx
+    push cx
+    push dx
+    call tm_sq_frame
+    call tm_sq_int
+    call gfx_fill_gray
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+tm_sq_black:                    ; the package pool (SPEC.md 20.1)
+    push ax
+    push bx
+    push cx
+    push dx
+    call tm_sq_frame
+    call tm_sq_int
+    mov byte [gfx_color], CBLACK
+    call gfx_fill
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+tm_sq_pat:                      ; SI = the pattern: a kernel buffer, a heap
+    push ax                     ; claim, or one package's pool region
+    push bx
+    push cx
+    push dx
+    call tm_sq_frame
+    mov [gfx_pat], si
+    call tm_sq_int
+    call gfx_fill_pat
     pop dx
     pop cx
     pop bx
