@@ -95,11 +95,17 @@
 SBL_HALF     equ 2048           ; double-buffer half size (SPEC.md 2.2)
 SBL_RING     equ 0x1000         ; record ring base offset (SPEC.md 2.2)
 SBL_RHALF    equ 4096           ; record ring half size (2 x 4KB = 8KB)
-SBL_POOL     equ 0x3000         ; staging pool base offset (SPEC.md 2.2)
-SBL_POOLMAX  equ 0xD000         ; the pool's CEILING - what a full 64KB
-                                ; segment would have held. The live bound is
-                                ; [sbl_poolsz], set at attach from the claim
-                                ; that was actually granted (SPEC.md 51.4)
+SBL_DMASZ    equ 0x3000         ; the DMA-visible claim: double buffer +
+                                ; record ring, 12KB. THE ONLY PART THE 8237
+                                ; ADDRESSES, and so the only part that has to
+                                ; obey its 64KB page rule
+SBL_POOLKB   equ 20             ; the staging pool, a SEPARATE claim taken on
+                                ; the first grant and released with the last
+                                ; (SPEC.md 51.4). Grant offsets are relative
+                                ; to ITS base, not the DMA buffer's
+SBL_POOLMAX  equ 0xD000         ; the biggest grant the offset arithmetic can
+                                ; express. The live bound is [sbl_poolsz],
+                                ; which is 0 until the pool is claimed
 SBL_GMAX     equ 8              ; staging-grant records
 SBL_DCHUNK   equ 512            ; drain-copy chunk: one act+gen-guarded
                                 ; IF=0 write unit (SPEC.md 34.6, ~2ms of
@@ -716,11 +722,15 @@ sbl_grant_alloc:
     push si                     ; SI is only an output on success: the
                                 ; refusals restore the caller's
     jcxz .e7
+    call sbl_pool_get           ; BEFORE the size test: [sbl_poolsz] is 0
+    jc .e8n                     ; until the pool is actually held
     cmp cx, [sbl_poolsz]        ; the pool we actually got, not a constant
     ja .e7
     pushf
     cli
-    mov si, SBL_POOL            ; SI = candidate base
+    xor si, si                  ; SI = candidate base: offsets are relative
+                                ; to the POOL's own claim now, not to the
+                                ; DMA buffer it used to sit above
 .rescan:
     mov ax, cx
     dec ax
@@ -728,7 +738,6 @@ sbl_grant_alloc:
     jc .e8f                     ; ran off the top of the segment...
     push dx
     mov dx, [sbl_poolsz]
-    add dx, SBL_POOL
     cmp ax, dx                  ; ...or off the top of the POOL we claimed
     pop dx
     jae .e8f
@@ -772,11 +781,17 @@ sbl_grant_alloc:
     jmp .out
 .e8f:
     popf
-    mov ax, 8
+.e8n:                           ; ...and the same refusal from OUTSIDE the
+    mov ax, 8                   ; window, where the pool claim happens
     jmp .err
 .e7:
     mov ax, 7
 .err:
+    push ax                     ; a refusal AFTER sbl_pool_get succeeded -
+    call sbl_pool_put           ; a bad size, or no room in a pool we just
+    pop ax                      ; claimed - must not strand the 20KB. It is
+                                ; a no-op when any grant is live, so this is
+                                ; safe on every refusal path
     pop si                      ; refused: the caller's SI comes back
     stc
 .out:
@@ -1438,11 +1453,11 @@ sbl_v_read:
                                 ; (SPEC.md 20.3/34.6; a package's DI is an
                                 ; offset in its OWN segment, never the
                                 ; kernel's)
-    mov ax, [sbl_seg]
+    mov ax, [sbl_poolseg]       ; the grant lives in the POOL claim
     push ds
     mov ds, ax                  ; DS:SI = the grant source
     cld
-    rep movsb                   ; SND_SEG:SI -> caller DI, interruptible
+    rep movsb                   ; pool:SI -> caller DI, interruptible
     pop ds
 .ok:
     xor ax, ax
@@ -1490,13 +1505,13 @@ sbl_v_stage:
     call sbl_grant_chk
     pop si
     jc .e7
-    mov ax, [sbl_seg]
+    mov ax, [sbl_poolseg]       ; the grant lives in the POOL claim
     mov es, ax
     mov ax, bx                  ; the caller's segment (slot wrapper, BX):
     cld                         ; the source pointer lives THERE since v3
     push ds
     mov ds, ax
-    rep movsb                   ; callerseg:SI -> SND_SEG:DI, interruptible
+    rep movsb                   ; callerseg:SI -> pool:DI, interruptible
     pop ds
 .ok:
     xor ax, ax
@@ -1554,8 +1569,9 @@ sbl_v_grant:
 .fok:
     mov word [sbl_gr_act+bx], 0
     popf
-    xor ax, ax
-    clc
+    call sbl_pool_put           ; ...and the pool itself if that was the last
+    xor ax, ax                  ; grant. OUTSIDE the window: this frees
+    clc                         ; through the kernel, which takes its own
     jmp .out
 .e7f:
     popf
@@ -1645,9 +1661,8 @@ sbl_fill_half:
     cld
     jcxz .pad
     push ds
-    push es
-    pop ds                      ; DS = SND_SEG for the grant -> buffer copy
-    rep movsb
+    mov ds, [sbl_poolseg]       ; DS = the POOL: the grant is there now, the
+    rep movsb                   ; destination half is in the DMA claim (ES)
     pop ds
 .pad:
     mov cx, dx
@@ -1760,9 +1775,8 @@ sbl_fill_guard:
     push cx
     mov cx, ax
     push ds
-    push es
-    pop ds                      ; DS = SND_SEG for the grant -> buffer copy
-    rep movsb
+    mov ds, [sbl_poolseg]       ; DS = the POOL: the grant is there now, the
+    rep movsb                   ; destination half is in the DMA claim (ES)
     pop ds
     pop cx
     popf
@@ -1941,8 +1955,9 @@ sbl_drain_half:
     push si
     push di
     push es
-    mov ax, [sbl_seg]
-    mov es, ax
+    mov es, [sbl_poolseg]       ; ES:DI = the grant, in the POOL claim; the
+                                ; ring it comes FROM is in the DMA claim, so
+                                ; this copy crosses the two now
     mov si, bx                  ; SI = SBL_RING + half * 4096: the source
     mov cl, 12
     shl si, cl
@@ -1973,8 +1988,7 @@ sbl_drain_half:
     push cx
     mov cx, bx
     push ds
-    push es
-    pop ds                      ; DS = SND_SEG for the ring -> grant copy
+    mov ds, [sbl_seg]           ; DS = the DMA claim, where the ring is
     rep movsb                   ; one chunk, atomic vs. teardown (IF=0)
     pop ds
     pop cx
@@ -2167,6 +2181,7 @@ sbl_release_inst:
     add bx, 2
     cmp bx, SBL_GMAX*2
     jb .g
+    call sbl_pool_put           ; a dying instance may have held the last one
     pop bx
     ret
 
@@ -2175,12 +2190,13 @@ sbl_release_inst:
 ; wiring (SPEC.md 51.4)
 ; =============================================================================
 
-SBL_FIXED  equ SBL_POOL         ; the DMA-VISIBLE part: double buffer + record
-                                ; ring, 12KB. Only this has to obey the 8237's
-                                ; 64KB page rule - the staging pool above it is
-                                ; copied by us, never addressed by the chip
-SBL_WANT   equ 32               ; KB we would like: the fixed part plus a 20KB
-                                ; staging pool
+SBL_WANT   equ SBL_DMASZ / 1024 ; KB claimed at attach: the DMA-visible part
+                                ; and NOTHING ELSE. The 20KB staging pool used
+                                ; to be claimed with it and held for the
+                                ; session; it is its own claim now, taken when
+                                ; an app first asks for a grant. On a 128KB
+                                ; machine that is 20KB of a 55KB heap that a
+                                ; card nobody is playing no longer holds
 
 ; -----------------------------------------------------------------------------
 ; sbl_attach - find a card and give it somewhere to DMA from
@@ -2247,8 +2263,8 @@ sbl_dma_map:
     push cx
     push dx
     mov word [sbl_seg], 0
-    mov ax, SBL_WANT
-    mov cx, SBL_FIXED / 1024    ; ...of which THIS much is the chip's
+    mov ax, SBL_WANT            ; 12KB, ALL of which the chip addresses -
+    mov cx, ax                  ; so the page rule covers the whole claim
     call OSAPI_MEM_CLAIM_DMA    ; out CF, DX = base segment
     jc .fail
     mov [sbl_seg], dx
@@ -2267,8 +2283,8 @@ sbl_dma_map:
     dec bx
     jnz .shr
     mov [sbl_page], al
-    mov word [sbl_poolsz], (SBL_WANT * 1024) - SBL_POOL
-    clc
+    clc                         ; the pool is NOT claimed here: sbl_pool_get
+                                ; takes it when an app first wants a grant
     jmp short .out
 .fail:
     mov word [sbl_seg], 0
@@ -2276,6 +2292,83 @@ sbl_dma_map:
 .out:
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sbl_pool_get - claim the staging pool, if it is not already held
+;
+; in:  nothing
+; out: CF = 0 and [sbl_poolseg]/[sbl_poolsz] usable; CF = 1 the heap could
+;      not fund it and NOTHING changed
+; clobbers: nothing (flags)
+;
+; Separate from the DMA claim on purpose, and the two are as different as
+; claims get. The buffer the 8237 reads must not cross a 64KB physical
+; boundary, which is easiest to satisfy on the empty heap that exists at
+; attach - so it is claimed there and never moves. The pool is copied by us
+; with rep movsb and the chip never sees it, so it has NO constraint at all
+; and a late claim is an ordinary one. Holding 20KB from boot for a card
+; nobody is playing costs 36% of a 128KB machine's heap.
+;
+; Refusal is not an error path anybody new has to handle: verb 7 already
+; answers 8 for "no space", and that is what a caller gets.
+; -----------------------------------------------------------------------------
+sbl_pool_get:
+    push ax
+    push bx
+    push dx
+    cmp word [sbl_poolseg], 0
+    jne .ok                     ; already held: grants share one claim
+    mov ax, SBL_POOLKB
+    call OSAPI_MEM_CLAIM        ; out CF, DX = base segment
+    jc .fail
+    mov [sbl_poolseg], dx
+    mov word [sbl_poolsz], SBL_POOLKB * 1024
+.ok:
+    clc
+    jmp short .out
+.fail:
+    mov word [sbl_poolseg], 0
+    mov word [sbl_poolsz], 0
+    stc
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sbl_pool_put - release the staging pool once the last grant has gone
+;
+; in:  nothing
+; out: nothing; a no-op while any grant record is live
+; clobbers: nothing (flags)
+;
+; Called from the two places a grant record is cleared, and from detach.
+; **Never from inside their pushf/cli windows** - this frees through the
+; kernel's API, and the claim table takes its own critical section.
+; -----------------------------------------------------------------------------
+sbl_pool_put:
+    push ax
+    push bx
+    push dx
+    cmp word [sbl_poolseg], 0
+    je .out                     ; nothing held
+    xor bx, bx
+.g:
+    cmp word [sbl_gr_act+bx], 0
+    jne .out                    ; somebody still holds bytes in it
+    add bx, 2
+    cmp bx, SBL_GMAX*2
+    jb .g
+    mov dx, [sbl_poolseg]
+    call OSAPI_MEM_FREE
+    mov word [sbl_poolseg], 0
+    mov word [sbl_poolsz], 0
+.out:
+    pop dx
     pop bx
     pop ax
     ret
@@ -2289,6 +2382,7 @@ sbl_dma_map:
 ; -----------------------------------------------------------------------------
 sbl_detach:
     push ax
+    push bx
     push cx
     push dx
     cmp byte [sbl_up], 0
@@ -2308,6 +2402,13 @@ sbl_detach:
     loop .wait
 .gone:
     call sbl_unhook             ; vector, mask and DSP back as we found them
+    xor bx, bx                  ; every grant is void once the card is gone,
+.gclr:                          ; so the pool can go with it
+    mov word [sbl_gr_act+bx], 0
+    add bx, 2
+    cmp bx, SBL_GMAX*2
+    jb .gclr
+    call sbl_pool_put
     mov dx, [sbl_seg]
     or dx, dx
     jz .out
@@ -2316,6 +2417,7 @@ sbl_detach:
 .out:                           ; IRQ pointing into the next claim
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -2756,7 +2858,11 @@ sbl_hopen:    times 1 dw 0            ;   verb 0's half width - a TEMP, the
 ; It was a pinned 64KB segment whose page and offset were constants. A
 ; driver's is a heap claim, so all three are computed once at attach by
 ; sbl_dma_map and read by every 8237 programming site.
-sbl_seg:      dw 0              ; the claim's segment: buffer, ring and pool
+sbl_seg:      dw 0              ; the DMA claim's segment: double buffer and
+                                ;   record ring, page-safe, held from attach
+sbl_poolseg:  dw 0              ; the STAGING POOL's own claim, 0 = not held.
+                                ;   Taken on the first grant, released with
+                                ;   the last (sbl_pool_get/put)
 sbl_page:     db 0              ; the 8237 page it landed in (address bits
                                 ; 16..19 - the XT's 8237 has no register for
                                 ; them, which is what 83h is)

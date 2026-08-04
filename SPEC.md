@@ -7088,11 +7088,38 @@ staging pool, verb 6 stages into a grant and verb 5 reads back out of one,
 and verb 4 opens an input stream that the drain task fills.
 
 **The pool is the driver's, so its size is not a constant an app may assume.**
-The Sound Blaster's is `SBL_WANT` minus its DMA-visible head — 20,480 bytes
-today — where `main`'s was a pinned 64KB segment. An app that needs a big
-grant asks in TIERS and records into what it got; `apps/recorder` is the
-reference for that, and the reason it works on a machine whose driver claimed
-less than it hoped for.
+The Sound Blaster's is 20,480 bytes, where `main`'s was a pinned 64KB segment.
+An app that needs a big grant asks in TIERS and records into what it got;
+`apps/recorder` is the reference for that, and the reason it works on a machine
+whose driver claimed less than it hoped for.
+
+**And it is not held when nobody is using it.** The pool is a **separate
+claim** from the DMA buffer, taken by `sbl_pool_get` on the first grant and
+released by `sbl_pool_put` with the last — including the release a dying
+instance triggers, and every refusal path, so a grant that fails after the pool
+was claimed cannot strand it. The two are as different as claims get, which is
+the whole reason to split them:
+
+| | DMA buffer | staging pool |
+|---|---|---|
+| size | 12KB | 20KB |
+| who addresses it | the **8237** | us, with `rep movsb` |
+| 64KB page rule | **binding** | none — it may straddle freely |
+| when claimed | attach, on an empty heap where a page-safe base is easy | first grant, and it may honestly refuse (error 8) |
+| lifetime | the driver's | the grants' |
+
+Holding both from boot cost a machine 32KB for a card nobody was playing —
+**58% of a 128KB machine's heap**. Measured after the split: a live grant shows
+43KB of heap claimed, freeing it shows 23KB.
+
+Two consequences worth stating. **Grant offsets are relative to the pool's own
+base**, so they start at 0 rather than above the DMA buffer — invisible to
+packages, which receive an opaque offset from verb 7 and hand it back, never
+forming an address themselves. And the refill and drain copies now **cross two
+segments**: `DS = [sbl_poolseg]` with `ES = [sbl_seg]` feeding the card, the
+reverse capturing. Each was one intra-segment `rep movsb` before, and the
+`push es / pop ds` idiom that expressed that is what a reader will expect to
+find and must not.
 
 **A verb on a machine with no driver answers `AX = 4`, not `AX = 0`.**
 `drv_svc_call`'s generic refusal returns 0 with CF=1, which is right for the
