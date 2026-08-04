@@ -281,6 +281,15 @@ sol_track:
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
     mov [sol_ox], ax
     mov [sol_oy], dx
+    cmp ax, [sol_lastox]            ; the window moved? every cached sliver is
+    jne .moved                      ; remembered at the OLD origin
+    cmp dx, [sol_lastoy]
+    je .same
+.moved:
+    mov [sol_lastox], ax
+    mov [sol_lastoy], dx
+    call sol_pinv
+.same:
     mov ax, [es:bx + W_W]
     sub ax, 2
     mov [sol_cwid], ax
@@ -334,6 +343,7 @@ sol_drawall:
     push bx
     push cx
     push dx
+    call sol_pinv                   ; the felt fill below wipes every column
     mov al, SOL_TABLE
     call OSAPI_SET_COLOR
     xor ax, ax
@@ -380,7 +390,8 @@ sol_drawpile:
     call sol_pilerect               ; [sol_rx1]..[sol_ry2], content-relative
     call sol_count                  ; CL = cards in the pile
     mov [sol_dpn], cl
-    call sol_covers
+    call sol_plan                   ; how much of a tableau column is already
+    call sol_covers                 ; right on the screen (0 for the others)
     jc .nowipe                      ; the card is about to cover every pixel
     mov al, SOL_TABLE               ; of this rect: erasing it first is a
     call OSAPI_SET_COLOR            ; second fill of the same pixels
@@ -405,8 +416,8 @@ sol_drawpile:
     ; --- a tableau column: every card, at this column's own fan -------------
     cmp byte [sol_dpn], 0
     je .slot
-    call sol_colfan                 ; [sol_cfd]/[sol_cfa]/[sol_cfu]
-    mov byte [sol_dpi], 0
+    mov ax, [sol_keepn]             ; sol_plan has already run sol_colfan and
+    mov [sol_dpi], al               ; decided how many leading cards to skip
 .tab:
     mov al, [sol_dpi]
     call sol_yoff                   ; AX = this card's y offset
@@ -437,6 +448,7 @@ sol_drawpile:
     mov al, [sol_dpi]
     cmp al, [sol_dpn]
     jb .tab
+    call sol_prec                   ; remember what the slivers look like now
     jmp .out
 
     ; --- the stock: one card back, or the turn-over-again ring --------------
@@ -515,6 +527,150 @@ sol_drawpile:
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; Keeping the buried backs (SPEC.md 43.7)
+;
+; A tableau column redrew every card whenever any of them changed, and the
+; cards at the bottom of it are face-DOWN - the one drawing in this program
+; that is genuinely expensive, because the back is a lattice and gfx_blit4
+; emits one gfx_fill per run of equal pixels (41 runs for a fanned sliver, 634
+; for a whole back). A column with five buried cards therefore paid ~205 runs
+; to redraw pixels that had not changed, on every single move that touched it.
+;
+; What makes skipping them safe is that **face-down cards are
+; indistinguishable**: every back is the same image, so the question is never
+; "is it still the same card" but only "is it still drawn in the same place at
+; the same size". Two numbers settle that, cached per column by sol_prec:
+;
+;   [sol_pfa+p]  the face-down fan step it was drawn at, and
+;   [sol_pslv+p] how many leading cards were drawn as slivers of exactly that
+;                height.
+;
+; A leading card's offset is index * step, so an unchanged step means an
+; unchanged position. sol_keep takes the smaller of what is wanted now and
+; what was drawn then, and sol_plan turns that into the row the erase starts
+; at - because an erase that reached higher would wipe the very slivers being
+; kept.
+;
+; The cache is invalidated - sol_pinv - wherever something else may have
+; painted over a column: a full repaint (which fills the content with felt
+; first), the win plaque (which lands on the felt between the piles), and a
+; change of content origin, which is what a window move looks like from here.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; sol_slv - how many leading cards of this column are drawn as face-down
+;           slivers of exactly [sol_cfa] height
+; in:  [sol_dpn], [sol_cfd]; out: AX; preserves all other registers
+;
+; All of the face-down run when something covers it. When the column is ALL
+; face-down - which only happens mid-deal - the last one is drawn at its full
+; height instead, so it is not a sliver and does not count.
+; -----------------------------------------------------------------------------
+sol_slv:
+    push cx
+    mov cl, [sol_dpn]
+    mov ch, 0
+    mov ax, [sol_cfd]
+    cmp cx, ax
+    ja .out
+    mov ax, cx
+    or ax, ax
+    jz .out
+    dec ax
+.out:
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_keep - how many leading cards are already correct on the screen
+; in:  [sol_dpp] (a tableau pile), [sol_dpn], sol_colfan already run
+; out: AX; preserves all other registers
+; -----------------------------------------------------------------------------
+sol_keep:
+    push bx
+    push si
+    mov al, [sol_dpp]
+    mov ah, 0
+    mov si, ax
+    add si, si
+    call sol_slv                    ; AX = what this draw wants to skip
+    mov bx, [sol_cfa]
+    cmp bx, [sol_pfa+si]            ; ...drawn at the same step as last time?
+    jne .none
+    cmp ax, [sol_pslv+si]           ; ...and no more than were drawn then?
+    jbe .out
+    mov ax, [sol_pslv+si]
+    jmp .out
+.none:
+    xor ax, ax
+.out:
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_prec - record what this column's slivers now look like
+; in:  [sol_dpp], [sol_dpn], sol_colfan already run; preserves all registers
+; -----------------------------------------------------------------------------
+sol_prec:
+    push ax
+    push si
+    mov al, [sol_dpp]
+    mov ah, 0
+    mov si, ax
+    add si, si
+    mov ax, [sol_cfa]
+    mov [sol_pfa+si], ax
+    call sol_slv
+    mov [sol_pslv+si], ax
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_pinv - forget every column's cache; the next draw of each redraws whole
+; preserves all registers
+; -----------------------------------------------------------------------------
+sol_pinv:
+    push cx
+    push si
+    xor si, si
+    mov cx, P_TABN
+.each:
+    mov word [sol_pslv+si], 0       ; 0 kept: sol_keep's min can only be 0
+    add si, 2
+    loop .each
+    pop si
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_plan - decide the keep count, and raise the erase to match it
+; in:  [sol_dpp], [sol_dpn]
+; out: [sol_keepn]; [sol_ry1] moved down when anything is kept; and for a
+;      tableau column sol_colfan has been run. Preserves all registers.
+; -----------------------------------------------------------------------------
+sol_plan:
+    push ax
+    mov word [sol_keepn], 0
+    mov al, [sol_dpp]
+    cmp al, P_TABN
+    jae .out                        ; only a tableau column has a run of
+    cmp byte [sol_dpn], 0           ; identical slivers to keep
+    je .out
+    call sol_colfan
+    call sol_keep
+    mov [sol_keepn], ax
+    or ax, ax
+    jz .out
+    call sol_yoff                   ; AL = the first index we WILL draw...
+    add ax, [sol_taby]
+    mov [sol_ry1], ax               ; ...and the erase may not start above it
+.out:
     pop ax
     ret
 
@@ -1146,8 +1302,9 @@ sol_banner:
     add dx, [sol_oy]
     mov si, sol_s_win
     call OSAPI_FONT_STR
-    pop si
-    pop dx
+    call sol_pinv                   ; the plaque lands on the felt BETWEEN the
+    pop si                          ; piles, and on a short window its top row
+    pop dx                          ; is a pixel off a column's slivers
     pop cx
     pop bx
     pop ax
@@ -2994,6 +3151,11 @@ sol_ic_ring:
     SWORD sol_cfa                   ; ...their fan step
     SWORD sol_cfu                   ; ...and the face-up one
     SBYTE sol_cfp                   ; the column being measured
+    SWORD sol_keepn                 ; leading cards this draw may skip
+    SWORD sol_lastox                ; the origin the cache below belongs to
+    SWORD sol_lastoy
+    SBUF  sol_pfa, P_TABN*2         ; per column: the fan its slivers were
+    SBUF  sol_pslv, P_TABN*2        ; drawn at, and how many of them
 
 ; --- sol_move / sol_domove / sol_tofnd ---------------------------------------
     SBYTE sol_mvs

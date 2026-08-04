@@ -7746,11 +7746,37 @@ Two things a card back makes expensive, and what each costs:
   steps wider than a card, so both still need clearing, and an empty pile needs
   it most: its slot outline covers almost nothing.
 
-What is left, and deliberately: a tableau column redraws every card when any
-of them changes, so exposing a face-down card repaints the buried backs below
-it at ~41 runs each. Narrowing that needs a first-changed-index hint threaded
-through `sol_drawpile`; it is a fifth of the stock's cost and paid once per
-move rather than once per click.
+- **A tableau column keeps its buried backs.** A column redrew every card
+  whenever any of them changed, and the cards at the bottom are face-DOWN - the
+  expensive drawing - so a column with five buried cards paid ~205 runs to
+  repaint pixels that had not moved. What makes skipping them safe is that
+  **face-down cards are indistinguishable**: every back is the same image, so
+  the question is never "is it still the same card" but only "is it still drawn
+  in the same place at the same size". Two numbers settle that, cached per
+  column by `sol_prec`: the face-down fan step it was drawn at (`sol_pfa`), and
+  how many leading cards were drawn as slivers of exactly that height
+  (`sol_pslv`). A leading card's offset is index x step, so an unchanged step
+  means an unchanged position; `sol_keep` takes the smaller of what is wanted
+  now and what was drawn then.
+
+  `sol_plan` turns that count into the row the erase **starts** at, and that is
+  the load-bearing half: an erase reaching any higher would wipe the very
+  slivers being kept. It is also why the erase moved out of the head of
+  `sol_drawpile` into a decision - the rect now depends on the fan, which
+  depends on `sol_colfan`.
+
+  The cache is invalidated by `sol_pinv` wherever something else may have
+  painted over a column: a full repaint (which fills the content with felt
+  first), the win plaque (which lands on the felt between the piles, a pixel
+  off a column's slivers on a short window), and a change of content origin -
+  which is what a window move looks like from inside the app.
+
+Measured on the running game: a drag off a six-card column keeps 4 buried backs
+on the source and 2 on the destination, so that one move skips 246 fill runs.
+The scheme is checked by comparison rather than by argument - after a stress of
+auto-plays, deals and drags that empties a column outright, the incrementally
+drawn content is **byte-identical** to the same position forced through a full
+`W_PAINT`, and still identical after the window is moved and played on again.
 
 ## 44. Arkanoid — the ninth package (apps/arkanoid/arkanoid.asm)
 
