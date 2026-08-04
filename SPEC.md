@@ -10334,6 +10334,29 @@ theirs. Real compaction needs a relocation callback every holder implements.
 Until there is one, the fix is to stop *creating* the fragmentation, which is
 what path 2 does: a claim that grows in place never leaves a hole behind it.
 
+**So "`mem_claim` refuses while the total free would have sufficed" has exactly
+two cures, and they are a decision rather than a bug fix:**
+
+1. **A relocation callback.** The only thing that makes real compaction safe,
+   and it is an ABI addition every holder has to implement — a package, the
+   back buffer, the menu save-under, the sound driver's DMA claim (which
+   additionally may not move at all, §50.3's page rule). It is not a change
+   `memory.inc` can make on its own, and it is not one to make speculatively.
+2. **Better placement, which needs no ABI at all.** `mem_claim` is a
+   bump-and-retry **first fit** going up and a highest fit going down; a
+   **best fit** would put a small claim in the smallest hole that takes it and
+   leave the big runs whole. That is contained to one scan — but the retry
+   loop's termination rests on the candidate base only ever moving *forward*
+   (past an overlapping claim, or up to the next 64KB page floor, §50.3), and
+   best fit means visiting every hole rather than stopping at the first. It is
+   a real option and a real rewrite of the one routine in the kernel that must
+   not be subtly wrong.
+
+Neither is written. The measurement that should come first is whether the
+refusal actually happens in practice: `mem_avail` already answers with the
+largest run *and* the total, so the two are distinguishable today, and nothing
+in the tree has yet reported a refusal where they differed.
+
 ### 50.4 Teardown
 
 `mem_free_rec` sits beside `snd_release_rec` at all three §29.4 teardown
