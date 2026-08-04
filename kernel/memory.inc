@@ -854,16 +854,26 @@ mem_run:
 ; The Task Manager's memory map walks these to draw every live claim at its
 ; real address - the one thing the old map could not do, because the blocks
 ; it drew were constants and there was nothing to walk.
+;
+; This is the ONLY place in the module that turns a record INDEX into an
+; address; every other loop steps by MC_SIZE and cannot drift. It used to
+; open-code the stride as an add-chain commented "*6 = MC_SIZE", and when
+; MC_DMA widened the record to 8 the comment stayed true and the code did
+; not: every record after the first was read straddling two, so the map drew
+; claims at invented addresses and invented sizes - one of them across nearly
+; the whole of conventional memory - while every figure in the window, which
+; comes from the stepping loops, stayed correct. It multiplies by the
+; constant now.
 ; -----------------------------------------------------------------------------
 mem_claim_get:
     push si
     cmp ax, MEM_MAX
     jae .none
+    push ax
+    mov si, MC_SIZE
+    mul si                      ; DX:AX = index * MC_SIZE, both small
     mov si, ax
-    add si, si                  ; *2
-    add si, si                  ; *4
-    add si, ax
-    add si, ax                  ; *6 = MC_SIZE
+    pop ax
     add si, mem_tab
     cmp word [si+MC_SEG], 0
     je .none
