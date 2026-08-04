@@ -421,8 +421,15 @@ osapi_table:
 ;     took the next number (readbig, 0x01E8) - so the block moved once
 ;     already. Ten cells of headroom is the cheap way not to move it again,
 ;     and it is the same reasoning as SPEC.md's reserved 45-49 band.
-    OSAPI_RSLOT                   ; 0x01F0
-    OSAPI_RSLOT                   ; 0x01F8
+    OSAPI_SLOT osapi_gfx_dbuf     ; 0x01F0 - a package's own bb_set (SPEC.md
+                                  ;          32): AL = 1 arm / 0 disarm, out
+                                  ;          AL = the state before, to hand
+                                  ;          back. CF=1 on the wrong adapter
+                                  ;          or a heap that cannot fund it
+    OSAPI_SLOT gfx_scroll         ; 0x01F8 - vertical scroll blit (SPEC.md
+                                  ;          5.5): AX/BX/CX/DX = the rect,
+                                  ;          SI = signed dy. The vacated rows
+                                  ;          are the caller's to repaint
     OSAPI_RSLOT                   ; 0x0200
     OSAPI_RSLOT                   ; 0x0208
     OSAPI_RSLOT                   ; 0x0210

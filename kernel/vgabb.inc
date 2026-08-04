@@ -255,6 +255,32 @@ bb_set:
     ret
 
 ; -----------------------------------------------------------------------------
+; osapi_gfx_dbuf - API slot 0x01F0 (SPEC.md 32/20.3): a package's bb_set.
+; in:  AL = 1 arm / 0 disarm; caller holds the gfx lock (the CP's context)
+; out: CF=1 [bb_avail] clear, NOTHING changed - the gate covers BOTH
+;      directions, because bb_set's AL=0 path keys on [bb_on], which a mono
+;      adapter holds at 1 as its RENDERER (SPEC.md 39.5); CF=0 done, AL =
+;      the previous [bb_dbl] (hand it back here to restore the user's mode)
+; clobbers: nothing else
+;
+; Arming can still fail on a heap too small to fund BB_KB - bb_set answers
+; CF=1 for that too (SPEC.md 50.2), which is the same "you did not get it"
+; the caller already has to handle.
+; -----------------------------------------------------------------------------
+osapi_gfx_dbuf:
+    cmp byte [bb_avail], 0
+    je .no
+    push bx
+    mov bl, [bb_dbl]            ; the previous state, before bb_set moves it
+    call bb_set
+    mov al, bl
+    pop bx
+    ret                         ; bb_set's own CF: a refused claim is a
+.no:                            ; refusal too (SPEC.md 50.2)
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; bb_mono_chk - retire [bb_mono] if [gfx_color] is not 0 or 15
 ;
 ; Called from gfx_fill and font_char - the only two places a colour other
@@ -339,6 +365,206 @@ bb_dirty_rect:
     add dx, [vga_rows]
     dec dx
     jmp bb_dirty                ; its ret returns to our caller
+
+; -----------------------------------------------------------------------------
+; gfx_scroll - vertical scroll blit (SPEC.md 5.5; API slot 0x01F8)
+;
+; in:       AX = x1, BX = y1, CX = x2, DX = y2 (inclusive, absolute screen
+;           coords), SI = dy SIGNED: positive moves the rect's content UP dy
+;           rows, negative down. Caller holds the gfx lock - which is what
+;           makes the blit cursor-safe: the cursor is hidden under it.
+; out:      CF=0 done; the |dy| vacated rows keep UNSPECIFIED content and
+;           the caller repaints them. CF=1 refused, nothing moved: x1/(x2+1)
+;           not multiples of 8, empty/inverted rect, |dy| = 0 or >= height,
+;           rect off the live screen, or an armed clip region that does not
+;           contain the whole rect (whole-shape clipping, the font_char/
+;           ico_core class - a blit cannot be cut per pixel; the caller
+;           falls back to a full repaint, which clips per strip).
+; clobbers: nothing (registers preserved; CF is the answer)
+;
+; Three backends, one contract (SPEC.md 39), all coherent:
+;   VGA direct   - GC write mode 1: each movsb moves 8 pixels across all
+;                  four planes through the latches; mode restored after
+;                  (SPEC.md 1 rule 7).
+;   VGA + buffer - gfx_flush FIRST (a pending dirty rect inside the region
+;                  would scroll stale VRAM against fresh RAM), then the four
+;                  buffer planes AND VRAM scroll in step; nothing is marked
+;                  dirty - they stay coherent by construction (SPEC.md 5.5).
+;   mono         - per-row rep movsb through gfx_rowbase, immune to the
+;                  banked layouts by construction.
+; -----------------------------------------------------------------------------
+gfx_scroll:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    test ax, 7                  ; byte-column granularity on every adapter
+    jnz .no
+    mov di, cx
+    inc di
+    test di, 7
+    jnz .no
+    cmp ax, cx
+    ja .no
+    cmp bx, dx
+    ja .no
+    cmp cx, [vid_w]
+    jae .no                     ; also catches a "negative" x1 via x1 <= x2
+    cmp dx, [vid_h]
+    jae .no
+    or si, si
+    jz .no
+    mov di, si                  ; DI = |dy|
+    jns .pos
+    neg di
+.pos:
+    push dx
+    sub dx, bx
+    inc dx                      ; DX = height
+    cmp di, dx
+    pop dx
+    jae .no
+    call wm_clip_test           ; whole-shape clip (SPEC.md 11.3): CF=1 =
+    jc .no                      ; armed and not wholly inside one fragment
+    mov [bbs_sdy], si
+    push cx
+    mov cl, 3
+    shr ax, cl
+    mov [bbs_col], ax           ; left byte column
+    pop ax                      ; AX = x2
+    inc ax
+    mov cl, 3
+    shr ax, cl
+    sub ax, [bbs_col]
+    mov [bbs_nb], ax            ; bytes per row
+    mov ax, dx
+    sub ax, bx
+    inc ax
+    sub ax, di
+    mov [bbs_rows], ax          ; rows to copy = height - |dy|
+    cmp word [bbs_sdy], 0
+    jl .down
+    mov [bbs_ydst], bx          ; up: dest rows y1..y2-|dy|, walked top-down
+    mov word [bbs_step], 1      ; (source below destination - forward-safe)
+    jmp short .disp
+.down:
+    mov [bbs_ydst], dx          ; down: dest rows y1+|dy|..y2, walked
+    mov word [bbs_step], -1     ; bottom-up (source above destination)
+.disp:
+    cmp byte [vid_planes], 1
+    je .mono
+    cmp byte [bb_dbl], 0
+    je .vram
+    call gfx_flush              ; pending dirty inside the region would
+                                ; scroll stale VRAM against fresh RAM
+    mov cx, 4                   ; the four buffer planes...
+    mov dx, [bb_seg]            ; ...at a CLAIMED base (SPEC.md 50), so this
+.plane:                         ; is a load, not an immediate
+    push cx
+    push dx
+    call bbs_lincopy
+    pop dx
+    pop cx
+    add dx, BB_PLANE_PARA
+    loop .plane
+.vram:                          ; ...and VRAM, via the latches
+    mov dx, 0x03CE
+    mov ax, 0x0105              ; GC5: write mode 1 - a movsb read fills the
+    out dx, ax                  ; latches, the write stores all four planes
+    mov dx, VGA_SEG
+    call bbs_lincopy
+    mov dx, 0x03CE
+    mov ax, 0x0005              ; write mode back to 0 (SPEC.md 1 rule 7)
+    out dx, ax
+    jmp short .ok
+.mono:
+    call bbs_bankcopy           ; the framebuffer IS [vid_rseg] (SPEC.md 39)
+.ok:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; bbs_lincopy - scroll one LINEAR segment (the VGA stride): a buffer plane,
+; or VRAM itself in write mode 1
+; in:       DX = target segment; the bbs_* geometry
+; clobbers: AX/BX/CX/DX/SI/DI, flags (gfx_scroll banked the caller's)
+; -----------------------------------------------------------------------------
+bbs_lincopy:
+    push ds
+    mov es, dx
+    mov ax, [bbs_rows]
+    mov [bbs_left], ax
+    mov bx, [bbs_ydst]
+.r:
+    mov ax, bx
+    add ax, [bbs_sdy]
+    mul word [vid_stride]       ; AX = src row * stride (DX:AX, DX = 0)
+    add ax, [bbs_col]
+    mov si, ax
+    mov ax, bx
+    mul word [vid_stride]
+    add ax, [bbs_col]
+    mov di, ax
+    mov cx, [bbs_nb]
+    push es
+    pop ds                      ; DS = ES = the target for the movs
+    cld
+    rep movsb
+    mov ax, KERNEL_SEG
+    mov ds, ax
+    add bx, [bbs_step]
+    dec word [bbs_left]
+    jnz .r
+    pop ds
+    ret
+
+; -----------------------------------------------------------------------------
+; bbs_bankcopy - the mono twin: per-row copies through gfx_rowbase, which
+; absorbs the Hercules/CGA bank interleave (SPEC.md 39.2)
+; in:       the bbs_* geometry; target = [vid_rseg]
+; clobbers: AX/BX/CX/DX/SI/DI, flags
+; -----------------------------------------------------------------------------
+bbs_bankcopy:
+    push ds
+    mov ax, [vid_rseg]
+    mov es, ax
+    mov ax, [bbs_rows]
+    mov [bbs_left], ax
+    mov bx, [bbs_ydst]
+.r:
+    mov ax, bx
+    add ax, [bbs_sdy]
+    call gfx_rowbase            ; AX = the src row's start (CS-relative
+    add ax, [bbs_col]           ; parameter reads - DS-safe, SPEC.md 39.2)
+    mov si, ax
+    mov ax, bx
+    call gfx_rowbase
+    add ax, [bbs_col]
+    mov di, ax
+    mov cx, [bbs_nb]
+    push es
+    pop ds
+    cld
+    rep movsb
+    mov ax, KERNEL_SEG
+    mov ds, ax
+    add bx, [bbs_step]
+    dec word [bbs_left]
+    jnz .r
+    pop ds
+    ret
 
 ; -----------------------------------------------------------------------------
 ; gfx_flush - copy the dirty back-buffer rect to VRAM, plane by plane
@@ -903,5 +1129,13 @@ bb_dir          resb 1          ; xfer: 0 = save, 1 = restore
 bb_mode         resb 1          ; rect core: BBM_SOLID / BBM_GRAY / BBM_XOR
 bb_pat          resb 1          ; rect core: plane value / dither pattern
 bb_altm         resb 1          ; rect core: per-row pattern toggle (0 or FF)
+
+bbs_col         resw 1          ; gfx_scroll (SPEC.md 5.5): left byte column
+bbs_nb          resw 1          ;   bytes per row
+bbs_sdy         resw 1          ;   signed dy (positive = content up)
+bbs_ydst        resw 1          ;   first destination row
+bbs_step        resw 1          ;   +1 (up: top-down) / -1 (down: bottom-up)
+bbs_rows        resw 1          ;   rows to copy = height - |dy|
+bbs_left        resw 1          ;   per-pass row countdown
 
 section .text

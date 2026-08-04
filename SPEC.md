@@ -484,6 +484,58 @@ through the Map Mask) would beat this on detailed pictures and lose on flat
 ones, and would need its own back-buffer and 1bpp twins; it changes no
 caller, so it stays available as a later optimisation.
 
+### 5.5 `gfx_scroll` — move a rect instead of redrawing it
+
+**in** AX/BX/CX/DX = x1/y1/x2/y2 inclusive, absolute screen coordinates;
+SI = dy **signed**, positive scrolling the content *up*. Caller holds the
+gfx lock. **out** CF=0 moved, CF=1 refused and nothing touched. Every
+register preserved — CF is the whole answer.
+
+A scrolling view is the one case the repaint optimisations elsewhere in this
+spec cannot help with: row signatures (§27.2) find every row changed, and a
+damage rect (§11.91) is the whole view. But the pixels are not *new* — they
+are the pixels one row up. Moving them is a `rep movsb` per row; redrawing
+them is `font_char` per cell, which on a 4.77MHz 8088 is the difference
+between a scroll that keeps up with the key repeat and one that does not.
+
+**The |dy| vacated rows are the caller's to repaint**, and their content
+after the call is unspecified — this primitive moves pixels and invents
+none.
+
+Refused, all with nothing moved, so a caller may simply fall back to a full
+repaint:
+
+- **x1 or x2+1 is not a multiple of 8.** The blit is byte-column granular
+  on every adapter, because on VGA the latches move eight pixels at a time
+  and on mono a byte *is* eight pixels. Sub-byte scrolling would need a
+  shift-and-merge pass, which is most of the cost of drawing.
+- Empty or inverted rect, `|dy|` = 0, `|dy|` ≥ the rect's height, or any
+  edge off the live screen (§39.2's `[vid_w]`/`[vid_h]`, not the VGA
+  reference constants).
+- **An armed clip region (§11.3) that does not wholly contain the rect.**
+  Whole-shape clipping, the `font_char`/`ico_core` class: a blit cannot be
+  cut per pixel, so it refuses and the caller repaints — which clips per
+  strip. This is the granularity rule in its third instance.
+
+Three backends, one contract (§39), and they are *coherent* rather than
+merely parallel:
+
+| adapter | how |
+|---|---|
+| VGA direct | GC write mode 1: a `movsb` read fills the latches and the write stores all four planes at once. Mode restored after (§1 rule 7). |
+| VGA + back buffer | `gfx_flush` **first**, then the four buffer planes *and* VRAM scroll in step. Nothing is marked dirty — they stay identical by construction. |
+| Hercules / CGA | per-row `rep movsb` through `gfx_rowbase`, so the banked interleave is absorbed rather than special-cased. |
+
+The flush-first rule is the subtle one. A pending dirty rect inside the
+region means RAM holds pixels VRAM has not seen; scrolling both would move
+fresh RAM against stale VRAM and the next flush would write the *unscrolled*
+rect over the scrolled one. Flushing first makes the two identical before
+either moves.
+
+Verified against a byte-exact reference on all three: the mono path over
+CGA's bank boundary, and the buffered path pixel-for-pixel against the
+direct one.
+
 ## 6. font.inc
 
 `font_init` runs **after** `vid_setmode` (§39.6): zero ES:BP, then int 10h
@@ -6420,6 +6472,20 @@ drawing entry dispatches on it. Turning OFF calls `gfx_flush` first, so
 nothing drawn under the old mode is stranded in RAM, then clears both and
 releases the claim. Both directions no-op when already in that state, so a
 repeated click cannot re-copy 150KB.
+
+**A package may switch it too — `osapi_gfx_dbuf`** (slot 0x01F0, AL = 1 on /
+0 off, lock held). Out CF=0 and **AL = the state before**, which the caller
+hands straight back when it is done so the user's own Control Panel setting
+survives an app that borrowed the buffer for one flicker-free frame. CF=1
+means it did not happen, and there are two reasons: `[bb_avail]` clear, or
+`bb_set`'s claim refused (§50.2 — a heap that cannot fund `BB_KB` right now).
+
+The `[bb_avail]` gate covers **both** directions, which is not symmetry for
+its own sake: `bb_set`'s AL=0 path keys on `[bb_on]`, and a mono adapter
+holds that at 1 permanently because it *is* the renderer (§39.5). An
+ungated disarm from a package would therefore turn off the only drawing path
+Hercules and CGA have. Refusal is a normal answer here, like every other
+claim in §50 — the app draws unbuffered.
 
 **`bb_sync` reads `[bb_seg]` BEFORE it loads DS = `VGA_SEG`.** With the base
 a constant this could not be got wrong; with it a variable in the kernel's

@@ -378,16 +378,41 @@ VID_CGA    equ 2
                                  ; resolution and the same UI-task-only rule
                                  ; as every other file slot.
 
+%define OSAPI_GFX_DBUF      KERNEL_SEG:0x01F0   ; arm/disarm double buffering
+                                 ; for your own drawing (SPEC.md 32): AL = 1
+                                 ; on / 0 off, lock HELD. Out CF=0 and AL =
+                                 ; the state before, which you hand straight
+                                 ; back when you are done so the user's own
+                                 ; Control Panel setting survives. CF=1 = you
+                                 ; did not get it: a mono adapter (which
+                                 ; renders through the same code and has
+                                 ; nothing to double) or a heap too small.
+                                 ; Refusal is normal - draw unbuffered.
+%define OSAPI_GFX_SCROLL    KERNEL_SEG:0x01F8   ; move a rect's contents up or
+                                 ; down instead of redrawing them (SPEC.md
+                                 ; 5.5): AX/BX/CX/DX = x1/y1/x2/y2 inclusive
+                                 ; ABSOLUTE screen coords, SI = signed dy,
+                                 ; positive scrolls the content UP. Lock held.
+                                 ; x1 and x2+1 must be multiples of 8 - the
+                                 ; blit is byte-column granular on every
+                                 ; adapter. Out CF=0 moved, and the |dy| rows
+                                 ; it vacated are YOURS to repaint; CF=1
+                                 ; refused and nothing moved, so fall back to
+                                 ; a full repaint. A clip region that does not
+                                 ; wholly contain the rect refuses: a blit
+                                 ; cannot be cut per pixel (SPEC.md 11.3).
+
 ; --- this fork's own slots (docs/PORTING.md 3) ---------------------------------
 ; Everything above is at `main`'s number. Everything from here up is this
 ; fork's - and 0x01B8..0x01C8 are HELD EMPTY because `main` puts its
 ; paragraph-counting arena there and this fork's heap counts KB (SPEC.md
-; 50.3), as is 0x01F0..0x0238, which is RESERVED for `main` to grow into. A
+; 50.3), as is 0x0200..0x0238, which is RESERVED for `main` to grow into. A
 ; call to any held number returns CF=1 with every register intact.
 ;
 ; The reservation is not theoretical: this block sat at 0x01E8 until `main`
 ; put OSAPI_FILE_READBIG there, and moving it cost a rebuild of every
-; package. Ten cells of headroom is cheaper than doing that again.
+; package. The two cells just spent (0x01F0/0x01F8) came out of that
+; headroom at `main`'s own numbers, which is exactly what it was for.
 %define OSAPI_MEM_CLAIM     KERNEL_SEG:0x0240   ; the claim heap (SPEC.md 50.3):
                                  ; AX = KB wanted; out CF=0 and DX = the base
                                  ; segment, CF=1 refused. This is how you get
