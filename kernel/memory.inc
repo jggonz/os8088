@@ -947,8 +947,15 @@ mem_own:
 .scan:
     cmp [si+MC_SEG], bx         ; a claim that starts exactly here...
     jne .next
-    cmp word [si+MC_OWN], INST_MAX   ; ...owned by an instance slot: a region
-    jb .yes
+    cmp word [si+MC_OWN], INST_MAX   ; ...owned by an instance slot: a
+    jb .yes                          ; PACKAGE's region...
+    cmp word [si+MC_OWN], MEM_K_DRV  ; ...or by the driver tag: a DRIVER's
+    je .yes                          ; image, which is the same kind of thing
+                                     ; and the same kind of caller. Without
+                                     ; this a driver cannot claim the bulk
+                                     ; buffers its own SDK tells it to claim -
+                                     ; it has no instance, so the test above
+                                     ; can never say yes about it
 .next:
     add si, MC_SIZE
     loop .scan

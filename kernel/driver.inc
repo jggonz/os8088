@@ -715,10 +715,13 @@ drv_release:
     mov dx, [bx+DRVR_SEG]
     or dx, dx
     jz .out
-    push bx
-    mov bx, MEM_K_DRV
-    call mem_free
-    pop bx
+    push bx                     ; anything the DRIVER itself claimed is owned
+    mov bx, dx                  ; by its segment (mem_own), so sweep those
+    call mem_free_owner         ; FIRST - the image's own free below takes
+    mov bx, MEM_K_DRV           ; that segment out of existence, and a claim
+    call mem_free               ; whose owner word no longer names anything
+    pop bx                      ; could never be found again. The mem_free_rec
+                                ; fence (SPEC.md 50.4), for a driver
     mov word [bx+DRVR_SEG], 0   ; ...and drv_call is disarmed with it
     mov word [bx+DRVR_KB], 0
     cmp bx, [drv_owner]
@@ -729,6 +732,71 @@ drv_release:
     pop dx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; drv_task - a driver's worker task, spawned and ended (SPEC.md 51.7)
+;
+; in:  AX = the near entry offset in the driver's OWN segment, or 0 meaning
+;      "this IS the worker, and it is exiting"; DH = an argument word's high
+;      half, which lands in the new task's DH; ES = the caller's DS, stamped
+;      by the slot's X stub
+; out: spawn: CF = 0 and AL = the task slot; CF = 1 refused.
+;      exit:  NEVER RETURNS.
+; clobbers: AX (an output), flags
+;
+; A driver cannot use OSAPI_TASK_SPAWN, and the reason is the thing that makes
+; that call safe: inst_pkg_spawn's fence is a chain of five tests all keyed on
+; an INSTANCE RECORD (SPEC.md 20.6), and a driver has none - no window, no
+; record, no I_SPTR to be identical to. So this is its own slot with its own
+; fence, rather than a sixth branch blunting that one.
+;
+; The fence is the same SHAPE: the caller's segment must be the segment of the
+; driver whose services are currently published. ES is the caller's DS and a
+; driver's DS is its own segment, so `ES == [drv_fseg]` is an identity test,
+; not an approximation. One consequence to know: a driver cannot spawn from
+; ATTACH, because drv_publish arms [drv_fseg] only after attach returns. Spawn
+; from a service call, which is where a stream opens anyway.
+;
+; T_INST is 0xFF - a driver has no instance, so the Task Manager bills its
+; worker to System, where its memory already is (MEM_K_DRV). That is why DL
+; is not the caller's to set and DH is: task_spawn's argument word puts DL in
+; T_INST and hands the whole of DX to the task. DH is how a driver gives its
+; worker something PER-TASK - a stream generation, say - which a variable
+; cannot do: a close and a re-open between the spawn and the worker's first
+; instruction would leave both workers reading the second stream's value.
+;
+; **The exit half is not a convenience.** drv_unload FREES THE DRIVER'S IMAGE,
+; so a worker still on the run queue would leave the scheduler holding a stack
+; frame whose CS points at memory the next claim takes. A driver's DRVV_DETACH
+; must therefore not return until its worker is gone, and AX = 0 is how the
+; worker says it has. task_exit takes no release byte here (BX = 0): a driver
+; owns no instance record for one to live in.
+; -----------------------------------------------------------------------------
+drv_task:
+    push bx
+    push dx
+    mov bx, es
+    or bx, bx
+    jz .fail
+    cmp bx, [drv_fseg]          ; only the loaded driver, and only its own
+    jne .fail                   ; segment, may reach either half
+    or ax, ax
+    jz .die
+    cmp ax, DRV_HDR_SZ          ; an entry inside its own image, past the
+    jb .fail                    ; header - the ld_check_hdr test
+    mov dl, 0xFF                ; DL -> T_INST: no instance (SPEC.md 8/28);
+    call task_spawn             ; DH is the caller's, and reaches the task
+    jmp short .out
+.die:
+    xor bx, bx                  ; no release byte: nothing to zero atomically
+    jmp task_exit               ; with the death, and this NEVER RETURNS - the
+                                ; two pushes above die with the task's stack
+.fail:
+    stc
+.out:
+    pop dx
+    pop bx
     ret
 
 ; =============================================================================

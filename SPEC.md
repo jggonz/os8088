@@ -6678,6 +6678,25 @@ page refuses that selection while it is meaningless, but a setting kept on a
 disk that later moves to a machine with a card must not take the beep away
 with it in the meantime.
 
+### 34.9 The two tiers that must never overlap
+
+An exclusive speaker clip (§34.4) raises `sch_lock` for its whole duration,
+which would freeze a loaded driver's refill worker and force its stream
+through the underrun path; and a stream's block IRQ arriving mid-clip is a
+DMA transfer the clip's busy loop cannot pace around. So a `PCM_EXCL` clip
+and a `PCM_BG` stream may never be live at once.
+
+**Only the kernel can enforce it**, because the clip's state is `snd.inc`'s
+and the stream's is the driver's, and neither module can read the other's.
+`snd_str_busy` is the question and the answer in one call — stream **verb 8**,
+which is not in the package SDK: DL says what the kernel is about to do, AX
+comes back saying whether a stream is open. `osapi_snd_play` asks before its
+grant window opens (so the refusal owes no `popf`) and tells the driver again
+when the clip ends.
+
+With no driver loaded there is no stream to collide with, and `drv_svc_call`
+refuses — which is the same answer, arrived at for free.
+
 ### 34.1 Port ownership
 
 - **PIT channel 2 + port 61h — one owner, one mode at a time.**
@@ -9224,6 +9243,50 @@ Panel reports them separately: a load that succeeds and a save that cannot
 reach the disk leaves the driver running and says so in the caption. Pretending
 one implies the other would be the lie that matters here — the user would
 believe a setting had been kept.
+
+### 51.7 A driver's worker task
+
+`OSAPI_TASK_SPAWN` is not available to a driver, and the reason is the thing
+that makes that call safe: `inst_pkg_spawn`'s fence is a chain of five tests
+all keyed on an **instance record** (§20.6), and a driver has none — no
+window, no record, no `I_SPTR` to be identical to. `OSAPI_DRV_TASK`
+(slot **0x0288**) is its own slot with its own fence of the same shape: the
+caller's segment must be the segment of the driver whose services are
+published (`ES == [drv_fseg]`), which is an identity test rather than an
+approximation.
+
+```
+AX = a near entry in the driver's own segment -> spawn; DH reaches the new
+     task's DH. out CF=0 and AL = the slot, CF=1 refused.
+AX = 0  -> "this IS the worker, and it is exiting". NEVER RETURNS.
+```
+
+**DH, not a variable.** `task_spawn`'s argument word puts DL in `T_INST`
+(0xFF here — a driver has no instance, so its worker bills to System) and
+hands the whole of DX to the task. DH is how a driver gives a worker
+something *per-task*, such as a stream generation: a close and a re-open
+between the spawn and the worker's first instruction would leave both
+workers reading a shared variable's second value.
+
+**Two rules, and the second is not optional:**
+
+1. A driver cannot spawn from **attach** — `drv_publish` arms the fence only
+   after attach returns. Spawn from a service call, which is where a stream
+   opens anyway.
+2. **`DRVV_DETACH` must not return until the worker is gone.** `drv_unload`
+   frees the driver's image the moment detach returns, and a worker still on
+   the run queue leaves the scheduler holding a stack frame whose CS points
+   at memory the next heap claim takes. `sbl_detach` is the reference: it
+   stops the stream, then spins on its own liveness byte with
+   `OSAPI_TASK_YIELD` until the worker clears it.
+
+**A driver may claim heap.** `mem_own`'s identity test accepts a driver's
+image (`MEM_K_DRV`) as well as a package's region, so `OSAPI_MEM_CLAIM`
+works from a driver — it has to, because the SDK tells drivers to put bulk
+buffers there rather than in their image. Those claims are owned by the
+driver's *segment*, and `drv_release` sweeps them with `mem_free_owner`
+**before** freeing the image, because the image's segment is the owner word
+and freeing it first would leave a claim nothing could ever name again.
 
 ### 51.6 Author rules
 
