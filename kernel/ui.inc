@@ -702,6 +702,15 @@ ui_dispatch:
     je .ret
     or ah, ah
     jz .kernel                  ; cell 0: the System menu
+    mov word [ui_about], 0
+    mov bx, [menu_abcell]       ; the app-NAME cell (SPEC.md 12.2)? It is
+    or bx, bx                   ; APPENDED after the app's own menus, so it
+    jz .notab                   ; is tested before the set - and it is legal
+    cmp bl, ah                  ; on a window that has no menu set at all,
+    jne .notab                  ; which the test below would have dropped
+    mov word [ui_about], 1
+    jmp .app
+.notab:
     mov bx, [menu_set]
     or bx, bx
     jz .ret                     ; a window with no menus cannot be here
@@ -759,7 +768,17 @@ ui_dispatch:
     push di                     ; so AM_ONCMD is read through its segment
     mov di, si
     call wm_strseg              ; ES = the window's string/data segment
+    cmp word [ui_about], 0      ; the name cell dispatches the About handler
+    je .oncmd                   ; wm_about_set registered, not AM_ONCMD -
+    push bx                     ; and BX may be 0 here (no menu set), so the
+    mov bx, si                  ; read below must not happen at all
+    call wm_about_get           ; AX = the handler's offset in the owner's seg
+    mov cx, ax
+    pop bx
+    jmp short .cbok
+.oncmd:
     mov cx, [es:bx + AM_ONCMD]
+.cbok:
     pop di
     pop es
     mov ax, [ui_menusel]
@@ -895,6 +914,9 @@ section .bss
 ui_ev:      resb 8              ; popped event record (EV_TYPE/A/B/C)
 ui_menusel: resw 1              ; ui_dispatch scratch: AH = menu, AL = item,
                                 ; held across the billing calls (SPEC 12.2)
+ui_about:   resw 1              ; 1 = the selection came from the app-NAME
+                                ; cell, so the callback offset is the one
+                                ; wm_about_set stored and not AM_ONCMD
 ui_click_t: resw 1              ; EV_C of the event being dispatched: the
                                 ; click's birth tick (valid during dispatch,
                                 ; which always stores before handlers read)

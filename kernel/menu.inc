@@ -81,7 +81,14 @@ MB_SEG      equ 12              ; word: the SEGMENT this cell's title and
                                 ; the .o88 header and every item draws "O8"
 MB_ENTSZ    equ 14
 MENU_APPMAX equ 4               ; app menus the bar can host
-MENU_BARMAX equ MENU_APPMAX + 1 ; + the System cell, which is always cell 0
+MENU_BARMAX equ MENU_APPMAX + 2 ; + the System cell, which is always cell 0,
+                                ; + the app-NAME cell, which exists only when
+                                ; the front window declared an About handler
+                                ; (SPEC.md 12.2) and is APPENDED last so the
+                                ; app's own menus keep bar index = set index+1
+MENU_ABPFX_LEN equ 6            ; 'About ' - menu_abstr's name copy starts
+                                ; here, which is why one buffer serves both
+                                ; the cell's TITLE and its single ITEM
 
 MENU_SYS_XR    equ 29           ; System cell: x 0..29, glyph at MENU_SYS_TX
 MENU_SYS_TX    equ 10
@@ -381,12 +388,115 @@ menu_relayout:
                                 ; is dropped, so the cells that DID fit keep
                                 ; bar index == set index
 .done:
+    call menu_ab_cell           ; the NAME cell goes LAST (DI = next slot)
     pop es
     pop di
     pop si
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_ab_cell - turn the app-name label into a bar cell, if the front window
+;                declared an About handler (SPEC.md 12.2)
+; in:  DI = the next free menu_bar slot, [menu_namep]/[menu_seg] = the label
+; out: [menu_abcell] = the cell's bar index, 0 = no cell (all regs preserved)
+;
+; It is APPENDED, after the application's own menus, and that is the whole
+; trick: hit-testing and drawing both walk menu_bar by XL/XR and TX, so where
+; a cell sits in the array has nothing to do with where it sits on the bar -
+; while the app's menus keep bar index == set index + 1 and ui_dispatch's
+; `dec ah` needs no adjustment. Its rect is the label's own, padded 6px
+; either side like a title cell, so it highlights the way every other cell
+; does and still clears the first menu by MENU_NAME_PAD - 6.
+;
+; BOTH of its strings are copied into menu_abstr, which is why its MB_SEG is
+; 0 even when the bar belongs to a package: the item is the whole buffer
+; ('About Paint') and the title is menu_abstr+MENU_ABPFX_LEN, the same bytes
+; from the name onward. Reading the title out of the package's segment
+; instead would work, but then one cell would need two segments.
+;
+; Locator never gets one: the kernel's own About is CMD_ABOUT, in the System
+; menu, which is cell 0 of every application including this one.
+; -----------------------------------------------------------------------------
+menu_ab_cell:
+    push ax
+    push bx
+    push si
+    push di
+    push es
+    mov word [menu_abcell], 0
+    mov bx, [menu_win]
+    or bx, bx
+    jz .out                     ; Locator: the System menu is its About
+    call wm_about_get           ; AX = the window's handler offset, 0 = none
+    or ax, ax
+    jz .out
+
+    push di                     ; --- 'About ' + the name, into menu_abstr ---
+    mov di, menu_abstr
+    push cs
+    pop es                      ; the prefix is ours...
+    mov si, menu_s_abpfx
+    call menu_ab_cat
+    call menu_es                ; ...the name is the owner's (SPEC.md 12.2)
+    mov si, [menu_namep]
+    call menu_ab_cat
+    mov byte [di], 0
+    pop di
+    mov word [menu_abitems], menu_abstr
+
+    push cs                     ; --- the cell, over the label's own rect ---
+    pop es                      ; the copy is kernel data now, so measure it
+    mov si, menu_abstr + MENU_ABPFX_LEN
+    call font_width_x           ; AX = the label's pixel width
+    mov [di + MB_TITLE], si
+    mov word [di + MB_ITEMS], menu_abitems
+    mov word [di + MB_NITEM], 1
+    mov word [di + MB_XL], MENU_NAME_X - 6
+    add ax, MENU_NAME_X + 5
+    mov [di + MB_XR], ax
+    mov word [di + MB_TX], MENU_NAME_X
+    mov word [di + MB_SEG], 0   ; both its strings are in menu_abstr
+    mov ax, [menu_nbar]
+    mov [menu_abcell], ax
+    inc word [menu_nbar]
+.out:
+    pop es
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_ab_cat - append a NUL string to a buffer (internal to menu_ab_cell)
+; in:  ES:SI = source, DI = destination (in the kernel's own segment)
+; out: DI = one past the last byte copied (no NUL written)
+; clobbers: DI (SI preserved)
+;
+; At most MENU_MAXCH bytes are taken from any one source: menu_abstr is a
+; fixed size and the name is a PACKAGE's string, so its length is not the
+; kernel's to trust (SPEC.md 12.2).
+; -----------------------------------------------------------------------------
+menu_ab_cat:
+    push ax
+    push cx
+    push si
+    mov cx, MENU_MAXCH
+.next:
+    mov al, [es:si]
+    or al, al
+    jz .done
+    mov [di], al
+    inc si
+    inc di
+    loop .next
+.done:
+    pop si
+    pop cx
     pop ax
     ret
 
@@ -453,6 +563,10 @@ menu_draw_bar:
     mov dx, MBAR_H - 1
     call gfx_hline
 
+    cmp word [menu_abcell], 0   ; the name is a CELL when the application
+    jne .cells                  ; declared an About (SPEC.md 12.2), and the
+                                ; loop below draws it at the same pen x -
+                                ; drawing it here too would double-strike it
     push es                     ; the name and every cell title belong to the
     call menu_es                ; owner (SPEC.md 12.2/20.1)
     mov si, [menu_namep]        ; the active application's name (SPEC 12)
@@ -460,6 +574,8 @@ menu_draw_bar:
     mov dx, MENU_TEXT_Y
     call font_str_x
     pop es
+
+.cells:
 
     mov si, menu_bar            ; titles (gfx_color is already black)
     mov cx, [menu_nbar]
@@ -1173,12 +1289,14 @@ menu_loc_set:
     dw menu_s_special, menu_items_special, 1
 
 ; -----------------------------------------------------------------------------
+menu_s_abpfx db 'About ', 0     ; + the app's name -> menu_abstr (12.2)
+
 section .bss
 
 menu_win:   resw 1              ; window owning the bar, 0 = Locator (12)
 menu_set:   resw 1              ; its app menu set (SPEC.md 12.2)
 menu_namep: resw 1              ; the name string drawn at MENU_NAME_X
-menu_bar:   resb 70             ; MENU_BARMAX x MB_ENTSZ (5 x 14; a literal
+menu_bar:   resb 84             ; MENU_BARMAX x MB_ENTSZ (6 x 14; a literal
                                 ; per the no-forward-ref-in-bss rule)
 menu_nbar:  resw 1              ; live cells in menu_bar (>= 1: the System
                                 ; menu is always cell 0)
@@ -1203,5 +1321,16 @@ menu_dseg:  resw 1              ; ...and the segment of the menu being
 menu_sseg:  resw 1              ; the save-under claim's segment, 0 = none
                                 ; (menu_drop then repaints instead)
 menu_tbuf:  resb MENU_MAXCH + 1 ; menu_trunc's staging buffer
+menu_abcell: resw 1             ; bar index of the app-NAME cell, 0 = none -
+                                ; cell 0 is the System menu, so 0 is free to
+                                ; mean "this application declared no About"
+menu_abitems: resw 1            ; the name cell's item array: one entry, and
+                                ; it points at menu_abstr below
+menu_abstr: resb MENU_ABPFX_LEN + MENU_MAXCH + 1
+                                ; 'About ' + the app's name + NUL. The cell's
+                                ; TITLE is menu_abstr+MENU_ABPFX_LEN - the
+                                ; same bytes, read from the name onward - so
+                                ; both strings the cell needs are KERNEL data
+                                ; and its MB_SEG is 0 even under a package
 
 section .text

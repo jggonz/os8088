@@ -133,7 +133,7 @@ wm_init:
     pop es
     xor ax, ax
     mov di, wm_wins             ; wins + zord + zn are contiguous in .bss
-    mov cx, MAX_WIN*WIN_SIZE + MAX_WIN + 1
+    mov cx, MAX_WIN*WIN_SIZE + MAX_WIN + 1 + MAX_WIN*2
     rep stosb
     mov al, 0xFF                ; wm_owner is NOT part of the zero run: its
     mov di, wm_owner            ; empty value is 0xFF (unowned, SPEC.md 11)
@@ -430,6 +430,9 @@ wm_destroy:
     div cl                      ; AL = index (AH = 0: ptr is record-aligned)
     mov si, ax                  ; orphan the slot's owner entry so a future
     mov byte [wm_owner+si], 0xFF; wm_create reuse starts unowned (SPEC.md 11)
+    shl si, 1                   ; ...and its About handler with it, or a
+    mov word [wm_about+si], 0   ; reused slot inherits a stranger's (12.2)
+    shr si, 1
     mov ch, 0
     mov cl, [wm_zn]
     jcxz .paint                 ; empty z-order: nothing to remove
@@ -1523,6 +1526,95 @@ wm_content:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_about_set - register a window's About handler (public; API 0x01E0,
+;                SPEC.md 12.2)
+; in:  BX = window ptr, SI = the handler's offset in the CALLER's segment
+;      (0 = this window has no About)
+; out: nothing - every register preserved, FLAGS INCLUDED
+;
+; The whole of the opt-in for the name menu. A window that declares a handler
+; gets its application's NAME in the bar as a real pull-down carrying one
+; item, 'About <Name>'; picking it dispatches this offset exactly like
+; W_ONCLICK - through the window's own dispatcher, so a package writes an
+; ordinary near proc ending in `ret` (SPEC.md 20.1). A window that declares
+; none keeps the plain label the bar has always drawn, which is why every
+; existing application is unaffected and no package can be handed a menu
+; index it was never written for.
+;
+; STORED, never dereferenced here - like menu_win_set, whose flag-preserving
+; contract this shares for the same reason: the one place it is meant to be
+; called from is a package entry proc sitting between wm_create and its own
+; `ret`, which owes the loader wm_create's CF (SPEC.md 20.2).
+; -----------------------------------------------------------------------------
+wm_about_set:
+    pushf
+    push ax
+    push di
+    call wm_ptr2idx             ; AX = window index (AH = 0)
+    mov di, ax
+    shl di, 1
+    mov [wm_about+di], si
+    cmp bx, [menu_win]
+    jne .out
+    call menu_relayout          ; the active application's bar changed
+.out:
+    pop di
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_about_get - a window's About handler offset, 0 = none (module internal
+;                to the bar: menu_relayout and ui_dispatch)
+; in:  BX = window ptr
+; out: AX = the offset wm_about_set registered, 0 = none
+; clobbers: flags only
+; -----------------------------------------------------------------------------
+wm_about_get:
+    push di
+    call wm_ptr2idx             ; AX = window index (AH = 0)
+    mov di, ax
+    shl di, 1
+    mov ax, [wm_about+di]
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_geom - a window's CONTENT size, and whether it is on screen (public;
+;           API 0x01B0, SPEC.md 11)
+; in:  BX = window ptr
+; out: CX = content width, DX = content height, both in pixels;
+;      CF = 1 the window is not visible (CX/DX are still filled in).
+;      Everything else preserved.
+;
+; The companion to wm_content, which answers the origin: together they are
+; the whole content rect. A package on this fork can read W_W/W_H out of the
+; record itself (ES = KERNEL_SEG in every callback, SPEC.md 20.1) and most
+; of them do - but that is FRAME size, and every caller then repeats the
+; same `sub 2` / `sub TITLE_H+1`. This is that arithmetic in one place, and
+; it is what a package written against `main` calls, so the two forks agree
+; on the slot AND on the answer (docs/PORTING.md 6).
+;
+; Callable from any context, lock held or not: it reads four words. The
+; answer is only STABLE under the lock, which is when painters ask.
+; -----------------------------------------------------------------------------
+wm_geom:
+    mov cx, [bx+W_W]
+    mov dx, [bx+W_H]
+    test word [bx+W_FLAGS], WF_FULL
+    jnz .vis                    ; fullscreen: the frame IS the content
+    sub cx, 2                   ; content cols x+1 .. x+w-2 (SPEC.md 11)
+    sub dx, TITLE_H + 1         ; content rows y+TITLE_H .. y+h-2
+.vis:
+    test word [bx+W_FLAGS], 2   ; visible?
+    jz .hidden
+    clc
+    ret
+.hidden:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_obscured - is any visible window above this one overlapping it?
 ; in:  BX = window ptr
 ; out: CF = 1 if a visible window later in wm_zord overlaps BX's frame rect
@@ -2452,9 +2544,12 @@ wm_grow_paint:
 ; so these three must stay contiguous and in this order)
 ; -----------------------------------------------------------------------------
 section .bss
-wm_wins:    resb MAX_WIN * WIN_SIZE ; 12 windows x 20 bytes
+wm_wins:    resb MAX_WIN * WIN_SIZE ; 12 windows x WIN_SIZE bytes
 wm_zord:    resb MAX_WIN            ; window indices, [0] = backmost
 wm_zn:      resb 1                  ; entries in wm_zord
+wm_about:   resw MAX_WIN            ; per-slot About handler offset, 0 = none
+                                    ; (SPEC.md 12.2); inside wm_init's zero
+                                    ; run, so a fresh slot has no About
 wm_owner:   resb MAX_WIN            ; instance index owning each window slot
                                     ; (SPEC.md 29), 0xFF = unowned; NOT part
                                     ; of wm_init's zero run (fill is 0xFF)

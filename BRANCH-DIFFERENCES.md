@@ -1,10 +1,13 @@
 # `experimental` vs `main` — what diverged
 
 Two forks of os8088 that share history up to **`2558ac0`** ("The same binary on
-a 286 and two 386s") and have not been reconciled since. `main` carries five
-squash-merged pull requests; `experimental` carries 53 commits. Neither is a
-subset of the other, and **a `.o88` package built for one branch will not run on
-the other** — see [docs/PORTING.md](docs/PORTING.md) for the conversion.
+a 286 and two 386s"). `main` carries five squash-merged pull requests;
+`experimental` carries its own line of development and has since taken part of
+`main` back — the API slot numbering, `OSAPI_WM_GEOM`, `OSAPI_ABOUT_SET`, the
+§41 extended-memory store and the foldered apps disk. Neither is a subset of
+the other, and **a `.o88` package built for one branch still will not run on
+the other** — the slot numbers agree now, but the kernel segment and the
+callback convention do not. See [docs/PORTING.md](docs/PORTING.md).
 
 This file has two halves: [the short list](#the-short-list), which is the set of
 facts you need before touching either tree, and [the long
@@ -16,44 +19,54 @@ Written from `experimental`. `main` is not modified by this document.
 
 ## The short list
 
-**ABI — a `.o88` cannot cross**
+> **Partially resynced.** `experimental` has since taken four things back from
+> `main`: the API slot numbering, `OSAPI_WM_GEOM`, `OSAPI_ABOUT_SET` and the
+> §41 extended-memory store, plus the foldered apps disk. What is left below
+> is the gap that remains.
 
-- `KERNEL_SEG` is `0x1000` on `main`, `0x0800` on `experimental`.
+**ABI — a `.o88` still cannot cross**
+
+- `KERNEL_SEG` is `0x1000` on `main`, `0x0060` on `experimental`.
 - Callbacks return `retf` on `main`, near `ret` on `experimental` (via a
   dispatcher at `+12` in the package header).
-- Every API slot from `0x00F8` up is renumbered; three numbers name different
-  routines on the two branches.
 - Package header `+12`..`+15`: a RAM-requirement word on `main`, the dispatcher
   bytes on `experimental`.
+- **Slot numbers now agree** for every shared routine. Five numbers are held
+  empty on `experimental` rather than reused.
 
 **Kernel**
 
-- Memory: arena + `cmem` + `xmem` + CPU tiers on `main`; one KB claim heap on
-  `experimental`.
+- Conventional memory: arena + `cmem` (paragraphs) on `main`; one claim heap
+  (KB) on `experimental`. **Extended memory is now on both**, at the same
+  slots.
 - Sound: speaker + OPL2 + Sound Blaster on `main`; speaker only on
   `experimental`.
 - Repaint: whole screen on `main`; damage rectangles on `experimental`.
 - Clock: `int 1Ah` on `main`; a four-rung RTC ladder on `experimental`.
 - Menus: set copied, capped, needs re-registering on `main`; read live on
   `experimental`.
+- Kernel budget: one 64KB span on `experimental` grew to 70KB to fund the
+  resync; `main` has no equivalent single-span rule.
 
 **Application-visible**
 
-- Window geometry: `OSAPI_WM_GEOM` (content px) on `main`; direct record reads
-  through `ES` (frame px) on `experimental`.
-- `main` only: `ABOUT_SET`, `CPU_INFO`, `XMEM_*`, `WM_GEOM`, `SND_FM`,
-  `SND_STREAM`.
-- `experimental` only: `MEM_CLAIM`, `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`,
-  `FILE_GOTO`.
+- Window geometry: `OSAPI_WM_GEOM` **on both, at 0x01B0**. `experimental` also
+  still lets a package read the record directly through `ES` (frame px).
+- `main` only: `SND_FM`, `SND_STREAM`, `MEM_ALLOC`/`MEM_FREE`/`MEM_AVAIL`
+  (paragraph-based).
+- `experimental` only: `MEM_CLAIM`/`MEM_FREE`/`MEM_AVAIL` (KB-based),
+  `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`.
+- **The file API is identical on both**, including its 64KB per-call ceiling
+  and every `FERR_*` code. `experimental` additionally recurses into folders
+  on delete (`dskw_rmtree`).
 
 **Build and layout**
 
-- Apps disk: `APPS/` and `GAMES/` folders on `main`; flat, order-pinned root on
-  `experimental`.
+- Apps disk: `APPS/` and `GAMES/` folders **on both** now.
 - `experimental` adds `make check-images` and the `RTC=` knob; `main` keeps the
   FAT16 / 2.88MB test geometry.
-- SPEC.md §0–§44 now agree; `experimental`-only material lives at §50+ and in
-  the `.90` subsection band.
+- SPEC.md §0–§44 agree; `experimental`-only material lives at §50+ and in the
+  `.90` subsection band.
 
 ---
 
@@ -62,13 +75,12 @@ Written from `experimental`. `main` is not modified by this document.
 ### 1. Where the kernel lives, and why every binary cares
 
 `main` runs the kernel at `KERNEL_SEG = 0x1000` (linear `0x10000`), which is
-where it has always been. `experimental` measured what was actually below it —
-the far-code blob, the FAT snapshot, the task stacks and the disk buffers come
-to 30,464 bytes, not the 62,976 that had been set aside — and moved the kernel
-down to `0x0800` (linear `0x08000`), handing the 32KB difference to the heap.
-The floor is the boot sector at `0000:7C00`, which is still executing while the
-kernel's sectors land, so `0x07E0` is the hard limit and a build guard asserts
-it.
+where it has always been. `experimental` measured what was actually below it,
+moved the kernel down twice — first to `0x0800`, then to **`0x0060`**, the
+first paragraph above the BIOS data area — and made the whole kernel one
+contiguous span, buffers and stacks included, held to `KERN_BUDGET` by a single
+build guard. The boot sector no longer floors it: `boot/boot.asm` relocates
+*itself* out of the landing zone before it reads a sector.
 
 That constant is baked into **every** far-call target in **every** package,
 because `OSAPI_X` is a `%define` of `KERNEL_SEG:offset`. It appears in three
@@ -81,12 +93,13 @@ below it, so nothing above the kernel has a fixed address any more:
 
 | | `main` | `experimental` |
 |---|---|---|
-| `.fartext` blob | `FAR_SEG` `0x0060` | `FAR_SEG` `0x0060`, `FAR_PARA` = 10,752 B |
-| FAT snapshot | `FAT_SEG` `0x0300`, 32 sectors | `FAT_SEG` `0x0300`, 10 sectors |
-| task stacks / disk buffers | `LOW_SEG` `0x0800` | `LOW_SEG` `0x0440` |
-| kernel image + `.bss` | `0x1000`, whole 64KB window | `0x0800`, capped at `KERN_MAX` = `0xB000` |
-| packages | arena from `0x6580` to the `int 12h` top | `PKG_SEG` `0x1300`, fixed 60KB pool |
-| everything else | pinned: `SAVE_SEG`, `VIEW_SEG`, `SND_SEG`, `BB_SEG` | `HEAP_SEG` `0x2200`, claimed on demand |
+| far code | `.fartext` at `FAR_SEG` `0x0060` | **retired** — there is no far code |
+| kernel image + `.bss` | `0x1000`, whole 64KB window | `0x0060`, first rung of one span |
+| FAT snapshot | `FAT_SEG` `0x0300`, 32 sectors | derived, right above the image, 9 sectors |
+| task stacks / disk buffers | `LOW_SEG` `0x0800` | derived, right above the FAT |
+| the whole kernel | no single-span rule | **one span**, `KERN_BUDGET` = 70KB, guard 1 |
+| packages | arena from `0x6580` to the `int 12h` top | `PKG_SEG` = wherever the kernel ends, 60KB |
+| everything else | pinned: `SAVE_SEG`, `VIEW_SEG`, `SND_SEG`, `BB_SEG` | the claim heap, above the pool, on demand |
 
 ### 2. How the kernel calls into a package
 
@@ -124,14 +137,14 @@ record is six bytes longer (`WIN_SIZE` 26 vs 20) for `W_DISP`, `W_SEG` and
 
 ### 3. Window geometry
 
-`main` closed the window record off. `OSAPI_WM_GEOM` (slot `0x01B0`) answers
-`CX` = content width, `DX` = content height, `CF=1` if the window is hidden —
-and the old idioms `mov ax,[bx+W_W]` and `test word [bx+W_FLAGS],2` are
+**`OSAPI_WM_GEOM` is on both now, at slot `0x01B0`**: `CX` = content width,
+`DX` = content height, `CF=1` if the window is hidden. On `main` it is the
+*only* way — the record is an opaque handle and `mov ax,[bx+W_W]` is
 explicitly dead.
 
-`experimental` kept the record readable through `ES` and publishes the field
-offsets in the SDK. The numbers there are **frame** dimensions, so an app
-converts for itself:
+`experimental` also kept the record readable through `ES`, and most of its apps
+still read it. The numbers there are **frame** dimensions, so an app that does
+converts for itself — which is exactly the subtraction `wm_geom` now does once:
 
 ```
 content width  = [es:bx+W_W] - 2
@@ -143,7 +156,9 @@ from live geometry on every call, never from a cached value.
 
 ### 4. Memory
 
-`main` grew two allocators and a CPU probe, in that order:
+Extended memory is now on **both** forks, at the same five slots — see §41 in
+either SPEC. What still differs is *conventional* memory. `main` grew two
+allocators and a CPU probe, in that order:
 
 - **`cpudet.inc`** publishes `[cpu_tier]` (8086 / 286 / 386) and three verified
   feature bits. The tier is information, never permission — code branches on the
@@ -158,7 +173,8 @@ from live geometry on every call, never from a cached value.
   loader carves package regions from, allocating in **paragraphs**, capped at 8
   entries for the whole machine.
 
-`experimental` deleted all three and replaced them with **`memory.inc`**, a
+`experimental` took `cpudet.inc` and `xmem.inc` back verbatim, and replaced
+`cmem.inc` alone with **`memory.inc`**, a
 single claim heap covering every paragraph above the package pool, allocating in
 **KB**, capped at 16 records. The kernel is a client too: the menu save-under
 and the double-buffer back buffer are tagged claims, which is why the Control

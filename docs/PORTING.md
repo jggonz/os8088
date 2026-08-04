@@ -74,34 +74,24 @@ Three independent breaks, any one of which is fatal.
 
 | | `main` | `experimental` |
 |---|---|---|
-| `KERNEL_SEG` | `0x1000` (linear `0x10000`) | `0x0800` (linear `0x08000`) |
+| `KERNEL_SEG` | `0x1000` (linear `0x10000`) | `0x0060` (linear `0x00600`) |
 
 Every `OSAPI_*` symbol is `%define OSAPI_X KERNEL_SEG:0xNNNN`, so `call OSAPI_X`
 assembles to a far call with that segment as an immediate. A `main` binary run on
-`experimental` calls into `0x1000:...`, which is somewhere inside the package
-pool.
+`experimental` calls into `0x1000:...`, which is somewhere above the kernel
+entirely.
 
 The constant appears in three files per branch — `kernel/kernel.asm`,
 `boot/boot.asm`, `apps/os88api.inc` — and changing it requires rebuilding every
 package and both apps floppies.
 
-### 2.2 The slot numbers
+### 2.2 The slot numbers — no longer a break
 
-`main` inserted `OSAPI_SND_FM` at `0x00F8` and `OSAPI_SND_STREAM` at `0x0100`.
-`experimental` never had them. So from `0x00F8` up, **`main` = `experimental` +
-`0x10`** for the whole block through `OSAPI_WM_CLIP_TEST`, and above that the two
-tables diverge outright.
-
-The dangerous part is that the collisions are *silent*. Three slot numbers name
-completely different routines on the two branches:
-
-| slot | `main` | `experimental` |
-|---|---|---|
-| `0x0178` | `OSAPI_WM_CLIP_CLEAR` | `OSAPI_MEM_CLAIM` |
-| `0x01B0` | `OSAPI_WM_GEOM` | `OSAPI_FILE_HERE` |
-| `0x01B8` | `OSAPI_MEM_ALLOC` | `OSAPI_FILE_GOTO` |
-
-And `OSAPI_WM_RESIZE` / `OSAPI_GFX_BLIT4` swap relative order between the two.
+They agreed once `experimental` renumbered onto `main`'s table (§3). This used
+to be the subtlest of the three breaks, because the collisions were *silent*:
+`0x01B0` meant `WM_GEOM` on one fork and `FILE_HERE` on the other. It is now
+the one thing you do **not** have to think about — but it does not make a
+binary portable on its own, because §2.1 and §2.3 still hold.
 
 ### 2.3 The callback mechanism
 
@@ -127,45 +117,40 @@ Slots `0x0010`..`0x00F0` are **identical on both branches**:
 0x00C8 MOUSE         0x00D8 RAND           0x00E8 SND_TONE
 ```
 
-Everything above `0x00F0` differs:
+Everything above `0x00F0` **now agrees too**, for every routine both forks
+have. `experimental` renumbered onto `main`'s addresses; where it has no
+counterpart for something `main` provides, the number is **held empty** (a
+`stc`/`retf` cell returning CF=1) rather than reused:
 
-| Name | `main` | `experimental` | Notes |
-|---|---|---|---|
-| `SND_FM` | `0x00F8` | — | OPL2; `experimental` has no FM sink |
-| `SND_STREAM` | `0x0100` | — | Sound Blaster PCM + record |
-| `WM_SIZABLE` | `0x0108` | `0x00F8` | |
-| `FULLSCREEN` | `0x0110` | `0x0100` | |
-| `WM_GROW` | `0x0118` | `0x0108` | |
-| `FILE_WRITE` | `0x0120` | `0x0110` | |
-| `FILE_READ` | `0x0128` | `0x0118` | |
-| `FILE_DELETE` | `0x0130` | `0x0120` | |
-| `FILE_RENAME` | `0x0138` | `0x0128` | |
-| `FILE_DFREE` | `0x0140` | `0x0130` | |
-| `MENU_SET` | `0x0148` | `0x0138` | copy vs live — see §9 |
-| `FILE_DLG` | `0x0150` | `0x0140` | |
-| `VIDEO` | `0x0158` | `0x0148` | |
-| `TASK_SPAWN` | `0x0160` | `0x0150` | |
-| `TASK_ALIVE` | `0x0168` | `0x0158` | |
-| `WM_CLIP_SET` | `0x0170` | `0x0160` | |
-| `WM_CLIP_CLEAR` | `0x0178` | `0x0168` | **`0x0178` is `MEM_CLAIM` on `experimental`** |
-| `WM_CLIP_TEST` | `0x0180` | `0x0170` | |
-| `MEM_CLAIM` | — | `0x0178` | KB in `AX`, segment out in `DX` |
-| `CPU_INFO` | `0x0188` | — | |
-| `MEM_FREE` | `0x01C0` | `0x0180` | `AX` on `main`, `DX` on `experimental` |
-| `MEM_AVAIL` | `0x01C8` | `0x0188` | paragraphs vs KB |
-| `XMEM_CAPS` | `0x0190` | — | |
-| `GFX_BLIT4` | `0x01D8` | `0x0190` | same contract, different slot |
-| `XMEM_ALLOC` | `0x0198` | — | |
-| `WM_RESIZE` | `0x01D0` | `0x0198` | same contract, different slot |
-| `XMEM_FREE` | `0x01A0` | — | |
-| `FONT_GLYPHS` | — | `0x01A0` | |
-| `XMEM_COPY` | `0x01A8` | — | |
-| `WM_ONSIZE` | — | `0x01A8` | |
-| `WM_GEOM` | `0x01B0` | — | **`0x01B0` is `FILE_HERE` on `experimental`** |
-| `FILE_HERE` | — | `0x01B0` | |
-| `MEM_ALLOC` | `0x01B8` | — | **`0x01B8` is `FILE_GOTO` on `experimental`** |
-| `FILE_GOTO` | — | `0x01B8` | |
-| `ABOUT_SET` | `0x01E0` | — | |
+| slot | `main` | `experimental` |
+|---|---|---|
+| `0x00F8` | `SND_FM` | *held* — no FM sink |
+| `0x0100` | `SND_STREAM` | *held* — no Sound Blaster |
+| `0x0108` | `WM_SIZABLE` | `WM_SIZABLE` |
+| `0x0110` | `FULLSCREEN` | `FULLSCREEN` |
+| `0x0118` | `WM_GROW` | `WM_GROW` |
+| `0x0120`–`0x0140` | `FILE_WRITE`/`READ`/`DELETE`/`RENAME`/`DFREE` | identical |
+| `0x0148` | `MENU_SET` | `MENU_SET` |
+| `0x0150` | `FILE_DLG` | `FILE_DLG` |
+| `0x0158` | `VIDEO` | `VIDEO` |
+| `0x0160` / `0x0168` | `TASK_SPAWN` / `TASK_ALIVE` | identical |
+| `0x0170`–`0x0180` | `WM_CLIP_SET`/`CLEAR`/`TEST` | identical |
+| `0x0188` | `CPU_INFO` | `CPU_INFO` |
+| `0x0190`–`0x01A8` | `XMEM_CAPS`/`ALLOC`/`FREE`/`COPY` | identical |
+| `0x01B0` | `WM_GEOM` | `WM_GEOM` |
+| `0x01B8` | `MEM_ALLOC` (paragraphs) | *held* |
+| `0x01C0` | `MEM_FREE` (`AX`) | *held* |
+| `0x01C8` | `MEM_AVAIL` (paragraphs) | *held* |
+| `0x01D0` / `0x01D8` | `WM_RESIZE` / `GFX_BLIT4` | identical |
+| `0x01E0` | `ABOUT_SET` | `ABOUT_SET` |
+| `0x01E8`+ | — | `MEM_CLAIM`, `MEM_FREE`, `MEM_AVAIL` (all KB), `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO` |
+
+**The memory trio is the one deliberate non-alignment.** `main` counts
+paragraphs and answers in `AX`; `experimental` counts KB and answers in `DX`.
+Putting those at one number would have failed silently and by a factor of 64,
+so all three of `main`'s numbers are held and `experimental`'s live above
+`0x01E0`. That is the rule the whole layout follows: **a slot number never
+means two different contracts.**
 
 You never write these numbers by hand — `%include "os88api.inc"` supplies them —
 so re-assembling against the target branch's SDK fixes every one. The table is

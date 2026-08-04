@@ -255,6 +255,9 @@ ark_entry:
     mov [ark_win], bx
     mov si, ark_menus
     call OSAPI_MENU_SET
+    mov si, ark_about
+    call OSAPI_ABOUT_SET            ; 'About Arkanoid' under our name in the
+                                    ; bar (SPEC.md 12.2); preserves the flags
 .full:
     pop di
     pop si
@@ -393,6 +396,8 @@ ark_onkey:
     push di
     mov bx, ax                      ; keep the key; ark_track needs AX
     call ark_track
+    call ark_abdismiss              ; any key takes the credits down, and is
+    jc .out                         ; spent doing it
     or bl, bl
     jnz .ascii
 
@@ -459,6 +464,8 @@ ark_oncmd:
     push di
     mov bl, al
     call ark_track
+    call ark_abdismiss              ; a menu pick takes the credits down first,
+    jc .out                         ; and is spent doing it
     or bl, bl
     jz .new
     cmp bl, 1
@@ -509,6 +516,207 @@ ark_cmd_pause:
 ; =============================================================================
 ; The worker: the game itself (SPEC.md 20.6)
 ; =============================================================================
+
+; =============================================================================
+; 'About Arkanoid' - the credits (SPEC.md 12.2)
+; =============================================================================
+; The panel is drawn INSIDE our own content, not in a window of its own: a
+; package has no way to put up a second window it does not own, and the game
+; field is exactly the rectangle a notice wants anyway.
+;
+; Two rules make it safe against the worker, which is drawing the same content
+; eighteen times a second. [ark_abon] is checked by ark_render UNDER THE LOCK,
+; right after the clip is armed, and the frame is dropped whole while it is
+; set - so the worker never paints over the panel and the UI task owns the
+; content until the panel comes down. And the game is PAUSED while it is up:
+; a skipped frame does not stop the ball (that is the point of SPEC.md 44.1),
+; so without the pause a player would read the credits and lose a life doing
+; it.
+
+; -----------------------------------------------------------------------------
+; ark_about - the OSAPI_ABOUT_SET handler: a window callback in every respect
+; in:  SI = our window ptr; caller holds the gfx lock
+; -----------------------------------------------------------------------------
+ark_about:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov byte [ark_abon], 1
+    mov al, [ark_mode]              ; a LIVE ball is frozen underneath, because
+    cmp al, M_PLAY                  ; a dropped frame does not stop it and a
+    jne .draw                       ; player would lose a life reading this.
+    mov [ark_wasmode], al           ; Every other mode is already still, so it
+    mov byte [ark_mode], M_PAUSE    ; is left alone and the banner it was
+.draw:                              ; showing comes back untouched
+    call ark_track
+    call ark_draw_all               ; ...which draws the panel last, because
+    pop di                          ; [ark_abon] is set
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_abdismiss - take the panel down if it is up
+; in:  the origin tracked; gfx lock held
+; out: CF = 1 the click/key was spent doing it, CF = 0 there was no panel;
+;      preserves every register
+; -----------------------------------------------------------------------------
+ark_abdismiss:
+    cmp byte [ark_abon], 0
+    je .none
+    mov byte [ark_abon], 0
+    call ark_draw_all               ; the game stays paused: the key that took
+    stc                             ; the credits down is not also a resume
+    ret
+.none:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_abmeas - size and centre the panel from the strings themselves
+; out: [ark_abw]/[ark_abh]/[ark_abl]/[ark_abt], content coords
+; preserves every register
+;
+; Measured rather than pinned because the two metric sets give two different
+; content widths (SPEC.md 44.6) and CGA's is the narrower - a hard-coded box
+; sized for VGA would hang out of it.
+; -----------------------------------------------------------------------------
+ark_abmeas:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor cx, cx                      ; CX = widest line, DI = line count
+    xor di, di
+    mov si, ark_ablines
+.next:
+    mov bx, [si]
+    or bx, bx
+    jz .done
+    inc di
+    add si, 2
+    push si
+    mov si, bx
+    call OSAPI_FONT_WIDTH           ; AX = pixel width
+    pop si
+    cmp ax, cx
+    jbe .next
+    mov cx, ax
+    jmp .next
+.done:
+    add cx, 16                      ; 8px of margin either side
+    cmp cx, [ark_cwid]
+    jbe .wok
+    mov cx, [ark_cwid]
+.wok:
+    mov [ark_abw], cx
+    mov ax, di                      ; height = lines * ARK_ABLH + margins
+    mov bx, ARK_ABLH
+    mul bx
+    add ax, 14
+    cmp ax, [ark_chgt]
+    jbe .hok
+    mov ax, [ark_chgt]
+.hok:
+    mov [ark_abh], ax
+    mov ax, [ark_cwid]
+    sub ax, [ark_abw]
+    shr ax, 1
+    mov [ark_abl], ax
+    mov ax, [ark_chgt]
+    sub ax, [ark_abh]
+    shr ax, 1
+    mov [ark_abt], ax
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_abdraw - the panel itself, last of everything
+; in:  gfx lock held, origin tracked; preserves every register
+; -----------------------------------------------------------------------------
+ark_abdraw:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call ark_abmeas
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    call .rect
+    call ark_fillc
+    mov al, CBLACK                  ; a black frame and black text on the white
+    call OSAPI_SET_COLOR            ; panel: the one pairing that survives
+    call .rect                      ; SPEC.md 39.4 on every adapter
+    call ark_framec
+
+    mov si, ark_ablines
+    mov di, [ark_abt]
+    add di, 7                       ; the first baseline, inside the frame
+.line:
+    mov bx, [si]
+    or bx, bx
+    jz .out
+    add si, 2
+    push si
+    mov si, bx
+    call OSAPI_FONT_WIDTH           ; AX = this line's width
+    mov cx, [ark_abw]
+    sub cx, ax
+    shr cx, 1
+    add cx, [ark_abl]
+    mov dx, di
+    call ark_textc                  ; content coords; ark_textc adds the origin
+    pop si
+    add di, ARK_ABLH
+    jmp .line
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.rect:                              ; the panel as (x1,y1)-(x2,y2), inclusive
+    mov ax, [ark_abl]
+    mov bx, [ark_abt]
+    mov cx, ax
+    add cx, [ark_abw]
+    dec cx
+    mov dx, bx
+    add dx, [ark_abh]
+    dec dx
+    ret
+
+; =============================================================================
+; The worker: the game itself (SPEC.md 20.6)
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; ark_worker - THE background task
+; in:  DX = our instance index, DS = ES = CS = our segment, IF = 1, gfx lock
+;      free. NEVER returns and never exits on its own: the only way out is
+;      OSAPI_TASK_ALIVE not coming back.
+;
+; One frame a tick. The sleep is what sets the frame rate AND what keeps the
+; machine usable: a worker that spun would starve the UI task it shares the
+; scheduler with. Everything is lock-free except ark_render, which takes the
+; lock for one short burst of drawing (rule 3).
 
 ; -----------------------------------------------------------------------------
 ; ark_worker - THE background task
@@ -1644,6 +1852,9 @@ ark_render:
     mov bx, [ark_win]
     call OSAPI_WM_CLIP_SET
     jc .unlock
+    cmp byte [ark_abon], 0          ; the credits are up: the UI task owns the
+    jne .unlock                     ; content until a click or a key takes them
+                                    ; down, and the game is paused underneath
     cmp byte [ark_full], 0
     je .parts
     mov byte [ark_full], 0
@@ -1725,6 +1936,10 @@ ark_draw_all:
     mov [ark_obx], ax
     mov ax, [ark_by]
     mov [ark_oby], ax
+    cmp byte [ark_abon], 0          ; the credits sit on top of everything, and
+    je .noab                        ; every full repaint puts them back
+    call ark_abdraw
+.noab:
     pop dx
     pop cx
     pop bx
@@ -2454,6 +2669,19 @@ ark_s_over:  db 'GAME OVER - N', 0
 ark_s_clear: db 'WALL CLEARED', 0
 ark_s_lv:    db 'LV', 0
 
+; The credits. Kept to 21 characters a line because CGA's metric set gives a
+; 206px content (SPEC.md 44.6) and 21 glyphs plus the margins is what fits it.
+ARK_ABLH equ 10                     ; line pitch, px (8px glyphs + 2 of air)
+ark_ablines:
+    dw ark_ab1, ark_ab2, ark_ab3, ark_ab4, ark_ab5, ark_ab6, ark_ab7, 0
+ark_ab1:     db 'Arkanoid for os8088', 0
+ark_ab2:     db 'A brick-breaker', 0
+ark_ab3:     db 0                   ; a blank line is a line with no glyphs
+ark_ab4:     db 'Contributed by', 0
+ark_ab5:     db 'github.com/Elendilon,', 0
+ark_ab6:     db 'who forked os8088 and', 0
+ark_ab7:     db 'wrote Solitaire too.', 0
+
 ; What each fifth of the paddle ADDS to the ball's existing vx. Not a velocity
 ; to replace it with: replacing is what made the bounce feel arbitrary, because
 ; a ball arriving steeply from the left and one drifting in from the right left
@@ -2552,6 +2780,11 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     ABYTE ark_launch                ; Space, set by the UI task
     ABYTE ark_hired                 ; the worker exists
     ABYTE ark_full                  ; the next frame must repaint everything
+    ABYTE ark_abon                  ; 1 = it is up, and the worker draws nothing
+    AWORD ark_abw                   ; the credit panel's measured width, height,
+    AWORD ark_abh                   ; left and top - content coords, all four
+    AWORD ark_abl                   ; settled by ark_abmeas before a pixel of
+    AWORD ark_abt                   ; it is drawn
     ABYTE ark_stat                  ; ...or at least the status strip
     ABYTE ark_msg                   ; ...or at least the banner
     ABYTE ark_padwipe

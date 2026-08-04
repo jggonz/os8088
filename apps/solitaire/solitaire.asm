@@ -254,6 +254,11 @@ sol_entry:
     jc .full
     mov si, sol_menus
     call OSAPI_MENU_SET             ; draws nothing, and preserves the flags
+    mov si, sol_about
+    call OSAPI_ABOUT_SET            ; 'About Solitaire' under our name in the
+                                    ; bar (SPEC.md 12.2) - same contract, and
+                                    ; it preserves the flags for the same
+                                    ; reason: the CF above is the loader's
 .full:
     pop di
     pop si
@@ -360,8 +365,12 @@ sol_drawall:
     cmp al, SOL_NPILE
     jb .pile
     cmp byte [sol_won], 0
-    je .out
+    je .about
     call sol_banner
+.about:
+    cmp byte [sol_abon], 0
+    je .out
+    call sol_abdraw
 .out:
     pop dx
     pop cx
@@ -1247,6 +1256,188 @@ sol_bpx:
     pop cx
     pop bx
     pop ax
+    ret
+
+; sol_about - the About handler (API 0x01E0, SPEC.md 12.2/43)
+; in:  SI = our window; the UI task, gfx lock HELD, far-called at our segment
+; out: nothing; may clobber the callback set
+;
+; A window callback in every respect that matters, so it draws directly and
+; repaints itself. The panel is state, not a modal loop: [sol_abon] goes up,
+; the content is redrawn with it on top, and the next click or key anywhere
+; in the window takes it down again (sol_abdismiss). A loop here would hold
+; the gfx lock against every background task for as long as the player left
+; the credits up.
+; -----------------------------------------------------------------------------
+sol_about:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov byte [sol_abon], 1
+    call sol_track
+    call sol_drawall
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_abdismiss - take the About panel down, if it is up
+; in:  the origin already tracked; gfx lock held
+; out: CF = 1 if it WAS up (and the content has been repainted), so the
+;      caller swallows the click or key that dismissed it; CF = 0 otherwise.
+;      All registers preserved.
+; -----------------------------------------------------------------------------
+sol_abdismiss:
+    cmp byte [sol_abon], 0
+    je .none
+    mov byte [sol_abon], 0
+    call sol_drawall
+    stc
+    ret
+.none:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_abmeas - size and place the About panel
+; in:  the origin already tracked
+; out: [sol_abw]/[sol_abh]/[sol_abl]/[sol_abt] (content coords)
+; clobbers: nothing (flags)
+;
+; Measured, never pinned: the widest line decides the width and the line
+; count decides the height, so the panel is right on all three adapters and
+; nothing has to be re-measured when a line of the credit changes. Both are
+; clamped to the content, because CGA's 640x200 gives this window 220px of
+; width and about 137 of height (SPEC.md 39).
+; -----------------------------------------------------------------------------
+sol_abmeas:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor cx, cx                      ; CX = widest line, DI = line count
+    xor di, di
+    mov si, sol_ablines
+.next:
+    mov bx, [si]
+    or bx, bx
+    jz .done
+    inc di
+    add si, 2
+    push si
+    mov si, bx
+    call OSAPI_FONT_WIDTH           ; AX = pixel width
+    pop si
+    cmp ax, cx
+    jbe .next
+    mov cx, ax
+    jmp .next
+.done:
+    add cx, 24                      ; 12px of margin either side
+    cmp cx, [sol_cwid]
+    jbe .wok
+    mov cx, [sol_cwid]
+.wok:
+    mov [sol_abw], cx
+    mov ax, di                      ; height = lines * SOL_ABLH + margins
+    mov bx, SOL_ABLH
+    mul bx
+    add ax, 16
+    cmp ax, [sol_chgt]
+    jbe .hok
+    mov ax, [sol_chgt]
+.hok:
+    mov [sol_abh], ax
+    mov ax, [sol_cwid]
+    sub ax, [sol_abw]
+    shr ax, 1
+    mov [sol_abl], ax
+    mov ax, [sol_chgt]
+    sub ax, [sol_abh]
+    shr ax, 1
+    mov [sol_abt], ax
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_abdraw - the About panel: white card, black frame, the credit centred
+; in:  the origin already tracked; gfx lock held
+; out: nothing; preserves all registers
+;
+; Every line is centred on the PANEL rather than on the content, so the block
+; still reads as one card when the panel has been clamped narrower than the
+; text wanted.
+; -----------------------------------------------------------------------------
+sol_abdraw:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call sol_abmeas
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    call .rect
+    call sol_fillc
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    call .rect
+    call sol_framec
+
+    mov si, sol_ablines
+    mov di, [sol_abt]
+    add di, 8                       ; the first baseline, inside the frame
+.line:
+    mov bx, [si]
+    or bx, bx
+    jz .out
+    add si, 2
+    push si
+    mov si, bx
+    call OSAPI_FONT_WIDTH           ; AX = this line's width
+    mov cx, [sol_abw]
+    sub cx, ax
+    shr cx, 1
+    add cx, [sol_abl]
+    add cx, [sol_ox]                ; font_str wants SCREEN coords
+    mov dx, di
+    add dx, [sol_oy]
+    call OSAPI_FONT_STR
+    pop si
+    add di, SOL_ABLH
+    jmp .line
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.rect:                              ; the panel as (x1,y1)-(x2,y2), inclusive
+    mov ax, [sol_abl]
+    mov bx, [sol_abt]
+    mov cx, ax
+    add cx, [sol_abw]
+    dec cx
+    mov dx, bx
+    add dx, [sol_abh]
+    dec dx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2182,6 +2373,8 @@ sol_onclick:
     push di
     push bp
     call sol_track
+    call sol_abdismiss              ; a click anywhere takes the credits down
+    jc .out                         ; and does nothing else
     sub cx, [sol_ox]                ; content-relative
     sub dx, [sol_oy]
     call sol_hit                    ; AL = pile, AH = card index
@@ -2779,6 +2972,8 @@ sol_onkey:
     push bp
     mov bl, al                      ; keep the key; sol_track needs AX
     call sol_track
+    call sol_abdismiss              ; any key takes the credits down, and is
+    jc .out                         ; spent doing it
     cmp bl, 'n'
     je .new
     cmp bl, 'N'
@@ -2995,6 +3190,22 @@ sol_ttl:     db 'Solitaire', 0
 sol_s_win:   db 'You win!', 0
 
 ; Rank glyphs, indexed by rank 0..12. Zero means "the ten", the one rank that
+; --- the About panel's credit (SPEC.md 43.8) -----------------------------------
+; A NUL-terminated array of line pointers, measured rather than pinned
+; (sol_abmeas): the widest line sets the width and the count sets the
+; height. Keep every line inside 24 glyphs - CGA gives this window 220px of
+; content, which is 27 glyphs less the panel's own margins (SPEC.md 39).
+SOL_ABLH equ 11                     ; line pitch, px (8px glyphs + 3 of air)
+sol_ablines:
+    dw sol_ab1, sol_ab2, sol_ab3, sol_ab4, sol_ab5, sol_ab6, sol_ab7, 0
+sol_ab1:     db 'Solitaire for os8088', 0
+sol_ab2:     db 'Klondike, in 8086 asm', 0
+sol_ab3:     db 0                   ; a blank line is a line with no glyphs
+sol_ab4:     db 'Contributed by', 0
+sol_ab5:     db 'github.com/Elendilon,', 0
+sol_ab6:     db 'who forked os8088 and', 0
+sol_ab7:     db 'wrote this game.', 0
+
 ; needs two glyphs, and sol_drawface spells it out.
 sol_rankch:
     db 'A', '2', '3', '4', '5', '6', '7', '8', '9', 0, 'J', 'Q', 'K'
@@ -3114,6 +3325,11 @@ sol_ic_ring:
     SBYTE sol_draw3                 ; 0 = deal one, 1 = deal three
     SBYTE sol_wfan                  ; waste cards to fan, 0..3
     SBYTE sol_won
+    SBYTE sol_abon                  ; 1 = the credit panel is up (43.8)
+    SWORD sol_abw                   ; its measured width, height, left and top
+    SWORD sol_abh                   ; - content coords, all four settled by
+    SWORD sol_abl                   ; sol_abmeas before a pixel is drawn
+    SWORD sol_abt
     SBYTE sol_bkcol                 ; the card back's field colour
 
 ; --- sol_drawpile's loop -----------------------------------------------------

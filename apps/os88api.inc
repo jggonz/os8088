@@ -152,19 +152,19 @@ SND_CAP_TONE     equ 01h
 SND_CAP_PCM_EXCL equ 08h
 
 ; --- window management (SPEC.md 11.1/11.2) -------------------------------------
-%define OSAPI_WM_SIZABLE    KERNEL_SEG:0x00F8   ; BX=win ptr, AL = 0 clear / non-zero set
+%define OSAPI_WM_SIZABLE    KERNEL_SEG:0x0108   ; BX=win ptr, AL = 0 clear / non-zero set
                                  ; WF_SIZABLE; call from the entry proc
                                  ; after OSAPI_WM_CREATE. A resizable
                                  ; window's paint/click procs MUST lay out
                                  ; from the live W_W/W_H every call.
-%define OSAPI_FULLSCREEN    KERNEL_SEG:0x0100   ; AL = 1 enter (BX=win ptr) / 0 exit;
+%define OSAPI_FULLSCREEN    KERNEL_SEG:0x0110   ; AL = 1 enter (BX=win ptr) / 0 exit;
                                  ; caller holds the gfx lock (window
                                  ; callbacks do); out CF=1 enter refused
                                  ; (screen already owned). Exiting is the
                                  ; app's job (Esc in its onkey is the
                                  ; convention) - the menu bar is
                                  ; unreachable while it holds the screen.
-%define OSAPI_WM_GROW       KERNEL_SEG:0x0108   ; BX=win ptr; caller holds the gfx lock.
+%define OSAPI_WM_GROW       KERNEL_SEG:0x0118   ; BX=win ptr; caller holds the gfx lock.
                                  ; A resizable window's self-initiated
                                  ; content repaint must END with this:
                                  ; the white-fill idiom erases the grow
@@ -182,15 +182,15 @@ SND_CAP_PCM_EXCL equ 08h
 ; The buffer is ES:BX (like OSAPI_SND_PLAY), so staged
 ; sound or an app's own bss both work; set ES = DS for the latter. A write
 ; stalls painters for its duration: never call these from a paint proc.
-%define OSAPI_FILE_WRITE    KERNEL_SEG:0x0110   ; SI = NUL 8.3 name, ES:BX = bytes, CX =
+%define OSAPI_FILE_WRITE    KERNEL_SEG:0x0120   ; SI = NUL 8.3 name, ES:BX = bytes, CX =
                                  ; count (0 = empty file); creates or
                                  ; REPLACES. out CF=0 AX=0, else AX = FERR_*
-%define OSAPI_FILE_READ     KERNEL_SEG:0x0118   ; SI = name, ES:BX = buffer, CX = capacity;
+%define OSAPI_FILE_READ     KERNEL_SEG:0x0128   ; SI = name, ES:BX = buffer, CX = capacity;
                                  ; out CF=0 AX = bytes read, else AX =
                                  ; FERR_* (FERR_BIG leaves the buffer alone)
-%define OSAPI_FILE_DELETE   KERNEL_SEG:0x0120   ; SI = name; out CF=0 AX=0, else FERR_*
-%define OSAPI_FILE_RENAME   KERNEL_SEG:0x0128   ; SI = old name, DI = new name; out as above
-%define OSAPI_FILE_DFREE    KERNEL_SEG:0x0130   ; out CF=0, DX:AX = free bytes, BX =
+%define OSAPI_FILE_DELETE   KERNEL_SEG:0x0130   ; SI = name; out CF=0 AX=0, else FERR_*
+%define OSAPI_FILE_RENAME   KERNEL_SEG:0x0138   ; SI = old name, DI = new name; out as above
+%define OSAPI_FILE_DFREE    KERNEL_SEG:0x0140   ; out CF=0, DX:AX = free bytes, BX =
                                  ; SECTORS per cluster; no disk I/O
 
 ; --- menus (SPEC.md 12.2) ------------------------------------------------------
@@ -199,7 +199,7 @@ SND_CAP_PCM_EXCL equ 08h
 ; the app's own menus follow. Register the set from the entry proc, with
 ; BX = the window OSAPI_WM_CREATE just returned - the loader shows the
 ; window afterwards, so the first bar drawn is already yours.
-%define OSAPI_MENU_SET      KERNEL_SEG:0x0138   ; BX = win ptr, SI = menu set ptr (0 =
+%define OSAPI_MENU_SET      KERNEL_SEG:0x0148   ; BX = win ptr, SI = menu set ptr (0 =
                                  ; none). Draws nothing, takes no lock,
                                  ; preserves every register AND the flags -
                                  ; so it can sit between OSAPI_WM_CREATE
@@ -218,14 +218,14 @@ SND_CAP_PCM_EXCL equ 08h
 ; proc is called much later. Cancel calls nothing at all.
 ;
 ; Call it from a menu command or a key handler, never from a paint proc.
-%define OSAPI_FILE_DLG      KERNEL_SEG:0x0140   ; AL = 0 Open / 1 Save, BX = your window ptr,
+%define OSAPI_FILE_DLG      KERNEL_SEG:0x0150   ; AL = 0 Open / 1 Save, BX = your window ptr,
                                  ; DI = completion proc, SI = default name
                                  ; (NUL, <= 12) or 0. out CF=0 accepted, CF=1
                                  ; refused (one is already up, or no room)
 FDLG_OPEN  equ 0                 ; the two modes, in AL going in and in AL
 FDLG_SAVE  equ 1                 ; coming back
 ;
-%define OSAPI_VIDEO         KERNEL_SEG:0x0148   ; the screen this machine actually has
+%define OSAPI_VIDEO         KERNEL_SEG:0x0158   ; the screen this machine actually has
                                  ; (SPEC.md 39.2). No inputs. Out: AX = width,
                                  ; BX = height, CX = the first row the dock
                                  ; owns (so the usable desktop is rows MBAR_H
@@ -262,7 +262,7 @@ VID_CGA    equ 2
 ; between clicks is pre-empted instead of crammed into a callback. This is
 ; the only place package code runs off the UI task.
 ;
-%define OSAPI_TASK_SPAWN    KERNEL_SEG:0x0150   ; AX = your worker's near entry (a plain
+%define OSAPI_TASK_SPAWN    KERNEL_SEG:0x0160   ; AX = your worker's near entry (a plain
                                  ; `mov ax, my_worker` - a whole-word
                                  ; package address, relocated for you),
                                  ; BX = YOUR window ptr (what
@@ -286,7 +286,7 @@ VID_CGA    equ 2
                                  ; preserved. NOT callable from your entry
                                  ; proc: the loader has not published your
                                  ; instance yet, so it would simply refuse.
-%define OSAPI_TASK_ALIVE    KERNEL_SEG:0x0158   ; BX = YOUR window ptr; the gfx lock must
+%define OSAPI_TASK_ALIVE    KERNEL_SEG:0x0168   ; BX = YOUR window ptr; the gfx lock must
                                  ; NOT be held, and it must be YOUR WORKER
                                  ; calling - never a window callback.
                                  ; Returns with every register AND the
@@ -302,7 +302,7 @@ VID_CGA    equ 2
 ; the lock and every gfx_*/font_* call you make is cut to the part of YOUR
 ; content nothing is covering; a window with one corner buried keeps drawing
 ; the rest instead of skipping the frame.
-%define OSAPI_WM_CLIP_SET   KERNEL_SEG:0x0160   ; BX = YOUR window ptr; the gfx lock must be
+%define OSAPI_WM_CLIP_SET   KERNEL_SEG:0x0170   ; BX = YOUR window ptr; the gfx lock must be
                                  ; HELD. out CF = 1: not one pixel of your
                                  ; content is visible - draw nothing this
                                  ; frame (the answer wm_obscured used to
@@ -311,10 +311,32 @@ VID_CGA    equ 2
                                  ; register. It dies at your next
                                  ; OSAPI_GFX_UNLOCK, so it is one call per
                                  ; lock hold and there is nothing to undo.
-%define OSAPI_WM_CLIP_CLEAR KERNEL_SEG:0x0168   ; disarm early, to draw unclipped again
+%define OSAPI_WM_CLIP_CLEAR KERNEL_SEG:0x0178   ; disarm early, to draw unclipped again
                                  ; inside the same lock hold. Preserves
                                  ; every register.
-%define OSAPI_MEM_CLAIM     KERNEL_SEG:0x0178   ; the claim heap (SPEC.md 50.3):
+; --- About, under the application's own name (SPEC.md 12.2) --------------------
+; Your name in the menu bar is a plain LABEL until you call this: register a
+; handler and the name becomes a real pull-down carrying one item,
+; 'About <Name>'. Picking it calls your handler exactly like W_ONCLICK - on
+; the UI task, UNDER THE GFX LOCK, billed to your instance - with SI = your
+; window and no selection to decode. Same rules, therefore: it may draw and
+; may call the file slots, it must never take the lock or block, and it must
+; repaint whatever it drew over.
+;
+; Call it from your entry proc, after OSAPI_WM_CREATE, like OSAPI_MENU_SET
+; (whose flag-preserving contract it shares, so it is safe between wm_create
+; and the CF you owe the loader). An application that never calls it is
+; exactly as it was: a label, no cell, no menu.
+%define OSAPI_ABOUT_SET     KERNEL_SEG:0x01E0   ; BX = win ptr, SI = your About
+                                 ; handler's offset (0 = none). Preserves every
+                                 ; register and the flags
+
+; --- this fork's own slots (docs/PORTING.md 3) ---------------------------------
+; Everything above is at `main`'s number. Everything from here up is this
+; fork's, in one block above `main`'s highest - and 0x01B8..0x01C8 are HELD
+; EMPTY because `main` puts its paragraph-counting arena there and this fork's
+; heap counts KB (SPEC.md 50.3). A call to one of those three returns CF=1.
+%define OSAPI_MEM_CLAIM     KERNEL_SEG:0x01E8   ; the claim heap (SPEC.md 50.3):
                                  ; AX = KB wanted; out CF=0 and DX = the base
                                  ; segment, CF=1 refused. This is how you get
                                  ; memory your region cannot hold - a canvas,
@@ -327,14 +349,14 @@ VID_CGA    equ 2
                                  ; your claims when your instance dies, so you
                                  ; need no teardown hook; free them yourself
                                  ; only to hand memory back mid-session.
-%define OSAPI_MEM_FREE      KERNEL_SEG:0x0180   ; DX = the segment you were
+%define OSAPI_MEM_FREE      KERNEL_SEG:0x01F0   ; DX = the segment you were
                                  ; given; out CF=0 released, CF=1 not yours
-%define OSAPI_MEM_AVAIL     KERNEL_SEG:0x0188   ; out AX = largest free run in
+%define OSAPI_MEM_AVAIL     KERNEL_SEG:0x01F8   ; out AX = largest free run in
                                  ; KB, BX = total free KB. Size yourself from
                                  ; THIS, not from int 12h: it is the only
                                  ; number that accounts for what the kernel
                                  ; and every other package already hold.
-%define OSAPI_WM_CLIP_TEST  KERNEL_SEG:0x0170   ; AX=x1, BX=y1, CX=x2, DX=y2 (inclusive);
+%define OSAPI_WM_CLIP_TEST  KERNEL_SEG:0x0180   ; AX=x1, BX=y1, CX=x2, DX=y2 (inclusive);
                                  ; out CF=0 the whole rect is drawable (also
                                  ; when no clip is armed), CF=1 it is not.
                                  ; Preserves every register. Ask this before
@@ -344,7 +366,7 @@ VID_CGA    equ 2
                                  ; a wide erase followed by glyphs can white
                                  ; out a band the glyphs then refuse to
                                  ; repaint. Erase per cell, or skip the pair.
-%define OSAPI_GFX_BLIT4     KERNEL_SEG:0x0190   ; ES:SI = packed 4bpp pixels (two
+%define OSAPI_GFX_BLIT4     KERNEL_SEG:0x01D8   ; ES:SI = packed 4bpp pixels (two
                                  ; per byte, high nibble leftmost), BP = source
                                  ; stride in BYTES, AX/BX = destination x/y,
                                  ; CX/DX = width/height in pixels. Draws the
@@ -357,7 +379,86 @@ VID_CGA    equ 2
                                  ; hundreds of OSAPI_GFX_HLINE calls a
                                  ; hand-rolled run-length blitter would make.
                                  ; Honours the clip region and the back buffer.
-%define OSAPI_WM_RESIZE     KERNEL_SEG:0x0198   ; BX = win ptr, CX = new width,
+; --- CPU tier and memory above 1MB (SPEC.md 41) --------------------------------
+; On a 286 or a 386 the machine has RAM above linear 0x0FFFFF that the 640KB
+; conventional map cannot name. These five slots lend you some of it, and they
+; sit at the SAME numbers `main` uses (docs/PORTING.md 3).
+;
+; READ THIS FIRST, because it is the rule the whole group is shaped around:
+; EXTENDED MEMORY IS A DATA STORE ONLY. Real mode forms an address as
+; seg<<4 + off, so the highest byte any CS:IP can name is 0x10FFEF - no code
+; up there, no jump table, no callback, no second copy of your image, on any
+; tier. And you never address it DIRECTLY at all: the 32-bit base
+; OSAPI_XMEM_ALLOC hands you is an OPAQUE TOKEN, not a pointer you can build a
+; segment from. Every byte you move crosses through OSAPI_XMEM_COPY, which is
+; exactly why that slot carries one ABI over two transports - direct
+; addressing needs unreal mode, which is tier 2 only and lives entirely inside
+; the kernel. YOU are 8086 code: no 32-bit register, no FS, no GS, no
+; `cpu 386` island of your own (SPEC.md 1 rule 1, no exception).
+;
+; BRANCH ON THE CAPS, NEVER ON THE TIER. OSAPI_XMEM_CAPS returning 0 KB is the
+; only answer that means "do not try", and it is the answer on a 386 whose A20
+; gate never verified just as much as on an 8088.
+CPU_8086            equ 0        ; tier 0: 8086/8088. No A20 line, no memory
+                                 ; above 1MB - the floor machine, and the
+                                 ; answer you must still work on.
+CPU_286             equ 1        ; tier 1: A20 + BIOS block move
+CPU_386             equ 2        ; tier 2: the above, plus unreal mode
+;
+%define OSAPI_CPU_INFO      KERNEL_SEG:0x0188   ; no inputs; out AL = CPU_8086 /
+                                 ; CPU_286 / CPU_386, AH = feature bits: bit 0
+                                 ; A20 verified open, bit 1 HMA claimed, bit 2
+                                 ; unreal mode armed. Preserves every register
+                                 ; but AX. Any context - it reads two bytes.
+%define OSAPI_XMEM_CAPS     KERNEL_SEG:0x0190   ; no inputs; out AX = extended-
+                                 ; memory KB the pool can still hand out (0 =
+                                 ; none, and the three below will all refuse),
+                                 ; DX:CX = the pool's 32-bit linear base, BL =
+                                 ; free block-table entries. Any context.
+%define OSAPI_XMEM_ALLOC    KERNEL_SEG:0x0198   ; DX:AX = bytes wanted, rounded
+                                 ; up to 1KB; out CF=0 and DX:AX = the block's
+                                 ; 32-bit linear base (opaque - hand it back to
+                                 ; COPY and FREE, never dereference it), else
+                                 ; CF=1 and AX = 0 no store / 1 no free table
+                                 ; entry / 2 no contiguous run that big. The
+                                 ; block is stamped with YOUR instance and
+                                 ; force-freed when you close - but the table
+                                 ; is small, so take one big block and
+                                 ; subdivide it yourself rather than many.
+%define OSAPI_XMEM_FREE     KERNEL_SEG:0x01A0   ; DX:AX = a base YOU own; out
+                                 ; CF=0 freed (and merged with the neighbouring
+                                 ; free runs), CF=1 not a base or not yours.
+%define OSAPI_XMEM_COPY     KERNEL_SEG:0x01A8   ; ES:SI = the conventional end,
+                                 ; DX:AX = the 32-bit linear extended end, CX =
+                                 ; bytes (EVEN, and <= 32768 - move more with
+                                 ; two calls), DI = 0 out to extended / 1 in
+                                 ; from extended. out CF=0 done; CF=1 and AX =
+                                 ; 1 no store / 2 the range is not inside a
+                                 ; block you own / 3 bad length. ES is restored.
+;
+; CONTEXT, BINDING: these five are UI-task / window-callback only - a window
+; callback, a menu handler or a file-dialog completion proc. NEVER from your
+; worker task. On tier 1 the copy goes through int 15h AH=87h, and some 286
+; BIOSes implement that call by RESETTING THE CPU to get back to real mode;
+; taken with the gfx lock held that is not a slow frame, it is a dead machine.
+
+; --- window geometry (SPEC.md 11) ----------------------------------------------
+%define OSAPI_WM_GEOM       KERNEL_SEG:0x01B0   ; BX = win ptr; out CX = content
+                                 ; width, DX = content height (inner px - the
+                                 ; box whose origin OSAPI_WM_CONTENT answers),
+                                 ; CF=1 the window is not visible. Preserves
+                                 ; everything else. Callable from any context,
+                                 ; lock held or not; the answer is only STABLE
+                                 ; under the lock, which is when painters ask.
+                                 ;
+                                 ; You may still read [es:bx+W_W]/[es:bx+W_H]
+                                 ; directly on this fork (ES = KERNEL_SEG in
+                                 ; every callback) - but those are FRAME size,
+                                 ; and this is the same subtraction done once,
+                                 ; at the number `main` uses. Prefer it in any
+                                 ; app you intend to build on both forks.
+
+%define OSAPI_WM_RESIZE     KERNEL_SEG:0x01D0   ; BX = win ptr, CX = new width,
                                  ; DX = new height, in pixels, of the WHOLE
                                  ; window (frame included). Clamps to the
                                  ; kernel's minimum and to the live screen,
@@ -368,7 +469,7 @@ VID_CGA    equ 2
                                  ; app that sets them leaves the shadow, the
                                  ; z-order damage and the dock out of step.
                                  ; Do NOT hold the gfx lock.
-%define OSAPI_WM_ONSIZE     KERNEL_SEG:0x01A8   ; BX = win ptr, AX = a near proc
+%define OSAPI_WM_ONSIZE     KERNEL_SEG:0x0208   ; BX = win ptr, AX = a near proc
                                  ; in YOUR segment (0 clears it). The kernel
                                  ; calls it BEFORE it commits a size the user
                                  ; dragged out of your grow box, with
@@ -382,10 +483,10 @@ VID_CGA    equ 2
                                  ; drawn at either size, so DO NOT draw in it -
                                  ; decide, return, and draw in the W_PAINT the
                                  ; kernel is about to make.
-%define OSAPI_FILE_HERE     KERNEL_SEG:0x01B0   ; out DX = the current
+%define OSAPI_FILE_HERE     KERNEL_SEG:0x0210   ; out DX = the current
                                  ; directory's first cluster (0 = the root),
                                  ; BL = the drive. No disk I/O.
-%define OSAPI_FILE_GOTO     KERNEL_SEG:0x01B8   ; in DX = a cluster from
+%define OSAPI_FILE_GOTO     KERNEL_SEG:0x0218   ; in DX = a cluster from
                                  ; OSAPI_FILE_HERE, BL = its drive; out CF=1
                                  ; it could not be listed and the volume is
                                  ; back at the root with the write gate shut.
@@ -403,7 +504,7 @@ VID_CGA    equ 2
                                  ; moved it. If your Save means "the same
                                  ; place my Save As chose", store the pair
                                  ; these two slots trade in beside the name.
-%define OSAPI_FONT_GLYPHS   KERNEL_SEG:0x01A0   ; out SI = the offset of the
+%define OSAPI_FONT_GLYPHS   KERNEL_SEG:0x0200   ; out SI = the offset of the
                                  ; kernel's 8x8 glyph table in KERNEL_SEG,
                                  ; AL = first character code it covers,
                                  ; AH = last, CX = bytes per glyph (8). Read

@@ -98,9 +98,13 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; folder it created from the file dialog - the deepest mark left was 246 bytes
 ; on task 0's stack and 150 on a background task's.
 ; =============================================================================
-KERN_BUDGET equ 65536           ; the whole kernel, guard 1. Growing past this
+KERN_BUDGET equ 71680           ; the whole kernel, guard 1. Growing past this
                                 ; is not a build detail - see
-                                ; docs/KERNEL-MEMORY.md before raising it
+                                ; docs/KERNEL-MEMORY.md before raising it.
+                                ; It was 65,536, and the 6KB it gained was
+                                ; asked for and granted, once, to buy the
+                                ; SPEC.md 41 store and the two API surfaces
+                                ; that came with it from the other fork
 
 ; The relocated boot sector (boot/boot.asm). The kernel now lands at 0x00600
 ; and runs up through 0x7C00, where the BIOS put the sector that is reading
@@ -108,7 +112,7 @@ KERN_BUDGET equ 65536           ; the whole kernel, guard 1. Growing past this
 ; offset so every label in it still resolves at org 0x7C00. BOOT_RELOC:7C00
 ; is linear 0x11000; its stack grows down from there, and guard 5 keeps the
 ; kernel clear of both. Both constants are mirrored in boot/boot.asm.
-BOOT_RELOC  equ 0x0940          ; 0x0940*16 + 0x7C00 = linear 0x11000
+BOOT_RELOC  equ 0x0AA0          ; 0x0AA0*16 + 0x7C00 = linear 0x12600
 BOOT_LIN    equ BOOT_RELOC*16 + 0x7C00
 BOOT_STACK  equ 2048            ; stack room below it
 
@@ -188,6 +192,32 @@ HEAP_SEG    equ PKG_SEG + PKG_PARA    ; the claim heap (SPEC.md 50): the
 BB_PLANE_PARA equ 0x960         ; paragraphs per plane (0x9600 = 480 rows x 80)
 BB_KB         equ 150           ; 4 planes x 0x9600 bytes, in KB
 
+; --- CPU tiers and memory above 1MB (SPEC.md 41) -----------------------------
+; None of this exists on tier 0, which is the target machine: an 8088 has no
+; A20 line, nothing above linear 0x0FFFFF, and every routine keyed off these
+; constants returns having touched no port. The tier is INFORMATION, not
+; permission - kernel code branches on the verified feature bits and packages
+; branch on the KB figure from osapi_xmem_caps (SPEC.md 41.1/41.8).
+CPU_8086    equ 0               ; tier 0: 8086/8088. No A20, no HMA, no store.
+                                ; The default [cpu_tier] and the fallback.
+CPU_286     equ 1               ; tier 1: A20 gate + HMA, int 15h AH=88h
+                                ; sizing and AH=87h block move (SPEC.md 41.5)
+CPU_386     equ 2               ; tier 2: all of tier 1, plus unreal mode -
+                                ; a 4GB data limit on FS/GS (SPEC.md 41.4)
+HMA_SEG     equ 0xFFFF          ; the one segment above 1MB: HMA_SEG:0010 is
+HMA_MIN_OFF equ 0x0010          ; linear 0x100000 (0xFFFF0 + 0x10) and
+HMA_BYTES   equ 0xFFF0          ; HMA_SEG:FFFF is linear 0x10FFEF - the
+                                ; highest byte real mode can name at all.
+                                ; 65,520 bytes, DATA ONLY: the near model
+                                ; pins CS = DS = KERNEL_SEG, so no code ever
+                                ; lives up there (SPEC.md 41.3/41.9 rule 3)
+XM_HMA_KB   equ 64              ; what a successful cpu_hma_claim takes off
+                                ; the xm pool - the HMA is the first 64KB of
+                                ; exactly the RAM AH=88h sizes (SPEC.md 2.4)
+XM_MAX_BLKS equ 8               ; xm_alloc's fixed block table, entries: a
+                                ; bulk store for a handful of large claims,
+                                ; not a malloc (SPEC.md 41.5)
+
 ; =============================================================================
 ; Section layout (SPEC.md 2.1) - declared here, once, with attributes; every
 ; module afterwards switches with a bare `section .text` / `.bss` / `.lowbss`.
@@ -261,6 +291,12 @@ cold_entry:
     times 5 db 0
 %endmacro
 
+%macro OSAPI_RSLOT 0                ; a number HELD EMPTY (SPEC.md 20.3)
+    stc                             ; `main` uses it for something this fork
+    retf                            ; does not have, so it is reserved rather
+    times 6 db 0                    ; than reused: a stray call gets CF=1 and
+%endmacro                           ; every register back, never our own code
+
 osapi_table:
     OSAPI_SLOT gfx_lock           ; 0x0010
     OSAPI_SLOT gfx_unlock         ; 0x0018
@@ -291,55 +327,90 @@ osapi_table:
     OSAPI_SLOT osapi_snd_caps     ; 0x00E0 - sound (SPEC.md 34): what the PC
     OSAPI_SLOT osapi_snd_tone     ; 0x00E8   speaker can do, a tone, and a
     OSAPI_SLOT osapi_snd_play     ; 0x00F0   clip out of the caller's buffer
-    OSAPI_SLOT wm_sizable         ; 0x00F8 - window features (SPEC.md 11.1)
-    OSAPI_SLOT wm_fullscreen      ; 0x0100 - fullscreen (SPEC.md 11.2)
-    OSAPI_SLOT wm_grow_paint      ; 0x0108 - grow-box restore (SPEC.md 11.1)
-    OSAPI_JSLOT api_file_write    ; 0x0110 - files (SPEC.md 18.4/20.3): N,
-    OSAPI_JSLOT api_file_read     ; 0x0118   because ES:BX is the data buffer
-    OSAPI_JSLOT api_file_delete   ; 0x0120   and the name still has to cross
-    OSAPI_JSLOT api_file_rename   ; 0x0128   (two names, this one)
-    OSAPI_SLOT dskw_dfree         ; 0x0130
-    OSAPI_SLOT menu_win_set       ; 0x0138 - app menus (SPEC.md 12.2): the
+    OSAPI_RSLOT                   ; 0x00F8 - HELD: `main`'s OSAPI_SND_FM. The
+    OSAPI_RSLOT                   ; 0x0100 - HELD: `main`'s OSAPI_SND_STREAM.
+                                  ;          The OPL2 and Sound Blaster tiers
+                                  ;          were removed here (SPEC.md 34.5/
+                                  ;          34.6); holding the two numbers is
+                                  ;          what puts every slot below back
+                                  ;          on `main`'s address
+    OSAPI_SLOT wm_sizable         ; 0x0108 - window features (SPEC.md 11.1)
+    OSAPI_SLOT wm_fullscreen      ; 0x0110 - fullscreen (SPEC.md 11.2)
+    OSAPI_SLOT wm_grow_paint      ; 0x0118 - grow-box restore (SPEC.md 11.1)
+    OSAPI_JSLOT api_file_write    ; 0x0120 - files (SPEC.md 18.4/20.3): N,
+    OSAPI_JSLOT api_file_read     ; 0x0128   because ES:BX is the data buffer
+    OSAPI_JSLOT api_file_delete   ; 0x0130   and the name still has to cross
+    OSAPI_JSLOT api_file_rename   ; 0x0138   (two names, this one)
+    OSAPI_SLOT dskw_dfree         ; 0x0140
+    OSAPI_SLOT menu_win_set       ; 0x0148 - app menus (SPEC.md 12.2): the
                                   ;          set's segment comes from the
                                   ;          window, so no stub is needed
-    OSAPI_JSLOT api_fdlg_open     ; 0x0140 - the Standard File dialog
+    OSAPI_JSLOT api_fdlg_open     ; 0x0150 - the Standard File dialog
                                   ;          (SPEC.md 38.6): N, for the
                                   ;          default name
-    OSAPI_SLOT osapi_video        ; 0x0148 - runtime screen geometry (39.2)
-    OSAPI_JSLOT api_pkg_spawn     ; 0x0150 - worker tasks (SPEC.md 20.6): X,
+    OSAPI_SLOT osapi_video        ; 0x0158 - runtime screen geometry (39.2)
+    OSAPI_JSLOT api_pkg_spawn     ; 0x0160 - worker tasks (SPEC.md 20.6): X,
                                   ;          the ownership fence needs to
                                   ;          know which segment is calling
-    OSAPI_SLOT inst_pkg_alive     ; 0x0158
-    OSAPI_SLOT wm_clip_set        ; 0x0160 - the clip region (SPEC.md 11.3)
-    OSAPI_SLOT wm_clip_clear      ; 0x0168
-    OSAPI_SLOT wm_clip_test       ; 0x0170
-    OSAPI_JSLOT api_mem_claim     ; 0x0178 - the claim heap (SPEC.md 50.3):
-    OSAPI_JSLOT api_mem_free      ; 0x0180   X, same fence as the spawn
-    OSAPI_SLOT osapi_mem_avail    ; 0x0188
-    OSAPI_SLOT gfx_blit4          ; 0x0190 - packed 4bpp block (SPEC.md 5.4):
-                                  ;          ES:SI = source, BP = stride,
-                                  ;          AX/BX = dest, CX/DX = w/h. ES is
-                                  ;          the caller's own choice here, so
-                                  ;          no stub is needed
-    OSAPI_SLOT wm_resize          ; 0x0198 - resize a window (SPEC.md 11.1):
+    OSAPI_SLOT inst_pkg_alive     ; 0x0168
+    OSAPI_SLOT wm_clip_set        ; 0x0170 - the clip region (SPEC.md 11.3)
+    OSAPI_SLOT wm_clip_clear      ; 0x0178
+    OSAPI_SLOT wm_clip_test       ; 0x0180
+    OSAPI_SLOT cpu_info           ; 0x0188 - CPU tiers and memory above 1MB
+    OSAPI_SLOT xm_caps            ; 0x0190   (SPEC.md 41): each body already
+    OSAPI_SLOT xm_alloc           ; 0x0198   answers its SPEC.md 20.3 contract
+    OSAPI_SLOT xm_free            ; 0x01A0   exactly, so the slots call
+    OSAPI_SLOT xm_copy            ; 0x01A8   straight at them - and xm_copy's
+                                  ;          ES:SI is the caller's own choice,
+                                  ;          so no X stub is involved either
+    OSAPI_SLOT wm_geom            ; 0x01B0 - content size + visibility
+                                  ;          (SPEC.md 11): the one read a
+                                  ;          package on EITHER fork can make
+    OSAPI_RSLOT                   ; 0x01B8 - HELD: `main`'s OSAPI_MEM_ALLOC
+    OSAPI_RSLOT                   ; 0x01C0 - HELD: `main`'s OSAPI_MEM_FREE
+    OSAPI_RSLOT                   ; 0x01C8 - HELD: `main`'s OSAPI_MEM_AVAIL.
+                                  ;          This fork's claim heap counts KB
+                                  ;          and answers in DX (SPEC.md 50.3);
+                                  ;          `main`'s arena counts PARAGRAPHS
+                                  ;          and answers in AX. Same names,
+                                  ;          different contracts - so all
+                                  ;          three numbers are held and the
+                                  ;          heap keeps its own below, because
+                                  ;          a slot that meant two things
+                                  ;          would fail silently and by the
+                                  ;          wrong factor of 64
+    OSAPI_SLOT wm_resize          ; 0x01D0 - resize a window (SPEC.md 11.1):
                                   ;          BX = win, CX = w, DX = h; lock
                                   ;          held. Retires the last liberty
                                   ;          in docs/PAINT-NOTES.md - an app
                                   ;          writing W_W/W_H itself
-    OSAPI_SLOT osapi_font_glyphs  ; 0x01A0 - the kernel's 8x8 glyph table
+    OSAPI_SLOT gfx_blit4          ; 0x01D8 - packed 4bpp block (SPEC.md 5.4):
+                                  ;          ES:SI = source, BP = stride,
+                                  ;          AX/BX = dest, CX/DX = w/h. ES is
+                                  ;          the caller's own choice here, so
+                                  ;          no stub is needed
+    OSAPI_SLOT wm_about_set       ; 0x01E0 - the app-name pull-down (12.2):
+                                  ;          BX = win, SI = your About handler
+; --- and here `main`'s table ends. Everything below is this fork's own, in
+;     one block above its highest number, exactly as SPEC.md 50 puts this
+;     fork's own SECTIONS above `main`'s highest -------------------------------
+    OSAPI_JSLOT api_mem_claim     ; 0x01E8 - the claim heap (SPEC.md 50.3):
+    OSAPI_JSLOT api_mem_free      ; 0x01F0   X, same fence as the spawn
+    OSAPI_SLOT osapi_mem_avail    ; 0x01F8
+    OSAPI_SLOT osapi_font_glyphs  ; 0x0200 - the kernel's 8x8 glyph table
                                   ;          (SPEC.md 6): out SI = its offset
                                   ;          in KERNEL_SEG, AL = first code,
                                   ;          AH = last, CX = bytes per glyph
-    OSAPI_SLOT wm_onsize          ; 0x01A8 - install the resize negotiator
+    OSAPI_SLOT wm_onsize          ; 0x0208 - install the resize negotiator
                                   ;          (SPEC.md 11.1): BX = win, AX =
                                   ;          near proc. The other half of
                                   ;          docs/PAINT-NOTES.md's resize
                                   ;          complaint - wm_resize is the app
                                   ;          asking, this is the app answering
-    OSAPI_SLOT osapi_file_here    ; 0x01B0 - where the file API's names
+    OSAPI_SLOT osapi_file_here    ; 0x0210 - where the file API's names
                                   ;          resolve (SPEC.md 18.4/19.2)
-    OSAPI_SLOT osapi_file_goto    ; 0x01B8 - ...and how to put it back
-osapi_table_end:                  ; 0x01C0
+    OSAPI_SLOT osapi_file_goto    ; 0x0218 - ...and how to put it back
+osapi_table_end:                  ; 0x0220
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -347,7 +418,7 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 54 * 8
+%if OSAPI_TABLE_LEN != 66 * 8
 %error "os8088 API jump table must be exactly 54 8-byte slots"
 %endif
 
@@ -476,6 +547,24 @@ kmain:
     mov sp, STK0_TOP            ; the image, so a stack offset stays small and
     sti                         ; the kernel's own 64KB window stays for code
     cld
+
+    call cpu_detect             ; CPU tier + memory above 1MB (SPEC.md 41),
+                                ; here and nowhere else: BEFORE sched_init,
+                                ; because this is the last moment at which no
+                                ; kernel ISR is installed - the unreal-mode
+                                ; window inside xm_init runs with CR0.PE set
+                                ; and a real-mode IVT, so the only handlers
+                                ; that may fire in it are the BIOS's own, and
+                                ; a tick lost here costs nothing ([ticks] is
+                                ; zeroed by sched_init anyway)
+    call cpu_a20_enable         ; ...and VERIFY it: the feature bit is set by
+                                ; the wraparound probe, never by the poke
+                                ; (SPEC.md 41.2). A no-op on tier 0 - an 8088
+                                ; has no gate and port 0x92 belongs to
+                                ; something else there
+    call xm_init                ; size the store (int 15h AH=88h, on task 0
+                                ; per SPEC.md 7), claim the HMA, arm unreal
+                                ; mode on tier 2, publish [xm_kb] LAST
 
     call sched_init             ; pre-emption live from here on
     call evq_init
@@ -631,6 +720,10 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
                                 ; so this must be resident with it
 %include "splash.inc"           ; must be resident within the image's opening
                                 ; SPL_RESIDENT sectors (SPEC.md 15)
+%include "cpudet.inc"           ; CPU tiers + the A20 line (SPEC.md 41.1-41.3)
+%include "xmem.inc"             ; memory above 1MB (SPEC.md 41.4/41.5): after
+                                ; cpudet.inc, whose tier and feature bits it
+                                ; branches on and whose cpu_hma_claim it calls
 %include "vga12.inc"
 %include "vgabb.inc"
 %include "font.inc"
@@ -711,6 +804,12 @@ KBUF_KB    equ ((FAT_PARA + LOW_PARA) * 16 + 1023) / 1024
 %endif
 %if KLOW_SIZE + STK0_SIZE > 65536
 %error "lowbss + task 0's stack overflows one 64KB segment"
+%endif
+; 3b. menu_bar is a LITERAL byte count (.bss may not forward-reference), so
+;    nothing makes it follow MENU_BARMAX. It gained a cell the day the app
+;    name became a pull-down (SPEC.md 12.2); this is what catches the next one.
+%if MENU_BARMAX * MB_ENTSZ > 84
+%error "menu_bar is too small for MENU_BARMAX cells - raise the resb in menu.inc"
 %endif
 ; 4. the menu save-under (SPEC.md 2.2/12.4) must fit the claim menu_init
 ;    takes for it. gfx_save costs planes x rows x (byte span + 1); the two

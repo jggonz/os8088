@@ -9,8 +9,10 @@ binding contract for the addresses; this is the reasoning behind them.
 
 ## The rule
 
-**The kernel fits in the first 64KB above the BIOS data area — linear
-0x00600 through 0x105FF — and that includes its buffers.**
+**The kernel is ONE contiguous span starting at linear 0x00600, and that
+includes its buffers.** The span is `KERN_BUDGET` bytes — 70KB today, and
+64KB for as long as that was affordable (see below); it currently runs
+0x00600 through 0x11FFF.
 
 Not the code and then some scratch elsewhere: *everything*. Code, read-only
 data, `.bss`, the FAT snapshot, the directory and icon caches, the sector
@@ -31,10 +33,33 @@ starts where *this build's* kernel happens to end and the heap starts after
 the pool. Both move when the kernel does, and that is intended — a fixed
 ceiling with slack under it is memory that nothing can ever use.
 
-**If the kernel needs to grow past 64KB, that is a conversation, not a
+**If the kernel needs to grow past its budget, that is a conversation, not a
 build fix.** Raise `KERN_BUDGET` only after explaining to whoever asked for
 the feature what it costs and getting an explicit yes. The guard's error
 message points here for that reason.
+
+**That conversation has happened once.** `KERN_BUDGET` was 65,536 — the first
+64KB above the BIOS data area, which is where the "one region" rule came
+from — and it is now **71,680 (70KB)**, granted explicitly to buy the
+SPEC.md §41 extended-memory store and the two API surfaces (`wm_geom`,
+`wm_about_set`) that came with it from the other fork. What it cost, exactly:
+
+| | before | after |
+|---|---:|---:|
+| image (`.text` + `.bss`) | 50,176 B | 52,736 B |
+| whole kernel span | 65,024 B | 67,584 B |
+| spare under the budget | 512 B | 4,096 B |
+
+The 64KB *segment* limit is untouched and cannot be raised at all: `.text` +
+`.bss` are addressed through one segment with 16-bit offsets, so guard 2 caps
+them at 65,536 whatever the budget says. At 52,736 there is still 12,800 B of
+segment left, so the budget is what binds, which is the intended order — a
+budget is a decision and a segment is physics.
+
+Raising the budget also moved the **relocated boot sector**: `BOOT_RELOC`
+went 0x0940 → 0x0AA0 (linear 0x11000 → 0x12600), because guard 5 keeps the
+growing kernel clear of the sector that is still executing while it lands.
+The constant is mirrored in `boot/boot.asm` and the two must move together.
 
 ---
 
@@ -45,11 +70,11 @@ out of the same constants the guards use.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` + `.bss`) | 50,176 B | all kernel code, its read-only data, and its scratch |
+| image (`.text` + `.bss`) | 52,736 B | all kernel code, its read-only data, and its scratch |
 | task stacks | 6,656 B | 11 background slots + task 0's |
 | disk buffers | 3,584 B | directory cache, icon cache, sector scratch |
 | FAT snapshot | 4,608 B | the mounted volume's FAT, resident |
-| **total** | **65,024 B** | of a 65,536-byte budget — 512 B spare |
+| **total** | **67,584 B** | of a 71,680-byte budget — 4,096 B spare |
 
 Everything above that is somebody else's: the 60KB package pool, then the
 claim heap up to whatever int 12h reports.

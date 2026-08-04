@@ -280,6 +280,19 @@ claim; if the heap cannot fund 3KB the window still opens with
 re-mount when another window has moved the globals. `VIEW_SLOTS` (4) stays
 the Disk kind's `KD_CAP`.
 
+### 2.4 Above 1MB — the HMA and the extended-memory store (§41)
+
+Not conventional memory and not on the ladder above: a separate space this
+kernel can only reach through `xmem.inc` (§41.5), and only on a 286 or
+better. `xm_init` sizes it with `int 15h AH=88h`; `cpu_hma_claim` takes the
+first `XM_HMA_KB` (64) of it — the HMA, `HMA_SEG:0010`..`HMA_SEG:FFFF`, the
+only bytes above 1MB real mode can name directly — and the remainder is the
+pool `xm_alloc` hands out in 1KB units.
+
+**Nothing up there holds code, on any tier** (§41.3/§41.9 rule 3), and on
+tier 0 — the target machine — the whole space is zero bytes and every entry
+point refuses.
+
 ## 3. Global constants (defined once in kernel.asm, used everywhere)
 
 ```nasm
@@ -483,7 +496,7 @@ bytes are hard-coded.
 | `font_str`   | CX=x, DX=y, SI=NUL str   | draw string left→right               |
 | `font_width` | SI=NUL str               | out AX = pixel width (8 × length)    |
 | `font_str_x` / `font_width_x` | ES:SI = NUL str | the same two, reading the string through **ES** — what the `X` stubs of §20.3 call so a package's string can live in its own segment |
-| `osapi_font_glyphs` | — | out SI = the offset of `font_glyphs` in KERNEL_SEG, AL = FONT_FIRST (32), AH = FONT_LAST (126), CX = 8 bytes per glyph. API slot 0x01A0 |
+| `osapi_font_glyphs` | — | out SI = the offset of `font_glyphs` in KERNEL_SEG, AL = FONT_FIRST (32), AH = FONT_LAST (126), CX = 8 bytes per glyph. API slot 0x0200 |
 
 **Handing out the bitmaps** (`osapi_font_glyphs`) is for an app that draws
 text into its OWN pixels rather than onto the screen — apps/paint's text tool
@@ -1000,7 +1013,7 @@ W_ONSIZE equ 24  ; word: near ptr or 0 - the resize negotiator (§11.1).
                  ; Called BEFORE a new size is committed, with SI = window,
                  ; CX/DX = the proposed frame size; answers in CX/DX with the
                  ; size it will accept. NOT a template word: wm_create zeroes
-                 ; it, `wm_onsize` (API slot 0x01A8) sets it.
+                 ; it, `wm_onsize` (API slot 0x0208) sets it.
 WIN_SIZE equ 26
 MAX_WIN  equ 12
 
@@ -1107,14 +1120,14 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | `wm_hit`       | in CX=x, DX=y; out BX = topmost visible window ptr containing the point (0 if none), AL = 0 content, 1 title bar, 2 close box, 3 minimize box, 4 grow box. AL=2/AL=3 only when BX is the frontmost visible window (the only one with the boxes drawn); on any other window those regions report AL=1. AL=4 only when BX is the frontmost visible window **and** has WF_SIZABLE (and not WF_FULL): the 13×13 grow-box rect of the frame drawing above; anywhere else that region is plain content (AL=0). A WF_FULL window reports AL=0 for every point — it has no chrome. |
 | `wm_paint_all` | full repaint: desktop gray (below menu bar), then `desk_paint` (§26 — desktop icons sit on the desktop, under every window), then `dock_paint` (§30 — the dock strip sits on the desktop under every window, like the icons), menu bar, every visible window back→front (frame + white content + W_PAINT) — **except** one `wm_covered` answers yes about, which is skipped whole (§11.91). Caller holds gfx lock. |
 | `wm_content`   | in BX = win ptr; out AX = content left, DX = content top. WF_FULL set → AX = W_X, DX = W_Y (no border, no title bar — §11.2). |
-| `wm_sizable`   | in BX = win ptr, AL = 0 clear / non-zero set WF_SIZABLE. No repaint (the grow box appears at the next paint). UI-task context only (entry procs and window callbacks qualify); safe with or without the gfx lock there — every W_FLAGS writer runs on the UI task or under the lock. API slot 0x00F8 (§20.3). |
-| `wm_grow_paint`| in BX = win ptr (caller holds the gfx lock): draw the grow box **iff** BX is the frontmost visible window with WF_SIZABLE set and WF_FULL clear; a no-op otherwise, so it is always safe to call. wm_draw_win uses it after W_PAINT, and a resizable window's **self-initiated content repaint must end with it** — the white-fill idiom (§22) erases the corner, and without the call the box vanishes until the next full repaint while wm_hit still reports AL=4 there. Packages reach it through API slot 0x0108 (§20.3). |
-| `wm_fullscreen`| in AL = 1 enter (BX = win ptr) / AL = 0 exit; **caller holds the gfx lock** (the intended callers are W_ONKEY/W_ONCLICK handlers, which already do). See §11.2. Out CF=1 refused (enter while another window owns the screen), CF=0 done. API slot 0x0100 (§20.3). |
+| `wm_sizable`   | in BX = win ptr, AL = 0 clear / non-zero set WF_SIZABLE. No repaint (the grow box appears at the next paint). UI-task context only (entry procs and window callbacks qualify); safe with or without the gfx lock there — every W_FLAGS writer runs on the UI task or under the lock. API slot 0x0108 (§20.3). |
+| `wm_grow_paint`| in BX = win ptr (caller holds the gfx lock): draw the grow box **iff** BX is the frontmost visible window with WF_SIZABLE set and WF_FULL clear; a no-op otherwise, so it is always safe to call. wm_draw_win uses it after W_PAINT, and a resizable window's **self-initiated content repaint must end with it** — the white-fill idiom (§22) erases the corner, and without the call the box vanishes until the next full repaint while wm_hit still reports AL=4 there. Packages reach it through API slot 0x0118 (§20.3). |
+| `wm_fullscreen`| in AL = 1 enter (BX = win ptr) / AL = 0 exit; **caller holds the gfx lock** (the intended callers are W_ONKEY/W_ONCLICK handlers, which already do). See §11.2. Out CF=1 refused (enter while another window owns the screen), CF=0 done. API slot 0x0110 (§20.3). |
 | `wm_ptr2idx`   | in BX = win ptr (record-aligned); out AL = window index, AH = 0. Clobbers nothing else. The one public home of the `(ptr − wm_wins) / WIN_SIZE` idiom. |
 | `wm_obscured`  | in BX = win ptr; out CF=1 if any visible window above BX in z-order overlaps its frame rect. Result is only trustworthy while the caller holds the gfx lock — the UI task mutates `wm_zord`/window rects under it. Kept, but **no longer the right answer for a background painter**: it vetoes a whole frame for one covered pixel. Use `wm_clip_set` (§11.3). |
-| `wm_clip_set`  | in BX = win ptr; **caller holds the gfx lock**. Builds BX's visible region — its content rect less every visible window above it in `wm_zord`, drop shadows included — into the clip list, and arms clipping. out CF=1 the window is entirely invisible: nothing is armed, draw nothing this frame (also the answer when the region needs more than 16 rects). CF=0 armed. Preserves every register. The region is valid only until the next `gfx_unlock`, which clears it (§11.3). API slot 0x0160 (§20.3). |
-| `wm_clip_clear`| disarm clipping. Preserves every register. `gfx_unlock` already does this, so a painter only needs it to go back to drawing unclipped inside the same lock hold. API slot 0x0168 (§20.3). |
-| `wm_clip_test` | in AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); out CF=0 the whole rect lies inside **one** clip fragment, or nothing is armed; CF=1 it does not. Preserves every register. This is the question `font_char` and `icon_draw16` ask themselves, exposed so a caller that **erases a rect and then draws glyphs into it** can ask it first — see the granularity rule in §11.3. API slot 0x0170 (§20.3). |
+| `wm_clip_set`  | in BX = win ptr; **caller holds the gfx lock**. Builds BX's visible region — its content rect less every visible window above it in `wm_zord`, drop shadows included — into the clip list, and arms clipping. out CF=1 the window is entirely invisible: nothing is armed, draw nothing this frame (also the answer when the region needs more than 16 rects). CF=0 armed. Preserves every register. The region is valid only until the next `gfx_unlock`, which clears it (§11.3). API slot 0x0170 (§20.3). |
+| `wm_clip_clear`| disarm clipping. Preserves every register. `gfx_unlock` already does this, so a painter only needs it to go back to drawing unclipped inside the same lock hold. API slot 0x0178 (§20.3). |
+| `wm_clip_test` | in AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); out CF=0 the whole rect lies inside **one** clip fragment, or nothing is armed; CF=1 it does not. Preserves every register. This is the question `font_char` and `icon_draw16` ask themselves, exposed so a caller that **erases a rect and then draws glyphs into it** can ask it first — see the granularity rule in §11.3. API slot 0x0180 (§20.3). |
 
 Paint procs and key handlers run on the **UI task** (via wm_paint_all /
 dispatch) or on the window's own background task — which, since §20.6, may
@@ -1131,7 +1144,7 @@ guarded by the package's own once-flag.
 A window is resizable iff W_FLAGS bit2 (`WF_SIZABLE`) is set. The bit is
 **not** part of the 16-byte template: built-ins get it from their kind row's
 `KD_WFLAG` byte (§29.3, OR-ed into W_FLAGS by app_launch right after
-wm_create), packages call `wm_sizable` (API slot 0x00F8) from their entry
+wm_create), packages call `wm_sizable` (API slot 0x0108) from their entry
 proc after OSAPI_WM_CREATE. Fixed-layout windows — dialogs, the Control
 Panel, Minesweeper — simply never set it and nothing about them changes.
 
@@ -1149,7 +1162,7 @@ resizable window's procs are required to lay out from the live record (record
 note above). Self-initiated repaints (the fm_repaint idiom, §22) must
 white-fill using the live W_W/W_H for the same reason.
 
-**`wm_resize` (API slot 0x0198) — an app changing its own size.** In:
+**`wm_resize` (API slot 0x01D0) — an app changing its own size.** In:
 BX = window, CX = new outer width, DX = new outer height; the caller holds
 the gfx lock. Clamps exactly as a drag does (never below WMIN_W/WMIN_H, never
 past the live screen or the dock row, §39.2), re-fits the origin the way
@@ -1171,7 +1184,7 @@ the record changes — which is the whole point: nothing has been drawn at
 either size yet, so a refusal costs no repaint. The answer is a SIZE and not
 a yes/no because the case that motivated it is per-axis: apps/paint refuses a
 drag that would crop artwork, and a drag that would lose columns but not rows
-should still get its rows. Install it with `wm_onsize` (API slot 0x01A8,
+should still get its rows. Install it with `wm_onsize` (API slot 0x0208,
 BX = window, AX = a near proc in the window's own segment, 0 clears).
 The negotiator runs under the gfx lock and **must not draw** — it decides,
 returns, and draws in the W_PAINT that immediately follows.
@@ -1190,7 +1203,7 @@ everything, because wm_obscured (which gates every unbidden background
 drawer: Clock, Bounce, the Task Manager sampler) sees a frame covering the
 entire screen and reports "covered" to everyone beneath it.
 
-`wm_fullscreen` (API slot 0x0100; caller holds the gfx lock):
+`wm_fullscreen` (API slot 0x0110; caller holds the gfx lock):
 
 - **Enter** (AL=1, BX = win ptr): another window already owns the screen
   (`[wm_fs]` non-zero and ≠ BX) → CF=1, nothing changes. Else save
@@ -3459,29 +3472,45 @@ assertions in kernel.asm; the span is **54 × 8** today. `apps/os88api.inc`
 mirrors every offset as an `OSAPI_*` `%define` (§20.5).
 
 ```
-0x0010 gfx_lock        0x0090 wm_front          0x0110 dskw_write     (N)
-0x0018 gfx_unlock      0x0098 wm_content        0x0118 dskw_read      (N)
-0x0020 gfx_pixel       0x00A0 wm_obscured       0x0120 dskw_delete    (N)
-0x0028 gfx_hline       0x00A8 task_yield        0x0128 dskw_rename    (N)
-0x0030 gfx_vline       0x00B0 task_sleep        0x0130 dskw_dfree
-0x0038 gfx_fill        0x00B8 osapi_get_ticks   0x0138 menu_win_set
-0x0040 gfx_frame       0x00C0 osapi_set_color   0x0140 fdlg_open      (N)
-0x0048 gfx_fill_gray   0x00C8 osapi_mouse       0x0148 osapi_video
-0x0050 gfx_xor_rect    0x00D0 osapi_srand       0x0150 inst_pkg_spawn (X)
-0x0058 gfx_xor_fill    0x00D8 osapi_rand        0x0158 inst_pkg_alive
-0x0060 font_char       0x00E0 osapi_snd_caps    0x0160 wm_clip_set
-0x0068 font_str    (X) 0x00E8 osapi_snd_tone    0x0168 wm_clip_clear
-0x0070 font_width  (X) 0x00F0 osapi_snd_play    0x0170 wm_clip_test
-0x0078 wm_create   (X) 0x00F8 wm_sizable        0x0178 mem_claim      (X)
-0x0080 wm_show        0x0100 wm_fullscreen      0x0180 mem_free       (X)
-0x0088 wm_hide        0x0108 wm_grow_paint      0x0188 mem_avail
-                                                0x0190 gfx_blit4
-                                                0x0198 wm_resize
-                                                0x01A0 osapi_font_glyphs
-                                                0x01A8 wm_onsize
-                                                0x01B0 osapi_file_here
-                                                0x01B8 osapi_file_goto
+0x0010 gfx_lock        0x0090 wm_front          0x0120 dskw_write     (N)
+0x0018 gfx_unlock      0x0098 wm_content        0x0128 dskw_read      (N)
+0x0020 gfx_pixel       0x00A0 wm_obscured       0x0130 dskw_delete    (N)
+0x0028 gfx_hline       0x00A8 task_yield        0x0138 dskw_rename    (N)
+0x0030 gfx_vline       0x00B0 task_sleep        0x0140 dskw_dfree
+0x0038 gfx_fill        0x00B8 osapi_get_ticks   0x0148 menu_win_set
+0x0040 gfx_frame       0x00C0 osapi_set_color   0x0150 fdlg_open      (N)
+0x0048 gfx_fill_gray   0x00C8 osapi_mouse       0x0158 osapi_video
+0x0050 gfx_xor_rect    0x00D0 osapi_srand       0x0160 inst_pkg_spawn (X)
+0x0058 gfx_xor_fill    0x00D8 osapi_rand        0x0168 inst_pkg_alive
+0x0060 font_char       0x00E0 osapi_snd_caps    0x0170 wm_clip_set
+0x0068 font_str    (X) 0x00E8 osapi_snd_tone    0x0178 wm_clip_clear
+0x0070 font_width  (X) 0x00F0 osapi_snd_play    0x0180 wm_clip_test
+0x0078 wm_create   (X) 0x00F8 --- HELD ---      0x0188 cpu_info
+0x0080 wm_show         0x0100 --- HELD ---      0x0190 xm_caps
+0x0088 wm_hide         0x0108 wm_sizable        0x0198 xm_alloc
+                       0x0110 wm_fullscreen     0x01A0 xm_free
+                       0x0118 wm_grow_paint     0x01A8 xm_copy
+
+0x01B0 wm_geom         0x01D0 wm_resize         0x01E8 mem_claim      (X)
+0x01B8 --- HELD ---    0x01D8 gfx_blit4         0x01F0 mem_free       (X)
+0x01C0 --- HELD ---    0x01E0 wm_about_set      0x01F8 mem_avail
+0x01C8 --- HELD ---                             0x0200 osapi_font_glyphs
+                                                0x0208 wm_onsize
+                                                0x0210 osapi_file_here
+                                                0x0218 osapi_file_goto
 ```
+
+**Five numbers are HELD EMPTY, and that is the point of the layout.** Every
+slot above is at the number `main` uses for the same routine, which is what
+lets one package source assemble for either fork (docs/PORTING.md §3). Where
+`main` has something this fork does not — `OSAPI_SND_FM` and
+`OSAPI_SND_STREAM` at 0x00F8/0x0100 (§34.5/§34.6), and its paragraph-counting
+arena at 0x01B8..0x01C8 — the number is **reserved rather than reused**: the
+cell is `stc` / `retf`, so a stray call gets CF=1 and every register back.
+Reusing 0x01C8 for this fork's KB-counting `mem_avail` would have failed
+silently and by a factor of 64, which is exactly the class of bug the holding
+prevents. This fork's own slots start at 0x01E8, above `main`'s highest,
+mirroring how §50 puts this fork's own SECTIONS above `main`'s highest.
 
 **Offsets are not stable across kernel versions, and never were pretended
 to be.** Two things have moved them wholesale: the removal of the sound
@@ -4741,7 +4770,7 @@ built-in Note Pad kind, moved out of the kernel to reclaim the 1,383 bytes
 it cost there — 281 of code and 1,036 of .bss, nearly all of the latter a
 fixed two-instance text pool. Behaviour matches §14 plus resizing: one
 window "Note Pad" 260×180 at (60,60), **resizable** — the entry calls
-`wm_sizable` (slot 0x00F8) right after wm_create, making it the first
+`wm_sizable` (slot 0x0108) right after wm_create, making it the first
 package to exercise §11.1 and the proof that the SDK path works. Paint
 renders the buffer at 8px per char with a 6px left/top margin, wrapping at
 the content width, dropping any row whose bottom would pass the content
@@ -4805,9 +4834,9 @@ document name seeded to `NOTES.TXT` at launch, and four File commands:
 | command | behaviour |
 |---------|-----------|
 | **New** | empties the buffer and resets the name to `NOTES.TXT` |
-| **Open…** | slot 0x0140 in Open mode, default = the current name; the callback stores the chosen name and loads it |
+| **Open…** | slot 0x0150 in Open mode, default = the current name; the callback stores the chosen name and loads it |
 | **Save** (F2) | writes `np_name` — no dialog, the second and later saves of a document are silent |
-| **Save As…** | slot 0x0140 in Save mode; the callback stores the chosen name and writes it |
+| **Save As…** | slot 0x0150 in Save mode; the callback stores the chosen name and writes it |
 
 F3 is **Open…**, i.e. it now raises the dialog rather than re-reading a
 fixed file — the one behaviour change to an existing key, and the reason
@@ -4842,7 +4871,7 @@ so it never becomes stale furniture, while a key the app ignores leaves
 both the toast and the screen alone. It is drawn last, so it sits above the
 text.
 
-Save is `ES = DS` + slot 0x0110; load is slot 0x0118 with the buffer
+Save is `ES = DS` + slot 0x0120; load is slot 0x0128 with the buffer
 capacity, mapping `FERR_BIG` to the same "Too big" toast the truncation
 path uses. Neither call happens in the paint proc — both run in onkey,
 which already holds the gfx lock, so the write's stall (§18.4) lands on a
@@ -5385,8 +5414,8 @@ init-less:
 | `inst_restore` | in DI = record, lock held: clear I_FLAGS bit0, wm_show I_WIN. |
 | `inst_task_die` | in DI = the CURRENT task's instance record; no lock held; **never returns**: gfx_lock, wm_destroy I_WIN (clears wm_owner), I_WIN ← 0, gfx_unlock, then `jmp task_exit` with BX = record ptr (I_STATE is offset 0 — the release byte). Reached from Clock's and Bounce's own loops (§14) and, for packages, from `inst_pkg_alive` (§20.6). |
 | `inst_wchk` | module-internal (§20.6). in BX = an untrusted window ptr; out CF=0 if BX lies inside `wm_wins` and is record-aligned, CF=1 otherwise. Preserves everything but the flags. The fence in front of `inst_of_win` for package-supplied pointers, whose `div cl` would otherwise fault. |
-| `inst_pkg_spawn` | API slot 0x0150 (§20.6). in AX = near worker entry, BX = the package's own window ptr; **caller holds the gfx lock** (exclusion against another *spawner* is `task_spawn`'s own IF=0 window, §8, not this lock). Refuses (CF=1, nothing created) when BX fails `inst_wchk`, names no owner, names a record with I_STATE ≠ 1, that record already has I_TASK ≠ 0xFF, or the **ownership fence** rejects it — the record must be a package (I_KIND bit 7) and AX must satisfy I_SPTR ≤ AX < I_SPTR + I_SIZE, which is what ties the spawn to the *calling* instance — or when `task_spawn` finds the table full. Else `task_spawn` (AX = entry, DX = instance index derived as (record − inst_tab) >> 5, the `app_launch` idiom), I_TASK ← slot, CF=0, AL = slot. Preserves every register but AL and the flags. No rollback exists or is needed — the instance is already published and stays live on refusal. |
-| `inst_pkg_alive` | API slot 0x0158 (§20.6). in BX = the package's own window ptr; **gfx lock NOT held**; called from the worker only. Returns with every register and the flags preserved while BX names a record with I_STATE = 1 — and returns unconditionally, without exiting anything, when `sch_cur` = 0: the UI task must never `task_exit` (§8), so a wrong-context call is refused. Otherwise recovers the *running task's* record from `T_INST` (§8) and `jmp inst_task_die` — never returns. A record with I_WIN = 0 (corrupt table: nothing to `wm_destroy`, and BX = 0 there would zero the cold-entry `jmp` at 0800:0000) still exits with BX = the record, so the record, its region and its dock/tm rows are released. Only T_INST ≥ INST_MAX exits with BX = 0 — no release byte because there is no record — the `sbl_refill_task` precedent (§34.5). |
+| `inst_pkg_spawn` | API slot 0x0160 (§20.6). in AX = near worker entry, BX = the package's own window ptr; **caller holds the gfx lock** (exclusion against another *spawner* is `task_spawn`'s own IF=0 window, §8, not this lock). Refuses (CF=1, nothing created) when BX fails `inst_wchk`, names no owner, names a record with I_STATE ≠ 1, that record already has I_TASK ≠ 0xFF, or the **ownership fence** rejects it — the record must be a package (I_KIND bit 7) and AX must satisfy I_SPTR ≤ AX < I_SPTR + I_SIZE, which is what ties the spawn to the *calling* instance — or when `task_spawn` finds the table full. Else `task_spawn` (AX = entry, DX = instance index derived as (record − inst_tab) >> 5, the `app_launch` idiom), I_TASK ← slot, CF=0, AL = slot. Preserves every register but AL and the flags. No rollback exists or is needed — the instance is already published and stays live on refusal. |
+| `inst_pkg_alive` | API slot 0x0168 (§20.6). in BX = the package's own window ptr; **gfx lock NOT held**; called from the worker only. Returns with every register and the flags preserved while BX names a record with I_STATE = 1 — and returns unconditionally, without exiting anything, when `sch_cur` = 0: the UI task must never `task_exit` (§8), so a wrong-context call is refused. Otherwise recovers the *running task's* record from `T_INST` (§8) and `jmp inst_task_die` — never returns. A record with I_WIN = 0 (corrupt table: nothing to `wm_destroy`, and BX = 0 there would zero the cold-entry `jmp` at 0800:0000) still exits with BX = the record, so the record, its region and its dock/tm rows are released. Only T_INST ≥ INST_MAX exits with BX = 0 — no release byte because there is no record — the `sbl_refill_task` precedent (§34.5). |
 | `inst_launch_post` | in AL = kind: one atomic word store of kind+1 into `inst_launch` — the deferred launch channel for lock-held posters (drained by ui_task step 3, §13). Rapid double posts coalesce (last wins). |
 
 **Sound teardown (§34.3, Phase 1).** Both free points release the
@@ -6896,14 +6925,14 @@ Save, Esc is Cancel. In **Open** mode the keyboard drives the list instead
 (Up/Down/PgUp/PgDn, Enter, Esc); there is no field to type in, which is
 what the Standard File dialog this is modelled on did too.
 
-### 38.6 The API slot 0x0140 and the completion callback
+### 38.6 The API slot 0x0150 and the completion callback
 
 The table-span assertion in `kernel.asm` goes 40 × 4 → **41 × 4** (42 × 4
 since §39.8 appended `OSAPI_VIDEO`, and 44 × 4 since §20.6 appended the
 worker-task pair); `apps/os88api.inc` mirrors the equ (§20.5).
 
 ```
-0x0140 fdlg_open   in AL = 0 Open / 1 Save, BX = requester window ptr,
+0x0150 fdlg_open   in AL = 0 Open / 1 Save, BX = requester window ptr,
                    DI = completion proc (near, in the caller's image),
                    SI = default name (NUL, <= 12) or 0 for none.
                    out CF=0 accepted — the dialog is ON SCREEN when this
@@ -6950,7 +6979,7 @@ window pointer alone would not do — window slots are reused.
 
 ### 38.7 Lifecycle
 
-1. **Ask.** The application calls slot 0x0140 from a menu command or a key
+1. **Ask.** The application calls slot 0x0150 from a menu command or a key
    handler, under the lock it already holds. `fdlg_open` refuses if
    `[fdlg_win]` ≠ 0, else records the request, seeds `fdlg_name` from SI,
    re-mounts the current directory, creates the window and `wm_show`s it.
@@ -6977,7 +7006,7 @@ window pointer alone would not do — window slots are reused.
 
 | symbol | contract |
 |--------|-----------|
-| `fdlg_open` | API slot 0x0140, above. The only entry point applications have. Caller holds the gfx lock. |
+| `fdlg_open` | API slot 0x0150, above. The only entry point applications have. Caller holds the gfx lock. |
 | `fdlg_gate` | Internal. Drops the gate (and destroys the window) if `[fdlg_win]` is not used-and-visible. In: AL = 1 if the caller holds the gfx lock, 0 if not — it needs the lock to destroy and takes its own when it must. Out: CF=0 and BX = the dialog if one is live, CF=1 if none. |
 | `fdlg_reap` | UI task, no lock held. `fdlg_gate` for its side effect alone, once per loop pass. Preserves all registers. |
 | `fdlg_grab` | In: CX/DX = press point. Out: CF=1 = swallow (beeped). Preserves all registers. Called with no lock held. |
@@ -7405,13 +7434,97 @@ not, and moving costs one replay because the cache survives the repaint.
   build/apps.img` passes.
 - All three adapters, and the back buffer both off and on.
 
-## 41. cpudet.inc / xmem.inc — not in this fork
+## 41. cpudet.inc / xmem.inc — CPU tiers and memory above 1MB
 
-CPU tiers, the A20 line, the HMA and the extended-memory store are `main`'s
-§41 and have no counterpart here: this fork has no `cpudet.inc`, no
-`xmem.inc`, no `OSAPI_CPU_INFO` and no `OSAPI_XMEM_*`. Memory beyond a
-package's own segment comes from the claim heap (§50) instead. The number is
-held empty so that §42 and up mean the same thing on both forks.
+Ported from `main`, at `main`'s section number and `main`'s API slots. Two
+modules and five slots: `cpudet.inc` publishes the CPU tier and the A20 line,
+`xmem.inc` sizes the store above 1MB, allocates out of it and moves bytes
+through it. The claim heap (§50) is unaffected and remains this fork's answer
+for *conventional* memory a package cannot fit in its own segment; these are
+the answer for bulk data that does not fit conventional memory at all.
+
+**None of it exists on tier 0, which is the target machine.** An 8088 has no
+A20 line and nothing above linear 0x0FFFFF; `cpu_detect` stores `CPU_8086`,
+`xm_init` publishes zero KB, and every entry point below refuses having
+touched no port. The Task Manager reads `XMS 0/0K` there (§28).
+
+### 41.1 The three tiers, and how they are detected
+
+`[cpu_tier]` is `CPU_8086` (0), `CPU_286` (1) or `CPU_386` (2), and
+`[cpu_feat]` carries three verified bits: bit 0 A20 open, bit 1 HMA claimed,
+bit 2 unreal mode armed. Both are **initialised `.text` data, not `.bss`**:
+`-f bin` zeroes nothing at boot, so the answer a machine reads when the probe
+never ran has to be the safe one — the `bb_avail` / `snd_live` idiom of §32
+and §34.7.
+
+**The tier is INFORMATION, not permission.** Nothing branches on
+`[cpu_tier]` to decide whether the store is usable; it branches on the
+feature bits, and a package branches on the KB figure `xm_caps` answers
+(§41.8). A 386 whose A20 gate never verified has no store, and code keyed off
+the tier alone walks straight into it. The one legitimate use of the tier is
+choosing an instruction *encoding* — which transport `xm_copy` runs, whether
+`xm_arm` may execute its `cpu 386` island.
+
+### 41.2 A20 — the gate, and the verification that is not optional
+
+Both enable methods are advisory: a machine may have neither, may decode port
+0x92 to something else, may have a keyboard controller that accepts D1h/DFh
+and does nothing. So `CPU_F_A20` is set by `cpu_a20_probe` — a wraparound
+read — and by **nothing else**, never by "we wrote to the gate".
+
+### 41.3 HMA_SEG — the one segment above 1MB, and who owns it
+
+`HMA_SEG:0010` is linear 0x100000 and `HMA_SEG:FFFF` is 0x10FFEF, the highest
+byte real mode can name at all: 65,520 bytes, **data only**. The near model
+pins CS = DS = `KERNEL_SEG`, so no code ever lives up there on any tier.
+
+### 41.4 Unreal mode, and why it is FS and GS
+
+A segment register's hidden descriptor cache keeps its limit until the
+register is *reloaded*, so one plain real-mode `mov fs, ax` anywhere would
+reset it and the 4GB window would be gone — silently, as a copy that wraps
+inside 64KB. **Only `xmem.inc` writes FS or GS**, a rule the whole tree can
+keep because a case-insensitive search finds nothing else. ES and DS were
+never candidates: ES is the most contended register in the kernel and DS is
+the kernel's own segment. The tier-2 copy re-arms from the resident GDT
+inside the same `cli` window as the accesses that depend on it, because the
+BIOS is re-entered by *interrupts* and not only by kernel calls.
+
+### 41.5 xmem.inc — sizing, the allocator, and the copy
+
+`XM_MAX_BLKS` (8) entries, 1KB granularity, stamped with the calling
+instance and force-freed at teardown like a sound grant (§34.3) or a heap
+claim (§50.4). Deliberately small: this is a bulk store for a handful of
+large claims, not a malloc. Free space is **implicit** — whatever no in-use
+entry covers — so a freed block merges with its neighbours for nothing.
+
+`xm_copy` carries **one ABI over two transports**: `int 15h AH=87h` on tier
+1, unreal mode on tier 2. The caller cannot tell which ran and must not care.
+
+### 41.6 What the Task Manager reports
+
+One line, `XMS used/sizedK`, directly **below** the package-pool map and
+above the process list (§28). It gets no map of its own, and that is the
+honest layout rather than a missing feature: the two maps above it are
+conventional memory and a magnified slice of conventional memory, and
+extended memory is in neither — real mode has no address for it, which is the
+whole reason `xm_copy` exists.
+
+### 41.8 The package ABI
+
+Five slots at `main`'s numbers: `OSAPI_CPU_INFO` (0x0188), `OSAPI_XMEM_CAPS`
+(0x0190), `OSAPI_XMEM_ALLOC` (0x0198), `OSAPI_XMEM_FREE` (0x01A0) and
+`OSAPI_XMEM_COPY` (0x01A8). What ALLOC returns is an **opaque 32-bit token**,
+not a pointer: every byte crosses through COPY. UI-task context only — on
+tier 1 the copy goes through a BIOS call some 286 BIOSes implement by
+resetting the CPU, which taken under the gfx lock is a dead machine.
+
+### 41.9 Forbidden (binding)
+
+1. Nothing above `cpudet.inc` may touch an A20 port or assume a gate exists.
+2. A `cpu 386` island is **assembly-time permission only** — an island
+   reached on a 286 is an illegal-opcode trap on a machine with no handler.
+3. No code above 1MB, on any tier, ever.
 
 ## 42. Paint — the seventh package (apps/paint/paint.asm)
 
@@ -7874,6 +7987,22 @@ auto-plays, deals and drags that empties a column outright, the incrementally
 drawn content is **byte-identical** to the same position forced through a full
 `W_PAINT`, and still identical after the window is moved and played on again.
 
+### 43.8 About Solitaire
+
+Registered with `OSAPI_ABOUT_SET` (§12.2) from the entry proc, so the app's
+name in the bar becomes a one-item pull-down. Picking it is a window callback
+like any other: under the gfx lock, billed to the instance.
+
+**The panel is state, not a modal loop.** `[sol_abon]` goes up, the content
+is redrawn with the credit on top, and the next click or key anywhere in the
+window takes it down again (`sol_abdismiss`, which returns CF=1 so the caller
+spends that click doing nothing else). A loop here would hold the gfx lock
+against every background task for as long as the player left the credits up.
+
+Measured, never pinned: the widest line sets the width and the line count
+sets the height, both clamped to the content, so it is right on all three
+adapters (§39) and nothing needs re-measuring when a line changes.
+
 ## 44. Arkanoid — the ninth package (apps/arkanoid/arkanoid.asm)
 
 A brick-breaker over the published package ABI. Prefix `ark_`, embedded icon,
@@ -8026,6 +8155,18 @@ white **notch** rather than a second colour, and an armed paddle grows two
 **muzzles** rather than merely turning red.
 
 ---
+
+### 44.7 The credits are a panel, and the worker must be held off it
+
+Same shape as §43.8 — `OSAPI_ABOUT_SET`, a measured panel, dismissed by the
+next click, key or menu pick — with one thing Solitaire does not have to
+worry about: **a worker task drawing underneath it**.
+
+The game loop is the worker (§44.1), so while `[ark_abon]` is set the worker
+takes the gfx lock, arms its clip, sees the flag and unlocks without drawing.
+The UI task owns the content until the panel comes down, and the game is
+paused underneath rather than running invisibly. Every full repaint re-draws
+the panel last, so it stays on top of whatever the resume puts back.
 
 ## 50. memory.inc — the claim heap
 

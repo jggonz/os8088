@@ -76,6 +76,28 @@ shipped images are always built without either.
 make sees an up-to-date `kernel.bin`, boots the previous adapter, and it reads exactly
 like the probe being broken.
 
+**Installing the toolchain in a fresh container (read this before fighting apt).**
+`nasm` installs normally. `qemu-system-x86` does **not**: the package index
+lists the `noble-updates` build, whose `.deb` 404s on `archive.ubuntu.com` and
+then times out against `security.ubuntu.com`, so a plain
+`apt-get install qemu-system-x86` burns several minutes and fails. Two things
+fix it, and both are needed:
+
+```
+apt-get update                       # the shipped index is stale; this is slow
+V='1:8.2.2+ds-0ubuntu1'              # the BASE noble version, not -updates
+apt-get install -y --no-install-recommends \
+        "qemu-system-x86=$V" "qemu-system-common=$V" "qemu-system-data=$V"
+```
+
+`-t noble` is **not** enough — it still resolves to the `-updates` version.
+Pin all three packages explicitly. `--no-install-recommends` skips the
+gstreamer/libcaca display extras, which 404 the same way and which a headless
+`-display none` run never touches. If a previous attempt is wedged, clear
+`/var/lib/dpkg/lock-frontend` and re-run `dpkg --configure -a` first, and do
+not `pkill -f apt-get` from inside a Bash tool call — the pattern matches the
+call's own shell and kills it.
+
 Requires `nasm`, `qemu-system-i386`, `python3`. No linker anywhere — everything is `nasm -f bin` flat binaries (deliberately, to avoid Apple's Mach-O-only toolchain).
 
 There are no unit tests. Testing = boot `make test`, then drive it over QMP:
@@ -139,7 +161,7 @@ Four things are load-bearing:
 - **`gfx_unlock` clears the clip.** The region is computed from `wm_zord` and the window rects, which the UI task mutates only under the lock, so it is valid for exactly one lock hold and meaningless after. Dying with the lock is also what keeps the drag outline and the menu highlights unclipped (rule 2) without either of them knowing the region exists.
 - **`wm_paint_all` is never clipped.** It draws back to front and the painter's algorithm resolves overlap for free. Clipping is for asynchronous single-window drawing only.
 - **Two primitives clip whole-shape, not per-pixel**: `font_char`'s 8x8 cell and `ico_core`'s icon body, via `wm_clip_test` — neither can draw half a shape, and both already skip one that would cross a *screen* edge. And `gfx_xor_rect` decomposes into four `gfx_xor_fill` strips first, because an outline is not the intersection of its bounding rect with anything.
-- **The granularity rule, which is the sharp edge.** Fills clip per pixel and glyphs clip per whole cell, so **anything that erases a rect and then draws text into it must not let the two disagree**. Ungated, a window cut horizontally by another window's edge gets its visible rows white-filled and then no text back in them — it goes *blank*, not stale, and re-blanks on every update. Two ways out, both in the tree: erase per cell behind a `wm_clip_test` on that cell (`app_clk_render`), or gate the whole erase+draw pair on a `wm_clip_test` of the whole rect and skip both (`fr_status`). `wm_clip_test` is API slot 0x0170 for exactly this. Solid-only drawing is unaffected — Bounce erases and redraws with `gfx_fill` at both ends.
+- **The granularity rule, which is the sharp edge.** Fills clip per pixel and glyphs clip per whole cell, so **anything that erases a rect and then draws text into it must not let the two disagree**. Ungated, a window cut horizontally by another window's edge gets its visible rows white-filled and then no text back in them — it goes *blank*, not stale, and re-blanks on every update. Two ways out, both in the tree: erase per cell behind a `wm_clip_test` on that cell (`app_clk_render`), or gate the whole erase+draw pair on a `wm_clip_test` of the whole rect and skip both (`fr_status`). `wm_clip_test` is API slot 0x0180 for exactly this. Solid-only drawing is unaffected — Bounce erases and redraws with `gfx_fill` at both ends.
 
 Overflow (more than 16 rects) degrades to CF=1, "skip this frame" — exactly what `wm_obscured` used to say, so it cannot regress anything. `wm_obscured` stays, and `cp_tick` and `tm_update` still use it: it is the cheaper answer for a drawer that repaints its whole pane in one go.
 
@@ -317,7 +339,7 @@ Two things about it are load-bearing and easy to undo by accident:
   bin` zeroes nothing and `fdlg_grab` reads it on the machine's very first
   mouse press.
 
-`fdlg_open` (API slot 0x0140) is called from a window callback that already
+`fdlg_open` (API slot 0x0150) is called from a window callback that already
 holds the gfx lock, so it creates and shows the window inline and returns; the
 answer comes back later through a completion callback, run after the dialog is
 destroyed so the app repaints onto clean screen.
@@ -360,7 +382,7 @@ build/*.o88        --os88disk.py--> build/apps.img / apps360.img   (FAT12 floppy
 
 The data disk is a standard **FAT12** volume (SPEC.md §19) — DOS, Windows, macOS and Linux all mount and write it, and since SPEC.md §18.4 so does os8088; every byte read off it is still treated as hostile. `disk_mount` validates the BPB against the 17-rule table in SPEC.md §18.2 before trusting any derived number, snapshots the FAT into `FAT_SEG` (ES-only, `dsk_next_clus` its single reader), re-shapes the root directory into synthesized 32-byte entries (volume label, LFN, subdirectory, hidden/system and deleted entries filtered; 8.3 display names like `MINES.O88`; 32-entry cap), and harvests icons by peeking each type-1 entry's first sector — a v3 `.o88` with the embedded-icon flag donates bytes 32..95, everything else gets the all-zero generic-icon sentinel. Loads go through `dsk_read_chain`, a size-driven cluster-chain walk with run coalescing: files a host OS wrote back fragmented load fine, a corrupt chain fails bounded as "Bad package", and FAT16 (reachable only on 2.88M test geometry — cluster count decides, per the Microsoft spec) differs only in `dsk_next_clus`'s entry decode.
 
-**Writing** is `kernel/diskw.inc` (prefix `dskw_`, the only caller of `disk_write`): seven operations — write (create or replace), read, delete, rename, dfree, plus `dskw_mkdir` and `dskw_rmdir` for folders (SPEC.md §18.5/§18.6) — the first five reached by the OS directly and by packages through API slots 0x0110..0x0130, UI-task context only. Names resolve in the volume's **current directory** (`[dsk_cwd]`, SPEC.md §19.2), not the root. Three rules are binding and easy to break by accident. (1) **Commit order**: allocate + write the data, flush the FAT, *then* write the directory entry (one sector — the commit), *then* free the replaced chain and flush again; a crash leaks lost clusters, never a cross-link. (2) **Rollback**: any failure before the commit re-reads the FAT off the disk (`dskw_refat`), so a half-built chain cannot survive in RAM to be flushed later. (3) **Coherence by remount**: a successful metadata change re-runs `disk_mount`, so `disk_dir`/`disk_icons`/`disk_nfiles` stay exactly a mount snapshot and no new staleness rule enters the kernel. Writes are gated on `[dsk_mntok]`, set only by a fully successful mount — which is why the boot floppy (no valid BPB) can never be written. Verify write changes with the `apps/filetest` gate package (`make test-snd TESTAPPS=build/filetest.img`, plus the `-frag` image) **and** `python3 tools/os88disk.py --verify <img>` from the host afterwards — the in-kernel free-space check and the host fsck catch different bugs.
+**Writing** is `kernel/diskw.inc` (prefix `dskw_`, the only caller of `disk_write`): seven operations — write (create or replace), read, delete, rename, dfree, plus `dskw_mkdir` and `dskw_rmdir` for folders (SPEC.md §18.5/§18.6) — the first five reached by the OS directly and by packages through API slots 0x0120..0x0140, UI-task context only. Names resolve in the volume's **current directory** (`[dsk_cwd]`, SPEC.md §19.2), not the root. Three rules are binding and easy to break by accident. (1) **Commit order**: allocate + write the data, flush the FAT, *then* write the directory entry (one sector — the commit), *then* free the replaced chain and flush again; a crash leaks lost clusters, never a cross-link. (2) **Rollback**: any failure before the commit re-reads the FAT off the disk (`dskw_refat`), so a half-built chain cannot survive in RAM to be flushed later. (3) **Coherence by remount**: a successful metadata change re-runs `disk_mount`, so `disk_dir`/`disk_icons`/`disk_nfiles` stay exactly a mount snapshot and no new staleness rule enters the kernel. Writes are gated on `[dsk_mntok]`, set only by a fully successful mount — which is why the boot floppy (no valid BPB) can never be written. Verify write changes with the `apps/filetest` gate package (`make test-snd TESTAPPS=build/filetest.img`, plus the `-frag` image) **and** `python3 tools/os88disk.py --verify <img>` from the host afterwards — the in-kernel free-space check and the host fsck catch different bugs.
 
  Packages are format v3 (SPEC.md §20.2) and **own a segment**: assembled at org 0, loaded on a paragraph boundary out of the `PKG_SEG` pool (first-fit; occupancy derived from the instance table), bss zeroed, entry far-called with DS = CS = the package's own segment. There is no relocation of any kind — no dual assembly, no reloc table, no author rule about whole-word addresses — and `tools/os88pkg.py` is a validator rather than a generator.
 
@@ -370,7 +392,7 @@ Three things carry the boundary, and each is solved once rather than per call si
 - **Calling in.** The window record carries **one** far pointer, `W_DISP`/`W_SEG`, aimed at a three-byte **dispatcher** in the package's header (`call bp` / `retf`, at `PKG_DISP` = 12). Every callback stays an ordinary near proc with a near `ret` — a package author never writes `retf`, so a missing one cannot exist — and dispatch is re-entrant across packages because the pointer comes out of the record, not a global. `wm_pkgcall` is the single site.
 - **Reading what you were handed.** **ES = KERNEL_SEG on entry to every callback**, because the window record and the file dialog's name buffer live there. `[es:bx+W_W]`, not `[bx+W_W]` — without the override a package reads its own image at that offset, which assembles cleanly and runs wrong.
 
-Each instance may own one worker task, spawned from a callback and torn down through `OSAPI_TASK_ALIVE`. **Multiple packages — or multiple instances of one — run at once**; closing one frees its region *and every heap claim it held*. **Root-directory order on the apps disk is pinned in the Makefile (the `APPS` list): mines, hello, notepad, piano, fractal, paint, solitaire, arkanoid — the kernel filters the volume-label entry, so mines stays index 0; tests click by row, and new packages append at the end so the indices hold.** A package's file name is an 8.3 stem, so it is not always the app's name: Solitaire ships as `SOLITAIR.O88` and carries `SOLITAIRE` in its 16-byte header field, which is what the dock and the Task Manager show.
+Each instance may own one worker task, spawned from a callback and torn down through `OSAPI_TASK_ALIVE`. **Multiple packages — or multiple instances of one — run at once**; closing one frees its region *and every heap claim it held*. **The apps disk is **foldered** (SPEC.md §19.2): the root holds `APPS` and `GAMES` and nothing else, so root indices are 0 = APPS, 1 = GAMES and a package is two double-clicks away. Order inside each folder is pinned in the Makefile (`APPS_TOOLS` = hello, notepad, piano, fractal, paint; `APPS_GAMES` = mines, solitair, arkanoid) — tests click by row, new packages append at the end of their folder, and each folder's indices are now independent of what the other holds.** A package's file name is an 8.3 stem, so it is not always the app's name: Solitaire ships as `SOLITAIR.O88` and carries `SOLITAIRE` in its 16-byte header field, which is what the dock and the Task Manager show.
 
 ### The clock is a ladder, not a BIOS call (SPEC.md §37.90)
 
@@ -407,6 +429,53 @@ Three things about it are load-bearing:
 (see Commands above); the Control Panel's Date/Time page names the rung that
 answered, because on a machine whose clock will not hold a setting that is the
 whole diagnosis.
+
+### What came back from `main` (SPEC.md §41, §12.2, §11)
+
+The forks were resynced once, partially and deliberately. Four things crossed:
+
+- **The API slot numbers.** Every slot whose contract matches `main`'s is now
+  at `main`'s number, so one package source assembles for either fork. Five
+  numbers are **held empty** rather than reused — `OSAPI_SND_FM` and
+  `OSAPI_SND_STREAM` (0x00F8/0x0100, no FM or SB sink here) and `main`'s
+  paragraph-counting arena (0x01B8..0x01C8, this fork's heap counts KB). A
+  held cell is `stc`/`retf`: CF=1 and every register back. The rule is that
+  **a slot number never means two different contracts** — reusing 0x01C8 for
+  a KB-based `mem_avail` would have failed silently and by a factor of 64.
+  This fork's own slots start at 0x01E8, above `main`'s highest.
+- **`OSAPI_WM_GEOM` (0x01B0).** Content width/height and visibility in one
+  call. Reading `[es:bx+W_W]` still works here and most apps still do it, but
+  those are FRAME dimensions and every caller repeated the same
+  `-2` / `-TITLE_H-1`; this is that subtraction in one place, at the number a
+  package written for `main` already calls.
+- **`OSAPI_ABOUT_SET` (0x01E0).** The app's name in the bar becomes a
+  one-item pull-down, `About <Name>`. The cell is **appended last** in
+  `menu_bar` so the app's own menus keep bar index == set index + 1 and
+  `ui_dispatch`'s `dec ah` needs no adjustment; `[menu_abcell]` names it.
+  Both its strings live in one kernel buffer — the item is `'About Paint'`
+  and the title is `menu_abstr+MENU_ABPFX_LEN`, the same bytes from the name
+  onward — so its `MB_SEG` is 0 even under a package. Solitaire and Arkanoid
+  ship credit panels behind it; Arkanoid's also holds its **worker** off the
+  content while the panel is up, or the game would draw underneath it.
+- **`cpudet.inc` + `xmem.inc` (§41).** CPU tiers, the A20 line and the store
+  above 1MB, at `main`'s five slots. On tier 0 — the target machine — all of
+  it is zero KB and every entry point returns having touched no port. The
+  claim heap is unaffected: §50 is still the answer for *conventional* memory
+  a package cannot fit in its own segment, and §41 is the answer for bulk
+  data that does not fit conventional memory at all. The Task Manager shows
+  it as one `XMS used/sizedK` line **below** the package-pool map, with no map
+  of its own — real mode has no address for it, so it is in neither of the
+  two maps above (SPEC.md §41.6).
+
+**This is what raised `KERN_BUDGET` from 64KB to 70KB** — the one time it has
+moved, granted explicitly, and `docs/KERNEL-MEMORY.md` records what it cost.
+The 64KB *segment* limit (guard 2) is untouched and unraisable: 16-bit
+offsets. Raising the budget also moved `BOOT_RELOC` (0x0940 → 0x0AA0), which
+is mirrored in `boot/boot.asm`.
+
+The apps disk is **foldered** now, like `main`'s: `APPS/` and `GAMES/`, via a
+`DIR:` prefix per package in the Makefile. Root indices are 0 = APPS,
+1 = GAMES, and a package is two double-clicks away rather than one.
 
 ### The claim heap (SPEC.md §50, `kernel/memory.inc`)
 

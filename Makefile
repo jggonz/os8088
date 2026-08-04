@@ -259,21 +259,31 @@ $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 tools/os88disk.py
 # mount. dsk_next_clus / dskw_setfat keep their FAT16 halves, unreachable.
 
 # The software floppies (drive B:) hold packages, not boot code - os88fs only.
-# Directory order is pinned: mines first, hello second (tests rely on it);
-# notepad third, piano fourth, fractal fifth, paint sixth and solitaire
-# seventh, so earlier indices hold. New packages ALWAYS append at the end -
-# the scripted tests click the Disk window by row index. (Recorder was the
-# fourth entry until the sound cards were removed - SPEC.md 34 - so
-# everything after it moved down one row.)
-APPS := $(BUILD)/mines.o88 $(BUILD)/hello.o88 $(BUILD)/notepad.o88 \
-        $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88 \
-        $(BUILD)/solitair.o88 $(BUILD)/arkanoid.o88
+# The volume is FOLDERED (SPEC.md 19.2): the root holds APPS and GAMES and
+# nothing else, so the root indices are 0 = APPS, 1 = GAMES and a package is
+# two double-clicks away rather than one. Order inside each folder is pinned
+# and new packages ALWAYS append at the end of their folder - the scripted
+# tests click the Disk window by row index, and every index inside a folder
+# is now independent of what the other folder holds. (Recorder was in APPS on
+# the other fork; the sound cards went with it - SPEC.md 34.5/34.6 - so this
+# fork's APPS is one shorter and its indices differ from `main`'s by one from
+# `piano` on.)
+APPS_TOOLS := $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/piano.o88 \
+              $(BUILD)/fractal.o88 $(BUILD)/paint.o88
+APPS_GAMES := $(BUILD)/mines.o88 $(BUILD)/solitair.o88 $(BUILD)/arkanoid.o88
+APPS := $(APPS_TOOLS) $(APPS_GAMES)
+
+# ...and the same list with the folder each package lands in. os88disk.py
+# reads a "DIR:" prefix per package, so the grouping lives here rather than
+# in the tool.
+APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
+            $(addprefix GAMES:,$(APPS_GAMES))
 
 $(APPSIMG): $(APPS) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(APPS)
+	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS)
 
 $(APPSIMG360): $(APPS) tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 360 $(APPS)
+	python3 tools/os88disk.py -o $@ --size 360 $(APPSARGS)
 
 # The GUI reads a Microsoft serial mouse on COM1; QEMU emulates one natively.
 MOUSE := -chardev msmouse,id=m0 -serial chardev:m0

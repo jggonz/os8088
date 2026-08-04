@@ -78,7 +78,16 @@ TMM_M2_Y1   equ 43              ; package-pool map frame top
 TMM_M2_Y2   equ 58              ; frame bottom (interior rows 44..57)
 TMM_HSQ_X   equ 105             ; the claim swatch, centred in the two-space
                                 ; gap between the RAM and HEAP figure pairs
-TMM_HDR_Y   equ 62              ; "NAME    ADDR SIZE   HEAP" header line
+TMM_XMS_Y   equ 62              ; 'XMS nnn/nnnK' - memory above 1MB
+                                ; (SPEC.md 41), directly BELOW the pool map
+                                ; because that is where it is: the two maps
+                                ; above are the conventional address space
+                                ; and a magnified slice of it, and extended
+                                ; memory is not in either - it has no
+                                ; conventional address to draw at. So it gets
+                                ; a figure line and no map, under the ones
+                                ; that do. On tier 0 it reads 'XMS 0/0K'
+TMM_HDR_Y   equ 74              ; "NAME    ADDR SIZE   HEAP" header line
 
 ; --- what the periodic refresh checks before it draws (SPEC.md 28) -----------
 ; The rows have tm_rowck; these are the five things AROUND them that cost
@@ -90,7 +99,8 @@ TMC_PKG     equ 1               ; the PACKAGES readout line
 TMC_MRAM    equ 2               ; the conventional-memory map interior
 TMC_MPOOL   equ 3               ; the package-pool map interior
 TMC_BAR     equ 4               ; the performance view's RAM bar
-TMC_N       equ 5
+TMC_XMS     equ 5               ; the XMS readout line (SPEC.md 41)
+TMC_N       equ 6
 
 ; Every line in this window is composed into tm_str before any of it is
 ; drawn - that is what lets one hash decide whether to draw it at all - so
@@ -126,7 +136,7 @@ TM_KBUF_KB  equ KBUF_KB         ; the four buffers alone - what the RAM bar
                                 ; draws in its own shade
 TM_POOL_KB0 equ PKG_SEG / 64    ; where the package pool starts, in KB
 TM_POOL_KB  equ PKG_PARA / 64   ; ...and how big it is
-TMM_ROW_Y   equ 74              ; first process row (same TM_ROW_H pitch)
+TMM_ROW_Y   equ 86              ; first process row (same TM_ROW_H pitch)
 TMM_ROWS    equ INST_MAX + 7    ; System, its four buffer rows, the two
                                 ; headings, every instance - 19 x TM_ROW_H
                                 ; from TMM_ROW_Y is 279 of the 281-pixel
@@ -185,7 +195,7 @@ tm_kinit:
     ret
 
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
-tm_tpl:     dw 250, 100, 232, 300, tm_ttl, tm_paint, 0, tm_click
+tm_tpl:     dw 250, 100, 232, 312, tm_ttl, tm_paint, 0, tm_click
 tm_ttl:     db 'Task Manager', 0
 tm_sname:   db 'TaskMgr', 0     ; KD_NAME: fits the 7-char NAME column
 
@@ -217,6 +227,7 @@ tm_s_mhdr:  db 'NAME    ADDR SIZE   HEAP', 0  ; 24 chars, the row width.
 tm_s_heap:  db '  HEAP ', 0     ; + claimed/size KB (SPEC.md 50). The two
                                 ; leading spaces are the RAM line's gap, and
                                 ; the claim swatch is drawn into them
+tm_s_xms:   db 'XMS ', 0        ; + used/size KB above 1MB (SPEC.md 41)
 tm_s_pool:  db 'PACKAGES ', 0   ; + allocated/size KB of the pool. The two
                                 ; caption lines are CAPS and the list's rows
                                 ; are mixed case, which is the whole of the
@@ -1013,6 +1024,7 @@ tm_upd_mem:
     call tm_txt_ram_y
     call tm_map_ram
     call tm_cap_pool
+    call tm_cap_xms
     call tm_map_pool
     call tm_rows_mem
 
@@ -1075,9 +1087,82 @@ tm_draw_mem:
 
     call tm_map_ram
     call tm_cap_pool
+    call tm_cap_xms
     call tm_map_pool
     call tm_rows_mem
 
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_cap_xms - white-fill the caption band and draw "XMS nnn/nnnK" (used /
+;              sized, SPEC.md 41.6)
+; in:  nothing
+; out: nothing
+; clobbers: nothing (flags only)
+;
+; No map goes with it, and that is the honest layout rather than a missing
+; feature: the two maps above are conventional memory and a magnified slice
+; of conventional memory, and extended memory is in NEITHER - real mode has
+; no address for it, which is the whole reason xm_copy exists (SPEC.md 41.5).
+; A third bar would have to invent a scale of its own and would read as if
+; it were part of the same span. So: the figures, directly under the last
+; map, above the process list.
+;
+; On tier 0 - the target machine - this reads 'XMS 0/0K' and costs the
+; refresh one string compare, because xm_caps answers 0 having touched
+; nothing (SPEC.md 41.9 rule 1).
+; -----------------------------------------------------------------------------
+tm_cap_xms:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    call xm_caps                ; AX = KB still free, [xm_kb] = the whole pool
+    mov bx, [xm_kb]
+    push bx
+    sub bx, ax                  ; BX = KB in use: sized minus free
+    mov ax, bx
+    pop bx
+    push ax
+    push bx
+    mov di, tm_str
+    mov si, tm_s_xms
+    call tm_copy
+    pop bx                      ; BX = total, AX = used
+    pop ax
+    call tm_put5                ; FIVE digits, not tm_kpair's three: AH=88h
+    mov byte [di], '/'          ; answers up to 65,535 KB and tm_put3 emits a
+    inc di                      ; non-digit above 999. Every other figure in
+    mov ax, bx                  ; this window is bounded by 640K and fits
+    call tm_put5
+    mov byte [di], 'K'
+    inc di
+    mov byte [di], 0
+
+    call tm_rowsum              ; unchanged? then so are its pixels
+    mov bx, tm_elck + 2*TMC_XMS
+    call tm_elchk
+    jc .out
+
+    mov ax, TMM_XMS_Y
+    call tm_lfill
+    mov byte [gfx_color], CBLACK
+    mov cx, [tm_cx]
+    add cx, 6
+    mov dx, [tm_cy]
+    add dx, TMM_XMS_Y
+    mov si, tm_str
+    call font_str
+.out:
     pop di
     pop si
     pop dx
@@ -2777,6 +2862,53 @@ tm_kpair:
     mov byte [di], 'K'
     inc di
     mov byte [di], 0
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_put5 - decimal 0..65535 as 5 chars at DI, right-aligned, space-padded
+;
+; tm_put3's shape does not extend: it emits one digit per hard-coded place,
+; and extended memory needs five of them - int 15h AH=88h answers up to
+; 65,535 KB and tm_put3 emits a non-digit above 999. This fills the field
+; with spaces and writes digits leftward from the ones column instead, so
+; the padding falls out of the division rather than out of a chain of
+; special cases.
+;
+; in:  AX = value, DI = dest
+; out: DI advanced by 5
+; clobbers: nothing else (internal helper)
+; -----------------------------------------------------------------------------
+tm_put5:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+
+    mov bx, di
+    mov cx, 5
+.pad:
+    mov byte [bx], ' '
+    inc bx
+    loop .pad
+    dec bx                      ; BX = the ones column
+
+    mov cx, 10
+.dig:
+    xor dx, dx
+    div cx                      ; AX = quotient, DX = this digit
+    add dl, '0'
+    mov [bx], dl
+    dec bx
+    or ax, ax
+    jnz .dig                    ; at most 5 passes: AX <= 65535
+
+    pop di
+    add di, 5
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
