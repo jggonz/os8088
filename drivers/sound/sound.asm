@@ -61,9 +61,36 @@ snd_entry:
     cmp al, DRVV_DETACH
     je snd_detach
     ; --- attach ---------------------------------------------------------------
+    ; TWO tiers, independently present. Either one alone is worth attaching
+    ; for, so the refusal is only when NEITHER answers - and the service
+    ; table is built from what actually replied, so a machine with an AdLib
+    ; and no Sound Blaster publishes FM and no stream verb at all.
+    mov byte [drv_up], 0
     call opl_probe              ; the timer-flag dance; a present chip is
-    jc .nohw                    ; FULLY initialised before this returns
+    jc .nofm                    ; FULLY initialised before this returns
     mov byte [drv_up], 1
+    mov word [snd_services+DSV_FM], opl_fm_op
+    mov word [snd_services+DSV_TONE], opl_tone
+    mov word [snd_services+DSV_RELINST], opl_release_inst
+    or word [snd_services+DSV_CAPS], SND_CAP_FM
+    mov word [snd_services+DSV_NAME], snd_s_opl
+.nofm:
+    call sbl_attach             ; the reset scan, then the DMA buffer
+    jc .nosb
+    mov byte [drv_up], 1
+    mov word [snd_services+DSV_STREAM], sbl_stream_op
+    mov word [snd_services+DSV_TICK], sbl_tick
+    or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN
+    cmp word [snd_services+DSV_NAME], 0
+    jne .nosb                   ; DSV_NAME is what the Control Panel's Sound
+    mov word [snd_services+DSV_NAME], snd_s_sb   ; page calls the CARD ROW,
+                                ; and that row is the TONE sink - so an OPL2
+                                ; keeps the name when both are present, and
+                                ; a Sound Blaster only takes it when it is
+                                ; the only card there is
+.nosb:
+    cmp byte [drv_up], 0
+    je .nohw
     mov si, snd_services
     clc
     ret
@@ -81,6 +108,14 @@ snd_detach:
     push cx
     cmp byte [drv_up], 0
     je .out
+    call sbl_detach             ; the Sound Blaster FIRST: it is the tier
+                                ; with an interrupt vector and a worker task
+                                ; in it, and neither may outlive this call -
+                                ; the kernel frees our image the moment we
+                                ; return (SPEC.md 51.7)
+    cmp word [snd_services+DSV_TONE], 0
+    je .done                    ; no OPL2 was ever found: nothing below is
+                                ; ours to silence
     mov cl, 0
 .off:
     call opl_keyoff             ; every voice down, claimed or not
@@ -94,23 +129,37 @@ snd_detach:
     mov ax, 0xBD00
     call opl_wr
     call opl_state_init         ; forget every claim: a reload starts clean
+.done:
     mov byte [drv_up], 0
+    mov word [snd_services+DSV_CAPS], 0     ; a reload rebuilds the table
+    mov word [snd_services+DSV_FM], 0       ; from what answers THEN
+    mov word [snd_services+DSV_STREAM], 0
+    mov word [snd_services+DSV_TICK], 0
+    mov word [snd_services+DSV_RELINST], 0
+    mov word [snd_services+DSV_TONE], 0
+    mov word [snd_services+DSV_NAME], 0
 .out:
     pop cx
     pop ax
     ret
 
 ; --- the service table (drivers/os88drv.inc) ---------------------------------
+; BUILT AT ATTACH, not authored: the two tiers are independently present, so
+; what this publishes is what actually answered. A machine with only an
+; AdLib gets FM and a tone sink and no stream verb; one with only a Sound
+; Blaster gets streams and leaves tones on the PC speaker, which is right -
+; an SB's tone tier would be a DAC loop, and the speaker is free.
 snd_services:
-    dw SND_CAP_FM               ; DSV_CAPS: what we add to OSAPI_SND_CAPS
-    dw opl_fm_op                ; DSV_FM
-    dw 0                        ; DSV_STREAM - the Sound Blaster's, not ours
-    dw 0                        ; DSV_TICK - FM needs no per-tick work
-    dw opl_release_inst         ; DSV_RELINST
-    dw snd_s_opl                ; DSV_NAME
-    dw opl_tone                 ; DSV_TONE: tones move off the speaker
+    dw 0                        ; DSV_CAPS
+    dw 0                        ; DSV_FM
+    dw 0                        ; DSV_STREAM
+    dw 0                        ; DSV_TICK
+    dw 0                        ; DSV_RELINST
+    dw 0                        ; DSV_NAME
+    dw 0                        ; DSV_TONE
 
 snd_s_opl:  db 'AdLib', 0
+snd_s_sb:   db 'Sound Blaster', 0
 
 ; =============================================================================
 ; OPL2 geometry and data
@@ -692,6 +741,8 @@ opl_init:
     pop cx
     pop ax
     ret
+
+%include "sb.inc"               ; the Sound Blaster half (SPEC.md 34.5/34.6)
 
 ; =============================================================================
 ; State. A driver has no .bss: these ship zeroed inside the image

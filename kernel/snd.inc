@@ -326,6 +326,10 @@ spk_pcm_idle:
     mov byte [snd_ch2mode], 0
     mov byte [snd_pcm_busy], 0
     popf
+    push dx                     ; ...and tell the other tier the machine is
+    xor dl, dl                  ; its own again (SPEC.md 34.9). Outside the
+    call snd_str_busy           ; IF=0 window: this is a far call into a
+    pop dx                      ; driver, not a port write
     pop ax
     ret
 
@@ -956,6 +960,11 @@ osapi_snd_play:
     pop bx
     mov bh, ah
 
+    mov dl, 1                   ; the OTHER tier, asked BEFORE the grant
+    call snd_str_busy           ; window opens - so this refusal exits by
+    jnc .grant                  ; the plain path, with no popf owed
+    mov ax, 1                   ; busy: a stream is open (SPEC.md 34.9)
+    jmp .err
 .grant:
     pushf                       ; --- the grant window (SPEC.md 34.3) ------
     cli
@@ -1040,6 +1049,44 @@ osapi_snd_play:
 ; =============================================================================
 
 section .text
+
+; -----------------------------------------------------------------------------
+; snd_str_busy - the two tiers that must never overlap (SPEC.md 34.9)
+;
+; in:  DL = 1 a PCM_EXCL clip is about to start, 0 it has finished
+; out: CF = 1 a background stream is open, so the clip must be refused
+; clobbers: nothing (flags)
+;
+; **The kernel is the only side that can see both.** An exclusive clip raises
+; sch_lock for its whole duration, which would freeze a loaded driver's refill
+; worker and force its stream through the underrun path; and a stream's block
+; IRQ arriving mid-clip is a DMA transfer the clip's busy loop cannot pace
+; around. But the clip's state is ours and the stream's is the DRIVER'S, so
+; neither module can answer alone. Stream verb 8 is the question and the
+; answer in one call: it takes our half and returns theirs.
+;
+; With no driver loaded there is no stream to collide with, and drv_svc_call
+; says so by refusing - which is the same answer, arrived at for free.
+; -----------------------------------------------------------------------------
+snd_str_busy:
+    push ax
+    push di
+    mov al, 8
+    mov di, DSV_STREAM
+    call drv_svc_call
+    jc .free                    ; no driver, no stream
+    or ax, ax
+    jnz .busy
+.free:
+    pop di
+    pop ax
+    clc
+    ret
+.busy:
+    pop di
+    pop ax
+    stc
+    ret
 
 ; -----------------------------------------------------------------------------
 ; snd_xlat_build - build the 256-byte PWM rescale table (far body)

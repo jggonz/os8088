@@ -66,6 +66,12 @@ CP_IBX2   equ CP_DIVX - 3       ; 85: selection bar right edge
 
 ; --- right pane: the selected item's page -----------------------------------
 CP_RX     equ 96                ; pane left edge (pane top = content top)
+CP_PRGT   equ CP_CW - CP_RX - 1 ; ...and its LAST COLUMN, as an offset from
+                                ; DI. A paint proc is handed DI = the PANE
+                                ; left (cp_page adds CP_RX before dispatch),
+                                ; so a line erase that reaches `di + CP_CW`
+                                ; runs CP_RX pixels past the window's right
+                                ; edge and paints the desktop
 
 ; --- Scheduler page, PANE-relative ------------------------------------------
 CP_PMX    equ 2                 ; left margin for the heading and the caption
@@ -166,6 +172,7 @@ cp_s_sspk:  db 'PC Speaker', 0
 cp_s_scard: db 'Sound card', 0  ; the row label when no driver names itself
 cp_s_stest: db 'Test', 0
 cp_s_snone: db 'No sound driver loaded', 0
+cp_s_snot:  db 'That card has no tone voice', 0
 ; The Date/Time page names the RTC ladder tier that answered (SPEC.md 37.90),
 ; not just yes/no: on a machine whose clock will not hold a setting, which of
 ; the four answered is the whole diagnosis, and there is nowhere else to see
@@ -901,7 +908,7 @@ cpf_disp_cap:
     mov bx, bp
     add bx, CP_PCAPY
     mov cx, di
-    add cx, CP_CW - 2
+    add cx, CP_PRGT
     mov dx, bx
     add dx, 7
     call gfx_fill
@@ -1745,23 +1752,22 @@ cp_snd_radios:
     push dx
     push si
     mov byte [gfx_color], CBLACK
-    mov al, [snd_route]
     mov cx, di
     add cx, CP_PGX
     mov dx, bp
     add dx, CP_PR0Y
-    mov si, cp_radio_off
-    cmp al, SND_RT_SPK
-    jne .r0
-    mov si, cp_radio_on
-.r0:
-    call cp_glyph
+    call snd_rt_card            ; where a tone would ACTUALLY come out - the
+    mov si, cp_radio_on         ; setting folded with what is present, so the
+    jc .r0                      ; dot can never claim a sink that is not
+    mov si, cp_radio_off        ; sounding (SPEC.md 34.8). AUTO on a machine
+.r0:                            ; whose card has no tone voice shows the
+    call cp_glyph               ; SPEAKER, because that is where the beep is
     add dx, CP_PROWH
+    call snd_rt_card
     mov si, cp_radio_off
-    cmp al, SND_RT_SPK
-    je .r1
-    mov si, cp_radio_on         ; AUTO and CARD both mean "the card if it is
-.r1:                            ; there", so one dot covers them
+    jc .r1
+    mov si, cp_radio_on
+.r1:
     call cp_glyph
     pop si
     pop dx
@@ -1781,15 +1787,22 @@ cp_snd_cap:
     mov dx, bp
     add dx, CPS_CAPY
     call cp_drv_wipe            ; the strings differ in length
-    call snd_rt_card            ; the router's own answer, not a second one
-    jnc .card
-    mov si, cp_s_sspk
-    cmp byte [snd_route], SND_RT_SPK
-    je .draw
-    mov si, cp_s_snone          ; asked for the card and there is none
+    call cp_snd_cardok          ; a greyed card row explains ITSELF here -
+    jc .why                     ; the Display page's idiom (SPEC.md 31.3)
+    call snd_rt_card            ; else name the sink a tone would use, which
+    jc .spk                     ; is the router's own answer and not a
+    call cp_snd_cardnm          ; second opinion
     jmp short .draw
-.card:
-    call cp_snd_cardnm
+.spk:
+    mov si, cp_s_sspk
+    jmp short .draw
+.why:
+    mov si, cp_s_snone          ; no driver at all...
+    cmp word [drv_owner], 0
+    je .draw
+    mov si, cp_s_snot           ; ...or one whose card has no tone voice. A
+                                ; Sound Blaster's would be a DAC loop; the
+                                ; speaker is free, and better
 .draw:
     mov cx, di
     add cx, CP_PMX
@@ -2137,7 +2150,7 @@ cp_drv_wipe:
     add ax, CP_PMX
     mov bx, dx
     mov cx, di
-    add cx, CP_CW - 2
+    add cx, CP_PRGT             ; the PANE's last column, not the content's
     add dx, 7
     call gfx_fill
     mov byte [gfx_color], CBLACK

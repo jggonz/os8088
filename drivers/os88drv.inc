@@ -85,6 +85,29 @@ DSV_NAME     equ 10
 DSV_TONE     equ 12
 DSV_SIZE     equ 14
 
+; --- a driver's worker task (SPEC.md 51.7) -----------------------------------
+; OSAPI_TASK_SPAWN is not available to you: its fence is a chain of tests on
+; an INSTANCE RECORD and you have none. This is the driver's own slot, with
+; the same identity fence against your segment.
+;
+;   AX = a near entry in YOUR segment -> spawn. DH is yours and reaches the
+;                                       new task's DH, which is how you give
+;                                       a worker something PER-TASK (a
+;                                       generation, say) that a variable
+;                                       cannot carry safely. out CF=0 and
+;                                       AL = the slot, CF=1 refused.
+;   AX = 0                            -> "this IS the worker, exiting". NEVER
+;                                        RETURNS.
+;
+; Two rules, and the second one is not optional:
+;   1. You cannot spawn from ATTACH - the kernel arms the fence only after
+;      attach returns. Spawn from a service call.
+;   2. YOUR DETACH MUST NOT RETURN UNTIL YOUR WORKER IS GONE. The kernel
+;      frees your image the moment detach returns, and a worker still on the
+;      run queue leaves the scheduler holding a stack frame whose CS points
+;      at memory the next heap claim takes.
+%define OSAPI_DRV_TASK      KERNEL_SEG:0x0288
+
 ; -----------------------------------------------------------------------------
 ; OS88_DRIVER 'NAME', class, entry - open the driver and emit its 32-byte
 ; header. Emits cpu 8086 / bits 16 / org 0 first, so it must be the first

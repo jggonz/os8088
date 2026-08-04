@@ -461,7 +461,13 @@ osapi_table:
                                   ;          place). Not an X cell: the string
                                   ;          is read through W_SEG, which is
                                   ;          already the caller's segment
-osapi_table_end:                  ; 0x0288
+    OSAPI_JSLOT api_drv_task      ; 0x0288 - a DRIVER's worker task (SPEC.md
+                                  ;          51.7): AX = a near entry in its
+                                  ;          own segment, or 0 = "this IS the
+                                  ;          worker, and it is exiting". X,
+                                  ;          because the fence is an identity
+                                  ;          test on the caller's segment
+osapi_table_end:                  ; 0x0290
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -469,8 +475,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 79 * 8
-%error "os8088 API jump table must be exactly 79 8-byte slots"
+%if OSAPI_TABLE_LEN != 80 * 8
+%error "os8088 API jump table must be exactly 80 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -501,6 +507,7 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
     OSAPI_XSTUB api_mem_free,   osapi_mem_free
     OSAPI_XSTUB api_mem_regrow, mem_regrow
     OSAPI_XSTUB api_snd_fm,     osapi_snd_fm_x
+    OSAPI_XSTUB api_drv_task,   drv_task
 
 ; N: the name at the caller's DS:SI is staged into kernel scratch first,
 ; because ES:BX belongs to the caller's data buffer and cannot carry it

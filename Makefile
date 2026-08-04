@@ -126,9 +126,10 @@ $(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin | $(BUILD)
 # by name in the volume's current directory and the file manager shows them.
 DRIVERS := $(BUILD)/sound.drv
 
-$(BUILD)/sound.bin: drivers/sound/sound.asm drivers/os88drv.inc \
-                    apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ drivers/sound/sound.asm
+$(BUILD)/sound.bin: drivers/sound/sound.asm drivers/sound/sb.inc \
+                    drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/sound/ -I drivers/ -I apps/ \
+		-o $@ drivers/sound/sound.asm
 	@echo "sound:  $(call FILESIZE,$@) bytes"
 
 $(BUILD)/sound.drv: $(BUILD)/sound.bin tools/os88drv.py
