@@ -902,9 +902,10 @@ menu_popup:
 ; That repaint is a DAMAGE RECT, not the screen: the menu covered the rect it
 ; drew and nothing else - which is precisely the rect gfx_save would have
 ; captured - so wm_paint_dmg over it puts back the windows it occluded and
-; leaves the rest alone. It also leaves the menu BAR alone, which is what the
-; save-under path does too, so menu_title_xor's self-inverting highlight
-; behaves the same either way.
+; leaves the rest alone. It leaves the menu BAR alone too - but only because
+; the repaint path DISARMS [menu_bdirty] before calling wm_paint_dmg. Without
+; that it did not, and menu_title_xor's self-inverting highlight stopped being
+; self-inverting; see the comment at .repaint.
 ; -----------------------------------------------------------------------------
 menu_drop:
     push bx
@@ -1022,6 +1023,30 @@ menu_drop:
     call gfx_restore
     jmp short .sel
 .repaint:                       ; no buffer: put back what the MENU covered,
+    mov byte [menu_bdirty], 0   ; ...but FIRST disarm the bar, because the
+                                ; title above is XOR-HIGHLIGHTED right now and
+                                ; menu_title_xor undoes it by XORing the same
+                                ; pixels again. wm_paint_dmg repaints the
+                                ; chrome (SPEC.md 11.91) and menu_draw_bar
+                                ; redraws the whole bar whenever this flag is
+                                ; set - which menu_force below sets at the end
+                                ; of EVERY interaction. So interaction N's
+                                ; flag was being spent by interaction N+1's
+                                ; repaint, landing between the two XORs: the
+                                ; bar came back clean, and the second XOR put
+                                ; a highlight ON and left it there. Nothing is
+                                ; lost by clearing it - menu_force re-arms it
+                                ; a dozen lines down, so the redraw is only
+                                ; DEFERRED past the window where it does harm,
+                                ; and the menu rect starts at MBAR_H so the
+                                ; bar was never damaged in the first place.
+                                ;
+                                ; Only the refused path can do this, which is
+                                ; why it took a machine small enough to refuse
+                                ; the claim to see it: on 128KB the save-under
+                                ; is refused every time, so this WAS the
+                                ; normal path there and every menu after the
+                                ; first left its title inverted.
     mov ax, [menu_x1]           ; which is the rect it drew and nothing else -
     mov bx, [menu_y1]           ; gfx_save captures exactly this, there is no
     mov cx, [menu_x2]           ; shadow outside it, and everything beyond it
