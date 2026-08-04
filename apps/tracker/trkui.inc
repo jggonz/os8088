@@ -52,6 +52,13 @@ TL_SCX    equ 24                    ; scope grid origin
 TL_SCY    equ 26
 TL_SCDX   equ 28                    ; cell pitch
 TL_SCDY   equ 30
+TUI_VUH   equ 3                     ; volume-bar height, px. It was 8 - a
+                                    ; full glyph row - and a bar is the one
+                                    ; thing here that is redrawn on EVERY
+                                    ; frame, so its height is a direct
+                                    ; multiplier on the per-frame fill cost.
+                                    ; Three rows still reads as a level meter
+                                    ; and costs three eighths of the pixels
 TL_SCW    equ 32                    ; cell size
 TL_SCH    equ 34
 TL_SCPR   equ 36                    ; scopes per row (2 or 4)
@@ -1593,11 +1600,125 @@ tui_marks:
     pop ax
     ret
 
+; =============================================================================
+; The 8088 single-line view (SPEC.md 45.9.1)
+;
+; XT mode already stopped the pattern view scrolling per ROW and made it
+; repaint per POSITION (45.9). On a real 4.77 MHz 8088 that is still far more
+; than the machine has: the view does not scroll, it does not even move -
+; one line updates now and then and the rest stands still, which reads as a
+; hung display rather than a slow one. The audio, meanwhile, is fine, and
+; keeping it that way is the whole point.
+;
+; So on a tier-0 MACHINE, and only while something is playing, the pattern
+; grid is not animated at all. The row area is cleared once when playback
+; starts and a SINGLE banded line - the row being played, drawn by the same
+; tui_row1 the grid uses - is updated in place. One row of four cells and two
+; hex numbers per row change, against thirty-odd rows of the same.
+;
+; It is gated on the machine, not on [mp_xt]: XT mode is a playback setting
+; anyone can switch on, and a 386 running it can animate the grid perfectly
+; well. And it is gated on playback, so a stopped 8088 still gets the whole
+; pattern to look at and Up/Down still scroll it.
+;
+; The line is centred in the cleared area rather than left at TL_BANDY. With
+; the grid gone there is nothing for the band's usual one-third-down position
+; to relate to, and a lone strip near the top of a large empty field looks
+; like a rendering fault.
+; =============================================================================
+
+; tui_xt_y - where the single line goes; out AX = its top y
+tui_xt_y:
+    mov ax, [tui_vh]
+    sub ax, [tui_lay + TL_ROWT]
+    sub ax, 11                      ; the band is 11 rows (tui_row1)
+    shr ax, 1
+    add ax, [tui_lay + TL_ROWT]
+    ret
+
+; tui_xt_clear - blank the whole row area, so no stale grid is left behind,
+;                and rule the channel separators down it
+;
+; The separators are what the grid drew per row (tui_row1's non-band path).
+; Drawn once, full height, they cost nothing per frame and they are the
+; difference between a line floating in a black field and a line sitting in
+; the four-channel view it belongs to.
+tui_xt_clear:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push si
+    xor ax, ax
+    mov bx, [tui_lay + TL_ROWT]
+    mov cx, [tui_vw]
+    dec cx
+    mov dx, [tui_vh]
+    dec dx
+    TSETC TC_BG
+    call tui_fillc
+    TSETC TC_SEP
+    mov si, [tui_lay + TL_CHW]
+    mov ax, [tui_lay + TL_CHX]
+    add ax, si
+    dec ax
+    mov bx, [tui_lay + TL_ROWT]
+    mov dx, [tui_vh]
+    dec dx
+    mov di, 3
+.sep:
+    call tui_vlinec
+    add ax, si
+    dec di
+    jnz .sep
+    pop si
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; tui_xt_line - the one line, plus the change markers the caller compares on
+tui_xt_line:
+    push ax
+    push bx
+    push cx
+    push dx
+    call tui_marks                  ; [tui_cvr] = the row to show
+    mov byte [tui_band], 1
+    mov al, [tui_cvr]
+    cbw
+    mov bx, ax
+    call tui_xt_y
+    mov dx, ax
+    call tui_row1
+    mov byte [tui_band], 0
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; tui_xt_on - is the single-line view active right now?
+; out: ZF = 1 (jz) no, ZF = 0 (jnz) yes; AL clobbered
+tui_xt_on:
+    mov al, [trk_cpu0]
+    and al, [mp_playing]
+    ret
+
 tui_draw_pat:
     push ax
     push bx
     push cx
     push dx
+    call tui_xt_on                  ; 8088 + playing: one line, no grid
+    jz .grid
+    call tui_xt_clear
+    call tui_xt_line
+    jmp .out
+.grid:
     call tui_marks
     mov byte [tui_band], 0
     mov cx, [tui_lay + TL_RAB]
@@ -1627,6 +1748,7 @@ tui_draw_pat:
     add dx, 8
     pop cx
     loop .lo
+.out:
     pop dx
     pop cx
     pop bx
@@ -1812,10 +1934,10 @@ tui_draw_vu:
     cmp word [tui_lay + TL_SCH], 16
     jb .cb
     add dx, [tui_lay + TL_SCH]
-    sub dx, 13
-    jmp .yb
+    sub dx, 11                      ; TUI_VUH rows, sitting where the middle
+    jmp .yb                         ; of the old eight-row bar sat
 .cb:
-    inc dx                          ; compact cell: the bar shares rows
+    add dx, 3                       ; compact cell: the bar shares rows
     add di, 8                       ; t2+1..t2+8 with the channel digit at
                                     ; t1+1..t1+8, so it starts at t1+12 -
                                     ; still left of the 'M' flag at t1+146
@@ -1835,7 +1957,7 @@ tui_draw_vu:
     mov ax, di
     add ax, si
     mov bx, dx
-    add dx, 7
+    add dx, TUI_VUH - 1
     TSETC TC_BG
     call tui_fillc
     jmp .next
@@ -1845,7 +1967,7 @@ tui_draw_vu:
     dec cx
     add ax, di
     mov bx, dx
-    add dx, 7
+    add dx, TUI_VUH - 1
     TSETC TC_VU
     call tui_fillc
 .next:
@@ -2109,6 +2231,15 @@ tui_draw_dyn:
     cmp byte [trk_fs], 0
     je .win
     inc byte [tui_frame]
+    mov al, [mp_playing]            ; did playback START or STOP? on a tier-0
+    cmp al, [tui_lplay]             ; machine that changes the SHAPE of the
+    je .played                      ; pattern view (SPEC.md 45.9.1), so the
+    mov [tui_lplay], al             ; row area is redrawn once, here, rather
+    cmp byte [trk_cpu0], 0          ; than at each of the five places that
+    je .played                      ; can start or stop a module - the
+    call tui_draw_pat               ; watchdog and a failed load included
+    jmp .norows
+.played:
     mov al, [mp_row]                ; did the view move?
     cmp al, [tui_lrow]
     jne .rows
@@ -2122,6 +2253,11 @@ tui_draw_dyn:
     cmp al, [tui_lvrow]
     je .norows
 .rows:
+    call tui_xt_on                  ; 8088 + playing (SPEC.md 45.9.1): the
+    jz .xtno                        ; grid is not animated at all - one
+    call tui_xt_line                ; banded line moves in place, and the
+    jmp .norows                     ; readouts below still follow
+.xtno:
     cmp byte [mp_xt], 0             ; XT (SPEC.md 45.9): a row-only change
     je .rfull                       ; relights the band alone; the full
     mov al, [mp_songpos]            ; repaint waits for a position/pattern
@@ -2402,6 +2538,8 @@ tui_ab5:     db 'Any key closes', 0
     TRKB tui_cvr                    ; the view row this frame
     TRKB tui_band                   ; tui_row1: drawing the band row
     TRKB tui_chn                    ; shared small loop counter
+    TRKB tui_lplay                  ; last seen [mp_playing], for the 8088
+                                    ; view's start/stop transition (45.9.1)
     TRKB tui_vonly                  ; 1 = draw an element's VALUES only, the
                                     ; face/bevel/labels being on screen already
     TRKB tui_lrow                   ; last-drawn markers for tui_draw_dyn

@@ -9854,6 +9854,52 @@ modes play the §24 test module at the same pitch — the step math is
 rate-invariant); the wall-clock claim itself is 86Box `make xt-sound`
 territory, cycle-counted here and honestly not QEMU-provable.
 
+### 45.9.1 …and on a real 8088 the pattern view stops being animated at all
+
+§45.9's per-position repaint is still more than a 4.77 MHz 8088 has. On the
+machine itself the view does not scroll and does not move: one line updates
+now and again while the rest stands still, which reads as a hung display
+rather than a slow one. The audio is fine throughout, and keeping it that
+way is the point.
+
+So on a **tier-0 machine**, and **only while something is playing**, the
+grid is not animated. The row area is cleared once at the playback
+transition and a **single banded line** — the row being played, drawn by the
+same `tui_row1` the grid uses — is updated in place. One row of four cells
+and two hex row numbers per row change, against thirty-odd rows of the same.
+Everything above the pattern area is unaffected: the readouts, the order
+window, the VU bars and the status line all keep following the music.
+
+Three things about the gating are deliberate:
+
+- **It keys on `[trk_cpu0]`, the MACHINE, not on `[mp_xt]`.** XT mode is a
+  playback setting anyone can switch on with **X**, and a 386 running it can
+  animate the grid perfectly well. The entry proc latches
+  `osapi_cpu_info`'s answer into `[trk_cpu0]` next to where it pre-arms
+  `[mp_xt]`, because those two facts stop being the same one the moment a
+  user touches the toggle.
+- **It keys on playback.** A stopped 8088 gets the whole pattern to look at,
+  and Up/Down still scroll it — there is no deadline when nothing is
+  playing.
+- **The transition is noticed in `tui_draw_dyn`, not at the five places that
+  can start or stop a module.** Play, stop, pattern-loop, a load, the §45.2
+  watchdog: all of them move `[mp_playing]`, and one comparison against
+  `[tui_lplay]` catches every one. `tui_draw_pat` then draws whichever view
+  is now correct, so nothing else in the module has to know the mode exists.
+
+The line is **centred in the cleared area**, not left at `TL_BANDY`. With
+the grid gone there is nothing for the band's usual one-third-down position
+to relate to, and a lone strip near the top of a large empty field looks
+like a rendering fault. The three channel separators are ruled down the full
+height once, at clear time: they cost nothing per frame and they are the
+difference between a line floating in a black field and a line sitting in
+the four-channel view it belongs to.
+
+**The volume bars are 3 rows, not 8** (`TUI_VUH`), on every machine. A bar
+is the one element redrawn on every frame, so its height is a direct
+multiplier on the per-frame fill cost; three rows still read as a level
+meter.
+
 ### 45.10 The Rate menu — 11 / 22 / 44 kHz for the other end of the range
 
 The XT trades fidelity for cycles; a 286/386 has cycles to spend, and the

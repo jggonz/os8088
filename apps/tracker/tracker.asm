@@ -139,7 +139,8 @@ trk_entry:
     or al, al                       ; machine gets XT mode pre-armed with
     jnz .cpu                        ; its menu item already relabeled
     mov byte [mp_xt], 1             ; (SPEC.md 45.9) - no table to rebuild,
-    mov word [trk_mi_file + 2], trk_s_xton  ; nothing is loaded yet
+    mov byte [trk_cpu0], 1          ; nothing is loaded yet - and the machine
+    mov word [trk_mi_file + 2], trk_s_xton  ; itself is remembered (45.9.1)
 .cpu:
     call OSAPI_VIDEO                ; AX = w, BX = h, CX = first dock row
     sub ax, TRK_WINW                ; centre the frame on the screen...
@@ -1331,6 +1332,13 @@ trk_s_smmoff: db 'Smooth off', 0
     TRKB trk_hired                  ; the worker exists
     TRKB trk_abon                   ; the About panel is up; worker frames drop
     TRKB trk_pmode                  ; 0 = song, 1 = pattern loop
+    TRKB trk_cpu0                   ; the MACHINE is a tier-0 8086/8088
+                                    ; (SPEC.md 41.8), latched at entry. NOT
+                                    ; [mp_xt], which is a user-toggleable
+                                    ; playback mode and true on a 386 the
+                                    ; moment someone presses X - this is the
+                                    ; one that decides whether the pattern
+                                    ; view can be animated at all (45.9.1)
 
 ; --- the module blob (a heap claim, SPEC.md 50) -------------------------------
     TRKW trk_modseg                 ; grant base segment, 0 = none
