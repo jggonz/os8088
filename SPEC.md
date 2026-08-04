@@ -5533,9 +5533,18 @@ own above the second map and read as *its* label.
   pool map's caption. The two caption lines are CAPS and the list's rows are
   mixed case, which is the whole of the distinction between a map's label and
   a row.
-- (16,62): header `"NAME    ADDR SIZE   HEAP"` (24 chars, the row width).
+- (16,62): header `"NAME     ADDR SIZE   HEAP"` (25 chars, the row width).
   Two spaces of gap before HEAP, not one: a 150K back buffer beside a 150K
   package ran the two figures together at the old 22-char width.
+  **The NAME field is eight columns plus a separator.** Seven of them are the
+  name (`tm_copy7`) and the eighth is the indent a nested row carries, so the
+  four builders line their addresses up whichever way they spend it: System
+  pays two trailing spaces, an instance row pays one leading indent and one
+  trailing space, and a buffer row — which has no address — spans the whole
+  nine. It was eight with no separator, and a name that used all seven of them
+  ran straight into the segment beside it: `ARKANOI9E40`. `TM_STRMAX` is 28
+  and sized by the `RAM`/`HEAP` line above, so the row had the column to
+  spend, and at 25 chars it still ends 8px inside `TM_RW`.
   **The window is sized by the line above the first map, not by this one**:
   `"RAM uuu/tttK"`, the claim square and `"HEAP uuu/tttK"` land exactly on
   `TM_RW` = 223, which puts the template at 232 wide. `TM_GW` = `TM_RW` − 7
