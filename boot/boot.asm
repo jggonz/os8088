@@ -42,7 +42,7 @@ KERNEL_SEG   equ 0x0060         ; kernel lands at linear 0x00600, the first
                                 ; paragraph above the BIOS data area. Mirrored
                                 ; in kernel/kernel.asm, which asserts that the
                                 ; kernel ends clear of our relocated stack
-BOOT_RELOC   equ 0x0AA0         ; 0x0AA0*16 + 0x7C00 = linear 0x12600: where
+BOOT_RELOC   equ 0x0B80         ; 0x0B80*16 + 0x7C00 = linear 0x13400: where
                                 ; we copy ourselves, above anything the kernel
                                 ; can reach. Mirrored in kernel/kernel.asm
 STACK_TOP    equ 0x7C00         ; stack grows down from our own base, so it
@@ -51,8 +51,28 @@ SPLASH_OFF   equ 0x0008         ; the kernel's boot splash far entry (SPEC.md 15
 SPL_RESIDENT equ 6              ; splash is fully aboard after this many
                                 ; sectors - must match kernel/splash.inc
 
+BPB_END      equ 62             ; where a DOS BPB stops and our code starts
+
 ; -----------------------------------------------------------------------------
-start:
+; The first 62 bytes are NOT ours. tools/os88disk.py writes a full FAT12 BPB
+; over them when it builds the image (SPEC.md 19.3), because the OS disk is a
+; real FAT12 volume now: the kernel sits in the RESERVED AREA, sectors 1..K,
+; which BPB_RsvdSecCnt covers and no file system structure can ever reach. So
+; the raw LBA read below is unchanged and still correct, and at the same time
+; DOS, Linux, macOS - and os8088's own file manager and write path - can all
+; mount drive A: and see the files after it.
+;
+; Everything above `entry` therefore has to be exactly the three bytes DOS
+; expects (a short jump and a NOP) followed by a hole. The jump is `short`,
+; not `near`, because that is what BS_jmpBoot's first-byte test looks for
+; (mount rule 2, SPEC.md 18.2) - and it is our own mount code that would
+; refuse the disk otherwise.
+; -----------------------------------------------------------------------------
+    jmp short entry
+    nop
+    times BPB_END - ($ - $$) db 0
+
+entry:
     cli
     xor ax, ax
     mov ds, ax
@@ -75,7 +95,7 @@ start:
     mov ax, cs
     mov ds, ax
     mov ss, ax                  ; the stack comes with us: same offset, so it
-    mov sp, STACK_TOP           ; grows down from linear 0x11000
+    mov sp, STACK_TOP           ; grows down from linear 0x13400
     sti
     cld
 

@@ -59,6 +59,7 @@ MC_SIZE  equ 6
 
 MEM_K_SAVE equ 0xFF01           ; kernel tags (SPEC.md 50.2): menu save-under
 MEM_K_BB   equ 0xFF02           ; the double-buffer back buffer
+MEM_K_DRV  equ 0xFF03           ; a loaded driver's image (SPEC.md 51.3)
 
 MEM_PARA_KB equ 64              ; paragraphs per KB
 

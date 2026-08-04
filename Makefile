@@ -115,17 +115,32 @@ $(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin | $(BUILD)
 		-o $@ boot/boot.asm
 	@test $(call FILESIZE,$@) -eq 512 || { echo "boot sector is not 512 bytes"; exit 1; }
 
-$(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin
-	@dd if=/dev/zero of=$@ bs=512 count=2880 status=none
-	@dd if=$(BUILD)/boot.bin of=$@ conv=notrunc status=none
-	@dd if=$(BUILD)/kernel.bin of=$@ bs=512 seek=1 conv=notrunc status=none
-	@echo "image:  $@ (1.44MB, 18 spt)"
+# The system disk is a FAT12 volume with the kernel in its RESERVED AREA
+# (SPEC.md 19.3). The boot sector still reads LBA 1..K raw - reserved sectors
+# belong to the boot loader by definition - and everything after them is an
+# ordinary file system, so drive A: mounts, browses and WRITES like the apps
+# disk. That is what gives drivers a place to live and settings a place to be
+# kept (SPEC.md 51).
+#
+# DRIVERS is the list, one .drv per line, root-level: the kernel resolves them
+# by name in the volume's current directory and the file manager shows them.
+DRIVERS := $(BUILD)/sound.drv
 
-$(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin
-	@dd if=/dev/zero of=$@ bs=512 count=720 status=none
-	@dd if=$(BUILD)/boot360.bin of=$@ conv=notrunc status=none
-	@dd if=$(BUILD)/kernel.bin of=$@ bs=512 seek=1 conv=notrunc status=none
-	@echo "image:  $@ (360KB, 9 spt)"
+$(BUILD)/sound.bin: drivers/sound/sound.asm drivers/os88drv.inc \
+                    apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/ -I apps/ -o $@ drivers/sound/sound.asm
+	@echo "sound:  $(call FILESIZE,$@) bytes"
+
+$(BUILD)/sound.drv: $(BUILD)/sound.bin tools/os88drv.py
+	python3 tools/os88drv.py $(BUILD)/sound.bin -o $@
+
+$(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(BUILD)/kernel.bin $(DRIVERS)
+
+$(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin $(DRIVERS)
 
 # Minesweeper, the first loadable program: a flat binary with the .o88
 # package header. ONE assembly per package since SPEC.md 20.1 - a package
@@ -317,10 +332,28 @@ debug: $(IMG) $(APPSIMG)
 #   make test
 #   python3 tools/qmp.py build/qmp.sock 'screendump build/shot.ppm'
 #   python3 tools/qmp.py build/qmp.sock 'quit'
+# ADLIB=1 / SB16=1 put an emulated card in the machine, for `test` as well as
+# `test-snd`: without one the sound DRIVER (SPEC.md 51.4) probes, finds
+# nothing and reports DRVE_HW, which is the correct answer and not the one
+# you want to be testing against. `make test ADLIB=1` is how the OPL2 path is
+# exercised at all - QEMU's -device adlib is an OPL2 at 388h.
+ifneq ($(ADLIB),)
+ADLIBDEV = -device adlib,audiodev=snd
+endif
+ifneq ($(SB16),)
+SBDEV = -device sb16,audiodev=snd
+endif
+# ...and both need an audiodev to hang off, which `test` otherwise has none
+# of. `none` is a real backend and costs nothing headless.
+ifneq ($(ADLIBDEV)$(SBDEV),)
+CARDAUDIO = -audiodev none,id=snd
+endif
+
 test: $(IMG) $(APPSIMG)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 \
-		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid
+		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
+		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV)
 
 # `make test` plus audio capture (SPEC.md 34): the PC speaker renders into
 # build/snd.wav, finalized when QMP `quit` stops QEMU. Verify with
@@ -331,7 +364,8 @@ test-snd: $(IMG) $(TESTAPPS)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 \
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
-		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd
+		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd \
+		$(ADLIBDEV) $(SBDEV)
 
 # 86Box rewrites its own config file on exit, and twice now it has put the
 # wp:// (write-protect) prefix back on the DATA floppy - which makes every

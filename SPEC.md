@@ -3518,6 +3518,36 @@ which is the same state a bad disk produces. A directory whose entries are
 garbage simply lists nothing. Neither can crash, because no LBA in either
 path is derived from an unvalidated field.
 
+### 19.3 The system disk — a FAT12 volume with the kernel in its reserved area
+
+The disk os8088 boots from is a **real FAT12 volume**: DOS, Linux and macOS
+mount it, and so do os8088's own file manager and write path. That is not
+cosmetic — it is what gives loadable drivers (§51) a place to live and
+settings a place to be kept, without a second on-disk format and a second
+set of readers.
+
+The trick is one field. `BPB_RsvdSecCnt` covers the sectors between the boot
+sector and FAT1 — the reserved area, which belongs to the boot loader by
+definition and which no file system structure can reach. `tools/os88disk.py`
+sets it to `1 + ceil(kernel/512)` and writes the kernel there, so
+**boot/boot.asm's raw `read LBA 1..K` is unchanged and still correct** while
+everything after it is an ordinary file system. Mount rule 5 (§18.2) has
+always been `RsvdSecCnt >= 1`; nothing was relaxed to allow this.
+
+Two consequences fall out, both wanted:
+
+- **Drive A: mounts.** The Disk browser opens it, `SOUND.DRV` and
+  `SYSTEM.CFG` are listed there, and the write gate (`[dsk_mntok]`, §18.4)
+  opens for it — which is what lets the Control Panel keep a setting.
+- **The boot sector carries a BPB.** Its first three bytes are
+  `EB 3C 90` (a short jump past the BPB, and `short` because mount rule 2
+  tests `BS_jmpBoot[0]`), then a 59-byte hole `os88disk.py` fills, then the
+  loader at offset 62. `boot/boot.asm` reserves the hole and asserts
+  nothing about its contents.
+
+The volume is labelled `OS8088SYS`; the apps disk stays `OS8088APPS`.
+
+
 ## 20. Loadable programs — the .o88 package format
 
 ### 20.1 A package owns a segment, and its region is a heap claim
@@ -6270,6 +6300,68 @@ Kernel routines this page reaches (all ordinary near calls since §33):
 `clk_fld_str`, `clk_fld_adj` (§33; `wm_content`, `wm_obscured`, `gfx_fill`,
 `gfx_frame` and `font_str` already have wrappers).
 
+### 31.6 Drivers page — loading and unloading, and remembering it
+
+Fourth item, index `CP_IDRV` = 3, list name and heading `'Drivers'`. One row
+per `drv_tab` row (§51): a checkbox, the driver's name, and under it the
+sentence `drv_status` derives from the row's live state — `'Loaded'`,
+`'Not loaded'`, or why the last attempt failed.
+
+**The checkbox tracks what is LOADED, not what the settings file wants.** A
+driver enabled on a machine with no card is unchecked, with `'No hardware
+found'` under it. That is the `bb_avail` idiom (§31.3) again: the box, the
+caption and the click all read one word, so they cannot disagree.
+
+**A click loads or unloads on the spot**, mounting A: on demand, and only
+then writes `SYSTEM.CFG`. So the page never shows a promise about the next
+boot — what it shows is what is running. The two outcomes are reported
+separately: a load that fails leaves the box clear with its reason, and a
+*save* that fails puts `'Cannot save to the system disk'` in the caption
+while the driver it just loaded stays loaded.
+
+A load does floppy I/O with the gfx lock held. That is the bargain every
+file operation in this OS makes (§18.4) — the cursor freezes for the length
+of the read — and the alternative, dropping the lock inside a click handler,
+is not one the window manager offers.
+
+
+### 31.7 Sound page — where a tone comes out
+
+Fifth item, index `CP_ISND` = 4. Two radio rows on the Display page's
+geometry — **PC Speaker** and the loaded driver's own sink name (its
+`DSV_NAME`, or `'Sound card'` when none is loaded) — and a **Test** button
+under them that plays one second of 660 Hz at `SND_PRI_UI` through whatever
+is selected. The answer to "did that do anything?" is one click away and does
+not need an app.
+
+The card row is the `bb_avail` idiom (§31.3) a third time: greyed when no
+loaded driver publishes `DSV_TONE`, refused on click, and named in the
+caption. The **setting is still kept** in that state — `SND_RT_CARD` on a
+machine with no card falls back to the speaker (`snd_rt_card`, §34.8) rather
+than going silent — because a disk carrying that setting to a machine that
+*has* one should simply work.
+
+The dot follows the **setting**; the caption names the **effective sink**. On
+a machine whose card went away those two differ, and both facts are worth
+showing.
+
+### 31.8 Every setting is remembered — `cp_flush`
+
+Each page calls `cp_flush` after it changes anything, and `cp_flush` writes
+`SYSTEM.CFG` (§51.5) — one 32-byte file carrying the whole panel: the driver
+list, the sound route, the clock options, the scheduler mode and the back
+buffer. One file and one writer, so there is no per-setting bookkeeping to
+keep in step, and `drv_boot` restores the lot before the desktop is painted.
+
+It writes on **every click**, not on close. A floppy write is about a second
+on the floor machine and that is the honest price: flushing on close loses
+every setting whenever the panel is closed by closing its window, which is
+how it is usually closed.
+
+A failed write never undoes the change — that already happened — and is
+reported in the Drivers page's caption (`'Cannot save to the system disk'`),
+the one page with room to say it.
+
 ## 32. vgabb.inc — the software renderer (double buffering, and §39's 1bpp driver)
 
 **Why it exists.** The original design drew straight into VRAM because
@@ -6502,12 +6594,34 @@ see. `docs/KERNEL-MEMORY.md` is where that budget is kept.
 
 ## 34. snd.inc — the sound layer
 
-**One sink: the PC speaker.** The layer had three — speaker, OPL2 (AdLib)
-and Sound Blaster — behind a driver table, per-tier route overrides and a
-Control Panel page that chose between them. All of that is retired. What
-remains is what every machine this OS boots on actually has: PIT channel 2
-and port 61h, driving a square-wave tone tier and a CPU-paced PCM clip
-tier, and a router that says who owns them.
+**One RESIDENT sink: the PC speaker.** PIT channel 2 and port 61h, driving a
+square-wave tone tier and a CPU-paced PCM clip tier, and a router that says
+who owns them — that is what every machine this OS boots on actually has, so
+that is what the kernel carries.
+
+Everything beyond it is a **loadable driver** (§51). `SOUND.DRV` on the
+system disk fills the two API slots the kernel holds empty without it —
+`OSAPI_SND_FM` (0x00F8) and `OSAPI_SND_STREAM` (0x0100) — and may take the
+tone tier with it. A machine with an AdLib in it and the driver loaded has
+FM; a 128KB machine with neither card pays nothing for the code that would
+have driven them. That split is the point: the card tiers used to be
+resident, which cost every machine their bytes whether or not the card was
+there.
+
+Four things reach the driver, and the kernel decides all four:
+
+| | |
+|---|---|
+| `osapi_snd_caps` | ORs in `DSV_CAPS`, and reports the live tone route in BL |
+| `osapi_snd_fm` / `osapi_snd_stream` | dispatch to `DSV_FM` / `DSV_STREAM`, CF=1 with no driver |
+| `snd_tone_out` | the tone tier's sink: `DSV_TONE` if one is published, else `spk_tone` |
+| `snd_tick`, `snd_release_inst` | give the driver `DSV_TICK` and `DSV_RELINST` |
+
+**The requesting instance is stamped by the kernel, not the driver.**
+`snd_req_inst` reads `[snd_inst]` and the running task's `T_INST`, both
+kernel state, so DH crosses the segment boundary as an argument (§34.3's
+grant-stamping rule) and a driver never needs an API slot to ask who is
+calling.
 
 What the removal bought, and why it is recorded here rather than in a
 changelog: `SND_SEG` — 64KB of conventional memory at linear
@@ -6529,9 +6643,31 @@ PWM rescale table.
 both tiers contend for the same channel 2 (§34.1). Simultaneity is not
 available on a PC speaker and the contracts say so rather than pretending.
 
-The API surface is three §20.3 slots — CAPS, TONE, PLAY. The FM and STREAM
-slots went with the hardware they drove; a package built against them is
-rebuilt against this table (the slot offsets after 0x0080 all moved).
+The API surface is five §20.3 slots — CAPS, TONE, PLAY resident, FM and
+STREAM live only while a driver is. Both answer CF=1 with no driver loaded,
+which is exactly what the held cells they replaced did, so a package may call
+them unconditionally and read the refusal.
+
+### 34.8 The tone route
+
+`[snd_route]` — a `.text` byte, because `snd_tone_out` reads it on the
+machine's first beep and `SYSTEM.CFG` may not exist at all:
+
+```
+SND_RT_AUTO (0)  the driver's sink if it publishes one, else the speaker
+SND_RT_SPK  (1)  the PC speaker, whatever is loaded
+SND_RT_CARD (2)  the card - and the speaker if it is not there
+```
+
+`snd_rt_card` is the single answer to "does a tone go to the driver right
+now?", and the router, `osapi_snd_caps`'s BL and the Control Panel's Sound
+page (§31.7) all read it — so they cannot disagree about where a beep is
+about to come out.
+
+**`SND_RT_CARD` with no driver falls back rather than going silent.** The
+page refuses that selection while it is meaningless, but a setting kept on a
+disk that later moves to a machine with a card must not take the beep away
+with it in the meantime.
 
 ### 34.1 Port ownership
 
@@ -8917,3 +9053,170 @@ replaced it is *live*: arm double buffering and the figure rises 150K, close
 Paint and it falls by whatever Paint held. `mem_claimed_kb` sums every
 claim; `mem_kernel_kb` sums only the `0xFFxx`-tagged ones, so a package's
 claim lands on the package's row rather than on System's.
+
+## 51. driver.inc — loadable drivers
+
+The kernel carries what every machine has. What only *some* machines have is
+a **driver**: an ordinary file on the system disk, loaded into the heap on
+demand, publishing a small table of services the kernel dispatches to. The
+first one is sound (§51.4) — the OPL2 and Sound Blaster tiers whose code
+would otherwise be resident on a 128KB machine that has neither card.
+
+The whole subsystem rests on one enabling change: **the system disk is a
+FAT12 volume now** (§19.3). A driver is a file on it, the settings that say
+which drivers load are a file on it, and both are reached through the file
+API that already existed.
+
+### 51.1 A driver is a package that is not an application
+
+Same 32-byte header, same `org 0`, same paragraph-aligned heap claim, same
+three-byte dispatcher at `PKG_DISP` — so `drv_call` is `wm_pkgcall` with the
+far pointer taken out of a driver row instead of a window record, and a
+driver author writes near procs with near `ret`s exactly as a package author
+does. Four things differ, and each is doing work:
+
+- **It is a `.DRV` file.** The mount types a directory entry as an
+  application only when its extension is `O88` (§19), so a driver is *data*
+  to the file manager and can never be double-clicked into the loader.
+- **Its header version is 4.** A package is 3, so if one ever did reach
+  `ld_check_hdr` it would be refused there too. Two independent gates,
+  because "the kernel ran a driver as an application" is not a failure mode
+  worth one gate.
+- **It has no instance record**: no dock tile, no Task Manager row, no
+  window, no `I_CYC` billing. Its memory is a kernel claim (`MEM_K_DRV`), so
+  the Task Manager counts it under System, which is what it is.
+- **Its bss ships inside its image**, zero-filled on the floppy by
+  `tools/os88drv.py`. A package's bss is claimed by the loader because a
+  package's is tens of KB and its file arrives through a peek-then-size
+  dance; a driver's is a few hundred bytes, and paying for them on disk buys
+  a load path with **exactly one claim in it** — made at the size the
+  directory entry already reported, before a byte is read. Anything bulk (a
+  DMA buffer, a ring) is the driver's own `OSAPI_MEM_CLAIM` at attach.
+
+### 51.2 The contract
+
+The entry proc is the only thing the kernel calls by offset; everything else
+it reaches through the table that entry returns.
+
+```
+in:  AL = verb, DS = CS = the driver's segment, ES = KERNEL_SEG
+DRVV_ATTACH (0)  probe + hook.  out CF=0 and SI = the service table;
+                 CF=1 = no hardware, AND NOTHING WAS HOOKED
+DRVV_DETACH (1)  silence, unhook, restore, free. Cannot fail.
+```
+
+**Attach must be all-or-nothing** and **detach cannot fail.** The first
+because the kernel frees the image the moment a driver says no, so anything
+it left behind — an interrupt vector, a port, a claim — outlives it by
+definition. The second because the user turned it off; there is no answer
+but yes.
+
+The service table, in the driver's segment, copied whole by the kernel at
+attach so every later dispatch is a near read plus one far call:
+
+```
+DSV_CAPS    dw  capability bits it ADDS to OSAPI_SND_CAPS
+DSV_FM      dw  near proc behind slot 0x00F8      (0 = none)
+DSV_STREAM  dw  near proc behind slot 0x0100      (0 = none)
+DSV_TICK    dw  near proc called from snd_tick - INSIDE IRQ0, at IF=0
+DSV_RELINST dw  near proc: AL = an instance slot being torn down
+DSV_NAME    dw  -> a NUL sink name, in ITS segment
+DSV_TONE    dw  near proc: the tone tier's sink while it is loaded
+```
+
+The copy is the `dsk_get_dir` idiom in a new place: every consumer downstream
+is then an ordinary near read with DS = KERNEL_SEG, and `snd_tick` — which
+runs inside IRQ0 — does not have to point a segment register anywhere to find
+out whether it has work.
+
+**`DSV_TONE` is the interesting one.** Publishing it *moves the tone tier off
+the PC speaker* onto the driver's hardware. An OPL2 publishes it, because an
+FM note is two register writes and then zero CPU, and moving tones there
+leaves the speaker for the exclusive-clip tier that has nowhere else to go
+(§34.4). A Sound Blaster does not.
+
+### 51.3 Loading, and what happens when it fails
+
+`drv_load` is the package loader's order (§21) with the instance half
+removed: mount A:, size the file out of the mount snapshot, claim exactly
+that, read, validate the header against the image that actually arrived,
+attach. Anything that fails after the claim frees it, so a refused driver
+costs nothing but the time.
+
+**Every failure is survivable and none of them stops the boot:**
+
+```
+DRVE_DISK   no readable system disk in A:
+DRVE_NOENT  it is not on that disk
+DRVE_BAD    not a driver image
+DRVE_MEM    the heap cannot fund it
+DRVE_HW     it loaded and found no hardware
+```
+
+The ordering at boot is binding. **`drv_boot` runs before the desktop's first
+paint**, so a machine whose sound driver loads has sound from the first
+frame. **`drv_notice` runs after it**, because a window cannot go up on a
+screen that has not been painted — so a failure is banked in the row and
+reported later, never where it happens.
+
+`drv_notice` opens the **Control Panel on its Drivers page** rather than
+putting up a notice of its own, and that is a design rather than a saving:
+the page already names every driver, already says what its last attempt
+answered, and is the one place the user can do something about it. A notice
+window would have said the same words and then made them go and find this
+page. The `[cp_sel]`-before-`KIND_CTRL` precedent is the menu bar clock's
+(§31.5).
+
+A machine with **no system disk at all** is not told about drivers it never
+enabled: only a row whose `DRVR_WANT` is set counts as a failure.
+
+### 51.4 Unloading, and why detach comes first
+
+`drv_unload` detaches, then frees — never the other way round. The detach
+verb is what silences the chip and unhooks the IRQ, and freeing the claim
+under a live interrupt vector points that vector at whatever claims the
+memory next.
+
+Dynamic load and unload are the same two routines the boot uses, so there is
+no second path to keep in step: the Control Panel's checkbox calls
+`drv_load` / `drv_unload` on the spot, mounting A: on demand. **The box shows
+what is LOADED (`DRVR_SEG`), not what the settings file wants** — a driver
+the user enabled on a machine with no card is unchecked, with the reason
+under it.
+
+### 51.5 SYSTEM.CFG
+
+32 bytes in the system disk's root, written through the ordinary file API, so
+it is an ordinary file — deletable, copyable and readable from DOS.
+
+```
++0   'O','8','8','C','F','G',0,0     signature
++8   dw version (1)
++10  dw wanted                        bit n = drv_tab row n loads at boot
++12  20 reserved bytes
+```
+
+A missing or malformed file means **the defaults in `drv_tab`**, never an
+error — which is what makes a freshly built image boot with sound enabled and
+a disk with a foreign `SYSTEM.CFG` boot at all.
+
+The settings write is a **separate outcome from the load**, and the Control
+Panel reports them separately: a load that succeeds and a save that cannot
+reach the disk leaves the driver running and says so in the caption. Pretending
+one implies the other would be the lie that matters here — the user would
+believe a setting had been kept.
+
+### 51.6 Author rules
+
+1. **Attach all-or-nothing, detach cannot fail.** Restated because it is the
+   whole contract.
+2. **`DSV_TICK` runs inside IRQ0 at IF=0.** Keep it short, and touch no port
+   that needs a long counted delay.
+3. **Stage what you are handed.** A package's pointer is in the package's
+   segment and you run in yours; the kernel stages the one case that exists
+   (a patch-load's 11 bytes) into its own buffer and hands you ES:SI. Do not
+   invent a second convention.
+4. **Bulk memory is a claim, not bss.** Take it at attach, free it at detach.
+5. **You may own a task.** `task_spawn` takes a segment, so a driver's refill
+   loop is an ordinary background task — but it must be gone before detach
+   returns.

@@ -80,11 +80,11 @@ out of the same constants the guards use.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` + `.bss`) | 54,272 B | all kernel code, its read-only data, and its scratch |
+| image (`.text` + `.bss`) | 57,344 B | all kernel code, its read-only data, and its scratch |
 | task stacks | 6,656 B | 11 background slots + task 0's |
 | disk buffers | 3,584 B | directory cache, icon cache, sector scratch |
 | FAT snapshot | 4,608 B | the mounted volume's FAT, resident |
-| **total** | **69,120 B** | of a 71,680-byte budget — 2,560 B spare |
+| **total** | **72,192 B** | of a 72,704-byte budget — 512 B spare |
 
 Everything above that is the claim heap, up to whatever int 12h reports —
 570KB on a 640KB machine, and **59KB on a 128KB one**, which is the floor
@@ -308,6 +308,7 @@ package calls into empty memory.
 | low memory sized to measurement, kernel moved to 0x0800 | 75 KB |
 | `.fartext` retired, ladder derived, buffers trimmed, kernel at 0x0060 | 63.5 KB |
 | budget raised 64 → 70KB for the SPEC.md §41 XMS store | 66 KB |
+| budget raised 70 → 71KB for the SPEC.md §51 driver subsystem | 70.5 KB |
 | ...and where it stands now | **67.5 KB** |
 
 The last row is the one to re-measure rather than trust: it moves with every
@@ -316,3 +317,34 @@ being spent on. Above, "Where it goes" carries the same figure to the byte.
 
 `docs/MEMORY-PLAN.md` is the narrative of how it got here, step by step, and
 what was rejected along the way. This document is what it looks like now.
+
+---
+
+## The second budget raise: loadable drivers (SPEC.md §51)
+
+70KB → **71KB** (71,680 → 72,704), asked for and granted, and it is the
+second time the number has moved.
+
+What it bought, and why it is not simply 1KB spent:
+
+| | |
+|---|---:|
+| the driver table, loader, settings file and boot path (`driver.inc`) | ~1.4 KB |
+| the Control Panel's Drivers and Sound pages, and `cp_flush` | ~1.1 KB |
+| the FM and stream API slots, the tone route, the driver hooks in `snd.inc` | ~0.5 KB |
+| **what it makes loadable instead of resident** | **the OPL2 and Sound Blaster tiers** |
+
+The last row is the argument. On the other fork those tiers are kernel code:
+`sndfm.inc` and `sndsb.inc` are 3,260 lines, resident on every machine
+whether or not a card is in it. Here they are a file on the system disk that
+a 128KB machine with no card never reads — and the same machinery will carry
+the next driver for nothing.
+
+The heap moved down by the same 1KB it gained, which on a 640KB machine is
+570KB → 569KB and on the 128KB floor is 59KB → 58KB.
+
+**`BOOT_RELOC` moved with it**, 0x0AA0 → 0x0B80 (linear 0x12600 → 0x13400),
+because guard 5 keeps the growing kernel clear of the boot sector that is
+still executing while it lands. The constant is mirrored in `boot/boot.asm`
+and the two must move together — this is the second time, and both times it
+was the raise that forced it.

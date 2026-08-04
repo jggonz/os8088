@@ -49,6 +49,11 @@
 SND_CAP_TONE     equ 01h        ; square voice: freq on/off
 SND_CAP_PCM_EXCL equ 08h        ; CPU-paced PCM out - exclusive clip contract
 
+; --- the tone tier's route (SPEC.md 34.8), a user setting -------------------
+SND_RT_AUTO equ 0               ; the driver's sink if it publishes one
+SND_RT_SPK  equ 1               ; ...the PC speaker whatever is loaded
+SND_RT_CARD equ 2               ; ...the card, and the speaker if it is gone
+
 SND_PRI_UI  equ 0C0h            ; kernel UI beeps (SPEC.md 34.3)
 SND_PRI_PKG equ 040h            ; documented package default priority
 
@@ -60,7 +65,11 @@ SND_PRI_PKG equ 040h            ; documented package default priority
 snd_live:      db 0             ; the boot gate: set LAST by snd_init (34.7)
 snd_excl_ok:   db 1             ; policy: exclusive clips allowed (34.4)
 
-snd_s_spk:     db 'Speaker', 0  ; the only sink's name (osapi_snd_caps)
+snd_s_spk:     db 'Speaker', 0  ; the resident sink's name (osapi_snd_caps)
+snd_route:     db SND_RT_AUTO   ; where tones go (SPEC.md 34.8). Initialised
+                                ; .text, not .bss: snd_tone_out reads it on
+                                ; the machine's first beep, and SYSTEM.CFG
+                                ; may not exist at all
 
 ; =============================================================================
 ; The PC speaker tone driver (SPEC.md 34.2)
@@ -358,12 +367,15 @@ snd_tone_req:
     jz .off
 
     ; --- tone on ------------------------------------------------------------
-    cmp byte [snd_ch2mode], 2   ; a PWM clip holds ch2: tone refused (34.1)
-    je .refuse
+    cmp byte [snd_ch2mode], 2   ; a PWM clip holds ch2: tone refused (34.1).
+    je .refuse                  ; Asked even when the tone is going to an
+                                ; OPL2 - the clip owns the machine's one
+                                ; exclusive tier and a tone under it would
+                                ; sound over a frozen desktop
     push dx
     xor dl, dl                  ; voice 0
-    call spk_tone               ; program the ports; CF = bad frequency
-    pop dx
+    call snd_tone_out           ; the tier's sink: a loaded driver's, else
+    pop dx                      ; the speaker's. CF = bad frequency
     jc .refuse                  ; nothing changed: the old owner still sounds
     inc byte [snd_gen]          ; stamp the owner record - same IF=0 window
     mov al, [snd_gen]           ; as the port writes (SPEC.md 34.3)
@@ -410,9 +422,9 @@ snd_town_off:
     push si
     cmp byte [snd_town_act], 0
     je .clear
-    xor ax, ax                  ; the speaker is the only sink there is
+    xor ax, ax
     xor dl, dl
-    call spk_tone
+    call snd_tone_out           ; whichever sink granted it, silences it
     mov byte [snd_ch2mode], 0
 .clear:
     mov byte [snd_town_act], 0
@@ -421,6 +433,55 @@ snd_town_off:
     pop dx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; snd_tone_out - the tone tier's current sink (SPEC.md 34.2/51.4)
+;
+; in:       AX = frequency Hz (0 = off), DL = voice
+; out:      CF = 0 done, CF = 1 unsupported voice/frequency
+; clobbers: nothing else (flags)
+;
+; One test decides where a tone goes. A loaded driver that publishes DSV_TONE
+; TAKES the tier - which is what an OPL2 does, and the reason it does is that
+; an FM note costs two register writes and then no CPU at all, so tones move
+; off the speaker and leave it for the exclusive-clip tier that has nowhere
+; else to go (SPEC.md 34.4). With no driver, or one that publishes no tone op
+; (a Sound Blaster), the answer is the speaker exactly as before.
+;
+; Reached from snd_tick's expiry path, so this can run INSIDE IRQ0 at IF=0.
+; That is sanctioned and bounded: the driver's key-off is one register write
+; (SPEC.md 8.2).
+; -----------------------------------------------------------------------------
+snd_tone_out:
+    call snd_rt_card
+    jc spk_tone                 ; tail call: the speaker, and CF is its own
+    push di
+    mov di, DSV_TONE
+    call drv_svc_call
+    pop di                      ; POP leaves the driver's CF alone
+    ret
+
+; -----------------------------------------------------------------------------
+; snd_rt_card - do tones go to the driver's hardware right now? (SPEC.md 34.8)
+; out:      CF = 0 yes; CF = 1 no, the speaker has the tier
+; clobbers: nothing (flags)
+;
+; One answer, so the router, osapi_snd_caps and the Control Panel's Sound page
+; cannot disagree about where a tone is about to come out. SND_RT_CARD with no
+; driver FALLS BACK to the speaker rather than going silent - the page refuses
+; that selection and says why, but a setting kept on a disk that later moves
+; to a machine with no card must not take the beep away with it.
+; -----------------------------------------------------------------------------
+snd_rt_card:
+    cmp byte [snd_route], SND_RT_SPK
+    je .no
+    cmp word [drv_svc+DSV_TONE], 0
+    je .no
+    clc
+    ret
+.no:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -482,6 +543,15 @@ snd_stop:
 snd_tick:
     cmp byte [snd_live], 0      ; the boot gate - nothing else is readable
     je .done
+    cmp word [drv_svc+DSV_TICK], 0
+    je .tone                    ; a loaded driver may want the tick too; it
+    push ax                     ; runs here, inside IRQ0, at IF=0
+    push di
+    mov di, DSV_TICK
+    call drv_svc_call
+    pop di
+    pop ax
+.tone:
     cmp word [snd_town_exp], 0
     je .done
     dec word [snd_town_exp]
@@ -514,6 +584,17 @@ snd_release_inst:
     cli
     cmp byte [snd_live], 0
     je .done
+    cmp word [drv_svc+DSV_RELINST], 0
+    je .spk                     ; a loaded driver's grants go first: its FM
+    push ax                     ; channels and streams are stamped with the
+    push di                     ; same instance slot ours are (SPEC.md 34.3)
+    push dx
+    mov di, DSV_RELINST
+    call drv_svc_call
+    pop dx
+    pop di
+    pop ax
+.spk:
     cmp byte [snd_pcm_busy], 0  ; a clip owned by the dying instance stops
     je .tone                    ; at its next emitted sample (SPEC.md 34.4)
     cmp al, [snd_pcm_inst]
@@ -680,8 +761,83 @@ snd_unhook:
 ; -----------------------------------------------------------------------------
 osapi_snd_caps:
     mov ax, SND_CAP_TONE | SND_CAP_PCM_EXCL
-    mov bl, 0
-    mov dx, 1
+    or ax, [drv_svc+DSV_CAPS]   ; ...plus whatever a loaded driver adds
+    mov bl, 0                   ; BL = where a tone would go RIGHT NOW: 0 the
+    call snd_rt_card            ; speaker, 1 the driver's own sink - the
+    jc .route                   ; setting and the hardware, folded (34.8)
+    mov bl, 1
+.route:
+    mov dx, 1                   ; DX bit 0 = the speaker, always present
+    cmp word [drv_svc+DSV_CAPS], 0
+    je .out
+    or dx, 2                    ; bit 1 = a sound driver is loaded
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; osapi_snd_fm - the public FM request (slot 0x00F8, SPEC.md 20.3/34.2)
+;
+; in:       AL = verb, and the verb's own registers. Verb 2's patch pointer
+;           has ALREADY been staged into the kernel by the slot's X stub, so
+;           what reaches the driver is ES:SI in kernel memory.
+; out:      CF = 1 no FM sink, or the driver refused
+; clobbers: nothing else (flags)
+;
+; The requesting instance is stamped here, not in the driver: snd_req_inst
+; reads [snd_inst] and the running task's T_INST, both of which are kernel
+; state, and a driver that had to ask for them would need an API slot of its
+; own to do it. DH is the grant-stamping rule (SPEC.md 34.3) crossing the
+; segment boundary as an argument.
+; -----------------------------------------------------------------------------
+osapi_snd_fm_x:
+    cmp al, 2
+    jne osapi_snd_fm            ; every verb but patch-load carries no pointer
+    push cx                     ; verb 2: stage the caller's 11 bytes into
+    push si                     ; the kernel, the dsk_get_dir idiom - the
+    push di                     ; driver runs with DS = its own segment and
+    mov di, snd_patch           ; cannot reach the caller's
+    mov cx, 11
+.stage:
+    mov ah, [es:si]
+    mov [di], ah
+    inc si
+    inc di
+    loop .stage
+    mov si, snd_patch
+    pop di
+    call osapi_snd_fm
+    pop si
+    pop cx
+    ret
+
+osapi_snd_fm:
+    push di
+    push dx
+    push es
+    push ds
+    pop es                      ; the driver reads a staged patch through ES
+    call snd_req_inst           ; DH = the requester
+    mov di, DSV_FM
+    call drv_svc_call
+    pop es
+    pop dx
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; osapi_snd_stream - the public stream request (slot 0x0100, SPEC.md 34.5)
+; in:       AL = verb, and the verb's own registers
+; out:      CF = 1 no streaming sink, or the driver refused
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+osapi_snd_stream:
+    push di
+    push dx
+    call snd_req_inst
+    mov di, DSV_STREAM
+    call drv_svc_call
+    pop dx
+    pop di
     ret
 
 ; -----------------------------------------------------------------------------
@@ -960,6 +1116,8 @@ snd_pcm_smp:   resb 1           ;   the sample parked across pacer polls
 snd_pcm_n:     resw 1           ;   the clip divisor N (74..255)
 snd_pcm_emitted: resw 1         ; debug counters (34.4), reset per clip:
 snd_pcm_resync:  resw 1         ;   pulses emitted / deadline resyncs
+snd_patch:     resb 12          ; a package's 11-byte FM patch, staged into
+                                ; the kernel so the driver can read it (34.2)
 snd_evtmp:     resb 8           ; click-abort event drain scratch (evq_pop
                                 ; copies into DS memory)
 

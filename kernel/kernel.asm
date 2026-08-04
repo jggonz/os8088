@@ -106,13 +106,20 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; folder it created from the file dialog - the deepest mark left was 246 bytes
 ; on task 0's stack and 150 on a background task's.
 ; =============================================================================
-KERN_BUDGET equ 71680           ; the whole kernel, guard 1. Growing past this
+KERN_BUDGET equ 72704           ; the whole kernel, guard 1. Growing past this
                                 ; is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
-                                ; It was 65,536, and the 6KB it gained was
-                                ; asked for and granted, once, to buy the
-                                ; SPEC.md 41 store and the two API surfaces
-                                ; that came with it from the other fork
+                                ; It has moved twice, both times asked for and
+                                ; granted: 65,536 -> 71,680 for the SPEC.md 41
+                                ; store and the two API surfaces that came
+                                ; with it from the other fork, and 71,680 ->
+                                ; here for the driver subsystem (SPEC.md 51)
+                                ; and the Control Panel pages that drive it.
+                                ; The second one BUYS more than it spends: the
+                                ; OPL2 and Sound Blaster code it makes
+                                ; loadable is thousands of lines that would
+                                ; otherwise be resident on a machine with
+                                ; neither card
 
 ; The relocated boot sector (boot/boot.asm). The kernel now lands at 0x00600
 ; and runs up through 0x7C00, where the BIOS put the sector that is reading
@@ -120,7 +127,7 @@ KERN_BUDGET equ 71680           ; the whole kernel, guard 1. Growing past this
 ; offset so every label in it still resolves at org 0x7C00. BOOT_RELOC:7C00
 ; is linear 0x11000; its stack grows down from there, and guard 5 keeps the
 ; kernel clear of both. Both constants are mirrored in boot/boot.asm.
-BOOT_RELOC  equ 0x0AA0          ; 0x0AA0*16 + 0x7C00 = linear 0x12600
+BOOT_RELOC  equ 0x0B80          ; 0x0B80*16 + 0x7C00 = linear 0x13400
 BOOT_LIN    equ BOOT_RELOC*16 + 0x7C00
 BOOT_STACK  equ 2048            ; stack room below it
 
@@ -334,10 +341,15 @@ osapi_table:
     OSAPI_SLOT osapi_snd_caps     ; 0x00E0 - sound (SPEC.md 34): what the PC
     OSAPI_SLOT osapi_snd_tone     ; 0x00E8   speaker can do, a tone, and a
     OSAPI_SLOT osapi_snd_play     ; 0x00F0   clip out of the caller's buffer
-    OSAPI_RSLOT                   ; 0x00F8 - HELD: `main`'s OSAPI_SND_FM. The
-    OSAPI_RSLOT                   ; 0x0100 - HELD: `main`'s OSAPI_SND_STREAM.
-                                  ;          The OPL2 and Sound Blaster tiers
-                                  ;          were removed here (SPEC.md 34.5/
+    OSAPI_JSLOT api_snd_fm        ; 0x00F8 - FM verbs (SPEC.md 34.2). X: a
+                                  ;          patch-load's 11 bytes are the
+                                  ;          caller's, and only live while a
+                                  ;          sound DRIVER is loaded (51.4)
+    OSAPI_SLOT osapi_snd_stream   ; 0x0100 - PCM_BG streams (SPEC.md 34.5),
+                                  ;          likewise the driver's. Both
+                                  ;          answer CF=1 with no driver, which
+                                  ;          is the same thing the held cells
+                                  ;          they replaced did (SPEC.md 34.5/
                                   ;          34.6); holding the two numbers is
                                   ;          what puts every slot below back
                                   ;          on `main`'s address
@@ -488,6 +500,7 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
     OSAPI_XSTUB api_mem_claim,  osapi_mem_claim
     OSAPI_XSTUB api_mem_free,   osapi_mem_free
     OSAPI_XSTUB api_mem_regrow, mem_regrow
+    OSAPI_XSTUB api_snd_fm,     osapi_snd_fm_x
 
 ; N: the name at the caller's DS:SI is staged into kernel scratch first,
 ; because ES:BX belongs to the caller's data buffer and cannot carry it
@@ -635,15 +648,27 @@ kmain:
     call files_init             ; Disk module state (no window at boot)
     call loader_init            ; package loader state
     call tm_init                ; Task Manager total-RAM read (no window)
+    call drv_init               ; the driver table (SPEC.md 51) - BEFORE
+                                ; snd_init, whose tone route reads the
+                                ; published service table on its first tick
     call snd_init               ; sound layer (SPEC.md 34.7): saves the 61h
                                 ; boot bits, stores its .bss state, publishes
                                 ; snd_live LAST - snd_tick has been running
                                 ; gated since sched_init hooked int 08h
 
+    call drv_boot               ; ...and load what SYSTEM.CFG asks for
+                                ; (SPEC.md 51.3). Before the first paint, so
+                                ; a machine whose sound driver loads has
+                                ; sound from the first frame; nothing here
+                                ; can stop the boot.
+
     call gfx_lock
     call wm_paint_all
     call gfx_unlock
     call cursor_show
+
+    call drv_notice             ; ...and only NOW say what did not load: a
+                                ; window needs a screen that has been painted
 
     jmp ui_task                 ; task 0 becomes the UI task; never returns
 
@@ -791,6 +816,9 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "dock.inc"
 %include "taskmgr.inc"
 %include "ctrl.inc"
+%include "driver.inc"           ; loadable drivers (SPEC.md 51): after
+                                ; diskw (it reads and writes the system disk)
+                                ; and memory (a driver image is a claim)
 %include "snd.inc"              ; the sound layer (SPEC.md 34): PC speaker
 
 ; =============================================================================

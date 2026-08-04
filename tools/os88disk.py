@@ -49,6 +49,7 @@ import sys
 SECTOR = 512
 MAX_FILES = 32                # kernel listing cap (SPEC.md section 19)
 VOL_LABEL = b"OS8088APPS "    # 11 bytes, BS_VolLab == root label entry
+SYS_LABEL = b"OS8088SYS  "    # ...and what a --boot/--kernel disk is called
 VOL_ID = 0x88000888           # fixed serial -> deterministic images
 FIXED_DATE = 0x5C21           # 2026-01-01 in FAT date encoding
 FIXED_TIME = 0x0000
@@ -203,8 +204,19 @@ def dirent(name11: bytes, attr: int, clus: int, size: int) -> bytes:
 
 
 def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
-                lay: Layout) -> bytes:
-    bs = bytearray(SECTOR)
+                lay: Layout, code: bytes = None, label: bytes = None) -> bytes:
+    """One BPB, two uses. `code` is os8088's own 512-byte boot sector: its
+    first three bytes are already EB 3C 90 and bytes 62.. are its loader, so
+    the BPB is written into the hole between them and everything else is left
+    exactly as nasm assembled it. Without `code` the sector carries the
+    not-bootable stub instead."""
+    bs = bytearray(code if code else SECTOR)
+    if code:
+        if len(code) != SECTOR:
+            fail(f"boot code is {len(code)} bytes, not {SECTOR}")
+        if code[0:3] != b"\xEB\x3C\x90":
+            fail("boot code does not open with `jmp short 0x3E / nop` - "
+                 "see boot/boot.asm's BPB_END")
     bs[0:3] = b"\xEB\x3C\x90"                   # jmp short 0x3E; nop
     bs[3:11] = b"MSDOS5.0"                      # interop OEM name
     struct.pack_into("<H", bs, 11, SECTOR)      # BPB_BytsPerSec
@@ -220,9 +232,10 @@ def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
     # BPB_HiddSec, BPB_TotSec32 stay 0; BS_DrvNum 0; BS_Reserved1 0.
     bs[38] = 0x29                               # BS_BootSig
     struct.pack_into("<I", bs, 39, VOL_ID)      # BS_VolID
-    bs[43:54] = VOL_LABEL                       # BS_VolLab
+    bs[43:54] = label or VOL_LABEL              # BS_VolLab
     bs[54:62] = b"FAT12   " if lay.fat12 else b"FAT16   "
-    bs[62:62 + len(BOOT_STUB)] = BOOT_STUB
+    if not code:
+        bs[62:62 + len(BOOT_STUB)] = BOOT_STUB
     bs[510:512] = b"\x55\xAA"
     return bytes(bs)
 
@@ -262,9 +275,41 @@ def split_spec(arg: str):
     return folder.upper(), path
 
 
+def read_blob(path: str, what: str) -> bytes:
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError as e:
+        fail(f"cannot read {what} {path}: {e}")
+
+
 def build(args) -> int:
     spt, heads, tot, spc, fatsz, root_ent, media = GEOMETRY[args.size]
-    lay = Layout(spc, 1, 2, root_ent, tot, fatsz)
+
+    # --- the system disk (SPEC.md 19.3) --------------------------------------
+    # The kernel goes in the RESERVED AREA - the sectors between the boot
+    # sector and FAT1, which BPB_RsvdSecCnt covers and which no file system
+    # structure can ever reach. So boot/boot.asm's raw `read LBA 1..K` is
+    # untouched and still correct, while everything after the kernel is an
+    # ordinary FAT12 volume that DOS, Linux, macOS and os8088's own file
+    # manager and write path can all read AND WRITE.
+    #
+    # It is the reserved count that makes this legal rather than a trick:
+    # mount rule 5 (SPEC.md 18.2) has always been `RsvdSecCnt >= 1`, and a
+    # boot loader living in reserved sectors is exactly what the field is for.
+    boot = label = None
+    ksecs = 0
+    if args.boot or args.kernel:
+        if not (args.boot and args.kernel):
+            fail("--boot and --kernel go together (a system disk needs both)")
+        boot = read_blob(args.boot, "boot sector")
+        kern = read_blob(args.kernel, "kernel")
+        ksecs = (len(kern) + SECTOR - 1) // SECTOR
+        label = SYS_LABEL
+    lay = Layout(spc, 1 + ksecs, 2, root_ent, tot, fatsz)
+    if lay.nclus < 1:
+        fail(f"a {ksecs}-sector kernel leaves no data clusters on a "
+             f"{args.size}KB disk")
 
     # Group by folder, keeping first-appearance order. Names are checked for
     # duplicates PER DIRECTORY: two folders may each hold a MINES.O88.
@@ -366,9 +411,9 @@ def build(args) -> int:
         put(dir_chains[k], bytes(raw))
 
     root = bytearray(lay.root_secs * SECTOR)
-    root[0:32] = dirent(VOL_LABEL, 0x08, 0, 0)   # label first: the kernel
-    slot = 1                                     # filters it, so the first
-    for k in dirs:                               # listed entry is index 0
+    root[0:32] = dirent(label or VOL_LABEL, 0x08, 0, 0)  # label first: the
+    slot = 1                                     # kernel filters it, so the
+    for k in dirs:                               # first listed entry is 0
         root[slot * 32:(slot + 1) * 32] = dirent(
             folder83(k), 0x10, dir_chains[k][0], 0)
         slot += 1
@@ -379,7 +424,9 @@ def build(args) -> int:
         slot += 1
 
     image = bytearray(boot_sector(spt, heads, tot, spc, fatsz, root_ent,
-                                  media, lay))
+                                  media, lay, boot, label))
+    if boot:
+        image += kern.ljust(ksecs * SECTOR, b"\0")   # the reserved area
     image += fat.buf + fat.buf                   # FAT2 = FAT1
     image += root
     image += data_area
@@ -395,6 +442,7 @@ def build(args) -> int:
           f"{lay.type_name}) {len(files)} file(s)"
           + (f" in {len(dirs)} folder(s)" if dirs else "")
           + f", {need}/{lay.nclus} clusters"
+          + (f", kernel in {ksecs} reserved sectors" if boot else "")
           + (", scrambled" if args.scramble and files else ""))
     return 0
 
@@ -588,6 +636,12 @@ def main() -> int:
                     help="fragment cluster chains round-robin (test only)")
     ap.add_argument("--verify", metavar="IMG",
                     help="structural fsck of an existing image (no build)")
+    ap.add_argument("--boot", metavar="BOOT.bin",
+                    help="os8088's own 512-byte boot sector: makes this a "
+                         "bootable SYSTEM disk (needs --kernel)")
+    ap.add_argument("--kernel", metavar="KERNEL.bin",
+                    help="the kernel, placed in the FAT reserved area so the "
+                         "boot sector's raw LBA read still finds it")
     ap.add_argument("packages", metavar="[DIR:]PKG.o88", nargs="*",
                     help="package files, in directory order "
                          "(none = empty disk)")

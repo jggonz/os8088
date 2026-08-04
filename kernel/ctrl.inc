@@ -93,6 +93,8 @@ cp_sname:   db 'Control', 0     ; KD_NAME: fits the 7-char NAME column
 ; .text data, not .bss, so it is initialised on disk and needs no cp_init -
 ; the osapi_seed trick from kernel.asm.
 cp_dirty:   db 0                ; 1 = the mode changed, repaint everything
+cp_dsave:   db 0                ; 1 = the last SYSTEM.CFG write failed, and
+                                ; the Drivers page's caption says so (51.5)
 
 ; Selected item, index into cp_items. Inline .text data for the same reason;
 ; 0 = Scheduler is the boot selection, so the panel opens on it.
@@ -110,11 +112,17 @@ cp_items:
     dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
     dw cp_s_disp,  cp_disp_paint,  cp_disp_click,  0
     dw cp_s_time,  cp_time_paint,  cp_time_click,  0
+    dw cp_s_drv,   cp_drv_paint,   cp_drv_click,   0
+    dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0
 cp_items_end:
 CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
 CP_ITIME  equ 2                 ; the Date/Time item: ui.inc selects it by
                                 ; name when the menu bar clock is clicked
                                 ; (SPEC.md 12.1/31.5)
+CP_IDRV   equ 3                 ; ...and the Drivers item, which drv_notice
+                                ; opens the panel on when a driver did not
+                                ; load at boot (SPEC.md 51.3)
+CP_ISND   equ 4                 ; ...and Sound, the tone tier's route (34.8)
 
 ; List names are at most 9 characters (72px): the selection bar ends at
 ; CP_IBX2 = 85 and the name starts at CP_IX = 6, so a tenth glyph would
@@ -143,6 +151,21 @@ cp_s_dmono: db 'Not on this adapter', 0     ; a 1bpp adapter draws straight
 ; --- Date/Time page (SPEC.md 31.5/37) ----------------------------------------
 cp_s_time:  db 'Date/Time', 0   ; list name AND the page heading
 cp_s_tcap:  db 'Click a field, then + or -', 0
+
+; --- Drivers page (SPEC.md 31.6/51) ------------------------------------------
+; One row per drv_tab row: a checkbox, the driver's name, and - in the caption
+; - what the last load attempt actually answered. The click loads or unloads
+; ON THE SPOT and then writes SYSTEM.CFG, so the box is never a promise about
+; the next boot: what it shows is what is running right now.
+cp_s_drv:   db 'Drivers', 0     ; list name AND the page heading
+cp_s_dsave: db 'Cannot save to the system disk', 0
+
+; --- Sound page (SPEC.md 31.7/34.8) ------------------------------------------
+cp_s_snd:   db 'Sound', 0       ; list name AND the page heading
+cp_s_sspk:  db 'PC Speaker', 0
+cp_s_scard: db 'Sound card', 0  ; the row label when no driver names itself
+cp_s_stest: db 'Test', 0
+cp_s_snone: db 'No sound driver loaded', 0
 ; The Date/Time page names the RTC ladder tier that answered (SPEC.md 37.90),
 ; not just yes/no: on a machine whose clock will not hold a setting, which of
 ; the four answered is the whole diagnosis, and there is nowhere else to see
@@ -657,6 +680,7 @@ cp_sched_click:
     je .done                    ; that row is already live: change nothing
     mov al, ah
     call sched_mode_set         ; live on the next tick (SPEC.md 8.2)
+    call cp_flush               ; ...and remembered (SPEC.md 31.8)
     mov byte [cp_dirty], 1      ; ui_task step 3 repaints the About box's
                                 ; third line and any other mode-quoting
                                 ; window, outside the lock (SPEC.md 13)
@@ -938,6 +962,7 @@ cp_disp_click:
     jc .done                    ; leave the dot where it is (the caption and
 .doit:                          ; the greyed label already say why)
     call bb_set                ; flips both flags; we hold the lock
+    call cp_flush               ; ...and remembered (SPEC.md 31.8)
     call cp_dbradios            ; the two glyph boxes only
     call cpf_disp_cap           ; the caption can change with the claim:
                                 ; turning it OFF hands 150KB back, which may
@@ -1102,6 +1127,7 @@ cp_time_click:
 .osec:
     xor byte [clk_secs], 1      ; row 1: seconds in the menu bar
 .oredraw:
+    call cp_flush               ; both are remembered (SPEC.md 31.8)
     mov byte [clk_barq], 1      ; the bar's text (and width) changed: ui_task
                                 ; redraws it in this same pass (SPEC.md 37).
                                 ; NOT [cp_dirty] - a whole-desktop repaint to
@@ -1560,6 +1586,566 @@ cp_chk_off:
     dw 0x8010                   ;  9  #..........#
     dw 0x8010                   ; 10  #..........#
     dw 0xFFF0                   ; 11  ############
+
+; -----------------------------------------------------------------------------
+; cp_flush - persist every Control Panel setting (SPEC.md 31.8/51.5)
+; in:  nothing
+; out: nothing (all registers preserved)
+;
+; EVERY page calls this after it changes anything, so the machine boots in the
+; state it was left in. It is one write of one 32-byte file, and the file
+; carries the whole panel - the driver list, the sound route, the clock
+; options, the scheduler mode and the back buffer - so there is no per-setting
+; bookkeeping to keep in step.
+;
+; It writes on every click rather than on close. A floppy write is ~a second
+; on the floor machine, and that is the honest price: the alternative loses a
+; setting whenever the panel is closed by closing the window, which is how it
+; is usually closed. [cp_dsave] carries the failure to the Drivers page's
+; caption - the only page with room to say it - and a failure never undoes
+; the change itself, which has already happened.
+; -----------------------------------------------------------------------------
+cp_flush:
+    push ax
+    call drv_cfg_save
+    mov byte [cp_dsave], 0
+    jnc .out
+    mov byte [cp_dsave], 1
+.out:
+    pop ax
+    ret
+
+; =============================================================================
+; The Sound page (SPEC.md 31.7/34.8)
+;
+; Where a tone comes out. Two radio rows on the Display page's geometry, and
+; a Test button under them that plays one through whatever is selected - so
+; the answer to "did that do anything?" is one click away and does not need
+; an app.
+;
+; The CARD row is the bb_avail idiom (SPEC.md 31.3) a third time: greyed when
+; no loaded driver publishes a tone sink, refused on click, and named in the
+; caption. Note the setting is kept even so - SND_RT_CARD on a machine with
+; no card falls back to the speaker (snd_rt_card) rather than going silent,
+; because a disk carrying that setting to a machine that HAS one should just
+; work.
+; =============================================================================
+
+CPS_BTX1  equ CP_PGX                    ; the Test button
+CPS_BTX2  equ CP_PGX + 44
+CPS_BTY1  equ 62
+CPS_BTY2  equ 77
+CPS_CAPY  equ 88
+
+; -----------------------------------------------------------------------------
+; cp_snd_paint - the page: heading, two route rows, the Test button, caption
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+cp_snd_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov byte [gfx_color], CBLACK    ; entry pen is CWHITE (cp_page's erase)
+    mov si, cp_s_snd
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PHY
+    call font_str
+
+    mov si, cp_s_sspk               ; row 0: always available
+    mov cx, di
+    add cx, CP_PLX
+    mov dx, bp
+    add dx, CP_PR0Y + CP_PLDY
+    call font_str
+
+    call cp_snd_cardok              ; row 1: greyed when there is no sink
+    mov byte [gfx_color], CBLACK
+    jnc .lbl1
+    mov byte [gfx_color], CDGRAY
+.lbl1:
+    call cp_snd_cardnm              ; SI = the driver's own name, or a
+    mov cx, di                      ; generic one
+    add cx, CP_PLX
+    mov dx, bp
+    add dx, CP_PR0Y + CP_PROWH + CP_PLDY
+    call font_str
+    mov byte [gfx_color], CBLACK
+
+    mov ax, di                      ; the Test button: a plain framed box
+    add ax, CPS_BTX1
+    mov bx, bp
+    add bx, CPS_BTY1
+    mov cx, di
+    add cx, CPS_BTX2
+    mov dx, bp
+    add dx, CPS_BTY2
+    call gfx_frame
+    mov si, cp_s_stest
+    mov cx, di
+    add cx, CPS_BTX1 + 11
+    mov dx, bp
+    add dx, CPS_BTY1 + 4
+    call font_str
+
+    call cp_snd_radios
+    call cp_snd_cap
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_snd_cardok - is the card row selectable? (module internal)
+; out: CF = 0 yes (a loaded driver publishes a tone sink); CF = 1 no
+; clobbers: nothing (flags)
+; -----------------------------------------------------------------------------
+cp_snd_cardok:
+    cmp word [drv_svc+DSV_TONE], 0
+    je .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_snd_cardnm - what to call the card row (module internal)
+; out: SI -> the loaded driver's own sink name, or 'Sound card'
+; clobbers: SI (the output), flags
+; -----------------------------------------------------------------------------
+cp_snd_cardnm:
+    mov si, cp_s_scard
+    cmp byte [drv_sname], 0     ; the driver's DSV_NAME, staged by drv_publish
+    je .out
+    mov si, drv_sname
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_snd_radios - both glyphs, from the live [snd_route] (module internal)
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
+;
+; The dot follows the SETTING, not the effective sink: a machine whose card
+; went away still shows what the disk asked for, and the caption says what is
+; actually sounding.
+; -----------------------------------------------------------------------------
+cp_snd_radios:
+    push ax
+    push cx
+    push dx
+    push si
+    mov byte [gfx_color], CBLACK
+    mov al, [snd_route]
+    mov cx, di
+    add cx, CP_PGX
+    mov dx, bp
+    add dx, CP_PR0Y
+    mov si, cp_radio_off
+    cmp al, SND_RT_SPK
+    jne .r0
+    mov si, cp_radio_on
+.r0:
+    call cp_glyph
+    add dx, CP_PROWH
+    mov si, cp_radio_off
+    cmp al, SND_RT_SPK
+    je .r1
+    mov si, cp_radio_on         ; AUTO and CARD both mean "the card if it is
+.r1:                            ; there", so one dot covers them
+    call cp_glyph
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_snd_cap - the caption: where a tone would come out right now (internal)
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+cp_snd_cap:
+    push cx
+    push dx
+    push si
+    mov dx, bp
+    add dx, CPS_CAPY
+    call cp_drv_wipe            ; the strings differ in length
+    call snd_rt_card            ; the router's own answer, not a second one
+    jnc .card
+    mov si, cp_s_sspk
+    cmp byte [snd_route], SND_RT_SPK
+    je .draw
+    mov si, cp_s_snone          ; asked for the card and there is none
+    jmp short .draw
+.card:
+    call cp_snd_cardnm
+.draw:
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CPS_CAPY
+    call font_str
+    pop si
+    pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_snd_click - a click inside the Sound page
+; in:  DI = pane left, BP = pane top, CX = pane-relative x, DX = pane-relative
+;      y; gfx lock held by the caller
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+cp_snd_click:
+    push ax
+    push cx
+    push dx
+
+    cmp dx, CPS_BTY1            ; --- the Test button ------------------------
+    jl .rows
+    cmp dx, CPS_BTY2
+    jg .done
+    cmp cx, CPS_BTX1
+    jl .done
+    cmp cx, CPS_BTX2
+    jg .done
+    mov ax, 660                 ; one second of a tone through whatever the
+    mov cx, 18                  ; page currently selects. UI priority, so it
+    mov dl, SND_PRI_UI          ; outranks anything a package is playing -
+    call osapi_snd_tone         ; the user asked for it
+    jmp short .done
+
+.rows:
+    cmp dx, CP_B0Y1             ; --- the two route rows --------------------
+    jl .done
+    cmp dx, CP_B1Y2
+    jg .done
+    mov al, SND_RT_CARD
+    cmp dx, CP_B0Y2
+    jg .set
+    mov al, SND_RT_SPK
+.set:
+    cmp al, SND_RT_SPK
+    je .take
+    call cp_snd_cardok          ; the card row is refused when nothing
+    jc .done                    ; publishes a tone sink - the caption says so
+.take:
+    cmp al, [snd_route]
+    je .done                    ; that row is already live
+    mov [snd_route], al
+    call cp_snd_radios
+    call cp_snd_cap
+    call cp_flush
+.done:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; =============================================================================
+; The Drivers page (SPEC.md 31.6/51)
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; cp_drv_paint - the page: heading, a checkbox row per driver, one caption
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+;
+; A row's LABEL is the driver's name and its CAPTION is what its last load
+; attempt answered - DRVE_OK reads 'Loaded', and every other value is the
+; reason it is not (kernel/driver.inc's drv_errstr, the same strings the boot
+; notice uses). That is the bb_avail idiom again: the box, the caption and
+; the click all read one word, so they cannot disagree.
+; -----------------------------------------------------------------------------
+cp_drv_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov byte [gfx_color], CBLACK    ; entry pen is CWHITE (cp_page's erase)
+    mov si, cp_s_drv                ; heading, same string as the list row
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PHY
+    call font_str
+
+    xor bx, bx                      ; BX = row index
+.row:
+    push bx
+    mov al, bl
+    call drv_row                    ; BX = the drv_tab row
+    cmp word [bx+DRVR_FILE], 0
+    je .next                        ; an empty table row draws nothing
+    mov si, [bx+DRVR_TITLE]
+    pop ax
+    push ax                         ; AX = the row index again
+    push bx
+    call cp_drv_rowy                ; DX = this row's glyph top
+    mov cx, di
+    add cx, CP_PLX
+    add dx, CP_PLDY
+    call font_str                   ; the driver's name
+    pop bx
+
+    call drv_status                 ; ...and what it is doing right now
+    pop ax
+    push ax
+    call cp_drv_rowy
+    add dx, CP_PLDY + 9
+    mov cx, di
+    add cx, CP_PLX
+    call font_str
+.next:
+    pop bx
+    inc bx
+    cmp bx, DRV_MAX
+    jb .row
+
+    call cp_drv_boxes               ; every checkbox, from the live state
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_drv_rowy - a driver row's glyph top (module internal)
+; in:  AL = row index, BP = pane top
+; out: DX = the absolute y of that row's checkbox
+; clobbers: nothing else (flags)
+;
+; Two text lines per row, so the pitch is wider than the radio pages': the
+; name sits on the glyph's own baseline and the reason 9px under it.
+; -----------------------------------------------------------------------------
+CP_DR0Y   equ 24                ; first driver row: glyph top
+CP_DROWH  equ 26                ; row pitch
+CP_DB0Y1  equ CP_DR0Y - 4                       ; row 0's hit band, top...
+CP_DB0Y2  equ CP_DR0Y + CP_DROWH - 5            ; ...and bottom = row 1 top-1
+CP_DB1Y2  equ CP_DR0Y + CP_DROWH + CP_GW + 5    ; row 1's bottom
+
+cp_drv_rowy:
+    push ax
+    push cx
+    mov ah, 0
+    mov cx, CP_DROWH
+    mul cx
+    add ax, CP_DR0Y
+    add ax, bp
+    mov dx, ax
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_drv_boxes - redraw every driver row's checkbox from the live table
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
+;
+; The box tracks DRVR_SEG - what is LOADED - and not DRVR_WANT, which is only
+; what the settings file asks for. A driver the user enabled on a machine with
+; no card is unchecked, and its caption says why.
+; -----------------------------------------------------------------------------
+cp_drv_boxes:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [gfx_color], CBLACK
+    xor bx, bx
+.row:
+    push bx
+    mov al, bl
+    call drv_row
+    cmp word [bx+DRVR_FILE], 0
+    je .next
+    mov si, cp_chk_off
+    cmp word [bx+DRVR_SEG], 0
+    je .off
+    mov si, cp_chk_on
+.off:
+    pop ax
+    push ax
+    call cp_drv_rowy
+    mov cx, di
+    add cx, CP_PGX
+    call cp_glyph
+.next:
+    pop bx
+    inc bx
+    cmp bx, DRV_MAX
+    jb .row
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_drv_click - a click inside the Drivers page (SPEC.md 51.3)
+;
+; in:  DI = pane left, BP = pane top, CX = pane-relative x (ignored),
+;      DX = pane-relative y; gfx lock held by the caller
+; out: nothing
+; clobbers: nothing (flags only)
+;
+; The click LOADS OR UNLOADS ON THE SPOT and only then writes SYSTEM.CFG, so
+; the page never shows a promise about the next boot. Both halves can fail
+; and both failures are reported in place: a load that finds no disk or no
+; card leaves the box clear with the reason under it, and a settings write
+; that cannot reach the disk says so in the caption while the driver it just
+; loaded stays loaded - which is the honest split, because the two are
+; genuinely separate outcomes.
+;
+; A load does floppy I/O with the gfx lock held. That is the same bargain
+; every other file operation in this OS makes (SPEC.md 18.4): the cursor
+; freezes for the length of the read, and the alternative - dropping the lock
+; inside a click handler - is not one the window manager offers.
+; -----------------------------------------------------------------------------
+cp_drv_click:
+    push ax
+    push bx
+    push dx
+
+    cmp dx, CP_DB0Y1            ; outside every band: nothing
+    jl .done
+    cmp dx, CP_DB1Y2
+    jg .done
+    xor al, al                  ; upper band = row 0
+    cmp dx, CP_DB0Y2
+    jle .got
+    mov al, 1                   ; lower band = row 1
+.got:
+    push ax
+    call drv_row
+    cmp word [bx+DRVR_FILE], 0  ; an empty table row is not a control
+    pop ax
+    je .done
+
+    push ax
+    call drv_row
+    cmp word [bx+DRVR_SEG], 0
+    pop ax
+    je .load
+    call drv_unload             ; it is up: take it down
+    push ax
+    call drv_row
+    mov byte [bx+DRVR_WANT], 0
+    mov byte [bx+DRVR_ERR], DRVE_OK ; nothing failed - it was turned off
+    pop ax
+    jmp short .save
+.load:
+    push ax
+    call drv_row
+    mov byte [bx+DRVR_WANT], 1  ; wanted first, so a failed load still
+    pop ax                      ; persists the intent: put the disk in and
+    call drv_load               ; the next boot picks it up
+.save:
+    call cp_flush               ; ...and only now, the settings file
+.redraw:
+    call cp_drv_boxes
+    call cp_drv_lines
+.done:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_drv_lines - redraw the reason under each row, and the save caption
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+;
+; The strings differ in length, so each line is erased before it is drawn -
+; the cpf_disp_cap idiom.
+; -----------------------------------------------------------------------------
+cp_drv_lines:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    xor bx, bx
+.row:
+    push bx
+    mov al, bl
+    call drv_row
+    cmp word [bx+DRVR_FILE], 0
+    je .next
+    call drv_status
+    pop ax
+    push ax
+    call cp_drv_rowy
+    add dx, CP_PLDY + 9
+    call cp_drv_wipe
+    mov cx, di
+    add cx, CP_PLX
+    call font_str
+.next:
+    pop bx
+    inc bx
+    cmp bx, DRV_MAX
+    jb .row
+
+    mov dx, bp                  ; the caption: only a failed SAVE speaks here
+    add dx, CP_PCAPY
+    call cp_drv_wipe
+    cmp byte [cp_dsave], 0
+    je .out
+    mov si, cp_s_dsave
+    mov cx, di
+    add cx, CP_PMX
+    call font_str
+.out:
+    mov byte [gfx_color], CBLACK
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_drv_wipe - white out one text line of the pane (module internal)
+; in:  DI = pane left, DX = the line's baseline y; gfx lock held
+; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
+; -----------------------------------------------------------------------------
+cp_drv_wipe:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [gfx_color], CWHITE
+    mov ax, di
+    add ax, CP_PMX
+    mov bx, dx
+    mov cx, di
+    add cx, CP_CW - 2
+    add dx, 7
+    call gfx_fill
+    mov byte [gfx_color], CBLACK
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; cp_chk_on - the same square with an X through it (checked)
 cp_chk_on:

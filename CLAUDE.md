@@ -15,6 +15,8 @@ make          # build all four floppy images into build/
 make run      # boot in QEMU with emulated serial mouse (1.44MB images)
 make run-640  # same, as a maxed-out 640KB machine (-m 1M; QEMU/SeaBIOS can't boot below 1MB, int 12h caps at 640K anyway; SeaBIOS's EBDA makes it 639K)
 make test     # boot headless with QMP socket at build/qmp.sock for scripted testing
+make test ADLIB=1 # ...with an emulated AdLib at 388h, so the sound DRIVER
+              # (SPEC.md 51.4) has something to attach to. SB16=1 likewise.
 make test-snd # make test + PC speaker captured to build/snd.wav; verify with
               # tools/sndcheck.py (note: the wav holds speaker-ON time only, not
               # wall time - a silent boot yields an empty capture, and QEMU leaves
@@ -543,6 +545,57 @@ is mirrored in `boot/boot.asm`.
 The apps disk is **foldered** now, like `main`'s: `APPS/` and `GAMES/`, via a
 `DIR:` prefix per package in the Makefile. Root indices are 0 = APPS,
 1 = GAMES, and a package is two double-clicks away rather than one.
+
+### Loadable drivers (SPEC.md §51, `kernel/driver.inc`)
+
+**A driver is a package that is not an application.** Same 32-byte header,
+same `org 0`, same paragraph-aligned heap claim, same three-byte dispatcher
+at `PKG_DISP` — so `drv_call` is `wm_pkgcall` with the far pointer taken out
+of a driver row instead of a window record, and a driver author writes near
+procs with near `ret`s. Four differences, each load-bearing: it is a **.DRV
+file** (the mount types only `*.O88` as an application, so it can never be
+double-clicked into the loader); its **header version is 4** (so
+`ld_check_hdr` refuses it too — two independent gates); it has **no instance
+record** (its memory is `MEM_K_DRV`, counted under System); and **its bss
+ships inside its image**, which is what lets `drv_load` make exactly ONE
+claim, at the size the directory entry already reported, before a byte is
+read.
+
+`DRVV_ATTACH` must be all-or-nothing — the kernel frees the image the moment
+a driver says no, so anything it hooked outlives it — and `DRVV_DETACH`
+cannot fail. Detach happens BEFORE the free, always: freeing the claim under
+a live interrupt vector points it at whatever claims that memory next.
+
+A driver publishes a **service table** the kernel copies into `.bss` at
+attach (the `dsk_get_dir` staging idiom), so every later dispatch is a near
+read plus one far call and `snd_tick` — inside IRQ0 — needs no segment
+register to find out whether it has work. `DSV_TONE` is the interesting cell:
+publishing it **moves the tone tier off the PC speaker**, which is what an
+OPL2 wants (an FM note is two register writes and then no CPU) and a Sound
+Blaster does not.
+
+**Nothing here can stop the boot.** No disk, no file, no card and no memory
+are all recorded in the row and reported afterwards — `drv_boot` runs before
+the first paint so a loaded driver is live from frame one, and `drv_notice`
+runs after it and opens the **Control Panel on its Drivers page**, which
+already names every driver and says what its last attempt answered.
+
+**The system disk is a FAT12 volume now** (SPEC.md §19.3) and that is what
+makes all of it possible: `BPB_RsvdSecCnt` covers the kernel's sectors, so
+`boot/boot.asm`'s raw `read LBA 1..K` is untouched while everything after it
+is an ordinary file system — drive A: mounts, browses and **writes**.
+`SYSTEM.CFG` in its root is 32 bytes carrying the *whole* Control Panel (the
+driver list, the sound route, the clock options, the scheduler mode, the back
+buffer), written by `cp_flush` on every click and restored by `drv_boot`. A
+missing or malformed file means the defaults, never an error.
+
+Two traps. **`build/os8088.img` is now writable and the OS writes to it** —
+any test that touches a Control Panel setting dirties a tracked, shipped
+artifact, exactly like `build/apps.img`; `rm -f build/os8088.img
+build/os8088-360.img && make` before committing. And **`make test ADLIB=1`**
+(or `SB16=1`) is the only way to exercise the driver at all: without a card
+QEMU's probe correctly finds nothing, which is the right answer and not the
+one you want to be testing against.
 
 ### The claim heap (SPEC.md §50, `kernel/memory.inc`)
 
