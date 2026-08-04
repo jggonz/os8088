@@ -211,6 +211,19 @@ $(BUILD)/piano.bin: apps/piano/piano.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/piano.o88: $(BUILD)/piano.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/piano.bin -o $@
 
+# Recorder (SPEC.md 35): the sound layer's recording and streaming client,
+# ported back from `main` once the driver put SND_CAP_PCM_IN and PCM_BG
+# streams behind SOUND.DRV (SPEC.md 51.4). It needs no card to be USEFUL -
+# DEMO stages a built-in sweep and PLAY falls back to speaker clips - so it
+# ships on every disk and greys REC on a machine with no Sound Blaster.
+$(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/recorder/recorder.asm
+	@echo "recorder: $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/recorder.o88: $(BUILD)/recorder.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/recorder.bin -o $@
+
 # Fractal, the sixth shipped package: five escape-time fractals in Q4.12
 # fixed point, rendered by a background WORKER TASK (SPEC.md 20.6) while the
 # GUI stays live. The first client of OSAPI_TASK_SPAWN / OSAPI_TASK_ALIVE.
@@ -316,12 +329,12 @@ $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 tools/os88disk.py
 # two double-clicks away rather than one. Order inside each folder is pinned
 # and new packages ALWAYS append at the end of their folder - the scripted
 # tests click the Disk window by row index, and every index inside a folder
-# is now independent of what the other folder holds. (Recorder was in APPS on
-# the other fork; the sound cards went with it - SPEC.md 34.5/34.6 - so this
-# fork's APPS is one shorter and its indices differ from `main`'s by one from
-# `piano` on.)
+# is now independent of what the other folder holds. (Recorder came BACK with
+# the driver - SPEC.md 34.5/34.6/51.4 - so APPS holds the same six packages
+# `main` does; it sits LAST here and third there, because the append rule
+# above outranks matching the other fork's row order.)
 APPS_TOOLS := $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/piano.o88 \
-              $(BUILD)/fractal.o88 $(BUILD)/paint.o88
+              $(BUILD)/fractal.o88 $(BUILD)/paint.o88 $(BUILD)/recorder.o88
 APPS_GAMES := $(BUILD)/mines.o88 $(BUILD)/solitair.o88 $(BUILD)/arkanoid.o88
 APPS := $(APPS_TOOLS) $(APPS_GAMES)
 

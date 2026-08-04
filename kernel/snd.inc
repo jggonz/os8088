@@ -831,13 +831,43 @@ osapi_snd_fm:
 ; -----------------------------------------------------------------------------
 ; osapi_snd_stream - the public stream request (slot 0x0100, SPEC.md 34.5)
 ; in:       AL = verb, and the verb's own registers
-; out:      CF = 1 no streaming sink, or the driver refused
+; out:      AX = the verb's answer; DX = bytes consumed ON VERB 3 ONLY;
+;           CF = 1 no streaming sink, or the driver refused
 ; clobbers: nothing else (flags)
+;
+; DX IS BOTH AN INPUT AND AN OUTPUT OF THIS SLOT, on different verbs, and the
+; stub has to know which. On the two OPEN verbs it is the RATE coming in, and
+; `snd_req_inst` writes DH - the top half of a 4,000..44,100 Hz rate - so the
+; kernel banks it into BX before stamping. On verb 3 it is the CONSUMED COUNT
+; going out, and banking it means restoring it, which threw the answer away:
+; every poller got its own stale DX back, read it as "consumed < total", and
+; sat on a finished stream forever saying PLAYING. Recorder is what found it
+; (sbtest showed the same garbage in its c: field and it read as plausible).
+;
+; So verb 3 takes a path that never pushes DX at all, rather than a test
+; after the call - a `cmp` there would eat the CF the call just answered
+; with, and the verb is known before the call anyway.
 ; -----------------------------------------------------------------------------
 osapi_snd_stream:
+    cmp word [drv_svc+DSV_STREAM], 0
+    jne .have
+    mov ax, 4                   ; NO STREAMING SINK, said in the stream verbs'
+    stc                         ; own vocabulary. drv_svc_call's generic
+    ret                         ; refusal answers AX = 0 - which is a fine
+                                ; "nothing happened" for the FM and tone
+                                ; slots, whose contract is CF alone, and is
+                                ; exactly WRONG here, because AX = 0 is how
+                                ; every stream verb says OK. A driverless
+                                ; machine handed Recorder a phantom grant
+                                ; that way: verb 7 reported success, SI was
+                                ; never written, and the app staged a demo
+                                ; into a buffer that did not exist.
+.have:
     push bx
     push bp
-    push dx
+    cmp al, 3
+    je .status
+    push dx                     ; every other verb gets its DX back
     mov bx, es                  ; BX = the CALLER'S SEGMENT, which verbs 5 and
                                 ; 6 copy to and from: the X stub put the
                                 ; caller's DS in ES, and ES is KERNEL_SEG by
@@ -848,18 +878,24 @@ osapi_snd_stream:
     cmp al, 4
     jne .go
 .rate:                          ; ...except on the two OPEN verbs, where BX is
-    mov bx, dx                  ; unused and the RATE needs somewhere to be.
-                                ; snd_req_inst writes DH, and DH is the top
-                                ; half of a 4,000..44,100 Hz rate, so stamping
-                                ; the requester first would destroy it. The
-                                ; other fork's driver banked DX itself, right
-                                ; before calling snd_req_inst; here the kernel
-                                ; stamps, so the kernel banks (SPEC.md 34.5).
+    mov bx, dx                  ; unused and the RATE needs somewhere to be
+                                ; (see above). The other fork's driver banked
+                                ; DX itself, right before calling
+                                ; snd_req_inst; here the kernel stamps, so
+                                ; the kernel banks (SPEC.md 34.5).
 .go:
     call snd_req_inst           ; DH = the requester
     mov bp, [drv_svc+DSV_STREAM]
     call drv_svc_call
     pop dx
+    pop bp
+    pop bx
+    ret
+.status:                        ; verb 3: DX is the ANSWER, so nothing banks
+    mov bx, es                  ; it and nothing puts it back
+    call snd_req_inst
+    mov bp, [drv_svc+DSV_STREAM]
+    call drv_svc_call
     pop bp
     pop bx
     ret
