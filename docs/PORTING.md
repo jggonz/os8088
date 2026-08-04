@@ -8,9 +8,10 @@ to go back to.
 The binding contract is [SPEC.md](../SPEC.md), and §20.8 in particular is the
 list of things a package may not do.
 
-**Nothing built for `b401eda` runs here.** The header magic and version still
-match, so a stale `.o88` loads and then jumps into the wrong place — the loader
-will not diagnose it. Bringing work forward always means rebuilding from source.
+**Nothing built for `b401eda` runs here.** The loader refuses a stale `.o88`
+as "Bad package" — this tree's v3 header carries the three dispatcher bytes
+at +12 (§5/§6) and `ld_check_hdr` demands them — so the failure is loud, not
+wrong. Bringing work forward always means rebuilding from source.
 
 ---
 
@@ -60,8 +61,8 @@ your intent on top** rather than resolving hunk by hunk:
 
 | file | why it conflicts |
 |---|---|
-| `kernel/kernel.asm` | the memory ladder is derived here, not a list of constants, and the API table has different contents above `0x01B0` |
-| `apps/os88api.inc` | slot numbers moved; the memory trio has a different contract |
+| `kernel/kernel.asm` | the memory ladder is derived here, not a list of constants, and the API table grew new slots at `0x0200`+ |
+| `apps/os88api.inc` | new `OSAPI_MEM_*` names carry the KB contract; the paragraph trio lives on at its old numbers, wrapper-answered |
 | `SPEC.md` | renumbered sections, and §45 arrived by a different route |
 
 If your work is a **package only**, none of that applies: copy the `.asm` into
@@ -91,8 +92,8 @@ If you only read one section, read this one.
 5. **Drop the fourth `OS88_HEADER` argument** (the RAM requirement) and any
    `--needs` in the Makefile rule. There is no load-time RAM gate; size
    yourself at runtime instead.
-6. **Rebuild.** Slot numbers are all `%define`s, so re-assembly fixes every
-   one of them — including the block that moved.
+6. **Rebuild.** Slot numbers are all `%define`s and every one of `b401eda`'s
+   kept its number, so re-assembly asks nothing of you here.
 
 What you do **not** have to change, though the older version of this document
 said otherwise: `OSAPI_WM_GEOM`, `OSAPI_ABOUT_SET`, `OSAPI_CPU_INFO`, every
@@ -118,12 +119,12 @@ three-byte dispatcher inside your own header, which calls you *near* — so ever
 one of those procs is a near proc with a near `ret`. A stale `retf` returns into
 the loader's stack frame and hangs the machine at the first paint. See §5.
 
-**Slot numbers above `0x01B0` moved.** They tracked `main`'s exactly while both
-branches were live, with five cells held empty so that a number could never mean
-two contracts. The merge made those holes pointless and they were closed, which
-moved this tree's own block down 88 bytes. `0x01D0` means `WM_RESIZE` at
-`b401eda` and `FILE_READBIG` here — a *silent* collision, which is why §4 lists
-the whole range.
+**Slot numbers did NOT move.** Every slot `b401eda` publishes keeps its number
+and its contract here — the three paragraph-counting memory slots at
+`0x01B8`..`0x01C8` included, answered by wrappers over the claim heap — and
+everything this tree added starts at `0x0200`, `b401eda`'s first free number.
+So a stale binary's API *calls* land on the right routines; it is the two
+items above, not the table, that force the rebuild.
 
 `SS != DS` on both, so `[bp+disp]` addresses `SS` and a pointer held in `BP`
 still needs an explicit `ds:` override. `LOW_SEG` itself is no longer a constant
@@ -147,34 +148,28 @@ Slots `0x0010`..`0x00F0` are **unchanged**:
 0x00C8 MOUSE         0x00D8 RAND           0x00E8 SND_TONE
 ```
 
-`0x00F8` to `0x01B0` are unchanged too, routine for routine. **Above `0x01B0`
-they differ**, and every number in that range is still a valid slot — so a
-stale citation resolves to the wrong routine rather than failing:
+`0x00F8` to `0x01F8` are unchanged too, routine for routine — **including the
+three paragraph-counting memory slots**:
 
 | slot | at `b401eda` | here |
 |---|---|---|
-| `0x01B0` | `WM_GEOM` | `WM_GEOM` — **the last number that agrees** |
-| `0x01B8` | `MEM_ALLOC` (paragraphs) | `WM_RESIZE` |
-| `0x01C0` | `MEM_FREE` (`AX`) | `GFX_BLIT4` |
-| `0x01C8` | `MEM_AVAIL` (paragraphs) | `ABOUT_SET` |
-| `0x01D0` | `WM_RESIZE` | `FILE_READBIG` |
-| `0x01D8` | `GFX_BLIT4` | `GFX_DBUF` |
-| `0x01E0` | `ABOUT_SET` | `GFX_SCROLL` |
-| `0x01E8` | `FILE_READBIG` | `MEM_CLAIM` (KB) |
-| `0x01F0` / `0x01F8` | `GFX_DBUF` / `GFX_SCROLL` | `MEM_FREE` / `MEM_AVAIL` (KB) |
-| `0x0200`+ | — | `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`, `MEM_REGROW`, `WM_TITLE`, `DRV_TASK` (drivers only), `MEM_CLAIM_DMA` |
+| `0x01B8` | `MEM_ALLOC` (paragraphs, answers in `AX`) | the same contract, answered by the claim heap through `osapi_cm_alloc` |
+| `0x01C0` | `MEM_FREE` (`AX`) | the same, through `osapi_cm_free` |
+| `0x01C8` | `MEM_AVAIL` (paragraphs) | the same, through `osapi_cm_caps` |
+| `0x01D0`..`0x01F8` | `WM_RESIZE`, `GFX_BLIT4`, `ABOUT_SET`, `FILE_READBIG`, `GFX_DBUF`, `GFX_SCROLL` | identical, number for number |
+| `0x0200`+ | — | this tree's additions: `MEM_CLAIM` / `MEM_FREE` / `MEM_AVAIL` (the KB shapes, §8), `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`, `MEM_REGROW`, `WM_TITLE`, `DRV_TASK` (drivers only), `MEM_CLAIM_DMA` |
 
-**Every contract `b401eda` had, this tree has** — `GFX_DBUF` and `GFX_SCROLL`
-were the last two missing and were ported before the merge. The one genuine
-difference is the memory API, and it is deliberate: paragraphs answering in
-`AX` versus KB answering in `DX`. Putting those at one number would fail
-silently and by a factor of 64, which is why the numbers were kept apart even
-while both branches lived.
+**Every contract `b401eda` had, this tree has, at `b401eda`'s number.** The
+paragraph slots are wrappers now — a paragraph count rounds up to whole KB, so
+a grant is never smaller than asked — and new code should prefer the KB slots
+at `0x0200`+ (§8): they are the native shape, they work from the entry proc,
+and only they carry the DMA-page and regrow contracts.
 
-You never write these numbers by hand — `%include "os88api.inc"` supplies them —
-so re-assembly fixes every one. The table exists for reading *prose*: a comment
-or a spec citation naming a slot number written before the merge means a
-different routine now.
+You never write these numbers by hand — `%include "os88api.inc"` supplies
+them — and this tree's SDK names the KB shapes `OSAPI_MEM_*`, so a `b401eda`
+source that used `OSAPI_MEM_ALLOC` (paragraphs) must either convert to KB at
+the new name or call the old slot by number. Everything else re-assembles
+with no thought given to the table at all.
 
 ---
 
@@ -310,7 +305,7 @@ so every caller repeats the same `-2` / `-TITLE_H-1`, and `WM_GEOM` is that
 subtraction done once. The record is readable, not idiomatic.
 
 `OSAPI_WM_RESIZE` is unchanged in contract (`BX` = win, `CX` = w, `DX` = h,
-lock held) and moved to `0x01B8`.
+lock held) and in number (`0x01D0`).
 
 ---
 
@@ -332,6 +327,13 @@ enough.
 `paragraphs >> 6` is KB. The register move is the part that assembles cleanly
 and misbehaves: a claim whose answer you read from `AX` gets whatever `AX`
 happened to hold.
+
+**Or skip the conversion**: `b401eda`'s three paragraph slots are still live
+at their own numbers (`0x01B8`/`0x01C0`/`0x01C8`, §4), answered by wrappers
+over the claim heap with `main`'s register contracts intact — call them by
+number and a port's memory code needs no change at all. The KB names are
+still the better target: only they carry the regrow and DMA-page contracts,
+and the SDK has no `%define` for the old shapes on purpose.
 
 ### 8.2 The model changed underneath it
 
@@ -387,7 +389,7 @@ the hardware lives: the OPL2 and Sound Blaster tiers are a **loadable driver**
 ## 10. Menus and About
 
 `OSAPI_MENU_SET` and the `OS88_MENUSET` / `OS88_MENU` macros are unchanged.
-`OSAPI_ABOUT_SET` is here (moved to `0x01C8`) and is the right way to publish
+`OSAPI_ABOUT_SET` is here (still `0x01E0`) and is the right way to publish
 an About item: it appends a one-item pull-down under your app's name.
 
 If your app used **the empty-menu-label trick** — an `AM_NAME` of `""` and a
@@ -405,7 +407,7 @@ effect on the next drop with no re-registration — which is how Paint's
 ## 11. Files, folders and the dialog
 
 Unchanged: every `dskw_*` slot, all eleven `FERR_*` codes, the Standard File
-dialog, and `OSAPI_FILE_READBIG` (moved to `0x01D0`) for reads with no 64KB
+dialog, and `OSAPI_FILE_READBIG` (still `0x01E8`) for reads with no 64KB
 ceiling.
 
 New here: `OSAPI_FILE_HERE` and `OSAPI_FILE_GOTO`, which read and restore the

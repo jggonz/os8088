@@ -1103,6 +1103,78 @@ osapi_mem_avail:
     jmp mem_avail
 
 ; -----------------------------------------------------------------------------
+; osapi_cm_alloc / osapi_cm_free / osapi_cm_caps - main's v3 arena slots
+; (SPEC.md 20.8), answered by the claim heap
+;
+; main numbers these 0x01B8/0x01C0/0x01C8 and counts in PARAGRAPHS; the heap
+; counts KB. The wrappers convert - a paragraph count rounds UP to whole KB,
+; so a grant is never smaller than asked - and keep main's register contracts
+; exactly: cm_alloc answers in AX (not DX) and fails with main's code in AX,
+; cm_free takes AX and preserves it, cm_caps answers AX/DX/BL preserving BH.
+; A package built against main's SDK runs on this kernel unchanged; one built
+; against this SDK uses the KB slots directly (SPEC.md 50.3).
+; -----------------------------------------------------------------------------
+osapi_cm_alloc:
+    push cx
+    push dx
+    add ax, 63                  ; paragraphs -> KB, rounded up; 0 asks for
+    jc .refuse                  ; 1KB (main's "0 is rounded up to 1"), and a
+    mov cl, 6                   ; carry is >0xFFC0 paragraphs - nothing that
+    shr ax, cl                  ; big exists below 1MB
+    or ax, ax
+    jnz .ask
+    inc ax
+.ask:
+    call osapi_mem_claim        ; CF/DX by the heap's rules, ES the identity
+    jc .refuse
+    mov ax, dx                  ; main's contract: AX = the base segment
+    pop dx
+    pop cx
+    ret
+.refuse:
+    xor ax, ax                  ; main's failure codes: 0 = no arena at all,
+    mov dx, [mem_top]           ; 1 = no record, 2 = no run. The heap does
+    cmp dx, [mem_base]          ; not tell 1 from 2 apart (and no shipped
+    je .code                    ; caller ever did): 2, or 0 on a machine
+    mov ax, 2                   ; whose heap is empty
+.code:
+    pop dx
+    pop cx
+    stc
+    ret
+
+osapi_cm_free:
+    push dx                     ; in: AX = the base segment; out: CF, with
+    mov dx, ax                  ; AX preserved - main's contract, so the
+    call osapi_mem_free         ; heap's DX-in shape is hidden here
+    pop dx
+    ret
+
+osapi_cm_caps:
+    push cx
+    push si
+    mov ch, bh                  ; BH survives in CH (CX itself is banked)
+    call mem_avail              ; AX = largest free KB, BX = total free KB
+    mov dx, bx
+    mov cl, 6
+    shl ax, cl                  ; KB -> paragraphs: a 640KB heap is 0xA000
+    shl dx, cl                  ; paragraphs, so the shifts never carry
+    xor bx, bx                  ; BL = free claim records (main: free
+    mov si, mem_tab             ; block-table entries)
+.rec:
+    cmp word [si+MC_SEG], 0
+    jne .used
+    inc bx
+.used:
+    add si, MC_SIZE
+    cmp si, mem_tab + MEM_MAX*MC_SIZE
+    jb .rec
+    mov bh, ch                  ; the caller's BH back (BL <= MEM_MAX)
+    pop si
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
 ; mem_own - the calling package's owner word (module-internal)
 ; in:  ES = the caller's segment, stamped by the API stub
 ; out: CF = 0 and BX = the owner word (that same segment); CF = 1 if the
