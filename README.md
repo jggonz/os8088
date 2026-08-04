@@ -209,7 +209,7 @@ paid for whether or not anything was loaded — and retiring it is what returned
 that memory to the heap. `docs/KERNEL-MEMORY.md` is the standing account of what the budget is spent
 on, and of the measured RAM floor: **80KB boots and loads a package**, ~176KB
 runs every shipped app at full function, and the heap is simply whatever
-int 12h reports minus 72.5KB.
+int 12h reports minus 73KB.
 
 ## Layout
 

@@ -107,11 +107,13 @@ Everything above that is the claim heap, up to whatever int 12h reports. The
 arithmetic is exact and worth writing down, because every RAM figure in this
 project falls out of it:
 
-> **heap KB = what int 12h reports − 72.5**
+> **heap KB = what int 12h reports − 73**
 
-`KERN_END` is 4,640 paragraphs = 74,240 bytes = 72.5KB, and the heap starts
+`KERN_END` is 4,672 paragraphs = 74,752 bytes = 73KB, and the heap starts
 there. Checked against a live machine: QEMU with `-m 1M` reports **639KB**
-and the Task Manager shows **566KB** of heap. 639 − 72.5 = 566.5. It used to
+and the Task Manager shows **566KB** of heap. 639 − 73 = 566. Re-derive it
+after any budget change — this constant has already moved once, when
+`KERN_BUDGET` went to 76,800. It used to
 be *nothing* on a small machine: the package pool's own top sat above 128KB,
 so a 128KB machine had no heap and could load no package at all.
 
@@ -123,7 +125,7 @@ tree.) Three different questions, three different answers:
 
 | RAM | heap | what happens |
 |---|---|---|
-| < 78KB | — | **cannot boot.** Nothing to do with the heap: `boot/boot.asm` relocates itself to linear 78,848 and reads the kernel from there, so the machine has to have that byte. Guard 5 checks the kernel clears its stack, with 2,560 bytes to spare. |
+| < 80KB | — | **cannot boot.** Nothing to do with the heap: `boot/boot.asm` relocates itself to linear 80,896 and reads the kernel from there, so the machine has to have that byte. Guard 5 checks the kernel clears its stack. |
 | 80KB | 7KB | boots, full desktop, browses both floppies, **loads a package** (`hello`) |
 | 96KB | 23KB | Note Pad runs. Paint loads and puts up its "Not enough memory" notice — the designed tier, not a crash |
 | 176KB | 103KB | **Paint runs live**, full 448×280 canvas. 160KB still gets the notice |
