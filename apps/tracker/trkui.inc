@@ -569,6 +569,17 @@ tui_msg_draw:
 ; --- position editor (0,0)-(111,76): 5-line order window with the current
 ; --- order on a band, plus song length and position readouts ------------------
 tui_el_posed:
+    mov byte [tui_vonly], 0         ; full: face, bevel, labels, values
+    jmp short tui_posed_body
+; --- ...and the same box with only the parts a position move can change ------
+; Its five order lines DO all move - the window scrolls under a fixed
+; highlight - so they are redrawn, but each erases only its own 8-row band
+; instead of the box being refilled and bevelled underneath them. 'Len' and
+; 'Pos' are labels and stay; the song length cannot change while a module is
+; loaded, so only the Pos value is relettered.
+tui_val_posed:
+    mov byte [tui_vonly], 1
+tui_posed_body:
     push ax
     push bx
     push cx
@@ -581,7 +592,10 @@ tui_el_posed:
     mov dx, 76
     call tui_clipc
     jc .out
+    cmp byte [tui_vonly], 0
+    jne .lines
     call tui_facec
+.lines:
     mov byte [tui_chn], 0           ; k = order-window line 0..4
 .k:
     mov al, [tui_chn]
@@ -590,6 +604,19 @@ tui_el_posed:
     mul bl
     add ax, 5
     mov dx, ax                      ; line y: 5, 14, 23, 32, 41
+    cmp byte [tui_vonly], 0         ; no box fill under us: erase this line's
+    je .band                        ; own band, which is all that moved
+    cmp byte [tui_chn], 2
+    je .band                        ; (line 2's band fill below erases it)
+    push dx
+    mov ax, 3
+    mov bx, dx
+    mov cx, 108
+    add dx, 7
+    TSETC TC_FACE
+    call tui_fillc
+    pop dx
+.band:
     cmp byte [tui_chn], 2
     jne .plain
     push dx
@@ -637,8 +664,10 @@ tui_el_posed:
     inc byte [tui_chn]
     cmp byte [tui_chn], 5
     jb .k
-    TSETC TC_FACET
-    mov si, tui_s_len
+    cmp byte [tui_vonly], 0
+    jne .pos                        ; 'Len' and 'Pos' are labels, and the song
+    TSETC TC_FACET                  ; length cannot change while a module is
+    mov si, tui_s_len               ; loaded: only the Pos value moves
     mov cx, 6
     mov dx, 56
     call tui_textc
@@ -651,13 +680,111 @@ tui_el_posed:
     mov cx, 6
     mov dx, 66
     call tui_textc
+    TSETC TC_FACET
     mov al, [mp_songpos]
     call tui_hex2
     mov si, tui_nbuf
     mov cx, 38
+    mov dx, 66
     call tui_textc
+    jmp short .out
+.pos:
+    mov al, [mp_songpos]
+    call tui_hex2
+    mov si, tui_nbuf
+    mov cx, 38
+    mov dx, 66
+    mov bx, 16
+    mov ah, TC_FACE
+    mov al, TC_FACET
+    call tui_rdout
 .out:
     pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; Value-only redraws (SPEC.md 45.12)
+;
+; The tui_el_* routines above are FULL element draws: box face, bevel, static
+; labels, values. That is what a repaint wants and it is the wrong thing to
+; run once a beat. tui_el_bpm refilled a 93x44 box, redrew its bevel and
+; relettered 'BPM' and 'Spd' to change one digit of tempo; tui_el_ptn did the
+; same for 'Ptn', 'Ln', '64' and 'Np', of which only two are values at all
+; and one of those cannot move while a module plays.
+;
+; These draw the VALUES and nothing else, each as one tui_rdout - a fill of
+; exactly the field's rect and the digits back into it - which is the same
+; erase-and-letter pair the compact layout has always used (tui_val_cga_*).
+; The face, the bevel and every label are drawn once by tui_draw_top and then
+; left alone, because nothing about them changes while the module plays.
+; =============================================================================
+
+; --- BPM / Spd values, inside the box tui_el_bpm draws ------------------------
+tui_val_bpm:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov al, [mp_bpm]
+    call tui_dec3
+    mov si, tui_nbuf
+    mov cx, 168
+    mov dx, 36
+    mov bx, 24
+    mov ah, TC_FACE
+    mov al, TC_FACET
+    call tui_rdout
+    mov al, [mp_speed]
+    call tui_dec3
+    mov si, tui_nbuf
+    mov cx, 168
+    mov dx, 50
+    mov bx, 24
+    mov ah, TC_FACE
+    mov al, TC_FACET
+    call tui_rdout
+    mov al, [mp_bpm]
+    mov [tui_lbpm], al
+    mov al, [mp_speed]
+    mov [tui_lspd], al
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- Ptn / Np values ('Ln 64' is a constant and is never redrawn) -------------
+tui_val_ptn:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov al, [mp_pattern]
+    call tui_hex2
+    mov si, tui_nbuf
+    mov cx, 258
+    mov dx, 36
+    mov bx, 16
+    mov ah, TC_FACE
+    mov al, TC_FACET
+    call tui_rdout
+    mov al, [mp_npat]
+    call tui_hex2
+    mov si, tui_nbuf
+    mov cx, 258
+    mov dx, 64
+    mov bx, 16
+    mov ah, TC_FACE
+    mov al, TC_FACET
+    call tui_rdout
     pop si
     pop dx
     pop cx
@@ -2015,8 +2142,8 @@ tui_draw_dyn:
     call tui_draw_pat
     test byte [tui_lay + TL_FLAGS], TLF_CMPCT
     jnz .rowc
-    call tui_el_posed
-    call tui_el_ptn
+    call tui_val_posed              ; VALUES only - the box faces, the bevels
+    call tui_val_ptn                ; and every label are already on screen
     jmp .norows
 .rowc:
     call tui_val_cga_pos
@@ -2030,7 +2157,7 @@ tui_draw_dyn:
 .bs:
     test byte [tui_lay + TL_FLAGS], TLF_CMPCT
     jnz .bsc
-    call tui_el_bpm
+    call tui_val_bpm
     jmp .nobs
 .bsc:
     call tui_val_cga_bs
@@ -2045,11 +2172,20 @@ tui_draw_dyn:
     call tui_el_scopes
 .nomute:
     call tui_draw_vu
-    mov al, [tui_frame]
-    and al, 15
-    jnz .out
-    call tui_draw_top               ; the fdlg-cancel menu-bar eraser
     jmp .out
+
+    ; The top band used to be redrawn WHOLE every 16 frames from here - the
+    ; logo, both readout blocks, the status line, four scope frames, the
+    ; button column and the pattern header - as an eraser for the menu bar,
+    ; which the kernel drew over our fullscreen content whenever the Standard
+    ; File dialog was cancelled. That was a second-or-so heartbeat of static
+    ; repainting on a machine with nothing to spare, to undo something that
+    ; should never have been drawn: a visible fullscreen window covers the
+    ; chrome (SPEC.md 11.2), and the kernel now declines to paint the bar or
+    ; the dock underneath one instead of leaving the application to scrub it
+    ; off afterwards. Closing the dialog damages our rect and we get a
+    ; W_PAINT for it like anything else, which is one repaint on an event
+    ; rather than a repaint per second forever.
 .win:
     cmp byte [mp_playing], 0        ; windowed: a live position line on the
     je .out                         ; splash while something plays
@@ -2266,6 +2402,8 @@ tui_ab5:     db 'Any key closes', 0
     TRKB tui_cvr                    ; the view row this frame
     TRKB tui_band                   ; tui_row1: drawing the band row
     TRKB tui_chn                    ; shared small loop counter
+    TRKB tui_vonly                  ; 1 = draw an element's VALUES only, the
+                                    ; face/bevel/labels being on screen already
     TRKB tui_lrow                   ; last-drawn markers for tui_draw_dyn
     TRKB tui_lpos
     TRKB tui_lpat

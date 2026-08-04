@@ -213,12 +213,17 @@ Three traps:
   drawn under windows, and `wm_fit` keeps a window above it but `ui_grow`'s
   clamp is looser, so a grown window can hang over it — where `dock_paint`
   would draw on top of a window instead of under it. That used to be
-  `wm_fast_ok`'s second veto, so **one** oversized window made every focus
+  a veto that sent the cheap path back to `wm_paint_all`, so **one** oversized
+  window made every focus
   change, show and un-minimize a full-screen repaint. `wm_dock_under` owns it
   now: `dock_paint` reports in CF whether it drew anything, `wm_dock_clear`
   whether a window is on the strip, and only if both say yes does
   `wm_dmg_wins` — §11.91's mark-and-draw pass, factored out for this — put
-  those windows back. Fullscreen (§11.2) is the one veto left.
+  those windows back. **Fullscreen is no longer a veto either**: a window
+  raised over a fullscreen one reveals nothing like any other, so `wm_raise`
+  just skips the chrome (`wm_fs_vis`) rather than the caller repainting the
+  screen to avoid drawing it, and `wm_paint_all` starts its walk AT the
+  fullscreen window because everything below is covered by construction.
 - **`wm_front` on a hidden window falls back** rather than draw a window that
   has no pixels on screen. `wm_show` is the entry point for that.
 

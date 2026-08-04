@@ -1482,10 +1482,40 @@ but nothing under the bar is touched. **`wm_front` on a window that is not
 visible** takes the full pass: `wm_show` is the entry point for that, and
 declining is better than drawing a hidden window.
 
-**One fallback to the full pass**, structural (`wm_fast_ok`): anything to do
-with a fullscreen window — `[wm_fs]` set, or the window itself carrying
-`WF_FULL` — because §11.2 suppresses the chrome entirely and the ordering
-above stops describing the screen.
+**There is no fallback to the full pass left.** A fullscreen window used to
+be one (`wm_fast_ok`): `[wm_fs]` set, or the window itself carrying
+`WF_FULL`, sent both entry points to `wm_paint_all` on the grounds that
+§11.2 suppresses the chrome and the ordering above stops describing the
+screen. It does not stop describing it — it gets *shorter*. A window shown
+over a fullscreen one reveals nothing, like any other; a fullscreen window
+shown over everything reveals nothing because it covers the screen. Only the
+chrome had to change, and `wm_raise` now **skips** the bar and the dock
+(`wm_fs_vis`) instead of the caller repainting the world in order to avoid
+drawing them.
+
+What that cost, before: opening the Standard File dialog over a fullscreen
+player repainted the player — its whole `W_PAINT` — to put a small dialog on
+top of it, and again to take it away. `wm_fs_vis` is the predicate the four
+painters now share; `wm_paint_all` and `wm_paint_dmg` had each open-coded it.
+
+Two things fell out of removing the veto, both of them latent bugs it had
+been hiding:
+
+- **`wm_draw_title` had no `WF_FULL` guard.** A fullscreen window has no
+  title bar, and `wm_raise` hands the *outgoing* front window one when
+  something is raised over it — so the first raise over a fullscreen window
+  painted a full-width white strip with a centred caption across the top of
+  its content. The guard belongs in `wm_draw_title`: "no title bar" is a
+  fact about the window, not about the path that reached it.
+- **`wm_paint_all` walks from the fullscreen window, not from the bottom.**
+  Everything below a window covering the whole screen is covered by it, by
+  construction. `wm_covered` reached the same answer one region-arithmetic
+  pass per window later.
+
+`wm_paint_dmg` likewise stops falling back. Under a fullscreen window the
+desktop, its drive zones, the dock and the bar are all under it, so the
+window pass is the whole of the work — and the empty-rect "the chrome
+changed" case has no chrome on screen to change.
 
 **A window hanging over the dock used to be the other, and it was expensive
 out of all proportion.** The strip is drawn under windows (§30), so
@@ -1507,8 +1537,7 @@ and nothing else. `wm_raise`, `wm_front`'s chrome-only path and
 
 **`wm_lift`** is the z-order move split out of `wm_front` so `wm_show` can
 reorder without committing to the repaint that used to be welded to it.
-**`wm_raise`** is the paint half both entry points share, and **`wm_fast_ok`**
-the eligibility test.
+**`wm_raise`** is the paint half both entry points share.
 
 **One consumer had to follow.** A file-manager window that posts a load
 draws `'Loading...'` in its status line while `[ld_pending]` is set (§22).
@@ -5812,8 +5841,8 @@ KIND_TASKMGR like the §14 kinds.
 The template carried a fixed height, which is right on VGA's 480 rows and too
 tall on Hercules' 348 - so the window hung over the dock strip, and
 `dock_paint` then had to draw *under* a window instead of over the desktop —
-which at the time was the one case `wm_fast_ok` declined (§11.90), so every
-window opened on top of it paid for that with a full repaint. On CGA's 200
+which at the time sent the cheap raise path back to the full pass (§11.90),
+so every window opened on top of it paid for that with a full repaint. On CGA's 200
 rows it never fitted at all. (`wm_dock_under` has since made that case cost a
 rectangle rather than the screen, but a window that fits is still the point.)
 

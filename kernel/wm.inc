@@ -566,16 +566,18 @@ wm_destroy:
 ; window cannot change them, and desk_zone_redraw (SPEC.md 26) already owns
 ; the one thing that can.
 ;
-; It falls back to the full pass in the two cases where "nothing else moved"
-; stops being true: anything to do with a fullscreen window (SPEC.md 11.2
-; suppresses the chrome entirely), and a visible window whose frame or drop
-; shadow hangs over the dock strip, where dock_paint would draw on top of a
-; window instead of under it.
+; **It no longer falls back at all.** A fullscreen window used to send both
+; this and wm_front to the full pass, on the grounds that SPEC.md 11.2
+; suppresses the chrome and none of the cheap path's reasoning survived that.
+; It survives it exactly: a window shown OVER a fullscreen one reveals
+; nothing, like any other, and a fullscreen window shown over everything
+; reveals nothing because it covers the screen. The chrome is the only part
+; that had to change, and wm_raise skips it (wm_fs_vis) rather than the
+; caller repainting the world to avoid drawing it. Opening the Standard File
+; dialog over a fullscreen player was a whole-screen repaint including that
+; player's W_PAINT, twice - once to show the dialog and once to take it away.
 ; -----------------------------------------------------------------------------
 wm_show:
-    call wm_fast_ok
-    jc .slow
-
     push ax
     push bx
     push bp
@@ -592,36 +594,64 @@ wm_show:
     pop bx
     pop ax
     ret
-.slow:
-    or word [bx+W_FLAGS], 2
-    call menu_activate
-    call wm_lift
-    jmp wm_paint_all            ; same register contract
 
 ; -----------------------------------------------------------------------------
-; wm_fast_ok - may the cheap raise path be used at all? (module internal)
-; in:  BX = the window about to come to the front
-; out: CF = 1 = no, fall back to the full pass. All registers preserved.
+; wm_fs_vis - is a VISIBLE fullscreen window covering the screen?
+; out: CF = 1 yes - the desktop, its drive zones, the dock and the menu bar
+;      are all under it and must not be drawn (SPEC.md 11.2). CF = 0 no.
+; clobbers: nothing else (flags)
 ;
-; ONE case now: anything to do with a fullscreen window, which suppresses the
-; chrome entirely (SPEC.md 11.2) so none of the cheap path's reasoning holds.
-;
-; A window hanging over the dock strip used to be the other. The strip is
-; drawn under windows, so dock_paint would have drawn on top of one - and
-; rather than order itself around that, the cheap path declined and the caller
-; repainted the whole screen. With a single oversized window on screen that
-; made EVERY focus change, show and un-minimize a full repaint. wm_dock_under
-; costs a rectangle instead, and usually nothing at all.
+; The one question four painters ask, and they used to ask it three different
+; ways: wm_paint_all and wm_paint_dmg open-coded it, and the cheap raise path
+; treated it as a reason to give up entirely.
 ; -----------------------------------------------------------------------------
-wm_fast_ok:
-    test word [bx+W_FLAGS], WF_FULL
-    jnz .no
-    cmp word [wm_fs], 0
-    jne .no
-    clc
+wm_fs_vis:
+    push bx
+    mov bx, [wm_fs]
+    or bx, bx
+    jz .no
+    test word [bx+W_FLAGS], 2
+    jz .no
+    pop bx
+    stc
     ret
 .no:
-    stc
+    pop bx
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_fs_zpos - where the fullscreen window sits in wm_zord (module internal)
+; in:  SI = wm_zord, DI = one past its last entry; wm_fs_vis has said yes
+; out: SI = its slot, or unchanged if it somehow is not in the order
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+wm_fs_zpos:
+    push ax
+    push bx
+    push cx
+    mov bx, [wm_fs]
+    mov ax, bx                  ; AL = its window index
+    sub ax, wm_wins
+    mov cl, WIN_SIZE
+    div cl                      ; (AH = 0: the pointer is record-aligned)
+    mov cx, di
+    sub cx, si
+    jcxz .out
+    push si
+.scan:
+    cmp [si], al
+    je .found
+    inc si
+    loop .scan
+    pop si                      ; not in the order: walk the lot, as before
+    jmp short .out
+.found:
+    add sp, 2
+.out:
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -649,12 +679,19 @@ wm_raise:
     push ax
     call menu_activate          ; BX owns the menu bar from here (SPEC.md 12)
     call wm_lift                ; ...and the top of the z-order
+    call wm_fs_vis              ; a fullscreen window is over the chrome, so
+    jc .nochrome                ; neither piece of it may be drawn at all
     call menu_draw_bar
     call wm_dock_under          ; the strip, and anything sitting on it
+.nochrome:
     cmp bp, di
     je .self                    ; already the front window: no outgoing one
     or bp, bp
     jz .self
+    test word [di+W_FLAGS], WF_FULL
+    jnz .self                   ; we are about to cover the whole screen: the
+                                ; outgoing window's title bar is a strip drawn
+                                ; only to be painted over
     xchg bp, di                 ; DI = the outgoing front, BP = the incoming
     call wm_draw_title          ; DI != BP now, so it loses its stripes
     xchg bp, di
@@ -887,8 +924,6 @@ wm_fullscreen:
 wm_front:
     test word [bx+W_FLAGS], 2
     jz .slow
-    call wm_fast_ok
-    jc .slow
 
     push ax
     push bx
@@ -916,6 +951,8 @@ wm_front:
     jnz .go
     call menu_activate          ; the degenerate case: chrome only
     call wm_lift
+    call wm_fs_vis              ; ...and under a fullscreen window, not even
+    jc .out                     ; that
     call menu_draw_bar
     call wm_dock_under
     jmp short .out
@@ -1323,11 +1360,10 @@ wm_paint_dmg:
     push di
     push bp
 
-    mov si, [wm_fs]             ; a visible fullscreen window suppresses the
-    or si, si                   ; chrome entirely (SPEC.md 11.2) - none of
-    jz .clamp                   ; the reasoning below survives that
-    test word [si+W_FLAGS], 2
-    jnz .fallback
+    mov byte [wm_dmg_fs], 0     ; a visible fullscreen window covers the
+    call wm_fs_vis              ; desktop, its drive zones, the dock and the
+    jnc .clamp                  ; bar - so none of those is drawn, and the
+    mov byte [wm_dmg_fs], 1     ; window pass is the whole of the work
 
 .clamp:
     or ax, ax                   ; onto the live screen (SPEC.md 39.2)
@@ -1355,6 +1391,8 @@ wm_paint_dmg:
     mov [wm_dmg_x2], cx
     mov [wm_dmg_y2], dx
 
+    cmp byte [wm_dmg_fs], 0
+    jne .wins                   ; fullscreen: no zones to grow the rect to
     call desk_dmg_zones         ; AL = the zone mask; the rect grows to cover
     mov [wm_dmg_zn], al         ; every zone it touched
 
@@ -1380,6 +1418,7 @@ wm_paint_dmg:
 .dock:
     call dock_paint
     call menu_draw_bar
+.wins:
     call wm_dmg_wins            ; mark and draw; leaves wm_dmg_mask for below
 
     ; --- the window this uncovered is the front window now -----------------
@@ -1408,10 +1447,9 @@ wm_paint_dmg:
     jmp short .out
 
 .chrome:
-    call wm_paint_chrome
-    jmp short .out
-.fallback:
-    call wm_paint_all
+    cmp byte [wm_dmg_fs], 0     ; "nothing was uncovered but the chrome
+    jne .out                    ; changed" - and under a fullscreen window
+    call wm_paint_chrome        ; the chrome is not on screen to change
 .out:
     pop bp
     pop di
@@ -1590,12 +1628,9 @@ wm_paint_all:
     push si
     push di
     push bp
-    mov bx, [wm_fs]             ; a visible fullscreen window covers the
-    or bx, bx                   ; desktop, dock and menu bar - painting
-    jz .chrome                  ; them under it is pure waste (SPEC.md 11.2)
-    test word [bx+W_FLAGS], 2
-    jnz .wins
-.chrome:
+    call wm_fs_vis              ; a visible fullscreen window covers the
+    jc .fswins                  ; desktop, dock and menu bar - painting
+                                ; them under it is pure waste (SPEC.md 11.2)
     xor ax, ax                  ; desktop: 50% dither under the bar
     mov bx, MBAR_H
     mov cx, [vid_wm1]
@@ -1615,6 +1650,24 @@ wm_paint_all:
     mov ah, 0
     mov di, si
     add di, ax                  ; DI = one past the front
+    jmp short .win
+
+    ; --- ...and under a fullscreen window the walk STARTS at it ------------
+    ; Everything below a window covering the whole screen is covered by it,
+    ; entirely and by construction. wm_covered would reach the same answer
+    ; one region-arithmetic pass per window later; this is the same fact
+    ; known in advance, and it is what stops a fullscreen player from
+    ; examining - and, before wm_covered existed, redrawing - every window
+    ; parked behind it.
+.fswins:
+    call wm_top
+    mov bp, bx                  ; BP = frontmost visible
+    mov si, wm_zord
+    mov al, [wm_zn]
+    mov ah, 0
+    mov di, si
+    add di, ax                  ; DI = one past the front
+    call wm_fs_zpos             ; SI = the fullscreen window's slot in wm_zord
 .win:
     cmp si, di
     je .done
@@ -1851,6 +1904,8 @@ wm_dmg_x2   dw 0
 wm_dmg_y2   dw 0
 wm_dmg_mask dw 0                ; bit n = window n must be redrawn
 wm_dmg_zn   db 0                ; bit n = drive zone n must be redrawn
+wm_dmg_fs   db 0                ; 1 = a fullscreen window is over the chrome,
+                                ; so this pass draws windows and nothing else
 wm_dmg_j    dw 0                ; the marking pass's inner index
 wm_hide_r   times 4 dw 0        ; wm_hide/wm_destroy: the vacated rect,
                                 ; banked across the record teardown
@@ -2342,6 +2397,16 @@ wm_idx2ptr:
 ; other path reaches it through wm_draw_win and never notices.
 ; -----------------------------------------------------------------------------
 wm_draw_title:
+    test word [di+W_FLAGS], WF_FULL
+    jnz .none                   ; a fullscreen window HAS no title bar
+                                ; (SPEC.md 11.2), and drawing one anyway put
+                                ; a full-width white strip with a centred
+                                ; caption across the top of its content. It
+                                ; never showed while wm_fast_ok sent every
+                                ; fullscreen case to wm_paint_all instead;
+                                ; the guard belongs here rather than at each
+                                ; caller, because "no title bar" is a fact
+                                ; about the window and not about the path
     push ax
     push bx
     push cx
@@ -2479,6 +2544,7 @@ wm_draw_title:
     pop cx
     pop bx
     pop ax
+.none:
     ret
 
 ; -----------------------------------------------------------------------------
