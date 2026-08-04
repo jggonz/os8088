@@ -3807,7 +3807,7 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
 **Nothing is held empty any more, and the table is contiguous.** It was not:
 five cells refused every call, because every slot up to `dskw_readbig` sat at
 the number `main` uses for the same routine and the aim was that one package
-source assemble for either fork (docs/PORTING.md §3). Where `main` had
+source assemble for either fork (docs/PORTING.md §4). Where `main` had
 something this fork did not, the number was **reserved rather than reused** —
 an `stc`/`retf` cell answering CF=1 with every register back — on the rule that
 **a slot number must never mean two contracts**. Reusing 0x01C8 for this fork's

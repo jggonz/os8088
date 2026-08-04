@@ -445,7 +445,7 @@ VID_CGA    equ 2
                                  ; wholly contain the rect refuses: a blit
                                  ; cannot be cut per pixel (SPEC.md 11.3).
 
-; --- this fork's own slots (docs/PORTING.md 3) ---------------------------------
+; --- this fork's own slots (docs/PORTING.md 4) ---------------------------------
 ; Everything above is at `main`'s number. Everything from here up is this
 ; fork's - and 0x01B8..0x01C8 are HELD EMPTY because `main` puts its
 ; paragraph-counting arena there and this fork's heap counts KB (SPEC.md
@@ -518,7 +518,7 @@ VID_CGA    equ 2
 ; --- CPU tier and memory above 1MB (SPEC.md 41) --------------------------------
 ; On a 286 or a 386 the machine has RAM above linear 0x0FFFFF that the 640KB
 ; conventional map cannot name. These five slots lend you some of it, and they
-; sit at the SAME numbers `main` uses (docs/PORTING.md 3).
+; sit at the SAME numbers `main` uses (docs/PORTING.md 4).
 ;
 ; READ THIS FIRST, because it is the rule the whole group is shaped around:
 ; EXTENDED MEMORY IS A DATA STORE ONLY. Real mode forms an address as

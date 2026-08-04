@@ -1721,7 +1721,7 @@ wm_about_get:
 ; of them do - but that is FRAME size, and every caller then repeats the
 ; same `sub 2` / `sub TITLE_H+1`. This is that arithmetic in one place, and
 ; it is what a package written against `main` calls, so the two forks agree
-; on the slot AND on the answer (docs/PORTING.md 6).
+; on the slot AND on the answer (docs/PORTING.md 7).
 ;
 ; Callable from any context, lock held or not: it reads four words. The
 ; answer is only STABLE under the lock, which is when painters ask.
