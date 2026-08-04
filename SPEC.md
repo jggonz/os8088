@@ -8908,9 +8908,20 @@ allow, from 32x16 up, and everything else follows from that:
   an empty field means "leave this axis alone". They need 41 rows below the last
   tool button, which a 110-row CGA canvas does not have, so `pt_szon` answers
   for the painter and the hit test both — a control that is not drawn is not
-  clickable — and the two-line readout is what shows when they do not fit (as it
-  is on a machine with no undo image, where the canvas cannot be resized at
-  all). Apply and a grow-box drag both go through **`pt_setsize`**, the one place
+  clickable — and the two-line readout is what shows when they do not fit.
+
+  **The canvas height therefore has a floor of `PT_SZ_END`, not `PT_CH_MIN`.**
+  The fields are the only way to make a canvas taller — there is no menu item
+  and no key — so a canvas short enough to hide them could never be grown
+  again, and typing 100 into the height field, or dragging the grow box up, was
+  a one-way trip for the rest of the session. It is a minimum window size and
+  nothing more exotic. The floor is held against `[pt_chmax]` first: where the
+  *screen* is what cannot fund the controls — CGA, whose 110 rows are 18 short —
+  no floor can, and `PT_CH_MIN` is the honest answer. **Paint on a CGA machine
+  cannot be resized at all**, which is a layout limit rather than a memory one
+  and is not new.
+
+  Apply and a grow-box drag both go through **`pt_setsize`**, the one place
   a size is decided: it clamps to the screen, then to what memory will fund
   (`pt_fit`), then to what the picture will stand to lose (`pt_lose_w` /
   `pt_lose_h`), so typing 900 into a field is exactly a drag that asked for too
