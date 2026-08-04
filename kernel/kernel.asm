@@ -467,7 +467,16 @@ osapi_table:
                                   ;          worker, and it is exiting". X,
                                   ;          because the fence is an identity
                                   ;          test on the caller's segment
-osapi_table_end:                  ; 0x0290
+    OSAPI_JSLOT api_mem_claim_dma ; 0x0290 - a claim an ISA DMA controller can
+                                  ;          reach (SPEC.md 50.3): AX = KB,
+                                  ;          CX = KB of the HEAD that must not
+                                  ;          cross a 64KB physical boundary.
+                                  ;          X, the claim's own owner fence.
+                                  ;          A separate cell and not a CX on
+                                  ;          0x0240, because every existing
+                                  ;          caller passes garbage there and
+                                  ;          the failure would be silent
+osapi_table_end:                  ; 0x0298
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -475,8 +484,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 80 * 8
-%error "os8088 API jump table must be exactly 80 8-byte slots"
+%if OSAPI_TABLE_LEN != 81 * 8
+%error "os8088 API jump table must be exactly 81 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -504,6 +513,7 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
     OSAPI_XSTUB api_wm_create,  wm_create
     OSAPI_XSTUB api_pkg_spawn,  inst_pkg_spawn
     OSAPI_XSTUB api_mem_claim,  osapi_mem_claim
+    OSAPI_XSTUB api_mem_claim_dma, osapi_mem_claim_dma
     OSAPI_XSTUB api_mem_free,   osapi_mem_free
     OSAPI_XSTUB api_mem_regrow, mem_regrow
     OSAPI_XSTUB api_snd_fm,     osapi_snd_fm_x

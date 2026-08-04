@@ -150,7 +150,7 @@ counterpart for something `main` provides, the number is **held empty** (a
 | `0x01F0` | `GFX_DBUF` | **not implemented here** — see BRANCH-DIFFERENCES.md §A |
 | `0x01F8` | `GFX_SCROLL` | **not implemented here** — see BRANCH-DIFFERENCES.md §A |
 | `0x0200`–`0x0238` | — | *still reserved for `main` to grow into* |
-| `0x0240`+ | — | `MEM_CLAIM`, `MEM_FREE`, `MEM_AVAIL` (all KB), `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`, `MEM_REGROW`, `WM_TITLE`, `DRV_TASK` (drivers only) |
+| `0x0240`+ | — | `MEM_CLAIM`, `MEM_FREE`, `MEM_AVAIL` (all KB), `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`, `MEM_REGROW`, `WM_TITLE`, `DRV_TASK` (drivers only), `MEM_CLAIM_DMA` |
 
 **The memory trio is the one deliberate non-alignment.** `main` counts
 paragraphs and answers in `AX`; `experimental` counts KB and answers in `DX`.

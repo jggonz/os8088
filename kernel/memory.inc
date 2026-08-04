@@ -112,13 +112,15 @@ mem_init:
     ret
 
 ; -----------------------------------------------------------------------------
-; mem_claim / mem_claim_hi - claim a block of the heap (SPEC.md 50.3)
+; mem_claim / mem_claim_hi / mem_claim_dma - claim a block of the heap
+; (SPEC.md 50.3)
 ;
 ; in:       AX = KB wanted (1..640), BX = owner word (instance slot, or a
-;           MEM_K_* kernel tag)
+;           MEM_K_* kernel tag); mem_claim_dma also CX = KB of the block's
+;           HEAD that must not cross a 64KB physical boundary (0 = none)
 ; out:      CF = 0, DX = base segment of the block; CF = 1 refused (no free
-;           record, no hole big enough, this owner is at MEM_OWNER_MAX, or a
-;           silly size)
+;           record, no hole big enough, this owner is at MEM_OWNER_MAX, a
+;           silly size, or nothing page-safe when CX asked for it)
 ; clobbers: DX (an output) and the flags - every other register preserved
 ;
 ; **Two ends, one heap.** mem_claim is first fit from the BOTTOM upward, and
@@ -141,12 +143,55 @@ mem_init:
 ; one overlaps the candidate, restart just past it (or just below it, going
 ; down). Each bump lands on a claim edge and moves monotonically, so both
 ; loops terminate.
+;
+; **The 64KB page constraint is a THIRD kind of bump, not a caller's problem.**
+; The 8237 has no register for address bits 16..19 - port 8xh holds them and
+; the chip never carries into them - so an ISA DMA buffer that straddles a
+; 64KB PHYSICAL boundary wraps to the start of its page and transfers the
+; wrong memory. The sound driver used to discover that by claiming, testing,
+; and claiming AGAIN while HOLDING the block that failed, up to four times:
+; correct, but it can hold 128KB to find 32KB and refuse on a machine that
+; had the room all along. mem_claim_dma asks the scan instead. A candidate
+; whose head would straddle bumps to the next page floor (going up) or to the
+; highest base in its own page that still fits (going down) - both strictly
+; monotonic, like the overlap bump, so termination is unchanged, and the very
+; next test passes by construction because the new base's head starts at
+; offset 0 or ends exactly at the page's end.
+;
+; CX is the HEAD, not the whole block, because only part of a buffer is
+; usually the chip's: the sound driver's staging pool sits above its double
+; buffer and ring and is copied with rep movsb, so it may straddle freely.
+; Constraining the whole 32KB would halve the legal bases for nothing.
+;
+; A head bigger than a page can never be satisfied and is refused up front -
+; which is also what keeps the bump loop finite, since the bump only helps
+; when a page can hold the head at all.
+;
+; NOT preserved by mem_regrow: the constraint is an allocation-time property
+; and no record carries it, so a claim that MOVES (regrow path 3) can land
+; straddling. Do not regrow a DMA buffer; claim the size you need.
 ; -----------------------------------------------------------------------------
+mem_claim_dma:
+    push ax
+    push cx
+    mov ax, cx
+    mov cl, 6
+    shl ax, cl                  ; head KB -> paragraphs
+    jnc .set
+    mov ax, 0xFFFF              ; a head past 1MB: let the page test refuse it
+.set:                           ; rather than wrap into a plausible small one
+    mov [mem_dma], ax
+    pop cx
+    pop ax
+    mov byte [mem_dir], 0
+    jmp short mem_claim.go
 mem_claim_hi:
     mov byte [mem_dir], 1
-    jmp short mem_claim.go
+    jmp short mem_claim.nodma
 mem_claim:
     mov byte [mem_dir], 0
+.nodma:
+    mov word [mem_dma], 0
 .go:
     push ax
     push cx
@@ -160,6 +205,8 @@ mem_claim:
     mov cl, 6
     shl ax, cl                  ; AX = paragraphs wanted
     jc .fail                    ; > 1MB asked for
+    cmp word [mem_dma], 0x1000  ; ...and a head bigger than a 64KB page can
+    ja .fail                    ; never sit inside one
 
     mov di, mem_tab             ; this owner's share first (MEM_OWNER_MAX):
     mov cx, MEM_MAX             ; the table is a shared resource and running
@@ -197,6 +244,26 @@ mem_claim:
     cmp dx, [mem_base]
     jb .fail
 .retry:
+    cmp word [mem_dma], 0       ; the 64KB DMA-page test, when one was asked
+    je .fit                     ; for (CX is dead here - .fit rebuilds it)
+    mov cx, dx
+    and cx, 0x0FFF              ; paragraphs into this 64KB physical page
+    add cx, [mem_dma]
+    cmp cx, 0x1000              ; the head has to END inside the same page
+    jbe .fit
+    mov cx, dx                  ; it straddles. Going UP, the next base that
+    and cx, 0xF000              ; can work is the next page's floor...
+    add cx, 0x1000
+    jc .fail                    ; ...past 1MB, so there is no next page
+    cmp byte [mem_dir], 0
+    je .dmago
+    sub cx, [mem_dma]           ; ...and going DOWN, the highest base in THIS
+    cmp cx, [mem_base]          ; page whose head still fits. Below the heap
+    jb .fail                    ; floor means every lower page is too
+.dmago:
+    mov dx, cx
+    jmp short .retry
+.fit:
     mov cx, dx
     add cx, ax                  ; CX = candidate end
     jc .fail                    ; wrapped past 0xFFFF
@@ -878,12 +945,32 @@ mem_total_kb:
 ; -----------------------------------------------------------------------------
 ; osapi_mem_claim - in: AX = KB, ES = the caller's segment (the stub's doing)
 ;                   out: CF = 0 and DX = segment, CF = 1 refused
+;
+; The plain claim IS the DMA claim with no head to constrain, so it borrows the
+; body rather than repeating it - and it has to bank CX, which is the head
+; parameter there and one of the registers this slot promises to preserve.
 ; -----------------------------------------------------------------------------
 osapi_mem_claim:
+    push cx
+    xor cx, cx                  ; no head: no 64KB page constraint
+    call osapi_mem_claim_dma
+    pop cx                      ; pop leaves CF alone, and so does ret
+    ret
+
+; -----------------------------------------------------------------------------
+; osapi_mem_claim_dma - in: AX = KB, CX = KB of the head that must not cross a
+;                       64KB physical boundary, ES = the caller's segment
+;                       out: CF = 0 and DX = segment, CF = 1 refused
+;
+; What an ISA DMA buffer asks for (SPEC.md 50.3/51.6). A driver reaches it
+; through the same slot table as everything else: mem_own accepts a driver's
+; image segment as an owner exactly as it accepts a package's region.
+; -----------------------------------------------------------------------------
+osapi_mem_claim_dma:
     push bx
     call mem_own                ; BX = owner word = the calling segment
     jc .fail
-    call mem_claim
+    call mem_claim_dma
     jmp short .out
 .fail:
     xor dx, dx
@@ -977,6 +1064,8 @@ mem_dir:  resb 1                  ; 0 = mem_claim (bottom up), 1 = mem_claim_hi
                                   ; (top down, a package's region). One byte
                                   ; and not a parameter because the whole
                                   ; claim runs inside one cli window
+mem_dma:  resw 1                  ; ...and mem_claim_dma's head, in paragraphs,
+                                  ; for the same reason: 0 = no page constraint
 mem_base: resw 1                  ; first heap paragraph = HEAP_SEG
 mem_skip:   resw 1              ; mem_runfree: a record to ignore, 0 = none
 mem_top:  resw 1                  ; one past the last, from int 12h

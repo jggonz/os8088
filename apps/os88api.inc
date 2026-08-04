@@ -163,8 +163,30 @@ CWHITE    equ 15
                                  ; verb 3 or the instance is torn down;
                                  ; CHANNEL 8 IS NOT AVAILABLE - it is the tone
                                  ; tier's voice (SPEC.md 34.8).
-%define OSAPI_SND_STREAM    KERNEL_SEG:0x0100   ; PCM_BG streams: likewise the
-                                 ; driver's, and likewise CF=1 without one.
+; OSAPI_SND_STREAM's context rule is PER-VERB (SPEC.md 20.3). Verbs 1
+; (feed), 3 (status), 5 (read), 6 (stage) and 7 (grant) are ANY-TASK: a
+; window callback or YOUR OWN worker may call them - the driver runs their
+; check-then-act sequences under single cli windows, threads the verb-5/6
+; segment per call, and attributes grants task-correctly, so a worker can
+; mix -> stage -> feed -> poll a stream it owns. Verbs 0 (open-out), 2
+; (close) and 4 (open-in) stay UI-CALLBACK-ONLY: their busy/half-duplex
+; refusals rest on every OPENER being serialized on the UI task. Open and
+; close from W_ONKEY, a menu handler or an fdlg completion proc.
+; One author rule (SPEC.md 34.6): NEVER verb-7-free a grant your worker may
+; be mid-stage into - free it from the worker itself, or only after your own
+; handshake says it is parked.
+%define OSAPI_SND_STREAM    KERNEL_SEG:0x0100   ; PCM_BG streams + staging: the
+                                 ; driver's too, and likewise CF=1 without
+                                 ; one. AL = verb (0 open-out / 1 feed /
+                                 ; 2 close / 3 status / 4 open-in / 5 read /
+                                 ; 6 stage / 7 grant), AH = handle or sub-op
+                                 ; (verb 0: OPEN FLAGS - bit 0 =
+                                 ; SND_OPENF_RING below; every linear open
+                                 ; passes AH = 0); out AX = 0 ok / err /
+                                 ; SND_ST_* state (verb 3). Verb 6's SI
+                                 ; source and verb 5's DI dest are in YOUR
+                                 ; segment - STAGED for you, like verb 2 of
+                                 ; OSAPI_SND_FM.
 
 ; capability bits returned by OSAPI_SND_CAPS (SPEC.md 34.2). TONE and
 ; PCM_EXCL are the resident PC speaker's and are always there; the rest
@@ -174,6 +196,27 @@ SND_CAP_FM       equ 02h
 SND_CAP_PCM_BG   equ 04h
 SND_CAP_PCM_EXCL equ 08h
 SND_CAP_PCM_IN   equ 10h
+
+; stream states returned by OSAPI_SND_STREAM verb 3 (SPEC.md 20.3/34.5)
+SND_ST_PLAYING   equ 0
+SND_ST_UNDER     equ 1           ; underrun-paused: resumable by a feed
+SND_ST_ENDED     equ 2           ; stopped by the stream watchdog. A feed
+                                 ; is ACCEPTED but the stream NEVER
+                                 ; RESUMES - its refill task is gone. On
+                                 ; state 2, close, then reopen.
+SND_ST_STALE     equ 0FFFFh      ; the handle's stream is gone
+
+; verb-0 open flags, passed in AH (SPEC.md 20.3 verb 0 - verb 0 carries no
+; handle, so the byte is free; every pre-ring caller already loads AH = 0)
+SND_OPENF_RING   equ 1           ; ring mode (SPEC.md 34.5): SI = ring base,
+                                 ; ring length RL = grant end - SI, a POWER
+                                 ; OF TWO in 4096..32768; CX = initial valid
+                                 ; total, one HALF <= CX <= RL (2,048, or
+                                 ; 4,096 above 22,222 Hz). total/fed/
+                                 ; consumed become free-running 16-bit
+                                 ; (mod 65536): stage stream byte n at
+                                 ; ringbase + (n & (RL-1)), and verb 1 feeds
+                                 ; a DELTA, never a new total.
 
 ; --- window management (SPEC.md 11.1/11.2) -------------------------------------
 %define OSAPI_WM_SIZABLE    KERNEL_SEG:0x0108   ; BX=win ptr, AL = 0 clear / non-zero set
@@ -401,6 +444,22 @@ VID_CGA    equ 2
                                  ; your claims when your instance dies, so you
                                  ; need no teardown hook; free them yourself
                                  ; only to hand memory back mid-session.
+%define OSAPI_MEM_CLAIM_DMA KERNEL_SEG:0x0290   ; the same claim, for a buffer
+                                 ; an ISA DMA CONTROLLER will read or write:
+                                 ; AX = KB wanted, CX = KB of the block's HEAD
+                                 ; that must not cross a 64KB PHYSICAL
+                                 ; boundary; out CF and DX as above. The 8237
+                                 ; has no register for address bits 16..19 -
+                                 ; the page port holds them and the chip never
+                                 ; carries into them - so a transfer that
+                                 ; crosses one wraps to the start of its page
+                                 ; and moves the wrong memory. CX is a HEAD and
+                                 ; not the whole block because usually only
+                                 ; part of a buffer is the chip's; pass CX = AX
+                                 ; if all of it is, and CX = 0 for the plain
+                                 ; claim. Do NOT grow one of these:
+                                 ; OSAPI_MEM_REGROW may move it, and no record
+                                 ; carries the constraint.
 %define OSAPI_MEM_FREE      KERNEL_SEG:0x0248   ; DX = the segment you were
                                  ; given; out CF=0 released, CF=1 not yours
 %define OSAPI_MEM_AVAIL     KERNEL_SEG:0x0250   ; out AX = largest free run in
