@@ -9408,15 +9408,25 @@ Four stores, none of them guessed:
   this section came from, where the same claim was effectively *all* the
   remaining arena on a 512KB machine; against a 566KB heap it is a fifth.
 
-  **The over-claim is fixable here and is not fixed.** It exists because the
-  file dialog's completion does not carry the entry's 32-bit size, and
-  because on the other fork freeing and re-claiming after the read was
-  unsafe — first fit may hand back a different base. That second reason
-  **does not hold on this fork**: `OSAPI_MEM_REGROW` (§50.3) shrinks a claim
-  **in place**. Trimming the blob to the byte count `readbig` already
-  reports would cost one call and hand back most of 128KB on every small
-  module. Recorded rather than done: it changes the behaviour of the largest
-  package in the tree and belongs in its own commit, not in a merge.
+  **...and then `trk_trim` gives the difference back.** The over-claim is
+  unavoidable at claim time — the dialog's completion proc is handed a name,
+  not a directory entry, so the size is not known until `readbig` returns it
+  — but it need not survive the load. One `OSAPI_MEM_REGROW` (§50.3.1) after
+  the read shrinks the claim to `ceil(bytes / 1024)` KB, and shrinking is the
+  path that **always succeeds in place**: the record's length changes and
+  nothing moves. Measured on a 5,596-byte module: the claim goes 128KB → 6KB
+  and the machine's heap use falls from 201KB to 79KB.
+  <br><br>
+  The fork this came from documented the over-claim as something it *could
+  not* fix, because claim-copy-free needs both blocks at once and may hand
+  back a different base. That is true there and false here, and it is the
+  clearest single example of what `mem_regrow` was for.
+  <br><br>
+  The trim runs **before `mp_load`**, so no sample pointer exists yet to be
+  invalidated even on the impossible path where a shrink relocated; and
+  `mp_load` bounds every read against `[mp_bloblen_*]` rather than against
+  the claim, so trimming to exactly those bytes cannot narrow what it may
+  look at. A refusal is harmless — the app keeps the oversized claim.
 
   The claim holds the file verbatim;
   samples are addressed through
@@ -9844,6 +9854,23 @@ first two move nothing:
 
 The caller must always take the base back from DX: a grow that moved leaves
 the old segment pointing at memory that is no longer theirs.
+
+**The slot needs `osapi_mem_regrow` in front of it, and went without one for
+its whole life.** `mem_regrow`'s ownership fence is `cmp [si+MC_OWN], bx`, and
+BX is an *implicit* input — `OSAPI_XSTUB` stamps ES from the caller's DS and
+stops there, exactly as it does for `mem_free`, which then calls `mem_own` to
+turn ES into an owner. The regrow cell called `mem_regrow` **directly**, so the
+fence compared an owner segment against whatever the package happened to leave
+in BX. It never matched. The slot always answered CF=1, no package could ever
+resize a claim, and `apps/paint`'s fragmentation fallback — the entire reason
+this routine was written — had never once run.
+
+That is the failure mode of a fence with an implicit input, and it is worth
+stating as a rule: **a refusal that means "you got the calling convention
+wrong" is indistinguishable from one that means "no room"**, so the caller
+reports the honest-sounding message and everyone believes it. Both shipped
+callers did. The lesson generalises to every X-stubbed slot whose body takes
+an owner: the stub supplies it or nothing does.
 
 **It does not compact the heap**, and cannot. A claim's base lives in its
 holder's own bss — a package's `[pt_base]`, the kernel's `[bb_seg]` — and

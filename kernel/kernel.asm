@@ -109,17 +109,21 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 KERN_BUDGET equ 76800           ; the whole kernel, guard 1. Growing past this
                                 ; is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
-                                ; It has moved twice, both times asked for and
-                                ; granted: 65,536 -> 71,680 for the SPEC.md 41
-                                ; store and the two API surfaces that came
-                                ; with it from the other fork, and 71,680 ->
-                                ; here for the driver subsystem (SPEC.md 51)
-                                ; and the Control Panel pages that drive it.
-                                ; The second one BUYS more than it spends: the
-                                ; OPL2 and Sound Blaster code it makes
-                                ; loadable is thousands of lines that would
-                                ; otherwise be resident on a machine with
-                                ; neither card
+                                ; It has moved three times, every one asked
+                                ; for and granted: 65,536 -> 71,680 for the
+                                ; SPEC.md 41 store and the two API surfaces
+                                ; that came with it from the other fork;
+                                ; 71,680 -> 72,704 for the driver subsystem
+                                ; (SPEC.md 51) and the Control Panel pages
+                                ; that drive it - which BUYS more than it
+                                ; spends, the OPL2 and Sound Blaster code it
+                                ; makes loadable being thousands of lines that
+                                ; would otherwise be resident on a machine
+                                ; with neither card; and 72,704 -> here for
+                                ; SPEC.md 51.5's keyed SYSTEM.CFG, granted in
+                                ; ADVANCE of further work with an optimisation
+                                ; pass to follow, so the slack under this one
+                                ; is temporary rather than an invitation
 
 ; The relocated boot sector (boot/boot.asm). The kernel now lands at 0x00600
 ; and runs up through 0x7C00, where the BIOS put the sector that is reading
@@ -498,7 +502,7 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
     OSAPI_XSTUB api_mem_claim,  osapi_mem_claim
     OSAPI_XSTUB api_mem_claim_dma, osapi_mem_claim_dma
     OSAPI_XSTUB api_mem_free,   osapi_mem_free
-    OSAPI_XSTUB api_mem_regrow, mem_regrow
+    OSAPI_XSTUB api_mem_regrow, osapi_mem_regrow
     OSAPI_XSTUB api_snd_fm,     osapi_snd_fm_x
     OSAPI_XSTUB api_drv_task,   drv_task
     OSAPI_XSTUB api_snd_stream, osapi_snd_stream
