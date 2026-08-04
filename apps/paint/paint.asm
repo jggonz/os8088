@@ -5547,10 +5547,10 @@ pt_resize:
 
 .inplace:
     mov word [pt_obase], 0          ; no move: stage in the undo image, the
-    cmp byte [pt_haveundo], 0       ; way this always did
-    jne .stage
+    cmp word [pt_unseg], 0          ; way this always did - and again the
+    jne .stage                      ; SEGMENT, because pt_osrc below is one
     call pt_alloc_undo              ; ...so ASK for one, because the grow just
-    cmp byte [pt_haveundo], 0       ; handed it back to make room and was
+    cmp word [pt_unseg], 0          ; handed it back to make room and was
     je .nostage                     ; refused anyway (and a machine that could
 .stage:                             ; not fund one at startup may be able to)
     mov ax, [pt_base]
@@ -6093,9 +6093,9 @@ pt_load:
     push di
     push es
     mov word [pt_msgp], pt_s_opened
-    cmp byte [pt_haveundo], 0
-    je .scratch
-    mov ax, [pt_unseg]              ; the file is staged in the UNDO image: it
+    cmp word [pt_unseg], 0          ; the SEGMENT, not [pt_haveundo]: what this
+    je .scratch                     ; needs is a buffer it can ADDRESS, and the
+    mov ax, [pt_unseg]              ; file is staged in the UNDO image: it
     mov [pt_gseg], ax               ; is the biggest single buffer we have, and
     mov es, ax                      ; the decoder reads whichever this was
     xor bx, bx                      ; a load invalidates undo anyway
@@ -7811,11 +7811,22 @@ pt_gif_out:
     ; vector table, and the machine died mid-save. The load path already had
     ; the answer (pt_load's .scratch): stage in the flood-fill scratch, which
     ; is idle here and re-initialised by the next fill.
+    ;
+    ; **The gate is [pt_unseg], not [pt_haveundo].** The two agree today, so
+    ; testing the flag happens to work - but they are different questions.
+    ; [pt_haveundo] means "the user can Undo" and is what the menu and pt_gate
+    ; ask; this needs "there is a buffer I can put a segment register on", and
+    ; the only variable that means that is the segment. The three sites that
+    ; stage in the undo image (here, pt_load, and pt_resize's in-place path)
+    ; all ask the second question, so all three test the segment. The moment
+    ; anything makes an undo image that is not conventionally addressable,
+    ; testing the flag puts ES back at 0000 and this fault returns - which is
+    ; not hypothetical: it is what the paragraph above is about.
     mov ax, [pt_unseg]
     mov cx, [pt_smaxp]
-    cmp byte [pt_haveundo], 0
-    jne .havestage
-    mov ax, [pt_scseg]              ; no undo image: one paragraph in, so the
+    cmp word [pt_unseg], 0          ; the SEGMENT, not [pt_haveundo] - see the
+    jne .havestage                  ; note above: this is the test that stops
+    mov ax, [pt_scseg]              ; it encoding at 0000:0000. One paragraph
     inc ax                          ; claim record survives and the buffer
     mov cx, PT_SC_KB * 64 - 1       ; still starts at offset 0 of a segment
 .havestage:
