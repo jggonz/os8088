@@ -4993,6 +4993,32 @@ tm_click). All drawing is self-backgrounding (each element white-fills its
 own rect or paints both segments), so tm_paint needs no preceding content
 clear beyond the one wm_paint_all already does.
 
+**Nothing is redrawn unless what it is drawn from changed.** Every element
+on this page composes or derives its content first, reduces it to one word,
+and compares that against what it last drew - the rows against `tm_rowck`,
+the five things around them against `tm_elck` (`TMC_*`). Equal means the
+pixels on screen are already right, so the erase and the draw are both
+skipped. **The erase is therefore inside the changed branch**, which is the
+ordering the whole thing rests on: something not redrawn must not be blanked
+either.
+
+| element | its key |
+|---|---|
+| `TMC_LINE` — the RAM (+ HEAP) line | the composed string |
+| `TMC_PKG` — the PACKAGES line | the composed string |
+| `TMC_MRAM` — the conventional map | `mem_tab`, hashed (§50) |
+| `TMC_MPOOL` — the pool map | the instance snapshot, hashed |
+| `TMC_BAR` — the performance RAM bar | `[tm_barw]` |
+
+The two maps are the ones that pay: a map interior is ~3,000 pixels of
+pattern fill, and it changes only when a claim is made or a package loads or
+closes, which on a desktop that is sitting still is never. Their keys are the
+tables they are drawn from rather than the pixels they would produce, so the
+comparison costs a byte-wise hash of 96 and 84 bytes. Reading the claim table
+unlocked can tear against a claim made on another task; a torn read differs
+from the stored key, which is the safe direction — one extra redraw, never a
+missed one.
+
 **A row is redrawn only when its text changed.** Both views compose
 the whole row into `tm_str` first — name, ADDR, SIZE/HEAP or ST/CPU/MEM, all
 of it — and then hash it with `tm_rowsum` (rotate-then-add, so a transposition
@@ -5010,9 +5036,13 @@ trade against `TMM_ROWS` words of `.bss` versus the 456 bytes a full text
 cache would need. Two rules keep it honest:
 
 - **`tm_rowck_clear` runs in `tm_draw_full`, and that is the whole of the
-  invalidation rule.** The only things that can change a row band's pixels
-  without going through `tm_mrow_close`/`tm_rows` are a `wm_draw_win` content
-  fill, a view switch and a resize — and all three arrive at a full body.
+  invalidation rule** for both arrays (`tm_elck` and `tm_rowck` are declared
+  adjacent and cleared as one span). The only things that can change this
+  window's pixels without going through a checked draw are a `wm_draw_win`
+  content fill, a view switch and a resize — and all three arrive at a full
+  body. A window MOVE arrives there too, via `wm_paint_dmg` (§11.91), which
+  is what stops a cached "unchanged" from leaving a map behind at the
+  window's old position.
 - **A row that fell off the bottom (`tm_ylim_set`) forgets its entry**
   rather than recording one, so it comes back if the window ever grows.
 - `tm_click`'s content clear is therefore load-bearing, and it takes its far
@@ -5078,13 +5108,19 @@ own line above the *second* map and read as its label, and the second map is
 the **package pool**, the one thing on this page that is emphatically not the
 heap.
 
-- (6,4): `"RAM uuu/tttK"` — the same readout as the performance view, and
-  **one `'K'`, at the end** (`tm_kpair`): eight characters per pair is what
-  fits a second one on this line.
-- (`TMM_HSQ_X`,4): the claim legend square, between the two pairs of figures.
-- (`TMM_HEAP_X`,4): `"HEAP uuu/tttK"` — claimed and total heap KB (§50). No
-  fill of its own: `tm_txt_ram_y` whited the whole line on its way past and
-  is always called first.
+- (6,4): `"RAM uuu/tttK  HEAP uuu/tttK"` — the performance view's readout
+  plus the heap's, and **one `'K'` per pair, at the end** (`tm_kpair`): eight
+  characters per pair is what fits both on one line. **One string and one
+  `font_str`**, not two draws — two would need two check words and a fill
+  that belongs to neither, where one string is one exact key. The performance
+  view builds the same line without the HEAP half (`[tm_view]`).
+- (`TMM_HSQ_X`,4): the claim legend square, drawn last, into the two-space
+  gap the string just lettered white.
+- `tm_str` must hold the longest of these lines, and this is it:
+  `TM_STRMAX` is named in its parts for that reason. It was a flat 24 when
+  the line was `"RAM uuuK/tttK"` alone, and stayed 24 when the line grew to
+  27 characters — writing four bytes past the end of `.bss` twice a second,
+  which blanked whatever variable followed.
 - Conventional-memory map: 1px black frame (6,14)-(`TM_RW`,29), interior
   (7,15)-(`TM_RW`−1,28) = `TM_GW`×14. KB scale: KB k maps to interior column
   k·`TM_GW`/totalK; a region [a,b) KB fills columns a·`TM_GW`/totalK ..

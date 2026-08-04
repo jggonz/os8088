@@ -58,16 +58,23 @@ The Task Manager's memory view shows this same breakdown live, one indented
 row per buffer under **System**, and paints the buffer part of the kernel
 span in its own texture on the RAM bar. Every figure there is an
 assembly-time constant, so the twice-a-second refresh does no arithmetic to
-produce them.
+produce them — and it does not draw them either unless they moved: every
+element on the page reduces what it is drawn from to one word and compares
+that against what it last drew, so a desktop sitting still costs a few string
+builds and two table hashes rather than two map interiors and a dozen rows.
 
 The page is **two maps, each captioned on the line directly above it**:
 
 ```
-RAM  89/639K  [] HEAP  23/514K      <- the conventional map's caption
+RAM  89/639K [] HEAP  23/514K       <- the conventional map's caption
 [==============================]    <- every byte the machine has
 PACKAGES   2/ 60K                   <- the pool map's caption
 [==============================]    <- the 60KB pool, magnified
 ```
+
+The top line is **one string**, swatch and all — the swatch is drawn into
+the two spaces between the pairs — because that makes the whole line one
+comparison when the refresh asks whether it needs drawing at all.
 
 The heap has no map of its own and never will: a claim is drawn in the
 *conventional* map at its real address, in among the kernel and the pool, so

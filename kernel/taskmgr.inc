@@ -76,9 +76,32 @@ TMM_M1_Y2   equ 29              ; frame bottom (interior rows 15..28)
 TMM_CAP_Y   equ 34              ; 'PACKAGES nnn/nnnK' - the pool map's caption
 TMM_M2_Y1   equ 43              ; package-pool map frame top
 TMM_M2_Y2   equ 58              ; frame bottom (interior rows 44..57)
-TMM_HEAP_X  equ 120             ; the HEAP figures on the RAM line, and the
-TMM_HSQ_X   equ 108             ; claim swatch that keys their texture
+TMM_HSQ_X   equ 105             ; the claim swatch, centred in the two-space
+                                ; gap between the RAM and HEAP figure pairs
 TMM_HDR_Y   equ 62              ; "NAME    ADDR SIZE   HEAP" header line
+
+; --- what the periodic refresh checks before it draws (SPEC.md 28) -----------
+; The rows have tm_rowck; these are the five things AROUND them that cost
+; real pixels and mostly do not move. A map interior is ~3,000 pixels of
+; pattern fill; the figures above it change when a claim is made or a package
+; loads, which on a desktop that is just sitting there is never.
+TMC_LINE    equ 0               ; the RAM (+ HEAP) readout line
+TMC_PKG     equ 1               ; the PACKAGES readout line
+TMC_MRAM    equ 2               ; the conventional-memory map interior
+TMC_MPOOL   equ 3               ; the package-pool map interior
+TMC_BAR     equ 4               ; the performance view's RAM bar
+TMC_N       equ 5
+
+; Every line in this window is composed into tm_str before any of it is
+; drawn - that is what lets one hash decide whether to draw it at all - so
+; the buffer has to hold the LONGEST of them, and it is the memory view's
+; top line by a good margin. Named in its parts because it grew by four
+; characters the day the HEAP figures joined the RAM figures on that line,
+; and a 24-byte buffer went on silently writing past the end of .bss.
+TM_L_RAM    equ 4               ; 'RAM '
+TM_L_HEAP   equ 7               ; '  HEAP '   (the gap is part of the label)
+TM_L_KPAIR  equ 8               ; 'nnn/nnnK'  (tm_kpair)
+TM_STRMAX   equ TM_L_RAM + TM_L_KPAIR + TM_L_HEAP + TM_L_KPAIR + 1
 
 ; --- what the kernel occupies, in KB (SPEC.md 2/28) --------------------------
 ; Every one of these is a compile-time constant, and that is the point: the
@@ -191,7 +214,9 @@ tm_s_mhdr:  db 'NAME    ADDR SIZE   HEAP', 0  ; 24 chars, the row width.
                                 ; Two spaces of gap, not one: a 150K back
                                 ; buffer beside a 150K package ran the two
                                 ; figures together at the old width
-tm_s_heap:  db 'HEAP ', 0       ; + claimed/size KB (SPEC.md 50)
+tm_s_heap:  db '  HEAP ', 0     ; + claimed/size KB (SPEC.md 50). The two
+                                ; leading spaces are the RAM line's gap, and
+                                ; the claim swatch is drawn into them
 tm_s_pool:  db 'PACKAGES ', 0   ; + allocated/size KB of the pool. The two
                                 ; caption lines are CAPS and the list's rows
                                 ; are mixed case, which is the whole of the
@@ -714,7 +739,7 @@ tm_sample:
     mov cx, [tm_totkb]          ; barw = usedK*TM_GW/totalK (all KB)
     jcxz .nobar
     mov si, TM_GW
-    mul si                      ; DX:AX = usedK*160 (<= 10240)
+    mul si                      ; DX:AX = usedK*TM_GW
     div cx
     cmp ax, TM_GW
     jbe .barok
@@ -783,20 +808,23 @@ tm_ylim_set:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_rowck_clear - forget every row's last-drawn content
+; tm_rowck_clear - forget every row's last-drawn content, and every check
+;                  word around them (tm_elck, declared immediately before it)
 ;
 ; Called by both full-paint bodies, and that is the whole of the cache's
-; invalidation rule: the ONLY things that can put different pixels in a row
-; band without going through tm_mrow_close or tm_rows are a wm_draw_win
-; content fill, a view switch and a resize - and all three arrive here.
+; invalidation rule: the ONLY things that can put different pixels in this
+; window without going through a checked draw are a wm_draw_win content fill,
+; a view switch and a resize - and all three arrive here. A window MOVE is a
+; wm_paint_dmg repaint, so it arrives here too, which is what stops a cached
+; "unchanged" from leaving a map behind at the window's old position.
 ; in:       nothing
 ; out:      nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 tm_rowck_clear:
     push bx
     push cx
-    mov bx, tm_rowck
-    mov cx, TMM_ROWS
+    mov bx, tm_elck
+    mov cx, TMC_N + TMM_ROWS
 .z:
     mov word [bx], 0
     inc bx
@@ -983,7 +1011,6 @@ tm_upd_mem:
 
     mov ax, TMM_RAM_Y
     call tm_txt_ram_y
-    call tm_cap_heap            ; ...on the right of the line it just filled
     call tm_map_ram
     call tm_cap_pool
     call tm_map_pool
@@ -1046,76 +1073,10 @@ tm_draw_mem:
     mov si, tm_s_mhdr
     call font_str
 
-    call tm_cap_heap            ; ...on the right of the line it just filled
     call tm_map_ram
     call tm_cap_pool
     call tm_map_pool
     call tm_rows_mem
-
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; tm_cap_heap - "HEAP nnn/nnnK" and the claim swatch, on the RIGHT of the RAM
-;               line (claimed / heap size, SPEC.md 50)
-; in:  [tm_cx], [tm_cy]; tm_txt_ram_y has already filled this line
-; out: nothing
-; clobbers: nothing (flags only)
-;
-; The third of the four things memory is: the kernel's fixed reservation
-; (System's row), the package pool (its own map), and this - everything handed
-; out on demand, kernel and package claims together.
-;
-; It shares the RAM line because it has no map of its own and never will: a
-; claim is drawn in the conventional map at its REAL address, in among the
-; kernel and the pool, so its figures belong to that map's caption. On its own
-; line above the pool map it read as the pool map's label, which is the one
-; thing on this page that is emphatically not the heap.
-;
-; No fill: tm_txt_ram_y whited the whole line on its way past, and it is
-; always called first.
-; -----------------------------------------------------------------------------
-tm_cap_heap:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
-    call mem_total_kb          ; AX = claimed KB, BX = heap size KB
-    mov di, tm_str
-    push ax
-    push bx
-    mov si, tm_s_heap
-    call tm_copy
-    pop bx
-    pop ax
-    call tm_kpair
-
-    mov byte [gfx_color], CBLACK
-    mov cx, [tm_cx]
-    add cx, TMM_HEAP_X
-    mov dx, [tm_cy]
-    add dx, TMM_RAM_Y
-    mov si, tm_str
-    call font_str
-
-    ; ...and the claim swatch, between the two pairs of figures. Every OTHER
-    ; texture belongs to one row and is keyed there; a claim belongs to the
-    ; HEAP column, which is a column and not a row, so its legend goes where
-    ; the heap's own figures are (SPEC.md 28).
-    mov ax, [tm_cy]
-    add ax, TMM_RAM_Y
-    mov [tm_rowy], ax
-    mov word [tm_sqox], TMM_HSQ_X
-    mov si, tm_pat_clm
-    call tm_sq_pat
 
     pop di
     pop si
@@ -1145,9 +1106,6 @@ tm_cap_pool:
     push si
     push di
 
-    mov ax, TMM_CAP_Y
-    call tm_lfill
-
     call tm_pool_kb             ; AX = KB of pool allocated
     mov di, tm_str
     push ax
@@ -1157,6 +1115,13 @@ tm_cap_pool:
     mov bx, TM_POOL_KB
     call tm_kpair
 
+    call tm_rowsum              ; unchanged? then so are its pixels
+    mov bx, tm_elck + 2*TMC_PKG
+    call tm_elchk
+    jc .out
+
+    mov ax, TMM_CAP_Y
+    call tm_lfill               ; only now is the line worth erasing
     mov byte [gfx_color], CBLACK
     mov cx, [tm_cx]
     add cx, 6
@@ -1164,7 +1129,7 @@ tm_cap_pool:
     add dx, TMM_CAP_Y
     mov si, tm_str
     call font_str
-
+.out:
     pop di
     pop si
     pop dx
@@ -1227,6 +1192,14 @@ tm_map_ram:
     push si
     push di
 
+    mov si, mem_tab             ; the claim map is the only part of this that
+    mov cx, MEM_MAX * MC_SIZE   ; moves - the kernel, its buffers and the pool
+    xor ax, ax                  ; are assembly-time constants and the total is
+    call tm_sumb                ; the boot int 12h figure - so it IS the key
+    mov bx, tm_elck + 2*TMC_MRAM
+    call tm_elchk
+    jc .out
+
     mov byte [gfx_color], CWHITE
     xor ax, ax                  ; whole interior white first
     mov cx, TM_GW - 1
@@ -1235,80 +1208,48 @@ tm_map_ram:
     call gfx_fill
 
     xor ax, ax                  ; [0, kernel end): the BIOS data area and the
-    call tm_ramkb2x             ; kernel entire - image, scratch, buffers and
-    mov si, ax                  ; stacks (SPEC.md 2). 50% gray: reserved, and
-    mov ax, TM_KERN_KB - 1      ; not available to anything else
-    call tm_ramkb2x
-    mov cx, ax
-    mov ax, si
-    mov bx, TMM_M1_Y1
-    call tm_map_rect
-    call gfx_fill_gray
+    mov dx, TM_KERN_KB - 1      ; kernel entire - image, scratch, buffers and
+    call tm_band                ; stacks (SPEC.md 2). 50% gray: reserved, and
+    call gfx_fill_gray          ; not available to anything else
 
     mov ax, TM_KERN_KB - TM_KBUF_KB   ; ...and its BUFFERS, over the top of
-    call tm_ramkb2x                   ; that, in a texture of their own: the
-    mov si, ax                        ; FAT snapshot, the disk caches and
-    mov ax, TM_KERN_KB - 1            ; every task stack are the part of the
-    call tm_ramkb2x                   ; kernel that is scratch rather than
-    mov cx, ax                        ; program, and the part these figures
-    mov ax, si                        ; are steered by (docs/KERNEL-MEMORY.md)
-    mov bx, TMM_M1_Y1
-    call tm_map_rect
-    mov word [gfx_pat], tm_pat_buf
-    call gfx_fill_pat
+    mov dx, TM_KERN_KB - 1            ; that, in a texture of their own: the
+    call tm_band                      ; FAT snapshot, the disk caches and
+    mov word [gfx_pat], tm_pat_buf    ; every task stack are the part of the
+    call gfx_fill_pat                 ; kernel that is scratch rather than
+                                      ; program, and the part these figures
+                                      ; are steered by (docs/KERNEL-MEMORY.md)
 
     mov ax, TM_POOL_KB0         ; the package pool, black: it is not free
-    call tm_ramkb2x             ; memory, it is the pool
-    mov si, ax
-    mov ax, TM_POOL_KB0 + TM_POOL_KB - 1
-    call tm_ramkb2x
-    mov cx, ax
-    mov ax, si
-    mov bx, TMM_M1_Y1
-    call tm_map_rect
+    mov dx, TM_POOL_KB0 + TM_POOL_KB - 1   ; memory, it is the pool
+    call tm_band
     mov byte [gfx_color], CBLACK
     call gfx_fill
 
     xor si, si                  ; every live claim, at its real address
 .claim:
     mov ax, si
-    call mem_claim_get         ; out CF=1 = free record; DX = seg, CX = paras
+    call mem_claim_get          ; out CF=1 = free record; DX = seg, CX = paras
     jc .cnext
     push si
-    mov ax, dx                  ; segment -> KB
-    mov cl, 6
-    shr ax, cl
-    push ax
-    mov ax, cx                  ; paragraphs -> KB
-    mov cl, 6
-    shr ax, cl
-    mov bx, ax
-    pop ax
-    push bx
-    call tm_ramkb2x
-    mov si, ax
-    pop bx
-    pop ax                      ; (AX = the claim's KB base again below)
-    push ax
+    mov si, cx                  ; bank the size; CL is about to become 6
     mov ax, dx
     mov cl, 6
-    shr ax, cl
-    add ax, bx
-    dec ax                      ; inclusive end KB
-    call tm_ramkb2x
-    mov cx, ax
+    shr ax, cl                  ; AX = base KB (a segment is KB<<6)
+    xchg ax, si                 ; SI = base KB, AX = paragraphs
+    shr ax, cl                  ; AX = size KB (CL is still 6)
+    mov dx, si
+    add dx, ax
+    dec dx                      ; DX = inclusive end KB
     mov ax, si
-    pop si
-    push si
-    mov bx, TMM_M1_Y1
-    call tm_map_rect
+    call tm_band
     call tm_map_claim           ; framed, so its edges are unmistakable
     pop si
 .cnext:
     inc si
     cmp si, MEM_MAX
     jb .claim
-
+.out:
     pop di
     pop si
     pop dx
@@ -1333,6 +1274,17 @@ tm_map_pool:
     push dx
     push si
     push di
+
+    xor ax, ax                  ; the snapshot this map is drawn from: which
+    mov si, tm_ist              ; slots are live, how big each region is and
+    mov cx, INST_MAX            ; where it sits
+    call tm_sumb
+    mov si, tm_isz              ; tm_isz and tm_ispt are declared adjacent
+    mov cx, INST_MAX * 4        ; and hashed as one span
+    call tm_sumb
+    mov bx, tm_elck + 2*TMC_MPOOL
+    call tm_elchk
+    jc .out
 
     mov byte [gfx_color], CWHITE
     xor ax, ax                  ; whole interior white first
@@ -1373,7 +1325,7 @@ tm_map_pool:
     inc si
     cmp si, INST_MAX
     jb .slot
-
+.out:
     pop di
     pop si
     pop dx
@@ -1381,6 +1333,29 @@ tm_map_pool:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; tm_band - a KB span of the conventional map, as a fill rect
+; in:  AX = first KB, DX = last KB (inclusive)
+; out: AX = x1, BX = y1, CX = x2, DX = y2, ready for any fill
+; clobbers: flags
+;
+; Every band on that map is "these KB, in this texture", and writing that out
+; longhand was eleven instructions of scale-both-ends-and-shuffle each - four
+; times, once per band, with the claim loop spilling to the stack to do it.
+; -----------------------------------------------------------------------------
+tm_band:
+    push si
+    push dx
+    call tm_ramkb2x
+    mov si, ax
+    pop ax
+    call tm_ramkb2x
+    mov cx, ax
+    mov ax, si
+    mov bx, TMM_M1_Y1
+    pop si
+    jmp tm_map_rect
 
 ; -----------------------------------------------------------------------------
 ; tm_map_rect - map a pair of interior pixel columns + a frame-top constant
@@ -1437,14 +1412,14 @@ tm_map_claim:
 ; -----------------------------------------------------------------------------
 ; tm_ramkb2x - KB -> conventional-map interior pixel column
 ; in:  AX = KB
-; out: AX = px = KB*160/totalK, clamped to 0..159
+; out: AX = px = KB*TM_GW/totalK, clamped to 0..TM_GW-1
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 tm_ramkb2x:
     push cx
     push dx
     mov cx, TM_GW
-    mul cx                      ; DX:AX = KB*160
+    mul cx                      ; DX:AX = KB*TM_GW
     mov cx, [tm_totkb]
     jcxz .zero                  ; int 12h can't return 0, but stay DIV-safe
     div cx
@@ -1463,7 +1438,7 @@ tm_ramkb2x:
 ; -----------------------------------------------------------------------------
 ; tm_para2x - pool paragraph -> pool-map interior pixel column
 ; in:  AX = offset
-; out: AX = px = para*160/PKG_PARA (<= 159 by construction: the pool is
+; out: AX = px = para*TM_GW/PKG_PARA (< TM_GW by construction: the pool is
 ;      PKG_PARA paragraphs and a region ends inside it)
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
@@ -1471,7 +1446,7 @@ tm_para2x:
     push cx
     push dx
     mov cx, TM_GW
-    mul cx                      ; DX:AX = para * 160 (<= 614,400)
+    mul cx                      ; DX:AX = para * TM_GW
     mov cx, PKG_PARA
     div cx                      ; <= 159 by construction
     pop dx
@@ -1925,6 +1900,54 @@ tm_rowsum:
     ret
 
 ; -----------------------------------------------------------------------------
+; tm_sumb - the same hash over a COUNTED span, so it can key a table
+; in:  SI = ptr, CX = bytes, AX = seed (0, or a previous result to chain)
+; out: AX = the sum; SI advanced past the span, everything else preserved
+;
+; What the maps are keyed on. A map's pixels are a function of one table -
+; the conventional map of the claim map (SPEC.md 50), the pool map of the
+; instance snapshot - so hashing the table answers "has this map changed"
+; without drawing anything. Reading the claim table unlocked can tear against
+; a claim made on another task, and the worst that costs is one extra redraw:
+; a torn read differs from the stored key, which is the safe direction.
+; -----------------------------------------------------------------------------
+tm_sumb:
+    push bx
+    push cx
+    mov bx, ax
+    xor ah, ah                  ; lodsb leaves AH alone, so this holds
+    jcxz .done
+.next:
+    lodsb
+    rol bx, 1
+    add bx, ax
+    loop .next
+.done:
+    mov ax, bx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_elchk - has the element whose check word is at BX changed to key AX?
+; in:  AX = key, BX = a TMC_* check word's address
+; out: CF = 1 unchanged (skip the draw), CF = 0 changed (and recorded)
+; clobbers: nothing else
+;
+; The rows have tm_rowck; this is the same idea for the five things around
+; them that are expensive and mostly still. tm_rowck_clear zeroes both.
+; -----------------------------------------------------------------------------
+tm_elchk:
+    cmp ax, [bx]
+    je .same
+    mov [bx], ax
+    clc
+    ret
+.same:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; tm_kcol - one right-aligned KB column: 3 digits + 'K', or "   -" for zero
 ; in:  AX = KB, DI = dest
 ; out: DI advanced by 5 (a leading space, then the four)
@@ -2196,12 +2219,20 @@ tm_txt_cpu:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_txt_ram - white-fill the RAM line's rect and draw "RAM uuuK/tttK"
-;              (tm_txt_ram_y draws the same line at any y - the memory view
-;              puts it at the top, SPEC.md 28)
+; tm_txt_ram - the RAM readout line (tm_txt_ram_y draws it at any y - the
+;              memory view puts it at the top, SPEC.md 28)
 ; in:  [tm_usedk], [tm_totkb]; tm_txt_ram_y: AX = content-relative y
 ; out: nothing
 ; clobbers: nothing (flags only)
+;
+; **In the memory view it carries the HEAP figures too**, in ONE string and
+; one font_str, with the claim swatch drawn into the two-space gap between
+; the pairs. Two draws on one line would need two check words and a fill that
+; belongs to neither; as one string it is one key, and the key is exact.
+;
+; The heap has no map of its own and never will - a claim is drawn in the
+; conventional map at its real address - so its figures belong to that map's
+; caption, which is this line.
 ; -----------------------------------------------------------------------------
 tm_txt_ram:
     push ax
@@ -2219,17 +2250,28 @@ tm_txt_ram_y:
     push di
 
     mov [tm_liny], ax
-    call tm_lfill
-
     mov di, tm_str
     mov si, tm_s_ram
     call tm_copy
     mov ax, [tm_usedk]
     mov bx, [tm_totkb]
     call tm_kpair               ; 'nnn/nnnK' - one K, not two, because the
-                                ; memory view fits a second figure on this
-                                ; line and eight characters is what it costs
+                                ; memory view fits a second pair on this line
+                                ; and eight characters is what it costs
+    cmp byte [tm_view], 0
+    je .built
+    mov si, tm_s_heap           ; ...whose two leading spaces are where the
+    call tm_copy                ; claim swatch goes
+    call mem_total_kb           ; AX = claimed KB, BX = heap size KB
+    call tm_kpair
+.built:
+    call tm_rowsum              ; unchanged since the last refresh? then the
+    mov bx, tm_elck + 2*TMC_LINE            ; pixels on screen are already right
+    call tm_elchk
+    jc .out
 
+    mov ax, [tm_liny]
+    call tm_lfill               ; only NOW is the line worth erasing
     mov byte [gfx_color], CBLACK
     mov cx, [tm_cx]
     add cx, 6
@@ -2238,6 +2280,15 @@ tm_txt_ram_y:
     mov si, tm_str
     call font_str
 
+    cmp byte [tm_view], 0
+    je .out
+    mov ax, [tm_cy]             ; ...and the claim legend square, last, over
+    add ax, [tm_liny]           ; the gap the string just lettered white
+    mov [tm_rowy], ax
+    mov word [tm_sqox], TMM_HSQ_X
+    mov si, tm_pat_clm
+    call tm_sq_pat
+.out:
     pop di
     pop si
     pop dx
@@ -2248,7 +2299,7 @@ tm_txt_ram_y:
 
 ; -----------------------------------------------------------------------------
 ; tm_bar - the RAM bar interior: black for barw px from the left, white rest
-; in:  [tm_barw] = 0..TM_GW
+; in:  [tm_barw] = 0..TM_GW; redrawn only when it changed (TMC_BAR)
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
@@ -2258,6 +2309,11 @@ tm_bar:
     push cx
     push dx
     push si
+
+    mov ax, [tm_barw]           ; the bar IS its width: same width, same two
+    mov bx, tm_elck + 2*TMC_BAR             ; rectangles, same pixels
+    call tm_elchk
+    jc .done
 
     mov si, [tm_barw]
     or si, si
@@ -2820,10 +2876,14 @@ tm_sqp:     resw 1              ; ...and its texture, or 0 for no square. A
                                 ; the band before it letters it, so a square
                                 ; drawn while the row was being composed
                                 ; would be erased again
+tm_elck:    resw TMC_N          ; the last drawn state of the five non-row
+                                ; elements, one word each (TMC_*), and
 tm_rowck:   resw TMM_ROWS       ; the last drawn content of each row, one
                                 ; word each (tm_rowsum). Shared by both
                                 ; views - TM_ROWS is the smaller of the two
-                                ; and a view switch clears it either way
+                                ; and a view switch clears it either way.
+                                ; DECLARED TOGETHER and cleared as one span,
+                                ; so this pair must stay adjacent
 tm_view:    resb 1              ; 0 = performance view, 1 = memory view
 tm_inm:     resb INST_MAX * 16  ; I_NAME snapshots
 tm_rcyc:    resw TM_ROWS * 2    ; per-ROW cycles: task + instance, dword
@@ -2843,6 +2903,6 @@ tm_ylim:    resw 1              ; ...and the lowest row top the frame holds
                                 ; (tm_ylim_set): the row lists are fixed-pitch
                                 ; and nothing clips a draw to a window
 tm_liny:    resw 1              ; tm_txt_ram_y scratch: the line's y
-tm_str:     resb 24             ; line-format scratch
+tm_str:     resb TM_STRMAX      ; line-format scratch
 
 section .text
