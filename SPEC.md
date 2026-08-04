@@ -6477,14 +6477,34 @@ list, the sound route, the clock options, the scheduler mode and the back
 buffer. One file and one writer, so there is no per-setting bookkeeping to
 keep in step, and `drv_boot` restores the lot before the desktop is painted.
 
-It writes on **every click**, not on close. A floppy write is about a second
-on the floor machine and that is the honest price: flushing on close loses
-every setting whenever the panel is closed by closing its window, which is
-how it is usually closed.
+It writes **once, when the panel closes**, not on every click. Pages set
+`[cp_wdirty]`; `cp_flush_close` spends it. A floppy write is about a second
+on the floor machine and the panel is frozen for it, so trying five settings
+out used to cost five seconds of frozen UI for a state only the last one
+describes.
 
-A failed write never undoes the change — that already happened — and is
-reported in the Drivers page's caption (`'Cannot save to the system disk'`),
-the one page with room to say it.
+**Both ways the panel stops existing flush it**, which is what makes the
+deferral safe:
+
+- `app_close_win`'s task-less branch (§29.4), gated on `I_KIND == KIND_CTRL`.
+  The panel owns no task, so it can never reach `inst_task_die` and the one
+  branch is the whole story.
+- The reboot path (§12.3), before the lock is taken and before `vid_text` —
+  a disk write is not something to attempt with the GUI already torn down.
+
+**Minimizing is not one of them.** The panel is still open, and hiding it is
+not a decision to save.
+
+What this gives up is the crash window: a machine switched off with the panel
+open loses whatever was changed in it. That is deliberate — these settings are
+a convenience, not a document.
+
+A failed write never undoes the change — that already happened — and
+**leaves `[cp_wdirty]` set**, so the next close or reboot retries rather than
+dropping it silently. It is reported in the Drivers page's caption
+(`'Cannot save to the system disk'`), the one page with room to say it, which
+now means the *next* time the panel is opened: by the time the write happens
+the page it would be reported on is already gone.
 
 ## 32. vgabb.inc — the software renderer (double buffering, and §39's 1bpp driver)
 
@@ -9234,22 +9254,53 @@ back reads samples out of whatever claimed the memory next.
 
 ## 45. Tracker — the tenth package (apps/tracker/tracker.asm)
 
+A four-channel ProTracker MOD player: `tracker.asm` (shell, menus, the file
+dialog completion proc), `trkplay.inc` (the loader and the mixer) and
+`trkui.inc` (the FastTracker II-style fullscreen interface). Prefix `trk_`,
+mixer prefix `mp_`, UI prefix `tui_`. It ships with `BEVERLY.MOD` beside it on
+the apps disk, because a player with nothing to play is not a demonstration of
+anything — `os88disk.py` takes any non-`.o88` argument as a plain data file
+(§24).
+
+It is the most demanding client the API has, and it is the only thing in the
+tree that exercises three features at once:
+
+- **Ring mode** (§34.5, verb 0 with `AH` bit 0). Nothing else uses it. The
+  mixer worker stages at `ringbase + (total & mask)` and feeds a *delta*
+  forever, so a module plays with no close-and-reopen seam and out of a grant
+  far smaller than the song.
+- **`OSAPI_FILE_READBIG`**, which exists because real MODs exceed
+  `dskw_read`'s 64KB ceiling: `BEVERLY.MOD` is 116KB, and the destination
+  advances by SEGMENT so it lands in one call. The Disk window shows its size
+  as 65535 — the directory listing's size field is 16 bits and saturates —
+  which is a display limit and not a load limit; the chain walk uses the real
+  length.
+- **The mixer is a worker task** (§20.6), so the GUI stays live while it
+  plays, and `OSAPI_GFX_DBUF` plus `OSAPI_GFX_SCROLL` keep the fullscreen
+  pattern view from tearing under it.
+
+The module blob is a **heap claim**, sized from `OSAPI_MEM_AVAIL` and capped
+at 128KB. Its lifetime is the fence that matters: `trk_play_stop` closes the
+stream and *drains* the worker's in-flight feed pass before the blob is freed
+or replaced, because a mixer mid-fetch from a grant that has just been handed
+back reads samples out of whatever claimed the memory next.
+
 A FastTracker II-styled 4-channel ProTracker MOD player over the published
 package ABI. Prefix `trk_` (`mp_` for the replayer in `trkplay.inc`, `tui_`
 for the drawing in `trkui.inc` — `ui_` is the kernel's), embedded icon, one
 worker task. It is the app class the sound layer was built toward (§34.6: "a
-music player plays … staged PCM via 0x0100"), and it rides on the worker-safe
-stream verbs + ring mode (§20.3/§34.5) and on `dskw_readbig` (§18.4, slot
-0x01D0). On the apps disks it lives in the `APPS` folder (§24), appended
-after paint, with `BEVERLY.MOD` after it.
+music player plays … staged PCM via `OSAPI_SND_STREAM`"), and building it is what forced
+the two kernel amendments it rides on: the worker-safe stream verbs + ring
+mode (§20.3/§34.5) and `dskw_readbig` (§18.4). On the apps
+disks it lives in the `APPS` folder (§24), appended after paint, with
+`BEVERLY.MOD` after it.
 
-**Ported, not written here**, which is why this section reads differently from
-its neighbours: `trkplay.inc` and `trkui.inc` are byte-identical to the fork
-they came from and `tracker.asm` differs by 57 lines — the `retf` → `ret`
-conversion (§20.8 rule 5) and the memory API (KB not paragraphs, the answer in
-DX not AX). The description below is that fork's, corrected everywhere this
-one contradicts it; the places that took real correction are §45.3, §45.4,
-§45.8 and §45.11, and all four are the memory model.
+**Ported, not written here.** `trkplay.inc` and `trkui.inc` are byte-identical
+to the tree this came from and `tracker.asm` differs by 57 lines — the
+`retf` → `ret` conversion (§20.8 rule 5) and the memory API (KB not paragraphs,
+the answer in DX not AX). Everything below is that tree's description corrected
+where this one contradicts it, and every place that took a real correction —
+§45.3, §45.4, §45.8, §45.11 — is the memory model.
 
 ### 45.1 Windowed is a splash; the app lives fullscreen
 

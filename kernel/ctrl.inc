@@ -99,6 +99,15 @@ cp_sname:   db 'Control', 0     ; KD_NAME: fits the 7-char NAME column
 ; .text data, not .bss, so it is initialised on disk and needs no cp_init -
 ; the osapi_seed trick from kernel.asm.
 cp_dirty:   db 0                ; 1 = the mode changed, repaint everything
+cp_wdirty:  db 0                ; 1 = a setting changed and SYSTEM.CFG is owed
+                                ; a write. Deferred to the panel's teardown
+                                ; (cp_flush_close) rather than taken on the
+                                ; click, so a session of fiddling costs ONE
+                                ; floppy write instead of one per click - and
+                                ; a floppy write is ~a second on the floor
+                                ; machine, during which the panel is frozen.
+                                ; .text and not .bss, like everything else
+                                ; here: nothing zeroes .bss (-f bin)
 cp_dsave:   db 0                ; 1 = the last SYSTEM.CFG write failed, and
                                 ; the Drivers page's caption says so (51.5)
 
@@ -687,7 +696,7 @@ cp_sched_click:
     je .done                    ; that row is already live: change nothing
     mov al, ah
     call sched_mode_set         ; live on the next tick (SPEC.md 8.2)
-    call cp_flush               ; ...and remembered (SPEC.md 31.8)
+    mov byte [cp_wdirty], 1     ; ...and remembered on close (31.8)
     mov byte [cp_dirty], 1      ; ui_task step 3 repaints the About box's
                                 ; third line and any other mode-quoting
                                 ; window, outside the lock (SPEC.md 13)
@@ -969,7 +978,7 @@ cp_disp_click:
     jc .done                    ; leave the dot where it is (the caption and
 .doit:                          ; the greyed label already say why)
     call bb_set                ; flips both flags; we hold the lock
-    call cp_flush               ; ...and remembered (SPEC.md 31.8)
+    mov byte [cp_wdirty], 1     ; ...and remembered on close (31.8)
     call cp_dbradios            ; the two glyph boxes only
     call cpf_disp_cap           ; the caption can change with the claim:
                                 ; turning it OFF hands 150KB back, which may
@@ -1134,7 +1143,7 @@ cp_time_click:
 .osec:
     xor byte [clk_secs], 1      ; row 1: seconds in the menu bar
 .oredraw:
-    call cp_flush               ; both are remembered (SPEC.md 31.8)
+    mov byte [cp_wdirty], 1     ; both remembered on close (31.8)
     mov byte [clk_barq], 1      ; the bar's text (and width) changed: ui_task
                                 ; redraws it in this same pass (SPEC.md 37).
                                 ; NOT [cp_dirty] - a whole-desktop repaint to
@@ -1605,12 +1614,22 @@ cp_chk_off:
 ; options, the scheduler mode and the back buffer - so there is no per-setting
 ; bookkeeping to keep in step.
 ;
-; It writes on every click rather than on close. A floppy write is ~a second
-; on the floor machine, and that is the honest price: the alternative loses a
-; setting whenever the panel is closed by closing the window, which is how it
-; is usually closed. [cp_dsave] carries the failure to the Drivers page's
-; caption - the only page with room to say it - and a failure never undoes
-; the change itself, which has already happened.
+; It writes ONCE, when the panel closes, rather than on every click. A floppy
+; write is ~a second on the floor machine and the panel is frozen for it, so
+; a session of trying settings out used to cost a second per click. Pages mark
+; [cp_wdirty] instead and cp_flush_close spends it.
+;
+; What that gives up is the crash window: a machine switched off with the
+; panel still open loses whatever was changed. That is the deliberate trade -
+; the settings are a convenience, not a document - and it is bounded by
+; flushing on the two ways the panel can go away, teardown and reboot, rather
+; than on the one obvious one.
+;
+; [cp_dsave] carries a failed write to the Drivers page's caption, the only
+; page with room to say it. It now says so the NEXT time the panel is opened,
+; because by the time the write happens the page is gone - and cp_flush_close
+; leaves [cp_wdirty] set on failure, so the next close retries rather than
+; silently dropping it.
 ; -----------------------------------------------------------------------------
 cp_flush:
     push ax
@@ -1620,6 +1639,30 @@ cp_flush:
     mov byte [cp_dsave], 1
 .out:
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_flush_close - spend [cp_wdirty], if there is anything to spend
+; in:  nothing
+; out: nothing (all registers preserved)
+;
+; Called from the Control Panel's teardown (app_close_win, SPEC.md 29.4) and
+; from the reboot path (SPEC.md 12.3) - the two ways the panel stops existing.
+; Minimizing is NOT one of them: the panel is still open, and hiding it is not
+; a decision to save.
+;
+; Safe to call when nothing changed, when the panel was never opened, and when
+; no disk is in the drive: the flag gates the first two and drv_cfg_save's own
+; failure path handles the third.
+; -----------------------------------------------------------------------------
+cp_flush_close:
+    cmp byte [cp_wdirty], 0
+    je .out
+    call cp_flush
+    cmp byte [cp_dsave], 0      ; the write failed: KEEP the flag, so closing
+    jne .out                    ; the panel again - or rebooting - tries once
+    mov byte [cp_wdirty], 0     ; more rather than dropping the settings
+.out:
     ret
 
 ; =============================================================================
@@ -1859,7 +1902,7 @@ cp_snd_click:
     mov [snd_route], al
     call cp_snd_radios
     call cp_snd_cap
-    call cp_flush
+    mov byte [cp_wdirty], 1
 .done:
     pop dx
     pop cx
@@ -2071,7 +2114,7 @@ cp_drv_click:
     pop ax                      ; persists the intent: put the disk in and
     call drv_load               ; the next boot picks it up
 .save:
-    call cp_flush               ; ...and only now, the settings file
+    mov byte [cp_wdirty], 1     ; ...and only now, the settings file
 .redraw:
     call cp_drv_boxes
     call cp_drv_lines

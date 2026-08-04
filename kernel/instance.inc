@@ -858,6 +858,15 @@ app_close_win:
     cmp byte [di+I_TASK], 0xFF
     jne .tasked
     mov byte [di+I_STATE], 2    ; dying: lock-held readers skip it from here
+    cmp byte [di+I_KIND], KIND_CTRL
+    jne .noflush                ; the Control Panel defers its settings write
+    call cp_flush_close         ; to here (SPEC.md 31.8): one floppy write per
+                                ; session instead of one per click. Only the
+                                ; TASK-LESS branch needs it - the panel owns
+                                ; no task, so it can never reach
+                                ; inst_task_die - and only on CLOSE, because
+                                ; minimizing leaves it open
+.noflush:
     call snd_release_rec        ; free every sound grant before the record
     call mem_free_rec           ; goes (SPEC.md 29.4/34.3), and every heap
                                 ; claim with it (SPEC.md 50.4)
