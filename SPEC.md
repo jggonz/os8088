@@ -5162,13 +5162,23 @@ cache would need. Two rules keep it honest:
   body. A window MOVE arrives there too, via `wm_paint_dmg` (§11.91), which
   is what stops a cached "unchanged" from leaving a map behind at the
   window's old position.
-- **A row that fell off the bottom (`tm_ylim_set`) forgets its entry**
+- **A row that fell off the bottom (`tm_view_begin`) forgets its entry**
   rather than recording one, so it comes back if the window ever grows.
 - `tm_click`'s content clear is therefore load-bearing, and it takes its far
   corner **off the window record** rather than from a pair of constants: a
   short fill leaves the outgoing view's tail rows lettered under the incoming
   one, and the incoming view will not erase them because it thinks they are
-  already blank.
+  already blank. It stops **two** pixels short of `x+w` and `y+h`, not one:
+  those are the frame's own right and bottom borders, and a fill that reached
+  them left the window open-sided until something repainted the frame.
+- **No live key may be zero**, because zero is what `tm_rowck_clear` writes.
+  `tm_elchk` — which every checked draw in this window goes through, the seven
+  `TMC_*` elements and each row of both lists — maps an incoming 0 to 1 for
+  exactly this reason. An element whose state legitimately hashes to zero
+  otherwise reads as *unchanged* on the very first paint and is never drawn at
+  all: `mem_tab` is all zeroes on a machine with no heap to claim from, so on
+  128KB the conventional-memory map stayed blank forever, and the XMS bar does
+  the same on any machine with no extended memory in use.
 
 **Content layout — performance view** (content-relative; content is
 231×282):
@@ -5290,7 +5300,7 @@ heap.
   slots are not drawn**: 19 rows at the 11px pitch is 279 of the 281-pixel
   content, which is what decides both that and the template's height.
   `tm_mrow_open` clamps to the **live** frame on top of that constant
-  (`tm_ylim_set`), for the screens where §39.7 shrinks the window — nothing
+  (`tm_view_begin`), for the screens where §39.7 shrinks the window — nothing
   in the kernel clips a draw to a window, and on a 200-row CGA this one is
   156px tall.
 - **The legend squares key the rows to the maps, and a row only gets one
@@ -5371,16 +5381,56 @@ rectangle rather than the screen, but a window that fits is still the point.)
 
 `tm_init` derives the height once, at boot, from `[vid_dock_y0]`: as many
 process rows as the space between the menu bar and the dock will take, capped
-at `TMM_ROWS`, and never fewer than one. `[tm_maxrow]` is that count.
+at `TMM_ROWS`, and never fewer than one. That count is `[tm_colrows]`.
+
+**One pixel of that space is spent before the frame gets any of it.**
+`wm_dock_clear` tests `y+h` against `[vid_dock_y0]` with `jae`, because the
+drop shadow lives on row `y+h` — so a frame that merely *reaches* the dock is
+already covering its first row. Deriving the height is not enough on its own
+either: `wm_fit` clamps `y` to `dock_y0 - h`, which puts the shadow straight
+back on the strip for any frame tall enough to be clamped at all. `tm_init`
+therefore writes the template's **y** as well, as `dock_y0 - 1 - h` floored at
+`MBAR_H`.
 
 This is separate from the per-row clip against `[tm_ylim]`, which stays: that
 stops a row's glyphs being lettered over the dock once a second, and it is
 what made an oversized window survivable rather than correct. The frame
 fitting is what stops the redraws.
 
-**CGA still shows only a handful of rows** - 156 usable pixels does not hold
-19 of them however the frame is sized. Recovering them means a wider window
-and a second column, which is not done here.
+### 28.1.1 Two columns, on a screen too short for one
+
+156 usable pixels does not hold 19 rows however the frame is sized, so a
+screen that fits fewer than `TM_COL2_MIN` (12) rows in one column gets a
+**second column and a window twice as wide** instead — if the screen is wide
+enough to carry it (`TM_W + TM_COLW`, which 640px across is). CGA is the only
+adapter that takes this path; VGA (19 rows) and Hercules (17) keep one column.
+
+The two columns are **not the same depth**. Column 0 begins under the maps,
+where the maps are; every later column begins at `TM_C2_ROW_Y`, the top of the
+content, because nothing is drawn above it there. On CGA that is 3 rows beside
+10 rather than 3 beside 3 — which is what makes both lists fit whole. Each
+column carries its own copy of the header line, at `TM_C2_HDR_Y` for the later
+ones.
+
+`tm_row_place` is the single index→pixel mapping, used by both views, and the
+order is **column-major**: rows `0..[tm_colrows]-1` fill column 0, then
+`[tm_col2rows]` at a time fill each column after it. That is what makes "this
+row has no place" monotone — once one row is refused every later row is too,
+so a caller may stop rather than test the rest.
+
+Three traps:
+
+- **`[tm_cols]`, `[tm_colrows]`, `[tm_col2rows]` and `[tm_maxrow]` are set at
+  boot and must live OUTSIDE `tm_zero_beg..tm_zero_end`**, which `tm_kinit`
+  zeroes every time a window opens. `[tm_col2rows]` is a divisor, so getting
+  this wrong is a divide-by-zero on the first launch, not a layout glitch.
+- **Everything a row draws reads `[tm_rowx]`, never `[tm_cx]`** — the fill, the
+  text, and *both halves* of a legend square. The frame and the interior of
+  that square are drawn by different routines, and one of them reading `tm_cx`
+  put a solid block in column 0 on top of whatever was there.
+- **The chrome above the list is column 0's** and reads `[tm_cx]`: the maps,
+  the bars and the caption lines. `tm_lfill` sets `[tm_rowx]` back to `[tm_cx]`
+  itself rather than relying on running before the row loop.
 
 ## 29. instance.inc — the instance table (running-app lifecycle)
 
@@ -7454,7 +7504,7 @@ On CGA the usable desktop is 156 rows, so windows authored at 640x480 meet
   background task, never on the `wm_paint_all` path. Minesweeper and Piano are clipped at the dock and
   still play. The Task Manager was the one case where this defaced the dock
   strip once a second, so its two fixed-pitch row lists now stop at
-  `[tm_ylim]` (`tm_ylim_set`, §28) rather than at `TM_ROWS`.
+  `[tm_ylim]` (`tm_view_begin`, §28) rather than at `TM_ROWS`.
 
 The general rule this leaves for any new window: **the clamp is not a clip.**
 If a paint proc lays out from constants rather than from `W_W`/`W_H`, it can
@@ -7648,11 +7698,34 @@ entry covers — so a freed block merges with its neighbours for nothing.
 ### 41.6 What the Task Manager reports
 
 One line, `XMS used/sizedK`, directly **below** the package-pool map and
-above the process list (§28). It gets no map of its own, and that is the
-honest layout rather than a missing feature: the two maps above it are
-conventional memory and a magnified slice of conventional memory, and
-extended memory is in neither — real mode has no address for it, which is the
-whole reason `xm_copy` exists.
+above the process list (§28), with a **bar** under it: `used/sized` of the
+bar's interior black, the rest white — the same shape and the same
+element-check discipline as the performance view's RAM bar, because it answers
+the same question about a different pool.
+
+It gets no *map*, and that is the honest layout rather than a missing feature:
+the two maps above it are conventional memory and a magnified slice of
+conventional memory, and extended memory is in neither — real mode has no
+address for it, which is the whole reason `xm_copy` exists. A bar needs no
+addresses, so a bar is what it gets.
+
+Two things about the bar are load-bearing:
+
+- **Its frame is drawn by `tm_draw_mem`, not by `tm_xbar`.** On tier 0 the
+  width is 0, which is exactly the value `tm_rowck_clear` leaves in the check
+  word, so the body skips itself on the very first paint — a frame inside that
+  gate would never be drawn at all. An empty bar beside `XMS 0/0K` is
+  deliberate: an absent one reads as a missing feature rather than an empty
+  pool.
+- **The figures need five digits.** `tm_put3` emits one character per hardcoded
+  place, so 64,448 KB came out as a plausible-looking `48K`. Every other figure
+  in this window is bounded by 640K and fits; this one is bounded by `int 15h
+  AH=88h` and does not.
+
+The never-zero rule in `tm_elchk` (§28.1.1) exists because of this bar and was
+then found to matter more widely: `mem_tab` is all zeroes on a machine with no
+heap to claim from, so on 128KB the *conventional-memory map* hashed to 0 too
+and stayed blank forever.
 
 ### 41.8 The package ABI
 

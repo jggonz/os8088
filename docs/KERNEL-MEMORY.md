@@ -54,8 +54,8 @@ are the table below:
 
 The 64KB *segment* limit is untouched and cannot be raised at all: `.text` +
 `.bss` are addressed through one segment with 16-bit offsets, so guard 2 caps
-them at 65,536 whatever the budget says. At today's 53,760 there is still
-11,776 B of segment left, so the budget is what binds, which is the intended
+them at 65,536 whatever the budget says. At today's 54,272 there is still
+11,264 B of segment left, so the budget is what binds, which is the intended
 order — a budget is a decision and a segment is physics.
 
 Raising the budget also moved the **relocated boot sector**: `BOOT_RELOC`
@@ -72,11 +72,11 @@ out of the same constants the guards use.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` + `.bss`) | 53,760 B | all kernel code, its read-only data, and its scratch |
+| image (`.text` + `.bss`) | 54,272 B | all kernel code, its read-only data, and its scratch |
 | task stacks | 6,656 B | 11 background slots + task 0's |
 | disk buffers | 3,584 B | directory cache, icon cache, sector scratch |
 | FAT snapshot | 4,608 B | the mounted volume's FAT, resident |
-| **total** | **68,608 B** | of a 71,680-byte budget — 3,072 B spare |
+| **total** | **69,120 B** | of a 71,680-byte budget — 2,560 B spare |
 
 Everything above that is somebody else's: the 60KB package pool, then the
 claim heap up to whatever int 12h reports.
@@ -145,7 +145,7 @@ the interior texture is light so it does not swallow it.
 
 ## Each region in detail
 
-### The image — `.text` + `.bss`, 53,760 B
+### The image — `.text` + `.bss`, 54,272 B
 
 One flat binary at `KERNEL_SEG:0000`, assembled `-f bin` with no linker.
 `.bss` follows `.text` immediately and is uninitialised by definition, so it
@@ -153,8 +153,8 @@ costs nothing on the floppy and everything in RAM.
 
 That figure is `.text` + `.bss` **rounded up to a whole 512 bytes** (see the
 alignment invariant below), so it is the only rung with any slack in it, and
-the slack is a rounding remainder rather than a reservation — 473 bytes as
-this is written, against 53,287 unrounded. Measure the unrounded pair by
+the slack is a rounding remainder rather than a reservation — 291 bytes as
+this is written, against 53,981 unrounded. Measure the unrounded pair by
 appending
 `section .text` / `times KBSS_SIZE db 0` to `kernel/kernel.asm`, assembling,
 and taking the file size; revert afterwards. `make`'s own `kernel: n bytes`
@@ -295,7 +295,7 @@ package calls into empty memory.
 | low memory sized to measurement, kernel moved to 0x0800 | 75 KB |
 | `.fartext` retired, ladder derived, buffers trimmed, kernel at 0x0060 | 63.5 KB |
 | budget raised 64 → 70KB for the SPEC.md §41 XMS store | 66 KB |
-| ...and where it stands now | **67 KB** |
+| ...and where it stands now | **67.5 KB** |
 
 The last row is the one to re-measure rather than trust: it moves with every
 commit that adds code, and it is not the budget — it is what the budget is
