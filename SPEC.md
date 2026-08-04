@@ -9961,19 +9961,57 @@ under it.
 
 ### 51.5 SYSTEM.CFG
 
-32 bytes in the system disk's root, written through the ordinary file API, so
-it is an ordinary file — deletable, copyable and readable from DOS.
+A small file in the system disk's root, written through the ordinary file API,
+so it is an ordinary file — deletable, copyable and readable from DOS. It
+carries the **whole Control Panel**, not just the driver list.
+
+**Nothing in it is positional.** It was a fixed 32-byte struct, which is the
+cheapest thing that works and the wrong thing to keep: adding a setting is
+fine, but *removing* one leaves a hole every later version must go on
+reserving, and any rearrangement silently reinterprets an old file's bytes as
+the wrong settings. Every value now travels with a key that says what it is.
 
 ```
-+0   'O','8','8','C','F','G',0,0     signature
-+8   dw version (1)
-+10  dw wanted                        bit n = drv_tab row n loads at boot
-+12  20 reserved bytes
++0    'O','8','8','C','F','G',0,0     signature
++8    dw  container generation (3)     the shape BELOW, not the settings
++10.. records, then a key of 0:
+        dw  key      two ASCII characters
+        db  ver      what this key MEANS
+        db  len      bytes of data
+        db  data[len]
 ```
 
-A missing or malformed file means **the defaults in `drv_tab`**, never an
-error — which is what makes a freshly built image boot with sound enabled and
-a disk with a foreign `SYSTEM.CFG` boot at all.
+Six keys today, 43 bytes: `DW` driver-wanted bitmap, `SR` sound route, `CH`
+clock 12/24, `CS` clock seconds, `SM` scheduler mode, `BB` back buffer. They
+are ASCII so a hex dump of the file reads as the list of settings it is.
+
+Four rules follow, and they are the point of the format:
+
+1. **A key this kernel does not know is skipped** by its own `len`, and is
+   **not carried over** — the writer emits the table and nothing else, so a
+   setting written by a newer kernel survives an older one reading it exactly
+   until that older one saves. That is intended: preserving bytes whose
+   meaning cannot be checked is worse than losing them, because the next
+   kernel to read them cannot tell a stale record from a current one.
+2. **A key whose meaning changed carries a new `ver`**, so the old record does
+   not match and the **default stands**. This is the case a positional struct
+   cannot express at all — same name, different encoding, no way to tell them
+   apart. *To change what a key means, bump its `ver`.*
+3. **A different container generation means all defaults.** Generation 2 was
+   the positional struct, and a struct read as records is nonsense.
+4. **Anything absent falls back to the default**, because `drv_cfg_load` packs
+   the *live* state into the struct before deserializing over it — and at boot
+   the live state is exactly the defaults. There is no second copy of them to
+   keep in step.
+
+Every step of the walk is bounded by the byte count the read returned: a
+record header that would run past the end, or a `len` that would, ends it. A
+torn or corrupt file therefore costs the settings it did not carry and nothing
+else.
+
+A missing or malformed file means **the defaults**, never an error — which is
+what makes a freshly built image boot with sound enabled and a disk with a
+foreign `SYSTEM.CFG` boot at all.
 
 The settings write is a **separate outcome from the load**, and the Control
 Panel reports them separately: a load that succeeds and a save that cannot

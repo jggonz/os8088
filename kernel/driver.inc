@@ -107,31 +107,104 @@ DSV_TONE    equ 12              ; dw: near proc, the tone tier's sink while
                                 ; Blaster does not.
 DSV_SIZE    equ 14
 
-; --- SYSTEM.CFG, 32 bytes in the system disk's root (SPEC.md 51.5) -----------
+; --- SYSTEM.CFG: a KEYED record file (SPEC.md 51.5) --------------------------
 ; It is the whole Control Panel's file, not just the driver list: every
 ; setting the panel offers is here, so a machine boots in the state it was
 ; left in.
-DRV_CFG_VER  equ 8              ; word, after the 8-byte signature
-DRV_CFG_WANT equ 10             ; word: bit n = drv_tab row n is wanted
-DRV_CFG_RT   equ 12             ; db: [snd_route]  (SPEC.md 34.8)
-DRV_CFG_H12  equ 13             ; db: [clk_h12]    (SPEC.md 31.5)
-DRV_CFG_SEC  equ 14             ; db: [clk_secs]
-DRV_CFG_SCH  equ 15             ; db: the scheduler mode (SPEC.md 8.2)
-DRV_CFG_BB   equ 16             ; db: double buffering  (SPEC.md 32)
-DRV_CFG_RSV  equ 17             ; ...and 15 bytes for what comes next
-DRV_CFG_SZ   equ 32
-DRV_CFG_V    equ 2              ; the version this kernel writes
+;
+; **Nothing in it is positional.** It was a fixed 32-byte struct, which is
+; the cheapest thing that works and the wrong thing to have: adding a setting
+; is fine, but REMOVING one leaves a hole every later version has to keep
+; reserving, and any rearrangement silently reinterprets an old file's bytes
+; as the wrong settings. So every value now travels with a KEY that says what
+; it is, and the file is a list of records rather than a layout:
+;
+;     0..7    the signature, byte for byte (drv_cfgsig)
+;     8       word: the CONTAINER generation - the shape BELOW, not the
+;             settings above it
+;     10..    records: key(word) ver(byte) len(byte) data[len]
+;             ...terminated by a key of 0
+;
+; Three properties follow, and they are the point:
+;
+;   1. **A key this kernel does not know is skipped**, by its own len, and is
+;      NOT carried over - drv_cfg_ser writes what the table holds and nothing
+;      else, so a setting written by a newer kernel survives being read by an
+;      older one exactly until that older one saves. That is the intended
+;      behaviour and not a bug: the alternative is preserving bytes whose
+;      meaning we cannot check.
+;   2. **A key whose MEANING changed carries a new ver**, so an old record
+;      does not match and the DEFAULT stands. This is the case a plain struct
+;      cannot express at all - same name, different encoding, and no way to
+;      tell the two apart.
+;   3. **Anything absent falls back to the default**, because drv_cfg_load
+;      packs the LIVE state into the struct before deserializing over it -
+;      and at boot the live state is exactly the defaults.
+;
+; The keys are two ASCII characters each so a hex dump of the file reads as
+; the list of settings it is.
+CFG_SIGN    equ 8               ; the signature, and where the generation sits
+CFG_GEN     equ 8               ; word: the container generation
+CFG_REC0    equ 10              ; ...and where the first record begins
+CFG_GEN_V   equ 3               ; what this kernel writes, and the only one it
+                                ; reads: generation 2 was the positional
+                                ; struct, and a struct read as records is
+                                ; nonsense, so it falls back to the defaults
+CFG_FBUF    equ 64              ; the file buffer. The table below emits 10
+                                ; bytes of header, 31 of records and a 2-byte
+                                ; terminator = 43, so this is the next round
+                                ; number up with room for a few more keys
 
-; The three plain bytes, as (file offset, kernel byte) pairs: one loop packs
+CFR_KEY     equ 0               ; one record
+CFR_VER     equ 2
+CFR_LEN     equ 3
+CFR_DAT     equ 4
+CFR_HDR     equ 4
+
+; The settings themselves, staged in a struct that is KERNEL-PRIVATE: only
+; the FILE has to be self-describing, and a positional struct in RAM costs
+; nothing and is never written to disk in this shape.
+CFG_WANT    equ 0               ; word: bit n = drv_tab row n is wanted
+CFG_RT      equ 2               ; db: [snd_route]  (SPEC.md 34.8)
+CFG_H12     equ 3               ; db: [clk_h12]    (SPEC.md 31.5)
+CFG_SEC     equ 4               ; db: [clk_secs]
+CFG_SCH     equ 5               ; db: the scheduler mode (SPEC.md 8.2)
+CFG_BB      equ 6               ; db: double buffering  (SPEC.md 32)
+CFG_NB      equ 7               ; ...the struct's size
+
+; key, ver, len, offset into the struct. ONE table drives the reader and the
+; writer both, so a new setting is five bytes here and nothing else - and the
+; reader can never disagree with the writer about what a key means.
+;
+; TO CHANGE WHAT A KEY MEANS, BUMP ITS ver. That is the whole compatibility
+; story: old records stop matching and the default stands, which is the
+; documented outcome rather than a misread value.
+drv_cfg_keys:
+    dw 'DW'                     ; Driver Wanted, the row bitmap
+    db 1, 2, CFG_WANT
+    dw 'SR'                     ; Sound Route
+    db 1, 1, CFG_RT
+    dw 'CH'                     ; Clock Hours, 12/24
+    db 1, 1, CFG_H12
+    dw 'CS'                     ; Clock Seconds
+    db 1, 1, CFG_SEC
+    dw 'SM'                     ; Scheduler Mode
+    db 1, 1, CFG_SCH
+    dw 'BB'                     ; Back Buffer
+    db 1, 1, CFG_BB
+CFG_NKEY    equ 6
+CFG_KESZ    equ 5               ; bytes per table entry
+
+; The three plain bytes, as (struct offset, kernel byte) pairs: one loop packs
 ; and another unpacks, so a new setting is three bytes of table rather than
 ; two more hand-written copies that can drift apart. The scheduler and the
 ; back buffer are NOT here - neither is a plain store (SPEC.md 8.2/32).
 drv_cfg_map:
-    db DRV_CFG_RT
+    db CFG_RT
     dw snd_route
-    db DRV_CFG_H12
+    db CFG_H12
     dw clk_h12
-    db DRV_CFG_SEC
+    db CFG_SEC
     dw clk_secs
 DRV_CFG_MAPN equ 3
 
@@ -880,11 +953,11 @@ drv_cfg_pack:
     add si, 3
     loop .p
     call drv_want_get
-    mov [drv_cfg+DRV_CFG_WANT], ax
+    mov [drv_cfg+CFG_WANT], ax
     call sched_mode_get
-    mov [drv_cfg+DRV_CFG_SCH], al
+    mov [drv_cfg+CFG_SCH], al
     mov al, [bb_dbl]
-    mov [drv_cfg+DRV_CFG_BB], al
+    mov [drv_cfg+CFG_BB], al
     pop di
     pop si
     pop cx
@@ -908,9 +981,9 @@ drv_cfg_unpack:
     mov [di], al
     add si, 3
     loop .u
-    mov ax, [drv_cfg+DRV_CFG_WANT]
+    mov ax, [drv_cfg+CFG_WANT]
     call drv_want_set
-    mov al, [drv_cfg+DRV_CFG_SCH]
+    mov al, [drv_cfg+CFG_SCH]
     cmp al, 1
     ja .out                     ; a byte from a future version: leave the
     call sched_mode_set         ; mode alone rather than pick nonsense
@@ -937,41 +1010,153 @@ drv_cfg_load:
     push es
     push cs
     pop es
-    mov bx, drv_cfg
-    mov cx, DRV_CFG_SZ
+    mov bx, drv_cfgbuf
+    mov cx, CFG_FBUF
     mov si, drv_cfgname
-    call dskw_read
+    call dskw_read              ; AX = bytes actually read
     jc .out                     ; no file: the defaults stand
-    cmp ax, DRV_CFG_SZ
-    jne .out
-    mov si, drv_cfg
+    call drv_cfg_pack           ; the LIVE state into the struct first: that
+                                ; is what a key the file does not carry - or
+                                ; carries at a ver we do not accept - falls
+                                ; back to, and at boot the live state IS the
+                                ; defaults (SPEC.md 51.5). No second copy of
+                                ; them to keep in step
+    call drv_cfg_deser
+    jc .out
+    call drv_cfg_unpack
+    clc
+    jmp short .done
+.out:
+    stc
+.done:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; drv_cfg_deser - the file's records into the settings struct (SPEC.md 51.5)
+; in:  AX = bytes read into drv_cfgbuf
+; out: CF = 0 the struct holds this file's settings; CF = 1 nothing usable
+;      was found and the struct is untouched
+; clobbers: flags
+;
+; **Defaults first, records second.** The struct is seeded from drv_cfg_def
+; before a record is looked at, so a key that is absent - or present with a
+; ver this kernel does not accept - leaves the DEFAULT in place rather than
+; whatever the struct happened to hold.
+;
+; Every step is bounded by the byte count the read actually returned: a record
+; header that would run past the end, or a len that would, ends the walk. A
+; truncated or corrupt file therefore costs the settings it did not carry and
+; nothing else - the same shape as every other hostile-input path here.
+; -----------------------------------------------------------------------------
+drv_cfg_deser:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cmp ax, CFG_REC0            ; too short to hold even a header
+    jb .bad
+    mov dx, ax                  ; DX = the file's length, the only bound
+    mov si, drv_cfgbuf
     mov di, drv_cfgsig
-    mov cx, 8
+    mov cx, CFG_SIGN
+    cld
 .sig:
     mov al, [si]
-    mov ah, [di]
-    cmp al, ah
-    jne .out                    ; a foreign file of that name: left alone
+    cmp al, [di]
+    jne .bad                    ; a foreign file of that name: left alone
     inc si
     inc di
     loop .sig
-    call drv_cfg_unpack
-    pop es
-    pop di
+    cmp word [drv_cfgbuf+CFG_GEN], CFG_GEN_V
+    jne .bad                    ; another generation's SHAPE: the records are
+                                ; not records. Defaults, and the next save
+                                ; rewrites the file in this one
+    mov si, CFG_REC0            ; SI = offset of the next record
+.rec:
+    mov ax, si
+    add ax, CFR_HDR
+    cmp ax, dx
+    ja .done                    ; no room for another header: end of file
+    mov bx, si
+    cmp word [bx+drv_cfgbuf+CFR_KEY], 0
+    je .done                    ; the terminator. Tested IN MEMORY, because AX
+                                ; is still si+CFR_HDR from the bound check
+                                ; above and the next one needs it
+    mov cl, [bx+drv_cfgbuf+CFR_LEN]
+    xor ch, ch
+    add ax, cx                  ; AX = where the NEXT record starts
+    cmp ax, dx
+    ja .done                    ; its data would run past the end
+    push ax
+    mov ax, [bx+drv_cfgbuf+CFR_KEY]
+    call drv_cfg_key            ; DI = table entry, or CF=1 = not ours
+    jc .next
+    mov cl, [di+3]              ; the length THIS kernel expects
+    xor ch, ch
+    cmp cl, [bx+drv_cfgbuf+CFR_LEN]
+    jne .next                   ; right key, wrong size: not our record
+    mov al, [di+2]
+    cmp al, [bx+drv_cfgbuf+CFR_VER]
+    jne .next                   ; right key, DIFFERENT MEANING: the default
+                                ; stands, which is the whole point of ver
+    push si
+    mov al, [di+4]              ; where it lives in the struct
+    xor ah, ah
+    mov di, ax
+    add di, drv_cfg
+    lea si, [bx+drv_cfgbuf+CFR_DAT]
+    rep movsb
     pop si
-    pop cx
-    pop bx
-    pop ax
+.next:
+    pop si                      ; ...the next record, bounded above
+    jmp .rec
+.done:
     clc
-    ret
-.out:
+    jmp short .dout
+.bad:
+    stc
+.dout:
     pop es
     pop di
     pop si
+    pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; drv_cfg_key - find a key in drv_cfg_keys (module internal)
+; in:  AX = the key
+; out: CF = 0 and DI = the entry; CF = 1 = this kernel does not know it
+; clobbers: DI (the output), flags
+; -----------------------------------------------------------------------------
+drv_cfg_key:
+    push cx
+    mov di, drv_cfg_keys
+    mov cx, CFG_NKEY
+.scan:
+    cmp [di], ax
+    je .hit
+    add di, CFG_KESZ
+    loop .scan
+    pop cx
     stc
+    ret
+.hit:
+    pop cx
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1021,6 +1206,68 @@ drv_want_get:
     ret
 
 ; -----------------------------------------------------------------------------
+; drv_cfg_ser - the settings struct out as records (SPEC.md 51.5)
+; in:  nothing (drv_cfg current)
+; out: CX = the file's length in bytes
+; clobbers: CX (the output), flags
+;
+; Writes the signature, this kernel's container generation, one record per
+; table entry and a zero terminator - so what it emits is exactly what this
+; kernel understands. A record read from a NEWER kernel's file is therefore
+; gone after the first save, which is the documented behaviour: keeping bytes
+; whose meaning cannot be checked is worse than losing them.
+; -----------------------------------------------------------------------------
+drv_cfg_ser:
+    push ax
+    push bx
+    push dx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov si, drv_cfgsig
+    mov di, drv_cfgbuf
+    mov cx, CFG_SIGN
+    rep movsb
+    mov ax, CFG_GEN_V
+    stosw
+    mov si, drv_cfg_keys
+    mov dx, CFG_NKEY
+.rec:
+    mov ax, [si]                ; key
+    stosw
+    mov al, [si+2]              ; ver
+    stosb
+    mov al, [si+3]              ; len
+    stosb
+    mov bl, [si+4]              ; ...and the bytes themselves
+    xor bh, bh
+    add bx, drv_cfg
+    mov cl, [si+3]
+    xor ch, ch
+.cp:
+    mov al, [bx]
+    stosb
+    inc bx
+    loop .cp
+    add si, CFG_KESZ
+    dec dx
+    jnz .rec
+    xor ax, ax
+    stosw                       ; the terminator
+    mov cx, di
+    sub cx, drv_cfgbuf          ; CX = what to write
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; drv_cfg_save - write the table's WANT bytes back to SYSTEM.CFG
 ; in:  nothing
 ; out: CF = 0 written; CF = 1 and AX = FERR_* (the caller says so in prose)
@@ -1039,22 +1286,12 @@ drv_cfg_save:
     call drv_mounted
     jc .nodisk
 
-    push ds                     ; rebuild the whole record: it is 32 bytes,
-    pop es                      ; and a partial write of a settings file is a
-    mov si, drv_cfgsig          ; bug waiting for the next version bump
-    mov di, drv_cfg
-    mov cx, 8
-    cld
-    rep movsb
-    mov word [drv_cfg+DRV_CFG_VER], DRV_CFG_V
-    mov di, drv_cfg + DRV_CFG_RSV
-    mov cx, DRV_CFG_SZ - DRV_CFG_RSV
-    xor al, al
-    rep stosb
-    call drv_cfg_pack
+    push ds                     ; rebuild the whole file: a settings file is
+    pop es                      ; small and a partial one is a bug waiting for
+    call drv_cfg_pack           ; the next format change
+    call drv_cfg_ser            ; CX = its length, records and all
 
-    mov bx, drv_cfg
-    mov cx, DRV_CFG_SZ
+    mov bx, drv_cfgbuf
     mov si, drv_cfgname
     call dskw_write             ; ES is already ours, which is where it reads
     jmp short .out
@@ -1090,7 +1327,7 @@ drv_boot:
     jc .nodisk
     call drv_cfg_load
     jc .load                    ; no record: every default stands
-    cmp byte [drv_cfg+DRV_CFG_BB], 0
+    cmp byte [drv_cfg+CFG_BB], 0
     je .load
     call gfx_lock               ; the one setting that is not a store: it
     mov al, 1                   ; claims 150KB and seeds the buffer from
@@ -1175,6 +1412,7 @@ drv_fsz:    resw 1              ; the driver file's byte size
 drv_owner:  resw 1              ; the row whose services are published, or 0
 drv_svc:    resb DSV_SIZE       ; a copy of that row's service table...
 drv_sname:  resb 16             ; ...and its sink's name, staged for font_str
-drv_cfg:    resb DRV_CFG_SZ     ; SYSTEM.CFG, read and written whole
+drv_cfg:    resb CFG_NB         ; the live settings, staged (layout above)
+drv_cfgbuf: resb CFG_FBUF       ; the file itself, records and all
 
 section .text
