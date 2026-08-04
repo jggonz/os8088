@@ -44,6 +44,22 @@
 ; a superseding open. Packages never hold an ES pointer into SND_SEG: data
 ; crosses through the verb-6 staging copy (the dsk_get_dir idiom).
 ;
+; Verbs 1/3/5/6/7 are ANY-TASK (SPEC.md 20.3's per-verb context rule): a
+; package's worker may feed, poll, read, stage and hold grants. Every
+; check-then-act those verbs run is one pushf/cli window (SPEC.md 34.3),
+; the verb-5/6 caller segment arrives per-call in BX from the slot wrapper,
+; and grant attribution rides the task-qualified [snd_inst] stamp
+; (snd_req_inst). Verbs 0/2/4 stay UI-callback-only - the open busy check
+; and the act=1 publish are many IF=1 instructions apart.
+;
+; RING MODE (SPEC.md 34.5; verb 0, AH bit 0 = SND_OPENF_RING): the same
+; total/fed/consumed become free-running 16-bit counters, the physical
+; offset of stream byte n is str_off + (n & sbl_rmask), fills are whole
+; 2048-byte halves only and never pad, and the feed bounds are the two
+; subtractions of SPEC.md 20.3 verb 1. What it buys: endless playback out
+; of a small grant with no close+reopen seam - a worker mixes, verb-6
+; stages at ringbase + (total & rmask), and verb-1 feeds, forever.
+;
 ; Recording (SPEC.md 34.6, Phase 5) is the mirror image on the same stream
 ; record: verb 4 opens an input stream (DSP 24h single-cycle / 2Ch
 ; auto-init per the version gate, DMA modes 45h/55h) capturing into the
@@ -477,6 +493,11 @@ sbl_isr:
     cmp byte [sbl_str_dir], 0   ; input streams take the mirror half-swap
     jne .input
 
+    cmp byte [sbl_ring_on], 0   ; ring: counters are free-running and a
+    je .lincons                 ; half only plays after being filled WHOLE
+    add word [sbl_consumed], SBL_HALF   ; (consumed+2048 <= fed <= total by
+    jmp .consd                  ; construction - SPEC.md 34.5), so no cap
+.lincons:
     mov ax, [sbl_consumed]      ; one block played (cap at the valid length:
     add ax, SBL_HALF            ; the tail of the last half is silence pad)
     cmp ax, [sbl_total]
@@ -484,6 +505,7 @@ sbl_isr:
     mov ax, [sbl_total]
 .cons:
     mov [sbl_consumed], ax
+.consd:
 
     mov bl, [sbl_play]          ; the half that just finished...
     xor bh, bh
@@ -831,10 +853,14 @@ sbl_hcheck:
 ;
 ; in:       DX = rate Hz (4000..22222), SI = grant offset, CX = valid bytes
 ;           staged so far (> 0; CX short of the grant is the caller
-;           explicitly accepting progressive-feed risk - the staged rule)
+;           explicitly accepting progressive-feed risk - the staged rule),
+;           AH = open flags (verb 0 carries no handle, so the byte is
+;           free): bit 0 = SND_OPENF_RING - ring mode (SPEC.md 34.5): the
+;           ring length RL = grant end - SI must be a power of two in
+;           4096..32768 and CX must be SBL_HALF..RL, else err 7
 ; out:      AL = 0 ok with AH = handle, else AX = 1 busy / 2 rate / 4 no
-;           sink or no IRQ found / 6 no task slot / 7 bad grant; CF mirrors
-;           the error
+;           sink or no IRQ found / 6 no task slot / 7 bad grant or ring;
+;           CF mirrors the error
 ; clobbers: nothing else (flags)
 ;
 ; First use runs IRQ discovery (sbl_irq_disc, far) and hooks sbl_isr onto
@@ -845,18 +871,24 @@ sbl_hcheck:
 ; opener's next instruction, and an unexpected real IRQ never reads 2xEh,
 ; leaving the DSP INT latched and the stream permanently silent.
 ;
-; One serialization assumption, pinned (SPEC.md 20.3): stream verbs run
-; only from window callbacks on the single UI task, so the busy check
-; here and the eventual act=1 publish - ~60 IF=1 instructions apart, and
-; IRQ discovery can even sleep on ticks in between - never race a second
-; open. A future background-task caller would have to claim the record
-; under pushf/cli first (the sbl_grant_alloc single-window standard).
+; One serialization assumption, pinned (SPEC.md 20.3, per-verb): the OPEN
+; verbs run only from window callbacks on the single UI task, so the busy
+; check here and the eventual act=1 publish - ~60 IF=1 instructions apart,
+; and IRQ discovery can even sleep on ticks in between - never race a
+; second open. The any-task verbs (1/3/5/6/7) carry their own pushf/cli
+; windows instead (SPEC.md 34.3); a future task-context OPEN would have to
+; claim the record under pushf/cli first (the sbl_grant_alloc standard).
 ; -----------------------------------------------------------------------------
 sbl_v_open:
     push bx
     push cx
     push dx
     push si
+    mov byte [sbl_ropen], 0     ; latch the ring flag before AH dies (a
+    test ah, 1                  ; TEMP, not the live record byte: the busy
+    jz .lin                     ; refusal below must not disturb an OPEN
+    mov byte [sbl_ropen], 1     ; stream's [sbl_ring_on])
+.lin:
     test byte [snd_drv + SDRV_SIZE*DRV_SB + SDRV_FLAGS], 1
     jz .e4                      ; no card: the documented clean failure
     cmp byte [sbl_str_act], 0
@@ -877,8 +909,27 @@ sbl_v_open:
     jnc .grantok                ; out AX = bytes to the grant's end
     jmp .e7
 .grantok:
-    mov [sbl_str_max], ax       ; the feed bound
+    mov [sbl_str_max], ax       ; the feed bound (linear; ring uses the mask)
     mov [sbl_str_inst], dh
+    cmp byte [sbl_ropen], 0     ; ring validation (SPEC.md 20.3 verb 0 /
+    je .irqchk                  ; 34.5): RL = AX = bytes SI..grant end
+    cmp ax, 4096                ; power of two, 4096..32768...
+    jb .e7t
+    cmp ax, 32768
+    ja .e7t
+    mov dx, ax
+    dec dx                      ; DX = candidate mask
+    test ax, dx
+    jnz .e7t                    ; not a power of two
+    cmp cx, ax                  ; ...and SBL_HALF <= CX <= RL: a ring never
+    ja .e7t                     ; pads, so the DSP may not start on a half
+    cmp cx, SBL_HALF            ; no fill can complete (SPEC.md 34.5 rule 3;
+    jae .rok                    ; CX > 0 was checked above)
+.e7t:
+    jmp .e7
+.rok:
+    mov [sbl_rmask], dx         ; RL-1: the ring mask
+.irqchk:
     cmp byte [sbl_irq], 0xFF    ; IRQ discovery, deferred to first use
     jne .irqok                  ; (SPEC.md 34.5)
     call sbl_irq_disc           ; far orchestration; hooks the winner
@@ -905,14 +956,24 @@ sbl_v_open:
     mov byte [sbl_valid+1], 0
     mov byte [sbl_paused], 0
     mov byte [sbl_str_dir], 0   ; an OUTPUT stream (SPEC.md 34.6)
+    mov al, [sbl_ropen]         ; commit the ring flag into the record
+    mov [sbl_ring_on], al       ; (SPEC.md 34.5; sbl_rmask was set above)
     mov byte [sbl_str_state], SBL_ST_PLAY
     inc byte [sbl_gen]
     xor bx, bx                  ; prime the double buffer: half 0 always
-    call sbl_fill_half          ; has data (CX > 0)...
-    mov byte [sbl_valid], 1
+    call sbl_fill_half          ; has data (ring: CX >= SBL_HALF validated;
+    mov byte [sbl_valid], 1     ; linear: CX > 0, short halves pad)...
     mov ax, [sbl_total]
     sub ax, [sbl_fed]
-    jz .primed                  ; ...half 1 only if any data remains
+    cmp byte [sbl_ring_on], 0
+    je .lin1
+    cmp ax, SBL_HALF            ; ...half 1: ring fills are whole halves
+    jb .primed                  ; only, never padded (SPEC.md 34.5 rule 1)
+    jmp .fill1
+.lin1:
+    or ax, ax
+    jz .primed                  ; ...linear: any remainder fills (+ pad)
+.fill1:
     mov bx, 1
     call sbl_fill_half
     mov byte [sbl_valid+1], 1
@@ -967,34 +1028,61 @@ sbl_v_open:
 ; -----------------------------------------------------------------------------
 ; sbl_v_feed - verb 1: extend a progressively staged stream (SPEC.md 20.3)
 ;
-; in:       AH = handle, CX = new total valid length (>= the old, and within
-;           the grant)
+; in:       AH = handle, CX = new total valid length. Linear: >= the old,
+;           and within the grant. Ring (SPEC.md 34.5): free-running mod
+;           65536 - new - old < 0x8000 (monotonic forward) and new - fed
+;           <= RL (never overwrite bytes the refill has not copied out)
 ; out:      AX = 0 ok / 7 bad length or an input stream (SPEC.md 34.6) /
 ;           0FFFFh stale; CF set on both errors
 ; clobbers: nothing else (flags)
 ;
-; A single word store: the ISR and the refill task read [sbl_total] whole.
+; ANY-TASK (SPEC.md 20.3's per-verb context rule), so the hcheck, the
+; direction check, both bound checks and the [sbl_total] store are ONE
+; pushf/cli..popf window (SPEC.md 34.3): a caller preempted between a
+; stale-handle check and the store, across a close+reopen on another
+; task, must never validate against one stream and store into its
+; successor. Bounded: a dozen compares and one word store - ISR-legal.
 ; An underrun-paused stream resumes on the refill task's next wake; a
 ; watchdog-stopped stream does not (its task is gone - the owner closes).
 ; -----------------------------------------------------------------------------
 sbl_v_feed:
+    pushf
+    cli
     call sbl_hcheck
     jc .stale
     cmp byte [sbl_str_dir], 0   ; a record stream has no valid length to
     jne .e7                     ; extend (SPEC.md 34.6): err 7
+    cmp byte [sbl_ring_on], 0
+    jne .ring
     cmp cx, [sbl_total]
     jb .e7                      ; the valid length never shrinks
     cmp cx, [sbl_str_max]
     ja .e7                      ; past the grant's end
+    jmp .store
+.ring:
+    mov ax, cx                  ; free-running bounds, both subtractions
+    sub ax, [sbl_total]         ; (SPEC.md 34.5 rule 2)
+    test ax, ax
+    js .e7                      ; delta >= 0x8000: not monotonic forward
+    mov ax, cx
+    sub ax, [sbl_fed]           ; outstanding bytes after this feed
+    jz .store                   ; nothing outstanding is trivially fine
+    dec ax
+    cmp ax, [sbl_rmask]         ; <= RL  <=>  (outstanding - 1) <= RL-1
+    ja .e7
+.store:
     mov [sbl_total], cx
+    popf
     xor ax, ax
     clc
     ret
 .e7:
+    popf
     mov ax, 7
     stc
     ret
 .stale:
+    popf
     mov ax, 0xFFFF
     stc
     ret
@@ -1064,18 +1152,29 @@ sbl_stop_stream:
 ;
 ; in:       AH = handle
 ; out:      AX = 0 playing / 1 underrun-paused / 2 ended (watchdog-stopped)
-;           with DX = bytes consumed; or AX = 0FFFFh stale (CF = 1, DX = 0)
+;           with DX = bytes consumed (ring mode: free-running mod 65536 -
+;           the owner works in deltas, SPEC.md 34.5); or AX = 0FFFFh stale
+;           (CF = 1, DX = 0)
 ; clobbers: nothing else (flags)
+;
+; ANY-TASK (SPEC.md 20.3): the hcheck and the two loads are one pushf/cli
+; window (SPEC.md 34.3) - a stale handle must read STALE, never the
+; successor stream's {state, consumed} through a close+reopen it was
+; preempted across.
 ; -----------------------------------------------------------------------------
 sbl_v_status:
+    pushf
+    cli
     call sbl_hcheck
     jc .stale
     mov al, [sbl_str_state]
     mov ah, 0
     mov dx, [sbl_consumed]
+    popf
     clc
     ret
 .stale:
+    popf
     mov ax, 0xFFFF
     xor dx, dx
     stc
@@ -1164,6 +1263,7 @@ sbl_v_open_in:
     mov byte [sbl_drain_h], 0   ; the next half the drain task empties
     mov byte [sbl_paused], 0
     mov byte [sbl_str_dir], 1   ; an INPUT stream (SPEC.md 34.6)
+    mov byte [sbl_ring_on], 0   ; input has no ring mode (SPEC.md 34.5)
     mov byte [sbl_str_state], SBL_ST_PLAY
     inc byte [sbl_gen]
     mov byte [sbl_str_act], 1   ; publish, then pace: the drain task
@@ -1210,7 +1310,7 @@ sbl_v_open_in:
 ;
 ; in:       SI = source offset in SND_SEG (inside a grant the caller owns),
 ;           CX = bytes, DI = destination offset in the CALLER's segment
-;           ([osapi_dseg], recorded by slot 0x0100's wrapper - SPEC.md 20.3)
+;           (BX, threaded per-call by slot 0x0100's wrapper - SPEC.md 20.3)
 ; out:      AX = 0 ok / 7 refused (range not inside the caller's grant);
 ;           CF mirrors
 ; clobbers: nothing else (flags; ES restored per SPEC.md 1)
@@ -1219,7 +1319,11 @@ sbl_v_open_in:
 ; packages never hold an ES pointer into SND_SEG. No handle: the grant
 ; owns the bytes, so captured data stays readable after the stream that
 ; recorded it closes, until the grant is freed. Works on every machine,
-; like verbs 6-7 - the pool exists wherever SND_SEG does.
+; like verbs 6-7 - the pool exists wherever SND_SEG does. ANY-TASK
+; (SPEC.md 20.3): the segment arriving in a register is what made it so -
+; a parked .bss word could be overwritten by the next caller's wrapper
+; while this caller sat preempted right here, and the rep movsb below
+; would then WRITE into the wrong package's segment.
 ; -----------------------------------------------------------------------------
 sbl_v_read:
     push cx
@@ -1231,11 +1335,12 @@ sbl_v_read:
     call snd_req_inst           ; DH = calling instance
     call sbl_grant_chk          ; range-check the SOURCE
     jc .e7
-    mov es, [osapi_dseg]        ; ES:DI = the caller's destination, in the
-                                ; segment the slot wrapper recorded - the
-                                ; staging copy IS the v3 boundary (SPEC.md
-                                ; 20.3/34.6; a package's DI is an offset in
-                                ; its OWN segment, not the kernel's)
+    mov es, bx                  ; ES:DI = the caller's destination, in the
+                                ; segment the slot wrapper threaded in BX -
+                                ; the staging copy IS the v3 boundary
+                                ; (SPEC.md 20.3/34.6; a package's DI is an
+                                ; offset in its OWN segment, never the
+                                ; kernel's)
     mov ax, SND_SEG
     push ds
     mov ds, ax                  ; DS:SI = the grant source
@@ -1260,8 +1365,8 @@ sbl_v_read:
 ; -----------------------------------------------------------------------------
 ; sbl_v_stage - verb 6: copy caller data into a grant (SPEC.md 34.6)
 ;
-; in:       SI = source offset in the CALLER's segment ([osapi_dseg],
-;           recorded by slot 0x0100's wrapper - SPEC.md 20.3), CX = bytes,
+; in:       SI = source offset in the CALLER's segment (BX, threaded
+;           per-call by slot 0x0100's wrapper - SPEC.md 20.3), CX = bytes,
 ;           DI = destination offset in SND_SEG (inside a grant the caller
 ;           owns)
 ; out:      AX = 0 ok / 7 refused (range not inside the caller's grant);
@@ -1269,7 +1374,12 @@ sbl_v_read:
 ; clobbers: nothing else (flags; ES restored per SPEC.md 1)
 ;
 ; The kernel-staged copy in: packages never hold an ES pointer into
-; SND_SEG (SPEC.md 2.2, the dsk_get_dir idiom).
+; SND_SEG (SPEC.md 2.2, the dsk_get_dir idiom). ANY-TASK (SPEC.md 20.3) -
+; the sbl_v_read register rationale, in the read direction. A worker's own
+; teardown cannot free the grant under this copy (deferred to
+; OSAPI_TASK_ALIVE, SPEC.md 34.6); the residual same-package race is the
+; SPEC.md 34.6 author rule: never verb-7-free a grant your worker may be
+; mid-stage into.
 ; -----------------------------------------------------------------------------
 sbl_v_stage:
     push cx
@@ -1286,8 +1396,8 @@ sbl_v_stage:
     jc .e7
     mov ax, SND_SEG
     mov es, ax
-    mov ax, [osapi_dseg]        ; the caller's segment (slot wrapper): the
-    cld                         ; source pointer lives THERE since v3
+    mov ax, bx                  ; the caller's segment (slot wrapper, BX):
+    cld                         ; the source pointer lives THERE since v3
     push ds
     mov ds, ax
     rep movsb                   ; callerseg:SI -> SND_SEG:DI, interruptible
@@ -1316,6 +1426,12 @@ sbl_v_stage:
 ;           not the caller's grant, or an open stream still reads from the
 ;           grant being freed (close it first) / 8 no space; CF mirrors
 ; clobbers: nothing else (flags)
+;
+; ANY-TASK (SPEC.md 20.3): alloc's scan+claim was always one pushf/cli
+; unit inside sbl_grant_alloc; the FREE path's find -> live-stream-overlap
+; check -> clear is now one window too (SPEC.md 34.3) - lock-free, a free
+; racing an open on another task could clear a grant the just-opened
+; stream reads from, exactly what the overlap check exists to refuse.
 ; -----------------------------------------------------------------------------
 sbl_v_grant:
     push bx
@@ -1324,9 +1440,12 @@ sbl_v_grant:
     jz .alloc
     cmp ah, 1
     jne .e7
-    call snd_req_inst           ; free: only the owner's own grant
+    call snd_req_inst           ; free: only the owner's own grant (a pure
+                                ; read - outside the window is fine)
+    pushf
+    cli
     call sbl_grant_find
-    jc .e7
+    jc .e7f
     cmp byte [sbl_str_act], 1   ; refused while an open stream reads from
     jne .fok                    ; this grant (SPEC.md 20.3 verb 7): the
     mov ax, [sbl_str_off]       ; refill task would copy unowned bytes -
@@ -1336,12 +1455,16 @@ sbl_v_grant:
     add dx, [sbl_gr_size+bx]
     dec dx                      ; DX = the grant's last byte (off+size can
     cmp ax, dx                  ; be 0x10000 exactly: compare last bytes)
-    jbe .e7                     ; live stream inside: close it first
+    jbe .e7f                    ; live stream inside: close it first
 .fok:
     mov word [sbl_gr_act+bx], 0
+    popf
     xor ax, ax
     clc
     jmp .out
+.e7f:
+    popf
+    jmp .e7
 .alloc:
     call snd_req_inst           ; DH = the instance the grant is stamped
     call sbl_grant_alloc        ; with (force-freed at teardown, 34.3)
@@ -1367,13 +1490,25 @@ sbl_v_grant:
 ; sbl_fill_half - copy the next stretch of grant data into one buffer half
 ;
 ; in:       BX = half (0/1); [sbl_str_off]/[sbl_fed]/[sbl_total] current
-; out:      nothing; [sbl_fed] advanced; the half's tail is 0x80 silence
-;           when the data ran short
+; out:      nothing; [sbl_fed] advanced; linear: the half's tail is 0x80
+;           silence when the data ran short. Ring ([sbl_ring_on]): exactly
+;           one WHOLE half from physical offset str_off + (fed & rmask) -
+;           the CALLER must have checked total - fed >= SBL_HALF, because
+;           a ring fill never pads (SPEC.md 34.5 rule 1)
 ; clobbers: nothing (flags)
+;
+; OPEN-PRIMING ONLY since the refill path moved to sbl_fill_guard below:
+; this un-guarded body survives solely under sbl_v_open, where the record
+; is not yet published (act = 0, gen already bumped - the guard's own
+; act+gen check would refuse the priming fills) and the UI-task pinning of
+; verb 0 excludes every concurrent open.
 ;
 ; Both source and destination live in SND_SEG, so the copy runs with
 ; DS = ES = SND_SEG for the movs; kernel state is only touched before the
-; switch. The caller publishes the half's valid flag afterwards.
+; switch. The caller publishes the half's valid flag afterwards. The ring
+; copy needs no seam split: fed stays 2048-aligned and RL is a power of
+; two >= 4096, so (fed & rmask) is 2048-aligned and the half ends at or
+; before the ring's end (SPEC.md 34.5).
 ; -----------------------------------------------------------------------------
 sbl_fill_half:
     push ax
@@ -1387,6 +1522,8 @@ sbl_fill_half:
     mov di, bx                  ; DI = half * 2048: the destination
     mov cl, 11
     shl di, cl
+    cmp byte [sbl_ring_on], 0
+    jne .ring
     mov si, [sbl_str_off]       ; SI = grant + progress: the source
     add si, [sbl_fed]
     mov cx, [sbl_total]
@@ -1398,6 +1535,15 @@ sbl_fill_half:
     mov dx, SBL_HALF            ; DX = silence pad after the data
     sub dx, cx
     add [sbl_fed], cx
+    jmp .copy
+.ring:
+    mov si, [sbl_fed]           ; physical = str_off + (fed & (RL-1))
+    and si, [sbl_rmask]
+    add si, [sbl_str_off]
+    mov cx, SBL_HALF            ; a whole half, guaranteed by the caller
+    add word [sbl_fed], SBL_HALF
+    xor dx, dx                  ; and never a pad (SPEC.md 34.5 rule 1)
+.copy:
     cld
     jcxz .pad
     push ds
@@ -1420,19 +1566,165 @@ sbl_fill_half:
     ret
 
 ; -----------------------------------------------------------------------------
+; sbl_fill_guard - sbl_refill's fill: one buffer half, act+gen-guarded
+;
+; in:       BX = half (0/1), DH = the stream generation this task serves;
+;           [sbl_str_off]/[sbl_fed]/[sbl_total] current
+; out:      nothing; on success [sbl_fed] is advanced and the half's valid
+;           flag published (linear: 0x80 tail pad; ring: one whole half,
+;           never padded - SPEC.md 34.5 rule 1)
+; clobbers: nothing (flags)
+;
+; sbl_fill_half with sbl_drain_half's teardown rule bolted on. The refill
+; task runs with IF=1 and can be preempted anywhere across a close+reopen
+; on the UI task; the un-guarded fill validated availability against one
+; stream and then advanced the SUCCESSOR's [sbl_fed] (ring: to fed >
+; total, making total - fed read ~0xF800 and flooding unstaged ring bytes
+; through both availability checks) and could scribble a half the
+; successor had already primed. So: the availability check, the counter
+; reads and the [sbl_fed] advance are ONE pushf/cli window that verifies
+; act + generation FIRST (advancing fed inside that window is safe - only
+; the same-generation refill task reads it, and a gen that moves later
+; means open rewrote it anyway); the grant -> half copy and the linear
+; silence pad run in SBL_DCHUNK pieces, each its own act+gen-verified
+; window (the destination half is the successor's too - a mismatch stops
+; at the chunk edge); and the valid flag is published only under a final
+; verified window, so a half is never published against a moved
+; generation. Both source and destination live in SND_SEG (DS = ES =
+; SND_SEG for the movs); kernel state is read before each switch.
+; -----------------------------------------------------------------------------
+sbl_fill_guard:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov ax, SND_SEG
+    mov es, ax
+    mov di, bx                  ; DI = half * 2048: the destination
+    mov cl, 11
+    shl di, cl
+    pushf
+    cli
+    cmp byte [sbl_str_act], 1   ; verify INSIDE the window, before any
+    jne .bail                   ; counter is read or advanced: a task
+    cmp dh, [sbl_gen]           ; parked here across a close+reopen must
+    jne .bail                   ; never touch the successor's counters
+    mov ax, [sbl_total]
+    sub ax, [sbl_fed]           ; AX = available (free-running-safe in
+    jz .bail                    ; BOTH modes; <= RL in ring mode by the
+    cmp byte [sbl_ring_on], 0   ; feed bound)
+    je .lin
+    cmp ax, SBL_HALF            ; ring: whole halves only, never pad -
+    jb .bail                    ; short of one half is the normal underrun
+    mov si, [sbl_fed]           ; path (SPEC.md 34.5 rule 1)
+    and si, [sbl_rmask]         ; physical = str_off + (fed & (RL-1))
+    add si, [sbl_str_off]
+    mov cx, SBL_HALF
+    xor bp, bp                  ; BP = silence pad: none in ring mode
+    add word [sbl_fed], SBL_HALF
+    jmp .claimed
+.lin:
+    mov si, [sbl_str_off]       ; SI = grant + progress: the source
+    add si, [sbl_fed]
+    mov cx, ax
+    cmp cx, SBL_HALF
+    jbe .cok
+    mov cx, SBL_HALF
+.cok:
+    mov bp, SBL_HALF            ; BP = silence pad after the data
+    sub bp, cx
+    add [sbl_fed], cx
+.claimed:
+    popf                        ; counters are claimed under this gen; the
+    cld                         ; copy itself runs in guarded chunks
+.copy:
+    jcxz .pad
+    mov ax, SBL_DCHUNK          ; AX = this chunk's size
+    cmp cx, ax
+    jae .csz
+    mov ax, cx
+.csz:
+    sub cx, ax                  ; CX = remaining after this chunk
+    pushf
+    cli
+    cmp byte [sbl_str_act], 1   ; re-verify per chunk (IF=0 excludes the
+    jne .dead                   ; switch): a close+reopen on another task
+    cmp dh, [sbl_gen]           ; must not see this copy scribble a half
+    jne .dead                   ; the successor primed
+    push cx
+    mov cx, ax
+    push ds
+    push es
+    pop ds                      ; DS = SND_SEG for the grant -> buffer copy
+    rep movsb
+    pop ds
+    pop cx
+    popf
+    jmp .copy
+.pad:
+    mov cx, bp                  ; CX = pad remaining (linear short data)
+.padc:
+    jcxz .publish
+    mov si, SBL_DCHUNK          ; SI's source duty is done: chunk size now
+    cmp cx, si
+    jae .psz
+    mov si, cx
+.psz:
+    sub cx, si
+    pushf
+    cli
+    cmp byte [sbl_str_act], 1   ; the pad writes the same shared half, so
+    jne .dead                   ; it carries the same per-chunk guard
+    cmp dh, [sbl_gen]
+    jne .dead
+    push cx
+    mov cx, si
+    mov al, 0x80                ; 8-bit unsigned silence
+    rep stosb
+    pop cx
+    popf
+    jmp .padc
+.publish:
+    pushf
+    cli
+    cmp byte [sbl_str_act], 1   ; publish only if every chunk landed under
+    jne .dead                   ; this generation - a half must never go
+    cmp dh, [sbl_gen]           ; valid after the generation moved
+    jne .dead
+    mov byte [sbl_valid+bx], 1
+.bail:                          ; (first-window refusals fall out the same
+.dead:                          ; way: nothing claimed, nothing published)
+    popf
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sbl_refill - one refill pass (task context)
 ;
 ; in:       DH = the stream generation this task serves
 ; out:      nothing
 ; clobbers: nothing (flags)
 ;
-; Fills the half the DSP needs next first, then the other; publishes each
-; valid flag only after its content is in place. Then the resume check: an
-; underrun-paused stream whose next half is now valid continues - flags,
-; expectation, watchdog and ports in ONE pushf/cli window (SPEC.md 34.3),
-; which RE-CHECKS act and generation first: a close (or teardown) that ran
-; between the checks above and the window must not see D4h/14h re-arm a
-; stream it already stopped, nor the ISR scribble a released record.
+; Fills the half the DSP needs next first, then the other - both through
+; sbl_fill_guard, whose act+gen-verified windows keep a pass preempted
+; across a close+reopen from acting on the successor stream. Then the
+; resume check: an underrun-paused stream whose next half is now valid
+; continues - flags, expectation, watchdog and ports in ONE pushf/cli
+; window (SPEC.md 34.3), which RE-CHECKS act and generation first: a close
+; (or teardown) that ran between the checks above and the window must not
+; see D4h/14h re-arm a stream it already stopped, nor the ISR scribble a
+; released record.
 ; -----------------------------------------------------------------------------
 sbl_refill:
     push ax
@@ -1466,16 +1758,12 @@ sbl_refill:
     pop bx
     pop ax
     ret
-.half:                          ; fill half BX if invalid and data exists
-    cmp byte [sbl_valid+bx], 0
-    jne .hout
-    mov ax, [sbl_total]
-    sub ax, [sbl_fed]
-    jz .hout                    ; nothing staged beyond what was copied
-    call sbl_fill_half
-    mov byte [sbl_valid+bx], 1  ; publish after the content is in place
-.hout:
-    ret
+.half:                          ; fill half BX if invalid and data exists:
+    cmp byte [sbl_valid+bx], 0  ; availability, the counter ops, the copy
+    jne .hout                   ; and the valid publish all run act+gen-
+    call sbl_fill_guard         ; guarded (the sbl_drain_half rule) - a
+.hout:                          ; task parked here across a close+reopen
+    ret                         ; must never act on the successor stream
 
 ; -----------------------------------------------------------------------------
 ; sbl_refill_task - the transient stream-pacing task (SPEC.md 34.5)
@@ -1535,9 +1823,11 @@ sbl_refill_task:
 ; inside the window AFTER the chunk lands: verb 3 reports it as "bytes
 ; captured into the grant" (SPEC.md 20.3), so the poll-then-read pattern
 ; (verb 3, then verb 5) must never see it run ahead of the copy.
-; (sbl_fill_half's pre-copy sbl_fed advance stays as is: that field is
-; internal refill bookkeeping, and the output copy only READS the grant -
-; a stale read at teardown is the documented benign glitch, SPEC.md 34.6.)
+; (The output mirror got the same treatment: sbl_fill_guard guards the
+; refill path's counters, copy and publish identically, because a reopen
+; makes even the read-only output copy mutate the successor's [sbl_fed];
+; the un-guarded sbl_fill_half survives only under sbl_v_open's priming,
+; where act is not yet published.)
 ; The caller clears the half's valid flag afterwards.
 ; -----------------------------------------------------------------------------
 sbl_drain_half:
@@ -1867,6 +2157,9 @@ sbl_state_init:
     mov byte [sbl_drain_h], 0
     mov byte [sbl_paused], 0
     mov byte [sbl_tc], 0
+    mov byte [sbl_ring_on], 0
+    mov byte [sbl_ropen], 0
+    mov word [sbl_rmask], 0
     mov word [sbl_str_off], 0
     mov word [sbl_str_max], 0
     mov word [sbl_total], 0
@@ -2164,6 +2457,16 @@ sbl_valid:    resb 2            ;   per-half: refilled since last consumed
 sbl_drain_h:  resb 1            ;   input: next half the drain task empties
 sbl_paused:   resb 1            ;   D0h issued; sbl_go_on owed
 sbl_tc:       resb 1            ;   DSP time constant for the open rate
+sbl_ring_on:  resb 1            ;   1 = ring mode (SPEC.md 34.5): the three
+                                ;   counters are free-running mod 65536 and
+                                ;   fills are whole unpadded halves
+sbl_ropen:    resb 1            ;   verb 0's latched open-flags bit 0 - a
+                                ;   TEMP, committed into sbl_ring_on only
+                                ;   with the rest of the record (a busy
+                                ;   refusal must not disturb a live stream)
+sbl_rmask:    resw 1            ;   ring: RL-1 (RL = power of two 4096..
+                                ;   32768); physical offset of stream byte
+                                ;   n = sbl_str_off + (n & sbl_rmask)
 sbl_wd:       resw 1            ;   watchdog countdown (snd_tick, 34.5)
 sbl_wd_rst:   resw 1            ;   its reload: ~2 block periods in ticks
 

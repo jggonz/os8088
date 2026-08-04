@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """os88disk: build (or verify) a FAT data floppy image from .o88 packages.
 
-    python3 tools/os88disk.py -o OUT.img --size {1440,360} [[DIR:]PKG.o88 ...]
+    python3 tools/os88disk.py -o OUT.img --size {1440,360} [[DIR:]FILE ...]
     python3 tools/os88disk.py --verify IMG
 
 The image is a canonical DOS FAT floppy (SPEC.md section 19): boot sector
@@ -14,6 +14,16 @@ truncation guard depends on it) and fixed timestamps (date 0x5C21 =
 2026-01-01, time 0). File data is allocated contiguously from cluster 2 in
 argument order; every field is fixed, so rebuilds are byte-identical.
 Directory display names are the host filenames (8.3, uppercased).
+
+A file argument whose extension is NOT .O88 is a DATA file (SPEC.md 24):
+it skips the package validation and is shipped byte-for-byte as an
+ordinary FAT12 file, same fixed timestamps, same exact-size rule. The
+kernel lists it as a type-0 entry with the generic icon and the Standard
+File dialog can Open it -- BEVERLY.MOD on the shipped apps disk is the
+first. The 8.3 name rules, the DIR: prefix and the per-directory
+duplicate check all apply the same; only *.O88 files are validated as
+packages, and --verify's structural fsck covers both kinds alike (it
+never validated package contents in the first place).
 
 A package argument may carry a FOLDER prefix -- "GAMES:build/mines.o88" --
 which puts it in a first-level subdirectory of that name (SPEC.md 19.2:
@@ -122,6 +132,19 @@ def validate_o88(path: str) -> bytes:
     return data
 
 
+def read_data_file(path: str) -> bytes:
+    """Read one non-.O88 data file: shipped as-is, no package validation."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        fail(f"cannot read {path}: {e}")
+    if not data:
+        fail(f"{path}: empty file (a zero-byte file has no cluster chain; "
+             "nothing to ship)")
+    return data
+
+
 RESERVED_STEMS = ({"CON", "PRN", "AUX", "NUL"}
                   | {f"COM{i}" for i in range(1, 10)}
                   | {f"LPT{i}" for i in range(1, 10)})
@@ -134,9 +157,6 @@ def name83(path: str, seen: set) -> bytes:
     if not 1 <= len(stem) <= 8 or len(ext) > 3:
         fail(f"{path}: '{base}' is not a valid 8.3 name "
              "(stem 1-8 chars, extension 0-3)")
-    if ext != "O88":
-        fail(f"{path}: '{base}' must carry the .O88 extension - the kernel "
-             "only marks *.O88 entries loadable (SPEC.md 19)")
     if stem in RESERVED_STEMS:
         fail(f"{path}: '{stem}' is a reserved DOS device name")
     for ch in (stem + ext).encode("ascii", "replace"):
@@ -275,7 +295,11 @@ def build(args) -> int:
             if folder:
                 folder83(folder)                 # validate once, on creation
         name11 = name83(path, seen[key])
-        data = validate_o88(path)
+        # Only *.O88 entries are packages; anything else ships as data.
+        if name11[8:11] == b"O88":
+            data = validate_o88(path)
+        else:
+            data = read_data_file(path)
         nclusters = (len(data) + lay.cluster_bytes - 1) // lay.cluster_bytes
         groups[key].append((name11, data, nclusters))
 
@@ -568,7 +592,8 @@ def verify(path: str) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Build or verify a FAT data floppy of .o88 packages.")
+        description="Build or verify a FAT data floppy of .o88 packages "
+                    "and data files.")
     ap.add_argument("-o", "--output", metavar="OUT.img",
                     help="floppy image to write")
     ap.add_argument("--size", type=int, choices=(1440, 360, 2880),
@@ -578,10 +603,11 @@ def main() -> int:
                     help="fragment cluster chains round-robin (test only)")
     ap.add_argument("--verify", metavar="IMG",
                     help="structural fsck of an existing image (no build)")
-    ap.add_argument("packages", metavar="[DIR:]PKG.o88", nargs="*",
-                    help="package files, in directory order (none = empty "
-                         "disk); a DIR: prefix puts one in a first-level "
-                         "folder of that name")
+    ap.add_argument("packages", metavar="[DIR:]FILE", nargs="*",
+                    help="files, in directory order (none = empty disk): "
+                         "*.o88 is validated as a package, anything else "
+                         "ships as a data file; a DIR: prefix puts one in "
+                         "a first-level folder of that name")
     args = ap.parse_args()
 
     if args.verify:

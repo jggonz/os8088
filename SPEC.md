@@ -2736,15 +2736,15 @@ effectively instant.
 
 `disk.inc` reads; **`kernel/diskw.inc` writes**, prefix `dskw_`. It is the
 one module that may modify a data floppy, and the only module that calls
-`disk_write`. Five public routines are the file surface — the same five
+`disk_write`. Six public routines are the file surface — the same six
 the API exposes to packages (§20.3) — because both the OS and its apps get
 exactly one vocabulary: whole files by name, in the volume's **current
 directory** (§19.2 — `[dsk_cwd]`, which `dsk_chdir` moves). There is no
 open/seek/handle model, no paths, no partial rewrite: a file is written in
 one call from one buffer, read back the same way, and its name is resolved
 in exactly one directory — the one the volume is currently sitting in.
-`dskw_mkdir` (§18.5) is the sixth routine and `dskw_rmdir` (§18.6) the
-seventh: the only two that act on a directory rather than on a file, and
+`dskw_mkdir` (§18.5) is the seventh routine and `dskw_rmdir` (§18.6) the
+eighth: the only two that act on a directory rather than on a file, and
 both kernel-internal for the same reason (a package cannot navigate). That
 is the largest subset that stays honest in 256KB with 12 pre-emptive tasks
 and no disk cache.
@@ -2783,6 +2783,7 @@ the volume.
 |--------|-----------|
 | `dskw_write` | in: SI → NUL-terminated 8.3 name (DS), ES:BX → the bytes, CX = byte count (0 = create an empty file). Creates or **replaces** the file. Out: CF=0, AX=0; CF=1, AX = `FERR_*`. Preserves all other registers, ES included. |
 | `dskw_read` | in: SI → name, ES:BX → destination, CX = destination capacity in bytes. Out: CF=0, AX = bytes read (= the file's size); CF=1, AX = `FERR_*` — `FERR_BIG` when the file does not fit CX, and **nothing is written** to the buffer in that case. |
+| `dskw_readbig` | in: SI → name, **ES = destination BASE segment** (the buffer starts at ES:0000 — arena grants are paragraph-aligned, so this costs callers nothing), **DX:CX = capacity in bytes** (32-bit, DX high). Out: CF=0, **DX:AX = bytes read** (= the file's 32-bit size); CF=1, AX = `FERR_*` — `FERR_BIG` when the file exceeds DX:CX, **decided from the directory entry's 32-bit size before any data I/O**, destination untouched. The 64KB read: same name resolution, same gate, same chain walk as `dskw_read`, but the destination advances **by segment** — after each 512-byte sector, ES += 32 with BX held at 0 — so the 16-bit offset limit never binds and `dsk_xfer`'s 8237 page-straddle staging (§18.1) keeps working per sector unchanged. The one file op with no 64KB ceiling; slot 0x01E8 (§20.3). |
 | `dskw_delete` | in: SI → name. Frees the chain and marks the directory entry deleted (0E5h). Out: CF=0, AX=0; CF=1, AX = `FERR_*`. |
 | `dskw_rename` | in: SI → old name, DI → new name. Same directory, name bytes only — chain, size, attribute and timestamps are untouched. Refuses `FERR_EXIST` if the new name already exists. Its protection mask is **0x0F, not 0x1F** (see below), so a *subdirectory* may be renamed. Out: CF/AX as above. |
 | `dskw_dfree` | out: CF=0, DX:AX = free bytes (32-bit), BX = **sectors** per cluster (not bytes — `spc`×512 overflows 16 bits at the §18.2-legal `spc` = 128); CF=1, AX = `FERR_*`. Counts free entries across the resident FAT snapshot; no disk I/O. |
@@ -2953,7 +2954,11 @@ preservation across a rewrite, and no attempt to defragment: chains are
 allocated first-fit from the rover, so a full disk fragments exactly the
 way DOS's did. Files are capped at 65,535 bytes by the 16-bit size and
 buffer contracts (`FERR_BIG`), which is far below the 64KB the near model
-could address anyway.
+could address anyway — with exactly one exception: **`dskw_readbig`** reads
+a file of any size the volume can hold into a caller-supplied segment run,
+because its destination advances by segment rather than by offset. Writing
+stays 16-bit-capped; only the read outgrew it (a 116KB MOD module is data
+to be *loaded*, never rewritten in one call).
 
 ### 18.5 `dskw_mkdir` — creating a subdirectory
 
@@ -3509,9 +3514,10 @@ inst_pkg_spawn, wm_clip_set/test, wm_geom, the xm_* trio — keeps its
 contract through the stub, and `menu_win_set`'s stronger all-flags promise
 survives too. **Slot ORDER is the ABI and is preserved from v2 exactly**;
 only the stride changed, 4 → 8, so slot i sits at 0x0010 + 8·i.
-`OSAPI_TABLE_OFF` stays 0x0010; the table-span assertion is **53 × 8** —
-the 52 v2 slots plus `wm_geom`, appended in the same change because a
-package can no longer read a window record (§11). Register contracts are
+`OSAPI_TABLE_OFF` stays 0x0010; the table-span assertion became **53 × 8**
+at that change — the 52 v2 slots plus `wm_geom`, appended because a
+package can no longer read a window record (§11) — and tracks the table's
+end as slots append (60 × 8 today). Register contracts are
 the target routines' own (§5, §6, §8, §11). Pinned layout:
 
 ```
@@ -3544,7 +3550,7 @@ the target routines' own (§5, §6, §8, §11). Pinned layout:
 0x00E0 osapi_snd_caps  0x01D0 wm_resize (§11.1)
 0x00E8 osapi_snd_tone   0x01D8 gfx_blit4 (§5.4)
 0x00F0 osapi_snd_play   0x01E0 wm_about_set (§12.2)
-0x00F8 osapi_snd_fm
+0x00F8 osapi_snd_fm     0x01E8 dskw_readbig (§18.4)
 ```
 
 **Marshalling (binding).** No register contract changed, but a v3
@@ -3565,12 +3571,12 @@ inside the kernel). The staged operands, pinned:
 |------|-------------------|
 | `font_str` / `font_width` | SI string → kernel scratch, at most `OSAPI_STR_MAX` chars + NUL; longer strings are truncated, not refused. The two slots do NOT share a stage: `font_str` (→ `osapi_sbuf`) draws, so its callers hold the gfx lock and the lock serializes the stage; `font_width` is legal WITHOUT the lock (it draws nothing), so it stages into its own `osapi_wbuf` — a lock-free WIDTH may never clobber a preempted lock-held STR stage — and runs stage + measure under `pushf`/`cli`…`popf` (bounded: `OSAPI_STR_MAX` bytes), so two lock-free callers cannot measure each other's strings either. |
 | `wm_create` | SI 16-byte template → staged whole. The template's title/paint/onkey/onclick words are stored as CALLER-SEGMENT offsets (§11): the code offsets are paired with the owner's segment at dispatch, the title is staged through it at draw. |
-| `dskw_write` / `dskw_read` / `dskw_delete` | SI name → staged (a NUL 8.3 name, ≤ 12 + NUL). The stage caps at `OSAPI_NAME_MAX` = **13** chars, one MORE than a legal name, on purpose: a 13+-char source keeps at least 13 chars in the stage, which `dskw_name83` rejects as an illegal name (`FERR_BADNAME`) — an over-long name is REFUSED, never silently truncated into some *other* legal name it happens to prefix. The data buffer is ES:BX and already carries its segment — unchanged. |
+| `dskw_write` / `dskw_read` / `dskw_readbig` / `dskw_delete` | SI name → staged (a NUL 8.3 name, ≤ 12 + NUL). The stage caps at `OSAPI_NAME_MAX` = **13** chars, one MORE than a legal name, on purpose: a 13+-char source keeps at least 13 chars in the stage, which `dskw_name83` rejects as an illegal name (`FERR_BADNAME`) — an over-long name is REFUSED, never silently truncated into some *other* legal name it happens to prefix. The data buffer is ES:BX (readbig: ES:0000) and already carries its segment — unchanged. |
 | `dskw_rename` | SI old + DI new → both staged, same cap and refusal rule. |
 | `fdlg_open` | SI default name → staged (≤ 12 + NUL; same 13-char stage — the dialog's own `FD_NAMEMAX` edit-box truncation applies after, harmless for a default that is only a seed). SI = 0 passes through unstaged. DI is a completion OFFSET in the caller's segment, stored as a value (§38.6). |
 | `menu_win_set` | SI is STORED, never dereferenced here: the whole set is copied at `menu_relayout` time through the owner's segment (§12.2), so this slot needs no wrapper at all. |
 | `osapi_snd_fm` verb 2 | DS:SI 11-byte patch → staged. |
-| `osapi_snd_stream` verbs 5/6 | the staging copy IS the boundary: the slot records the caller's segment and verb 6 reads its SI source / verb 5 writes its DI destination through that segment (§34.6); the grant-offset arguments are values and never were pointers. |
+| `osapi_snd_stream` verbs 5/6 | the staging copy IS the boundary: the slot wrapper passes the caller's segment **per-call in BX** — a register threaded through the verb dispatch, not a `.bss` word — and verb 6 reads its SI source / verb 5 writes its DI destination through it (§34.6); the grant-offset arguments are values and never were pointers. BX was free in every verb's register contract, and the register is what makes the verbs any-task-safe: the retired `[osapi_dseg]` global could be overwritten by the next caller's wrapper while the first caller sat preempted between the store and the copy, and verb 5 would then `rep movsb` into the wrong package's segment. |
 
 Everything else in the table takes values, opaque handles, or an
 **ES-relative buffer** (`dskw_write`/`dskw_read` data ES:BX,
@@ -3625,14 +3631,14 @@ caller holding several grants is unambiguous by construction):
 
 | verb | name | contract |
 |------|------|----------|
-| 0 | open-out | DX = rate Hz (4000..22222, the §34.5 TC range), SI = grant offset, CX = valid bytes staged so far (> 0, inside the caller's grant); spawns the kernel refill task (§34.5); out AL = 0 with AH = handle, else AX = err. Streams must be fully staged before playback (§34.5) — CX short of the grant **is** the caller explicitly accepting progressive-feed risk. |
-| 1 | feed | AH = handle, CX = new total valid length (never smaller, never past the grant's end) — extends a progressively staged stream; an underrun-paused stream resumes (§34.5). Out AX = 0 / err. |
+| 0 | open-out | DX = rate Hz (4000..22222, the §34.5 TC range), SI = grant offset, CX = valid bytes staged so far (> 0, inside the caller's grant), **AH = open flags** (verb 0 carries no handle, so the byte is free): bit 0 = `SND_OPENF_RING` opens the stream in **ring mode** (§34.5) — SI is then the ring's base, the ring length RL = grant end − SI must be a **power of two in 4096..32768** (else err 7), and CX (the initial valid total) must satisfy one half ≤ CX ≤ RL (a ring never pads, so the DSP may not start on a half no fill can complete). Every pre-ring caller loads `mov ax, 0x0000` and gets linear mode unchanged. Spawns the kernel refill task (§34.5); out AL = 0 with AH = handle, else AX = err. Streams must be fully staged before playback (§34.5) — in linear mode, CX short of the grant **is** the caller explicitly accepting progressive-feed risk; a ring stream is progressive by construction. |
+| 1 | feed | AH = handle, CX = new total valid length — extends a progressively staged stream; an underrun-paused stream resumes (§34.5). Linear bounds: never smaller, never past the grant's end. Ring bounds (§34.5): counters are free-running 16-bit, so the checks are subtractions — `new_total − old_total < 0x8000` (monotonic forward) AND `new_total − fed ≤ RL` (never overwrite bytes the refill has not copied out yet). Out AX = 0 / err. **Any-task** (see the context rule below): the hcheck, the direction check, both bound checks and the `sbl_total` store are one `pushf`/`cli`…`popf` window (§34.3), so a caller preempted against a close+reopen can never validate against one stream and store into its successor. |
 | 2 | close | AH = handle; halts playback, frees the stream record (its refill task exits at the next wake). Out AX = 0 / stale. |
-| 3 | status | AH = handle; out AX = state, DX = bytes consumed (capped at the valid length; input: bytes captured into the grant) — **this poll is the notification mechanism**: callbacks check it; there are no sound events (§34.3). States, pinned: **0 playing (input: recording), 1 underrun-paused (§34.5 — data ran out or the refill starved; resumable by a feed. Input, §34.6: capacity full, or the drain starved), 2 ended (stopped by the §34.5 watchdog), 0FFFFh stale.** A fully-staged clip that plays out reads underrun-paused with DX = its length — the owner's cue to close, exactly as a capacity-full capture reads paused with DX = its capacity; "ended" is reserved for the watchdog stop. |
+| 3 | status | AH = handle; out AX = state, DX = bytes consumed (capped at the valid length; input: bytes captured into the grant; **ring mode: free-running mod 65536** — the owner works in deltas) — **this poll is the notification mechanism**: callbacks check it; there are no sound events (§34.3). States, pinned: **0 playing (input: recording), 1 underrun-paused (§34.5 — data ran out or the refill starved; resumable by a feed. Input, §34.6: capacity full, or the drain starved), 2 ended (stopped by the §34.5 watchdog), 0FFFFh stale.** A fully-staged clip that plays out reads underrun-paused with DX = its length — the owner's cue to close, exactly as a capacity-full capture reads paused with DX = its capacity; "ended" is reserved for the watchdog stop. Any-task; the hcheck and the two loads are one `pushf`/`cli` window, so a stale handle reads stale (0FFFFh), never the successor stream's state. |
 | 4 | open-in | DX = rate Hz (4000 up to the §34.5 input ceiling: 13,000 on a single-cycle DSP, 15,000 on auto-init), SI = grant offset, CX = capture capacity in bytes (> 0, inside the caller's grant); spawns the kernel drain task, which moves record-ring halves into the grant until CX bytes have landed, then stops the DSP (§34.6). Out AL = 0 with AH = handle, else AX = err. **Half-duplex with playback is err 1 busy** (§34.3): one stream record, either direction. Feed on an input stream is err 7 — a capture has no valid length to extend. |
-| 5 | read | copy CX bytes from the grant at offset SI into the caller's DI (in the caller's own segment — the slot records it, §20.3 marshalling) — the kernel-staged copy out, verb 6's exact mirror (§34.6); the range must sit inside one grant the caller owns. **No handle**: the grant owns the bytes, so captured data stays readable after the stream that recorded it closes, until the grant is freed. Works on every machine, like verbs 6–7. Out AX = 0 / err 7. |
-| 6 | stage | copy CX bytes from the caller's SI (in the caller's own segment — the slot records it, §20.3 marshalling) into the grant at offset DI (kernel-staged copy — callers never touch ES = SND_SEG, §2.2); the range must sit inside one grant the caller owns. Out AX = 0 / err. |
-| 7 | grant | AH = sub-op (0 alloc, 1 free): CX = bytes → out SI = grant offset, or free (SI = offset, owner only — **refused with err 7 while an open stream's read offset sits inside the grant**: close the stream first, or the refill task would copy from unowned, re-allocatable bytes); stamped with the calling instance, force-freed by `snd_release_inst` (§34.3 — teardown is safe: it closes the stream before freeing grants, and the drain copy is teardown-fenced so a mid-copy preempted drain task cannot write into freed bytes, §34.6). Out AX = 0 / err. |
+| 5 | read | copy CX bytes from the grant at offset SI into the caller's DI (in the caller's own segment — passed in BX by the slot wrapper, §20.3 marshalling) — the kernel-staged copy out, verb 6's exact mirror (§34.6); the range must sit inside one grant the caller owns. **No handle**: the grant owns the bytes, so captured data stays readable after the stream that recorded it closes, until the grant is freed. Works on every machine, like verbs 6–7. Out AX = 0 / err 7. |
+| 6 | stage | copy CX bytes from the caller's SI (in the caller's own segment — passed in BX by the slot wrapper, §20.3 marshalling) into the grant at offset DI (kernel-staged copy — callers never touch ES = SND_SEG, §2.2); the range must sit inside one grant the caller owns. **Unchanged in ring mode**: the caller computes physical grant offsets itself — `ringbase + (n & (RL−1))` — and splits its own copy at the seam (with 2048-aligned fills and RL a power of two, a whole staged half never needs the split, which is why the tracker never takes it). Out AX = 0 / err. |
+| 7 | grant | AH = sub-op (0 alloc, 1 free): CX = bytes → out SI = grant offset, or free (SI = offset, owner only — **refused with err 7 while an open stream's read offset sits inside the grant**: close the stream first, or the refill task would copy from unowned, re-allocatable bytes); stamped with the calling instance, force-freed by `snd_release_inst` (§34.3 — teardown is safe: it closes the stream before freeing grants, and the drain copy is teardown-fenced so a mid-copy preempted drain task cannot write into freed bytes, §34.6). Alloc's scan+claim was always one `pushf`/`cli` unit; since the verbs went any-task the **free path's find → live-stream-overlap check → clear is one window too** (§34.3), or a free racing an open could clear a grant the just-opened stream reads from — the exact thing the overlap check exists to refuse. Out AX = 0 / err. |
 
 Error codes, pinned (AX; CF set on any error, and on the stale status):
 0 ok, 1 busy (a stream is already open, or a `PCM_EXCL` clip is running),
@@ -3663,14 +3669,15 @@ WMIN_W/WMIN_H (§20.5):
                        always safe to call.
 ```
 
-**File slots (§18.4), 0x0120..0x0140.** Five slots, all live from
-the change that adds them. The register contracts in §18.4 *are* the ABI;
-since v3 the four name-taking slots are fronted by the marshalling
-wrapper above — the SI/DI names are staged out of the caller's segment
-before the `dskw_*` body parses them, and the bodies themselves keep
-their plain-DS contracts for the kernel's own save/delete/rename paths
-(§22). `apps/os88api.inc` mirrors the constants plus the `FERR_*` codes
-(§20.5).
+**File slots (§18.4), 0x0120..0x0140 plus 0x01E8.** Six slots — the
+original five live from the change that added them, `dskw_readbig`
+appended at 0x01E8 (slot order is the ABI, so a new op can only append).
+The register contracts in §18.4 *are* the ABI; since v3 the five
+name-taking slots are fronted by the marshalling wrapper above — the
+SI/DI names are staged out of the caller's segment before the `dskw_*`
+body parses them, and the bodies themselves keep their plain-DS contracts
+for the kernel's own save/delete/rename paths (§22). `apps/os88api.inc`
+mirrors the constants plus the `FERR_*` codes (§20.5).
 
 ```
 0x0120 dskw_write   in SI = NUL 8.3 name, ES:BX = bytes, CX = count
@@ -3684,6 +3691,14 @@ their plain-DS contracts for the kernel's own save/delete/rename paths
 0x0140 dskw_dfree   out CF=0, DX:AX = free bytes, BX = sectors/cluster;
                     CF=1 AX = FERR_* (no disk I/O — the resident FAT
                     snapshot answers it).
+0x01E8 dskw_readbig in SI = name, ES = destination BASE segment (buffer
+                    starts at ES:0000), DX:CX = capacity in bytes
+                    (32-bit, DX high); out CF=0, DX:AX = bytes read,
+                    else CF=1 AX = FERR_* (FERR_BIG when the file
+                    exceeds the capacity — decided from the directory
+                    entry's 32-bit size before any I/O, destination
+                    untouched). The ≥64KB read (§18.4): the destination
+                    advances ES += 32 per sector with BX = 0.
 ```
 
 **Menu slot (§12.2), 0x0148.** Then the **file-dialog slot (§38.6),
@@ -3693,7 +3708,8 @@ of §20.6** (0x0160, 0x0168), the three **clip-region slots of §11.3**
 of §41.8** (0x0188..0x01A8), **`wm_geom` (§11), 0x01B0**, the three
 **arena-memory slots of §2.6/§20.8** (0x01B8, 0x01C0, 0x01C8),
 **`wm_resize` (§11.1), 0x01D0**, **`gfx_blit4` (§5.4), 0x01D8** and
-**`wm_about_set` (§12.2), 0x01E0** — the table's end today, 59 × 8.
+**`wm_about_set` (§12.2), 0x01E0** and **`dskw_readbig` (§18.4),
+0x01E8** — the table's end today, 60 × 8.
 
 ```
 0x0148 menu_win_set  in BX = win ptr, SI = the app menu set's offset in
@@ -3761,8 +3777,9 @@ which in practice means a worker's draw burst.
                       granularity rule is what happens if you don't.
 ```
 
-**These slots are UI-task/window-callback context only (binding)** — the
-same rule as the stream verbs above, and for a stronger reason: they take
+**These slots — `dskw_readbig` included — are UI-task/window-callback
+context only (binding)** — the same rule as the stream *open* verbs
+above, and for a stronger reason: they take
 `[sch_lock]` around int 13h and share `dsk_secbuf` and the FAT snapshot
 with the mount path. **A package's worker task (§20.6) must NEVER call
 these slots.** Spawning no longer keeps the caller set honest by
@@ -3780,16 +3797,26 @@ The buffer is **ES:BX** (not DS:BX), like `osapi_snd_play`, so a caller can
 write out of `SND_SEG` staging or its own image without a copy; packages
 that keep data in their own bss just set ES = DS. ES is restored per §1.
 
-**Stream verbs are UI-task/window-callback context only (binding).**
-Every caller — packages and Control Panel alike — runs inside a window
-callback on the single UI task, and the half-duplex/busy refusals of the
-open verbs rest on that serialization: the open-verb busy check and the
-eventual stream-record publish are many IF=1 instructions apart (IRQ
-discovery can even sleep on ticks between them), which two concurrent
-opens would race. A future background-task caller must first make the
-record claim a single `pushf`/`cli` unit (the grant allocator's
-scan+claim standard, §34.6) — it cannot simply start calling these verbs
-from a task.
+**Stream-verb context is per-verb (binding).** Verbs **1 (feed), 3
+(status), 5 (read), 6 (stage) and 7 (grant) are any-task**: callable from
+a window callback *or* from the calling instance's own worker task
+(§20.6). Three things make that true, and each is pinned where it lives:
+every check-then-act those verbs perform runs in one `pushf`/`cli` window
+(§34.3 — feed's bounds+store, status's hcheck+loads, grant-free's
+find+overlap+clear; grant-alloc always was one); verbs 5/6's caller
+segment crosses per-call in a register (the marshalling table above); and
+the dispatch stamp `snd_req_inst` resolves is task-qualified (§34.3), so
+a worker's call is attributed to the worker's own instance even while
+another task is mid-callback. Verbs **0, 2 and 4 (open-out, close,
+open-in) stay UI-task/window-callback context only**: the open-verb busy
+check and the eventual stream-record publish are many IF=1 instructions
+apart (IRQ discovery can even sleep on ticks between them), which two
+concurrent opens would race, and a close is not fenced against a
+concurrent open's half-built record. A future task-context open would
+have to make the record claim a single `pushf`/`cli` unit (the grant
+allocator's scan+claim standard, §34.6) — until that ships, opening and
+closing from W_ONKEY / an `AM_ONCMD` handler / the fdlg completion proc
+is the contract, and it is where a player naturally does both.
 
 **CPU-tier and extended-memory slots (§41), 0x0188..0x01A8.** Five slots;
 `apps/os88api.inc` mirrors the constants plus the `CPU_*` tier enum
@@ -3841,12 +3868,16 @@ group.
 
 That future is now *reachable*: §20.6 lets a package own a worker task, and
 nothing in `inst_pkg_spawn` stops that worker from calling
-`osapi_snd_stream`. So this is an **author rule** now rather than a
-structural impossibility: **a package worker must not call verbs 0–4.** The
-staging verbs 5–7 are likewise UI-task-only — the grant allocator's
-scan+claim is a single `cli` unit, but `snd_release_inst` teardown is not
-fenced against a worker. Nothing about the design changes; only what stands
-behind it does.
+`osapi_snd_stream`. So the residue is an **author rule** rather than a
+structural impossibility: **a package worker must not call verbs 0, 2 or
+4** — verbs 1/3/5/6/7 are any-task by the context rule above, which is
+exactly what lets a worker *pace its own ring* (mix → stage → feed → poll)
+while opens and closes stay on the UI task. Teardown needs no new fence
+for the worker's own grants: a task-owned instance's teardown is deferred
+to `OSAPI_TASK_ALIVE` (§20.6/§29.4), so `snd_release_inst` can never free
+a grant out from under the worker mid-verb. The one residue is
+same-package: a *callback* must never verb-7-free a grant its own worker
+may be mid-stage into (§34.6's author rule).
 
 **Window-geometry slot (§11), 0x01B0 — the one slot v3 added.** A package
 treats its SI/BX window pointers as opaque handles (§11): the record lives
@@ -4069,8 +4100,12 @@ paragraphs precisely so a full-segment region cannot wrap the compare
 can never be made to `iret` into kernel code or past the named record's
 region, because the frame's CS/DS/ES are seeded from **that record's**
 `I_SPTR` (§8) and the offset is bounded by its size. Half two — identity:
-the record's index must equal the **`[snd_inst]` dispatch stamp**
-(§34.3). Containment alone stopped proving identity at org 0: under v2
+the record's index must equal the low byte of the **`[snd_inst]` dispatch
+stamp**, and the stamp is honored **only when its high byte names the
+running task** (§34.3's task-qualified stamp — the `snd_req_inst` rule): a
+worker preempting a foreign callback mid-flight on another task must not
+inherit that callback's identity and attach its task to the foreign
+record. Containment alone stopped proving identity at org 0: under v2
 two instances lived at different bases, so a relocated entry could only
 be inside its own region; at org 0 every package's offsets start at 0x20
 and every region is at least 32 paragraphs, so the offset test passes
@@ -4180,16 +4215,27 @@ Two teardown corollaries, both about not trading a crash for a leak:
    `osapi_set_color`, `font_*`, `wm_content`, `wm_geom`, `wm_obscured`,
    `wm_clip_set`/`wm_clip_clear`, `osapi_video`,
    `osapi_get_ticks`, `osapi_mouse`, `osapi_srand`/`osapi_rand`,
-   `task_sleep`, `task_yield` and `OSAPI_TASK_ALIVE`. `osapi_set_color`
+   `task_sleep`, `task_yield`, `OSAPI_TASK_ALIVE`, the sound slots
+   `osapi_snd_caps`, `osapi_snd_tone` and `osapi_snd_fm` (both safe by
+   the `snd_req_inst` construction — outside a dispatched callback the
+   grant is stamped with the running task's own `T_INST`, and since the
+   §34.3 task-qualified stamp that resolution holds even while another
+   task is mid-callback), and `osapi_snd_stream` **verbs 1, 3, 5, 6 and
+   7 only** (feed/status/read/stage/grant — the §20.3 per-verb context
+   rule; their check-then-act sequences are single `pushf`/`cli` windows
+   and the verb-5/6 segment crosses in a register, which is what made
+   them any-task). `osapi_set_color`
    comes with a condition, and it is the same one that makes `gfx_*` safe:
    `[gfx_color]` is a *single global with no owner*, so a worker may set it
    only inside the same lock hold as the drawing it colours. Setting it
    lock-free repaints some other window's next fill in the wrong colour.
    Everything the SPEC
    marks *UI-task/window-callback context only* is forbidden to it: the
-   file slots 0x0120..0x0140 (§18.4 — shared `dsk_secbuf`, FAT snapshot and
-   `sch_lock`), the file dialog 0x0150 (§38.6), and every verb of
-   `osapi_snd_stream` including the staging verbs (§20.3);
+   file slots 0x0120..0x0140 and 0x01E8 (§18.4 — shared `dsk_secbuf`, FAT
+   snapshot and
+   `sch_lock`), the file dialog 0x0150 (§38.6), and the stream verbs
+   0/2/4 — open-out, close, open-in — whose busy-check-to-publish window
+   is not claim-fenced (§20.3);
    `osapi_snd_play` blocks with `sch_lock` raised and is likewise out.
    None of this is enforced.
 
@@ -4789,9 +4835,10 @@ UI ladder routes rows 0..19 to `wm_hit` and the bar is neither drawn nor
 clickable, so a fullscreen file-manager window would have no menu bar at all: the
 context menu and the keyboard would be its entire command surface. **That
 state is not reachable today** — `wm_fullscreen`'s only caller is API slot
-0x0090, a package can only fullscreen its own window, and no shipped `.o88`
-does; `ui_rdown`'s `[wm_fs]` test is insurance against a Locator Fullscreen
-command that does not exist yet. It is written down because the day that
+0x0110, a package can only fullscreen its own window, and the one shipped
+`.o88` that does (Tracker, §45) fullscreens its own player surface, never a
+file-manager window; `ui_rdown`'s `[wm_fs]` test is insurance against a
+Locator Fullscreen command that does not exist yet. It is written down because the day that
 command lands, the context menu is what makes the mode usable at all. That is also
 why the in-window Refresh and view-toggle buttons stay — a one-button
 machine queues no `EVT_RDOWN` at all and must still be able to work.
@@ -5028,6 +5075,18 @@ and non-zero exit + stderr message on any validation failure.
     0xFFFF], non-empty printable header name (a v1/v2 file fails with
     "rebuild with the v3 toolchain"). Corruption surfaces on
     the host, not on the 8086.
+  - **Data files.** An argument whose name does not end in `.o88` is a
+    plain data file: it skips `validate_o88` and the `O88` extension
+    gate, and lands as an ordinary FAT12 file of its exact byte size —
+    no size cap beyond the volume's (the kernel's §19 lister shows it as
+    a type-0 entry and the §38 dialog Opens it; `dskw_readbig` is how a
+    package loads one that outgrows 64KB). Its 8.3 name derives from the
+    host filename like a package's, with an optional extension of up to 3
+    chars from the same charset instead of the fixed `O88` (extension-less
+    names like `README` are legal FAT names, listed as ordinary type-0
+    entries — consistent with §18.5's optional-dot name rule). A folder may
+    carry data files and packages side by side (§19.2 — the per-folder
+    32-entry cap and duplicate check apply to both alike).
   - 8.3 names derive from the **host filename** (basename, uppercased),
     not the header name field (8.3 cannot hold the 15-char header names —
     the Disk window shows "MINES.O88", a deliberate, documented UX
@@ -5090,7 +5149,11 @@ and non-zero exit + stderr message on any validation failure.
   Directory order on the apps disks stays pinned, because scripted tests
   click by row (§22) — but it is pinned **per folder** now: the root is
   `APPS` then `GAMES`, `APPS` holds hello, notepad, recorder, piano,
-  fractal, paint and `GAMES` holds mines, solitaire, arkanoid, each new
+  fractal, paint, tracker and then the data file `BEVERLY.MOD` (the
+  shipped module the Tracker package plays; a data file rides its folder
+  exactly like a package, always after every `.o88` so package row
+  indices never shift), and `GAMES` holds mines, solitaire, arkanoid,
+  each new
   package appending at the end of its own folder. The grouping lives in
   the Makefile (`APPS_TOOLS`/`APPS_GAMES` → the `DIR:`-prefixed
   `APPSARGS`), not in the tool. `run`/`debug`/`test` attach
@@ -5700,7 +5763,7 @@ init-less:
 | `inst_restore` | in DI = record, lock held: clear I_FLAGS bit0, wm_show I_WIN. |
 | `inst_task_die` | in DI = the CURRENT task's instance record; no lock held; **never returns**: gfx_lock, wm_destroy I_WIN (clears wm_owner), I_WIN ← 0, gfx_unlock, then `jmp task_exit` with BX = record ptr (I_STATE is offset 0 — the release byte). Reached from Clock's and Bounce's own loops (§14) and, for packages, from `inst_pkg_alive` (§20.6). |
 | `inst_wchk` | module-internal (§20.6). in BX = an untrusted window ptr; out CF=0 if BX lies inside `wm_wins` and is record-aligned, CF=1 otherwise. Preserves everything but the flags. The fence in front of `inst_of_win` for package-supplied pointers, whose `div cl` would otherwise fault. |
-| `inst_pkg_spawn` | API slot 0x0160 (§20.6). in AX = the worker's entry offset in the package's own segment, BX = the package's own window ptr; **caller holds the gfx lock** (exclusion against another *spawner* is `task_spawn`'s own IF=0 window, §8, not this lock). Refuses (CF=1, nothing created) when BX fails `inst_wchk`, names no owner, names a record with I_STATE ≠ 1, that record already has I_TASK ≠ 0xFF, or the **two-half ownership fence** rejects it — the record must be a package (I_KIND bit 7) whose region contains the entry (AX >> 4 < I_SIZE, compared in paragraphs so a full-segment region cannot wrap it, §2.5/§20.6), AND the record's index must equal the `[snd_inst]` dispatch stamp (§34.3): at org 0 the offset test alone passes against essentially any package record, so the caller must be spawning into its OWN dispatched instance, never a sibling's or a stranger's (§20.6) — or when `task_spawn` finds the table full. Else `task_spawn` (AX = entry, **CX = the record's I_SPTR segment** — the frame's CS/DS/ES words, §8 — DX = instance index derived as (record − inst_tab) >> 5, the `app_launch` idiom), I_TASK ← slot, CF=0, AL = slot. Preserves every register but AL and the flags. No rollback exists or is needed — the instance is already published and stays live on refusal. |
+| `inst_pkg_spawn` | API slot 0x0160 (§20.6). in AX = the worker's entry offset in the package's own segment, BX = the package's own window ptr; **caller holds the gfx lock** (exclusion against another *spawner* is `task_spawn`'s own IF=0 window, §8, not this lock). Refuses (CF=1, nothing created) when BX fails `inst_wchk`, names no owner, names a record with I_STATE ≠ 1, that record already has I_TASK ≠ 0xFF, or the **two-half ownership fence** rejects it — the record must be a package (I_KIND bit 7) whose region contains the entry (AX >> 4 < I_SIZE, compared in paragraphs so a full-segment region cannot wrap it, §2.5/§20.6), AND the record's index must equal the low byte of the `[snd_inst]` dispatch stamp with the stamp's high byte naming the running task (§34.3's task-qualified stamp): at org 0 the offset test alone passes against essentially any package record, so the caller must be spawning into its OWN dispatched instance on the task that dispatch stamped, never a sibling's or a stranger's (§20.6) — or when `task_spawn` finds the table full. Else `task_spawn` (AX = entry, **CX = the record's I_SPTR segment** — the frame's CS/DS/ES words, §8 — DX = instance index derived as (record − inst_tab) >> 5, the `app_launch` idiom), I_TASK ← slot, CF=0, AL = slot. Preserves every register but AL and the flags. No rollback exists or is needed — the instance is already published and stays live on refusal. |
 | `inst_pkg_alive` | API slot 0x0168 (§20.6). in BX = the package's own window ptr; **gfx lock NOT held**; called from the worker only. Returns with every register and the flags preserved while BX names a record with I_STATE = 1 — and returns unconditionally, without exiting anything, when `sch_cur` = 0: the UI task must never `task_exit` (§8), so a wrong-context call is refused. Otherwise recovers the *running task's* record from `T_INST` (§8) and `jmp inst_task_die` — never returns. A record with I_WIN = 0 (corrupt table: nothing to `wm_destroy`, and BX = 0 there would zero the cold-entry `jmp` at 1000:0000) still exits with BX = the record, so the record, its region and its dock/tm rows are released. Only T_INST ≥ INST_MAX exits with BX = 0 — no release byte because there is no record — the `sbl_refill_task` precedent (§34.5). |
 | `inst_launch_post` | in AL = kind: one atomic word store of kind+1 into `inst_launch` — the deferred launch channel for lock-held posters (drained by ui_task step 3, §13). Rapid double posts coalesce (last wins). |
 
@@ -6652,6 +6715,32 @@ documented outputs; callable from task context only unless stated:
   leave ch2 untouched, because only the speaker op's idle path ever
   clears mode 2 — an unconditional stamp would wedge tone refusal
   forever after the first non-speaker clip.
+  **The rule's scope grew with the any-task stream verbs (§20.3): every
+  stream-record check-then-act is one window too** — feed's hcheck +
+  direction + bound checks + the `sbl_total` store, status's hcheck + the
+  two loads, and the grant free's find + live-stream-overlap check +
+  clear — because those verbs are no longer serialized on one task, and a
+  caller preempted between a stale-handle check and its store could
+  otherwise act on the *successor* stream (validated against the old
+  record, stored into the new one). Each window is a handful of compares
+  plus one word store — bounded, ISR-legal.
+- **The dispatch stamp is task-qualified (binding).** `[snd_inst]` is a
+  word: the low byte is the instance slot a window callback is being
+  dispatched for (0xFF = none), and the **high byte is `[sch_cur]` at the
+  moment `snd_disp_set` stamped it** — the task the callback is running
+  on. `snd_req_inst` (and `osapi_snd_play`'s inline copy) honor the low
+  byte **only when the high byte equals the current `[sch_cur]`**; on any
+  other task they fall back to the running task's `T_INST`. This is
+  binding, not cosmetic: callbacks run under the gfx lock but fully
+  preemptible, so with a task-blind stamp a worker of package B calling
+  any `snd_req_inst`-routed verb while a W_PAINT of package A was in
+  flight on another task read A's stamp — its grant/tone/channel was
+  attributed to A, and A's teardown then force-freed B's live grant while
+  B's worker could be mid-`rep movsb` into it. The fix retroactively
+  hardens TONE, FM and PLAY, whose "worker-safe by the T_INST fallback"
+  claim silently rested on no callback being in flight elsewhere. The
+  nesting push/pop at the dispatch sites is untouched — the sites
+  push/pop the whole word, stamp and qualifier together.
 - **FM tier**: 9 channels (8 while the tone reservation is active),
   claimed per requester on first touch of a **caller-named** channel
   (bitmap + owner stamps — there is no allocator picking channels);
@@ -6837,24 +6926,58 @@ end.
   parameter in the ABI the kernel cannot distinguish "finished" from
   "starved", and refusing to guess is the honest contract (§20.3 verb 3
   pins the states). A short final half is padded with 80h silence by the
-  refill copy, so the pause always lands on a block edge. `snd_tick`'s
+  refill copy, so the pause always lands on a block edge (linear mode
+  only — a ring fill never pads, per the ring rules below). `snd_tick`'s
   **stream watchdog** covers the complementary failure: a block IRQ that
   fails to arrive within ~2× the block period (while one is expected)
   halts the stream and marks it **ended** instead of hanging the owner.
-- **The refill task — the kernel owns stream pacing.** A package *may* own
-  a worker task (§20.6), but exactly one, and it may not call the stream
-  verbs (§20.3) — so pacing a stream can never be the package's job.
-  open-out/open-in therefore spawn
+- **The refill task — the kernel owns stream pacing.** The DSP-facing
+  half of pacing is the kernel's and stays so: open-out/open-in spawn
   a **transient kernel task** from the same 12-slot pool (the
-  Clock/Bounce spawn idiom; a full pool is a clean err 6), and the package
-  observes progress by polling the status verb from its callbacks. It copies
+  Clock/Bounce spawn idiom; a full pool is a clean err 6). It copies
   grant → double-buffer halves as `sbl_isr` flags them consumed (or
-  ring → grant for recording) and exits at stream end, close or teardown.
+  ring → grant for recording), resumes an underrun-paused stream, and
+  exits at stream end, close or teardown.
   SB playback DMA never runs from a grant — the copy hop satisfies the DMA
-  contract by construction, not by caller discipline. Rejected, recorded:
+  contract by construction, not by caller discipline. Since the §20.3
+  per-verb context rule, a package's worker (§20.6) may **feed, poll and
+  stage** — the refill task's resume path already re-verifies act +
+  generation under IF=0 and never assumed which task fed; what the worker
+  supplies is *data* pacing (keeping the valid length ahead of
+  consumption), which the kernel could never do for it. **The feed-ahead
+  rule (binding for progressive feeders)**: keep `total − fed ≥ 2048`
+  (one half) at all times — a linear fill pads a short half's tail with
+  80h silence *without advancing `fed`*, so falling behind inserts
+  audible gaps before the honest underrun-pause (a ring fill never pads;
+  falling behind there is the pause itself). Rejected, recorded:
   a *resident* sound task would cost a 1,536-byte `.lowbss` stack for
   mostly-idle work; tone expiry is a `snd_tick` leaf and stream refills
   are transient spawns that exit with their stream.
+- **Ring mode (`SND_OPENF_RING`, §20.3 verb 0) — endless playback without
+  a ring ABI.** A linear stream is bounded: total/fed/consumed are
+  monotonic 16-bit offsets capped at the grant end (~52KB pool → ~4.7s at
+  11kHz per open), and a close+reopen seam is an audible hole every few
+  seconds. Ring mode reuses the same three counters as **free-running
+  16-bit values** (mod 65536), which keeps every comparison a
+  subtraction. The physical offset of stream byte *n* is
+  `SI + (n & (RL−1))`, RL a power of two in 4096..32768 (validated at
+  open). Four rules carry the mode, all kernel-enforced:
+  1. **Fills are whole 2048-byte halves only, never padded.** `fed` stays
+     2048-aligned, so with RL a power of two a half never crosses the
+     ring seam and the fill copy needs no split. Fewer than 2048 bytes
+     available (`total − fed < 2048`) fills nothing — the normal
+     underrun-pause path; the linear 80h tail pad is unreachable here.
+  2. **Feed bounds are subtractions** (§20.3 verb 1): monotonic forward
+     and never past `fed + RL`.
+  3. **The open must cover one half** (CX ≥ 2048): a ring never pads, so
+     the DSP may not be started on a half no fill can complete.
+  4. **Status DX is free-running**; the owner works in deltas, and a
+     feeder keeps `total − consumed ≤ RL` on its side (stricter than the
+     kernel's `fed` bound, needs no new ABI) and ≥ 2048 ahead.
+  The ISR's consumed accounting needs no cap in ring mode — a half only
+  plays after being filled whole, so `consumed + 2048 ≤ fed ≤ total`
+  holds by construction and the ISR adds 2048 flat. Input streams
+  (verb 4) have no ring mode — the capture grant is the bound.
 - **The DSP < 2.00 fallback, pinned now**: QEMU's sb16 cannot exercise
   single-cycle DSPs at all; that path is verified on 86Box (`vm/xtsb`, an
   XT with an SB 1.5/2.0). If that config proves unmaintainable, the
@@ -6922,7 +7045,26 @@ end.
   `SND_SEG`**: data goes in via the stage verb (kernel copies
   caller → grant) and comes out via the read verb (kernel copies
   grant → caller) — the `dsk_get_dir` staging idiom (§18), in both
-  directions.
+  directions. The caller's segment for those two copies crosses the
+  boundary **per-call in a register** (BX, threaded by the slot wrapper —
+  §20.3 marshalling), never in a `.bss` word: with the verbs any-task, a
+  parked global could be overwritten by the next caller's wrapper while
+  the first caller sat preempted between store and copy.
+- **The verb-6 copy needs no drain-style chunk fence, and one author rule
+  replaces it (binding).** The asymmetry, recorded: the drain copy needed
+  its 512-byte act+gen-re-verified chunks because it is a *kernel task*
+  whose owning instance can be force-torn-down independently mid-copy. A
+  package worker mid-verb-6 has no such exposure — a task-owned
+  instance's teardown only sets `I_STATE = 2` and defers everything to
+  `OSAPI_TASK_ALIVE` (§20.6/§29.4), so `snd_release_inst` can never free
+  the worker's own grant while the worker is preempted inside the copy.
+  What remains is same-package and the kernel cannot see it: **never
+  verb-7-free a grant your worker may be mid-stage into** — free it from
+  the worker itself, or only after the worker is known parked (your own
+  handshake byte; verb 3 tells you the stream is closed, not that the
+  worker is). A freed-then-re-granted range under a preempted verb-6
+  `rep movsb` is another instance's memory being overwritten, and hazard
+  attribution ends at the author.
 - What packages get: a Minesweeper explosion is one
   `call OSAPI_SND_TONE` (a far immediate since v3 — nothing to fix up,
   §20.3/§20.5); a music player
@@ -9022,3 +9164,278 @@ no worker:
 A click or a key takes the panel down and is **spent** doing it
 (`ark_abdismiss` answers CF=1), which is why `ark_onclick` exists at all —
 nothing in this game steers with the mouse.
+
+## 45. Tracker — the tenth package (apps/tracker/tracker.asm)
+
+A FastTracker II-styled 4-channel ProTracker MOD player over the published
+package ABI. Prefix `trk_` (`mp_` for the replayer in `trkplay.inc`, `tui_`
+for the drawing in `trkui.inc` — `ui_` is the kernel's), embedded icon, one
+worker task. It is the app class the sound layer was built toward (§34.6: "a
+music player plays … staged PCM via 0x0100"), and building it is what forced
+the two kernel amendments it rides on: the worker-safe stream verbs + ring
+mode (§20.3/§34.5) and `dskw_readbig` (§18.4, slot 0x01E8). On the apps
+disks it lives in the `APPS` folder (§24), appended after paint, with
+`BEVERLY.MOD` after it.
+
+### 45.1 Windowed is a splash; the app lives fullscreen
+
+The entry proc creates an ordinary centred 420x180 window — a splash card:
+the name, the loaded module's title, the key map, and *Press any key for
+fullscreen*. That promise is kept literally: while the window has never been
+fullscreen, **any** key or click enters fullscreen; afterwards F toggles and
+Esc returns, and windowed keys drive the player normally (a module keeps
+playing on the splash, which shows a live position line).
+
+Tracker is the first shipped client of `wm_fullscreen` (§11.2), and its
+lifecycle is the section's contract exercised end to end. Fullscreen is
+entered ONLY from `W_ONKEY`/`W_ONCLICK`/`AM_ONCMD` — the contexts that hold
+the gfx lock the slot requires; never the entry proc (no lock there). One
+ordering detail is load-bearing: **`[trk_fs]` is flipped before the
+`osapi_fullscreen` call**, because entering fronts and repaints under the
+held lock — the `W_PAINT` that runs *inside* the call must already see the
+fullscreen answer, or it paints the splash across the bare screen. A refusal
+(CF=1, someone else owns the screen) flips it back. Exit is Esc in
+`W_ONKEY`, the documented convention; the close and minimize boxes need
+nothing, because `wm_fs_drop` runs on both paths (§11.2).
+
+Under `WF_FULL` the menu bar is unreachable, so the bar's two commands
+(File ▸ Open…, View ▸ Fullscreen) are duplicates of keys (L, F) — the
+Arkanoid rule. `About Tracker` (`OSAPI_ABOUT_SET`) is the `[ark_abon]`
+panel-in-content pattern verbatim: the flag is checked by the worker **under
+the lock, right after the clip is armed**, and the whole frame is dropped
+while it is set — but only the *drawing* pauses; the audio feed keeps
+running, because a dropped frame should not stop the music.
+
+### 45.2 The audio is a ring stream, and the worker feeds it
+
+The player's architecture is one sentence plus one handshake: **the UI task
+opens, closes and pre-mixes at open; the worker mixes and feeds; and the
+close drains the worker first.** `mp_gen` is not reentrant (its cursors are
+shared package bss), so the worker brackets every feed pass with
+`[trk_mixing]` — set before the pass's own entry guards, cleared last — and
+`trk_stream_close` spins that flag to zero after dropping `[trk_sopen]`.
+Every UI path that resets the replayer, runs the `mp_gen` pre-roll, or
+frees the module blob sits behind a `trk_stream_close`, so a worker
+suspended anywhere inside a feed pass finishes it before the UI touches
+`mp_*` state; a pass that enters *between* close and reopen sees
+`trk_sopen` = 0 and falls out touching nothing. The drain is deadlock-free
+(the feed path never takes the gfx lock the UI holds; pre-emption keeps the
+worker running) and bounded (the fill loop re-checks `trk_sopen` per half).
+Opening (`trk_play`, reached from
+Enter/Space/P and the load completion proc) allocates one 16KB grant from
+the `SND_SEG` pool (verb 7, once — force-freed at teardown like every
+grant), pre-mixes two 2048-byte halves, stages them at ring offsets 0 and
+2048, and opens a **ring-mode** stream (§20.3 verb 0 with `SND_OPENF_RING`
+in AH, rate request 11,000 Hz, initial valid total 4096). From then on the
+worker's every wake runs the feed *before* the draw, lock-free, on the
+verbs the §20.3 amendment made any-task:
+
+- verb 3 answers `consumed`, free-running 16-bit in ring mode; `lead =
+  total − consumed` is exact across wrap because both counters are.
+- While `lead ≤ 16384−2048` and fewer than 6 halves this wake: `mp_gen`
+  renders 2048 bytes into `mp_outbuf`, verb 6 stages them at `grant +
+  (total & 16383)` — a half never crosses the ring seam, because 16384 is a
+  multiple of 2048, so the copy needs no split — and verb 1 publishes
+  `total + 2048`.
+- The polled `consumed` goes stale across the loop, which errs on the
+  conservative side: `consumed` only grows, so the computed lead only
+  over-reports fullness, never over-feeds.
+
+Underrun is the normal quiet path (§34.5: the stream pauses, the next feed
+resumes it within a tick or two). A watchdog-**ended** stream is different —
+it never resumes, and the worker cannot close it (verb 2 stays
+UI-callback-only), so the worker only flags `[trk_ended]` and stops feeding.
+**F00 takes the same exit**: the effect stops the replayer on the worker,
+whose pass keeps polling until `consumed` catches `total` (the stop row's
+tail is heard) and then latches `[trk_ended]`. Every UI callback runs
+`trk_reap` first, which closes a flagged (or F00-stopped) stream — so the
+machine's single stream record is held no longer than the tracker's next
+paint, key, click or menu command, which is the documented residue of
+verb 2's UI-only rule. The 6-half cap bounds the
+worker's lock-free burst at ~1.1 s of mixing per wake, so a wake can catch
+up after a stall without starving the machine.
+
+### 45.3 Loading goes through readbig, because real MODs are big
+
+`OSAPI_FILE_READBIG` (slot 0x01E8) exists because `dskw_read`'s CX is a
+16-bit byte count: a file ≥ 65,536 bytes was `FERR_BIG` *unconditionally*,
+and BEVERLY.MOD is 116,085 bytes. The load path is the whole client story
+of §2.6 + §18.4 + §38 in one proc (`trk_fdone`, the fdlg completion):
+
+1. Copy the ES:DI name out **first** — ES is `KERNEL_SEG` and the buffer
+   dies with the call (§38.6).
+2. Stop playback and close the stream — the close **drains
+   `[trk_mixing]`** (§45.2), so no `mp_mixch` is left mid-fetch from the
+   old grant — *then* clear `mp_loaded` and free the previous module
+   grant: no reader may trust a blob about to move, and on the worker
+   path the drain is what enforces that rule.
+3. `OSAPI_MEM_AVAIL` → take `min(largest run, 8192 paragraphs)` in ONE
+   `OSAPI_MEM_ALLOC` (the one-block rule, §2.6). Refusal is a status-line
+   "Out of memory", not an abort.
+4. `OSAPI_FILE_READBIG` with ES = the grant, DX:CX = its byte capacity.
+   `FERR_BIG` reads back as "File too big" — the honest answer on a 512KB
+   machine, whose ~107KB arena a 116KB module simply does not fit; the
+   5.6KB TEST.MOD loads everywhere the arena exists.
+5. `mp_load` validates the hostile bytes (the §45.5 checklist) and answers
+   CF=1 with its own verdict string, which goes straight to the status
+   line; success starts playback inline — pre-mix, stage, ring open, all
+   sanctioned UI-lock context.
+
+The dialog itself opens on top of the fullscreen surface and works there
+(§38 — `fdlg_grab` runs before the `[wm_fs]` branch). Its one residue is
+documented: closing the dialog paints the menu bar over rows 0..MBAR_H−1
+with no callback on cancel. The worker owns the fix: every 16th frame it
+repaints the whole top band, so a cancelled dialog's bar strip lives for at
+most a second.
+
+### 45.4 Memory layout
+
+Four stores, none of them guessed:
+
+- **The package segment** — image + bss, including the mixer's 65×256
+  volume table (16,640 bytes, built at load: `vt[vol][b] = (int8)b·vol»6`)
+  and the 2048-byte `mp_outbuf`.
+- **The module blob** — one arena grant (§2.6), sized
+  `min(largest free run, 8192 paragraphs)` from `MEM_AVAIL` at load time
+  regardless of the module's actual size, and held until the next load or
+  teardown. Consequence, stated honestly: while any module is loaded the
+  Tracker's blob grant occupies the largest free arena run (up to 128KB —
+  on a 512KB machine effectively all remaining arena), so other package
+  loads and other instances' `OSAPI_MEM_ALLOC` grants may refuse "Out of
+  memory" until the Tracker instance closes. (A size-fitted grant would
+  need the fdlg completion to carry the entry's 32-bit size, or a shrink
+  primitive — `MEM_FREE` + re-alloc after the read is unsafe, since
+  first-fit may relocate the base.) The grant holds the file verbatim;
+  samples are addressed through
+  normalized per-sample bases (`seg = blob_seg + (start >> 4)`), so every
+  sample is reachable inside one 8086 segment window, and pattern *p* lives
+  at segment `blob_seg + 67 + 64·p`, offset 12 — nothing ever offsets more
+  than 64KB from one base, which is how a 116KB blob is walked on an 8086.
+- **The stream ring** — one 16KB `SND_SEG` pool grant (verb 7).
+- Nothing else: no frame buffer, no second window.
+
+All three grants are stamped with the instance and force-freed at teardown
+(§2.6/§34.3), which is why the close box needs no code at all: the worker
+dies inside `OSAPI_TASK_ALIVE`, and the kernel sweeps the stream, the pool
+grant and the arena grant behind it.
+
+### 45.5 The replayer is ProTracker, validated hostile
+
+`trkplay.inc` is a period-native PT replayer (PAL: rate = 3,546,895/period)
+with the ft2-clone's semantics as the reference. The load checklist runs
+before one byte is trusted: magic at 1080 ∈ {`M.K.`, `M!K!`, `4CHN`,
+`FLT4`}; song length 1..128; restart ≥ songlen → 0; the pattern count is
+the max over **all 128** order bytes + 1 and `1084 + 1024·P` must fit the
+32-bit file size; every sample's byte extent is clamped to the bytes
+actually present (a truncated file yields short samples, never a wild
+pointer — BEVERLY.MOD's 9 trailing bytes are why the check is ≤, not =);
+volumes clamp to 64; loop fix-ups per the PT rules (loop start past the
+data disables it, an overflowing loop length is trimmed, looping iff the
+result exceeds 2 bytes). Per-sample play length caps at 60,000 bytes so the
+mixer's 16-bit position can never wrap. At play time every period is
+clamped to [113..856] **before** the step DIV — the clamp *is* the #DE
+guard — and effect handling ignores what it does not implement rather than
+faulting.
+
+Effects, v1: 0 arpeggio, 1/2 porta, 3 tone porta, 4 vibrato (the exact
+32-entry PT table), 5/6 slide combos, 7 tremolo, 9 sample offset, A volume
+slide, B position jump, C set volume, D pattern break (BCD), E1/E2 fine
+porta, E6 pattern loop, E9 retrig, EA/EB fine volume, EC note cut, ED note
+delay, EE pattern delay, F speed/tempo split at 32 with **F00 = stop**.
+Ignored honestly: 8xx pan (mono output), E3/E4/E5/E7 (waveform control and
+finetune — v1 plays finetune 0). Timing is the PT model: tick rate =
+BPM·2/5 Hz, `mp_gen` renders `mixrate·5/(2·BPM)` samples a tick, tick 0
+reads the row, ticks 1..speed−1 run the per-tick effects.
+
+The mixer accumulates per channel into a 16-bit chunk buffer through the
+volume table and converts once: `out = 128 + (sum >> 2)` — four channels at
+64 volume cannot clip. A muted or silent channel still advances its
+position arithmetically, so unmuting rejoins the song where it really is.
+Mixing throughput on a real 8088 is **not promised** (§45.8); the mixer is
+honest about being a QEMU/286-era luxury.
+
+### 45.6 The FT2 screen, parameterized by adapter
+
+`tui_layout_init` asks `OSAPI_VIDEO` once and copies one of three layout
+records plus one of two colour tables (the Arkanoid metric-record pattern,
+by height):
+
+- **640x480 VGA** — the FT2-proportioned screen: top desktop area y=0..171
+  (position editor with a 5-entry order window banded on the current entry,
+  TRACKER nameplate, BPM/Spd and Ptn/Ln boxes, status line, 2x2 volume-bar
+  scopes, two FT2 button stacks, a 12-row instrument list + song-name box),
+  pattern editor y=172..479 with **16 rows above and 18 below** the band.
+- **720x348 Hercules** — the mid layout: same top blocks, scopes in one row
+  of four, no stacks or instrument list, 14+14 rows, channel block centred
+  in the 720.
+- **640x200 CGA** — compact: one title/readout line, four inline bars,
+  channel header, 10+10 rows.
+
+The pattern view is the deliverable — the four FT2 tells, in order: the
+black field cut by a **full-width current-row band** that rows scroll
+*through*; **hex row numbers on both edges** (left only on CGA);
+separator-ruled channel columns with `C-2 01 A0F` cells (the 1px `TC_SEP`
+rules `tui_row1` redraws after each strip erase; `mp_cell2txt`'s pinned format:
+note `...` when the period is 0, instrument `..` when 0, effect `...` when
+effect and param are both 0); the desktop above with the position editor
+top-left and the Play/Stop stack right. Colours are the FT2 "Arctic"
+palette mapped to 16: bg 0, pattern text 9, band 7 with text 15, bevels
+15/8, accent 1.
+
+On 1bpp the table swaps whole (§39.4 discipline): **colour 9 never appears
+on a mono adapter** — it reduces to black and pattern text would vanish
+into the pattern field, the exact CBROWN lesson of §44.6. Mono is text 15
+on 0, the band inverted (solid white, black text), faces black inside white
+bevels, and the desktop the 50% dither.
+
+Every erase+text pair obeys the §11.3 granularity rule the `fr_status` way:
+one `osapi_wm_clip_test` per unit — a pattern row strip, a readout value, a
+whole desktop element — and the pair is skipped whole when any of it is
+covered, so a partly covered element goes *stale*, never half-blank. Pure
+fills (backgrounds, VU bars) clip per pixel and are never gated. In
+fullscreen the only thing that ever covers this window is the file dialog,
+which is exactly when the gates earn their bytes.
+
+The worker's frame (`tui_draw_dyn`) is change-driven: the pattern area and
+position readouts redraw only when row/position/pattern moved, tempo
+readouts on change, mute flags on toggle; the VU bars every frame (rise
+instantly, decay 2 units a frame, so they read as needles); the top band
+every 16th frame (§45.3's dialog-cancel rule).
+
+### 45.7 Keys
+
+| Key | Action |
+|---|---|
+| Enter | Play song (Right Ctrl in FT2) |
+| Space | Stop / play toggle |
+| P | Loop the current pattern (Right Alt in FT2) |
+| Left / Right | Song position −/+ (`mp_setpos`) |
+| Up / Down | Scroll pattern rows while stopped |
+| 1..4 | Toggle channel mute (a click in that scope does the same) |
+| L | Load… (the Standard File dialog) |
+| F | Fullscreen toggle |
+| Esc | Exit fullscreen (windowed: ignored) |
+
+The `or al, al` keypad gate of §44.2 applies verbatim: the numeric keypad
+sends digits with arrow scan codes, so ascii is tested before any scan code
+is trusted. There is no held-key inference here — every action is
+edge-triggered, so no deadline machinery is needed.
+
+### 45.8 The honest degradations
+
+- **No Sound Blaster: a viewer, not a player.** `osapi_snd_caps` without
+  `PCM_BG` refuses Play with a status-line message; loading, the pattern
+  view, scrolling and the whole fullscreen surface still work. No silent
+  tick-driven fake playback is attempted, and no FM fallback in v1 (FM is
+  now worker-whitelisted — that is future work, not a promise).
+- **512KB machine: big modules refused.** The ~107KB arena cannot hold a
+  116KB blob; `FERR_BIG`/"Out of memory" on the status line is the answer,
+  and small modules play. On the 256KB floor the package refuses to load
+  like every package (§2.5 — the arena is empty there).
+- **Mono adapters: the band carries the look.** The blue-on-black pattern
+  text distinction dies by design; the inverted band, the bevels and the
+  MUTE flags carry every state in shape, not hue.
+- **Real-8088 mixing throughput is not promised.** The kernel quantizes the
+  11,000 Hz request through the TC (§34.5), the mixer follows the granted
+  rate's arithmetic but not its wall-clock cost on an 8088; the floor
+  machine still gets the viewer.

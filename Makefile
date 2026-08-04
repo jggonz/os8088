@@ -22,6 +22,9 @@ VMHERC := $(CURDIR)/vm/xt-hercules
 VM286 := $(CURDIR)/vm/286
 VM386SX := $(CURDIR)/vm/386sx
 VM386DX := $(CURDIR)/vm/386dx
+VMXTSND := $(CURDIR)/vm/xt-sound
+VM286SND := $(CURDIR)/vm/286-sound
+VM386SND := $(CURDIR)/vm/386-sound
 
 # VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
 # 39.1). The shipped images are always built without it, so they auto-detect;
@@ -64,7 +67,7 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
 .PHONY: all run run-640 debug test test-snd xt xt-640 xt-cga xt-hercules \
-        286 386sx 386 clean
+        286 386sx 386 xt-sound 286-sound 386-sound clean
 
 all: $(IMG) $(IMG360) $(APPSIMG) $(APPSIMG360)
 
@@ -220,6 +223,24 @@ $(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/arkanoid.o88: $(BUILD)/arkanoid.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/arkanoid.bin -o $@
 
+# Tracker, the tenth shipped package (SPEC.md 45): an FT2-homage 4-channel
+# ProTracker MOD player. It loads .MOD files through the Standard File
+# dialog (the whole-file read is OSAPI_FILE_READBIG, slot 0x01E8, because
+# real modules run past 64KB), mixes them into a ring-mode Sound Blaster
+# stream fed by its WORKER task (the SPEC.md 34 amendment both halves of
+# this feature exist for), and draws the FastTracker II pattern view -
+# windowed splash first, fullscreen (wm_fullscreen) on a key. Ships with
+# BEVERLY.MOD (Beverly Hills Cop, 116,085 bytes) as the APPS folder's
+# first data file; the deterministic 5,596-byte TEST.MOD below is what the
+# scripted tests play.
+$(BUILD)/tracker.bin: apps/tracker/tracker.asm apps/tracker/trkplay.inc \
+		apps/tracker/trkui.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/tracker/ -o $@ apps/tracker/tracker.asm
+	@echo "tracker: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/tracker.o88: $(BUILD)/tracker.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/tracker.bin -o $@
+
 # FMTEST, the sound Phase 3 gate package (docs/SOUND-PLAN.md): drives the FM
 # slot 0x0084 end to end (patch-load, chord, all-off, tone expiry, teardown).
 # Never on the shipped apps disks - their directory order is pinned - it gets
@@ -278,6 +299,21 @@ $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 tools/os88disk.py
 $(BUILD)/filetest-fat16.img: $(BUILD)/filetest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 2880 $(BUILD)/filetest.o88
 
+# TEST.MOD, the deterministic 5,596-byte module the tracker tests play
+# (docs/TRACKER-PLAN.md): Ode to Joy over four synthesized samples, a
+# pinned spread of v1 effects (not the full set - see mkmod.py's list),
+# and the square lead SOLO for the first eight rows so sndcheck.py sees a
+# clean ~327 Hz at song start.
+$(BUILD)/test.mod: tools/mkmod.py | $(BUILD)
+	python3 tools/mkmod.py $@
+
+# The tracker's scratch image (filetest.img pattern): TRACKER.O88 and
+# TEST.MOD at root level, never on the shipped apps disks. Mounted with:
+#   make test-snd SB16=1 TESTAPPS=build/tracker-test.img
+# then verified after QMP quit with tools/sndcheck.py (327 Hz dominant).
+$(BUILD)/tracker-test.img: $(BUILD)/tracker.o88 $(BUILD)/test.mod tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/tracker.o88 $(BUILD)/test.mod
+
 # The software floppies (drive B:) hold packages, not boot code - os88fs only.
 # The volume is FOLDERED (SPEC.md 19.2): the root holds APPS and GAMES and
 # nothing else, so the root indices are 0 = APPS, 1 = GAMES and a package is
@@ -286,20 +322,29 @@ $(BUILD)/filetest-fat16.img: $(BUILD)/filetest.o88 tools/os88disk.py
 # tests click the Disk window by row index, and every index inside a folder
 # is now independent of what the other folder holds.
 APPS_TOOLS := $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 \
-              $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88
+              $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88 \
+              $(BUILD)/tracker.o88
 APPS_GAMES := $(BUILD)/mines.o88 $(BUILD)/solitair.o88 $(BUILD)/arkanoid.o88
 APPS := $(APPS_TOOLS) $(APPS_GAMES)
+
+# The tracker's demo module rides the APPS folder as its LAST entry - a
+# DATA file, the first non-package on a shipped disk (SPEC.md 24): the
+# kernel lists it with the generic icon and the tracker's Open dialog
+# finds it next to the app. It fits the 360KB disk too: all ten packages
+# plus its 114 clusters use 165 of the 354 available (49 package + 114
+# module + 2 folder clusters) - just under half, ~189KB free.
+BEVERLY := apps/tracker/beverly.mod
 
 # ...and the same list with the folder each package lands in. os88disk.py
 # reads a "DIR:" prefix per package, so the grouping lives here rather than
 # in the tool.
-APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
+APPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(BEVERLY)) \
             $(addprefix GAMES:,$(APPS_GAMES))
 
-$(APPSIMG): $(APPS) tools/os88disk.py
+$(APPSIMG): $(APPS) $(BEVERLY) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS)
 
-$(APPSIMG360): $(APPS) tools/os88disk.py
+$(APPSIMG360): $(APPS) $(BEVERLY) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(APPSARGS)
 
 # The GUI reads a Microsoft serial mouse on COM1; QEMU emulates one natively.
@@ -418,6 +463,32 @@ xt-hercules: $(IMG360) $(APPSIMG360)
 386: $(IMG) $(APPSIMG)
 	@$(UNPROTECT_B) $(VM386DX)/86box.cfg
 	$(BOX) -P $(VM386DX) -N
+
+# The sound machines: the same three tiers with a real Sound Blaster in the
+# slot, so what test-snd verifies headlessly can be heard on emulated period
+# hardware. The XT carries a Sound Blaster v2.0 - an 8-BIT card (an SB16 is
+# 16-bit ISA and physically cannot seat in an XT) whose DSP 2.01 is the
+# OLDEST auto-init part, and on the ibmxt86's 640KB the Tracker package is
+# loadable. NOTE: this is NOT the single-cycle (DSP < 2.00) gate SPEC.md
+# 34.5 / docs/SOUND-PLAN.md still owe as `vm/xtsb` - that branch needs
+# `sndcard = sb1.5` (DSP 1.05), one config-line swap away when someone sits
+# down to verify it. The 286 and 386 carry a Sound Blaster 16 like QEMU's
+# -device sb16. All three cards sit at base 0x220, IRQ 5, DMA 1 (dma16 5 on
+# the SB16) - inside the {7,5,3,2} set the kernel's F2h IRQ discovery
+# probes. Device section names ([Sound Blaster v2.0 #1] / [Sound Blaster 16
+# #1]) are exactly what 86Box writes back on exit; keep them, or 86Box
+# ignores the base/irq/dma keys.
+xt-sound: $(IMG360) $(APPSIMG360)
+	@$(UNPROTECT_B) $(VMXTSND)/86box.cfg
+	$(BOX) -P $(VMXTSND) -N
+
+286-sound: $(IMG) $(APPSIMG)
+	@$(UNPROTECT_B) $(VM286SND)/86box.cfg
+	$(BOX) -P $(VM286SND) -N
+
+386-sound: $(IMG) $(APPSIMG)
+	@$(UNPROTECT_B) $(VM386SND)/86box.cfg
+	$(BOX) -P $(VM386SND) -N
 
 clean:
 	rm -rf $(BUILD)

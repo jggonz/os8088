@@ -175,15 +175,26 @@ CWHITE    equ 15
 %define OSAPI_SND_FM        KERNEL_SEG:0x00F8   ; FM verbs (SPEC.md 34.2); verb 2's
                                                 ; SI patch is yours - staged; out
                                                 ; CF=1 no FM sink / refused
-; NEVER call OSAPI_SND_STREAM from your worker task - any verb, staging
-; included (SPEC.md 20.3/34.5). The open verbs' busy/half-duplex refusals
-; rest on every caller being serialized on the UI task, and teardown is not
-; fenced against a task. Poll status from a callback instead.
+; OSAPI_SND_STREAM's context rule is PER-VERB (SPEC.md 20.3). Verbs 1
+; (feed), 3 (status), 5 (read), 6 (stage) and 7 (grant) are ANY-TASK: a
+; window callback or YOUR OWN worker may call them - the kernel runs their
+; check-then-act sequences under single cli windows, threads the verb-5/6
+; segment per call, and attributes grants task-correctly, so a worker can
+; mix -> stage -> feed -> poll a stream it owns. Verbs 0 (open-out), 2
+; (close) and 4 (open-in) stay UI-CALLBACK-ONLY: their busy/half-duplex
+; refusals rest on every OPENER being serialized on the UI task. Open and
+; close from W_ONKEY, a menu handler or an fdlg completion proc.
+; One author rule replaces the old blanket ban (SPEC.md 34.6): NEVER
+; verb-7-free a grant your worker may be mid-stage into - free it from
+; the worker itself, or only after your own handshake says it is parked.
 %define OSAPI_SND_STREAM    KERNEL_SEG:0x0100   ; PCM_BG streams + staging (SPEC.md
                                                 ; 20.3): AL = verb (0 open / 1 feed /
                                                 ; 2 close / 3 status / 5 read /
                                                 ; 6 stage / 7 grant), AH = handle or
-                                                ; sub-op; out AX = 0 ok / err /
+                                                ; sub-op (verb 0: OPEN FLAGS - bit 0
+                                                ; = SND_OPENF_RING below; every
+                                                ; linear open passes AH = 0); out
+                                                ; AX = 0 ok / err /
                                                 ; SND_ST_* state (verb 3). Verb 6's
                                                 ; SI source and verb 5's DI dest are
                                                 ; in YOUR segment - copied for you
@@ -198,8 +209,34 @@ SND_CAP_PCM_IN   equ 10h
 ; stream states returned by OSAPI_SND_STREAM verb 3 (SPEC.md 20.3/34.5)
 SND_ST_PLAYING   equ 0
 SND_ST_UNDER     equ 1           ; underrun-paused: resumable by a feed
-SND_ST_ENDED     equ 2           ; stopped by the stream watchdog
+SND_ST_ENDED     equ 2           ; stopped by the stream watchdog. A feed
+                                 ; is ACCEPTED but the stream NEVER
+                                 ; RESUMES - its refill task is gone. On
+                                 ; state 2, close, then reopen.
 SND_ST_STALE     equ 0FFFFh      ; the handle's stream is gone
+
+; verb-0 open flags, passed in AH (SPEC.md 20.3 verb 0 - verb 0 carries no
+; handle, so the byte is free; every pre-ring caller already loads AH = 0)
+SND_OPENF_RING   equ 1           ; ring mode (SPEC.md 34.5): SI = ring base,
+                                 ; ring length RL = grant end - SI, a POWER
+                                 ; OF TWO in 4096..32768; CX = initial valid
+                                 ; total, 2048 <= CX <= RL. total/fed/
+                                 ; consumed become free-running 16-bit
+                                 ; (mod 65536): stage stream byte n at
+                                 ; ringbase + (n & (RL-1)), feed CX = the
+                                 ; new free-running total (forward < 0x8000
+                                 ; per feed, and never > RL ahead of what
+                                 ; the kernel copied out), and read verb
+                                 ; 3's DX in deltas. Fills are whole
+                                 ; 2048-byte halves and NEVER pad: keep
+                                 ; total >= consumed + 2048 (one half
+                                 ; ahead) and total - consumed <= RL, or
+                                 ; the stream underrun-pauses (state 1 -
+                                 ; honest and resumable, but audible).
+                                 ; The feed-ahead rule applies to LINEAR
+                                 ; progressive streams too: a short half
+                                 ; is padded with silence there, which
+                                 ; stretches the timeline (SPEC.md 34.5).
 
 ; --- window management (SPEC.md 11.1/11.2) -------------------------------------
 %define OSAPI_WM_SIZABLE    KERNEL_SEG:0x0108   ; BX=win ptr, AL = 0 clear / non-zero
@@ -248,6 +285,24 @@ SND_ST_STALE     equ 0FFFFh      ; the handle's stream is gone
                                                 ; as above
 %define OSAPI_FILE_DFREE    KERNEL_SEG:0x0140   ; out CF=0, DX:AX = free bytes, BX =
                                                 ; SECTORS per cluster; no disk I/O
+%define OSAPI_FILE_READBIG  KERNEL_SEG:0x01E8   ; the >= 64KB read (SPEC.md 18.4):
+                                                ; SI = NUL 8.3 name (yours - staged,
+                                                ; same refusal rule), ES =
+                                                ; destination BASE segment - the
+                                                ; buffer starts at ES:0000, so pass
+                                                ; an OSAPI_MEM_ALLOC grant's segment
+                                                ; straight in - DX:CX = capacity in
+                                                ; bytes (32-bit, DX high). out CF=0,
+                                                ; DX:AX = bytes read (the file's
+                                                ; 32-bit size); CF=1, AX = FERR_*
+                                                ; (FERR_BIG when the file exceeds
+                                                ; DX:CX - decided from the directory
+                                                ; entry before any I/O, buffer
+                                                ; untouched). The kernel advances
+                                                ; through your buffer BY SEGMENT, so
+                                                ; there is no 64KB ceiling; same
+                                                ; UI-task-only rule as every file
+                                                ; slot - NEVER from your worker.
 
 ; --- menus (SPEC.md 12.2) ------------------------------------------------------
 ; Every application owns the menu bar while its window is frontmost: the
@@ -447,25 +502,35 @@ VID_CGA    equ 2
 ;     OSAPI_WM_CONTENT, OSAPI_WM_GEOM, OSAPI_WM_OBSCURED,
 ;     OSAPI_WM_CLIP_SET, OSAPI_WM_CLIP_CLEAR, OSAPI_WM_CLIP_TEST,
 ;     OSAPI_VIDEO, OSAPI_GET_TICKS, OSAPI_MOUSE, OSAPI_SRAND/RAND,
-;     OSAPI_SND_CAPS, OSAPI_SND_TONE, OSAPI_TASK_SLEEP, OSAPI_TASK_YIELD
-;     and OSAPI_TASK_ALIVE.
+;     OSAPI_SND_CAPS, OSAPI_SND_TONE, OSAPI_SND_FM, OSAPI_SND_STREAM
+;     verbs 1/3/5/6/7 ONLY (feed, status, read, stage, grant),
+;     OSAPI_TASK_SLEEP, OSAPI_TASK_YIELD and OSAPI_TASK_ALIVE.
 ;     OSAPI_SET_COLOR writes ONE global pen shared by the whole machine,
 ;     so set it only inside the same lock hold as the drawing it colours -
 ;     lock-free, it repaints someone else's window in your colour.
-;     OSAPI_SND_TONE is worker-safe by construction, not by luck: the
-;     grant is stamped with the instance `snd_req_inst` resolves, and
-;     outside a dispatched callback that is the RUNNING TASK's own
-;     instance (SPEC.md 34.3) - which is yours - so the tone is
-;     attributed to you and released by `snd_release_inst` when you are
-;     torn down. Ask for a DURATION and it self-expires through
+;     OSAPI_SND_TONE and OSAPI_SND_FM are worker-safe by construction,
+;     not by luck: the grant/channel is stamped with the instance
+;     `snd_req_inst` resolves, and outside YOUR OWN dispatched callback
+;     that is the RUNNING TASK's own instance (SPEC.md 34.3, the
+;     task-qualified stamp) - which is yours - so it is attributed to you
+;     and released by `snd_release_inst` when you are torn down. Ask
+;     OSAPI_SND_TONE for a DURATION and it self-expires through
 ;     `snd_tick`, so a worker need never come back to silence it
 ;     (apps/arkanoid drives the whole game's sound this way, SPEC.md
-;     44.5). You may NOT call the file slots, OSAPI_FILE_DLG,
-;     OSAPI_SND_STREAM or OSAPI_SND_PLAY from a worker - those are
-;     UI-task-only and the kernel cannot stop you, and the two sound
-;     ones are barred for a different reason than misattribution: they
-;     run with the scheduler locked, so a worker calling one freezes the
-;     desktop for the length of the clip.
+;     44.5). The five any-task STREAM verbs are safe for the same
+;     reasons plus two of their own (SPEC.md 20.3/34.3): their
+;     check-then-act runs under single cli windows, and the verb-5/6
+;     segment crosses in a register per call - which is what lets your
+;     worker pace a ring stream end to end (mix, stage, feed, poll).
+;     You may NOT call the file slots (OSAPI_FILE_READBIG included),
+;     OSAPI_FILE_DLG, OSAPI_SND_STREAM verbs 0/2/4 (open-out, close,
+;     open-in) or OSAPI_SND_PLAY from a worker - the kernel cannot stop
+;     you. The file slots share one sector buffer, the FAT snapshot and
+;     the scheduler lock with every other disk user; the stream OPEN
+;     verbs' busy-to-publish window is not fenced against a second
+;     opener (open and close from a callback - SPEC.md 20.3); and
+;     OSAPI_SND_PLAY really does run with the scheduler locked, so a
+;     worker calling it freezes the desktop for the length of the clip.
 ;
 ; The kernel's own app_bounce_task is the reference implementation of all
 ; of this.

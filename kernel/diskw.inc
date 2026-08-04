@@ -156,6 +156,43 @@ dskw_read:
     ret
 
 ; -----------------------------------------------------------------------------
+; dskw_readbig - read a whole file into a segment run (SPEC.md 18.4,
+;                slot 0x01E8) - the one file op with no 64KB ceiling
+; in:  SI -> NUL 8.3 name, ES = destination BASE segment (the buffer starts
+;      at ES:0000), DX:CX = capacity in bytes (32-bit, DX high)
+; out: CF=0, DX:AX = bytes read (the file's 32-bit size); CF=1, AX =
+;      FERR_* - FERR_BIG when the file exceeds DX:CX, decided from the
+;      directory entry's 32-bit size BEFORE any data I/O, destination
+;      untouched
+; clobbers: AX/DX (the outputs), CF; ES restored per SPEC.md 1
+;
+; dskw_read's sibling: same gate, same current-directory name resolution,
+; same chain walk - but the destination advances BY SEGMENT (ES += 32 per
+; 512-byte sector, BX held at 0), so the 16-bit offset limit never binds
+; and dsk_xfer's 8237 page-straddle staging (SPEC.md 18.1) keeps working
+; per sector unchanged. UI-task/window-callback context only, like every
+; file op (SPEC.md 20.3).
+; -----------------------------------------------------------------------------
+dskw_readbig:
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    push es
+    mov [dskw_seg], es          ; the destination base segment
+    mov [dskw_bcap_lo], cx      ; the 32-bit capacity
+    mov [dskw_bcap_hi], dx
+    call dskw_rbbody            ; out: CF + DX:AX (pops touch neither)
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; dskw_delete - delete a file by name (SPEC.md 18.4, slot 0x0130)
 ; in:  SI -> name
 ; out: CF=0, AX = 0; CF=1, AX = FERR_*
@@ -1031,6 +1068,189 @@ dskw_rdata:
     jc .ioerr
     mov es, [dskw_seg]
     mov di, [dskw_bx]
+    mov cx, [dskw_tail]
+    call dskw_fetch             ; ...and only its live bytes to the caller
+.advance:
+    mov ax, [dskw_take]
+    sub [dskw_rem], ax
+    jz .done
+    mov ax, [dskw_cur]          ; follow the chain
+    call dsk_next_clus
+    jc .corrupt
+    mov [dskw_cur], ax
+    jmp .clus                   ; (near: the loop body outruns a short jump)
+.done:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_rbbody - the big-read pipeline (module-internal; dskw_readbig saves
+;               the registers)
+; in:  SI -> name; [dskw_seg] = destination base segment,
+;      [dskw_bcap_hi]:[dskw_bcap_lo] = 32-bit capacity
+; out: CF=0 with DX:AX = bytes read, or CF=1 with AX = FERR_*
+;
+; dskw_rbody with the 16-bit ceilings removed: the size compare is 32-bit
+; against the caller's capacity (FERR_BIG before any data I/O, per the
+; dskw_read precedent), and the sector count is derived from the full
+; 32-bit size. A size field whose sector count would not fit 16 bits
+; (>= 32MB) cannot be a real chain on any volume this kernel mounts
+; (TotSec16 <= 65,535) - it is refused as FERR_IO up front, because a
+; wrapped 16-bit count could otherwise make the chain walk STOP EARLY and
+; report success over a hostile entry (SPEC.md 18: every byte off the
+; disk is hostile input).
+; -----------------------------------------------------------------------------
+dskw_rbbody:
+    cmp byte [dsk_mntok], 1
+    je .gated
+    mov ax, FERR_NODISK
+    stc
+    ret
+.gated:
+    mov di, dskw_n83
+    call dskw_name83
+    jnc .named
+    mov ax, FERR_NAME
+    stc
+    ret
+.named:
+    call dskw_find
+    jc .out                     ; AX = FERR_NOENT / FERR_IO already
+    call dskw_ent_load
+    jc .out
+    test byte [dskw_raw+DSK_R_ATTR], 0x18
+    jz .isfile
+    mov ax, FERR_PROT           ; a volume label or a subdirectory
+    stc
+.out:
+    ret
+.isfile:
+    mov ax, [dskw_raw+DSK_R_SIZE]       ; the 32-bit size...
+    mov dx, [dskw_raw+DSK_R_SIZE+2]
+    cmp dx, [dskw_bcap_hi]              ; ...against the 32-bit capacity,
+    jb .fits                            ; BEFORE any data I/O
+    ja .toobig
+    cmp ax, [dskw_bcap_lo]
+    jbe .fits
+.toobig:
+    mov ax, FERR_BIG            ; nothing was written
+    stc
+    ret
+.fits:
+    mov [dskw_blen_lo], ax
+    mov [dskw_blen_hi], dx
+    mov cx, ax
+    or cx, dx
+    jnz .sized
+    xor ax, ax                  ; a 0-byte file: no chain, DX:AX = 0
+    xor dx, dx
+    clc
+    ret
+.sized:
+    mov cx, ax                  ; bytes in a partial final sector
+    and cx, 511
+    mov [dskw_tail], cx
+    mov cx, 9                   ; sectors = size >> 9 (32-bit shift)...
+.shr:
+    shr dx, 1
+    rcr ax, 1
+    loop .shr
+    cmp word [dskw_tail], 0
+    je .whole
+    add ax, 1                   ; ...+ 1 for the partial sector
+    adc dx, 0
+.whole:
+    or dx, dx                   ; > 65,535 sectors: impossible on this
+    jz .secok                   ; media - hostile size field
+    mov ax, FERR_IO
+    stc
+    ret
+.secok:
+    mov [dskw_rem], ax
+    mov ax, [dskw_raw+DSK_R_CLUS]
+    mov [dskw_cur], ax
+    mov ax, [dskw_seg]
+    mov [dskw_bseg], ax         ; the ADVANCING destination segment
+    call dskw_rbdata            ; walk the chain, segment-stepped
+    jc .rerr
+    mov ax, [dskw_blen_lo]      ; bytes read = the file's size, 32-bit
+    mov dx, [dskw_blen_hi]
+    clc
+.rerr:
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_rbdata - read [dskw_rem] sectors along the chain at [dskw_cur],
+;               destination advancing by segment (module-internal)
+; in:  [dskw_cur] = first cluster, [dskw_rem]/[dskw_tail] sized by the
+;      caller, [dskw_bseg] = the destination segment (buffer at bseg:0000)
+; out: CF=0, or CF=1 with AX = FERR_*
+; clobbers: AX (the output), BX, CX, DI, ES, CF
+;
+; dskw_rdata's segment-stepped twin: one disk_read per sector at
+; [dskw_bseg]:0000, then bseg += 32 (512 bytes) - so no transfer ever
+; crosses the destination's 16-bit offset horizon, and dsk_xfer's own
+; one-sector int 13h granularity means nothing is lost to the split. The
+; partial final sector stages through dsk_secbuf exactly as dskw_rdata's
+; does, with only its live bytes copied out (no memory past EOF reaches
+; the caller - nothing here to zero, the buffer is the caller's).
+; -----------------------------------------------------------------------------
+dskw_rbdata:
+    jmp short .clus
+.corrupt:
+    mov ax, FERR_IO             ; any link outside [2, maxclus] while bytes
+    stc                         ; remain is corruption (SPEC.md 18)
+    ret
+.ioerr:
+    call dskw_ioerr
+    stc
+    ret
+.clus:
+    mov ax, [dskw_cur]
+    cmp ax, 2
+    jb .corrupt
+    cmp ax, [dsk_maxclus]
+    ja .corrupt
+    call dsk_clus2lba
+    jc .corrupt
+    mov [dskw_lba], ax
+    mov al, [dsk_spc]           ; take = min(spc, sectors remaining)
+    xor ah, ah
+    cmp ax, [dskw_rem]
+    jbe .take
+    mov ax, [dskw_rem]
+.take:
+    mov [dskw_take], ax
+    mov cx, ax
+    call dskw_last_p            ; ZF=1: this take ends in a partial sector
+    jnz .whole
+    dec cx                      ; whole sectors = take - 1 then
+.whole:
+    jcxz .tail
+.sect:                          ; whole sectors, one per read, ES stepping
+    mov ax, [dskw_lba]
+    mov es, [dskw_bseg]
+    xor bx, bx                  ; the buffer is always ES:0000
+    push cx
+    mov cx, 1
+    call disk_read
+    pop cx
+    jc .ioerr
+    inc word [dskw_lba]         ; next sector...
+    add word [dskw_bseg], 32    ; ...lands 512 bytes = 32 paragraphs on
+    loop .sect
+.tail:
+    call dskw_last_p
+    jnz .advance
+    mov ax, LOW_SEG             ; the file's last sector, whole, into the
+    mov es, ax                  ; scratch buffer...
+    mov bx, dsk_secbuf
+    mov cx, 1
+    mov ax, [dskw_lba]          ; (.sect already advanced dskw_lba to it)
+    call disk_read
+    jc .ioerr
+    mov es, [dskw_bseg]
+    xor di, di
     mov cx, [dskw_tail]
     call dskw_fetch             ; ...and only its live bytes to the caller
 .advance:
@@ -2066,6 +2286,12 @@ dskw_src:     resw 1            ; and its offset
 dskw_bx:      resw 1            ; the moving source/destination offset
 dskw_len:     resw 1            ; the file's byte count
 dskw_cap:     resw 1            ; dskw_read: the destination's capacity
+dskw_bseg:    resw 1            ; dskw_readbig: the advancing destination
+                                ; segment (+32 paragraphs per sector)
+dskw_bcap_lo: resw 1            ; dskw_readbig: 32-bit capacity, low...
+dskw_bcap_hi: resw 1            ; ...and high word
+dskw_blen_lo: resw 1            ; dskw_readbig: the file's 32-bit size,
+dskw_blen_hi: resw 1            ; low / high (the DX:AX answer)
 dskw_secs:    resw 1            ; sectors the file occupies
 dskw_rem:     resw 1            ; sectors still to move
 dskw_tail:    resw 1            ; bytes in the partial final sector (0 = none)

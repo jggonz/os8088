@@ -27,6 +27,11 @@ make xt-hercules # XT + real Hercules card, 256KB (vm/xt-hercules)
 make 286         # 86Box AT clone: 286 @ 12.5MHz, 1MB, VGA (vm/286)
 make 386sx       # 86Box Shuttle HOT-304: 386SX @ 16MHz, 2MB, VGA (vm/386sx)
 make 386         # 86Box Micronics: 386DX @ 25MHz, 2MB, VGA (vm/386dx)
+make xt-sound    # 640KB XT + Sound Blaster v2.0 (8-bit ISA, DSP 2.01 = oldest
+                 # auto-init part; vm/xt-sound). NOT the single-cycle DSP<2.00
+                 # gate — that wants sndcard = sb1.5, still owed as vm/xtsb
+make 286-sound   # the 286 + Sound Blaster 16 (vm/286-sound)
+make 386-sound   # the 386DX + Sound Blaster 16 (vm/386-sound)
 make clean
 ```
 

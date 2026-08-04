@@ -834,7 +834,10 @@ inst_wchk:
 ; region for the session. The identity the kernel already holds is the
 ; DISPATCH stamp: every sanctioned call site is a dispatched callback,
 ; and snd_disp_set stamped its instance index into [snd_inst] (SPEC.md
-; 34.3) - the record's index must match it, full stop.
+; 34.3) - the record's index must match its low byte AND its high byte
+; must name the running task (the stamp is task-qualified, the
+; snd_req_inst rule: a foreign callback preempted mid-flight on another
+; task leaves its stamp live, and a worker must not inherit it).
 ;
 ; NOT callable from the package entry proc: the loader publishes I_STATE=1
 ; and binds wm_owner only AFTER the entry returns (SPEC.md 21 step 9), so
@@ -870,9 +873,9 @@ inst_pkg_spawn:
     mov cl, 5                   ; lands in the worker's DX and its DL in
     shr dx, cl                  ; T_INST, so the Task Manager attributes the
                                 ; task to this instance (SPEC.md 8/28)
-    cmp dl, [snd_inst]          ; the fence's OTHER half (SPEC.md 20.6): the
-    jne .fail                   ; record found must BE the instance whose
-                                ; callback is running. Every sanctioned call
+    mov cx, [snd_inst]          ; the fence's OTHER half (SPEC.md 20.6): the
+    cmp dl, cl                  ; record found must BE the instance whose
+    jne .fail                   ; callback is running. Every sanctioned call
                                 ; site is a dispatched callback, and the
                                 ; dispatch stamped its instance index into
                                 ; [snd_inst] (SPEC.md 34.3) - without this,
@@ -883,6 +886,15 @@ inst_pkg_spawn:
                                 ; putting a foreign task in its segment and
                                 ; its record on the die-flag close path
                                 ; nobody will ever complete
+    cmp ch, [sch_cur]           ; ...and the stamp is TASK-QUALIFIED (the
+    jne .fail                   ; snd_req_inst rule, SPEC.md 34.3): its high
+                                ; byte must name the RUNNING task, or a
+                                ; worker preempting a foreign callback
+                                ; mid-flight on another task would inherit
+                                ; that callback's identity and attach its
+                                ; task to the foreign record - both
+                                ; instances then sit on the wrong teardown
+                                ; path
     mov cx, [di+I_SPTR]         ; the worker's DS/ES/CS = the instance's own
                                 ; segment (SPEC.md 8/20.6): the frame can
                                 ; only iret into THIS record's region

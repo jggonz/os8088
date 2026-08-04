@@ -797,15 +797,21 @@ snd_release_rec:
 ; snd_disp_set - stamp the instance a window callback is dispatched for
 ;
 ; in:  DI = instance record ptr, or 0 = none (kernel)
-; out: nothing; [snd_inst] = the instance slot (0xFF for none)
+; out: nothing; [snd_inst] low byte = the instance slot (0xFF for none),
+;      HIGH byte = [sch_cur], the task the dispatch runs on (SPEC.md 34.3,
+;      the task-qualified stamp)
 ; clobbers: nothing (flags)
 ;
 ; Called at the same dispatch sites that bill I_CYC (SPEC.md 34.3): the site
 ; brackets the callback with `push word [snd_inst]` / call snd_disp_set /
 ; callback / `pop word [snd_inst]`, so nested dispatches (a click handler
-; that triggers repaints) restore the outer stamp correctly. Sound grants
-; made inside the callback are stamped with this slot, which is what lets
-; snd_release_inst find them at teardown.
+; that triggers repaints) restore the outer stamp correctly - stamp and
+; task qualifier travel together, one word. Sound grants made inside the
+; callback are stamped with this slot, which is what lets snd_release_inst
+; find them at teardown. The qualifier is what keeps a WORKER's grant off a
+; foreign stamp: snd_req_inst honors the low byte only when the high byte
+; names the running task, so a worker calling while another task is
+; mid-callback resolves to its own T_INST, never the callback's instance.
 ; -----------------------------------------------------------------------------
 snd_disp_set:
     push ax
@@ -820,7 +826,9 @@ snd_disp_set:
 .none:
     mov al, 0xFF
 .store:
-    mov [snd_inst], al
+    mov ah, [sch_cur]           ; the task-qualifier (SPEC.md 34.3): AH was
+    mov [snd_inst], ax          ; 0 from the shift on both paths, so the
+                                ; whole word is one store
     pop cx
     pop ax
     ret
@@ -994,16 +1002,30 @@ osapi_snd_tone:
 ; snd_req_inst - who is asking? (SPEC.md 34.3, the grant-stamping rule)
 ;
 ; out:      DH = requesting instance slot: the dispatched callback's stamp
-;           ([snd_inst], set at the I_CYC billing sites), else the running
+;           ([snd_inst] low byte, set at the I_CYC billing sites) - honored
+;           ONLY when the stamp's high byte names the RUNNING task
+;           (SPEC.md 34.3, the task-qualified stamp) - else the running
 ;           task's T_INST. 0xFF = kernel.
 ; clobbers: nothing else (flags)
+;
+; The qualifier is binding, not defensive: callbacks are preemptible, so a
+; worker of package B calling any grant-stamping verb while a W_PAINT of
+; package A is in flight on ANOTHER task used to read A's stamp - and A's
+; teardown then force-freed B's live grant. [sch_cur] is stable for the
+; whole of this routine (it names the running task, and only a switch away
+; and back can pass through here); the word read of [snd_inst] is one
+; instruction, so a stale foreign stamp can only ever FAIL the compare.
 ; -----------------------------------------------------------------------------
 snd_req_inst:
     push bx
-    mov dh, [snd_inst]
+    mov bx, [snd_inst]          ; BL = stamped slot, BH = stamping task
+    mov dh, bl
     cmp dh, 0xFF
-    jne .out
-    mov bl, [sch_cur]           ; not in a callback: the running task's
+    je .task                    ; no dispatch stamped at all
+    cmp bh, [sch_cur]           ; stamped by the running task?
+    je .out
+.task:
+    mov bl, [sch_cur]           ; not OUR callback: the running task's
     xor bh, bh                  ; instance (0xFF for the UI task)
     shl bx, 1                   ; T_SIZE = 8
     shl bx, 1
@@ -1075,9 +1097,13 @@ osapi_snd_play:
     pop dx
     pop cx
 
-    mov bh, [snd_inst]          ; requesting instance: the dispatched
-    cmp bh, 0xFF                ; callback's stamp, else the running
-    jne .grant                  ; task's T_INST (SPEC.md 34.3)
+    mov ax, [snd_inst]          ; requesting instance: the dispatched
+    mov bh, al                  ; callback's stamp - honored only when its
+    cmp bh, 0xFF                ; high-byte qualifier names the RUNNING
+    je .fromtask                ; task (SPEC.md 34.3, the task-qualified
+    cmp ah, [sch_cur]           ; stamp; one word read, so stamp and
+    je .grant                   ; qualifier can never tear apart) - else
+.fromtask:                      ; the running task's T_INST
     push bx
     mov bl, [sch_cur]
     xor bh, bh
@@ -1287,8 +1313,12 @@ snd_texp_gen:  resb 1           ;   generation the pending expiry belongs to
 snd_town_drv:  resb 1           ;   driver row the tone is sounding on
 snd_town_exp:  resw 1           ;   remaining ticks, 0 = no self-expiry
 snd_inst:      resw 1           ; low byte: instance slot being dispatched
-                                ; (0xFF = none); a word so the dispatch
-                                ; sites can push/pop it around callbacks
+                                ; (0xFF = none); HIGH byte: [sch_cur] at
+                                ; the stamp - the task qualifier
+                                ; snd_req_inst honors (SPEC.md 34.3). A
+                                ; word so the dispatch sites push/pop it
+                                ; around callbacks, stamp and qualifier
+                                ; together
 
 snd_xlat:      resb 256         ; per-clip PWM rescale table (34.4), built
                                 ; by snd_xlat_build before every clip -

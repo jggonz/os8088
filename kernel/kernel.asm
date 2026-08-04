@@ -266,9 +266,11 @@ osapi_table:
     OSAPI_SLOT osapi_snd_tone     ; 0x00E8   five slots ship in Phase 1;
     OSAPI_SLOT osapi_snd_play     ; 0x00F0   PLAY takes ES:SI (unchanged);
     OSAPI_SLOT osapi_w_snd_fm     ; 0x00F8   FM verb 2's patch is staged;
-    OSAPI_SLOT osapi_w_snd_stream ; 0x0100   STREAM records the caller's
-                                  ;          segment for verbs 5/6, whose
-                                  ;          staging copy IS the boundary
+    OSAPI_SLOT osapi_w_snd_stream ; 0x0100   STREAM threads the caller's
+                                  ;          segment to verbs 5/6 in BX -
+                                  ;          per call, a register, because
+                                  ;          the verbs are any-task
+                                  ;          (SPEC.md 20.3)
     OSAPI_SLOT wm_sizable         ; 0x0108 - window features (SPEC.md 11.1)
     OSAPI_SLOT wm_fullscreen      ; 0x0110 - fullscreen (SPEC.md 11.2)
     OSAPI_SLOT wm_grow_paint      ; 0x0118 - grow-box restore after a
@@ -351,7 +353,14 @@ osapi_table:
                                   ;          opt-in that turns the app-name
                                   ;          label into a real bar menu
                                   ;          (SPEC.md 12.2)
-osapi_table_end:                 ; 0x01E8
+    OSAPI_SLOT osapi_w_dskw_readbig ; 0x01E8 - the >= 64KB file read
+                                  ;          (SPEC.md 18.4/20.3): SI = name,
+                                  ;          staged like dskw_read's; ES =
+                                  ;          destination BASE segment
+                                  ;          (buffer at ES:0000), DX:CX =
+                                  ;          capacity; out CF=0 DX:AX =
+                                  ;          bytes read, CF=1 AX = FERR_*
+osapi_table_end:                 ; 0x01F0
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -359,8 +368,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 59 * 8
-%error "os8088 API jump table must be exactly 59 8-byte far slots"
+%if OSAPI_TABLE_LEN != 60 * 8
+%error "os8088 API jump table must be exactly 60 8-byte far slots"
 %endif
 
 ; =============================================================================
@@ -783,6 +792,33 @@ osapi_w_dskw_read:
     pop bp
     ret
 
+; ---- dskw_readbig (slot 0x01E8): SI name staged; ES/DX:CX untouched ----------
+; dskw_read's clone (SPEC.md 18.4/20.3): ES is the caller's DS for the name
+; stage, then the caller's own ES - the destination BASE segment - restored
+; from SS:[bp-2] before the body runs. DX:CX (the 32-bit capacity) is never
+; touched here; the body answers DX:AX = bytes read, so DX is an output and
+; is not saved/restored.
+osapi_w_dskw_readbig:
+    push bp
+    mov bp, sp
+    push es
+    push si
+    push di
+    push cx
+    mov es, [bp+4]
+    mov di, osapi_nbuf
+    mov cx, OSAPI_NAME_MAX
+    call osapi_copy_str
+    pop cx
+    pop di
+    mov es, [bp-2]              ; ES = the caller's destination base segment
+    mov si, osapi_nbuf
+    call dskw_readbig           ; out: CF + DX:AX
+    pop si
+    pop es
+    pop bp
+    ret
+
 ; ---- dskw_delete (slot 0x0130): SI name staged -------------------------------
 osapi_w_dskw_delete:
     push bp
@@ -884,29 +920,35 @@ osapi_w_snd_fm:
     pop bp
     ret
 
-; ---- osapi_snd_stream (slot 0x0100): record the caller's segment -------------
+; ---- osapi_snd_stream (slot 0x0100): thread the caller's segment in BX -------
 ; Verbs 5/6's staging copy IS the boundary (SPEC.md 20.3/34.6): sbl_v_read
 ; writes the caller's DI destination and sbl_v_stage reads the caller's SI
-; source THROUGH [osapi_dseg] instead of DS. This store is the only writer,
-; and those two verb bodies are the only readers - reachable exclusively
-; through this wrapper, which is what stands in for a .bss hand-init
-; (kernel-internal stream use is verbs 0-4/7, which carry no pointer;
-; kernel code that ever needed 5/6 would set [osapi_dseg] itself first).
+; source through the segment this wrapper passes IN BX - a register, per
+; call, because the verbs are any-task since SPEC.md 20.3's per-verb
+; context rule: the retired [osapi_dseg] .bss word could be overwritten by
+; the next caller's wrapper while the first sat preempted between store
+; and copy, and verb 5 would then rep movsb into the wrong package's
+; segment. BX is free in every verb's register contract and no verb
+; outputs it; `pop bx` restores the caller's and touches no flags, so
+; every CF/AX/DX/SI output passes through. (Kernel-internal stream use is
+; verbs 0-4/7, which carry no pointer; kernel code that ever needed 5/6
+; would load BX = its own segment first.)
 osapi_w_snd_stream:
     push bp
     mov bp, sp
-    push ax
-    mov ax, [bp+4]
-    mov [osapi_dseg], ax        ; the caller's segment, for the verb bodies
-    pop ax
-    call osapi_snd_stream       ; out: CF + AX (pop bp touches neither)
+    push bx
+    mov bx, [bp+4]              ; the caller's segment, for the verb bodies
+    call osapi_snd_stream       ; out: CF + AX (the pops touch neither)
+    pop bx
     pop bp
     ret
 
 section .bss
 ; the marshalling stages (SPEC.md 20.3/20.4) - written by the wrappers
-; above (and osapi_dseg read by sndsb.inc's verb-5/6 bodies); every buffer
-; is written before it is read on every path, so none needs a boot init
+; above; every buffer is written before it is read on every path, so none
+; needs a boot init. (osapi_dseg is GONE: snd_stream's verb-5/6 caller
+; segment travels in BX per call - a parked .bss word was a cross-package
+; clobber once the verbs went any-task, SPEC.md 20.3.)
 osapi_sbuf:  resb 64            ; OSAPI_STR_MAX chars + the forced NUL
 osapi_wbuf:  resb 64            ; font_width's OWN stage (SPEC.md 20.3):
                                 ; WIDTH is legal without the gfx lock, so
@@ -916,8 +958,6 @@ osapi_nbuf:  resb 14            ; OSAPI_NAME_MAX chars + NUL (8.3 names)
 osapi_nbuf2: resb 14            ; dskw_rename's second name
 osapi_tbuf:  resb 16            ; wm_create's staged template
 osapi_fmbuf: resb 11            ; snd_fm verb 2's staged patch
-osapi_dseg:  resw 1             ; the segment snd_stream's caller passed its
-                                ; verb-5/6 pointers in (see the wrapper)
 
 section .text
 
