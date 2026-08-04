@@ -57,6 +57,8 @@ TM_HDR_Y    equ 87              ; process-list header line
 TM_ROW_Y    equ 97              ; first process row
 TM_ROW_H    equ 11              ; row pitch, px
 TM_ROWS     equ INST_MAX + 1    ; "System" plus one row per instance slot
+TM_W        equ 232             ; the window's own width - the template's, and
+                                ; one column's. Two columns add TM_COLW.
 TM_RW       equ 223             ; the rows' right edge, content-relative. It
                                 ; is the memory view's TOP LINE that sizes the
                                 ; window: 'RAM nnn/nnnK', the claim swatch and
@@ -87,20 +89,27 @@ TMM_XMS_Y   equ 62              ; 'XMS nnn/nnnK' - memory above 1MB
                                 ; conventional address to draw at. So it gets
                                 ; a figure line and no map, under the ones
                                 ; that do. On tier 0 it reads 'XMS 0/0K'
-TMM_HDR_Y   equ 74              ; "NAME    ADDR SIZE   HEAP" header line
+TMM_XB_Y1   equ 71              ; the XMS bar's frame, directly under its
+TMM_XB_Y2   equ 80              ; figures - same shape as the RAM bar in the
+                                ; performance view, because it answers the
+                                ; same question about a different pool
+TMM_HDR_Y   equ 84              ; "NAME    ADDR SIZE   HEAP" header line
 
 ; --- what the periodic refresh checks before it draws (SPEC.md 28) -----------
-; The rows have tm_rowck; these are the five things AROUND them that cost
+; The rows have tm_rowck; these are the seven things AROUND them that cost
 ; real pixels and mostly do not move. A map interior is ~3,000 pixels of
 ; pattern fill; the figures above it change when a claim is made or a package
-; loads, which on a desktop that is just sitting there is never.
+; loads, which on a desktop that is just sitting there is never. Every one of
+; them goes through tm_elchk, rows included, so the never-zero rule there
+; covers the lot.
 TMC_LINE    equ 0               ; the RAM (+ HEAP) readout line
 TMC_PKG     equ 1               ; the PACKAGES readout line
 TMC_MRAM    equ 2               ; the conventional-memory map interior
 TMC_MPOOL   equ 3               ; the package-pool map interior
 TMC_BAR     equ 4               ; the performance view's RAM bar
 TMC_XMS     equ 5               ; the XMS readout line (SPEC.md 41)
-TMC_N       equ 6
+TMC_XBAR    equ 6               ; ...and its bar
+TMC_N       equ 7
 
 ; Every line in this window is composed into tm_str before any of it is
 ; drawn - that is what lets one hash decide whether to draw it at all - so
@@ -136,7 +145,24 @@ TM_KBUF_KB  equ KBUF_KB         ; the four buffers alone - what the RAM bar
                                 ; draws in its own shade
 TM_POOL_KB0 equ PKG_SEG / 64    ; where the package pool starts, in KB
 TM_POOL_KB  equ PKG_PARA / 64   ; ...and how big it is
-TMM_ROW_Y   equ 86              ; first process row (same TM_ROW_H pitch)
+TMM_ROW_Y   equ 96              ; first process row (same TM_ROW_H pitch)
+TM_COLW     equ TM_RW + 9       ; column pitch when the list runs in two of
+                                ; them: a row's own width plus the margin the
+                                ; next one starts at
+TM_COL2_MIN equ 12              ; ...and the threshold. A screen that fits at
+                                ; least this many rows in ONE column keeps
+                                ; one - VGA (19) and Hercules (17) do. CGA's
+                                ; 200 rows fit three, so it gets the second
+                                ; column and a window twice as wide, which
+                                ; 640 px across has room for
+TM_C2_HDR_Y equ 4               ; A later column's header, at the very top of
+TM_C2_ROW_Y equ 16              ; the content, and its first row under it.
+                                ; Column 0 starts below the maps because the
+                                ; maps are there; nothing is above column 1, so
+                                ; anchoring it at TMM_ROW_Y too would waste the
+                                ; taller two thirds of it. On CGA that is the
+                                ; difference between 3 rows beside 3 and 3
+                                ; beside 10
 TMM_ROWS    equ INST_MAX + 7    ; System, its four buffer rows, the two
                                 ; headings, every instance - 19 x TM_ROW_H
                                 ; from TMM_ROW_Y is 279 of the 281-pixel
@@ -175,27 +201,87 @@ tm_init:
     ; So the height is derived, once, at boot: as many process rows as the
     ; space between MBAR_H and [vid_dock_y0] will take, and never more than
     ; the table has records for.
+    ;
+    ; One px of that space is spent before the frame gets any of it, because
+    ; wm_dock_clear tests y+h against [vid_dock_y0] with `jae`: the drop
+    ; shadow lives on row y+h, so a frame that merely REACHES the dock is
+    ; already covering its first row. wm_fit will happily hand out exactly
+    ; that (it clamps y to dock_y0 - h), and the whole point of this is that
+    ; it must not.
     mov ax, [vid_dock_y0]
-    sub ax, MBAR_H              ; AX = px available to the whole frame
+    sub ax, MBAR_H + 1          ; AX = px available to the whole frame
     sub ax, TITLE_H + 1 + TMM_ROW_Y     ; ...less the chrome and the maps
     jbe .norows
     mov bl, TM_ROW_H
-    div bl                      ; AL = rows that fit (AH = remainder)
+    div bl                      ; AL = rows that fit in ONE column
     xor ah, ah
-    cmp ax, TMM_ROWS
-    jbe .rows
-    mov ax, TMM_ROWS            ; never more than there is data for
-.rows:
-    or ax, ax
-    jnz .haverows
+    jmp short .haverows
 .norows:
     mov ax, 1                   ; a screen this short still gets one row
 .haverows:
-    mov [tm_maxrow], ax
+    mov [tm_colrows], ax        ; ...and that is the column's depth
+
+    ; --- one column, or two? -------------------------------------------------
+    mov word [tm_cols], 1
+    mov bx, TM_W
+    cmp ax, TM_COL2_MIN
+    jae .cols                   ; tall enough: one column shows a useful list
+    mov dx, [vid_w]             ; short: a second column IF the screen is wide
+    cmp dx, TM_W + TM_COLW      ; enough to carry it
+    jb .cols
+    mov word [tm_cols], 2
+    mov bx, TM_W + TM_COLW
+.cols:
+    mov [tm_tpl+4], bx          ; the frame width the layout needs
+
+    mov ax, [tm_colrows]        ; the height is COLUMN 0's worth: it is the
+    cmp ax, TMM_ROWS            ; column that starts lowest, so it is the one
+    jbe .hok                    ; the frame has to be tall enough for
+    mov ax, TMM_ROWS
+.hok:
     mov dx, TM_ROW_H
     mul dx
     add ax, TITLE_H + 1 + TMM_ROW_Y
     mov [tm_tpl+6], ax          ; the frame height the machine can take
+
+    ; --- how deep is a LATER column? -----------------------------------------
+    ; Not [tm_colrows]: a later column is top-anchored (TM_C2_ROW_Y), so it
+    ; holds every row the frame has height for, which on a short screen is
+    ; three times what column 0 gets.
+    sub ax, TITLE_H + 1 + TM_C2_ROW_Y
+    jbe .norow2
+    mov bl, TM_ROW_H
+    div bl                      ; AL = rows in one top-anchored column
+    xor ah, ah
+    jmp short .haverow2
+.norow2:
+    mov ax, 1
+.haverow2:
+    mov [tm_col2rows], ax
+
+    mov bx, [tm_cols]           ; the whole list's depth: column 0, plus every
+    dec bx                      ; later column's own
+    mul bx
+    add ax, [tm_colrows]
+    cmp ax, TMM_ROWS
+    jbe .rowcap
+    mov ax, TMM_ROWS            ; never more than there is data for
+.rowcap:
+    mov [tm_maxrow], ax
+
+    mov ax, [tm_tpl+6]          ; (the y clamp below wants the height back)
+
+    mov dx, [vid_dock_y0]       ; ...and a top that keeps y+h off the dock.
+    dec dx                      ; Deriving the height is not enough on its
+    sub dx, ax                  ; own: wm_fit clamps y to dock_y0 - h, which
+    cmp dx, 100                 ; puts the shadow row back on the strip for
+    jge .ykeep                  ; any frame tall enough to be clamped at all
+    cmp dx, MBAR_H              ; (signed - a tiny screen can drive this below
+    jge .yset                   ; the menu bar, and there it simply cannot win)
+    mov dx, MBAR_H
+.yset:
+    mov [tm_tpl+2], dx
+.ykeep:
 
     pop dx
     pop bx
@@ -834,25 +920,40 @@ tm_paint:
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
 ; -----------------------------------------------------------------------------
-; tm_ylim_set - cache the lowest row top this window can still hold
+; tm_view_begin - the setup every paint and every update does first
 ;
-; The row lists are fixed-pitch and TM_ROWS long, and nothing in the kernel
-; clips a draw to a WINDOW - vga_rect_setup clips to the SCREEN. That was
-; harmless while every template fitted, but since SPEC.md 39.7 wm_create
-; clamps a frame onto the live screen, and on a 200-row CGA this window's
-; 264px template becomes 156px: unbounded, the last rows would be white-filled
-; and lettered over the dock strip, once a second.
+; Both views open by asking the window where its content is and how far down it
+; may draw, and both did it inline until the second one of those answers grew a
+; second consumer. [tm_rowx] is why it is one routine now: it is the left edge
+; of the row being drawn, it equals [tm_cx] everywhere except inside the memory
+; view's second column, and a view that forgot to seed it drew its rows at x=0 -
+; white bands across the desktop, well outside the window, which is exactly what
+; the process list did the first time the columns landed.
+;
+; [tm_ylim] is the row clamp. The row lists are fixed-pitch and TM_ROWS long,
+; and nothing in the kernel clips a draw to a WINDOW - vga_rect_setup clips to
+; the SCREEN. That was harmless while every template fitted, but since SPEC.md
+; 39.7 wm_create clamps a frame onto the live screen, and on a 200-row CGA this
+; window's 264px template becomes 156px: unbounded, the last rows would be
+; white-filled and lettered over the dock strip, once a second.
 ; in:       BX = window ptr
-; out:      [tm_ylim] = the largest row top whose 8px band stays inside the
+; out:      [tm_cx]/[tm_cy] = content origin, [tm_rowx] = [tm_cx],
+;           [tm_ylim] = the largest row top whose 8px band stays inside the
 ;           frame's bottom border
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
-tm_ylim_set:
+tm_view_begin:
     push ax
+    push dx
+    call wm_content             ; AX = content left, DX = content top
+    mov [tm_cx], ax
+    mov [tm_cy], dx
+    mov [tm_rowx], ax           ; column 0 until tm_mrow_open says otherwise
     mov ax, [bx+W_Y]
     add ax, [bx+W_H]
     sub ax, 9                   ; 1px bottom border + the row's 8px band
     mov [tm_ylim], ax
+    pop dx
     pop ax
     ret
 
@@ -899,10 +1000,7 @@ tm_draw_perf:
     push di
 
     mov bx, si
-    call wm_content             ; AX = content left, DX = content top
-    mov [tm_cx], ax
-    mov [tm_cy], dx
-    call tm_ylim_set
+    call tm_view_begin          ; [tm_cx]/[tm_cy]/[tm_rowx]/[tm_ylim]
 
     call tm_txt_cpu
 
@@ -945,12 +1043,23 @@ tm_draw_perf:
     call tm_bar
 
     mov byte [gfx_color], CBLACK
-    mov cx, [tm_cx]             ; task-list header
-    add cx, 6
+    mov cx, [tm_cx]             ; task-list header - once per COLUMN, because
+    mov bx, [tm_cols]           ; each carries its own list
     mov dx, [tm_cy]
-    add dx, TM_HDR_Y
+    add dx, TM_HDR_Y            ; column 0's sits under the graph and bar...
+.hdr:
+    push cx
+    push dx
+    add cx, 6
     mov si, tm_s_hdr
     call font_str
+    pop dx
+    pop cx
+    add cx, TM_COLW
+    mov dx, [tm_cy]             ; ...every later one at the top, with its
+    add dx, TM_C2_HDR_Y         ; column
+    dec bx
+    jnz .hdr
     call tm_rows
 
     pop di
@@ -982,10 +1091,7 @@ tm_update:
     push dx
 
     mov bx, [tm_win]
-    call wm_content
-    mov [tm_cx], ax
-    mov [tm_cy], dx
-    call tm_ylim_set
+    call tm_view_begin          ; [tm_cx]/[tm_cy]/[tm_rowx]/[tm_ylim]
 
     call tm_txt_cpu
     mov bx, [tm_lastcol]
@@ -1023,10 +1129,13 @@ tm_click:
     push ax                     ; ...and the far corner off the record, not
     mov ax, [bx+W_Y]            ; a pair of constants: this fill is the ONLY
     add ax, [bx+W_H]            ; thing that erases the outgoing view, and a
-    dec ax                      ; short one leaves its tail rows lettered
+    sub ax, 2                   ; short one leaves its tail rows lettered
     mov cx, [bx+W_X]            ; under the incoming one (they were 198x245
-    add cx, [bx+W_W]            ; against a content that had grown to 231x282)
-    dec cx
+    add cx, [bx+W_W]            ; against a content that had grown to 231x282).
+    sub cx, 2                   ; TWO, not one: y+h-1 and x+w-1 are the frame's
+                                ; own bottom and right BORDERS, and a fill that
+                                ; reached them left the window open-sided until
+                                ; something repainted the frame
     mov bx, dx
     mov dx, ax
     pop ax
@@ -1053,16 +1162,14 @@ tm_upd_mem:
     push dx
 
     mov bx, [tm_win]
-    call wm_content
-    mov [tm_cx], ax
-    mov [tm_cy], dx
-    call tm_ylim_set
+    call tm_view_begin          ; [tm_cx]/[tm_cy]/[tm_rowx]/[tm_ylim]
 
     mov ax, TMM_RAM_Y
     call tm_txt_ram_y
     call tm_map_ram
     call tm_cap_pool
     call tm_cap_xms
+    call tm_xbar
     call tm_map_pool
     call tm_rows_mem
 
@@ -1087,10 +1194,7 @@ tm_draw_mem:
     push di
 
     mov bx, si
-    call wm_content             ; AX = content left, DX = content top
-    mov [tm_cx], ax
-    mov [tm_cy], dx
-    call tm_ylim_set
+    call tm_view_begin          ; [tm_cx]/[tm_cy]/[tm_rowx]/[tm_ylim]
 
     mov ax, TMM_RAM_Y
     call tm_txt_ram_y
@@ -1116,16 +1220,38 @@ tm_draw_mem:
     add dx, TMM_M2_Y2
     call gfx_frame
 
-    mov cx, [tm_cx]             ; header, at the rows' text x
-    add cx, 16
+    mov ax, [tm_cx]             ; XMS bar frame (6,71)-(TM_RW,80) - here and
+    add ax, 6                   ; not in tm_xbar, which is element-checked and
+    mov bx, [tm_cy]             ; skips itself on an empty pool
+    add bx, TMM_XB_Y1
+    mov cx, [tm_cx]
+    add cx, TM_RW
     mov dx, [tm_cy]
-    add dx, TMM_HDR_Y
+    add dx, TMM_XB_Y2
+    call gfx_frame
+
+    mov cx, [tm_cx]             ; header, at the rows' text x - once per
+    mov bx, [tm_cols]           ; COLUMN, because each carries its own list
+    mov dx, [tm_cy]
+    add dx, TMM_HDR_Y           ; column 0's sits under the maps...
+.hdr:
+    push cx
+    push dx
+    add cx, 16
     mov si, tm_s_mhdr
     call font_str
+    pop dx
+    pop cx
+    add cx, TM_COLW
+    mov dx, [tm_cy]             ; ...every later one at the top, with its
+    add dx, TM_C2_HDR_Y         ; column
+    dec bx
+    jnz .hdr
 
     call tm_map_ram
     call tm_cap_pool
     call tm_cap_xms
+    call tm_xbar
     call tm_map_pool
     call tm_rows_mem
 
@@ -1170,6 +1296,25 @@ tm_cap_xms:
     sub bx, ax                  ; BX = KB in use: sized minus free
     mov ax, bx
     pop bx
+    push ax                     ; --- the bar's width, worked out HERE, while
+    push bx                     ; AX and BX still hold used and sized: the
+    or bx, bx                   ; formatting below leaves both equal to sized
+    jz .nobar
+    mov si, TM_GW
+    mul si                      ; DX:AX = used * TM_GW
+    div bx
+    cmp ax, TM_GW
+    jbe .barok
+    mov ax, TM_GW
+.barok:
+    mov [tm_xbarw], ax
+    jmp short .barset
+.nobar:
+    mov word [tm_xbarw], 0      ; no pool: an empty bar, not an absent one
+.barset:
+    pop bx
+    pop ax
+
     push ax
     push bx
     mov di, tm_str
@@ -1872,33 +2017,89 @@ tm_buf_row:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_mrow_open - start a memory-view row: compute y, white the band, DI =
-;                the text buffer
+; tm_row_place - where on screen does list row AX go?
+;
+; Both views' lists run down one column and, on a screen too short to show a
+; useful number of entries, wrap into a second one beside it (SPEC.md 28.1) -
+; so the index-to-pixel mapping is here rather than in each of them. The order
+; is COLUMN-MAJOR, which is what makes "this row has no place" monotone: once
+; one row is refused, so is every row after it, and a caller may stop.
+;
+; The columns are NOT the same depth. Column 0 begins under the maps, where
+; the caller's BX puts it; every later column begins at TM_C2_ROW_Y, the top
+; of the content, because nothing is drawn above it there.
+;
+; in:       AX = row index, BX = COLUMN 0's first-row content-relative y
+; out:      [tm_rowx]/[tm_rowy] = that row's top-left; CF=1 if the row has no
+;           place on this screen and must not be drawn
+; clobbers: flags
+; -----------------------------------------------------------------------------
+tm_row_place:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    push ax                     ; the index again, for the tm_maxrow test
+    mov cx, [tm_cx]
+    cmp ax, [tm_colrows]
+    jb .place                   ; inside column 0: BX and CX already stand
+
+    sub ax, [tm_colrows]        ; ...otherwise which LATER column, and how far
+    xor dx, dx                  ; down it
+    div word [tm_col2rows]
+    inc ax                      ; 0 was column 1
+    push dx                     ; DX is the row within the column and `mul`
+    mov bx, ax                  ; writes it - it does not survive this
+    mov ax, TM_COLW
+    mul bx
+    pop dx
+    add cx, ax
+    mov bx, TM_C2_ROW_Y         ; top-anchored, whatever column 0 does
+    mov ax, dx
+.place:
+    mov [tm_rowx], cx
+    mov cx, TM_ROW_H            ; y1 = cy + the column's first row
+    mul cx                      ;      + TM_ROW_H * row-within-column
+    add ax, bx
+    add ax, [tm_cy]
+    mov [tm_rowy], ax
+    pop cx                      ; CX = the row index
+
+    cmp ax, [tm_ylim]           ; does this row's 8px band still fall inside
+    ja .nofit                   ; the frame? Nothing in the kernel clips a
+    cmp cx, [tm_maxrow]         ; draw to a WINDOW (tm_view_begin), and a short
+    jae .nofit                  ; screen clamps this window hard - and a row
+    clc                         ; past the LAST column's depth has no place at
+    jmp short .out              ; all, in either direction. Unbounded, the tail
+.nofit:                         ; of the list would be lettered over the dock
+    stc                         ; strip once a second
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_mrow_open - start a memory-view row: compute x and y, DI = the text buffer
 ; in:  [tm_mrow]
-; out: DI = tm_str, [tm_rowy] set
+; out: DI = tm_str, [tm_rowx]/[tm_rowy]/[tm_mfit] set
 ; clobbers: nothing else (flags)
 ; -----------------------------------------------------------------------------
 tm_mrow_open:
     push ax
     push bx
-    push cx
-    push dx
-    mov ax, [tm_mrow]           ; y1 = cy + TMM_ROW_Y + 11*row
-    mov cx, TM_ROW_H
-    mul cx
-    add ax, TMM_ROW_Y
-    add ax, [tm_cy]
-    mov [tm_rowy], ax
+    mov ax, [tm_mrow]
+    mov bx, TMM_ROW_Y
+    call tm_row_place
+    mov byte [tm_mfit], 1
+    jnc .fits
+    mov byte [tm_mfit], 0
+.fits:
     mov word [tm_sqox], 6       ; the legend square's left edge, at the margin
                                 ; unless the row moves it (tm_buf_row)
     mov word [tm_sqp], 0        ; ...and no square unless the row asks for one
-    mov byte [tm_mfit], 1       ; does this row's 8px band still fall inside
-    cmp ax, [tm_ylim]           ; the frame? Nothing in the kernel clips a
-    jbe .fits                   ; draw to a WINDOW (tm_ylim_set), and on a
-    mov byte [tm_mfit], 0       ; 200-row CGA this window is clamped to 156px
-.fits:                          ; - unbounded, the tail of the list would be
-    pop dx                      ; lettered over the dock strip once a second
-    pop cx
     pop bx
     pop ax
     mov di, tm_str
@@ -1922,9 +2123,9 @@ tm_mrow_close:
     je .forget                  ; forget what used to be here so it comes
     mov byte [di], 0            ; back if the window ever grows
     call tm_rowsum              ; AX = this row's content, in one word
-    cmp ax, [tm_rowck+bx]
-    je .out                     ; byte for byte what is already on screen
-    mov [tm_rowck+bx], ax
+    add bx, tm_rowck            ; ...through tm_elchk, for the never-zero rule
+    call tm_elchk
+    jc .out                     ; byte for byte what is already on screen
 
     call tm_rowfill             ; only NOW is the band worth erasing
     mov si, [tm_sqp]            ; the legend square the row asked for, drawn
@@ -1933,7 +2134,7 @@ tm_mrow_close:
     call tm_sq_pat
 .text:
     mov byte [gfx_color], CBLACK
-    mov cx, [tm_cx]
+    mov cx, [tm_rowx]
     add cx, 16
     mov dx, [tm_rowy]
     mov si, tm_str
@@ -1952,15 +2153,22 @@ tm_mrow_close:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_rowfill - white the row band at [tm_rowy], full width
-; in:  [tm_cx], [tm_rowy]
+; tm_rowfill - white the row band at [tm_rowx],[tm_rowy], one column wide
+; in:  [tm_rowx], [tm_rowy]
 ; out: nothing (all registers preserved)
 ; Both views' row loops erase before they letter, and only once they know the
 ; row changed, so the rect lives in one place rather than in each of them.
 ; -----------------------------------------------------------------------------
 ; tm_lfill is the same band named by a CONTENT-RELATIVE y, which is how the
-; three caption lines above the list ask for it.
+; caption lines above the list ask for it. They are chrome and live in column 0
+; whatever the list is doing, so this says so rather than relying on being
+; called before the row loop has moved [tm_rowx] - every row draw sets it back
+; through tm_row_place, so putting it back here costs nothing.
 tm_lfill:
+    push ax
+    mov ax, [tm_cx]
+    mov [tm_rowx], ax
+    pop ax
     push ax
     add ax, [tm_cy]
     mov [tm_rowy], ax
@@ -1977,9 +2185,9 @@ tm_rowfill:
     mov bx, [tm_rowy]
     mov dx, bx
     add dx, 7
-    mov ax, [tm_cx]
+    mov ax, [tm_rowx]
     add ax, 6
-    mov cx, [tm_cx]
+    mov cx, [tm_rowx]
     add cx, TM_RW
     call gfx_fill
     pop dx
@@ -2060,14 +2268,19 @@ tm_sumb:
 ; out: CF = 1 unchanged (skip the draw), CF = 0 changed (and recorded)
 ; clobbers: nothing else
 ;
-; The rows have tm_rowck; this is the same idea for the five things around
-; them that are expensive and mostly still. tm_rowck_clear zeroes both.
+; Every checked draw in this window comes through here - the seven elements
+; in the TMC_* list and each row of both lists - and tm_rowck_clear zeroes the
+; lot. That single gate is where the never-zero rule below belongs.
 ; -----------------------------------------------------------------------------
 tm_elchk:
-    cmp ax, [bx]
-    je .same
-    mov [bx], ax
-    clc
+    or ax, ax                   ; 0 is what tm_rowck_clear writes, so no LIVE
+    jnz .cmp                    ; key may be 0 - an element whose state
+    inc ax                      ; legitimately hashes to zero would read as
+.cmp:                           ; "unchanged" on the very first paint and never
+    cmp ax, [bx]                ; be drawn at all. That is not hypothetical:
+    je .same                    ; mem_tab is all zeroes on a machine with no
+    mov [bx], ax                ; heap to claim from, so on 128KB the RAM map
+    clc                         ; hashed to 0 and stayed blank forever
     ret
 .same:
     stc
@@ -2101,7 +2314,7 @@ tm_kcol:
 ; -----------------------------------------------------------------------------
 ; tm_sq_frame - the 1px black frame of the current row's legend square,
 ;               (6,rowy)-(13,rowy+7)
-; in:  [tm_cx], [tm_rowy]
+; in:  [tm_rowx], [tm_rowy]
 ; out: nothing
 ; clobbers: flags ([gfx_color] left black)
 ; -----------------------------------------------------------------------------
@@ -2111,7 +2324,7 @@ tm_sq_frame:
     push cx
     push dx
     mov byte [gfx_color], CBLACK
-    mov ax, [tm_cx]
+    mov ax, [tm_rowx]
     add ax, [tm_sqox]
     mov bx, [tm_rowy]
     mov cx, ax
@@ -2127,7 +2340,7 @@ tm_sq_frame:
 
 ; -----------------------------------------------------------------------------
 ; tm_sq_pat - a legend square in the 8-byte texture at SI
-; in:  [tm_cx], [tm_rowy], [tm_sqox]; SI = an 8-byte pattern
+; in:  [tm_rowx], [tm_rowy], [tm_sqox]; SI = an 8-byte pattern
 ; out: nothing (all registers preserved)
 ;
 ; **The square keys the row to a band**, so there is exactly one texture per
@@ -2159,13 +2372,14 @@ tm_sq_pat:                      ; SI = the pattern: the kernel's span, a
 
 ; -----------------------------------------------------------------------------
 ; tm_sq_int - the legend square's interior rect, ready for a fill
-; in:  [tm_cx], [tm_rowy]
+; in:  [tm_rowx], [tm_rowy]
 ; out: AX = x1, BX = y1, CX = x2, DX = y2 = (7,rowy+1)-(12,rowy+6)
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 tm_sq_int:
-    mov ax, [tm_cx]
-    add ax, [tm_sqox]
+    mov ax, [tm_rowx]           ; the ROW's left edge, not the content's: in a
+    add ax, [tm_sqox]           ; second column those are 232px apart, and the
+                                ; frame (tm_sq_frame) already knows it
     inc ax
     mov bx, [tm_rowy]
     inc bx
@@ -2478,6 +2692,72 @@ tm_bar:
     ret
 
 ; -----------------------------------------------------------------------------
+; tm_xbar - the XMS bar interior: black for [tm_xbarw] px, white for the rest
+; in:  [tm_xbarw] = 0..TM_GW; redrawn only when it CHANGED (TMC_XBAR)
+; out: nothing
+; clobbers: nothing (flags only)
+;
+; tm_bar's twin, for the pool above 1MB (SPEC.md 41.6). Same element-check
+; discipline: the bar IS its width, so the same width means the same two
+; rectangles and the refresh draws nothing at all - which on a desktop that
+; is merely sitting there is every refresh, twice a second, forever.
+;
+; On tier 0 the width is 0 and the bar stands empty beside the 'XMS 0/ 0K'
+; figures. That is deliberate - an absent bar would read as a missing feature
+; rather than an empty pool - and it is the reason the FRAME is drawn by
+; tm_draw_mem and not here, exactly as the perf view draws the RAM bar's. A
+; zero width matches the cleared check word, so this body skips on the very
+; first paint, and a frame drawn inside the gate would never appear at all.
+; -----------------------------------------------------------------------------
+tm_xbar:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov ax, [tm_xbarw]
+    mov bx, tm_elck + 2*TMC_XBAR
+    call tm_elchk
+    jc .done
+
+    mov si, [tm_xbarw]
+    or si, si
+    jz .rest
+    mov byte [gfx_color], CBLACK
+    mov ax, [tm_cx]
+    add ax, 7
+    mov bx, [tm_cy]
+    add bx, TMM_XB_Y1 + 1
+    mov cx, ax
+    add cx, si
+    dec cx
+    mov dx, [tm_cy]
+    add dx, TMM_XB_Y2 - 1
+    call gfx_fill
+.rest:
+    cmp si, TM_GW
+    jae .done
+    mov byte [gfx_color], CWHITE
+    mov ax, [tm_cx]
+    add ax, 7
+    add ax, si
+    mov bx, [tm_cy]
+    add bx, TMM_XB_Y1 + 1
+    mov cx, [tm_cx]
+    add cx, TM_RW - 1
+    mov dx, [tm_cy]
+    add dx, TMM_XB_Y2 - 1
+    call gfx_fill
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; tm_order - the performance view's row order: built-ins first, then packages,
 ;            then the free slots (SPEC.md 28)
 ; in:  the tm_ist/tm_iknd snapshot
@@ -2557,12 +2837,10 @@ tm_rows:
     call tm_order               ; group the rows before laying any of them out
     xor si, si                  ; SI = row index
 .row:
-    mov ax, si                  ; y1 = cy + TM_ROW_Y + 11*row
-    mov cx, TM_ROW_H
-    mul cx
-    add ax, TM_ROW_Y
-    add ax, [tm_cy]
-    mov [tm_rowy], ax
+    mov ax, si
+    mov bx, TM_ROW_Y
+    call tm_row_place           ; column-major, so a refused row ends the list
+    jc .rdone
 
     ; --- build "NAME     ST  nnn%mmmK" in tm_str -----------------------------
     ; The band is NOT erased yet: most of these rows are the same as they
@@ -2688,15 +2966,15 @@ tm_rows:
 .draw:
     mov byte [di], 0
     call tm_rowsum              ; unchanged since the last refresh? then the
-    mov bx, si                  ; pixels on screen are already right
-    shl bx, 1
-    cmp ax, [tm_rowck+bx]
-    je .rnext
-    mov [tm_rowck+bx], ax
+    mov bx, si                  ; pixels on screen are already right. Through
+    shl bx, 1                   ; tm_elchk, not an open-coded compare, so this
+    add bx, tm_rowck            ; row gets the never-zero rule too
+    call tm_elchk
+    jc .rnext
 
     call tm_rowfill             ; only now is the band worth erasing
     mov byte [gfx_color], CBLACK
-    mov cx, [tm_cx]
+    mov cx, [tm_rowx]
     add cx, 6
     mov dx, [tm_rowy]
     push si
@@ -2707,11 +2985,7 @@ tm_rows:
 .rnext:
     inc si
     cmp si, TM_ROWS
-    jae .rdone
-    mov ax, [tm_rowy]           ; and stop at the bottom of the FRAME, not the
-    add ax, TM_ROW_H            ; screen (tm_ylim_set)
-    cmp ax, [tm_ylim]
-    jbe .row
+    jb .row
 .rdone:
 
     pop di
@@ -3051,10 +3325,9 @@ tm_sqp:     resw 1              ; ...and its texture, or 0 for no square. A
                                 ; would be erased again
 tm_elck:    resw TMC_N          ; the last drawn state of the five non-row
                                 ; elements, one word each (TMC_*), and
-tm_maxrow:  resw 1              ; process rows this SCREEN has room for, <=
-                                ; TMM_ROWS; set once by tm_init from
-                                ; [vid_dock_y0] so the window never overlaps
-                                ; the dock (SPEC.md 28)
+tm_rowx:    resw 1              ; the left edge of the row being drawn: tm_cx
+                                ; for column 0, one TM_COLW on for column 1
+tm_xbarw:   resw 1              ; the XMS bar's black run, px (TMC_XBAR)
 tm_rowck:   resw TMM_ROWS       ; the last drawn content of each row, one
                                 ; word each (tm_rowsum). Shared by both
                                 ; views - TM_ROWS is the smaller of the two
@@ -3070,6 +3343,19 @@ tm_usedk:   resw 1              ; used RAM, KB
 tm_barw:    resw 1              ; RAM bar black width, 0..TM_GW
 tm_zero_end:
 
+; --- set ONCE by tm_init, at boot, and OUTSIDE the block above ---------------
+; tm_kinit zeroes tm_zero_beg..tm_zero_end every time a window opens, so a
+; value tm_init worked out at boot cannot live in there: it would survive
+; exactly until the first launch and then read back as zero. That cost a
+; divide-by-zero the first time this window was opened, because tm_colrows is
+; a divisor.
+tm_cols:    resw 1              ; process-list columns, 1 or 2 (SPEC.md 28.1)
+tm_colrows: resw 1              ; rows in COLUMN 0, which starts under the maps
+tm_col2rows: resw 1             ; rows in each LATER column, which starts at the
+                                ; top and so holds more - A DIVISOR, never 0
+tm_maxrow:  resw 1              ; rows this SCREEN shows, <= TMM_ROWS: derived
+                                ; from [vid_dock_y0] so the window never
+                                ; overlaps the dock (SPEC.md 28.1)
 tm_totkb:   resw 1              ; total conventional RAM (int 12h, boot)
 tm_cx:      resw 1              ; cached content origin (draw paths only,
 tm_cy:      resw 1              ; always under the gfx lock)
@@ -3077,7 +3363,7 @@ tm_ord:     resb INST_MAX       ; tm_order: display row - 1 -> instance slot
 tm_rowi:    resb 1              ; ...the one tm_rows is drawing right now
 tm_rowy:    resw 1              ; tm_rows/tm_rows_mem scratch: current row y
 tm_ylim:    resw 1              ; ...and the lowest row top the frame holds
-                                ; (tm_ylim_set): the row lists are fixed-pitch
+                                ; (tm_view_begin): the row lists are fixed-pitch
                                 ; and nothing clips a draw to a window
 tm_liny:    resw 1              ; tm_txt_ram_y scratch: the line's y
 tm_str:     resb TM_STRMAX      ; line-format scratch
