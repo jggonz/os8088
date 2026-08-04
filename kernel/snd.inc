@@ -460,10 +460,10 @@ snd_town_off:
 snd_tone_out:
     call snd_rt_card
     jc spk_tone                 ; tail call: the speaker, and CF is its own
-    push di
-    mov di, DSV_TONE
+    push bp
+    mov bp, [drv_svc+DSV_TONE]
     call drv_svc_call
-    pop di                      ; POP leaves the driver's CF alone
+    pop bp                      ; POP leaves the driver's CF alone
     ret
 
 ; -----------------------------------------------------------------------------
@@ -550,10 +550,10 @@ snd_tick:
     cmp word [drv_svc+DSV_TICK], 0
     je .tone                    ; a loaded driver may want the tick too; it
     push ax                     ; runs here, inside IRQ0, at IF=0
-    push di
-    mov di, DSV_TICK
+    push bp
+    mov bp, [drv_svc+DSV_TICK]
     call drv_svc_call
-    pop di
+    pop bp
     pop ax
 .tone:
     cmp word [snd_town_exp], 0
@@ -591,12 +591,12 @@ snd_release_inst:
     cmp word [drv_svc+DSV_RELINST], 0
     je .spk                     ; a loaded driver's grants go first: its FM
     push ax                     ; channels and streams are stamped with the
-    push di                     ; same instance slot ours are (SPEC.md 34.3)
+    push bp                     ; same instance slot ours are (SPEC.md 34.3)
     push dx
-    mov di, DSV_RELINST
+    mov bp, [drv_svc+DSV_RELINST]
     call drv_svc_call
     pop dx
-    pop di
+    pop bp
     pop ax
 .spk:
     cmp byte [snd_pcm_busy], 0  ; a clip owned by the dying instance stops
@@ -817,17 +817,17 @@ osapi_snd_fm_x:
     ret
 
 osapi_snd_fm:
-    push di
+    push bp
     push dx
     push es
     push ds
     pop es                      ; the driver reads a staged patch through ES
     call snd_req_inst           ; DH = the requester
-    mov di, DSV_FM
+    mov bp, [drv_svc+DSV_FM]
     call drv_svc_call
     pop es
     pop dx
-    pop di
+    pop bp
     ret
 
 ; -----------------------------------------------------------------------------
@@ -837,13 +837,33 @@ osapi_snd_fm:
 ; clobbers: nothing else (flags)
 ; -----------------------------------------------------------------------------
 osapi_snd_stream:
-    push di
+    push bx
+    push bp
     push dx
-    call snd_req_inst
-    mov di, DSV_STREAM
+    mov bx, es                  ; BX = the CALLER'S SEGMENT, which verbs 5 and
+                                ; 6 copy to and from: the X stub put the
+                                ; caller's DS in ES, and ES is KERNEL_SEG by
+                                ; the time the driver runs (drv_call), so BX
+                                ; is the only way it can reach them
+    cmp al, 0
+    je .rate
+    cmp al, 4
+    jne .go
+.rate:                          ; ...except on the two OPEN verbs, where BX is
+    mov bx, dx                  ; unused and the RATE needs somewhere to be.
+                                ; snd_req_inst writes DH, and DH is the top
+                                ; half of a 4,000..44,100 Hz rate, so stamping
+                                ; the requester first would destroy it. The
+                                ; other fork's driver banked DX itself, right
+                                ; before calling snd_req_inst; here the kernel
+                                ; stamps, so the kernel banks (SPEC.md 34.5).
+.go:
+    call snd_req_inst           ; DH = the requester
+    mov bp, [drv_svc+DSV_STREAM]
     call drv_svc_call
     pop dx
-    pop di
+    pop bp
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1077,20 +1097,20 @@ section .text
 ; -----------------------------------------------------------------------------
 snd_str_busy:
     push ax
-    push di
+    push bp
     mov al, 8
-    mov di, DSV_STREAM
+    mov bp, [drv_svc+DSV_STREAM]
     call drv_svc_call
     jc .free                    ; no driver, no stream
     or ax, ax
     jnz .busy
 .free:
-    pop di
+    pop bp
     pop ax
     clc
     ret
 .busy:
-    pop di
+    pop bp
     pop ax
     stc
     ret

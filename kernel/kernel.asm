@@ -339,7 +339,7 @@ osapi_table:
                                   ;          patch-load's 11 bytes are the
                                   ;          caller's, and only live while a
                                   ;          sound DRIVER is loaded (51.4)
-    OSAPI_SLOT osapi_snd_stream   ; 0x0100 - PCM_BG streams (SPEC.md 34.5),
+    OSAPI_JSLOT api_snd_stream    ; 0x0100 - PCM_BG streams (SPEC.md 34.5),
                                   ;          likewise the driver's. Both
                                   ;          answer CF=1 with no driver, which
                                   ;          is the same thing the held cells
@@ -450,7 +450,16 @@ osapi_table:
                                   ;          worker, and it is exiting". X,
                                   ;          because the fence is an identity
                                   ;          test on the caller's segment
-osapi_table_end:                  ; 0x0238
+    OSAPI_JSLOT api_mem_claim_dma ; 0x0238 - a claim an ISA DMA controller can
+                                  ;          reach (SPEC.md 50.3): AX = KB,
+                                  ;          CX = KB of the HEAD that must not
+                                  ;          cross a 64KB physical boundary.
+                                  ;          X, the claim's own owner fence.
+                                  ;          A separate cell and not a CX on
+                                  ;          mem_claim, because every existing
+                                  ;          caller passes garbage there and
+                                  ;          the failure would be silent
+osapi_table_end:                  ; 0x0240
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -458,8 +467,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 69 * 8
-%error "os8088 API jump table must be exactly 69 8-byte slots"
+%if OSAPI_TABLE_LEN != 70 * 8
+%error "os8088 API jump table must be exactly 70 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -487,10 +496,12 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
     OSAPI_XSTUB api_wm_create,  wm_create
     OSAPI_XSTUB api_pkg_spawn,  inst_pkg_spawn
     OSAPI_XSTUB api_mem_claim,  osapi_mem_claim
+    OSAPI_XSTUB api_mem_claim_dma, osapi_mem_claim_dma
     OSAPI_XSTUB api_mem_free,   osapi_mem_free
     OSAPI_XSTUB api_mem_regrow, mem_regrow
     OSAPI_XSTUB api_snd_fm,     osapi_snd_fm_x
     OSAPI_XSTUB api_drv_task,   drv_task
+    OSAPI_XSTUB api_snd_stream, osapi_snd_stream
 
 ; N: the name at the caller's DS:SI is staged into kernel scratch first,
 ; because ES:BX belongs to the caller's data buffer and cannot carry it

@@ -294,32 +294,31 @@ drv_call:
 
 ; -----------------------------------------------------------------------------
 ; drv_svc_call - dispatch one of the published service procs
-; in:  DI = a DSV_* offset, every other register = that proc's own arguments
+; in:  BP = the published near offset (0 = nothing publishes it), every other
+;      register = that proc's own arguments
 ; out: CF = 1 and AX = 0 when nothing publishes it; else whatever it returns
 ; clobbers: BP; DS and ES restored
 ;
 ; The one place that turns "a service exists" into a far call, so each API
 ; slot and snd_tick stay one test and one jump.
 ;
-; **It takes no register but DI, and that is a contract, not a convenience.**
-; Every other general register is an argument to something in the sound ABI
-; (SPEC.md 34.2/34.5) - AL is the verb, BX the FM frequency, CL the channel,
-; DH the requesting instance, SI and ES a staged buffer. This routine used to
-; load the driver ROW into BX for drv_call, which quietly ate the frequency:
-; a note-on arrived at the driver with BX = a kernel offset, no OPL2 block
-; fits 15,000 Hz, and every FM call came back refused while tones - which
-; pass AX - worked perfectly. The far pointer lives in memory for exactly
-; that reason.
+; **It takes NO GENERAL REGISTER, and that is a contract, not a convenience.**
+; Every one of them is an argument to something in the sound ABI (SPEC.md
+; 34.2/34.5) - AL the verb, AH a handle, BX the FM frequency or the caller's
+; segment, CX a length, DH the requesting instance, DX a rate, SI and DI the
+; two ends of a staging copy. This routine ate two of them in turn before the
+; gate packages caught it: the driver ROW in BX, which silently became the FM
+; frequency (every note refused, while tones - which pass AX - worked
+; perfectly), and then the service SELECTOR in DI, which silently became the
+; staging destination (every verb-5/6 copy refused as out of range). So the
+; far pointer lives in memory and the selector arrives in BP, which nothing
+; in the ABI uses and which this routine is documented to clobber anyway.
 ; -----------------------------------------------------------------------------
 drv_svc_call:
-    cmp word [drv_fseg], 0
-    je .none
-    push di
-    add di, drv_svc
-    mov bp, [di]
-    pop di
     or bp, bp
     jz .none
+    cmp word [drv_fseg], 0
+    je .none
     push ds
     push es
     push cs

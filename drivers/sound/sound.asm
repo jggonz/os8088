@@ -81,13 +81,28 @@ snd_entry:
     mov word [snd_services+DSV_STREAM], sbl_stream_op
     mov word [snd_services+DSV_TICK], sbl_tick
     or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN
-    cmp word [snd_services+DSV_NAME], 0
-    jne .nosb                   ; DSV_NAME is what the Control Panel's Sound
-    mov word [snd_services+DSV_NAME], snd_s_sb   ; page calls the CARD ROW,
-                                ; and that row is the TONE sink - so an OPL2
-                                ; keeps the name when both are present, and
-                                ; a Sound Blaster only takes it when it is
-                                ; the only card there is
+    mov word [snd_services+DSV_NAME], snd_s_sb
+                                ; DSV_NAME is what the Control Panel's Sound
+                                ; page calls the CARD ROW, and the SOUND
+                                ; BLASTER TAKES IT WHENEVER IT ATTACHES -
+                                ; unconditionally, overwriting the OPL2's.
+                                ;
+                                ; It used to defer to whatever named itself
+                                ; first, on the reasoning that the row is the
+                                ; TONE sink and the tone comes out of the
+                                ; OPL2. That is true and it is still the wrong
+                                ; name, because EVERY Sound Blaster carries an
+                                ; OPL2 of its own and that chip is probed
+                                ; FIRST: the row therefore read 'AdLib' on
+                                ; every real Sound Blaster ever made, and the
+                                ; page's one statement about the machine's
+                                ; hardware named the smaller half of it. The
+                                ; tone still comes out of an OPL2 either way -
+                                ; the SB's - so the new name is no less true
+                                ; of the sink, and strictly more true of the
+                                ; card. It doubles as the answer to "did the
+                                ; DSP tier attach?", since nothing else can
+                                ; put that string on the page.
 .nosb:
     cmp byte [drv_up], 0
     je .nohw

@@ -6803,6 +6803,18 @@ page refuses that selection while it is meaningless, but a setting kept on a
 disk that later moves to a machine with a card must not take the beep away
 with it in the meantime.
 
+**`DSV_NAME` names the CARD, and the Sound Blaster takes it whenever it
+attaches.** The page's card row is a tone route and the tone comes out of an
+OPL2, so the name used to go to whichever tier published first and the OPL2
+kept it — which is wrong on every machine it matters on, because **every real
+Sound Blaster carries an OPL2 of its own** and that chip is probed first. The
+row read `AdLib` on an SB1.0, an SB1.5, an SB2.0 and an SB16 alike, and the
+page's one statement about the machine's hardware named the smaller half of
+it. The tone still comes out of an OPL2 — the SB's — so the name is no less
+true of the sink and strictly more true of the card, and it doubles as the
+**answer to "did the DSP tier attach?"**, since nothing else puts that string
+on the page.
+
 ### 34.9 The two tiers that must never overlap
 
 An exclusive speaker clip (§34.4) raises `sch_lock` for its whole duration,
@@ -6818,6 +6830,14 @@ which is not in the package SDK: DL says what the kernel is about to do, AX
 comes back saying whether a stream is open. `osapi_snd_play` asks before its
 grant window opens (so the refusal owes no `popf`) and tells the driver again
 when the clip ends.
+
+**The stream slot's stub is verb-aware**, and has to be. BX carries the
+*caller's segment* for verbs 5 and 6 — the driver runs with ES = KERNEL_SEG,
+so BX is the only way it can reach the caller's buffer — but on verbs 0 and 4
+BX is unused and the **rate** needs somewhere to live, because `snd_req_inst`
+writes DH and DH is the top half of a 4,000..44,100 Hz rate. The other fork's
+driver banked DX itself, immediately before stamping; here the kernel stamps,
+so the kernel banks.
 
 With no driver loaded there is no stream to collide with, and `drv_svc_call`
 refuses — which is the same answer, arrived at for free.
@@ -9190,19 +9210,47 @@ can meet.
 ### 50.3 The API (§20.3 slots)
 
 ```
-osapi_mem_claim   AX = KB wanted, BX = YOUR window ptr
-                  out CF=0 and DX = base segment; CF=1 refused
-osapi_mem_free    DX = the segment you were given, BX = YOUR window ptr
-                  out CF=0 released; CF=1 not yours / no such claim
-osapi_mem_avail   out AX = largest free run in KB, BX = total free KB
+osapi_mem_claim     AX = KB wanted
+                    out CF=0 and DX = base segment; CF=1 refused
+osapi_mem_claim_dma AX = KB wanted, CX = KB of the HEAD that must not cross
+                    a 64KB PHYSICAL boundary (0 = the plain claim)
+                    out CF=0 and DX = base segment; CF=1 refused
+osapi_mem_free      DX = the segment you were given
+                    out CF=0 released; CF=1 not yours / no such claim
+osapi_mem_avail     out AX = largest free run in KB, BX = total free KB
 ```
 
-`BX` is the **ownership fence**, the same one `OSAPI_TASK_SPAWN` uses
-(§20.6): the window must be a plausible `wm_wins` pointer, owned by a live
-instance, and that instance becomes the claim's owner. A borrowed window
-pointer buys nothing — it would spend, and could only free, that instance's
-memory, and the loader would then free it anyway at the *other* instance's
-teardown.
+The **ownership fence** is `ES`, stamped by the X stub from the caller's own
+DS (§20.3): a package's owner word is **the segment it runs in**, so there is
+nothing to pass and nothing to forge, and it answers from the *entry proc*,
+where there is no window yet and no published instance — which is exactly
+where an app sizes itself. `mem_own` asks the claim map rather than
+`inst_tab` for that reason: a live claim starting at `ES` and owned by an
+instance slot is a package's region, and by `MEM_K_DRV` a driver's image
+(§51.3), and nothing else looks like either.
+
+**`osapi_mem_claim_dma` is for a buffer a bus master addresses.** The 8237
+has no register for address bits 16..19 — the page port holds them and the
+chip never carries into them — so a transfer crossing a 64KB *physical*
+boundary wraps to the start of its page and moves the wrong memory. `CX` is a
+**head** and not the whole block because usually only part of a buffer is the
+chip's: the sound driver's 32KB claim is a 12KB double-buffer-plus-ring the
+card reads, under a 20KB staging pool the driver copies with `rep movsb`, and
+constraining all 32KB would rule out every base in a page's upper half for
+nothing.
+
+The constraint is answered **inside the scan** (§50.2): a candidate whose head
+would straddle bumps to the next page floor — the same shape as the bump past
+an overlapping claim, monotonic, so termination is unchanged — and the block
+returned is the lowest one satisfying both. It replaced a claim-test-reclaim
+loop in the driver that held each failed block so the next attempt would land
+elsewhere: correct, but it could hold 128KB to find 32KB and refuse on a
+machine that had the room the whole time.
+
+Two limits, both deliberate: a head bigger than 64KB is refused up front (no
+page can hold it, and that is also what bounds the bump), and **`mem_regrow`
+does not preserve it** — no record carries the constraint, so a claim that
+moves can land straddling. Claim the size you need and do not grow it.
 
 `osapi_mem_avail` is what a package sizes itself from. `apps/paint` used to
 divide an int 12h figure and hope; asking the allocator is the difference
@@ -9342,15 +9390,29 @@ is then an ordinary near read with DS = KERNEL_SEG, and `snd_tick` — which
 runs inside IRQ0 — does not have to point a segment register anywhere to find
 out whether it has work.
 
-**`drv_svc_call` takes no register but DI, and that is a contract.** Every
-other general register is an argument to something in the sound ABI (§34.2,
-§34.5): AL is the verb, BX the FM frequency, CL the channel, DH the
-requesting instance, SI and ES a staged buffer. So the driver's dispatcher
-lives in memory as a far pointer (`drv_fptr`/`drv_fseg`, armed by
-`drv_publish` and cleared by `drv_release`) rather than being passed in.
-It was passed in BX once, which quietly ate the frequency: a note-on reached
-the driver with BX = a kernel offset, no OPL2 block fits 15,000 Hz, and every
-FM call came back refused — while *tones*, which pass AX, worked perfectly.
+**`drv_svc_call` takes NO GENERAL REGISTER, and that is a contract.** Every
+one of them is an argument to something in the sound ABI (§34.2, §34.5): AL
+the verb, AH a handle or sub-op, BX the FM frequency *or* the caller's
+segment, CX a length, DH the requesting instance, DX a rate, SI and DI the
+two ends of a staging copy. So the dispatcher lives in memory as a far
+pointer (`drv_fptr`/`drv_fseg`, armed by `drv_publish`, cleared by
+`drv_release`) and the service selector arrives in **BP**, which nothing in
+the ABI uses and which the routine is documented to clobber anyway.
+
+It ate two registers in turn before the gate packages caught them, and both
+failures were silent in the same way:
+
+- **the driver row in BX** became the FM frequency. No OPL2 block fits
+  15,000 Hz, so every FM call came back refused — while *tones*, which pass
+  AX, worked perfectly. `apps/fmtest` found it.
+- **the service selector in DI** became the staging destination. `DSV_STREAM`
+  is 4, which is inside no grant, so every verb-5/6 copy refused as out of
+  range and every open that staged first failed with it. `apps/sbtest` found
+  it.
+
+The lesson is written into the contract rather than the changelog: a
+dispatcher that consumes an argument register is a dispatcher that will
+consume a *different* one next time the ABI grows.
 
 **`DSV_TONE` is the interesting one.** Publishing it *moves the tone tier off
 the PC speaker* onto the driver's hardware. An OPL2 publishes it, because an
@@ -9489,6 +9551,12 @@ and freeing it first would leave a claim nothing could ever name again.
    still made a noise, which is how a bug like that survives a listening
    test.
 4. **Bulk memory is a claim, not bss.** Take it at attach, free it at detach.
+   Your **image segment** is your owner word, exactly as a package's region is
+   its own (§50.3), so `OSAPI_MEM_CLAIM` needs no driver variant. A buffer a
+   **bus master** will address does: ask `OSAPI_MEM_CLAIM_DMA` for it, with
+   `CX` = the KB of it the chip actually sees. Do not claim, check the
+   address, and claim again — that holds every block that failed while it
+   looks for one that does not.
 5. **You may own a task.** `task_spawn` takes a segment, so a driver's refill
    loop is an ordinary background task — but it must be gone before detach
    returns.

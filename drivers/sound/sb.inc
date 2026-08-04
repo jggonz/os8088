@@ -981,12 +981,12 @@ sbl_v_open:
     jne .e1                     ; one stream per card (SPEC.md 34.3)
     cmp byte [sbl_clip], 0
     jne .e1                     ; an exclusive clip holds the machine
-    cmp dx, 4000                ; TC = 256 - 1e6/rate must fit a byte...
-    jb .e2
-    mov word [sbl_hopen], SBL_HALF  ; the open's half width (a TEMP, the
-    cmp dx, 22222               ; sbl_ropen idiom - committed at .irqok)
-    jbe .ratok                  ; classic TC regime, any DSP
-    cmp dx, 44100               ; the wide-rate regime (SPEC.md 34.5):
+    cmp bx, 4000                ; TC = 256 - 1e6/rate must fit a byte. THE
+    jb .e2                      ; RATE ARRIVES IN BX, not DX: DH carries the
+    mov word [sbl_hopen], SBL_HALF  ; requesting instance (SPEC.md 34.3) and
+    cmp bx, 22222               ; would otherwise be the rate's top half, so
+    jbe .ratok                  ; the kernel banks it for us on the way in
+    cmp bx, 44100               ; the wide-rate regime (SPEC.md 34.5):
     ja .e2                      ; 22,223..44,100 on a DSP >= 4.00 only -
     cmp byte [sbl_verhi], 4     ; err 2 below that, never a clamp
     jb .e2
@@ -996,8 +996,7 @@ sbl_v_open:
     jnz .args                   ; jumps are short-only: .e7 sits past reach,
     jmp .e7                     ; so the refusals trampoline)
 .args:
-    mov bx, dx                  ; BX = rate (snd_req_inst wants DH)
-    call sbl_grant_chk          ; the range must sit in the caller's grant;
+    call sbl_grant_chk          ; BX is already the rate (see above)          ; the range must sit in the caller's grant;
     jnc .grantok                ; out AX = bytes to the grant's end
     jmp .e7
 .grantok:
@@ -1320,21 +1319,20 @@ sbl_v_open_in:
                                 ; direction (SPEC.md 34.3/34.6)
     cmp byte [sbl_clip], 0
     jne .e1                     ; an exclusive clip holds the machine
-    cmp dx, 4000                ; TC = 256 - 1e6/rate must fit a byte...
+    cmp bx, 4000                ; the rate is in BX here too (see sbl_v_open)
     jb .e2
     mov ax, 13000               ; ...and the INPUT ceiling is honoured:
     cmp byte [sbl_auto], 0      ; 13k on 1.x, 15k on >= 2.00 normal mode
     je .ceil                    ; (SPEC.md 34.5) - err 2, never a clamp
     mov ax, 15000
 .ceil:
-    cmp dx, ax
+    cmp bx, ax
     ja .e2
     or cx, cx                   ; zero capacity captures nothing (8086
     jnz .args                   ; conditionals are short-only: trampoline)
     jmp .e7
 .args:
-    mov bx, dx                  ; BX = rate (snd_req_inst wants DH)
-    call sbl_grant_chk          ; the capture range must sit in the caller's
+    call sbl_grant_chk          ; BX is already the rate (see above)          ; the capture range must sit in the caller's
     jnc .grantok                ; grant; out AX = bytes to the grant's end
     jmp .e7
 .grantok:
@@ -2182,8 +2180,7 @@ SBL_FIXED  equ SBL_POOL         ; the DMA-VISIBLE part: double buffer + record
                                 ; 64KB page rule - the staging pool above it is
                                 ; copied by us, never addressed by the chip
 SBL_WANT   equ 32               ; KB we would like: the fixed part plus a 20KB
-SBL_MIN    equ 12               ; staging pool; and the least we can work with
-SBL_TRIES  equ 4                ; page-safe claim attempts before giving up
+                                ; staging pool
 
 ; -----------------------------------------------------------------------------
 ; sbl_attach - find a card and give it somewhere to DMA from
@@ -2228,58 +2225,40 @@ sbl_attach:
 ; for channel 1 and the chip never carries into them, so a transfer that
 ; would cross a 64KB PHYSICAL boundary wraps to the start of its page and
 ; plays the wrong memory. While this buffer was a pinned segment the property
-; was true by construction; a heap claim has to be TESTED for it.
+; was true by construction; a heap claim has to ASK for it.
 ;
-; The test is on the fixed 12KB only. The staging pool above it is copied by
-; us with rep movsb and the chip never sees it, so it may straddle freely.
+; And it asks the allocator, which is the only thing that can answer it
+; cheaply. This used to claim, test the address it got, and claim AGAIN while
+; still HOLDING the block that failed - so finding 32KB could hold 128KB, and
+; a 128KB machine with exactly one good hole would be told it had no page-safe
+; memory while sitting on the hole. OSAPI_MEM_CLAIM_DMA moves the test inside
+; the scan: a candidate whose head would straddle bumps to the next page
+; floor, the same way an overlapping one bumps past the claim it hit, and the
+; first block that satisfies BOTH is the one returned (SPEC.md 50.3).
 ;
-; A failed test RE-CLAIMS rather than gives up: the first claim is still held,
-; so the allocator hands out a different block, and the old one goes back
-; after. Four attempts, because each one moves at least SBL_WANT KB along and
-; a 64KB page holds only so many bad starts.
+; CX is the fixed 12KB, not the whole 32KB. The staging pool above it is
+; copied by us with rep movsb and the chip never sees it, so it may straddle
+; freely - and constraining it anyway would rule out every base in the upper
+; half of a page for nothing.
 ; -----------------------------------------------------------------------------
 sbl_dma_map:
     push ax
     push bx
     push cx
     push dx
-    push si
     mov word [sbl_seg], 0
-    mov cx, SBL_TRIES
-    xor si, si                  ; SI = the previous attempt's segment, 0 = none
-.try:
-    push cx
     mov ax, SBL_WANT
-    call OSAPI_MEM_CLAIM        ; out CF, DX = base segment
-    pop cx
-    jc .small
-    push dx
-    mov ax, dx
-    and ax, 0x0FFF              ; paragraphs into this 64KB page...
-    mov bx, 4
-.shl:
-    shl ax, 1                   ; ...times 16 = bytes into it (0..65520, so
-    dec bx                      ; this cannot overflow)
-    jnz .shl
-    add ax, SBL_FIXED
-    pop dx
-    jc .again                   ; carried past 64KB: the fixed part straddles
-    or si, si
-    jz .keep
-    push dx                     ; a better block: give the previous one back
-    mov dx, si
-    call OSAPI_MEM_FREE
-    pop dx
-    xor si, si
-.keep:
+    mov cx, SBL_FIXED / 1024    ; ...of which THIS much is the chip's
+    call OSAPI_MEM_CLAIM_DMA    ; out CF, DX = base segment
+    jc .fail
     mov [sbl_seg], dx
     mov ax, dx
     and ax, 0x0FFF
     mov bx, 4
-.shl2:
-    shl ax, 1
-    dec bx
-    jnz .shl2
+.shl:
+    shl ax, 1                   ; paragraphs into this 64KB page x 16 = bytes
+    dec bx                      ; (0..65520, so this cannot overflow)
+    jnz .shl
     mov [sbl_dmaoff], ax        ; where we sit inside our page...
     mov ax, dx
     mov bx, 12
@@ -2291,26 +2270,10 @@ sbl_dma_map:
     mov word [sbl_poolsz], (SBL_WANT * 1024) - SBL_POOL
     clc
     jmp short .out
-.again:
-    or si, si                   ; hold this one so the next claim lands
-    jz .hold                    ; somewhere else, and drop the one before it
-    push dx
-    mov dx, si
-    call OSAPI_MEM_FREE
-    pop dx
-.hold:
-    mov si, dx
-    loop .try
-.small:
-    or si, si                   ; out of attempts: give back whatever is held
-    jz .fail
-    mov dx, si
-    call OSAPI_MEM_FREE
 .fail:
     mov word [sbl_seg], 0
     stc
 .out:
-    pop si
     pop dx
     pop cx
     pop bx

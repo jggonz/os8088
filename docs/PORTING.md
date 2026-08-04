@@ -52,8 +52,11 @@ If you only read one section, read this one. Porting **`main` → `experimental`
    frame: content is `W_W - 2` wide and `W_H - TITLE_H - 1` tall.
 4. Replace `OSAPI_MEM_ALLOC` (paragraphs, returns `AX`) with `OSAPI_MEM_CLAIM`
    (KB, returns `DX`), and `OSAPI_MEM_AVAIL`'s paragraphs with KB.
-5. Delete `OSAPI_ABOUT_SET`, `OSAPI_CPU_INFO`, every `OSAPI_XMEM_*`,
-   `OSAPI_SND_FM` and `OSAPI_SND_STREAM` — none of them exist.
+5. Delete `OSAPI_CPU_INFO` and every `OSAPI_XMEM_*` — neither exists.
+   `OSAPI_ABOUT_SET`, `OSAPI_SND_FM` and `OSAPI_SND_STREAM` all exist and are
+   at `main`'s numbers, but the two sound slots answer CF=1 unless the
+   **sound driver** is loaded (SPEC.md §51) — which is exactly what
+   `OSAPI_SND_CAPS` is for, and what a well-written `main` app already checks.
 6. Drop the fourth `OS88_HEADER` argument (the RAM requirement) and any
    `--needs` in the Makefile rule.
 7. Rebuild. The slot numbers are all `%define`s, so re-assembly fixes them.
@@ -124,8 +127,8 @@ when the branches began merging — so its own block sits 88 bytes lower than
 
 | slot | `main` | `experimental` |
 |---|---|---|
-| `0x00F8` | `SND_FM` | `SND_FM` (via the loadable sound driver) |
-| `0x0100` | `SND_STREAM` | `SND_STREAM` (likewise) |
+| `0x00F8` | `SND_FM` | `SND_FM` — refused unless the sound driver is loaded |
+| `0x0100` | `SND_STREAM` | `SND_STREAM` — likewise |
 | `0x0108` | `WM_SIZABLE` | `WM_SIZABLE` |
 | `0x0110` | `FULLSCREEN` | `FULLSCREEN` |
 | `0x0118` | `WM_GROW` | `WM_GROW` |
@@ -146,7 +149,7 @@ when the branches began merging — so its own block sits 88 bytes lower than
 | `0x01E0` | `ABOUT_SET` | `GFX_SCROLL` |
 | `0x01E8` | `FILE_READBIG` | `MEM_CLAIM` (KB) |
 | `0x01F0` / `0x01F8` | `GFX_DBUF` / `GFX_SCROLL` | `MEM_FREE` / `MEM_AVAIL` (KB) |
-| `0x0200`+ | — | `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`, `MEM_REGROW`, `WM_TITLE`, `DRV_TASK` |
+| `0x0200`+ | — | `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`, `MEM_REGROW`, `WM_TITLE`, `DRV_TASK` (drivers only), `MEM_CLAIM_DMA` |
 
 **Every contract `main` has, `experimental` now has too** — `GFX_DBUF` and
 `GFX_SCROLL` were its last two gaps and are implemented, just at different
@@ -438,29 +441,40 @@ there is no equivalent, and no CPU detection either.
 |---|---|---|
 | `SND_CAP_TONE` | yes | yes |
 | `SND_CAP_PCM_EXCL` | yes | yes |
-| `SND_CAP_FM` | yes (OPL2) | — |
-| `SND_CAP_PCM_BG` | yes (Sound Blaster) | — |
-| `SND_CAP_PCM_IN` | yes (recording) | — |
-| `OSAPI_SND_CAPS` | `BL` = route (0 speaker / 1 OPL2), `DX` = present drivers | `BL` = 0, `DX` = 1 |
+| `SND_CAP_FM` | yes (OPL2) | yes (OPL2) — **driver** |
+| `SND_CAP_PCM_BG` | yes (Sound Blaster) | yes (Sound Blaster) — **driver** |
+| `SND_CAP_PCM_IN` | yes (recording) | yes (recording) — **driver** |
+| `OSAPI_SND_CAPS` | `BL` = route (0 speaker / 1 OPL2), `DX` = present drivers | identical |
 | `OSAPI_SND_TONE` | identical | identical |
 | `OSAPI_SND_PLAY` | identical | identical |
-| `OSAPI_SND_FM` | `0x00F8` | — |
-| `OSAPI_SND_STREAM` | `0x0100` | — |
-| Control Panel Sound page | yes | removed |
+| `OSAPI_SND_FM` | `0x00F8` | `0x00F8` — CF=1 with no driver |
+| `OSAPI_SND_STREAM` | `0x0100` | `0x0100` — CF=1 with no driver |
+| Control Panel Sound page | yes | yes (source select + Test) |
+| where the hardware lives | in the kernel | in a **loadable `.DRV`** (SPEC.md §51) |
 
 `OSAPI_SND_TONE` is worker-task-safe on both: `snd_req_inst` stamps the grant with
 the running task's own instance when no callback is being dispatched. Only the
 blocking `OSAPI_SND_PLAY` is UI-task-only, and for the different reason that it
 freezes the desktop for the length of the clip.
 
-**`main` → `experimental`:** an app using FM or streams has to fall back to
-`OSAPI_SND_TONE` and `OSAPI_SND_PLAY`. Query `OSAPI_SND_CAPS` and branch on the
-bits rather than assuming — that is already the documented rule on `main`, so a
-well-written app degrades on its own. The `recorder`, `sbtest` and `fmtest`
-packages have no `experimental` counterpart and were deleted, not ported.
+**The one real difference is that here the hardware is optional at runtime.**
+On `main` the OPL2 and Sound Blaster code is in the kernel and probes at boot;
+here it is `SOUND.DRV`, loaded from the system disk if the Control Panel's
+Drivers page says so, and a machine that never loads it reports
+`SND_CAP_TONE | SND_CAP_PCM_EXCL` and refuses both slots. The user can also
+route tones to the **PC speaker** with a card present (Sound page), which
+`OSAPI_SND_CAPS` reports in `BL`.
 
-**`experimental` → `main`:** nothing to do. The two surviving slots behave
-identically.
+**`main` → `experimental`:** nothing mechanical. Query `OSAPI_SND_CAPS` and
+branch on the bits rather than assuming — that is already the documented rule
+on `main`, so a well-written app degrades on its own, and here it has to,
+because the answer changes when a driver is loaded or unloaded. `fmtest` and
+`sbtest` are ported and are the gate packages for the two tiers
+(`make test-snd ADLIB=1 TESTAPPS=build/fmtest.img`, `SB16=1` /
+`build/sbtest.img`).
+
+**`experimental` → `main`:** nothing to do. Every slot behaves identically once
+the driver is attached; `main` has no equivalent of *not* having it.
 
 ---
 
@@ -667,9 +681,11 @@ contract-identical across the two branches:
 
 **Features with no counterpart**
 
-- [ ] `OSAPI_ABOUT_SET` — drop, or fold the About content into a real menu.
-- [ ] `OSAPI_SND_FM` / `OSAPI_SND_STREAM` — fall back to `SND_TONE` /
-      `SND_PLAY`, branching on `OSAPI_SND_CAPS`.
+- [ ] Nothing left in the API surface — `OSAPI_ABOUT_SET`, `OSAPI_SND_FM` and
+      `OSAPI_SND_STREAM` all exist here at `main`'s numbers.
+- [ ] `OSAPI_SND_FM` / `OSAPI_SND_STREAM` still need the `OSAPI_SND_CAPS`
+      branch, because the hardware is a **loadable driver** and may be absent
+      at runtime (§8).
 
 **Verify**
 
@@ -792,8 +808,9 @@ Counting `retf` per app is a quick way to size a port. On `main`: `mines` 7,
 | `OSAPI_XMEM_*` (RAM above 1MB) | ✓ | — | no equivalent |
 | `OSAPI_CPU_INFO` (CPU tiers) | ✓ | — | no equivalent |
 | Header declares minimum RAM (`+14`) | ✓ | — | size at runtime instead |
-| OPL2 / FM (`OSAPI_SND_FM`) | ✓ | — | fall back to `SND_TONE` |
-| Sound Blaster streams / record (`SND_STREAM`) | ✓ | — | fall back to `SND_PLAY` |
+| OPL2 / FM (`OSAPI_SND_FM`) | ✓ | ✓ | driver-borne here; check `SND_CAPS` |
+| Sound Blaster streams / record (`SND_STREAM`) | ✓ | ✓ | driver-borne here; check `SND_CAPS` |
+| Loadable drivers (`.DRV`, SPEC.md §51) | — | ✓ | kernel-side |
 | PC speaker tone + exclusive PCM | ✓ | ✓ | identical |
 | Menu set copied (needs re-`MENU_SET`) | ✓ | — | extra call is harmless the other way |
 | Live menu set, 24 shown chars | — | ✓ | |

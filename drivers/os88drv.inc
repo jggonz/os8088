@@ -108,6 +108,17 @@ DSV_SIZE     equ 14
 ;      at memory the next heap claim takes.
 %define OSAPI_DRV_TASK      KERNEL_SEG:0x0230
 
+; --- memory a bus-master can reach (SPEC.md 50.3/51.6) -----------------------
+; Everything in the app SDK's memory section applies to you unchanged - your
+; IMAGE segment is your owner word, exactly as a package's region is its own -
+; so OSAPI_MEM_CLAIM and OSAPI_MEM_FREE need no driver variant. One thing does:
+; a buffer the ISA DMA controller addresses must not cross a 64KB PHYSICAL
+; boundary, because the 8237 has no register for address bits 16..19 and never
+; carries into the page port that does. Ask for that up front with
+; OSAPI_MEM_CLAIM_DMA (AX = KB, CX = KB of the head the chip will see) rather
+; than claiming, testing the address, and claiming again while holding the
+; block that failed - that pattern can hold four buffers to find one, and
+; refuse on a machine that had the room all along.
 ; -----------------------------------------------------------------------------
 ; OS88_DRIVER 'NAME', class, entry - open the driver and emit its 32-byte
 ; header. Emits cpu 8086 / bits 16 / org 0 first, so it must be the first

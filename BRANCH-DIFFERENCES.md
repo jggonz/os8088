@@ -367,7 +367,7 @@ Run against `main` at **`b401eda`** and `experimental` at **`cdc1c59`**, and
 re-checked against **`6c1ee99`** — the Sound Blaster tier — after it landed.
 That commit closes none of the gaps below (it is a driver, not a kernel
 change): `snd_req_inst` is still unqualified, and its one new cell,
-`OSAPI_DRV_TASK` at **0x0288**, is in the *driver* SDK
+`OSAPI_DRV_TASK`, is in the *driver* SDK
 (`drivers/os88drv.inc`), not the application table this audit compares.
 
 The question it answers is narrow and one-directional: *what capability, fix or
