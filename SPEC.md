@@ -3722,9 +3722,10 @@ sentinel, which `apps/hello` ships deliberately to keep that path exercised.
 held. The program creates its window(s) via the API table (wm_create is
 lock-free) and **returns** BX = window ptr with CF clear; the loader
 registers the instance (§29) and wm_shows it. CF set = abort (loader reports
-"load failed"); an aborting entry must return BX = its already-created
-window ptr (or 0 if it created none) so the loader can wm_destroy it —
-otherwise aborted loads would leak window records.
+"load failed"); on abort the loader runs `wm_destroy_seg` over the region's
+segment before unreserving it, destroying every window the entry created by
+its `W_SEG` creator stamp — BX is not trusted or even consulted, a package
+that just declared itself broken gets nothing believed (§42.1).
 
 The entry must not call wm_show/wm_hide/wm_front, spawn tasks, or draw. The
 spawn prohibition is mechanical, not stylistic: `OSAPI_TASK_SPAWN` (§20.6)
@@ -8888,19 +8889,20 @@ thing. It is `[pt_abon]` plus `pt_abmeas`/`pt_abdraw`/`pt_abdismiss`, the same
 shape as §43.8 and §44.7 — a card on Paint's own content, dismissed by the next
 click or key, drawn last by every repaint so nothing erases it.
 
-**A second window would have been the obvious design and is the wrong one
-here.** A package's second window is never bound to its instance record: only
-the window the entry proc returns goes through `inst_bind_win` (§21), so
-`wm_owner` says nothing owns the second one and teardown does not destroy it.
-Meanwhile teardown *does* free the region (§29.4), and the orphaned window is
-still carrying `W_SEG`/`W_DISP` into it — the next repaint far-calls whatever
-claimed that memory afterwards. There is no `OSAPI_WM_DESTROY` for a package to
-clean up with either. A card is a flag and some pixels: it cannot outlive the
-instance because it never existed apart from it.
-
-**This is a rule about packages, not about Paint.** Until a package can own
-more than one window, an app that wants a second surface draws it on the one it
-has.
+**A second window would have been the obvious design and is still the wrong
+one here.** A package's second window is never bound to its instance record:
+only the window the entry proc returns goes through `inst_bind_win` (§21), so
+`wm_owner` says nothing owns it, it gets no dock tile and no Task Manager row,
+and there is no `OSAPI_WM_DESTROY` for the package to clean it up with. It is
+*safe*, though: every teardown site — `app_close_win`'s task-less branch,
+`inst_task_die`, the winless worker death and the loader's abort — runs
+`wm_destroy_seg` over the dying region's segment **before** the region is
+freed, destroying every window whose `W_SEG` stamp names it (the sweep `main`
+enforced with the `wm_wseg` side table; the stamp moved into the record and
+the sweep moved with it). So an extra window can never outlive the segment its
+callback procs live in — it just makes a poor citizen of the ones that manage
+it by hand. A card is a flag and some pixels: it cannot outlive the instance
+because it never existed apart from it.
 
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 

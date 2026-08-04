@@ -490,31 +490,20 @@ ld_run_body:
     ret
 
 .abort:
-    ; SPEC.md 20.2: an aborting entry returns BX = its half-created window
-    ; ptr (or 0). Destroy it, or aborted loads would leak wm_wins slots for
-    ; good. BX comes from a package that just declared itself broken, so
-    ; trust nothing: only a properly aligned pointer into wm_wins reaches
-    ; wm_destroy (which writes through it). The reserved instance record
-    ; was never published, so it and the region are simply still free.
-    push bx                     ; the region, and anything the entry proc
-    mov di, [ld_rec]            ; claimed before it declared itself broken
-    call ld_unreserve
-    pop bx
-    test bx, bx
-    jz .abort_clean
-    mov ax, bx
-    sub ax, wm_wins
-    jc .abort_clean             ; below the window table
-    cmp ax, MAX_WIN*WIN_SIZE
-    jae .abort_clean            ; beyond it
-    mov cl, WIN_SIZE
-    div cl                      ; AL = idx; AH = offset mod WIN_SIZE
-    test ah, ah
-    jnz .abort_clean            ; not record-aligned
+    ; SPEC.md 20.2: an aborting entry may have created windows before it
+    ; declared itself broken - the one it returns in BX, and any others.
+    ; Destroy them ALL by the W_SEG creator stamp (wm_destroy_seg) rather
+    ; than by trusting BX: a package that just declared itself broken gets
+    ; nothing believed, and the sweep only ever touches records wm_create
+    ; stamped itself. BEFORE ld_unreserve, so no window outlives the region
+    ; its procs live in - a survivor's repaint would far-call a freed claim.
+    ; The reserved instance record was never published, so it needs nothing.
     call gfx_lock
-    call wm_destroy             ; in: BX; clears the record + zord slot
+    mov ax, [ld_base]
+    call wm_destroy_seg
     call gfx_unlock
-.abort_clean:
+    mov di, [ld_rec]            ; the region, and anything the entry proc
+    call ld_unreserve           ; claimed before it declared itself broken
     mov al, LD_EABORT
     ret
 
