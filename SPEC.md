@@ -5318,6 +5318,29 @@ Menu/dispatch: see §12/§13 — "Task Manager" (CMD_TASKS = 3) is the System
 menu's third item, under "Control Panel"; dispatch calls `app_launch`
 KIND_TASKMGR like the §14 kinds.
 
+
+### 28.1 The window is sized to the SCREEN, not to a constant
+
+The template carried a fixed height, which is right on VGA's 480 rows and too
+tall on Hercules' 348 - so the window hung over the dock strip, and
+`dock_paint` then had to draw *under* a window instead of over the desktop,
+which is the one case `wm_fast_ok` declines (§11.90). Every window opened on
+top of it paid for that with a full repaint. On CGA's 200 rows it never
+fitted at all.
+
+`tm_init` derives the height once, at boot, from `[vid_dock_y0]`: as many
+process rows as the space between the menu bar and the dock will take, capped
+at `TMM_ROWS`, and never fewer than one. `[tm_maxrow]` is that count.
+
+This is separate from the per-row clip against `[tm_ylim]`, which stays: that
+stops a row's glyphs being lettered over the dock once a second, and it is
+what made an oversized window survivable rather than correct. The frame
+fitting is what stops the redraws.
+
+**CGA still shows only a handful of rows** - 156 usable pixels does not hold
+19 of them however the frame is sized. Recovering them means a wider window
+and a second column, which is not done here.
+
 ## 29. instance.inc — the instance table (running-app lifecycle)
 
 Every running application instance — built-in kind or loaded package — is

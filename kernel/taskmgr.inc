@@ -159,8 +159,46 @@ TMM_ROWS    equ INST_MAX + 7    ; System, its four buffer rows, the two
 ; -----------------------------------------------------------------------------
 tm_init:
     push ax
+    push bx
+    push dx
     int 0x12                    ; AX = conventional memory, KB
     mov [tm_totkb], ax
+
+    ; --- fit the window between the menu bar and the dock ---------------------
+    ; The template used to carry a fixed 312, which is fine on VGA's 480 rows
+    ; and eight pixels too many on Hercules' 348 - so the window hung over the
+    ; dock strip, and dock_paint then had to draw UNDER a window instead of
+    ; over the desktop, which is the one case wm_fast_ok declines (SPEC.md
+    ; 11.90). Every window opened on top of it paid for that with a full
+    ; repaint. On CGA's 200 rows it never fitted at all.
+    ;
+    ; So the height is derived, once, at boot: as many process rows as the
+    ; space between MBAR_H and [vid_dock_y0] will take, and never more than
+    ; the table has records for.
+    mov ax, [vid_dock_y0]
+    sub ax, MBAR_H              ; AX = px available to the whole frame
+    sub ax, TITLE_H + 1 + TMM_ROW_Y     ; ...less the chrome and the maps
+    jbe .norows
+    mov bl, TM_ROW_H
+    div bl                      ; AL = rows that fit (AH = remainder)
+    xor ah, ah
+    cmp ax, TMM_ROWS
+    jbe .rows
+    mov ax, TMM_ROWS            ; never more than there is data for
+.rows:
+    or ax, ax
+    jnz .haverows
+.norows:
+    mov ax, 1                   ; a screen this short still gets one row
+.haverows:
+    mov [tm_maxrow], ax
+    mov dx, TM_ROW_H
+    mul dx
+    add ax, TITLE_H + 1 + TMM_ROW_Y
+    mov [tm_tpl+6], ax          ; the frame height the machine can take
+
+    pop dx
+    pop bx
     pop ax
     ret
 
@@ -1669,6 +1707,9 @@ tm_rows_mem:
 .blank:
     cmp word [tm_mrow], TMM_ROWS
     jae .done
+    mov ax, [tm_maxrow]         ; ...and at what this screen actually shows
+    cmp word [tm_mrow], ax
+    jae .done
     call tm_mrow_open
     call tm_mrow_close
     jmp .blank
@@ -3010,6 +3051,10 @@ tm_sqp:     resw 1              ; ...and its texture, or 0 for no square. A
                                 ; would be erased again
 tm_elck:    resw TMC_N          ; the last drawn state of the five non-row
                                 ; elements, one word each (TMC_*), and
+tm_maxrow:  resw 1              ; process rows this SCREEN has room for, <=
+                                ; TMM_ROWS; set once by tm_init from
+                                ; [vid_dock_y0] so the window never overlaps
+                                ; the dock (SPEC.md 28)
 tm_rowck:   resw TMM_ROWS       ; the last drawn content of each row, one
                                 ; word each (tm_rowsum). Shared by both
                                 ; views - TM_ROWS is the smaller of the two
