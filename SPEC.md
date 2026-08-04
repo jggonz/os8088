@@ -496,7 +496,7 @@ bytes are hard-coded.
 | `font_str`   | CX=x, DX=y, SI=NUL str   | draw string left→right               |
 | `font_width` | SI=NUL str               | out AX = pixel width (8 × length)    |
 | `font_str_x` / `font_width_x` | ES:SI = NUL str | the same two, reading the string through **ES** — what the `X` stubs of §20.3 call so a package's string can live in its own segment |
-| `osapi_font_glyphs` | — | out SI = the offset of `font_glyphs` in KERNEL_SEG, AL = FONT_FIRST (32), AH = FONT_LAST (126), CX = 8 bytes per glyph. API slot 0x0200 |
+| `osapi_font_glyphs` | — | out SI = the offset of `font_glyphs` in KERNEL_SEG, AL = FONT_FIRST (32), AH = FONT_LAST (126), CX = 8 bytes per glyph. API slot 0x0258 |
 
 **Handing out the bitmaps** (`osapi_font_glyphs`) is for an app that draws
 text into its OWN pixels rather than onto the screen — apps/paint's text tool
@@ -1013,7 +1013,7 @@ W_ONSIZE equ 24  ; word: near ptr or 0 - the resize negotiator (§11.1).
                  ; Called BEFORE a new size is committed, with SI = window,
                  ; CX/DX = the proposed frame size; answers in CX/DX with the
                  ; size it will accept. NOT a template word: wm_create zeroes
-                 ; it, `wm_onsize` (API slot 0x0208) sets it.
+                 ; it, `wm_onsize` (API slot 0x0260) sets it.
 WIN_SIZE equ 26
 MAX_WIN  equ 12
 
@@ -1184,7 +1184,7 @@ the record changes — which is the whole point: nothing has been drawn at
 either size yet, so a refusal costs no repaint. The answer is a SIZE and not
 a yes/no because the case that motivated it is per-axis: apps/paint refuses a
 drag that would crop artwork, and a drag that would lose columns but not rows
-should still get its rows. Install it with `wm_onsize` (API slot 0x0208,
+should still get its rows. Install it with `wm_onsize` (API slot 0x0260,
 BX = window, AX = a near proc in the window's own segment, 0 clears).
 The negotiator runs under the gfx lock and **must not draw** — it decides,
 returns, and draws in the W_PAINT that immediately follows.
@@ -2860,6 +2860,39 @@ way DOS's did. Files are capped at 65,535 bytes by the 16-bit size and
 buffer contracts (`FERR_BIG`), which is far below the 64KB the near model
 could address anyway.
 
+### 18.4.1 `dskw_readbig` — the one file op with no 64KB ceiling
+
+Ported from `main` at `main`'s slot, 0x01E8. `dskw_read`'s sibling: same
+gate, same current-directory name resolution, same chain walk — but the
+destination **advances by segment** (ES += 32 per 512-byte sector, the offset
+held at 0), so the 16-bit offset limit never binds and `dsk_xfer`'s 8237
+page-straddle staging (§18.1) keeps working per sector unchanged.
+
+```
+in   SI -> NUL 8.3 name, ES = destination BASE segment (buffer at ES:0000),
+     DX:CX = capacity in bytes (32-bit, DX high)
+out  CF=0, DX:AX = bytes read (the file's 32-bit size);
+     CF=1, AX = FERR_* - FERR_BIG decided from the directory entry's 32-bit
+     size BEFORE any data I/O, destination untouched
+```
+
+**It allocates nothing.** There is no staging buffer and no growth in the
+kernel's span: the caller supplies the destination, which in practice is an
+`OSAPI_MEM_CLAIM` grant (§50.3), because a package's own region caps at one
+segment and this exists precisely for data that does not fit there. Only the
+partial final sector stages, through the same `dsk_secbuf` `dskw_rdata` uses.
+
+A size field whose sector count would not fit 16 bits (>= 32MB) cannot be a
+real chain on any volume this kernel mounts (TotSec16 <= 65,535), so it is
+refused as FERR_IO up front: a wrapped count could otherwise make the chain
+walk stop early and report success over a hostile entry (§18 — every byte off
+the disk is hostile input).
+
+`apps/filetest` check 01 covers it, against a 96KB `BIG.DAT` whose byte at
+offset i is `i >> 9` — one distinct value per sector, so a destination that
+failed to advance reads a *different* byte rather than a plausible one. The
+probe is offset 0x11111, past the horizon every other file op stops at.
+
 ### 18.5 `dskw_mkdir` — creating a subdirectory
 
 ```
@@ -3491,13 +3524,13 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
                        0x0110 wm_fullscreen     0x01A0 xm_free
                        0x0118 wm_grow_paint     0x01A8 xm_copy
 
-0x01B0 wm_geom         0x01D0 wm_resize         0x01E8 mem_claim      (X)
-0x01B8 --- HELD ---    0x01D8 gfx_blit4         0x01F0 mem_free       (X)
-0x01C0 --- HELD ---    0x01E0 wm_about_set      0x01F8 mem_avail
-0x01C8 --- HELD ---                             0x0200 osapi_font_glyphs
-                                                0x0208 wm_onsize
-                                                0x0210 osapi_file_here
-                                                0x0218 osapi_file_goto
+0x01B0 wm_geom         0x01D0 wm_resize         0x0240 mem_claim      (X)
+0x01B8 --- HELD ---    0x01D8 gfx_blit4         0x0248 mem_free       (X)
+0x01C0 --- HELD ---    0x01E0 wm_about_set      0x0250 mem_avail
+0x01C8 --- HELD ---    0x01E8 dskw_readbig  (N) 0x0258 osapi_font_glyphs
+                       0x01F0..0x0238 RESERVED  0x0260 wm_onsize
+                              for `main`        0x0268 osapi_file_here
+                                                0x0270 osapi_file_goto
 ```
 
 **Five numbers are HELD EMPTY, and that is the point of the layout.** Every
@@ -3509,8 +3542,11 @@ arena at 0x01B8..0x01C8 — the number is **reserved rather than reused**: the
 cell is `stc` / `retf`, so a stray call gets CF=1 and every register back.
 Reusing 0x01C8 for this fork's KB-counting `mem_avail` would have failed
 silently and by a factor of 64, which is exactly the class of bug the holding
-prevents. This fork's own slots start at 0x01E8, above `main`'s highest,
-mirroring how §50 puts this fork's own SECTIONS above `main`'s highest.
+prevents. This fork's own slots start at 0x0240, above a RESERVED
+band at 0x01F0..0x0238 — they sat at 0x01E8 until `main` put `dskw_readbig`
+there, so the whole block had to move once already and every package be
+rebuilt. Ten cells of headroom is the cheap way not to do that again, and it
+is the same reasoning as §50's reserved 45–49 section band.
 
 **Offsets are not stable across kernel versions, and never were pretended
 to be.** Two things have moved them wholesale: the removal of the sound
@@ -4686,6 +4722,20 @@ and non-zero exit + stderr message on any validation failure.
   new packages append at the end and the existing indices hold.
   `run`/`debug`/`test` attach build/apps.img as floppy index 1. 86Box's
   fdd_02 gets apps360.img (best-effort config keys).
+
+### 24.1 Data files on a volume
+
+`os88disk.py` validates `*.O88` as packages and ships **anything else as-is**,
+so a disk can carry a module, a picture or a text file next to the programs
+that read it. The 8.3 name check, the per-directory cap and the duplicate
+check apply the same either way; only the package validation is skipped.
+
+Nothing in the kernel changed for this. A non-package already listed with the
+generic icon and did nothing on a double-click — that has always been the
+behaviour for any file a host OS put on the volume, and this only makes the
+*builder* able to produce one. The shipped apps disks carry no data files;
+`build/filetest.img` carries `BIG.DAT` for §18.4.1's check, generated rather
+than committed.
 
 ## 25. icons.inc — icon format, draw routine, built-in library
 

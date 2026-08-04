@@ -821,19 +821,19 @@ fr_setup:
     jnz .have
     jmp .out
 .have:
-    mov ax, [es:bx+W_W]             ; content = w-2 by h-TITLE_H-1, less the
-    sub ax, 2                       ; status strip. The record is KERNEL
-                                    ; memory and ES points there both in a
-                                    ; callback and in our worker's frame
-                                    ; (SPEC.md 20.1/20.6) - and this package
-                                    ; never loads ES with anything else
+    call OSAPI_WM_GEOM              ; CX/DX = CONTENT w/h (SPEC.md 11) - the
+                                    ; kernel does the w-2 / h-TITLE_H-1 that
+                                    ; every caller used to repeat off the
+                                    ; record, so this package no longer needs
+                                    ; ES to point at kernel memory at all
+    mov ax, cx
     cmp ax, 1
     jge .cwok
     mov ax, 1                       ; never 0: it is a divisor below
 .cwok:
     mov [fr_cw], ax
-    mov ax, [es:bx+W_H]
-    sub ax, TITLE_H+1+FR_STRIP_H
+    mov ax, dx
+    sub ax, FR_STRIP_H              ; ...less our own status strip
     cmp ax, 1
     jge .chok
     mov ax, 1
@@ -1234,8 +1234,12 @@ fr_emit_body:
     mov bx, [fr_win]
     or bx, bx
     jz .step
-    test word [es:bx+W_FLAGS], 2    ; still visible?
-    jz .step
+    call OSAPI_WM_GEOM              ; CF=1: not visible (SPEC.md 11). Was a
+    jc .step                        ; [es:bx+W_FLAGS] test, which needed ES
+                                    ; still pointing at the record inside the
+                                    ; WORKER's frame - true, but only by
+                                    ; convention, and one stray `mov es` away
+                                    ; from reading a flag out of our own image
     call OSAPI_WM_CLIP_SET          ; how much of it shows? (SPEC.md 11.3)
     jc .step
     jmp short .draw

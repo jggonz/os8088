@@ -124,9 +124,11 @@ def name83(path: str, seen: set) -> bytes:
     if not 1 <= len(stem) <= 8 or len(ext) > 3:
         fail(f"{path}: '{base}' is not a valid 8.3 name "
              "(stem 1-8 chars, extension 0-3)")
-    if ext != "O88":
-        fail(f"{path}: '{base}' must carry the .O88 extension - the kernel "
-             "only marks *.O88 entries loadable (SPEC.md 19)")
+    # Any 8.3 extension is legal now that a disk may carry DATA next to its
+    # programs (SPEC.md 24). The kernel still only marks *.O88 entries
+    # loadable, so a data file simply lists with the generic icon and does
+    # nothing on a double-click - which is the behaviour a non-package has
+    # always had for any file a host OS put there.
     if stem in RESERVED_STEMS:
         fail(f"{path}: '{stem}' is a reserved DOS device name")
     for ch in (stem + ext).encode("ascii", "replace"):
@@ -225,6 +227,18 @@ def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
     return bytes(bs)
 
 
+def read_data_file(path: str) -> bytes:
+    """Read one non-.O88 data file: shipped as-is, no package validation."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        fail(f"cannot read {path}: {e}")
+    if not data:
+        fail(f"{path}: empty")
+    return data
+
+
 def folder83(name: str) -> bytes:
     """Derive the 11-byte FAT short name of a subdirectory (no extension)."""
     up = name.upper()
@@ -265,7 +279,14 @@ def build(args) -> int:
             if folder:
                 folder83(folder)                 # validate once, on creation
         name11 = name83(path, seen[key])
-        data = validate_o88(path)
+        # Only *.O88 entries are packages; anything else ships as data, so a
+        # disk can carry a module, a picture or a text file next to the
+        # programs that read it (SPEC.md 24). The 8.3 name, the per-directory
+        # cap and the duplicate check all apply the same either way.
+        if path.lower().endswith(".o88"):
+            data = validate_o88(path)
+        else:
+            data = read_data_file(path)
         nclusters = (len(data) + lay.cluster_bytes - 1) // lay.cluster_bytes
         groups[key].append((name11, data, nclusters))
 
@@ -558,7 +579,7 @@ def verify(path: str) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Build or verify a FAT data floppy of .o88 packages.")
+        description="Build or verify a FAT data floppy of .o88 packages and data files.")
     ap.add_argument("-o", "--output", metavar="OUT.img",
                     help="floppy image to write")
     ap.add_argument("--size", type=int, choices=(1440, 360),

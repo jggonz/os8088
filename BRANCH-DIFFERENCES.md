@@ -56,9 +56,9 @@ Written from `experimental`. `main` is not modified by this document.
   (paragraph-based).
 - `experimental` only: `MEM_CLAIM`/`MEM_FREE`/`MEM_AVAIL` (KB-based),
   `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`.
-- **The file API is identical on both**, including its 64KB per-call ceiling
-  and every `FERR_*` code. `experimental` additionally recurses into folders
-  on delete (`dskw_rmtree`).
+- **The file API is identical on both**, including `dskw_readbig` (0x01E8),
+  the one op with no 64KB ceiling, and every `FERR_*` code. `experimental`
+  additionally recurses into folders on delete (`dskw_rmtree`).
 
 **Build and layout**
 

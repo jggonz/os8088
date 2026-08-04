@@ -331,12 +331,40 @@ VID_CGA    equ 2
                                  ; handler's offset (0 = none). Preserves every
                                  ; register and the flags
 
+%define OSAPI_FILE_READBIG  KERNEL_SEG:0x01E8   ; SI = NUL 8.3 name, ES = the
+                                 ; destination BASE segment (the buffer starts
+                                 ; at ES:0000), DX:CX = capacity in BYTES,
+                                 ; 32-bit, DX high. out CF=0 and DX:AX = bytes
+                                 ; read (the file's 32-bit size); CF=1 and
+                                 ; AX = FERR_*, with FERR_BIG decided from the
+                                 ; directory entry BEFORE any data I/O, so the
+                                 ; destination is untouched.
+                                 ;
+                                 ; The one file op with NO 64KB ceiling. The
+                                 ; destination advances by SEGMENT - ES += 32
+                                 ; per 512-byte sector, offset held at 0 - so
+                                 ; the 16-bit offset limit never binds and a
+                                 ; 116KB file lands in a heap claim in one
+                                 ; call. Point it at OSAPI_MEM_CLAIM's answer,
+                                 ; not at your own segment: your region caps
+                                 ; at one segment and this exists precisely
+                                 ; for data that does not fit there.
+                                 ;
+                                 ; Same gate, same current-directory name
+                                 ; resolution and the same UI-task-only rule
+                                 ; as every other file slot.
+
 ; --- this fork's own slots (docs/PORTING.md 3) ---------------------------------
 ; Everything above is at `main`'s number. Everything from here up is this
-; fork's, in one block above `main`'s highest - and 0x01B8..0x01C8 are HELD
-; EMPTY because `main` puts its paragraph-counting arena there and this fork's
-; heap counts KB (SPEC.md 50.3). A call to one of those three returns CF=1.
-%define OSAPI_MEM_CLAIM     KERNEL_SEG:0x01E8   ; the claim heap (SPEC.md 50.3):
+; fork's - and 0x01B8..0x01C8 are HELD EMPTY because `main` puts its
+; paragraph-counting arena there and this fork's heap counts KB (SPEC.md
+; 50.3), as is 0x01F0..0x0238, which is RESERVED for `main` to grow into. A
+; call to any held number returns CF=1 with every register intact.
+;
+; The reservation is not theoretical: this block sat at 0x01E8 until `main`
+; put OSAPI_FILE_READBIG there, and moving it cost a rebuild of every
+; package. Ten cells of headroom is cheaper than doing that again.
+%define OSAPI_MEM_CLAIM     KERNEL_SEG:0x0240   ; the claim heap (SPEC.md 50.3):
                                  ; AX = KB wanted; out CF=0 and DX = the base
                                  ; segment, CF=1 refused. This is how you get
                                  ; memory your region cannot hold - a canvas,
@@ -349,9 +377,9 @@ VID_CGA    equ 2
                                  ; your claims when your instance dies, so you
                                  ; need no teardown hook; free them yourself
                                  ; only to hand memory back mid-session.
-%define OSAPI_MEM_FREE      KERNEL_SEG:0x01F0   ; DX = the segment you were
+%define OSAPI_MEM_FREE      KERNEL_SEG:0x0248   ; DX = the segment you were
                                  ; given; out CF=0 released, CF=1 not yours
-%define OSAPI_MEM_AVAIL     KERNEL_SEG:0x01F8   ; out AX = largest free run in
+%define OSAPI_MEM_AVAIL     KERNEL_SEG:0x0250   ; out AX = largest free run in
                                  ; KB, BX = total free KB. Size yourself from
                                  ; THIS, not from int 12h: it is the only
                                  ; number that accounts for what the kernel
@@ -469,7 +497,7 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; app that sets them leaves the shadow, the
                                  ; z-order damage and the dock out of step.
                                  ; Do NOT hold the gfx lock.
-%define OSAPI_WM_ONSIZE     KERNEL_SEG:0x0208   ; BX = win ptr, AX = a near proc
+%define OSAPI_WM_ONSIZE     KERNEL_SEG:0x0260   ; BX = win ptr, AX = a near proc
                                  ; in YOUR segment (0 clears it). The kernel
                                  ; calls it BEFORE it commits a size the user
                                  ; dragged out of your grow box, with
@@ -483,10 +511,10 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; drawn at either size, so DO NOT draw in it -
                                  ; decide, return, and draw in the W_PAINT the
                                  ; kernel is about to make.
-%define OSAPI_FILE_HERE     KERNEL_SEG:0x0210   ; out DX = the current
+%define OSAPI_FILE_HERE     KERNEL_SEG:0x0268   ; out DX = the current
                                  ; directory's first cluster (0 = the root),
                                  ; BL = the drive. No disk I/O.
-%define OSAPI_FILE_GOTO     KERNEL_SEG:0x0218   ; in DX = a cluster from
+%define OSAPI_FILE_GOTO     KERNEL_SEG:0x0270   ; in DX = a cluster from
                                  ; OSAPI_FILE_HERE, BL = its drive; out CF=1
                                  ; it could not be listed and the volume is
                                  ; back at the root with the write gate shut.
@@ -504,7 +532,7 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; moved it. If your Save means "the same
                                  ; place my Save As chose", store the pair
                                  ; these two slots trade in beside the name.
-%define OSAPI_FONT_GLYPHS   KERNEL_SEG:0x0200   ; out SI = the offset of the
+%define OSAPI_FONT_GLYPHS   KERNEL_SEG:0x0258   ; out SI = the offset of the
                                  ; kernel's 8x8 glyph table in KERNEL_SEG,
                                  ; AL = first character code it covers,
                                  ; AH = last, CX = bytes per glyph (8). Read

@@ -442,7 +442,17 @@ The forks were resynced once, partially and deliberately. Four things crossed:
   held cell is `stc`/`retf`: CF=1 and every register back. The rule is that
   **a slot number never means two different contracts** — reusing 0x01C8 for
   a KB-based `mem_avail` would have failed silently and by a factor of 64.
-  This fork's own slots start at 0x01E8, above `main`'s highest.
+  This fork's own slots start at **0x0240**, above a RESERVED band at
+  0x01F0..0x0238. They sat at 0x01E8 until `main` put `dskw_readbig` there,
+  so the block moved once already and every package had to be rebuilt — the
+  headroom is the cheap way not to repeat that.
+
+  **No app reads the window record through ES any more.** `wm_geom` answers
+  content size and visibility, so Fractal and Note Pad ask the kernel instead
+  of dereferencing a pointer whose segment they only held by convention. The
+  record is still readable and the SDK still publishes the offsets; it is no
+  longer the idiom, and the worker-task case (Fractal) was the one where the
+  convention was thinnest.
 - **`OSAPI_WM_GEOM` (0x01B0).** Content width/height and visibility in one
   call. Reading `[es:bx+W_W]` still works here and most apps still do it, but
   those are FRAME dimensions and every caller repeated the same
@@ -457,6 +467,14 @@ The forks were resynced once, partially and deliberately. Four things crossed:
   onward — so its `MB_SEG` is 0 even under a package. Solitaire and Arkanoid
   ship credit panels behind it; Arkanoid's also holds its **worker** off the
   content while the panel is up, or the game would draw underneath it.
+- **`dskw_readbig` (0x01E8).** The one file op with no 64KB ceiling: the
+  destination advances by SEGMENT, so a package loads a 96KB file into a heap
+  claim in one call. It allocates nothing — the caller supplies the
+  destination, and only the partial final sector stages. `os88disk.py` ships
+  non-`.O88` files as data now, which is how a big file gets onto a volume to
+  be read; `apps/filetest` check 01 covers it against a generated `BIG.DAT`
+  whose byte at offset i is `i >> 9`, so a destination that failed to advance
+  reads a *different* byte rather than a plausible one.
 - **`cpudet.inc` + `xmem.inc` (§41).** CPU tiers, the A20 line and the store
   above 1MB, at `main`'s five slots. On tier 0 — the target machine — all of
   it is zero KB and every entry point returns having touched no port. The

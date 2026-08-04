@@ -242,8 +242,17 @@ $(BUILD)/filetest.bin: apps/filetest/filetest.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/filetest.o88: $(BUILD)/filetest.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/filetest.bin -o $@
 
-$(BUILD)/filetest.img: $(BUILD)/filetest.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/filetest.o88
+# BIG.DAT: 96KB, larger than any other file op can move, so filetest's
+# readbig check has something to read. Byte i is (i >> 9) - one distinct value
+# per 512-byte sector - so a destination that failed to advance by SEGMENT
+# reads a different byte rather than a plausible one. Generated, never
+# committed: 96KB of git churn per rebuild for a fixture is not worth it, and
+# it rides the filetest image only (never the shipped apps disks).
+$(BUILD)/big.dat: Makefile | $(BUILD)
+	python3 -c "import sys; n=96*1024; sys.stdout.buffer.write(bytes((i>>9)&0xFF for i in range(n)))" > $@
+
+$(BUILD)/filetest.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/filetest.o88 $(BUILD)/big.dat
 
 # The same package on a legally fragmented volume: --scramble interleaves the
 # chains, so the write path's allocator and the free/replace paths meet holes

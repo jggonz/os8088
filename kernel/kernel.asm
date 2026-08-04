@@ -391,26 +391,45 @@ osapi_table:
                                   ;          no stub is needed
     OSAPI_SLOT wm_about_set       ; 0x01E0 - the app-name pull-down (12.2):
                                   ;          BX = win, SI = your About handler
-; --- and here `main`'s table ends. Everything below is this fork's own, in
-;     one block above its highest number, exactly as SPEC.md 50 puts this
-;     fork's own SECTIONS above `main`'s highest -------------------------------
-    OSAPI_JSLOT api_mem_claim     ; 0x01E8 - the claim heap (SPEC.md 50.3):
-    OSAPI_JSLOT api_mem_free      ; 0x01F0   X, same fence as the spawn
-    OSAPI_SLOT osapi_mem_avail    ; 0x01F8
-    OSAPI_SLOT osapi_font_glyphs  ; 0x0200 - the kernel's 8x8 glyph table
+    OSAPI_JSLOT api_file_readbig  ; 0x01E8 - the one file op with no 64KB
+                                  ;          ceiling (SPEC.md 18.4): N, and
+                                  ;          the destination advances BY
+                                  ;          SEGMENT, so a package can load a
+                                  ;          116KB module into a heap claim
+; --- and here `main`'s table ends -------------------------------------------
+;     0x01F0..0x0238 are RESERVED for `main` to grow into. This fork's own
+;     slots used to start immediately above its highest, and `main` promptly
+;     took the next number (readbig, 0x01E8) - so the block moved once
+;     already. Ten cells of headroom is the cheap way not to move it again,
+;     and it is the same reasoning as SPEC.md's reserved 45-49 band.
+    OSAPI_RSLOT                   ; 0x01F0
+    OSAPI_RSLOT                   ; 0x01F8
+    OSAPI_RSLOT                   ; 0x0200
+    OSAPI_RSLOT                   ; 0x0208
+    OSAPI_RSLOT                   ; 0x0210
+    OSAPI_RSLOT                   ; 0x0218
+    OSAPI_RSLOT                   ; 0x0220
+    OSAPI_RSLOT                   ; 0x0228
+    OSAPI_RSLOT                   ; 0x0230
+    OSAPI_RSLOT                   ; 0x0238
+; --- this fork's own, in one block (docs/PORTING.md 3) ----------------------
+    OSAPI_JSLOT api_mem_claim     ; 0x0240 - the claim heap (SPEC.md 50.3):
+    OSAPI_JSLOT api_mem_free      ; 0x0248   X, same fence as the spawn
+    OSAPI_SLOT osapi_mem_avail    ; 0x0250
+    OSAPI_SLOT osapi_font_glyphs  ; 0x0258 - the kernel's 8x8 glyph table
                                   ;          (SPEC.md 6): out SI = its offset
                                   ;          in KERNEL_SEG, AL = first code,
                                   ;          AH = last, CX = bytes per glyph
-    OSAPI_SLOT wm_onsize          ; 0x0208 - install the resize negotiator
+    OSAPI_SLOT wm_onsize          ; 0x0260 - install the resize negotiator
                                   ;          (SPEC.md 11.1): BX = win, AX =
                                   ;          near proc. The other half of
                                   ;          docs/PAINT-NOTES.md's resize
                                   ;          complaint - wm_resize is the app
                                   ;          asking, this is the app answering
-    OSAPI_SLOT osapi_file_here    ; 0x0210 - where the file API's names
+    OSAPI_SLOT osapi_file_here    ; 0x0268 - where the file API's names
                                   ;          resolve (SPEC.md 18.4/19.2)
-    OSAPI_SLOT osapi_file_goto    ; 0x0218 - ...and how to put it back
-osapi_table_end:                  ; 0x0220
+    OSAPI_SLOT osapi_file_goto    ; 0x0270 - ...and how to put it back
+osapi_table_end:                  ; 0x0278
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -418,7 +437,7 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 66 * 8
+%if OSAPI_TABLE_LEN != 77 * 8
 %error "os8088 API jump table must be exactly 54 8-byte slots"
 %endif
 
@@ -476,6 +495,7 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
     OSAPI_NSTUB api_file_write,  dskw_write
     OSAPI_NSTUB api_file_read,   dskw_read
     OSAPI_NSTUB api_file_delete, dskw_delete
+    OSAPI_NSTUB api_file_readbig, dskw_readbig
     OSAPI_NSTUB api_fdlg_open,   fdlg_open
 
 ; ...and the two-name case, which needs DI as well and so is written out

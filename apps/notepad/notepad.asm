@@ -170,22 +170,31 @@ np_entry:
 np_bounds:
     push ax
     push bx
+    push cx
     push dx
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
+    push ax
+    push dx
     add ax, NP_MARGIN
     mov [np_tx], ax
     add dx, NP_MARGIN
     mov [np_ty], dx
-    mov ax, [es:bx+W_X]             ; the window record is KERNEL memory and
-    add ax, [es:bx+W_W]             ; ES points at it on entry (SPEC.md 20.1)
-    sub ax, 2
-    mov [np_rgt], ax
-    mov ax, [es:bx+W_Y]
-    add ax, [es:bx+W_H]
-    sub ax, 2
+    call OSAPI_WM_GEOM              ; CX/DX = content w/h (BX still the window)
+    pop ax                          ; content top
+    add ax, dx
+    dec ax                          ; the last drawable row...
     mov [np_bot], ax
+    pop ax                          ; content left
+    add ax, cx
+    dec ax                          ; ...and the last drawable column. This was
+    mov [np_rgt], ax                ; W_X+W_W-2 read off the record through ES;
+                                    ; origin + size - 1 is the same pixel and
+                                    ; needs no kernel pointer of our own - and
+                                    ; it stays right under WF_FULL, where the
+                                    ; frame IS the content (SPEC.md 11.2)
     pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -465,9 +474,10 @@ np_toast:
     mov [np_by1], dx
     add dx, 11
     mov [np_by2], dx
-    mov ax, [es:bx+W_X]
-    add ax, [es:bx+W_W]
-    sub ax, 4                   ; 2px frame + a 2px gap from the edge
+    call OSAPI_WM_GEOM          ; CX = content width (BX is still the window;
+    mov ax, di                  ; DX is dead here, both strip rows are stored)
+    add ax, cx
+    sub ax, 3                   ; 2px frame + a 2px gap from the edge
     mov [np_bx2], ax
     push ax
     mov si, [np_msg]
@@ -985,14 +995,16 @@ np_redraw:
     push dx
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = x1, DX = y1
-    mov cx, [es:bx+W_X]
-    add cx, [es:bx+W_W]
-    sub cx, 2                       ; CX = x2
+    push ax
     push dx
-    mov dx, [es:bx+W_Y]
-    add dx, [es:bx+W_H]
-    sub dx, 2                       ; DX = y2
-    pop bx                          ; BX = y1
+    call OSAPI_WM_GEOM              ; CX/DX = content w/h
+    pop ax                          ; y1
+    add dx, ax
+    dec dx                          ; DX = y2
+    mov bx, ax                      ; BX = y1
+    pop ax                          ; x1
+    add cx, ax
+    dec cx                          ; CX = x2
     push ax                         ; the pen is a register here, not a
     mov al, CWHITE                  ; variable - keep x1 across the call
     call OSAPI_SET_COLOR
