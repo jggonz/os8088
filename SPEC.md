@@ -5051,16 +5051,26 @@ in-segment map would show one black block and nothing else.
   (`tm_pat_buf`, 2-on-2-off horizontal bars — the band is 14 rows tall and,
   on a 640KB machine, four pixels wide, so a texture has to carry its
   signature vertically or it has nowhere to show it), the **package pool**
-  solid black, and **each live heap claim** in `tm_pat_clm`, a 2px diagonal
-  (§50) — read live at draw time from the claim table, so arming double
-  buffering or opening a Disk window makes a band appear. The buffer band is
-  what makes the bar say the same thing the rows do: the kernel is not one
-  lump, and the part of it that is scratch rather than program is the part
-  these figures are steered by (`docs/KERNEL-MEMORY.md`). A claim gets its
-  own texture rather than the kernel's gray because the two are unrelated —
-  memory reserved at build time and memory asked for at run time — and one
-  texture for both made the map unreadable in exactly the place the CLM
-  column points at.
+  solid black, and **each live heap claim** as a **framed block**
+  (`tm_map_claim`: `tm_pat_clm` inside, a 1px black `gfx_frame` around) —
+  read live at draw time from the claim table, so arming double buffering or
+  opening a Disk window makes a band appear. The buffer band is what makes
+  the bar say the same thing the rows do: the kernel is not one lump, and the
+  part of it that is scratch rather than program is the part these figures
+  are steered by (`docs/KERNEL-MEMORY.md`).
+
+  **A claim is framed and the others are not**, and that asymmetry is the
+  point. A claim is the only kind of band here that appears and disappears
+  while you watch, several sit shoulder to shoulder, and the scale is coarse
+  — 4KB per pixel on a 640KB machine, so a 3KB Disk-window cache is a single
+  column. No texture can say where one claim stops and the next starts at
+  that size; a 1px rule can, and `gfx_frame` degenerates into exactly the
+  solid vertical line a one-column claim should look like. `tm_pat_clm` is
+  deliberately light for the same reason — it is there so the interior is
+  not white, and a darker one swallowed its own frame at four pixels wide.
+  Claims used to share the kernel's 50% gray, which made the map say one
+  thing about two unrelated ones: memory reserved at build time and memory
+  asked for at run time.
 - (6,33): `"HEAP nnnK/nnnK"` — claimed and total heap KB (§50).
 - Package-pool map: 1px black frame (6,43)-(167,58), interior
   (7,44)-(166,57) = 160×14. Paragraph scale across `PKG_PARA`; the interior

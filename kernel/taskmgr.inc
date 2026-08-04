@@ -209,10 +209,18 @@ tm_pat_buf:
 ; ...and one for a live heap claim (SPEC.md 50). Claims used to be drawn in
 ; the same 50% checker as the kernel span, which made the RAM map say "gray"
 ; about two unrelated things: memory the kernel reserved at build time and
-; memory something asked for at run time. A 2px diagonal is the third
-; signature that survives a 4px-wide band next to the other two.
+; memory something asked for at run time.
+;
+; The interior is deliberately LIGHT, because what has to be legible about a
+; claim is its EDGES, not its middle: claims are the only bands on this map
+; that come and go, they sit next to each other, and on a 640KB machine the
+; scale is 4KB per pixel - a 3KB Disk-window cache is one column. So the band
+; is framed in solid black by tm_map_claim and this fills the inside, which
+; makes the frame the thing you read. A darker interior swallowed its own
+; frame at four pixels wide, and the diagonal this replaces gave every claim
+; a ragged edge that could not be told from the next one along.
 tm_pat_clm:
-    db 0xCC, 0x66, 0x33, 0x99, 0xCC, 0x66, 0x33, 0x99
+    db 0xEE, 0xFF, 0xBB, 0xFF, 0xEE, 0xFF, 0xBB, 0xFF
 
 ; Slot patterns: 12 x 8 row bytes, pattern i = tm_pats + i*8, bit set =
 ; white (SPEC.md 5/28). Black-on-white hatch textures, none of them the
@@ -1146,8 +1154,7 @@ tm_map_ram:
     push si
     mov bx, TMM_M1_Y1
     call tm_map_rect
-    mov word [gfx_pat], tm_pat_clm      ; a claim's own texture, not the
-    call gfx_fill_pat                   ; kernel's gray (tm_pat_clm above)
+    call tm_map_claim           ; framed, so its edges are unmistakable
     pop si
 .cnext:
     inc si
@@ -1248,6 +1255,35 @@ tm_map_rect:
     inc bx                      ; interior = frame rows +1..+14
     mov dx, bx
     add dx, 13
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_map_claim - draw one heap claim's band: light interior, hard black frame
+; in:  AX = x1, BX = y1, CX = x2, DX = y2 (a tm_map_rect result)
+; out: nothing (all registers preserved)
+;
+; The frame is the point. A claim is the only kind of band on this map that
+; appears and disappears while you watch, several of them sit shoulder to
+; shoulder, and the scale is coarse - 4KB per pixel on a 640KB machine, so a
+; 3KB Disk-window cache is a single column. A texture alone cannot say where
+; one claim stops and the next starts at that size; a 1px rule can.
+;
+; gfx_frame degenerates gracefully: a one-column claim comes out as a solid
+; vertical line, which is exactly what it should look like.
+; -----------------------------------------------------------------------------
+tm_map_claim:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov word [gfx_pat], tm_pat_clm
+    call gfx_fill_pat
+    mov byte [gfx_color], CBLACK
+    call gfx_frame
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

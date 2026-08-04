@@ -68,12 +68,18 @@ above, so the two can be read against each other:
 | 50% gray | the kernel's own span | `System`, `Code+data` |
 | horizontal bars | its buffers | `Stacks`, `Disk bufs`, `FAT snap` |
 | solid black | the package pool | `Packages` |
-| 2px diagonal | a live heap claim | *(the CLM column)* |
+| framed light block | a live heap claim | *(the CLM column)* |
 | per-slot pattern | one package's region | each package row |
 
 `Builtins` has no square on purpose: a built-in owns no band on either map —
 its code is already inside `Code+data`, and its memory is heap claims billed
 to its own row.
+
+A claim is the only band drawn with a **frame**, because it is the only one
+that comes and goes while you watch, several sit shoulder to shoulder, and
+the scale is coarse enough (4KB per pixel on a 640KB machine) that a 3KB
+Disk-window cache is one column. The frame is what makes its edges readable;
+the interior texture is light so it does not swallow it.
 
 ---
 
