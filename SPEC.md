@@ -8385,6 +8385,21 @@ then found to matter more widely: `mem_tab` is all zeroes on a machine with no
 heap to claim from, so on 128KB the *conventional-memory map* hashed to 0 too
 and stayed blank forever.
 
+### 41.7 Testing
+
+The coverage matrix is in §16 and it is uneven by construction: QEMU
+presents no 8086 and no 286, so `make test` exercises **tier 2 only**, and
+with A20 already open — neither gate path in §41.2 is genuinely run there.
+Tier 1 belongs to `make 286`, tier 0 to `make xt` / `xt-640` / `xt-cga` /
+`xt-hercules`, and all of those are interactive.
+
+Two branches are cheap to reach under the harness and must both be checked:
+run the `test` recipe by hand with `-m 1M` for **no extended memory at all**
+(AH=88h answers 0 — the claim refuses, the caps slot reports 0, the three
+allocator slots refuse, and the Task Manager line reads `0/0K`) and with
+`-m 2M` for a small non-zero store, where an allocator that gets its
+subtraction wrong will hand out a base past the top of RAM.
+
 ### 41.8 The package ABI
 
 Five slots at `main`'s numbers: `OSAPI_CPU_INFO` (0x0188), `OSAPI_XMEM_CAPS`
@@ -8400,6 +8415,25 @@ resetting the CPU, which taken under the gfx lock is a dead machine.
 2. A `cpu 386` island is **assembly-time permission only** — an island
    reached on a 286 is an illegal-opcode trap on a machine with no handler.
 3. No code above 1MB, on any tier, ever.
+
+### 41.10 Acceptance
+
+- `make xt` and `make xt-640`: identical boot, identical desktop, identical
+  Task Manager figures except the tier/XMS line, which reads
+  `CPU 8086  XMS     0/    0K`. This is the regression that matters most —
+  tier 0 is the target machine.
+- `make test`: the line reads `386+` with five-digit KB figures; allocate,
+  copy out, copy back and compare, and the bytes match.
+- The same `test` recipe with `-m 1M`: `386+` and `0/0K`, and every allocator
+  slot refuses cleanly rather than handing out a base above the top of RAM.
+- `make 286` on a VM with more than 1MB: the line reads `286`, the HMA claim
+  succeeds, the AH=87h transport round-trips the same buffer the tier-2 path
+  did, and the caps figure is 64KB short of what AH=88h reported.
+- All three adapters (§39.9), because the line is drawn text like any other
+  and clips at `[tm_ylim]` — and on a narrow screen it is the **second
+  column** that has to hold it (§28.1).
+- `make clean && make`: both geometries, zero warnings, every §15.1 guard
+  still passing, and `make check-images` clean.
 
 ## 42. Paint — the seventh package (apps/paint/paint.asm)
 
