@@ -91,8 +91,14 @@ CCYAN     equ 3
 CRED      equ 4
 CMAGENTA  equ 5
 CBROWN    equ 6
-CLGRAY    equ 7
-CDGRAY    equ 8
+CLGRAY    equ 7             ; DECORATION grey - Minesweeper's covered cells,
+                            ; Arkanoid's rails. Never the disabled colour
+CDGRAY    equ 8             ; the DISABLED colour, and the only one (SPEC.md
+                            ; 46). Grey the whole control - frame, ring, box,
+                            ; icon AND label - not just its caption; a black
+                            ; control with faint writing beside it reads as
+                            ; live. Text-only controls need words too (see
+                            ; MENU_DIS below for why)
 CLBLUE    equ 9
 CLGREEN   equ 10
 CLCYAN    equ 11
@@ -795,6 +801,17 @@ MENU_DIS    equ 1           ; an item string that BEGINS with this byte is
                             ;
                             ; Still answer the command itself: a keyboard
                             ; shortcut never goes near a menu.
+                            ;
+                            ; THE '(NoRam)' IS NOT DECORATION. Grey is the
+                            ; whole visual signal, and on a 1bpp adapter it
+                            ; is no signal: font_ink rounds CDGRAY to BLACK
+                            ; (a dithered 8x8 glyph is unreadable), so on
+                            ; Hercules and CGA your disabled item is
+                            ; pixel-identical to a live one and merely
+                            ; declines to highlight. A menu item is text and
+                            ; nothing else, so the words ARE the mono half
+                            ; of the feature. SPEC.md 46 is the standard for
+                            ; every disabled control; this is its rule 3.
 
 ; --- window record layout (SPEC.md 11, 20 bytes) -------------------------------
 W_FLAGS   equ 0             ; word: bit0 = used, bit1 = visible, bit2 =

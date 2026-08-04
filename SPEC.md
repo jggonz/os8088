@@ -92,6 +92,12 @@ pre-empted background task, updating live while the user types or drags).
    drawing routines render into `[vid_rseg]` and touch no VGA register at
    all; only `gfx_flush` (Sequencer Map Mask) and the cursor path program
    the hardware, and both restore the same defaults.
+8. **A control that can refuse a click is greyed the way §46 says**, whether
+   it is the kernel's or a package's: `CDGRAY`, the whole control and not just
+   its caption, one predicate shared by the greying and the refusal, and words
+   as well for anything drawn only as text — because `font_ink` rounds
+   `CDGRAY` to black and a greyed *string* is invisible as such on two
+   adapters out of three (§39.4).
 
 ## 2. Memory map
 
@@ -1936,6 +1942,16 @@ to point `AMENU_ITEMS` at a different string to relabel it ("Save Gif" vs
 change, no ABI change, and works for a built-in's menus exactly as for a
 package's. An app must still answer the command itself — a keyboard shortcut
 never goes near a menu.
+
+**`CDGRAY` is the whole of the visual signal, and on a 1bpp adapter it is not
+a signal at all.** `font_ink` rounds it to black (§39.4), so a disabled item is
+pixel-identical to a live one on Hercules and CGA — it just silently declines
+to highlight. A menu item is text and nothing else, so §46 rule 3 applies with
+no escape: **relabel it too**. The parenthetical in the paragraph above is not
+a stylistic example, it is the mono half of the feature: `'Save Gif (NoRam)'`
+is what a user on an XT actually sees. The kernel neither supplies those words
+nor checks for them today, which §46.3 lists as owed work — an app that skips
+them ships an item that looks selectable, is not, and never says why.
 
 **Every string in a set is an offset in the OWNING WINDOW'S segment**
 (§11's W_SEG, §20.1) — the app name, the menu titles and every item. So the
@@ -8221,6 +8237,14 @@ can give it black while the black-key core needs white.
 Glyphs never dither — a dithered 8x8 glyph is unreadable — so `font_ink`
 rounds everything but pure white to black.
 
+**That is what makes a greyed string invisible as such on both mono
+adapters**, and it is the reason §46 exists: `CDGRAY` text comes out black
+here, pixel-identical to a live label, while a `CDGRAY` ring or frame goes
+through `gfx_ink` and comes out dotted. Anything drawn only as text has to
+carry its disabled state in words as well (§46 rule 3). The reduction is not
+the bug — a dithered glyph really is unreadable — but every disabled control
+in the tree has to be designed around it.
+
 ### 39.5 Dispatch: `[bb_on]` and `[bb_dbl]`
 
 `[bb_on]` now means **"route drawing through the software renderer"**. It is
@@ -9885,6 +9909,123 @@ reaches any of this (§45.9's band relight short-circuits first).
 difference — a rising bar fills its growth, a falling one erases its
 shrinkage, a steady one costs nothing; `tui_el_scopes` zeroes the four
 widths whenever it repaints the cells under them.
+
+## 46. Disabled controls — the greying standard (binding)
+
+Every part of the UI that can refuse a click has to say so the same way. This
+section is the whole of how, and it is binding on the kernel and on packages
+alike. **It breaks silently**: get it wrong and the control still works, still
+refuses, and still looks fine on the machine you tested it on — it just stops
+saying anything on the other two adapters, or says the opposite of what it
+means.
+
+### 46.1 The seven rules
+
+1. **`CDGRAY` is the disabled colour, and the only one.** `CLGRAY` is a
+   *decoration* colour — Minesweeper's covered cells, Arkanoid's rails,
+   Recorder's centre line — and using it for disabled state collides with all
+   three. Do not invent a lighter shade or a stipple of your own.
+
+2. **Grey the whole control, not its caption.** Every mark the control is made
+   of takes the disabled pen: the radio ring, the checkbox square, the button
+   frame, the icon, and the label. A black ring with faint writing beside it
+   reads as a live control that someone mislabelled — which is exactly what the
+   Sound page shipped as until it was reported.
+
+3. **Text alone is not a disabled state, because on 1bpp it is not a state at
+   all.** `font_ink` rounds `CDGRAY` to **black** (§39.4), deliberately: a
+   dithered 8x8 glyph is unreadable, so mono has no grey to draw a letter in.
+   A greyed label is therefore *pixel-identical* to a live one on Hercules and
+   CGA. Anything drawn through the `gfx_*` primitives reduces through
+   `gfx_ink` instead, where `CDGRAY` becomes the 50% dither and survives — so
+   a ring, a frame or a box carries the state and a string does not.
+
+   **A control whose only mark is text must carry the disabled state in words
+   as well.** `'Save Gif (NoRam)'` (§12.2), or a caption beneath it that says
+   why (§31.3). One or the other, never neither.
+
+4. **One predicate, three consumers.** The test that greys the control, the
+   test that refuses the click and the text that explains it are the *same
+   call* — `cpf_dbok` (§31.3), `cp_snd_rowok` (§31.7) — never three copies of
+   the condition. Copies drift, and both drifts are bad: a control that looks
+   available and refuses, or looks unavailable and works.
+
+5. **Grey a fact, never a guess.** Grey when the answer is stable and knowable
+   without doing the thing — no hardware (§51.2's `DSV_TIERS`), the wrong
+   adapter, a driver that is not loaded. When the only way to know is to *try*,
+   do not grey: attempt it and report what came back. Memory is the case that
+   splits: `mem_avail` is a real predicate for an ordinary claim, so the
+   back-buffer row greys on it (§31.3); `mem_claim_dma` has no predicate at all
+   because the 64KB page rule is inside its scan (§50.3), so the Sound Blaster
+   row does not grey on memory and the click reports instead (§34.8).
+
+   The corollary is a cost rule: **a greying test runs on every paint**, so it
+   must be cheap. If answering it means probing hardware, the answer belongs in
+   a value someone already computed — that is what `DSV_TIERS` is for, and
+   §31.7 records what re-probing cost when the page did it on a click instead.
+
+6. **A refused click says exactly one thing.** Greyed → say nothing more; the
+   control already said it, and a second explanation for something the user can
+   see is disabled is noise. Not greyed but refused → the page owes words at
+   the point of refusal, in the vocabulary it already uses for that failure
+   (the Sound page reports `drv_errstr`, the loader's own strings).
+
+7. **Every redraw path applies the same pen.** A page that repaints part of
+   itself after a click — glyphs only, one row, one line — must run the same
+   predicate the full paint runs. Miss it and a control's two halves disagree
+   about being disabled, which is worse than either answer alone.
+
+### 46.2 Verifying it
+
+**A greying change is not done until it has been looked at on a 1bpp adapter.**
+Rule 3 is the one that cannot be seen on the machine most work happens on, and
+VGA will show a perfectly convincing grey for something that is invisible on
+the other two:
+
+```
+python3 tools/hercshot.py build/qmp.sock 0x70000 out.png   # after make test VIDEO=herc HERCSEG=0x7000
+make test VIDEO=cga                                        # and screendump normally
+```
+
+One trap on the CGA path: **QEMU double-scans mode 6 to 640x400**, so a
+screendump cropped at 640x200 shows the top half of the guest screen and
+nothing else. Take every second row.
+
+### 46.3 Where the tree stands
+
+Conformant, and worth reading as the reference:
+
+- **`cp_snd_rowok` / `cp_snd_radios` / `cp_snd_paint`** (§31.7) — one
+  predicate, glyph and label both, dotted ring on mono.
+- **`rc_btn`** (Recorder) — greys the button frame with the label, so the
+  frame dithers and the button reads as disabled on every adapter.
+- **Paint's menu items** (§12.2) — text-only controls that carry the state in
+  words, `'Save Gif (NoRam)'` and five more, which is rule 3's other half.
+
+- **The Display page's back-buffer row** (§31.3) — `cp_dbradios` takes
+  `cpf_dbok`'s pen for row 1's glyph. It used to draw it `CBLACK` beside a grey
+  label, which this section's rule 2 forbids and §31.3 had *already* described
+  correctly; the code was the thing that disagreed.
+
+**Not yet conformant — a correction pass is owed:**
+
+- **Disabled menu items** (§12.2, `MENU_DIS`) are text and nothing else, so on
+  Hercules and CGA a disabled item is pixel-identical to a live one. The
+  `'(NoRam)'` wording is the only mono signal and it is a *convention* the
+  kernel neither supplies nor checks — Paint does it, and an app that does not
+  gets an item that looks selectable, cannot be selected, and never says why.
+  Rule 3. Fixing it is the one entry here that is not a local edit: either
+  `menu_drop` grows a mark a glyph cell can carry on 1bpp, or `MENU_DIS`'s
+  contract starts requiring the words.
+- **`MENU_DIS` used as a RADIO MARK** — Solitaire's Draw One / Draw Three
+  (§43) and Tracker's 11/22/44 kHz (§45) disable the item that is *currently
+  selected*, so grey reads "this is the setting" rather than "you cannot have
+  this". It is a good idiom and it fails the same way, but it needs a different
+  repair: `(NoRam)`-style words say *why not*, and what these need is a mark
+  saying *which one*. A leading glyph in the string — the Mac's checkmark — is
+  the cheap version, and it costs one character of `MENU_MAXCH`. Until then a
+  Hercules or CGA user sees three identical rate items and no way to tell which
+  is playing.
 
 ## 50. memory.inc — the claim heap
 

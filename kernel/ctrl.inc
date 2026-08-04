@@ -865,6 +865,13 @@ cpf_dbok:
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing
 ; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
+;
+; Row 1's glyph takes cpf_dbok's pen, the same one cp_disp_paint gives its
+; label (SPEC.md 46 rule 2). It was drawn in CBLACK here while the label
+; beside it went grey, so a row the click band refuses still showed a
+; full-strength ring - which reads as a live control with faint writing next
+; to it. The caption saying 'Not Enough Ram' was carrying the whole message
+; on its own.
 ; -----------------------------------------------------------------------------
 cp_dbradios:
     push ax
@@ -882,7 +889,7 @@ cp_dbradios:
     mov dx, bp
     add dx, CP_PR0Y
 
-    mov si, cp_radio_off        ; --- row 0: direct to screen ---
+    mov si, cp_radio_off        ; --- row 0: direct to screen, always live ---
     cmp bl, 0
     jne .r0
     mov si, cp_radio_on
@@ -890,12 +897,18 @@ cp_dbradios:
     call cp_glyph
 
     add dx, CP_PROWH            ; --- row 1: double buffered ---
+    call cpf_dbok               ; ...which is the row that can be refused
+    mov byte [gfx_color], CBLACK
+    jnc .pen
+    mov byte [gfx_color], CDGRAY
+.pen:
     mov si, cp_radio_off
     cmp bl, 1
     jne .r1
     mov si, cp_radio_on
 .r1:
     call cp_glyph
+    mov byte [gfx_color], CBLACK
 
     pop si
     pop dx
