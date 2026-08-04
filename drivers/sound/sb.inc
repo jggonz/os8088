@@ -2405,11 +2405,19 @@ sbl_detach:
                                 ; worker's own loop test is sbl_str_act, so
                                 ; this is what tells it to die
 .quiet:
-    mov cx, 40                  ; ...and WAIT for it: up to ~2s of yields.
-.wait:                          ; The worker sleeps a tick at a time, so it
-    cmp byte [sbl_wtask], 0     ; wakes and exits well inside this
-    je .gone
-    call OSAPI_TASK_YIELD
+    mov cx, 40                  ; ...and WAIT for it, bounded in real TICKS
+.wait:                          ; (~2s): 40 bare yields pass in microseconds
+    cmp byte [sbl_wtask], 0     ; against a worker that sleeps a tick between
+    je .gone                    ; passes, and timed out with it still asleep.
+    call OSAPI_GET_TICKS        ; This wait is best-effort ordering - the
+    mov dx, ax                  ; worker's last card touch before the DSP
+.tk:                            ; reset below - not the survival guarantee:
+    call OSAPI_TASK_YIELD       ; the KERNEL waits for the death itself
+    cmp byte [sbl_wtask], 0     ; ([drv_wcnt], cleared inside task_exit) in
+    je .gone                    ; drv_unload, before the image is freed
+    call OSAPI_GET_TICKS        ; (SPEC.md 51.7)
+    cmp ax, dx
+    je .tk                      ; same tick still: yield again
     loop .wait
 .gone:
     call sbl_unhook             ; vector, mask and DSP back as we found them
