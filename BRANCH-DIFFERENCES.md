@@ -359,8 +359,14 @@ threshold and makes the FAT16 decode structurally unreachable dead code.
 
 ## The parity audit — everything `main` has that this fork does not
 
-Run against `main` at **`b401eda`** and `experimental` at **`cdc1c59`**. The
-question it answers is narrow and one-directional: *what capability, fix or
+Run against `main` at **`b401eda`** and `experimental` at **`cdc1c59`**, and
+re-checked against **`6c1ee99`** — the Sound Blaster tier — after it landed.
+That commit closes none of the gaps below (it is a driver, not a kernel
+change): `snd_req_inst` is still unqualified, and its one new cell,
+`OSAPI_DRV_TASK` at **0x0288**, is in the *driver* SDK
+(`drivers/os88drv.inc`), not the application table this audit compares.
+
+The question it answers is narrow and one-directional: *what capability, fix or
 call does `main` have that we are missing?* Divergences where the two forks do
 the same job differently are recorded as such and are **not** gaps.
 
