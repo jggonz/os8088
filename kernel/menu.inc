@@ -150,14 +150,9 @@ menu_init:
     mov byte [menu_bdirty], 1   ; .bss is not zeroed at boot (-f bin)
     xor bx, bx
     mov [menu_win], bx
-    mov word [menu_sseg], 0
-    call menu_relayout
-    mov ax, MENU_SAVE_KB        ; the save-under buffer, claimed once and
-    mov bx, MEM_K_SAVE          ; held for the session (SPEC.md 50.2)
-    call mem_claim
-    jc .nosave                  ; menu_drop falls back to repainting
-    mov [menu_sseg], dx
-.nosave:
+    mov word [menu_sseg], 0     ; the save-under is claimed by menu_drop for
+    call menu_relayout          ; as long as a menu is actually down, not
+                                ; here for the session (SPEC.md 12.4/50.2)
     pop dx
     pop bx
     pop ax
@@ -891,11 +886,18 @@ menu_popup:
 ; held), while the item highlight is a transient overlay drawn VRAM-direct
 ; like the cursor. Only one menu is ever open - both callers run on the UI
 ; task and both are driven by a held button - so the one save-under buffer
-; needs no allocator of its own. It IS a heap claim (SPEC.md 50.2), taken
-; once at menu_init and held for the session: MENU_SAVE_KB, bounded at build
-; time by the clamps below and asserted in kernel.asm. If the claim failed -
-; only possible on a machine whose heap cannot spare 16KB at boot - the save
-; is skipped and the restore repaints instead, which is slower and correct.
+; needs no allocator of its own. It IS a heap claim (SPEC.md 50.2), and it is
+; claimed HERE and released before this routine returns - MENU_SAVE_KB for
+; exactly as long as a menu is on screen, bounded at build time by the clamps
+; below and asserted in kernel.asm. It used to be taken once at menu_init and
+; held for the session, which is 20KB a 128KB machine was paying for at every
+; instant it was not looking at a menu.
+;
+; **The claim can now fail**, where before it could only fail at boot. That
+; needs no new failure path: `[menu_sseg]` = 0 already means "no buffer", the
+; save is skipped and the restore repaints the screen instead - slower, and
+; correct. A machine tight enough to hit it gets a flash when a menu closes
+; rather than a menu it cannot open.
 ; -----------------------------------------------------------------------------
 menu_drop:
     push bx
@@ -904,6 +906,15 @@ menu_drop:
     push si
     push di
     push es
+
+    ; --- claim the save-under for as long as this menu is down ----------------
+    mov word [menu_sseg], 0
+    mov ax, MENU_SAVE_KB
+    mov bx, MEM_K_SAVE
+    call mem_claim
+    jc .noclaim                 ; refused: the restore repaints instead
+    mov [menu_sseg], dx
+.noclaim:
 
     ; --- save the pixels under the menu to the claimed buffer -----------------
     mov ax, [menu_sseg]
@@ -1007,6 +1018,13 @@ menu_drop:
     call wm_paint_all           ; the no-buffer fallback: desktop, icons,
     call gfx_flush              ; dock, bar and every window, under the lock
 .sel:
+    mov dx, [menu_sseg]         ; the menu is off the screen: hand the buffer
+    or dx, dx                   ; back rather than hold 20KB until the next
+    jz .nofree                  ; one (SPEC.md 12.4/50.2)
+    mov bx, MEM_K_SAVE
+    call mem_free
+    mov word [menu_sseg], 0
+.nofree:
     call menu_force             ; the cell highlight is XOR and undoes itself,
                                 ; but the restore path above is a save-under
                                 ; that can be refused - one bar redraw per

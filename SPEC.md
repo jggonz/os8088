@@ -2295,6 +2295,32 @@ for it at boot; forward references from `instance.inc`'s kind table to
 `cp_tpl`/`cp_sname` resolve at assembly time exactly as `tm_tpl` already
 does.
 
+**The save-under is claimed per drop, not per session.** `menu_drop` takes
+`MENU_SAVE_KB` from the heap on the way in and gives it back before it
+returns, so those 20KB exist only while a menu is actually on screen — which
+on a 128KB machine is a third of the heap it used to hold at every instant
+nobody was looking at a menu. `menu_init` used to take it once and keep it.
+
+The claim can therefore **fail**, where before it could only fail at boot, and
+that needs no new failure path: `[menu_sseg]` = 0 already means "no buffer",
+so the save is skipped and the restore repaints the screen instead — slower,
+and correct. A machine tight enough to hit it gets a flash when a menu closes
+rather than a menu it cannot open.
+
+**The release happens before the selected item runs**, and that is what keeps
+the claim from fragmenting anything. `menu_drop` frees on its way out, so a
+bar menu is released inside `menu_track` — before `ui.inc` even drops the gfx
+lock, let alone calls `ui_dispatch` — and a context menu before `files.inc`
+looks its command up. Whatever the item then does, launching a package
+included, allocates into a heap the menu has already left.
+
+The one thing still overlapping it: `menu_drop`'s tracking loop calls
+`task_yield`, so a package worker can claim while a menu is down. Its claim
+lands above the save-under (both fit from the bottom) and freeing the
+save-under leaves a hole under it — transient, not a split, because the next
+bottom-up claim reuses it and package regions come from the other end
+anyway.
+
 ### 15.1 Size guards
 
 End of file (after all `%include` lines, with `section .text` in effect).
@@ -2354,7 +2380,9 @@ whoever asked for the feature, which is why its message points at
 `docs/KERNEL-MEMORY.md` rather than telling you what to edit.
 
 Guard 4 is the menu save-under, the one kernel buffer deliberately outside
-that budget because it is a heap claim (§12.4/§50). Guard 6 is the 512-byte
+that budget because it is a heap claim (§12.4/§50) that exists only while a
+menu is down — it bounds what `gfx_save` can be asked to write, which is a
+build-time property of the clamps and does not depend on when it is claimed. Guard 6 is the 512-byte
 alignment every int 13h target depends on (§2.1.1). Guard 7 is the relocated
 boot sector (§15.2). Keep this block last.
 
@@ -8544,7 +8572,7 @@ The kernel's own claims, and what each replaced:
 
 | tag / owner | KB | taken by | replaces |
 |-------------|----|----------|----------|
-| `MEM_K_SAVE` | `MENU_SAVE_KB` = 16 | `menu_init`, held for the session | `SAVE_SEG`, 48KB pinned |
+| `MEM_K_SAVE` | `MENU_SAVE_KB` = 20 | `menu_drop`, for exactly as long as a menu is on screen; **released before it returns** | `SAVE_SEG`, 48KB pinned |
 | `MEM_K_BB` | `BB_KB` = 150 | `bb_set` when the Display page arms it; **freed when it is switched off** | `BB_SEG`, 150KB pinned |
 | the Disk instance's slot | `VIEW_KB` = 3 | `fm_kinit`, per open window | `VIEW_SEG`, 4 × 4KB pinned |
 

@@ -23,8 +23,13 @@ against `KERN_BUDGET` and fails the build if it is over.
 **There is exactly one deliberate exception**, and it is a heap claim rather
 than a reservation: the menu save-under (SPEC.md §12.4), 20KB that exists
 only while a pull-down is on screen and is handed back the moment it closes.
-It is not part of the kernel's footprint because on any given tick it
-usually is not there.
+It is not part of the kernel's footprint because on any given tick it usually
+is not there — `menu_drop` claims it on the way in and releases it on the way
+out, *before* the selected item runs, so a menu that launches something has
+already given the 20KB back by the time the launch asks for memory. It was
+claimed once at `menu_init` and held for the whole session until that was
+noticed, which on a 128KB machine is a third of the heap held permanently
+against nothing.
 
 **The size in RAM is the actual size, not a budget.** There is no growth
 room anywhere in the ladder. Each rung is the measured size of what it
