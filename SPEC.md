@@ -8538,9 +8538,27 @@ which for a 12×10 sprite dwarfs the writing. Two things pay for themselves:
 - **The erase is the vacated strip, not the whole capsule.** A capsule falls
   `ARK_PUFALL` rows a frame and is redrawn whole immediately after, so
   erasing all ten rows spent 120 pixels a frame on pixels nothing would ever
-  see. `ark_wipe_pu` clears `ARK_PUFALL` rows off the top while the capsule is
-  falling, and the full rect only on the frame it is caught or lost — the one
-  case with no redraw behind it.
+  see. `ark_wipe_pu` clears the rows between where it was last drawn and where
+  it is now, and the full rect only on the frame it is caught or lost — the
+  one case with no redraw behind it.
+
+**`[ark_puold]` and `[ark_shold]` mean "where it was last DRAWN", and only
+`ark_draw_pu`/`ark_draw_shots` may write them.** They used to be set by
+`ark_do_pu`/`ark_do_shots`, one line before the move — which is the same thing
+*only while every update is followed by a draw*. `ark_render` skips a frame
+whenever the window is invisible, `wm_clip_set` returns CF=1, or the credits
+panel is up (§44.7), and `ark_update` keeps running through all three. One
+skipped frame and the erase is two rows off the pixels; the sliver it leaves
+is permanent, because the next erase is aimed at the new position too. That is
+the "a caught capsule was not cleared" report, and forcing the condition —
+drop every third frame's drawing with capsules in flight — reproduces it as
+red trails down the whole playfield: **1,186 stray pixels before the fix, 292
+after** (the 292 being the capsules themselves).
+
+Deriving the erase from the *update* is the trap; deriving it from the *draw*
+cannot drift, however many frames are skipped. The falling case computes its
+height as `[ark_puy] - [ark_puold]` and skips the fill entirely when that is
+zero, which is every frame of the pause after a death.
 
 Measured against the previous code with all three capsules and both bolts
 pinned on screen: **24.1 → 15.2 `gfx_fill` calls per frame**, with the capsule

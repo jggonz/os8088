@@ -1474,9 +1474,12 @@ ark_do_pu:
     mov bx, si
     add bx, bx
     mov ax, [ark_puy+bx]
-    mov [ark_puold+bx], ax          ; where to erase it from
-    add ax, ARK_PUFALL
-    mov [ark_puy+bx], ax
+    add ax, ARK_PUFALL              ; [ark_puold] is NOT touched here: it means
+    mov [ark_puy+bx], ax            ; where the capsule was last DRAWN, and
+                                    ; ark_draw_pu is the only thing that knows
+                                    ; that. Moved here, it drifts from the
+                                    ; pixels the moment ark_render skips a
+                                    ; frame - and then the erase misses
     mov cx, ax                      ; caught? its bottom against the paddle
     add cx, ARK_PUH
     cmp cx, [ark_pady]
@@ -1637,9 +1640,8 @@ ark_do_shots:
     mov bx, si
     add bx, bx
     mov ax, [ark_shy+bx]
-    mov [ark_shold+bx], ax
-    sub ax, 6
-    mov [ark_shy+bx], ax
+    sub ax, 6                       ; [ark_shold] is ark_draw_shots' to write,
+    mov [ark_shy+bx], ax            ; for the reason ark_do_pu explains
     cmp ax, [ark_status]
     jle .kill
     mov cx, [ark_shx+bx]
@@ -2275,6 +2277,11 @@ ark_draw_pu:
     mov dx, [ark_puy+bx]
     inc dx
     call ark_charc
+
+    mov bx, si                      ; ...and THIS is where it now sits, which
+    add bx, bx                      ; is the only honest thing to erase from
+    mov ax, [ark_puy+bx]
+    mov [ark_puold+bx], ax
 .next:
     inc si
     cmp si, ARK_MAXPU
@@ -2306,12 +2313,17 @@ ark_wipe_pu:
     mov byte [ark_puwipe+si], 0
     mov dx, ARK_PUH - 1
     jmp short .wipe
-.fall:                              ; still falling: only the strip it
-    mov dx, ARK_PUFALL - 1          ; VACATED, which is ARK_PUFALL rows off the
-                                    ; top. The other eight rows are about to be
-                                    ; drawn over anyway, and erasing them first
-                                    ; was 120 pixels a frame per capsule spent
-                                    ; on pixels nothing would ever see
+.fall:                              ; still falling: only the strip it VACATED
+    mov bx, si                      ; since it was last drawn. Two rows in the
+    add bx, bx                      ; ordinary frame; more if ark_render
+    mov ax, [ark_puy+bx]            ; skipped one and the capsule kept moving;
+    sub ax, [ark_puold+bx]          ; NONE if it has not moved since, which is
+    jbe .next                       ; every frame of the pause after a death
+    dec ax
+    mov dx, ax                      ; The other eight rows are drawn over
+                                    ; anyway, and erasing them first was 120
+                                    ; pixels a frame per capsule spent on
+                                    ; pixels nothing would ever see
 .wipe:
     mov al, ARK_BG
     call OSAPI_SET_COLOR
@@ -2359,6 +2371,10 @@ ark_draw_shots:
     mov dx, bx
     add dx, 5
     call ark_fillc
+    mov bx, si                      ; where it now sits, for the erase
+    add bx, bx
+    mov ax, [ark_shy+bx]
+    mov [ark_shold+bx], ax
 .next:
     inc si
     cmp si, ARK_MAXSHOT
