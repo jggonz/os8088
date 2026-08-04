@@ -2058,8 +2058,11 @@ tm_mrow_close:
     cmp byte [tm_mfit], 0       ; off the bottom: nothing was drawn, and
     je .forget                  ; forget what used to be here so it comes
     mov byte [di], 0            ; back if the window ever grows
-    call tm_rowok               ; clipped across? then draw nothing, and do
-    jc .out                     ; NOT record it as drawn
+    call tm_rowok               ; cut by the region? then draw it a cell at a
+    jnc .mwhole                 ; time instead of not at all (tm_row_cells),
+    call tm_row_cells           ; and do NOT record it as drawn
+    jmp short .out
+.mwhole:
     call tm_rowsum              ; AX = this row's content, in one word
     add bx, tm_rowck            ; ...through tm_elchk, for the never-zero rule
     call tm_elchk
@@ -2114,6 +2117,101 @@ tm_lfill:
     jc .out                     ; so BOTH halves answer to one test and the
     call tm_rowfill             ; caller skips its font_str on CF=1 (SPEC.md
 .out:                           ; 11.3's granularity rule)
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_row_cells - draw one row CELL BY CELL, for a row the clip region cuts
+; in:  [tm_rowx]/[tm_rowy] placed, tm_str composed; gfx lock held, clip armed
+; out: nothing (all registers preserved)
+;
+; The other half of the granularity rule (SPEC.md 11.3). tm_rowok vetoes a row
+; the region does not wholly contain, because a fill clips per PIXEL and a
+; glyph per whole CELL: erase the band and letter it, and a row cut by a
+; HORIZONTAL edge is erased where it shows and lettered nowhere - blank, not
+; stale, every refresh.
+;
+; But that veto is charged to the wrong thing. A VERTICAL edge - a window
+; overlapping the list's right-hand columns - cuts exactly ONE glyph cell per
+; row, and the veto threw away the whole row to protect it. The visible half
+; of the Task Manager then stopped changing entirely: an app launched while
+; anything overlapped the list never appeared in it, and the list stayed
+; wrong until something forced a full repaint.
+;
+; So: ask the question per cell, which is the granularity the primitives
+; actually have. A cell wholly inside is erased and lettered; a cell the
+; region cuts is LEFT ALONE - stale for one character rather than blank for a
+; row. A horizontal cut fails every cell and so draws nothing at all, which is
+; what the veto was right about in the first place.
+;
+; The check word is deliberately NOT recorded by the caller on this path, so
+; the row is re-examined every refresh: the one stale cell fixes itself the
+; moment the occlusion moves, without waiting for a damage repaint.
+; -----------------------------------------------------------------------------
+tm_row_cells:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov byte [gfx_color], CWHITE
+    mov ax, [tm_rowx]           ; the band's LEAD-IN, ahead of the first glyph
+    add ax, 6                   ; cell: no glyph ever lands here, so a plain
+    mov cx, [tm_rowx]           ; fill is safe whatever the region does - it
+    add cx, 15                  ; clips per PIXEL. tm_rowfill used to scrub
+    mov bx, [tm_rowy]           ; this as part of the band, and without it a
+    mov dx, bx                  ; character from an older, longer row survives
+    add dx, 7                   ; one cell to the left of the text forever
+    call gfx_fill
+    mov si, tm_str
+    mov di, [tm_rowx]
+    add di, 16                  ; the pen, exactly where font_str would start
+.cell:
+    cmp byte [si], 0
+    je .done
+    mov ax, di                  ; this cell: 8 wide, 8 tall, inclusive
+    mov cx, di
+    add cx, 7
+    mov bx, [tm_rowy]
+    mov dx, bx
+    add dx, 7
+    call wm_clip_test
+    jc .next                    ; the region cuts it: leave what is there
+    mov byte [gfx_color], CWHITE
+    mov ax, di                  ; erase just this cell...
+    mov cx, di
+    add cx, 7
+    mov bx, [tm_rowy]
+    mov dx, bx
+    add dx, 7
+    call gfx_fill
+    mov byte [gfx_color], CBLACK
+    mov cx, di                  ; ...and letter it
+    mov dx, [tm_rowy]
+    mov al, [si]
+    call font_char
+.next:
+    add di, 8
+    inc si
+    jmp .cell
+.done:
+    mov byte [gfx_color], CWHITE
+    mov ax, di                  ; ...and the TAIL past the last glyph, for the
+    mov cx, [tm_rowx]           ; same reason: a row that got SHORTER leaves
+    add cx, TM_RW               ; characters out there that no cell covers
+    cmp ax, cx
+    ja .tdone
+    mov bx, [tm_rowy]
+    mov dx, bx
+    add dx, 7
+    call gfx_fill
+.tdone:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -2937,8 +3035,11 @@ tm_rows:
 
 .draw:
     mov byte [di], 0
-    call tm_rowok               ; clipped across? then draw nothing, and do
-    jc .rnext                   ; NOT record it as drawn
+    call tm_rowok               ; cut by the region? then draw it a cell at a
+    jnc .rwhole                 ; time instead of not at all, and do NOT
+    call tm_row_cells           ; record it - it is re-examined every refresh
+    jmp short .rnext
+.rwhole:
     call tm_rowsum              ; unchanged since the last refresh? then the
     mov bx, si                  ; pixels on screen are already right. Through
     shl bx, 1                   ; tm_elchk, not an open-coded compare, so this
