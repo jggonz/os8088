@@ -9516,7 +9516,11 @@ edge-triggered, so no deadline machinery is needed.
 
 ### 45.9 XT mode — playback sized for a 4.77 MHz 8088
 
-Off by default; toggled by the **X** key or the File menu's relabeling
+Off by default on a 286-or-better — and **on by default on a tier-0
+machine**: the entry proc asks `osapi_cpu_info` (§41.8) and a `CPU_8086`
+answer pre-arms the mode with its menu item already relabeled, because the
+machine this mode exists for should not have to find the toggle. Toggled
+either way by the **X** key or the File menu's relabeling
 `XT Mode: Off/On` item (the §12.2 copy rule applies: the item's string is
 repointed and `OSAPI_MENU_SET` re-called — the Solitaire Deal-menu idiom).
 Toggling while playing stops playback first (through the §45.2 drain);
@@ -9581,7 +9585,8 @@ direct-to-VRAM path the CRT catches every intermediate state — the flicker
 is architectural, not a bug in the strips. The cure is the §32 back
 buffer: while it is armed, a worker draw burst renders to RAM and
 `gfx_unlock` flushes the finished frame once. **View ▸ `Smooth: On/Off`**
-(the relabeling idiom; key **S**; default On) makes the tracker arm it via
+(the relabeling idiom; key **S**; default Off — the flush cost is opt-in)
+makes the tracker arm it via
 slot 0x01F0 **on entering fullscreen** and hand back the user's previous
 state on leaving; while Smooth is off, or where the slot refuses (mono
 adapters — where the software renderer already IS the direct path — and

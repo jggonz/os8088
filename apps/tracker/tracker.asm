@@ -135,7 +135,12 @@ trk_entry:
     push di
     call mp_init                    ; first: mp_* may clobber, and the CF we
                                     ; owe the loader comes from wm_create
-    mov byte [trk_smooth], 1        ; Smooth defaults ON (SPEC.md 45.11)
+    call OSAPI_CPU_INFO             ; AL = tier (SPEC.md 41.8); a tier-0
+    or al, al                       ; machine gets XT mode pre-armed with
+    jnz .cpu                        ; its menu item already relabeled
+    mov byte [mp_xt], 1             ; (SPEC.md 45.9) - no table to rebuild,
+    mov word [trk_mi_file + 2], trk_s_xton  ; nothing is loaded yet
+.cpu:
     call OSAPI_VIDEO                ; AX = w, BX = h, CX = first dock row
     sub ax, TRK_WINW                ; centre the frame on the screen...
     jns .xok
@@ -1219,7 +1224,7 @@ trk_s_open:  db 'Open...', 0
 trk_s_xtoff: db 'XT Mode: Off', 0
 trk_s_xton:  db 'XT Mode: On', 0
 trk_m_view:  db 'View', 0
-trk_mi_view: dw trk_s_fullm, trk_s_smon ; item 1 repointed by
+trk_mi_view: dw trk_s_fullm, trk_s_smoff ; item 1 repointed by
                                         ; trk_smooth_toggle (SPEC.md 45.11)
 trk_s_fullm: db 'Fullscreen', 0
 trk_s_smon:  db 'Smooth: On', 0
@@ -1297,8 +1302,8 @@ trk_s_smmoff: db 'Smooth off', 0
     TRKB trk_rsel                   ; the Rate menu's pick (SPEC.md 45.10):
                                     ; 0/1/2 = 11/22/44 kHz; bss zeroes to
                                     ; the 11 kHz default
-    TRKB trk_smooth                 ; Smooth (SPEC.md 45.11) - set to 1 by
-                                    ; the entry proc (bss zeroes, default On)
+    TRKB trk_smooth                 ; Smooth (SPEC.md 45.11) - bss zeroes:
+                                    ; the default is OFF
     TRKB trk_bbprev                 ; ...the user's back-buffer state, banked
     TRKB trk_bbheld                 ; ...1 = we borrowed it (hand back at exit)
     TRKB trk_mixing                 ; the worker is inside a trk_feed pass -
