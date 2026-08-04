@@ -4,30 +4,34 @@ This document is the **binding contract** for all kernel modules. Every symbol
 name, register contract, constant, and data layout here is pinned. Implement
 exactly what is written; put questions in your report, not in the code.
 
-### Section numbering across the forks
+### Section numbering, and the fork that ended
 
-This is the `experimental` fork. It shares §0–§44 with `main` and **a section
-number means the same topic on both** wherever the topic exists on both, so a
-citation like §11.3 or §20.1 can be read on either. Three rules keep it that
-way as the two diverge:
+**This document is now the only one.** It began as the `experimental` fork's
+spec and was numbered to share §0–§44 with `main` so that a citation like
+§11.3 or §20.1 could be read on either; `main`'s line of development has since
+been merged into this one, having been checked capability by capability first
+(BRANCH-DIFFERENCES.md, part 3). Three consequences worth knowing before
+citing a number:
 
-- **§45–§49 are reserved for `main`.** Nothing here will claim them.
-- **`experimental`-only top-level sections start at §50.** Today that is §50
-  (the claim heap) alone.
-- **`experimental`-only *subsections* of a shared section are numbered from
-  `.90`**, so they stay with the parent they belong to while leaving `main`
-  the whole ordinary range. Today: §11.90, §11.91, §18.90, §37.90.
+- **§45–§49 were reserved for `main`, and §45 is now claimed** — the Tracker,
+  ported over with its section. The four numbers above it are free.
+- **§50+ is where this fork's own top-level sections started**, and §50 (the
+  claim heap) and §51 (loadable drivers) are still there rather than being
+  renumbered down into the gap. Moving them would break every citation in the
+  tree to buy tidiness.
+- **The `.90` subsection band** (§11.90, §11.91, §18.90, §37.90) likewise
+  stays. It exists for the same retired reason and costs nothing.
 
-**API slot numbers no longer track `main`'s** (§20.3). They did, with five
-cells held empty to keep one number from meaning two contracts, and the
-branches are merging so the holes bought nothing and were closed. What
-survives is the half of the rule that was never about the other fork: a
-shipped slot keeps its contract, and "we no longer implement this" is a
-refusing stub, not a reuse.
+**API slot numbers do not track `main`'s** (§20.3). They did, with five cells
+held empty to keep one number from meaning two contracts; the merge made the
+holes pointless and they were closed. What survives is the half of that rule
+that was never about the other fork: a shipped slot keeps its contract, and
+"we no longer implement this" is a refusing stub, not a reuse (§20.8 rule 4).
 
-The two forks' contents are catalogued in
-[BRANCH-DIFFERENCES.md](BRANCH-DIFFERENCES.md); porting an application across
-is [docs/PORTING.md](docs/PORTING.md).
+What the two lines of development contained, and what the merge did with each
+difference, is [BRANCH-DIFFERENCES.md](BRANCH-DIFFERENCES.md). Bringing
+forward work written against the pre-merge `main` is
+[docs/PORTING.md](docs/PORTING.md).
 
 ## 0. Goal
 
@@ -9193,6 +9197,420 @@ at 128KB. Its lifetime is the fence that matters: `trk_play_stop` closes the
 stream and *drains* the worker's in-flight feed pass before the blob is freed
 or replaced, because a mixer mid-fetch from a grant that has just been handed
 back reads samples out of whatever claimed the memory next.
+
+## 45. Tracker — the tenth package (apps/tracker/tracker.asm)
+
+A FastTracker II-styled 4-channel ProTracker MOD player over the published
+package ABI. Prefix `trk_` (`mp_` for the replayer in `trkplay.inc`, `tui_`
+for the drawing in `trkui.inc` — `ui_` is the kernel's), embedded icon, one
+worker task. It is the app class the sound layer was built toward (§34.6: "a
+music player plays … staged PCM via 0x0100"), and it rides on the worker-safe
+stream verbs + ring mode (§20.3/§34.5) and on `dskw_readbig` (§18.4, slot
+0x01D0). On the apps disks it lives in the `APPS` folder (§24), appended
+after paint, with `BEVERLY.MOD` after it.
+
+**Ported, not written here**, which is why this section reads differently from
+its neighbours: `trkplay.inc` and `trkui.inc` are byte-identical to the fork
+they came from and `tracker.asm` differs by 57 lines — the `retf` → `ret`
+conversion (§20.8 rule 5) and the memory API (KB not paragraphs, the answer in
+DX not AX). The description below is that fork's, corrected everywhere this
+one contradicts it; the places that took real correction are §45.3, §45.4,
+§45.8 and §45.11, and all four are the memory model.
+
+### 45.1 Windowed is a splash; the app lives fullscreen
+
+The entry proc creates an ordinary centred 420x180 window — a splash card:
+the name, the loaded module's title, the key map, and *Press any key for
+fullscreen*. That promise is kept literally: while the window has never been
+fullscreen, **any** key or click enters fullscreen; afterwards F toggles and
+Esc returns, and windowed keys drive the player normally (a module keeps
+playing on the splash, which shows a live position line).
+
+Tracker is the first shipped client of `wm_fullscreen` (§11.2), and its
+lifecycle is the section's contract exercised end to end. Fullscreen is
+entered ONLY from `W_ONKEY`/`W_ONCLICK`/`AM_ONCMD` — the contexts that hold
+the gfx lock the slot requires; never the entry proc (no lock there). One
+ordering detail is load-bearing: **`[trk_fs]` is flipped before the
+`osapi_fullscreen` call**, because entering fronts and repaints under the
+held lock — the `W_PAINT` that runs *inside* the call must already see the
+fullscreen answer, or it paints the splash across the bare screen. A refusal
+(CF=1, someone else owns the screen) flips it back. Exit is Esc in
+`W_ONKEY`, the documented convention; the close and minimize boxes need
+nothing, because `wm_fs_drop` runs on both paths (§11.2).
+
+Under `WF_FULL` the menu bar is unreachable, so the bar's two commands
+(File ▸ Open…, View ▸ Fullscreen) are duplicates of keys (L, F) — the
+Arkanoid rule. `About Tracker` (`OSAPI_ABOUT_SET`) is the `[ark_abon]`
+panel-in-content pattern verbatim: the flag is checked by the worker **under
+the lock, right after the clip is armed**, and the whole frame is dropped
+while it is set — but only the *drawing* pauses; the audio feed keeps
+running, because a dropped frame should not stop the music.
+
+### 45.2 The audio is a ring stream, and the worker feeds it
+
+The player's architecture is one sentence plus one handshake: **the UI task
+opens, closes and pre-mixes at open; the worker mixes and feeds; and the
+close drains the worker first.** `mp_gen` is not reentrant (its cursors are
+shared package bss), so the worker brackets every feed pass with
+`[trk_mixing]` — set before the pass's own entry guards, cleared last — and
+`trk_stream_close` spins that flag to zero after dropping `[trk_sopen]`.
+Every UI path that resets the replayer, runs the `mp_gen` pre-roll, or
+frees the module blob sits behind a `trk_stream_close`, so a worker
+suspended anywhere inside a feed pass finishes it before the UI touches
+`mp_*` state; a pass that enters *between* close and reopen sees
+`trk_sopen` = 0 and falls out touching nothing. The drain is deadlock-free
+(the feed path never takes the gfx lock the UI holds; pre-emption keeps the
+worker running) and bounded (the fill loop re-checks `trk_sopen` per half).
+Opening (`trk_play`, reached from
+Enter/Space/P and the load completion proc) allocates one 16KB grant from
+the `SND_SEG` pool (verb 7, once — force-freed at teardown like every
+grant), pre-mixes two 2048-byte halves, stages them at ring offsets 0 and
+2048, and opens a **ring-mode** stream (§20.3 verb 0 with `SND_OPENF_RING`
+in AH, rate request 11,000 Hz, initial valid total 4096). From then on the
+worker's every wake runs the feed *before* the draw, lock-free, on the
+verbs the §20.3 amendment made any-task:
+
+- verb 3 answers `consumed`, free-running 16-bit in ring mode; `lead =
+  total − consumed` is exact across wrap because both counters are.
+- While `lead ≤ 16384−2048` and fewer than 6 halves this wake: `mp_gen`
+  renders 2048 bytes into `mp_outbuf`, verb 6 stages them at `grant +
+  (total & 16383)` — a half never crosses the ring seam, because 16384 is a
+  multiple of 2048, so the copy needs no split — and verb 1 publishes
+  `total + 2048`.
+- The polled `consumed` goes stale across the loop, which errs on the
+  conservative side: `consumed` only grows, so the computed lead only
+  over-reports fullness, never over-feeds.
+
+Underrun is the normal quiet path (§34.5: the stream pauses, the next feed
+resumes it within a tick or two). A watchdog-**ended** stream is different —
+it never resumes, and the worker cannot close it (verb 2 stays
+UI-callback-only), so the worker only flags `[trk_ended]` and stops feeding.
+**F00 takes the same exit**: the effect stops the replayer on the worker,
+whose pass keeps polling until `consumed` catches `total` (the stop row's
+tail is heard) and then latches `[trk_ended]`. Every UI callback runs
+`trk_reap` first, which closes a flagged (or F00-stopped) stream — so the
+machine's single stream record is held no longer than the tracker's next
+paint, key, click or menu command, which is the documented residue of
+verb 2's UI-only rule. The 6-half cap bounds the
+worker's lock-free burst at ~1.1 s of mixing per wake, so a wake can catch
+up after a stall without starving the machine.
+
+### 45.3 Loading goes through readbig, because real MODs are big
+
+`OSAPI_FILE_READBIG` (slot 0x01D0) exists because `dskw_read`'s CX is a
+16-bit byte count: a file ≥ 65,536 bytes was `FERR_BIG` *unconditionally*,
+and BEVERLY.MOD is 116,085 bytes. The load path is the whole client story
+of §50 + §18.4 + §38 in one proc (`trk_fdone`, the fdlg completion):
+
+1. Copy the ES:DI name out **first** — ES is `KERNEL_SEG` and the buffer
+   dies with the call (§38.6).
+2. Stop playback and close the stream — the close **drains
+   `[trk_mixing]`** (§45.2), so no `mp_mixch` is left mid-fetch from the
+   old grant — *then* clear `mp_loaded` and free the previous module
+   grant: no reader may trust a blob about to move, and on the worker
+   path the drain is what enforces that rule.
+3. `OSAPI_MEM_AVAIL` → take `min(largest run, 128 KB)` in ONE
+   `OSAPI_MEM_CLAIM` (the one-block rule, §50.3). Refusal is a status-line
+   "Out of memory", not an abort.
+4. `OSAPI_FILE_READBIG` with ES = the grant, DX:CX = its byte capacity.
+   `FERR_BIG` reads back as "File too big" — a much rarer answer here than
+   on the fork this section came from, because the heap is not a fixed
+   arena: a 640KB machine measures 566KB of it and a 512KB machine about
+   439KB, so a 116KB module fits both with room to spare (§45.8).
+5. `mp_load` validates the hostile bytes (the §45.5 checklist) and answers
+   CF=1 with its own verdict string, which goes straight to the status
+   line; success starts playback inline — pre-mix, stage, ring open, all
+   sanctioned UI-lock context.
+
+The dialog itself opens on top of the fullscreen surface and works there
+(§38 — `fdlg_grab` runs before the `[wm_fs]` branch). Its one residue is
+documented: closing the dialog paints the menu bar over rows 0..MBAR_H−1
+with no callback on cancel. The worker owns the fix: every 16th frame it
+repaints the whole top band, so a cancelled dialog's bar strip lives for at
+most a second.
+
+### 45.4 Memory layout
+
+Four stores, none of them guessed:
+
+- **The package segment** — image + bss, including the mixer's 65×256
+  volume table (16,640 bytes, built at load: `vt[vol][b] = (int8)b·vol»6`)
+  and the 2048-byte `mp_outbuf`.
+- **The module blob** — one heap claim (§50), sized
+  `min(largest free run, 128 KB)` **in KB** from `MEM_AVAIL` at load time
+  regardless of the module's actual size, and held until the next load or
+  teardown. Consequence, stated honestly: while a module is loaded the
+  Tracker's claim holds up to 128KB that other packages and other instances
+  then cannot have. That is a far smaller consequence here than on the fork
+  this section came from, where the same claim was effectively *all* the
+  remaining arena on a 512KB machine; against a 566KB heap it is a fifth.
+
+  **The over-claim is fixable here and is not fixed.** It exists because the
+  file dialog's completion does not carry the entry's 32-bit size, and
+  because on the other fork freeing and re-claiming after the read was
+  unsafe — first fit may hand back a different base. That second reason
+  **does not hold on this fork**: `OSAPI_MEM_REGROW` (§50.3) shrinks a claim
+  **in place**. Trimming the blob to the byte count `readbig` already
+  reports would cost one call and hand back most of 128KB on every small
+  module. Recorded rather than done: it changes the behaviour of the largest
+  package in the tree and belongs in its own commit, not in a merge.
+
+  The claim holds the file verbatim;
+  samples are addressed through
+  normalized per-sample bases (`seg = blob_seg + (start >> 4)`), so every
+  sample is reachable inside one 8086 segment window, and pattern *p* lives
+  at segment `blob_seg + 67 + 64·p`, offset 12 — nothing ever offsets more
+  than 64KB from one base, which is how a 116KB blob is walked on an 8086.
+- **The stream ring** — one 16KB grant out of the **sound driver's** staging
+  pool (verb 7, §34.6). Not a kernel segment: the pool belongs to whichever
+  driver attached and **its size is not a constant an app may assume** — on
+  this fork it is 20,480 bytes, where the other pinned a 64KB `SND_SEG`
+  (§2.2, retired).
+- Nothing else: no frame buffer, no second window.
+
+All three grants are stamped with the instance and force-freed at teardown
+(§50.2/§34.3), which is why the close box needs no code at all: the worker
+dies inside `OSAPI_TASK_ALIVE`, and the kernel sweeps the stream, the pool
+grant and the heap claim behind it.
+
+### 45.5 The replayer is ProTracker, validated hostile
+
+`trkplay.inc` is a period-native PT replayer (PAL: rate = 3,546,895/period)
+with the ft2-clone's semantics as the reference. The load checklist runs
+before one byte is trusted: magic at 1080 ∈ {`M.K.`, `M!K!`, `4CHN`,
+`FLT4`}; song length 1..128; restart ≥ songlen → 0; the pattern count is
+the max over **all 128** order bytes + 1 and `1084 + 1024·P` must fit the
+32-bit file size; every sample's byte extent is clamped to the bytes
+actually present (a truncated file yields short samples, never a wild
+pointer — BEVERLY.MOD's 9 trailing bytes are why the check is ≤, not =);
+volumes clamp to 64; loop fix-ups per the PT rules (loop start past the
+data disables it, an overflowing loop length is trimmed, looping iff the
+result exceeds 2 bytes). Per-sample play length caps at 60,000 bytes so the
+mixer's 16-bit position can never wrap. At play time every period is
+clamped to [113..856] **before** the step DIV — the clamp *is* the #DE
+guard — and effect handling ignores what it does not implement rather than
+faulting.
+
+Effects, v1: 0 arpeggio, 1/2 porta, 3 tone porta, 4 vibrato (the exact
+32-entry PT table), 5/6 slide combos, 7 tremolo, 9 sample offset, A volume
+slide, B position jump, C set volume, D pattern break (BCD), E1/E2 fine
+porta, E6 pattern loop, E9 retrig, EA/EB fine volume, EC note cut, ED note
+delay, EE pattern delay, F speed/tempo split at 32 with **F00 = stop**.
+Ignored honestly: 8xx pan (mono output), E3/E4/E5/E7 (waveform control and
+finetune — v1 plays finetune 0). Timing is the PT model: tick rate =
+BPM·2/5 Hz, `mp_gen` renders `mixrate·5/(2·BPM)` samples a tick, tick 0
+reads the row, ticks 1..speed−1 run the per-tick effects.
+
+The mixer accumulates per channel into a 16-bit chunk buffer through the
+volume table and converts once: `out = 128 + (sum >> 2)` — four channels at
+64 volume cannot clip. A muted or silent channel still advances its
+position arithmetically, so unmuting rejoins the song where it really is.
+Mixing throughput on a real 8088 is **not promised** (§45.8); the mixer is
+honest about being a QEMU/286-era luxury.
+
+### 45.6 The FT2 screen, parameterized by adapter
+
+`tui_layout_init` asks `OSAPI_VIDEO` once and copies one of three layout
+records plus one of two colour tables (the Arkanoid metric-record pattern,
+by height):
+
+- **640x480 VGA** — the FT2-proportioned screen: top desktop area y=0..171
+  (position editor with a 5-entry order window banded on the current entry,
+  TRACKER nameplate, BPM/Spd and Ptn/Ln boxes, status line, 2x2 volume-bar
+  scopes, two FT2 button stacks, a 12-row instrument list + song-name box),
+  pattern editor y=172..479 with **16 rows above and 18 below** the band.
+- **720x348 Hercules** — the mid layout: same top blocks, scopes in one row
+  of four, no stacks or instrument list, 14+14 rows, channel block centred
+  in the 720.
+- **640x200 CGA** — compact: one title/readout line, four inline bars,
+  channel header, 10+10 rows.
+
+The pattern view is the deliverable — the four FT2 tells, in order: the
+black field cut by a **full-width current-row band** that rows scroll
+*through*; **hex row numbers on both edges** (left only on CGA);
+separator-ruled channel columns with `C-2 01 A0F` cells (the 1px `TC_SEP`
+rules `tui_row1` redraws after each strip erase; `mp_cell2txt`'s pinned format:
+note `...` when the period is 0, instrument `..` when 0, effect `...` when
+effect and param are both 0); the desktop above with the position editor
+top-left and the Play/Stop stack right. Colours are the FT2 "Arctic"
+palette mapped to 16: bg 0, pattern text 9, band 7 with text 15, bevels
+15/8, accent 1.
+
+On 1bpp the table swaps whole (§39.4 discipline): **colour 9 never appears
+on a mono adapter** — it reduces to black and pattern text would vanish
+into the pattern field, the exact CBROWN lesson of §44.6. Mono is text 15
+on 0, the band inverted (solid white, black text), faces black inside white
+bevels, and the desktop the 50% dither.
+
+Every erase+text pair obeys the §11.3 granularity rule the `fr_status` way:
+one `osapi_wm_clip_test` per unit — a pattern row strip, a readout value, a
+whole desktop element — and the pair is skipped whole when any of it is
+covered, so a partly covered element goes *stale*, never half-blank. Pure
+fills (backgrounds, VU bars) clip per pixel and are never gated. In
+fullscreen the only thing that ever covers this window is the file dialog,
+which is exactly when the gates earn their bytes.
+
+The worker's frame (`tui_draw_dyn`) is change-driven: the pattern area and
+position readouts redraw only when row/position/pattern moved, tempo
+readouts on change, mute flags on toggle; the VU bars every frame (rise
+instantly, decay 2 units a frame, so they read as needles); the top band
+every 16th frame (§45.3's dialog-cancel rule).
+
+### 45.7 Keys
+
+| Key | Action |
+|---|---|
+| Enter | Play song (Right Ctrl in FT2) |
+| Space | Stop / play toggle |
+| P | Loop the current pattern (Right Alt in FT2) |
+| Left / Right | Song position −/+ (`mp_setpos`) |
+| Up / Down | Scroll pattern rows while stopped |
+| 1..4 | Toggle channel mute (a click in that scope does the same) |
+| L | Load… (the Standard File dialog) |
+| F | Fullscreen toggle |
+| X | XT mode toggle (§45.9 — also File ▸ the relabeling menu item) |
+| R | Cycle the sample rate 11 → 22 → 44 kHz (§45.10 — also the Rate menu) |
+| S | Smooth toggle (§45.11 — also View ▸ the relabeling menu item) |
+| Esc | Exit fullscreen (windowed: ignored) |
+
+The `or al, al` keypad gate of §44.2 applies verbatim: the numeric keypad
+sends digits with arrow scan codes, so ascii is tested before any scan code
+is trusted. There is no held-key inference here — every action is
+edge-triggered, so no deadline machinery is needed.
+
+### 45.8 The honest degradations
+
+- **No Sound Blaster: a viewer, not a player.** `osapi_snd_caps` without
+  `PCM_BG` refuses Play with a status-line message; loading, the pattern
+  view, scrolling and the whole fullscreen surface still work. No silent
+  tick-driven fake playback is attempted, and no FM fallback in v1 (FM is
+  now worker-whitelisted — that is future work, not a promise).
+- **512KB machine: big modules play.** The one item in this list the fork
+  *removed* rather than inherited. The other fork refused a 116KB blob
+  there, because its ~107KB arena could not hold one. The claim heap is not
+  a fixed arena — it is everything above the kernel — so a 640KB machine
+  measures 566KB and a 512KB machine about 439KB, and the largest MOD this
+  player accepts fits either. `FERR_BIG` / "Out of memory" is still the
+  answer when the heap genuinely cannot fund the claim; it is no longer the
+  answer on an ordinary machine.
+- **Mono adapters: the band carries the look.** The blue-on-black pattern
+  text distinction dies by design; the inverted band, the bevels and the
+  MUTE flags carry every state in shape, not hue.
+- **Real-8088 mixing throughput is not promised in the default mode.** The
+  kernel quantizes the 11,000 Hz request through the TC (§34.5), the mixer
+  follows the granted rate's arithmetic but not its wall-clock cost on an
+  8088; the floor machine still gets the viewer — and §45.9's XT mode is
+  the mode that *does* aim at the 8088, opt-in and honest about its trade.
+
+### 45.9 XT mode — playback sized for a 4.77 MHz 8088
+
+Off by default on a 286-or-better — and **on by default on a tier-0
+machine**: the entry proc asks `osapi_cpu_info` (§41.8) and a `CPU_8086`
+answer pre-arms the mode with its menu item already relabeled, because the
+machine this mode exists for should not have to find the toggle. Toggled
+either way by the **X** key or the File menu's relabeling
+`XT Mode: Off/On` item (the §12.2 copy rule applies: the item's string is
+repointed and `OSAPI_MENU_SET` re-called — the Solitaire Deal-menu idiom).
+Toggling while playing stops playback first (through the §45.2 drain);
+the mode change is a table rebuild plus constants, never a mid-stream
+switch. What it changes, and why each piece pays on an 8088:
+
+- **Rate: 11,000 → 5,500 Hz.** The mixer's cost is linear in output
+  samples; one 2,048-byte ring half now carries ~372 ms of audio, so the
+  worker's whole feed cadence relaxes by the same factor.
+- **The volume tables pre-scale the output stage away**: entries become
+  `(int8)b · vol >> 8` (±31 — four channels sum inside a byte around the
+  0x80 bias), so the default mode's 16-bit accumulator buffer, its
+  `rep stosw` zero pass and its shift-and-bias conversion pass all
+  disappear. The first audible channel *stores* `128 + vt[b]` straight
+  into `mp_outbuf`, later channels *add* — a chunk with no audible
+  channel is one `rep stosb` of 0x80. One table format per mode: the
+  toggle rebuilds the 65×256 table (16,640 `imul`s — an intentional
+  sub-second freeze on the machines this mode exists for).
+- **The bounds check leaves the inner loop.** Each channel's chunk is cut
+  into runs: one `div` computes a conservative sample count that cannot
+  reach the sample/loop limit (`(limit − pos − 1) / (stepint + 1)`), the
+  run is mixed with no compare at all, and only the approach to the
+  boundary walks the checked/wrapping path a sample at a time. The XT
+  inner loop is fetch, `xlat`, byte add, `inc di`, `add`/`adc` position,
+  `loop` — ~95 cycles on an 8088 against the default path's ~160-plus-
+  conversion, and it multiplies with the rate halving: ~7.9M cycles/s of
+  mixing at 11 kHz becomes ~2.1M at 5,500 — under half the 4.77M budget,
+  with silent channels (most MODs rest some channel most of the time)
+  skipped for the price of the position advance.
+- **The pattern view redraws per position, not per row.** The full 30+-row
+  scroll repaint is the other 8088-killer (§45.6); in XT mode a row change
+  repaints only the band's two hex row numbers (clip-gated per the §11.3
+  granularity rule) and the readouts/VU bars, and the whole pattern area
+  repaints when the song *position* (or the stopped-scroll view) moves.
+
+An underrun under XT mode still takes §34.5's honest path — bounded
+silence, resume on catch-up — so an overloaded machine degrades to
+stuttering audio with a live UI, never a wedge. Verified in QEMU (both
+modes play the §24 test module at the same pitch — the step math is
+rate-invariant); the wall-clock claim itself is 86Box `make xt-sound`
+territory, cycle-counted here and honestly not QEMU-provable.
+
+### 45.10 The Rate menu — 11 / 22 / 44 kHz for the other end of the range
+
+The XT trades fidelity for cycles; a 286/386 has cycles to spend, and the
+**Rate** menu spends them: `11 kHz` (default, requested as 11,000),
+`22 kHz` (22,050) and `44 kHz` (44,100 — the §34.5 wide-rate regime, so a
+DSP ≥ 4.00; on an older card the open refuses err 2 and the status line
+says so, the `bb_avail` honesty pattern). The active item is its own
+`MENU_DIS`-disabled twin — the Solitaire Deal-menu radio idiom — and the
+**R** key cycles the selection for fullscreen reach. A rate change while
+playing stops playback first (the §45.2 drain), exactly like the XT
+toggle; XT mode overrides the selection with its own 5,500 Hz while it is
+on, and the selection returns when it is off. The mixer's cost is linear
+in the rate: 44 kHz is 4× the default's samples — chosen for machines
+where the default is loafing, refused honestly where it is not.
+
+### 45.11 Smooth — the fullscreen redraw rides the §32 back buffer
+
+The pattern scroll repaints 30-plus row strips erase-then-text, and on a
+direct-to-VRAM path the CRT catches every intermediate state — the flicker
+is architectural, not a bug in the strips. The cure is the §32 back
+buffer: while it is armed, a worker draw burst renders to RAM and
+`gfx_unlock` flushes the finished frame once. **View ▸ `Smooth: On/Off`**
+(the relabeling idiom; key **S**; default Off — the flush cost is opt-in)
+makes the tracker arm it via
+slot 0x01D8 **on entering fullscreen** and hand back the user's previous
+state on leaving; while Smooth is off, or where the slot refuses (mono
+adapters — where the software renderer already IS the direct path — or a
+heap that cannot fund the 150KB claim right now), fullscreen draws exactly
+as before. That second refusal is a **live** condition on this fork, not a
+boot-time verdict: `bb_avail` is about the adapter alone and the memory
+question is asked of the heap every time the buffer is armed (§32), so
+Smooth can be refused with Paint open and granted after it closes. Two recorded
+consequences: the flush costs VRAM bandwidth (the §32 ~24× figure), which
+is why the toggle exists — a slow-bus VGA machine can decline, and XT
+mode's band-relight keeps the dirty rect small enough that the two modes
+compose well; and a close **while fullscreen** takes the kernel's
+`wm_destroy` safety net, which the app never sees — the buffer then stays
+armed, a legal user-settable mode the Control Panel's Display page shows
+and can disarm, recorded here rather than fenced with kernel machinery.
+
+### 45.12 The scroll path and the delta-drawn VU bars
+
+Two updates stopped repainting what had not changed. **The row scroll**:
+when the view moves by exactly one row inside one pattern and position,
+the row area's content is the same pixels eight rows away, so the redraw
+collapses to two `gfx_scroll` calls (§5.5 — the upper and lower row
+regions move separately, because the 11-row band between them breaks the
+8-row rhythm) plus **three** `tui_row1` strips: the band, the strip that
+just left it (band colours back to normal), and the row entering at the
+region's far edge. Both directions work — Down while stopped scrolls the
+other way with the mirrored three strips. Any other change (position,
+pattern, a seek, the compact layouts' pagination) takes `tui_draw_pat` as
+before, and so does a `gfx_scroll` refusal — the §5.5 whole-shape clip
+answer while the file dialog covers the area, which is exactly when the
+per-strip path's own clip gates are the correct renderer. XT mode never
+reaches any of this (§45.9's band relight short-circuits first).
+**The VU bars** keep a last-drawn width per channel and paint only the
+difference — a rising bar fills its growth, a falling one erases its
+shrinkage, a steady one costs nothing; `tui_el_scopes` zeroes the four
+widths whenever it repaints the cells under them.
 
 ## 50. memory.inc — the claim heap
 

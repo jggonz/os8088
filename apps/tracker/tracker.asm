@@ -850,7 +850,7 @@ trk_mix_stage:
 ; -----------------------------------------------------------------------------
 ; trk_stream_close / trk_play_stop
 ; UI context only (verb 2). The close box needs neither: teardown force-frees
-; the stream, the pool grant and the arena grant (SPEC.md 34.3/2.6).
+; the stream, the pool grant and the heap claim (SPEC.md 34.3/50.2).
 ; -----------------------------------------------------------------------------
 trk_stream_close:
     push ax
@@ -1277,7 +1277,7 @@ trk_s_smmoff: db 'Smooth off', 0
     TRKB trk_abon                   ; the About panel is up; worker frames drop
     TRKB trk_pmode                  ; 0 = song, 1 = pattern loop
 
-; --- the module blob (arena grant, SPEC.md 2.6) --------------------------------
+; --- the module blob (a heap claim, SPEC.md 50) -------------------------------
     TRKW trk_modseg                 ; grant base segment, 0 = none
     TRKW trk_capk                   ; its size in KB
     TRKBUF trk_fname, 13            ; the chosen 8.3 name, copied out of the

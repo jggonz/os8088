@@ -22,6 +22,12 @@ VMHERC := $(CURDIR)/vm/xt-hercules
 VM286 := $(CURDIR)/vm/286
 VM386SX := $(CURDIR)/vm/386sx
 VM386DX := $(CURDIR)/vm/386dx
+# ...and the same three machines with a sound card in them (SPEC.md 51.4).
+# QEMU's -device adlib/sb16 is the only other way to give the driver
+# something to attach to, and it is not a real card: these are.
+VMXTSND := $(CURDIR)/vm/xt-sound
+VM286SND := $(CURDIR)/vm/286-sound
+VM386SND := $(CURDIR)/vm/386-sound
 
 # VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
 # 39.1). The shipped images are always built without it, so they auto-detect;
@@ -79,7 +85,7 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
 .PHONY: all run run-640 debug test test-snd xt xt-640 xt-cga xt-hercules \
-        286 386sx 386 check-images clean
+        286 386sx 386 xt-sound 286-sound 386-sound check-images clean
 
 all: $(IMG) $(IMG360) $(APPSIMG) $(APPSIMG360)
 
@@ -497,6 +503,24 @@ xt-hercules: $(IMG360) $(APPSIMG360)
 386: $(IMG) $(APPSIMG)
 	@$(UNPROTECT_B) $(VM386DX)/86box.cfg
 	$(BOX) -P $(VM386DX) -N
+
+# The three sound machines: an XT with a Sound Blaster 2.0 (so the OPL2 is
+# the FM tier and the DSP the stream tier on the CPU this OS is FOR), and the
+# 286/386 with an SB16. `make test ADLIB=1` / `SB16=1` gives the driver
+# something to attach to under QEMU; these give it a card on a machine whose
+# bus and clock are period-correct, which is the only place a stream's pacing
+# means anything (SPEC.md 34.5/51.4).
+xt-sound: $(IMG360) $(APPSIMG360)
+	@$(UNPROTECT_B) $(VMXTSND)/86box.cfg
+	$(BOX) -P $(VMXTSND) -N
+
+286-sound: $(IMG) $(APPSIMG)
+	@$(UNPROTECT_B) $(VM286SND)/86box.cfg
+	$(BOX) -P $(VM286SND) -N
+
+386-sound: $(IMG) $(APPSIMG)
+	@$(UNPROTECT_B) $(VM386SND)/86box.cfg
+	$(BOX) -P $(VM386SND) -N
 
 # check-images - are the git-tracked binaries in build/ what the sources
 # actually produce?
