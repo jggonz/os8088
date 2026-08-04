@@ -1881,6 +1881,19 @@ cp_snd_row:
 ; cp_snd_radios - the three glyphs (module internal)
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
+;
+; THE GLYPH IS GREYED TOO, not just the label beside it, and on this page that
+; is what carries the whole signal on two adapters out of three. font_ink
+; rounds CDGRAY to BLACK for text - a dithered 8x8 glyph is unreadable, so
+; mono has no grey to draw a letter in - which means a disabled LABEL is
+; pixel-identical to a live one on Hercules and CGA. The Display page gets
+; away with that because its caption says why in words; this page has no
+; caption, so the row had to say it some other way.
+;
+; A glyph can, because it is drawn with gfx_pixel rather than as a font cell:
+; gfx_ink maps CDGRAY to the 50% dither, so the ring comes out dotted. Dark
+; grey on VGA, dotted on mono, and either way the whole row reads as disabled
+; instead of a black control with faint writing next to it.
 ; -----------------------------------------------------------------------------
 cp_snd_radios:
     push ax
@@ -1888,8 +1901,7 @@ cp_snd_radios:
     push cx
     push dx
     push si
-    mov byte [gfx_color], CBLACK
-    call cp_snd_row             ; AL = the row that owns the dot
+    call cp_snd_row             ; BH = the row that owns the dot
     mov bh, al
     xor bl, bl
     mov cx, di
@@ -1897,6 +1909,12 @@ cp_snd_radios:
     mov dx, bp
     add dx, CP_PR0Y
 .r:
+    mov al, bl
+    call cp_snd_rowok           ; ...and the same pen cp_snd_paint gave the
+    mov byte [gfx_color], CBLACK    ; label, so the two halves of a row can
+    jnc .pen                        ; never disagree about being disabled
+    mov byte [gfx_color], CDGRAY
+.pen:
     mov si, cp_radio_off
     cmp bl, bh
     jne .draw
@@ -1907,6 +1925,7 @@ cp_snd_radios:
     inc bl
     cmp bl, 3
     jb .r
+    mov byte [gfx_color], CBLACK
     pop si
     pop dx
     pop cx
