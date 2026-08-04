@@ -935,6 +935,12 @@ ui_cmd:
     ret
 
 .reboot:
+    call cp_flush_close         ; the OTHER way the panel stops existing
+                                ; (SPEC.md 31.8). Before the lock, because a
+                                ; disk write is not something to do with the
+                                ; GUI already torn down - and before vid_text,
+                                ; so a failure still has a screen to have
+                                ; happened on
     call gfx_lock               ; never released - the GUI is done
     call vid_text
     call sched_unhook           ; restores int 08h/0Ch (unhooks the mouse too)
