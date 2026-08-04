@@ -719,7 +719,7 @@ wm_fs_drop:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_sizable - set or clear a window's WF_SIZABLE bit (public; API 0x008C)
+; wm_sizable - set or clear a window's WF_SIZABLE bit (public; API 0x0108)
 ; in:  BX = window ptr, AL = 0 clear / non-zero set
 ; out: nothing (all registers preserved)
 ; No repaint: the grow box appears at the next paint. UI-task context only
@@ -735,7 +735,7 @@ wm_sizable:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_fullscreen - enter or leave fullscreen (public; API 0x0090, SPEC.md 11.2)
+; wm_fullscreen - enter or leave fullscreen (public; API 0x0110, SPEC.md 11.2)
 ; in:  AL = 1 enter (BX = window ptr) / 0 exit; caller HOLDS the gfx lock
 ; out: CF = 1 enter refused (another window owns the screen), else CF = 0.
 ;      All registers preserved.

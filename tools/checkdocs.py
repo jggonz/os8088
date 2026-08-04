@@ -15,7 +15,10 @@ import sys
 
 HEAD = re.compile(r"^#{2,6}\s+(\d{1,2}(?:\.\d+)*)\.?\s")
 CITE = re.compile(r"(?:SPEC\.md\s+§?|§)(\d{1,2}(?:\.\d+)*(?:/\d{1,2}(?:\.\d+)*)*)")
-SLOT = re.compile(r"slot (0x0[0-9A-Fa-f]{3})")
+SLOT = re.compile(r"(?:slot|API) (0x0[0-9A-Fa-f]{3})")   # both spellings: the
+# renumbering left three "API 0x..." header comments behind (wm_sizable,
+# wm_fullscreen, menu_win_set) because only "slot 0x..." was being checked, and
+# a wrong number in a routine's own header is the one place an author looks.
 
 # Numbered RULES inside a section, not sections: SPEC.md 1 and 29.2 are lists.
 # Plus the reserved-range note in the preamble, which names a span, not a
