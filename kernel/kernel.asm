@@ -442,7 +442,14 @@ osapi_table:
                                   ;          place when the paragraphs above
                                   ;          are free, which is what stops a
                                   ;          grow needing old + new at once
-osapi_table_end:                  ; 0x0280
+    OSAPI_SLOT wm_title_set       ; 0x0280 - retitle a window and redraw ONLY
+                                  ;          its caption (SPEC.md 11.92): BX =
+                                  ;          win, AX = the new string (0 = the
+                                  ;          bytes W_TITLE names changed in
+                                  ;          place). Not an X cell: the string
+                                  ;          is read through W_SEG, which is
+                                  ;          already the caller's segment
+osapi_table_end:                  ; 0x0288
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -450,8 +457,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 78 * 8
-%error "os8088 API jump table must be exactly 54 8-byte slots"
+%if OSAPI_TABLE_LEN != 79 * 8
+%error "os8088 API jump table must be exactly 79 8-byte slots"
 %endif
 
 ; =============================================================================

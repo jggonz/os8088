@@ -1450,15 +1450,39 @@ it the new window has not covered, which is exactly what §11.3 exists for.
 `fm_win_of` is the reverse of `fm_vp_set` it needs, because `[ld_pwin]`
 holds the poster's **state block** and not its window. It falls back to
 `files_refresh`'s full pass when there is no poster (a package asked for
-the load itself, §22.1), when `[fm_full]` says the caption changed too, or
-when the poster's window is no longer visible — and to `fm_repaint` when
-`fm_status_only` refuses (§22).
+the load itself, §22.1) or when the poster's window is no longer visible —
+and to `fm_repaint` when `fm_status_only` refuses (§22). A pending retitle
+does **not** send it to the full pass any more: it spends one
+`fm_title_flush` (§11.92) before arming the clip, because `wm_title_set`
+does its own region arithmetic on a strip the content rect does not contain.
 
 The **other** end of the same round trip is `fm_onclick`'s double-click:
 posting a load turns the status line into `'Loading...'` and changes
 nothing else on screen, so it too draws one line rather than the window's
-whole content. A double-click on a *folder* still repaints everything —
-`fm_go` replaced the listing.
+whole content. A double-click on a *folder* still repaints the window's
+content — `fm_go` replaced the listing — but no longer its frame, and no
+longer the screen (§11.92).
+
+**A window left barely on the dock is nudged back off it.** `wm_dock_under`
+makes the overlap affordable; `wm_dock_snap` makes most of it not happen.
+`ui_drag` and `ui_grow` call it once, after their own clamps and before the
+damage rect is computed: in BX = the window, out CF = 1 if `W_Y` moved. It
+moves the window **up** and never anywhere else, and only when *both* gates
+open:
+
+- **Less than `DOCK_H`/2 rows of the strip are covered.** `y+h` — the drop
+  shadow's own row — against `[vid_dock_y0]`. Half the strip is the line
+  between "the drag stopped a little low" and "the user put it there"; past
+  it the window stays exactly where it was put and `wm_dock_under` pays.
+- **It fits above.** `dock_y0 - 1 - h` must still be at least `MBAR_H`.
+  A window taller than the desktop band is left **completely** alone — that
+  is the case that must not break, because Paint grown to nearly the whole
+  screen is a deliberate, legal size and neither snapping it nor refusing
+  the resize would be honest about what the grow box does.
+
+`ui_grow` is the caller that needs care: a snap moves the **origin**, which
+nothing else in a resize does, so it banks the old rect's last row *before*
+the call and unions against it afterwards.
 
 ### 11.91 Hiding, destroying and moving cost a rectangle, not a screen
 
@@ -1535,6 +1559,58 @@ was under it, and the promotion is visible — the pinstripes and the two
 boxes belong to the front window alone (§11). After the marked windows are
 drawn, `wm_paint_dmg` asks `wm_top` again; if the answer was **not** redrawn
 in this pass, it owes exactly one `wm_draw_title` with DI = BP.
+
+### 11.92 Retitling costs a strip — `wm_title_set`
+
+A caption changes on an **event** — a folder was entered, a document was
+opened — and never on a paint. The window that owns it therefore knows what
+it wants to be called *after* the frame carrying that caption has already
+been drawn, and until this call the only correction available was "ask the
+next repaint for more": the file manager kept `[fm_full]`, a flag that
+escalated its next `fm_repaint` from the content to the whole frame, and
+before that to `wm_paint_all`. Either way, a window's listing, its chrome
+and everything overlapping it were redrawn to fix 17 rows.
+
+`wm_title_set` (**API slot 0x0280**) is the direct answer: in BX = window
+ptr, AX = the new `W_TITLE` offset — or **0**, meaning the bytes `W_TITLE`
+already names changed underneath it, which is the file manager's case
+because its caption *is* the instance record's `I_NAME` (§29.1). Caller
+holds the gfx lock, so it is a window-callback call like every other drawing
+entry point. All registers preserved.
+
+It draws the strip `x .. x+w-1`, `y .. y+TITLE_H-1` and **nothing else**: no
+content fill, no `W_PAINT`, no other window, no chrome. The pinstripes and
+the two boxes still belong to the frontmost window alone, so it asks
+`wm_top` for BP and hands both to `wm_draw_title`, exactly as §11.90 does.
+
+**Three ways out, and the granularity rule (§11.3) is what picks between
+them.** The region arithmetic is `wm_covered`'s — `wm_clip_occl` seeded on
+the title strip instead of the frame:
+
+- **Nothing above it** (the whole strip lies inside one fragment):
+  `wm_draw_title`, clip disarmed. This is the overwhelmingly common case,
+  because a window is normally frontmost at the moment it retitles.
+- **Wholly covered** (the list came back empty): draw nothing at all.
+  Answered *before* `wm_clip_test`, which reads an empty list as "disarmed,
+  draw freely".
+- **Anything in between**, or a list that overflowed: `wm_paint_dmg` over
+  the strip. A caption is a white gap fill with glyphs on top; a fill clips
+  per pixel and a glyph per whole 8×8 cell, so a clip edge across the strip
+  would erase the text and not put it back — blank, not stale. 17 rows of
+  §11.91 is the honest price of that.
+
+A hidden window and a fullscreen one (§11.2, which has no title bar) both
+return having drawn nothing, so a caller need not test either.
+
+**The file manager is the reference consumer.** `fm_settitle` writes the 16
+bytes and banks the window in `[fm_tdirty]`; `fm_title_flush` spends it, and
+only `fm_repaint` and `files_poster` call that — both under the lock. It is
+deferred, and it is a **pointer rather than a flag**, because `fm_settitle`'s
+callers are a mixed set: `fm_go`, `fm_mount` and `fm_view` hold the lock,
+`fm_kinit` runs before the window is ever shown, and `fmv_sync`'s
+folder-vanished path reaches it from `ld_run`, which deliberately holds no
+lock across a mount (§21). A pointer cannot be spent on whichever window
+happened to repaint in between.
 
 ## 12. menu.inc
 
@@ -3637,6 +3713,8 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
                        0x01F0..0x0238 RESERVED  0x0260 wm_onsize
                               for `main`        0x0268 osapi_file_here
                                                 0x0270 osapi_file_goto
+                                                0x0278 mem_regrow     (X)
+                                                0x0280 wm_title_set
 ```
 
 **Five numbers are HELD EMPTY, and that is the point of the layout.** Every
@@ -4205,9 +4283,9 @@ receives `W_ONKEY` (§13), so exactly one editor can be live, and arming one
 window's editor clears every other block's `FS_EDIT`; `fm_onam` (13B) and
 `fm_odir` (byte), the name and folder-ness of the entry Rename/Delete was
 armed **on**, captured at arm time for the same reason (one live editor) and
-because `fm_name` is reused by every row the painter draws; and `fm_full`
-(byte, "the next `fm_repaint` owes the frame too"), which is set and consumed
-inside a single held lock. `fm_msgbuf` (16B) plus `fm_msgwin` (word, the
+because `fm_name` is reused by every row the painter draws; and `fm_tdirty`
+(word, the window whose caption has been rewritten and not yet drawn — see
+"The deferred retitle" below). `fm_msgbuf` (16B) plus `fm_msgwin` (word, the
 state block that asked) carry the free-space line, which is why `FS_FERR` =
 255 alone does not draw it: the buffer holds one figure and it belongs to one
 window.
@@ -4234,16 +4312,31 @@ mismatch** — where the answer is always the root, the one caption that
 names itself. Every other path that changes `FS_CWD` is navigation and
 retitles with a real name.
 
-**The repaint escalation (`[fm_full]`).** `fm_repaint` normally repaints
-content only. A window's CAPTION, though, lives in the frame, which a
-content repaint never touches — so navigation would leave the title bar
-naming the folder just left. `fm_settitle` therefore raises `[fm_full]`,
-and `fm_repaint` consumes it (clearing it *before* the call, so there is no
-recursion) by escalating to `wm_paint_all` under the caller-held lock — the
-`ui_drag` idiom (§13). It is only ever raised on paths that have already
-paid for a whole disk mount, so a full-screen repaint is not the expensive
-part of anything it joins. `files_init` zeroes it, so it is not a `.bss`
-read-before-write (§2.1).
+**The deferred retitle (`[fm_tdirty]`).** `fm_repaint` repaints content
+only. A window's CAPTION lives in the frame, which a content repaint never
+touches — so navigation would leave the title bar naming the folder just
+left. `fm_settitle` therefore banks its window in `[fm_tdirty]`, and
+`fm_title_flush` spends it through `wm_title_set` (§11.92): 17 rows, under
+the caller-held lock, with no cascade. Exactly two routines call the flush,
+because exactly two repaint a Disk window under the lock — `fm_repaint` and
+`files_poster` (§11.90) — and each clears the word *before* the call, so
+there is no recursion.
+
+It is **deferred**, and it is a **pointer rather than a flag**, because
+`fm_settitle`'s callers disagree about the lock: `fm_go`, `fm_mount` and
+`fm_view` hold it, `fm_kinit` runs before the window is ever shown (and
+zeroes the word afterwards — `app_launch`'s `wm_show` is about to draw the
+whole window anyway), and `fmv_sync`'s folder-vanished path reaches it from
+`ld_run`, which holds no lock across a mount. A pointer cannot be spent on
+whichever window happened to repaint in between. `files_init` zeroes it, so
+it is not a `.bss` read-before-write (§2.1).
+
+This replaced `[fm_full]`, a byte meaning "the next `fm_repaint` owes the
+frame too", which escalated that call to the window's whole frame rect and,
+before that, to `wm_paint_all`. The reasoning for the escalation was that it
+is only ever raised on a path that has already paid for a disk mount — true,
+and still not a reason to redraw a listing, a frame and every overlapping
+window to correct one string.
 
 **The status line alone (`fm_status_only`).** The loader round trip changes
 exactly one line of text — `'Loading...'` on when the load is posted, off
@@ -4383,11 +4476,11 @@ Behaviour:
 - `files_open` (from CMD_FILES dispatch, no lock held): the target is
   `([disk_drive], [dsk_cwd])` — where the volume already is — then the same
   rule.
-- `W_ONCLICK` (lock held; every path below ends in `fm_repaint`, which is
-  normally the content repaint — white-fill own content from the **live**
-  W_W/W_H + redraw + a closing `wm_grow_paint` (§11), because the white
-  fill erases the grow box — but **escalates to a full `wm_paint_all` when
-  `[fm_full]` is set**, see "The repaint escalation" below):
+- `W_ONCLICK` (lock held; every path below ends in `fm_repaint`: a content
+  repaint — white-fill own content from the **live** W_W/W_H + redraw + a
+  closing `wm_grow_paint` (§11), because the white fill erases the grow box
+  — preceded by `fm_title_flush` when navigation left a caption owing, see
+  "The deferred retitle" below):
   test order is buttons → scroll bar → rows.
   1. Refresh rect → `fmv_load` on **this window's** `FS_DRV`, root: a
      re-mount from scratch, so a swapped disk shows its real contents.
@@ -5510,11 +5603,11 @@ at `TMM_ROWS`, and never fewer than one. That count is `[tm_colrows]`.
 **One pixel of that space is spent before the frame gets any of it.**
 `wm_dock_clear` tests `y+h` against `[vid_dock_y0]` with `jae`, because the
 drop shadow lives on row `y+h` — so a frame that merely *reaches* the dock is
-already covering its first row. Deriving the height is not enough on its own
-either: `wm_fit` clamps `y` to `dock_y0 - h`, which puts the shadow straight
-back on the strip for any frame tall enough to be clamped at all. `tm_init`
-therefore writes the template's **y** as well, as `dock_y0 - 1 - h` floored at
-`MBAR_H`.
+already covering its first row. `tm_init` writes the template's **y** as
+`dock_y0 - 1 - h` floored at `MBAR_H` for that reason. `wm_fit` now takes the
+same pixel off both of its own clamps (§39.7), so this is belt and braces
+rather than the only defence it once was — but it is the number the derived
+row count is computed against, so it stays written here.
 
 This is separate from the per-row clip against `[tm_ylim]`, which stays: that
 stops a row's glyphs being lettered over the dock once a second, and it is
@@ -7609,9 +7702,20 @@ and every already-built third-party `.o88`, with zero app rebuilds). Size
 first, then position, and the y floor last so it wins:
 
 ```
-w = min(w, vid_w)               h = min(h, vid_dock_y0 - MBAR_H)
-x = min(x, vid_w - w), floor 0  y = min(y, vid_dock_y0 - h), floor MBAR_H
+w = min(w, vid_w)               h = min(h, vid_dock_y0 - MBAR_H - 1)
+x = min(x, vid_w - w), floor 0  y = min(y, vid_dock_y0 - h - 1), floor MBAR_H
 ```
+
+**Both height clamps are one pixel short of the dock, and that pixel is
+load-bearing.** A window's drop shadow lives on row `y+h`, and
+`wm_dock_clear` tests `y+h` against `[vid_dock_y0]` with `jae` — so a frame
+that merely *reaches* the strip is already covering its first row, and every
+window later shown over it pays a `wm_dock_under` pass (§11.90). Clamping
+`h` alone is not enough either: the `y` clamp would put the shadow straight
+back on the strip for any frame tall enough to have been clamped at all. One
+subtraction here fixes it for **every fixed-size template at once** — which
+is why Solitaire, Arkanoid and the Task Manager needed no per-app rule
+beyond keeping their own derived layouts in step with it.
 
 On VGA it is a no-op. **Consequence for §11:** the record may differ from the
 template it was created from, so a package that lays out from its own

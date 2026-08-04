@@ -172,8 +172,15 @@ wm_fit:
     jle .wok
     mov [bx+W_W], ax
 .wok:
-    mov ax, [vid_dock_y0]       ; h = min(h, desktop height)
-    sub ax, MBAR_H
+    mov ax, [vid_dock_y0]       ; h = min(h, desktop height) - and ONE PIXEL
+    sub ax, MBAR_H + 1          ; SHORT of the dock, because the drop shadow
+                                ; lives on row y+h and wm_dock_clear tests
+                                ; y+h with `jae`. Clamping to exactly the
+                                ; band handed out a window flush against the
+                                ; strip, which then made every window opened
+                                ; over it pay a dock-under repaint (SPEC.md
+                                ; 11.90). This is the one place that decides
+                                ; it for every fixed-size package at once
     cmp [bx+W_H], ax
     jle .hok
     mov [bx+W_H], ax
@@ -188,8 +195,9 @@ wm_fit:
     jge .yc
     mov word [bx+W_X], 0
 .yc:
-    mov ax, [vid_dock_y0]       ; y = min(y, dock top - h), floor MBAR_H
-    sub ax, [bx+W_H]
+    mov ax, [vid_dock_y0]       ; y = min(y, dock top - h - 1), floor MBAR_H
+    sub ax, [bx+W_H]            ; - the same pixel, for the same reason
+    dec ax
     cmp [bx+W_Y], ax
     jle .yok
     mov [bx+W_Y], ax
@@ -199,6 +207,68 @@ wm_fit:
     mov word [bx+W_Y], MBAR_H
 .out:
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_dock_snap - a window left barely over the dock is nudged back above it
+; in:  BX = window ptr (its rect already clamped by the caller)
+; out: CF = 1 if W_Y moved, CF = 0 if nothing changed. All registers preserved.
+;
+; A window's drop shadow is on row y+h, so y+h >= [vid_dock_y0] means it is
+; covering the strip - and the strip is drawn UNDER windows, so every later
+; dock repaint has to put that window back over it (wm_dock_under, SPEC.md
+; 11.90). Landing there by a few pixels is almost always a miss rather than
+; an intention, and it is the expensive kind of miss.
+;
+; TWO gates, and both matter:
+;
+; - **Less than half the strip.** DOCK_H/2 rows of overlap is the line
+;   between "the drag stopped a little low" and "the user put it there".
+;   Past that it stays where it was put; the dock goes under it and
+;   wm_dock_under pays, which is what that routine is for.
+; - **It has to FIT.** Only a window shorter than the desktop band can be
+;   moved off the strip at all, and a window that cannot is left exactly
+;   alone. That is the case that must not be broken: Paint grown to nearly
+;   the whole screen is a deliberate, legal size, and snapping - or worse,
+;   refusing - would make the grow box lie about what it does.
+;
+; MBAR_H is the floor, so this can only ever move a window UP into space it
+; already fits in.
+; -----------------------------------------------------------------------------
+wm_dock_snap:
+    push ax
+    push cx
+    push dx
+    mov ax, [bx+W_Y]
+    add ax, [bx+W_H]            ; AX = the drop shadow's own row
+    mov cx, [vid_dock_y0]
+    cmp ax, cx
+    jb .no                      ; clear of the strip already
+    sub ax, cx
+    inc ax                      ; AX = rows of the strip it covers
+    cmp ax, DOCK_H / 2
+    jae .no                     ; deliberate: leave it, and let the dock go
+                                ; under it
+    mov dx, cx                  ; the highest y that keeps y+h off the strip
+    dec dx
+    sub dx, [bx+W_H]
+    cmp dx, MBAR_H
+    jl .no                      ; it does not fit above the dock at all - a
+                                ; grown Paint, and its size is not ours to
+                                ; second-guess
+    cmp [bx+W_Y], dx
+    jle .no                     ; already at or above it
+    mov [bx+W_Y], dx
+    pop dx
+    pop cx
+    pop ax
+    stc
+    ret
+.no:
+    pop dx
+    pop cx
+    pop ax
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2404,6 +2474,111 @@ wm_draw_title:
     call font_str_x
     pop es
 .out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_title_set - change a window's caption and redraw ONLY the caption
+; in:  BX = window ptr, AX = the new W_TITLE offset, or 0 to leave W_TITLE
+;      alone (the bytes it already points at changed in place); caller HOLDS
+;      the gfx lock
+; out: nothing (all registers preserved)
+;
+; The answer to "the title bar was drawn before the window knew what it wanted
+; to be called". A caption changes on an EVENT - a folder was entered, a file
+; was opened - and never on a paint, so the fix is not a hook that asks every
+; window for its name on every frame: it is a call the owner makes at the
+; moment it decides, and which draws that one strip and nothing else. Before
+; this, the file manager's only way to correct its caption was a flag that
+; escalated the next repaint to the whole FRAME, so stepping into a folder
+; redrew the window's contents, its listing and everything overlapping it.
+;
+; The rect is x .. x+w-1, y .. y+TITLE_H-1, which is the strip wm_draw_title
+; owns, and nothing outside it is touched: no W_PAINT, no cascade. The region
+; arithmetic is wm_covered's (SPEC.md 11.3) seeded on that strip instead of
+; the frame, so an occluding window's pixels stay its own.
+;
+; The granularity rule decides which of three ways it goes. The caption is a
+; white gap fill with glyphs on top; a fill clips per pixel and a glyph per
+; whole 8x8 cell, so a clip edge across the strip would erase the text and
+; not put it back - blank, not stale. So the cheap path is taken only when
+; the WHOLE strip is one fragment (nothing over it). Wholly covered draws
+; nothing at all. Anything in between - or a region that overflowed - falls
+; back to wm_paint_dmg over the strip, which is still 17 rows rather than a
+; screen.
+; -----------------------------------------------------------------------------
+wm_title_set:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    or ax, ax
+    jz .keep
+    mov [bx+W_TITLE], ax
+.keep:
+    mov di, bx                  ; DI = the window for the duration; BX stays
+                                ; the window until wm_clip_occl has had it
+    test word [di+W_FLAGS], 2
+    jz .out                     ; hidden: no pixels on screen to correct
+    test word [di+W_FLAGS], WF_FULL
+    jnz .out                    ; fullscreen has no title bar (SPEC.md 11.2)
+
+    mov word [wm_clip_n], 0
+    mov ax, [di+W_X]
+    mov cx, ax
+    add cx, [di+W_W]
+    dec cx
+    mov dx, [di+W_Y]
+    mov si, dx
+    add si, TITLE_H-1
+    mov [wm_clip_tab+WCR_X1], ax
+    mov [wm_clip_tab+WCR_Y1], dx
+    mov [wm_clip_tab+WCR_X2], cx
+    mov [wm_clip_tab+WCR_Y2], si
+    mov word [wm_clip_n], 1
+    call wm_clip_occl           ; subtract every visible window above us
+    jc .dmg                     ; overflowed: nothing about the list is valid
+    cmp word [wm_clip_n], 0
+    je .clear                   ; wholly covered: not one pixel of it is ours
+
+    mov ax, [di+W_X]            ; is the whole strip one fragment? wm_clip_test
+    mov cx, ax                  ; reads an empty list as "disarmed, draw
+    add cx, [di+W_W]            ; freely", which is why the covered case had
+    dec cx                      ; to be answered above it and not here
+    mov bx, [di+W_Y]
+    mov dx, bx
+    add dx, TITLE_H-1
+    call wm_clip_test
+    jc .dmg
+    call wm_clip_clear          ; nothing is over it: the clip has no work to
+    call wm_top                 ; do, and wm_draw_title stays inside the strip
+    mov bp, bx                  ; BP = the frontmost visible window (or 0):
+    mov bx, di                  ; the pinstripes and the two boxes are its
+    call wm_draw_title          ; alone (SPEC.md 11.90)
+    jmp short .out
+.clear:
+    call wm_clip_clear
+    jmp short .out
+.dmg:
+    call wm_clip_clear
+    mov ax, [di+W_X]
+    mov bx, [di+W_Y]
+    mov cx, ax
+    add cx, [di+W_W]
+    dec cx
+    mov dx, bx
+    add dx, TITLE_H-1
+    call wm_paint_dmg
+.out:
+    pop bp
+    pop di
     pop si
     pop dx
     pop cx

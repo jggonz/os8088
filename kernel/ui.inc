@@ -519,6 +519,11 @@ ui_drag:
 .y_same:
     mov [bx + W_Y], ax
 
+    call wm_dock_snap           ; barely over the dock? then back above it,
+    jnc .nosnap                 ; if it still fits (SPEC.md 11.90)
+    inc di                      ; ...and it moved after all
+.nosnap:
+
     or di, di                   ; a click that only raised the window (above)
     jz .done                    ; leaves the screen already correct
 
@@ -677,24 +682,32 @@ ui_grow:
     mov [bx + W_H], dx          ; size it will take, per axis, and by then
                                 ; nothing has been drawn at the other one
 
-    ; Only the rect it had and the rect it has changed, and a grow keeps its
-    ; ORIGIN fixed - so their union is that origin plus the larger of the two
-    ; sizes per axis. wm_paint_dmg's case, not wm_paint_all's (SPEC.md 11.91):
-    ; dragging a corner used to repaint every window on the screen.
+    ; A grow that stopped just over the dock is nudged back above it, if it
+    ; still fits there (SPEC.md 11.90). It moves the ORIGIN, which nothing
+    ; else in this loop does, so the old bottom is banked first: the union
+    ; below has to reach it whichever way the origin went.
+    mov ax, [bx + W_Y]
+    add ax, [ui_origy]          ; the old rect's last row, origin unmoved
+    push ax
+    call wm_dock_snap
+    pop ax
+
+    ; Only the rect it had and the rect it has changed, so the repaint is
+    ; their union: wm_paint_dmg's case, not wm_paint_all's (SPEC.md 11.91).
+    ; Dragging a corner used to repaint every window on the screen.
+    mov dx, [bx + W_Y]
+    add dx, [bx + W_H]          ; the new last row...
+    cmp dx, ax
+    jae .uh
+    mov dx, ax                  ; ...or the old one, whichever is lower
+.uh:
     mov ax, [bx + W_W]
-    cmp ax, [ui_origx]          ; ...against the frame size at mousedown
-    jge .uw
+    cmp ax, [ui_origx]          ; width never moves its origin, so that axis
+    jge .uw                     ; is still just the larger of the two
     mov ax, [ui_origx]
 .uw:
     mov cx, ax
-    mov ax, [bx + W_H]
-    cmp ax, [ui_origy]
-    jge .uh
-    mov ax, [ui_origy]
-.uh:
-    mov dx, ax
     add cx, [bx + W_X]          ; x2 = x + w: the drop shadow's own column
-    add dx, [bx + W_Y]          ; y2 = y + h: and its own row
     mov ax, [bx + W_X]
     mov bx, [bx + W_Y]          ; (the read completes before BX changes)
     call wm_paint_dmg           ; caller-held lock, per the wm contract

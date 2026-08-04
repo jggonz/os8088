@@ -219,8 +219,15 @@ ark_entry:
 
     mov ax, [ark_chwant]            ; the height the layout wants...
     add ax, TITLE_H + 1
-    mov bx, [ark_dock]              ; ...clamped to the desktop band, exactly
-    sub bx, MBAR_H                  ; as wm_fit would (SPEC.md 11)
+    mov bx, [ark_dock]              ; ...clamped to the desktop band, and one
+    sub bx, MBAR_H + 1              ; pixel short of it, exactly as wm_fit
+                                    ; does (SPEC.md 11): the drop shadow is
+                                    ; on row y+h, so a frame that merely
+                                    ; REACHES the dock already covers it.
+                                    ; wm_fit would shave this pixel anyway -
+                                    ; taking it here keeps ark_chgt, and so
+                                    ; the whole layout, in step with the
+                                    ; window the kernel actually made
     cmp ax, bx
     jbe .hok
     mov ax, bx

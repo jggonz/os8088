@@ -144,7 +144,7 @@ files_init:
     mov byte [fm_odir], 0
     mov word [fm_msgwin], 0
     mov byte [fm_msgbuf], 0
-    mov byte [fm_full], 0
+    mov word [fm_tdirty], 0
     mov word [fm_vp], fm_pool   ; no acting window yet: point the three
     mov word [fm_vseg], 0           ; published words at slot 0, and at the
     mov word [fm_vinst], 0          ; global snapshot rather than a cache
@@ -221,9 +221,10 @@ fm_kinit:
     call fmv_load               ; DI = block: mount, then fill its own cache
     mov si, [fm_seed_nam]       ; the folder's name when the caller knew it
     call fm_settitle
-    mov byte [fm_full], 0       ; app_launch's wm_show repaints everything
-                                ; anyway - do not make the first self-repaint
-                                ; pay for a second full pass
+    mov word [fm_tdirty], 0     ; app_launch's wm_show draws this window whole
+                                ; a moment from now, caption included - do not
+                                ; leave the first self-repaint owing a strip
+                                ; that is already correct
 
     pop si
     pop dx
@@ -988,11 +989,12 @@ fm_win_of:
 ; SPEC.md 11.3 clip region is what makes it safe to draw a window that the
 ; new one may now be sitting on top of.
 ;
-; [fm_full] and a poster-less load (a package asking for one, SPEC.md 22.1)
-; both fall back to the whole screen: the first because the caption changed
-; and fm_repaint would escalate to wm_paint_all anyway - which under an
-; armed clip would be clipped to one window's content rect - and the second
-; because there is no window to aim at.
+; A poster-less load (a package asking for one, SPEC.md 22.1) falls back to
+; the whole screen, because there is no window to aim at. A pending retitle
+; does NOT: this is one of the two places that can spend one, and it is spent
+; BEFORE the clip is armed - wm_title_set does its own region arithmetic on
+; the title strip, and would otherwise be clipped to the content rect that
+; strip is not inside.
 ; -----------------------------------------------------------------------------
 files_poster:
     push ax
@@ -1000,11 +1002,10 @@ files_poster:
     push si
     cmp word [ld_pwin], 0
     je .full
-    cmp byte [fm_full], 0
-    jne .full
     call fm_win_of              ; [ld_pwin] is a STATE BLOCK, not a window
     jc .full                    ; ptr - its window has gone since it posted
     call gfx_lock
+    call fm_title_flush
     call wm_clip_set            ; CF = 1: none of it is visible any more
     jc .unlock
     mov si, bx
@@ -1766,6 +1767,23 @@ fm_reload:
 ;
 ; The caption, the dock tile and the Task Manager row are the same 16 bytes
 ; (the instance's I_NAME, aimed at by fm_kinit), so all three follow.
+;
+; The screen is corrected by wm_title_set (SPEC.md 11.92) and nothing else -
+; but not from here. [fm_tdirty] banks the WINDOW whose 16 bytes just moved,
+; and the next locked repaint of it spends that through fm_title_flush,
+; because this routine's callers are a mixed set: fm_go, fm_mount and fm_view
+; hold the gfx lock, fm_kinit runs before the window is ever shown, and
+; fmv_sync's rarest path reaches here from ld_run, which deliberately holds no
+; lock across a mount. A pointer rather than a flag, so it can never be spent
+; on the wrong window.
+;
+; It used to bank [fm_full] instead, which escalated the next fm_repaint from
+; the content to the whole FRAME - the caption being the one part of a window
+; a content repaint never touches. That worked, but it redrew the window
+; whole, its listing and everything overlapping it, to correct 17 rows. And
+; the frame is drawn BEFORE the mount that decides what the caption should
+; say, which is what made a deferred escalation necessary at all; a strip the
+; window redraws once it has decided has no such ordering.
 ; -----------------------------------------------------------------------------
 fm_settitle:
     push ax
@@ -1775,6 +1793,8 @@ fm_settitle:
     mov di, [fm_vinst]
     or di, di
     jz .out                     ; unowned window: nothing to retitle
+    mov ax, [di+I_WIN]          ; inst_bind_win runs before KD_INIT, so this
+    mov [fm_tdirty], ax         ; is already valid on the very first call
     add di, I_NAME              ; DI -> the 16 bytes the caption points at
     push di
     mov di, [fm_vp]
@@ -1788,9 +1808,6 @@ fm_settitle:
     jnz .copy
     mov si, fm_s_folder
 .copy:
-    mov byte [fm_full], 1       ; the caption lives in the FRAME, which a
-                                ; content repaint never touches: ask the
-                                ; next fm_repaint for the whole screen
     mov cx, 15                  ; I_NAME is 16 bytes with a permanent NUL
 .ch:                            ; at byte 15 (SPEC.md 29.1)
     lodsb                       ; DF=0 per SPEC.md 1
@@ -1804,6 +1821,30 @@ fm_settitle:
     pop di
     pop si
     pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_title_flush - spend a pending retitle on the screen
+; in:  nothing ([fm_tdirty]); caller HOLDS the gfx lock
+; out: nothing (all registers preserved)
+;
+; Called from the two places that repaint a Disk window under the lock -
+; fm_repaint and files_poster - and from nowhere else. W_TITLE already points
+; at the bytes fm_settitle rewrote, so wm_title_set is told to leave it alone
+; (AX = 0) and just correct the strip.
+; -----------------------------------------------------------------------------
+fm_title_flush:
+    push ax
+    push bx
+    mov bx, [fm_tdirty]
+    or bx, bx
+    jz .out
+    mov word [fm_tdirty], 0
+    xor ax, ax
+    call wm_title_set
+.out:
+    pop bx
     pop ax
     ret
 
@@ -2536,17 +2577,13 @@ fm_edit_end:
 ; from wm_paint_all, but self-initiated repaints must fill it themselves -
 ; from the LIVE record: the window resizes (SPEC.md 11.1).
 ;
-; [fm_full] escalates to the whole screen, and only navigation raises it
-; (fm_settitle): the window's CAPTION lives in the frame, which a content
-; repaint never touches, so a folder change would otherwise leave the title
-; bar naming the folder we just left.
-;
-; That is OUR RECT, not the screen. It was wm_paint_all, on the reasoning
-; that the only thing raising the flag has just paid for a disk mount - true,
-; but it meant every step into a folder and every step back out redrew the
-; desktop, both drive zones, the chrome and every other window. wm_paint_dmg
-; over the window's own rect redraws this window whole, plus whatever
-; overlaps it (SPEC.md 11.91), and leaves the rest of the screen alone.
+; A pending retitle is spent here (SPEC.md 11.92) and costs 17 rows. It used
+; to be [fm_full], which escalated this call to the whole FRAME - the window's
+; CAPTION lives there, and a content repaint never touches it, so a folder
+; change would otherwise leave the title bar naming the folder we just left.
+; That escalation redrew this window whole and every window overlapping it,
+; and before that it was wm_paint_all: the desktop, both drive zones, the
+; chrome and every other window, to correct one string.
 ; -----------------------------------------------------------------------------
 fm_repaint:
     push ax
@@ -2554,13 +2591,7 @@ fm_repaint:
     push cx
     push dx
 
-    cmp byte [fm_full], 0
-    je .content
-    mov byte [fm_full], 0
-    call wm_win_rect            ; SI = our window: the frame too, because the
-    call wm_paint_dmg           ; caption just changed - but only OUR rect
-    jmp .done
-.content:
+    call fm_title_flush
 
     mov bx, si
     call wm_content             ; AX = x1, DX = y1
@@ -3296,9 +3327,14 @@ fm_seed_nam: resw 1             ; -> fm_snam, or 0 = derive the title
 fm_snam:     resb 17            ; the seeded folder name, COPIED (fm_name is
                                 ; reused by the repaint before the drain)
 
-fm_full:    resb 1              ; 1 = the next fm_repaint owes the frame too.
-                                ; Module-global on purpose: it is raised and
-                                ; consumed inside one held lock, by one window
+fm_tdirty:  resw 1              ; the window whose caption fm_settitle just
+                                ; rewrote and nobody has drawn yet, or 0. A
+                                ; POINTER, not a flag: fmv_sync can retitle a
+                                ; window from ld_run, which holds no lock, so
+                                ; the redraw is spent later by whichever of
+                                ; fm_repaint / files_poster gets there first -
+                                ; and it must not be spendable on some other
+                                ; window that repainted in between
 fm_cmdwin:  resw 1              ; fm_oncmd/fm_rclick scratch: the acting
                                 ; window ptr, held across the dispatch
 fm_rcmdid:  resb 1              ; the FMC_* a context menu chose, handed from

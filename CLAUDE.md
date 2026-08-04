@@ -269,6 +269,42 @@ reverse of `fm_vp_set`, because `[ld_pwin]` holds the poster's **state block**,
 not its window — a distinction that silently draws a Disk window's contents
 through a garbage rect if you miss it.
 
+### Retitling costs a strip, and the dock stopped being a trap (SPEC.md §11.92/§39.7)
+
+A caption changes on an **event**, never on a paint — so a window knows what it
+wants to be called *after* the frame carrying that caption has been drawn.
+`wm_title_set` (API slot 0x0280) is the correction: BX = window, AX = the new
+`W_TITLE` (or **0**, "the bytes it already names changed underneath it"), lock
+held, and it draws `y .. y+TITLE_H-1` and **nothing else** — no content fill, no
+`W_PAINT`, no other window. Three ways out, picked by the granularity rule:
+nothing above it → `wm_draw_title`; wholly covered → draw nothing (answered
+*before* `wm_clip_test`, which reads an empty list as "disarmed, draw freely");
+anything in between → `wm_paint_dmg` over the strip, because a fill clips per
+pixel and a glyph per cell and the caption would go blank rather than stale.
+
+The file manager is the reference consumer and lost `[fm_full]` — a flag that
+escalated its next repaint to the whole frame — for `[fm_tdirty]`, a **pointer**
+to the window owing a caption. Deferred and a pointer because `fm_settitle`'s
+callers disagree about the lock: `fm_go`/`fm_mount`/`fm_view` hold it,
+`fm_kinit` runs before the window exists on screen, and `fmv_sync`'s
+folder-vanished path arrives from `ld_run`, which holds none. `fm_title_flush`
+spends it, and only `fm_repaint` and `files_poster` call that.
+
+**`wm_fit` takes one pixel off both height clamps** (`dock_y0 - MBAR_H - 1` and
+`dock_y0 - h - 1`). The drop shadow is on row `y+h` and `wm_dock_clear` tests
+`y+h` with `jae`, so a frame that merely *reaches* the strip is already on it —
+and every window later shown over that one pays a `wm_dock_under` pass. One
+subtraction fixes every fixed-size template at once, which is why Solitaire,
+Arkanoid and the Task Manager needed nothing beyond keeping their own derived
+layouts in step. **`wm_dock_snap`** then handles what the user does by hand:
+called by `ui_drag` and `ui_grow` after their own clamps, it moves a window
+**up** off the strip, and only when both gates open — less than `DOCK_H`/2 rows
+covered (past that it was deliberate; leave it and let `wm_dock_under` pay) and
+`dock_y0 - 1 - h >= MBAR_H` (a window taller than the desktop band is left
+completely alone, because Paint grown to nearly the whole screen is a legal
+size). In `ui_grow` a snap moves the **origin**, which nothing else in a resize
+does, so bank the old rect's last row before the call and union against it.
+
 ### The mono adapters reuse the back-buffer renderer (SPEC.md §39)
 
 There is **no second graphics driver**. `kernel/vgabb.inc` was written as a latch-free,

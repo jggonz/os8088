@@ -560,6 +560,21 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; moved leaves your old segment pointing at
                                  ; memory that is no longer yours.
 
+%define OSAPI_WM_TITLE      KERNEL_SEG:0x0280   ; BX = win ptr, AX = a NUL
+                                 ; string IN YOUR OWN SEGMENT, or 0 to mean
+                                 ; "the bytes W_TITLE already names changed
+                                 ; underneath it". Redraws the caption strip
+                                 ; and NOTHING else: no content fill, no
+                                 ; W_PAINT, no other window - so a document
+                                 ; name in the title bar costs 17 rows.
+                                 ;
+                                 ; Call it from a window callback, which is
+                                 ; where the gfx lock is already held. It is
+                                 ; safe on a hidden window (it draws nothing)
+                                 ; and safe on a covered one (likewise), and
+                                 ; the string must OUTLIVE the call - the
+                                 ; record keeps the pointer, not the bytes.
+
 %define OSAPI_FONT_GLYPHS   KERNEL_SEG:0x0258   ; out SI = the offset of the
                                  ; kernel's 8x8 glyph table in KERNEL_SEG,
                                  ; AL = first character code it covers,
