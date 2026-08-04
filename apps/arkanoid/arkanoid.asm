@@ -494,6 +494,31 @@ ark_oncmd:
     ret
 
 ; -----------------------------------------------------------------------------
+; ark_onclick - W_ONCLICK: nothing in this game steers with the mouse, so a
+;               click exists only to take the credit panel down. A panel you
+;               dismiss with a key but not with a click reads as a hung
+;               window, which is the whole reason this callback exists.
+; in:  CX = x, DX = y (screen), SI = window ptr; caller holds the gfx lock
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+ark_onclick:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call ark_track
+    call ark_abdismiss
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; ark_cmd_new / ark_cmd_pause - the two commands, shared by keys and menu
 ; in:  the origin tracked; gfx lock held; preserve all registers
 ; -----------------------------------------------------------------------------
@@ -2728,7 +2753,7 @@ ark_charc:
 ; x/y/w/h are computed by ark_entry from the live screen.
 ark_tpl:
     dw 0, 0, 0, 0
-    dw ark_ttl, ark_paint, ark_onkey, 0
+    dw ark_ttl, ark_paint, ark_onkey, ark_onclick
 
 ; --- app menu set (SPEC.md 12.2) -----------------------------------------------
     OS88_MENUSET ark_menus, ark_m_name, ark_oncmd

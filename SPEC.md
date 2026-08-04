@@ -18,9 +18,12 @@ way as the two diverge:
   `.90`**, so they stay with the parent they belong to while leaving `main`
   the whole ordinary range. Today: §11.90, §11.91, §18.90, §37.90.
 
-A number `main` uses for something this fork does not have is **held empty**
-with a stub saying so, rather than reused — §34.5, §34.6 and §41. That is what
-lets prose here refer to a retired mechanism by the number it had.
+**API slot numbers no longer track `main`'s** (§20.3). They did, with five
+cells held empty to keep one number from meaning two contracts, and the
+branches are merging so the holes bought nothing and were closed. What
+survives is the half of the rule that was never about the other fork: a
+shipped slot keeps its contract, and "we no longer implement this" is a
+refusing stub, not a reuse.
 
 The two forks' contents are catalogued in
 [BRANCH-DIFFERENCES.md](BRANCH-DIFFERENCES.md); porting an application across
@@ -484,6 +487,58 @@ through the Map Mask) would beat this on detailed pictures and lose on flat
 ones, and would need its own back-buffer and 1bpp twins; it changes no
 caller, so it stays available as a later optimisation.
 
+### 5.5 `gfx_scroll` — move a rect instead of redrawing it
+
+**in** AX/BX/CX/DX = x1/y1/x2/y2 inclusive, absolute screen coordinates;
+SI = dy **signed**, positive scrolling the content *up*. Caller holds the
+gfx lock. **out** CF=0 moved, CF=1 refused and nothing touched. Every
+register preserved — CF is the whole answer.
+
+A scrolling view is the one case the repaint optimisations elsewhere in this
+spec cannot help with: row signatures (§27.2) find every row changed, and a
+damage rect (§11.91) is the whole view. But the pixels are not *new* — they
+are the pixels one row up. Moving them is a `rep movsb` per row; redrawing
+them is `font_char` per cell, which on a 4.77MHz 8088 is the difference
+between a scroll that keeps up with the key repeat and one that does not.
+
+**The |dy| vacated rows are the caller's to repaint**, and their content
+after the call is unspecified — this primitive moves pixels and invents
+none.
+
+Refused, all with nothing moved, so a caller may simply fall back to a full
+repaint:
+
+- **x1 or x2+1 is not a multiple of 8.** The blit is byte-column granular
+  on every adapter, because on VGA the latches move eight pixels at a time
+  and on mono a byte *is* eight pixels. Sub-byte scrolling would need a
+  shift-and-merge pass, which is most of the cost of drawing.
+- Empty or inverted rect, `|dy|` = 0, `|dy|` ≥ the rect's height, or any
+  edge off the live screen (§39.2's `[vid_w]`/`[vid_h]`, not the VGA
+  reference constants).
+- **An armed clip region (§11.3) that does not wholly contain the rect.**
+  Whole-shape clipping, the `font_char`/`ico_core` class: a blit cannot be
+  cut per pixel, so it refuses and the caller repaints — which clips per
+  strip. This is the granularity rule in its third instance.
+
+Three backends, one contract (§39), and they are *coherent* rather than
+merely parallel:
+
+| adapter | how |
+|---|---|
+| VGA direct | GC write mode 1: a `movsb` read fills the latches and the write stores all four planes at once. Mode restored after (§1 rule 7). |
+| VGA + back buffer | `gfx_flush` **first**, then the four buffer planes *and* VRAM scroll in step. Nothing is marked dirty — they stay identical by construction. |
+| Hercules / CGA | per-row `rep movsb` through `gfx_rowbase`, so the banked interleave is absorbed rather than special-cased. |
+
+The flush-first rule is the subtle one. A pending dirty rect inside the
+region means RAM holds pixels VRAM has not seen; scrolling both would move
+fresh RAM against stale VRAM and the next flush would write the *unscrolled*
+rect over the scrolled one. Flushing first makes the two identical before
+either moves.
+
+Verified against a byte-exact reference on all three: the mono path over
+CGA's bank boundary, and the buffered path pixel-for-pixel against the
+direct one.
+
 ## 6. font.inc
 
 `font_init` runs **after** `vid_setmode` (§39.6): zero ES:BP, then int 10h
@@ -500,7 +555,7 @@ bytes are hard-coded.
 | `font_str`   | CX=x, DX=y, SI=NUL str   | draw string left→right               |
 | `font_width` | SI=NUL str               | out AX = pixel width (8 × length)    |
 | `font_str_x` / `font_width_x` | ES:SI = NUL str | the same two, reading the string through **ES** — what the `X` stubs of §20.3 call so a package's string can live in its own segment |
-| `osapi_font_glyphs` | — | out SI = the offset of `font_glyphs` in KERNEL_SEG, AL = FONT_FIRST (32), AH = FONT_LAST (126), CX = 8 bytes per glyph. API slot 0x0258 |
+| `osapi_font_glyphs` | — | out SI = the offset of `font_glyphs` in KERNEL_SEG, AL = FONT_FIRST (32), AH = FONT_LAST (126), CX = 8 bytes per glyph. API slot 0x0200 |
 
 **Handing out the bitmaps** (`osapi_font_glyphs`) is for an app that draws
 text into its OWN pixels rather than onto the screen — apps/paint's text tool
@@ -1017,7 +1072,7 @@ W_ONSIZE equ 24  ; word: near ptr or 0 - the resize negotiator (§11.1).
                  ; Called BEFORE a new size is committed, with SI = window,
                  ; CX/DX = the proposed frame size; answers in CX/DX with the
                  ; size it will accept. NOT a template word: wm_create zeroes
-                 ; it, `wm_onsize` (API slot 0x0260) sets it.
+                 ; it, `wm_onsize` (API slot 0x0208) sets it.
 WIN_SIZE equ 26
 MAX_WIN  equ 12
 
@@ -1170,7 +1225,7 @@ resizable window's procs are required to lay out from the live record (record
 note above). Self-initiated repaints (the fm_repaint idiom, §22) must
 white-fill using the live W_W/W_H for the same reason.
 
-**`wm_resize` (API slot 0x01D0) — an app changing its own size.** In:
+**`wm_resize` (API slot 0x01B8) — an app changing its own size.** In:
 BX = window, CX = new outer width, DX = new outer height; the caller holds
 the gfx lock. Clamps exactly as a drag does (never below WMIN_W/WMIN_H, never
 past the live screen or the dock row, §39.2), re-fits the origin the way
@@ -1192,7 +1247,7 @@ the record changes — which is the whole point: nothing has been drawn at
 either size yet, so a refusal costs no repaint. The answer is a SIZE and not
 a yes/no because the case that motivated it is per-axis: apps/paint refuses a
 drag that would crop artwork, and a drag that would lose columns but not rows
-should still get its rows. Install it with `wm_onsize` (API slot 0x0260,
+should still get its rows. Install it with `wm_onsize` (API slot 0x0208,
 BX = window, AX = a near proc in the window's own segment, 0 clears).
 The negotiator runs under the gfx lock and **must not draw** — it decides,
 returns, and draws in the W_PAINT that immediately follows.
@@ -1571,7 +1626,7 @@ escalated its next `fm_repaint` from the content to the whole frame, and
 before that to `wm_paint_all`. Either way, a window's listing, its chrome
 and everything overlapping it were redrawn to fix 17 rows.
 
-`wm_title_set` (**API slot 0x0280**) is the direct answer: in BX = window
+`wm_title_set` (**API slot 0x0228**) is the direct answer: in BX = window
 ptr, AX = the new `W_TITLE` offset — or **0**, meaning the bytes `W_TITLE`
 already names changed underneath it, which is the file manager's case
 because its caption *is* the instance record's `I_NAME` (§29.1). Caller
@@ -3730,37 +3785,47 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
 0x0060 font_char       0x00E0 osapi_snd_caps    0x0170 wm_clip_set
 0x0068 font_str    (X) 0x00E8 osapi_snd_tone    0x0178 wm_clip_clear
 0x0070 font_width  (X) 0x00F0 osapi_snd_play    0x0180 wm_clip_test
-0x0078 wm_create   (X) 0x00F8 --- HELD ---      0x0188 cpu_info
-0x0080 wm_show         0x0100 --- HELD ---      0x0190 xm_caps
+0x0078 wm_create   (X) 0x00F8 osapi_snd_fm  (X) 0x0188 cpu_info
+0x0080 wm_show         0x0100 osapi_snd_stream  0x0190 xm_caps
 0x0088 wm_hide         0x0108 wm_sizable        0x0198 xm_alloc
                        0x0110 wm_fullscreen     0x01A0 xm_free
                        0x0118 wm_grow_paint     0x01A8 xm_copy
 
-0x01B0 wm_geom         0x01D0 wm_resize         0x0240 mem_claim      (X)
-0x01B8 --- HELD ---    0x01D8 gfx_blit4         0x0248 mem_free       (X)
-0x01C0 --- HELD ---    0x01E0 wm_about_set      0x0250 mem_avail
-0x01C8 --- HELD ---    0x01E8 dskw_readbig  (N) 0x0258 osapi_font_glyphs
-                       0x01F0..0x0238 RESERVED  0x0260 wm_onsize
-                              for `main`        0x0268 osapi_file_here
-                                                0x0270 osapi_file_goto
-                                                0x0278 mem_regrow     (X)
-                                                0x0280 wm_title_set
+0x01B0 wm_geom         0x01D8 osapi_gfx_dbuf    0x0200 osapi_font_glyphs
+0x01B8 wm_resize       0x01E0 gfx_scroll        0x0208 wm_onsize
+0x01C0 gfx_blit4       0x01E8 mem_claim     (X) 0x0210 osapi_file_here
+0x01C8 wm_about_set    0x01F0 mem_free      (X) 0x0218 osapi_file_goto
+0x01D0 dskw_readbig(N) 0x01F8 mem_avail         0x0220 mem_regrow     (X)
+                                                0x0228 wm_title_set
+                                                0x0230 osapi_drv_task (X)
 ```
 
-**Five numbers are HELD EMPTY, and that is the point of the layout.** Every
-slot above is at the number `main` uses for the same routine, which is what
-lets one package source assemble for either fork (docs/PORTING.md §3). Where
-`main` has something this fork does not — `OSAPI_SND_FM` and
-`OSAPI_SND_STREAM` at 0x00F8/0x0100 (§34.5/§34.6), and its paragraph-counting
-arena at 0x01B8..0x01C8 — the number is **reserved rather than reused**: the
-cell is `stc` / `retf`, so a stray call gets CF=1 and every register back.
-Reusing 0x01C8 for this fork's KB-counting `mem_avail` would have failed
-silently and by a factor of 64, which is exactly the class of bug the holding
-prevents. This fork's own slots start at 0x0240, above a RESERVED
-band at 0x01F0..0x0238 — they sat at 0x01E8 until `main` put `dskw_readbig`
-there, so the whole block had to move once already and every package be
-rebuilt. Ten cells of headroom is the cheap way not to do that again, and it
-is the same reasoning as §50's reserved 45–49 section band.
+**Nothing is held empty any more, and the table is contiguous.** It was not:
+five cells refused every call, because every slot up to `dskw_readbig` sat at
+the number `main` uses for the same routine and the aim was that one package
+source assemble for either fork (docs/PORTING.md §3). Where `main` had
+something this fork did not, the number was **reserved rather than reused** —
+an `stc`/`retf` cell answering CF=1 with every register back — on the rule that
+**a slot number must never mean two contracts**. Reusing 0x01C8 for this fork's
+KB-counting `mem_avail` where `main` puts its paragraph-counting one would have
+failed silently and by a factor of 64, which is the whole class of bug the rule
+exists to prevent. Ten further cells were RESERVED above them for `main` to
+grow into, after it took 0x01E8 for `dskw_readbig` and forced this fork's own
+block to move.
+
+**The branches are merging, so none of that buys anything, and the cells are
+gone.** Two of the five were filled rather than dropped — `OSAPI_SND_FM` and
+`OSAPI_SND_STREAM` at 0x00F8/0x0100, which the loadable sound driver (§51.4)
+gave real contracts identical to `main`'s. The other three and the reserved
+band were closed up, and everything above them moved **down** by 88 bytes.
+That is the third and last time this block has moved: every package is in this
+tree and `make` rebuilds all of them (§20.8 rule 4).
+
+The rule that produced the holes is worth keeping even without them. It was
+never really about `main` — it is that a shipped number keeps its contract, and
+the answer to "we no longer implement this" is a refusing stub, not a reuse
+(the retired sound slots were the precedent). What ended was the *cross-fork*
+half: this kernel no longer promises that its numbers match another tree's.
 
 **Offsets are not stable across kernel versions, and never were pretended
 to be.** Two things have moved them wholesale: the removal of the sound
@@ -4140,6 +4205,52 @@ construction and needs no shim.
 
 On entry the worker gets DX = its instance index, DS = ES = CS =
 `KERNEL_SEG`, IF = 1, gfx lock free — the ordinary `task_spawn` frame (§8).
+
+### 20.8 Forbidden (binding)
+
+Six rules the package model rests on. Every one has been obeyed since it was
+written down nowhere, which is the problem this section fixes: a rule that
+lives only in the shape of the existing code is one an edit can violate
+without anyone noticing it was a rule.
+
+1. **No package code above 1MB, ever.** A package's region is a claim off the
+   §50 heap — conventional memory — and nowhere else. Extended memory (§41) is
+   a **data store**: no entry, no callback, no worker entry, no "just this one
+   proc" in the HMA or above it. The highest byte any CS:IP can name is
+   0x10FFEF and this design leans on that ceiling.
+2. **The instance record does not grow.** `I_RECSZ` = 32 is load-bearing —
+   index↔pointer is a shift (§29.1) — and the record is exactly full. Anything
+   needing a new per-instance word finds a **side table** instead; `inst_icons`
+   is the precedent and `wm_owner` is the other.
+3. **No segment overrides in place of marshalling.** A caller's pointer
+   crosses the boundary by being **copied** — at the API-slot layer's X and N
+   stubs (§20.3), or at relayout (§12.2), the `dsk_get_dir` idiom (§2.1) —
+   never by threading a "which segment" answer down through `font_str`,
+   `menu_track`, `menu_drop` or the `dskw_*` name parsers. ES is the most
+   contended register in this kernel and those bodies serve kernel-internal
+   callers whose pointers are plain DS. The override version of this feature is
+   where the bugs would have lived.
+4. **A shipped slot keeps its contract.** The table is 8 bytes per cell from
+   0x0010, and a number, once it means something, never means something else —
+   retired functionality gets a **refusing stub**, not a reuse. What this rule
+   is *not* is a promise that the numbers match another tree's: they did while
+   two branches were live and stopped when they merged (§20.3), and closing
+   that gap moved every cell above 0x01B0 down 88 bytes. Renumbering is
+   therefore possible but expensive and deliberate: it invalidates every `.o88`
+   at once, and it is only survivable because every package is in this tree and
+   `make` rebuilds all of them. It has happened three times.
+5. **No `retf` from a package proc the kernel calls** — the inverse of the same
+   rule on `main`, and the one place porting a package is not mechanical. The
+   kernel reaches a package through the three-byte `call bp` / `retf`
+   dispatcher in its own header (§20.2), so entry, paint, onkey, onclick, menu
+   handler and completion proc are all **near procs with a near `ret`**; the
+   dispatcher owns the only `retf`. A `retf` left in from `main` returns into
+   the loader's stack frame and hangs the machine at the first paint. The
+   worker entry is the one proc with no return at all — it exits through
+   `OSAPI_TASK_ALIVE` (§20.6 rule 2).
+6. **No relocation, reintroduced under any name.** A change that seems to need
+   a load-time fixup pass means the org-0, own-segment model is being violated
+   somewhere else first. Fix that instead.
 
 ## 21. loader.inc
 
@@ -6421,6 +6532,20 @@ nothing drawn under the old mode is stranded in RAM, then clears both and
 releases the claim. Both directions no-op when already in that state, so a
 repeated click cannot re-copy 150KB.
 
+**A package may switch it too — `osapi_gfx_dbuf`** (slot 0x01D8, AL = 1 on /
+0 off, lock held). Out CF=0 and **AL = the state before**, which the caller
+hands straight back when it is done so the user's own Control Panel setting
+survives an app that borrowed the buffer for one flicker-free frame. CF=1
+means it did not happen, and there are two reasons: `[bb_avail]` clear, or
+`bb_set`'s claim refused (§50.2 — a heap that cannot fund `BB_KB` right now).
+
+The `[bb_avail]` gate covers **both** directions, which is not symmetry for
+its own sake: `bb_set`'s AL=0 path keys on `[bb_on]`, and a mono adapter
+holds that at 1 permanently because it *is* the renderer (§39.5). An
+ungated disarm from a package would therefore turn off the only drawing path
+Hercules and CGA have. Refusal is a normal answer here, like every other
+claim in §50 — the app draws unbuffered.
+
 **`bb_sync` reads `[bb_seg]` BEFORE it loads DS = `VGA_SEG`.** With the base
 a constant this could not be got wrong; with it a variable in the kernel's
 own segment, reading it after the DS load fetches framebuffer bytes as a
@@ -6800,6 +6925,21 @@ speaker is not a device that can be absent.
   The generation guard is only sound because task-side writers are atomic
   w.r.t. the tick. The same rule covers the PWM steal path: `snd_ch2mode`,
   the generation stamp and the silencing are one unit.
+- **Grant stamping is task-qualified (binding)**. Every grant records the
+  instance that asked for it, and `snd_req_inst` is the single routine
+  that answers who that is. A window callback is dispatched with
+  `[snd_inst]` stamped, and the obvious reading — "a stamp is set, so use
+  it" — is wrong the moment two tasks exist: a **worker that pre-empts
+  that callback** is a different app entirely, and it would inherit the
+  stamp. So the stamp carries **the task that wrote it** in its high byte
+  and is honoured only while that task is the running one; every other
+  caller falls through to its own `T_INST`. Without this a worker's tone
+  is billed to, and released at the teardown of, whichever app happened to
+  be dispatching when it played — and Arkanoid's worker calls
+  `OSAPI_SND_TONE` while UI callbacks run, so it is reachable, not
+  theoretical. Corollary: **no caller may open-code the fallback**;
+  `osapi_snd_play` did, and a second copy of a rule is a second place for
+  it to be wrong.
 - **`snd_release_inst`** — in: AL = instance slot. Both grants a package
   can hold — tone ownership and a running clip — are stamped with the
   owner instance, and this routine force-releases them (the clip stops at
@@ -8155,11 +8295,26 @@ entry covers — so a freed block merges with its neighbours for nothing.
 
 ### 41.6 What the Task Manager reports
 
-One line, `XMS used/sizedK`, directly **below** the package-pool map and
-above the process list (§28), with a **bar** under it: `used/sized` of the
+One line, `CPU 8086  XMS used/sizedK`, directly **below** the package-pool map
+and above the process list (§28), with a **bar** under it: `used/sized` of the
 bar's interior black, the rest white — the same shape and the same
 element-check discipline as the performance view's RAM bar, because it answers
 the same question about a different pool.
+
+**The tier shares this line rather than taking one of its own**, because it is
+the same fact: what the CPU is (§41.1) is what decides whether there can be any
+memory above 1MB at all, and on the machine this OS is written for the honest
+reading of the whole line is "an 8086, so none". Nothing else in the UI ever
+said which tier `cpu_detect` settled on. The three names are padded to the same
+six columns so the figures beside them do not shuffle between machines, and the
+line needs no check word of its own — `tm_rowsum` hashes the composed string,
+so the tier folds into the XMS line's.
+
+`TM_STRMAX` now takes the **maximum** of its two candidate longest lines rather
+than naming the winner. Which line is longest has already changed twice — the
+RAM line grew by four the day HEAP joined it, the XMS line by ten the day the
+tier did — and the failure mode is a `tm_str` that silently writes past the end
+of `.bss`.
 
 It gets no *map*, and that is the honest layout rather than a missing feature:
 the two maps above it are conventional memory and a magnified slice of
@@ -8459,6 +8614,29 @@ allow, from 32x16 up, and everything else follows from that:
   during one: the "Loading..." toast a file dialog's completion callback puts up
   is followed by one `pt_wait`, or the buffered machine flushes it only after
   the load it was announcing.
+
+### 42.1 About Paint, and why it is not a window
+
+Registered with `OSAPI_ABOUT_SET` (§12.2), and **only in `PT_M_LIVE`**: taking
+the card down repaints through `pt_repaint`, which draws a canvas, and a Paint
+that could not claim one has a notice on screen already saying the more useful
+thing. It is `[pt_abon]` plus `pt_abmeas`/`pt_abdraw`/`pt_abdismiss`, the same
+shape as §43.8 and §44.7 — a card on Paint's own content, dismissed by the next
+click or key, drawn last by every repaint so nothing erases it.
+
+**A second window would have been the obvious design and is the wrong one
+here.** A package's second window is never bound to its instance record: only
+the window the entry proc returns goes through `inst_bind_win` (§21), so
+`wm_owner` says nothing owns the second one and teardown does not destroy it.
+Meanwhile teardown *does* free the region (§29.4), and the orphaned window is
+still carrying `W_SEG`/`W_DISP` into it — the next repaint far-calls whatever
+claimed that memory afterwards. There is no `OSAPI_WM_DESTROY` for a package to
+clean up with either. A card is a flag and some pixels: it cannot outlive the
+instance because it never existed apart from it.
+
+**This is a rule about packages, not about Paint.** Until a package can own
+more than one window, an app that wants a second surface draws it on the one it
+has.
 
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
@@ -8935,6 +9113,13 @@ The UI task owns the content until the panel comes down, and the game is
 paused underneath rather than running invisibly. Every full repaint re-draws
 the panel last, so it stays on top of whatever the resume puts back.
 
+**`W_ONCLICK` is wired for the panel and for nothing else.** Nothing in this
+game steers with the mouse, so the callback's whole body is `ark_track` plus
+`ark_abdismiss` — but a panel that a key takes down and a click does not reads
+as a hung window, which is the only reason the slot is non-zero. It is the
+window's *content* that dispatches it: a click on the frame or the drop shadow
+never reaches a callback, so the panel correctly survives one.
+
 ## 50. memory.inc — the claim heap
 
 Everything above the kernel, in one map the kernel owns.
@@ -9089,7 +9274,7 @@ Rules for a package (none enforceable, all binding):
 Growing a claim used to mean claim-new, copy, free-old, which needs **old +
 new free at once and contiguously**. A heap with plenty of total room refused
 resizes it could afford, and the app reported "not enough memory" over
-hundreds of free KB. `mem_regrow` (slot 0x0278) takes three paths, and the
+hundreds of free KB. `mem_regrow` (slot 0x0220) takes three paths, and the
 first two move nothing:
 
 1. **Shrink or level** — the record's length changes and that is all. The
@@ -9312,7 +9497,7 @@ believe a setting had been kept.
 that makes that call safe: `inst_pkg_spawn`'s fence is a chain of five tests
 all keyed on an **instance record** (§20.6), and a driver has none — no
 window, no record, no `I_SPTR` to be identical to. `OSAPI_DRV_TASK`
-(slot **0x0288**) is its own slot with its own fence of the same shape: the
+(slot **0x0230**) is its own slot with its own fence of the same shape: the
 caller's segment must be the segment of the driver whose services are
 published (`ES == [drv_fseg]`), which is an identity test rather than an
 approximation.

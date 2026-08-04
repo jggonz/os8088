@@ -1269,7 +1269,7 @@ sol_bpx:
     pop ax
     ret
 
-; sol_about - the About handler (API 0x01E0, SPEC.md 12.2/43)
+; sol_about - the About handler (API 0x01C8, SPEC.md 12.2/43)
 ; in:  SI = our window; the UI task, gfx lock HELD, far-called at our segment
 ; out: nothing; may clobber the callback set
 ;

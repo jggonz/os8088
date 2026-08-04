@@ -157,7 +157,7 @@ dskw_read:
 
 ; -----------------------------------------------------------------------------
 ; dskw_readbig - read a whole file into a segment run (SPEC.md 18.4,
-;                slot 0x01E8) - the one file op with no 64KB ceiling
+;                slot 0x01D0) - the one file op with no 64KB ceiling
 ; in:  SI -> NUL 8.3 name, ES = destination BASE segment (the buffer starts
 ;      at ES:0000), DX:CX = capacity in bytes (32-bit, DX high)
 ; out: CF=0, DX:AX = bytes read (the file's 32-bit size); CF=1, AX =

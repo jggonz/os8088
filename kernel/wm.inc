@@ -1654,7 +1654,7 @@ wm_content:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_about_set - register a window's About handler (public; API 0x01E0,
+; wm_about_set - register a window's About handler (public; API 0x01C8,
 ;                SPEC.md 12.2)
 ; in:  BX = window ptr, SI = the handler's offset in the CALLER's segment
 ;      (0 = this window has no About)

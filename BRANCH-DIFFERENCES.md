@@ -34,10 +34,12 @@ Written from `experimental`. `main` is not modified by this document.
   dispatcher at `+12` in the package header).
 - Package header `+12`..`+15`: a RAM-requirement word on `main`, the dispatcher
   bytes on `experimental`.
-- **Slot numbers now agree** for every shared routine, and no number means two
-  contracts. Three are held empty here rather than reused (`main`'s
-  paragraph-based memory trio); two more, `GFX_DBUF` and `GFX_SCROLL`, are
-  `main` calls this fork does not implement yet.
+- **Slot numbers agree up to 0x01B0 and part above it.** They agreed
+  throughout, with five cells held empty so a number could never mean two
+  contracts; the branches are merging, so the holes were closed and this
+  fork's block moved down 88 bytes. Every contract `main` has, this fork now
+  has — `GFX_DBUF` and `GFX_SCROLL` were the last two gaps — just at
+  different numbers above 0x01B0.
 
 **Kernel**
 
@@ -57,11 +59,13 @@ Written from `experimental`. `main` is not modified by this document.
 
 - Window geometry: `OSAPI_WM_GEOM` **on both, at 0x01B0**. `experimental` also
   still lets a package read the record directly through `ES` (frame px).
-- `main` only: `SND_FM`, `SND_STREAM`, `MEM_ALLOC`/`MEM_FREE`/`MEM_AVAIL`
-  (paragraph-based), `GFX_DBUF` and `GFX_SCROLL`.
+- `main` only: `MEM_ALLOC`/`MEM_FREE`/`MEM_AVAIL` (paragraph-based). `SND_FM`
+  and `SND_STREAM` are on both now (the loadable sound driver), as are
+  `GFX_DBUF` and `GFX_SCROLL`.
 - `experimental` only: `MEM_CLAIM`/`MEM_FREE`/`MEM_AVAIL` (KB-based),
-  `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`.
-- **The file API is identical on both**, including `dskw_readbig` (0x01E8),
+  `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`, `MEM_REGROW`,
+  `WM_TITLE`, and `DRV_TASK` in the driver SDK.
+- **The file API is identical on both**, including `dskw_readbig`,
   the one op with no 64KB ceiling, and every `FERR_*` code. `experimental`
   additionally recurses into folders on delete (`dskw_rmtree`).
 
@@ -363,7 +367,7 @@ Run against `main` at **`b401eda`** and `experimental` at **`cdc1c59`**, and
 re-checked against **`6c1ee99`** — the Sound Blaster tier — after it landed.
 That commit closes none of the gaps below (it is a driver, not a kernel
 change): `snd_req_inst` is still unqualified, and its one new cell,
-`OSAPI_DRV_TASK` at **0x0288**, is in the *driver* SDK
+`OSAPI_DRV_TASK`, is in the *driver* SDK
 (`drivers/os88drv.inc`), not the application table this audit compares.
 
 The question it answers is narrow and one-directional: *what capability, fix or
@@ -386,18 +390,22 @@ base `2558ac0`.
 ### A. The API surface — 2 real gaps
 
 57 slot numbers are shared and **every one carries the same name on both
-forks**; there is not a single number meaning two contracts. Five slots exist
-only on `main`, nine only here (0x0240..0x0280).
+forks**; there is not a single number meaning two contracts. Five slots existed
+only on `main`, nine only here.
 
 | slot | `main` | verdict |
 |---|---|---|
-| 0x01B8 / 0x01C0 / 0x01C8 | `MEM_ALLOC` / `MEM_FREE` / `MEM_AVAIL` | **Not a gap — held empty on purpose.** `main` counts paragraphs, we count KB; the same number would mean two contracts and fail by a factor of 64. Ours are at 0x0240+. |
+| 0x01B8 / 0x01C0 / 0x01C8 | `MEM_ALLOC` / `MEM_FREE` / `MEM_AVAIL` | **Not a gap — a different contract.** `main` counts paragraphs, we count KB; the same number would mean two contracts and fail by a factor of 64. These three were held empty for that reason and are now reused by our own block, which is safe for exactly the reason the holding was needed and no longer is: the trees are merging. |
 | **0x01F0** | **`OSAPI_GFX_DBUF`** | **GAP.** Arm/disarm the §32 back buffer from a lock-held callback, so one lock hold is one flush and no erase-then-draw state reaches VRAM. We have the back buffer; a package cannot ask for it. |
 | **0x01F8** | **`OSAPI_GFX_SCROLL`** | **GAP.** Vertical scroll blit (§5.5): move an existing rect by ±dy instead of redrawing it. A general primitive — `main`'s Tracker is its first client, not its only possible one. |
 
-Both gaps fall **inside the RESERVED band this fork already keeps at
-0x01F0..0x0238**, which is exactly what that band was reserved for: they port
-at `main`'s numbers with no renumbering and no package rebuild.
+**Both are now implemented, and the table has since been compacted.** They
+landed first at `main`'s numbers, in the band this fork reserved for exactly
+that; then the held and reserved cells were dropped altogether — the branches
+are merging, so a number meaning the same thing on both trees stopped being
+worth 88 bytes of `stc`/`retf`. Everything above 0x01B0 moved down. `main`'s
+0x01F0/0x01F8 are `GFX_DBUF`/`GFX_SCROLL`; ours are at 0x01D8/0x01E0, with the
+same contracts. See docs/PORTING.md §3 for the two tables side by side.
 
 ### B. Application by application
 
@@ -473,22 +481,27 @@ was an approximation.
 | §41.7 / §41.10 | xmem testing and acceptance | we have the code, not the two prose sections |
 | §45 (12 subsections) | Tracker | out of scope |
 | **§5.5** | `gfx_scroll` | comes with the port |
-| **§20.8 Forbidden (binding)** | five binding package rules | **GAP.** Four of the five apply here verbatim — no package code above 1MB, the instance record does not grow, no segment overrides in place of marshalling, no reordering or repurposing of API slots. The fifth inverts (`main`: never a near `ret`; here: **always** a near `ret`). We enforce all five in practice and state none of them as binding. |
+| **§20.8 Forbidden (binding)** | six binding package rules | **CLOSED.** Written, with the `retf` rule inverted: `main` forbids a near `ret` from a package proc because it far-calls them; this fork *requires* one, because the kernel arrives through the package's own dispatcher and a stray `retf` returns into the loader's stack frame. Rule 4 also had to be rewritten rather than copied — the numbers no longer track `main`'s. |
 
-### E. Recommendation
+### E. Recommendation — all seven done
 
-Ordered by value per byte. Nothing here needs a package rebuild — both new
-slots land in the reserved band.
+Every gap the audit found has been closed. What each one turned into:
 
-| # | port | why | rough cost |
-|---|---|---|---|
-| 1 | **`snd_req_inst` task qualification** | a live misattribution bug, not a feature; reachable from Arkanoid today | ~6 lines |
-| 2 | **`OSAPI_GFX_SCROLL` + `gfx_scroll`** (§5.5, slot 0x01F8) | the largest new *capability*: scrolling text and list views stop being full repaints, which is worth most on the 4.77MHz machines | ~230 lines in `vgabb.inc` |
-| 3 | **`OSAPI_GFX_DBUF`** (slot 0x01F0) | lets an app arm the back buffer for its own flicker-free frame; we already own the buffer | ~40 lines |
-| 4 | **Paint's About panel** | the only app-visible feature gap; use our native `OSAPI_ABOUT_SET` rather than `main`'s empty-menu-label trick | ~60 lines |
-| 5 | **CPU tier in the Task Manager** | we detect it and never say so; one string table and a copy on the XMS line | ~20 lines |
-| 6 | **Arkanoid: wire `W_ONCLICK`** | a click should dismiss the credits, as a key already does | 1 template word + a 10-line proc |
-| 7 | **SPEC §20.8 "Forbidden (binding)"** | we obey these rules and have never written them down; the audit above needed all five | prose |
+| # | port | outcome |
+|---|---|---|
+| 1 | `snd_req_inst` task qualification | Done. The stamp carries the stamping task in its high byte and is spent only by that task. `osapi_snd_play` had open-coded the same fallback and now calls the one routine — **10 bytes smaller** than the copy it replaced. |
+| 2 | `OSAPI_GFX_SCROLL` + `gfx_scroll` (§5.5) | Done, all three backends. Verified against byte-exact references: the mono path diffed over CGA's bank boundary, the buffered path against the direct one across 291,840 pixels with zero mismatches. |
+| 3 | `OSAPI_GFX_DBUF` (§32) | Done. Unlike `main`'s it returns `bb_set`'s CF rather than swallowing it — here arming can also fail on a heap that cannot fund the 150KB claim, and the caller has to see that. |
+| 4 | Paint's About panel (§42.1) | Done, but **not** `main`'s design. A second window is never bound to its instance record, so nothing destroys it at teardown while teardown frees the region — the orphan's `W_SEG` then dangles. It is a card on Paint's own content, the shape Solitaire and Arkanoid already use. |
+| 5 | CPU tier in the Task Manager (§41.6) | Done, sharing the XMS line. `TM_STRMAX` now takes the max of its two candidate longest lines instead of naming the winner. |
+| 6 | Arkanoid `W_ONCLICK` (§44.7) | Done. |
+| 7 | SPEC §20.8 "Forbidden (binding)" | Done, six rules. Five apply verbatim; the `retf` rule **inverts** — `main` forbids a near `ret` from a package proc, this fork requires one, because the kernel arrives through the package's own dispatcher. |
+
+Two things changed that the audit did not ask for and the merge made
+possible. The **held and reserved API cells are gone** (§A) — 88 bytes of
+`stc`/`retf` whose only job was keeping a number free on a branch that is
+merging. And SPEC §20.8 rule 4 now says what a slot number does and does not
+promise, which is the rule that made those cells exist in the first place.
 
 **Not recommended, with reasons:** the paragraph memory API (a second contract
 for the same job), `main`'s DMA bounce buffer (our alignment guard is
