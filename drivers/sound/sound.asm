@@ -75,6 +75,7 @@ snd_entry:
     mov word [snd_services+DSV_TONE], opl_tone
     mov word [snd_services+DSV_RELINST], opl_release_inst
     or word [snd_services+DSV_CAPS], SND_CAP_FM
+    or word [snd_services+DSV_TIERS], 1 << SND_RT_FM
     mov word [snd_services+DSV_NAME], snd_s_opl
 .nofm:
     call sbl_attach             ; the reset scan, then the DMA buffer
@@ -83,6 +84,15 @@ snd_entry:
     mov word [snd_services+DSV_STREAM], sbl_stream_op
     mov word [snd_services+DSV_TICK], sbl_tick
     or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN
+    or word [snd_services+DSV_TIERS], 1 << SND_RT_SB
+                                ; ...and THIS is the only place that bit is
+                                ; ever set: snd_tier may take the DSP tier
+                                ; away and give it back all session, but
+                                ; whether a card is in the machine was
+                                ; settled here and cannot change until the
+                                ; driver is reloaded. That is what lets the
+                                ; Control Panel grey the row instead of
+                                ; running the six-base reset scan on a click
     mov word [snd_services+DSV_NAME], snd_s_sb
                                 ; DSV_NAME is what the Control Panel's Sound
                                 ; page calls the CARD ROW, and the SOUND
@@ -212,6 +222,9 @@ snd_detach:
     mov word [snd_services+DSV_RELINST], 0
     mov word [snd_services+DSV_TONE], 0
     mov word [snd_services+DSV_NAME], 0
+    mov word [snd_services+DSV_TIERS], 0    ; detach is the ONE thing besides
+                                            ; attach that may clear this - a
+                                            ; tier change must not
 .out:
     pop cx
     pop ax
@@ -231,6 +244,7 @@ snd_services:
     dw 0                        ; DSV_RELINST
     dw 0                        ; DSV_NAME
     dw 0                        ; DSV_TONE
+    dw 0                        ; DSV_TIERS
 
 snd_s_opl:  db 'AdLib', 0
 snd_s_sb:   db 'Sound Blaster', 0

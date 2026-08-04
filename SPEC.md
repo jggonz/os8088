@@ -6506,22 +6506,35 @@ could not be read as a choice between two things. Nothing stages `DSV_NAME`
 into the kernel any more; it is published as a pointer and that is all
 (`drv_publish`, §51.2).
 
-**Two rows are greyed and one is not**, and the difference is what the kernel
-can actually know:
+**A row greys for missing hardware and never for missing memory**, and the line
+between those two is the whole design of the page:
 
-- **AdLib** greys when no loaded driver publishes `DSV_TONE`. That is a stable
-  fact — the FM half is never torn down by a tier change, so if it is not
-  published now it is not there.
-- **Sound Blaster** greys only when no sound driver is published at all
-  (`drv_owner` = 0). Whether a card is there, and whether the heap can fund a
-  page-safe 12KB for it *right now*, are both answerable only by making the
-  claim. So the click makes it, and reports what came back.
+- **Hardware is a fact the driver already established.** `DSV_TIERS` (§51.2) is
+  a bitmap of the tiers the driver *could* provide, decided at attach from what
+  its probes found and never touched by a tier change. The page reads one word
+  and greys what the machine does not have. It does not ask the driver to look
+  again — an ISA card cannot arrive while the machine is running, and looking
+  again is **expensive**: the Sound Blaster scan is six base addresses with a
+  DSP reset timeout each and then a slow retry on 220h, run on the UI task
+  under the gfx lock. Measured on QEMU it hid the cursor for 27 ms; the poll
+  budgets it is built from (2,000 status reads per base, 65,536 for the retry)
+  are sized for period ISA timing and cost proportionally more on the machine
+  they were written for. Either way it is a visible hitch on a click that then
+  refuses.
+- **Memory is not a fact anyone has.** Whether the heap can fund a page-safe
+  12KB *right now* is answerable only by making the claim: `mem_avail` reports
+  the largest free run and says nothing about whether a 64KB-page-safe base
+  exists inside it (§50.3), so only `mem_claim_dma`'s own scan knows. The click
+  therefore tries, and reports what came back.
 
-That is the one place the page departs from the `bb_avail` idiom (§31.3), and
-deliberately: `bb_canfit` is a real predicate and `mem_claim_dma` has none.
-`mem_avail` reports the largest free run and says nothing about whether a
-64KB-page-safe base exists inside it (§50.3), so a greyed-on-a-guess row would
-keep a machine that has the room off a tier it can afford.
+That second half is the one place the page departs from the `bb_avail` idiom
+(§31.3), and deliberately: `bb_canfit` is a real predicate and `mem_claim_dma`
+has none. Greying on a guess would keep a machine that has the room off a tier
+it can afford.
+
+A driver that publishes `DSV_TIERS` = 0 said nothing and is taken at its word:
+every row stays live and the click finds out the slow way, which is exactly the
+behaviour before the cell existed.
 
 A refused tier change leaves the setting where it was and writes the reason
 into a **notice line** below the Test button, using the loader's own
@@ -10132,7 +10145,8 @@ turning one *on* is a claim and therefore can. Its refusal codes are the
 loader's own `DRVE_*` (§51.3), so the Control Panel names a refused tier change
 with the string it already has for a refused load — one vocabulary for both. A
 driver with a single tier need not implement the verb at all; it answers `CF=1`
-and the caller reports that, with nothing to undo.
+and the caller reports that, with nothing to undo. What tiers a driver *has* is
+`DSV_TIERS` below, and this verb must never change it.
 
 The service table, in the driver's segment, copied whole by the kernel at
 attach so every later dispatch is a near read plus one far call:
@@ -10145,7 +10159,23 @@ DSV_TICK    dw  near proc called from snd_tick - INSIDE IRQ0, at IF=0
 DSV_RELINST dw  near proc: AL = an instance slot being torn down
 DSV_NAME    dw  -> a NUL sink name, in ITS segment
 DSV_TONE    dw  near proc: the tone tier's sink while it is loaded
+DSV_TIERS   dw  bitmap of 1 << SND_RT_*: the tiers it COULD provide
 ```
+
+**`DSV_TIERS` is the only cell that says what a driver *could be* rather than
+what it *is*.** Every other cell is the running configuration and `DRVV_TIER`
+rewrites them; this one is decided at attach from what the probes found,
+cleared at detach, and **never touched by a tier change**. It exists so the
+Control Panel can grey a tier the machine does not have without asking the
+driver to probe again — see §31.7 for what that costs and why the answer cannot
+change between attach and detach. 0 means the driver did not answer, and the
+panel then assumes it can do everything.
+
+**Widening the table means rebuilding every `.drv`.** `drv_publish` copies
+`DSV_SIZE/2` words, so a kernel that knows about a new cell reads past the end
+of a driver built before it. Every driver is in this tree and `make` rebuilds
+them all, which is the same reason `APP_MAX_SIZE` can be mirrored in three
+places (§20.1).
 
 The copy is the `dsk_get_dir` idiom in a new place: every consumer downstream
 is then an ordinary near read with DS = KERNEL_SEG, and `snd_tick` — which
