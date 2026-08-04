@@ -1303,8 +1303,14 @@ fdlg_act:
     call fdlg_dive              ; a FOLDER: navigate into it, in either mode.
     jmp short .stay             ; Selecting one and pressing Enter in Save mode
 .nosel:                         ; used to save a file under whatever name the
-    cmp byte [fdlg_mode], 0     ; box still held
-    je .refuse                  ; Open with nothing chosen: the button is inert
+                                ; box still held
+    ; Open mode with no ROW chosen is not the same as nothing to open. The
+    ; box is not editable in Open mode, so the only name it can be holding is
+    ; the one the CALLER passed in - and it is drawn, in a box labelled
+    ; 'Open:', which is a promise. This used to refuse it: the dialog showed a
+    ; file name, and the Open button and Enter both just beeped, while a
+    ; double-click on a row worked. The empty-name gate below is what actually
+    ; distinguishes "nothing to act on", and it serves both modes.
 .save:
     cmp byte [fdlg_nlen], 0
     je .refuse                  ; an empty name is not an answer
