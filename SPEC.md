@@ -5077,7 +5077,10 @@ in-segment map would show one black block and nothing else.
   is white-filled, then one `gfx_fill_pat` band per snapshot slot with
   I_STATE ≠ 0 and I_SIZE ≠ 0, in that slot's pattern. Unallocated pool reads
   white — free space, drawn honestly.
-- (16,62): header `"NAME    ADDR SIZE  CLM"` (22 chars, the row width).
+- (16,62): header `"NAME    ADDR SIZE   HEAP"` (24 chars, the row width).
+  Two spaces of gap before HEAP, not one: a 150K back buffer beside a 150K
+  package ran the two figures together at the old 22-char width, which is
+  what sizes the window at 216 (`TM_RW` 207, `TM_GW` 200).
 - Rows at y = 74 + 11·r, `TMM_ROWS = INST_MAX + 7` of them — System, its
   four buffer rows, the two group headings, and one per instance. **Free
   slots are not drawn**: 19 rows at the 11px pitch is 279 of the 281-pixel
@@ -5086,14 +5089,21 @@ in-segment map would show one black block and nothing else.
   (`tm_ylim_set`), for the screens where §39.7 shrinks the window — nothing
   in the kernel clips a draw to a window, and on a 200-row CGA this one is
   156px tall.
-- **The legend squares key the rows to the maps, and there is exactly one
-  per texture.** A row may only wear the square its memory is actually drawn
-  in: `tm_sq_gray` (the kernel's own span), `tm_sq_black` (the package pool),
-  `tm_sq_pat` (a kernel buffer, or one package's pool region in its slot
-  pattern). This is checkable by eye and it has been wrong: row 0 carried a
-  solid black square from before the maps were reworked, by which time solid
-  black had become the *package pool's* band — the legend was pointing at
-  the wrong region entirely.
+- **The legend squares key the rows to the maps, and a row only gets one
+  when the texture is its own.** `tm_sq_gray` on System (the kernel's span),
+  `tm_sq_pat` on the three buffer rows (their band) and on each package row
+  (its slot pattern in the pool map), `tm_sq_black` on the `Packages`
+  heading (the pool). `Code+data` gets **none** — it is drawn in the same
+  gray as System, and a square that repeats one above it is not a legend.
+  Nor does `Builtins`, which owns no band at all. This is checkable by eye
+  and it has been wrong: row 0 carried a solid black square from before the
+  maps were reworked, by which time solid black had become the *package
+  pool's* band, so the legend was pointing at the wrong region entirely.
+- The three buffer squares sit at `[tm_sqox]` = 22 rather than the 6 every
+  other row uses, so they land **beside** their two-space-indented names
+  instead of out at the margin. `tm_mrow_open` resets the offset per row.
+- **The claim texture is keyed beside the `HEAP nnnK/nnnK` caption, not in
+  the list**, because it belongs to a *column* and not to any one row.
 - Row 0 (System): legend square 50% gray, the kernel's band; ADDR `0600`
   (where the kernel starts — `KERNEL_SEG`); SIZE = `TM_KERN_KB`; CLM = the
   kernel's own heap claims.
@@ -5108,8 +5118,8 @@ in-segment map would show one black block and nothing else.
   (§2), so there is nothing to check at run time. They give up the ADDR
   column to have twelve characters of name, and land SIZE and CLM exactly
   where row 0 puts them. `Code+data` wears the **gray** square and the other
-  three the **`tm_pat_buf`** one, which is the same split the RAM bar draws
-  across the kernel span.
+  three the **`tm_pat_buf`** one — `Code+data` has no square, because that
+  is the same gray System already wears.
 - `Builtins` heading — **no square, and that is the information**: a
   built-in owns no band on either map. Its code is already inside
   `Code+data` and its memory is heap claims, billed to its own row. Then one

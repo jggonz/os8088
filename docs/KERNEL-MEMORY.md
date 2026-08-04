@@ -63,17 +63,21 @@ produce them.
 Each row's legend square is the texture its memory is drawn in on the maps
 above, so the two can be read against each other:
 
-| square | band | rows |
+| square | band | where |
 |---|---|---|
-| 50% gray | the kernel's own span | `System`, `Code+data` |
+| 50% gray | the kernel's own span | `System` |
 | horizontal bars | its buffers | `Stacks`, `Disk bufs`, `FAT snap` |
 | solid black | the package pool | `Packages` |
-| framed light block | a live heap claim | *(the CLM column)* |
+| framed light block | a live heap claim | beside the `HEAP` caption |
 | per-slot pattern | one package's region | each package row |
 
-`Builtins` has no square on purpose: a built-in owns no band on either map —
-its code is already inside `Code+data`, and its memory is heap claims billed
-to its own row.
+A row only gets a square when the texture is its own. `Code+data` has none —
+it is drawn in the same gray as `System`, and a square that repeats one above
+it is not a legend. `Builtins` has none because a built-in owns no band at
+all: its code is already inside `Code+data`, and its memory is heap claims
+billed to its own row. And the claim texture is keyed beside the
+`HEAP nnnK/nnnK` caption rather than in the list, because it belongs to the
+HEAP *column* and not to any one row.
 
 A claim is the only band drawn with a **frame**, because it is the only one
 that comes and goes while you watch, several sit shoulder to shoulder, and

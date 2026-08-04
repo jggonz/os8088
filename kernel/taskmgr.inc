@@ -42,10 +42,11 @@
 ; --- geometry / cadence (SPEC.md 28) -----------------------------------------
 TM_INT      equ 9               ; sample interval, ticks (~0.5s)
 TM_EPOCH    equ 20              ; samples per calibration epoch (~10s)
-TM_GW       equ 184             ; graph interior width = history ring size
-                                ; (7..TM_RW-1 inclusive; the rows are 22
-                                ; chars = 176px, so both stop clear of the
-                                ; scroll-free right edge at TM_RW)
+TM_GW       equ 200             ; graph interior width = history ring size
+                                ; (7..TM_RW-1 inclusive). The memory view's
+                                ; rows are 24 chars = 192px from x=16, which
+                                ; lands exactly on TM_RW - that row, not the
+                                ; graph, is what sizes the window
 TM_GH       equ 40              ; graph interior height, px
 TM_CPU_Y    equ 4               ; "CPU nnn% SCH xxxxxxx" line, content-rel y
 TM_GF_Y1    equ 14              ; graph frame top (interior rows 15..54)
@@ -57,7 +58,7 @@ TM_HDR_Y    equ 87              ; process-list header line
 TM_ROW_Y    equ 97              ; first process row
 TM_ROW_H    equ 11              ; row pitch, px
 TM_ROWS     equ INST_MAX + 1    ; "System" plus one row per instance slot
-TM_RW       equ 191             ; the rows' right edge, content-relative
+TM_RW       equ 207             ; the rows' right edge, content-relative
 
 ; --- memory-view geometry (SPEC.md 28) ---------------------------------------
 TMM_RAM_Y   equ 4               ; "RAM uuuK/tttK" line (same string, new y)
@@ -66,7 +67,7 @@ TMM_M1_Y2   equ 29              ; frame bottom (interior rows 15..28)
 TMM_CAP_Y   equ 33              ; "HEAP nnnK/nnnK" caption line
 TMM_M2_Y1   equ 43              ; package-pool map frame top
 TMM_M2_Y2   equ 58              ; frame bottom (interior rows 44..57)
-TMM_HDR_Y   equ 62              ; "NAME    ADDR SIZE  CLM" header line
+TMM_HDR_Y   equ 62              ; "NAME    ADDR SIZE   HEAP" header line
 
 ; --- what the kernel occupies, in KB (SPEC.md 2/28) --------------------------
 ; Every one of these is a compile-time constant, and that is the point: the
@@ -150,7 +151,7 @@ tm_kinit:
     ret
 
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
-tm_tpl:     dw 250, 100, 200, 300, tm_ttl, tm_paint, 0, tm_click
+tm_tpl:     dw 250, 100, 216, 300, tm_ttl, tm_paint, 0, tm_click
 tm_ttl:     db 'Task Manager', 0
 tm_sname:   db 'TaskMgr', 0     ; KD_NAME: fits the 7-char NAME column
 
@@ -175,7 +176,10 @@ tm_s_free:  db '---', 0
 tm_s_frtl:  db '  -     -', 0   ; free row's CPU + MEM columns
 
 ; --- memory view (SPEC.md 28) ------------------------------------------------
-tm_s_mhdr:  db 'NAME    ADDR SIZE  CLM', 0    ; 22 chars, the row width
+tm_s_mhdr:  db 'NAME    ADDR SIZE   HEAP', 0  ; 24 chars, the row width.
+                                ; Two spaces of gap, not one: a 150K back
+                                ; buffer beside a 150K package ran the two
+                                ; figures together at the old width
 tm_s_heap:  db 'HEAP ', 0       ; + claimed/size KB (SPEC.md 50)
 tm_s_bhdr:  db 'Builtins    ', 0 ; + used/max of the kernel segment they share
 tm_s_phdr:  db 'Packages    ', 0 ; + used/max of the package pool
@@ -218,9 +222,11 @@ tm_pat_buf:
 ; is framed in solid black by tm_map_claim and this fills the inside, which
 ; makes the frame the thing you read. A darker interior swallowed its own
 ; frame at four pixels wide, and the diagonal this replaces gave every claim
-; a ragged edge that could not be told from the next one along.
+; a ragged edge that could not be told from the next one along. Every row
+; carries a black column, though - at 8x8 with only every other row inked,
+; the 6x6 legend swatch beside the HEAP caption came out empty.
 tm_pat_clm:
-    db 0xEE, 0xFF, 0xBB, 0xFF, 0xEE, 0xFF, 0xBB, 0xFF
+    db 0xEE, 0xBB, 0xEE, 0xBB, 0xEE, 0xBB, 0xEE, 0xBB
 
 ; Slot patterns: 12 x 8 row bytes, pattern i = tm_pats + i*8, bit set =
 ; white (SPEC.md 5/28). Black-on-white hatch textures, none of them the
@@ -1050,6 +1056,17 @@ tm_cap_heap:
     mov si, tm_str
     call font_str
 
+    ; ...and the claim swatch, beside the caption rather than down in the
+    ; list. Every OTHER texture belongs to one row and is keyed there; a
+    ; claim belongs to the HEAP column, which is a column and not a row, so
+    ; its legend goes where the heap's own figures are (SPEC.md 28).
+    mov ax, [tm_cy]
+    add ax, TMM_CAP_Y
+    mov [tm_rowy], ax
+    mov word [tm_sqox], 126     ; clear of 'HEAP nnnK/nnnK' at 8px a char
+    mov si, tm_pat_clm
+    call tm_sq_pat
+
     pop di
     pop si
     pop dx
@@ -1375,6 +1392,8 @@ tm_rows_mem:
     inc di
     mov ax, TM_KERN_KB          ; the kernel, whole (SPEC.md 2)
     call tm_kcol
+    mov byte [di], ' '          ; the HEAP column's own gap (tm_s_mhdr)
+    inc di
     xor ax, ax
     call mem_kernel_kb         ; AX += the kernel's own heap claims, KB
     call tm_kcol
@@ -1387,9 +1406,9 @@ tm_rows_mem:
     ; snapshot are the whole of KERN_SIZE (SPEC.md 2). All four figures are
     ; assembly-time constants, so this is four string copies on a path that
     ; runs once a second.
-    mov bx, tm_s_bimg           ; the image is the GRAY part of the kernel's
-    mov cx, TM_KIMG_KB          ; band; the other three are the striped part
-    xor dx, dx
+    mov bx, tm_s_bimg           ; NO square: the image is drawn in the same
+    mov cx, TM_KIMG_KB          ; gray as the System row above it, and a
+    xor dx, dx                  ; square that repeats one is not a legend
     call tm_buf_row
     mov bx, tm_s_bstk
     mov cx, TM_KSTK_KB + TM_K0_KB
@@ -1546,6 +1565,8 @@ tm_inst_row:
     call tm_copy
     pop si
 .claim:
+    mov byte [di], ' '          ; the HEAP column's own gap (tm_s_mhdr)
+    inc di
     call tm_inst_claim          ; SI = slot; AX = KB claimed off the heap
     call tm_kcol
     call tm_mrow_close
@@ -1603,13 +1624,11 @@ tm_buf_row:
     push di
     push cx                     ; the size, banked across tm_mrow_open
     call tm_mrow_open
-    or dx, dx                   ; the square first: it keys this row to its
-    jz .gray                    ; band on the RAM map above (tm_sq_*)
-    mov si, dx
-    call tm_sq_pat
-    jmp short .name
-.gray:
-    call tm_sq_gray
+    or dx, dx                   ; a square only where the texture is this
+    jz .name                    ; row's OWN - the three buffers share one
+    mov word [tm_sqox], 22      ; band, and it is theirs. Indented to sit
+    mov si, dx                  ; beside the names rather than out at the
+    call tm_sq_pat              ; margin two columns to their left
 .name:
     pop ax
     push ax
@@ -1625,8 +1644,10 @@ tm_buf_row:
 .size:
     pop ax
     call tm_kcol
+    mov byte [di], ' '          ; the HEAP column's own gap (tm_s_mhdr)
+    inc di
     push si
-    mov si, tm_s_dash5          ; CLM: a buffer is not a claim
+    mov si, tm_s_dash5          ; HEAP: a buffer is not a claim
     call tm_copy
     pop si
     call tm_mrow_close
@@ -1656,6 +1677,8 @@ tm_mrow_open:
     add ax, TMM_ROW_Y
     add ax, [tm_cy]
     mov [tm_rowy], ax
+    mov word [tm_sqox], 6       ; the legend square's left edge, at the margin
+                                ; unless the row moves it (tm_buf_row)
     mov byte [tm_mfit], 1       ; does this row's 8px band still fall inside
     cmp ax, [tm_ylim]           ; the frame? Nothing in the kernel clips a
     jbe .fits                   ; draw to a WINDOW (tm_ylim_set), and on a
@@ -1751,7 +1774,7 @@ tm_sq_frame:
     push dx
     mov byte [gfx_color], CBLACK
     mov ax, [tm_cx]
-    add ax, 6
+    add ax, [tm_sqox]
     mov bx, [tm_rowy]
     mov cx, ax
     add cx, 7
@@ -1828,7 +1851,8 @@ tm_sq_pat:                      ; SI = the pattern: a kernel buffer, a heap
 ; -----------------------------------------------------------------------------
 tm_sq_int:
     mov ax, [tm_cx]
-    add ax, 7
+    add ax, [tm_sqox]
+    inc ax
     mov bx, [tm_rowy]
     inc bx
     mov cx, ax
@@ -2616,6 +2640,7 @@ tm_iknd:    resb INST_MAX       ; I_KIND snapshot: the Builtins/Packages split
                                 ; instance's claims carry (SPEC.md 50.2)
 tm_mrow:    resw 1              ; the memory view's row cursor
 tm_mfit:    resb 1              ; ...and whether the row it names is on screen
+tm_sqox:    resw 1              ; ...and where its legend square starts
 tm_view:    resb 1              ; 0 = performance view, 1 = memory view
 tm_inm:     resb INST_MAX * 16  ; I_NAME snapshots
 tm_rcyc:    resw TM_ROWS * 2    ; per-ROW cycles: task + instance, dword
