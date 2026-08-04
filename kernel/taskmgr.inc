@@ -127,6 +127,12 @@ TM_L_RAM    equ 4               ; 'RAM '
 TM_L_HEAP   equ 7               ; '  HEAP '   (the gap is part of the label)
 TM_L_KPAIR  equ 8               ; 'nnn/nnnK'  (tm_kpair)
 TM_STRMAX   equ TM_L_RAM + TM_L_KPAIR + TM_L_HEAP + TM_L_KPAIR + 1
+                                ; = 28. The memory view's ROWS are 25 (see
+                                ; tm_s_mhdr) and its captions shorter still,
+                                ; so this line is the one that sizes the
+                                ; buffer - but only by three characters now,
+                                ; which is the number to check before widening
+                                ; a row again
 
 ; --- what the kernel occupies, in KB (SPEC.md 2/28) --------------------------
 ; Every one of these is a compile-time constant, and that is the point: the
@@ -348,7 +354,11 @@ tm_s_free:  db '---', 0
 tm_s_frtl:  db '  -     -', 0   ; free row's CPU + MEM columns
 
 ; --- memory view (SPEC.md 28) ------------------------------------------------
-tm_s_mhdr:  db 'NAME    ADDR SIZE   HEAP', 0  ; 24 chars, the row width.
+tm_s_mhdr:  db 'NAME     ADDR SIZE   HEAP', 0 ; 25 chars, the row width. The
+                                ; NAME field is EIGHT wide plus a separator:
+                                ; seven for the name and one for the indent a
+                                ; nested row carries, so a seven-character
+                                ; name still gets a gap before the address
                                 ; Two spaces of gap, not one: a 150K back
                                 ; buffer beside a 150K package ran the two
                                 ; figures together at the old width
@@ -364,7 +374,7 @@ tm_s_bhdr:  db 'Builtins', 0     ; no figures: a built-in owns no band on
                                 ; either map - its code is inside Code+data
                                 ; and its memory is heap claims, billed to
                                 ; its own row
-tm_s_phdr:  db 'Packages    ', 0 ; + allocated/size KB of the pool
+tm_s_phdr:  db 'Packages     ', 0; + allocated/size KB of the pool
 tm_s_mfr:   db '   -    -', 0   ; the ADDR+SIZE pair a built-in has no answer
                                 ; for: it owns no region of its own
 tm_s_dash4: db '   -', 0        ; one empty KB column
@@ -1639,8 +1649,10 @@ tm_rows_mem:
     mov si, tm_s_sys
     call tm_copy7
     pop si
-    mov byte [di], ' '          ; row 0 has no indent, so it pays the
-    inc di                      ; separator here instead
+    mov byte [di], ' '          ; row 0 has no indent, so it pays BOTH of the
+    inc di                      ; NAME field's trailing columns here
+    mov byte [di], ' '
+    inc di
     push si
     mov si, tm_s_sys0           ; it starts at the bottom of low memory
     call tm_copy
@@ -1769,13 +1781,15 @@ tm_inst_row:
     mov byte [di], ' '          ; the indent: these live INSIDE the region
     inc di                      ; their heading names
     push si
-    mov ax, si                  ; name: the I_NAME snapshot. Seven wide and
-    mov cl, 4                   ; NO separator after it - the indent already
-    shl ax, cl                  ; spent the column the space would have had,
-    mov si, ax                  ; and a truncated name is worse than a tight
-    add si, tm_inm              ; one
+    mov ax, si                  ; name: the I_NAME snapshot, seven wide, then
+    mov cl, 4                   ; a separator. A name that USES all seven -
+    shl ax, cl                  ; ARKANOI, SOLITAI - ran straight into the
+    mov si, ax                  ; segment beside it without one: 'ARKANOI9E40'
+    add si, tm_inm
     call tm_copy7
     pop si
+    mov byte [di], ' '
+    inc di
 
     mov bx, si
     shl bx, 1
@@ -1876,8 +1890,8 @@ tm_buf_row:
     push ax
     mov si, bx
     call tm_copy                ; the name carries its own two-space indent
-    mov cx, tm_str + 12
-    sub cx, di
+    mov cx, tm_str + 13         ; the NAME field plus its separator: a buffer
+    sub cx, di                  ; has no address, so the name spans both
     jle .size
 .pad:
     mov byte [di], ' '
