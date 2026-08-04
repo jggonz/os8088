@@ -571,8 +571,8 @@ ui_drag_xor:
 ;           its SIZE follows the mouse; W_W/W_H commit on release
 ;           (SPEC.md 11.1/13 - ui_drag's binding lock/XOR ordering, verbatim)
 ; in:  BX = window ptr (frontmost, WF_SIZABLE), CX = mousedown x, DX = " y
-; out: nothing; W_W/W_H updated (clamped WMIN_W/H .. screen edge), full
-;      repaint done
+; out: nothing; W_W/W_H updated (clamped WMIN_W/H .. screen edge), and the
+;      union of the old and new rects repainted
 ; clobbers: AX, BX, CX, DX, DI (internal helper of the UI task)
 ;
 ; Reuses ui_drag's statics - one tracker runs at a time on the single UI
@@ -677,7 +677,27 @@ ui_grow:
     mov [bx + W_H], dx          ; size it will take, per axis, and by then
                                 ; nothing has been drawn at the other one
 
-    call wm_paint_all           ; caller-held lock, per the wm contract
+    ; Only the rect it had and the rect it has changed, and a grow keeps its
+    ; ORIGIN fixed - so their union is that origin plus the larger of the two
+    ; sizes per axis. wm_paint_dmg's case, not wm_paint_all's (SPEC.md 11.91):
+    ; dragging a corner used to repaint every window on the screen.
+    mov ax, [bx + W_W]
+    cmp ax, [ui_origx]          ; ...against the frame size at mousedown
+    jge .uw
+    mov ax, [ui_origx]
+.uw:
+    mov cx, ax
+    mov ax, [bx + W_H]
+    cmp ax, [ui_origy]
+    jge .uh
+    mov ax, [ui_origy]
+.uh:
+    mov dx, ax
+    add cx, [bx + W_X]          ; x2 = x + w: the drop shadow's own column
+    add dx, [bx + W_Y]          ; y2 = y + h: and its own row
+    mov ax, [bx + W_X]
+    mov bx, [bx + W_Y]          ; (the read completes before BX changes)
+    call wm_paint_dmg           ; caller-held lock, per the wm contract
     call gfx_unlock             ; NO second gfx_lock here - already held (§7)
     ret
 

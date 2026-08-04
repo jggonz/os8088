@@ -147,6 +147,7 @@ menu_init:
     push ax
     push bx
     push dx
+    mov byte [menu_bdirty], 1   ; .bss is not zeroed at boot (-f bin)
     xor bx, bx
     mov [menu_win], bx
     mov word [menu_sseg], 0
@@ -160,6 +161,17 @@ menu_init:
     pop dx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_force - the whole bar must be redrawn, whoever owns it
+; in:  nothing
+; out: nothing (all registers preserved)
+;
+; For callers that drew over the bar rather than changed what belongs on it.
+; -----------------------------------------------------------------------------
+menu_force:
+    mov byte [menu_bdirty], 1
     ret
 
 ; -----------------------------------------------------------------------------
@@ -255,7 +267,8 @@ menu_check:
 ; AM_NAME is the string 'Locator'.
 ; -----------------------------------------------------------------------------
 menu_relayout:
-    push ax
+    mov byte [menu_bdirty], 1   ; the cells, the name, or both, are about to
+    push ax                     ; be different: the bar owes a full redraw
     push bx
     push cx
     push dx
@@ -534,12 +547,25 @@ menu_des:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_draw_bar - draw the menu bar: white rows 0..MBAR_H-2, black line at
-;                 row MBAR_H-1, then every live cell's title, the active
-;                 application's name label, and the clock.
+; menu_draw_bar - bring the menu bar up to date: the white field, the black
+;                 rule, the active application's name and every live cell's
+;                 title when [menu_bdirty] says they are owed - and the clock,
+;                 which is on its own cadence, always.
 ; in:  nothing (caller holds the gfx lock)
 ; out: nothing
 ; clobbers: nothing (flags only)
+;
+; **Called on every window operation and usually with nothing to do.** Unlike
+; the dock there is no useful per-cell granularity: the bar's contents ARE the
+; active application's, so either the owner changed and every cell did, or the
+; owner did not and none of them did. menu_relayout is the single rebuild
+; point (SPEC.md 12) and sets the flag; menu_check just above may reach it.
+;
+; The other thing that sets the flag is somebody having drawn OVER the bar,
+; which only two things can do - a fullscreen window (SPEC.md 11.2) and a
+; dropped menu whose save-under was refused - so wm_paint_all and menu_track
+; set it rather than reason about it. The clock is outside all of this:
+; menu_draw_clock fills its own cell and is what the Clock task calls direct.
 ; -----------------------------------------------------------------------------
 menu_draw_bar:
     push ax
@@ -549,6 +575,9 @@ menu_draw_bar:
     push si
 
     call menu_check             ; the owner may have closed since (SPEC 12)
+    cmp byte [menu_bdirty], 0
+    je .clock
+    mov byte [menu_bdirty], 0
 
     mov byte [gfx_color], CWHITE
     xor ax, ax                  ; white field, rows 0..MBAR_H-2
@@ -607,6 +636,7 @@ menu_draw_bar:
     add si, MB_ENTSZ
     loop .title
 
+.clock:
     call menu_draw_clock        ; the right end of the bar (SPEC.md 12.1)
 
     pop si
@@ -977,6 +1007,10 @@ menu_drop:
     call wm_paint_all           ; the no-buffer fallback: desktop, icons,
     call gfx_flush              ; dock, bar and every window, under the lock
 .sel:
+    call menu_force             ; the cell highlight is XOR and undoes itself,
+                                ; but the restore path above is a save-under
+                                ; that can be refused - one bar redraw per
+                                ; menu interaction is not worth reasoning about
     mov ax, [menu_sel]
 
     pop es
@@ -1318,6 +1352,9 @@ menu_seg:   resw 1              ; the segment [menu_set] and the app's own
 menu_dseg:  resw 1              ; ...and the segment of the menu being
                                 ; DROPPED, which is that cell's MB_SEG: 0
                                 ; for the System menu even under a package
+menu_bdirty: resb 1             ; the bar's field, name and cells are owed a
+                                ; redraw. Set by menu_relayout and by anyone
+                                ; who drew over the bar (menu_force)
 menu_sseg:  resw 1              ; the save-under claim's segment, 0 = none
                                 ; (menu_drop then repaints instead)
 menu_tbuf:  resb MENU_MAXCH + 1 ; menu_trunc's staging buffer

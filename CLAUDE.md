@@ -173,7 +173,12 @@ area can only grow — and the full pass was a whole-screen planar dither plus
 every visible window's frame and `W_PAINT`, paid to raise one window. Both go
 through `wm_raise`, which draws four things in order: the menu bar
 (`menu_activate` just handed it over), the dock (the owning instance may be new,
-and the *active* tile moves), **the outgoing front window's title bar**
+and the *active* tile moves) — **and neither of those usually draws anything**,
+because both are incremental now: `menu_draw_bar` is gated on `[menu_bdirty]`,
+which only `menu_relayout` and a fullscreen/save-under overdraw set, and
+`dock_paint` keys each tile on its icon plus live/minimized/active so a focus
+change costs two tiles and a quiet desktop costs none — then **the outgoing
+front window's title bar**
 (`wm_draw_title` — the pinstripes and the two boxes belong to the frontmost
 window alone), then this window, last and therefore on top.
 
@@ -190,11 +195,16 @@ Three traps:
 - **`wm_top` is read BEFORE the visible bit goes on** in `wm_show`. `wm_create`
   has already appended the new window to `wm_zord`, so once it is visible
   `wm_top` answers with *itself* and the outgoing front never loses its stripes.
-- **The dock is the reason for `wm_dock_clear`** (inside `wm_fast_ok`). `wm_fit`
-  keeps a window above the dock but `ui_grow`'s clamp is looser, so a grown
-  window can hang over it — and `dock_paint` would then draw on top of a window
-  instead of under it. The cheap path declines and falls back rather than
-  reorder itself. Fullscreen (§11.2) falls back too.
+- **A window over the dock costs a rectangle, not the screen.** The strip is
+  drawn under windows, and `wm_fit` keeps a window above it but `ui_grow`'s
+  clamp is looser, so a grown window can hang over it — where `dock_paint`
+  would draw on top of a window instead of under it. That used to be
+  `wm_fast_ok`'s second veto, so **one** oversized window made every focus
+  change, show and un-minimize a full-screen repaint. `wm_dock_under` owns it
+  now: `dock_paint` reports in CF whether it drew anything, `wm_dock_clear`
+  whether a window is on the strip, and only if both say yes does
+  `wm_dmg_wins` — §11.91's mark-and-draw pass, factored out for this — put
+  those windows back. Fullscreen (§11.2) is the one veto left.
 - **`wm_front` on a hidden window falls back** rather than draw a window that
   has no pixels on screen. `wm_show` is the entry point for that.
 

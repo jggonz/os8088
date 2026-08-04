@@ -1156,8 +1156,12 @@ the identical binding lock/XOR ordering, tracking an outline anchored at
 clamped to at least WMIN_W×WMIN_H while tracking (the XOR rect must stay
 well-formed). On release it clamps again — WMIN_W ≤ w ≤ `[vid_w]` − W_X,
 WMIN_H ≤ h ≤ `[vid_h]` − W_Y (the frame stays on screen; position never
-changes) — then **asks the window** (below), writes W_W/W_H, and calls
-wm_paint_all under the still-held lock. The repaint re-enters W_PAINT, and a
+changes) — then **asks the window** (below), writes W_W/W_H, and repaints
+under the still-held lock. **Only the rect it had and the rect it has
+changed**, and a grow keeps its ORIGIN fixed, so their union is that origin
+plus the larger of the two sizes per axis: `wm_paint_dmg`'s case, not
+`wm_paint_all`'s (§11.91). Dragging a corner used to repaint every window on
+the screen. The repaint re-enters W_PAINT, and a
 resizable window's procs are required to lay out from the live record (record
 note above). Self-initiated repaints (the fm_repaint idiom, §22) must
 white-fill using the live W_W/W_H for the same reason.
@@ -1404,16 +1408,28 @@ but nothing under the bar is touched. **`wm_front` on a window that is not
 visible** takes the full pass: `wm_show` is the entry point for that, and
 declining is better than drawing a hidden window.
 
-**Two fallbacks to the full pass**, both structural (`wm_fast_ok`):
+**One fallback to the full pass**, structural (`wm_fast_ok`): anything to do
+with a fullscreen window — `[wm_fs]` set, or the window itself carrying
+`WF_FULL` — because §11.2 suppresses the chrome entirely and the ordering
+above stops describing the screen.
 
-- Anything to do with a fullscreen window — `[wm_fs]` set, or the window
-  itself carrying `WF_FULL` — because §11.2 suppresses the chrome entirely
-  and the ordering above stops describing the screen.
-- `wm_dock_clear` finding a visible window whose frame or drop shadow
-  reaches `[vid_dock_y0]`. `wm_fit` keeps a window above the dock but
-  `ui_grow`'s own clamp is looser, so a grown window can hang over it —
-  and there `dock_paint` would draw *on top of* a window instead of under
-  it. The cheap path declines rather than reorder itself.
+**A window hanging over the dock used to be the other, and it was expensive
+out of all proportion.** The strip is drawn under windows (§30), so
+`dock_paint` would have drawn on top of one; rather than order itself around
+that, the cheap path declined and the caller repainted the whole screen. One
+oversized window anywhere on screen therefore made *every* focus change, show
+and un-minimize a full repaint — `wm_fit` keeps a window above the dock but
+`ui_grow`'s clamp is looser, so this is reachable by dragging a corner.
+
+**`wm_dock_under` costs a rectangle instead**, and usually nothing. It asks
+two questions and both are normally no: `dock_paint` reports in CF whether it
+put any pixels on the strip at all (§30 — most calls change nothing), and
+`wm_dock_clear` whether any window is sitting on them. Only when both are yes
+does it seed `wm_dmg_x1..y2` with the strip's own rect and call
+**`wm_dmg_wins`** — §11.91's mark-and-draw pass, factored out of
+`wm_paint_dmg` for exactly this — which redraws the windows the strip touches
+and nothing else. `wm_raise`, `wm_front`'s chrome-only path and
+`wm_paint_chrome` all reach the dock through it.
 
 **`wm_lift`** is the z-order move split out of `wm_front` so `wm_show` can
 reorder without committing to the repaint that used to be welded to it.
@@ -1631,6 +1647,28 @@ dirties the back buffer nor flushes — the poll loop does no drawing work at
 all beyond the XOR itself. The final save-under restore + title un-highlight
 need no flush of their own — the caller's gfx_unlock flushes them (§13
 step 2), and that flush is what clears the last item highlight from VRAM.
+
+### 12.05 The bar is redrawn only when its contents changed
+
+`menu_draw_bar` is on the same hot path as `dock_paint` — every window
+operation calls it because the bar *might* have changed owner — and unlike the
+dock there is no useful per-cell granularity: the bar's contents **are** the
+active application's, so either the owner changed and every cell did, or it
+did not and none of them did. So one flag, `[menu_bdirty]`, gates the white
+field, the black rule, the name label and every cell title.
+
+`menu_relayout` is the single rebuild point and sets it, which covers every
+ownership change including the one `menu_check` makes at the top of
+`menu_draw_bar` itself. The only other thing that can invalidate the bar is
+somebody having drawn **over** it, and just two things can: a fullscreen
+window (§11.2) and a dropped menu whose save-under claim was refused. So
+`wm_paint_all` and `menu_track` call `menu_force` rather than reason about it
+— one bar redraw per menu interaction is not worth a proof. `menu_init` sets
+it too, because `-f bin` zeroes no `.bss`.
+
+**The clock is outside all of this.** `menu_draw_clock` fills its own cell and
+is called unconditionally at the end of `menu_draw_bar`, as well as directly
+by the Clock task (§12.1).
 
 ### 12.1 The menu-bar clock
 
@@ -1964,7 +2002,9 @@ Loop forever:
      cur w/h = orig w/h + (mouse − start), clamped to ≥ WMIN_W/WMIN_H
      every pass. On release (outline drawn, lock held): xor-erase, clamp
      w to WMIN_W..`[vid_w]`−W_X and h to WMIN_H..`[vid_h]`−W_Y, write
-     W_W/W_H, `wm_paint_all`, gfx_unlock — same no-relock rule.
+     W_W/W_H, `wm_paint_dmg` over the union of the old and new rects
+     (§11.91 — the origin is fixed, so that is the origin plus the larger
+     size per axis), gfx_unlock — same no-relock rule.
    - content of non-front window → `wm_front`.
    - content of front window → if its `W_ONCLICK` is non-zero: gfx_lock,
      near-call it (CX=x, DX=y, SI=win ptr) billed to the window's instance
@@ -5323,10 +5363,11 @@ KIND_TASKMGR like the §14 kinds.
 
 The template carried a fixed height, which is right on VGA's 480 rows and too
 tall on Hercules' 348 - so the window hung over the dock strip, and
-`dock_paint` then had to draw *under* a window instead of over the desktop,
-which is the one case `wm_fast_ok` declines (§11.90). Every window opened on
-top of it paid for that with a full repaint. On CGA's 200 rows it never
-fitted at all.
+`dock_paint` then had to draw *under* a window instead of over the desktop —
+which at the time was the one case `wm_fast_ok` declined (§11.90), so every
+window opened on top of it paid for that with a full repaint. On CGA's 200
+rows it never fitted at all. (`wm_dock_under` has since made that case cost a
+rectangle rather than the screen, but a window that fits is still the point.)
 
 `tm_init` derives the height once, at boot, from `[vid_dock_y0]`: as many
 process rows as the space between the menu bar and the dock will take, capped
@@ -5553,6 +5594,36 @@ body, §25). Active (the tile's record == `[dock_act]`): a second 1px black
 `[vid_dock_ty0]`+1 through `[vid_dock_ty0]`+DOCK_TILE_H−2 — the icon body
 sits at (+4,+2) and 16×16, so it clears both new edges. Minimized (I_FLAGS
 bit0): `gfx_xor_fill` over that same interior rect.
+
+### 30.1 It is called constantly and usually has nothing to do
+
+Raising a window, showing one, hiding one, dragging one — each repaints the
+chrome because the chrome *might* have changed, and most of the time the only
+thing that did is which tile wears the active mark. So `dock_paint` is
+incremental, and **reports in CF whether it put any pixel on the strip at
+all** — which is what lets `wm_dock_under` (§11.90) skip putting the windows
+back over it.
+
+Each tile carries a **key** (`dock_key`): its `I_ICON`, rotated so the
+pointer's high bits reach the low ones, XORed with live / minimized / active.
+A tile whose key still matches `dock_ck[i]` — what it was last *drawn* as —
+is left alone. 0 is reserved for "no tile", so a slot going free erases and a
+slot filling draws. A focus change costs two tiles; nothing changing costs no
+pixels. A tile that does change is **erased to white first**, because its
+marks are not nested: active → plain has an inner frame to remove, and
+minimized → plain an XOR to undo.
+
+The strip's own rule and white field are redrawn only when `[dock_full]` says
+so, and the single thing that sets it is somebody having drawn **over** the
+strip: `wm_paint_all`'s dither, and `wm_paint_dmg`'s when the damage reaches
+`[vid_dock_y0]` — which is how *"a window that was covering the dock moved
+away"* gets its full redraw, since hiding, destroying, dragging and resizing
+all arrive there with a rect that reaches the strip. `dock_force` is the
+entry point and it clears the per-tile keys with it: a tile whose pixels were
+painted over is not "unchanged" however much its state still matches.
+
+`.bss` is not zeroed at boot (`-f bin`), so `dock_init` sets `[dock_full]`
+and clears the keys itself.
 
 The dock renders ONLY records read as I_STATE = 1 during the same lock
 hold (§29.2 rule 3); dying records are skipped, so a closing instance's

@@ -533,17 +533,23 @@ wm_show:
 ; in:  BX = the window about to come to the front
 ; out: CF = 1 = no, fall back to the full pass. All registers preserved.
 ;
-; The two cases where "nothing else moved" stops being true: anything to do
-; with a fullscreen window (SPEC.md 11.2 suppresses the chrome entirely), and
-; a visible window whose frame or drop shadow hangs over the dock strip, where
-; the dock_paint below would draw on top of a window instead of under it.
+; ONE case now: anything to do with a fullscreen window, which suppresses the
+; chrome entirely (SPEC.md 11.2) so none of the cheap path's reasoning holds.
+;
+; A window hanging over the dock strip used to be the other. The strip is
+; drawn under windows, so dock_paint would have drawn on top of one - and
+; rather than order itself around that, the cheap path declined and the caller
+; repainted the whole screen. With a single oversized window on screen that
+; made EVERY focus change, show and un-minimize a full repaint. wm_dock_under
+; costs a rectangle instead, and usually nothing at all.
 ; -----------------------------------------------------------------------------
 wm_fast_ok:
     test word [bx+W_FLAGS], WF_FULL
     jnz .no
     cmp word [wm_fs], 0
     jne .no
-    jmp wm_dock_clear           ; tail call: its CF is the answer
+    clc
+    ret
 .no:
     stc
     ret
@@ -574,7 +580,7 @@ wm_raise:
     call menu_activate          ; BX owns the menu bar from here (SPEC.md 12)
     call wm_lift                ; ...and the top of the z-order
     call menu_draw_bar
-    call dock_paint
+    call wm_dock_under          ; the strip, and anything sitting on it
     cmp bp, di
     je .self                    ; already the front window: no outgoing one
     or bp, bp
@@ -841,7 +847,7 @@ wm_front:
     call menu_activate          ; the degenerate case: chrome only
     call wm_lift
     call menu_draw_bar
-    call dock_paint
+    call wm_dock_under
     jmp short .out
 .go:
     call wm_raise
@@ -1197,29 +1203,13 @@ wm_dmg_union:
 ; worker destroys a moment later; the destroy used to repaint the whole screen
 ; a second time for two strips' worth of change.
 ;
-; The dock strip is drawn UNDER windows (SPEC.md 30), so this declines when a
-; window hangs over it and lets wm_paint_dmg redraw that window afterwards.
+; The dock strip is drawn UNDER windows (SPEC.md 30), which wm_dock_under
+; owns: it puts back whatever window is sitting on the pixels it just drew,
+; and does nothing at all when the strip did not change.
 ; -----------------------------------------------------------------------------
 wm_paint_chrome:
-    call wm_dock_clear
-    jc .over
-    call dock_paint
+    call wm_dock_under
     jmp menu_draw_bar           ; tail call
-.over:
-    push ax
-    push bx
-    push cx
-    push dx
-    xor ax, ax                  ; damage = the strip itself, so the window
-    mov bx, [vid_dock_y0]       ; sitting on it gets marked and redrawn
-    mov cx, [vid_wm1]
-    mov dx, [vid_hm1]
-    call wm_paint_dmg
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; wm_paint_dmg - repaint only what a rectangle's worth of change touched
@@ -1313,9 +1303,70 @@ wm_paint_dmg:
 .zones:
     mov al, [wm_dmg_zn]
     call desk_paint_mask        ; the touched drive zones, whole
+    mov ax, [wm_dmg_y2]         ; reached the strip? then the dither above
+    cmp ax, [vid_dock_y0]       ; just ran over it, and whatever WAS covering
+    jl .dock                    ; it has moved - the one case that owes the
+    call dock_force             ; dock a whole redraw rather than a tile
+.dock:
     call dock_paint
     call menu_draw_bar
+    call wm_dmg_wins            ; mark and draw; leaves wm_dmg_mask for below
 
+    ; --- the window this uncovered is the front window now -----------------
+    ; Hiding or destroying the frontmost window promotes whatever was under
+    ; it, and the promotion is visible: the pinstripes, the close box and the
+    ; minimize box belong to the front window alone (SPEC.md 11). If the new
+    ; front was redrawn above it already has them; if it sat well clear of
+    ; the damage it was never touched, and this is the one rect it owes.
+.promote:
+    call wm_top
+    or bx, bx
+    jz .out
+    mov ax, bx
+    sub ax, wm_wins
+    mov cl, WIN_SIZE
+    div cl                      ; AL = its index (AH = 0: record-aligned)
+    xor ah, ah
+    mov di, ax
+    shl di, 1
+    mov ax, [wm_bit1+di]
+    test [wm_dmg_mask], ax
+    jnz .out                    ; redrawn in this pass: it has them already
+    mov di, bx
+    mov bp, bx                  ; DI == BP: draw it as the FRONT window
+    call wm_draw_title
+    jmp short .out
+
+.chrome:
+    call wm_paint_chrome
+    jmp short .out
+.fallback:
+    call wm_paint_all
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; ...and the pass itself, which wm_dock_under borrows to put the windows back
+; over a strip it has just redrawn.
+; -----------------------------------------------------------------------------
+; wm_dmg_wins - redraw every window that a damage rect touched, back to front
+; in:  wm_dmg_x1/y1/x2/y2 set; caller holds the gfx lock
+; out: wm_dmg_mask = which windows were drawn. All registers preserved.
+; -----------------------------------------------------------------------------
+wm_dmg_wins:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
     ; --- mark: overlaps the damage, or overlaps something already marked ---
     ; Bottom to top, so "already marked" means "marked and below us" and one
     ; pass reaches the whole transitive closure. Nothing here may keep a loop
@@ -1380,7 +1431,7 @@ wm_paint_dmg:
     ; --- draw the marked ones, back to front ------------------------------
 .draw:
     cmp word [wm_dmg_mask], 0
-    je .promote
+    je .wdone
     call wm_top
     mov bp, bx                  ; BP = frontmost visible (0 if none)
     xor si, si                  ; SI = index into wm_zord
@@ -1388,7 +1439,7 @@ wm_paint_dmg:
     mov al, [wm_zn]
     xor ah, ah
     cmp si, ax
-    jae .promote
+    jae .wdone
     mov di, wm_zord
     add di, si
     mov al, [di]
@@ -1407,44 +1458,49 @@ wm_paint_dmg:
 .dnext:
     inc si
     jmp .dwin
-
-    ; --- the window this uncovered is the front window now -----------------
-    ; Hiding or destroying the frontmost window promotes whatever was under
-    ; it, and the promotion is visible: the pinstripes, the close box and the
-    ; minimize box belong to the front window alone (SPEC.md 11). If the new
-    ; front was redrawn above it already has them; if it sat well clear of
-    ; the damage it was never touched, and this is the one rect it owes.
-.promote:
-    call wm_top
-    or bx, bx
-    jz .out
-    mov ax, bx
-    sub ax, wm_wins
-    mov cl, WIN_SIZE
-    div cl                      ; AL = its index (AH = 0: record-aligned)
-    xor ah, ah
-    mov di, ax
-    shl di, 1
-    mov ax, [wm_bit1+di]
-    test [wm_dmg_mask], ax
-    jnz .out                    ; redrawn in this pass: it has them already
-    mov di, bx
-    mov bp, bx                  ; DI == BP: draw it as the FRONT window
-    call wm_draw_title
-    jmp short .out
-
-.chrome:
-    call wm_paint_chrome
-    jmp short .out
-.fallback:
-    call wm_paint_all
-.out:
+.wdone:
     pop bp
     pop di
     pop si
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_dock_under - bring the dock strip up to date, and put back whatever
+;                 window is sitting on it
+; in:  nothing (caller holds the gfx lock)
+; out: nothing (all registers preserved)
+;
+; The strip is drawn UNDER windows (SPEC.md 30), and wm_fit only keeps a
+; window above it - ui_grow's clamp is looser, so a grown window CAN hang over
+; it. This used to be the cheap raise path's one veto: wm_fast_ok declined and
+; the caller repainted the whole screen, so with a single oversized window on
+; screen EVERY focus change, show and un-minimize cost a full repaint.
+;
+; It costs a rectangle instead. Two tests come first and both are usually no:
+; dock_paint says whether it drew anything at all, and wm_dock_clear whether
+; any window is over the strip. Only when both are yes does anything get
+; redrawn, and then only the windows the strip's own rect touches.
+; -----------------------------------------------------------------------------
+wm_dock_under:
+    push ax
+    call dock_paint             ; CF = 1 if it put pixels on the strip
+    jnc .out
+    call wm_dock_clear          ; CF = 1 if a window is sitting on them
+    jnc .out
+    xor ax, ax
+    mov [wm_dmg_x1], ax
+    mov ax, [vid_dock_y0]
+    mov [wm_dmg_y1], ax
+    mov ax, [vid_wm1]
+    mov [wm_dmg_x2], ax
+    mov ax, [vid_hm1]
+    mov [wm_dmg_y2], ax
+    call wm_dmg_wins
+.out:
     pop ax
     ret
 
@@ -1477,7 +1533,9 @@ wm_paint_all:
     call gfx_fill_gray
     call desk_paint             ; drive icons live on the desktop, under
                                 ; every window (SPEC.md 26)
-    call dock_paint             ; so does the dock strip (SPEC.md 30)
+    call dock_force             ; the dither just ran over the strip, and it
+    call dock_paint             ; is drawn UNDER windows (SPEC.md 30)
+    call menu_force
     call menu_draw_bar
 .wins:
     call wm_top
