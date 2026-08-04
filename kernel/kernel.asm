@@ -360,7 +360,13 @@ osapi_table:
                                   ;          (buffer at ES:0000), DX:CX =
                                   ;          capacity; out CF=0 DX:AX =
                                   ;          bytes read, CF=1 AX = FERR_*
-osapi_table_end:                 ; 0x01F0
+    OSAPI_SLOT osapi_gfx_dbuf     ; 0x01F0 - arm/disarm the SPEC.md 32 back
+                                  ;          buffer (AL = 1/0, lock held);
+                                  ;          out CF=1 [bb_avail] clear and
+                                  ;          nothing changed (BOTH ways -
+                                  ;          the mono bb_on guard, 32/39.3),
+                                  ;          CF=0 AL = the previous state
+osapi_table_end:                 ; 0x01F8
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -368,7 +374,7 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 60 * 8
+%if OSAPI_TABLE_LEN != 61 * 8
 %error "os8088 API jump table must be exactly 60 8-byte far slots"
 %endif
 

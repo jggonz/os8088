@@ -735,6 +735,17 @@ WMIN_H  equ 64                   ; px (SPEC.md 11.1; kernel/wm.inc's own equs)
                                                 ; the gfx lock. Preserves every
                                                 ; register; leaves [gfx_color]
                                                 ; holding the last run's colour
+%define OSAPI_GFX_DBUF      KERNEL_SEG:0x01F0   ; arm (AL=1) / disarm (AL=0) the
+                                                ; SPEC.md 32 back buffer from a
+                                                ; lock-held callback: while armed,
+                                                ; one lock hold = one flush and no
+                                                ; erase-then-draw state reaches
+                                                ; VRAM. out CF=1 unavailable (mono
+                                                ; adapter or < 500KB - NOTHING
+                                                ; changed, either direction), CF=0
+                                                ; AL = the PREVIOUS state: hand it
+                                                ; back here to restore what the
+                                                ; user had. Preserves all else.
 
 ; --- 'About <you>', under your name in the bar (SPEC.md 12.2) ------------------
 ; The app-name label the bar draws for the active application is a plain

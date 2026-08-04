@@ -3523,7 +3523,7 @@ only the stride changed, 4 → 8, so slot i sits at 0x0010 + 8·i.
 `OSAPI_TABLE_OFF` stays 0x0010; the table-span assertion became **53 × 8**
 at that change — the 52 v2 slots plus `wm_geom`, appended because a
 package can no longer read a window record (§11) — and tracks the table's
-end as slots append (60 × 8 today). Register contracts are
+end as slots append (61 × 8 today). Register contracts are
 the target routines' own (§5, §6, §8, §11). Pinned layout:
 
 ```
@@ -3714,8 +3714,24 @@ of §20.6** (0x0160, 0x0168), the three **clip-region slots of §11.3**
 of §41.8** (0x0188..0x01A8), **`wm_geom` (§11), 0x01B0**, the three
 **arena-memory slots of §2.6/§20.8** (0x01B8, 0x01C0, 0x01C8),
 **`wm_resize` (§11.1), 0x01D0**, **`gfx_blit4` (§5.4), 0x01D8** and
-**`wm_about_set` (§12.2), 0x01E0** and **`dskw_readbig` (§18.4),
-0x01E8** — the table's end today, 60 × 8.
+**`wm_about_set` (§12.2), 0x01E0**, **`dskw_readbig` (§18.4),
+0x01E8** and **`osapi_gfx_dbuf` (§32), 0x01F0** — the table's end
+today, 61 × 8.
+
+```
+0x01F0 osapi_gfx_dbuf  in AL = 1 arm the §32 back buffer / 0 disarm;
+                       caller holds the gfx lock (the Control Panel's
+                       own bb_set context). out CF=1 unavailable —
+                       [bb_avail] is clear (a mono adapter or a
+                       < 500KB machine) and NOTHING changed, in either
+                       direction: the gate is what keeps a package
+                       from stripping a mono adapter's software
+                       renderer, where [bb_on] = 1 IS the drawing
+                       path (§39.3, the bb_on/bb_dbl conflation
+                       trap). CF=0 done, AL = the PREVIOUS state
+                       (0/1) — hand it back to this slot to restore
+                       what the user had. Preserves everything else.
+```
 
 ```
 0x0148 menu_win_set  in BX = win ptr, SI = the app menu set's offset in
@@ -6266,6 +6282,16 @@ drawing entry dispatches on it. Turning OFF calls `gfx_flush` first, so
 nothing drawn under the old mode is stranded in RAM, then clears both. Both
 directions no-op when
 already in that state, so a repeated click cannot re-copy 150KB.
+
+**Packages reach `bb_set` through API slot 0x01F0** (`osapi_gfx_dbuf`,
+§20.3): AL = 1 arm / 0 disarm from a lock-held callback, answering the
+PREVIOUS `[bb_dbl]` in AL so an app can borrow the mode and hand back
+exactly what the user had. Both directions are refused (CF=1, nothing
+changed) while `[bb_avail]` is clear — `bb_set`'s own AL = 0 path keys on
+`[bb_on]`, which a mono adapter holds at 1 as its *renderer* (§39.3), so
+the slot's gate is load-bearing, not a convenience. The intended client is
+a fullscreen app smoothing its redraw (§45.11): one lock hold becomes one
+flush, and no erase-then-text intermediate state ever reaches VRAM.
 
 Note the EBDA caveat: a BIOS that steals
 top-of-memory (SeaBIOS's 640K → 639) still passes, and so does a real 512K
@@ -9460,6 +9486,7 @@ every 16th frame (§45.3's dialog-cancel rule).
 | F | Fullscreen toggle |
 | X | XT mode toggle (§45.9 — also File ▸ the relabeling menu item) |
 | R | Cycle the sample rate 11 → 22 → 44 kHz (§45.10 — also the Rate menu) |
+| S | Smooth toggle (§45.11 — also View ▸ the relabeling menu item) |
 | Esc | Exit fullscreen (windowed: ignored) |
 
 The `or al, al` keypad gate of §44.2 applies verbatim: the numeric keypad
@@ -9546,3 +9573,23 @@ toggle; XT mode overrides the selection with its own 5,500 Hz while it is
 on, and the selection returns when it is off. The mixer's cost is linear
 in the rate: 44 kHz is 4× the default's samples — chosen for machines
 where the default is loafing, refused honestly where it is not.
+
+### 45.11 Smooth — the fullscreen redraw rides the §32 back buffer
+
+The pattern scroll repaints 30-plus row strips erase-then-text, and on a
+direct-to-VRAM path the CRT catches every intermediate state — the flicker
+is architectural, not a bug in the strips. The cure is the §32 back
+buffer: while it is armed, a worker draw burst renders to RAM and
+`gfx_unlock` flushes the finished frame once. **View ▸ `Smooth: On/Off`**
+(the relabeling idiom; key **S**; default On) makes the tracker arm it via
+slot 0x01F0 **on entering fullscreen** and hand back the user's previous
+state on leaving; while Smooth is off, or where the slot refuses (mono
+adapters — where the software renderer already IS the direct path — and
+< 500KB machines), fullscreen draws exactly as before. Two recorded
+consequences: the flush costs VRAM bandwidth (the §32 ~24× figure), which
+is why the toggle exists — a slow-bus VGA machine can decline, and XT
+mode's band-relight keeps the dirty rect small enough that the two modes
+compose well; and a close **while fullscreen** takes the kernel's
+`wm_destroy` safety net, which the app never sees — the buffer then stays
+armed, a legal user-settable mode the Control Panel's Display page shows
+and can disarm, recorded here rather than fenced with kernel machinery.

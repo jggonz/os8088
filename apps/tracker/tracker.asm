@@ -135,6 +135,7 @@ trk_entry:
     push di
     call mp_init                    ; first: mp_* may clobber, and the CF we
                                     ; owe the loader comes from wm_create
+    mov byte [trk_smooth], 1        ; Smooth defaults ON (SPEC.md 45.11)
     call OSAPI_VIDEO                ; AX = w, BX = h, CX = first dock row
     sub ax, TRK_WINW                ; centre the frame on the screen...
     jns .xok
@@ -306,6 +307,10 @@ trk_onkey:
     je .rcyc
     cmp bl, 'R'
     je .rcyc
+    cmp bl, 's'
+    je .smooth
+    cmp bl, 'S'
+    je .smooth
     cmp bl, '1'
     jb .out
     cmp bl, '4'
@@ -330,6 +335,9 @@ trk_onkey:
     xor al, al
 .rset:
     call trk_rate_set
+    jmp .out
+.smooth:
+    call trk_smooth_toggle          ; S (SPEC.md 45.11 - fullscreen reach)
     jmp .out
 .play:
     mov al, 0
@@ -422,7 +430,12 @@ trk_oncmd:
     cmp bh, 1
     jne .out
     or bl, bl                       ; View > Fullscreen: toggle
-    jnz .out
+    jz .vfull
+    cmp bl, 1                       ; View > Smooth (SPEC.md 45.11)
+    jne .out
+    call trk_smooth_toggle
+    jmp .out
+.vfull:
     cmp byte [trk_fs], 0
     je .enter
     call trk_fs_exit
@@ -659,6 +672,14 @@ trk_fs_enter:
     jmp .out
 .ok:
     mov byte [trk_fsever], 1
+    cmp byte [trk_smooth], 0        ; Smooth (SPEC.md 45.11): borrow the 32
+    je .draw                        ; back buffer for the fullscreen stay
+    mov al, 1
+    call OSAPI_GFX_DBUF             ; lock held (we are in a key/click/menu
+    jc .draw                        ; callback); CF=1 = mono or small: draw
+    mov [trk_bbprev], al            ; direct as before
+    mov byte [trk_bbheld], 1
+.draw:
     call tui_draw_all
 .out:
     pop bx
@@ -670,6 +691,13 @@ trk_fs_exit:
     push bx
     cmp byte [trk_fs], 0
     je .out
+    cmp byte [trk_bbheld], 0        ; hand back the user's buffer state
+    je .fs                          ; BEFORE the exit repaint, so the
+    mov al, [trk_bbprev]            ; desktop redraw takes the mode the
+    call OSAPI_GFX_DBUF             ; user actually chose (SPEC.md 45.11);
+    mov byte [trk_bbheld], 0        ; a close-while-fullscreen never runs
+                                    ; this - recorded in 45.11, not fenced
+.fs:
     mov byte [trk_fs], 0
     mov al, 0
     mov bx, [trk_win]
@@ -871,6 +899,59 @@ trk_reap:
 trk_play_stop:
     call trk_stream_close
     call mp_stop
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_smooth_toggle - flip Smooth (SPEC.md 45.11). UI context, lock held
+; (key S or View > Smooth). While fullscreen the change applies live:
+; arming borrows the SPEC.md 32 back buffer (previous state banked for the
+; exit hand-back), disarming returns the user's mode now. Windowed it just
+; decides what the next fullscreen entry does.
+; -----------------------------------------------------------------------------
+trk_smooth_toggle:
+    push ax
+    push bx
+    push si
+    mov al, [trk_smooth]
+    xor al, 1
+    mov [trk_smooth], al
+    cmp byte [trk_fs], 0
+    je .menu
+    or al, al
+    jz .disarm
+    cmp byte [trk_bbheld], 0        ; arm live (unless already borrowed)
+    jne .menu
+    mov al, 1
+    call OSAPI_GFX_DBUF
+    jc .menu                        ; mono/small: nothing to smooth
+    mov [trk_bbprev], al
+    mov byte [trk_bbheld], 1
+    jmp .menu
+.disarm:
+    cmp byte [trk_bbheld], 0
+    je .menu
+    mov al, [trk_bbprev]
+    call OSAPI_GFX_DBUF
+    mov byte [trk_bbheld], 0
+.menu:
+    mov si, trk_s_smoff             ; relabel + MENU_SET (the kernel holds
+    cmp byte [trk_smooth], 0        ; a COPY of the set, SPEC.md 12.2)
+    je .lab
+    mov si, trk_s_smon
+.lab:
+    mov [trk_mi_view + 2], si
+    mov bx, [trk_win]
+    mov si, trk_menus
+    call OSAPI_MENU_SET
+    mov si, trk_s_smmoff
+    cmp byte [trk_smooth], 0
+    je .msg
+    mov si, trk_s_smmon
+.msg:
+    call tui_msg
+    pop si
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1125,7 +1206,7 @@ trk_tpl:
 ; --- app menu set (SPEC.md 12.2) -----------------------------------------------
     OS88_MENUSET trk_menus, trk_m_name, trk_oncmd
         OS88_MENU trk_m_file, trk_mi_file, 2
-        OS88_MENU trk_m_view, trk_mi_view, 1
+        OS88_MENU trk_m_view, trk_mi_view, 2
         OS88_MENU trk_m_rate, trk_mi_rate, 3
     OS88_MENUSET_END trk_menus
 
@@ -1138,8 +1219,11 @@ trk_s_open:  db 'Open...', 0
 trk_s_xtoff: db 'XT Mode: Off', 0
 trk_s_xton:  db 'XT Mode: On', 0
 trk_m_view:  db 'View', 0
-trk_mi_view: dw trk_s_fullm
+trk_mi_view: dw trk_s_fullm, trk_s_smon ; item 1 repointed by
+                                        ; trk_smooth_toggle (SPEC.md 45.11)
 trk_s_fullm: db 'Fullscreen', 0
+trk_s_smon:  db 'Smooth: On', 0
+trk_s_smoff: db 'Smooth: Off', 0
 trk_m_rate:  db 'Rate', 0
 trk_mi_rate: dw trk_s_r11d, trk_s_r22, trk_s_r44 ; the active pick is its
                                         ; own MENU_DIS twin - the radio
@@ -1173,6 +1257,8 @@ trk_s_snderr: db 'Sound open failed', 0
 trk_s_xtmon:  db 'XT mode on - Enter plays', 0
 trk_s_xtmoff: db 'XT mode off - Enter plays', 0
 trk_s_norate: db '44 kHz needs a DSP 4.x card', 0
+trk_s_smmon:  db 'Smooth on', 0
+trk_s_smmoff: db 'Smooth off', 0
 
 ; =============================================================================
 ; The other two thirds of the package
@@ -1211,6 +1297,10 @@ trk_s_norate: db '44 kHz needs a DSP 4.x card', 0
     TRKB trk_rsel                   ; the Rate menu's pick (SPEC.md 45.10):
                                     ; 0/1/2 = 11/22/44 kHz; bss zeroes to
                                     ; the 11 kHz default
+    TRKB trk_smooth                 ; Smooth (SPEC.md 45.11) - set to 1 by
+                                    ; the entry proc (bss zeroes, default On)
+    TRKB trk_bbprev                 ; ...the user's back-buffer state, banked
+    TRKB trk_bbheld                 ; ...1 = we borrowed it (hand back at exit)
     TRKB trk_mixing                 ; the worker is inside a trk_feed pass -
                                     ; trk_stream_close drains it before any
                                     ; UI-task touch of mp_* state or the blob

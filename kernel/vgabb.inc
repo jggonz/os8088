@@ -199,6 +199,29 @@ bb_set:
     ret
 
 ; -----------------------------------------------------------------------------
+; osapi_gfx_dbuf - API slot 0x01F0 (SPEC.md 32/20.3): a package's bb_set.
+; in:  AL = 1 arm / 0 disarm; caller holds the gfx lock (the CP's context)
+; out: CF=1 [bb_avail] clear, NOTHING changed - the gate covers BOTH
+;      directions, because bb_set's AL=0 path keys on [bb_on], which a mono
+;      adapter holds at 1 as its RENDERER (SPEC.md 39.3); CF=0 done, AL =
+;      the previous [bb_dbl] (hand it back here to restore the user's mode)
+; clobbers: nothing else
+; -----------------------------------------------------------------------------
+osapi_gfx_dbuf:
+    cmp byte [bb_avail], 0
+    je .no
+    push bx
+    mov bl, [bb_dbl]            ; the previous state, before bb_set moves it
+    call bb_set
+    mov al, bl
+    pop bx
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; bb_mono_chk - retire [bb_mono] if [gfx_color] is not 0 or 15
 ;
 ; Called from gfx_fill and font_char - the only two places a colour other
