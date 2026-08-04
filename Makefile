@@ -224,6 +224,21 @@ $(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/recorder.o88: $(BUILD)/recorder.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/recorder.bin -o $@
 
+# Tracker (SPEC.md 45): a four-channel ProTracker MOD player, ported back
+# from `main` with the rest of the sound apps. Its mixer is a worker task
+# feeding a RING-mode stream (SPEC.md 34.5), which is the only thing in the
+# tree that uses ring mode at all, and the module blob is a heap claim read
+# with OSAPI_FILE_READBIG - the one file op with no 64KB ceiling, which is
+# why it exists. Three sources, one binary.
+$(BUILD)/tracker.bin: apps/tracker/tracker.asm apps/tracker/trkplay.inc \
+                      apps/tracker/trkui.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/tracker/ -o $@ apps/tracker/tracker.asm
+	@echo "tracker: $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/tracker.o88: $(BUILD)/tracker.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/tracker.bin -o $@
+
 # Fractal, the sixth shipped package: five escape-time fractals in Q4.12
 # fixed point, rendered by a background WORKER TASK (SPEC.md 20.6) while the
 # GUI stays live. The first client of OSAPI_TASK_SPAWN / OSAPI_TASK_ALIVE.
@@ -334,15 +349,24 @@ $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 tools/os88disk.py
 # `main` does; it sits LAST here and third there, because the append rule
 # above outranks matching the other fork's row order.)
 APPS_TOOLS := $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/piano.o88 \
-              $(BUILD)/fractal.o88 $(BUILD)/paint.o88 $(BUILD)/recorder.o88
+              $(BUILD)/fractal.o88 $(BUILD)/paint.o88 $(BUILD)/recorder.o88 \
+              $(BUILD)/tracker.o88
 APPS_GAMES := $(BUILD)/mines.o88 $(BUILD)/solitair.o88 $(BUILD)/arkanoid.o88
-APPS := $(APPS_TOOLS) $(APPS_GAMES)
+
+# Data that ships beside the programs that read it (SPEC.md 24): os88disk.py
+# treats anything not ending .o88 as a plain file. Tracker with no module to
+# open is a player with nothing to play, and this is the one it was written
+# against - so it travels with it rather than being something you have to
+# find. 116KB, which the 360KB disk can still hold alongside every package.
+APPS_DATA := apps/tracker/beverly.mod
+APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA)
 
 # ...and the same list with the folder each package lands in. os88disk.py
 # reads a "DIR:" prefix per package, so the grouping lives here rather than
 # in the tool.
 APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
-            $(addprefix GAMES:,$(APPS_GAMES))
+            $(addprefix GAMES:,$(APPS_GAMES)) \
+            $(addprefix APPS:,$(APPS_DATA))
 
 $(APPSIMG): $(APPS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS)

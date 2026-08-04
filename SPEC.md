@@ -7035,17 +7035,40 @@ end.
   and gated by the user policy byte `snd_excl_ok` (default on,
   CP-flippable) — `osapi_snd_play` returns err 3 while it is off.
 
-### 34.5 Sound Blaster — retired
+### 34.5 Sound Blaster — back, as a driver
 
-The Sound Blaster driver, its DMA buffers and its stream verbs were removed
-with the rest of the non-speaker tiers; the number is held so that the
-references above to the retired `sbl_*` tasks still resolve, and so that §34
-numbers the same topics `main` does.
+Retired once, and no longer: `drivers/sound/sb.inc` is the DSP scan, the
+stream verbs, the auto-init/single-cycle strategy gate and the deferred IRQ
+discovery, all of it inside `SOUND.DRV` rather than the kernel (§51.4). What
+changed in the move is where its memory comes from — a **heap claim** taken at
+attach (`sbl_dma_map`, `OSAPI_MEM_CLAIM_DMA`), not a pinned segment, which is
+why the 64KB DMA-page rule had to become something the allocator answers
+(§50.3) rather than a property the address had by construction.
 
-### 34.6 Recording and staging — retired
+The stream verbs reach it through `osapi_snd_stream` (slot `0x0100`), which is
+the one slot where **DX is an input on some verbs and an output on another**:
+the rate on 0 and 4, the consumed count on 3. The stub banks it for the
+former and must not for the latter — getting that wrong made every poller
+believe a finished stream was still playing.
 
-Went with §34.5. `osapi_snd_play` reads the caller's `ES:SI` in place, so
-there is no staging pool and nothing to record into.
+### 34.6 Recording and staging — back, as a driver
+
+Went with §34.5 and came back with it. Verb 7 grants out of the driver's
+staging pool, verb 6 stages into a grant and verb 5 reads back out of one,
+and verb 4 opens an input stream that the drain task fills.
+
+**The pool is the driver's, so its size is not a constant an app may assume.**
+The Sound Blaster's is `SBL_WANT` minus its DMA-visible head — 20,480 bytes
+today — where `main`'s was a pinned 64KB segment. An app that needs a big
+grant asks in TIERS and records into what it got; `apps/recorder` is the
+reference for that, and the reason it works on a machine whose driver claimed
+less than it hoped for.
+
+**A verb on a machine with no driver answers `AX = 4`, not `AX = 0`.**
+`drv_svc_call`'s generic refusal returns 0 with CF=1, which is right for the
+FM and tone slots — their contract is CF alone — and exactly wrong here,
+because `AX = 0` is how every stream verb says OK. The slot tests
+`DSV_STREAM` itself and answers in the verbs' own vocabulary.
 
 ### 34.7 State, boot gate, teardown
 
@@ -7082,18 +7105,36 @@ there is no staging pool and nothing to record into.
   alone. Far code keeps DS = KERNEL_SEG, so it reads its data from `.text`
   (§33 rule 2).
 
-## 35. Recorder — retired
+## 35. Recorder — the sound layer's recording client
 
-`apps/recorder` was the sound layer's recording and streaming client: it
-needed `SND_CAP_PCM_IN` (a Sound Blaster) to record, `PCM_BG` streams to
-play back, and the §34.6 staging pool to hold a clip. All three went with
-the sound cards, and the package went with them. The section number is
-kept so every other reference in this document still points where it did.
+`apps/recorder` needs `SND_CAP_PCM_IN` (a Sound Blaster) to record and
+`PCM_BG` streams to play back; both went with the sound cards when those were
+removed, and both came back as `SOUND.DRV` (§51.4), so the package came back
+with them. One window: a waveform strip, two status lines and four buttons
+(REC / STOP / PLAY / DEMO), each also an item in a **Sound** menu (§12.2)
+calling the very routine its button calls — so a command picked in the wrong
+state is refused with the same status line a click on the greyed button would
+have written.
 
-The shipped apps disk is therefore **mines, hello, notepad, piano,
-fractal, paint** — six packages, and everything that used to sit after
-Recorder moved down one row. Scripted tests click the Disk window by row
-index (§16), so that shift is load-bearing.
+Three things about it are worth knowing:
+
+- **It sizes its grant in tiers** (§34.6): 5 s, 3, 2, 1, keeping the first the
+  driver will part with, because the staging pool is the driver's and 40,000
+  bytes is not always there. The floor is the demo's own length, so the
+  built-in sweep fits every tier and the app is never useless. Line 2 shows
+  the capacity it actually got, because that is no longer the same number on
+  every machine.
+- **Progress is POLLED** (§34.3 — there are no sound events): every paint and
+  click runs `rc_poll`, which reads verb 3 and retires finished or
+  watchdog-stopped streams. On QEMU no input IRQ ever arrives, so a recording
+  always lands on the watchdog path and says so honestly.
+- **It stays useful with no card**: DEMO stages a built-in 400→800→400 Hz
+  sweep and PLAY falls back to `OSAPI_SND_PLAY` speaker chunks. With no driver
+  at all it says NO SOUND DRIVER rather than blaming memory, which is the
+  distinction §34.6's `AX = 4` exists to make.
+
+Teardown needs nothing from the app: `snd_release_inst` (§34.3) force-closes
+any live stream and frees the grant.
 
 ## 36. Piano — the fifth package (apps/piano/piano.asm)
 
@@ -9119,6 +9160,39 @@ game steers with the mouse, so the callback's whole body is `ark_track` plus
 as a hung window, which is the only reason the slot is non-zero. It is the
 window's *content* that dispatches it: a click on the frame or the drop shadow
 never reaches a callback, so the panel correctly survives one.
+
+## 45. Tracker — the tenth package (apps/tracker/tracker.asm)
+
+A four-channel ProTracker MOD player: `tracker.asm` (shell, menus, the file
+dialog completion proc), `trkplay.inc` (the loader and the mixer) and
+`trkui.inc` (the FastTracker II-style fullscreen interface). Prefix `trk_`,
+mixer prefix `mp_`, UI prefix `tui_`. It ships with `BEVERLY.MOD` beside it on
+the apps disk, because a player with nothing to play is not a demonstration of
+anything — `os88disk.py` takes any non-`.o88` argument as a plain data file
+(§24).
+
+It is the most demanding client the API has, and it is the only thing in the
+tree that exercises three features at once:
+
+- **Ring mode** (§34.5, verb 0 with `AH` bit 0). Nothing else uses it. The
+  mixer worker stages at `ringbase + (total & mask)` and feeds a *delta*
+  forever, so a module plays with no close-and-reopen seam and out of a grant
+  far smaller than the song.
+- **`OSAPI_FILE_READBIG`**, which exists because real MODs exceed
+  `dskw_read`'s 64KB ceiling: `BEVERLY.MOD` is 116KB, and the destination
+  advances by SEGMENT so it lands in one call. The Disk window shows its size
+  as 65535 — the directory listing's size field is 16 bits and saturates —
+  which is a display limit and not a load limit; the chain walk uses the real
+  length.
+- **The mixer is a worker task** (§20.6), so the GUI stays live while it
+  plays, and `OSAPI_GFX_DBUF` plus `OSAPI_GFX_SCROLL` keep the fullscreen
+  pattern view from tearing under it.
+
+The module blob is a **heap claim**, sized from `OSAPI_MEM_AVAIL` and capped
+at 128KB. Its lifetime is the fence that matters: `trk_play_stop` closes the
+stream and *drains* the worker's in-flight feed pass before the blob is freed
+or replaced, because a mixer mid-fetch from a grant that has just been handed
+back reads samples out of whatever claimed the memory next.
 
 ## 50. memory.inc — the claim heap
 
