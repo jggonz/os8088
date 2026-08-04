@@ -5527,12 +5527,28 @@ what is not redrawn must not be blanked either.
 The chunk, rather than the row, is the unit for a measured reason: a row
 carried **one** key until it was found to be redrawing the name, the state
 and the memory figure every time a CPU percentage ticked over — 20 glyphs to
-change three, twice a second, on the machines least able to afford it. It is
-also the granularity the clip region wants (§11.3), so `tm_row_draw` answers
-both questions at one width: **what changed** and **what may be drawn at
-all**. A vertical clip edge costs the one chunk it crosses instead of the
-whole row, and a chunk that *is* crossed zeroes its own key so it is tried
-again rather than recorded as drawn while blank.
+change three, twice a second, on the machines least able to afford it.
+
+**The two questions do NOT share a width, and assuming they did cost five
+characters.** The chunk is right for *what changed*; for *what may be drawn*
+the answer is still the 8x8 cell, because that is what `font_char` can draw
+or not draw. A whole-chunk clip test throws away all five cells to protect
+the one an edge crosses, and a chunk holding a single inked character loses
+that character outright — a package row is `' PAINT …'`, so the split falls
+`" PAIN"` | `"T …"` and a window edge in the second chunk erased the T and
+nothing else. It reads as letters going missing in arbitrary positions,
+sometimes several at once, because which ones go depends only on where the
+edge falls against the five-character grid; and it shows as *blank* rather
+than stale whenever the row is new, since nothing was ever drawn there.
+
+So a chunk the region cuts — and only that chunk — is redrawn a **cell** at a
+time (`tm_chunk_cells`): each 8x8 cell is tested on its own, and a cell
+wholly inside one fragment is erased and lettered while a crossed one is left
+alone entirely, both halves of the granularity rule together. That is four
+extra clip tests on at most one chunk per row per vertical edge, and nothing
+at all on a row nothing covers. The cut chunk's key is forgotten afterwards
+whatever happened, because a chunk that took this path was by definition not
+drawn whole.
 
 The last chunk's fill runs on to the row band's right edge, because the pen
 is inset from the band and no chunk covers the tail; the string is

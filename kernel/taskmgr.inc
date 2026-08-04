@@ -2240,10 +2240,11 @@ tm_row_draw:
     add dx, 7                   ; AX/BX/CX/DX = the chunk's rect
     call wm_clip_test
     jnc .draw
-    mov bx, [tm_ckb]            ; the region cuts it: forget the record just
-    mov word [bx], 0            ; made, so the chunk is tried again rather
-                                ; than left blank and called clean
-    jmp short .next
+    call tm_chunk_cells         ; the region cuts it: per CELL instead, so a
+    mov bx, [tm_ckb]            ; vertical edge costs the characters it
+    mov word [bx], 0            ; actually crosses and not the four beside
+    jnc .gdone                  ; them. Forget the record either way - a cut
+    jmp short .next             ; chunk is never wholly drawn
 .draw:
     push ax
     push cx
@@ -2292,6 +2293,84 @@ tm_row_draw:
     ret
 .drew:
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_chunk_cells - draw one chunk a CELL at a time, for the one chunk per row
+;                  that a clip edge crosses (SPEC.md 11.3/28)
+; in:  AX = the chunk's x1, DI -> its TM_CHUNK characters, [tm_rowy] placed;
+;      gfx lock held, clip armed
+; out: CF = 0 at least one cell drew, CF = 1 none did; all registers preserved
+;
+; The chunk is the right unit for "did this text change" and very nearly the
+; right one for "may this be drawn" - but not quite, and the difference is
+; five characters wide. A whole-chunk clip test throws away all five cells to
+; protect the one the edge crosses, and a chunk holding a single inked
+; character loses that character: a package row is ' PAINT ...', so the split
+; falls " PAIN" | "T ...", and a window edge in the second chunk erased the T
+; and nothing else. Which characters go depends only on where the edge lands
+; against the five-character grid, which is why it read as letters going
+; missing in arbitrary positions, sometimes several at once.
+;
+; So the cut chunk - and only the cut chunk - asks the question a cell at a
+; time, which is the granularity font_char itself works at. A cell wholly
+; inside one fragment is erased and lettered; one the edge crosses is left
+; alone entirely, both halves of the granularity rule together. That costs
+; four extra clip tests on at most one chunk per row per vertical edge, and
+; nothing at all on a row nothing covers.
+;
+; The caller forgets the chunk's check word afterwards whatever happens here:
+; a chunk this ran on was by definition not drawn whole.
+; -----------------------------------------------------------------------------
+tm_chunk_cells:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov byte [tm_cdrew], 0
+    mov byte [tm_ccn], TM_CHUNK
+    mov si, di                  ; SI -> the characters, DI -> the cell's x
+    mov di, ax
+.cell:
+    mov ax, di                  ; the CELL's own rect - the same question
+    mov cx, di                  ; font_char asks about the glyph it holds
+    add cx, 7
+    mov bx, [tm_rowy]
+    mov dx, bx
+    add dx, 7
+    call wm_clip_test
+    jc .cnext                   ; crossed: leave its pixels alone, both the
+                                ; erase and the letter
+    mov byte [gfx_color], CWHITE
+    call gfx_fill               ; (AX/BX/CX/DX are still the cell's rect)
+    mov al, [si]
+    or al, al
+    jz .drew                    ; past the string's end an erase is all it is
+    mov byte [gfx_color], CBLACK
+    mov cx, di
+    mov dx, [tm_rowy]
+    call font_char
+.drew:
+    inc byte [tm_cdrew]
+.cnext:
+    inc si
+    add di, 8
+    dec byte [tm_ccn]
+    jnz .cell
+    cmp byte [tm_cdrew], 0      ; (pop leaves the flags alone)
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    je .none
+    clc
+    ret
+.none:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3504,6 +3583,9 @@ tm_ci:      resw 1              ; tm_row_draw's chunk index (BP is the task's
                                 ; instance record and cannot be borrowed)
 tm_ckb:     resw 1              ; ...and the running check-word pointer, for
                                 ; the same reason
+tm_ccn:     resb 1              ; tm_chunk_cells' cell counter and how many of
+tm_cdrew:   resb 1              ; them drew - in memory for the same reason,
+                                ; the cell's rect needing all four of AX/BX/CX/DX
 tm_rowck:   resw TM_NCK * TM_NCHUNK  ; the last drawn content of each row, a
                                 ; word per CHUNK (tm_chunksum), plus one
                                 ; virtual row for the CPU caption (TMR_CPU).
