@@ -584,8 +584,11 @@ ark_abdismiss:
     je .none
     mov byte [ark_abon], 0
     call ark_draw_all               ; the game stays paused: the key that took
-    stc                             ; the credits down is not also a resume
-    ret
+    mov byte [ark_full], 0          ; the credits down is not also a resume.
+    mov byte [ark_msg], 0           ; This IS the whole repaint every skipped
+    mov byte [ark_stat], 0          ; frame under the panel asked for, so it
+    stc                             ; settles the debt rather than leaving the
+    ret                             ; worker to draw the board a second time
 .none:
     clc
     ret
@@ -1878,14 +1881,14 @@ ark_render:
     mov es, ax
     mov bx, [ark_win]
     test word [es:bx + W_FLAGS], 2  ; still visible?
-    jz .unlock
+    jz .skip
     mov si, bx
     call ark_track                  ; the window may have been dragged
     mov bx, [ark_win]
     call OSAPI_WM_CLIP_SET
-    jc .unlock
+    jc .skip
     cmp byte [ark_abon], 0          ; the credits are up: the UI task owns the
-    jne .unlock                     ; content until a click or a key takes them
+    jne .skip                       ; content until a click or a key takes them
                                     ; down, and the game is paused underneath
     cmp byte [ark_full], 0
     je .parts
@@ -1912,6 +1915,22 @@ ark_render:
     mov byte [ark_msg], 0
     call ark_clear_msg
     call ark_draw_msg
+    jmp short .unlock
+
+    ; --- a frame that drew nothing owes a WHOLE one -------------------------
+    ; ark_update ran and moved everything; the screen did not follow. Every
+    ; erase this module does is aimed at where something was last DRAWN, so
+    ; one skipped frame is survivable - but that is an invariant six separate
+    ; pieces of state have to keep, and it cost a stranded capsule once
+    ; already (SPEC.md 44.4).
+    ;
+    ; In practice the kernel repaints us anyway: un-hiding goes through
+    ; wm_show, uncovering through wm_paint_dmg, and both end in W_PAINT. That
+    ; is a guarantee this module cannot enforce and does not own - and it is
+    ; being actively narrowed (SPEC.md 11.90/11.91 exist to make W_PAINT run
+    ; LESS often). One byte buys independence from it.
+.skip:
+    mov byte [ark_full], 1
 .unlock:
     call OSAPI_GFX_UNLOCK
     pop di
