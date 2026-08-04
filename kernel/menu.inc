@@ -203,13 +203,25 @@ menu_win_set:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_check - revert to Locator if the bar's owner stopped being visible
+; menu_check - hand the bar on when its owner stops being visible
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ;
 ; One validation covers close, minimize and hide (SPEC.md 12): wm_destroy
 ; clears W_FLAGS outright and wm_hide clears the visible bit, so neither
 ; path needs to know the menu bar exists.
+;
+; The bar goes to the window PROMOTED in its place, not to Locator. Losing
+; the front window promotes whatever was under it - wm_paint_dmg redraws
+; that window's title bar with the pinstripes and the two boxes for exactly
+; that reason (SPEC.md 11.5) - and the bar has to name the same application
+; the pinstripes do, or the screen says two different things about which app
+; is active. wm_top answers 0 when no visible window is left, and 0 IS
+; Locator, so the old fallback is still the last rung of this one.
+;
+; A deliberate switch to Locator (the .desk_icons branch of the event
+; ladder, SPEC.md 12) stays put: [menu_win] = 0 leaves here at the first
+; test, so a later hide cannot drag the bar back onto a window.
 ; -----------------------------------------------------------------------------
 menu_check:
     push bx
@@ -218,10 +230,10 @@ menu_check:
     jz .out
     test word [bx + W_FLAGS], 2 ; still visible?
     jnz .out
-    xor bx, bx
-    call menu_activate          ; back to Locator (CF ignored: our caller
-.out:                           ; is menu_draw_bar, already drawing)
-    pop bx
+    call wm_top                 ; BX = the window promoted in its place, or
+    call menu_activate          ; 0 = nothing visible = Locator (CF ignored:
+.out:                           ; our caller is menu_draw_bar, already
+    pop bx                      ; drawing)
     ret
 
 ; -----------------------------------------------------------------------------
