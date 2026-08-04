@@ -907,6 +907,69 @@ menu_popup:
 ; that it did not, and menu_title_xor's self-inverting highlight stopped being
 ; self-inverting; see the comment at .repaint.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; menu_save_kb - how big a save-under does THIS menu need? (SPEC.md 12.4/50.2)
+;
+; in:  [menu_x1]/[menu_x2]/[menu_y1]/[menu_y2], set by menu_drop's caller
+; out: AX = KB to claim, never 0 (mem_claim refuses that)
+; clobbers: AX (the output), flags
+;
+; gfx_save costs planes x rows x (byte span + 1), which is exactly what the
+; build-time assert in kernel.asm bounds - and the claim used to BE that
+; bound: a flat MENU_SAVE_KB, sized for eleven items at the widest a package
+; may declare, taken whole for a four-item pull-down.
+;
+; That is a fifth of a 128KB machine's heap for the duration of a menu, and
+; on one with a sound card it simply could not be had: 55K of heap, 38K held
+; by the driver, 20K asked for. The save-under was refused on EVERY menu
+; there, so every menu repainted instead of restoring - the slow path, taken
+; permanently, on the machine least able to afford it.
+;
+; Sized from the rect, Locator's File menu wants ~4KB on VGA and ~1KB on
+; Hercules, where [vid_planes] is 1 and three quarters of the fixed figure
+; was never going to be written to at all.
+;
+; The +2 is the assert's own slack: +1 makes a span a count, and +1 covers
+; the rect starting mid-byte, which is the same allowance MENU_MAXW/8 + 2
+; makes. Every factor is clamped (MENU_MAXW, MENU_POPMAX, [vid_popmax]), so
+; the multiplies cannot leave 16 bits - the assert is the proof of that, and
+; it still holds as the ceiling this can never exceed.
+; -----------------------------------------------------------------------------
+menu_save_kb:
+    push bx
+    push cx
+    push dx
+    mov ax, [menu_x2]
+    mov cl, 3
+    shr ax, cl                  ; the rect's last byte column...
+    mov bx, [menu_x1]
+    shr bx, cl                  ; ...and its first
+    sub ax, bx
+    add ax, 2                   ; span -> count, plus the misalignment byte
+    mov bx, [menu_y2]
+    sub bx, [menu_y1]
+    inc bx                      ; BX = rows
+    mul bx                      ; AX = bytes for one plane
+    mov bx, [vid_planes_w]      ; ...times the planes this adapter HAS: 4 on
+    mul bx                      ; VGA, 1 on Hercules and CGA (SPEC.md 39.2).
+                                ; The _w twin, because vid_planes itself is a
+                                ; BYTE and a word read of it takes the low
+                                ; half of this very variable with it - 0x0404,
+                                ; a thousand planes, and a claim bigger than
+                                ; the fixed one it replaced
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl                  ; ...as KB, rounded UP
+    or ax, ax
+    jnz .out
+    inc ax                      ; a 0 KB claim is refused, and a rect this
+.out:                           ; small still needs somewhere to go
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 menu_drop:
     push bx
     push cx
@@ -917,7 +980,8 @@ menu_drop:
 
     ; --- claim the save-under for as long as this menu is down ----------------
     mov word [menu_sseg], 0
-    mov ax, MENU_SAVE_KB
+    call menu_save_kb           ; AX = what THIS menu's rect needs, not the
+                                ; worst case any menu could
     mov bx, MEM_K_SAVE
     call mem_claim
     jc .noclaim                 ; refused: the restore repaints instead

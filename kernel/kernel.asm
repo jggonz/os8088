@@ -881,12 +881,14 @@ KBUF_KB    equ ((FAT_PARA + LOW_PARA) * 16 + 1023) / 1024
 %if MENU_BARMAX * MB_ENTSZ > 84
 %error "menu_bar is too small for MENU_BARMAX cells - raise the resb in menu.inc"
 %endif
-; 4. the menu save-under (SPEC.md 2.2/12.4) must fit the claim menu_init
-;    takes for it. gfx_save costs planes x rows x (byte span + 1); the two
-;    clamps in menu.inc bound both factors, and this is where they are
-;    checked against the buffer they write into. The save-under is the ONE
-;    kernel buffer outside the budget above, deliberately: it is 20KB that
-;    exists only while a menu is down (SPEC.md 50).
+; 4. the menu save-under (SPEC.md 2.2/12.4) must fit MENU_SAVE_KB. gfx_save
+;    costs planes x rows x (byte span + 1); the two clamps in menu.inc bound
+;    both factors, and this is where they are checked. The claim itself is
+;    menu_save_kb, sized from the RECT ACTUALLY DROPPED - so this is now the
+;    ceiling that arithmetic can never exceed rather than the figure claimed,
+;    and what it really proves is that menu_save_kb's multiplies stay inside
+;    16 bits. The save-under is the ONE kernel buffer outside the budget
+;    above, deliberately: it exists only while a menu is down (SPEC.md 50).
 %if 4 * (MENU_POPMAX*MENU_ITEM_H + 2) * (MENU_MAXW/8 + 2) > MENU_SAVE_KB*1024
 %error "menu save-under can overflow its claim - lower MENU_POPMAX/MENU_MAXW"
 %endif
