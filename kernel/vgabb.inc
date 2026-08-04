@@ -255,7 +255,7 @@ bb_set:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_gfx_dbuf - API slot 0x01F0 (SPEC.md 32/20.3): a package's bb_set.
+; osapi_gfx_dbuf - API slot 0x01D8 (SPEC.md 32/20.3): a package's bb_set.
 ; in:  AL = 1 arm / 0 disarm; caller holds the gfx lock (the CP's context)
 ; out: CF=1 [bb_avail] clear, NOTHING changed - the gate covers BOTH
 ;      directions, because bb_set's AL=0 path keys on [bb_on], which a mono
@@ -367,7 +367,7 @@ bb_dirty_rect:
     jmp bb_dirty                ; its ret returns to our caller
 
 ; -----------------------------------------------------------------------------
-; gfx_scroll - vertical scroll blit (SPEC.md 5.5; API slot 0x01F8)
+; gfx_scroll - vertical scroll blit (SPEC.md 5.5; API slot 0x01E0)
 ;
 ; in:       AX = x1, BX = y1, CX = x2, DX = y2 (inclusive, absolute screen
 ;           coords), SI = dy SIGNED: positive moves the rect's content UP dy

@@ -305,12 +305,6 @@ cold_entry:
     times 5 db 0
 %endmacro
 
-%macro OSAPI_RSLOT 0                ; a number HELD EMPTY (SPEC.md 20.3)
-    stc                             ; `main` uses it for something this fork
-    retf                            ; does not have, so it is reserved rather
-    times 6 db 0                    ; than reused: a stray call gets CF=1 and
-%endmacro                           ; every register back, never our own code
-
 osapi_table:
     OSAPI_SLOT gfx_lock           ; 0x0010
     OSAPI_SLOT gfx_unlock         ; 0x0018
@@ -385,96 +379,78 @@ osapi_table:
     OSAPI_SLOT wm_geom            ; 0x01B0 - content size + visibility
                                   ;          (SPEC.md 11): the one read a
                                   ;          package on EITHER fork can make
-    OSAPI_RSLOT                   ; 0x01B8 - HELD: `main`'s OSAPI_MEM_ALLOC
-    OSAPI_RSLOT                   ; 0x01C0 - HELD: `main`'s OSAPI_MEM_FREE
-    OSAPI_RSLOT                   ; 0x01C8 - HELD: `main`'s OSAPI_MEM_AVAIL.
-                                  ;          This fork's claim heap counts KB
-                                  ;          and answers in DX (SPEC.md 50.3);
-                                  ;          `main`'s arena counts PARAGRAPHS
-                                  ;          and answers in AX. Same names,
-                                  ;          different contracts - so all
-                                  ;          three numbers are held and the
-                                  ;          heap keeps its own below, because
-                                  ;          a slot that meant two things
-                                  ;          would fail silently and by the
-                                  ;          wrong factor of 64
-    OSAPI_SLOT wm_resize          ; 0x01D0 - resize a window (SPEC.md 11.1):
+    OSAPI_SLOT wm_resize          ; 0x01B8 - resize a window (SPEC.md 11.1):
                                   ;          BX = win, CX = w, DX = h; lock
                                   ;          held. Retires the last liberty
                                   ;          in docs/PAINT-NOTES.md - an app
                                   ;          writing W_W/W_H itself
-    OSAPI_SLOT gfx_blit4          ; 0x01D8 - packed 4bpp block (SPEC.md 5.4):
+    OSAPI_SLOT gfx_blit4          ; 0x01C0 - packed 4bpp block (SPEC.md 5.4):
                                   ;          ES:SI = source, BP = stride,
                                   ;          AX/BX = dest, CX/DX = w/h. ES is
                                   ;          the caller's own choice here, so
                                   ;          no stub is needed
-    OSAPI_SLOT wm_about_set       ; 0x01E0 - the app-name pull-down (12.2):
+    OSAPI_SLOT wm_about_set       ; 0x01C8 - the app-name pull-down (12.2):
                                   ;          BX = win, SI = your About handler
-    OSAPI_JSLOT api_file_readbig  ; 0x01E8 - the one file op with no 64KB
+    OSAPI_JSLOT api_file_readbig  ; 0x01D0 - the one file op with no 64KB
                                   ;          ceiling (SPEC.md 18.4): N, and
                                   ;          the destination advances BY
                                   ;          SEGMENT, so a package can load a
                                   ;          116KB module into a heap claim
-; --- and here `main`'s table ends -------------------------------------------
-;     0x01F0..0x0238 are RESERVED for `main` to grow into. This fork's own
-;     slots used to start immediately above its highest, and `main` promptly
-;     took the next number (readbig, 0x01E8) - so the block moved once
-;     already. Ten cells of headroom is the cheap way not to move it again,
-;     and it is the same reasoning as SPEC.md's reserved 45-49 band.
-    OSAPI_SLOT osapi_gfx_dbuf     ; 0x01F0 - a package's own bb_set (SPEC.md
+    OSAPI_SLOT osapi_gfx_dbuf     ; 0x01D8 - a package's own bb_set (SPEC.md
                                   ;          32): AL = 1 arm / 0 disarm, out
                                   ;          AL = the state before, to hand
                                   ;          back. CF=1 on the wrong adapter
                                   ;          or a heap that cannot fund it
-    OSAPI_SLOT gfx_scroll         ; 0x01F8 - vertical scroll blit (SPEC.md
+    OSAPI_SLOT gfx_scroll         ; 0x01E0 - vertical scroll blit (SPEC.md
                                   ;          5.5): AX/BX/CX/DX = the rect,
                                   ;          SI = signed dy. The vacated rows
                                   ;          are the caller's to repaint
-    OSAPI_RSLOT                   ; 0x0200
-    OSAPI_RSLOT                   ; 0x0208
-    OSAPI_RSLOT                   ; 0x0210
-    OSAPI_RSLOT                   ; 0x0218
-    OSAPI_RSLOT                   ; 0x0220
-    OSAPI_RSLOT                   ; 0x0228
-    OSAPI_RSLOT                   ; 0x0230
-    OSAPI_RSLOT                   ; 0x0238
-; --- this fork's own, in one block (docs/PORTING.md 3) ----------------------
-    OSAPI_JSLOT api_mem_claim     ; 0x0240 - the claim heap (SPEC.md 50.3):
-    OSAPI_JSLOT api_mem_free      ; 0x0248   X, same fence as the spawn
-    OSAPI_SLOT osapi_mem_avail    ; 0x0250
-    OSAPI_SLOT osapi_font_glyphs  ; 0x0258 - the kernel's 8x8 glyph table
+; --- and here the numbers this fork shares with `main` end ------------------
+;     There is no gap and no reservation any more. Both existed to keep one
+;     number meaning one contract across two living branches: three cells
+;     were HELD where `main` puts its paragraph-counting arena, and ten were
+;     RESERVED for it to grow into. The branches are merging, so neither
+;     buys anything - and 88 bytes of `stc`/`retf` in the middle of a jump
+;     table is a strange thing to ship for a compatibility nobody is
+;     claiming. The block below moved DOWN to close them, which is the third
+;     time it has moved and the last: every package is in this tree and
+;     `make` rebuilds them all (SPEC.md 20.8 rule 4).
+    OSAPI_JSLOT api_mem_claim     ; 0x01E8 - the claim heap (SPEC.md 50.3):
+    OSAPI_JSLOT api_mem_free      ; 0x01F0   X, same fence as the spawn
+    OSAPI_SLOT osapi_mem_avail    ; 0x01F8
+    OSAPI_SLOT osapi_font_glyphs  ; 0x0200 - the kernel's 8x8 glyph table
                                   ;          (SPEC.md 6): out SI = its offset
                                   ;          in KERNEL_SEG, AL = first code,
                                   ;          AH = last, CX = bytes per glyph
-    OSAPI_SLOT wm_onsize          ; 0x0260 - install the resize negotiator
+    OSAPI_SLOT wm_onsize          ; 0x0208 - install the resize negotiator
                                   ;          (SPEC.md 11.1): BX = win, AX =
                                   ;          near proc. The other half of
                                   ;          docs/PAINT-NOTES.md's resize
                                   ;          complaint - wm_resize is the app
                                   ;          asking, this is the app answering
-    OSAPI_SLOT osapi_file_here    ; 0x0268 - where the file API's names
+    OSAPI_SLOT osapi_file_here    ; 0x0210 - where the file API's names
                                   ;          resolve (SPEC.md 18.4/19.2)
-    OSAPI_SLOT osapi_file_goto    ; 0x0270 - ...and how to put it back
-    OSAPI_JSLOT api_mem_regrow    ; 0x0278 - resize a claim you already hold
+    OSAPI_SLOT osapi_file_goto    ; 0x0218 - ...and how to put it back
+    OSAPI_JSLOT api_mem_regrow    ; 0x0220 - resize a claim you already hold
                                   ;          (SPEC.md 50.3): X, same owner
                                   ;          fence as the claim itself. In
                                   ;          place when the paragraphs above
                                   ;          are free, which is what stops a
                                   ;          grow needing old + new at once
-    OSAPI_SLOT wm_title_set       ; 0x0280 - retitle a window and redraw ONLY
+    OSAPI_SLOT wm_title_set       ; 0x0228 - retitle a window and redraw ONLY
                                   ;          its caption (SPEC.md 11.92): BX =
                                   ;          win, AX = the new string (0 = the
                                   ;          bytes W_TITLE names changed in
                                   ;          place). Not an X cell: the string
                                   ;          is read through W_SEG, which is
                                   ;          already the caller's segment
-    OSAPI_JSLOT api_drv_task      ; 0x0288 - a DRIVER's worker task (SPEC.md
+    OSAPI_JSLOT api_drv_task      ; 0x0230 - a DRIVER's worker task (SPEC.md
                                   ;          51.7): AX = a near entry in its
                                   ;          own segment, or 0 = "this IS the
                                   ;          worker, and it is exiting". X,
                                   ;          because the fence is an identity
                                   ;          test on the caller's segment
-osapi_table_end:                  ; 0x0290
+osapi_table_end:                  ; 0x0238
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -482,8 +458,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 80 * 8
-%error "os8088 API jump table must be exactly 80 8-byte slots"
+%if OSAPI_TABLE_LEN != 69 * 8
+%error "os8088 API jump table must be exactly 69 8-byte slots"
 %endif
 
 ; =============================================================================

@@ -275,7 +275,7 @@ through a garbage rect if you miss it.
 
 A caption changes on an **event**, never on a paint — so a window knows what it
 wants to be called *after* the frame carrying that caption has been drawn.
-`wm_title_set` (API slot 0x0280) is the correction: BX = window, AX = the new
+`wm_title_set` (API slot 0x0228) is the correction: BX = window, AX = the new
 `W_TITLE` (or **0**, "the bytes it already names changed underneath it"), lock
 held, and it draws `y .. y+TITLE_H-1` and **nothing else** — no content fill, no
 `W_PAINT`, no other window. Three ways out, picked by the granularity rule:
@@ -485,18 +485,24 @@ whole diagnosis.
 
 The forks were resynced once, partially and deliberately. Four things crossed:
 
-- **The API slot numbers.** Every slot whose contract matches `main`'s is now
-  at `main`'s number, so one package source assembles for either fork. Five
-  numbers are **held empty** rather than reused — `OSAPI_SND_FM` and
-  `OSAPI_SND_STREAM` (0x00F8/0x0100, no FM or SB sink here) and `main`'s
-  paragraph-counting arena (0x01B8..0x01C8, this fork's heap counts KB). A
-  held cell is `stc`/`retf`: CF=1 and every register back. The rule is that
-  **a slot number never means two different contracts** — reusing 0x01C8 for
-  a KB-based `mem_avail` would have failed silently and by a factor of 64.
-  This fork's own slots start at **0x0240**, above a RESERVED band at
-  0x01F0..0x0238. They sat at 0x01E8 until `main` put `dskw_readbig` there,
-  so the block moved once already and every package had to be rebuilt — the
-  headroom is the cheap way not to repeat that.
+- **The API slot numbers.** Every slot up to 0x01B0 is at `main`'s number,
+  and **above that the tables have parted** (SPEC.md §20.3). They used not
+  to: five cells were **held empty** and ten more RESERVED so that a package
+  source would assemble for either fork. The branches are merging, so the
+  holes bought nothing and were closed — everything above 0x01B0 moved
+  **down 88 bytes**, which is the third and last time that block has moved.
+  Two of the five held cells were *filled* rather than dropped
+  (`OSAPI_SND_FM`/`OSAPI_SND_STREAM` at 0x00F8/0x0100, now the loadable
+  sound driver's).
+
+  What survives is the half of the rule that was never about the other fork:
+  **a shipped slot keeps its contract**, and "we no longer implement this" is
+  a refusing stub, not a reuse. Reusing 0x01C8 for a KB-counting `mem_avail`
+  where `main` puts a paragraph-counting one would have failed silently and
+  by a factor of 64 — which is why the merge closed the gap by *moving* this
+  fork's block rather than by overlaying it. SPEC.md §20.8 rule 4 is the
+  written form; **renumbering invalidates every `.o88` at once** and is only
+  survivable because every package is in this tree and `make` rebuilds them.
 
   **No app reads the window record through ES any more.** `wm_geom` answers
   content size and visibility, so Fractal and Note Pad ask the kernel instead

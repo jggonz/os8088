@@ -106,7 +106,7 @@ DSV_SIZE     equ 14
 ;      frees your image the moment detach returns, and a worker still on the
 ;      run queue leaves the scheduler holding a stack frame whose CS points
 ;      at memory the next heap claim takes.
-%define OSAPI_DRV_TASK      KERNEL_SEG:0x0288
+%define OSAPI_DRV_TASK      KERNEL_SEG:0x0230
 
 ; -----------------------------------------------------------------------------
 ; OS88_DRIVER 'NAME', class, entry - open the driver and emit its 32-byte

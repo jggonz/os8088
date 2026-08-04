@@ -26,10 +26,12 @@ SLOT = re.compile(r"(?:slot|API) (0x0[0-9A-Fa-f]{3})")   # both spellings: the
 # Plus the reserved-range note in the preamble, which names a span, not a
 # heading.
 RULE_REFS = {"1.6", "1.7", "29.2.8", "45", "49"}
-# Numbers held empty on purpose (SPEC.md 20.3): main uses them, this fork does
-# not, and the cells refuse. Prose may name them; os88api.inc does not define
-# them.
-HELD = {"0x00f8", "0x0100", "0x01b8", "0x01c0", "0x01c8"}
+# Historical slot numbers prose may still name. Nothing is held empty any more
+# (SPEC.md 20.3): the five cells that were are either filled - 0x00F8/0x0100
+# went to the sound driver - or gone, closed up when the fork stopped keeping
+# main's numbers free. Left as an empty set rather than deleted, because the
+# next retired-but-still-documented slot wants exactly this.
+HELD = set()
 # These two describe BOTH forks, so they cite main's numbering on purpose.
 CROSS_FORK = {"BRANCH-DIFFERENCES.md", "docs/PORTING.md"}
 # ...and inside those two ONLY, these are sections that exist on `main` and not

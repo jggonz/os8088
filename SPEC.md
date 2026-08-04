@@ -18,9 +18,12 @@ way as the two diverge:
   `.90`**, so they stay with the parent they belong to while leaving `main`
   the whole ordinary range. Today: §11.90, §11.91, §18.90, §37.90.
 
-A number `main` uses for something this fork does not have is **held empty**
-with a stub saying so, rather than reused — §34.5, §34.6 and §41. That is what
-lets prose here refer to a retired mechanism by the number it had.
+**API slot numbers no longer track `main`'s** (§20.3). They did, with five
+cells held empty to keep one number from meaning two contracts, and the
+branches are merging so the holes bought nothing and were closed. What
+survives is the half of the rule that was never about the other fork: a
+shipped slot keeps its contract, and "we no longer implement this" is a
+refusing stub, not a reuse.
 
 The two forks' contents are catalogued in
 [BRANCH-DIFFERENCES.md](BRANCH-DIFFERENCES.md); porting an application across
@@ -552,7 +555,7 @@ bytes are hard-coded.
 | `font_str`   | CX=x, DX=y, SI=NUL str   | draw string left→right               |
 | `font_width` | SI=NUL str               | out AX = pixel width (8 × length)    |
 | `font_str_x` / `font_width_x` | ES:SI = NUL str | the same two, reading the string through **ES** — what the `X` stubs of §20.3 call so a package's string can live in its own segment |
-| `osapi_font_glyphs` | — | out SI = the offset of `font_glyphs` in KERNEL_SEG, AL = FONT_FIRST (32), AH = FONT_LAST (126), CX = 8 bytes per glyph. API slot 0x0258 |
+| `osapi_font_glyphs` | — | out SI = the offset of `font_glyphs` in KERNEL_SEG, AL = FONT_FIRST (32), AH = FONT_LAST (126), CX = 8 bytes per glyph. API slot 0x0200 |
 
 **Handing out the bitmaps** (`osapi_font_glyphs`) is for an app that draws
 text into its OWN pixels rather than onto the screen — apps/paint's text tool
@@ -1069,7 +1072,7 @@ W_ONSIZE equ 24  ; word: near ptr or 0 - the resize negotiator (§11.1).
                  ; Called BEFORE a new size is committed, with SI = window,
                  ; CX/DX = the proposed frame size; answers in CX/DX with the
                  ; size it will accept. NOT a template word: wm_create zeroes
-                 ; it, `wm_onsize` (API slot 0x0260) sets it.
+                 ; it, `wm_onsize` (API slot 0x0208) sets it.
 WIN_SIZE equ 26
 MAX_WIN  equ 12
 
@@ -1222,7 +1225,7 @@ resizable window's procs are required to lay out from the live record (record
 note above). Self-initiated repaints (the fm_repaint idiom, §22) must
 white-fill using the live W_W/W_H for the same reason.
 
-**`wm_resize` (API slot 0x01D0) — an app changing its own size.** In:
+**`wm_resize` (API slot 0x01B8) — an app changing its own size.** In:
 BX = window, CX = new outer width, DX = new outer height; the caller holds
 the gfx lock. Clamps exactly as a drag does (never below WMIN_W/WMIN_H, never
 past the live screen or the dock row, §39.2), re-fits the origin the way
@@ -1244,7 +1247,7 @@ the record changes — which is the whole point: nothing has been drawn at
 either size yet, so a refusal costs no repaint. The answer is a SIZE and not
 a yes/no because the case that motivated it is per-axis: apps/paint refuses a
 drag that would crop artwork, and a drag that would lose columns but not rows
-should still get its rows. Install it with `wm_onsize` (API slot 0x0260,
+should still get its rows. Install it with `wm_onsize` (API slot 0x0208,
 BX = window, AX = a near proc in the window's own segment, 0 clears).
 The negotiator runs under the gfx lock and **must not draw** — it decides,
 returns, and draws in the W_PAINT that immediately follows.
@@ -1623,7 +1626,7 @@ escalated its next `fm_repaint` from the content to the whole frame, and
 before that to `wm_paint_all`. Either way, a window's listing, its chrome
 and everything overlapping it were redrawn to fix 17 rows.
 
-`wm_title_set` (**API slot 0x0280**) is the direct answer: in BX = window
+`wm_title_set` (**API slot 0x0228**) is the direct answer: in BX = window
 ptr, AX = the new `W_TITLE` offset — or **0**, meaning the bytes `W_TITLE`
 already names changed underneath it, which is the file manager's case
 because its caption *is* the instance record's `I_NAME` (§29.1). Caller
@@ -3782,37 +3785,47 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
 0x0060 font_char       0x00E0 osapi_snd_caps    0x0170 wm_clip_set
 0x0068 font_str    (X) 0x00E8 osapi_snd_tone    0x0178 wm_clip_clear
 0x0070 font_width  (X) 0x00F0 osapi_snd_play    0x0180 wm_clip_test
-0x0078 wm_create   (X) 0x00F8 --- HELD ---      0x0188 cpu_info
-0x0080 wm_show         0x0100 --- HELD ---      0x0190 xm_caps
+0x0078 wm_create   (X) 0x00F8 osapi_snd_fm  (X) 0x0188 cpu_info
+0x0080 wm_show         0x0100 osapi_snd_stream  0x0190 xm_caps
 0x0088 wm_hide         0x0108 wm_sizable        0x0198 xm_alloc
                        0x0110 wm_fullscreen     0x01A0 xm_free
                        0x0118 wm_grow_paint     0x01A8 xm_copy
 
-0x01B0 wm_geom         0x01D0 wm_resize         0x0240 mem_claim      (X)
-0x01B8 --- HELD ---    0x01D8 gfx_blit4         0x0248 mem_free       (X)
-0x01C0 --- HELD ---    0x01E0 wm_about_set      0x0250 mem_avail
-0x01C8 --- HELD ---    0x01E8 dskw_readbig  (N) 0x0258 osapi_font_glyphs
-                       0x01F0..0x0238 RESERVED  0x0260 wm_onsize
-                              for `main`        0x0268 osapi_file_here
-                                                0x0270 osapi_file_goto
-                                                0x0278 mem_regrow     (X)
-                                                0x0280 wm_title_set
+0x01B0 wm_geom         0x01D8 osapi_gfx_dbuf    0x0200 osapi_font_glyphs
+0x01B8 wm_resize       0x01E0 gfx_scroll        0x0208 wm_onsize
+0x01C0 gfx_blit4       0x01E8 mem_claim     (X) 0x0210 osapi_file_here
+0x01C8 wm_about_set    0x01F0 mem_free      (X) 0x0218 osapi_file_goto
+0x01D0 dskw_readbig(N) 0x01F8 mem_avail         0x0220 mem_regrow     (X)
+                                                0x0228 wm_title_set
+                                                0x0230 osapi_drv_task (X)
 ```
 
-**Five numbers are HELD EMPTY, and that is the point of the layout.** Every
-slot above is at the number `main` uses for the same routine, which is what
-lets one package source assemble for either fork (docs/PORTING.md §3). Where
-`main` has something this fork does not — `OSAPI_SND_FM` and
-`OSAPI_SND_STREAM` at 0x00F8/0x0100 (§34.5/§34.6), and its paragraph-counting
-arena at 0x01B8..0x01C8 — the number is **reserved rather than reused**: the
-cell is `stc` / `retf`, so a stray call gets CF=1 and every register back.
-Reusing 0x01C8 for this fork's KB-counting `mem_avail` would have failed
-silently and by a factor of 64, which is exactly the class of bug the holding
-prevents. This fork's own slots start at 0x0240, above a RESERVED
-band at 0x01F0..0x0238 — they sat at 0x01E8 until `main` put `dskw_readbig`
-there, so the whole block had to move once already and every package be
-rebuilt. Ten cells of headroom is the cheap way not to do that again, and it
-is the same reasoning as §50's reserved 45–49 section band.
+**Nothing is held empty any more, and the table is contiguous.** It was not:
+five cells refused every call, because every slot up to `dskw_readbig` sat at
+the number `main` uses for the same routine and the aim was that one package
+source assemble for either fork (docs/PORTING.md §3). Where `main` had
+something this fork did not, the number was **reserved rather than reused** —
+an `stc`/`retf` cell answering CF=1 with every register back — on the rule that
+**a slot number must never mean two contracts**. Reusing 0x01C8 for this fork's
+KB-counting `mem_avail` where `main` puts its paragraph-counting one would have
+failed silently and by a factor of 64, which is the whole class of bug the rule
+exists to prevent. Ten further cells were RESERVED above them for `main` to
+grow into, after it took 0x01E8 for `dskw_readbig` and forced this fork's own
+block to move.
+
+**The branches are merging, so none of that buys anything, and the cells are
+gone.** Two of the five were filled rather than dropped — `OSAPI_SND_FM` and
+`OSAPI_SND_STREAM` at 0x00F8/0x0100, which the loadable sound driver (§51.4)
+gave real contracts identical to `main`'s. The other three and the reserved
+band were closed up, and everything above them moved **down** by 88 bytes.
+That is the third and last time this block has moved: every package is in this
+tree and `make` rebuilds all of them (§20.8 rule 4).
+
+The rule that produced the holes is worth keeping even without them. It was
+never really about `main` — it is that a shipped number keeps its contract, and
+the answer to "we no longer implement this" is a refusing stub, not a reuse
+(the retired sound slots were the precedent). What ended was the *cross-fork*
+half: this kernel no longer promises that its numbers match another tree's.
 
 **Offsets are not stable across kernel versions, and never were pretended
 to be.** Two things have moved them wholesale: the removal of the sound
@@ -4192,6 +4205,52 @@ construction and needs no shim.
 
 On entry the worker gets DX = its instance index, DS = ES = CS =
 `KERNEL_SEG`, IF = 1, gfx lock free — the ordinary `task_spawn` frame (§8).
+
+### 20.8 Forbidden (binding)
+
+Six rules the package model rests on. Every one has been obeyed since it was
+written down nowhere, which is the problem this section fixes: a rule that
+lives only in the shape of the existing code is one an edit can violate
+without anyone noticing it was a rule.
+
+1. **No package code above 1MB, ever.** A package's region is a claim off the
+   §50 heap — conventional memory — and nowhere else. Extended memory (§41) is
+   a **data store**: no entry, no callback, no worker entry, no "just this one
+   proc" in the HMA or above it. The highest byte any CS:IP can name is
+   0x10FFEF and this design leans on that ceiling.
+2. **The instance record does not grow.** `I_RECSZ` = 32 is load-bearing —
+   index↔pointer is a shift (§29.1) — and the record is exactly full. Anything
+   needing a new per-instance word finds a **side table** instead; `inst_icons`
+   is the precedent and `wm_owner` is the other.
+3. **No segment overrides in place of marshalling.** A caller's pointer
+   crosses the boundary by being **copied** — at the API-slot layer's X and N
+   stubs (§20.3), or at relayout (§12.2), the `dsk_get_dir` idiom (§2.1) —
+   never by threading a "which segment" answer down through `font_str`,
+   `menu_track`, `menu_drop` or the `dskw_*` name parsers. ES is the most
+   contended register in this kernel and those bodies serve kernel-internal
+   callers whose pointers are plain DS. The override version of this feature is
+   where the bugs would have lived.
+4. **A shipped slot keeps its contract.** The table is 8 bytes per cell from
+   0x0010, and a number, once it means something, never means something else —
+   retired functionality gets a **refusing stub**, not a reuse. What this rule
+   is *not* is a promise that the numbers match another tree's: they did while
+   two branches were live and stopped when they merged (§20.3), and closing
+   that gap moved every cell above 0x01B0 down 88 bytes. Renumbering is
+   therefore possible but expensive and deliberate: it invalidates every `.o88`
+   at once, and it is only survivable because every package is in this tree and
+   `make` rebuilds all of them. It has happened three times.
+5. **No `retf` from a package proc the kernel calls** — the inverse of the same
+   rule on `main`, and the one place porting a package is not mechanical. The
+   kernel reaches a package through the three-byte `call bp` / `retf`
+   dispatcher in its own header (§20.2), so entry, paint, onkey, onclick, menu
+   handler and completion proc are all **near procs with a near `ret`**; the
+   dispatcher owns the only `retf`. A `retf` left in from `main` returns into
+   the loader's stack frame and hangs the machine at the first paint. The
+   worker entry is the one proc with no return at all — it exits through
+   `OSAPI_TASK_ALIVE` (§20.6 rule 2).
+6. **No relocation, reintroduced under any name.** A change that seems to need
+   a load-time fixup pass means the org-0, own-segment model is being violated
+   somewhere else first. Fix that instead.
 
 ## 21. loader.inc
 
@@ -6473,7 +6532,7 @@ nothing drawn under the old mode is stranded in RAM, then clears both and
 releases the claim. Both directions no-op when already in that state, so a
 repeated click cannot re-copy 150KB.
 
-**A package may switch it too — `osapi_gfx_dbuf`** (slot 0x01F0, AL = 1 on /
+**A package may switch it too — `osapi_gfx_dbuf`** (slot 0x01D8, AL = 1 on /
 0 off, lock held). Out CF=0 and **AL = the state before**, which the caller
 hands straight back when it is done so the user's own Control Panel setting
 survives an app that borrowed the buffer for one flicker-free frame. CF=1
@@ -9167,7 +9226,7 @@ Rules for a package (none enforceable, all binding):
 Growing a claim used to mean claim-new, copy, free-old, which needs **old +
 new free at once and contiguously**. A heap with plenty of total room refused
 resizes it could afford, and the app reported "not enough memory" over
-hundreds of free KB. `mem_regrow` (slot 0x0278) takes three paths, and the
+hundreds of free KB. `mem_regrow` (slot 0x0220) takes three paths, and the
 first two move nothing:
 
 1. **Shrink or level** — the record's length changes and that is all. The
@@ -9376,7 +9435,7 @@ believe a setting had been kept.
 that makes that call safe: `inst_pkg_spawn`'s fence is a chain of five tests
 all keyed on an **instance record** (§20.6), and a driver has none — no
 window, no record, no `I_SPTR` to be identical to. `OSAPI_DRV_TASK`
-(slot **0x0288**) is its own slot with its own fence of the same shape: the
+(slot **0x0230**) is its own slot with its own fence of the same shape: the
 caller's segment must be the segment of the driver whose services are
 published (`ES == [drv_fseg]`), which is an identity test rather than an
 approximation.

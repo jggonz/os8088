@@ -10,8 +10,7 @@ either side, read that branch's own `SPEC.md` — and **do not cite section
 numbers across branches** without checking: `experimental` has since aligned
 §0-§44 with `main`, so most now match, but `experimental`-only material sits at
 §50+ (the claim heap) and in a reserved `.90` subsection band (§11.90, §11.91,
-§18.90, §37.90), and §34.5, §34.6 and §41 are held empty there because `main`
-uses them for things this fork does not have.
+§18.90, §37.90).
 
 **Nothing here is binary-compatible.** There is no way to run a `.o88` built for
 one branch on the other, and no loader on either side will diagnose it usefully —
@@ -87,11 +86,11 @@ package and both apps floppies.
 
 ### 2.2 The slot numbers — no longer a break
 
-They agreed once `experimental` renumbered onto `main`'s table (§3). This used
-to be the subtlest of the three breaks, because the collisions were *silent*:
-`0x01B0` meant `WM_GEOM` on one fork and `FILE_HERE` on the other. It is now
-the one thing you do **not** have to think about — but it does not make a
-binary portable on its own, because §2.1 and §2.3 still hold.
+They agreed for a while, once `experimental` renumbered onto `main`'s table,
+and they no longer do above `0x01B0` (§3). This is the subtlest of the three
+breaks, because the collisions are *silent*: `0x01D0` means `WM_RESIZE` on
+`main` and `FILE_READBIG` here. Both forks obey the rule that a number never
+means two contracts WITHIN a tree; neither promises it across two.
 
 ### 2.3 The callback mechanism
 
@@ -117,15 +116,16 @@ Slots `0x0010`..`0x00F0` are **identical on both branches**:
 0x00C8 MOUSE         0x00D8 RAND           0x00E8 SND_TONE
 ```
 
-Everything above `0x00F0` **now agrees too**, for every routine both forks
-have. `experimental` renumbered onto `main`'s addresses; where it has no
-counterpart for something `main` provides, the number is **held empty** (a
-`stc`/`retf` cell returning CF=1) rather than reused:
+Everything from `0x00F8` to `0x01B0` **still agrees**, routine for routine.
+Above that the two tables have parted: `experimental` used to hold five cells
+empty so that a number could never mean two contracts, and closed those holes
+when the branches began merging — so its own block sits 88 bytes lower than
+`main`'s numbering would put it.
 
 | slot | `main` | `experimental` |
 |---|---|---|
-| `0x00F8` | `SND_FM` | *held* — no FM sink |
-| `0x0100` | `SND_STREAM` | *held* — no Sound Blaster |
+| `0x00F8` | `SND_FM` | `SND_FM` (via the loadable sound driver) |
+| `0x0100` | `SND_STREAM` | `SND_STREAM` (likewise) |
 | `0x0108` | `WM_SIZABLE` | `WM_SIZABLE` |
 | `0x0110` | `FULLSCREEN` | `FULLSCREEN` |
 | `0x0118` | `WM_GROW` | `WM_GROW` |
@@ -137,24 +137,28 @@ counterpart for something `main` provides, the number is **held empty** (a
 | `0x0170`–`0x0180` | `WM_CLIP_SET`/`CLEAR`/`TEST` | identical |
 | `0x0188` | `CPU_INFO` | `CPU_INFO` |
 | `0x0190`–`0x01A8` | `XMEM_CAPS`/`ALLOC`/`FREE`/`COPY` | identical |
-| `0x01B0` | `WM_GEOM` | `WM_GEOM` |
-| `0x01B8` | `MEM_ALLOC` (paragraphs) | *held* |
-| `0x01C0` | `MEM_FREE` (`AX`) | *held* |
-| `0x01C8` | `MEM_AVAIL` (paragraphs) | *held* |
-| `0x01D0` / `0x01D8` | `WM_RESIZE` / `GFX_BLIT4` | identical |
-| `0x01E0` | `ABOUT_SET` | `ABOUT_SET` |
-| `0x01E8` | `FILE_READBIG` | `FILE_READBIG` |
-| `0x01F0` | `GFX_DBUF` | **not implemented here** — see BRANCH-DIFFERENCES.md §A |
-| `0x01F8` | `GFX_SCROLL` | **not implemented here** — see BRANCH-DIFFERENCES.md §A |
-| `0x0200`–`0x0238` | — | *still reserved for `main` to grow into* |
-| `0x0240`+ | — | `MEM_CLAIM`, `MEM_FREE`, `MEM_AVAIL` (all KB), `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`, `MEM_REGROW`, `WM_TITLE` |
+| `0x01B0` | `WM_GEOM` | `WM_GEOM` — **the last shared number** |
+| `0x01B8` | `MEM_ALLOC` (paragraphs) | `WM_RESIZE` |
+| `0x01C0` | `MEM_FREE` (`AX`) | `GFX_BLIT4` |
+| `0x01C8` | `MEM_AVAIL` (paragraphs) | `ABOUT_SET` |
+| `0x01D0` | `WM_RESIZE` | `FILE_READBIG` |
+| `0x01D8` | `GFX_BLIT4` | `GFX_DBUF` |
+| `0x01E0` | `ABOUT_SET` | `GFX_SCROLL` |
+| `0x01E8` | `FILE_READBIG` | `MEM_CLAIM` (KB) |
+| `0x01F0` / `0x01F8` | `GFX_DBUF` / `GFX_SCROLL` | `MEM_FREE` / `MEM_AVAIL` (KB) |
+| `0x0200`+ | — | `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`, `MEM_REGROW`, `WM_TITLE`, `DRV_TASK` |
 
-**The memory trio is the one deliberate non-alignment.** `main` counts
-paragraphs and answers in `AX`; `experimental` counts KB and answers in `DX`.
-Putting those at one number would have failed silently and by a factor of 64,
-so all three of `main`'s numbers are held and `experimental`'s live above
-`0x01E0`. That is the rule the whole layout follows: **a slot number never
-means two different contracts.**
+**Every contract `main` has, `experimental` now has too** — `GFX_DBUF` and
+`GFX_SCROLL` were its last two gaps and are implemented, just at different
+numbers. What differs is the memory API, and deliberately: `main` counts
+paragraphs and answers in `AX`, `experimental` counts KB and answers in `DX`.
+Putting those at one number would fail silently and by a factor of 64. That
+is still the rule the layout follows — **a slot number never means two
+different contracts** — it just no longer extends across the two trees.
+
+**So a package binary is not portable between the branches, and never was.**
+Re-assembling it is, and that is all that was ever claimed: the numbers live
+in one `%include`d file on each side.
 
 You never write these numbers by hand — `%include "os88api.inc"` supplies them —
 so re-assembling against the target branch's SDK fixes every one. The table is

@@ -351,11 +351,11 @@ VID_CGA    equ 2
 ; (whose flag-preserving contract it shares, so it is safe between wm_create
 ; and the CF you owe the loader). An application that never calls it is
 ; exactly as it was: a label, no cell, no menu.
-%define OSAPI_ABOUT_SET     KERNEL_SEG:0x01E0   ; BX = win ptr, SI = your About
+%define OSAPI_ABOUT_SET     KERNEL_SEG:0x01C8   ; BX = win ptr, SI = your About
                                  ; handler's offset (0 = none). Preserves every
                                  ; register and the flags
 
-%define OSAPI_FILE_READBIG  KERNEL_SEG:0x01E8   ; SI = NUL 8.3 name, ES = the
+%define OSAPI_FILE_READBIG  KERNEL_SEG:0x01D0   ; SI = NUL 8.3 name, ES = the
                                  ; destination BASE segment (the buffer starts
                                  ; at ES:0000), DX:CX = capacity in BYTES,
                                  ; 32-bit, DX high. out CF=0 and DX:AX = bytes
@@ -378,7 +378,7 @@ VID_CGA    equ 2
                                  ; resolution and the same UI-task-only rule
                                  ; as every other file slot.
 
-%define OSAPI_GFX_DBUF      KERNEL_SEG:0x01F0   ; arm/disarm double buffering
+%define OSAPI_GFX_DBUF      KERNEL_SEG:0x01D8   ; arm/disarm double buffering
                                  ; for your own drawing (SPEC.md 32): AL = 1
                                  ; on / 0 off, lock HELD. Out CF=0 and AL =
                                  ; the state before, which you hand straight
@@ -388,7 +388,7 @@ VID_CGA    equ 2
                                  ; renders through the same code and has
                                  ; nothing to double) or a heap too small.
                                  ; Refusal is normal - draw unbuffered.
-%define OSAPI_GFX_SCROLL    KERNEL_SEG:0x01F8   ; move a rect's contents up or
+%define OSAPI_GFX_SCROLL    KERNEL_SEG:0x01E0   ; move a rect's contents up or
                                  ; down instead of redrawing them (SPEC.md
                                  ; 5.5): AX/BX/CX/DX = x1/y1/x2/y2 inclusive
                                  ; ABSOLUTE screen coords, SI = signed dy,
@@ -413,7 +413,7 @@ VID_CGA    equ 2
 ; put OSAPI_FILE_READBIG there, and moving it cost a rebuild of every
 ; package. The two cells just spent (0x01F0/0x01F8) came out of that
 ; headroom at `main`'s own numbers, which is exactly what it was for.
-%define OSAPI_MEM_CLAIM     KERNEL_SEG:0x0240   ; the claim heap (SPEC.md 50.3):
+%define OSAPI_MEM_CLAIM     KERNEL_SEG:0x01E8   ; the claim heap (SPEC.md 50.3):
                                  ; AX = KB wanted; out CF=0 and DX = the base
                                  ; segment, CF=1 refused. This is how you get
                                  ; memory your region cannot hold - a canvas,
@@ -426,9 +426,9 @@ VID_CGA    equ 2
                                  ; your claims when your instance dies, so you
                                  ; need no teardown hook; free them yourself
                                  ; only to hand memory back mid-session.
-%define OSAPI_MEM_FREE      KERNEL_SEG:0x0248   ; DX = the segment you were
+%define OSAPI_MEM_FREE      KERNEL_SEG:0x01F0   ; DX = the segment you were
                                  ; given; out CF=0 released, CF=1 not yours
-%define OSAPI_MEM_AVAIL     KERNEL_SEG:0x0250   ; out AX = largest free run in
+%define OSAPI_MEM_AVAIL     KERNEL_SEG:0x01F8   ; out AX = largest free run in
                                  ; KB, BX = total free KB. Size yourself from
                                  ; THIS, not from int 12h: it is the only
                                  ; number that accounts for what the kernel
@@ -443,7 +443,7 @@ VID_CGA    equ 2
                                  ; a wide erase followed by glyphs can white
                                  ; out a band the glyphs then refuse to
                                  ; repaint. Erase per cell, or skip the pair.
-%define OSAPI_GFX_BLIT4     KERNEL_SEG:0x01D8   ; ES:SI = packed 4bpp pixels (two
+%define OSAPI_GFX_BLIT4     KERNEL_SEG:0x01C0   ; ES:SI = packed 4bpp pixels (two
                                  ; per byte, high nibble leftmost), BP = source
                                  ; stride in BYTES, AX/BX = destination x/y,
                                  ; CX/DX = width/height in pixels. Draws the
@@ -535,7 +535,7 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; at the number `main` uses. Prefer it in any
                                  ; app you intend to build on both forks.
 
-%define OSAPI_WM_RESIZE     KERNEL_SEG:0x01D0   ; BX = win ptr, CX = new width,
+%define OSAPI_WM_RESIZE     KERNEL_SEG:0x01B8   ; BX = win ptr, CX = new width,
                                  ; DX = new height, in pixels, of the WHOLE
                                  ; window (frame included). Clamps to the
                                  ; kernel's minimum and to the live screen,
@@ -546,7 +546,7 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; app that sets them leaves the shadow, the
                                  ; z-order damage and the dock out of step.
                                  ; Do NOT hold the gfx lock.
-%define OSAPI_WM_ONSIZE     KERNEL_SEG:0x0260   ; BX = win ptr, AX = a near proc
+%define OSAPI_WM_ONSIZE     KERNEL_SEG:0x0208   ; BX = win ptr, AX = a near proc
                                  ; in YOUR segment (0 clears it). The kernel
                                  ; calls it BEFORE it commits a size the user
                                  ; dragged out of your grow box, with
@@ -560,10 +560,10 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; drawn at either size, so DO NOT draw in it -
                                  ; decide, return, and draw in the W_PAINT the
                                  ; kernel is about to make.
-%define OSAPI_FILE_HERE     KERNEL_SEG:0x0268   ; out DX = the current
+%define OSAPI_FILE_HERE     KERNEL_SEG:0x0210   ; out DX = the current
                                  ; directory's first cluster (0 = the root),
                                  ; BL = the drive. No disk I/O.
-%define OSAPI_FILE_GOTO     KERNEL_SEG:0x0270   ; in DX = a cluster from
+%define OSAPI_FILE_GOTO     KERNEL_SEG:0x0218   ; in DX = a cluster from
                                  ; OSAPI_FILE_HERE, BL = its drive; out CF=1
                                  ; it could not be listed and the volume is
                                  ; back at the root with the write gate shut.
@@ -581,7 +581,7 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; moved it. If your Save means "the same
                                  ; place my Save As chose", store the pair
                                  ; these two slots trade in beside the name.
-%define OSAPI_MEM_REGROW    KERNEL_SEG:0x0278   ; DX = a claim YOU hold, AX =
+%define OSAPI_MEM_REGROW    KERNEL_SEG:0x0220   ; DX = a claim YOU hold, AX =
                                  ; the new size in KB. out CF=0 and DX = the
                                  ; claim's base NOW - the SAME segment when it
                                  ; grew where it stood, a different one when it
@@ -606,7 +606,7 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; moved leaves your old segment pointing at
                                  ; memory that is no longer yours.
 
-%define OSAPI_WM_TITLE      KERNEL_SEG:0x0280   ; BX = win ptr, AX = a NUL
+%define OSAPI_WM_TITLE      KERNEL_SEG:0x0228   ; BX = win ptr, AX = a NUL
                                  ; string IN YOUR OWN SEGMENT, or 0 to mean
                                  ; "the bytes W_TITLE already names changed
                                  ; underneath it". Redraws the caption strip
@@ -621,7 +621,7 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; the string must OUTLIVE the call - the
                                  ; record keeps the pointer, not the bytes.
 
-%define OSAPI_FONT_GLYPHS   KERNEL_SEG:0x0258   ; out SI = the offset of the
+%define OSAPI_FONT_GLYPHS   KERNEL_SEG:0x0200   ; out SI = the offset of the
                                  ; kernel's 8x8 glyph table in KERNEL_SEG,
                                  ; AL = first character code it covers,
                                  ; AH = last, CX = bytes per glyph (8). Read
