@@ -889,7 +889,14 @@ mem_sum_kb:
     or bx, bx
     jz .take
     cmp byte [si+MC_OWN+1], 0xFF    ; the kernel tags are 0xFFxx; an instance
-    jne .next                       ; slot is 0..INST_MAX-1
+    je .take                        ; slot is 0..INST_MAX-1
+    push bx                         ; ...and a LOADED DRIVER's own buffers,
+    mov bx, [si+MC_OWN]             ; which name themselves by the segment the
+    call drv_owns_seg               ; driver runs in and so match neither test
+    pop bx                          ; above. They belong under System, where
+    jc .next                        ; the driver's image already is (51.3) -
+                                    ; without this they were in the totals and
+                                    ; in the map, and in no row at all
 .take:
     add dx, [si+MC_PARA]
 .next:

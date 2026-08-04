@@ -215,6 +215,53 @@ drv_init:
     ret
 
 ; -----------------------------------------------------------------------------
+; drv_owns_seg - is BX the image segment of a driver that is loaded RIGHT NOW?
+; in:  BX = a claim's owner word
+; out: CF = 0 yes (a loaded driver's segment), CF = 1 no
+; clobbers: nothing else (flags)
+;
+; The Task Manager's question, and only its question (SPEC.md 50.5/51.3). A
+; driver's IMAGE is claimed under MEM_K_DRV and so is counted with the
+; kernel's own tags; the bulk buffers the driver then claims for itself are
+; owned by the segment it runs in, exactly as a package's data claims are
+; owned by its region - because mem_own answers with ES either way and the
+; driver has no instance to name instead.
+;
+; That left them billed to NOBODY: not a 0xFFxx tag, not an instance slot, so
+; every per-row column skipped them while the HEAP and RAM totals counted them
+; correctly. On a 128KB machine with a Sound Blaster the effect was 32KB of
+; heap - the DMA buffer - visible in the totals and in the map's bands, and
+; attributable to no row in the list. This is what closes that hole.
+;
+; A zero owner word can never match, because DRVR_SEG is 0 exactly when the
+; row is not loaded, and the test skips those rows.
+; -----------------------------------------------------------------------------
+drv_owns_seg:
+    push ax
+    push cx
+    push si
+    mov si, drv_tab
+    mov cx, DRV_MAX
+.scan:
+    mov ax, [si+DRVR_SEG]
+    or ax, ax
+    jz .next                    ; row not loaded: its stale segment is not an
+    cmp ax, bx                  ; owner, and 0 would match a zeroed record
+    je .yes
+.next:
+    add si, DRVR_SIZE
+    loop .scan
+    stc
+    jmp short .out
+.yes:
+    clc
+.out:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; drv_status - the sentence describing one row's state right now
 ; in:  BX = row ptr
 ; out: SI -> a NUL string

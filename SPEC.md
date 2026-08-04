@@ -9344,8 +9344,18 @@ does. Four things differ, and each is doing work:
   because "the kernel ran a driver as an application" is not a failure mode
   worth one gate.
 - **It has no instance record**: no dock tile, no Task Manager row, no
-  window, no `I_CYC` billing. Its memory is a kernel claim (`MEM_K_DRV`), so
-  the Task Manager counts it under System, which is what it is.
+  window, no `I_CYC` billing. Its IMAGE is a kernel claim (`MEM_K_DRV`), so
+  the Task Manager counts it under System, which is what it is — **and so are
+  the bulk buffers it claims for itself**, which is less obvious and had to
+  be made true. Those carry the driver's own SEGMENT as their owner word,
+  because `mem_own` answers with `ES` and a driver has no instance to name
+  instead — exactly like a package's data claims, but with no row to be
+  billed to. They were therefore in the `HEAP` and `RAM` totals, and in the
+  memory map's bands, and in no line of the list: on a 128KB machine with a
+  Sound Blaster that is 32KB of DMA buffer belonging to nobody. `mem_sum_kb`
+  asks `drv_owns_seg` as well as testing for a `0xFFxx` tag, so `System`'s
+  `HEAP` column now equals the `HEAP` total whenever nothing else holds a
+  claim.
 - **Its bss ships inside its image**, zero-filled on the floppy by
   `tools/os88drv.py`. A package's bss is claimed by the loader because a
   package's is tens of KB and its file arrives through a peek-then-size
