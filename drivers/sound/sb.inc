@@ -506,7 +506,8 @@ sbl_go_on:
 ; =============================================================================
 ; sbl_isr - the SB block-IRQ handler (SPEC.md 34.5, binding)
 ;
-; mou_isr discipline: push used regs + DS + ES, DS = KERNEL_SEG, IF=0
+; mou_isr discipline: push used regs + DS + ES, DS = the DRIVER's own
+; segment (CS - this ISR lives in a loaded image, not the kernel), IF=0
 ; throughout, no BIOS, never sti, own EOI (out 20h, 20h - the BIOS does not
 ; handle this IRQ). Never touches VGA, gfx_lock or the switch path.
 ;
@@ -2503,10 +2504,10 @@ sbl_unhook:
     ret
 
 ; -----------------------------------------------------------------------------
-; sbl_state_init - store the module's .bss before snd_live publishes
+; sbl_state_init - store the module's .bss before the services publish
 ;
-; in:       nothing (called by snd_init beside opl_state_init; the probe
-;           that fills sbl_base/version runs AFTER this)
+; in:       nothing (called from DRVV_ATTACH beside opl_state_init; the
+;           probe that fills sbl_base/version runs AFTER this)
 ; out:      nothing
 ; clobbers: nothing (flags)
 ; -----------------------------------------------------------------------------
@@ -2558,21 +2559,21 @@ sbl_state_init:
     ret
 
 ; =============================================================================
-; Detection and IRQ discovery: cold far code (SPEC.md 33/34.7) behind their
-; FARSHIMs. DSP handshakes go through KCALL sbl_dsp_wr / sbl_dsp_rd; the
-; polls and vector writes are direct. Far code keeps DS = KERNEL_SEG, so
-; the tables above and all sbl_ state stay readable.
+; Detection and IRQ discovery. Kernel-resident ancestry: these were far
+; code behind FARSHIMs with KCALL'd DSP handshakes; in the driver they are
+; ordinary near calls in the image's own segment, DS = the driver, and the
+; tables above and all sbl_ state are plain [addr] reads.
 ; =============================================================================
 
 
 ; -----------------------------------------------------------------------------
 ; sbl_f_probe - the SB reset scan + version gate (far body; SPEC.md 34.2)
 ;
-; in:       nothing (DS = KERNEL_SEG; boot-time, from snd_init's probe loop)
+; in:       nothing (DS = the driver's segment; attach-time, from the
+;           DRVV_ATTACH probe)
 ; out:      AL = 1 present - [sbl_base] set, DSP version read via E1h,
-;           [sbl_auto] decided (>= 2.00), the base parked in the row's
-;           SDRV_CFG word; AL = 0 absent
-; clobbers: AH (snd_init's probe loop holds nothing in it); nothing else
+;           [sbl_auto] decided (>= 2.00); AL = 0 absent
+; clobbers: AH (the attach probe holds nothing in it); nothing else
 ;
 ; Scan order pinned: {220h,240h,210h,230h,250h,260h}, a bounded poll budget
 ; per base (an absent bus floats FFh and fails the 0AAh compare fast); one

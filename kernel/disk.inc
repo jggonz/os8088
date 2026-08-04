@@ -779,14 +779,12 @@ dsk_synth:
     ; --- @18: first cluster = raw FstClusLO, verbatim even when type=0 ---
     mov ax, [es:si+DSK_R_CLUS]
     mov [dsk_ent+18], ax
-    ; --- @20: size word = raw size dword, clamped to 0xFFFF (display) ---
+    ; --- @20: size dword - lo word at 20, hi at 22 (SPEC.md 19). It was one
+    ;     word clamped to 0xFFFF, and a 116KB module listed as 65535 ---
     mov dx, [es:si+DSK_R_SIZE+2]    ; DX = size high word (held for below)
     mov ax, [es:si+DSK_R_SIZE]
-    test dx, dx
-    jz .szok
-    mov ax, 0xFFFF
-.szok:
     mov [dsk_ent+20], ax
+    mov [dsk_ent+22], dx
     ; --- @16: type 2 = subdirectory, and nothing else about it is trusted:
     ;     a folder's size field is zero by spec, and its first cluster is
     ;     validated exactly like a file's because dsk_chdir will walk it
@@ -801,7 +799,8 @@ dsk_synth:
     cmp ax, [dsk_maxclus]       ; listed, inert, never enterable
     ja .typed
     mov word [dsk_ent+16], 2
-    mov word [dsk_ent+20], 0    ; folders have no meaningful size
+    mov word [dsk_ent+20], 0    ; folders have no meaningful size - both
+    mov word [dsk_ent+22], 0    ; halves, a hostile entry can carry either
     jmp short .typed
 .notdir:
 

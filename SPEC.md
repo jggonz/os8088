@@ -3451,8 +3451,8 @@ every consumer (files.inc, loader.inc) reads:
 | 0   | 16   | display name, NUL-padded: raw name[0..7] with trailing spaces trimmed, then '.', then ext[0..2] trimmed (dot omitted when the ext is blank); **every byte outside 0x21..0x7E replaced with '_'** (OEM-codepage bytes never reach the font renderer). Max 12 chars — fits every §22 truncation budget |
 | 16  | 2    | type: 1 = loadable package, 2 = subdirectory, else 0 (rules below) |
 | 18  | 2    | first cluster = raw FstClusLO (word @26), copied verbatim even when type=0 (harmless; the loader only reads it behind type==1, and `dsk_chdir` only behind type==2). FstClusHI (@20) is FAT32-only per spec — ignored |
-| 20  | 2    | size in bytes = raw size dword @28, clamped to 0xFFFF when ≥ 65,536 (display-only ceiling); forced to 0 for type 2 |
-| 22  | 10   | zero                                                        |
+| 20  | 4    | size in bytes = raw size dword @28, verbatim (lo word @20, hi @22 — drawn whole by `fm_ultoa`); forced to 0 for type 2 |
+| 24  | 8    | zero                                                        |
 
 **The type word** (binding — defense in depth with §21 step 1), tested in
 this order:
@@ -4539,8 +4539,7 @@ or any §18.2 BPB rule failed. N is the accepted-entry count (≤ 32, §19's
 cap — the header count always equals the listed count), read from this
 window's `FS_N`, not from the global `[disk_nfiles]`. File names are
 the synthesized 8.3 display names of §19 (e.g. `"MINES.O88"`, ≤ 12
-chars); sizes are the §19 staged size word, clamped at 65,535 for ≥64KB
-files. Folders count and list exactly like files — a type-2 entry (§19)
+chars); sizes are the §19 staged size dword, drawn in full (`fm_ultoa`). Folders count and list exactly like files — a type-2 entry (§19)
 shows the built-in folder icon and a blank size column. Two buttons at the top right,
 1px black frames, labels centered: **Refresh** from (cw−68, 2) to
 (cw−6, 15) — remounts the current drive so a swapped disk shows its real
@@ -7998,7 +7997,7 @@ no longer always reaches it.
 | `fdlg_draw_name` / `fdlg_draw_list` / `fdlg_draw_both` | §38.8. Erase one rectangle and redraw it. All assume the held lock and a valid `[fdlg_cx]`/`[fdlg_cy]`; all preserve every register. |
 | `fdlg_name_body` / `fdlg_list_body` | The same drawing without the erase, for `fdlg_paint`, which is handed a white content. |
 | `fdlg_rows` | Out: AX = display rows = `disk_nfiles` + (`[dsk_cwd]` ≠ 0), CX = the `..` offset (0 or 1). The one place that offset is decided. |
-| `fdlg_stage` | In: AX = display row. Out: `fdlg_row` = its name, `fdlg_type` / `fdlg_size` its §19 type and size words; the `..` row is synthesized as type 2. |
+| `fdlg_stage` | In: AX = display row. Out: `fdlg_row` = its name, `fdlg_type` / `fdlg_size`+`fdlg_sizeh` its §19 type word and size dword; the `..` row is synthesized as type 2. |
 | `fdlg_go` | In: AX = first cluster. `dsk_chdir` + reset selection and scroll. |
 
 **What this deliberately does not do.** No filtering by extension (an Open
@@ -9977,8 +9976,10 @@ between "how much RAM does this machine have" and "how much can I have".
 Rules for a package (none enforceable, all binding):
 
 1. **Claim at startup, from a window callback or your entry proc.** The
-   fence needs your window to exist and — for the entry proc — the loader
-   publishes your instance before it calls you (§21), so both work.
+   fence is `mem_own`'s claim-map test, not an instance scan — your REGION
+   is a live claim from loader step 5 while your instance publishes only at
+   step 9, *after* the entry returns (§21) — which is exactly what lets an
+   entry proc size itself before it has a window or a record.
 2. **Handle refusal.** CF=1 is a normal outcome on a small machine. Give up
    a feature, or put up a notice and stay running; do not read memory you
    were not given.

@@ -176,9 +176,11 @@ mem_init:
 ; which is also what keeps the bump loop finite, since the bump only helps
 ; when a page can hold the head at all.
 ;
-; NOT preserved by mem_regrow: the constraint is an allocation-time property
-; and no record carries it, so a claim that MOVES (regrow path 3) can land
-; straddling. Do not regrow a DMA buffer; claim the size you need.
+; PRESERVED by mem_regrow: the record carries the constraint (MC_DMA), so a
+; claim that MOVES (regrow path 3) is re-placed under the same page rule -
+; mem_dmaok is the re-test, and mem_hifit refuses a straddling candidate
+; rather than bumping, which can refuse where a legal base exists (rare,
+; conservative, never wrong memory).
 ; -----------------------------------------------------------------------------
 mem_claim_dma:
     push si
@@ -758,7 +760,7 @@ mem_free_rec:
 ; The query a package sizes itself from (SPEC.md 50.3). Walking holes
 ; without sorting: for each candidate base (the heap base, then every
 ; claim's end), measure the distance to the nearest claim that starts above
-; it. O(MEM_MAX^2) with MEM_MAX = 16 - a few hundred cycles, called once at
+; it. O(MEM_MAX^2) with MEM_MAX = 32 - around a thousand cycles, called at
 ; app startup.
 ; -----------------------------------------------------------------------------
 mem_avail:
