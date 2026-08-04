@@ -8435,8 +8435,32 @@ restart flag.
 origin (the window may have been dragged while we slept), check `W_FLAGS`
 bit 1, then `osapi_wm_clip_set`. CF=1 means not one pixel shows, so the frame
 is skipped and the game keeps running invisibly — what the kernel's own Bounce
-does. `[ark_full]` survives a skip, so whatever repaint was owed still happens
-on the first frame that shows.
+does. The credits panel (§44.7) is the third skip, and there the window *is*
+visible; the UI task owns the content until the panel comes down.
+
+**A skipped frame raises `[ark_full]`, so the next frame that draws draws
+everything.** `ark_update` ran and moved the world; the screen did not follow,
+and the difference has to be reconciled somewhere. Every erase in this package
+is aimed at where something was last *drawn* rather than where the update last
+moved it from — see §44.4 — so a single skip is survivable without this. But
+that is an invariant six separate pieces of state have to keep independently
+(the ball's `[ark_obx]`/`[ark_oby]`, the paddle's whole-lane erase and its
+`[ark_padwipe]` gate, `[ark_dirty]`, `[ark_stat]`, `[ark_msg]`, and the
+capsules' `[ark_puold]`/`[ark_shold]`), and one of them not keeping it cost a
+stranded capsule on real hardware.
+
+It is *also* true that the kernel repaints the window anyway — un-hiding goes
+through `wm_show`, uncovering through `wm_paint_dmg`, and both end in
+`W_PAINT`. That is a guarantee this package cannot enforce and does not own,
+and §11.90/§11.91 exist precisely to make `W_PAINT` run **less** often. One
+byte buys independence from a policy that is still being tuned.
+
+`ark_abdismiss` settles the debt itself: it calls `ark_draw_all` on the
+keystroke that takes the panel down — immediately, rather than up to a tick
+later — and then clears `[ark_full]`, `[ark_msg]` and `[ark_stat]`, exactly as
+`ark_render`'s own full branch does. Without that, every frame spent under the
+panel would have queued a whole-board repaint for the worker to perform a
+second time.
 
 ### 44.2 The keyboard has no key-up, so the paddle glides on a deadline
 
