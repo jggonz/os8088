@@ -1,20 +1,5 @@
 # os8088
 
-> ### The `main` fork has been merged into this branch
->
-> `experimental` and `main` shared history up to `2558ac0` and diverged for a
-> long time. `main` ended at `b401eda` and is merged in — after an audit that
-> went through it capability by capability, so that nothing was lost to a merge
-> which deliberately kept this tree's files. **Work written against `b401eda`
-> still needs porting, not merging**: the kernel segment, the callback
-> convention and the API slot numbers above `0x01B0` all differ.
->
-> - **[docs/PORTING.md](docs/PORTING.md)** — how to bring that work forward.
->   The git mechanics, the then-and-now slot table, the callback and memory
->   conversions, a checklist and a worked example.
-> - **[BRANCH-DIFFERENCES.md](BRANCH-DIFFERENCES.md)** — what diverged and how
->   the merge resolved each difference, plus the audit itself.
-
 ## Contributing
 
 Patches welcome — and you do not need to already know 8086 assembly.
@@ -216,6 +201,10 @@ int 12h reports minus 73KB.
 ```
 SPEC.md              the binding module contracts (interfaces, layouts,
                      concurrency rules) - read this first
+docs/KERNEL-MEMORY.md what the kernel's byte budget is spent on, and the
+                     measured RAM floor
+docs/PORTING.md      bringing forward a package written against an older
+                     API table (the slot numbers above 0x01B0 have moved)
 boot/boot.asm        512-byte boot sector: LBA->CHS, retrying reads
 kernel/kernel.asm    constants, boot sequence, includes, size assertion
 kernel/vga12.inc     mode 12h planar primitives, save/restore, gfx lock

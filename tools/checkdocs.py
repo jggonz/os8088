@@ -2,8 +2,8 @@
 """Documentation consistency gate. Two things drift silently and have:
 
   1. a SPEC.md section citation that names a heading which does not exist
-     (in the two cross-fork documents, MAIN_ONLY below is the allowlist of
-     sections that exist on the other branch and not on this one);
+     (CROSS_FORK/MAIN_ONLY below allow a document that deliberately discusses
+     a retired numbering to name sections this SPEC no longer has);
   2. an API slot number in prose that is not a slot apps/os88api.inc defines.
 
 The second is the nastier one: after a renumbering, a stale citation is often
@@ -32,23 +32,12 @@ RULE_REFS = {"1.6", "1.7", "29.2.8", "45", "49"}
 # main's numbers free. Left as an empty set rather than deleted, because the
 # next retired-but-still-documented slot wants exactly this.
 HELD = set()
-# These two describe BOTH forks, so they cite main's numbering on purpose.
-CROSS_FORK = {"BRANCH-DIFFERENCES.md", "docs/PORTING.md"}
-# ...and inside those two ONLY, these are sections that exist on `main` and not
-# here. Listing them rather than exempting cross-fork files wholesale is the
-# point: a citation of OUR spec is still checked in those files, and this set
-# is the reviewable record of what we are pointing at across the fork. Every
-# entry is something the parity audit examined; shrink it when one is ported.
-MAIN_ONLY = {
-    "2.5",      # the package arena
-    "2.6",      # the arena's grant map (cmem.inc)
-    "20.7",     # memory a package asks for
-}
-# All three are the arena memory model, which this tree replaced with the claim
-# heap (SPEC.md 50) and will never have. Everything else that was in this set
-# has been written here instead: 5.5 gfx_scroll, 20.8 Forbidden, 41.7 and 41.10
-# xmem testing and acceptance. Shrink it further only by writing a section, not
-# by adding an exemption.
+# docs/PORTING.md describes a package written against an OLDER API table as
+# well as this one, so a section number in it may name something that has since
+# moved. It cites none today - MAIN_ONLY is empty and the mechanism is kept for
+# the next time a document has to talk about a retired numbering.
+CROSS_FORK = {"docs/PORTING.md"}
+MAIN_ONLY = set()
 
 
 def main() -> int:
