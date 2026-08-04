@@ -1685,23 +1685,34 @@ cp_flush_close:
 ; machine that is 12KB of a 55KB heap back, which is the whole reason the
 ; middle rung exists.
 ;
-; TWO THINGS ARE GREYED AND ONE IS NOT, and the difference is what the kernel
-; can actually know:
+; A ROW IS GREYED FOR MISSING HARDWARE AND NEVER FOR MISSING MEMORY, and the
+; line between those two is the whole design of this page:
 ;
-;   - AdLib greys when no loaded driver publishes a tone sink. That is a
-;     stable fact: the FM half of the sound driver is never torn down by a
-;     tier change, so if it is not published now it is not there.
-;   - Sound Blaster greys only when NO sound driver is published at all.
-;     Whether a card is there, and whether the heap can fund a page-safe 12KB
-;     for it right now, are both answerable ONLY by making the claim - so the
-;     click makes it (SPEC.md 50.3) and cp_snd_note reports what came back.
-;     Greying it on a full heap would be a guess, and mem_avail cannot even
-;     make that guess: it reports the largest free run and says nothing about
-;     whether a 64KB-page-safe base exists inside it.
+;   - **Hardware is a fact the driver already established.** DSV_TIERS is a
+;     bitmap of the tiers it COULD provide, decided at attach from what its
+;     probes found and never touched by a tier change (SPEC.md 51.2). So the
+;     page reads one word and greys what the machine does not have. It does
+;     not ask the driver to look again, because an ISA card cannot arrive
+;     while the machine is running and looking again is EXPENSIVE: the Sound
+;     Blaster scan is six base addresses with a DSP reset timeout each and
+;     then a slow retry on 220h, about a sixth of a second on a machine with
+;     no card - spent on the UI task under the gfx lock, so the user sees the
+;     desktop freeze on a click that then does nothing.
+;   - **Memory is not a fact anyone has.** Whether the heap can fund a
+;     page-safe 12KB right now is answerable ONLY by making the claim:
+;     mem_avail reports the largest free run and says nothing about whether a
+;     64KB-page-safe base exists inside it, so only mem_claim_dma's own scan
+;     knows (SPEC.md 50.3). The click therefore tries, and cp_snd_note reports
+;     what came back. Greying on a guess would keep a machine that has the
+;     room off a tier it can afford.
 ;
-; That is the one place this page departs from the bb_avail idiom (SPEC.md
-; 31.3), and deliberately: bb_canfit is a real predicate and mem_claim_dma has
-; none.
+; That second half is the one place this page departs from the bb_avail idiom
+; (SPEC.md 31.3), and deliberately: bb_canfit is a real predicate and
+; mem_claim_dma has none.
+;
+; A driver that publishes DSV_TIERS = 0 said nothing, and is taken at its
+; word: every row stays live and the click finds out the slow way, which is
+; exactly the behaviour before the cell existed.
 ; =============================================================================
 
 CPS_B2Y2  equ CP_PR0Y + 2*CP_PROWH + CP_GW + 3  ; 81: route row 2's bottom
@@ -1712,8 +1723,11 @@ CPS_BTY2  equ 99
 CPS_NOTEY equ 104                       ; the refusal notice's text row
 
 ; Which row a click asked for, in [snd_route] order, so the band test is an
-; index rather than a ladder of compares.
+; index rather than a ladder of compares - and the same rows as DSV_TIERS
+; bits, which is a table rather than a shift because cp_snd_rowok promises to
+; clobber nothing and a variable shift count costs CL.
 cp_snd_tiers: db SND_RT_SPK, SND_RT_FM, SND_RT_SB
+cp_snd_tbit:  db 0, 1 << SND_RT_FM, 1 << SND_RT_SB
 
 ; The last click's refusal, as a DRVE_* (0 = the last click was fine, and the
 ; notice line is blank). .text and not .bss for the reason everything else
@@ -1801,19 +1815,28 @@ cp_snd_paint:
 ; out: CF = 0 yes; CF = 1 no - the hardware that row names is not here
 ; clobbers: nothing (flags)
 ;
-; See the header above for why row 2's test is so much weaker than row 1's.
+; ONE test for both driver rows, because both ask the same question and the
+; driver answered it once, at attach. The bits are in the low byte for every
+; SND_RT_* there is (they are 1..3), so this is a byte test.
 ; -----------------------------------------------------------------------------
 cp_snd_rowok:
     or al, al
-    jz .yes                     ; the speaker is always there
-    cmp al, 1
-    je .fm
-    cmp word [drv_owner], 0     ; row 2: a published sound driver is the most
-    je .no                      ; we can assert without claiming
-    jmp short .yes
-.fm:
-    cmp word [drv_svc+DSV_TONE], 0
-    je .no
+    jz .yes                     ; the PC speaker is resident and needs no
+                                ; driver at all: never refused
+    cmp word [drv_owner], 0
+    je .no                      ; nothing published: the speaker is all the
+                                ; machine has
+    cmp word [drv_svc+DSV_TIERS], 0
+    je .yes                     ; a driver that did not answer is taken at its
+                                ; word - the click finds out the slow way,
+                                ; which is what every row used to do
+    push bx
+    mov bl, al
+    xor bh, bh
+    mov bl, [bx+cp_snd_tbit]
+    test byte [drv_svc+DSV_TIERS], bl
+    pop bx                      ; POP does not touch flags
+    jz .no
 .yes:
     clc
     ret

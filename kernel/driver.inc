@@ -112,7 +112,15 @@ DSV_TONE    equ 12              ; dw: near proc, the tone tier's sink while
                                 ; this driver is loaded (0 = leave it on the
                                 ; speaker). An OPL2 publishes it, a Sound
                                 ; Blaster does not.
-DSV_SIZE    equ 14
+DSV_TIERS   equ 14              ; dw: bitmap of 1 << SND_RT_* saying which
+                                ; tiers this driver COULD provide. Every cell
+                                ; above says what the driver IS; this one says
+                                ; what it could BE, so DRVV_TIER never touches
+                                ; it - only attach and detach do. 0 = the
+                                ; driver did not answer the question, and the
+                                ; Control Panel then assumes it can (SPEC.md
+                                ; 34.8/31.7)
+DSV_SIZE    equ 16
 
 ; --- SYSTEM.CFG: a KEYED record file (SPEC.md 51.5) --------------------------
 ; It is the whole Control Panel's file, not just the driver list: every

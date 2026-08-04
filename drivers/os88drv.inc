@@ -114,6 +114,21 @@ DRVE_HW      equ 5              ; the hardware that tier needs is not there
 ;                   this MOVES tones off the PC speaker onto your hardware,
 ;                   which is what an OPL2 wants and a Sound Blaster does not.
 ;   DSV_NAME    dw  -> a NUL sink name in your segment, for the Control Panel
+;   DSV_TIERS   dw  bitmap of 1 << SND_RT_* : which tiers you COULD provide,
+;                   whatever you are running right now. Every cell above says
+;                   what you ARE; this one says what you could BE, so DRVV_TIER
+;                   must NOT change it - decide it at attach, from what your
+;                   probes actually found, and clear it at detach.
+;
+;                   It exists so the Control Panel can grey a tier your machine
+;                   does not have WITHOUT asking you to probe again. The Sound
+;                   Blaster scan is six ISA base addresses with a reset timeout
+;                   each and then a slow retry on 220h - about a sixth of a
+;                   second on a machine that has no card, spent under the gfx
+;                   lock, which the user sees as the desktop freezing on a
+;                   click that then does nothing. You already know the answer;
+;                   this is where you put it. Leave it 0 and the panel assumes
+;                   you can do everything and finds out the slow way.
 DSV_CAPS     equ 0
 DSV_FM       equ 2
 DSV_STREAM   equ 4
@@ -121,7 +136,8 @@ DSV_TICK     equ 6
 DSV_RELINST  equ 8
 DSV_NAME     equ 10
 DSV_TONE     equ 12
-DSV_SIZE     equ 14
+DSV_TIERS    equ 14
+DSV_SIZE     equ 16
 
 ; --- a driver's worker task (SPEC.md 51.7) -----------------------------------
 ; OSAPI_TASK_SPAWN is not available to you: its fence is a chain of tests on
