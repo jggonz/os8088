@@ -426,6 +426,27 @@ fdlg_commit:
     mov cx, [fdlg_rqcb]
     or cx, cx
     jz .out
+    push word [snd_inst]        ; STAMP THE DISPATCHED INSTANCE (SPEC.md
+    call snd_disp_set           ; 34.3), exactly as W_ONKEY, W_ONCLICK, the
+                                ; menu handler and W_PAINT all do - and DI is
+                                ; still [fdlg_rqrec] here, validated three
+                                ; tests up, so the record is free.
+                                ;
+                                ; This was the one dispatch site that did not,
+                                ; and the consequence was invisible: a sound
+                                ; GRANT taken inside a completion proc got
+                                ; snd_req_inst's fallback, the running task's
+                                ; T_INST, which on the UI task is 0xFF - "no
+                                ; instance". The app's own worker is stamped
+                                ; with the real instance, so sbl_grant_chk's
+                                ; owner compare could never match and every
+                                ; stage into that grant was refused. Tracker
+                                ; loads a module through this dialog and mixes
+                                ; from a worker: the ring kept the open's
+                                ; pre-roll and played zeros for the rest of
+                                ; it, forever. The 0xFF stamp also outlives
+                                ; the app, because snd_release_inst releases
+                                ; by instance and nothing owns 0xFF.
     mov al, [fdlg_mode]         ; the callback's contract: AL = mode,
     mov ah, 0                   ; SI = its window, ES:DI = the name - ES,
     mov si, [fdlg_rqwin]        ; because for a package DS is its own
@@ -436,6 +457,7 @@ fdlg_commit:
     call wm_pkgcall             ; SI = its window, BP = the completion proc
     pop bp
     pop es
+    pop word [snd_inst]         ; the outer dispatch's stamp, back
 .out:
     pop di
     pop si

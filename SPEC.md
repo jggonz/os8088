@@ -6983,6 +6983,21 @@ speaker is not a device that can be absent.
   880 Hz tone through the active tone route; for UI use (menu error,
   refused clicks).
 
+**Every site that dispatches a package callback must stamp the instance.**
+`snd_req_inst` falls back to the running task's `T_INST` when no callback is
+stamped, and on the UI task that is `0xFF` — *no instance*. A grant taken
+under that fallback is owned by nobody: the app's own **worker**, stamped
+with the real instance, then fails the driver's owner compare on every
+staging call, and `snd_release_inst` cannot free the grant at teardown
+either. The failure is silent in both directions.
+
+The sites are `W_ONKEY`, `W_ONCLICK`, the menu command handler, `W_PAINT`
+and **the Standard File dialog's completion proc** (§38.6) — the last of
+which did not stamp, which is what made Tracker play its ring's opening
+pre-roll and then zeros, forever: it takes its module grant inside exactly
+that callback. `W_ONSIZE` is the one dispatch that deliberately does not
+stamp; it is a geometry negotiator and has no business granting sound.
+
 ### 34.4 Speaker PWM — exclusive clips (Phase 2)
 
 **Modulator**: ch2 in **mode 0, lobyte-only** (90h → 43h once at clip

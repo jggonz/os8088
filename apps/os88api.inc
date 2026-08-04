@@ -215,8 +215,10 @@ SND_OPENF_RING   equ 1           ; ring mode (SPEC.md 34.5): SI = ring base,
                                  ; 4,096 above 22,222 Hz). total/fed/
                                  ; consumed become free-running 16-bit
                                  ; (mod 65536): stage stream byte n at
-                                 ; ringbase + (n & (RL-1)), and verb 1 feeds
-                                 ; a DELTA, never a new total.
+                                 ; ringbase + (n & (RL-1)), and verb 1 still
+                                 ; feeds the NEW TOTAL - free-running, so the
+                                 ; driver reads it as a wrapping counter, not
+                                 ; as a delta.
 
 ; --- window management (SPEC.md 11.1/11.2) -------------------------------------
 %define OSAPI_WM_SIZABLE    KERNEL_SEG:0x0108   ; BX=win ptr, AL = 0 clear / non-zero set
