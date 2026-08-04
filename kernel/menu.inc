@@ -190,7 +190,7 @@ menu_activate:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_win_set - attach an app menu set to a window (API 0x00AC, SPEC 12.2)
+; menu_win_set - attach an app menu set to a window (API 0x0148, SPEC 12.2)
 ; in:  BX = window ptr, SI = menu set ptr (0 = no menus of its own)
 ; out: nothing (all registers preserved, FLAGS INCLUDED)
 ;
