@@ -289,6 +289,11 @@ pt_entry:
     mov ax, pt_onsize               ; ...and the kernel asks us before it
     call OSAPI_WM_ONSIZE            ; commits one (SPEC.md 11.1)
     pop ax
+    push si                         ; SI is the loader's, like the two other
+    mov si, pt_about                ; borrowings in this proc
+    call OSAPI_ABOUT_SET            ; 'About Paint' under our name in the bar
+    pop si                          ; (SPEC.md 12.2); BX is still the window.
+                                    ; LIVE only - see pt_about
     call pt_menufix                 ; and the menus say what is unavailable                      ; a notice window gets the menu bar too,
                                     ; so its name shows and File/Edit are
                                     ; visibly inert rather than absent
@@ -2616,6 +2621,10 @@ pt_paint:
     call pt_blit_all
     mov byte [pt_selshown], 0
     call pt_marq                    ; the marquee, if a selection is live
+    cmp byte [pt_abon], 0           ; ...and the About card over the lot
+    je .noab
+    call pt_abdraw
+.noab:
     cmp byte [pt_apend], 0          ; a refused resize, deferred to here
     je .out
     cmp byte [pt_apend], 2          ; 2 = pt_onsize held an axis back, so the
@@ -2822,6 +2831,8 @@ pt_click:
     jne .out
     mov bx, si
     call pt_org
+    call pt_abdismiss               ; a click anywhere takes the credits down,
+    jc .out                         ; and is spent doing it
     call pt_msg_hide
     mov al, [pt_fbox]               ; a click may move the keyboard focus, and
     mov [pt_fbold], al              ; the group has to be redrawn if it does
@@ -4783,6 +4794,8 @@ pt_onkey:
     mov [pt_key], ax
     mov bx, si
     call pt_org
+    call pt_abdismiss               ; ...and so does any key
+    jc .out
     call pt_msg_hide
     mov ax, [pt_key]
     cmp byte [pt_fbox], 0           ; a size box has the keyboard: it gets the
@@ -5883,6 +5896,193 @@ pt_num:
     loop .emit
     ret
 
+; =============================================================================
+; The About panel (SPEC.md 12.2/42) - a card drawn ON the content, not a
+; window of its own.
+;
+; `main`'s Paint makes a second window for this. That cannot be ported here
+; and it is worth writing down why: a package's SECOND window is never bound
+; to its instance record (only the entry's is - SPEC.md 21), so nothing
+; destroys it at teardown, and after Paint closes the kernel frees the region
+; while the window still carries W_SEG/W_DISP pointing into it. The next
+; repaint far-calls into whatever claimed that memory. There is also no
+; OSAPI_WM_DESTROY for a package to clean up with. A card drawn on our own
+; content has none of that: it is a flag and some pixels, and it dies with
+; the instance because it never existed apart from it. Solitaire and Arkanoid
+; do the same, so this is the fork's idiom rather than a workaround.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; pt_about - the OSAPI_ABOUT_SET handler (slot 0x01E0, SPEC.md 12.2)
+; in:  SI = our window; UI task, gfx lock HELD
+; out: nothing; preserves all registers
+;
+; Registered only in PT_M_LIVE (pt_entry), because dismissing it repaints
+; through pt_repaint and that draws a canvas. A Paint that could not claim
+; one has a notice on screen already saying so, which is the more useful
+; thing for it to be showing.
+; -----------------------------------------------------------------------------
+pt_about:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, si
+    call pt_org                     ; the window may have been dragged
+    mov byte [pt_abon], 1
+    call pt_abdraw                  ; straight on top - the content under it
+    pop di                          ; is untouched and comes back on dismiss
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_abdismiss - take the card down if it is up
+; in:  the origin already tracked; gfx lock held
+; out: CF = 1 it WAS up and the content has been repainted, so the caller
+;      swallows the click or key that dismissed it; CF = 0 otherwise.
+;      Preserves every register.
+; -----------------------------------------------------------------------------
+pt_abdismiss:
+    cmp byte [pt_abon], 0
+    je .none
+    mov byte [pt_abon], 0
+    call pt_repaint
+    stc
+    ret
+.none:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_abmeas - size and centre the card from the strings themselves
+; out: [pt_abw]/[pt_abh]/[pt_abl]/[pt_abt], content coords
+; preserves every register
+;
+; Measured, never pinned: the widest line decides the width. Both axes are
+; clamped to the content, because this window is RESIZABLE (SPEC.md 11.1) -
+; the card has to fit whatever the user has dragged it down to, not the size
+; it was measured against.
+; -----------------------------------------------------------------------------
+pt_abmeas:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor cx, cx                      ; CX = widest line, DI = line count
+    xor di, di
+    mov si, pt_ablines
+.next:
+    mov bx, [si]
+    or bx, bx
+    jz .done
+    inc di
+    add si, 2
+    push si
+    mov si, bx
+    call OSAPI_FONT_WIDTH           ; AX = pixel width
+    pop si
+    cmp ax, cx
+    jbe .next
+    mov cx, ax
+    jmp .next
+.done:
+    add cx, 24                      ; 12px of margin either side
+    cmp cx, [pt_contw]
+    jbe .wok
+    mov cx, [pt_contw]
+.wok:
+    mov [pt_abw], cx
+    mov ax, di                      ; height = lines * PT_ABLH + margins
+    mov bx, PT_ABLH
+    mul bx
+    add ax, 16
+    cmp ax, [pt_conth]
+    jbe .hok
+    mov ax, [pt_conth]
+.hok:
+    mov [pt_abh], ax
+    mov ax, [pt_contw]
+    sub ax, [pt_abw]
+    shr ax, 1
+    mov [pt_abl], ax
+    mov ax, [pt_conth]
+    sub ax, [pt_abh]
+    shr ax, 1
+    mov [pt_abt], ax
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_abdraw - the card: white fill, black frame, the credit centred in it
+; in:  the origin already tracked; gfx lock held
+; out: nothing; preserves all registers
+;
+; Every line is centred on the CARD rather than on the content, so the block
+; still reads as one card when the card has been clamped narrower than the
+; text wanted.
+; -----------------------------------------------------------------------------
+pt_abdraw:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call pt_abmeas
+    mov ax, [pt_abl]                ; pt_cwell: fill in [pt_pen], frame black
+    mov bx, [pt_abt]
+    mov cx, [pt_abw]
+    dec cx                          ; it takes width-1 / height-1
+    mov dx, [pt_abh]
+    dec dx
+    mov byte [pt_pen], CWHITE
+    call pt_cwell
+    mov si, pt_ablines
+    mov di, [pt_abt]
+    add di, 8                       ; the first baseline, inside the frame
+.line:
+    mov bx, [si]
+    or bx, bx
+    jz .out
+    add si, 2
+    push si
+    mov si, bx
+    call OSAPI_FONT_WIDTH           ; AX = this line's width
+    mov cx, [pt_abw]
+    sub cx, ax
+    jns .fits
+    xor cx, cx                      ; wider than the card: flush left rather
+.fits:                              ; than off its left edge
+    shr cx, 1
+    add cx, [pt_abl]
+    mov dx, di
+    mov byte [pt_pen], CBLACK
+    call pt_ctext                   ; content coords; it adds the origin
+    pop si
+    add di, PT_ABLH
+    jmp .line
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; pt_repaint - a self-initiated repaint of our whole content
 ; in:  gfx lock held; out: nothing; preserves all registers
@@ -5911,6 +6111,10 @@ pt_repaint:
     mov byte [pt_msgon], 0
     mov byte [pt_careton], 0
     call pt_marq
+    cmp byte [pt_abon], 0           ; the card sits on top of everything, so
+    je .noab                        ; it is drawn last and by every repaint -
+    call pt_abdraw                  ; otherwise a paint triggered while it is
+.noab:                              ; up would quietly erase it
     mov bx, [pt_win]
     call OSAPI_WM_GROW              ; the white-fill idiom ate the grow box
                                     ; (SPEC.md 11.1) - put it back
@@ -7884,6 +8088,20 @@ pt_gif_out:
 pt_s_title:  db 'Paint', 0          ; the title's stem, and the fingerprint
                                     ; pt_dupchk matches on
 pt_appname:  db 'Paint', 0          ; the menu bar's app label (SPEC.md 12.2)
+
+; --- the About card (SPEC.md 12.2/42) ---------------------------------------
+; A 12px line pitch rather than the kernel About's 16: six lines have to fit
+; a CGA content of about 132 rows (SPEC.md 39.2), and pt_abmeas clamps to
+; whatever the window has actually been resized to anyway.
+PT_ABLH     equ 12
+pt_ablines:
+    dw pt_ab_1, pt_ab_2, pt_ab_3, pt_ab_4, pt_ab_5, pt_ab_6, 0
+pt_ab_1:     db 'Paint for os8088', 0
+pt_ab_2:     db 'a bitmap editor for the 8086', 0
+pt_ab_3:     db 0                   ; a blank line is a line with no glyphs
+pt_ab_4:     db 'Paint, and the fork it came', 0
+pt_ab_5:     db 'from, contributed by Elendilon', 0
+pt_ab_6:     db 'github.com/Elendilon', 0
 pt_s_defname: db 'PICTURE.BMP', 0
 pt_s_defgif:  db 'PICTURE.GIF', 0
 pt_s_ebmp:    db 'BMP', 0
@@ -8208,6 +8426,11 @@ pt_ic_text:
     PTWORD pt_ic_rs
     PTWORD pt_msgw
     PTWORD pt_msgp                  ; the toast a file operation asked for
+    PTBYTE pt_abon                  ; 1 = the About card is up (SPEC.md 12.2)
+    PTWORD pt_abl                   ; ...and where pt_abmeas settled it,
+    PTWORD pt_abt                   ; content coords
+    PTWORD pt_abw
+    PTWORD pt_abh
     PTWORD pt_uy1                   ; the rows an undo swap touched
     PTWORD pt_uy2
     PTWORD pt_mbest                 ; pt_map16's best distance so far

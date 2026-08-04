@@ -8216,11 +8216,26 @@ entry covers — so a freed block merges with its neighbours for nothing.
 
 ### 41.6 What the Task Manager reports
 
-One line, `XMS used/sizedK`, directly **below** the package-pool map and
-above the process list (§28), with a **bar** under it: `used/sized` of the
+One line, `CPU 8086  XMS used/sizedK`, directly **below** the package-pool map
+and above the process list (§28), with a **bar** under it: `used/sized` of the
 bar's interior black, the rest white — the same shape and the same
 element-check discipline as the performance view's RAM bar, because it answers
 the same question about a different pool.
+
+**The tier shares this line rather than taking one of its own**, because it is
+the same fact: what the CPU is (§41.1) is what decides whether there can be any
+memory above 1MB at all, and on the machine this OS is written for the honest
+reading of the whole line is "an 8086, so none". Nothing else in the UI ever
+said which tier `cpu_detect` settled on. The three names are padded to the same
+six columns so the figures beside them do not shuffle between machines, and the
+line needs no check word of its own — `tm_rowsum` hashes the composed string,
+so the tier folds into the XMS line's.
+
+`TM_STRMAX` now takes the **maximum** of its two candidate longest lines rather
+than naming the winner. Which line is longest has already changed twice — the
+RAM line grew by four the day HEAP joined it, the XMS line by ten the day the
+tier did — and the failure mode is a `tm_str` that silently writes past the end
+of `.bss`.
 
 It gets no *map*, and that is the honest layout rather than a missing feature:
 the two maps above it are conventional memory and a magnified slice of
@@ -8520,6 +8535,29 @@ allow, from 32x16 up, and everything else follows from that:
   during one: the "Loading..." toast a file dialog's completion callback puts up
   is followed by one `pt_wait`, or the buffered machine flushes it only after
   the load it was announcing.
+
+### 42.1 About Paint, and why it is not a window
+
+Registered with `OSAPI_ABOUT_SET` (§12.2), and **only in `PT_M_LIVE`**: taking
+the card down repaints through `pt_repaint`, which draws a canvas, and a Paint
+that could not claim one has a notice on screen already saying the more useful
+thing. It is `[pt_abon]` plus `pt_abmeas`/`pt_abdraw`/`pt_abdismiss`, the same
+shape as §43.8 and §44.7 — a card on Paint's own content, dismissed by the next
+click or key, drawn last by every repaint so nothing erases it.
+
+**A second window would have been the obvious design and is the wrong one
+here.** A package's second window is never bound to its instance record: only
+the window the entry proc returns goes through `inst_bind_win` (§21), so
+`wm_owner` says nothing owns the second one and teardown does not destroy it.
+Meanwhile teardown *does* free the region (§29.4), and the orphaned window is
+still carrying `W_SEG`/`W_DISP` into it — the next repaint far-calls whatever
+claimed that memory afterwards. There is no `OSAPI_WM_DESTROY` for a package to
+clean up with either. A card is a flag and some pixels: it cannot outlive the
+instance because it never existed apart from it.
+
+**This is a rule about packages, not about Paint.** Until a package can own
+more than one window, an app that wants a second surface draws it on the one it
+has.
 
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
@@ -8995,6 +9033,13 @@ takes the gfx lock, arms its clip, sees the flag and unlocks without drawing.
 The UI task owns the content until the panel comes down, and the game is
 paused underneath rather than running invisibly. Every full repaint re-draws
 the panel last, so it stays on top of whatever the resume puts back.
+
+**`W_ONCLICK` is wired for the panel and for nothing else.** Nothing in this
+game steers with the mouse, so the callback's whole body is `ark_track` plus
+`ark_abdismiss` — but a panel that a key takes down and a click does not reads
+as a hung window, which is the only reason the slot is non-zero. It is the
+window's *content* that dispatches it: a click on the frame or the drop shadow
+never reaches a callback, so the panel correctly survives one.
 
 ## 50. memory.inc — the claim heap
 

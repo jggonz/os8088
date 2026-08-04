@@ -126,13 +126,26 @@ TMC_N       equ 6
 TM_L_RAM    equ 4               ; 'RAM '
 TM_L_HEAP   equ 7               ; '  HEAP '   (the gap is part of the label)
 TM_L_KPAIR  equ 8               ; 'nnn/nnnK'  (tm_kpair)
-TM_STRMAX   equ TM_L_RAM + TM_L_KPAIR + TM_L_HEAP + TM_L_KPAIR + 1
-                                ; = 28. The memory view's ROWS are 25 (see
-                                ; tm_s_mhdr) and its captions shorter still,
-                                ; so this line is the one that sizes the
-                                ; buffer - but only by three characters now,
-                                ; which is the number to check before widening
-                                ; a row again
+TM_L_CPU    equ 4 + 6           ; 'CPU ' + a six-column tier name
+TM_L_XMS    equ 4               ; 'XMS '
+TM_L_K5PAIR equ 5 + 1 + 5 + 1   ; 'nnnnn/nnnnnK' (two tm_put5, SPEC.md 41.6)
+; Two candidates for longest, and which one wins has already changed once, so
+; take the max rather than naming the winner: the RAM line grew by four the
+; day HEAP joined it, and the XMS line grew by ten the day the CPU tier did.
+TM_LN_RAM   equ TM_L_RAM + TM_L_KPAIR + TM_L_HEAP + TM_L_KPAIR
+TM_LN_XMS   equ TM_L_CPU + TM_L_XMS + TM_L_K5PAIR
+%if TM_LN_XMS > TM_LN_RAM
+TM_STRMAX   equ TM_LN_XMS + 1
+%else
+TM_STRMAX   equ TM_LN_RAM + 1
+%endif
+                                ; = 28: the RAM line at 27 + NUL, one ahead of
+                                ; the XMS line's 26. The memory view's ROWS are
+                                ; 25 (see tm_s_mhdr) and the captions shorter
+                                ; still. There is ONE character of slack, which
+                                ; is the number to check before widening
+                                ; anything - a 24-byte buffer once went on
+                                ; silently writing past the end of .bss
 
 ; --- what the kernel occupies, in KB (SPEC.md 2/28) --------------------------
 ; Every one of these is a compile-time constant, and that is the point: the
@@ -365,6 +378,14 @@ tm_s_mhdr:  db 'NAME     ADDR SIZE   HEAP', 0 ; 25 chars, the row width. The
 tm_s_heap:  db '  HEAP ', 0     ; + claimed/size KB (SPEC.md 50). The two
                                 ; leading spaces are the RAM line's gap, and
                                 ; the claim swatch is drawn into them
+tm_s_t86:   db '8086  ', 0      ; the detected tier (SPEC.md 41.1), which
+tm_s_t286:  db '286   ', 0      ; nothing else in the UI says out loud. Each
+tm_s_t386:  db '386+  ', 0      ; name is padded to the SAME six columns, so
+                                ; the XMS figures beside it do not shuffle
+                                ; left and right between machines. The 'CPU '
+                                ; in front of them is tm_s_cpu, the
+                                ; performance view's own label - one string,
+                                ; because it is one word
 tm_s_xms:   db 'XMS ', 0        ; + used/size KB above 1MB (SPEC.md 41)
 tm_s_pool:  db 'PACKAGES ', 0   ; + allocated/size KB of the pool. The two
                                 ; caption lines are CAPS and the list's rows
@@ -1260,8 +1281,8 @@ tm_draw_mem:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_cap_xms - white-fill the caption band and draw "XMS nnn/nnnK" (used /
-;              sized, SPEC.md 41.6)
+; tm_cap_xms - white-fill the caption band and draw "CPU 8086  XMS n/nK"
+;              (tier, then used / sized above 1MB - SPEC.md 41.1/41.6)
 ; in:  nothing
 ; out: nothing
 ; clobbers: nothing (flags only)
@@ -1274,9 +1295,15 @@ tm_draw_mem:
 ; it were part of the same span. So: the figures, directly under the last
 ; map, above the process list.
 ;
-; On tier 0 - the target machine - this reads 'XMS 0/0K' and costs the
-; refresh one string compare, because xm_caps answers 0 having touched
-; nothing (SPEC.md 41.9 rule 1).
+; On tier 0 - the target machine - this reads 'CPU 8086  XMS 0/0K' and costs
+; the refresh one string compare, because xm_caps answers 0 having touched
+; nothing (SPEC.md 41.9 rule 1). The tier shares this line rather than taking
+; one of its own because it is the same fact: what the CPU is decides whether
+; there can be any memory above 1MB at all, and on the machine this OS is for
+; the honest reading of the whole line is "an 8086, so none".
+;
+; It needs no check word of its own either - tm_rowsum hashes the composed
+; tm_str, so the tier folds into TMC_XMS's for free.
 ; -----------------------------------------------------------------------------
 tm_cap_xms:
     push ax
@@ -1314,6 +1341,16 @@ tm_cap_xms:
     push ax
     push bx
     mov di, tm_str
+    mov si, tm_s_cpu            ; 'CPU ' + the tier, ahead of the XMS figures:
+    call tm_copy                ; the two belong together, because the tier is
+    mov si, tm_s_t86            ; exactly what decides whether there can BE any
+    cmp byte [cpu_tier], CPU_286
+    jb .tier
+    mov si, tm_s_t286
+    je .tier
+    mov si, tm_s_t386
+.tier:
+    call tm_copy
     mov si, tm_s_xms
     call tm_copy
     pop bx                      ; BX = total, AX = used
