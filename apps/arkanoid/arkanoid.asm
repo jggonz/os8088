@@ -153,6 +153,11 @@ ARK_PUH     equ 10                  ; 8px glyph drawn one row in, or the letter
                                     ; it and every frame leaves a slice of the
                                     ; last one behind
 ARK_PUFALL  equ 2                   ; ...and how fast it falls
+ARK_LAGMAX  equ 4                   ; how far behind its own deadline the
+                                    ; worker will chase before giving up and
+                                    ; re-anchoring (ark_worker). Small, because
+                                    ; the point is to absorb ONE slow frame,
+                                    ; not to run a backlog of them
 
 ; game modes ([ark_mode])
 M_READY     equ 0                   ; ball parked on the paddle, Space to go
@@ -730,11 +735,29 @@ ark_abdraw:
 ; lock for one short burst of drawing (rule 3).
 ; -----------------------------------------------------------------------------
 ark_worker:
+    call OSAPI_GET_TICKS
+    mov [ark_due], ax               ; the first frame is due now
 .loop:
     mov bx, [ark_win]
     call OSAPI_TASK_ALIVE           ; the lock must NOT be held here (rule 4)
-    mov ax, 1
+
+    inc word [ark_due]              ; ...and the next one a tick after this
+    call OSAPI_GET_TICKS            ; AX = now
+    mov bx, [ark_due]
+    sub bx, ax                      ; BX = ticks still to wait, SIGNED, and
+    jle .behind                     ; wrap-safe by subtraction (SPEC.md 8)
+    mov ax, bx
     call OSAPI_TASK_SLEEP
+    jmp short .frame
+.behind:
+    cmp bx, -ARK_LAGMAX             ; a little late: run now and keep the
+    jg .frame                       ; deadline, so the next short frame catches
+    mov [ark_due], ax               ; back up. Hopelessly late - a long stall,
+                                    ; or a machine that cannot hold 18fps at
+                                    ; all - and the deadline is re-anchored to
+                                    ; now, or it runs away and this loop never
+                                    ; sleeps again
+.frame:
     call ark_update
     call ark_render
     jmp .loop
@@ -2217,26 +2240,33 @@ ark_draw_pu:
     mov di, ax                      ; DI = kind, for the colour/letter tables
     mov bx, si
     add bx, bx                      ; BX = the word-indexed slot
-    mov al, [ark_pucol+di]
-    call OSAPI_SET_COLOR
-    mov ax, [ark_pux+bx]
-    mov bx, [ark_puy+bx]
-    mov cx, ax
-    add cx, ARK_PUW - 1
-    mov dx, bx
+
+    mov al, CBLACK                  ; the 1px frame, as a SOLID rect that the
+    call OSAPI_SET_COLOR            ; body is then inset into: two fills for
+    mov ax, [ark_pux+bx]            ; what a fill plus a gfx_frame did in five
+    mov bx, [ark_puy+bx]            ; (a frame is four of them inside the
+    mov cx, ax                      ; kernel), and the same pixels. A capsule
+    add cx, ARK_PUW - 1             ; still has an edge against the background
+    mov dx, bx                      ; when its own colour is a light one
     add dx, ARK_PUH - 1
     call ark_fillc
-    mov al, CBLACK                  ; a 1px frame, so a white capsule still
-    call OSAPI_SET_COLOR            ; has an edge against the background
+
+    mov al, [ark_pucol+di]
+    call OSAPI_SET_COLOR
     mov bx, si
     add bx, bx
     mov ax, [ark_pux+bx]
+    inc ax
     mov bx, [ark_puy+bx]
+    inc bx
     mov cx, ax
-    add cx, ARK_PUW - 1
+    add cx, ARK_PUW - 3             ; x+1 .. x+PUW-2, y+1 .. y+PUH-2
     mov dx, bx
-    add dx, ARK_PUH - 1
-    call ark_framec
+    add dx, ARK_PUH - 3
+    call ark_fillc
+
+    mov al, CBLACK                  ; the letter is black on the body, and the
+    call OSAPI_SET_COLOR            ; body fill above left the pen its colour
     mov al, [ark_puletter+di]
     mov bx, si
     add bx, bx
@@ -2270,10 +2300,18 @@ ark_wipe_pu:
     xor si, si
 .each:
     cmp byte [ark_pukind+si], PU_NONE
-    jne .wipe
-    cmp byte [ark_puwipe+si], 0     ; caught or lost: one last erase
-    je .next
+    jne .fall
+    cmp byte [ark_puwipe+si], 0     ; caught or lost: one last erase, and it
+    je .next                        ; has to be the WHOLE capsule
     mov byte [ark_puwipe+si], 0
+    mov dx, ARK_PUH - 1
+    jmp short .wipe
+.fall:                              ; still falling: only the strip it
+    mov dx, ARK_PUFALL - 1          ; VACATED, which is ARK_PUFALL rows off the
+                                    ; top. The other eight rows are about to be
+                                    ; drawn over anyway, and erasing them first
+                                    ; was 120 pixels a frame per capsule spent
+                                    ; on pixels nothing would ever see
 .wipe:
     mov al, ARK_BG
     call OSAPI_SET_COLOR
@@ -2283,8 +2321,7 @@ ark_wipe_pu:
     mov bx, [ark_puold+bx]
     mov cx, ax
     add cx, ARK_PUW - 1
-    mov dx, bx
-    add dx, ARK_PUH - 1
+    add dx, bx
     call ark_fillc
 .next:
     inc si
@@ -2804,6 +2841,9 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     AWORD ark_sy
     AWORD ark_err
     AWORD ark_nstep
+
+; --- the worker's frame clock -------------------------------------------------
+    AWORD ark_due                   ; [ticks] the next frame is due at
 
 ; --- drawing scratch ----------------------------------------------------------
     AWORD ark_dx

@@ -8401,9 +8401,29 @@ unlike `SOLITAIR.O88` the file name needs no truncating.
 
 A ball has to keep moving between keystrokes, and a window callback only runs
 when something happens to the window, so the loop lives in `ark_worker`
-(§20.6) — the same shape as apps/fractal. One frame per `osapi_task_sleep 1`,
-about 18 fps. The sleep is the frame rate *and* what keeps the machine usable:
-a worker that spun would starve the UI task it shares the scheduler with.
+(§20.6) — the same shape as apps/fractal. One frame a tick, about 18 fps. The
+sleep is the frame rate *and* what keeps the machine usable: a worker that
+spun would starve the UI task it shares the scheduler with.
+
+**It sleeps to a DEADLINE, not for a duration, and the difference is a factor
+of two.** `task_sleep` is relative — the wake tick is computed from `[ticks]`
+*at the call* (§8) — so a loop that works and then sleeps 1 has a period of
+`ceil(work) + 1` ticks. The instant a frame's work crosses one 55ms tick the
+rate does not sag, it **halves**: 18.2 fps to 9.1, which is what "it lags when
+there is a lot on screen" actually feels like. So `ark_worker` keeps
+`[ark_due]`, the tick the next frame is owed at, advances it by one each
+frame, and sleeps only the difference against `osapi_get_ticks`. A frame that
+overran does not sleep at all, and the period becomes `max(1, work)` — a
+smooth degradation instead of a step.
+
+Measured on QEMU with an artificial frame costing exactly one tick, which is
+the worst point for the old shape: **9.2 fps before, 18.3 fps after**, with
+identical work.
+
+`[ark_lagmax]`'s job is the other half. A worker that is *persistently* late
+would see its deadline run away from `[ticks]` and never sleep again, so once
+it is `ARK_LAGMAX` ticks behind it re-anchors the deadline to now. Small on
+purpose: the point is to absorb one slow frame, not to run a backlog of them.
 
 Everything the UI task does is set a word the worker reads — `[ark_launch]`,
 `[ark_pdir]`, `[ark_pkeep]` — with no protocol at all, because the 8086
@@ -8503,6 +8523,36 @@ an 8px box hangs a row below the rect that erases it, and every frame leaves a
 slice of the last one behind. The laser bolt spawns clear of the paddle for
 the same class of reason — spawned *on* it, the bolt's first erase punches a
 hole in the paddle it was fired from.
+
+**Three capsules are the frame's dominant cost, so each one is three fills
+rather than six.** What matters here is the *count* of `gfx_fill` calls, not
+the pixels: each carries `vga_rect_setup`'s clip, offset and mask arithmetic,
+which for a 12×10 sprite dwarfs the writing. Two things pay for themselves:
+
+- **The 1px frame is a solid rect the body is inset into**, not a
+  `gfx_frame` — which is four fills inside the kernel. Black rect, then the
+  body at `x+1 .. x+PUW-2`, `y+1 .. y+PUH-2`: two fills for what took five,
+  and the same pixels. The pen is black on entry and the *body* fill leaves it
+  the capsule's colour, so the letter has to set it back — drawn in the body's
+  own colour it is invisible, which is exactly what happened first.
+- **The erase is the vacated strip, not the whole capsule.** A capsule falls
+  `ARK_PUFALL` rows a frame and is redrawn whole immediately after, so
+  erasing all ten rows spent 120 pixels a frame on pixels nothing would ever
+  see. `ark_wipe_pu` clears `ARK_PUFALL` rows off the top while the capsule is
+  falling, and the full rect only on the frame it is caught or lost — the one
+  case with no redraw behind it.
+
+Measured against the previous code with all three capsules and both bolts
+pinned on screen: **24.1 → 15.2 `gfx_fill` calls per frame**, with the capsule
+sprite pixel-for-pixel identical.
+
+The same trick does **not** apply to the bolts, and `osapi_gfx_blit4` does not
+apply to either. A bolt is 2×6 and moves 6 rows, so its old and new rects do
+not overlap and two fills is already minimal. And a blit coalesces *runs*: a
+framed capsule is 26 runs (one per frame row, three per body row) against the
+three fills it costs drawn directly, so blitting it would be eight times the
+work. Solitaire's card back wins from `blit4` (§43) because a lattice is
+hundreds of calls collapsing into few runs; this is the opposite shape.
 
 ### 44.5 Sound comes from the worker
 
