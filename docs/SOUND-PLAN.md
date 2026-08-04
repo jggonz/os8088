@@ -155,9 +155,13 @@ SDRV_NOTE   equ 4   ; dw  near ptr: FM op        (0 if unsupported)
 SDRV_PCM    equ 6   ; dw  near ptr: PCM-out op   (0 if unsupported)
 SDRV_PCMIN  equ 8   ; dw  near ptr: PCM-in op    (0 if unsupported)
 SDRV_PROBE  equ 10  ; dw  near ptr to the probe's FARSHIM stub in .text
-                    ;     (0 = unconditionally present) - SPEC §33.3 rule 3: near
-                    ;     pointers reach far code only through shims; KCALL/FARK is
-                    ;     the reverse direction (probe bodies calling kernel helpers)
+                    ;     (0 = unconditionally present)
+                    ; [CORRECTION: this whole shim mechanism is retired here.
+                    ;  .fartext is gone (SPEC.md 33), so there is no far code to
+                    ;  reach and no FARSHIM/KCALL/FARK. A driver publishes a
+                    ;  service table the kernel copies into .bss at attach, and
+                    ;  every dispatch is a near read plus one far call - SPEC.md
+                    ;  51.]
 SDRV_NAME   equ 12  ; dw  .text string ptr ("Speaker","AdLib","Sound Blaster")
             equ 14  ; dw  reserved (SB: packed base/IRQ/DMA config word)
 ```
@@ -742,7 +746,8 @@ kernel image changes even when nothing sound-side ships on disk).
   resumed; a screendumped Clock window proves ticks weren't lost; CP page driven by
   `mouse.py` down/to/up, screendump-verified.
 - **Phase 3 — AdLib/OPL2.** sndfm.inc: far probe (timer dance), far init/patch loader,
-  `opl_wr` + FM op behind slot 0x0084, tone-route-to-OPL preference live in CP (with
+  `opl_wr` + FM op behind the FM slot (0x0084 when this was written; it is
+  `OSAPI_SND_FM` at **0x00F8** now), tone-route-to-OPL preference live in CP (with
   the channel-8 reservation), snd_tick's sanctioned key-off path, channel-bitmap
   allocator released by `snd_release_inst`. *Test*: `-device adlib`; QMP-drive a test
   package playing a known chord; sndcheck asserts the note fundamentals; a timed tone
@@ -752,7 +757,7 @@ kernel image changes even when nothing sound-side ships on disk).
   `apps/fmtest` (built into the scratch image `build/fmtest.img`, mounted with
   `make test-snd ADLIB=1 TESTAPPS=build/fmtest.img` — never on the shipped apps
   disks, whose directory order is pinned). Its first click patch-loads a carrier
-  MULT=2 voice through slot 0x0084 verb 2 and keys 440 Hz — sounding **880 Hz** iff
+  MULT=2 voice through the FM slot's verb 2 and keys 440 Hz — sounding **880 Hz** iff
   the caller's DS:SI patch actually reached the chip — its second click adds 660 Hz
   (the chord), 'b' requests a 3-tick 880 Hz tone (the snd_tick expiry leg), and the
   close box mid-chord is the teardown leg. Assertion note for future automation: the
