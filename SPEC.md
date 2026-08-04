@@ -7584,6 +7584,34 @@ the whole content instead. `sol_checkwin` therefore clears the flag as well as
 setting it: a won game is not a dead end, the foundations can still be dragged
 back off, and `sol_domove` tests the flag on both sides of the check.
 
+Two things a card back makes expensive, and what each costs:
+
+- **The card back is a lattice, and a lattice does not coalesce.** `gfx_blit4`
+  emits one `gfx_fill` per run of equal pixels, and the back's diagonals put a
+  run boundary every few pixels: **634 runs** for the 32x44 metrics, 336 for
+  CGA's 28x28. A face is two fills, four edges and a couple of glyphs. So a
+  back is the one drawing in this program worth going out of the way not to
+  repeat, and both rules below exist for it.
+- **The stock is only ever redrawn when its PICTURE changes.** That picture is
+  one bit — a card back, or the turn-over-again ring — so it changes only when
+  the last card leaves the pile and when a recycle refills it. Dealing from a
+  stock that still has cards leaves exactly what is already on the screen, and
+  `sol_cmd_deal` compares the emptiness before and after rather than redrawing
+  it. This was 635 wasted operations on **every single click of the stock**,
+  which is the action a player repeats most.
+- **A pile whose card covers its whole rect is not erased first.** `sol_covers`
+  answers that for the stock and the foundations — one card drawn into a
+  one-card rect — where the erase was a second fill of the same pixels. A
+  tableau's rect runs the full height of the content and the waste's is two fan
+  steps wider than a card, so both still need clearing, and an empty pile needs
+  it most: its slot outline covers almost nothing.
+
+What is left, and deliberately: a tableau column redraws every card when any
+of them changes, so exposing a face-down card repaints the buried backs below
+it at ~41 runs each. Narrowing that needs a first-changed-index hint threaded
+through `sol_drawpile`; it is a fifth of the stock's cost and paid once per
+move rather than once per click.
+
 ## 44. Arkanoid — the ninth package (apps/arkanoid/arkanoid.asm)
 
 A brick-breaker over the published package ABI. Prefix `ark_`, embedded icon,

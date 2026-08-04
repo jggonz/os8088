@@ -378,17 +378,18 @@ sol_drawpile:
     push di
     mov [sol_dpp], al
     call sol_pilerect               ; [sol_rx1]..[sol_ry2], content-relative
-    mov al, SOL_TABLE
-    call OSAPI_SET_COLOR
+    call sol_count                  ; CL = cards in the pile
+    mov [sol_dpn], cl
+    call sol_covers
+    jc .nowipe                      ; the card is about to cover every pixel
+    mov al, SOL_TABLE               ; of this rect: erasing it first is a
+    call OSAPI_SET_COLOR            ; second fill of the same pixels
     mov ax, [sol_rx1]
     mov bx, [sol_ry1]
     mov cx, [sol_rx2]
     mov dx, [sol_ry2]
     call sol_fillc
-
-    mov al, [sol_dpp]
-    call sol_count                  ; CL = cards in the pile
-    mov [sol_dpn], cl
+.nowipe:
     mov al, [sol_dpp]
     call sol_pilexy                 ; CX = x, DX = y (content-relative)
     mov [sol_dpx], cx
@@ -515,6 +516,38 @@ sol_drawpile:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_covers - will this pile's own drawing cover every pixel of the rect
+;              sol_drawpile is about to erase?
+; in:  [sol_dpp], [sol_dpn]
+; out: CF = 1 yes, so skip the erase; preserves all registers
+;
+; True for exactly two piles, and only when they hold a card: the stock and a
+; foundation are one card drawn into a one-card rect. A tableau's rect runs
+; the whole height of the content and the waste's is two fan steps wider than
+; a card, so both really do need clearing; an empty pile draws an outline and
+; needs it most of all.
+; -----------------------------------------------------------------------------
+sol_covers:
+    push ax
+    cmp byte [sol_dpn], 0
+    je .no
+    mov al, [sol_dpp]
+    cmp al, P_STOCK
+    je .yes
+    cmp al, P_FND0
+    jb .no                          ; a tableau column
+    cmp al, P_WASTE
+    je .no
+.yes:
+    pop ax
+    stc
+    ret
+.no:
+    pop ax
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1998,12 +2031,8 @@ sol_onclick:
     jc .out
     cmp al, P_STOCK
     jne .grab
-    call sol_stock
-    mov al, P_STOCK
-    call sol_drawpile
-    mov al, P_WASTE
-    call sol_drawpile
-    jmp .out
+    call sol_cmd_deal               ; the same path the Space key takes, so
+    jmp .out                        ; the redraw rule lives in one place
 .grab:
     call sol_grab                   ; CF = 1: there is nothing to drag
     jc .out
@@ -2692,13 +2721,42 @@ sol_cmd_restart:
     call sol_drawall
     ret
 
+; The stock's PICTURE is one bit - a card back, or the turn-over-again ring -
+; so it needs redrawing only when that bit flips: when the last card leaves it,
+; and when a recycle refills it. Dealing from a stock that still has cards
+; leaves exactly the picture that is already on the screen, and redrawing it
+; is not cheap: the back is a lattice, so gfx_blit4 coalesces it into 634
+; gfx_fill runs on the 32x44 metrics (336 on CGA's 28x28). That was being paid
+; on every single click of the stock, which is the one thing a player does
+; over and over.
 sol_cmd_deal:
     push ax
+    push bx
+    push cx
+    mov al, P_STOCK
+    call sol_count
+    mov bl, 0
+    or cl, cl
+    jz .before
+    mov bl, 1                       ; BL = "the stock showed a card" before
+.before:
     call sol_stock
     mov al, P_STOCK
+    call sol_count
+    mov bh, 0
+    or cl, cl
+    jz .after
+    mov bh, 1                       ; ...and after
+.after:
+    cmp bl, bh
+    je .waste                       ; same picture: leave it alone
+    mov al, P_STOCK
     call sol_drawpile
+.waste:
     mov al, P_WASTE
     call sol_drawpile
+    pop cx
+    pop bx
     pop ax
     ret
 
