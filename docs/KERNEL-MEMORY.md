@@ -10,7 +10,7 @@ binding contract for the addresses; this is the reasoning behind them.
 ## The rule
 
 **The kernel is ONE contiguous span starting at linear 0x00600, and that
-includes its buffers.** The span is `KERN_BUDGET` bytes — 70KB today, and
+includes its buffers.** The span is `KERN_BUDGET` bytes — 75KB today, and
 64KB for as long as that was affordable (see below); it currently runs
 0x00600 through 0x11DFF.
 
@@ -46,12 +46,29 @@ build fix.** Raise `KERN_BUDGET` only after explaining to whoever asked for
 the feature what it costs and getting an explicit yes. The guard's error
 message points here for that reason.
 
-**That conversation has happened once.** `KERN_BUDGET` was 65,536 — the first
-64KB above the BIOS data area, which is where the "one region" rule came
-from — and it is now **71,680 (70KB)**, granted explicitly to buy the
-SPEC.md §41 extended-memory store and the two API surfaces (`wm_geom`,
-`wm_about_set`) that came with it from the other fork. What it cost **at the
-commit that granted it** — a snapshot, not a running total; the live figures
+**That conversation has happened three times.** `KERN_BUDGET` was 65,536 —
+the first 64KB above the BIOS data area, which is where the "one region" rule
+came from.
+
+1. → **71,680 (70KB)**, to buy the SPEC.md §41 extended-memory store and the
+   two API surfaces (`wm_geom`, `wm_about_set`) that came with it from the
+   other fork.
+2. → **72,704 (71KB)**, for the sound driver's Control Panel page — the
+   source selection and its Test button (SPEC.md §31.7).
+3. → **76,800 (75KB)**, for SPEC.md §51.5's keyed `SYSTEM.CFG`: a settings
+   file where nothing is positional costs a key table, a bounded record
+   walker and a writer, and that is ~260 bytes the previous ceiling had no
+   room for. Granted **in advance of further work**, with an optimisation
+   pass to follow that should hand some of it back — so unlike the first two,
+   the slack under this one is deliberate and temporary rather than an
+   invitation.
+
+`BOOT_RELOC` moved with each of them (0x0940 → 0x0AA0 → 0x0B80 → **0x0C00**),
+because guard 5 pins the kernel's landing zone below the relocated boot
+sector's stack; it is mirrored in `boot/boot.asm` and the two must change
+together.
+
+What the first raise cost **at the commit that granted it** — a snapshot, not a running total; the live figures
 are the table below:
 
 | | before | after |

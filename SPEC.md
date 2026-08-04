@@ -9252,48 +9252,11 @@ stream and *drains* the worker's in-flight feed pass before the blob is freed
 or replaced, because a mixer mid-fetch from a grant that has just been handed
 back reads samples out of whatever claimed the memory next.
 
-## 45. Tracker — the tenth package (apps/tracker/tracker.asm)
-
-A four-channel ProTracker MOD player: `tracker.asm` (shell, menus, the file
-dialog completion proc), `trkplay.inc` (the loader and the mixer) and
-`trkui.inc` (the FastTracker II-style fullscreen interface). Prefix `trk_`,
-mixer prefix `mp_`, UI prefix `tui_`. It ships with `BEVERLY.MOD` beside it on
-the apps disk, because a player with nothing to play is not a demonstration of
-anything — `os88disk.py` takes any non-`.o88` argument as a plain data file
-(§24).
-
-It is the most demanding client the API has, and it is the only thing in the
-tree that exercises three features at once:
-
-- **Ring mode** (§34.5, verb 0 with `AH` bit 0). Nothing else uses it. The
-  mixer worker stages at `ringbase + (total & mask)` and feeds a *delta*
-  forever, so a module plays with no close-and-reopen seam and out of a grant
-  far smaller than the song.
-- **`OSAPI_FILE_READBIG`**, which exists because real MODs exceed
-  `dskw_read`'s 64KB ceiling: `BEVERLY.MOD` is 116KB, and the destination
-  advances by SEGMENT so it lands in one call. The Disk window shows its size
-  as 65535 — the directory listing's size field is 16 bits and saturates —
-  which is a display limit and not a load limit; the chain walk uses the real
-  length.
-- **The mixer is a worker task** (§20.6), so the GUI stays live while it
-  plays, and `OSAPI_GFX_DBUF` plus `OSAPI_GFX_SCROLL` keep the fullscreen
-  pattern view from tearing under it.
-
-The module blob is a **heap claim**, sized from `OSAPI_MEM_AVAIL` and capped
-at 128KB. Its lifetime is the fence that matters: `trk_play_stop` closes the
-stream and *drains* the worker's in-flight feed pass before the blob is freed
-or replaced, because a mixer mid-fetch from a grant that has just been handed
-back reads samples out of whatever claimed the memory next.
-
-A FastTracker II-styled 4-channel ProTracker MOD player over the published
-package ABI. Prefix `trk_` (`mp_` for the replayer in `trkplay.inc`, `tui_`
-for the drawing in `trkui.inc` — `ui_` is the kernel's), embedded icon, one
-worker task. It is the app class the sound layer was built toward (§34.6: "a
-music player plays … staged PCM via `OSAPI_SND_STREAM`"), and building it is what forced
-the two kernel amendments it rides on: the worker-safe stream verbs + ring
-mode (§20.3/§34.5) and `dskw_readbig` (§18.4). On the apps
-disks it lives in the `APPS` folder (§24), appended after paint, with
-`BEVERLY.MOD` after it.
+It is the app class the sound layer was built toward (§34.6: "a music player
+plays … staged PCM via `OSAPI_SND_STREAM`"), and building it is what forced
+the two kernel amendments it rides on: the worker-safe stream verbs plus ring
+mode (§20.3/§34.5) and `dskw_readbig` (§18.4). On the apps disks it lives in
+the `APPS` folder (§24), appended after paint, with `BEVERLY.MOD` after it.
 
 **Ported, not written here.** `trkplay.inc` and `trkui.inc` are byte-identical
 to the tree this came from and `tracker.asm` differs by 57 lines — the
@@ -10085,19 +10048,57 @@ under it.
 
 ### 51.5 SYSTEM.CFG
 
-32 bytes in the system disk's root, written through the ordinary file API, so
-it is an ordinary file — deletable, copyable and readable from DOS.
+A small file in the system disk's root, written through the ordinary file API,
+so it is an ordinary file — deletable, copyable and readable from DOS. It
+carries the **whole Control Panel**, not just the driver list.
+
+**Nothing in it is positional.** It was a fixed 32-byte struct, which is the
+cheapest thing that works and the wrong thing to keep: adding a setting is
+fine, but *removing* one leaves a hole every later version must go on
+reserving, and any rearrangement silently reinterprets an old file's bytes as
+the wrong settings. Every value now travels with a key that says what it is.
 
 ```
-+0   'O','8','8','C','F','G',0,0     signature
-+8   dw version (1)
-+10  dw wanted                        bit n = drv_tab row n loads at boot
-+12  20 reserved bytes
++0    'O','8','8','C','F','G',0,0     signature
++8    dw  container generation (3)     the shape BELOW, not the settings
++10.. records, then a key of 0:
+        dw  key      two ASCII characters
+        db  ver      what this key MEANS
+        db  len      bytes of data
+        db  data[len]
 ```
 
-A missing or malformed file means **the defaults in `drv_tab`**, never an
-error — which is what makes a freshly built image boot with sound enabled and
-a disk with a foreign `SYSTEM.CFG` boot at all.
+Six keys today, 43 bytes: `DW` driver-wanted bitmap, `SR` sound route, `CH`
+clock 12/24, `CS` clock seconds, `SM` scheduler mode, `BB` back buffer. They
+are ASCII so a hex dump of the file reads as the list of settings it is.
+
+Four rules follow, and they are the point of the format:
+
+1. **A key this kernel does not know is skipped** by its own `len`, and is
+   **not carried over** — the writer emits the table and nothing else, so a
+   setting written by a newer kernel survives an older one reading it exactly
+   until that older one saves. That is intended: preserving bytes whose
+   meaning cannot be checked is worse than losing them, because the next
+   kernel to read them cannot tell a stale record from a current one.
+2. **A key whose meaning changed carries a new `ver`**, so the old record does
+   not match and the **default stands**. This is the case a positional struct
+   cannot express at all — same name, different encoding, no way to tell them
+   apart. *To change what a key means, bump its `ver`.*
+3. **A different container generation means all defaults.** Generation 2 was
+   the positional struct, and a struct read as records is nonsense.
+4. **Anything absent falls back to the default**, because `drv_cfg_load` packs
+   the *live* state into the struct before deserializing over it — and at boot
+   the live state is exactly the defaults. There is no second copy of them to
+   keep in step.
+
+Every step of the walk is bounded by the byte count the read returned: a
+record header that would run past the end, or a `len` that would, ends it. A
+torn or corrupt file therefore costs the settings it did not carry and nothing
+else.
+
+A missing or malformed file means **the defaults**, never an error — which is
+what makes a freshly built image boot with sound enabled and a disk with a
+foreign `SYSTEM.CFG` boot at all.
 
 The settings write is a **separate outcome from the load**, and the Control
 Panel reports them separately: a load that succeeds and a save that cannot

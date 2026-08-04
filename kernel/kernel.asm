@@ -106,7 +106,7 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; folder it created from the file dialog - the deepest mark left was 246 bytes
 ; on task 0's stack and 150 on a background task's.
 ; =============================================================================
-KERN_BUDGET equ 72704           ; the whole kernel, guard 1. Growing past this
+KERN_BUDGET equ 76800           ; the whole kernel, guard 1. Growing past this
                                 ; is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
                                 ; It has moved twice, both times asked for and
@@ -125,9 +125,9 @@ KERN_BUDGET equ 72704           ; the whole kernel, guard 1. Growing past this
 ; and runs up through 0x7C00, where the BIOS put the sector that is reading
 ; it - so the sector copies ITSELF out of the way first, keeping its own
 ; offset so every label in it still resolves at org 0x7C00. BOOT_RELOC:7C00
-; is linear 0x11000; its stack grows down from there, and guard 5 keeps the
+; is linear 0x13C00; its stack grows down from there, and guard 5 keeps the
 ; kernel clear of both. Both constants are mirrored in boot/boot.asm.
-BOOT_RELOC  equ 0x0B80          ; 0x0B80*16 + 0x7C00 = linear 0x13400
+BOOT_RELOC  equ 0x0C00          ; 0x0C00*16 + 0x7C00 = linear 0x13C00
 BOOT_LIN    equ BOOT_RELOC*16 + 0x7C00
 BOOT_STACK  equ 2048            ; stack room below it
 
