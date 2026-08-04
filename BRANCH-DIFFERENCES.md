@@ -1,7 +1,7 @@
 # `experimental` vs `main` — what diverged
 
 Two forks of os8088 that share history up to **`2558ac0`** ("The same binary on
-a 286 and two 386s"). `main` carries five squash-merged pull requests;
+a 286 and two 386s"). `main` carries six squash-merged pull requests;
 `experimental` carries its own line of development and has since taken part of
 `main` back — the API slot numbering, `OSAPI_WM_GEOM`, `OSAPI_ABOUT_SET`, the
 §41 extended-memory store and the foldered apps disk. Neither is a subset of
@@ -9,9 +9,12 @@ the other, and **a `.o88` package built for one branch still will not run on
 the other** — the slot numbers agree now, but the kernel segment and the
 callback convention do not. See [docs/PORTING.md](docs/PORTING.md).
 
-This file has two halves: [the short list](#the-short-list), which is the set of
-facts you need before touching either tree, and [the long
-list](#the-long-list), which is the same material with the reasoning attached.
+This file has three parts: [the short list](#the-short-list), which is the set
+of facts you need before touching either tree; [the long
+list](#the-long-list), the same material with the reasoning attached; and
+[the parity audit](#the-parity-audit--everything-main-has-that-this-fork-does-not),
+a one-directional sweep for anything `main` has that this fork lacks, with a
+recommendation on what to port.
 
 Written from `experimental`. `main` is not modified by this document.
 
@@ -31,8 +34,10 @@ Written from `experimental`. `main` is not modified by this document.
   dispatcher at `+12` in the package header).
 - Package header `+12`..`+15`: a RAM-requirement word on `main`, the dispatcher
   bytes on `experimental`.
-- **Slot numbers now agree** for every shared routine. Five numbers are held
-  empty on `experimental` rather than reused.
+- **Slot numbers now agree** for every shared routine, and no number means two
+  contracts. Three are held empty here rather than reused (`main`'s
+  paragraph-based memory trio); two more, `GFX_DBUF` and `GFX_SCROLL`, are
+  `main` calls this fork does not implement yet.
 
 **Kernel**
 
@@ -53,7 +58,7 @@ Written from `experimental`. `main` is not modified by this document.
 - Window geometry: `OSAPI_WM_GEOM` **on both, at 0x01B0**. `experimental` also
   still lets a package read the record directly through `ES` (frame px).
 - `main` only: `SND_FM`, `SND_STREAM`, `MEM_ALLOC`/`MEM_FREE`/`MEM_AVAIL`
-  (paragraph-based).
+  (paragraph-based), `GFX_DBUF` and `GFX_SCROLL`.
 - `experimental` only: `MEM_CLAIM`/`MEM_FREE`/`MEM_AVAIL` (KB-based),
   `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`.
 - **The file API is identical on both**, including `dskw_readbig` (0x01E8),
@@ -349,6 +354,148 @@ threshold and makes the FAT16 decode structurally unreachable dead code.
   behaviour.
 - **Paint exists on both**, sized from the respective allocator — one
   subdivided block on `main`, four claims on `experimental`.
+
+---
+
+## The parity audit — everything `main` has that this fork does not
+
+Run against `main` at **`b401eda`** and `experimental` at **`cdc1c59`**, and
+re-checked against **`6c1ee99`** — the Sound Blaster tier — after it landed.
+That commit closes none of the gaps below (it is a driver, not a kernel
+change): `snd_req_inst` is still unqualified, and its one new cell,
+`OSAPI_DRV_TASK` at **0x0288**, is in the *driver* SDK
+(`drivers/os88drv.inc`), not the application table this audit compares.
+
+The question it answers is narrow and one-directional: *what capability, fix or
+call does `main` have that we are missing?* Divergences where the two forks do
+the same job differently are recorded as such and are **not** gaps.
+
+**Out of scope by instruction:** the Sound Blaster tier and everything that
+rides on it — `kernel/sndsb.inc`, `kernel/sndfm.inc`, `apps/sbtest`,
+`apps/recorder`, `apps/tracker`, `tools/mkmod.py`, SPEC §45, and the
+`xt-sound` / `286-sound` / `386-sound` machines. Another worker owns that port.
+One sound-adjacent item is flagged below anyway because it is a kernel
+correctness bug rather than a device feature.
+
+**What was compared.** The tracked file inventory; both API tables slot by
+slot; the routine inventory of all 19 shared kernel files; the routine *and
+user-visible string* inventory of all 10 shared applications; the SPEC section
+tree; the Makefile targets; and each of `main`'s six commits since the merge
+base `2558ac0`.
+
+### A. The API surface — 2 real gaps
+
+57 slot numbers are shared and **every one carries the same name on both
+forks**; there is not a single number meaning two contracts. Five slots exist
+only on `main`, nine only here (0x0240..0x0280).
+
+| slot | `main` | verdict |
+|---|---|---|
+| 0x01B8 / 0x01C0 / 0x01C8 | `MEM_ALLOC` / `MEM_FREE` / `MEM_AVAIL` | **Not a gap — held empty on purpose.** `main` counts paragraphs, we count KB; the same number would mean two contracts and fail by a factor of 64. Ours are at 0x0240+. |
+| **0x01F0** | **`OSAPI_GFX_DBUF`** | **GAP.** Arm/disarm the §32 back buffer from a lock-held callback, so one lock hold is one flush and no erase-then-draw state reaches VRAM. We have the back buffer; a package cannot ask for it. |
+| **0x01F8** | **`OSAPI_GFX_SCROLL`** | **GAP.** Vertical scroll blit (§5.5): move an existing rect by ±dy instead of redrawing it. A general primitive — `main`'s Tracker is its first client, not its only possible one. |
+
+Both gaps fall **inside the RESERVED band this fork already keeps at
+0x01F0..0x0238**, which is exactly what that band was reserved for: they port
+at `main`'s numbers with no renumbering and no package rebuild.
+
+### B. Application by application
+
+| app | `main`-only routines | `main`-only strings | verdict |
+|---|---|---|---|
+| `hello` | — | — | parity |
+| `mines` | — | — | parity |
+| `piano` | — | — | parity |
+| `fractal` | — | — | parity |
+| `notepad` | — | — | parity (and we are ahead: §27.2 row signatures) |
+| `filetest` | — | — | parity |
+| `fmtest` | — | — | parity |
+| `solitaire` | — | — | parity (we carry two later fixes) |
+| `arkanoid` | `ark_onclick` | — | **GAP (small).** `main` wires `W_ONCLICK`, so a *click* takes the credit panel down. Ours dismisses on a key or a menu pick only; our template's click slot is 0. |
+| `paint` | `pt_about`, `pt_about_paint`, `pt_about_tpl`, `pt_ab_1..6`, `pt_ab_center`, `pt_i_about`, `pt_it_app`, `pt_s_abttl`, `pt_s_app` | `About Paint`, `Paint for os8088`, `a bitmap editor for the 8086`, the three credit lines | **GAP.** `main`'s Paint has an About panel; ours has none at all. |
+| `paint` | `pt_runend` | — | **Not a gap — we are ahead.** That is `main`'s in-package run-scan blit loop; ours is the same algorithm moved *into the kernel* as `gfx_blit4`, which is one far call instead of hundreds. |
+| `paint` | — | `Paint is already running.` | **Not a gap.** A single-instance notice; this fork allows multiple Paints. |
+| `paint` | — | `Cut (no RAM)`, `Copy (no RAM)`, `Paste (no RAM)`, `Undo/Redo (no RAM)`, `Save Gif (no RAM)`, `Save as Gif(no RAM)` | **Not a gap — different wording, better mechanism.** We carry `MENU_DIS` + `(NoRam)` variants and `pt_menufix` switches them **both ways** live; `main` relabels one way only. |
+
+The five applications that predate the split (`hello`, `mines`, `piano`,
+`fractal`, `notepad`) were re-read line by line against `main`'s deltas since
+`2558ac0`: every added line there is v3 ABI conversion — `wm_geom` in place of
+a record read, org-0 offsets, `retf` — which this fork made independently. **No
+behavioural fix is hiding in them.**
+
+### C. Kernel file by kernel file
+
+| file | `main`-only symbols | verdict |
+|---|---|---|
+| `kernel.asm` | `osapi_w_*` (11), `osapi_*buf` (7), `osapi_copy_n/_str`, `kernel_far_end` | structural — `main`'s far-call marshalling; we use X/N stubs |
+| `instance.inc` | `inst_cb_call`, `inst_cb_call_es`, `inst_cb_seg` | structural — we dispatch through the package's own header stub |
+| `wm.inc` | `wm_destroy_seg`, `wm_tbuf`, `wm_wseg` | structural — per-window segment bookkeeping the dispatcher makes unnecessary |
+| `menu.inc` | `menu_copy_set`, `menu_kset`, `menu_kitems`, `menu_kstr`, `menu_nbuf` | structural — `main` copies a menu set into kernel buffers; we read it live through `MB_SEG`, which is why `pt_menufix` can relabel without re-registering |
+| `loader.inc` | `ld_alloc`, `ld_arena_top`, `ld_ramkb` | structural — arena vs `mem_claim_hi` |
+| `loader.inc` | **`ld_needkb` / `LD_ENEED`** | **GAP, but blocked.** `main` refuses a package with the precise `Needs nnnK`. Its v3 header carries a RAM-requirement word at **+12** — the same four bytes this fork spends on the `call bp / retf` dispatcher. Not portable without a header field. |
+| `files.inc` | `fm_s_needs`, `fm_s_kaych` | the display half of the above |
+| `files.inc` | `fm_is_fmwin` | not a gap — we do the same `W_MENUS` test inline |
+| `files.inc` | `fm_full` | not a gap — deliberately replaced by `[fm_tdirty]`, a pointer rather than a flag (§11.92) |
+| `disk.inc` | `dsk_dmabuf`, `dsk_bounce_in/out`, `dsk_try` | **not a gap — different solution, and ours is checked at build time.** `main` detects a 64KB DMA-page straddle at run time and stages through a fixed 512-byte buffer. We make it unrepresentable: every int 13h destination is 512-aligned by construction, asserted by guards 6/6b in `kernel.asm`, so a claim base, a package image and a `readbig` destination all start aligned and a one-sector transfer cannot straddle. Costs 512 bytes and a copy less. **If we ever let a package name a non-aligned destination, we need `main`'s bounce.** |
+| `clock.inc` | `clk_rtc_read` | not a gap — naming. Our clock is the 4-rung ladder (§37.90); `main` has one rung |
+| `ctrl.inc` | `cp_snd*` (10), `cpf_*` (3), `cp_swdir`, `cp_sine` | sound — out of scope |
+| `ctrl.inc` | `cp_s_trtc` (`Hardware clock: yes`) | not a gap — we are ahead: our Date/Time page names *which rung* answered |
+| `ctrl.inc` | `cp_putu16` | not a gap — utility we have an equivalent of |
+| `snd.inc` | `snd_drv`, `snd_route_set`, `snd_pcm_route`, `snd_tone_route`, `snd_pref_*`, `snd_s_opl`, `snd_s_sb` | sound routing — out of scope, and superseded here by §51 loadable drivers |
+| `snd.inc` | **`snd_req_inst`'s task qualification** | **GAP — a real latent bug.** See below. |
+| `taskmgr.inc` | `tm_cap_arena`, `tm_map_seg`, `tm_memcol_par`, `tm_off2x`, `tm_igp`, `tm_igr`, `tm_put4`, `tm_s_cap/cap2` | structural — paragraph-based memory view vs our KB-based one |
+| `taskmgr.inc` | `tmf_task`, `tmf_paint`, `tmf_click`, `tm_ylim_set` | not a gap — naming (`tm_task`/`tm_paint`/`tm_click`/`tm_view_begin`) |
+| `taskmgr.inc` | **`tm_txt_xm`, `tm_s_t86/t286/t386`** | **GAP (small).** `main` prints the detected CPU tier — `CPU 8086` / `286` / `386+`. We run `cpudet.inc` and never show the answer anywhere. |
+| `vgabb.inc` | **`gfx_scroll`, `osapi_gfx_dbuf`, `bbs_bankcopy`, `bbs_lincopy`** | **GAP** — the implementations behind the two missing slots |
+| `ui.inc` | `ui_cbofs` | structural — far-call plumbing |
+| `cmem.inc`, `farcall.inc` | whole files | structural — arena grants and far-call thunks, neither of which this model has |
+
+**`snd_req_inst`, spelled out**, because it is the one out-of-scope-looking
+item that is genuinely ours to worry about. `main` made `[snd_inst]`
+task-qualified: the stamp's low byte is the instance whose callback is running
+and the **high byte is the task that stamped it**, and `snd_req_inst` only
+honours the stamp when that task is the running one. Ours compares the low byte
+alone, so **a worker that pre-empts a foreign callback mid-flight inherits that
+callback's instance** — its tone is billed to, and released at the teardown of,
+the wrong app. Arkanoid's worker calls `SND_TONE` while UI callbacks run, so
+this is reachable today. It is six lines and independent of any device.
+
+`main` applied the same qualification to `inst_pkg_spawn`'s ownership fence.
+**That half we do not need**: our fence tests `ES == I_SPTR`, an identity test
+on the package's own segment, which is exact where `main`'s stamp comparison
+was an approximation.
+
+### D. Documentation
+
+| `main` § | subject | verdict |
+|---|---|---|
+| §2.5 / §2.6 / §20.7 | the package arena and its grant map | structural — ours is §50 |
+| §41.7 / §41.10 | xmem testing and acceptance | we have the code, not the two prose sections |
+| §45 (12 subsections) | Tracker | out of scope |
+| **§5.5** | `gfx_scroll` | comes with the port |
+| **§20.8 Forbidden (binding)** | five binding package rules | **GAP.** Four of the five apply here verbatim — no package code above 1MB, the instance record does not grow, no segment overrides in place of marshalling, no reordering or repurposing of API slots. The fifth inverts (`main`: never a near `ret`; here: **always** a near `ret`). We enforce all five in practice and state none of them as binding. |
+
+### E. Recommendation
+
+Ordered by value per byte. Nothing here needs a package rebuild — both new
+slots land in the reserved band.
+
+| # | port | why | rough cost |
+|---|---|---|---|
+| 1 | **`snd_req_inst` task qualification** | a live misattribution bug, not a feature; reachable from Arkanoid today | ~6 lines |
+| 2 | **`OSAPI_GFX_SCROLL` + `gfx_scroll`** (§5.5, slot 0x01F8) | the largest new *capability*: scrolling text and list views stop being full repaints, which is worth most on the 4.77MHz machines | ~230 lines in `vgabb.inc` |
+| 3 | **`OSAPI_GFX_DBUF`** (slot 0x01F0) | lets an app arm the back buffer for its own flicker-free frame; we already own the buffer | ~40 lines |
+| 4 | **Paint's About panel** | the only app-visible feature gap; use our native `OSAPI_ABOUT_SET` rather than `main`'s empty-menu-label trick | ~60 lines |
+| 5 | **CPU tier in the Task Manager** | we detect it and never say so; one string table and a copy on the XMS line | ~20 lines |
+| 6 | **Arkanoid: wire `W_ONCLICK`** | a click should dismiss the credits, as a key already does | 1 template word + a 10-line proc |
+| 7 | **SPEC §20.8 "Forbidden (binding)"** | we obey these rules and have never written them down; the audit above needed all five | prose |
+
+**Not recommended, with reasons:** the paragraph memory API (a second contract
+for the same job), `main`'s DMA bounce buffer (our alignment guard is
+stronger and cheaper), `LD_ENEED` / `Needs nnnK` (needs a header field the
+dispatcher occupies — revisit only if the header ever gains a spare word),
+`fm_is_fmwin`, `clk_rtc_read`, `pt_runend` and `cp_s_trtc` (all cases where
+this fork already does the same thing or better).
 
 ---
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Documentation consistency gate. Two things drift silently and have:
 
-  1. a SPEC.md section citation that names a heading which does not exist;
+  1. a SPEC.md section citation that names a heading which does not exist
+     (in the two cross-fork documents, MAIN_ONLY below is the allowlist of
+     sections that exist on the other branch and not on this one);
   2. an API slot number in prose that is not a slot apps/os88api.inc defines.
 
 The second is the nastier one: after a renumbering, a stale citation is often
@@ -30,6 +32,20 @@ RULE_REFS = {"1.6", "1.7", "29.2.8", "45", "49"}
 HELD = {"0x00f8", "0x0100", "0x01b8", "0x01c0", "0x01c8"}
 # These two describe BOTH forks, so they cite main's numbering on purpose.
 CROSS_FORK = {"BRANCH-DIFFERENCES.md", "docs/PORTING.md"}
+# ...and inside those two ONLY, these are sections that exist on `main` and not
+# here. Listing them rather than exempting cross-fork files wholesale is the
+# point: a citation of OUR spec is still checked in those files, and this set
+# is the reviewable record of what we are pointing at across the fork. Every
+# entry is something the parity audit examined; shrink it when one is ported.
+MAIN_ONLY = {
+    "2.5",      # the package arena
+    "2.6",      # the arena's grant map (cmem.inc)
+    "5.5",      # gfx_scroll
+    "20.7",     # memory a package asks for
+    "20.8",     # Forbidden (binding)
+    "41.7",     # xmem testing
+    "41.10",    # xmem acceptance
+}
 
 
 def main() -> int:
@@ -53,8 +69,11 @@ def main() -> int:
         for n, line in enumerate(text.split("\n"), 1):
             for m in CITE.finditer(line):
                 for num in m.group(1).split("/"):
-                    if num not in heads and num not in RULE_REFS:
-                        bad.append(f"{path}:{n}: SPEC.md §{num} is not a heading")
+                    if num in heads or num in RULE_REFS:
+                        continue
+                    if path in CROSS_FORK and num in MAIN_ONLY:
+                        continue
+                    bad.append(f"{path}:{n}: SPEC.md §{num} is not a heading")
             if path in CROSS_FORK:
                 continue
             for m in SLOT.finditer(line):

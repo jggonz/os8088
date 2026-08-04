@@ -144,7 +144,9 @@ counterpart for something `main` provides, the number is **held empty** (a
 | `0x01D0` / `0x01D8` | `WM_RESIZE` / `GFX_BLIT4` | identical |
 | `0x01E0` | `ABOUT_SET` | `ABOUT_SET` |
 | `0x01E8` | `FILE_READBIG` | `FILE_READBIG` |
-| `0x01F0`–`0x0238` | — | *reserved for `main` to grow into* |
+| `0x01F0` | `GFX_DBUF` | **not implemented here** — see BRANCH-DIFFERENCES.md §A |
+| `0x01F8` | `GFX_SCROLL` | **not implemented here** — see BRANCH-DIFFERENCES.md §A |
+| `0x0200`–`0x0238` | — | *still reserved for `main` to grow into* |
 | `0x0240`+ | — | `MEM_CLAIM`, `MEM_FREE`, `MEM_AVAIL` (all KB), `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`, `MEM_REGROW`, `WM_TITLE` |
 
 **The memory trio is the one deliberate non-alignment.** `main` counts
