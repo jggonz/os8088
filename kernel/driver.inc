@@ -90,6 +90,13 @@ DRV_MAX_KB  equ 40              ; the biggest driver image we will claim
 DRVV_ATTACH equ 0               ; probe + hook. out CF=1 = no hardware, and
                                 ; the contract is that NOTHING was hooked
 DRVV_DETACH equ 1               ; silence, unhook, restore. Cannot fail.
+DRVV_TIER   equ 2               ; in AH = SND_RT_*: how much of itself the
+                                ; user wants (SPEC.md 34.8). out CF=0 and
+                                ; SI = its service table, RE-COPIED because
+                                ; the tier changes what it publishes; CF=1
+                                ; and AL = a DRVE_* saying why not, with
+                                ; nothing moved. Optional - sent only when a
+                                ; setting asks for it
 
 ; --- the service table an attached driver returns in SI ----------------------
 ; Offsets into the DRIVER'S segment. This is the whole of what a driver
@@ -567,6 +574,10 @@ drv_find:
 ;
 ; There is no peek-then-size dance and no second claim, because a driver's bss
 ; is inside its image (see the header comment). One claim, one read.
+;
+; DI and BP are saved for drv_tier's reason: the attach at the end of this is a
+; far call into code the kernel did not write, and the Control Panel's Drivers
+; page calls this holding both as its pane origin.
 ; -----------------------------------------------------------------------------
 drv_load:
     push ax
@@ -574,6 +585,8 @@ drv_load:
     push cx
     push dx
     push si
+    push di
+    push bp
     push es
 
     call drv_row                ; BX = the row for the whole routine
@@ -660,6 +673,8 @@ drv_load:
     stc
 .out:
     pop es
+    pop bp
+    pop di
     pop si
     pop dx
     pop cx
@@ -728,12 +743,89 @@ drv_attach:
     jc .out
     mov es, [bx+DRVR_SEG]
     call drv_publish            ; SI is an offset in ES, so copy it now
-    clc
+    mov ah, [snd_route]         ; ...then hand it the persisted tier, which
+    call drv_tier               ; may take memory back off it (SPEC.md 34.8).
+    clc                         ; A refusal is not a failed attach: the driver
+                                ; is up at whatever tier it could reach, and
+                                ; the Sound page shows which
 .out:
     pop es
     pop bp
     pop si
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; drv_tier - tell the published driver which tier the user wants (SPEC.md 34.8)
+; in:  AH = SND_RT_*
+; out: CF = 0 it took (or there was nothing to tell); CF = 1 it refused, and
+;      AL = the DRVE_* saying why
+; clobbers: AL (flags)
+;
+; The tier arrives in AH rather than being read out of [snd_route], because the
+; two callers disagree about what that byte means at the moment they call.
+; Boot has already loaded the setting and is telling the driver about it;
+; the Control Panel is asking WHETHER a tier can be had and only stores it if
+; the answer is yes. Passing the candidate keeps the panel from having to set
+; the setting and roll it back - a rollback that has to run on a path that
+; already failed.
+;
+; SND_RT_AUTO means a fresh SYSTEM.CFG and "whatever answered", which is what
+; attach already left, so it is not sent. A driver that does not implement
+; DRVV_TIER answers CF=1 and its caller reports that - there is nothing to
+; undo, since the verb's contract is that a refusal changes nothing.
+;
+; The row comes from [drv_owner] - the row whose services are published, which
+; is the only driver a tier could be about. At boot that is the row drv_publish
+; has just armed, so the attach path needs to pass nothing.
+;
+; The re-publish is not optional: a tier change alters the service table, and
+; the kernel's copy is what every later dispatch reads.
+;
+; EVERYTHING IS SAVED, AH INCLUDED, because drv_call is a far call into code
+; the kernel did not write: a driver may clobber any register it likes and the
+; two callers here are mid-something. The Control Panel calls this holding DI
+; and BP as its pane origin and then redraws with them; with DI eaten by the
+; driver's DMA claim the redraw went to an off-screen x and the page simply did
+; not change, which reads exactly like a click that never arrived. AH is saved
+; for the same reason and gives this the clobber list its header claims - the
+; caller's requested tier is what it stores on the way out.
+; -----------------------------------------------------------------------------
+drv_tier:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    push ax                     ; ...and the tier, which is AH
+    cmp ah, SND_RT_AUTO
+    je .ok                      ; unset: leave attach's answer alone
+    mov bx, [drv_owner]
+    or bx, bx
+    jz .ok                      ; nothing is published: nothing to tell
+    mov bp, [bx+DRVR_ENT]
+    mov al, DRVV_TIER
+    call drv_call               ; out: CF, AL = why not, SI = the table it
+    jc .no                      ; now has
+    mov es, [bx+DRVR_SEG]
+    call drv_publish
+.ok:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop bx                      ; the saved AX: AL is the output, so only AH
+    mov ah, bh                  ; comes back
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -746,8 +838,13 @@ drv_attach:
 ; with DS = KERNEL_SEG, and snd_tick - which runs inside IRQ0 - does not have
 ; to point a segment register anywhere to find out whether it has work.
 ;
-; The sink's NAME is staged too, into a fixed buffer, because the Control
-; Panel prints it with font_str and font_str reads DS.
+; DSV_NAME is copied as a POINTER and left at that. It used to be staged into
+; a 16-byte kernel buffer as well, so the Control Panel could print it with
+; font_str - and that was the Sound page's card row, which now names fixed
+; TIERS instead (SPEC.md 34.8). Nothing reads a staged copy any more, so there
+; is not one; the pointer is still published, and [drv_fseg] still says which
+; segment it is an offset into, so a later consumer has everything it needs to
+; stage its own.
 ; -----------------------------------------------------------------------------
 drv_publish:
     push ax
@@ -768,23 +865,6 @@ drv_publish:
     mov [drv_owner], bx         ; which row these belong to, so a detach can
     mov ax, [bx+DRVR_SEG]       ; take them away again - and the far pointer
     mov [drv_fseg], ax          ; drv_svc_call dispatches through
-
-    mov byte [drv_sname], 0     ; the sink's name (0 = it named none)
-    mov si, [drv_svc+DSV_NAME]
-    or si, si
-    jz .out
-    mov di, drv_sname
-    mov cx, 15
-.nm:
-    mov al, [es:si]
-    mov [di], al
-    inc si
-    inc di
-    or al, al
-    jz .out
-    loop .nm
-    mov byte [di], 0
-.out:
     pop di
     pop si
     pop cx
@@ -801,10 +881,18 @@ drv_publish:
 ; live interrupt vector points that vector at whatever claims the memory next.
 ; Detach cannot fail - a driver able to refuse to let go would be a driver the
 ; user cannot turn off.
+;
+; Everything is saved for drv_tier's reason: the detach verb is a far call into
+; code the kernel did not write, and the Drivers page calls this holding DI and
+; BP as its pane origin.
 ; -----------------------------------------------------------------------------
 drv_unload:
     push ax
     push bx
+    push cx
+    push dx
+    push si
+    push di
     push bp
     call drv_row
     cmp word [bx+DRVR_SEG], 0
@@ -818,6 +906,10 @@ drv_unload:
     call drv_release
 .out:
     pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -1410,8 +1502,7 @@ drv_nerr:   resb 1              ; 1 = drv_notice owes the user a window
 drv_pad0:   resb 1
 drv_fsz:    resw 1              ; the driver file's byte size
 drv_owner:  resw 1              ; the row whose services are published, or 0
-drv_svc:    resb DSV_SIZE       ; a copy of that row's service table...
-drv_sname:  resb 16             ; ...and its sink's name, staged for font_str
+drv_svc:    resb DSV_SIZE       ; a copy of that row's service table
 drv_cfg:    resb CFG_NB         ; the live settings, staged (layout above)
 drv_cfgbuf: resb CFG_FBUF       ; the file itself, records and all
 

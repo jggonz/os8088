@@ -49,10 +49,21 @@
 SND_CAP_TONE     equ 01h        ; square voice: freq on/off
 SND_CAP_PCM_EXCL equ 08h        ; CPU-paced PCM out - exclusive clip contract
 
-; --- the tone tier's route (SPEC.md 34.8), a user setting -------------------
-SND_RT_AUTO equ 0               ; the driver's sink if it publishes one
-SND_RT_SPK  equ 1               ; ...the PC speaker whatever is loaded
-SND_RT_CARD equ 2               ; ...the card, and the speaker if it is gone
+; --- which sound hardware the machine uses (SPEC.md 34.8), a user setting ---
+; Three tiers, not two, and the middle one is the point: an AdLib is an OPL2
+; and nothing else, and EVERY Sound Blaster carries an OPL2 - so an SB owner
+; who picks AdLib gets FM with no DMA buffer, no IRQ and no worker task. On a
+; 128KB machine that is 12KB of a 55KB heap back for a tier they were not
+; using. It is a CHOICE and not a probe result, which is why it persists.
+SND_RT_AUTO equ 0               ; unset (a fresh SYSTEM.CFG): the best tier
+                                ; that actually answered at boot
+SND_RT_SPK  equ 1               ; the PC speaker, whatever else is loaded
+SND_RT_FM   equ 2               ; AdLib: FM only - no streams, no 12KB
+SND_RT_SB   equ 3               ; Sound Blaster: FM and streams both
+SND_RT_CARD equ SND_RT_FM       ; the old two-value name, kept so a SYSTEM.CFG
+                                ; written before the split still reads as "a
+                                ; card" - and reads as the CHEAP card, which
+                                ; is the safe way to be wrong
 
 SND_PRI_UI  equ 0C0h            ; kernel UI beeps (SPEC.md 34.3)
 SND_PRI_PKG equ 040h            ; documented package default priority

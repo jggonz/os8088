@@ -60,6 +60,8 @@ OS88_DRIVER 'Sound', DRVC_SOUND, snd_entry
 snd_entry:
     cmp al, DRVV_DETACH
     je snd_detach
+    cmp al, DRVV_TIER
+    je snd_tier
     ; --- attach ---------------------------------------------------------------
     ; TWO tiers, independently present. Either one alone is worth attaching
     ; for, so the refusal is only when NEITHER answers - and the service
@@ -110,6 +112,63 @@ snd_entry:
     clc
     ret
 .nohw:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; snd_tier - DRVV_TIER: how much of ourselves the user wants (SPEC.md 34.8)
+;
+; in:  AH = SND_RT_* - anything below SND_RT_SB means "no Sound Blaster"
+; out: CF = 0 and SI = the service table, which the kernel re-copies because
+;      this changes it; CF = 1 and AL = DRVE_* - the SB tier was wanted and
+;      could not be had
+;
+; The FM half is never touched. It costs no memory beyond the driver image,
+; and an AdLib is what remains when the DSP tier is off - so the two tiers
+; are not alternatives to probe between, they are a subset relationship the
+; user picks a point on.
+;
+; TURNING IT OFF CANNOT FAIL, which is why that leg does not test anything:
+; sbl_detach halts the DSP, waits the worker out, unhooks the vector and
+; frees both claims. TURNING IT ON IS A CLAIM AND SO CAN, and we simply try -
+; there is nothing to pre-check with. mem_avail reports the largest free run,
+; which says nothing about whether a 64KB-page-safe base exists inside it;
+; only mem_claim_dma's own scan knows, so asking it IS the test. That is also
+; why the Control Panel does not grey the Sound Blaster row on a full heap:
+; the only honest test is the claim itself, so the page makes it and reports
+; what came back (SPEC.md 34.8).
+; -----------------------------------------------------------------------------
+snd_tier:
+    cmp byte [drv_up], 0
+    je .nohw                    ; nothing attached: no tier to move
+    cmp ah, SND_RT_SB
+    jae .want
+                                ; --- off ----------------------------------
+    cmp word [snd_services+DSV_STREAM], 0
+    je .table                   ; already off
+    call sbl_detach             ; cannot fail (SPEC.md 51.2)
+    mov word [snd_services+DSV_STREAM], 0
+    and word [snd_services+DSV_CAPS], ~(SND_CAP_PCM_BG | SND_CAP_PCM_IN)
+    cmp word [snd_services+DSV_TONE], 0
+    je .table                   ; no OPL2 either: the name stays as it was
+    mov word [snd_services+DSV_NAME], snd_s_opl   ; the card is an AdLib now
+    jmp short .table
+.want:                          ; --- on -----------------------------------
+    cmp word [snd_services+DSV_STREAM], 0
+    jne .table                  ; already on
+    call sbl_attach             ; probe + the 12KB page-safe claim; AL is the
+    jc .no                      ; DRVE_* saying which of the two failed
+    mov word [snd_services+DSV_STREAM], sbl_stream_op
+    mov word [snd_services+DSV_TICK], sbl_tick
+    or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN
+    mov word [snd_services+DSV_NAME], snd_s_sb
+.table:
+    mov si, snd_services
+    clc
+    ret
+.nohw:
+    mov al, DRVE_HW             ; nothing attached at all, so there is no
+.no:                            ; Sound Blaster here either
     stc
     ret
 

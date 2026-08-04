@@ -54,10 +54,48 @@ SND_CAP_FM       equ 02h        ; 9-ch 2-op patch + note-on/off (OPL2 model)
 SND_CAP_PCM_BG   equ 04h        ; self-clocked block PCM out - background-safe
 SND_CAP_PCM_IN   equ 10h        ; block PCM input (recording)
 
+; --- sound tiers (SPEC.md 34.8): what DRVV_TIER's AH carries -----------------
+; The kernel's own [snd_route], mirrored here so a driver can compare against
+; it without reaching into kernel headers. A driver that implements DRVV_TIER
+; only has to know "is this at least my expensive tier?".
+SND_RT_AUTO  equ 0              ; unset: whatever answered at boot
+SND_RT_SPK   equ 1              ; the PC speaker
+SND_RT_FM    equ 2              ; AdLib - FM only
+SND_RT_SB    equ 3              ; Sound Blaster - FM and streams
+
 ; --- entry verbs (AL on the far call into your entry proc) -------------------
 DRVV_ATTACH  equ 0              ; out CF=0 and SI = your service table;
                                 ;     CF=1 = no hardware, nothing hooked
 DRVV_DETACH  equ 1              ; out: nothing. Cannot fail.
+DRVV_TIER    equ 2              ; in AH = how much of yourself the user wants
+                                ; (SPEC.md 34.8); out CF=0 and SI = your
+                                ; service table, which the kernel RE-COPIES
+                                ; because a tier change alters it; CF=1 and
+                                ; AL = a DRVE_* saying why not, with the table
+                                ; untouched.
+                                ;
+                                ; For a driver whose tiers cost different
+                                ; amounts of memory. The sound driver's Sound
+                                ; Blaster tier holds a 12KB DMA buffer that
+                                ; its AdLib tier does not, and on a 128KB
+                                ; machine that is a fifth of the heap - so
+                                ; which one is running is the USER's choice,
+                                ; persisted, not a consequence of what the
+                                ; probe found. A driver with one tier need
+                                ; not implement this verb at all: the kernel
+                                ; only sends it when a setting says to.
+                                ;
+                                ; Turning a tier ON may need memory and may
+                                ; therefore FAIL, which is what CF is for.
+                                ; Turning one OFF cannot fail, for the same
+                                ; reason DRVV_DETACH cannot.
+
+; --- refusal reasons, mirrored from kernel/driver.inc (SPEC.md 51.3) ---------
+; What DRVV_TIER answers in AL when it says no. They are the SAME codes the
+; loader banks in the row, so the Control Panel names a refused tier change
+; with the string it already has for a refused LOAD - one vocabulary for both.
+DRVE_MEM     equ 4              ; the heap cannot fund that tier right now
+DRVE_HW      equ 5              ; the hardware that tier needs is not there
 
 ; --- the service table you return in SI at attach ----------------------------
 ; Offsets in YOUR segment. The kernel copies the whole thing once, so it may
