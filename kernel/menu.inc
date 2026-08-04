@@ -895,9 +895,16 @@ menu_popup:
 ;
 ; **The claim can now fail**, where before it could only fail at boot. That
 ; needs no new failure path: `[menu_sseg]` = 0 already means "no buffer", the
-; save is skipped and the restore repaints the screen instead - slower, and
-; correct. A machine tight enough to hit it gets a flash when a menu closes
-; rather than a menu it cannot open.
+; save is skipped and the restore repaints instead - slower, and correct. A
+; machine tight enough to hit it gets a flash when a menu closes rather than a
+; menu it cannot open.
+;
+; That repaint is a DAMAGE RECT, not the screen: the menu covered the rect it
+; drew and nothing else - which is precisely the rect gfx_save would have
+; captured - so wm_paint_dmg over it puts back the windows it occluded and
+; leaves the rest alone. It also leaves the menu BAR alone, which is what the
+; save-under path does too, so menu_title_xor's self-inverting highlight
+; behaves the same either way.
 ; -----------------------------------------------------------------------------
 menu_drop:
     push bx
@@ -1014,9 +1021,13 @@ menu_drop:
     mov dx, [menu_y2]
     call gfx_restore
     jmp short .sel
-.repaint:
-    call wm_paint_all           ; the no-buffer fallback: desktop, icons,
-    call gfx_flush              ; dock, bar and every window, under the lock
+.repaint:                       ; no buffer: put back what the MENU covered,
+    mov ax, [menu_x1]           ; which is the rect it drew and nothing else -
+    mov bx, [menu_y1]           ; gfx_save captures exactly this, there is no
+    mov cx, [menu_x2]           ; shadow outside it, and everything beyond it
+    mov dx, [menu_y2]           ; is still correct on screen (SPEC.md 11.91)
+    call wm_paint_dmg
+    call gfx_flush
 .sel:
     mov dx, [menu_sseg]         ; the menu is off the screen: hand the buffer
     or dx, dx                   ; back rather than hold 20KB until the next

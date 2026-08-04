@@ -2303,9 +2303,17 @@ nobody was looking at a menu. `menu_init` used to take it once and keep it.
 
 The claim can therefore **fail**, where before it could only fail at boot, and
 that needs no new failure path: `[menu_sseg]` = 0 already means "no buffer",
-so the save is skipped and the restore repaints the screen instead — slower,
-and correct. A machine tight enough to hit it gets a flash when a menu closes
+so the save is skipped and the restore repaints instead — slower, and
+correct. A machine tight enough to hit it gets a flash when a menu closes
 rather than a menu it cannot open.
+
+**That repaint is a damage rect, not the screen.** A menu covers the rect it
+drew and nothing else — no shadow outside it, which is exactly why `gfx_save`
+captures that same rect — so `wm_paint_dmg` over `[menu_x1..menu_y2]` puts
+back the windows it occluded and leaves everything else alone (§11.91). It
+also leaves the menu **bar** alone, which is what the save-under path does
+too, so `menu_title_xor`'s self-inverting cell highlight behaves identically
+either way.
 
 **The release happens before the selected item runs**, and that is what keeps
 the claim from fragmenting anything. `menu_drop` frees on its way out, so a

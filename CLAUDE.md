@@ -512,7 +512,7 @@ Everything above the kernel is handed out on demand. `mem_claim` takes KB and an
 - **A package's owner word is the segment it runs in**, put in ES by the slot's X stub — so there is nothing to pass and nothing to forge, and `OSAPI_MEM_CLAIM` works from the entry proc where the app has no window yet. That is where an app sizes itself.
 - **Teardown frees claims.** `mem_free_rec` runs at all three instance teardown sites, which is why `OSAPI_MEM_CLAIM` needs no close hook.
 - **The kernel is a client too**, with its own owner tags: the menu save-under (`MEM_K_SAVE`, claimed by `menu_drop` for exactly as long as a menu is on screen and released *before* the chosen item runs) and the back buffer (`MEM_K_BB`). `bb_set` claims 150KB when double buffering is armed and frees it when it is switched off, and the Control Panel's Display row **greys out with "Not Enough Ram"** when `bb_canfit` says the heap cannot fund it right now. That is live state — open Paint and the row greys, close it and it comes back.
-- **Refusal is a normal path, not a panic.** Every claim in the tree has a fallback: the menu save-under repaints instead of restoring, a Disk window with no listing cache reads the global mount snapshot, Paint gives up features tier by tier and finally puts up a notice window.
+- **Refusal is a normal path, not a panic.** Every claim in the tree has a fallback: the menu save-under repaints the menu's own rect instead of restoring it, a Disk window with no listing cache reads the global mount snapshot, Paint gives up features tier by tier and finally puts up a notice window.
 
 ### Two geometries of everything
 
