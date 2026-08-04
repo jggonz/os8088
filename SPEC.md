@@ -6490,25 +6490,53 @@ of the read — and the alternative, dropping the lock inside a click handler,
 is not one the window manager offers.
 
 
-### 31.7 Sound page — where a tone comes out
+### 31.7 Sound page — which sound hardware the machine uses
 
-Fifth item, index `CP_ISND` = 4. Two radio rows on the Display page's
-geometry — **PC Speaker** and the loaded driver's own sink name (its
-`DSV_NAME`, or `'Sound card'` when none is loaded) — and a **Test** button
-under them that plays one second of 660 Hz at `SND_PRI_UI` through whatever
-is selected. The answer to "did that do anything?" is one click away and does
-not need an app.
+Fifth item, index `CP_ISND` = 4. **Three** radio rows on the Display page's
+geometry — **PC Speaker**, **AdLib**, **Sound Blaster** — and a **Test**
+button under them that plays one second of 660 Hz at `SND_PRI_UI` through
+whatever is selected. The answer to "did that do anything?" is one click away
+and does not need an app.
 
-The card row is the `bb_avail` idiom (§31.3) a third time: greyed when no
-loaded driver publishes `DSV_TONE`, refused on click, and named in the
-caption. The **setting is still kept** in that state — `SND_RT_CARD` on a
-machine with no card falls back to the speaker (`snd_rt_card`, §34.8) rather
-than going silent — because a disk carrying that setting to a machine that
-*has* one should simply work.
+The rows are the §34.8 ladder, and the labels are **fixed**. They used to be
+two, the lower one labelled from the loaded driver's own `DSV_NAME` — which on
+a Sound Blaster read `Sound Blaster` with the DSP tier up and `AdLib` with it
+down, so the label moved as the setting moved and the one control on the page
+could not be read as a choice between two things. Nothing stages `DSV_NAME`
+into the kernel any more; it is published as a pointer and that is all
+(`drv_publish`, §51.2).
 
-The dot follows the **setting**; the caption names the **effective sink**. On
-a machine whose card went away those two differ, and both facts are worth
-showing.
+**Two rows are greyed and one is not**, and the difference is what the kernel
+can actually know:
+
+- **AdLib** greys when no loaded driver publishes `DSV_TONE`. That is a stable
+  fact — the FM half is never torn down by a tier change, so if it is not
+  published now it is not there.
+- **Sound Blaster** greys only when no sound driver is published at all
+  (`drv_owner` = 0). Whether a card is there, and whether the heap can fund a
+  page-safe 12KB for it *right now*, are both answerable only by making the
+  claim. So the click makes it, and reports what came back.
+
+That is the one place the page departs from the `bb_avail` idiom (§31.3), and
+deliberately: `bb_canfit` is a real predicate and `mem_claim_dma` has none.
+`mem_avail` reports the largest free run and says nothing about whether a
+64KB-page-safe base exists inside it (§50.3), so a greyed-on-a-guess row would
+keep a machine that has the room off a tier it can afford.
+
+A refused tier change leaves the setting where it was and writes the reason
+into a **notice line** below the Test button, using the loader's own
+`drv_errstr` strings: `No hardware found` or `Not enough memory`. A tier change
+and a driver load fail for the same two reasons, so they say it the same way.
+The line is blank otherwise, and the next click clears it. The old
+detected-card caption is gone — three named rows and the greying carry
+everything it used to say.
+
+The dot follows the **effective** tier, never the stored setting, so it cannot
+claim hardware that is not sounding. The two differ in exactly one case: a disk
+written on a machine with a Sound Blaster and carried to one without.
+`[snd_route]` keeps `SND_RT_SB` there — taking the setting away would mean the
+disk stopped working when it went home — and the dot honestly shows whichever
+tier the driver actually reached.
 
 ### 31.8 Every setting is remembered — `cp_flush`
 
@@ -6847,38 +6875,69 @@ STREAM live only while a driver is. Both answer CF=1 with no driver loaded,
 which is exactly what the held cells they replaced did, so a package may call
 them unconditionally and read the refusal.
 
-### 34.8 The tone route
+### 34.8 The sound tier
 
 `[snd_route]` — a `.text` byte, because `snd_tone_out` reads it on the
 machine's first beep and `SYSTEM.CFG` may not exist at all:
 
 ```
-SND_RT_AUTO (0)  the driver's sink if it publishes one, else the speaker
-SND_RT_SPK  (1)  the PC speaker, whatever is loaded
-SND_RT_CARD (2)  the card - and the speaker if it is not there
+SND_RT_AUTO (0)  unset: the best tier that actually answered at boot
+SND_RT_SPK  (1)  the PC speaker, whatever else is loaded
+SND_RT_FM   (2)  AdLib: FM only - no streams, no 12KB
+SND_RT_SB   (3)  Sound Blaster: FM and streams both
 ```
+
+**Three tiers, not two, and the middle one is the point.** An AdLib is an OPL2
+and nothing else, and every Sound Blaster carries an OPL2 — so the tiers are
+not three devices to pick between, they are a **subset relationship the user
+picks a point on**. An SB owner who selects AdLib is not giving their card up;
+they are giving up the 12KB DMA buffer, the IRQ and the refill worker that only
+the stream tier needs. On a 128KB machine that is 12KB of a 55KB heap back for
+a tier they were not using, which is the whole reason the rung exists. It is a
+**choice, not a probe result**, which is why it persists in `SYSTEM.CFG`.
+
+`SND_RT_CARD` remains as an alias for `SND_RT_FM`, so a `SYSTEM.CFG` written
+before the split still reads as "a card" — and reads as the *cheap* card, which
+is the safe way to be wrong.
 
 `snd_rt_card` is the single answer to "does a tone go to the driver right
 now?", and the router, `osapi_snd_caps`'s BL and the Control Panel's Sound
 page (§31.7) all read it — so they cannot disagree about where a beep is
 about to come out.
 
-**`SND_RT_CARD` with no driver falls back rather than going silent.** The
-page refuses that selection while it is meaningless, but a setting kept on a
-disk that later moves to a machine with a card must not take the beep away
-with it in the meantime.
+**A tier below `SND_RT_SB` with no driver falls back rather than going
+silent.** The page greys that selection while it is meaningless, but a setting
+kept on a disk that later moves to a machine with a card must not take the beep
+away with it in the meantime.
+
+**`DRVV_TIER` is how the setting reaches the hardware** (§51.2). `drv_tier`
+carries `AH` = the tier to the published driver, which answers `CF=0` and a
+re-copied service table, or `CF=1` and a `DRVE_*` saying why not. Two rules
+hold it up:
+
+- **Turning a tier off cannot fail**, for the same reason `DRVV_DETACH` cannot.
+  The sound driver's off-leg halts the DSP, waits the worker out, unhooks the
+  vector and frees both claims.
+- **Turning one on is a claim and so can fail**, and there is nothing to
+  pre-check with, so the answer is to *try*. The Control Panel therefore
+  passes a **candidate** tier and stores `[snd_route]` only on `CF=0` — which
+  is why `drv_tier` takes `AH` instead of reading the byte itself. A rollback
+  would otherwise have to run on the path that already failed.
+
+**`drv_tier` saves every register, `AH` included.** `drv_call` is a far call
+into code the kernel did not write, and its callers are mid-something: the
+Control Panel holds `DI`/`BP` as its pane origin and redraws with them after
+the call. With `DI` eaten by the driver's DMA claim the redraw went to an
+off-screen x and the page simply did not change — which reads exactly like a
+click that never arrived. `drv_load` and `drv_unload` save the same registers
+for the same reason; the Drivers page calls both the same way.
 
 **`DSV_NAME` names the CARD, and the Sound Blaster takes it whenever it
-attaches.** The page's card row is a tone route and the tone comes out of an
-OPL2, so the name used to go to whichever tier published first and the OPL2
-kept it — which is wrong on every machine it matters on, because **every real
-Sound Blaster carries an OPL2 of its own** and that chip is probed first. The
-row read `AdLib` on an SB1.0, an SB1.5, an SB2.0 and an SB16 alike, and the
-page's one statement about the machine's hardware named the smaller half of
-it. The tone still comes out of an OPL2 — the SB's — so the name is no less
-true of the sink and strictly more true of the card, and it doubles as the
-**answer to "did the DSP tier attach?"**, since nothing else puts that string
-on the page.
+attaches.** It used to go to whichever tier published first, which was always
+the OPL2 — so on an SB1.0, an SB1.5, an SB2.0 and an SB16 alike it read
+`AdLib`. Nothing in the kernel paints it now (§31.7), and it is published as a
+pointer rather than staged, but the rule stands for whatever reads it next: the
+name should describe the card, not the half of it that answered first.
 
 ### 34.9 The two tiers that must never overlap
 
@@ -10054,6 +10113,11 @@ in:  AL = verb, DS = CS = the driver's segment, ES = KERNEL_SEG
 DRVV_ATTACH (0)  probe + hook.  out CF=0 and SI = the service table;
                  CF=1 = no hardware, AND NOTHING WAS HOOKED
 DRVV_DETACH (1)  silence, unhook, restore, free. Cannot fail.
+DRVV_TIER   (2)  in AH = how much of yourself the user wants (SND_RT_*,
+                 34.8). out CF=0 and SI = the service table, RE-COPIED
+                 because a tier change alters it; CF=1 and AL = a DRVE_*
+                 saying why not, with the table untouched. OPTIONAL - the
+                 kernel sends it only when a setting asks for one.
 ```
 
 **Attach must be all-or-nothing** and **detach cannot fail.** The first
@@ -10061,6 +10125,14 @@ because the kernel frees the image the moment a driver says no, so anything
 it left behind — an interrupt vector, a port, a claim — outlives it by
 definition. The second because the user turned it off; there is no answer
 but yes.
+
+**`DRVV_TIER` is for a driver whose tiers cost different amounts of memory**,
+and it inherits both halves of that rule: turning a tier *off* cannot fail, and
+turning one *on* is a claim and therefore can. Its refusal codes are the
+loader's own `DRVE_*` (§51.3), so the Control Panel names a refused tier change
+with the string it already has for a refused load — one vocabulary for both. A
+driver with a single tier need not implement the verb at all; it answers `CF=1`
+and the caller reports that, with nothing to undo.
 
 The service table, in the driver's segment, copied whole by the kernel at
 attach so every later dispatch is a near read plus one far call:

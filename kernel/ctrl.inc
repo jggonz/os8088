@@ -176,12 +176,16 @@ cp_s_drv:   db 'Drivers', 0     ; list name AND the page heading
 cp_s_dsave: db 'Cannot save to the system disk', 0
 
 ; --- Sound page (SPEC.md 31.7/34.8) ------------------------------------------
+; The three row labels are FIXED and name TIERS, not whatever a driver called
+; itself. The row used to be labelled from the driver's own DSV_NAME, which on
+; a Sound Blaster read 'Sound Blaster' with the DSP tier up and 'AdLib' with it
+; down - the label moved as the setting moved, so the one control on the page
+; could not be read as a choice between two things.
 cp_s_snd:   db 'Sound', 0       ; list name AND the page heading
 cp_s_sspk:  db 'PC Speaker', 0
-cp_s_scard: db 'Sound card', 0  ; the row label when no driver names itself
+cp_s_sfm:   db 'AdLib', 0
+cp_s_ssb:   db 'Sound Blaster', 0
 cp_s_stest: db 'Test', 0
-cp_s_snone: db 'No sound driver loaded', 0
-cp_s_snot:  db 'That card has no tone voice', 0
 ; The Date/Time page names the RTC ladder tier that answered (SPEC.md 37.90),
 ; not just yes/no: on a machine whose clock will not hold a setting, which of
 ; the four answered is the whole diagnosis, and there is nowhere else to see
@@ -1668,27 +1672,56 @@ cp_flush_close:
 ; =============================================================================
 ; The Sound page (SPEC.md 31.7/34.8)
 ;
-; Where a tone comes out. Two radio rows on the Display page's geometry, and
-; a Test button under them that plays one through whatever is selected - so
-; the answer to "did that do anything?" is one click away and does not need
-; an app.
+; WHICH SOUND HARDWARE THE MACHINE USES. Three radio rows on the Display
+; page's geometry, and a Test button under them that plays a tone through
+; whatever is selected - so the answer to "did that do anything?" is one click
+; away and does not need an app.
 ;
-; The CARD row is the bb_avail idiom (SPEC.md 31.3) a third time: greyed when
-; no loaded driver publishes a tone sink, refused on click, and named in the
-; caption. Note the setting is kept even so - SND_RT_CARD on a machine with
-; no card falls back to the speaker (snd_rt_card) rather than going silent,
-; because a disk carrying that setting to a machine that HAS one should just
-; work.
+; The rows are a LADDER, not three devices: PC Speaker is the resident sink
+; every machine has, AdLib adds the FM tier, and Sound Blaster adds the stream
+; tier on top of it. Every Sound Blaster carries an OPL2, so an SB owner who
+; picks AdLib is not giving up their card - they are giving up the DMA buffer,
+; the IRQ and the worker task that only the stream tier needs. On a 128KB
+; machine that is 12KB of a 55KB heap back, which is the whole reason the
+; middle rung exists.
+;
+; TWO THINGS ARE GREYED AND ONE IS NOT, and the difference is what the kernel
+; can actually know:
+;
+;   - AdLib greys when no loaded driver publishes a tone sink. That is a
+;     stable fact: the FM half of the sound driver is never torn down by a
+;     tier change, so if it is not published now it is not there.
+;   - Sound Blaster greys only when NO sound driver is published at all.
+;     Whether a card is there, and whether the heap can fund a page-safe 12KB
+;     for it right now, are both answerable ONLY by making the claim - so the
+;     click makes it (SPEC.md 50.3) and cp_snd_note reports what came back.
+;     Greying it on a full heap would be a guess, and mem_avail cannot even
+;     make that guess: it reports the largest free run and says nothing about
+;     whether a 64KB-page-safe base exists inside it.
+;
+; That is the one place this page departs from the bb_avail idiom (SPEC.md
+; 31.3), and deliberately: bb_canfit is a real predicate and mem_claim_dma has
+; none.
 ; =============================================================================
 
+CPS_B2Y2  equ CP_PR0Y + 2*CP_PROWH + CP_GW + 3  ; 81: route row 2's bottom
 CPS_BTX1  equ CP_PGX                    ; the Test button
 CPS_BTX2  equ CP_PGX + 44
-CPS_BTY1  equ 62
-CPS_BTY2  equ 77
-CPS_CAPY  equ 88
+CPS_BTY1  equ 84
+CPS_BTY2  equ 99
+CPS_NOTEY equ 104                       ; the refusal notice's text row
+
+; Which row a click asked for, in [snd_route] order, so the band test is an
+; index rather than a ladder of compares.
+cp_snd_tiers: db SND_RT_SPK, SND_RT_FM, SND_RT_SB
+
+; The last click's refusal, as a DRVE_* (0 = the last click was fine, and the
+; notice line is blank). .text and not .bss for the reason everything else
+; here is: -f bin zeroes nothing.
+cp_snd_err: db 0
 
 ; -----------------------------------------------------------------------------
-; cp_snd_paint - the page: heading, two route rows, the Test button, caption
+; cp_snd_paint - the page: heading, three tier rows, the Test button, notice
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
@@ -1707,24 +1740,33 @@ cp_snd_paint:
     add dx, CP_PHY
     call font_str
 
-    mov si, cp_s_sspk               ; row 0: always available
+    xor bx, bx                      ; BX = row 0..2
+.lbl:
+    mov al, bl
+    call cp_snd_rowok               ; greyed rows still draw - they are what
+    mov byte [gfx_color], CBLACK    ; the machine does not have, and a missing
+    jnc .pen                        ; row would just look like a shorter list
+    mov byte [gfx_color], CDGRAY
+.pen:
+    mov si, cp_s_sspk               ; three fixed labels, in ladder order
+    or bl, bl
+    jz .str
+    mov si, cp_s_sfm
+    cmp bl, 1
+    je .str
+    mov si, cp_s_ssb
+.str:
     mov cx, di
     add cx, CP_PLX
+    mov ax, CP_PROWH
+    mul bl                          ; AX = bl * CP_PROWH (bl <= 2, so AH = 0)
     mov dx, bp
+    add dx, ax
     add dx, CP_PR0Y + CP_PLDY
     call font_str
-
-    call cp_snd_cardok              ; row 1: greyed when there is no sink
-    mov byte [gfx_color], CBLACK
-    jnc .lbl1
-    mov byte [gfx_color], CDGRAY
-.lbl1:
-    call cp_snd_cardnm              ; SI = the driver's own name, or a
-    mov cx, di                      ; generic one
-    add cx, CP_PLX
-    mov dx, bp
-    add dx, CP_PR0Y + CP_PROWH + CP_PLDY
-    call font_str
+    inc bl
+    cmp bl, 3
+    jb .lbl
     mov byte [gfx_color], CBLACK
 
     mov ax, di                      ; the Test button: a plain framed box
@@ -1744,7 +1786,7 @@ cp_snd_paint:
     call font_str
 
     call cp_snd_radios
-    call cp_snd_cap
+    call cp_snd_note
 
     pop si
     pop dx
@@ -1754,13 +1796,25 @@ cp_snd_paint:
     ret
 
 ; -----------------------------------------------------------------------------
-; cp_snd_cardok - is the card row selectable? (module internal)
-; out: CF = 0 yes (a loaded driver publishes a tone sink); CF = 1 no
+; cp_snd_rowok - is tier row AL selectable? (module internal)
+; in:  AL = 0 speaker, 1 AdLib, 2 Sound Blaster
+; out: CF = 0 yes; CF = 1 no - the hardware that row names is not here
 ; clobbers: nothing (flags)
+;
+; See the header above for why row 2's test is so much weaker than row 1's.
 ; -----------------------------------------------------------------------------
-cp_snd_cardok:
+cp_snd_rowok:
+    or al, al
+    jz .yes                     ; the speaker is always there
+    cmp al, 1
+    je .fm
+    cmp word [drv_owner], 0     ; row 2: a published sound driver is the most
+    je .no                      ; we can assert without claiming
+    jmp short .yes
+.fm:
     cmp word [drv_svc+DSV_TONE], 0
     je .no
+.yes:
     clc
     ret
 .no:
@@ -1768,93 +1822,113 @@ cp_snd_cardok:
     ret
 
 ; -----------------------------------------------------------------------------
-; cp_snd_cardnm - what to call the card row (module internal)
-; out: SI -> the loaded driver's own sink name, or 'Sound card'
-; clobbers: SI (the output), flags
+; cp_snd_row - which row is EFFECTIVELY live? (module internal)
+; in:  nothing
+; out: AL = 0 speaker, 1 AdLib, 2 Sound Blaster
+; clobbers: AL (the output), flags
+;
+; The dot follows the effective tier, not the stored setting, so it can never
+; claim hardware that is not sounding. The two disagree in exactly one case: a
+; disk written on a machine with a Sound Blaster, carried to one without.
+; [snd_route] keeps SND_RT_SB there - taking the setting away would mean the
+; disk stopped working when it went home - and the dot honestly shows AdLib or
+; the speaker, whichever the driver actually reached.
 ; -----------------------------------------------------------------------------
-cp_snd_cardnm:
-    mov si, cp_s_scard
-    cmp byte [drv_sname], 0     ; the driver's DSV_NAME, staged by drv_publish
-    je .out
-    mov si, drv_sname
-.out:
+cp_snd_row:
+    cmp byte [snd_route], SND_RT_SPK
+    je .spk
+    cmp byte [snd_route], SND_RT_FM
+    je .fm                      ; AUTO and SB both take the best tier up
+    cmp word [drv_svc+DSV_STREAM], 0
+    jne .sb
+.fm:
+    cmp word [drv_svc+DSV_TONE], 0
+    jne .adlib
+.spk:
+    xor al, al
+    ret
+.adlib:
+    mov al, 1
+    ret
+.sb:
+    mov al, 2
     ret
 
 ; -----------------------------------------------------------------------------
-; cp_snd_radios - both glyphs, from the live [snd_route] (module internal)
+; cp_snd_radios - the three glyphs (module internal)
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
-;
-; The dot follows the SETTING, not the effective sink: a machine whose card
-; went away still shows what the disk asked for, and the caption says what is
-; actually sounding.
 ; -----------------------------------------------------------------------------
 cp_snd_radios:
     push ax
+    push bx
     push cx
     push dx
     push si
     mov byte [gfx_color], CBLACK
+    call cp_snd_row             ; AL = the row that owns the dot
+    mov bh, al
+    xor bl, bl
     mov cx, di
     add cx, CP_PGX
     mov dx, bp
     add dx, CP_PR0Y
-    call snd_rt_card            ; where a tone would ACTUALLY come out - the
-    mov si, cp_radio_on         ; setting folded with what is present, so the
-    jc .r0                      ; dot can never claim a sink that is not
-    mov si, cp_radio_off        ; sounding (SPEC.md 34.8). AUTO on a machine
-.r0:                            ; whose card has no tone voice shows the
-    call cp_glyph               ; SPEAKER, because that is where the beep is
-    add dx, CP_PROWH
-    call snd_rt_card
+.r:
     mov si, cp_radio_off
-    jc .r1
+    cmp bl, bh
+    jne .draw
     mov si, cp_radio_on
-.r1:
+.draw:
     call cp_glyph
+    add dx, CP_PROWH
+    inc bl
+    cmp bl, 3
+    jb .r
     pop si
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; cp_snd_cap - the caption: where a tone would come out right now (internal)
+; cp_snd_note - the notice line: why the last click did not take (internal)
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing (all registers preserved)
+;
+; Blank unless a tier change was refused, and it uses the LOADER's strings
+; (drv_errstr) because a tier that cannot be had and a driver that cannot be
+; loaded fail for the same two reasons - no hardware, or no memory - and one
+; vocabulary for both is one less thing for the user to map.
 ; -----------------------------------------------------------------------------
-cp_snd_cap:
+cp_snd_note:
+    push ax
+    push bx
     push cx
     push dx
     push si
     mov dx, bp
-    add dx, CPS_CAPY
-    call cp_drv_wipe            ; the strings differ in length
-    call cp_snd_cardok          ; a greyed card row explains ITSELF here -
-    jc .why                     ; the Display page's idiom (SPEC.md 31.3)
-    call snd_rt_card            ; else name the sink a tone would use, which
-    jc .spk                     ; is the router's own answer and not a
-    call cp_snd_cardnm          ; second opinion
-    jmp short .draw
-.spk:
-    mov si, cp_s_sspk
-    jmp short .draw
-.why:
-    mov si, cp_s_snone          ; no driver at all...
-    cmp word [drv_owner], 0
-    je .draw
-    mov si, cp_s_snot           ; ...or one whose card has no tone voice. A
-                                ; Sound Blaster's would be a DAC loop; the
-                                ; speaker is free, and better
-.draw:
+    add dx, CPS_NOTEY
+    call cp_drv_wipe            ; the strings differ in length, and the line
+    mov bl, [cp_snd_err]        ; is usually empty
+    or bl, bl
+    jz .out
+    cmp bl, DRVE_NERR           ; the code came out of a driver, and a table
+    jae .out                    ; index is not a thing to take on trust
+    xor bh, bh
+    shl bx, 1
+    mov si, [bx+drv_errstr]
     mov cx, di
     add cx, CP_PMX
     mov dx, bp
-    add dx, CPS_CAPY
+    add dx, CPS_NOTEY
     call font_str
+.out:
     pop si
     pop dx
     pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1862,9 +1936,16 @@ cp_snd_cap:
 ; in:  DI = pane left, BP = pane top, CX = pane-relative x, DX = pane-relative
 ;      y; gfx lock held by the caller
 ; out: nothing (all registers preserved)
+;
+; A tier change is ASKED FOR, not asserted: drv_tier carries the candidate to
+; the driver, which may have to claim memory for it, and only an answer of yes
+; stores it. That order is what lets the AdLib -> Sound Blaster switch simply
+; try - there is no predicate to pre-check with, and refusing on a guess would
+; keep a machine that has the room off a tier it can afford (SPEC.md 34.8).
 ; -----------------------------------------------------------------------------
 cp_snd_click:
     push ax
+    push bx
     push cx
     push dx
 
@@ -1883,29 +1964,42 @@ cp_snd_click:
     jmp short .done
 
 .rows:
-    cmp dx, CP_B0Y1             ; --- the two route rows --------------------
+    cmp dx, CP_B0Y1             ; --- the three tier rows -------------------
     jl .done
-    cmp dx, CP_B1Y2
-    jg .done
-    mov al, SND_RT_CARD
+    xor bl, bl                  ; BL = the row the y lands in
     cmp dx, CP_B0Y2
-    jg .set
-    mov al, SND_RT_SPK
-.set:
-    cmp al, SND_RT_SPK
-    je .take
-    call cp_snd_cardok          ; the card row is refused when nothing
-    jc .done                    ; publishes a tone sink - the caption says so
+    jle .band
+    inc bl
+    cmp dx, CP_B1Y2
+    jle .band
+    inc bl
+    cmp dx, CPS_B2Y2
+    jg .done
+.band:
+    mov al, bl
+    call cp_snd_rowok           ; a row whose hardware is not here is refused
+    jc .done                    ; without a notice: it is drawn grey, which
+                                ; has already said so
+    xor bh, bh
+    mov ah, [bx+cp_snd_tiers]   ; the SND_RT_* that row asks for
+    mov byte [cp_snd_err], 0
+    cmp ah, [snd_route]
+    je .redraw                  ; already the setting: still redraw, because
+                                ; the click clears a stale notice
+    call drv_tier               ; ask the driver to move; AL = why not
+    jnc .take
+    mov [cp_snd_err], al        ; the tier stands where it was, and the notice
+    jmp short .redraw           ; line says which of the two reasons
 .take:
-    cmp al, [snd_route]
-    je .done                    ; that row is already live
-    mov [snd_route], al
-    call cp_snd_radios
-    call cp_snd_cap
+    mov [snd_route], ah
     mov byte [cp_wdirty], 1
+.redraw:
+    call cp_snd_radios
+    call cp_snd_note
 .done:
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 

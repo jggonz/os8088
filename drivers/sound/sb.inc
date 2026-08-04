@@ -721,7 +721,10 @@ sbl_grant_alloc:
     push di
     push si                     ; SI is only an output on success: the
                                 ; refusals restore the caller's
-    jcxz .e7
+    or cx, cx                   ; not jcxz: .e7 is out of a short jump's
+    jnz .szok                   ; reach now that the pool claim sits here
+    jmp .e7
+.szok:
     call sbl_pool_get           ; BEFORE the size test: [sbl_poolsz] is 0
     jc .e8n                     ; until the pool is actually held
     cmp cx, [sbl_poolsz]        ; the pool we actually got, not a constant
@@ -2201,33 +2204,41 @@ SBL_WANT   equ SBL_DMASZ / 1024 ; KB claimed at attach: the DMA-visible part
 ; -----------------------------------------------------------------------------
 ; sbl_attach - find a card and give it somewhere to DMA from
 ; in:  nothing
-; out: CF = 0 attached; CF = 1 no card, or no page-safe memory - and in
-;      either case NOTHING is hooked and NOTHING is held (SPEC.md 51.2)
-; clobbers: flags
+; out: CF = 0 attached; CF = 1 and AL = DRVE_HW (no card) or DRVE_MEM (no
+;      page-safe memory) - and in either case NOTHING is hooked and NOTHING is
+;      held (SPEC.md 51.2)
+; clobbers: AX (flags)
+;
+; The two refusals are told apart because the Control Panel reports them: on a
+; tier switch "you have no card" and "close something and try again" are
+; different answers, and a page that said only "no" for both would send the
+; user looking for the wrong problem (SPEC.md 34.8).
 ; -----------------------------------------------------------------------------
 sbl_attach:
-    push ax
     push bx
     push cx
     push dx
     call sbl_state_init         ; before any port write: a reload starts clean
     call sbl_f_probe            ; the reset scan + E1h version gate
     or al, al
-    jz .no
+    jz .nohw
     call sbl_dma_map            ; ...and somewhere to DMA from
-    jc .no
+    jc .nomem
     mov byte [sbl_up], 1        ; publish LAST (SPEC.md 29.2): the stream
     clc                         ; verbs test this and nothing else
     jmp short .out
-.no:
-    xor ax, ax
-    mov [sbl_seg], ax           ; a refused attach holds nothing
+.nohw:
+    mov al, DRVE_HW
+    jmp short .fail
+.nomem:
+    mov al, DRVE_MEM
+.fail:
+    mov word [sbl_seg], 0       ; a refused attach holds nothing
     stc
 .out:
     pop dx
     pop cx
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
