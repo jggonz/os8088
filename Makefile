@@ -142,6 +142,20 @@ $(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin $(DRIVERS)
 
+# FMTEST: the AdLib gate package (SPEC.md 34.2/51.4). NEVER on the shipped
+# apps disks - their directory order is pinned (SPEC.md 24) - so it rides its
+# own scratch image, the filetest precedent:
+#   make test-snd ADLIB=1 TESTAPPS=build/fmtest.img
+$(BUILD)/fmtest.bin: apps/fmtest/fmtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/fmtest/fmtest.asm
+	@echo "fmtest: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/fmtest.o88: $(BUILD)/fmtest.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/fmtest.bin -o $@
+
+$(BUILD)/fmtest.img: $(BUILD)/fmtest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/fmtest.o88
+
 # Minesweeper, the first loadable program: a flat binary with the .o88
 # package header. ONE assembly per package since SPEC.md 20.1 - a package
 # links at org 0 and owns a segment, so it is position-independent and there

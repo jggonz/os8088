@@ -144,6 +144,17 @@ DRV_CFG_MAPN equ 3
 drv_f_sound: db 'SOUND.DRV', 0
 drv_t_sound: db 'Sound', 0
 
+; The published driver's dispatcher, as a FAR POINTER. Adjacent and in this
+; order because together they ARE the dword `call far [drv_fptr]` reads, and
+; in .text because drv_svc_call tests the segment half on the machine's first
+; beep. drv_publish arms it, drv_release clears it - so "is a service
+; dispatchable" is one word test and the call itself needs NO REGISTER, which
+; is the whole point: every general register is an argument to something in
+; the sound ABI (SPEC.md 34.2), and BX in particular is the FM verb's
+; frequency.
+drv_fptr:    dw PKG_DISP
+drv_fseg:    dw 0
+
 drv_cfgname: db 'SYSTEM.CFG', 0
 drv_cfgsig:  db 'O88CFG', 0, 0  ; 8 bytes, byte for byte the file's head
 
@@ -289,23 +300,36 @@ drv_call:
 ;
 ; The one place that turns "a service exists" into a far call, so each API
 ; slot and snd_tick stay one test and one jump.
+;
+; **It takes no register but DI, and that is a contract, not a convenience.**
+; Every other general register is an argument to something in the sound ABI
+; (SPEC.md 34.2/34.5) - AL is the verb, BX the FM frequency, CL the channel,
+; DH the requesting instance, SI and ES a staged buffer. This routine used to
+; load the driver ROW into BX for drv_call, which quietly ate the frequency:
+; a note-on arrived at the driver with BX = a kernel offset, no OPL2 block
+; fits 15,000 Hz, and every FM call came back refused while tones - which
+; pass AX - worked perfectly. The far pointer lives in memory for exactly
+; that reason.
 ; -----------------------------------------------------------------------------
 drv_svc_call:
-    push bx
-    mov bx, [drv_owner]
-    or bx, bx
-    jz .none
+    cmp word [drv_fseg], 0
+    je .none
     push di
     add di, drv_svc
     mov bp, [di]
     pop di
     or bp, bp
     jz .none
-    call drv_call
-    pop bx
+    push ds
+    push es
+    push cs
+    pop es                      ; ES = KERNEL_SEG: what the driver reads the
+    mov ds, [es:drv_fseg]       ; things it was handed through
+    call far [es:drv_fptr]
+    pop es
+    pop ds
     ret
 .none:
-    pop bx
     xor ax, ax
     stc
     ret
@@ -323,6 +347,7 @@ drv_svc_clear:
     push ds
     pop es
     mov word [drv_owner], 0
+    mov word [drv_fseg], 0
     mov di, drv_svc
     mov cx, DSV_SIZE + 16       ; the table and the staged sink name
     xor al, al
@@ -622,7 +647,8 @@ drv_publish:
     loop .copy
 
     mov [drv_owner], bx         ; which row these belong to, so a detach can
-                                ; take them away again
+    mov ax, [bx+DRVR_SEG]       ; take them away again - and the far pointer
+    mov [drv_fseg], ax          ; drv_svc_call dispatches through
 
     mov byte [drv_sname], 0     ; the sink's name (0 = it named none)
     mov si, [drv_svc+DSV_NAME]
@@ -697,6 +723,7 @@ drv_release:
     mov word [bx+DRVR_KB], 0
     cmp bx, [drv_owner]
     jne .out
+    mov word [drv_fseg], 0      ; disarm the dispatch before the table goes
     call drv_svc_clear
 .out:
     pop dx

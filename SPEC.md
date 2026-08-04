@@ -9138,6 +9138,16 @@ is then an ordinary near read with DS = KERNEL_SEG, and `snd_tick` — which
 runs inside IRQ0 — does not have to point a segment register anywhere to find
 out whether it has work.
 
+**`drv_svc_call` takes no register but DI, and that is a contract.** Every
+other general register is an argument to something in the sound ABI (§34.2,
+§34.5): AL is the verb, BX the FM frequency, CL the channel, DH the
+requesting instance, SI and ES a staged buffer. So the driver's dispatcher
+lives in memory as a far pointer (`drv_fptr`/`drv_fseg`, armed by
+`drv_publish` and cleared by `drv_release`) rather than being passed in.
+It was passed in BX once, which quietly ate the frequency: a note-on reached
+the driver with BX = a kernel offset, no OPL2 block fits 15,000 Hz, and every
+FM call came back refused — while *tones*, which pass AX, worked perfectly.
+
 **`DSV_TONE` is the interesting one.** Publishing it *moves the tone tier off
 the PC speaker* onto the driver's hardware. An OPL2 publishes it, because an
 FM note is two register writes and then zero CPU, and moving tones there
@@ -9221,10 +9231,15 @@ believe a setting had been kept.
    whole contract.
 2. **`DSV_TICK` runs inside IRQ0 at IF=0.** Keep it short, and touch no port
    that needs a long counted delay.
-3. **Stage what you are handed.** A package's pointer is in the package's
-   segment and you run in yours; the kernel stages the one case that exists
-   (a patch-load's 11 bytes) into its own buffer and hands you ES:SI. Do not
-   invent a second convention.
+3. **Stage what you are handed, and read it through ES.** A package's
+   pointer is in the package's segment and you run in yours; the kernel
+   stages the one case that exists (a patch-load's 11 bytes) into its own
+   buffer and hands you ES:SI. **Do not point DS at it** — your own tables
+   are in DS, and taking DS to the caller takes them with it. `opl_patch`
+   reads the patch with an `es lodsb` and its register bases with a plain
+   `[opl_opregs+bx]` for exactly this reason; the version that repointed DS
+   still made a noise, which is how a bug like that survives a listening
+   test.
 4. **Bulk memory is a claim, not bss.** Take it at attach, free it at detach.
 5. **You may own a task.** `task_spawn` takes a segment, so a driver's refill
    loop is an ordinary background task — but it must be gone before detach

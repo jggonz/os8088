@@ -284,10 +284,18 @@ opl_keyoff:
 ; =============================================================================
 ; opl_patch - load an 11-byte patch onto one channel (SPEC.md 34.2)
 ;
-; in:       CL = channel 0..8, DS:SI -> 11 bytes: 5 modulator operator regs
+; in:       CL = channel 0..8, ES:SI -> 11 bytes: 5 modulator operator regs
 ;           (20h/40h/60h/80h/E0h values), 5 carrier, then C0h
 ; out:      nothing
 ; clobbers: nothing (flags)
+;
+; **ES:SI, not DS:SI, and that is the whole reason this reads with an
+; override.** The patch bytes are the CALLER'S - a package's, staged into the
+; kernel's own buffer by the API slot - while opl_slotoff and opl_opregs are
+; OURS. Pointing DS at the caller to reach the bytes would have taken the
+; two tables with it, and the register bases would come out of whatever sat
+; at those offsets in the kernel. It did, briefly; the note still sounded,
+; which is exactly how a bug like this survives a listening test.
 ; =============================================================================
 opl_patch:
     push ax
@@ -306,7 +314,7 @@ opl_patch:
 .reg:
     mov ah, [opl_opregs+bx]
     add ah, dl                  ; register = base + slot offset
-    lodsb                       ; the patch byte
+    es lodsb                    ; the patch byte, from the CALLER's segment
     call opl_wr
     inc bx
     cmp bx, 5
@@ -316,7 +324,7 @@ opl_patch:
     jnz .op
     mov ah, 0xC0
     add ah, cl                  ; C0h+ch: feedback/connection
-    lodsb
+    es lodsb
     call opl_wr
     popf
     pop si
@@ -518,9 +526,9 @@ opl_fm_op:
 .patch:                         ; --- verb 2: patch-load -----------------------
     call opl_claim
     jc .bad
-    push es                     ; the 11 bytes are in the KERNEL's staging
-    pop ds                      ; buffer, which the kernel handed us in ES:SI
-    call opl_patch
+    call opl_patch              ; ES:SI is the kernel's staging buffer, and
+                                ; DS stays OURS - opl_patch's own tables are
+                                ; in this segment
 .ok:
     clc
     jmp .out
@@ -669,13 +677,17 @@ opl_init:
     call opl_wr
     mov ax, 0xBD00              ; BDh <- 0: melodic mode, no drums
     call opl_wr
-    mov cl, 0
+    push es
+    push ds
+    pop es                      ; opl_patch reads the patch through ES, and
+    mov cl, 0                   ; OUR default one is in our own segment
 .patch:
     mov si, opl_defpatch        ; the default voice, channel by channel
     call opl_patch
     inc cl
     cmp cl, 9
     jb .patch
+    pop es
     pop si
     pop cx
     pop ax

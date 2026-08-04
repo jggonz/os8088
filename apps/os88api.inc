@@ -150,9 +150,30 @@ CWHITE    equ 15
                                  ; desktop for the length of the clip, and a
                                  ; mouse click aborts it (err 5)
 
-; capability bits returned by OSAPI_SND_CAPS (SPEC.md 34.2)
+%define OSAPI_SND_FM        KERNEL_SEG:0x00F8   ; FM verbs (SPEC.md 34.2), live
+                                 ; only while a sound DRIVER is loaded
+                                 ; (SPEC.md 51.4) - CF=1 when none is.
+                                 ; AL = verb: 0 note-on (CL = channel 0..7,
+                                 ; BX = Hz 19..6208), 1 note-off (CL),
+                                 ; 2 patch-load (CL, DS:SI -> 11 bytes: 5
+                                 ; modulator regs, 5 carrier, then C0h -
+                                 ; STAGED for you, so SI is yours), 3 all-off.
+                                 ; A channel is claimed by its first note-on
+                                 ; or patch-load and is yours until you call
+                                 ; verb 3 or the instance is torn down;
+                                 ; CHANNEL 8 IS NOT AVAILABLE - it is the tone
+                                 ; tier's voice (SPEC.md 34.8).
+%define OSAPI_SND_STREAM    KERNEL_SEG:0x0100   ; PCM_BG streams: likewise the
+                                 ; driver's, and likewise CF=1 without one.
+
+; capability bits returned by OSAPI_SND_CAPS (SPEC.md 34.2). TONE and
+; PCM_EXCL are the resident PC speaker's and are always there; the rest
+; appear only while a sound driver is loaded (SPEC.md 51.4).
 SND_CAP_TONE     equ 01h
+SND_CAP_FM       equ 02h
+SND_CAP_PCM_BG   equ 04h
 SND_CAP_PCM_EXCL equ 08h
+SND_CAP_PCM_IN   equ 10h
 
 ; --- window management (SPEC.md 11.1/11.2) -------------------------------------
 %define OSAPI_WM_SIZABLE    KERNEL_SEG:0x0108   ; BX=win ptr, AL = 0 clear / non-zero set

@@ -574,6 +574,25 @@ publishing it **moves the tone tier off the PC speaker**, which is what an
 OPL2 wants (an FM note is two register writes and then no CPU) and a Sound
 Blaster does not.
 
+**`drv_svc_call` takes no register but DI, and that is a contract**: every
+other general register is an argument to something in the sound ABI — AL the
+verb, BX the FM frequency, CL the channel, DH the requesting instance, SI and
+ES a staged buffer — so the dispatcher is a far pointer in memory
+(`drv_fptr`/`drv_fseg`) rather than something passed in. It went through BX
+once and quietly ate the frequency: every FM call came back refused while
+*tones*, which pass AX, worked perfectly.
+
+**Porting an app from `main` is two mechanical edits and one trap.** Over
+there a callback is far-called and ends in `retf`; here the kernel reaches it
+through the package's own dispatcher, so **every proc — the entry included —
+is a near proc with a near `ret`**, and the `push cs / call x` trick around a
+retf-ending helper goes with it. A `retf` left in place returns into the
+loader's stack frame and hangs the machine at the first paint. `apps/fmtest`
+is the reference port and the FM gate: `make test-snd ADLIB=1
+TESTAPPS=build/fmtest.img`, click twice, and the wav must show 880 Hz
+dominant from a keyed 440 — which is only true if the CALLER'S patch bytes
+reached the operator registers.
+
 **Nothing here can stop the boot.** No disk, no file, no card and no memory
 are all recorded in the row and reported afterwards — `drv_boot` runs before
 the first paint so a loaded driver is live from frame one, and `drv_notice`
