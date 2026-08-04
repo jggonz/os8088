@@ -877,9 +877,7 @@ fdlg_paint:
     call fdlg_off
     call gfx_frame
 
-    call fdlg_clamp
-    call fdlg_draw_rows
-    call fdlg_draw_sbar
+    call fdlg_list_body
 
     ; --- the button column ---
     mov si, fdlg_s_open
@@ -926,12 +924,76 @@ fdlg_paint:
     mov dx, FD_NBY2
     call fdlg_off
     call gfx_frame
+    call fdlg_name_body
+
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; Partial redraws - what a keystroke actually changes (SPEC.md 38.8)
+;
+; The dialog does not resize, so unlike a text window it never has to work out
+; WHICH pixels moved: every key and every click knows what it touched. Typing
+; a character changes the name box and nothing else - not the listing, not the
+; four buttons, not the header, not two frames and a scroll bar - so a
+; keystroke that repainted the whole content was redrawing about a hundred
+; glyphs to move one.
+;
+; So the content is three parts, and each of the two that change on their own
+; is a BODY (draws) plus a wrapper (erases its own rectangle first, and only
+; its own). fdlg_paint calls the bodies, because wm_paint_all already handed
+; it a white content; everything else calls the wrappers.
+;
+; The third part - the header, the two frames, the buttons and the name
+; label - changes only when the volume, the mode or the folder-naming state
+; does, and those paths keep fdlg_repaint. That is the rule for deciding
+; where a new action goes: if it can change the drive letter, the word
+; 'Disk'/'Folder', or the 'Save as:'/'Folder:' label, it is a full repaint.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; fdlg_name_body / fdlg_draw_name - the name box's contents, and the caret
+; in:  [fdlg_cx]/[fdlg_cy] valid; gfx lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fdlg_draw_name:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [gfx_color], CWHITE    ; INSIDE the frame: the frame itself is
+    mov ax, FD_NBX1+1               ; part of the chrome and never moves
+    mov bx, FD_NBY1+1
+    mov cx, FD_NBX2-1
+    mov dx, FD_NBY2-1
+    call fdlg_off
+    call gfx_fill
+    call fdlg_name_body
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+fdlg_name_body:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [gfx_color], CBLACK
     mov si, fdlg_name
     mov cx, FD_NTX
     mov dx, FD_NTY
     call fdlg_text
     cmp byte [fdlg_mode], 0
-    je .done                    ; no caret in Open mode: there is nothing
+    je .out                     ; no caret in Open mode: there is nothing
                                 ; to type there (SPEC.md 38.5)
     mov al, [fdlg_ncur]         ; a 1px caret AT the caret index - 8px cells,
     xor ah, ah                  ; so its column is the index times eight
@@ -944,14 +1006,53 @@ fdlg_paint:
     mov dx, FD_NTY+7
     add dx, [fdlg_cy]
     call gfx_vline              ; AX = x, BX = y1, DX = y2
-.done:
-    pop bp
-    pop di
+.out:
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_list_body / fdlg_draw_list - the listing and its scroll bar
+; in:  [fdlg_cx]/[fdlg_cy] valid; gfx lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fdlg_draw_list:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [gfx_color], CWHITE    ; inside the list frame, which the scroll
+    mov ax, FD_LX1+1                ; bar's own rules are drawn against
+    mov bx, FD_LY1+1
+    mov cx, FD_LX2-1
+    mov dx, FD_LY2-1
+    call fdlg_off
+    call gfx_fill
+    call fdlg_list_body
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+fdlg_list_body:
+    call fdlg_clamp
+    call fdlg_draw_rows
+    call fdlg_draw_sbar
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_draw_both - a selection move: the listing scrolled AND the box took the
+;                  new selection's name (fdlg_pick)
+; in:  as above
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fdlg_draw_both:
+    call fdlg_draw_list
+    call fdlg_draw_name
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1466,6 +1567,13 @@ fdlg_onkey:
     push dx
     push di
 
+    push ax                     ; the content origin the partial redraws
+    mov bx, si                  ; below need. This proc used to get it for
+    call wm_content             ; free from fdlg_paint, which it no longer
+    mov [fdlg_cx], ax           ; always reaches - and AX is the keystroke,
+    mov [fdlg_cy], dx           ; which the ladder below still wants
+    pop ax
+
     cmp al, 27
     je .cancel
     cmp al, 13
@@ -1514,36 +1622,36 @@ fdlg_onkey:
     jc .out
 .store:
     call fdlg_nins              ; at the caret, which moves past it
-    jmp .redraw
+    jmp .rname
 
 .bksp:
     cmp byte [fdlg_ncur], 0
     je .out                     ; nothing to the left of the caret
     dec byte [fdlg_ncur]
     call fdlg_ndel
-    jmp .redraw
+    jmp .rname
 
 .kdel:
     call fdlg_ndel              ; forward delete: the caret stays put
-    jmp .redraw
+    jmp .rname
 .kleft:
     cmp byte [fdlg_ncur], 0
     je .out
     dec byte [fdlg_ncur]
-    jmp short .redraw
+    jmp short .rname
 .kright:
     mov al, [fdlg_ncur]
     cmp al, [fdlg_nlen]
     jae .out
     inc byte [fdlg_ncur]
-    jmp short .redraw
+    jmp short .rname
 .khome:
     mov byte [fdlg_ncur], 0
-    jmp short .redraw
+    jmp short .rname
 .kend:
     mov al, [fdlg_nlen]
     mov [fdlg_ncur], al
-    jmp short .redraw
+    jmp short .rname
 
 .kup:
     mov ax, [fdlg_sel]
@@ -1567,7 +1675,7 @@ fdlg_onkey:
 .setsel:
     call fdlg_setsel
     call fdlg_pick              ; keep the name box on the selection
-    jmp short .redraw
+    jmp short .rboth
 
 .enter:
     call fdlg_act               ; CF = 1: the window is gone, do not repaint
@@ -1576,9 +1684,16 @@ fdlg_onkey:
     cmp byte [fdlg_nmode], 0    ; Escape while naming a folder backs OUT of
     je .close                   ; that, not out of the dialog: the user asked
     call fdlg_unfold            ; for a folder, changed their mind, and still
-    jmp .redraw           ; wants to save
+    jmp short .redraw           ; wants to save. WHOLE: the box's label goes
+                                ; back from 'Folder:' to 'Save as:'
 .close:
     call fdlg_close
+    jmp short .out
+.rname:                         ; the box changed and nothing else did
+    call fdlg_draw_name
+    jmp short .out
+.rboth:                         ; ...the selection moved, so the list did too
+    call fdlg_draw_both
     jmp short .out
 .redraw:
     call fdlg_repaint
@@ -1794,7 +1909,7 @@ fdlg_onclick:
     mov al, [fdlg_nlen]         ; past the text: the caret goes after it
 .nb_set:
     mov [fdlg_ncur], al
-    jmp .redraw
+    jmp .rname
 
     ; --- the scroll bar ---
 .sbar2:
@@ -1811,25 +1926,25 @@ fdlg_onclick:
     cmp cx, FD_LY2-11
     jge .s_dn
     call fdlg_thumb             ; the track pages against the thumb
-    jc .redraw                  ; no thumb: the track is inert
-    cmp cx, ax
+    jc .out                     ; no thumb: the track is inert, and inert
+    cmp cx, ax                  ; means nothing to draw
     jl .s_pgup
     add ax, dx
     cmp cx, ax
     jge .s_pgdn
-    jmp .redraw           ; on the thumb itself: nothing to do
+    jmp .out                    ; on the thumb itself: nothing to do
 .s_up:
     dec word [fdlg_scrl]
-    jmp .redraw
+    jmp .rlist
 .s_dn:
     inc word [fdlg_scrl]
-    jmp .redraw
+    jmp .rlist
 .s_pgup:
     sub word [fdlg_scrl], FD_ROWS
-    jmp .redraw
+    jmp .rlist
 .s_pgdn:
     add word [fdlg_scrl], FD_ROWS
-    jmp .redraw
+    jmp short .rlist
 
     ; --- the rows ---
 .rows:
@@ -1873,6 +1988,14 @@ fdlg_onclick:
     mov bx, [ui_click_t]
     mov [fdlg_clkt], bx
     call fdlg_pick
+    call fdlg_draw_both         ; the list scrolled and the box took the name
+    jmp short .out
+.rlist:                         ; the listing scrolled; the box did not move
+    call fdlg_draw_list
+    jmp short .out
+.rname:                         ; only the caret in the box moved
+    call fdlg_draw_name
+    jmp short .out
 .redraw:
     call fdlg_repaint           ; SI is still the window ptr
 .out:
