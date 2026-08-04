@@ -65,35 +65,32 @@ TM_RW       equ 223             ; the rows' right edge, content-relative. It
                                 ; 'HEAP nnn/nnnK' land exactly on it
 
 ; --- memory-view geometry (SPEC.md 28) ---------------------------------------
-; **Each map is captioned on the line directly above it**, and the gaps say
-; which caption goes with which: 4px above a caption, 1px below it. They used
-; to share one heading order - RAM line, map, HEAP line, map - which read as
-; if the second map WAS the heap. It is the package pool; the heap has no map
-; of its own because its claims are drawn in the first one, at their real
-; addresses, which is why the claim swatch sits beside the HEAP figures.
+; **ONE map, captioned on the line directly above it.** There were two: the
+; conventional address space, and the package pool magnified. The pool is
+; gone (SPEC.md 20.1) - a package's region is an ordinary heap claim now - so
+; the second map had nothing left to magnify, and the regions it used to show
+; are drawn in the first one at their real addresses, in the same per-slot
+; patterns. That is a strictly better place for them: they are now next to
+; the data claims they compete with for the heap.
 TMM_RAM_Y   equ 4               ; 'RAM nnn/nnnK [] HEAP nnn/nnnK' - the
                                 ; conventional map's caption, both figures
 TMM_M1_Y1   equ 14              ; conventional-memory map frame top
 TMM_M1_Y2   equ 29              ; frame bottom (interior rows 15..28)
-TMM_CAP_Y   equ 34              ; 'PACKAGES nnn/nnnK' - the pool map's caption
-TMM_M2_Y1   equ 43              ; package-pool map frame top
-TMM_M2_Y2   equ 58              ; frame bottom (interior rows 44..57)
 TMM_HSQ_X   equ 105             ; the claim swatch, centred in the two-space
                                 ; gap between the RAM and HEAP figure pairs
-TMM_XMS_Y   equ 62              ; 'XMS nnn/nnnK' - memory above 1MB
-                                ; (SPEC.md 41), directly BELOW the pool map
-                                ; because that is where it is: the two maps
-                                ; above are the conventional address space
-                                ; and a magnified slice of it, and extended
-                                ; memory is not in either - it has no
-                                ; conventional address to draw at. So it gets
-                                ; a figure line and no map, under the ones
-                                ; that do. On tier 0 it reads 'XMS 0/0K'
-TMM_XB_Y1   equ 71              ; the XMS bar's frame, directly under its
-TMM_XB_Y2   equ 80              ; figures - same shape as the RAM bar in the
+TMM_XMS_Y   equ 33              ; 'XMS nnn/nnnK' - memory above 1MB
+                                ; (SPEC.md 41), directly BELOW the map
+                                ; because that is where it is NOT: the map
+                                ; above is the conventional address space and
+                                ; extended memory has no conventional address
+                                ; to draw at. So it gets a figure line and a
+                                ; bar of its own scale, under the map that
+                                ; does. On tier 0 it reads 'XMS 0/0K'
+TMM_XB_Y1   equ 42              ; the XMS bar's frame, directly under its
+TMM_XB_Y2   equ 51              ; figures - same shape as the RAM bar in the
                                 ; performance view, because it answers the
                                 ; same question about a different pool
-TMM_HDR_Y   equ 84              ; "NAME    ADDR SIZE   HEAP" header line
+TMM_HDR_Y   equ 55              ; "NAME    ADDR SIZE   HEAP" header line
 
 ; --- what the periodic refresh checks before it draws (SPEC.md 28) -----------
 ; The rows have tm_rowck; these are the seven things AROUND them that cost
@@ -103,13 +100,12 @@ TMM_HDR_Y   equ 84              ; "NAME    ADDR SIZE   HEAP" header line
 ; them goes through tm_elchk, rows included, so the never-zero rule there
 ; covers the lot.
 TMC_LINE    equ 0               ; the RAM (+ HEAP) readout line
-TMC_PKG     equ 1               ; the PACKAGES readout line
+TMC_PKG     equ 1               ; (free - was the PACKAGES readout line)
 TMC_MRAM    equ 2               ; the conventional-memory map interior
-TMC_MPOOL   equ 3               ; the package-pool map interior
-TMC_BAR     equ 4               ; the performance view's RAM bar
-TMC_XMS     equ 5               ; the XMS readout line (SPEC.md 41)
-TMC_XBAR    equ 6               ; ...and its bar
-TMC_N       equ 7
+TMC_BAR     equ 3               ; the performance view's RAM bar
+TMC_XMS     equ 4               ; the XMS readout line (SPEC.md 41)
+TMC_XBAR    equ 5               ; ...and its bar
+TMC_N       equ 6
 
 ; Every line in this window is composed into tm_str before any of it is
 ; drawn - that is what lets one hash decide whether to draw it at all - so
@@ -143,9 +139,7 @@ TM_KDSK_KB  equ (KLOW_SIZE - (MAX_TASKS-1) * SCH_STACK + 1023) / 1024
 TM_KERN_KB  equ KERN_KB         ; ...and the span that holds all five
 TM_KBUF_KB  equ KBUF_KB         ; the four buffers alone - what the RAM bar
                                 ; draws in its own shade
-TM_POOL_KB0 equ PKG_SEG / 64    ; where the package pool starts, in KB
-TM_POOL_KB  equ PKG_PARA / 64   ; ...and how big it is
-TMM_ROW_Y   equ 96              ; first process row (same TM_ROW_H pitch)
+TMM_ROW_Y   equ 67              ; first process row (same TM_ROW_H pitch)
 TM_COLW     equ TM_RW + 9       ; column pitch when the list runs in two of
                                 ; them: a row's own width plus the margin the
                                 ; next one starts at
@@ -1167,10 +1161,8 @@ tm_upd_mem:
     mov ax, TMM_RAM_Y
     call tm_txt_ram_y
     call tm_map_ram
-    call tm_cap_pool
     call tm_cap_xms
     call tm_xbar
-    call tm_map_pool
     call tm_rows_mem
 
     pop dx
@@ -1210,15 +1202,6 @@ tm_draw_mem:
     add dx, TMM_M1_Y2
     call gfx_frame
 
-    mov ax, [tm_cx]             ; pool map frame (6,43)-(TM_RW,58)
-    add ax, 6
-    mov bx, [tm_cy]
-    add bx, TMM_M2_Y1
-    mov cx, [tm_cx]
-    add cx, TM_RW
-    mov dx, [tm_cy]
-    add dx, TMM_M2_Y2
-    call gfx_frame
 
     mov ax, [tm_cx]             ; XMS bar frame (6,71)-(TM_RW,80) - here and
     add ax, 6                   ; not in tm_xbar, which is element-checked and
@@ -1249,10 +1232,8 @@ tm_draw_mem:
     jnz .hdr
 
     call tm_map_ram
-    call tm_cap_pool
     call tm_cap_xms
     call tm_xbar
-    call tm_map_pool
     call tm_rows_mem
 
     pop di
@@ -1355,59 +1336,7 @@ tm_cap_xms:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_cap_pool - white-fill the caption band and draw "PACKAGES nnn/nnnK"
-;               (resident regions / pool size, SPEC.md 20.1)
-; in:  the instance snapshot block
-; out: nothing
-; clobbers: nothing (flags only)
-;
-; The map below this line is the package pool magnified - the same 60KB the
-; black band in the map above stands for, given the whole width so the regions
-; inside it can be told apart. Unlabelled it was simply a second bar, and the
-; HEAP figures that used to sit here made it look like the heap's.
-; -----------------------------------------------------------------------------
-tm_cap_pool:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
-    call tm_pool_kb             ; AX = KB of pool allocated
-    mov di, tm_str
-    push ax
-    mov si, tm_s_pool
-    call tm_copy
-    pop ax
-    mov bx, TM_POOL_KB
-    call tm_kpair
-
-    call tm_rowsum              ; unchanged? then so are its pixels
-    mov bx, tm_elck + 2*TMC_PKG
-    call tm_elchk
-    jc .out
-
-    mov ax, TMM_CAP_Y
-    call tm_lfill               ; only now is the line worth erasing
-    mov byte [gfx_color], CBLACK
-    mov cx, [tm_cx]
-    add cx, 6
-    mov dx, [tm_cy]
-    add dx, TMM_CAP_Y
-    mov si, tm_str
-    call font_str
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; tm_pool_kb - how much of the package pool is allocated, in KB rounded up
+; tm_pool_kb - how much heap the resident package REGIONS hold, in KB
 ; in:  the tm_ist/tm_isz snapshot
 ; out: AX = KB
 ; clobbers: nothing else (flags)
@@ -1488,11 +1417,6 @@ tm_map_ram:
                                       ; program, and the part these figures
                                       ; are steered by (docs/KERNEL-MEMORY.md)
 
-    mov ax, TM_POOL_KB0         ; the package pool, black: it is not free
-    mov dx, TM_POOL_KB0 + TM_POOL_KB - 1   ; memory, it is the pool
-    call tm_band
-    mov byte [gfx_color], CBLACK
-    call gfx_fill
 
     xor si, si                  ; every live claim, at its real address
 .claim:
@@ -1517,82 +1441,53 @@ tm_map_ram:
     inc si
     cmp si, MEM_MAX
     jb .claim
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
-; -----------------------------------------------------------------------------
-; tm_map_pool - the package-pool map interior (SPEC.md 20.1/28): white =
-;               unallocated, one pattern region per resident package. The
-;               scale is the pool's own 60KB, not a 64KB segment - the pool
-;               left the kernel's segment and is its own address space now.
-; in:  tm_ist/tm_isz/tm_ispt snapshot
-; out: nothing
-; clobbers: nothing (flags only)
-; -----------------------------------------------------------------------------
-tm_map_pool:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
-    xor ax, ax                  ; the snapshot this map is drawn from: which
-    mov si, tm_ist              ; slots are live, how big each region is and
-    mov cx, INST_MAX            ; where it sits
-    call tm_sumb
-    mov si, tm_isz              ; tm_isz and tm_ispt are declared adjacent
-    mov cx, INST_MAX * 4        ; and hashed as one span
-    call tm_sumb
-    mov bx, tm_elck + 2*TMC_MPOOL
-    call tm_elchk
-    jc .out
-
-    mov byte [gfx_color], CWHITE
-    xor ax, ax                  ; whole interior white first
-    mov cx, TM_GW - 1
-    mov bx, TMM_M2_Y1
-    call tm_map_rect
-    call gfx_fill
-
-    xor si, si                  ; SI = instance slot
-.slot:
+    ; --- ...and each resident package's REGION, over the top of its claim ---
+    ; A region IS a claim now (SPEC.md 20.1), so the loop above has already
+    ; drawn it as one. Redrawing it in the slot's own pattern is what keeps
+    ; the legend true: the per-slot pattern means "this package's region"
+    ; and it used to mean that on a map of its own. They sit at the TOP of
+    ; the heap and the data claims at the bottom (SPEC.md 50.3), so on this
+    ; map the two kinds separate visibly, which is the point of allocating
+    ; them from opposite ends.
+    xor si, si
+.reg:
     cmp byte [tm_ist+si], 0
-    je .next
+    je .rnext
+    test byte [tm_iknd+si], KIND_PKG
+    jz .rnext
     mov di, si
     shl di, 1
     mov ax, [tm_isz+di]
-    or ax, ax                   ; built-ins own no region
-    jz .next
-    mov bx, [tm_ispt+di]        ; BX = base SEGMENT
-    sub bx, PKG_SEG             ; -> paragraphs into the pool
-    mov cl, 4
-    shr ax, cl                  ; I_SIZE bytes -> paragraphs
-    add ax, bx
-    dec ax                      ; inclusive end, in paragraphs
-    call tm_para2x
-    mov cx, ax                  ; CX = end px
-    mov ax, bx
-    call tm_para2x              ; AX = start px
-    mov bx, si                  ; [gfx_pat] = tm_pats + slot*8
-    shl bx, 1
-    shl bx, 1
-    shl bx, 1
-    add bx, tm_pats
-    mov [gfx_pat], bx
-    mov bx, TMM_M2_Y1
-    call tm_map_rect
+    or ax, ax                   ; a built-in owns no region
+    jz .rnext
+    mov di, si                  ; [gfx_pat] = tm_pats + slot*8, worked out
+    shl di, 1                   ; while SI still holds the slot
+    shl di, 1
+    shl di, 1
+    add di, tm_pats
+    mov [gfx_pat], di
+
+    push si
+    mov di, si
+    shl di, 1
+    mov ax, [tm_isz+di]
+    mov cl, 10
+    shr ax, cl                  ; AX = size KB (I_SIZE is a whole KB now)
+    mov si, [tm_ispt+di]        ; SI = base SEGMENT
+    mov cl, 6
+    shr si, cl                  ; -> base KB
+    mov dx, si
+    add dx, ax
+    dec dx                      ; DX = inclusive end KB
+    mov ax, si
+    call tm_band
     call gfx_fill_pat
-.next:
+    pop si
+.rnext:
     inc si
     cmp si, INST_MAX
-    jb .slot
+    jb .reg
 .out:
     pop di
     pop si
@@ -1704,24 +1599,6 @@ tm_ramkb2x:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_para2x - pool paragraph -> pool-map interior pixel column
-; in:  AX = offset
-; out: AX = px = para*TM_GW/PKG_PARA (< TM_GW by construction: the pool is
-;      PKG_PARA paragraphs and a region ends inside it)
-; clobbers: flags
-; -----------------------------------------------------------------------------
-tm_para2x:
-    push cx
-    push dx
-    mov cx, TM_GW
-    mul cx                      ; DX:AX = para * TM_GW
-    mov cx, PKG_PARA
-    div cx                      ; <= 159 by construction
-    pop dx
-    pop cx
-    ret
-
-; -----------------------------------------------------------------------------
 ; tm_rows_mem - the memory view's rows (SPEC.md 28)
 ;
 ; Grouped, not slot-ordered: System, then a Builtins heading and every live
@@ -1822,8 +1699,12 @@ tm_rows_mem:
 
     ; --- the Packages heading, then every live package ------------------------
     ; The sum comes FIRST, because tm_pool_kb needs DI and tm_mrow_open hands
-    ; DI over as the string cursor - the two cannot overlap.
-    call tm_pool_kb             ; AX = KB of pool allocated
+    ; DI over as the string cursor - the two cannot overlap. It is the KB of
+    ; HEAP the regions hold now, not of a pool: there is no denominator to
+    ; put it over any more, so it takes the SIZE column like a package row
+    ; does, and no square - the regions wear their own per-slot patterns on
+    ; the map above (SPEC.md 20.1/28).
+    call tm_pool_kb             ; AX = KB of region held
     push ax
     call tm_mrow_open
     push si
@@ -1831,9 +1712,7 @@ tm_rows_mem:
     call tm_copy
     pop si
     pop ax
-    mov bx, TM_POOL_KB
-    call tm_kpair
-    mov word [tm_sqp], tm_pat_blk   ; the pool's band on the RAM map above
+    call tm_kcol
     call tm_mrow_close
 
     xor si, si

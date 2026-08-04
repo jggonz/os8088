@@ -28,10 +28,13 @@ usually is not there.
 
 **The size in RAM is the actual size, not a budget.** There is no growth
 room anywhere in the ladder. Each rung is the measured size of what it
-holds, rounded up only as far as alignment demands, so the package pool
-starts where *this build's* kernel happens to end and the heap starts after
-the pool. Both move when the kernel does, and that is intended — a fixed
-ceiling with slack under it is memory that nothing can ever use.
+holds, rounded up only as far as alignment demands, so the heap starts where
+*this build's* kernel happens to end and moves when the kernel does. A fixed
+ceiling with slack under it is memory that nothing can ever use — which is
+what the **package pool** had become: 60KB reserved above the kernel whether
+or not a package was loaded. A package's region is an ordinary heap claim now
+(SPEC.md §20.1), taken from the top of the heap downward while data claims
+grow up from the bottom.
 
 **If the kernel needs to grow past its budget, that is a conversation, not a
 build fix.** Raise `KERN_BUDGET` only after explaining to whoever asked for
@@ -78,8 +81,10 @@ out of the same constants the guards use.
 | FAT snapshot | 4,608 B | the mounted volume's FAT, resident |
 | **total** | **69,120 B** | of a 71,680-byte budget — 2,560 B spare |
 
-Everything above that is somebody else's: the 60KB package pool, then the
-claim heap up to whatever int 12h reports.
+Everything above that is the claim heap, up to whatever int 12h reports —
+570KB on a 640KB machine, and **59KB on a 128KB one**, which is the floor
+this targets. It used to be 510KB and *nothing*: the pool's own top sat above
+128KB, so a 128KB machine had no heap and could load no package at all.
 
 The Task Manager's memory view shows this same breakdown live, one indented
 row per buffer under **System**, and paints the buffer part of the kernel
@@ -90,13 +95,14 @@ element on the page reduces what it is drawn from to one word and compares
 that against what it last drew, so a desktop sitting still costs a few string
 builds and two table hashes rather than two map interiors and a dozen rows.
 
-The page is **two maps, each captioned on the line directly above it**:
+The page is **one map, captioned on the line directly above it** — the
+second used to magnify the package pool, and there is no pool:
 
 ```
-RAM  89/639K [] HEAP  23/514K       <- the conventional map's caption
+RAM 267/639K [] HEAP 181/570K       <- the map's caption, both figures
 [==============================]    <- every byte the machine has
-PACKAGES   2/ 60K                   <- the pool map's caption
-[==============================]    <- the 60KB pool, magnified
+XMS   0/64448K                      <- and what it has no address for
+[==============================]
 ```
 
 The top line is **one string**, swatch and all — the swatch is drawn into
@@ -104,11 +110,12 @@ the two spaces between the pairs — because that makes the whole line one
 comparison when the refresh asks whether it needs drawing at all.
 
 The heap has no map of its own and never will: a claim is drawn in the
-*conventional* map at its real address, in among the kernel and the pool, so
-its figures belong to that map's caption and share the top line with RAM. On
-its own line above the second map — which is where it used to sit — it read
-as that map's label, and the second map is the package pool, the one thing on
-the page that is emphatically not the heap.
+conventional map at its real address, in among the kernel and everything
+else, so its figures belong to that map's caption and share the top line with
+RAM. **Package regions are claims too** (SPEC.md §20.1) and are drawn there
+in their per-slot patterns — at the far right, because they are claimed from
+the top of the heap downward while data grows up from the bottom, so the two
+kinds separate visibly.
 
 Each row's legend square is the texture its memory is drawn in on the maps,
 so the two can be read against each other:
@@ -117,7 +124,6 @@ so the two can be read against each other:
 |---|---|---|
 | 50% gray | the kernel's own span | `System` |
 | horizontal bars | its buffers | `Stacks`, `Disk bufs`, `FAT snap` |
-| solid black | the package pool | `Packages` |
 | framed light block | a live heap claim | beside the `HEAP` figures |
 | per-slot pattern | one package's region | each package row |
 
@@ -255,9 +261,11 @@ straddle with error 09h.
 Every base in this ladder is an int 13h target: the FAT snapshot, the disk
 buffers, a package image being loaded, and a package's file buffer out of
 the heap. So the image rounds up to a whole **512 bytes** rather than to a
-paragraph, and because `FAT_PARA` (288), `LOW_PARA` and `PKG_PARA` (3,840)
-are all multiples of 32 paragraphs, aligning that one rung aligns the whole
-ladder. Guard 6 proves it.
+paragraph, and because `FAT_PARA` (288) and `LOW_PARA` are both multiples of
+32 paragraphs, aligning that one rung aligns the whole ladder. Guard 6 proves
+it — and guard 6b proves the claim heap keeps it, since a package image is
+read by int 13h into a **claim** now: `mem_claim` rounds to whole KB, so every
+base it hands out is `HEAP_SEG` + n·64 paragraphs.
 
 This held by luck until the ladder became derived: every base used to be a
 round constant like `0x0300` or `0x2A00`, and nothing said why that

@@ -359,11 +359,15 @@ resize happen and clamp or reflow in `W_PAINT` instead.
 Both branches give a package one segment holding its image and bss, loaded on a
 paragraph boundary, with no relocation of any kind. `main` allocates it from a
 conventional **arena** running from linear `0x65800` to whatever `int 12h`
-reports; `experimental` allocates it from a fixed 60KB **pool** at `PKG_SEG`
-(`0x1300`). Neither is visible to package code.
+reports; `experimental` allocates it from the **claim heap** (SPEC.md §50), from
+the top downward, while data claims grow up from the bottom. Neither is visible
+to package code.
 
-The practical difference: on `main` the arena is **empty on a 256KB machine** and
-package loads refuse with a message; `experimental`'s pool is always there.
+`experimental` had a fixed 60KB pool of its own until the heap absorbed it. The
+practical difference now: `main`'s arena starts at a constant, so it is **empty
+on a 256KB machine** and package loads refuse with a message; `experimental`'s
+heap starts where the kernel actually ends, so it is ~187KB on a 256KB machine
+and ~59KB on a **128KB** one — which is the floor `experimental` targets.
 
 ### 7.2 Asking for more
 

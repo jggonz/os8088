@@ -58,74 +58,58 @@ LD_HDR_SIZE equ 0x20
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 loader_init:
+    mov word [ld_base], 0
     mov word [ld_pending], 0
     mov word [ld_pwin], 0
     mov byte [ld_status], LD_OK
     ret
 
 ; -----------------------------------------------------------------------------
-; ld_alloc - claim a pool region, first-fit lowest base (SPEC.md 21)
-; in:  AX = paragraphs needed (a 32-multiple: regions are 512-granular)
-; out: CF = 0, BX = region base SEGMENT; CF = 1 no hole fits
-; clobbers: nothing else. UI task only (occupancy is derived from the
-;           instance table, which only this task grows).
+; ld_slot - the instance slot a reserved record sits in, which is the owner
+;           word its REGION claim carries (SPEC.md 50.2)
+; in:  DI = instance record ptr
+; out: BX = slot index 0..INST_MAX-1
+; clobbers: nothing else (flags)
 ;
-; start = PKG_SEG; while any in-use package record overlaps
-; [start, start+AX), start = that record's end, rescan from the top (each
-; bump lands on a record end, so the loop terminates); fail when
-; start + AX > PKG_SEG + PKG_PARA.
-;
-; Segments, not offsets, since SPEC.md 20.1: a package is loaded at a
-; paragraph boundary and addresses itself from 0, so what the allocator hands
-; out IS the package's CS and DS.
+; The region is owned by the SLOT and a package's data claims by its SEGMENT,
+; deliberately: mem_free_rec already releases both, so teardown needs no new
+; code, and the Task Manager's HEAP column - which sums a package's claims by
+; segment - does not then count the region twice against the SIZE column that
+; already reports it.
 ; -----------------------------------------------------------------------------
-ld_alloc:
+ld_slot:
+    push ax
     push cx
-    push dx
-    push si
-    push di
-    mov bx, PKG_SEG             ; BX = candidate base segment
-.retry:
-    mov dx, bx
-    add dx, ax                  ; DX = candidate end
-    jc .full                    ; wrapped past 0xFFFF
-    cmp dx, PKG_SEG + PKG_PARA
-    ja .full
-    mov di, inst_tab            ; overlap scan over in-use package records
-    mov cx, INST_MAX
-.scan:
-    cmp byte [di+I_STATE], 0
-    je .next
-    test byte [di+I_KIND], 0x80 ; packages only (builtins have I_SIZE 0)
-    jz .next
-    mov si, [di+I_SPTR]         ; SI = that region's base segment
-    cmp si, dx                  ; record starts at/past our end: no overlap
-    jae .next
-    push cx
-    mov cl, 4
-    mov cx, [di+I_SIZE]         ; bytes -> paragraphs (I_SIZE is a 512-
-    shr cx, 1                   ; multiple, so this is exact)
-    shr cx, 1
-    shr cx, 1
-    shr cx, 1
-    add si, cx                  ; SI = the region's end segment
+    mov ax, di
+    sub ax, inst_tab
+    mov cl, 5                   ; I_RECSZ = 32
+    shr ax, cl
+    mov bx, ax
     pop cx
-    cmp si, bx                  ; record ends at/before our start: ditto
-    jbe .next
-    mov bx, si                  ; overlap: restart just past this record
-    jmp .retry
-.next:
-    add di, I_RECSZ
-    loop .scan
-    clc
-    jmp .out
-.full:
-    stc
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ld_unreserve - give back a region, and anything the entry proc claimed
+; in:  DI = the reserved (unpublished) instance record
+; out: nothing (all registers preserved)
+;
+; The record is not published, so mem_free_rec cannot be used: it reads
+; I_SPTR, which step 9 has not written yet. Both owner words are known here
+; anyway - the slot for the region, [ld_base] for whatever the entry proc
+; claimed before it failed.
+; -----------------------------------------------------------------------------
+ld_unreserve:
+    push bx
+    call ld_slot
+    call mem_free_owner
+    mov bx, [ld_base]
+    or bx, bx
+    jz .out
+    call mem_free_owner
+    mov word [ld_base], 0
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -377,11 +361,17 @@ ld_run_body:
                                 ; entry offset into the dispatcher below,
                                 ; and loader_run is UI-task-only and one
                                 ; load at a time (SPEC.md 21)
-    mov cl, 4
-    shr ax, cl                  ; AX = paragraphs (the 512-multiple divides)
-    call ld_alloc               ; out: BX = region base SEGMENT
-    jc .nomem
-    mov [ld_base], bx
+    add ax, 1023                ; the region is a heap claim now (SPEC.md
+    mov cl, 10                  ; 20.1/50.3), so it rounds to whole KB rather
+    shr ax, cl                  ; than to the 512 bytes int 13h needs - which
+                                ; mem_claim's own granularity then guarantees
+    call ld_slot                ; BX = the owner word: this record's slot
+    call mem_claim_hi           ; from the TOP down, away from the data claims
+    jc .nomem                   ; growing up from the bottom (SPEC.md 50.3)
+    mov [ld_base], dx
+    mov cl, 10                  ; I_SIZE is bytes, and it is what the region
+    shl ax, cl                  ; occupies now, not what the file needed
+    mov [ld_need], ax
     jmp short .read
 .disk1:
     mov al, LD_EDISK
@@ -460,7 +450,11 @@ ld_run_body:
 
     ; --- 9. register + publish the instance, show the window ---------------------
     jmp short .reg
-.ret2:
+.ret2:                          ; step 6 or 7 failed with a region already
+    push ax                     ; claimed (AL is the status): give it back,
+    mov di, [ld_rec]            ; or a failed load would hold heap for the
+    call ld_unreserve           ; session. The record itself is unpublished,
+    pop ax                      ; so it needs nothing
     ret
 
 .reg:
@@ -502,6 +496,10 @@ ld_run_body:
     ; trust nothing: only a properly aligned pointer into wm_wins reaches
     ; wm_destroy (which writes through it). The reserved instance record
     ; was never published, so it and the region are simply still free.
+    push bx                     ; the region, and anything the entry proc
+    mov di, [ld_rec]            ; claimed before it declared itself broken
+    call ld_unreserve
+    pop bx
     test bx, bx
     jz .abort_clean
     mov ax, bx

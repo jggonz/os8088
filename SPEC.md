@@ -102,11 +102,14 @@ below it, plus its size", so changing a size slides everything above it and
 there are no gaps to lose track of. The sizes are the only numbers, and all
 of them live in one block at the top of `kernel.asm`.
 
-**Every rung is derived, and none of them carries growth room.** The
-package pool starts where *this build's* kernel actually ends and the heap
-starts after the pool, so both move whenever the kernel does. A fixed ceiling
-with slack under it is memory nothing can ever use, which is what the
-retired `KERN_MAX` was.
+**Every rung is derived, and none of them carries growth room.** The heap
+starts where *this build's* kernel actually ends, so it moves whenever the
+kernel does. A fixed ceiling with slack under it is memory nothing can ever
+use, which is what the retired `KERN_MAX` was — and what the **package pool**
+had become: 60KB reserved between the kernel and the heap whether or not a
+single package was loaded. A package's region is an ordinary heap claim now
+(§20.1/§50.3), which returned those 60KB to every machine and is the reason
+the floor is **128KB of RAM** rather than 256KB.
 
 | linear        | segment | contents                                          |
 |---------------|---------|----------------------------------------------------|
@@ -114,8 +117,7 @@ retired `KERN_MAX` was.
 | 0x00600       | `KERNEL_SEG` | kernel image: `.text` + `.bss`, `KIMG_PARA` paragraphs (derived, 512-rounded) |
 | derived       | `FAT_SEG` | mount-time FAT snapshot, `DSK_FAT_SECS`×512 = 4,608 bytes, via **ES only** (§18) |
 | derived       | `LOW_SEG` | `.lowbss`: task stacks + disk buffers (9,216 B), then task 0's stack (`STK0_SIZE`, 1,024 B) growing down from `STK0_TOP` |
-| derived       | `PKG_SEG` | the package pool, `PKG_PARA` paragraphs (60KB) — **its own address space**, one segment per loaded package (§20.1) |
-| derived       | `HEAP_SEG` | **the claim heap (§50)** — everything from there to the top of conventional memory, handed out on demand |
+| derived       | `HEAP_SEG` | **the claim heap (§50)** — everything from there to the top of conventional memory, handed out on demand. Data claims grow **up** from here; a package's region is claimed **down** from the top (§50.3) |
 | 0xA0000       | 0xA000  | VGA planar framebuffer, 80 bytes/row               |
 | 0xB0000       | 0xB000  | Hercules framebuffer, 4 banks × 0x2000, 90 bytes/row (§39) — mono adapters only |
 | 0xB8000       | 0xB800  | CGA framebuffer, 2 banks × 0x2000, 80 bytes/row (§39) — mono adapters only |
@@ -230,7 +232,7 @@ Every base in this ladder is an int 13h target: the FAT snapshot, the disk
 buffers, a package image being loaded (§21), and a package's file buffer out
 of the heap (§18.4). So `KIMG_PARA` rounds the image up to a whole **512
 bytes** rather than to a paragraph, and because `FAT_PARA` (288), `LOW_PARA`
-and `PKG_PARA` (3,840) are all multiples of 32 paragraphs, aligning that one
+and `LOW_PARA` are multiples of 32 paragraphs, aligning that one
 rung aligns the whole ladder. Guard 6 (§15.1) proves it.
 
 This held by accident until the ladder became derived — every base used to be
@@ -310,8 +312,8 @@ STK0_SIZE    equ 1024                  ; task 0's own stack (§2.1)
 STK0_TOP     equ KLOW_SIZE + STK0_SIZE - 2
 KERN_END     equ LOW_SEG + LOW_PARA    ; ...and there the kernel stops
 KERN_SIZE    equ (KERN_END - KERNEL_SEG) * 16  ; what guard 1 measures
-PKG_SEG      equ KERN_END              ; the package pool (§20.1)
-HEAP_SEG     equ PKG_SEG + PKG_PARA          ; the claim heap (§50)
+HEAP_SEG     equ KERN_END              ; the claim heap (§50). There is no
+                                       ; package pool: a region is a claim
 ; VGA reference geometry, and the initializers of the live block (§39.2);
 ; the live screen is [vid_w] / [vid_h] / [vid_stride]
 SCREEN_W     equ 640
@@ -325,9 +327,11 @@ CWHITE  equ 15
 CLGRAY  equ 7
 CDGRAY  equ 8
 ; loadable programs (§20)
-PKG_PARA     equ 0x0F00      ; the package pool: 61,440 bytes of its own
-APP_MAX_SIZE equ 0xF000      ; image + bss budget - the whole pool, since
-                             ; one package may be the only one
+APP_MAX_SIZE equ 0xF000      ; image + bss budget: 60KB. The ceiling is the
+                             ; SEGMENT - a package links at org 0 and
+                             ; addresses itself with 16-bit offsets - and
+                             ; what it can ACTUALLY get also depends on
+                             ; what the heap has contiguous
 PKG_DISP     equ 12          ; the dispatcher's fixed offset inside a
                              ; package's header (§20.2)
 ; double buffering (§32) - a heap claim, so there is no BB_SEG
@@ -2335,7 +2339,7 @@ KBUF_KB    equ ((FAT_PARA + LOW_PARA) * 16 + 1023) / 1024
 %if (KERNEL_SEG % 32) || (FAT_SEG % 32) || (LOW_SEG % 32)
 %error "a disk-buffer segment is not 512-byte aligned - see KIMG_PARA"
 %endif
-%if (PKG_SEG % 32) || (HEAP_SEG % 32)
+%if HEAP_SEG % 32
 %error "the pool or the heap is not 512-byte aligned - see KIMG_PARA"
 %endif
 %if KERNEL_SEG*16 + KERN_SIZE > BOOT_LIN - BOOT_STACK
@@ -3404,18 +3408,44 @@ path is derived from an unvalidated field.
 
 ## 20. Loadable programs — the .o88 package format
 
-### 20.1 The pool
+### 20.1 A package owns a segment, and its region is a heap claim
 
 A package **owns a segment**. It is a flat 8086 binary assembled with
-`org 0` and loaded on a paragraph boundary inside `PKG_SEG`'s 60KB pool
-(§2, §21); the loader hands it its own CS = DS = that paragraph, and
-nothing in the image depends on where it landed. SS is still `LOW_SEG`,
+`org 0` and loaded on a paragraph boundary **claimed from the heap** (§2,
+§21, §50.3); the loader hands it its own CS = DS = that paragraph, and
+nothing in the image depends on where it landed.
+
+**There is no package pool.** There was: `PKG_SEG`, 60KB of its own between
+the kernel and the heap, with a first-fit allocator (`ld_alloc`) of its own
+over the instance table. It was a fixed reservation — unavailable to anything
+else whether or not a package was loaded — so deleting it returned 60KB to
+every machine (510KB → 570KB of heap on a 640KB one) and is what makes a
+**128KB** machine viable at all: the pool's own top used to sit above 128KB,
+so such a machine had no heap and could load nothing.
+
+Two consequences follow, and both are load-bearing:
+
+- **A region is claimed from the TOP of the heap downward** (`mem_claim_hi`)
+  while data claims grow up from the bottom, because a data claim can move
+  within its lifetime by being freed and re-claimed and **a region can never
+  move at all** — its base IS its CS, and relocating it would invalidate
+  `W_SEG`, `I_SPTR`, every `MB_SEG` in the menu bar and every claim owner
+  word. From one end they interleave and a long-lived data claim landing
+  mid-heap permanently splits the space a package can load into; from
+  opposite ends they meet only when the heap is genuinely full.
+- **The region's owner word is the instance SLOT**, not the segment, while a
+  package's own data claims carry the segment (§50.2). `mem_free_rec` already
+  releases both, so teardown needs no new code, and the Task Manager's HEAP
+  column — which sums a package's claims by segment — does not count the
+  region twice against the SIZE column that already reports it. SS is still `LOW_SEG`,
 shared with every task, so `[bp+disp]` still addresses SS and a BP-held
 data pointer still needs a `ds:` override. §1's hard rules still apply
 (cpu 8086, register discipline, no bare `sti` in handlers).
 
-Budget: image + zeroed bss ≤ `APP_MAX_SIZE` (0xF000 — the whole pool, since
-one package could legitimately be the only one). Multiple package instances
+Budget: image + zeroed bss ≤ `APP_MAX_SIZE` (0xF000 = 60KB). The ceiling is
+the **segment** — 16-bit offsets from `org 0` — not a pool; what a package can
+actually get also depends on what the heap has contiguous, and a refusal
+there is `LD_ENOMEM` like any other. Multiple package instances
 can be resident at once, including two of the same package: each is its own
 copy in its own segment with its own bss, so package state (equ offsets from
 `os88_image_end`) is per-instance automatically. Closing an instance frees
@@ -3454,7 +3484,7 @@ each needed a mechanism**:
 
 **The dispatcher at +12 is the header's one piece of executable code**, and
 it is what makes a package's callbacks ordinary near procs. Every
-kernel-to-package call goes far to `PKG_SEG_of_this_package:12` with BP
+kernel-to-package call goes far to `<this package's segment>:12` with BP
 holding the real target and DS already switched, so the three bytes are
 `call bp` / `retf` (§11, `wm_pkgcall`). A package author never writes
 `retf`, which means a missing one cannot exist; and because the pointer the
@@ -3829,7 +3859,7 @@ flips *both* instances onto the wrong teardown path: the stranger's close
 box would take the die-flag branch and hide it forever, waiting on a worker
 it does not own, while the caller's own record stayed task-less and its
 close took the synchronous path — freeing, per §29.2 rule 7, the region its
-worker is still executing in, for `ld_alloc` to hand to the next package.
+worker is still executing in, for the heap to hand to the next package.
 A second instance of the same package is refused by the same test: it lives
 at a different base, so the caller's relocated entry is not inside it.
 
@@ -3983,19 +4013,23 @@ entry's first-cluster word (§19; it was `LD_DE_LBA` — same offset, renamed
 because the word is a cluster number now). `ld_appwin` is gone — the
 instance table (§29) tracks residency.
 
-**The pool allocator is the instance table.** A package record occupies
-the paragraph range [I_SPTR, I_SPTR + I_SIZE/16) iff I_STATE ≠ 0 (§29.2
-rule 7) — **I_SPTR is a SEGMENT** now (§20.1) and I_SIZE the allocated size
-in bytes, a 512-multiple. `ld_alloc` (in: AX = bytes, a 512-multiple; out:
-CF=1 no hole, else the region's base segment): first-fit lowest base over
-[`PKG_SEG`, `PKG_SEG` + `PKG_PARA`) — start at `PKG_SEG`; if any in-use
-package record overlaps, set start = that record's end and rescan from the
-top; fail when the region would pass the pool's end. UI-task-only, so
-allocation never races itself; freeing is the record store (task-less close
-path or task_exit, §29) — and since §20.6 the `task_exit` half is reachable
-for packages too, so a region can be released from a worker task under IF=0
-rather than from the UI task under the lock. No compaction — regions never
-move once loaded.
+**The region allocator is the claim heap.** A package's region is an
+ordinary claim (§20.1/§50.3): `mem_claim_hi` — first fit from the TOP of the
+heap downward, away from the data claims growing up from the bottom — with
+the instance SLOT as its owner word. **I_SPTR is a SEGMENT** (§20.1) and
+I_SIZE the region's size in bytes, now a whole-KB multiple because that is
+`mem_claim`'s granularity. Freeing is `mem_free_rec` at the two §29.4
+teardown sites, which releases the slot-owned region and the segment-owned
+data claims together. No compaction — regions never move once loaded, which
+is exactly why they are allocated from the far end.
+
+`ld_alloc`, the first-fit-over-`inst_tab` allocator this replaced, is gone;
+its scan idiom survives inside `mem_claim`. **Every failure path after the
+claim must give the region back** (`ld_unreserve`): a bad read, a header that
+changed under a disk swap, or an entry proc that aborts. The instance record
+is still unpublished at those points, so `mem_free_rec` cannot be used — it
+reads an I_SPTR that step 9 has not written — and both owner words are known
+locally instead.
 
 `ld_check_hdr` (module-internal) — in: SI → 32 readable header bytes,
 [ld_fsz] = file size; out: CF=0 + scratch (img/bss/entry) filled, or CF=1 +
@@ -4027,7 +4061,7 @@ on entry. Steps:
 4. need = roundup512(max(image+bss, file size)); > APP_MAX_SIZE → status
    3. (Sector-granular allocation makes the whole-file read safe: it
    writes ceil(fsize/512)·512 ≤ need bytes, never a neighbour's region.)
-5. `inst_alloc` (§29) → CF → status 5. `ld_alloc` need bytes → CF →
+5. `inst_alloc` (§29) → CF → status 5. `mem_claim_hi` need KB → CF →
    status 5 (the unpublished instance record stays free). Note the
    record is not yet published, so the region is reserved only by
    single-threadedness (rule §29.2.8).
@@ -5078,7 +5112,7 @@ account, and the rows partition one total.
   `TM_KERN_KB` (the whole kernel — image, scratch, FAT snapshot, disk
   buffers and every task stack are one contiguous span since §2, and there
   is no growth room in it to bill to anybody), `TM_POOL_KB` (the whole
-  package pool, §20.1
+  heap's package regions, §20.1
   — reserved from boot, so a machine with no package open still shows it
   spoken for), and every live **heap claim** (§50, `mem_claimed_kb`). Both
   the kernel's own claims (the menu save-under, the back buffer) and every
@@ -5224,18 +5258,17 @@ cache would need. Two rules keep it honest:
   dashes, no `'%'` and no `'K'`.
 
 **Content layout — memory view** (content-relative; the same 231×282). Two
-maps: conventional memory as a whole, and the package pool. There is no
-kernel-segment map any more — the pool left that segment (§20.1), so an
-in-segment map would show one black block and nothing else.
+map: conventional memory as a whole. There were two — the second magnified
+the package pool — and the pool is gone (§20.1), so it had nothing left to
+show; the package regions it drew now appear in the first map at their real
+addresses, in the same per-slot patterns, which is a strictly better place
+for them because it puts them next to the data claims they share the heap
+with.
 
-**Each map is captioned on the line directly above it**, and the gaps say
-which caption goes with which: 4px above a caption, 1px below it. The heap
-has no map of its own and never will — a claim is drawn in the *conventional*
-map at its real address, in among the kernel and the pool — so its figures
-share the RAM line, which is that map's caption. They used to sit on their
-own line above the *second* map and read as its label, and the second map is
-the **package pool**, the one thing on this page that is emphatically not the
-heap.
+**The map is captioned on the line directly above it**, and the heap's
+figures share that line: a claim is drawn in the map at its real address, so
+its figures belong to that map's caption. They used to sit on a line of their
+own above the second map and read as *its* label.
 
 - (6,4): `"RAM uuu/tttK  HEAP uuu/tttK"` — the performance view's readout
   plus the heap's, and **one `'K'` per pair, at the end** (`tm_kpair`): eight
@@ -5258,8 +5291,8 @@ heap.
   gray, **its buffers** over the top of that in a texture of their own
   (`tm_pat_buf`, 2-on-2-off horizontal bars — the band is 14 rows tall and,
   on a 640KB machine, four pixels wide, so a texture has to carry its
-  signature vertically or it has nowhere to show it), the **package pool**
-  solid black, and **each live heap claim** as a **framed block**
+  signature vertically or it has nowhere to show it), **each live heap claim**
+  as a **framed block**
   (`tm_map_claim`: `tm_pat_clm` inside, a 1px black `gfx_frame` around) —
   read live at draw time from the claim table, so arming double buffering or
   opening a Disk window makes a band appear. The buffer band is what makes
@@ -5283,11 +5316,6 @@ heap.
   pool map's caption. The two caption lines are CAPS and the list's rows are
   mixed case, which is the whole of the distinction between a map's label and
   a row.
-- Package-pool map: 1px black frame (6,43)-(`TM_RW`,58), interior
-  (7,44)-(`TM_RW`−1,57) = `TM_GW`×14. Paragraph scale across `PKG_PARA`; the interior
-  is white-filled, then one `gfx_fill_pat` band per snapshot slot with
-  I_STATE ≠ 0 and I_SIZE ≠ 0, in that slot's pattern. Unallocated pool reads
-  white — free space, drawn honestly.
 - (16,62): header `"NAME    ADDR SIZE   HEAP"` (24 chars, the row width).
   Two spaces of gap before HEAP, not one: a 150K back buffer beside a 150K
   package ran the two figures together at the old 22-char width.
@@ -5306,7 +5334,8 @@ heap.
 - **The legend squares key the rows to the maps, and a row only gets one
   when the texture is its own.** `tm_pat_gray` on System (the kernel's span),
   the row's own pattern on the three buffer rows (their band) and on each
-  package row (its slot pattern in the pool map), `tm_pat_blk` on the
+  package row (its slot pattern, drawn on the map at the region's real
+  address now that the pool is gone, §20.1), `tm_pat_blk` on the
   `Packages` heading (the pool). `Code+data` gets **none** — it is drawn in the same
   gray as System, and a square that repeats one above it is not a legend.
   Nor does `Builtins`, which owns no band at all. This is checkable by eye
@@ -5349,8 +5378,9 @@ heap.
   SIZE (they own no region), and a real CLM figure — the Disk window's
   listing cache shows up here (§2.3).
 - `Packages` heading + allocated/size of the pool (`tm_pool_kb`, which the
-  `PACKAGES` caption above the map shares), its square **solid black** for
-  the pool's own band, then one row per package instance: square = pattern i,
+  which is the KB of HEAP the resident regions hold rather than of any pool
+  — so it takes the SIZE column and no square, the regions wearing their own
+  per-slot patterns on the map above — then one row per package instance: square = pattern i,
   which is how the row keys the pool map below it; ADDR = the I_SPTR snapshot (a **segment**,
   four hex digits); SIZE = I_SIZE in KB rounded up; CLM = its claims.
 - A dying instance (I_STATE 2) still draws its region and its row: the
@@ -7540,7 +7570,7 @@ run-coalesced band paint and releases it (rule 3 of §20.6).
 ### 40.1 The pass-0 restore cache
 
 **Why there is no frame buffer.** The canvas is 320×170. Raw at 4bpp that is
-27,200 bytes against a **19,968-byte package pool shared by every resident
+27,200 bytes against the **19,968-byte package pool then shared by every resident
 package**; a run-length copy of a whole frame measures 11,712–13,928, most
 of the pool for one instance. A run-length copy of **pass 0 alone** is
 ~3,300 bytes, and it is the right quarter of the work to keep, because pass 0
@@ -7623,7 +7653,7 @@ not, and moving costs one replay because the cache survives the repaint.
 - Change type: the canvas clears and the render restarts at 0%.
 - Bury it behind another window: it keeps rendering the visible strips and
   paints nothing outside them; raise it and the whole picture is there.
-- Two instances alongside Minesweeper and Note Pad all load (`ld_alloc` must
+- Two instances alongside Minesweeper and Note Pad all load (the heap must
   not refuse the fourth package), and `python3 tools/os88disk.py --verify
   build/apps.img` passes.
 - All three adapters, and the back buffer both off and on.
@@ -8387,7 +8417,7 @@ the panel last, so it stays on top of whatever the resume puts back.
 
 ## 50. memory.inc — the claim heap
 
-Everything above the package pool, in one map the kernel owns.
+Everything above the kernel, in one map the kernel owns.
 `HEAP_SEG` (§2/§3) to the top of conventional memory as int 12h reports it;
 KB-granular, segment-aligned blocks; a record per live claim; and one rule
 that makes the whole thing worth having — **a claim is taken when it is
@@ -8430,8 +8460,27 @@ MC_OWN   4  word  owner: 0..INST_MAX-1 = instance slot;
 
 The record **is** the allocator, the `inst_tab` idiom of §29.2 rule 7:
 occupancy is derived by walking the table, so freeing is one word store and
-no free list can disagree with reality. First fit, lowest address, with the
-`ld_alloc` restart-past-the-overlap scan of §21.
+no free list can disagree with reality. First fit, restart past the overlap.
+
+**Two ends, one heap.** `mem_claim` fits from the bottom upward and is what
+data asks for; `mem_claim_hi` fits from the top downward and is what a
+package's REGION asks for (§20.1). The asymmetry is not tidiness: a data
+claim can move within its lifetime by being freed and re-claimed, and a
+region can never move at all, because its base is its CS. Allocated from one
+end they interleave, and one long-lived data claim landing mid-heap
+permanently splits the space a package can be loaded into — it then fails to
+load not because 8KB is not free but because 8KB is not CONTIGUOUS. From
+opposite ends they meet only when the heap is genuinely full, and either
+side may still use all of it when the other is not there.
+
+**No owner may hold more than `MEM_OWNER_MAX` = 8 claims.** It does not
+shrink the table — the table is sized by what a machine can hold — and that
+is not what it is for. Since a region is a claim, exhausting the table now
+means *no package can load*, so the cost has to fall on whoever caused it:
+one app is refused its ninth claim rather than every other app being refused
+its first. Eight is Paint's measured peak (scratch, canvas, undo, clipboard,
+LZW, and the transient sixth it holds while trading a bigger clipboard for a
+smaller) plus its region and one spare.
 
 The kernel's own claims, and what each replaced:
 

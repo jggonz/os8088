@@ -29,9 +29,28 @@
 ; worker task inside inst_task_die, so the two really can meet.
 ; =============================================================================
 
-MEM_MAX  equ 16                 ; claim records; more than this and a claim
+MEM_MAX  equ 32                 ; claim records; more than this and a claim
                                 ; is refused, which is the same answer as
-                                ; "no room" and needs no new failure path
+                                ; "no room" and needs no new failure path. It
+                                ; was 16 while a package's REGION came out of
+                                ; a pool of its own and only data competed for
+                                ; records; a region is a claim now (SPEC.md
+                                ; 20.1), so twelve instances can hold twelve
+                                ; of these before anything asks for data
+MEM_OWNER_MAX equ 8             ; ...and no one owner may hold more than this
+                                ; many. It does NOT shrink the table - the
+                                ; table is sized by what the machine can hold,
+                                ; not by the cap - and that is not what it is
+                                ; for. Since a region is a claim, running the
+                                ; table out now means NO PACKAGE CAN LOAD, so
+                                ; the failure has to be charged to whoever
+                                ; caused it: one app is refused its ninth
+                                ; claim instead of every other app being
+                                ; refused its first. Eight is Paint's
+                                ; measured peak (scratch, canvas, undo,
+                                ; clipboard, LZW, plus the transient sixth it
+                                ; holds while trading a bigger clipboard for
+                                ; a smaller) with its region and one spare
 MC_SEG   equ 0                  ; word: base segment, 0 = free record
 MC_PARA  equ 2                  ; word: size in paragraphs (KB << 6)
 MC_OWN   equ 4                  ; word: owner - 0..INST_MAX-1 is an instance
@@ -50,7 +69,7 @@ MEM_PARA_KB equ 64              ; paragraphs per KB
 ; out:      nothing (all registers preserved)
 ;
 ; int 12h gives conventional memory in KB; the heap is everything from
-; HEAP_SEG (the paragraph above the package pool) to the top of it. On a
+; HEAP_SEG (the paragraph the kernel ends on) to the top of it. On a
 ; machine whose RAM ends below HEAP_SEG the heap is empty and every claim is
 ; refused - which is a supported outcome, not a boot failure: the kernel's
 ; own claims all have a "then don't" path.
@@ -92,19 +111,42 @@ mem_init:
     ret
 
 ; -----------------------------------------------------------------------------
-; mem_claim - claim a block of the heap (SPEC.md 50.3)
+; mem_claim / mem_claim_hi - claim a block of the heap (SPEC.md 50.3)
 ;
 ; in:       AX = KB wanted (1..640), BX = owner word (instance slot, or a
 ;           MEM_K_* kernel tag)
 ; out:      CF = 0, DX = base segment of the block; CF = 1 refused (no free
-;           record, no hole big enough, or a silly size)
+;           record, no hole big enough, this owner is at MEM_OWNER_MAX, or a
+;           silly size)
 ; clobbers: DX (an output) and the flags - every other register preserved
 ;
-; First fit, lowest address. The scan is the ld_alloc idiom (SPEC.md 21):
-; walk the claims; if one overlaps the candidate, restart just past it. Each
-; bump lands on a claim's end, so the loop terminates.
+; **Two ends, one heap.** mem_claim is first fit from the BOTTOM upward, and
+; is what data asks for. mem_claim_hi is first fit from the TOP downward, and
+; is what a package's REGION asks for (SPEC.md 20.1/21), because the two have
+; different lifetimes and only one of them can ever move:
+;
+;   a data claim can move within its lifetime by being freed and re-claimed;
+;   a package region can NEVER move, because its base IS its CS - relocating
+;   it would invalidate W_SEG, I_SPTR, every MB_SEG in the menu bar and every
+;   claim owner word, and there is no compaction and cannot be.
+;
+; Allocated from one end they interleave, and one long-lived data claim
+; landing mid-heap permanently splits the space a package can be loaded into:
+; a package then fails to load not because 8KB is not free but because 8KB is
+; not CONTIGUOUS. From opposite ends they only meet when the heap is genuinely
+; full, and either side may still use all of it when the other is not there.
+;
+; The scan is the ld_alloc idiom it replaced (SPEC.md 21): walk the claims; if
+; one overlaps the candidate, restart just past it (or just below it, going
+; down). Each bump lands on a claim edge and moves monotonically, so both
+; loops terminate.
 ; -----------------------------------------------------------------------------
+mem_claim_hi:
+    mov byte [mem_dir], 1
+    jmp short mem_claim.go
 mem_claim:
+    mov byte [mem_dir], 0
+.go:
     push ax
     push cx
     push si
@@ -118,7 +160,22 @@ mem_claim:
     shl ax, cl                  ; AX = paragraphs wanted
     jc .fail                    ; > 1MB asked for
 
-    mov di, mem_tab             ; a free record first: refusing early costs
+    mov di, mem_tab             ; this owner's share first (MEM_OWNER_MAX):
+    mov cx, MEM_MAX             ; the table is a shared resource and running
+    xor si, si                  ; it out stops packages LOADING, so the app
+.own:                           ; that wants a ninth claim pays, not the next
+    cmp word [di+MC_SEG], 0     ; app to ask for its first
+    je .ownext
+    cmp [di+MC_OWN], bx
+    jne .ownext
+    inc si
+.ownext:
+    add di, MC_SIZE
+    loop .own
+    cmp si, MEM_OWNER_MAX
+    jae .fail
+
+    mov di, mem_tab             ; a free record next: refusing early costs
 .rec:                           ; nothing and keeps the scan simple
     cmp word [di+MC_SEG], 0
     je .haverec
@@ -128,7 +185,16 @@ mem_claim:
     jmp .fail
 .haverec:
 
+    cmp byte [mem_dir], 0
+    jne .hi
     mov dx, [mem_base]          ; DX = candidate base
+    jmp short .retry
+.hi:
+    mov dx, [mem_top]           ; the highest base that still fits
+    sub dx, ax
+    jc .fail
+    cmp dx, [mem_base]
+    jb .fail
 .retry:
     mov cx, dx
     add cx, ax                  ; CX = candidate end
@@ -146,8 +212,17 @@ mem_claim:
     add cx, [si+MC_PARA]        ; CX = this claim's end
     cmp cx, dx
     jbe .nover                  ; claim ends at/before our start: ditto
-    mov dx, cx                  ; overlap: restart just past this claim
-    jmp short .retry
+    cmp byte [mem_dir], 0
+    jne .down
+    mov dx, cx                  ; overlap: restart just past this claim...
+    jmp .retry
+.down:                          ; ...or just BELOW it, coming down from the
+    mov dx, [si+MC_SEG]         ; top. Monotonic either way, so it terminates
+    sub dx, ax
+    jc .fail
+    cmp dx, [mem_base]
+    jb .fail
+    jmp .retry
 .nover:
     mov cx, dx                  ; rebuild the candidate end and carry on
     add cx, ax
@@ -842,28 +917,58 @@ osapi_mem_avail:
 ;      caller is not a loaded package
 ; clobbers: BX (the output), flags
 ;
-; The pool bound is the whole test. A segment inside [PKG_SEG, PKG_SEG +
-; PKG_PARA) is a loaded package and nothing else can be, so it is a unique,
-; unforgeable owner - two instances of one package live at different bases.
-; The kernel's own claims use 0xFFxx tags and a built-in's use its instance
-; slot (0..11); all three ranges are disjoint by construction.
+; It used to be a range test - a segment inside the package pool was a loaded
+; package and nothing else could be. There is no pool now, so the question is
+; asked of the claim map instead: **ES is a package if a live claim STARTS at
+; it and that claim is owned by an instance slot**, which is exactly how a
+; region is allocated (loader_run step 5) and what nothing else looks like.
+; Data claims carry a segment or a 0xFFxx tag as their owner, so the second
+; half of the test is what separates a region from anything else that might
+; happen to begin at the same paragraph.
+;
+; **It has to answer during the ENTRY PROC**, which is where an app sizes
+; itself - and the entry runs at loader_run step 8, BEFORE I_STATE and I_SPTR
+; are published at step 9. So this cannot be an inst_tab scan, however much it
+; reads like one. The region claim exists from step 5, which is why the claim
+; map is the right table to ask.
+;
+; No weaker than the range test it replaces: ES is stamped by the API stub
+; from the caller's own DS, so a package can only name a segment it is
+; actually executing at, and two instances of one package live at different
+; bases and so remain distinct owners.
 ; -----------------------------------------------------------------------------
 mem_own:
+    push cx
+    push si
     mov bx, es
-    cmp bx, PKG_SEG
-    jb .bad
-    cmp bx, PKG_SEG + PKG_PARA
-    jae .bad
-    clc
-    ret
-.bad:
+    mov si, mem_tab
+    mov cx, MEM_MAX
+.scan:
+    cmp [si+MC_SEG], bx         ; a claim that starts exactly here...
+    jne .next
+    cmp word [si+MC_OWN], INST_MAX   ; ...owned by an instance slot: a region
+    jb .yes
+.next:
+    add si, MC_SIZE
+    loop .scan
+    pop si
+    pop cx
     stc
+    ret
+.yes:
+    pop si
+    pop cx
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
 section .bss
 
 mem_tab:  resb MEM_MAX * MC_SIZE  ; the claim map (layout above)
+mem_dir:  resb 1                  ; 0 = mem_claim (bottom up), 1 = mem_claim_hi
+                                  ; (top down, a package's region). One byte
+                                  ; and not a parameter because the whole
+                                  ; claim runs inside one cli window
 mem_base: resw 1                  ; first heap paragraph = HEAP_SEG
 mem_skip:   resw 1              ; mem_runfree: a record to ignore, 0 = none
 mem_top:  resw 1                  ; one past the last, from int 12h

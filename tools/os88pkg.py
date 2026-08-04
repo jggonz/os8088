@@ -29,7 +29,9 @@ VERSION = 3
 ENTRY_MIN = 0x20          # first byte after the header
 ENTRY_MIN_ICON = 0x60     # first byte after the embedded icon (flags bit 0)
 ICON_END = 96             # header (32) + icon block (64)
-APP_MAX_SIZE = 0xF000     # image + bss budget: the whole 60KB pool
+APP_MAX_SIZE = 0xF000     # image + bss budget: 60KB (one segment's worth -
+                          # the region is a heap claim, so the real limit is
+                          # also whatever the heap has contiguous)
 DISPATCH = bytes((0xFF, 0xD5, 0xCB, 0x00))   # call bp / retf / pad, at +12
 
 

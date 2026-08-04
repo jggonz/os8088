@@ -56,14 +56,14 @@ WCR_X2  equ 4
 WCR_Y2  equ 6
 WCR_SZ  equ 8
 
-; loadable programs (SPEC.md 20) - the pool is its own address space now
-PKG_PARA     equ 0x0F00         ; 61,440 bytes: the package pool, SPEC.md
-                                ; 20.1. It was 19,968 bytes at the top of the
-                                ; kernel's own segment, which is all that was
-                                ; left there; a package now owns a SEGMENT,
-                                ; links at org 0, and is loaded at a
-                                ; paragraph boundary inside this block
-APP_MAX_SIZE equ 0xF000         ; the biggest single package: the whole pool
+; loadable programs (SPEC.md 20) - a package's region is a HEAP CLAIM
+APP_MAX_SIZE equ 0xF000         ; the biggest single package: 60KB, and the
+                                ; ceiling is now the SEGMENT rather than a
+                                ; pool - a package links at org 0 and
+                                ; addresses itself with 16-bit offsets, so
+                                ; image + bss cannot reach 64KB whatever the
+                                ; heap has free. Mirrored in apps/os88api.inc
+                                ; and tools/os88pkg.py
 PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
                                 ; .o88 header (SPEC.md 20.2): three bytes,
                                 ; `call bp / retf`. Every kernel-to-package
@@ -81,8 +81,16 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ;   0x00600  KERNEL_SEG  .text + .bss                KIMG_PARA (derived)
 ;            FAT_SEG     mount-time FAT snapshot     FAT_PARA
 ;            LOW_SEG     .lowbss + task 0's stack    LOW_PARA
-;            PKG_SEG     the package pool            PKG_PARA
 ;            HEAP_SEG    the claim heap              up to int 12h's top
+;
+; **There is no package pool.** It was a fixed 60KB reservation between the
+; kernel and the heap - unavailable to anything else whether or not a package
+; was loaded - and a package's region is an ordinary heap claim now (SPEC.md
+; 20.1/50), taken from the TOP of the heap downward while data claims grow
+; up from the bottom. That returned 60KB to every machine: 510KB -> 570KB of
+; heap on a 640KB one, and it is the whole reason a 128KB machine can run
+; this at all (the pool's own top used to sit above 128KB, so such a machine
+; had no heap and could load nothing).
 ;
 ; **Everything from KERNEL_SEG to the end of task 0's stack is the kernel**,
 ; and guard 1 holds that whole span to KERN_BUDGET - 64KB, the first 64KB
@@ -160,7 +168,7 @@ VIEW_KB     equ 3               ; each cache: 1KB of entries + 2KB of icons
 ; 512-byte boundary does that, and the DMA controller answers a straddle with
 ; error 09h. Every base below is an int 13h target - the FAT snapshot, the
 ; disk buffers, a package image, a package's file buffer out of the heap -
-; and FAT_PARA (288), LOW_PARA and PKG_PARA (3,840) are all multiples of 32
+; and FAT_PARA (288) and LOW_PARA are both multiples of 32
 ; paragraphs, so aligning this one rung aligns the whole ladder. Guard 6
 ; proves it. It used to hold by luck: every base in the map was a round
 ; constant like 0x0300 or 0x2A00, and nothing said why that mattered.
@@ -177,14 +185,13 @@ STK0_TOP    equ KLOW_SIZE + STK0_SIZE - 2   ; task 0's stack top, growing down
 KERN_END    equ LOW_SEG + LOW_PARA    ; ...and there the kernel stops
 KERN_SIZE   equ (KERN_END - KERNEL_SEG) * 16   ; what guard 1 measures
 
-PKG_SEG     equ KERN_END        ; the pool starts where the kernel ACTUALLY
-                                ; ends, not where a budget said it might -
-                                ; so it, and the heap above it, move with
-                                ; every build (SPEC.md 2)
-HEAP_SEG    equ PKG_SEG + PKG_PARA    ; the claim heap (SPEC.md 50): the
-                                ; paragraph after the pool, up to whatever
-                                ; int 12h reports. Nothing up there has a
-                                ; fixed address any more
+HEAP_SEG    equ KERN_END        ; the claim heap (SPEC.md 50) starts where
+                                ; the kernel ACTUALLY ends, not where a
+                                ; budget said it might, and runs to whatever
+                                ; int 12h reports. Package regions and data
+                                ; claims share it from opposite ends
+                                ; (SPEC.md 50.3); nothing up here has a fixed
+                                ; address any more
 
 ; double buffering (SPEC.md 32) - the back buffer is a heap CLAIM now, so
 ; there is no BB_SEG constant: bb_init asks for BB_KB and remembers what it
@@ -854,8 +861,17 @@ KBUF_KB    equ ((FAT_PARA + LOW_PARA) * 16 + 1023) / 1024
 %if (KERNEL_SEG % 32) || (FAT_SEG % 32) || (LOW_SEG % 32)
 %error "a disk-buffer segment is not 512-byte aligned - see KIMG_PARA"
 %endif
-%if (PKG_SEG % 32) || (HEAP_SEG % 32)
-%error "the pool or the heap is not 512-byte aligned - see KIMG_PARA"
+%if HEAP_SEG % 32
+%error "the heap base is not 512-byte aligned - see KIMG_PARA"
+%endif
+; 6b. ...and so is every claim in it, which is what a package region rides
+;     on now that it is a claim rather than a pool slot: mem_claim rounds to
+;     whole KB, so every base it hands out is HEAP_SEG + n*64 paragraphs.
+;     MEM_PARA_KB is that 64; if it ever stopped being a multiple of 32 an
+;     int 13h read of a package image could straddle a 64KB DMA boundary and
+;     the symptom would be "Disk error" on the LARGE packages only.
+%if MEM_PARA_KB % 32
+%error "a heap claim is not 512-byte aligned - a package image is read into one"
 %endif
 ; 5. the boot sector relocates itself to BOOT_RELOC before it reads a sector,
 ;    and its stack grows down from there. The kernel's landing zone must end

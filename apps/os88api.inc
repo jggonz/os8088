@@ -65,8 +65,11 @@ KERNEL_SEG   equ 0x0060     ; where the kernel is, and what ES holds on entry.
                             ; package built against a different value calls
                             ; into empty memory: rebuild EVERY .o88 (and the
                             ; apps floppies) whenever the kernel moves
-APP_MAX_SIZE equ 0xF000     ; image + bss budget: the whole 60KB pool, if
-                            ; nothing else is loaded
+APP_MAX_SIZE equ 0xF000     ; image + bss budget: 60KB. The ceiling is the
+                            ; SEGMENT, not a pool: a package links at org 0
+                            ; and addresses itself with 16-bit offsets. Its
+                            ; region is an ordinary heap claim, so what it
+                            ; can ACTUALLY get also depends on the heap
 ; The REFERENCE screen, not a promise. Since SPEC.md 39 the kernel drives
 ; three adapters and picks one at boot: VGA 640x480x16, Hercules 720x348
 ; mono, or CGA 640x200 mono. Ask OSAPI_VIDEO for the one you actually got.
