@@ -153,8 +153,8 @@ costs nothing on the floppy and everything in RAM.
 
 That figure is `.text` + `.bss` **rounded up to a whole 512 bytes** (see the
 alignment invariant below), so it is the only rung with any slack in it, and
-the slack is a rounding remainder rather than a reservation — 473 bytes as
-this is written, against 53,287 unrounded. Measure the unrounded pair by
+the slack is a rounding remainder rather than a reservation — 94 bytes as
+this is written, against 53,666 unrounded. Measure the unrounded pair by
 appending
 `section .text` / `times KBSS_SIZE db 0` to `kernel/kernel.asm`, assembling,
 and taking the file size; revert afterwards. `make`'s own `kernel: n bytes`
