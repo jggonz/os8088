@@ -1993,6 +1993,16 @@ pre-Locator bar — **File**: "Clock" (CMD_CLOCK), "Bounce" (CMD_BOUNCE),
 application: "About os8088..." (CMD_ABOUT), "Control Panel" (CMD_CTRL,
 §31), "Task Manager" (CMD_TASKS, §28).
 
+**"Close Window" greys when there is nothing to close.** `ui_loc_gate` points
+that item at its `MENU_DIS` twin from `wm_top`, on the press that opens the
+bar — the item list is static `.text` and nothing relays the bar out when the
+last window goes, so layout time is too early. It is the §46 rule 5 case in
+its purest form (a stable, one-word fact) and the one a user meets on the
+desktop at boot before meeting any other; it used to be a live item that
+answered with a beep. The tables-full refusals beside it — Clock, Bounce and
+Disk at the instance cap — stay beeps on purpose: `MAX_TASKS` is 12, and the
+predicate is per-kind rather than one word.
+
 ```nasm
 CMD_ABOUT  equ 1   ; --- System (cell 0, every application) ---
 CMD_CTRL   equ 2
@@ -8042,6 +8052,20 @@ its own):
 | `fdlg_draw_list` → `fdlg_list_body` | inside the list frame | `fdlg_clamp` + `fdlg_draw_rows` + `fdlg_draw_sbar` |
 | `fdlg_draw_both` | both | both — a selection move changes the listing *and* takes the new name (`fdlg_pick`) |
 
+**The default button is the fourth thing a keystroke can change**, and it is
+redrawn on an *edge* rather than per key. `fdlg_actok` is the one predicate
+behind the button's pen, the click on it and the Enter key (§46 rule 4) — a
+chosen row always acts, and with no row chosen an empty name box is not an
+answer — so typing the first character or deleting the last one flips it, and
+`fdlg_draw_name` compares the answer against `[fdlg_actl]` and calls
+`fdlg_defbtn` only when it moved. Every caret move comes down the same path,
+and a frame plus a label per keypress is real money on the machines this runs
+on.
+
+`fdlg_btn` takes the **caller's** pen rather than forcing `CBLACK`, so the
+disabled frame greys with the label — which is what shows on a mono adapter,
+where a package's grey text alone would round to black (§46 rule 2/3).
+
 `fdlg_paint` calls the **bodies**, because `wm_paint_all` already handed it a
 white content; everything else calls the wrappers. Neither erase touches its
 frame: the frames are chrome and never move.
@@ -10067,10 +10091,29 @@ Conformant, and worth reading as the reference:
   setting": the current item is now the dithered one, so a mono user can see
   which is which without a checkmark glyph and without spending a character of
   `MENU_MAXCH`.
-**Owed:** nothing identified. §46.2 is the standing obligation — a greying
-change is not finished until it has been looked at on a mono adapter, and the
-audit that produced this list only covered controls that *do* grey. Controls
-that ought to refuse and do not disable at all are a different sweep.
+- **"Close Window"** (§12.3) — greys from `wm_top` rather than beeping.
+- **The file dialog's default button** (§38.8) — `fdlg_actok` behind the pen,
+  the click and the Enter key alike, greyed while the name box is empty and no
+  row is chosen. `fdlg_btn` stopped forcing `CBLACK` so the frame greys too.
+
+**Left as beeps, deliberately.** The second half of the sweep asked which
+refusals *ought* to grey and do not, and three answer no:
+
+- **A press outside the modal dialog** (`fdlg_grab`, §38.2). Greying the whole
+  desktop is not a control state, and the dialog's presence is the explanation.
+- **Clock / Bounce / Disk at the instance cap** (§12.3). `MAX_TASKS` is 12 and
+  the predicate is per-kind rather than one word; the cost is not worth a fact
+  a user meets about never.
+- **The Disk window's context menus** (`files.inc`, §22). Up One Folder at the
+  root, Rename with no disk: silent no-ops. The recorded reason — four windows
+  share an immutable `.text` descriptor, so nothing per-window can live in one
+  — **is now obsolete**, because `ui_loc_gate` shows the swap can happen just
+  before the menu drops, when exactly one window is relevant. It stays a
+  no-op because it is a feature rather than a correction, not because it
+  cannot be done. Whoever picks it up should read this paragraph first.
+
+**Owed:** nothing else identified. §46.2 is the standing obligation — a greying
+change is not finished until it has been looked at on a mono adapter.
 
 **Packages have no `[gfx_dis]`, on purpose.** §20.3 publishes no slot for it
 because nothing has needed one: a package's disabled control is covered by rule

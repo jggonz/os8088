@@ -114,7 +114,8 @@ ui_task:
     jae .on_desktop
     cmp cx, [vid_clk_hx]        ; the clock cell at the right end (SPEC 12.1)?
     jae .clock_cell             ; tested BEFORE menu_track: it is not a title
-    call gfx_lock               ; menu_track runs the whole interaction
+    call ui_loc_gate            ; ...and Locator's own items go grey or live
+    call gfx_lock               ; before it can draw them (SPEC.md 46 rule 5)
     call menu_track             ; in: CX = mousedown x; out: AX = CMD_* or 0
     call gfx_unlock
     call ui_dispatch
@@ -730,6 +731,44 @@ ui_grow:
 ;                           exactly like W_ONCLICK: under the gfx lock, on
 ;                           this task, billed to the owning instance
 ; -----------------------------------------------------------------------------
+
+; -----------------------------------------------------------------------------
+; ui_loc_gate - point Locator's conditional items at their live or disabled
+;               string, just before a menu can be dropped (SPEC.md 46 rule 5)
+; in:  nothing
+; out: nothing (all registers preserved)
+;
+; 'Close Window' with nothing open used to be a live item that answered with a
+; beep. Whether a window is there is a stable, cheap fact - `wm_top` - so it is
+; exactly what rule 5 says to grey rather than refuse, and it is the case a
+; user meets on the desktop at boot before meeting any other.
+;
+; The swap is a store into the item ARRAY, which is the same idiom a package
+; uses (SPEC.md 12.2: point AMENU_ITEMS at a different string). It runs on the
+; press that opens the bar rather than at layout time because nothing relays
+; the bar out when the last window closes - `menu_check` hands ownership over,
+; but Locator's own item list is static and would keep whatever it last held.
+;
+; NOT called before a popup (§12.4) or from menu_relayout: this list is only
+; ever read while a menu is dropping, and one call site is one thing to keep
+; right. The tables-full refusals below (Clock, Bounce, Disk at the instance
+; cap) stay beeps - MAX_TASKS is 12, a user reaches it about never, and the
+; predicate is per-kind rather than one word.
+; -----------------------------------------------------------------------------
+ui_loc_gate:
+    push ax
+    push bx
+    mov ax, menu_s_close        ; live: the plain string
+    call wm_top                 ; BX = frontmost visible, 0 = nothing to close
+    or bx, bx
+    jnz .set
+    mov ax, menu_s_closex       ; ...or its MENU_DIS twin
+.set:
+    mov [menu_items_file + 3*2], ax
+    pop bx
+    pop ax
+    ret
+
 ui_dispatch:
     cmp ax, 0xFFFF
     je .ret

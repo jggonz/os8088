@@ -736,6 +736,64 @@ fdlg_text:
     ret
 
 ; -----------------------------------------------------------------------------
+; fdlg_actok - would the default button actually do anything? (internal)
+; in:  nothing
+; out: CF = 0 yes; CF = 1 it would refuse
+; clobbers: nothing (flags)
+;
+; The predicate the greying, the click and the Enter key all share (SPEC.md 46
+; rule 4) - it is `fdlg_act`'s own test, lifted, so the button cannot look
+; available and refuse. A chosen ROW always acts: fdlg_stage puts its name in
+; the box first, so open, dive and save-under-that-name all have something to
+; work with. With no row chosen the box is the whole answer, and an empty box
+; is not one.
+; -----------------------------------------------------------------------------
+fdlg_actok:
+    cmp word [fdlg_sel], 0xFFFF
+    jne .yes
+    cmp byte [fdlg_nlen], 0
+    je .no
+.yes:
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_defbtn - draw the default button (Open / Save) in the right pen
+; in:  the layout cache; gfx lock held
+; out: nothing (all registers preserved); leaves the disabled pen set
+; -----------------------------------------------------------------------------
+fdlg_defbtn:
+    push ax
+    push bx
+    push si
+    mov si, fdlg_s_open
+    cmp byte [fdlg_mode], 0
+    je .lbl
+    mov si, fdlg_s_save
+.lbl:
+    call fdlg_actok
+    mov al, 0
+    adc al, 0                   ; AL = 1 refused, 0 live - and note ADC WRITES
+    mov [fdlg_actl], al         ; CF, so the carry the gate answered in is
+    or al, al                   ; gone by here. Passing it to gfx_pen_cf drew
+    jz .live                    ; the button live every time, which is exactly
+    call gfx_pen_dis            ; the "looks available and refuses" failure
+    jmp short .pen              ; rule 4 exists to prevent
+.live:
+    call gfx_pen_live
+.pen:
+    mov bx, FD_BY0
+    mov al, 1                   ; the default button carries the outer frame
+    call fdlg_btn
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; fdlg_btn - one button of the right-hand column (internal)
 ; in:  BX = its top (content-relative), SI = label, AL non-zero = the
 ;      default button (a second frame 2px out)
@@ -751,7 +809,12 @@ fdlg_btn:
     mov [fdlg_bdef], al         ; AL is about to become a rect corner
     mov bp, bx                  ; BP = the button top (a value, never an
                                 ; address: SS is not DS, SPEC.md 1)
-    mov byte [gfx_color], CBLACK
+                                ; The pen is the CALLER'S - it used to force
+                                ; CBLACK here, which is fine for three of the
+                                ; four buttons and wrong for the one that can
+                                ; be disabled (SPEC.md 46 rule 2: the frame
+                                ; greys with the label, and on a mono adapter
+                                ; the frame is the half that shows)
     mov ax, FD_BX1
     mov bx, bp
     mov cx, FD_BX2
@@ -902,14 +965,8 @@ fdlg_paint:
     call fdlg_list_body
 
     ; --- the button column ---
-    mov si, fdlg_s_open
-    cmp byte [fdlg_mode], 0
-    je .defbtn
-    mov si, fdlg_s_save
-.defbtn:
-    mov bx, FD_BY0
-    mov al, 1                   ; the default button carries the outer frame
-    call fdlg_btn
+    call fdlg_defbtn            ; Open / Save, greyed when it would refuse
+    call gfx_pen_live
     mov si, fdlg_s_cancel
     mov bx, FD_BY1
     xor al, al
@@ -997,6 +1054,13 @@ fdlg_draw_name:
     call fdlg_off
     call gfx_fill
     call fdlg_name_body
+    call fdlg_actok             ; typing the first character, or deleting the
+    mov al, 0                   ; last one, makes the default button live or
+    adc al, 0                   ; dead - and this is the only path a keystroke
+    cmp al, [fdlg_actl]         ; takes. Redrawn on the EDGE only: every caret
+    je .out                     ; move comes through here too, and a frame
+    call fdlg_defbtn            ; plus a label per keypress is real money on
+.out:                           ; the machines this has to run on
     pop dx
     pop cx
     pop bx
@@ -2070,5 +2134,8 @@ fdlg_type:  resw 1              ; and its SPEC.md 19 type...
 fdlg_size:  resw 1              ; ...and size words
 fdlg_num:   resb 8              ; the size column's digits
 fdlg_bdef:  resb 1              ; fdlg_btn: is this the default button?
+fdlg_actl:  resb 1              ; fdlg_actok's answer as last DRAWN, so a
+                                ; keystroke redraws the default button on the
+                                ; live/dead edge and not on every caret move
 
 section .text

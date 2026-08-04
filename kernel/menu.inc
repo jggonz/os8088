@@ -1412,6 +1412,9 @@ menu_s_clock    db 'Clock', 0
 menu_s_bounce   db 'Bounce', 0
 menu_s_disk     db 'Disk', 0
 menu_s_close    db 'Close Window', 0
+menu_s_closex   db MENU_DIS, 'Close Window', 0  ; ...with nothing to close;
+                                ; ui_loc_gate points the item at one or the
+                                ; other before the menu can drop (SPEC.md 46)
 menu_s_tasks    db 'Task Manager', 0
 menu_s_restart  db 'Restart', 0
 

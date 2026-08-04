@@ -2161,11 +2161,19 @@ MC_ITEMS    equ 0               ; word: array of near ptrs to NUL item strings
 MC_CMDS     equ 2               ; word: parallel array of FMC_* bytes
 MC_NITEM    equ 4               ; word: item count
 
-; A descriptor is IMMUTABLE .text: four windows share these three, so
-; nothing per-window (a selection, a disabled mask) may live in one. There
-; is no disabled-item mask at all - a command with nothing to do (Up One
-; Folder at the root, Rename with no disk) is the same silent no-op it
-; already is from the bar, and one rule beats two.
+; A descriptor is IMMUTABLE .text: four windows share these three, so nothing
+; per-window (a selection, a disabled mask) may live in one. There is no
+; disabled-item mask at all - a command with nothing to do (Up One Folder at
+; the root, Rename with no disk) is the same silent no-op it already is from
+; the bar, and one rule beats two.
+;
+; **The sharing is no longer the reason** (SPEC.md 46.3). ui_loc_gate points
+; an item at a MENU_DIS twin on the press that OPENS the menu, when exactly
+; one window is relevant, and the same trick works here - a shared descriptor
+; only rules out per-window state that has to persist. What is left is a
+; feature nobody has asked for rather than an impossibility, so if you are
+; here to add it: it is doable, and the paragraph above is not an argument
+; against it.
 fm_ctx_file:                    ; the row under the pointer is a file
     dw fm_cxi_file, fm_cxc_file, 3
 fm_ctx_fold:                    ; ...or a folder, which can also be opened
