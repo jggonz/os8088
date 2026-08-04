@@ -845,41 +845,31 @@ tm_sample:
     cmp bx, TM_ROWS * 4
     jb .pct
 
-    ; --- RAM: kernel footprint + resident package regions (SPEC.md 28) -------
-    ; Straight off the snapshot above - built-ins carry I_SIZE 0, so summing
-    ; every in-use record counts exactly the resident package regions. Dying
-    ; instances still count: their region is still resident. The loader keeps
-    ; the sum <= APP_MAX_SIZE, so the 16-bit total cannot overflow.
-    xor bx, bx
-    xor si, si
-.rsum:
-    cmp byte [tm_ist+si], 0
-    je .rnext
-    mov di, si
-    shl di, 1
-    add bx, [tm_isz+di]
-.rnext:
-    inc si
-    cmp si, INST_MAX
-    jb .rsum
-    mov ax, bx                  ; the pool's resident regions, in KB
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl
-    add ax, TM_KERN_KB          ; + the WHOLE kernel (SPEC.md 2): image,
+    ; --- RAM: the kernel's footprint, plus everything claimed (SPEC.md 28) --
+    ; TWO terms, not three. There used to be a third - a sum of every resident
+    ; package REGION off the instance snapshot - because a region came out of
+    ; a pool that the claim heap knew nothing about. Since SPEC.md 20.1 a
+    ; region IS a heap claim, so mem_claimed_kb already counts every one of
+    ; them and the sum counted them a second time.
+    ;
+    ; That is what let this figure exceed the machine: with a package loaded,
+    ; used was over by its region, and a 20KB menu save-under landing on top
+    ; of an already-inflated figure could read as more RAM than the machine
+    ; has. It cannot now - claims live in the heap, the heap is what is left
+    ; above the kernel, so kernel + claims is bounded by the total.
+    mov ax, TM_KERN_KB          ; the WHOLE kernel (SPEC.md 2): image,
                                 ; scratch, FAT snapshot, disk buffers and
-                                ; every task stack are one contiguous span
-                                ; now, and there is no growth room in it to
-                                ; bill to anybody
+                                ; every task stack are one contiguous span,
+                                ; and there is no growth room in it to bill
     call mem_claimed_kb        ; + everything claimed out of the heap
                                 ; (SPEC.md 50): the back buffer while it is
-                                ; armed, the menu save-under, each open Disk
-                                ; window's listing cache, and every package's
-                                ; claim - live, not a constant
+                                ; armed, the menu save-under while a menu is
+                                ; down, each open Disk window's listing
+                                ; cache, and every package's region and data
+                                ; - live, not a constant
     mov [tm_usedk], ax          ; ...and what is left really is free: the
-                                ; unallocated pool and the unclaimed heap
-                                ; are the only two things not counted here,
-                                ; and both can be handed out on demand
+                                ; unclaimed heap is the only thing not
+                                ; counted here, and it is handed out on demand
     mov cx, [tm_totkb]          ; barw = usedK*TM_GW/totalK (all KB)
     jcxz .nobar
     mov si, TM_GW
