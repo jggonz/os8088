@@ -28,8 +28,8 @@ is not there — `menu_drop` claims it on the way in and releases it on the way
 out, *before* the selected item runs, so a menu that launches something has
 already given the 20KB back by the time the launch asks for memory. It was
 claimed once at `menu_init` and held for the whole session until that was
-noticed, which on a 128KB machine is a third of the heap held permanently
-against nothing.
+noticed, which on a 128KB machine is more than a third of the heap held
+permanently against nothing.
 
 **The size in RAM is the actual size, not a budget.** There is no growth
 room anywhere in the ladder. Each rung is the measured size of what it
@@ -86,10 +86,41 @@ out of the same constants the guards use.
 | FAT snapshot | 4,608 B | the mounted volume's FAT, resident |
 | **total** | **72,192 B** | of a 72,704-byte budget — 512 B spare |
 
-Everything above that is the claim heap, up to whatever int 12h reports —
-570KB on a 640KB machine, and **59KB on a 128KB one**, which is the floor
-this targets. It used to be 510KB and *nothing*: the pool's own top sat above
-128KB, so a 128KB machine had no heap and could load no package at all.
+Everything above that is the claim heap, up to whatever int 12h reports. The
+arithmetic is exact and worth writing down, because every RAM figure in this
+project falls out of it:
+
+> **heap KB = what int 12h reports − 72.5**
+
+`KERN_END` is 4,640 paragraphs = 74,240 bytes = 72.5KB, and the heap starts
+there. Checked against a live machine: QEMU with `-m 1M` reports **639KB**
+and the Task Manager shows **566KB** of heap. 639 − 72.5 = 566.5. It used to
+be *nothing* on a small machine: the package pool's own top sat above 128KB,
+so a 128KB machine had no heap and could load no package at all.
+
+## What it actually takes to run
+
+Measured, not derived — by clamping what `mem_init` believes int 12h said and
+booting each size under QEMU. (The clamp is a throwaway; it is not in the
+tree.) Three different questions, three different answers:
+
+| RAM | heap | what happens |
+|---|---|---|
+| < 78KB | — | **cannot boot.** Nothing to do with the heap: `boot/boot.asm` relocates itself to linear 78,848 and reads the kernel from there, so the machine has to have that byte. Guard 5 checks the kernel clears its stack, with 2,560 bytes to spare. |
+| 80KB | 7KB | boots, full desktop, browses both floppies, **loads a package** (`hello`) |
+| 96KB | 23KB | Note Pad runs. Paint loads and puts up its "Not enough memory" notice — the designed tier, not a crash |
+| 176KB | 103KB | **Paint runs live**, full 448×280 canvas. 160KB still gets the notice |
+| 640KB | 566KB | everything, including the 150KB back buffer |
+
+So the honest floor is **80KB to boot and load something**, and **~176KB for
+every shipped app at full function**. The often-quoted "128KB" sits between
+those: it runs the OS and most of the packages, and Paint declines.
+
+Two things this table is not. It is not a promise about *speed* — these were
+measured under QEMU, which does not model 8086 timing at all (SPEC.md §5.4).
+And the sizes below 640KB were simulated by clamping the heap, so they
+exercise every "the heap said no" path faithfully but do not exercise a BIOS
+that reports a small number, which only real hardware and 86Box can do.
 
 The Task Manager's memory view shows this same breakdown live, one indented
 row per buffer under **System**, and paints the buffer part of the kernel
@@ -340,8 +371,9 @@ whether or not a card is in it. Here they are a file on the system disk that
 a 128KB machine with no card never reads — and the same machinery will carry
 the next driver for nothing.
 
-The heap moved down by the same 1KB it gained, which on a 640KB machine is
-570KB → 569KB and on the 128KB floor is 59KB → 58KB.
+The heap moved down by the same 1KB it gained. Today's measured figures are
+in the table above; the point of this note is the direction, not the
+arithmetic, and every raise of the budget comes straight off the heap.
 
 **`BOOT_RELOC` moved with it**, 0x0AA0 → 0x0B80 (linear 0x12600 → 0x13400),
 because guard 5 keeps the growing kernel clear of the boot sector that is

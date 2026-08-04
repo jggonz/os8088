@@ -167,7 +167,7 @@ the menus. All of classic Mac's core interactions work:
 
 | piece         | how it works on an XT                                       |
 |---------------|--------------------------------------------------------------|
-| graphics      | VGA mode 12h, 640x480x16 planar, drawn directly (no double buffer — a 150KB backbuffer wouldn't fit in 256KB of RAM; the real Mac drew directly too). Set/Reset + Bit Mask fills, XOR for drag outlines and menu highlights. |
+| graphics      | VGA mode 12h, 640x480x16 planar, drawn directly by default (the real Mac drew directly too). A 150KB back buffer is available as a runtime option on machines with the heap for it — it is a claim, not a reservation, so a small machine never pays for it. Set/Reset + Bit Mask fills, XOR for drag outlines and menu highlights. |
 | multitasking  | round-robin off int 08h (PIT, 18.2Hz): chain to the BIOS tick, then save the register frame on the task stack, swap SP, and iret into the next ready task. 12 task slots, 512-byte stacks (sized against a measured 150-byte high-water mark). Pre-emptive by default; in cooperative mode the tick declines to switch and a task runs until it yields, sleeps or exits — with a ~1s watchdog so a runaway one can't take the machine with it. |
 | mouse         | Microsoft serial mouse on COM1, IRQ4, 1200 baud 7N1, 3-byte packets — the period-correct XT mouse. QEMU emulates one natively (`-chardev msmouse`). |
 | cursor        | arrow with save-under, drawn by the mouse ISR itself when it's safe, deferred to the next unlock when a task holds the drawing lock. |
@@ -197,16 +197,19 @@ and only the sizes are real numbers.
 | `0x00600` | `0060`  | kernel: code, data, .bss                           |
 | derived   | —       | the mount-time FAT snapshot                        |
 | derived   | —       | task stacks and disk buffers, then task 0's stack  |
-| derived   | —       | the 60KB package pool, one segment per package     |
-| derived   | —       | the claim heap: everything else, handed out on demand |
+| derived   | —       | the claim heap: everything else, handed out on demand — a package's region is a claim off the top of it, like any other |
 | `0xA0000` | `A000`  | VGA planar framebuffer, 80 bytes per row           |
 
-**The whole kernel — buffers and stacks included — fits the first 64KB above
-the BIOS**, and a build-time assertion says so. Nothing in the ladder carries
-growth room: each rung is the measured size of what it holds, so the package
-pool starts where this build's kernel actually ends and the heap starts after
-the pool. `docs/KERNEL-MEMORY.md` is the standing account of what the 64KB is
-spent on. Fits and runs in 256KB of RAM.
+**The whole kernel — buffers and stacks included — is one span held to a
+single budget**, and a build-time assertion says so. Nothing in the ladder
+carries growth room: each rung is the measured size of what it holds, so the
+heap starts wherever this build's kernel actually ends and moves when the
+kernel does. There is no package pool — a 60KB reservation that every machine
+paid for whether or not anything was loaded — and retiring it is what returned
+that memory to the heap. `docs/KERNEL-MEMORY.md` is the standing account of what the budget is spent
+on, and of the measured RAM floor: **80KB boots and loads a package**, ~176KB
+runs every shipped app at full function, and the heap is simply whatever
+int 12h reports minus 72.5KB.
 
 ## Layout
 
