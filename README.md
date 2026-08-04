@@ -177,12 +177,12 @@ the menus. All of classic Mac's core interactions work:
 | keyboard      | BIOS int 16h, polled by the UI task. |
 | font          | the VGA ROM's own 8x8 font, copied out via int 10h AX=1130h at boot. |
 | floppy        | BIOS int 13h, one sector per call with retries — reads and writes share one routine, so the CHS math and the retry policy can't drift apart; task switching pauses during a transfer (the tick still runs — the floppy motor needs it). |
-| software      | `.o88` packages on a plain FAT12 data floppy in B: — any PC, Mac or Linux box can read and write the disk, and so can os8088: apps create, replace, rename and delete whole files through five API slots, and the kernel validates every byte it reads off the disk before any of it becomes an address (Note Pad saves and loads DOS-readable text files, named through the kernel's Standard File dialog). A package is a flat binary assembled at org 0 and loaded into a first-fit region of a 60KB pool that is **its own address space**, one segment per package, so there are no relocations at all: it calls the kernel through a fixed table of far-call cells at 0800:0010, and the kernel calls back through a three-byte dispatcher in the package's header. Several packages, or several copies of one, run at once. |
+| software      | `.o88` packages on a plain FAT12 data floppy in B: — any PC, Mac or Linux box can read and write the disk, and so can os8088: apps create, replace, rename and delete whole files through five API slots, and the kernel validates every byte it reads off the disk before any of it becomes an address (Note Pad saves and loads DOS-readable text files, named through the kernel's Standard File dialog). A package is a flat binary assembled at org 0 and loaded into a first-fit region of a 60KB pool that is **its own address space**, one segment per package, so there are no relocations at all: it calls the kernel through a fixed table of far-call cells at 0060:0010, and the kernel calls back through a three-byte dispatcher in the package's header. Several packages, or several copies of one, run at once. |
 | concurrency   | one drawing mutex (`gfx_lock`); background tasks re-check visibility *under* the lock and then arm a clip region — their window's content rect less every window above it — so a covered window draws the part that shows instead of skipping the frame; ISRs run IF=0 throughout and never draw over a held lock. SPEC.md is the binding contract. |
 
-The kernel is ~42KB. Kernel code is near-model — CS = DS = `KERNEL_SEG`
-(0x0800) — with SS pointed at low memory, where the task stacks live, and no
-linker anywhere: NASM `-f bin` flat binaries only, which keeps Apple's
+The kernel is ~44KB of code and data, 63.5KB with its buffers. Kernel code is
+near-model — CS = DS = `KERNEL_SEG` (0x0060) — with SS pointed at the task
+stacks just above it, and no linker anywhere: NASM `-f bin` flat binaries only, which keeps Apple's
 Mach-O-only toolchain out of the picture.
 
 Only 8086 instructions are used, and `cpu 8086` at the top of kernel.asm
@@ -197,19 +197,19 @@ and only the sizes are real numbers.
 
 | linear    | segment | contents                                          |
 |-----------|---------|----------------------------------------------------|
-| `0x00600` | `0060`  | far code, copied out of the kernel image at boot   |
-| `0x03000` | `0300`  | the mount-time FAT snapshot                        |
-| `0x04400` | `0440`  | task stacks and disk buffers, then task 0's stack  |
-| `0x07C00` | `0000`  | boot sector, where the BIOS puts us — dead ground once the kernel runs |
-| `0x08000` | `0800`  | kernel: code, data, .bss                           |
-| `0x13000` | `1300`  | the 60KB package pool, one segment per package     |
-| `0x22000` | `2200`  | the claim heap: everything else, handed out on demand |
+| `0x00600` | `0060`  | kernel: code, data, .bss                           |
+| derived   | —       | the mount-time FAT snapshot                        |
+| derived   | —       | task stacks and disk buffers, then task 0's stack  |
+| derived   | —       | the 60KB package pool, one segment per package     |
+| derived   | —       | the claim heap: everything else, handed out on demand |
 | `0xA0000` | `A000`  | VGA planar framebuffer, 80 bytes per row           |
 
-Fits and runs in 256KB of RAM. Build-time assertions fail the build if the
-kernel image + bss reach the package pool, if the far blob outgrows its
-reserve, if low memory crowds task 0's stack, or if the kernel segment is
-ever moved down onto the boot sector.
+**The whole kernel — buffers and stacks included — fits the first 64KB above
+the BIOS**, and a build-time assertion says so. Nothing in the ladder carries
+growth room: each rung is the measured size of what it holds, so the package
+pool starts where this build's kernel actually ends and the heap starts after
+the pool. `docs/KERNEL-MEMORY.md` is the standing account of what the 64KB is
+spent on. Fits and runs in 256KB of RAM.
 
 ## Layout
 

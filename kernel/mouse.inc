@@ -596,8 +596,7 @@ cur_pass:
 ; This is the only genuinely new renderer loop in the multi-adapter port:
 ; the cursor is the one drawing path with no bb_* twin to borrow, because
 ; cur_saveu/cur_restoreu deliberately bypass the buffer (SPEC.md 32). It runs
-; inside IRQ4, so it cannot live in .fartext either (farcall.inc forbids far
-; code in an interrupt handler).
+; inside IRQ4, where the vector is a seg:off into KERNEL_SEG.
 ; in:   SI -> 16-word row table, DI = offset of the top-left byte, CL =
 ;       shift, CH = 8-shift, ES = [vid_seg], [cur_ink] = 1 white / 0 black
 ; out:  none; preserves CX, DI; clobbers ax, bx, dx, si, bp

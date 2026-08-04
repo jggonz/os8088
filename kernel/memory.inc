@@ -440,8 +440,7 @@ mem_owned_kb:
 ; clobbers: nothing else (flags)
 ;
 ; ADD-style rather than plain readers because both call sites are building a
-; sum in AX, and the .fartext caller reaches them through KCALL (SPEC.md 33)
-; where a spare register is not free.
+; sum in AX and have no spare register to hold a partial total in.
 ; -----------------------------------------------------------------------------
 mem_claimed_kb:
     push bx

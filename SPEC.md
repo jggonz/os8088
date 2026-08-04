@@ -49,7 +49,7 @@ pre-empted background task, updating live while the user types or drags).
    the kernel segment (§2.1). ES is scratch — any routine may change and use
    ES freely, but must restore it before returning unless documented
    otherwise. Calls between modules in `.text` are **near** calls; modules in
-   `.fartext` are reached only through the shims of §33.
+   there is no far code and no second code segment (§33).
 
    **SS ≠ DS has one consequence and it is easy to miss:** a `[bp]`,
    `[bp+disp]`, `[bp+si]` or `[bp+di]` operand addresses **SS**, not DS. Code
@@ -74,7 +74,7 @@ pre-empted background task, updating live while the user types or drags).
    assembled. The build runs NASM with `-w+error` so the tell-tale
    "initialize memory in a nobits section" warning fails the build.
    Two further sections exist and follow the same switch-back rule:
-   `.lowbss` (scratch in `LOW_SEG`, §2.1) and `.fartext` (far code, §33).
+   and `.lowbss` (task stacks + disk buffers in `LOW_SEG`, §2.1).
    All four are declared once, with their attributes, at the top of
    `kernel.asm`; modules switch with a bare `section <name>`.
 5. **Label hygiene.** One flat namespace. Prefix every module-internal label
@@ -102,18 +102,36 @@ below it, plus its size", so changing a size slides everything above it and
 there are no gaps to lose track of. The sizes are the only numbers, and all
 of them live in one block at the top of `kernel.asm`.
 
+**Every rung is derived, and none of them carries growth room.** The
+package pool starts where *this build's* kernel actually ends and the heap
+starts after the pool, so both move whenever the kernel does. A fixed ceiling
+with slack under it is memory nothing can ever use, which is what the
+retired `KERN_MAX` was.
+
 | linear        | segment | contents                                          |
 |---------------|---------|----------------------------------------------------|
 | 0x00000       | 0x0000  | IVT + BIOS data area — theirs, 1,536 bytes         |
-| 0x00600       | `FAR_SEG` | far code (§33), copied here by `far_init`; `FAR_PARA` paragraphs (10,752 B) reserved (§15.1 guard 5) |
-| 0x03000       | `FAT_SEG` | mount-time FAT snapshot, `DSK_FAT_SECS`×512 = 5,120 bytes, via **ES only** (§18) |
-| 0x04400       | `LOW_SEG` | `.lowbss`: task stacks + disk buffers (9,216 B), then task 0's stack growing down from `STK0_TOP` (§2.1) |
-| 0x08000       | `KERNEL_SEG` | kernel: code, data, .bss — ceiling `KERN_MAX` (0xB000 = 45,056 B) |
-| 0x13000       | `PKG_SEG` | the package pool, `PKG_PARA` paragraphs (60KB) — **its own address space** now, one segment per loaded package (§20.1) |
-| 0x22000       | `HEAP_SEG` | **the claim heap (§50)** — everything from here to the top of conventional memory, handed out on demand |
+| 0x00600       | `KERNEL_SEG` | kernel image: `.text` + `.bss`, `KIMG_PARA` paragraphs (derived, 512-rounded) |
+| derived       | `FAT_SEG` | mount-time FAT snapshot, `DSK_FAT_SECS`×512 = 4,608 bytes, via **ES only** (§18) |
+| derived       | `LOW_SEG` | `.lowbss`: task stacks + disk buffers (9,216 B), then task 0's stack (`STK0_SIZE`, 1,024 B) growing down from `STK0_TOP` |
+| derived       | `PKG_SEG` | the package pool, `PKG_PARA` paragraphs (60KB) — **its own address space**, one segment per loaded package (§20.1) |
+| derived       | `HEAP_SEG` | **the claim heap (§50)** — everything from there to the top of conventional memory, handed out on demand |
 | 0xA0000       | 0xA000  | VGA planar framebuffer, 80 bytes/row               |
 | 0xB0000       | 0xB000  | Hercules framebuffer, 4 banks × 0x2000, 90 bytes/row (§39) — mono adapters only |
 | 0xB8000       | 0xB800  | CGA framebuffer, 2 banks × 0x2000, 80 bytes/row (§39) — mono adapters only |
+
+**The kernel is the first four rungs, and it fits in 64KB.** `KERNEL_SEG`
+through the top of task 0's stack is one contiguous span — code, read-only
+data, `.bss`, the FAT snapshot, the disk caches, the sector buffer and every
+task stack — and guard 1 (§15.1) holds the whole of it to `KERN_BUDGET` =
+65,536, the first 64KB above the BIOS data area. It measures 65,024 bytes
+on the shipped build. **`docs/KERNEL-MEMORY.md` is the maintained account of
+what that is spent on**; raising `KERN_BUDGET` is a decision to be taken
+with whoever asked for the feature, not a build fix.
+
+The one deliberate exception is the menu save-under (§12.4), which is a heap
+**claim** rather than a reservation: 20KB that exists only while a pull-down
+is on screen.
 
 **Above `HEAP_SEG` nothing has a fixed address.** There used to be four
 pinned blocks up there — `SND_SEG` (64KB), `SAVE_SEG` (48KB), `VIEW_SEG`
@@ -125,80 +143,65 @@ when they are not. A package that wants memory outside its own region asks
 the same allocator, which is what retires `apps/paint`'s unsanctioned grab
 of linear 0x66000 (§42).
 
-The floor machine is 256KB and the ladder fits it with room: BIOS 1.5KB,
-low memory 29.75KB, the kernel's 45KB, the 60KB pool — and about 120KB of
-heap left over for whoever asks first.
+The floor machine is 256KB and the ladder fits it with room: BIOS 1.5KB, the
+kernel's 63.5KB, the 60KB pool — and about 131KB of heap left over for
+whoever asks first.
 
-**`KERNEL_SEG` is 0x0800, and the boot sector is why it is not lower.** It
-was 0x1000 for as long as low memory was a place to put things rather than a
-sized ladder; once the four rungs below it were measured (below, and §8) they
-came to 30,464 bytes, not 62,976, and the 32KB difference was memory nothing
-could address. The floor is `0x07E0`: the BIOS loads `boot/boot.asm` to
-0000:7C00 and that code is *still running* while the kernel's sectors arrive
-— it far-calls the splash at `KERNEL_SEG:0008` after every one — so
-`KERNEL_SEG:0000` must begin at or above 0x7E00, the byte after it. (The boot
-sector's stack grows *down* from 0x7C00, so it is safe by the same test, and
-both are dead ground by the time `kmain` points SS at `LOW_SEG`.) 0x0800 is
-the first round paragraph that clears it. `boot/boot.asm` carries its own
-`KERNEL_SEG` because it is assembled separately, and `apps/os88api.inc`
-carries a third copy because it is baked into every package's far-call
-targets: **all three move together, and every `.o88` must be rebuilt**, since
-a package built against the old value far-calls into empty memory.
+**`KERNEL_SEG` is 0x0060 — the first paragraph above the BIOS data area.**
+It was 0x1000, then 0x0800, and the floor both times was the boot sector:
+the BIOS loads `boot/boot.asm` to 0000:7C00 and that code is *still running*
+while the kernel's sectors arrive, since it far-calls the splash at
+`KERNEL_SEG:0008` after every one. The sector now **relocates itself** out of
+the landing zone before it reads anything (§15.2), so the floor is gone.
+`boot/boot.asm` carries its own `KERNEL_SEG` because it is assembled
+separately, and `apps/os88api.inc` carries a third copy because it is baked
+into every package's far-call targets: **all three move together, and every
+`.o88` must be rebuilt**, since a package built against the old value
+far-calls into empty memory.
 
-### 2.1 Low memory
-
-Linear 0x00600..0x07FFF — 30,464 bytes between the BIOS data area and the
-kernel image — is free on every machine once the boot sector has handed off.
-Nothing the kernel keeps there needs to be addressable through DS, which is
-the whole point: it is memory the kernel's own 64KB window does not spend.
-
-The three regions are a ladder (§2): `FAR_SEG` + `FAR_PARA` paragraphs is
-`FAT_SEG`; `FAT_SEG` + `FAT_PARA` is `LOW_SEG`; and `LOW_LIMIT` — the offset
-at which `LOW_SEG` reaches `KERNEL_SEG:0000` — falls out of where `LOW_SEG`
-landed. Guard 7 (§15.1) proves the second link has no gap.
+### 2.1 The kernel's buffers
 
 `LOW_SEG` holds the `.lowbss` section, addressed through **SS** (the task
-stacks) or **ES** (the disk buffers), never DS:
+stacks) or **ES** (the disk buffers), never DS. It sits *above* the kernel
+image now, not below it — there is no low memory under the kernel any more,
+because the kernel starts as low as the BIOS lets it.
 
 - `sch_stacks` — 11 × `SCH_STACK` (512) = 5,632 bytes, task slots 1..11 (§8).
-- Task 0 runs on the same segment at `STK0_TOP`, growing down toward the top
-  of `.lowbss` — 6,142 bytes of room. All tasks share one SS, so a switch is
-  still an SP swap and SS is not part of the saved frame. **This is the
-  reservation that lets a built-in app run at all**: About, Disk, the Control
-  Panel and the Task Manager have no task of their own — they execute inside
-  window callbacks on the UI task, on this stack. So does every package
-  callback, the menu tracker and the Standard File dialog (§38), which is
-  why task 0 gets the larger share of the two.
-- `disk_dir` (the synthesized directory cache), `disk_icons` (the harvested
-  icon cache) and `dsk_secbuf` (sector scratch) — written through ES
-  (int 13h ES:BX, or `rep movsw` from kernel scratch at mount, §18–19),
-  read only through `dsk_get_dir` / `dsk_get_icon`, which stage one entry
-  back into the kernel segment (§18). `dsk_secbuf` is also the write
-  path's staging sector (§18.4): the directory sector being
-  read-modify-written, and the zero-padded final sector of a file.
+- Task 0 runs on the same segment at `STK0_TOP`, growing down onto the top
+  of `.lowbss` — `STK0_SIZE` = 1,024 bytes. All tasks share one SS, so a
+  switch is still an SP swap and SS is not part of the saved frame. **This
+  is the reservation that lets a built-in app run at all**: About, Disk, the
+  Control Panel and the Task Manager have no task of their own — they
+  execute inside window callbacks on the UI task, on this stack. So does
+  every package callback, the menu tracker and the Standard File dialog
+  (§38), which is why task 0 gets the larger share of the two.
+- `disk_dir` (the synthesized directory cache, 1,024 B), `disk_icons` (the
+  harvested icon cache, 2,048 B) and `dsk_secbuf` (sector scratch, 512 B) —
+  written through ES (int 13h ES:BX, or `rep movsw` from kernel scratch at
+  mount, §18–19), read only through `dsk_get_dir` / `dsk_get_icon`, which
+  stage one entry back into the kernel segment (§18). `dsk_secbuf` is also
+  the write path's staging sector (§18.4).
 
-`LOW_SEG:LOW_LIMIT` **is** `KERNEL_SEG:0x0000`. Every `LOW_SEG` offset must
-stay strictly below it, and the §15.1 assertions keep task 0 4KB of
-clearance above `.lowbss`.
+**The stack numbers are measured, not guessed.** Every byte of the stack
+region was filled with 0xCC at the top of `kmain` and the machine driven as
+hard as it goes — Clock, two Bounces, About, the Control Panel on both its
+pages, the Task Manager with a window drag, a Disk window, the Fractal with
+its worker task, and Paint saving a GIF into a folder it created from the
+file dialog. The deepest mark left was **246 bytes** on task 0's stack and
+**150** on a background task's, ISR frames included (the tick and mouse
+handlers run on whichever stack they interrupt). The reservations above are
+4× and 3.4× those. Redo the fill probe before lowering either; guard 3
+(§15.1) only proves `STK0_SIZE` is big enough to be a stack at all, not that
+a task fits its own slice.
 
-**The stack numbers are measured, not guessed.** Every byte of low memory was
-filled with 0xCC at the top of `kmain` and the machine driven as hard as it
-goes — Clock, two Bounces, About, the Control Panel on both its pages, the
-Task Manager with a window drag, a Disk window, the Fractal with its worker
-task, and Paint saving a GIF into a folder it created from the file dialog.
-The deepest mark left was **246 bytes** on task 0's stack and **150** on a
-background task's, ISR frames included (the tick and mouse handlers run on
-whichever stack they interrupt). The reservations above are 25× and 3.4×
-those. Redo the fill probe before lowering either; guard 3 (§15.1) only
-catches `.lowbss` eating task 0's room, not a stack that outgrows its slice.
+**`STK0_SIZE` is a constant, and that is load-bearing.** It used to be
+"whatever is left between the top of `.lowbss` and the kernel segment", so
+task 0's stack silently absorbed every byte saved anywhere below it and two
+rounds of shrinking the buffers freed exactly nothing. Naming the number is
+what turned those savings into memory.
 
-`FAR_SEG` holds the `.fartext` blob — see §33. 10,752 bytes reserved against
-a blob of 5,455 (`taskmgr.inc` 3,622 + `ctrl.inc` 1,790 + shims), and the
-5,297-byte remainder is deliberate: it is where the *next* cold module goes
-when the kernel segment needs relief again.
-
-`FAT_SEG` holds the mount-time FAT snapshot: up to `DSK_FAT_SECS` (= **10**)
-sectors, 5,120 bytes, rewritten from FAT1 (or the FAT2 fallback, §18.3) on
+`FAT_SEG` holds the mount-time FAT snapshot: up to `DSK_FAT_SECS` (= **9**)
+sectors, 4,608 bytes, rewritten from FAT1 (or the FAT2 fallback, §18.3) on
 **every** mount — no cross-mount state survives. Reached through **ES
 only**, never DS: `dsk_next_clus` is the single reader and `dskw_setfat`
 (§18.4) the single writer, and int 13h moves it via ES:BX only at mount (in)
@@ -206,18 +209,35 @@ and at a FAT flush (out). The whole region is the snapshot; there is no
 reserve, and `FAT_PARA` is derived from `DSK_FAT_SECS` so the two can never
 disagree.
 
-**Why 10.** `DSK_FAT_SECS` is an *acceptance* threshold, not a buffer size:
+**Why 9.** `DSK_FAT_SECS` is an *acceptance* threshold, not a buffer size:
 §18.2 rule 10 refuses to mount a volume whose declared FAT is larger, before
-a byte of it is read. 10 covers every geometry this OS boots or builds with a
-sector to spare — 360KB = 2, 720KB = 3, 1.2MB = 7, 1.44MB = 9 — and nothing
-else. It was 24, sized for a 2.88MB FAT16 test image (23 sectors) that no
-longer exists; **the consequence is that FAT16 is now unreachable**, because
-a FAT is only FAT16 with ≥ 4,085 clusters and that needs ≥ 16 FAT sectors, so
-rule 10 turns every FAT16 volume away structurally. The FAT16 halves of
+a byte of it is read. 9 is exactly the largest FAT any geometry this OS boots
+or builds declares — 360KB = 2, 720KB = 3, 1.2MB = 7, 1.44MB = 9 — and
+nothing more. **The consequence is that FAT16 is unreachable**, because a FAT
+is only FAT16 with ≥ 4,085 clusters and that needs ≥ 16 FAT sectors, so rule
+10 turns every FAT16 volume away structurally. The FAT16 halves of
 `dsk_next_clus` and `dskw_setfat` stay in the tree, and nothing can call
 them.
 
-The full plan this came from is `docs/MEMORY-PLAN.md`.
+### 2.1.1 Every disk-visible base is 512-byte aligned
+
+int 13h moves one sector per call, which bounds a transfer to 512 bytes —
+but **does not stop one from straddling a 64KB physical boundary**. Only
+starting on a 512-byte boundary does that, and the DMA controller answers a
+straddle with error 09h.
+
+Every base in this ladder is an int 13h target: the FAT snapshot, the disk
+buffers, a package image being loaded (§21), and a package's file buffer out
+of the heap (§18.4). So `KIMG_PARA` rounds the image up to a whole **512
+bytes** rather than to a paragraph, and because `FAT_PARA` (288), `LOW_PARA`
+and `PKG_PARA` (3,840) are all multiples of 32 paragraphs, aligning that one
+rung aligns the whole ladder. Guard 6 (§15.1) proves it.
+
+This held by accident until the ladder became derived — every base used to be
+a round constant like `0x0300` or `0x2A00`, and nothing said why that
+mattered. The symptom when it broke was a **"Disk error" on any save larger
+than the distance from the buffer to the next 64KB boundary**: Paint's 63KB
+BMP hit it immediately, a Note Pad text file never would.
 
 ### 2.2 SND_SEG — retired
 
@@ -266,16 +286,18 @@ the Disk kind's `KD_CAP`.
 KERNEL_SEG   equ 0x0800                ; linear 0x08000 - guard 8 fences it
 VGA_SEG      equ 0xA000                ; against the boot sector at 0x7C00
 ; the memory ladder (§2) - each rung is the one below plus its size
-FAR_SEG      equ 0x0060                ; linear 0x00600 - far code (§33)
-FAR_PARA     equ 0x02A0                ; 10,752 bytes reserved for the blob
-FAT_SEG      equ FAR_SEG + FAR_PARA    ; FAT snapshot, via ES ONLY (§18)
-DSK_FAT_SECS equ 10                    ; resident FAT cap, sectors (5,120 B)
+KERN_BUDGET  equ 65536                 ; the WHOLE kernel, guard 1 (§2)
+KIMG_PARA    equ ((KTEXT_SIZE + KBSS_SIZE + 511) / 512) * 32   ; 512-rounded
+FAT_SEG      equ KERNEL_SEG + KIMG_PARA   ; FAT snapshot, via ES ONLY (§18)
+DSK_FAT_SECS equ 9                     ; resident FAT cap, sectors (4,608 B)
 FAT_PARA     equ DSK_FAT_SECS * 32     ; 512 bytes = 32 paragraphs
 LOW_SEG      equ FAT_SEG + FAT_PARA    ; .lowbss: stacks + disk buffers
-LOW_LIMIT    equ (KERNEL_SEG - LOW_SEG) * 16   ; LOW_SEG:LOW_LIMIT IS
-STK0_TOP     equ LOW_LIMIT - 2                 ; KERNEL_SEG:0
-KERN_MAX     equ 0xB000                ; the kernel's own ceiling (45,056 B)
-PKG_SEG      equ KERNEL_SEG + KERN_MAX/16    ; the package pool (§20.1)
+LOW_PARA     equ ((KLOW_SIZE + STK0_SIZE + 511) / 512) * 32
+STK0_SIZE    equ 1024                  ; task 0's own stack (§2.1)
+STK0_TOP     equ KLOW_SIZE + STK0_SIZE - 2
+KERN_END     equ LOW_SEG + LOW_PARA    ; ...and there the kernel stops
+KERN_SIZE    equ (KERN_END - KERNEL_SEG) * 16  ; what guard 1 measures
+PKG_SEG      equ KERN_END              ; the package pool (§20.1)
 HEAP_SEG     equ PKG_SEG + PKG_PARA          ; the claim heap (§50)
 ; VGA reference geometry, and the initializers of the live block (§39.2);
 ; the live screen is [vid_w] / [vid_h] / [vid_stride]
@@ -334,7 +356,6 @@ VIEW_KB       equ 3          ; each window's cache, claimed when it opens
 | `kernel/taskmgr.inc`| Task Manager window: CPU load gauge + history graph, RAM readout, per-instance process list with CPU + memory (§28) |
 | `kernel/ctrl.inc`   | Control Panel window: two-pane item list + settings pages (§31), prefix `cp_` |
 | `kernel/snd.inc`    | sound core (§34): driver table + router, tone tier, speaker driver (tone + PWM clips), `snd_tick`, the five API slot targets, `snd_release_inst`/`snd_unhook` — prefix `snd_`, lands Phases 1–2 |
-| `kernel/farcall.inc`| Far-code mechanism (§33): the `FARK`/`KCALL`/`FARSHIM` macros, `far_init`, and the list of kernel routines far code may call |
 
 `kernel/video.inc`, `keyboard.inc`, `string.inc`, `gfx.inc` remain in the
 tree but are **no longer included**; the GUI replaces the text shell.
@@ -2194,8 +2215,7 @@ writes character/attribute pairs into the bitmap. kmain's own `vid_init`
 then wipes the splash.
 
 kmain: set DS/ES = `KERNEL_SEG` and SS:SP = `LOW_SEG:STK0_TOP` (§2.1),
-`sti`, `cld`, then: `far_init` (**first** — the `.fartext` blob is sitting
-on top of `.bss` until it runs, §33) →
+`sti`, `cld`, then:
 `sched_init` → `evq_init` → `clk_init` (§37 — the RTC probe, before the
 mode set so a machine without one is dated from the fallback constants
 from the first paint onward) → `vid_init` (§39 — re-runs the splash's probe,
@@ -2222,17 +2242,14 @@ does.
 
 End of file (after all `%include` lines, with `section .text` in effect).
 `kernel_text_end` **must** be the last thing in `.text`: it is at once the
-image size, the base of `.bss` and the landing address of the `.fartext`
-blob. Each section measures itself against its own `$$` — a label difference
-across two sections is not a constant in `-f bin` and will not assemble.
+image size, the base of `.bss` and — through `KIMG_PARA` — where the FAT
+snapshot begins. Each section measures itself against its own `$$` — a label
+difference across two sections is not a constant in `-f bin` and will not
+assemble.
 
 ```nasm
 kernel_text_end:
 KTEXT_SIZE equ kernel_text_end - $$
-
-section .fartext
-kernel_far_end:
-KFAR_SIZE equ kernel_far_end - $$
 
 section .lowbss
 kernel_low_end:
@@ -2244,38 +2261,63 @@ section .bss
 kernel_bss_end:
 KBSS_SIZE equ kernel_bss_end - $$
 
-%if KTEXT_SIZE + KBSS_SIZE > KERN_MAX
-%error "kernel too big: image + bss must stay below KERN_MAX"
-%endif
-%if KTEXT_SIZE + KFAR_SIZE > KERN_MAX
-%error "kernel too big: image + fartext must stay below KERN_MAX"
-%endif
-%if KLOW_SIZE > STK0_TOP - 4096
-%error "lowbss too big: task 0's stack needs 4KB of clearance below STK0_TOP"
-%endif
-%if STK0_TOP >= LOW_LIMIT
-%error "STK0_TOP must stay below LOW_LIMIT (LOW_SEG:LOW_LIMIT is the kernel)"
-%endif
-%if KFAR_SIZE > FAR_PARA * 16
-%error "fartext blob would collide with FAT_SEG - raise FAR_PARA"
-%endif
-%if FAT_SEG + FAT_PARA != LOW_SEG
-%error "low-memory ladder has a gap: FAT_PARA does not reach LOW_SEG"
-%endif
-%if KERNEL_SEG < 0x07E0
-%error "KERNEL_SEG would overlap the boot sector at 0000:7C00"
-%endif
+KERN_KB    equ (KERN_SIZE + 1023) / 1024              ; §28 RAM figures
+KBUF_KB    equ ((FAT_PARA + LOW_PARA) * 16 + 1023) / 1024
 
-KLOWFAR_KB equ (KLOW_SIZE + KFAR_SIZE + 1023) / 1024   ; §28 RAM figure
+%if KERN_SIZE > KERN_BUDGET
+%error "kernel too big: it must fit KERN_BUDGET - see docs/KERNEL-MEMORY.md"
+%endif
+%if KTEXT_SIZE + KBSS_SIZE > 65536
+%error "kernel image + bss overflows one 64KB segment"
+%endif
+%if STK0_SIZE < 512
+%error "STK0_SIZE is too small to be a stack"
+%endif
+%if KLOW_SIZE + STK0_SIZE > 65536
+%error "lowbss + task 0's stack overflows one 64KB segment"
+%endif
+%if 4 * (MENU_POPMAX*MENU_ITEM_H + 2) * (MENU_MAXW/8 + 2) > MENU_SAVE_KB*1024
+%error "menu save-under can overflow its claim - lower MENU_POPMAX/MENU_MAXW"
+%endif
+%if (KERNEL_SEG % 32) || (FAT_SEG % 32) || (LOW_SEG % 32)
+%error "a disk-buffer segment is not 512-byte aligned - see KIMG_PARA"
+%endif
+%if (PKG_SEG % 32) || (HEAP_SEG % 32)
+%error "the pool or the heap is not 512-byte aligned - see KIMG_PARA"
+%endif
+%if KERNEL_SEG*16 + KERN_SIZE > BOOT_LIN - BOOT_STACK
+%error "the kernel would land on the relocated boot sector's stack"
+%endif
 ```
 
-The second guard exists because the far blob lands *inside* the kernel
-window and only leaves it when `far_init` runs. The fifth fences `FAT_SEG`
-(§2.1) — `FAR_SEG` linear 0x00600 + `FAR_PARA` is where the FAT snapshot
-begins — and the seventh proves the rung above it has no gap. The eighth is
-the boot sector: the kernel is read in *while boot.asm is still executing*
-at 0000:7C00, so `KERNEL_SEG` can never fall below 0x07E0 (§2). Keep this
-block last.
+**Guard 1 is the one the project is steered by**: the kernel's whole
+footprint — image, scratch, FAT snapshot, disk buffers and every task stack
+— against 64KB (§2). Raising `KERN_BUDGET` is a decision to be taken with
+whoever asked for the feature, which is why its message points at
+`docs/KERNEL-MEMORY.md` rather than telling you what to edit.
+
+Guard 4 is the menu save-under, the one kernel buffer deliberately outside
+that budget because it is a heap claim (§12.4/§50). Guard 6 is the 512-byte
+alignment every int 13h target depends on (§2.1.1). Guard 7 is the relocated
+boot sector (§15.2). Keep this block last.
+
+### 15.2 The boot sector relocates itself
+
+The BIOS loads `boot/boot.asm` to 0000:7C00 and jumps there. That code is
+still executing while the kernel's sectors arrive — it far-calls the splash
+at `KERNEL_SEG:0008` after every one — and the kernel lands at 0x00600 and
+runs up to 64KB, so it covers 0x7C00 long before the last sector.
+
+So `start`'s first act, before it touches a drive, is to copy its own 512
+bytes to `BOOT_RELOC:7C00` (linear 0x11000, above anything the kernel can
+reach) and far-jump there. **The copy keeps the same offset**: every label in
+the file still resolves at `org 0x7C00`, only the segment registers change,
+and the stack rides along at the same offset and grows down from 0x11000.
+Nothing above the far jump addresses memory through a label, so that prologue
+runs correctly at 0000:7C00 where the BIOS put it.
+
+`BOOT_RELOC` and `KERNEL_SEG` are mirrored in `kernel/kernel.asm`, whose
+guard 7 proves the kernel ends clear of the relocated stack.
 
 ## 16. Build & test
 
@@ -2855,10 +2897,10 @@ path stack and no memory of how the user got here: the disk records it.
 `[dsk_keepcwd]` (§19.2). It is the flag `dskw_commit` reads to stamp
 `ATTR_DIRECTORY` instead of `ARCHIVE`, and `dskw_mkbody` is the only thing
 that ever *sets* it, so on a system where no folder has yet been created it
-is only ever read. `-f bin` gives `.bss` no image bytes and the `.fartext`
-blob is copied out from on top of `.bss` at boot (§33), so an uninitialised
-`.bss` byte reads back as leftover far code — reliably **non-zero**. Left
-there, this byte made every file the OS created carry attribute 0x10;
+is only ever read. `-f bin` gives `.bss` no image bytes and nothing zeroes
+it, so an uninitialised `.bss` byte reads back as whatever the machine left
+there — reliably **non-zero** on the hardware this was found on. Left
+uninitialised, this byte made every file the OS created carry attribute 0x10;
 every reader then refused it as `FERR_PROT` (a directory is protected), so
 nothing could be read back or deleted and every chain those writes
 allocated leaked. The `filetest` gate caught it and `--verify` did not,
@@ -4913,16 +4955,15 @@ account, and the rows partition one total.
   0 (no DIV ever executes with a zero divisor)**; else
   share_i = row_i·100/total (≤ 100 since row_i ≤ total).
 - RAM — **the honest total: everything claimed, whether or not it is
-  live.** Four terms, and each is a reservation nobody else can be given:
-  `TM_KLOW_KB` (all of low memory from `FAR_SEG` up to `KERNEL_SEG` — the
-  far-code blob, the FAT snapshot, `.lowbss` and task 0's stack, §2.1),
-  `TM_KSEG_KB` (`KERN_MAX`, the kernel's own segment budget *including its
-  headroom* — the pool starts at `KERN_MAX`, so the unused part is the
-  kernel's and no one else's), `TM_POOL_KB` (the whole package pool, §20.1
+  live.** Three terms, and each is a reservation nobody else can be given:
+  `TM_KERN_KB` (the whole kernel — image, scratch, FAT snapshot, disk
+  buffers and every task stack are one contiguous span since §2, and there
+  is no growth room in it to bill to anybody), `TM_POOL_KB` (the whole
+  package pool, §20.1
   — reserved from boot, so a machine with no package open still shows it
   spoken for), and every live **heap claim** (§50, `mem_claimed_kb`). Both
   the kernel's own claims (the menu save-under, the back buffer) and every
-  package's are in that last term. **All four are KB from the start**: the
+  package's are in that last term. **All three are KB from the start**: the
   back buffer alone is 150KB and would not fit a 16-bit byte count. Total KB
   is the boot-time int 12h value. **All bar math is in KB**: barw =
   usedK·160/totalK (`mul` then `div`; totalK cannot be 0 from int 12h, but a
@@ -5005,11 +5046,17 @@ in-segment map would show one black block and nothing else.
   (7,15)-(166,28) = 160×14. KB scale: KB k maps to interior column
   k·160/totalK; a region [a,b) KB fills columns a·160/totalK ..
   (b−1)·160/totalK inclusive, clamped so no region drops below 1px. The
-  interior is white-filled (free), then, in order: the kernel's fixed
-  reservation (low memory + the kernel segment) solid black, the package
-  pool 50% gray, and **each live heap claim** as its own band (§50) — read
+  interior is white-filled (free), then, in order: **the kernel** in 50%
+  gray, **its buffers** over the top of that in a texture of their own
+  (`tm_pat_buf`, 2-on-2-off horizontal bars — the band is 14 rows tall and,
+  on a 640KB machine, four pixels wide, so a texture has to carry its
+  signature vertically or it has nowhere to show it), the **package pool**
+  solid black, and **each live heap claim** as its own 50% band (§50) — read
   live at draw time from the claim table, so arming double buffering or
-  opening a Disk window makes a band appear.
+  opening a Disk window makes a band appear. The buffer band is what makes
+  the bar say the same thing the rows do: the kernel is not one lump, and
+  the part of it that is scratch rather than program is the part these
+  figures are steered by (`docs/KERNEL-MEMORY.md`).
 - (6,33): `"HEAP nnnK/nnnK"` — claimed and total heap KB (§50).
 - Package-pool map: 1px black frame (6,43)-(167,58), interior
   (7,44)-(166,57) = 160×14. Paragraph scale across `PKG_PARA`; the interior
@@ -5017,15 +5064,29 @@ in-segment map would show one black block and nothing else.
   I_STATE ≠ 0 and I_SIZE ≠ 0, in that slot's pattern. Unallocated pool reads
   white — free space, drawn honestly.
 - (16,62): header `"NAME    ADDR SIZE  CLM"` (22 chars, the row width).
-- Rows at y = 74 + 11·r, `TMM_ROWS = INST_MAX + 3` of them — System, the
-  two group headings, and one per instance. **Free slots are not drawn**:
-  15 rows at the 11px pitch is 239 of the 245-pixel content, which is what
-  decides it.
-- Row 0 (System): legend square solid black; ADDR `0600` (where the
-  reservation starts — `FAR_SEG`, the bottom of low memory); SIZE =
-  `TM_KLOW_KB` + `TM_KSEG_KB`; CLM = the kernel's own heap claims.
-- `Builtins` heading + used/max of the kernel segment they share, then one
-  indented row per built-in instance: no square, `"   -    -"` for ADDR and
+- Rows at y = 74 + 11·r, `TMM_ROWS = INST_MAX + 7` of them — System, its
+  four buffer rows, the two group headings, and one per instance. **Free
+  slots are not drawn**: 19 rows at the 11px pitch is 279 of the 281-pixel
+  content, which is what decides both that and the template's height.
+  `tm_mrow_open` clamps to the **live** frame on top of that constant
+  (`tm_ylim_set`), for the screens where §39.7 shrinks the window — nothing
+  in the kernel clips a draw to a window, and on a 200-row CGA this one is
+  156px tall.
+- Row 0 (System): legend square solid black; ADDR `0600` (where the kernel
+  starts — `KERNEL_SEG`); SIZE = `TM_KERN_KB`; CLM = the kernel's own heap
+  claims.
+- **Four indented buffer rows under it** — `Code+data`, `Stacks`,
+  `Disk bufs`, `FAT snap` — each with its size in the SIZE column and a dash
+  in CLM, because a buffer is part of the kernel and not a claim. Between
+  them they account for every byte of the System figure above, so it is not
+  a lump. Every one of the four is an **assembly-time constant**
+  (`TM_KIMG_KB`, `TM_KSTK_KB` + `TM_K0_KB`, `TM_KDSK_KB`, `TM_KFAT_KB`), so
+  the once-a-second refresh spends four string copies and no arithmetic on
+  them; the kernel's footprint is fixed at build time down to the paragraph
+  (§2), so there is nothing to check at run time. They give up the ADDR
+  column to have twelve characters of name, and land SIZE and CLM exactly
+  where row 0 puts them.
+- `Builtins` heading, then one indented row per built-in instance: no square, `"   -    -"` for ADDR and
   SIZE (they own no region), and a real CLM figure — the Disk window's
   listing cache shows up here (§2.3).
 - `Packages` heading + used/max of the pool, then one row per package
@@ -5616,7 +5677,7 @@ selected one — white on a black `gfx_fill` box inset 2px around the glyphs
   field or a miss does nothing. No BIOS call anywhere: `clk_fld_adj` sets
   `[clk_dirty]` and ui_task writes the RTC outside the lock (§13 step 3).
 - `cp_tick` — the live refresh, called by ui_task step 4 under the gfx
-  lock through a `FARSHIM` like the other two entry points. It returns
+  lock, like the other two entry points. It returns
   immediately unless `[cp_sel]` = `CP_ITIME` **and** `inst_find_kind`
   KIND_CTRL finds a live instance **and** its window is visible **and**
   `wm_obscured` says clear; only then does it derive DI/BP from
@@ -5632,7 +5693,8 @@ selected one — white on a black `gfx_fill` box inset 2px around the glyphs
   UI task; a stale answer costs one wasted lock, and `cp_tick` re-checks
   everything under it anyway.
 
-New `FARK` entries for this page: `inst_find_kind`, `clk_snap`,
+Kernel routines this page reaches (all ordinary near calls since §33):
+`inst_find_kind`, `clk_snap`,
 `clk_fld_str`, `clk_fld_adj` (§33; `wm_content`, `wm_obscured`, `gfx_fill`,
 `gfx_frame` and `font_str` already have wrappers).
 
@@ -5843,68 +5905,28 @@ both move the moment the Display page switches it (39K ↔ 189K on a 639K
 QEMU). The §16 test flow boots direct-to-screen like every machine; turning
 the buffer on is a deliberate act, and `make xt` (256K) cannot do it at all.
 
-## 33. farcall.inc — far code modules
+## 33. Far code — retired
 
-Cold modules put their **code** in `section .fartext`, which is assembled at
-`vstart=0`, shipped at the tail of the kernel image, and copied to
-`FAR_SEG:0000` by `far_init` — kmain's first act (§15). That code costs the
-kernel's 64KB window nothing at run time; only the shims stay behind.
+There used to be a `.fartext` section and a `kernel/farcall.inc` to serve it.
+Cold modules — `ctrl.inc`, `taskmgr.inc` and one routine of `snd.inc` — put
+their **code** there; it was assembled at `vstart=0`, shipped at the tail of
+the kernel image, and copied down to its own segment below the kernel by
+`far_init` as kmain's first act. The point was that those 5,455 bytes did not
+count against the kernel's 64KB *window*.
 
-**Why the blob is free.** `.bss` is declared `vfollows=.text` — *not*
-following `.fartext` — so `.bss` deliberately overlaps the blob's landing
-zone at `kernel_text_end`. The blob is copied out before anything writes
-`.bss`, and `.bss` is uninitialised by definition, so the same addresses
-serve both in turn. This is the same hazard `splash.inc` has always lived
-with (§15: it keeps its state in `.text` because `.bss` is where the last
-sector lands), and it is why `far_init` must run before `sched_init`.
+**It is gone, and the arithmetic is why.** The mechanism needed a 10,752-byte
+reservation in low memory to hold that 5,455-byte blob, so from the moment
+§2's budget made the kernel's whole *footprint* the number being steered by,
+far code was spending 5,297 bytes to save nothing. Merging it back also
+deleted the shims: three `FARSHIM` stubs, twenty-seven `FARK` wrappers,
+`far_init` itself, and two bytes on each of the 91 `KCALL` sites — which is
+why the image grew by less than the blob it absorbed.
 
-**The contract.** All of it:
-
-1. **DS stays `KERNEL_SEG`.** Far code addresses kernel variables exactly
-   like near code, so every `[var]`, `[si+off]` and `lodsb` works unchanged.
-2. **Therefore all data stays in `.text` or `.bss`.** Strings, tables,
-   window templates, bitmaps — anything reached through DS — must not move.
-   Only executable code moves. A module's data *may* hold pointers to its
-   own far code (see rule 5).
-3. The kernel calls in through `FARSHIM name, far_body`: a 6-byte near stub
-   in `.text` that far-calls the body. Window templates, kind tables and
-   `call [bx+W_PAINT]` keep naming the stub, so no dispatch site changes.
-   A task entry must be a shim too — `task_spawn` builds a frame with
-   CS = `KERNEL_SEG` (§8) and can only launch a near entry. Which is
-   exactly why a package's worker entry (§20.6) is a plain near label
-   inside its own relocated region — reloc class 0 — and needs no shim.
-4. Far code calls back with `KCALL routine`, which far-calls the 4-byte
-   `call`/`retf` wrapper emitted by `FARK routine`. Neither hop touches a
-   register or a flag, so a routine that returns CF still does. Every
-   `KCALL` target needs a `FARK` entry in the list at the bottom of
-   `farcall.inc`. A tail `jmp` to something that never returns
-   (`inst_task_die`) becomes `jmp far KERNEL_SEG:…` and needs no wrapper.
-5. Calls between routines of the same far module stay near. An indirect
-   near call through a table of `.fartext` labels is legal **only** from far
-   code — a near pointer means nothing without knowing which CS will run it.
-6. Far bodies reached by `FARSHIM` end in `retf`, not `ret`.
-
-**What may not move:** the boot path (`splash.inc` and `viddet.inc` both run
-before `far_init`, §39),
-any interrupt handler (vectors are seg:off into `KERNEL_SEG`), and anything
-on a hot inner loop — each crossing is a far call, roughly 1.5× a near one.
-
-**Resident so far:** `ctrl.inc` (§31) and `taskmgr.inc` (§28). Both keep
-their data, their `.bss` and their two or three near shims in the kernel
-segment; everything else is far. `tm_init` and `tm_kinit` also stay near —
-they are self-contained and too small to be worth a shim.
-
-**The sound layer (§34):** one cold half is far — the PWM xlat-table
-builder, behind a `FARSHIM`. Everything else sits on a tick path and stays
-in `.text`: `snd_tick`, the tone core, `spk_pcm_run`, the router and the
-three API slot targets (§34.7). It used to be far-heavy — the OPL2 timer
-dance, the SB reset scan, the IRQ-discovery orchestration, OPL2 init and
-its patch loader, the Sound page bodies — and every one of those went with
-the sound cards.
-
-**Accounting.** `KLOWFAR_KB` (§15.1) is what the kernel occupies outside its
-own segment — `.lowbss` plus `.fartext` — and both the Task Manager's RAM
-total and its System row add it, so the rows still sum to the total (§28).
+What this means for anyone adding a module: **there is nowhere to put code
+that is "too cold to be worth the space".** Cold code is ordinary code, near
+called like everything else. If the image has to shrink it shrinks by doing
+less or doing it smaller, not by moving it somewhere the accounting cannot
+see. `docs/KERNEL-MEMORY.md` is where that budget is kept.
 
 ## 34. snd.inc — the sound layer
 
@@ -6160,7 +6182,7 @@ there is no staging pool and nothing to record into.
 - **Sections** (§33): everything `snd_tick` can reach stays in `.text` —
   the owner record, the tone core, `snd_beep`, `snd_tick`, the router, the
   three API slot targets, `snd_release_inst`, `snd_unhook` and
-  `spk_pcm_run`. Far, behind `FARSHIM`/`KCALL`: the PWM xlat-table builder
+  `spk_pcm_run`. Cold, but near like everything else (§33): the PWM builder
   alone. Far code keeps DS = KERNEL_SEG, so it reads its data from `.text`
   (§33 rule 2).
 
@@ -6287,7 +6309,7 @@ afterwards. Label prefix `clk_` (the built-in Clock **app** of §14 keeps
 its own `app_clk_` names and its own per-instance stopwatch state — the two
 are unrelated). Included right after `events.inc`; `clk_init` runs in kmain
 right after `evq_init` (§15). All code is near `.text`: it is called from
-the UI task's inner loop and, through `FARK` wrappers, from the Control
+the UI task's inner loop and from the Control
 Panel's far page (§31.5).
 
 **State (`.bss`), the single source of truth.** Broken-down time, because
@@ -6386,10 +6408,10 @@ the caller cannot know which rung answered.
 |--------|-----------|
 | `clk_init` | Boot: display settings to their defaults (24-hour, no seconds), fallback date, then the RTC probe. Preserves all registers. |
 | `clk_tick` | UI task only. Advances the clock from the `[ticks]` delta. Out: AL = the change mask above. Clobbers AX only. |
-| `clk_snap` | Copies the six fields to `clk_sn_*` under `pushf`/`cli`. Preserves all registers. `FARK`ed for §31.5. |
+| `clk_snap` | Copies the six fields to `clk_sn_*` under `pushf`/`cli`. Preserves all registers. Read by §31.5. |
 | `clk_fmt` | Calls `clk_snap`, then formats the bar's line into `clk_str` in the live form: `'Mmm DD YYYY  HH:MM'`, plus `':SS'` if `[clk_secs]`, and in 12-hour mode the hour drawn 1..12 **without a leading zero** and a trailing `' AM'`/`' PM'`. 18..24 glyphs; `clk_str` is 26 bytes. Out: SI = `clk_str`. Preserves everything else. |
-| `clk_fld_str` | In: AL = field 0..6 (month, day, year, hour, minute, second, meridiem). Out: SI = a NUL string for that field alone in `clk_fbuf` — `'Mmm'`, `'DD'`, `'YYYY'`, `'HH'`, `'MM'`, `'SS'`, `'AM'`/`'PM'`. Always the field's **full width, zero-padded** — unlike `clk_fmt`, because a field is a fixed-width editable cell whose highlight box must not change size under it; in 12-hour mode the hour reads `'12'`, `'01'`..`'11'`. Reads the last `clk_snap` and does **not** take one. Preserves everything else. `FARK`ed for §31.5. |
-| `clk_fld_adj` | In: AL = field 0..6, BL = +1 or −1. Steps that field with wrap (month 1..12, day 1..month length, year 1980..2099, hour 0..23, min/sec 0..59); field 6 flips the meridiem by ±12 hours, either sign. Then re-clamps the day to the new month length (31 Mar − 1 month = 28 Feb, never 31 Feb), zeroes `clk_acc` and re-samples `clk_last` so the new second starts from now, and sets `[clk_dirty]` + `[clk_barq]`. Preserves all registers. `FARK`ed for §31.5. |
+| `clk_fld_str` | In: AL = field 0..6 (month, day, year, hour, minute, second, meridiem). Out: SI = a NUL string for that field alone in `clk_fbuf` — `'Mmm'`, `'DD'`, `'YYYY'`, `'HH'`, `'MM'`, `'SS'`, `'AM'`/`'PM'`. Always the field's **full width, zero-padded** — unlike `clk_fmt`, because a field is a fixed-width editable cell whose highlight box must not change size under it; in 12-hour mode the hour reads `'12'`, `'01'`..`'11'`. Reads the last `clk_snap` and does **not** take one. Preserves everything else. Read by §31.5. |
+| `clk_fld_adj` | In: AL = field 0..6, BL = +1 or −1. Steps that field with wrap (month 1..12, day 1..month length, year 1980..2099, hour 0..23, min/sec 0..59); field 6 flips the meridiem by ±12 hours, either sign. Then re-clamps the day to the new month length (31 Mar − 1 month = 28 Feb, never 31 Feb), zeroes `clk_acc` and re-samples `clk_last` so the new second starts from now, and sets `[clk_dirty]` + `[clk_barq]`. Preserves all registers. Read by §31.5. |
 
 **The hour is always stored 0..23** and stepped 0..23 — 12-hour mode is a
 rendering of it, not a second representation. So `+` on an hour showing
@@ -6857,8 +6879,8 @@ Module `kernel/viddet.inc`, prefix `vid_`. It is `%include`d **before**
 `splash.inc` because the boot splash probes and sets the mode on its first
 tick, which means everything in it must be resident inside the first
 `SPL_RESIDENT` sectors and **all of its data must live in `.text`** — `.bss`
-is not cleared at that point and still has the `.fartext` blob on top of it
-(§15/§33). `[vid_mono]` is **not** `[bb_mono]`: the latter means "all four
+is not cleared at that point and holds whatever the machine left there
+(§15). `[vid_mono]` is **not** `[bb_mono]`: the latter means "all four
 back-buffer planes hold identical bytes" (§32) and the two must never be
 conflated.
 
@@ -6967,10 +6989,10 @@ path**, which is why the VGA output is bit-for-bit what it was before.
 **Both read their parameters through `CS`, not `DS`.** Two callers run with
 DS pointed elsewhere entirely: `bb_xfer`'s save path sets DS to the
 framebuffer segment for its `movsb`, and its restore path sets DS to the
-caller's buffer (`SAVE_SEG` for a menu's save-under). Reading the stride
-through DS there fetches framebuffer bytes as a scan-line step. CS is
-`KERNEL_SEG` for everything in `.text`, and `.fartext` reaches these only
-through the `.text` shims, so the override is always correct.
+caller's buffer (the menu's save-under claim). Reading the stride through DS
+there fetches framebuffer bytes as a scan-line step. CS is `KERNEL_SEG` for
+every byte of kernel code (§33 — there is no far code any more), so the
+override is always correct.
 
 **Invariant, with a build assertion:** the bank number must live in DI's own
 high bits, which requires a bank's rows never to reach into the next bank's

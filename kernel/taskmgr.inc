@@ -68,27 +68,38 @@ TMM_M2_Y1   equ 43              ; package-pool map frame top
 TMM_M2_Y2   equ 58              ; frame bottom (interior rows 44..57)
 TMM_HDR_Y   equ 62              ; "NAME    ADDR SIZE  CLM" header line
 
-; --- what the kernel reserves, in KB (SPEC.md 2/28) --------------------------
-; The two figures the RAM readout was missing, and the reason the audit found
-; it reporting 145K on a machine that was 224K committed. Both are compile-
-; time constants because both are reservations, not allocations: nothing else
-; can ever be given any of this memory, whether or not a byte of it is live.
-TM_KLOW_KB  equ ((KERNEL_SEG - FAR_SEG) * 16 + 1023) / 1024
-                                ; ALL of low memory: the far-code blob, the
-                                ; FAT snapshot, .lowbss and task 0's stack -
-                                ; the stack every built-in app runs on
-TM_KSEG_KB  equ (KERN_MAX + 1023) / 1024
-                                ; the kernel's own segment budget, headroom
-                                ; included: the pool starts at KERN_MAX, so
-                                ; the unused part is the kernel's and no one
-                                ; else's
+; --- what the kernel occupies, in KB (SPEC.md 2/28) --------------------------
+; Every one of these is a compile-time constant, and that is the point: the
+; kernel's footprint is fixed at build time down to the paragraph (SPEC.md 2),
+; so the RAM view can name each buffer without a single runtime check on the
+; drawing path. They are also exhaustive - between them they cover every byte
+; from KERNEL_SEG to the end of task 0's stack, which is the whole kernel.
+TM_KIMG_KB  equ (KTEXT_SIZE + KBSS_SIZE + 1023) / 1024
+                                ; code + read-only data + .bss scratch
+TM_KFAT_KB  equ (DSK_FAT_SECS * 512 + 1023) / 1024
+                                ; the mount-time FAT snapshot (SPEC.md 18)
+TM_KSTK_KB  equ ((MAX_TASKS-1) * SCH_STACK + 1023) / 1024
+                                ; the MAX_TASKS-1 background task stacks
+TM_K0_KB    equ (STK0_SIZE + 1023) / 1024
+                                ; task 0's - the UI task's, so every built-in
+                                ; app's and every window callback's
+TM_KDSK_KB  equ (KLOW_SIZE - (MAX_TASKS-1) * SCH_STACK + 1023) / 1024
+                                ; whatever else is in .lowbss: the directory
+                                ; cache, the icon cache and the sector buffer
+TM_KERN_KB  equ KERN_KB         ; ...and the span that holds all five
+TM_KBUF_KB  equ KBUF_KB         ; the four buffers alone - what the RAM bar
+                                ; draws in its own shade
 TM_POOL_KB0 equ PKG_SEG / 64    ; where the package pool starts, in KB
 TM_POOL_KB  equ PKG_PARA / 64   ; ...and how big it is
 TMM_ROW_Y   equ 74              ; first process row (same TM_ROW_H pitch)
-TMM_ROWS    equ INST_MAX + 3    ; System, the two headings, every instance -
-                                ; 15 x TM_ROW_H from TMM_ROW_Y is 239 of the
-                                ; 245-pixel content, which is what decides
-                                ; that free slots are not drawn at all
+TMM_ROWS    equ INST_MAX + 7    ; System, its four buffer rows, the two
+                                ; headings, every instance - 19 x TM_ROW_H
+                                ; from TMM_ROW_Y is 279 of the 281-pixel
+                                ; content, which is what decides both the
+                                ; template's height and that free slots are
+                                ; not drawn at all. tm_mrow_open clamps to
+                                ; the LIVE frame on top of this, for the
+                                ; screens where wm_fit shrinks the window
 
 ; -----------------------------------------------------------------------------
 ; tm_init - read total conventional RAM once (boot thread only)
@@ -139,7 +150,7 @@ tm_kinit:
     ret
 
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
-tm_tpl:     dw 250, 100, 200, 264, tm_ttl, tm_paint, 0, tm_click
+tm_tpl:     dw 250, 100, 200, 300, tm_ttl, tm_paint, 0, tm_click
 tm_ttl:     db 'Task Manager', 0
 tm_sname:   db 'TaskMgr', 0     ; KD_NAME: fits the 7-char NAME column
 
@@ -171,8 +182,29 @@ tm_s_phdr:  db 'Packages    ', 0 ; + used/max of the package pool
 tm_s_mfr:   db '   -    -', 0   ; the ADDR+SIZE pair a built-in has no answer
                                 ; for: it owns no region of its own
 tm_s_dash4: db '   -', 0        ; one empty KB column
-tm_s_sys0:  db '0600', 0        ; where the kernel's reservation starts:
-                                ; FAR_SEG, the bottom of low memory
+tm_s_dash5: db '    -', 0       ; ...and one with tm_kcol's leading space
+tm_s_sys0:  db '0600', 0        ; where the kernel starts: KERNEL_SEG, the
+                                ; first paragraph above the BIOS data area
+
+; The kernel's own buffers, one row each under System (SPEC.md 28). Every
+; figure beside them is a compile-time constant (TM_K*_KB above), so drawing
+; this list costs four string copies and no arithmetic at all - which is why
+; it can sit on the once-a-second refresh path.
+tm_s_bimg:  db '  Code+data', 0
+tm_s_bstk:  db '  Stacks', 0
+tm_s_bdsk:  db '  Disk bufs', 0
+tm_s_bfat:  db '  FAT snap', 0
+
+; The kernel-buffer texture for the RAM map (SPEC.md 28): 2-on-2-off
+; horizontal bars. The band is 14 rows tall and, on a 640KB machine, four
+; pixels wide - so a texture has to carry its signature VERTICALLY or it has
+; nowhere to show it, which rules out every vertical and diagonal hatch and
+; leaves this one. It reads as "reserved, and not code" against both the 50%
+; checker the rest of the kernel span uses and the solid black of the package
+; pool, and it survives the reduction to three inks (SPEC.md 39.4) where a
+; second colour would not.
+tm_pat_buf:
+    db 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00
 
 ; Slot patterns: 12 x 8 row bytes, pattern i = tm_pats + i*8, bit set =
 ; white (SPEC.md 5/28). Black-on-white hatch textures, none of them the
@@ -192,32 +224,28 @@ tm_pats:
     db 0x88, 0x00, 0x22, 0x00, 0x88, 0x00, 0x22, 0x00   ; 11: dense dots
 
 ; -----------------------------------------------------------------------------
-; Everything above stays in the kernel segment: tm_init and tm_kinit (both
-; self-contained, ~40 bytes) plus all the strings and the window template,
-; which far code reaches through DS (SPEC.md 33 rule 2). Everything below is
-; code and moves to .fartext.
+; This module used to split here: strings and the template above, code below
+; in .fartext, copied down to its own segment at boot so its ~3,600 bytes
+; would not count against the kernel's 64KB window. SPEC.md 33 records why
+; that was retired. It is all one .text module now.
 ;
-; Three entry points keep near names as shims: tm_paint and tm_click,
-; because tm_tpl and the wm/ui dispatchers want near pointers, and
-; tm_task, because task_spawn builds a frame with CS = KERNEL_SEG
-; (SPEC.md 8) and can only launch a near entry. tm_task never returns, so
+; tm_task is still worth a note: task_spawn builds a frame with CS =
+; KERNEL_SEG (SPEC.md 8) and can only launch a near entry. tm_task never
+; returns, so
 ; the shim's own `ret` is dead code and its `call far` return address is
 ; simply abandoned with the rest of the stack at task_exit.
 ; -----------------------------------------------------------------------------
-    FARSHIM tm_paint, tmf_paint
-    FARSHIM tm_click, tmf_click
-    FARSHIM tm_task,  tmf_task
 
-section .fartext
+section .text
 
 ; -----------------------------------------------------------------------------
-; tmf_task - the monitor task: spin-measure for TM_INT ticks, sample, redraw,
+; tm_task - the monitor task: spin-measure for TM_INT ticks, sample, redraw,
 ;           die on request
 ; in:  DX = instance index (the spawn argument, SPEC.md 8); never returns
 ; -----------------------------------------------------------------------------
-tmf_task:
+tm_task:
     mov al, dl
-    KCALL inst_ptr               ; DI = our instance record
+    call inst_ptr               ; DI = our instance record
     mov bp, di                  ; BP = record for life
 .interval:
     mov ax, [ticks]
@@ -227,7 +255,7 @@ tmf_task:
 .spin:
     add word [tm_cnt], 1        ; 32-bit spin counter
     adc word [tm_cnt+2], 0
-    KCALL task_yield
+    call task_yield
     mov ax, [ticks]
     sub ax, [tm_t0]             ; wrap-safe interval check
     cmp ax, TM_INT
@@ -238,15 +266,15 @@ tmf_task:
 
     call tm_sample              ; no lock: computes load, shares, RAM
 
-    KCALL gfx_lock
+    call gfx_lock
     mov bx, [tm_win]
     test word [bx+W_FLAGS], 2   ; re-check under the lock (SPEC.md 14)
     jz .skip
-    KCALL wm_obscured
+    call wm_obscured
     jc .skip
     call tm_update              ; incremental redraw, lock held
 .skip:
-    KCALL gfx_unlock
+    call gfx_unlock
     jmp .interval
 
 .die:
@@ -619,16 +647,12 @@ tm_sample:
     add ax, 1023
     mov cl, 10
     shr ax, cl
-    add ax, TM_KLOW_KB          ; + ALL of low memory (SPEC.md 2.1): the far
-                                ; blob, the FAT snapshot, .lowbss and task
-                                ; 0's stack. The kernel owns 0x00600..0x0FFFF
-                                ; entire, so all of it is spoken for - the
-                                ; old figure billed only .lowbss + .fartext
-                                ; and left 32KB of it looking free
-    add ax, TM_KSEG_KB          ; + the kernel's own segment budget, headroom
-                                ; included: the pool starts where it ends, so
-                                ; nothing else can be given the slack
-    KCALL mem_claimed_kb        ; + everything claimed out of the heap
+    add ax, TM_KERN_KB          ; + the WHOLE kernel (SPEC.md 2): image,
+                                ; scratch, FAT snapshot, disk buffers and
+                                ; every task stack are one contiguous span
+                                ; now, and there is no growth room in it to
+                                ; bill to anybody
+    call mem_claimed_kb        ; + everything claimed out of the heap
                                 ; (SPEC.md 50): the back buffer while it is
                                 ; armed, the menu save-under, each open Disk
                                 ; window's listing cache, and every package's
@@ -674,13 +698,13 @@ tm_sample:
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
-tmf_paint:
+tm_paint:
     call tm_draw_full
-    retf                        ; far body: reached through the tm_paint shim
+    ret
 
 ; -----------------------------------------------------------------------------
 ; tm_draw_full - full redraw of whichever view [tm_view] selects (also the
-;                tail of tmf_click's in-place view swap)
+;                tail of tm_click's in-place view swap)
 ; in:  SI = window ptr (gfx lock held)
 ; out: nothing
 ; clobbers: nothing (flags only)
@@ -723,7 +747,7 @@ tm_draw_perf:
     push di
 
     mov bx, si
-    KCALL wm_content             ; AX = content left, DX = content top
+    call wm_content             ; AX = content left, DX = content top
     mov [tm_cx], ax
     mov [tm_cy], dx
     call tm_ylim_set
@@ -739,7 +763,7 @@ tm_draw_perf:
     add cx, TM_RW
     mov dx, [tm_cy]
     add dx, TM_GF_Y2
-    KCALL gfx_frame
+    call gfx_frame
 
     xor bx, bx                  ; every column; tm_pos is the sweep gap
 .col:
@@ -765,7 +789,7 @@ tm_draw_perf:
     add cx, TM_RW
     mov dx, [tm_cy]
     add dx, TM_BAR_Y2
-    KCALL gfx_frame
+    call gfx_frame
     call tm_bar
 
     mov byte [gfx_color], CBLACK
@@ -774,7 +798,7 @@ tm_draw_perf:
     mov dx, [tm_cy]
     add dx, TM_HDR_Y
     mov si, tm_s_hdr
-    KCALL font_str
+    call font_str
     call tm_rows
 
     pop di
@@ -806,7 +830,7 @@ tm_update:
     push dx
 
     mov bx, [tm_win]
-    KCALL wm_content
+    call wm_content
     mov [tm_cx], ax
     mov [tm_cy], dx
     call tm_ylim_set
@@ -826,7 +850,7 @@ tm_update:
     ret
 
 ; -----------------------------------------------------------------------------
-; tmf_click - W_ONCLICK (far body via the tm_click shim): ANY content click
+; tm_click - W_ONCLICK (far body via the tm_click shim): ANY content click
 ;             toggles the view (SPEC.md 28). ui.inc only feeds clicks to the
 ;             front window, so a raising click never lands here. The lock is
 ;             already held: white-fill the whole content and run the new
@@ -835,7 +859,7 @@ tm_update:
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
-tmf_click:
+tm_click:
     push ax
     push bx
     push cx
@@ -843,21 +867,21 @@ tmf_click:
 
     xor byte [tm_view], 1
     mov bx, si
-    KCALL wm_content             ; AX = content left, DX = content top
+    call wm_content             ; AX = content left, DX = content top
     mov byte [gfx_color], CWHITE
     mov bx, dx                  ; content is 198x245 (SPEC.md 28)
     mov cx, ax
     add cx, 197
     mov dx, bx
     add dx, 244
-    KCALL gfx_fill
+    call gfx_fill
     call tm_draw_full           ; SI = window ptr still
 
     pop dx
     pop cx
     pop bx
     pop ax
-    retf                        ; far body: reached through the tm_click shim
+    ret
 
 ; -----------------------------------------------------------------------------
 ; tm_upd_mem - the memory view's periodic redraw (gfx lock held): everything
@@ -872,7 +896,7 @@ tm_upd_mem:
     push dx
 
     mov bx, [tm_win]
-    KCALL wm_content
+    call wm_content
     mov [tm_cx], ax
     mov [tm_cy], dx
     call tm_ylim_set
@@ -905,7 +929,7 @@ tm_draw_mem:
     push di
 
     mov bx, si
-    KCALL wm_content             ; AX = content left, DX = content top
+    call wm_content             ; AX = content left, DX = content top
     mov [tm_cx], ax
     mov [tm_cy], dx
     call tm_ylim_set
@@ -922,7 +946,7 @@ tm_draw_mem:
     add cx, TM_RW
     mov dx, [tm_cy]
     add dx, TMM_M1_Y2
-    KCALL gfx_frame
+    call gfx_frame
 
     mov ax, [tm_cx]             ; pool map frame (6,43)-(TM_RW,58)
     add ax, 6
@@ -932,14 +956,14 @@ tm_draw_mem:
     add cx, TM_RW
     mov dx, [tm_cy]
     add dx, TMM_M2_Y2
-    KCALL gfx_frame
+    call gfx_frame
 
     mov cx, [tm_cx]             ; header, at the rows' text x
     add cx, 16
     mov dx, [tm_cy]
     add dx, TMM_HDR_Y
     mov si, tm_s_mhdr
-    KCALL font_str
+    call font_str
 
     call tm_cap_heap
     call tm_map_ram
@@ -982,9 +1006,9 @@ tm_cap_heap:
     add cx, TM_RW
     mov dx, [tm_cy]
     add dx, TMM_CAP_Y + 7
-    KCALL gfx_fill
+    call gfx_fill
 
-    KCALL mem_total_kb          ; AX = claimed KB, BX = heap size KB
+    call mem_total_kb          ; AX = claimed KB, BX = heap size KB
     mov di, tm_str
     push bx
     push ax
@@ -1008,7 +1032,7 @@ tm_cap_heap:
     mov dx, [tm_cy]
     add dx, TMM_CAP_Y
     mov si, tm_str
-    KCALL font_str
+    call font_str
 
     pop di
     pop si
@@ -1044,18 +1068,30 @@ tm_map_ram:
     mov cx, TM_GW - 1
     mov bx, TMM_M1_Y1
     call tm_map_rect
-    KCALL gfx_fill
+    call gfx_fill
 
-    xor ax, ax                  ; [0, kernel segment end): the BIOS area, the
-    call tm_ramkb2x             ; far blob, the FAT snapshot, .lowbss, task
-    mov si, ax                  ; 0's stack and the kernel's own 45KB - all
-    mov ax, TM_KLOW_KB + TM_KSEG_KB - 1     ; of it reserved, none of it
-    call tm_ramkb2x             ; available to anything else
+    xor ax, ax                  ; [0, kernel end): the BIOS data area and the
+    call tm_ramkb2x             ; kernel entire - image, scratch, buffers and
+    mov si, ax                  ; stacks (SPEC.md 2). 50% gray: reserved, and
+    mov ax, TM_KERN_KB - 1      ; not available to anything else
+    call tm_ramkb2x
     mov cx, ax
     mov ax, si
     mov bx, TMM_M1_Y1
     call tm_map_rect
-    KCALL gfx_fill_gray
+    call gfx_fill_gray
+
+    mov ax, TM_KERN_KB - TM_KBUF_KB   ; ...and its BUFFERS, over the top of
+    call tm_ramkb2x                   ; that, in a texture of their own: the
+    mov si, ax                        ; FAT snapshot, the disk caches and
+    mov ax, TM_KERN_KB - 1            ; every task stack are the part of the
+    call tm_ramkb2x                   ; kernel that is scratch rather than
+    mov cx, ax                        ; program, and the part these figures
+    mov ax, si                        ; are steered by (docs/KERNEL-MEMORY.md)
+    mov bx, TMM_M1_Y1
+    call tm_map_rect
+    mov word [gfx_pat], tm_pat_buf
+    call gfx_fill_pat
 
     mov ax, TM_POOL_KB0         ; the package pool, black: it is not free
     call tm_ramkb2x             ; memory, it is the pool
@@ -1067,12 +1103,12 @@ tm_map_ram:
     mov bx, TMM_M1_Y1
     call tm_map_rect
     mov byte [gfx_color], CBLACK
-    KCALL gfx_fill
+    call gfx_fill
 
     xor si, si                  ; every live claim, at its real address
 .claim:
     mov ax, si
-    KCALL mem_claim_get         ; out CF=1 = free record; DX = seg, CX = paras
+    call mem_claim_get         ; out CF=1 = free record; DX = seg, CX = paras
     jc .cnext
     push si
     mov ax, dx                  ; segment -> KB
@@ -1102,7 +1138,7 @@ tm_map_ram:
     push si
     mov bx, TMM_M1_Y1
     call tm_map_rect
-    KCALL gfx_fill_gray
+    call gfx_fill_gray
     pop si
 .cnext:
     inc si
@@ -1139,7 +1175,7 @@ tm_map_pool:
     mov cx, TM_GW - 1
     mov bx, TMM_M2_Y1
     call tm_map_rect
-    KCALL gfx_fill
+    call gfx_fill
 
     xor si, si                  ; SI = instance slot
 .slot:
@@ -1168,7 +1204,7 @@ tm_map_pool:
     mov [gfx_pat], bx
     mov bx, TMM_M2_Y1
     call tm_map_rect
-    KCALL gfx_fill_pat
+    call gfx_fill_pat
 .next:
     inc si
     cmp si, INST_MAX
@@ -1292,16 +1328,35 @@ tm_rows_mem:
     pop si
     mov byte [di], ' '
     inc di
-    mov ax, TM_KLOW_KB + TM_KSEG_KB     ; low memory + the kernel's own 45KB
+    mov ax, TM_KERN_KB          ; the kernel, whole (SPEC.md 2)
     call tm_kcol
     xor ax, ax
-    KCALL mem_kernel_kb         ; AX += the kernel's own heap claims, KB
+    call mem_kernel_kb         ; AX += the kernel's own heap claims, KB
     call tm_kcol
     call tm_sq_frame            ; solid black legend square
     call tm_sq_int
     mov byte [gfx_color], CBLACK
-    KCALL gfx_fill
+    call gfx_fill
     call tm_mrow_close
+
+    ; --- the kernel's own buffers, one row each -------------------------------
+    ; Indented under System, and between them they account for every byte of
+    ; it: image + scratch, the task stacks, the disk buffers and the FAT
+    ; snapshot are the whole of KERN_SIZE (SPEC.md 2). All four figures are
+    ; assembly-time constants, so this is four string copies on a path that
+    ; runs once a second.
+    mov bx, tm_s_bimg
+    mov cx, TM_KIMG_KB
+    call tm_buf_row
+    mov bx, tm_s_bstk
+    mov cx, TM_KSTK_KB + TM_K0_KB
+    call tm_buf_row
+    mov bx, tm_s_bdsk
+    mov cx, TM_KDSK_KB
+    call tm_buf_row
+    mov bx, tm_s_bfat
+    mov cx, TM_KFAT_KB
+    call tm_buf_row
 
     ; --- the Builtins heading, then every live built-in -----------------------
     call tm_mrow_open
@@ -1309,17 +1364,6 @@ tm_rows_mem:
     mov si, tm_s_bhdr
     call tm_copy
     pop si
-    mov ax, kernel_bss_end      ; used: the kernel's text + bss, in KB
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl
-    call tm_put3
-    mov byte [di], '/'
-    inc di
-    mov ax, TM_KSEG_KB          ; ...of the segment they all live in
-    call tm_put3
-    mov byte [di], 'K'
-    inc di
     call tm_mrow_close
 
     xor si, si
@@ -1447,7 +1491,7 @@ tm_inst_row:
     mov [gfx_pat], si
     pop si
     call tm_sq_int
-    KCALL gfx_fill_pat
+    call gfx_fill_pat
     jmp short .claim
 .noreg:                         ; a built-in: it owns no region, and says so
     push si
@@ -1482,8 +1526,60 @@ tm_inst_claim:
     shl bx, 1
     mov bx, [tm_ispt+bx]        ; the package's segment IS its owner word
 .have:
-    KCALL mem_owned_kb          ; in BX; out AX
+    call mem_owned_kb          ; in BX; out AX
     pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_buf_row - one indented kernel-buffer row: name and size
+; in:  BX = the buffer's NUL name, CX = its size in KB
+; out: nothing (all registers preserved)
+;
+; The name is given the ADDR column's width as well as its own, because a
+; buffer's segment is an implementation detail and its NAME is the thing worth
+; twelve characters. SIZE and CLM land exactly where row 0 puts them: the
+; System row above pads to 8, writes four ADDR characters and then two
+; five-wide KB columns, so padding to 12 and writing the same two columns
+; keeps every figure in this view in one pair of vertical rules.
+;
+; The CLM column is a dash on purpose. A buffer is not a claim - it is part of
+; the kernel, present whether or not anything is running - and the whole point
+; of these four rows is that the System figure above them is not a lump.
+; -----------------------------------------------------------------------------
+tm_buf_row:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push cx                     ; the size, banked across tm_mrow_open
+    call tm_mrow_open
+    pop ax
+    push ax
+    mov si, bx
+    call tm_copy                ; the name carries its own two-space indent
+    mov cx, tm_str + 12
+    sub cx, di
+    jle .size
+.pad:
+    mov byte [di], ' '
+    inc di
+    loop .pad
+.size:
+    pop ax
+    call tm_kcol
+    push si
+    mov si, tm_s_dash5          ; CLM: a buffer is not a claim
+    call tm_copy
+    pop si
+    call tm_mrow_close
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1504,6 +1600,17 @@ tm_mrow_open:
     add ax, TMM_ROW_Y
     add ax, [tm_cy]
     mov [tm_rowy], ax
+    mov byte [tm_mfit], 1       ; does this row's 8px band still fall inside
+    cmp ax, [tm_ylim]           ; the frame? Nothing in the kernel clips a
+    jbe .fits                   ; draw to a WINDOW (tm_ylim_set), and on a
+    mov byte [tm_mfit], 0       ; 200-row CGA this window is clamped to 156px
+    pop dx                      ; - unbounded, the tail of the list would be
+    pop cx                      ; lettered over the dock strip once a second
+    pop bx
+    pop ax
+    mov di, tm_str
+    ret
+.fits:
     mov byte [gfx_color], CWHITE
     mov bx, ax
     mov dx, ax
@@ -1512,7 +1619,7 @@ tm_mrow_open:
     add ax, 6
     mov cx, [tm_cx]
     add cx, TM_RW
-    KCALL gfx_fill
+    call gfx_fill
     pop dx
     pop cx
     pop bx
@@ -1531,13 +1638,16 @@ tm_mrow_close:
     push dx
     push si
     push di
+    cmp byte [tm_mfit], 0       ; off the bottom: the row was never opened
+    je .out
     mov byte [di], 0
     mov byte [gfx_color], CBLACK
     mov cx, [tm_cx]
     add cx, 16
     mov dx, [tm_rowy]
     mov si, tm_str
-    KCALL font_str
+    call font_str
+.out:
     inc word [tm_mrow]
     pop di
     pop si
@@ -1591,7 +1701,7 @@ tm_sq_frame:
     add cx, 7
     mov dx, bx
     add dx, 7
-    KCALL gfx_frame
+    call gfx_frame
     pop dx
     pop cx
     pop bx
@@ -1676,7 +1786,7 @@ tm_col:
     mov dx, cx
     add dx, TM_GF_Y2 - 1
     sub dx, si
-    KCALL gfx_vline
+    call gfx_vline
 .black:
     or si, si                   ; black: rows 55-v..54 (skip when v=0)
     jz .done
@@ -1686,7 +1796,7 @@ tm_col:
     sub bx, si
     mov dx, cx
     add dx, TM_GF_Y2 - 1
-    KCALL gfx_vline
+    call gfx_vline
 .done:
     pop si
     pop dx
@@ -1714,7 +1824,7 @@ tm_gapcol:
     add bx, TM_GF_Y1 + 1
     add dx, TM_GF_Y2 - 1
     mov byte [gfx_color], CWHITE
-    KCALL gfx_vline
+    call gfx_vline
 
     pop dx
     pop bx
@@ -1748,7 +1858,7 @@ tm_txt_cpu:
     add cx, TM_RW
     mov dx, [tm_cy]
     add dx, TM_CPU_Y + 7
-    KCALL gfx_fill
+    call gfx_fill
 
     mov di, tm_str
     mov si, tm_s_cpu
@@ -1760,7 +1870,7 @@ tm_txt_cpu:
     mov byte [di], ' '
     inc di
     mov si, tm_s_pre            ; chars 9..19: the live scheduler mode
-    KCALL sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
+    call sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
     or al, al
     jz .mode
     mov si, tm_s_coop
@@ -1774,7 +1884,7 @@ tm_txt_cpu:
     mov dx, [tm_cy]
     add dx, TM_CPU_Y
     mov si, tm_str
-    KCALL font_str
+    call font_str
 
     pop di
     pop si
@@ -1818,7 +1928,7 @@ tm_txt_ram_y:
     mov dx, [tm_cy]
     add dx, [tm_liny]
     add dx, 7
-    KCALL gfx_fill
+    call gfx_fill
 
     mov di, tm_str
     mov si, tm_s_ram
@@ -1841,7 +1951,7 @@ tm_txt_ram_y:
     mov dx, [tm_cy]
     add dx, [tm_liny]
     mov si, tm_str
-    KCALL font_str
+    call font_str
 
     pop di
     pop si
@@ -1877,7 +1987,7 @@ tm_bar:
     dec cx                      ; x2 = 7 + barw - 1
     mov dx, [tm_cy]
     add dx, TM_BAR_Y2 - 1
-    KCALL gfx_fill
+    call gfx_fill
 .rest:
     cmp si, TM_GW
     jae .done
@@ -1891,7 +2001,7 @@ tm_bar:
     add cx, TM_RW - 1
     mov dx, [tm_cy]
     add dx, TM_BAR_Y2 - 1
-    KCALL gfx_fill
+    call gfx_fill
 .done:
     pop si
     pop dx
@@ -1995,7 +2105,7 @@ tm_rows:
     add ax, 6
     mov cx, [tm_cx]
     add cx, TM_RW
-    KCALL gfx_fill
+    call gfx_fill
 
     ; --- build "NAME     ST  nnn%mmmK" in tm_str -----------------------------
     mov di, tm_str
@@ -2019,12 +2129,10 @@ tm_rows:
     mov bx, si
     mov al, [tm_pct+bx]
     call tm_cpucol
-    mov ax, TM_KLOW_KB + TM_KSEG_KB     ; the kernel's fixed reservation:
-                                ; low memory entire, and its own segment
-                                ; budget (SPEC.md 2/28) - the same two terms
-                                ; the RAM line above uses, so the rows still
-                                ; sum to the bar
-    KCALL mem_kernel_kb         ; + the kernel's OWN heap claims (SPEC.md
+    mov ax, TM_KERN_KB          ; the kernel's footprint, whole (SPEC.md 2)
+                                ; - the same term the RAM line above uses, so
+                                ; the rows still sum to the bar
+    call mem_kernel_kb         ; + the kernel's OWN heap claims (SPEC.md
                                 ; 42.2): the save-under and the back buffer.
                                 ; A package's claim belongs to its own row.
     call tm_memcol_kb
@@ -2125,7 +2233,7 @@ tm_rows:
     mov dx, [tm_rowy]
     push si
     mov si, tm_str
-    KCALL font_str
+    call font_str
     pop si
 
     inc si
@@ -2395,6 +2503,7 @@ tm_iknd:    resb INST_MAX       ; I_KIND snapshot: the Builtins/Packages split
                                 ; column needs to know which owner word an
                                 ; instance's claims carry (SPEC.md 50.2)
 tm_mrow:    resw 1              ; the memory view's row cursor
+tm_mfit:    resb 1              ; ...and whether the row it names is on screen
 tm_view:    resb 1              ; 0 = performance view, 1 = memory view
 tm_inm:     resb INST_MAX * 16  ; I_NAME snapshots
 tm_rcyc:    resw TM_ROWS * 2    ; per-ROW cycles: task + instance, dword

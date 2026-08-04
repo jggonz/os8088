@@ -3,12 +3,19 @@
 ;
 ; The BIOS loads this single 512-byte sector to 0000:7C00 and jumps to it with
 ; DL set to the drive we came from. Our only job is to pull the kernel off the
-; floppy into 0800:0000 and hand control over. The loading screen itself lives
+; floppy into 0060:0000 and hand control over. The loading screen itself lives
 ; in the kernel (kernel/splash.inc, SPEC.md 15): once its opening SPL_RESIDENT
-; sectors are aboard we far-call its pinned 0800:0008 entry after every
+; sectors are aboard we far-call its pinned 0060:0008 entry after every
 ; further sector, and it draws the welcome dialog, progress bar and spinning
 ; 8088. Strictly event-driven - a completed read is the only thing that ever
 ; advances it, so the animation costs no load time.
+;
+; **We move out of the way first.** The kernel lands at linear 0x00600 and is
+; up to 64KB (SPEC.md 2), so it covers 0x7C00 - this sector, and the stack
+; below it - long before the last sector arrives. `start` therefore copies
+; these 512 bytes to BOOT_RELOC:7C00 and jumps there. The copy keeps the SAME
+; OFFSET, so every label in this file still resolves at org 0x7C00 and the
+; only thing that changes is which segment the segment registers name.
 ;
 ; Assembled with -DKERNEL_SECTORS=<n> by the Makefile, which measures the
 ; built kernel so we never read more sectors than exist.
@@ -31,14 +38,15 @@ org 0x7C00
 %define HEADS 2
 %endif
 
-KERNEL_SEG   equ 0x0800         ; kernel lands at linear 0x08000 - the first
-                                ; round paragraph above THIS sector, which the
-                                ; BIOS put at 0x7C00 and which keeps running
-                                ; (splash far calls, below) while the kernel
-                                ; arrives. Must match kernel/kernel.asm, whose
-                                ; guard 8 asserts the 0x07E0 floor
-STACK_TOP    equ 0x7C00         ; stack grows down, away from our code - and
-                                ; away from the kernel, which lands above us
+KERNEL_SEG   equ 0x0060         ; kernel lands at linear 0x00600, the first
+                                ; paragraph above the BIOS data area. Mirrored
+                                ; in kernel/kernel.asm, which asserts that the
+                                ; kernel ends clear of our relocated stack
+BOOT_RELOC   equ 0x0940         ; 0x0940*16 + 0x7C00 = linear 0x11000: where
+                                ; we copy ourselves, above anything the kernel
+                                ; can reach. Mirrored in kernel/kernel.asm
+STACK_TOP    equ 0x7C00         ; stack grows down from our own base, so it
+                                ; relocates with us and stays out of the way
 SPLASH_OFF   equ 0x0008         ; the kernel's boot splash far entry (SPEC.md 15)
 SPL_RESIDENT equ 6              ; splash is fully aboard after this many
                                 ; sectors - must match kernel/splash.inc
@@ -50,6 +58,24 @@ start:
     mov ds, ax
     mov ss, ax
     mov sp, STACK_TOP
+
+    ; --- relocate: same offset, new segment ---------------------------------
+    ; Nothing above this point touches memory through a label, so it runs
+    ; correctly at 0000:7C00 where the BIOS put it. After the far jump CS is
+    ; BOOT_RELOC and every org-0x7C00 label below is correct again.
+    mov si, STACK_TOP
+    mov di, STACK_TOP
+    mov ax, BOOT_RELOC
+    mov es, ax
+    mov cx, 256
+    cld
+    rep movsw
+    jmp BOOT_RELOC:.moved
+.moved:
+    mov ax, cs
+    mov ds, ax
+    mov ss, ax                  ; the stack comes with us: same offset, so it
+    mov sp, STACK_TOP           ; grows down from linear 0x11000
     sti
     cld
 
@@ -74,7 +100,9 @@ start:
 
     ; --- copy KERNEL_SECTORS sectors, starting at LBA 1, to KERNEL_SEG:0000 --
     ; The destination segment advances one sector (0x20 paragraphs) per read
-    ; with BX held at zero, so the pointer can never wrap inside a segment.
+    ; with BX held at zero, so the pointer can never wrap inside a segment,
+    ; and every transfer is 512 bytes at a 512-aligned linear address - which
+    ; is what keeps a single read from ever straddling a 64KB DMA boundary.
     mov word [lba], 1
     mov cx, KERNEL_SECTORS
 

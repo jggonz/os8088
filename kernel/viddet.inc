@@ -29,7 +29,7 @@
 ; kernel is still coming off the floppy. Everything here therefore obeys the
 ; splash's rules: it must be resident inside the first SPL_RESIDENT sectors,
 ; and ALL its data lives in .text - never .bss, which is not yet cleared and
-; still has the .fartext blob sitting on it (SPEC.md 15/33).
+; holds whatever the machine left there (SPEC.md 15).
 ; =============================================================================
 
 ; A build-time override for the probe, so the fallbacks can be exercised on
@@ -492,7 +492,7 @@ gfx_rowbase:
 ; its movsb, and its restore path sets DS to the caller's buffer (SAVE_SEG
 ; for a menu's save-under). Reading the step through DS there fetches
 ; framebuffer bytes as a scan-line stride. CS is KERNEL_SEG for everything
-; in .text, and .fartext reaches this only through the .text shims, so the
+; in .text - every byte of kernel code, since SPEC.md 33 - so the
 ; override is always right and costs one byte per reference.
 ; -----------------------------------------------------------------------------
 gfx_nextrow:

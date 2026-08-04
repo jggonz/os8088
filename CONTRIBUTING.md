@@ -174,7 +174,7 @@ has read a lot of modern x86:
   no `pusha`/`popa`, no `push imm`, no `shl reg, imm` other than 1 (use CL), no
   `movzx`, no 32-bit registers. If the build fails with a warning-as-error
   about the CPU level, the agent reached for a 186+ instruction.
-- **Near model.** CS = DS = `KERNEL_SEG` (0x0800) for the kernel and every
+- **Near model.** CS = DS = `KERNEL_SEG` (0x0060) for the kernel and every
   task; **SS = `LOW_SEG`**, because the task stacks live outside the kernel
   segment — so `[bp+disp]` addresses SS, and a kernel pointer held in BP needs
   an explicit `ds:` override. Kernel calls are near; a loaded package owns its

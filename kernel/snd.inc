@@ -878,16 +878,15 @@ osapi_snd_play:
     ret
 
 ; =============================================================================
-; The PWM rescale-table builder (SPEC.md 34.4): cold per-clip work, so it
-; lives in .fartext behind a FARSHIM (SPEC.md 33/34.7). Far code keeps
-; DS = KERNEL_SEG, so it writes the .bss table directly.
+; The PWM rescale-table builder (SPEC.md 34.4): cold per-clip work. It used
+; to live in .fartext behind a shim; SPEC.md 33 records why that mechanism
+; was retired, and it is an ordinary near proc now.
 ; =============================================================================
-    FARSHIM snd_xlat_build, snd_f_xlat
 
-section .fartext
+section .text
 
 ; -----------------------------------------------------------------------------
-; snd_f_xlat - build the 256-byte PWM rescale table (far body)
+; snd_xlat_build - build the 256-byte PWM rescale table (far body)
 ;
 ; in:       AX = N, the clip divisor (74..255, validated by the caller)
 ; out:      snd_xlat[s] = 1 + s*(N-2)/255 for s = 0..255
@@ -900,7 +899,7 @@ section .fartext
 ; per-sample mul scaling is rejected there, the table saves ~70
 ; cycles/sample).
 ; -----------------------------------------------------------------------------
-snd_f_xlat:
+snd_xlat_build:
     push ax
     push bx
     push cx
@@ -928,7 +927,7 @@ snd_f_xlat:
     pop cx
     pop bx
     pop ax
-    retf                        ; far body: reached through the shim
+    ret
 
 section .text
 

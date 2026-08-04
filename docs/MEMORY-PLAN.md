@@ -3,8 +3,10 @@
 **Status board for the work that buys the kernel room to grow.** SPEC.md is
 the binding contract for what the kernel *is*; this document is the standing
 plan for how it gets more space, why each step is shaped the way it is, and
-what is deliberately still on the shelf. Steps A through E have landed. Read
-this before assuming the kernel is out of room again.
+what is deliberately still on the shelf. Steps A through F have landed. Read
+this before assuming the kernel is out of room again — and read
+`docs/KERNEL-MEMORY.md`, which is the standing account of where the kernel's
+64KB actually goes; this document is the history of how it got there.
 
 ## The constraint
 
@@ -269,6 +271,63 @@ sector to spare: 360KB = 2, 720KB = 3, 1.2MB = 7, 1.44MB = 9.
 **What to redo before trusting a smaller number.** Guard 3 only catches
 `.lowbss` crowding task 0; nothing catches a task stack that outgrows its own
 512-byte slice. Re-run the fill probe.
+
+## Step F — the kernel is 64KB, buffers and all ✅ done
+
+Steps A–E steered by the kernel's 64KB **window** — what CS/DS can address —
+and treated everything outside it as free. Step F changes what is being
+measured: the kernel's whole **footprint**, code and scratch alike, against
+64KB of physical memory. `docs/KERNEL-MEMORY.md` is the maintained account of
+it; this is what the change was.
+
+Three things fell out of that switch, and the first is the interesting one.
+
+**`.fartext` inverted.** Step B moved cold modules out of the window into a
+segment of their own — 5,455 bytes of code, and a 10,752-byte reservation to
+land it in. That was a clear win against the window and a 5,297-byte **loss**
+against the footprint. It is retired: the modules are ordinary `.text`, and
+the shims went with it — three `FARSHIM` stubs, twenty-seven `FARK` wrappers,
+`far_init`, and two bytes on each of 91 `KCALL` sites, which is why the image
+grew by less than the blob it absorbed.
+
+**"Whatever is left" was hiding the savings.** Step E measured the buffers and
+shrank them, and the machine came out exactly the same size. The reason was
+`STK0_TOP equ LOW_LIMIT - 2`: task 0's stack was defined as the gap between
+the top of `.lowbss` and the kernel segment, so every byte saved below it
+simply made that gap bigger. The FAT snapshot gave up 7KB and task 0's stack
+grew by 7KB. `STK0_SIZE` is a named constant now (1,024, against a measured
+246), and that one edit is what turned step E's arithmetic into memory.
+
+**The boot sector was the floor, so it moved.** With the kernel at 0x00600 and
+up to 64KB long, its landing zone covers 0x7C00 — where the BIOS puts the
+sector that is still reading it. The sector now copies itself to linear
+0x11000 and far-jumps there **keeping its own offset**, so every `org 0x7C00`
+label still resolves and only the segment registers change.
+
+| region | step E | step F |
+|---|---:|---:|
+| `.fartext` reserve | 10,752 | — |
+| FAT snapshot | 5,120 | 4,608 |
+| `.lowbss` | 9,216 | 9,216 |
+| task 0's stack | 6,142 | 1,024 |
+| image + `.bss` | 44,549 | 50,176 |
+| **kernel footprint** | **75,779** | **65,024** |
+
+`KERN_MAX` is retired with the rest: a fixed ceiling with slack under it is
+memory nothing can use. Every base is derived from the measured sizes, so the
+package pool starts where this build's kernel ends and the heap after the
+pool — and on the 639K test machine the heap went from 503K to 515K.
+
+**One bug came with it, and it is worth remembering.** Making the bases
+derived made them arbitrary, and three of them stopped being 512-byte
+aligned. int 13h moves one sector per call, which bounds a transfer to 512
+bytes but does *not* stop one straddling a 64KB physical boundary — only
+starting 512-aligned does. Every base here is an int 13h target, so the
+symptom was a **"Disk error" on any save large enough to reach the next 64KB
+boundary**: Paint's 63KB BMP hit it on the first try, a Note Pad file never
+would. `KIMG_PARA` rounds the image to a whole 512 bytes now and guard 6
+asserts the whole ladder. It had held by luck, because every base used to be
+a round constant.
 
 ## Rejected
 

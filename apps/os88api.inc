@@ -26,12 +26,12 @@
 ; from the os88_image_end label that OS88_IMAGE_END defines.
 ;
 ; Packages run in the kernel's near model: CS = DS = KERNEL_SEG, but
-; SS = LOW_SEG (0x0800) - every task stack lives OUTSIDE the kernel segment,
-; so SS != DS and `[bp+disp]` addresses SS, not your data. A pointer held in
-; BP needs an explicit `ds:` override. That has always been true inside a
-; callback (you run on the UI task's stack) and matters more now that a
-; package can own a worker task of its own (OSAPI_TASK_SPAWN below), whose
-; 1536-byte stack is likewise in LOW_SEG.
+; SS = LOW_SEG - every task stack lives OUTSIDE the kernel segment (just
+; ABOVE it since SPEC.md 2), so SS != DS and `[bp+disp]` addresses SS, not
+; your data. A pointer held in BP needs an explicit `ds:` override. That has
+; always been true inside a callback (you run on the UI task's stack) and
+; matters more now that a package can own a worker task of its own
+; (OSAPI_TASK_SPAWN below), whose 512-byte stack is likewise in LOW_SEG.
 ;
 ; A package is assembled at org 0 and OWNS A SEGMENT (SPEC.md 20.1): the
 ; loader puts it on a paragraph boundary and hands it its own CS = DS, so
@@ -60,7 +60,7 @@
 ; Your image is linked at org 0 and loaded at a paragraph boundary, so it is
 ; position-independent: there are no relocations, and two instances of one
 ; package differ only in the segment they run in.
-KERNEL_SEG   equ 0x0800     ; where the kernel is, and what ES holds on entry.
+KERNEL_SEG   equ 0x0060     ; where the kernel is, and what ES holds on entry.
                             ; It is baked into every OSAPI_* far call, so a
                             ; package built against a different value calls
                             ; into empty memory: rebuild EVERY .o88 (and the

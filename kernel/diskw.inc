@@ -90,9 +90,9 @@ dskw_syms:  db '$', '%', 0x27, '-', '_', '@', '~', 0x60
 ;
 ; It lives HERE, in .text, and not in .bss - the same rule, and the same
 ; hard-won reason, as [dsk_keepcwd] in disk.inc. -f bin gives .bss no image
-; bytes, and the .fartext blob is copied out from ON TOP of .bss at boot
-; (SPEC.md 33), so an uninitialised .bss byte reads as leftover far code:
-; reliably NON-ZERO. In .bss this byte made dskw_commit stamp attribute 0x10
+; bytes and nothing zeroes it, so an uninitialised .bss byte reads back as
+; whatever the machine left there - reliably NON-ZERO on the hardware this
+; was found on. In .bss this byte made dskw_commit stamp attribute 0x10
 ; on every file the OS ever created - which every reader then refused as
 ; FERR_PROT (a directory is protected), so nothing could be read back or
 ; deleted, and every chain those writes allocated leaked. It is exactly the

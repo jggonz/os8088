@@ -234,41 +234,13 @@ CPS_B1Y2  equ CPS_R1Y + CP_GW - 1       ; 47: route row 1 bottom
 CPS_CBY2  equ CPS_CBY + CP_GW - 1       ; 63: checkbox band bottom
 
 ; -----------------------------------------------------------------------------
-; Everything above this line is DATA and stays in the kernel segment, because
-; far code still reads it through DS (SPEC.md 33 rule 2). Everything below is
-; code and lives in .fartext, outside the kernel's 64KB window. The two entry
-; points the kernel dispatches to - the window template's paint and onclick
-; procs - keep their near names here as 6-byte shims, so instance.inc's kind
-; table and wm's `call [bx+W_PAINT]` are unchanged.
-;
-; Note that cp_items (above) holds .fartext offsets in its paint/click words.
-; That is legal because the only code that calls through them, cp_page and
-; cpf_onclick, is itself far and therefore runs with CS = FAR_SEG
-; (SPEC.md 33 rule 5).
-; -----------------------------------------------------------------------------
-    FARSHIM cp_paint,   cpf_paint
-    FARSHIM cp_onclick, cpf_onclick
-    FARSHIM cp_tick,    cpf_tick    ; the once-a-second Date/Time refresh,
-                                    ; called by ui_task step 4 (SPEC 31.5)
-
-; -----------------------------------------------------------------------------
-; cp_tick_due - is a live Date/Time page on screen? (SPEC.md 31.5)
-;
-; in:  nothing; NO gfx lock held
-; out: CF = 1 if the Control Panel is live, visible and showing that page
-; clobbers: nothing else
-;
-; The gate ui_task consults BEFORE taking the gfx lock (SPEC.md 13 step 4):
-; with the menu bar's seconds hidden, an open Date/Time page is the only
-; thing that still wants a per-second redraw, and taking the lock to find
-; that out would blink the cursor every second - the very flicker the
-; setting removes.
-;
-; Near code, not far: it runs every second and is a dozen instructions (the
-; tm_init precedent, SPEC.md 33). It reads the instance table with no lock
-; held, which is safe because only the UI task allocates or frees a
-; task-less instance and this IS the UI task; a stale answer costs one
-; wasted lock, and cp_tick re-checks everything under it anyway.
+; Everything above this line is DATA and everything below is code, and both
+; are ordinary .text in the kernel's own segment. This module used to live in
+; .fartext, copied down to a segment of its own at boot so its ~1,800 bytes
+; would not count against the kernel's 64KB window; SPEC.md 33 records why
+; that was retired - the mechanism reserved 10,752 bytes of low memory to
+; hold a 5,455-byte blob, so it cost more RAM than it saved as soon as the
+; whole footprint became the number being steered by.
 ; -----------------------------------------------------------------------------
 cp_tick_due:
     push ax
@@ -292,10 +264,10 @@ cp_tick_due:
     pop ax
     ret
 
-section .fartext
+section .text
 
 ; -----------------------------------------------------------------------------
-; cpf_paint - W_PAINT for the Control Panel window (far body of cp_paint)
+; cp_paint - W_PAINT for the Control Panel window (far body of cp_paint)
 ;
 ; in:  SI = window ptr (content already white-filled, gfx lock held)
 ; out: nothing
@@ -305,7 +277,7 @@ section .fartext
 ; derived from the live window rect, never a screen constant - and every
 ; helper below takes it in the same pair.
 ; -----------------------------------------------------------------------------
-cpf_paint:
+cp_paint:
     push ax
     push bx
     push cx
@@ -315,7 +287,7 @@ cpf_paint:
     push bp
 
     mov bx, si                  ; wm_content takes the window in BX
-    KCALL wm_content             ; AX = content left, DX = content top
+    call wm_content             ; AX = content left, DX = content top
     mov di, ax                  ; DI = content left \ the panel's origin
     mov bp, dx                  ; BP = content top  /
 
@@ -330,10 +302,10 @@ cpf_paint:
     pop cx
     pop bx
     pop ax
-    retf                        ; far body: reached through the cp_paint shim
+    ret
 
 ; -----------------------------------------------------------------------------
-; cpf_onclick - W_ONCLICK for the Control Panel window (far body)
+; cp_onclick - W_ONCLICK for the Control Panel window (far body)
 ;
 ; in:  CX = x, DX = y (ABSOLUTE screen coords), SI = window ptr
 ;      (gfx lock held by the caller, call already billed to the instance)
@@ -351,7 +323,7 @@ cpf_paint:
 ; wm_paint_all here (that would deadlock or recurse) - a page that needs
 ; other windows repainted posts a deferred flag instead (SPEC.md 31.2).
 ; -----------------------------------------------------------------------------
-cpf_onclick:
+cp_onclick:
     push ax
     push bx
     push cx
@@ -362,7 +334,7 @@ cpf_onclick:
 
     mov bx, si                  ; wm_content takes the window in BX
     mov si, dx                  ; SI = click y; the window ptr is done with
-    KCALL wm_content             ; AX = content left, DX = content top
+    call wm_content             ; AX = content left, DX = content top
     mov di, ax                  ; DI = content left \ same origin pair as
     mov bp, dx                  ; BP = content top  / cp_paint's
     sub cx, di                  ; CX = content-relative click x
@@ -396,7 +368,7 @@ cpf_onclick:
     pop cx
     pop bx
     pop ax
-    retf                        ; far body: reached through the cp_onclick shim
+    ret
 
 ; -----------------------------------------------------------------------------
 ; cp_entry - item index -> item record
@@ -478,7 +450,7 @@ cp_list:
     add cx, CP_DIVX - 1
     mov dx, bp
     add dx, CP_CH - 1
-    KCALL gfx_fill
+    call gfx_fill
 
     mov dx, bp
     add dx, CP_I0Y              ; DX = row 0 top, screen y
@@ -501,7 +473,7 @@ cp_list:
     add cx, CP_IBX2
     mov bx, dx                  ; y1 = row top
     add dx, CP_IBH - 1          ; y2
-    KCALL gfx_fill
+    call gfx_fill
     pop dx
     pop cx
     pop bx
@@ -516,7 +488,7 @@ cp_list:
     add cx, CP_IX
     push dx
     add dx, CP_ITDY
-    KCALL font_str
+    call font_str
     pop dx
 
     add dx, CP_IROWH
@@ -549,7 +521,7 @@ cp_divider:
     mov bx, bp
     mov dx, bp
     add dx, CP_CH - 1
-    KCALL gfx_vline              ; in AX = x, BX = y1, DX = y2
+    call gfx_vline              ; in AX = x, BX = y1, DX = y2
     pop dx
     pop bx
     pop ax
@@ -581,7 +553,7 @@ cp_page:
     add cx, CP_CW - 1
     mov dx, bp
     add dx, CP_CH - 1
-    KCALL gfx_fill
+    call gfx_fill
 
     mov al, [cp_sel]
     call cp_entry               ; SI = the selected item's record
@@ -621,28 +593,28 @@ cp_sched_paint:
     add cx, CP_PMX
     mov dx, bp
     add dx, CP_PHY
-    KCALL font_str
+    call font_str
 
     mov si, cp_s_pre            ; row 0 label
     mov cx, di
     add cx, CP_PLX
     mov dx, bp
     add dx, CP_PR0Y + CP_PLDY
-    KCALL font_str
+    call font_str
 
     mov si, cp_s_coop           ; row 1 label
     mov cx, di
     add cx, CP_PLX
     mov dx, bp
     add dx, CP_PR0Y + CP_PROWH + CP_PLDY
-    KCALL font_str
+    call font_str
 
     mov si, cp_s_cap            ; caption: the flip is immediate
     mov cx, di
     add cx, CP_PMX
     mov dx, bp
     add dx, CP_PCAPY
-    KCALL font_str
+    call font_str
 
     call cp_radios              ; both glyphs, filled per the live mode
 
@@ -680,11 +652,11 @@ cp_sched_click:
     mov al, 0                   ; upper band = Pre-emptive
 .set:
     mov ah, al                  ; AH = the mode this row selects
-    KCALL sched_mode_get         ; AL = the live mode
+    call sched_mode_get         ; AL = the live mode
     cmp al, ah
     je .done                    ; that row is already live: change nothing
     mov al, ah
-    KCALL sched_mode_set         ; live on the next tick (SPEC.md 8.2)
+    call sched_mode_set         ; live on the next tick (SPEC.md 8.2)
     mov byte [cp_dirty], 1      ; ui_task step 3 repaints the About box's
                                 ; third line and any other mode-quoting
                                 ; window, outside the lock (SPEC.md 13)
@@ -710,7 +682,7 @@ cp_radios:
     push dx
     push si
 
-    KCALL sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
+    call sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
     mov bl, al                  ; BL = the row whose glyph is filled
 
     mov byte [gfx_color], CBLACK ; the pen cp_glyph draws the bitmap with:
@@ -770,14 +742,14 @@ cp_disp_paint:
     add cx, CP_PMX
     mov dx, bp
     add dx, CP_PHY
-    KCALL font_str
+    call font_str
 
     mov si, cp_s_dbof           ; row 0 label
     mov cx, di
     add cx, CP_PLX
     mov dx, bp
     add dx, CP_PR0Y + CP_PLDY
-    KCALL font_str
+    call font_str
 
     call cpf_dbok               ; CF = 1: the option cannot be taken now, so
     mov byte [gfx_color], CBLACK    ; its label is drawn greyed (SPEC.md
@@ -791,7 +763,7 @@ cp_disp_paint:
     add cx, CP_PLX
     mov dx, bp
     add dx, CP_PR0Y + CP_PROWH + CP_PLDY
-    KCALL font_str
+    call font_str
     mov byte [gfx_color], CBLACK
 
     mov si, cp_s_dcap           ; caption: what it costs...
@@ -806,7 +778,7 @@ cp_disp_paint:
     add cx, CP_PMX
     mov dx, bp
     add dx, CP_PCAPY
-    KCALL font_str
+    call font_str
 
     call cp_dbradios            ; both glyphs, filled per the live state
 
@@ -832,7 +804,7 @@ cpf_dbok:
     jne .yes                    ; already armed: the memory is ours
     push ax
     push bx
-    KCALL mem_avail             ; AX = largest free run, KB
+    call mem_avail             ; AX = largest free run, KB
     cmp ax, BB_KB
     pop bx
     pop ax
@@ -908,7 +880,7 @@ cpf_disp_cap:
     add cx, CP_CW - 2
     mov dx, bx
     add dx, 7
-    KCALL gfx_fill
+    call gfx_fill
     mov byte [gfx_color], CBLACK
     mov si, cp_s_dcap
     call cpf_dbok
@@ -922,7 +894,7 @@ cpf_disp_cap:
     add cx, CP_PMX
     mov dx, bp
     add dx, CP_PCAPY
-    KCALL font_str
+    call font_str
     pop si
     pop dx
     pop cx
@@ -965,7 +937,7 @@ cp_disp_click:
     call cpf_dbok               ; arming: refuse if it cannot be funded, and
     jc .done                    ; leave the dot where it is (the caption and
 .doit:                          ; the greyed label already say why)
-    KCALL bb_set                ; flips both flags; we hold the lock
+    call bb_set                ; flips both flags; we hold the lock
     call cp_dbradios            ; the two glyph boxes only
     call cpf_disp_cap           ; the caption can change with the claim:
                                 ; turning it OFF hands 150KB back, which may
@@ -1008,7 +980,7 @@ cp_time_paint:
     add cx, CP_PMX
     mov dx, bp
     add dx, CP_PHY
-    KCALL font_str
+    call font_str
 
     call cp_time_rows           ; both field rows, from the live clock
 
@@ -1023,13 +995,13 @@ cp_time_paint:
     add cx, CP_PLX
     mov dx, bp
     add dx, CPT_O0Y + CP_PLDY
-    KCALL font_str
+    call font_str
     mov si, cp_s_tsec
     mov cx, di
     add cx, CP_PLX
     mov dx, bp
     add dx, CPT_O1Y + CP_PLDY
-    KCALL font_str
+    call font_str
     call cp_timechk
 
     mov byte [gfx_color], CBLACK
@@ -1038,7 +1010,7 @@ cp_time_paint:
     add cx, CP_PMX
     mov dx, bp
     add dx, CPT_CAP1Y
-    KCALL font_str
+    call font_str
 
     mov si, cp_s_tnrt           ; caption 2: read live from the probe's
     cmp byte [clk_rtc], 0       ; verdict (SPEC.md 37.90) - informative only,
@@ -1054,7 +1026,7 @@ cp_time_paint:
     add cx, CP_PMX
     mov dx, bp
     add dx, CPT_CAP2Y
-    KCALL font_str
+    call font_str
 
     pop si
     pop dx
@@ -1110,7 +1082,7 @@ cp_time_click:
     jg .done
 .step:
     mov al, [cp_tsel]
-    KCALL clk_fld_adj           ; in AL = field, BL = +1/-1 (SPEC.md 37)
+    call clk_fld_adj           ; in AL = field, BL = +1/-1 (SPEC.md 37)
     call cp_time_rows
     jmp .done
 
@@ -1155,7 +1127,7 @@ cp_time_click:
 ; nothing may be on top of it. Only then is the origin re-derived from the
 ; live window rect and the two rows redrawn in place.
 ; -----------------------------------------------------------------------------
-cpf_tick:
+cp_tick:
     push ax
     push bx
     push cx
@@ -1167,14 +1139,14 @@ cpf_tick:
     cmp byte [cp_sel], CP_ITIME
     jne .out
     mov al, KIND_CTRL
-    KCALL inst_find_kind         ; CF = 1: no live Control Panel
+    call inst_find_kind         ; CF = 1: no live Control Panel
     jc .out
     mov bx, [di+I_WIN]
     test word [bx+W_FLAGS], 2   ; visible?
     jz .out
-    KCALL wm_obscured
+    call wm_obscured
     jc .out
-    KCALL wm_content             ; AX = content left, DX = content top
+    call wm_content             ; AX = content left, DX = content top
     mov di, ax
     add di, CP_RX               ; DI = pane left, BP = pane top
     mov bp, dx
@@ -1188,7 +1160,7 @@ cpf_tick:
     pop cx
     pop bx
     pop ax
-    retf                        ; far body: reached through the cp_tick shim
+    ret
 
 ; -----------------------------------------------------------------------------
 ; cp_time_rows - redraw both field rows from the live clock
@@ -1216,7 +1188,7 @@ cp_time_rows:
     add cx, CPT_BX - 4
     mov dx, bp
     add dx, CPT_TY + 11
-    KCALL gfx_fill
+    call gfx_fill
 
     mov byte [gfx_color], CBLACK ; the time row's two ':' separators (the
     mov si, cp_s_tcol            ; date row's gaps are simply blank)
@@ -1224,12 +1196,12 @@ cp_time_rows:
     add cx, CPT_FX + 16
     mov dx, bp
     add dx, CPT_TY
-    KCALL font_str
+    call font_str
     mov cx, di
     add cx, CPT_FX + 40
-    KCALL font_str
+    call font_str
 
-    KCALL clk_snap               ; ONE snapshot for all the fields, so the
+    call clk_snap               ; ONE snapshot for all the fields, so the
                                  ; row cannot straddle a second (SPEC.md 37)
     mov ah, 6                   ; active field count: the meridiem exists
     add ah, [clk_h12]           ; only in 12-hour mode (SPEC.md 31.5)
@@ -1294,7 +1266,7 @@ cp_time_fld:
     sub bx, 2                   ; y1 = y - 2
     add dx, 9                   ; y2 = y + 9
     mov byte [gfx_color], CBLACK
-    KCALL gfx_fill
+    call gfx_fill
     pop ax
     pop bx
     pop dx
@@ -1305,8 +1277,8 @@ cp_time_fld:
     mov byte [gfx_color], CBLACK
 .text:
     mov al, ah                  ; AL = field index for the formatter
-    KCALL clk_fld_str            ; SI = that field's text (SPEC.md 37)
-    KCALL font_str               ; in SI, CX = x, DX = y
+    call clk_fld_str            ; SI = that field's text (SPEC.md 37)
+    call font_str               ; in SI, CX = x, DX = y
 
     pop si
     pop dx
@@ -1451,13 +1423,13 @@ cp_timebtn:
     mov dx, bx
     add dx, CPT_BH - 1          ; DX = y2
     mov byte [gfx_color], CBLACK
-    KCALL gfx_frame
+    call gfx_frame
     inc ax                      ; the interior, one pixel in from the frame
     inc bx
     dec cx
     dec dx
     mov byte [gfx_color], CWHITE
-    KCALL gfx_fill
+    call gfx_fill
     pop bx
 
     mov byte [gfx_color], CBLACK ; the 8px glyph, centred in the box
@@ -1465,7 +1437,7 @@ cp_timebtn:
     add cx, CPT_BX + (CPT_BW - 8) / 2
     mov dx, bx
     add dx, (CPT_BH - 8) / 2
-    KCALL font_str
+    call font_str
 
     pop si
     pop dx
@@ -1506,7 +1478,7 @@ cp_glyph:
     mov ax, cx                  ; white box: (x,y) .. (x+11, y+11)
     add cx, CP_GW - 1
     add dx, CP_GW - 1
-    KCALL gfx_fill               ; in AX = x1, BX = y1, CX = x2, DX = y2
+    call gfx_fill               ; in AX = x1, BX = y1, CX = x2, DX = y2
     pop ax
     mov [gfx_color], al
 
@@ -1519,7 +1491,7 @@ cp_glyph:
 .col:
     shl ax, 1
     jnc .skip
-    KCALL gfx_pixel              ; in CX = x, DX = y, color [gfx_color]
+    call gfx_pixel              ; in CX = x, DX = y, color [gfx_color]
 .skip:
     inc cx
     dec bl
