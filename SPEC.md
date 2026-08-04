@@ -9432,6 +9432,7 @@ every 16th frame (§45.3's dialog-cancel rule).
 | 1..4 | Toggle channel mute (a click in that scope does the same) |
 | L | Load… (the Standard File dialog) |
 | F | Fullscreen toggle |
+| X | XT mode toggle (§45.9 — also File ▸ the relabeling menu item) |
 | Esc | Exit fullscreen (windowed: ignored) |
 
 The `or al, al` keypad gate of §44.2 applies verbatim: the numeric keypad
@@ -9453,7 +9454,53 @@ edge-triggered, so no deadline machinery is needed.
 - **Mono adapters: the band carries the look.** The blue-on-black pattern
   text distinction dies by design; the inverted band, the bevels and the
   MUTE flags carry every state in shape, not hue.
-- **Real-8088 mixing throughput is not promised.** The kernel quantizes the
-  11,000 Hz request through the TC (§34.5), the mixer follows the granted
-  rate's arithmetic but not its wall-clock cost on an 8088; the floor
-  machine still gets the viewer.
+- **Real-8088 mixing throughput is not promised in the default mode.** The
+  kernel quantizes the 11,000 Hz request through the TC (§34.5), the mixer
+  follows the granted rate's arithmetic but not its wall-clock cost on an
+  8088; the floor machine still gets the viewer — and §45.9's XT mode is
+  the mode that *does* aim at the 8088, opt-in and honest about its trade.
+
+### 45.9 XT mode — playback sized for a 4.77 MHz 8088
+
+Off by default; toggled by the **X** key or the File menu's relabeling
+`XT Mode: Off/On` item (the §12.2 copy rule applies: the item's string is
+repointed and `OSAPI_MENU_SET` re-called — the Solitaire Deal-menu idiom).
+Toggling while playing stops playback first (through the §45.2 drain);
+the mode change is a table rebuild plus constants, never a mid-stream
+switch. What it changes, and why each piece pays on an 8088:
+
+- **Rate: 11,000 → 5,500 Hz.** The mixer's cost is linear in output
+  samples; one 2,048-byte ring half now carries ~372 ms of audio, so the
+  worker's whole feed cadence relaxes by the same factor.
+- **The volume tables pre-scale the output stage away**: entries become
+  `(int8)b · vol >> 8` (±31 — four channels sum inside a byte around the
+  0x80 bias), so the default mode's 16-bit accumulator buffer, its
+  `rep stosw` zero pass and its shift-and-bias conversion pass all
+  disappear. The first audible channel *stores* `128 + vt[b]` straight
+  into `mp_outbuf`, later channels *add* — a chunk with no audible
+  channel is one `rep stosb` of 0x80. One table format per mode: the
+  toggle rebuilds the 65×256 table (16,640 `imul`s — an intentional
+  sub-second freeze on the machines this mode exists for).
+- **The bounds check leaves the inner loop.** Each channel's chunk is cut
+  into runs: one `div` computes a conservative sample count that cannot
+  reach the sample/loop limit (`(limit − pos − 1) / (stepint + 1)`), the
+  run is mixed with no compare at all, and only the approach to the
+  boundary walks the checked/wrapping path a sample at a time. The XT
+  inner loop is fetch, `xlat`, byte add, `inc di`, `add`/`adc` position,
+  `loop` — ~95 cycles on an 8088 against the default path's ~160-plus-
+  conversion, and it multiplies with the rate halving: ~7.9M cycles/s of
+  mixing at 11 kHz becomes ~2.1M at 5,500 — under half the 4.77M budget,
+  with silent channels (most MODs rest some channel most of the time)
+  skipped for the price of the position advance.
+- **The pattern view redraws per position, not per row.** The full 30+-row
+  scroll repaint is the other 8088-killer (§45.6); in XT mode a row change
+  repaints only the band's two hex row numbers (clip-gated per the §11.3
+  granularity rule) and the readouts/VU bars, and the whole pattern area
+  repaints when the song *position* (or the stopped-scroll view) moves.
+
+An underrun under XT mode still takes §34.5's honest path — bounded
+silence, resume on catch-up — so an overloaded machine degrades to
+stuttering audio with a live UI, never a wedge. Verified in QEMU (both
+modes play the §24 test module at the same pitch — the step math is
+rate-invariant); the wall-clock claim itself is 86Box `make xt-sound`
+territory, cycle-counted here and honestly not QEMU-provable.

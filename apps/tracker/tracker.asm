@@ -114,6 +114,8 @@ TRK_HALF    equ 2048                ; the stream's fill unit, pinned (SPEC.md
                                     ; 34.5): fills are whole halves only
 TRK_RATE    equ 11000               ; open rate request, Hz (kernel quantizes
                                     ; via the TC; mp_gen mixes to the same)
+TRK_RATE_XT equ 5500                ; XT mode's rate (SPEC.md 45.9): halves
+                                    ; the mixer's per-second sample budget
 TRK_MAXFEED equ 6                   ; halves mixed per worker wake, at most -
                                     ; bounds the lock-free burst so a wake
                                     ; never mixes more than ~1.1s of audio
@@ -292,6 +294,10 @@ trk_onkey:
     je .fstog
     cmp bl, 'F'
     je .fstog
+    cmp bl, 'x'
+    je .xt
+    cmp bl, 'X'
+    je .xt
     cmp bl, '1'
     jb .out
     cmp bl, '4'
@@ -304,6 +310,9 @@ trk_onkey:
     cmp byte [trk_fs], 0
     je .out
     call trk_fs_exit
+    jmp .out
+.xt:
+    call trk_xt_toggle
     jmp .out
 .play:
     mov al, 0
@@ -404,7 +413,12 @@ trk_oncmd:
     jmp .out
 .file:
     or bl, bl                       ; File > Open...
-    jnz .out
+    jz .fopen
+    cmp bl, 1                       ; File > XT Mode (the relabeling item)
+    jne .out
+    call trk_xt_toggle
+    jmp .out
+.fopen:
     call trk_do_open
 .out:
     pop di
@@ -685,7 +699,12 @@ trk_play:
     mov [trk_grant], si
     mov byte [trk_ghave], 1
 .granted:
-    mov word [mp_mixrate], TRK_RATE
+    mov ax, TRK_RATE                ; the mode picks the rate (SPEC.md 45.9)
+    cmp byte [mp_xt], 0
+    je .rate
+    mov ax, TRK_RATE_XT
+.rate:
+    mov [mp_mixrate], ax
     mov al, [trk_pmode]
     call mp_start
     mov word [trk_total], 0
@@ -696,7 +715,7 @@ trk_play:
                                     ; SPEC.md 20.3; DX stays the plain rate)
     mov si, [trk_grant]
     mov cx, TRK_HALF * 2            ; initial valid total
-    mov dx, TRK_RATE
+    mov dx, [mp_mixrate]            ; the mode's rate, set above
     call OSAPI_SND_STREAM           ; out AL = 0 with AH = handle, else err
     or al, al
     jnz .ofail
@@ -815,6 +834,54 @@ trk_reap:
 trk_play_stop:
     call trk_stream_close
     call mp_stop
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_xt_toggle - flip XT mode (SPEC.md 45.9). UI context, lock held (key X
+; or File > XT Mode). Playing stops first - the mode is a table rebuild plus
+; rate/mixer constants, never a mid-stream switch; the user presses Play
+; again. The menu item is relabeled and MENU_SET re-called (the kernel holds
+; a COPY of the set, SPEC.md 12.2 - a repoint alone changes nothing).
+; -----------------------------------------------------------------------------
+trk_xt_toggle:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    cmp byte [mp_playing], 0
+    je .idle
+    call trk_play_stop              ; drains the worker (SPEC.md 45.2)
+.idle:
+    cmp byte [trk_sopen], 0         ; a drained ring left open by F00/stop
+    je .flip                        ; paths closes now, before the rate flips
+    call trk_stream_close
+.flip:
+    mov al, [mp_xt]
+    xor al, 1
+    call mp_setxt                   ; stores the mode + rebuilds the volume
+                                    ; table when a module is loaded (the
+                                    ; deliberate sub-second freeze, 45.9)
+    mov si, trk_s_xtoff
+    cmp byte [mp_xt], 0
+    je .lab
+    mov si, trk_s_xton
+.lab:
+    mov [trk_mi_file + 2], si
+    mov bx, [trk_win]
+    mov si, trk_menus
+    call OSAPI_MENU_SET
+    mov si, trk_s_xtmoff
+    cmp byte [mp_xt], 0
+    je .msg
+    mov si, trk_s_xtmon
+.msg:
+    call tui_msg
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; =============================================================================
@@ -966,14 +1033,18 @@ trk_tpl:
 
 ; --- app menu set (SPEC.md 12.2) -----------------------------------------------
     OS88_MENUSET trk_menus, trk_m_name, trk_oncmd
-        OS88_MENU trk_m_file, trk_mi_file, 1
+        OS88_MENU trk_m_file, trk_mi_file, 2
         OS88_MENU trk_m_view, trk_mi_view, 1
     OS88_MENUSET_END trk_menus
 
 trk_m_name:  db 'Tracker', 0
 trk_m_file:  db 'File', 0
-trk_mi_file: dw trk_s_open
+trk_mi_file: dw trk_s_open, trk_s_xtoff ; item 1 repointed by trk_xt_toggle
+                                        ; (the sol_dealmenu relabel idiom -
+                                        ; invisible until MENU_SET re-runs)
 trk_s_open:  db 'Open...', 0
+trk_s_xtoff: db 'XT Mode: Off', 0
+trk_s_xton:  db 'XT Mode: On', 0
 trk_m_view:  db 'View', 0
 trk_mi_view: dw trk_s_fullm
 trk_s_fullm: db 'Fullscreen', 0
@@ -989,6 +1060,8 @@ trk_s_toobig: db 'File too big', 0
 trk_s_noent:  db 'File not found', 0
 trk_s_ioerr:  db 'Disk error', 0
 trk_s_snderr: db 'Sound open failed', 0
+trk_s_xtmon:  db 'XT mode on - Enter plays', 0
+trk_s_xtmoff: db 'XT mode off - Enter plays', 0
 
 ; =============================================================================
 ; The other two thirds of the package

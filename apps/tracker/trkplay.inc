@@ -359,23 +359,8 @@ mp_load:
 .smdone:
     push ds
     pop es
-    ; -- the 65x256 volume table: vt[vol][b] = (int8)b * vol >> 6 ------------
-    mov di, mp_voltab
-    mov byte [mp_tvol], 0
-.vt_v:
-    xor bx, bx                  ; BL = source byte 0..255
-.vt_b:
-    mov al, bl
-    imul byte [mp_tvol]         ; AX = (int8)b * vol
-    mov cl, 6
-    sar ax, cl
-    mov [di], al
-    inc di
-    inc bl
-    jnz .vt_b
-    inc byte [mp_tvol]
-    cmp byte [mp_tvol], 65
-    jb .vt_v
+    call mp_vtbuild             ; the 65x256 volume table, in the current
+                                ; mode's format (SPEC.md 45.9)
     ; -- done ----------------------------------------------------------------
     mov byte [mp_songpos], 0
     mov byte [mp_row], 0
@@ -384,6 +369,50 @@ mp_load:
     mov [mp_pattern], al
     mov byte [mp_loaded], 1
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; mp_vtbuild - the 65x256 volume table for the current mode (SPEC.md 45.9):
+;   default: vt[vol][b] = (int8)b * vol >> 6 (+/-127; 16-bit accumulate,
+;            out = 128 + (sum >> 2))
+;   XT:      vt[vol][b] = (int8)b * vol >> 8 (+/-31; four channels sum in
+;            a byte around the 0x80 bias - the output stage pre-scaled away)
+; clobbers AX/BX/CX/DI
+; -----------------------------------------------------------------------------
+mp_vtbuild:
+    mov di, mp_voltab
+    mov byte [mp_tvol], 0
+    mov cl, 6
+    cmp byte [mp_xt], 0
+    je .vt_v
+    mov cl, 8
+.vt_v:
+    xor bx, bx                  ; BL = source byte 0..255
+.vt_b:
+    mov al, bl
+    imul byte [mp_tvol]         ; AX = (int8)b * vol
+    sar ax, cl
+    mov [di], al
+    inc di
+    inc bl
+    jnz .vt_b
+    inc byte [mp_tvol]
+    cmp byte [mp_tvol], 65
+    jb .vt_v
+    ret
+
+; -----------------------------------------------------------------------------
+; mp_setxt - set XT mode (AL = 0/1; SPEC.md 45.9) and rebuild the volume
+; table to the mode's format when a module is loaded. UI context, playback
+; stopped by the caller: the 16,640-imul rebuild is a deliberate sub-second
+; freeze on the machines the mode exists for. Clobbers AX/BX/CX/DI.
+; -----------------------------------------------------------------------------
+mp_setxt:
+    mov [mp_xt], al
+    cmp byte [mp_loaded], 0
+    je .out
+    call mp_vtbuild
+.out:
     ret
 
 ; =============================================================================
@@ -705,6 +734,7 @@ mp_pfind:
 ; =============================================================================
 mp_gen:
     cld
+    push bp                     ; mp_mixch_xt keeps the frac step in BP
     push ds
     pop es
     or cx, cx
@@ -736,6 +766,8 @@ mp_gen:
     mov ax, MP_CHUNK
 .c2:
     mov [mp_chunk], ax
+    cmp byte [mp_xt], 0         ; XT mode mixes straight into the outbuf
+    jne .xtmix                  ; (SPEC.md 45.9) - no zero, no convert
     ; zero the accumulator
     mov di, mp_mixbuf
     mov cx, ax
@@ -761,6 +793,7 @@ mp_gen:
     add ax, 128
     stosb
     loop .cv
+.adv:
     mov [mp_outp], di
     mov ax, [mp_chunk]
     sub [mp_need], ax
@@ -770,6 +803,26 @@ mp_gen:
     mov ax, [mp_spt]
     mov [mp_tickrem], ax
     jmp .big
+.xtmix:
+    mov byte [mp_first], 1      ; the first audible channel STORES the
+    mov word [mp_crec], mp_chans; biased byte, later ones ADD (45.9)
+    mov byte [mp_curc], 0
+.xmc:
+    call mp_mixch_xt
+    add word [mp_crec], MP_CHSZ
+    inc byte [mp_curc]
+    cmp byte [mp_curc], 4
+    jb .xmc
+    cmp byte [mp_first], 0      ; nothing audible rendered: the chunk is
+    je .xdone                   ; the bias alone
+    mov di, [mp_outp]
+    mov cx, [mp_chunk]
+    mov al, 0x80
+    rep stosb
+.xdone:
+    mov di, [mp_outp]
+    add di, [mp_chunk]
+    jmp .adv
 .silence:
     mov di, [mp_outp]
     mov al, 0x80
@@ -778,6 +831,7 @@ mp_gen:
 .done:
     push ds
     pop es
+    pop bp
     ret
 
 ; -----------------------------------------------------------------------------
@@ -891,6 +945,145 @@ mp_mixch:
     ret
 .soend:
     mov byte [si+MP_ACT], 0
+    ret
+
+; -----------------------------------------------------------------------------
+; mp_mixch_xt - one channel's chunk in XT mode (SPEC.md 45.9), straight into
+; the outbuf at [mp_outp]. [mp_first] = 1: this is the first audible channel,
+; STORE 128 + vt[b]; 0: ADD vt[b]. The bounds check leaves the inner loop:
+; one DIV cuts a conservative run ((limit-1-pos)/(stepint+1) samples cannot
+; reach the limit), the run mixes unchecked, and only the boundary approach
+; walks the checked/wrapping path a sample at a time. Muted/silent channels
+; take mp_mixch's shared advance. BP carries the frac step as a register -
+; never a memory base, so SS != DS cannot bite.
+; -----------------------------------------------------------------------------
+mp_mixch_xt:
+    mov si, [mp_crec]
+    cmp byte [si+MP_ACT], 0
+    je .ret0
+    mov ax, [si+MP_OFF]
+    add ax, [si+MP_PLEN]
+    mov [mp_climit], ax
+    mov ax, [si+MP_LLEN]
+    mov [mp_cloopl], ax
+    mov ax, [si+MP_STEPI]
+    mov [mp_cstepi], ax
+    mov ax, [si+MP_STEPF]
+    mov [mp_cstepf], ax
+    mov bl, [mp_curc]
+    xor bh, bh
+    cmp byte [mp_mute + bx], 0
+    jne mp_mixch.silent         ; the shared advance-only path: same scratch,
+    mov al, [si+MP_OVOL]        ; same [mp_crec] in SI, ends in ret
+    or al, al
+    jz mp_mixch.silent
+    xor ah, ah
+    mov cl, 8
+    shl ax, cl
+    add ax, mp_voltab
+    mov bx, ax                  ; BX = the volume table slice (xlat)
+    mov es, [si+MP_SEG]
+    mov dx, [si+MP_POSF]
+    mov bp, [mp_cstepf]         ; BP = frac step, register-resident
+    mov di, [mp_outp]
+    mov cx, [mp_chunk]          ; CX = samples remaining
+    push si
+    mov si, [si+MP_POSI]
+.runs:
+    mov ax, [mp_climit]         ; conservative unchecked run
+    dec ax
+    sub ax, si
+    jb .edge                    ; at/past limit-1: checked path decides
+    push cx
+    push dx
+    xor dx, dx
+    mov cx, [mp_cstepi]
+    inc cx                      ; stepint+1 >= step always, so n samples
+    div cx                      ; cannot reach the limit
+    pop dx
+    pop cx
+    or ax, ax
+    jz .edge
+    cmp ax, cx
+    jbe .runn
+    mov ax, cx
+.runn:
+    sub cx, ax
+    xchg cx, ax                 ; CX = run length, AX = remaining
+    push ax
+    cmp byte [mp_first], 0
+    je .addl
+.stl:
+    mov al, [es:si]             ; store pass: out = 128 + vt[b]
+    xlat
+    add al, 0x80
+    mov [di], al
+    inc di
+    add dx, bp
+    adc si, [mp_cstepi]
+    loop .stl
+    jmp .rejoin
+.addl:
+    mov al, [es:si]             ; add pass: out += vt[b]
+    xlat
+    add [di], al
+    inc di
+    add dx, bp
+    adc si, [mp_cstepi]
+    loop .addl
+.rejoin:
+    pop cx                      ; CX = remaining
+    or cx, cx
+    jnz .runs
+    jmp .fin
+.edge:
+    cmp si, [mp_climit]         ; the boundary approach, one checked sample
+    jae .wrap
+    mov al, [es:si]
+    xlat
+    cmp byte [mp_first], 0
+    je .eadd
+    add al, 0x80
+    mov [di], al
+    jmp .estep
+.eadd:
+    add [di], al
+.estep:
+    inc di
+    add dx, bp
+    adc si, [mp_cstepi]
+    loop .runs                  ; one sample consumed: recut the run
+    jmp .fin
+.wrap:
+    mov ax, [mp_cloopl]
+    or ax, ax
+    jz .oend
+.wl:
+    sub si, ax
+    cmp si, [mp_climit]
+    jae .wl
+    jmp .runs                   ; wrapped, nothing consumed: recut
+.fin:
+    mov ax, si
+    pop si
+    mov [si+MP_POSI], ax
+    mov [si+MP_POSF], dx
+    mov byte [mp_first], 0      ; this channel rendered: later ones add
+    push ds
+    pop es
+    ret
+.oend:                          ; one-shot ended mid-chunk
+    push ds
+    pop es                      ; BEFORE any stosb: ES was the sample seg
+    cmp byte [mp_first], 0
+    je .of
+    mov al, 0x80                ; the store channel owes the bias under
+    rep stosb                   ; the tail it never rendered
+    mov byte [mp_first], 0
+.of:
+    pop si
+    mov byte [si+MP_ACT], 0
+.ret0:
     ret
 
 ; =============================================================================
@@ -1822,6 +2015,8 @@ mpe_song:   db 'Bad song data', 0
     TRKB mp_posjmp                  ; Bxx/Dxx position advance flag
     TRKB mp_curc                    ; channel loop counter
     TRKB mp_tvol                    ; volume-table build counter
+    TRKB mp_xt                      ; XT mode (SPEC.md 45.9): 0 = default
+    TRKB mp_first                   ; XT chunk: next audible channel stores
     TRKW mp_spt                     ; samples per tick
     TRKW mp_tickrem                 ; samples left in the current tick
     TRKW mp_need                    ; mp_gen bytes remaining

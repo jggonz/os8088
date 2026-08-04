@@ -1493,6 +1493,31 @@ tui_draw_pat:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; tui_row_lt - XT mode (SPEC.md 45.9): redraw only the band strip for the
+; new row and settle the row marker; the rows around it stay until the
+; position moves. tui_row1 carries the §11.3 clip gate, so a covering file
+; dialog still blanks nothing.
+; -----------------------------------------------------------------------------
+tui_row_lt:
+    push ax
+    push bx
+    push dx
+    call tui_viewrow
+    mov al, [mp_row]
+    mov [tui_lrow], al
+    mov al, [tui_cvr]
+    cbw
+    mov bx, ax
+    mov byte [tui_band], 1
+    mov dx, [tui_lay + TL_BANDY]
+    call tui_row1
+    mov byte [tui_band], 0
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 ; =============================================================================
 ; Volume bars (every worker frame) and the scope hit-test
 ; =============================================================================
@@ -1843,6 +1868,20 @@ tui_draw_dyn:
     cmp al, [tui_lvrow]
     je .norows
 .rows:
+    cmp byte [mp_xt], 0             ; XT (SPEC.md 45.9): a row-only change
+    je .rfull                       ; relights the band alone; the full
+    mov al, [mp_songpos]            ; repaint waits for a position/pattern
+    cmp al, [tui_lpos]              ; (or stopped-scroll) move
+    jne .rfull
+    mov al, [mp_pattern]
+    cmp al, [tui_lpat]
+    jne .rfull
+    mov al, [tui_vrow]
+    cmp al, [tui_lvrow]
+    jne .rfull
+    call tui_row_lt
+    jmp .norows
+.rfull:
     call tui_draw_pat
     test byte [tui_lay + TL_FLAGS], TLF_CMPCT
     jnz .rowc
@@ -2063,7 +2102,7 @@ tui_s_splash1: db 'T R A C K E R', 0
 tui_s_splash2: db 'A FastTracker II style MOD player', 0
 tui_s_none:    db 'No module loaded', 0
 tui_s_keys1:   db 'ENTER play  SPACE stop  P pattern', 0
-tui_s_keys2:   db 'ARROWS position  1-4 mute  L load', 0
+tui_s_keys2:   db 'ARROWS position  1-4 mute  L load  X xt', 0
 tui_s_anykey:  db 'Press any key for fullscreen', 0
 tui_s_hint:    db 'ENTER play  SPACE stop  L load', 0
 
