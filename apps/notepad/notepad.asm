@@ -103,7 +103,16 @@
 
 NP_CAP       equ 512            ; text buffer capacity, bytes
 NP_IOCAP     equ NP_CAP * 2     ; staging capacity: every char may become CR LF
-NP_BSS_TOTAL equ 600 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
+NP_MAXROWS   equ 60             ; signature slots, one per row the content can
+                                ; show (SPEC.md 27.2). The tallest this window
+                                ; can be is a fullscreen VGA frame, where the
+                                ; frame IS the content (SPEC.md 11.2): 480 rows
+                                ; less the 6px top margin and the 7px a row's
+                                ; own band needs is 59. np_bounds clamps to
+                                ; this, so a taller screen degrades to "the
+                                ; rows past 60 are always redrawn" rather than
+                                ; writing past the array
+NP_BSS_TOTAL equ 744 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
 NP_MARGIN    equ 6              ; left/top text margin inside the content
 NP_KEY_SAVE  equ 0x3C           ; F2 scan code (DOS Editor's keys)
 NP_KEY_LOAD  equ 0x3D           ; F3
@@ -193,6 +202,26 @@ np_bounds:
                                     ; needs no kernel pointer of our own - and
                                     ; it stays right under WF_FULL, where the
                                     ; frame IS the content (SPEC.md 11.2)
+
+    mov ax, [np_bot]                ; ...and how many whole 8px rows that is,
+    sub ax, [np_ty]                 ; which is what the signature array is
+    jc .norows                      ; indexed by (SPEC.md 27.2)
+    cmp ax, 7
+    jb .norows
+    sub ax, 7
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    inc ax
+    cmp ax, NP_MAXROWS
+    jbe .vok
+    mov ax, NP_MAXROWS
+.vok:
+    mov [np_vrows], ax
+    jmp short .out
+.norows:
+    mov word [np_vrows], 0
+.out:
     pop dx
     pop cx
     pop bx
@@ -246,6 +275,8 @@ np_walk:
     mov di, [np_tx]                 ; DI = pen x
     mov bp, [np_ty]                 ; BP = pen y
     mov word [np_i], 0
+    mov word [np_row], 0            ; ...and row 0 of the signature array,
+    mov word [np_rowh], 0           ; with nothing folded into it yet
     mov bx, [np_len]                ; BX = characters remaining
     mov si, np_buf
     cmp byte [np_draw], 0
@@ -263,7 +294,8 @@ np_walk:
     jbe .fits
     mov di, [np_tx]
     add bp, 8
-.fits:
+    call np_nextrow                 ; the pen changed rows, so the signature
+.fits:                              ; being accumulated belongs to the old one
     call np_ask                     ; the queries, at the settled pen
     cmp byte [np_draw], 0
     je .body
@@ -279,15 +311,23 @@ np_walk:
     cmp al, 13
     jne .glyph
     mov di, [np_tx]                 ; newline: carriage return + line feed,
-    add bp, 8                       ; and it occupies no cell
-    jmp short .loop
+    add bp, 8                       ; and it occupies no cell - so it is not
+    call np_nextrow                 ; folded into either row's signature, and
+    jmp short .loop                 ; the pixels of the row it ends are the
+                                    ; same with it and without it
 .glyph:
+    push ax                         ; fold it in whatever this pass is for:
+    xor ah, ah                      ; the pass that COMPUTES the signatures is
+    call np_fold                    ; a measure pass, so this cannot hang off
+    pop ax                          ; np_draw
     cmp byte [np_draw], 0
     je .advance
     mov cx, bp                      ; vertical clip: drop rows that overflow,
     add cx, 7                       ; but keep advancing the pen so every
     cmp cx, [np_bot]                ; position below stays true
     ja .advance
+    call np_rowdirty                ; ...and drop the rows whose pixels this
+    jc .advance                     ; redraw already knows are right
     mov cx, di
     mov dx, bp
     call OSAPI_FONT_CHAR            ; AL still holds the character
@@ -296,6 +336,15 @@ np_walk:
     jmp short .loop
 
 .done:
+    cmp byte [np_sigup], 0
+    je .fin
+.pad:
+    call np_nextrow                 ; flush the row the walk ended on, and then
+    mov ax, [np_row]                ; every visible row after it: a note that
+    cmp ax, [np_vrows]              ; SHRANK leaves rows behind that are no
+    jb .pad                         ; longer reached, and their old signature
+.fin:                               ; is exactly what says they must be erased
+
     pop bp
     pop di
     pop si
@@ -325,6 +374,13 @@ np_ask:
     jne .hit
     mov [np_curx], di
     mov [np_cury], bp
+    push ax                         ; AX is [np_i] and .hit below still wants
+    mov ax, di                      ; it. The caret is pixels on this row too,
+    xor ax, 0x5A5A                  ; and folding it in HERE - between the
+    call np_fold                    ; glyph before it and the one after - is
+    pop ax                          ; what makes moving it dirty both rows.
+                                    ; The xor keeps a column from folding the
+                                    ; way a character code would
 .hit:
     mov cx, [np_hity]
     cmp cx, 0xFFFF
@@ -410,6 +466,8 @@ np_carets:
     add cx, 7
     cmp cx, [np_bot]
     ja .out                         ; its row does not fit: no caret
+    call np_rowdirty                ; ...nor does a row this pass is not
+    jc .out                         ; redrawing (SPEC.md 27.2)
     mov ax, di                      ; 1px black caret, 8 rows tall
     mov bx, bp
     mov dx, bp
@@ -422,14 +480,180 @@ np_carets:
     pop ax
     ret
 
+; =============================================================================
+; Row signatures - why a keystroke does not repaint the note (SPEC.md 27.2)
+;
+; Typing one character used to cost a white fill of the whole content and a
+; font_char per character in the note, twice over on Up/Down. Nearly all of
+; that redraws pixels that did not move: an edit at the caret cannot change a
+; row above it, and it cannot change a row below the newline that ends the
+; caret's paragraph either, because a newline resets the pen.
+;
+; So each visible row carries a one-word signature - a rotate-then-add fold of
+; the characters drawn on it, plus the caret's column when the caret is on it.
+; Two layouts that fold to the same word put the same glyphs at the same
+; pixels, because on any row the k-th glyph is always at [np_tx] + 8k. It is a
+; hash and not a proof, the same trade the Task Manager's rows make (SPEC.md
+; 28): a collision leaves one row stale until its content moves again.
+;
+; The caret is part of the signature and has to be. Moving it off a row has to
+; dirty that row, or it stays drawn there.
+;
+; A redraw is then two walks. The first measures, folds, compares against the
+; stored signatures and widens [np_dr0]..[np_dr1] - a RANGE, not a bitmap,
+; because the interesting cases are all contiguous and a range needs no
+; indexing and turns the erase into ONE fill. The second draws, and skips
+; every row outside it. If the range comes back empty nothing is drawn at all.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; np_fold - fold AX into the row being accumulated
+; in:  AX; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_fold:
+    push bx
+    mov bx, [np_rowh]
+    rol bx, 1                       ; rotate then add, so a transposition is
+    add bx, ax                      ; not invisible
+    mov [np_rowh], bx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; np_nextrow - the pen moved to the next row: bank the signature it just
+;              finished, and start the next one
+; in:  [np_row], [np_rowh], [np_sigup]
+; out: [np_row] advanced, [np_rowh] = 0; [np_dr0]/[np_dr1] widened if the row
+;      changed; preserves all registers
+;
+; Rows past [np_vrows] are off the bottom of the content. The walk still
+; visits them - every position below has to stay true - but they have no
+; signature slot and no pixels, so they are counted and otherwise ignored.
+; -----------------------------------------------------------------------------
+np_nextrow:
+    push ax
+    push bx
+    cmp byte [np_sigup], 0
+    je .adv
+    mov ax, [np_row]
+    cmp ax, [np_vrows]
+    jae .adv
+    shl ax, 1
+    mov bx, ax
+    mov ax, [np_rowh]
+    cmp ax, [bx+np_sig]
+    je .adv                         ; same word, same pixels: leave it alone
+    mov [bx+np_sig], ax
+    mov ax, [np_row]
+    cmp ax, [np_dr0]
+    jae .hi
+    mov [np_dr0], ax
+.hi:
+    cmp ax, [np_dr1]
+    jbe .adv
+    mov [np_dr1], ax
+.adv:
+    inc word [np_row]
+    mov word [np_rowh], 0
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_rowdirty - is the row the pen is on one this pass is redrawing?
+; in:  [np_row], [np_clip], [np_dr0]/[np_dr1]
+; out: CF = 1 if it must NOT be drawn; preserves all registers
+; -----------------------------------------------------------------------------
+np_rowdirty:
+    cmp byte [np_clip], 0
+    je .yes                         ; not clipping: this is a full paint
+    push ax
+    mov ax, [np_row]
+    cmp ax, [np_dr0]
+    jb .no
+    cmp ax, [np_dr1]
+    ja .no
+    pop ax
+.yes:
+    clc
+    ret
+.no:
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; np_sigmark - record the geometry (and the toast) the signatures describe
+; in:  np_bounds already run
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_sigmark:
+    push ax
+    mov ax, [np_tx]
+    mov [np_stx], ax
+    mov ax, [np_ty]
+    mov [np_sty], ax
+    mov ax, [np_rgt]
+    mov [np_srgt], ax
+    mov ax, [np_bot]
+    mov [np_sbot], ax
+    mov ax, [np_msg]
+    mov [np_smsg], ax
+    mov byte [np_sigok], 1
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_sigsame - do the stored signatures still describe this window?
+; in:  np_bounds already run
+; out: CF = 1 if they do not and the caller must repaint whole; preserves all
+;
+; Four of the five tests are the layout: a resized window wraps differently,
+; and the kernel white-filled its content on the way here anyway. The fifth is
+; the toast, which is drawn OVER the text by np_toast and is in no row's
+; signature - so the keystroke that retires one has to erase it the only way
+; this module can, by painting the content again.
+; -----------------------------------------------------------------------------
+np_sigsame:
+    push ax
+    cmp byte [np_sigok], 0
+    je .no
+    mov ax, [np_tx]
+    cmp ax, [np_stx]
+    jne .no
+    mov ax, [np_ty]
+    cmp ax, [np_sty]
+    jne .no
+    mov ax, [np_rgt]
+    cmp ax, [np_srgt]
+    jne .no
+    mov ax, [np_bot]
+    cmp ax, [np_sbot]
+    jne .no
+    mov ax, [np_msg]
+    cmp ax, [np_smsg]
+    jne .no
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
+    ret
+
 ; -----------------------------------------------------------------------------
 ; np_measure - run the walk without drawing
 ; in:  SI = window ptr; the query fields already set
 ; out: as np_walk; preserves all registers
+;
+; A QUERY pass: it answers where the caret is, or what a click landed on, and
+; it must not touch the signatures - the caller has not drawn anything.
 ; -----------------------------------------------------------------------------
 np_measure:
     call np_bounds
     mov byte [np_draw], 0
+    mov byte [np_sigup], 0
+    mov byte [np_clip], 0
     call np_walk
     ret
 
@@ -444,7 +668,10 @@ np_paint:
     mov word [np_hity], 0xFFFF      ; no queries: this pass is here to draw
     mov word [np_wanty], 0xFFFF
     mov byte [np_draw], 1
-    call np_walk
+    mov byte [np_sigup], 1          ; the content was white-filled on the way
+    mov byte [np_clip], 0           ; here, so this pass draws every row AND is
+    call np_walk                    ; the baseline every later incremental
+    call np_sigmark                 ; redraw is measured against (SPEC.md 27.2)
     pop ax
     call np_toast                   ; last, so it sits above the text
     ret
@@ -977,22 +1204,80 @@ np_onkey:
     ret
 
 ; -----------------------------------------------------------------------------
-; np_redraw - repaint our own content from the buffer
+; np_redraw - repaint our own content from the buffer, redrawing only the rows
+;             that actually moved (SPEC.md 27.2)
 ; in:  SI = window ptr (gfx lock held by the caller)
 ; out: nothing; preserves all registers
 ;
-; The self-repaint every dispatch site shares: white-fill the content, run
-; np_paint over it, then put the grow box back, because the fill just erased
-; it (SPEC.md 11.1/27). It exists as a routine rather than a tail of
-; np_onkey because the menu handler needs exactly the same three steps - the
-; kernel does not repaint after a command returns (SPEC.md 12.2), so every
-; command that changes the buffer has to end here.
+; The self-repaint every dispatch site shares. It exists as a routine rather
+; than a tail of np_onkey because the menu handler needs exactly the same
+; steps - the kernel does not repaint after a command returns (SPEC.md 12.2),
+; so every command that changes the buffer has to end here.
+;
+; Two walks: one to measure and compare, one to draw the band the first found.
+; Typing one character usually dirties exactly one row, and the erase is then
+; a fill 8 pixels tall instead of the whole content. When nothing on screen
+; changed - an arrow key that hit the end of the note, a keystroke a full
+; buffer dropped - it draws nothing at all and returns.
+;
+; np_sigsame decides whether that is legal: a resize or a toast coming and
+; going means the stored signatures no longer describe what is on screen, and
+; then this is the old routine unchanged - fill the content whole, np_paint
+; over it, put the grow box back because the fill just erased it.
 ; -----------------------------------------------------------------------------
 np_redraw:
     push ax
     push bx
     push cx
     push dx
+    call np_bounds
+    call np_sigsame
+    jc .full
+
+    mov word [np_hity], 0xFFFF      ; pass 1: no queries, no drawing - just
+    mov word [np_wanty], 0xFFFF     ; which rows stopped matching
+    mov word [np_dr0], 0xFFFF
+    mov word [np_dr1], 0
+    mov byte [np_draw], 0
+    mov byte [np_sigup], 1
+    mov byte [np_clip], 0
+    call np_walk
+    mov ax, [np_dr0]
+    cmp ax, 0xFFFF
+    je .out                         ; not one pixel of the text moved
+
+    mov bx, ax                      ; y1 = np_ty + 8*dr0
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add bx, [np_ty]
+    mov dx, [np_dr1]                ; y2 = np_ty + 8*dr1 + 7
+    shl dx, 1
+    shl dx, 1
+    shl dx, 1
+    add dx, [np_ty]
+    add dx, 7
+    mov ax, [np_tx]                 ; the full content width, margins included:
+    sub ax, NP_MARGIN               ; np_toast and the grow box live out there
+    mov cx, [np_rgt]
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL             ; ONE fill, over the dirty band only
+
+    mov byte [np_draw], 1           ; pass 2: draw, and only inside it
+    mov byte [np_sigup], 0
+    mov byte [np_clip], 1
+    call np_walk
+    mov byte [np_clip], 0
+
+    mov bx, si                      ; both of these sit ON the text, so they
+    call OSAPI_WM_GROW              ; follow any fill that could have reached
+    call np_toast                   ; them - and np_toast is a no-op with no
+    jmp short .out                  ; message, which is every keystroke
+
+.full:
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = x1, DX = y1
     push ax
@@ -1013,6 +1298,7 @@ np_redraw:
     call np_paint                   ; SI still = window ptr
     mov bx, si                      ; the white fill erased the grow box;
     call OSAPI_WM_GROW              ; restore it (SPEC.md 11.1/27)
+.out:
     pop dx
     pop cx
     pop bx
@@ -1357,4 +1643,30 @@ np_dirok    equ os88_image_end + 573 + NP_IOCAP    ; its drive, byte: whether
                                        ; volume back where 'Save As' left it,
                                        ; or it writes into whatever folder
                                        ; something else navigated to since
-                                       ; total 600 + NP_IOCAP = NP_BSS_TOTAL
+
+; --- the row signatures (SPEC.md 27.2) ---------------------------------------
+; All zero is a note whose every visible row is empty, which is what a fresh
+; instance has - but nothing reads them until np_paint has written them,
+; because np_sigok below is 0 until it does.
+np_row      equ os88_image_end + 600 + NP_IOCAP    ; word: np_walk's visible row
+np_rowh     equ os88_image_end + 602 + NP_IOCAP    ; word: its running fold
+np_vrows    equ os88_image_end + 604 + NP_IOCAP    ; word: rows the content
+                                       ; shows, capped at NP_MAXROWS
+np_dr0      equ os88_image_end + 606 + NP_IOCAP    ; word: first dirty row
+np_dr1      equ os88_image_end + 608 + NP_IOCAP    ; word: ...and the last.
+                                       ; np_dr0 = 0xFFFF means none at all
+np_stx      equ os88_image_end + 610 + NP_IOCAP    ; word } the geometry the
+np_sty      equ os88_image_end + 612 + NP_IOCAP    ; word } signatures were
+np_srgt     equ os88_image_end + 614 + NP_IOCAP    ; word } taken at, and the
+np_sbot     equ os88_image_end + 616 + NP_IOCAP    ; word } toast that was over
+np_smsg     equ os88_image_end + 618 + NP_IOCAP    ; word } them (np_sigsame)
+np_sigup    equ os88_image_end + 620 + NP_IOCAP    ; byte: np_walk folds and
+                                       ; compares
+np_clip     equ os88_image_end + 621 + NP_IOCAP    ; byte: ...and draws only
+                                       ; the dirty band
+np_sigok    equ os88_image_end + 622 + NP_IOCAP    ; byte: np_sig has been
+                                       ; written at least once
+np_pad3     equ os88_image_end + 623 + NP_IOCAP    ; byte: keeps np_sig even
+np_sig      equ os88_image_end + 624 + NP_IOCAP    ; NP_MAXROWS words: one
+                                       ; per row of the content
+                                       ; total 744 + NP_IOCAP = NP_BSS_TOTAL

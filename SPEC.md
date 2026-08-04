@@ -5007,6 +5007,64 @@ menu losing its first item and re-basing on `CMD_CLOCK`. Directory order on
 the apps disk stays mines, hello, notepad: the first two keep their indices
 so existing tests are unaffected.
 
+### 27.2 Row signatures — a keystroke redraws one row, not the note
+
+Typing one character used to cost a white fill of the whole content and a
+`font_char` per character in the note, and Up/Down cost that plus two extra
+measuring walks. Nearly all of it redrew pixels that had not moved: an edit
+at the caret cannot change a row **above** it, and it cannot change a row
+below the newline that ends the caret's paragraph either, because a newline
+resets the pen.
+
+Each visible row therefore carries a one-word **signature** in `np_sig`: a
+rotate-then-add fold of the characters drawn on it, plus the caret's column
+when the caret is on it. Two layouts that fold to the same word put the same
+glyphs at the same pixels, because on any row the k-th glyph is always at
+`[np_tx] + 8k`. It is a hash and not a proof — the same trade the Task
+Manager's rows make (§28) — so a collision leaves one row stale until its
+content moves again.
+
+`np_redraw` is then two walks:
+
+1. **Measure and compare** (`np_draw` = 0, `np_sigup` = 1). Folds each row,
+   compares against `np_sig`, stores the new value, and widens
+   `[np_dr0]`..`[np_dr1]`. If `np_dr0` comes back 0xFFFF nothing on screen
+   moved and the routine returns having drawn nothing at all.
+2. **Draw the band** (`np_draw` = 1, `np_clip` = 1). One `gfx_fill` over
+   rows `np_dr0`..`np_dr1` across the full content width, then the walk
+   again, skipping every row outside the range.
+
+Measured on a 410-character note, 20 keystrokes at the end, counting calls
+inside the kernel: `font_char` **8,410 → 350**, and scanlines filled
+**5,020 → 1,960**.
+
+Five things hold it up:
+
+- **A range, not a bitmap.** The interesting cases are all contiguous — one
+  row for a keystroke, one paragraph for a reflow, two adjacent rows for
+  Up/Down — and a range needs no indexing and turns the erase into one fill.
+  A click that jumps far redraws everything between, which is still no worse
+  than the old unconditional full repaint.
+- **The caret is in the signature**, folded in `np_ask` between the glyph
+  before it and the glyph after it. Moving it has to dirty both the row it
+  left and the row it arrived on, or it stays drawn where it was.
+- **A newline is folded into neither row.** It occupies no cell, so the row
+  it ends has the same pixels with it and without it. The row that
+  *disappears* when it is deleted is handled at the other end: after the
+  walk ends, `np_walk` keeps flushing rows until `[np_vrows]`, so a note
+  that shrank compares its vacated rows against their old signatures and
+  erases them.
+- **`np_paint` is the baseline, and never clips.** The kernel white-filled
+  the content on the way there, so that pass draws every row *and* records
+  what it drew. `np_measure` — the query pass behind a click or an Up — must
+  not touch the signatures at all: nothing has been drawn.
+- **`np_sigsame` is the escape hatch**, and it tests five things: the four
+  numbers `np_bounds` produced, so a resized window falls back to a full
+  repaint, and `np_msg`, because the toast is drawn *over* the text by
+  `np_toast` and is in no row's signature — the keystroke that retires one
+  has to erase it the only way this module can, by painting the content
+  again.
+
 ## 28. taskmgr.inc — the Task Manager window
 
 Built-in singleton app kind (KIND_TASKMGR, cap 1 — one sampler), window
