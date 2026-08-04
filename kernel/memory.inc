@@ -181,33 +181,40 @@ mem_init:
 ; straddling. Do not regrow a DMA buffer; claim the size you need.
 ; -----------------------------------------------------------------------------
 mem_claim_dma:
-    push ax
+    push si
+    push di
     push cx
-    mov ax, cx
+    mov si, cx
     mov cl, 6
-    shl ax, cl                  ; head KB -> paragraphs
-    jnc .set
-    mov ax, 0xFFFF              ; a head past 1MB: let the page test refuse it
-.set:                           ; rather than wrap into a plausible small one
-    mov [mem_dma], ax
+    shl si, cl                  ; head KB -> paragraphs
     pop cx
-    pop ax
-    mov byte [mem_dir], 0
+    jnc .set
+    mov si, 0xFFFF              ; a head past 1MB: let the page test refuse it
+.set:                           ; rather than wrap into a plausible small one
+    xor di, di
     jmp short mem_claim.go
 mem_claim_hi:
-    mov byte [mem_dir], 1
-    jmp short mem_claim.nodma
+    push si
+    push di
+    xor si, si
+    mov di, 1
+    jmp short mem_claim.go
 mem_claim:
-    mov byte [mem_dir], 0
-.nodma:
-    mov word [mem_dma], 0
+    push si
+    push di
+    xor si, si
+    xor di, di
 .go:
     push ax
     push cx
-    push si
-    push di
     pushf
-    cli                         ; the whole scan-and-publish, one window
+    cli                         ; the whole scan-and-publish, one window -
+    mov [mem_dma], si           ; the operation's PARAMETERS included. The
+    mov [mem_dir], di           ; entries stage them in registers because a
+                                ; global stored BEFORE the cli is another
+                                ; task's to overwrite in the gap: a worker's
+                                ; DMA head silently dropped, or a region
+                                ; claim allocating from the wrong end
 
     or ax, ax
     jz .fail
@@ -242,7 +249,7 @@ mem_claim:
     jmp .fail
 .haverec:
 
-    cmp byte [mem_dir], 0
+    cmp word [mem_dir], 0
     jne .hi
     mov dx, [mem_base]          ; DX = candidate base
     jmp short .retry
@@ -264,7 +271,7 @@ mem_claim:
     and cx, 0xF000              ; can work is the next page's floor...
     add cx, 0x1000
     jc .fail                    ; ...past 1MB, so there is no next page
-    cmp byte [mem_dir], 0
+    cmp word [mem_dir], 0
     je .dmago
     sub cx, [mem_dma]           ; ...and going DOWN, the highest base in THIS
     cmp cx, [mem_base]          ; page whose head still fits. Below the heap
@@ -289,7 +296,7 @@ mem_claim:
     add cx, [si+MC_PARA]        ; CX = this claim's end
     cmp cx, dx
     jbe .nover                  ; claim ends at/before our start: ditto
-    cmp byte [mem_dir], 0
+    cmp word [mem_dir], 0
     jne .down
     mov dx, cx                  ; overlap: restart just past this claim...
     jmp .retry
@@ -323,10 +330,10 @@ mem_claim:
     xor dx, dx
     stc
 .out:
-    pop di
-    pop si
     pop cx
     pop ax
+    pop di
+    pop si
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1157,10 +1164,12 @@ mem_own:
 section .bss
 
 mem_tab:  resb MEM_MAX * MC_SIZE  ; the claim map (layout above)
-mem_dir:  resb 1                  ; 0 = mem_claim (bottom up), 1 = mem_claim_hi
-                                  ; (top down, a package's region). One byte
-                                  ; and not a parameter because the whole
-                                  ; claim runs inside one cli window
+mem_dir:  resw 1                  ; 0 = mem_claim (bottom up), 1 = mem_claim_hi
+                                  ; (top down, a package's region). A word so
+                                  ; the entries can stage it in a register and
+                                  ; store it INSIDE the cli window - it is a
+                                  ; global only because the scan reads it per
+                                  ; candidate, never a parameter channel
 mem_dma:  resw 1                  ; ...and mem_claim_dma's head, in paragraphs,
                                   ; for the same reason: 0 = no page constraint
 mem_base: resw 1                  ; first heap paragraph = HEAP_SEG

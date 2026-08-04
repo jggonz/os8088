@@ -475,8 +475,9 @@ drv_svc_clear:
     mov word [drv_owner], 0
     mov word [drv_fseg], 0
     mov di, drv_svc
-    mov cx, DSV_SIZE + 16       ; the table and the staged sink name
-    xor al, al
+    mov cx, DSV_SIZE            ; the table alone: the 16-byte staged sink
+    xor al, al                  ; name this once also cleared is gone, and
+                                ; drv_cfg now sits right behind drv_svc
     cld
     rep stosb
     pop es
@@ -926,20 +927,20 @@ drv_release:
     mov dx, [bx+DRVR_SEG]
     or dx, dx
     jz .out
+    cmp bx, [drv_owner]         ; disarm DISPATCH before a byte is freed:
+    jne .norow                  ; snd_tick far-calls through drv_fseg inside
+    mov word [drv_fseg], 0      ; IRQ0, and a tick landing between the free
+    call drv_svc_clear          ; and a later disarm ran freed code. The
+.norow:                         ; single word store is atomic against it
+    mov word [bx+DRVR_SEG], 0   ; ...and drv_call is disarmed the same way
+    mov word [bx+DRVR_KB], 0
     push bx                     ; anything the DRIVER itself claimed is owned
     mov bx, dx                  ; by its segment (mem_own), so sweep those
     call mem_free_owner         ; FIRST - the image's own free below takes
     mov bx, MEM_K_DRV           ; that segment out of existence, and a claim
     call mem_free               ; whose owner word no longer names anything
     pop bx                      ; could never be found again. The mem_free_rec
-                                ; fence (SPEC.md 50.4), for a driver
-    mov word [bx+DRVR_SEG], 0   ; ...and drv_call is disarmed with it
-    mov word [bx+DRVR_KB], 0
-    cmp bx, [drv_owner]
-    jne .out
-    mov word [drv_fseg], 0      ; disarm the dispatch before the table goes
-    call drv_svc_clear
-.out:
+.out:                           ; fence (SPEC.md 50.4), for a driver
     pop dx
     pop bx
     pop ax
