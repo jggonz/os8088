@@ -796,19 +796,17 @@ cp_disp_paint:
     call font_str
 
     call cpf_dbok               ; CF = 1: the option cannot be taken now, so
-    mov byte [gfx_color], CBLACK    ; its label is drawn greyed (SPEC.md
-    jnc .lbl1                       ; 31.3/42.5). CDGRAY is the tree's only
-    mov byte [gfx_color], CDGRAY    ; disabled colour; on a 1bpp adapter
-.lbl1:                              ; font_ink rounds it to black, which is
-                                    ; why the caption below carries the
-                                    ; reason in words as well
+    call gfx_pen_cf             ; its label takes the disabled pen (SPEC.md
+                                ; 31.3/46). One call, because the predicate
+                                ; already answers in CF and the pen is two
+                                ; pieces of state that must not disagree
     mov si, cp_s_dbon           ; row 1 label
     mov cx, di
     add cx, CP_PLX
     mov dx, bp
     add dx, CP_PR0Y + CP_PROWH + CP_PLDY
     call font_str
-    mov byte [gfx_color], CBLACK
+    call gfx_pen_live
 
     mov si, cp_s_dcap           ; caption: what it costs...
     call cpf_dbok
@@ -898,17 +896,14 @@ cp_dbradios:
 
     add dx, CP_PROWH            ; --- row 1: double buffered ---
     call cpf_dbok               ; ...which is the row that can be refused
-    mov byte [gfx_color], CBLACK
-    jnc .pen
-    mov byte [gfx_color], CDGRAY
-.pen:
+    call gfx_pen_cf
     mov si, cp_radio_off
     cmp bl, 1
     jne .r1
     mov si, cp_radio_on
 .r1:
     call cp_glyph
-    mov byte [gfx_color], CBLACK
+    call gfx_pen_live
 
     pop si
     pop dx
@@ -1771,10 +1766,8 @@ cp_snd_paint:
 .lbl:
     mov al, bl
     call cp_snd_rowok               ; greyed rows still draw - they are what
-    mov byte [gfx_color], CBLACK    ; the machine does not have, and a missing
-    jnc .pen                        ; row would just look like a shorter list
-    mov byte [gfx_color], CDGRAY
-.pen:
+    call gfx_pen_cf                 ; the machine does not have, and a missing
+                                    ; row would just look like a shorter list
     mov si, cp_s_sspk               ; three fixed labels, in ladder order
     or bl, bl
     jz .str
@@ -1794,7 +1787,7 @@ cp_snd_paint:
     inc bl
     cmp bl, 3
     jb .lbl
-    mov byte [gfx_color], CBLACK
+    call gfx_pen_live
 
     mov ax, di                      ; the Test button: a plain framed box
     add ax, CPS_BTX1
@@ -1924,11 +1917,8 @@ cp_snd_radios:
 .r:
     mov al, bl
     call cp_snd_rowok           ; ...and the same pen cp_snd_paint gave the
-    mov byte [gfx_color], CBLACK    ; label, so the two halves of a row can
-    jnc .pen                        ; never disagree about being disabled
-    mov byte [gfx_color], CDGRAY
-.pen:
-    mov si, cp_radio_off
+    call gfx_pen_cf             ; label, so the two halves of a row can
+    mov si, cp_radio_off        ; never disagree about being disabled
     cmp bl, bh
     jne .draw
     mov si, cp_radio_on
@@ -1938,7 +1928,7 @@ cp_snd_radios:
     inc bl
     cmp bl, 3
     jb .r
-    mov byte [gfx_color], CBLACK
+    call gfx_pen_live
     pop si
     pop dx
     pop cx

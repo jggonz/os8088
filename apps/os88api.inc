@@ -92,13 +92,20 @@ CRED      equ 4
 CMAGENTA  equ 5
 CBROWN    equ 6
 CLGRAY    equ 7             ; DECORATION grey - Minesweeper's covered cells,
-                            ; Arkanoid's rails. Never the disabled colour
-CDGRAY    equ 8             ; the DISABLED colour, and the only one (SPEC.md
-                            ; 46). Grey the whole control - frame, ring, box,
-                            ; icon AND label - not just its caption; a black
-                            ; control with faint writing beside it reads as
-                            ; live. Text-only controls need words too (see
-                            ; MENU_DIS below for why)
+                            ; Arkanoid's rails, Recorder's centre line
+CDGRAY    equ 8             ; the disabled pen (SPEC.md 46). GREY THE WHOLE
+                            ; CONTROL - frame, ring, box, icon AND label -
+                            ; never just the caption, and that is not a style
+                            ; note: on a mono adapter your greyed LABEL comes
+                            ; out solid black, pixel-identical to a live one,
+                            ; because a dithered 8x8 glyph loses half its
+                            ; strokes and font_ink will not do that to a
+                            ; package's text. A frame or a ring DOES dither
+                            ; (gfx_ink), so the shape is what carries the
+                            ; state at 1bpp. rc_btn in apps/recorder is the
+                            ; reference: it greys the button frame with the
+                            ; label, so the button reads as disabled on every
+                            ; adapter
 CLBLUE    equ 9
 CLGREEN   equ 10
 CLCYAN    equ 11
@@ -802,16 +809,19 @@ MENU_DIS    equ 1           ; an item string that BEGINS with this byte is
                             ; Still answer the command itself: a keyboard
                             ; shortcut never goes near a menu.
                             ;
-                            ; THE '(NoRam)' IS NOT DECORATION. Grey is the
-                            ; whole visual signal, and on a 1bpp adapter it
-                            ; is no signal: font_ink rounds CDGRAY to BLACK
-                            ; (a dithered 8x8 glyph is unreadable), so on
-                            ; Hercules and CGA your disabled item is
-                            ; pixel-identical to a live one and merely
-                            ; declines to highlight. A menu item is text and
-                            ; nothing else, so the words ARE the mono half
-                            ; of the feature. SPEC.md 46 is the standard for
-                            ; every disabled control; this is its rule 3.
+                            ; The grey says THAT the item is unavailable, on
+                            ; every adapter: the KERNEL draws your menu, so a
+                            ; MENU_DIS item goes through the disabled pen and
+                            ; is masked to a checkerboard on mono - the way
+                            ; the 1bpp Macintosh drew a greyed-out item. You
+                            ; need do nothing for that. (This is the one
+                            ; place a package gets 1bpp-visible disabled TEXT
+                            ; for free; anything you draw yourself follows
+                            ; the CDGRAY note above.) The '(NoRam)' says WHY,
+                            ; which the grey cannot, and is worth the bytes
+                            ; whenever there is a reason a user could act on.
+                            ; SPEC.md 46 is the standard for every disabled
+                            ; control in the system.
 
 ; --- window record layout (SPEC.md 11, 20 bytes) -------------------------------
 W_FLAGS   equ 0             ; word: bit0 = used, bit1 = visible, bit2 =

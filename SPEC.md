@@ -1943,15 +1943,19 @@ change, no ABI change, and works for a built-in's menus exactly as for a
 package's. An app must still answer the command itself — a keyboard shortcut
 never goes near a menu.
 
-**`CDGRAY` is the whole of the visual signal, and on a 1bpp adapter it is not
-a signal at all.** `font_ink` rounds it to black (§39.4), so a disabled item is
-pixel-identical to a live one on Hercules and CGA — it just silently declines
-to highlight. A menu item is text and nothing else, so §46 rule 3 applies with
-no escape: **relabel it too**. The parenthetical in the paragraph above is not
-a stylistic example, it is the mono half of the feature: `'Save Gif (NoRam)'`
-is what a user on an XT actually sees. The kernel neither supplies those words
-nor checks for them today, which §46.3 lists as owed work — an app that skips
-them ships an item that looks selectable, is not, and never says why.
+**The grey is the whole of the visual signal, and it survives 1bpp** — but only
+because `menu_drop` draws the item through `gfx_pen_dis` rather than storing
+`CDGRAY`, and `font_ink` masks a flagged glyph to a checkerboard (§39.4/§46).
+Grey text alone rounds to black on mono, and a disabled item used to be
+pixel-identical to a live one there, silently declining to highlight and never
+saying why. It is a checkerboard now, the way the 1bpp Macintosh drew a
+greyed-out item, so `MENU_DIS` needs nothing from the app to be *visible* on
+any adapter — including when it is used as a radio mark (§43, §45), where the
+dithered item is the one that is currently selected.
+
+Relabelling is still worth doing. `'Save Gif (NoRam)'` says **why** the item is
+unavailable, which the grey cannot; the grey says **that** it is, which the
+words alone did unreliably. Paint does both (§46.3).
 
 **Every string in a set is an offset in the OWNING WINDOW'S segment**
 (§11's W_SEG, §20.1) — the app name, the menu titles and every item. So the
@@ -4999,7 +5003,15 @@ content-relative; the procs fetch the content origin via `wm_content`
   (12) pennant + black mast on a covered cell; revealed = white face, 1px
   dark gray grid border, centered colored digit; digit colors:
   1=1 (blue), 2=2 (green), 3=4 (red), 4=5 (magenta), 5=6 (brown),
-  6=3 (cyan), 7=0 (black), 8=8 (dark gray). Mine = black disc with spokes;
+  6=3 (cyan), 7=0 (black), 8=8 (dark gray) — the 8 is the one digit that cannot
+  reduce to black, because 1..7 use all seven indices that do. It keeps dark
+  gray because that is the only one of the six dither-class colours with enough
+  contrast on a white cell face; the alternatives are light gray (too faint to
+  read) and three bright colours (worse), and light blue collides with the 1.
+  **This digit is why the disabled state is a flag and not a colour** (§46): a
+  first cut had `font_ink` dither every `CDGRAY` glyph on mono, which made a
+  Minesweeper 8 come out looking exactly like a menu item you cannot pick.
+  Mine = black disc with spokes;
   the one you clicked sits on a light-red (12) cell, others (shown on
   loss) on light gray. Wrong flags on loss: mine + black X.
 - Input: W_ONCLICK reveals (or flags, in flag mode) the cell under the
@@ -8234,16 +8246,29 @@ an idle `CWHITE` one.
 Piano's decorative sharp glyph (`CLRED` on white) disappears — no flat map
 can give it black while the black-key core needs white.
 
-Glyphs never dither — a dithered 8x8 glyph is unreadable — so `font_ink`
-rounds everything but pure white to black.
+Glyphs round to black rather than dithering — a dithered glyph costs half its
+strokes, and Piano's coloured letters want contrast, not texture — **with one
+exception: `[gfx_dis]`**, the disabled flag (§46 rule 1). `font_ink` sets
+`[font_dith]`, which selects a third row loop in `font_char_bb` that ANDs the
+shifted glyph with an alternating AA/55.
 
-**That is what makes a greyed string invisible as such on both mono
-adapters**, and it is the reason §46 exists: `CDGRAY` text comes out black
-here, pixel-identical to a live label, while a `CDGRAY` ring or frame goes
-through `gfx_ink` and comes out dotted. Anything drawn only as text has to
-carry its disabled state in words as well (§46 rule 3). The reduction is not
-the bug — a dithered glyph really is unreadable — but every disabled control
-in the tree has to be designed around it.
+Without it a disabled string came out **black — pixel-identical to a live
+one** — so a greyed menu item simply stopped saying it was greyed, and
+`MENU_DIS`'s entire visual signal was missing on two adapters out of three
+(§12.2). Half a stroke is a real cost and it is the right one to pay here: it
+is what the 1bpp Macintosh did to a greyed-out menu item, and it is legible for
+the same reason.
+
+The trigger is the **flag and not the colour** because the renderer cannot ask
+whether a string is a control. Keyed off `CDGRAY` it caught Minesweeper's digit
+8 (§23), which is dark gray for contrast and has nothing to do with being
+disabled.
+
+The phase restarts at `AA` for every cell rather than tracking absolute y, so a
+line of text is in step with itself; text rows are 8px apart, which is even, so
+lines are in step with each other too. It is a **separate loop** and not an
+`and` inside `.crow` because that is the innermost loop of every string on the
+slowest machines we support, and almost no glyph wants this.
 
 ### 39.5 Dispatch: `[bb_on]` and `[bb_dbl]`
 
@@ -9921,10 +9946,25 @@ means.
 
 ### 46.1 The seven rules
 
-1. **`CDGRAY` is the disabled colour, and the only one.** `CLGRAY` is a
-   *decoration* colour — Minesweeper's covered cells, Arkanoid's rails,
-   Recorder's centre line — and using it for disabled state collides with all
-   three. Do not invent a lighter shade or a stipple of your own.
+1. **Disabled is a FLAG, not a colour: `gfx_pen_dis` / `gfx_pen_live` /
+   `gfx_pen_cf`.** They set `[gfx_color]` = `CDGRAY` *and* `[gfx_dis]` = 1
+   together, and nothing in the kernel sets either half by hand. `gfx_pen_cf`
+   takes the answer in CF, which is the shape every greying predicate already
+   returns, so a call site is `call <ok-test>` then `call gfx_pen_cf`.
+
+   It is a flag because the renderer has to do something a colour cannot
+   express — `font_ink` masks a disabled glyph to a checkerboard on mono
+   (rule 3) — and because inferring it from `CDGRAY` catches every other use of
+   that colour. The first cut did exactly that and made Minesweeper's digit 8
+   (§23) look like a menu item you cannot pick. A flag says what is *meant*;
+   a colour only says what was *picked*.
+
+   `gfx_unlock` clears `[gfx_dis]`, for the reason it clears the clip region
+   (§11.3): it is valid for exactly one lock hold, so a site that forgets
+   `gfx_pen_live` cannot leak dithered text into whatever draws next.
+
+   `CLGRAY` remains a *decoration* colour — Minesweeper's covered cells,
+   Arkanoid's rails, Recorder's centre line — and is never a disabled state.
 
 2. **Grey the whole control, not its caption.** Every mark the control is made
    of takes the disabled pen: the radio ring, the checkbox square, the button
@@ -9932,17 +9972,26 @@ means.
    reads as a live control that someone mislabelled — which is exactly what the
    Sound page shipped as until it was reported.
 
-3. **Text alone is not a disabled state, because on 1bpp it is not a state at
-   all.** `font_ink` rounds `CDGRAY` to **black** (§39.4), deliberately: a
-   dithered 8x8 glyph is unreadable, so mono has no grey to draw a letter in.
-   A greyed label is therefore *pixel-identical* to a live one on Hercules and
-   CGA. Anything drawn through the `gfx_*` primitives reduces through
-   `gfx_ink` instead, where `CDGRAY` becomes the 50% dither and survives — so
-   a ring, a frame or a box carries the state and a string does not.
+3. **Grey does not survive 1bpp; the flag does.** Every middle grey rounds to
+   black in text (§39.4) — a dithered 8x8 glyph costs half its strokes, which
+   is the wrong trade for Piano's coloured letters and right for nothing —
+   so a `CDGRAY` label used to be *pixel-identical* to a live one on Hercules
+   and CGA. `[gfx_dis]` is the carve-out: `font_ink` masks a disabled glyph to
+   a checkerboard, exactly as the 1bpp Macintosh drew a greyed-out menu item,
+   and just as readable.
 
-   **A control whose only mark is text must carry the disabled state in words
-   as well.** `'Save Gif (NoRam)'` (§12.2), or a caption beneath it that says
-   why (§31.3). One or the other, never neither.
+   Shapes never needed it — `gfx_ink` maps `CDGRAY` to the 50% dither, so a
+   ring or a frame comes out dotted on mono — which is why rule 2's "grey the
+   whole control" was load-bearing before this existed and remains the rule for
+   **packages**, which have no way to reach the flag (§20.3 publishes no slot
+   for it, deliberately: nothing has needed one). A package's disabled *label*
+   still rounds to black on mono, so a package's disabled control must include
+   a non-text mark — a frame, a box, an icon — and `rc_btn` (Recorder) is the
+   reference.
+
+   Words are still worth adding — `'Save Gif (NoRam)'` (§12.2), or a caption
+   that says why (§31.3) — but they say *why not*, not *whether*. They stopped
+   being load-bearing for kernel-drawn text when the renderer took the state.
 
 4. **One predicate, three consumers.** The test that greys the control, the
    test that refuses the click and the text that explains it are the *same
@@ -9978,9 +10027,10 @@ means.
 ### 46.2 Verifying it
 
 **A greying change is not done until it has been looked at on a 1bpp adapter.**
-Rule 3 is the one that cannot be seen on the machine most work happens on, and
-VGA will show a perfectly convincing grey for something that is invisible on
-the other two:
+The two adapters differ in *kind*, not just in colour depth — a glyph becomes a
+checkerboard, a ring becomes dotted — and VGA will show a perfectly convincing
+grey for something that renders quite differently, or not at all, on the other
+two:
 
 ```
 python3 tools/hercshot.py build/qmp.sock 0x70000 out.png   # after make test VIDEO=herc HERCSEG=0x7000
@@ -9999,33 +10049,34 @@ Conformant, and worth reading as the reference:
   predicate, glyph and label both, dotted ring on mono.
 - **`rc_btn`** (Recorder) — greys the button frame with the label, so the
   frame dithers and the button reads as disabled on every adapter.
-- **Paint's menu items** (§12.2) — text-only controls that carry the state in
-  words, `'Save Gif (NoRam)'` and five more, which is rule 3's other half.
-
+- **Paint's menu items** (§12.2) — text-only controls that also carry the state
+  in words, `'Save Gif (NoRam)'` and five more. Since `font_ink` learned the
+  dither those words say *why not* rather than *whether*, which is still worth
+  having.
 - **The Display page's back-buffer row** (§31.3) — `cp_dbradios` takes
   `cpf_dbok`'s pen for row 1's glyph. It used to draw it `CBLACK` beside a grey
-  label, which this section's rule 2 forbids and §31.3 had *already* described
-  correctly; the code was the thing that disagreed.
+  label, which rule 2 forbids and §31.3 had *already* described correctly; the
+  code was the thing that disagreed.
+- **Every disabled menu item everywhere** (§12.2, `MENU_DIS`) — fixed in the
+  renderer rather than per app, which is why there is nothing to list. It was
+  text and nothing else, so on Hercules and CGA it was pixel-identical to a live
+  item and merely declined to highlight; `font_ink`'s `CDGRAY` dither made all
+  of them, in the kernel and in every package at once, say so. The same change
+  covers **`MENU_DIS` used as a RADIO MARK** — Solitaire's Draw One / Draw Three
+  (§43) and Tracker's 11/22/44 kHz (§45), where grey means "this is the
+  setting": the current item is now the dithered one, so a mono user can see
+  which is which without a checkmark glyph and without spending a character of
+  `MENU_MAXCH`.
+**Owed:** nothing identified. §46.2 is the standing obligation — a greying
+change is not finished until it has been looked at on a mono adapter, and the
+audit that produced this list only covered controls that *do* grey. Controls
+that ought to refuse and do not disable at all are a different sweep.
 
-**Not yet conformant — a correction pass is owed:**
-
-- **Disabled menu items** (§12.2, `MENU_DIS`) are text and nothing else, so on
-  Hercules and CGA a disabled item is pixel-identical to a live one. The
-  `'(NoRam)'` wording is the only mono signal and it is a *convention* the
-  kernel neither supplies nor checks — Paint does it, and an app that does not
-  gets an item that looks selectable, cannot be selected, and never says why.
-  Rule 3. Fixing it is the one entry here that is not a local edit: either
-  `menu_drop` grows a mark a glyph cell can carry on 1bpp, or `MENU_DIS`'s
-  contract starts requiring the words.
-- **`MENU_DIS` used as a RADIO MARK** — Solitaire's Draw One / Draw Three
-  (§43) and Tracker's 11/22/44 kHz (§45) disable the item that is *currently
-  selected*, so grey reads "this is the setting" rather than "you cannot have
-  this". It is a good idiom and it fails the same way, but it needs a different
-  repair: `(NoRam)`-style words say *why not*, and what these need is a mark
-  saying *which one*. A leading glyph in the string — the Mac's checkmark — is
-  the cheap version, and it costs one character of `MENU_MAXCH`. Until then a
-  Hercules or CGA user sees three identical rate items and no way to tell which
-  is playing.
+**Packages have no `[gfx_dis]`, on purpose.** §20.3 publishes no slot for it
+because nothing has needed one: a package's disabled control is covered by rule
+2, whose non-text mark dithers through `gfx_ink` without help. If an app ever
+needs disabled *text* with no shape beside it, that is when the slot gets
+added — and adding one is an append, which §20.8 allows.
 
 ## 50. memory.inc — the claim heap
 

@@ -158,19 +158,25 @@ Testing quirks (learned the hard way):
   - `.lowbss` — task stacks + disk buffers, in `LOW_SEG` just **above** the kernel image. Reached through SS or ES, **never DS** (SPEC.md §2.1).
 - **Label hygiene.** One flat namespace; every module-internal label carries its module prefix (`vga_`, `mou_`, `sch_`, `wm_`, `inst_`, `menu_`, `ui_`, `dsk_`, `dskw_`, `ld_`, `fm_`, `ico_`, `desk_`, `dock_`, …) or is a NASM local label.
 - **Greying a control follows SPEC.md §46 — read it before disabling anything.**
-  Seven binding rules, and the one nobody guesses is rule 3: **`font_ink` rounds
-  `CDGRAY` to BLACK**, so a greyed *string* is pixel-identical to a live one on
-  Hercules and CGA. Grey survives only where `gfx_ink` sees it (rings, frames,
-  fills → the 50% dither), so grey **the whole control and not just its
-  caption**, and give a text-only control words as well (`'Save GIF (NoRam)'`).
-  The rest in one line each: `CDGRAY` and never `CLGRAY`; one predicate shared
-  by the greying, the click refusal and the explanation; grey a **fact** (no
-  hardware, wrong adapter) and never a guess — if the only test is doing the
-  thing, do it and report; a greyed control explains itself, so a refused click
-  on it says nothing more; and every partial redraw path applies the same pen
-  as the full paint. **A greying change is not done until it has been looked at
-  on a 1bpp adapter** — that is the entire failure mode, and VGA will show you a
-  convincing grey for something invisible on the other two.
+  Seven binding rules. The load-bearing one is rule 1: **disabled is a FLAG,
+  not a colour** — `call <ok-test>` then `call gfx_pen_cf`, which sets
+  `[gfx_color]` = `CDGRAY` and `[gfx_dis]` together (`gfx_pen_dis` /
+  `gfx_pen_live` for the unconditional cases, and `gfx_unlock` clears the flag
+  like it clears the clip region). The flag exists because on mono grey text
+  rounds to *black* — a disabled label was pixel-identical to a live one — so
+  `font_ink` masks a flagged glyph to a checkerboard, the 1bpp Macintosh's
+  greyed-out menu item. Keying that off the colour instead caught Minesweeper's
+  dark-grey 8, which is why it is a flag. The rest in one line
+  each: grey **the whole control** — ring, box, frame, icon *and* label, never
+  just the caption; one predicate shared by the greying, the click refusal and
+  the explanation; grey a **fact** (no hardware, wrong adapter) and never a
+  guess — if the only test is doing the thing, do it and report; a greyed
+  control explains itself, so a refused click on it says nothing more; every
+  partial redraw path applies the same pen as the full paint; and words like
+  `'Save Gif (NoRam)'` are still worth adding, but they now say *why not*
+  rather than *whether*. **A greying change is not done until it has been looked
+  at on a 1bpp adapter** — the two mono adapters differ from VGA in kind, not
+  just in depth, and a glyph there is a checkerboard while a ring is dotted.
 - **Memory budget — read `docs/KERNEL-MEMORY.md` before spending any.** The whole kernel fits the first 64KB above the BIOS: image, `.bss`, the FAT snapshot, the disk buffers and every task stack are one contiguous span from `KERNEL_SEG`, and guard 1 in `kernel.asm` measures it against `KERN_BUDGET` = 65,536. It is at 65,024 today — **512 bytes of headroom, and no growth room anywhere in the ladder by design**. The one exception is the menu save-under, a heap claim rather than a reservation. **Growing past 64KB is a decision to take with whoever asked for the feature, not a build fix.** There is also nowhere to hide code any more: `.fartext` is retired (SPEC.md §33), so cold code is ordinary code. The heap starts where *this build's* kernel ends, so it moves whenever the kernel does. Nothing catches a task stack that outgrows its 512-byte slice — re-run the fill probe (KERNEL-MEMORY) before trusting a smaller number.
 
 ### Concurrency (SPEC.md §7 — the crux)

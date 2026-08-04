@@ -263,7 +263,10 @@ font_char_bb:
     mov di, [font_bb_di]
     mov bh, 8                   ; row counter
     test ch, 1                  ; this plane's ink, decided ONCE rather than
-    jz .crow                    ; once per row
+    jnz .srow                   ; once per row - and so is the disabled
+    cmp byte [font_dith], 0     ; dither, which is mono-only and therefore
+    jne .dstart                 ; always on the clear-bits side
+    jmp .crow
 .srow:
     mov ah, [si]                ; glyph row in the window's high byte
     inc si
@@ -305,6 +308,45 @@ font_char_bb:
 .cnw:
     dec bh
     jnz .crow
+    jmp short .pnext
+
+; --- disabled text, mono only (SPEC.md 46) -----------------------------------
+; .crow with the shifted glyph masked to a checkerboard. A separate loop
+; rather than an `and ah, [font_dmask]` in .crow itself: that is the innermost
+; loop of every string on the slowest machines we run on, and a memory-operand
+; AND per byte per row is real money there for something almost no glyph wants.
+; The phase restarts at AA for every cell, so a whole line is in step - text
+; rows are 8px apart, which is even, so lines are in step with each other too.
+.dstart:
+    mov byte [font_dmask], 0xAA
+.drow:
+    mov ah, [si]
+    inc si
+    or ah, ah                   ; a blank row masks nothing out...
+    jz .dnext
+    xor al, al
+    shr ax, cl
+    and ah, [font_dmask]        ; ...and half of what is left goes too
+    and al, [font_dmask]
+    or ah, ah
+    jz .dsecond                 ; the mask can empty a byte the glyph filled
+    not ah
+    and [es:di], ah
+.dsecond:
+    or al, al
+    jz .dnext
+    not al
+    and [es:di+1], al
+.dnext:
+    xor byte [font_dmask], 0xFF ; every row, blank ones included, or the
+                                ; checkerboard turns into stripes
+    add di, [cs:vid_rowadd]
+    test di, [cs:vid_wrapbit]
+    jz .dnw
+    add di, [cs:vid_wrapfix]
+.dnw:
+    dec bh
+    jnz .drow
 .pnext:
     add dx, [vid_rpara]
     shr ch, 1
@@ -317,22 +359,41 @@ font_char_bb:
 ;
 ; The glyph loop tests bit 0 of CH once per plane and shifts, so on VGA the
 ; colour index goes in untouched. On mono there is one plane and one bit to
-; give it: gfx_ink's black or white. Glyphs never dither - a dithered 8x8
-; glyph is unreadable - so the middle greys round to black, which is right
-; for every string the UI draws (dark grey disabled text on white stays
-; legible, and Piano's coloured letters keep their contrast).
-; in:       CH = [gfx_color]
-; out:      CH = the colour index (VGA) or 00/FF (mono)
+; give it: gfx_ink's black or white. The middle greys round to black - a
+; dithered 8x8 glyph costs half its strokes, and Piano's coloured letters
+; want contrast, not texture.
+;
+; **[gfx_dis] IS THE ONE EXCEPTION** (SPEC.md 46): a disabled control's text
+; is masked to a checkerboard instead - half the strokes, which is exactly
+; what the 1bpp Macintosh did to a greyed-out menu item and exactly as
+; readable. Without it a disabled STRING came out black, pixel-identical to a
+; live one on Hercules and CGA, so a menu item that greyed out simply stopped
+; saying so and MENU_DIS's whole visual signal was missing (SPEC.md 12.2).
+;
+; **It keys off the FLAG and not off CDGRAY**, which was the first attempt:
+; the renderer cannot ask whether a string is a control, so every other use of
+; that colour got caught too - Minesweeper's digit 8 (SPEC.md 23) came out
+; dotted, looking like a menu item you cannot pick. A flag says what is meant
+; rather than inferring it from what was picked, and gfx_pen_* keeps the two
+; from disagreeing.
+;
+; in:       CH = [gfx_color], [gfx_dis]
+; out:      CH = the colour index (VGA) or 00/FF (mono); [font_dith] set
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 font_ink:
-    cmp byte [vid_mono], 0
-    je .out
+    mov byte [font_dith], 0     ; cleared on EVERY path, VGA included: the
+    cmp byte [vid_mono], 0      ; glyph loop reads it per plane and .bss is
+    je .out                     ; not zeroed by -f bin
     push ax
     mov al, ch
-    call gfx_ink
+    call gfx_ink                ; CH is untouched by it - still the index
     cmp al, 0xFF                ; only pure white lights a mono pixel
     je .white
+    cmp byte [gfx_dis], 0
+    je .black
+    mov byte [font_dith], 1     ; disabled: black ink, half the pixels
+.black:
     xor al, al
 .white:
     mov ch, al
@@ -428,4 +489,8 @@ section .bss
 font_glyphs:    resb 760        ; glyphs 32..126, 8 bytes per row (FONT_BYTES)
 font_bb_si:     resw 1          ; bb path: glyph pointer, reloaded per plane
 font_bb_di:     resw 1          ; bb path: cell offset, reloaded per plane
+font_dith:      resb 1          ; 1 = this glyph is disabled text on a mono
+                                ; adapter (SPEC.md 46); font_ink decides it
+                                ; per glyph and writes it on every path
+font_dmask:     resb 1          ; ...and the row's half of the checkerboard
 section .text
