@@ -174,6 +174,282 @@ mem_claim:
     ret
 
 ; -----------------------------------------------------------------------------
+; mem_runfree - is the paragraph run [CX, DI) clear of every live claim?
+; in:  CX = first paragraph, DI = one past the last, [mem_skip] = a record to
+;      ignore (0 = ignore none)
+; out: CF = 0 the run is free, CF = 1 something is in it
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+mem_runfree:
+    push ax
+    push bx
+    push dx
+    mov bx, mem_tab
+    mov dx, MEM_MAX
+.next:
+    cmp bx, [mem_skip]
+    je .skip
+    cmp word [bx+MC_SEG], 0
+    je .skip
+    mov ax, [bx+MC_SEG]
+    cmp ax, di
+    jae .skip                   ; it starts at or past our end
+    add ax, [bx+MC_PARA]
+    cmp ax, cx
+    ja .busy                    ; ...and it ends past our start: overlap
+.skip:
+    add bx, MC_SIZE
+    dec dx
+    jnz .next
+    clc
+    jmp short .out
+.busy:
+    stc
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mem_hifit - the HIGHEST free run of AX paragraphs
+; in:  AX = paragraphs
+; out: CF = 0 and CX = its base; CF = 1 nothing that big is free
+; clobbers: CX (the output), CF
+;
+; Highest and not lowest on purpose: the one caller is a claim being GROWN,
+; and a block at the top has the rest of the heap's free space above it, so
+; the next grow extends in place instead of moving again. The low holes stay
+; where they are for claims that are not growing.
+;
+; The only candidate bases worth trying are the heap's floor and the end of
+; each live claim - a gap starts at one of those or nowhere - so this is
+; MEM_MAX candidates against MEM_MAX claims, not a walk of the heap.
+; -----------------------------------------------------------------------------
+mem_hifit:
+    push ax
+    push bx
+    push dx
+    push di
+    push si
+    mov word [mem_skip], 0      ; a destination may overlap nothing at all
+    xor si, si                  ; SI = best base so far, 0 = none
+    mov bx, mem_tab
+    mov cx, [mem_base]          ; the first candidate is the heap's floor
+.cand:
+    mov di, cx
+    add di, ax
+    jc .step                    ; wrapped
+    cmp di, [mem_top]
+    ja .step
+    call mem_runfree
+    jc .step
+    cmp cx, si
+    jbe .step
+    mov si, cx                  ; a higher one that fits
+.step:                          ; ...then the end of each live claim, and the
+    cmp bx, mem_tab + MEM_MAX*MC_SIZE   ; table bound is the loop bound: a
+    jae .done                           ; count could walk one record past it
+    cmp word [bx+MC_SEG], 0
+    je .skiprec                 ; a free record has no end to try
+    mov cx, [bx+MC_SEG]
+    add cx, [bx+MC_PARA]
+    add bx, MC_SIZE
+    jmp short .cand
+.skiprec:
+    add bx, MC_SIZE
+    jmp short .step
+.done:
+    mov cx, si
+    or si, si
+    jz .none
+    clc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop si
+    pop di
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mem_bcopy - move CX paragraphs from segment SI to segment DI
+; in:  SI = source base segment, DI = destination base segment, CX = paragraphs
+; out: nothing; preserves every register
+;
+; Segment-stepped, 1KB at a time, so a block bigger than 64KB moves without a
+; 16-bit offset ever binding - the dskw_rbdata idiom (SPEC.md 18.4.1). The
+; two blocks never overlap: mem_hifit treats the source as occupied, so the
+; destination it returns cannot cover it, and a plain forward copy is safe.
+; -----------------------------------------------------------------------------
+mem_bcopy:
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    push es
+.chunk:
+    jcxz .done
+    mov ax, cx
+    cmp ax, 64                  ; 64 paragraphs = 1KB per pass
+    jbe .last
+    mov ax, 64
+.last:
+    sub cx, ax
+    push cx
+    push si
+    push di
+    mov ds, si
+    mov es, di
+    xor si, si
+    xor di, di
+    mov cx, ax
+    shl cx, 1                   ; paragraphs -> words (x16 bytes / 2)
+    shl cx, 1
+    shl cx, 1
+    cld
+    rep movsw
+    pop di
+    pop si
+    pop cx
+    add si, ax                  ; ...and both bases step by what moved
+    add di, ax
+    jmp short .chunk
+.done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; mem_regrow - resize a claim you already hold (SPEC.md 50.3)
+; in:  DX = the claim's current base segment, AX = the new size in KB,
+;      BX = the owner word (the API stub supplies it)
+; out: CF=0 and DX = the claim's base NOW - unchanged when it grew where it
+;      stood, different when it had to move, and the contents came with it
+;      either way. CF=1 and the old claim is untouched at its old base.
+; clobbers: DX (the output), CF
+;
+; WHY THIS EXISTS. Growing a claim used to mean claim-new, copy, free-old,
+; which needs old + new free AT ONCE and contiguously - so a heap with plenty
+; of total room refused a resize it could afford, and the app reported "not
+; enough memory" over hundreds of free KB. Three paths, and the first two
+; move nothing:
+;
+;   1. shrink or level -> the record's length changes and that is all.
+;   2. grow with free paragraphs directly above -> extend in place. This is
+;      the case that matters: it needs only the DIFFERENCE free, not old +
+;      new, and it is what a canvas dragged bigger hits nearly every time.
+;   3. grow with something above -> a new block, HIGHEST-fit so the grower
+;      lands at the top with the free space above it, the kernel copies, and
+;      the old block is freed. Only this path pays for a move, and it is the
+;      same copy the caller used to make itself.
+;
+; WHAT IT IS NOT. It does not compact the heap by sliding OTHER claims down,
+; and it cannot: a claim's base lives in its holder's own bss - a package's
+; [pt_base], the kernel's [bb_seg] - and nothing here can reach in and
+; rewrite those. Moving somebody else's block hands them a pointer into
+; memory that is no longer theirs. Real compaction needs a relocation
+; callback every holder implements; until there is one, the fix is to stop
+; CREATING the fragmentation, which is what path 2 does.
+; -----------------------------------------------------------------------------
+mem_regrow:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    pushf
+    cli
+    or ax, ax
+    jz .fail
+    mov cl, 6
+    shl ax, cl                  ; AX = paragraphs wanted
+    jc .fail
+
+    mov si, mem_tab             ; it must be a base, and yours
+    mov cx, MEM_MAX
+.find:
+    cmp word [si+MC_SEG], 0
+    je .fnext
+    cmp [si+MC_SEG], dx
+    jne .fnext
+    cmp [si+MC_OWN], bx
+    je .found
+.fnext:
+    add si, MC_SIZE
+    loop .find
+    jmp short .fail
+.found:
+    cmp ax, [si+MC_PARA]
+    ja .grow
+    mov [si+MC_PARA], ax        ; 1. shrink or level: the tail is free now
+    jmp short .ok
+
+.grow:
+    mov di, dx                  ; 2. does it fit where it stands?
+    add di, ax
+    jc .move
+    cmp di, [mem_top]
+    ja .move
+    mov [mem_skip], si          ; our own paragraphs are not in the way
+    mov cx, dx
+    add cx, [si+MC_PARA]        ; CX = our end = the extension's start
+    call mem_runfree
+    mov word [mem_skip], 0
+    jc .move
+    mov [si+MC_PARA], ax        ; it does: extend, copy nothing
+    jmp short .ok
+
+.move:                          ; 3. the highest block that will take it
+    call mem_hifit              ; CX = its base
+    jc .fail
+    push ax
+    push cx
+    mov di, cx
+    mov cx, [si+MC_PARA]        ; only what is in use travels
+    mov si, dx
+    call mem_bcopy
+    pop cx
+    pop ax
+    mov si, mem_tab             ; re-find: SI carried the source segment
+.rfind:                         ; bounded, though it cannot miss - the record
+    cmp si, mem_tab + MEM_MAX*MC_SIZE   ; was found once already and nothing
+    jae .fail                           ; since could clear it
+    cmp [si+MC_SEG], dx
+    jne .rnext
+    cmp [si+MC_OWN], bx
+    je .rgot
+.rnext:
+    add si, MC_SIZE
+    jmp short .rfind
+.rgot:
+    mov [si+MC_SEG], cx         ; the record follows the bytes
+    mov [si+MC_PARA], ax
+    mov dx, cx                  ; ...and the caller is told where it went
+.ok:
+    popf
+    clc
+    jmp short .out
+.fail:
+    popf
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; mem_free - release a block (SPEC.md 50.3)
 ;
 ; in:       DX = the base segment mem_claim returned, BX = the owner word it
@@ -589,6 +865,7 @@ section .bss
 
 mem_tab:  resb MEM_MAX * MC_SIZE  ; the claim map (layout above)
 mem_base: resw 1                  ; first heap paragraph = HEAP_SEG
+mem_skip:   resw 1              ; mem_runfree: a record to ignore, 0 = none
 mem_top:  resw 1                  ; one past the last, from int 12h
 
 section .text

@@ -532,6 +532,31 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; moved it. If your Save means "the same
                                  ; place my Save As chose", store the pair
                                  ; these two slots trade in beside the name.
+%define OSAPI_MEM_REGROW    KERNEL_SEG:0x0278   ; DX = a claim YOU hold, AX =
+                                 ; the new size in KB. out CF=0 and DX = the
+                                 ; claim's base NOW - the SAME segment when it
+                                 ; grew where it stood, a different one when it
+                                 ; had to move, and your bytes came with it
+                                 ; either way. CF=1 and the old claim is
+                                 ; untouched at its old base.
+                                 ;
+                                 ; USE THIS INSTEAD OF claim-copy-free. That
+                                 ; sequence needs old + new free AT ONCE and
+                                 ; contiguously, so a heap with plenty of total
+                                 ; room refuses a resize it can afford. This
+                                 ; extends in place when the paragraphs above
+                                 ; are free - needing only the DIFFERENCE - and
+                                 ; only moves when it must, in which case it
+                                 ; picks the HIGHEST block that fits so you end
+                                 ; up at the top with room to grow again.
+                                 ;
+                                 ; Shrinking always succeeds in place, and the
+                                 ; tail is free for everyone else immediately.
+                                 ;
+                                 ; ALWAYS take the answer from DX. A grow that
+                                 ; moved leaves your old segment pointing at
+                                 ; memory that is no longer yours.
+
 %define OSAPI_FONT_GLYPHS   KERNEL_SEG:0x0258   ; out SI = the offset of the
                                  ; kernel's 8x8 glyph table in KERNEL_SEG,
                                  ; AL = first character code it covers,

@@ -140,7 +140,13 @@
 ; to two instances, so two Paints now simply both run.
 PT_SC_KB    equ 12                  ; scratch (the flood-fill stack), taken off
                                     ; the TOP of the block
-PT_CLIPMINP equ 1024                ; the clipboard's floor, in paragraphs
+PT_CLIPMINP equ 256                 ; the clipboard's floor, in paragraphs. It
+                                    ; was 1024 - 16KB - and that was the GIF
+                                    ; codec's requirement, not the
+                                    ; clipboard's; the tables have their own
+                                    ; claim now, so a machine that can spare
+                                    ; only a little gets a small clipboard
+                                    ; instead of none
 PT_MINP     equ 2000                ; ...and a canvas under 32,000 bytes
                                     ; (320x200) is not worth starting
 PT_WANT_KB  equ 318                 ; the hard ceiling: two canvases at the
@@ -153,10 +159,13 @@ PT_SC_STACK equ 16                  ; flood-fill span stack starts here
 PT_FSTK_MAX equ 1024                ; entries of 8 bytes (y, x1, x2, dy)
 
 ; --- the GIF codec's work areas (SPEC.md 42) ---------------------------------
-; Both directions borrow buffers a load or a save has already invalidated, which
-; is the whole reason an LZW dictionary fits an app whose own world is 19.5KB.
-; The clipboard's floor exists to be borrowed here; the assertion below is what
-; keeps that true if PT_CLIPMINP ever moves.
+; The LZW tables have their own claim, taken for the length of one GIF and
+; handed straight back (pt_alloc_lzw / pt_free_lzw). They used to BORROW the
+; clipboard, which is why PT_CLIPMINP had a floor big enough to hold them -
+; a legacy of the days before a package could ask the kernel for memory at
+; all (SPEC.md 50.3). Borrowing cost more than it saved: it tied Save Gif to
+; whether a clipboard happened to be funded, and it kept 16KB reserved in
+; every clipboard on every machine for a codec that is idle almost always.
 PT_GD_PREF  equ 0                   ; read: prefix[4096] words
 PT_GD_SUFF  equ 8192                ; read: suffix[4096] bytes
 PT_GD_STK   equ 12288               ; read: the output stack, 4096 bytes
@@ -170,11 +179,12 @@ PT_GE_MAXC  equ 2047                ; the writer's code ceiling: 11 bits, minus
                                     ; (see pt_gadd - its table runs one behind)
 PT_GDIM_MAX equ 4096                ; a GIF bigger than this in either axis is
                                     ; refused, not decoded row by row to nowhere
-%if PT_GD_END > PT_CLIPMINP * 16
-%error "the GIF read tables no longer fit the clipboard's reserved floor"
+PT_LZW_KB   equ 16                  ; the claim both directions run in
+%if PT_GD_END > PT_LZW_KB * 1024
+%error "the GIF read tables no longer fit PT_LZW_KB"
 %endif
-%if PT_GE_END > PT_CLIPMINP * 16
-%error "the GIF write tables no longer fit the clipboard's reserved floor"
+%if PT_GE_END > PT_LZW_KB * 1024
+%error "the GIF write tables no longer fit PT_LZW_KB"
 %endif
 
 ; --- canvas geometry -----------------------------------------------------------
@@ -585,6 +595,7 @@ pt_alloc_undo:
     mov [pt_undelta], dx
     mov byte [pt_haveundo], 1
 .out:
+    call pt_menufix                 ; funded or not, the menu says which
     pop dx
     pop cx
     pop ax
@@ -626,6 +637,7 @@ pt_alloc_clip:
     mov [pt_cbparas], ax
     mov byte [pt_haveclip], 1
 .out:
+    call pt_menufix                 ; funded or not, the menu says which
     pop dx
     pop cx
     pop ax
@@ -688,6 +700,44 @@ pt_free_undo:
     mov word [pt_unseg], 0
     mov byte [pt_haveundo], 0
     mov byte [pt_undo_ok], 0
+    call pt_menufix             ; the menu says so now
+.out:
+    pop dx
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_alloc_lzw / pt_free_lzw - the GIF codec's tables, for one file only
+; out: CF=0 and [pt_lzwseg] is a claim; CF=1 nothing was funded
+;
+; Taken at the top of a GIF and released at the bottom, so a Paint that is not
+; converting a GIF holds none of it. 16KB is the READ direction's need; the
+; write direction uses 10KB of the same block.
+; -----------------------------------------------------------------------------
+pt_alloc_lzw:
+    push ax
+    push dx
+    mov word [pt_lzwseg], 0
+    mov ax, PT_LZW_KB
+    call OSAPI_MEM_CLAIM
+    jc .no
+    mov [pt_lzwseg], dx
+    pop dx
+    pop ax
+    clc
+    ret
+.no:
+    pop dx
+    pop ax
+    stc
+    ret
+
+pt_free_lzw:
+    push dx
+    mov dx, [pt_lzwseg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+    mov word [pt_lzwseg], 0
 .out:
     pop dx
     ret
@@ -702,6 +752,7 @@ pt_free_clip:
     mov word [pt_cbparas], 0
     mov byte [pt_haveclip], 0
     mov word [pt_cbw], 0
+    call pt_menufix             ; the menu says so now
 .out:
     pop dx
     ret
@@ -1945,8 +1996,14 @@ pt_draw_dims:
 ; control that is not drawn from being clickable.
 ; -----------------------------------------------------------------------------
 pt_szon:
-    cmp byte [pt_haveundo], 0
-    je .no                          ; a fixed canvas has nothing to type into
+    ; NOT gated on [pt_haveundo] any more. It was, on the reasoning that a
+    ; machine with no undo image had a fixed canvas - true when the only way
+    ; to restage an in-place resize was that buffer. It is not true now: a
+    ; resize that MOVES to a new block stages in the old one, pt_resize asks
+    ; for an undo image itself when it needs one, and a refusal it cannot
+    ; avoid is a toast rather than a wipe. Hiding the boxes made a large
+    ; canvas on a small machine unresizable and unexplained - the controls
+    ; simply were not there.
     push ax
     mov ax, PT_SZ_END
     cmp ax, [pt_ch]
@@ -4981,18 +5038,47 @@ pt_oncmd:
 ; paint will do.
 ; -----------------------------------------------------------------------------
 pt_menufix:
+    ; BOTH ways, and called whenever a capability moves - not once at startup.
+    ; It used to set the disabled labels only, from the entry proc, so a
+    ; clipboard or undo image handed back to fund a bigger canvas left the
+    ; menu still offering what it could no longer do; and one re-funded later
+    ; stayed greyed for the rest of the session. This fork's kernel reads a
+    ; menu set LIVE out of the owning segment (SPEC.md 12.2), so a store here
+    ; is enough - there is nothing to re-register.
     cmp byte [pt_haveclip], 0
-    jne .undo
+    je .noclip
+    mov word [pt_it_edit + 2 * PT_ME_CUT], pt_i_cut
+    mov word [pt_it_edit + 2 * PT_ME_COPY], pt_i_copy
+    mov word [pt_it_edit + 2 * PT_ME_PASTE], pt_i_paste
+    jmp short .undo
+.noclip:
     mov word [pt_it_edit + 2 * PT_ME_CUT], pt_i_cut2
     mov word [pt_it_edit + 2 * PT_ME_COPY], pt_i_copy2
     mov word [pt_it_edit + 2 * PT_ME_PASTE], pt_i_paste2
+.undo:
+    ; The GIF items follow the LZW claim, which is taken per file and so
+    ; cannot be tested here - what decides them is whether the heap could
+    ; fund PT_LZW_KB at all, which is also what pt_save will ask.
+    push ax
+    push bx                         ; MEM_AVAIL answers in AX *and* BX, and
+    call OSAPI_MEM_AVAIL            ; AX = largest free run, KB
+    cmp ax, PT_LZW_KB               ; this routine promises to preserve both
+    pop bx
+    pop ax
+    jb .nogif
+    mov word [pt_it_file + 2 * PT_MF_SAVEG], pt_i_saveg
+    mov word [pt_it_file + 2 * PT_MF_SAVEAG], pt_i_saveag
+    jmp short .undo2
+.nogif:
     mov word [pt_it_file + 2 * PT_MF_SAVEG], pt_i_saveg2
     mov word [pt_it_file + 2 * PT_MF_SAVEAG], pt_i_saveag2
-.undo:
+.undo2:
     cmp byte [pt_haveundo], 0
-    jne .out
+    je .noundo
+    mov word [pt_it_edit + 2 * PT_ME_UNDO], pt_i_undo
+    ret
+.noundo:
     mov word [pt_it_edit + 2 * PT_ME_UNDO], pt_i_undo2
-.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5186,7 +5272,17 @@ pt_sizeask:
     jle .h_cap
     mov dx, [pt_chmax]
 .h_cap:
+    mov [pt_reqw], ax               ; what was asked for, before memory has
+    mov [pt_reqh], dx               ; its say
     call pt_fit                     ; what memory will actually fund
+    mov byte [pt_szmem], 0          ; ...and whether that is what bound it
+    cmp ax, [pt_reqw]
+    jb .ramcut
+    cmp dx, [pt_reqh]
+    jae .nocut
+.ramcut:
+    mov byte [pt_szmem], 1
+.nocut:
     ; --- and what the picture will stand to lose ----------------------------
     ; A shrink that would throw away ink is refused per axis: the other axis
     ; still moves, so widening while shortening does the half that is safe.
@@ -5200,6 +5296,7 @@ pt_sizeask:
     mov ax, [pt_cw]
     mov byte [pt_kept], 1
     mov byte [pt_pinw], 1
+    mov byte [pt_szmem], 0          ; ink, not memory, is why THIS axis held
 .w_ok2:
     cmp dx, [pt_ch]
     jae .h_ok2
@@ -5208,6 +5305,7 @@ pt_sizeask:
     mov dx, [pt_ch]
     mov byte [pt_kept], 1
     mov byte [pt_pinh], 1
+    mov byte [pt_szmem], 0
 .h_ok2:
     ; --- and it has to FIT again ------------------------------------------
     ; The guards above put an axis back to a size pt_fit had already ruled
@@ -5235,6 +5333,18 @@ pt_sizeask:
 .out:
     mov byte [pt_pinw], 0
     mov byte [pt_pinh], 0
+    ; A grow memory would not fund is a refusal too. [pt_kept] used to mean
+    ; "ink held an axis back" alone, so a size memory simply could not reach
+    ; either said nothing at all or - through a [pt_szmem] left over from the
+    ; last commit - borrowed the crop toast and blamed the artwork.
+    cmp byte [pt_szmem], 0
+    je .askdone
+    cmp ax, [pt_cw]
+    jne .askdone
+    cmp dx, [pt_ch]
+    jne .askdone
+    mov byte [pt_kept], 1           ; nothing moved, and memory is why
+.askdone:
     pop cx
     pop bx
     ret
@@ -5310,8 +5420,8 @@ pt_setsize:
     push cx
     push dx
     mov byte [pt_szchg], 0
-    mov byte [pt_szmem], 0
-    call pt_sizeask                 ; AX/DX = the size we will take
+    call pt_sizeask                 ; AX/DX = the size we will take, and
+                                    ; [pt_szmem] = whether memory bound it
     cmp ax, [pt_cw]
     jne .go
     cmp dx, [pt_ch]
@@ -5393,8 +5503,31 @@ pt_resize:
     call pt_free_undo
     call pt_free_clip
     call pt_kb_of                   ; AX = KB for CX paragraphs
+    push ax
     call OSAPI_MEM_CLAIM            ; DX = the new base, CF = refused
+    pop bx                          ; BX = the KB, for the fallback below
+    jnc .moved
+
+    ; The heap could not hand us a SECOND block that big - but it may well be
+    ; able to extend the one we already hold, which needs only the DIFFERENCE
+    ; free rather than old + new at once. That is the whole fragmentation
+    ; case: plenty of total room, no single run wide enough for two canvases.
+    ; It costs the staging the two-block path avoids, so it is the fallback
+    ; and not the first move.
+    mov ax, bx
+    mov dx, [pt_base]
+    call OSAPI_MEM_REGROW           ; DX = where it is now (same = in place)
     jc .refit
+    mov [pt_base], dx               ; unchanged unless it had to move, and the
+    mov ax, bx                      ; picture came with it either way
+    mov cl, 6
+    shl ax, cl
+    mov [pt_smaxp], ax
+    jmp .inplace                    ; one block now: stage as in-place does -
+                                    ; the wanted size is still on the stack,
+                                    ; which is exactly what .inplace expects
+
+.moved:
     mov bx, [pt_base]
     mov [pt_obase], bx              ; the old canvas: source, then freed
     mov [pt_osrc], bx
@@ -5906,12 +6039,13 @@ pt_save:
     mov si, pt_name
     cmp byte [pt_sfmt], 0
     je .bmp
-    cmp byte [pt_haveclip], 0       ; the LZW tables live in the clipboard
-    jne .gif
+    call pt_alloc_lzw               ; the tables, for the length of this file
+    jnc .gif
     mov word [pt_msgp], pt_s_ng
     jmp .out
 .gif:
     call pt_gif_out
+    call pt_free_lzw                ; ...and straight back
     jmp .out
 .bmp:
     ; --- one write, so the whole file must fit the API's 64KB (SPEC.md 18.4)
@@ -5962,19 +6096,18 @@ pt_load:
     cmp byte [pt_haveundo], 0
     je .scratch
     mov ax, [pt_unseg]              ; the file is staged in the UNDO image: it
-    mov es, ax                      ; is the biggest single buffer we have, and
+    mov [pt_gseg], ax               ; is the biggest single buffer we have, and
+    mov es, ax                      ; the decoder reads whichever this was
     xor bx, bx                      ; a load invalidates undo anyway
-    mov cx, [pt_smaxp]              ; its capacity, in bytes, capped at what a
-    cmp cx, 4096                    ; 16-bit count can express
-    jb .cap
-    mov cx, 0xFFFF
+    mov ax, [pt_smaxp]              ; its capacity, in bytes - 32-bit now, so
+    xor dx, dx                      ; a canvas block bigger than 64KB is not
+    mov cx, 4                       ; truncated to describe itself
+.p2b:
+    shl ax, 1
+    rcl dx, 1
+    loop .p2b
+    mov cx, ax
     jmp short .rd
-.cap:
-    shl cx, 1                       ; paragraphs -> bytes. NOT `mov cl,4` and a
-    shl cx, 1                       ; shift by CL: that overwrites the low byte
-    shl cx, 1                       ; of the very value being shifted, which on
-    shl cx, 1                       ; a small-canvas machine handed the reader a
-    jmp short .rd                   ; capacity up to 64 bytes past its buffer
 .scratch:
     ; No undo image (SPEC.md 42), so the scratch area lends its flood-fill
     ; stack - idle during a load, and re-initialised by the next fill. One
@@ -5982,17 +6115,38 @@ pt_load:
     ; offset 0 of a segment, which is what both decoders assume.
     mov ax, [pt_scseg]
     inc ax
+    mov [pt_gseg], ax
     mov es, ax
     xor bx, bx
     mov cx, PT_SC_KB * 1024 - 16
+    xor dx, dx
 .rd:
-    call OSAPI_FILE_READ
+    ; READBIG, not READ: the destination advances by SEGMENT (SPEC.md 18.4.1),
+    ; so a picture whose file runs past 64KB - which a full-screen canvas's
+    ; BMP does - loads in one call instead of being refused. ES is the base
+    ; segment and the buffer starts at ES:0000, which is what both decoders
+    ; already assume; DX:CX is the capacity, and the size comes back in DX:AX.
+    call OSAPI_FILE_READBIG
     jnc .got
     call pt_ferr
     jmp short .out
 .got:
+    ; DX:AX is the file's 32-bit size. Every check downstream is 16-bit, and
+    ; every one of them is an UPPER bound - "the pixel data must be inside
+    ; what we read" - so a file at or past 64KB saturates to 0xFFFF rather
+    ; than wrapping. That is conservative by construction: READBIG either
+    ; read the whole file or refused, so at >= 64KB every 16-bit offset the
+    ; decoders can form is inside the buffer. (The BMP decoder still refuses
+    ; more than 64KB of PIXELS on its own account - a separate ceiling, and
+    ; not one readbig was ever going to lift.)
+    or dx, dx
+    jz .sz16
+    mov ax, 0xFFFF
+    jmp short .szok
+.sz16:
     cmp ax, 64
     jb .bad
+.szok:
     cmp word [es:0], 0x4D42         ; 'BM'
     je .bmp
     cmp word [es:0], 0x4947         ; 'GI'
@@ -6006,12 +6160,15 @@ pt_load:
     mov word [pt_msgp], pt_s_nofmt
     jmp short .out
 .gifin:
-    cmp byte [pt_haveclip], 0       ; the LZW tables live in the clipboard
-    jne .gif
+    call pt_alloc_lzw               ; the tables, for the length of this file
+    jnc .gif
     mov word [pt_msgp], pt_s_ng
     jmp short .out
 .gif:
     call pt_gif_in                  ; the magic decides, not the extension
+    pushf
+    call pt_free_lzw                ; ...and straight back, error or not
+    popf
     jnc .out
     mov [pt_msgp], si
     jmp short .out
@@ -6894,7 +7051,7 @@ pt_gbits:
     cmp bx, [pt_glen]
     jae .end
     add bx, [pt_gbase]
-    mov ax, [pt_unseg]
+    mov ax, [pt_gseg]
     mov es, ax
     mov ax, [es:bx]
     mov dl, [es:bx+2]
@@ -7094,7 +7251,7 @@ pt_gdec:
     push si
     push di
     push es
-    mov ax, [pt_cbseg]
+    mov ax, [pt_lzwseg]
     mov es, ax                      ; the tables, for the whole loop
     mov word [pt_gbyte], 0
     mov byte [pt_gbit], 0
@@ -7236,7 +7393,7 @@ pt_gwr:
     mov bx, [pt_gout]
     cmp bx, [pt_gcap]
     jae .full
-    mov ax, [pt_unseg]
+    mov ax, [pt_gseg]
     mov es, ax
     mov [es:bx], cl
     inc bx
@@ -7352,7 +7509,7 @@ pt_gflush:
     inc ax
     cmp ax, [pt_gcap]
     ja .full
-    mov ax, [pt_unseg]
+    mov ax, [pt_gseg]
     mov es, ax
     mov di, [pt_gout]
     mov al, cl
@@ -7560,7 +7717,7 @@ pt_genc:
     push si
     push di
     push es
-    mov ax, [pt_cbseg]
+    mov ax, [pt_lzwseg]
     mov es, ax                      ; the tables, for the whole loop
     mov byte [pt_gbn], 0
     mov word [pt_gacc], 0
@@ -7647,7 +7804,23 @@ pt_gif_out:
     push si
     push di
     push es
-    mov ax, [pt_smaxp]
+    ; Where the file is BUILT, and how much of it there is room for. It used
+    ; to be [pt_unseg] unconditionally, with pt_save gating only on the
+    ; clipboard - so on a machine whose undo image had been handed back to
+    ; fund a big canvas this encoded the GIF at 0000:0000, over the interrupt
+    ; vector table, and the machine died mid-save. The load path already had
+    ; the answer (pt_load's .scratch): stage in the flood-fill scratch, which
+    ; is idle here and re-initialised by the next fill.
+    mov ax, [pt_unseg]
+    mov cx, [pt_smaxp]
+    cmp byte [pt_haveundo], 0
+    jne .havestage
+    mov ax, [pt_scseg]              ; no undo image: one paragraph in, so the
+    inc ax                          ; claim record survives and the buffer
+    mov cx, PT_SC_KB * 64 - 1       ; still starts at offset 0 of a segment
+.havestage:
+    mov [pt_gseg], ax
+    mov ax, cx
     cmp ax, 4095
     jae .big
     mov cl, 4
@@ -7670,7 +7843,7 @@ pt_gif_out:
     cmp byte [pt_govf], 0
     jne .toobig
     mov cx, [pt_gout]
-    mov ax, [pt_unseg]
+    mov ax, [pt_gseg]
     mov es, ax
     xor bx, bx
     call OSAPI_FILE_WRITE           ; SI is still the name
@@ -8121,6 +8294,12 @@ pt_ic_text:
     PTBYTE pt_szi                   ; pt_szdraw's box counter
     PTBYTE pt_szchg                 ; pt_setsize moved the canvas
     PTBYTE pt_szmem                 ; ...and refused for want of memory, not ink
+    PTWORD pt_reqw                  ; the size asked for, before pt_fit had its
+    PTWORD pt_reqh                  ; say - so the two can be compared
+    PTWORD pt_lzwseg                ; the LZW tables' own claim, 0 = none
+    PTWORD pt_gseg                  ; where a GIF is staged, either direction:
+                                    ; the undo image when there is one, the
+                                    ; flood-fill scratch when there is not
     PTBYTE pt_apsay                 ; 1 = pt_apend also owes the user a notice
     PTBYTE pt_pinw                  ; pt_fit: an axis pt_sizeask's ink guard
     PTBYTE pt_pinh                  ; has already settled - do not cut it

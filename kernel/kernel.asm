@@ -429,7 +429,13 @@ osapi_table:
     OSAPI_SLOT osapi_file_here    ; 0x0268 - where the file API's names
                                   ;          resolve (SPEC.md 18.4/19.2)
     OSAPI_SLOT osapi_file_goto    ; 0x0270 - ...and how to put it back
-osapi_table_end:                  ; 0x0278
+    OSAPI_JSLOT api_mem_regrow    ; 0x0278 - resize a claim you already hold
+                                  ;          (SPEC.md 50.3): X, same owner
+                                  ;          fence as the claim itself. In
+                                  ;          place when the paragraphs above
+                                  ;          are free, which is what stops a
+                                  ;          grow needing old + new at once
+osapi_table_end:                  ; 0x0280
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -437,7 +443,7 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 77 * 8
+%if OSAPI_TABLE_LEN != 78 * 8
 %error "os8088 API jump table must be exactly 54 8-byte slots"
 %endif
 
@@ -467,6 +473,7 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
     OSAPI_XSTUB api_pkg_spawn,  inst_pkg_spawn
     OSAPI_XSTUB api_mem_claim,  osapi_mem_claim
     OSAPI_XSTUB api_mem_free,   osapi_mem_free
+    OSAPI_XSTUB api_mem_regrow, mem_regrow
 
 ; N: the name at the caller's DS:SI is staged into kernel scratch first,
 ; because ES:BX belongs to the caller's data buffer and cannot carry it

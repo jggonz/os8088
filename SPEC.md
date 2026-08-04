@@ -8319,6 +8319,36 @@ Rules for a package (none enforceable, all binding):
 4. **You do not have to free it.** Teardown does (§50.4). Freeing early is
    how you hand memory back mid-session.
 
+
+### 50.3.1 `mem_regrow` — resizing a claim without needing it twice over
+
+Growing a claim used to mean claim-new, copy, free-old, which needs **old +
+new free at once and contiguously**. A heap with plenty of total room refused
+resizes it could afford, and the app reported "not enough memory" over
+hundreds of free KB. `mem_regrow` (slot 0x0278) takes three paths, and the
+first two move nothing:
+
+1. **Shrink or level** — the record's length changes and that is all. The
+   tail is free for everyone else immediately.
+2. **Grow with free paragraphs directly above** — extend in place. This needs
+   only the *difference*, not old + new, and it is what a canvas dragged
+   bigger hits nearly every time.
+3. **Grow with something above** — a new block, chosen **highest-fit** so the
+   grower lands at the top with the free space above it; the kernel copies
+   and frees the old block. Only this path pays for a move, and it is the
+   same copy the caller used to make itself.
+
+The caller must always take the base back from DX: a grow that moved leaves
+the old segment pointing at memory that is no longer theirs.
+
+**It does not compact the heap**, and cannot. A claim's base lives in its
+holder's own bss — a package's `[pt_base]`, the kernel's `[bb_seg]` — and
+nothing in `memory.inc` can reach in and rewrite those, so sliding somebody
+else's block down would hand them a pointer into memory that stopped being
+theirs. Real compaction needs a relocation callback every holder implements.
+Until there is one, the fix is to stop *creating* the fragmentation, which is
+what path 2 does: a claim that grows in place never leaves a hole behind it.
+
 ### 50.4 Teardown
 
 `mem_free_rec` sits beside `snd_release_rec` at all three §29.4 teardown
