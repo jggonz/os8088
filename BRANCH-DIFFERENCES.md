@@ -16,68 +16,44 @@ Written from `experimental`. `main` is not modified by this document.
 
 ## The short list
 
-1. **The package ABI is incompatible in three independent ways.** `KERNEL_SEG`
-   is `0x1000` on `main` and `0x0800` on `experimental`; kernel-called
-   procedures return with `retf` on `main` and near `ret` on `experimental`;
-   and every API slot from `0x00F8` upward has a different number. Any one of
-   these alone would break every binary.
+**ABI — a `.o88` cannot cross**
 
-2. **Callbacks are reached differently.** `main` far-calls your procedure
-   directly, so it must `retf`. `experimental` far-calls a three-byte
-   **dispatcher** at `+12` in your package header (`call bp` / `retf`) with
-   `BP` = the real target, so every callback stays an ordinary near proc. The
-   shipped apps carry **zero** `retf` on `experimental` and 3–9 each on `main`.
+- `KERNEL_SEG` is `0x1000` on `main`, `0x0800` on `experimental`.
+- Callbacks return `retf` on `main`, near `ret` on `experimental` (via a
+  dispatcher at `+12` in the package header).
+- Every API slot from `0x00F8` up is renumbered; three numbers name different
+  routines on the two branches.
+- Package header `+12`..`+15`: a RAM-requirement word on `main`, the dispatcher
+  bytes on `experimental`.
 
-3. **The window record is public on `experimental` and opaque on `main`.**
-   `experimental` sets `ES = KERNEL_SEG` on entry to every callback and you read
-   `[es:bx+W_W]` — **frame** pixels. `main` forbids dereferencing the handle and
-   answers `OSAPI_WM_GEOM` instead — **content** pixels. Different accessor,
-   different units.
+**Kernel**
 
-4. **Two different memory models above the kernel.** `main`: a conventional
-   *arena* at linear `0x65800`, a paragraph allocator (`cmem.inc`), extended
-   memory above 1MB (`xmem.inc`) and CPU tiers (`cpudet.inc`).
-   `experimental`: one KB-granular *claim heap* (`memory.inc`) above a fixed
-   60KB package pool, and no extended memory or CPU detection at all.
+- Memory: arena + `cmem` + `xmem` + CPU tiers on `main`; one KB claim heap on
+  `experimental`.
+- Sound: speaker + OPL2 + Sound Blaster on `main`; speaker only on
+  `experimental`.
+- Repaint: whole screen on `main`; damage rectangles on `experimental`.
+- Clock: `int 1Ah` on `main`; a four-rung RTC ladder on `experimental`.
+- Menus: set copied, capped, needs re-registering on `main`; read live on
+  `experimental`.
 
-5. **`main` has three sound tiers; `experimental` has one.** `main` ships the
-   OPL2 (AdLib) and Sound Blaster drivers, a 64KB `SND_SEG`, a Control Panel
-   Sound page and the `recorder`/`sbtest`/`fmtest` packages.
-   `experimental` deleted all of it — the PC speaker is the only sink.
+**Application-visible**
 
-6. **`experimental` repaints damage rectangles; `main` repaints the screen.**
-   `wm_raise` (§11.4) and `wm_paint_dmg` (§11.5) make show/front/hide/destroy/
-   drag cost one window or one rectangle. On `main` those paths call
-   `wm_paint_all`.
+- Window geometry: `OSAPI_WM_GEOM` (content px) on `main`; direct record reads
+  through `ES` (frame px) on `experimental`.
+- `main` only: `ABOUT_SET`, `CPU_INFO`, `XMEM_*`, `WM_GEOM`, `SND_FM`,
+  `SND_STREAM`.
+- `experimental` only: `MEM_CLAIM`, `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`,
+  `FILE_GOTO`.
 
-7. **`experimental` has a four-rung RTC ladder** (§37.1: MC146818 → RP5C01 →
-   MM58167 → `int 1Ah`) with an `RTC=` build knob. `main` calls `int 1Ah` and
-   nothing else.
+**Build and layout**
 
-8. **Menu sets are copied on `main` and read live on `experimental`.** `main`
-   caps at 8 items per menu and 19 characters per string and **requires a second
-   `OSAPI_MENU_SET`** after you change any string. `experimental` reads through
-   a per-cell segment word, shows 24 characters, and needs no re-registration.
-
-9. **Slots exclusive to one side.** `main` only: `OSAPI_ABOUT_SET`,
-   `OSAPI_CPU_INFO`, `OSAPI_XMEM_CAPS/ALLOC/FREE/COPY`, `OSAPI_WM_GEOM`,
-   `OSAPI_SND_FM`, `OSAPI_SND_STREAM`. `experimental` only: `OSAPI_MEM_CLAIM`,
-   `OSAPI_FONT_GLYPHS`, `OSAPI_WM_ONSIZE`, `OSAPI_FILE_HERE`,
-   `OSAPI_FILE_GOTO`.
-
-10. **The apps disk has folders on `main`** (`APPS/` and `GAMES/`, via a
-    `DIR:` prefix in the Makefile) and a flat, order-pinned root on
-    `experimental`.
-
-11. **SPEC.md section numbers do not agree.** §41 is *CPU tiers / xmem* on
-    `main` and *Paint* on `experimental`; §42 is *Paint* on `main` and *the
-    claim heap* on `experimental`. §35 (Recorder) is retired on `experimental`.
-    Cross-branch citations by number are wrong more often than right.
-
-12. **Build differences.** `experimental` adds `make check-images` and the
-    `RTC=` knob. `main` keeps `--size 2880` and the FAT16 test geometry, which
-    `experimental` made structurally unreachable by cutting `DSK_FAT_SECS` to
-    10.
+- Apps disk: `APPS/` and `GAMES/` folders on `main`; flat, order-pinned root on
+  `experimental`.
+- `experimental` adds `make check-images` and the `RTC=` knob; `main` keeps the
+  FAT16 / 2.88MB test geometry.
+- SPEC.md §0–§44 now agree; `experimental`-only material lives at §50+ and in
+  the `.90` subsection band.
 
 ---
 
@@ -223,12 +199,12 @@ visible window's frame and `W_PAINT`.
 
 `experimental` split that into two arguments:
 
-- **Coming to the front reveals nothing** (§11.4). The window moves up, so for
+- **Coming to the front reveals nothing** (§11.90). The window moves up, so for
   every other window the covered area can only grow. `wm_raise` draws the menu
   bar, the dock, the outgoing front window's title bar, and then this window.
   A click on a background window's title bar costs two title bars and the
   chrome; raising a window that is already frontmost repaints no window at all.
-- **Going away reveals a rectangle** (§11.5). `wm_paint_dmg` takes an inclusive
+- **Going away reveals a rectangle** (§11.91). `wm_paint_dmg` takes an inclusive
   damage rect, repaints the desktop dither clipped to it, the drive zones it
   touches, the chrome, and then only the windows that overlap it — or that
   overlap a window already marked below them, since a marked window is redrawn
@@ -367,4 +343,6 @@ threshold and makes the FAT16 decode structurally unreachable dead code.
   conversion, the geometry and memory conversions, and a checklist in each
   direction.
 - **The binding contract for either branch:** that branch's own `SPEC.md`.
-  Do not cite section numbers across branches; they disagree from §35 up.
+  §0-§44 now mean the same topic on both; `experimental`-only material is at
+  §50+ and in the `.90` subsection band, and numbers `main` uses for what this
+  fork lacks are held empty (§34.5, §34.6, §41).

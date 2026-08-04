@@ -42,7 +42,7 @@ ifneq ($(HERCSEG),)
 VIDDEF += -DVID_HERC_SEG=$(HERCSEG)
 endif
 # RTC=none|at|ns|rp|bios forces one rung of the clock ladder instead of
-# walking it (SPEC.md 37.1). Same reason as VIDEO=: QEMU has an MC146818 and
+# walking it (SPEC.md 37.90). Same reason as VIDEO=: QEMU has an MC146818 and
 # nothing else, so rung 1 always wins there and the other three would never
 # be reached under the QMP harness. `none` exercises the fallback date.
 RTCFORCE_none := 5

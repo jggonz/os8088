@@ -107,7 +107,7 @@ FS_EDIT     equ 13              ; byte: the status-line editor is armed here
 FS_FERR     equ 14              ; byte: FERR_* of the last file operation IN
                                 ; THIS WINDOW, 0 = none
 FS_VSEG     equ 16              ; word: this window's listing-cache claim
-                                ; (SPEC.md 42.2), 0 = none - fm_kinit claims
+                                ; (SPEC.md 50.2), 0 = none - fm_kinit claims
                                 ; VIEW_KB and the instance's teardown frees
                                 ; it, so nothing here has a close hook
 FS_SIZE     equ 18              ; = the Disk kind's KD_SSIZE
@@ -182,7 +182,7 @@ fm_kinit:
 
     mov word [di+FS_VSEG], 0    ; the listing cache: VIEW_KB of the heap,
     push bx                     ; owned by THIS instance so its teardown
-    push dx                     ; frees it (SPEC.md 42.2/42.4)
+    push dx                     ; frees it (SPEC.md 50.2/50.4)
     mov ax, si                  ; SI = our record -> the owner word
     sub ax, inst_tab
     mov cl, 5
@@ -982,7 +982,7 @@ fm_win_of:
 ;
 ; The window that posted the load has "Loading..." in its status line, drawn
 ; because [ld_pending] was set (SPEC.md 22). The load clears it, and since
-; SPEC.md 11.4 the successful path's wm_show draws only the window it just
+; SPEC.md 11.90 the successful path's wm_show draws only the window it just
 ; put up - so that one line would sit there stale until something else
 ; repainted. This is the cheap correction: one window's content, and the
 ; SPEC.md 11.3 clip region is what makes it safe to draw a window that the

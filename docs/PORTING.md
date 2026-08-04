@@ -7,9 +7,11 @@ other branch does differently is spelled out.
 For the narrative version of why the forks differ, see
 [BRANCH-DIFFERENCES.md](../BRANCH-DIFFERENCES.md). For the binding contract on
 either side, read that branch's own `SPEC.md` — and **do not cite section
-numbers across branches**, because they disagree from §35 upward (§41 is *CPU
-tiers* on `main` and *Paint* on `experimental`; §42 is *Paint* on `main` and
-*the claim heap* on `experimental`).
+numbers across branches** without checking: `experimental` has since aligned
+§0-§44 with `main`, so most now match, but `experimental`-only material sits at
+§50+ (the claim heap) and in a reserved `.90` subsection band (§11.90, §11.91,
+§18.90, §37.90), and §34.5, §34.6 and §41 are held empty there because `main`
+uses them for things this fork does not have.
 
 **Nothing here is binary-compatible.** There is no way to run a `.o88` built for
 one branch on the other, and no loader on either side will diagnose it usefully —

@@ -290,7 +290,7 @@ gfx_hline:
     ret
 
 ; -----------------------------------------------------------------------------
-; gfx_blit4 - draw a block of packed 4bpp pixels (SPEC.md 5.4/41)
+; gfx_blit4 - draw a block of packed 4bpp pixels (SPEC.md 5.4/42)
 ;
 ; in:       ES:SI = source, packed 4 bits per pixel, 2 pixels per byte, the
 ;                   HIGH nibble leftmost - the layout apps/paint's canvas

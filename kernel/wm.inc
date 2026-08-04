@@ -465,7 +465,7 @@ wm_destroy:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_show - make a window visible, raise it, and draw JUST it (SPEC.md 11.4)
+; wm_show - make a window visible, raise it, and draw JUST it (SPEC.md 11.90)
 ; in:  BX = window ptr (caller holds the gfx lock)
 ; out: nothing (all registers preserved)
 ;
@@ -643,7 +643,7 @@ wm_dock_clear:
 ;
 ; Hiding DOES reveal, which is why this cannot take wm_show's path - but it
 ; reveals only inside the rect the window occupied, and every pixel outside
-; that rect is already correct. wm_paint_dmg (SPEC.md 11.5) is that argument.
+; that rect is already correct. wm_paint_dmg (SPEC.md 11.91) is that argument.
 ; The rect is taken BEFORE the visible bit drops, because wm_fs_drop can
 ; restore a fullscreen window's smaller windowed geometry on the way past and
 ; the pixels to repair are the ones that were actually lit.
@@ -781,7 +781,7 @@ wm_fullscreen:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_front - raise a window to the front of the z-order (SPEC.md 11.4)
+; wm_front - raise a window to the front of the z-order (SPEC.md 11.90)
 ; in:  BX = window ptr (caller holds the gfx lock)
 ; out: nothing (all registers preserved)
 ;
@@ -1224,7 +1224,7 @@ wm_paint_chrome:
 ;      caller holds the gfx lock
 ; out: nothing (all registers preserved)
 ;
-; The counterpart to wm_show's argument (SPEC.md 11.4). SHOWING a window
+; The counterpart to wm_show's argument (SPEC.md 11.90). SHOWING a window
 ; reveals nothing, so it costs one window; HIDING, destroying or MOVING one
 ; does reveal - but only inside the rect it vacated, and everything outside
 ; that rect is already correct on screen. A window on the right of the screen
@@ -1771,7 +1771,7 @@ wm_clip_occl:
 ; that window is being redrawn in this pass or is merely still on screen. The
 ; consequence a package author can see is that **W_PAINT does not run on a
 ; wholly covered window**, so a paint proc must be a repaint and nothing else
-; - anything it also does has to tolerate being skipped (SPEC.md 11.5).
+; - anything it also does has to tolerate being skipped (SPEC.md 11.91).
 ;
 ; Overflow degrades the OTHER way from wm_clip_set: more than 16 fragments
 ; means "not covered", i.e. draw it. Skipping on a maybe would lose pixels.
@@ -2118,7 +2118,7 @@ wm_idx2ptr:
 ; changes when some OTHER window is raised: the pinstripes, the close box
 ; and the minimize box belong to the frontmost window alone (DI == BP), so
 ; the outgoing front window needs exactly this rect redrawn and nothing
-; else. wm_show's fast path (SPEC.md 11.4) is the caller that cares; every
+; else. wm_show's fast path (SPEC.md 11.90) is the caller that cares; every
 ; other path reaches it through wm_draw_win and never notices.
 ; -----------------------------------------------------------------------------
 wm_draw_title:

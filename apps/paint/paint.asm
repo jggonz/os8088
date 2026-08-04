@@ -128,7 +128,7 @@
     dw 0x0000
     OS88_ICON16_END
 
-; --- the memory we CLAIM from the kernel (SPEC.md 42) ---------------------------
+; --- the memory we CLAIM from the kernel (SPEC.md 50) ---------------------------
 ; One contiguous block, asked for at startup and carved into four: canvas,
 ; undo image, clipboard, scratch. Nothing here is a fixed address any more -
 ; the kernel owns the map and hands us a segment, which is the whole of what
@@ -152,7 +152,7 @@ PT_WANT_KB  equ 318                 ; the hard ceiling: two canvases at the
 PT_SC_STACK equ 16                  ; flood-fill span stack starts here
 PT_FSTK_MAX equ 1024                ; entries of 8 bytes (y, x1, x2, dy)
 
-; --- the GIF codec's work areas (SPEC.md 41.7) ---------------------------------
+; --- the GIF codec's work areas (SPEC.md 42) ---------------------------------
 ; Both directions borrow buffers a load or a save has already invalidated, which
 ; is the whole reason an LZW dictionary fits an app whose own world is 19.5KB.
 ; The clipboard's floor exists to be borrowed here; the assertion below is what
@@ -215,7 +215,7 @@ PT_TH_DX    equ 21
 PT_CUR_X    equ 90                  ; current-colour well
 PT_SW_X     equ 116                 ; colour swatches: the design pitch, and
 PT_SW_DX    equ 21                  ; the tightest one still worth aiming at.
-PT_SW_MIN   equ 11                  ; The live pitch is [pt_swdx] (SPEC.md 41)
+PT_SW_MIN   equ 11                  ; The live pitch is [pt_swdx] (SPEC.md 42)
 PT_BTN_W16  equ 16                  ; the two toggles are right-anchored, so
                                     ; their x is [pt_filx] / [pt_fntx]
 
@@ -308,7 +308,7 @@ pt_entry:
 ; **FOUR separate claims, sized for the canvas we are about to show** - not
 ; one block sized for the biggest canvas the screen could ever show. The
 ; difference is the whole memory story: a package may hold several claims
-; (SPEC.md 42.2) and the kernel frees all of them at teardown, so there is no
+; (SPEC.md 50.2) and the kernel frees all of them at teardown, so there is no
 ; reason to reserve the maximum up front. What made the old version do it was
 ; that pt_resize staged the old picture in the undo image, which therefore had
 ; to be big enough for any canvas that could ever be adopted - and the bases
@@ -348,7 +348,7 @@ pt_geom:
     mov word [pt_cwmax], PT_CW_MIN  ; the window will only carry a notice, but
     mov word [pt_chmax], PT_CH_MIN  ; the arithmetic below still has to run
     ; --- what memory allows -------------------------------------------------
-    ; Four claims (SPEC.md 42.3), each independently refusable, and each
+    ; Four claims (SPEC.md 50.3), each independently refusable, and each
     ; refusal costs exactly the feature it funds. That is the tier system the
     ; old single block emulated with arithmetic, expressed as what it is.
 .mem:
@@ -507,7 +507,7 @@ pt_kb_of:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_alloc - claim everything a canvas of AX x DX needs (SPEC.md 42.3)
+; pt_alloc - claim everything a canvas of AX x DX needs (SPEC.md 50.3)
 ; in:  AX = width, DX = height (already through pt_fit)
 ; out: CF=1 nothing usable could be claimed; else the four claim segments are
 ;      published and [pt_haveundo]/[pt_haveclip] say what was funded.
@@ -676,7 +676,7 @@ pt_clip_need:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_free_undo / pt_free_clip - hand a claim back (SPEC.md 42.3)
+; pt_free_undo / pt_free_clip - hand a claim back (SPEC.md 50.3)
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
 pt_free_undo:
@@ -738,7 +738,7 @@ pt_growmax:
 ;      AX and DX preserved
 ;
 ; The stride is the BMP one - ceil(w/2) rounded up to 4 - because the canvas IS
-; the file (SPEC.md 41). The byte total needs 32 bits: a 736x464 canvas is
+; the file (SPEC.md 42). The byte total needs 32 bits: a 736x464 canvas is
 ; 171,000 bytes, so MUL's DX:AX is shifted down to paragraphs as a pair.
 ; -----------------------------------------------------------------------------
 pt_paras:
@@ -1878,7 +1878,7 @@ PT_DIM_Y    equ PT_PAL_Y0 + 4 * PT_PAL_DY + 2
 ; --- the size boxes, under the tools: two typable fields and Apply -------------
 ; They need 41 rows below the last tool button, which a 110-row CGA canvas does
 ; not have, so pt_szon decides per repaint whether they appear at all and the
-; two-line readout is what shows when they do not (SPEC.md 41.6).
+; two-line readout is what shows when they do not (SPEC.md 42).
 PT_SZ_Y     equ PT_DIM_Y            ; the width box's top row
 PT_SZ_DY    equ 13                  ; ...and the height box's, one pitch down
 PT_SZ_BH    equ 11                  ; box height (an 8px cell plus its border)
@@ -4951,7 +4951,7 @@ pt_oncmd:
     jmp pt_draw_strip
 
 ; =============================================================================
-; What a smaller machine does without (SPEC.md 41.8)
+; What a smaller machine does without (SPEC.md 42)
 ;
 ; `pt_geom` decides once, from int 12h, and nothing can change it later: the
 ; buffer bases are fixed from the largest canvas the machine can fund, so the
@@ -5133,7 +5133,7 @@ pt_track:
                                     ; paint, not here: the frame ui_grow already
                                     ; drew is the wrong size, so one repaint is
                                     ; owed, and a toast drawn before it would be
-                                    ; wiped by it (SPEC.md 41.6)
+                                    ; wiped by it (SPEC.md 42)
 .out:
     pop dx
     pop cx
@@ -5976,7 +5976,7 @@ pt_load:
     shl cx, 1                       ; a small-canvas machine handed the reader a
     jmp short .rd                   ; capacity up to 64 bytes past its buffer
 .scratch:
-    ; No undo image (SPEC.md 41.8), so the scratch area lends its flood-fill
+    ; No undo image (SPEC.md 42), so the scratch area lends its flood-fill
     ; stack - idle during a load, and re-initialised by the next fill. One
     ; paragraph in, so the claim record survives, and the buffer still starts at
     ; offset 0 of a segment, which is what both decoders assume.
@@ -6598,7 +6598,7 @@ pt_setext:
     ret
 
 ; =============================================================================
-; GIF - LZW in both directions (SPEC.md 41.7)
+; GIF - LZW in both directions (SPEC.md 42)
 ;
 ; Where everything lives, and why:
 ;
@@ -7749,7 +7749,7 @@ pt_i_save:   db 'Save Bmp', 0
 pt_i_saveas: db 'Save as Bmp...', 0
 pt_i_saveg:  db 'Save Gif', 0
 pt_i_saveag: db 'Save as Gif...', 0
-; --- and the same items on a machine that cannot fund them (SPEC.md 41.8) -----
+; --- and the same items on a machine that cannot fund them (SPEC.md 42) -----
 ; The leading MENU_DIS byte is the kernel's disabled marker (SPEC.md 12.2):
 ; the item draws grey and cannot be highlighted or picked. The suffix stays,
 ; shortened - greying says "not now", the words say why - and at 24 glyphs
@@ -8112,9 +8112,9 @@ pt_ic_text:
     PTBYTE pt_apend                 ; ...and the notice for it is owed
     PTWORD pt_wanth                 ; pt_onsize: the height it settled on, held
                                     ; over the register shuffle on the way out
-    PTWORD pt_base                  ; the claimed block's base (SPEC.md 42.3)
+    PTWORD pt_base                  ; the claimed block's base (SPEC.md 50.3)
     PTBYTE pt_haveundo              ; this machine can fund an undo image...
-    PTBYTE pt_haveclip              ; ...and a clipboard (SPEC.md 41.8)
+    PTBYTE pt_haveclip              ; ...and a clipboard (SPEC.md 42)
     PTBYTE pt_fbox                  ; the size box with the keyboard, 0 = none
     PTBYTE pt_fbold                 ; ...as it was before this click
     PTBYTE pt_fresh                 ; the next digit replaces the value
@@ -8131,7 +8131,7 @@ pt_ic_text:
     PTBYTE pt_lwn                   ; pt_lose_w: the boundary nibble matters
     PTBYTE pt_sfmt                  ; the save verb's format: 0 BMP, 1 GIF
     PTWORD pt_pw                    ; a loaded picture's own width
-    PTWORD pt_gw                    ; --- GIF (SPEC.md 41.7) ---
+    PTWORD pt_gw                    ; --- GIF (SPEC.md 42) ---
     PTWORD pt_gh                    ; the image descriptor's own size
     PTWORD pt_gpend                 ; one past a colour table
     PTWORD pt_gbase                 ; the flattened LZW stream: where...

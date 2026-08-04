@@ -314,7 +314,7 @@ VID_CGA    equ 2
 %define OSAPI_WM_CLIP_CLEAR KERNEL_SEG:0x0168   ; disarm early, to draw unclipped again
                                  ; inside the same lock hold. Preserves
                                  ; every register.
-%define OSAPI_MEM_CLAIM     KERNEL_SEG:0x0178   ; the claim heap (SPEC.md 42.3):
+%define OSAPI_MEM_CLAIM     KERNEL_SEG:0x0178   ; the claim heap (SPEC.md 50.3):
                                  ; AX = KB wanted; out CF=0 and DX = the base
                                  ; segment, CF=1 refused. This is how you get
                                  ; memory your region cannot hold - a canvas,

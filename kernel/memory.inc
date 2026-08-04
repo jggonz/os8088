@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - memory.inc
 ;
-; The claim heap (SPEC.md 42): every paragraph of conventional memory above
+; The claim heap (SPEC.md 50): every paragraph of conventional memory above
 ; the package pool, handed out in KB-granular, segment-aligned blocks to
 ; whoever asks - a package through the API slots, or the kernel itself for
 ; the things it uses speculatively (the menu save-under, a Disk window's
@@ -38,7 +38,7 @@ MC_OWN   equ 4                  ; word: owner - 0..INST_MAX-1 is an instance
                                 ; slot; 0xFF00 | tag is the kernel's own
 MC_SIZE  equ 6
 
-MEM_K_SAVE equ 0xFF01           ; kernel tags (SPEC.md 42.2): menu save-under
+MEM_K_SAVE equ 0xFF01           ; kernel tags (SPEC.md 50.2): menu save-under
 MEM_K_BB   equ 0xFF02           ; the double-buffer back buffer
 
 MEM_PARA_KB equ 64              ; paragraphs per KB
@@ -92,7 +92,7 @@ mem_init:
     ret
 
 ; -----------------------------------------------------------------------------
-; mem_claim - claim a block of the heap (SPEC.md 42.3)
+; mem_claim - claim a block of the heap (SPEC.md 50.3)
 ;
 ; in:       AX = KB wanted (1..640), BX = owner word (instance slot, or a
 ;           MEM_K_* kernel tag)
@@ -174,7 +174,7 @@ mem_claim:
     ret
 
 ; -----------------------------------------------------------------------------
-; mem_free - release a block (SPEC.md 42.3)
+; mem_free - release a block (SPEC.md 50.3)
 ;
 ; in:       DX = the base segment mem_claim returned, BX = the owner word it
 ;           was claimed with
@@ -198,7 +198,7 @@ mem_free:
     jne .next
     cmp [si+MC_OWN], bx
     jne .next
-    mov word [si+MC_SEG], 0     ; the record IS the allocator (SPEC.md 42.3)
+    mov word [si+MC_SEG], 0     ; the record IS the allocator (SPEC.md 50.3)
     popf
     clc
     jmp short .out
@@ -213,7 +213,7 @@ mem_free:
     ret
 
 ; -----------------------------------------------------------------------------
-; mem_free_owner - release every claim an owner holds (SPEC.md 42.4)
+; mem_free_owner - release every claim an owner holds (SPEC.md 50.4)
 ;
 ; in:       BX = owner word
 ; out:      nothing (all registers preserved)
@@ -275,7 +275,7 @@ mem_free_rec:
 ; out:      AX = largest free run in KB, BX = total free KB
 ; clobbers: nothing else (flags)
 ;
-; The query a package sizes itself from (SPEC.md 42.3). Walking holes
+; The query a package sizes itself from (SPEC.md 50.3). Walking holes
 ; without sorting: for each candidate base (the heap base, then every
 ; claim's end), measure the distance to the nearest claim that starts above
 ; it. O(MEM_MAX^2) with MEM_MAX = 16 - a few hundred cycles, called once at
@@ -372,7 +372,7 @@ mem_run:
     ret
 
 ; -----------------------------------------------------------------------------
-; mem_claim_get - read one claim record by index (SPEC.md 42.5)
+; mem_claim_get - read one claim record by index (SPEC.md 50.5)
 ; in:  AX = record index (0..MEM_MAX-1)
 ; out: CF = 0 and DX = base segment, CX = paragraphs, BX = owner word;
 ;      CF = 1 if that record is free
@@ -406,7 +406,7 @@ mem_claim_get:
     ret
 
 ; -----------------------------------------------------------------------------
-; mem_owned_kb - how many KB does one owner hold? (SPEC.md 42.5)
+; mem_owned_kb - how many KB does one owner hold? (SPEC.md 50.5)
 ; in:  BX = owner word
 ; out: AX = KB claimed by that owner (0 if none)
 ; clobbers: nothing else (flags)
@@ -514,7 +514,7 @@ mem_total_kb:
     ret
 
 ; =============================================================================
-; The API slot targets (SPEC.md 20.3/42.3).
+; The API slot targets (SPEC.md 20.3/50.3).
 ;
 ; A package does not name itself: its SEGMENT is its identity, and the API
 ; stub hands that over in ES (SPEC.md 20.3). Nothing can be spoofed - a

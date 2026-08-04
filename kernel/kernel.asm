@@ -76,7 +76,7 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; derived from the one below it: change a size and everything above it slides.
 ; There are no gaps and no fixed addresses above the kernel segment - what
 ; used to be four pinned constants up there (SND_SEG, SAVE_SEG, VIEW_SEG,
-; BB_SEG) is now the claim heap of SPEC.md 42, handed out on demand.
+; BB_SEG) is now the claim heap of SPEC.md 50, handed out on demand.
 ;
 ;   0x00000  IVT + BIOS data area                     (theirs, 1,536 B)
 ;   0x00600  FAR_SEG   .fartext blob                  FAR_PARA = 10,752 B
@@ -138,7 +138,7 @@ VIEW_KB     equ 3               ; each cache: 1KB of entries + 2KB of icons
 
 PKG_SEG     equ KERNEL_SEG + (KERN_MAX / 16)  ; the pool starts where the
                                 ; kernel's own budget ends - no gap
-HEAP_SEG    equ PKG_SEG + PKG_PARA    ; the claim heap (SPEC.md 42): the
+HEAP_SEG    equ PKG_SEG + PKG_PARA    ; the claim heap (SPEC.md 50): the
                                 ; paragraph after the pool, up to whatever
                                 ; int 12h reports. Nothing up there has a
                                 ; fixed address any more
@@ -276,7 +276,7 @@ osapi_table:
     OSAPI_SLOT wm_clip_set        ; 0x0160 - the clip region (SPEC.md 11.3)
     OSAPI_SLOT wm_clip_clear      ; 0x0168
     OSAPI_SLOT wm_clip_test       ; 0x0170
-    OSAPI_JSLOT api_mem_claim     ; 0x0178 - the claim heap (SPEC.md 42.3):
+    OSAPI_JSLOT api_mem_claim     ; 0x0178 - the claim heap (SPEC.md 50.3):
     OSAPI_JSLOT api_mem_free      ; 0x0180   X, same fence as the spawn
     OSAPI_SLOT osapi_mem_avail    ; 0x0188
     OSAPI_SLOT gfx_blit4          ; 0x0190 - packed 4bpp block (SPEC.md 5.4):
@@ -452,7 +452,7 @@ kmain:
                                 ; the runtime geometry, set the mode. Re-runs
                                 ; what the splash already did, which is what
                                 ; wipes the loading screen.
-    call mem_init               ; the claim heap (SPEC.md 42): int 12h, the
+    call mem_init               ; the claim heap (SPEC.md 50): int 12h, the
                                 ; empty map. FIRST of the memory users -
                                 ; every claim below goes through it
     call bb_init                ; back buffer (SPEC.md 32): can this ADAPTER
@@ -608,7 +608,7 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 %include "clock.inc"            ; the system clock (SPEC.md 37): after
                                 ; sched.inc, whose [ticks] it advances from
 %include "wm.inc"
-%include "memory.inc"           ; the claim heap (SPEC.md 42): after
+%include "memory.inc"           ; the claim heap (SPEC.md 50): after
                                 ; instance.inc, whose records own the claims
 %include "instance.inc"
 %include "menu.inc"

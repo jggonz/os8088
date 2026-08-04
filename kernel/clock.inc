@@ -23,7 +23,7 @@
 ; posts [clk_dirty] instead. Only the BIOS tier still calls int 1Ah, but the
 ; rule stays: the caller cannot know which tier answered.
 ;
-; THE RTC IS A LADDER (SPEC.md 37.1). int 1Ah AH=02h..05h is the LAST rung,
+; THE RTC IS A LADDER (SPEC.md 37.90). int 1Ah AH=02h..05h is the LAST rung,
 ; not the only one: an XT BIOS implements AH=00h/01h and nothing else, so on
 ; a 5150 with a clock card the BIOS knows nothing about a clock that is
 ; sitting right there - and a BIOS that implements the two READ functions
@@ -50,7 +50,7 @@ clk_mdays:  db 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 ; --- Sakamoto's month offsets, for clk_dow ----------------------------------
 clk_dowt:   db 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4
 
-; --- the RTC ladder (SPEC.md 37.1): which chip answered, and where ----------
+; --- the RTC ladder (SPEC.md 37.90): which chip answered, and where ----------
 CLK_T_NONE  equ 0               ; no clock at all: the PIT and the fallback
 CLK_T_AT    equ 1               ; MC146818 / DS12885 at 70h/71h
 CLK_T_NS    equ 2               ; National MM58167 at CLK_XT_BASE
@@ -288,7 +288,7 @@ clk_dow:
     ret
 
 ; =============================================================================
-; Tier CLK_T_AT (1): the MC146818 at 70h/71h (SPEC.md 37.1)
+; Tier CLK_T_AT (1): the MC146818 at 70h/71h (SPEC.md 37.90)
 ; =============================================================================
 ; Every access is an index write to 70h followed IMMEDIATELY by 71h, and the
 ; pair is global mutable state shared with the BIOS: anything that lands
@@ -2599,7 +2599,7 @@ clk_tb_d:   resb 1
 clk_tb_p:   resb 1
 clk_tb_y:   resw 1
 
-; --- the RTC ladder (SPEC.md 37.1) ------------------------------------------
+; --- the RTC ladder (SPEC.md 37.90) ------------------------------------------
 clk_tier:   resb 1              ; CLK_T_*: which rung answered. [clk_rtc] is
                                 ; still the yes/no every caller tests
 clk_ref:    resb 1              ; 1 = int 1Ah gave a usable answer, so the

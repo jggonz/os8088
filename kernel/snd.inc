@@ -685,7 +685,7 @@ osapi_snd_caps:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_tone - the public tone request (slot 0x007C, SPEC.md 20.3)
+; osapi_snd_tone - the public tone request (slot 0x00E8, SPEC.md 20.3)
 ;
 ; in:       AX = frequency Hz (0 = off), CX = duration ticks (0 = until off),
 ;           DL = priority
@@ -729,7 +729,7 @@ snd_req_inst:
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_snd_play - PCM_EXCL clip, run-to-completion (slot 0x0080, SPEC.md
+; osapi_snd_play - PCM_EXCL clip, run-to-completion (slot 0x00F0, SPEC.md
 ;                  20.3/34.4 - live from Phase 2)
 ;
 ; in:       ES:SI = 8-bit unsigned mono samples, CX = count (<= 65535),

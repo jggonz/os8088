@@ -94,7 +94,7 @@ MENU_LOGO_Y equ 4               ; logo glyph top row (11px tall)
 MENU_ITEM_H equ 16              ; pull-down item cell height, px
 MENU_POPMAX equ 11              ; items ANY pull-down may have (SPEC.md 12.4)
 
-; The save-under bound (SPEC.md 2.2/42.2). gfx_save costs
+; The save-under bound (SPEC.md 2.2/50.2). gfx_save costs
 ; planes x rows x (byte span + 1), and until these two clamps existed
 ; nothing in the kernel bounded either factor: a package's menu set could
 ; declare items of any width and any count, and the heap it wrote into was
@@ -145,7 +145,7 @@ menu_init:
     mov word [menu_sseg], 0
     call menu_relayout
     mov ax, MENU_SAVE_KB        ; the save-under buffer, claimed once and
-    mov bx, MEM_K_SAVE          ; held for the session (SPEC.md 42.2)
+    mov bx, MEM_K_SAVE          ; held for the session (SPEC.md 50.2)
     call mem_claim
     jc .nosave                  ; menu_drop falls back to repainting
     mov [menu_sseg], dx
@@ -733,7 +733,7 @@ menu_popup:
 ; held), while the item highlight is a transient overlay drawn VRAM-direct
 ; like the cursor. Only one menu is ever open - both callers run on the UI
 ; task and both are driven by a held button - so the one save-under buffer
-; needs no allocator of its own. It IS a heap claim (SPEC.md 42.2), taken
+; needs no allocator of its own. It IS a heap claim (SPEC.md 50.2), taken
 ; once at menu_init and held for the session: MENU_SAVE_KB, bounded at build
 ; time by the clamps below and asserted in kernel.asm. If the claim failed -
 ; only possible on a machine whose heap cannot spare 16KB at boot - the save

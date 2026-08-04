@@ -293,7 +293,7 @@ vid_apply:
     mov byte [vid_planes], 4
     mov word [vid_planes_w], 4
     xor ax, ax                  ; VGA: the renderer has no target until
-    mov bx, BB_PLANE_PARA       ; bb_set claims one (SPEC.md 32/42.2)
+    mov bx, BB_PLANE_PARA       ; bb_set claims one (SPEC.md 32/50.2)
     xor dx, dx
     cmp byte [vid_kind], VID_VGA
     je .rend

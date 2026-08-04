@@ -524,7 +524,7 @@ ui_drag:
 
     ; It moved. Only two rects changed: the one it left and the one it now
     ; occupies - everything outside their union is still correct on screen,
-    ; so this is wm_paint_dmg's case, not wm_paint_all's (SPEC.md 11.5). The
+    ; so this is wm_paint_dmg's case, not wm_paint_all's (SPEC.md 11.91). The
     ; union rather than two passes because the two overlap on any short drag,
     ; and a rect that big is still a fraction of the screen.
     mov ax, [ui_origx]          ; where it was, drop shadow included

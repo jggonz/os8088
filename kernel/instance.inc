@@ -860,7 +860,7 @@ app_close_win:
     mov byte [di+I_STATE], 2    ; dying: lock-held readers skip it from here
     call snd_release_rec        ; free every sound grant before the record
     call mem_free_rec           ; goes (SPEC.md 29.4/34.3), and every heap
-                                ; claim with it (SPEC.md 42.4)
+                                ; claim with it (SPEC.md 50.4)
     call wm_destroy             ; frees the wm slot + wm_owner, repaints
     mov word [di+I_WIN], 0
     mov byte [di+I_STATE], 0    ; record (and any package region) free
@@ -913,7 +913,7 @@ inst_restore:
 inst_task_die:
     call snd_release_rec        ; free every sound grant before the record
     call mem_free_rec           ; goes (SPEC.md 29.4/34.3), and every heap
-                                ; claim with it (SPEC.md 42.4)
+                                ; claim with it (SPEC.md 50.4)
     call gfx_lock
     mov bx, [di+I_WIN]
     call wm_destroy             ; frees the wm slot + wm_owner, repaints

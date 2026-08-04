@@ -165,7 +165,7 @@ tm_s_frtl:  db '  -     -', 0   ; free row's CPU + MEM columns
 
 ; --- memory view (SPEC.md 28) ------------------------------------------------
 tm_s_mhdr:  db 'NAME    ADDR SIZE  CLM', 0    ; 22 chars, the row width
-tm_s_heap:  db 'HEAP ', 0       ; + claimed/size KB (SPEC.md 42)
+tm_s_heap:  db 'HEAP ', 0       ; + claimed/size KB (SPEC.md 50)
 tm_s_bhdr:  db 'Builtins    ', 0 ; + used/max of the kernel segment they share
 tm_s_phdr:  db 'Packages    ', 0 ; + used/max of the package pool
 tm_s_mfr:   db '   -    -', 0   ; the ADDR+SIZE pair a built-in has no answer
@@ -391,7 +391,7 @@ tm_sample:
     mov al, [si+I_TASK]
     mov [tm_itsk+bx], al
     mov al, [si+I_KIND]         ; bit 7 = package: the memory view groups on
-    mov [tm_iknd+bx], al        ; it, and bills claims by it (SPEC.md 28/42)
+    mov [tm_iknd+bx], al        ; it, and bills claims by it (SPEC.md 28/50)
     mov di, bx
     shl di, 1                   ; DI = index*2
     mov ax, [si+I_SIZE]
@@ -629,7 +629,7 @@ tm_sample:
                                 ; included: the pool starts where it ends, so
                                 ; nothing else can be given the slack
     KCALL mem_claimed_kb        ; + everything claimed out of the heap
-                                ; (SPEC.md 42): the back buffer while it is
+                                ; (SPEC.md 50): the back buffer while it is
                                 ; armed, the menu save-under, each open Disk
                                 ; window's listing cache, and every package's
                                 ; claim - live, not a constant
@@ -956,7 +956,7 @@ tm_draw_mem:
 
 ; -----------------------------------------------------------------------------
 ; tm_cap_heap - white-fill the caption band and draw "HEAP nnnK/nnnK"
-;               (claimed / heap size, SPEC.md 42)
+;               (claimed / heap size, SPEC.md 50)
 ; in:  nothing
 ; out: nothing
 ; clobbers: nothing (flags only)
@@ -1019,7 +1019,7 @@ tm_cap_heap:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_map_ram - the conventional-memory map interior (SPEC.md 28/42)
+; tm_map_ram - the conventional-memory map interior (SPEC.md 28/50)
 ;
 ; Four kinds of band, and between them they now cover every byte the machine
 ; has: gray = the kernel's fixed reservation (low memory, then its own
@@ -1260,7 +1260,7 @@ tm_para2x:
 ; The two headings carry the numbers that used to be nowhere: how much of the
 ; KERNEL SEGMENT the built-ins share is spent (they have no memory of their
 ; own - they are kernel code running on the UI task's stack), and how much of
-; the PACKAGE POOL is allocated. The CLAIM column is the heap (SPEC.md 42):
+; the PACKAGE POOL is allocated. The CLAIM column is the heap (SPEC.md 50):
 ; what this instance asked for on top of everything above, which for Paint is
 ; most of the machine and used to be invisible.
 ;
@@ -1466,13 +1466,13 @@ tm_inst_row:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_inst_claim - how much heap has this instance claimed? (SPEC.md 42.5)
+; tm_inst_claim - how much heap has this instance claimed? (SPEC.md 50.5)
 ; in:  SI = instance slot
 ; out: AX = KB
 ; clobbers: nothing else (flags)
 ;
 ; A package's claims are stamped with its segment and a built-in's with its
-; slot (SPEC.md 42.2), so the owner word depends on which this is.
+; slot (SPEC.md 50.2), so the owner word depends on which this is.
 ; -----------------------------------------------------------------------------
 tm_inst_claim:
     push bx
@@ -2099,7 +2099,7 @@ tm_rows:
     mov si, bx
     shr si, 1                   ; SI = instance slot
     call tm_inst_claim          ; ...plus everything it holds off the claim
-    pop si                      ; heap (SPEC.md 42.5). The MEM column is what
+    pop si                      ; heap (SPEC.md 50.5). The MEM column is what
     add ax, dx                  ; this app COSTS, and a package that claimed a
     call tm_memcol_kb0          ; canvas costs far more than its region - the
     jmp .draw                   ; same sum the System row already shows
@@ -2393,7 +2393,7 @@ tm_ispt:    resw INST_MAX       ; I_SPTR snapshot (memory view, SPEC.md 28)
 tm_iknd:    resb INST_MAX       ; I_KIND snapshot: the Builtins/Packages split
                                 ; (SPEC.md 28) needs bit 7, and the CLAIM
                                 ; column needs to know which owner word an
-                                ; instance's claims carry (SPEC.md 42.2)
+                                ; instance's claims carry (SPEC.md 50.2)
 tm_mrow:    resw 1              ; the memory view's row cursor
 tm_view:    resb 1              ; 0 = performance view, 1 = memory view
 tm_inm:     resb INST_MAX * 16  ; I_NAME snapshots

@@ -143,7 +143,7 @@ cp_s_dmono: db 'Not on this adapter', 0     ; a 1bpp adapter draws straight
 ; --- Date/Time page (SPEC.md 31.5/37) ----------------------------------------
 cp_s_time:  db 'Date/Time', 0   ; list name AND the page heading
 cp_s_tcap:  db 'Click a field, then + or -', 0
-; The Date/Time page names the RTC ladder tier that answered (SPEC.md 37.1),
+; The Date/Time page names the RTC ladder tier that answered (SPEC.md 37.90),
 ; not just yes/no: on a machine whose clock will not hold a setting, which of
 ; the four answered is the whole diagnosis, and there is nowhere else to see
 ; it. **Indexed by [clk_tier], i.e. by the CLK_T_* enum - NOT by the order
@@ -1041,7 +1041,7 @@ cp_time_paint:
     KCALL font_str
 
     mov si, cp_s_tnrt           ; caption 2: read live from the probe's
-    cmp byte [clk_rtc], 0       ; verdict (SPEC.md 37.1) - informative only,
+    cmp byte [clk_rtc], 0       ; verdict (SPEC.md 37.90) - informative only,
     je .cap                     ; since editing works either way
     push bx
     mov bl, [clk_tier]

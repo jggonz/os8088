@@ -20,7 +20,7 @@
 ; buffer is armed and must be flushed" - the two were one flag until the
 ; mono path needed the first without the second.
 ;
-; The buffer is not reserved: bb_set CLAIMS its 150KB from the SPEC.md 42
+; The buffer is not reserved: bb_set CLAIMS its 150KB from the SPEC.md 50
 ; heap when the Control Panel arms it and FREES them when it is switched off,
 ; so a machine that never turns it on never spends a byte, and a machine
 ; whose heap is full is refused with a reason the Display page can print.
@@ -219,7 +219,7 @@ bb_set:
     cmp byte [bb_on], 0
     jne .ok                     ; already on
     mov ax, BB_KB               ; the memory question, asked now and not at
-    mov bx, MEM_K_BB            ; boot (SPEC.md 42.2)
+    mov bx, MEM_K_BB            ; boot (SPEC.md 50.2)
     call mem_claim
     jc .refuse                  ; the heap cannot fund it: the Display page
     mov [bb_seg], dx            ; prints why and the click does nothing
@@ -237,7 +237,7 @@ bb_set:
     call gfx_flush              ; land anything still pending in VRAM
     mov byte [bb_dbl], 0
     mov byte [bb_on], 0
-    mov dx, [bb_seg]            ; and hand the 150KB back (SPEC.md 42.2):
+    mov dx, [bb_seg]            ; and hand the 150KB back (SPEC.md 50.2):
     mov bx, MEM_K_BB            ; switched off means not spent
     call mem_free
     mov word [bb_seg], 0

@@ -48,7 +48,7 @@ changed most is not any single number: it is that **nothing above the pool
 has a fixed address any more**. The four pinned blocks that used to sit up
 there — `SND_SEG`, `SAVE_SEG`, `VIEW_SEG`, `BB_SEG`, 278KB of a 256KB
 machine's address space spoken for by constants — are gone or are claims
-(SPEC.md §42), and the ladder below is derived rung by rung so a size change
+(SPEC.md §50), and the ladder below is derived rung by rung so a size change
 slides everything above it with no gaps to lose track of.
 
 ---
@@ -204,7 +204,7 @@ generator.
 plan was to carve them out of a block shared with the save-under heap on a
 256KB floor machine, and to worry about `VIEW_SEG` having taken 16KB off the
 top of it. None of that survived: `SND_SEG` went with the sound cards,
-`SAVE_SEG` and `VIEW_SEG` became **claims** (SPEC.md §42) taken when they
+`SAVE_SEG` and `VIEW_SEG` became **claims** (SPEC.md §50) taken when they
 are used, and the pool is simply the paragraph after the kernel's ceiling —
 `PKG_SEG` = `KERNEL_SEG` + `KERN_MAX`/16, with the heap starting the
 paragraph after the pool. The ladder has no gaps and nothing above the pool

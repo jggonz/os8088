@@ -14,7 +14,7 @@ for them are marked **RESOLVED** where that is so. In short:
 
 | asked for | shipped as |
 |-----------|------------|
-| `alloc(paragraphs)`/`free`, a `largest_free` query, and the same map governing the kernel's own speculative RAM | the **claim heap**, SPEC.md §42 — `OSAPI_MEM_CLAIM` / `OSAPI_MEM_FREE` / `OSAPI_MEM_AVAIL`, freed at instance teardown, billed by the Task Manager, and `bb_set` asking it for the back buffer like anyone else |
+| `alloc(paragraphs)`/`free`, a `largest_free` query, and the same map governing the kernel's own speculative RAM | the **claim heap**, SPEC.md §50 — `OSAPI_MEM_CLAIM` / `OSAPI_MEM_FREE` / `OSAPI_MEM_AVAIL`, freed at instance teardown, billed by the Task Manager, and `bb_set` asking it for the back buffer like anyone else |
 | a `gfx_blit4` slot | SPEC.md §5.4 — packed 4bpp, adapter- and back-buffer- and clip-aware |
 | the kernel's glyph table | `OSAPI_FONT_GLYPHS`, SPEC.md §6 |
 | `wm_resize(BX, w, h)`, and a resize callback whose refusal `ui_grow` honours | `OSAPI_WM_RESIZE` and `W_ONSIZE`/`OSAPI_WM_ONSIZE`, SPEC.md §11.1 |
@@ -129,7 +129,7 @@ Three consequences are handled rather than hoped about:
 - **The claim is invisible to the Task Manager**, which sums package regions
   and the kernel's own segments. Paint's quarter-megabyte does not appear in
   its RAM figure. *(Resolved: a claim is billed to the instance that holds it,
-  in both Task Manager views — SPEC.md §28/§42.5.)*
+  in both Task Manager views — SPEC.md §28/§50.5.)*
 
 **2. It writes W_W/W_H in the window record.** **(RESOLVED — `OSAPI_WM_RESIZE`
 and `W_ONSIZE`. `pt_wfix` survives only for `wm_fullscreen`, which does not
@@ -266,7 +266,7 @@ cost the kernel one indirect call and would make an allocator (above) safe
 by construction.
 
 **The allocator case is closed without the callback**: `mem_free_rec`
-(SPEC.md §42.4) runs at all three teardown sites and returns every claim the
+(SPEC.md §50.4) runs at all three teardown sites and returns every claim the
 instance held, so `OSAPI_MEM_CLAIM` needs no hook and `pt_dupchk` is gone —
 two instances get two claims by construction. What is still missing is
 everything else a package might want to finish: flushing a file it was
