@@ -550,6 +550,7 @@ bytes are hard-coded.
 | `font_str`   | CX=x, DX=y, SI=NUL str   | draw string left→right               |
 | `font_width` | SI=NUL str               | out AX = pixel width (8 × length)    |
 | `font_str_x` / `font_width_x` | ES:SI = NUL str | the same two, reading the string through **ES** — what the `X` stubs of §20.3 call so a package's string can live in its own segment |
+| `font_run` / `font_run_x` | CX=x, DX=y, SI (ES:SI) = NUL str, AL=ink, AH=background | one **opaque** run: the cells' background AND their glyphs, in a single pass (§6.1). API slot 0x0240 |
 | `osapi_font_glyphs` | — | out SI = the offset of `font_glyphs` in KERNEL_SEG, AL = FONT_FIRST (32), AH = FONT_LAST (126), CX = 8 bytes per glyph. API slot 0x0200 |
 
 **Handing out the bitmaps** (`osapi_font_glyphs`) is for an app that draws
@@ -573,6 +574,50 @@ the software renderer, which applies the same shifted row masks to every
 plane the adapter has (or/and-not per the `[gfx_color]` plane bit — at 1bpp
 there is one plane and one bit, and `font_ink` rounds everything but pure
 white to black, because a dithered 8x8 glyph is unreadable, §39.4).
+
+### 6.1 `font_run` — the erase-and-letter pair, as one operation
+
+**Every text-bearing element in this system fills a rect and then letters
+it**, and each of them writes those bytes twice: once as a fill, once as a
+read-modify-write per glyph. `font_run` does it once. It takes both colours
+and paints each 8x8 cell complete — background where the glyph is clear, ink
+where it is set.
+
+Two things follow, and the second is the reason it exists.
+
+**It cannot produce §11.3's granularity failure.** A fill clips per pixel
+and a glyph per whole cell, so an erase-then-letter pair can disagree and
+leave a cell blanked rather than stale — the sharp edge that section is
+mostly about. Here the two are one decision about one cell, taken once, so
+a caller using this needs no `wm_clip_test` gate around the pair and cannot
+get it wrong.
+
+**On a 1bpp adapter at a byte-aligned x, a cell row is one store.** The cell
+owns its whole framebuffer byte, so there is nothing underneath to preserve:
+no shift, no read, no second byte, and no separate fill pass at all. Per
+plane the byte is `(glyph & ink) | (~glyph & background)` with each mask 00
+or FF, which on mono reduces to the glyph or its complement. That is the
+path the slow machines are on — `[bb_on]` is permanently 1 there (§39.5) —
+and it is where the cost of text actually lives.
+
+The fast path is deliberately narrow: `[bb_on]` set **and** `x & 7 == 0`.
+Anything else — a VRAM planar target, or an unaligned run — falls back to
+one `gfx_fill` of the run's rect in the background colour and `font_str`
+over it, which is exactly what every caller wrote by hand before. The answer
+is identical either way, so a caller never has to ask which path it got, and
+it is never slower than doing it by hand.
+
+Clipping is `font_char`'s, per cell, screen edge and clip region alike — the
+background clips with the glyph rather than independently of it, which is
+the whole point.
+
+**The first consumer is the tracker's pattern view** (§45.9), whose channel
+columns were moved onto 8-pixel boundaries to earn the fast path: `TL_CHX`
+28→32 and `TL_CHW` 145→144 with `TL_PAD` 28→24 on VGA, 70→72 / 145→144 /
+28→24 on Hercules. The compact CGA layout was already aligned. It uses this
+only on mono, because on a colour adapter `[bb_on]` is 0 unless Smooth
+(§45.11) borrowed the back buffer, and there the fallback's fill would be a
+second pass over ground the row band already covered.
 
 ## 7. Concurrency model (read carefully — this is the crux)
 

@@ -162,7 +162,7 @@ stale citation resolves to the wrong routine rather than failing:
 | `0x01E0` | `ABOUT_SET` | `GFX_SCROLL` |
 | `0x01E8` | `FILE_READBIG` | `MEM_CLAIM` (KB) |
 | `0x01F0` / `0x01F8` | `GFX_DBUF` / `GFX_SCROLL` | `MEM_FREE` / `MEM_AVAIL` (KB) |
-| `0x0200`+ | — | `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`, `MEM_REGROW`, `WM_TITLE`, `DRV_TASK` (drivers only), `MEM_CLAIM_DMA` |
+| `0x0200`+ | — | `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`, `MEM_REGROW`, `WM_TITLE`, `DRV_TASK` (drivers only), `MEM_CLAIM_DMA`, `FONT_RUN` |
 
 **Every contract `b401eda` had, this tree has** — `GFX_DBUF` and `GFX_SCROLL`
 were the last two missing and were ported before the merge. The one genuine

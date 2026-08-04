@@ -463,7 +463,17 @@ osapi_table:
                                   ;          mem_claim, because every existing
                                   ;          caller passes garbage there and
                                   ;          the failure would be silent
-osapi_table_end:                  ; 0x0240
+    OSAPI_JSLOT api_font_run      ; 0x0240 - one OPAQUE text run (SPEC.md 6.1):
+                                  ;          CX = x, DX = y, SI = ASCIIZ,
+                                  ;          AL = ink, AH = background. Draws
+                                  ;          the cells' background AND their
+                                  ;          glyphs in one pass, so the two
+                                  ;          cannot disagree about the clip
+                                  ;          (11.3's granularity rule) and, on
+                                  ;          a 1bpp adapter at a byte-aligned
+                                  ;          x, a cell row is one store. X:
+                                  ;          the string is package data
+osapi_table_end:                  ; 0x0248
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -471,8 +481,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 70 * 8
-%error "os8088 API jump table must be exactly 70 8-byte slots"
+%if OSAPI_TABLE_LEN != 71 * 8
+%error "os8088 API jump table must be exactly 71 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -496,6 +506,7 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %endmacro
 
     OSAPI_XSTUB api_font_str,   font_str_x
+    OSAPI_XSTUB api_font_run,   font_run_x
     OSAPI_XSTUB api_font_width, font_width_x
     OSAPI_XSTUB api_wm_create,  wm_create
     OSAPI_XSTUB api_pkg_spawn,  inst_pkg_spawn

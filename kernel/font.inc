@@ -389,6 +389,218 @@ font_str_x:
     pop ax
     ret
 
+; =============================================================================
+; font_run - draw a string as OPAQUE cells: background and glyph in one pass
+;
+; in:       CX = x, DX = y, SI -> ASCIIZ (font_run_x: ES:SI), AL = text
+;           colour, AH = background colour; caller holds the gfx lock
+; out:      nothing
+; clobbers: nothing (flags)
+;
+; **Every text-bearing element in this system erases a rect and then letters
+; it**, and each of them writes those bytes twice: once as a fill and once,
+; read-modify-write, as a glyph. This does it once. On a 1bpp adapter with a
+; byte-aligned x an 8x8 cell row IS one framebuffer byte, so the whole
+; operation is `mov [es:di], al` per row per cell - no shift, no read, no
+; second byte, and no separate fill pass at all.
+;
+; **It also collapses the granularity rule** (SPEC.md 11.3) for its callers.
+; A fill clips per pixel and a glyph per whole cell, so an erase-then-letter
+; pair can disagree and leave a cell blank; here they are one decision about
+; one cell, taken once. A caller using this cannot produce that failure.
+;
+; Two paths, and the fast one is deliberately narrow:
+;   - `[bb_on]` (both mono adapters, and VGA while double-buffered) with x
+;     byte-aligned: the per-plane loop below. This is the case the slow
+;     machines are in - on mono `[bb_on]` is permanently 1 (SPEC.md 39.5).
+;   - anything else: one gfx_fill of the run's rect in the background colour
+;     and font_str over it, which is exactly what every caller wrote by hand
+;     before. No regression, no new planar VRAM code, and the answer is
+;     identical either way.
+; =============================================================================
+font_run:
+    push es
+    push ds
+    pop es
+    call font_run_x
+    pop es
+    ret
+
+font_run_x:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov [font_rn_fg], al
+    mov [font_rn_bg], ah
+    test cx, 7                  ; unaligned, or a VRAM planar target: the
+    jnz .slow                   ; two-pass answer, unchanged
+    cmp byte [bb_on], 0
+    je .slow
+
+    mov al, [font_rn_fg]        ; both colours are drawn, so both decide
+    mov [gfx_color], al         ; whether the planes can still be treated as
+    call bb_mono_chk            ; one (SPEC.md 32)
+    mov al, [font_rn_bg]
+    mov [gfx_color], al
+    call bb_mono_chk
+    cld
+.cell:
+    mov al, [es:si]
+    or al, al
+    jz .out
+    inc si
+    call font_run_cell          ; CX/DX = this cell; preserves both
+    add cx, 8
+    jmp short .cell
+
+.slow:
+    mov al, [font_rn_bg]        ; one fill of the run's rect, then the glyphs
+    mov [gfx_color], al         ; over it: what every caller wrote by hand
+    call font_width_x           ; AX = 8 * length (CX/DX/SI preserved)
+    or ax, ax
+    jz .letter
+    push cx
+    push dx
+    add ax, cx
+    dec ax                      ; AX = x2
+    mov bx, dx                  ; BX = y1
+    add dx, 7                   ; DX = y2
+    xchg ax, cx                 ; AX = x1, CX = x2
+    call gfx_fill
+    pop dx
+    pop cx
+.letter:
+    mov al, [font_rn_fg]
+    mov [gfx_color], al
+    call font_str_x
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; font_run_cell - internal: one opaque 8x8 cell, byte-aligned, [bb_on] path
+; in:       AL = character, CX = x (multiple of 8), DX = y
+; out:      nothing (all registers preserved)
+;
+; The plane loop is font_char_bb's with the read-modify-write replaced by a
+; store: the cell owns its whole byte, so there is nothing underneath to
+; preserve, and the background arrives in the same write as the glyph. Per
+; plane the byte is (glyph & fg) | (~glyph & bg), each mask 00 or FF - on
+; mono that reduces to the glyph or its complement.
+; -----------------------------------------------------------------------------
+font_run_cell:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+
+    cmp cx, [vid_wm8]           ; the same whole-cell clipping font_char does,
+    ja .out                     ; screen edge and clip region alike - so a run
+    cmp dx, [vid_hm8]           ; clips exactly as its glyphs would, and its
+    ja .out                     ; background with them
+    cmp word [wm_clip_n], 0
+    je .noclip
+    push ax
+    mov ax, cx
+    mov bx, dx
+    mov cx, ax
+    add cx, 7
+    mov dx, bx
+    add dx, 7
+    call wm_clip_test
+    mov cx, ax
+    mov dx, bx
+    pop ax
+    jc .out
+.noclip:
+    cmp al, FONT_FIRST
+    jb .blank
+    cmp al, FONT_LAST
+    ja .blank
+    sub al, FONT_FIRST
+    mov ah, 0
+    mov si, ax
+    shl si, 1
+    shl si, 1
+    shl si, 1
+    add si, font_glyphs
+    jmp short .have
+.blank:
+    mov si, font_rn_zero        ; an unprintable character is a blank cell -
+.have:                          ; which still has to be PAINTED here
+
+    mov di, cx                  ; DI = x/8 FIRST: gfx_rowbase clobbers CX
+    mov cl, 3                   ; (and AX and DX), and this cell's column has
+    shr di, cl                  ; to survive it
+    mov ax, dx
+    call gfx_rowbase            ; AX = rowbase(y)
+    add di, ax
+    mov [font_rn_si], si
+    mov [font_rn_di], di
+
+    mov ch, [font_rn_fg]        ; the per-plane bit sources, reduced the way
+    call font_ink               ; every other glyph draw reduces them
+    mov [font_rn_fs], ch
+    mov ch, [font_rn_bg]
+    call font_ink
+    mov [font_rn_bs], ch
+
+    mov dx, [vid_rseg]
+    mov bl, [vid_planes]        ; BL = plane counter: 4 or 1
+.plane:
+    mov es, dx
+    mov si, [font_rn_si]
+    mov di, [font_rn_di]
+    mov bh, 8
+    shr byte [font_rn_fs], 1    ; this plane's bit -> CF -> an 00/FF mask
+    sbb al, al
+    mov [font_rn_fm], al
+    shr byte [font_rn_bs], 1
+    sbb al, al
+    mov [font_rn_bm], al
+.row:
+    mov al, [si]                ; AL = the glyph row
+    inc si
+    mov ah, al
+    and al, [font_rn_fm]        ; ink where the glyph is set...
+    not ah
+    and ah, [font_rn_bm]        ; ...background where it is not
+    or al, ah
+    mov [es:di], al             ; the cell owns the byte: store, never merge
+    add di, [cs:vid_rowadd]     ; (gfx_nextrow inlined - see font_char_bb)
+    test di, [cs:vid_wrapbit]
+    jz .nw
+    add di, [cs:vid_wrapfix]
+.nw:
+    dec bh
+    jnz .row
+    add dx, [vid_rpara]
+    dec bl
+    jnz .plane
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+font_rn_zero:   db 0,0,0,0,0,0,0,0   ; the blank cell an unprintable draws
+
 ; -----------------------------------------------------------------------------
 ; font_width - pixel width of a NUL-terminated string
 ;
@@ -426,6 +638,14 @@ font_width_x:
 ; -----------------------------------------------------------------------------
 section .bss
 font_glyphs:    resb 760        ; glyphs 32..126, 8 bytes per row (FONT_BYTES)
+font_rn_fg:     resb 1          ; font_run: the run's two colours, and the
+font_rn_bg:     resb 1          ; per-plane bit sources and 00/FF masks its
+font_rn_fs:     resb 1          ; cell loop consumes. In .bss for the same
+font_rn_bs:     resb 1          ; reason font_bb_si is: the row loop has no
+font_rn_fm:     resb 1          ; register to spare, and every caller holds
+font_rn_bm:     resb 1          ; the gfx lock (SPEC.md 1.6)
+font_rn_si:     resw 1
+font_rn_di:     resw 1
 font_bb_si:     resw 1          ; bb path: glyph pointer, reloaded per plane
 font_bb_di:     resw 1          ; bb path: cell offset, reloaded per plane
 section .text

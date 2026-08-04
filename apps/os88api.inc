@@ -451,7 +451,8 @@ VID_CGA    equ 2
 ; Everything above is at `main`'s number. Everything from here up is this
 ; fork's - and 0x01B8..0x01C8 are HELD EMPTY because `main` puts its
 ; paragraph-counting arena there and this fork's heap counts KB (SPEC.md
-; 50.3), as is 0x0200..0x0238, which is RESERVED for `main` to grow into. A
+; 50.3), as is 0x0200..0x0238, which is RESERVED for `main` to grow into -
+; 0x0240 (FONT_RUN) is the first number past that reservation. A
 ; call to any held number returns CF=1 with every register intact.
 ;
 ; The reservation is not theoretical: this block sat at 0x01E8 until `main`
@@ -471,6 +472,30 @@ VID_CGA    equ 2
                                  ; your claims when your instance dies, so you
                                  ; need no teardown hook; free them yourself
                                  ; only to hand memory back mid-session.
+%define OSAPI_FONT_RUN      KERNEL_SEG:0x0240   ; CX=x, DX=y, SI=NUL string,
+                                                ; AL=ink, AH=background. ONE
+                                                ; OPAQUE text run (SPEC.md 6.1):
+                                                ; the cells' background and
+                                                ; their glyphs in a single
+                                                ; pass, which is the
+                                                ; erase-then-letter pair every
+                                                ; text element writes by hand.
+                                                ; Two things it buys. It cannot
+                                                ; produce SPEC.md 11.3's
+                                                ; granularity failure - fill
+                                                ; and glyph are one decision
+                                                ; about one cell - so a
+                                                ; background task needs no
+                                                ; OSAPI_WM_CLIP_TEST gate
+                                                ; around it. And on a 1bpp
+                                                ; adapter with x a multiple of
+                                                ; 8, a cell row is a single
+                                                ; store: no shift, no read, no
+                                                ; second byte, no fill pass.
+                                                ; Off that path it falls back
+                                                ; to fill+FONT_STR, so it is
+                                                ; never slower than doing it
+                                                ; by hand
 %define OSAPI_MEM_CLAIM_DMA KERNEL_SEG:0x0238   ; the same claim, for a buffer
                                  ; an ISA DMA CONTROLLER will read or write:
                                  ; AX = KB wanted, CX = KB of the block's HEAD

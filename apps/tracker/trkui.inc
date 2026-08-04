@@ -296,6 +296,52 @@ tui_textc:                          ; SI = string, CX = x, DX = y
     pop cx
     ret
 
+; tui_runc - one OPAQUE text run: SI = string, CX = x, DX = y,
+;            AL = ink role, AH = background role (TC_*)
+;
+; On a mono adapter this is OSAPI_FONT_RUN (SPEC.md 6.1), which paints the
+; cells' background and their glyphs in one pass and - because the pattern
+; columns are laid out on 8-pixel boundaries - writes each cell row as a
+; single store instead of a shift and a read-modify-write. That is the whole
+; of the pattern view's text cost on the machines that cannot afford it.
+;
+; On a colour adapter [bb_on] is 0 unless Smooth borrowed the back buffer, so
+; the kernel would fall back to its own fill plus FONT_STR - a second fill of
+; ground the caller has already covered. There it stays FONT_STR: the row
+; band was filled once, which is cheaper than filling it again per run.
+tui_runc:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    cmp byte [tui_mono], 0
+    jne .run
+    call tui_setcol                 ; colour: the caller already filled
+    call tui_textc
+    jmp short .out
+.run:
+    push ax
+    mov bl, ah                      ; resolve both roles through the table
+    xor bh, bh
+    mov ah, [tui_col + bx]
+    mov [tui_rbg], ah
+    pop ax
+    mov bl, al
+    xor bh, bh
+    mov al, [tui_col + bx]
+    mov ah, [tui_rbg]
+    add cx, [tui_ox]
+    add dx, [tui_oy]
+    call OSAPI_FONT_RUN
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 tui_charc:                          ; AL = char, CX = x, DX = y
     push cx
     push dx
@@ -1529,22 +1575,24 @@ tui_row1:
     jl .out
     cmp bx, 63
     jg .out
-    mov al, TC_TEXT
+    mov ax, (TC_BG << 8) | TC_TEXT  ; AL = ink role, AH = background role
     cmp byte [tui_band], 0
     je .col
-    mov al, TC_BANDT
+    mov ax, (TC_BAND << 8) | TC_BANDT
 .col:
-    call tui_setcol
+    mov [tui_rrole], ax
     mov al, bl
     call tui_hex2                   ; the FT2 hex row number, both sides
     mov si, tui_nbuf
     mov cx, [tui_lay + TL_RNL]
     mov dx, [tui_t1]
-    call tui_textc
+    mov ax, [tui_rrole]
+    call tui_runc
     mov cx, [tui_lay + TL_RNR]
     cmp cx, 0FFFFh
     je .cells
-    call tui_textc
+    mov ax, [tui_rrole]
+    call tui_runc
 .cells:
     mov byte [tui_chn], 0
 .cl:
@@ -1566,7 +1614,8 @@ tui_row1:
     mov si, mp_celltxt
     mov cx, [tui_t2]
     mov dx, [tui_t1]
-    call tui_textc
+    mov ax, [tui_rrole]
+    call tui_runc
 .nx:
     inc byte [tui_chn]
     cmp byte [tui_chn], 4
@@ -2430,7 +2479,7 @@ tui_about_panel:
 ; the pattern from y=173; the extra 80 rows go to the pattern view)
 tui_lay_vga:
     dw 172, 175, 185, 16, 313, 324, 18         ; PATY HDRY ROWT RAB BANDY LOWY RBE
-    dw 8, 608, 28, 145, 28                     ; RNL RNR CHX CHW PAD
+    dw 8, 608, 32, 144, 24                     ; RNL RNR CHX CHW PAD
     dw 2, 94, 145, 39, 143, 38, 2              ; SCX SCY SCDX SCDY SCW SCH SCPR
     dw 4, 80, 282, 632                         ; STX STY STW SLX
     dw TLF_INSTR | TLF_MENUS                   ; FLAGS
@@ -2439,7 +2488,7 @@ tui_lay_vga:
 ; instrument list or button stacks, channel block centred in 720
 tui_lay_hrc:
     dw 92, 95, 105, 14, 217, 228, 14
-    dw 8, 656, 70, 145, 28
+    dw 8, 656, 72, 144, 24
     dw 291, 2, 106, 0, 104, 44, 4
     dw 4, 80, 282, 291              ; SLX 291, not 714: the sliver fill must
                                     ; cover ALL of rows 0..MBAR_H-1 right of
@@ -2540,6 +2589,8 @@ tui_ab5:     db 'Any key closes', 0
     TRKB tui_chn                    ; shared small loop counter
     TRKB tui_lplay                  ; last seen [mp_playing], for the 8088
                                     ; view's start/stop transition (45.9.1)
+    TRKW tui_rrole                  ; tui_row1's ink/background role pair
+    TRKB tui_rbg                    ; tui_runc's resolved background colour
     TRKB tui_vonly                  ; 1 = draw an element's VALUES only, the
                                     ; face/bevel/labels being on screen already
     TRKB tui_lrow                   ; last-drawn markers for tui_draw_dyn
