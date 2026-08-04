@@ -1008,6 +1008,8 @@ files_poster:
     call wm_clip_set            ; CF = 1: none of it is visible any more
     jc .unlock
     mov si, bx
+    call fm_status_only         ; the load changed ONE line of this window;
+    jnc .unlock                 ; only a clip edge across it forces the rest
     call fm_repaint
 .unlock:
     call gfx_unlock             ; ...which also disarms the clip
@@ -1388,7 +1390,10 @@ fm_onclick:
     cmp dx, FM_DBLCLK
     jae .select
     call fm_open_sel            ; double-click: a package goes to the
-    jmp .redraw                 ; loader, a folder re-lists this window (22)
+    cmp word [ld_pending], 0    ; loader, a folder re-lists this window (22)
+    je .redraw                  ; folder: fm_go changed the whole listing
+    call fm_status_only         ; package: the ONLY thing that changed on
+    jnc .out                    ; screen is 'Loading...' in the status line
 
 .select:
     mov [bx+FS_SEL], ax
@@ -1402,7 +1407,7 @@ fm_onclick:
 
 .redraw:
     call fm_repaint             ; SI still = window ptr
-
+.out:
     pop di
     pop dx
     pop cx
@@ -3034,8 +3039,97 @@ fm_draw_core:
     mov byte [gfx_color], CBLACK
     call gfx_frame
 .nothumb:
-
 .norows:
+    call fm_draw_status         ; the status line is a proc of its own so a
+                                ; status-ONLY change - the loader's
+                                ; 'Loading...' and back again - can cost one
+                                ; line instead of a whole content repaint
+                                ; (fm_status_only below)
+
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_status_only - repaint one Disk window's status line and NOTHING else
+; in:  SI = window ptr; gfx lock held (a clip region may be armed)
+; out: CF = 0 drawn; CF = 1 refused - the caller must fall back to a whole
+;      repaint. All registers preserved.
+;
+; This exists for the loader round trip. Posting a load and finishing one
+; change exactly one line of text - "Loading..." on, then off again - and both
+; used to cost a full fm_repaint: a white fill of the whole content plus every
+; row, every icon, the header and the buttons, to correct eight pixel rows.
+;
+; The refusal is the SPEC.md 11.3 granularity rule, not caution. The erase is
+; a fill (per-pixel clipping) and the text is glyphs (whole-cell clipping), so
+; a clip edge crossing this rect would erase rows the text could not be put
+; back into - the line would go blank rather than stale. wm_clip_test on the
+; whole rect answers that in one call, exactly as fr_status does; CF = 1 sends
+; the caller back to fm_repaint, which is what it did before this existed.
+; -----------------------------------------------------------------------------
+fm_status_only:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov bx, si
+    call fm_layout              ; fm_cx/fm_cy/fm_cw/fm_rgt/fm_staty, and the
+                                ; fm_l* snapshot fm_draw_status reads
+
+    mov ax, [fm_cx]             ; the status line's own rect: full content
+    mov bx, [fm_cy]             ; width, the 8 rows font_str draws into. The
+    add bx, [fm_staty]          ; scroll bar stops at fm_listb, two rows
+    mov cx, [fm_rgt]            ; above this, so nothing else lives here
+    mov dx, bx
+    add dx, 7
+    cmp ax, cx
+    jg .refuse                  ; degenerate content: nothing to draw into
+    cmp bx, dx
+    jg .refuse
+    call wm_clip_test           ; whole rect visible? (SPEC.md 11.3)
+    jc .refuse
+
+    mov byte [gfx_color], CWHITE
+    call gfx_fill
+    call fm_draw_status
+    clc
+    jmp short .out
+.refuse:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_draw_status - stage and draw JUST the status line
+; in:  fm_layout already run for the acting window; gfx lock held
+; out: nothing (all registers preserved)
+;
+; Draws only - it does not erase first, because its usual caller
+; (fm_draw_core) white-fills the whole content before it runs. The caller
+; that needs an erase is fm_status_only, which does its own.
+; -----------------------------------------------------------------------------
+fm_draw_status:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
     ; --- status line at (6, staty): the precedence is binding (SPEC.md 22),
     ;     because all four of these can be true at the same moment. The
     ;     header buffer is free by now, so every branch stages into it and
@@ -3043,58 +3137,58 @@ fm_draw_core:
     mov di, fm_hdrbuf
     mov si, fm_s_loading        ; 1. a pending load trumps everything
     cmp word [ld_pending], 0
-    jne .stat
+    jne .fs_stat
     mov al, [fm_ledit]          ; 2. the input line, prompt and all - the
     or al, al                   ;    editor IS the status line (SPEC.md 22)
-    jz .st_err
+    jz .fs_st_err
     cmp al, 3
-    je .st_del
+    je .fs_st_del
     mov si, fm_s_newfld
     cmp al, 1
-    je .st_prompt
+    je .fs_st_prompt
     mov si, fm_s_renam          ; "Rename NAME to: NEW"
     call fm_scat
     mov si, fm_onam
     call fm_scat
     mov si, fm_s_rento
-.st_prompt:
+.fs_st_prompt:
     call fm_scat
     mov si, fm_ebuf
-    jmp short .stat
-.st_del:
+    jmp short .fs_stat
+.fs_st_del:
     mov si, fm_s_delpr          ; "Delete NAME? Enter=yes Esc=no", or
     call fm_scat                ; "Delete NAME +contents? ..." for a folder
     mov si, fm_onam
     call fm_scat
     mov si, fm_s_delq
     cmp byte [fm_odir], 0
-    je .stat
+    je .fs_stat
     mov si, fm_s_delq2
-    jmp short .stat
-.st_err:
+    jmp short .fs_stat
+.fs_st_err:
     mov al, [fm_lferr]          ; 3./4. this window's own last word: the
     or al, al                   ;    free-space figure, or the FERR_* text
-    jz .st_load                 ;    that keeps no dskw_* failure silent
+    jz .fs_st_load                 ;    that keeps no dskw_* failure silent
     cmp al, FM_FREE
-    je .st_free
+    je .fs_st_free
     mov bx, fm_errtab
-    jmp short .st_tab
-.st_free:
+    jmp short .fs_st_tab
+.fs_st_free:
     mov si, fm_msgbuf
-    jmp short .stat
-.st_load:
+    jmp short .fs_stat
+.fs_st_load:
     mov al, [ld_status]         ; 5. and finally the loader's
     mov bx, fm_stattab
     cmp al, 5
-    ja .statdone                ; out-of-range status: draw nothing
-.st_tab:
+    ja .fs_done                ; out-of-range status: draw nothing
+.fs_st_tab:
     cmp al, FM_NERR
-    jae .statdone
+    jae .fs_done
     xor ah, ah
     shl ax, 1
     add bx, ax
     mov si, [bx]
-.stat:
+.fs_stat:
     call fm_scat                ; stage it, then truncate to the live cw
     mov ax, [fm_cw]             ; ("Out of memory" is 104px and cw can
     sub ax, 12                  ; legally be 94, SPEC.md 22)
@@ -3109,7 +3203,7 @@ fm_draw_core:
     mov byte [fm_hdrbuf+bx], 0
 .stdraw:
     cmp byte [fm_hdrbuf], 0
-    je .statdone
+    je .fs_done
     mov byte [gfx_color], CBLACK
     mov cx, [fm_cx]
     add cx, 6
@@ -3117,9 +3211,7 @@ fm_draw_core:
     add dx, [fm_staty]
     mov si, fm_hdrbuf
     call font_str
-.statdone:
-
-    pop bp
+.fs_done:
     pop di
     pop si
     pop dx

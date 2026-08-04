@@ -521,7 +521,21 @@ ui_drag:
 
     or di, di                   ; a click that only raised the window (above)
     jz .done                    ; leaves the screen already correct
-    call wm_paint_all           ; caller-held lock, per the wm contract
+
+    ; It moved. Only two rects changed: the one it left and the one it now
+    ; occupies - everything outside their union is still correct on screen,
+    ; so this is wm_paint_dmg's case, not wm_paint_all's (SPEC.md 11.5). The
+    ; union rather than two passes because the two overlap on any short drag,
+    ; and a rect that big is still a fraction of the screen.
+    mov ax, [ui_origx]          ; where it was, drop shadow included
+    mov cx, ax
+    add cx, [ui_dragw]
+    mov bx, [ui_origy]
+    mov dx, bx
+    add dx, [ui_dragh]
+    mov si, [ui_dragwin]
+    call wm_dmg_union           ; ...grown to cover where it is now
+    call wm_paint_dmg           ; caller-held lock, per the wm contract
 .done:
     call gfx_unlock             ; NO second gfx_lock here - already held (§7)
     ret

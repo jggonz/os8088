@@ -320,6 +320,12 @@ ark_layout:
 ; ark_paint - W_PAINT: full content repaint, and where the worker is hired
 ; in:  SI = window ptr; caller holds the gfx lock
 ; out: nothing; preserves all registers
+;
+; The three "owed" flags are cleared here, not just in ark_render's own full
+; branch: ark_draw_all satisfies all three, and W_PAINT is the OTHER caller
+; of it. Left set, the worker's very next frame drew the whole board a second
+; time - most visibly on the launch, where ark_newgame raises [ark_full] and
+; the first paint therefore rendered twice in a row.
 ; -----------------------------------------------------------------------------
 ark_paint:
     push ax
@@ -330,6 +336,9 @@ ark_paint:
     push di
     call ark_track
     call ark_draw_all
+    mov byte [ark_full], 0
+    mov byte [ark_msg], 0
+    mov byte [ark_stat], 0
     call ark_hire                   ; idempotent: only the first paint spawns
     pop di
     pop si

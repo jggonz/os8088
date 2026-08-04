@@ -5,8 +5,15 @@
 ; one tile per RUNNING instance (I_STATE = 1, SPEC.md 29), built-in or
 ; package. Tile position i belongs to instance-table record i - a stable
 ; mapping with holes, so quitting one instance never moves another's tile.
-; Minimized instances (I_FLAGS bit0) draw inverted; clicking a tile restores
-; a minimized instance or fronts a visible one.
+;
+; A tile carries TWO independent states, and they are drawn as two different
+; kinds of mark on purpose. Minimized (I_FLAGS bit0) inverts the tile's
+; interior - the app is not on screen at all. ACTIVE - the instance that owns
+; the frontmost visible window - doubles the tile's border instead. They are
+; mutually exclusive in practice (a minimized window is not visible, so it
+; cannot be frontmost) but nothing depends on that, and a heavier border
+; survives the 1bpp reduction (SPEC.md 39.4) where a second colour would not.
+; Clicking a tile restores a minimized instance or fronts a visible one.
 ;
 ; dock_paint runs inside wm_paint_all right after desk_paint, under the
 ; caller's gfx lock - windows paint over the dock exactly like they cover
@@ -68,6 +75,13 @@ dock_paint:
     mov dx, [vid_hm1]
     call gfx_fill
 
+    call wm_top                 ; who owns the frontmost visible window? Its
+    mov word [dock_act], 0      ; tile gets the active mark (0 = nobody)
+    or bx, bx
+    jz .scan
+    call inst_win_owner         ; DI = its instance record, or 0
+    mov [dock_act], di
+.scan:
     mov di, inst_tab            ; one tile per live record, stable slots
     xor cx, cx                  ; CX = instance index
 .tile:
@@ -131,6 +145,20 @@ dock_draw_tile:
     call icon_draw16
     pop si
 
+    cmp di, [dock_act]          ; active: a second frame just inside the
+    jne .mini                   ; first, which reads as a heavier border and
+    mov byte [gfx_color], CBLACK; costs no colour (SPEC.md 39.4). The icon
+    mov ax, si                  ; body is at +4,+2 and 16x16, so it clears
+    inc ax                      ; both new edges by 2px and 1px
+    mov bx, [vid_dock_ty0]
+    inc bx
+    mov cx, si
+    add cx, DOCK_TILE_W-2
+    mov dx, [vid_dock_ty0]
+    add dx, DOCK_TILE_H-2
+    call gfx_frame
+
+.mini:
     test byte [di+I_FLAGS], 1   ; minimized: invert the tile interior
     jz .done
     mov ax, si
@@ -213,5 +241,8 @@ dock_click:
 section .bss
 
 dock_gcol:  resb 1              ; dock_paint's [gfx_color] save
+dock_act:   resw 1              ; the instance record owning the frontmost
+                                ; visible window, 0 = none. Read per tile, so
+                                ; it is resolved once per dock_paint
 
 section .text
