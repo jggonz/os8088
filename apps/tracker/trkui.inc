@@ -2279,7 +2279,6 @@ tui_draw_dyn:
     call tui_track
     cmp byte [trk_fs], 0
     je .win
-    inc byte [tui_frame]
     mov al, [mp_playing]            ; did playback START or STOP? on a tier-0
     cmp al, [tui_lplay]             ; machine that changes the SHAPE of the
     je .played                      ; pattern view (SPEC.md 45.9.1), so the
@@ -2582,7 +2581,6 @@ tui_ab5:     db 'Any key closes', 0
     TRKW tui_chend                  ; right edge of the channel block
     TRKW tui_rend                   ; right edge of a row strip
     TRKW tui_vuw                    ; volume bar full width
-    TRKB tui_frame                  ; worker frame counter (top band each 16)
     TRKB tui_vrow                   ; the Up/Down scroll row while stopped
     TRKB tui_cvr                    ; the view row this frame
     TRKB tui_band                   ; tui_row1: drawing the band row
