@@ -216,8 +216,19 @@ sol_entry:
     add ax, [sol_taby]
     add ax, [sol_ch]
     add ax, TITLE_H + 1
-    mov bx, [sol_dock]              ; ...clamped to the desktop band, exactly
-    sub bx, MBAR_H                  ; as wm_fit would
+    mov bx, [sol_dock]              ; ...clamped to the desktop band, and ONE
+    sub bx, MBAR_H + 1              ; PIXEL SHORT of it: the kernel tests
+                                    ; y+h against the dock's first row with
+                                    ; `jae`, because the drop shadow lives on
+                                    ; row y+h - so a frame that merely REACHES
+                                    ; the dock is already covering it, and
+                                    ; every window opened over this one then
+                                    ; pays for the dock to be redrawn under
+                                    ; it. wm_fit would hand out exactly that
+                                    ; height; this is the same pixel tm_init
+                                    ; spends for the same reason. It costs
+                                    ; Hercules and CGA one row of tableau and
+                                    ; VGA nothing, since VGA never clamps
     cmp ax, bx
     jbe .hok
     mov ax, bx
