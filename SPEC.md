@@ -5464,15 +5464,15 @@ account, and the rows partition one total.
 **Drawing.** `tm_paint` (W_PAINT) dispatches on `[tm_view]` and runs the
 active view's full body — bare and unconditional, no lock, no visibility
 check (wm_paint_all calls it with the lock already held, §11). tm_task's
-periodic path wraps its drawing Clock-style (§14): gfx_lock, re-check
-visible + not `wm_obscured` under the lock (else skip), and touches only
-what changed. Performance view: the CPU + scheduler text line (one line,
-redrawn whole every interval, so a mode change shows up within one sample
-period without any extra plumbing), the new sweep column plus an all-white
+periodic path wraps its drawing Clock-style (§14): gfx_lock, arm
+`wm_clip_set` under the lock (else skip), and touches only what changed.
+Performance view: the CPU + scheduler text line (checked per chunk like a
+row, so a mode change shows up within one sample period without any extra
+plumbing), the new sweep column plus an all-white
 gap column at the advanced tm_pos, the RAM line and bar, and the process
 rows — the full graph render happens only in tm_paint, so the periodic lock
 hold stays small (Bounce-scale). Memory view: the RAM line and its HEAP
-figures, the pool caption, both map interiors and the rows; the two map
+figures, the XMS line and bar, the map interior and the rows; the two map
 frames and the column header are painted only by the full bodies (tm_paint /
 tm_click). All drawing is self-backgrounding (each element white-fills its
 own rect or paints both segments), so tm_paint needs no preceding content
@@ -5490,39 +5490,68 @@ either.
 | element | its key |
 |---|---|
 | `TMC_LINE` — the RAM (+ HEAP) line | the composed string |
-| `TMC_PKG` — the PACKAGES line | the composed string |
 | `TMC_MRAM` — the conventional map | `mem_tab`, hashed (§50) |
-| `TMC_MPOOL` — the pool map | the instance snapshot, hashed |
 | `TMC_BAR` — the performance RAM bar | `[tm_barw]` |
+| `TMC_XMS` — the XMS line (§41) | the composed string |
+| `TMC_XBAR` — the XMS bar | `[tm_xbarw]` |
 
-The two maps are the ones that pay: a map interior is ~3,000 pixels of
-pattern fill, and it changes only when a claim is made or a package loads or
-closes, which on a desktop that is sitting still is never. Their keys are the
-tables they are drawn from rather than the pixels they would produce, so the
-comparison costs a byte-wise hash of 96 and 84 bytes. Reading the claim table
-unlocked can tear against a claim made on another task; a torn read differs
-from the stored key, which is the safe direction — one extra redraw, never a
-missed one.
+The map is the one that pays: its interior is ~3,000 pixels of pattern fill,
+and it changes only when a claim is made or a package loads or closes, which
+on a desktop that is sitting still is never. Its key is the table it is drawn
+from rather than the pixels it would produce, so the comparison costs a
+byte-wise hash of 96 bytes. Reading the claim table unlocked can tear against
+a claim made on another task; a torn read differs from the stored key, which
+is the safe direction — one extra redraw, never a missed one.
 
-**A row is redrawn only when its text changed.** Both views compose
-the whole row into `tm_str` first — name, ADDR, SIZE/HEAP or ST/CPU/MEM, all
-of it — and then hash it with `tm_rowsum` (rotate-then-add, so a transposition
-is not invisible) and compare against `tm_rowck[row]`. Equal means the pixels
-on screen are already right: **no fill, no legend square, no `font_str`**. So
-the erase is *inside* the changed branch, which is the ordering the whole
-thing rests on — a row that is not redrawn must not be blanked either. Most
-rows are unchanged most of the time (a free slot always is; a built-in's row
-moves only when it claims or releases something), so the twice-a-second
-refresh costs a string build and a compare for each of them.
+**A row is redrawn a CHUNK at a time, and only the chunks whose text
+changed.** Both views compose the whole row into `tm_str` first — name, ADDR,
+SIZE/HEAP or ST/CPU/MEM, all of it — zero-pad it to `TM_NCHUNK`×`TM_CHUNK`
+characters, and then hash each `TM_CHUNK`-character chunk on its own
+(`tm_chunksum`, rotate-then-add, so a transposition is not invisible) against
+its word in `tm_rowck`. Equal means the pixels on screen are already right:
+**no fill, no legend square, no glyphs** for that chunk. So the erase is
+*inside* the changed branch, which is the ordering the whole thing rests on —
+what is not redrawn must not be blanked either.
 
-It is a hash and not a proof: a collision leaves one row stale until its
+The chunk, rather than the row, is the unit for a measured reason: a row
+carried **one** key until it was found to be redrawing the name, the state
+and the memory figure every time a CPU percentage ticked over — 20 glyphs to
+change three, twice a second, on the machines least able to afford it. It is
+also the granularity the clip region wants (§11.3), so `tm_row_draw` answers
+both questions at one width: **what changed** and **what may be drawn at
+all**. A vertical clip edge costs the one chunk it crosses instead of the
+whole row, and a chunk that *is* crossed zeroes its own key so it is tried
+again rather than recorded as drawn while blank.
+
+The last chunk's fill runs on to the row band's right edge, because the pen
+is inset from the band and no chunk covers the tail; the string is
+zero-padded first so every chunk hashes deterministically and a row that got
+*shorter* changes the chunk it lost its characters from, which is what erases
+them.
+
+**The CPU + scheduler caption is drawn through the same routine**, as the
+virtual row `TMR_CPU` — one past the last row either list can show. Its first
+two chunks carry a percentage that moves nearly every interval and its last
+two a scheduler mode that essentially never does, so checking it whole would
+still have cost all twenty glyphs; chunked, a load that moves costs the five
+or ten characters that moved.
+
+It is a hash and not a proof: a collision leaves one chunk stale until its
 content moves again. For a status display at this cadence that is the right
-trade against `TMM_ROWS` words of `.bss` versus the 456 bytes a full text
-cache would need. Two rules keep it honest:
+trade against `TM_NCK`×`TM_NCHUNK` words of `.bss` versus the 456 bytes a
+full text cache would need. Three rules keep it honest:
 
 - **`tm_rowck_clear` runs in `tm_draw_full`, and that is the whole of the
-  invalidation rule** for both arrays (`tm_elck` and `tm_rowck` are declared
-  adjacent and cleared as one span). The only things that can change this
+  invalidation rule** for both arrays. It names `tm_elck` and `tm_rowck`
+  **separately**, with an address and a count each: it used to zero them as
+  one span on the strength of their being declared adjacent, and they were
+  not — five unrelated words had drifted in between, so the run stopped five
+  words short and the last row of `tm_rowck` was never invalidated. Latent
+  while that was the memory list's bottom row, which is empty on any machine
+  that fits its instances; immediately visible once `TMR_CPU` became the last
+  row, because a view switch then white-filled the content and left four
+  fifths of `CPU nnn% SCH preempt` recorded as drawn. The only things that can
+  change this
   window's pixels without going through a checked draw are a `wm_draw_win`
   content fill, a view switch and a resize — and all three arrive at a full
   body. A window MOVE arrives there too, via `wm_paint_dmg` (§11.91), which
@@ -5538,8 +5567,9 @@ cache would need. Two rules keep it honest:
   those are the frame's own right and bottom borders, and a fill that reached
   them left the window open-sided until something repainted the frame.
 - **No live key may be zero**, because zero is what `tm_rowck_clear` writes.
-  `tm_elchk` — which every checked draw in this window goes through, the seven
-  `TMC_*` elements and each row of both lists — maps an incoming 0 to 1 for
+  `tm_elchk` — which every checked draw in this window goes through, the
+  `TMC_*` elements and each chunk of each row of both lists — maps an
+  incoming 0 to 1 for
   exactly this reason. An element whose state legitimately hashes to zero
   otherwise reads as *unchanged* on the very first paint and is never drawn at
   all: `mem_tab` is all zeroes on a machine with no heap to claim from, so on
@@ -8074,6 +8104,29 @@ dispatch one hook serves both renderers, and below it a clip would work on
 VGA and silently do nothing on Hercules and CGA. That is the expected
 failure mode of getting the placement wrong, and `make test VIDEO=cga` plus
 `tools/hercshot.py` are what catch it.
+
+And it is why `font_char_bb` is the mono adapters' **only** text renderer,
+which makes its eight-row loop the innermost loop of every string os8088
+draws on the slowest machines it runs on. It therefore keeps three things the
+VRAM path had from the start and the port did not:
+
+- **The ink test is hoisted out of the rows.** `[gfx_color]`'s plane bit
+  cannot change inside a plane, so the set/clear choice is made once per
+  plane and there are two eight-row loops rather than one branch per row.
+- **A blank glyph row is skipped whole.** or-ing in 0 and and-ing in FF are
+  both identity, but a read-modify-write of framebuffer memory costs the
+  same ~30 cycles on an 8088 whether or not it changes a pixel. Most glyphs
+  have a blank descender row, many a blank top row, and a space is eight of
+  them. The second byte is skipped on the same test, which is the whole cost
+  of a glyph at a byte-aligned x.
+- **`gfx_nextrow` is inlined**, CS overrides and all. Its body is three
+  instructions and the `call`/`ret` around them cost as much again.
+
+There is no BIOS alternative to any of this and there cannot be. `int 10h`
+AH=09h/0Eh is cell-aligned to the BIOS font's own grid, knows nothing of
+§11.3's clip region, and is slower than this code in mode 12h — and on
+Hercules **graphics** there is no BIOS text support whatsoever, the mode
+itself being set behind the BIOS's back (§39.6).
 
 ### 39.6 Mode set and teardown
 

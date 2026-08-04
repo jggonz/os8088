@@ -186,6 +186,14 @@ TM_C2_ROW_Y equ 16              ; the content, and its first row under it.
                                 ; taller two thirds of it. On CGA that is the
                                 ; difference between 3 rows beside 3 and 3
                                 ; beside 10
+TM_CHUNK    equ 5               ; characters per independently-checked chunk
+TM_NCHUNK   equ 5               ; ...and chunks per row: 25 characters, which
+                                ; covers the widest row either view composes.
+                                ; A row used to be ONE check word, so a CPU
+                                ; percentage ticking over redrew the name, the
+                                ; state and the memory figure with it - 20
+                                ; glyphs to change three. Per chunk it is four
+TM_CW       equ TM_CHUNK * 8    ; a chunk's width in pixels
 TMM_ROWS    equ INST_MAX + 7    ; System, its four buffer rows, the two
                                 ; headings, every instance - 19 x TM_ROW_H
                                 ; from TMM_ROW_Y is 279 of the 281-pixel
@@ -194,6 +202,17 @@ TMM_ROWS    equ INST_MAX + 7    ; System, its four buffer rows, the two
                                 ; not drawn at all. tm_mrow_open clamps to
                                 ; the LIVE frame on top of this, for the
                                 ; screens where wm_fit shrinks the window
+
+; The CPU/scheduler caption is chunked too, and it borrows the row machinery
+; whole by being a row that no list draws: it is a 20-character line whose
+; first two chunks carry a percentage that moves every interval and whose
+; last two carry a scheduler mode that essentially never does. As one check
+; word it redrew all twenty glyphs twice a second on a machine doing nothing,
+; which on the mono adapters made it the single largest recurring cost of
+; having this window open.
+TMR_CPU     equ TMM_ROWS        ; the virtual row index it draws as
+TM_NCK      equ TMM_ROWS + 1    ; ...so tm_rowck holds one more row than
+                                ; either list can show
 
 ; -----------------------------------------------------------------------------
 ; tm_init - read total conventional RAM once (boot thread only)
@@ -989,7 +1008,7 @@ tm_view_begin:
 
 ; -----------------------------------------------------------------------------
 ; tm_rowck_clear - forget every row's last-drawn content, and every check
-;                  word around them (tm_elck, declared immediately before it)
+;                  word around them
 ;
 ; Called by both full-paint bodies, and that is the whole of the cache's
 ; invalidation rule: the ONLY things that can put different pixels in this
@@ -999,12 +1018,34 @@ tm_view_begin:
 ; "unchanged" from leaving a map behind at the window's old position.
 ; in:       nothing
 ; out:      nothing (all registers preserved)
+;
+; TWO spans, not one. This used to zero tm_elck and tm_rowck as a single run
+; on the strength of a comment saying they were declared adjacent - and they
+; were not: five unrelated words had drifted in between, so the run stopped
+; five words short and the LAST rows of tm_rowck were never invalidated at
+; all. Harmless while those were the memory list's two bottom rows, which are
+; empty on any machine that fits its instances; fatal the moment the CPU
+; caption became the last row, because a view switch then white-filled the
+; content and left four fifths of 'CPU nnn% SCH preempt' recorded as drawn.
+; An address and a count each, so the layout cannot say otherwise again.
 ; -----------------------------------------------------------------------------
 tm_rowck_clear:
     push bx
     push cx
     mov bx, tm_elck
-    mov cx, TMC_N + TMM_ROWS
+    mov cx, TMC_N
+    call tm_ckz
+    mov bx, tm_rowck
+    mov cx, TM_NCK * TM_NCHUNK
+    call tm_ckz
+    pop cx
+    pop bx
+    ret
+
+; tm_ckz - zero CX check words at BX (all registers preserved)
+tm_ckz:
+    push bx
+    push cx
 .z:
     mov word [bx], 0
     inc bx
@@ -1371,7 +1412,10 @@ tm_cap_xms:
 
     mov ax, TMM_XMS_Y
     call tm_lfill
-    jc .out                     ; a clip edge crosses it: neither half
+    jnc .draw                   ; a clip edge crosses it: neither half draws,
+    mov word [bx], 0            ; so the key must not stand either
+    jmp short .out
+.draw:
     mov byte [gfx_color], CBLACK
     mov cx, [tm_cx]
     add cx, 6
@@ -2058,31 +2102,16 @@ tm_mrow_close:
     cmp byte [tm_mfit], 0       ; off the bottom: nothing was drawn, and
     je .forget                  ; forget what used to be here so it comes
     mov byte [di], 0            ; back if the window ever grows
-    call tm_rowsum              ; AX = this row's content, in one word
-    add bx, tm_rowck            ; ...through tm_elchk, for the never-zero rule
-    call tm_elchk
-    jc .out                     ; byte for byte what is already on screen,
-                                ; whatever the clip says (see tm_rows)
-
-    call tm_rowok               ; changed: can the whole band go at once?
-    jnc .mwhole
-    call tm_row_cells           ; no - cell by cell (SPEC.md 11.3)
-    jnc .out
-    mov word [bx], 0            ; it drew nothing: forget the record
-    jmp short .out
-.mwhole:
-    call tm_rowfill             ; only NOW is the band worth erasing
-    mov si, [tm_sqp]            ; the legend square the row asked for, drawn
-    or si, si                   ; after the fill that would have erased it
-    jz .text
+    mov ax, [tm_rowx]           ; this list letters from tm_rowx+16, leaving
+    add ax, 16                  ; the band's first ten pixels for the square
+    mov [tm_penx], ax
+    mov bx, [tm_mrow]
+    call tm_row_draw            ; chunked: only what changed, and only what
+    jc .out                     ; the region lets us (SPEC.md 11.3/28)
+    mov si, [tm_sqp]            ; something drew, so the legend square may
+    or si, si                   ; have been erased with it - put it back
+    jz .out
     call tm_sq_pat
-.text:
-    mov byte [gfx_color], CBLACK
-    mov cx, [tm_rowx]
-    add cx, 16
-    mov dx, [tm_rowy]
-    mov si, tm_str
-    call font_str
     jmp short .out
 .forget:
     mov word [tm_rowck+bx], 0
@@ -2124,99 +2153,135 @@ tm_lfill:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_row_cells - draw one row CELL BY CELL, for a row the clip region cuts
-; in:  [tm_rowx]/[tm_rowy] placed, tm_str composed; gfx lock held, clip armed
-; out: CF = 0 at least one glyph cell was drawn; CF = 1 none was (every cell
-;      cut - what a HORIZONTAL cut does). All registers preserved.
+; tm_row_draw - draw one list row, a CHUNK at a time (SPEC.md 11.3/28)
 ;
-; The other half of the granularity rule (SPEC.md 11.3). tm_rowok vetoes a row
-; the region does not wholly contain, because a fill clips per PIXEL and a
-; glyph per whole CELL: erase the band and letter it, and a row cut by a
-; HORIZONTAL edge is erased where it shows and lettered nowhere - blank, not
-; stale, every refresh.
+; in:  [tm_rowx]/[tm_rowy] placed, [tm_penx] = the text's left edge, tm_str
+;      composed, BX = the row index; gfx lock held, clip armed
+; out: CF = 0 something was drawn, CF = 1 nothing was; all registers preserved
 ;
-; But that veto is charged to the wrong thing. A VERTICAL edge - a window
-; overlapping the list's right-hand columns - cuts exactly ONE glyph cell per
-; row, and the veto threw away the whole row to protect it. The visible half
-; of the Task Manager then stopped changing entirely: an app launched while
-; anything overlapped the list never appeared in it, and the list stayed
-; wrong until something forced a full repaint.
+; ONE routine now answers both of the questions a row draw has to ask, and it
+; asks them at the same granularity: a chunk of TM_CHUNK characters.
 ;
-; So: ask the question per cell, which is the granularity the primitives
-; actually have. A cell wholly inside is erased and lettered; a cell the
-; region cuts is LEFT ALONE - stale for one character rather than blank for a
-; row. A horizontal cut fails every cell and so draws nothing at all, which is
-; what the veto was right about in the first place.
+; **What changed?** A row used to carry a single check word over its whole
+; composed string, so a CPU percentage ticking over redrew the name, the state
+; and the memory figure with it. Measured on an idle machine that was ~49
+; glyphs per refresh for three fields' worth of change. Per chunk, a row whose
+; percentage moved redraws the four or five characters that moved.
 ;
-; The check word is deliberately NOT recorded by the caller on this path, so
-; the row is re-examined every refresh: the one stale cell fixes itself the
-; moment the occlusion moves, without waiting for a damage repaint.
+; **Can it be drawn?** The granularity rule: a fill clips per PIXEL and a
+; glyph per whole CELL, so erase-then-letter blanks anything the region cuts.
+; A whole-row test threw the row away to protect one cut cell; a chunk is
+; TM_CW wide, so a vertical edge costs one chunk instead of the row, and a
+; chunk that IS cut zeroes its own check word so it retries rather than being
+; recorded as drawn while blank.
+;
+; The string is zero-padded to the full chunk span first, so every chunk
+; hashes deterministically and a row that got SHORTER changes the chunk it
+; lost its characters from - which is what erases them.
 ; -----------------------------------------------------------------------------
-tm_row_cells:
+tm_row_draw:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
-    push bp
-    xor bp, bp                  ; BP = glyph cells actually drawn
-    mov byte [gfx_color], CWHITE
-    mov ax, [tm_rowx]           ; the band's LEAD-IN, ahead of the first glyph
-    add ax, 6                   ; cell: no glyph ever lands here, so a plain
-    mov cx, [tm_rowx]           ; fill is safe whatever the region does - it
-    add cx, 15                  ; clips per PIXEL. tm_rowfill used to scrub
-    mov bx, [tm_rowy]           ; this as part of the band, and without it a
-    mov dx, bx                  ; character from an older, longer row survives
-    add dx, 7                   ; one cell to the left of the text forever
-    call gfx_fill
-    mov si, tm_str
-    mov di, [tm_rowx]
-    add di, 16                  ; the pen, exactly where font_str would start
-.cell:
-    cmp byte [si], 0
-    je .done
-    mov ax, di                  ; this cell: 8 wide, 8 tall, inclusive
-    mov cx, di
-    add cx, 7
-    mov bx, [tm_rowy]
-    mov dx, bx
-    add dx, 7
-    call wm_clip_test
-    jc .next                    ; the region cuts it: leave what is there
-    mov byte [gfx_color], CWHITE
-    mov ax, di                  ; erase just this cell...
-    mov cx, di
-    add cx, 7
-    mov bx, [tm_rowy]
-    mov dx, bx
-    add dx, 7
-    call gfx_fill
-    mov byte [gfx_color], CBLACK
-    mov cx, di                  ; ...and letter it
+    push es
+    push ds
+    pop es
+
+    mov di, tm_str              ; pad to TM_NCHUNK*TM_CHUNK with zeros
+    mov cx, TM_NCHUNK * TM_CHUNK
+    xor al, al
+    cld
+    repne scasb                 ; DI just past the NUL, CX = bytes after it
+    jcxz .padded
+    rep stosb
+.padded:
+    mov ax, bx                  ; this row's check words: TM_NCHUNK of them
+    mov cl, TM_NCHUNK
+    mul cl                      ; AX = row * TM_NCHUNK (both are small)
+    shl ax, 1
+    add ax, tm_rowck
+    mov [tm_ckb], ax            ; &tm_rowck[row][0], stepped a chunk at a time
+    mov word [tm_ci], 0
+    xor si, si                  ; SI = 0: nothing drawn yet
+
+.chunk:
+    push si                     ; the "drew something" flag rides the stack
+    mov si, [tm_ci]
+    mov ax, si
+    mov cl, TM_CHUNK
+    mul cl
+    add ax, tm_str              ; AX -> this chunk's characters
+    mov di, ax
+    call tm_chunksum            ; AX = their hash (DI preserved)
+    mov bx, [tm_ckb]
+    call tm_elchk               ; changed? (BX = this chunk's check word)
+    jc .next                    ; no - its pixels are already right
+
+    mov ax, [tm_ci]             ; the chunk's band: [penx + i*TM_CW, +TM_CW)
+    mov cl, TM_CW
+    mul cl
+    add ax, [tm_penx]
+    mov cx, ax
+    add cx, TM_CW - 1
+    push ax
+    mov ax, [tm_ci]             ; ...and the LAST chunk runs on to the row's
+    inc ax                      ; right edge instead, so the tail past the
+    cmp ax, TM_NCHUNK           ; text - which no chunk covers, the pen being
+    jb .x2ok                    ; inset from the band - is scrubbed by
+    mov cx, [tm_rowx]           ; something
+    add cx, TM_RW
+.x2ok:
+    pop ax
     mov dx, [tm_rowy]
-    mov al, [si]
-    call font_char
-    inc bp
-.next:
-    add di, 8
-    inc si
-    jmp .cell
-.done:
+    mov bx, dx
+    add dx, 7                   ; AX/BX/CX/DX = the chunk's rect
+    call wm_clip_test
+    jnc .draw
+    mov bx, [tm_ckb]            ; the region cuts it: forget the record just
+    mov word [bx], 0            ; made, so the chunk is tried again rather
+                                ; than left blank and called clean
+    jmp short .next
+.draw:
+    push ax
+    push cx
     mov byte [gfx_color], CWHITE
-    mov ax, di                  ; ...and the TAIL past the last glyph, for the
-    mov cx, [tm_rowx]           ; same reason: a row that got SHORTER leaves
-    add cx, TM_RW               ; characters out there that no cell covers
-    cmp ax, cx
-    ja .tdone
-    mov bx, [tm_rowy]
-    mov dx, bx
-    add dx, 7
-    call gfx_fill
-.tdone:
-    or bp, bp                   ; CF = 1 when NOTHING was drawn - every cell
-    pop bp                      ; cut, which is what a HORIZONTAL cut does.
-    pop di                      ; pop leaves the flags alone
+    call gfx_fill               ; erase just this chunk
+    pop cx
+    pop ax
+    mov byte [gfx_color], CBLACK
+    mov cx, ax                  ; letter it, one glyph at a time - font_str
+    mov dx, [tm_rowy]           ; would run past the chunk's end
+    mov si, di                  ; DI still points at the chunk's characters
+    mov ah, TM_CHUNK
+.glyph:
+    mov al, [si]
+    or al, al
+    jz .gdone
+    call font_char
+    inc si
+    add cx, 8
+    dec ah
+    jnz .glyph
+.gdone:
+    pop si
+    inc si                      ; something was drawn
+    push si
+.next:
+    pop si
+    inc word [tm_ci]
+    mov bx, [tm_ckb]            ; the check word for the NEXT chunk
+    add bx, 2
+    mov [tm_ckb], bx
+    mov ax, [tm_ci]
+    cmp ax, TM_NCHUNK
+    jb .chunk
+
+    or si, si
+    pop es
+    pop di
     pop si
     pop dx
     pop cx
@@ -2227,6 +2292,31 @@ tm_row_cells:
     ret
 .drew:
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_chunksum - one word standing for TM_CHUNK characters at DI
+; in:  DI -> the characters (already zero-padded by tm_row_draw)
+; out: AX = the hash; DI preserved
+; clobbers: AX (the output), flags
+; -----------------------------------------------------------------------------
+tm_chunksum:
+    push bx
+    push cx
+    push si
+    mov si, di
+    xor bx, bx
+    xor ah, ah
+    mov cx, TM_CHUNK
+.next:
+    lodsb
+    rol bx, 1
+    add bx, ax
+    loop .next
+    mov ax, bx
+    pop si
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2579,14 +2669,21 @@ tm_gapcol:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_txt_cpu - white-fill the CPU line's rect and draw the 20-char
-;              "CPU nnn% SCH xxxxxxx" line (SPEC.md 28): chars 0..7 the load,
-;              8 a space, 9..19 the read-only scheduler-mode field. The whole
-;              line is rewritten every interval, so a mode flip from the
-;              Control Panel (SPEC.md 31) shows up within one sample period.
+; tm_txt_cpu - the 20-char "CPU nnn% SCH xxxxxxx" line (SPEC.md 28): chars
+;              0..7 the load, 8 a space, 9..19 the read-only scheduler-mode
+;              field. A mode flip from the Control Panel (SPEC.md 31) shows up
+;              within one sample period.
 ; in:  [tm_load]; live mode from sched_mode_get (SPEC.md 8.2)
 ; out: nothing
 ; clobbers: nothing (flags only)
+;
+; Composed and then drawn THROUGH tm_row_draw, as the virtual row TMR_CPU -
+; so it is checked and erased a chunk at a time, exactly like a list row. It
+; used to be the one unconditional draw in the window, twenty glyphs and a
+; full-width erase every interval whether or not anything had moved; and even
+; checked whole it would have redrawn all twenty for a percentage that ticks
+; over almost every time. Chunked, a load that moves costs the five or ten
+; characters it moved and leaves 'SCH preempt' alone.
 ; -----------------------------------------------------------------------------
 tm_txt_cpu:
     push ax
@@ -2595,17 +2692,6 @@ tm_txt_cpu:
     push dx
     push si
     push di
-
-    mov byte [gfx_color], CWHITE
-    mov ax, [tm_cx]
-    add ax, 6
-    mov bx, [tm_cy]
-    add bx, TM_CPU_Y
-    mov cx, [tm_cx]
-    add cx, TM_RW
-    mov dx, [tm_cy]
-    add dx, TM_CPU_Y + 7
-    call gfx_fill
 
     mov di, tm_str
     mov si, tm_s_cpu
@@ -2625,13 +2711,15 @@ tm_txt_cpu:
     call tm_copy                ; 11 chars either way, space-padded
     mov byte [di], 0
 
-    mov byte [gfx_color], CBLACK
-    mov cx, [tm_cx]
-    add cx, 6
-    mov dx, [tm_cy]
-    add dx, TM_CPU_Y
-    mov si, tm_str
-    call font_str
+    mov ax, [tm_cx]             ; a caption sits in column 0 whatever the row
+    mov [tm_rowx], ax           ; loops have left [tm_rowx] at, and letters
+    add ax, 6                   ; from the margin
+    mov [tm_penx], ax
+    mov ax, [tm_cy]
+    add ax, TM_CPU_Y
+    mov [tm_rowy], ax
+    mov bx, TMR_CPU
+    call tm_row_draw
 
     pop di
     pop si
@@ -2695,7 +2783,10 @@ tm_txt_ram_y:
 
     mov ax, [tm_liny]
     call tm_lfill               ; only NOW is the line worth erasing
-    jc .out                     ; ...unless a clip edge crosses it
+    jnc .draw                   ; ...unless a clip edge crosses it, in which
+    mov word [bx], 0            ; case nothing was drawn and the key tm_elchk
+    jmp short .out              ; just recorded is a lie that would keep this
+.draw:                          ; line stale until its content moved again
     mov byte [gfx_color], CBLACK
     mov cx, [tm_cx]
     add cx, 6
@@ -3049,32 +3140,13 @@ tm_rows:
 
 .draw:
     mov byte [di], 0
-    call tm_rowsum              ; unchanged since the last refresh? then the
-    mov bx, si                  ; pixels on screen are already right. Through
-    shl bx, 1                   ; tm_elchk, not an open-coded compare, so this
-    add bx, tm_rowck            ; row gets the never-zero rule too
-    call tm_elchk
-    jc .rnext                   ; ...WHATEVER the clip says. This test is a
-                                ; 20-byte hash and it comes FIRST, so a Task
-                                ; Manager with something over it costs one
-                                ; hash per row per refresh, not one redraw
-
-    call tm_rowok               ; changed: can the whole band go at once?
-    jnc .rwhole
-    call tm_row_cells           ; no - cell by cell (SPEC.md 11.3)
-    jnc .rnext
-    mov word [bx], 0            ; it drew NOTHING: forget the record just made
-    jmp short .rnext            ; so the row is tried again next refresh
-.rwhole:
-    call tm_rowfill             ; only now is the band worth erasing
-    mov byte [gfx_color], CBLACK
-    mov cx, [tm_rowx]
-    add cx, 6
-    mov dx, [tm_rowy]
+    mov ax, [tm_rowx]           ; this list letters from tm_rowx+6 - there is
+    add ax, 6                   ; no square in front of it
+    mov [tm_penx], ax
     push si
-    mov si, tm_str
-    call font_str
-    pop si
+    mov bx, si
+    call tm_row_draw            ; chunked: only what changed, and only what
+    pop si                      ; the region lets us (SPEC.md 11.3/28)
 
 .rnext:
     inc si
@@ -3417,17 +3489,31 @@ tm_sqp:     resw 1              ; ...and its texture, or 0 for no square. A
                                 ; the band before it letters it, so a square
                                 ; drawn while the row was being composed
                                 ; would be erased again
-tm_elck:    resw TMC_N          ; the last drawn state of the five non-row
-                                ; elements, one word each (TMC_*), and
+tm_elck:    resw TMC_N          ; the last drawn state of the non-row
+                                ; elements, one word each (TMC_*)
 tm_rowx:    resw 1              ; the left edge of the row being drawn: tm_cx
                                 ; for column 0, one TM_COLW on for column 1
 tm_xbarw:   resw 1              ; the XMS bar's black run, px (TMC_XBAR)
-tm_rowck:   resw TMM_ROWS       ; the last drawn content of each row, one
-                                ; word each (tm_rowsum). Shared by both
-                                ; views - TM_ROWS is the smaller of the two
-                                ; and a view switch clears it either way.
-                                ; DECLARED TOGETHER and cleared as one span,
-                                ; so this pair must stay adjacent
+tm_penx:    resw 1              ; where the row's text starts: the process
+                                ; list letters from tm_rowx+6 and the memory
+                                ; list from tm_rowx+16, and tm_row_draw has to
+                                ; be told which - drawing a process row at the
+                                ; memory list's pen puts it 10px right of the
+                                ; text it is replacing
+tm_ci:      resw 1              ; tm_row_draw's chunk index (BP is the task's
+                                ; instance record and cannot be borrowed)
+tm_ckb:     resw 1              ; ...and the running check-word pointer, for
+                                ; the same reason
+tm_rowck:   resw TM_NCK * TM_NCHUNK  ; the last drawn content of each row, a
+                                ; word per CHUNK (tm_chunksum), plus one
+                                ; virtual row for the CPU caption (TMR_CPU).
+                                ; Shared by both views - TM_ROWS is the
+                                ; smaller of the two and a view switch clears
+                                ; it either way. tm_rowck_clear names this
+                                ; and tm_elck separately; they used to be
+                                ; cleared as one span on the strength of
+                                ; being declared adjacent, which they have
+                                ; not been for some time
 tm_view:    resb 1              ; 0 = performance view, 1 = memory view
 tm_inm:     resb INST_MAX * 16  ; I_NAME snapshots
 tm_rcyc:    resw TM_ROWS * 2    ; per-ROW cycles: task + instance, dword
