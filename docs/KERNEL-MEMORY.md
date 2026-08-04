@@ -12,7 +12,7 @@ binding contract for the addresses; this is the reasoning behind them.
 **The kernel is ONE contiguous span starting at linear 0x00600, and that
 includes its buffers.** The span is `KERN_BUDGET` bytes — 70KB today, and
 64KB for as long as that was affordable (see below); it currently runs
-0x00600 through 0x11FFF.
+0x00600 through 0x11DFF.
 
 Not the code and then some scratch elsewhere: *everything*. Code, read-only
 data, `.bss`, the FAT snapshot, the directory and icon caches, the sector
@@ -42,7 +42,9 @@ message points here for that reason.
 64KB above the BIOS data area, which is where the "one region" rule came
 from — and it is now **71,680 (70KB)**, granted explicitly to buy the
 SPEC.md §41 extended-memory store and the two API surfaces (`wm_geom`,
-`wm_about_set`) that came with it from the other fork. What it cost, exactly:
+`wm_about_set`) that came with it from the other fork. What it cost **at the
+commit that granted it** — a snapshot, not a running total; the live figures
+are the table below:
 
 | | before | after |
 |---|---:|---:|
@@ -52,9 +54,9 @@ SPEC.md §41 extended-memory store and the two API surfaces (`wm_geom`,
 
 The 64KB *segment* limit is untouched and cannot be raised at all: `.text` +
 `.bss` are addressed through one segment with 16-bit offsets, so guard 2 caps
-them at 65,536 whatever the budget says. At 52,736 there is still 12,800 B of
-segment left, so the budget is what binds, which is the intended order — a
-budget is a decision and a segment is physics.
+them at 65,536 whatever the budget says. At today's 53,760 there is still
+11,776 B of segment left, so the budget is what binds, which is the intended
+order — a budget is a decision and a segment is physics.
 
 Raising the budget also moved the **relocated boot sector**: `BOOT_RELOC`
 went 0x0940 → 0x0AA0 (linear 0x11000 → 0x12600), because guard 5 keeps the
@@ -70,11 +72,11 @@ out of the same constants the guards use.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` + `.bss`) | 52,736 B | all kernel code, its read-only data, and its scratch |
+| image (`.text` + `.bss`) | 53,760 B | all kernel code, its read-only data, and its scratch |
 | task stacks | 6,656 B | 11 background slots + task 0's |
 | disk buffers | 3,584 B | directory cache, icon cache, sector scratch |
 | FAT snapshot | 4,608 B | the mounted volume's FAT, resident |
-| **total** | **67,584 B** | of a 71,680-byte budget — 4,096 B spare |
+| **total** | **68,608 B** | of a 71,680-byte budget — 3,072 B spare |
 
 Everything above that is somebody else's: the 60KB package pool, then the
 claim heap up to whatever int 12h reports.
@@ -143,7 +145,7 @@ the interior texture is light so it does not swallow it.
 
 ## Each region in detail
 
-### The image — `.text` + `.bss`, 50,176 B
+### The image — `.text` + `.bss`, 53,760 B
 
 One flat binary at `KERNEL_SEG:0000`, assembled `-f bin` with no linker.
 `.bss` follows `.text` immediately and is uninitialised by definition, so it
@@ -151,8 +153,9 @@ costs nothing on the floppy and everything in RAM.
 
 That figure is `.text` + `.bss` **rounded up to a whole 512 bytes** (see the
 alignment invariant below), so it is the only rung with any slack in it, and
-the slack is a rounding remainder rather than a reservation — 50 bytes as
-this is written. Measure the unrounded pair by appending
+the slack is a rounding remainder rather than a reservation — 473 bytes as
+this is written, against 53,287 unrounded. Measure the unrounded pair by
+appending
 `section .text` / `times KBSS_SIZE db 0` to `kernel/kernel.asm`, assembling,
 and taking the file size; revert afterwards. `make`'s own `kernel: n bytes`
 line is `.text` alone.
@@ -290,7 +293,13 @@ package calls into empty memory.
 |---|---:|
 | before any of this (v1.0.20260728) | ~107 KB |
 | low memory sized to measurement, kernel moved to 0x0800 | 75 KB |
-| `.fartext` retired, ladder derived, buffers trimmed, kernel at 0x0060 | **63.5 KB** |
+| `.fartext` retired, ladder derived, buffers trimmed, kernel at 0x0060 | 63.5 KB |
+| budget raised 64 → 70KB for the SPEC.md §41 XMS store | 66 KB |
+| ...and where it stands now | **67 KB** |
+
+The last row is the one to re-measure rather than trust: it moves with every
+commit that adds code, and it is not the budget — it is what the budget is
+being spent on. Above, "Where it goes" carries the same figure to the byte.
 
 `docs/MEMORY-PLAN.md` is the narrative of how it got here, step by step, and
 what was rejected along the way. This document is what it looks like now.
