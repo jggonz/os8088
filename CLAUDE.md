@@ -194,10 +194,14 @@ Four things hold it up:
   bottom-to-top over `wm_zord`, so one pass reaches the transitive closure. And
   nothing in that pass may keep a loop counter in a general register —
   `wm_win_rect` writes all four.
-- **Whole-drawn things get folded into the rect, not special-cased in the
-  marking.** A drive zone the rect touches (`desk_dmg_zones` grows the rect to
-  it), and the dock rows — but only when `wm_dock_clear` says a window hangs
-  over the strip, so the usual case pays nothing.
+- **A touched drive zone is folded into the rect, not special-cased in the
+  marking** (`desk_dmg_zones` grows the rect to it), because a zone is drawn
+  whole and a window over it must therefore be redrawn. The **dock is not**:
+  the strip is full width, so a rect grown to reach it is full width for the
+  damage's whole height, which erased the drive icons out from under any
+  window tall enough to touch the bottom of the screen. It is a per-window
+  test in the marking pass instead — a window whose rect reaches
+  `[vid_dock_y0]` is marked, and nothing else moves.
 - **A wholly covered window is not drawn at all.** `wm_covered` is §11.3's
   region arithmetic seeded with the *frame* rect instead of the content rect;
   empty means every pixel it would write is written again by something above it.

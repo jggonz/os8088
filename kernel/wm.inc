@@ -1243,10 +1243,13 @@ wm_paint_chrome:
 ; would otherwise paint over this one. Marking runs bottom-to-top, so one
 ; pass reaches the whole transitive closure.
 ;
-; Two things are folded into the rect before the marking pass rather than
-; special-cased in it: a touched drive zone (drawn whole, so a window over it
-; must be redrawn) and - only when wm_dock_clear says a window hangs over the
-; strip - the dock rows. Both are then just more damage.
+; A touched drive zone is folded into the rect before the marking pass rather
+; than special-cased in it: it is drawn whole, so a window over it has to be
+; redrawn, and growing the rect is what makes the marking notice. The DOCK is
+; not folded in, and that is not symmetry for its own sake - the strip is
+; full width, so a rect grown to it erases the whole width for the damage's
+; entire height, which took the drive icons out from under a window that
+; merely reached the bottom of the screen. It is a per-window test instead.
 ; -----------------------------------------------------------------------------
 wm_paint_dmg:
     push ax
@@ -1292,14 +1295,6 @@ wm_paint_dmg:
     call desk_dmg_zones         ; AL = the zone mask; the rect grows to cover
     mov [wm_dmg_zn], al         ; every zone it touched
 
-    call wm_dock_clear          ; CF = 1: some window hangs over the strip,
-    jnc .fill                   ; so dock_paint below would draw ON it
-    xor ax, ax
-    mov bx, [vid_dock_y0]
-    mov cx, [vid_wm1]
-    mov dx, [vid_hm1]
-    call wm_dmg_add
-
 .fill:
     mov ax, [wm_dmg_x1]         ; the desktop dither, clipped to the damage
     mov bx, [wm_dmg_y1]         ; and to the band below the menu bar
@@ -1339,6 +1334,11 @@ wm_paint_dmg:
     call wm_win_rect            ; AX,BX,CX,DX = our rect, shadow included
     call wm_dmg_hit
     jc .mset
+    cmp dx, [vid_dock_y0]       ; the dock is repainted unconditionally above
+    jge .mset                   ; and it is drawn UNDER windows, so a window
+                                ; reaching into the strip is damaged by it -
+                                ; per window, rather than by widening the
+                                ; rect, which would erase the whole width
     mov word [wm_dmg_j], 0      ; not damaged directly - but a marked window
 .mbelow:                        ; below is redrawn WHOLE and would paint on us
     mov ax, [wm_dmg_j]

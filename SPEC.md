@@ -1421,14 +1421,20 @@ runs bottom-to-top over `wm_zord`, so one pass reaches the whole transitive
 closure. Nothing in that pass may keep a loop counter in a general
 register: `wm_win_rect` writes all four.
 
-Two things are folded into the damage rect before the marking pass rather
-than special-cased inside it, and for the same reason in both cases —
-something is about to be drawn **whole** in a place a window might be:
+**A touched drive zone is folded into the damage rect** before the marking
+pass rather than special-cased inside it: the zone is drawn whole — gray
+fill, icon, label — so a window sitting over it has to be redrawn, and
+growing the rect is what makes the marking notice.
 
-- a drive zone the rect touches (drawn whole: gray fill, icon, label);
-- the dock rows, but **only** when `wm_dock_clear` says a window hangs over
-  the strip. `wm_fit` keeps windows above it, so the usual case pays
-  nothing.
+**The dock is not folded in, and that asymmetry is load-bearing.** The strip
+runs the full width of the screen, so a rect grown to reach it is a rect
+grown to full width *for the damage's entire height* — which erased the
+drive icons out from under a window that merely reached the bottom of the
+screen, and left them erased, because `desk_dmg_zones` had already run
+against the smaller rect. The dock is a **per-window test** in the marking
+pass instead: the strip is repainted unconditionally and is drawn under
+windows, so a window whose rect reaches `[vid_dock_y0]` is marked, and no
+other pixel is disturbed.
 
 **A wholly covered window is not drawn at all.** `wm_covered` seeds §11.3's
 region arithmetic with the **frame** rect instead of the content rect — a
