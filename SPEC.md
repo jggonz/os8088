@@ -6552,6 +6552,18 @@ A driver that publishes `DSV_TIERS` = 0 said nothing and is taken at its word:
 every row stays live and the click finds out the slow way, which is exactly the
 behaviour before the cell existed.
 
+**A greyed row greys its GLYPH as well as its label**, and on this page that is
+what carries the whole signal on two adapters out of three. `font_ink` rounds
+`CDGRAY` to *black* for text — a dithered 8x8 glyph is unreadable, so mono has
+no grey to draw a letter in (§39.4) — which means a disabled label is
+pixel-identical to a live one on Hercules and CGA. The Display page gets away
+with that because its caption says why in words; this page has no caption, so
+the row has to say it some other way. A glyph can, because it is drawn with
+`gfx_pixel` rather than as a font cell: `gfx_ink` maps `CDGRAY` to the 50%
+dither, so the ring comes out **dotted**. Dark grey on VGA, dotted on mono, and
+on all three the whole row reads as disabled instead of a black control with
+faint writing beside it.
+
 A refused tier change leaves the setting where it was and writes the reason
 into a **notice line** below the Test button, using the loader's own
 `drv_errstr` strings: `No hardware found` or `Not enough memory`. A tier change
