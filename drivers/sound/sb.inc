@@ -981,12 +981,12 @@ sbl_v_open:
     jne .e1                     ; one stream per card (SPEC.md 34.3)
     cmp byte [sbl_clip], 0
     jne .e1                     ; an exclusive clip holds the machine
-    cmp dx, 4000                ; TC = 256 - 1e6/rate must fit a byte...
-    jb .e2
-    mov word [sbl_hopen], SBL_HALF  ; the open's half width (a TEMP, the
-    cmp dx, 22222               ; sbl_ropen idiom - committed at .irqok)
-    jbe .ratok                  ; classic TC regime, any DSP
-    cmp dx, 44100               ; the wide-rate regime (SPEC.md 34.5):
+    cmp bx, 4000                ; TC = 256 - 1e6/rate must fit a byte. THE
+    jb .e2                      ; RATE ARRIVES IN BX, not DX: DH carries the
+    mov word [sbl_hopen], SBL_HALF  ; requesting instance (SPEC.md 34.3) and
+    cmp bx, 22222               ; would otherwise be the rate's top half, so
+    jbe .ratok                  ; the kernel banks it for us on the way in
+    cmp bx, 44100               ; the wide-rate regime (SPEC.md 34.5):
     ja .e2                      ; 22,223..44,100 on a DSP >= 4.00 only -
     cmp byte [sbl_verhi], 4     ; err 2 below that, never a clamp
     jb .e2
@@ -996,8 +996,7 @@ sbl_v_open:
     jnz .args                   ; jumps are short-only: .e7 sits past reach,
     jmp .e7                     ; so the refusals trampoline)
 .args:
-    mov bx, dx                  ; BX = rate (snd_req_inst wants DH)
-    call sbl_grant_chk          ; the range must sit in the caller's grant;
+    call sbl_grant_chk          ; BX is already the rate (see above)          ; the range must sit in the caller's grant;
     jnc .grantok                ; out AX = bytes to the grant's end
     jmp .e7
 .grantok:
@@ -1320,21 +1319,20 @@ sbl_v_open_in:
                                 ; direction (SPEC.md 34.3/34.6)
     cmp byte [sbl_clip], 0
     jne .e1                     ; an exclusive clip holds the machine
-    cmp dx, 4000                ; TC = 256 - 1e6/rate must fit a byte...
+    cmp bx, 4000                ; the rate is in BX here too (see sbl_v_open)
     jb .e2
     mov ax, 13000               ; ...and the INPUT ceiling is honoured:
     cmp byte [sbl_auto], 0      ; 13k on 1.x, 15k on >= 2.00 normal mode
     je .ceil                    ; (SPEC.md 34.5) - err 2, never a clamp
     mov ax, 15000
 .ceil:
-    cmp dx, ax
+    cmp bx, ax
     ja .e2
     or cx, cx                   ; zero capacity captures nothing (8086
     jnz .args                   ; conditionals are short-only: trampoline)
     jmp .e7
 .args:
-    mov bx, dx                  ; BX = rate (snd_req_inst wants DH)
-    call sbl_grant_chk          ; the capture range must sit in the caller's
+    call sbl_grant_chk          ; BX is already the rate (see above)          ; the capture range must sit in the caller's
     jnc .grantok                ; grant; out AX = bytes to the grant's end
     jmp .e7
 .grantok:

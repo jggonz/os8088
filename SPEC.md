@@ -6694,6 +6694,14 @@ comes back saying whether a stream is open. `osapi_snd_play` asks before its
 grant window opens (so the refusal owes no `popf`) and tells the driver again
 when the clip ends.
 
+**The stream slot's stub is verb-aware**, and has to be. BX carries the
+*caller's segment* for verbs 5 and 6 — the driver runs with ES = KERNEL_SEG,
+so BX is the only way it can reach the caller's buffer — but on verbs 0 and 4
+BX is unused and the **rate** needs somewhere to live, because `snd_req_inst`
+writes DH and DH is the top half of a 4,000..44,100 Hz rate. The other fork's
+driver banked DX itself, immediately before stamping; here the kernel stamps,
+so the kernel banks.
+
 With no driver loaded there is no stream to collide with, and `drv_svc_call`
 refuses — which is the same answer, arrived at for free.
 
@@ -9157,15 +9165,29 @@ is then an ordinary near read with DS = KERNEL_SEG, and `snd_tick` — which
 runs inside IRQ0 — does not have to point a segment register anywhere to find
 out whether it has work.
 
-**`drv_svc_call` takes no register but DI, and that is a contract.** Every
-other general register is an argument to something in the sound ABI (§34.2,
-§34.5): AL is the verb, BX the FM frequency, CL the channel, DH the
-requesting instance, SI and ES a staged buffer. So the driver's dispatcher
-lives in memory as a far pointer (`drv_fptr`/`drv_fseg`, armed by
-`drv_publish` and cleared by `drv_release`) rather than being passed in.
-It was passed in BX once, which quietly ate the frequency: a note-on reached
-the driver with BX = a kernel offset, no OPL2 block fits 15,000 Hz, and every
-FM call came back refused — while *tones*, which pass AX, worked perfectly.
+**`drv_svc_call` takes NO GENERAL REGISTER, and that is a contract.** Every
+one of them is an argument to something in the sound ABI (§34.2, §34.5): AL
+the verb, AH a handle or sub-op, BX the FM frequency *or* the caller's
+segment, CX a length, DH the requesting instance, DX a rate, SI and DI the
+two ends of a staging copy. So the dispatcher lives in memory as a far
+pointer (`drv_fptr`/`drv_fseg`, armed by `drv_publish`, cleared by
+`drv_release`) and the service selector arrives in **BP**, which nothing in
+the ABI uses and which the routine is documented to clobber anyway.
+
+It ate two registers in turn before the gate packages caught them, and both
+failures were silent in the same way:
+
+- **the driver row in BX** became the FM frequency. No OPL2 block fits
+  15,000 Hz, so every FM call came back refused — while *tones*, which pass
+  AX, worked perfectly. `apps/fmtest` found it.
+- **the service selector in DI** became the staging destination. `DSV_STREAM`
+  is 4, which is inside no grant, so every verb-5/6 copy refused as out of
+  range and every open that staged first failed with it. `apps/sbtest` found
+  it.
+
+The lesson is written into the contract rather than the changelog: a
+dispatcher that consumes an argument register is a dispatcher that will
+consume a *different* one next time the ABI grows.
 
 **`DSV_TONE` is the interesting one.** Publishing it *moves the tone tier off
 the PC speaker* onto the driver's hardware. An OPL2 publishes it, because an
