@@ -1,112 +1,147 @@
-# Porting os8088 applications between `main` and `experimental`
+# Bringing work forward from pre-merge `main`
 
-A working reference for moving a `.o88` package source from one fork to the
-other. It assumes you know the branch you are coming *from*; everything the
-other branch does differently is spelled out.
+`main`'s line of development ended at **`b401eda`** and was merged into this
+tree. If you have a package, a patch or a branch written against that commit or
+an earlier one, this is how to bring it forward.
 
-For the narrative version of why the forks differ, see
-[BRANCH-DIFFERENCES.md](../BRANCH-DIFFERENCES.md). For the binding contract on
-either side, read that branch's own `SPEC.md` — and **do not cite section
-numbers across branches** without checking: `experimental` has since aligned
-§0-§44 with `main`, so most now match, but `experimental`-only material sits at
-§50+ (the claim heap) and in a reserved `.90` subsection band (§11.90, §11.91,
-§18.90, §37.90).
+This used to be a two-way document, because there were two live branches. There
+is one now, so everything here points one direction: **from `b401eda`, to
+here.** The reverse instructions are gone rather than kept for symmetry — there
+is nowhere to go back to.
 
-**Nothing here is binary-compatible.** There is no way to run a `.o88` built for
-one branch on the other, and no loader on either side will diagnose it usefully —
-the header magic and version match, so it loads and then jumps into the wrong
-place. Porting means rebuilding from source.
+For what the two lines of development contained and why the merge resolved each
+difference the way it did, see
+[BRANCH-DIFFERENCES.md](../BRANCH-DIFFERENCES.md). The binding contract is
+[SPEC.md](../SPEC.md), and §20.8 in particular is the list of things a package
+may not do.
+
+**Nothing built for `b401eda` runs here.** The header magic and version still
+match, so a stale `.o88` loads and then jumps into the wrong place — the loader
+will not diagnose it. Bringing work forward always means rebuilding from source.
 
 ---
 
 ## Contents
 
-1. [The five-minute version](#1-the-five-minute-version)
-2. [Why a binary cannot cross](#2-why-a-binary-cannot-cross)
-3. [The API slot table, side by side](#3-the-api-slot-table-side-by-side)
-4. [The callback convention](#4-the-callback-convention)
-5. [The package header](#5-the-package-header)
-6. [Window geometry](#6-window-geometry)
-7. [Memory](#7-memory)
-8. [Sound](#8-sound)
-9. [Menus and About](#9-menus-and-about)
-10. [Files, folders and the dialog](#10-files-folders-and-the-dialog)
-11. [Worker tasks](#11-worker-tasks)
-12. [Repaint obligations](#12-repaint-obligations)
-13. [Things that did not change](#13-things-that-did-not-change)
-14. [Checklist: `main` → `experimental`](#14-checklist-main--experimental)
-15. [Checklist: `experimental` → `main`](#15-checklist-experimental--main)
-16. [Worked example: `hello`](#16-worked-example-hello)
-17. [Feature availability matrix](#17-feature-availability-matrix)
+1. [Doing it in git](#1-doing-it-in-git)
+2. [The five-minute version](#2-the-five-minute-version)
+3. [Why a rebuild is required](#3-why-a-rebuild-is-required)
+4. [The API slot table, then and now](#4-the-api-slot-table-then-and-now)
+5. [The callback convention](#5-the-callback-convention)
+6. [The package header](#6-the-package-header)
+7. [Window geometry](#7-window-geometry)
+8. [Memory](#8-memory)
+9. [Sound](#9-sound)
+10. [Menus and About](#10-menus-and-about)
+11. [Files, folders and the dialog](#11-files-folders-and-the-dialog)
+12. [Worker tasks](#12-worker-tasks)
+13. [Repaint obligations](#13-repaint-obligations)
+14. [Things that did not change](#14-things-that-did-not-change)
+15. [What you gain](#15-what-you-gain)
+16. [Checklist](#16-checklist)
+17. [Worked example: `hello`](#17-worked-example-hello)
 
 ---
 
-## 1. The five-minute version
+## 1. Doing it in git
 
-If you only read one section, read this one. Porting **`main` → `experimental`**:
+The merge commit has both lines as parents, so `b401eda` is an ancestor of
+`HEAD` and git can reason about the range normally. What it *cannot* do is
+resolve the content: the merge deliberately kept this tree's files
+(`-s ours`), because the audit established capability by capability that
+nothing was being lost. So a plain `git merge b401eda` will report
+"Already up to date" and change nothing — correct, and not what you want.
 
-1. Delete every `retf` in the file. They all become `ret`.
-2. Delete every `push cs` that exists only to fake a far return before calling
-   one of your own kernel-called procs.
-3. Replace `OSAPI_WM_GEOM` with `[es:bx+W_W]` / `[es:bx+W_H]`, and subtract the
-   frame: content is `W_W - 2` wide and `W_H - TITLE_H - 1` tall.
-4. Replace `OSAPI_MEM_ALLOC` (paragraphs, returns `AX`) with `OSAPI_MEM_CLAIM`
-   (KB, returns `DX`), and `OSAPI_MEM_AVAIL`'s paragraphs with KB.
-5. Delete `OSAPI_CPU_INFO` and every `OSAPI_XMEM_*` — neither exists.
-   `OSAPI_ABOUT_SET`, `OSAPI_SND_FM` and `OSAPI_SND_STREAM` all exist and are
-   at `main`'s numbers, but the two sound slots answer CF=1 unless the
-   **sound driver** is loaded (SPEC.md §51) — which is exactly what
-   `OSAPI_SND_CAPS` is for, and what a well-written `main` app already checks.
-6. Drop the fourth `OS88_HEADER` argument (the RAM requirement) and any
-   `--needs` in the Makefile rule.
-7. Rebuild. The slot numbers are all `%define`s, so re-assembly fixes them.
+Bring the work forward by replaying **your** commits, not by merging:
 
-Porting **`experimental` → `main`** is the same list inverted, plus the one thing
-that has no mechanical answer: `OSAPI_WM_ONSIZE`, `OSAPI_FONT_GLYPHS`,
-`OSAPI_FILE_HERE` and `OSAPI_FILE_GOTO` do not exist on `main` and each needs a
-design decision (§17).
+```sh
+git fetch origin
+git log --oneline b401eda..my-branch      # what is actually yours
+git checkout -b my-branch-forward origin/experimental
+git cherry-pick <first>^..<last>          # or: git rebase --onto origin/experimental b401eda my-branch
+```
 
----
+Expect conflicts in proportion to how much kernel you touched. Three files are
+where they concentrate, and in each case **take this tree's side and re-apply
+your intent on top** rather than resolving hunk by hunk:
 
-## 2. Why a binary cannot cross
+| file | why it conflicts |
+|---|---|
+| `kernel/kernel.asm` | the memory ladder is derived here, not a list of constants, and the API table has different contents above `0x01B0` |
+| `apps/os88api.inc` | slot numbers moved; the memory trio has a different contract |
+| `SPEC.md` | renumbered sections, and §45 arrived by a different route |
 
-Three independent breaks, any one of which is fatal.
+If your work is a **package only**, none of that applies: copy the `.asm` into
+`apps/<name>/`, apply §16's checklist, add it to `APPS_TOOLS` or `APPS_GAMES`
+in the Makefile, and rebuild. That is the common case and it is an afternoon.
 
-### 2.1 `KERNEL_SEG`
-
-| | `main` | `experimental` |
-|---|---|---|
-| `KERNEL_SEG` | `0x1000` (linear `0x10000`) | `0x0060` (linear `0x00600`) |
-
-Every `OSAPI_*` symbol is `%define OSAPI_X KERNEL_SEG:0xNNNN`, so `call OSAPI_X`
-assembles to a far call with that segment as an immediate. A `main` binary run on
-`experimental` calls into `0x1000:...`, which is somewhere above the kernel
-entirely.
-
-The constant appears in three files per branch — `kernel/kernel.asm`,
-`boot/boot.asm`, `apps/os88api.inc` — and changing it requires rebuilding every
-package and both apps floppies.
-
-### 2.2 The slot numbers — no longer a break
-
-They agreed for a while, once `experimental` renumbered onto `main`'s table,
-and they no longer do above `0x01B0` (§3). This is the subtlest of the three
-breaks, because the collisions are *silent*: `0x01D0` means `WM_RESIZE` on
-`main` and `FILE_READBIG` here. Both forks obey the rule that a number never
-means two contracts WITHIN a tree; neither promises it across two.
-
-### 2.3 The callback mechanism
-
-`main` far-calls your procedure; it must `retf`. `experimental` far-calls a
-dispatcher in your header which calls your procedure *near*; it must `ret`. A
-binary built for either one, run under the other, returns to the wrong place on
-the first callback. See §4.
+Whatever you do, finish with `make && make check-images && python3
+tools/checkdocs.py`. The second catches a stale shipped binary and the third
+catches a SPEC citation that pointed somewhere that has since moved — both are
+failure modes a forward-port produces routinely.
 
 ---
 
-## 3. The API slot table, side by side
+## 2. The five-minute version
 
-Slots `0x0010`..`0x00F0` are **identical on both branches**:
+If you only read one section, read this one.
+
+1. **Delete every `retf`.** They all become `ret`. This is the big one and
+   §5 explains why.
+2. **Delete every `push cs`** that exists only to fake a far return before
+   calling one of your own kernel-called procs.
+3. **`OSAPI_MEM_ALLOC` → `OSAPI_MEM_CLAIM`**: the unit is KB, not paragraphs,
+   and the answer comes back in `DX`, not `AX`. `OSAPI_MEM_AVAIL` likewise
+   answers KB, with the total in `BX`.
+4. **Set `ES = DS`** before any `ES:BX` file buffer or `ES:SI` sound buffer.
+   You are called with `ES = KERNEL_SEG` here, so it is no longer free.
+5. **Drop the fourth `OS88_HEADER` argument** (the RAM requirement) and any
+   `--needs` in the Makefile rule. There is no load-time RAM gate; size
+   yourself at runtime instead.
+6. **Rebuild.** Slot numbers are all `%define`s, so re-assembly fixes every
+   one of them — including the block that moved.
+
+What you do **not** have to change, though the older version of this document
+said otherwise: `OSAPI_WM_GEOM`, `OSAPI_ABOUT_SET`, `OSAPI_CPU_INFO`, every
+`OSAPI_XMEM_*`, `OSAPI_GFX_DBUF`, `OSAPI_GFX_SCROLL` and `OSAPI_FILE_READBIG`
+all exist here with `main`'s contracts. The two sound slots exist too, but
+answer CF=1 unless the **sound driver** is loaded (SPEC.md §51) — which is what
+`OSAPI_SND_CAPS` is for, and what a well-written app already checked.
+
+---
+
+## 3. Why a rebuild is required
+
+Three things make a `b401eda` binary unrunnable here, and only the first is
+obvious.
+
+**`KERNEL_SEG` moved**, `0x1000` → `0x0060`. It is baked into every `OSAPI_*`
+far-call target, so a stale binary calls into empty memory on its first API
+call. Re-assembly fixes it; nothing else can.
+
+**The callback mechanism inverted.** `b401eda` far-called your procedure
+directly, so every kernel-called proc ended in `retf`. Here the kernel calls a
+three-byte dispatcher inside your own header, which calls you *near* — so every
+one of those procs is a near proc with a near `ret`. A stale `retf` returns into
+the loader's stack frame and hangs the machine at the first paint. See §5.
+
+**Slot numbers above `0x01B0` moved.** They tracked `main`'s exactly while both
+branches were live, with five cells held empty so that a number could never mean
+two contracts. The merge made those holes pointless and they were closed, which
+moved this tree's own block down 88 bytes. `0x01D0` means `WM_RESIZE` at
+`b401eda` and `FILE_READBIG` here — a *silent* collision, which is why §4 lists
+the whole range.
+
+`SS != DS` on both, so `[bp+disp]` addresses `SS` and a pointer held in `BP`
+still needs an explicit `ds:` override. `LOW_SEG` itself is no longer a constant
+you can quote — the memory ladder is derived from the kernel's measured size, so
+it moves whenever the kernel does.
+
+---
+
+## 4. The API slot table, then and now
+
+Slots `0x0010`..`0x00F0` are **unchanged**:
 
 ```
 0x0010 GFX_LOCK      0x0038 GFX_FILL       0x0060 FONT_CHAR    0x0090 WM_FRONT
@@ -114,33 +149,18 @@ Slots `0x0010`..`0x00F0` are **identical on both branches**:
 0x0020 GFX_PIXEL     0x0048 GFX_FILL_GRAY  0x0070 FONT_WIDTH   0x00A0 WM_OBSCURED
 0x0028 GFX_HLINE     0x0050 GFX_XOR_RECT   0x0078 WM_CREATE    0x00A8 TASK_YIELD
 0x0030 GFX_VLINE     0x0058 GFX_XOR_FILL   0x0080 WM_SHOW      0x00B0 TASK_SLEEP
-                                            0x0088 WM_HIDE     0x00B8 GET_TICKS
+                                           0x0088 WM_HIDE      0x00B8 GET_TICKS
 0x00C0 SET_COLOR     0x00D0 SRAND          0x00E0 SND_CAPS     0x00F0 SND_PLAY
 0x00C8 MOUSE         0x00D8 RAND           0x00E8 SND_TONE
 ```
 
-Everything from `0x00F8` to `0x01B0` **still agrees**, routine for routine.
-Above that the two tables have parted: `experimental` used to hold five cells
-empty so that a number could never mean two contracts, and closed those holes
-when the branches began merging — so its own block sits 88 bytes lower than
-`main`'s numbering would put it.
+`0x00F8` to `0x01B0` are unchanged too, routine for routine. **Above `0x01B0`
+they differ**, and every number in that range is still a valid slot — so a
+stale citation resolves to the wrong routine rather than failing:
 
-| slot | `main` | `experimental` |
+| slot | at `b401eda` | here |
 |---|---|---|
-| `0x00F8` | `SND_FM` | `SND_FM` — refused unless the sound driver is loaded |
-| `0x0100` | `SND_STREAM` | `SND_STREAM` — likewise |
-| `0x0108` | `WM_SIZABLE` | `WM_SIZABLE` |
-| `0x0110` | `FULLSCREEN` | `FULLSCREEN` |
-| `0x0118` | `WM_GROW` | `WM_GROW` |
-| `0x0120`–`0x0140` | `FILE_WRITE`/`READ`/`DELETE`/`RENAME`/`DFREE` | identical |
-| `0x0148` | `MENU_SET` | `MENU_SET` |
-| `0x0150` | `FILE_DLG` | `FILE_DLG` |
-| `0x0158` | `VIDEO` | `VIDEO` |
-| `0x0160` / `0x0168` | `TASK_SPAWN` / `TASK_ALIVE` | identical |
-| `0x0170`–`0x0180` | `WM_CLIP_SET`/`CLEAR`/`TEST` | identical |
-| `0x0188` | `CPU_INFO` | `CPU_INFO` |
-| `0x0190`–`0x01A8` | `XMEM_CAPS`/`ALLOC`/`FREE`/`COPY` | identical |
-| `0x01B0` | `WM_GEOM` | `WM_GEOM` — **the last shared number** |
+| `0x01B0` | `WM_GEOM` | `WM_GEOM` — **the last number that agrees** |
 | `0x01B8` | `MEM_ALLOC` (paragraphs) | `WM_RESIZE` |
 | `0x01C0` | `MEM_FREE` (`AX`) | `GFX_BLIT4` |
 | `0x01C8` | `MEM_AVAIL` (paragraphs) | `ABOUT_SET` |
@@ -151,33 +171,28 @@ when the branches began merging — so its own block sits 88 bytes lower than
 | `0x01F0` / `0x01F8` | `GFX_DBUF` / `GFX_SCROLL` | `MEM_FREE` / `MEM_AVAIL` (KB) |
 | `0x0200`+ | — | `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`, `MEM_REGROW`, `WM_TITLE`, `DRV_TASK` (drivers only), `MEM_CLAIM_DMA` |
 
-**Every contract `main` has, `experimental` now has too** — `GFX_DBUF` and
-`GFX_SCROLL` were its last two gaps and are implemented, just at different
-numbers. What differs is the memory API, and deliberately: `main` counts
-paragraphs and answers in `AX`, `experimental` counts KB and answers in `DX`.
-Putting those at one number would fail silently and by a factor of 64. That
-is still the rule the layout follows — **a slot number never means two
-different contracts** — it just no longer extends across the two trees.
-
-**So a package binary is not portable between the branches, and never was.**
-Re-assembling it is, and that is all that was ever claimed: the numbers live
-in one `%include`d file on each side.
+**Every contract `b401eda` had, this tree has** — `GFX_DBUF` and `GFX_SCROLL`
+were the last two missing and were ported before the merge. The one genuine
+difference is the memory API, and it is deliberate: paragraphs answering in
+`AX` versus KB answering in `DX`. Putting those at one number would fail
+silently and by a factor of 64, which is why the numbers were kept apart even
+while both branches lived.
 
 You never write these numbers by hand — `%include "os88api.inc"` supplies them —
-so re-assembling against the target branch's SDK fixes every one. The table is
-here for reading disassembly and for judging whether an unported binary could
-possibly work (it cannot).
+so re-assembly fixes every one. The table exists for reading *prose*: a comment
+or a spec citation naming a slot number written before the merge means a
+different routine now.
 
 ---
 
-## 4. The callback convention
+## 5. The callback convention
 
-### 4.1 What the kernel does
+### 5.1 What the kernel does
 
-**`main`** builds a far pointer to your procedure directly (`inst_cb_call`,
-`inst_cb_seg`) and `call far`s it. Your procedure is the far target.
+At `b401eda` the kernel built a far pointer to your procedure and `call far`ed
+it. Your procedure was the far target.
 
-**`experimental`** builds a far pointer to `PKG_DISP` = offset **12** in your
+Here the kernel builds a far pointer to `PKG_DISP` = offset **12** in your own
 package header, loads `BP` with the near offset of your procedure, and
 `call far`s the header. The four bytes there are:
 
@@ -188,23 +203,25 @@ package header, loads `BP` with the near offset of your procedure, and
 ```
 
 So the dispatcher calls you near, you `ret` to it, and it `retf`s to the kernel.
-`wm_pkgcall` is the single site; dispatch is re-entrant across packages because
-the far pointer comes out of the window record (`W_DISP`/`W_SEG`), not a global.
+`wm_pkgcall` is the single site, and dispatch is re-entrant across packages
+because the far pointer comes out of the window record (`W_DISP`/`W_SEG`), not a
+global.
 
-### 4.2 What you write
+The consequence worth internalising: **a package author never writes `retf`, so
+a missing one cannot exist.** SPEC.md §20.8 rule 5 is the binding form.
+
+### 5.2 What you write
 
 Every routine the kernel calls — the entry proc, `W_PAINT`, `W_ONKEY`,
-`W_ONCLICK`, the `AM_ONCMD` menu handler, the file-dialog completion proc, and on
-`experimental` also the `W_ONSIZE` negotiator:
+`W_ONCLICK`, the `AM_ONCMD` menu handler, the file-dialog completion proc, and
+the `W_ONSIZE` negotiator:
 
-| | `main` | `experimental` |
+| | at `b401eda` | here |
 |---|---|---|
 | returns with | `retf` | `ret` |
 | calling one of them yourself | `push cs` then `call` | plain `call` |
 
-The worker task entry is the exception on both branches: it never returns at all.
-
-**`main` → `experimental`:**
+The worker task entry is the exception: it never returns at all, on either.
 
 ```nasm
 ; before
@@ -227,36 +244,33 @@ hl_repaint:
     call hl_paint
 ```
 
-Going the other way, add the `retf`s **and** the `push cs` before every internal
-call to one of them. Forgetting the `push cs` is the failure mode that assembles
-cleanly and unwinds the stack by two bytes per call.
+A leftover `retf` is the failure mode that assembles cleanly and hangs at the
+first paint. A leftover `push cs` unwinds the stack by two bytes per call and
+survives longer, which makes it worse.
 
-### 4.3 Segment registers on entry
+### 5.3 Segment registers on entry
 
-| | `main` | `experimental` |
+| | at `b401eda` | here |
 |---|---|---|
 | `CS` | your segment | your segment |
 | `DS` | your segment | your segment |
 | `ES` | your segment | **`KERNEL_SEG`** |
-| `SS` | `LOW_SEG` (`0x0800`) | `LOW_SEG` (`0x0440`) |
+| `SS` | `LOW_SEG` | `LOW_SEG` (derived, not a constant) |
 
-`SS != DS` on both, so `[bp+disp]` addresses `SS` and a pointer held in `BP`
-needs an explicit `ds:` override — unchanged, and true inside a worker task too.
-
-The `ES` difference is the one to internalise. On `experimental`, `ES` already
-points at kernel memory when you are called, which is what makes `[es:bx+W_W]`
-and the file dialog's `DI` name buffer work without a segment load. You may
-clobber `ES` freely afterwards, but if you do, reload it before touching the
-window record again. On `main`, `ES = DS`, and the two ES-relative APIs
-(`OSAPI_FILE_*` data buffers, `OSAPI_SND_PLAY`) therefore read your own segment
-with no setup — which is also true on `experimental` *once you set `ES = DS`
-yourself*.
+The `ES` difference is the one that bites. Here `ES` already points at kernel
+memory when you are called, which is what makes `[es:bx+W_W]` and the file
+dialog's name buffer work with no segment load. You may clobber `ES` freely
+afterwards — but the two ES-relative APIs (`OSAPI_FILE_*` data buffers,
+`OSAPI_SND_PLAY` samples) read *your* memory, and at `b401eda` that was free
+because `ES = DS` already. **Set `ES = DS` before those calls.** Code that
+worked for years without doing so will read the kernel's memory instead, and
+what it finds there is plausible enough to be confusing.
 
 ---
 
-## 5. The package header
+## 6. The package header
 
-`OS88_HEADER` emits 32 bytes. Both branches agree on:
+`OS88_HEADER` emits 32 bytes. Unchanged:
 
 ```
 +0   'O','8'          magic
@@ -271,363 +285,184 @@ yourself*.
 
 Bytes `+12`..`+15` are the whole disagreement:
 
-| | `main` | `experimental` |
+| | at `b401eda` | here |
 |---|---|---|
 | `+12` | `dw 0` — retired v2 relocation count | `db 0FFh, 0D5h, 0CBh, 0` — the dispatcher |
 | `+14` | `dw` minimum conventional RAM, **KB** | — |
 | macro arity | `OS88_HEADER name, entry [, flags [, needs_kb]]` | `OS88_HEADER name, entry [, flags]` |
-| default | 500 KB if omitted | n/a |
-| image + bss cap | 65,520 B (`PKG_MAX_PARA` × 16) | 61,440 B (`APP_MAX_SIZE` = `0xF000`) |
-| `os88pkg.py` | `--needs KB` overrides `+14`; validates 256–640 | validates the four dispatcher bytes |
+| image + bss cap | 65,520 B | **61,440 B** (`APP_MAX_SIZE` = `0xF000`) |
+| `os88pkg.py` | `--needs KB` overrides `+14` | validates the four dispatcher bytes |
 
-`main` uses the `+14` word to refuse a load on a machine with less RAM than the
-package declares (`ld_needkb` / `ld_ramkb`). `experimental` has no such gate — an
-app sizes itself at runtime from `OSAPI_MEM_AVAIL` and puts up a notice window if
-the answer is too small, which is what Paint does.
+`b401eda` used the `+14` word to refuse a load on a machine with less RAM than
+the package declared. **There is no such gate here, and there cannot be one** —
+the dispatcher occupies those bytes. An app sizes itself at runtime from
+`OSAPI_MEM_AVAIL` and puts up a notice window if the answer is too small;
+`apps/paint` is the reference, giving up features tier by tier.
 
-**`main` → `experimental`:** drop the fourth macro argument, drop any `--needs`
-from the Makefile rule, and add the runtime sizing if the app relied on the gate.
-Check the image against the smaller 61,440-byte cap.
-
-**`experimental` → `main`:** decide a floor and pass it as the fourth argument.
+So: drop the fourth macro argument, drop any `--needs` from the Makefile rule,
+add runtime sizing if the app relied on the gate, and check the image against
+the smaller 61,440-byte cap.
 
 ---
 
-## 6. Window geometry
+## 7. Window geometry
 
-### 6.1 The two idioms
+**No conversion needed.** `OSAPI_WM_GEOM` is here at `0x01B0` with `main`'s
+contract: `CX` = content width, `DX` = content height, `CF=1` if hidden. It is
+the recommended idiom and the one an app brought forward should keep.
 
-**`main`** — the window pointer is an **opaque handle**. Dereferencing it is
-explicitly forbidden; the SDK still publishes `W_*` offsets, but only for the
-`wm_create` template.
+This tree *also* lets you read the record through `ES`, and several of its own
+apps still do. If you are porting, ignore that: those are **frame** dimensions,
+so every caller repeats the same `-2` / `-TITLE_H-1`, and `WM_GEOM` is that
+subtraction done once. The record is readable, not idiomatic.
 
-```nasm
-    mov bx, [my_win]
-    call OSAPI_WM_GEOM      ; CX = CONTENT width, DX = CONTENT height
-    jc  .hidden             ; CF = 1: the window is not visible
-```
+`OSAPI_WM_RESIZE` is unchanged in contract (`BX` = win, `CX` = w, `DX` = h,
+lock held) and moved to `0x01B8`.
 
-**`experimental`** — the record is kernel memory and `ES` points at it:
+---
 
-```nasm
-    mov bx, [my_win]
-    mov ax, [es:bx+W_W]     ; FRAME width
-    sub ax, 2               ; -> content width
-    mov dx, [es:bx+W_H]     ; FRAME height
-    sub dx, TITLE_H+1       ; -> content height
-```
+## 8. Memory
 
-Visibility is `test word [es:bx+W_FLAGS], 2` on `experimental`; on `main` it is
-the `CF` that `OSAPI_WM_GEOM` returns.
+This is the real work, and the one place a mechanical substitution is not
+enough.
 
-### 6.2 The conversion
+### 8.1 The conversion
 
-```
-content width  = W_W - 2
-content height = W_H - TITLE_H - 1
-```
-
-Getting this wrong is a silent off-by-19-pixels that only shows on a resize, so
-convert once into a helper and call it everywhere — which is what
-`apps/fractal/fractal.asm` does on both branches.
-
-### 6.3 Record layout
-
-| | `main` | `experimental` |
+| | at `b401eda` | here |
 |---|---|---|
-| `W_FLAGS` … `W_MENUS` | 0 … 18 | 0 … 18 (identical) |
-| `W_DISP` / `W_SEG` | — | 20 / 22 |
-| `W_ONSIZE` | — | 24 |
-| `WIN_SIZE` | 20 | 26 |
+| unit | paragraphs (16 B) | **KB** |
+| claim | `MEM_ALLOC`, `AX` = paragraphs → `AX` = segment | `MEM_CLAIM`, `AX` = KB → **`DX`** = segment |
+| free | `MEM_FREE`, `AX` = segment | `MEM_FREE`, **`DX`** = segment |
+| available | `MEM_AVAIL` → `AX` largest, `DX` total | `MEM_AVAIL` → `AX` largest KB, **`BX`** total KB |
+| refusal | CF=1 | CF=1 |
 
-The `wm_create` template (`WT_X` … `WT_SIZE` = 16) is **identical on both
-branches**, so the template you pass to `OSAPI_WM_CREATE` needs no change.
+`paragraphs >> 6` is KB. The register move is the part that assembles cleanly
+and misbehaves: a claim whose answer you read from `AX` gets whatever `AX`
+happened to hold.
 
-### 6.4 Resizing
+### 8.2 The model changed underneath it
 
-`OSAPI_WM_RESIZE` exists on both with the same contract (`BX` = window, `CX`/`DX`
-= new **frame** size; do not hold the gfx lock). `OSAPI_WM_SIZABLE`,
-`OSAPI_WM_GROW` and `OSAPI_FULLSCREEN` likewise.
+`b401eda` handed packages memory out of a fixed **arena** — a reservation
+carved out at boot whether or not anything used it. Here it is a **claim heap**
+(SPEC.md §50): everything above the kernel, handed out on demand and given back
+on teardown. Three consequences for a port:
 
-`OSAPI_WM_ONSIZE` is **`experimental` only**. It registers a near proc the kernel
-calls *before* committing a size the user dragged out of the grow box, with
-`SI` = your window and `CX`/`DX` = the proposed frame size; you answer in
-`CX`/`DX` with the size you will accept. Answer with the size you already have to
-refuse outright, or change one axis and leave the other. It runs under the gfx
-lock with nothing drawn at either size — **do not draw in it**.
+- **There is much more of it.** A 640KB machine measures 566KB of heap. Code
+  that worked around a ~107KB arena — refusing large files, staging in pieces,
+  declining a feature — may not need to any more. `apps/tracker`'s §45.8 is a
+  worked example: the same player refuses a 116KB module at `b401eda` on a
+  512KB machine and loads it here.
+- **Refusal is still normal** and every claim needs its fallback. The heap is
+  shared, so "there was room a moment ago" is not a guarantee.
+- **Your claims are freed at teardown**, stamped with the segment you run in.
+  You need no close hook, and freeing early is only for handing memory back
+  mid-session.
 
-Porting an app that uses it to `main` means giving up the negotiation: let the
-resize happen and clamp or reflow in `W_PAINT` instead.
+### 8.3 What is new
 
----
-
-## 7. Memory
-
-### 7.1 Your own segment
-
-Both branches give a package one segment holding its image and bss, loaded on a
-paragraph boundary, with no relocation of any kind. `main` allocates it from a
-conventional **arena** running from linear `0x65800` to whatever `int 12h`
-reports; `experimental` allocates it from the **claim heap** (SPEC.md §50), from
-the top downward, while data claims grow up from the bottom. Neither is visible
-to package code.
-
-`experimental` had a fixed 60KB pool of its own until the heap absorbed it. The
-practical difference now: `main`'s arena starts at a constant, so it is **empty
-on a 256KB machine** and package loads refuse with a message; `experimental`'s
-heap starts where the kernel actually ends, so it is ~187KB on a 256KB machine
-and ~59KB on a **128KB** one — which is the floor `experimental` targets.
-
-### 7.2 Asking for more
-
-| | `main` `OSAPI_MEM_ALLOC` | `experimental` `OSAPI_MEM_CLAIM` |
-|---|---|---|
-| slot | `0x01B8` | `0x0178` |
-| unit in | **paragraphs** in `AX` (0 → 1) | **KB** in `AX` |
-| result | `CF=0`, `AX` = base segment | `CF=0`, `DX` = base segment |
-| failure | `CF=1`, `AX` = 0 no arena / 1 no table entry / 2 no run that big | `CF=1`, no code |
-| free | `OSAPI_MEM_FREE`, `AX` = base | `OSAPI_MEM_FREE`, `DX` = base |
-| survey | `OSAPI_MEM_AVAIL` → `AX` largest run in **paragraphs**, `DX` total, `BL` free entries | `OSAPI_MEM_AVAIL` → `AX` largest run in **KB**, `BX` total KB |
-| table size | 8 entries, whole machine | 16 records |
-| context | UI task only | UI task in practice; callable from the entry proc |
-| identity | the calling instance | the segment you run in |
-
-Both stamp blocks with an owner and force-free at teardown, so neither needs a
-close hook, and on both a refusal is a normal path that every caller must handle.
-
-**Conversion:** paragraphs → KB is `>> 6`; KB → paragraphs is `<< 6`. Watch the
-result register — `AX` on `main`, `DX` on `experimental` — and watch that
-`OSAPI_MEM_AVAIL`'s second output is `DX` (total paragraphs) on `main` and `BX`
-(total KB) on `experimental`.
-
-**Shape:** `main` tells you to take **one** block and subdivide it, because eight
-entries serve the whole machine. `experimental`'s 16 records are looser — Paint
-takes four separate claims there and one subdivided block on `main`. Either shape
-works on `experimental`; only the single-block shape is safe on `main`.
-
-A block larger than 64KB is a paragraph *count*, not an offset, on both: walk it
-as `seg:off` with the segment advancing, never as one flat 16-bit offset.
-
-### 7.3 Memory above 1MB
-
-**`main` only**, and it comes with hard rules:
-
-- `OSAPI_CPU_INFO` → `AL` = `CPU_8086` / `CPU_286` / `CPU_386`, `AH` = feature
-  bits (A20 verified, HMA claimed, unreal armed).
-- `OSAPI_XMEM_CAPS` → `AX` = KB available, `DX:CX` = pool base, `BL` = free
-  entries.
-- `OSAPI_XMEM_ALLOC` / `FREE` / `COPY`.
-
-**Branch on the caps, never on the tier.** `OSAPI_XMEM_CAPS` returning 0 KB is
-the only answer that means "do not try", and it is the answer on a 386 whose A20
-gate never verified just as much as on an 8088.
-
-What `ALLOC` returns is an **opaque 32-bit token, not an address**. Real mode
-cannot name a byte above `0x10FFEF`, so extended memory is a **data store only** —
-no code, no jump table, no callback, no second copy of your image, on any tier.
-Every byte moves through `OSAPI_XMEM_COPY` (`CX` even and ≤ 32768). These five
-slots are UI-task-only: on a 286 the copy goes through `int 15h AH=87h`, and some
-BIOSes implement that by resetting the CPU.
-
-`experimental` has none of it. An app that used extended memory as a scratch
-store must either shrink to what the claim heap can fund or give up the feature —
-there is no equivalent, and no CPU detection either.
+- **`OSAPI_MEM_REGROW`** resizes a claim you already hold, **in place** when
+  the paragraphs above it are free. There was no shrink primitive at
+  `b401eda`, and code that over-claimed because re-claiming might relocate the
+  base can stop doing that.
+- **`OSAPI_MEM_CLAIM_DMA`** takes the 64KB physical-page rule as a parameter,
+  for a buffer an ISA DMA controller will read or write. `CX` is the KB of the
+  block's **head** the chip sees, not the whole block.
+- **Extended memory** (`OSAPI_CPU_INFO`, `OSAPI_XMEM_*`) is here at `main`'s
+  numbers and unchanged. On the 8086 this OS targets it is all zero KB.
 
 ---
 
-## 8. Sound
+## 9. Sound
 
-| capability | `main` | `experimental` |
-|---|---|---|
-| `SND_CAP_TONE` | yes | yes |
-| `SND_CAP_PCM_EXCL` | yes | yes |
-| `SND_CAP_FM` | yes (OPL2) | yes (OPL2) — **driver** |
-| `SND_CAP_PCM_BG` | yes (Sound Blaster) | yes (Sound Blaster) — **driver** |
-| `SND_CAP_PCM_IN` | yes (recording) | yes (recording) — **driver** |
-| `OSAPI_SND_CAPS` | `BL` = route (0 speaker / 1 OPL2), `DX` = present drivers | identical |
-| `OSAPI_SND_TONE` | identical | identical |
-| `OSAPI_SND_PLAY` | identical | identical |
-| `OSAPI_SND_FM` | `0x00F8` | `0x00F8` — CF=1 with no driver |
-| `OSAPI_SND_STREAM` | `0x0100` | `0x0100` — CF=1 with no driver |
-| Control Panel Sound page | yes | yes (source select + Test) |
-| where the hardware lives | in the kernel | in a **loadable `.DRV`** (SPEC.md §51) |
+The slots are `main`'s and the contracts are `main`'s. What changed is where
+the hardware lives: the OPL2 and Sound Blaster tiers are a **loadable driver**
+(`SOUND.DRV`, SPEC.md §51), not resident kernel code. So:
 
-`OSAPI_SND_TONE` is worker-task-safe on both: `snd_req_inst` stamps the grant with
-the running task's own instance when no callback is being dispatched. Only the
-blocking `OSAPI_SND_PLAY` is UI-task-only, and for the different reason that it
-freezes the desktop for the length of the clip.
-
-**The one real difference is that here the hardware is optional at runtime.**
-On `main` the OPL2 and Sound Blaster code is in the kernel and probes at boot;
-here it is `SOUND.DRV`, loaded from the system disk if the Control Panel's
-Drivers page says so, and a machine that never loads it reports
-`SND_CAP_TONE | SND_CAP_PCM_EXCL` and refuses both slots. The user can also
-route tones to the **PC speaker** with a card present (Sound page), which
-`OSAPI_SND_CAPS` reports in `BL`.
-
-**`main` → `experimental`:** nothing mechanical. Query `OSAPI_SND_CAPS` and
-branch on the bits rather than assuming — that is already the documented rule
-on `main`, so a well-written app degrades on its own, and here it has to,
-because the answer changes when a driver is loaded or unloaded. `fmtest` and
-`sbtest` are ported and are the gate packages for the two tiers
-(`make test-snd ADLIB=1 TESTAPPS=build/fmtest.img`, `SB16=1` /
-`build/sbtest.img`).
-
-**`experimental` → `main`:** nothing to do. Every slot behaves identically once
-the driver is attached; `main` has no equivalent of *not* having it.
+- `OSAPI_SND_FM` and `OSAPI_SND_STREAM` answer CF=1 with no driver loaded.
+  Branch on `OSAPI_SND_CAPS` — which a correct app already did, because the
+  card could always be absent.
+- The staging pool a stream ring is granted from **belongs to the driver**, so
+  its size is not a constant to assume. Ask in tiers and record into what you
+  got; `apps/recorder` is the reference.
+- `OSAPI_SND_TONE` is worker-safe; the blocking `OSAPI_SND_PLAY` is UI-task
+  only. Unchanged, and now enforced more carefully: a grant's stamp is
+  qualified by the task that made it, so a worker cannot inherit a foreign
+  callback's instance.
 
 ---
 
-## 9. Menus and About
+## 10. Menus and About
 
-The `OS88_MENUSET` / `OS88_MENU` / `OS88_MENUSET_END` macros, the `AM_*` and
-`AMENU_*` offsets, `MENU_APPMAX` = 4 and the `MENU_DIS` disabled-item marker are
-**the same on both branches**. The command handler is a window callback reached
-through the bar on both: UI task, under the gfx lock, billed to your instance,
-may draw, may call the file API, must not take the lock, and **must repaint
-itself**.
+`OSAPI_MENU_SET` and the `OS88_MENUSET` / `OS88_MENU` macros are unchanged.
+`OSAPI_ABOUT_SET` is here (moved to `0x01C8`) and is the right way to publish
+an About item: it appends a one-item pull-down under your app's name.
 
-The difference is what the kernel does with your set:
+If your app used **the empty-menu-label trick** — an `AM_NAME` of `""` and a
+first menu titled with the app's name, so the pull-down lands where the label
+would be — replace it with `OSAPI_ABOUT_SET` and give the set its real name.
+`main`'s Paint did this; this tree's does not.
 
-| | `main` | `experimental` |
-|---|---|---|
-| storage | **copied** at layout time | **read live** through a per-cell segment word |
-| items per menu kept | `MENU_ITEMMAX` = 8 | uncapped |
-| chars kept / shown | `MENU_STRMAX` = 19 | `MENU_MAXCH` = 24 shown |
-| after changing a string | **call `OSAPI_MENU_SET` again** | nothing |
-
-So `main` code that relabels an item — or disables one by repointing it at a
-string beginning with `MENU_DIS` — follows the change with a second
-`OSAPI_MENU_SET` call. That call is a store and a relayout, draws nothing, and
-is safe from inside a menu handler. Carrying it to `experimental` is harmless;
-*omitting* it on `main` leaves the bar drawing from a stale copy.
-
-`OSAPI_MENU_SET` preserves every register **and the flags** on both branches, so
-it can sit between `OSAPI_WM_CREATE` and the entry proc's return without eating
-the `CF` the loader is owed.
-
-**`OSAPI_ABOUT_SET` is `main` only** (slot `0x01E0`). It turns the app's name in
-the bar from a plain label into a one-item pull-down carrying `About <Name>`;
-picking it calls your handler exactly like `W_ONCLICK`. Porting to
-`experimental` means dropping the call and, if the About content matters, moving
-it into one of your own menus.
+Menu sets are read **live** here through the owning window's segment, not
+copied into kernel buffers. A set whose item strings you rewrite in place takes
+effect on the next drop with no re-registration — which is how Paint's
+`(NoRam)` labels switch both ways.
 
 ---
 
-## 10. Files, folders and the dialog
+## 11. Files, folders and the dialog
 
-Identical on both branches: the five package-visible operations (`WRITE`, `READ`,
-`DELETE`, `RENAME`, `DFREE`), all eleven `FERR_*` codes, the name-staging rule
-(a name longer than 12 chars is **refused** with `FERR_NAME`, never truncated),
-the `ES:BX` data buffer convention, and the rule that names resolve in the
-volume's **current directory** rather than the root.
+Unchanged: every `dskw_*` slot, all eleven `FERR_*` codes, the Standard File
+dialog, and `OSAPI_FILE_READBIG` (moved to `0x01D0`) for reads with no 64KB
+ceiling.
 
-The Standard File dialog is the same shape on both: modal, non-blocking,
-`OSAPI_FILE_DLG` with `AL` = `FDLG_OPEN`/`FDLG_SAVE`, `BX` = your window, `DI` =
-a completion offset in your segment, `SI` = a default name or 0. The completion
-proc runs on the UI task with the gfx lock held after the dialog is gone, with
-`AL` = the mode, `SI` = your window and the chosen name at `ES:DI` where `ES` =
-`KERNEL_SEG`. **The name buffer is the kernel's and valid for the call only —
-copy it.** (`main` states `ES:DI` explicitly because `ES` is otherwise your own
-segment; `experimental` says `DI` because `ES` is already `KERNEL_SEG`. Same
-buffer, same rule.)
+New here: `OSAPI_FILE_HERE` and `OSAPI_FILE_GOTO`, which read and restore the
+directory names resolve in. Also `dskw_rmtree` — delete recurses into folders.
 
-`experimental` adds two slots with no `main` equivalent:
-
-```nasm
-    call OSAPI_FILE_HERE    ; out DX = current directory's first cluster
-                            ;     BL = the drive. No disk I/O.
-    ...
-    call OSAPI_FILE_GOTO    ; in  DX = a cluster from FILE_HERE, BL = its drive
-                            ; out CF=1 could not list; volume back at the root
-                            ; A REMOUNT: real floppy I/O, UI-task only.
-```
-
-They exist because the current directory is **one global** shared with every Disk
-window and the dialog. Right after the dialog closes it still names the folder
-the user picked, so a write lands there — but later it does not, because anything
-else that navigated has moved it. An app whose `Save` means "the same place my
-`Save As` chose" stores the (cluster, drive) pair beside the name. Note Pad on
-`experimental` does exactly this.
-
-Porting such an app to `main`: there is no way to express it. Either re-prompt
-with the dialog on every save, or accept that `Save` writes to wherever the
-volume currently sits.
-
-The other `experimental`-side file work is kernel-internal and needs no package
-change: New Folder in the Save dialog, a movable caret in the name field,
-`File > Delete` recursing into a folder, and the Disk window repainting one
-status line instead of its whole content.
-
-**Folders on the apps disk itself are `main` only.** `tools/os88disk.py` there
-takes a `[DIR:]PKG.o88` argument and the Makefile sorts packages into `APPS/`
-and `GAMES/`. On `experimental` the root is flat and its order is pinned in the
-Makefile's `APPS` list, because the scripted tests click by row index and new
-packages must append at the end.
+The apps disk is foldered on both sides, so a package still goes in
+`APPS_TOOLS` or `APPS_GAMES` in the Makefile. **Append it**, so existing row
+indices in the scripted tests hold.
 
 ---
 
-## 11. Worker tasks
+## 12. Worker tasks
 
-**The same on both branches.** An instance may claim one worker task from a
-callback:
+Unchanged in every respect: `OSAPI_TASK_SPAWN` from a callback, one worker per
+instance, and the worker dies inside `OSAPI_TASK_ALIVE` — which it must call
+every loop or it leaks its instance record for the session.
 
-- `OSAPI_TASK_SPAWN` — `main` `0x0160`, `experimental` `0x0150`
-- `OSAPI_TASK_ALIVE` — `main` `0x0168`, `experimental` `0x0158`
-
-The binding rule is identical and is the one most easily got wrong: a worker that
-returns or exits on its own **leaks its instance record and its region for the
-session**, because the close path then sets a die flag nobody reads. It must call
-`OSAPI_TASK_ALIVE` every loop, and that call is where it dies — it does not
-return.
-
-The worker's stack is 1536 bytes in `LOW_SEG` on both, so `SS != DS` there too.
-
-On `experimental`, `ES` = `KERNEL_SEG` holds in the worker's frame as well as in
-callbacks, which is what lets `apps/fractal` read `[es:bx+W_W]` from its worker.
-If you port such a worker to `main`, it must call `OSAPI_WM_GEOM` instead — and
-`OSAPI_WM_GEOM` is safe from any context there, lock held or not.
-
-Neither branch permits the file API, `OSAPI_SND_PLAY`, or (on `main`) the
-`XMEM`/`MEM` slots from a worker.
+Two things a forward-ported worker should know. `OSAPI_TASK_SLEEP` is
+**relative** — the deadline is `[ticks] + AX` at the call — so a worker that
+sleeps 1 tick per frame runs at `ceil(work)+1` ticks per frame, not 1.
+`OSAPI_GET_TICKS` lets you pace against an absolute deadline instead;
+`apps/arkanoid` is the reference. And a worker must re-check visibility under
+the gfx lock and arm a clip region, which has not changed but matters more now
+that damage-rect repainting means fewer full repaints will paper over a mistake.
 
 ---
 
-## 12. Repaint obligations
+## 13. Repaint obligations
 
-Both branches: a `W_PAINT` proc draws **content only** and must be a pure
-repaint. A menu handler and a file-dialog completion proc must repaint whatever
-they drew over, because the kernel does not repaint after they return.
+The rules are the same and there is more machinery behind them, most of which
+you get for free. Two that can bite a port:
 
-The clip region is the same on both (`OSAPI_WM_CLIP_SET` / `CLEAR` / `TEST`,
-16 rects, `CF=1` = draw nothing this frame, dies at the next `OSAPI_GFX_UNLOCK`),
-and so is the granularity rule that makes `WM_CLIP_TEST` necessary: **fills clip
-per pixel but glyphs clip per whole 8x8 cell**, so anything that erases a rect
-and then draws text into it must either erase per cell behind a `WM_CLIP_TEST`
-or gate the whole erase-and-draw pair on one.
+- **`W_PAINT` does not run on a wholly covered window.** A paint proc must be
+  a repaint and nothing else — no state changes, no side effects.
+- **The granularity rule.** Fills clip per pixel, glyphs per whole 8x8 cell.
+  Anything that erases a rect and then draws text into it must not let the two
+  disagree, or a window cut by another window's edge goes *blank* rather than
+  stale. Erase per cell behind a `wm_clip_test`, or gate the erase-and-draw
+  pair on one test of the whole rect and skip both.
 
-What `experimental` changes is when the kernel calls you:
-
-- **`W_PAINT` does not run on a wholly covered window.** `wm_covered` seeds the
-  §11.3 region arithmetic with the frame rect; if nothing it would write survives,
-  the window is skipped entirely. A partly covered window is still redrawn in
-  full. An app that used `W_PAINT` as a heartbeat — anything other than a
-  repaint — breaks here.
-- **Fewer paints overall.** Raising a window repaints that window and the chrome,
-  not the screen; hiding, destroying or dragging repaints only the vacated
-  rectangle and whatever overlaps it.
-
-Neither change alters what a correct paint proc does. Both are reasons an
-*incorrect* one stops getting away with it.
+`OSAPI_WM_TITLE` is new and repaints only the caption strip; `OSAPI_GFX_SCROLL`
+is new and moves a rect instead of redrawing it.
 
 ---
 
-## 13. Things that did not change
+## 14. Things that did not change
 
-Do not spend porting effort on any of this — it is byte-identical or
-contract-identical across the two branches:
+Do not spend porting effort here — these are contract-identical:
 
-- The whole graphics API, `0x0010`..`0x0058`, and the font API `0x0060`..`0x0070`.
+- The whole graphics API `0x0010`..`0x0058` and the font API `0x0060`..`0x0070`.
 - `OSAPI_WM_CREATE`, `WM_SHOW`, `WM_HIDE`, `WM_FRONT`, `WM_CONTENT`,
   `WM_OBSCURED`, and the `WT_*` template layout.
 - `OSAPI_TASK_YIELD`, `TASK_SLEEP`, `GET_TICKS`, `SET_COLOR`, `MOUSE`, `SRAND`,
@@ -635,120 +470,79 @@ contract-identical across the two branches:
 - `OSAPI_VIDEO` and the three-adapter rule: `SCREEN_W`/`SCREEN_H` are VGA
   reference values, the live screen is what `OSAPI_VIDEO` reports, and colours
   reduce to black / white / 50% dither on the mono adapters.
-- `OSAPI_GFX_BLIT4` and `OSAPI_WM_RESIZE` contracts (only the slot numbers move).
+- `OSAPI_GFX_BLIT4` and `OSAPI_WM_RESIZE` contracts — only the numbers moved.
 - The 16 EGA colour indices, `MBAR_H` = 20, `TITLE_H` = 18.
-- All eleven `FERR_*` codes.
 - The clip region API and its granularity rule.
-- Worker-task lifecycle.
 - `OS88_ICON16` / `OS88_BSS` / `OS88_IMAGE_END`, and the icon format.
 - 8086-only assembly: `cpu 8086`, `-w+error`, no `pusha`, no `push imm`, no
-  `shl reg, imm` other than 1, no `movzx`, no 32-bit registers, no `FS`/`GS`.
+  `shl reg, imm` other than 1, no `movzx`, no 32-bit registers.
 
 ---
 
-## 14. Checklist: `main` → `experimental`
+## 15. What you gain
+
+Worth a second pass over ported code, because these did not exist to be used:
+
+| | |
+|---|---|
+| `OSAPI_MEM_REGROW` | resize a claim in place — retires the over-claim workaround |
+| `OSAPI_MEM_CLAIM_DMA` | the 64KB page rule inside the allocator |
+| `OSAPI_WM_ONSIZE` | negotiate a resize instead of accepting it |
+| `OSAPI_WM_TITLE` | retitle without repainting the window |
+| `OSAPI_FONT_GLYPHS` | the kernel's 8x8 glyph table |
+| `OSAPI_FILE_HERE` / `GOTO` | read and restore the current directory |
+| `OSAPI_GFX_SCROLL` | move a rect rather than redraw it |
+| a much larger heap | see §8.2 |
+
+---
+
+## 16. Checklist
 
 **Mechanical**
 
 - [ ] Replace every `retf` with `ret`.
 - [ ] Remove every `push cs` that precedes an internal call to a kernel-called
       proc.
-- [ ] Drop the fourth `OS88_HEADER` argument (RAM requirement) and any `--needs`
-      in the Makefile rule.
-- [ ] Check image + bss against the smaller **61,440-byte** cap.
-- [ ] Add the package to the Makefile's flat `APPS` list — **at the end**, so
-      existing row indices in the scripted tests hold.
+- [ ] Drop the fourth `OS88_HEADER` argument and any `--needs` in the Makefile
+      rule; add runtime sizing if the app relied on the load-time gate.
+- [ ] Check image + bss against the **61,440-byte** cap.
+- [ ] Append the package to `APPS_TOOLS` or `APPS_GAMES`.
 
-**Geometry**
+**Segments**
 
-- [ ] Replace `OSAPI_WM_GEOM` with `[es:bx+W_W]` / `[es:bx+W_H]` **minus the
-      frame** (`-2`, `-TITLE_H-1`).
-- [ ] Replace the `CF` visibility answer with
-      `test word [es:bx+W_FLAGS], 2`.
-- [ ] Make sure `ES` still holds `KERNEL_SEG` at every record read; reload it if
-      the code clobbered `ES` in between.
-- [ ] Set `ES = DS` before any `ES:BX` file buffer or `ES:SI` sound buffer —
-      `main` got this free, `experimental` does not.
+- [ ] Set `ES = DS` before any `ES:BX` file buffer or `ES:SI` sound buffer.
+- [ ] If you read the window record, make sure `ES` still holds `KERNEL_SEG` at
+      that point — or use `OSAPI_WM_GEOM`, which needs no `ES` at all.
 
 **Memory**
 
-- [ ] `OSAPI_MEM_ALLOC` → `OSAPI_MEM_CLAIM`: paragraphs `>> 6` to KB, result
-      moves from `AX` to `DX`.
+- [ ] `OSAPI_MEM_ALLOC` → `OSAPI_MEM_CLAIM`: paragraphs `>> 6` to KB, and the
+      answer moves from `AX` to `DX`.
 - [ ] `OSAPI_MEM_FREE`: argument moves from `AX` to `DX`.
-- [ ] `OSAPI_MEM_AVAIL`: `AX` is now KB, and total moves from `DX` to `BX`.
-- [ ] Delete `OSAPI_CPU_INFO` and every `OSAPI_XMEM_*`; redesign whatever used
-      extended memory.
+- [ ] `OSAPI_MEM_AVAIL`: `AX` is KB now, and the total moves from `DX` to `BX`.
+- [ ] Revisit anything that worked around the arena's size (§8.2).
 
-**Features with no counterpart**
+**Sound**
 
-- [ ] Nothing left in the API surface — `OSAPI_ABOUT_SET`, `OSAPI_SND_FM` and
-      `OSAPI_SND_STREAM` all exist here at `main`'s numbers.
-- [ ] `OSAPI_SND_FM` / `OSAPI_SND_STREAM` still need the `OSAPI_SND_CAPS`
-      branch, because the hardware is a **loadable driver** and may be absent
-      at runtime (§8).
+- [ ] Keep the `OSAPI_SND_CAPS` branch — the card is a loadable driver and may
+      be absent at runtime.
+- [ ] Do not assume the staging pool's size.
 
 **Verify**
 
-- [ ] `make && make test`, then drive it: window opens, paints, menus track,
-      close box works, and the app survives being covered and revealed.
+- [ ] `make && make test`, then drive it: the window opens, paints, menus
+      track, the close box works, and the app survives being covered and
+      revealed. **Pay attention to the first callback after load** — a missed
+      `retf` conversion shows up there and nowhere earlier.
 - [ ] `make check-images` before committing anything under `build/`.
+- [ ] `python3 tools/checkdocs.py` if you touched prose.
 
 ---
 
-## 15. Checklist: `experimental` → `main`
+## 17. Worked example: `hello`
 
-**Mechanical**
-
-- [ ] Add `retf` to the entry proc, `W_PAINT`, `W_ONKEY`, `W_ONCLICK`, the
-      `AM_ONCMD` handler and the file-dialog completion proc.
-- [ ] Add `push cs` before **every** internal call to one of those.
-- [ ] Add the fourth `OS88_HEADER` argument (minimum conventional RAM, KB,
-      256–640) or accept the 500 KB default.
-- [ ] Add the package to `APPS_TOOLS` or `APPS_GAMES` in the Makefile, which
-      decides which folder it lands in.
-
-**Geometry**
-
-- [ ] Replace every `[es:bx+W_*]` read with `OSAPI_WM_GEOM` — and remember it
-      answers **content** dimensions, so delete the `-2` / `-TITLE_H-1`
-      arithmetic rather than applying it twice.
-- [ ] Replace `test word [es:bx+W_FLAGS], 2` with the `CF` from
-      `OSAPI_WM_GEOM`.
-- [ ] A worker task that read the record must call `OSAPI_WM_GEOM` instead
-      (safe from any context).
-
-**Memory**
-
-- [ ] `OSAPI_MEM_CLAIM` → `OSAPI_MEM_ALLOC`: KB `<< 6` to paragraphs, result
-      moves from `DX` to `AX`.
-- [ ] `OSAPI_MEM_FREE`: argument moves from `DX` to `AX`.
-- [ ] `OSAPI_MEM_AVAIL`: `AX` is now paragraphs, total moves from `BX` to `DX`.
-- [ ] **Collapse many claims into one block and subdivide it** — the `main`
-      table holds 8 entries for the whole machine.
-- [ ] Handle the arena being **empty on a 256KB machine**: `OSAPI_MEM_AVAIL`
-      answering zero is a normal, shipping outcome there.
-
-**Features with no counterpart**
-
-- [ ] `OSAPI_WM_ONSIZE` — no negotiation; let the resize land and reflow in
-      `W_PAINT`.
-- [ ] `OSAPI_FONT_GLYPHS` — no glyph-table access; embed the bitmaps you need
-      or draw with `OSAPI_FONT_CHAR`.
-- [ ] `OSAPI_FILE_HERE` / `OSAPI_FILE_GOTO` — no way to restore a directory;
-      re-prompt with the dialog or write wherever the volume sits.
-
-**Verify**
-
-- [ ] `make && make test`. Pay particular attention to the first callback after
-      load: a missed `retf` shows up there and nowhere earlier.
-
----
-
-## 16. Worked example: `hello`
-
-`apps/hello/hello.asm` is the smallest package in the tree and the whole
-`main` → `experimental` diff is four hunks. It is the clearest possible
-illustration of §4.
+`apps/hello/hello.asm` is the smallest package in the tree, and the whole
+forward-port is four hunks. It is the clearest possible illustration of §5.
 
 ```diff
  ; hl_entry - package entry point
@@ -757,8 +551,6 @@ illustration of §4.
  ; out: BX = window ptr, CF clear (CF set = abort)
  hl_entry:
      ...
- .out:
-     pop si
 -    retf                            ; far-called by the loader
 +    ret
 
@@ -768,60 +560,17 @@ illustration of §4.
 +    ret
 
  hl_oncmd:
-     mov [hl_page], al
-     call hl_repaint
+     ...
 -    retf                            ; far-called menu handler
 +    ret
 
  hl_repaint:
-     ...
-     call OSAPI_GFX_FILL
--    push cs                         ; hl_paint is a kernel-called proc and
--    call hl_paint                   ; returns with retf: give it the CS a
--                                    ; far call would have pushed
-+    call hl_paint                   ; SI = window ptr still
+-    push cs                         ; returns with retf: give it the CS a
+-    call hl_paint                   ; far call would have pushed
++    call hl_paint
 ```
 
 Three `retf` → `ret`, one `push cs` deleted. Everything else in the file — the
-window template, the menu set, `OSAPI_FONT_STR`, `OSAPI_GFX_FILL`, the org-0
-`dw` table indexed by page — is unchanged, because none of it crosses a boundary
-that moved.
+window template, the menu set, the drawing, the icon — is untouched.
 
-Counting `retf` per app is a quick way to size a port. On `main`: `mines` 7,
-`hello` 3, `notepad` 6, `piano` 9, `fractal` 4, `paint` 7, `solitaire` 6,
-`arkanoid` 6, `filetest` 2. On `experimental`: **zero, in all of them.**
-
----
-
-## 17. Feature availability matrix
-
-| Feature | `main` | `experimental` | Porting note |
-|---|:---:|:---:|---|
-| Near `ret` callbacks via header dispatcher | — | ✓ | §4, mechanical |
-| Direct window-record reads (`ES` = `KERNEL_SEG`) | — | ✓ | ↔ `OSAPI_WM_GEOM` |
-| `OSAPI_WM_GEOM` (content px, opaque handle) | ✓ | — | ↔ record reads |
-| `OSAPI_WM_ONSIZE` resize negotiation | — | ✓ | no equivalent; reflow in `W_PAINT` |
-| `OSAPI_FONT_GLYPHS` | — | ✓ | no equivalent |
-| `OSAPI_FILE_HERE` / `FILE_GOTO` | — | ✓ | no equivalent |
-| `OSAPI_ABOUT_SET` | ✓ | — | fold into a menu |
-| `OSAPI_MEM_*` claim/alloc | ✓ paragraphs | ✓ KB | unit + register conversion |
-| `OSAPI_XMEM_*` (RAM above 1MB) | ✓ | — | no equivalent |
-| `OSAPI_CPU_INFO` (CPU tiers) | ✓ | — | no equivalent |
-| Header declares minimum RAM (`+14`) | ✓ | — | size at runtime instead |
-| OPL2 / FM (`OSAPI_SND_FM`) | ✓ | ✓ | driver-borne here; check `SND_CAPS` |
-| Sound Blaster streams / record (`SND_STREAM`) | ✓ | ✓ | driver-borne here; check `SND_CAPS` |
-| Loadable drivers (`.DRV`, SPEC.md §51) | — | ✓ | kernel-side |
-| PC speaker tone + exclusive PCM | ✓ | ✓ | identical |
-| Menu set copied (needs re-`MENU_SET`) | ✓ | — | extra call is harmless the other way |
-| Live menu set, 24 shown chars | — | ✓ | |
-| Damage-rect repaint (`wm_paint_dmg`) | — | ✓ | kernel-side; affects `W_PAINT` frequency |
-| `W_PAINT` skipped on a wholly covered window | — | ✓ | a paint proc must be a pure repaint |
-| RTC ladder (4 rungs) | — | ✓ | kernel-side |
-| Folders on the apps disk | ✓ | — | build-side |
-| `make check-images` | — | ✓ | build-side |
-| FAT16 / `--size 2880` test geometry | ✓ | — | dead code on `experimental` |
-| Clip region (`WM_CLIP_SET`/`CLEAR`/`TEST`) | ✓ | ✓ | identical |
-| Worker tasks (`TASK_SPAWN`/`TASK_ALIVE`) | ✓ | ✓ | identical |
-| `GFX_BLIT4`, `WM_RESIZE`, `WM_SIZABLE`, `WM_GROW`, `FULLSCREEN` | ✓ | ✓ | identical contracts, moved slots |
-| Standard File dialog | ✓ | ✓ | identical |
-| Three video adapters (VGA / Hercules / CGA) | ✓ | ✓ | identical |
+Counting `retf` per source file is a quick way to size a port before starting.

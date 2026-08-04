@@ -4,30 +4,34 @@ This document is the **binding contract** for all kernel modules. Every symbol
 name, register contract, constant, and data layout here is pinned. Implement
 exactly what is written; put questions in your report, not in the code.
 
-### Section numbering across the forks
+### Section numbering, and the fork that ended
 
-This is the `experimental` fork. It shares §0–§44 with `main` and **a section
-number means the same topic on both** wherever the topic exists on both, so a
-citation like §11.3 or §20.1 can be read on either. Three rules keep it that
-way as the two diverge:
+**This document is now the only one.** It began as the `experimental` fork's
+spec and was numbered to share §0–§44 with `main` so that a citation like
+§11.3 or §20.1 could be read on either; `main`'s line of development has since
+been merged into this one, having been checked capability by capability first
+(BRANCH-DIFFERENCES.md, part 3). Three consequences worth knowing before
+citing a number:
 
-- **§45–§49 are reserved for `main`.** Nothing here will claim them.
-- **`experimental`-only top-level sections start at §50.** Today that is §50
-  (the claim heap) alone.
-- **`experimental`-only *subsections* of a shared section are numbered from
-  `.90`**, so they stay with the parent they belong to while leaving `main`
-  the whole ordinary range. Today: §11.90, §11.91, §18.90, §37.90.
+- **§45–§49 were reserved for `main`, and §45 is now claimed** — the Tracker,
+  ported over with its section. The four numbers above it are free.
+- **§50+ is where this fork's own top-level sections started**, and §50 (the
+  claim heap) and §51 (loadable drivers) are still there rather than being
+  renumbered down into the gap. Moving them would break every citation in the
+  tree to buy tidiness.
+- **The `.90` subsection band** (§11.90, §11.91, §18.90, §37.90) likewise
+  stays. It exists for the same retired reason and costs nothing.
 
-**API slot numbers no longer track `main`'s** (§20.3). They did, with five
-cells held empty to keep one number from meaning two contracts, and the
-branches are merging so the holes bought nothing and were closed. What
-survives is the half of the rule that was never about the other fork: a
-shipped slot keeps its contract, and "we no longer implement this" is a
-refusing stub, not a reuse.
+**API slot numbers do not track `main`'s** (§20.3). They did, with five cells
+held empty to keep one number from meaning two contracts; the merge made the
+holes pointless and they were closed. What survives is the half of that rule
+that was never about the other fork: a shipped slot keeps its contract, and
+"we no longer implement this" is a refusing stub, not a reuse (§20.8 rule 4).
 
-The two forks' contents are catalogued in
-[BRANCH-DIFFERENCES.md](BRANCH-DIFFERENCES.md); porting an application across
-is [docs/PORTING.md](docs/PORTING.md).
+What the two lines of development contained, and what the merge did with each
+difference, is [BRANCH-DIFFERENCES.md](BRANCH-DIFFERENCES.md). Bringing
+forward work written against the pre-merge `main` is
+[docs/PORTING.md](docs/PORTING.md).
 
 ## 0. Goal
 
@@ -3803,7 +3807,7 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
 **Nothing is held empty any more, and the table is contiguous.** It was not:
 five cells refused every call, because every slot up to `dskw_readbig` sat at
 the number `main` uses for the same routine and the aim was that one package
-source assemble for either fork (docs/PORTING.md §3). Where `main` had
+source assemble for either fork (docs/PORTING.md §4). Where `main` had
 something this fork did not, the number was **reserved rather than reused** —
 an `stc`/`retf` cell answering CF=1 with every register back — on the rule that
 **a slot number must never mean two contracts**. Reusing 0x01C8 for this fork's
@@ -8401,6 +8405,21 @@ then found to matter more widely: `mem_tab` is all zeroes on a machine with no
 heap to claim from, so on 128KB the *conventional-memory map* hashed to 0 too
 and stayed blank forever.
 
+### 41.7 Testing
+
+The coverage matrix is in §16 and it is uneven by construction: QEMU
+presents no 8086 and no 286, so `make test` exercises **tier 2 only**, and
+with A20 already open — neither gate path in §41.2 is genuinely run there.
+Tier 1 belongs to `make 286`, tier 0 to `make xt` / `xt-640` / `xt-cga` /
+`xt-hercules`, and all of those are interactive.
+
+Two branches are cheap to reach under the harness and must both be checked:
+run the `test` recipe by hand with `-m 1M` for **no extended memory at all**
+(AH=88h answers 0 — the claim refuses, the caps slot reports 0, the three
+allocator slots refuse, and the Task Manager line reads `0/0K`) and with
+`-m 2M` for a small non-zero store, where an allocator that gets its
+subtraction wrong will hand out a base past the top of RAM.
+
 ### 41.8 The package ABI
 
 Five slots at `main`'s numbers: `OSAPI_CPU_INFO` (0x0188), `OSAPI_XMEM_CAPS`
@@ -8416,6 +8435,25 @@ resetting the CPU, which taken under the gfx lock is a dead machine.
 2. A `cpu 386` island is **assembly-time permission only** — an island
    reached on a 286 is an illegal-opcode trap on a machine with no handler.
 3. No code above 1MB, on any tier, ever.
+
+### 41.10 Acceptance
+
+- `make xt` and `make xt-640`: identical boot, identical desktop, identical
+  Task Manager figures except the tier/XMS line, which reads
+  `CPU 8086  XMS     0/    0K`. This is the regression that matters most —
+  tier 0 is the target machine.
+- `make test`: the line reads `386+` with five-digit KB figures; allocate,
+  copy out, copy back and compare, and the bytes match.
+- The same `test` recipe with `-m 1M`: `386+` and `0/0K`, and every allocator
+  slot refuses cleanly rather than handing out a base above the top of RAM.
+- `make 286` on a VM with more than 1MB: the line reads `286`, the HMA claim
+  succeeds, the AH=87h transport round-trips the same buffer the tier-2 path
+  did, and the caps figure is 64KB short of what AH=88h reported.
+- All three adapters (§39.9), because the line is drawn text like any other
+  and clips at `[tm_ylim]` — and on a narrow screen it is the **second
+  column** that has to hold it (§28.1).
+- `make clean && make`: both geometries, zero warnings, every §15.1 guard
+  still passing, and `make check-images` clean.
 
 ## 42. Paint — the seventh package (apps/paint/paint.asm)
 
@@ -9214,6 +9252,39 @@ stream and *drains* the worker's in-flight feed pass before the blob is freed
 or replaced, because a mixer mid-fetch from a grant that has just been handed
 back reads samples out of whatever claimed the memory next.
 
+## 45. Tracker — the tenth package (apps/tracker/tracker.asm)
+
+A four-channel ProTracker MOD player: `tracker.asm` (shell, menus, the file
+dialog completion proc), `trkplay.inc` (the loader and the mixer) and
+`trkui.inc` (the FastTracker II-style fullscreen interface). Prefix `trk_`,
+mixer prefix `mp_`, UI prefix `tui_`. It ships with `BEVERLY.MOD` beside it on
+the apps disk, because a player with nothing to play is not a demonstration of
+anything — `os88disk.py` takes any non-`.o88` argument as a plain data file
+(§24).
+
+It is the most demanding client the API has, and it is the only thing in the
+tree that exercises three features at once:
+
+- **Ring mode** (§34.5, verb 0 with `AH` bit 0). Nothing else uses it. The
+  mixer worker stages at `ringbase + (total & mask)` and feeds a *delta*
+  forever, so a module plays with no close-and-reopen seam and out of a grant
+  far smaller than the song.
+- **`OSAPI_FILE_READBIG`**, which exists because real MODs exceed
+  `dskw_read`'s 64KB ceiling: `BEVERLY.MOD` is 116KB, and the destination
+  advances by SEGMENT so it lands in one call. The Disk window shows its size
+  as 65535 — the directory listing's size field is 16 bits and saturates —
+  which is a display limit and not a load limit; the chain walk uses the real
+  length.
+- **The mixer is a worker task** (§20.6), so the GUI stays live while it
+  plays, and `OSAPI_GFX_DBUF` plus `OSAPI_GFX_SCROLL` keep the fullscreen
+  pattern view from tearing under it.
+
+The module blob is a **heap claim**, sized from `OSAPI_MEM_AVAIL` and capped
+at 128KB. Its lifetime is the fence that matters: `trk_play_stop` closes the
+stream and *drains* the worker's in-flight feed pass before the blob is freed
+or replaced, because a mixer mid-fetch from a grant that has just been handed
+back reads samples out of whatever claimed the memory next.
+
 A FastTracker II-styled 4-channel ProTracker MOD player over the published
 package ABI. Prefix `trk_` (`mp_` for the replayer in `trkplay.inc`, `tui_`
 for the drawing in `trkui.inc` — `ui_` is the kernel's), embedded icon, one
@@ -9223,6 +9294,13 @@ the two kernel amendments it rides on: the worker-safe stream verbs + ring
 mode (§20.3/§34.5) and `dskw_readbig` (§18.4). On the apps
 disks it lives in the `APPS` folder (§24), appended after paint, with
 `BEVERLY.MOD` after it.
+
+**Ported, not written here.** `trkplay.inc` and `trkui.inc` are byte-identical
+to the tree this came from and `tracker.asm` differs by 57 lines — the
+`retf` → `ret` conversion (§20.8 rule 5) and the memory API (KB not paragraphs,
+the answer in DX not AX). Everything below is that tree's description corrected
+where this one contradicts it, and every place that took a real correction —
+§45.3, §45.4, §45.8, §45.11 — is the memory model.
 
 ### 45.1 Windowed is a splash; the app lives fullscreen
 
@@ -9304,10 +9382,10 @@ up after a stall without starving the machine.
 
 ### 45.3 Loading goes through readbig, because real MODs are big
 
-`OSAPI_FILE_READBIG` exists because `dskw_read`'s CX is a
+`OSAPI_FILE_READBIG` (slot 0x01D0) exists because `dskw_read`'s CX is a
 16-bit byte count: a file ≥ 65,536 bytes was `FERR_BIG` *unconditionally*,
 and BEVERLY.MOD is 116,085 bytes. The load path is the whole client story
-of §50.3 + §18.4 + §38 in one proc (`trk_fdone`, the fdlg completion):
+of §50 + §18.4 + §38 in one proc (`trk_fdone`, the fdlg completion):
 
 1. Copy the ES:DI name out **first** — ES is `KERNEL_SEG` and the buffer
    dies with the call (§38.6).
@@ -9317,15 +9395,13 @@ of §50.3 + §18.4 + §38 in one proc (`trk_fdone`, the fdlg completion):
    grant: no reader may trust a blob about to move, and on the worker
    path the drain is what enforces that rule.
 3. `OSAPI_MEM_AVAIL` → take `min(largest run, 128 KB)` in ONE
-   `OSAPI_MEM_CLAIM` (the one-block rule, §50.3). **This fork counts KB and
-   answers in `DX`**, where `main` counts paragraphs and answers in `AX`
-   (docs/PORTING.md §7) — the cap is the same 128KB either way. Refusal is a
-   status-line
+   `OSAPI_MEM_CLAIM` (the one-block rule, §50.3). Refusal is a status-line
    "Out of memory", not an abort.
 4. `OSAPI_FILE_READBIG` with ES = the grant, DX:CX = its byte capacity.
-   `FERR_BIG` reads back as "File too big" — the honest answer on a 512KB
-   machine, whose ~107KB arena a 116KB module simply does not fit; the
-   5.6KB TEST.MOD loads everywhere the arena exists.
+   `FERR_BIG` reads back as "File too big" — a much rarer answer here than
+   on the fork this section came from, because the heap is not a fixed
+   arena: a 640KB machine measures 566KB of it and a 512KB machine about
+   439KB, so a 116KB module fits both with room to spare (§45.8).
 5. `mp_load` validates the hostile bytes (the §45.5 checklist) and answers
    CF=1 with its own verdict string, which goes straight to the status
    line; success starts playback inline — pre-mix, stage, ring open, all
@@ -9345,29 +9421,42 @@ Four stores, none of them guessed:
 - **The package segment** — image + bss, including the mixer's 65×256
   volume table (16,640 bytes, built at load: `vt[vol][b] = (int8)b·vol»6`)
   and the 2048-byte `mp_outbuf`.
-- **The module blob** — one arena grant (§50.3), sized
-  `min(largest free run, 128 KB)` from `MEM_AVAIL` at load time
+- **The module blob** — one heap claim (§50), sized
+  `min(largest free run, 128 KB)` **in KB** from `MEM_AVAIL` at load time
   regardless of the module's actual size, and held until the next load or
-  teardown. Consequence, stated honestly: while any module is loaded the
-  Tracker's blob grant occupies the largest free arena run (up to 128KB —
-  on a 512KB machine effectively all remaining arena), so other package
-  loads and other instances' `OSAPI_MEM_CLAIM` grants may refuse "Out of
-  memory" until the Tracker instance closes. (A size-fitted grant would
-  need the fdlg completion to carry the entry's 32-bit size, or a shrink
-  primitive — `MEM_FREE` + re-alloc after the read is unsafe, since
-  first-fit may relocate the base.) The grant holds the file verbatim;
+  teardown. Consequence, stated honestly: while a module is loaded the
+  Tracker's claim holds up to 128KB that other packages and other instances
+  then cannot have. That is a far smaller consequence here than on the fork
+  this section came from, where the same claim was effectively *all* the
+  remaining arena on a 512KB machine; against a 566KB heap it is a fifth.
+
+  **The over-claim is fixable here and is not fixed.** It exists because the
+  file dialog's completion does not carry the entry's 32-bit size, and
+  because on the other fork freeing and re-claiming after the read was
+  unsafe — first fit may hand back a different base. That second reason
+  **does not hold on this fork**: `OSAPI_MEM_REGROW` (§50.3) shrinks a claim
+  **in place**. Trimming the blob to the byte count `readbig` already
+  reports would cost one call and hand back most of 128KB on every small
+  module. Recorded rather than done: it changes the behaviour of the largest
+  package in the tree and belongs in its own commit, not in a merge.
+
+  The claim holds the file verbatim;
   samples are addressed through
   normalized per-sample bases (`seg = blob_seg + (start >> 4)`), so every
   sample is reachable inside one 8086 segment window, and pattern *p* lives
   at segment `blob_seg + 67 + 64·p`, offset 12 — nothing ever offsets more
   than 64KB from one base, which is how a 116KB blob is walked on an 8086.
-- **The stream ring** — one 16KB `SND_SEG` pool grant (verb 7).
+- **The stream ring** — one 16KB grant out of the **sound driver's** staging
+  pool (verb 7, §34.6). Not a kernel segment: the pool belongs to whichever
+  driver attached and **its size is not a constant an app may assume** — on
+  this fork it is 20,480 bytes, where the other pinned a 64KB `SND_SEG`
+  (§2.2, retired).
 - Nothing else: no frame buffer, no second window.
 
 All three grants are stamped with the instance and force-freed at teardown
-(§50.3/§34.3), which is why the close box needs no code at all: the worker
+(§50.2/§34.3), which is why the close box needs no code at all: the worker
 dies inside `OSAPI_TASK_ALIVE`, and the kernel sweeps the stream, the pool
-grant and the arena grant behind it.
+grant and the heap claim behind it.
 
 ### 45.5 The replayer is ProTracker, validated hostile
 
@@ -9481,10 +9570,14 @@ edge-triggered, so no deadline machinery is needed.
   view, scrolling and the whole fullscreen surface still work. No silent
   tick-driven fake playback is attempted, and no FM fallback in v1 (FM is
   now worker-whitelisted — that is future work, not a promise).
-- **512KB machine: big modules refused.** The ~107KB arena cannot hold a
-  116KB blob; `FERR_BIG`/"Out of memory" on the status line is the answer,
-  and small modules play. On the 256KB floor the package refuses to load
-  like every package (§50 — the heap is what a package claims from here).
+- **512KB machine: big modules play.** The one item in this list the fork
+  *removed* rather than inherited. The other fork refused a 116KB blob
+  there, because its ~107KB arena could not hold one. The claim heap is not
+  a fixed arena — it is everything above the kernel — so a 640KB machine
+  measures 566KB and a 512KB machine about 439KB, and the largest MOD this
+  player accepts fits either. `FERR_BIG` / "Out of memory" is still the
+  answer when the heap genuinely cannot fund the claim; it is no longer the
+  answer on an ordinary machine.
 - **Mono adapters: the band carries the look.** The blue-on-black pattern
   text distinction dies by design; the inverted band, the bevels and the
   MUTE flags carry every state in shape, not hue.
@@ -9567,10 +9660,14 @@ buffer: while it is armed, a worker draw burst renders to RAM and
 `gfx_unlock` flushes the finished frame once. **View ▸ `Smooth: On/Off`**
 (the relabeling idiom; key **S**; default Off — the flush cost is opt-in)
 makes the tracker arm it via
-`OSAPI_GFX_DBUF` **on entering fullscreen** and hand back the user's previous
+slot 0x01D8 **on entering fullscreen** and hand back the user's previous
 state on leaving; while Smooth is off, or where the slot refuses (mono
-adapters — where the software renderer already IS the direct path — and
-< 500KB machines), fullscreen draws exactly as before. Two recorded
+adapters — where the software renderer already IS the direct path — or a
+heap that cannot fund the 150KB claim right now), fullscreen draws exactly
+as before. That second refusal is a **live** condition on this fork, not a
+boot-time verdict: `bb_avail` is about the adapter alone and the memory
+question is asked of the heap every time the buffer is armed (§32), so
+Smooth can be refused with Paint open and granted after it closes. Two recorded
 consequences: the flush costs VRAM bandwidth (the §32 ~24× figure), which
 is why the toggle exists — a slow-bus VGA machine can decline, and XT
 mode's band-relight keeps the dirty rect small enough that the two modes

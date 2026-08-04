@@ -1,22 +1,19 @@
 # os8088
 
-> ### This is the `experimental` branch — it has diverged from `main`
+> ### The `main` fork has been merged into this branch
 >
-> `experimental` and `main` are two forks that share history up to `2558ac0` and
-> have not been reconciled. **A `.o88` package built for one will not run on the
-> other**: the kernel segment, the callback convention and most API slot numbers
-> all differ.
+> `experimental` and `main` shared history up to `2558ac0` and diverged for a
+> long time. `main` ended at `b401eda` and is merged in — after an audit that
+> went through it capability by capability, so that nothing was lost to a merge
+> which deliberately kept this tree's files. **Work written against `b401eda`
+> still needs porting, not merging**: the kernel segment, the callback
+> convention and the API slot numbers above `0x01B0` all differ.
 >
-> - **[BRANCH-DIFFERENCES.md](BRANCH-DIFFERENCES.md)** — what diverged. A short
->   list of the twelve facts you need before touching either tree, then the same
->   material at length with the reasoning attached.
-> - **[docs/PORTING.md](docs/PORTING.md)** — how to move an application between
->   the two. Full side-by-side slot table, the callback and geometry
->   conversions, the memory and sound differences, a checklist in each
->   direction, and a worked example.
->
-> Section numbers in `SPEC.md` disagree between the branches from §35 upward —
-> do not cite them across forks.
+> - **[docs/PORTING.md](docs/PORTING.md)** — how to bring that work forward.
+>   The git mechanics, the then-and-now slot table, the callback and memory
+>   conversions, a checklist and a worked example.
+> - **[BRANCH-DIFFERENCES.md](BRANCH-DIFFERENCES.md)** — what diverged and how
+>   the merge resolved each difference, plus the audit itself.
 
 ## Contributing
 

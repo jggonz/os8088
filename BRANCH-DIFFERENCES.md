@@ -1,31 +1,39 @@
-# `experimental` vs `main` — what diverged
+# `experimental` vs `main` — what diverged, and how it was resolved
 
-Two forks of os8088 that share history up to **`2558ac0`** ("The same binary on
-a 286 and two 386s"). `main` carries six squash-merged pull requests;
-`experimental` carries its own line of development and has since taken part of
-`main` back — the API slot numbering, `OSAPI_WM_GEOM`, `OSAPI_ABOUT_SET`, the
-§41 extended-memory store and the foldered apps disk. Neither is a subset of
-the other, and **a `.o88` package built for one branch still will not run on
-the other** — the slot numbers agree now, but the kernel segment and the
-callback convention do not. See [docs/PORTING.md](docs/PORTING.md).
+**The fork is over.** Two lines of os8088 shared history up to **`2558ac0`**
+("The same binary on a 286 and two 386s") and diverged for six squash-merged
+pull requests on `main` and a long line of development here. `main` ended at
+**`b401eda`** and has been merged into this tree — not mechanically: the merge
+kept this tree's files wholesale, and what justifies that is [the parity
+audit](#the-parity-audit--everything-main-has-that-this-fork-does-not) below,
+which went through `main` capability by capability and found seven things
+missing. All seven were ported first.
 
-This file has three parts: [the short list](#the-short-list), which is the set
-of facts you need before touching either tree; [the long
-list](#the-long-list), the same material with the reasoning attached; and
-[the parity audit](#the-parity-audit--everything-main-has-that-this-fork-does-not),
-a one-directional sweep for anything `main` has that this fork lacks, with a
-recommendation on what to port.
+This file is now the **record of what diverged and what the merge did with each
+difference**, which is worth keeping for two reasons: half the differences are
+still live design decisions in this tree, and anyone bringing forward work
+written against `b401eda` needs to know which of them will bite. That
+procedure is [docs/PORTING.md](docs/PORTING.md).
 
-Written from `experimental`. `main` is not modified by this document.
+Three parts: [the short list](#the-short-list), the facts you need before
+touching this tree; [the long list](#the-long-list), the same material with the
+reasoning; and [the parity audit](#the-parity-audit--everything-main-has-that-this-fork-does-not),
+the sweep that made the merge safe.
+
+Throughout, **`main` means `main` as it stood at `b401eda`** — a past state,
+not a branch someone is still committing to. The present tense in the long list
+is the tense it was written in and has been left alone, because the comparisons
+are still the reason this tree looks the way it does.
 
 ---
 
 ## The short list
 
-> **Partially resynced.** `experimental` has since taken four things back from
-> `main`: the API slot numbering, `OSAPI_WM_GEOM`, `OSAPI_ABOUT_SET` and the
-> §41 extended-memory store, plus the foldered apps disk. What is left below
-> is the gap that remains.
+> **Resynced, then merged.** This tree took back the API slot numbering,
+> `OSAPI_WM_GEOM`, `OSAPI_ABOUT_SET`, the §41 extended-memory store and the
+> foldered apps disk; then the audit found and closed the last seven gaps; then
+> `main` was merged in. What is below is what still *differs*, which is now a
+> list of this tree's own decisions rather than a list of things to reconcile.
 
 **ABI — a `.o88` still cannot cross**
 
@@ -405,7 +413,7 @@ that; then the held and reserved cells were dropped altogether — the branches
 are merging, so a number meaning the same thing on both trees stopped being
 worth 88 bytes of `stc`/`retf`. Everything above 0x01B0 moved down. `main`'s
 0x01F0/0x01F8 are `GFX_DBUF`/`GFX_SCROLL`; ours are at 0x01D8/0x01E0, with the
-same contracts. See docs/PORTING.md §3 for the two tables side by side.
+same contracts. See docs/PORTING.md §4 for the two tables side by side.
 
 ### B. Application by application
 

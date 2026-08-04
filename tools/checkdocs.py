@@ -42,12 +42,13 @@ CROSS_FORK = {"BRANCH-DIFFERENCES.md", "docs/PORTING.md"}
 MAIN_ONLY = {
     "2.5",      # the package arena
     "2.6",      # the arena's grant map (cmem.inc)
-    "5.5",      # gfx_scroll
     "20.7",     # memory a package asks for
-    "20.8",     # Forbidden (binding)
-    "41.7",     # xmem testing
-    "41.10",    # xmem acceptance
 }
+# All three are the arena memory model, which this tree replaced with the claim
+# heap (SPEC.md 50) and will never have. Everything else that was in this set
+# has been written here instead: 5.5 gfx_scroll, 20.8 Forbidden, 41.7 and 41.10
+# xmem testing and acceptance. Shrink it further only by writing a section, not
+# by adding an exemption.
 
 
 def main() -> int:
