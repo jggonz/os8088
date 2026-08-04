@@ -188,6 +188,12 @@ inside 8237 DMA physical page 3, so every buffer in it is
 0x3000..0xFFFF   staging pool, ~52KB             (granted to instances, §34.6)
 ```
 
+One pinned annexation: a **wide-rate output stream** (> 22,222 Hz, §34.5)
+widens the double buffer to 2 × 4 KB — 0x0000..0x1FFF — borrowing the
+record ring's first 4 KB, which the router's half-duplex rule (§34.3)
+proves idle for as long as the stream is open. Still wholly inside 8237
+page 3; the ring's bytes are kernel-owned either way.
+
 Packages never hold an ES pointer into the segment — data crosses through
 kernel-staged copies in both directions (§34.6, the `dsk_get_dir` idiom of
 §18). The Task Manager's RAM figure carries the segment the way it carries
@@ -3631,7 +3637,7 @@ caller holding several grants is unambiguous by construction):
 
 | verb | name | contract |
 |------|------|----------|
-| 0 | open-out | DX = rate Hz (4000..22222, the §34.5 TC range), SI = grant offset, CX = valid bytes staged so far (> 0, inside the caller's grant), **AH = open flags** (verb 0 carries no handle, so the byte is free): bit 0 = `SND_OPENF_RING` opens the stream in **ring mode** (§34.5) — SI is then the ring's base, the ring length RL = grant end − SI must be a **power of two in 4096..32768** (else err 7), and CX (the initial valid total) must satisfy one half ≤ CX ≤ RL (a ring never pads, so the DSP may not start on a half no fill can complete). Every pre-ring caller loads `mov ax, 0x0000` and gets linear mode unchanged. Spawns the kernel refill task (§34.5); out AL = 0 with AH = handle, else AX = err. Streams must be fully staged before playback (§34.5) — in linear mode, CX short of the grant **is** the caller explicitly accepting progressive-feed risk; a ring stream is progressive by construction. |
+| 0 | open-out | DX = rate Hz (4000..22222 on any DSP — the §34.5 TC range — or up to 44,100 on a DSP ≥ 4.00, the §34.5 wide-rate regime; above the machine's ceiling is err 2, never a clamp), SI = grant offset, CX = valid bytes staged so far (> 0, inside the caller's grant), **AH = open flags** (verb 0 carries no handle, so the byte is free): bit 0 = `SND_OPENF_RING` opens the stream in **ring mode** (§34.5) — SI is then the ring's base, the ring length RL = grant end − SI must be a **power of two in 4096..32768** (else err 7), and CX (the initial valid total) must satisfy one half ≤ CX ≤ RL (a ring never pads, so the DSP may not start on a half no fill can complete). Every pre-ring caller loads `mov ax, 0x0000` and gets linear mode unchanged. Spawns the kernel refill task (§34.5); out AL = 0 with AH = handle, else AX = err. Streams must be fully staged before playback (§34.5) — in linear mode, CX short of the grant **is** the caller explicitly accepting progressive-feed risk; a ring stream is progressive by construction. |
 | 1 | feed | AH = handle, CX = new total valid length — extends a progressively staged stream; an underrun-paused stream resumes (§34.5). Linear bounds: never smaller, never past the grant's end. Ring bounds (§34.5): counters are free-running 16-bit, so the checks are subtractions — `new_total − old_total < 0x8000` (monotonic forward) AND `new_total − fed ≤ RL` (never overwrite bytes the refill has not copied out yet). Out AX = 0 / err. **Any-task** (see the context rule below): the hcheck, the direction check, both bound checks and the `sbl_total` store are one `pushf`/`cli`…`popf` window (§34.3), so a caller preempted against a close+reopen can never validate against one stream and store into its successor. |
 | 2 | close | AH = handle; halts playback, frees the stream record (its refill task exits at the next wake). Out AX = 0 / stale. |
 | 3 | status | AH = handle; out AX = state, DX = bytes consumed (capped at the valid length; input: bytes captured into the grant; **ring mode: free-running mod 65536** — the owner works in deltas) — **this poll is the notification mechanism**: callbacks check it; there are no sound events (§34.3). States, pinned: **0 playing (input: recording), 1 underrun-paused (§34.5 — data ran out or the refill starved; resumable by a feed. Input, §34.6: capacity full, or the drain starved), 2 ended (stopped by the §34.5 watchdog), 0FFFFh stale.** A fully-staged clip that plays out reads underrun-paused with DX = its length — the owner's cue to close, exactly as a capacity-full capture reads paused with DX = its capacity; "ended" is reserved for the watchdog stop. Any-task; the hcheck and the two loads are one `pushf`/`cli` window, so a stale handle reads stale (0FFFFh), never the successor stream's state. |
@@ -6923,6 +6929,26 @@ end.
   construction. Rates are quantised via TC = 256 − 1e6/rate; ceilings
   honoured (out ≤ ~22 kHz; in ≤ 13 kHz on 1.x / 15 kHz on 2.0 normal
   mode). **Every DSP poll (2xCh busy, 2xEh ready) carries a timeout.**
+- **The wide-rate regime (output only, DSP ≥ 4.00): 22,223..44,100 Hz.**
+  Below a 4.x DSP the ceiling stays 22,222 and a higher request is err 2 —
+  never a clamp. On a 4.x part the TC command gives way to **41h** (output
+  sample rate in Hz, two bytes big-endian) and the legacy 48h+1Ch start
+  gives way to **C6h, mode 00h (8-bit mono unsigned), block length − 1
+  lo/hi**; halt (D0h), continue (D4h) and the DAh block-edge exit are
+  unchanged, which is why close and underrun-resume need no second path.
+  Two derived facts are binding. The **halves widen to 2 × 4 KB**: a 2 KB
+  half is 46 ms at 44.1 kHz — less than one scheduler tick, so the
+  tick-paced refill task would underrun by architecture; the widened
+  buffer annexes the record ring's first 4 KB (§2.2), which is **free by
+  construction** — the router's one-stream-record half-duplex rule (§34.3)
+  means no capture exists while an output stream is open. And every
+  half-sized quantity is runtime state (`[sbl_half]`), not the assembly
+  constant: the ISR's consumed step, the fill/pad sizes, the DMA count,
+  the DSP block length and the watchdog period all follow the open —
+  except the single-cycle arm, which stays 2 KB because a DSP < 2.00 can
+  never open wide. Ring mode composes: fills take whole *kernel* halves,
+  so a wide ring feeder keeps ≥ 4,096 bytes of lead (§20.3 verb 0's
+  CX floor is one half for the same reason).
 - **The staged rule (binding), and the floppy truth behind it**: the DMA
   and `sbl_isr` keep running during int 13h windows (`sch_lock` does not
   mask interrupts), but the refill task does not — task switching pauses
@@ -9433,6 +9459,7 @@ every 16th frame (§45.3's dialog-cancel rule).
 | L | Load… (the Standard File dialog) |
 | F | Fullscreen toggle |
 | X | XT mode toggle (§45.9 — also File ▸ the relabeling menu item) |
+| R | Cycle the sample rate 11 → 22 → 44 kHz (§45.10 — also the Rate menu) |
 | Esc | Exit fullscreen (windowed: ignored) |
 
 The `or al, al` keypad gate of §44.2 applies verbatim: the numeric keypad
@@ -9504,3 +9531,18 @@ stuttering audio with a live UI, never a wedge. Verified in QEMU (both
 modes play the §24 test module at the same pitch — the step math is
 rate-invariant); the wall-clock claim itself is 86Box `make xt-sound`
 territory, cycle-counted here and honestly not QEMU-provable.
+
+### 45.10 The Rate menu — 11 / 22 / 44 kHz for the other end of the range
+
+The XT trades fidelity for cycles; a 286/386 has cycles to spend, and the
+**Rate** menu spends them: `11 kHz` (default, requested as 11,000),
+`22 kHz` (22,050) and `44 kHz` (44,100 — the §34.5 wide-rate regime, so a
+DSP ≥ 4.00; on an older card the open refuses err 2 and the status line
+says so, the `bb_avail` honesty pattern). The active item is its own
+`MENU_DIS`-disabled twin — the Solitaire Deal-menu radio idiom — and the
+**R** key cycles the selection for fullscreen reach. A rate change while
+playing stops playback first (the §45.2 drain), exactly like the XT
+toggle; XT mode overrides the selection with its own 5,500 Hz while it is
+on, and the selection returns when it is off. The mixer's cost is linear
+in the rate: 44 kHz is 4× the default's samples — chosen for machines
+where the default is loafing, refused honestly where it is not.

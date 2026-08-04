@@ -116,6 +116,10 @@ TRK_RATE    equ 11000               ; open rate request, Hz (kernel quantizes
                                     ; via the TC; mp_gen mixes to the same)
 TRK_RATE_XT equ 5500                ; XT mode's rate (SPEC.md 45.9): halves
                                     ; the mixer's per-second sample budget
+TRK_RATE22  equ 22050               ; Rate menu (SPEC.md 45.10): still the
+                                    ; classic TC regime, any DSP
+TRK_RATE44  equ 44100               ; the 34.5 wide-rate regime - DSP >= 4
+                                    ; only; an older card refuses err 2
 TRK_MAXFEED equ 6                   ; halves mixed per worker wake, at most -
                                     ; bounds the lock-free burst so a wake
                                     ; never mixes more than ~1.1s of audio
@@ -298,6 +302,10 @@ trk_onkey:
     je .xt
     cmp bl, 'X'
     je .xt
+    cmp bl, 'r'
+    je .rcyc
+    cmp bl, 'R'
+    je .rcyc
     cmp bl, '1'
     jb .out
     cmp bl, '4'
@@ -313,6 +321,15 @@ trk_onkey:
     jmp .out
 .xt:
     call trk_xt_toggle
+    jmp .out
+.rcyc:
+    mov al, [trk_rsel]              ; R cycles 11 -> 22 -> 44 -> 11
+    inc al                          ; (SPEC.md 45.10 - fullscreen reach)
+    cmp al, 3
+    jb .rset
+    xor al, al
+.rset:
+    call trk_rate_set
     jmp .out
 .play:
     mov al, 0
@@ -400,6 +417,8 @@ trk_oncmd:
     jc .out
     or bh, bh
     jz .file
+    cmp bh, 2                       ; the Rate menu (SPEC.md 45.10)
+    je .rate
     cmp bh, 1
     jne .out
     or bl, bl                       ; View > Fullscreen: toggle
@@ -420,6 +439,10 @@ trk_oncmd:
     jmp .out
 .fopen:
     call trk_do_open
+    jmp .out
+.rate:
+    mov al, bl                      ; Rate > 11/22/44 kHz (SPEC.md 45.10)
+    call trk_rate_set
 .out:
     pop di
     pop si
@@ -699,10 +722,15 @@ trk_play:
     mov [trk_grant], si
     mov byte [trk_ghave], 1
 .granted:
-    mov ax, TRK_RATE                ; the mode picks the rate (SPEC.md 45.9)
-    cmp byte [mp_xt], 0
-    je .rate
+    cmp byte [mp_xt], 0             ; XT mode overrides the Rate menu with
+    je .rsel                        ; its own 5,500 Hz (SPEC.md 45.9/45.10)
     mov ax, TRK_RATE_XT
+    jmp .rate
+.rsel:
+    mov bl, [trk_rsel]              ; the Rate menu's pick: 0/1/2
+    xor bh, bh
+    shl bx, 1
+    mov ax, [trk_rates + bx]
 .rate:
     mov [mp_mixrate], ax
     mov al, [trk_pmode]
@@ -710,11 +738,16 @@ trk_play:
     mov word [trk_total], 0
     call trk_mix_stage              ; pre-mix two halves at ring offsets
     call trk_mix_stage              ; 0 and 2048: the open's initial CX
+    cmp word [mp_mixrate], 22222    ; the wide regime plays 4KB kernel
+    jbe .preok                      ; halves (SPEC.md 34.5): pre-roll two
+    call trk_mix_stage              ; more so the open covers both wide
+    call trk_mix_stage              ; halves, not one
+.preok:
     mov al, 0                       ; verb 0: open-out, ring mode - the flag
     mov ah, SND_OPENF_RING          ; rides AH (verb 0 carries no handle,
                                     ; SPEC.md 20.3; DX stays the plain rate)
     mov si, [trk_grant]
-    mov cx, TRK_HALF * 2            ; initial valid total
+    mov cx, [trk_total]             ; initial valid total = the pre-roll
     mov dx, [mp_mixrate]            ; the mode's rate, set above
     call OSAPI_SND_STREAM           ; out AL = 0 with AH = handle, else err
     or al, al
@@ -728,6 +761,10 @@ trk_play:
 .ofail:
     call mp_stop
     mov si, trk_s_snderr
+    cmp ax, 2                       ; err 2 = rate refused: the 44 kHz pick
+    jne .ofmsg                      ; on a pre-4.x DSP (SPEC.md 45.10)
+    mov si, trk_s_norate
+.ofmsg:
     call tui_msg
     jmp .out
 .noload:
@@ -834,6 +871,60 @@ trk_reap:
 trk_play_stop:
     call trk_stream_close
     call mp_stop
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_rate_set - pick the Rate menu's sample rate (AL = 0/1/2 = 11/22/44
+; kHz; SPEC.md 45.10). UI context, lock held (key R or the Rate menu).
+; Playing stops first, like the XT toggle; the pick lands at the next Play.
+; The active item becomes its own MENU_DIS twin (the radio idiom) and
+; MENU_SET re-runs - the kernel holds a COPY of the set (SPEC.md 12.2).
+; -----------------------------------------------------------------------------
+trk_rate_set:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    cmp al, [trk_rsel]
+    je .done                        ; same pick: nothing to do
+    mov [trk_rsel], al
+    cmp byte [mp_playing], 0
+    je .idle
+    call trk_play_stop              ; drains the worker (SPEC.md 45.2)
+.idle:
+    cmp byte [trk_sopen], 0         ; a drained ring left open by F00/stop
+    je .menu                        ; paths closes before the rate changes
+    call trk_stream_close
+.menu:
+    xor si, si                      ; repoint the three items: the active
+.mi:                                ; one gets its disabled twin
+    mov bx, [trk_rplain + si]
+    mov al, [trk_rsel]
+    xor ah, ah
+    shl ax, 1
+    cmp ax, si
+    jne .plain
+    mov bx, [trk_rdis + si]
+.plain:
+    mov [trk_mi_rate + si], bx
+    add si, 2
+    cmp si, 6
+    jb .mi
+    mov bx, [trk_win]
+    mov si, trk_menus
+    call OSAPI_MENU_SET
+    mov bl, [trk_rsel]
+    xor bh, bh
+    shl bx, 1
+    mov si, [trk_rmsg + bx]
+    call tui_msg
+.done:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1035,6 +1126,7 @@ trk_tpl:
     OS88_MENUSET trk_menus, trk_m_name, trk_oncmd
         OS88_MENU trk_m_file, trk_mi_file, 2
         OS88_MENU trk_m_view, trk_mi_view, 1
+        OS88_MENU trk_m_rate, trk_mi_rate, 3
     OS88_MENUSET_END trk_menus
 
 trk_m_name:  db 'Tracker', 0
@@ -1048,6 +1140,24 @@ trk_s_xton:  db 'XT Mode: On', 0
 trk_m_view:  db 'View', 0
 trk_mi_view: dw trk_s_fullm
 trk_s_fullm: db 'Fullscreen', 0
+trk_m_rate:  db 'Rate', 0
+trk_mi_rate: dw trk_s_r11d, trk_s_r22, trk_s_r44 ; the active pick is its
+                                        ; own MENU_DIS twin - the radio
+                                        ; idiom (SPEC.md 45.10); repointed
+                                        ; by trk_rate_set + MENU_SET
+trk_s_r11:   db '11 kHz', 0
+trk_s_r11d:  db MENU_DIS, '11 kHz', 0
+trk_s_r22:   db '22 kHz', 0
+trk_s_r22d:  db MENU_DIS, '22 kHz', 0
+trk_s_r44:   db '44 kHz', 0
+trk_s_r44d:  db MENU_DIS, '44 kHz', 0
+trk_rplain:  dw trk_s_r11, trk_s_r22, trk_s_r44
+trk_rdis:    dw trk_s_r11d, trk_s_r22d, trk_s_r44d
+trk_rates:   dw TRK_RATE, TRK_RATE22, TRK_RATE44
+trk_rmsg:    dw trk_s_m11, trk_s_m22, trk_s_m44
+trk_s_m11:   db 'Rate: 11 kHz - Enter plays', 0
+trk_s_m22:   db 'Rate: 22 kHz - Enter plays', 0
+trk_s_m44:   db 'Rate: 44 kHz - Enter plays', 0
 
 trk_ttl:     db 'Tracker', 0
 
@@ -1062,6 +1172,7 @@ trk_s_ioerr:  db 'Disk error', 0
 trk_s_snderr: db 'Sound open failed', 0
 trk_s_xtmon:  db 'XT mode on - Enter plays', 0
 trk_s_xtmoff: db 'XT mode off - Enter plays', 0
+trk_s_norate: db '44 kHz needs a DSP 4.x card', 0
 
 ; =============================================================================
 ; The other two thirds of the package
@@ -1097,6 +1208,9 @@ trk_s_xtmoff: db 'XT mode off - Enter plays', 0
                                     ; on the next UI event (trk_reap)
     TRKW trk_total                  ; free-running total bytes mixed (mod 64K)
     TRKB trk_halves                 ; halves fed this wake (bounds the burst)
+    TRKB trk_rsel                   ; the Rate menu's pick (SPEC.md 45.10):
+                                    ; 0/1/2 = 11/22/44 kHz; bss zeroes to
+                                    ; the 11 kHz default
     TRKB trk_mixing                 ; the worker is inside a trk_feed pass -
                                     ; trk_stream_close drains it before any
                                     ; UI-task touch of mp_* state or the blob

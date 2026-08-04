@@ -310,14 +310,29 @@ sbl_arm_rec:
 ; -----------------------------------------------------------------------------
 sbl_hw_start:
     push ax
+    push bx
+    cmp byte [sbl_wide], 0      ; the wide-rate regime (SPEC.md 34.5, DSP
+    je .tc                      ; >= 4.00): 41h takes the rate in Hz,
+    mov al, 0x41                ; big-endian, in place of the TC
+    call sbl_dsp_wr
+    mov al, [sbl_rate+1]
+    call sbl_dsp_wr
+    mov al, [sbl_rate]
+    call sbl_dsp_wr
+    jmp .spk
+.tc:
     mov al, 0x40                ; time constant
     call sbl_dsp_wr
     mov al, [sbl_tc]
     call sbl_dsp_wr
+.spk:
     mov al, 0xD1                ; speaker (DAC) on
     call sbl_dsp_wr
     cmp byte [sbl_auto], 0
     je .single
+    mov bx, [sbl_half]          ; BX = DMA count = 2*half - 1
+    shl bx, 1
+    dec bx
     pushf
     cli
     mov al, 0x05
@@ -327,9 +342,9 @@ sbl_hw_start:
     out 0x02, al                ; address 0x0000 (SND_SEG:0)
     out 0x02, al
     out 0x0C, al                ; flip-flop clear
-    mov al, (2*SBL_HALF-1) & 0xFF
+    mov al, bl
     out 0x03, al                ; count = the whole ring - 1
-    mov al, (2*SBL_HALF-1) >> 8
+    mov al, bh
     out 0x03, al
     mov al, 0x59                ; auto-init, read, channel 1
     out 0x0B, al
@@ -338,19 +353,35 @@ sbl_hw_start:
     mov al, 0x01
     out 0x0A, al                ; unmask
     popf
+    mov bx, [sbl_half]          ; BX = DSP block length - 1
+    dec bx
+    cmp byte [sbl_wide], 0
+    je .legacy
+    mov al, 0xC6                ; wide start: C6h, mode 00h (8-bit mono
+    call sbl_dsp_wr             ; unsigned), block length - 1 lo/hi -
+    xor al, al                  ; halt/continue/DAh-exit are unchanged,
+    call sbl_dsp_wr             ; so close and resume need no second path
+    mov al, bl
+    call sbl_dsp_wr
+    mov al, bh
+    call sbl_dsp_wr
+    jmp .out
+.legacy:
     mov al, 0x48                ; DSP block size = one half
     call sbl_dsp_wr
-    mov al, (SBL_HALF-1) & 0xFF
+    mov al, bl
     call sbl_dsp_wr
-    mov al, (SBL_HALF-1) >> 8
+    mov al, bh
     call sbl_dsp_wr
     mov al, 0x1C                ; auto-init 8-bit DMA output
     call sbl_dsp_wr
     jmp .out
 .single:
     mov al, 0
-    call sbl_arm_half           ; half 0; the ISR re-arms from there
+    call sbl_arm_half           ; half 0 (always 2KB: a DSP < 2.00 can
+                                ; never open wide); the ISR re-arms
 .out:
+    pop bx
     pop ax
     ret
 
@@ -498,13 +529,15 @@ sbl_isr:
     cmp byte [sbl_str_dir], 0   ; input streams take the mirror half-swap
     jne .input
 
-    cmp byte [sbl_ring_on], 0   ; ring: counters are free-running and a
-    je .lincons                 ; half only plays after being filled WHOLE
-    add word [sbl_consumed], SBL_HALF   ; (consumed+2048 <= fed <= total by
-    jmp .consd                  ; construction - SPEC.md 34.5), so no cap
+    mov ax, [sbl_half]          ; the mode's block size (SPEC.md 34.5 -
+    cmp byte [sbl_ring_on], 0   ; wide streams play 4KB halves)
+    je .lincons                 ; ring: counters are free-running and a
+    add [sbl_consumed], ax      ; half only plays after being filled WHOLE
+    jmp .consd                  ; (consumed+half <= fed <= total by
+                                ; construction - SPEC.md 34.5), so no cap
 .lincons:
-    mov ax, [sbl_consumed]      ; one block played (cap at the valid length:
-    add ax, SBL_HALF            ; the tail of the last half is silence pad)
+    add ax, [sbl_consumed]      ; one block played (cap at the valid length:
+                                ; the tail of the last half is silence pad)
     cmp ax, [sbl_total]
     jbe .cons
     mov ax, [sbl_total]
@@ -900,8 +933,15 @@ sbl_v_open:
     jne .e1                     ; an exclusive clip holds the machine
     cmp dx, 4000                ; TC = 256 - 1e6/rate must fit a byte...
     jb .e2
-    cmp dx, 22222               ; ...and the 8-bit-out ceiling is honoured
-    ja .e2                      ; (SPEC.md 34.5) - err 2, never a clamp
+    mov word [sbl_hopen], SBL_HALF  ; the open's half width (a TEMP, the
+    cmp dx, 22222               ; sbl_ropen idiom - committed at .irqok)
+    jbe .ratok                  ; classic TC regime, any DSP
+    cmp dx, 44100               ; the wide-rate regime (SPEC.md 34.5):
+    ja .e2                      ; 22,223..44,100 on a DSP >= 4.00 only -
+    cmp byte [sbl_verhi], 4     ; err 2 below that, never a clamp
+    jb .e2
+    mov word [sbl_hopen], 2*SBL_HALF
+.ratok:
     or cx, cx                   ; nothing staged at all? (8086 conditional
     jnz .args                   ; jumps are short-only: .e7 sits past reach,
     jmp .e7                     ; so the refusals trampoline)
@@ -924,10 +964,10 @@ sbl_v_open:
     dec dx                      ; DX = candidate mask
     test ax, dx
     jnz .e7t                    ; not a power of two
-    cmp cx, ax                  ; ...and SBL_HALF <= CX <= RL: a ring never
+    cmp cx, ax                  ; ...and one half <= CX <= RL: a ring never
     ja .e7t                     ; pads, so the DSP may not start on a half
-    cmp cx, SBL_HALF            ; no fill can complete (SPEC.md 34.5 rule 3;
-    jae .rok                    ; CX > 0 was checked above)
+    cmp cx, [sbl_hopen]         ; no fill can complete (SPEC.md 34.5 rule 3;
+    jae .rok                    ; the WIDE half when the rate widened it)
 .e7t:
     jmp .e7
 .rok:
@@ -939,6 +979,19 @@ sbl_v_open:
     or al, al
     jz .e4                      ; no candidate confirmed: no usable card
 .irqok:
+    mov ax, [sbl_hopen]         ; commit the half width (safe pre-publish:
+    mov [sbl_half], ax          ; sbl_str_act == 0 held at .e1, so nothing
+    mov byte [sbl_wide], 0      ; live reads these)
+    cmp ax, SBL_HALF
+    je .tcrate
+    mov byte [sbl_wide], 1      ; wide (SPEC.md 34.5): 41h wants the rate
+    mov [sbl_rate], bx          ; in Hz, and the watchdog spans the wide
+    mov ax, 0x4666              ; blocks: (2*4096*18.2)/rate + 3 =
+    mov dx, 0x0002              ; 149,094/rate + 3
+    div bx
+    add ax, 3
+    jmp .wdset
+.tcrate:
     mov ax, 0x4240              ; TC = 256 - 1,000,000/rate (SPEC.md 34.5)
     mov dx, 0x000F
     div bx                      ; AX = 1e6/rate (45..250 by the range check)
@@ -948,6 +1001,7 @@ sbl_v_open:
     mov dx, 1                   ; (2*2048*18.2)/rate + 3 = 74547/rate + 3
     div bx
     add ax, 3
+.wdset:
     mov [sbl_wd_rst], ax
     mov [sbl_wd], ax
     mov [sbl_str_off], si       ; the stream record (not yet published)
@@ -970,7 +1024,7 @@ sbl_v_open:
     sub ax, [sbl_fed]
     cmp byte [sbl_ring_on], 0
     je .lin1
-    cmp ax, SBL_HALF            ; ...half 1: ring fills are whole halves
+    cmp ax, [sbl_half]          ; ...half 1: ring fills are whole halves
     jb .primed                  ; only, never padded (SPEC.md 34.5 rule 1)
     jmp .fill1
 .lin1:
@@ -1522,8 +1576,12 @@ sbl_fill_half:
     push es
     mov ax, SND_SEG
     mov es, ax
-    mov di, bx                  ; DI = half * 2048: the destination
-    mov cl, 11
+    mov di, bx                  ; DI = half * [sbl_half]: the destination
+    mov cl, 11                  ; (wide halves shift one more, SPEC.md 34.5)
+    cmp byte [sbl_wide], 0
+    je .dsh
+    inc cl
+.dsh:
     shl di, cl
     cmp byte [sbl_ring_on], 0
     jne .ring
@@ -1531,11 +1589,11 @@ sbl_fill_half:
     add si, [sbl_fed]
     mov cx, [sbl_total]
     sub cx, [sbl_fed]           ; CX = data remaining
-    cmp cx, SBL_HALF
+    cmp cx, [sbl_half]
     jbe .n
-    mov cx, SBL_HALF
+    mov cx, [sbl_half]
 .n:
-    mov dx, SBL_HALF            ; DX = silence pad after the data
+    mov dx, [sbl_half]          ; DX = silence pad after the data
     sub dx, cx
     add [sbl_fed], cx
     jmp .copy
@@ -1543,8 +1601,8 @@ sbl_fill_half:
     mov si, [sbl_fed]           ; physical = str_off + (fed & (RL-1))
     and si, [sbl_rmask]
     add si, [sbl_str_off]
-    mov cx, SBL_HALF            ; a whole half, guaranteed by the caller
-    add word [sbl_fed], SBL_HALF
+    mov cx, [sbl_half]          ; a whole half, guaranteed by the caller
+    add [sbl_fed], cx
     xor dx, dx                  ; and never a pad (SPEC.md 34.5 rule 1)
 .copy:
     cld
@@ -1607,8 +1665,12 @@ sbl_fill_guard:
     push es
     mov ax, SND_SEG
     mov es, ax
-    mov di, bx                  ; DI = half * 2048: the destination
-    mov cl, 11
+    mov di, bx                  ; DI = half * [sbl_half]: the destination
+    mov cl, 11                  ; (wide halves shift one more, SPEC.md 34.5)
+    cmp byte [sbl_wide], 0
+    je .dsh
+    inc cl
+.dsh:
     shl di, cl
     pushf
     cli
@@ -1621,24 +1683,24 @@ sbl_fill_guard:
     jz .bail                    ; BOTH modes; <= RL in ring mode by the
     cmp byte [sbl_ring_on], 0   ; feed bound)
     je .lin
-    cmp ax, SBL_HALF            ; ring: whole halves only, never pad -
+    cmp ax, [sbl_half]          ; ring: whole halves only, never pad -
     jb .bail                    ; short of one half is the normal underrun
     mov si, [sbl_fed]           ; path (SPEC.md 34.5 rule 1)
     and si, [sbl_rmask]         ; physical = str_off + (fed & (RL-1))
     add si, [sbl_str_off]
-    mov cx, SBL_HALF
+    mov cx, [sbl_half]
     xor bp, bp                  ; BP = silence pad: none in ring mode
-    add word [sbl_fed], SBL_HALF
+    add [sbl_fed], cx
     jmp .claimed
 .lin:
     mov si, [sbl_str_off]       ; SI = grant + progress: the source
     add si, [sbl_fed]
     mov cx, ax
-    cmp cx, SBL_HALF
+    cmp cx, [sbl_half]
     jbe .cok
-    mov cx, SBL_HALF
+    mov cx, [sbl_half]
 .cok:
-    mov bp, SBL_HALF            ; BP = silence pad after the data
+    mov bp, [sbl_half]          ; BP = silence pad after the data
     sub bp, cx
     add [sbl_fed], cx
 .claimed:
@@ -2170,6 +2232,10 @@ sbl_state_init:
     mov word [sbl_consumed], 0
     mov word [sbl_wd], 0
     mov word [sbl_wd_rst], 0
+    mov word [sbl_half], SBL_HALF
+    mov byte [sbl_wide], 0
+    mov word [sbl_rate], 0
+    mov word [sbl_hopen], SBL_HALF
     xor bx, bx
 .g:
     mov word [sbl_gr_act+bx], 0
@@ -2491,6 +2557,14 @@ sbl_rmask:    resw 1            ;   ring: RL-1 (RL = power of two 4096..
                                 ;   n = sbl_str_off + (n & sbl_rmask)
 sbl_wd:       resw 1            ;   watchdog countdown (snd_tick, 34.5)
 sbl_wd_rst:   resw 1            ;   its reload: ~2 block periods in ticks
+sbl_half:     resw 1            ;   the open's half size: 2048, or 4096 in
+                                ;   the wide-rate regime (SPEC.md 34.5 -
+                                ;   the 2x4KB buffer annexes the record
+                                ;   ring's first 4KB, idle by half-duplex)
+sbl_wide:     resb 1            ;   1 = wide: rate via 41h, start via C6h
+sbl_rate:     resw 1            ;   wide: the open rate in Hz (41h operand)
+sbl_hopen:    resw 1            ;   verb 0's half width - a TEMP, the
+                                ;   sbl_ropen idiom (committed at .irqok)
 
 sbl_gr_off:   resw SBL_GMAX     ; staging grants (SPEC.md 34.6): offset,
 sbl_gr_size:  resw SBL_GMAX     ;   size in bytes,
