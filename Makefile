@@ -385,7 +385,7 @@ MOUSE := -chardev msmouse,id=m0 -serial chardev:m0
 
 run: $(IMG) $(APPSIMG)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
-		-drive file=$(APPSIMG),format=raw,if=floppy,index=1
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 $(DEVCARD)
 
 # A maxed-out 640KB machine. QEMU/SeaBIOS cannot boot with less than 1MB
 # of guest RAM (SeaBIOS wedges during POST at -m 512k and -m 640k alike),
@@ -393,11 +393,11 @@ run: $(IMG) $(APPSIMG)
 # -m 1M makes int 12h report 640K - same as a fully populated XT.
 run-640: $(IMG) $(APPSIMG)
 	$(QEMU) -m 1M -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
-		-drive file=$(APPSIMG),format=raw,if=floppy,index=1
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 $(DEVCARD)
 
 debug: $(IMG) $(APPSIMG)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) -s -S \
-		-drive file=$(APPSIMG),format=raw,if=floppy,index=1
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 $(DEVCARD)
 
 # Headless boot with a QMP socket, for scripted screendumps and input:
 #   make test
@@ -420,11 +420,25 @@ ifneq ($(ADLIBDEV)$(SBDEV),)
 CARDAUDIO = -audiodev none,id=snd
 endif
 
+# The plain dev-loop targets (`run`, `run-640`, `debug`, `test`) carry the
+# OPL2 by DEFAULT. The sound driver is WANTED out of the box (SPEC.md 51.4),
+# and on a machine with no card the boot reports "No hardware found" by
+# opening the Control Panel on its Drivers page (SPEC.md 51.3) - the right
+# answer on real cardless hardware, pure noise at every boot of the dev
+# loop. NOCARD=1 boots the cardless machine deliberately, to see exactly
+# that path; an explicit ADLIB=1/SB16=1 supplies its own card, so the
+# default stands down rather than double-mapping port 388h. `test-snd` is
+# NOT in the list: its wav capture asserts on PC-speaker output, and a
+# present card would route the very tones it measures away to FM.
+ifeq ($(NOCARD)$(ADLIB)$(SB16),)
+DEVCARD = -audiodev none,id=devsnd -device adlib,audiodev=devsnd
+endif
+
 test: $(IMG) $(APPSIMG)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 \
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
-		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV)
+		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV) $(DEVCARD)
 
 # `make test` plus audio capture (SPEC.md 34): the PC speaker renders into
 # build/snd.wav, finalized when QMP `quit` stops QEMU. Verify with
