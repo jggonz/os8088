@@ -5203,7 +5203,7 @@ and non-zero exit + stderr message on any validation failure.
   Directory order on the apps disks stays pinned, because scripted tests
   click by row (§22) — but it is pinned **per folder** now: the root is
   `APPS` then `GAMES`, `APPS` holds hello, notepad, recorder, piano,
-  fractal, paint, tracker and then the data file `BEVERLY.MOD` (the
+  fractal, paint, tracker, artful and then the data file `BEVERLY.MOD` (the
   shipped module the Tracker package plays; a data file rides its folder
   exactly like a package, always after every `.o88` so package row
   indices never shift), and `GAMES` holds mines, solitaire, arkanoid,
@@ -9651,3 +9651,135 @@ reaches any of this (§45.9's band relight short-circuits first).
 difference — a rising bar fills its growth, a falling one erases its
 shrinkage, a steady one costs nothing; `tui_el_scopes` zeroes the four
 widths whenever it repaints the cells under them.
+
+## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
+
+A port of ActionRetro's **ArtfulType** — "a distraction-free Markdown
+writing app for classic 68k Macintosh computers" (github.com/ActionRetro,
+GPLv3 code; the name, icon and artwork are reserved assets, which is why
+the package ships a hand-drawn nib icon and why the 128×100 typewriter
+bitmap is carried as a conversion of the original's `splash_image.h` under
+the user's own porting decision) — onto the §11.2 fullscreen surface.
+Windowed, the instance is the splash card: the branding, version, URL, and
+**New** / **Open…** buttons (plus a `File` menu on the real bar and `N` /
+`O` / `W` keys). Any of them takes the whole screen; Esc or File > Quit
+hands it back with the document intact, and the kernel's §11.2 safety net
+covers a close while fullscreen. Sources: `artful.asm` (entry, callbacks,
+worker, tables) plus `atdoc.inc` (gap buffer + layout), `atrend.inc`
+(renderer), `atui.inc` (bar, menus, alerts, splash), `atedit.inc` (input,
+selection, clipboard, undo), `atcmd.inc` (commands), `atfile.inc` (files),
+`atimg.inc` (the artwork). `ARTFUL.O88`, APPS folder, after TRACKER.
+
+### 46.1 The performance contract
+
+Sized for the 4.77MHz floor: a printable keystroke costs a gap-buffer
+store, a one-paragraph relayout (§46.3) and the repaint of that
+paragraph's visual lines — each line ONE `OSAPI_GFX_BLIT4` (§5.4).
+Scrolling is `OSAPI_GFX_SCROLL` for moves of up to three lines plus a
+render of the revealed band; only mode/zoom switches, undo restores and
+W_PAINT redraw the whole page. Nothing on the typing path walks the whole
+document: caret motion never moves the gap (at_getb branches around it),
+and the layout tail after an edit is one add-loop shift.
+
+### 46.2 The document model — canonical markdown, live-preview rendering
+
+The document is always canonical markdown (newline = LF; CR LF and lone CR
+fold to LF on load, control bytes and >126 drop; saved bytes are the
+buffer verbatim) in a 20,480-byte gap buffer in bss, so the app works with
+an EMPTY arena — an `OSAPI_MEM_ALLOC` block (64/32/16KB tried in that
+order, §2.6 rules) only adds the undo/redo stacks and the full-size
+clipboard; without it undo reports itself unavailable through the menu
+gray and the clipboard falls back to 2KB of bss. There is no second styled
+buffer and no sync machinery (the original's `BuildHiddenView` /
+`SyncHiddenToCanonical` pair): **Writer mode is a rendering property**.
+Styled lines hide the delimiters and draw the spans; the caret's logical
+line renders RAW — the live-preview rule, which is what keeps caret
+arithmetic exact while editing — and collapses to styled the moment the
+caret leaves. Markdown mode renders everything raw at body size
+(`ClearStyles`' rule). Toggle semantics per logical line: `**` bold, `*`
+italic, `` ` `` code (suppressing the others inside), `~~` strike (which
+the classic Mac original could not render), `[text](url)` inside one
+visual line underlines the text and hides the rest; span state carries
+across a WRAP but resets at every newline — the independence that makes
+§46.3 cheap.
+
+### 46.3 Layout — raw-width wrap, one paragraph at a time
+
+`at_lstart[]`/`at_lattr[]` (2,048 entries: logical start; heading level,
+continuation flag, span nibble at line start) describe visual lines. Word
+wrap measures RAW characters in both modes, so layout is independent of
+the caret and caret motion never reflows; only the heading CELL WIDTH
+differs between modes (Writer scales headings). Geometry per (zoom 0..1,
+level 0..3): cells 8/16/16/8 and 16/24/24/16 px, rows 10/20/20/12 and
+20/30/30/22 — H1 and H3 bold, H2 plain. A document ending in a newline
+owns a trailing empty line (the caret must live somewhere after it).
+`at_relayout` rescans exactly the edited paragraph(s) into a 64-entry
+staging window, converges at the next old paragraph start (+delta, equal
+attr), splices, and add-shifts the surviving tail; overflow falls back to
+the full `at_layout`, which bulk operations already afford.
+
+### 46.4 The renderer — one line, one blit
+
+`at_parse` turns a line slice into per-character visibility, style and
+x-position arrays (the one hidden-set definition, shared by rendering,
+click mapping, selection and Style > None). `at_compose` builds 1bpp rows
+in a strip, styling ROM 8x8 glyphs itself (paint's §42 probe, copied to
+bss at entry): bold = overstrike, italic = a two-step shear (top half
+right by `scale` px), links = underline, strike = centre rule, headings =
+bit-doubled/tripled scale-ups through 16-entry nibble tables. `at_expand`
+widens 1bpp to packed 4bpp through 256×4-byte tables — white background,
+or CLGRAY for code-span columns (solid gray on VGA, a §39.4 dither on
+mono) — and one `OSAPI_GFX_BLIT4` delivers the line. Selection is an XOR
+overlay folded in after each blit; drag-selection XORs only the delta
+range per mouse sample. The caret is an XOR bar under strict on/off
+bookkeeping (`at_caret_on/off`, always under the lock), which is what
+makes the blink worker's toggling safe: the package's one §20.6 task
+sleeps 9 ticks, re-checks its gates under the lock, arms the §11.3 clip
+and toggles. The colours survive every adapter by construction: black on
+white, dithered code cells, XOR selection/caret.
+
+### 46.5 The chrome — the app draws its own Macintosh
+
+Fullscreen makes the kernel bar unreachable (§11.2), which is exactly what
+lets the app draw ArtfulType's: rows 0..19, BLACK with white titles in
+Writer mode (main.c's `UpdateMenuBarLook`, done honestly because the bar
+is the app's pixels), standard white in Markdown mode. The pull-downs are
+Mac press-drag-release menus in the `sol_drag` idiom (§43): draw under the
+held lock, unlock/yield/relock, sample the button by LEVEL; hover moves an
+XOR bar, release flashes the pick three times, and the box is erased by
+repainting the lines it covered — a package has no save-under, and a line
+repaint is one blit. Items carry right-aligned `^`-shortcuts, gray
+disabled states (Undo/Redo/zoom bounds, CLGRAY text), hand-drawn check
+marks (Markdown/Writer), and separator rules. The modal alerts (Save
+changes / About / errors) route every key and click while `[at_modal]` is
+set and repaint what they covered on close; W_PAINT re-raises a live alert
+a `wm_paint_all` crossed.
+
+### 46.6 Commands — markdown.c on one buffer
+
+Menu picks and ^key shortcuts land on the same `at_docmd` (the notepad
+two-doors rule): ^N/^O/^S new/open/save, Save As, ^Q quit, ^Z undo
+(Shift-^Z redo), ^X/^C/^V clipboard, ^A select all, ^B/^I/^K
+bold/italic/code, ^L link. `WrapSelection`'s port toggles delimiter pairs
+around the selection (outer- and inner-wrapped both strip); headings
+replace whatever level the line has (same level toggles off); Link wraps
+`[selection](` with the caret parked inside the parens — in Writer mode
+the caret parks the paragraph raw, so the URL is typed into visible syntax
+and styles itself on the way out; None deletes exactly the characters the
+styled parser would hide. Undo/redo are whole-document snapshots (the
+original's design: canonical text round-trips styling for free), 15 deep,
+coalesced per typing run, in compacting stacks inside the arena block.
+Zoom has two sizes (Default/Large — one bitmap font scales by integers,
+against the original's five point sizes), session-only.
+
+### 46.7 Files
+
+Open/Save ride the §38 dialog from fullscreen — the dialog window fronts the
+surface, modality routes input, and the completion proc repaints the page
+before any failure alert so nothing lands on the hole the dialog left.
+Names live per instance (`UNTITLED.MD` seeded); the file slots read and
+write whole documents in place (no staging copy: the gap parks at the end
+for a save, and a load folds line endings in place). `FERR_*` becomes a
+human sentence in an error alert. New/Open/Quit with unsaved changes ask
+first — Save / Cancel / Don't Save, with Save continuing the pending
+action through the Save As completion when the document is untitled.

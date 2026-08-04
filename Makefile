@@ -241,6 +241,26 @@ $(BUILD)/tracker.bin: apps/tracker/tracker.asm apps/tracker/trkplay.inc \
 $(BUILD)/tracker.o88: $(BUILD)/tracker.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/tracker.bin -o $@
 
+# ArtfulType, the eleventh shipped package (SPEC.md 46): a port of
+# ActionRetro's ArtfulType, the distraction-free Markdown writer for classic
+# 68k Macs, onto the fullscreen surface (SPEC.md 11.2). Windowed it is the
+# splash card; a button takes the whole screen, where it draws its own
+# Macintosh menu bar (inverted in Writer mode), styles markdown live from
+# its own ROM-font glyph renderer (bold overstrike / italic shear / scaled
+# headings / underlined links / gray code cells), and does word wrap, drag
+# selection, snapshot undo in an arena block, and Open/Save through the
+# Standard File dialog. One line = one OSAPI_GFX_BLIT4 is the whole
+# performance story; the caret blink is its worker task.
+$(BUILD)/artful.bin: apps/artful/artful.asm apps/artful/atdoc.inc \
+		apps/artful/atrend.inc apps/artful/atui.inc apps/artful/atedit.inc \
+		apps/artful/atcmd.inc apps/artful/atfile.inc apps/artful/atimg.inc \
+		apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/artful/ -o $@ apps/artful/artful.asm
+	@echo "artful: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/artful.o88: $(BUILD)/artful.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/artful.bin -o $@
+
 # FMTEST, the sound Phase 3 gate package (docs/SOUND-PLAN.md): drives the FM
 # slot 0x0084 end to end (patch-load, chord, all-off, tone expiry, teardown).
 # Never on the shipped apps disks - their directory order is pinned - it gets
@@ -323,7 +343,7 @@ $(BUILD)/tracker-test.img: $(BUILD)/tracker.o88 $(BUILD)/test.mod tools/os88disk
 # is now independent of what the other folder holds.
 APPS_TOOLS := $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 \
               $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88 \
-              $(BUILD)/tracker.o88
+              $(BUILD)/tracker.o88 $(BUILD)/artful.o88
 APPS_GAMES := $(BUILD)/mines.o88 $(BUILD)/solitair.o88 $(BUILD)/arkanoid.o88
 APPS := $(APPS_TOOLS) $(APPS_GAMES)
 
