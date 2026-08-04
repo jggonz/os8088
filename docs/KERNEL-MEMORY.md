@@ -45,7 +45,7 @@ out of the same constants the guards use.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` + `.bss`) | 49,664 B | all kernel code, its read-only data, and its scratch |
+| image (`.text` + `.bss`) | 50,176 B | all kernel code, its read-only data, and its scratch |
 | task stacks | 6,656 B | 11 background slots + task 0's |
 | disk buffers | 3,584 B | directory cache, icon cache, sector scratch |
 | FAT snapshot | 4,608 B | the mounted volume's FAT, resident |
@@ -57,27 +57,49 @@ claim heap up to whatever int 12h reports.
 The Task Manager's memory view shows this same breakdown live, one indented
 row per buffer under **System**, and paints the buffer part of the kernel
 span in its own texture on the RAM bar. Every figure there is an
-assembly-time constant, so the once-a-second refresh does no arithmetic to
+assembly-time constant, so the twice-a-second refresh does no arithmetic to
 produce them.
 
-Each row's legend square is the texture its memory is drawn in on the maps
-above, so the two can be read against each other:
+The page is **two maps, each captioned on the line directly above it**:
+
+```
+RAM  89/639K  [] HEAP  23/514K      <- the conventional map's caption
+[==============================]    <- every byte the machine has
+PACKAGES   2/ 60K                   <- the pool map's caption
+[==============================]    <- the 60KB pool, magnified
+```
+
+The heap has no map of its own and never will: a claim is drawn in the
+*conventional* map at its real address, in among the kernel and the pool, so
+its figures belong to that map's caption and share the top line with RAM. On
+its own line above the second map — which is where it used to sit — it read
+as that map's label, and the second map is the package pool, the one thing on
+the page that is emphatically not the heap.
+
+Each row's legend square is the texture its memory is drawn in on the maps,
+so the two can be read against each other:
 
 | square | band | where |
 |---|---|---|
 | 50% gray | the kernel's own span | `System` |
 | horizontal bars | its buffers | `Stacks`, `Disk bufs`, `FAT snap` |
 | solid black | the package pool | `Packages` |
-| framed light block | a live heap claim | beside the `HEAP` caption |
+| framed light block | a live heap claim | beside the `HEAP` figures |
 | per-slot pattern | one package's region | each package row |
 
 A row only gets a square when the texture is its own. `Code+data` has none —
 it is drawn in the same gray as `System`, and a square that repeats one above
 it is not a legend. `Builtins` has none because a built-in owns no band at
 all: its code is already inside `Code+data`, and its memory is heap claims
-billed to its own row. And the claim texture is keyed beside the
-`HEAP nnnK/nnnK` caption rather than in the list, because it belongs to the
-HEAP *column* and not to any one row.
+billed to its own row. And the claim texture is keyed beside the `HEAP`
+figures rather than in the list, because it belongs to the HEAP *column* and
+not to any one row.
+
+Every square goes through one routine over an 8-byte pattern, including the
+two the maps themselves draw with `gfx_fill_gray` and a plain black fill:
+`tm_pat_gray` is byte for byte what `gfx_fill_gray` lays down, so a square is
+the same pixels as its band and not merely a similar grey. A set bit is
+white (SPEC.md §5), which is why solid black is a pattern of eight zeroes.
 
 A claim is the only band drawn with a **frame**, because it is the only one
 that comes and goes while you watch, several sit shoulder to shoulder, and
@@ -89,11 +111,19 @@ the interior texture is light so it does not swallow it.
 
 ## Each region in detail
 
-### The image — `.text` + `.bss`, 49,664 B
+### The image — `.text` + `.bss`, 50,176 B
 
 One flat binary at `KERNEL_SEG:0000`, assembled `-f bin` with no linker.
 `.bss` follows `.text` immediately and is uninitialised by definition, so it
 costs nothing on the floppy and everything in RAM.
+
+That figure is `.text` + `.bss` **rounded up to a whole 512 bytes** (see the
+alignment invariant below), so it is the only rung with any slack in it, and
+the slack is a rounding remainder rather than a reservation — 50 bytes as
+this is written. Measure the unrounded pair by appending
+`section .text` / `times KBSS_SIZE db 0` to `kernel/kernel.asm`, assembling,
+and taking the file size; revert afterwards. `make`'s own `kernel: n bytes`
+line is `.text` alone.
 
 **All of the kernel's code is here.** There used to be a `.fartext`
 section — cold modules (the Control Panel, the Task Manager, one sound

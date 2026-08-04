@@ -4974,7 +4974,7 @@ account, and the rows partition one total.
   bar and an app that claimed a quarter-megabyte of canvas says so.
 - History: load% scaled to 0..40 (·40 then /100), stored at
   `tm_hist[tm_pos]`. The ring index IS the graph column — an oscilloscope
-  sweep, no scrolling — then tm_pos advances mod 160.
+  sweep, no scrolling — then tm_pos advances mod `TM_GW`.
 
 **Drawing.** `tm_paint` (W_PAINT) dispatches on `[tm_view]` and runs the
 active view's full body — bare and unconditional, no lock, no visibility
@@ -4985,18 +4985,46 @@ what changed. Performance view: the CPU + scheduler text line (one line,
 redrawn whole every interval, so a mode change shows up within one sample
 period without any extra plumbing), the new sweep column plus an all-white
 gap column at the advanced tm_pos, the RAM line and bar, and the process
-rows — the full 160-column graph render happens only in tm_paint, so the
-periodic lock hold stays small (Bounce-scale). Memory view: the RAM line,
-the pool caption, both map interiors and the rows; the two map frames are
-painted only by the full bodies (tm_paint / tm_click). All drawing is
-self-backgrounding (each element white-fills its own rect or paints both
-segments), so tm_paint needs no preceding content clear beyond the one
-wm_paint_all already does.
+rows — the full graph render happens only in tm_paint, so the periodic lock
+hold stays small (Bounce-scale). Memory view: the RAM line and its HEAP
+figures, the pool caption, both map interiors and the rows; the two map
+frames and the column header are painted only by the full bodies (tm_paint /
+tm_click). All drawing is self-backgrounding (each element white-fills its
+own rect or paints both segments), so tm_paint needs no preceding content
+clear beyond the one wm_paint_all already does.
+
+**A row is redrawn only when its text changed.** Both views compose
+the whole row into `tm_str` first — name, ADDR, SIZE/HEAP or ST/CPU/MEM, all
+of it — and then hash it with `tm_rowsum` (rotate-then-add, so a transposition
+is not invisible) and compare against `tm_rowck[row]`. Equal means the pixels
+on screen are already right: **no fill, no legend square, no `font_str`**. So
+the erase is *inside* the changed branch, which is the ordering the whole
+thing rests on — a row that is not redrawn must not be blanked either. Most
+rows are unchanged most of the time (a free slot always is; a built-in's row
+moves only when it claims or releases something), so the twice-a-second
+refresh costs a string build and a compare for each of them.
+
+It is a hash and not a proof: a collision leaves one row stale until its
+content moves again. For a status display at this cadence that is the right
+trade against `TMM_ROWS` words of `.bss` versus the 456 bytes a full text
+cache would need. Two rules keep it honest:
+
+- **`tm_rowck_clear` runs in `tm_draw_full`, and that is the whole of the
+  invalidation rule.** The only things that can change a row band's pixels
+  without going through `tm_mrow_close`/`tm_rows` are a `wm_draw_win` content
+  fill, a view switch and a resize — and all three arrive at a full body.
+- **A row that fell off the bottom (`tm_ylim_set`) forgets its entry**
+  rather than recording one, so it comes back if the window ever grows.
+- `tm_click`'s content clear is therefore load-bearing, and it takes its far
+  corner **off the window record** rather than from a pair of constants: a
+  short fill leaves the outgoing view's tail rows lettered under the incoming
+  one, and the incoming view will not erase them because it thinks they are
+  already blank.
 
 **Content layout — performance view** (content-relative; content is
-198×245):
+231×282):
 
-- (6,4): the CPU + scheduler line (white-fill (6,4)-(167,11) first):
+- (6,4): the CPU + scheduler line (white-fill (6,4)-(`TM_RW`,11) first):
   `[0..7]` `"CPU nnn%"` (n right-aligned, space-padded, 0..100), `[8]`
   space, `[9..19]` the **read-only** scheduler-mode field, left-justified
   and space-padded to 11 chars — `"SCH preempt"` or `"SCH coop   "` — from
@@ -5004,12 +5032,12 @@ wm_paint_all already does.
   changed from the Control Panel (§31). The padding is what erases the
   longer word when the mode changes, so the field must always be written
   full-width.
-- Graph: 1px black frame (6,14)-(167,55); interior columns x = 7+i,
-  i = 0..159, rows 15..54. Column value v (0..40): white vline rows
+- Graph: 1px black frame (6,14)-(`TM_RW`,55); interior columns x = 7+i,
+  i = 0..`TM_GW`−1, rows 15..54. Column value v (0..40): white vline rows
   15..54−v, then black vline rows 55−v..54 (v=0 → all white, v=40 → all
   black). The column at tm_pos draws all white (the sweep gap).
 - (6,61): `"RAM uuuK/tttK"` (white-fill (6,61)-(167,68) first).
-- RAM bar: 1px black frame (6,71)-(167,80); interior (7,72)-(166,79):
+- RAM bar: 1px black frame (6,71)-(`TM_RW`,80); interior (7,72)-(`TM_RW`−1,79):
   black for barw pixels from the left, white for the remainder.
 - (6,87): header `"NAME     ST  CPU MEM"`.
 - Process rows r = 0..TM_ROWS−1 at y = 97 + 11·r (white-fill
@@ -5036,16 +5064,31 @@ wm_paint_all already does.
 - A free slot renders `-` / `---` / `  -` / `   -`: name dash, state
   dashes, no `'%'` and no `'K'`.
 
-**Content layout — memory view** (content-relative; the same 198×245). Two
+**Content layout — memory view** (content-relative; the same 231×282). Two
 maps: conventional memory as a whole, and the package pool. There is no
 kernel-segment map any more — the pool left that segment (§20.1), so an
 in-segment map would show one black block and nothing else.
 
-- (6,4): the same `"RAM uuuK/tttK"` readout as the performance view.
-- Conventional-memory map: 1px black frame (6,14)-(167,29), interior
-  (7,15)-(166,28) = 160×14. KB scale: KB k maps to interior column
-  k·160/totalK; a region [a,b) KB fills columns a·160/totalK ..
-  (b−1)·160/totalK inclusive, clamped so no region drops below 1px. The
+**Each map is captioned on the line directly above it**, and the gaps say
+which caption goes with which: 4px above a caption, 1px below it. The heap
+has no map of its own and never will — a claim is drawn in the *conventional*
+map at its real address, in among the kernel and the pool — so its figures
+share the RAM line, which is that map's caption. They used to sit on their
+own line above the *second* map and read as its label, and the second map is
+the **package pool**, the one thing on this page that is emphatically not the
+heap.
+
+- (6,4): `"RAM uuu/tttK"` — the same readout as the performance view, and
+  **one `'K'`, at the end** (`tm_kpair`): eight characters per pair is what
+  fits a second one on this line.
+- (`TMM_HSQ_X`,4): the claim legend square, between the two pairs of figures.
+- (`TMM_HEAP_X`,4): `"HEAP uuu/tttK"` — claimed and total heap KB (§50). No
+  fill of its own: `tm_txt_ram_y` whited the whole line on its way past and
+  is always called first.
+- Conventional-memory map: 1px black frame (6,14)-(`TM_RW`,29), interior
+  (7,15)-(`TM_RW`−1,28) = `TM_GW`×14. KB scale: KB k maps to interior column
+  k·`TM_GW`/totalK; a region [a,b) KB fills columns a·`TM_GW`/totalK ..
+  (b−1)·`TM_GW`/totalK inclusive, clamped so no region drops below 1px. The
   interior is white-filled (free), then, in order: **the kernel** in 50%
   gray, **its buffers** over the top of that in a texture of their own
   (`tm_pat_buf`, 2-on-2-off horizontal bars — the band is 14 rows tall and,
@@ -5071,16 +5114,22 @@ in-segment map would show one black block and nothing else.
   Claims used to share the kernel's 50% gray, which made the map say one
   thing about two unrelated ones: memory reserved at build time and memory
   asked for at run time.
-- (6,33): `"HEAP nnnK/nnnK"` — claimed and total heap KB (§50).
-- Package-pool map: 1px black frame (6,43)-(167,58), interior
-  (7,44)-(166,57) = 160×14. Paragraph scale across `PKG_PARA`; the interior
+- (6,34): `"PACKAGES uuu/tttK"` — allocated and total pool KB (§20.1), the
+  pool map's caption. The two caption lines are CAPS and the list's rows are
+  mixed case, which is the whole of the distinction between a map's label and
+  a row.
+- Package-pool map: 1px black frame (6,43)-(`TM_RW`,58), interior
+  (7,44)-(`TM_RW`−1,57) = `TM_GW`×14. Paragraph scale across `PKG_PARA`; the interior
   is white-filled, then one `gfx_fill_pat` band per snapshot slot with
   I_STATE ≠ 0 and I_SIZE ≠ 0, in that slot's pattern. Unallocated pool reads
   white — free space, drawn honestly.
 - (16,62): header `"NAME    ADDR SIZE   HEAP"` (24 chars, the row width).
   Two spaces of gap before HEAP, not one: a 150K back buffer beside a 150K
-  package ran the two figures together at the old 22-char width, which is
-  what sizes the window at 216 (`TM_RW` 207, `TM_GW` 200).
+  package ran the two figures together at the old 22-char width.
+  **The window is sized by the line above the first map, not by this one**:
+  `"RAM uuu/tttK"`, the claim square and `"HEAP uuu/tttK"` land exactly on
+  `TM_RW` = 223, which puts the template at 232 wide. `TM_GW` = `TM_RW` − 7
+  follows it, so both map interiors always fill their frames edge to edge.
 - Rows at y = 74 + 11·r, `TMM_ROWS = INST_MAX + 7` of them — System, its
   four buffer rows, the two group headings, and one per instance. **Free
   slots are not drawn**: 19 rows at the 11px pitch is 279 of the 281-pixel
@@ -5090,10 +5139,10 @@ in-segment map would show one black block and nothing else.
   in the kernel clips a draw to a window, and on a 200-row CGA this one is
   156px tall.
 - **The legend squares key the rows to the maps, and a row only gets one
-  when the texture is its own.** `tm_sq_gray` on System (the kernel's span),
-  `tm_sq_pat` on the three buffer rows (their band) and on each package row
-  (its slot pattern in the pool map), `tm_sq_black` on the `Packages`
-  heading (the pool). `Code+data` gets **none** — it is drawn in the same
+  when the texture is its own.** `tm_pat_gray` on System (the kernel's span),
+  the row's own pattern on the three buffer rows (their band) and on each
+  package row (its slot pattern in the pool map), `tm_pat_blk` on the
+  `Packages` heading (the pool). `Code+data` gets **none** — it is drawn in the same
   gray as System, and a square that repeats one above it is not a legend.
   Nor does `Builtins`, which owns no band at all. This is checkable by eye
   and it has been wrong: row 0 carried a solid black square from before the
@@ -5102,8 +5151,16 @@ in-segment map would show one black block and nothing else.
 - The three buffer squares sit at `[tm_sqox]` = 22 rather than the 6 every
   other row uses, so they land **beside** their two-space-indented names
   instead of out at the margin. `tm_mrow_open` resets the offset per row.
-- **The claim texture is keyed beside the `HEAP nnnK/nnnK` caption, not in
-  the list**, because it belongs to a *column* and not to any one row.
+- **The claim texture is keyed beside the `HEAP` figures, not in the list**,
+  because it belongs to a *column* and not to any one row.
+- **Every square goes through one routine** (`tm_sq_pat`) over an 8-byte
+  pattern, including the two the maps themselves draw with `gfx_fill_gray`
+  and a plain black `gfx_fill`. `tm_pat_gray` is byte for byte what
+  `gfx_fill_gray` lays down — 0xAA on even rows, 0x55 on odd, and the
+  pattern fill indexes by the same y — so a square is the same pixels as its
+  band and not merely a similar grey. A set bit is **white** (§5), so
+  `tm_pat_blk` is eight zeroes. A square is a **request**, `[tm_sqp]`, not a
+  draw: the row's band is erased between composing it and lettering it.
 - Row 0 (System): legend square 50% gray, the kernel's band; ADDR `0600`
   (where the kernel starts — `KERNEL_SEG`); SIZE = `TM_KERN_KB`; CLM = the
   kernel's own heap claims.
@@ -5126,15 +5183,16 @@ in-segment map would show one black block and nothing else.
   indented row per built-in instance: no square, `"   -    -"` for ADDR and
   SIZE (they own no region), and a real CLM figure — the Disk window's
   listing cache shows up here (§2.3).
-- `Packages` heading + used/max of the pool, its square **solid black** for
+- `Packages` heading + allocated/size of the pool (`tm_pool_kb`, which the
+  `PACKAGES` caption above the map shares), its square **solid black** for
   the pool's own band, then one row per package instance: square = pattern i,
   which is how the row keys the pool map below it; ADDR = the I_SPTR snapshot (a **segment**,
   four hex digits); SIZE = I_SIZE in KB rounded up; CLM = its claims.
 - A dying instance (I_STATE 2) still draws its region and its row: the
   region is still resident (§21).
 
-**Slot patterns.** `tm_pats` — 12 × 8 bytes in .text (far code reads
-data through DS, §33 rule 2); pattern i = `tm_pats + i·8`, fixed
+**Slot patterns.** `tm_pats` — 12 × 8 bytes in .text; pattern i =
+`tm_pats + i·8`, fixed
 slot↔pattern for the instance's life (the §30 slot↔tile rule again).
 All twelve are black-on-white dither/hatch textures (§5 bit sense: set =
 white) chosen to stay tellable-apart at a few pixels' width; none is the

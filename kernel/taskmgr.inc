@@ -42,11 +42,10 @@
 ; --- geometry / cadence (SPEC.md 28) -----------------------------------------
 TM_INT      equ 9               ; sample interval, ticks (~0.5s)
 TM_EPOCH    equ 20              ; samples per calibration epoch (~10s)
-TM_GW       equ 200             ; graph interior width = history ring size
-                                ; (7..TM_RW-1 inclusive). The memory view's
-                                ; rows are 24 chars = 192px from x=16, which
-                                ; lands exactly on TM_RW - that row, not the
-                                ; graph, is what sizes the window
+TM_GW       equ TM_RW - 7       ; graph interior width = history ring size
+                                ; (7..TM_RW-1 inclusive), so it follows TM_RW
+                                ; and the two maps below always fill their
+                                ; frames edge to edge
 TM_GH       equ 40              ; graph interior height, px
 TM_CPU_Y    equ 4               ; "CPU nnn% SCH xxxxxxx" line, content-rel y
 TM_GF_Y1    equ 14              ; graph frame top (interior rows 15..54)
@@ -58,15 +57,27 @@ TM_HDR_Y    equ 87              ; process-list header line
 TM_ROW_Y    equ 97              ; first process row
 TM_ROW_H    equ 11              ; row pitch, px
 TM_ROWS     equ INST_MAX + 1    ; "System" plus one row per instance slot
-TM_RW       equ 207             ; the rows' right edge, content-relative
+TM_RW       equ 223             ; the rows' right edge, content-relative. It
+                                ; is the memory view's TOP LINE that sizes the
+                                ; window: 'RAM nnn/nnnK', the claim swatch and
+                                ; 'HEAP nnn/nnnK' land exactly on it
 
 ; --- memory-view geometry (SPEC.md 28) ---------------------------------------
-TMM_RAM_Y   equ 4               ; "RAM uuuK/tttK" line (same string, new y)
+; **Each map is captioned on the line directly above it**, and the gaps say
+; which caption goes with which: 4px above a caption, 1px below it. They used
+; to share one heading order - RAM line, map, HEAP line, map - which read as
+; if the second map WAS the heap. It is the package pool; the heap has no map
+; of its own because its claims are drawn in the first one, at their real
+; addresses, which is why the claim swatch sits beside the HEAP figures.
+TMM_RAM_Y   equ 4               ; 'RAM nnn/nnnK [] HEAP nnn/nnnK' - the
+                                ; conventional map's caption, both figures
 TMM_M1_Y1   equ 14              ; conventional-memory map frame top
 TMM_M1_Y2   equ 29              ; frame bottom (interior rows 15..28)
-TMM_CAP_Y   equ 33              ; "HEAP nnnK/nnnK" caption line
+TMM_CAP_Y   equ 34              ; 'PACKAGES nnn/nnnK' - the pool map's caption
 TMM_M2_Y1   equ 43              ; package-pool map frame top
 TMM_M2_Y2   equ 58              ; frame bottom (interior rows 44..57)
+TMM_HEAP_X  equ 120             ; the HEAP figures on the RAM line, and the
+TMM_HSQ_X   equ 108             ; claim swatch that keys their texture
 TMM_HDR_Y   equ 62              ; "NAME    ADDR SIZE   HEAP" header line
 
 ; --- what the kernel occupies, in KB (SPEC.md 2/28) --------------------------
@@ -151,7 +162,7 @@ tm_kinit:
     ret
 
 ; --- window template: {x, y, w, h, title, paint, onkey, onclick} words -------
-tm_tpl:     dw 250, 100, 216, 300, tm_ttl, tm_paint, 0, tm_click
+tm_tpl:     dw 250, 100, 232, 300, tm_ttl, tm_paint, 0, tm_click
 tm_ttl:     db 'Task Manager', 0
 tm_sname:   db 'TaskMgr', 0     ; KD_NAME: fits the 7-char NAME column
 
@@ -181,8 +192,15 @@ tm_s_mhdr:  db 'NAME    ADDR SIZE   HEAP', 0  ; 24 chars, the row width.
                                 ; buffer beside a 150K package ran the two
                                 ; figures together at the old width
 tm_s_heap:  db 'HEAP ', 0       ; + claimed/size KB (SPEC.md 50)
-tm_s_bhdr:  db 'Builtins    ', 0 ; + used/max of the kernel segment they share
-tm_s_phdr:  db 'Packages    ', 0 ; + used/max of the package pool
+tm_s_pool:  db 'PACKAGES ', 0   ; + allocated/size KB of the pool. The two
+                                ; caption lines are CAPS and the list's rows
+                                ; are mixed case, which is the whole of the
+                                ; distinction between a map's label and a row
+tm_s_bhdr:  db 'Builtins', 0     ; no figures: a built-in owns no band on
+                                ; either map - its code is inside Code+data
+                                ; and its memory is heap claims, billed to
+                                ; its own row
+tm_s_phdr:  db 'Packages    ', 0 ; + allocated/size KB of the pool
 tm_s_mfr:   db '   -    -', 0   ; the ADDR+SIZE pair a built-in has no answer
                                 ; for: it owns no region of its own
 tm_s_dash4: db '   -', 0        ; one empty KB column
@@ -227,6 +245,16 @@ tm_pat_buf:
 ; the 6x6 legend swatch beside the HEAP caption came out empty.
 tm_pat_clm:
     db 0xEE, 0xBB, 0xEE, 0xBB, 0xEE, 0xBB, 0xEE, 0xBB
+
+; ...and the two the MAPS draw without a pattern at all, so that every legend
+; square can go through one routine (tm_sq_pat). tm_pat_gray is exactly what
+; gfx_fill_gray lays down - 0xAA on even rows, 0x55 on odd, and gfx_fill_pat
+; indexes by the same y - so the square and the band it keys are the same
+; pixels, not merely a similar grey.
+tm_pat_gray:
+    db 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55
+tm_pat_blk:                     ; a set bit is WHITE (SPEC.md 5), so solid
+    db 0, 0, 0, 0, 0, 0, 0, 0   ; black is a pattern of no bits at all
 
 ; Slot patterns: 12 x 8 row bytes, pattern i = tm_pats + i*8, bit set =
 ; white (SPEC.md 5/28). Black-on-white hatch textures, none of them the
@@ -755,7 +783,32 @@ tm_ylim_set:
     ret
 
 ; -----------------------------------------------------------------------------
+; tm_rowck_clear - forget every row's last-drawn content
+;
+; Called by both full-paint bodies, and that is the whole of the cache's
+; invalidation rule: the ONLY things that can put different pixels in a row
+; band without going through tm_mrow_close or tm_rows are a wm_draw_win
+; content fill, a view switch and a resize - and all three arrive here.
+; in:       nothing
+; out:      nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+tm_rowck_clear:
+    push bx
+    push cx
+    mov bx, tm_rowck
+    mov cx, TMM_ROWS
+.z:
+    mov word [bx], 0
+    inc bx
+    inc bx
+    loop .z
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 tm_draw_full:
+    call tm_rowck_clear
     cmp byte [tm_view], 0
     jne tm_draw_mem
     ; fall through: performance view
@@ -890,12 +943,17 @@ tm_click:
     xor byte [tm_view], 1
     mov bx, si
     call wm_content             ; AX = content left, DX = content top
+    push ax                     ; ...and the far corner off the record, not
+    mov ax, [bx+W_Y]            ; a pair of constants: this fill is the ONLY
+    add ax, [bx+W_H]            ; thing that erases the outgoing view, and a
+    dec ax                      ; short one leaves its tail rows lettered
+    mov cx, [bx+W_X]            ; under the incoming one (they were 198x245
+    add cx, [bx+W_W]            ; against a content that had grown to 231x282)
+    dec cx
+    mov bx, dx
+    mov dx, ax
+    pop ax
     mov byte [gfx_color], CWHITE
-    mov bx, dx                  ; content is 198x245 (SPEC.md 28)
-    mov cx, ax
-    add cx, 197
-    mov dx, bx
-    add dx, 244
     call gfx_fill
     call tm_draw_full           ; SI = window ptr still
 
@@ -925,8 +983,9 @@ tm_upd_mem:
 
     mov ax, TMM_RAM_Y
     call tm_txt_ram_y
-    call tm_cap_heap
+    call tm_cap_heap            ; ...on the right of the line it just filled
     call tm_map_ram
+    call tm_cap_pool
     call tm_map_pool
     call tm_rows_mem
 
@@ -987,8 +1046,9 @@ tm_draw_mem:
     mov si, tm_s_mhdr
     call font_str
 
-    call tm_cap_heap
+    call tm_cap_heap            ; ...on the right of the line it just filled
     call tm_map_ram
+    call tm_cap_pool
     call tm_map_pool
     call tm_rows_mem
 
@@ -1001,15 +1061,24 @@ tm_draw_mem:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_cap_heap - white-fill the caption band and draw "HEAP nnnK/nnnK"
-;               (claimed / heap size, SPEC.md 50)
-; in:  nothing
+; tm_cap_heap - "HEAP nnn/nnnK" and the claim swatch, on the RIGHT of the RAM
+;               line (claimed / heap size, SPEC.md 50)
+; in:  [tm_cx], [tm_cy]; tm_txt_ram_y has already filled this line
 ; out: nothing
 ; clobbers: nothing (flags only)
 ;
 ; The third of the four things memory is: the kernel's fixed reservation
-; (System's row), the package pool (the map below), and this - everything
-; handed out on demand, kernel and package claims together.
+; (System's row), the package pool (its own map), and this - everything handed
+; out on demand, kernel and package claims together.
+;
+; It shares the RAM line because it has no map of its own and never will: a
+; claim is drawn in the conventional map at its REAL address, in among the
+; kernel and the pool, so its figures belong to that map's caption. On its own
+; line above the pool map it read as the pool map's label, which is the one
+; thing on this page that is emphatically not the heap.
+;
+; No fill: tm_txt_ram_y whited the whole line on its way past, and it is
+; always called first.
 ; -----------------------------------------------------------------------------
 tm_cap_heap:
     push ax
@@ -1019,51 +1088,32 @@ tm_cap_heap:
     push si
     push di
 
-    mov byte [gfx_color], CWHITE
-    mov ax, [tm_cx]
-    add ax, 6
-    mov bx, [tm_cy]
-    add bx, TMM_CAP_Y
-    mov cx, [tm_cx]
-    add cx, TM_RW
-    mov dx, [tm_cy]
-    add dx, TMM_CAP_Y + 7
-    call gfx_fill
-
     call mem_total_kb          ; AX = claimed KB, BX = heap size KB
     mov di, tm_str
-    push bx
     push ax
+    push bx
     mov si, tm_s_heap
     call tm_copy
+    pop bx
     pop ax
-    call tm_put3
-    mov byte [di], 'K'
-    inc di
-    mov byte [di], '/'
-    inc di
-    pop ax
-    call tm_put3
-    mov byte [di], 'K'
-    inc di
-    mov byte [di], 0
+    call tm_kpair
 
     mov byte [gfx_color], CBLACK
     mov cx, [tm_cx]
-    add cx, 6
+    add cx, TMM_HEAP_X
     mov dx, [tm_cy]
-    add dx, TMM_CAP_Y
+    add dx, TMM_RAM_Y
     mov si, tm_str
     call font_str
 
-    ; ...and the claim swatch, beside the caption rather than down in the
-    ; list. Every OTHER texture belongs to one row and is keyed there; a
-    ; claim belongs to the HEAP column, which is a column and not a row, so
-    ; its legend goes where the heap's own figures are (SPEC.md 28).
+    ; ...and the claim swatch, between the two pairs of figures. Every OTHER
+    ; texture belongs to one row and is keyed there; a claim belongs to the
+    ; HEAP column, which is a column and not a row, so its legend goes where
+    ; the heap's own figures are (SPEC.md 28).
     mov ax, [tm_cy]
-    add ax, TMM_CAP_Y
+    add ax, TMM_RAM_Y
     mov [tm_rowy], ax
-    mov word [tm_sqox], 126     ; clear of 'HEAP nnnK/nnnK' at 8px a char
+    mov word [tm_sqox], TMM_HSQ_X
     mov si, tm_pat_clm
     call tm_sq_pat
 
@@ -1073,6 +1123,87 @@ tm_cap_heap:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_cap_pool - white-fill the caption band and draw "PACKAGES nnn/nnnK"
+;               (resident regions / pool size, SPEC.md 20.1)
+; in:  the instance snapshot block
+; out: nothing
+; clobbers: nothing (flags only)
+;
+; The map below this line is the package pool magnified - the same 60KB the
+; black band in the map above stands for, given the whole width so the regions
+; inside it can be told apart. Unlabelled it was simply a second bar, and the
+; HEAP figures that used to sit here made it look like the heap's.
+; -----------------------------------------------------------------------------
+tm_cap_pool:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov ax, TMM_CAP_Y
+    call tm_lfill
+
+    call tm_pool_kb             ; AX = KB of pool allocated
+    mov di, tm_str
+    push ax
+    mov si, tm_s_pool
+    call tm_copy
+    pop ax
+    mov bx, TM_POOL_KB
+    call tm_kpair
+
+    mov byte [gfx_color], CBLACK
+    mov cx, [tm_cx]
+    add cx, 6
+    mov dx, [tm_cy]
+    add dx, TMM_CAP_Y
+    mov si, tm_str
+    call font_str
+
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_pool_kb - how much of the package pool is allocated, in KB rounded up
+; in:  the tm_ist/tm_isz snapshot
+; out: AX = KB
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+tm_pool_kb:
+    push bx
+    push cx
+    push si
+    push di
+    xor bx, bx
+    xor si, si
+.slot:
+    cmp byte [tm_ist+si], 0
+    je .next
+    mov di, si
+    shl di, 1
+    add bx, [tm_isz+di]
+.next:
+    inc si
+    cmp si, INST_MAX
+    jb .slot
+    mov ax, bx
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl
+    pop di
+    pop si
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1397,7 +1528,7 @@ tm_rows_mem:
     xor ax, ax
     call mem_kernel_kb         ; AX += the kernel's own heap claims, KB
     call tm_kcol
-    call tm_sq_gray             ; the kernel's band on the RAM map above
+    mov word [tm_sqp], tm_pat_gray  ; the kernel's band on the RAM map above
     call tm_mrow_close
 
     ; --- the kernel's own buffers, one row each -------------------------------
@@ -1447,39 +1578,19 @@ tm_rows_mem:
     jb .blt
 
     ; --- the Packages heading, then every live package ------------------------
-    ; The sum comes FIRST, because it needs DI and tm_mrow_open hands DI over
-    ; as the string cursor - the two cannot overlap.
-    xor bx, bx                  ; used: the sum of resident regions
-    push si
-    xor si, si
-.psum:
-    cmp byte [tm_ist+si], 0
-    je .pnext
-    mov di, si
-    shl di, 1
-    add bx, [tm_isz+di]
-.pnext:
-    inc si
-    cmp si, INST_MAX
-    jb .psum
-    pop si
+    ; The sum comes FIRST, because tm_pool_kb needs DI and tm_mrow_open hands
+    ; DI over as the string cursor - the two cannot overlap.
+    call tm_pool_kb             ; AX = KB of pool allocated
+    push ax
     call tm_mrow_open
     push si
     mov si, tm_s_phdr
     call tm_copy
     pop si
-    mov ax, bx
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl
-    call tm_put3
-    mov byte [di], '/'
-    inc di
-    mov ax, TM_POOL_KB
-    call tm_put3
-    mov byte [di], 'K'
-    inc di
-    call tm_sq_black            ; the pool's band on the RAM map above
+    pop ax
+    mov bx, TM_POOL_KB
+    call tm_kpair
+    mov word [tm_sqp], tm_pat_blk   ; the pool's band on the RAM map above
     call tm_mrow_close
 
     xor si, si
@@ -1556,7 +1667,7 @@ tm_inst_row:
     shl si, 1
     shl si, 1
     add si, tm_pats
-    call tm_sq_pat
+    mov [tm_sqp], si
     pop si
     jmp short .claim
 .noreg:                         ; a built-in: it owns no region, and says so
@@ -1627,8 +1738,8 @@ tm_buf_row:
     or dx, dx                   ; a square only where the texture is this
     jz .name                    ; row's OWN - the three buffers share one
     mov word [tm_sqox], 22      ; band, and it is theirs. Indented to sit
-    mov si, dx                  ; beside the names rather than out at the
-    call tm_sq_pat              ; margin two columns to their left
+    mov [tm_sqp], dx            ; beside the names rather than out at the
+                                ; margin two columns to their left
 .name:
     pop ax
     push ax
@@ -1679,27 +1790,13 @@ tm_mrow_open:
     mov [tm_rowy], ax
     mov word [tm_sqox], 6       ; the legend square's left edge, at the margin
                                 ; unless the row moves it (tm_buf_row)
+    mov word [tm_sqp], 0        ; ...and no square unless the row asks for one
     mov byte [tm_mfit], 1       ; does this row's 8px band still fall inside
     cmp ax, [tm_ylim]           ; the frame? Nothing in the kernel clips a
     jbe .fits                   ; draw to a WINDOW (tm_ylim_set), and on a
     mov byte [tm_mfit], 0       ; 200-row CGA this window is clamped to 156px
-    pop dx                      ; - unbounded, the tail of the list would be
-    pop cx                      ; lettered over the dock strip once a second
-    pop bx
-    pop ax
-    mov di, tm_str
-    ret
-.fits:
-    mov byte [gfx_color], CWHITE
-    mov bx, ax
-    mov dx, ax
-    add dx, 7
-    mov ax, [tm_cx]
-    add ax, 6
-    mov cx, [tm_cx]
-    add cx, TM_RW
-    call gfx_fill
-    pop dx
+.fits:                          ; - unbounded, the tail of the list would be
+    pop dx                      ; lettered over the dock strip once a second
     pop cx
     pop bx
     pop ax
@@ -1713,26 +1810,118 @@ tm_mrow_open:
 ; -----------------------------------------------------------------------------
 tm_mrow_close:
     push ax
+    push bx
     push cx
     push dx
     push si
     push di
-    cmp byte [tm_mfit], 0       ; off the bottom: the row was never opened
-    je .out
-    mov byte [di], 0
+    mov bx, [tm_mrow]
+    shl bx, 1
+    cmp byte [tm_mfit], 0       ; off the bottom: nothing was drawn, and
+    je .forget                  ; forget what used to be here so it comes
+    mov byte [di], 0            ; back if the window ever grows
+    call tm_rowsum              ; AX = this row's content, in one word
+    cmp ax, [tm_rowck+bx]
+    je .out                     ; byte for byte what is already on screen
+    mov [tm_rowck+bx], ax
+
+    call tm_rowfill             ; only NOW is the band worth erasing
+    mov si, [tm_sqp]            ; the legend square the row asked for, drawn
+    or si, si                   ; after the fill that would have erased it
+    jz .text
+    call tm_sq_pat
+.text:
     mov byte [gfx_color], CBLACK
     mov cx, [tm_cx]
     add cx, 16
     mov dx, [tm_rowy]
     mov si, tm_str
     call font_str
+    jmp short .out
+.forget:
+    mov word [tm_rowck+bx], 0
 .out:
     inc word [tm_mrow]
     pop di
     pop si
     pop dx
     pop cx
+    pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_rowfill - white the row band at [tm_rowy], full width
+; in:  [tm_cx], [tm_rowy]
+; out: nothing (all registers preserved)
+; Both views' row loops erase before they letter, and only once they know the
+; row changed, so the rect lives in one place rather than in each of them.
+; -----------------------------------------------------------------------------
+; tm_lfill is the same band named by a CONTENT-RELATIVE y, which is how the
+; three caption lines above the list ask for it.
+tm_lfill:
+    push ax
+    add ax, [tm_cy]
+    mov [tm_rowy], ax
+    call tm_rowfill
+    pop ax
+    ret
+
+tm_rowfill:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [gfx_color], CWHITE
+    mov bx, [tm_rowy]
+    mov dx, bx
+    add dx, 7
+    mov ax, [tm_cx]
+    add ax, 6
+    mov cx, [tm_cx]
+    add cx, TM_RW
+    call gfx_fill
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tm_rowsum - one word standing for the whole of tm_str
+; in:  tm_str, NUL-terminated
+; out: AX = the sum; every other register preserved
+;
+; What makes the once-a-second refresh nearly free: a row's NAME, its legend
+; square, its ADDR and its SIZE/HEAP figures are all functions of this string,
+; so one comparison answers "has anything in this row changed" for all of
+; them at once - and the answer is no for most rows most of the time. A free
+; slot never changes at all; a built-in's row changes only when it claims or
+; releases something.
+;
+; Rotate-then-add rather than a plain sum, so that transposing two characters
+; is not invisible. It is a hash and not a proof: a collision would leave one
+; row stale for one interval, until its content moves again. For a status
+; display refreshed twice a second that is the right trade against 38 bytes
+; of .bss versus the 456 a full text cache would take.
+; -----------------------------------------------------------------------------
+tm_rowsum:
+    push bx
+    push si
+    mov si, tm_str
+    xor bx, bx
+    xor ah, ah                  ; lodsb leaves AH alone, so this holds
+.next:
+    lodsb
+    or al, al
+    jz .done
+    rol bx, 1
+    add bx, ax
+    jmp short .next
+.done:
+    mov ax, bx
+    pop si
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1788,48 +1977,24 @@ tm_sq_frame:
     ret
 
 ; -----------------------------------------------------------------------------
-; tm_sq_gray / tm_sq_black / tm_sq_pat - a legend square in one of the three
-; textures the RAM map uses, plus the per-slot patterns the pool map uses
-; in:  [tm_cx], [tm_rowy]; tm_sq_pat also SI = an 8-byte pattern
+; tm_sq_pat - a legend square in the 8-byte texture at SI
+; in:  [tm_cx], [tm_rowy], [tm_sqox]; SI = an 8-byte pattern
 ; out: nothing (all registers preserved)
 ;
-; **The square keys the row to a band**, so there is exactly one of these per
-; texture in the two maps and a row may only wear the one its memory is drawn
-; in. That is not decoration: the System row used to carry a solid black
-; square, and solid black became the PACKAGE POOL's band when the maps were
-; reworked - so the legend was pointing at the wrong region entirely.
+; **The square keys the row to a band**, so there is exactly one texture per
+; kind of memory across the two maps and a row may only wear the one its own
+; memory is drawn in. That is not decoration: the System row used to carry a
+; solid black square, and solid black became the PACKAGE POOL's band when the
+; maps were reworked - so the legend was pointing at the wrong region entirely.
+;
+; Every kind goes through this one routine, including the two the maps draw
+; with gfx_fill_gray and a plain black gfx_fill: tm_pat_gray is byte for byte
+; what gfx_fill_gray lays down (0xAA on even rows, 0x55 on odd - the pattern
+; fill indexes by the same y), and tm_pat_blk is a solid one. A square is 6x6;
+; there is nothing to be gained by rendering it three different ways.
 ; -----------------------------------------------------------------------------
-tm_sq_gray:                     ; the kernel's own span (SPEC.md 2)
-    push ax
-    push bx
-    push cx
-    push dx
-    call tm_sq_frame
-    call tm_sq_int
-    call gfx_fill_gray
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-tm_sq_black:                    ; the package pool (SPEC.md 20.1)
-    push ax
-    push bx
-    push cx
-    push dx
-    call tm_sq_frame
-    call tm_sq_int
-    mov byte [gfx_color], CBLACK
-    call gfx_fill
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-tm_sq_pat:                      ; SI = the pattern: a kernel buffer, a heap
-    push ax                     ; claim, or one package's pool region
+tm_sq_pat:                      ; SI = the pattern: the kernel's span, a
+    push ax                     ; buffer, a claim, or one package's region
     push bx
     push cx
     push dx
@@ -2054,32 +2219,16 @@ tm_txt_ram_y:
     push di
 
     mov [tm_liny], ax
-    mov byte [gfx_color], CWHITE
-    mov ax, [tm_cx]
-    add ax, 6
-    mov bx, [tm_cy]
-    add bx, [tm_liny]
-    mov cx, [tm_cx]
-    add cx, TM_RW
-    mov dx, [tm_cy]
-    add dx, [tm_liny]
-    add dx, 7
-    call gfx_fill
+    call tm_lfill
 
     mov di, tm_str
     mov si, tm_s_ram
     call tm_copy
     mov ax, [tm_usedk]
-    call tm_put3
-    mov byte [di], 'K'
-    inc di
-    mov byte [di], '/'
-    inc di
-    mov ax, [tm_totkb]
-    call tm_put3
-    mov byte [di], 'K'
-    inc di
-    mov byte [di], 0
+    mov bx, [tm_totkb]
+    call tm_kpair               ; 'nnn/nnnK' - one K, not two, because the
+                                ; memory view fits a second figure on this
+                                ; line and eight characters is what it costs
 
     mov byte [gfx_color], CBLACK
     mov cx, [tm_cx]
@@ -2233,17 +2382,10 @@ tm_rows:
     add ax, [tm_cy]
     mov [tm_rowy], ax
 
-    mov byte [gfx_color], CWHITE
-    mov bx, ax                  ; white-fill the band (6,y)-(TM_RW,y+7)
-    mov dx, ax
-    add dx, 7
-    mov ax, [tm_cx]
-    add ax, 6
-    mov cx, [tm_cx]
-    add cx, TM_RW
-    call gfx_fill
-
     ; --- build "NAME     ST  nnn%mmmK" in tm_str -----------------------------
+    ; The band is NOT erased yet: most of these rows are the same as they
+    ; were half a second ago - a free slot always is - and tm_rowsum below
+    ; decides whether any of it is worth drawing.
     mov di, tm_str
     or si, si
     jnz .inst
@@ -2363,6 +2505,14 @@ tm_rows:
 
 .draw:
     mov byte [di], 0
+    call tm_rowsum              ; unchanged since the last refresh? then the
+    mov bx, si                  ; pixels on screen are already right
+    shl bx, 1
+    cmp ax, [tm_rowck+bx]
+    je .rnext
+    mov [tm_rowck+bx], ax
+
+    call tm_rowfill             ; only now is the band worth erasing
     mov byte [gfx_color], CBLACK
     mov cx, [tm_cx]
     add cx, 6
@@ -2372,6 +2522,7 @@ tm_rows:
     call font_str
     pop si
 
+.rnext:
     inc si
     cmp si, TM_ROWS
     jae .rdone
@@ -2551,6 +2702,29 @@ tm_copy7:
     ret
 
 ; -----------------------------------------------------------------------------
+; tm_kpair - 'nnn/nnnK' at DI, NUL-terminated
+; in:  AX = used, BX = total, DI = dest
+; out: DI left ON the NUL, so a row builder's own terminator lands on it
+; clobbers: nothing else
+;
+; ONE 'K', at the end. Both figures are KB and the memory view has to fit two
+; of these pairs plus their labels and a swatch on one line - eight characters
+; each is what makes that come out level with the map frames below.
+; -----------------------------------------------------------------------------
+tm_kpair:
+    push ax
+    call tm_put3
+    mov byte [di], '/'
+    inc di
+    mov ax, bx
+    call tm_put3
+    mov byte [di], 'K'
+    inc di
+    mov byte [di], 0
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; tm_put3 - decimal 0..999 as 3 chars at DI, right-aligned, space-padded
 ; in:  AX = value, DI = dest
 ; out: DI advanced by 3
@@ -2641,6 +2815,15 @@ tm_iknd:    resb INST_MAX       ; I_KIND snapshot: the Builtins/Packages split
 tm_mrow:    resw 1              ; the memory view's row cursor
 tm_mfit:    resb 1              ; ...and whether the row it names is on screen
 tm_sqox:    resw 1              ; ...and where its legend square starts
+tm_sqp:     resw 1              ; ...and its texture, or 0 for no square. A
+                                ; REQUEST, not a draw: tm_mrow_close erases
+                                ; the band before it letters it, so a square
+                                ; drawn while the row was being composed
+                                ; would be erased again
+tm_rowck:   resw TMM_ROWS       ; the last drawn content of each row, one
+                                ; word each (tm_rowsum). Shared by both
+                                ; views - TM_ROWS is the smaller of the two
+                                ; and a view switch clears it either way
 tm_view:    resb 1              ; 0 = performance view, 1 = memory view
 tm_inm:     resb INST_MAX * 16  ; I_NAME snapshots
 tm_rcyc:    resw TM_ROWS * 2    ; per-ROW cycles: task + instance, dword
