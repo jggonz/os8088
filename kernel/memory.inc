@@ -55,7 +55,16 @@ MC_SEG   equ 0                  ; word: base segment, 0 = free record
 MC_PARA  equ 2                  ; word: size in paragraphs (KB << 6)
 MC_OWN   equ 4                  ; word: owner - 0..INST_MAX-1 is an instance
                                 ; slot; 0xFF00 | tag is the kernel's own
-MC_SIZE  equ 6
+MC_DMA   equ 6                  ; word: the 64KB-page-safe HEAD in paragraphs,
+                                ; 0 = no constraint. Recorded so that a claim
+                                ; which MOVES keeps the property it was
+                                ; granted for: mem_regrow's path 3 is a fresh
+                                ; search, and without this it searched as if
+                                ; the block were ordinary and could land the
+                                ; head straddling - which the 8237 answers by
+                                ; wrapping to the start of its page and moving
+                                ; the wrong memory, silently
+MC_SIZE  equ 8
 
 MEM_K_SAVE equ 0xFF01           ; kernel tags (SPEC.md 50.2): menu save-under
 MEM_K_BB   equ 0xFF02           ; the double-buffer back buffer
@@ -302,6 +311,10 @@ mem_claim:
     mov [di+MC_SEG], dx         ; publish the claim
     mov [di+MC_PARA], ax
     mov [di+MC_OWN], bx
+    push ax
+    mov ax, [mem_dma]           ; ...and the page constraint it was granted
+    mov [di+MC_DMA], ax         ; under, so a later move can honour it
+    pop ax
     popf
     clc
     jmp short .out
@@ -369,6 +382,36 @@ mem_runfree:
 ; each live claim - a gap starts at one of those or nowhere - so this is
 ; MEM_MAX candidates against MEM_MAX claims, not a walk of the heap.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; mem_dmaok - would a block based at CX keep [mem_dma] paragraphs inside one
+;             64KB physical page? (module internal)
+; in:  CX = candidate base, [mem_dma] = the head in paragraphs (0 = no rule)
+; out: CF = 0 fine; CF = 1 it would straddle
+; clobbers: nothing else (flags)
+;
+; mem_claim's scan does this inline because it also has to BUMP to the next
+; page floor; mem_hifit only has to reject, so it asks here. One predicate,
+; two callers, and the second one is the whole reason a moved claim keeps the
+; property it was granted under.
+; -----------------------------------------------------------------------------
+mem_dmaok:
+    push ax
+    cmp word [mem_dma], 0
+    je .ok
+    mov ax, cx
+    and ax, 0x0FFF              ; paragraphs into this 64KB physical page
+    add ax, [mem_dma]
+    cmp ax, 0x1000              ; the head has to END inside the same page
+    ja .no
+.ok:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop ax
+    ret
+
 mem_hifit:
     push ax
     push bx
@@ -387,6 +430,8 @@ mem_hifit:
     ja .step
     call mem_runfree
     jc .step
+    call mem_dmaok              ; a constrained block may not straddle a 64KB
+    jc .step                    ; page here any more than at its first claim
     cmp cx, si
     jbe .step
     mov si, cx                  ; a higher one that fits
@@ -552,7 +597,16 @@ mem_regrow:
     jmp short .ok
 
 .move:                          ; 3. the highest block that will take it
+    push ax                     ; the constraint this block was GRANTED under
+    mov ax, [si+MC_DMA]         ; travels with it: mem_hifit rejects a base
+    mov [mem_dma], ax           ; whose head would straddle, exactly as the
+    pop ax                      ; first claim did. Paths 1 and 2 need no such
+                                ; care - the rule is on the HEAD, so a shrink
+                                ; and an extend upward both keep it
     call mem_hifit              ; CX = its base
+    pushf
+    mov word [mem_dma], 0       ; a transient, and this window is the only
+    popf                        ; place it may be set (the whole op is IF=0)
     jc .fail
     push ax
     push cx
@@ -574,8 +628,8 @@ mem_regrow:
     add si, MC_SIZE
     jmp short .rfind
 .rgot:
-    mov [si+MC_SEG], cx         ; the record follows the bytes
-    mov [si+MC_PARA], ax
+    mov [si+MC_SEG], cx         ; the record follows the bytes; MC_DMA is
+    mov [si+MC_PARA], ax        ; already right - it never changed
     mov dx, cx                  ; ...and the caller is told where it went
 .ok:
     popf

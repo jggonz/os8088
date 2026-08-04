@@ -9831,9 +9831,16 @@ elsewhere: correct, but it could hold 128KB to find 32KB and refuse on a
 machine that had the room the whole time.
 
 Two limits, both deliberate: a head bigger than 64KB is refused up front (no
-page can hold it, and that is also what bounds the bump), and **`mem_regrow`
-does not preserve it** — no record carries the constraint, so a claim that
-moves can land straddling. Claim the size you need and do not grow it.
+page can hold it, and that is also what bounds the bump). **The claim record
+carries it** — `MC_DMA`, the head in paragraphs, 0 for an ordinary claim — so
+`mem_regrow` keeps the property a block was granted under even when it has to
+move. It did not, and the hazard was documented here as a rule to remember
+instead: a regrow that took path 3 searched as though the block were ordinary
+and could land the head straddling, which the 8237 answers by wrapping to the
+start of its page and moving the wrong memory, with nothing to see. Paths 1
+and 2 never needed the care — the rule is on the HEAD, so a shrink and an
+extend upward both keep it — and `MC_SIZE` went 6 → 8 to hold the word, 64
+bytes across the table. Claim the size you need and do not grow it.
 
 `osapi_mem_avail` is what a package sizes itself from. `apps/paint` used to
 divide an int 12h figure and hope; asking the allocator is the difference
