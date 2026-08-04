@@ -7320,7 +7320,51 @@ window pointer alone would not do — window slots are reused.
    directly, the last two go through `wm_hide` and are collected by
    `fdlg_check` at the next input (§38.2).
 
-### 38.8 Symbols
+### 38.8 Partial redraws — what a keystroke actually changes
+
+Typing a character into the name box used to repaint the whole content: the
+header, both frames, six listing rows, the scroll bar, four buttons, the
+label, the box and the caret — about 120 glyphs and a 298×151 white fill, to
+move one letter.
+
+The dialog **does not resize**, so unlike a text window it never has to work
+out *which* pixels moved — every key and every click knows what it touched.
+The content is three parts, and the two that can change on their own are a
+**body** (draws) plus a **wrapper** (erases its own rectangle first, and only
+its own):
+
+| routine | erases | draws |
+|---------|--------|-------|
+| `fdlg_draw_name` → `fdlg_name_body` | inside the name box's frame | the name, and the caret in Save mode |
+| `fdlg_draw_list` → `fdlg_list_body` | inside the list frame | `fdlg_clamp` + `fdlg_draw_rows` + `fdlg_draw_sbar` |
+| `fdlg_draw_both` | both | both — a selection move changes the listing *and* takes the new name (`fdlg_pick`) |
+
+`fdlg_paint` calls the **bodies**, because `wm_paint_all` already handed it a
+white content; everything else calls the wrappers. Neither erase touches its
+frame: the frames are chrome and never move.
+
+Measured on the APPS folder, 8 characters typed into an empty name box,
+counting calls inside the kernel: `font_char` **972 → 36**, scanlines filled
+**7,600 → 184**.
+
+Routing, and the rule for adding to it:
+
+- name only — every printable character, backspace, Del, the four caret keys,
+  and a click inside the box
+- list only — the scroll bar's arrows and its two paging halves (a click *on*
+  the thumb, or on an inert track, now draws nothing at all)
+- both — Up/Down/PgUp/PgDn and a click on a row
+- **whole** (`fdlg_repaint`) — the third part changed: the header's drive
+  letter or `Disk`/`Folder` word, or the box's `Save as:`/`Folder:` label.
+  That is `fdlg_go` (the Drive button, and diving into a folder),
+  `fdlg_newfolder` and `fdlg_unfold`. **If a new action can change any of
+  those three strings, it is a full repaint.**
+
+One consequence to keep: `fdlg_onkey` now caches the content origin itself,
+because it used to get `[fdlg_cx]`/`[fdlg_cy]` for free from `fdlg_paint` and
+no longer always reaches it.
+
+### 38.9 Symbols
 
 | symbol | contract |
 |--------|-----------|
@@ -7332,6 +7376,8 @@ window pointer alone would not do — window slots are reused.
 | `fdlg_close` | Destroy the window, drop the gate, return the bar to the requester. Caller holds the lock. Preserves all registers. |
 | `fdlg_commit` | `fdlg_close`, staleness check, then the callback. Caller holds the lock. |
 | `fdlg_paint` / `fdlg_onkey` / `fdlg_onclick` | The window procs; all three assume the held lock and never take it. |
+| `fdlg_draw_name` / `fdlg_draw_list` / `fdlg_draw_both` | §38.8. Erase one rectangle and redraw it. All assume the held lock and a valid `[fdlg_cx]`/`[fdlg_cy]`; all preserve every register. |
+| `fdlg_name_body` / `fdlg_list_body` | The same drawing without the erase, for `fdlg_paint`, which is handed a white content. |
 | `fdlg_rows` | Out: AX = display rows = `disk_nfiles` + (`[dsk_cwd]` ≠ 0), CX = the `..` offset (0 or 1). The one place that offset is decided. |
 | `fdlg_stage` | In: AX = display row. Out: `fdlg_row` = its name, `fdlg_type` / `fdlg_size` its §19 type and size words; the `..` row is synthesized as type 2. |
 | `fdlg_go` | In: AX = first cluster. `dsk_chdir` + reset selection and scroll. |
