@@ -1,5 +1,23 @@
 # os8088
 
+> ### This is the `experimental` branch — it has diverged from `main`
+>
+> `experimental` and `main` are two forks that share history up to `2558ac0` and
+> have not been reconciled. **A `.o88` package built for one will not run on the
+> other**: the kernel segment, the callback convention and most API slot numbers
+> all differ.
+>
+> - **[BRANCH-DIFFERENCES.md](BRANCH-DIFFERENCES.md)** — what diverged. A short
+>   list of the twelve facts you need before touching either tree, then the same
+>   material at length with the reasoning attached.
+> - **[docs/PORTING.md](docs/PORTING.md)** — how to move an application between
+>   the two. Full side-by-side slot table, the callback and geometry
+>   conversions, the memory and sound differences, a checklist in each
+>   direction, and a worked example.
+>
+> Section numbers in `SPEC.md` disagree between the branches from §35 upward —
+> do not cite them across forks.
+
 ## Contributing
 
 Patches welcome — and you do not need to already know 8086 assembly.
