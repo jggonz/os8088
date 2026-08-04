@@ -1,19 +1,12 @@
 # Bringing work forward from pre-merge `main`
 
-`main`'s line of development ended at **`b401eda`** and was merged into this
-tree. If you have a package, a patch or a branch written against that commit or
-an earlier one, this is how to bring it forward.
+A long-lived branch was merged into this tree at **`b401eda`**. If you have a
+package, a patch or a branch written against that commit or an earlier one,
+this is how to bring it forward — one direction only, because there is nowhere
+to go back to.
 
-This used to be a two-way document, because there were two live branches. There
-is one now, so everything here points one direction: **from `b401eda`, to
-here.** The reverse instructions are gone rather than kept for symmetry — there
-is nowhere to go back to.
-
-For what the two lines of development contained and why the merge resolved each
-difference the way it did, see
-[BRANCH-DIFFERENCES.md](../BRANCH-DIFFERENCES.md). The binding contract is
-[SPEC.md](../SPEC.md), and §20.8 in particular is the list of things a package
-may not do.
+The binding contract is [SPEC.md](../SPEC.md), and §20.8 in particular is the
+list of things a package may not do.
 
 **Nothing built for `b401eda` runs here.** The header magic and version still
 match, so a stale `.o88` loads and then jumps into the wrong place — the loader
@@ -48,17 +41,17 @@ will not diagnose it. Bringing work forward always means rebuilding from source.
 The merge commit has both lines as parents, so `b401eda` is an ancestor of
 `HEAD` and git can reason about the range normally. What it *cannot* do is
 resolve the content: the merge deliberately kept this tree's files
-(`-s ours`), because the audit established capability by capability that
-nothing was being lost. So a plain `git merge b401eda` will report
-"Already up to date" and change nothing — correct, and not what you want.
+(`-s ours`), every capability of the other line having been checked off
+first. So a plain `git merge b401eda` will report "Already up to date" and
+change nothing — correct, and not what you want.
 
 Bring the work forward by replaying **your** commits, not by merging:
 
 ```sh
 git fetch origin
 git log --oneline b401eda..my-branch      # what is actually yours
-git checkout -b my-branch-forward origin/experimental
-git cherry-pick <first>^..<last>          # or: git rebase --onto origin/experimental b401eda my-branch
+git checkout -b my-branch-forward origin/main
+git cherry-pick <first>^..<last>          # or: git rebase --onto origin/main b401eda my-branch
 ```
 
 Expect conflicts in proportion to how much kernel you touched. Three files are

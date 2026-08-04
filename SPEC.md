@@ -4,33 +4,24 @@ This document is the **binding contract** for all kernel modules. Every symbol
 name, register contract, constant, and data layout here is pinned. Implement
 exactly what is written; put questions in your report, not in the code.
 
-### Section numbering, and the fork that ended
+### Gaps in the numbering
 
-**This document is now the only one.** It began as the `experimental` fork's
-spec and was numbered to share §0–§44 with `main` so that a citation like
-§11.3 or §20.1 could be read on either; `main`'s line of development has since
-been merged into this one, having been checked capability by capability first
-(BRANCH-DIFFERENCES.md, part 3). Three consequences worth knowing before
-citing a number:
+Two stretches of number are not used, and both are cheaper to leave alone than
+to close:
 
-- **§45–§49 were reserved for `main`, and §45 is now claimed** — the Tracker,
-  ported over with its section. The four numbers above it are free.
-- **§50+ is where this fork's own top-level sections started**, and §50 (the
-  claim heap) and §51 (loadable drivers) are still there rather than being
-  renumbered down into the gap. Moving them would break every citation in the
-  tree to buy tidiness.
-- **The `.90` subsection band** (§11.90, §11.91, §18.90, §37.90) likewise
-  stays. It exists for the same retired reason and costs nothing.
+- **Sections 46 to 49 are unused.** §45 is the Tracker; the four above it are
+  free for whatever comes next.
+- **The `.90` subsection band** — §11.90, §11.91, §18.90, §37.90 — is
+  ordinary spec text that happens to sit high in its parent's range.
 
-**API slot numbers do not track `main`'s** (§20.3). They did, with five cells
-held empty to keep one number from meaning two contracts; the merge made the
-holes pointless and they were closed. What survives is the half of that rule
-that was never about the other fork: a shipped slot keeps its contract, and
-"we no longer implement this" is a refusing stub, not a reuse (§20.8 rule 4).
+Renumbering either would break every citation in the tree, in source comments
+as much as in prose, and `tools/checkdocs.py` would only catch the ones that
+stopped resolving — not the ones that resolved to something else. That is the
+whole reason to leave them.
 
-What the two lines of development contained, and what the merge did with each
-difference, is [BRANCH-DIFFERENCES.md](BRANCH-DIFFERENCES.md). Bringing
-forward work written against the pre-merge `main` is
+The same rule governs the API table (§20.3): **a shipped slot keeps its
+contract**, and "we no longer implement this" is a refusing stub, not a reuse
+(§20.8 rule 4). Bringing forward a package written against an older table is
 [docs/PORTING.md](docs/PORTING.md).
 
 ## 0. Goal
