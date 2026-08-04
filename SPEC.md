@@ -6780,6 +6780,21 @@ speaker is not a device that can be absent.
   The generation guard is only sound because task-side writers are atomic
   w.r.t. the tick. The same rule covers the PWM steal path: `snd_ch2mode`,
   the generation stamp and the silencing are one unit.
+- **Grant stamping is task-qualified (binding)**. Every grant records the
+  instance that asked for it, and `snd_req_inst` is the single routine
+  that answers who that is. A window callback is dispatched with
+  `[snd_inst]` stamped, and the obvious reading — "a stamp is set, so use
+  it" — is wrong the moment two tasks exist: a **worker that pre-empts
+  that callback** is a different app entirely, and it would inherit the
+  stamp. So the stamp carries **the task that wrote it** in its high byte
+  and is honoured only while that task is the running one; every other
+  caller falls through to its own `T_INST`. Without this a worker's tone
+  is billed to, and released at the teardown of, whichever app happened to
+  be dispatching when it played — and Arkanoid's worker calls
+  `OSAPI_SND_TONE` while UI callbacks run, so it is reachable, not
+  theoretical. Corollary: **no caller may open-code the fallback**;
+  `osapi_snd_play` did, and a second copy of a rule is a second place for
+  it to be wrong.
 - **`snd_release_inst`** — in: AL = instance slot. Both grants a package
   can hold — tone ownership and a running clip — are stamped with the
   owner instance, and this routine force-releases them (the clip stops at

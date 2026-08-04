@@ -642,7 +642,8 @@ snd_release_rec:
 ; snd_disp_set - stamp the instance a window callback is dispatched for
 ;
 ; in:  DI = instance record ptr, or 0 = none (kernel)
-; out: nothing; [snd_inst] = the instance slot (0xFF for none)
+; out: nothing; [snd_inst] = the instance slot (0xFF for none) in the low
+;      byte, the stamping task in the high byte
 ; clobbers: nothing (flags)
 ;
 ; Called at the same dispatch sites that bill I_CYC (SPEC.md 34.3): the site
@@ -665,8 +666,9 @@ snd_disp_set:
 .none:
     mov al, 0xFF
 .store:
-    mov [snd_inst], al
-    pop cx
+    mov ah, [sch_cur]           ; ...and WHICH TASK stamped it, so that a
+    mov [snd_inst], ax          ; worker pre-empting this callback mid-flight
+    pop cx                      ; cannot inherit the stamp (SPEC.md 34.3)
     pop ax
     ret
 
@@ -697,7 +699,7 @@ snd_init:
     mov [snd_61boot], al
 
     mov byte [snd_ch2mode], 0
-    mov word [snd_inst], 0x00FF ; word: the dispatch sites push/pop it whole
+    mov word [snd_inst], 0xFFFF ; no stamp, owned by no task: a word because
     mov byte [snd_gen], 0
     mov byte [snd_town_act], 0
     mov byte [snd_town_inst], 0xFF
@@ -872,13 +874,26 @@ osapi_snd_tone:
 ;           ([snd_inst], set at the I_CYC billing sites), else the running
 ;           task's T_INST. 0xFF = kernel.
 ; clobbers: nothing else (flags)
+;
+; The stamp is only the answer for a caller running INSIDE that callback, and
+; the callback runs on one task. A worker that pre-empts it is a different
+; task, and honouring the stamp there bills its tone to - and releases it at
+; the teardown of - whichever app happened to be dispatching. So the stamp
+; carries the task that wrote it and is spent only by that task; everyone
+; else falls through to their own T_INST. Arkanoid's worker calls SND_TONE
+; while UI callbacks run, which is what makes this reachable rather than
+; theoretical.
 ; -----------------------------------------------------------------------------
 snd_req_inst:
     push bx
-    mov dh, [snd_inst]
+    mov bx, [snd_inst]          ; BL = the stamped instance, BH = the task
+    cmp bh, [sch_cur]           ; that stamped it. A DIFFERENT task is running
+    jne .task                   ; now, so it pre-empted that callback and the
+    mov dh, bl                  ; callback's instance is not its to spend
     cmp dh, 0xFF
     jne .out
-    mov bl, [sch_cur]           ; not in a callback: the running task's
+.task:
+    mov bl, [sch_cur]           ; not our callback: the running task's
     xor bh, bh                  ; instance (0xFF for the UI task)
     shl bx, 1                   ; T_SIZE = 8
     shl bx, 1
@@ -947,18 +962,10 @@ osapi_snd_play:
     pop dx
     pop cx
 
-    mov bh, [snd_inst]          ; requesting instance: the dispatched
-    cmp bh, 0xFF                ; callback's stamp, else the running
-    jne .grant                  ; task's T_INST (SPEC.md 34.3)
-    push bx
-    mov bl, [sch_cur]
-    xor bh, bh
-    shl bx, 1                   ; T_SIZE = 8
-    shl bx, 1
-    shl bx, 1
-    mov ah, [bx+sch_tasks+T_INST]
-    pop bx
-    mov bh, ah
+    push dx                     ; requesting instance (SPEC.md 34.3) - the one
+    call snd_req_inst           ; routine, so the task qualification is not
+    mov bh, dh                  ; open-coded a second time and cannot drift
+    pop dx
 
     mov dl, 1                   ; the OTHER tier, asked BEFORE the grant
     call snd_str_busy           ; window opens - so this refusal exits by
@@ -1149,8 +1156,11 @@ snd_town_gen:  resb 1           ;   generation stamped at grant
 snd_texp_gen:  resb 1           ;   generation the pending expiry belongs to
 snd_town_exp:  resw 1           ;   remaining ticks, 0 = no self-expiry
 snd_inst:      resw 1           ; low byte: instance slot being dispatched
-                                ; (0xFF = none); a word so the dispatch
-                                ; sites can push/pop it around callbacks
+                                ; (0xFF = none). HIGH byte: the task that
+                                ; stamped it, so snd_req_inst can tell a
+                                ; caller inside that callback from a worker
+                                ; that pre-empted it. A word for both reasons:
+                                ; the dispatch sites push/pop it whole
 
 snd_xlat:      resb 256         ; per-clip PWM rescale table (34.4), built
                                 ; by snd_xlat_build before every clip -
