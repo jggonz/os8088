@@ -955,6 +955,15 @@ ui_cmd:
                                 ; GUI already torn down - and before vid_text,
                                 ; so a failure still has a screen to have
                                 ; happened on
+    call drv_shutdown           ; detach every loaded driver (SPEC.md 51.2):
+                                ; int 19h resets no hardware, so a hooked
+                                ; card would ride the reboot with its vector
+                                ; pointing into a heap the next boot reuses
+                                ; and an auto-init DMA still running. Before
+                                ; sched_unhook, because the unload WAITS on
+                                ; the worker's death, which needs the
+                                ; scheduler alive - and before the lock,
+                                ; because that wait yields
     call gfx_lock               ; never released - the GUI is done
     call vid_text
     call sched_unhook           ; restores int 08h/0Ch (unhooks the mouse too)

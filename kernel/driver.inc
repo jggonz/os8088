@@ -938,6 +938,39 @@ drv_unload:
     ret
 
 ; -----------------------------------------------------------------------------
+; drv_shutdown - take every loaded driver down, for reboot (SPEC.md 51.2)
+; in:  nothing
+; out: nothing (all registers preserved)
+;
+; int 19h resets no hardware: a hooked Sound Blaster would ride across it
+; with its IRQ vector pointing into a heap segment the next boot reuses, the
+; line unmasked at the 8259, and an auto-init DSP+8237 transfer still moving
+; memory. The full drv_unload per row rather than a bare quiesce verb, so
+; there is exactly ONE teardown path - main's snd_unhook did this for the
+; resident card code, and the obligation moved here with the code.
+; -----------------------------------------------------------------------------
+drv_shutdown:
+    push ax
+    push bx
+    push cx
+    xor cx, cx
+.next:
+    mov al, cl
+    call drv_row                ; BX = the row
+    cmp word [bx+DRVR_SEG], 0
+    je .skip
+    mov al, cl
+    call drv_unload
+.skip:
+    inc cx
+    cmp cx, DRV_MAX
+    jb .next
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; drv_release - give the image's claim back and disarm the row (internal)
 ; in:  BX = row ptr
 ; out: nothing (all registers preserved)
