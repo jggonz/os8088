@@ -6102,9 +6102,8 @@ content moves again.
    compares against `np_sig`, stores the new value, and widens
    `[np_dr0]`..`[np_dr1]`. If `np_dr0` comes back 0xFFFF nothing on screen
    moved and the routine returns having drawn nothing at all.
-2. **Draw the band** (`np_draw` = 1, `np_clip` = 1). One `gfx_fill` over
-   rows `np_dr0`..`np_dr1` across the full content width, then the walk
-   again, skipping every row outside the range.
+2. **Draw the band** (`np_draw` = 1, `np_clip` = 1). The walk again,
+   drawing every row inside the range and skipping every row outside it.
 
 Measured on a 410-character note, 20 keystrokes at the end, counting calls
 inside the kernel: `font_char` **8,410 → 350**, and scanlines filled
@@ -6136,6 +6135,198 @@ Five things hold it up:
   `np_toast` and is in no row's signature — the keystroke that retires one
   has to erase it the only way this module can, by painting the content
   again.
+
+**A dirty row is drawn as ONE opaque `font_run`, and there is no band fill.**
+It used to be a `gfx_fill` of rows `dr0..dr1` followed by a `FONT_CHAR` per
+cell in pass 2 — the erase-and-letter pair, which on a 4.77MHz 8088 leaves the
+line *blank* for several display frames and flickers on every keypress
+(§6.1/§11.94). `np_walk`'s draw pass accumulates each row into `np_rbuf`
+instead of drawing it, and `np_rflush` paints the row at each row transition
+and at the end of the walk. The buffer is padded with **spaces** to
+`np_rcols`, and that is the whole trick: `font_run` paints a space as
+background on its fast path, so the padding *is* the erase and no cell is ever
+momentarily blank.
+
+Seven things this has to get right, and the first one is not obvious:
+
+- **Rows the walk no longer reaches must still be blanked.** A backspace that
+  pulls a wrapped line back up, or a deleted newline, leaves rows below the
+  text whose old pixels are still on screen. The band fill erased them for
+  free because it covered `dr0..dr1` whether the walk got there or not; row-by-
+  row drawing does not, so `.done` walks on to `np_dr1` blanking as it goes.
+  Without it a deletion leaves the row's last state behind — **caret included**,
+  which is how the first test of this showed it.
+- **The caret is banked, not drawn.** `np_carets` used to draw it during the
+  walk; the row's run would now paint over it, so it records its x in
+  `np_rcx` and `np_rflush` draws it after the run.
+- **The margins are still fills.** The run covers `np_tx` to the last whole
+  cell, so the inset left of the pen and the under-8px tail past the last cell
+  are two thin fills over the dirty band. Neither carries a glyph, so neither
+  can flicker and neither can disagree with anything at a clip edge (§11.3).
+- **A row is diffed against what was last drawn on it, and only the changed
+  span is run.** Typing at the end of a line changes exactly one cell, plus
+  the two the caret leaves and arrives at — three cells out of forty. The
+  cache is one row (`np_prow`, `np_prowi`, `np_prcc`) and it is deliberately
+  the row that was last *drawn*, which under steady typing is the caret's:
+  rows the walk visits but `np_rowdirty` skips leave it alone, so it does not
+  get overwritten by the other rows of the same walk. It is invalidated at
+  birth (`.bss` is zeroed and 0 is a real row index) and on the full-repaint
+  path, which is where every disturbance that is not our own row draw ends up.
+  The caret's old and new columns are folded into the span because a bare
+  arrow key moves the bar without changing a character, and the cell it
+  vacates has to lose it. Measured under QEMU with a counter in
+  `font_run_cell`: a keystroke draws **2 cells**, at any note length and at
+  any window width.
+- **`np_clean` is what keeps the padding from costing rows × width.** Padding
+  to `np_rcols` is only needed to erase something; after a `gfx_fill` there is
+  nothing there, so a run may stop at the row's last real character. The flag
+  is set for exactly as long as that is true — `np_paint` (the kernel filled
+  the content on the way in) and the reconcile of §27.3 (which fills its own
+  band) — and a row that trims to nothing is not drawn at all. Without it a
+  fullscreen repaint is 50 rows of 90 cells whether the note has 500
+  characters or five, which on a 4.77MHz 8088 is about five seconds.
+- **The grow box is restored only when the dirty band could have reached it.**
+  It is 13x13 at the content's bottom-right, and `OSAPI_WM_GROW` used to be
+  called on every keystroke — it had to be, because the band fill spanned the
+  full content width. `wm_grow_paint` fills the square before framing it, so
+  that was the erase-and-letter flash surviving in one corner: with the rows
+  fixed, the resize handle was still visibly flickering. One comparison of
+  the band's last row against `np_bot - 12` answers it.
+- **`np_rcols` is clamped to `NP_MAXCOL`**, and the accumulate step range-checks
+  against it. The wrap rule means a cell past the band cannot normally arise;
+  the clamp is what makes that a bounded write rather than a claim.
+
+The full-repaint path (`np_sigsame` says the signatures no longer describe the
+screen) still fills the content whole first — there the fill is erasing
+everything below the text as well, and a full repaint is not what a keystroke
+pays for.
+
+### 27.3 The visual break — typing in FRONT of text without reflowing it
+
+Inserting a character at the front of a note moves every character after it,
+and there is no cheaper way to draw that than to draw it: forty rows of forty
+cells is 1,600 cells, and a cell is about a millisecond (§6.1.1). One
+keystroke, most of a second. §27.2's delta cache does not help — those cells
+really did all change.
+
+So they are not drawn. The rows below the caret are **scrolled down one row**
+(`OSAPI_GFX_SCROLL`, §5.5), and what the screen then shows is the note with a
+line break at the caret that the note does not contain: the text after the
+caret hangs on the next row at the column it already occupied, and everything
+below it has moved down. The caret keeps the rest of its own row to type on at
+§27.2's two cells a keystroke, and when it runs out of row the rows below are
+pushed down again.
+
+```
+before                  after inserting 'z' at the caret (|)
++----------------+      +----------------+
+|mnoab|cdefghijab|      |mnoabz|         |
+|cdefghijabcdefgh|      |      cdefghijab|
+|ijabcdefghijabcd|      |cdefghijabcdefgh|
+|efghij          |      |ijabcdefghijabcd|
++----------------+      +----------------+
+```
+
+`[np_bmode]` is the flag, `[np_bcrow]` the row the break sits on and
+`[np_borig]` the row it started on. A keystroke while it is up is **one**
+walk — no measure pass, because nothing below the caret is being laid out and
+there is nothing to compare signatures against — from §27.4's checkpoint to
+the caret and no further (`[np_bstop]`), then `np_rflush`'s delta.
+
+Six rules hold it up, and each is a rule rather than a tuning:
+
+- **It is a lie, so it settles.** `np_reconcile` runs half a second after the
+  last keystroke, when the window stops being frontmost, and before anything
+  that is not typing. A user's rhythm is type-then-read, and a note that
+  stayed broken while it was being read would be read as the note.
+- **The settle is a worker task** (§20.6), spawned lazily on the first break
+  so a Note Pad that never breaks costs no task slot. It polls every 3 ticks,
+  compares `OSAPI_GET_TICKS` against `[np_ktick]` and asks `OSAPI_WM_TOP`
+  whether it still has the front — a package learns that it *gained* the
+  front and never that it lost it. A **covered** window is skipped rather
+  than drawn: the reconcile is a fill followed by runs, and under an armed
+  clip region a fill cuts per pixel while a run cuts per cell (§11.3).
+  Skipping costs nothing, because an uncover repaints through `W_PAINT` and
+  `np_paint` draws the note and clears the flag.
+- **Everything that is not typing settles first**, and the hook is at
+  `np_measure` rather than in each handler: that call *means* "I need to know
+  where things really are", and a click has to land on the character under
+  the pointer. Enter, Delete, the menu commands, save and load reach
+  `np_redraw` without `[np_fast]` and settle there; a resize or a toast fails
+  `np_sigsame` and settles too.
+- **The trigger is CELLS, not rows** — `(np_dr1 − caret row) × np_rcols ≥ 60`.
+  This window is resizable and a row is 30 cells or 90 depending how wide it
+  was dragged, so a row count is two different amounts of work wearing one
+  number. The caret's own row is excluded because §27.2 already draws it for
+  two cells.
+- **It is entered only on an INSERT, and only on a CPU_8086** — the row below
+  the break keeps the pixels of the row that was there, and how much of that
+  is a stale duplicate depends which way the caret moved (`ccol−1` cells for
+  an insert, `ccol+1` for a backspace); rather than carry both cases, a
+  backspace that would cost a big reflow just reflows. Once the break *is* up
+  a backspace is the ordinary cheap path, because nothing below the caret
+  moves. The CPU gate is `OSAPI_CPU_INFO`: anywhere faster the reflow is
+  already invisible and the lie buys nothing.
+- **It needs `[np_tx]` on a multiple of 8**, because `OSAPI_GFX_SCROLL` is
+  byte-column granular on every adapter. `OSAPI_WM_SNAP` (§11.94) guarantees
+  that on the two mono adapters — the ones a 4.77MHz machine has — and on VGA
+  it is a coin flip, so there the break does not engage. That is a FACT the
+  code tests, not a guess (§47 rule 3).
+
+**The reconcile is incremental**, and it can be: the break only ever scrolled
+rows `[np_borig]` and below, so everything above it is still the note and
+still carries the signature that says so. `np_reconcile` runs a measure walk
+to bring the signatures up to date, then forces the band to
+`np_borig..np_vrows−1` — no signature describes a fiction, so the comparison
+is not consulted there — fills that band white, and draws it with `np_clean`
+set. A refused scroll (the band left below the caret is shorter than the row
+being inserted, which is what happens at the bottom of the window) sets
+`np_bfail` and settles on the spot.
+
+### 27.4 The layout checkpoint — a keystroke stops walking the whole note
+
+`np_walk` is O(the note) and §27.2 runs it **twice** per keystroke. That is
+about 500 8086 cycles a character a pass, so on a 4.77MHz machine a 400-
+character note costs ~90ms per keystroke in layout alone — against ~2ms of
+drawing. It is invisible until the note is long, and then it is the whole
+cost: a user filled a fullscreen window and reported each keystroke getting
+slower while a counter in `font_run_cell` said the drawing was still two
+cells.
+
+Wrapping is a **left-to-right automaton with no lookahead** — a cell that
+would cross `[np_rgt]` moves to the next row, a newline resets the pen — so
+the pen state at index k depends only on the characters before it. An edit at
+the caret therefore cannot change the layout of anything ahead of the caret,
+and the walk may **resume at the start of the caret's row**.
+
+The start of a row is `(index, row)` alone: the pen's x is always `[np_tx]`
+there, and its y is always `[np_ty] + 8·row`, because every row advance moves
+`np_row` and `bp` together. `np_rstart` banks the candidate
+(`np_ckpc`/`np_ckpcr`) and `np_ask` promotes it to `np_ckpi`/`np_ckpr` the
+moment the walk stands on the caret, so every walk leaves the checkpoint
+describing the layout it just performed.
+
+Three things make it safe:
+
+- **`[np_fast]` is set by the key handler, not inferred**, and only for a
+  printable insert (1) or a backspace (2) whose edit index is at or after the
+  checkpoint. A backspace at column 0 eats the last character of the row
+  *above*, which is before the checkpoint — that is the one deletion a
+  resumed walk could not see, and it is exactly the "inside the caret's own
+  row" rule.
+- **It is one-shot.** `np_redraw` reads `[np_fast]` and clears it, so a
+  handler that forgets to set it gets the full walk, which is only slow.
+- **`np_sigsame` gates it.** The checkpoint is a row index, so it means
+  nothing under a different geometry; `np_redraw` only honours `[np_fast]`
+  after the four `np_bounds` numbers have compared equal.
+
+Rows above the checkpoint keep their stored signatures, which is correct
+because they did not change; `np_dr0` can therefore never come back below
+`np_ckpr`, and both passes resume from the same point. Measured under QEMU
+with a counter in `np_walk`'s loop: at 200 characters a keystroke went from
+**404 walk iterations to 35**, at 350 from **702 to 28**, and after growing
+the window to the full screen to **4** — bounded by the caret's column
+instead of by the note.
 
 ## 28. taskmgr.inc — the Task Manager window
 
@@ -6593,61 +6784,6 @@ Menu/dispatch: see §12/§13 — "Task Manager" (CMD_TASKS = 3) is the System
 menu's third item, under "Control Panel"; dispatch calls `app_launch`
 KIND_TASKMGR like the §14 kinds.
 
-
-**A dirty row is drawn as ONE opaque `font_run`, and there is no band fill.**
-It used to be a `gfx_fill` of rows `dr0..dr1` followed by a `FONT_CHAR` per
-cell in pass 2 — the erase-and-letter pair, which on a 4.77MHz 8088 leaves the
-line *blank* for several display frames and flickers on every keypress
-(§6.1/§11.94). `np_walk`'s draw pass now accumulates each row into `np_rbuf`
-instead of drawing it, and `np_rflush` paints the row at each row transition
-and at the end of the walk. The buffer is padded with **spaces** to
-`np_rcols`, and that is the whole trick: `font_run` paints a space as
-background on its fast path, so the padding *is* the erase and no cell is ever
-momentarily blank.
-
-Four things this has to get right, and the first one is not obvious:
-
-- **Rows the walk no longer reaches must still be blanked.** A backspace that
-  pulls a wrapped line back up, or a deleted newline, leaves rows below the
-  text whose old pixels are still on screen. The band fill erased them for
-  free because it covered `dr0..dr1` whether the walk got there or not; row-by-
-  row drawing does not, so `.done` walks on to `np_dr1` blanking as it goes.
-  Without it a deletion leaves the row's last state behind — **caret included**,
-  which is how the first test of this showed it.
-- **The caret is banked, not drawn.** `np_carets` used to draw it during the
-  walk; the row's run would now paint over it, so it records its x in
-  `np_rcx` and `np_rflush` draws it after the run.
-- **The margins are still fills.** The run covers `np_tx` to the last whole
-  cell, so the inset left of the pen and the under-8px tail past the last cell
-  are two thin fills over the dirty band. Neither carries a glyph, so neither
-  can flicker and neither can disagree with anything at a clip edge (§11.3).
-- **A row is diffed against what was last drawn on it, and only the changed
-  span is run.** Typing at the end of a line changes exactly one cell, plus
-  the two the caret leaves and arrives at — three cells out of forty. The
-  cache is one row (`np_prow`, `np_prowi`, `np_prcc`) and it is deliberately
-  the row that was last *drawn*, which under steady typing is the caret's:
-  rows the walk visits but `np_rowdirty` skips leave it alone, so it does not
-  get overwritten by the other rows of the same walk. It is invalidated at
-  birth (`.bss` is zeroed and 0 is a real row index) and on the full-repaint
-  path, which is where every disturbance that is not our own row draw ends up.
-  The caret's old and new columns are folded into the span because a bare
-  arrow key moves the bar without changing a character, and the cell it
-  vacates has to lose it.
-- **The grow box is restored only when the dirty band could have reached it.**
-  It is 13x13 at the content's bottom-right, and `OSAPI_WM_GROW` used to be
-  called on every keystroke — it had to be, because the band fill spanned the
-  full content width. `wm_grow_paint` fills the square before framing it, so
-  that was the erase-and-letter flash surviving in one corner: with the rows
-  fixed, the resize handle was still visibly flickering. One comparison of
-  the band's last row against `np_bot - 12` answers it.
-- **`np_rcols` is clamped to `NP_MAXCOL`**, and the accumulate step range-checks
-  against it. The wrap rule means a cell past the band cannot normally arise;
-  the clamp is what makes that a bounded write rather than a claim.
-
-The full-repaint path (`np_sigsame` says the signatures no longer describe the
-screen) still fills the content whole first — there the fill is erasing
-everything below the text as well, and a full repaint is not what a keystroke
-pays for.
 
 ### 28.1 The window is sized to the SCREEN, not to a constant
 

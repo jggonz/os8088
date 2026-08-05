@@ -116,7 +116,21 @@ NP_MAXROWS   equ 60             ; signature slots, one per row the content can
                                 ; this, so a taller screen degrades to "the
                                 ; rows past 60 are always redrawn" rather than
                                 ; writing past the array
-NP_BSS_TOTAL equ 945 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
+NP_BSS_TOTAL equ 972 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
+NP_BRK_CELLS equ 60             ; the visual break's trigger (SPEC.md 27.3):
+                                ; the CELLS a keystroke would repaint BELOW
+                                ; the caret's row. Not rows - this window is
+                                ; resizable and a row is 30 cells or 90
+                                ; depending how wide the user dragged it, so
+                                ; a row count means two different amounts of
+                                ; work. 60 cells is about 60ms on a 4.77MHz
+                                ; 8088 (SPEC.md 6.1.1), which is the point
+                                ; where a keystroke stops keeping up
+NP_IDLE      equ 9              ; ticks of no typing before the break is
+                                ; reconciled: ~500ms at 18.2Hz
+NP_WTICKS    equ 3              ; ...and how often the worker looks, ~165ms.
+                                ; Finer than NP_IDLE so the settle lands
+                                ; near the deadline rather than a tick late
 NP_MARGIN    equ 8              ; left/top text margin inside the content. It
                                 ; was 6, and 8 is what puts every glyph cell
                                 ; on a multiple of 8 once OSAPI_WM_SNAP has
@@ -175,6 +189,17 @@ np_entry:
     pop si                          ; CF is still wm_create's: the branch
                                     ; above consumed it and OSAPI_MENU_SET
                                     ; preserves flags too (SPEC.md 20.3)
+    mov [np_win], bx                ; the worker (SPEC.md 27.3) has no callback
+                                    ; to be handed this in SI
+    pushf                           ; the visual break exists for the machine
+    push ax                         ; that cannot repaint a screenful between
+    call OSAPI_CPU_INFO             ; keystrokes, and nowhere else: on anything
+    cmp al, CPU_8086                ; faster the reflow is already invisible
+    jne .nobrk                      ; and a temporary layout would be a lie
+    mov byte [np_brkok], 1          ; told for no gain. The flags are saved
+.nobrk:                             ; around it because the CF this proc owes
+    pop ax                          ; the loader is still riding in them and
+    popf                            ; the compare above would eat it
     mov word [np_prowi], 0xFFFF     ; .bss arrives zeroed and 0 is a REAL row
                                     ; index, so the delta cache has to be told
                                     ; it holds nothing (SPEC.md 27.2)
@@ -314,7 +339,21 @@ np_walk:
     mov word [np_rowh], 0           ; with nothing folded into it yet
     mov bx, [np_len]                ; BX = characters remaining
     mov si, np_buf
-    call np_rstart                  ; BP is row 0's y; the buffer starts blank
+    cmp byte [np_resume], 0         ; ...or, for a keystroke at the caret,
+    je .seeded                      ; start where the caret's row does
+    mov ax, [np_ckpi]               ; (SPEC.md 27.4). Everything before it
+    cmp ax, [np_len]                ; laid out identically last time and
+    ja .seeded                      ; cannot have moved, so its signatures
+    mov [np_i], ax                  ; still stand and its pixels are on screen
+    add si, ax
+    sub bx, ax
+    mov ax, [np_ckpr]
+    mov [np_row], ax
+    mov cl, 3
+    shl ax, cl
+    add bp, ax                      ; y is [np_ty] + 8*row by construction:
+.seeded:                            ; every row advance moves both together
+    call np_rstart                  ; BP is this row's y; the buffer starts blank
 
 .loop:
     ; --- the wrap rule, applied to the cell this index will occupy ---------
@@ -326,13 +365,21 @@ np_walk:
     mov di, [np_tx]                 ; moves [np_row] off it
     add bp, 8
     call np_nextrow                 ; the pen changed rows, so the signature
-    call np_rstart                  ; being accumulated belongs to the old one
-.fits:                              ; being accumulated belongs to the old one
+    call np_bpush                   ; being accumulated belongs to the old one
+    call np_rstart                  ; ...and in break mode the rows below have
+.fits:                              ; to be pushed down before it is drawn
     call np_ask                     ; the queries, at the settled pen
     cmp byte [np_draw], 0
     je .body
     call np_carets                  ; ...and the caret, if this is its index
 .body:
+    cmp byte [np_bstop], 0          ; the visual break (SPEC.md 27.3): the
+    je .nostop                      ; walk ENDS at the caret, because the
+    mov ax, [np_i]                  ; whole point is that the note below it
+    cmp ax, [np_cur]                ; is not being laid out at all
+    jne .nostop
+    jmp .done                       ; near: .done is past a short jump's reach
+.nostop:
     test bx, bx
     jz .done                        ; the index past the last character: the
                                     ; queries have seen it, and there is no
@@ -443,6 +490,13 @@ np_ask:
     jne .hit
     mov [np_curx], di
     mov [np_cury], bp
+    push ax                         ; the row the caret is on starts HERE, and
+    mov ax, [np_ckpc]               ; that is the only state the next keystroke
+    mov [np_ckpi], ax               ; needs to skip everything above it
+    mov ax, [np_ckpcr]              ; (SPEC.md 27.4)
+    mov [np_ckpr], ax
+    mov byte [np_ckok], 1
+    pop ax
     push ax                         ; AX is [np_i] and .hit below still wants
     mov ax, di                      ; it. The caret is pixels on this row too,
     xor ax, 0x5A5A                  ; and folding it in HERE - between the
@@ -605,6 +659,10 @@ np_rstart:
     cld
     mov [np_rby], bp
     mov word [np_rcx], 0xFFFF
+    mov ax, [np_i]                  ; where this row STARTS, banked as the
+    mov [np_ckpc], ax               ; checkpoint candidate: np_ask promotes it
+    mov ax, [np_row]                ; the moment the walk stands on the caret
+    mov [np_ckpcr], ax              ; (SPEC.md 27.4)
     mov di, np_rbuf
     mov cx, [np_rcols]
     mov al, ' '
@@ -700,6 +758,19 @@ np_rflush:
     je .cache                       ; nothing moved: draw NOTHING
 
 .draw:
+    cmp byte [np_clean], 0          ; the band is known blank (a full repaint
+    je .draw2                       ; white-filled it, SPEC.md 27.2), so the
+    mov bx, [np_fhi]                ; padding has nothing to erase and the run
+.tl:                                ; stops at the last real character. A
+    cmp byte [np_rbuf+bx], ' '      ; fullscreen window is 90 cells wide and a
+    jne .tdone                      ; note is rarely that long: without this a
+    cmp bx, [np_flo]                ; repaint costs rows x width instead of
+    jbe .cache                      ; characters, and on a 4.77MHz 8088 that
+    dec bx                          ; is the difference between half a second
+    jmp short .tl                   ; and five
+.tdone:
+    mov [np_fhi], bx
+.draw2:
     mov bx, [np_fhi]                ; terminate the span and run just it: the
     inc bx                          ; row is one string, so the byte after the
     mov al, [np_rbuf+bx]            ; span has to come back afterwards
@@ -778,6 +849,394 @@ np_fold1:
     mov [np_fhi], ax
 .out:
     ret
+
+; =============================================================================
+; The visual break - typing in FRONT of text without reflowing it (SPEC.md 27.3)
+;
+; Inserting a character at the front of a note moves every character after it,
+; and there is no cheaper way to draw that than to draw it: forty rows of
+; forty cells is 1,600 cells, and on a 4.77MHz 8088 a cell is about a
+; millisecond (SPEC.md 6.1.1). One keystroke, most of a second. The delta
+; cache of 27.2 does not help - the cells really did all change.
+;
+; So they are not drawn. The rows below the caret are SCROLLED down by one,
+; and what the screen then shows is the note with a line break at the caret
+; that the note does not contain - the text after the caret hangs on the next
+; row at the column it already occupied, and everything below it has moved
+; down a row. The caret keeps the rest of its own row to type on, at 27.2's
+; two cells a keystroke, and when it runs out of row the rows below are
+; pushed down again.
+;
+; Four things hold this up, and each is a rule rather than a tuning:
+;
+;  1. It is a LIE, so it is temporary and it says so by settling. The
+;     reconcile runs half a second after the last keystroke, when the window
+;     stops being frontmost, and before anything that is not typing (a click,
+;     an arrow, Enter, a menu command, a save, a resize). A user's normal
+;     rhythm is type-then-read, and a note that stayed broken while being
+;     read would be read as the note.
+;  2. It is gated on the machine, not on the adapter: OSAPI_CPU_INFO must say
+;     CPU_8086. Anywhere faster the reflow is already invisible and the lie
+;     buys nothing.
+;  3. The trigger is CELLS, not rows. This window is resizable and a row is
+;     30 cells or 90 depending how wide it was dragged, so a row count is two
+;     different amounts of work wearing one number.
+;  4. It needs [np_tx] on a multiple of 8, because OSAPI_GFX_SCROLL is
+;     byte-column granular on every adapter. OSAPI_WM_SNAP guarantees that on
+;     the two mono adapters (SPEC.md 11.94) - which are the ones a 4.77MHz
+;     machine has - and on VGA it is a coin flip, so there the break simply
+;     does not engage and the reflow is what happens. That is a FACT the code
+;     can test, not a guess (SPEC.md 47 rule 3).
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; np_scroll - move row AX and everything below it down one row
+; in:  AX = the first row index to move, np_bounds already run, gfx lock held
+; out: CF = OSAPI_GFX_SCROLL's answer; preserves all registers
+;
+; The x span is the whole content width rounded IN to byte columns. [np_tx] is
+; a multiple of 8 (the caller checked) and the left margin is NP_MARGIN = 8,
+; so x1 is the content's own left edge; x2+1 rounds the content's right edge
+; down, which can only ever drop part of the <8px tail past the last cell -
+; the band no glyph reaches.
+; -----------------------------------------------------------------------------
+np_scroll:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_ty]
+    mov bx, ax                      ; BX = y1
+    mov dx, [np_bot]                ; DX = y2
+    mov ax, [np_tx]
+    sub ax, NP_MARGIN               ; AX = x1
+    mov cx, [np_rgt]
+    inc cx
+    and cx, 0xFFF8
+    dec cx                          ; CX = x2, x2+1 a multiple of 8
+    mov si, -8                      ; down one row
+    call OSAPI_GFX_SCROLL
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret                             ; POP does not touch flags: CF is still
+                                    ; the scroll's answer
+
+; -----------------------------------------------------------------------------
+; np_bpush - np_walk reached a new row while the break is up: push the note
+;            below it down to make room
+; in:  [np_row] = the row the pen just moved ONTO; gfx lock held
+; out: nothing; preserves all registers
+;
+; Called from np_walk's wrap site, AFTER the row that was ending has been
+; flushed and BEFORE the new one starts - the only moment at which the row
+; above is finished and the row below has not been touched.
+;
+; A refusal is the band below the caret being shorter than the row we are
+; asking to insert, which is what happens when the caret reaches the bottom
+; of the window. Nothing was moved, so the screen is still consistent with
+; the note as far as this row; the caller settles.
+; -----------------------------------------------------------------------------
+np_bpush:
+    cmp byte [np_bmode], 0
+    je .out
+    cmp byte [np_draw], 0           ; a measure pass moves no pixels
+    je .out
+    push ax
+    mov ax, [np_row]
+    cmp ax, [np_bcrow]
+    jbe .pop                        ; still on the break's own row
+    call np_scroll
+    jc .fail
+    mov ax, [np_row]
+    mov [np_bcrow], ax
+    mov word [np_prowi], 0xFFFF     ; the vacated row holds a copy of the one
+    mov byte [np_didpush], 1        ; above it: nothing the delta cache knows
+    jmp short .pop
+.fail:
+    mov byte [np_bfail], 1
+.pop:
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; np_brkdraw - one keystroke while the break is up
+; in:  SI = window ptr, gfx lock held, [np_ckok] set
+; out: nothing; clobbers what a callback may
+;
+; ONE walk, from the checkpoint to the caret and no further - so a keystroke
+; costs the caret's own row and nothing else, whatever the note weighs. No
+; signature pass: the rows below the caret are not being laid out, so there
+; is nothing to compare them against.
+; -----------------------------------------------------------------------------
+np_brkdraw:
+    push ax
+    push bx
+    mov word [np_hity], 0xFFFF
+    mov word [np_wanty], 0xFFFF
+    mov word [np_dr1], 0            ; np_walk's blank loop must not run: it
+                                    ; erases rows this pass has no opinion on
+    mov byte [np_draw], 1
+    mov byte [np_sigup], 0
+    mov byte [np_clip], 0
+    mov byte [np_resume], 1
+    mov byte [np_bstop], 1
+    mov byte [np_didpush], 0
+    mov byte [np_bfail], 0
+    call np_walk
+    mov byte [np_resume], 0
+    mov byte [np_bstop], 0
+    cmp byte [np_bfail], 0
+    jne .settle
+    cmp byte [np_didpush], 0
+    je .out
+    mov bx, si                      ; a push scrolled the whole band, grow box
+    call OSAPI_WM_GROW              ; included (SPEC.md 11.1)
+    jmp short .out
+.settle:
+    call np_reconcile               ; no room left below: show the note
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_brktry - would this keystroke be cheaper as a break? then take it
+; in:  SI = window ptr, pass 1 has run ([np_dr1], [np_curx]/[np_cury] valid),
+;      the caller has already checked [np_brkok] and that this is a plain
+;      keystroke at the caret; gfx lock held
+; out: CF = 0 the break took over AND drew - the caller is done; CF = 1 it
+;      did not, and the caller reflows as before. Clobbers AX/BX/CX/DX/DI
+; -----------------------------------------------------------------------------
+np_brktry:
+    push di
+    test word [np_tx], 7
+    jnz .no                         ; rule 4: the scroll is byte-column granular
+    mov ax, [np_cury]
+    sub ax, [np_ty]
+    mov cl, 3
+    shr ax, cl
+    mov di, ax                      ; DI = the caret's row
+    mov ax, [np_dr1]
+    sub ax, di
+    jbe .no                         ; nothing below the caret's row moved
+    mul word [np_rcols]             ; DX:AX = the cells this reflow would cost
+    or dx, dx                       ; below the caret. It cannot overflow -
+    jnz .yes                        ; 60 rows by 90 cells is 5,400 - but a
+    cmp ax, NP_BRK_CELLS            ; multiply writes DX and saying so is
+    jb .no                          ; cheaper than remembering it cannot
+.yes:
+    mov ax, di
+    inc ax
+    cmp ax, [np_vrows]
+    jae .no                         ; no row below to push the note into
+    mov ax, [np_curx]
+    sub ax, [np_tx]
+    mov cl, 3
+    shr ax, cl
+    mov bx, ax                      ; BX = the caret's column, AFTER the edit
+    or bx, bx
+    jz .no                          ; column 0 means this keystroke wrapped the
+                                    ; caret onto a fresh row: there is no
+                                    ; prefix to keep and no tail to push, and
+                                    ; the next keystroke will ask again
+    mov ax, di
+    call np_scroll                  ; the caret's row and everything below it
+    jc .no                          ; go down one; the caret's row is redrawn
+                                    ; from the note a moment later
+    dec bx                          ; the prefix the row BELOW now duplicates:
+    jz .nodup                       ; columns 0..caret-2, because the caret is
+    push bx                         ; one past the character just typed
+    mov ax, di
+    inc ax
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_ty]
+    mov bx, ax                      ; BX = y1
+    mov dx, ax
+    add dx, 7                       ; DX = y2
+    pop ax                          ; AX = cells to blank
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_tx]
+    dec ax
+    mov cx, ax                      ; CX = x2
+    mov ax, [np_tx]                 ; AX = x1
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+.nodup:
+    mov byte [np_bmode], 1
+    mov [np_bcrow], di
+    mov [np_borig], di              ; the first row the reconcile owes a repaint
+    mov word [np_prowi], 0xFFFF     ; the caret's row was just scrolled away
+    call np_brkdraw
+    mov bx, si                      ; the scroll above dragged the grow box
+    call OSAPI_WM_GROW              ; down with everything else
+    call np_hire                    ; nothing settles the break but the worker
+    clc
+    pop di                          ; POP does not touch flags
+    ret
+.no:
+    stc
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; np_reconcile - take the break down and show the note
+; in:  SI = window ptr, gfx lock held (UI task or the worker)
+; out: nothing; clobbers what a callback may
+;
+; INCREMENTAL, and it can be: the break only ever scrolled rows [np_borig] and
+; below, so everything above it is still the note and still has the signature
+; that says so. The band from np_borig down is filled white and redrawn whole,
+; and np_clean is what keeps that from costing rows x width - with the band
+; known blank a row's run stops at its last real character instead of padding
+; to the edge to erase with (SPEC.md 27.2).
+; -----------------------------------------------------------------------------
+np_reconcile:
+    push ax
+    push bx
+    push cx
+    push dx
+    call np_bounds
+    mov byte [np_bmode], 0
+    mov byte [np_resume], 0
+    mov word [np_hity], 0xFFFF      ; pass 1: the signatures, over the whole
+    mov word [np_wanty], 0xFFFF     ; note, because they have been standing
+    mov word [np_dr0], 0xFFFF       ; still since the break went up
+    mov word [np_dr1], 0
+    mov byte [np_draw], 0
+    mov byte [np_sigup], 1
+    mov byte [np_clip], 0
+    call np_walk
+    mov ax, [np_vrows]
+    or ax, ax
+    jz .done
+    dec ax
+    mov [np_dr1], ax
+    mov ax, [np_borig]
+    cmp ax, [np_dr1]
+    ja .done
+    mov [np_dr0], ax                ; the band is everything the break moved,
+                                    ; whatever the signatures think: no
+                                    ; signature describes a fiction
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_ty]
+    mov bx, ax                      ; BX = y1
+    mov dx, [np_bot]                ; DX = y2
+    mov ax, [np_tx]
+    sub ax, NP_MARGIN               ; AX = x1, the content's own left edge
+    mov cx, [np_rgt]                ; CX = x2
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+    mov word [np_prowi], 0xFFFF     ; the fill erased whatever the cache knew
+    mov byte [np_clean], 1
+    mov byte [np_draw], 1
+    mov byte [np_sigup], 0
+    mov byte [np_clip], 1
+    call np_walk
+    mov byte [np_clip], 0
+    mov byte [np_clean], 0
+    mov bx, si
+    call OSAPI_WM_GROW              ; the fill reached it (SPEC.md 11.1/27)
+.done:
+    call np_sigmark
+    call np_toast
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_hire - spawn the worker, once
+; in:  gfx lock held (OSAPI_TASK_SPAWN requires it); preserves all registers
+;
+; Lazy on purpose: a Note Pad that never breaks never costs a task slot or a
+; 512-byte stack, which on a 12-slot table is worth the byte of state. A
+; refusal is normal and transient (the table can be full), so nothing is
+; latched and the next break asks again.
+; -----------------------------------------------------------------------------
+np_hire:
+    push ax
+    push bx
+    cmp byte [np_hired], 0
+    jne .out
+    mov ax, np_worker
+    mov bx, [np_win]
+    call OSAPI_TASK_SPAWN
+    jc .out
+    mov byte [np_hired], 1
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_worker - THE background task (SPEC.md 20.6): it settles the break
+; in:  DX = our instance index, DS = ES = CS = our segment, IF = 1, gfx lock
+;      free. NEVER returns and never exits on its own - the only way out is
+;      OSAPI_TASK_ALIVE not coming back.
+;
+; It exists for one reason: a break that is never taken down is not a
+; temporary state, it is what the user believes the note says. Two things
+; take it down - half a second of not typing, and the window ceasing to be
+; frontmost. The second needs OSAPI_WM_TOP because a package is told when it
+; GAINS the front and never when it loses it.
+;
+; A covered window is skipped rather than drawn: the clip region cuts a fill
+; per pixel and a run per cell (SPEC.md 11.3), and this reconcile is a fill
+; followed by runs. Skipping costs nothing - an uncover repaints through
+; W_PAINT, and np_paint draws the note and clears the break.
+; -----------------------------------------------------------------------------
+np_worker:
+.loop:
+    mov bx, [np_win]
+    call OSAPI_TASK_ALIVE           ; the lock must NOT be held here (rule 4)
+    mov ax, NP_WTICKS
+    call OSAPI_TASK_SLEEP
+    cmp byte [np_bmode], 0
+    je .loop
+    call OSAPI_WM_TOP               ; BX = frontmost visible, 0 = none
+    cmp bx, [np_win]
+    jne .go
+    call OSAPI_GET_TICKS
+    sub ax, [np_ktick]              ; modular, so a wrapping tick counter is
+    cmp ax, NP_IDLE                 ; not a special case (SPEC.md 8)
+    jb .loop
+.go:
+    call OSAPI_GFX_LOCK
+    cmp byte [np_bmode], 0          ; re-read UNDER the lock: the UI task may
+    je .unlock                      ; have settled it while we waited
+    mov bx, [np_win]
+    call OSAPI_WM_OBSCURED
+    jc .unlock
+    mov si, [np_win]
+    call np_reconcile
+.unlock:
+    call OSAPI_GFX_UNLOCK
+    jmp .loop
 
 ; -----------------------------------------------------------------------------
 ; np_nextrow - the pen moved to the next row: bank the signature it just
@@ -908,13 +1367,32 @@ np_sigsame:
 ;
 ; A QUERY pass: it answers where the caret is, or what a click landed on, and
 ; it must not touch the signatures - the caller has not drawn anything.
+;
+; It is also where the visual break comes down (SPEC.md 27.3), and that is the
+; right place for it rather than a call in each of the four handlers: this is
+; exactly the call that means "I need to know where things really are", and
+; the answer would be a lie against what the user is looking at. A click has
+; to land on the character under the pointer, so the note has to be showing
+; the note before the pointer is resolved.
 ; -----------------------------------------------------------------------------
 np_measure:
+    call np_settle
     call np_bounds
     mov byte [np_draw], 0
     mov byte [np_sigup], 0
     mov byte [np_clip], 0
     call np_walk
+    ret
+
+; -----------------------------------------------------------------------------
+; np_settle - if the visual break is up, take it down
+; in:  SI = window ptr, gfx lock held; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_settle:
+    cmp byte [np_bmode], 0
+    je .out
+    jmp np_reconcile                ; a tail call: it preserves what we do
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -925,14 +1403,19 @@ np_measure:
 np_paint:
     push ax
     call np_bounds
+    mov byte [np_bmode], 0          ; whatever the break was showing, this
+    mov word [np_prowi], 0xFFFF     ; draws the NOTE over a filled content
+    mov byte [np_resume], 0
     mov word [np_hity], 0xFFFF      ; no queries: this pass is here to draw
     mov word [np_wanty], 0xFFFF
     mov byte [np_draw], 1
     mov byte [np_sigup], 1          ; the content was white-filled on the way
     mov byte [np_clip], 0           ; here, so this pass draws every row AND is
-    call np_walk                    ; the baseline every later incremental
-    call np_sigmark                 ; redraw is measured against (SPEC.md 27.2)
-    pop ax
+    mov byte [np_clean], 1          ; the baseline every later incremental
+    call np_walk                    ; redraw is measured against (SPEC.md 27.2)
+    mov byte [np_clean], 0          ; ...and because it WAS filled, a row's run
+    call np_sigmark                 ; stops at its last character instead of
+    pop ax                          ; padding to the band's edge to erase with
     call np_toast                   ; last, so it sits above the text
     ret
 
@@ -1351,6 +1834,45 @@ np_clamp:
     ret
 
 ; -----------------------------------------------------------------------------
+; np_fastok / np_fastokb - is this keystroke one np_redraw may take the cheap
+;                          path for? (SPEC.md 27.4)
+; in:  [np_cur] BEFORE the edit; np_fastokb is the backspace door, where the
+;      character that moves is one index earlier
+; out: [np_fast] set if so, left alone if not; preserves all registers
+;
+; Two questions in one: the checkpoint has to describe this layout at all,
+; and the edit has to fall at or after it. The second is what "inside the
+; caret's own row" means - a backspace at column 0 eats the last character of
+; the row ABOVE, which is before the checkpoint, and that is the one deletion
+; the resumed walk could not see.
+;
+; It is deliberately NOT a test of what the redraw will cost: pass 1 answers
+; that, and it can only answer it after this has let it run cheaply.
+; -----------------------------------------------------------------------------
+np_fastok:
+    push ax
+    push bx
+    mov bx, 1                       ; an INSERT, which is the only edit the
+    mov ax, [np_cur]                ; visual break may be ENTERED on
+    jmp short np_fastcm
+np_fastokb:
+    push ax
+    push bx
+    mov bx, 2
+    mov ax, [np_cur]
+    dec ax
+np_fastcm:
+    cmp byte [np_ckok], 0
+    je .out
+    cmp ax, [np_ckpi]
+    jb .out
+    mov [np_fast], bl
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; np_onkey - W_ONKEY: edit the buffer, then repaint our own content
 ; in:  AL = ascii, AH = scan, SI = window ptr (gfx lock held by caller)
 ; out: nothing; preserves all registers
@@ -1403,7 +1925,10 @@ np_onkey:
     jb .out
     cmp al, 126
     ja .out
-
+    call np_fastok                  ; a printable at the caret is THE case the
+                                    ; incremental paths exist for (SPEC.md
+                                    ; 27.3/27.4); Enter is not, and jumps in
+                                    ; below this
 .append:
     call np_ins                     ; at the caret, which follows it
     jmp short .edited
@@ -1411,8 +1936,9 @@ np_onkey:
 .bksp:
     cmp word [np_cur], 0
     je .out                         ; nothing to the left of the caret
-    dec word [np_cur]
-    call np_del
+    call np_fastokb                 ; ...and so is a backspace, as long as the
+    dec word [np_cur]               ; character it eats is on the caret's own
+    call np_del                     ; row
     jmp short .edited
 
 .del:
@@ -1451,6 +1977,8 @@ np_onkey:
 
 .edited:                        ; an edit retires the toast; an unhandled
     mov word [np_msg], 0        ; key leaves both it and the screen alone
+    call OSAPI_GET_TICKS        ; ...and restarts the settle clock, which is
+    mov [np_ktick], ax          ; what the worker measures (SPEC.md 27.3)
 
 .redraw:
     call np_redraw                  ; SI still = window ptr
@@ -1491,8 +2019,28 @@ np_redraw:
     push cx
     push dx
     call np_bounds
+    mov al, [np_fast]               ; ONE-SHOT: whoever set it meant this
+    mov byte [np_fast], 0           ; redraw and no other
+    mov byte [np_resume], 0
+    cmp byte [np_bmode], 0
+    je .normal
+    or al, al
+    jz .settle                      ; the break survives typing and nothing
+    call np_sigsame                 ; else (SPEC.md 27.3), and a resize or a
+    jc .settle                      ; toast is not typing either
+    call np_brkdraw
+    jmp .out
+.settle:
+    call np_reconcile
+    jmp .out
+
+.normal:
+    push ax
     call np_sigsame
+    pop ax
     jc .full
+    mov [np_resume], al             ; only a keystroke at the caret may skip
+                                    ; the rows above it (SPEC.md 27.4)
 
     mov word [np_hity], 0xFFFF      ; pass 1: no queries, no drawing - just
     mov word [np_wanty], 0xFFFF     ; which rows stopped matching
@@ -1504,7 +2052,25 @@ np_redraw:
     call np_walk
     mov ax, [np_dr0]
     cmp ax, 0xFFFF
-    je .out                         ; not one pixel of the text moved
+    je .done                        ; not one pixel of the text moved
+
+    cmp byte [np_resume], 1         ; would this reflow cost more than pushing
+    jne .band                       ; the note down a row? (SPEC.md 27.3)
+                                    ; 1 is an insert and 2 a backspace: the
+                                    ; break is only ENTERED on an insert,
+                                    ; because the row below it keeps the
+                                    ; pixels of the row that was there and
+                                    ; how much of that is a stale duplicate
+                                    ; depends on which way the caret moved.
+                                    ; A backspace once the break IS up is
+                                    ; the ordinary cheap path and needs none
+                                    ; of that - nothing below the caret moves
+    cmp byte [np_brkok], 0
+    je .band
+    call np_brktry
+    jnc .done                       ; it took over, and it drew
+.band:
+    mov ax, [np_dr0]                ; reloaded: np_brktry is free with AX
 
     mov bx, ax                      ; y1 = np_ty + 8*dr0
     shl bx, 1
@@ -1584,7 +2150,9 @@ np_redraw:
     call OSAPI_WM_GROW
 .nogrow:
     call np_toast                   ; a no-op with no message, which is every
-    jmp short .out                  ; keystroke
+.done:                              ; keystroke
+    mov byte [np_resume], 0
+    jmp short .out
 
 .full:
     mov word [np_prowi], 0xFFFF     ; the delta cache describes the SCREEN, and
@@ -2005,4 +2573,58 @@ np_fcc      equ os88_image_end + 941 + NP_IOCAP    ; word: the caret's column
                                        ; on the row being flushed
 np_bandb    equ os88_image_end + 943 + NP_IOCAP    ; word: the dirty band's last
                                        ; row, for the grow-box test
-                                       ; total 945 + NP_IOCAP = NP_BSS_TOTAL
+
+; --- the layout checkpoint (SPEC.md 27.4) ------------------------------------
+; np_walk is O(the note), and it runs TWICE per keystroke - which is what a
+; user found by filling a fullscreen window and watching each keystroke get
+; slower while the delta cache above kept the drawing at two cells. Wrapping
+; is a left-to-right automaton with no lookahead, so the pen state at index k
+; depends only on the characters before it: an edit at the caret cannot
+; change the layout of anything ahead of the caret. So the walk may RESUME at
+; the start of the caret's row instead of starting at index 0, and the start
+; of a row is (index, row) alone - the pen's x is always [np_tx] there and
+; its y is always [np_ty] + 8*row.
+np_ckpi     equ os88_image_end + 945 + NP_IOCAP    ; word } the checkpoint: the
+np_ckpr     equ os88_image_end + 947 + NP_IOCAP    ; word } caret's row start
+np_ckpc     equ os88_image_end + 949 + NP_IOCAP    ; word } and the candidate
+np_ckpcr    equ os88_image_end + 951 + NP_IOCAP    ; word } np_rstart banks
+np_win      equ os88_image_end + 953 + NP_IOCAP    ; word: our window, which a
+                                       ; callback is handed but the worker
+                                       ; has to remember
+np_bcrow    equ os88_image_end + 955 + NP_IOCAP    ; word: the row the visual
+                                       ; break sits on (SPEC.md 27.3)
+np_borig    equ os88_image_end + 957 + NP_IOCAP    ; word: ...and the row it
+                                       ; started on, which is the first row
+                                       ; the reconcile has to repaint
+np_ktick    equ os88_image_end + 959 + NP_IOCAP    ; word: the tick of the last
+                                       ; keystroke, for the idle settle
+np_ckok     equ os88_image_end + 961 + NP_IOCAP    ; byte: the checkpoint
+                                       ; describes THIS layout
+np_fast     equ os88_image_end + 962 + NP_IOCAP    ; byte: this redraw is a
+                                       ; plain insert or backspace at the
+                                       ; caret, inside the caret's own row.
+                                       ; One-shot: np_redraw consumes it
+np_resume   equ os88_image_end + 963 + NP_IOCAP    ; byte: np_walk starts at
+                                       ; the checkpoint, not at index 0
+np_bmode    equ os88_image_end + 964 + NP_IOCAP    ; byte: the visual break is
+                                       ; up, so the screen is NOT the note
+np_clean    equ os88_image_end + 965 + NP_IOCAP    ; byte: the band is known
+                                       ; blank, so a row's run needs no
+                                       ; trailing padding to erase with
+np_brkok    equ os88_image_end + 966 + NP_IOCAP    ; byte: this machine is slow
+                                       ; enough to want the break at all
+np_hired    equ os88_image_end + 967 + NP_IOCAP    ; byte: the worker exists
+np_didpush  equ os88_image_end + 968 + NP_IOCAP    ; byte: a push scrolled the
+                                       ; band, so the grow box needs redrawing
+np_bfail    equ os88_image_end + 969 + NP_IOCAP    ; byte: a push was REFUSED -
+                                       ; the band left below the caret is
+                                       ; shorter than a row - so the break
+                                       ; cannot continue and must settle
+np_bstop    equ os88_image_end + 970 + NP_IOCAP    ; byte: THIS walk ends at
+                                       ; the caret. Its own flag and not
+                                       ; "[np_bmode] is set", because
+                                       ; np_measure answers clicks and arrow
+                                       ; keys and has to see the whole note
+                                       ; even while the break is up
+np_pad5     equ os88_image_end + 971 + NP_IOCAP    ; byte: keeps the total even
+                                       ; total 972 + NP_IOCAP = NP_BSS_TOTAL

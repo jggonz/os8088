@@ -243,6 +243,50 @@ accumulator folded per iteration costs a few instructions and cannot lap; a
   §6.1.1 predicted the opposite and was corrected by measurement: per-cell
   overhead dominates the byte-writes it guards.
 
+### Count work, don't time it — QEMU is exact about the first and useless at the second
+
+The container's clock tells you nothing about a 4.77 MHz machine, but the
+*amount of work* the guest does is identical on both, and QEMU will report it
+exactly. So when the question is "is this slow because it does too much?",
+**instrument a counter and read it over QMP** rather than reaching for 86Box:
+
+```nasm
+; kernel/font.inc, in .text so the offset is fixed
+dbg_cells:  dw 0
+...
+font_run_cell:
+    inc word [cs:dbg_cells]
+```
+
+```sh
+nasm ... -l /tmp/k.lst   &&  grep dbg_cells /tmp/k.lst     # -> 0x1E78
+python3 tools/qmp.py build/qmp.sock 'xp /2xh 0x2478'       # KERNEL_SEG*16 + off
+```
+
+`h` is a word; HMP's `w` is four bytes. Editing any include **before** the one
+holding the counter moves the offset, so re-derive it after every rebuild.
+
+A **package** can write the same counter — `mov ax, KERNEL_SEG / mov es, ax /
+inc word [es:0x1E7E]` — which is how a walk inside an app is counted without
+knowing the segment its region was claimed at.
+
+This is what settled the Note Pad question (SPEC.md §27.4). A user reported
+typing getting slower as a note grew and inferred that more than one character
+was being redrawn. The cell counter said **2 cells per keystroke at every note
+length and every window width** — the drawing was already right — and a
+counter in the layout walk said 404 iterations, growing linearly. The cost was
+in a place no screenshot could show and no wall clock here could measure.
+
+Two rules that fall out of it:
+
+- **Measure before redesigning.** The obvious hypothesis (the delta span is
+  growing) was wrong, and the fix it would have produced was a fix to working
+  code.
+- **A counter is not a timer.** It tells you how many times something ran, not
+  what it cost. Multiply by the calibration numbers above to get milliseconds,
+  and say that you did — ~500 8086 cycles per walk iteration is a reading of
+  the instruction stream, not a measurement.
+
 ### Prefer a self-checking harness to a careful one
 
 Three of the four bugs above were caught by **one number on screen
