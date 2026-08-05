@@ -10168,96 +10168,125 @@ later — and then clears `[ark_full]`, `[ark_msg]` and `[ark_stat]`, exactly as
 panel would have queued a whole-board repaint for the worker to perform a
 second time.
 
-### 44.2 The keyboard has no key-up, so the paddle glides on a deadline
+### 44.2 The keyboard has no key-up, so a hold is inferred from the repeat RATE
 
-int 16h delivers keypresses and nothing else, so "is left held" cannot be
-asked. Each arrow key sets a direction and refills `[ark_pkeep]` with a
-deadline in **ticks**; the worker moves the paddle while the deadline lasts and
-decrements it. Typematic repeat keeps refilling it, so a held key glides and a
-tap is one short nudge.
+int 16h delivers keypresses and nothing else. There is no key-up, and a
+typematic repeat is **byte-identical** to a fresh press, so neither "is left
+held" nor even "did that key come up in between" can be asked. The **interval
+between events** is the only evidence there is, and which interval you read it
+by decides the whole feel of the paddle.
 
-A repeat that arrives *while the deadline still stands* is the only available
-evidence that the key is held rather than tapped, which is what promotes the
-paddle from `ARK_PSTEP` to `ARK_PFAST`.
+Every earlier version read the typematic **delay**, and all of its failures
+were the same failure. A fresh press latched the paddle in motion for
+`ARK_PKEEP` ticks, chosen at 11 to outlast the ~9-tick delay so that the first
+repeat would arrive while the latch still stood; a repeat arriving inside it
+meant *held*, and promoted the paddle to `ARK_PFAST`. That works, and it welds
+the tap to the delay: the latch is what makes the paddle move, so a tap moves
+for 11 ticks whether or not anyone wanted it to. At the old `ARK_PSTEP` that
+was **44 pixels** — a whole paddle width, a fifth of the paddle's travel, for a
+key already released — and the paddle could not be aimed at all. Shortening the
+latch stalled the hold. Tapering the speed inside it made a hold decelerate and
+then surge as the repeats landed, which read worse than the overshoot did.
+Slowing it enough to keep the tap short made both the tap and the first half
+second of a hold a crawl. With the delay as the discriminator, a tap and the
+opening of a hold are the *same event*, so every number serves both and none of
+them can serve both well.
 
-**The deadline has two lengths, and collapsing them into one is what made the
-paddle feel unresponsive.** The deadline is how long the paddle keeps moving
-after the *last* key event, so it is also the distance it coasts once the key
-comes up — and the two events need very different amounts of it. A **fresh**
-press must bridge the BIOS typematic **delay** of about 9 ticks, or a held key
-stalls for half a second before its first repeat arrives and the game reads as
-ignoring the keyboard; that is `ARK_PKEEP`, 11. A **repeat** has nothing left
-to bridge but the typematic **rate**, about 1.7 ticks at the usual 10.9 cps
-default; that is `ARK_PHOLD`, 4, which tolerates a rate down to ~4.5 cps.
+**The typematic RATE is a far better discriminator, because nothing else
+produces it.** Repeats arrive about 1.65 ticks apart at the usual 10.9 cps, and
+no human taps a key seven times a second. So: two key events in the same
+direction no more than `ARK_PRATE` ticks apart mean the key is **held**, and
+nothing else does. `[ark_page]` counts ticks since the last event — aged by
+`ark_do_paddle`, stopped at `ARK_PRATE` so it cannot wrap, reset by every key
+event — and one comparison against it is the entire inference.
 
-Refilling `ARK_PKEEP` on every repeat charged the delay to the release: the
-paddle sailed on for 11 ticks at `ARK_PFAST`, 88 pixels — a third of the play
-field — after the player let go. With `ARK_PHOLD` a release costs 4 ticks, 32
-pixels.
+Everything follows from that:
+
+- **A press whose neighbour is further off is the player pressing again**, and
+  it simply restarts the tap. That is the answer to "can we tell a re-press
+  from a repeat" — not from the event, which carries nothing, but from the
+  interval, and only for intervals a human cannot produce. Measured: two
+  presses stay two taps down to about **130 ms** apart, and read as a hold
+  below that.
+- **The tap stopped having to outlast anything.** `ARK_PTAP` is a pure feel
+  knob now: 7 ticks, and `ARK_PTAP` × `ARK_PSTEP` is the whole tap, 14 pixels.
+- **The first repeat of a real hold is 9 ticks after the press, so it reads as
+  a re-press and restarts the tap** — which is exactly right, and is why a hold
+  keeps moving through a delay it cannot see the end of. The *second* repeat,
+  1.65 ticks later, promotes it.
+- **Erring low on `ARK_PRATE` is the safe direction.** Too high and a player
+  tapping to walk the paddle trips into a hold (3 puts that at ~4.5 taps a
+  second, 2 at ~7). Too low — on a machine whose repeat rate is slower than
+  `ARK_PRATE` — costs only the fast speed: every repeat then restarts the tap
+  instead, so a held key still moves, just at `ARK_PSTEP`. The old scheme's
+  equivalent failure was the paddle stalling.
+
+`ARK_PHOLD` (4) is what each repeat of a confirmed hold refills, so it is also
+exactly how long the paddle coasts once the key comes up — 32 pixels. It has
+only to outlast the typematic rate, and tolerates one down to ~4.5 cps. It is
+unchanged from the scheme above, and is the one part of it that was always
+right: refilling `ARK_PKEEP` there instead charged the *delay* to the release
+and sailed the paddle on for 88 pixels after the player let go.
 
 The `or al, al` gate on the scan code is not optional: the numeric keypad
 sends '4' and '6' with the arrow scan codes, so without it typing a digit
 steers the paddle — the trap apps/notepad documents.
 
-### 44.2.1 One speed decides both the tap and the first half-second of a hold
+### 44.2.1 Three speeds, and nothing between them
 
-The deadline above fixed the *release*; the **tap** was the other half of the
-same bug and outlived it. A press-and-release still glided the full
-`ARK_PKEEP` — 11 ticks at `ARK_PSTEP`, 44 pixels, a whole paddle width and a
-fifth of the paddle's entire travel, for a key the player had let go of. The
-paddle could only be put somewhere in 44-pixel jumps, so it could not be aimed
-at all.
+`[ark_pspd]` holds one of exactly three values and **is** the paddle's state
+machine:
 
-Only the **speed** can fix that, and this is where the obvious cleverness is
-wrong. A press cannot be known to be a tap until the repeat that would have
-made it a hold fails to arrive, about 9 ticks later. **A fresh press and the
-first half-second of a hold are therefore the same event**, and any shape given
-to one is given to the other — so the paddle's speed profile during the delay
-is the only free variable, and it is a single choice serving two cases that
-want opposite things.
+| speed | value | set by | ends |
+|---|---|---|---|
+| stopped | 0 | `ark_do_paddle`, when the countdown runs out | — |
+| tapping | `ARK_PSTEP`, 2 px/tick | a press with no repeat-interval neighbour | after `ARK_PTAP` ticks, mid-stride |
+| holding | `ARK_PFAST`, 8 px/tick | the second of two events `ARK_PRATE` ticks apart | `ARK_PHOLD` ticks after the last repeat |
 
-Tapering was tried and is wrong. Running `ARK_PSTEP` for two ticks and then
-shedding a pixel a tick to a standstill — 4, 4, 3, 2, 1 — shortens the tap to
-14 pixels beautifully, and it makes a *hold* decelerate to nothing and then
-surge as the repeats land. That reads worse than the overshoot did: a paddle
-that slows down while the key is still held reads as the game losing the key,
-where a paddle that merely moves slowly reads as the game waiting. **The speed
-is flat for the whole latch and then stops dead.** A hold creeps at one
-constant speed until the repeats wind it to `ARK_PFAST`; a tap is that same
-creep, cut off at `ARK_PKEEP`. Nothing ever slows down, and `ark_do_paddle`
-holds no taper state at all — `[ark_pspd]` is written in exactly two places,
-`ARK_PSTEP` on a fresh press and `ARK_PFAST` on a confirmed repeat, so a
-mid-press slowdown is not a behaviour the code can express.
+Nothing ramps, tapers, eases or coasts between them, and `ark_do_paddle`
+changes the speed exactly one way — to 0, when `[ark_pkeep]` runs out. **The
+abrupt stop is the point, not a compromise**: a tap that decays is a tap whose
+distance depends on when you stopped watching it, and the paddle is aimed by
+tapping.
 
-The abrupt stop costs nothing precisely *because* the speed is low: the paddle
-is doing a pixel a tick when the latch expires, so there is nothing to
-decelerate from. The stop also lands where it should — `ARK_PKEEP` is 11 and
-the earliest repeat is at 9, so the paddle stops at almost exactly the moment
-the press is known not to be a hold. There is no window in which it could ramp
-down even if it wanted to.
+Two details are load-bearing:
 
-What this leaves is **one number, `ARK_PSTEP`, deciding both the tap's distance
-and the creep at the start of a hold**. Shortening the nudge and sharpening the
-creep are the same edit in opposite directions and no arrangement of the code
-separates them. It is **5 quarter pixels**, 1.25 a tick: 13 pixels for a tap
-against the 44 it was, and 11 pixels covered while the typematic delay runs.
+- **`[ark_pspd]` = 0 is what tells `ark_onkey` a hold is over.** The hold
+  branch is `[ark_pspd] == ARK_PFAST`, and without the store to 0 a press
+  arriving long after a hold had expired would be read as its continuation and
+  take off at full speed.
+- **`[ark_pacc]` carries the quarter pixels a fractional speed owes between
+  frames**, exactly as §44.3.2 does for the ball, because `ARK_PTAP` ticks of a
+  *whole* number of pixels gives a tap of 7, 14 or 21 and nothing in between.
+  `ARK_PFAST` is `8 * ARK_VQ`, a whole number of pixels, so the accumulator
+  never shows in a rally.
 
-It is fractional because it has to be. Eleven ticks of any whole number of
-pixels is 11 or 22 and nothing in between — the same ladder the ball hit in
-§44.3.2, and the same fix: `[ark_pacc]` carries the quarter pixels owed between
-frames and `ark_do_paddle` moves the whole pixels that fall out of it, 1 on
-three ticks in four and 2 on the fourth. `ARK_PFAST` is `8 * ARK_VQ`, a whole
-number of pixels, so the accumulator never shows in a rally and the release
-coast stays the flat 4 × 8 = 32 pixels §44.2 set.
+Measured on the running game: a tap moves 2 px a tick from its first tick and
+stops dead at 14; five taps 200 ms apart walk the paddle 44 px without ever
+promoting; a press followed by a 500 ms delay and six 91 ms repeats travels
+98 px.
 
-One consequence is worth stating because it changes how a serve aims.
-`ark_throw` and `ark_english` read `[ark_pvel]`, the pixels actually moved, so
-a creeping paddle imparts **nothing**: a flick is a hold now, not a tap, and
-Space after a tap serves straight up however recently the arrow was pressed.
-That is not a rounding accident but the honest reading of the existing rule — a
-paddle standing still serves straight up, and at 1.25 pixels a tick it is very
-nearly standing still. It used to be credited with the 4 pixels a tick the flat
-deadline pretended it was doing.
+**One consumer had to stop reading the paddle's motion, and that is a real
+distinction rather than a patch.** `ark_english` and the rail clamp ask a
+physical question — how fast is this thing actually going — and `[ark_pvel]`,
+the pixels moved this frame, answers it. `ark_throw` asks a different one:
+which way did the player *ask* for. Those two agreed while the paddle moved 4
+pixels a tick and stopped agreeing at 2, where a flick moves two pixels in the
+tick Space is pressed and `[ark_pvel]` halves it to one — so a serve barely
+left the vertical unless the player had held the key first. The mechanism had
+gone quiet, not the intent.
+
+So `ark_throw` reads the **state machine**, and has exactly three rungs to
+match it: stopped, so nothing is being asked for, and the serve leaves straight
+up; tapping, and it leaves at `ARK_THRTAP`; holding, and it leaves at
+`ARK_THRHOLD`, harder. The last two are 2 and 3 pixels, the figures the old
+`[ark_pvel]` arithmetic produced back when the paddle really did move 4 and 8
+pixels a tick, so the serve throws exactly as it always did while the paddle
+underneath it does not. Measured: 0.00, −2.0 and −3.00 px/frame.
+
+A paddle held against a rail still serves off it, which the physical reading
+would refuse. That is the intent answering, and it is the right answer: the
+player asked for left.
 
 ### 44.3 The ball steps one pixel at a time
 
@@ -10296,12 +10325,14 @@ authority on the rally's vertical speed, so a bounce restores the tempo it
 already had instead of inventing one per zone, and it is the single number
 Slow reduces.
 
-**The serve is thrown, not aimed.** `ark_throw` gives it `vx` from
-`[ark_pvel]` at twice `ark_english`'s weight, because a serve has no incoming
-direction to build on — the flick *is* the aim. A paddle standing still serves
-straight up, which is honest rather than a hidden default: the player who
-wants an angle flicks, and the one who does not chooses after the first
-bounce. It also means the ball can be walked along the paddle before release.
+**The serve is thrown, not aimed.** `ark_throw` gives it `vx` from **which key
+is down** — §44.2.1's three rungs — because a serve has no incoming direction
+to build on: the flick *is* the aim. A paddle standing still serves straight
+up, which is honest rather than a hidden default: the player who wants an angle
+flicks, and the one who does not chooses after the first bounce. It also means
+the ball can be walked along the paddle before release. It read `[ark_pvel]` at
+twice `ark_english`'s weight until §44.2.1 made the paddle move too slowly for
+that to survive the halving.
 
 Measured on the running game (with `ark_zbias` zeroed, so only preservation
 and english can move vx): a stationary serve leaves with dx exactly 0; a
@@ -10336,11 +10367,13 @@ Three details are load-bearing:
 - **It is not reset on a bounce.** What it holds is less than one pixel of
   travel, so the worst a sign flip can do is delay the first step of the new
   direction by a single frame — cheaper than the special case.
-- **`ark_english` and `ark_throw` scale at their exit, once.** Both read
-  `[ark_pvel]` in pixels and clamp in pixels, so the arithmetic in the body
-  stays the pixel arithmetic it reads as; the `imul ARK_VQ` is the last
-  instruction before the `ret`. `ark_zbias` is written `-2*ARK_VQ` … `2*ARK_VQ`
-  for the same reason.
+- **`ark_english` and `ark_throw` scale at their exit, once.** Both work in
+  pixels and clamp in pixels — `ark_english` from `[ark_pvel]`, `ark_throw`
+  from the state machine — so the arithmetic in the body stays the pixel
+  arithmetic it reads as; the `imul ARK_VQ` is the last instruction before the
+  `ret`. `ark_zbias` is written `-2*ARK_VQ` … `2*ARK_VQ` for the same reason.
+  `[ark_pspd]` and `[ark_pacc]` are in quarter pixels for the same argument
+  again, one level down: see §44.2.1.
 
 **`ARK_VXMIN` is the other half, and it is a fix rather than a rescale.** The
 walk takes `max(|dx|, |dy|)` steps, so a ball going straight up moves `vymag`
