@@ -17,6 +17,8 @@ make run-640  # same, as a maxed-out 640KB machine (-m 1M; QEMU/SeaBIOS can't bo
 make test     # boot headless with QMP socket at build/qmp.sock for scripted testing
 make test ADLIB=1 # ...with an emulated AdLib at 388h, so the sound DRIVER
               # (SPEC.md 51.4) has something to attach to. SB16=1 likewise.
+              # QEMU HAS both cards; the two gate packages verify them
+              # mechanically (docs/TESTING.md). Sound is NOT 86Box-only.
 make test-snd # make test + PC speaker captured to build/snd.wav; verify with
               # tools/sndcheck.py (note: the wav holds speaker-ON time only, not
               # wall time - a silent boot yields an empty capture, and QEMU leaves
@@ -113,7 +115,12 @@ call's own shell and kills it.
 
 Requires `nasm`, `qemu-system-i386`, `python3`. No linker anywhere — everything is `nasm -f bin` flat binaries (deliberately, to avoid Apple's Mach-O-only toolchain).
 
-There are no unit tests. Testing = boot `make test`, then drive it over QMP:
+There are no unit tests. Testing = boot `make test`, then drive it over QMP.
+**`docs/TESTING.md` is the matrix of what QEMU can and cannot do**, with a
+verified recipe per capability — read it before concluding anything is
+untestable here. The short version: all three video adapters and all three
+sound routes work under QEMU; 86Box is needed only for the video *detection
+probe*, the 6845 programming and period-correct timing.
 
 ```
 python3 tools/mouse.py build/qmp.sock click 180 150      # absolute mouse click
