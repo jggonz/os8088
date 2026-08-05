@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/fmtest/fmtest.asm
+; os8088 - tests/fmtest/fmtest.asm
 ;
 ; FMTEST: the committed sound Phase 3 gate package (docs/SOUND-PLAN.md).
 ; Exercises the public FM surface (slot 0x00F8, SPEC.md 20.3/34.2) end to

@@ -131,12 +131,35 @@ Phase 4.
 
 ---
 
-## The testing apps live in `tests/`, and their numbers move
+## Everything not shipped lives in `tests/`
 
-`tests/` holds testing apps, and it is **not** `apps/`. Nothing under it is
-built by `all`, no artifact of it is tracked, and none of it reaches a
-shipped floppy — so a normal build and every image the project ships are
-exactly what they were before it existed. It is on-demand only:
+`tests/` holds every package that is not shipping software, and it is **not**
+`apps/`. Nothing under it is built by `all`, no artifact of it is tracked,
+and none of it reaches a shipped floppy — so a normal build and every image
+the project ships are exactly what they were before it existed.
+
+Two kinds live there, and the difference is what they assert.
+
+**Gates** answer pass/fail against a capability, and are the mechanical
+checks referenced throughout this document:
+
+| Package | Asserts | Run it with |
+|---|---|---|
+| `fmtest` | the AdLib FM surface (SPEC.md §34.2/§51.4) | `make test-snd ADLIB=1 TESTAPPS=build/fmtest.img` |
+| `sbtest` | the Sound Blaster streams (§34.5/§34.6) | `make test-snd SB16=1 TESTAPPS=build/sbtest.img` |
+| `filetest` | the write path (§18.4) | `make test TESTAPPS=build/filetest.img` |
+
+`filetest` also has a fragmented-volume variant, `build/filetest-frag.img`,
+and its results are worth pairing with the host-side fsck — the in-kernel
+free-space check and `python3 tools/os88disk.py --verify <img>` catch
+different bugs.
+
+**Benchmarks** answer *how fast*. `fontbench` prices the *primitive* (SPEC.md
+§6.1.1): one ten-character run drawn four ways, as the hand-written
+`gfx_fill` + `font_str` pair and as one `font_run`, each byte-aligned and
+again at x+5. `typebench` prices the *keystroke* (§11.94): 40 characters typed
+into a 40-cell line with the whole line redrawn after each, which is what
+`np_redraw` does to its dirty band.
 
 ```sh
 make bench                                                 # build the two disks
@@ -145,16 +168,13 @@ make test VIDEO=cga                  TESTAPPS=build/bench.img
 make test VIDEO=herc HERCSEG=0x7000  TESTAPPS=build/bench.img
 ```
 
-`make test TESTAPPS=…` builds the disk on its own — `TESTAPPS` is a
-prerequisite of the test targets — so `make bench` is for building without
-booting, e.g. to write `build/bench360.img` to a real floppy.
+Every one of these images builds on demand — `TESTAPPS` is a prerequisite of
+the test targets, so naming one is enough. `make bench` exists for building
+the two benchmark disks *without* booting, e.g. to write `bench360.img` to a
+real floppy.
 
-Two packages so far. `fontbench` prices the *primitive* (SPEC.md §6.1.1): one
-ten-character run drawn four ways, as the hand-written `gfx_fill` +
-`font_str` pair and as one `font_run`, each byte-aligned and again at x+5.
-`typebench` prices the *keystroke* (SPEC.md §11.94): 40 characters typed into
-a 40-cell line with the whole line redrawn after each, which is what
-`np_redraw` does to its dirty band.
+The rest of this section is about the benchmarks, because a gate's answer is
+a boolean and does not rot the way a number does.
 
 **The `testing` branch still exists, and is now for developing these**, not
 for holding them. A harness takes several rounds to get right — two of the

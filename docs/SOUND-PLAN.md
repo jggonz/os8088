@@ -3,7 +3,7 @@
 > **Historical planning document, kept for its phase numbering and its
 > reasoning — not for its memory design.** This is the plan the sound layer was
 > built to on the branch it came from, and four places in this tree cite its
-> phases (`drivers/sound/sb.inc`, `apps/sbtest`, `apps/fmtest`, and CLAUDE.md's
+> phases (`drivers/sound/sb.inc`, `tests/sbtest`, `tests/fmtest`, and CLAUDE.md's
 > note about the residual blip at the end of a captured wav). The phases are
 > real and the budgets are still the reason the layer promises what it does.
 >
@@ -754,7 +754,7 @@ kernel image changes even when nothing sound-side ships on disk).
   routed to OPL2 expires (the snd_tick key-off test); CP page shows "AdLib: yes"
   (screendump); a no-adlib boot still shows "no" and refuses the radio; closing the
   package mid-chord silences it (teardown test). The gate package is **committed**:
-  `apps/fmtest` (built into the scratch image `build/fmtest.img`, mounted with
+  `tests/fmtest` (built into the scratch image `build/fmtest.img`, mounted with
   `make test-snd ADLIB=1 TESTAPPS=build/fmtest.img` — never on the shipped apps
   disks, whose directory order is pinned). Its first click patch-loads a carrier
   MULT=2 voice through the FM slot's verb 2 and keys 440 Hz — sounding **880 Hz** iff

@@ -155,8 +155,8 @@ $(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) tools/os88disk.py
 # apps disks - their directory order is pinned (SPEC.md 24) - so it rides its
 # own scratch image, the filetest precedent:
 #   make test-snd ADLIB=1 TESTAPPS=build/fmtest.img
-$(BUILD)/fmtest.bin: apps/fmtest/fmtest.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/fmtest/fmtest.asm
+$(BUILD)/fmtest.bin: tests/fmtest/fmtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/fmtest/fmtest.asm
 	@echo "fmtest: $(call FILESIZE,$@) bytes"
 
 $(BUILD)/fmtest.o88: $(BUILD)/fmtest.bin tools/os88pkg.py
@@ -168,8 +168,8 @@ $(BUILD)/fmtest.img: $(BUILD)/fmtest.o88 tools/os88disk.py
 # SBTEST: the Sound Blaster gate package (SPEC.md 34.5/34.6). Like fmtest it
 # is never on the shipped apps disks and rides its own scratch image:
 #   make test-snd SB16=1 TESTAPPS=build/sbtest.img
-$(BUILD)/sbtest.bin: apps/sbtest/sbtest.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/sbtest/sbtest.asm
+$(BUILD)/sbtest.bin: tests/sbtest/sbtest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/sbtest/sbtest.asm
 	@echo "sbtest: $(call FILESIZE,$@) bytes"
 
 $(BUILD)/sbtest.o88: $(BUILD)/sbtest.bin tools/os88pkg.py
@@ -333,8 +333,8 @@ $(BUILD)/arkanoid.o88: $(BUILD)/arkanoid.bin tools/os88pkg.py
 #   make test TESTAPPS=build/filetest.img
 # then, after QMP quit, checked from the host with:
 #   python3 tools/os88disk.py --verify build/filetest.img
-$(BUILD)/filetest.bin: apps/filetest/filetest.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/filetest/filetest.asm
+$(BUILD)/filetest.bin: tests/filetest/filetest.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/filetest/filetest.asm
 	@echo "filetest: $(call FILESIZE,$@) bytes"
 
 

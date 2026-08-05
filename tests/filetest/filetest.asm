@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/filetest/filetest.asm
+; os8088 - tests/filetest/filetest.asm
 ;
 ; FILETEST, the file-API gate package (SPEC.md 18.4/20.3). Like fmtest and
 ; sbtest it never ships on the apps disks - their directory order is pinned

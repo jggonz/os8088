@@ -1,5 +1,5 @@
 ; =============================================================================
-; os8088 - apps/sbtest/sbtest.asm
+; os8088 - tests/sbtest/sbtest.asm
 ;
 ; SBTEST: the sound Phase 4+5 gate package (docs/SOUND-PLAN.md). Exercises
 ; the stream + staging surface (slot 0x0100, SPEC.md 20.3/34.5/34.6) end to

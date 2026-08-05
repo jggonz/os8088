@@ -3449,7 +3449,7 @@ one, and a nearly full disk can refuse a save it could have done in place
 existing bytes on every power glitch, and this OS has no journal to make
 that safe.
 
-**The gate package.** `apps/filetest/filetest.asm` (§20.3's slots, driven
+**The gate package.** `tests/filetest/filetest.asm` (§20.3's slots, driven
 end to end: write, read-back-and-compare, oversize-buffer refusal, shrink
 replace, empty file, rename both ways, rename-onto-existing, bad name,
 delete twice, fill-to-refusal, mass delete, free-space equality). Like
@@ -3504,7 +3504,7 @@ refused as FERR_IO up front: a wrapped count could otherwise make the chain
 walk stop early and report success over a hostile entry (§18 — every byte off
 the disk is hostile input).
 
-`apps/filetest` check 01 covers it, against a 96KB `BIG.DAT` whose byte at
+`tests/filetest` check 01 covers it, against a 96KB `BIG.DAT` whose byte at
 offset i is `i >> 9` — one distinct value per sector, so a destination that
 failed to advance reads a *different* byte rather than a plausible one. The
 probe is offset 0x11111, past the horizon every other file op stops at.
@@ -11689,10 +11689,10 @@ failures were silent in the same way:
 
 - **the driver row in BX** became the FM frequency. No OPL2 block fits
   15,000 Hz, so every FM call came back refused — while *tones*, which pass
-  AX, worked perfectly. `apps/fmtest` found it.
+  AX, worked perfectly. `tests/fmtest` found it.
 - **the service selector in DI** became the staging destination. `DSV_STREAM`
   is 4, which is inside no grant, so every verb-5/6 copy refused as out of
-  range and every open that staged first failed with it. `apps/sbtest` found
+  range and every open that staged first failed with it. `tests/sbtest` found
   it.
 
 The lesson is written into the contract rather than the changelog: a
