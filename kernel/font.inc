@@ -310,7 +310,7 @@ font_char_bb:
     jnz .crow
     jmp short .pnext
 
-; --- disabled text, mono only (SPEC.md 46) -----------------------------------
+; --- disabled text, mono only (SPEC.md 47) -----------------------------------
 ; .crow with the shifted glyph masked to a checkerboard. A separate loop
 ; rather than an `and ah, [font_dmask]` in .crow itself: that is the innermost
 ; loop of every string on the slowest machines we run on, and a memory-operand
@@ -363,7 +363,7 @@ font_char_bb:
 ; dithered 8x8 glyph costs half its strokes, and Piano's coloured letters
 ; want contrast, not texture.
 ;
-; **[gfx_dis] IS THE ONE EXCEPTION** (SPEC.md 46): a disabled control's text
+; **[gfx_dis] IS THE ONE EXCEPTION** (SPEC.md 47): a disabled control's text
 ; is masked to a checkerboard instead - half the strokes, which is exactly
 ; what the 1bpp Macintosh did to a greyed-out menu item and exactly as
 ; readable. Without it a disabled STRING came out black, pixel-identical to a
@@ -501,7 +501,7 @@ font_run_x:
     jnz .slow                   ; two-pass answer, unchanged
     cmp byte [bb_on], 0
     je .slow
-    cmp byte [gfx_dis], 0       ; a DISABLED control (SPEC.md 46) masks the
+    cmp byte [gfx_dis], 0       ; a DISABLED control (SPEC.md 47) masks the
     jne .slow                   ; glyph to a checkerboard inside font_ink,
                                 ; which the plain store below cannot express
                                 ; - and greying is a rare UI state, not a hot
@@ -716,7 +716,7 @@ font_rn_di:     resw 1
 font_bb_si:     resw 1          ; bb path: glyph pointer, reloaded per plane
 font_bb_di:     resw 1          ; bb path: cell offset, reloaded per plane
 font_dith:      resb 1          ; 1 = this glyph is disabled text on a mono
-                                ; adapter (SPEC.md 46); font_ink decides it
+                                ; adapter (SPEC.md 47); font_ink decides it
                                 ; per glyph and writes it on every path
 font_dmask:     resb 1          ; ...and the row's half of the checkerboard
 section .text

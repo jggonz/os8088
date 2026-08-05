@@ -92,6 +92,15 @@ dock_force:
 ;      All registers preserved; [gfx_color] restored.
 ; -----------------------------------------------------------------------------
 dock_paint:
+    call wm_fs_vis              ; a visible fullscreen window is OVER the strip
+    jnc .go                     ; (SPEC.md 11.2). Same reasoning as
+    clc                         ; menu_draw_bar's guard: whether the dock is on
+    ret                         ; screen is a fact about the screen. CF = 0,
+                                ; "nothing was drawn", which is exactly what
+                                ; wm_dock_under needs to hear. [dock_full] and
+                                ; the per-tile keys are left alone, so the
+                                ; strip is still owed its redraw afterwards
+.go:
     push ax
     push bx
     push cx

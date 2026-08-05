@@ -160,7 +160,7 @@ DSV_SIZE     equ 16
 ;      frees your image the moment detach returns, and a worker still on the
 ;      run queue leaves the scheduler holding a stack frame whose CS points
 ;      at memory the next heap claim takes.
-%define OSAPI_DRV_TASK      KERNEL_SEG:0x0230
+%define OSAPI_DRV_TASK      KERNEL_SEG:0x0248
 
 ; --- memory a bus-master can reach (SPEC.md 50.3/51.6) -----------------------
 ; Everything in the app SDK's memory section applies to you unchanged - your

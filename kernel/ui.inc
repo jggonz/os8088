@@ -115,7 +115,7 @@ ui_task:
     cmp cx, [vid_clk_hx]        ; the clock cell at the right end (SPEC 12.1)?
     jae .clock_cell             ; tested BEFORE menu_track: it is not a title
     call ui_loc_gate            ; ...and Locator's own items go grey or live
-    call gfx_lock               ; before it can draw them (SPEC.md 46 rule 5)
+    call gfx_lock               ; before it can draw them (SPEC.md 47 rule 5)
     call menu_track             ; in: CX = mousedown x; out: AX = CMD_* or 0
     call gfx_unlock
     call ui_dispatch
@@ -371,8 +371,11 @@ ui_rdown:
     or al, al
     jnz .ret                    ; title bar, close/minimize/grow box: the
                                 ; chrome has no context menu
+    cmp word [si + W_SEG], 0    ; a kernel window whose set is fm_menus -
+    jne .ret                    ; the OFFSET alone is not identity: a
     cmp word [si + W_MENUS], fm_menus
-    jne .ret                    ; only Locator's file-manager windows
+    jne .ret                    ; package's org-0 W_MENUS can collide with
+                                ; it numerically (SPEC.md 12.3)
 
     call gfx_lock
     call fm_rclick              ; select + track the popup: UNBILLED, exactly
@@ -734,7 +737,7 @@ ui_grow:
 
 ; -----------------------------------------------------------------------------
 ; ui_loc_gate - point Locator's conditional items at their live or disabled
-;               string, just before a menu can be dropped (SPEC.md 46 rule 5)
+;               string, just before a menu can be dropped (SPEC.md 47 rule 5)
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ;
@@ -786,7 +789,16 @@ ui_dispatch:
     mov bx, [menu_set]
     or bx, bx
     jz .ret                     ; a window with no menus cannot be here
-    cmp word [bx + AM_ONCMD], 0
+    push es                     ; the set is the OWNER's data (SPEC.md 12.2):
+    push cs                     ; Locator's lives in kernel .text, a
+    pop es                      ; package's in its own segment - so this
+    mov di, [menu_win]          ; read must go through the owner's segment,
+    or di, di                   ; like every other read of the set. Through
+    jz .ownset                  ; DS it tested a random word of kernel .text
+    call wm_strseg              ; at the package set's offset, and dispatched
+.ownset:                        ; app menus as Locator commands whenever that
+    cmp word [es:bx + AM_ONCMD], 0  ; word happened to be zero
+    pop es
     jne .app
 .kernel:
     mov bl, ah                  ; cmd = the cell's base + the item index
@@ -853,11 +865,13 @@ ui_dispatch:
 .cbok:
     pop di
     pop es
-    mov ax, [ui_menusel]
-    push bp
+    jcxz .nocb                  ; a handler withdrawn while the lock was down
+    mov ax, [ui_menusel]        ; (wm_about_set 0 / MENU_SET in the gap) must
+    push bp                     ; not be called at offset 0 (SPEC.md 12.2)
     mov bp, cx
     call wm_pkgcall             ; SI = window, BP = the handler
     pop bp
+.nocb:
     pop ax                      ; start stamp
     pop dx
     pop word [snd_inst]         ; the outer dispatch's stamp, back
@@ -980,6 +994,15 @@ ui_cmd:
                                 ; GUI already torn down - and before vid_text,
                                 ; so a failure still has a screen to have
                                 ; happened on
+    call drv_shutdown           ; detach every loaded driver (SPEC.md 51.2):
+                                ; int 19h resets no hardware, so a hooked
+                                ; card would ride the reboot with its vector
+                                ; pointing into a heap the next boot reuses
+                                ; and an auto-init DMA still running. Before
+                                ; sched_unhook, because the unload WAITS on
+                                ; the worker's death, which needs the
+                                ; scheduler alive - and before the lock,
+                                ; because that wait yields
     call gfx_lock               ; never released - the GUI is done
     call vid_text
     call sched_unhook           ; restores int 08h/0Ch (unhooks the mouse too)

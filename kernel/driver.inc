@@ -286,6 +286,7 @@ drv_init:
     push bx
     push cx
     mov byte [drv_nerr], 0
+    mov byte [drv_wcnt], 0
     call drv_svc_clear
     xor cx, cx                  ; nothing is loaded on a cold boot, and .bss
     mov bx, drv_tab             ; is not what these live in - clear the two
@@ -483,8 +484,9 @@ drv_svc_clear:
     mov word [drv_owner], 0
     mov word [drv_fseg], 0
     mov di, drv_svc
-    mov cx, DSV_SIZE + 16       ; the table and the staged sink name
-    xor al, al
+    mov cx, DSV_SIZE            ; the table alone: the 16-byte staged sink
+    xor al, al                  ; name this once also cleared is gone, and
+                                ; drv_cfg now sits right behind drv_svc
     cld
     rep stosb
     pop es
@@ -907,9 +909,30 @@ drv_unload:
     je .out
     mov bp, [bx+DRVR_ENT]
     or bp, bp
-    jz .free
+    jz .free                    ; never attached: nothing could have spawned
     mov al, DRVV_DETACH
     call drv_call
+    ; Detach told the workers to die; now WAIT for the deaths themselves
+    ; before a byte of the image is freed. [drv_wcnt] falls inside
+    ; task_exit's IF=0 window (drv_task), so zero means no task's CS points
+    ; into the image. The bound is in TICKS, not yields - a worker sleeps a
+    ; tick between passes, and 40 yields pass in microseconds.
+    mov cx, 91                  ; ~5s: dozens of wakes for a worker that
+.wait:                          ; needs one
+    cmp byte [drv_wcnt], 0
+    je .free
+    mov dx, [ticks]
+.tk:
+    call task_yield
+    cmp byte [drv_wcnt], 0
+    je .free
+    cmp dx, [ticks]
+    je .tk                      ; same tick: let the others run again
+    loop .wait
+    jmp short .out              ; a worker that never died is a driver bug.
+                                ; The row stays loaded and the image stays
+                                ; claimed - a leak, never a free under a CS
+                                ; that still points into it
 .free:
     call drv_release
 .out:
@@ -917,6 +940,39 @@ drv_unload:
     pop di
     pop si
     pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; drv_shutdown - take every loaded driver down, for reboot (SPEC.md 51.2)
+; in:  nothing
+; out: nothing (all registers preserved)
+;
+; int 19h resets no hardware: a hooked Sound Blaster would ride across it
+; with its IRQ vector pointing into a heap segment the next boot reuses, the
+; line unmasked at the 8259, and an auto-init DSP+8237 transfer still moving
+; memory. The full drv_unload per row rather than a bare quiesce verb, so
+; there is exactly ONE teardown path - main's snd_unhook did this for the
+; resident card code, and the obligation moved here with the code.
+; -----------------------------------------------------------------------------
+drv_shutdown:
+    push ax
+    push bx
+    push cx
+    xor cx, cx
+.next:
+    mov al, cl
+    call drv_row                ; BX = the row
+    cmp word [bx+DRVR_SEG], 0
+    je .skip
+    mov al, cl
+    call drv_unload
+.skip:
+    inc cx
+    cmp cx, DRV_MAX
+    jb .next
     pop cx
     pop bx
     pop ax
@@ -934,20 +990,20 @@ drv_release:
     mov dx, [bx+DRVR_SEG]
     or dx, dx
     jz .out
+    cmp bx, [drv_owner]         ; disarm DISPATCH before a byte is freed:
+    jne .norow                  ; snd_tick far-calls through drv_fseg inside
+    mov word [drv_fseg], 0      ; IRQ0, and a tick landing between the free
+    call drv_svc_clear          ; and a later disarm ran freed code. The
+.norow:                         ; single word store is atomic against it
+    mov word [bx+DRVR_SEG], 0   ; ...and drv_call is disarmed the same way
+    mov word [bx+DRVR_KB], 0
     push bx                     ; anything the DRIVER itself claimed is owned
     mov bx, dx                  ; by its segment (mem_own), so sweep those
     call mem_free_owner         ; FIRST - the image's own free below takes
     mov bx, MEM_K_DRV           ; that segment out of existence, and a claim
     call mem_free               ; whose owner word no longer names anything
     pop bx                      ; could never be found again. The mem_free_rec
-                                ; fence (SPEC.md 50.4), for a driver
-    mov word [bx+DRVR_SEG], 0   ; ...and drv_call is disarmed with it
-    mov word [bx+DRVR_KB], 0
-    cmp bx, [drv_owner]
-    jne .out
-    mov word [drv_fseg], 0      ; disarm the dispatch before the table goes
-    call drv_svc_clear
-.out:
+.out:                           ; fence (SPEC.md 50.4), for a driver
     pop dx
     pop bx
     pop ax
@@ -988,9 +1044,19 @@ drv_release:
 ; **The exit half is not a convenience.** drv_unload FREES THE DRIVER'S IMAGE,
 ; so a worker still on the run queue would leave the scheduler holding a stack
 ; frame whose CS points at memory the next claim takes. A driver's DRVV_DETACH
-; must therefore not return until its worker is gone, and AX = 0 is how the
-; worker says it has. task_exit takes no release byte here (BX = 0): a driver
-; owns no instance record for one to live in.
+; tells its workers to die, and AX = 0 is how each one says it has - but the
+; authoritative wait is the KERNEL'S, in drv_unload, on [drv_wcnt]: the count
+; goes up inside the spawn's IF=0 window and comes down inside task_exit's, so
+; zero means no task's CS points into the image - there is no instant at which
+; a worker has "said" it is gone and still has instructions left to run there,
+; which is exactly the gap a driver-side flag cannot close. task_exit takes no
+; release byte (BX = 0): a driver owns no instance record for one to live in.
+;
+; The exit half must NEVER be refusable for a real worker: a never-returns
+; call that returns falls off the end of the caller's die path into whatever
+; bytes follow it. So exit is fenced on "ES is a loaded driver's image
+; segment" (drv_owns_seg), not on [drv_fseg] alone - a second driver's worker
+; exiting while another driver's services are published still dies cleanly.
 ; -----------------------------------------------------------------------------
 drv_task:
     push bx
@@ -998,19 +1064,38 @@ drv_task:
     mov bx, es
     or bx, bx
     jz .fail
-    cmp bx, [drv_fseg]          ; only the loaded driver, and only its own
-    jne .fail                   ; segment, may reach either half
     or ax, ax
-    jz .die
+    jz .exit
+    cmp bx, [drv_fseg]          ; spawn: only the loaded driver, and only its
+    jne .fail                   ; own segment, may ask
     cmp ax, DRV_HDR_SZ          ; an entry inside its own image, past the
     jb .fail                    ; header - the ld_check_hdr test
     mov dl, 0xFF                ; DL -> T_INST: no instance (SPEC.md 8/28);
-    call task_spawn             ; DH is the caller's, and reaches the task
+                                ; DH is the caller's, and reaches the task
+    pushf
+    cli                         ; count-then-spawn in one IF=0 window: counted
+    inc byte [drv_wcnt]         ; BEFORE the task can run, so the count never
+    call task_spawn             ; lags a worker that spawned and died at once
+    jc .spfail                  ; (task_spawn preserves IF, so nothing runs
+    popf                        ; until our popf)
+    clc
     jmp short .out
+.spfail:
+    dec byte [drv_wcnt]         ; refused: no task was made
+    popf
+    stc
+    jmp short .out
+.exit:
+    cmp bx, [drv_fseg]
+    je .die
+    call drv_owns_seg           ; CF = 0: ES is some loaded row's image
+    jc .fail
 .die:
-    xor bx, bx                  ; no release byte: nothing to zero atomically
-    jmp task_exit               ; with the death, and this NEVER RETURNS - the
-                                ; two pushes above die with the task's stack
+    cli                         ; IF=0 through task_exit (it would cli again
+    dec byte [drv_wcnt]         ; anyway): the count moves in the SAME window
+    xor bx, bx                  ; as the death publish, and this NEVER
+    jmp task_exit               ; RETURNS - the two pushes above die with the
+                                ; task's stack
 .fail:
     stc
 .out:
@@ -1507,7 +1592,10 @@ drv_notice:
 section .bss
 
 drv_nerr:   resb 1              ; 1 = drv_notice owes the user a window
-drv_pad0:   resb 1
+drv_wcnt:   resb 1              ; live driver worker tasks: +1 inside the
+                                ; spawn's IF=0 window, -1 inside task_exit's
+                                ; (drv_task). drv_unload waits for 0 before
+                                ; the image is freed (SPEC.md 51.7)
 drv_fsz:    resw 1              ; the driver file's byte size
 drv_owner:  resw 1              ; the row whose services are published, or 0
 drv_svc:    resb DSV_SIZE       ; a copy of that row's service table

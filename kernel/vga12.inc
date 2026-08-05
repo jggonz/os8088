@@ -27,7 +27,7 @@ VGA_SEQ     equ 0x3C4           ; Sequencer index port (data +1)
 
 gfx_color       db CBLACK       ; current drawing color for every solid op
 gfx_dis         db 0            ; 1 = what is being drawn is a DISABLED
-                                ; control (SPEC.md 46). It is a FLAG and not
+                                ; control (SPEC.md 47). It is a FLAG and not
                                 ; a colour because the renderer has to do
                                 ; something a colour cannot express: on a
                                 ; mono adapter font_ink masks the glyph to a
@@ -1349,7 +1349,7 @@ vga_restore_vram:
 ; out:      nothing
 ; clobbers: nothing (flags)
 ;
-; SPEC.md 46 makes a disabled control two things at once - the CDGRAY pen and
+; SPEC.md 47 makes a disabled control two things at once - the CDGRAY pen and
 ; the [gfx_dis] flag - and these exist so no call site can set one without the
 ; other. That is not hypothetical tidiness: the bug this whole section came
 ; out of was a row whose LABEL was greyed and whose GLYPH was not, and "two
@@ -1416,7 +1416,7 @@ gfx_lock:
 gfx_unlock:
     mov word [wm_clip_n], 0
     mov byte [gfx_dis], 0       ; the disabled pen dies with the lock, for the
-                                ; clip region's reason (SPEC.md 11.3/46): a
+                                ; clip region's reason (SPEC.md 11.3/47): a
                                 ; site that forgets gfx_pen_live cannot leak
                                 ; dithered text into whatever draws next
     call gfx_flush

@@ -2167,7 +2167,7 @@ MC_NITEM    equ 4               ; word: item count
 ; the root, Rename with no disk) is the same silent no-op it already is from
 ; the bar, and one rule beats two.
 ;
-; **The sharing is no longer the reason** (SPEC.md 46.3). ui_loc_gate points
+; **The sharing is no longer the reason** (SPEC.md 47.3). ui_loc_gate points
 ; an item at a MENU_DIS twin on the press that OPENS the menu, when exactly
 ; one window is relevant, and the same trick works here - a shared descriptor
 ; only rules out per-window state that has to persist. What is left is a
@@ -2690,8 +2690,10 @@ fm_stage_name:
     mov byte [fm_name+16], 0
     mov ax, [si]                ; type word (entry offset 16; SI advanced
     mov [fm_ftype], ax          ; past the name)
-    mov ax, [si+4]              ; size word (entry offset 20)
+    mov ax, [si+4]              ; size dword (entry offsets 20/22)
     mov [fm_fsize], ax
+    mov ax, [si+6]
+    mov [fm_fsizeh], ax
     pop si
     pop cx
     pop bx
@@ -2879,10 +2881,11 @@ fm_draw_core:
     cmp word [fm_ftype], 2      ; a folder has no meaningful size (19), and
     je .lnosize                 ; a column of zeroes would only read as one
     mov ax, [fm_fsize]
+    mov dx, [fm_fsizeh]
     push di
     mov di, fm_numbuf
-    call fm_utoa
-    pop di
+    call fm_ultoa               ; the full dword: BEVERLY.MOD is 116,085
+    pop di                      ; bytes, not 65,535
     mov si, fm_numbuf
     call font_width             ; AX = string width, px
     mov cx, [fm_rgt]            ; right-align ending at cw-22 (clear of
@@ -3317,6 +3320,52 @@ fm_utoa:
     ret
 
 ; -----------------------------------------------------------------------------
+; fm_ultoa - unsigned dword to decimal ASCII, no leading zeros
+; in:  DX:AX = value, DI = destination (needs up to 11 bytes: 10 digits + NUL)
+; out: DI -> the stored NUL
+; clobbers: nothing else (internal helper)
+; fm_utoa's shape with the 32-bit divide done in two steps: hi/10 first,
+; its remainder riding into the lo divide as the high half, so the pushed
+; digit is the true dword remainder and the loop repeats on the quotient.
+; -----------------------------------------------------------------------------
+fm_ultoa:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov si, 10
+    xor cx, cx                  ; CX = digit count
+.div:
+    mov bx, ax                  ; BX = lo, briefly
+    mov ax, dx
+    xor dx, dx
+    div si                      ; AX = hi quotient, DX = its remainder
+    xchg ax, bx                 ; AX = lo, BX = hi quotient
+    div si                      ; (rem:lo)/10 -> AX = lo quotient, DX = digit
+    add dl, '0'
+    push dx
+    inc cx
+    mov dx, bx                  ; DX:AX = the running quotient
+    mov bx, ax
+    or bx, dx
+    jnz .div
+.emit:
+    pop ax
+    mov [di], al
+    inc di
+    loop .emit
+    mov byte [di], 0
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 section .bss
 
 ; --- per-window state (SPEC.md 22): the kind's KD_POOL, one block per window
@@ -3396,7 +3445,8 @@ fm_total:   resw 1              ; fm_layout: total rows
 fm_nch:     resw 1              ; fm_layout: list-view name chars that fit
 
 fm_shown:   resw 1              ; draw scratch: rows drawn this paint
-fm_fsize:   resw 1              ; fm_stage_name: entry size, bytes
+fm_fsize:   resw 1              ; fm_stage_name: entry size, bytes (lo word)
+fm_fsizeh:  resw 1              ; ...and its high word (SPEC.md 19)
 fm_ftype:   resw 1              ; fm_stage_name: SPEC.md 19 type word
 fm_vrow:    resw 1              ; grid scratch: visible row / column
 fm_vcol:    resw 1
@@ -3413,6 +3463,6 @@ fm_hdrbuf:  resb 48             ; = FM_HDRMAX (a literal per the no-forward-
                                 ; worst case, "Delete NAME? Enter=yes Esc=no"
                                 ; at 38, which is staged whole and truncated
                                 ; afterwards
-fm_numbuf:  resb 6              ; fm_utoa scratch: 5 digits + NUL
+fm_numbuf:  resb 11             ; fm_ultoa scratch: 10 digits + NUL
 
 section .text

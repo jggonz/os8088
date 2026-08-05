@@ -93,8 +93,8 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; had no heap and could load nothing).
 ;
 ; **Everything from KERNEL_SEG to the end of task 0's stack is the kernel**,
-; and guard 1 holds that whole span to KERN_BUDGET - 64KB, the first 64KB
-; above the BIOS. Code, data, scratch, the FAT snapshot, the disk buffers and
+; and guard 1 holds that whole span to KERN_BUDGET - 75KB just above the
+; BIOS data area. Code, data, scratch, the FAT snapshot, the disk buffers and
 ; every task stack are inside it. The one deliberate exception is the menu
 ; save-under, which is a heap claim (SPEC.md 12.4/50) because it is 20KB that
 ; only exists while a menu is down.
@@ -383,78 +383,84 @@ osapi_table:
     OSAPI_SLOT wm_geom            ; 0x01B0 - content size + visibility
                                   ;          (SPEC.md 11): the one read a
                                   ;          package on EITHER fork can make
-    OSAPI_SLOT wm_resize          ; 0x01B8 - resize a window (SPEC.md 11.1):
+; --- every slot main publishes keeps main's NUMBER (SPEC.md 20.8) -----------
+;     The fork moved this block down three cells when it retired the
+;     paragraph-counting arena, and a package built against main's SDK then
+;     called wm_resize where it meant cm_alloc. main's numbers are the ABI:
+;     the three arena slots stay at 0x01B8..0x01C8 as wrappers over the
+;     claim heap (osapi_cm_*, kernel/memory.inc), the six slots after them
+;     stay where main put them, and everything this fork ADDED starts at
+;     0x0200 - main's next free number, which merging makes ours.
+    OSAPI_JSLOT api_cm_alloc      ; 0x01B8 - main's v3 arena (SPEC.md 20.8):
+                                  ;          AX = PARAGRAPHS -> AX = segment.
+                                  ;          X - the owner fence needs the
+                                  ;          caller's segment
+    OSAPI_JSLOT api_cm_free       ; 0x01C0 - AX = a base segment you own; X
+    OSAPI_SLOT osapi_cm_caps      ; 0x01C8 - AX/DX = largest/total free
+                                  ;          PARAGRAPHS, BL = free records
+    OSAPI_SLOT wm_resize          ; 0x01D0 - resize a window (SPEC.md 11.1):
                                   ;          BX = win, CX = w, DX = h; lock
                                   ;          held. Retires the last liberty
                                   ;          in docs/PAINT-NOTES.md - an app
                                   ;          writing W_W/W_H itself
-    OSAPI_SLOT gfx_blit4          ; 0x01C0 - packed 4bpp block (SPEC.md 5.4):
+    OSAPI_SLOT gfx_blit4          ; 0x01D8 - packed 4bpp block (SPEC.md 5.4):
                                   ;          ES:SI = source, BP = stride,
                                   ;          AX/BX = dest, CX/DX = w/h. ES is
                                   ;          the caller's own choice here, so
                                   ;          no stub is needed
-    OSAPI_SLOT wm_about_set       ; 0x01C8 - the app-name pull-down (12.2):
+    OSAPI_SLOT wm_about_set       ; 0x01E0 - the app-name pull-down (12.2):
                                   ;          BX = win, SI = your About handler
-    OSAPI_JSLOT api_file_readbig  ; 0x01D0 - the one file op with no 64KB
+    OSAPI_JSLOT api_file_readbig  ; 0x01E8 - the one file op with no 64KB
                                   ;          ceiling (SPEC.md 18.4): N, and
                                   ;          the destination advances BY
                                   ;          SEGMENT, so a package can load a
                                   ;          116KB module into a heap claim
-    OSAPI_SLOT osapi_gfx_dbuf     ; 0x01D8 - a package's own bb_set (SPEC.md
+    OSAPI_SLOT osapi_gfx_dbuf     ; 0x01F0 - a package's own bb_set (SPEC.md
                                   ;          32): AL = 1 arm / 0 disarm, out
                                   ;          AL = the state before, to hand
                                   ;          back. CF=1 on the wrong adapter
                                   ;          or a heap that cannot fund it
-    OSAPI_SLOT gfx_scroll         ; 0x01E0 - vertical scroll blit (SPEC.md
+    OSAPI_SLOT gfx_scroll         ; 0x01F8 - vertical scroll blit (SPEC.md
                                   ;          5.5): AX/BX/CX/DX = the rect,
                                   ;          SI = signed dy. The vacated rows
                                   ;          are the caller's to repaint
-; --- and here the numbers this fork shares with `main` end ------------------
-;     There is no gap and no reservation any more. Both existed to keep one
-;     number meaning one contract across two living branches: three cells
-;     were HELD where `main` puts its paragraph-counting arena, and ten were
-;     RESERVED for it to grow into. The branches are merging, so neither
-;     buys anything - and 88 bytes of `stc`/`retf` in the middle of a jump
-;     table is a strange thing to ship for a compatibility nobody is
-;     claiming. The block below moved DOWN to close them, which is the third
-;     time it has moved and the last: every package is in this tree and
-;     `make` rebuilds them all (SPEC.md 20.8 rule 4).
-    OSAPI_JSLOT api_mem_claim     ; 0x01E8 - the claim heap (SPEC.md 50.3):
-    OSAPI_JSLOT api_mem_free      ; 0x01F0   X, same fence as the spawn
-    OSAPI_SLOT osapi_mem_avail    ; 0x01F8
-    OSAPI_SLOT osapi_font_glyphs  ; 0x0200 - the kernel's 8x8 glyph table
+; --- and from here on, the slots this fork ADDS --------------------------------
+    OSAPI_JSLOT api_mem_claim     ; 0x0200 - the claim heap (SPEC.md 50.3):
+    OSAPI_JSLOT api_mem_free      ; 0x0208   X, same fence as the spawn
+    OSAPI_SLOT osapi_mem_avail    ; 0x0210
+    OSAPI_SLOT osapi_font_glyphs  ; 0x0218 - the kernel's 8x8 glyph table
                                   ;          (SPEC.md 6): out SI = its offset
                                   ;          in KERNEL_SEG, AL = first code,
                                   ;          AH = last, CX = bytes per glyph
-    OSAPI_SLOT wm_onsize          ; 0x0208 - install the resize negotiator
+    OSAPI_SLOT wm_onsize          ; 0x0220 - install the resize negotiator
                                   ;          (SPEC.md 11.1): BX = win, AX =
                                   ;          near proc. The other half of
                                   ;          docs/PAINT-NOTES.md's resize
                                   ;          complaint - wm_resize is the app
                                   ;          asking, this is the app answering
-    OSAPI_SLOT osapi_file_here    ; 0x0210 - where the file API's names
+    OSAPI_SLOT osapi_file_here    ; 0x0228 - where the file API's names
                                   ;          resolve (SPEC.md 18.4/19.2)
-    OSAPI_SLOT osapi_file_goto    ; 0x0218 - ...and how to put it back
-    OSAPI_JSLOT api_mem_regrow    ; 0x0220 - resize a claim you already hold
+    OSAPI_SLOT osapi_file_goto    ; 0x0230 - ...and how to put it back
+    OSAPI_JSLOT api_mem_regrow    ; 0x0238 - resize a claim you already hold
                                   ;          (SPEC.md 50.3): X, same owner
                                   ;          fence as the claim itself. In
                                   ;          place when the paragraphs above
                                   ;          are free, which is what stops a
                                   ;          grow needing old + new at once
-    OSAPI_SLOT wm_title_set       ; 0x0228 - retitle a window and redraw ONLY
+    OSAPI_SLOT wm_title_set       ; 0x0240 - retitle a window and redraw ONLY
                                   ;          its caption (SPEC.md 11.92): BX =
                                   ;          win, AX = the new string (0 = the
                                   ;          bytes W_TITLE names changed in
                                   ;          place). Not an X cell: the string
                                   ;          is read through W_SEG, which is
                                   ;          already the caller's segment
-    OSAPI_JSLOT api_drv_task      ; 0x0230 - a DRIVER's worker task (SPEC.md
+    OSAPI_JSLOT api_drv_task      ; 0x0248 - a DRIVER's worker task (SPEC.md
                                   ;          51.7): AX = a near entry in its
                                   ;          own segment, or 0 = "this IS the
                                   ;          worker, and it is exiting". X,
                                   ;          because the fence is an identity
                                   ;          test on the caller's segment
-    OSAPI_JSLOT api_mem_claim_dma ; 0x0238 - a claim an ISA DMA controller can
+    OSAPI_JSLOT api_mem_claim_dma ; 0x0250 - a claim an ISA DMA controller can
                                   ;          reach (SPEC.md 50.3): AX = KB,
                                   ;          CX = KB of the HEAD that must not
                                   ;          cross a 64KB physical boundary.
@@ -463,7 +469,7 @@ osapi_table:
                                   ;          mem_claim, because every existing
                                   ;          caller passes garbage there and
                                   ;          the failure would be silent
-    OSAPI_JSLOT api_font_run      ; 0x0240 - one OPAQUE text run (SPEC.md 6.1):
+    OSAPI_JSLOT api_font_run      ; 0x0258 - one OPAQUE text run (SPEC.md 6.1):
                                   ;          CX = x, DX = y, SI = ASCIIZ,
                                   ;          AL = ink, AH = background. Draws
                                   ;          the cells' background AND their
@@ -472,8 +478,14 @@ osapi_table:
                                   ;          (11.3's granularity rule) and, on
                                   ;          a 1bpp adapter at a byte-aligned
                                   ;          x, a cell row is one store. X:
-                                  ;          the string is package data
-osapi_table_end:                  ; 0x0248
+                                  ;          the string is package data.
+                                  ;          APPENDED after main's cm_* trio
+                                  ;          rather than kept at 0x0240 - the
+                                  ;          three arena cells this fork had
+                                  ;          been holding empty are filled now
+                                  ;          (SPEC.md 20.8), and everything
+                                  ;          above them moved 24 bytes up
+osapi_table_end:                  ; 0x0260
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -481,8 +493,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 71 * 8
-%error "os8088 API jump table must be exactly 71 8-byte slots"
+%if OSAPI_TABLE_LEN != 74 * 8
+%error "os8088 API jump table must be exactly 74 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -513,6 +525,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
     OSAPI_XSTUB api_mem_claim,  osapi_mem_claim
     OSAPI_XSTUB api_mem_claim_dma, osapi_mem_claim_dma
     OSAPI_XSTUB api_mem_free,   osapi_mem_free
+    OSAPI_XSTUB api_cm_alloc,   osapi_cm_alloc
+    OSAPI_XSTUB api_cm_free,    osapi_cm_free
     OSAPI_XSTUB api_mem_regrow, osapi_mem_regrow
     OSAPI_XSTUB api_snd_fm,     osapi_snd_fm_x
     OSAPI_XSTUB api_drv_task,   drv_task
@@ -868,7 +882,7 @@ KBUF_KB    equ ((FAT_PARA + LOW_PARA) * 16 + 1023) / 1024
 
 ; 1. THE budget: the whole kernel - image, scratch, FAT snapshot, disk
 ;    buffers and every task stack - is one span starting at KERNEL_SEG, and
-;    it fits in the first 64KB above the BIOS data area. This is the guard
+;    it fits KERN_BUDGET (75KB) just above the BIOS data area. This is the guard
 ;    the project is steering by; raising KERN_BUDGET is a decision, not a
 ;    build fix (docs/KERNEL-MEMORY.md).
 %if KERN_SIZE > KERN_BUDGET

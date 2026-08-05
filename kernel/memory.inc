@@ -176,38 +176,47 @@ mem_init:
 ; which is also what keeps the bump loop finite, since the bump only helps
 ; when a page can hold the head at all.
 ;
-; NOT preserved by mem_regrow: the constraint is an allocation-time property
-; and no record carries it, so a claim that MOVES (regrow path 3) can land
-; straddling. Do not regrow a DMA buffer; claim the size you need.
+; PRESERVED by mem_regrow: the record carries the constraint (MC_DMA), so a
+; claim that MOVES (regrow path 3) is re-placed under the same page rule -
+; mem_dmaok is the re-test, and mem_hifit refuses a straddling candidate
+; rather than bumping, which can refuse where a legal base exists (rare,
+; conservative, never wrong memory).
 ; -----------------------------------------------------------------------------
 mem_claim_dma:
-    push ax
+    push si
+    push di
     push cx
-    mov ax, cx
+    mov si, cx
     mov cl, 6
-    shl ax, cl                  ; head KB -> paragraphs
-    jnc .set
-    mov ax, 0xFFFF              ; a head past 1MB: let the page test refuse it
-.set:                           ; rather than wrap into a plausible small one
-    mov [mem_dma], ax
+    shl si, cl                  ; head KB -> paragraphs
     pop cx
-    pop ax
-    mov byte [mem_dir], 0
+    jnc .set
+    mov si, 0xFFFF              ; a head past 1MB: let the page test refuse it
+.set:                           ; rather than wrap into a plausible small one
+    xor di, di
     jmp short mem_claim.go
 mem_claim_hi:
-    mov byte [mem_dir], 1
-    jmp short mem_claim.nodma
+    push si
+    push di
+    xor si, si
+    mov di, 1
+    jmp short mem_claim.go
 mem_claim:
-    mov byte [mem_dir], 0
-.nodma:
-    mov word [mem_dma], 0
+    push si
+    push di
+    xor si, si
+    xor di, di
 .go:
     push ax
     push cx
-    push si
-    push di
     pushf
-    cli                         ; the whole scan-and-publish, one window
+    cli                         ; the whole scan-and-publish, one window -
+    mov [mem_dma], si           ; the operation's PARAMETERS included. The
+    mov [mem_dir], di           ; entries stage them in registers because a
+                                ; global stored BEFORE the cli is another
+                                ; task's to overwrite in the gap: a worker's
+                                ; DMA head silently dropped, or a region
+                                ; claim allocating from the wrong end
 
     or ax, ax
     jz .fail
@@ -242,7 +251,7 @@ mem_claim:
     jmp .fail
 .haverec:
 
-    cmp byte [mem_dir], 0
+    cmp word [mem_dir], 0
     jne .hi
     mov dx, [mem_base]          ; DX = candidate base
     jmp short .retry
@@ -264,7 +273,7 @@ mem_claim:
     and cx, 0xF000              ; can work is the next page's floor...
     add cx, 0x1000
     jc .fail                    ; ...past 1MB, so there is no next page
-    cmp byte [mem_dir], 0
+    cmp word [mem_dir], 0
     je .dmago
     sub cx, [mem_dma]           ; ...and going DOWN, the highest base in THIS
     cmp cx, [mem_base]          ; page whose head still fits. Below the heap
@@ -289,7 +298,7 @@ mem_claim:
     add cx, [si+MC_PARA]        ; CX = this claim's end
     cmp cx, dx
     jbe .nover                  ; claim ends at/before our start: ditto
-    cmp byte [mem_dir], 0
+    cmp word [mem_dir], 0
     jne .down
     mov dx, cx                  ; overlap: restart just past this claim...
     jmp .retry
@@ -323,10 +332,10 @@ mem_claim:
     xor dx, dx
     stc
 .out:
-    pop di
-    pop si
     pop cx
     pop ax
+    pop di
+    pop si
     ret
 
 ; -----------------------------------------------------------------------------
@@ -751,7 +760,7 @@ mem_free_rec:
 ; The query a package sizes itself from (SPEC.md 50.3). Walking holes
 ; without sorting: for each candidate base (the heap base, then every
 ; claim's end), measure the distance to the nearest claim that starts above
-; it. O(MEM_MAX^2) with MEM_MAX = 16 - a few hundred cycles, called once at
+; it. O(MEM_MAX^2) with MEM_MAX = 32 - around a thousand cycles, called at
 ; app startup.
 ; -----------------------------------------------------------------------------
 mem_avail:
@@ -1096,6 +1105,78 @@ osapi_mem_avail:
     jmp mem_avail
 
 ; -----------------------------------------------------------------------------
+; osapi_cm_alloc / osapi_cm_free / osapi_cm_caps - main's v3 arena slots
+; (SPEC.md 20.8), answered by the claim heap
+;
+; main numbers these 0x01B8/0x01C0/0x01C8 and counts in PARAGRAPHS; the heap
+; counts KB. The wrappers convert - a paragraph count rounds UP to whole KB,
+; so a grant is never smaller than asked - and keep main's register contracts
+; exactly: cm_alloc answers in AX (not DX) and fails with main's code in AX,
+; cm_free takes AX and preserves it, cm_caps answers AX/DX/BL preserving BH.
+; A package built against main's SDK runs on this kernel unchanged; one built
+; against this SDK uses the KB slots directly (SPEC.md 50.3).
+; -----------------------------------------------------------------------------
+osapi_cm_alloc:
+    push cx
+    push dx
+    add ax, 63                  ; paragraphs -> KB, rounded up; 0 asks for
+    jc .refuse                  ; 1KB (main's "0 is rounded up to 1"), and a
+    mov cl, 6                   ; carry is >0xFFC0 paragraphs - nothing that
+    shr ax, cl                  ; big exists below 1MB
+    or ax, ax
+    jnz .ask
+    inc ax
+.ask:
+    call osapi_mem_claim        ; CF/DX by the heap's rules, ES the identity
+    jc .refuse
+    mov ax, dx                  ; main's contract: AX = the base segment
+    pop dx
+    pop cx
+    ret
+.refuse:
+    xor ax, ax                  ; main's failure codes: 0 = no arena at all,
+    mov dx, [mem_top]           ; 1 = no record, 2 = no run. The heap does
+    cmp dx, [mem_base]          ; not tell 1 from 2 apart (and no shipped
+    je .code                    ; caller ever did): 2, or 0 on a machine
+    mov ax, 2                   ; whose heap is empty
+.code:
+    pop dx
+    pop cx
+    stc
+    ret
+
+osapi_cm_free:
+    push dx                     ; in: AX = the base segment; out: CF, with
+    mov dx, ax                  ; AX preserved - main's contract, so the
+    call osapi_mem_free         ; heap's DX-in shape is hidden here
+    pop dx
+    ret
+
+osapi_cm_caps:
+    push cx
+    push si
+    mov ch, bh                  ; BH survives in CH (CX itself is banked)
+    call mem_avail              ; AX = largest free KB, BX = total free KB
+    mov dx, bx
+    mov cl, 6
+    shl ax, cl                  ; KB -> paragraphs: a 640KB heap is 0xA000
+    shl dx, cl                  ; paragraphs, so the shifts never carry
+    xor bx, bx                  ; BL = free claim records (main: free
+    mov si, mem_tab             ; block-table entries)
+.rec:
+    cmp word [si+MC_SEG], 0
+    jne .used
+    inc bx
+.used:
+    add si, MC_SIZE
+    cmp si, mem_tab + MEM_MAX*MC_SIZE
+    jb .rec
+    mov bh, ch                  ; the caller's BH back (BL <= MEM_MAX)
+    pop si
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
 ; mem_own - the calling package's owner word (module-internal)
 ; in:  ES = the caller's segment, stamped by the API stub
 ; out: CF = 0 and BX = the owner word (that same segment); CF = 1 if the
@@ -1157,10 +1238,12 @@ mem_own:
 section .bss
 
 mem_tab:  resb MEM_MAX * MC_SIZE  ; the claim map (layout above)
-mem_dir:  resb 1                  ; 0 = mem_claim (bottom up), 1 = mem_claim_hi
-                                  ; (top down, a package's region). One byte
-                                  ; and not a parameter because the whole
-                                  ; claim runs inside one cli window
+mem_dir:  resw 1                  ; 0 = mem_claim (bottom up), 1 = mem_claim_hi
+                                  ; (top down, a package's region). A word so
+                                  ; the entries can stage it in a register and
+                                  ; store it INSIDE the cli window - it is a
+                                  ; global only because the scan reads it per
+                                  ; candidate, never a parameter channel
 mem_dma:  resw 1                  ; ...and mem_claim_dma's head, in paragraphs,
                                   ; for the same reason: 0 = no page constraint
 mem_base: resw 1                  ; first heap paragraph = HEAP_SEG

@@ -93,7 +93,7 @@ CMAGENTA  equ 5
 CBROWN    equ 6
 CLGRAY    equ 7             ; DECORATION grey - Minesweeper's covered cells,
                             ; Arkanoid's rails, Recorder's centre line
-CDGRAY    equ 8             ; the disabled pen (SPEC.md 46). GREY THE WHOLE
+CDGRAY    equ 8             ; the disabled pen (SPEC.md 47). GREY THE WHOLE
                             ; CONTROL - frame, ring, box, icon AND label -
                             ; never just the caption, and that is not a style
                             ; note: on a mono adapter your greyed LABEL comes
@@ -409,11 +409,11 @@ VID_CGA    equ 2
 ; (whose flag-preserving contract it shares, so it is safe between wm_create
 ; and the CF you owe the loader). An application that never calls it is
 ; exactly as it was: a label, no cell, no menu.
-%define OSAPI_ABOUT_SET     KERNEL_SEG:0x01C8   ; BX = win ptr, SI = your About
+%define OSAPI_ABOUT_SET     KERNEL_SEG:0x01E0   ; BX = win ptr, SI = your About
                                  ; handler's offset (0 = none). Preserves every
                                  ; register and the flags
 
-%define OSAPI_FILE_READBIG  KERNEL_SEG:0x01D0   ; SI = NUL 8.3 name, ES = the
+%define OSAPI_FILE_READBIG  KERNEL_SEG:0x01E8   ; SI = NUL 8.3 name, ES = the
                                  ; destination BASE segment (the buffer starts
                                  ; at ES:0000), DX:CX = capacity in BYTES,
                                  ; 32-bit, DX high. out CF=0 and DX:AX = bytes
@@ -436,7 +436,7 @@ VID_CGA    equ 2
                                  ; resolution and the same UI-task-only rule
                                  ; as every other file slot.
 
-%define OSAPI_GFX_DBUF      KERNEL_SEG:0x01D8   ; arm/disarm double buffering
+%define OSAPI_GFX_DBUF      KERNEL_SEG:0x01F0   ; arm/disarm double buffering
                                  ; for your own drawing (SPEC.md 32): AL = 1
                                  ; on / 0 off, lock HELD. Out CF=0 and AL =
                                  ; the state before, which you hand straight
@@ -446,7 +446,7 @@ VID_CGA    equ 2
                                  ; renders through the same code and has
                                  ; nothing to double) or a heap too small.
                                  ; Refusal is normal - draw unbuffered.
-%define OSAPI_GFX_SCROLL    KERNEL_SEG:0x01E0   ; move a rect's contents up or
+%define OSAPI_GFX_SCROLL    KERNEL_SEG:0x01F8   ; move a rect's contents up or
                                  ; down instead of redrawing them (SPEC.md
                                  ; 5.5): AX/BX/CX/DX = x1/y1/x2/y2 inclusive
                                  ; ABSOLUTE screen coords, SI = signed dy,
@@ -460,19 +460,16 @@ VID_CGA    equ 2
                                  ; wholly contain the rect refuses: a blit
                                  ; cannot be cut per pixel (SPEC.md 11.3).
 
-; --- this fork's own slots (docs/PORTING.md 4) ---------------------------------
-; Everything above is at `main`'s number. Everything from here up is this
-; fork's - and 0x01B8..0x01C8 are HELD EMPTY because `main` puts its
-; paragraph-counting arena there and this fork's heap counts KB (SPEC.md
-; 50.3), as is 0x0200..0x0238, which is RESERVED for `main` to grow into -
-; 0x0240 (FONT_RUN) is the first number past that reservation. A
-; call to any held number returns CF=1 with every register intact.
-;
-; The reservation is not theoretical: this block sat at 0x01E8 until `main`
-; put OSAPI_FILE_READBIG there, and moving it cost a rebuild of every
-; package. The two cells just spent (0x01F0/0x01F8) came out of that
-; headroom at `main`'s own numbers, which is exactly what it was for.
-%define OSAPI_MEM_CLAIM     KERNEL_SEG:0x01E8   ; the claim heap (SPEC.md 50.3):
+; --- the new slots (docs/PORTING.md 4) ------------------------------------------
+; EVERY slot main published keeps main's number and contract - including the
+; three paragraph-counting arena slots at 0x01B8..0x01C8 (OSAPI_MEM_ALLOC /
+; OSAPI_MEM_FREE / OSAPI_MEM_AVAIL in main's SDK), which are answered by the
+; claim heap through converting wrappers, so a package built against main's
+; os88api.inc runs on this kernel unchanged. New code should prefer the KB
+; slots below: they are the native shape, they work from the entry proc, and
+; only they carry the DMA-page and regrow contracts. Everything this branch
+; ADDED starts at 0x0200, main's next free number.
+%define OSAPI_MEM_CLAIM     KERNEL_SEG:0x0200   ; the claim heap (SPEC.md 50.3):
                                  ; AX = KB wanted; out CF=0 and DX = the base
                                  ; segment, CF=1 refused. This is how you get
                                  ; memory your region cannot hold - a canvas,
@@ -485,31 +482,7 @@ VID_CGA    equ 2
                                  ; your claims when your instance dies, so you
                                  ; need no teardown hook; free them yourself
                                  ; only to hand memory back mid-session.
-%define OSAPI_FONT_RUN      KERNEL_SEG:0x0240   ; CX=x, DX=y, SI=NUL string,
-                                                ; AL=ink, AH=background. ONE
-                                                ; OPAQUE text run (SPEC.md 6.1):
-                                                ; the cells' background and
-                                                ; their glyphs in a single
-                                                ; pass, which is the
-                                                ; erase-then-letter pair every
-                                                ; text element writes by hand.
-                                                ; Two things it buys. It cannot
-                                                ; produce SPEC.md 11.3's
-                                                ; granularity failure - fill
-                                                ; and glyph are one decision
-                                                ; about one cell - so a
-                                                ; background task needs no
-                                                ; OSAPI_WM_CLIP_TEST gate
-                                                ; around it. And on a 1bpp
-                                                ; adapter with x a multiple of
-                                                ; 8, a cell row is a single
-                                                ; store: no shift, no read, no
-                                                ; second byte, no fill pass.
-                                                ; Off that path it falls back
-                                                ; to fill+FONT_STR, so it is
-                                                ; never slower than doing it
-                                                ; by hand
-%define OSAPI_MEM_CLAIM_DMA KERNEL_SEG:0x0238   ; the same claim, for a buffer
+%define OSAPI_MEM_CLAIM_DMA KERNEL_SEG:0x0250   ; the same claim, for a buffer
                                  ; an ISA DMA CONTROLLER will read or write:
                                  ; AX = KB wanted, CX = KB of the block's HEAD
                                  ; that must not cross a 64KB PHYSICAL
@@ -522,12 +495,12 @@ VID_CGA    equ 2
                                  ; not the whole block because usually only
                                  ; part of a buffer is the chip's; pass CX = AX
                                  ; if all of it is, and CX = 0 for the plain
-                                 ; claim. Do NOT grow one of these:
-                                 ; OSAPI_MEM_REGROW may move it, and no record
-                                 ; carries the constraint.
-%define OSAPI_MEM_FREE      KERNEL_SEG:0x01F0   ; DX = the segment you were
+                                 ; claim. OSAPI_MEM_REGROW is safe on one of
+                                 ; these: the record carries the constraint,
+                                 ; and a move re-honours it (SPEC.md 50.3).
+%define OSAPI_MEM_FREE      KERNEL_SEG:0x0208   ; DX = the segment you were
                                  ; given; out CF=0 released, CF=1 not yours
-%define OSAPI_MEM_AVAIL     KERNEL_SEG:0x01F8   ; out AX = largest free run in
+%define OSAPI_MEM_AVAIL     KERNEL_SEG:0x0210   ; out AX = largest free run in
                                  ; KB, BX = total free KB. Size yourself from
                                  ; THIS, not from int 12h: it is the only
                                  ; number that accounts for what the kernel
@@ -542,7 +515,7 @@ VID_CGA    equ 2
                                  ; a wide erase followed by glyphs can white
                                  ; out a band the glyphs then refuse to
                                  ; repaint. Erase per cell, or skip the pair.
-%define OSAPI_GFX_BLIT4     KERNEL_SEG:0x01C0   ; ES:SI = packed 4bpp pixels (two
+%define OSAPI_GFX_BLIT4     KERNEL_SEG:0x01D8   ; ES:SI = packed 4bpp pixels (two
                                  ; per byte, high nibble leftmost), BP = source
                                  ; stride in BYTES, AX/BX = destination x/y,
                                  ; CX/DX = width/height in pixels. Draws the
@@ -634,7 +607,7 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; at the number `main` uses. Prefer it in any
                                  ; app you intend to build on both forks.
 
-%define OSAPI_WM_RESIZE     KERNEL_SEG:0x01B8   ; BX = win ptr, CX = new width,
+%define OSAPI_WM_RESIZE     KERNEL_SEG:0x01D0   ; BX = win ptr, CX = new width,
                                  ; DX = new height, in pixels, of the WHOLE
                                  ; window (frame included). Clamps to the
                                  ; kernel's minimum and to the live screen,
@@ -645,7 +618,7 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; app that sets them leaves the shadow, the
                                  ; z-order damage and the dock out of step.
                                  ; Do NOT hold the gfx lock.
-%define OSAPI_WM_ONSIZE     KERNEL_SEG:0x0208   ; BX = win ptr, AX = a near proc
+%define OSAPI_WM_ONSIZE     KERNEL_SEG:0x0220   ; BX = win ptr, AX = a near proc
                                  ; in YOUR segment (0 clears it). The kernel
                                  ; calls it BEFORE it commits a size the user
                                  ; dragged out of your grow box, with
@@ -659,10 +632,10 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; drawn at either size, so DO NOT draw in it -
                                  ; decide, return, and draw in the W_PAINT the
                                  ; kernel is about to make.
-%define OSAPI_FILE_HERE     KERNEL_SEG:0x0210   ; out DX = the current
+%define OSAPI_FILE_HERE     KERNEL_SEG:0x0228   ; out DX = the current
                                  ; directory's first cluster (0 = the root),
                                  ; BL = the drive. No disk I/O.
-%define OSAPI_FILE_GOTO     KERNEL_SEG:0x0218   ; in DX = a cluster from
+%define OSAPI_FILE_GOTO     KERNEL_SEG:0x0230   ; in DX = a cluster from
                                  ; OSAPI_FILE_HERE, BL = its drive; out CF=1
                                  ; it could not be listed and the volume is
                                  ; back at the root with the write gate shut.
@@ -680,7 +653,7 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; moved it. If your Save means "the same
                                  ; place my Save As chose", store the pair
                                  ; these two slots trade in beside the name.
-%define OSAPI_MEM_REGROW    KERNEL_SEG:0x0220   ; DX = a claim YOU hold, AX =
+%define OSAPI_MEM_REGROW    KERNEL_SEG:0x0238   ; DX = a claim YOU hold, AX =
                                  ; the new size in KB. out CF=0 and DX = the
                                  ; claim's base NOW - the SAME segment when it
                                  ; grew where it stood, a different one when it
@@ -705,7 +678,7 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; moved leaves your old segment pointing at
                                  ; memory that is no longer yours.
 
-%define OSAPI_WM_TITLE      KERNEL_SEG:0x0228   ; BX = win ptr, AX = a NUL
+%define OSAPI_WM_TITLE      KERNEL_SEG:0x0240   ; BX = win ptr, AX = a NUL
                                  ; string IN YOUR OWN SEGMENT, or 0 to mean
                                  ; "the bytes W_TITLE already names changed
                                  ; underneath it". Redraws the caption strip
@@ -720,7 +693,7 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; the string must OUTLIVE the call - the
                                  ; record keeps the pointer, not the bytes.
 
-%define OSAPI_FONT_GLYPHS   KERNEL_SEG:0x0200   ; out SI = the offset of the
+%define OSAPI_FONT_GLYPHS   KERNEL_SEG:0x0218   ; out SI = the offset of the
                                  ; kernel's 8x8 glyph table in KERNEL_SEG,
                                  ; AL = first character code it covers,
                                  ; AH = last, CX = bytes per glyph (8). Read
@@ -759,7 +732,7 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
 ;     every call to the part of your content that shows. OSAPI_WM_OBSCURED
 ;     is still there and still correct, but it vetoes the whole frame for
 ;     one covered pixel - prefer the clip.
-;  6. Your stack is 1536 bytes in LOW_SEG and SS != DS (see the header of
+;  6. Your stack is SCH_STACK (512) bytes in LOW_SEG and SS != DS (see the header of
 ;     this file). No deep recursion, no big stack buffers, and BP-relative
 ;     operands address SS.
 ;  7. You may call: the gfx_* and font_* slots, OSAPI_SET_COLOR,
@@ -845,7 +818,7 @@ MENU_DIS    equ 1           ; an item string that BEGINS with this byte is
                             ; the CDGRAY note above.) The '(NoRam)' says WHY,
                             ; which the grey cannot, and is worth the bytes
                             ; whenever there is a reason a user could act on.
-                            ; SPEC.md 46 is the standard for every disabled
+                            ; SPEC.md 47 is the standard for every disabled
                             ; control in the system.
 
 ; --- window record layout (SPEC.md 11, 20 bytes) -------------------------------
@@ -1045,3 +1018,28 @@ OS88_BSS_SIZE equ 0
         %error "package too big: image + bss must fit in APP_MAX_SIZE (0x4E00)"
     %endif
 %endmacro
+
+%define OSAPI_FONT_RUN      KERNEL_SEG:0x0258   ; CX=x, DX=y, SI=NUL string,
+                                                ; AL=ink, AH=background. ONE
+                                                ; OPAQUE text run (SPEC.md 6.1):
+                                                ; the cells' background and
+                                                ; their glyphs in a single
+                                                ; pass, which is the
+                                                ; erase-then-letter pair every
+                                                ; text element writes by hand.
+                                                ; Two things it buys. It cannot
+                                                ; produce SPEC.md 11.3's
+                                                ; granularity failure - fill
+                                                ; and glyph are one decision
+                                                ; about one cell - so a
+                                                ; background task needs no
+                                                ; OSAPI_WM_CLIP_TEST gate
+                                                ; around it. And on a 1bpp
+                                                ; adapter with x a multiple of
+                                                ; 8, a cell row is a single
+                                                ; store: no shift, no read, no
+                                                ; second byte, no fill pass.
+                                                ; Off that path it falls back
+                                                ; to fill+FONT_STR, so it is
+                                                ; never slower than doing it
+                                                ; by hand

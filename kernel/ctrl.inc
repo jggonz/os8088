@@ -865,7 +865,7 @@ cpf_dbok:
 ; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
 ;
 ; Row 1's glyph takes cpf_dbok's pen, the same one cp_disp_paint gives its
-; label (SPEC.md 46 rule 2). It was drawn in CBLACK here while the label
+; label (SPEC.md 47 rule 2). It was drawn in CBLACK here while the label
 ; beside it went grey, so a row the click band refuses still showed a
 ; full-strength ring - which reads as a live control with faint writing next
 ; to it. The caption saying 'Not Enough Ram' was carrying the whole message

@@ -245,6 +245,26 @@ $(BUILD)/tracker.bin: apps/tracker/tracker.asm apps/tracker/trkplay.inc \
 $(BUILD)/tracker.o88: $(BUILD)/tracker.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/tracker.bin -o $@
 
+# ArtfulType, the eleventh shipped package (SPEC.md 46): a port of
+# ActionRetro's ArtfulType, the distraction-free Markdown writer for classic
+# 68k Macs, onto the fullscreen surface (SPEC.md 11.2). Windowed it is the
+# splash card; a button takes the whole screen, where it draws its own
+# Macintosh menu bar (inverted in Writer mode), styles markdown live from
+# its own ROM-font glyph renderer (bold overstrike / italic shear / scaled
+# headings / underlined links / gray code cells), and does word wrap, drag
+# selection, snapshot undo in a heap claim (SPEC.md 50.3), and Open/Save
+# through the Standard File dialog. One line = one OSAPI_GFX_BLIT4 is the
+# whole performance story; the caret blink is its worker task.
+$(BUILD)/artful.bin: apps/artful/artful.asm apps/artful/atdoc.inc \
+		apps/artful/atrend.inc apps/artful/atui.inc apps/artful/atedit.inc \
+		apps/artful/atcmd.inc apps/artful/atfile.inc apps/artful/atimg.inc \
+		apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/artful/ -o $@ apps/artful/artful.asm
+	@echo "artful: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/artful.o88: $(BUILD)/artful.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/artful.bin -o $@
+
 # Fractal, the sixth shipped package: five escape-time fractals in Q4.12
 # fixed point, rendered by a background WORKER TASK (SPEC.md 20.6) while the
 # GUI stays live. The first client of OSAPI_TASK_SPAWN / OSAPI_TASK_ALIVE.
@@ -356,7 +376,7 @@ $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 tools/os88disk.py
 # above outranks matching the other fork's row order.)
 APPS_TOOLS := $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/piano.o88 \
               $(BUILD)/fractal.o88 $(BUILD)/paint.o88 $(BUILD)/recorder.o88 \
-              $(BUILD)/tracker.o88
+              $(BUILD)/tracker.o88 $(BUILD)/artful.o88
 APPS_GAMES := $(BUILD)/mines.o88 $(BUILD)/solitair.o88 $(BUILD)/arkanoid.o88
 
 # Data that ships beside the programs that read it (SPEC.md 24): os88disk.py
@@ -385,7 +405,7 @@ MOUSE := -chardev msmouse,id=m0 -serial chardev:m0
 
 run: $(IMG) $(APPSIMG)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
-		-drive file=$(APPSIMG),format=raw,if=floppy,index=1
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 $(DEVCARD)
 
 # A maxed-out 640KB machine. QEMU/SeaBIOS cannot boot with less than 1MB
 # of guest RAM (SeaBIOS wedges during POST at -m 512k and -m 640k alike),
@@ -393,11 +413,11 @@ run: $(IMG) $(APPSIMG)
 # -m 1M makes int 12h report 640K - same as a fully populated XT.
 run-640: $(IMG) $(APPSIMG)
 	$(QEMU) -m 1M -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
-		-drive file=$(APPSIMG),format=raw,if=floppy,index=1
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 $(DEVCARD)
 
 debug: $(IMG) $(APPSIMG)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) -s -S \
-		-drive file=$(APPSIMG),format=raw,if=floppy,index=1
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 $(DEVCARD)
 
 # Headless boot with a QMP socket, for scripted screendumps and input:
 #   make test
@@ -420,11 +440,25 @@ ifneq ($(ADLIBDEV)$(SBDEV),)
 CARDAUDIO = -audiodev none,id=snd
 endif
 
+# The plain dev-loop targets (`run`, `run-640`, `debug`, `test`) carry the
+# OPL2 by DEFAULT. The sound driver is WANTED out of the box (SPEC.md 51.4),
+# and on a machine with no card the boot reports "No hardware found" by
+# opening the Control Panel on its Drivers page (SPEC.md 51.3) - the right
+# answer on real cardless hardware, pure noise at every boot of the dev
+# loop. NOCARD=1 boots the cardless machine deliberately, to see exactly
+# that path; an explicit ADLIB=1/SB16=1 supplies its own card, so the
+# default stands down rather than double-mapping port 388h. `test-snd` is
+# NOT in the list: its wav capture asserts on PC-speaker output, and a
+# present card would route the very tones it measures away to FM.
+ifeq ($(NOCARD)$(ADLIB)$(SB16),)
+DEVCARD = -audiodev none,id=devsnd -device adlib,audiodev=devsnd
+endif
+
 test: $(IMG) $(APPSIMG)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 \
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
-		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV)
+		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV) $(DEVCARD)
 
 # `make test` plus audio capture (SPEC.md 34): the PC speaker renders into
 # build/snd.wav, finalized when QMP `quit` stops QEMU. Verify with

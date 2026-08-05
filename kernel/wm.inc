@@ -538,6 +538,43 @@ wm_destroy:
     ret
 
 ; -----------------------------------------------------------------------------
+; wm_destroy_seg - destroy every window whose callbacks live in segment AX
+; in:  AX = a package region's segment (never 0); caller holds the gfx lock
+; out: nothing (all registers preserved)
+;
+; The teardown sweep for windows the loader never bound: a package may
+; wm_create more windows than the one it returned to the loader (SPEC.md
+; 20.2), and those carry no instance record - only the W_SEG creator stamp
+; ties them to the region. Called with the dying instance's I_SPTR
+; (app_close_win / inst_task_die / the winless worker death) and with an
+; aborted or dying load's region segment, always BEFORE the region is freed:
+; an orphan still carries W_SEG/W_DISP into it, and the next repaint would
+; far-call whatever claims that memory. main enforced this with the wm_wseg
+; side table; the stamp moved into the record (W_SEG) and the sweep moves
+; with it.
+; -----------------------------------------------------------------------------
+wm_destroy_seg:
+    push ax
+    push bx
+    push cx
+    mov bx, wm_wins
+    mov cx, MAX_WIN
+.scan:
+    test word [bx+W_FLAGS], 1   ; a used record only - a free slot's W_SEG
+    jz .next                    ; is a previous tenant's leftover
+    cmp [bx+W_SEG], ax
+    jne .next
+    call wm_destroy             ; clears the used bit, so a slot can never
+                                ; match twice
+.next:
+    add bx, WIN_SIZE
+    loop .scan
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_show - make a window visible, raise it, and draw JUST it (SPEC.md 11.90)
 ; in:  BX = window ptr (caller holds the gfx lock)
 ; out: nothing (all registers preserved)
@@ -881,7 +918,29 @@ wm_fullscreen:
     mov ax, [vid_h]
     mov [bx+W_H], ax
     or word [bx+W_FLAGS], WF_FULL
-    call wm_front               ; raise + repaint, lock already held
+                                ; Raise it AND draw it WHOLE. Not wm_front:
+                                ; that asks wm_obscured whether anything was
+                                ; on top of us and draws only the title bar
+                                ; when nothing was - a question about the rect
+                                ; we just REPLACED. An app already frontmost
+                                ; (the usual case - it is responding to its
+                                ; own click) took the degenerate chrome-only
+                                ; path and its new full-screen content was
+                                ; never painted at all. wm_fast_ok used to
+                                ; hide this by sending every fullscreen call
+                                ; to wm_paint_all; nothing else in the tree
+                                ; changes a window's geometry and then raises
+                                ; it, which is why wm_front never had to know.
+    push bp
+    push di
+    mov di, bx
+    call wm_top                 ; BX = the outgoing front (may be us)
+    mov bp, bx
+    mov bx, di
+    mov al, 1                   ; a new frame has no pixels on screen
+    call wm_raise
+    pop di
+    pop bp
     jmp .ok
 .exit:
     mov bx, [wm_fs]
@@ -1707,7 +1766,7 @@ wm_content:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_about_set - register a window's About handler (public; API 0x01C8,
+; wm_about_set - register a window's About handler (public; API 0x01E0,
 ;                SPEC.md 12.2)
 ; in:  BX = window ptr, SI = the handler's offset in the CALLER's segment
 ;      (0 = this window has no About)

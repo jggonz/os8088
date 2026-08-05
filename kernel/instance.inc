@@ -868,10 +868,17 @@ app_close_win:
                                 ; minimizing leaves it open
 .noflush:
     call snd_release_rec        ; free every sound grant before the record
-    call mem_free_rec           ; goes (SPEC.md 29.4/34.3), and every heap
-                                ; claim with it (SPEC.md 50.4)
-    call wm_destroy             ; frees the wm slot + wm_owner, repaints
-    mov word [di+I_WIN], 0
+                                ; goes (SPEC.md 29.4/34.3)
+    call wm_destroy             ; frees the wm slot + wm_owner, repaints -
+    mov word [di+I_WIN], 0      ; and the windows go BEFORE the claims: the
+    cmp word [di+I_SIZE], 0     ; repaint inside a destroy far-calls every
+    je .swept                   ; survivor, and a survivor whose procs live
+    push ax                     ; in a freed region is a wild call. For a
+    mov ax, [di+I_SPTR]         ; package, sweep the region's OTHER windows
+    call wm_destroy_seg         ; too (SPEC.md 20.2) - I_SPTR is its segment
+    pop ax                      ; (a built-in's is a state ptr; I_SIZE tells
+.swept:                         ; them apart)
+    call mem_free_rec           ; ...then every heap claim (SPEC.md 50.4)
     mov byte [di+I_STATE], 0    ; record (and any package region) free
     jmp .out
 .tasked:
@@ -921,13 +928,18 @@ inst_restore:
 ; -----------------------------------------------------------------------------
 inst_task_die:
     call snd_release_rec        ; free every sound grant before the record
-    call mem_free_rec           ; goes (SPEC.md 29.4/34.3), and every heap
-                                ; claim with it (SPEC.md 50.4)
+                                ; goes (SPEC.md 29.4/34.3)
     call gfx_lock
     mov bx, [di+I_WIN]
-    call wm_destroy             ; frees the wm slot + wm_owner, repaints
-    mov word [di+I_WIN], 0
+    call wm_destroy             ; frees the wm slot + wm_owner, repaints -
+    mov word [di+I_WIN], 0      ; and BEFORE mem_free_rec: the repaint
+    cmp word [di+I_SIZE], 0     ; far-calls every surviving window, so none
+    je .swept                   ; whose procs live in the dying region may
+    mov ax, [di+I_SPTR]         ; outlive it. For a package, that includes
+    call wm_destroy_seg         ; any window it made beyond the bound one
+.swept:                         ; (SPEC.md 20.2)
     call gfx_unlock
+    call mem_free_rec           ; every heap claim, region included (50.4)
     mov bx, di                  ; I_STATE is offset 0: the release byte
     jmp task_exit
 
@@ -1127,7 +1139,14 @@ inst_pkg_alive:
                                 ; would zero the cold-entry jmp at 0800:0000
     jmp inst_task_die           ; never returns
 .winless:
-    call snd_release_rec        ; the inst_task_die order, minus the window
+    call snd_release_rec        ; the inst_task_die order, minus the BOUND
+    cmp word [di+I_SIZE], 0     ; window - but a package can have made
+    je .nwin                    ; windows it never bound to the record, and
+    call gfx_lock               ; they must not outlive the region either
+    mov ax, [di+I_SPTR]         ; (SPEC.md 20.2)
+    call wm_destroy_seg
+    call gfx_unlock
+.nwin:
     call mem_free_rec
     mov bx, di                  ; no window, but the record is real: release
     jmp task_exit               ; it anyway (I_STATE is offset 0), or its

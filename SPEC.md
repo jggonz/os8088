@@ -556,8 +556,8 @@ bytes are hard-coded.
 | `font_str`   | CX=x, DX=y, SI=NUL str   | draw string left→right               |
 | `font_width` | SI=NUL str               | out AX = pixel width (8 × length)    |
 | `font_str_x` / `font_width_x` | ES:SI = NUL str | the same two, reading the string through **ES** — what the `X` stubs of §20.3 call so a package's string can live in its own segment |
-| `font_run` / `font_run_x` | CX=x, DX=y, SI (ES:SI) = NUL str, AL=ink, AH=background | one **opaque** run: the cells' background AND their glyphs, in a single pass (§6.1). API slot 0x0240 |
-| `osapi_font_glyphs` | — | out SI = the offset of `font_glyphs` in KERNEL_SEG, AL = FONT_FIRST (32), AH = FONT_LAST (126), CX = 8 bytes per glyph. API slot 0x0200 |
+| `font_run` / `font_run_x` | CX=x, DX=y, SI (ES:SI) = NUL str, AL=ink, AH=background | one **opaque** run: the cells' background AND their glyphs, in a single pass (§6.1). API slot 0x0258 |
+| `osapi_font_glyphs` | — | out SI = the offset of `font_glyphs` in KERNEL_SEG, AL = FONT_FIRST (32), AH = FONT_LAST (126), CX = 8 bytes per glyph. API slot 0x0218 |
 
 **Handing out the bitmaps** (`osapi_font_glyphs`) is for an app that draws
 text into its OWN pixels rather than onto the screen — apps/paint's text tool
@@ -1118,7 +1118,7 @@ W_ONSIZE equ 24  ; word: near ptr or 0 - the resize negotiator (§11.1).
                  ; Called BEFORE a new size is committed, with SI = window,
                  ; CX/DX = the proposed frame size; answers in CX/DX with the
                  ; size it will accept. NOT a template word: wm_create zeroes
-                 ; it, `wm_onsize` (API slot 0x0208) sets it.
+                 ; it, `wm_onsize` (API slot 0x0220) sets it.
 WIN_SIZE equ 26
 MAX_WIN  equ 12
 
@@ -1271,7 +1271,7 @@ resizable window's procs are required to lay out from the live record (record
 note above). Self-initiated repaints (the fm_repaint idiom, §22) must
 white-fill using the live W_W/W_H for the same reason.
 
-**`wm_resize` (API slot 0x01B8) — an app changing its own size.** In:
+**`wm_resize` (API slot 0x01D0) — an app changing its own size.** In:
 BX = window, CX = new outer width, DX = new outer height; the caller holds
 the gfx lock. Clamps exactly as a drag does (never below WMIN_W/WMIN_H, never
 past the live screen or the dock row, §39.2), re-fits the origin the way
@@ -1293,7 +1293,7 @@ the record changes — which is the whole point: nothing has been drawn at
 either size yet, so a refusal costs no repaint. The answer is a SIZE and not
 a yes/no because the case that motivated it is per-axis: apps/paint refuses a
 drag that would crop artwork, and a drag that would lose columns but not rows
-should still get its rows. Install it with `wm_onsize` (API slot 0x0208,
+should still get its rows. Install it with `wm_onsize` (API slot 0x0220,
 BX = window, AX = a near proc in the window's own segment, 0 clears).
 The negotiator runs under the gfx lock and **must not draw** — it decides,
 returns, and draws in the W_PAINT that immediately follows.
@@ -1414,7 +1414,7 @@ map drawing the wrong SHAPE rather than in the wrong PLACE. A primitive not
 in this table is not "unclipped by design"; it is a hole.
 
 **Two are still holes, and they are named here so they are not silent.**
-`gfx_blit4` (0x01C0) and `gfx_scroll` (0x01E0) take no hook, because
+`gfx_blit4` (0x01D8) and `gfx_scroll` (0x01F8) take no hook, because
 `GFXCLIP` re-enters a body with a sub-rect and neither can honour one
 without also advancing its SOURCE to match — a blit is not a fill. Nothing
 in the tree reaches them from a clipped context today: both are package
@@ -1721,7 +1721,7 @@ escalated its next `fm_repaint` from the content to the whole frame, and
 before that to `wm_paint_all`. Either way, a window's listing, its chrome
 and everything overlapping it were redrawn to fix 17 rows.
 
-`wm_title_set` (**API slot 0x0228**) is the direct answer: in BX = window
+`wm_title_set` (**API slot 0x0240**) is the direct answer: in BX = window
 ptr, AX = the new `W_TITLE` offset — or **0**, meaning the bytes `W_TITLE`
 already names changed underneath it, which is the file manager's case
 because its caption *is* the instance record's `I_NAME` (§29.1). Caller
@@ -3555,8 +3555,8 @@ every consumer (files.inc, loader.inc) reads:
 | 0   | 16   | display name, NUL-padded: raw name[0..7] with trailing spaces trimmed, then '.', then ext[0..2] trimmed (dot omitted when the ext is blank); **every byte outside 0x21..0x7E replaced with '_'** (OEM-codepage bytes never reach the font renderer). Max 12 chars — fits every §22 truncation budget |
 | 16  | 2    | type: 1 = loadable package, 2 = subdirectory, else 0 (rules below) |
 | 18  | 2    | first cluster = raw FstClusLO (word @26), copied verbatim even when type=0 (harmless; the loader only reads it behind type==1, and `dsk_chdir` only behind type==2). FstClusHI (@20) is FAT32-only per spec — ignored |
-| 20  | 2    | size in bytes = raw size dword @28, clamped to 0xFFFF when ≥ 65,536 (display-only ceiling); forced to 0 for type 2 |
-| 22  | 10   | zero                                                        |
+| 20  | 4    | size in bytes = raw size dword @28, verbatim (lo word @20, hi @22 — drawn whole by `fm_ultoa`); forced to 0 for type 2 |
+| 24  | 8    | zero                                                        |
 
 **The type word** (binding — defense in depth with §21 step 1), tested in
 this order:
@@ -3826,9 +3826,10 @@ sentinel, which `apps/hello` ships deliberately to keep that path exercised.
 held. The program creates its window(s) via the API table (wm_create is
 lock-free) and **returns** BX = window ptr with CF clear; the loader
 registers the instance (§29) and wm_shows it. CF set = abort (loader reports
-"load failed"); an aborting entry must return BX = its already-created
-window ptr (or 0 if it created none) so the loader can wm_destroy it —
-otherwise aborted loads would leak window records.
+"load failed"); on abort the loader runs `wm_destroy_seg` over the region's
+segment before unreserving it, destroying every window the entry created by
+its `W_SEG` creator stamp — BX is not trusted or even consulted, a package
+that just declared itself broken gets nothing believed (§42.1).
 
 The entry must not call wm_show/wm_hide/wm_front, spawn tasks, or draw. The
 spawn prohibition is mechanical, not stylistic: `OSAPI_TASK_SPAWN` (§20.6)
@@ -3887,7 +3888,7 @@ below the table. There are two families:
   `fdlg_open`, plus a hand-written `api_file_rename` that stages both names.
 
 The table's start (0x0010) and its span are proved by two build-time
-assertions in kernel.asm; the span is **54 × 8** today. `apps/os88api.inc`
+assertions in kernel.asm; the span is **73 × 8** today. `apps/os88api.inc`
 mirrors every offset as an `OSAPI_*` `%define` (§20.5).
 
 ```
@@ -3910,41 +3911,35 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
                        0x0110 wm_fullscreen     0x01A0 xm_free
                        0x0118 wm_grow_paint     0x01A8 xm_copy
 
-0x01B0 wm_geom         0x01D8 osapi_gfx_dbuf    0x0200 osapi_font_glyphs
-0x01B8 wm_resize       0x01E0 gfx_scroll        0x0208 wm_onsize
-0x01C0 gfx_blit4       0x01E8 mem_claim     (X) 0x0210 osapi_file_here
-0x01C8 wm_about_set    0x01F0 mem_free      (X) 0x0218 osapi_file_goto
-0x01D0 dskw_readbig(N) 0x01F8 mem_avail         0x0220 mem_regrow     (X)
-                                                0x0228 wm_title_set
-                                                0x0230 osapi_drv_task (X)
+0x01B0 wm_geom         0x01D8 gfx_blit4         0x0200 mem_claim      (X)
+0x01B8 cm_alloc    (X) 0x01E0 wm_about_set      0x0208 mem_free       (X)
+0x01C0 cm_free     (X) 0x01E8 dskw_readbig  (N) 0x0210 mem_avail
+0x01C8 cm_caps         0x01F0 osapi_gfx_dbuf    0x0218 osapi_font_glyphs
+0x01D0 wm_resize       0x01F8 gfx_scroll        0x0220 wm_onsize
+                                                0x0228 osapi_file_here
+                                                0x0230 osapi_file_goto
+                                                0x0238 mem_regrow     (X)
+                                                0x0240 wm_title_set
+                                                0x0248 osapi_drv_task (X)
+                                                0x0250 mem_claim_dma  (X)
 ```
 
-**Nothing is held empty any more, and the table is contiguous.** It was not:
-five cells refused every call, because every slot up to `dskw_readbig` sat at
-the number `main` uses for the same routine and the aim was that one package
-source assemble for either fork (docs/PORTING.md §4). Where `main` had
-something this fork did not, the number was **reserved rather than reused** —
-an `stc`/`retf` cell answering CF=1 with every register back — on the rule that
-**a slot number must never mean two contracts**. Reusing 0x01C8 for this fork's
-KB-counting `mem_avail` where `main` puts its paragraph-counting one would have
-failed silently and by a factor of 64, which is the whole class of bug the rule
-exists to prevent. Ten further cells were RESERVED above them for `main` to
-grow into, after it took 0x01E8 for `dskw_readbig` and forced this fork's own
-block to move.
-
-**The branches are merging, so none of that buys anything, and the cells are
-gone.** Two of the five were filled rather than dropped — `OSAPI_SND_FM` and
-`OSAPI_SND_STREAM` at 0x00F8/0x0100, which the loadable sound driver (§51.4)
-gave real contracts identical to `main`'s. The other three and the reserved
-band were closed up, and everything above them moved **down** by 88 bytes.
-That is the third and last time this block has moved: every package is in this
-tree and `make` rebuilds all of them (§20.8 rule 4).
-
-The rule that produced the holes is worth keeping even without them. It was
-never really about `main` — it is that a shipped number keeps its contract, and
-the answer to "we no longer implement this" is a refusing stub, not a reuse
-(the retired sound slots were the precedent). What ended was the *cross-fork*
-half: this kernel no longer promises that its numbers match another tree's.
+**Every slot `main` ever published keeps `main`'s number and contract**, on
+the rule that **a slot number must never mean two contracts**: a shipped
+number keeps its meaning, and the answer to "we no longer implement this" is
+a wrapper or a refusing stub, never a reuse. Reusing 0x01C8 for a KB-counting
+`mem_avail` where `main` put its paragraph-counting one would fail silently
+and by a factor of 64, which is the whole class of bug the rule exists to
+prevent. So the three v3 arena slots at 0x01B8..0x01C8 stay live as
+`osapi_cm_*` (kernel/memory.inc) — paragraph-counting wrappers over the claim
+heap that keep `main`'s register contracts exactly, so a package built
+against `main`'s SDK runs unchanged — and `OSAPI_SND_FM`/`OSAPI_SND_STREAM`
+at 0x00F8/0x0100, once refusing stubs, carry the loadable sound driver's
+(§51.4) real contracts, identical to `main`'s. Everything this branch ADDS
+starts at 0x0200, `main`'s first free number, which the merge makes this
+tree's own. New code should prefer the KB slots (§50.3) over the arena
+wrappers: they are the native shape, they work from the entry proc, and only
+they carry the DMA-page and regrow contracts.
 
 **Offsets are not stable across kernel versions, and never were pretended
 to be.** Two things have moved them wholesale: the removal of the sound
@@ -3972,74 +3967,74 @@ Slot-specific contracts that are not simply their target routine's:
                          click aborts it. out AX = 0 ok / 1 busy / 2 rate
                          / 3 disabled-by-user / 4 no sink / 5 aborted.
                          ES restored per §1.
-0x00F8 wm_sizable        in BX = win ptr, AL = 0 clear / non-zero set
+0x0108 wm_sizable        in BX = win ptr, AL = 0 clear / non-zero set
                          WF_SIZABLE (§11.1). UI-task context only.
-0x0100 wm_fullscreen     in AL = 1 enter (BX = win) / 0 exit; caller holds
+0x0110 wm_fullscreen     in AL = 1 enter (BX = win) / 0 exit; caller holds
                          the gfx lock; out CF=1 = enter refused, screen
                          already owned (§11.2).
-0x0108 wm_grow_paint     in BX = win ptr; lock held. The grow-box restore
+0x0118 wm_grow_paint     in BX = win ptr; lock held. The grow-box restore
                          of §11: a resizable package's self-initiated
                          content repaint must end with this call. A no-op
                          unless BX is the frontmost visible WF_SIZABLE
                          window, so it is always safe to call.
-0x0110 dskw_write        in SI = NUL 8.3 name, ES:BX = bytes, CX = count
+0x0120 dskw_write        in SI = NUL 8.3 name, ES:BX = bytes, CX = count
                          (0 = empty file). Creates or replaces. out CF=0
                          AX=0, else CF=1 AX = FERR_*.
-0x0118 dskw_read         in SI = name, ES:BX = buffer, CX = capacity; out
+0x0128 dskw_read         in SI = name, ES:BX = buffer, CX = capacity; out
                          CF=0 AX = bytes read, else CF=1 AX = FERR_*
                          (FERR_BIG leaves the buffer untouched).
-0x0120 dskw_delete       in SI = name; out CF=0 AX=0, else CF=1 AX=FERR_*.
-0x0128 dskw_rename       in SI = old name, DI = new name; out as delete.
-0x0130 dskw_dfree        out CF=0, DX:AX = free bytes, BX = sectors per
+0x0130 dskw_delete       in SI = name; out CF=0 AX=0, else CF=1 AX=FERR_*.
+0x0138 dskw_rename       in SI = old name, DI = new name; out as delete.
+0x0140 dskw_dfree        out CF=0, DX:AX = free bytes, BX = sectors per
                          cluster; CF=1 AX = FERR_*. No disk I/O — the
                          resident FAT snapshot answers it.
-0x0138 menu_win_set      in BX = win ptr, SI = app menu set (0 = none).
+0x0148 menu_win_set      in BX = win ptr, SI = app menu set (0 = none).
                          Stores [BX+W_MENUS] and relayouts the bar when BX
                          is active. Draws nothing, takes no lock, and
                          preserves every register AND the flags — so it can
                          sit between wm_create and the entry proc's `ret`
                          without eating the CF that `ret` owes the loader.
-0x0150 inst_pkg_spawn    in AX = near entry inside the package image, BX =
+0x0160 inst_pkg_spawn    in AX = near entry inside the package image, BX =
                          the package's own window ptr; lock HELD. out CF=1
                          refused, else CF=0 and AL = the task slot (§20.6).
-0x0158 inst_pkg_alive    in BX = the package's own window ptr; lock NOT
+0x0168 inst_pkg_alive    in BX = the package's own window ptr; lock NOT
                          held. Returns with everything preserved while the
                          instance lives; otherwise NEVER RETURNS — it tears
                          the instance down through inst_task_die (§29.4).
-0x0160 wm_clip_set       in BX = the package's own window ptr; lock HELD.
+0x0170 wm_clip_set       in BX = the package's own window ptr; lock HELD.
                          Arms the window's visible region for every
                          gfx_*/font_* call until the next gfx_unlock. out
                          CF=1 nothing is visible — draw nothing this frame.
-0x0168 wm_clip_clear     disarm early, inside the same lock hold.
-0x0170 wm_clip_test      in AX/BX/CX/DX = x1,y1,x2,y2 inclusive; out CF=0
+0x0178 wm_clip_clear     disarm early, inside the same lock hold.
+0x0180 wm_clip_test      in AX/BX/CX/DX = x1,y1,x2,y2 inclusive; out CF=0
                          the whole rect is drawable (also when nothing is
                          armed). Ask this BEFORE erasing a rect you are
                          about to draw text into — §11.3's granularity
                          rule is what happens if you don't.
-0x0178 mem_claim         in AX = KB wanted; out CF=0 and DX = the base
+0x0200 mem_claim         in AX = KB wanted; out CF=0 and DX = the base
                          segment, CF=1 refused (§50.3). The caller is
                          identified by the segment it runs in, so there is
                          nothing to pass and nothing to forge, and it works
                          from the entry proc where there is no window yet.
-0x0180 mem_free          in DX = a segment this caller was given; out CF=0
+0x0208 mem_free          in DX = a segment this caller was given; out CF=0
                          released, CF=1 not yours.
-0x0188 mem_avail         out AX = largest free run in KB, BX = total free
+0x0210 mem_avail         out AX = largest free run in KB, BX = total free
                          KB. The only honest number to size against — int
                          12h does not know what the kernel and the other
                          packages already hold.
-0x0190 gfx_blit4         in ES:SI = packed 4bpp source, BP = source stride
+0x01D8 gfx_blit4         in ES:SI = packed 4bpp source, BP = source stride
                          in bytes, AX/BX = dest x/y, CX/DX = width/height
                          in pixels (§5.4). ES is the caller's own here.
-0x0198 wm_resize         in BX = win, CX = new outer width, DX = new outer
+0x01D0 wm_resize         in BX = win, CX = new outer width, DX = new outer
                          height; lock held. Clamps, re-fits the origin and
                          repaints (§11.1). Never from inside a W_PAINT.
-0x01A0 osapi_font_glyphs out SI = the glyph table's offset in KERNEL_SEG,
+0x0218 osapi_font_glyphs out SI = the glyph table's offset in KERNEL_SEG,
                          AL = 32, AH = 126, CX = 8 (§6). Read through ES.
-0x01A8 wm_onsize         in BX = win, AX = a near proc in the window's own
+0x0220 wm_onsize         in BX = win, AX = a near proc in the window's own
                          segment (0 clears). The resize negotiator (§11.1).
-0x01B0 osapi_file_here   out DX = the current directory's first cluster
+0x0228 osapi_file_here   out DX = the current directory's first cluster
                          (0 = the root), BL = the drive. No disk I/O.
-0x01B8 osapi_file_goto   in DX = a cluster from `osapi_file_here`, BL = its
+0x0230 osapi_file_goto   in DX = a cluster from `osapi_file_here`, BL = its
                          drive; out CF=1 it could not be listed and the
                          volume is back at the root with the write gate
                          shut. A REMOUNT (§19.2) - real floppy I/O, and
@@ -4648,8 +4643,7 @@ or any §18.2 BPB rule failed. N is the accepted-entry count (≤ 32, §19's
 cap — the header count always equals the listed count), read from this
 window's `FS_N`, not from the global `[disk_nfiles]`. File names are
 the synthesized 8.3 display names of §19 (e.g. `"MINES.O88"`, ≤ 12
-chars); sizes are the §19 staged size word, clamped at 65,535 for ≥64KB
-files. Folders count and list exactly like files — a type-2 entry (§19)
+chars); sizes are the §19 staged size dword, drawn in full (`fm_ultoa`). Folders count and list exactly like files — a type-2 entry (§19)
 shows the built-in folder icon and a blank size column. Two buttons at the top right,
 1px black frames, labels centered: **Refresh** from (cw−68, 2) to
 (cw−6, 15) — remounts the current drive so a swapped disk shows its real
@@ -5187,12 +5181,19 @@ and non-zero exit + stderr message on any validation failure.
 - Makefile: one `nasm -f bin -w+error -I apps/` per package (dep on
   apps/os88api.inc) — a single assembly each since v3 — fed to os88pkg.py,
   then `build/apps.img` (1440) + `build/apps360.img` (360) via os88disk.py;
-  all built by `all`. **Root-directory order is pinned by the argument
-  order**: mines, hello, notepad, piano, fractal, paint. The kernel filters
-  the volume-label entry, so mines stays index 0; QMP tests click by row, so
-  new packages append at the end and the existing indices hold.
-  `run`/`debug`/`test` attach build/apps.img as floppy index 1. 86Box's
-  fdd_02 gets apps360.img (best-effort config keys).
+  all built by `all`.
+  Directory order on the apps disks stays pinned, because scripted tests
+  click by row (§22) — but it is pinned **per folder**: the root is
+  `APPS` then `GAMES`, `APPS` holds hello, notepad, piano, fractal,
+  paint, recorder, tracker, artful and then the data file `BEVERLY.MOD`
+  (the shipped module the Tracker package plays; a data file rides its
+  folder exactly like a package, always after every `.o88` so package row
+  indices never shift), and `GAMES` holds mines, solitaire, arkanoid,
+  each new package appending at the end of its own folder. The grouping
+  lives in the Makefile (`APPS_TOOLS`/`APPS_GAMES` → the `DIR:`-prefixed
+  `APPSARGS`), not in the tool. `run`/`debug`/`test` attach
+  build/apps.img as floppy index 1. 86Box's fdd_02 gets apps360.img
+  (best-effort config keys).
 
 ### 24.1 Data files on a volume
 
@@ -5207,7 +5208,6 @@ behaviour for any file a host OS put on the volume, and this only makes the
 *builder* able to produce one. The shipped apps disks carry no data files;
 `build/filetest.img` carries `BIG.DAT` for §18.4.1's check, generated rather
 than committed.
-
 ## 25. icons.inc — icon format, draw routine, built-in library
 
 1-bit icons with a mask, classic Mac style, drawn exactly like the mouse
@@ -6788,7 +6788,7 @@ nothing drawn under the old mode is stranded in RAM, then clears both and
 releases the claim. Both directions no-op when already in that state, so a
 repeated click cannot re-copy 150KB.
 
-**A package may switch it too — `osapi_gfx_dbuf`** (slot 0x01D8, AL = 1 on /
+**A package may switch it too — `osapi_gfx_dbuf`** (slot 0x01F0, AL = 1 on /
 0 off, lock held). Out CF=0 and **AL = the state before**, which the caller
 hands straight back when it is done so the user's own Control Panel setting
 survives an app that borrowed the buffer for one flicker-free frame. CF=1
@@ -8180,7 +8180,7 @@ no longer always reaches it.
 | `fdlg_draw_name` / `fdlg_draw_list` / `fdlg_draw_both` | §38.8. Erase one rectangle and redraw it. All assume the held lock and a valid `[fdlg_cx]`/`[fdlg_cy]`; all preserve every register. |
 | `fdlg_name_body` / `fdlg_list_body` | The same drawing without the erase, for `fdlg_paint`, which is handed a white content. |
 | `fdlg_rows` | Out: AX = display rows = `disk_nfiles` + (`[dsk_cwd]` ≠ 0), CX = the `..` offset (0 or 1). The one place that offset is decided. |
-| `fdlg_stage` | In: AX = display row. Out: `fdlg_row` = its name, `fdlg_type` / `fdlg_size` its §19 type and size words; the `..` row is synthesized as type 2. |
+| `fdlg_stage` | In: AX = display row. Out: `fdlg_row` = its name, `fdlg_type` / `fdlg_size`+`fdlg_sizeh` its §19 type word and size dword; the `..` row is synthesized as type 2. |
 | `fdlg_go` | In: AX = first cluster. `dsk_chdir` + reset selection and scroll. |
 
 **What this deliberately does not do.** No filtering by extension (an Open
@@ -9097,19 +9097,20 @@ thing. It is `[pt_abon]` plus `pt_abmeas`/`pt_abdraw`/`pt_abdismiss`, the same
 shape as §43.8 and §44.7 — a card on Paint's own content, dismissed by the next
 click or key, drawn last by every repaint so nothing erases it.
 
-**A second window would have been the obvious design and is the wrong one
-here.** A package's second window is never bound to its instance record: only
-the window the entry proc returns goes through `inst_bind_win` (§21), so
-`wm_owner` says nothing owns the second one and teardown does not destroy it.
-Meanwhile teardown *does* free the region (§29.4), and the orphaned window is
-still carrying `W_SEG`/`W_DISP` into it — the next repaint far-calls whatever
-claimed that memory afterwards. There is no `OSAPI_WM_DESTROY` for a package to
-clean up with either. A card is a flag and some pixels: it cannot outlive the
-instance because it never existed apart from it.
-
-**This is a rule about packages, not about Paint.** Until a package can own
-more than one window, an app that wants a second surface draws it on the one it
-has.
+**A second window would have been the obvious design and is still the wrong
+one here.** A package's second window is never bound to its instance record:
+only the window the entry proc returns goes through `inst_bind_win` (§21), so
+`wm_owner` says nothing owns it, it gets no dock tile and no Task Manager row,
+and there is no `OSAPI_WM_DESTROY` for the package to clean it up with. It is
+*safe*, though: every teardown site — `app_close_win`'s task-less branch,
+`inst_task_die`, the winless worker death and the loader's abort — runs
+`wm_destroy_seg` over the dying region's segment **before** the region is
+freed, destroying every window whose `W_SEG` stamp names it (the sweep `main`
+enforced with the `wm_wseg` side table; the stamp moved into the record and
+the sweep moved with it). So an extra window can never outlive the segment its
+callback procs live in — it just makes a poor citizen of the ones that manage
+it by hand. A card is a flag and some pixels: it cannot outlive the instance
+because it never existed apart from it.
 
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
@@ -9719,7 +9720,7 @@ up after a stall without starving the machine.
 
 ### 45.3 Loading goes through readbig, because real MODs are big
 
-`OSAPI_FILE_READBIG` (slot 0x01D0) exists because `dskw_read`'s CX is a
+`OSAPI_FILE_READBIG` (slot 0x01E8) exists because `dskw_read`'s CX is a
 16-bit byte count: a file ≥ 65,536 bytes was `FERR_BIG` *unconditionally*,
 and BEVERLY.MOD is 116,085 bytes. The load path is the whole client story
 of §50 + §18.4 + §38 in one proc (`trk_fdone`, the fdlg completion):
@@ -10053,7 +10054,7 @@ buffer: while it is armed, a worker draw burst renders to RAM and
 `gfx_unlock` flushes the finished frame once. **View ▸ `Smooth: On/Off`**
 (the relabeling idiom; key **S**; default Off — the flush cost is opt-in)
 makes the tracker arm it via
-slot 0x01D8 **on entering fullscreen** and hand back the user's previous
+slot 0x01F0 **on entering fullscreen** and hand back the user's previous
 state on leaving; while Smooth is off, or where the slot refuses (mono
 adapters — where the software renderer already IS the direct path — or a
 heap that cannot fund the 150KB claim right now), fullscreen draws exactly
@@ -10090,7 +10091,138 @@ difference — a rising bar fills its growth, a falling one erases its
 shrinkage, a steady one costs nothing; `tui_el_scopes` zeroes the four
 widths whenever it repaints the cells under them.
 
-## 46. Disabled controls — the greying standard (binding)
+## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
+
+A port of ActionRetro's **ArtfulType** — "a distraction-free Markdown
+writing app for classic 68k Macintosh computers" (github.com/ActionRetro,
+GPLv3 code; the name, icon and artwork are reserved assets, which is why
+the package ships a hand-drawn nib icon and why the 128×100 typewriter
+bitmap is carried as a conversion of the original's `splash_image.h` under
+the user's own porting decision) — onto the §11.2 fullscreen surface.
+Windowed, the instance is the splash card: the branding, version, URL, and
+**New** / **Open…** buttons (plus a `File` menu on the real bar and `N` /
+`O` / `W` keys). Any of them takes the whole screen; Esc or File > Quit
+hands it back with the document intact, and the kernel's §11.2 safety net
+covers a close while fullscreen. Sources: `artful.asm` (entry, callbacks,
+worker, tables) plus `atdoc.inc` (gap buffer + layout), `atrend.inc`
+(renderer), `atui.inc` (bar, menus, alerts, splash), `atedit.inc` (input,
+selection, clipboard, undo), `atcmd.inc` (commands), `atfile.inc` (files),
+`atimg.inc` (the artwork). `ARTFUL.O88`, APPS folder, after TRACKER.
+
+### 46.1 The performance contract
+
+Sized for the 4.77MHz floor: a printable keystroke costs a gap-buffer
+store, a one-paragraph relayout (§46.3) and the repaint of that
+paragraph's visual lines — each line ONE `OSAPI_GFX_BLIT4` (§5.4).
+Scrolling is `OSAPI_GFX_SCROLL` for moves of up to three lines plus a
+render of the revealed band; only mode/zoom switches, undo restores and
+W_PAINT redraw the whole page. Nothing on the typing path walks the whole
+document: caret motion never moves the gap (at_getb branches around it),
+and the layout tail after an edit is one add-loop shift.
+
+### 46.2 The document model — canonical markdown, live-preview rendering
+
+The document is always canonical markdown (newline = LF; CR LF and lone CR
+fold to LF on load, control bytes and >126 drop; saved bytes are the
+buffer verbatim) in a 20,480-byte gap buffer in bss, so the app works with
+an EMPTY heap — an `OSAPI_MEM_CLAIM` block (64/32/16KB tried in that
+order, §50.3 rules; force-freed at teardown like every claim) only adds
+the undo/redo stacks and the full-size clipboard; without it undo reports itself unavailable through the menu
+gray and the clipboard falls back to 2KB of bss. There is no second styled
+buffer and no sync machinery (the original's `BuildHiddenView` /
+`SyncHiddenToCanonical` pair): **Writer mode is a rendering property**.
+Styled lines hide the delimiters and draw the spans; the caret's logical
+line renders RAW — the live-preview rule, which is what keeps caret
+arithmetic exact while editing — and collapses to styled the moment the
+caret leaves. Markdown mode renders everything raw at body size
+(`ClearStyles`' rule). Toggle semantics per logical line: `**` bold, `*`
+italic, `` ` `` code (suppressing the others inside), `~~` strike (which
+the classic Mac original could not render), `[text](url)` inside one
+visual line underlines the text and hides the rest; span state carries
+across a WRAP but resets at every newline — the independence that makes
+§46.3 cheap.
+
+### 46.3 Layout — raw-width wrap, one paragraph at a time
+
+`at_lstart[]`/`at_lattr[]` (2,048 entries: logical start; heading level,
+continuation flag, span nibble at line start) describe visual lines. Word
+wrap measures RAW characters in both modes, so layout is independent of
+the caret and caret motion never reflows; only the heading CELL WIDTH
+differs between modes (Writer scales headings). Geometry per (zoom 0..1,
+level 0..3): cells 8/16/16/8 and 16/24/24/16 px, rows 10/20/20/12 and
+20/30/30/22 — H1 and H3 bold, H2 plain. A document ending in a newline
+owns a trailing empty line (the caret must live somewhere after it).
+`at_relayout` rescans exactly the edited paragraph(s) into a 64-entry
+staging window, converges at the next old paragraph start (+delta, equal
+attr), splices, and add-shifts the surviving tail; overflow falls back to
+the full `at_layout`, which bulk operations already afford.
+
+### 46.4 The renderer — one line, one blit
+
+`at_parse` turns a line slice into per-character visibility, style and
+x-position arrays (the one hidden-set definition, shared by rendering,
+click mapping, selection and Style > None). `at_compose` builds 1bpp rows
+in a strip, styling ROM 8x8 glyphs itself (paint's §42 probe, copied to
+bss at entry): bold = overstrike, italic = a two-step shear (top half
+right by `scale` px), links = underline, strike = centre rule, headings =
+bit-doubled/tripled scale-ups through 16-entry nibble tables. `at_expand`
+widens 1bpp to packed 4bpp through 256×4-byte tables — white background,
+or CLGRAY for code-span columns (solid gray on VGA, a §39.4 dither on
+mono) — and one `OSAPI_GFX_BLIT4` delivers the line. Selection is an XOR
+overlay folded in after each blit; drag-selection XORs only the delta
+range per mouse sample. The caret is an XOR bar under strict on/off
+bookkeeping (`at_caret_on/off`, always under the lock), which is what
+makes the blink worker's toggling safe: the package's one §20.6 task
+sleeps 9 ticks, re-checks its gates under the lock, arms the §11.3 clip
+and toggles. The colours survive every adapter by construction: black on
+white, dithered code cells, XOR selection/caret.
+
+### 46.5 The chrome — the app draws its own Macintosh
+
+Fullscreen makes the kernel bar unreachable (§11.2), which is exactly what
+lets the app draw ArtfulType's: rows 0..19, BLACK with white titles in
+Writer mode (main.c's `UpdateMenuBarLook`, done honestly because the bar
+is the app's pixels), standard white in Markdown mode. The pull-downs are
+Mac press-drag-release menus in the `sol_drag` idiom (§43): draw under the
+held lock, unlock/yield/relock, sample the button by LEVEL; hover moves an
+XOR bar, release flashes the pick three times, and the box is erased by
+repainting the lines it covered — a package has no save-under, and a line
+repaint is one blit. Items carry right-aligned `^`-shortcuts, gray
+disabled states (Undo/Redo/zoom bounds, CLGRAY text), hand-drawn check
+marks (Markdown/Writer), and separator rules. The modal alerts (Save
+changes / About / errors) route every key and click while `[at_modal]` is
+set and repaint what they covered on close; W_PAINT re-raises a live alert
+a `wm_paint_all` crossed.
+
+### 46.6 Commands — markdown.c on one buffer
+
+Menu picks and ^key shortcuts land on the same `at_docmd` (the notepad
+two-doors rule): ^N/^O/^S new/open/save, Save As, ^Q quit, ^Z undo
+(Shift-^Z redo), ^X/^C/^V clipboard, ^A select all, ^B/^I/^K
+bold/italic/code, ^L link. `WrapSelection`'s port toggles delimiter pairs
+around the selection (outer- and inner-wrapped both strip); headings
+replace whatever level the line has (same level toggles off); Link wraps
+`[selection](` with the caret parked inside the parens — in Writer mode
+the caret parks the paragraph raw, so the URL is typed into visible syntax
+and styles itself on the way out; None deletes exactly the characters the
+styled parser would hide. Undo/redo are whole-document snapshots (the
+original's design: canonical text round-trips styling for free), 15 deep,
+coalesced per typing run, in compacting stacks inside the heap claim.
+Zoom has two sizes (Default/Large — one bitmap font scales by integers,
+against the original's five point sizes), session-only.
+
+### 46.7 Files
+
+Open/Save ride the §38 dialog from fullscreen — the dialog window fronts the
+surface, modality routes input, and the completion proc repaints the page
+before any failure alert so nothing lands on the hole the dialog left.
+Names live per instance (`UNTITLED.MD` seeded); the file slots read and
+write whole documents in place (no staging copy: the gap parks at the end
+for a save, and a load folds line endings in place). `FERR_*` becomes a
+human sentence in an error alert. New/Open/Quit with unsaved changes ask
+first — Save / Cancel / Don't Save, with Save continuing the pending
+action through the Save As completion when the document is untitled.
+## 47. Disabled controls — the greying standard (binding)
 
 Every part of the UI that can refuse a click has to say so the same way. This
 section is the whole of how, and it is binding on the kernel and on packages
@@ -10099,7 +10231,7 @@ refuses, and still looks fine on the machine you tested it on — it just stops
 saying anything on the other two adapters, or says the opposite of what it
 means.
 
-### 46.1 The seven rules
+### 47.1 The seven rules
 
 1. **Disabled is a FLAG, not a colour: `gfx_pen_dis` / `gfx_pen_live` /
    `gfx_pen_cf`.** They set `[gfx_color]` = `CDGRAY` *and* `[gfx_dis]` = 1
@@ -10179,7 +10311,7 @@ means.
    predicate the full paint runs. Miss it and a control's two halves disagree
    about being disabled, which is worse than either answer alone.
 
-### 46.2 Verifying it
+### 47.2 Verifying it
 
 **A greying change is not done until it has been looked at on a 1bpp adapter.**
 The two adapters differ in *kind*, not just in colour depth — a glyph becomes a
@@ -10196,7 +10328,7 @@ One trap on the CGA path: **QEMU double-scans mode 6 to 640x400**, so a
 screendump cropped at 640x200 shows the top half of the guest screen and
 nothing else. Take every second row.
 
-### 46.3 Where the tree stands
+### 47.3 Where the tree stands
 
 Conformant, and worth reading as the reference:
 
@@ -10243,7 +10375,7 @@ refusals *ought* to grey and do not, and three answer no:
   no-op because it is a feature rather than a correction, not because it
   cannot be done. Whoever picks it up should read this paragraph first.
 
-**Owed:** nothing else identified. §46.2 is the standing obligation — a greying
+**Owed:** nothing else identified. §47.2 is the standing obligation — a greying
 change is not finished until it has been looked at on a mono adapter.
 
 **Packages have no `[gfx_dis]`, on purpose.** §20.3 publishes no slot for it
@@ -10398,8 +10530,10 @@ between "how much RAM does this machine have" and "how much can I have".
 Rules for a package (none enforceable, all binding):
 
 1. **Claim at startup, from a window callback or your entry proc.** The
-   fence needs your window to exist and — for the entry proc — the loader
-   publishes your instance before it calls you (§21), so both work.
+   fence is `mem_own`'s claim-map test, not an instance scan — your REGION
+   is a live claim from loader step 5 while your instance publishes only at
+   step 9, *after* the entry returns (§21) — which is exactly what lets an
+   entry proc size itself before it has a window or a record.
 2. **Handle refusal.** CF=1 is a normal outcome on a small machine. Give up
    a feature, or put up a notice and stay running; do not read memory you
    were not given.
@@ -10413,7 +10547,7 @@ Rules for a package (none enforceable, all binding):
 Growing a claim used to mean claim-new, copy, free-old, which needs **old +
 new free at once and contiguously**. A heap with plenty of total room refused
 resizes it could afford, and the app reported "not enough memory" over
-hundreds of free KB. `mem_regrow` (slot 0x0220) takes three paths, and the
+hundreds of free KB. `mem_regrow` (slot 0x0238) takes three paths, and the
 first two move nothing:
 
 1. **Shrink or level** — the record's length changes and that is all. The
@@ -10754,7 +10888,7 @@ believe a setting had been kept.
 that makes that call safe: `inst_pkg_spawn`'s fence is a chain of five tests
 all keyed on an **instance record** (§20.6), and a driver has none — no
 window, no record, no `I_SPTR` to be identical to. `OSAPI_DRV_TASK`
-(slot **0x0230**) is its own slot with its own fence of the same shape: the
+(slot **0x0248**) is its own slot with its own fence of the same shape: the
 caller's segment must be the segment of the driver whose services are
 published (`ES == [drv_fseg]`), which is an identity test rather than an
 approximation.

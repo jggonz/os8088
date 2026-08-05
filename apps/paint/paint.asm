@@ -5933,7 +5933,7 @@ pt_num:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; pt_about - the OSAPI_ABOUT_SET handler (slot 0x01C8, SPEC.md 12.2)
+; pt_about - the OSAPI_ABOUT_SET handler (slot 0x01E0, SPEC.md 12.2)
 ; in:  SI = our window; UI task, gfx lock HELD
 ; out: nothing; preserves all registers
 ;

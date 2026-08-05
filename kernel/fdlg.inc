@@ -535,6 +535,7 @@ fdlg_stage:
     jnz .below
     mov word [fdlg_type], 2
     mov word [fdlg_size], 0
+    mov word [fdlg_sizeh], 0
     mov word [fdlg_row], '..'   ; two bytes, then the terminator
     mov byte [fdlg_row+2], 0
     jmp short .out
@@ -552,8 +553,10 @@ fdlg_stage:
     mov byte [fdlg_row+16], 0
     mov ax, [si]                ; SI has advanced to offset 16: the type...
     mov [fdlg_type], ax
-    mov ax, [si+4]              ; ...and offset 20: the size
+    mov ax, [si+4]              ; ...and offsets 20/22: the size dword
     mov [fdlg_size], ax
+    mov ax, [si+6]
+    mov [fdlg_sizeh], ax
 .out:
     pop si
     pop cx
@@ -741,7 +744,7 @@ fdlg_text:
 ; out: CF = 0 yes; CF = 1 it would refuse
 ; clobbers: nothing (flags)
 ;
-; The predicate the greying, the click and the Enter key all share (SPEC.md 46
+; The predicate the greying, the click and the Enter key all share (SPEC.md 47
 ; rule 4) - it is `fdlg_act`'s own test, lifted, so the button cannot look
 ; available and refuse. A chosen ROW always acts: fdlg_stage puts its name in
 ; the box first, so open, dive and save-under-that-name all have something to
@@ -812,7 +815,7 @@ fdlg_btn:
                                 ; The pen is the CALLER'S - it used to force
                                 ; CBLACK here, which is fine for three of the
                                 ; four buttons and wrong for the one that can
-                                ; be disabled (SPEC.md 46 rule 2: the frame
+                                ; be disabled (SPEC.md 47 rule 2: the frame
                                 ; greys with the label, and on a mono adapter
                                 ; the frame is the half that shows)
     mov ax, FD_BX1
@@ -1190,9 +1193,10 @@ fdlg_draw_rows:
     cmp word [fdlg_type], 2     ; word 'folder' - a column of zeroes under
     je .right                   ; every directory would only read as one
     mov ax, [fdlg_size]
+    mov dx, [fdlg_sizeh]
     push di
     mov di, fdlg_num
-    call fm_utoa
+    call fm_ultoa               ; the full dword (SPEC.md 19)
     pop di
     mov si, fdlg_num
 .right:
@@ -2131,8 +2135,9 @@ fdlg_total: resw 1              ; display rows, and how many of them show -
 fdlg_shown: resw 1              ; painter scratch, valid inside one draw
 fdlg_row:   resb 18             ; one staged row's name (16 + NUL, padded)
 fdlg_type:  resw 1              ; and its SPEC.md 19 type...
-fdlg_size:  resw 1              ; ...and size words
-fdlg_num:   resb 8              ; the size column's digits
+fdlg_size:  resw 1              ; ...and size dword, lo...
+fdlg_sizeh: resw 1              ; ...and hi (SPEC.md 19)
+fdlg_num:   resb 11             ; the size column's digits (fm_ultoa: 10+NUL)
 fdlg_bdef:  resb 1              ; fdlg_btn: is this the default button?
 fdlg_actl:  resb 1              ; fdlg_actok's answer as last DRAWN, so a
                                 ; keystroke redraws the default button on the
