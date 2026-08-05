@@ -85,6 +85,11 @@ make sees an up-to-date `kernel.bin`, boots the previous adapter, and it reads e
 like the probe being broken.
 
 **Installing the toolchain in a fresh container (read this before fighting apt).**
+`.claude/hooks/session-start.sh` now does all of this on session start, so on
+the web there should be nothing to install by hand — but read the rest anyway
+before debugging a failure, because the hook is only the recipe below with the
+version derived rather than hard-coded (`apt-cache madison`'s `noble/main`
+line, since the `-updates` version moves and a pin written down goes stale).
 `nasm` installs normally. `qemu-system-x86` does **not**: the package index
 lists the `noble-updates` build, whose `.deb` 404s on `archive.ubuntu.com` and
 then times out against `security.ubuntu.com`, so a plain
@@ -116,7 +121,8 @@ python3 tools/mouse.py build/qmp.sock to X Y / down / up      # for menus: posit
 python3 tools/mouse.py --screen 640x200 build/qmp.sock ...    # MUST match the adapter (SPEC.md §39): the harness
                                                               # pins against the kernel's own edge clamp
 python3 tools/qmp.py build/qmp.sock 'sendkey h'
-python3 tools/qmp.py build/qmp.sock 'screendump /abs/path/shot.ppm'
+python3 tools/qmp.py build/qmp.sock 'screendump /abs/path/shot.ppm'   # raw NetPBM, ABSOLUTE path
+python3 tools/shot.py build/qmp.sock out.png [--crop X,Y,W,H] [--zoom N]  # ...or straight to PNG
 python3 tools/qmp.py build/qmp.sock 'quit'
 ```
 
@@ -124,7 +130,7 @@ Testing quirks (learned the hard way):
 - Never inject raw HMP `mouse_move` — QEMU's msmouse backend truncates large deltas (big negative deltas flip positive). Always go through `tools/mouse.py`, which chunks moves to ≤60px and derives absolute position by pinning against the kernel's edge clamp.
 - Menus need press/move/up sequences (`mouse.py down` / `to` / `up`), not `click`.
 - Double-clicks compare birth ticks with a 9-tick (~0.5s) window: two separate `mouse.py click` invocations are too slow. Position with `mouse.py to X Y`, then send both clicks over one QMP connection: `qmp.py build/qmp.sock 'mouse_button 1' 'sleep 0.08' 'mouse_button 0' 'sleep 0.12' 'mouse_button 1' 'sleep 0.08' 'mouse_button 0'`.
-- Small changes (e.g. one revealed 16px Minesweeper cell) are easy to misread as "nothing happened" in a full 640x480 screendump — crop and zoom before concluding a click was lost.
+- Small changes (e.g. one revealed 16px Minesweeper cell) are easy to misread as "nothing happened" in a full 640x480 screendump — crop and zoom before concluding a click was lost. `tools/shot.py <sock> out.png --crop X,Y,W,H --zoom 6` is that in one command, and it also spares you `screendump`'s NetPBM: there is no Pillow in a fresh container and nothing else in the tree reads a `.ppm`. **Its Y is the HOST scanout's**, so on `VIDEO=cga` (dumped 640x400 — QEMU line-doubles 640x200) a crop's Y and H are twice the kernel's; VGA is 1:1. Hercules is not screendumpable at all — `tools/hercshot.py`, below.
 - `mouse.py down X Y` / `up X Y` now goto-then-press (any other argument shape errors out); bare `down`/`up` still act at the CURRENT cursor position — historically `down X Y` silently ignored the coordinates, a footgun that read as a kernel bug.
 - Unpaced `mouse_move`/`mouse_button` sequences over one QMP connection outrun the 1200-baud msmouse: the button packet is processed at a stale position and drags silently do nothing — interleave `'sleep 0.1'` (or more) between moves and presses.
 - `mouse.py`'s derived absolute position can be 1–2px off after a run of moves. On narrow targets (the Disk window's 14px scroll bar) a click can silently land just outside the rect — aim at the visual center of the glyph, and when a click "does nothing", screendump and check where the drawn cursor actually sits before suspecting the hit-test.
