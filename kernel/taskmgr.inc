@@ -194,6 +194,18 @@ TM_NCHUNK   equ 5               ; ...and chunks per row: 25 characters, which
                                 ; state and the memory figure with it - 20
                                 ; glyphs to change three. Per chunk it is four
 TM_CW       equ TM_CHUNK * 8    ; a chunk's width in pixels
+TM_PEN      equ 8               ; the process list's and the captions' inset
+                                ; from the row band. It was 6, and 8 is what
+                                ; puts every cell in this window on a multiple
+                                ; of 8 once WF_SNAP has put the content origin
+                                ; on one (SPEC.md 11.94): the band starts at
+                                ; the content left, TM_COLW is 232, and the
+                                ; memory list's own inset was already 16. Two
+                                ; pixels of margin bought the whole window
+                                ; font_run's single-store path
+TM_MPEN     equ 16              ; ...and the memory list's, which leaves the
+                                ; band's first ten pixels for the legend
+                                ; square and was already aligned
 TMM_ROWS    equ INST_MAX + 7    ; System, its four buffer rows, the two
                                 ; headings, every instance - 19 x TM_ROW_H
                                 ; from TMM_ROW_Y is 279 of the 281-pixel
@@ -353,6 +365,12 @@ tm_kinit:
     xor al, al
     rep stosb
     mov [tm_win], bx
+
+    mov al, 1                   ; every row this window draws is an opaque
+    call wm_snap                ; text run, so it asks for its content origin
+                                ; on a multiple of 8 and every one of them
+                                ; reaches font_run's single-store path
+                                ; (SPEC.md 11.94/6.1). A no-op on VGA
 
     pop es
     pop di
@@ -2102,8 +2120,8 @@ tm_mrow_close:
     cmp byte [tm_mfit], 0       ; off the bottom: nothing was drawn, and
     je .forget                  ; forget what used to be here so it comes
     mov byte [di], 0            ; back if the window ever grows
-    mov ax, [tm_rowx]           ; this list letters from tm_rowx+16, leaving
-    add ax, 16                  ; the band's first ten pixels for the square
+    mov ax, [tm_rowx]           ; this list letters from tm_rowx+TM_MPEN,
+    add ax, TM_MPEN             ; leaving the band's first pixels for the square
     mov [tm_penx], ax
     mov bx, [tm_mrow]
     call tm_row_draw            ; chunked: only what changed, and only what
@@ -2190,14 +2208,23 @@ tm_row_draw:
     push ds
     pop es
 
-    mov di, tm_str              ; pad to TM_NCHUNK*TM_CHUNK with zeros
-    mov cx, TM_NCHUNK * TM_CHUNK
+    mov di, tm_str              ; pad to TM_NCHUNK*TM_CHUNK with SPACES, and
+    mov cx, TM_NCHUNK * TM_CHUNK + 1    ; terminate one past the end
     xor al, al
     cld
     repne scasb                 ; DI just past the NUL, CX = bytes after it
+    dec di                      ; ...back ONTO it: the pad overwrites it
+    inc cx
     jcxz .padded
-    rep stosb
+    mov al, ' '                 ; SPACES, not zeros. font_run paints a space
+    rep stosb                   ; as background on its fast path (the glyph's
+                                ; rows are all clear, so the mask leaves the
+                                ; background byte) - which is exactly the
+                                ; field-fill this row wants, and is the
+                                ; opposite of font_str, where a space draws
+                                ; nothing at all
 .padded:
+    mov byte [tm_str + TM_NCHUNK * TM_CHUNK], 0
     mov ax, bx                  ; this row's check words: TM_NCHUNK of them
     mov cl, TM_NCHUNK
     mul cl                      ; AX = row * TM_NCHUNK (both are small)
@@ -2243,35 +2270,55 @@ tm_row_draw:
     mov dx, [tm_rowy]
     mov bx, dx
     add dx, 7                   ; AX/BX/CX/DX = the chunk's rect
-    call wm_clip_test
-    jnc .draw
-    call tm_chunk_cells         ; the region cuts it: per CELL instead, so a
-    mov bx, [tm_ckb]            ; vertical edge costs the characters it
-    mov word [bx], 0            ; actually crosses and not the four beside
-    jnc .gdone                  ; them. Forget the record either way - a cut
-    jmp short .next             ; chunk is never wholly drawn
-.draw:
-    push ax
+    call wm_clip_test           ; NOT a veto any more - font_run decides per
+    pushf                       ; CELL on both its paths (SPEC.md 6.1.2), so
+                                ; this only asks whether the chunk will be
+                                ; drawn WHOLE, which is whether its check word
+                                ; may be believed next time
+
+    push ax                     ; --- the chunk, as ONE opaque run ----------
     push cx
-    mov byte [gfx_color], CWHITE
-    call gfx_fill               ; erase just this chunk
+    push dx
+    mov cx, ax                  ; x
+    mov dx, [tm_rowy]           ; y
+    mov si, di                  ; DI -> this chunk's TM_CHUNK characters
+    mov bx, si                  ; terminate at the chunk's end and put the
+    add bx, TM_CHUNK            ; byte back after: the row is one 25-character
+    mov ah, [bx]                ; string and font_run runs to a NUL. The
+    mov byte [bx], 0            ; buffer has room for the last chunk's, which
+    push bx                     ; lands on tm_str[25] of TM_STRMAX = 28
+    push ax
+    mov al, CBLACK              ; AL = ink, AH = background: the erase and the
+    mov ah, CWHITE              ; letters as one decision per cell
+    call font_run
+    pop ax
+    pop bx
+    mov [bx], ah
+    pop dx
     pop cx
     pop ax
-    mov byte [gfx_color], CBLACK
-    mov cx, ax                  ; letter it, one glyph at a time - font_str
-    mov dx, [tm_rowy]           ; would run past the chunk's end
-    mov si, di                  ; DI still points at the chunk's characters
-    mov ah, TM_CHUNK
-.glyph:
-    mov al, [si]
-    or al, al
-    jz .gdone
-    call font_char
-    inc si
-    add cx, 8
-    dec ah
-    jnz .glyph
+
+    cmp word [tm_ci], TM_NCHUNK - 1     ; the LAST chunk owns the band's tail
+    jne .gdone                          ; too - the pen is inset, so the row
+    push ax                             ; runs past the 25 cells and nothing
+    push cx                             ; else would scrub it
+    mov ax, [tm_penx]
+    add ax, TM_NCHUNK * TM_CW
+    mov cx, [tm_rowx]
+    add cx, TM_RW
+    cmp ax, cx
+    ja .tdone
+    mov byte [gfx_color], CWHITE
+    call gfx_fill               ; BX/DX still the row's y1/y2
+.tdone:
+    pop cx
+    pop ax
 .gdone:
+    popf
+    jnc .kept
+    mov bx, [tm_ckb]            ; an edge cut it, so some cell was skipped:
+    mov word [bx], 0            ; forget the record and ask again next time
+.kept:
     pop si
     inc si                      ; something was drawn
     push si
@@ -2354,84 +2401,6 @@ tm_row_lead:
     pop bx
     pop ax
 .no:
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; tm_chunk_cells - draw one chunk a CELL at a time, for the one chunk per row
-;                  that a clip edge crosses (SPEC.md 11.3/28)
-; in:  AX = the chunk's x1, DI -> its TM_CHUNK characters, [tm_rowy] placed;
-;      gfx lock held, clip armed
-; out: CF = 0 at least one cell drew, CF = 1 none did; all registers preserved
-;
-; The chunk is the right unit for "did this text change" and very nearly the
-; right one for "may this be drawn" - but not quite, and the difference is
-; five characters wide. A whole-chunk clip test throws away all five cells to
-; protect the one the edge crosses, and a chunk holding a single inked
-; character loses that character: a package row is ' PAINT ...', so the split
-; falls " PAIN" | "T ...", and a window edge in the second chunk erased the T
-; and nothing else. Which characters go depends only on where the edge lands
-; against the five-character grid, which is why it read as letters going
-; missing in arbitrary positions, sometimes several at once.
-;
-; So the cut chunk - and only the cut chunk - asks the question a cell at a
-; time, which is the granularity font_char itself works at. A cell wholly
-; inside one fragment is erased and lettered; one the edge crosses is left
-; alone entirely, both halves of the granularity rule together. That costs
-; four extra clip tests on at most one chunk per row per vertical edge, and
-; nothing at all on a row nothing covers.
-;
-; The caller forgets the chunk's check word afterwards whatever happens here:
-; a chunk this ran on was by definition not drawn whole.
-; -----------------------------------------------------------------------------
-tm_chunk_cells:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov byte [tm_cdrew], 0
-    mov byte [tm_ccn], TM_CHUNK
-    mov si, di                  ; SI -> the characters, DI -> the cell's x
-    mov di, ax
-.cell:
-    mov ax, di                  ; the CELL's own rect - the same question
-    mov cx, di                  ; font_char asks about the glyph it holds
-    add cx, 7
-    mov bx, [tm_rowy]
-    mov dx, bx
-    add dx, 7
-    call wm_clip_test
-    jc .cnext                   ; crossed: leave its pixels alone, both the
-                                ; erase and the letter
-    mov byte [gfx_color], CWHITE
-    call gfx_fill               ; (AX/BX/CX/DX are still the cell's rect)
-    mov al, [si]
-    or al, al
-    jz .drew                    ; past the string's end an erase is all it is
-    mov byte [gfx_color], CBLACK
-    mov cx, di
-    mov dx, [tm_rowy]
-    call font_char
-.drew:
-    inc byte [tm_cdrew]
-.cnext:
-    inc si
-    add di, 8
-    dec byte [tm_ccn]
-    jnz .cell
-    cmp byte [tm_cdrew], 0      ; (pop leaves the flags alone)
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    je .none
-    clc
-    ret
-.none:
     stc
     ret
 
@@ -2854,7 +2823,7 @@ tm_txt_cpu:
 
     mov ax, [tm_cx]             ; a caption sits in column 0 whatever the row
     mov [tm_rowx], ax           ; loops have left [tm_rowx] at, and letters
-    add ax, 6                   ; from the margin
+    add ax, TM_PEN              ; from the margin
     mov [tm_penx], ax
     mov ax, [tm_cy]
     add ax, TM_CPU_Y
@@ -3281,8 +3250,8 @@ tm_rows:
 
 .draw:
     mov byte [di], 0
-    mov ax, [tm_rowx]           ; this list letters from tm_rowx+6 - there is
-    add ax, 6                   ; no square in front of it
+    mov ax, [tm_rowx]           ; this list letters from tm_rowx+TM_PEN - there
+    add ax, TM_PEN              ; is no square in front of it
     mov [tm_penx], ax
     push si
     mov bx, si
@@ -3645,9 +3614,6 @@ tm_ci:      resw 1              ; tm_row_draw's chunk index (BP is the task's
                                 ; instance record and cannot be borrowed)
 tm_ckb:     resw 1              ; ...and the running check-word pointer, for
                                 ; the same reason
-tm_ccn:     resb 1              ; tm_chunk_cells' cell counter and how many of
-tm_cdrew:   resb 1              ; them drew - in memory for the same reason,
-                                ; the cell's rect needing all four of AX/BX/CX/DX
 tm_rowck:   resw TM_NCK * TM_NCHUNK  ; the last drawn content of each row, a
                                 ; word per CHUNK (tm_chunksum), plus one
                                 ; virtual row for the CPU caption (TMR_CPU).

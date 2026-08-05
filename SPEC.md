@@ -699,29 +699,36 @@ The single store exists only because the cell owns its whole byte. So the
 only by arranging that text lands on multiples of 8, and that is a question
 about **window placement**, not about the renderer.
 
-#### 6.1.2 The granularity guarantee is the FAST PATH's, not the call's
+#### 6.1.2 One decision per cell, on BOTH paths
 
-On the fast path `font_run` **cannot** produce §11.3's granularity failure. A
-fill clips per pixel and a glyph per whole cell, so an erase-then-letter pair
-can disagree and leave a cell blanked rather than stale — the sharp edge that
-section is mostly about. `font_run_cell` asks `wm_clip_test` once, about the
-cell, and then either paints the whole cell or leaves it entirely alone.
+`font_run` cannot produce §11.3's granularity failure. A fill clips per pixel
+and a glyph per whole cell, so an erase-then-letter pair can disagree and
+leave a cell blanked rather than stale — the sharp edge that section is mostly
+about. Here the two are one decision about one cell, so a caller needs no
+`wm_clip_test` gate around the pair and cannot get it wrong.
 
-**The fallback does not inherit that**, and a caller must not assume it does.
-`font_run`'s slow path *is* `gfx_fill` followed by `font_str_x`, with no clip
-handling of its own — so a clip edge cutting the run horizontally fills the
-visible rows in the background colour and then draws no glyphs into them. The
-line goes blank, not stale, exactly as if the caller had written the pair by
-hand. And the fallback is the common configuration, not a corner: every VGA
-machine without double buffering takes it.
+On the fast path that is free: `font_run_cell` asks about the cell once and
+then either paints the whole cell or leaves it entirely alone.
 
-So the rule for a caller is: **`font_run` removes the granularity trap only
-where it is also fast.** A caller that draws under an armed clip region and
-is not certain of both conditions still owes the region the same care §11.3
-asks of anything else — either gate the run on a `wm_clip_test` of its rect,
-or accept a blanked line when an edge crosses it. The tracker is safe because
-it only calls `font_run` on mono, where `[bb_on]` is 1 and its columns are
-aligned by construction (below), so the fast path always fires.
+**The fallback had to be taught it**, and for a while it was not. `font_run`'s
+slow path *was* `gfx_fill` followed by `font_str_x` with no clip handling of
+its own — the exact pair the rule warns about — so under an armed clip region
+a horizontal edge filled the visible rows and lettered none of them. That was
+survivable while the tracker was the only consumer, because it calls this on
+mono only and the fast path always fires there; it stopped being survivable
+the moment kernel code drew through it (§28). So the fallback now picks:
+
+- **no region armed** — one `gfx_fill` and one `font_str`, as before. The pair
+  cannot disagree when nothing is clipping it, and this is the overwhelmingly
+  common case.
+- **a region armed but the whole run inside one fragment** — the same, on one
+  extra `wm_clip_test`.
+- **an edge actually crossing the run** — `font_run_scell` per cell: test the
+  cell, then fill it and letter it behind that one answer.
+
+So the per-cell cost is paid only by runs an edge really cuts, and the
+guarantee is now the *call's* rather than the fast path's. A caller may draw
+under an armed clip region without gating.
 
 #### 6.1.3 The first consumer, and what it changed to qualify
 
@@ -1878,6 +1885,65 @@ callers are a mixed set: `fm_go`, `fm_mount` and `fm_view` hold the lock,
 folder-vanished path reaches it from `ld_run`, which deliberately holds no
 lock across a mount (§21). A pointer cannot be spent on whichever window
 happened to repaint in between.
+
+### 11.94 `WF_SNAP` — a window that keeps its content on a byte boundary
+
+**Opt-in, mono only, and the whole of it is one `and`.** `wm_snap` (API slot
+0x0268) sets `WF_SNAP` on a window, and every site that writes `W_X` then
+keeps that window's **content origin** on a multiple of 8 — so every
+`font_run` the window makes reaches the single-store fast path (§6.1) instead
+of the erase-and-letter fallback. §6.1.1 measures what that is worth: the
+operation goes from 228..336 framebuffer byte-accesses to a flat 80, and
+§6.1.4 is why there is no other way to get it.
+
+**Content origin, not frame x.** `wm_content` returns `W_X + 1` for the
+border, so the number the kernel actually holds is `W_X ≡ 7 (mod 8)`.
+Publishing the frame number would make every app rediscover that `inc ax`,
+and they would each get it wrong differently.
+
+**The gate is `[vid_mono]`, never `[bb_on]`.** They agree on Hercules and CGA,
+but `[bb_on]` is also 1 on a VGA with double buffering armed — so gating on it
+would make windows drag differently depending on a Control Panel setting, and
+buy almost nothing: the back buffer's flush costs ~24× its render (§32), so
+the render-side saving is diluted away there. On VGA the flag is therefore a
+no-op, which is what lets an app set it unconditionally instead of asking
+`OSAPI_VIDEO` first.
+
+Four sites write `W_X` and all four go through `wm_snap_ax`:
+
+- **`wm_fit`**, after both x clamps. Never before: the snap moves left, which
+  is only legal once the right edge has been dealt with.
+- **`wm_resize`**, after its x clamp — a width change can move x.
+- **`ui_drag`**, before its "did it move" comparison rather than after the
+  store, because what *moved* has to mean where the window ends up, and a drag
+  inside one 8-pixel step ends up nowhere.
+- **`wm_fullscreen`** needs nothing: x is 0 with no border, so the content
+  origin is already 0. That is why apps/tracker has had the fast path all
+  along without any of this (§45.9).
+
+Three consequences worth naming:
+
+- **A snapped window cannot sit flush against the left edge.** The smallest x
+  with `x + 1` a multiple of 8 is 7, so that is as far left as it goes. Seven
+  pixels is the visible cost of the feature.
+- **The snap moves LEFT**, so it can never violate the caller's right-edge
+  clamp — except in the `x = 0..6` case, where the only answer is 7 and the
+  right edge is re-tested. A window too wide for that is **left unsnapped**
+  rather than made illegal: it simply misses the fast path, which is a normal
+  path and not a failure.
+- **Dragging becomes 8-pixel steps horizontally**, and that is cheaper than it
+  sounds because `ui_drag` drags an XOR *outline* — the window itself only
+  moves on release, so the snap reads as the outline stepping rather than a
+  window stuttering.
+
+**The app's half of the contract is not enforced.** `WF_SNAP` puts the content
+origin on a boundary; whether the app's own text sits at content-relative x
+values that are multiples of 8 is the app's business, and getting it wrong
+costs the 2.5% fallback silently rather than drawing anything wrong. The three
+converted consumers each had to move something: the Task Manager's process
+list and captions from a 6-pixel inset to 8 (`TM_PEN`), and the file manager
+and Note Pad likewise. Two pixels of margin bought a whole window the
+single-store path.
 
 ## 12. menu.inc
 

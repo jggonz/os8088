@@ -500,6 +500,11 @@ ui_drag:
     xor ax, ax
 .x_low_ok:
     mov bx, [ui_dragwin]
+    call wm_snap_ax             ; back onto a multiple of 8 if this window
+                                ; asked (SPEC.md 11.94). BEFORE the compare,
+                                ; not after the store: what "moved" has to
+                                ; mean is where the window ENDS UP, and a
+                                ; drag inside one 8px step ends up nowhere
     xor di, di                  ; DI = "the window actually moved"
     cmp [bx + W_X], ax
     je .x_same

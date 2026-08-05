@@ -773,6 +773,9 @@ FERR_BIG     equ 10              ; larger than the buffer (or than 64KB)
 
 WF_SIZABLE equ 4                 ; W_FLAGS bit2: resizable (SPEC.md 11.1)
 WF_FULL    equ 8                 ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
+WF_SNAP    equ 16                ; W_FLAGS bit4: content origin snapped to a
+                                 ; multiple of 8 (SPEC.md 11.94) - set it with
+                                 ; OSAPI_WM_SNAP, never by hand
 WMIN_W     equ 96                ; smallest frame a resize can leave
 WMIN_H     equ 64
 
@@ -1062,3 +1065,42 @@ OS88_BSS_SIZE equ 0
                                                 ; question: it says VISIBLE,
                                                 ; which a wholly covered
                                                 ; window still is.
+
+%define OSAPI_WM_SNAP       KERNEL_SEG:0x0268   ; BX = window ptr, AL = 0
+                                                ; clear / non-zero set. Out:
+                                                ; nothing, every register
+                                                ; preserved.
+                                                ;
+                                                ; "Keep my CONTENT ORIGIN on a
+                                                ; multiple of 8." Ask for this
+                                                ; if you redraw a lot of text
+                                                ; and can put your own text at
+                                                ; content-relative x values
+                                                ; that are multiples of 8 -
+                                                ; then every OSAPI_FONT_RUN
+                                                ; you make takes the
+                                                ; single-store path (SPEC.md
+                                                ; 6.1) instead of the
+                                                ; erase-and-letter fallback.
+                                                ;
+                                                ; CONTENT origin, not frame:
+                                                ; OSAPI_WM_CONTENT already
+                                                ; answers W_X + 1 for the
+                                                ; border, and the kernel owns
+                                                ; that pixel so you never have
+                                                ; to think about it.
+                                                ;
+                                                ; It costs your window 8-pixel
+                                                ; horizontal steps when the
+                                                ; user drags it, and it cannot
+                                                ; sit flush against the left
+                                                ; edge (x = 7 is as far as it
+                                                ; goes). MONO ONLY - a no-op
+                                                ; on VGA, so set it
+                                                ; unconditionally rather than
+                                                ; asking OSAPI_VIDEO first.
+                                                ;
+                                                ; Call it from your entry proc,
+                                                ; before the window is shown.
+                                                ; UI-task context only, like
+                                                ; OSAPI_WM_SIZABLE.

@@ -14,7 +14,8 @@
 
 ; --- window record, 20 bytes, fixed offsets (SPEC.md 11) ---------------------
 W_FLAGS equ 0                   ; word: bit0 = used, bit1 = visible,
-                                ; bit2 = resizable, bit3 = fullscreen
+                                ; bit2 = resizable, bit3 = fullscreen,
+                                ; bit4 = content-origin snapped (SPEC.md 11.94)
 W_X     equ 2                   ; word, frame left (screen coords)
 W_Y     equ 4                   ; word, frame top (below menu bar: y >=
                                 ; MBAR_H - except under WF_FULL, SPEC 11.2)
@@ -55,6 +56,10 @@ MAX_WIN  equ 12                 ; mirrored in apps/os88api.inc (SPEC.md 11)
 
 WF_SIZABLE equ 4                ; W_FLAGS bit2: resizable (SPEC.md 11.1)
 WF_FULL    equ 8                ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
+WF_SNAP    equ 16               ; W_FLAGS bit4: this window's CONTENT origin
+                                ; is kept on a multiple of 8 so its text can
+                                ; take font_run's single-store path
+                                ; (SPEC.md 11.94/6.1)
 WMIN_W     equ 96               ; smallest frame a resize can leave, outer px
 WMIN_H     equ 64               ; (SPEC.md 11.1; mirrored in apps/os88api.inc)
 
@@ -192,9 +197,14 @@ wm_fit:
     mov [bx+W_X], ax
 .xok:
     cmp word [bx+W_X], 0
-    jge .yc
+    jge .xfl
     mov word [bx+W_X], 0
-.yc:
+.xfl:
+    call wm_snap_win            ; ...and back onto a multiple of 8 if this
+                                ; window asked for it (SPEC.md 11.94). After
+                                ; both clamps, never before: it moves left,
+                                ; which only stays legal once the right edge
+                                ; has been dealt with
     mov ax, [vid_dock_y0]       ; y = min(y, dock top - h - 1), floor MBAR_H
     sub ax, [bx+W_H]            ; - the same pixel, for the same reason
     dec ax
@@ -433,9 +443,11 @@ wm_resize:
     xor ax, ax
 .xc:
     cmp [bx+W_X], ax
-    jle .yc
+    jle .xs
     mov [bx+W_X], ax
-.yc:
+.xs:
+    call wm_snap_win            ; the width changed, so the right-edge clamp
+                                ; may have moved x (SPEC.md 11.94)
     mov ax, [vid_dock_y0]       ; y + h <= the row the dock owns
     sub ax, dx
     cmp ax, MBAR_H
@@ -859,6 +871,103 @@ wm_fs_drop:
     and word [bx+W_FLAGS], 0xFFF7
     mov word [wm_fs], 0
     pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_snap - set or clear a window's WF_SNAP bit (public; API 0x0268,
+;           SPEC.md 11.94)
+; in:  BX = window ptr, AL = 0 clear / non-zero set
+; out: nothing (all registers preserved)
+;
+; "My CONTENT origin wants to be a multiple of 8." Not "snap my W_X": the
+; frame carries a 1px border, so wm_content returns W_X + 1 and the alignment
+; a caller actually needs is one pixel off the frame's. Publishing the frame
+; number would make every app rediscover that `inc ax`, and they would each
+; get it wrong differently.
+;
+; It snaps immediately as well as setting the flag, because the intended
+; caller is an entry proc or a KD_INIT - before the window is shown, where
+; moving it costs nothing and repainting is not owed. Setting it on a visible
+; window is legal and moves it at the next paint the caller performs, exactly
+; like wm_sizable's grow box.
+;
+; UI-task context only, same as wm_sizable and for the same reason: every
+; W_FLAGS writer runs on the UI task or under the gfx lock.
+; -----------------------------------------------------------------------------
+wm_snap:
+    or al, al
+    jz .clear
+    or word [bx+W_FLAGS], WF_SNAP
+    call wm_snap_win
+    ret
+.clear:
+    and word [bx+W_FLAGS], ~WF_SNAP & 0xFFFF
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_snap_win - put this window's content origin back on a multiple of 8
+; in:  BX = window ptr, W_X already clamped by the caller
+; out: W_X possibly moved; all registers preserved
+; -----------------------------------------------------------------------------
+wm_snap_win:
+    push ax
+    mov ax, [bx+W_X]
+    call wm_snap_ax
+    mov [bx+W_X], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_snap_ax - snap a candidate frame x for a WF_SNAP window
+; in:  AX = candidate x (the caller's clamps already applied), BX = window ptr
+; out: AX = the x to use; every other register preserved, flags clobbered
+;
+; The whole of SPEC.md 11.94's mechanism, in one place because four sites
+; write W_X and every one of them has to agree.
+;
+; MONO ONLY, and the gate is [vid_mono] rather than [bb_on] on purpose. The
+; two say the same thing on Hercules and CGA, but [bb_on] is also 1 on a VGA
+; that has double buffering armed - so gating on it would make windows drag
+; differently depending on a Control Panel setting, and buy almost nothing
+; for it: the back buffer's flush costs ~24x its render (SPEC.md 32), so the
+; render-side saving snapping unlocks is diluted away there.
+;
+; WF_FULL is left alone: a fullscreen window is at x=0 with no border, so its
+; content origin is 0 and already aligned (SPEC.md 11.2) - which is why the
+; tracker has had the fast path all along without any of this.
+;
+; The arithmetic moves LEFT, to the nearest x with x+1 a multiple of 8. Left
+; because the caller has already clamped against the right edge and moving
+; left cannot violate it. The one exception is x = 0..6, where there is no
+; such x at or below it and the answer has to be 7 - the leftmost snapped
+; position there is, so a snapped window cannot sit flush against the left
+; edge. That is the visible cost of the feature and it is 7 pixels.
+; -----------------------------------------------------------------------------
+wm_snap_ax:
+    test word [bx+W_FLAGS], WF_SNAP
+    jz .out
+    test word [bx+W_FLAGS], WF_FULL
+    jnz .out
+    cmp byte [vid_mono], 0
+    je .out
+    push cx
+    mov cx, ax
+    inc cx
+    and cx, 0xFFF8              ; content left, rounded DOWN to a multiple of 8
+    dec cx                      ; ...and back to a frame x
+    jns .fits
+    add cx, 8                   ; x was 0..6: the next one up is the only one
+.fits:
+    push ax                     ; only the x=0..6 case can move RIGHT, but the
+    mov ax, cx                  ; right-edge test is cheap and it is the one
+    add ax, [bx+W_W]            ; way this could hand back an illegal rect
+    cmp ax, [vid_w]
+    pop ax
+    ja .pop                     ; would hang off: leave it unsnapped, and it
+    mov ax, cx                  ; simply misses the fast path
+.pop:
+    pop cx
 .out:
     ret
 

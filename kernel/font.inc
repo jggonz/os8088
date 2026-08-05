@@ -525,11 +525,35 @@ font_run_x:
     jmp short .cell
 
 .slow:
-    mov al, [font_rn_bg]        ; one fill of the run's rect, then the glyphs
-    mov [gfx_color], al         ; over it: what every caller wrote by hand
+    ; The fallback: what every caller wrote by hand, one gfx_fill of the run's
+    ; rect and font_str over it - EXCEPT that the pair clips at two different
+    ; granularities, so under an armed clip region an edge crossing the run
+    ; fills the visible rows and letters none of them, and the run goes BLANK
+    ; rather than stale (SPEC.md 11.3/6.1.2). That is affordable for a caller
+    ; who knows to gate on it; it is not affordable for a primitive the kernel
+    ; itself draws through. So the pair is used only where it cannot
+    ; disagree - no region armed, or the whole run inside one fragment - and a
+    ; run an edge actually cuts goes per cell.
     call font_width_x           ; AX = 8 * length (CX/DX/SI preserved)
     or ax, ax
-    jz .letter
+    jz .out                     ; empty string: nothing to fill and nothing
+                                ; to letter
+    cmp word [wm_clip_n], 0
+    je .whole                   ; disarmed: the pair cannot disagree
+    push ax
+    push cx
+    push dx
+    add ax, cx
+    dec ax
+    mov bx, dx
+    add dx, 7
+    xchg ax, cx                 ; AX,BX,CX,DX = the run's rect
+    call wm_clip_test
+    pop dx
+    pop cx
+    pop ax
+    jc .cells                   ; an edge cuts it
+.whole:
     push cx
     push dx
     add ax, cx
@@ -537,13 +561,25 @@ font_run_x:
     mov bx, dx                  ; BX = y1
     add dx, 7                   ; DX = y2
     xchg ax, cx                 ; AX = x1, CX = x2
+    push ax
+    mov al, [font_rn_bg]
+    mov [gfx_color], al
+    pop ax
     call gfx_fill
     pop dx
     pop cx
-.letter:
     mov al, [font_rn_fg]
     mov [gfx_color], al
     call font_str_x
+    jmp short .out
+.cells:
+    mov al, [es:si]
+    or al, al
+    jz .out
+    inc si
+    call font_run_scell
+    add cx, 8
+    jmp short .cells
 .out:
     pop di
     pop si
@@ -666,6 +702,52 @@ font_run_cell:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; font_run_scell - internal: one opaque cell the SLOW way, for a run an armed
+;                  clip region cuts (see font_run_x's .cells)
+; in:       AL = character, CX = x, DX = y
+; out:      nothing (all registers preserved)
+;
+; Fill the cell, letter the cell - but behind ONE wm_clip_test about that
+; cell, so the two halves cannot disagree about it. That is the same decision
+; font_run_cell makes on the fast path; this is just the version that works
+; on a planar target or at an unaligned x, where the cell does not own its
+; framebuffer byte and there is nothing cleverer to do.
+; -----------------------------------------------------------------------------
+font_run_scell:
+    mov [font_rn_ch], al
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, cx                  ; AX,BX,CX,DX = this cell's rect, inclusive
+    mov bx, dx
+    mov cx, ax
+    add cx, 7
+    mov dx, bx
+    add dx, 7
+    call wm_clip_test
+    jc .out                     ; crossed: leave its pixels alone, BOTH halves
+    push ax                     ; (the pen loads clobber AL, which is x1's low
+    mov al, [font_rn_bg]        ; byte - gfx_fill still needs the rect)
+    mov [gfx_color], al
+    pop ax
+    call gfx_fill
+    push ax
+    mov al, [font_rn_fg]
+    mov [gfx_color], al
+    pop ax
+    mov cx, ax                  ; font_char takes x,y in CX,DX
+    mov dx, bx
+    mov al, [font_rn_ch]
+    call font_char
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 font_rn_zero:   db 0,0,0,0,0,0,0,0   ; the blank cell an unprintable draws
 
 ; -----------------------------------------------------------------------------
@@ -711,6 +793,9 @@ font_rn_fs:     resb 1          ; cell loop consumes. In .bss for the same
 font_rn_bs:     resb 1          ; reason font_bb_si is: the row loop has no
 font_rn_fm:     resb 1          ; register to spare, and every caller holds
 font_rn_bm:     resb 1          ; the gfx lock (SPEC.md 1.6)
+font_rn_ch:     resb 1          ; font_run_scell's character, parked because
+                                ; AL is the rect's low byte by the time the
+                                ; letter is drawn
 font_rn_si:     resw 1
 font_rn_di:     resw 1
 font_bb_si:     resw 1          ; bb path: glyph pointer, reloaded per plane

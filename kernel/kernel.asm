@@ -505,7 +505,18 @@ osapi_table:
                                   ;          your own window ptr; W_FLAGS bit1
                                   ;          only says VISIBLE, which a wholly
                                   ;          covered window still is
-osapi_table_end:                  ; 0x0268
+    OSAPI_SLOT wm_snap            ; 0x0268 - BX = window, AL = 0 clear / non-0
+                                  ;          set: keep this window's CONTENT
+                                  ;          ORIGIN on a multiple of 8, so its
+                                  ;          text can take font_run's
+                                  ;          single-store path (SPEC.md
+                                  ;          11.94/6.1). Content, not frame:
+                                  ;          the border makes them differ by
+                                  ;          one and the kernel owns that
+                                  ;          pixel. Mono only - it is a no-op
+                                  ;          on VGA, so an app may set it
+                                  ;          unconditionally
+osapi_table_end:                  ; 0x0270
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -513,8 +524,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 75 * 8
-%error "os8088 API jump table must be exactly 75 8-byte slots"
+%if OSAPI_TABLE_LEN != 76 * 8
+%error "os8088 API jump table must be exactly 76 8-byte slots"
 %endif
 
 ; =============================================================================
