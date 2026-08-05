@@ -11213,11 +11213,11 @@ and the layout tail after an edit is one add-loop shift.
 
 The document is always canonical markdown (newline = LF; CR LF and lone CR
 fold to LF on load, control bytes and >126 drop; saved bytes are the
-buffer verbatim) in a 20,480-byte gap buffer in bss, so the app works with
-an EMPTY heap — an `OSAPI_MEM_CLAIM` block (64/32/16KB tried in that
-order, §50.3 rules; force-freed at teardown like every claim) only adds
-the undo/redo stacks and the full-size clipboard; without it undo reports itself unavailable through the menu
-gray and the clipboard falls back to 2KB of bss. There is no second styled
+buffer verbatim) in a gap buffer that is a **heap claim** (§46.9). A second
+`OSAPI_MEM_CLAIM` block (64/32/16KB tried in that order, §50.3 rules;
+force-freed at teardown like every claim) carries the undo/redo stacks and
+the full-size clipboard; without it undo reports itself unavailable through
+the menu gray and the clipboard falls back to 2KB of bss. There is no second styled
 buffer and no sync machinery (the original's `BuildHiddenView` /
 `SyncHiddenToCanonical` pair): **Writer mode is a rendering property**.
 Styled lines hide the delimiters and draw the spans; the caret's logical
@@ -11307,10 +11307,69 @@ surface, modality routes input, and the completion proc repaints the page
 before any failure alert so nothing lands on the hole the dialog left.
 Names live per instance (`UNTITLED.MD` seeded); the file slots read and
 write whole documents in place (no staging copy: the gap parks at the end
-for a save, and a load folds line endings in place). `FERR_*` becomes a
+for a save, so `ES:BX` is the claim itself, and a load folds line endings
+in place inside it — §46.9). `FERR_*` becomes a
 human sentence in an error alert. New/Open/Quit with unsaved changes ask
 first — Save / Cancel / Don't Save, with Save continuing the pending
 action through the Save As completion when the document is untitled.
+### 46.9 The document is a heap claim, and it grows
+
+The gap buffer was 20,480 bytes of **bss**, and the reason given for it was
+that the app then worked with an empty heap. That reason was never true on
+this kernel: a package's *region* is itself a heap claim (§20.1), so a
+machine whose heap cannot fund a claim cannot load ArtfulType either. It was
+a holdover from a kernel where a package got one 64KB segment for code and
+data and there was no memory API to ask for anything else. What it actually
+cost was 20KB of the 60KB an image and its bss share.
+
+The text is `[at_dseg]:0000` now, `[at_dcap]` bytes, claimed by `at_entry`
+*before* it creates the window — an editor with nowhere to type is not a
+window worth opening, so a refusal is `LD_EABORT` and the loader says so,
+which is why nothing below has to test `[at_dseg]`. bss falls from 42,165
+bytes to 21,695, and image + bss from 59,198 of `APP_MAX_SIZE`'s 61,440 to
+39,057.
+
+**`at_dresize` is the whole of it, and the gap is what makes it more than a
+resize.** Text is `[0, at_gs) ++ [at_ge, cap)`, so the high run always ends
+at the buffer's ceiling — which is why the new gap end is simply
+`newcap - T` and never a delta. Growing must slide that run *up* to the new
+ceiling, backwards because the ranges overlap, and **after** the regrow;
+shrinking must slide it *down* **before** the bytes past the new ceiling
+stop being ours. Each ordering is the one whose failure is benign: a refused
+grow has moved nothing, and a refused shrink (which cannot happen — a shrink
+always succeeds in place, §50.3.1) leaves more heap held than the books say,
+which wastes memory and cannot corrupt anything.
+
+Three movements hang off it: `at_dgrow` from `at_ins` when a keystroke
+spends the gap and from `at_insn`/the paste path when a run does not fit;
+`at_load_named`, which opens the claim to `AT_MAXKB` before the read because
+nothing knows the file's size until the read reports it, lands the file in
+the document buffer itself, folds line endings **in place** (the fold only
+drops bytes, so the write index cannot outrun the read index) and calls
+`at_dfit` on both paths; and `at_cmd_newdoc`, which empties the buffer
+*first* — so the shrink has no high run to carry — and then gives the heap
+back.
+
+**`AT_MAXKB` is 60, and it is not the heap's limit.** `at_gs`, `at_ge`,
+`at_caret` and every entry in `at_lstart` are **words**, so a document can
+never reach 65,536 bytes whatever the machine has; 60KB leaves the top of
+that range alone. Lifting it means widening the gap buffer's whole
+arithmetic, not asking for more memory.
+
+The cost is one segment register. `at_getb` — the hottest routine in the
+app, one call per character of `at_scan` — is `push es` / `mov es,
+[at_dseg]` / fetch / `pop es`, about 32 clocks a character on a 4.77MHz
+8088. ES is **preserved** rather than left holding the document because
+`at_slice` is not the only caller that holds ES across a read and a silently
+clobbered ES is a corruption bug, where this is a measured and bounded cost:
+~2ms on the paragraph rescan a keystroke actually pays for, and a fifth of a
+second on a full relayout of a *maximal* document — which happens on a load,
+a mode switch or a zoom, and never on a keystroke. The move primitives
+(`at_gapto`, `at_copyout`, the paste and the snapshot restore) switch DS as
+well, through `at_dsegs`, and every cursor and count they need is latched in
+a register first: past that call no package variable is readable, which is
+the `dsk_copy_in` discipline of §18 applied inside an app.
+
 ## 47. Disabled controls — the greying standard (binding)
 
 Every part of the UI that can refuse a click has to say so the same way. This

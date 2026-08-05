@@ -1260,8 +1260,13 @@ at_paste:
     pop ax
     sub si, bx
     add si, cx                      ; SI = the length afterwards
-    cmp si, AT_DOCCAP
-    ja .nofit
+.fit:
+    cmp si, [at_dcap]
+    jbe .fits
+    call at_dgrow                   ; a paste bigger than the buffer grows it
+    jnc .fit                        ; a quantum at a time (SPEC.md 46.9), and
+    jmp short .nofit                ; only then gives up
+.fits:
     call at_undo_push               ; only a paste that WILL land pays:
     mov byte [at_typrun], 0         ; before the fit check, a refused one
                                     ; cost the whole redo stack for nothing
@@ -1279,12 +1284,10 @@ at_paste:
     ; every cursor is latched in registers first
     mov si, di
     mov di, [at_gs]
-    add di, at_doc
     mov ax, es                      ; AX = source segment
     push ds
-    push ds
-    pop es                          ; ES = ours (destination)
-    mov ds, ax                      ; DS = source
+    mov es, [at_dseg]               ; ES = the document (destination)
+    mov ds, ax                      ; DS = the clip
     cld
     push cx
     rep movsb
@@ -1630,20 +1633,20 @@ at_snap_take:
     mov ax, [es:si+6]
     mov [at_selb], ax
     add si, 8
-    ; the text: claim ES:SI -> our at_doc[0..len)
+    ; the text: snapshot ES:SI -> the document at [at_dseg]:0000
     mov ax, es                      ; AX = source segment
     mov cx, bp
-    mov di, at_doc
+    xor di, di
     push ds
-    push ds
-    pop es                          ; ES = ours
-    mov ds, ax                      ; DS = the claim
+    mov es, [at_dseg]               ; ES = the document
+    mov ds, ax                      ; DS = the snapshot arena
     cld
     rep movsb
     pop ds
-    ; install: text = [0..len), gap = [len..CAP)
+    ; install: text = [0..len), gap = [len..cap)
     mov [at_gs], bp
-    mov word [at_ge], AT_DOCCAP
+    mov ax, [at_dcap]
+    mov [at_ge], ax
     ; clamp what the header claimed to the length
     mov cx, bp
     mov ax, [at_caret]

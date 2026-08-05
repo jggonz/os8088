@@ -59,9 +59,23 @@
     dw 0000010110100000b
     OS88_ICON16_END
 
-AT_DOCCAP  equ 20480                ; document bytes (bss - works with an
-                                    ; empty heap; a claim only adds undo
-                                    ; depth and clipboard reach)
+; --- the document lives in the HEAP, not in this package's bss (SPEC.md 46.9)
+; It used to be AT_DOCCAP bytes of bss, which was a holdover from a kernel
+; where a package got ONE 64KB segment for code and data and there was no
+; memory API to ask for anything else. On this kernel a package's REGION is
+; itself a heap claim (SPEC.md 20.1), so "works with an empty heap" was never
+; a property this app had: if the heap could not fund a claim it could not
+; have loaded the app either. What the bss buffer actually cost was 20KB of a
+; 60KB region that image + bss share.
+AT_KB0     equ 4                    ; the document claim at launch, KB
+AT_GROWKB  equ 4                    ; ...and the quantum it grows by
+AT_MAXKB   equ 60                   ; ...and its ceiling. NOT the heap's - it
+                                    ; is the gap buffer's own arithmetic:
+                                    ; at_gs, at_ge, at_caret and every entry
+                                    ; in at_lstart are WORDS, so a document
+                                    ; can never reach 65,536 bytes whatever
+                                    ; the machine has. 60KB leaves the top of
+                                    ; that range alone
 AT_NL      equ 10                   ; the internal newline
 AT_MAXLN   equ 2048                 ; visual-line table entries
 AT_LBUFCAP equ 128                  ; one visual line's slice cap
@@ -82,6 +96,11 @@ AT_NMENUS  equ 5
 at_entry:
     push ds                         ; ES arrives = KERNEL_SEG (SPEC.md 20.2);
     pop es                          ; the string ops below want ES = ours
+    mov ax, AT_KB0                  ; the document, before anything else: an
+    call OSAPI_MEM_CLAIM            ; editor with nowhere to type is not a
+    jc .out                         ; window worth opening, so a refusal is
+    mov [at_dseg], dx               ; LD_EABORT and the loader says so - and
+    mov word [at_dcap], AT_KB0*1024 ; nothing below has to test [at_dseg]
     push si
     mov si, at_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
@@ -797,8 +816,23 @@ AT_BSS_TOTAL equ (at_bss_end - at_bss_base)
 at_bss_base equ os88_image_end
 
 ; --- the document -------------------------------------------------------------
-at_doc      equ at_bss_base                  ; AT_DOCCAP bytes
-at_gs       equ at_doc + AT_DOCCAP           ; word: gap start
+; The TEXT is not here - it is [at_dseg]:0000, a heap claim (SPEC.md 46.9).
+; What stays in bss is the bookkeeping, which is fixed-size and tiny.
+at_dseg     equ at_bss_base                  ; word: the document claim, and
+                                             ; never 0 while this instance
+                                             ; lives - at_entry aborts the
+                                             ; launch rather than open an
+                                             ; editor with nowhere to type
+at_dcap     equ at_dseg + 2                  ; word: its capacity in bytes,
+                                             ; kept in step by at_dresize
+at_dkb      equ at_dcap + 2                  ; word } at_dresize's scratch: the
+at_dnew     equ at_dkb + 2                   ; word } size it is moving to, in
+at_dtail    equ at_dnew + 2                  ; word } KB and in bytes, and the
+                                             ; length of the gap's high run,
+                                             ; which has to survive a segment
+                                             ; switch that makes no package
+                                             ; variable readable
+at_gs       equ at_dtail + 2                 ; word: gap start
 at_ge       equ at_gs + 2                    ; word: gap end
 at_caret    equ at_ge + 2                    ; word
 at_sela     equ at_caret + 2                 ; word: selection anchor
