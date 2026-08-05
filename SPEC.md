@@ -6251,22 +6251,41 @@ Six rules hold it up, and each is a rule rather than a tuning:
 - **Everything that is not typing settles first**, and the hook is at
   `np_measure` rather than in each handler: that call *means* "I need to know
   where things really are", and a click has to land on the character under
-  the pointer. Enter, Delete, the menu commands, save and load reach
-  `np_redraw` without `[np_fast]` and settle there; a resize or a toast fails
+  the pointer. Enter, the menu commands, save and load reach `np_redraw`
+  without `[np_fast]` and settle there; a resize or a toast fails
   `np_sigsame` and settles too.
 - **The trigger is CELLS, not rows** — `(np_dr1 − caret row) × np_rcols ≥ 60`.
   This window is resizable and a row is 30 cells or 90 depending how wide it
   was dragged, so a row count is two different amounts of work wearing one
   number. The caret's own row is excluded because §27.2 already draws it for
   two cells.
-- **It is entered only on an INSERT, and only on a CPU_8086** — the row below
-  the break keeps the pixels of the row that was there, and how much of that
-  is a stale duplicate depends which way the caret moved (`ccol−1` cells for
-  an insert, `ccol+1` for a backspace); rather than carry both cases, a
-  backspace that would cost a big reflow just reflows. Once the break *is* up
-  a backspace is the ordinary cheap path, because nothing below the caret
-  moves. The CPU gate is `OSAPI_CPU_INFO`: anywhere faster the reflow is
-  already invisible and the lie buys nothing.
+- **The edit column is REPORTED, not derived**, and that is what lets every
+  edit enter the break rather than only an insert. The scrolled copy below
+  duplicates the row's prefix, which is **C** cells — the caret's column
+  *before* the edit — for an insert and for a backspace alike. But the caret
+  ends at `C+1` in one case and `C−1` in the other, so deriving C from where
+  it *ended* runs the opposite way for each, and the first version of this
+  did exactly that and left two stale characters behind a backspace. The key
+  handler knows C outright (`[np_cur] − [np_ckpi]`, because a row start is a
+  character index and every character on a row occupies one cell), so it says
+  so in `[np_ecol]` and says in `[np_eext]` how many further cells its edit
+  took off that row — one, for forward Delete, which removes a character that
+  was on it. `np_brktry` blanks `np_ecol + np_eext` and needs to know nothing
+  about directions.
+- **Entering the break and continuing in it are different permissions**,
+  because while it is up **the tail is not redrawn**. `[np_fast]` carries the
+  kind: 1 insert, 2 backspace, 3 forward Delete, 4 a caret move. Kinds 1..4
+  may resume the walk (§27.4); kinds 1..3 may *enter* the break, since a
+  caret move reflowed nothing worth avoiding; only kinds 1..2 may *continue*
+  in it. Right would push a character from the tail into the caret's row and
+  draw it twice, Left would pull one the other way and lose it, and Delete
+  eats exactly the tail's first character — all three settle instead.
+- **The caret bar is erased before the scroll.** It is a 1px column at the
+  caret's old x, and the scroll would carry it down into the middle of the
+  tail where nothing would ever erase it. The caret's row is redrawn whole a
+  moment later, so erasing it where it stands costs nothing.
+- **It is gated on `CPU_8086`** via `OSAPI_CPU_INFO`: anywhere faster the
+  reflow is already invisible and the lie buys nothing.
 - **It needs `[np_tx]` on a multiple of 8**, because `OSAPI_GFX_SCROLL` is
   byte-column granular on every adapter. `OSAPI_WM_SNAP` (§11.94) guarantees
   that on the two mono adapters — the ones a 4.77MHz machine has — and on VGA

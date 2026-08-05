@@ -116,7 +116,7 @@ NP_MAXROWS   equ 60             ; signature slots, one per row the content can
                                 ; this, so a taller screen degrades to "the
                                 ; rows past 60 are always redrawn" rather than
                                 ; writing past the array
-NP_BSS_TOTAL equ 982 + NP_IOCAP + NP_MAXROWS*2  ; see the bss layout below
+NP_BSS_TOTAL equ 984 + NP_IOCAP + NP_MAXROWS*2  ; see the bss layout below
 NP_BRK_CELLS equ 60             ; the visual break's trigger (SPEC.md 27.3):
                                 ; the CELLS a keystroke would repaint BELOW
                                 ; the caret's row. Not rows - this window is
@@ -1089,19 +1089,46 @@ np_brktry:
     sub ax, [np_tx]
     mov cl, 3
     shr ax, cl
-    mov bx, ax                      ; BX = the caret's column, AFTER the edit
-    or bx, bx
-    jz .no                          ; column 0 means this keystroke wrapped the
-                                    ; caret onto a fresh row: there is no
-                                    ; prefix to keep and no tail to push, and
-                                    ; the next keystroke will ask again
+    or ax, ax
+    jz .no                          ; the caret ended at column 0, which for an
+                                    ; insert means the keystroke WRAPPED it
+                                    ; onto a fresh row - there is no prefix to
+                                    ; keep and no tail to push. The next
+                                    ; keystroke will ask again
+
+    mov bx, [np_ecol]               ; the caret's column BEFORE the edit, which
+    xor ah, ah                      ; is exactly the prefix the scrolled copy
+    mov al, [np_eext]               ; below will duplicate - plus whatever the
+    add bx, ax                      ; edit took off that row (Delete: one cell)
+    cmp bx, [np_rcols]
+    ja .no                          ; a stale np_ecol cannot reach past the band
+
+    push bx                         ; the caret bar is about to be scrolled
+    push dx                         ; down with everything else, and it would
+    mov ax, [np_ecol]               ; land in the middle of the tail. Erase it
+    push cx                         ; where it STANDS, which is the column it
+    mov cl, 3                       ; was at before this edit and not the one
+    shl ax, cl                      ; it is at now - this row is redrawn whole
+    pop cx                          ; a moment from now anyway
+    add ax, [np_tx]
+    mov bx, [np_cury]
+    mov dx, bx
+    add dx, 7
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_VLINE
+    pop dx
+    pop bx
+
     mov ax, di
     call np_scroll                  ; the caret's row and everything below it
     jc .no                          ; go down one; the caret's row is redrawn
                                     ; from the note a moment later
-    dec bx                          ; the prefix the row BELOW now duplicates:
-    jz .nodup                       ; columns 0..caret-2, because the caret is
-    push bx                         ; one past the character just typed
+    or bx, bx
+    jz .nodup
+    push bx
     mov ax, di
     inc ax
     push cx
@@ -2008,51 +2035,91 @@ np_clamp:
     ret
 
 ; -----------------------------------------------------------------------------
-; np_fastok / np_fastokb - is this keystroke one np_redraw may take the cheap
-;                          path for? (SPEC.md 27.4)
-; in:  [np_cur] BEFORE the edit; np_fastokb is the backspace door, where the
-;      character that moves is one index earlier
-; out: [np_fast] set if so, left alone if not; preserves all registers
+; np_fastok* - five doors onto one answer: may np_redraw take the cheap paths
+;              for this keystroke, and what does the visual break need to know
+;              about it? (SPEC.md 27.4/27.3)
+; in:  [np_cur] and the note BEFORE the edit
+; out: [np_fast] = the KIND, 0 if none: 1 insert, 2 backspace, 3 forward
+;      Delete, 4 a caret move. [np_ecol] = the caret's column on its row,
+;      before the edit; [np_eext] = columns of the row below that go stale
+;      BEYOND that one. All three left alone when the answer is no.
+;      Preserves all registers
 ;
-; Two questions in one: the checkpoint has to describe this layout at all,
-; and the edit has to fall at or after it. The second is what "inside the
-; caret's own row" means - a backspace at column 0 eats the last character of
-; the row ABOVE, which is before the checkpoint, and that is the one deletion
-; the resumed walk could not see.
+; The kind carries two different permissions and they are NOT the same set:
+;   walk may resume        kinds 1..4  - nothing ahead of the caret moved
+;   break may be ENTERED   kinds 1..3  - an edit reflowed something worth not
+;                                        drawing; a caret move reflowed nothing
+;   break may CONTINUE     kinds 1..2  - while the break is up the TAIL is not
+;                                        redrawn, so anything that would move
+;                                        the break point or eat the tail's
+;                                        first character has to settle first.
+;                                        Right would draw a character twice
+;                                        and Left would lose one; Delete eats
+;                                        exactly the tail's first character
+;
+; The resume test is two questions: the checkpoint has to describe this layout
+; at all, and the edit has to fall at or after it. The second is what "inside
+; the caret's own row" means - a backspace at column 0 eats the last character
+; of the row ABOVE, which is before the checkpoint, and that is the one
+; deletion the resumed walk could not see.
+;
+; THE EDIT COLUMN IS REPORTED, NOT DERIVED, and that is the whole reason
+; backspace can enter the break at all. The break scrolls the caret's row down
+; and redraws it, so the copy left below duplicates the row's prefix and has to
+; be blanked - and the prefix is C cells for an insert AND for a backspace,
+; but the caret ends at C+1 in one case and C-1 in the other. Deriving C from
+; where the caret ENDED therefore runs the opposite way for each, which is a
+; direction test in a place with no business knowing about directions; getting
+; it wrong left two stale characters on the row below. Here the caret's column
+; is [np_cur] - [np_ckpi] outright, because a row start is a character index
+; and every character on a row occupies exactly one cell (a newline ends a row,
+; so there cannot be one in between). Forward Delete is then the same fact plus
+; one: the character it removes was ON that row, so the copy is stale one cell
+; further.
 ;
 ; It is deliberately NOT a test of what the redraw will cost: pass 1 answers
 ; that, and it can only answer it after this has let it run cheaply.
 ; -----------------------------------------------------------------------------
-np_fastok:
+np_fastok:                          ; a printable at the caret
     push ax
     push bx
-    mov bx, 1                       ; an INSERT, which is the only edit the
-    mov ax, [np_cur]                ; visual break may be ENTERED on
+    push cx
+    mov bx, 1
+    xor cx, cx
+    mov ax, [np_cur]
     jmp short np_fastcm
-np_fastokb:
-    push ax
+np_fastokb:                         ; Backspace: the character that goes is one
+    push ax                         ; index earlier, so that is the edit
     push bx
+    push cx
     mov bx, 2
+    xor cx, cx
     mov ax, [np_cur]
     dec ax
+    jmp short np_fastcm
+np_fastokd:                         ; forward Delete: the edit is AT the caret,
+    push ax                         ; and it takes a cell off the row below too
+    push bx
+    push cx
+    mov bx, 3
+    mov cx, 1
+    mov ax, [np_cur]
     jmp short np_fastcm
 np_fastokm:                         ; Left: the caret lands one index back, so
     push ax                         ; that is the earliest cell that changes
     push bx
-    mov bx, 3
+    push cx
+    mov bx, 4                       ; a caret move is not an edit, and the
+    xor cx, cx                      ; break is a thing you do to an EDIT
     mov ax, [np_cur]
     dec ax
     jmp short np_fastcm
 np_fastokr:                         ; Right: it lands one FORWARD, and the cell
     push ax                         ; it leaves is the one it is on now
     push bx
-    mov bx, 3
-    mov ax, [np_cur]
-    jmp short np_fastcm
-np_fastokd:                         ; forward Delete: an edit AT the caret, but
-    push ax                         ; never one the visual break is entered on
-    push bx
-    mov bx, 2
+    push cx
+    mov bx, 4
+    xor cx, cx
     mov ax, [np_cur]
 np_fastcm:
     cmp byte [np_ckok], 0
@@ -2060,7 +2127,12 @@ np_fastcm:
     cmp ax, [np_ckpi]
     jb .out
     mov [np_fast], bl
+    mov [np_eext], cl
+    mov ax, [np_cur]
+    sub ax, [np_ckpi]
+    mov [np_ecol], ax
 .out:
+    pop cx
     pop bx
     pop ax
     ret
@@ -2217,13 +2289,19 @@ np_redraw:
     call np_bounds
     mov al, [np_fast]               ; ONE-SHOT: whoever set it meant this
     mov byte [np_fast], 0           ; redraw and no other
+    mov [np_ekind], al
     mov byte [np_resume], 0
     cmp byte [np_bmode], 0
     je .normal
     or al, al
-    jz .settle                      ; the break survives typing and nothing
-    call np_sigsame                 ; else (SPEC.md 27.3), and a resize or a
-    jc .settle                      ; toast is not typing either
+    jz .settle                      ; the break survives an insert and a
+    cmp al, 3                       ; backspace and NOTHING else (SPEC.md
+    jae .settle                     ; 27.3): the tail is not redrawn while it
+                                    ; is up, so Right would draw a character
+                                    ; twice, Left would lose one, and Delete
+                                    ; eats exactly the tail's first character
+    call np_sigsame                 ; ...and a resize or a toast is not typing
+    jc .settle                      ; either
     call np_brkdraw
     jmp .out
 .settle:
@@ -2235,7 +2313,6 @@ np_redraw:
     call np_sigsame
     pop ax
     jc .full
-    mov [np_ekind], al              ; 1 insert, 2 backspace, 3 a caret move
     or al, al
     jz .noseed
     call np_seedck                  ; only an edit at the caret may skip the
@@ -2253,17 +2330,15 @@ np_redraw:
     cmp ax, 0xFFFF
     je .done                        ; not one pixel of the text moved
 
-    cmp byte [np_ekind], 1          ; would this reflow cost more than pushing
-    jne .band                       ; the note down a row? (SPEC.md 27.3)
-                                    ; 1 is an insert and 2 a backspace: the
-                                    ; break is only ENTERED on an insert,
-                                    ; because the row below it keeps the
-                                    ; pixels of the row that was there and
-                                    ; how much of that is a stale duplicate
-                                    ; depends on which way the caret moved.
-                                    ; A backspace once the break IS up is
-                                    ; the ordinary cheap path and needs none
-                                    ; of that - nothing below the caret moves
+    mov al, [np_ekind]              ; would this reflow cost more than pushing
+    or al, al                       ; the note down a row? (SPEC.md 27.3)
+    jz .band                        ; Every EDIT at the caret qualifies -
+    cmp al, 4                       ; insert, Backspace and Delete alike -
+    jae .band                       ; because np_fastok* REPORTED the caret's
+                                    ; column rather than leaving this to work
+                                    ; it out from where the caret ended up. A
+                                    ; caret move does not: nothing reflowed,
+                                    ; so there is nothing to avoid drawing
     cmp byte [np_brkok], 0
     je .band
     call np_brktry
@@ -2846,8 +2921,14 @@ np_lastrow  equ os88_image_end + 978 + NP_IOCAP + NP_MAXROWS*2   ; word: the
                                        ; SHOT and reset to 0xFFFF by np_walk,
                                        ; so a caller that forgets gets the
                                        ; whole note - slow, never wrong
-np_ekind    equ os88_image_end + 980 + NP_IOCAP + NP_MAXROWS*2   ; byte: what
-                                       ; np_redraw is redrawing for: 1 insert,
-                                       ; 2 backspace, 3 a caret move
-np_pad5     equ os88_image_end + 981 + NP_IOCAP + NP_MAXROWS*2   ; byte: even
+np_ecol     equ os88_image_end + 980 + NP_IOCAP + NP_MAXROWS*2   ; word: the
+                                       ; caret's column on its row BEFORE this
+                                       ; edit - reported by the key handler,
+                                       ; never derived (SPEC.md 27.3)
+np_ekind    equ os88_image_end + 982 + NP_IOCAP + NP_MAXROWS*2   ; byte: what
+                                       ; THIS redraw is for - np_redraw's
+                                       ; one-shot copy of [np_fast]'s kind
+np_eext     equ os88_image_end + 983 + NP_IOCAP + NP_MAXROWS*2   ; byte: cells
+                                       ; of the row below that go stale beyond
+                                       ; the caret's column (Delete: 1)
                                        ; total 972 + NP_IOCAP = NP_BSS_TOTAL
