@@ -2014,9 +2014,9 @@ Snapping is 2.9% and the run conversion a further 10.7%, against 2.1% and
 6.4% under `-icount`. But the number that decides it is not in the table:
 **the two CHAR rows visibly flicker on that machine and the `font_run` row
 does not** (§6.1). A keystroke costs 33 ms there, and the erase-and-letter
-pair spends most of it with the line blank. That is why Note Pad drawing
-character by character is a defect rather than a tuning choice, and why the
-case for converting it does not rest on the 10.7%.
+pair spends most of it with the line blank. That made Note Pad drawing
+character by character a defect rather than a tuning choice, and **it has
+been converted** (§27.2) — on the flicker, not on the 10.7%.
 
 **The app's half of the contract is not enforced.** `WF_SNAP` puts the content
 origin on a boundary; whether the app's own text sits at content-relative x
@@ -6589,6 +6589,42 @@ Menu/dispatch: see §12/§13 — "Task Manager" (CMD_TASKS = 3) is the System
 menu's third item, under "Control Panel"; dispatch calls `app_launch`
 KIND_TASKMGR like the §14 kinds.
 
+
+**A dirty row is drawn as ONE opaque `font_run`, and there is no band fill.**
+It used to be a `gfx_fill` of rows `dr0..dr1` followed by a `FONT_CHAR` per
+cell in pass 2 — the erase-and-letter pair, which on a 4.77MHz 8088 leaves the
+line *blank* for several display frames and flickers on every keypress
+(§6.1/§11.94). `np_walk`'s draw pass now accumulates each row into `np_rbuf`
+instead of drawing it, and `np_rflush` paints the row at each row transition
+and at the end of the walk. The buffer is padded with **spaces** to
+`np_rcols`, and that is the whole trick: `font_run` paints a space as
+background on its fast path, so the padding *is* the erase and no cell is ever
+momentarily blank.
+
+Four things this has to get right, and the first one is not obvious:
+
+- **Rows the walk no longer reaches must still be blanked.** A backspace that
+  pulls a wrapped line back up, or a deleted newline, leaves rows below the
+  text whose old pixels are still on screen. The band fill erased them for
+  free because it covered `dr0..dr1` whether the walk got there or not; row-by-
+  row drawing does not, so `.done` walks on to `np_dr1` blanking as it goes.
+  Without it a deletion leaves the row's last state behind — **caret included**,
+  which is how the first test of this showed it.
+- **The caret is banked, not drawn.** `np_carets` used to draw it during the
+  walk; the row's run would now paint over it, so it records its x in
+  `np_rcx` and `np_rflush` draws it after the run.
+- **The margins are still fills.** The run covers `np_tx` to the last whole
+  cell, so the inset left of the pen and the under-8px tail past the last cell
+  are two thin fills over the dirty band. Neither carries a glyph, so neither
+  can flicker and neither can disagree with anything at a clip edge (§11.3).
+- **`np_rcols` is clamped to `NP_MAXCOL`**, and the accumulate step range-checks
+  against it. The wrap rule means a cell past the band cannot normally arise;
+  the clamp is what makes that a bounded write rather than a claim.
+
+The full-repaint path (`np_sigsame` says the signatures no longer describe the
+screen) still fills the content whole first — there the fill is erasing
+everything below the text as well, and a full repaint is not what a keystroke
+pays for.
 
 ### 28.1 The window is sized to the SCREEN, not to a constant
 

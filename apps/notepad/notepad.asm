@@ -103,6 +103,10 @@
 
 NP_CAP       equ 512            ; text buffer capacity, bytes
 NP_IOCAP     equ NP_CAP * 2     ; staging capacity: every char may become CR LF
+NP_MAXCOL    equ 91             ; cells a row can hold: 720/8 is the widest
+                                ; screen this runs on, plus one for the NUL.
+                                ; A row is accumulated into a buffer and drawn
+                                ; as ONE opaque font_run (SPEC.md 6.1/27.2)
 NP_MAXROWS   equ 60             ; signature slots, one per row the content can
                                 ; show (SPEC.md 27.2). The tallest this window
                                 ; can be is a fullscreen VGA frame, where the
@@ -112,7 +116,7 @@ NP_MAXROWS   equ 60             ; signature slots, one per row the content can
                                 ; this, so a taller screen degrades to "the
                                 ; rows past 60 are always redrawn" rather than
                                 ; writing past the array
-NP_BSS_TOTAL equ 744 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
+NP_BSS_TOTAL equ 842 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
 NP_MARGIN    equ 8              ; left/top text margin inside the content. It
                                 ; was 6, and 8 is what puts every glyph cell
                                 ; on a multiple of 8 once OSAPI_WM_SNAP has
@@ -217,6 +221,20 @@ np_bounds:
                                     ; it stays right under WF_FULL, where the
                                     ; frame IS the content (SPEC.md 11.2)
 
+    mov ax, [np_rgt]                ; whole 8px CELLS between the pen and the
+    sub ax, [np_tx]                 ; right edge: the width of one opaque run,
+    inc ax                          ; and what the row buffer is padded to
+    jns .cok
+    xor ax, ax
+.cok:
+    mov cl, 3
+    shr ax, cl
+    cmp ax, NP_MAXCOL - 1
+    jbe .csave
+    mov ax, NP_MAXCOL - 1
+.csave:
+    mov [np_rcols], ax
+
     mov ax, [np_bot]                ; ...and how many whole 8px rows that is,
     sub ax, [np_ty]                 ; which is what the signature array is
     jc .norows                      ; indexed by (SPEC.md 27.2)
@@ -293,12 +311,7 @@ np_walk:
     mov word [np_rowh], 0           ; with nothing folded into it yet
     mov bx, [np_len]                ; BX = characters remaining
     mov si, np_buf
-    cmp byte [np_draw], 0
-    je .loop
-    push ax
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    pop ax
+    call np_rstart                  ; BP is row 0's y; the buffer starts blank
 
 .loop:
     ; --- the wrap rule, applied to the cell this index will occupy ---------
@@ -306,9 +319,11 @@ np_walk:
     add cx, 7
     cmp cx, [np_rgt]
     jbe .fits
-    mov di, [np_tx]
+    call np_rflush                  ; the row that is ENDING, before np_nextrow
+    mov di, [np_tx]                 ; moves [np_row] off it
     add bp, 8
     call np_nextrow                 ; the pen changed rows, so the signature
+    call np_rstart                  ; being accumulated belongs to the old one
 .fits:                              ; being accumulated belongs to the old one
     call np_ask                     ; the queries, at the settled pen
     cmp byte [np_draw], 0
@@ -324,10 +339,12 @@ np_walk:
     inc word [np_i]
     cmp al, 13
     jne .glyph
-    mov di, [np_tx]                 ; newline: carriage return + line feed,
-    add bp, 8                       ; and it occupies no cell - so it is not
-    call np_nextrow                 ; folded into either row's signature, and
-    jmp short .loop                 ; the pixels of the row it ends are the
+    call np_rflush                  ; same as the wrap above: flush before
+    mov di, [np_tx]                 ; np_nextrow moves off this row
+    add bp, 8                       ; newline: carriage return + line feed,
+    call np_nextrow                 ; and it occupies no cell - so it is not
+    call np_rstart                  ; folded into either row's signature, and
+    jmp .loop                       ; the pixels of the row it ends are the
                                     ; same with it and without it
 .glyph:
     push ax                         ; fold it in whatever this pass is for:
@@ -342,14 +359,49 @@ np_walk:
     ja .advance
     call np_rowdirty                ; ...and drop the rows whose pixels this
     jc .advance                     ; redraw already knows are right
-    mov cx, di
-    mov dx, bp
-    call OSAPI_FONT_CHAR            ; AL still holds the character
+    push bx                         ; into the row buffer at this pen's CELL -
+    mov bx, di                      ; np_rflush draws the whole row at once
+    sub bx, [np_tx]
+    push cx
+    mov cl, 3
+    shr bx, cl
+    pop cx
+    cmp bx, [np_rcols]
+    jae .nocell                     ; past the band: the wrap rule above means
+    mov [np_rbuf+bx], al            ; this cannot normally happen, and a
+.nocell:                            ; clamped np_rcols is the case where it can
+    pop bx
 .advance:
     add di, 8
-    jmp short .loop
+    jmp .loop                       ; near: the cell-buffer store above pushed
+                                    ; the loop body past a short jump's reach
 
 .done:
+    call np_rflush                  ; the last row the walk was accumulating
+
+    ; ...and then every row BELOW it that this redraw still owns. A note that
+    ; shrank - a backspace that pulled a wrapped line back up, a deleted
+    ; newline - leaves rows the walk no longer reaches, and their old pixels
+    ; are still on screen. The band fill used to erase them for free, because
+    ; it covered dr0..dr1 whether or not the walk got there; drawing row by row
+    ; does not, so they are blanked explicitly. Without this a deletion left
+    ; the row's last state behind, caret included, which is exactly what the
+    ; first test of this rewrite showed.
+    cmp byte [np_draw], 0
+    je .sigpad
+.blank:
+    mov ax, [np_row]
+    cmp ax, [np_dr1]
+    jae .sigpad                     ; past what this redraw was asked for
+    cmp ax, [np_vrows]
+    jae .sigpad                     ; ...or past the content
+    add bp, 8
+    call np_nextrow
+    call np_rstart                  ; an empty row at this y: np_rflush's own
+    call np_rflush                  ; dirty and fits tests still gate it
+    jmp short .blank
+
+.sigpad:
     cmp byte [np_sigup], 0
     je .fin
 .pad:
@@ -482,11 +534,9 @@ np_carets:
     ja .out                         ; its row does not fit: no caret
     call np_rowdirty                ; ...nor does a row this pass is not
     jc .out                         ; redrawing (SPEC.md 27.2)
-    mov ax, di                      ; 1px black caret, 8 rows tall
-    mov bx, bp
-    mov dx, bp
-    add dx, 7
-    call OSAPI_GFX_VLINE
+    mov [np_rcx], di                ; BANKED, not drawn: the row's font_run has
+                                    ; not happened yet and would paint over it,
+                                    ; so np_rflush puts it back afterwards
 .out:
     pop dx
     pop cx
@@ -531,6 +581,101 @@ np_fold:
     add bx, ax                      ; not invisible
     mov [np_rowh], bx
     pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; np_rstart - begin accumulating a row: BP is its y, the buffer goes to spaces
+; preserves all registers
+;
+; SPACES and not zeros. font_run paints a space as background on its fast path
+; - the glyph's rows are all clear, so the mask leaves the background byte -
+; which is what makes one run erase the whole band as well as letter it. That
+; is the entire reason this rewrite needs no fill: the padding IS the erase.
+; -----------------------------------------------------------------------------
+np_rstart:
+    push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov [np_rby], bp
+    mov word [np_rcx], 0xFFFF
+    mov di, np_rbuf
+    mov cx, [np_rcols]
+    mov al, ' '
+    rep stosb
+    mov byte [di], 0
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_rflush - draw the accumulated row: ONE opaque font_run, then its caret
+; preserves all registers
+;
+; This replaced a GFX_FILL of the whole dirty band followed by a FONT_CHAR per
+; character, and the reason is not only that it is faster (SPEC.md 11.94: 30.1
+; ms against 33.3 for a forty-cell line on a 4.77MHz 8088). It is that the
+; pair leaves the line BLANK between the fill and the last glyph, and at 33 ms
+; a keystroke that gap is several display frames - it flickers, visibly, on
+; every keypress. A run writes each cell from its old content straight to its
+; final content, so there is never a moment when the line is empty (SPEC.md
+; 6.1). Measured and then watched: the benchmark's two erase-and-letter rows
+; flash on the XT and its font_run row does not.
+;
+; The caret is drawn AFTER the run and not during the walk, because the run
+; would paint over it. np_carets banks its x instead of drawing.
+;
+; Three things this must not draw: a row of a measure pass, a row this redraw
+; already knows is right (np_rowdirty, SPEC.md 27.2), and a row whose pixels
+; fall past the content bottom - all three the same tests the per-character
+; draw used to make, moved up to the row.
+; -----------------------------------------------------------------------------
+np_rflush:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    cmp byte [np_draw], 0
+    je .out
+    call np_rowdirty
+    jc .out
+    mov ax, [np_rby]
+    add ax, 7
+    cmp ax, [np_bot]
+    ja .out                         ; the row does not fit: the pen still
+                                    ; advanced, so every position below is true
+    cmp word [np_rcols], 0
+    je .caret
+    mov cx, [np_tx]
+    mov dx, [np_rby]
+    mov si, np_rbuf
+    mov al, CBLACK                  ; ink and background in one call: the erase
+    mov ah, CWHITE                  ; and the letters are one decision per cell
+    call OSAPI_FONT_RUN
+.caret:
+    mov ax, [np_rcx]
+    cmp ax, 0xFFFF
+    je .out
+    mov bx, [np_rby]                ; 1px black caret, 8 rows tall, on top of
+    mov dx, bx                      ; the run that would otherwise have eaten it
+    add dx, 7
+    push ax
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_VLINE
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1271,14 +1416,44 @@ np_redraw:
     shl dx, 1
     add dx, [np_ty]
     add dx, 7
-    mov ax, [np_tx]                 ; the full content width, margins included:
-    sub ax, NP_MARGIN               ; np_toast and the grow box live out there
-    mov cx, [np_rgt]
+    ; The band fill is GONE. It used to erase dr0..dr1 whole and pass 2 then
+    ; lettered it, which is the erase-and-letter pair - and on a 4.77MHz 8088
+    ; that leaves the line blank for several display frames, so every keystroke
+    ; flickered (SPEC.md 6.1). np_rflush draws each row as one opaque font_run
+    ; instead: the padding erases and the glyphs land in the same write, and no
+    ; cell is ever momentarily blank.
+    ;
+    ; What the run does NOT reach is the two margins - the inset left of the
+    ; pen, and whatever is left of the band right of the last whole cell. They
+    ; are still fills, and they carry no glyphs, so they cannot flicker and
+    ; cannot disagree with anything at a clip edge.
     push ax
     mov al, CWHITE
     call OSAPI_SET_COLOR
     pop ax
-    call OSAPI_GFX_FILL             ; ONE fill, over the dirty band only
+    push bx
+    push dx
+    mov ax, [np_tx]                 ; left: the margin, if there is one
+    sub ax, NP_MARGIN
+    mov cx, [np_tx]
+    dec cx
+    cmp ax, cx
+    jg .mr
+    call OSAPI_GFX_FILL
+.mr:
+    mov ax, [np_rcols]              ; right: the <8px tail past the last cell
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_tx]
+    mov cx, [np_rgt]
+    cmp ax, cx
+    jg .mdone
+    call OSAPI_GFX_FILL
+.mdone:
+    pop dx
+    pop bx
 
     mov byte [np_draw], 1           ; pass 2: draw, and only inside it
     mov byte [np_sigup], 0
@@ -1683,4 +1858,12 @@ np_sigok    equ os88_image_end + 622 + NP_IOCAP    ; byte: np_sig has been
 np_pad3     equ os88_image_end + 623 + NP_IOCAP    ; byte: keeps np_sig even
 np_sig      equ os88_image_end + 624 + NP_IOCAP    ; NP_MAXROWS words: one
                                        ; per row of the content
-                                       ; total 744 + NP_IOCAP = NP_BSS_TOTAL
+np_rcols    equ os88_image_end + 744 + NP_IOCAP    ; word: cells the band holds
+np_rby      equ os88_image_end + 746 + NP_IOCAP    ; word: y of the row being
+                                       ; accumulated - BP has moved on by the
+                                       ; time it is flushed
+np_rcx      equ os88_image_end + 748 + NP_IOCAP    ; word: the caret's x on that
+                                       ; row, 0xFFFF = it is not on this one
+np_rbuf     equ os88_image_end + 750 + NP_IOCAP    ; NP_MAXCOL+1 bytes: the row
+                                       ; being accumulated, space-filled
+                                       ; total 842 + NP_IOCAP = NP_BSS_TOTAL
