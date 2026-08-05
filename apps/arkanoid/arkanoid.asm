@@ -175,7 +175,7 @@ ARK_PRATE   equ 2                   ; THE discriminator. Two key events this
                                     ; just at ARK_PSTEP
 ARK_PTAP    equ 7                   ; ticks a TAP moves for, then stops dead.
                                     ; Times ARK_PSTEP this is the whole tap:
-                                    ; 14 pixels. It is a pure feel knob - it
+                                    ; 35 pixels. It is a pure feel knob - it
                                     ; used to have to outlast the typematic
                                     ; DELAY, which is what forced it to 11 and
                                     ; the speed down to a crawl, and ARK_PRATE
@@ -188,22 +188,34 @@ ARK_PHOLD   equ 4                   ; ...and what each repeat of a confirmed
 ARK_VQ      equ 4                   ; QUARTER pixels: the sub-pixel unit BOTH
                                     ; the paddle (just below) and the ball
                                     ; (SPEC.md 44.3.2, further below) move in
-ARK_PSTEP   equ 2 * ARK_VQ          ; tap speed: 2 px a tick, from the first
+ARK_PSTEP   equ 5 * ARK_VQ          ; tap speed: 5 px a tick, from the first
                                     ; tick of the press, held flat, then gone.
-                                    ; In quarter pixels because whole ones give
-                                    ; a tap of 7, 14 or 21 pixels and nothing
-                                    ; in between - the ladder the ball hit in
-                                    ; SPEC.md 44.3.2, and the same fix
+                                    ; Halfway to ARK_PFAST, which is what makes
+                                    ; a tap read as a MOVE rather than a nudge
+                                    ; and very nearly hides the step up to a
+                                    ; hold. In quarter pixels because whole
+                                    ; ones give a tap of 28, 35 or 42 pixels
+                                    ; and nothing in between - the ladder the
+                                    ; ball hit in SPEC.md 44.3.2, same fix
 ARK_PFAST   equ 8 * ARK_VQ          ; hold speed: 8 px a tick, and a whole
                                     ; number of pixels so the accumulator never
                                     ; shows in a rally
-ARK_THRTAP  equ 2                   ; PIXELS of sideways speed a SERVE gets
-ARK_THRHOLD equ 3                   ; from a flick, and from a hold. These are
+ARK_THRTAP  equ 3                   ; PIXELS of sideways speed a SERVE gets
+ARK_THRHOLD equ 4                   ; from a flick, and from a hold. These are
                                     ; the two answers ark_throw gives, and it
                                     ; picks between them by asking WHICH KEY IS
                                     ; DOWN rather than how fast the paddle is
                                     ; going - see ark_throw for why the serve
-                                    ; is the one place that reads the intent
+                                    ; is the one place that reads the intent.
+                                    ; They track the two SPEEDS: a flick that
+                                    ; moves the paddle 5 px a tick has to throw
+                                    ; harder than one that moved it 2, or the
+                                    ; aim stops matching the gesture. The hold
+                                    ; figure is ARK_VXMAX exactly - the
+                                    ; flattest angle the game has - which is a
+                                    ; ceiling a serve may ASK for and nothing
+                                    ; afterwards can exceed; asserted below,
+                                    ; where ARK_VXMAX is declared
 
 ; --- ball velocity is in QUARTER pixels (SPEC.md 44.3.2) ----------------------
 ; It used to be whole pixels a frame, which made the speed ladder 3, 4, 5 and
@@ -237,6 +249,10 @@ ARK_VYSTEP  equ 3                   ; +0.75 a wall...
 ARK_VYMAX   equ 5 * ARK_VQ          ; ...to a 5 px/frame ceiling
 ARK_VYFLOOR equ 10                  ; 2.5 px/frame: Slow may not go below it
 ARK_VYSLOW  equ 2                   ; ...and takes 0.5 px/frame at a time
+
+%if ARK_THRHOLD * ARK_VQ > ARK_VXMAX
+  %error "ark_throw would serve flatter than ARK_VXMAX, the game's own ceiling"
+%endif
 
 ; powerup kinds, and the letter each capsule carries
 PU_NONE     equ 0
@@ -1089,11 +1105,12 @@ ark_do_paddle:
 ; out: AX = -2..+2 PIXELS, in quarter units; preserves all other registers
 ;
 ; [ark_pvel] is PIXELS, so a held paddle at 8 gives a clean -2..+2 without a
-; table. idiv truncates toward zero, which is what makes a rail-clamped
-; part-move round down to nothing - and what makes a TAP, at 1 pixel a tick
-; and 2 on every fourth, impart nothing at all. That is the right answer and
-; not a rounding accident: a paddle creeping a pixel a frame is not carrying
-; the ball anywhere, and only a hold has ever been able to steer a rally.
+; table, and a tapping one at 5 gives 1. idiv truncates toward zero, which is
+; what makes a rail-clamped part-move round down to nothing - and what put a
+; tap at 0 while ARK_PSTEP was 2, so that a rally could be steered by holding
+; and not by tapping. At 5 that distinction has gone away on its own, which is
+; the right answer for the same reason it was right before: the number tracks
+; how fast the paddle is really moving, and nothing else.
 ; The result is scaled to quarter units at the end, so the arithmetic above
 ; stays the pixel arithmetic it reads as.
 ; -----------------------------------------------------------------------------
@@ -1120,7 +1137,8 @@ ark_english:
 
 ; -----------------------------------------------------------------------------
 ; ark_throw - the sideways speed a SERVE gets from the key the player is on
-; out: AX = -3..+3 PIXELS, in quarter units; preserves all other registers
+; out: AX = -ARK_THRHOLD..+ARK_THRHOLD PIXELS, in quarter units; preserves all
+;      other registers
 ;
 ; The serve has no incoming direction to build on, so the flick IS the aim, and
 ; a paddle standing still serves straight up - honest rather than a hidden
@@ -1130,20 +1148,21 @@ ark_english:
 ; This is the ONE place that reads the player's intent rather than the paddle's
 ; motion, and it has to. Everywhere else - ark_english, the rail clamp - the
 ; question is physical, "how fast is this thing actually going", and [ark_pvel]
-; answers it. Here the question is "which way did you ask for", and once the
-; taper was replaced by a flat 1.25 px a tick (see the head of this file) the
-; two stopped agreeing: a flick moves the paddle 1 pixel in the tick Space is
-; pressed, [ark_pvel] halves that to nothing, and every serve went straight up
-; unless the player had been holding the key for half a second first. The
-; mechanism, not the intent, had gone quiet.
+; answers it. Here the question is "which way did you ask for", and the two
+; stopped agreeing the moment the paddle stopped being fast: at the 2 px a tick
+; ARK_PSTEP briefly was, a flick moved the paddle 2 pixels in the tick Space is
+; pressed and the old halving took that to 1, so a serve barely left the
+; vertical unless the key had been held for half a second first. The mechanism
+; had gone quiet, not the intent - and reading the intent is what keeps the
+; serve stable while ARK_PSTEP is tuned underneath it, which it has been three
+; times.
 ;
-; So the ladder is the LATCH, and it has exactly three rungs. No key latched:
-; nothing is being asked for, straight up. A flick - latched at ARK_PSTEP,
-; which covers a tap for the whole ARK_PTAP it moves: ARK_THRTAP. A hold -
-; wound up to ARK_PFAST by the typematic repeats: ARK_THRHOLD, harder. Both of
-; the last two are the pixel figures the old [ark_pvel] arithmetic produced
-; when the paddle still moved 4 and 8 pixels a tick, so the serve throws
-; exactly as it always did while the paddle underneath it does not.
+; So the ladder is the STATE MACHINE, and it has exactly three rungs to match.
+; Stopped: nothing is being asked for, straight up. Tapping, at ARK_PSTEP:
+; ARK_THRTAP. Holding, wound up to ARK_PFAST by the typematic repeats:
+; ARK_THRHOLD, harder. The two figures track the two speeds rather than deriving
+; from them - a flick that moves the paddle 5 px a tick has to throw harder
+; than one that moved it 2, or the aim stops matching the gesture.
 ;
 ; A paddle held against a rail still serves off it, which the physical reading
 ; would refuse. That is the intent answering: the player asked for left.

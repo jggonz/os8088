@@ -10209,7 +10209,7 @@ Everything follows from that:
   presses stay two taps down to about **130 ms** apart, and read as a hold
   below that.
 - **The tap stopped having to outlast anything.** `ARK_PTAP` is a pure feel
-  knob now: 7 ticks, and `ARK_PTAP` × `ARK_PSTEP` is the whole tap, 14 pixels.
+  knob now: 7 ticks, and `ARK_PTAP` × `ARK_PSTEP` is the whole tap, 35 pixels.
 - **The first repeat of a real hold is 9 ticks after the press, so it reads as
   a re-press and restarts the tap** — which is exactly right, and is why a hold
   keeps moving through a delay it cannot see the end of. The *second* repeat,
@@ -10240,7 +10240,7 @@ machine:
 | speed | value | set by | ends |
 |---|---|---|---|
 | stopped | 0 | `ark_do_paddle`, when the countdown runs out | — |
-| tapping | `ARK_PSTEP`, 2 px/tick | a press with no repeat-interval neighbour | after `ARK_PTAP` ticks, mid-stride |
+| tapping | `ARK_PSTEP`, 5 px/tick | a press with no repeat-interval neighbour | after `ARK_PTAP` ticks, mid-stride |
 | holding | `ARK_PFAST`, 8 px/tick | the second of two events `ARK_PRATE` ticks apart | `ARK_PHOLD` ticks after the last repeat |
 
 Nothing ramps, tapers, eases or coasts between them, and `ark_do_paddle`
@@ -10257,32 +10257,47 @@ Two details are load-bearing:
   take off at full speed.
 - **`[ark_pacc]` carries the quarter pixels a fractional speed owes between
   frames**, exactly as §44.3.2 does for the ball, because `ARK_PTAP` ticks of a
-  *whole* number of pixels gives a tap of 7, 14 or 21 and nothing in between.
+  *whole* number of pixels gives a tap of 28, 35 or 42 and nothing in between.
   `ARK_PFAST` is `8 * ARK_VQ`, a whole number of pixels, so the accumulator
   never shows in a rally.
 
-Measured on the running game: a tap moves 2 px a tick from its first tick and
-stops dead at 14; five taps 200 ms apart walk the paddle 44 px without ever
-promoting; a press followed by a 500 ms delay and six 91 ms repeats travels
-98 px.
+**`ARK_PSTEP` is halfway to `ARK_PFAST`, and that is the setting.** It was
+tried at 1.25 px a tick and at 2, both of which made a tap a nudge — and made
+the step up to a hold a 4x jump the player could feel, which is the "ramp" the
+flat speeds were supposed to have removed. At 5 the tap reads as a *move*, the
+promotion is barely visible, and the tap's distance rises with the speed
+because `ARK_PTAP` is unchanged: 35 pixels, most of a paddle width, in 385 ms.
+That is the trade the knob makes and there is nothing subtle left in it —
+`ARK_PTAP` × `ARK_PSTEP` is the tap, and the two speeds are how far apart tap
+and hold feel.
+
+Measured on the running game: a tap moves 5 px a tick from its first tick and
+stops dead at 35; two presses 300 ms apart travel 65 px and 150 ms apart 50 px,
+both as taps; the same two 90 ms apart are a hold at 42 px; a press followed by
+a 500 ms delay and four 91 ms repeats travels 98 px.
 
 **One consumer had to stop reading the paddle's motion, and that is a real
 distinction rather than a patch.** `ark_english` and the rail clamp ask a
 physical question — how fast is this thing actually going — and `[ark_pvel]`,
 the pixels moved this frame, answers it. `ark_throw` asks a different one:
 which way did the player *ask* for. Those two agreed while the paddle moved 4
-pixels a tick and stopped agreeing at 2, where a flick moves two pixels in the
-tick Space is pressed and `[ark_pvel]` halves it to one — so a serve barely
-left the vertical unless the player had held the key first. The mechanism had
-gone quiet, not the intent.
+pixels a tick and stopped agreeing the moment it did not, at the 2 px a tick
+`ARK_PSTEP` briefly was: a flick moved the paddle two pixels in the tick Space
+was pressed and `[ark_pvel]` halved that to one, so a serve barely left the
+vertical unless the player had held the key first. The mechanism had gone
+quiet, not the intent — and reading the intent is what has kept the serve
+stable while `ARK_PSTEP` was tuned underneath it three times.
 
 So `ark_throw` reads the **state machine**, and has exactly three rungs to
 match it: stopped, so nothing is being asked for, and the serve leaves straight
 up; tapping, and it leaves at `ARK_THRTAP`; holding, and it leaves at
-`ARK_THRHOLD`, harder. The last two are 2 and 3 pixels, the figures the old
-`[ark_pvel]` arithmetic produced back when the paddle really did move 4 and 8
-pixels a tick, so the serve throws exactly as it always did while the paddle
-underneath it does not. Measured: 0.00, −2.0 and −3.00 px/frame.
+`ARK_THRHOLD`, harder. The last two are **3 and 4 pixels**, and they track the
+two speeds rather than deriving from them: a flick that moves the paddle 5 px a
+tick has to throw harder than one that moved it 2, or the aim stops matching
+the gesture. `ARK_THRHOLD` is `ARK_VXMAX` exactly — the flattest angle the game
+has, a ceiling a serve may *ask* for and nothing afterwards can exceed — and an
+assembly-time `%if` in arkanoid.asm refuses a value past it. Measured: 0.00,
+−3.1 and −4.2 px/frame.
 
 A paddle held against a rail still serves off it, which the physical reading
 would refuse. That is the intent answering, and it is the right answer: the
