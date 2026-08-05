@@ -3168,8 +3168,9 @@ that safe.
 end to end: write, read-back-and-compare, oversize-buffer refusal, shrink
 replace, empty file, rename both ways, rename-onto-existing, bad name,
 delete twice, fill-to-refusal, mass delete, free-space equality). Like
-`fmtest`/`sbtest` it never ships on the apps disks — their directory order
-is pinned — and rides its own scratch images: `build/filetest.img` (FAT12),
+`fmtest`/`sbtest` it never ships on the apps disks — a gate package is not
+software anyone would want to launch — and rides its own scratch images:
+`build/filetest.img` (FAT12),
 and `-frag` (`--scramble`d, so allocation and free meet holes). There was a
 third, `-fat16`, on the 2.88M test geometry — the only way to exercise the
 FAT16 entry encoding; it went when `DSK_FAT_SECS` fell to 10 and rule 10
@@ -3720,6 +3721,52 @@ Two consequences fall out, both wanted:
   nothing about its contents.
 
 The volume is labelled `OS8088SYS`; the apps disk stays `OS8088APPS`.
+
+### 19.4 The listing is sorted by name, in the mount
+
+`disk_dir` comes out of `disk_mount` in **ascending display-name order**,
+not the order the entries happen to sit in on the disk. `dsk_sortdir` is a
+selection sort over the accepted entries, run at the end of the scan.
+
+**It is done here and not in the file manager**, and that is the whole
+point: the Disk window, the Standard File dialog (§38), every per-window
+view cache (§22.1) and anything else that ever reads the snapshot get it
+already sorted, and none of them carries a comparator. The alternative — a
+display-order layer per consumer — is three copies of the same rule and
+three chances to disagree with `fm_hit` about which entry a row is.
+
+Four things about it:
+
+- **It runs BEFORE the icon harvest**, which is what keeps it to one array.
+  `disk_icons[i]` belongs to `disk_dir[i]`, so sorting afterwards would mean
+  permuting a second 2KB array in lockstep — twice the movement, and a
+  standing invitation for the two to drift apart. Harvesting afterwards
+  fills slot *i* for whatever entry ended up at *i*.
+- **Selection sort**, because *n* ≤ 32: at most 31 exchanges of 32 bytes for
+  any input, against a bubble sort's 496. What it spends instead is
+  comparisons — 496 of 16 bytes — and those are byte loads through `ES` with
+  nothing copied in or out.
+- **Case-insensitive.** A FAT short name is uppercase only *by convention*;
+  `dsk_sanit` folds unprintables and nothing else, so a volume some other
+  tool wrote with lowercase bytes would otherwise sort its whole lowercase
+  half after `Z`. The compare folds `a`–`z` and nothing else.
+- **The name field is NUL-padded** (`dsk_synth` zeroes the entry before
+  filling it), so a shorter name sorts before a longer one that shares its
+  prefix with no length test anywhere: `PAINT.O88` before `PAINT2.O88`,
+  because 0 < `'2'`.
+
+No `rep cmpsb` and no `rep movsb`: those want DS:SI, and `disk_dir` is in
+`LOW_SEG`, which DS never points at (§2.1). Both operands are read and
+written with `es:` overrides.
+
+**What this replaced was a pinned build order.** The apps disk's listing was
+directory order, so the order packages were named in the Makefile was the
+order they appeared in, new packages had to be appended at the end of their
+folder, and the scripted tests clicked rows by that index. None of it
+survived contact with the disk being writable and mountable by a host OS —
+a file the user copies on lands wherever the allocator puts it. The
+Makefile's lists now say only *which* packages ship and *which folder* each
+lands in.
 
 
 ## 20. Loadable programs — the .o88 package format

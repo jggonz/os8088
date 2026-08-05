@@ -366,18 +366,20 @@ $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 tools/os88disk.py
 
 # The software floppies (drive B:) hold packages, not boot code - os88fs only.
 # The volume is FOLDERED (SPEC.md 19.2): the root holds APPS and GAMES and
-# nothing else, so the root indices are 0 = APPS, 1 = GAMES and a package is
-# two double-clicks away rather than one. Order inside each folder is pinned
-# and new packages ALWAYS append at the end of their folder - the scripted
-# tests click the Disk window by row index, and every index inside a folder
-# is now independent of what the other folder holds. (Recorder came BACK with
-# the driver - SPEC.md 34.5/34.6/51.4 - so APPS holds the same six packages
-# `main` does; it sits LAST here and third there, because the append rule
-# above outranks matching the other fork's row order.)
-APPS_TOOLS := $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/piano.o88 \
-              $(BUILD)/fractal.o88 $(BUILD)/paint.o88 $(BUILD)/recorder.o88 \
-              $(BUILD)/tracker.o88 $(BUILD)/artful.o88
-APPS_GAMES := $(BUILD)/mines.o88 $(BUILD)/solitair.o88 $(BUILD)/arkanoid.o88
+# nothing else, so a package is two double-clicks away rather than one.
+#
+# The order of these lists DOES NOT MATTER and nothing may be built on it.
+# It used to: the listing was directory order, so the order a package was
+# named here was the row it appeared on, new packages had to append at the
+# end of their folder, and the scripted tests clicked by that index. The
+# mount sorts by name now (SPEC.md 19.4), so a volume lists alphabetically
+# whoever wrote it and whatever order its entries are stored in - which is
+# also the only answer that survives a host OS writing to the disk. What is
+# left here is which packages ship and which folder each lands in.
+APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/fractal.o88 $(BUILD)/hello.o88 \
+              $(BUILD)/notepad.o88 $(BUILD)/paint.o88 $(BUILD)/piano.o88 \
+              $(BUILD)/recorder.o88 $(BUILD)/tracker.o88
+APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/mines.o88 $(BUILD)/solitair.o88
 
 # Data that ships beside the programs that read it (SPEC.md 24): os88disk.py
 # treats anything not ending .o88 as a plain file. Tracker with no module to
