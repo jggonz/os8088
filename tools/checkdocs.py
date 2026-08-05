@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Documentation consistency gate. Two things drift silently and have:
 
-  1. a SPEC.md section citation that names a heading which does not exist
-     (CROSS_FORK/MAIN_ONLY below allow a document that deliberately discusses
-     a retired numbering to name sections this SPEC no longer has);
+  1. a SPEC.md section citation that names a heading which does not exist;
   2. an API slot number in prose that is not a slot apps/os88api.inc defines.
 
 The second is the nastier one: after a renumbering, a stale citation is often
@@ -29,7 +27,7 @@ RULE_REFS = {"1.6", "1.7", "29.2.8", "45", "49"}
 # Slot numbers prose may still name that apps/os88api.inc deliberately does
 # not define. Nothing is held EMPTY any more (SPEC.md 20.3) - the five cells
 # that were are either filled (0x00F8/0x0100 went to the sound driver) or
-# gone, closed up when the fork stopped keeping main's numbers free.
+# gone, closed up when the numbering settled.
 #
 # 0x01E8 is the other case, and the one this set was kept for: RETIRED
 # (SPEC.md 18.4.1/20.8). It was OSAPI_FILE_READBIG; OSAPI_FILE_READ absorbed
@@ -38,12 +36,6 @@ RULE_REFS = {"1.6", "1.7", "29.2.8", "45", "49"}
 # it fails to assemble. Prose has to keep naming the number, because the
 # number is the whole reason the cell is still there.
 HELD = {"0x01e8"}
-# docs/PORTING.md describes a package written against an OLDER API table as
-# well as this one, so a section number in it may name something that has since
-# moved. It cites none today - MAIN_ONLY is empty and the mechanism is kept for
-# the next time a document has to talk about a retired numbering.
-CROSS_FORK = {"docs/PORTING.md"}
-MAIN_ONLY = set()
 
 
 def main() -> int:
@@ -69,11 +61,7 @@ def main() -> int:
                 for num in m.group(1).split("/"):
                     if num in heads or num in RULE_REFS:
                         continue
-                    if path in CROSS_FORK and num in MAIN_ONLY:
-                        continue
                     bad.append(f"{path}:{n}: SPEC.md §{num} is not a heading")
-            if path in CROSS_FORK:
-                continue
             for m in SLOT.finditer(line):
                 num = m.group(1).lower()
                 if num not in api and num not in HELD:

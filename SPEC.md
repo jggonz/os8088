@@ -21,8 +21,7 @@ whole reason to leave them.
 
 The same rule governs the API table (§20.3): **a shipped slot keeps its
 contract**, and "we no longer implement this" is a refusing stub, not a reuse
-(§20.8 rule 4). Bringing forward a package written against an older table is
-[docs/PORTING.md](docs/PORTING.md).
+(§20.8 rule 4).
 
 ## 0. Goal
 
@@ -4361,22 +4360,19 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
                                                 0x0260 wm_top
 ```
 
-**Every slot `main` ever published keeps `main`'s number and contract**, on
-the rule that **a slot number must never mean two contracts**: a shipped
-number keeps its meaning, and the answer to "we no longer implement this" is
-a wrapper or a refusing stub, never a reuse. Reusing 0x01C8 for a KB-counting
-`mem_avail` where `main` put its paragraph-counting one would fail silently
-and by a factor of 64, which is the whole class of bug the rule exists to
-prevent. So the three v3 arena slots at 0x01B8..0x01C8 stay live as
-`osapi_cm_*` (kernel/memory.inc) — paragraph-counting wrappers over the claim
-heap that keep `main`'s register contracts exactly, so a package built
-against `main`'s SDK runs unchanged — and `OSAPI_SND_FM`/`OSAPI_SND_STREAM`
-at 0x00F8/0x0100, once refusing stubs, carry the loadable sound driver's
-(§51.4) real contracts, identical to `main`'s. Everything this branch ADDS
-starts at 0x0200, `main`'s first free number, which the merge makes this
-tree's own. New code should prefer the KB slots (§50.3) over the arena
-wrappers: they are the native shape, they work from the entry proc, and only
-they carry the DMA-page and regrow contracts.
+**Every published slot keeps its number and contract**, on the rule that **a
+slot number must never mean two contracts**: a shipped number keeps its
+meaning, and the answer to "we no longer implement this" is a wrapper or a
+refusing stub, never a reuse. Reusing 0x01C8 for a KB-counting `mem_avail`
+where it once held a paragraph-counting one would fail silently and by a
+factor of 64, which is the whole class of bug the rule exists to prevent. So
+the three v3 arena slots at 0x01B8..0x01C8 stay live as `osapi_cm_*`
+(kernel/memory.inc) — paragraph-counting wrappers over the claim heap that
+keep their original register contracts exactly — and `OSAPI_SND_FM` /
+`OSAPI_SND_STREAM` at 0x00F8/0x0100, once refusing stubs, carry the loadable
+sound driver's (§51.4) real contracts. New code should prefer the KB slots
+(§50.3) over the arena wrappers: they are the native shape, they work from
+the entry proc, and only they carry the DMA-page and regrow contracts.
 
 **Offsets are not stable across kernel versions, and never were pretended
 to be.** Two things have moved them wholesale: the removal of the sound
@@ -4810,12 +4806,11 @@ without anyone noticing it was a rule.
    point of doing it now rather than later. The retired third slot, 0x01E8,
    obeys the rule as written: a refusing stub, not a reuse. Nothing else may
    read this as licence; the next contract change is a new number.
-5. **No `retf` from a package proc the kernel calls** — the inverse of the same
-   rule on `main`, and the one place porting a package is not mechanical. The
+5. **No `retf` from a package proc the kernel calls.** The
    kernel reaches a package through the three-byte `call bp` / `retf`
    dispatcher in its own header (§20.2), so entry, paint, onkey, onclick, menu
    handler and completion proc are all **near procs with a near `ret`**; the
-   dispatcher owns the only `retf`. A `retf` left in from `main` returns into
+   dispatcher owns the only `retf`. A stray `retf` returns into
    the loader's stack frame and hangs the machine at the first paint. The
    worker entry is the one proc with no return at all — it exits through
    `OSAPI_TASK_ALIVE` (§20.6 rule 2).
@@ -8343,9 +8338,8 @@ when the clip ends.
 *caller's segment* for verbs 5 and 6 — the driver runs with ES = KERNEL_SEG,
 so BX is the only way it can reach the caller's buffer — but on verbs 0 and 4
 BX is unused and the **rate** needs somewhere to live, because `snd_req_inst`
-writes DH and DH is the top half of a 4,000..44,100 Hz rate. The other fork's
-driver banked DX itself, immediately before stamping; here the kernel stamps,
-so the kernel banks.
+writes DH and DH is the top half of a 4,000..44,100 Hz rate. The kernel is
+what stamps, so the kernel is what banks DX.
 
 With no driver loaded there is no stream to collide with, and `drv_svc_call`
 refuses — which is the same answer, arrived at for free.
@@ -8581,7 +8575,7 @@ staging pool, verb 6 stages into a grant and verb 5 reads back out of one,
 and verb 4 opens an input stream that the drain task fills.
 
 **The pool is the driver's, so its size is not a constant an app may assume.**
-The Sound Blaster's is 20,480 bytes, where `main`'s was a pinned 64KB segment.
+The Sound Blaster's is 20,480 bytes.
 An app that needs a big grant asks in TIERS and records into what it got;
 `apps/recorder` is the reference for that, and the reason it works on a machine
 whose driver claimed less than it hoped for.
@@ -9914,10 +9908,9 @@ not, and moving costs one replay because the cache survives the repaint.
 
 ## 41. cpudet.inc / xmem.inc — CPU tiers and memory above 1MB
 
-Ported from `main`, at `main`'s section number and `main`'s API slots. Two
-modules and five slots: `cpudet.inc` publishes the CPU tier and the A20 line,
+Two modules and five slots: `cpudet.inc` publishes the CPU tier and the A20 line,
 `xmem.inc` sizes the store above 1MB, allocates out of it and moves bytes
-through it. The claim heap (§50) is unaffected and remains this fork's answer
+through it. The claim heap (§50) is unaffected and remains the answer
 for *conventional* memory a package cannot fit in its own segment; these are
 the answer for bulk data that does not fit conventional memory at all.
 
@@ -10043,7 +10036,7 @@ subtraction wrong will hand out a base past the top of RAM.
 
 ### 41.8 The package ABI
 
-Five slots at `main`'s numbers: `OSAPI_CPU_INFO` (0x0188), `OSAPI_XMEM_CAPS`
+Five slots: `OSAPI_CPU_INFO` (0x0188), `OSAPI_XMEM_CAPS`
 (0x0190), `OSAPI_XMEM_ALLOC` (0x0198), `OSAPI_XMEM_FREE` (0x01A0) and
 `OSAPI_XMEM_COPY` (0x01A8). What ALLOC returns is an **opaque 32-bit token**,
 not a pointer: every byte crosses through COPY. UI-task context only — on
@@ -10369,9 +10362,7 @@ and there is no `OSAPI_WM_DESTROY` for the package to clean it up with. It is
 *safe*, though: every teardown site — `app_close_win`'s task-less branch,
 `inst_task_die`, the winless worker death and the loader's abort — runs
 `wm_destroy_seg` over the dying region's segment **before** the region is
-freed, destroying every window whose `W_SEG` stamp names it (the sweep `main`
-enforced with the `wm_wseg` side table; the stamp moved into the record and
-the sweep moved with it). So an extra window can never outlive the segment its
+freed, destroying every window whose `W_SEG` stamp names it. So an extra window can never outlive the segment its
 callback procs live in — it just makes a poor citizen of the ones that manage
 it by hand. A card is a flag and some pixels: it cannot outlive the instance
 because it never existed apart from it.
@@ -11309,9 +11300,8 @@ completion):
    "Out of memory", not an abort.
 4. `OSAPI_FILE_READ` with ES:BX = the grant at its first byte, DX:CX = its
    byte capacity.
-   `FERR_BIG` reads back as "File too big" — a much rarer answer here than
-   on the fork this section came from, because the heap is not a fixed
-   arena: a 640KB machine measures 566KB of it and a 512KB machine about
+   `FERR_BIG` reads back as "File too big" — a rare answer, because the
+   heap is not a fixed arena: a 640KB machine measures 566KB of it and a 512KB machine about
    439KB, so a 116KB module fits both with room to spare (§45.8).
 5. `mp_load` validates the hostile bytes (the §45.5 checklist) and answers
    CF=1 with its own verdict string, which goes straight to the status
@@ -11337,9 +11327,9 @@ Four stores, none of them guessed:
   regardless of the module's actual size, and held until the next load or
   teardown. Consequence, stated honestly: while a module is loaded the
   Tracker's claim holds up to 128KB that other packages and other instances
-  then cannot have. That is a far smaller consequence here than on the fork
-  this section came from, where the same claim was effectively *all* the
-  remaining arena on a 512KB machine; against a 566KB heap it is a fifth.
+  then cannot have. Against a fixed arena that claim would have been
+  effectively *all* of it on a 512KB machine; against a 566KB heap it is a
+  fifth.
 
   **...and then `trk_trim` gives the difference back.** The over-claim is
   unavoidable at claim time — the dialog's completion proc is handed a name,
@@ -11350,10 +11340,10 @@ Four stores, none of them guessed:
   nothing moves. Measured on a 5,596-byte module: the claim goes 128KB → 6KB
   and the machine's heap use falls from 201KB to 79KB.
   <br><br>
-  The fork this came from documented the over-claim as something it *could
-  not* fix, because claim-copy-free needs both blocks at once and may hand
-  back a different base. That is true there and false here, and it is the
-  clearest single example of what `mem_regrow` was for.
+  A claim-copy-free would need both blocks at once and may hand back a
+  different base, which is why the over-claim used to be documented as
+  unfixable. `mem_regrow` shrinking in place is what fixes it, and this is
+  the clearest single example of what it was for.
   <br><br>
   The trim runs **before `mp_load`**, so no sample pointer exists yet to be
   invalidated even on the impossible path where a shrink relocated; and
@@ -11369,9 +11359,8 @@ Four stores, none of them guessed:
   than 64KB from one base, which is how a 116KB blob is walked on an 8086.
 - **The stream ring** — one 16KB grant out of the **sound driver's** staging
   pool (verb 7, §34.6). Not a kernel segment: the pool belongs to whichever
-  driver attached and **its size is not a constant an app may assume** — on
-  this fork it is 20,480 bytes, where the other pinned a 64KB `SND_SEG`
-  (§2.2, retired).
+  driver attached and **its size is not a constant an app may assume** — the
+  Sound Blaster's is 20,480 bytes.
 - Nothing else: no frame buffer, no second window.
 
 All three grants are stamped with the instance and force-freed at teardown
@@ -11491,9 +11480,8 @@ edge-triggered, so no deadline machinery is needed.
   view, scrolling and the whole fullscreen surface still work. No silent
   tick-driven fake playback is attempted, and no FM fallback in v1 (FM is
   now worker-whitelisted — that is future work, not a promise).
-- **512KB machine: big modules play.** The one item in this list the fork
-  *removed* rather than inherited. The other fork refused a 116KB blob
-  there, because its ~107KB arena could not hold one. The claim heap is not
+- **512KB machine: big modules play.** A fixed ~107KB package arena could
+  not hold a 116KB blob at all, and that limit is gone. The claim heap is not
   a fixed arena — it is everything above the kernel — so a 640KB machine
   measures 566KB and a 512KB machine about 439KB, and the largest MOD this
   player accepts fits either. `FERR_BIG` / "Out of memory" is still the
@@ -11673,7 +11661,7 @@ slot 0x01F0 **on entering fullscreen** and hand back the user's previous
 state on leaving; while Smooth is off, or where the slot refuses (mono
 adapters — where the software renderer already IS the direct path — or a
 heap that cannot fund the 150KB claim right now), fullscreen draws exactly
-as before. That second refusal is a **live** condition on this fork, not a
+as before. That second refusal is a **live** condition, not a
 boot-time verdict: `bb_avail` is about the adapter alone and the memory
 question is asked of the heap every time the buffer is armed (§32), so
 Smooth can be refused with Paint open and granted after it closes. Two recorded
@@ -12057,6 +12045,194 @@ because nothing has needed one: a package's disabled control is covered by rule
 2, whose non-text mark dithers through `gfx_ink` without help. If an app ever
 needs disabled *text* with no shape beside it, that is when the slot gets
 added — and adding one is an append, which §20.8 allows.
+
+## 48. Missile Command — the twelfth package (apps/missile/missile.asm)
+
+A port of Atari's 1980 arcade game onto the published package ABI, from the
+original 6502 sources (`W3MAIN` / `W3DSUP` / `W3COMN`, "WWIII", project
+23603, July 1979). Prefix `mc_`, embedded icon, one worker task, **no kernel
+change of any kind**. Directory order on the apps disks stays pinned;
+missile is appended last in `GAMES`. `MISSILE` is seven characters, so the
+file name needs no truncating.
+
+It runs windowed — seven eighths of the desktop band — or on the §11.2
+fullscreen surface, `F` in and Esc out. No heap claim: every array is sized
+by the arcade's own object counts and lives in the package bss, about 800
+bytes of it, so this package costs its image and nothing else.
+
+### 48.1 What is the arcade's, verbatim
+
+The numbers are not re-invented. `mc_icbwav` **is** `ICBWAV`
+(12, 15, 18, 12, 16, …) and `mc_crmwav` **is** `CRMWAV`, the smart-bomb
+count that stays 0 until wave 6; both clamp at the end of the table exactly
+as the 6502 clamps them. Six cities and three bases stand at
+`CITY1H..CITY6H` and `MISB1H..MISB3H` on the arcade's own 0..255 field,
+mapped onto whatever content rectangle the window actually got — which is
+what preserves the shape of the board (base, three cities, base, three
+cities, base) at any size. Ten ABMs a base (`MAXMIS`), eight ICBMs and eight
+ABMs in flight (`NICBMS`/`NABMS`), seven ICBMs on screen (`MXICON`), first
+satellite at wave `SPUTWV` = 2, first MIRV at `MIRVWV` = 1.
+
+Scoring is `SETICS`: 25 an ICBM, 100 a satellite or bomber (`SPUTKI`'s
+"4X ICBM"), 125 a smart bomb (`CMKILL`'s "5X"), all times
+`min(6, (wave+1)/2)` — `SMULTI` capped at `MAXMUL`. End of wave pays 5 ×
+multiplier per unused ABM (`ABMADD`) and 100 × multiplier per surviving city
+(`ENDWV4`'s "4 ICBM POINTS/CITY"), tallied one at a time with a beep each,
+which is what `ENDWV2`/`ENDWV4` do a frame at a time. A bonus city every
+10,000 points (`BONINL`'s default interval). `mc_rad` is `OLDRAD`/`NEWRAD`:
+0, 0, 2, 3, … 13, 13, … 1, 0, 0 over `EXDONE` = 27 frames. An explosion
+below `[mc_lowest]` does no damage and pays nothing (`LOWEST`), which is
+what stops a player farming points off the deck.
+
+**`[mc_lives]` is `PLIVES`**: the number of cities the player is *entitled*
+to, decremented when one is lost and incremented by a bonus, with the wave
+transition regenerating cities up to it (`REGEN`). That one variable is why
+a bonus city awarded mid-wave appears at the start of the next one, and why
+the game ends when it reaches zero.
+
+**All three bases come back every wave, with ten missiles each** — `NEWWV1`
+writes `MAXMIS` into every `NMMISB` and `0E0` into `MBLEFT`, "ALL 3 BASES
+ALIVE". Only cities are permanent losses. Getting this wrong is not a
+fidelity detail: a player who lost all three launchers to one bad wave had
+nothing to defend with ever again, and testing found wave 2 opening with no
+bases and no way to fire.
+
+### 48.2 A trackball becomes the mouse, and three buttons become one
+
+The arcade aims with a trackball and picks a launcher with one of three fire
+buttons. Here the crosshair follows the mouse — polled from the worker with
+`osapi_mouse`, which is worker-safe (§20.6 rule 7) — and a click fires from
+the **nearest live base that still has missiles**. Keys 1/2/3 still pick a
+base outright, because the left and right launchers are what a player
+reaches for when the middle one runs dry.
+
+The click itself is not acted on in `W_ONCLICK`. The worker owns every
+object in the game, so the UI task's whole job is to leave the target behind
+in three words — apps/arkanoid's `[ark_launch]` with a point attached.
+`[mc_fire]` is a **counter** rather than a flag so two clicks inside one
+frame both fire.
+
+**The crosshair is an XOR overlay**, drawn last each frame and undone first
+the next, so nothing else ever draws while it is on the screen — the same
+condition §32 requires of the window manager's own drag outline. Its arms
+are deliberately long: the kernel keeps drawing the arrow cursor at the same
+point (§11.2 — even fullscreen, the cursor stays live), and a short
+crosshair simply hides underneath it.
+
+### 48.3 There is no line primitive
+
+`mc_line` is a Bresenham that **coalesces each horizontal run into one
+`gfx_hline`**, and it draws the missile trails one *segment* at a time — the
+two or three pixels a missile moved this frame, not the whole trail — which
+is what makes fifteen missiles in flight affordable at 4.77MHz. A full
+repaint needs no frame buffer for the same reason trails are cheap: every
+missile carries the point it launched from and the point it has been drawn
+to, so the whole trail is one `mc_line`.
+
+**The erase has to be one pixel wider than the draw, and that is not a
+nicety.** The trail is drawn as a chain of per-frame segments and erased as
+a single whole line, and those two rasterizations are not the same pixels —
+each segment is its own Bresenham between two rounded endpoints, while the
+erase runs between the extremes. Neither differs from the true line by more
+than a pixel in the minor axis, and "no more than a pixel" still left **104
+of a measured 217-pixel trail on the screen**: every dead missile left a
+dashed line that never went away, and a stalled game was a sky full of them.
+`[mc_lfat]` grows each flushed run by one pixel in every direction, which
+covers exactly that error and costs nothing — a run is a rect either way, so
+it is the same number of `gfx_fill` calls.
+
+The honest alternative — replaying the erase segment by segment — needs the
+frame count since launch *and* breaks the moment `mc_render` skips a frame
+or a smart bomb re-aims, because then the drawn segments are not the ones a
+replay would produce. The dilation has neither failure mode.
+
+### 48.4 The explosion scales, and its square root is free
+
+The arcade's burst is 27 pixels across on a 256×231 field — a tenth of the
+screen, and **that proportion is the game**: it decides how much sky one ABM
+covers and therefore whether a wave is survivable. Left at a literal
+13-pixel radius on a 560-pixel-wide window it was less than half as big in
+relative terms, and the game became unwinnable for a reason that had nothing
+to do with the design. `mc_escale` scales the whole `OLDRAD` ramp once per
+layout, by `min(cw/256, ch/231)` in eighths — a **minimum over both axes**,
+because this window is much wider than it is tall and dramatically so on
+CGA's 200 rows, where a width-scaled burst would swallow the entire sky.
+
+Scaled radii put a circle table out of reach (the radii now wanted would
+have made one 1KB), so there is none. `mc_shrink` walks a running half-width
+down until `half² + dy² ≤ r²`; because the half-width falls monotonically as
+`dy` rises, it is decremented exactly `R` times across a whole disc — O(R)
+for the entire circle, against O(R) multiplies per *row* for an honest
+integer square root. `mc_erase_ring` runs two of them at once, one per
+radius, to give back the annulus a shrinking burst vacated.
+
+Growing, the new disc covers the old one, so one filled circle is the frame's
+whole work; the colour cycles every frame either way, which is the arcade's
+flashing and costs nothing because the disc is redrawn regardless.
+
+### 48.5 Two ways a wave could never end
+
+Both were found by leaving the game running, and both present identically —
+a still screen on a machine that is otherwise perfectly alive, because the
+worker is looping happily and simply has nothing left to do.
+
+- **No target left.** `mc_launch_icbm` picks a living city or base to aim
+  at. Once the last one is gone that refusal is *permanent*, and the first
+  version treated it like the transient one above it (no free slot: try
+  again next tick). The wave's budget stood forever, `mc_check_wave` waited
+  on it, `mc_nextwave` never ran, and the THE END it would have reached
+  never arrived. Spending the budget outright ends the wave on the next
+  frame and the game with it.
+- **A drifting on-screen count.** `MXICON` gates every launch, so a count
+  that drifts high stops the wave launching and produces the same hang.
+  Five launch sites and three death sites had to agree for a counter to stay
+  honest, so `mc_recount` derives it every frame instead — an
+  eight-iteration loop needs no agreement at all.
+
+### 48.6 The palette cycles, and none of it may go black
+
+`SETCOL` walks ten palettes at one per two waves; so does `mc_pal`. But
+everything here is drawn on a black field, so a colour from §39.4's black
+class (0..6) makes that object **invisible** on Hercules and CGA — the trap
+§44.6 records. Every entry is therefore from the white class (12/14/15) or
+the dither class (7..11, 13), and **within a palette the ground and the
+cities come from different classes, as do the ICBM trails and the ABM
+trails**, so the four things a player must tell apart stay apart once colour
+has reduced to three inks.
+
+Text is stricter still: all three figures in the score strip are drawn from
+the **white class only**. A dithered 8×8 glyph on a black field loses the
+half of each stroke the pattern masks out, and a 1px stroke has nothing
+left — the wave counter was `CLGREEN` and on CGA it was not faint but
+*absent*, zero lit pixels across the hundred columns it occupied.
+
+A destroyed base is a **notch bitten out of the ground**, not a stump. The
+first version drew two low stubs in the ground colour on top of the ground,
+which is invisible on every adapter, so a launcher that was gone looked
+exactly like bare terrain and a player could not tell it from one that was
+merely out of missiles.
+
+### 48.7 The rest of the game
+
+The loop is the worker (§20.6, apps/arkanoid's shape), one frame a tick,
+sleeping to a **deadline** rather than for a duration for the reason §44.1
+measures. `mc_render` is the one lock hold a frame and obeys rule 5:
+re-read the origin, check `W_FLAGS` bit 1, `wm_clip_set`; CF=1 skips the
+frame and raises `[mc_full]`, so the next frame that draws draws everything.
+
+MIRVs split partway down and their children come out of the **same wave
+budget**, so a MIRV does not add ICBMs to a wave — it delivers them all at
+once, lower down, which is the point of the weapon. The satellite (or
+bomber; which shape is a coin toss, as `SOBJID` is) crosses the sky from
+wave 2 and drops ICBMs out of that same budget. Smart bombs from wave 6 fly
+slower and re-aim at a point displaced well to one side of a burst they see
+coming, rather than reversing: reversing makes them hover, and a bomb that
+never arrives is not a threat.
+
+Sound is duration-limited `osapi_snd_tone` from the worker throughout, on
+§44.5's argument. The credits panel is §44.7's: drawn inside our own
+content, the worker held off it by `[mc_abon]` under the lock, the game
+paused underneath.
 
 ## 50. memory.inc — the claim heap
 

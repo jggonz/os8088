@@ -892,10 +892,9 @@ osapi_snd_stream:
     jne .go
 .rate:                          ; ...except on the two OPEN verbs, where BX is
     mov bx, dx                  ; unused and the RATE needs somewhere to be
-                                ; (see above). The other fork's driver banked
-                                ; DX itself, right before calling
-                                ; snd_req_inst; here the kernel stamps, so
-                                ; the kernel banks (SPEC.md 34.5).
+                                ; (see above). The kernel is what stamps,
+                                ; so the kernel is what banks DX
+                                ; (SPEC.md 34.5).
 .go:
     call snd_req_inst           ; DH = the requester
     mov bp, [drv_svc+DSV_STREAM]

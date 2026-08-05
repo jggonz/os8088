@@ -625,13 +625,13 @@ trk_fdone:
                                     ; reader may trust it past this line
     cmp word [trk_modseg], 0
     je .alloc
-    mov dx, [trk_modseg]            ; DX, not AX (docs/PORTING.md 8)
+    mov dx, [trk_modseg]            ; DX, not AX (SPEC.md 50.3)
     call OSAPI_MEM_FREE
     mov word [trk_modseg], 0
 .alloc:
     call OSAPI_MEM_AVAIL            ; AX = LARGEST contiguous run in KB, and
-    or ax, ax                       ; BX = the total (this fork counts KB, not
-    jz .nomem                       ; paragraphs - docs/PORTING.md 8)
+    or ax, ax                       ; BX = the total (KB, not
+    jz .nomem                       ; paragraphs - SPEC.md 50.3)
     cmp ax, 128                     ; cap the grant at 128KB - bigger than any
     jbe .sized                      ; sane 4-channel MOD
     mov ax, 128
@@ -689,7 +689,7 @@ trk_fdone:
     mov si, ax                      ; mp_load's own verdict string
 .failfree:
     push si
-    mov dx, [trk_modseg]            ; DX, not AX (docs/PORTING.md 8)
+    mov dx, [trk_modseg]            ; DX, not AX (SPEC.md 50.3)
     or dx, dx
     jz .npop
     call OSAPI_MEM_FREE

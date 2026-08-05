@@ -5065,7 +5065,7 @@ pt_menufix:
     ; It used to set the disabled labels only, from the entry proc, so a
     ; clipboard or undo image handed back to fund a bigger canvas left the
     ; menu still offering what it could no longer do; and one re-funded later
-    ; stayed greyed for the rest of the session. This fork's kernel reads a
+    ; stayed greyed for the rest of the session. The kernel reads a
     ; menu set LIVE out of the owning segment (SPEC.md 12.2), so a store here
     ; is enough - there is nothing to re-register.
     cmp byte [pt_haveclip], 0
@@ -5930,8 +5930,8 @@ pt_num:
 ; The About panel (SPEC.md 12.2/42) - a card drawn ON the content, not a
 ; window of its own.
 ;
-; `main`'s Paint makes a second window for this. That cannot be ported here
-; and it is worth writing down why: a package's SECOND window is never bound
+; A second WINDOW would be the obvious way to do this, and it is wrong here.
+; Worth writing down why: a package's SECOND window is never bound
 ; to its instance record (only the entry's is - SPEC.md 21), so nothing
 ; destroys it at teardown, and after Paint closes the kernel frees the region
 ; while the window still carries W_SEG/W_DISP pointing into it. The next
@@ -5939,7 +5939,7 @@ pt_num:
 ; OSAPI_WM_DESTROY for a package to clean up with. A card drawn on our own
 ; content has none of that: it is a flag and some pixels, and it dies with
 ; the instance because it never existed apart from it. Solitaire and Arkanoid
-; do the same, so this is the fork's idiom rather than a workaround.
+; do the same, so this is the tree's idiom rather than a workaround.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -8271,13 +8271,12 @@ pt_appname:  db 'Paint', 0          ; the menu bar's app label (SPEC.md 12.2)
 ; whatever the window has actually been resized to anyway.
 PT_ABLH     equ 12
 pt_ablines:
-    dw pt_ab_1, pt_ab_2, pt_ab_3, pt_ab_4, pt_ab_5, pt_ab_6, 0
+    dw pt_ab_1, pt_ab_2, pt_ab_3, pt_ab_4, pt_ab_5, 0
 pt_ab_1:     db 'Paint for os8088', 0
 pt_ab_2:     db 'a bitmap editor for the 8086', 0
 pt_ab_3:     db 0                   ; a blank line is a line with no glyphs
-pt_ab_4:     db 'Paint, and the fork it came', 0
-pt_ab_5:     db 'from, contributed by Elendilon', 0
-pt_ab_6:     db 'github.com/Elendilon', 0
+pt_ab_4:     db 'contributed by Elendilon', 0
+pt_ab_5:     db 'github.com/Elendilon', 0
 pt_s_defname: db 'PICTURE.BMP', 0
 pt_s_defgif:  db 'PICTURE.GIF', 0
 pt_s_ebmp:    db 'BMP', 0

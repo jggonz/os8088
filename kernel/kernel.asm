@@ -112,7 +112,7 @@ KERN_BUDGET equ 80896           ; the whole kernel, guard 1. Growing past this
                                 ; It has moved three times, every one asked
                                 ; for and granted: 65,536 -> 71,680 for the
                                 ; SPEC.md 41 store and the two API surfaces
-                                ; that came with it from the other fork;
+                                ; that came with it (wm_geom, wm_about_set);
                                 ; 71,680 -> 72,704 for the driver subsystem
                                 ; (SPEC.md 51) and the Control Panel pages
                                 ; that drive it - which BUYS more than it
@@ -357,9 +357,9 @@ osapi_table:
                                   ;          answer CF=1 with no driver, which
                                   ;          is the same thing the held cells
                                   ;          they replaced did (SPEC.md 34.5/
-                                  ;          34.6); holding the two numbers is
-                                  ;          what puts every slot below back
-                                  ;          on `main`'s address
+                                  ;          34.6). The two numbers are held
+                                  ;          rather than reused, which is what
+                                  ;          fixes every slot below them
     OSAPI_SLOT wm_sizable         ; 0x0108 - window features (SPEC.md 11.1)
     OSAPI_SLOT wm_fullscreen      ; 0x0110 - fullscreen (SPEC.md 11.2)
     OSAPI_SLOT wm_grow_paint      ; 0x0118 - grow-box restore (SPEC.md 11.1)
@@ -396,17 +396,17 @@ osapi_table:
                                   ;          ES:SI is the caller's own choice,
                                   ;          so no X stub is involved either
     OSAPI_SLOT wm_geom            ; 0x01B0 - content size + visibility
-                                  ;          (SPEC.md 11): the one read a
-                                  ;          package on EITHER fork can make
-; --- every slot main publishes keeps main's NUMBER (SPEC.md 20.8) -----------
-;     The fork moved this block down three cells when it retired the
-;     paragraph-counting arena, and a package built against main's SDK then
-;     called wm_resize where it meant cm_alloc. main's numbers are the ABI:
+                                  ;          (SPEC.md 11): content size
+                                  ;          without touching the record
+; --- every published slot keeps its NUMBER (SPEC.md 20.8) -------------------
+;     This block was once moved down three cells when the paragraph-counting
+;     arena was retired, and a package built against the older SDK then
+;     called wm_resize where it meant cm_alloc. The numbers are the ABI:
 ;     the three arena slots stay at 0x01B8..0x01C8 as wrappers over the
 ;     claim heap (osapi_cm_*, kernel/memory.inc), the six slots after them
-;     stay where main put them, and everything this fork ADDED starts at
-;     0x0200 - main's next free number, which merging makes ours.
-    OSAPI_JSLOT api_cm_alloc      ; 0x01B8 - main's v3 arena (SPEC.md 20.8):
+;     keep their published numbers, and everything ADDED since starts at
+;     0x0200 - the first free number above them.
+    OSAPI_JSLOT api_cm_alloc      ; 0x01B8 - the v3 arena (SPEC.md 20.8):
                                   ;          AX = PARAGRAPHS -> AX = segment.
                                   ;          X - the owner fence needs the
                                   ;          caller's segment
@@ -441,7 +441,7 @@ osapi_table:
                                   ;          5.5): AX/BX/CX/DX = the rect,
                                   ;          SI = signed dy. The vacated rows
                                   ;          are the caller's to repaint
-; --- and from here on, the slots this fork ADDS --------------------------------
+; --- and from here on, the slots added since ----------------------------------
     OSAPI_JSLOT api_mem_claim     ; 0x0200 - the claim heap (SPEC.md 50.3):
     OSAPI_JSLOT api_mem_free      ; 0x0208   X, same fence as the spawn
     OSAPI_SLOT osapi_mem_avail    ; 0x0210
@@ -496,10 +496,10 @@ osapi_table:
                                   ;          a 1bpp adapter at a byte-aligned
                                   ;          x, a cell row is one store. X:
                                   ;          the string is package data.
-                                  ;          APPENDED after main's cm_* trio
+                                  ;          APPENDED after the cm_* trio
                                   ;          rather than kept at 0x0240 - the
-                                  ;          three arena cells this fork had
-                                  ;          been holding empty are filled now
+                                  ;          three arena cells that had
+                                  ;          been held empty are filled now
                                   ;          (SPEC.md 20.8), and everything
                                   ;          above them moved 24 bytes up
     OSAPI_SLOT wm_top             ; 0x0260 - out BX = the frontmost VISIBLE

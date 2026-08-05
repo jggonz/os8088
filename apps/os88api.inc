@@ -464,7 +464,7 @@ VID_CGA    equ 2
                                  ; wholly contain the rect refuses: a blit
                                  ; cannot be cut per pixel (SPEC.md 11.3).
 
-; --- the new slots (docs/PORTING.md 4) ------------------------------------------
+; --- the KB-counting memory slots (SPEC.md 50.3) --------------------------------
 ; EVERY slot main published keeps main's number and contract - including the
 ; three paragraph-counting arena slots at 0x01B8..0x01C8 (OSAPI_MEM_ALLOC /
 ; OSAPI_MEM_FREE / OSAPI_MEM_AVAIL in main's SDK), which are answered by the
@@ -534,8 +534,7 @@ VID_CGA    equ 2
                                  ; Honours the clip region and the back buffer.
 ; --- CPU tier and memory above 1MB (SPEC.md 41) --------------------------------
 ; On a 286 or a 386 the machine has RAM above linear 0x0FFFFF that the 640KB
-; conventional map cannot name. These five slots lend you some of it, and they
-; sit at the SAME numbers `main` uses (docs/PORTING.md 4).
+; conventional map cannot name. These five slots lend you some of it.
 ;
 ; READ THIS FIRST, because it is the rule the whole group is shaped around:
 ; EXTENDED MEMORY IS A DATA STORE ONLY. Real mode forms an address as
@@ -605,11 +604,10 @@ CPU_386             equ 2        ; tier 2: the above, plus unreal mode
                                  ; under the lock, which is when painters ask.
                                  ;
                                  ; You may still read [es:bx+W_W]/[es:bx+W_H]
-                                 ; directly on this fork (ES = KERNEL_SEG in
+                                 ; directly (ES = KERNEL_SEG in
                                  ; every callback) - but those are FRAME size,
-                                 ; and this is the same subtraction done once,
-                                 ; at the number `main` uses. Prefer it in any
-                                 ; app you intend to build on both forks.
+                                 ; and this is the same subtraction done once.
+                                 ; Prefer it over repeating the arithmetic.
 
 %define OSAPI_WM_RESIZE     KERNEL_SEG:0x01D0   ; BX = win ptr, CX = new width,
                                  ; DX = new height, in pixels, of the WHOLE

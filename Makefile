@@ -219,9 +219,9 @@ $(BUILD)/piano.bin: apps/piano/piano.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/piano.o88: $(BUILD)/piano.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/piano.bin -o $@
 
-# Recorder (SPEC.md 35): the sound layer's recording and streaming client,
-# ported back from `main` once the driver put SND_CAP_PCM_IN and PCM_BG
-# streams behind SOUND.DRV (SPEC.md 51.4). It needs no card to be USEFUL -
+# Recorder (SPEC.md 35): the sound layer's recording and streaming client.
+# SND_CAP_PCM_IN and PCM_BG streams live behind SOUND.DRV (SPEC.md 51.4).
+# It needs no card to be USEFUL -
 # DEMO stages a built-in sweep and PLAY falls back to speaker clips - so it
 # ships on every disk and greys REC on a machine with no Sound Blaster.
 $(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc | $(BUILD)
@@ -232,8 +232,8 @@ $(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/recorder.o88: $(BUILD)/recorder.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/recorder.bin -o $@
 
-# Tracker (SPEC.md 45): a four-channel ProTracker MOD player, ported back
-# from `main` with the rest of the sound apps. Its mixer is a worker task
+# Tracker (SPEC.md 45): a four-channel ProTracker MOD player. Its mixer is
+# a worker task
 # feeding a RING-mode stream (SPEC.md 34.5), which is the only thing in the
 # tree that uses ring mode at all, and the module blob is a heap claim read
 # with OSAPI_FILE_READ, whose destination advances by SEGMENT (SPEC.md
@@ -326,6 +326,22 @@ $(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc | $(BUILD)
 
 $(BUILD)/arkanoid.o88: $(BUILD)/arkanoid.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/arkanoid.bin -o $@
+
+# Missile Command, the twelfth shipped package (SPEC.md 48): a port of Atari's
+# 1980 arcade game from the 6502 sources (W3MAIN/W3DSUP/W3COMN). Like Arkanoid
+# the game loop is a WORKER TASK (SPEC.md 20.6), but the aiming is the mouse
+# rather than the keyboard, and it runs windowed OR on the fullscreen surface
+# (SPEC.md 11.2). The wave table, the smart-bomb schedule, the scoring, the
+# explosion radius ramp and the city/base coordinates are the arcade's own
+# numbers; the palette cycles per wave the way SETCOL does, drawn only from
+# colours that survive SPEC.md 39.4's reduction to three inks. No heap claim:
+# every array is sized by the arcade's object counts and fits the package bss.
+$(BUILD)/missile.bin: apps/missile/missile.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/missile/missile.asm
+	@echo "missile: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/missile.o88: $(BUILD)/missile.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/missile.bin -o $@
 
 # FILETEST, the file-API gate package (SPEC.md 18.4/18.4.1): drives the file
 # slots end to end (write, read-back, replace, rename, delete, dfree and the
@@ -453,7 +469,8 @@ $(BUILD)/bench360.img: $(BENCHPKGS) tools/os88disk.py
 APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/fractal.o88 $(BUILD)/hello.o88 \
               $(BUILD)/notepad.o88 $(BUILD)/paint.o88 $(BUILD)/piano.o88 \
               $(BUILD)/recorder.o88 $(BUILD)/tracker.o88
-APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/mines.o88 $(BUILD)/solitair.o88
+APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/mines.o88 $(BUILD)/missile.o88 \
+              $(BUILD)/solitair.o88
 
 # Data that ships beside the programs that read it (SPEC.md 24): os88disk.py
 # treats anything not ending .o88 as a plain file. Tracker with no module to

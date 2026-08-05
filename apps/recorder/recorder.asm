@@ -11,8 +11,8 @@
 ; command picked in the wrong state is refused with the same status line a
 ; click on the grayed button would have written.
 ;
-; Ported back from `main` (docs/PORTING.md) once the Sound Blaster became a
-; loadable driver here (SPEC.md 51.4). Two things about that are worth
+; The Sound Blaster is a loadable driver (SPEC.md 51.4), and two things
+; follow from that which are worth
 ; knowing. Every callback is a NEAR proc with a near `ret` - the kernel
 ; reaches us through our own header dispatcher, not a far call - so there is
 ; no `retf` anywhere in this file and a stray one would return into the
@@ -20,7 +20,7 @@
 ; app branches on are RUNTIME state rather than boot state: with no driver
 ; loaded OSAPI_SND_CAPS answers TONE|PCM_EXCL, both card slots refuse CF=1,
 ; and the app degrades to exactly what it already does on a speaker-only
-; machine. The `main` rule "query the caps, do not assume" is not politeness
+; machine. "Query the caps, do not assume" is not politeness
 ; here - it is the only thing that works.
 ;
 ;   - REC needs SND_CAP_PCM_IN (a Sound Blaster): verb 7 grants a 40,000 B
@@ -125,8 +125,8 @@ RC_BTN_H    equ 16
 RC_BTN_W    equ 52                  ; buttons at x 4 / 58 / 112 / 166
 
 ; --- capture / playback parameters ---------------------------------------------
-; The grant is asked for in TIERS, not taken as a constant (rc_grant). On
-; `main` the staging pool was a pinned segment and 40,000 B was always there;
+; The grant is asked for in TIERS, not taken as a constant (rc_grant). A
+; pinned staging segment would always have 40,000 B in it;
 ; here the pool is whatever the loaded driver claimed off the heap - the
 ; Sound Blaster's is SBL_WANT minus its DMA-visible head, 20,480 B today -
 ; and a driver written tomorrow may have a different one. So this asks for 5

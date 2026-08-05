@@ -8,13 +8,11 @@
 ; into its own scratch image, build/fmtest.img, mounted with
 ; `make test-snd ADLIB=1 TESTAPPS=build/fmtest.img`.
 ;
-; Ported from the other fork, and the one thing that had to change is the
-; thing that changes in EVERY such port: over there a callback is far-called
-; and ends in `retf`; here the kernel reaches it through the three-byte
+; The kernel reaches a callback through the three-byte
 ; dispatcher in the package's own header (SPEC.md 20.1), so every proc below
 ; - the entry included - is an ordinary near proc with a near `ret`. A `retf`
-; left in place returns into the loader's stack frame and hangs the machine
-; at the first paint, which is exactly what it did.
+; here returns into the loader's stack frame and hangs the machine
+; at the first paint.
 ;
 ; What each input proves:
 ;   click 1  verb 2 patch-load (DS:SI, carrier MULT=2) on channel 0, then
@@ -24,8 +22,8 @@
 ;            path the P3 review found severed (osapi_snd_fm destroyed SI).
 ;            The window shows 'FM patch: K' (both CF=0), 'P' (the patch
 ;            verb was refused) or 'N' (the note-on was). Splitting the two
-;            is this fork's one change to the app, and it earned itself
-;            immediately: the port's first failure was N, which said the
+;            Splitting the two earned itself immediately: the first
+;            failure was N, which said the
 ;            frequency never reached the driver - drv_svc_call was eating BX.
 ;   click 2  patch + note-on 660 Hz on channel 1 -> the sustained chord
 ;            (sounding 880 + 1320).

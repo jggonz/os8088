@@ -51,8 +51,7 @@ the first 64KB above the BIOS data area, which is where the "one region" rule
 came from.
 
 1. → **71,680 (70KB)**, to buy the SPEC.md §41 extended-memory store and the
-   two API surfaces (`wm_geom`, `wm_about_set`) that came with it from the
-   other fork.
+   two API surfaces (`wm_geom`, `wm_about_set`) that came with it.
 2. → **72,704 (71KB)**, for the sound driver's Control Panel page — the
    source selection and its Test button (SPEC.md §31.7).
 3. → **76,800 (75KB)**, for SPEC.md §51.5's keyed `SYSTEM.CFG`: a settings
@@ -384,9 +383,9 @@ What it bought, and why it is not simply 1KB spent:
 | the FM and stream API slots, the tone route, the driver hooks in `snd.inc` | ~0.5 KB |
 | **what it makes loadable instead of resident** | **the OPL2 and Sound Blaster tiers** |
 
-The last row is the argument. On the other fork those tiers are kernel code:
-`sndfm.inc` and `sndsb.inc` are 3,260 lines, resident on every machine
-whether or not a card is in it. Here they are a file on the system disk that
+The last row is the argument. Resident, those tiers are kernel code:
+`sndfm.inc` and `sndsb.inc` are 3,260 lines, on every machine
+whether or not a card is in it. Loadable, they are a file on the system disk that
 a 128KB machine with no card never reads — and the same machinery will carry
 the next driver for nothing.
 
