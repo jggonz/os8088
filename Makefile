@@ -327,6 +327,22 @@ $(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/arkanoid.o88: $(BUILD)/arkanoid.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/arkanoid.bin -o $@
 
+# Missile Command, the twelfth shipped package (SPEC.md 48): a port of Atari's
+# 1980 arcade game from the 6502 sources (W3MAIN/W3DSUP/W3COMN). Like Arkanoid
+# the game loop is a WORKER TASK (SPEC.md 20.6), but the aiming is the mouse
+# rather than the keyboard, and it runs windowed OR on the fullscreen surface
+# (SPEC.md 11.2). The wave table, the smart-bomb schedule, the scoring, the
+# explosion radius ramp and the city/base coordinates are the arcade's own
+# numbers; the palette cycles per wave the way SETCOL does, drawn only from
+# colours that survive SPEC.md 39.4's reduction to three inks. No heap claim:
+# every array is sized by the arcade's object counts and fits the package bss.
+$(BUILD)/missile.bin: apps/missile/missile.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/missile/missile.asm
+	@echo "missile: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/missile.o88: $(BUILD)/missile.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/missile.bin -o $@
+
 # FILETEST, the file-API gate package (SPEC.md 18.4/18.4.1): drives the file
 # slots end to end (write, read-back, replace, rename, delete, dfree and the
 # refusals) with both shapes of buffer - a heap claim past the 64KB horizon
@@ -450,10 +466,15 @@ $(BUILD)/bench360.img: $(BENCHPKGS) tools/os88disk.py
 # whoever wrote it and whatever order its entries are stored in - which is
 # also the only answer that survives a host OS writing to the disk. What is
 # left here is which packages ship and which folder each lands in.
+#
+# (`main` still pins its order and appends new packages at the end of a
+# folder. That rule does not survive the sort, so Missile Command is simply
+# filed alphabetically here - the row it lands on is the mount's decision.)
 APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/fractal.o88 $(BUILD)/hello.o88 \
               $(BUILD)/notepad.o88 $(BUILD)/paint.o88 $(BUILD)/piano.o88 \
               $(BUILD)/recorder.o88 $(BUILD)/tracker.o88
-APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/mines.o88 $(BUILD)/solitair.o88
+APPS_GAMES := $(BUILD)/arkanoid.o88 $(BUILD)/mines.o88 $(BUILD)/missile.o88 \
+              $(BUILD)/solitair.o88
 
 # Data that ships beside the programs that read it (SPEC.md 24): os88disk.py
 # treats anything not ending .o88 as a plain file. Tracker with no module to
