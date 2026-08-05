@@ -4732,11 +4732,12 @@ Behaviour:
 - `files_open` (from CMD_FILES dispatch, no lock held): the target is
   `([disk_drive], [dsk_cwd])` — where the volume already is — then the same
   rule.
-- `W_ONCLICK` (lock held; every path below ends in `fm_repaint`: a content
-  repaint — white-fill own content from the **live** W_W/W_H + redraw + a
-  closing `wm_grow_paint` (§11), because the white fill erases the grow box
-  — preceded by `fm_title_flush` when navigation left a caption owing, see
-  "The deferred retitle" below):
+- `W_ONCLICK` (lock held; the button and scroll-bar paths below end in
+  `fm_repaint`: a content repaint — white-fill own content from the **live**
+  W_W/W_H + redraw + a closing `wm_grow_paint` (§11), because the white fill
+  erases the grow box — preceded by `fm_title_flush` when navigation left a
+  caption owing, see "The deferred retitle" below. **A click in the row area
+  usually ends nowhere near it** — see §22.2):
   test order is buttons → scroll bar → rows.
   1. Refresh rect → `fmv_load` on **this window's** `FS_DRV`, root: a
      re-mount from scratch, so a swapped disk shows its real contents.
@@ -4749,7 +4750,8 @@ Behaviour:
      `FS_N` → clear selection. Index == `FS_SEL` and
      [ui_click_t]−`FS_CLKT` < 9 (birth ticks, §10) → double-click:
      `fm_open_sel` (below). Else select it (`FS_SEL` =
-     directory index), stamp `FS_CLKT`.
+     directory index), stamp `FS_CLKT`. **What that costs to draw is
+     §22.2, and it is normally two inverted bands or nothing at all.**
      A double-click that posted a **load** (`[ld_pending]` non-zero on the
      way back) exits through `fm_status_only` instead: the only thing it
      changed on screen is `'Loading...'` in the status line. A double-click
@@ -5059,6 +5061,55 @@ every visible window anyway — which is what the call was always for (the
 loaded program's window may overlap any of them). It no longer runs on the
 **successful** path at all: `ld_run_body`'s own `wm_show` is that pass, and
 running both was the second whole-screen redraw a launch used to show.
+
+### 22.2 Selecting costs two bands, and re-selecting costs nothing
+
+A click in the row area used to end in `fm_repaint` like every other click:
+white-fill the whole content, redraw the header, both buttons, every visible
+row with its icon, name and size, the scroll bar with its arrows, track and
+thumb, and the status line — about 130 glyphs and a dozen fills, to move one
+inverted strip. The first click of a **double**-click paid it too, which is
+what made a double-click flash.
+
+The selection is drawn as an **XOR fill** over the row band (list view) or
+the cell (icon view), and XOR is its own inverse, so the whole change is:
+invert the band the selection is leaving, invert the band it is arriving at.
+`fm_sel_bar` is that operation, factored out of `fm_draw_core` so the painter
+and the click path cannot disagree about which pixels a selected entry owns —
+the same argument that made `fm_hit` one routine. It takes a directory index
+and range-checks it itself (`0xFFFF`, past `FS_N`, or scrolled out of the row
+area all draw nothing), because one caller hands it an index it has not
+looked at.
+
+Four cases, and three of them draw nothing at all:
+
+| the click | what changes | what is drawn |
+|---|---|---|
+| a different row | `FS_SEL`, `FS_CLKT` | two `gfx_xor_fill`s |
+| the row already selected | `FS_CLKT` | **nothing** |
+| empty space, something selected | `FS_SEL` = 0xFFFF | one `gfx_xor_fill` |
+| empty space, nothing selected | nothing | **nothing** |
+
+Measured on the shipped `APPS` folder, in both views: **zero `font_char` and
+zero `gfx_fill` calls** for every row of that table but the first.
+
+Two things hold it up:
+
+- **It is correct only because `W_ONCLICK` fires on the frontmost window
+  alone** (§13). Nothing is on top of it, so the content on screen is exactly
+  what the last paint put there, XOR included — a stale band would otherwise
+  be inverted back to something that was never drawn. §11.3's granularity rule
+  does not apply either way: an inversion erases nothing, so there is no fill
+  and no glyph to disagree.
+- **An editor line is the one other thing a row click changes.** `fm_edit_end`
+  runs first and cancels a half-typed name, which rewrites the status line, so
+  `fm_onclick` captures `FS_EDIT` into `[fm_wased]` **before** ending it. Set,
+  the fast path is skipped and the click takes the old `fm_repaint` — the
+  status line has to be redrawn anyway and the repaint draws the new band
+  itself.
+
+`fdlg.inc` has the same rule and its own `fdlg_sel_bar` (§38.3): the geometry
+differs, the argument does not.
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
@@ -7931,7 +7982,37 @@ content-relative:
 ```
 
 The selected row is an XOR bar across the list interior, exactly as §22
-draws its own (`gfx_xor_fill` under the held lock).
+draws its own (`gfx_xor_fill` under the held lock) — and, for the same
+reason, **moving the selection costs two of those bars and nothing else**.
+`fdlg_sel_bar` is §22.2's `fm_sel_bar` in this module's geometry: same
+range-checking, same factored-out-of-the-painter argument, same XOR-is-its-
+own-inverse trick. A row click used to run `fdlg_draw_both` — refill the
+list interior, re-letter six rows and their sizes, redraw the scroll bar
+frame, both rules, both arrows, the track and the thumb — to move one strip.
+
+The dialog needs one thing the Disk window does not: **the name box follows
+the selection** (`fdlg_pick`), so "did the selection move" is the wrong
+question and "did the box move" is the right one. Only the setter can answer
+it, so `fdlg_setname` returns **CF = 1 when the stored text, length or caret
+is not what it was** and `fdlg_pick` passes that through. What falls out:
+
+- a **different** row → two bands, plus the name box only if it actually
+  took a new name (landing on a *folder* row leaves the box alone, and now
+  leaves its pixels alone too);
+- the row **already selected** → the click re-arms the double-click window
+  and draws **nothing**, unless something was typed into the box since, in
+  which case the box alone is redrawn and the list still is not. That last
+  case is what keeps behaviour identical: clicking the selected row still
+  puts the file's name back over what you typed.
+
+The fallback is `fdlg_setsel` scrolling the selection into view, which moves
+every row: `[fdlg_scrl]` is compared across the call and a change sends the
+click back to `fdlg_draw_both`. A **click** can never trigger it — the hit
+test is bounded by what is drawn — but the keyboard shares `fdlg_setsel`,
+and comparing one word is cheaper than proving that.
+
+`fdlg_sel_bar` asks `fdlg_rows` for the total instead of reading
+`[fdlg_shown]`, which is painter scratch and means nothing on a click.
 
 **The button column** carries Open/Save, Cancel, Drive and — in **save mode
 only** — a **two-line New / Folder** button (`FD_BH2`, drawn by `fdlg_btn2`),

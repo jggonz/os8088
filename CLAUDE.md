@@ -341,6 +341,51 @@ completely alone, because Paint grown to nearly the whole screen is a legal
 size). In `ui_grow` a snap moves the **origin**, which nothing else in a resize
 does, so bank the old rect's last row before the call and union against it.
 
+### Selecting a file costs two inverted bands (SPEC.md §22.2/§38.3)
+
+The selection in a Disk window and in the Standard File dialog is an XOR
+fill, and XOR is its own inverse — so moving it is "invert the band it is
+leaving, invert the band it is arriving at" and **nothing else redraws**.
+Both had been ending a row click in a full repaint (the Disk window's whole
+content; the dialog's whole list plus its scroll bar), about 130 glyphs and
+a dozen fills to move one strip — and the first click of a **double**-click
+paid it too, which is what made a double-click flash. `fm_sel_bar` /
+`fdlg_sel_bar` are that operation, factored out of the two painters so the
+painter and the click path cannot disagree about which pixels a selected row
+owns (the `fm_hit` argument again), and range-checking their own argument so
+a caller may hand them a selection it has not looked at. A click on the row
+**already** selected now draws nothing at all.
+
+Four things are load-bearing:
+
+- **Correct only because `W_ONCLICK` fires on the frontmost window alone**
+  (SPEC.md §13). Nothing is on top of it, so what is on screen inside its
+  content is exactly what the last paint put there, XOR included; inverting
+  a stale band would produce something that was never drawn. §11.3's
+  granularity rule does not apply either way — an inversion erases nothing,
+  so there is no fill and no glyph to disagree.
+- **The Disk window's one other change is the editor line.** `fm_edit_end`
+  runs first and cancels a half-typed name, rewriting the status line, so
+  `fm_onclick` banks `FS_EDIT` into `[fm_wased]` *before* ending it and falls
+  back to `fm_repaint` when it was set.
+- **The dialog's name box follows the selection**, so the question is not
+  "did the selection move" but "did the box", and only the setter can answer
+  it: `fdlg_setname` returns **CF = 1 when the text, the length or the caret
+  changed** and `fdlg_pick` passes it through. That is what lets a second
+  click on the same row draw nothing while still putting the file's name back
+  over anything typed since — same behaviour, no repaint.
+- **`fdlg_sel_bar` asks `fdlg_rows`, not `[fdlg_shown]`.** The latter is
+  painter scratch, valid inside one draw and meaningless on a click.
+
+The two modules do **not** share a row painter and should not be made to:
+the Disk window is resizable with a runtime `fm_layout`, two view modes,
+icons and a per-window heap cache, while the dialog is a fixed-size modal of
+`equ`s that reads the global mount snapshot directly *because* it is modal
+(SPEC.md §38.2) — the exact opposite rule. What they share is the smaller
+true thing: the entry format (§19), `dsk_get_dir`, `fm_ultoa`, and the
+one-place-for-geometry discipline that `fm_hit`, `fm_thumb`/`fdlg_thumb` and
+now the two `*_sel_bar`s all follow.
+
 ### The mono adapters reuse the back-buffer renderer (SPEC.md §39)
 
 There is **no second graphics driver**. `kernel/vgabb.inc` was written as a latch-free,

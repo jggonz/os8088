@@ -1286,6 +1286,10 @@ fm_onclick:
     mov bx, si                  ; publish the clicked window BEFORE anything
     call fm_vp_set              ; reads or writes per-window state
 
+    mov di, [fm_vp]             ; was an editor line up in THIS window? ending
+    mov al, [di+FS_EDIT]        ; one rewrites the status line, and that is the
+    mov [fm_wased], al          ; only thing besides the two selection bands a
+                                ; row click can change (SPEC.md 22.2)
     call fm_edit_end            ; clicking away abandons a half-typed name
 
     mov bx, si
@@ -1376,11 +1380,10 @@ fm_onclick:
 
     ; --- the row area ---
 .rows:
-    call fm_hit                 ; AX = directory index, CF = 1 = not a row
+    mov bx, [fm_vp]             ; BX = the state block from here on, AX the
+    call fm_hit                 ; directory index (fm_hit spares BX)
     jc .clear
 
-    mov bx, [fm_vp]             ; BX = the state block from here on, AX the
-                                ; directory index
     cmp ax, [bx+FS_SEL]         ; second click on the selected entry?
     jne .select
     mov dx, [ui_click_t]        ; click birth tick (EV_C), not [ticks]:
@@ -1389,22 +1392,50 @@ fm_onclick:
                                 ; PER WINDOW, or a click on row 3 here and
                                 ; one on row 3 next door would compose
     cmp dx, FM_DBLCLK
-    jae .select
+    jae .restamp
     call fm_open_sel            ; double-click: a package goes to the
     cmp word [ld_pending], 0    ; loader, a folder re-lists this window (22)
     je .redraw                  ; folder: fm_go changed the whole listing
     call fm_status_only         ; package: the ONLY thing that changed on
     jnc .out                    ; screen is 'Loading...' in the status line
+    jmp short .redraw           ; a clip edge crosses it: whole content
+
+.restamp:                       ; already selected, too slow to be a double
+    mov dx, [ui_click_t]        ; click: the entry does not move, so NOT ONE
+    mov [bx+FS_CLKT], dx        ; PIXEL changes - all this click does is
+    jmp short .quiet            ; re-arm the double-click window (22.2)
 
 .select:
-    mov [bx+FS_SEL], ax
     mov dx, [ui_click_t]
     mov [bx+FS_CLKT], dx
-    jmp .redraw
+    jmp short .newsel
 
-.clear:
-    mov bx, [fm_vp]
-    mov word [bx+FS_SEL], 0xFFFF
+.clear:                         ; off the rows: the selection goes away, which
+    mov ax, 0xFFFF              ; is still just a band. No FS_CLKT stamp -
+    cmp ax, [bx+FS_SEL]         ; empty space is not a double-clickable thing
+    je .quiet                   ; ...and a second click on it changes nothing
+
+.newsel:
+    ; SPEC.md 22.2: two bands change and nothing else does. The old highlight
+    ; is XORed off and the new one XORed on, so every row, every icon, the
+    ; header, the buttons and the scroll bar stay exactly as they are - and a
+    ; double-click's first half no longer flashes the whole window.
+    mov dx, [fm_lsel]           ; the mirror still names the OLD selection
+    mov [bx+FS_SEL], ax
+    mov [fm_lsel], ax
+    cmp byte [fm_wased], 0
+    jne .redraw                 ; an editor line was up: the repaint below
+                                ; owes the status line anyway and draws the
+                                ; new bar itself, so the XORs would be waste
+    xchg ax, dx
+    call fm_sel_bar             ; off...
+    xchg ax, dx
+    call fm_sel_bar             ; ...and on
+    jmp short .out
+
+.quiet:
+    cmp byte [fm_wased], 0      ; nothing moved - but ending an editor line
+    je .out                     ; rewrote the status line, so that still owes
 
 .redraw:
     call fm_repaint             ; SI still = window ptr
@@ -2899,25 +2930,8 @@ fm_draw_core:
     jmp .lrow
 
 .lsel:
-    ; selection bar (inverted row band), only when scrolled into view
-    mov ax, [fm_lsel]
-    cmp ax, [fm_lnf]       ; 0xFFFF (none) also fails this
-    jae .bar
-    sub ax, [fm_lscr]
-    js .bar
-    cmp ax, [fm_shown]
-    jae .bar
-    mov cx, FM_ROW_H
-    mul cx
-    add ax, [fm_cy]
-    add ax, FM_ROW_Y0
-    mov bx, ax                  ; y1 = row band top
-    mov dx, ax
-    add dx, FM_ROW_H - 1        ; y2
-    mov ax, [fm_cx]             ; row area width: x 0 .. cw-16
-    mov cx, [fm_rgt]
-    sub cx, 15
-    call gfx_xor_fill
+    mov ax, [fm_lsel]           ; the selection bar, drawn by the same proc a
+    call fm_sel_bar             ; selection CHANGE uses (SPEC.md 22.2)
     jmp .bar
 
     ; --- icon grid ---
@@ -2975,34 +2989,8 @@ fm_draw_core:
     jmp .irow
 
 .isel:
-    ; selection cell (inverted), only when scrolled into view
-    mov ax, [fm_lsel]
-    cmp ax, [fm_lnf]
-    jae .bar
-    xor dx, dx
-    div word [fm_cols]          ; AX = grid row, DX = column
-    mov cx, dx                  ; CX = column
-    sub ax, [fm_lscr]
-    js .bar
-    cmp ax, [fm_shown]
-    jae .bar
-    push ax
-    mov ax, FMI_CELL_W
-    mul cx
-    add ax, [fm_cx]
-    mov [fm_cellx], ax
-    pop ax
-    mov cx, FMI_CELL_H
-    mul cx
-    add ax, [fm_cy]
-    add ax, FM_ROW_Y0
-    mov bx, ax                  ; y1 = cell top
-    mov dx, ax
-    add dx, FMI_CELL_H - 1
-    mov ax, [fm_cellx]
-    mov cx, ax
-    add cx, FMI_CELL_W - 1
-    call gfx_xor_fill
+    mov ax, [fm_lsel]           ; the selection cell, same proc as the bar
+    call fm_sel_bar
 
     ; --- scroll bar: x cw-14..cw-1, y 22..listb-1 (SPEC.md 22) ---
 .bar:
@@ -3096,6 +3084,89 @@ fm_draw_core:
     pop bp
     pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_sel_bar - XOR the selection highlight for ONE directory index
+; in:  AX = directory index, 0xFFFF = none; fm_layout already run for the
+;      acting window; gfx lock held
+; out: nothing (all registers preserved)
+;
+; Draws nothing when the index names no entry, or is scrolled out of the row
+; area, or there is no row area at all - so a caller may hand it a selection
+; it has not range-checked, which both of them do.
+;
+; XOR is what makes SPEC.md 22.2's two-band selection change possible: the
+; same call that puts the highlight up takes it back down, so a click that
+; moves the selection costs two inverted bands instead of a white fill and
+; every row, icon, name, size, button and the scroll bar. Factored out of
+; fm_draw_core rather than written twice for the same reason fm_hit was -
+; the painter and the click path cannot be allowed to disagree about which
+; pixels a selected entry owns, or a "take it down" would leave a fringe.
+;
+; Correct only because W_ONCLICK fires on the FRONTMOST window alone (SPEC.md
+; 13): nothing is on top of it, so what is on screen inside its content is
+; exactly what the last paint put there, XOR included. A clip region is never
+; armed here and none is needed - and the granularity rule (11.3) does not
+; apply either way, because an inversion erases nothing to draw back.
+; -----------------------------------------------------------------------------
+fm_sel_bar:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp ax, [fm_lnf]            ; 0xFFFF (none) also fails this
+    jae .out
+    cmp byte [fm_lview], 0
+    jne .icon
+
+    sub ax, [fm_lscr]           ; list: the whole row band, x 0 .. cw-16
+    js .out
+    cmp ax, [fm_fit]            ; fit = 0 (no row area) lands here too, and
+    jae .out                    ; fit bounds shown, so it is the same test
+    mov cx, FM_ROW_H
+    mul cx
+    add ax, [fm_cy]
+    add ax, FM_ROW_Y0
+    mov bx, ax                  ; y1 = row band top
+    mov dx, ax
+    add dx, FM_ROW_H - 1        ; y2
+    mov ax, [fm_cx]
+    mov cx, [fm_rgt]
+    sub cx, 15
+    call gfx_xor_fill
+    jmp short .out
+
+.icon:
+    xor dx, dx
+    div word [fm_cols]          ; AX = grid row, DX = column (cols >= 1 per
+    mov cx, dx                  ; fm_layout, so this cannot divide by zero)
+    sub ax, [fm_lscr]
+    js .out
+    cmp ax, [fm_fit]
+    jae .out
+    push ax
+    mov ax, FMI_CELL_W
+    mul cx
+    add ax, [fm_cx]
+    mov [fm_cellx], ax
+    pop ax
+    mov cx, FMI_CELL_H
+    mul cx
+    add ax, [fm_cy]
+    add ax, FM_ROW_Y0
+    mov bx, ax                  ; y1 = cell top
+    mov dx, ax
+    add dx, FMI_CELL_H - 1
+    mov ax, [fm_cellx]
+    mov cx, ax
+    add cx, FMI_CELL_W - 1
+    call gfx_xor_fill
+.out:
     pop dx
     pop cx
     pop bx
@@ -3427,7 +3498,13 @@ fm_lmok:    resb 1              ; FS_MOK
 fm_ldrv:    resb 1              ; FS_DRV
 fm_ledit:   resb 1              ; FS_EDIT
 fm_lferr:   resb 1              ; FS_FERR
-fm_lpad:    resb 1              ; keeps the words below even-aligned
+fm_wased:   resb 1              ; NOT a mirror: FS_EDIT as it stood BEFORE
+                                ; fm_onclick's fm_edit_end cleared it. A row
+                                ; click changes two selection bands and, if an
+                                ; editor line was up, the status line - this
+                                ; is how the fast path knows which (22.2). It
+                                ; also keeps the words below even-aligned,
+                                ; which is all the pad it replaced ever did
 fm_lnf:     resw 1              ; FS_N
 fm_lscr:    resw 1              ; FS_SCRL
 fm_lsel:    resw 1              ; FS_SEL
