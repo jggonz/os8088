@@ -236,8 +236,9 @@ $(BUILD)/recorder.o88: $(BUILD)/recorder.bin tools/os88pkg.py
 # from `main` with the rest of the sound apps. Its mixer is a worker task
 # feeding a RING-mode stream (SPEC.md 34.5), which is the only thing in the
 # tree that uses ring mode at all, and the module blob is a heap claim read
-# with OSAPI_FILE_READBIG - the one file op with no 64KB ceiling, which is
-# why it exists. Three sources, one binary.
+# with OSAPI_FILE_READ, whose destination advances by SEGMENT (SPEC.md
+# 18.4.1) - which is the only reason a 116KB module fits in one call. Three
+# sources, one binary.
 $(BUILD)/tracker.bin: apps/tracker/tracker.asm apps/tracker/trkplay.inc \
                       apps/tracker/trkui.inc apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/tracker/ -o $@ apps/tracker/tracker.asm
@@ -326,9 +327,10 @@ $(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/arkanoid.o88: $(BUILD)/arkanoid.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/arkanoid.bin -o $@
 
-# FILETEST, the file-API gate package (SPEC.md 18.4): drives the file slots
-# 0x0098..0x00A8 end to end (write, read-back, replace, rename, delete,
-# dfree, and the refusals). Never on the shipped apps disks - their
+# FILETEST, the file-API gate package (SPEC.md 18.4/18.4.1): drives the file
+# slots end to end (write, read-back, replace, rename, delete, dfree and the
+# refusals) with both shapes of buffer - a heap claim past the 64KB horizon
+# and this package's own bss. Never on the shipped apps disks - their
 # directory order is pinned - it gets its own scratch image, mounted with:
 #   make test TESTAPPS=build/filetest.img
 # then, after QMP quit, checked from the host with:
@@ -341,12 +343,13 @@ $(BUILD)/filetest.bin: tests/filetest/filetest.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/filetest.o88: $(BUILD)/filetest.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/filetest.bin -o $@
 
-# BIG.DAT: 96KB, larger than any other file op can move, so filetest's
-# readbig check has something to read. Byte i is (i >> 9) - one distinct value
-# per 512-byte sector - so a destination that failed to advance by SEGMENT
-# reads a different byte rather than a plausible one. Generated, never
-# committed: 96KB of git churn per rebuild for a fixture is not worth it, and
-# it rides the filetest image only (never the shipped apps disks).
+# BIG.DAT: 96KB, well past the 64KB horizon the file API used to stop at, so
+# filetest's big-file checks have something to read - and, once read, to write
+# straight back out again. Byte i is (i >> 9) - one distinct value per
+# 512-byte sector - so a buffer that failed to advance by SEGMENT reads a
+# different byte rather than a plausible one. Generated, never committed:
+# 96KB of git churn per rebuild for a fixture is not worth it, and it rides
+# the filetest image only (never the shipped apps disks).
 $(BUILD)/big.dat: Makefile | $(BUILD)
 	python3 -c "import sys; n=96*1024; sys.stdout.buffer.write(bytes((i>>9)&0xFF for i in range(n)))" > $@
 
@@ -355,9 +358,11 @@ $(BUILD)/filetest.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88disk.py
 
 # The same package on a legally fragmented volume: --scramble interleaves the
 # chains, so the write path's allocator and the free/replace paths meet holes
-# rather than a clean run of clusters.
-$(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 --scramble $(BUILD)/filetest.o88 $(BUILD)/mines.o88 $(BUILD)/piano.o88
+# rather than a clean run of clusters. BIG.DAT rides this image too - checks
+# 2..5 need it, and a 96KB chain walked across holes is the strongest version
+# of what --scramble exists to test.
+$(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 --scramble $(BUILD)/filetest.o88 $(BUILD)/mines.o88 $(BUILD)/piano.o88 $(BUILD)/big.dat
 
 # --- the benchmark disk, from tests/ (ON DEMAND: `make bench`) ---------------
 #

@@ -22,8 +22,13 @@ at_cmd_newdoc:
     push cx
     push si
     push di
-    mov word [at_gs], 0
-    mov word [at_ge], AT_DOCCAP
+    mov word [at_gs], 0             ; empty FIRST - the whole buffer is gap -
+    mov ax, [at_dcap]               ; so the shrink below has no high run to
+    mov [at_ge], ax                 ; carry down and cannot refuse
+    mov ax, AT_KB0                  ; ...and this is the moment to give the
+    call at_dresize                 ; heap back whatever the old document
+    mov ax, [at_dcap]               ; grew into (SPEC.md 46.9)
+    mov [at_ge], ax
     mov word [at_caret], 0
     mov word [at_sela], 0
     mov word [at_selb], 0
@@ -165,10 +170,10 @@ at_save_named:
     call at_gapto                   ; gap to the end - text is contiguous
     mov cx, ax                      ; wait: at_gapto wants AX = position =
     ; the length itself; AX already holds it. CX = byte count for write.
-    push ds
-    pop es
-    mov bx, at_doc                  ; ES:BX = the bytes
-    mov si, at_name
+    mov es, [at_dseg]               ; ES:BX = the document itself - no staging
+    xor bx, bx                      ; pass, because the gap is parked at the
+    xor dx, dx                      ; end and [0..len) is one straight run
+    mov si, at_name                 ; (SPEC.md 18.4.1/46.9)
     call OSAPI_FILE_WRITE
     jc .err
     mov byte [at_dirty], 0
@@ -205,21 +210,28 @@ at_load_named:
     push si
     push di
     push es
-    push ds
-    pop es
-    mov bx, at_doc
-    mov cx, AT_DOCCAP
-    mov si, at_name
-    call OSAPI_FILE_READ            ; AX = bytes read
+    mov ax, AT_MAXKB                ; open the claim to its ceiling for the
+    call at_dresize                 ; read: nothing knows the file's size
+                                    ; until the read reports it, and the fold
+                                    ; below only ever SHRINKS what arrived, so
+                                    ; the file lands in the document buffer
+                                    ; itself (SPEC.md 46.9). at_dfit gives the
+                                    ; rest back at the end of both paths
+    mov es, [at_dseg]
+    xor bx, bx
+    mov cx, [at_dcap]
+    xor dx, dx                      ; DX:CX = the capacity; a file bigger than
+    mov si, at_name                 ; the gap buffer is FERR_BIG, as before
+    call OSAPI_FILE_READ            ; DX:AX = bytes read, and DX is 0 here
     jc .err
-    ; fold in place: SI reads, DI writes, both inside at_doc
+    ; fold in place: SI reads, DI writes, both inside the document claim
     mov cx, ax
-    mov si, at_doc
-    mov di, at_doc
+    xor si, si
+    xor di, di
     xor dl, dl                      ; DL = previous raw byte
 .fold:
     jcxz .folded
-    lodsb
+    es lodsb                        ; the document is ES, not DS (SPEC.md 46.9)
     dec cx
     cmp al, 10
     jne .notlf
@@ -231,7 +243,7 @@ at_load_named:
     jne .noteol
     mov dl, al                      ; remember the CR...
     mov al, 10                      ; ...and store it as LF
-    mov [di], al
+    mov [es:di], al
     inc di
     jmp short .fold
 .noteol:
@@ -245,15 +257,15 @@ at_load_named:
     cmp al, 126
     ja .skip
 .store:
-    mov [di], al
+    mov [es:di], al
     inc di
 .skip:
     mov dl, al
     jmp short .fold
 .folded:
-    sub di, at_doc
     mov [at_gs], di                 ; text = [0..kept), gap = the rest
-    mov word [at_ge], AT_DOCCAP
+    mov ax, [at_dcap]
+    mov [at_ge], ax
     mov word [at_caret], 0
     mov word [at_sela], 0
     mov word [at_selb], 0
@@ -265,6 +277,7 @@ at_load_named:
     mov word [at_utop], 0
     mov word [at_rcnt], 0
     mov word [at_rtop], 0
+    call at_dfit                    ; give back what the file did not need
     call at_layout
     call at_cline_span
     clc
@@ -272,13 +285,14 @@ at_load_named:
 .err:
     mov [at_ferr], ax               ; the code survives this frame's pops
     cmp ax, FERR_IO                 ; a mid-chain FERR_IO already clobbered
-    jne .keep                       ; part of at_doc (only FERR_BIG and the
-    call at_cmd_newdoc              ; pre-I/O refusals leave it alone): the
-                                    ; old text is gone, so become a fresh
+    jne .keep                       ; part of the document (only FERR_BIG and
+    call at_cmd_newdoc              ; the pre-I/O refusals leave it alone):
+                                    ; the old text is gone, so become a fresh
                                     ; Untitled rather than a hybrid a later
                                     ; Save would silently write over the file
 .keep:
-    stc
+    call at_dfit                    ; ...and do not leave AT_MAXKB held for a
+    stc                             ; load that did not happen
 .out:
     pop es
     pop di

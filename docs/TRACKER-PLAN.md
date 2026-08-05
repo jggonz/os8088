@@ -3,6 +3,9 @@
 > **Historical planning document**, kept as the design record for SPEC.md §45.
 > Its two "kernel amendments" — a worker-safe stream and a file read with no
 > 64KB ceiling — both landed, here as well as on the branch it was written for.
+> The second has since been folded away: `dskw_readbig` and slot `0x01E8` are
+> retired, and `dskw_read` itself carries the contract this document asked for
+> (SPEC.md §18.4.1). Read every `readbig` below as `dskw_read`.
 > Where it describes memory it describes an arena in paragraphs; this tree has
 > a claim heap in KB (SPEC.md §50), which is the one correction to carry while
 > reading. SPEC.md §45 is the binding description of what was built.

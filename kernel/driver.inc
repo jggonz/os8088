@@ -628,15 +628,16 @@ drv_load:
     mov [bx+DRVR_KB], ax
 
     push bx                     ; the row - BX is the read's own destination
-    mov es, dx                  ; offset, and dskw_read hands it back as 0
+    mov es, dx                  ; offset, and the claim starts at ES:0000
     mov si, [bx+DRVR_FILE]
     mov cx, [drv_fsz]
     xor bx, bx
+    xor dx, dx                  ; DX:CX = the capacity, DX:AX the answer -
     call dskw_read              ; the whole file, by name, in A:'s root
     pop bx
     jc .ioerr
-    cmp ax, [drv_fsz]
-    jne .ioerr
+    cmp ax, [drv_fsz]           ; DX is 0 or the read would have refused: a
+    jne .ioerr                  ; driver is DRV_MAX_KB at the outside
 
     call drv_check              ; the header, against the image that arrived
     jc .badfree
@@ -1190,15 +1191,17 @@ drv_cfg_load:
     push ax
     push bx
     push cx
-    push si
+    push dx                     ; DX is the read's capacity high word going in
+    push si                     ; and its size high word coming back (18.4.1)
     push di
     push es
     push cs
-    pop es
-    mov bx, drv_cfgbuf
-    mov cx, CFG_FBUF
+    pop es                      ; a 64-byte .bss buffer, not a heap claim: this
+    mov bx, drv_cfgbuf          ; runs at boot and a claim can be refused, and
+    mov cx, CFG_FBUF            ; the read takes ES:BX for exactly that reason
+    xor dx, dx
     mov si, drv_cfgname
-    call dskw_read              ; AX = bytes actually read
+    call dskw_read              ; AX = bytes actually read (DX = 0: CFG_FBUF)
     jc .out                     ; no file: the defaults stand
     call drv_cfg_pack           ; the LIVE state into the struct first: that
                                 ; is what a key the file does not carry - or
@@ -1217,6 +1220,7 @@ drv_cfg_load:
     pop es
     pop di
     pop si
+    pop dx
     pop cx
     pop bx
     pop ax
@@ -1465,6 +1469,7 @@ drv_cfg_ser:
 drv_cfg_save:
     push bx
     push cx
+    push dx                     ; DX is the write's count high word (18.4.1)
     push si
     push di
     push es
@@ -1477,6 +1482,7 @@ drv_cfg_save:
     call drv_cfg_ser            ; CX = its length, records and all
 
     mov bx, drv_cfgbuf
+    xor dx, dx                  ; DX:CX = the count; a settings file is bytes
     mov si, drv_cfgname
     call dskw_write             ; ES is already ours, which is where it reads
     jmp short .out
@@ -1487,6 +1493,7 @@ drv_cfg_save:
     pop es
     pop di
     pop si
+    pop dx
     pop cx
     pop bx
     ret

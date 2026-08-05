@@ -365,6 +365,12 @@ osapi_table:
     OSAPI_SLOT wm_grow_paint      ; 0x0118 - grow-box restore (SPEC.md 11.1)
     OSAPI_JSLOT api_file_write    ; 0x0120 - files (SPEC.md 18.4/20.3): N,
     OSAPI_JSLOT api_file_read     ; 0x0128   because ES:BX is the data buffer
+                                  ;          - and DX:CX its 32-bit count, so
+                                  ;          these two are the WHOLE read/write
+                                  ;          surface (SPEC.md 18.4.1). DX is
+                                  ;          an argument to both and an output
+                                  ;          of the read, and the N stub keeps
+                                  ;          its hands off it
     OSAPI_JSLOT api_file_delete   ; 0x0130   and the name still has to cross
     OSAPI_JSLOT api_file_rename   ; 0x0138   (two names, this one)
     OSAPI_SLOT dskw_dfree         ; 0x0140
@@ -419,11 +425,13 @@ osapi_table:
                                   ;          no stub is needed
     OSAPI_SLOT wm_about_set       ; 0x01E0 - the app-name pull-down (12.2):
                                   ;          BX = win, SI = your About handler
-    OSAPI_JSLOT api_file_readbig  ; 0x01E8 - the one file op with no 64KB
-                                  ;          ceiling (SPEC.md 18.4): N, and
-                                  ;          the destination advances BY
-                                  ;          SEGMENT, so a package can load a
-                                  ;          116KB module into a heap claim
+    OSAPI_SLOT dskw_gone          ; 0x01E8 - RETIRED (SPEC.md 18.4.1/20.8):
+                                  ;          this was readbig, the one file op
+                                  ;          with no 64KB ceiling. dskw_read
+                                  ;          has none either now, so the cell
+                                  ;          answers CF=1 / AX = FERR_NAME
+                                  ;          rather than being reused - a
+                                  ;          shipped slot keeps its contract
     OSAPI_SLOT osapi_gfx_dbuf     ; 0x01F0 - a package's own bb_set (SPEC.md
                                   ;          32): AL = 1 arm / 0 disarm, out
                                   ;          AL = the state before, to hand
@@ -590,7 +598,6 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
     OSAPI_NSTUB api_file_write,  dskw_write
     OSAPI_NSTUB api_file_read,   dskw_read
     OSAPI_NSTUB api_file_delete, dskw_delete
-    OSAPI_NSTUB api_file_readbig, dskw_readbig
     OSAPI_NSTUB api_fdlg_open,   fdlg_open
 
 ; ...and the two-name case, which needs DI as well and so is written out

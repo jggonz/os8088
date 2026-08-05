@@ -42,8 +42,9 @@
 ;  * The canvas is 4bpp packed, high nibble = the left pixel, rows stored
 ;    BOTTOM-UP behind a 118-byte BMP header - i.e. the canvas IS a
 ;    BITMAPINFOHEADER DIB. Saving is therefore one OSAPI_FILE_WRITE of the
-;    canvas segment with no staging pass and no copy, which also keeps a
-;    full-size picture inside the file API's 64KB ceiling (SPEC.md 18.4).
+;    canvas claim with no staging pass and no copy - and since the write
+;    walks its source by SEGMENT (SPEC.md 18.4.1), one call whatever the
+;    picture's size.
 ;    Bottom-up costs nothing: pt_rowtab maps canvas y to a byte offset once
 ;    at startup and every access is a table lookup.
 ;  * Nothing ever repaints more of the screen than it changed. A brush
@@ -138,6 +139,15 @@
 ; and a magic-word claim record so two Paints could not silently share one
 ; canvas. All three are gone: OSAPI_MEM_CLAIM cannot hand the same paragraph
 ; to two instances, so two Paints now simply both run.
+PT_GIF_MAX_KB equ 64            ; the GIF encoder's transient claim, KB: its
+                                ; write cursor pt_gout is a 16-bit offset into
+                                ; one segment, so more would be unreachable
+PT_STAGE_MAX equ 192            ; the load's transient staging claim, KB. A
+                                ; picture bigger than this is not one this
+                                ; app can hold anyway - a full 640x480 4bpp
+                                ; canvas is 154KB with its header - and the
+                                ; cap keeps one Open from taking the whole
+                                ; heap on a big machine (SPEC.md 42.6)
 PT_SC_KB    equ 12                  ; scratch (the flood-fill stack), taken off
                                     ; the TOP of the block
 PT_CLIPMINP equ 256                 ; the clipboard's floor, in paragraphs. It
@@ -6149,11 +6159,12 @@ pt_repaint:
 ;
 ; The writer is the whole reason the canvas is laid out the way it is: rows
 ; bottom-up behind a 118-byte DIB header means "save" is one OSAPI_FILE_WRITE
-; of PT_CVSEG with no staging pass, and a full 448x280 picture is 62,838
-; bytes - inside the file API's 64KB ceiling (SPEC.md 18.4) with room to
-; spare. The reader needs a staging buffer for the file it is about to parse
-; and uses the clipboard segment for it, which is why Open empties the
-; clipboard.
+; of the canvas claim with no staging pass. It used to need the result to fit
+; 64KB as well - a full 448x280 picture is 62,838 bytes, which it just did -
+; and since SPEC.md 18.4.1 it does not: DX:CX is the count and the source
+; advances by segment, so a picture bigger than one segment saves whole. The
+; reader needs a staging buffer for the file it is about to parse and uses
+; the clipboard segment for it, which is why Open empties the clipboard.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -6272,14 +6283,15 @@ pt_save:
     call pt_free_lzw                ; ...and straight back
     jmp .out
 .bmp:
-    ; --- one write, so the whole file must fit the API's 64KB (SPEC.md 18.4)
+    ; --- one write, and no 64KB ceiling on it any more (SPEC.md 18.4.1). The
+    ; canvas is one contiguous claim with the DIB at offset 0, which is
+    ; exactly the segment run the write walks - so DX:AX goes straight into
+    ; DX:CX and a full-screen picture saves whole.
     mov ax, [pt_ch]
     mul word [pt_stride]            ; DX:AX = pixel bytes
     add ax, PT_BMPHDR
     adc dx, 0
-    or dx, dx
-    jnz .toobig
-    mov cx, ax
+    mov cx, ax                      ; DX:CX = the file's 32-bit length
     call pt_bmp_hdr                 ; re-stamp it: the live size is the truth
     mov ax, [pt_base]
     mov es, ax
@@ -6290,9 +6302,6 @@ pt_save:
     jmp short .out
 .wrote:
     mov byte [pt_trunc], 0          ; what is on disk now IS what we hold
-    jmp short .out
-.toobig:
-    mov word [pt_msgp], pt_s_toobig
 .out:
     pop es
     pop si
@@ -6317,60 +6326,35 @@ pt_load:
     push di
     push es
     mov word [pt_msgp], pt_s_opened
-    cmp word [pt_unseg], 0          ; the SEGMENT, not [pt_haveundo]: what this
-    je .scratch                     ; needs is a buffer it can ADDRESS, and the
-    mov ax, [pt_unseg]              ; file is staged in the UNDO image: it
-    mov [pt_gseg], ax               ; is the biggest single buffer we have, and
-    mov es, ax                      ; the decoder reads whichever this was
-    xor bx, bx                      ; a load invalidates undo anyway
-    mov ax, [pt_smaxp]              ; its capacity, in bytes - 32-bit now, so
-    xor dx, dx                      ; a canvas block bigger than 64KB is not
-    mov cx, 4                       ; truncated to describe itself
-.p2b:
-    shl ax, 1
-    rcl dx, 1
-    loop .p2b
-    mov cx, ax
-    jmp short .rd
-.scratch:
-    ; No undo image (SPEC.md 42), so the scratch area lends its flood-fill
-    ; stack - idle during a load, and re-initialised by the next fill. One
-    ; paragraph in, so the claim record survives, and the buffer still starts at
-    ; offset 0 of a segment, which is what both decoders assume.
-    mov ax, [pt_scseg]
-    inc ax
-    mov [pt_gseg], ax
-    mov es, ax
+    mov ax, PT_STAGE_MAX
+    call pt_stage                   ; ES:0000 = somewhere to put the file, and
+    jc .nostage                     ; DX:CX = how much of it there is
+    mov es, [pt_gseg]
     xor bx, bx
-    mov cx, PT_SC_KB * 1024 - 16
-    xor dx, dx
 .rd:
-    ; READBIG, not READ: the destination advances by SEGMENT (SPEC.md 18.4.1),
-    ; so a picture whose file runs past 64KB - which a full-screen canvas's
-    ; BMP does - loads in one call instead of being refused. ES is the base
-    ; segment and the buffer starts at ES:0000, which is what both decoders
-    ; already assume; DX:CX is the capacity, and the size comes back in DX:AX.
-    call OSAPI_FILE_READBIG
+    ; The destination advances by SEGMENT (SPEC.md 18.4.1), so a picture whose
+    ; file runs past 64KB - which a full-screen canvas's BMP does - loads in
+    ; one call instead of being refused. ES:BX is the base and the buffer
+    ; starts at ES:0000, which is what both decoders already assume; DX:CX is
+    ; the capacity, and the size comes back in DX:AX.
+    call OSAPI_FILE_READ
     jnc .got
     call pt_ferr
     jmp short .out
 .got:
-    ; DX:AX is the file's 32-bit size. Every check downstream is 16-bit, and
-    ; every one of them is an UPPER bound - "the pixel data must be inside
-    ; what we read" - so a file at or past 64KB saturates to 0xFFFF rather
-    ; than wrapping. That is conservative by construction: READBIG either
-    ; read the whole file or refused, so at >= 64KB every 16-bit offset the
-    ; decoders can form is inside the buffer. (The BMP decoder still refuses
-    ; more than 64KB of PIXELS on its own account - a separate ceiling, and
-    ; not one readbig was ever going to lift.)
+    mov [pt_fsz], ax                ; DX:AX is the file's 32-bit size, and the
+    mov [pt_fsz+2], dx              ; decoders read it from here
+    call pt_stagefit                ; ...and the staging claim gives back what
+                                    ; the file did not need, BEFORE pt_adopt
+                                    ; goes looking for a canvas and an undo
+                                    ; image. Nothing knows the size until the
+                                    ; read reports it, so the claim was for
+                                    ; the largest run the heap had
     or dx, dx
-    jz .sz16
-    mov ax, 0xFFFF
-    jmp short .szok
-.sz16:
+    jnz .sz32
     cmp ax, 64
     jb .bad
-.szok:
+.sz32:
     cmp word [es:0], 0x4D42         ; 'BM'
     je .bmp
     cmp word [es:0], 0x4947         ; 'GI'
@@ -6384,6 +6368,15 @@ pt_load:
     mov word [pt_msgp], pt_s_nofmt
     jmp short .out
 .gifin:
+    cmp word [pt_fsz+2], 0          ; the GIF decoder is 16-bit end to end and
+    jne .gifbig                     ; deliberately so (SPEC.md 42.6): every
+                                    ; offset into the stream is a word, and
+                                    ; pt_gdeblk flattens the sub-blocks with
+                                    ; one rep movsb inside one segment. A GIF
+                                    ; is COMPRESSED - the 448x280 test picture
+                                    ; is 1,285 bytes where its BMP is 62,838 -
+                                    ; so 64KB of GIF is a picture far past
+                                    ; PT_GDIM_MAX. Refuse it; do not truncate
     call pt_alloc_lzw               ; the tables, for the length of this file
     jnc .gif
     mov word [pt_msgp], pt_s_ng
@@ -6397,17 +6390,132 @@ pt_load:
     mov [pt_msgp], si
     jmp short .out
 .bmp:
-    call pt_bmp_in                  ; AX = the byte count read
+    call pt_bmp_in                  ; DX:AX = the byte count read
     jnc .out
     mov [pt_msgp], si               ; SI = why not
+    jmp short .out
+.nostage:
+    mov word [pt_msgp], pt_s_nostage
+    jmp short .out
+.gifbig:
+    mov word [pt_msgp], pt_s_gifbig
 .out:
-    pop es
-    pop di
+    call pt_unstage                 ; the staging buffer goes straight back:
+    pop es                          ; it is the biggest thing this app holds
+    pop di                          ; and it is wanted for one decode
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_stage - a transient buffer for a file being decoded or encoded
+; in:  AX = the most KB worth taking
+; out: CF=0 with [pt_gseg] set and DX:CX = its byte capacity, or CF=1;
+;      preserves every other register
+;
+; A TRANSIENT claim, sized from what the heap actually has (SPEC.md 42.6).
+; This used to borrow the undo image - "the biggest single buffer we have" -
+; and, when there was no undo image, the flood-fill stack: PT_SC_KB, twelve
+; kilobytes, which was the real ceiling on what Paint could open. Both were
+; written before there was an allocator to ask, and borrowing the undo image
+; is also why opening a picture threw away the undo history. Neither is a
+; reason any more.
+;
+; The claim is capped at PT_STAGE_MAX and floored at nothing: a machine that
+; can spare 8KB opens an 8KB picture, which is what the fallbacks used to be
+; for. Refusal is an ordinary path and says so.
+; -----------------------------------------------------------------------------
+pt_stage:
+    push ax
+    push bx
+    mov [pt_stgkb], ax              ; the caller's cap, across the AVAIL call
+    call OSAPI_MEM_AVAIL            ; AX = the largest free run, in KB
+    cmp ax, [pt_stgkb]
+    jbe .kb
+    mov ax, [pt_stgkb]
+.kb:
+    or ax, ax
+    jz .no
+    mov [pt_stgkb], ax
+    call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base segment
+    jc .no
+    mov [pt_gseg], dx
+    mov ax, [pt_stgkb]              ; DX:CX = KB * 1024, 32-bit
+    mov dx, ax
+    mov cl, 10
+    shl ax, cl
+    mov cl, 6
+    shr dx, cl
+    mov cx, ax
+    clc
+    jmp short .out
+.no:
+    mov word [pt_gseg], 0
+    stc
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_stagefit - shrink the staging claim to the bytes actually read
+; in:  [pt_fsz] = the 32-bit size
+; out: nothing (all registers and the flags preserved)
+;
+; A shrink always succeeds in place (SPEC.md 50.3.1), so this cannot fail and
+; cannot move the buffer. It matters because pt_adopt runs next and wants a
+; canvas claim and an undo image, and until this call the staging is holding
+; the largest free run the heap had.
+; -----------------------------------------------------------------------------
+pt_stagefit:
+    pushf
+    push ax
+    push cx
+    push dx
+    mov ax, [pt_fsz]
+    mov dx, [pt_fsz+2]
+    add ax, 1023                    ; -> whole KB, 32-bit
+    adc dx, 0
+    mov cl, 10
+    shr ax, cl
+    mov cl, 6
+    shl dx, cl
+    or ax, dx                       ; AX = KB (a file this big cannot exist on
+    or ax, ax                       ; the media, so this cannot overflow)
+    jnz .kb
+    inc ax                          ; an empty claim is not a claim
+.kb:
+    mov dx, [pt_gseg]
+    call OSAPI_MEM_REGROW
+    jc .out
+    mov [pt_gseg], dx
+.out:
+    pop dx
+    pop cx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_unstage - hand the staging buffer back
+; out: nothing (all registers and the flags preserved)
+; -----------------------------------------------------------------------------
+pt_unstage:
+    pushf
+    push ax
+    push dx
+    mov dx, [pt_gseg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+    mov word [pt_gseg], 0
+.out:
+    pop dx
+    pop ax
+    popf
     ret
 
 ; pt_ferr - a FERR_* code in AX into [pt_msgp]
@@ -6429,8 +6537,10 @@ pt_ferr:
 
 ; -----------------------------------------------------------------------------
 ; pt_bmp_in - decode the staged BMP into the canvas
-; in:  ES = PT_CBSEG, AX = bytes read; gfx lock held
+; in:  ES = the staging segment, [pt_fsz] = the 32-bit byte count read;
+;      gfx lock held
 ; out: CF=0 done, CF=1 with SI = the reason; preserves all other registers
+;      except ES, which the row loop re-points per row (pt_srowset)
 ;
 ; Everything about the header is checked before anything is believed: the
 ; magic, both halves of every dword that must be zero, the bit depth, the
@@ -6449,11 +6559,10 @@ pt_bmp_in:
     push cx
     push dx
     push di
-    mov [pt_fsz], ax
-    mov ax, [es:10]
-    mov [pt_boff], ax               ; bfOffBits...
-    cmp word [es:12], 0             ; ...which must be a 16-bit quantity
-    jne .bad
+    mov ax, [es:10]                 ; bfOffBits, both halves: a picture past
+    mov [pt_boff], ax               ; the 64KB horizon has pixel data past it
+    mov ax, [es:12]                 ; too, and this is where that used to be
+    mov [pt_boff+2], ax             ; refused (SPEC.md 42.6)
     cmp word [es:16], 0
     jne .bad
     mov ax, [es:14]                 ; biSize: BITMAPINFOHEADER or later
@@ -6510,15 +6619,22 @@ pt_bmp_in:
     shl ax, 1
     shl ax, 1
     mov [pt_bstr], ax
-    ; --- and the pixel data must be inside what we read -------------------
+    ; --- and the pixel data must be inside what we read, in 32 bits -------
+    ; rows x stride is the number this used to give up on: 448 x 326 is
+    ; 73,024 and every picture worth the resizable canvas passes 65,535. It
+    ; is a dword here, added to a dword bfOffBits and compared against the
+    ; dword the read reported (SPEC.md 42.6).
     mov ax, [pt_bh]
-    mul word [pt_bstr]
-    or dx, dx
-    jnz .big
+    mul word [pt_bstr]              ; DX:AX = the pixel bytes
     add ax, [pt_boff]
-    jc .big
+    adc dx, [pt_boff+2]
+    jc .big                         ; past 4GB: a hostile header, not a file
+    cmp dx, [pt_fsz+2]
+    ja .big
+    jb .fits
     cmp ax, [pt_fsz]
     ja .big
+.fits:
     ; --- the palette, mapped to our sixteen -------------------------------
     cmp word [pt_bpp], 24
     je .size
@@ -6541,10 +6657,12 @@ pt_bmp_in:
     dec ax
     sub ax, di
 .top:
-    mul word [pt_bstr]
+    mul word [pt_bstr]              ; DX:AX = the row's 32-bit byte offset...
     add ax, [pt_boff]
-    mov [pt_srow], ax
-    call pt_bmp_row                 ; -> pt_line, one colour index per column
+    adc dx, [pt_boff+2]
+    call pt_srowset                 ; ...as a (segment, offset) pair, which is
+    call pt_bmp_row                 ; how the CANVAS has been addressed since
+                                    ; it outgrew a segment (pt_rowseg)
     call pt_line_put                ; -> the canvas row DI
     inc di
     jmp short .row
@@ -6693,9 +6811,42 @@ pt_map16:
     ret
 
 ; -----------------------------------------------------------------------------
+; pt_srowset - point ES:[pt_srow] at the staged file's byte DX:AX
+; in:  DX:AX = a 32-bit offset into the staging buffer
+; out: ES = the segment, [pt_srow] = an offset of 0..15; clobbers ES and
+;      [pt_srow] only
+;
+; dskw_norm's arithmetic (SPEC.md 18.4.1) inside an app, and the same reason:
+; the paragraph part of the offset goes into the segment, so what is left is
+; small enough that nothing added to it can carry. A row is at most
+; [pt_cols] x 3 bytes wide and [pt_cols] is the canvas's width, so the
+; per-column offsets pt_bmp_row builds on top of this cannot reach a segment
+; boundary from an offset under 16.
+; -----------------------------------------------------------------------------
+pt_srowset:
+    push ax
+    push cx
+    push dx
+    mov cx, ax
+    and cx, 15                      ; the offset that survives...
+    mov [pt_srow], cx
+    mov cl, 4                       ; ...and the paragraphs that do not
+    shr ax, cl
+    mov cl, 12
+    shl dx, cl                      ; the high word's paragraphs are its low
+    or ax, dx                       ; four bits shifted up: 20 bits of
+    add ax, [pt_gseg]               ; address is 16 bits of paragraph
+    mov es, ax
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; pt_bmp_row - one source row into pt_line as colour indices
-; in:  ES = PT_CBSEG, [pt_srow], [pt_cols], [pt_bpp]
-; out: pt_line filled; preserves all registers
+; in:  ES:[pt_srow] = the row (pt_srowset), [pt_cols], [pt_bpp]
+; out: pt_line filled; preserves all registers except ES, which the caller
+;      re-points per row anyway
 ;
 ; A line buffer rather than a direct canvas write, because the source is in ES
 ; and the destination is in another segment entirely; DS has to stay on the
@@ -6885,8 +7036,13 @@ pt_adopt:
     call pt_layout
     call pt_bmp_hdr
     call pt_undo_new
-    mov byte [pt_undo_ok], 0        ; the staging buffer IS the undo image, and
-    mov word [pt_cbw], 0            ; the clipboard is the codec's table space
+    mov byte [pt_undo_ok], 0        ; a picture just arrived: there is nothing
+                                    ; to go BACK to. The clipboard used to be
+                                    ; emptied here too, because the codec's
+                                    ; tables lived in it and the file was
+                                    ; staged in the undo image; both have had
+                                    ; their own claims for a while and the
+                                    ; line outlived the reason (SPEC.md 42.6)
     mov ax, [pt_pw]                 ; columns we will actually take
     cmp ax, [pt_cw]
     jbe .cols
@@ -7018,8 +7174,8 @@ pt_gif_in:
     push cx
     push dx
     push di
-    mov [pt_fsz], ax
-    cmp ax, 14
+    mov ax, [pt_fsz]                ; the caller set it, both words, and has
+    cmp ax, 14                      ; already refused a high one (SPEC.md 42.6)
     jb .bad
     cmp byte [es:2], 'F'
     jne .bad
@@ -8046,29 +8202,24 @@ pt_gif_out:
     ; anything makes an undo image that is not conventionally addressable,
     ; testing the flag puts ES back at 0000 and this fault returns - which is
     ; not hypothetical: it is what the paragraph above is about.
-    mov ax, [pt_unseg]
-    mov cx, [pt_smaxp]
-    cmp word [pt_unseg], 0          ; the SEGMENT, not [pt_haveundo] - see the
-    jne .havestage                  ; note above: this is the test that stops
-    mov ax, [pt_scseg]              ; it encoding at 0000:0000. One paragraph
-    inc ax                          ; claim record survives and the buffer
-    mov cx, PT_SC_KB * 64 - 1       ; still starts at offset 0 of a segment
-.havestage:
-    mov [pt_gseg], ax
-    mov ax, cx
-    cmp ax, 4095
-    jae .big
-    mov cl, 4
-    shl ax, cl
-    jmp short .cap
-.big:
-    mov ax, 65520
+    mov ax, PT_GIF_MAX_KB           ; a TRANSIENT claim, like the load's
+    call pt_stage                   ; (SPEC.md 42.6). This used to build the
+    jc .nostage                     ; GIF in the undo image - and, with no
+                                    ; undo image, in the twelve kilobytes of
+                                    ; the flood-fill stack - which is why
+                                    ; saving a GIF threw away the undo history
+                                    ; and why a small machine could not save
+                                    ; one at all
+    or dx, dx                       ; DX:CX = the bytes claimed, capped at
+    jnz .full                       ; what a 16-bit write cursor can address
+    cmp cx, 65520
+    jbe .cap
+.full:
+    mov cx, 65520
 .cap:
-    mov [pt_gcap], ax
+    mov [pt_gcap], cx
     mov word [pt_gout], 0
     mov byte [pt_govf], 0
-    mov byte [pt_undo_ok], 0        ; the GIF is built in the undo image, and
-    mov word [pt_cbw], 0            ; its tables are in the clipboard
     call pt_ghdr
     call pt_genc
     xor al, al                      ; the LZW block terminator...
@@ -8076,8 +8227,9 @@ pt_gif_out:
     mov al, 0x3B                    ; ...and the trailer
     call pt_gwr
     cmp byte [pt_govf], 0
-    jne .toobig
-    mov cx, [pt_gout]
+    jne .toobig                     ; the ENCODER's own ceiling, not the file
+    mov cx, [pt_gout]               ; API's: pt_gout is a 16-bit offset into
+    xor dx, dx                      ; one staging segment (SPEC.md 18.4.1)
     mov ax, [pt_gseg]
     mov es, ax
     xor bx, bx
@@ -8091,7 +8243,11 @@ pt_gif_out:
     jmp short .out
 .toobig:
     mov word [pt_msgp], pt_s_toobig
+    jmp short .out
+.nostage:
+    mov word [pt_msgp], pt_s_nostage
 .out:
+    call pt_unstage
     pop es
     pop di
     pop si
@@ -8205,7 +8361,9 @@ pt_s_nofmt:   db 'Only BMP and GIF are supported', 0
 pt_s_badpic:  db 'Not a picture we can read', 0
 pt_s_nocomp:  db 'Compressed BMP not supported', 0
 pt_s_nodepth: db 'Need a 1, 4, 8 or 24-bit BMP', 0
-pt_s_toobig:  db 'Too big to save (64KB limit)', 0
+pt_s_toobig:  db 'GIF too big to save - try Bmp', 0
+pt_s_nostage: db 'Not enough memory to open a file', 0
+pt_s_gifbig:  db 'GIF larger than 64KB', 0
 pt_s_trunc:   db 'Cropped on load - use Save As', 0
 pt_s_bigsel:  db 'Selection too big to copy', 0
 
@@ -8456,14 +8614,20 @@ pt_ic_text:
     PTWORD pt_mbest                 ; pt_map16's best distance so far
 
     ; the BMP reader
-    PTWORD pt_fsz                   ; bytes actually read
-    PTWORD pt_boff                  ; bfOffBits
+    PTWORD pt_fsz                   ; bytes actually read, low word...
+    PTWORD pt_fszh                  ; ...and high ([pt_fsz+2], SPEC.md 42.6)
+    PTWORD pt_boff                  ; bfOffBits, low word...
+    PTWORD pt_boffh                 ; ...and high ([pt_boff+2])
     PTWORD pt_bhsz                  ; biSize
     PTWORD pt_bw                    ; biWidth
     PTWORD pt_bh                    ; |biHeight|
     PTWORD pt_bpp                   ; biBitCount
     PTWORD pt_bstr                  ; source row stride
-    PTWORD pt_srow                  ; the source row being read
+    PTWORD pt_srow                  ; the source row being read: an offset of
+                                    ; 0..15, the segment part having gone into
+                                    ; ES (pt_srowset)
+    PTWORD pt_stgkb                 ; pt_stage: the transient staging claim's
+                                    ; size in KB, across the claim call
     PTWORD pt_cols                  ; columns we take from it
 
     ; the canvas, its geometry and the memory that funds it

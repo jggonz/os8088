@@ -26,12 +26,18 @@ SLOT = re.compile(r"(?:slot|API) (0x0[0-9A-Fa-f]{3})")   # both spellings: the
 # Plus the reserved-range note in the preamble, which names a span, not a
 # heading.
 RULE_REFS = {"1.6", "1.7", "29.2.8", "45", "49"}
-# Historical slot numbers prose may still name. Nothing is held empty any more
-# (SPEC.md 20.3): the five cells that were are either filled - 0x00F8/0x0100
-# went to the sound driver - or gone, closed up when the fork stopped keeping
-# main's numbers free. Left as an empty set rather than deleted, because the
-# next retired-but-still-documented slot wants exactly this.
-HELD = set()
+# Slot numbers prose may still name that apps/os88api.inc deliberately does
+# not define. Nothing is held EMPTY any more (SPEC.md 20.3) - the five cells
+# that were are either filled (0x00F8/0x0100 went to the sound driver) or
+# gone, closed up when the fork stopped keeping main's numbers free.
+#
+# 0x01E8 is the other case, and the one this set was kept for: RETIRED
+# (SPEC.md 18.4.1/20.8). It was OSAPI_FILE_READBIG; OSAPI_FILE_READ absorbed
+# it, the cell still exists and still answers CF=1 so nothing above it had to
+# move, and the SDK publishes no name for it - so a package that still calls
+# it fails to assemble. Prose has to keep naming the number, because the
+# number is the whole reason the cell is still there.
+HELD = {"0x01e8"}
 # docs/PORTING.md describes a package written against an OLDER API table as
 # well as this one, so a section number in it may name something that has since
 # moved. It cites none today - MAIN_ONLY is empty and the mechanism is kept for

@@ -3303,8 +3303,8 @@ the volume.
 
 | symbol | contract |
 |--------|-----------|
-| `dskw_write` | in: SI → NUL-terminated 8.3 name (DS), ES:BX → the bytes, CX = byte count (0 = create an empty file). Creates or **replaces** the file. Out: CF=0, AX=0; CF=1, AX = `FERR_*`. Preserves all other registers, ES included. |
-| `dskw_read` | in: SI → name, ES:BX → destination, CX = destination capacity in bytes. Out: CF=0, AX = bytes read (= the file's size); CF=1, AX = `FERR_*` — `FERR_BIG` when the file does not fit CX, and **nothing is written** to the buffer in that case. |
+| `dskw_write` | in: SI → NUL-terminated 8.3 name (DS), ES:BX → the bytes, DX:CX = byte count (32-bit, DX high; 0 = create an empty file). Creates or **replaces** the file. Out: CF=0, AX=0; CF=1, AX = `FERR_*` — `FERR_BIG` for a count ≥ 32MB, which no volume this kernel mounts can hold. Preserves all other registers, ES and DX included. |
+| `dskw_read` | in: SI → name, ES:BX → destination, DX:CX = its capacity in bytes (32-bit, DX high). Out: CF=0, **DX:AX** = bytes read (= the file's 32-bit size); CF=1, AX = `FERR_*` — `FERR_BIG` when the file does not fit DX:CX, decided from the directory entry before any data I/O, so **nothing is written** to the buffer in that case. DX is an output: it does not survive the call. |
 | `dskw_delete` | in: SI → name. Frees the chain and marks the directory entry deleted (0E5h). Out: CF=0, AX=0; CF=1, AX = `FERR_*`. |
 | `dskw_rename` | in: SI → old name, DI → new name. Same directory, name bytes only — chain, size, attribute and timestamps are untouched. Refuses `FERR_EXIST` if the new name already exists. Its protection mask is **0x0F, not 0x1F** (see below), so a *subdirectory* may be renamed. Out: CF/AX as above. |
 | `dskw_dfree` | out: CF=0, DX:AX = free bytes (32-bit), BX = **sectors** per cluster (not bytes — `spc`×512 overflows 16 bits at the §18.2-legal `spc` = 128); CF=1, AX = `FERR_*`. Counts free entries across the resident FAT snapshot; no disk I/O. |
@@ -3476,42 +3476,80 @@ emptying a subtree is the user's job one level at a time — no append or seek, 
 truncate-in-place, no FAT32, no volume-label editing, no timestamp
 preservation across a rewrite, and no attempt to defragment: chains are
 allocated first-fit from the rover, so a full disk fragments exactly the
-way DOS's did. Files are capped at 65,535 bytes by the 16-bit size and
-buffer contracts (`FERR_BIG`), which is far below the 64KB the near model
-could address anyway.
+way DOS's did. What files are **not** capped at is 64KB — see §18.4.1.
 
-### 18.4.1 `dskw_readbig` — the one file op with no 64KB ceiling
+### 18.4.1 One read, one write, and no 64KB ceiling on either
 
-Ported from `main` at `main`'s slot, 0x01E8. `dskw_read`'s sibling: same
-gate, same current-directory name resolution, same chain walk — but the
-destination **advances by segment** (ES += 32 per 512-byte sector, the offset
-held at 0), so the 16-bit offset limit never binds and `dsk_xfer`'s 8237
-page-straddle staging (§18.1) keeps working per sector unchanged.
+There were three routines here and there are two. `dskw_read` and
+`dskw_write` are the whole read/write surface, for the kernel and for
+packages alike, and neither has a size limit that a FAT floppy does not
+already impose.
 
 ```
-in   SI -> NUL 8.3 name, ES = destination BASE segment (buffer at ES:0000),
-     DX:CX = capacity in bytes (32-bit, DX high)
-out  CF=0, DX:AX = bytes read (the file's 32-bit size);
-     CF=1, AX = FERR_* - FERR_BIG decided from the directory entry's 32-bit
-     size BEFORE any data I/O, destination untouched
+dskw_write  in   SI -> NUL 8.3 name, ES:BX -> the bytes, DX:CX = the byte
+                 count (32-bit, DX high; 0 = an empty file)
+            out  CF=0, AX = 0; CF=1, AX = FERR_*. DX preserved.
+
+dskw_read   in   SI -> NUL 8.3 name, ES:BX -> the destination, DX:CX = its
+                 capacity in bytes (32-bit, DX high)
+            out  CF=0, DX:AX = bytes read (the file's 32-bit size);
+                 CF=1, AX = FERR_* - FERR_BIG decided from the directory
+                 entry's 32-bit size BEFORE any data I/O, destination
+                 untouched. DX does not survive the call.
 ```
 
-**It allocates nothing.** There is no staging buffer and no growth in the
-kernel's span: the caller supplies the destination, which in practice is an
-`OSAPI_MEM_CLAIM` grant (§50.3), because a package's own region caps at one
-segment and this exists precisely for data that does not fit there. Only the
-partial final sector stages, through the same `dsk_secbuf` `dskw_rdata` uses.
+**The mechanism is one routine, `dskw_norm`, called once at the top of each
+pipeline.** It folds the whole paragraph part of BX into ES, leaving an
+offset of 0..15; the transfer loop then holds that offset and advances the
+**segment** by 32 paragraphs per 512-byte sector. An offset under 16 plus
+512 can never carry, so the 16-bit offset horizon is unreachable by
+construction, and `dsk_xfer`'s per-sector int 13h granularity (§18.1) is
+untouched — the multi-sector call this replaced was already a software loop
+inside `dsk_xfer`, so nothing got slower.
 
-A size field whose sector count would not fit 16 bits (>= 32MB) cannot be a
-real chain on any volume this kernel mounts (TotSec16 <= 65,535), so it is
-refused as FERR_IO up front: a wrapped count could otherwise make the chain
-walk stop early and report success over a hostile entry (§18 — every byte off
-the disk is hostile input).
+**That is why the destination stays `ES:BX` rather than becoming a base
+segment.** A base-segment contract would have forced every caller with a
+small fixed buffer to find a segment run for it, and the kernel has one of
+those it must not lose: `drv_cfg_load` reads `SYSTEM.CFG` (§51.5) into 64
+bytes of `.bss` **at boot**, where a heap claim is something that can be
+refused. The superset costs about ten bytes of code and removes the entire
+16-bit read path, so it is smaller than what it replaced.
 
-`tests/filetest` check 01 covers it, against a 96KB `BIG.DAT` whose byte at
-offset i is `i >> 9` — one distinct value per sector, so a destination that
+**A hostile size is still refused up front.** A size field whose sector
+count would not fit 16 bits (≥ 32MB) cannot be a real chain on any volume
+this kernel mounts (TotSec16 ≤ 65,535): on a read that is `FERR_IO`, because
+a wrapped count could otherwise make the chain walk stop early and report
+success over a hostile entry (§18 — every byte off the disk is hostile
+input); on a write it is `FERR_BIG`, since the caller asked for something no
+volume could hold. Neither is reachable from a legal floppy.
+
+**What went, and what it cost.** `dskw_readbig` and its two private bodies
+are gone, and so is the "the buffer must not wrap its segment" argument
+check that both pipelines used to open with — a buffer that spans segments
+is now the *normal* case, not an error. **API slot 0x01E8 is retired but not
+reused** (§20.8 rule 4): the cell still exists and answers CF=1 with
+`FERR_NAME`, so every slot above it keeps its number, and `apps/os88api.inc`
+publishes no `OSAPI_FILE_READBIG`, so a package source that still names it
+fails to assemble instead of silently calling a routine whose BX it never
+set. Slots 0x0120 and 0x0128 **changed contract**, which is the one thing
+§20.8 otherwise forbids; it is a deliberate, recorded exception, taken while
+every package that calls them is still in this tree and rebuilt by `make`.
+
+**It allocates nothing**, in either direction. There is no staging buffer
+and no growth in the kernel's span: the caller supplies the memory, which
+for anything large is an `OSAPI_MEM_CLAIM` grant (§50.3), because a
+package's own region caps at one segment. Only a partial final sector
+stages, through the same `dsk_secbuf` both directions already used.
+
+`tests/filetest` checks 2..5 cover it, against a 96KB `BIG.DAT` whose byte
+at offset i is `i >> 9` — one distinct value per sector, so a buffer that
 failed to advance reads a *different* byte rather than a plausible one. The
-probe is offset 0x11111, past the horizon every other file op stops at.
+probe is offset 0x11111, past the horizon the API used to stop at. Check 2
+reads it into a claim at offset **0x33** — neither zero nor a paragraph
+multiple, so `dskw_norm`'s arithmetic is what the probe is testing; check 3
+writes those 96KB straight back out from the same `ES:BX`; check 4 reads the
+copy back at offset 0; check 5 deletes it, so §18.4's free-space equality
+check still closes over the whole run.
 
 ### 18.5 `dskw_mkdir` — creating a subdirectory
 
@@ -4310,7 +4348,7 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
 
 0x01B0 wm_geom         0x01D8 gfx_blit4         0x0200 mem_claim      (X)
 0x01B8 cm_alloc    (X) 0x01E0 wm_about_set      0x0208 mem_free       (X)
-0x01C0 cm_free     (X) 0x01E8 dskw_readbig  (N) 0x0210 mem_avail
+0x01C0 cm_free     (X) 0x01E8 (retired)         0x0210 mem_avail
 0x01C8 cm_caps         0x01F0 osapi_gfx_dbuf    0x0218 osapi_font_glyphs
 0x01D0 wm_resize       0x01F8 gfx_scroll        0x0220 wm_onsize
                                                 0x0228 osapi_file_here
@@ -4376,17 +4414,27 @@ Slot-specific contracts that are not simply their target routine's:
                          content repaint must end with this call. A no-op
                          unless BX is the frontmost visible WF_SIZABLE
                          window, so it is always safe to call.
-0x0120 dskw_write        in SI = NUL 8.3 name, ES:BX = bytes, CX = count
-                         (0 = empty file). Creates or replaces. out CF=0
-                         AX=0, else CF=1 AX = FERR_*.
-0x0128 dskw_read         in SI = name, ES:BX = buffer, CX = capacity; out
-                         CF=0 AX = bytes read, else CF=1 AX = FERR_*
-                         (FERR_BIG leaves the buffer untouched).
+0x0120 dskw_write        in SI = NUL 8.3 name, ES:BX = bytes, DX:CX = the
+                         count (0 = empty file). Creates or replaces. out
+                         CF=0 AX=0, else CF=1 AX = FERR_*. DX preserved.
+0x0128 dskw_read         in SI = name, ES:BX = buffer, DX:CX = its capacity;
+                         out CF=0 and DX:AX = bytes read, else CF=1 AX =
+                         FERR_* (FERR_BIG leaves the buffer untouched). DX
+                         is an OUTPUT and does not survive the call.
+                         Neither slot has a 64KB ceiling: the buffer is
+                         normalised to an offset under 16 and the transfer
+                         walks the segment (§18.4.1). The pair is the whole
+                         read/write surface — 0x01E8 was the big-file
+                         sibling and is retired, below.
 0x0130 dskw_delete       in SI = name; out CF=0 AX=0, else CF=1 AX=FERR_*.
 0x0138 dskw_rename       in SI = old name, DI = new name; out as delete.
 0x0140 dskw_dfree        out CF=0, DX:AX = free bytes, BX = sectors per
                          cluster; CF=1 AX = FERR_*. No disk I/O — the
                          resident FAT snapshot answers it.
+0x01E8 (retired)         was dskw_readbig; dskw_read absorbed it (§18.4.1).
+                         The cell answers CF=1 with AX = FERR_NAME and the
+                         SDK publishes no name for it, so nothing above it
+                         renumbered and nothing can call it by accident.
 0x0148 menu_win_set      in BX = win ptr, SI = app menu set (0 = none).
                          Stores [BX+W_MENUS] and relayouts the bar when BX
                          is active. Draws nothing, takes no lock, and
@@ -4752,6 +4800,16 @@ without anyone noticing it was a rule.
    therefore possible but expensive and deliberate: it invalidates every `.o88`
    at once, and it is only survivable because every package is in this tree and
    `make` rebuilds all of them. It has happened three times.
+
+   **The unification of §18.4.1 is the one recorded exception, and it is an
+   exception to the first sentence, not to the rest of the rule.** Slots
+   0x0120 and 0x0128 kept their numbers and *changed* their register
+   contracts: CX became DX:CX, and `dskw_read`'s answer became DX:AX. That is
+   exactly what this rule forbids, and it was taken deliberately, before
+   anything outside this tree can have been built against them — the whole
+   point of doing it now rather than later. The retired third slot, 0x01E8,
+   obeys the rule as written: a refusing stub, not a reuse. Nothing else may
+   read this as licence; the next contract change is a new number.
 5. **No `retf` from a package proc the kernel calls** — the inverse of the same
    rule on `main`, and the one place porting a package is not mechanical. The
    kernel reaches a package through the three-byte `call bp` / `retf`
@@ -5640,8 +5698,12 @@ without a modifier key it has no way to report.
 
 ### 22.5 A copy is a stream, so size is not a limit
 
-`dskw_write` takes a 16-bit length and always will. A copy is therefore a
-**truncating create followed by a run of appends**: `fcp_xfer` opens the
+The copy **buffer** is a heap claim of whatever the machine could spare, and
+a file may be larger than it. (`dskw_write` itself has no size limit — that
+went in §18.4.1 — but a single call still needs the whole file in memory at
+once, which is the thing a floppy-sized copy cannot promise.) A copy is
+therefore a **truncating create followed by a run of appends**: `fcp_xfer`
+opens the
 source with `fcp_rdopen`, writes a zero-length destination through the
 ordinary `dskw_write` (so the replace, the free-slot hunt and the old
 chain's release all keep their §18.4 discipline), then loops read-chunk /
@@ -6008,11 +6070,9 @@ scan codes of Left, Right, Up, Down, Home, End and Delete.
 
 Two things got simpler in the move. The built-in reached its state through
 `inst_of_win` → `I_SPTR` because every instance shared one pool; a package
-addresses its own bss directly (`np_len` word + `np_buf` 512 bytes + three
-paint scratch words + the §27.1 save/load state = `NP_BSS_TOTAL`). And the
-cap is gone: the pool that fixed it at 2 no longer exists, so instances are
-bounded only by the region pool and the instance table like any other
-package.
+addresses its own bss directly. And the cap is gone: the pool that fixed it
+at 2 no longer exists, so instances are bounded only by the heap and the
+instance table like any other package.
 
 ### 27.1 Save and load — the file API's first caller
 
@@ -6049,10 +6109,12 @@ it; two Note Pads on two documents are now the ordinary case.
 filesystem at all: the buffer stores a bare 13 on Enter (§14), the file
 gets `CR LF`, and a load folds `CR LF` — and a lone `LF` — back to 13. A
 note written here opens correctly in Windows Notepad, and one written there
-opens correctly here. Translation runs through `np_io`, a 2×`NP_CAP`
-staging buffer in the package's own bss, so neither direction can overrun
-`np_buf`: a load stops folding at `NP_CAP` characters and reports the
-truncation.
+opens correctly here. A load folds **in place** inside the document claim
+(§27.3) and needs no staging at all; a save expands, so it takes a second,
+transient claim sized at 2 × `[np_len]` — the worst case, every character a
+newline — and hands it back the moment the write returns. A refused claim is
+an ordinary path: the toast says "No memory" and the note is still there,
+still editable, and still saveable when something gives memory back.
 
 **Feedback is a toast**: `np_msg` (a near pointer, 0 = none) is drawn by
 `np_paint` as a black-framed white box at the content's top-right — "Saved
@@ -6411,6 +6473,55 @@ window** on the seeded build and the full-walk build — except for one cell,
 where the full-walk build left a **stale caret** overdrawing a character and
 the seeded one did not. The incremental screen is also pixel-identical to a
 from-scratch `W_PAINT` repaint of the same state.
+
+### 27.6 The note is a heap claim, and it grows
+
+The **text is not in this package's bss**. `np_entry` claims `NP_KB0` (1KB)
+before it creates the window and puts the document at `[np_dseg]:0000`;
+`[np_cap]` is its capacity in bytes. A region is image + bss capped at
+`APP_MAX_SIZE` (§20.1) and is fixed at load time, so anything whose size only
+the *user* knows belongs in the heap (§50.3) — which is the whole point of
+`OSAPI_MEM_CLAIM` existing, and what a 512-byte `np_buf` was working around.
+
+Four movements, and every one of them goes through `np_resize`, which is
+`OSAPI_MEM_REGROW` and **never** claim-copy-free (§50.3.1: a regrow extends
+in place when the paragraphs above it are free, so it needs the *difference*
+rather than old + new at once, and when it must move it brings the bytes):
+
+- **`np_room`, the growth point and the only one.** A keystroke that would
+  fill the claim asks for another `NP_GROWKB` first. A refusal — the heap's
+  or the ceiling's — drops the keystroke, which is exactly what a full note
+  did when it could not grow at all.
+- **A load sizes the claim to the file.** `np_load` opens it to `NP_MAXKB`
+  *before* the read, because nothing knows the file's size until the read
+  reports it and there is no stat in the file API; the file then lands in the
+  document buffer itself and the CR/LF fold runs **in place**, which is safe
+  because folding only ever drops bytes so the write index can never outrun
+  the read index. `np_fitclaim` gives the rest back afterwards — on the
+  failing path too, so a refused load does not leave 8KB held for a note that
+  did not change. There is no load staging buffer at all.
+- **`File > New` shrinks back to `NP_KB0`.** A shrink always succeeds in
+  place, so this cannot fail.
+- **A save takes a second, transient claim**, sized from `[np_len]` and held
+  only across the write, because expanding CR to CR LF *grows* and the
+  document claim is sized for the document. A refusal is an ordinary path:
+  the note is still there and still editable.
+
+**`NP_MAXKB` is 8, and it is not a memory limit — it is what the window can
+show.** Note Pad does not scroll: `np_walk` lays out from `[np_ty]`, which
+`np_bounds` always sets to the content's top, so text past the last visible
+row can be typed and can never be read back. The most any window can display
+is `NP_MAXROWS` rows of `NP_MAXCOL` cells — 60 × 91, about 5,400 characters
+on a fullscreen VGA frame and fewer on anything smaller — so 8,192 is already
+past the point of diminishing returns, and every byte beyond it also costs a
+`np_walk` pass that visits it on *every* paint. **Lifting the ceiling wants
+scrolling first**, and that is the change this section is waiting on.
+
+One behaviour changed with the ceiling. A file larger than the claim used to
+fill the buffer and say "Truncated"; it is now `FERR_BIG` and "Too big", and
+the note is left alone. That is the honest answer and the old one was a trap:
+a half-loaded note whose next save wrote the truncation back over the whole
+file.
 
 ## 28. taskmgr.inc — the Task Manager window
 
@@ -9868,9 +9979,15 @@ allow, from 32x16 up, and everything else follows from that:
 - **The canvas is still a BMP.** 4bpp packed, high nibble = left pixel, rows
   **bottom-up behind a 118-byte DIB header**, stride = the BMP stride
   (ceil(w/2) rounded up to 4). Saving is one `OSAPI_FILE_WRITE` of the canvas
-  base with no staging pass — *provided the whole file fits 64KB*, which is
-  `dskw_write`'s ceiling (§18.4). A larger canvas can be edited but not
-  saved, and Paint says so rather than writing a truncated file.
+  base with no staging pass, **whatever the picture's size**: the write walks
+  its source by segment (§18.4.1) and the canvas is one contiguous claim, so
+  DX:AX goes straight into DX:CX. It used to need the file to fit 64KB as
+  well, and a larger canvas could be edited but not saved; that refusal and
+  its notice are gone.
+
+  The decoder followed (§42.6), so a picture Paint saves is one Paint can
+  re-open. The GIF encoder's own ceiling stays, and it is not the file
+  API's.
 - **The canvas base is a heap claim.** `pt_geom` asks `OSAPI_MEM_AVAIL` what
   the largest free run is, caps it at what the app can use, and takes it with
   `OSAPI_MEM_CLAIM` (§50.3); `[pt_base]` is whatever segment came back. That
@@ -10097,6 +10214,57 @@ the sweep moved with it). So an extra window can never outlive the segment its
 callback procs live in — it just makes a poor citizen of the ones that manage
 it by hand. A card is a flag and some pixels: it cannot outlive the instance
 because it never existed apart from it.
+
+### 42.6 Opening a big picture, and the ceilings that were not the file API's
+
+§18.4.1 lifted the file API's 64KB ceiling and §42's save with it. Three of
+Paint's own ceilings were left, all of them written before the kernel had an
+allocator to ask, and two of them have gone.
+
+**The staging buffer is a claim now, not a borrowed one.** A file being
+decoded used to be read into the **undo image** — "the biggest single buffer
+we have" — and, when there was no undo image, into the flood-fill stack:
+`PT_SC_KB`, twelve kilobytes, which was the real limit on what Paint could
+open. Borrowing the undo image is also why opening a picture threw the undo
+history away, and why the code that followed emptied the clipboard "because
+the codec's tables live in it" — a line that had outlived its reason by two
+refactors, the LZW tables having had their own claim for a while.
+`pt_stage`/`pt_unstage` take a transient claim sized from `OSAPI_MEM_AVAIL`
+and capped at `PT_STAGE_MAX`, and `pt_stagefit` shrinks it to the bytes the
+read actually reported **before** `pt_adopt` goes looking for a canvas and an
+undo image — nothing knows the file's size until the read reports it, so the
+claim has to be for the largest run the heap had. The GIF *encoder* takes the
+same claim, capped at `PT_GIF_MAX_KB`, instead of building the file in the
+undo image.
+
+**The BMP decoder is 32-bit.** `biHeight × stride` is the number it used to
+give up on: 448 × 326 is 73,024 and every picture worth a resizable canvas
+passes 65,535. It is a dword now, added to a dword `bfOffBits` — a picture
+past the horizon has its pixel data past it too — and compared against the
+dword the read reported. Per row, `pt_srowset` turns the 32-bit byte offset
+into a **(segment, offset) pair** exactly as `pt_rowseg`/`pt_rowoff` have
+done for the canvas since it outgrew a segment, and by the same arithmetic as
+`dskw_norm` (§18.4.1): the paragraph part goes into the segment and what is
+left is under 16, so the per-column offsets `pt_bmp_row` builds on top of it
+cannot carry.
+
+**The GIF decoder stays 16-bit, deliberately.** Every offset into the stream
+is a word and `pt_gdeblk` flattens the sub-blocks with one `rep movsb` inside
+one segment. A GIF is *compressed* — the 448×280 test picture is 1,285 bytes
+where its BMP is 62,838 — so 64KB of GIF is a picture far past `PT_GDIM_MAX`,
+and the ceiling is the format's natural size rather than a limitation. What
+changed is that a file past it is **refused** ("GIF larger than 64KB") rather
+than being handed to a decoder that would truncate it, which is reachable now
+that the read can deliver one. The GIF *encoder*'s ceiling is the same shape
+and stays for the same reason: `pt_gout` is a 16-bit write cursor into one
+segment, and "GIF too big to save — try Bmp" says which of the two formats
+has the limit.
+
+Measured: the Paint before this refuses a 69,718-byte BMP outright with "File
+too large" — its staging was the default canvas's undo image. The Paint after
+it opens a 124,918-byte one (620×400, cropped to the screen's 594×390) and
+every one of the 390 decoded rows matches the source pixel for pixel, 190 of
+them read from source bytes past the 64KB horizon.
 
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
@@ -10744,12 +10912,13 @@ tree that exercises three features at once:
   mixer worker stages at `ringbase + (total & mask)` and feeds a *delta*
   forever, so a module plays with no close-and-reopen seam and out of a grant
   far smaller than the song.
-- **`OSAPI_FILE_READBIG`**, which exists because real MODs exceed
-  `dskw_read`'s 64KB ceiling: `BEVERLY.MOD` is 116KB, and the destination
-  advances by SEGMENT so it lands in one call. The Disk window shows its size
-  as 65535 — the directory listing's size field is 16 bits and saturates —
-  which is a display limit and not a load limit; the chain walk uses the real
-  length.
+- **A read past the 64KB horizon.** `BEVERLY.MOD` is 116KB, and the whole of
+  it lands in one `OSAPI_FILE_READ` because the destination advances by
+  SEGMENT (§18.4.1). This is what that ceiling's removal was *for*, and it
+  used to be a separate slot, `OSAPI_FILE_READBIG`. The Disk window shows the
+  file's size as 65535 — the directory listing's size field is 16 bits and
+  saturates — which is a display limit and not a load limit; the chain walk
+  uses the real length.
 - **The mixer is a worker task** (§20.6), so the GUI stays live while it
   plays, and `OSAPI_GFX_DBUF` plus `OSAPI_GFX_SCROLL` keep the fullscreen
   pattern view from tearing under it.
@@ -10763,7 +10932,8 @@ back reads samples out of whatever claimed the memory next.
 It is the app class the sound layer was built toward (§34.6: "a music player
 plays … staged PCM via `OSAPI_SND_STREAM`"), and building it is what forced
 the two kernel amendments it rides on: the worker-safe stream verbs plus ring
-mode (§20.3/§34.5) and `dskw_readbig` (§18.4). On the apps disks it lives in
+mode (§20.3/§34.5) and a read with no 64KB ceiling (§18.4.1 — which arrived
+as `dskw_readbig` and is now just what `dskw_read` does). On the apps disks it lives in
 the `APPS` folder (§24), appended after paint, with `BEVERLY.MOD` after it.
 
 **Ported, not written here.** `trkplay.inc` and `trkui.inc` are byte-identical
@@ -10851,12 +11021,15 @@ verb 2's UI-only rule. The 6-half cap bounds the
 worker's lock-free burst at ~1.1 s of mixing per wake, so a wake can catch
 up after a stall without starving the machine.
 
-### 45.3 Loading goes through readbig, because real MODs are big
+### 45.3 Loading is one read, and that is why the ceiling went
 
-`OSAPI_FILE_READBIG` (slot 0x01E8) exists because `dskw_read`'s CX is a
-16-bit byte count: a file ≥ 65,536 bytes was `FERR_BIG` *unconditionally*,
-and BEVERLY.MOD is 116,085 bytes. The load path is the whole client story
-of §50 + §18.4 + §38 in one proc (`trk_fdone`, the fdlg completion):
+BEVERLY.MOD is 116,085 bytes. `dskw_read`'s count was 16-bit, so a file
+≥ 65,536 bytes was `FERR_BIG` *unconditionally*, and this app is why the
+kernel grew a second entry point for it — `dskw_readbig`, at slot 0x01E8,
+which §18.4.1 has since folded back into `dskw_read` itself. Nothing about
+the load path changed with it but the name and a `xor bx, bx`. It is the
+whole client story of §50 + §18.4 + §38 in one proc (`trk_fdone`, the fdlg
+completion):
 
 1. Copy the ES:DI name out **first** — ES is `KERNEL_SEG` and the buffer
    dies with the call (§38.6).
@@ -10868,7 +11041,8 @@ of §50 + §18.4 + §38 in one proc (`trk_fdone`, the fdlg completion):
 3. `OSAPI_MEM_AVAIL` → take `min(largest run, 128 KB)` in ONE
    `OSAPI_MEM_CLAIM` (the one-block rule, §50.3). Refusal is a status-line
    "Out of memory", not an abort.
-4. `OSAPI_FILE_READBIG` with ES = the grant, DX:CX = its byte capacity.
+4. `OSAPI_FILE_READ` with ES:BX = the grant at its first byte, DX:CX = its
+   byte capacity.
    `FERR_BIG` reads back as "File too big" — a much rarer answer here than
    on the fork this section came from, because the heap is not a fixed
    arena: a 640KB machine measures 566KB of it and a 512KB machine about
@@ -10903,7 +11077,7 @@ Four stores, none of them guessed:
 
   **...and then `trk_trim` gives the difference back.** The over-claim is
   unavoidable at claim time — the dialog's completion proc is handed a name,
-  not a directory entry, so the size is not known until `readbig` returns it
+  not a directory entry, so the size is not known until the read returns it
   — but it need not survive the load. One `OSAPI_MEM_REGROW` (§50.3.1) after
   the read shrinks the claim to `ceil(bytes / 1024)` KB, and shrinking is the
   path that **always succeeds in place**: the record's length changes and
@@ -11299,11 +11473,11 @@ and the layout tail after an edit is one add-loop shift.
 
 The document is always canonical markdown (newline = LF; CR LF and lone CR
 fold to LF on load, control bytes and >126 drop; saved bytes are the
-buffer verbatim) in a 20,480-byte gap buffer in bss, so the app works with
-an EMPTY heap — an `OSAPI_MEM_CLAIM` block (64/32/16KB tried in that
-order, §50.3 rules; force-freed at teardown like every claim) only adds
-the undo/redo stacks and the full-size clipboard; without it undo reports itself unavailable through the menu
-gray and the clipboard falls back to 2KB of bss. There is no second styled
+buffer verbatim) in a gap buffer that is a **heap claim** (§46.9). A second
+`OSAPI_MEM_CLAIM` block (64/32/16KB tried in that order, §50.3 rules;
+force-freed at teardown like every claim) carries the undo/redo stacks and
+the full-size clipboard; without it undo reports itself unavailable through
+the menu gray and the clipboard falls back to 2KB of bss. There is no second styled
 buffer and no sync machinery (the original's `BuildHiddenView` /
 `SyncHiddenToCanonical` pair): **Writer mode is a rendering property**.
 Styled lines hide the delimiters and draw the spans; the caret's logical
@@ -11393,10 +11567,69 @@ surface, modality routes input, and the completion proc repaints the page
 before any failure alert so nothing lands on the hole the dialog left.
 Names live per instance (`UNTITLED.MD` seeded); the file slots read and
 write whole documents in place (no staging copy: the gap parks at the end
-for a save, and a load folds line endings in place). `FERR_*` becomes a
+for a save, so `ES:BX` is the claim itself, and a load folds line endings
+in place inside it — §46.9). `FERR_*` becomes a
 human sentence in an error alert. New/Open/Quit with unsaved changes ask
 first — Save / Cancel / Don't Save, with Save continuing the pending
 action through the Save As completion when the document is untitled.
+### 46.9 The document is a heap claim, and it grows
+
+The gap buffer was 20,480 bytes of **bss**, and the reason given for it was
+that the app then worked with an empty heap. That reason was never true on
+this kernel: a package's *region* is itself a heap claim (§20.1), so a
+machine whose heap cannot fund a claim cannot load ArtfulType either. It was
+a holdover from a kernel where a package got one 64KB segment for code and
+data and there was no memory API to ask for anything else. What it actually
+cost was 20KB of the 60KB an image and its bss share.
+
+The text is `[at_dseg]:0000` now, `[at_dcap]` bytes, claimed by `at_entry`
+*before* it creates the window — an editor with nowhere to type is not a
+window worth opening, so a refusal is `LD_EABORT` and the loader says so,
+which is why nothing below has to test `[at_dseg]`. bss falls from 42,165
+bytes to 21,695, and image + bss from 59,198 of `APP_MAX_SIZE`'s 61,440 to
+39,057.
+
+**`at_dresize` is the whole of it, and the gap is what makes it more than a
+resize.** Text is `[0, at_gs) ++ [at_ge, cap)`, so the high run always ends
+at the buffer's ceiling — which is why the new gap end is simply
+`newcap - T` and never a delta. Growing must slide that run *up* to the new
+ceiling, backwards because the ranges overlap, and **after** the regrow;
+shrinking must slide it *down* **before** the bytes past the new ceiling
+stop being ours. Each ordering is the one whose failure is benign: a refused
+grow has moved nothing, and a refused shrink (which cannot happen — a shrink
+always succeeds in place, §50.3.1) leaves more heap held than the books say,
+which wastes memory and cannot corrupt anything.
+
+Three movements hang off it: `at_dgrow` from `at_ins` when a keystroke
+spends the gap and from `at_insn`/the paste path when a run does not fit;
+`at_load_named`, which opens the claim to `AT_MAXKB` before the read because
+nothing knows the file's size until the read reports it, lands the file in
+the document buffer itself, folds line endings **in place** (the fold only
+drops bytes, so the write index cannot outrun the read index) and calls
+`at_dfit` on both paths; and `at_cmd_newdoc`, which empties the buffer
+*first* — so the shrink has no high run to carry — and then gives the heap
+back.
+
+**`AT_MAXKB` is 60, and it is not the heap's limit.** `at_gs`, `at_ge`,
+`at_caret` and every entry in `at_lstart` are **words**, so a document can
+never reach 65,536 bytes whatever the machine has; 60KB leaves the top of
+that range alone. Lifting it means widening the gap buffer's whole
+arithmetic, not asking for more memory.
+
+The cost is one segment register. `at_getb` — the hottest routine in the
+app, one call per character of `at_scan` — is `push es` / `mov es,
+[at_dseg]` / fetch / `pop es`, about 32 clocks a character on a 4.77MHz
+8088. ES is **preserved** rather than left holding the document because
+`at_slice` is not the only caller that holds ES across a read and a silently
+clobbered ES is a corruption bug, where this is a measured and bounded cost:
+~2ms on the paragraph rescan a keystroke actually pays for, and a fifth of a
+second on a full relayout of a *maximal* document — which happens on a load,
+a mode switch or a zoom, and never on a keystroke. The move primitives
+(`at_gapto`, `at_copyout`, the paste and the snapshot restore) switch DS as
+well, through `at_dsegs`, and every cursor and count they need is latched in
+a register first: past that call no package variable is readable, which is
+the `dsk_copy_in` discipline of §18 applied inside an app.
+
 ## 47. Disabled controls — the greying standard (binding)
 
 Every part of the UI that can refuse a click has to say so the same way. This

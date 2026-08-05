@@ -40,10 +40,171 @@
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
+; at_dresize - make the document claim AX kilobytes, text and gap intact
+; in:  AX = the wanted size in KB (clamped to AT_KB0..AT_MAXKB)
+; out: CF=0 with [at_dseg]/[at_dcap]/[at_ge] updated, or CF=1 and nothing
+;      moved; preserves every register
+;
+; ALWAYS OSAPI_MEM_REGROW, never claim-copy-free: a regrow extends in place
+; when the paragraphs above it are free, so it needs the DIFFERENCE rather
+; than old + new at once, and when it must move it brings the bytes with it
+; (SPEC.md 50.3.1).
+;
+; The gap is what makes this more than a resize. Text is [0, at_gs) ++
+; [at_ge, cap), so growing the buffer must ALSO slide the high run up to the
+; new ceiling - backwards, because the two ranges overlap - and shrinking
+; must slide it down first, before the bytes past the new ceiling stop being
+; ours. Get the order wrong either way and the second half of the document is
+; whatever the heap had there.
+; -----------------------------------------------------------------------------
+at_dresize:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push ds
+    push es
+    cmp ax, AT_KB0
+    jae .lo
+    mov ax, AT_KB0
+.lo:
+    cmp ax, AT_MAXKB
+    jbe .hi
+    mov ax, AT_MAXKB
+.hi:
+    mov [at_dkb], ax                ; the wanted size in KB...
+    mov cl, 10
+    shl ax, cl
+    mov [at_dnew], ax               ; ...and in bytes
+    cmp ax, [at_dcap]
+    je .ok                          ; already that size
+    mov cx, [at_dcap]
+    sub cx, [at_ge]
+    mov [at_dtail], cx              ; T, the high run's length. It ends at the
+                                    ; buffer's ceiling before and after, so
+                                    ; the new gap end is simply newcap - T
+    mov ax, [at_dnew]
+    cmp ax, [at_dcap]
+    jb .shrink
+
+    ; --- grow: the BLOCK first, then the high run up to the new ceiling ---
+    mov ax, [at_dkb]
+    mov dx, [at_dseg]
+    call OSAPI_MEM_REGROW           ; out CF=0 and DX = the base NOW
+    jc .no                          ; refused: nothing has moved yet
+    mov [at_dseg], dx
+    mov cx, [at_dtail]
+    jcxz .fin
+    mov si, [at_dcap]
+    dec si                          ; SI = the old ceiling's last byte...
+    mov di, [at_dnew]
+    dec di                          ; ...DI the new one's, and DI > SI, which
+    call at_dsegs                   ; is why this one runs BACKWARDS
+    std
+    rep movsb
+    cld                             ; DF=0 is the standing state (SPEC.md 1)
+    push cs
+    pop ds                          ; ours again before a variable is read
+    jmp short .fin
+
+    ; --- shrink: the high run DOWN first, before those bytes stop being ---
+    ; ours, and only then the block. The books are updated in between, so a
+    ; regrow that somehow refused leaves us holding more heap than we think
+    ; we do - which wastes memory and cannot corrupt anything.
+.shrink:
+    mov ax, [at_gs]
+    add ax, [at_dtail]              ; what the text actually occupies...
+    cmp ax, [at_dnew]
+    ja .no                          ; ...must fit what is being asked for
+    mov cx, [at_dtail]
+    jcxz .books
+    mov si, [at_ge]
+    mov di, [at_dnew]
+    sub di, cx                      ; DI < SI here, so forwards is correct
+    call at_dsegs
+    cld
+    rep movsb
+    push cs
+    pop ds
+.books:
+    call at_dfin                    ; at_ge and at_dcap, before the regrow
+    mov ax, [at_dkb]
+    mov dx, [at_dseg]
+    call OSAPI_MEM_REGROW           ; a shrink always succeeds in place
+    jc .ok
+    mov [at_dseg], dx
+    jmp short .ok
+.fin:
+    call at_dfin
+.ok:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; at_dfin - the books, once the bytes are where the new size says they are
+at_dfin:
+    push ax
+    mov ax, [at_dnew]
+    mov [at_dcap], ax
+    sub ax, [at_dtail]
+    mov [at_ge], ax                 ; the high run ends at the ceiling, always
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; at_dgrow - give the gap another AT_GROWKB kilobytes
+; out: CF=0 the gap is bigger, CF=1 refused - the heap's answer or the
+;      ceiling's; preserves every register
+; -----------------------------------------------------------------------------
+at_dgrow:
+    push ax
+    push cx
+    mov ax, [at_dcap]
+    mov cl, 10
+    shr ax, cl
+    add ax, AT_GROWKB
+    call at_dresize
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; at_dfit - size the claim to the document plus one growth quantum
+; out: nothing (all registers and the flags preserved)
+; -----------------------------------------------------------------------------
+at_dfit:
+    pushf
+    push ax
+    push cx
+    call at_dlen
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl
+    add ax, AT_GROWKB
+    call at_dresize                 ; a shrink always succeeds in place
+    pop cx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; at_dlen - AX = logical document length; preserves all else
 ; -----------------------------------------------------------------------------
 at_dlen:
-    mov ax, AT_DOCCAP
+    mov ax, [at_dcap]
     sub ax, [at_ge]
     add ax, [at_gs]
     ret
@@ -51,19 +212,33 @@ at_dlen:
 ; -----------------------------------------------------------------------------
 ; at_getb - read one logical byte
 ; in:  BX = logical offset (< length; caller's burden)
-; out: AL = the byte; everything else preserved
+; out: AL = the byte; everything else preserved, ES INCLUDED
+;
+; The hottest routine in the app - at_scan calls it once per character - and
+; since the document became a heap claim (SPEC.md 46.9) it costs a segment
+; load and a push/pop pair on top of the fetch. ES is preserved rather than
+; left holding the document because at_slice is not the only caller that
+; holds ES across a read, and a silently clobbered ES is a corruption bug
+; where this is a measurable but bounded cost: about 32 clocks a character on
+; a 4.77MHz 8088, so ~2ms on the paragraph rescan a keystroke actually pays
+; for, and a fifth of a second on a full relayout of a MAXIMAL document -
+; which happens on a load, a mode switch or a zoom, and never on a keystroke.
 ; -----------------------------------------------------------------------------
 at_getb:
+    push es
+    mov es, [at_dseg]
     cmp bx, [at_gs]
     jb .low
     push bx
     add bx, [at_ge]
     sub bx, [at_gs]
-    mov al, [bx+at_doc]
+    mov al, [es:bx]
     pop bx
+    pop es
     ret
 .low:
-    mov al, [bx+at_doc]
+    mov al, [es:bx]
+    pop es
     ret
 
 ; -----------------------------------------------------------------------------
@@ -76,6 +251,8 @@ at_gapto:
     push cx
     push si
     push di
+    push ds
+    push es
     cmp ax, [at_gs]
     je .done
     jb .back
@@ -84,12 +261,11 @@ at_gapto:
     sub cx, [at_gs]
     mov si, [at_ge]
     mov di, [at_gs]
-    add si, at_doc
-    add di, at_doc
     add [at_ge], cx
     mov [at_gs], ax
-    cld
-    rep movsb
+    call at_dsegs                   ; DS = ES = the document claim; NO package
+    cld                             ; variable is readable past this point,
+    rep movsb                       ; which is why both cursors are latched
     jmp short .done
 .back:
     ; backward: push [pos .. at_gs) up so it ends at [at_ge]
@@ -97,19 +273,38 @@ at_gapto:
     sub cx, ax
     mov si, [at_gs]
     dec si
-    add si, at_doc
     mov di, [at_ge]
     dec di
-    add di, at_doc
     sub [at_ge], cx
     mov [at_gs], ax
+    call at_dsegs
     std
     rep movsb
     cld                             ; DF=0 is the standing state (SPEC.md 1)
 .done:
+    pop es
+    pop ds
     pop di
     pop si
     pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; at_dsegs - DS = ES = the document claim (module-internal)
+; out: nothing else touched, flags included
+;
+; The move primitives here have both ends inside the document, so they want a
+; string instruction with both segments on it. Every cursor and count they
+; need is latched in a register FIRST, because past this call no package
+; variable is readable - the dsk_copy_in discipline of SPEC.md 18, and the
+; caller restores DS.
+; -----------------------------------------------------------------------------
+at_dsegs:
+    push ax
+    mov ax, [at_dseg]
+    mov ds, ax
+    mov es, ax
     pop ax
     ret
 
@@ -121,17 +316,25 @@ at_gapto:
 ; -----------------------------------------------------------------------------
 at_ins:
     push bx
+    push es
     mov bx, [at_gs]
     cmp bx, [at_ge]
-    jae .full
-    mov [bx+at_doc], al
+    jb .room
+    call at_dgrow                   ; the gap is spent: another AT_GROWKB, and
+    jc .full                        ; a refusal is the keystroke being dropped
+    mov bx, [at_gs]                 ; (at_dgrow may have MOVED the claim, so
+.room:                              ; nothing cached across it is reusable)
+    mov es, [at_dseg]
+    mov [es:bx], al
     inc word [at_gs]
     inc word [at_caret]
     clc
+    pop es
     pop bx
     ret
 .full:
     stc
+    pop es
     pop bx
     ret
 
@@ -145,14 +348,17 @@ at_insn:
     push si
     push di
     push es
+.fit:
     mov ax, [at_ge]
     sub ax, [at_gs]                 ; AX = gap size = room
     cmp ax, cx
-    jb .full
-    push ds
-    pop es
-    mov di, [at_gs]
-    add di, at_doc
+    jae .room
+    call at_dgrow                   ; a paste bigger than the gap grows the
+    jnc .fit                        ; claim a quantum at a time until it fits
+    jmp short .full                 ; ...or the ceiling or the heap says no
+.room:
+    mov es, [at_dseg]               ; DS:SI is the caller's (package or clip),
+    mov di, [at_gs]                 ; ES:DI the gap
     add [at_gs], cx
     add [at_caret], cx
     cld
@@ -199,6 +405,7 @@ at_copyout:
     push bx
     push cx
     push si
+    push ds
     cld
     mov bx, [at_gs]                 ; BX = gap start
     cmp ax, bx
@@ -210,20 +417,23 @@ at_copyout:
 .cap:
     sub cx, ax                      ; CX = low-run length
     mov si, ax
-    add si, at_doc
     add ax, cx                      ; AX = min(to, gs) for the high run
-    rep movsb
+    push ds                         ; DS = the document for the move, ES the
+    mov ds, [at_dseg]               ; caller's destination. Everything the
+    rep movsb                       ; loop needs is already in a register
+    pop ds
 .high:
     cmp dx, ax
     jbe .out
     mov si, ax
     add si, [at_ge]
     sub si, bx
-    add si, at_doc
     mov cx, dx
     sub cx, ax
+    mov ds, [at_dseg]
     rep movsb
 .out:
+    pop ds
     pop si
     pop cx
     pop bx

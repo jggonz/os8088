@@ -264,12 +264,29 @@ SND_OPENF_RING   equ 1           ; ring mode (SPEC.md 34.5): SI = ring base,
 ; The buffer is ES:BX (like OSAPI_SND_PLAY), so staged
 ; sound or an app's own bss both work; set ES = DS for the latter. A write
 ; stalls painters for its duration: never call these from a paint proc.
-%define OSAPI_FILE_WRITE    KERNEL_SEG:0x0120   ; SI = NUL 8.3 name, ES:BX = bytes, CX =
-                                 ; count (0 = empty file); creates or
+;
+; ONE read and ONE write, and NEITHER has a 64KB ceiling (SPEC.md 18.4.1).
+; The count is DX:CX - 32-bit, DX high - and the buffer's ES:BX is reduced to
+; a segment plus an offset under 16 before the transfer, which then walks the
+; SEGMENT. So a 1KB staging buffer inside your own bss and a 128KB heap claim
+; (ES = OSAPI_MEM_CLAIM's answer, BX = 0) are the same call, and the second
+; is what you want for anything that does not fit your region: your image and
+; bss together cap at APP_MAX_SIZE.
+;
+; DX IS AN ARGUMENT TO BOTH, AND AN OUTPUT OF THE READ. `xor dx, dx` before
+; every call whose count fits 16 bits, and do not expect DX to survive a
+; read - it comes back as the file's size high word.
+%define OSAPI_FILE_WRITE    KERNEL_SEG:0x0120   ; SI = NUL 8.3 name, ES:BX = bytes, DX:CX
+                                 ; = count (0 = empty file); creates or
                                  ; REPLACES. out CF=0 AX=0, else AX = FERR_*
-%define OSAPI_FILE_READ     KERNEL_SEG:0x0128   ; SI = name, ES:BX = buffer, CX = capacity;
-                                 ; out CF=0 AX = bytes read, else AX =
-                                 ; FERR_* (FERR_BIG leaves the buffer alone)
+                                 ; (FERR_BIG = a count no FAT volume this
+                                 ; kernel mounts could hold). DX preserved.
+%define OSAPI_FILE_READ     KERNEL_SEG:0x0128   ; SI = name, ES:BX = buffer, DX:CX = its
+                                 ; capacity; out CF=0 and DX:AX = bytes read
+                                 ; (the file's 32-bit size), else AX = FERR_*.
+                                 ; FERR_BIG is decided from the directory
+                                 ; entry BEFORE any data I/O, so it leaves the
+                                 ; buffer alone.
 %define OSAPI_FILE_DELETE   KERNEL_SEG:0x0130   ; SI = name; out CF=0 AX=0, else FERR_*
 %define OSAPI_FILE_RENAME   KERNEL_SEG:0x0138   ; SI = old name, DI = new name; out as above
 %define OSAPI_FILE_DFREE    KERNEL_SEG:0x0140   ; out CF=0, DX:AX = free bytes, BX =
@@ -413,28 +430,15 @@ VID_CGA    equ 2
                                  ; handler's offset (0 = none). Preserves every
                                  ; register and the flags
 
-%define OSAPI_FILE_READBIG  KERNEL_SEG:0x01E8   ; SI = NUL 8.3 name, ES = the
-                                 ; destination BASE segment (the buffer starts
-                                 ; at ES:0000), DX:CX = capacity in BYTES,
-                                 ; 32-bit, DX high. out CF=0 and DX:AX = bytes
-                                 ; read (the file's 32-bit size); CF=1 and
-                                 ; AX = FERR_*, with FERR_BIG decided from the
-                                 ; directory entry BEFORE any data I/O, so the
-                                 ; destination is untouched.
-                                 ;
-                                 ; The one file op with NO 64KB ceiling. The
-                                 ; destination advances by SEGMENT - ES += 32
-                                 ; per 512-byte sector, offset held at 0 - so
-                                 ; the 16-bit offset limit never binds and a
-                                 ; 116KB file lands in a heap claim in one
-                                 ; call. Point it at OSAPI_MEM_CLAIM's answer,
-                                 ; not at your own segment: your region caps
-                                 ; at one segment and this exists precisely
-                                 ; for data that does not fit there.
-                                 ;
-                                 ; Same gate, same current-directory name
-                                 ; resolution and the same UI-task-only rule
-                                 ; as every other file slot.
+; 0x01E8 is RETIRED and has NO %define (SPEC.md 18.4.1/20.8). It was
+; OSAPI_FILE_READBIG, the one file op with no 64KB ceiling; OSAPI_FILE_READ
+; has none either now, and the two contracts differed only in where the
+; destination's offset came from. The cell is still there and still answers -
+; CF=1 with AX = FERR_NAME - because a shipped slot keeps its contract and
+; "we no longer implement this" is a refusal, never a different routine at
+; the same address. Nothing above it moved. A source that still names
+; OSAPI_FILE_READBIG fails to assemble, which is the intended way to find
+; out: pass your base segment in ES with BX = 0 and call OSAPI_FILE_READ.
 
 %define OSAPI_GFX_DBUF      KERNEL_SEG:0x01F0   ; arm/disarm double buffering
                                  ; for your own drawing (SPEC.md 32): AL = 1

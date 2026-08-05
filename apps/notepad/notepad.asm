@@ -101,8 +101,29 @@
     dw 0x0000
     OS88_ICON16_END
 
-NP_CAP       equ 512            ; text buffer capacity, bytes
-NP_IOCAP     equ NP_CAP * 2     ; staging capacity: every char may become CR LF
+; --- the document lives in the HEAP, not in this package's bss (SPEC.md 27.6)
+; A note is data, and data of a size only the user knows; a package's region
+; is image + bss capped at APP_MAX_SIZE, so anything sized by the user belongs
+; in a claim (SPEC.md 50.3). The claim starts at NP_KB0, grows a kilobyte at a
+; time as the note fills it, is sized to the file on a load, and shrinks back
+; on File > New. [np_dseg]:0000 is the text and [np_cap] its capacity.
+NP_KB0       equ 1              ; the document claim at launch, KB
+NP_GROWKB    equ 1              ; ...and the quantum it grows by
+NP_MAXKB     equ 8              ; ...and its ceiling. NOT a memory limit - it
+                                ; is what the WINDOW can show. Note Pad does
+                                ; not scroll: np_walk lays out from [np_ty],
+                                ; which np_bounds always sets to the content's
+                                ; top, so text past the last visible row can
+                                ; be typed and can never be read back. The
+                                ; most a window can display is NP_MAXROWS
+                                ; rows of NP_MAXCOL cells - 60 x 91, about
+                                ; 5,400 characters on a fullscreen VGA frame,
+                                ; and fewer on any smaller one - so 8,192 is
+                                ; already past the point of diminishing
+                                ; returns, and every byte past it also costs
+                                ; a np_walk pass that visits it on EVERY
+                                ; paint. Lifting this wants scrolling first
+NP_STGMIN    equ 1              ; the save's transient staging claim, KB
 NP_MAXCOL    equ 91             ; cells a row can hold: 720/8 is the widest
                                 ; screen this runs on, plus one for the NUL.
                                 ; A row is accumulated into a buffer and drawn
@@ -116,7 +137,7 @@ NP_MAXROWS   equ 60             ; signature slots, one per row the content can
                                 ; this, so a taller screen degrades to "the
                                 ; rows past 60 are always redrawn" rather than
                                 ; writing past the array
-NP_BSS_TOTAL equ 984 + NP_IOCAP + NP_MAXROWS*2  ; see the bss layout below
+NP_BSS_TOTAL equ 484 + NP_MAXROWS*2  ; see the bss layout below
 NP_BRK_CELLS equ 60             ; the visual break's trigger (SPEC.md 27.3):
                                 ; the CELLS a keystroke would repaint BELOW
                                 ; the caret's row. Not rows - this window is
@@ -169,6 +190,12 @@ NP_NAMEMAX   equ 12             ; 8 + '.' + 3, as SPEC.md 38.6 hands it over
 ; appears, the bar already says "Note Pad  File".
 ; -----------------------------------------------------------------------------
 np_entry:
+    mov ax, NP_KB0                  ; the document, before anything else: an
+    call OSAPI_MEM_CLAIM            ; editor with nowhere to put the text is
+    jc .nomem                       ; not a window worth opening, and the
+    mov [np_dseg], dx               ; loader's LD_EABORT says so for us
+    mov word [np_capkb], NP_KB0
+    mov word [np_cap], NP_KB0 * 1024
     push si
     mov si, np_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
@@ -209,6 +236,9 @@ np_entry:
                                     ; ordinary routine and the CF we owe the
                                     ; loader is still riding in the flags
 .out:
+    ret
+.nomem:                             ; ld_unreserve gives the region back, and
+    stc                             ; anything an entry proc claimed with it
     ret
 
 ; -----------------------------------------------------------------------------
@@ -358,7 +388,9 @@ np_walk:
     mov word [np_row], 0            ; ...and row 0 of the signature array,
     mov word [np_rowh], 0           ; with nothing folded into it yet
     mov bx, [np_len]                ; BX = characters remaining
-    mov si, np_buf
+    xor si, si                      ; ES:SI = the document (SPEC.md 27.6), and
+    mov es, [np_dseg]               ; ES survives every callee below: np_rstart
+                                    ; and np_rflush push it around their own
     cmp byte [np_resume], 0         ; ...or start part-way in: at the caret's
     je .seeded                      ; own row for a keystroke (SPEC.md 27.4),
     mov ax, [np_sdi]                ; or at any row np_rows named (SPEC.md
@@ -410,8 +442,8 @@ np_walk:
     jz .done                        ; the index past the last character: the
                                     ; queries have seen it, and there is no
                                     ; character to draw
-    lodsb                           ; DF=0 per SPEC.md 1
-    dec bx
+    es lodsb                        ; DF=0 per SPEC.md 1; the override is what
+    dec bx                          ; makes the note a heap claim and not bss
     inc word [np_i]
     cmp al, 13
     jne .glyph
@@ -1392,6 +1424,8 @@ np_sigmark:
     mov [np_sbot], ax
     mov ax, [np_msg]
     mov [np_smsg], ax
+    mov ax, [np_msgn]
+    mov [np_smsgn], ax
     mov byte [np_sigok], 1
     pop ax
     ret
@@ -1426,8 +1460,11 @@ np_sigsame:
     mov ax, [np_msg]
     cmp ax, [np_smsg]
     jne .no
-    pop ax
-    clc
+    mov ax, [np_msgn]           ; ...and its GENERATION, not just the pointer.
+    cmp ax, [np_smsgn]          ; "Saved X" and "Loaded X" are both composed
+    jne .no                     ; into np_tbuf, so [np_msg] is the same word
+    pop ax                      ; for both and a save straight after a load
+    clc                         ; left the window still saying "Loaded"
     ret
 .no:
     pop ax
@@ -1611,14 +1648,175 @@ np_toast:
     pop ax
     ret
 
+; =============================================================================
+; The document claim (SPEC.md 27.6/50.3)
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; np_resize - make the document claim AX kilobytes
+; in:  AX = the wanted size in KB (clamped to NP_KB0..NP_MAXKB)
+; out: CF=0 with [np_dseg]/[np_capkb]/[np_cap] updated, or CF=1 and all three
+;      unchanged; preserves every register
+;
+; ALWAYS through OSAPI_MEM_REGROW, never claim-copy-free: a regrow extends in
+; place when the paragraphs above it are free, so it needs the DIFFERENCE
+; rather than old + new at once, and when it does have to move it brings the
+; bytes with it (SPEC.md 50.3.1). Shrinking always succeeds in place, which
+; is what makes File > New's give-back free.
+; -----------------------------------------------------------------------------
+np_resize:
+    push ax
+    push dx
+    cmp ax, NP_KB0
+    jae .lo
+    mov ax, NP_KB0
+.lo:
+    cmp ax, NP_MAXKB
+    jbe .hi
+    mov ax, NP_MAXKB
+.hi:
+    cmp ax, [np_capkb]
+    je .same                        ; already that size: nothing to ask for
+    push ax
+    mov dx, [np_dseg]
+    call OSAPI_MEM_REGROW           ; out CF=0 and DX = the base NOW
+    pop ax
+    jc .out                         ; refused: the old claim stands untouched
+    mov [np_dseg], dx               ; ...and a grow that MOVED reports a new
+    mov [np_capkb], ax              ; base, which is the whole reason DX is
+    mov cl, 10                      ; the answer (SPEC.md 50.3.1)
+    shl ax, cl
+    mov [np_cap], ax                ; NP_MAXKB * 1024 fits a word by design
+.same:
+    clc
+.out:
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_fitclaim - size the claim to the note plus one kilobyte to type into
+; out: nothing (all registers and the flags preserved)
+;
+; What a load ends with, on the way out of both its paths. np_load opens the
+; claim to NP_MAXKB before the read because nothing knows the file's size
+; until the read reports it; this is the other half of that, and it runs even
+; when the read failed - a refused load must not leave eight kilobytes of heap
+; held for a note that did not change.
+; -----------------------------------------------------------------------------
+np_fitclaim:
+    pushf
+    push ax
+    push cx
+    mov ax, [np_len]
+    add ax, 1023                ; the note's own whole kilobytes...
+    mov cl, 10
+    shr ax, cl
+    add ax, NP_GROWKB           ; ...plus one to type into
+    call np_resize              ; a shrink always succeeds in place
+    pop cx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; np_room - make sure one more character fits
+; out: CF=0 there is room at [np_len], CF=1 the note is as big as it can get
+; clobbers: flags
+;
+; The growth point, and the only one. A keystroke that would fill the claim
+; asks for another kilobyte first; a refusal - the heap's or NP_MAXKB's - is
+; the keystroke being dropped, which is what a full note did before it could
+; grow at all.
+; -----------------------------------------------------------------------------
+np_room:
+    push ax
+    mov ax, [np_len]
+    cmp ax, [np_cap]
+    jb .yes
+    mov ax, [np_capkb]
+    add ax, NP_GROWKB
+    call np_resize
+    jc .no
+    mov ax, [np_len]
+    cmp ax, [np_cap]
+    jb .yes
+.no:
+    stc
+    jmp short .out
+.yes:
+    clc
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_stghold - claim the save's CR/LF staging buffer
+; in:  [np_len]
+; out: CF=0 with [np_stgseg] set and ES = it, or CF=1 (the toast is already
+;      set); preserves every other register
+;
+; Sized from the note, not fixed: every character may become CR LF, so the
+; worst case is 2 x [np_len]. It is a SECOND claim and it is transient - held
+; only across the write - because the expansion grows and the document claim
+; is sized for the document. A refusal is an ordinary path: the note is still
+; there and still editable, it just cannot reach the disk until something
+; gives memory back.
+; -----------------------------------------------------------------------------
+np_stghold:
+    push ax
+    push dx
+    mov ax, [np_len]
+    add ax, [np_len]                ; 2 x len, which cannot carry: [np_len] is
+    add ax, 1023                    ; bounded by NP_MAXKB * 1024
+    mov cl, 10
+    shr ax, cl                      ; ...as whole kilobytes, rounded up
+    cmp ax, NP_STGMIN
+    jae .kb
+    mov ax, NP_STGMIN               ; an empty note still needs somewhere to
+.kb:                                ; put its zero bytes
+    call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base segment
+    jc .no
+    mov [np_stgseg], dx
+    mov es, dx
+    clc
+    jmp short .out
+.no:
+    mov word [np_stgseg], 0
+    mov word [np_msg], np_e_nomem
+    stc
+.out:
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_stgdrop - hand the staging buffer straight back
+; out: nothing (all registers and the flags preserved)
+; -----------------------------------------------------------------------------
+np_stgdrop:
+    pushf
+    push ax
+    push dx
+    mov dx, [np_stgseg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+    mov word [np_stgseg], 0
+.out:
+    pop dx
+    pop ax
+    popf
+    ret
+
 ; -----------------------------------------------------------------------------
 ; np_save - write the note to NOTES.TXT (SPEC.md 18.4/27.1)
 ; in:  nothing (the buffer and its length)
 ; out: nothing; [np_msg] reports the outcome; preserves all registers
 ;
-; The note's bare 13s become CR LF on the way out, through np_io - which is
-; sized for the worst case (every character a newline), so the staging pass
-; needs no bounds test of its own.
+; The note's bare 13s become CR LF on the way out, through the staging claim -
+; which is sized for the worst case (every character a newline), so the
+; staging pass needs no bounds test of its own.
 ; -----------------------------------------------------------------------------
 np_save:
     push ax
@@ -1627,41 +1825,48 @@ np_save:
     push dx
     push si
     push di
+    push ds
     push es
+    call np_stghold             ; ES = the staging claim, or a toast and out
+    jc .out
     call np_goto                ; the folder this document belongs to, if the
-    mov si, np_buf              ; volume has been moved since (SPEC.md 19.2)
-    mov di, np_io
-    mov cx, [np_len]
-    xor bx, bx                  ; BX = staged byte count
+    mov ds, [np_dseg]           ; volume has been moved since (SPEC.md 19.2)
+    xor si, si                  ; DS:SI = the note, ES:DI the expansion. NO
+    xor di, di                  ; kernel variable is readable while DS is the
+    mov cx, [cs:np_len]         ; document - through CS is how the counts are
+    xor bx, bx                  ; reached, the dsk_copy_in discipline
 .stage:
     jcxz .staged
-    mov al, [si]
-    inc si
+    lodsb                       ; DF=0 per SPEC.md 1
     dec cx
-    mov [di], al
+    mov [es:di], al
     inc di
     inc bx
     cmp al, 13
     jne .stage
-    mov byte [di], 10           ; the DOS half of the line ending
+    mov byte [es:di], 10        ; the DOS half of the line ending
     inc di
     inc bx
     jmp short .stage
 .staged:
-    push ds
-    pop es                      ; ES:BX = the staged bytes (SPEC.md 20.3)
-    mov cx, bx
-    mov bx, np_io
+    push cs
+    pop ds                      ; ...and back, before anything else is read
+    mov cx, bx                  ; ES:BX = the staged bytes (SPEC.md 20.3),
+    xor bx, bx                  ; DX:CX their count (SPEC.md 18.4.1)
+    xor dx, dx
     mov si, np_name
     call OSAPI_FILE_WRITE
     jc .err
     mov si, np_m_saved
     call np_setmsg
-    jmp short .out
+    jmp short .done
 .err:
     call np_errmsg              ; AX = FERR_* -> the toast
+.done:
+    call np_stgdrop
 .out:
     pop es
+    pop ds
     pop di
     pop si
     pop dx
@@ -1688,21 +1893,32 @@ np_load:
     push si
     push di
     push es
-    call np_goto                ; ...and the same on the way back in
-    push ds
-    pop es
-    mov bx, np_io
-    mov cx, NP_IOCAP
+    mov ax, NP_MAXKB            ; open the claim to its ceiling for the read:
+    call np_resize              ; nothing here knows the file's size until the
+                                ; read reports it, and the fold below only ever
+                                ; SHRINKS what arrived - so the file lands in
+                                ; the document buffer itself and folds in
+                                ; place, and there is no load staging at all
+    call np_goto                ; ...and the same folder dance on the way in
+    mov es, [np_dseg]
+    xor bx, bx                  ; ES:BX = the document, DX:CX its capacity
+    mov cx, [np_cap]
+    xor dx, dx
     mov si, np_name
-    call OSAPI_FILE_READ        ; AX = bytes read
-    jc .err
+    call OSAPI_FILE_READ        ; DX:AX = bytes read, and DX is 0 - a longer
+    jc .err                     ; file is FERR_BIG, "Too big", and the note is
+                                ; left alone. That is the honest answer and it
+                                ; used to be a half-loaded note that the next
+                                ; save then wrote back over the whole file
     mov cx, ax
-    mov si, np_io
-    xor di, di                  ; DI = characters kept
-    xor dx, dx                  ; DL = previous byte, DH = truncation flag
+    xor si, si                  ; ES:SI walks what arrived...
+    xor di, di                  ; ...and ES:DI writes the kept characters back
+    xor dx, dx                  ; over it. DI can never outrun SI - the fold
+                                ; only drops bytes - so in place is safe.
+                                ; DL = previous byte, DH = truncation flag
 .fold:
     jcxz .folded
-    mov al, [si]
+    mov al, [es:si]
     inc si
     dec cx
     cmp al, 10
@@ -1718,12 +1934,12 @@ np_load:
     cmp al, 126
     ja .skip
 .store:
-    cmp di, NP_CAP
+    cmp di, [np_cap]
     jb .room
-    mov dh, 1                   ; the note is full: stop here and say so
-    jmp short .folded
+    mov dh, 1                   ; unreachable - the fold cannot outgrow what
+    jmp short .folded           ; the read fitted - but a bound is a bound
 .room:
-    mov [di+np_buf], al
+    mov [es:di], al
     inc di
 .skip:
     mov dl, al
@@ -1735,12 +1951,15 @@ np_load:
     mov si, np_m_loaded
     call np_setmsg
     test dh, dh
-    jz .out
+    jz .done
     mov word [np_msg], np_m_trunc
-    jmp short .out
+    jmp short .done
 .err:
     call np_errmsg
-.out:
+.done:
+    call np_fitclaim            ; both paths: give back what the file did not
+.out:                           ; need, including the whole of a read that
+                                ; failed and left the note as it was
     pop es
     pop di
     pop si
@@ -1786,30 +2005,33 @@ np_ins:
     push dx
     push si
     push di
+    push es
     mov dl, al
+    call np_room                    ; grow by a kilobyte if this is the
+    jc .out                         ; keystroke that fills the claim; a
+                                    ; refusal drops it, as a full note always
+    mov es, [np_dseg]               ; did (SPEC.md 27.6)
     mov bx, [np_len]
-    cmp bx, NP_CAP
-    jae .out                        ; full: drop the keystroke silently
     mov cx, bx
     sub cx, [np_cur]                ; CX = the bytes to the right of the caret
-    mov si, np_buf
-    add si, bx
+    mov si, bx
     dec si                          ; SI = the last live byte
     mov di, si
     inc di
     jcxz .place
 .mv:
-    mov al, [si]
-    mov [di], al
+    mov al, [es:si]
+    mov [es:di], al
     dec si
     dec di
     loop .mv
 .place:
     mov bx, [np_cur]
-    mov [bx+np_buf], dl
+    mov [es:bx], dl
     inc word [np_len]
     inc word [np_cur]
 .out:
+    pop es
     pop di
     pop si
     pop dx
@@ -1828,26 +2050,28 @@ np_del:
     push cx
     push si
     push di
+    push es
     mov bx, [np_cur]
     cmp bx, [np_len]
     jae .out
+    mov es, [np_dseg]
     mov cx, [np_len]
     sub cx, bx
     dec cx                          ; CX = the bytes that move down
-    mov di, np_buf
-    add di, bx
+    mov di, bx
     mov si, di
     inc si
     jcxz .close
 .mv:
-    mov al, [si]
-    mov [di], al
+    mov al, [es:si]
+    mov [es:di], al
     inc si
     inc di
     loop .mv
 .close:
     dec word [np_len]
 .out:
+    pop es
     pop di
     pop si
     pop cx
@@ -2026,6 +2250,14 @@ np_onclick:
 ; -----------------------------------------------------------------------------
 np_clamp:
     push ax
+    mov byte [np_ckok], 0           ; the whole buffer just changed underneath
+    mov byte [np_rowsok], 0         ; them, and both are indices INTO it
+                                    ; (SPEC.md 27.4/27.5). np_bounds catches a
+                                    ; geometry change and nothing caught this;
+                                    ; every path here does in fact reach
+                                    ; np_redraw with [np_fast] clear and walk
+                                    ; in full, but that is a fact about the
+                                    ; callers rather than about the data
     mov ax, [np_len]
     cmp [np_cur], ax
     jbe .out
@@ -2469,15 +2701,24 @@ np_redraw:
 ; in:  nothing
 ; out: nothing; preserves all registers
 ;
-; Only the length and the toast are cleared: np_paint reads exactly [np_len]
-; bytes, so the stale tail of np_buf is unreachable and wiping 512 bytes
-; would buy nothing. The toast goes because "Loaded NOTES.TXT" over an empty
-; note is a lie - the same reason an ordinary keystroke retires it.
+; The length, the toast and the claim. np_paint reads exactly [np_len] bytes,
+; so the stale tail is unreachable and wiping it would buy nothing - but the
+; claim it sat in is real memory, and a note that grew to NP_MAXKB has no
+; business holding eight kilobytes of heap after the user emptied it. The
+; toast goes because "Loaded NOTES.TXT" over an empty note is a lie - the same
+; reason an ordinary keystroke retires it.
 ; -----------------------------------------------------------------------------
 np_new:
     mov word [np_len], 0
     mov word [np_cur], 0
     mov word [np_msg], 0
+    call np_clamp               ; a no-op on the caret, which is already 0 -
+                                ; it is here for the invalidation np_clamp
+                                ; carries (SPEC.md 27.4/27.5)
+    push ax                     ; ...and give the heap back what the old note
+    mov ax, NP_KB0              ; had grown into. A shrink always succeeds in
+    call np_resize              ; place, so this cannot fail (SPEC.md 50.3.1)
+    pop ax
     jmp np_defname              ; a new note is a new document: leaving the
                                 ; old name would make the next F2 overwrite
                                 ; the file the user just walked away from
@@ -2690,6 +2931,7 @@ np_setmsg:
     inc di
     jmp short .copy
 .done:
+    inc word [np_msgn]          ; a new toast, even at the same address
     mov word [np_msg], np_tbuf
     pop di
     pop si
@@ -2747,53 +2989,50 @@ np_e_dirfull: db 'Dir full', 0
 np_e_prot:    db 'Protected', 0
 np_e_wprot:   db 'Write protected', 0
 np_e_big:     db 'Too big', 0
+np_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
 
     OS88_BSS NP_BSS_TOTAL
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -------------------------------------
 ; All zero = a fresh empty note with the caret at the origin and no toast.
-np_len      equ os88_image_end + 0     ; word: characters used
-np_buf      equ os88_image_end + 2     ; NP_CAP bytes of text
-np_tx       equ os88_image_end + 514   ; word: paint scratch, text origin x
-np_rgt      equ os88_image_end + 516   ; word: content right, inclusive
-np_bot      equ os88_image_end + 518   ; word: content bottom, inclusive
-np_msg      equ os88_image_end + 520   ; word: toast string, 0 = none
-np_bx1      equ os88_image_end + 522   ; word: the toast box, computed in
-np_by1      equ os88_image_end + 524   ; np_toast and used by three calls
-np_bx2      equ os88_image_end + 526
-np_by2      equ os88_image_end + 528
-np_name     equ os88_image_end + 530   ; 14: the current document, 8.3 + NUL
+np_len      equ os88_image_end + 0     ; word: characters used. The TEXT is
+                                       ; not here any more - it is [np_dseg]
+                                       ; below, a heap claim (SPEC.md 27.6)
+np_tx       equ os88_image_end + 2   ; word: paint scratch, text origin x
+np_rgt      equ os88_image_end + 4   ; word: content right, inclusive
+np_bot      equ os88_image_end + 6   ; word: content bottom, inclusive
+np_msg      equ os88_image_end + 8   ; word: toast string, 0 = none
+np_bx1      equ os88_image_end + 10   ; word: the toast box, computed in
+np_by1      equ os88_image_end + 12   ; np_toast and used by three calls
+np_bx2      equ os88_image_end + 14
+np_by2      equ os88_image_end + 16
+np_name     equ os88_image_end + 18   ; 14: the current document, 8.3 + NUL
                                        ; (SPEC.md 27.1) - per INSTANCE, so
                                        ; two Note Pads hold two documents
-np_tbuf     equ os88_image_end + 544   ; 26: 'Saved ' / 'Loaded ' + np_name
-np_io       equ os88_image_end + 570   ; NP_IOCAP bytes: the CR LF staging
-                                       ; buffer, both directions. Even by
-                                       ; construction - both blocks above
-                                       ; are even-sized, which is what the
-                                       ; old np_pad word was for
-np_cur      equ os88_image_end + 574 + NP_IOCAP    ; word: THE CARET - the
+np_tbuf     equ os88_image_end + 32   ; 26: 'Saved ' / 'Loaded ' + np_name
+np_cur      equ os88_image_end + 62    ; word: THE CARET - the
                                        ; character index it sits in front of,
                                        ; 0..[np_len]. Everything below exists
                                        ; to move it or to answer where it is
-np_ty       equ os88_image_end + 576 + NP_IOCAP    ; word: the first text row
-np_i        equ os88_image_end + 578 + NP_IOCAP    ; word: np_walk's index
-np_curx     equ os88_image_end + 580 + NP_IOCAP    ; word: the caret in pixels
-np_cury     equ os88_image_end + 582 + NP_IOCAP
-np_hitx     equ os88_image_end + 584 + NP_IOCAP    ; word: a click to resolve,
-np_hity     equ os88_image_end + 586 + NP_IOCAP    ; 0xFFFF in y = no query
-np_hiti     equ os88_image_end + 588 + NP_IOCAP    ; word: ...and its answer
-np_wantx    equ os88_image_end + 590 + NP_IOCAP    ; word: a row and column to
-np_wanty    equ os88_image_end + 592 + NP_IOCAP    ; find, 0xFFFF = no query
-np_wanti    equ os88_image_end + 594 + NP_IOCAP    ; word: ...and its answer,
+np_ty       equ os88_image_end + 64    ; word: the first text row
+np_i        equ os88_image_end + 66    ; word: np_walk's index
+np_curx     equ os88_image_end + 68    ; word: the caret in pixels
+np_cury     equ os88_image_end + 70
+np_hitx     equ os88_image_end + 72    ; word: a click to resolve,
+np_hity     equ os88_image_end + 74    ; 0xFFFF in y = no query
+np_hiti     equ os88_image_end + 76    ; word: ...and its answer
+np_wantx    equ os88_image_end + 78    ; word: a row and column to
+np_wanty    equ os88_image_end + 80    ; find, 0xFFFF = no query
+np_wanti    equ os88_image_end + 82    ; word: ...and its answer,
                                        ; 0xFFFF = there is no such row
-np_draw     equ os88_image_end + 596 + NP_IOCAP    ; byte: np_walk paints
-np_hitset   equ os88_image_end + 597 + NP_IOCAP    ; byte: the click row was
-np_wantset  equ os88_image_end + 598 + NP_IOCAP    ; byte: ...the target row
-np_pad2     equ os88_image_end + 599 + NP_IOCAP    ; byte: keeps the total even
-np_dir      equ os88_image_end + 570 + NP_IOCAP    ; word: the folder the
-np_drv      equ os88_image_end + 572 + NP_IOCAP    ; document lives in, byte:
-np_dirok    equ os88_image_end + 573 + NP_IOCAP    ; its drive, byte: whether
+np_draw     equ os88_image_end + 84    ; byte: np_walk paints
+np_hitset   equ os88_image_end + 85    ; byte: the click row was
+np_wantset  equ os88_image_end + 86    ; byte: ...the target row
+np_pad2     equ os88_image_end + 87    ; byte: keeps the total even
+np_dir      equ os88_image_end + 58    ; word: the folder the
+np_drv      equ os88_image_end + 60    ; document lives in, byte:
+np_dirok    equ os88_image_end + 61    ; its drive, byte: whether
                                        ; the pair has been recorded at all.
                                        ; A file name resolves in the VOLUME's
                                        ; current directory - one global every
@@ -2807,49 +3046,82 @@ np_dirok    equ os88_image_end + 573 + NP_IOCAP    ; its drive, byte: whether
 ; All zero is a note whose every visible row is empty, which is what a fresh
 ; instance has - but nothing reads them until np_paint has written them,
 ; because np_sigok below is 0 until it does.
-np_row      equ os88_image_end + 600 + NP_IOCAP    ; word: np_walk's visible row
-np_rowh     equ os88_image_end + 602 + NP_IOCAP    ; word: its running fold
-np_vrows    equ os88_image_end + 604 + NP_IOCAP    ; word: rows the content
+np_row      equ os88_image_end + 88    ; word: np_walk's visible row
+np_rowh     equ os88_image_end + 90    ; word: its running fold
+np_vrows    equ os88_image_end + 92    ; word: rows the content
                                        ; shows, capped at NP_MAXROWS
-np_dr0      equ os88_image_end + 606 + NP_IOCAP    ; word: first dirty row
-np_dr1      equ os88_image_end + 608 + NP_IOCAP    ; word: ...and the last.
+np_dr0      equ os88_image_end + 94    ; word: first dirty row
+np_dr1      equ os88_image_end + 96    ; word: ...and the last.
                                        ; np_dr0 = 0xFFFF means none at all
-np_stx      equ os88_image_end + 610 + NP_IOCAP    ; word } the geometry the
-np_sty      equ os88_image_end + 612 + NP_IOCAP    ; word } signatures were
-np_srgt     equ os88_image_end + 614 + NP_IOCAP    ; word } taken at, and the
-np_sbot     equ os88_image_end + 616 + NP_IOCAP    ; word } toast that was over
-np_smsg     equ os88_image_end + 618 + NP_IOCAP    ; word } them (np_sigsame)
-np_sigup    equ os88_image_end + 620 + NP_IOCAP    ; byte: np_walk folds and
+np_stx      equ os88_image_end + 98    ; word } the geometry the
+np_sty      equ os88_image_end + 100    ; word } signatures were
+np_srgt     equ os88_image_end + 102    ; word } taken at, and the
+np_sbot     equ os88_image_end + 104    ; word } toast that was over
+np_smsg     equ os88_image_end + 106    ; word } them (np_sigsame)
+np_sigup    equ os88_image_end + 108    ; byte: np_walk folds and
                                        ; compares
-np_clip     equ os88_image_end + 621 + NP_IOCAP    ; byte: ...and draws only
+np_clip     equ os88_image_end + 109    ; byte: ...and draws only
                                        ; the dirty band
-np_sigok    equ os88_image_end + 622 + NP_IOCAP    ; byte: np_sig has been
+np_sigok    equ os88_image_end + 110    ; byte: np_sig has been
                                        ; written at least once
-np_pad3     equ os88_image_end + 623 + NP_IOCAP    ; byte: keeps np_sig even
-np_sig      equ os88_image_end + 624 + NP_IOCAP    ; NP_MAXROWS words: one
+np_pad3     equ os88_image_end + 111    ; byte: keeps np_sig even
+np_sig      equ os88_image_end + 112    ; NP_MAXROWS words: one
                                        ; per row of the content
-np_rcols    equ os88_image_end + 744 + NP_IOCAP    ; word: cells the band holds
-np_rby      equ os88_image_end + 746 + NP_IOCAP    ; word: y of the row being
+np_rcols    equ os88_image_end + 232    ; word: cells the band holds
+np_rby      equ os88_image_end + 234    ; word: y of the row being
                                        ; accumulated - BP has moved on by the
                                        ; time it is flushed
-np_rcx      equ os88_image_end + 748 + NP_IOCAP    ; word: the caret's x on that
+np_rcx      equ os88_image_end + 236    ; word: the caret's x on that
                                        ; row, 0xFFFF = it is not on this one
-np_rbuf     equ os88_image_end + 750 + NP_IOCAP    ; NP_MAXCOL+1 bytes: the row
+np_rbuf     equ os88_image_end + 238    ; NP_MAXCOL+1 bytes: the row
                                        ; being accumulated, space-filled
-np_prow     equ os88_image_end + 842 + NP_IOCAP    ; NP_MAXCOL bytes: what was
+np_prow     equ os88_image_end + 330    ; NP_MAXCOL bytes: what was
                                        ; last DRAWN on the cached row, so the
                                        ; next keystroke can draw the delta
-np_prowi    equ os88_image_end + 933 + NP_IOCAP    ; word: which row that is,
+np_prowi    equ os88_image_end + 421    ; word: which row that is,
                                        ; 0xFFFF = the cache holds nothing
-np_prcc     equ os88_image_end + 935 + NP_IOCAP    ; word: and where its caret
+np_prcc     equ os88_image_end + 423    ; word: and where its caret
                                        ; was, so the cell it vacates is redrawn
-np_flo      equ os88_image_end + 937 + NP_IOCAP    ; word } np_rflush's span,
-np_fhi      equ os88_image_end + 939 + NP_IOCAP    ; word } 0xFFFF = empty
-np_fcc      equ os88_image_end + 941 + NP_IOCAP    ; word: the caret's column
+np_flo      equ os88_image_end + 425    ; word } np_rflush's span,
+np_fhi      equ os88_image_end + 427    ; word } 0xFFFF = empty
+np_fcc      equ os88_image_end + 429    ; word: the caret's column
                                        ; on the row being flushed
-np_bandb    equ os88_image_end + 943 + NP_IOCAP    ; word: the dirty band's last
+np_bandb    equ os88_image_end + 431    ; word: the dirty band's last
                                        ; row, for the grow-box test
 
+; --- the document, and the heap it lives in (SPEC.md 27.6/50.3) ----------------
+; The text itself is NOT in this package's region. np_entry claims NP_KB0 for
+; it before it creates the window, np_room grows it a kilobyte at a time as
+; the note fills, a load sizes it to the file and File > New gives it back.
+; That is what an editor's buffer is: data whose size only the user knows,
+; and a region is image + bss capped at APP_MAX_SIZE (SPEC.md 20.1).
+np_dseg     equ os88_image_end + 433    ; word: the document claim's segment.
+                                       ; The text is [np_dseg]:0000, and it
+                                       ; is NEVER 0 while this instance lives:
+                                       ; np_entry aborts the launch rather
+                                       ; than open a window with nowhere to
+                                       ; put the text, so nothing below has
+                                       ; to test it
+np_capkb    equ os88_image_end + 435    ; word: its size in KB...
+np_cap      equ os88_image_end + 437    ; word: ...and in bytes, kept in step
+                                       ; by np_resize. NP_MAXKB * 1024 fits a
+                                       ; word, which is what bounds the note
+np_msgn     equ os88_image_end + 441    ; word: the toast's GENERATION, bumped
+np_smsgn    equ os88_image_end + 443    ; word: ...and the one the signatures
+                                       ; were taken over. np_setmsg composes
+                                       ; every toast into the same np_tbuf, so
+                                       ; the POINTER cannot tell "Saved X"
+                                       ; from "Loaded X" and np_sigsame used
+                                       ; to skip the repaint between them
+np_stgseg   equ os88_image_end + 439    ; word: the save's CR/LF staging
+                                       ; claim, 0 = not held. A SECOND claim,
+                                       ; sized from [np_len] and taken only
+                                       ; across the write, because expanding
+                                       ; CR to CR LF grows and the document
+                                       ; claim is sized for the document. A
+                                       ; load needs none: the file lands in
+                                       ; the document buffer and folds in
+                                       ; place, which only ever shrinks
 ; --- the layout checkpoint (SPEC.md 27.4) ------------------------------------
 ; np_walk is O(the note), and it runs TWICE per keystroke - which is what a
 ; user found by filling a fullscreen window and watching each keystroke get
@@ -2860,49 +3132,49 @@ np_bandb    equ os88_image_end + 943 + NP_IOCAP    ; word: the dirty band's last
 ; the start of the caret's row instead of starting at index 0, and the start
 ; of a row is (index, row) alone - the pen's x is always [np_tx] there and
 ; its y is always [np_ty] + 8*row.
-np_ckpi     equ os88_image_end + 945 + NP_IOCAP    ; word } the checkpoint: the
-np_ckpr     equ os88_image_end + 947 + NP_IOCAP    ; word } caret's row start
-np_ckpc     equ os88_image_end + 949 + NP_IOCAP    ; word } and the candidate
-np_ckpcr    equ os88_image_end + 951 + NP_IOCAP    ; word } np_rstart banks
-np_win      equ os88_image_end + 953 + NP_IOCAP    ; word: our window, which a
+np_ckpi     equ os88_image_end + 445    ; word } the checkpoint: the
+np_ckpr     equ os88_image_end + 447    ; word } caret's row start
+np_ckpc     equ os88_image_end + 449    ; word } and the candidate
+np_ckpcr    equ os88_image_end + 451    ; word } np_rstart banks
+np_win      equ os88_image_end + 453    ; word: our window, which a
                                        ; callback is handed but the worker
                                        ; has to remember
-np_bcrow    equ os88_image_end + 955 + NP_IOCAP    ; word: the row the visual
+np_bcrow    equ os88_image_end + 455    ; word: the row the visual
                                        ; break sits on (SPEC.md 27.3)
-np_borig    equ os88_image_end + 957 + NP_IOCAP    ; word: ...and the row it
+np_borig    equ os88_image_end + 457    ; word: ...and the row it
                                        ; started on, which is the first row
                                        ; the reconcile has to repaint
-np_ktick    equ os88_image_end + 959 + NP_IOCAP    ; word: the tick of the last
+np_ktick    equ os88_image_end + 459    ; word: the tick of the last
                                        ; keystroke, for the idle settle
-np_ckok     equ os88_image_end + 961 + NP_IOCAP    ; byte: the checkpoint
+np_ckok     equ os88_image_end + 461    ; byte: the checkpoint
                                        ; describes THIS layout
-np_fast     equ os88_image_end + 962 + NP_IOCAP    ; byte: this redraw is a
+np_fast     equ os88_image_end + 462    ; byte: this redraw is a
                                        ; plain insert or backspace at the
                                        ; caret, inside the caret's own row.
                                        ; One-shot: np_redraw consumes it
-np_resume   equ os88_image_end + 963 + NP_IOCAP    ; byte: np_walk starts at
+np_resume   equ os88_image_end + 463    ; byte: np_walk starts at
                                        ; the checkpoint, not at index 0
-np_bmode    equ os88_image_end + 964 + NP_IOCAP    ; byte: the visual break is
+np_bmode    equ os88_image_end + 464    ; byte: the visual break is
                                        ; up, so the screen is NOT the note
-np_clean    equ os88_image_end + 965 + NP_IOCAP    ; byte: the band is known
+np_clean    equ os88_image_end + 465    ; byte: the band is known
                                        ; blank, so a row's run needs no
                                        ; trailing padding to erase with
-np_brkok    equ os88_image_end + 966 + NP_IOCAP    ; byte: this machine is slow
+np_brkok    equ os88_image_end + 466    ; byte: this machine is slow
                                        ; enough to want the break at all
-np_hired    equ os88_image_end + 967 + NP_IOCAP    ; byte: the worker exists
-np_didpush  equ os88_image_end + 968 + NP_IOCAP    ; byte: a push scrolled the
+np_hired    equ os88_image_end + 467    ; byte: the worker exists
+np_didpush  equ os88_image_end + 468    ; byte: a push scrolled the
                                        ; band, so the grow box needs redrawing
-np_bfail    equ os88_image_end + 969 + NP_IOCAP    ; byte: a push was REFUSED -
+np_bfail    equ os88_image_end + 469    ; byte: a push was REFUSED -
                                        ; the band left below the caret is
                                        ; shorter than a row - so the break
                                        ; cannot continue and must settle
-np_bstop    equ os88_image_end + 970 + NP_IOCAP    ; byte: THIS walk ends at
+np_bstop    equ os88_image_end + 470    ; byte: THIS walk ends at
                                        ; the caret. Its own flag and not
                                        ; "[np_bmode] is set", because
                                        ; np_measure answers clicks and arrow
                                        ; keys and has to see the whole note
                                        ; even while the break is up
-np_rowsok   equ os88_image_end + 971 + NP_IOCAP    ; byte: np_rows describes
+np_rowsok   equ os88_image_end + 471    ; byte: np_rows describes
                                        ; this layout
 
 ; --- where each row starts (SPEC.md 27.5) ------------------------------------
@@ -2911,24 +3183,24 @@ np_rowsok   equ os88_image_end + 971 + NP_IOCAP    ; byte: np_rows describes
 ; Up and a Home all name a row and want the index at a column of it, and
 ; without this each of them re-derived the whole layout from index 0 to answer
 ; a question about thirty characters.
-np_rows     equ os88_image_end + 972 + NP_IOCAP    ; NP_MAXROWS words
-np_rowsn    equ os88_image_end + 972 + NP_IOCAP + NP_MAXROWS*2   ; word: how
+np_rows     equ os88_image_end + 472    ; NP_MAXROWS words
+np_rowsn    equ os88_image_end + 472 + NP_MAXROWS*2   ; word: how
                                        ; many of them the last full walk wrote
-np_sdi      equ os88_image_end + 974 + NP_IOCAP + NP_MAXROWS*2   ; word } the
-np_sdr      equ os88_image_end + 976 + NP_IOCAP + NP_MAXROWS*2   ; word } seed
-np_lastrow  equ os88_image_end + 978 + NP_IOCAP + NP_MAXROWS*2   ; word: the
+np_sdi      equ os88_image_end + 474 + NP_MAXROWS*2   ; word } the
+np_sdr      equ os88_image_end + 476 + NP_MAXROWS*2   ; word } seed
+np_lastrow  equ os88_image_end + 478 + NP_MAXROWS*2   ; word: the
                                        ; last row this walk cares about. ONE-
                                        ; SHOT and reset to 0xFFFF by np_walk,
                                        ; so a caller that forgets gets the
                                        ; whole note - slow, never wrong
-np_ecol     equ os88_image_end + 980 + NP_IOCAP + NP_MAXROWS*2   ; word: the
+np_ecol     equ os88_image_end + 480 + NP_MAXROWS*2   ; word: the
                                        ; caret's column on its row BEFORE this
                                        ; edit - reported by the key handler,
                                        ; never derived (SPEC.md 27.3)
-np_ekind    equ os88_image_end + 982 + NP_IOCAP + NP_MAXROWS*2   ; byte: what
+np_ekind    equ os88_image_end + 482 + NP_MAXROWS*2   ; byte: what
                                        ; THIS redraw is for - np_redraw's
                                        ; one-shot copy of [np_fast]'s kind
-np_eext     equ os88_image_end + 983 + NP_IOCAP + NP_MAXROWS*2   ; byte: cells
+np_eext     equ os88_image_end + 483 + NP_MAXROWS*2   ; byte: cells
                                        ; of the row below that go stale beyond
                                        ; the caret's column (Delete: 1)
-                                       ; total 972 + NP_IOCAP = NP_BSS_TOTAL
+                                       ; total 972 = NP_BSS_TOTAL

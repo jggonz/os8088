@@ -228,31 +228,38 @@ would beat the run coalescer on photographs and lose on flat drawings, and it
 would need its own back-buffer and 1bpp twins — which is exactly why the
 coalescer went first.
 
-### 2. The file API is whole-file and caps at 64KB
+### 2. The file API is whole-file and caps at 64KB — **LANDED**, and the
+### ceiling that is left is Paint's own
 
-`dskw_read`/`dskw_write` (SPEC.md §18.4) move an entire file through one
-buffer with a 16-bit count, and `FERR_BIG` refuses anything over 64KB. Since
-the canvas became resizable this is the limit users meet first, and it cuts
-twice:
+`dskw_read`/`dskw_write` (SPEC.md §18.4) used to move an entire file through
+one buffer with a 16-bit count, and `FERR_BIG` refused anything over 64KB.
+Since the canvas became resizable that was the limit users met first, and it
+cut twice: a picture larger than 64KB could not be read *at all*, and a canvas
+whose BMP would pass 64KB could not be saved — Paint edited a 594×342 picture
+(102KB) perfectly well and then reported "Too big to save (64KB limit)".
 
-- **A picture larger than 64KB cannot be read at all.** Not "read partially" —
-  there is no positioned read, so a 155KB BMP is simply refused. The request
-  that motivated the resizable canvas ("load as much of an oversized bitmap as
-  will fit") is therefore honoured for *dimensions* — a 700×440 file opens
-  cropped to what the screen and memory allow — but cannot be honoured for
-  *file size*.
-- **A canvas whose BMP would pass 64KB cannot be saved.** Paint edits a
-  594×342 picture (102KB) perfectly well; writing it needs a call the API does
-  not have, so it reports "Too big to save (64KB limit)" rather than writing a
-  truncated file.
+**SPEC.md §18.4.1 lifted it.** The count is `DX:CX` and the buffer walks by
+segment, so there is no file-size limit in the API in either direction, and
+Paint's save is still one `OSAPI_FILE_WRITE` of the canvas base with no
+staging copy — `DX:AX` straight into `DX:CX`. The refusal and its notice are
+gone; verified by saving a 448×326 canvas as a 73,142-byte BMP and reading it
+back off the volume from the host.
 
-The canvas is still laid out *as* the file — a 118-byte DIB header in front of
-bottom-up rows — so a save that does fit is one `OSAPI_FILE_WRITE` of the
-canvas base with no staging copy at all.
+**What is left is Paint's, and it is now visible as an asymmetry.** The BMP
+decoder computes `biHeight × stride` into `DX:AX` and refuses a non-zero `DX`,
+because `pt_srow` and everything downstream of it are 16-bit offsets into the
+staging buffer. So Paint **saves pictures it cannot re-open**: that 73KB file
+is a valid 4bpp BMP any host displays, and `File > Open` on it answers "Not a
+picture we can read". Two ways out, both inside Paint:
 
-A positioned read/write (`read(name, offset, len, buf)`) or a real
-open/seek/close would lift both limits, and would also let a decoder stream
-instead of demanding the whole file in RAM at once.
+- carry the source offset as a (segment, offset) pair through `pt_bmp_row`,
+  the way `pt_rowseg`/`pt_rowoff` already do for the canvas itself; or
+- decode row by row out of a small window instead of demanding the whole file
+  in one addressable block, which is what a positioned read would have bought
+  and which the staging buffer can emulate now that the read can fill it.
+
+The GIF encoder's ceiling is the same shape and stays for the same reason:
+`pt_gout` is a 16-bit pointer into one staging segment.
 
 ### 3. No teardown callback for a package — half resolved
 
@@ -371,8 +378,7 @@ Two things about it are worth knowing before touching it:
 decoder is Huffman + dequantise + IDCT + upsample + colour convert, and on a
 4.77MHz 8088 with no hardware multiply worth the name that is tens of seconds
 for a single 448×280 frame, before the dither to sixteen colours. An encoder is
-worse. The 64KB file ceiling also means the only JPEGs that could be opened at
-all are small ones. The app recognises it by magic and says so rather than
+worse. The app recognises it by magic and says so rather than
 guessing.
 
 (The package is about 13.8KB of image + 3.6KB of bss. The budget is
@@ -417,9 +423,10 @@ What GIF costs in time, and what it buys: LZW is per-pixel work in both
 directions, so a 448×280 picture is about 125,000 trips through a dictionary
 walk — a few seconds either way under QEMU, comparable to the BMP path, which
 spends its time on the floppy instead. In return, the 448×280 test picture is
-62,838 bytes as a BMP and 1,285 as a GIF; since the file API refuses anything
-over 64KB (above), GIF is the only format in which a large canvas can be saved
-at all.
+62,838 bytes as a BMP and 1,285 as a GIF. GIF used to be the only format in
+which a large canvas could be saved at all; the file API's ceiling is gone
+(above), so BMP saves any size now — but only GIF *reloads* one, because
+the BMP decoder's own 64KB-of-pixels limit is still there.
 
 Measured under QEMU with `make run-640`: a full-canvas flood fill of a picture
 with obstacles completes in about four seconds of wall clock, opening a 448×280
