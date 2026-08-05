@@ -5516,11 +5516,9 @@ Four things hold the engine up:
 
 Two limits, recorded rather than hidden:
 
-- **A Cut is a copy followed by a delete**, not a re-linking of directory
-  entries. The fast move is real — the data need never be read — but it
-  means fixing up a moved directory's own `..` and reasoning about a chain
-  that is briefly named twice. The cost is that a Cut needs room for both
-  copies at once.
+- **A Cut inside one volume re-links rather than copies** — see §22.6. Across
+  drives it is still a copy followed by a delete, which is the only thing it
+  can be when the two volumes share no FAT.
 - **File size is not a limit** — see §22.5. The buffer is one `MEM_K_COPY`
   claim (§50) sized from `mem_avail`, held for the whole operation
   *including* the part suspended on a question, and released by `fcp_stop`
@@ -5614,6 +5612,49 @@ logic:
 - **A read that crosses a 64KB physical boundary is not a *logic* error**,
   so it does not fail — it hangs in the BIOS. That is why the alignment is
   explicit here rather than assumed.
+
+### 22.6 A move inside one volume is three sector writes
+
+A same-volume Cut needs no data I/O at all: the cluster chain is already
+where it belongs and only the *name* of it changes hands. `fcp_relink` moves
+the directory entry — a read and a write per cluster becomes three sector
+writes, so a folder of packages moves in less time than the copy path took
+to read one of them.
+
+**It declines rather than competes.** Another drive, a name the destination
+already holds, a full destination directory, a source it cannot read: it
+answers "not attempted" and `fcp_step` falls through to the copy engine,
+which is the one that knows how to ask about overwrites. That is what keeps
+this an optimisation rather than a second set of semantics, and it is why
+the overwrite prompt, the recursion and the suspend/resume machinery needed
+no changes at all.
+
+Two things make it cheap enough to be worth having:
+
+- **`dskw_raw` still holds the SOURCE's thirty-two bytes** when the
+  destination's lookup fails — `dskw_stat` bails inside `dskw_find`, before
+  `dskw_ent_load` could overwrite them. So the entry that lands in the
+  destination is the source's, carrying its real 32-bit size *and* its
+  original timestamps. Building a fresh one through `dskw_commit` would have
+  given neither: that path writes the size from the 16-bit `[dskw_len]`.
+- **`[dskw_zapnext]` is consumed by `dskw_ent_store`, not by
+  `dskw_commit`.** Taking the slot that *is* the end-of-directory marker —
+  the common case in a young directory — is therefore handled by the same
+  routine that writes the entry, and the three-line slot hand-off
+  (`[dskw_fsec]`/`[dskw_foff]`/`[dskw_fend]`) is the whole of it.
+
+**The order is binding: the destination entry is written before the source
+is unnamed.** A crash between the two leaves the chain named from two
+directories — visible, and the user can delete one. The other order loses
+the file. `fcp_rlzap` is the one delete in this system that leaves the
+clusters alone, because they are not free: the entry just written owns them
+now, and `dskw_delete` would take the moved file with it.
+
+**A moved folder's own `..` follows it** (`fcp_rlup`). Entry 1 of a
+subdirectory is `..` by spec — the same fact `dsk_dotdot` rests on (§19.2) —
+and it is checked rather than assumed, because everything read off the disk
+is hostile. Without it the folder still lists and still opens, but going up
+out of it lands in the folder it used to live in.
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 

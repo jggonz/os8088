@@ -33,12 +33,10 @@
 ;
 ; What this deliberately does NOT do:
 ;
-; - A same-volume move is a copy followed by a delete, not a re-linking of
-;   directory entries. The fast move is real (the data need never be read),
-;   but it means fixing up a moved directory's own '..' entry and reasoning
-;   about a chain that is briefly named twice; copy-then-delete reuses one
-;   engine and is obviously correct, at the cost of needing room for both
-;   copies at once. Recorded, not overlooked.
+; - A same-volume move re-links the directory entry rather than copying the
+;   data (fcp_relink, SPEC.md 22.6). Across drives it is still a copy
+;   followed by a delete, which is the only thing it can be when the two
+;   volumes share no FAT.
 ; - Nothing about the SIZE of a file: the buffer bounds the CHUNK, not the
 ;   file (SPEC.md 22.5). dskw_write still takes a 16-bit length and always
 ;   will, so a copy is a truncating create followed by a run of
@@ -470,6 +468,16 @@ fcp_step:
 
     ; --- the first step: the clipboard entry itself ---
     mov byte [fcp_started], 1
+    cmp byte [fcp_op], FCP_CUT  ; a same-volume move needs no data I/O at
+    jne .copyit                 ; all (SPEC.md 22.6) - try that first, and
+    mov al, [fcp_drv]           ; fall through to the copy engine when it
+    cmp al, [fcp_ddrv]          ; declines
+    jne .copyit
+    call fcp_relink             ; CF=0 done; CF=1 with AX=0 not attempted;
+    jnc .finish2                ; CF=1 with AX = FERR_* past the point of
+    or ax, ax                   ; no return
+    jnz .failax
+.copyit:
     cmp word [fcp_type], 2
     jae .tree
 
@@ -524,6 +532,7 @@ fcp_step:
     call fcp_srcdel
     jc .fail
 .ok:
+.finish2:
     mov al, FCPS_DONE
     call fcp_stop
     ret
@@ -542,6 +551,170 @@ fcp_step:
 .failed:
     mov al, FCPS_ERR
     call fcp_stop
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_relink - move an entry inside ONE volume by moving its directory entry
+; out: CF=0 = done; CF=1 with AX = 0 = not attempted (the caller falls back
+;      to the copy engine); CF=1 with AX = FERR_* = failed past the point of
+;      no return. Preserves everything else.
+;
+; A same-volume move needs no data I/O at all (SPEC.md 22.6): the chain is
+; already where it belongs and only the name of it changes hands. Three
+; sector writes, against a read and a write per cluster - a folder of
+; packages moves in less time than the copy path took to read one of them.
+;
+; It DECLINES rather than competes. Another drive, a name the destination
+; already holds, a full destination directory, a source it cannot read: AX =
+; 0 and the engine that knows how to ask about overwrites takes it. That is
+; what keeps this an optimisation rather than a second set of semantics.
+;
+; Two things make it cheap. dskw_raw still holds the SOURCE's thirty-two
+; bytes when the destination's lookup fails - dskw_stat bails inside
+; dskw_find, before dskw_ent_load could overwrite them - so the entry that
+; lands in the destination carries the real 32-bit size AND the original
+; timestamps, which building a fresh one through dskw_commit would not.
+; And [dskw_zapnext] is consumed by dskw_ent_store, not by dskw_commit, so
+; taking the slot that IS the end-of-directory marker is handled by the same
+; routine that writes the entry.
+;
+; The order is binding: the destination entry is written BEFORE the source is
+; unnamed. A crash between the two leaves the chain named from two
+; directories - visible, and the user can delete one. The other order loses
+; the file.
+; -----------------------------------------------------------------------------
+fcp_relink:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov al, [fcp_drv]           ; the source entry, raw
+    mov bx, [fcp_cwd]
+    call fcp_goto
+    jc .no
+    mov si, fcp_name
+    call dskw_stat              ; dskw_raw = its 32 bytes, BX = first cluster
+    jc .no
+    mov [fcp_rlclus], bx
+
+    mov al, [fcp_ddrv]          ; the destination must not hold that name
+    mov bx, [fcp_dcwd]
+    call fcp_goto
+    jc .no
+    mov si, fcp_name
+    call dskw_stat
+    jnc .no                     ; it does: the copy path knows how to ask
+    cmp ax, FERR_NOENT
+    jne .no
+    cmp word [dskw_fsec], 0xFFFF
+    je .no                      ; no reusable slot: FERR_DIRFULL is the copy
+                                ; engine's to report, with its own message
+
+    mov ax, [dskw_fsec]         ; the slot dskw_find spotted on its scan
+    mov [dskw_dsec], ax
+    mov ax, [dskw_foff]
+    mov [dskw_doff], ax
+    mov al, [dskw_fend]         ; taking the 0x00 terminator means the next
+    mov [dskw_zapnext], al      ; entry must be zeroed to remain one
+    call dskw_ent_store
+    jc .no                      ; nothing written yet: still declinable
+
+    mov al, [fcp_drv]           ; ...and ONLY now unname the source
+    mov bx, [fcp_cwd]
+    call fcp_goto
+    jc .half
+    mov si, fcp_name
+    call fcp_rlzap
+    jc .half
+
+    cmp word [fcp_type], 2      ; a folder's own '..' has to follow it
+    jb .done
+    call fcp_rlup               ; best effort: the move has happened either
+.done:                          ; way, and a stale '..' is a wrong parent
+    pop di                      ; link, not a lost file
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.half:
+    mov ax, FERR_IO             ; past the point of no return: the entry is
+    jmp short .out              ; in the destination and the source still
+.no:                            ; names it. Reported, never retried.
+    xor ax, ax                  ; not attempted, nothing written
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_rlzap - unname an entry WITHOUT freeing its chain (module-internal)
+; in:  SI = its NUL 8.3 name, its directory current
+; out: CF=0, or CF=1 with AX = FERR_*
+; clobbers: AX, flags
+;
+; The one delete in this system that leaves the clusters alone, because they
+; are not free: the entry fcp_relink just wrote in the destination owns them
+; now. dskw_delete would free them and take the moved file with it.
+; -----------------------------------------------------------------------------
+fcp_rlzap:
+    call dskw_stat              ; locates it: dskw_dsec/doff, and dskw_raw
+    jc .out
+    mov byte [dskw_raw], 0xE5   ; SPEC.md 19's deleted marker
+    mov byte [dskw_zapnext], 0
+    call dskw_ent_store
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_rlup - point a moved folder's own '..' at its new parent
+; out: nothing (all registers preserved); a failure is left alone
+;
+; Entry 1 of a subdirectory is '..' by spec, which is the same fact
+; dsk_dotdot rests on (SPEC.md 19.2) - and it is checked here rather than
+; assumed, because everything read off the disk is hostile. Without this the
+; moved folder still lists and still opens, but going UP out of it lands in
+; the folder it used to live in.
+; -----------------------------------------------------------------------------
+fcp_rlup:
+    push ax
+    push bx
+    push cx
+    push es
+    mov ax, LOW_SEG
+    mov es, ax
+    mov ax, [fcp_rlclus]
+    call dsk_clus2lba           ; AX = the folder's first sector
+    jc .out
+    push ax
+    mov cx, 1
+    mov bx, dsk_secbuf
+    call disk_read
+    pop ax
+    jc .out
+    cmp byte [es:dsk_secbuf+32], '.'
+    jne .out
+    cmp byte [es:dsk_secbuf+33], '.'
+    jne .out
+    mov bx, [fcp_dcwd]
+    mov [es:dsk_secbuf+32+DSK_R_CLUS], bx
+    push ax
+    mov cx, 1
+    mov bx, dsk_secbuf
+    call disk_write
+    pop ax
+.out:
+    pop es
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1218,6 +1391,8 @@ fcp_raw:    resw 1              ; the copy buffer as mem_claim gave it...
 fcp_seg:    resw 1              ; ...and rounded up to a 512-byte boundary
 fcp_kb:     resw 1              ; its size in KB...
 fcp_chunk:  resw 1              ; ...and the bytes one pass moves
+
+fcp_rlclus: resw 1              ; fcp_relink: the moved entry's first cluster
 
 fcp_rclus:  resw 1              ; the streaming read: the next cluster...
 fcp_rsz:    resw 1              ; ...the bytes of the file still to come,
