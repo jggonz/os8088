@@ -9765,20 +9765,9 @@ allow, from 32x16 up, and everything else follows from that:
   well, and a larger canvas could be edited but not saved; that refusal and
   its notice are gone.
 
-  **Two ceilings that were never the file API's are still there, and one of
-  them now shows.** The GIF *encoder* addresses one staging segment with a
-  16-bit pointer, so `Save Gif` still refuses past ~64KB of output. And the
-  BMP *decoder* refuses more than 64KB of pixel data — `pt_bmp_in` computes
-  `biHeight × stride` into DX:AX and gives up if DX is non-zero, because
-  `pt_srow` and everything downstream of it are 16-bit offsets into the
-  staging buffer. So **Paint can now save a picture it cannot re-open**: a
-  636×326 canvas writes a perfectly valid 4bpp BMP that any host reads, and
-  `File > Open` on it answers "Not a picture we can read". That is a worse
-  trap than the old refusal *sounds* like, and a better outcome than it
-  *was* — refusing the save lost the user's work outright, where this leaves
-  it in a file every other tool on the planet can open. Lifting it is a
-  Paint change (a 32-bit source offset through the decoder), not a kernel
-  one, and it is not done.
+  The decoder followed (§42.6), so a picture Paint saves is one Paint can
+  re-open. The GIF encoder's own ceiling stays, and it is not the file
+  API's.
 - **The canvas base is a heap claim.** `pt_geom` asks `OSAPI_MEM_AVAIL` what
   the largest free run is, caps it at what the app can use, and takes it with
   `OSAPI_MEM_CLAIM` (§50.3); `[pt_base]` is whatever segment came back. That
@@ -10005,6 +9994,57 @@ the sweep moved with it). So an extra window can never outlive the segment its
 callback procs live in — it just makes a poor citizen of the ones that manage
 it by hand. A card is a flag and some pixels: it cannot outlive the instance
 because it never existed apart from it.
+
+### 42.6 Opening a big picture, and the ceilings that were not the file API's
+
+§18.4.1 lifted the file API's 64KB ceiling and §42's save with it. Three of
+Paint's own ceilings were left, all of them written before the kernel had an
+allocator to ask, and two of them have gone.
+
+**The staging buffer is a claim now, not a borrowed one.** A file being
+decoded used to be read into the **undo image** — "the biggest single buffer
+we have" — and, when there was no undo image, into the flood-fill stack:
+`PT_SC_KB`, twelve kilobytes, which was the real limit on what Paint could
+open. Borrowing the undo image is also why opening a picture threw the undo
+history away, and why the code that followed emptied the clipboard "because
+the codec's tables live in it" — a line that had outlived its reason by two
+refactors, the LZW tables having had their own claim for a while.
+`pt_stage`/`pt_unstage` take a transient claim sized from `OSAPI_MEM_AVAIL`
+and capped at `PT_STAGE_MAX`, and `pt_stagefit` shrinks it to the bytes the
+read actually reported **before** `pt_adopt` goes looking for a canvas and an
+undo image — nothing knows the file's size until the read reports it, so the
+claim has to be for the largest run the heap had. The GIF *encoder* takes the
+same claim, capped at `PT_GIF_MAX_KB`, instead of building the file in the
+undo image.
+
+**The BMP decoder is 32-bit.** `biHeight × stride` is the number it used to
+give up on: 448 × 326 is 73,024 and every picture worth a resizable canvas
+passes 65,535. It is a dword now, added to a dword `bfOffBits` — a picture
+past the horizon has its pixel data past it too — and compared against the
+dword the read reported. Per row, `pt_srowset` turns the 32-bit byte offset
+into a **(segment, offset) pair** exactly as `pt_rowseg`/`pt_rowoff` have
+done for the canvas since it outgrew a segment, and by the same arithmetic as
+`dskw_norm` (§18.4.1): the paragraph part goes into the segment and what is
+left is under 16, so the per-column offsets `pt_bmp_row` builds on top of it
+cannot carry.
+
+**The GIF decoder stays 16-bit, deliberately.** Every offset into the stream
+is a word and `pt_gdeblk` flattens the sub-blocks with one `rep movsb` inside
+one segment. A GIF is *compressed* — the 448×280 test picture is 1,285 bytes
+where its BMP is 62,838 — so 64KB of GIF is a picture far past `PT_GDIM_MAX`,
+and the ceiling is the format's natural size rather than a limitation. What
+changed is that a file past it is **refused** ("GIF larger than 64KB") rather
+than being handed to a decoder that would truncate it, which is reachable now
+that the read can deliver one. The GIF *encoder*'s ceiling is the same shape
+and stays for the same reason: `pt_gout` is a 16-bit write cursor into one
+segment, and "GIF too big to save — try Bmp" says which of the two formats
+has the limit.
+
+Measured: the Paint before this refuses a 69,718-byte BMP outright with "File
+too large" — its staging was the default canvas's undo image. The Paint after
+it opens a 124,918-byte one (620×400, cropped to the screen's 594×390) and
+every one of the 390 decoded rows matches the source pixel for pixel, 190 of
+them read from source bytes past the 64KB horizon.
 
 ## 43. Solitaire — the eighth package (apps/solitaire/solitaire.asm)
 
