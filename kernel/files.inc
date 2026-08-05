@@ -1402,7 +1402,9 @@ fm_onclick:
     call fm_drag                ; CF=0 = it WAS a drag, already handled
     pop bx
     pop ax
-    jnc .out
+    jnc .redraw                 ; ...except the repaint: a drop changes this
+                                ; window's own listing (a Cut left it) and
+                                ; may have armed the replace question
 
     cmp ax, [bx+FS_SEL]         ; second click on the selected entry?
     jne .select
@@ -2893,7 +2895,10 @@ fm_dgdrop:
 
     mov di, [fm_vp]
     mov al, [di+FS_DRV]
-    mov bx, [di+FS_CWD]         ; the default target: the folder it shows
+    mov [fm_dgdrv], al          ; BANKED: fm_hit clobbers AX, and the target
+    mov bx, [di+FS_CWD]         ; drive has to outlive it. Leaving it in AL
+                                ; is what made every drop paste to a garbage
+                                ; drive, fail FERR_NODISK and look inert
     call fm_hit                 ; AX = directory index, CF=1 = not a row
     jc .have
     push bx
@@ -2903,6 +2908,7 @@ fm_dgdrop:
     jb .have                    ; a file: into the window's folder
     mov bx, [si+18]             ; a folder (or '..'): into THAT one
 .have:
+    mov al, [fm_dgdrv]
     cmp al, [fcp_drv]           ; the same folder it came from? then the
     jne .go                     ; drag went nowhere and there is nothing
     cmp bx, [fcp_cwd]           ; to do - not a copy of it into itself
@@ -2910,10 +2916,9 @@ fm_dgdrop:
 .go:
     push ax
     push bx
-    mov di, [fm_dgwin]          ; the paste result is reported on the window
-    mov bx, di                  ; the drag STARTED in, which is where the
-    call fm_vp_set              ; user is looking
-    pop bx
+    mov bx, [fm_dgwin]          ; the paste result is reported on the window
+    call fm_vp_set              ; the drag STARTED in, which is where the
+    pop bx                      ; user is looking
     pop ax
     call fcp_paste
     call fm_paste_res
@@ -2942,11 +2947,18 @@ fm_paste_res:
     cmp al, FCPS_ERR
     je .err
     mov byte [di+FS_FERR], 0
-    jmp short .out
+    jmp short .all
 .err:
     mov al, [fcp_err]
     mov [di+FS_FERR], al
-    jmp short .out
+.all:
+    call wm_paint_all           ; fmv_reload_all moved every window's CACHE;
+    jmp short .out              ; their PIXELS are still the old listing, and
+                                ; a paste is the one operation that can
+                                ; change three windows at once. The caller's
+                                ; own repaint then lands on top of ours,
+                                ; which is one window against the disk I/O
+                                ; this operation has already done
 .ask:
     push si
     push cx
@@ -4037,7 +4049,7 @@ fm_starty:  resw 1
 fm_dgx:     resw 1              ; where the outline is DRAWN (fm_dgxor)
 fm_dgy:     resw 1
 fm_dgon:    resb 1              ; 1 = the outline is on screen
-fm_dgpad:   resb 1
+fm_dgdrv:   resb 1              ; the drop target's drive, banked past fm_hit
 
 fm_cx:      resw 1              ; fm_layout: content left (abs)
 fm_cy:      resw 1              ; fm_layout: content top (abs)
