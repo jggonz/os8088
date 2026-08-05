@@ -42,7 +42,7 @@ KERNEL_SEG   equ 0x0060         ; kernel lands at linear 0x00600, the first
                                 ; paragraph above the BIOS data area. Mirrored
                                 ; in kernel/kernel.asm, which asserts that the
                                 ; kernel ends clear of our relocated stack
-BOOT_RELOC   equ 0x0C00         ; 0x0C00*16 + 0x7C00 = linear 0x13C00: where
+BOOT_RELOC   equ 0x0D40         ; 0x0D40*16 + 0x7C00 = linear 0x15000: where
                                 ; we copy ourselves, above anything the kernel
                                 ; can reach. Mirrored in kernel/kernel.asm
 STACK_TOP    equ 0x7C00         ; stack grows down from our own base, so it

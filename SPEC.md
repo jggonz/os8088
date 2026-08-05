@@ -5345,6 +5345,132 @@ Two things hold it up:
 `fdlg.inc` has the same rule and its own `fdlg_sel_bar` (§38.3): the geometry
 differs, the argument does not.
 
+### 22.3 Cut, Copy and Paste (`kernel/filecp.inc`)
+
+The clipboard is **(drive, folder, name, type)** and deliberately not an
+index: an index means nothing outside the listing it came from, and the
+whole point is that the listing changes between the Cut and the Paste — a
+different window, a different folder, possibly the other drive. A name is a
+legal `dskw_name83` input (§19) and cannot go stale the way an index can,
+which is the argument `fm_onam` already won for Rename. `..` cannot be cut
+or copied (§19.5).
+
+**Surfaces.** File ▸ Cut / Copy / Paste on the bar; Cut, Copy on a row's
+context menu and **Paste Into** on a folder's; **Paste** on the empty-space
+menu; and Ctrl+X / Ctrl+C / Ctrl+V on the keyboard — *control codes*, not
+bare letters, because `c` and `v` are already this window's own shortcuts
+and int 16h hands 0x18/0x03/0x16 straight over. Every one of them runs the
+same `FMC_*` id through the same `fm_jmp` table, so no command has a second
+implementation. A Copy stays on the clipboard and can be pasted again; a Cut
+is spent by its paste.
+
+**Paste takes its target as an argument** (`fcp_paste`, AL = drive, BX =
+folder), because three surfaces name it differently: Paste means "this
+window's folder", Paste Into means "the folder under the pointer", and a
+drop means "the folder I was released over, possibly in another window"
+(§22.4).
+
+**A folder is copied recursively, and the source folder's name is created
+inside the target** — pasting `SUB` into `DEST` makes `DEST/SUB/…`, which is
+also what pasting *onto* a folder does. A folder that already exists is
+**not** an overwrite: it is adopted and the recursion continues into it. A
+*file* of that name where a folder must go is a genuine collision `mkdir`
+cannot resolve, and it is reported.
+
+**The overwrite question suspends the operation.** `fcp_step` runs until it
+finishes, fails, or must ask; every byte of its state is in `.bss`, so the
+pause is an ordinary trip through the event loop and `fcp_answer` resumes
+it. The question is `FS_EDIT` = 4 — the Delete confirmation's mechanism with
+a third answer — and reads `Replace NAME? Enter=yes A=all Esc=stop`. **A**
+sets `[fcp_all]` and nothing is asked again for the rest of that operation;
+anything else stops it with what has already been copied left in place.
+
+Four things hold the engine up:
+
+- **The recursion has no call stack.** A task stack is 512 bytes (§2.1) and
+  a directory tree is attacker-supplied, so the walk keeps `FCP_MAXD` = 6
+  frames of (source cluster, mirror cluster, entry ordinal) in `.bss` and
+  iterates — `dskw_rmtree`'s discipline. What is different is that a copy
+  does not consume the source as it goes, so each frame has to remember
+  *where it was*: `fcp_scan` re-walks the directory to its ordinal, which
+  costs FAT lookups out of the RAM snapshot plus one sector read, because
+  `dsk_dirw_next` only computes LBAs. Deeper than `FCP_MAXD` is reported,
+  never walked.
+- **`fcp_goto` is quiet inside one volume.** `dsk_chdir` re-runs the whole
+  mount because the *listing* must follow it, but nothing here reads the
+  listing — `dskw_*` resolve names by walking `[dsk_cwd]`'s raw directory,
+  and the FAT snapshot belongs to the volume, not the folder. So a move
+  inside one volume is a word, and a tree copy that would otherwise pay two
+  full mounts per directory pays none. Crossing to the other drive is a real
+  mount, because then the snapshot genuinely is wrong. The cluster is
+  range-checked here, since the quiet path skips `disk_mount`'s own
+  `.cwd_lost` validation.
+- **`[dskw_batch]` defers the coherence remount.** §18.4 rule 3 has every
+  `dskw_*` re-mount on success; a tree copy would pay that per file, so the
+  flag suppresses it and the operation ends with one `fmv_reload_all` — every
+  live Disk window re-listed from its own (drive, folder), because a paste
+  changes the destination, a Cut's source, and every folder it created.
+  `fmv_bcast` reaches only the windows on the *current* (drive, cwd), which
+  after a walk is wherever the walk stopped. The flag is **dropped while a
+  question is outstanding**: the pause is a trip through the event loop where
+  anything else that writes must behave normally.
+- **`fcp_selfchk` refuses a folder pasted into itself or its own subtree**,
+  by walking up from the destination looking for the source's cluster —
+  the cheapest way to ask "is the source an ancestor" on a file system with
+  no paths. Without it the walk creates a copy inside the directory it is
+  reading and then finds that copy, forever.
+
+Two limits, recorded rather than hidden:
+
+- **A Cut is a copy followed by a delete**, not a re-linking of directory
+  entries. The fast move is real — the data need never be read — but it
+  means fixing up a moved directory's own `..` and reasoning about a chain
+  that is briefly named twice. The cost is that a Cut needs room for both
+  copies at once.
+- **A file larger than the copy buffer is refused with `Too large`.**
+  `dskw_write` takes a 16-bit length, so 64KB is the ceiling whatever the
+  heap says; the buffer is one `MEM_K_COPY` claim (§50) sized from
+  `mem_avail`, held for the whole operation *including* the part suspended
+  on a question, and released by `fcp_stop` on every exit. `BEVERLY.MOD` is
+  deliberately larger than that.
+
+`dskw_stat` (name → CF, attribute, first cluster) is published for this: the
+overwrite prompt has to ask "would this replace something, and is that
+something a folder?" *before* writing, and no existing entry point could
+answer without also doing the thing.
+
+### 22.4 Dragging an entry onto a folder
+
+A press on a row that leaves it by `FM_DRAGMIN` pixels becomes a **drag**;
+released over a folder, it **moves** the entry there. That is the same
+operation Cut-then-Paste performs (§22.3), and it literally is: `fm_drag`
+arms the clipboard as a Cut the moment the drag begins and hands the drop
+target to `fcp_paste`. Giving the drag a transport of its own would be a
+second thing to keep correct.
+
+It is `ui_drag`'s loop with three differences:
+
+- **The gfx lock is already held**, because this runs inside `W_ONCLICK`.
+  So it never calls `gfx_lock` — it unlocks and re-locks around the yield
+  exactly as `ui_drag`'s tracking pass does, and returns holding it.
+- **The outline is a row-sized rect**, drawn VRAM-direct for `ui_drag_xor`'s
+  reason (§32): a transient overlay, always XOR-erased before the lock drops.
+  `[fm_dgx]`/`[fm_dgy]` exist because the erase must use the coordinates the
+  draw used — XOR only removes what it put there, and the pointer moves
+  between the two calls.
+- **The drop is resolved against every visible window**, not the one it
+  started in. That is the point: a drag from a GAMES window onto a folder in
+  an APPS window is the same move Cut and Paste would have made. `wm_hit`
+  finds the window, `inst_win_owner` says whether it is a Disk window, and
+  that window's own `fm_layout` + `fm_hit` say which row. A folder row (type
+  2 or 3) is the target; a file row, a blank row or the header all mean
+  "into the folder you can see".
+
+A drop onto the folder it came from is a no-op, not a copy of everything
+into itself. `..` cannot be dragged (§19.5). A drag is always a move — the
+Macintosh rule within one volume, and the only one this system can honour
+without a modifier key it has no way to report.
+
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
 Not kernel code: a .o88 package built with os88api.inc, org 0 (§20.1), all

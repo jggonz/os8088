@@ -93,7 +93,7 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; had no heap and could load nothing).
 ;
 ; **Everything from KERNEL_SEG to the end of task 0's stack is the kernel**,
-; and guard 1 holds that whole span to KERN_BUDGET - 75KB just above the
+; and guard 1 holds that whole span to KERN_BUDGET - 79KB just above the
 ; BIOS data area. Code, data, scratch, the FAT snapshot, the disk buffers and
 ; every task stack are inside it. The one deliberate exception is the menu
 ; save-under, which is a heap claim (SPEC.md 12.4/50) because it is 20KB that
@@ -106,7 +106,7 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; folder it created from the file dialog - the deepest mark left was 246 bytes
 ; on task 0's stack and 150 on a background task's.
 ; =============================================================================
-KERN_BUDGET equ 76800           ; the whole kernel, guard 1. Growing past this
+KERN_BUDGET equ 80896           ; the whole kernel, guard 1. Growing past this
                                 ; is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
                                 ; It has moved three times, every one asked
@@ -123,7 +123,16 @@ KERN_BUDGET equ 76800           ; the whole kernel, guard 1. Growing past this
                                 ; SPEC.md 51.5's keyed SYSTEM.CFG, granted in
                                 ; ADVANCE of further work with an optimisation
                                 ; pass to follow, so the slack under this one
-                                ; is temporary rather than an invitation
+                                ; is temporary rather than an invitation; and
+                                ; 72,704 -> 80,896 for the file manager's
+                                ; Cut/Copy/Paste, its recursive paste engine
+                                ; and the drag (SPEC.md 22.3/22.4), which
+                                ; overran the previous figure by 512 bytes
+                                ; with the drag still to come. Asked for and
+                                ; granted with the 4KB it costs the claim heap
+                                ; on every machine named up front - Paint
+                                ; gives up one canvas tier for it, and the
+                                ; 128KB RAM floor is untouched
 
 ; The relocated boot sector (boot/boot.asm). The kernel now lands at 0x00600
 ; and runs up through 0x7C00, where the BIOS put the sector that is reading
@@ -131,7 +140,7 @@ KERN_BUDGET equ 76800           ; the whole kernel, guard 1. Growing past this
 ; offset so every label in it still resolves at org 0x7C00. BOOT_RELOC:7C00
 ; is linear 0x13C00; its stack grows down from there, and guard 5 keeps the
 ; kernel clear of both. Both constants are mirrored in boot/boot.asm.
-BOOT_RELOC  equ 0x0C00          ; 0x0C00*16 + 0x7C00 = linear 0x13C00
+BOOT_RELOC  equ 0x0D40          ; 0x0D40*16 + 0x7C00 = linear 0x15000
 BOOT_LIN    equ BOOT_RELOC*16 + 0x7C00
 BOOT_STACK  equ 2048            ; stack room below it
 
@@ -851,6 +860,9 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
                                 ; disk.inc, whose constants and layout it uses
 %include "loader.inc"
 %include "files.inc"
+%include "filecp.inc"        ; Cut/Copy/Paste and the recursive paste
+                                ; engine (SPEC.md 22.3) - after files.inc,
+                                ; whose fm_* it reads
 %include "fdlg.inc"             ; the Standard File dialog (SPEC.md 38)
 %include "icons.inc"
 %include "desk.inc"
@@ -893,7 +905,7 @@ KBUF_KB    equ ((FAT_PARA + LOW_PARA) * 16 + 1023) / 1024
 
 ; 1. THE budget: the whole kernel - image, scratch, FAT snapshot, disk
 ;    buffers and every task stack - is one span starting at KERNEL_SEG, and
-;    it fits KERN_BUDGET (75KB) just above the BIOS data area. This is the guard
+;    it fits KERN_BUDGET (79KB) just above the BIOS data area. This is the guard
 ;    the project is steering by; raising KERN_BUDGET is a decision, not a
 ;    build fix (docs/KERNEL-MEMORY.md).
 %if KERN_SIZE > KERN_BUDGET

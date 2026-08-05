@@ -612,6 +612,8 @@ FM_FREE       equ 255           ; the one FS_FERR value that is not a FERR_*:
 fm_s_newfld:  db 'New folder: ', 0
 fm_s_renam:   db 'Rename ', 0
 fm_s_rento:   db ' to: ', 0
+fm_s_reppr:   db 'Replace ', 0     ; the overwrite question (SPEC.md 22.3)
+fm_s_repq:    db '? Enter=yes A=all Esc=stop', 0
 fm_s_delpr:   db 'Delete ', 0
 fm_s_delq:    db '? Enter=yes Esc=no', 0
 fm_s_delq2:   db ' +contents? Enter=yes Esc=no', 0   ; ...for a folder
@@ -642,6 +644,10 @@ fm_s_open:    db 'Open', 0
 fm_s_mkdir:   db 'New Folder...', 0
 fm_s_rename:  db 'Rename...', 0
 fm_s_delete:  db 'Delete', 0
+fm_s_cut:     db 'Cut', 0
+fm_s_copy:    db 'Copy', 0
+fm_s_paste:   db 'Paste', 0
+fm_s_pastin:  db 'Paste Into', 0
 fm_s_closew:  db 'Close Window', 0
 fm_s_refr:    db 'Refresh', 0
 fm_s_up:      db 'Up One Folder', 0
@@ -655,7 +661,8 @@ fm_s_newwin:  db 'New Window', 0
 fm_s_opennew: db 'Open in New Window', 0
 
 fm_items_file:
-    dw fm_s_open, fm_s_mkdir, fm_s_rename, fm_s_delete, fm_s_closew
+    dw fm_s_open, fm_s_mkdir, fm_s_rename, fm_s_delete
+    dw fm_s_cut, fm_s_copy, fm_s_paste, fm_s_closew
 fm_items_fold:
     dw fm_s_newwin, fm_s_opennew
     dw fm_s_refr, fm_s_up, fm_s_rootf, fm_s_drva, fm_s_drvb, fm_s_dfree
@@ -668,7 +675,7 @@ fm_menus:
     dw menu_loc_name            ; AM_NAME: still 'Locator' (SPEC.md 12.3)
     dw fm_oncmd                 ; AM_ONCMD: our own handler
     dw 4                        ; AM_COUNT (= MENU_APPMAX, used exactly)
-    dw fm_s_mfile, fm_items_file, 5
+    dw fm_s_mfile, fm_items_file, 8
     dw fm_s_mfold, fm_items_fold, 8
     dw fm_s_mview, fm_items_view, 2
     dw fm_s_mspec, fm_items_spec, 3
@@ -1292,6 +1299,10 @@ fm_onclick:
                                 ; row click can change (SPEC.md 22.2)
     call fm_edit_end            ; clicking away abandons a half-typed name
 
+    mov [fm_pressx], cx         ; the ABSOLUTE point, banked before the
+    mov [fm_pressy], dx         ; conversion below eats it: a drag tracks in
+                                ; screen coordinates and may end in another
+                                ; window entirely (SPEC.md 22.4)
     mov bx, si
     push cx                     ; save click x
     mov cx, dx                  ; CX = click y
@@ -1383,6 +1394,15 @@ fm_onclick:
     mov bx, [fm_vp]             ; BX = the state block from here on, AX the
     call fm_hit                 ; directory index (fm_hit spares BX)
     jc .clear
+
+    push ax                     ; a press on a row may turn into a drag
+    push bx                     ; (SPEC.md 22.4), and only the pointer
+    mov cx, [fm_pressx]         ; leaving the row decides which
+    mov dx, [fm_pressy]
+    call fm_drag                ; CF=0 = it WAS a drag, already handled
+    pop bx
+    pop ax
+    jnc .out
 
     cmp ax, [bx+FS_SEL]         ; second click on the selected entry?
     jne .select
@@ -1541,6 +1561,12 @@ fm_onkey:
     je .vtoggle
     cmp al, 8                   ; Backspace goes up, the way it does in every
     je .updir                   ; file manager since (SPEC.md 22)
+    cmp al, 0x18                ; Ctrl+X / Ctrl+C / Ctrl+V (SPEC.md 22.3).
+    je .cut                     ; CONTROL codes, not bare letters: 'c' and
+    cmp al, 0x03                ; 'v' are already this window's own shortcuts
+    je .copy                    ; and int 16h hands these straight over
+    cmp al, 0x16
+    je .paste
     cmp al, 'n'
     je .newfld
     cmp al, 'N'
@@ -1598,6 +1624,21 @@ fm_onkey:
     mov al, 1                   ; DI is still this window's block
     call fm_edit_arm
     jmp .redraw
+
+.cut:
+    mov bx, FMC_CUT
+    jmp short .cmd
+.copy:
+    mov bx, FMC_COPY
+    jmp short .cmd
+.paste:
+    mov bx, FMC_PASTE
+.cmd:
+    push si                     ; fm_docmd repaints and clobbers everything,
+    mov [fm_cmdwin], si         ; and SI is still the window pointer .redraw
+    call fm_docmd               ; wants (the .updir precedent)
+    pop si
+    jmp .out                    ; fm_docmd has already repainted
 
 .scr_up:
     mov bx, si                  ; the scroll keys clamp against the live
@@ -1895,21 +1936,30 @@ FMC_OPEN    equ 0               ; File
 FMC_MKDIR   equ 1
 FMC_RENAME  equ 2
 FMC_DELETE  equ 3
-FMC_CLOSEW  equ 4
-FMC_NEWWIN  equ 5               ; Folder
-FMC_OPENNEW equ 6
-FMC_REFRESH equ 7
-FMC_UP      equ 8
-FMC_ROOT    equ 9
-FMC_DRVA    equ 10
-FMC_DRVB    equ 11
-FMC_FREE    equ 12
-FMC_LIST    equ 13              ; View
-FMC_ICONS   equ 14
-FMC_CLOCK   equ 15              ; Special
-FMC_BOUNCE  equ 16
-FMC_RESTART equ 17
-FMC_COUNT   equ 18
+FMC_CUT     equ 4
+FMC_COPY    equ 5
+FMC_PASTE   equ 6
+FMC_CLOSEW  equ 7
+FMC_NEWWIN  equ 8               ; Folder
+FMC_OPENNEW equ 9
+FMC_REFRESH equ 10
+FMC_UP      equ 11
+FMC_ROOT    equ 12
+FMC_DRVA    equ 13
+FMC_DRVB    equ 14
+FMC_FREE    equ 15
+FMC_LIST    equ 16              ; View
+FMC_ICONS   equ 17
+FMC_CLOCK   equ 18              ; Special
+FMC_BOUNCE  equ 19
+FMC_RESTART equ 20
+FMC_PASTEIN equ 21              ; no menu CELL of its own: the context menu's
+                                ; "paste into the folder under the pointer"
+                                ; (SPEC.md 22.3), which the bar cannot offer
+                                ; because the bar has no pointer. It sits
+                                ; PAST every menu's range so no base + item
+                                ; sum can reach it by accident.
+FMC_COUNT   equ 22
 
 FM_NMENUS   equ 4               ; = fm_menus' AM_COUNT = MENU_APPMAX
 fm_menu_base:
@@ -1929,6 +1979,11 @@ fm_jmp:
     dw fm_c_rename              ; inline (arms it; the disk is touched at
                                 ;         Enter, not here)
     dw fm_c_delete              ; inline (arms the CONFIRM line; likewise)
+    dw fm_c_cut                 ; inline (the clipboard is a memory write)
+    dw fm_c_copy                ; inline (ditto)
+    dw fm_c_paste               ; inline (disk I/O under the lock, like
+                                ;         Refresh and navigation already are;
+                                ;         SPEC.md 22.3)
     dw fm_c_closew              ; POSTED - ui_cmd takes the lock
     dw fm_c_newwin              ; POSTED - app_launch takes the lock (29.4)
     dw fm_c_opennew             ; POSTED - ditto
@@ -1943,7 +1998,8 @@ fm_jmp:
     dw fm_c_icons               ; inline (FS_VIEW = 1)
     dw fm_c_clock               ; POSTED - app_launch takes the lock
     dw fm_c_bounce              ; POSTED - app_launch takes the lock
-    dw fm_c_restart             ; POSTED - ui_cmd takes the lock, forever
+    dw fm_c_restart             ; POSTED - ui_cmd takes the lock
+    dw fm_c_pastein             ; inline (fm_c_paste with another target), forever
 
 ; -----------------------------------------------------------------------------
 ; fm_oncmd - AM_ONCMD for fm_menus (SPEC.md 12.2)
@@ -2058,6 +2114,68 @@ fm_arm_sel:
     jmp fm_edit_arm
 .none:
     pop ax                      ; nothing selected: a no-op, like File > Open
+    ret
+
+fm_c_cut:                       ; File > Cut - the selection, onto the
+    mov al, FCP_CUT             ; clipboard (SPEC.md 22.3)
+    jmp short fm_c_clip
+fm_c_copy:                      ; File > Copy
+    mov al, FCP_COPY
+fm_c_clip:
+    mov di, [fm_vp]
+    mov bx, [di+FS_SEL]
+    call fcp_arm                ; CF=1 = nothing selected, or '..': a no-op,
+    ret                         ; like every other command with nothing to
+                                ; act on
+
+fm_c_paste:                     ; File > Paste - into THIS window's folder
+    mov di, [fm_vp]
+    mov al, [di+FS_DRV]
+    mov bx, [di+FS_CWD]
+    jmp short fm_c_pasteto
+
+fm_c_pastein:                   ; context menu > Paste Into - the folder the
+    call fm_selfold             ; pointer is on, not the one we are in
+    jc fm_c_pasteno             ; the selection is not a folder: a no-op
+fm_c_pasteto:
+    call fcp_paste              ; AL = FCPS_*; the operation may suspend on
+    jmp fm_paste_res            ; an overwrite question (SPEC.md 22.3)
+fm_c_pasteno:
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_selfold - the acting window's selection, if it is a folder
+; in:  [fm_vp] published
+; out: CF=0 with AL = its drive and BX = its first cluster; CF=1 = there is
+;      no selection, or it is not a folder
+; clobbers: AX, BX, flags
+;
+; Type 3 (the parent link, SPEC.md 19.5) counts: pasting onto '..' means
+; pasting into the folder above, which is exactly what it looks like.
+; -----------------------------------------------------------------------------
+fm_selfold:
+    push cx
+    push si
+    push di
+    mov di, [fm_vp]
+    mov ax, [di+FS_SEL]
+    cmp ax, [di+FS_N]           ; 0xFFFF (no selection) also fails this
+    jae .no
+    call fmv_get_dir            ; SI -> the staged entry (SPEC.md 19)
+    cmp word [si+16], 2
+    jb .no
+    mov bx, [si+18]
+    mov al, [di+FS_DRV]
+    pop di
+    pop si
+    pop cx
+    clc
+    ret
+.no:
+    pop di
+    pop si
+    pop cx
+    stc
     ret
 
 fm_c_newwin:                    ; Folder > New Window - a second view of here
@@ -2212,11 +2330,11 @@ MC_NITEM    equ 4               ; word: item count
 ; here to add it: it is doable, and the paragraph above is not an argument
 ; against it.
 fm_ctx_file:                    ; the row under the pointer is a file
-    dw fm_cxi_file, fm_cxc_file, 3
+    dw fm_cxi_file, fm_cxc_file, 5
 fm_ctx_fold:                    ; ...or a folder, which can also be opened
-    dw fm_cxi_fold, fm_cxc_fold, 4
+    dw fm_cxi_fold, fm_cxc_fold, 7
 fm_ctx_dir:                     ; empty space: the folder's own commands
-    dw fm_cxi_dir,  fm_cxc_dir,  8
+    dw fm_cxi_dir,  fm_cxc_dir,  9
 fm_ctx_up:                      ; ...or '..' (SPEC.md 19.5), which opens and
     dw fm_cxi_fold, fm_cxc_fold, 2  ; opens-in-a-new-window like any folder
                                     ; and renames and deletes like nothing:
@@ -2224,20 +2342,26 @@ fm_ctx_up:                      ; ...or '..' (SPEC.md 19.5), which opens and
                                     ; the same arrays cut short
 
 fm_cxi_file:
-    dw fm_s_open, fm_s_rename, fm_s_delete
+    dw fm_s_open, fm_s_cut, fm_s_copy, fm_s_rename, fm_s_delete
 fm_cxc_file:
-    db FMC_OPEN, FMC_RENAME, FMC_DELETE
+    db FMC_OPEN, FMC_CUT, FMC_COPY, FMC_RENAME, FMC_DELETE
 
+; Paste is on the FOLDER menu as well as the empty-space one, because
+; "paste into that folder" is the thing a right-click on a folder is for -
+; and it is the pointer-driven twin of the drag (SPEC.md 22.4). Cut and Copy
+; come first so the two lists read the same way down to the divergence.
 fm_cxi_fold:
-    dw fm_s_open, fm_s_opennew, fm_s_rename, fm_s_delete
+    dw fm_s_open, fm_s_opennew, fm_s_cut, fm_s_copy
+    dw fm_s_pastin, fm_s_rename, fm_s_delete
 fm_cxc_fold:
-    db FMC_OPEN, FMC_OPENNEW, FMC_RENAME, FMC_DELETE
+    db FMC_OPEN, FMC_OPENNEW, FMC_CUT, FMC_COPY
+    db FMC_PASTEIN, FMC_RENAME, FMC_DELETE
 
 fm_cxi_dir:
-    dw fm_s_mkdir, fm_s_refr, fm_s_up, fm_s_rootf
+    dw fm_s_mkdir, fm_s_paste, fm_s_refr, fm_s_up, fm_s_rootf
     dw fm_s_drva, fm_s_drvb, fm_s_aslist, fm_s_asicon
 fm_cxc_dir:
-    db FMC_MKDIR, FMC_REFRESH, FMC_UP, FMC_ROOT
+    db FMC_MKDIR, FMC_PASTE, FMC_REFRESH, FMC_UP, FMC_ROOT
     db FMC_DRVA, FMC_DRVB, FMC_LIST, FMC_ICONS
 
 ; -----------------------------------------------------------------------------
@@ -2388,6 +2512,8 @@ fm_editkey:
     push bx
     push di
     mov di, [fm_vp]
+    cmp byte [di+FS_EDIT], 4
+    je .replace
     cmp byte [di+FS_EDIT], 3
     je .confirm
     cmp al, 13
@@ -2430,6 +2556,30 @@ fm_editkey:
                                 ; EARLIER, so the name displayed short and
                                 ; every character typed after a backspace
                                 ; landed behind that NUL and never appeared
+
+    ; The replace question (SPEC.md 22.3). Three answers, and the default is
+    ; the safe one for the same reason mode 3's is: Enter replaces THIS file,
+    ; 'a' replaces every one that follows, and anything else stops the
+    ; operation with what has already been copied left in place.
+.replace:
+    xor ah, ah                  ; stop
+    cmp al, 13
+    je .rep_go
+    inc ah                      ; replace this one
+    cmp al, 'a'
+    je .rep_all
+    cmp al, 'A'
+    jne .rep_stop
+.rep_all:
+    inc ah                      ; ...and every one after it
+    jmp short .rep_go
+.rep_stop:
+    xor ah, ah
+.rep_go:
+    mov al, ah
+    call fcp_answer             ; AL = FCPS_* on the way back
+    call fm_paste_res
+    jmp short .out
 
 .confirm:
     cmp al, 13
@@ -2536,6 +2686,325 @@ fm_edit_commit:
     call fm_edit_end
     pop di
     pop si
+    pop ax
+    ret
+
+FM_DRAGMIN  equ 4               ; pixels the pointer must leave the press
+                                ; point by before a click becomes a drag
+
+; -----------------------------------------------------------------------------
+; fm_drag - drag an entry onto a folder, which MOVES it (SPEC.md 22.4)
+; in:  CX = press x, DX = press y (absolute), SI = the window, AX = the
+;      directory index under the press; the gfx lock is HELD (this runs
+;      inside W_ONCLICK)
+; out: CF=0 = it was a drag and the drop is handled - the caller must not
+;      also treat the press as a click; CF=1 = the pointer never left the
+;      row, so it was an ordinary click and nothing was drawn
+;
+; ui_drag's loop, with three differences. The lock is already held, so this
+; never calls gfx_lock - it unlocks and re-locks around the yield exactly as
+; ui_drag's tracking pass does, and returns holding it. The outline is a row,
+; not a window. And the drop target is resolved against EVERY visible window
+; rather than the one we started in, which is the whole point: a drag from a
+; GAMES window onto a folder in an APPS window is the same move Cut and
+; Paste would have made (SPEC.md 22.3).
+;
+; A drag is a MOVE, always - the Macintosh rule for a drag within one
+; volume, and the one this system can honour without a modifier key it has
+; no way to report (int 16h shift state is not sampled anywhere else here).
+; It TAKES THE CLIPBOARD to do it, arming a Cut the moment the pointer leaves
+; the row: a drag is the same operation as Cut-then-Paste (SPEC.md 22.3) and
+; giving it a second transport would be a second thing to keep correct.
+; -----------------------------------------------------------------------------
+fm_drag:
+    push ax
+    push bx
+    push si
+    push di
+    mov [fm_dgidx], ax
+    mov [fm_dgwin], si
+    mov [fm_startx], cx
+    mov [fm_starty], dx
+    mov byte [fm_dgon], 0
+
+.wait:                          ; not a drag until the pointer leaves the row
+    mov di, ui_ev
+    call evq_pop
+    jc .noev
+    cmp word [ui_ev + EV_TYPE], EVT_MUP
+    jne .wait
+    jmp .click
+.noev:
+    test byte [mouse_btn], 1
+    jz .click                   ; released without moving: an ordinary click
+    mov ax, [mouse_x]
+    sub ax, [fm_startx]
+    call fm_dgabs
+    cmp ax, FM_DRAGMIN
+    jae .begin
+    mov ax, [mouse_y]
+    sub ax, [fm_starty]
+    call fm_dgabs
+    cmp ax, FM_DRAGMIN
+    jae .begin
+    call gfx_unlock             ; the lock may only drop with nothing drawn
+    call task_yield
+    call gfx_lock
+    jmp short .wait
+
+.begin:
+    mov bx, [fm_dgidx]          ; the drag IS a Cut, armed here rather than
+    mov al, FCP_CUT             ; at the press, so an ordinary click never
+    call fcp_arm                ; disturbs a clipboard the user filled
+    jc .click                   ; '..' (SPEC.md 19.5) is not draggable
+    mov byte [fm_dgon], 1
+    call fm_dgmove
+    call fm_dgxor               ; the outline is up from here on
+.track:
+    mov di, ui_ev
+    call evq_pop
+    jc .nomup
+    cmp word [ui_ev + EV_TYPE], EVT_MUP
+    jne .track
+    jmp short .drop
+.nomup:
+    test byte [mouse_btn], 1    ; the fallback ui_drag documents: a dropped
+    jz .drop                    ; EVT_MUP still ends the drag by level
+    call fm_dgxor               ; erase at the OLD position...
+    call gfx_unlock             ; ...only then may the lock drop
+    call task_yield
+    call gfx_lock
+    call fm_dgmove              ; ...take the new one...
+    call fm_dgxor               ; ...and draw there
+    mov ax, [ticks]
+.linger:
+    call task_yield
+    cmp ax, [ticks]
+    je .linger
+    jmp short .track
+
+.drop:
+    call fm_dgxor               ; erase; the lock stays held to the end
+    call fm_dgdrop
+    pop di
+    pop si
+    pop bx
+    pop ax
+    clc
+    ret
+.click:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_dgabs - |AX| (module-internal); out AX, clobbers flags
+; -----------------------------------------------------------------------------
+fm_dgabs:
+    or ax, ax
+    jns .out
+    neg ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_dgmove - take the pointer's position as the outline's next one
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fm_dgmove:
+    push ax
+    mov ax, [mouse_x]
+    sub ax, 8
+    mov [fm_dgx], ax
+    mov ax, [mouse_y]
+    sub ax, 4
+    mov [fm_dgy], ax
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_dgxor - the drag outline, at [fm_dgx]/[fm_dgy]
+; out: nothing (all registers preserved)
+; fm_dgmove is what advances those two, and the pairing is binding: the
+; erase must use the coordinates the draw used or it leaves a rectangle
+; behind and paints a second one.
+; VRAM-direct for ui_drag_xor's reason (SPEC.md 32): a transient overlay
+; XOR-erased before the lock ever drops.
+; -----------------------------------------------------------------------------
+fm_dgxor:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [fm_dgx]            ; the position it was DRAWN at, not where the
+    mov bx, [fm_dgy]            ; pointer is now: XOR only erases what it drew,
+    mov cx, ax                  ; and the pointer moves between the two calls
+    add cx, 95                  ; a 96 x FM_ROW_H ghost: wide enough to read
+    mov dx, bx                  ; as "a row", narrow enough not to swamp a
+    add dx, FM_ROW_H - 1        ; 320px window
+    call vga_xor_rect_vram      ; clips, so the screen edges are free
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_dgdrop - resolve the release point and move the dragged entry there
+; out: nothing; clobbers everything (fm_drag saved what it needs)
+;
+; The target is a folder if the pointer is on one, and the window's own
+; folder otherwise - dropping on a file, on a blank row or on the header all
+; mean "into the folder you can see". A drop onto the folder we came from is
+; a no-op rather than a copy-and-delete of everything into itself.
+; -----------------------------------------------------------------------------
+fm_dgdrop:
+    mov cx, [mouse_x]
+    mov dx, [mouse_y]
+    call wm_hit                 ; BX = the window under the point, 0 = none
+    or bx, bx
+    jz .out
+    push cx                     ; is it a DISK window? fm_win_of goes the
+    push dx                     ; other way (block -> window), so the test is
+    call inst_win_owner         ; the instance that owns it
+    pop dx
+    pop cx
+    or di, di
+    jz .out
+    cmp byte [di+I_KIND], KIND_FILES
+    jne .out
+
+    push cx                     ; content-relative, for fm_hit
+    push dx
+    call wm_content             ; AX = content left, DX = content top
+    pop cx                      ; CX = click y
+    sub cx, dx
+    pop dx                      ; DX = click x
+    sub dx, ax
+    push cx
+    push dx
+    call fm_vp_set              ; BX is still the window: publish it, so
+    call fm_layout              ; fm_hit reads THAT window's mirrors
+    pop dx
+    pop cx
+
+    mov di, [fm_vp]
+    mov al, [di+FS_DRV]
+    mov bx, [di+FS_CWD]         ; the default target: the folder it shows
+    call fm_hit                 ; AX = directory index, CF=1 = not a row
+    jc .have
+    push bx
+    call fmv_get_dir            ; SI -> the staged entry (SPEC.md 19)
+    cmp word [si+16], 2
+    pop bx
+    jb .have                    ; a file: into the window's folder
+    mov bx, [si+18]             ; a folder (or '..'): into THAT one
+.have:
+    cmp al, [fcp_drv]           ; the same folder it came from? then the
+    jne .go                     ; drag went nowhere and there is nothing
+    cmp bx, [fcp_cwd]           ; to do - not a copy of it into itself
+    je .out
+.go:
+    push ax
+    push bx
+    mov di, [fm_dgwin]          ; the paste result is reported on the window
+    mov bx, di                  ; the drag STARTED in, which is where the
+    call fm_vp_set              ; user is looking
+    pop bx
+    pop ax
+    call fcp_paste
+    call fm_paste_res
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_paste_res - spend a Cut/Copy/Paste step's answer (SPEC.md 22.3)
+; in:  AL = FCPS_*; [fm_vp] published; gfx lock held
+; out: nothing; clobbers AX, BX, CX, SI, DI (fm_docmd saved them all)
+;
+; Three outcomes, and only one of them is a pause. A pause arms FS_EDIT = 4
+; on the acting window - the Delete confirmation's mechanism, with a third
+; answer - and the name it is asking about goes into fm_onam for the same
+; reason Delete's does: the status line has to be able to SAY it, and every
+; other copy of a name in this module is painter scratch.
+; -----------------------------------------------------------------------------
+fm_paste_res:
+    push ax
+    push di
+    cmp al, FCPS_ASK
+    je .ask
+    call fm_edit_end            ; whatever was armed is spent
+    call fmv_reload_all         ; the coherence pass this operation owes
+    mov di, [fm_vp]
+    cmp al, FCPS_ERR
+    je .err
+    mov byte [di+FS_FERR], 0
+    jmp short .out
+.err:
+    mov al, [fcp_err]
+    mov [di+FS_FERR], al
+    jmp short .out
+.ask:
+    push si
+    push cx
+    mov si, fcp_fname
+    mov di, fm_onam
+    mov cx, 13
+    call fcp_ncopy
+    pop cx
+    pop si
+    mov di, [fm_vp]
+    mov al, 4                   ; the replace question (SPEC.md 22.3)
+    call fm_edit_arm
+.out:
+    pop di
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fmv_reload_all - re-list EVERY live Disk window from its own (drive, folder)
+; out: nothing (all registers preserved)
+;
+; The coherence pass a multi-file operation owes (SPEC.md 22.3). fmv_bcast
+; reaches only the windows on the CURRENT (drive, cwd), which after a tree
+; walk is wherever the walk happened to stop - and a paste changes the
+; destination folder, a Cut's source folder, and every folder it created on
+; the way down. Up to four mounts, once per operation, against a listing
+; that would otherwise be silently wrong.
+; -----------------------------------------------------------------------------
+fmv_reload_all:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, inst_tab
+    mov cx, INST_MAX
+.scan:
+    cmp byte [si+I_STATE], 1
+    jne .next
+    cmp byte [si+I_KIND], KIND_FILES
+    jne .next
+    push cx
+    push si
+    mov di, [si+I_SPTR]
+    mov al, [di+FS_DRV]
+    mov dx, [di+FS_CWD]
+    call fmv_load               ; resets FS_SEL/FS_SCRL, which is honest:
+    pop si                      ; every index into the old listing is
+    pop cx                      ; meaningless now
+.next:
+    add si, I_RECSZ
+    loop .scan
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -3302,6 +3771,8 @@ fm_draw_status:
     jz .fs_st_err
     cmp al, 3
     je .fs_st_del
+    cmp al, 4
+    je .fs_st_rep
     mov si, fm_s_newfld
     cmp al, 1
     je .fs_st_prompt
@@ -3313,6 +3784,13 @@ fm_draw_status:
 .fs_st_prompt:
     call fm_scat
     mov si, fm_ebuf
+    jmp short .fs_stat
+.fs_st_rep:
+    mov si, fm_s_reppr          ; "Replace NAME? Enter=yes A=all Esc=stop"
+    call fm_scat
+    mov si, fm_onam
+    call fm_scat
+    mov si, fm_s_repq
     jmp short .fs_stat
 .fs_st_del:
     mov si, fm_s_delpr          ; "Delete NAME? Enter=yes Esc=no", or
@@ -3549,6 +4027,17 @@ fm_wased:   resb 1              ; NOT a mirror: FS_EDIT as it stood BEFORE
 fm_lnf:     resw 1              ; FS_N
 fm_lscr:    resw 1              ; FS_SCRL
 fm_lsel:    resw 1              ; FS_SEL
+
+fm_pressx:  resw 1              ; fm_onclick's press point, ABSOLUTE - the
+fm_pressy:  resw 1              ; drag tracks in screen coordinates (22.4)
+fm_dgidx:   resw 1              ; fm_drag: the row it began on...
+fm_dgwin:   resw 1              ; ...the window it began in...
+fm_startx:  resw 1              ; ...and where the button went down
+fm_starty:  resw 1
+fm_dgx:     resw 1              ; where the outline is DRAWN (fm_dgxor)
+fm_dgy:     resw 1
+fm_dgon:    resb 1              ; 1 = the outline is on screen
+fm_dgpad:   resb 1
 
 fm_cx:      resw 1              ; fm_layout: content left (abs)
 fm_cy:      resw 1              ; fm_layout: content top (abs)

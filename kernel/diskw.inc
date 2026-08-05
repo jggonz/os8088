@@ -98,6 +98,11 @@ dskw_syms:  db '$', '%', 0x27, '-', '_', '@', '~', 0x60
 ; deleted, and every chain those writes allocated leaked. It is exactly the
 ; kind of flag that is only ever cleared on a path that has never run.
 dskw_isdir: db 0                ; 1 = dskw_commit is stamping a folder
+dskw_batch: db 0                ; 1 = a MULTI-FILE operation is running and
+                                ; owns the coherence remount (SPEC.md 22.3).
+                                ; A .text `db`, not .bss, for dskw_isdir's
+                                ; reason: -f bin zeroes nothing, and the very
+                                ; first write must not see a garbage flag
 
 ; -----------------------------------------------------------------------------
 ; dskw_write - create or replace a whole file (SPEC.md 18.4, slot 0x0120)
@@ -1668,6 +1673,8 @@ dskw_nbody:
 ; wrong-directory write, not just a display glitch.
 ; -----------------------------------------------------------------------------
 dskw_sync:
+    cmp byte [dskw_batch], 0    ; a tree copy remounts ONCE, when it ends -
+    jne .defer                  ; not after every one of its files (22.3)
     push ax
     push dx
     mov dl, [disk_drive]
@@ -1676,6 +1683,52 @@ dskw_sync:
     mov byte [dsk_keepcwd], 0
     pop dx
     pop ax
+.defer:
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_stat - does NAME exist in the current directory? (SPEC.md 18.4)
+; in:  SI -> a NUL-terminated 8.3 name
+; out: CF=0 = it exists, with AL = its raw attribute byte and BX = its first
+;      cluster; CF=1 with AX = FERR_NODISK / FERR_NAME / FERR_NOENT / FERR_IO
+; clobbers: AX, BX (the outputs), CF
+;
+; The lookup half of every other operation in this module, published because
+; filecp.inc has to ask "would this replace something, and is that something
+; a folder?" BEFORE it writes anything - which is the whole overwrite prompt
+; (SPEC.md 22.3), and which no existing entry point can answer without also
+; doing the thing.
+; -----------------------------------------------------------------------------
+dskw_stat:
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [dsk_mntok], 1
+    jne .nodisk
+    mov di, dskw_n83
+    call dskw_name83
+    jc .badname
+    call dskw_find
+    jc .fail                    ; AX = FERR_NOENT / FERR_IO already
+    call dskw_ent_load
+    jc .fail
+    mov bx, [dskw_raw+DSK_R_CLUS]
+    mov al, [dskw_raw+DSK_R_ATTR]
+    clc
+    jmp short .out
+.badname:
+    mov ax, FERR_NAME
+    jmp short .fail
+.nodisk:
+    mov ax, FERR_NODISK
+.fail:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
     ret
 
 ; -----------------------------------------------------------------------------

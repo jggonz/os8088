@@ -69,6 +69,10 @@ MC_SIZE  equ 8
 MEM_K_SAVE equ 0xFF01           ; kernel tags (SPEC.md 50.2): menu save-under
 MEM_K_BB   equ 0xFF02           ; the double-buffer back buffer
 MEM_K_DRV  equ 0xFF03           ; a loaded driver's image (SPEC.md 51.3)
+MEM_K_COPY equ 0xFF04           ; the file manager's copy buffer (22.3): held
+                                ; for exactly one Cut/Copy/Paste operation,
+                                ; including the part of it that is suspended
+                                ; on an overwrite question
 
 MEM_PARA_KB equ 64              ; paragraphs per KB
 

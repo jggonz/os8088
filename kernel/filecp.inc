@@ -1,0 +1,1075 @@
+; =============================================================================
+; filecp.inc - the file manager's clipboard: Cut, Copy, Paste (SPEC.md 22.3)
+;
+; Prefix fcp_. UI-task context only, gfx lock held by the caller - every
+; entry point here is reached from a menu body, a context-menu body, a key
+; handler or a drop, and all four already hold it (SPEC.md 22). It is disk
+; I/O under the lock, which is the trade SPEC.md 22 already accepted for
+; Refresh and for navigation.
+;
+; Three things about this module are load-bearing.
+;
+; ONE: the clipboard is (drive, folder, name, type) and NOT an index. An
+; index means nothing outside the listing it came from, and the whole point
+; of the feature is that the listing changes between the Cut and the Paste -
+; a different window, a different folder, possibly a different drive. A name
+; is a legal dskw_name83 input (SPEC.md 19) and cannot go stale the way an
+; index can, which is the same argument fm_onam already won for Rename.
+;
+; TWO: the recursion has NO call stack. A task stack is 512 bytes
+; (SPEC.md 2.1) and a directory tree is attacker-supplied, so the walk keeps
+; its state in an explicit FCP_MAXD-deep array of frames and iterates. That
+; is dskw_rmtree's discipline; what is different here is that a copy does
+; not consume the source as it goes, so each frame has to remember WHERE IT
+; WAS - fcp_scan takes an entry ordinal and re-walks the directory to it,
+; which costs FAT lookups out of the RAM snapshot plus one sector read.
+;
+; THREE: the operation SUSPENDS on a question. "Replace this file?" cannot
+; be answered from inside a loop that holds the gfx lock, so fcp_step runs
+; until it is done, fails, or needs an answer - and in the last case every
+; byte of its state is already in .bss, so returning to the event loop and
+; coming back through fcp_answer costs nothing. That is the only reason the
+; frame array exists in a module that could otherwise have recursed.
+;
+; What this deliberately does NOT do:
+;
+; - A same-volume move is a copy followed by a delete, not a re-linking of
+;   directory entries. The fast move is real (the data need never be read),
+;   but it means fixing up a moved directory's own '..' entry and reasoning
+;   about a chain that is briefly named twice; copy-then-delete reuses one
+;   engine and is obviously correct, at the cost of needing room for both
+;   copies at once. Recorded, not overlooked.
+; - A file bigger than the copy buffer is refused with 'Too large'.
+;   dskw_write takes a 16-bit length, so 64KB is the ceiling whatever the
+;   heap says, and BEVERLY.MOD is deliberately larger than that.
+; =============================================================================
+
+FCP_NONE    equ 0               ; [fcp_op]
+FCP_COPY    equ 1
+FCP_CUT     equ 2
+
+FCP_MAXD    equ 6               ; nesting depth of one paste. Six levels of
+                                ; folder is far past anything a floppy holds
+                                ; and the array is 36 bytes; deeper than this
+                                ; is reported, never walked.
+FCP_FSRC    equ 0               ; frame: word, the source folder's cluster
+FCP_FDST    equ 2               ;        word, its mirror in the destination
+FCP_FPOS    equ 4               ;        word, the next raw entry ordinal to
+FCP_FSIZE   equ 6               ;        examine in the source
+
+FCP_MAXKB   equ 64              ; the copy buffer's cap: dskw_write's length
+FCP_MINKB   equ 4               ; is 16 bits, so a bigger one could not be
+                                ; spent. Below the minimum, Paste refuses.
+
+; The step machine's answers, returned in AL by fcp_step:
+FCPS_DONE   equ 0               ; the operation finished
+FCPS_ASK    equ 1               ; suspended: fcp_cname needs a verdict
+FCPS_ERR    equ 2               ; stopped, [fcp_err] = FERR_*
+
+; -----------------------------------------------------------------------------
+; fcp_arm - put one of the acting window's entries on the clipboard
+; in:  AL = FCP_COPY or FCP_CUT, BX = its directory index; [fm_vp] published
+;      (fm_layout or fm_vp_set has run); gfx lock held
+; out: CF=0 armed, CF=1 refused (nothing selected, or the parent link)
+; clobbers: flags
+;
+; The parent link is refused for fm_arm_sel's reason (SPEC.md 19.5): '..' is
+; a way out of the folder, not a thing in it. Everything else - a file, a
+; package, a folder - is fair game.
+; -----------------------------------------------------------------------------
+fcp_arm:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov [fcp_op], al
+    mov di, [fm_vp]
+    mov ax, bx                  ; the INDEX is an argument: Cut and Copy pass
+    cmp ax, [di+FS_N]           ; FS_SEL, a drag passes the row it began on
+    jae .none                   ; (0xFFFF fails this too)
+    call fm_stage_name          ; fm_name + [fm_ftype], out of THIS window's
+    cmp word [fm_ftype], 3      ; cache (SPEC.md 22.1)
+    je .none
+    mov ax, [fm_ftype]
+    mov [fcp_type], ax
+    mov al, [di+FS_DRV]
+    mov [fcp_drv], al
+    mov ax, [di+FS_CWD]
+    mov [fcp_cwd], ax
+    mov si, fm_name             ; COPIED, not pointed at: fm_name is rewritten
+    mov di, fcp_name            ; for every row the painter draws
+    mov cx, 13
+    call fcp_ncopy
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.none:
+    mov byte [fcp_op], FCP_NONE
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_ncopy - CX bytes from DS:SI to DS:DI (module-internal)
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fcp_ncopy:
+    push ax
+    push cx
+    push si
+    push di
+.b:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .b
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_goto - make (AL = drive, BX = folder cluster) the current directory
+; out: CF=1 = the move failed (AX = FERR_*)
+; clobbers: AX, flags
+;
+; The quiet path is the point. dsk_chdir re-runs the whole mount because the
+; LISTING has to follow it, but nothing in this module reads the listing -
+; dskw_* resolve names by walking [dsk_cwd]'s raw directory, and the FAT
+; snapshot and every derived geometry belong to the VOLUME, not the folder.
+; So a move inside one volume is a word, and a tree copy that would otherwise
+; pay two full mounts per directory pays none at all. Crossing to the other
+; drive is a real mount, because then the FAT snapshot genuinely is wrong.
+;
+; The cluster is range-checked here rather than trusted, because the quiet
+; path skips disk_mount's own .cwd_lost validation.
+; -----------------------------------------------------------------------------
+fcp_goto:
+    push dx
+    cmp al, [disk_drive]
+    jne .full
+    or bx, bx
+    jz .quiet                   ; 0 is the root, always legal
+    cmp bx, 2
+    jb .bad
+    cmp bx, [dsk_maxclus]
+    ja .bad
+.quiet:
+    mov [dsk_cwd], bx
+    pop dx
+    clc
+    ret
+.bad:
+    mov ax, FERR_IO
+    pop dx
+    stc
+    ret
+.full:
+    mov dl, al
+    mov ax, bx
+    call dsk_chdir
+    jc .ferr
+    pop dx
+    clc
+    ret
+.ferr:
+    mov ax, FERR_NODISK
+    pop dx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_paste - start a paste into (AL = drive, BX = folder) (SPEC.md 22.3)
+; in:  the target folder in AL/BX; gfx lock held
+; out: AL = FCPS_*, and on FCPS_ASK the caller owes the user a question
+; clobbers: AX, flags
+;
+; The target is an argument, not the acting window's own folder, because
+; three surfaces name it differently: Paste means "this window's folder",
+; Paste Into means "the folder under the pointer", and a drop means "the
+; folder I was released over", possibly in a DIFFERENT window (SPEC.md 22.4).
+; One engine, three callers that each know their own answer.
+;
+; Claims the copy buffer, seeds the frame stack and runs. Everything after
+; the first question re-enters through fcp_answer.
+; -----------------------------------------------------------------------------
+fcp_paste:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [fcp_op], FCP_NONE
+    je .empty
+    cmp byte [dsk_mntok], 1
+    jne .nodisk
+
+    mov [fcp_ddrv], al
+    mov [fcp_dcwd], bx
+    mov al, [fcp_drv]           ; the walk reads one word wherever it is
+    mov [fcp_sdrv], al
+
+    call fcp_selfchk            ; a folder may not be pasted into itself
+    jc .loop_err
+
+    call fcp_bufget             ; the one heap claim (SPEC.md 50)
+    jc .nomem
+
+    mov byte [fcp_all], 0
+    mov word [fcp_depth], 0
+    mov byte [fcp_busy], 1
+    mov byte [fcp_err], FERR_OK
+    mov byte [fcp_started], 0
+    call fcp_step
+    jmp short .out
+.empty:
+    mov al, FCPS_DONE           ; nothing on the clipboard is not an error,
+    jmp short .out              ; it is a menu item that does nothing
+.nodisk:
+    mov byte [fcp_err], FERR_NODISK
+    jmp short .err
+.nomem:
+    mov byte [fcp_err], FERR_FULL
+    jmp short .err
+.loop_err:
+    mov byte [fcp_err], FERR_NAME
+.err:
+    mov byte [fcp_busy], 0
+    mov al, FCPS_ERR
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_selfchk - refuse a folder pasted into itself or into its own subtree
+; out: CF=1 = refuse
+; clobbers: flags
+;
+; Without it the walk creates a copy inside the directory it is reading and
+; then finds that copy, forever - a loop bounded only by the disk filling up.
+; The test is a walk UP from the destination looking for the source folder's
+; cluster, which is the cheapest way to ask "is the source an ancestor of the
+; destination" on a file system with no paths. Same drive only; across drives
+; the two trees cannot touch.
+; -----------------------------------------------------------------------------
+fcp_selfchk:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp word [fcp_type], 2      ; only a FOLDER can contain anything
+    jb .ok
+    mov al, [fcp_drv]
+    cmp al, [fcp_ddrv]
+    jne .ok
+    call fcp_srcclus            ; BX = the source folder's own cluster
+    jc .ok                      ; unreadable: the copy will fail honestly
+    mov dx, bx
+    mov al, [fcp_ddrv]
+    mov bx, [fcp_dcwd]
+    call fcp_goto
+    jc .ok
+    mov cx, FCP_MAXD + 2        ; the walk up is bounded like every other
+.up:
+    mov ax, [dsk_cwd]
+    cmp ax, dx
+    je .bad                     ; the destination IS the source, or is under
+    or ax, ax                   ; it: either way the copy would eat itself
+    jz .ok                      ; reached the root without meeting it
+    call dsk_dotdot
+    jc .ok
+    mov [dsk_cwd], ax
+    loop .up
+.bad:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+.ok:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_srcclus - the clipboard entry's own first cluster
+; out: CF=0 with BX = it; CF=1 = it could not be looked up
+; clobbers: BX (the output), AX, flags
+; -----------------------------------------------------------------------------
+fcp_srcclus:
+    push si
+    mov al, [fcp_drv]
+    mov bx, [fcp_cwd]
+    call fcp_goto
+    jc .bad
+    mov si, fcp_name
+    call dskw_stat              ; CF=0 with BX = first cluster
+    jc .bad
+    pop si
+    clc
+    ret
+.bad:
+    pop si
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_bufget / fcp_bufput - the copy buffer (SPEC.md 50)
+; out: CF=1 = the heap cannot fund even FCP_MINKB
+; clobbers: AX, flags
+;
+; One claim for the whole operation, taken at the start and released at the
+; end - including the end that a question is still waiting on, which is why
+; fcp_stop exists and why every exit from this module goes through it.
+; -----------------------------------------------------------------------------
+fcp_bufget:
+    push bx
+    push cx
+    push dx
+    call mem_avail              ; AX = largest free run in KB
+    cmp ax, FCP_MINKB
+    jb .no
+    cmp ax, FCP_MAXKB
+    jbe .size
+    mov ax, FCP_MAXKB
+.size:
+    mov [fcp_kb], ax
+    mov bx, MEM_K_COPY
+    call mem_claim              ; AX = segment, 0 = refused
+    or ax, ax
+    jz .no
+    mov [fcp_seg], ax
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.no:
+    mov word [fcp_seg], 0
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+fcp_bufput:
+    push ax
+    mov ax, [fcp_seg]
+    or ax, ax
+    jz .out
+    call mem_free
+    mov word [fcp_seg], 0
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_stop - end the operation, however it ended
+; in:  AL = the FCPS_* to report
+; out: AL unchanged
+; clobbers: flags
+; -----------------------------------------------------------------------------
+fcp_stop:
+    push ax
+    call fcp_bufput
+    mov byte [fcp_busy], 0
+    mov byte [dskw_batch], 0    ; the deferred remount is spent by the caller
+    cmp byte [fcp_op], FCP_CUT  ; a Cut is spent by its paste; a Copy stays
+    jne .keep                   ; on the clipboard, so it can be pasted again
+    mov byte [fcp_op], FCP_NONE
+.keep:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_answer - resume a suspended paste (SPEC.md 22.3)
+; in:  AL = 0 stop / 1 replace this one / 2 replace all
+; out: AL = FCPS_*
+; clobbers: AX, flags
+; -----------------------------------------------------------------------------
+fcp_answer:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [fcp_busy], 0
+    je .idle
+    or al, al
+    jz .stop
+    cmp al, 2
+    jne .yes
+    mov byte [fcp_all], 1
+.yes:
+    mov byte [fcp_ovw], 1       ; the pending file may be replaced
+    call fcp_step
+    jmp short .out
+.stop:
+    mov al, FCPS_DONE           ; a stop is not a failure: what was already
+    call fcp_stop               ; copied stays, and the line says so
+    jmp short .out
+.idle:
+    mov al, FCPS_DONE
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_step - run the operation until it finishes, fails or must ask
+; out: AL = FCPS_*
+; clobbers: AX, flags (called with everything else already saved)
+;
+; Re-entrant across a question by construction: it reads its whole state out
+; of .bss and writes it back before returning, so the answer path calls it
+; again and nothing needs to be threaded through the event loop.
+; -----------------------------------------------------------------------------
+fcp_step:
+    mov byte [dskw_batch], 1    ; one remount for the whole operation, spent
+                                ; by the caller (SPEC.md 18.4 rule 3)
+    cmp byte [fcp_started], 0
+    jne .walk
+
+    ; --- the first step: the clipboard entry itself ---
+    mov byte [fcp_started], 1
+    cmp word [fcp_type], 2
+    jae .tree
+
+    call fcp_file1              ; a plain file: one copy and we are done
+    jc .fail
+    cmp byte [fcp_pend], 0
+    jne .ask
+    jmp .finish
+
+.tree:
+    call fcp_mkroot             ; create (or adopt) the folder in the target
+    jc .fail
+    mov word [fcp_depth], 0
+    call fcp_push               ; BX = the new folder's cluster
+    jc .fail
+
+.walk:
+    cmp byte [fcp_pend], 0      ; an answered question: finish that file
+    je .next
+    call fcp_file2
+    jc .fail
+    cmp byte [fcp_pend], 0
+    jne .ask
+.next:
+    cmp word [fcp_depth], 0
+    je .finish
+    call fcp_frame              ; BX -> the top frame
+    call fcp_scan               ; CF=1 = this directory is exhausted
+    jc .updir
+    cmp word [fcp_ctype], 2     ; a subdirectory: mirror it and descend
+    jne .plain
+    call fcp_mksub
+    jc .fail
+    call fcp_push
+    jc .fail
+    jmp short .walk
+.plain:
+    call fcp_file1
+    jc .fail
+    cmp byte [fcp_pend], 0
+    jne .ask
+    jmp short .walk
+.updir:
+    or ax, ax                   ; fcp_scan reports a read error in AX
+    jnz .failax
+    dec word [fcp_depth]
+    jmp short .walk
+
+.finish:
+    cmp byte [fcp_op], FCP_CUT  ; a Cut removes the source, and only once
+    jne .ok                     ; every byte of it has arrived
+    call fcp_srcdel
+    jc .fail
+.ok:
+    mov al, FCPS_DONE
+    call fcp_stop
+    ret
+.ask:
+    mov byte [dskw_batch], 0    ; the pause is a trip through the event loop,
+                                ; where anything else that writes must behave
+                                ; normally; fcp_step raises it again on the
+                                ; way back in
+    mov al, FCPS_ASK            ; the buffer and the frames stay claimed:
+    ret                         ; this is a pause, not an end
+.failax:
+    mov [fcp_err], al
+    jmp short .failed
+.fail:
+    mov [fcp_err], al
+.failed:
+    mov al, FCPS_ERR
+    call fcp_stop
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_frame / fcp_push - the frame stack (module-internal)
+; fcp_frame: out BX -> the top frame (depth >= 1 assumed)
+; fcp_push:  in BX = the new destination folder's cluster, [fcp_cclus] its
+;            source; out CF=1 = FCP_MAXD exceeded (AX = FERR_DIRFULL - the
+;            truthful shape of "this tree is deeper than we walk")
+; -----------------------------------------------------------------------------
+fcp_frame:
+    push ax
+    push dx
+    mov ax, [fcp_depth]
+    dec ax
+    mov bx, FCP_FSIZE
+    mul bx                      ; DX:AX, so DX is saved above
+    add ax, fcp_stack
+    mov bx, ax
+    pop dx
+    pop ax
+    ret
+
+fcp_push:
+    push ax
+    push bx
+    push dx
+    cmp word [fcp_depth], FCP_MAXD
+    jae .deep
+    mov ax, [fcp_depth]
+    mov dx, FCP_FSIZE
+    mul dx
+    add ax, fcp_stack
+    xchg ax, bx                 ; BX -> the new frame, AX = its destination
+    mov [bx+FCP_FDST], ax
+    mov ax, [fcp_csrc]
+    mov [bx+FCP_FSRC], ax
+    mov word [bx+FCP_FPOS], 0
+    inc word [fcp_depth]
+    pop dx
+    pop bx
+    pop ax
+    clc
+    ret
+.deep:
+    pop dx
+    pop bx
+    pop ax
+    mov ax, FERR_DIRFULL
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_scan - the next usable entry of the top frame's SOURCE directory
+; in:  BX -> the frame
+; out: CF=0 with fcp_cname / [fcp_ctype] / [fcp_csrc] / [fcp_clen] set and
+;      the frame's ordinal advanced past it; CF=1 with AX = 0 (exhausted) or
+;      AX = FERR_IO (unreadable)
+; clobbers: AX, flags
+;
+; The ordinal is a RAW slot number - sector*16 + slot - and re-walking to it
+; is what buys the frame array its small size. A copy does not modify the
+; source directory, so the ordinal stays valid across everything that happens
+; between two calls: the scan of another directory, a write into the
+; destination, and a trip through the event loop while a question is
+; answered.
+;
+; The species filter is the LISTING's (SPEC.md 19), not the disk's, so what
+; you see in the window is what gets copied - a hidden or system file is not
+; silently carried along, and neither is a long-name fragment.
+; -----------------------------------------------------------------------------
+fcp_scan:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov di, bx                  ; DI -> the frame, held throughout
+    mov ax, LOW_SEG
+    mov es, ax
+    mov al, [fcp_sdrv]
+    mov bx, [di+FCP_FSRC]
+    call fcp_goto
+    jc .ioerr
+    mov ax, [di+FCP_FSRC]
+    call dsk_dirw_start
+    mov ax, [di+FCP_FPOS]       ; the ordinal splits into a sector and a slot
+    mov cl, 4
+    shr ax, cl
+    mov [fcp_ssec], ax
+    mov ax, [di+FCP_FPOS]
+    and ax, 15
+    mov [fcp_sslot], ax
+.skipsec:
+    cmp word [fcp_ssec], 0      ; dsk_dirw_next only computes LBAs - skipping
+    je .readsec                 ; whole sectors reads nothing
+    call dsk_dirw_next
+    jc .end
+    dec word [fcp_ssec]
+    jmp short .skipsec
+.readsec:
+    call dsk_dirw_next          ; AX = the sector holding the ordinal
+    jc .end
+    mov cx, 1
+    mov bx, dsk_secbuf
+    call disk_read
+    jc .ioerr
+    mov si, dsk_secbuf
+    mov ax, [fcp_sslot]
+    mov cl, 5
+    shl ax, cl                  ; slot * 32
+    add si, ax
+    mov cx, 16
+    sub cx, [fcp_sslot]         ; slots left in this sector, always >= 1
+.entry:
+    mov al, [es:si]
+    test al, al
+    jz .end                     ; 0x00: end of directory, per spec
+    inc word [di+FCP_FPOS]      ; consumed, whatever it turns out to be
+    cmp al, 0xE5
+    je .next
+    cmp al, '.'
+    je .next                    ; the on-disk dot links (SPEC.md 19)
+    cmp al, 0x20
+    je .next
+    mov ah, [es:si+DSK_R_ATTR]
+    mov al, ah
+    and al, 0x3F
+    cmp al, 0x0F
+    je .next                    ; a long-name fragment
+    test ah, 0x08
+    jnz .next                   ; the volume label
+    test ah, 0x06
+    jnz .next                   ; hidden or system, exactly as the listing
+    call dsk_synth              ; ES:SI -> dsk_ent (SPEC.md 19): the display
+                                ; name, the type word, the cluster, the size
+    push si
+    push di
+    mov si, dsk_ent
+    mov di, fcp_cname           ; copied out: dsk_ent is scratch every caller
+    mov cx, 13                  ; below rewrites
+    call fcp_ncopy
+    pop di
+    pop si
+    mov ax, [dsk_ent+16]
+    mov [fcp_ctype], ax
+    mov ax, [dsk_ent+18]
+    mov [fcp_csrc], ax
+    mov ax, [dsk_ent+20]
+    mov [fcp_clen], ax
+    mov ax, [dsk_ent+22]
+    mov [fcp_clenh], ax
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.next:
+    add si, 32
+    loop .entry
+    mov word [fcp_sslot], 0     ; this sector is spent; the ordinal has kept
+    jmp .readsec                ; up with it, so the next one starts at 0
+.end:
+    xor ax, ax
+    jmp short .bad
+.ioerr:
+    mov ax, FERR_IO
+.bad:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_mkroot - create (or adopt) the pasted folder in the destination
+; out: CF=0 with BX = its first cluster and [fcp_csrc] = the source's;
+;      CF=1 with AX = FERR_*
+; clobbers: AX, BX, flags
+;
+; "A folder that already exists is not an overwrite" (SPEC.md 22.3): if the
+; name is there and IS a folder, it is adopted and the recursion continues
+; into it. If it is there and is a FILE, that is a genuine collision a mkdir
+; cannot resolve, and it is reported rather than guessed at.
+; -----------------------------------------------------------------------------
+fcp_mkroot:
+    push cx
+    push si
+    call fcp_srcclus            ; BX = the source folder's own cluster
+    jc .err
+    mov [fcp_csrc], bx
+    mov al, [fcp_ddrv]
+    mov bx, [fcp_dcwd]
+    call fcp_goto
+    jc .err
+    mov si, fcp_name
+    call fcp_ensure
+    jc .err
+    pop si
+    pop cx
+    clc
+    ret
+.err:
+    pop si
+    pop cx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_mksub - the same, for the subdirectory fcp_scan just named
+; in:  BX -> the top frame
+; out: CF=0 with BX = the mirror's first cluster; CF=1 with AX = FERR_*
+; clobbers: AX, BX, flags
+; -----------------------------------------------------------------------------
+fcp_mksub:
+    push si
+    mov al, [fcp_ddrv]
+    push bx
+    mov bx, [bx+FCP_FDST]
+    call fcp_goto
+    pop bx
+    jc .err
+    mov si, fcp_cname
+    call fcp_ensure
+    jc .err
+    pop si
+    clc
+    ret
+.err:
+    pop si
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_ensure - make SI a folder of the current directory, or adopt it
+; in:  SI -> a NUL 8.3 name; the destination directory is current
+; out: CF=0 with BX = its first cluster; CF=1 with AX = FERR_*
+; clobbers: AX, BX, flags
+; -----------------------------------------------------------------------------
+fcp_ensure:
+    call dskw_stat              ; CF=0: it is already there
+    jc .make
+    test al, DSKW_DIR
+    jz .clash                   ; a FILE of that name: mkdir cannot fix this
+    clc
+    ret
+.make:
+    cmp ax, FERR_NOENT
+    jne .fail                   ; a lookup that failed for another reason
+    call dskw_mkdir
+    jc .fail
+    call dskw_stat              ; the mount's own answer for where it landed
+    jc .fail
+    clc
+    ret
+.clash:
+    mov ax, FERR_EXIST
+.fail:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_file1 - copy the pending file, asking first if it would replace one
+; in:  for the first step, fcp_name / [fcp_cwd] / [fcp_drv] name the source
+;      and [fcp_dcwd] the target; inside the walk, fcp_cname and the top
+;      frame do. [fcp_intree] says which.
+; out: CF=0 and [fcp_pend] = 1 when a question is owed, 0 when the file is
+;      copied; CF=1 with AX = FERR_*
+; clobbers: AX, flags
+; -----------------------------------------------------------------------------
+fcp_file1:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov byte [fcp_ovw], 0
+    call fcp_fnames             ; publish this file's source and destination
+    mov al, [fcp_fddrv]         ; does the destination already hold it?
+    mov bx, [fcp_fdclus]
+    call fcp_goto
+    jc .err
+    mov si, fcp_fname
+    call dskw_stat
+    jc .free                    ; FERR_NOENT is the ordinary case
+    test al, DSKW_DIR
+    jnz .clash                  ; a FOLDER of that name: not a replaceable
+    cmp byte [fcp_all], 0       ; file, and not something to silently remove
+    jne .go                     ; "replace all" was answered earlier
+    mov byte [fcp_pend], 1      ; suspend: fcp_cname is what to ask about
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.free:
+    cmp ax, FERR_NOENT
+    jne .err
+.go:
+    call fcp_xfer
+    jc .err
+    mov byte [fcp_pend], 0
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.clash:
+    mov ax, FERR_EXIST
+.err:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_file2 - the answered half of fcp_file1: the transfer, no question
+; out: as fcp_file1
+; clobbers: AX, flags
+; -----------------------------------------------------------------------------
+fcp_file2:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [fcp_ovw], 0
+    je .skip                    ; answered 'no': leave the target alone
+    call fcp_xfer
+    jc .err
+.skip:
+    mov byte [fcp_pend], 0
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.err:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_fnames - publish the pending file's source and destination
+; out: fcp_fname = its name, [fcp_fsdrv]/[fcp_fsclus] the source directory,
+;      [fcp_fddrv]/[fcp_fdclus] the destination. All registers preserved.
+;
+; The first step and the walk name a file differently - the clipboard entry
+; itself versus whatever fcp_scan just found - and resolving that here means
+; fcp_file1, fcp_file2 and the question all read one set of words.
+; -----------------------------------------------------------------------------
+fcp_fnames:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov al, [fcp_ddrv]
+    mov [fcp_fddrv], al
+    cmp word [fcp_depth], 0
+    jne .intree
+    mov si, fcp_name            ; the clipboard entry itself
+    mov al, [fcp_drv]
+    mov [fcp_fsdrv], al
+    mov ax, [fcp_cwd]
+    mov [fcp_fsclus], ax
+    mov ax, [fcp_dcwd]
+    mov [fcp_fdclus], ax
+    jmp short .name
+.intree:
+    mov si, fcp_cname
+    mov al, [fcp_sdrv]
+    mov [fcp_fsdrv], al
+    call fcp_frame              ; BX -> the top frame
+    mov ax, [bx+FCP_FSRC]
+    mov [fcp_fsclus], ax
+    mov ax, [bx+FCP_FDST]
+    mov [fcp_fdclus], ax
+.name:
+    mov di, fcp_fname
+    mov cx, 13
+    call fcp_ncopy
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_xfer - move one file's bytes, source directory to destination
+; out: CF=0, or CF=1 with AX = FERR_* (FERR_BIG when it does not fit the
+;      buffer - see the header note about dskw_write's 16-bit length)
+; clobbers: AX, flags
+; -----------------------------------------------------------------------------
+fcp_xfer:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov al, [fcp_fsdrv]
+    mov bx, [fcp_fsclus]
+    call fcp_goto
+    jc .err
+    mov ax, [fcp_kb]            ; KB -> a 16-bit byte capacity. 64 KB is
+    cmp ax, FCP_MAXKB           ; 65,536, which WRAPS TO ZERO - and a zero
+    jb .kb                      ; capacity is not "the lot", it is a file
+    mov ax, 0xFFFF              ; that never fits, so every copy came back
+    jmp short .cap              ; 'Too large'. The claim really is 64 KB;
+.kb:                            ; what cannot be expressed is its last byte
+    mov cl, 10
+    shl ax, cl
+.cap:
+    mov cx, ax
+    mov es, [fcp_seg]
+    xor bx, bx
+    mov si, fcp_fname
+    call dskw_read              ; AX = the file's size, or FERR_BIG
+    jc .err
+    mov [fcp_flen], ax
+    mov al, [fcp_fddrv]
+    mov bx, [fcp_fdclus]
+    call fcp_goto
+    jc .err
+    mov es, [fcp_seg]
+    xor bx, bx
+    mov cx, [fcp_flen]
+    mov si, fcp_fname
+    call dskw_write
+    jc .err
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.err:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_srcdel - a Cut's second half: remove the source, once the copy is whole
+; out: CF=0, or CF=1 with AX = FERR_*
+; clobbers: AX, flags
+; -----------------------------------------------------------------------------
+fcp_srcdel:
+    push bx
+    push si
+    mov al, [fcp_drv]
+    mov bx, [fcp_cwd]
+    call fcp_goto
+    jc .err
+    mov si, fcp_name
+    cmp word [fcp_type], 2
+    jae .tree
+    call dskw_delete
+    jc .err
+    jmp short .ok
+.tree:
+    call dskw_rmtree            ; the folder AND everything under it (18.6)
+    jc .err
+.ok:
+    pop si
+    pop bx
+    clc
+    ret
+.err:
+    pop si
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+section .bss
+
+fcp_op:     resb 1              ; FCP_NONE / FCP_COPY / FCP_CUT
+fcp_drv:    resb 1              ; the clipboard entry's drive...
+fcp_cwd:    resw 1              ; ...folder...
+fcp_type:   resw 1              ; ...and SPEC.md 19 type word
+fcp_name:   resb 13             ; ...and 8.3 display name, COPIED
+
+fcp_busy:   resb 1              ; 1 = an operation is running or suspended
+fcp_started: resb 1             ; 1 = fcp_step is past its first step
+fcp_all:    resb 1              ; 1 = 'replace all' was answered
+fcp_pend:   resb 1              ; 1 = a file is waiting on a verdict
+fcp_ovw:    resb 1              ; that verdict: 1 = replace it
+fcp_err:    resb 1              ; FERR_* of whatever stopped us
+fcp_ddrv:   resb 1              ; the paste target's drive...
+fcp_sdrv:   resb 1              ; ...and the source tree's (they are the
+                                ; clipboard's, held here so the walk reads
+                                ; one word wherever it is)
+fcp_dcwd:   resw 1              ; the paste target's folder
+
+fcp_seg:    resw 1              ; the copy buffer's claim, 0 = none
+fcp_kb:     resw 1              ; its size in KB
+
+fcp_depth:  resw 1              ; frames in use, 0 = not inside a tree
+fcp_stack:  resb FCP_MAXD * FCP_FSIZE
+
+fcp_ssec:   resw 1              ; fcp_scan: sectors still to skip...
+fcp_sslot:  resw 1              ; ...and the slot to resume at
+
+fcp_cname:  resb 13             ; fcp_scan's answer: name...
+fcp_cpad:   resb 1              ; (keeps the words below even-aligned)
+fcp_ctype:  resw 1              ; ...SPEC.md 19 type word...
+fcp_csrc:   resw 1              ; ...first cluster...
+fcp_clen:   resw 1              ; ...and size, low word...
+fcp_clenh:  resw 1              ; ...and high
+
+fcp_fname:  resb 13             ; the pending file: name...
+fcp_fsdrv:  resb 1              ; ...source drive...
+fcp_fddrv:  resb 1              ; ...destination drive...
+fcp_fpad:   resb 1
+fcp_fsclus: resw 1              ; ...source folder...
+fcp_fdclus: resw 1              ; ...destination folder...
+fcp_flen:   resw 1              ; ...and the byte count dskw_read reported
+
+section .text
