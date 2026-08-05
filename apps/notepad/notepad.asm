@@ -116,7 +116,7 @@ NP_MAXROWS   equ 60             ; signature slots, one per row the content can
                                 ; this, so a taller screen degrades to "the
                                 ; rows past 60 are always redrawn" rather than
                                 ; writing past the array
-NP_BSS_TOTAL equ 842 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
+NP_BSS_TOTAL equ 945 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
 NP_MARGIN    equ 8              ; left/top text margin inside the content. It
                                 ; was 6, and 8 is what puts every glyph cell
                                 ; on a multiple of 8 once OSAPI_WM_SNAP has
@@ -175,6 +175,9 @@ np_entry:
     pop si                          ; CF is still wm_create's: the branch
                                     ; above consumed it and OSAPI_MENU_SET
                                     ; preserves flags too (SPEC.md 20.3)
+    mov word [np_prowi], 0xFFFF     ; .bss arrives zeroed and 0 is a REAL row
+                                    ; index, so the delta cache has to be told
+                                    ; it holds nothing (SPEC.md 27.2)
     pushf                           ; ...and so must this: the bss arrives
     call np_defname                 ; zeroed and an empty name is not a file
     popf                            ; (SPEC.md 27.1), but np_defname is an
@@ -641,10 +644,11 @@ np_rflush:
     push cx
     push dx
     push si
+    push di
     cmp byte [np_draw], 0
     je .out
     call np_rowdirty
-    jc .out
+    jc .out                         ; a row this redraw already knows is right
     mov ax, [np_rby]
     add ax, 7
     cmp ax, [np_bot]
@@ -652,12 +656,87 @@ np_rflush:
                                     ; advanced, so every position below is true
     cmp word [np_rcols], 0
     je .caret
-    mov cx, [np_tx]
+
+    mov word [np_fcc], 0xFFFF       ; this row's caret column, if it has one
+    mov ax, [np_rcx]
+    cmp ax, 0xFFFF
+    je .span
+    sub ax, [np_tx]
+    mov cl, 3
+    shr ax, cl
+    mov [np_fcc], ax
+.span:
+    mov word [np_flo], 0            ; the default span is the whole row
+    mov ax, [np_rcols]
+    dec ax
+    mov [np_fhi], ax
+    mov ax, [np_row]
+    cmp ax, [np_prowi]
+    jne .draw                       ; not the cached row: nothing to diff
+
+    mov word [np_flo], 0xFFFF       ; --- the delta, cell by cell -----------
+    mov word [np_fhi], 0xFFFF
+    xor bx, bx
+.dl:
+    cmp bx, [np_rcols]
+    jae .dfold
+    mov al, [np_rbuf+bx]
+    cmp al, [np_prow+bx]
+    je .dn
+    cmp word [np_flo], 0xFFFF
+    jne .dhi
+    mov [np_flo], bx
+.dhi:
+    mov [np_fhi], bx
+.dn:
+    inc bx
+    jmp short .dl
+.dfold:
+    mov ax, [np_prcc]               ; the caret's cells count as changed at
+    call np_fold1                   ; both ends: the one it left has to lose
+    mov ax, [np_fcc]                ; its bar, and the one it arrived at has
+    call np_fold1                   ; to get one
+    cmp word [np_flo], 0xFFFF
+    je .cache                       ; nothing moved: draw NOTHING
+
+.draw:
+    mov bx, [np_fhi]                ; terminate the span and run just it: the
+    inc bx                          ; row is one string, so the byte after the
+    mov al, [np_rbuf+bx]            ; span has to come back afterwards
+    push ax
+    mov byte [np_rbuf+bx], 0
+    push bx
+    mov si, [np_flo]
+    mov cx, si
+    mov ax, cx
+    mov cl, 3
+    shl ax, cl
+    add ax, [np_tx]
+    mov cx, ax                      ; CX = x of the span's first cell
+    add si, np_rbuf
     mov dx, [np_rby]
-    mov si, np_rbuf
     mov al, CBLACK                  ; ink and background in one call: the erase
     mov ah, CWHITE                  ; and the letters are one decision per cell
     call OSAPI_FONT_RUN
+    pop bx
+    pop ax
+    mov [np_rbuf+bx], al
+
+.cache:
+    push es                         ; the span was drawn, so the screen now
+    push ds                         ; shows np_rbuf: remember it, and remember
+    pop es                          ; which row and where its caret is
+    cld
+    mov si, np_rbuf
+    mov di, np_prow
+    mov cx, [np_rcols]
+    rep movsb
+    pop es
+    mov ax, [np_row]
+    mov [np_prowi], ax
+    mov ax, [np_fcc]
+    mov [np_prcc], ax
+
 .caret:
     mov ax, [np_rcx]
     cmp ax, 0xFFFF
@@ -671,11 +750,33 @@ np_rflush:
     pop ax
     call OSAPI_GFX_VLINE
 .out:
+    pop di
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; np_fold1 - fold column AX into [np_flo]..[np_fhi]; 0xFFFF folds nothing.
+; Preserves everything.
+np_fold1:
+    cmp ax, 0xFFFF
+    je .out
+    cmp word [np_flo], 0xFFFF
+    jne .lo
+    mov [np_flo], ax
+    mov [np_fhi], ax
+    ret
+.lo:
+    cmp ax, [np_flo]
+    jae .hi
+    mov [np_flo], ax
+.hi:
+    cmp ax, [np_fhi]
+    jbe .out
+    mov [np_fhi], ax
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1416,6 +1517,7 @@ np_redraw:
     shl dx, 1
     add dx, [np_ty]
     add dx, 7
+    mov [np_bandb], dx              ; ...banked for the grow-box test below
     ; The band fill is GONE. It used to erase dr0..dr1 whole and pass 2 then
     ; lettered it, which is the erase-and-letter pair - and on a 4.77MHz 8088
     ; that leaves the line blank for several display frames, so every keystroke
@@ -1461,12 +1563,36 @@ np_redraw:
     call np_walk
     mov byte [np_clip], 0
 
-    mov bx, si                      ; both of these sit ON the text, so they
-    call OSAPI_WM_GROW              ; follow any fill that could have reached
-    call np_toast                   ; them - and np_toast is a no-op with no
-    jmp short .out                  ; message, which is every keystroke
+    ; The grow box is redrawn only if this redraw could have touched it, and
+    ; that test is new. It used to be unconditional, and it HAD to be: the band
+    ; fill spanned the full content width, so any dirty row level with the box
+    ; erased it - and there was no cheap way to know which. It is 13x13 at
+    ; (np_rgt-12, np_bot-12), the bottom-right corner of the content, and the
+    ; only things that reach it now are the right-margin fill and the last text
+    ; row, both bounded by the dirty band's rows. So one comparison answers it.
+    ;
+    ; Unconditional, it redrew the box on EVERY KEYSTROKE - and wm_grow_paint
+    ; fills the square before it frames it, which is the erase-and-letter flash
+    ; all over again in one 13x13 corner. Typing anywhere in the note made the
+    ; resize handle flicker, which is exactly what a user saw once the rows
+    ; themselves had stopped.
+    mov ax, [np_bot]
+    sub ax, 12
+    cmp [np_bandb], ax
+    jb .nogrow
+    mov bx, si
+    call OSAPI_WM_GROW
+.nogrow:
+    call np_toast                   ; a no-op with no message, which is every
+    jmp short .out                  ; keystroke
 
 .full:
+    mov word [np_prowi], 0xFFFF     ; the delta cache describes the SCREEN, and
+                                    ; the screen is about to be filled over.
+                                    ; Every path that disturbs it other than
+                                    ; our own row draws lands here - a resize,
+                                    ; a toast arriving or leaving, an uncover -
+                                    ; because that is what np_sigsame is for
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = x1, DX = y1
     push ax
@@ -1866,4 +1992,17 @@ np_rcx      equ os88_image_end + 748 + NP_IOCAP    ; word: the caret's x on that
                                        ; row, 0xFFFF = it is not on this one
 np_rbuf     equ os88_image_end + 750 + NP_IOCAP    ; NP_MAXCOL+1 bytes: the row
                                        ; being accumulated, space-filled
-                                       ; total 842 + NP_IOCAP = NP_BSS_TOTAL
+np_prow     equ os88_image_end + 842 + NP_IOCAP    ; NP_MAXCOL bytes: what was
+                                       ; last DRAWN on the cached row, so the
+                                       ; next keystroke can draw the delta
+np_prowi    equ os88_image_end + 933 + NP_IOCAP    ; word: which row that is,
+                                       ; 0xFFFF = the cache holds nothing
+np_prcc     equ os88_image_end + 935 + NP_IOCAP    ; word: and where its caret
+                                       ; was, so the cell it vacates is redrawn
+np_flo      equ os88_image_end + 937 + NP_IOCAP    ; word } np_rflush's span,
+np_fhi      equ os88_image_end + 939 + NP_IOCAP    ; word } 0xFFFF = empty
+np_fcc      equ os88_image_end + 941 + NP_IOCAP    ; word: the caret's column
+                                       ; on the row being flushed
+np_bandb    equ os88_image_end + 943 + NP_IOCAP    ; word: the dirty band's last
+                                       ; row, for the grow-box test
+                                       ; total 945 + NP_IOCAP = NP_BSS_TOTAL

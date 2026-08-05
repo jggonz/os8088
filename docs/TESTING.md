@@ -210,6 +210,74 @@ back into `all` — which is exactly the arrangement this folder replaced.
 
 ---
 
+## Modelling the old machine from a fast one
+
+Everything above is about *where* to run a test. This is about the systematic
+error in running it anywhere but the target, and it has now cost four bugs, so
+it is worth stating as a method rather than a warning.
+
+**The container is roughly three orders of magnitude faster than a 4.77 MHz
+8088.** Every constant you size while looking at QEMU is sized against the
+wrong machine, and the failures are not proportional — they are structural,
+because the constants encode *ranges*:
+
+| what was sized against QEMU | what a real XT did |
+|---|---|
+| a 16-bit elapsed counter, one subtraction start-to-end | rows are 1.5M counts; it lapped silently into a small plausible number |
+| `>= 32768 means the run overran` | most legitimate rows are 32768..65535; it discarded them |
+| a ratio computed from `counts >> 4` | `>> 4` is still 90,000; it overflowed the word and printed 696 for 134 |
+| `OSAPI_WM_GROW` on every keystroke | free in the emulator; a visible flicker in a 13×13 corner at 33 ms a keystroke |
+
+The rule that falls out: **when a harness has to hold a range, size it from the
+slowest machine it will ever run on, not the one in front of you.** A 32-bit
+accumulator folded per iteration costs a few instructions and cannot lap; a
+16-bit one sized "generously" against QEMU is wrong by 20x on hardware.
+
+### Two calibration numbers, so an estimate needs no machine
+
+- **About 1 ms per 8×8 glyph cell** on a 4.77 MHz 8088 with a Hercules card.
+  Two independent harnesses agree: `fontbench` 10.09 ms per ten cells,
+  `typebench` 33.3 ms per forty. A 40-cell line redraw is ~33 ms, so a
+  keystroke that redraws its row costs about that.
+- **Instructions are the better proxy, not framebuffer traffic.** SPEC.md
+  §6.1.1 predicted the opposite and was corrected by measurement: per-cell
+  overhead dominates the byte-writes it guards.
+
+### Prefer a self-checking harness to a careful one
+
+Three of the four bugs above were caught by **one number on screen
+contradicting another**, not by inspection:
+
+- `typebench`'s CHAR row does 1.33x `fontbench`'s PAIR work, so it cannot be
+  the smaller number — yet PAIR reported the overrun sentinel and CHAR
+  reported 15551. Only one reading is consistent, and it identified the lap
+  and its size.
+- The ratio was wrong while the counts and milliseconds beside it were right,
+  which localises the fault to the one column computed differently.
+
+So put **redundant quantities on the screen**: a raw count *and* a derived
+time, two rows whose relative sizes are known in advance, a ratio you can
+recompute by hand from the columns next to it. A harness that reports one
+number per run is one you have to trust.
+
+### What the emulator cannot show at all
+
+Not "shows inaccurately" — cannot show:
+
+- **Flicker.** The erase-and-letter pair leaves a line blank between the fill
+  and the last glyph. On an XT that gap is tens of milliseconds and plainly
+  visible; under QEMU it is microseconds and invisible at any frame rate a
+  screendump can sample. Note Pad's per-keystroke flash (SPEC.md §27.2) and
+  the grow box's were both found by a person watching the real machine, and
+  neither appears in any timing column, because the two methods take
+  comparable *time* and differ in what is on screen during it.
+- **Perceived latency and input overrun.** Whether a human can outpace the
+  redraw — and start losing keystrokes to a full BIOS buffer — is a property
+  of the real machine's speed against a real person's typing.
+
+For both, the emulator's role is to prove *correctness* before you burn a
+floppy. The judgement is made on hardware.
+
 ## What 86Box is genuinely for
 
 Real period hardware: the video **detection probe**, the 6845 programming, a

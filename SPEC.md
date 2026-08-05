@@ -2965,6 +2965,10 @@ guard 7 proves the kernel ends clear of the relocated stack.
   drive is fixed):  and `build/filetest.img` / `-frag` (§18.4). A write
   test is only half-done in the emulator — finish it on the host with
   `python3 tools/os88disk.py --verify <img>`.
+- **`docs/TESTING.md` is the testing map**, and its section on modelling the
+  old machine from a fast one is what to read before taking any number: the
+  container is ~1000x a 4.77MHz 8088, so a constant sized against it encodes
+  the wrong range, and flicker and input overrun cannot be observed there.
 - The **benchmarks are not here.** `apps/fontbench` (§6.1.1) and
   `apps/typebench` (§11.94) are the same idea for a *measurement* rather than
   a gate, and they live on the **`testing` branch**: they ship on no disk,
@@ -6617,6 +6621,25 @@ Four things this has to get right, and the first one is not obvious:
   cell, so the inset left of the pen and the under-8px tail past the last cell
   are two thin fills over the dirty band. Neither carries a glyph, so neither
   can flicker and neither can disagree with anything at a clip edge (§11.3).
+- **A row is diffed against what was last drawn on it, and only the changed
+  span is run.** Typing at the end of a line changes exactly one cell, plus
+  the two the caret leaves and arrives at — three cells out of forty. The
+  cache is one row (`np_prow`, `np_prowi`, `np_prcc`) and it is deliberately
+  the row that was last *drawn*, which under steady typing is the caret's:
+  rows the walk visits but `np_rowdirty` skips leave it alone, so it does not
+  get overwritten by the other rows of the same walk. It is invalidated at
+  birth (`.bss` is zeroed and 0 is a real row index) and on the full-repaint
+  path, which is where every disturbance that is not our own row draw ends up.
+  The caret's old and new columns are folded into the span because a bare
+  arrow key moves the bar without changing a character, and the cell it
+  vacates has to lose it.
+- **The grow box is restored only when the dirty band could have reached it.**
+  It is 13x13 at the content's bottom-right, and `OSAPI_WM_GROW` used to be
+  called on every keystroke — it had to be, because the band fill spanned the
+  full content width. `wm_grow_paint` fills the square before framing it, so
+  that was the erase-and-letter flash surviving in one corner: with the rows
+  fixed, the resize handle was still visibly flickering. One comparison of
+  the band's last row against `np_bot - 12` answers it.
 - **`np_rcols` is clamped to `NP_MAXCOL`**, and the accumulate step range-checks
   against it. The wrap rule means a cell past the band cannot normally arise;
   the clamp is what makes that a bounded write rather than a claim.

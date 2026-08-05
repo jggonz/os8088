@@ -122,7 +122,10 @@ Requires `nasm`, `qemu-system-i386`, `python3`. No linker anywhere — everythin
 There are no unit tests. Testing = boot `make test`, then drive it over QMP.
 **`docs/TESTING.md` is the matrix of what QEMU can and cannot do**, with a
 verified recipe per capability — read it before concluding anything is
-untestable here. The short version: all three video adapters and all three
+untestable here. Its **"Modelling the old machine from a fast one"** section is
+the part that has cost four bugs: this container is ~1000x a 4.77MHz 8088, so
+every constant sized while looking at it encodes the wrong range, and two
+things cannot be observed here at all — **flicker** and **input overrun**. The short version: all three video adapters and all three
 sound routes work under QEMU; 86Box is needed only for the video *detection
 probe*, the 6845 programming and period-correct timing.
 
