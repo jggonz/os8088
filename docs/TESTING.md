@@ -72,11 +72,13 @@ zero is the commonest mistake. Full recipe and the four ways to get it
 silently wrong: `docs/HERCULES-TESTING.md`.
 
 **`VIDEO=`/`RTC=` are tracked by a stamp file**, so a knob-built kernel is a
-*different* kernel. Rebuild knob-free before committing or `make
-check-images` reports STALE:
+*different* kernel and changing the knob rebuilds it. Nothing in `build/` is
+committed, so a forced kernel can no longer reach the repo — but it does stay
+on your disk images until something rebuilds them, and a release must be built
+knob-free:
 
 ```sh
-rm -f build/os8088.img build/os8088-360.img && make && make check-images
+rm -f build/os8088.img build/os8088-360.img && make
 ```
 
 ---
@@ -202,11 +204,10 @@ disproportionately memory traffic. `build/bench360.img` on a real 4.77 MHz
 means microseconds. That is where these numbers are worth taking. A VGA run
 measures the *fallback* path by design — `font_run`'s fast path is mono-only.
 
-One trap if you ever track a bench artifact: `make check-images` reads its
-list from `git ls-files build`, so a tracked image `all` does not build reads
-as **ORPHAN** and one it builds differently reads as **STALE**. Leaving them
-untracked is what lets `all` stay free of them. Tracking one would force it
-back into `all` — which is exactly the arrangement this folder replaced.
+Nothing under `build/` is committed — bench artifacts included, along with the
+shipped images themselves — so there is no way for one of these disks to reach
+the repo or a release. What keeps them off a normal build is `all`, which
+builds nothing from `tests/`: that is the arrangement this folder exists for.
 
 ---
 

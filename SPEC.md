@@ -2979,23 +2979,23 @@ guard 7 proves the kernel ends clear of the relocated stack.
   host time, which is what makes a result reproducible (±1 count across runs)
   and independent of the machine it is taken on. Without `-icount` they
   measure the host, which is not an 8088 and not a number worth quoting.
-- **`check-images`**: `build/` is gitignored but a curated set inside it is
-  force-added and shipped — the kernel, both boot sectors, both bootable
-  floppies, both software floppies, and every package's `.bin`/`.o88`.
-  Nothing makes those follow a source change, so this target builds every
-  one of them a second time into `build/.check` and compares byte for byte.
-  It is only meaningful because the toolchain is deterministic by design
-  (§24: `os88disk.py` pins the volume serial and every FAT timestamp), so a
-  difference is staleness and never noise. The set is read from
-  `git ls-files build` rather than listed, so it cannot drift from what is
-  tracked. Three failures: **STALE** (rebuild and commit), **ORPHAN**
-  (tracked, but nothing builds it) and **SCRATCH** (a tracked `VIDEO=`/`RTC=`
-  stamp — named specially because the scratch build makes one too and two
-  empty files compare equal). The comparison build is always knob-free, so
-  a kernel carrying a forced probe reads as stale, which is what the rule
-  above ("every shipped image is built with neither knob set") needs to stop
-  being a comment nobody executes. Not part of `all`: it costs a second full
-  build and is a pre-commit gate.
+- **No build artifact is tracked.** `build/` is gitignored outright: the
+  kernel, both boot sectors, both bootable floppies, both software floppies
+  and every package's `.bin`/`.o88` are products of this tree and live in a
+  *release* — a GitHub release and os8088.com — never in a commit. A curated
+  set of them used to be force-added, with a `check-images` target rebuilding
+  each one into `build/.check` and comparing byte for byte to catch the
+  staleness that follows from committing a derived file. Both are retired.
+  What made the check possible is what made the tracking pointless: the
+  toolchain is deterministic by design (§24: `os88disk.py` pins the volume
+  serial and every FAT timestamp), so a rebuild reproduces a released image
+  exactly and a committed copy adds nothing. **That determinism is still
+  binding on the toolchain** — it is the only thing that lets a third party
+  verify a downloaded image against these sources. The rule above ("every
+  shipped image is built with neither knob set") is back to being a rule the
+  kernel recipe warns about rather than one a target executes; a release is
+  built by `.claude/skills/release-os8088` from a clean checkout with no knobs
+  set, which is where it now holds.
 - 86Box config (`vm/xt/86box.cfg`): set the mouse to a serial Microsoft
   mouse on COM1 (best-effort; cannot be verified headless).
 - The kernel may exceed 8 sectors; the two images are already built
@@ -10123,7 +10123,7 @@ resetting the CPU, which taken under the gfx lock is a dead machine.
   and clips at `[tm_ylim]` — and on a narrow screen it is the **second
   column** that has to hold it (§28.1).
 - `make clean && make`: both geometries, zero warnings, every §15.1 guard
-  still passing, and `make check-images` clean.
+  still passing.
 
 ## 42. Paint — the seventh package (apps/paint/paint.asm)
 

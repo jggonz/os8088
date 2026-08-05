@@ -284,6 +284,15 @@ time and reads exactly as many sectors as the measured kernel occupies.
 A 1.44MB drive postdates the 8086 by years, so period hardware gets the
 360KB build.
 
+**No binary is committed to this repository.** `build/` is gitignored
+outright — the four images, the kernel, the boot sectors and every package
+are products of `make`, which needs only `nasm` and `python3`. For a floppy
+you can boot without a toolchain, take a
+[release](https://github.com/jggonz/os8088/releases) or
+[os8088.com](https://os8088.com); the build is deterministic
+(`tools/os88disk.py` pins the volume serial and every FAT timestamp), so a
+released image rebuilds from its own sources byte for byte.
+
 ## Emulators
 
 `make run` boots QEMU with `-chardev msmouse,id=m0 -serial chardev:m0` —

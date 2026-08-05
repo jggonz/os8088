@@ -86,18 +86,20 @@ changing one rebuilds the kernel. Two consequences:
 - **Going back to VGA is also a change.** Dropping the knobs rebuilds; if you
   forget, `make test` boots the *Hercules* kernel on your next VGA run and it
   reads exactly like a broken probe.
-- **The shipped images are always built knob-free.** `make check-images`
-  builds its comparison copy with `VIDEO= HERCSEG= RTC=` and will report the
-  kernel **STALE** if a forced build reached the tree. Before committing:
+- **A released image is always built knob-free.** Nothing in `build/` is
+  committed, so a forced kernel cannot reach the repo — but it can sit on your
+  disk images indefinitely, and a release cut from one would ship a machine
+  that never probes. Reset before releasing, and any time a run's starting
+  state matters:
 
 ```sh
-rm -f build/os8088.img build/os8088-360.img && make && make check-images
+rm -f build/os8088.img build/os8088-360.img && make
 ```
 
 The `os8088.img` removal is separate and unrelated to the video knob: QEMU
 mounts it writable and the OS writes `SYSTEM.CFG` to it, so any test that
-touches a Control Panel setting dirties a tracked artifact. `make` will not
-fix that on its own — the image is newer than every input, so it is skipped.
+touches a Control Panel setting is remembered across boots. `make` will not
+undo that on its own — the image is newer than every input, so it is skipped.
 
 ## A stale QEMU will lie to you
 

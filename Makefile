@@ -85,7 +85,7 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
 .PHONY: all run run-640 debug test test-snd xt xt-640 xt-cga xt-hercules \
-        286 386sx 386 xt-sound 286-sound 386-sound check-images bench clean
+        286 386sx 386 xt-sound 286-sound 386-sound bench clean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
 # below). The testing apps are on-demand only: `make bench`.
@@ -101,8 +101,8 @@ $(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) | $(BUILD)
 	@echo "kernel: $(call FILESIZE,$@) bytes"
 ifneq ($(VIDDEF),)
 	@echo "  *** VIDEO=$(VIDEO) RTC=$(RTC): this kernel has a probe FORCED. ***"
-	@echo "  *** build/ is git-tracked - rebuild with plain \`make\` before  ***"
-	@echo "  *** committing, or every machine boots that way.               ***"
+	@echo "  *** It boots that way on every machine. Rebuild with a plain  ***"
+	@echo "  *** \`make\` before testing detection or cutting a release.      ***"
 endif
 
 # The boot sector needs to know how many sectors to read, so we measure the
@@ -401,11 +401,10 @@ $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88dis
 # --- the benchmark disk, from tests/ (ON DEMAND: `make bench`) ---------------
 #
 # These are the only packages in the tree built from OUTSIDE apps/, and the
-# folder is the point: tests/ holds testing apps, `all` never builds them, and
-# no artifact of theirs is tracked. That keeps a normal build - and every
-# shipped image - free of them, and it keeps `make check-images` honest, which
-# reads its list from `git ls-files build`: an untracked bench.img is invisible
-# to it, where a tracked one would have to be built by `all` or read as ORPHAN.
+# folder is the point: tests/ holds testing apps and `all` never builds them,
+# which keeps a normal build - and every shipped image - free of them. (Their
+# artifacts are untracked, but so is everything else in build/ now; that used
+# to be the load-bearing half of this comment.)
 # The DEVELOPMENT of these apps happens on the `testing` branch; what lands
 # here is a finished harness, so experimental never carries the midway
 # artifacts of writing one.
@@ -675,80 +674,41 @@ xt-sound: $(IMG360) $(APPSIMG360)
 	@$(UNPROTECT_B) $(VM386SND)/86box.cfg
 	$(BOX) -P $(VM386SND) -N
 
-# check-images - are the git-tracked binaries in build/ what the sources
-# actually produce?
+# NOTHING IN build/ IS TRACKED, and that is a decision rather than an accident.
 #
-# build/ is gitignored, but a handful of artifacts inside it are force-added
-# and shipped: the kernel, the two boot sectors, the two bootable floppies and
-# the two software floppies. Nothing makes them follow a source change, so
-# they go stale in silence - edit a package, skip the rebuild, and the tree
-# still builds, still boots, and still looks right while carrying a floppy
-# image that no longer holds what the source says it does. That is not
-# hypothetical: two "Rebuild the shipped images" commits exist because someone
-# caught it by hand, and a merge shipped a Paint two fixes out of date until
-# the merge rebuilt it.
+# For most of this tree's life the opposite held: build/ was gitignored but 35
+# artifacts inside it - the kernel, both boot sectors, both bootable floppies,
+# both software floppies and every package's .bin/.o88 - were force-added and
+# shipped, so a clone could boot without a toolchain. Nothing made them follow
+# a source change, so they went stale in silence, and `check-images` lived here
+# to catch that by building everything a second time and comparing byte for
+# byte. It caught real staleness (two "Rebuild the shipped images" commits, and
+# a merge that shipped a Paint two fixes out of date), which is the point: the
+# cache had a correctness obligation, and the obligation was not free.
 #
-# This is the mechanical version of catching it. Every shipped artifact is
-# built a SECOND time into a scratch directory and compared byte for byte.
-# That is only meaningful because the toolchain is deterministic on purpose -
-# tools/os88disk.py pins the volume serial and every FAT timestamp for exactly
-# this reason - so a difference is always staleness and never noise.
+# A binary an artifact of THIS tree does not need to be committed:
 #
-# Three things are deliberate:
+#  - the toolchain is deterministic on purpose (tools/os88disk.py pins the
+#    volume serial and every FAT timestamp), so `make` reproduces any of them
+#    byte for byte - a committed copy carried no information a rebuild lacks;
+#  - the images are published where a version can be attached to them: a GitHub
+#    release, and os8088.com. .claude/skills/release-os8088 builds them fresh
+#    from a clean checkout, so the release path never read the tracked copies;
+#  - anyone running `make run` already has QEMU, and nasm is the easier of the
+#    two to install.
 #
-#  - **The tracked set comes from git, not from a list here.** A list would
-#    drift from what is actually tracked, and the drift would be invisible.
-#  - **A tracked file the build does NOT produce is reported too**, and so is
-#    a tracked VIDEO=/RTC= stamp. Both are the other half of the same problem:
-#    build/ has been force-added wholesale more than once, which swept in a
-#    stamp twice and, on the occasion the parse-time hook had just deleted it,
-#    took kernel.bin OUT of the repo. The stamp needs naming specially because
-#    it would otherwise pass - the scratch build makes one too, and two empty
-#    files compare equal.
-#  - **The scratch build is knob-free.** The shipped images must be built with
-#    no VIDEO=/HERCSEG=/RTC= forcing - the kernel recipe already says so in a
-#    comment it prints at you - so building the comparison without them turns
-#    that comment into a check: a forced kernel that reached the tree reads as
-#    stale, which is exactly what it is.
+# Three ongoing traps died with it, and they are the reason not to reintroduce
+# any of this: STALE/ORPHAN/SCRATCH as a class (build/ was force-added
+# wholesale more than once, which swept in a VIDEO= stamp twice and once took
+# kernel.bin OUT of the repo); binary merge conflicts; and the sharpest one -
+# QEMU mounts build/apps.img and build/os8088.img WRITABLE and the OS writes to
+# them, so any test that saved a file or touched a Control Panel setting
+# dirtied a shipped artifact and needed the image deleted and rebuilt before
+# committing. Those images are now scratch, and a test may dirty them freely.
 #
-# It is not part of `all`: it costs a second full build, and it is a
-# pre-commit gate rather than something every build should pay for.
-CHECKDIR := $(BUILD)/.check
-
-check-images:
-	@rm -rf $(CHECKDIR)
-	@$(MAKE) BUILD=$(CHECKDIR) VIDEO= HERCSEG= RTC= all >/dev/null
-	@stale=0; bogus=0; n=0; \
-	for t in $$(git ls-files $(BUILD) 2>/dev/null); do \
-	    n=$$((n+1)); \
-	    b=$$(basename $$t); \
-	    case $$b in .video-*) \
-	        echo "  SCRATCH $$t - a build stamp, not a shipped artifact"; \
-	        bogus=1; continue;; \
-	    esac; \
-	    if [ ! -f $(CHECKDIR)/$$b ]; then \
-	        echo "  ORPHAN  $$t - tracked, but no build rule produces it"; \
-	        bogus=1; \
-	    elif cmp -s $$t $(CHECKDIR)/$$b; then \
-	        :; \
-	    else \
-	        echo "  STALE   $$t - does not match what the sources build"; \
-	        stale=1; \
-	    fi; \
-	done; \
-	rm -rf $(CHECKDIR); \
-	if [ $$n -eq 0 ]; then \
-	    echo "check-images: nothing tracked in $(BUILD)/ - is this a git checkout?"; \
-	    exit 1; \
-	fi; \
-	if [ $$stale -ne 0 ]; then \
-	    echo "check-images: STALE above - run \`make\`, then commit $(BUILD)/"; \
-	fi; \
-	if [ $$bogus -ne 0 ]; then \
-	    echo "check-images: SCRATCH/ORPHAN above - untrack it: git rm --cached <path>"; \
-	fi; \
-	if [ $$stale -ne 0 ] || [ $$bogus -ne 0 ]; then exit 1; fi; \
-	echo "check-images: $$n tracked artifact(s) match the sources"
+# The determinism is still load-bearing - it is what lets anyone rebuild a
+# released image and get the same bytes - it just no longer has a make target
+# guarding it.
 
 clean:
 	rm -rf $(BUILD)
