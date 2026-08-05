@@ -482,7 +482,7 @@ mem_hifit:
 ; out: nothing; preserves every register
 ;
 ; Segment-stepped, 1KB at a time, so a block bigger than 64KB moves without a
-; 16-bit offset ever binding - the dskw_rbdata idiom (SPEC.md 18.4.1). The
+; 16-bit offset ever binding - the dskw_rdata idiom (SPEC.md 18.4.1). The
 ; two blocks never overlap: mem_hifit treats the source as occupied, so the
 ; destination it returns cannot cover it, and a plain forward copy is safe.
 ; -----------------------------------------------------------------------------

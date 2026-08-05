@@ -168,7 +168,8 @@ at_save_named:
     push ds
     pop es
     mov bx, at_doc                  ; ES:BX = the bytes
-    mov si, at_name
+    xor dx, dx                      ; DX:CX = the count, and a document is
+    mov si, at_name                 ; AT_DOCCAP at the outside (SPEC.md 18.4.1)
     call OSAPI_FILE_WRITE
     jc .err
     mov byte [at_dirty], 0
@@ -209,8 +210,9 @@ at_load_named:
     pop es
     mov bx, at_doc
     mov cx, AT_DOCCAP
-    mov si, at_name
-    call OSAPI_FILE_READ            ; AX = bytes read
+    xor dx, dx                      ; DX:CX = the capacity; a file bigger than
+    mov si, at_name                 ; the gap buffer is FERR_BIG, as before
+    call OSAPI_FILE_READ            ; DX:AX = bytes read, and DX is 0 here
     jc .err
     ; fold in place: SI reads, DI writes, both inside at_doc
     mov cx, ax

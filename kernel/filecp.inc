@@ -38,9 +38,11 @@
 ;   followed by a delete, which is the only thing it can be when the two
 ;   volumes share no FAT.
 ; - Nothing about the SIZE of a file: the buffer bounds the CHUNK, not the
-;   file (SPEC.md 22.5). dskw_write still takes a 16-bit length and always
-;   will, so a copy is a truncating create followed by a run of
-;   dskw_append calls, each one a whole number of clusters.
+;   file (SPEC.md 22.5). dskw_write lost its 64KB ceiling in SPEC.md 18.4.1,
+;   but the copy buffer is a heap claim of whatever the machine could spare
+;   and a file may still be bigger than it, so a copy stays a truncating
+;   create followed by a run of dskw_append calls, each one a whole number
+;   of clusters.
 ; =============================================================================
 
 FCP_NONE    equ 0               ; [fcp_op]
@@ -1290,6 +1292,7 @@ fcp_xfer:
     mov es, [fcp_seg]
     xor bx, bx
     xor cx, cx
+    xor dx, dx                  ; DX:CX = 0 bytes (SPEC.md 18.4.1)
     mov si, fcp_fname
     call dskw_write
     jc .err

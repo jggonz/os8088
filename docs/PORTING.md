@@ -92,12 +92,17 @@ If you only read one section, read this one.
 5. **Drop the fourth `OS88_HEADER` argument** (the RAM requirement) and any
    `--needs` in the Makefile rule. There is no load-time RAM gate; size
    yourself at runtime instead.
-6. **Rebuild.** Slot numbers are all `%define`s and every one of `b401eda`'s
-   kept its number, so re-assembly asks nothing of you here.
+6. **Widen every file call's count** (§11). `OSAPI_FILE_WRITE` and
+   `OSAPI_FILE_READ` take `DX:CX`, not `CX`, and the read answers in `DX:AX` —
+   so put a `xor dx, dx` before each call whose count fits 16 bits, and stop
+   assuming `DX` survives a read. `OSAPI_FILE_READBIG` is gone; delete the
+   call and pass its `ES` with `BX = 0` to `OSAPI_FILE_READ` instead.
+7. **Rebuild.** Every other slot number is a `%define` that kept its number,
+   so re-assembly asks nothing more of you.
 
 What you do **not** have to change, though the older version of this document
 said otherwise: `OSAPI_WM_GEOM`, `OSAPI_ABOUT_SET`, `OSAPI_CPU_INFO`, every
-`OSAPI_XMEM_*`, `OSAPI_GFX_DBUF`, `OSAPI_GFX_SCROLL` and `OSAPI_FILE_READBIG`
+`OSAPI_XMEM_*`, `OSAPI_GFX_DBUF` and `OSAPI_GFX_SCROLL`
 all exist here with `main`'s contracts. The two sound slots exist too, but
 answer CF=1 unless the **sound driver** is loaded (SPEC.md §51) — which is what
 `OSAPI_SND_CAPS` is for, and what a well-written app already checked.
@@ -156,10 +161,12 @@ three paragraph-counting memory slots**:
 | `0x01B8` | `MEM_ALLOC` (paragraphs, answers in `AX`) | the same contract, answered by the claim heap through `osapi_cm_alloc` |
 | `0x01C0` | `MEM_FREE` (`AX`) | the same, through `osapi_cm_free` |
 | `0x01C8` | `MEM_AVAIL` (paragraphs) | the same, through `osapi_cm_caps` |
-| `0x01D0`..`0x01F8` | `WM_RESIZE`, `GFX_BLIT4`, `ABOUT_SET`, `FILE_READBIG`, `GFX_DBUF`, `GFX_SCROLL` | identical, number for number |
+| `0x01D0`..`0x01F8` | `WM_RESIZE`, `GFX_BLIT4`, `ABOUT_SET`, `FILE_READBIG`, `GFX_DBUF`, `GFX_SCROLL` | identical number for number, **except `0x01E8`**: `FILE_READBIG` is retired here and the cell answers CF=1 (SPEC.md §18.4.1). `FILE_READ` does its job. |
 | `0x0200`+ | — | this tree's additions: `MEM_CLAIM` / `MEM_FREE` / `MEM_AVAIL` (the KB shapes, §8), `FONT_GLYPHS`, `WM_ONSIZE`, `FILE_HERE`, `FILE_GOTO`, `MEM_REGROW`, `WM_TITLE`, `DRV_TASK` (drivers only), `MEM_CLAIM_DMA`, `FONT_RUN` |
 
-**Every contract `b401eda` had, this tree has, at `b401eda`'s number.** The
+**Every contract `b401eda` had, this tree has, at `b401eda`'s number** — with
+the single exception of the file read and write, which changed shape rather
+than number when the three of them became two (SPEC.md §18.4.1). The
 paragraph slots are wrappers now — a paragraph count rounds up to whole KB, so
 a grant is never smaller than asked — and new code should prefer the KB slots
 at `0x0200`+ (§8): they are the native shape, they work from the entry proc,
@@ -406,9 +413,25 @@ effect on the next drop with no re-registration — which is how Paint's
 
 ## 11. Files, folders and the dialog
 
-Unchanged: every `dskw_*` slot, all eleven `FERR_*` codes, the Standard File
-dialog, and `OSAPI_FILE_READBIG` (still `0x01E8`) for reads with no 64KB
-ceiling.
+Unchanged: every `dskw_*` slot NUMBER, all eleven `FERR_*` codes, and the
+Standard File dialog.
+
+**Changed: the read and the write themselves** (SPEC.md §18.4.1). There is no
+`OSAPI_FILE_READBIG` here — one read and one write serve both shapes of
+caller, and neither has a 64KB ceiling:
+
+```
+OSAPI_FILE_WRITE  SI = name, ES:BX = the bytes, DX:CX = the count
+OSAPI_FILE_READ   SI = name, ES:BX = the buffer, DX:CX = its capacity
+                  out DX:AX = bytes read
+```
+
+`ES:BX` is normalised to an offset under 16 and the transfer then walks the
+segment, so a buffer inside your own bss and a multi-segment heap claim are
+the same call. Porting is mechanical: `xor dx, dx` before every call whose
+count fits 16 bits, do not expect `DX` to survive a read, and turn a
+`READBIG` into a `READ` with `BX = 0`. Slot `0x01E8` still exists and still
+answers — CF=1, `FERR_NAME` — so nothing above it renumbered.
 
 New here: `OSAPI_FILE_HERE` and `OSAPI_FILE_GOTO`, which read and restore the
 directory names resolve in. Also `dskw_rmtree` — delete recurses into folders.

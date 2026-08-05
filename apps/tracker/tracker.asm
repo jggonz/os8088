@@ -5,8 +5,9 @@
 ; 4-channel ProTracker MOD player: launches windowed with a splash card, any
 ; key or click enters FULLSCREEN (wm_fullscreen's first shipped package
 ; client, SPEC.md 11.2), Esc returns. Modules load through the Standard File
-; dialog into an arena grant via OSAPI_FILE_READBIG (files >= 64KB are why
-; that slot exists), and play through a ring-mode Sound Blaster background
+; dialog into an arena grant via OSAPI_FILE_READ (whose destination walks by
+; SEGMENT, SPEC.md 18.4.1, which is what lets a file >= 64KB land in one
+; call at all), and play through a ring-mode Sound Blaster background
 ; stream fed by the package's worker task (the worker-safe stream verbs and
 ; ring mode of SPEC.md 34.5/20.3 exist for this app).
 ;
@@ -588,8 +589,9 @@ trk_trim:
 ;
 ; The load path: stop playback, free the previous module grant, size a new
 ; grant from OSAPI_MEM_AVAIL (capped at 128KB), read the
-; whole file with OSAPI_FILE_READBIG (DX:CX capacity in bytes - this is the
-; slot that exists because real MODs exceed dskw_read's 64KB ceiling), then
+; whole file with OSAPI_FILE_READ (ES:BX = the grant, DX:CX = its capacity in
+; bytes - the read walks its destination by SEGMENT, SPEC.md 18.4.1, which is
+; the only reason a 116KB module fits in one call at all), then
 ; mp_load validates and builds tables. Any failure frees the grant and puts
 ; its verdict on the status line. Success starts playback and repaints -
 ; which under WF_FULL also covers the menu-bar strip fdlg_close painted.
@@ -647,8 +649,9 @@ trk_fdone:
     shr dx, cl
     mov cx, ax
     mov es, [trk_modseg]
+    xor bx, bx                      ; ES:BX = the grant, at its first byte
     mov si, trk_fname
-    call OSAPI_FILE_READBIG         ; out CF=0, DX:AX = bytes read
+    call OSAPI_FILE_READ            ; out CF=0, DX:AX = bytes read
     push ds
     pop es
     jc .rderr

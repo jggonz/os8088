@@ -15,6 +15,15 @@
 ; host-side `os88disk.py --verify`, which catches the leaks a running
 ; kernel cannot see.
 ;
+; TWO slots, not three (SPEC.md 18.4.1). There is no separate big-file entry
+; point to gate any more: 0x0120 and 0x0128 take a far pointer and a 32-bit
+; count, and the suite's job is to prove that ONE pair of routines covers
+; both shapes of caller. So checks 2..5 drive a 96KB file through them into a
+; heap claim - once at a deliberately unaligned offset, once at zero - and
+; every check from 6 down drives the same two slots into this package's own
+; bss. A machine whose heap cannot fund the claim skips 2..5 and runs the
+; rest; refusal is a normal path (SPEC.md 50.3).
+;
 ; Prefix ft_.
 ; =============================================================================
 
@@ -24,17 +33,27 @@
 
 FT_BIG    equ 1500            ; spans sectors AND ends mid-sector
 FT_SMALL  equ 300             ; the replace is smaller: the chain must shrink
-FT_ROWS   equ 25              ; result slots: exactly the checks below
-FT_BIGKB  equ 128             ; the heap claim readbig lands in, KB
+FT_ROWS   equ 25              ; result slots: exactly the checks below, when
+                              ; the big block's claim was funded (21 without)
+FT_BIGKB  equ 128             ; the heap claim the big checks land in, KB
 FT_BIGSZ_HI equ 0x0001        ; BIG.DAT is 96KB = 0x00018000 bytes, and its
 FT_BIGSZ_LO equ 0x8000        ; byte at offset i is (i >> 9) - one distinct
 FT_BIGPROBE equ 0x0088        ; value per 512-byte sector, so a destination
                               ; that failed to advance by segment reads a
                               ; DIFFERENT one. The probe is offset 0x11111,
-                              ; sector 0x88, past the 64KB horizon every
-                              ; other file op stops at
+                              ; sector 0x88, past the 64KB horizon the file
+                              ; API used to stop at
+FT_BIGOFF equ 0x0033          ; ...and the OFFSET the first big read is aimed
+                              ; at inside the claim. Deliberately neither zero
+                              ; nor a paragraph multiple: ES:BX is normalised
+                              ; to seg+3 : 3 before the transfer walks the
+                              ; segment (SPEC.md 18.4.1), and nothing else in
+                              ; this suite proves that arithmetic
+FT_BIGCAP_HI equ 0x0001       ; the capacity offered for that read: 0x1F000 =
+FT_BIGCAP_LO equ 0xF000       ; 124KB, which is what is left of a 128KB claim
+                              ; past FT_BIGOFF with room to spare
 FT_MAXF   equ 999             ; scratch-name ceiling for the fill check
-FT_BSS_TOTAL equ 3064         ; see the bss layout after OS88_IMAGE_END
+FT_BSS_TOTAL equ 3068         ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; ft_entry - run the suite, then create the window that reports it
@@ -65,180 +84,233 @@ ft_run:
     push ds
     pop es                      ; every buffer here is our own bss
 
-    ; 25. readbig: the one file op with no 64KB ceiling (SPEC.md 18.4). It
-    ; needs somewhere bigger than our own segment to land, which is what the
-    ; claim heap is for (SPEC.md 50.3) - so a machine that cannot fund the
-    ; claim records nothing rather than failing. Refusal is a normal path.
-    ;
-    ; ONE check, not three: the size and the probe byte are both part of "it
-    ; read the file", and splitting them would need the call's CF carried
-    ; across two ft_note calls. Note `mov dx, 0` and not `xor dx, dx` below -
-    ; ft_note wants the CF the call under test left, and XOR clears it.
-    mov ax, FT_BIGKB
-    call OSAPI_MEM_CLAIM        ; DX = the claim's base segment
-    jc .nobig
-    push dx
-    mov es, dx                  ; the destination is ES:0000
-    mov si, ft_nbig
-    mov cx, 0x0000              ; DX:CX = FT_BIGKB * 1024, the capacity
-    mov dx, 0x0002
-    call OSAPI_FILE_READBIG     ; out DX:AX = the file's 32-bit size
-    jc .rbnote                  ; CF and AX = FERR_* already
-    cmp dx, FT_BIGSZ_HI         ; the real size, which is more than 16 bits
-    jne .rbwrong
-    cmp ax, FT_BIGSZ_LO
-    jne .rbwrong
-    pop dx
-    push dx
-    add dx, 0x1000              ; a byte PAST the 64KB horizon: if the
-    mov es, dx                  ; destination had not advanced by SEGMENT,
-    mov bx, 0x1111              ; this sector never landed here
-    mov al, [es:bx]
-    xor ah, ah
-    cmp ax, FT_BIGPROBE
-    jne .rbwrong
-    clc
-    jmp short .rbnote
-.rbwrong:
-    mov ax, FERR_IO
-    stc
-.rbnote:
-    mov dx, 0                   ; expect success - and keep CF
-    call ft_note
-    pop dx                      ; the claim stays: the kernel frees it at
-    push ds                     ; teardown (SPEC.md 50.4)
-    pop es                      ; every other buffer here is our own bss
-.nobig:
+    ; EVERY ft_note below is preceded by `mov dx, <expected>`, NEVER by
+    ; `xor dx, dx`. ft_note reads the CF the call under test left, and XOR
+    ; clears CF - so an `xor` there silently turns every failed call that was
+    ; expected to succeed into a PASS. That is not hypothetical: this suite
+    ; shipped with fifteen of them.
 
-    ; 1. free space, before anything
+    ; 1. free space, before anything. Taken FIRST, so the big-file checks
+    ;    below are inside the span check 16 closes.
     call OSAPI_FILE_DFREE       ; DX:AX = bytes, BX = sectors/cluster
     mov [ft_free0], ax
     mov [ft_free0+2], dx
-    xor dx, dx
+    mov dx, 0
     call ft_note                ; expect success
 
-    ; 2. a multi-sector write with a partial final sector
+    ; --- 2..5: past the 64KB horizon, through the ordinary read and write ---
+    ; There is no second "big" entry point any more (SPEC.md 18.4.1): the
+    ; slots under test here are 0x0128 and 0x0120, the same two every check
+    ; below uses. What is different is only where the buffer is - a heap claim
+    ; (SPEC.md 50.3) rather than this package's own bss, because a package's
+    ; region caps at one segment. A machine that cannot fund the claim records
+    ; nothing rather than failing: refusal is a normal path.
+    mov ax, FT_BIGKB
+    call OSAPI_MEM_CLAIM        ; DX = the claim's base segment
+    jc .nobig
+    mov [ft_bseg], dx
+
+    ; 2. read BIG.DAT into the claim at a NON-ZERO, non-paragraph offset.
+    ;    ONE check, not two: the 32-bit size and the probe byte are both part
+    ;    of "it read the file", and splitting them would need the call's CF
+    ;    carried across two ft_note calls.
+    mov es, dx
+    mov bx, FT_BIGOFF
+    mov si, ft_nbig
+    mov cx, FT_BIGCAP_LO        ; DX:CX = the capacity
+    mov dx, FT_BIGCAP_HI
+    call OSAPI_FILE_READ        ; out DX:AX = the file's 32-bit size
+    jc .rd1note                 ; CF and AX = FERR_* already
+    call ft_bigchk              ; size + the byte at FT_BIGOFF + 0x11111
+.rd1note:
+    mov dx, 0                   ; expect success - and keep CF
+    call ft_note
+
+    ; 3. write those 96KB straight back out from the same ES:BX. This is the
+    ;    write that used to be impossible: one call, a count that does not fit
+    ;    16 bits, and a source that spans segments.
+    mov es, [ft_bseg]
+    mov bx, FT_BIGOFF
+    mov si, ft_nbig2
+    mov cx, FT_BIGSZ_LO         ; DX:CX = 96KB
+    mov dx, FT_BIGSZ_HI
+    call OSAPI_FILE_WRITE
+    mov dx, 0
+    call ft_note
+
+    ; 4. poison the probe byte, then read the copy back at offset 0 - so the
+    ;    normalised path and the already-aligned one are both exercised, and
+    ;    the byte can only be right if 96KB actually reached the disk.
+    mov es, [ft_bseg]
+    mov ax, es
+    add ax, 0x1000
+    mov es, ax
+    mov byte [es:0x1111], 0xAA
+    mov es, [ft_bseg]
+    xor bx, bx
+    mov si, ft_nbig2
+    mov cx, FT_BIGCAP_LO
+    mov dx, FT_BIGCAP_HI
+    call OSAPI_FILE_READ
+    jc .rd2note
+    call ft_bigchk0             ; size + the byte at 0x11111
+.rd2note:
+    mov dx, 0
+    call ft_note
+
+    ; 5. and take the 96KB back, so check 16 still measures a closed span
+    mov si, ft_nbig2
+    call OSAPI_FILE_DELETE
+    mov dx, 0
+    call ft_note
+
+    mov dx, [ft_bseg]           ; the claim has done its work
+    call OSAPI_MEM_FREE
+    mov word [ft_bseg], 0
+.nobig:
+    push ds
+    pop es                      ; every other buffer here is our own bss
+
+    ; 6. a multi-sector write with a partial final sector
     call ft_fill                ; ft_buf = FT_BIG bytes of pattern
     mov si, ft_n1
     mov bx, ft_buf
     mov cx, FT_BIG
+    mov dx, 0                   ; DX:CX = the count (SPEC.md 18.4.1)
     call OSAPI_FILE_WRITE
-    xor dx, dx
+    mov dx, 0
     call ft_note
 
-    ; 3. read it back whole, and compare every byte
+    ; 7. read it back whole, into a buffer inside our OWN segment, and
+    ;    compare every byte. The in-segment destination is the other half of
+    ;    the unified contract and every check from here down uses it.
     call ft_wipe
     mov si, ft_n1
     mov bx, ft_in
     mov cx, FT_BIG
-    call OSAPI_FILE_READ        ; AX = bytes read
-    xor dx, dx
+    mov dx, 0
+    call OSAPI_FILE_READ        ; DX:AX = bytes read
+    mov dx, 0
     call ft_note
     mov cx, FT_BIG
     call ft_same                ; CF=1 (and AX=1) if the bytes differ
-    xor dx, dx
+    mov dx, 0
     call ft_note
 
-    ; 4. a buffer too small must refuse without touching it
+    ; 8. a buffer too small must refuse without touching it
     mov si, ft_n1
     mov bx, ft_in
     mov cx, 100
+    mov dx, 0
     call OSAPI_FILE_READ
     mov dx, FERR_BIG
     call ft_note
 
-    ; 5. replace it with a SHORTER file: the chain must shrink, not overlap
+    ; 9. replace it with a SHORTER file: the chain must shrink, not overlap
     mov si, ft_n1
     mov bx, ft_buf
     mov cx, FT_SMALL
+    mov dx, 0
     call OSAPI_FILE_WRITE
-    xor dx, dx
+    mov dx, 0
     call ft_note
     call ft_wipe
     mov si, ft_n1
     mov bx, ft_in
     mov cx, FT_BIG
+    mov dx, 0
     call OSAPI_FILE_READ
-    cmp ax, FT_SMALL
-    je .sized
-    stc                         ; wrong length: force a FAIL
+    jc .sized                   ; a failure is its own FAIL; do not overwrite
+    cmp ax, FT_SMALL            ; the code with a length verdict
+    jne .wronglen
+    or dx, dx                   ; a 96KB answer in a 300-byte file is a size
+    jz .sized                   ; high word that did not get cleared
+.wronglen:
     mov ax, 1
+    stc
 .sized:
-    xor dx, dx
+    mov dx, 0
     call ft_note
     mov cx, FT_SMALL
     call ft_same
-    xor dx, dx
+    mov dx, 0
     call ft_note
 
-    ; 6. an empty file is a legal file
+    ; 10. an empty file is a legal file
     mov si, ft_n3
     mov bx, ft_buf
     xor cx, cx
+    mov dx, 0
     call OSAPI_FILE_WRITE
-    xor dx, dx
+    mov dx, 0
     call ft_note
     mov si, ft_n3
     mov bx, ft_in
     mov cx, FT_BIG
+    mov dx, 0
     call OSAPI_FILE_READ
-    test ax, ax
+    jc .empty
+    mov bx, ax
+    or bx, dx                   ; DX:AX must be zero, both words
     jz .empty
-    stc
     mov ax, 1
+    stc
 .empty:
-    xor dx, dx
+    mov dx, 0
     call ft_note
 
-    ; 7. rename, and prove both ends of it
+    ; 11. rename, and prove both ends of it
     mov si, ft_n1
     mov di, ft_n2
     call OSAPI_FILE_RENAME
-    xor dx, dx
+    mov dx, 0
     call ft_note
     mov si, ft_n1
     mov bx, ft_in
     mov cx, FT_BIG
+    mov dx, 0
     call OSAPI_FILE_READ
     mov dx, FERR_NOENT
     call ft_note
     mov si, ft_n2
     mov bx, ft_in
     mov cx, FT_BIG
+    mov dx, 0
     call OSAPI_FILE_READ
-    xor dx, dx
+    mov dx, 0
     call ft_note
 
-    ; 8. renaming onto an existing name must be refused
+    ; 12. renaming onto an existing name must be refused
     mov si, ft_n2
     mov di, ft_n3
     call OSAPI_FILE_RENAME
     mov dx, FERR_EXIST
     call ft_note
 
-    ; 9. a malformed name never reaches the disk
+    ; 13. a malformed name never reaches the disk
     mov si, ft_nbad
     mov bx, ft_buf
     mov cx, 16
+    mov dx, 0
     call OSAPI_FILE_WRITE
     mov dx, FERR_NAME
     call ft_note
 
-    ; 10. delete both, and prove the second delete finds nothing
+    ; 14. delete both, and prove the second delete finds nothing
     mov si, ft_n2
     call OSAPI_FILE_DELETE
-    xor dx, dx
+    mov dx, 0
     call ft_note
     mov si, ft_n3
     call OSAPI_FILE_DELETE
-    xor dx, dx
+    mov dx, 0
     call ft_note
     mov si, ft_n2
     call OSAPI_FILE_DELETE
     mov dx, FERR_NOENT
     call ft_note
 
-    ; 11. fill the volume until it refuses. This is the path where a bug
+    ; 15. fill the volume until it refuses. This is the path where a bug
     ;     costs a disk: the failing write dies mid-chain, and its rollback
     ;     (SPEC.md 18.4) must leave nothing allocated behind it.
     mov word [ft_made], 0
@@ -248,30 +320,31 @@ ft_run:
     mov si, ft_tmp
     mov bx, ft_buf
     mov cx, FT_BIG
+    mov dx, 0
     call OSAPI_FILE_WRITE
     jc .refused
     inc word [ft_made]
     mov ax, [ft_made]
     cmp ax, FT_MAXF
     jb .fill
-    stc                         ; out of names before out of disk: FAIL
-    mov ax, 1
+    mov ax, 1                   ; out of names before out of disk: FAIL
+    stc
     jmp short .refnote
 .refused:
     cmp ax, FERR_FULL           ; only these two are legitimate refusals
     je .goodref
     cmp ax, FERR_DIRFULL
     je .goodref
-    stc
     mov ax, 1
+    stc
     jmp short .refnote
 .goodref:
     clc
 .refnote:
-    xor dx, dx
+    mov dx, 0
     call ft_note
 
-    ; 12. take it all back
+    ; 16. take it all back
     mov word [ft_i], 0
     xor bx, bx                  ; BX = failures
 .del:
@@ -289,13 +362,14 @@ ft_run:
 .deleted:
     test bx, bx
     jz .delgood
-    stc
     mov ax, 1
+    stc
 .delgood:
-    xor dx, dx
+    mov dx, 0
     call ft_note
 
-    ; 13. and free space must be back to the byte - no leaked clusters
+    ; 17. and free space must be back to the byte - no leaked clusters, and
+    ;     that now covers the 96KB write and delete of checks 3 and 5
     call OSAPI_FILE_DFREE
     mov [ft_free1], ax
     mov [ft_free1+2], dx
@@ -304,10 +378,10 @@ ft_run:
     cmp dx, [ft_free0+2]
     je .clean
 .leaked:
-    stc
     mov ax, 1
+    stc
 .clean:
-    xor dx, dx
+    mov dx, 0
     call ft_note
 
     pop es
@@ -356,6 +430,46 @@ ft_note:
     pop di
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ft_bigchk / ft_bigchk0 - did a 96KB read actually land, all of it?
+; in:  DX:AX = the size the read reported; [ft_bseg] = the claim it went into.
+;      ft_bigchk is for a read aimed at FT_BIGOFF, ft_bigchk0 for one aimed at
+;      offset 0
+; out: CF=0 all correct, or CF=1 with AX = FERR_IO (which is what ft_note
+;      wants to see for a check that was expected to succeed)
+; clobbers: AX, BX, ES, CF
+;
+; Two questions in one answer, because the caller has to hand ft_note a single
+; CF: the size must be the real 32-bit one, and the byte at file offset
+; 0x11111 must be 0x88. That byte is past the 64KB horizon, so it can only be
+; there if the transfer walked the destination by SEGMENT - a loop that stayed
+; inside one segment would have wrapped and written it somewhere else
+; entirely, and one that ignored FT_BIGOFF would have put it 51 bytes low.
+; -----------------------------------------------------------------------------
+ft_bigchk:
+    mov bx, FT_BIGOFF + 0x1111
+    jmp short ft_bigchk_do
+ft_bigchk0:
+    mov bx, 0x1111
+ft_bigchk_do:
+    cmp dx, FT_BIGSZ_HI         ; the real size, which is more than 16 bits
+    jne .bad
+    cmp ax, FT_BIGSZ_LO
+    jne .bad
+    mov ax, [ft_bseg]
+    add ax, 0x1000              ; the probe's segment: 64KB into the claim
+    mov es, ax
+    mov al, [es:bx]
+    xor ah, ah
+    cmp ax, FT_BIGPROBE
+    jne .bad
+    clc
+    ret
+.bad:
+    mov ax, FERR_IO
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -591,7 +705,8 @@ ft_s_fail: db 'FAIL', 0
 ft_s_free: db 'free', 0
 
 ; the files this suite creates and removes again
-ft_nbig: db 'BIG.DAT', 0        ; shipped as DATA on the test image
+ft_nbig:  db 'BIG.DAT', 0       ; shipped as DATA on the test image
+ft_nbig2: db 'FTBIG.DAT', 0     ; ...and the 96KB copy check 3 writes of it
 ft_n1:   db 'FTEST1.TXT', 0
 ft_n2:   db 'FTEST2.TXT', 0
 ft_n3:   db 'FTEST3.TXT', 0
@@ -610,6 +725,8 @@ ft_made   equ os88_image_end + 20       ; word: scratch files created
 ft_i      equ os88_image_end + 22       ; word: the delete loop's index
 ft_tmp    equ os88_image_end + 24       ; 16 bytes: "FTnnn.TMP"
 ft_res    equ os88_image_end + 40       ; FT_ROWS result bytes, 0 = PASS
-ft_buf    equ os88_image_end + 64       ; FT_BIG bytes written
-ft_in     equ os88_image_end + 1564     ; FT_BIG bytes read back
-                                        ; total 3064 = FT_BSS_TOTAL
+ft_buf    equ os88_image_end + 66       ; FT_BIG bytes written (65 rounded up)
+ft_in     equ os88_image_end + 1566     ; FT_BIG bytes read back
+ft_bseg   equ os88_image_end + 3066     ; word: the big checks' claim, 0 = the
+                                        ; heap could not fund one
+                                        ; total 3068 = FT_BSS_TOTAL

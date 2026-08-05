@@ -42,8 +42,9 @@
 ;  * The canvas is 4bpp packed, high nibble = the left pixel, rows stored
 ;    BOTTOM-UP behind a 118-byte BMP header - i.e. the canvas IS a
 ;    BITMAPINFOHEADER DIB. Saving is therefore one OSAPI_FILE_WRITE of the
-;    canvas segment with no staging pass and no copy, which also keeps a
-;    full-size picture inside the file API's 64KB ceiling (SPEC.md 18.4).
+;    canvas claim with no staging pass and no copy - and since the write
+;    walks its source by SEGMENT (SPEC.md 18.4.1), one call whatever the
+;    picture's size.
 ;    Bottom-up costs nothing: pt_rowtab maps canvas y to a byte offset once
 ;    at startup and every access is a table lookup.
 ;  * Nothing ever repaints more of the screen than it changed. A brush
@@ -6149,11 +6150,12 @@ pt_repaint:
 ;
 ; The writer is the whole reason the canvas is laid out the way it is: rows
 ; bottom-up behind a 118-byte DIB header means "save" is one OSAPI_FILE_WRITE
-; of PT_CVSEG with no staging pass, and a full 448x280 picture is 62,838
-; bytes - inside the file API's 64KB ceiling (SPEC.md 18.4) with room to
-; spare. The reader needs a staging buffer for the file it is about to parse
-; and uses the clipboard segment for it, which is why Open empties the
-; clipboard.
+; of the canvas claim with no staging pass. It used to need the result to fit
+; 64KB as well - a full 448x280 picture is 62,838 bytes, which it just did -
+; and since SPEC.md 18.4.1 it does not: DX:CX is the count and the source
+; advances by segment, so a picture bigger than one segment saves whole. The
+; reader needs a staging buffer for the file it is about to parse and uses
+; the clipboard segment for it, which is why Open empties the clipboard.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -6272,14 +6274,15 @@ pt_save:
     call pt_free_lzw                ; ...and straight back
     jmp .out
 .bmp:
-    ; --- one write, so the whole file must fit the API's 64KB (SPEC.md 18.4)
+    ; --- one write, and no 64KB ceiling on it any more (SPEC.md 18.4.1). The
+    ; canvas is one contiguous claim with the DIB at offset 0, which is
+    ; exactly the segment run the write walks - so DX:AX goes straight into
+    ; DX:CX and a full-screen picture saves whole.
     mov ax, [pt_ch]
     mul word [pt_stride]            ; DX:AX = pixel bytes
     add ax, PT_BMPHDR
     adc dx, 0
-    or dx, dx
-    jnz .toobig
-    mov cx, ax
+    mov cx, ax                      ; DX:CX = the file's 32-bit length
     call pt_bmp_hdr                 ; re-stamp it: the live size is the truth
     mov ax, [pt_base]
     mov es, ax
@@ -6290,9 +6293,6 @@ pt_save:
     jmp short .out
 .wrote:
     mov byte [pt_trunc], 0          ; what is on disk now IS what we hold
-    jmp short .out
-.toobig:
-    mov word [pt_msgp], pt_s_toobig
 .out:
     pop es
     pop si
@@ -6345,12 +6345,12 @@ pt_load:
     mov cx, PT_SC_KB * 1024 - 16
     xor dx, dx
 .rd:
-    ; READBIG, not READ: the destination advances by SEGMENT (SPEC.md 18.4.1),
-    ; so a picture whose file runs past 64KB - which a full-screen canvas's
-    ; BMP does - loads in one call instead of being refused. ES is the base
-    ; segment and the buffer starts at ES:0000, which is what both decoders
-    ; already assume; DX:CX is the capacity, and the size comes back in DX:AX.
-    call OSAPI_FILE_READBIG
+    ; The destination advances by SEGMENT (SPEC.md 18.4.1), so a picture whose
+    ; file runs past 64KB - which a full-screen canvas's BMP does - loads in
+    ; one call instead of being refused. ES:BX is the base and the buffer
+    ; starts at ES:0000, which is what both decoders already assume; DX:CX is
+    ; the capacity, and the size comes back in DX:AX.
+    call OSAPI_FILE_READ
     jnc .got
     call pt_ferr
     jmp short .out
@@ -6358,11 +6358,11 @@ pt_load:
     ; DX:AX is the file's 32-bit size. Every check downstream is 16-bit, and
     ; every one of them is an UPPER bound - "the pixel data must be inside
     ; what we read" - so a file at or past 64KB saturates to 0xFFFF rather
-    ; than wrapping. That is conservative by construction: READBIG either
-    ; read the whole file or refused, so at >= 64KB every 16-bit offset the
+    ; than wrapping. That is conservative by construction: the read either
+    ; took the whole file or refused it, so at >= 64KB every 16-bit offset the
     ; decoders can form is inside the buffer. (The BMP decoder still refuses
     ; more than 64KB of PIXELS on its own account - a separate ceiling, and
-    ; not one readbig was ever going to lift.)
+    ; not one the file API was ever going to lift.)
     or dx, dx
     jz .sz16
     mov ax, 0xFFFF
@@ -8076,8 +8076,9 @@ pt_gif_out:
     mov al, 0x3B                    ; ...and the trailer
     call pt_gwr
     cmp byte [pt_govf], 0
-    jne .toobig
-    mov cx, [pt_gout]
+    jne .toobig                     ; the ENCODER's own ceiling, not the file
+    mov cx, [pt_gout]               ; API's: pt_gout is a 16-bit offset into
+    xor dx, dx                      ; one staging segment (SPEC.md 18.4.1)
     mov ax, [pt_gseg]
     mov es, ax
     xor bx, bx
