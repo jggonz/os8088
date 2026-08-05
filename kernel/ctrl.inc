@@ -83,6 +83,10 @@ CP_PROWH  equ 20                ; row pitch: row i glyph top = CP_PR0Y + i*20
 CP_PLX    equ CP_PGX + 18       ; 22: label text x
 CP_PLDY   equ 2                 ; label baseline offset (8px font in 12px box)
 CP_PCAPY  equ 74                ; caption text row
+CP_PCAP2  equ CP_PCAPY + 9      ; 83: second caption row. Only the mono answer
+                                ; uses it - the caption is the lowest thing on
+                                ; every page, so a second 8px line fits inside
+                                ; CP_CH (121) with room to spare
 
 ; --- radio hit bands, pane-relative y: generous, contiguous ------------------
 CP_B0Y1   equ CP_PR0Y - 4                     ; 22: row 0 (Pre-emptive) top
@@ -157,11 +161,23 @@ cp_s_dna:   db 'Not Enough Ram', 0          ; the heap cannot fund 150KB
                                             ; a reservation, so this can
                                             ; change while the panel is open
                                             ; (close an app and it comes back)
-cp_s_dmono: db 'Not on this adapter', 0     ; a 1bpp adapter draws straight
-                                            ; to the framebuffer and has no
-                                            ; buffer to double (SPEC.md 39.5)
-                                            ; - a memory answer would be a lie
-                                            ; on a 640K Hercules machine
+                                            ; A 1bpp adapter draws straight to
+                                            ; the framebuffer and has no buffer
+                                            ; to double (SPEC.md 39.5) - a
+                                            ; memory answer would be a lie on a
+                                            ; 640K Hercules machine. It says
+                                            ; WHY rather than just "no": the
+                                            ; software renderer IS the direct
+                                            ; path there, so there is nothing
+                                            ; to double rather than no room.
+                                            ; Two lines because the pane is 27
+                                            ; characters wide (CP_PRGT-CP_PMX
+                                            ; = 219px) and this is 49; the
+                                            ; caption is the lowest thing on
+                                            ; the page, so the second line has
+                                            ; room under it.
+cp_s_dmono: db 'Framebuffer is the display', 0
+cp_s_dmono2: db 'driver on this adapter', 0
 
 ; --- Date/Time page (SPEC.md 31.5/37) ----------------------------------------
 cp_s_time:  db 'Date/Time', 0   ; list name AND the page heading
@@ -821,6 +837,15 @@ cp_disp_paint:
     mov dx, bp
     add dx, CP_PCAPY
     call font_str
+    cmp si, cp_s_dmono          ; ...and that one answer runs to a second line.
+    jne .capdone                ; font_str clobbers nothing, so SI still names
+    mov si, cp_s_dmono2         ; the string that was drawn
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PCAP2
+    call font_str
+.capdone:
 
     call cp_dbradios            ; both glyphs, filled per the live state
 
@@ -923,15 +948,15 @@ cpf_disp_cap:
     push cx
     push dx
     push si
-    mov byte [gfx_color], CWHITE    ; erase the whole caption line first -
-    mov ax, di                      ; the strings differ in length
-    add ax, CP_PMX
-    mov bx, bp
-    add bx, CP_PCAPY
+    mov byte [gfx_color], CWHITE    ; erase BOTH caption lines first - the
+    mov ax, di                      ; strings differ in length AND in line
+    add ax, CP_PMX                  ; count, so erasing only the first would
+    mov bx, bp                      ; leave the mono answer's second line
+    add bx, CP_PCAPY                ; stranded under a one-line caption
     mov cx, di
     add cx, CP_PRGT
     mov dx, bx
-    add dx, 7
+    add dx, CP_PCAP2 - CP_PCAPY + 7
     call gfx_fill
     mov byte [gfx_color], CBLACK
     mov si, cp_s_dcap
@@ -947,6 +972,15 @@ cpf_disp_cap:
     mov dx, bp
     add dx, CP_PCAPY
     call font_str
+    cmp si, cp_s_dmono              ; same two-line answer as the full paint
+    jne .done                       ; (SPEC.md 47 rule 6: a partial redraw
+    mov si, cp_s_dmono2             ; path draws what the full paint would)
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PCAP2
+    call font_str
+.done:
     pop si
     pop dx
     pop cx
