@@ -7192,9 +7192,14 @@ shares `cp_glyph` and the `CP_B*Y` hit bands). Heading "Display"; row 0
 `[bb_dbl]`, the armed-buffer flag and **not** `[bb_on]` (1 on any mono
 adapter, §39.5); it is **0 at boot** — double buffering is opt-in.
 
-Caption: "Smoother; costs 150K" normally, or "Not on this adapter" on a
-1bpp card, which has no buffer to double at any memory size and never arms
-`[bb_avail]` at all (§39.5). On such a machine the page is display-only: a
+Caption: "Smoother; costs 150K" normally, or — on a 1bpp card — the two
+lines "Framebuffer is the display" / "driver on this adapter", which say why
+rather than merely refusing: the software renderer *is* the direct path
+there (§39.5), so there is nothing to double at any memory size and
+`[bb_avail]` is never armed at all. Two lines because the pane is 27
+characters wide and the answer is 49; the caption is the lowest thing on the
+page, so `CP_PCAP2` sits under it. On such a machine the page is
+display-only: a
 click in either band is ignored outright rather than moving a dot that
 `bb_set` would refuse to honour.
 
@@ -9143,8 +9148,9 @@ armed and must be flushed"**, and is what `gfx_flush`, the Control Panel's
 Display page and the Task Manager's RAM figures read — otherwise a mono
 machine would claim double buffering and bill 150KB that was never
 allocated. `bb_init` refuses to set `[bb_avail]` on mono, so the Display page
-cannot arm it, and its caption says *"Not on this adapter"* rather than
-lying about memory.
+cannot arm it, and its caption says *"Framebuffer is the display driver on
+this adapter"* rather than lying about memory — naming the reason, because
+"not here" invites the guess that a bigger machine would qualify.
 
 This is why the nine existing `[bb_on]` dispatch sites needed **no new
 dispatch bytes**. The four that did are the escape hatches — the callers that
