@@ -6604,6 +6604,80 @@ Three details that are not free choices:
   screen, so ordinary typing inside one screenful costs the comparison and
   nothing else.
 
+### 27.7.1 A walk stops at the bottom of the view
+
+Scrolling made a question worth asking that had never been asked: *why does a
+keystroke lay out the part of the note nobody can see?* Measured on a
+2,000-character note with the caret near the top, one keystroke cost **six**
+`np_walk` calls and 10,079 loop iterations, **72% of them on rows below the
+window**. Every walk now carries `[np_lastrow] = [np_vrows]` and the same
+keystroke costs **two** walks and 1,015 iterations — 29 of them below the
+view, which is the one row past the bottom that the bound deliberately keeps.
+Typing at the *end* of a note was already 2 walks and ~50 iterations, flat in
+the note's length, and is unchanged: §27.4's checkpoint had that case.
+
+Five things make the bound safe, and each of them is a thing that broke first:
+
+- **The comparison is SIGNED.** `np_row` is a visible row and is negative
+  above the view, which unsigned reads as past every limit — so a bounded
+  walk stopped before drawing anything at all. `[np_lastrow]`'s "no limit"
+  sentinel is `0x7FFF` for the same reason: `0xFFFF` is row minus one.
+- **The bound is `[np_vrows]`, one row PAST the last visible row**, because a
+  character typed at the end of the bottom row wraps the caret onto the row
+  below and `np_seecaret` has to be able to see where it went.
+- **`[np_curseen]`** says whether this walk stood on the caret, because 0 is a
+  real pen y and `[np_cury]` cannot say "not found" by itself. When a walk
+  that owes a caret-follow did not find it, `np_redraw` walks again from index
+  0, **unbounded and unseeded** — a net carrying either restriction misses the
+  caret exactly as the first walk did. The case is ordinary: page the view
+  away with the scroll bar and then press a key.
+- **`np_paint` is bounded too.** A full repaint is what every scroll step
+  costs, and walking 16KB of note to draw one screenful of it is the whole
+  problem in its most visible form.
+- **`.pad` no longer falls into `.stop`.** It walks `np_row` past the note's
+  last row without `np_rstart`, so the `np_rows` entries `.stop` would claim
+  were never written.
+
+**`[np_drows]` is the one thing a bounded walk cannot know**, and it is what
+the thumb is a fraction of. Three sources, in order of exactness:
+
+- A walk that reached the note's **end** sets it exactly and clears
+  `[np_hdirty]`.
+- A walk that **stopped** raises it to the lower bound it proved — the row it
+  stopped on exists, so the note is at least that tall — and **never lowers
+  it**. That is what keeps `np_scrollmax` from clamping the view short of a
+  caret that has just moved past the old bottom, which is the difference
+  between a stale thumb and a caret nobody can see.
+- **`np_height`** walks the whole note when `[np_hdirty]` says an edit
+  changed it. The **worker** runs it half a second after the typing stops —
+  the same idle test that settles the visual break — and `np_onclick` runs it
+  synchronously before `np_sbclick`, because a click on the bar is the one
+  place the height has to be exact rather than generous. `np_hire` is
+  therefore no longer only the break's: a note taller than its window wants a
+  worker whether or not this machine draws breaks.
+
+Between an edit and that settle the thumb can be a row or two small on a note
+that **shrank**. It is the deliberate trade: the bound is monotone upward, so
+the error is always in the direction that keeps the caret reachable, and the
+next full repaint — which every scroll is — makes it exact.
+
+**A scroll that follows the caret does not re-measure and re-follow.**
+`np_redraw`'s band path jumps past `.full`'s clamp-and-follow block to
+`.fullpaint`, because a caret that has just been followed is in view by
+construction: `np_seecaret`'s target is the row itself, not a step towards it.
+Two of the six walks were that block being asked a question it had already
+answered.
+
+**And a walk with no checkpoint seeds at the top of the VIEW.** `np_rows[0]`
+is the index row 0 of the content starts at, so rows above the view — which
+have neither pixels nor signatures — need not be walked to find it. It is
+§27.4's claim applied from a higher row and therefore a weaker one, and the
+two die together: `np_scrollto`, `np_bounds` and `np_clamp` clear `[np_ckok]`
+and `[np_rowsok]` side by side. For it to be available at all, a **bounded**
+walk has to publish `np_rowsn`/`[np_rowsok]` for the rows it did pass, which
+`.stop` now does whenever the walk started at the top of the view rather than
+at a seed part-way down.
+
 ## 28. taskmgr.inc — the Task Manager window
 
 Built-in singleton app kind (KIND_TASKMGR, cap 1 — one sampler), window
