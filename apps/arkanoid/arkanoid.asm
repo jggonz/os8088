@@ -24,19 +24,34 @@
 ;    task does is set a word the worker reads.
 ;
 ;  - **The keyboard is edge-triggered, so the paddle glides on a deadline -
-;    and the deadline has two lengths.** int 16h gives keypresses and no
-;    key-up, so "is left held" cannot be asked. Instead each arrow key sets a
-;    direction and refills [ark_pkeep] with a deadline in ticks, and the worker
-;    moves the paddle while the deadline lasts. A repeat arriving while the
-;    deadline still stands means the key is HELD, which winds the paddle up to
-;    its faster speed. The deadline is how long the paddle keeps moving after
-;    the LAST key event, so it is also the coast when the key comes up - and
-;    that is why one length cannot serve both: a FRESH press must outlast the
-;    ~9-tick typematic DELAY or a hold stalls for half a second before it
+;    and the deadline has two lengths and a taper.** int 16h gives keypresses
+;    and no key-up, so "is left held" cannot be asked. Instead each arrow key
+;    sets a direction and refills [ark_pkeep] with a deadline in ticks, and the
+;    worker moves the paddle while the deadline lasts. A repeat arriving while
+;    the deadline still stands means the key is HELD, which winds the paddle up
+;    to its faster speed. The deadline is how long the paddle keeps moving
+;    after the LAST key event, so it is also the coast when the key comes up -
+;    and that is why one length cannot serve both: a FRESH press must outlast
+;    the ~9-tick typematic DELAY or a hold stalls for half a second before it
 ;    repeats, while a REPEAT only has to outlast the ~1.7-tick typematic RATE.
 ;    Refilling the long one on every repeat charged the delay to the release,
 ;    and the paddle sailed on for 11 ticks at held speed - 88 pixels, a third
 ;    of the field - after the player let go.
+;    The remaining half of that was the TAP, and it is the same mistake one
+;    level down: the deadline was spending the distance as well as measuring
+;    the time, so a press-and-release cost the full 11 ticks at ARK_PSTEP - 44
+;    pixels, a whole paddle width, a fifth of the paddle's entire travel. The
+;    latch has to be 11 ticks; the MOTION does not. So a fresh press eases its
+;    speed off instead (ARK_PBURST, ARK_PEASE) and is at rest by its fifth tick
+;    with six of the latch still to run: a tap costs 14 pixels and settles,
+;    while the latch still stands its full length and the first repeat - which
+;    cannot arrive before tick 9 - still finds it standing, still winds the
+;    paddle up to ARK_PFAST, and from there nothing about a hold has changed.
+;    The price is that the ease-out lands in the middle of the
+;    typematic delay, so the start of a HOLD decelerates before the repeats
+;    take over - which is the stall the two lengths were meant to avoid, but
+;    reached gently and from a standstill rather than at speed, and it reads as
+;    the ramp of an acceleration curve rather than a dropped keypress.
 ;
 ;  - **Sound comes from the worker**, which the SDK's worker-safe list does not
 ;    mention and which is nevertheless correct: `snd_req_inst` (SPEC.md 34.3)
@@ -147,6 +162,20 @@ ARK_PHOLD   equ 4                   ; ...and what a REPEAT refills. Once the
                                     ; the paddle coasts once the key comes up
 ARK_PSTEP   equ 4                   ; paddle pixels a tick, tapped...
 ARK_PFAST   equ 8                   ; ...and held
+ARK_PBURST  equ 2                   ; ticks a fresh press spends at the full
+                                    ; ARK_PSTEP before it starts easing off...
+ARK_PEASE   equ 1                   ; ...and the pixels a tick it sheds after
+                                    ; that. Between them they decide what a TAP
+                                    ; costs, which the deadline above must NOT:
+                                    ; 4+4+3+2+1, at rest by tick 5 and 14
+                                    ; pixels travelled, against the flat 44 an
+                                    ; unswitched ARK_PSTEP spent over the whole
+                                    ; ARK_PKEEP. The latch keeps its full
+                                    ; length either way, so the first typematic
+                                    ; repeat still lands inside it. A CONFIRMED
+                                    ; hold is never eased - the taper is gated
+                                    ; on ARK_PFAST - so the release coast stays
+                                    ; the flat 4 x 8 = 32 pixels it was
 
 ; --- ball velocity is in QUARTER pixels (SPEC.md 44.3.2) ----------------------
 ; It used to be whole pixels a frame, which made the speed ladder 3, 4, 5 and
@@ -489,7 +518,8 @@ ark_onkey:
 .fresh:
     mov [ark_pdir], al
     mov word [ark_pspd], ARK_PSTEP
-    mov word [ark_pkeep], ARK_PKEEP
+    mov word [ark_pramp], ARK_PBURST ; ...and the burst before it eases off:
+    mov word [ark_pkeep], ARK_PKEEP  ; the latch is long, the nudge is not
     jmp .out
 
 .ascii:
@@ -940,13 +970,22 @@ ark_focuschk:
 
 ; -----------------------------------------------------------------------------
 ; ark_do_paddle - move the paddle while its deadline lasts
-; in:  [ark_pdir]/[ark_pkeep]/[ark_pspd]; out: [ark_px] moved, clamped
-; preserves all registers
+; in:  [ark_pdir]/[ark_pkeep]/[ark_pspd]/[ark_pramp]; out: [ark_px] moved,
+;      clamped; preserves all registers
 ;
 ; [ark_pkeep] is written by the UI task and decremented here. Both are plain
 ; word accesses, and the 8086 recognises interrupts only at instruction
 ; boundaries, so neither can be torn by the other - the same no-protocol
-; sharing apps/fractal uses for its restart flag.
+; sharing apps/fractal uses for its restart flag. [ark_pspd] and [ark_pramp]
+; are written by both, and the same argument covers them: the UI task only ever
+; stores a whole word, never reads one back to modify it.
+;
+; The taper is here rather than in ark_onkey because the key events are the one
+; thing that cannot pace it - a tap delivers exactly one of them and a hold
+; delivers none at all for half a second, while this runs once a tick either
+; way. The burst is what protects the first tick: spending ARK_PBURST of it
+; before any of ARK_PEASE is spent means the press moves at the full ARK_PSTEP
+; for exactly ARK_PBURST ticks, and the nudge starts the instant the key does.
 ; -----------------------------------------------------------------------------
 ark_do_paddle:
     push ax
@@ -958,6 +997,17 @@ ark_do_paddle:
     dec word [ark_pkeep]
     mov al, [ark_pdir]
     cbw
+    cmp word [ark_pspd], ARK_PFAST  ; a hold, once confirmed, keeps its speed:
+    jae .move                       ; the taper is the UNconfirmed press easing
+    cmp word [ark_pramp], 0         ; itself to a stop well inside its own
+    jle .ease                       ; latch, so that a TAP is a nudge. None of
+    dec word [ark_pramp]            ; it touches AX, which holds the direction
+    jmp .move
+.ease:
+    sub word [ark_pspd], ARK_PEASE
+    jge .move
+    mov word [ark_pspd], 0          ; at rest, but still latched: a repeat
+.move:                              ; arriving now is still read as a hold
     mov bx, [ark_pspd]
     imul bx                         ; DX:AX = dir * speed
     add ax, [ark_px]
@@ -990,9 +1040,12 @@ ark_do_paddle:
 ; ark_english - the sideways kick the paddle's own motion imparts
 ; out: AX = -2..+2 PIXELS, in quarter units; preserves all other registers
 ;
-; The paddle moves 4 pixels a tick tapped and 8 held (ARK_PSTEP/ARK_PFAST), so
-; a quarter of that is a clean -2..+2 without a table. idiv truncates toward
-; zero, which is what makes a rail-clamped part-move round down to nothing.
+; The paddle moves at most 4 pixels a tick tapped and 8 held (ARK_PSTEP /
+; ARK_PFAST), so a quarter of that is a clean -2..+2 without a table. idiv
+; truncates toward zero, which is what makes a rail-clamped part-move round
+; down to nothing - and what makes the tail of a tap's taper, 3 and 2 and 1
+; pixels a tick, impart nothing either. That is the right answer: a paddle
+; that has almost stopped is not carrying the ball anywhere.
 ; The result is scaled to quarter units at the end, so the arithmetic above
 ; stays the pixel arithmetic it reads as.
 ; -----------------------------------------------------------------------------
@@ -1025,6 +1078,12 @@ ark_english:
 ; build on: the flick IS the aim. A paddle standing still serves straight up,
 ; which is honest rather than a hidden default - the player who wants an angle
 ; flicks, and the one who does not gets to choose after the first bounce.
+;
+; The taper (ARK_PBURST) narrowed what counts as a flick, and deliberately so:
+; a tap is at rest by its fifth tick, so Space pressed a quarter-second after
+; the arrow now serves straight up where it used to serve at full angle for
+; the whole 11-tick latch. That was the paddle standing still and being read
+; as moving. A HOLD still throws the maximum, since ARK_PFAST is never eased.
 ; -----------------------------------------------------------------------------
 ark_throw:
     push bx
@@ -3194,8 +3253,10 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     AWORD ark_hold                  ; ticks left in a death/clear pause
     AWORD ark_px                    ; paddle x
     AWORD ark_pw                    ; ...and its live width
-    AWORD ark_pkeep                 ; ticks the paddle keeps moving
-    AWORD ark_pspd
+    AWORD ark_pkeep                 ; ticks the paddle stays latched to a key
+    AWORD ark_pspd                  ; ...how fast it moves while it is...
+    AWORD ark_pramp                 ; ...and the ticks left before an
+                                    ; unconfirmed press starts easing that off
     AWORD ark_pvel                  ; pixels the paddle moved this frame
     AWORD ark_vymag                 ; the rally's vertical speed, QUARTER px
     AWORD ark_accx                  ; ...and the sub-pixel remainder each axis

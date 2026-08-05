@@ -10193,10 +10193,48 @@ default; that is `ARK_PHOLD`, 4, which tolerates a rate down to ~4.5 cps.
 Refilling `ARK_PKEEP` on every repeat charged the delay to the release: the
 paddle sailed on for 11 ticks at `ARK_PFAST`, 88 pixels — a third of the play
 field — after the player let go. With `ARK_PHOLD` a release costs 4 ticks, 32
-pixels. A **tap** still glides the full `ARK_PKEEP`, and that is not a
-shortfall but the same constraint seen from the other side: until a repeat
-arrives or fails to, a tap and the first tick of a hold are the same event, so
-the nudge cannot be shortened without reintroducing the stall.
+pixels.
+
+**The deadline measures the time; it must not also spend the distance.** That
+was the other half of the same bug, and it survived the fix above because a
+**tap** still glided the full `ARK_PKEEP` — 11 ticks at `ARK_PSTEP`, 44 pixels,
+a whole paddle width and a fifth of the paddle's entire travel, for a key the
+player pressed and let go of. A tap has to be a *nudge*, or fine aiming is
+impossible: the paddle cannot be put anywhere except in 44-pixel jumps.
+
+The latch has to be 11 ticks. The motion does not, and separating them is the
+answer: an unconfirmed press **eases its speed off** rather than holding
+`ARK_PSTEP` flat. `[ark_pspd]` runs at the full step for `ARK_PBURST` ticks
+(2), then sheds `ARK_PEASE` (1) a tick to a standstill — 4, 4, 3, 2, 1 — so a
+tap costs **14 pixels** and is at rest by its fifth tick, with six ticks of its
+own latch still to run and the earliest possible repeat four ticks away.
+`[ark_pramp]` counts the burst down and `ark_do_paddle` spends it before it
+sheds any speed, which is the whole of why the burst exists: without it the
+first tick of a press would already be eased, and the nudge has to start at the
+full `ARK_PSTEP` the instant the key does. The taper is gated on `ARK_PFAST`,
+so a **confirmed hold is never eased** and its release coast stays the flat
+4 × 8 = 32 pixels.
+
+The stall the two lengths were meant to avoid is not eliminated by this, and
+pretending otherwise would be the wrong account: the ease-out lands in the
+middle of the typematic delay, so the beginning of a *hold* now decelerates for
+a few ticks before the first repeat takes over. What changed is its shape. The
+paddle arrives at the pause already at rest, having decelerated into it, and
+leaves it accelerating to `ARK_PFAST` — which reads as the ramp of an
+acceleration curve rather than as a dropped keypress, whereas a flat
+`ARK_PSTEP` cut off mid-stride would read as the game losing the key. Against
+that, a tap that travels a third of what it did. Both are the same constraint
+seen from the same side: until a repeat arrives or fails to, a tap and the
+first tick of a hold are the same event, so the only free variable is what the
+paddle does *during* the delay, and a decelerating nudge is the answer that
+serves both.
+
+One consequence is worth stating because it changes how a serve aims:
+`ark_throw` reads the paddle's live velocity, so the window in which a flick
+still carries its full ±3 is now the burst rather than the whole latch. A tap
+followed by Space a quarter-second later serves straight up. That was always
+what the paddle was doing — standing still — and only the flat deadline made it
+read as motion; a hold, which is never eased, still throws the maximum.
 
 The `or al, al` gate on the scan code is not optional: the numeric keypad
 sends '4' and '6' with the arrow scan codes, so without it typing a digit
