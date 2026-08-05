@@ -327,6 +327,20 @@ disk_mount:
     mov ax, LOW_SEG
     mov es, ax
     xor bp, bp                  ; BP = accepted entry count
+    cmp word [dsk_cwd], 0
+    je .noup
+    call dsk_synth_up           ; in a subdirectory the listing OPENS with
+    push si                     ; '..' (SPEC.md 19.5) - built before the scan
+    push di                     ; so the scan's entries land above it and the
+    mov di, disk_dir            ; sort below never has to keep it in place
+    mov si, dsk_ent
+    mov cx, DSK_DE_SIZE/2
+    cld
+    rep movsw                   ; DS=kernel -> ES=LOW_SEG
+    pop di
+    pop si
+    mov bp, 1
+.noup:
     mov ax, [dsk_cwd]           ; the current directory (0 = root at mount;
     call dsk_dirw_start         ; dsk_chdir re-enters here, SPEC.md 19.2)
 .rootsec:
@@ -386,10 +400,14 @@ disk_mount:
     loop .entry
     jmp .rootsec
 .scan_done:
-    mov cx, bp                  ; alphabetical, and BEFORE the harvest below:
-    call dsk_sortdir            ; slot i is then filled for whatever entry
-                                ; ended up at i, so disk_icons never has to
-                                ; be permuted alongside disk_dir (SPEC.md 19.4)
+    mov bx, disk_dir            ; alphabetical, and BEFORE the harvest below:
+    mov cx, bp                  ; slot i is then filled for whatever entry
+    cmp word [dsk_cwd], 0       ; ended up at i, so disk_icons never has to
+    je .sortall                 ; be permuted alongside disk_dir (19.4). The
+    add bx, DSK_DE_SIZE         ; parent link is not IN the sort - it is
+    dec cx                      ; always the first entry (19.5)
+.sortall:
+    call dsk_sortdir
 
     ; disk_icons: blank ALL 32 slots up front so no slot ever carries a
     ; previous mount's bytes (SPEC.md 18.3 step 4: fully rewritten every
@@ -412,9 +430,9 @@ disk_mount:
     jae .done
     mov ax, dx
     call dsk_get_dir            ; SI -> dsk_ent, the synthesized entry
-    cmp word [si+16], 2         ; a folder: the one icon that is not
-    je .h_folder                ; harvested off the disk but built in
-    cmp word [si+16], 1         ; type word
+    cmp word [si+16], 2         ; a folder or the parent link (SPEC.md 19.5):
+    jae .h_folder               ; the one icon that is not harvested off the
+    cmp word [si+16], 1         ; disk but built in
     jne .h_zero
     mov ax, [si+18]             ; first cluster (validated at synthesis)
     call dsk_clus2lba
@@ -853,10 +871,56 @@ dsk_sanit:
     ret
 
 ; -----------------------------------------------------------------------------
-; dsk_sortdir - sort the synthesized directory by display name (SPEC.md 19.4)
-; in:       CX = accepted entry count, ES = LOW_SEG
-; out:      disk_dir[0 .. CX-1] in ascending name order
+; dsk_synth_up - build the parent-link entry '..' (module-internal, 19.5)
+; in:       [dsk_cwd] != 0 (the caller has checked it)
+; out:      dsk_ent = the 32-byte entry: name '..', TYPE 3, the parent's
+;           first cluster at +18, size 0. All registers preserved.
+;
+; Type 3 is what makes this safe to put in the listing at all. It behaves
+; like a folder everywhere that navigates and everywhere that draws, but it
+; is NOT one to Rename or Delete, and a name comparison against '..' would be
+; a poor way to know that - a volume is allowed to hold a real file called
+; '..' precisely because dsk_synth's own species filter drops the on-disk
+; dot entries and never re-surfaces them (19.2). The fact belongs in the
+; entry, not in a string.
+;
+; A '..' link that cannot be read gets cluster 0 - the root - rather than no
+; entry at all. Losing the row would strand the user in a folder whose only
+; way out is Root Folder, and the root is where Root Folder would take them.
+; -----------------------------------------------------------------------------
+dsk_synth_up:
+    push ax
+    push cx
+    push di
+    mov di, dsk_ent             ; zero first: the name's NUL padding and the
+    mov cx, DSK_DE_SIZE/2       ; unused tail both fall out of it
+.zero:
+    mov word [di], 0
+    inc di
+    inc di
+    loop .zero
+    mov word [dsk_ent+0], '..'  ; two bytes, then the padding already there
+    mov word [dsk_ent+16], 3    ; type 3 = the parent link (SPEC.md 19)
+    call dsk_dotdot             ; AX = the parent's first cluster, validated
+    jnc .have                   ; against dsk_maxclus by the walker itself
+    xor ax, ax
+.have:
+    mov [dsk_ent+18], ax
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_sortdir - sort synthesized directory entries by display name (19.4)
+; in:       BX = the first entry's LOW_SEG offset, CX = how many from there,
+;           ES = LOW_SEG
+; out:      those entries in ascending name order
 ; clobbers: flags
+;
+; BX rather than disk_dir because the parent link (SPEC.md 19.5) is not part
+; of the sort: it occupies slot 0 in a subdirectory and stays there, so the
+; caller hands this the entry AFTER it.
 ;
 ; Called at the END of the directory scan and BEFORE the icon harvest, and
 ; that order is the whole reason this touches ONE array. disk_icons[i]
@@ -887,11 +951,11 @@ dsk_sortdir:
     mov ax, cx
     mov cl, 5
     shl ax, cl                  ; count * DSK_DE_SIZE
-    add ax, disk_dir
+    add ax, bx
     mov dx, ax                  ; DX = one past the last entry
     mov cx, dx
     sub cx, DSK_DE_SIZE         ; CX = the last entry: no choice to make for
-    mov bx, disk_dir            ; it once everything below is placed
+                                ; it once everything below is placed
 .outer:                         ; BX = the slot being filled
     cmp bx, cx
     jae .out

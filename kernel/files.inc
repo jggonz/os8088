@@ -1679,8 +1679,8 @@ fm_open_sel:
     mov di, [fm_vp]
     call fmv_get_dir            ; SI -> the staged 32-byte entry
     mov bx, [si+18]             ; its first cluster, banked before the mount
-    cmp word [si+16], 2
-    je .folder
+    cmp word [si+16], 2         ; 2 = a folder, 3 = the parent link (19.5):
+    jae .folder                 ; both of them navigate, neither is loadable
     inc ax                      ; index + 1: ui.inc runs the loader once the
     mov [ld_pending], ax        ; lock drops (SPEC.md 21)
     mov [ld_pwin], di           ; ...resolved against THIS window (22.1)
@@ -1689,6 +1689,10 @@ fm_open_sel:
     call fm_stage_name          ; fm_name = the folder's display name, out
     mov ax, bx                  ; of the staged entry while it still exists
     mov si, fm_name
+    cmp word [fm_ftype], 3      ; ...except '..', which has no caption worth
+    jne .titled                 ; having: the parent cannot be named without
+    xor si, si                  ; the grandparent's listing (SPEC.md 22), so
+.titled:                        ; it derives one, exactly as fm_c_up does
     call fm_go
 .out:
     pop di
@@ -2048,7 +2052,9 @@ fm_arm_sel:
     cmp ax, [di+FS_N]           ; 0xFFFF (no selection) also fails this
     jae .none
     call fm_stage_onam          ; fm_onam + [fm_odir]
-    pop ax
+    cmp word [fm_ftype], 3      ; '..' is a way out of the folder, not a
+    je .none                    ; thing in it: it renames and deletes like
+    pop ax                      ; the no-selection case, silently (19.5)
     jmp fm_edit_arm
 .none:
     pop ax                      ; nothing selected: a no-op, like File > Open
@@ -2211,6 +2217,11 @@ fm_ctx_fold:                    ; ...or a folder, which can also be opened
     dw fm_cxi_fold, fm_cxc_fold, 4
 fm_ctx_dir:                     ; empty space: the folder's own commands
     dw fm_cxi_dir,  fm_cxc_dir,  8
+fm_ctx_up:                      ; ...or '..' (SPEC.md 19.5), which opens and
+    dw fm_cxi_fold, fm_cxc_fold, 2  ; opens-in-a-new-window like any folder
+                                    ; and renames and deletes like nothing:
+                                    ; the FIRST TWO of the folder's items,
+                                    ; the same arrays cut short
 
 fm_cxi_file:
     dw fm_s_open, fm_s_rename, fm_s_delete
@@ -2283,9 +2294,10 @@ fm_rclick:
     mov di, fm_ctx_file
     call fmv_get_dir            ; SI -> the staged entry (SPEC.md 19)
     cmp word [si+16], 2
-    jne .have
-    mov di, fm_ctx_fold         ; a folder has somewhere to open INTO
-    jmp short .have
+    jb .have
+    mov di, fm_ctx_fold         ; a folder has somewhere to open INTO...
+    je .have
+    mov di, fm_ctx_up           ; ...and the parent link has only that
 .empty:
     mov word [di+FS_SEL], 0xFFFF
     mov di, fm_ctx_dir
@@ -2657,6 +2669,34 @@ fm_repaint:
     ret
 
 ; -----------------------------------------------------------------------------
+; fm_nfiles - the header's count: this window's listing minus its parent link
+; in:  the fm_l* mirrors, [fm_vp]/[fm_vseg] published (fm_layout has run)
+; out: AX = entries the user would call files
+; clobbers: AX (the output), flags
+;
+; Asked of the LISTING rather than derived from FS_CWD, because those two can
+; disagree for exactly one mount: dsk_synth_up gives an unreadable '..' the
+; root as its target rather than dropping the row (SPEC.md 19.5), and a
+; window can also be showing a cache taken before it moved. One staged entry
+; per paint is cheaper than a mirror that could be wrong.
+; -----------------------------------------------------------------------------
+fm_nfiles:
+    push si
+    mov ax, [fm_lnf]
+    or ax, ax
+    jz .out                     ; an empty listing has no entry 0 to stage
+    push ax
+    xor ax, ax
+    call fmv_get_dir            ; is entry 0 the parent link, or a real one?
+    cmp word [si+16], 3
+    pop ax
+    jne .out
+    dec ax
+.out:
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
 ; fm_draw_icon16 - one entry's 16x16 icon, with the generic fallback
 ; in:  AX = directory index, CX = x, DX = y (absolute, gfx lock held)
 ; out: nothing (all registers preserved)
@@ -2765,8 +2805,8 @@ fm_draw_core:
     inc di
     mov si, fm_s_colsp
     call fm_scat
-    mov ax, [fm_lnf]
-    call fm_utoa
+    call fm_nfiles              ; the listing MINUS its parent link (19.5):
+    call fm_utoa                ; '..' is a way out, not a file
     mov si, fm_s_files
     call fm_scat
     jmp .hdrtrunc
@@ -2909,8 +2949,9 @@ fm_draw_core:
     mov si, fm_name
     call font_str               ; name at x = 24
 
-    cmp word [fm_ftype], 2      ; a folder has no meaningful size (19), and
-    je .lnosize                 ; a column of zeroes would only read as one
+    cmp word [fm_ftype], 2      ; a folder and the parent link have no
+    jae .lnosize                ; meaningful size (19), and a column of
+                                ; zeroes would only read as one
     mov ax, [fm_fsize]
     mov dx, [fm_fsizeh]
     push di

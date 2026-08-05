@@ -112,7 +112,6 @@ fdlg_s_newf2:  db 'Folder', 0
 fdlg_s_lopen:  db 'Open:', 0
 fdlg_s_lsave:  db 'Save as:', 0
 fdlg_s_lfold:  db 'Folder:', 0 ; 8 glyphs is what fits before the box
-fdlg_s_dotdot: db '..', 0
 fdlg_s_folder: db 'folder', 0
 fdlg_s_up:     db 'up', 0
 fdlg_s_root:   db 'Disk', 0
@@ -532,49 +531,30 @@ fdlg_setname:
 ; -----------------------------------------------------------------------------
 ; fdlg_rows - the display row count (SPEC.md 38.4)
 ; in:  nothing
-; out: AX = rows = [disk_nfiles] + the '..' row, CX = 1 when that row exists
-;      (0 at the root). Preserves everything else.
-; The ONE place the '..' offset is decided; every row <-> directory index
-; conversion in this module goes through it.
+; out: AX = [disk_nfiles]. Preserves everything else.
+;
+; A display row IS a directory index. It used not to be: this module
+; synthesized its own '..' row and carried a +1 offset through every row <->
+; index conversion in it. The MOUNT puts the parent link in the listing now
+; (SPEC.md 19.5), so the dialog, the Disk window and every view cache get the
+; same row from the same place - and the offset, and the one routine that
+; existed to decide it, are gone.
 ; -----------------------------------------------------------------------------
 fdlg_rows:
-    xor cx, cx
-    cmp word [dsk_cwd], 0
-    je .root
-    mov cx, 1
-.root:
     mov ax, [disk_nfiles]
-    add ax, cx
     ret
 
 ; -----------------------------------------------------------------------------
 ; fdlg_stage - stage one display row (SPEC.md 38.4)
-; in:  AX = display row, already checked against fdlg_rows
+; in:  AX = display row = directory index, already checked against fdlg_rows
 ; out: fdlg_row = its NUL name, [fdlg_type] / [fdlg_size] = the SPEC.md 19
-;      type and size words. The '..' row is synthesized as type 2 so every
-;      consumer treats it as the folder it is. Preserves all registers.
+;      type and size words. Preserves all registers.
 ; -----------------------------------------------------------------------------
 fdlg_stage:
     push ax
     push bx
     push cx
     push si
-    push ax
-    call fdlg_rows              ; CX = the '..' offset
-    pop ax
-    or cx, cx
-    jz .entry
-    or ax, ax
-    jnz .below
-    mov word [fdlg_type], 2
-    mov word [fdlg_size], 0
-    mov word [fdlg_sizeh], 0
-    mov word [fdlg_row], '..'   ; two bytes, then the terminator
-    mov byte [fdlg_row+2], 0
-    jmp short .out
-.below:
-    dec ax                      ; display row -> directory index
-.entry:
     call dsk_get_dir            ; SI -> the staged 32-byte entry (SPEC.md 19)
     mov bx, fdlg_row
     mov cx, 16
@@ -1223,7 +1203,7 @@ fdlg_draw_rows:
 
     mov si, fdlg_s_folder       ; the right-hand column: a size, or the
     cmp word [fdlg_type], 2     ; word 'folder' - a column of zeroes under
-    je .right                   ; every directory would only read as one
+    jae .right                  ; every directory would only read as one
     mov ax, [fdlg_size]
     mov dx, [fdlg_sizeh]
     push di
@@ -1453,7 +1433,7 @@ fdlg_act:
     je .nosel
     call fdlg_stage
     cmp word [fdlg_type], 2
-    jne .save                   ; a FILE: commit it, in either mode
+    jb .save                    ; a FILE: commit it, in either mode
     call fdlg_dive              ; a FOLDER: navigate into it, in either mode.
     jmp short .stay             ; Selecting one and pressing Enter in Save mode
 .nosel:                         ; used to save a file under whatever name the
@@ -1677,30 +1657,23 @@ fdlg_streq:
 
 ; -----------------------------------------------------------------------------
 ; fdlg_dive - enter the staged row's directory and repaint (internal)
-; in:  fdlg_row / fdlg_type staged and type 2, SI = window ptr; lock held
+; in:  fdlg_type staged and >= 2, SI = window ptr; lock held
 ; out: nothing (all registers preserved)
-; The '..' row walks the on-disk link (SPEC.md 19.2); every other folder
-; goes straight to its first cluster. A '..' that cannot be read leaves us
-; where we are, which is the Disk window's answer too.
+;
+; '..' needs no special case: the mount put the PARENT'S first cluster in
+; that entry (SPEC.md 19.5), so every folder here is one cluster read out of
+; one staged entry. This used to test fdlg_row[0] for a dot and call
+; dsk_dotdot, which walked the directory off the disk a second time.
 ; -----------------------------------------------------------------------------
 fdlg_dive:
     push ax
     push cx
     push dx
-    cmp byte [fdlg_row], '.'
-    jne .down
-    call dsk_dotdot             ; AX = the parent's first cluster
-    jc .out                     ; a missing or corrupt '..': stay put
-    jmp short .go
-.down:
     push si
-    call fdlg_rows              ; CX = the '..' offset
     mov ax, [fdlg_sel]
-    sub ax, cx                  ; display row -> directory index
     call dsk_get_dir            ; SI -> the staged entry
     mov ax, [si+18]             ; its first cluster (SPEC.md 19)
     pop si
-.go:
     mov dl, [disk_drive]
     call fdlg_go
 .out:
@@ -1970,7 +1943,7 @@ fdlg_pick:
     je .no
     call fdlg_stage
     cmp word [fdlg_type], 2
-    je .no                      ; a folder is not a file name
+    jae .no                     ; a folder is not a file name
     mov si, fdlg_row
     call fdlg_setname           ; CF = 1 = the box is not what it was
     jmp short .out
@@ -2137,7 +2110,7 @@ fdlg_onclick:
     jae .again
     call fdlg_stage
     cmp word [fdlg_type], 2
-    je .dive
+    jae .dive
     cmp byte [fdlg_mode], 0     ; a double-clicked FILE: in Open mode that
     jne .again                  ; is the answer; in Save mode it is only a
     call fdlg_commit            ; name for the box, which the first click of
