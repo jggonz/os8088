@@ -18,29 +18,17 @@
 ; icount the PIT counts guest INSTRUCTIONS, so the answer is deterministic
 ; (+/-1 count across runs) and the same on any machine. What it said:
 ;
-;   adapter            PAIR   RUN aligned   RUN at x+1
-;   VGA ([bb_on] = 0)  2693       2760         2768
-;   CGA 640x200        3398       2693         3474
-;   Hercules 720x348   3368       2670         3443
+;   adapter            PAIR    PAIR    RUN     RUN
+;                      aligned x+5     aligned x+5
+;   VGA ([bb_on] = 0)   2694   2957     2763   3023
+;   CGA 640x200         3400   3513     2695   3580
+;   Hercules 720x348    3369   3483     2673   3548
 ;
-; 1.26x on mono; 2.5% AGAINST on VGA, where [bb_on] is 0 and both FONT_RUN
-; rows take the fallback whatever the alignment - which is exactly why the
-; two of them land within 0.3% of each other there.
-;
-; Three rows are measured, all drawing the SAME 10-character string at the
-; same y, so the only thing that differs is how:
-;
-;   PAIR    GFX_FILL of the run's rect + FONT_STR over it. What every caller
-;           in the tree does today.
-;   RUN-A   FONT_RUN at an x that is a multiple of 8 - the fast path
-;           (SPEC.md 6.1), which is what the tracker's columns were moved to
-;           earn.
-;   RUN-U   FONT_RUN at x+1. Same call, but the alignment test fails, so it
-;           takes the fallback - which IS a fill plus a font_str. This row
-;           exists to price the fallback against doing it by hand, because
-;           that difference is the whole "never slower than doing it
-;           manually" claim, and it is the same code an unaligned or
-;           unbuffered caller lands on.
+; The SKEWED pair is the status quo - ui_drag writes W_X straight from the
+; mouse, so a draggable window's content x is arbitrary mod 8 - and the
+; aligned RUN is what a window would cost if something guaranteed alignment.
+; 1.30x on mono; 2.4-2.5% AGAINST on VGA, where [bb_on] is 0 and every row
+; takes the fallback whatever the alignment.
 ;
 ; --- how it is timed ---------------------------------------------------------
 ;
@@ -81,9 +69,17 @@ FB_N      equ 120                 ; runs per row. Sized so the slowest row
                                   ; counts, so the low digits are signal
 FB_LEN    equ 10                  ; characters in the measured string
 FB_W      equ FB_LEN * 8          ; ...and its pixel width
+FB_SKEW   equ 5                   ; the UNALIGNED rows' offset. NOT 1: the ROM
+                                  ; font's rightmost column is blank in every
+                                  ; glyph, so a one-pixel shift spills nothing
+                                  ; into the second byte and an unaligned run
+                                  ; costs almost what an aligned one does -
+                                  ; which flatters the status quo and is not
+                                  ; where a dragged window usually lands. 5 is
+                                  ; an ordinary shift
 
 FB_CONT_W equ 246
-FB_CONT_H equ 77
+FB_CONT_H equ 89
 
 ; -----------------------------------------------------------------------------
 ; fb_entry - package entry (SPEC.md 20.2)
@@ -135,11 +131,14 @@ fb_paint:
     call OSAPI_FONT_STR
     jmp short .out
 .rows:
-    mov si, fb_s_pair               ; the three measured rows
+    mov si, fb_s_pair               ; the four measured rows
     mov dx, [fb_cy]
     add dx, 19
     call fb_line
     mov si, fb_s_runa
+    add dx, 12
+    call fb_line
+    mov si, fb_s_pairu
     add dx, 12
     call fb_line
     mov si, fb_s_runu
@@ -244,7 +243,6 @@ fb_run:
     call fb_time
     mov di, fb_s_pair + FB_COL
     call fb_dec5
-    mov [fb_tpair], ax
 
     mov word [fb_mode], 1           ; 1 = FONT_RUN, aligned
     call fb_time
@@ -252,12 +250,19 @@ fb_run:
     call fb_dec5
     mov [fb_trun], ax
 
-    mov word [fb_mode], 2           ; 2 = FONT_RUN, x+1 (the fallback)
+    mov word [fb_mode], 2           ; 2 = PAIR at the skewed x - the STATUS QUO
+    call fb_time                    ; for a draggable window, which lands
+    mov di, fb_s_pairu + FB_COL     ; unaligned seven times in eight
+    call fb_dec5
+    mov [fb_tpair], ax              ; ...and THIS is the ratio's numerator
+
+    mov word [fb_mode], 3           ; 3 = FONT_RUN at the skewed x (the fallback)
     call fb_time
     mov di, fb_s_runu + FB_COL
     call fb_dec5
 
-    mov ax, [fb_tpair]              ; PAIR / RUN-A, x100, so 250 reads 2.50x
+    mov ax, [fb_tpair]              ; skewed PAIR / aligned RUN, x100: what
+                                    ; snapping a text window would actually buy
     mov bx, 100
     mul bx                          ; DX:AX, so the div below needs a guard:
     mov bx, [fb_trun]               ; an 8086 divide overflow is an interrupt,
@@ -335,13 +340,16 @@ fb_once:
     push dx
     push si
     mov cx, [fb_bx]
-    cmp word [fb_mode], 2           ; the fallback row draws one pixel right,
-    jne .x                          ; which is all it takes to fail x & 7
-    inc cx
+    cmp word [fb_mode], 2           ; rows 2 and 3 draw FB_SKEW pixels right,
+    jb .x                           ; which is all it takes to fail x & 7
+    add cx, FB_SKEW
 .x:
     mov dx, [fb_by]
-    cmp word [fb_mode], 0
-    jne .run
+    mov ax, [fb_mode]               ; 0 and 2 are the PAIR; 1 and 3 the call
+    and ax, 1
+    jz .pair
+    jmp .run
+.pair:
 
     mov al, CWHITE                  ; --- PAIR: fill the rect, letter over it
     call OSAPI_SET_COLOR
@@ -471,7 +479,7 @@ fb_head:
 ; --- data --------------------------------------------------------------------
 
 fb_tpl:
-    dw 180, 150, 248, 96            ; x, y, w, h -> content 246 x 77
+    dw 180, 150, 248, 108           ; x, y, w, h -> content 246 x 89
     dw fb_ttl, fb_paint, fb_onkey, fb_onclick
 
 fb_ttl:     db 'Font Bench', 0
@@ -487,12 +495,13 @@ fb_n_cga:   db 'CGA '
 
 fb_s_hint:  db 'Click or press a key to run.', 0
 
-FB_COL      equ 22                  ; the count column in the three rows
+FB_COL      equ 22                  ; the count column in the four rows
 FB_RCOL     equ 22
-fb_s_pair:  db 'PAIR fill+str       :      ', 0
+fb_s_pair:  db 'PAIR aligned        :      ', 0
 fb_s_runa:  db 'RUN  aligned        :      ', 0
-fb_s_runu:  db 'RUN  unaligned      :      ', 0
-fb_s_ratio: db 'PAIR/RUN x100       :      ', 0
+fb_s_pairu: db 'PAIR skewed 5       :      ', 0
+fb_s_runu:  db 'RUN  skewed 5       :      ', 0
+fb_s_ratio: db 'SKEWPAIR/RUN x100   :      ', 0
 
 fb_win:     dw 0
 fb_cx:      dw 0

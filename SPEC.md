@@ -621,47 +621,83 @@ read directly, because a 55ms tick cannot resolve a 3ms row.
 
 Run under QEMU with `-icount`, so the PIT counts guest **instructions**
 rather than host time and the result is deterministic and machine-independent
-(three runs per adapter agreed to ±1 count):
+(runs agreed to ±1 count). Each path is measured twice: at a byte-aligned x,
+and at x+5. **The skewed row is the honest status quo**, because
+`ui_drag` writes `W_X` straight from the mouse and a draggable window's
+content x is arbitrary mod 8; the aligned row is what a window would cost if
+something guaranteed the alignment. x+5 and not x+1 because the ROM font's
+rightmost column is blank in every glyph, so a one-pixel shift spills nothing
+into the second byte and flatters the unaligned case.
 
-| adapter | PAIR | `font_run` aligned | `font_run` at x+1 |
-|---|---|---|---|
-| VGA, `[bb_on]` = 0 | 2693 | 2760 | 2768 |
-| CGA 640x200 | 3398 | **2693** | 3474 |
-| Hercules 720x348 | 3368 | **2670** | 3443 |
+| adapter | PAIR aligned | PAIR at x+5 | `font_run` aligned | `font_run` at x+5 |
+|---|---|---|---|---|
+| VGA, `[bb_on]` = 0 | 2694 | 2957 | 2763 | 3023 |
+| CGA 640x200 | 3400 | 3513 | **2695** | 3580 |
+| Hercules 720x348 | 3369 | 3483 | **2673** | 3548 |
 
-**On mono the fast path is 1.26x faster — 21% fewer instructions.** The two
-mono adapters agree to within 1%, which is what should happen: they run the
-same renderer and differ only in stride and bank wrap.
+**On mono, aligned `font_run` against the unaligned pair is 1.30x — and
+against the aligned pair 1.26x.** The two mono adapters agree to within 1%,
+which is what should happen: same renderer, different stride and bank wrap.
 
 **Instruction count understates the win on the hardware this is for**, because
 what the fast path removes is disproportionately *memory* work, and on a
 4.77MHz machine a framebuffer access on the 8-bit ISA bus is the expensive
 part. Counting framebuffer byte-accesses directly (temporary kernel counters
 at the three write sites, read over QMP) gives the same figures on Hercules
-and on CGA, per ten-character run:
+and on CGA. `font_run`'s fast path is a flat **80** — ten cells x eight rows
+x one store, no reads at all, at every alignment it accepts. The pair is not
+flat, because `font_char` writes a second byte whenever the shifted glyph
+spills into it and the fill covers one more byte column:
 
-| | reads | writes | total accesses |
+| x mod 8 | fill | glyphs | PAIR total |
 |---|---|---|---|
-| PAIR | 82 | 146 | **228** |
-| `font_run` aligned | **0** | 80 | **80** |
+| 0 | 128 | 100 | **228** |
+| 1 | 136 | 100 | 236 |
+| 2 | 136 | 128 | 264 |
+| 3 | 136 | 162 | 298 |
+| 4 | 136 | 174 | 310 |
+| 5 | 136 | 190 | 326 |
+| 6 | 136 | 194 | 330 |
+| 7 | 136 | 200 | 336 |
 
-**2.85x less bus traffic, and the reads go to zero.** PAIR's 228 breaks down
-as 128 for the fill (two masked edge columns at 8 rows x 2 read-modify-writes
-each, plus 8 rows of 4 word stores across the interior) and 100 for the
-glyphs (the 50 non-blank glyph rows in that string, one read-modify-write
-apiece). `font_run` writes 80 bytes and reads nothing at all: 10 cells x 8
-rows x one store. A real 8088 figure would be larger still — the eliminated
-per-row `shr ax, cl` costs 8+4·cl clocks there — but that has not been
-measured and no number is claimed for it.
+Mean 291. So the operation goes from **228..336 depending where the window
+was dragged to, to a flat 80** — 2.85x at best and 4.2x at worst, 3.6x on
+average. The aligned row is measured; the rest is that measurement's model
+(fill = two masked edge columns at 8 rows x 2 read-modify-writes, plus the
+interior as word stores; glyphs = one read-modify-write per non-blank glyph
+row, two when the shift spills) evaluated against the ROM font actually in
+memory, and it predicted the aligned case and the repaint's own contribution
+to the byte.
 
-**On VGA it costs 2.5%.** Both `font_run` rows land within 0.3% of each other
-there, which is the tell that `[bb_on]` = 0 sends both to the fallback
-whatever the alignment; the 2.5% over the hand-written pair is the far call,
-the two gate tests and `font_width_x`. That is the price of the abstraction on
-the adapter it cannot help, it is small, and it is why the tracker calls
-`font_run` only when `[tui_mono]` says the fast path is reachable — on colour
-its row band was filled once already, so the fallback's fill would be a second
-pass over the same ground.
+**Alignment is worth something on its own**, before `font_run` enters: the
+pair itself is 1.03x cheaper aligned on mono and 1.10x on VGA (four planes,
+so the spilled second byte costs four times). But most of the value is in the
+single-store path, and alignment is what unlocks it — see §6.1.4.
+
+**On VGA `font_run` costs 2.5%.** Both `font_run` rows sit 2.4-2.5% above
+their matching pair, which is the tell that `[bb_on]` = 0 sends everything to
+the fallback whatever the alignment; the 2.5% is the far call, the gate tests
+and `font_width_x`. That is the price of the abstraction on the adapter it
+cannot help, it is small, and it is why the tracker calls `font_run` only
+when `[tui_mono]` says the fast path is reachable — on colour its row band
+was filled once already, so the fallback's fill would be a second pass over
+the same ground.
+
+#### 6.1.4 Unaligned cannot be made fast, which is why alignment is a design question
+
+The obvious alternative to constraining x is to widen the fast path to
+handle any x. It does not work, and the arithmetic says so before any code is
+written. At an unaligned x an opaque cell row spans two framebuffer bytes and
+the neighbours' bits in both of them must be preserved, so the write becomes
+read-both / merge / write-both: **4 accesses per cell row, 320 per
+ten-character run** — against 228..336 for the pair it would replace. It is a
+wash at best, because the pair's fill gets to use `rep stosw` and reads
+nothing at all across the interior.
+
+The single store exists only because the cell owns its whole byte. So the
+2.85x-to-4.2x is not available by making `font_run` cleverer; it is available
+only by arranging that text lands on multiples of 8, and that is a question
+about **window placement**, not about the renderer.
 
 #### 6.1.2 The granularity guarantee is the FAST PATH's, not the call's
 
