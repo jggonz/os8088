@@ -6070,11 +6070,58 @@ scan codes of Left, Right, Up, Down, Home, End and Delete.
 
 Two things got simpler in the move. The built-in reached its state through
 `inst_of_win` → `I_SPTR` because every instance shared one pool; a package
-addresses its own bss directly (`np_len` word + `np_buf` 512 bytes + three
-paint scratch words + the §27.1 save/load state = `NP_BSS_TOTAL`). And the
-cap is gone: the pool that fixed it at 2 no longer exists, so instances are
-bounded only by the region pool and the instance table like any other
-package.
+addresses its own bss directly. And the cap is gone: the pool that fixed it
+at 2 no longer exists, so instances are bounded only by the heap and the
+instance table like any other package.
+
+### 27.3 The note is a heap claim, and it grows
+
+The **text is not in this package's bss**. `np_entry` claims `NP_KB0` (1KB)
+before it creates the window and puts the document at `[np_dseg]:0000`;
+`[np_cap]` is its capacity in bytes. A region is image + bss capped at
+`APP_MAX_SIZE` (§20.1) and is fixed at load time, so anything whose size only
+the *user* knows belongs in the heap (§50.3) — which is the whole point of
+`OSAPI_MEM_CLAIM` existing, and what a 512-byte `np_buf` was working around.
+
+Four movements, and every one of them goes through `np_resize`, which is
+`OSAPI_MEM_REGROW` and **never** claim-copy-free (§50.3.1: a regrow extends
+in place when the paragraphs above it are free, so it needs the *difference*
+rather than old + new at once, and when it must move it brings the bytes):
+
+- **`np_room`, the growth point and the only one.** A keystroke that would
+  fill the claim asks for another `NP_GROWKB` first. A refusal — the heap's
+  or the ceiling's — drops the keystroke, which is exactly what a full note
+  did when it could not grow at all.
+- **A load sizes the claim to the file.** `np_load` opens it to `NP_MAXKB`
+  *before* the read, because nothing knows the file's size until the read
+  reports it and there is no stat in the file API; the file then lands in the
+  document buffer itself and the CR/LF fold runs **in place**, which is safe
+  because folding only ever drops bytes so the write index can never outrun
+  the read index. `np_fitclaim` gives the rest back afterwards — on the
+  failing path too, so a refused load does not leave 8KB held for a note that
+  did not change. There is no load staging buffer at all.
+- **`File > New` shrinks back to `NP_KB0`.** A shrink always succeeds in
+  place, so this cannot fail.
+- **A save takes a second, transient claim**, sized from `[np_len]` and held
+  only across the write, because expanding CR to CR LF *grows* and the
+  document claim is sized for the document. A refusal is an ordinary path:
+  the note is still there and still editable.
+
+**`NP_MAXKB` is 8, and it is not a memory limit — it is what the window can
+show.** Note Pad does not scroll: `np_walk` lays out from `[np_ty]`, which
+`np_bounds` always sets to the content's top, so text past the last visible
+row can be typed and can never be read back. The most any window can display
+is `NP_MAXROWS` rows of `NP_MAXCOL` cells — 60 × 91, about 5,400 characters
+on a fullscreen VGA frame and fewer on anything smaller — so 8,192 is already
+past the point of diminishing returns, and every byte beyond it also costs a
+`np_walk` pass that visits it on *every* paint. **Lifting the ceiling wants
+scrolling first**, and that is the change this section is waiting on.
+
+One behaviour changed with the ceiling. A file larger than the claim used to
+fill the buffer and say "Truncated"; it is now `FERR_BIG` and "Too big", and
+the note is left alone. That is the honest answer and the old one was a trap:
+a half-loaded note whose next save wrote the truncation back over the whole
+file.
 
 ### 27.1 Save and load — the file API's first caller
 
@@ -6111,17 +6158,12 @@ it; two Note Pads on two documents are now the ordinary case.
 filesystem at all: the buffer stores a bare 13 on Enter (§14), the file
 gets `CR LF`, and a load folds `CR LF` — and a lone `LF` — back to 13. A
 note written here opens correctly in Windows Notepad, and one written there
-opens correctly here. Translation runs through a 2×`NP_CAP` staging buffer,
-so neither direction can overrun `np_buf`: a load stops folding at `NP_CAP`
-characters and reports the truncation.
-
-**That buffer is a heap claim, not bss** (`np_iohold` / `np_iodrop`, §50.3).
-It is 1KB, and Note Pad holds it only while a save or a load is running. The
-file API takes `ES:BX` (§18.4.1), so an I/O buffer has no reason to sit in a
-package's own region — where it is 1KB of a budget that caps at one segment,
-permanently, for two operations a session. A refused claim is an ordinary
-path: the toast says "No memory" and the note is still there, still editable,
-and still saveable when something gives memory back.
+opens correctly here. A load folds **in place** inside the document claim
+(§27.3) and needs no staging at all; a save expands, so it takes a second,
+transient claim sized at 2 × `[np_len]` — the worst case, every character a
+newline — and hands it back the moment the write returns. A refused claim is
+an ordinary path: the toast says "No memory" and the note is still there,
+still editable, and still saveable when something gives memory back.
 
 **Feedback is a toast**: `np_msg` (a near pointer, 0 = none) is drawn by
 `np_paint` as a black-framed white box at the content's top-right — "Saved
