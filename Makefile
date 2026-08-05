@@ -371,29 +371,6 @@ $(BUILD)/fontbnch.o88: $(BUILD)/fontbnch.bin tools/os88pkg.py
 $(BUILD)/fontbench.img: $(BUILD)/fontbnch.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/fontbnch.o88
 
-# TYPEBENCH, the workload benchmark behind SPEC.md 11.94: what a KEYSTROKE
-# costs, by typing 40 random characters into a line and redrawing the whole
-# line after each one - which is what np_redraw does to its dirty band. Three
-# rows: Note Pad's fill-then-FONT_CHAR at an aligned x, the same at x+5 (an
-# UNSNAPPED window), and one FONT_RUN for the line. It is snappable itself and
-# says in its header whether the snap took. Its own scratch image, like the
-# gates above:
-#   make test TESTAPPS=build/typebench.img
-#   make test VIDEO=cga             TESTAPPS=build/typebench.img
-#   make test VIDEO=herc HERCSEG=0x7000 TESTAPPS=build/typebench.img
-# On real hardware the microsecond column is the answer. Under QEMU it is not:
-# add -icount shift=3,sleep=off and the PIT counts guest INSTRUCTIONS, which is
-# reproducible but is not time (docs and SPEC.md 6.1.1).
-$(BUILD)/typebnch.bin: apps/typebench/typebench.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/typebench/typebench.asm
-	@echo "typebnch: $(call FILESIZE,$@) bytes"
-
-$(BUILD)/typebnch.o88: $(BUILD)/typebnch.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/typebnch.bin -o $@
-
-$(BUILD)/typebench.img: $(BUILD)/typebnch.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/typebnch.o88
-
 # The same package on a legally fragmented volume: --scramble interleaves the
 # chains, so the write path's allocator and the free/replace paths meet holes
 # rather than a clean run of clusters.
