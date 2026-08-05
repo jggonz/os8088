@@ -23,15 +23,20 @@
 ;    apps/fractal, sleeping one tick a frame for ~18 fps. Everything the UI
 ;    task does is set a word the worker reads.
 ;
-;  - **The keyboard is edge-triggered, so the paddle glides on a deadline.**
-;    int 16h gives keypresses and no key-up, so "is left held" cannot be asked.
-;    Instead each arrow key sets a direction and refills [ark_pkeep] with a
-;    deadline in ticks, and the worker moves the paddle while the deadline
-;    lasts. Typematic repeat keeps refilling it, so a held key glides; the
-;    deadline outlives the ~9-tick typematic DELAY on purpose, or a hold would
-;    stall for half a second before it repeated. A tap is one short nudge, and
-;    a repeat arriving while the deadline still stands means the key is HELD,
-;    which is what winds the paddle up to its faster speed.
+;  - **The keyboard is edge-triggered, so the paddle glides on a deadline -
+;    and the deadline has two lengths.** int 16h gives keypresses and no
+;    key-up, so "is left held" cannot be asked. Instead each arrow key sets a
+;    direction and refills [ark_pkeep] with a deadline in ticks, and the worker
+;    moves the paddle while the deadline lasts. A repeat arriving while the
+;    deadline still stands means the key is HELD, which winds the paddle up to
+;    its faster speed. The deadline is how long the paddle keeps moving after
+;    the LAST key event, so it is also the coast when the key comes up - and
+;    that is why one length cannot serve both: a FRESH press must outlast the
+;    ~9-tick typematic DELAY or a hold stalls for half a second before it
+;    repeats, while a REPEAT only has to outlast the ~1.7-tick typematic RATE.
+;    Refilling the long one on every repeat charged the delay to the release,
+;    and the paddle sailed on for 11 ticks at held speed - 88 pixels, a third
+;    of the field - after the player let go.
 ;
 ;  - **Sound comes from the worker**, which the SDK's worker-safe list does not
 ;    mention and which is nevertheless correct: `snd_req_inst` (SPEC.md 34.3)
@@ -48,8 +53,10 @@
 ;    rows, the paddle and the ball all scaling with them. Colour is never the
 ;    only carrier (SPEC.md 39.4): a two-hit brick carries a white notch rather
 ;    than a second colour, an armed laser paddle grows two muzzles rather than
-;    merely turning red, and a capsule is identified by the LETTER on it since
-;    five colours cannot survive a reduction to three inks. The brick rows go
+;    merely turning red - and those muzzles are where the bolts come from, the
+;    only two x a bolt can reach the end columns from - and a capsule is
+;    identified by the LETTER on it, since five colours cannot survive a
+;    reduction to three inks. The brick rows go
 ;    further - no row colour may reduce to BLACK, or that row disappears into
 ;    the background entirely, so the palette is drawn from the white and
 ;    dither classes only and alternates between them.
@@ -126,9 +133,18 @@ ARK_CELLS   equ ARK_COLS * ARK_MAXROW
 ARK_NMET    equ 11                  ; words in a metrics record (ark_met_*)
 
 ARK_LIVES   equ 3
-ARK_PKEEP   equ 11                  ; ticks a keypress keeps the paddle moving.
-                                    ; The BIOS typematic DELAY is ~9 ticks, so
-                                    ; anything shorter stalls a held key
+ARK_PKEEP   equ 11                  ; ticks a FRESH press keeps the paddle
+                                    ; moving. The BIOS typematic DELAY is ~9
+                                    ; ticks, so anything shorter stalls a held
+                                    ; key before its first repeat arrives
+ARK_PHOLD   equ 4                   ; ...and what a REPEAT refills. Once the
+                                    ; key is known held the repeats arrive
+                                    ; every ~1.7 ticks (10.9 cps, the usual
+                                    ; BIOS default), so this only has to
+                                    ; outlast the typematic RATE, not the
+                                    ; delay - it tolerates a rate down to
+                                    ; ~4.5 cps. It is also exactly how long
+                                    ; the paddle coasts once the key comes up
 ARK_PSTEP   equ 4                   ; paddle pixels a tick, tapped...
 ARK_PFAST   equ 8                   ; ...and held
 
@@ -181,7 +197,10 @@ PU_LIFE     equ 5                   ; a HEART, and the only thing in the game
                                     ; so there is no character to ask for
 PU_KINDS    equ 5
 ARK_MAXPU   equ 3                   ; capsules falling at once
-ARK_MAXSHOT equ 2                   ; bullets in the air at once
+ARK_MAXSHOT equ 4                   ; bullets in the air at once - a volley is
+                                    ; TWO, one per muzzle, so this is two
+                                    ; presses' worth exactly as it was when a
+                                    ; volley was a single bolt
 ARK_PUCHANCE equ 8                  ; 1 in this many broken bricks drops one
 ARK_PUW     equ 12                  ; capsule size. The height must CONTAIN the
 ARK_PUH     equ 10                  ; 8px glyph drawn one row in, or the letter
@@ -462,14 +481,14 @@ ark_onkey:
 .steer:
     cmp al, [ark_pdir]              ; a repeat in the same direction while the
     jne .fresh                      ; deadline still stands means the key is
-    cmp word [ark_pkeep], 0         ; HELD: wind the paddle up
-    je .fresh
-    mov word [ark_pspd], ARK_PFAST
-    jmp .keep
+    cmp word [ark_pkeep], 0         ; HELD: wind the paddle up, and switch to
+    je .fresh                       ; the SHORT deadline - the long one is a
+    mov word [ark_pspd], ARK_PFAST  ; bridge to the first repeat and there is
+    mov word [ark_pkeep], ARK_PHOLD ; nothing left to bridge once they flow
+    jmp .out
 .fresh:
     mov [ark_pdir], al
     mov word [ark_pspd], ARK_PSTEP
-.keep:
     mov word [ark_pkeep], ARK_PKEEP
     jmp .out
 
@@ -1802,41 +1821,82 @@ ark_slower:
     ret
 
 ; -----------------------------------------------------------------------------
-; ark_fire / ark_do_shots - the laser
-; ark_fire:     put a bullet in the air from the paddle's centre
+; ark_fire / ark_bolt / ark_do_shots - the laser
+; ark_fire:     a volley - one bolt out of each muzzle
+; ark_bolt:     arm one slot; BX = slot, AX = x
 ; ark_do_shots: fly them, and let each break one brick
-; both preserve every register
+; all three preserve every register
+;
+; The bolts leave the MUZZLES, not the paddle's centre, and that is what makes
+; the outermost brick column at either end reachable at all. ark_do_paddle
+; clamps [ark_px] to [ark_rail] .. [ark_cwid]-[ark_rail]-[ark_pw], so a
+; CENTRE-fired bolt reached only the middle of that span - half a paddle-width
+; inside each rail. Against a 24px brick that margin is 22px with the paddle
+; unexpanded, which left a 2px slice of column 0 hittable and nothing more;
+; one Expand takes the paddle to [ark_pwmax] = 68 and the margin to 34, wider
+; than a brick, and columns 0 and ARK_COLS-1 became unhittable outright - on
+; both metric sets, and exactly when the player has most reason to be firing.
+;
+; The muzzles sit AT the clamp limits: the left one at [ark_px] and the right
+; at [ark_px]+[ark_pw]-2, both 2px wide like the bolt itself, so a fully
+; deflected paddle fires from the rail - which is exactly where column 0
+; starts (ark_cell divides x-[ark_rail] by the brick width) and where column
+; ARK_COLS-1 ends. The reach becomes the whole wall at every paddle width,
+; and a wider paddle now widens the spread instead of narrowing the reach.
+;
+; A volley is a PAIR and is fired as one. With fewer than two free slots
+; nothing goes out, because one muzzle firing alone reads as a dropped shot
+; rather than a deliberate half-volley - and the muzzles are drawn as a pair,
+; so the asymmetry would look like a bug rather than a limit.
 ; -----------------------------------------------------------------------------
 ark_fire:
     push ax
     push bx
+    push cx
     push si
+    mov cx, -1                      ; CX = the first free slot, once found
     xor si, si
 .slot:
     cmp byte [ark_shot+si], 0
-    je .free
+    jne .next
+    cmp cx, -1
+    jne .pair                       ; a second free slot: SI is it
+    mov cx, si
+.next:
     inc si
     cmp si, ARK_MAXSHOT
     jb .slot
-    jmp .out
-.free:
-    mov byte [ark_shot+si], 1
-    mov bx, si
-    add bx, bx
-    mov ax, [ark_pw]
-    shr ax, 1
-    add ax, [ark_px]
-    mov [ark_shx+bx], ax
-    mov ax, [ark_pady]              ; CLEAR of the paddle and its muzzles: a
-    sub ax, 8                       ; bolt spawned on the paddle erases its
-    mov [ark_shy+bx], ax            ; own first position out of it and leaves
-    mov [ark_shold+bx], ax          ; a hole where it was fired from
-    mov ax, 2200
+    jmp .out                        ; fewer than two free - no half-volleys
+.pair:
+    mov bx, cx                      ; the left muzzle
+    mov ax, [ark_px]
+    call ark_bolt
+    mov bx, si                      ; ...and the right
+    mov ax, [ark_px]
+    add ax, [ark_pw]
+    sub ax, 2
+    call ark_bolt
+    mov ax, 2200                    ; one beep for the volley, not one each
     call ark_beep
 .out:
     pop si
+    pop cx
     pop bx
     pop ax
+    ret
+
+ark_bolt:
+    push bx
+    push dx
+    mov byte [ark_shot+bx], 1
+    add bx, bx
+    mov [ark_shx+bx], ax
+    mov dx, [ark_pady]              ; CLEAR of the paddle and its muzzles: a
+    sub dx, 8                       ; bolt spawned on the paddle erases its
+    mov [ark_shy+bx], dx            ; own first position out of it and leaves
+    mov [ark_shold+bx], dx          ; a hole where it was fired from
+    pop dx
+    pop bx
     ret
 
 ark_do_shots:

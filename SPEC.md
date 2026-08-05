@@ -9412,12 +9412,27 @@ deadline in **ticks**; the worker moves the paddle while the deadline lasts and
 decrements it. Typematic repeat keeps refilling it, so a held key glides and a
 tap is one short nudge.
 
-Two constants are load-bearing. `ARK_PKEEP` is 11 ticks because the BIOS
-typematic **delay** is about 9 — a shorter deadline makes a held key stall for
-half a second before the first repeat arrives, which reads as the game
-ignoring the keyboard. And a repeat that arrives *while the deadline still
-stands* is the only available evidence that the key is held rather than
-tapped, which is what promotes the paddle from `ARK_PSTEP` to `ARK_PFAST`.
+A repeat that arrives *while the deadline still stands* is the only available
+evidence that the key is held rather than tapped, which is what promotes the
+paddle from `ARK_PSTEP` to `ARK_PFAST`.
+
+**The deadline has two lengths, and collapsing them into one is what made the
+paddle feel unresponsive.** The deadline is how long the paddle keeps moving
+after the *last* key event, so it is also the distance it coasts once the key
+comes up — and the two events need very different amounts of it. A **fresh**
+press must bridge the BIOS typematic **delay** of about 9 ticks, or a held key
+stalls for half a second before its first repeat arrives and the game reads as
+ignoring the keyboard; that is `ARK_PKEEP`, 11. A **repeat** has nothing left
+to bridge but the typematic **rate**, about 1.7 ticks at the usual 10.9 cps
+default; that is `ARK_PHOLD`, 4, which tolerates a rate down to ~4.5 cps.
+
+Refilling `ARK_PKEEP` on every repeat charged the delay to the release: the
+paddle sailed on for 11 ticks at `ARK_PFAST`, 88 pixels — a third of the play
+field — after the player let go. With `ARK_PHOLD` a release costs 4 ticks, 32
+pixels. A **tap** still glides the full `ARK_PKEEP`, and that is not a
+shortfall but the same constraint seen from the other side: until a repeat
+arrives or fails to, a tap and the first tick of a hold are the same event, so
+the nudge cannot be shortened without reintroducing the stall.
 
 The `or al, al` gate on the scan code is not optional: the numeric keypad
 sends '4' and '6' with the arrow scan codes, so without it typing a digit
@@ -9528,8 +9543,9 @@ used to leave at 0.
 
 One broken brick in `ARK_PUCHANCE` drops a capsule, up to three falling at
 once; catching it with the paddle applies it. Five kinds: **E** expand, **C**
-catch (the ball sticks until Space), **L** laser (Space fires, two bolts at a
-time, each breaking one brick), **S** slow, and a **heart** for an extra life.
+catch (the ball sticks until Space), **L** laser (Space fires a volley of two
+bolts, each breaking one brick, up to `ARK_MAXSHOT` = 4 in the air), **S**
+slow, and a **heart** for an extra life.
 
 A capsule is identified by the **mark** drawn on it, not by its colour — five
 colours cannot survive §39.4's reduction to three inks. Its height must
@@ -9538,6 +9554,34 @@ below the rect that erases it, and every frame leaves a slice of the last one
 behind. The laser bolt spawns clear of the paddle for the same class of reason
 — spawned *on* it, the bolt's first erase punches a hole in the paddle it was
 fired from.
+
+**A volley leaves the two muzzles, and that is what makes the end columns
+reachable.** `ark_do_paddle` clamps `[ark_px]` to
+`[ark_rail] .. [ark_cwid]-[ark_rail]-[ark_pw]`, so a bolt fired from the
+paddle's *centre* reached only x half a paddle-width inside each rail. Against
+a 24px brick that margin is 22px unexpanded — a 2px slice of column 0 and
+nothing more — and **one Expand takes the paddle to `[ark_pwmax]` = 68 and the
+margin to 34, wider than a brick**, so columns 0 and `ARK_COLS-1` became
+unhittable outright. The same on the CGA set: brick 20, margin 17 then 29.
+That is the worst possible pairing, because Expand is common and a laser is
+what the player reaches for when the ends of the wall are all that is left.
+
+The muzzles sit **at** the clamp limits: `ark_draw_paddle` puts the left one at
+`[ark_px]` and the right at `[ark_px]+[ark_pw]-2`, each 2px wide like the bolt
+itself, so `ark_fire` spawns at those two x and a fully deflected paddle fires
+from the rail — exactly where column 0 begins, since `ark_cell` derives a
+column by dividing `x - [ark_rail]` by the brick width, and where the last
+column ends. The reach is the whole wall at every paddle width, and a wider
+paddle now widens the **spread** instead of narrowing the reach. Drawing and
+firing read the same two numbers, which is the point: a muzzle the bolt does
+not come out of is a lie about where the gun is.
+
+A volley is a **pair and is fired as one**. `ark_fire` wants two free slots and
+fires nothing with fewer, because the muzzles are drawn as a pair and one of
+them firing alone reads as a dropped shot rather than a deliberate half-volley.
+`ARK_MAXSHOT` is 4 rather than 2 for the same arithmetic: a volley costs two
+slots, so four keeps two presses in the air, which is what the player had when
+a volley was a single bolt.
 
 **The extra life is a heart and not a letter**, which costs this module a
 sprite: the kernel's ROM font is glyphs 32..126 (§6), so there is no character
