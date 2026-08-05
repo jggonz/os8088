@@ -6673,6 +6673,62 @@ walk has to publish `np_rowsn`/`[np_rowsok]` for the rows it did pass, which
 `.stop` now does whenever the walk started at the top of the view rather than
 at a seed part-way down.
 
+### 27.7.2 A scroll moves the pixels it already has
+
+A scroll used to be a full repaint: white-fill the content and letter every
+visible row. But moving the view by `d` rows changes only `d` rows of what is
+on screen — the rest is the same text at a different y, which is exactly what
+`OSAPI_GFX_SCROLL` moves. An arrow click letters **4 rows instead of 20**, and
+a downward one walks 174 layout iterations instead of 1,914.
+
+**`NP_SB_STEP` is 4.** The Disk window's arrow cell steps one row, but its rows
+are 16px list entries and these are 8px lines of prose; four is about the same
+travel, and a blit-scrolled band costs the same whether it moves one row or
+four.
+
+What makes it safe is that the blit shifts the **pixels** and `np_shiftrows`
+shifts their **description** — `np_sig` and `np_rows` — by the same `d`, as one
+operation. §27.7 says those arrays are dropped rather than adjusted on a
+scroll, and that was right while the pixels were being redrawn wholesale:
+adjusting would have been a second place that has to agree about what a row is.
+Here there is no second place. **`[np_ptop]` — the `[np_top]` the screen was
+drawn for — is the one fact that says whether the two have parted**, and
+`np_redraw` reconciles it before anything reads an array indexed by a visible
+row. That matters because a scroll-bar click scrolls and *then* redraws.
+
+Six things the band arithmetic has to get right:
+
+- **The x span rounds OUTWARD to byte columns**, which is what lets this work
+  on every adapter rather than only where `OSAPI_WM_SNAP` aligns the content
+  (§11.94). Rounding x1 down stays inside the content because `NP_MARGIN` is 8;
+  rounding x2+1 up reaches at most seven columns into the scroll bar, so that
+  strip is blanked and its two owners — `np_sbar` and the grow box — put
+  themselves back.
+- **The y span stops at the bottom of the last WHOLE row, not at `[np_bot]`.**
+  A content height that is not a multiple of 8 leaves a sliver below it;
+  `np_rflush` refuses to draw a row that would cross the content edge, so
+  nothing would ever erase what the blit pushed into that sliver. It showed as
+  a one-pixel band of the row above's descenders, left behind permanently —
+  and only on a window whose height has a remainder, which is why VGA was
+  clean and Hercules was not.
+- **`OSAPI_GFX_SCROLL` does not blank what it vacates** (§27.3 relies on the
+  same fact), so the exposed rows are filled before they are lettered.
+- **The exposed rows are drawn by ROW, not by signature.** `np_clip` with
+  `[np_dr0]`/`[np_dr1]` set to the band is deterministic; an exposed row's old
+  signature belongs to the row that scrolled away and could match the new one
+  by luck.
+- **The caller's dirty rows join the band, shifted into the new frame.** An Up
+  that scrolls has two: the row the caret arrived on, and the row it left,
+  which the blit carried faithfully and which therefore still shows a caret.
+- **A page is refused.** `|d| >= [np_vrows]` retains nothing, so the blit would
+  be pure cost; `np_scrollpaint` answers CF=1 and the full repaint happens. A
+  toast is refused for the same kind of reason — it is drawn over the text and
+  is in no row's signature, so the blit would carry it off its own frame.
+
+Verified by differential: the same scripted run against a build whose
+`np_scrollpaint` always refuses is **pixel-identical inside the window**, on
+VGA over nine states and on Hercules over six.
+
 ## 28. taskmgr.inc — the Task Manager window
 
 Built-in singleton app kind (KIND_TASKMGR, cap 1 — one sampler), window
