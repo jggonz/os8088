@@ -141,7 +141,7 @@ NP_MAXROWS   equ 60             ; signature slots, one per row the content can
                                 ; this, so a taller screen degrades to "the
                                 ; rows past 60 are always redrawn" rather than
                                 ; writing past the array
-NP_BSS_TOTAL equ 500 + NP_MAXROWS*2  ; see the bss layout below
+NP_BSS_TOTAL equ 508 + NP_MAXROWS*2  ; see the bss layout below
 NP_BRK_CELLS equ 60             ; the visual break's trigger (SPEC.md 27.3):
                                 ; the CELLS a keystroke would repaint BELOW
                                 ; the caret's row. Not rows - this window is
@@ -163,6 +163,12 @@ NP_SB_W      equ 14             ; scroll bar width, the Disk window's
                                 ; count, which depends on the wrap width,
                                 ; which would depend on the bar
 NP_SB_ARR    equ 11             ; ...and the arrow cells at each end of it
+NP_SB_STEP   equ 4              ; rows an arrow cell steps. The Disk window
+                                ; steps one, but its rows are 16px list
+                                ; entries and these are 8px lines of prose:
+                                ; four of them is about the same travel, and
+                                ; a blit-scrolled band costs the same whether
+                                ; it moves one row or four (SPEC.md 27.7.2)
 NP_GROW      equ 13             ; the grow box the kernel draws in the
                                 ; content's bottom-right corner (SPEC.md
                                 ; 11.1). The bar stops above it, exactly as
@@ -320,10 +326,16 @@ np_scrollto:
 .hi:
     cmp ax, [np_top]
     je .same
-    mov [np_top], ax
-    mov byte [np_sigok], 0          ; every row index now names a different row
-    mov byte [np_ckok], 0
-    mov byte [np_rowsok], 0
+    mov [np_top], ax                ; np_sig and np_rows are NOT dropped here
+                                    ; any more: they still describe the pixels
+                                    ; that are still on screen, and
+                                    ; np_scrollpaint shifts all three together
+                                    ; (SPEC.md 27.7.2). [np_ptop] is what says
+                                    ; the two have parted, and every path out
+                                    ; of np_redraw puts them back in step
+    mov byte [np_ckok], 0           ; the checkpoint is one row rather than an
+                                    ; array, so it is cheaper to re-find than
+                                    ; to carry: the view seed replaces it
     mov byte [np_resume], 0         ; ...including one ALREADY LOADED: np_walk
                                     ; takes [np_sdr] as a visible row and
                                     ; np_measure does not clear the flag, so a
@@ -608,11 +620,11 @@ np_sbclick:
     jmp short .yes                  ; on the thumb itself
 .lineup:
     mov ax, [np_top]
-    dec ax
+    sub ax, NP_SB_STEP
     jmp short .set
 .linedn:
     mov ax, [np_top]
-    inc ax
+    add ax, NP_SB_STEP
     jmp short .set
 .pageup:
     mov ax, [np_top]
@@ -630,6 +642,340 @@ np_sbclick:
     stc
 .out:
     pop dx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; Scrolling the PIXELS (SPEC.md 27.7.2)
+;
+; A scroll used to be a full repaint: white-fill the content and letter every
+; visible row. But moving the view by d rows changes only d rows of what is on
+; screen - the rest is the same text at a different y, which is exactly what
+; OSAPI_GFX_SCROLL moves. So the view moves with one blit and d rows of glyphs
+; instead of nineteen, and on a 4.77MHz machine that is the difference between
+; a scroll bar that steps and one that redraws.
+;
+; What makes it safe is that the blit shifts the PIXELS and np_shiftrows
+; shifts their DESCRIPTION - np_sig and np_rows - by the same d, in the same
+; operation. SPEC.md 27.7 says those two arrays are dropped rather than
+; adjusted on a scroll, and that was right while the pixels were being
+; redrawn wholesale: adjusting would have been a second place that has to
+; agree about what a row is. Here there is no second place. The pixels and
+; the arrays move together or not at all, and [np_ptop] - the [np_top] the
+; screen was drawn for - is the one fact that says which.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; np_vshift - move the whole text band DI pixels (signed; positive = text up)
+; in:  DI = the signed pixel distance, np_bounds run, gfx lock held
+; out: CF = OSAPI_GFX_SCROLL's answer; preserves all registers
+;
+; The x span is rounded OUTWARD to byte columns, and that is what lets this
+; work on every adapter rather than only where OSAPI_WM_SNAP aligns the
+; content (SPEC.md 11.94). Rounding x1 DOWN stays inside the content because
+; NP_MARGIN is 8 and the rounding moves it at most 7; rounding x2+1 UP reaches
+; at most seven columns into the scroll bar, which np_sbar redraws
+; immediately afterwards because the thumb has moved anyway. The band
+; therefore CONTAINS every glyph pixel, which the break's np_scroll - rounding
+; inward, and needing [np_tx] aligned for it - does not have to.
+; -----------------------------------------------------------------------------
+np_vshift:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov ax, [np_tx]
+    and ax, 0xFFF8                  ; x1, down to a byte column
+    mov bx, [np_ty]                 ; y1
+    mov cx, [np_rgt]
+    add cx, 8
+    and cx, 0xFFF8
+    dec cx                          ; x2, with x2+1 up to a byte column
+    mov dx, [np_vrows]              ; y2 stops at the bottom of the last WHOLE
+    push cx                         ; row, not at [np_bot]: a content height
+    mov cl, 3                       ; that is not a multiple of 8 leaves a
+    shl dx, cl                      ; sliver below it, np_rflush refuses to
+    pop cx                          ; draw a row that would cross it, and so
+    add dx, [np_ty]                 ; nothing would ever erase what the blit
+    dec dx                          ; pushed into it. Scrolled to [np_bot] it
+    cmp dx, [np_bot]                ; showed as a one-pixel band of the row
+    jbe .yok                        ; above's descenders, left behind for good
+    mov dx, [np_bot]                ; - and only on a window whose content
+.yok:                               ; height has a remainder, which is why VGA
+    mov si, di                      ; was clean and Hercules was not
+    call OSAPI_GFX_SCROLL
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret                             ; POP does not touch flags: CF is still
+                                    ; the scroll's answer
+
+; -----------------------------------------------------------------------------
+; np_shiftrows - move np_sig and np_rows by [np_sdlt] rows
+; in:  [np_sdlt] = the signed row delta, |d| < [np_vrows]
+; out: nothing; preserves all registers
+;
+; Entry r must end up holding what entry r+d held, because the pixels of row
+; r+d are now at row r. The slots with no source are the exposed rows, and the
+; pass that letters them rewrites both arrays for exactly those.
+; -----------------------------------------------------------------------------
+np_shiftrows:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es                          ; both arrays are ours (SPEC.md 20.1)
+    mov ax, [np_sdlt]
+    or ax, ax
+    js .up
+    mov cx, [np_vrows]              ; DOWN: dst r, src r+d, ascending
+    sub cx, ax
+    jbe .out
+    mov bx, ax
+    shl bx, 1                       ; BX = d in bytes
+    push cx
+    mov di, np_sig
+    mov si, di
+    add si, bx
+    cld
+    rep movsw
+    pop cx
+    mov di, np_rows
+    mov si, di
+    add si, bx
+    rep movsw
+    jmp short .out
+.up:
+    neg ax                          ; UP: dst r+|d|, src r, DESCENDING, or the
+    mov cx, [np_vrows]              ; copy would overwrite its own source
+    sub cx, ax
+    jbe .out
+    mov bx, [np_vrows]
+    dec bx
+    shl bx, 1                       ; BX = the last row's byte offset
+    mov di, bx
+    sub bx, ax
+    sub bx, ax                      ; ...and BX = that minus |d| words
+    mov si, bx
+    push cx
+    push si
+    push di
+    add si, np_sig
+    add di, np_sig
+    std
+    rep movsw
+    cld
+    pop di
+    pop si
+    pop cx
+    add si, np_rows
+    add di, np_rows
+    std
+    rep movsw
+    cld
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_scrollpaint - move the view with a blit instead of a repaint
+; in:  SI = window ptr, np_bounds run, gfx lock held, [np_top] ALREADY moved,
+;      [np_dr0]/[np_dr1] = whatever rows the caller found dirty in the frame
+;      the screen is still showing (0xFFFF/0 = none)
+; out: CF=0 the screen is correct and both arrays describe it; CF=1 nothing
+;      was drawn and the caller must repaint in full. Preserves all registers.
+; -----------------------------------------------------------------------------
+np_scrollpaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    cmp byte [np_sigok], 0
+    je .nope                        ; the arrays do not describe the screen,
+                                    ; so there is nothing to shift
+    cmp word [np_msg], 0
+    jne .nope                       ; a toast sits OVER the text and is in no
+                                    ; row's signature: the blit would carry it
+                                    ; off its own frame and nothing would put
+                                    ; it back
+    cmp word [np_vrows], 2
+    jb .nope
+    mov ax, [np_top]
+    sub ax, [np_ptop]               ; AX = d, signed
+    jz .nope                        ; the view did not actually move
+    mov [np_sdlt], ax
+    mov bx, ax
+    or bx, bx
+    jns .abs
+    neg bx
+.abs:
+    cmp bx, [np_vrows]
+    jae .nope                       ; nothing is retained: a repaint is the
+                                    ; same work without the blit
+    mov di, ax
+    push cx
+    mov cl, 3
+    shl di, cl                      ; DI = d*8, and a positive d moves the
+    pop cx                          ; view down, which moves the text UP
+    call np_vshift
+    jc .nope                        ; refused, and having drawn nothing
+
+    ; Rounding x2+1 outward carried up to seven columns of furniture with the
+    ; text: the scroll bar's left frame at np_rgt+1, and the left edge of the
+    ; grow box below it. Blank that strip and let the two things that own it
+    ; put themselves back - np_sbar at the end of this routine, and the grow
+    ; box here, because np_sbar stops short of the corner it sits in.
+    mov ax, [np_rgt]
+    inc ax                          ; x1, the first column past the text
+    mov cx, [np_rgt]
+    add cx, 8
+    and cx, 0xFFF8
+    dec cx                          ; x2, the same one np_vshift moved
+    cmp ax, cx
+    ja .nostrip
+    mov bx, [np_ty]
+    mov dx, [np_bot]
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+    push bx
+    mov bx, si
+    call OSAPI_WM_GROW              ; SPEC.md 11.1/27
+    pop bx
+.nostrip:
+
+    mov ax, [np_sdlt]               ; the rows the blit did not fill in
+    or ax, ax
+    js .exup
+    mov bx, [np_vrows]              ; view moved DOWN: they are at the bottom
+    sub bx, ax
+    mov [np_bd0], bx
+    mov bx, [np_vrows]
+    dec bx
+    mov [np_bd1], bx
+    jmp short .band
+.exup:
+    mov word [np_bd0], 0            ; ...and UP: at the top
+    neg ax
+    dec ax
+    mov [np_bd1], ax
+.band:
+    ; ...plus whatever the caller already knew was dirty, which it counted in
+    ; the OLD frame. A caret that moved off a row leaves that row needing a
+    ; redraw even though the blit carried it faithfully - so an Up that
+    ; scrolls has TWO dirty rows, the one it arrived on and the one it left.
+    mov ax, [np_dr0]
+    cmp ax, 0xFFFF
+    je .shift
+    sub ax, [np_sdlt]
+    jns .d0ok
+    xor ax, ax                      ; it half scrolled off the top
+.d0ok:
+    mov bx, [np_dr1]
+    sub bx, [np_sdlt]
+    js .shift                       ; ...or all of it did
+    cmp bx, [np_vrows]
+    jb .d1ok
+    mov bx, [np_vrows]
+    dec bx
+.d1ok:
+    cmp ax, bx
+    ja .shift
+    cmp ax, [np_bd0]
+    jae .hi
+    mov [np_bd0], ax
+.hi:
+    cmp bx, [np_bd1]
+    jbe .shift
+    mov [np_bd1], bx
+.shift:
+    call np_shiftrows
+
+    mov ax, [np_bd0]                ; erase the band: OSAPI_GFX_SCROLL leaves
+    push cx                         ; the vacated rows holding a copy of what
+    mov cl, 3                       ; was next to them, and a row of the new
+    shl ax, cl                      ; text may be shorter than that or empty
+    pop cx
+    add ax, [np_ty]
+    mov bx, ax                      ; BX = y1
+    mov ax, [np_bd1]
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_ty]
+    add ax, 7
+    cmp ax, [np_bot]
+    jbe .yok
+    mov ax, [np_bot]
+.yok:
+    mov dx, ax                      ; DX = y2
+    mov ax, [np_tx]
+    sub ax, NP_MARGIN               ; AX = x1, the content's own left edge
+    mov cx, [np_rgt]                ; CX = x2
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+    mov word [np_prowi], 0xFFFF     ; the fill erased what the delta cache knew
+
+    mov word [np_hity], 0xFFFF      ; one pass, drawing AND re-signing: the
+    mov word [np_wanty], 0xFFFF     ; band was just filled, so np_clean, and
+    mov ax, [np_bd0]                ; np_clip confines it to the band by ROW
+    mov [np_dr0], ax                ; rather than by signature - an exposed
+    mov ax, [np_bd1]                ; row's old signature is the row that
+    mov [np_dr1], ax                ; scrolled away and could match by luck
+    mov byte [np_draw], 1
+    mov byte [np_sigup], 1
+    mov byte [np_clip], 1
+    mov byte [np_clean], 1
+    mov byte [np_resume], 0
+    cmp byte [np_rowsok], 0
+    je .noseed
+    mov ax, [np_bd0]
+    or ax, ax
+    jz .noseed                      ; the band starts at the top of the view:
+    dec ax                          ; there is no earlier row to start from
+    mov bx, ax                      ; np_rows is valid up to here and no
+    inc bx                          ; further, the entries above the band
+    mov [np_rowsn], bx              ; having just been shifted out of range
+    mov dx, [np_vrows]
+    call np_seedrow
+.noseed:
+    mov ax, [np_vrows]
+    mov [np_lastrow], ax
+    call np_walk
+    mov byte [np_clip], 0
+    mov byte [np_clean], 0
+
+    mov ax, [np_top]
+    mov [np_ptop], ax               ; the screen shows this view now
+    call np_sbar                    ; unconditional: the thumb moved, and the
+                                    ; blit reached into the bar's columns
+    clc
+    jmp short .out
+.nope:
+    stc
+.out:
+    pop di
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -1747,6 +2093,10 @@ np_reconcile:
     call OSAPI_WM_GROW              ; the fill reached it (SPEC.md 11.1/27)
 .done:
     call np_sigmark
+    push ax
+    mov ax, [np_top]                ; the reconcile draws the note as it now
+    mov [np_ptop], ax               ; is, in the view it now has
+    pop ax
     call np_toast
     pop dx
     pop cx
@@ -2121,7 +2471,9 @@ np_paint:
     call np_walk                    ; (SPEC.md 27.7/27.2)
     mov byte [np_clean], 0          ; ...and because it WAS filled, a row's run
     call np_sigmark                 ; stops at its last character instead of
-    pop ax                          ; padding to the band's edge to erase with
+    mov ax, [np_top]                ; padding to the band's edge to erase with
+    mov [np_ptop], ax               ; ...and the screen now shows THIS view
+    pop ax
     call np_sbar                    ; the fill took the bar with it
     call np_toast                   ; last, so it sits above the text
     ret
@@ -3126,6 +3478,12 @@ np_redraw:
     call np_sigsame
     pop ax
     jc .full
+    push ax                         ; the screen shows [np_ptop] and the view
+    mov ax, [np_top]                ; may already have moved - a scroll bar
+    cmp ax, [np_ptop]               ; click scrolls and THEN redraws. Reconcile
+    pop ax                          ; the pixels first: everything below this
+    jne .scrolled0                  ; indexes an array by a VISIBLE row, and
+                                    ; those still count in the old view
     or al, al
     jz .noseed
     call np_seedck                  ; only an edit at the caret may skip the
@@ -3183,7 +3541,7 @@ np_redraw:
     call np_measure
 .haveit:
     call np_seecaret                ; when it MOVED. A scroll bar click also
-    jnc .fullpaint                  ; ends here, and following the caret then
+    jnc .scrolled                   ; ends here, and following the caret then
 .noflw:                             ; would drag the view straight back to it
                                     ; and make the bar look broken. Moving
                                     ; the view renames every row the band and
@@ -3301,6 +3659,17 @@ np_redraw:
 .nohire:
     mov byte [np_resume], 0
     jmp short .out
+
+.scrolled0:
+    mov word [np_dr0], 0xFFFF       ; no walk has run this redraw, so nothing
+    mov word [np_dr1], 0            ; is known dirty beyond the exposed rows
+.scrolled:
+    ; The view moved. Move the PIXELS to match instead of drawing them again
+    ; (SPEC.md 27.7.2) - and if that is refused, the full repaint below is
+    ; exactly what used to happen every time.
+    call np_scrollpaint
+    jnc .done
+    jmp short .fullpaint
 
 .full:
     ; Reached when np_sigsame REFUSED - a resize, a toast arriving or leaving,
@@ -3897,6 +4266,16 @@ np_follow   equ os88_image_end + 496 + NP_MAXROWS*2   ; byte: this redraw is
                                        ; scroll bar click - which reaches the
                                        ; same np_redraw - cannot be dragged
                                        ; straight back to the caret
+np_ptop     equ os88_image_end + 500 + NP_MAXROWS*2   ; word: the [np_top]
+                                       ; the PIXELS on screen were drawn for.
+                                       ; np_sig and np_rows are indexed by a
+                                       ; visible row, so this is what says
+                                       ; which view they describe - and a
+                                       ; scroll is reconciled by shifting all
+                                       ; three together (SPEC.md 27.7.2)
+np_sdlt     equ os88_image_end + 502 + NP_MAXROWS*2   ; word } np_scrollpaint
+np_bd0      equ os88_image_end + 504 + NP_MAXROWS*2   ; word } scratch: the
+np_bd1      equ os88_image_end + 506 + NP_MAXROWS*2   ; word } delta, the band
 np_hdirty   equ os88_image_end + 498 + NP_MAXROWS*2   ; byte: the note
                                        ; changed, so [np_drows] is a lower
                                        ; bound rather than the height. Set by
