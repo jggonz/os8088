@@ -9967,6 +9967,195 @@ for a save, and a load folds line endings in place). `FERR_*` becomes a
 human sentence in an error alert. New/Open/Quit with unsaved changes ask
 first — Save / Cancel / Don't Save, with Save continuing the pending
 action through the Save As completion when the document is untitled.
+
+## 47. Missile Command — the twelfth package (apps/missile/missile.asm)
+
+A port of Atari's 1980 arcade game onto the published package ABI, from the
+original 6502 sources (`W3MAIN` / `W3DSUP` / `W3COMN`, "WWIII", project
+23603, July 1979). Prefix `mc_`, embedded icon, one worker task, **no kernel
+change of any kind**. Directory order on the apps disks stays pinned;
+missile is appended last in `GAMES`. `MISSILE` is seven characters, so the
+file name needs no truncating.
+
+It runs windowed — seven eighths of the desktop band — or on the §11.2
+fullscreen surface, `F` in and Esc out. No heap claim: every array is sized
+by the arcade's own object counts and lives in the package bss, about 800
+bytes of it, so this package costs its image and nothing else.
+
+### 47.1 What is the arcade's, verbatim
+
+The numbers are not re-invented. `mc_icbwav` **is** `ICBWAV`
+(12, 15, 18, 12, 16, …) and `mc_crmwav` **is** `CRMWAV`, the smart-bomb
+count that stays 0 until wave 6; both clamp at the end of the table exactly
+as the 6502 clamps them. Six cities and three bases stand at
+`CITY1H..CITY6H` and `MISB1H..MISB3H` on the arcade's own 0..255 field,
+mapped onto whatever content rectangle the window actually got — which is
+what preserves the shape of the board (base, three cities, base, three
+cities, base) at any size. Ten ABMs a base (`MAXMIS`), eight ICBMs and eight
+ABMs in flight (`NICBMS`/`NABMS`), seven ICBMs on screen (`MXICON`), first
+satellite at wave `SPUTWV` = 2, first MIRV at `MIRVWV` = 1.
+
+Scoring is `SETICS`: 25 an ICBM, 100 a satellite or bomber (`SPUTKI`'s
+"4X ICBM"), 125 a smart bomb (`CMKILL`'s "5X"), all times
+`min(6, (wave+1)/2)` — `SMULTI` capped at `MAXMUL`. End of wave pays 5 ×
+multiplier per unused ABM (`ABMADD`) and 100 × multiplier per surviving city
+(`ENDWV4`'s "4 ICBM POINTS/CITY"), tallied one at a time with a beep each,
+which is what `ENDWV2`/`ENDWV4` do a frame at a time. A bonus city every
+10,000 points (`BONINL`'s default interval). `mc_rad` is `OLDRAD`/`NEWRAD`:
+0, 0, 2, 3, … 13, 13, … 1, 0, 0 over `EXDONE` = 27 frames. An explosion
+below `[mc_lowest]` does no damage and pays nothing (`LOWEST`), which is
+what stops a player farming points off the deck.
+
+**`[mc_lives]` is `PLIVES`**: the number of cities the player is *entitled*
+to, decremented when one is lost and incremented by a bonus, with the wave
+transition regenerating cities up to it (`REGEN`). That one variable is why
+a bonus city awarded mid-wave appears at the start of the next one, and why
+the game ends when it reaches zero.
+
+**All three bases come back every wave, with ten missiles each** — `NEWWV1`
+writes `MAXMIS` into every `NMMISB` and `0E0` into `MBLEFT`, "ALL 3 BASES
+ALIVE". Only cities are permanent losses. Getting this wrong is not a
+fidelity detail: a player who lost all three launchers to one bad wave had
+nothing to defend with ever again, and testing found wave 2 opening with no
+bases and no way to fire.
+
+### 47.2 A trackball becomes the mouse, and three buttons become one
+
+The arcade aims with a trackball and picks a launcher with one of three fire
+buttons. Here the crosshair follows the mouse — polled from the worker with
+`osapi_mouse`, which is worker-safe (§20.6 rule 7) — and a click fires from
+the **nearest live base that still has missiles**. Keys 1/2/3 still pick a
+base outright, because the left and right launchers are what a player
+reaches for when the middle one runs dry.
+
+The click itself is not acted on in `W_ONCLICK`. The worker owns every
+object in the game, so the UI task's whole job is to leave the target behind
+in three words — apps/arkanoid's `[ark_launch]` with a point attached.
+`[mc_fire]` is a **counter** rather than a flag so two clicks inside one
+frame both fire.
+
+**The crosshair is an XOR overlay**, drawn last each frame and undone first
+the next, so nothing else ever draws while it is on the screen — the same
+condition §32 requires of the window manager's own drag outline. Its arms
+are deliberately long: the kernel keeps drawing the arrow cursor at the same
+point (§11.2 — even fullscreen, the cursor stays live), and a short
+crosshair simply hides underneath it.
+
+### 47.3 There is no line primitive
+
+`mc_line` is a Bresenham that **coalesces each horizontal run into one
+`gfx_hline`**, and it draws the missile trails one *segment* at a time — the
+two or three pixels a missile moved this frame, not the whole trail — which
+is what makes fifteen missiles in flight affordable at 4.77MHz. A full
+repaint needs no frame buffer for the same reason trails are cheap: every
+missile carries the point it launched from and the point it has been drawn
+to, so the whole trail is one `mc_line`.
+
+**The erase has to be one pixel wider than the draw, and that is not a
+nicety.** The trail is drawn as a chain of per-frame segments and erased as
+a single whole line, and those two rasterizations are not the same pixels —
+each segment is its own Bresenham between two rounded endpoints, while the
+erase runs between the extremes. Neither differs from the true line by more
+than a pixel in the minor axis, and "no more than a pixel" still left **104
+of a measured 217-pixel trail on the screen**: every dead missile left a
+dashed line that never went away, and a stalled game was a sky full of them.
+`[mc_lfat]` grows each flushed run by one pixel in every direction, which
+covers exactly that error and costs nothing — a run is a rect either way, so
+it is the same number of `gfx_fill` calls.
+
+The honest alternative — replaying the erase segment by segment — needs the
+frame count since launch *and* breaks the moment `mc_render` skips a frame
+or a smart bomb re-aims, because then the drawn segments are not the ones a
+replay would produce. The dilation has neither failure mode.
+
+### 47.4 The explosion scales, and its square root is free
+
+The arcade's burst is 27 pixels across on a 256×231 field — a tenth of the
+screen, and **that proportion is the game**: it decides how much sky one ABM
+covers and therefore whether a wave is survivable. Left at a literal
+13-pixel radius on a 560-pixel-wide window it was less than half as big in
+relative terms, and the game became unwinnable for a reason that had nothing
+to do with the design. `mc_escale` scales the whole `OLDRAD` ramp once per
+layout, by `min(cw/256, ch/231)` in eighths — a **minimum over both axes**,
+because this window is much wider than it is tall and dramatically so on
+CGA's 200 rows, where a width-scaled burst would swallow the entire sky.
+
+Scaled radii put a circle table out of reach (the radii now wanted would
+have made one 1KB), so there is none. `mc_shrink` walks a running half-width
+down until `half² + dy² ≤ r²`; because the half-width falls monotonically as
+`dy` rises, it is decremented exactly `R` times across a whole disc — O(R)
+for the entire circle, against O(R) multiplies per *row* for an honest
+integer square root. `mc_erase_ring` runs two of them at once, one per
+radius, to give back the annulus a shrinking burst vacated.
+
+Growing, the new disc covers the old one, so one filled circle is the frame's
+whole work; the colour cycles every frame either way, which is the arcade's
+flashing and costs nothing because the disc is redrawn regardless.
+
+### 47.5 Two ways a wave could never end
+
+Both were found by leaving the game running, and both present identically —
+a still screen on a machine that is otherwise perfectly alive, because the
+worker is looping happily and simply has nothing left to do.
+
+- **No target left.** `mc_launch_icbm` picks a living city or base to aim
+  at. Once the last one is gone that refusal is *permanent*, and the first
+  version treated it like the transient one above it (no free slot: try
+  again next tick). The wave's budget stood forever, `mc_check_wave` waited
+  on it, `mc_nextwave` never ran, and the THE END it would have reached
+  never arrived. Spending the budget outright ends the wave on the next
+  frame and the game with it.
+- **A drifting on-screen count.** `MXICON` gates every launch, so a count
+  that drifts high stops the wave launching and produces the same hang.
+  Five launch sites and three death sites had to agree for a counter to stay
+  honest, so `mc_recount` derives it every frame instead — an
+  eight-iteration loop needs no agreement at all.
+
+### 47.6 The palette cycles, and none of it may go black
+
+`SETCOL` walks ten palettes at one per two waves; so does `mc_pal`. But
+everything here is drawn on a black field, so a colour from §39.4's black
+class (0..6) makes that object **invisible** on Hercules and CGA — the trap
+§44.6 records. Every entry is therefore from the white class (12/14/15) or
+the dither class (7..11, 13), and **within a palette the ground and the
+cities come from different classes, as do the ICBM trails and the ABM
+trails**, so the four things a player must tell apart stay apart once colour
+has reduced to three inks.
+
+Text is stricter still: all three figures in the score strip are drawn from
+the **white class only**. A dithered 8×8 glyph on a black field loses the
+half of each stroke the pattern masks out, and a 1px stroke has nothing
+left — the wave counter was `CLGREEN` and on CGA it was not faint but
+*absent*, zero lit pixels across the hundred columns it occupied.
+
+A destroyed base is a **notch bitten out of the ground**, not a stump. The
+first version drew two low stubs in the ground colour on top of the ground,
+which is invisible on every adapter, so a launcher that was gone looked
+exactly like bare terrain and a player could not tell it from one that was
+merely out of missiles.
+
+### 47.7 The rest of the game
+
+The loop is the worker (§20.6, apps/arkanoid's shape), one frame a tick,
+sleeping to a **deadline** rather than for a duration for the reason §44.1
+measures. `mc_render` is the one lock hold a frame and obeys rule 5:
+re-read the origin, check `W_FLAGS` bit 1, `wm_clip_set`; CF=1 skips the
+frame and raises `[mc_full]`, so the next frame that draws draws everything.
+
+MIRVs split partway down and their children come out of the **same wave
+budget**, so a MIRV does not add ICBMs to a wave — it delivers them all at
+once, lower down, which is the point of the weapon. The satellite (or
+bomber; which shape is a coin toss, as `SOBJID` is) crosses the sky from
+wave 2 and drops ICBMs out of that same budget. Smart bombs from wave 6 fly
+slower and re-aim at a point displaced well to one side of a burst they see
+coming, rather than reversing: reversing makes them hover, and a bomb that
+never arrives is not a threat.
+
+Sound is duration-limited `osapi_snd_tone` from the worker throughout, on
+§44.5's argument. The credits panel is §44.7's: drawn inside our own
+content, the worker held off it by `[mc_abon]` under the lock, the game
+paused underneath.
+
 ## 50. memory.inc — the claim heap
 
 Everything above the kernel, in one map the kernel owns.
