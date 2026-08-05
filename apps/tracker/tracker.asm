@@ -351,8 +351,7 @@ trk_onkey:
     cmp byte [mp_playing], 0
     je .play
     call trk_play_stop
-    mov si, trk_s_stop
-    call tui_msg
+    call trk_transport
     jmp .out
 .pat:
     mov al, 1
@@ -839,7 +838,8 @@ trk_play:
     mov byte [trk_sopen], 1         ; keys every pass on trk_sopen, and a
                                     ; pass must never see the new stream
                                     ; through the old session's flags
-    jmp .out
+    call trk_transport              ; the one success path; every exit below
+    jmp .out                        ; is a refusal with its own message
 .ofail:
     call mp_stop
     mov si, trk_s_snderr
@@ -953,6 +953,44 @@ trk_reap:
 trk_play_stop:
     call trk_stream_close
     call mp_stop
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_transport - the status legend and the stopped view row follow the
+;                 transport, from wherever it changed
+; in:  [mp_playing]; gfx lock held (every caller is a UI callback or the
+;      worker's own locked frame)
+; out: nothing (all registers preserved)
+;
+; TWO things were missing and both were the same omission: nothing said what
+; the transport was doing. trk_play set no message at all on success, so the
+; line kept whatever the load had put there; 'Stopped' was set once and stuck,
+; with no key legend after it; and because [tui_msgp] is non-zero from the
+; first load onward, tui_s_hint - the only thing that ever named the keys -
+; never came back. So the line now carries the state AND the keys for it, in
+; both directions.
+;
+; Stopping also parks the view where the music GOT TO. tui_viewrow reads
+; [tui_vrow] while stopped, and that was the Up/Down scroll row, untouched
+; since before playback started - so stopping jumped the pattern back to
+; where you pressed play. mp_stop leaves [mp_row] alone, which is what makes
+; this a copy rather than a snapshot taken earlier.
+; -----------------------------------------------------------------------------
+trk_transport:
+    push ax
+    push si
+    cmp byte [mp_playing], 0
+    jne .playing
+    mov al, [mp_row]
+    mov [tui_vrow], al
+    mov si, trk_s_stopd
+    jmp short .msg
+.playing:
+    mov si, trk_s_playing
+.msg:
+    call tui_msg
+    pop si
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1300,7 +1338,8 @@ trk_s_m44:   db 'Rate: 44 kHz - Enter plays', 0
 trk_ttl:     db 'Tracker', 0
 
 ; --- status-line strings -------------------------------------------------------
-trk_s_stop:   db 'Stopped', 0
+trk_s_stopd:  db 'Stopped  ENTER play  L load', 0
+trk_s_playing: db 'Playing  SPACE stop  L load', 0
 trk_s_noload: db 'No module loaded - L loads one', 0
 trk_s_nosb:   db 'No Sound Blaster: viewer only', 0
 trk_s_nomem:  db 'Out of memory', 0

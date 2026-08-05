@@ -10016,6 +10016,9 @@ Three things about the gating are deliberate:
   watchdog: all of them move `[mp_playing]`, and one comparison against
   `[tui_lplay]` catches every one. `tui_draw_pat` then draws whichever view
   is now correct, so nothing else in the module has to know the mode exists.
+  The comparison sits **above** the windowed/fullscreen split, because
+  §45.9.2 hangs off it too and the transport changes either way; only the
+  `tui_draw_pat` behind it is tier-0 and fullscreen.
 
 The line is **centred in the cleared area**, not left at `TL_BANDY`. With
 the grid gone there is nothing for the band's usual one-third-down position
@@ -10029,6 +10032,45 @@ the four-channel view it belongs to.
 is the one element redrawn on every frame, so its height is a direct
 multiplier on the per-frame fill cost; three rows still read as a level
 meter.
+
+### 45.9.2 The status line carries the transport, and stopping parks the view
+
+The status line is the only place the keyboard is ever named, and it used to
+stop naming it. `[tui_msgp]` is non-zero from the first load onward, so
+`tui_s_hint` — `'ENTER play  SPACE stop  L load'`, the line the app opens
+with — never came back; and `trk_play` set no message at all on success, so
+starting playback left whatever the load had put there and `'Stopped'` was
+set once and then stuck with no legend after it. Between them the user got a
+line that said nothing about what the transport was doing and nothing about
+which key would change it.
+
+`trk_transport` is the fix and it is one routine: it reads `[mp_playing]`
+and writes `'Playing  SPACE stop  L load'` or
+`'Stopped  ENTER play  L load'` — the state **and** the key that leaves it,
+in both directions.
+
+Two call sites, and both are needed for different reasons. `trk_play`'s
+success path calls it so the line changes on the keystroke rather than up to
+a tick later, which on a 4.77 MHz machine is the difference between a
+responsive app and a dropped keypress. `tui_draw_dyn`'s `[tui_lplay]`
+transition (§45.9.1) calls it because that is the **only** site that sees a
+stop nobody asked for — song end, an F00, the §45.2 watchdog. It does not
+matter that the two overlap on a user-driven stop: the second call redraws
+one line of text with the same content. What matters is that `trk_transport`
+deliberately does **not** touch `[tui_lplay]`; leaving that to
+`tui_draw_dyn` alone is what makes a transition that happened while
+`trk_render` was skipping frames (hidden, wholly covered, About panel up)
+still get noticed when the frames come back.
+
+**Stopping also parks the pattern view where the music got to.**
+`tui_viewrow` reads `[tui_vrow]` while stopped, and that word is the Up/Down
+scroll position — untouched since before playback started, so stopping
+snapped the view back to wherever the user pressed play, discarding the one
+piece of information a stop is *for*. `trk_transport` copies `[mp_row]` into
+it on the stopping edge. That is a copy rather than a snapshot taken earlier
+because `mp_stop` leaves `[mp_row]` alone, so the replayer's own row is
+still valid at the moment the transport is observed to have stopped — from
+the keystroke and from the watchdog alike.
 
 ### 45.10 The Rate menu — 11 / 22 / 44 kHz for the other end of the range
 

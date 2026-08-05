@@ -2277,16 +2277,20 @@ tui_draw_dyn:
     cmp byte [tui_inited], 0
     je .out
     call tui_track
-    cmp byte [trk_fs], 0
+    mov al, [mp_playing]            ; did playback START or STOP? the test is
+    cmp al, [tui_lplay]             ; above the fullscreen split because the
+    je .noxn                        ; TRANSPORT changed either way, and the
+    mov [tui_lplay], al             ; legend has to follow it in both. This
+    call trk_transport              ; is also the only site that sees a stop
+    cmp byte [trk_fs], 0            ; nobody asked for - song end, F00, the
+    je .win                         ; watchdog, a failed load - so it is the
+    cmp byte [trk_cpu0], 0          ; one that must park the view row.
+    je .played                      ; On a tier-0 machine the transition also
+    call tui_draw_pat               ; changes the SHAPE of the pattern view
+    jmp .norows                     ; (SPEC.md 45.9.1), redrawn once here
+.noxn:                              ; rather than at each of the five places
+    cmp byte [trk_fs], 0            ; that can start or stop a module
     je .win
-    mov al, [mp_playing]            ; did playback START or STOP? on a tier-0
-    cmp al, [tui_lplay]             ; machine that changes the SHAPE of the
-    je .played                      ; pattern view (SPEC.md 45.9.1), so the
-    mov [tui_lplay], al             ; row area is redrawn once, here, rather
-    cmp byte [trk_cpu0], 0          ; than at each of the five places that
-    je .played                      ; can start or stop a module - the
-    call tui_draw_pat               ; watchdog and a failed load included
-    jmp .norows
 .played:
     mov al, [mp_row]                ; did the view move?
     cmp al, [tui_lrow]
