@@ -627,26 +627,20 @@ Three things about it are load-bearing:
 answered, because on a machine whose clock will not hold a setting that is the
 whole diagnosis.
 
-### What came back from `main` (SPEC.md §41, §12.2, §11)
+### Extended memory, window geometry and About (SPEC.md §41, §12.2, §11)
 
-The forks were resynced once, partially and deliberately. Four things crossed:
-
-- **The API slot numbers.** Every slot up to 0x01B0 is at `main`'s number,
-  and **above that the tables have parted** (SPEC.md §20.3). They used not
-  to: five cells were **held empty** and ten more RESERVED so that a package
-  source would assemble for either fork. The branches are merging, so the
-  holes bought nothing and were closed — everything above 0x01B0 moved
-  **down 88 bytes**, which is the third and last time that block has moved.
-  Two of the five held cells were *filled* rather than dropped
+- **The API slot numbers.** Everything above 0x01B0 moved **down 88 bytes**
+  once, when five cells that had been **held empty** and ten more RESERVED
+  were closed up (SPEC.md §20.3); that is the third and last time that block
+  has moved. Two of the five held cells were *filled* rather than dropped
   (`OSAPI_SND_FM`/`OSAPI_SND_STREAM` at 0x00F8/0x0100, now the loadable
   sound driver's).
 
-  What survives is the half of the rule that was never about the other fork:
-  **a shipped slot keeps its contract**, and "we no longer implement this" is
-  a refusing stub, not a reuse. Reusing 0x01C8 for a KB-counting `mem_avail`
-  where `main` puts a paragraph-counting one would have failed silently and
-  by a factor of 64 — which is why the merge closed the gap by *moving* this
-  fork's block rather than by overlaying it. SPEC.md §20.8 rule 4 is the
+  The rule that governs the table is **a shipped slot keeps its contract**,
+  and "we no longer implement this" is a refusing stub, not a reuse. Reusing
+  0x01C8 for a KB-counting `mem_avail` where a paragraph-counting one had
+  been published would fail silently and by a factor of 64 — which is why
+  that block was *moved* rather than overlaid. SPEC.md §20.8 rule 4 is the
   written form; **renumbering invalidates every `.o88` at once** and is only
   survivable because every package is in this tree and `make` rebuilds them.
 
@@ -659,8 +653,7 @@ The forks were resynced once, partially and deliberately. Four things crossed:
 - **`OSAPI_WM_GEOM` (0x01B0).** Content width/height and visibility in one
   call. Reading `[es:bx+W_W]` still works here and most apps still do it, but
   those are FRAME dimensions and every caller repeated the same
-  `-2` / `-TITLE_H-1`; this is that subtraction in one place, at the number a
-  package written for `main` already calls.
+  `-2` / `-TITLE_H-1`; this is that subtraction in one place.
 - **`OSAPI_ABOUT_SET` (0x01E0).** The app's name in the bar becomes a
   one-item pull-down, `About <Name>`. The cell is **appended last** in
   `menu_bar` so the app's own menus keep bar index == set index + 1 and
@@ -675,7 +668,7 @@ The forks were resynced once, partially and deliberately. Four things crossed:
   (see "One read, one write" below), so the slot is a refusing stub and the
   SDK publishes no name for it.
 - **`cpudet.inc` + `xmem.inc` (§41).** CPU tiers, the A20 line and the store
-  above 1MB, at `main`'s five slots. On tier 0 — the target machine — all of
+  above 1MB, across five slots. On tier 0 — the target machine — all of
   it is zero KB and every entry point returns having touched no port. The
   claim heap is unaffected: §50 is still the answer for *conventional* memory
   a package cannot fit in its own segment, and §41 is the answer for bulk
@@ -684,13 +677,13 @@ The forks were resynced once, partially and deliberately. Four things crossed:
   of its own — real mode has no address for it, so it is in neither of the
   two maps above (SPEC.md §41.6).
 
-**This is what raised `KERN_BUDGET` from 64KB to 70KB** — the one time it has
-moved, granted explicitly, and `docs/KERNEL-MEMORY.md` records what it cost.
+**That store is what raised `KERN_BUDGET` from 64KB to 70KB** — the one time
+it has moved, granted explicitly, and `docs/KERNEL-MEMORY.md` records what it cost.
 The 64KB *segment* limit (guard 2) is untouched and unraisable: 16-bit
 offsets. Raising the budget also moved `BOOT_RELOC` (0x0940 → 0x0AA0), which
 is mirrored in `boot/boot.asm`.
 
-The apps disk is **foldered** now, like `main`'s: `APPS/` and `GAMES/`, via a
+The apps disk is **foldered**: `APPS/` and `GAMES/`, via a
 `DIR:` prefix per package in the Makefile. Root indices are 0 = APPS,
 1 = GAMES, and a package is two double-clicks away rather than one.
 
@@ -730,13 +723,12 @@ ES a staged buffer — so the dispatcher is a far pointer in memory
 once and quietly ate the frequency: every FM call came back refused while
 *tones*, which pass AX, worked perfectly.
 
-**Porting an app from `main` is two mechanical edits and one trap.** Over
-there a callback is far-called and ends in `retf`; here the kernel reaches it
-through the package's own dispatcher, so **every proc — the entry included —
-is a near proc with a near `ret`**, and the `push cs / call x` trick around a
-retf-ending helper goes with it. A `retf` left in place returns into the
+**The kernel reaches a callback through the package's own dispatcher**, so
+**every proc — the entry included — is a near proc with a near `ret`**, and
+there is no `push cs / call x` trick around a retf-ending helper because
+there are no retf-ending helpers. A `retf` returns into the
 loader's stack frame and hangs the machine at the first paint. `tests/fmtest`
-is the reference port and the FM gate: `make test-snd ADLIB=1
+is the FM gate: `make test-snd ADLIB=1
 TESTAPPS=build/fmtest.img`, click twice, and the wav must show 880 Hz
 dominant from a keyed 440 — which is only true if the CALLER'S patch bytes
 reached the operator registers.

@@ -219,9 +219,9 @@ $(BUILD)/piano.bin: apps/piano/piano.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/piano.o88: $(BUILD)/piano.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/piano.bin -o $@
 
-# Recorder (SPEC.md 35): the sound layer's recording and streaming client,
-# ported back from `main` once the driver put SND_CAP_PCM_IN and PCM_BG
-# streams behind SOUND.DRV (SPEC.md 51.4). It needs no card to be USEFUL -
+# Recorder (SPEC.md 35): the sound layer's recording and streaming client.
+# SND_CAP_PCM_IN and PCM_BG streams live behind SOUND.DRV (SPEC.md 51.4).
+# It needs no card to be USEFUL -
 # DEMO stages a built-in sweep and PLAY falls back to speaker clips - so it
 # ships on every disk and greys REC on a machine with no Sound Blaster.
 $(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc | $(BUILD)
@@ -232,8 +232,8 @@ $(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/recorder.o88: $(BUILD)/recorder.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/recorder.bin -o $@
 
-# Tracker (SPEC.md 45): a four-channel ProTracker MOD player, ported back
-# from `main` with the rest of the sound apps. Its mixer is a worker task
+# Tracker (SPEC.md 45): a four-channel ProTracker MOD player. Its mixer is
+# a worker task
 # feeding a RING-mode stream (SPEC.md 34.5), which is the only thing in the
 # tree that uses ring mode at all, and the module blob is a heap claim read
 # with OSAPI_FILE_READ, whose destination advances by SEGMENT (SPEC.md
@@ -466,10 +466,6 @@ $(BUILD)/bench360.img: $(BENCHPKGS) tools/os88disk.py
 # whoever wrote it and whatever order its entries are stored in - which is
 # also the only answer that survives a host OS writing to the disk. What is
 # left here is which packages ship and which folder each lands in.
-#
-# (`main` still pins its order and appends new packages at the end of a
-# folder. That rule does not survive the sort, so Missile Command is simply
-# filed alphabetically here - the row it lands on is the mount's decision.)
 APPS_TOOLS := $(BUILD)/artful.o88 $(BUILD)/fractal.o88 $(BUILD)/hello.o88 \
               $(BUILD)/notepad.o88 $(BUILD)/paint.o88 $(BUILD)/piano.o88 \
               $(BUILD)/recorder.o88 $(BUILD)/tracker.o88

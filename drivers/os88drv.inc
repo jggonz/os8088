@@ -48,8 +48,7 @@ DRVC_SOUND   equ 1
 
 ; --- the capability bits a sound driver may ADD (SPEC.md 34.2) ---------------
 ; os88api.inc publishes the two the resident kernel already has (TONE and
-; PCM_EXCL, the PC speaker's); these are the ones only a card can offer, and
-; the numbers are `main`'s so one source assembles for either fork.
+; PCM_EXCL, the PC speaker's); these are the ones only a card can offer.
 SND_CAP_FM       equ 02h        ; 9-ch 2-op patch + note-on/off (OPL2 model)
 SND_CAP_PCM_BG   equ 04h        ; self-clocked block PCM out - background-safe
 SND_CAP_PCM_IN   equ 10h        ; block PCM input (recording)

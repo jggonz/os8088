@@ -46,11 +46,9 @@
 ; Window procs run with the gfx lock held (SPEC.md 11) and preserve all
 ; registers, like every package.
 ;
-; Ported from the other fork with the one edit every such port needs: over
-; there a callback is far-called and ends in `retf`; here the kernel reaches
-; it through the three-byte dispatcher in the package's own header
-; (SPEC.md 20.1), so every proc below - the entry included - is an ordinary
-; near proc with a near `ret`, and the `push cs` around sb_paint goes with it.
+; The kernel reaches a callback through the three-byte dispatcher in the
+; package's own header (SPEC.md 20.1), so every proc below - the entry
+; included - is an ordinary near proc with a near `ret`.
 ; =============================================================================
 
 %include "os88api.inc"

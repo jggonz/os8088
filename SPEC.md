@@ -21,8 +21,7 @@ whole reason to leave them.
 
 The same rule governs the API table (§20.3): **a shipped slot keeps its
 contract**, and "we no longer implement this" is a refusing stub, not a reuse
-(§20.8 rule 4). Bringing forward a package written against an older table is
-[docs/PORTING.md](docs/PORTING.md).
+(§20.8 rule 4).
 
 ## 0. Goal
 
@@ -4361,22 +4360,19 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
                                                 0x0260 wm_top
 ```
 
-**Every slot `main` ever published keeps `main`'s number and contract**, on
-the rule that **a slot number must never mean two contracts**: a shipped
-number keeps its meaning, and the answer to "we no longer implement this" is
-a wrapper or a refusing stub, never a reuse. Reusing 0x01C8 for a KB-counting
-`mem_avail` where `main` put its paragraph-counting one would fail silently
-and by a factor of 64, which is the whole class of bug the rule exists to
-prevent. So the three v3 arena slots at 0x01B8..0x01C8 stay live as
-`osapi_cm_*` (kernel/memory.inc) — paragraph-counting wrappers over the claim
-heap that keep `main`'s register contracts exactly, so a package built
-against `main`'s SDK runs unchanged — and `OSAPI_SND_FM`/`OSAPI_SND_STREAM`
-at 0x00F8/0x0100, once refusing stubs, carry the loadable sound driver's
-(§51.4) real contracts, identical to `main`'s. Everything this branch ADDS
-starts at 0x0200, `main`'s first free number, which the merge makes this
-tree's own. New code should prefer the KB slots (§50.3) over the arena
-wrappers: they are the native shape, they work from the entry proc, and only
-they carry the DMA-page and regrow contracts.
+**Every published slot keeps its number and contract**, on the rule that **a
+slot number must never mean two contracts**: a shipped number keeps its
+meaning, and the answer to "we no longer implement this" is a wrapper or a
+refusing stub, never a reuse. Reusing 0x01C8 for a KB-counting `mem_avail`
+where it once held a paragraph-counting one would fail silently and by a
+factor of 64, which is the whole class of bug the rule exists to prevent. So
+the three v3 arena slots at 0x01B8..0x01C8 stay live as `osapi_cm_*`
+(kernel/memory.inc) — paragraph-counting wrappers over the claim heap that
+keep their original register contracts exactly — and `OSAPI_SND_FM` /
+`OSAPI_SND_STREAM` at 0x00F8/0x0100, once refusing stubs, carry the loadable
+sound driver's (§51.4) real contracts. New code should prefer the KB slots
+(§50.3) over the arena wrappers: they are the native shape, they work from
+the entry proc, and only they carry the DMA-page and regrow contracts.
 
 **Offsets are not stable across kernel versions, and never were pretended
 to be.** Two things have moved them wholesale: the removal of the sound
@@ -4810,12 +4806,11 @@ without anyone noticing it was a rule.
    point of doing it now rather than later. The retired third slot, 0x01E8,
    obeys the rule as written: a refusing stub, not a reuse. Nothing else may
    read this as licence; the next contract change is a new number.
-5. **No `retf` from a package proc the kernel calls** — the inverse of the same
-   rule on `main`, and the one place porting a package is not mechanical. The
+5. **No `retf` from a package proc the kernel calls.** The
    kernel reaches a package through the three-byte `call bp` / `retf`
    dispatcher in its own header (§20.2), so entry, paint, onkey, onclick, menu
    handler and completion proc are all **near procs with a near `ret`**; the
-   dispatcher owns the only `retf`. A `retf` left in from `main` returns into
+   dispatcher owns the only `retf`. A stray `retf` returns into
    the loader's stack frame and hangs the machine at the first paint. The
    worker entry is the one proc with no return at all — it exits through
    `OSAPI_TASK_ALIVE` (§20.6 rule 2).
@@ -8269,9 +8264,8 @@ when the clip ends.
 *caller's segment* for verbs 5 and 6 — the driver runs with ES = KERNEL_SEG,
 so BX is the only way it can reach the caller's buffer — but on verbs 0 and 4
 BX is unused and the **rate** needs somewhere to live, because `snd_req_inst`
-writes DH and DH is the top half of a 4,000..44,100 Hz rate. The other fork's
-driver banked DX itself, immediately before stamping; here the kernel stamps,
-so the kernel banks.
+writes DH and DH is the top half of a 4,000..44,100 Hz rate. The kernel is
+what stamps, so the kernel is what banks DX.
 
 With no driver loaded there is no stream to collide with, and `drv_svc_call`
 refuses — which is the same answer, arrived at for free.
@@ -8507,7 +8501,7 @@ staging pool, verb 6 stages into a grant and verb 5 reads back out of one,
 and verb 4 opens an input stream that the drain task fills.
 
 **The pool is the driver's, so its size is not a constant an app may assume.**
-The Sound Blaster's is 20,480 bytes, where `main`'s was a pinned 64KB segment.
+The Sound Blaster's is 20,480 bytes.
 An app that needs a big grant asks in TIERS and records into what it got;
 `apps/recorder` is the reference for that, and the reason it works on a machine
 whose driver claimed less than it hoped for.
@@ -9840,10 +9834,9 @@ not, and moving costs one replay because the cache survives the repaint.
 
 ## 41. cpudet.inc / xmem.inc — CPU tiers and memory above 1MB
 
-Ported from `main`, at `main`'s section number and `main`'s API slots. Two
-modules and five slots: `cpudet.inc` publishes the CPU tier and the A20 line,
+Two modules and five slots: `cpudet.inc` publishes the CPU tier and the A20 line,
 `xmem.inc` sizes the store above 1MB, allocates out of it and moves bytes
-through it. The claim heap (§50) is unaffected and remains this fork's answer
+through it. The claim heap (§50) is unaffected and remains the answer
 for *conventional* memory a package cannot fit in its own segment; these are
 the answer for bulk data that does not fit conventional memory at all.
 
@@ -9969,7 +9962,7 @@ subtraction wrong will hand out a base past the top of RAM.
 
 ### 41.8 The package ABI
 
-Five slots at `main`'s numbers: `OSAPI_CPU_INFO` (0x0188), `OSAPI_XMEM_CAPS`
+Five slots: `OSAPI_CPU_INFO` (0x0188), `OSAPI_XMEM_CAPS`
 (0x0190), `OSAPI_XMEM_ALLOC` (0x0198), `OSAPI_XMEM_FREE` (0x01A0) and
 `OSAPI_XMEM_COPY` (0x01A8). What ALLOC returns is an **opaque 32-bit token**,
 not a pointer: every byte crosses through COPY. UI-task context only — on
@@ -10295,9 +10288,7 @@ and there is no `OSAPI_WM_DESTROY` for the package to clean it up with. It is
 *safe*, though: every teardown site — `app_close_win`'s task-less branch,
 `inst_task_die`, the winless worker death and the loader's abort — runs
 `wm_destroy_seg` over the dying region's segment **before** the region is
-freed, destroying every window whose `W_SEG` stamp names it (the sweep `main`
-enforced with the `wm_wseg` side table; the stamp moved into the record and
-the sweep moved with it). So an extra window can never outlive the segment its
+freed, destroying every window whose `W_SEG` stamp names it. So an extra window can never outlive the segment its
 callback procs live in — it just makes a poor citizen of the ones that manage
 it by hand. A card is a flag and some pixels: it cannot outlive the instance
 because it never existed apart from it.
@@ -11235,9 +11226,8 @@ completion):
    "Out of memory", not an abort.
 4. `OSAPI_FILE_READ` with ES:BX = the grant at its first byte, DX:CX = its
    byte capacity.
-   `FERR_BIG` reads back as "File too big" — a much rarer answer here than
-   on the fork this section came from, because the heap is not a fixed
-   arena: a 640KB machine measures 566KB of it and a 512KB machine about
+   `FERR_BIG` reads back as "File too big" — a rare answer, because the
+   heap is not a fixed arena: a 640KB machine measures 566KB of it and a 512KB machine about
    439KB, so a 116KB module fits both with room to spare (§45.8).
 5. `mp_load` validates the hostile bytes (the §45.5 checklist) and answers
    CF=1 with its own verdict string, which goes straight to the status
@@ -11263,9 +11253,9 @@ Four stores, none of them guessed:
   regardless of the module's actual size, and held until the next load or
   teardown. Consequence, stated honestly: while a module is loaded the
   Tracker's claim holds up to 128KB that other packages and other instances
-  then cannot have. That is a far smaller consequence here than on the fork
-  this section came from, where the same claim was effectively *all* the
-  remaining arena on a 512KB machine; against a 566KB heap it is a fifth.
+  then cannot have. Against a fixed arena that claim would have been
+  effectively *all* of it on a 512KB machine; against a 566KB heap it is a
+  fifth.
 
   **...and then `trk_trim` gives the difference back.** The over-claim is
   unavoidable at claim time — the dialog's completion proc is handed a name,
@@ -11276,10 +11266,10 @@ Four stores, none of them guessed:
   nothing moves. Measured on a 5,596-byte module: the claim goes 128KB → 6KB
   and the machine's heap use falls from 201KB to 79KB.
   <br><br>
-  The fork this came from documented the over-claim as something it *could
-  not* fix, because claim-copy-free needs both blocks at once and may hand
-  back a different base. That is true there and false here, and it is the
-  clearest single example of what `mem_regrow` was for.
+  A claim-copy-free would need both blocks at once and may hand back a
+  different base, which is why the over-claim used to be documented as
+  unfixable. `mem_regrow` shrinking in place is what fixes it, and this is
+  the clearest single example of what it was for.
   <br><br>
   The trim runs **before `mp_load`**, so no sample pointer exists yet to be
   invalidated even on the impossible path where a shrink relocated; and
@@ -11295,9 +11285,8 @@ Four stores, none of them guessed:
   than 64KB from one base, which is how a 116KB blob is walked on an 8086.
 - **The stream ring** — one 16KB grant out of the **sound driver's** staging
   pool (verb 7, §34.6). Not a kernel segment: the pool belongs to whichever
-  driver attached and **its size is not a constant an app may assume** — on
-  this fork it is 20,480 bytes, where the other pinned a 64KB `SND_SEG`
-  (§2.2, retired).
+  driver attached and **its size is not a constant an app may assume** — the
+  Sound Blaster's is 20,480 bytes.
 - Nothing else: no frame buffer, no second window.
 
 All three grants are stamped with the instance and force-freed at teardown
@@ -11417,9 +11406,8 @@ edge-triggered, so no deadline machinery is needed.
   view, scrolling and the whole fullscreen surface still work. No silent
   tick-driven fake playback is attempted, and no FM fallback in v1 (FM is
   now worker-whitelisted — that is future work, not a promise).
-- **512KB machine: big modules play.** The one item in this list the fork
-  *removed* rather than inherited. The other fork refused a 116KB blob
-  there, because its ~107KB arena could not hold one. The claim heap is not
+- **512KB machine: big modules play.** A fixed ~107KB package arena could
+  not hold a 116KB blob at all, and that limit is gone. The claim heap is not
   a fixed arena — it is everything above the kernel — so a 640KB machine
   measures 566KB and a 512KB machine about 439KB, and the largest MOD this
   player accepts fits either. `FERR_BIG` / "Out of memory" is still the
@@ -11599,7 +11587,7 @@ slot 0x01F0 **on entering fullscreen** and hand back the user's previous
 state on leaving; while Smooth is off, or where the slot refuses (mono
 adapters — where the software renderer already IS the direct path — or a
 heap that cannot fund the 150KB claim right now), fullscreen draws exactly
-as before. That second refusal is a **live** condition on this fork, not a
+as before. That second refusal is a **live** condition, not a
 boot-time verdict: `bb_avail` is about the adapter alone and the memory
 question is asked of the heap every time the buffer is armed (§32), so
 Smooth can be refused with Paint open and granted after it closes. Two recorded

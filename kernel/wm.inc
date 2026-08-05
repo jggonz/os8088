@@ -1951,12 +1951,11 @@ wm_about_get:
 ;      Everything else preserved.
 ;
 ; The companion to wm_content, which answers the origin: together they are
-; the whole content rect. A package on this fork can read W_W/W_H out of the
+; the whole content rect. A package can read W_W/W_H out of the
 ; record itself (ES = KERNEL_SEG in every callback, SPEC.md 20.1) and most
 ; of them do - but that is FRAME size, and every caller then repeats the
-; same `sub 2` / `sub TITLE_H+1`. This is that arithmetic in one place, and
-; it is what a package written against `main` calls, so the two forks agree
-; on the slot AND on the answer (docs/PORTING.md 7).
+; same `sub 2` / `sub TITLE_H+1`. This is that arithmetic in one place, so
+; a package never repeats it and never gets it subtly wrong.
 ;
 ; Callable from any context, lock held or not: it reads four words. The
 ; answer is only STABLE under the lock, which is when painters ask.

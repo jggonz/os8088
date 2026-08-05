@@ -203,8 +203,6 @@ SPEC.md              the binding module contracts (interfaces, layouts,
                      concurrency rules) - read this first
 docs/KERNEL-MEMORY.md what the kernel's byte budget is spent on, and the
                      measured RAM floor
-docs/PORTING.md      bringing forward a package written against an older
-                     API table (the slot numbers above 0x01B0 have moved)
 boot/boot.asm        512-byte boot sector: LBA->CHS, retrying reads
 kernel/kernel.asm    constants, boot sequence, includes, size assertion
 kernel/vga12.inc     mode 12h planar primitives, save/restore, gfx lock
