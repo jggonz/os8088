@@ -341,6 +341,25 @@ $(BUILD)/missile.bin: apps/missile/missile.asm apps/os88api.inc | $(BUILD)
 $(BUILD)/missile.o88: $(BUILD)/missile.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/missile.bin -o $@
 
+# TameGram, the thirteenth shipped package (SPEC.md 48): a four-direction,
+# dual-faction containment matrix contributed by Jason Page (store.amfile.org),
+# credited under its own name in the bar (OSAPI_ABOUT_SET, SPEC.md 12.2). Like
+# Arkanoid and Missile Command the game loop is a WORKER TASK (SPEC.md 20.6),
+# but unlike them the worker's UPDATE runs under the gfx lock as well as its
+# drawing: the piece geometry and the drawing share their scratch words, and
+# every UI callback already holds that lock. The cell size is derived from the
+# LIVE content box on every frame rather than from the screen height, so the
+# matrix fits CGA's 136-row desktop band; the two faction colours straddle
+# SPEC.md 39.4's white and dither classes so they survive 1bpp. No heap claim:
+# the 32x32 board is 1KB of package bss.
+$(BUILD)/tamegram.bin: apps/tamegram/tamegram.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/tamegram/tamegram.asm
+	@echo "tamegram: $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/tamegram.o88: $(BUILD)/tamegram.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/tamegram.bin -o $@
+
 # FILETEST, the file-API gate package (SPEC.md 18.4): drives the file slots
 # 0x0098..0x00A8 end to end (write, read-back, replace, rename, delete,
 # dfree, and the refusals). Never on the shipped apps disks - their
@@ -395,7 +414,7 @@ APPS_TOOLS := $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/piano.o88 \
               $(BUILD)/fractal.o88 $(BUILD)/paint.o88 $(BUILD)/recorder.o88 \
               $(BUILD)/tracker.o88 $(BUILD)/artful.o88
 APPS_GAMES := $(BUILD)/mines.o88 $(BUILD)/solitair.o88 $(BUILD)/arkanoid.o88 \
-              $(BUILD)/missile.o88
+              $(BUILD)/missile.o88 $(BUILD)/tamegram.o88
 
 # Data that ships beside the programs that read it (SPEC.md 24): os88disk.py
 # treats anything not ending .o88 as a plain file. Tracker with no module to

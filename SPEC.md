@@ -10156,6 +10156,171 @@ Sound is duration-limited `osapi_snd_tone` from the worker throughout, on
 content, the worker held off it by `[mc_abon]` under the lock, the game
 paused underneath.
 
+## 48. TameGram — the thirteenth package (apps/tamegram/tamegram.asm)
+
+A four-direction, dual-faction containment matrix, contributed by **Jason
+Page** (store.amfile.org) and credited under its own name in the bar through
+`OSAPI_ABOUT_SET` (§12.2). Prefix `tg_`, embedded icon, one worker task,
+**no kernel change of any kind**. Directory order on the apps disks stays
+pinned; tamegram is appended last in `GAMES`, and `TAMEGRAM` is exactly
+eight characters so the file name needs no truncating. No heap claim: the
+32x32 board is 1,024 bytes of package bss and the whole package is under 6KB
+of image plus bss.
+
+Units spawn at the centre of a fixed 32x32 matrix and fall toward one of the
+four edges; the gravity vector re-rolls with every piece unless `F` locks
+it. Each piece belongs to one of two factions, and a contiguous run of
+**eight** same-faction cells purges — rows and columns both, `floor(len/8)*8`
+cells a run. What survives settles along the current vector one step a tick
+and the scan runs again, so a cascade is a state machine (`PLAY` → `FLASH` →
+`SETTLE` → `FLASH` … → `PLAY`) rather than a loop inside one frame.
+
+### 48.1 The worker's UPDATE holds the gfx lock, and that is the point
+
+Arkanoid (§44) and Missile Command (§47) run their update lock-free and take
+the lock only to draw. This one does not, and the reason is the shape of the
+piece geometry: `tg_cell_of` resolves one of the four cells from the shared
+words `[tg_tr]`/`[tg_tc]` into the shared words `[tg_cr]`/`[tg_cc]`, and the
+**drawing path uses the same four words**. Every UI callback already runs on
+the UI task under the gfx lock (§11/§12.2) — `W_PAINT`, the About handler, a
+menu command — so with a lock-free update the UI task can repaint in the
+middle of `tg_fits`, and the remaining cells of a trial position get
+evaluated against a different origin. `tg_fits` then reports "fits" for a
+position it never tested, `tg_step_grav` commits to it, and `tg_lock_piece`
+stamps a flat index built from an off-board row.
+
+Taking the lock around `tg_update` makes a tick atomic against every UI
+callback, which is the whole fix. It is affordable for two reasons that are
+worth stating because they are what make this a *local* decision and not a
+precedent: the expensive half of a frame (`tg_draw_all`) was always inside
+the lock anyway, and the expensive half of an update (`tg_scan_clears`, 2,048
+cell reads) runs once per piece **lock**, not once per tick. Rule 4 still
+binds — `OSAPI_TASK_ALIVE` is called at the top of the loop with the lock
+free, because gfx_lock is not reentrant.
+
+### 48.2 One bounds test, at the index
+
+`tg_gidx` answers `CF=1` for a cell that is off the board instead of handing
+back an index, and every reader and the single writer already go through it.
+That is deliberate placement rather than defence in depth spread thin:
+`tg_grid` is the last object in the bss and a package's region is an ordinary
+heap claim (§50.3), so an index built from row 32 does not fault — it writes
+33 bytes past the end of the claim, into whatever claim was made after ours.
+
+`tg_lock_piece` skips an off-board cell rather than clamping it. So does
+`tg_erase_prev`, and for a different reason: a *clamped* erase rect would
+black out a cell on the far side of the matrix.
+
+### 48.3 Nothing draws outside the content box
+
+`tg_fillc`, `tg_framec` and `tg_str` are the only three ways this module
+reaches the screen, and all three clamp to `[tg_cwid]`/`[tg_chgt]` before
+adding the window origin. The gfx primitives clip to the **screen**, not to a
+window (§11.3), and `W_PAINT` runs with no clip region armed, so a rect that
+is one row too tall paints over the window below rather than being trimmed.
+
+`tg_str` is all-or-nothing: `font_char` draws a whole 8x8 cell or none of it,
+so a string that would leave the box is **dropped**, not clipped. A missing
+HUD field is a layout bug you can see; a glyph on the neighbour's window is
+one you cannot.
+
+That clamp is what caught the layout. 32 8px cells plus a 28px HUD want 284
+content rows, and CGA's desktop band has 136 — so the matrix used to hang 19
+rows through the bottom of its own window, and a HUD laid out to 242px ran
+off the side of a 128px-wide one. `tg_metrics` re-derives `[tg_csz]` from the
+**live** content box on every callback and every frame, so it follows what
+`wm_fit` actually granted rather than what the entry proc asked for: 8px
+cells on VGA and Hercules, 3px on CGA. The content is never narrower than
+`TG_HUD_W` (248px, one glyph clear of the widest HUD row) and the matrix is
+centred in it by `[tg_bx0]`. A zero cell size is refused, because a zero cell
+makes every rect inside-out and an inside-out rect is a stripe rather than a
+small mistake.
+
+### 48.4 Two colours are chosen at boot, not pinned
+
+§39.4 leaves a 4bpp screen three greys and a 1bpp screen none. On VGA the HUD
+band is `CDGRAY` under `CLGRAY`-bordered matrix; on Hercules and CGA both of
+those land in the **dither** class, and white text on a 50% pattern is
+legible only in principle. `[tg_hudbg]`/`[tg_frcol]` are set from
+`OSAPI_VIDEO`'s `DH`: black band and a solid white border on 1bpp. The HUD
+text itself is `CWHITE` on every adapter — §47's lesson, that a dithered 8x8
+glyph loses the half of each stroke the pattern masks out, so text comes from
+the white class and only a filled *area* may dither.
+
+The factions straddle the two classes deliberately: `CYELLOW` (white) against
+`CLGREEN` (dither), and `CLBLUE` (dither) against `CLRED` (white) in the
+colour-blind palette that `C` toggles. So the two factions stay apart on all
+three adapters without a second carrier.
+
+### 48.5 A PLAY frame costs eight cells
+
+`[tg_dirty]` says a frame is owed; `[tg_full]` says it must be a whole one. A
+falling piece raises only the first, and `tg_frame` then erases the four
+cells of `tg_snap_active`'s snapshot and draws the four the piece arrived at
+— no content wipe, no 1,024-cell rescan, no HUD. Everything else raises
+`[tg_full]`: a lock (the HUD's score moved and the board grew a piece), a
+purge, a settle step, a mode change, a dismissed About.
+
+`tg_lock_piece` drops `[tg_hasop]` at the moment it stamps, because those
+cells belong to the board now and erasing them as a stale piece would rub out
+what was just committed. The purge animation is the other partial path:
+`tg_draw_flash_pages` rewrites only the marked cells, because a full wipe
+every tick puts an intermediate black frame behind every shrink on the
+direct-to-VRAM path.
+
+### 48.6 One panel mechanism, two texts
+
+The bar carries **two** menus: `Protocol` (New Protocol / Halt / Colour-Blind
+/ Lock Vector) and `Help`, whose single item `How to Play` puts the rules and
+the whole key list on screen — because nothing else in the app says what any
+key does, and every one of them is a keypress with no on-screen affordance.
+
+Both it and the credits are the **same** panel: `tg_draw_panel` measures,
+centres and draws whatever `[tg_plines]` names, `[tg_panel]` says one is up,
+and while it stands the worker neither updates nor draws, so a falling unit is
+frozen rather than landing behind the text. Opening one over the other
+replaces it. Any key or click takes it down.
+
+It is drawn **inside our own content**, not in a window of its own, for the
+reason §44.7 and §47 give: a package instance is bound to one window (§29), so
+a second window's close box lands on the instance teardown path and takes the
+game with it. There is no package-reachable equivalent of `fdlg`'s unowned
+window.
+
+Two things the second text needed that the credits did not:
+
+- **A pitch ladder.** CGA's content box is 124 rows (96 of matrix, 28 of HUD)
+  and thirteen lines at VGA's 10px pitch want 144. `tg_pmeas` walks
+  10 → 9 → 8 and stops at 8 because a glyph is 8 rows tall. Without it
+  `tg_str` would silently DROP the lines that fell outside the content box
+  (§48.3), and a key list missing its last four entries is worse than a tight
+  one.
+- **`TG_PLEFT`.** A line beginning with byte 1 is drawn left-aligned at the
+  panel's text margin instead of centred, and the byte is not drawn — the same
+  shape as the SDK's `MENU_DIS`, and for the same reason: no second array, no
+  per-line struct. Prose and a credit read well centred; a two-column key
+  table centred is a ragged diamond, so the title and the dismiss hint are
+  centred and everything between them is not.
+
+### 48.7 Two bugs the port fixed, both invisible until they were not
+
+**`retf`.** The contributed source ended all six callbacks — entry, paint,
+key, click, menu command, About — in `retf`, which is `main`'s convention.
+Here the kernel reaches them through the three-byte dispatcher in the
+package's own header (§20.1/§20.2), so every proc is a near proc with a near
+`ret`; a `retf` returns into the loader's stack frame and hangs the machine
+at the first paint. This is the trap `docs/PORTING.md` names, and it is worth
+naming again because it assembles perfectly.
+
+**`tg_num` ate the y coordinate.** `div bx` takes its dividend in DX:AX and
+leaves the remainder in DX, which is where the caller's y sits. The y is
+banked in SI now. Left in DX it survived every counter that was still zero —
+the loop does not run at all for 0 — and then, on the first piece to lock,
+drew THREAT's digit at y equal to the digit's own ASCII code: a score of 3
+put a stray `3` on board row 3 and left the HUD field blank. A wrong number
+would have been obvious. A number somewhere else entirely reads as a
+corrupted board.
+
 ## 50. memory.inc — the claim heap
 
 Everything above the kernel, in one map the kernel owns.
