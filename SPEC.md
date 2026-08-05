@@ -6507,21 +6507,102 @@ rather than old + new at once, and when it must move it brings the bytes):
   document claim is sized for the document. A refusal is an ordinary path:
   the note is still there and still editable.
 
-**`NP_MAXKB` is 8, and it is not a memory limit — it is what the window can
-show.** Note Pad does not scroll: `np_walk` lays out from `[np_ty]`, which
-`np_bounds` always sets to the content's top, so text past the last visible
-row can be typed and can never be read back. The most any window can display
-is `NP_MAXROWS` rows of `NP_MAXCOL` cells — 60 × 91, about 5,400 characters
-on a fullscreen VGA frame and fewer on anything smaller — so 8,192 is already
-past the point of diminishing returns, and every byte beyond it also costs a
-`np_walk` pass that visits it on *every* paint. **Lifting the ceiling wants
-scrolling first**, and that is the change this section is waiting on.
+**`NP_MAXKB` is 16, and it is an arithmetic limit rather than a memory one.**
+It used to be 8 and 8 was never about memory either: it was what the window
+could *show*, because Note Pad did not scroll and text past the last visible
+row could be typed and never read back. §27.7 removed that, so what bounds
+the note now is the **save**. Staging expands every newline to CR LF, so the
+worst case is twice the note — walked with a 16-bit DI, counted with a 16-bit
+BX, and sized by `np_stghold`'s own `2 × [np_len]`. At 16KB that worst case
+is 32,768 and all three hold; at 32KB it is 65,536 and all three wrap to
+zero. 16,384 characters is 32× what the old `np_buf` held.
 
 One behaviour changed with the ceiling. A file larger than the claim used to
 fill the buffer and say "Truncated"; it is now `FERR_BIG` and "Too big", and
 the note is left alone. That is the honest answer and the old one was a trap:
 a half-loaded note whose next save wrote the truncation back over the whole
 file.
+
+### 27.7 The view scrolls, and one word is what makes it
+
+`[np_top]` is the note row drawn at the top of the content, and **`np_walk`'s
+`np_row` starts at minus it**. That single change is the whole mechanism: a
+row above the view has a *negative* index, and every array in this module is
+already indexed by an unsigned test against a limit (`np_sig`, `np_rows`, the
+dirty band), so a negative word read as unsigned is past all of them and
+skips itself. Nothing downstream had to learn what scrolling is.
+
+**One place could not see it, and it is the exception that names the rule.**
+`np_rflush` decides whether to draw a row from the row's *pixel* y, and a row
+a little above the view has an ordinary small y rather than an implausible
+one — so it grew a test of its own (`[np_rby] < [np_ty]` → drop). The bottom
+edge was already tested and needed nothing.
+
+`np_scrollto` is the only writer, it clamps to `0 .. np_scrollmax`, and it
+answers CF = 0 when the view actually moved. Moving it **drops four pieces of
+state rather than adjusting them** — the row signatures, the layout
+checkpoint (§27.4), `np_rows` (§27.5) and the seed already loaded into
+`[np_resume]` — because every one of them is counted in *visible* rows, and
+adjusting them all by the same delta would be a second place that has to
+agree about what a row is. It also ends the visual break (§27.3): its fiction
+is about particular rows on screen.
+
+Two things follow from "a row index means something different afterwards":
+
+- **A scroll is a full repaint, never a band.** `np_scrollto` clears
+  `[np_sigok]`, so the next `np_sigsame` refuses and `np_redraw` takes its
+  `.full` path. The alternative — `OSAPI_GFX_SCROLL` on the content and a
+  band for the newly exposed row — is a real optimisation and is *not* done,
+  because the delta cache, the signatures and `np_rows` would all have to be
+  rotated to match and any one of them missed is a wrong character on screen.
+- **`[np_drows]` is recorded only by a walk that ran to its natural end.** It
+  is the note's height — what the thumb is a fraction of — and the two walks
+  that stop early cannot know it: the `[np_lastrow]` stop (a caller that
+  knows nothing below moved) and the visual break's stop at the caret. The
+  draw pass's `.blank` loop also walks `np_row` on *past* the note's last
+  row to erase what a shrinking note left behind, so the height is banked
+  before it rather than after.
+
+**The caret gets a place on screen, and `[np_follow]` is what asks for it.**
+Its own flag, not `[np_ekind]`: that one says which cheap redraw path this
+keystroke has *earned*, and Enter, Up, Down, Home and End are all 0 there
+while all five move the caret. `np_onkey` sets it at the one label every
+handled key reaches; `np_redraw` spends it and clears it, so a scroll bar
+click — which arrives at the same `np_redraw` — is not dragged straight back
+to the caret. A click in the *text* needs no follow: it landed on a row that
+was already visible.
+
+**A resize re-clamps, and it needs a walk to do it.** The wrap width changes,
+so the note is a different number of rows, so `[np_top]` may be looking past
+the end of it — and only a walk knows by how much. `np_bounds` raises
+`[np_gchg]` when the geometry differs from what the last paint recorded, and
+`np_paint` spends it: measure, `np_scrollto` the current top, then draw.
+`np_sigmark` clears it. The cost is one extra measuring walk **per geometry
+change**, not per paint. `np_clamp` does the same job for the other way the
+view can be left pointing at nothing — a load or a `File > New` replaces the
+buffer — by putting the view back at row 0, which is also where a reader
+starts.
+
+**The bar is the Disk window's (§22)**, deliberately: same `NP_SB_W` width,
+same `NP_SB_ARR` arrow cells, same proportional thumb with an 8px floor, and
+a track click **pages** rather than dragging. `np_thumb` is the one piece of
+geometry, shared by the painter and the hit test so the two cannot disagree
+about where the thumb is — the same argument as `fm_hit` and `fm_thumb`.
+
+Three details that are not free choices:
+
+- **It is reserved always**, whether or not the note needs one. Whether one
+  is needed depends on the row count, which depends on the wrap width, which
+  would then depend on the bar — so a bar that came and went would change the
+  layout that decides whether it should be there.
+- **It stops short of the grow box**: `[np_sbb]` is `[np_bot] - NP_GROW`,
+  because the kernel draws a 13×13 handle in the content's bottom-right
+  corner and a down arrow drawn into it comes out as a filled square. That is
+  how this was found.
+- **`np_sbcheck`, not `np_sbar`, is what a keystroke calls.** The bar is
+  redrawn only when `[np_top]` or `[np_drows]` differs from what is on
+  screen, so ordinary typing inside one screenful costs the comparison and
+  nothing else.
 
 ## 28. taskmgr.inc — the Task Manager window
 

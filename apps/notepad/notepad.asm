@@ -109,20 +109,24 @@
 ; on File > New. [np_dseg]:0000 is the text and [np_cap] its capacity.
 NP_KB0       equ 1              ; the document claim at launch, KB
 NP_GROWKB    equ 1              ; ...and the quantum it grows by
-NP_MAXKB     equ 8              ; ...and its ceiling. NOT a memory limit - it
-                                ; is what the WINDOW can show. Note Pad does
-                                ; not scroll: np_walk lays out from [np_ty],
-                                ; which np_bounds always sets to the content's
-                                ; top, so text past the last visible row can
-                                ; be typed and can never be read back. The
-                                ; most a window can display is NP_MAXROWS
-                                ; rows of NP_MAXCOL cells - 60 x 91, about
-                                ; 5,400 characters on a fullscreen VGA frame,
-                                ; and fewer on any smaller one - so 8,192 is
-                                ; already past the point of diminishing
-                                ; returns, and every byte past it also costs
-                                ; a np_walk pass that visits it on EVERY
-                                ; paint. Lifting this wants scrolling first
+NP_MAXKB     equ 16             ; ...and its ceiling, which is now a real
+                                ; ceiling rather than a stand-in for one. It
+                                ; was 8, and 8 was never about memory: it was
+                                ; what the WINDOW could show, because Note Pad
+                                ; did not scroll and text past the last
+                                ; visible row could be typed and never read
+                                ; back. It scrolls now (SPEC.md 27.7), so what
+                                ; bounds the note is the arithmetic instead -
+                                ; a save expands every newline to CR LF, and
+                                ; its staging pass walks that with a 16-bit DI
+                                ; and counts it with a 16-bit BX. At 16KB the
+                                ; worst case is 32,768 and both hold; at 32KB
+                                ; it is 65,536 and both wrap to zero, and so
+                                ; does np_stghold's own 2 x [np_len]. So the
+                                ; SAVE is what bounds the note, not the
+                                ; window and not the heap - going further
+                                ; means teaching that loop to cross a segment
+                                ; and making its count 32-bit
 NP_STGMIN    equ 1              ; the save's transient staging claim, KB
 NP_MAXCOL    equ 91             ; cells a row can hold: 720/8 is the widest
                                 ; screen this runs on, plus one for the NUL.
@@ -137,7 +141,7 @@ NP_MAXROWS   equ 60             ; signature slots, one per row the content can
                                 ; this, so a taller screen degrades to "the
                                 ; rows past 60 are always redrawn" rather than
                                 ; writing past the array
-NP_BSS_TOTAL equ 484 + NP_MAXROWS*2  ; see the bss layout below
+NP_BSS_TOTAL equ 498 + NP_MAXROWS*2  ; see the bss layout below
 NP_BRK_CELLS equ 60             ; the visual break's trigger (SPEC.md 27.3):
                                 ; the CELLS a keystroke would repaint BELOW
                                 ; the caret's row. Not rows - this window is
@@ -152,6 +156,19 @@ NP_IDLE      equ 9              ; ticks of no typing before the break is
 NP_WTICKS    equ 3              ; ...and how often the worker looks, ~165ms.
                                 ; Finer than NP_IDLE so the settle lands
                                 ; near the deadline rather than a tick late
+NP_SB_W      equ 14             ; scroll bar width, the Disk window's
+                                ; (SPEC.md 22) so the two look like one OS.
+                                ; It is reserved ALWAYS, present or not:
+                                ; whether a bar is NEEDED depends on the row
+                                ; count, which depends on the wrap width,
+                                ; which would depend on the bar
+NP_SB_ARR    equ 11             ; ...and the arrow cells at each end of it
+NP_GROW      equ 13             ; the grow box the kernel draws in the
+                                ; content's bottom-right corner (SPEC.md
+                                ; 11.1). The bar stops above it, exactly as
+                                ; the Disk window's stops above its status
+                                ; line - drawn into, the two overlap and the
+                                ; down arrow comes out as a square
 NP_MARGIN    equ 8              ; left/top text margin inside the content. It
                                 ; was 6, and 8 is what puts every glyph cell
                                 ; on a multiple of 8 once OSAPI_WM_SNAP has
@@ -241,6 +258,382 @@ np_entry:
     stc                             ; anything an entry proc claimed with it
     ret
 
+; =============================================================================
+; Scrolling (SPEC.md 27.7)
+;
+; The note used to be however much of it fitted: rows past the content bottom
+; were dropped and the pen kept advancing, so text below the window existed
+; and could be saved but could not be looked at. That was survivable at 512
+; characters and is not at 16,384 (SPEC.md 27.6).
+;
+; [np_top] is the note row drawn at the top of the view, and np_walk's np_row
+; - the index into np_sig, np_rows and the dirty band - starts at MINUS it.
+; Nothing downstream of that had to change: every array index is already an
+; unsigned test against a limit, and a negative row read as unsigned is past
+; all of them. The one place that could not see it is np_rflush, because a row
+; a little above the view has an ordinary small y rather than a huge one, so
+; it grew a test of its own.
+;
+; The bar is the Disk window's (SPEC.md 22), drawn with the same proportions
+; so the two read as one system, and it is RESERVED ALWAYS - whether one is
+; needed depends on the row count, which depends on the wrap width, which
+; would depend on the bar. Paging, not dragging, is what a track click does,
+; which is also what the Disk window does.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; np_scrollmax - the largest [np_top] that still shows text
+; out: AX = max(np_drows - np_vrows, 0); preserves all other registers
+; -----------------------------------------------------------------------------
+np_scrollmax:
+    mov ax, [np_drows]
+    sub ax, [np_vrows]
+    jns .out
+    xor ax, ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; np_scrollto - put row AX at the top of the view
+; in:  AX = the wanted row (signed; clamped here), SI = window ptr
+; out: CF=0 if [np_top] moved, CF=1 if it did not; preserves all registers
+;
+; Everything indexed by the visible row means something different afterwards -
+; the signatures, the checkpoint and np_rows all shift by the same amount as
+; the view - so all three are dropped rather than adjusted. Adjusting them
+; would be a second place that has to agree about what a row is.
+; -----------------------------------------------------------------------------
+np_scrollto:
+    push ax
+    push bx
+    or ax, ax
+    jns .lo
+    xor ax, ax
+.lo:
+    push ax
+    call np_scrollmax
+    mov bx, ax
+    pop ax
+    cmp ax, bx
+    jbe .hi
+    mov ax, bx
+.hi:
+    cmp ax, [np_top]
+    je .same
+    mov [np_top], ax
+    mov byte [np_sigok], 0          ; every row index now names a different row
+    mov byte [np_ckok], 0
+    mov byte [np_rowsok], 0
+    mov byte [np_resume], 0         ; ...including one ALREADY LOADED: np_walk
+                                    ; takes [np_sdr] as a visible row and
+                                    ; np_measure does not clear the flag, so a
+                                    ; scroll between np_seedck and the walk it
+                                    ; seeded resumes at the wrong row and every
+                                    ; number that walk produces - [np_cury] and
+                                    ; the note's height - is out by the scroll
+    mov byte [np_bmode], 0          ; and the visual break's fiction is over
+    clc
+    jmp short .out
+.same:
+    stc
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_seecaret - scroll so the caret is inside the view
+; in:  [np_cury] from a walk, SI = window ptr
+; out: CF=0 if the view moved; preserves all registers
+; -----------------------------------------------------------------------------
+np_seecaret:
+    push ax
+    push cx
+    push dx
+    mov ax, [np_cury]               ; the caret's VISIBLE row, signed: a caret
+    sub ax, [np_ty]                 ; above the view has a pen y above np_ty
+    mov cl, 3
+    sar ax, 1                       ; an arithmetic shift, three times: the
+    sar ax, 1                       ; 8086 has no `sar ax, 3`
+    sar ax, 1
+    or ax, ax
+    js .up
+    cmp ax, [np_vrows]
+    jb .same                        ; already in view
+    sub ax, [np_vrows]
+    inc ax
+    add ax, [np_top]                ; ...below it: bring it to the last row
+    jmp short .go
+.up:
+    add ax, [np_top]                ; ...above it: bring it to the first
+.go:
+    call np_scrollto
+    jmp short .out
+.same:
+    stc
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_thumb - the thumb's geometry, shared by the painter and the hit test
+; in:  np_bounds run
+; out: CF=1 no thumb (it all fits, or the track is too short); else CF=0,
+;      AX = thumb top (absolute y), DX = thumb height
+; clobbers: nothing else
+;
+; The Disk window's arithmetic (SPEC.md 22): height = fit*track/total with an
+; 8px floor, top = scroll*track/total, clamped so the bottom of the thumb
+; cannot leave the track.
+; -----------------------------------------------------------------------------
+np_thumb:
+    push bx
+    push cx
+    mov ax, [np_drows]
+    cmp ax, [np_vrows]
+    jbe .none
+    call np_trackh                  ; BX = track height
+    cmp bx, 8
+    jl .none                        ; degenerate track: bare, no thumb
+    mov ax, [np_vrows]
+    mul bx
+    div word [np_drows]             ; AX = proportional height
+    cmp ax, 8
+    jge .hok
+    mov ax, 8
+.hok:
+    mov cx, ax
+    mov ax, [np_top]
+    mul bx
+    div word [np_drows]             ; AX = offset down the track
+    add ax, [np_ty]
+    add ax, NP_SB_ARR               ; ...from the track's top
+    mov dx, [np_ty]                 ; clamp: top <= track top + track - height
+    add dx, NP_SB_ARR
+    add dx, bx
+    sub dx, cx
+    cmp ax, dx
+    jle .tok
+    mov ax, dx
+.tok:
+    mov dx, cx
+    clc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop cx
+    pop bx
+    ret
+
+; np_trackh - BX = the grey track's height, between the two arrow cells
+np_trackh:
+    push ax
+    mov bx, [np_sbb]
+    sub bx, [np_ty]
+    inc bx
+    sub bx, NP_SB_ARR*2
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_sbar - draw the scroll bar
+; in:  SI = window ptr, np_bounds run, gfx lock held
+; out: nothing; clobbers what a callback may
+; -----------------------------------------------------------------------------
+np_sbar:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    push bp
+    mov di, [np_sbr]
+    sub di, NP_SB_W-1               ; DI = the bar's left column, absolute
+
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov ax, di                      ; the box
+    mov bx, [np_ty]
+    mov cx, [np_sbr]
+    mov dx, [np_sbb]
+    call OSAPI_GFX_FRAME
+
+    mov ax, di                      ; the two arrow-cell rules
+    mov bx, [np_sbr]
+    mov dx, [np_ty]
+    add dx, NP_SB_ARR-1
+    call OSAPI_GFX_HLINE
+    mov ax, di
+    mov bx, [np_sbr]
+    mov dx, [np_sbb]
+    sub dx, NP_SB_ARR-1
+    call OSAPI_GFX_HLINE
+
+    xor bp, bp                      ; up glyph: 5 rows, widths 1..9
+    mov dx, [np_ty]
+    add dx, 3
+.up:
+    mov ax, di
+    add ax, 6
+    sub ax, bp
+    mov bx, di
+    add bx, 6
+    add bx, bp
+    call OSAPI_GFX_HLINE
+    inc dx
+    inc bp
+    cmp bp, 5
+    jb .up
+
+    mov bp, 4                       ; down glyph: 5 rows, widths 9..1
+    mov dx, [np_sbb]
+    sub dx, 7
+.dn:
+    mov ax, di
+    add ax, 6
+    sub ax, bp
+    mov bx, di
+    add bx, 6
+    add bx, bp
+    call OSAPI_GFX_HLINE
+    inc dx
+    dec bp
+    jns .dn
+
+    mov ax, di                      ; the track, grey between the rules
+    inc ax
+    mov bx, [np_ty]
+    add bx, NP_SB_ARR
+    mov cx, [np_sbr]
+    dec cx
+    mov dx, [np_sbb]
+    sub dx, NP_SB_ARR
+    cmp bx, dx
+    jg .done                        ; degenerate track: leave it framed
+    call OSAPI_GFX_FILL_GRAY
+
+    call np_thumb                   ; CF=1: it all fits, no thumb
+    jc .done
+    mov bx, ax                      ; y1 = thumb top
+    add dx, ax
+    dec dx                          ; y2 = top + height - 1
+    mov ax, di
+    add ax, 2
+    mov cx, [np_sbr]
+    sub cx, 2
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov ax, di
+    add ax, 2
+    mov cx, [np_sbr]
+    sub cx, 2
+    call OSAPI_GFX_FRAME
+.done:
+    mov ax, [np_top]                ; remember what is on screen, so a redraw
+    mov [np_sbtop], ax              ; that moved neither number draws nothing
+    mov ax, [np_drows]
+    mov [np_sbrows], ax
+    pop bp
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_sbcheck - redraw the bar only if it would look different
+; in:  SI = window ptr, gfx lock held; out: nothing; clobbers as a callback
+; -----------------------------------------------------------------------------
+np_sbcheck:
+    push ax
+    mov ax, [np_top]
+    cmp ax, [np_sbtop]
+    jne .draw
+    mov ax, [np_drows]
+    cmp ax, [np_sbrows]
+    je .out
+.draw:
+    call np_sbar
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_sbclick - a press inside the scroll bar
+; in:  CX = x, DX = y (absolute), np_bounds run, gfx lock held
+; out: CF=0 the bar took it (and may have scrolled), CF=1 it was not ours;
+;      preserves all registers
+;
+; Zones are the Disk window's (SPEC.md 22): the two arrow cells step a row,
+; the track pages against the thumb, and the thumb itself does nothing -
+; there is no drag, here or there.
+; -----------------------------------------------------------------------------
+np_sbclick:
+    push ax
+    push bx
+    push dx
+    mov bx, dx                      ; BX = the click's y; np_thumb wants DX
+    mov ax, [np_sbr]
+    sub ax, NP_SB_W-1
+    cmp cx, ax
+    jb .no
+    cmp bx, [np_ty]
+    jb .no
+    cmp bx, [np_sbb]
+    ja .no
+    mov ax, [np_ty]
+    add ax, NP_SB_ARR
+    cmp bx, ax
+    jb .lineup
+    mov ax, [np_sbb]
+    sub ax, NP_SB_ARR
+    cmp bx, ax
+    ja .linedn
+    call np_thumb                   ; AX = thumb top, DX = its height
+    jc .yes                         ; it all fits: the bar is inert, but ours
+    cmp bx, ax
+    jb .pageup
+    add ax, dx
+    cmp bx, ax
+    jae .pagedn
+    jmp short .yes                  ; on the thumb itself
+.lineup:
+    mov ax, [np_top]
+    dec ax
+    jmp short .set
+.linedn:
+    mov ax, [np_top]
+    inc ax
+    jmp short .set
+.pageup:
+    mov ax, [np_top]
+    sub ax, [np_vrows]
+    jmp short .set
+.pagedn:
+    mov ax, [np_top]
+    add ax, [np_vrows]
+.set:
+    call np_scrollto
+.yes:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; np_bounds - the content rectangle and the text origin, from the live record
 ; in:  SI = window ptr, ES = KERNEL_SEG (as every callback is entered)
@@ -272,7 +665,10 @@ np_bounds:
     mov [np_bot], ax
     pop ax                          ; content left
     add ax, cx
-    dec ax                          ; ...and the last drawable column. This was
+    dec ax
+    mov [np_sbr], ax                ; ...and the last drawable column.
+    sub ax, NP_SB_W                 ; The scroll bar owns the rightmost
+                                    ; NP_SB_W of it (SPEC.md 27.7). This was
     mov [np_rgt], ax                ; W_X+W_W-2 read off the record through ES;
                                     ; origin + size - 1 is the same pixel and
                                     ; needs no kernel pointer of our own - and
@@ -308,9 +704,13 @@ np_bounds:
     mov ax, NP_MAXROWS
 .vok:
     mov [np_vrows], ax
-    jmp short .geom
+    jmp short .sbb
 .norows:
     mov word [np_vrows], 0
+.sbb:
+    mov ax, [np_bot]                ; the bar's own bottom, clear of the corner
+    sub ax, NP_GROW                 ; the kernel draws the grow box in
+    mov [np_sbb], ax
 .geom:
     ; The checkpoint and np_rows are ROW INDICES, so they mean nothing under a
     ; different geometry - and unlike the signatures, nothing else was going to
@@ -331,6 +731,11 @@ np_bounds:
 .stale:
     mov byte [np_ckok], 0
     mov byte [np_rowsok], 0
+    mov byte [np_gchg], 1           ; ...and the note is a different NUMBER of
+                                    ; rows under a different wrap width, so
+                                    ; the view can be looking past the end of
+                                    ; it. Only a walk knows how many, so this
+                                    ; says "one is owed" and np_paint pays it
 .out:
     pop dx
     pop cx
@@ -383,10 +788,14 @@ np_walk:
     mov byte [np_wantset], 0
 
     mov di, [np_tx]                 ; DI = pen x
-    mov bp, [np_ty]                 ; BP = pen y
     mov word [np_i], 0
-    mov word [np_row], 0            ; ...and row 0 of the signature array,
-    mov word [np_rowh], 0           ; with nothing folded into it yet
+    mov ax, [np_top]                ; np_row is the VISIBLE row, so the note's
+    neg ax                          ; first row sits np_top rows ABOVE the top
+    mov [np_row], ax                ; of the view and its index is NEGATIVE
+    mov word [np_rowh], 0           ; (SPEC.md 27.7). Everything that indexes
+                                    ; an array by it already tests UNSIGNED
+                                    ; against a limit, and a negative word
+                                    ; read as unsigned is past all of them
     mov bx, [np_len]                ; BX = characters remaining
     xor si, si                      ; ES:SI = the document (SPEC.md 27.6), and
     mov es, [np_dseg]               ; ES survives every callee below: np_rstart
@@ -401,10 +810,12 @@ np_walk:
     sub bx, ax
     mov ax, [np_sdr]
     mov [np_row], ax
-    mov cl, 3
-    shl ax, cl
-    add bp, ax                      ; y is [np_ty] + 8*row by construction:
-.seeded:                            ; every row advance moves both together
+.seeded:
+    mov ax, [np_row]                ; BP = np_ty + 8*row for BOTH starts, and
+    mov cl, 3                       ; the shift is a signed multiply: a row
+    shl ax, cl                      ; above the view gets a pen y above np_ty,
+    add ax, [np_ty]                 ; which np_rflush refuses to draw at
+    mov bp, ax
     call np_rstart                  ; BP is this row's y; the buffer starts blank
 
 .loop:
@@ -435,7 +846,7 @@ np_walk:
     cmp ax, [np_cur]                ; is not being laid out at all
     jne .nostop
     mov byte [np_rowsok], 0         ; ...which leaves np_rows stale below the
-    jmp .done                       ; caret: the note MOVED and this walk did
+    jmp .donebrk                    ; caret: the note MOVED and this walk did
 .nostop:                            ; not rewrite where. Near: .done is past a
                                     ; short jump's reach
     test bx, bx
@@ -487,6 +898,14 @@ np_walk:
                                     ; the loop body past a short jump's reach
 
 .done:
+    mov ax, [np_row]                ; how tall the NOTE is, which is what the
+    add ax, [np_top]                ; scroll bar's thumb is a fraction of
+    inc ax                          ; (SPEC.md 27.7). HERE, not below: .blank
+    mov [np_drows], ax              ; walks np_row on past the last row the note
+                                    ; actually has, and .donebrk is the visual
+                                    ; break's end - a walk that stopped at the
+                                    ; caret has not seen the note's height
+.donebrk:
     call np_rflush                  ; the last row the walk was accumulating
 
     ; ...and then every row BELOW it that this redraw still owns. A note that
@@ -514,8 +933,14 @@ np_walk:
 .sigpad:
     mov ax, [np_row]                ; a walk that ran to its natural end is
     inc ax                          ; what np_rows describes, rows 0..np_row
-    mov [np_rowsn], ax              ; (SPEC.md 27.5) - a STOPPED one leaves
-    mov byte [np_rowsok], 1         ; the tail of the table stale
+    js .norows2                     ; (SPEC.md 27.5) - a STOPPED one leaves
+    mov [np_rowsn], ax              ; the tail of the table stale, and one that
+    mov byte [np_rowsok], 1         ; ended ABOVE the view described none of it
+    jmp short .padchk
+.norows2:
+    mov word [np_rowsn], 0
+    mov byte [np_rowsok], 0
+.padchk:
     cmp byte [np_sigup], 0
     je .fin
 .pad:
@@ -787,9 +1212,13 @@ np_rflush:
     call np_rowdirty
     jc .out                         ; a row this redraw already knows is right
     mov ax, [np_rby]
-    add ax, 7
-    cmp ax, [np_bot]
-    ja .out                         ; the row does not fit: the pen still
+    cmp ax, [np_ty]
+    jb .out                         ; ABOVE the view: scrolled off the top
+    add ax, 7                       ; (SPEC.md 27.7), and the unsigned tests
+    cmp ax, [np_bot]                ; elsewhere cannot see this one, because a
+    ja .out                         ; row a little above np_ty has an ordinary
+                                    ; small y. Below: it does not fit, the pen
+                                    ; still
                                     ; advanced, so every position below is true
     cmp word [np_rcols], 0
     je .caret
@@ -1427,8 +1856,9 @@ np_sigmark:
     mov ax, [np_msgn]
     mov [np_smsgn], ax
     mov byte [np_sigok], 1
-    pop ax
-    ret
+    mov byte [np_gchg], 0           ; this paint laid the note out under the
+    pop ax                          ; geometry just recorded, so the view has
+    ret                             ; been re-clamped against it
 
 ; -----------------------------------------------------------------------------
 ; np_sigsame - do the stored signatures still describe this window?
@@ -1566,6 +1996,13 @@ np_paint:
     mov byte [np_resume], 0
     mov word [np_hity], 0xFFFF      ; no queries: this pass is here to draw
     mov word [np_wanty], 0xFFFF
+    cmp byte [np_gchg], 0           ; a resize got here through W_PAINT, which
+    je .laidout                     ; is not np_redraw and so has clamped
+    call np_measure                 ; nothing: measure the note under the new
+    mov ax, [np_top]                ; wrap width and put the view back inside
+    call np_scrollto                ; it. np_bmode is 0 above, so np_settle
+    mov byte [np_resume], 0         ; inside np_measure is a no-op and this is
+.laidout:                           ; just the walk
     mov byte [np_draw], 1
     mov byte [np_sigup], 1          ; the content was white-filled on the way
     mov byte [np_clip], 0           ; here, so this pass draws every row AND is
@@ -1574,6 +2011,7 @@ np_paint:
     mov byte [np_clean], 0          ; ...and because it WAS filled, a row's run
     call np_sigmark                 ; stops at its last character instead of
     pop ax                          ; padding to the band's edge to erase with
+    call np_sbar                    ; the fill took the bar with it
     call np_toast                   ; last, so it sits above the text
     ret
 
@@ -1768,7 +2206,8 @@ np_stghold:
     push dx
     mov ax, [np_len]
     add ax, [np_len]                ; 2 x len, which cannot carry: [np_len] is
-    add ax, 1023                    ; bounded by NP_MAXKB * 1024
+    add ax, 1023                    ; bounded by NP_MAXKB * 1024, and NP_MAXKB
+                                    ; is 16 for exactly this sum's sake
     mov cl, 10
     shr ax, cl                      ; ...as whole kilobytes, rounded up
     cmp ax, NP_STGMIN
@@ -2221,6 +2660,12 @@ np_onclick:
     mov word [np_wanty], 0xFFFF
     call np_settle                  ; the pointer has to be over the NOTE
     call np_bounds                  ; before it can be resolved (SPEC.md 27.3)
+    call np_sbclick                 ; ...and the scroll bar is not the note
+    jc .text
+    pop dx
+    call np_redraw                  ; np_scrollto dropped np_sigok, so this is
+    jmp short .out                  ; the full path (SPEC.md 27.7)
+.text:
     mov ax, dx                      ; the row the click landed on is the only
     sub ax, [np_ty]                 ; one that can answer it (SPEC.md 27.5)
     jc .full
@@ -2250,6 +2695,9 @@ np_onclick:
 ; -----------------------------------------------------------------------------
 np_clamp:
     push ax
+    mov word [np_top], 0            ; a NOTE row, so it names nothing once the
+                                    ; note is replaced - and the top of a file
+                                    ; just opened is where a reader starts
     mov byte [np_ckok], 0           ; the whole buffer just changed underneath
     mov byte [np_rowsok], 0         ; them, and both are indices INTO it
                                     ; (SPEC.md 27.4/27.5). np_bounds catches a
@@ -2481,6 +2929,11 @@ np_onkey:
     mov [np_ktick], ax          ; what the worker measures (SPEC.md 27.3)
 
 .redraw:
+    mov byte [np_follow], 1         ; a KEY got us here, so wherever the caret
+                                    ; ended up the view owes it a place on
+                                    ; screen (SPEC.md 27.7). Set at the one
+                                    ; label every handled key reaches, rather
+                                    ; than in each of the twelve above it
     call np_redraw                  ; SI still = window ptr
 
 .out:
@@ -2558,6 +3011,15 @@ np_redraw:
     mov byte [np_sigup], 1
     mov byte [np_clip], 0
     call np_walk
+    cmp byte [np_follow], 0         ; the caret has to be somewhere the user
+    je .noflw                       ; can see it (SPEC.md 27.7) - but only
+    call np_seecaret                ; when it MOVED. A scroll bar click also
+    jnc .full                       ; ends here, and following the caret then
+.noflw:                             ; would drag the view straight back to it
+                                    ; and make the bar look broken. Moving
+                                    ; the view renames every row the band and
+                                    ; the signatures are counted in - so that
+                                    ; is a full repaint, not a band
     mov ax, [np_dr0]
     cmp ax, 0xFFFF
     je .done                        ; not one pixel of the text moved
@@ -2657,12 +3119,25 @@ np_redraw:
     mov bx, si
     call OSAPI_WM_GROW
 .nogrow:
-    call np_toast                   ; a no-op with no message, which is every
+    call np_sbcheck                 ; a note that gained or lost a row moves
+    call np_toast                   ; the thumb, and nothing else redraws it
 .done:                              ; keystroke
     mov byte [np_resume], 0
     jmp short .out
 
 .full:
+    call np_measure                 ; a resize lands here, and BOTH numbers the
+    mov ax, [np_top]                ; view is clamped by have just changed: a
+    call np_scrollto                ; wider window wraps into fewer rows, so
+                                    ; measure first and then put the view back
+                                    ; inside a note that may now be shorter
+                                    ; than where it was looking
+    cmp byte [np_follow], 0         ; ...and only then the caret, which the
+    je .nofl2                       ; clamp above may have just moved out from
+    call np_measure                 ; under. Measured again because np_scrollto
+    call np_seecaret                ; renames every row [np_cury] was counted
+.nofl2:                             ; in. Same gate as the band path: a bar
+                                    ; click must not have its scroll undone
     mov word [np_prowi], 0xFFFF     ; the delta cache describes the SCREEN, and
                                     ; the screen is about to be filled over.
                                     ; Every path that disturbs it other than
@@ -2690,6 +3165,9 @@ np_redraw:
     mov bx, si                      ; the white fill erased the grow box;
     call OSAPI_WM_GROW              ; restore it (SPEC.md 11.1/27)
 .out:
+    mov byte [np_follow], 0         ; ONE-SHOT, like [np_fast]: whoever set it
+                                    ; meant this redraw and no other, and the
+                                    ; next one may well be a scroll bar click
     pop dx
     pop cx
     pop bx
@@ -3203,4 +3681,39 @@ np_ekind    equ os88_image_end + 482 + NP_MAXROWS*2   ; byte: what
 np_eext     equ os88_image_end + 483 + NP_MAXROWS*2   ; byte: cells
                                        ; of the row below that go stale beyond
                                        ; the caret's column (Delete: 1)
-                                       ; total 972 = NP_BSS_TOTAL
+
+; --- scrolling (SPEC.md 27.7) ------------------------------------------------
+np_top      equ os88_image_end + 484 + NP_MAXROWS*2   ; word: the note row
+                                       ; drawn at the top of the view. np_row
+                                       ; is the VISIBLE row and starts at
+                                       ; MINUS this
+np_drows    equ os88_image_end + 486 + NP_MAXROWS*2   ; word: how many rows
+                                       ; the note occupies, from the last walk
+                                       ; that ran to its natural end
+np_sbr      equ os88_image_end + 488 + NP_MAXROWS*2   ; word: the content's
+                                       ; own right edge - np_rgt stops
+                                       ; NP_SB_W short of it now
+np_sbb      equ os88_image_end + 490 + NP_MAXROWS*2   ; word: and the bar's own
+                                       ; bottom, np_bot less the grow box
+np_sbtop    equ os88_image_end + 492 + NP_MAXROWS*2   ; word } what the bar on
+np_sbrows   equ os88_image_end + 494 + NP_MAXROWS*2   ; word } screen was drawn
+                                       ; from, so a redraw that moved neither
+                                       ; leaves it alone
+np_follow   equ os88_image_end + 496 + NP_MAXROWS*2   ; byte: this redraw is
+                                       ; one the CARET moved in, so the view
+                                       ; owes it a place on screen. Its own
+                                       ; flag and not "[np_ekind] is set":
+                                       ; that one says which cheap redraw path
+                                       ; is allowed, and Enter, Up, Down, Home
+                                       ; and End are all 0 there while all
+                                       ; five move the caret. One-shot, so a
+                                       ; scroll bar click - which reaches the
+                                       ; same np_redraw - cannot be dragged
+                                       ; straight back to the caret
+np_gchg     equ os88_image_end + 497 + NP_MAXROWS*2   ; byte: the geometry
+                                       ; changed since the last paint, so the
+                                       ; row count did too and [np_top] has
+                                       ; not been clamped against it yet. Set
+                                       ; by np_bounds, spent by np_paint,
+                                       ; cleared by np_sigmark
+                                       ; total 974 = NP_BSS_TOTAL
