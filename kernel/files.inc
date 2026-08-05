@@ -612,8 +612,14 @@ FM_FREE       equ 255           ; the one FS_FERR value that is not a FERR_*:
 fm_s_newfld:  db 'New folder: ', 0
 fm_s_renam:   db 'Rename ', 0
 fm_s_rento:   db ' to: ', 0
-fm_s_reppr:   db 'Replace ', 0     ; the overwrite question (SPEC.md 22.3)
-fm_s_repq:    db '? Enter=yes A=all Esc=stop', 0
+fm_s_reppr:   db 'Replace ', 0     ; the overwrite question (SPEC.md 22.3),
+fm_s_repq:    db '?', 0             ; on TWO lines: 'Replace NAME?' and the
+fm_s_repk:    db 'Enter=yes  A=all  Esc=stop', 0  ; three answers are 45
+                                    ; characters together and 38 fit the
+                                    ; default window, which is resizable
+                                    ; SMALLER still - so the question takes
+                                    ; the row above the status line for as
+                                    ; long as it is up
 fm_s_delpr:   db 'Delete ', 0
 fm_s_delq:    db '? Enter=yes Esc=no', 0
 fm_s_delq2:   db ' +contents? Enter=yes Esc=no', 0   ; ...for a folder
@@ -3798,11 +3804,19 @@ fm_draw_status:
     mov si, fm_ebuf
     jmp short .fs_stat
 .fs_st_rep:
-    mov si, fm_s_reppr          ; "Replace NAME? Enter=yes A=all Esc=stop"
-    call fm_scat
-    mov si, fm_onam
+    mov si, fm_s_reppr          ; line one: 'Replace NAME?', in the row area
+    call fm_scat                ; (a repaint redraws both, and the question
+    mov si, fm_onam             ; is only up between two of them)
     call fm_scat
     mov si, fm_s_repq
+    call fm_scat
+    mov byte [di], 0
+    mov dx, [fm_cy]
+    add dx, [fm_staty]
+    sub dx, 9
+    call fm_stat_line
+    mov di, fm_hdrbuf           ; ...and line two, the answers, where every
+    mov si, fm_s_repk           ; other status line goes
     jmp short .fs_stat
 .fs_st_del:
     mov si, fm_s_delpr          ; "Delete NAME? Enter=yes Esc=no", or
@@ -3838,30 +3852,55 @@ fm_draw_status:
     add bx, ax
     mov si, [bx]
 .fs_stat:
-    call fm_scat                ; stage it, then truncate to the live cw
-    mov ax, [fm_cw]             ; ("Out of memory" is 104px and cw can
-    sub ax, 12                  ; legally be 94, SPEC.md 22)
-    jg .stpos
+    call fm_scat                ; stage it, then draw it on the status line
+    mov dx, [fm_cy]
+    add dx, [fm_staty]
+    call fm_stat_line
+.fs_done:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_stat_line - draw fm_hdrbuf at (content x + 6, DX), truncated to the
+;                window's live width
+; in:  fm_hdrbuf staged, DX = absolute y; fm_layout has run; lock held
+; out: nothing (all registers preserved)
+;
+; A proc rather than the tail of fm_draw_status because the replace question
+; (SPEC.md 22.3) needs it TWICE, on two rows. The truncation is not optional:
+; 'Out of memory' is 104px and cw can legally be 94 (SPEC.md 22).
+; -----------------------------------------------------------------------------
+fm_stat_line:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    cmp byte [fm_hdrbuf], 0
+    je .out
+    mov ax, [fm_cw]
+    sub ax, 12
+    jg .pos
     xor ax, ax
-.stpos:
+.pos:
     mov cl, 3
-    shr ax, cl                  ; AX = chars that fit
+    shr ax, cl                  ; AX = characters that fit
     cmp ax, FM_HDRMAX-1
-    jae .stdraw
+    jae .draw
     mov bx, ax
     mov byte [fm_hdrbuf+bx], 0
-.stdraw:
-    cmp byte [fm_hdrbuf], 0
-    je .fs_done
+.draw:
     mov byte [gfx_color], CBLACK
     mov cx, [fm_cx]
     add cx, 6
-    mov dx, [fm_cy]
-    add dx, [fm_staty]
     mov si, fm_hdrbuf
     call font_str
-.fs_done:
-    pop di
+.out:
     pop si
     pop dx
     pop cx

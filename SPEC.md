@@ -5381,9 +5381,17 @@ cannot resolve, and it is reported.
 finishes, fails, or must ask; every byte of its state is in `.bss`, so the
 pause is an ordinary trip through the event loop and `fcp_answer` resumes
 it. The question is `FS_EDIT` = 4 — the Delete confirmation's mechanism with
-a third answer — and reads `Replace NAME? Enter=yes A=all Esc=stop`. **A**
-sets `[fcp_all]` and nothing is asked again for the rest of that operation;
-anything else stops it with what has already been copied left in place.
+a third answer. **A** sets `[fcp_all]` and nothing is asked again for the
+rest of that operation; anything else stops it with what has already been
+copied left in place.
+
+It is drawn on **two lines** — `Replace NAME?` in the row area, then
+`Enter=yes  A=all  Esc=stop` on the status line — because together they are
+45 characters and 38 fit the default window, which is resizable smaller
+still. `fm_stat_line` is the truncate-and-draw tail of `fm_draw_status`
+lifted into a proc so the question can spend it twice; the extra row is
+legal because a repaint redraws both, and the question is only ever up
+between two of them.
 
 Four things hold the engine up:
 
