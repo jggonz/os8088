@@ -112,7 +112,6 @@ fdlg_s_newf2:  db 'Folder', 0
 fdlg_s_lopen:  db 'Open:', 0
 fdlg_s_lsave:  db 'Save as:', 0
 fdlg_s_lfold:  db 'Folder:', 0 ; 8 glyphs is what fits before the box
-fdlg_s_dotdot: db '..', 0
 fdlg_s_folder: db 'folder', 0
 fdlg_s_up:     db 'up', 0
 fdlg_s_root:   db 'Disk', 0
@@ -470,28 +469,61 @@ fdlg_commit:
 ; -----------------------------------------------------------------------------
 ; fdlg_setname - store a name in the box (internal)
 ; in:  SI -> NUL-terminated source
-; out: fdlg_name / [fdlg_nlen], truncated to FD_NAMEMAX. Preserves all.
+; out: fdlg_name / [fdlg_nlen], truncated to FD_NAMEMAX. CF = 1 when the box
+;      is not what it was - text, length or caret. Preserves all registers.
+;
+; The CF is what lets a click that lands on the row ALREADY selected draw
+; nothing at all (SPEC.md 38.3): the box follows the selection, so the honest
+; question is not "did the selection move" but "did the box", and only the
+; setter can answer it. Typing into the box between the two clicks is the one
+; case where it did.
 ; -----------------------------------------------------------------------------
 fdlg_setname:
     push ax
     push bx
+    push cx
     push si
     xor bx, bx
+    xor cx, cx                  ; CX counts what came out different
 .copy:
     mov al, [si]
     or al, al
     jz .done
     cmp bx, FD_NAMEMAX
     jae .done
+    cmp al, [bx+fdlg_name]
+    je .same
+    inc cx
+.same:
     mov [bx+fdlg_name], al
     inc bx
     inc si
     jmp short .copy
 .done:
+    cmp byte [bx+fdlg_name], 0  ; the terminator: a SHORTER name differs here
+    je .tsame                   ; and nowhere above
+    inc cx
+.tsame:
     mov byte [bx+fdlg_name], 0
+    cmp [fdlg_nlen], bl
+    je .lsame
+    inc cx
+.lsame:
     mov [fdlg_nlen], bl
-    mov [fdlg_ncur], bl         ; a name arriving whole puts the caret after
-    pop si                      ; it, which is where typing continues
+    cmp [fdlg_ncur], bl         ; a name arriving whole puts the caret after
+    je .csame                   ; it, which is where typing continues - and
+    inc cx                      ; moving the caret alone is a redraw
+.csame:
+    mov [fdlg_ncur], bl
+    or cx, cx
+    jz .nochange
+    stc
+    jmp short .out
+.nochange:
+    clc
+.out:
+    pop si
+    pop cx
     pop bx
     pop ax
     ret
@@ -499,49 +531,30 @@ fdlg_setname:
 ; -----------------------------------------------------------------------------
 ; fdlg_rows - the display row count (SPEC.md 38.4)
 ; in:  nothing
-; out: AX = rows = [disk_nfiles] + the '..' row, CX = 1 when that row exists
-;      (0 at the root). Preserves everything else.
-; The ONE place the '..' offset is decided; every row <-> directory index
-; conversion in this module goes through it.
+; out: AX = [disk_nfiles]. Preserves everything else.
+;
+; A display row IS a directory index. It used not to be: this module
+; synthesized its own '..' row and carried a +1 offset through every row <->
+; index conversion in it. The MOUNT puts the parent link in the listing now
+; (SPEC.md 19.5), so the dialog, the Disk window and every view cache get the
+; same row from the same place - and the offset, and the one routine that
+; existed to decide it, are gone.
 ; -----------------------------------------------------------------------------
 fdlg_rows:
-    xor cx, cx
-    cmp word [dsk_cwd], 0
-    je .root
-    mov cx, 1
-.root:
     mov ax, [disk_nfiles]
-    add ax, cx
     ret
 
 ; -----------------------------------------------------------------------------
 ; fdlg_stage - stage one display row (SPEC.md 38.4)
-; in:  AX = display row, already checked against fdlg_rows
+; in:  AX = display row = directory index, already checked against fdlg_rows
 ; out: fdlg_row = its NUL name, [fdlg_type] / [fdlg_size] = the SPEC.md 19
-;      type and size words. The '..' row is synthesized as type 2 so every
-;      consumer treats it as the folder it is. Preserves all registers.
+;      type and size words. Preserves all registers.
 ; -----------------------------------------------------------------------------
 fdlg_stage:
     push ax
     push bx
     push cx
     push si
-    push ax
-    call fdlg_rows              ; CX = the '..' offset
-    pop ax
-    or cx, cx
-    jz .entry
-    or ax, ax
-    jnz .below
-    mov word [fdlg_type], 2
-    mov word [fdlg_size], 0
-    mov word [fdlg_sizeh], 0
-    mov word [fdlg_row], '..'   ; two bytes, then the terminator
-    mov byte [fdlg_row+2], 0
-    jmp short .out
-.below:
-    dec ax                      ; display row -> directory index
-.entry:
     call dsk_get_dir            ; SI -> the staged 32-byte entry (SPEC.md 19)
     mov bx, fdlg_row
     mov cx, 16
@@ -1159,7 +1172,6 @@ fdlg_draw_rows:
     push bp
 
     call fdlg_rows              ; AX = total rows
-    mov [fdlg_total], ax
     sub ax, [fdlg_scrl]         ; shown = min(total - scroll, FD_ROWS)
     jg .some
     xor ax, ax
@@ -1191,7 +1203,7 @@ fdlg_draw_rows:
 
     mov si, fdlg_s_folder       ; the right-hand column: a size, or the
     cmp word [fdlg_type], 2     ; word 'folder' - a column of zeroes under
-    je .right                   ; every directory would only read as one
+    jae .right                  ; every directory would only read as one
     mov ax, [fdlg_size]
     mov dx, [fdlg_sizeh]
     push di
@@ -1211,13 +1223,48 @@ fdlg_draw_rows:
     jmp short .row
 
 .sel:
-    mov ax, [fdlg_sel]          ; the selection bar, when it is in view
-    cmp ax, [fdlg_total]        ; (0FFFFh = none also fails this)
+    mov ax, [fdlg_sel]          ; the selection bar, drawn by the same proc a
+    call fdlg_sel_bar           ; selection CHANGE uses (SPEC.md 22.2/38.3)
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_sel_bar - XOR the selection band for ONE display row
+; in:  AX = display row, 0FFFFh = none; [fdlg_cx]/[fdlg_cy] valid; gfx lock
+;      held
+; out: nothing (all registers preserved)
+;
+; The Disk window's fm_sel_bar, in this module's geometry and for the same
+; reason (SPEC.md 22.2): XOR means the call that puts the band up is the call
+; that takes it down, so moving the selection costs two inverted strips
+; instead of refilling the list. Range-checked here rather than at the call
+; sites, because one of them hands it a row it has not looked at.
+;
+; It asks fdlg_rows for the total instead of reading [fdlg_shown], which is
+; painter scratch and means nothing on the click path.
+; -----------------------------------------------------------------------------
+fdlg_sel_bar:
+    push ax
+    push bx
+    push cx
+    push dx
+    push ax
+    call fdlg_rows              ; AX = total display rows
+    mov bx, ax
+    pop ax
+    cmp ax, bx                  ; 0FFFFh (none) also fails this
     jae .out
     sub ax, [fdlg_scrl]
     js .out
-    cmp ax, [fdlg_shown]
-    jae .out
+    cmp ax, FD_ROWS             ; the row is < total, so this bounds it by
+    jae .out                    ; what is drawn just as [fdlg_shown] did
     mov cx, FD_ROWH
     mul cx
     add ax, FD_ROW0
@@ -1229,9 +1276,6 @@ fdlg_draw_rows:
     call fdlg_off
     call gfx_xor_fill
 .out:
-    pop bp
-    pop di
-    pop si
     pop dx
     pop cx
     pop bx
@@ -1389,7 +1433,7 @@ fdlg_act:
     je .nosel
     call fdlg_stage
     cmp word [fdlg_type], 2
-    jne .save                   ; a FILE: commit it, in either mode
+    jb .save                    ; a FILE: commit it, in either mode
     call fdlg_dive              ; a FOLDER: navigate into it, in either mode.
     jmp short .stay             ; Selecting one and pressing Enter in Save mode
 .nosel:                         ; used to save a file under whatever name the
@@ -1613,30 +1657,23 @@ fdlg_streq:
 
 ; -----------------------------------------------------------------------------
 ; fdlg_dive - enter the staged row's directory and repaint (internal)
-; in:  fdlg_row / fdlg_type staged and type 2, SI = window ptr; lock held
+; in:  fdlg_type staged and >= 2, SI = window ptr; lock held
 ; out: nothing (all registers preserved)
-; The '..' row walks the on-disk link (SPEC.md 19.2); every other folder
-; goes straight to its first cluster. A '..' that cannot be read leaves us
-; where we are, which is the Disk window's answer too.
+;
+; '..' needs no special case: the mount put the PARENT'S first cluster in
+; that entry (SPEC.md 19.5), so every folder here is one cluster read out of
+; one staged entry. This used to test fdlg_row[0] for a dot and call
+; dsk_dotdot, which walked the directory off the disk a second time.
 ; -----------------------------------------------------------------------------
 fdlg_dive:
     push ax
     push cx
     push dx
-    cmp byte [fdlg_row], '.'
-    jne .down
-    call dsk_dotdot             ; AX = the parent's first cluster
-    jc .out                     ; a missing or corrupt '..': stay put
-    jmp short .go
-.down:
     push si
-    call fdlg_rows              ; CX = the '..' offset
     mov ax, [fdlg_sel]
-    sub ax, cx                  ; display row -> directory index
     call dsk_get_dir            ; SI -> the staged entry
     mov ax, [si+18]             ; its first cluster (SPEC.md 19)
     pop si
-.go:
     mov dl, [disk_drive]
     call fdlg_go
 .out:
@@ -1900,15 +1937,18 @@ fdlg_pick:
     push ax
     push si
     cmp byte [fdlg_nmode], 0
-    jne .out                    ; the box is a folder name being typed: a
+    jne .no                     ; the box is a folder name being typed: a
     mov ax, [fdlg_sel]          ; selection must not overwrite it
     cmp ax, 0xFFFF
-    je .out
+    je .no
     call fdlg_stage
     cmp word [fdlg_type], 2
-    je .out
+    jae .no                     ; a folder is not a file name
     mov si, fdlg_row
-    call fdlg_setname
+    call fdlg_setname           ; CF = 1 = the box is not what it was
+    jmp short .out
+.no:
+    clc                         ; nothing to pick is nothing to redraw
 .out:
     pop si
     pop ax
@@ -2040,7 +2080,7 @@ fdlg_onclick:
     jmp .rlist
 .s_pgdn:
     add word [fdlg_scrl], FD_ROWS
-    jmp short .rlist
+    jmp .rlist
 
     ; --- the rows ---
 .rows:
@@ -2067,24 +2107,57 @@ fdlg_onclick:
     mov bx, [ui_click_t]        ; the click's BIRTH tick, not [ticks]:
     sub bx, [fdlg_clkt]         ; wrap-safe, and queued clicks must not
     cmp bx, FD_DBLCLK           ; collapse into double-clicks (SPEC.md 22)
-    jae .select
+    jae .again
     call fdlg_stage
     cmp word [fdlg_type], 2
-    je .dive
+    jae .dive
     cmp byte [fdlg_mode], 0     ; a double-clicked FILE: in Open mode that
-    jne .select                 ; is the answer; in Save mode it is only a
-    call fdlg_commit            ; name for the box, which .select just put
-    jmp short .out              ; there
+    jne .again                  ; is the answer; in Save mode it is only a
+    call fdlg_commit            ; name for the box, which the first click of
+    jmp short .out              ; the pair already put there
 .dive:
     call fdlg_dive              ; repaints itself
     jmp short .out
 
-.select:
-    call fdlg_setsel
+    ; The row is ALREADY selected, so no band moves and the list does not
+    ; change one pixel (SPEC.md 38.3). The box still follows the selection -
+    ; that is what clicking a row MEANS in Save mode - so fdlg_pick still
+    ; runs, and its CF is the whole question: it comes back set only when
+    ; something was typed into the box since the last click, which is the one
+    ; way a second click on the same row can change anything.
+.again:
     mov bx, [ui_click_t]
     mov [fdlg_clkt], bx
     call fdlg_pick
-    call fdlg_draw_both         ; the list scrolled and the box took the name
+    jc .rname
+    jmp short .out
+
+    ; A DIFFERENT row: the old band comes off, the new one goes on, and the
+    ; rows, their sizes and the whole scroll bar stay where they are. The
+    ; fallback is for fdlg_setsel scrolling the selection into view - which a
+    ; click never does, the hit test being bounded by what is drawn, but the
+    ; keyboard shares that routine and this is the cheaper thing to prove.
+.select:
+    push ax
+    mov ax, [fdlg_sel]
+    call fdlg_sel_bar           ; off (a no-op at 0FFFFh)
+    pop ax
+    mov bx, [fdlg_scrl]
+    push bx
+    call fdlg_setsel
+    pop bx
+    mov ax, [ui_click_t]
+    mov [fdlg_clkt], ax
+    cmp bx, [fdlg_scrl]
+    jne .selscrl
+    mov ax, [fdlg_sel]
+    call fdlg_sel_bar           ; ...and on
+    call fdlg_pick              ; the box follows a file, not a folder
+    jc .rname
+    jmp short .out
+.selscrl:
+    call fdlg_pick
+    call fdlg_draw_both         ; it scrolled: the whole list moved
     jmp short .out
 .rlist:                         ; the listing scrolled; the box did not move
     call fdlg_draw_list
@@ -2131,8 +2204,10 @@ fdlg_ncur:  resb 1              ; ...and the CARET, 0..[fdlg_nlen]: the
                                 ; append-only field (SPEC.md 38.5)
 fdlg_cx:    resw 1              ; content origin, cached by paint and click
 fdlg_cy:    resw 1
-fdlg_total: resw 1              ; display rows, and how many of them show -
-fdlg_shown: resw 1              ; painter scratch, valid inside one draw
+fdlg_shown: resw 1              ; rows the painter actually drew: scratch,
+                                ; valid inside one draw and nowhere else -
+                                ; which is why fdlg_sel_bar, reachable from a
+                                ; click, asks fdlg_rows instead
 fdlg_row:   resb 18             ; one staged row's name (16 + NUL, padded)
 fdlg_type:  resw 1              ; and its SPEC.md 19 type...
 fdlg_size:  resw 1              ; ...and size dword, lo...

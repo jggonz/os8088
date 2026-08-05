@@ -327,6 +327,20 @@ disk_mount:
     mov ax, LOW_SEG
     mov es, ax
     xor bp, bp                  ; BP = accepted entry count
+    cmp word [dsk_cwd], 0
+    je .noup
+    call dsk_synth_up           ; in a subdirectory the listing OPENS with
+    push si                     ; '..' (SPEC.md 19.5) - built before the scan
+    push di                     ; so the scan's entries land above it and the
+    mov di, disk_dir            ; sort below never has to keep it in place
+    mov si, dsk_ent
+    mov cx, DSK_DE_SIZE/2
+    cld
+    rep movsw                   ; DS=kernel -> ES=LOW_SEG
+    pop di
+    pop si
+    mov bp, 1
+.noup:
     mov ax, [dsk_cwd]           ; the current directory (0 = root at mount;
     call dsk_dirw_start         ; dsk_chdir re-enters here, SPEC.md 19.2)
 .rootsec:
@@ -386,6 +400,14 @@ disk_mount:
     loop .entry
     jmp .rootsec
 .scan_done:
+    mov bx, disk_dir            ; alphabetical, and BEFORE the harvest below:
+    mov cx, bp                  ; slot i is then filled for whatever entry
+    cmp word [dsk_cwd], 0       ; ended up at i, so disk_icons never has to
+    je .sortall                 ; be permuted alongside disk_dir (19.4). The
+    add bx, DSK_DE_SIZE         ; parent link is not IN the sort - it is
+    dec cx                      ; always the first entry (19.5)
+.sortall:
+    call dsk_sortdir
 
     ; disk_icons: blank ALL 32 slots up front so no slot ever carries a
     ; previous mount's bytes (SPEC.md 18.3 step 4: fully rewritten every
@@ -408,9 +430,9 @@ disk_mount:
     jae .done
     mov ax, dx
     call dsk_get_dir            ; SI -> dsk_ent, the synthesized entry
-    cmp word [si+16], 2         ; a folder: the one icon that is not
-    je .h_folder                ; harvested off the disk but built in
-    cmp word [si+16], 1         ; type word
+    cmp word [si+16], 2         ; a folder or the parent link (SPEC.md 19.5):
+    jae .h_folder               ; the one icon that is not harvested off the
+    cmp word [si+16], 1         ; disk but built in
     jne .h_zero
     mov ax, [si+18]             ; first cluster (validated at synthesis)
     call dsk_clus2lba
@@ -846,6 +868,206 @@ dsk_sanit:
 .fold:
     mov al, '_'
 .ok:
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_synth_up - build the parent-link entry '..' (module-internal, 19.5)
+; in:       [dsk_cwd] != 0 (the caller has checked it)
+; out:      dsk_ent = the 32-byte entry: name '..', TYPE 3, the parent's
+;           first cluster at +18, size 0. All registers preserved.
+;
+; Type 3 is what makes this safe to put in the listing at all. It behaves
+; like a folder everywhere that navigates and everywhere that draws, but it
+; is NOT one to Rename or Delete, and a name comparison against '..' would be
+; a poor way to know that - a volume is allowed to hold a real file called
+; '..' precisely because dsk_synth's own species filter drops the on-disk
+; dot entries and never re-surfaces them (19.2). The fact belongs in the
+; entry, not in a string.
+;
+; A '..' link that cannot be read gets cluster 0 - the root - rather than no
+; entry at all. Losing the row would strand the user in a folder whose only
+; way out is Root Folder, and the root is where Root Folder would take them.
+; -----------------------------------------------------------------------------
+dsk_synth_up:
+    push ax
+    push cx
+    push di
+    mov di, dsk_ent             ; zero first: the name's NUL padding and the
+    mov cx, DSK_DE_SIZE/2       ; unused tail both fall out of it
+.zero:
+    mov word [di], 0
+    inc di
+    inc di
+    loop .zero
+    mov word [dsk_ent+0], '..'  ; two bytes, then the padding already there
+    mov word [dsk_ent+16], 3    ; type 3 = the parent link (SPEC.md 19)
+    call dsk_dotdot             ; AX = the parent's first cluster, validated
+    jnc .have                   ; against dsk_maxclus by the walker itself
+    xor ax, ax
+.have:
+    mov [dsk_ent+18], ax
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_sortdir - sort synthesized directory entries by display name (19.4)
+; in:       BX = the first entry's LOW_SEG offset, CX = how many from there,
+;           ES = LOW_SEG
+; out:      those entries in ascending name order
+; clobbers: flags
+;
+; BX rather than disk_dir because the parent link (SPEC.md 19.5) is not part
+; of the sort: it occupies slot 0 in a subdirectory and stays there, so the
+; caller hands this the entry AFTER it.
+;
+; Called at the END of the directory scan and BEFORE the icon harvest, and
+; that order is the whole reason this touches ONE array. disk_icons[i]
+; belongs to disk_dir[i], so a sort run after the harvest would have to
+; permute a second 2KB array in lockstep - twice the movement and a standing
+; invitation for the two to drift apart. Harvesting afterwards fills slot i
+; for whatever entry ended up at i, and the question never arises.
+;
+; Selection sort: n <= 32, so at most 31 exchanges of 32 bytes whatever the
+; input, where a bubble sort's worst case is 496. What it spends instead is
+; comparisons - 496 of them at 16 bytes - and those are byte loads out of ES
+; with nothing copied in or out.
+;
+; DS never points at LOW_SEG (SPEC.md 2.1), so there is no rep cmpsb or
+; movsb anywhere here: those want DS:SI, and this segment is the one thing
+; the module refuses to give them. Both operands are read and written with
+; es: overrides instead.
+; -----------------------------------------------------------------------------
+dsk_sortdir:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp cx, 2
+    jb .out                     ; 0 or 1 entries are already in order
+    mov ax, cx
+    mov cl, 5
+    shl ax, cl                  ; count * DSK_DE_SIZE
+    add ax, bx
+    mov dx, ax                  ; DX = one past the last entry
+    mov cx, dx
+    sub cx, DSK_DE_SIZE         ; CX = the last entry: no choice to make for
+                                ; it once everything below is placed
+.outer:                         ; BX = the slot being filled
+    cmp bx, cx
+    jae .out
+    mov di, bx                  ; DI = the smallest name seen so far
+    mov si, bx
+.inner:
+    add si, DSK_DE_SIZE         ; SI = the candidate
+    cmp si, dx
+    jae .placed
+    call dsk_ncmp
+    jae .inner                  ; not smaller: keep looking
+    mov di, si
+    jmp short .inner
+.placed:
+    cmp di, bx
+    je .next                    ; already in place: 32 bytes not moved
+    mov si, bx
+    call dsk_swapent
+.next:
+    add bx, DSK_DE_SIZE
+    jmp short .outer
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_ncmp - compare two synthesized entries' display names (module-internal)
+; in:       SI, DI = LOW_SEG offsets of two entries, ES = LOW_SEG
+; out:      the flags of an unsigned compare of [SI]'s name against [DI]'s:
+;           JB = SI sorts first, JA = DI does, JE = the same 16 bytes
+; clobbers: AX, flags (SI, DI and CX preserved)
+;
+; Case-insensitive, because "alphabetical" is what the user is promised and a
+; FAT short name is uppercase only BY CONVENTION - dsk_sanit folds
+; unprintables and nothing else, so a volume written by some other tool with
+; lowercase bytes in its short names would otherwise sort its whole lowercase
+; half after 'Z'.
+;
+; The 16 bytes are NUL-padded (dsk_synth zeroes the entry before filling it),
+; so a short name sorts before a longer one that shares its prefix with no
+; length test anywhere: PAINT.O88 before PAINT2.O88, because 0 < '2'.
+;
+; `loop` does not touch the flags on an 8086, so falling out of the bottom
+; means sixteen equal bytes AND that the last `cmp` is still what the caller
+; reads.
+; -----------------------------------------------------------------------------
+dsk_ncmp:
+    push cx
+    push si
+    push di
+    mov cx, 16                  ; the display-name field (SPEC.md 19)
+.next:
+    mov al, [es:di]
+    call dsk_upper
+    mov ah, al                  ; AH = [DI]'s byte, folded
+    mov al, [es:si]
+    call dsk_upper              ; AL = [SI]'s byte, folded
+    inc si
+    inc di
+    cmp al, ah
+    jne .done
+    loop .next
+.done:
+    pop di
+    pop si
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_upper - fold one name byte to upper case (module-internal)
+; in:  AL = a byte
+; out: AL = it, with 'a'..'z' folded
+; clobbers: AL (the output), flags
+; -----------------------------------------------------------------------------
+dsk_upper:
+    cmp al, 'a'
+    jb .out
+    cmp al, 'z'
+    ja .out
+    sub al, 'a'-'A'
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_swapent - exchange two synthesized directory entries (module-internal)
+; in:       SI, DI = LOW_SEG offsets, ES = LOW_SEG
+; out:      the two entries exchanged
+; clobbers: flags (AX, CX, SI and DI preserved)
+; -----------------------------------------------------------------------------
+dsk_swapent:
+    push ax
+    push cx
+    push si
+    push di
+    mov cx, DSK_DE_SIZE
+.next:
+    mov al, [es:si]
+    mov ah, [es:di]
+    mov [es:si], ah
+    mov [es:di], al
+    inc si
+    inc di
+    loop .next
+    pop di
+    pop si
+    pop cx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------

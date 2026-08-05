@@ -3168,8 +3168,9 @@ that safe.
 end to end: write, read-back-and-compare, oversize-buffer refusal, shrink
 replace, empty file, rename both ways, rename-onto-existing, bad name,
 delete twice, fill-to-refusal, mass delete, free-space equality). Like
-`fmtest`/`sbtest` it never ships on the apps disks — their directory order
-is pinned — and rides its own scratch images: `build/filetest.img` (FAT12),
+`fmtest`/`sbtest` it never ships on the apps disks — a gate package is not
+software anyone would want to launch — and rides its own scratch images:
+`build/filetest.img` (FAT12),
 and `-frag` (`--scramble`d, so allocation and free meet holes). There was a
 third, `-fat16`, on the 2.88M test geometry — the only way to exercise the
 FAT16 entry encoding; it went when `DSK_FAT_SECS` fell to 10 and rule 10
@@ -3529,10 +3530,10 @@ FAT-spec species it handles):
   32-slot listing budget from foreign housekeeping files).
 - name[0] == 0x20 → invalid per spec (a name may not start with a
   space); skip defensively.
-- name[0] == '.' → a subdirectory's own `.` and `..` links; skip.
-  Navigation reads `..` through `dsk_dotdot` (§19.2), not through the
-  listing, so surfacing them would only put two undeletable oddities at
-  the top of every folder.
+- name[0] == '.' → a subdirectory's own `.` and `..` links; skip. The `..`
+  row the user sees is **synthesized** (§19.5) and typed 3, so it can be
+  navigated but never renamed or deleted; surfacing the raw pair would put
+  two undeletable oddities at the top of every folder instead.
 - name[0] == 0x05 → KANJI escape: treat the first byte as 0xE5 (spec)
   for display; falls through the sanitizer below.
 - Otherwise **accept**, up to the cap of **32 accepted entries** —
@@ -3553,7 +3554,7 @@ every consumer (files.inc, loader.inc) reads:
 | off | size | contents                                                    |
 |-----|------|--------------------------------------------------------------|
 | 0   | 16   | display name, NUL-padded: raw name[0..7] with trailing spaces trimmed, then '.', then ext[0..2] trimmed (dot omitted when the ext is blank); **every byte outside 0x21..0x7E replaced with '_'** (OEM-codepage bytes never reach the font renderer). Max 12 chars — fits every §22 truncation budget |
-| 16  | 2    | type: 1 = loadable package, 2 = subdirectory, else 0 (rules below) |
+| 16  | 2    | type: 1 = loadable package, 2 = subdirectory, 3 = the parent link (§19.5), else 0 (rules below) |
 | 18  | 2    | first cluster = raw FstClusLO (word @26), copied verbatim even when type=0 (harmless; the loader only reads it behind type==1, and `dsk_chdir` only behind type==2). FstClusHI (@20) is FAT32-only per spec — ignored |
 | 20  | 4    | size in bytes = raw size dword @28, verbatim (lo word @20, hi @22 — drawn whole by `fm_ultoa`); forced to 0 for type 2 |
 | 24  | 8    | zero                                                        |
@@ -3577,9 +3578,15 @@ this order:
 truthful.)
 - else **type 0**.
 
+**Type 3** is not derived from an on-disk entry at all: it is the
+synthesized `..` row (§19.5), and it exists as its own type so that
+"navigable, but not a thing on the disk" is a fact in the entry rather than
+a string comparison. Consumers that navigate test `type >= 2`; consumers
+that act on a file (Rename, Delete) refuse 3.
+
 The type word is the *only* thing a consumer branches on: §22's open path
-sends type 1 to the loader and type 2 to `dsk_chdir`, and type 0 to the
-loader as well, where it is rejected as "Bad package" — which is the
+sends type 1 to the loader and types 2 and 3 to `dsk_chdir`, and type 0 to
+the loader as well, where it is rejected as "Bad package" — which is the
 truthful verdict for double-clicking a data file.
 
 **Icons** have no on-disk table: they are **harvested at mount** (§18.3
@@ -3588,7 +3595,7 @@ embedded-icon flag (§20.2 bit 0) carries its 16×16 body at file offset
 32..95, and that block is copied into `disk_icons` entry i. Everything
 else — type-0 files, iconless packages, harvest read failures — gets the
 all-zero slot, and viewers fall back to the built-in `ico_app16` (§25).
-**Type-2 entries are the one exception**: a folder has nothing on disk to
+**Type 2 and type 3 are the one exception**: a folder has nothing on disk to
 harvest an icon *from*, so `dsk_folder_ico` — a hand-authored 16×16 body in
 `disk.inc`'s `.text`, the only icon in the kernel besides the menu-bar logo
 that is drawn by hand — is copied into the slot instead. Doing it at
@@ -3599,9 +3606,9 @@ is all zero.
 Display names are the 8.3 host filenames (e.g. `"MINES.O88"`), not the
 16-byte header names — 8.3 cannot hold the 15-char header names; a running
 instance still shows its header name (`inst_set_name` reads the loaded
-region, §21). Directory order on the shipped disks is pinned by §24's
-argument order; the volume-label entry is filtered, so index 0 stays the
-first package.
+region, §21). The listing is sorted by display name (§19.4), so nothing —
+the Makefile's build order least of all — decides which entry an index
+names.
 
 ### 19.2 Subdirectories — the current directory, one walker, and navigation
 
@@ -3720,6 +3727,107 @@ Two consequences fall out, both wanted:
   nothing about its contents.
 
 The volume is labelled `OS8088SYS`; the apps disk stays `OS8088APPS`.
+
+### 19.4 The listing is sorted by name, in the mount
+
+`disk_dir` comes out of `disk_mount` in **ascending display-name order**,
+not the order the entries happen to sit in on the disk. `dsk_sortdir` is a
+selection sort over the accepted entries, run at the end of the scan.
+
+**It is done here and not in the file manager**, and that is the whole
+point: the Disk window, the Standard File dialog (§38), every per-window
+view cache (§22.1) and anything else that ever reads the snapshot get it
+already sorted, and none of them carries a comparator. The alternative — a
+display-order layer per consumer — is three copies of the same rule and
+three chances to disagree with `fm_hit` about which entry a row is.
+
+Four things about it:
+
+- **It runs BEFORE the icon harvest**, which is what keeps it to one array.
+  `disk_icons[i]` belongs to `disk_dir[i]`, so sorting afterwards would mean
+  permuting a second 2KB array in lockstep — twice the movement, and a
+  standing invitation for the two to drift apart. Harvesting afterwards
+  fills slot *i* for whatever entry ended up at *i*.
+- **Selection sort**, because *n* ≤ 32: at most 31 exchanges of 32 bytes for
+  any input, against a bubble sort's 496. What it spends instead is
+  comparisons — 496 of 16 bytes — and those are byte loads through `ES` with
+  nothing copied in or out.
+- **Case-insensitive.** A FAT short name is uppercase only *by convention*;
+  `dsk_sanit` folds unprintables and nothing else, so a volume some other
+  tool wrote with lowercase bytes would otherwise sort its whole lowercase
+  half after `Z`. The compare folds `a`–`z` and nothing else.
+- **The name field is NUL-padded** (`dsk_synth` zeroes the entry before
+  filling it), so a shorter name sorts before a longer one that shares its
+  prefix with no length test anywhere: `PAINT.O88` before `PAINT2.O88`,
+  because 0 < `'2'`.
+
+No `rep cmpsb` and no `rep movsb`: those want DS:SI, and `disk_dir` is in
+`LOW_SEG`, which DS never points at (§2.1). Both operands are read and
+written with `es:` overrides.
+
+The parent link (§19.5) is **not in the sort** — it occupies slot 0 and
+stays there — so `dsk_sortdir` takes the first entry's offset rather than
+assuming `disk_dir`.
+
+**What this replaced was a pinned build order.** The apps disk's listing was
+directory order, so the order packages were named in the Makefile was the
+order they appeared in, new packages had to be appended at the end of their
+folder, and the scripted tests clicked rows by that index. None of it
+survived contact with the disk being writable and mountable by a host OS —
+a file the user copies on lands wherever the allocator puts it. The
+Makefile's lists now say only *which* packages ship and *which folder* each
+lands in.
+
+### 19.5 `..` is an entry in the listing, not a menu command
+
+In a subdirectory the listing **opens with a `..` row** — folder icon, no
+size column, first in both the list and the icon grid, and above the sort
+because it is placed before the scan runs (§19.4). Double-clicking it goes
+up, exactly like double-clicking any folder.
+
+**It is synthesized in the mount** (`dsk_synth_up`), for the same reason the
+sort lives there: the Disk window, the Standard File dialog and every view
+cache read one snapshot, so putting the row in that snapshot gives all of
+them the same row from the same place. The dialog used to synthesize its own
+— `fdlg_rows` returned `disk_nfiles + (cwd ≠ 0)` and every row ↔ index
+conversion in the module carried the resulting offset — and that offset, and
+the routine that existed to decide it, are gone: **a display row IS a
+directory index** now. `fdlg_dive`'s `..` special case went with it, because
+the entry carries the *parent's* first cluster and dives like any folder
+instead of walking the directory off the disk a second time.
+
+The entry is **type 3**, not type 2, and that distinction is the safety
+property:
+
+- Everything that **navigates** tests `type >= 2`, so `..` behaves exactly
+  like a folder in `fm_open_sel`, `fdlg_act`, `fdlg_onclick`'s dive and the
+  size-column suppression.
+- Everything that **acts on a file** refuses 3. `fm_arm_sel` will not arm
+  Rename or Delete on it — silently, like the no-selection case — and the
+  context menu gets `fm_ctx_up`, which is the folder menu's first two items
+  (Open, Open in New Window) and nothing else.
+- A **name comparison against `..` would have been the wrong test.** The
+  species filter (§19) drops the on-disk dot entries and never re-surfaces
+  them, so a volume is free to hold something else that displays as `..`.
+  The fact belongs in the entry.
+
+Three consequences worth stating:
+
+- **The header says "N files" without the link.** `fm_nfiles` asks the
+  listing — is entry 0 type 3? — rather than deriving it from `FS_CWD`,
+  because those two can disagree: a `..` whose on-disk link is unreadable
+  gets **cluster 0, the root**, rather than no row at all, so the user is
+  never stranded in a folder whose only way out is Root Folder.
+- **The 32-entry cap costs one slot in a subdirectory**: 31 real entries
+  plus the link.
+- **The write path never sees it.** `dskw_find` scans the raw on-disk
+  directory, not `disk_dir`, and `dskw_name83` rejects a leading dot, so
+  `".."` can never become a raw 8.3 name to match against. Both gates
+  predate this.
+
+**Folder ▸ Up One Folder and Backspace stay.** They are the same
+destination by a different route, and a one-button machine in a fullscreen
+window needs the keyboard one.
 
 
 ## 20. Loadable programs — the .o88 package format
@@ -4732,11 +4840,12 @@ Behaviour:
 - `files_open` (from CMD_FILES dispatch, no lock held): the target is
   `([disk_drive], [dsk_cwd])` — where the volume already is — then the same
   rule.
-- `W_ONCLICK` (lock held; every path below ends in `fm_repaint`: a content
-  repaint — white-fill own content from the **live** W_W/W_H + redraw + a
-  closing `wm_grow_paint` (§11), because the white fill erases the grow box
-  — preceded by `fm_title_flush` when navigation left a caption owing, see
-  "The deferred retitle" below):
+- `W_ONCLICK` (lock held; the button and scroll-bar paths below end in
+  `fm_repaint`: a content repaint — white-fill own content from the **live**
+  W_W/W_H + redraw + a closing `wm_grow_paint` (§11), because the white fill
+  erases the grow box — preceded by `fm_title_flush` when navigation left a
+  caption owing, see "The deferred retitle" below. **A click in the row area
+  usually ends nowhere near it** — see §22.2):
   test order is buttons → scroll bar → rows.
   1. Refresh rect → `fmv_load` on **this window's** `FS_DRV`, root: a
      re-mount from scratch, so a swapped disk shows its real contents.
@@ -4749,7 +4858,8 @@ Behaviour:
      `FS_N` → clear selection. Index == `FS_SEL` and
      [ui_click_t]−`FS_CLKT` < 9 (birth ticks, §10) → double-click:
      `fm_open_sel` (below). Else select it (`FS_SEL` =
-     directory index), stamp `FS_CLKT`.
+     directory index), stamp `FS_CLKT`. **What that costs to draw is
+     §22.2, and it is normally two inverted bands or nothing at all.**
      A double-click that posted a **load** (`[ld_pending]` non-zero on the
      way back) exits through `fm_status_only` instead: the only thing it
      changed on screen is `'Loading...'` in the status line. A double-click
@@ -5059,6 +5169,55 @@ every visible window anyway — which is what the call was always for (the
 loaded program's window may overlap any of them). It no longer runs on the
 **successful** path at all: `ld_run_body`'s own `wm_show` is that pass, and
 running both was the second whole-screen redraw a launch used to show.
+
+### 22.2 Selecting costs two bands, and re-selecting costs nothing
+
+A click in the row area used to end in `fm_repaint` like every other click:
+white-fill the whole content, redraw the header, both buttons, every visible
+row with its icon, name and size, the scroll bar with its arrows, track and
+thumb, and the status line — about 130 glyphs and a dozen fills, to move one
+inverted strip. The first click of a **double**-click paid it too, which is
+what made a double-click flash.
+
+The selection is drawn as an **XOR fill** over the row band (list view) or
+the cell (icon view), and XOR is its own inverse, so the whole change is:
+invert the band the selection is leaving, invert the band it is arriving at.
+`fm_sel_bar` is that operation, factored out of `fm_draw_core` so the painter
+and the click path cannot disagree about which pixels a selected entry owns —
+the same argument that made `fm_hit` one routine. It takes a directory index
+and range-checks it itself (`0xFFFF`, past `FS_N`, or scrolled out of the row
+area all draw nothing), because one caller hands it an index it has not
+looked at.
+
+Four cases, and three of them draw nothing at all:
+
+| the click | what changes | what is drawn |
+|---|---|---|
+| a different row | `FS_SEL`, `FS_CLKT` | two `gfx_xor_fill`s |
+| the row already selected | `FS_CLKT` | **nothing** |
+| empty space, something selected | `FS_SEL` = 0xFFFF | one `gfx_xor_fill` |
+| empty space, nothing selected | nothing | **nothing** |
+
+Measured on the shipped `APPS` folder, in both views: **zero `font_char` and
+zero `gfx_fill` calls** for every row of that table but the first.
+
+Two things hold it up:
+
+- **It is correct only because `W_ONCLICK` fires on the frontmost window
+  alone** (§13). Nothing is on top of it, so the content on screen is exactly
+  what the last paint put there, XOR included — a stale band would otherwise
+  be inverted back to something that was never drawn. §11.3's granularity rule
+  does not apply either way: an inversion erases nothing, so there is no fill
+  and no glyph to disagree.
+- **An editor line is the one other thing a row click changes.** `fm_edit_end`
+  runs first and cancels a half-typed name, which rewrites the status line, so
+  `fm_onclick` captures `FS_EDIT` into `[fm_wased]` **before** ending it. Set,
+  the fast path is skipped and the click takes the old `fm_repaint` — the
+  status line has to be redrawn anyway and the repaint draws the new band
+  itself.
+
+`fdlg.inc` has the same rule and its own `fdlg_sel_bar` (§38.3): the geometry
+differs, the argument does not.
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 
@@ -7931,7 +8090,37 @@ content-relative:
 ```
 
 The selected row is an XOR bar across the list interior, exactly as §22
-draws its own (`gfx_xor_fill` under the held lock).
+draws its own (`gfx_xor_fill` under the held lock) — and, for the same
+reason, **moving the selection costs two of those bars and nothing else**.
+`fdlg_sel_bar` is §22.2's `fm_sel_bar` in this module's geometry: same
+range-checking, same factored-out-of-the-painter argument, same XOR-is-its-
+own-inverse trick. A row click used to run `fdlg_draw_both` — refill the
+list interior, re-letter six rows and their sizes, redraw the scroll bar
+frame, both rules, both arrows, the track and the thumb — to move one strip.
+
+The dialog needs one thing the Disk window does not: **the name box follows
+the selection** (`fdlg_pick`), so "did the selection move" is the wrong
+question and "did the box move" is the right one. Only the setter can answer
+it, so `fdlg_setname` returns **CF = 1 when the stored text, length or caret
+is not what it was** and `fdlg_pick` passes that through. What falls out:
+
+- a **different** row → two bands, plus the name box only if it actually
+  took a new name (landing on a *folder* row leaves the box alone, and now
+  leaves its pixels alone too);
+- the row **already selected** → the click re-arms the double-click window
+  and draws **nothing**, unless something was typed into the box since, in
+  which case the box alone is redrawn and the list still is not. That last
+  case is what keeps behaviour identical: clicking the selected row still
+  puts the file's name back over what you typed.
+
+The fallback is `fdlg_setsel` scrolling the selection into view, which moves
+every row: `[fdlg_scrl]` is compared across the call and a change sends the
+click back to `fdlg_draw_both`. A **click** can never trigger it — the hit
+test is bounded by what is drawn — but the keyboard shares `fdlg_setsel`,
+and comparing one word is cheaper than proving that.
+
+`fdlg_sel_bar` asks `fdlg_rows` for the total instead of reading
+`[fdlg_shown]`, which is painter scratch and means nothing on a click.
 
 **The button column** carries Open/Save, Cancel, Drive and — in **save mode
 only** — a **two-line New / Folder** button (`FD_BH2`, drawn by `fdlg_btn2`),
@@ -7960,16 +8149,22 @@ The dialog lists **the mounted volume's current directory** — `disk_dir` /
 through `dsk_get_dir`. It never touches `VIEW_SEG` and never copies the
 listing anywhere (§38.2).
 
-**Display rows** are the directory entries, with one synthetic row `..`
-prepended when `[dsk_cwd]` ≠ 0. So `fdlg_rows` = `disk_nfiles` + (cwd ≠ 0),
-and display row *r* maps to directory index *r* − (cwd ≠ 0). The `..` row is
-the only navigation affordance the list carries; `.` and `..` are filtered
-out of the listing itself by §19's species rules and are not re-surfaced.
+**A display row IS a directory index**, and `fdlg_rows` is just
+`disk_nfiles`. It used not to be: this module synthesized its own `..` row
+and carried the resulting +1 offset through every row ↔ index conversion in
+it. The mount puts the parent link in the listing now (§19.5), as a type-3
+entry carrying the parent's first cluster, so the dialog, the Disk window
+and every view cache get the same row from the same place — and the offset,
+and the one routine that existed to decide it, are gone. The on-disk `.` and
+`..` entries are still filtered out by §19's species rules; the row the user
+sees is the synthesized one.
 
 **Acting on a row** (double-click, or Enter, or the Open/Save button):
 
-- `..` → `dsk_dotdot` then `dsk_chdir` — §19.2's walk, no path stack.
-- type 2 (subdirectory) → `dsk_chdir` into it.
+- type 2 (subdirectory) or type 3 (the `..` link) → `dsk_chdir` into the
+  entry's first cluster. `..` needs no special case and no second walk of
+  the directory off the disk: the mount already put the parent's cluster
+  there.
 - type 0/1 (a file) → **Open**: that is the answer, commit it. **Save**:
   copy the name into the edit field, do not commit — replacing a file is a
   thing the user must still press Save for.
@@ -8181,8 +8376,8 @@ no longer always reaches it.
 | `fdlg_paint` / `fdlg_onkey` / `fdlg_onclick` | The window procs; all three assume the held lock and never take it. |
 | `fdlg_draw_name` / `fdlg_draw_list` / `fdlg_draw_both` | §38.8. Erase one rectangle and redraw it. All assume the held lock and a valid `[fdlg_cx]`/`[fdlg_cy]`; all preserve every register. |
 | `fdlg_name_body` / `fdlg_list_body` | The same drawing without the erase, for `fdlg_paint`, which is handed a white content. |
-| `fdlg_rows` | Out: AX = display rows = `disk_nfiles` + (`[dsk_cwd]` ≠ 0), CX = the `..` offset (0 or 1). The one place that offset is decided. |
-| `fdlg_stage` | In: AX = display row. Out: `fdlg_row` = its name, `fdlg_type` / `fdlg_size`+`fdlg_sizeh` its §19 type word and size dword; the `..` row is synthesized as type 2. |
+| `fdlg_rows` | Out: AX = `disk_nfiles`. There is no offset any more — §19.5 put the `..` row in the listing, so a display row is a directory index. |
+| `fdlg_stage` | In: AX = display row, which IS a directory index (§19.5 put the `..` row in the listing, so this module no longer synthesizes one or carries an offset). Out: `fdlg_row` = its name, `fdlg_type` / `fdlg_size`+`fdlg_sizeh` its §19 type word and size dword. |
 | `fdlg_go` | In: AX = first cluster. `dsk_chdir` + reset selection and scroll. |
 
 **What this deliberately does not do.** No filtering by extension (an Open
