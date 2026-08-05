@@ -29,6 +29,7 @@ tree, not about the emulator.
 | AdLib / OPL2 | ✅ | `make test-snd ADLIB=1` | dominant 880.0 Hz from a keyed 440 |
 | Sound Blaster 16 | ✅ | `make test-snd SB16=1` | 2.00 s at 1000.0 Hz |
 | Scripted mouse / keys | ✅ | `tools/mouse.py`, `tools/qmp.py` | all adapters, incl. Hercules |
+| Performance benchmarks | ⚠️ | the **`testing` branch**, not here | numbers are always in flux — see below |
 | Video **detection probe** | ❌ | `make xt-cga` / `xt-hercules` | 86Box only |
 | 6845 programming | ❌ | `make xt-hercules` | 86Box only |
 | Period-correct timing | ❌ | `make xt` (4.77 MHz), `286`, `386` | 86Box only |
@@ -127,6 +128,65 @@ to attach announces itself by opening the Control Panel on its Drivers page.
 
 Depth, including the underrun and capture edge cases: `docs/SOUND-PLAN.md`
 Phase 4.
+
+---
+
+## Benchmarks live on the `testing` branch, and their numbers move
+
+The harnesses are not in this tree and are not meant to be. `apps/fontbench`
+and `apps/typebench` live on **`testing`**, along with `build/bench.img` and
+`build/bench360.img` — a two-package floppy in both geometries, tracked as
+binaries specifically so it can be written to a real disk without a
+toolchain. `fontbench` prices the *primitive* (SPEC.md §6.1.1): one
+ten-character run drawn four ways, as the hand-written `gfx_fill` +
+`font_str` pair and as one `font_run`, each byte-aligned and again at x+5.
+`typebench` prices the *keystroke* (SPEC.md §11.94): 40 characters typed into
+a 40-cell line with the whole line redrawn after each, which is what
+`np_redraw` does to its dirty band.
+
+```sh
+git fetch origin testing && git checkout testing
+make                                                       # builds the bench disk
+make test                            TESTAPPS=build/bench.img
+make test VIDEO=cga                  TESTAPPS=build/bench.img
+make test VIDEO=herc HERCSEG=0x7000  TESTAPPS=build/bench.img
+```
+
+**Treat every number as provisional and cite where it came from.** This is
+not a caveat about tidiness — the figures have been wrong in ways only real
+hardware exposed, twice in quick succession: the elapsed counter was 16-bit
+and a real run overflowed it, and then the ratio overflowed because it came
+from counts shifted right by 4 that real rows exceed. A third correction
+went the other way and landed in *this* tree, not that one: SPEC.md §6.1.1
+predicted `font_run`'s true win sat near the framebuffer-traffic figure, and
+a 4.77 MHz 8088 with a Hercules card measured 1.30x — the *instruction*
+figure to three digits. Per-cell overhead dominates the byte-writes it
+guards. So a benchmark number quoted here without a date and a machine is
+worth very little.
+
+Two structural things make it worse than ordinary staleness:
+
+- **`testing` is a sibling of `experimental`, not downstream of it.** It
+  branches from a shared ancestor and lags — at the time of writing 3 ahead
+  and 8 behind. A run from that branch therefore measures a slightly older
+  kernel than the one you are changing, and the gap only grows. Rebase or
+  merge `experimental` into it before trusting a comparison against work in
+  this tree.
+- **Under QEMU the numbers are not time at all.** QEMU runs the guest at host
+  speed, so add `-icount shift=3,sleep=off` and the PIT counts guest
+  *instructions* — reproducible and machine-independent, but not
+  microseconds, and it understates the mono win because what alignment
+  removes is disproportionately memory traffic. `build/bench360.img` on a
+  real 4.77 MHz 8088 (or 86Box) is where the PIT is a wall clock and the
+  microsecond column means microseconds. That is where these numbers are
+  worth taking.
+
+One trap if you ever move a harness between branches: on `testing` the bench
+disk is part of `all`, and deliberately so. `make check-images` compares
+every tracked file in `build/` against what `all` produces, so a tracked
+image `all` does not build reads as **ORPHAN** and one it builds differently
+reads as **STALE**. Tracking the images — the whole point of that branch — is
+what requires them to be built there.
 
 ---
 
