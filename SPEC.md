@@ -6328,6 +6328,71 @@ with a counter in `np_walk`'s loop: at 200 characters a keystroke went from
 the window to the full screen to **4** — bounded by the caret's column
 instead of by the note.
 
+### 27.5 Where each row starts — a query about a row costs a row
+
+§27.4 bounded the *keystroke*. It did nothing for the caret keys, and they
+were the worse case: Up ran **four** full walks — `np_vmove` measured to find
+where the caret is, `np_move` measured again to find the index at the column
+above it, and `np_redraw` then measured and drew. At ~500 8086 cycles a
+character a walk that is ~170 ms per arrow key on a 400-character note.
+
+Every one of those walks exists to answer a question about **one row**: where
+is the caret's row, what index sits at column C of row R, what did this click
+land on. The only reason a walk had to start at index 0 was that nothing
+recorded where a row begins. `np_rows` is that record — `NP_MAXROWS` words,
+the buffer index each visible row starts at, written by `np_rstart` beside the
+checkpoint candidate it already banks. With it, and with `[np_lastrow]`
+telling `np_walk` the last row this pass cares about, every query is a walk of
+at most `np_rcols` cells:
+
+| event | before | after |
+|---|---|---|
+| type a character | 60 | 60 |
+| Left / Right | 804 | 60 |
+| Home / End | 1,608 | 90 |
+| Up / Down | 1,608 | 184 |
+
+(walk iterations on a 400-character note, counted under QEMU)
+
+Five things hold it up:
+
+- **`[np_lastrow]` is one-shot** — `np_walk` resets it to 0xFFFF on the way
+  out. A caller that forgets to set it walks the whole note, which is slow and
+  never wrong; the other polarity would silently truncate somebody else's
+  pass.
+- **The `np_lastrow` stop leaves `np_rows` alone; the `[np_bstop]` stop
+  invalidates it.** Stopping early because the caller knows nothing below
+  moved is not the same as stopping early because the note is not being laid
+  out at all — the second leaves the table describing a buffer that has since
+  shifted, so it clears `[np_rowsok]` and the reconcile's full pass rebuilds
+  it.
+- **The fallback is what makes a stale table safe.** `np_seedrow` refuses a
+  row at or past `[np_rowsn]` — a click on the blank space below the text —
+  and the caller runs the full walk instead. Without it a stale entry answers
+  with a plausible wrong index rather than an obvious wrong one.
+- **`np_bounds` invalidates on a geometry change.** The checkpoint and
+  `np_rows` are row *indices*, so they mean nothing under a different layout.
+  `np_sigsame` guards `np_redraw`, but nothing guarded the caret keys, so the
+  test lives in `np_bounds` where every path already goes.
+- **A caret move may resume too, and it must seed at the EARLIER of the two
+  rows.** Up lands on the row above the checkpoint, and seeding at the
+  checkpoint would walk straight past the caret without ever finding it —
+  `[np_curx]`/`[np_cury]` stay 0 and the bar is drawn at the content's origin.
+  `np_move` moves the checkpoint back to the target row before arming
+  `[np_fast]` = 3.
+- **The settle happens before the seed, not inside `np_measure`.** A reconcile
+  runs walks of its own, and they would spend the seed the caller had just
+  set. `np_vmove`, `np_hmove` and `np_onclick` call `np_settle` first for that
+  reason; `np_measure` keeps its own call as the backstop, where it is now
+  always a no-op.
+
+Verified by differential: an identical scripted session of typing, arrows,
+Home/End, backspace, Delete, Enter and two clicks produces a **pixel-identical
+window** on the seeded build and the full-walk build — except for one cell,
+where the full-walk build left a **stale caret** overdrawing a character and
+the seeded one did not. The incremental screen is also pixel-identical to a
+from-scratch `W_PAINT` repaint of the same state.
+
 ## 28. taskmgr.inc — the Task Manager window
 
 Built-in singleton app kind (KIND_TASKMGR, cap 1 — one sampler), window

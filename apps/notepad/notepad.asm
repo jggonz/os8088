@@ -116,7 +116,7 @@ NP_MAXROWS   equ 60             ; signature slots, one per row the content can
                                 ; this, so a taller screen degrades to "the
                                 ; rows past 60 are always redrawn" rather than
                                 ; writing past the array
-NP_BSS_TOTAL equ 972 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
+NP_BSS_TOTAL equ 982 + NP_IOCAP + NP_MAXROWS*2  ; see the bss layout below
 NP_BRK_CELLS equ 60             ; the visual break's trigger (SPEC.md 27.3):
                                 ; the CELLS a keystroke would repaint BELOW
                                 ; the caret's row. Not rows - this window is
@@ -278,9 +278,29 @@ np_bounds:
     mov ax, NP_MAXROWS
 .vok:
     mov [np_vrows], ax
-    jmp short .out
+    jmp short .geom
 .norows:
     mov word [np_vrows], 0
+.geom:
+    ; The checkpoint and np_rows are ROW INDICES, so they mean nothing under a
+    ; different geometry - and unlike the signatures, nothing else was going to
+    ; notice. np_sigsame guards np_redraw; this guards everything else, which
+    ; is every caret key and every click.
+    mov ax, [np_tx]
+    cmp ax, [np_stx]
+    jne .stale
+    mov ax, [np_ty]
+    cmp ax, [np_sty]
+    jne .stale
+    mov ax, [np_rgt]
+    cmp ax, [np_srgt]
+    jne .stale
+    mov ax, [np_bot]
+    cmp ax, [np_sbot]
+    je .out
+.stale:
+    mov byte [np_ckok], 0
+    mov byte [np_rowsok], 0
 .out:
     pop dx
     pop cx
@@ -339,15 +359,15 @@ np_walk:
     mov word [np_rowh], 0           ; with nothing folded into it yet
     mov bx, [np_len]                ; BX = characters remaining
     mov si, np_buf
-    cmp byte [np_resume], 0         ; ...or, for a keystroke at the caret,
-    je .seeded                      ; start where the caret's row does
-    mov ax, [np_ckpi]               ; (SPEC.md 27.4). Everything before it
-    cmp ax, [np_len]                ; laid out identically last time and
-    ja .seeded                      ; cannot have moved, so its signatures
-    mov [np_i], ax                  ; still stand and its pixels are on screen
-    add si, ax
+    cmp byte [np_resume], 0         ; ...or start part-way in: at the caret's
+    je .seeded                      ; own row for a keystroke (SPEC.md 27.4),
+    mov ax, [np_sdi]                ; or at any row np_rows named (SPEC.md
+    cmp ax, [np_len]                ; 27.5). Everything before the seed laid
+    ja .seeded                      ; out identically last time and cannot have
+    mov [np_i], ax                  ; moved, so its signatures still stand and
+    add si, ax                      ; its pixels are on screen
     sub bx, ax
-    mov ax, [np_ckpr]
+    mov ax, [np_sdr]
     mov [np_row], ax
     mov cl, 3
     shl ax, cl
@@ -367,7 +387,11 @@ np_walk:
     call np_nextrow                 ; the pen changed rows, so the signature
     call np_bpush                   ; being accumulated belongs to the old one
     call np_rstart                  ; ...and in break mode the rows below have
-.fits:                              ; to be pushed down before it is drawn
+    mov ax, [np_row]                ; to be pushed down before it is drawn
+    cmp ax, [np_lastrow]
+    jbe .fits
+    jmp .stop                       ; past every row this pass was asked about
+.fits:
     call np_ask                     ; the queries, at the settled pen
     cmp byte [np_draw], 0
     je .body
@@ -378,8 +402,10 @@ np_walk:
     mov ax, [np_i]                  ; whole point is that the note below it
     cmp ax, [np_cur]                ; is not being laid out at all
     jne .nostop
-    jmp .done                       ; near: .done is past a short jump's reach
-.nostop:
+    mov byte [np_rowsok], 0         ; ...which leaves np_rows stale below the
+    jmp .done                       ; caret: the note MOVED and this walk did
+.nostop:                            ; not rewrite where. Near: .done is past a
+                                    ; short jump's reach
     test bx, bx
     jz .done                        ; the index past the last character: the
                                     ; queries have seen it, and there is no
@@ -394,8 +420,10 @@ np_walk:
     add bp, 8                       ; newline: carriage return + line feed,
     call np_nextrow                 ; and it occupies no cell - so it is not
     call np_rstart                  ; folded into either row's signature, and
-    jmp .loop                       ; the pixels of the row it ends are the
-                                    ; same with it and without it
+    mov ax, [np_row]                ; the pixels of the row it ends are the
+    cmp ax, [np_lastrow]            ; same with it and without it
+    jbe .loop
+    jmp .stop
 .glyph:
     push ax                         ; fold it in whatever this pass is for:
     xor ah, ah                      ; the pass that COMPUTES the signatures is
@@ -452,6 +480,10 @@ np_walk:
     jmp short .blank
 
 .sigpad:
+    mov ax, [np_row]                ; a walk that ran to its natural end is
+    inc ax                          ; what np_rows describes, rows 0..np_row
+    mov [np_rowsn], ax              ; (SPEC.md 27.5) - a STOPPED one leaves
+    mov byte [np_rowsok], 1         ; the tail of the table stale
     cmp byte [np_sigup], 0
     je .fin
 .pad:
@@ -459,8 +491,16 @@ np_walk:
     mov ax, [np_row]                ; every visible row after it: a note that
     cmp ax, [np_vrows]              ; SHRANK leaves rows behind that are no
     jb .pad                         ; longer reached, and their old signature
-.fin:                               ; is exactly what says they must be erased
-
+                                    ; is exactly what says they must be erased
+.stop:                              ; the np_lastrow stop leaves np_rows ALONE:
+                                    ; a walk that ends early is one whose
+                                    ; caller knows nothing below it moved, so
+                                    ; the entries past it are still what the
+                                    ; last full pass wrote
+.fin:
+    mov word [np_lastrow], 0xFFFF   ; ONE-SHOT: a caller that forgets to set it
+                                    ; gets the whole note, which is slow and
+                                    ; never wrong
     pop bp
     pop di
     pop si
@@ -663,6 +703,13 @@ np_rstart:
     mov [np_ckpc], ax               ; checkpoint candidate: np_ask promotes it
     mov ax, [np_row]                ; the moment the walk stands on the caret
     mov [np_ckpcr], ax              ; (SPEC.md 27.4)
+    cmp ax, NP_MAXROWS              ; ...and into np_rows, which is the same
+    jae .norow                      ; fact for every row rather than for the
+    shl ax, 1                       ; caret's (SPEC.md 27.5)
+    mov di, ax
+    mov ax, [np_i]
+    mov [di+np_rows], ax
+.norow:
     mov di, np_rbuf
     mov cx, [np_rcols]
     mov al, ' '
@@ -987,7 +1034,7 @@ np_brkdraw:
     mov byte [np_draw], 1
     mov byte [np_sigup], 0
     mov byte [np_clip], 0
-    mov byte [np_resume], 1
+    call np_seedck
     mov byte [np_bstop], 1
     mov byte [np_didpush], 0
     mov byte [np_bfail], 0
@@ -1396,6 +1443,53 @@ np_settle:
     ret
 
 ; -----------------------------------------------------------------------------
+; np_seedck - seed the next walk at the caret's row (SPEC.md 27.4)
+; np_seedrow - seed it at row AX instead, and stop after row DX (SPEC.md 27.5)
+; out: [np_resume] set if the seed is usable, left 0 if the walk must start at
+;      index 0 after all; preserves all registers
+;
+; np_rows only describes rows the last completed walk reached, so a query about
+; a row past [np_rowsn] - a click on the blank space below the text - has to
+; fall back. That fallback is the ONLY thing keeping a stale table from
+; answering with a plausible wrong index.
+; -----------------------------------------------------------------------------
+np_seedck:
+    push ax
+    mov byte [np_resume], 0
+    cmp byte [np_ckok], 0
+    je .out
+    mov ax, [np_ckpi]
+    mov [np_sdi], ax
+    mov ax, [np_ckpr]
+    mov [np_sdr], ax
+    mov byte [np_resume], 1
+.out:
+    pop ax
+    ret
+
+np_seedrow:
+    push ax
+    push bx
+    mov byte [np_resume], 0
+    cmp byte [np_rowsok], 0
+    je .out
+    cmp ax, [np_rowsn]
+    jae .out                        ; a row the table never described
+    mov [np_sdr], ax
+    shl ax, 1
+    mov bx, ax
+    mov ax, [bx+np_rows]
+    cmp ax, [np_len]
+    ja .out
+    mov [np_sdi], ax
+    mov [np_lastrow], dx
+    mov byte [np_resume], 1
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; np_paint - W_PAINT: draw the buffer and the caret
 ; in:  SI = window ptr (content already white-filled, gfx lock held)
 ; out: nothing; preserves all registers
@@ -1741,13 +1835,54 @@ np_del:
 ; -----------------------------------------------------------------------------
 np_move:
     push ax
+    push dx
     mov word [np_hity], 0xFFFF      ; one query at a time
+    mov ax, [np_wanty]              ; the row it names is the ONLY row this
+    sub ax, [np_ty]                 ; walk has to visit (SPEC.md 27.5)
+    jc .full
+    push cx
+    mov cl, 3
+    shr ax, cl
+    pop cx
+    mov dx, ax
+    call np_seedrow
+.full:
     call np_measure
+    mov byte [np_resume], 0
     mov ax, [np_wanti]
     cmp ax, 0xFFFF
     je .out                         ; no such row: the caret stays put, which
     mov [np_cur], ax                ; is what Up on the first line should do
+
+    ; The caret moved but nothing else did, so the repaint may resume too - at
+    ; whichever of the two rows comes FIRST. Up lands on the row above the
+    ; checkpoint, and seeding at the checkpoint would then walk straight past
+    ; the caret without ever finding it, which draws the bar at (0,0).
+    mov ax, [np_wanty]
+    sub ax, [np_ty]
+    jc .out
+    push cx
+    mov cl, 3
+    shr ax, cl
+    pop cx
+    cmp ax, [np_ckpr]
+    jae .arm                        ; already at or after the checkpoint
+    cmp byte [np_rowsok], 0
+    je .out
+    cmp ax, [np_rowsn]
+    jae .out
+    push bx
+    mov [np_ckpr], ax
+    shl ax, 1
+    mov bx, ax
+    mov ax, [bx+np_rows]
+    mov [np_ckpi], ax
+    pop bx
+.arm:
+    mov byte [np_fast], 3
 .out:
+    mov byte [np_resume], 0
+    pop dx
     pop ax
     ret
 
@@ -1763,9 +1898,21 @@ np_move:
 np_vmove:
     push ax
     push dx
+    call np_settle                  ; before the seed, not inside np_measure:
+                                    ; a reconcile runs walks of its own and
+                                    ; would spend the seed we are about to set
     mov word [np_hity], 0xFFFF
     mov word [np_wanty], 0xFFFF
+    push dx                         ; the caret is on its checkpoint's row by
+    mov dx, [np_ckpr]               ; definition, so this walk is that row and
+    call np_seedck                  ; no more (SPEC.md 27.4/27.5)
+    cmp byte [np_resume], 0
+    je .nolim
+    mov [np_lastrow], dx
+.nolim:
+    pop dx
     call np_measure                 ; [np_curx]/[np_cury]
+    mov byte [np_resume], 0
     mov ax, [np_cury]
     add ax, dx
     mov [np_wanty], ax
@@ -1783,10 +1930,22 @@ np_vmove:
 ; -----------------------------------------------------------------------------
 np_hmove:
     push ax
+    call np_settle                  ; before the seed - see np_vmove
     mov word [np_hity], 0xFFFF
     mov word [np_wanty], 0xFFFF
+    cmp byte [np_ckok], 0           ; the caret's row IS the checkpoint's, so
+    je .measure                     ; Home and End need no walk at all to find
+    mov ax, [np_ckpr]               ; the row they are aiming at
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_ty]
+    jmp short .have
+.measure:
     call np_measure                 ; [np_cury] = the row we are on
     mov ax, [np_cury]
+.have:
     mov [np_wanty], ax
     mov [np_wantx], dx
     call np_move
@@ -1805,10 +1964,25 @@ np_hmove:
 ; -----------------------------------------------------------------------------
 np_onclick:
     push ax
+    push dx
     mov [np_hitx], cx
     mov [np_hity], dx
     mov word [np_wanty], 0xFFFF
+    call np_settle                  ; the pointer has to be over the NOTE
+    call np_bounds                  ; before it can be resolved (SPEC.md 27.3)
+    mov ax, dx                      ; the row the click landed on is the only
+    sub ax, [np_ty]                 ; one that can answer it (SPEC.md 27.5)
+    jc .full
+    push cx
+    mov cl, 3
+    shr ax, cl
+    pop cx
+    mov dx, ax
+    call np_seedrow
+.full:
+    pop dx
     call np_measure
+    mov byte [np_resume], 0
     mov ax, [np_hiti]
     cmp ax, [np_cur]
     je .out                         ; the caret did not move: no repaint
@@ -1861,6 +2035,25 @@ np_fastokb:
     mov bx, 2
     mov ax, [np_cur]
     dec ax
+    jmp short np_fastcm
+np_fastokm:                         ; Left: the caret lands one index back, so
+    push ax                         ; that is the earliest cell that changes
+    push bx
+    mov bx, 3
+    mov ax, [np_cur]
+    dec ax
+    jmp short np_fastcm
+np_fastokr:                         ; Right: it lands one FORWARD, and the cell
+    push ax                         ; it leaves is the one it is on now
+    push bx
+    mov bx, 3
+    mov ax, [np_cur]
+    jmp short np_fastcm
+np_fastokd:                         ; forward Delete: an edit AT the caret, but
+    push ax                         ; never one the visual break is entered on
+    push bx
+    mov bx, 2
+    mov ax, [np_cur]
 np_fastcm:
     cmp byte [np_ckok], 0
     je .out
@@ -1945,18 +2138,21 @@ np_onkey:
     mov ax, [np_cur]                ; forward delete: the caret stays put
     cmp ax, [np_len]
     jae .out
+    call np_fastokd
     call np_del
     jmp short .edited
 
 .left:
     cmp word [np_cur], 0
     je .out
-    dec word [np_cur]
+    call np_fastokm                 ; a caret move is not an edit, but the row
+    dec word [np_cur]               ; above it still cannot have changed
     jmp short .edited
 .right:
     mov ax, [np_cur]
     cmp ax, [np_len]
     jae .out
+    call np_fastokr
     inc word [np_cur]
     jmp short .edited
 .up:
@@ -2039,8 +2235,11 @@ np_redraw:
     call np_sigsame
     pop ax
     jc .full
-    mov [np_resume], al             ; only a keystroke at the caret may skip
-                                    ; the rows above it (SPEC.md 27.4)
+    mov [np_ekind], al              ; 1 insert, 2 backspace, 3 a caret move
+    or al, al
+    jz .noseed
+    call np_seedck                  ; only an edit at the caret may skip the
+.noseed:                            ; rows above it (SPEC.md 27.4)
 
     mov word [np_hity], 0xFFFF      ; pass 1: no queries, no drawing - just
     mov word [np_wanty], 0xFFFF     ; which rows stopped matching
@@ -2054,7 +2253,7 @@ np_redraw:
     cmp ax, 0xFFFF
     je .done                        ; not one pixel of the text moved
 
-    cmp byte [np_resume], 1         ; would this reflow cost more than pushing
+    cmp byte [np_ekind], 1          ; would this reflow cost more than pushing
     jne .band                       ; the note down a row? (SPEC.md 27.3)
                                     ; 1 is an insert and 2 a backspace: the
                                     ; break is only ENTERED on an insert,
@@ -2123,9 +2322,11 @@ np_redraw:
     pop dx
     pop bx
 
-    mov byte [np_draw], 1           ; pass 2: draw, and only inside it
-    mov byte [np_sigup], 0
-    mov byte [np_clip], 1
+    mov byte [np_draw], 1           ; pass 2: draw, and only inside it - and
+    mov byte [np_sigup], 0          ; STOP at it, because pass 1 already knows
+    mov byte [np_clip], 1           ; no row below np_dr1 changed. An arrow key
+    mov ax, [np_dr1]                ; dirties two rows and used to lay out the
+    mov [np_lastrow], ax            ; whole note behind them to draw them
     call np_walk
     mov byte [np_clip], 0
 
@@ -2626,5 +2827,27 @@ np_bstop    equ os88_image_end + 970 + NP_IOCAP    ; byte: THIS walk ends at
                                        ; np_measure answers clicks and arrow
                                        ; keys and has to see the whole note
                                        ; even while the break is up
-np_pad5     equ os88_image_end + 971 + NP_IOCAP    ; byte: keeps the total even
+np_rowsok   equ os88_image_end + 971 + NP_IOCAP    ; byte: np_rows describes
+                                       ; this layout
+
+; --- where each row starts (SPEC.md 27.5) ------------------------------------
+; The checkpoint above is the caret's row start; this is EVERY row's, which is
+; what turns a query about an arbitrary row into a bounded walk. A click, an
+; Up and a Home all name a row and want the index at a column of it, and
+; without this each of them re-derived the whole layout from index 0 to answer
+; a question about thirty characters.
+np_rows     equ os88_image_end + 972 + NP_IOCAP    ; NP_MAXROWS words
+np_rowsn    equ os88_image_end + 972 + NP_IOCAP + NP_MAXROWS*2   ; word: how
+                                       ; many of them the last full walk wrote
+np_sdi      equ os88_image_end + 974 + NP_IOCAP + NP_MAXROWS*2   ; word } the
+np_sdr      equ os88_image_end + 976 + NP_IOCAP + NP_MAXROWS*2   ; word } seed
+np_lastrow  equ os88_image_end + 978 + NP_IOCAP + NP_MAXROWS*2   ; word: the
+                                       ; last row this walk cares about. ONE-
+                                       ; SHOT and reset to 0xFFFF by np_walk,
+                                       ; so a caller that forgets gets the
+                                       ; whole note - slow, never wrong
+np_ekind    equ os88_image_end + 980 + NP_IOCAP + NP_MAXROWS*2   ; byte: what
+                                       ; np_redraw is redrawing for: 1 insert,
+                                       ; 2 backspace, 3 a caret move
+np_pad5     equ os88_image_end + 981 + NP_IOCAP + NP_MAXROWS*2   ; byte: even
                                        ; total 972 + NP_IOCAP = NP_BSS_TOTAL
