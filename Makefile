@@ -85,8 +85,10 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
 .PHONY: all run run-640 debug test test-snd xt xt-640 xt-cga xt-hercules \
-        286 386sx 386 xt-sound 286-sound 386-sound check-images clean
+        286 386sx 386 xt-sound 286-sound 386-sound check-images bench clean
 
+# `all` deliberately does NOT build anything under tests/ (see the bench block
+# below). The testing apps are on-demand only: `make bench`.
 all: $(IMG) $(IMG360) $(APPSIMG) $(APPSIMG360)
 
 $(BUILD):
@@ -357,6 +359,73 @@ $(BUILD)/filetest.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88disk.py
 $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 --scramble $(BUILD)/filetest.o88 $(BUILD)/mines.o88 $(BUILD)/piano.o88
 
+# --- the benchmark disk, from tests/ (ON DEMAND: `make bench`) ---------------
+#
+# These are the only packages in the tree built from OUTSIDE apps/, and the
+# folder is the point: tests/ holds testing apps, `all` never builds them, and
+# no artifact of theirs is tracked. That keeps a normal build - and every
+# shipped image - free of them, and it keeps `make check-images` honest, which
+# reads its list from `git ls-files build`: an untracked bench.img is invisible
+# to it, where a tracked one would have to be built by `all` or read as ORPHAN.
+# The DEVELOPMENT of these apps happens on the `testing` branch; what lands
+# here is a finished harness, so experimental never carries the midway
+# artifacts of writing one.
+#
+# FONTBENCH prices the PRIMITIVE (SPEC.md 6.1.1): the same ten-character run
+# drawn four ways - the hand-written gfx_fill + font_str pair and one
+# font_run, each at a byte-aligned x and again at x+5.
+#
+# TYPEBENCH prices the KEYSTROKE (SPEC.md 11.94): 40 random characters typed
+# into a 40-cell line with the whole line redrawn after each one, which is
+# what np_redraw does to its dirty band. It is snappable itself and says in
+# its header whether the snap took.
+#
+# BOTH ride one disk, built in both geometries, because they answer the same
+# question at two scales and you want them side by side:
+#
+#   make bench                                             # build the disks
+#   make test                            TESTAPPS=build/bench.img   # 1.44M, QEMU
+#   make test VIDEO=cga                  TESTAPPS=build/bench.img
+#   make test VIDEO=herc HERCSEG=0x7000  TESTAPPS=build/bench.img
+#
+# `make test TESTAPPS=build/bench.img` builds the disk on demand by itself -
+# TESTAPPS is a prerequisite of the test targets - so `make bench` is for
+# building it without booting (e.g. to write build/bench360.img to a floppy).
+#
+# build/bench360.img is the same disk at 9 spt / 40 cylinders - what an XT
+# BIOS can actually read, so it is the one to write to a real 5.25" floppy or
+# hand to 86Box. THAT is where these numbers are worth taking: on a 4.77MHz
+# 8088 the PIT is a wall clock and the microsecond column means microseconds.
+#
+# Under QEMU it does not. QEMU runs the guest at host speed, so add
+# `-icount shift=3,sleep=off` and the PIT counts guest INSTRUCTIONS instead -
+# reproducible and machine-independent, but not time, and it understates the
+# mono win because what alignment removes is disproportionately memory
+# traffic (SPEC.md 6.1.1).
+BENCHPKGS := $(BUILD)/fontbnch.o88 $(BUILD)/typebnch.o88
+
+bench: $(BUILD)/bench.img $(BUILD)/bench360.img
+
+$(BUILD)/fontbnch.bin: tests/fontbench/fontbench.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/fontbench/fontbench.asm
+	@echo "fontbnch: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/fontbnch.o88: $(BUILD)/fontbnch.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/fontbnch.bin -o $@
+
+$(BUILD)/typebnch.bin: tests/typebench/typebench.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/typebench/typebench.asm
+	@echo "typebnch: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/typebnch.o88: $(BUILD)/typebnch.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/typebnch.bin -o $@
+
+$(BUILD)/bench.img: $(BENCHPKGS) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BENCHPKGS)
+
+$(BUILD)/bench360.img: $(BENCHPKGS) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BENCHPKGS)
+
 # There WAS a third image here - the same package on a FAT16 volume, built on
 # the 2.88MB test geometry, which exercised the one part of the write path
 # FAT12 cannot. It went with DSK_FAT_SECS: at 10 sectors the mount's rule 10
@@ -456,17 +525,25 @@ ifeq ($(NOCARD)$(ADLIB)$(SB16),)
 DEVCARD = -audiodev none,id=devsnd -device adlib,audiodev=devsnd
 endif
 
-test: $(IMG) $(APPSIMG)
+# TESTAPPS swaps the B: disk for a scratch image - the filetest/fmtest/sbtest
+# gates and the bench disk. It MUST be defined above the first target that
+# names it: prerequisites are expanded when the rule is READ, so a definition
+# below `test:` leaves that prerequisite empty. It sat below for a long time
+# and `test` therefore hard-coded $(APPSIMG) - so `make test TESTAPPS=...`
+# silently booted the SHIPPED apps disk, which reads as the scratch image
+# having failed to build rather than never having been mounted.
+TESTAPPS ?= $(APPSIMG)
+
+test: $(IMG) $(TESTAPPS)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
-		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 \
+		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 \
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
 		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV) $(DEVCARD)
 
 # `make test` plus audio capture (SPEC.md 34): the PC speaker renders into
 # build/snd.wav, finalized when QMP `quit` stops QEMU. Verify with
-# tools/sndcheck.py (RMS + dominant-frequency assertions). TESTAPPS swaps
-# the B: disk for a scratch image (the filetest gate above).
-TESTAPPS ?= $(APPSIMG)
+# tools/sndcheck.py (RMS + dominant-frequency assertions). TESTAPPS (defined
+# above `test`) swaps the B: disk for a scratch image.
 test-snd: $(IMG) $(TESTAPPS)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 \
