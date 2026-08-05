@@ -91,11 +91,6 @@ make sees an up-to-date `kernel.bin`, boots the previous adapter, and it reads e
 like the probe being broken.
 
 **Installing the toolchain in a fresh container (read this before fighting apt).**
-`.claude/hooks/session-start.sh` now does all of this on session start, so on
-the web there should be nothing to install by hand — but read the rest anyway
-before debugging a failure, because the hook is only the recipe below with the
-version derived rather than hard-coded (`apt-cache madison`'s `noble/main`
-line, since the `-updates` version moves and a pin written down goes stale).
 `nasm` installs normally. `qemu-system-x86` does **not**: the package index
 lists the `noble-updates` build, whose `.deb` 404s on `archive.ubuntu.com` and
 then times out against `security.ubuntu.com`, so a plain
