@@ -2570,16 +2570,15 @@ fm_editkey:
     ; 'a' replaces every one that follows, and anything else stops the
     ; operation with what has already been copied left in place.
 .replace:
-    xor ah, ah                  ; stop
-    cmp al, 13
-    je .rep_go
-    inc ah                      ; replace this one
-    cmp al, 'a'
-    je .rep_all
-    cmp al, 'A'
-    jne .rep_stop
-.rep_all:
-    inc ah                      ; ...and every one after it
+    mov ah, 1                   ; Enter: replace THIS one. The answer is built
+    cmp al, 13                  ; by loading it outright rather than by
+    je .rep_go                  ; counting `inc ah` up from the stop value -
+    cmp al, 'a'                 ; the branch for Enter jumped over that first
+    je .rep_all                 ; increment, so Enter delivered 0 and STOPPED
+    cmp al, 'A'                 ; the operation. The line on screen says
+    jne .rep_stop               ; 'Enter=yes' and the paste was cancelled by
+.rep_all:                       ; it, which left replacing a single file with
+    mov ah, 2                   ; no working answer at all
     jmp short .rep_go
 .rep_stop:
     xor ah, ah

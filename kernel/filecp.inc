@@ -226,6 +226,10 @@ fcp_paste:
     mov al, [fcp_drv]           ; the walk reads one word wherever it is
     mov [fcp_sdrv], al
 
+    call fcp_here               ; pasting into the folder it came from is
+    jc .empty                   ; nothing to do, and DOING it destroys the
+                                ; entry (see the proc below)
+
     call fcp_selfchk            ; a folder may not be pasted into itself
     jc .loop_err
 
@@ -259,6 +263,47 @@ fcp_paste:
     pop dx
     pop cx
     pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_here - is the paste target the folder the clipboard entry already lives
+;            in? (module-internal)
+; out: CF=1 = yes; all registers preserved
+;
+; The one case where doing the work DESTROYS the thing being copied, and it is
+; the easiest one in the system to reach: Copy (or Cut) and then Paste without
+; navigating anywhere. Source and destination are then the same directory, so
+; fcp_xfer opens a read stream on an entry and immediately hands that entry's
+; own name to dskw_write as a truncating create - which frees the chain the
+; stream is walking. A one-cluster file survives by luck; anything longer comes
+; back 0 bytes with FERR_IO, and a Cut then deletes what is left. A folder is
+; worse: fcp_mkroot ADOPTS a folder that is already there (SPEC.md 22.3), so
+; the walk mirrors a directory into itself and a Cut finishes with dskw_rmtree
+; on the destination.
+;
+; This is deliberately NOT fcp_selfchk's job. That one asks a question about
+; the TREE - is the destination inside the source - and only a folder can fail
+; it. This asks about one directory and applies to every species.
+;
+; A no-op rather than an error, which is what fm_dgdrop already decided for the
+; same fact arriving as a drag ("the drag went nowhere and there is nothing to
+; do"): the clipboard is left armed, so the user can navigate somewhere it does
+; mean something and paste there.
+; -----------------------------------------------------------------------------
+fcp_here:
+    push ax
+    mov al, [fcp_drv]
+    cmp al, [fcp_ddrv]
+    jne .no
+    mov ax, [fcp_cwd]
+    cmp ax, [fcp_dcwd]
+    jne .no
+    pop ax
+    stc
+    ret
+.no:
+    pop ax
+    clc
     ret
 
 ; -----------------------------------------------------------------------------

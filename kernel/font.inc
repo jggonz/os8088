@@ -644,6 +644,29 @@ font_run_cell:
     mov si, font_rn_zero        ; an unprintable character is a blank cell -
 .have:                          ; which still has to be PAINTED here
 
+    ; The back buffer's dirty rect, which this path owes exactly as
+    ; font_char_bb does (SPEC.md 32). It is easy to miss here because the
+    ; target is [vid_rseg] either way and on MONO that IS the framebuffer, so
+    ; the cell appears the moment it is written and nothing looks wrong. On a
+    ; VGA with double buffering armed, bb_set repoints [vid_rseg] at the back
+    ; buffer and gfx_unlock flushes only what bb_dirty was told about - so an
+    ; unmarked cell is rendered, correctly, into memory nobody copies to VRAM.
+    ; The symptom is position-dependent and reads as anything but this: the
+    ; fast path needs a byte-aligned x, so the Task Manager froze solid at one
+    ; window x and ran perfectly one pixel either side of it.
+    ; bb_dirty is a no-op when [bb_dbl] is 0, which is every mono machine.
+    push cx                     ; x and y are still wanted below
+    push dx
+    mov ax, cx
+    mov cl, 3
+    shr ax, cl                  ; AX = this cell's byte column...
+    mov bx, ax                  ; ...and its right column: an aligned 8px cell
+    mov cx, dx                  ; is exactly one byte wide
+    add dx, 7                   ; CX/DX = the rows it covers, inclusive
+    call bb_dirty               ; clobbers flags only
+    pop dx
+    pop cx
+
     mov di, cx                  ; DI = x/8 FIRST: gfx_rowbase clobbers CX
     mov cl, 3                   ; (and AX and DX), and this cell's column has
     shr di, cl                  ; to survive it
