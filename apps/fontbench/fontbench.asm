@@ -1,0 +1,508 @@
+; =============================================================================
+; os8088 - apps/fontbench/fontbench.asm
+;
+; FONTBENCH: the measurement behind SPEC.md 6.1.1. It times the two ways of
+; drawing an opaque text run - the erase-and-letter PAIR every caller wrote
+; by hand, and the single FONT_RUN call - against each other on whatever
+; adapter it is booted on, and reports both in PIT counts.
+;
+; It is never shipped on the apps disks (their order is pinned): the Makefile
+; builds it into its own scratch image, the fmtest/filetest precedent.
+;
+;   make test TESTAPPS=build/fontbench.img
+;   make test VIDEO=cga TESTAPPS=build/fontbench.img
+;   make test VIDEO=herc HERCSEG=0x7000 TESTAPPS=build/fontbench.img
+;
+; ...but boot it under QEMU with `-icount shift=3,sleep=off` or the numbers
+; are the HOST's speed, which is not an 8088's and not worth quoting. With
+; icount the PIT counts guest INSTRUCTIONS, so the answer is deterministic
+; (+/-1 count across runs) and the same on any machine. What it said:
+;
+;   adapter            PAIR   RUN aligned   RUN at x+1
+;   VGA ([bb_on] = 0)  2693       2760         2768
+;   CGA 640x200        3398       2693         3474
+;   Hercules 720x348   3368       2670         3443
+;
+; 1.26x on mono; 2.5% AGAINST on VGA, where [bb_on] is 0 and both FONT_RUN
+; rows take the fallback whatever the alignment - which is exactly why the
+; two of them land within 0.3% of each other there.
+;
+; Three rows are measured, all drawing the SAME 10-character string at the
+; same y, so the only thing that differs is how:
+;
+;   PAIR    GFX_FILL of the run's rect + FONT_STR over it. What every caller
+;           in the tree does today.
+;   RUN-A   FONT_RUN at an x that is a multiple of 8 - the fast path
+;           (SPEC.md 6.1), which is what the tracker's columns were moved to
+;           earn.
+;   RUN-U   FONT_RUN at x+1. Same call, but the alignment test fails, so it
+;           takes the fallback - which IS a fill plus a font_str. This row
+;           exists to price the fallback against doing it by hand, because
+;           that difference is the whole "never slower than doing it
+;           manually" claim, and it is the same code an unaligned or
+;           unbuffered caller lands on.
+;
+; --- how it is timed ---------------------------------------------------------
+;
+; NOT with GET_TICKS. A tick is 55ms and the whole point is the difference
+; between two loops that take a few milliseconds, so a tick count answers 0
+; or 1. Counter 0 of the 8253 is read directly instead: it is already running
+; at 1.193182 MHz for the system tick, so latching it costs nothing and
+; nobody's state is disturbed (latch is a read command, not a reprogram).
+; One unit is 838ns and it wraps every 55ms, which is why FB_N is sized to
+; keep a single measured run well inside one tick.
+;
+; Interrupts are OFF across each measured loop. Without that the scheduler
+; pre-empts the benchmark mid-run and bills another task's time to whichever
+; row was unlucky, and the numbers move by more than the effect being
+; measured. The counter keeps counting with IF=0, so the measurement is
+; unaffected - only the tick the kernel would have serviced is late, which
+; costs a few milliseconds of clock drift per press and nothing else.
+;
+; The counter counts DOWN, so elapsed is start - end - and it MUST be the
+; modular 16-bit subtraction, not a comparison. The counter reaches zero and
+; reloads once every 55ms whatever the measurement is doing, so `end > start`
+; does not mean the run overran: it means the run happened to straddle that
+; reload, which for a 3ms row is a one-in-eighteen coincidence. Testing for
+; it reported a perfectly good CGA row as an overflow, and only on some
+; presses - `sub` with the borrow discarded is already right in both cases.
+; What IS worth catching is a genuine overrun, and the threshold for that is
+; half the range: every row here costs a few thousand counts, so a difference
+; past 32768 is a run that lapped the counter and not a measurement.
+; =============================================================================
+
+%include "os88api.inc"
+
+    OS88_HEADER 'FONTBENCH', fb_entry
+
+FB_N      equ 120                 ; runs per row. Sized so the slowest row
+                                  ; (PAIR on Hercules) stays inside one 55ms
+                                  ; PIT wrap while still costing thousands of
+                                  ; counts, so the low digits are signal
+FB_LEN    equ 10                  ; characters in the measured string
+FB_W      equ FB_LEN * 8          ; ...and its pixel width
+
+FB_CONT_W equ 246
+FB_CONT_H equ 77
+
+; -----------------------------------------------------------------------------
+; fb_entry - package entry (SPEC.md 20.2)
+; in:  CS=DS=ES = our own segment; gfx lock NOT held
+; out: BX = window ptr, CF set = refused
+; -----------------------------------------------------------------------------
+fb_entry:
+    push si
+    call fb_head                    ; name the adapter in the header line
+    mov si, fb_tpl
+    call OSAPI_WM_CREATE
+    pop si
+    ret                           ; NEAR: the kernel reaches every proc here
+                                    ; through our own dispatcher (SPEC.md 20.1)
+
+; -----------------------------------------------------------------------------
+; fb_paint - W_PAINT: the three result lines, or the invitation
+; in:  SI = window ptr; gfx lock held; content already white
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+fb_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, si
+    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
+    mov [fb_cx], ax
+    mov [fb_cy], dx
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+
+    mov cx, [fb_cx]                 ; line 0: the adapter, so a screenshot
+    add cx, 4                       ; says which machine produced the numbers
+    mov dx, [fb_cy]
+    add dx, 3
+    mov si, fb_s_head
+    call OSAPI_FONT_STR
+
+    cmp byte [fb_done], 0
+    jne .rows
+    mov cx, [fb_cx]
+    add cx, 4
+    mov dx, [fb_cy]
+    add dx, 25
+    mov si, fb_s_hint
+    call OSAPI_FONT_STR
+    jmp short .out
+.rows:
+    mov si, fb_s_pair               ; the three measured rows
+    mov dx, [fb_cy]
+    add dx, 19
+    call fb_line
+    mov si, fb_s_runa
+    add dx, 12
+    call fb_line
+    mov si, fb_s_runu
+    add dx, 12
+    call fb_line
+    mov si, fb_s_ratio
+    add dx, 14
+    call fb_line
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; fb_line - one result line at DX; SI = the string. Preserves all registers.
+fb_line:
+    push cx
+    mov cx, [fb_cx]
+    add cx, 4
+    call OSAPI_FONT_STR
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; fb_onclick - W_ONCLICK: run the benchmark, then repaint ourselves
+; in:  SI = window ptr; gfx lock held
+; out: nothing; preserves all registers
+;
+; A callback must repaint itself - the kernel does not do it afterwards
+; (SPEC.md 12.3) - and here that matters twice over, because the measured
+; loops have been scribbling the test string over the content the whole time.
+; -----------------------------------------------------------------------------
+fb_onclick:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [fb_win], si
+    call fb_run
+    mov byte [fb_done], 1
+
+    mov bx, [fb_win]                ; wipe the scribbles, then draw the results
+    call OSAPI_WM_CONTENT
+    mov [fb_cx], ax
+    mov [fb_cy], dx
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    mov ax, [fb_cx]
+    mov bx, [fb_cy]
+    mov cx, ax
+    add cx, FB_CONT_W - 1
+    mov dx, bx
+    add dx, FB_CONT_H - 1
+    call OSAPI_GFX_FILL
+    mov si, [fb_win]
+    call fb_paint
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+fb_onkey:                           ; a keypress runs it too, so the window
+    jmp short fb_onclick            ; can be driven without aiming at content
+
+; -----------------------------------------------------------------------------
+; fb_run - measure all three rows and format them
+; in:  [fb_win]; gfx lock held
+; out: fb_s_pair/runa/runu/ratio filled in; preserves all registers
+;
+; The draw y is the LAST content row so the three loops cannot scribble over
+; the result lines while they run, and the x is rounded UP to a multiple of 8
+; so RUN-A gets the fast path whatever pixel the window was dragged to.
+; -----------------------------------------------------------------------------
+fb_run:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov bx, [fb_win]
+    call OSAPI_WM_CONTENT
+    mov [fb_cx], ax
+    mov [fb_cy], dx
+    add ax, 7                       ; the aligned x: content left, rounded UP
+    and ax, 0xFFF8
+    mov [fb_bx], ax
+    mov ax, [fb_cy]
+    add ax, FB_CONT_H - 9
+    mov [fb_by], ax
+
+    mov word [fb_mode], 0           ; 0 = PAIR
+    call fb_time
+    mov di, fb_s_pair + FB_COL
+    call fb_dec5
+    mov [fb_tpair], ax
+
+    mov word [fb_mode], 1           ; 1 = FONT_RUN, aligned
+    call fb_time
+    mov di, fb_s_runa + FB_COL
+    call fb_dec5
+    mov [fb_trun], ax
+
+    mov word [fb_mode], 2           ; 2 = FONT_RUN, x+1 (the fallback)
+    call fb_time
+    mov di, fb_s_runu + FB_COL
+    call fb_dec5
+
+    mov ax, [fb_tpair]              ; PAIR / RUN-A, x100, so 250 reads 2.50x
+    mov bx, 100
+    mul bx                          ; DX:AX, so the div below needs a guard:
+    mov bx, [fb_trun]               ; an 8086 divide overflow is an interrupt,
+    or bx, bx                       ; not a wrong answer, and a package taking
+    jz .noratio                     ; int 0 hangs the machine
+    cmp dx, bx
+    jb .div
+    mov ax, 0xFFFF                  ; would not fit: say so rather than trap
+    jmp short .ratio
+.div:
+    div bx
+.ratio:
+    mov di, fb_s_ratio + FB_RCOL
+    call fb_dec5
+.noratio:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fb_time - run FB_N iterations of [fb_mode] with IF=0 and time them
+; out: AX = elapsed PIT counts (65535 = the counter wrapped: overran a tick)
+; preserves all other registers
+; -----------------------------------------------------------------------------
+fb_time:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    pushf
+    cli                             ; no pre-emption inside the measurement -
+                                    ; another task's timeslice billed to one
+                                    ; row moves the answer more than the
+                                    ; effect being measured
+    call fb_pit                     ; AX = the counter now
+    mov [fb_t0], ax
+    mov cx, FB_N
+.loop:
+    push cx
+    call fb_once
+    pop cx
+    loop .loop
+    call fb_pit
+    mov bx, [fb_t0]
+    sub bx, ax                      ; modular: correct across the reload too
+    mov ax, bx
+    cmp ax, 32768                   ; ...and only THAT is an overrun
+    jb .out
+    mov ax, 0xFFFF
+.out:
+    popf
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fb_once - draw the string once, the way [fb_mode] says
+; preserves all registers
+;
+; The two colours and the rect are identical in all three, so what is being
+; compared is only how the bytes get written.
+; -----------------------------------------------------------------------------
+fb_once:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov cx, [fb_bx]
+    cmp word [fb_mode], 2           ; the fallback row draws one pixel right,
+    jne .x                          ; which is all it takes to fail x & 7
+    inc cx
+.x:
+    mov dx, [fb_by]
+    cmp word [fb_mode], 0
+    jne .run
+
+    mov al, CWHITE                  ; --- PAIR: fill the rect, letter over it
+    call OSAPI_SET_COLOR
+    mov ax, cx
+    mov bx, dx
+    push cx
+    push dx
+    add cx, FB_W - 1
+    add dx, 7
+    call OSAPI_GFX_FILL
+    pop dx
+    pop cx
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov si, fb_s_test
+    call OSAPI_FONT_STR
+    jmp short .out
+.run:
+    mov si, fb_s_test               ; --- FONT_RUN: both colours, one pass
+    mov al, CBLACK
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fb_pit - latch and read counter 0 of the 8253
+; out: AX = the counter (counts down, 1.193182 MHz, wraps every 55ms)
+; preserves all other registers
+;
+; Latch (control word 00h) freezes a copy for reading without touching the
+; counter's mode or reload value, so the system tick is not disturbed. The
+; caller has IF=0 already; a latch that was interrupted between the two byte
+; reads would return a torn count.
+; -----------------------------------------------------------------------------
+fb_pit:
+    push dx
+    mov al, 0
+    out 0x43, al                    ; latch counter 0
+    jmp short $+2                   ; I/O settling, the period-hardware idiom
+    in al, 0x40
+    mov dl, al
+    jmp short $+2
+    in al, 0x40
+    mov ah, al
+    mov al, dl
+    pop dx
+    ret
+
+; -----------------------------------------------------------------------------
+; fb_dec5 - AX as five decimal digits at ES:DI (DS here), zero-suppressed
+; in:  AX = value, DI -> five bytes; out: AX preserved
+; -----------------------------------------------------------------------------
+fb_dec5:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    add di, 4                       ; write right to left
+    mov cx, 5
+    mov bx, 10
+.dig:
+    xor dx, dx
+    div bx                          ; AX = quotient, DX = digit
+    add dl, '0'
+    mov [di], dl
+    dec di
+    loop .dig
+    pop di                          ; leading zeros -> spaces, all but the last
+    mov cx, 4
+.sup:
+    cmp byte [di], '0'
+    jne .done
+    mov byte [di], ' '
+    inc di
+    loop .sup
+.done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fb_head - name the adapter in the header line, once, at entry
+; preserves all registers
+; -----------------------------------------------------------------------------
+fb_head:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call OSAPI_VIDEO                ; DL = 0 VGA / 1 Hercules / 2 CGA
+    mov si, fb_n_vga
+    cmp dl, VID_HERC
+    jne .have
+    mov si, fb_n_herc
+.have:
+    cmp dl, VID_CGA
+    jne .copy
+    mov si, fb_n_cga
+.copy:
+    mov di, fb_s_head + FB_ACOL
+    mov cx, 4
+.c:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .c
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- data --------------------------------------------------------------------
+
+fb_tpl:
+    dw 180, 150, 248, 96            ; x, y, w, h -> content 246 x 77
+    dw fb_ttl, fb_paint, fb_onkey, fb_onclick
+
+fb_ttl:     db 'Font Bench', 0
+
+; The measured string is a tracker pattern cell - the run this was built for.
+fb_s_test:  db 'C-2 01 A0F', 0
+
+FB_ACOL     equ 19                  ; where fb_head writes the adapter name
+fb_s_head:  db 'Font Bench  N=120  ....', 0
+fb_n_vga:   db 'VGA '
+fb_n_herc:  db 'HERC'
+fb_n_cga:   db 'CGA '
+
+fb_s_hint:  db 'Click or press a key to run.', 0
+
+FB_COL      equ 22                  ; the count column in the three rows
+FB_RCOL     equ 22
+fb_s_pair:  db 'PAIR fill+str       :      ', 0
+fb_s_runa:  db 'RUN  aligned        :      ', 0
+fb_s_runu:  db 'RUN  unaligned      :      ', 0
+fb_s_ratio: db 'PAIR/RUN x100       :      ', 0
+
+fb_win:     dw 0
+fb_cx:      dw 0
+fb_cy:      dw 0
+fb_bx:      dw 0
+fb_by:      dw 0
+fb_mode:    dw 0
+fb_t0:      dw 0
+fb_tpair:   dw 0
+fb_trun:    dw 0
+fb_done:    db 0
+
+    OS88_IMAGE_END

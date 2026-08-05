@@ -589,41 +589,122 @@ read-modify-write per glyph. `font_run` does it once. It takes both colours
 and paints each 8x8 cell complete — background where the glyph is clear, ink
 where it is set.
 
-Two things follow, and the second is the reason it exists.
+**This is a speed optimisation and nothing else**, and it earns its place on
+the two mono adapters. On a 1bpp adapter at a byte-aligned x the cell owns
+its whole framebuffer byte, so there is nothing underneath to preserve: no
+shift, no read, no second byte, and no separate fill pass at all. Per plane
+the byte is `(glyph & ink) | (~glyph & background)` with each mask 00 or FF,
+which on mono reduces to the glyph or its complement. That is the path the
+slow machines are on — `[bb_on]` is permanently 1 there (§39.5) — and it is
+where the cost of text actually lives.
 
-**It cannot produce §11.3's granularity failure.** A fill clips per pixel
-and a glyph per whole cell, so an erase-then-letter pair can disagree and
-leave a cell blanked rather than stale — the sharp edge that section is
-mostly about. Here the two are one decision about one cell, taken once, so
-a caller using this needs no `wm_clip_test` gate around the pair and cannot
-get it wrong.
-
-**On a 1bpp adapter at a byte-aligned x, a cell row is one store.** The cell
-owns its whole framebuffer byte, so there is nothing underneath to preserve:
-no shift, no read, no second byte, and no separate fill pass at all. Per
-plane the byte is `(glyph & ink) | (~glyph & background)` with each mask 00
-or FF, which on mono reduces to the glyph or its complement. That is the
-path the slow machines are on — `[bb_on]` is permanently 1 there (§39.5) —
-and it is where the cost of text actually lives.
-
-The fast path is deliberately narrow: `[bb_on]` set **and** `x & 7 == 0`.
-Anything else — a VRAM planar target, or an unaligned run — falls back to
-one `gfx_fill` of the run's rect in the background colour and `font_str`
-over it, which is exactly what every caller wrote by hand before. The answer
-is identical either way, so a caller never has to ask which path it got, and
-it is never slower than doing it by hand.
+The fast path is deliberately narrow: `[bb_on]` set **and** `x & 7 == 0`
+**and** `[gfx_dis]` clear (a disabled control's glyph is masked to a
+checkerboard inside `font_ink`, §47, which a plain store cannot express).
+Anything else — a VRAM planar target, an unaligned run, a greyed one — falls
+back to one `gfx_fill` of the run's rect in the background colour and
+`font_str` over it, which is exactly what every caller wrote by hand before.
+The rendered answer is identical either way, so a caller never has to ask
+which path it got.
 
 Clipping is `font_char`'s, per cell, screen edge and clip region alike — the
-background clips with the glyph rather than independently of it, which is
-the whole point.
+background clips with the glyph rather than independently of it.
 
-**The first consumer is the tracker's pattern view** (§45.9), whose channel
-columns were moved onto 8-pixel boundaries to earn the fast path: `TL_CHX`
-28→32 and `TL_CHW` 145→144 with `TL_PAD` 28→24 on VGA, 70→72 / 145→144 /
-28→24 on Hercules. The compact CGA layout was already aligned. It uses this
-only on mono, because on a colour adapter `[bb_on]` is 0 unless Smooth
-(§45.11) borrowed the back buffer, and there the fallback's fill would be a
-second pass over ground the row band already covered.
+#### 6.1.1 What it is worth, measured
+
+`apps/fontbench` is the measurement, and it is in the tree so the numbers can
+be re-taken rather than trusted. It draws the same ten-character run
+(`'C-2 01 A0F'`, a tracker pattern cell) 120 times three ways — the hand-written
+`gfx_fill` + `font_str` PAIR, `font_run` at an aligned x, and `font_run` at
+x+1 so the alignment test fails — and times each with counter 0 of the 8253
+read directly, because a 55ms tick cannot resolve a 3ms row.
+
+Run under QEMU with `-icount`, so the PIT counts guest **instructions**
+rather than host time and the result is deterministic and machine-independent
+(three runs per adapter agreed to ±1 count):
+
+| adapter | PAIR | `font_run` aligned | `font_run` at x+1 |
+|---|---|---|---|
+| VGA, `[bb_on]` = 0 | 2693 | 2760 | 2768 |
+| CGA 640x200 | 3398 | **2693** | 3474 |
+| Hercules 720x348 | 3368 | **2670** | 3443 |
+
+**On mono the fast path is 1.26x faster — 21% fewer instructions.** The two
+mono adapters agree to within 1%, which is what should happen: they run the
+same renderer and differ only in stride and bank wrap.
+
+**Instruction count understates the win on the hardware this is for**, because
+what the fast path removes is disproportionately *memory* work, and on a
+4.77MHz machine a framebuffer access on the 8-bit ISA bus is the expensive
+part. Counting framebuffer byte-accesses directly (temporary kernel counters
+at the three write sites, read over QMP) gives the same figures on Hercules
+and on CGA, per ten-character run:
+
+| | reads | writes | total accesses |
+|---|---|---|---|
+| PAIR | 82 | 146 | **228** |
+| `font_run` aligned | **0** | 80 | **80** |
+
+**2.85x less bus traffic, and the reads go to zero.** PAIR's 228 breaks down
+as 128 for the fill (two masked edge columns at 8 rows x 2 read-modify-writes
+each, plus 8 rows of 4 word stores across the interior) and 100 for the
+glyphs (the 50 non-blank glyph rows in that string, one read-modify-write
+apiece). `font_run` writes 80 bytes and reads nothing at all: 10 cells x 8
+rows x one store. A real 8088 figure would be larger still — the eliminated
+per-row `shr ax, cl` costs 8+4·cl clocks there — but that has not been
+measured and no number is claimed for it.
+
+**On VGA it costs 2.5%.** Both `font_run` rows land within 0.3% of each other
+there, which is the tell that `[bb_on]` = 0 sends both to the fallback
+whatever the alignment; the 2.5% over the hand-written pair is the far call,
+the two gate tests and `font_width_x`. That is the price of the abstraction on
+the adapter it cannot help, it is small, and it is why the tracker calls
+`font_run` only when `[tui_mono]` says the fast path is reachable — on colour
+its row band was filled once already, so the fallback's fill would be a second
+pass over the same ground.
+
+#### 6.1.2 The granularity guarantee is the FAST PATH's, not the call's
+
+On the fast path `font_run` **cannot** produce §11.3's granularity failure. A
+fill clips per pixel and a glyph per whole cell, so an erase-then-letter pair
+can disagree and leave a cell blanked rather than stale — the sharp edge that
+section is mostly about. `font_run_cell` asks `wm_clip_test` once, about the
+cell, and then either paints the whole cell or leaves it entirely alone.
+
+**The fallback does not inherit that**, and a caller must not assume it does.
+`font_run`'s slow path *is* `gfx_fill` followed by `font_str_x`, with no clip
+handling of its own — so a clip edge cutting the run horizontally fills the
+visible rows in the background colour and then draws no glyphs into them. The
+line goes blank, not stale, exactly as if the caller had written the pair by
+hand. And the fallback is the common configuration, not a corner: every VGA
+machine without double buffering takes it.
+
+So the rule for a caller is: **`font_run` removes the granularity trap only
+where it is also fast.** A caller that draws under an armed clip region and
+is not certain of both conditions still owes the region the same care §11.3
+asks of anything else — either gate the run on a `wm_clip_test` of its rect,
+or accept a blanked line when an edge crosses it. The tracker is safe because
+it only calls `font_run` on mono, where `[bb_on]` is 1 and its columns are
+aligned by construction (below), so the fast path always fires.
+
+#### 6.1.3 The first consumer, and what it changed to qualify
+
+**The tracker's pattern view** (§45.9), whose channel columns were moved onto
+8-pixel boundaries to earn the fast path: `TL_CHX` 28→32 and `TL_CHW` 145→144
+with `TL_PAD` 28→24 on VGA, 70→72 / 145→144 / 28→24 on Hercules. Cell text x
+is `CHX + n*CHW + PAD`, so that turned `56 + 145n` — where only channel 0
+was aligned, 145 not being a multiple of 8 — into `56 + 144n`, where all four
+are. The compact CGA layout was already aligned.
+
+Alignment is why the tracker is the only consumer so far and not simply the
+first of many. It is **fullscreen** (§11.2), so its content origin is (0,0)
+and cannot move. An ordinary window's is `W_X + 1` and `ui_drag` writes `W_X`
+straight from the mouse with no snapping, so for anything in a draggable
+window `x & 7` is arbitrary and re-rolls on every drag: the fast path would
+fire one time in eight. Adopting `font_run` there buys the code deletion and
+§6.1.2's guarantee one press in eight, and the 2.5% fallback cost the rest of
+the time. Snapping window x to a multiple of 8 would make it general and is
+not worth what it would do to dragging.
 
 ## 7. Concurrency model (read carefully — this is the crux)
 
@@ -2691,6 +2772,15 @@ guard 7 proves the kernel ends clear of the relocated stack.
   drive is fixed):  and `build/filetest.img` / `-frag` (§18.4). A write
   test is only half-done in the emulator — finish it on the host with
   `python3 tools/os88disk.py --verify <img>`.
+- **`build/fontbench.img`** is the same idea for a *measurement* rather than
+  a gate: §6.1.1's numbers, retakeable on any of the three adapters. It
+  times its three drawing paths against counter 0 of the 8253 read directly,
+  because a 55ms tick cannot resolve a 3ms row. Run it under QEMU with
+  `-icount shift=3,sleep=off` and the PIT counts guest **instructions**
+  instead of host time, which is what makes the result reproducible (±1
+  count across runs) and independent of the machine it is taken on. Without
+  `-icount` it measures the host, which is not an 8088 and not a number
+  worth quoting.
 - **`check-images`**: `build/` is gitignored but a curated set inside it is
   force-added and shipped — the kernel, both boot sectors, both bootable
   floppies, both software floppies, and every package's `.bin`/`.o88`.

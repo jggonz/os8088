@@ -351,6 +351,26 @@ $(BUILD)/big.dat: Makefile | $(BUILD)
 $(BUILD)/filetest.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/filetest.o88 $(BUILD)/big.dat
 
+# FONTBENCH, the measurement behind SPEC.md 6.1: it times the erase-and-letter
+# PAIR against one FONT_RUN on whatever adapter it is booted on, reading the
+# 8253 directly because a 55ms tick cannot resolve the difference. Its own
+# scratch image, like the two gates above:
+#   make test                       TESTAPPS=build/fontbench.img
+#   make test VIDEO=cga             TESTAPPS=build/fontbench.img
+#   make test VIDEO=herc HERCSEG=0x7000 TESTAPPS=build/fontbench.img
+# Under plain QEMU the numbers are host speed, which is not an 8088's; run it
+# with -icount (docs/FONT-BENCH.md) to make the PIT count guest INSTRUCTIONS
+# instead, which is reproducible and host-independent.
+$(BUILD)/fontbnch.bin: apps/fontbench/fontbench.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/fontbench/fontbench.asm
+	@echo "fontbnch: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/fontbnch.o88: $(BUILD)/fontbnch.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/fontbnch.bin -o $@
+
+$(BUILD)/fontbench.img: $(BUILD)/fontbnch.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/fontbnch.o88
+
 # The same package on a legally fragmented volume: --scramble interleaves the
 # chains, so the write path's allocator and the free/replace paths meet holes
 # rather than a clean run of clusters.
