@@ -304,9 +304,10 @@ tui_textc:                          ; SI = string, CX = x, DX = y
 ; columns are laid out on 8-pixel boundaries - writes each cell row as a
 ; single store instead of a shift and a read-modify-write. That is the whole
 ; of the pattern view's text cost on the machines that cannot afford it, and
-; it is measured rather than hoped: for a run this length apps/fontbench puts
-; it at 1.26x the instructions and 2.85x the framebuffer traffic (SPEC.md
-; 6.1.1), the same on Hercules and on CGA.
+; it is measured rather than hoped: for a run this length it is 1.26x the
+; instructions and 2.85x the framebuffer traffic (SPEC.md 6.1.1), the same on
+; Hercules and on CGA. The harness that says so is apps/fontbench, which lives
+; on the testing branch - the numbers are recorded in 6.1.1 either way.
 ;
 ; On a colour adapter [bb_on] is 0 unless Smooth borrowed the back buffer, so
 ; the kernel would fall back to its own fill plus FONT_STR - a second fill of

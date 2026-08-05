@@ -612,12 +612,14 @@ background clips with the glyph rather than independently of it.
 
 #### 6.1.1 What it is worth, measured
 
-`apps/fontbench` is the measurement, and it is in the tree so the numbers can
-be re-taken rather than trusted. It draws the same ten-character run
-(`'C-2 01 A0F'`, a tracker pattern cell) 120 times three ways — the hand-written
-`gfx_fill` + `font_str` PAIR, `font_run` at an aligned x, and `font_run` at
-x+1 so the alignment test fails — and times each with counter 0 of the 8253
-read directly, because a 55ms tick cannot resolve a 3ms row.
+`apps/fontbench` is the measurement. It lives on the **`testing` branch**, not
+here — it ships on no disk and nothing in this tree builds or cites it, so it
+is tooling rather than system, and the numbers below stand on their own record
+the way any other measured figure in this document does. What it does: draws
+the same ten-character run (`'C-2 01 A0F'`, a tracker pattern cell) 120 times
+four ways — the hand-written `gfx_fill` + `font_str` PAIR and one `font_run`,
+each at a byte-aligned x and again at x+5 — and times each against counter 0
+of the 8253 read directly, because a 55ms tick cannot resolve a 3ms row.
 
 Run under QEMU with `-icount`, so the PIT counts guest **instructions**
 rather than host time and the result is deterministic and machine-independent
@@ -1947,6 +1949,26 @@ snapped **aborted the launch**. On mono only, because that `cmp` is inside the
 failed" on Hercules, which is the shape every mono-gated bug in this system
 has.
 
+**What it is worth, at the workload level.** §6.1.1 prices the primitive;
+`apps/typebench` (on the `testing` branch, like fontbench and for the same
+reason) prices the *keystroke* — 40 random characters typed into a 40-cell
+line, the whole line redrawn after each one, which is what `np_redraw` does to
+its dirty band (§27.2). Under `-icount`:
+
+| adapter | CHAR aligned | CHAR at x+5 | one `font_run` |
+|---|---|---|---|
+| Hercules | 3717 | 3794 | 3480 |
+| VGA | 3133 | 3314 | 3137 |
+
+So snapping is **2.1% on Hercules and 5.8% on VGA** in instructions — more on
+VGA because four planes make the spilled second byte cost four times — and
+drawing the row as a run instead would be a further 6.4% on mono and nothing
+at all on VGA, where `[bb_on]` is 0 and `font_run` falls back. Thin numbers,
+and honestly so: the instruction story for this feature is small and the
+framebuffer-traffic story of §6.1.1 is where the mono case actually lives.
+It is also why Note Pad was left drawing character by character rather than
+restructured onto `font_run`.
+
 **The app's half of the contract is not enforced.** `WF_SNAP` puts the content
 origin on a boundary; whether the app's own text sits at content-relative x
 values that are multiples of 8 is the app's business, and getting it wrong
@@ -2894,15 +2916,17 @@ guard 7 proves the kernel ends clear of the relocated stack.
   drive is fixed):  and `build/filetest.img` / `-frag` (§18.4). A write
   test is only half-done in the emulator — finish it on the host with
   `python3 tools/os88disk.py --verify <img>`.
-- **`build/fontbench.img`** is the same idea for a *measurement* rather than
-  a gate: §6.1.1's numbers, retakeable on any of the three adapters. It
-  times its three drawing paths against counter 0 of the 8253 read directly,
-  because a 55ms tick cannot resolve a 3ms row. Run it under QEMU with
-  `-icount shift=3,sleep=off` and the PIT counts guest **instructions**
-  instead of host time, which is what makes the result reproducible (±1
-  count across runs) and independent of the machine it is taken on. Without
-  `-icount` it measures the host, which is not an 8088 and not a number
-  worth quoting.
+- The **benchmarks are not here.** `apps/fontbench` (§6.1.1) and
+  `apps/typebench` (§11.94) are the same idea for a *measurement* rather than
+  a gate, and they live on the **`testing` branch**: they ship on no disk,
+  nothing in this tree builds or cites them, and a harness that only ever
+  answers a question once is tooling rather than system. Both time their
+  drawing paths against counter 0 of the 8253 read directly, because a 55ms
+  tick cannot resolve a 3ms row. **Run either under QEMU with `-icount
+  shift=3,sleep=off`** and the PIT counts guest **instructions** instead of
+  host time, which is what makes a result reproducible (±1 count across runs)
+  and independent of the machine it is taken on. Without `-icount` they
+  measure the host, which is not an 8088 and not a number worth quoting.
 - **`check-images`**: `build/` is gitignored but a curated set inside it is
   force-added and shipped — the kernel, both boot sectors, both bootable
   floppies, both software floppies, and every package's `.bin`/`.o88`.
