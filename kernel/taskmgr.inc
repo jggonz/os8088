@@ -2301,17 +2301,24 @@ tm_row_draw:
     cmp word [tm_ci], TM_NCHUNK - 1     ; the LAST chunk owns the band's tail
     jne .gdone                          ; too - the pen is inset, so the row
     push ax                             ; runs past the 25 cells and nothing
-    push cx                             ; else would scrub it
+    push bx                             ; else would scrub it
+    push cx
+    push dx
     mov ax, [tm_penx]
     add ax, TM_NCHUNK * TM_CW
     mov cx, [tm_rowx]
     add cx, TM_RW
+    mov bx, [tm_rowy]           ; y1/y2 FROM THE ROW, not from whatever the
+    mov dx, bx                  ; run above left behind - terminating the
+    add dx, 7                   ; chunk needed a register and BX was it
     cmp ax, cx
     ja .tdone
     mov byte [gfx_color], CWHITE
-    call gfx_fill               ; BX/DX still the row's y1/y2
+    call gfx_fill
 .tdone:
+    pop dx
     pop cx
+    pop bx
     pop ax
 .gdone:
     popf

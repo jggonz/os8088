@@ -1068,8 +1068,12 @@ OS88_BSS_SIZE equ 0
 
 %define OSAPI_WM_SNAP       KERNEL_SEG:0x0268   ; BX = window ptr, AL = 0
                                                 ; clear / non-zero set. Out:
-                                                ; nothing, every register
-                                                ; preserved.
+                                                ; nothing - every register
+                                                ; preserved, FLAGS INCLUDED,
+                                                ; so it is safe in an entry
+                                                ; proc after the CF you owe
+                                                ; the loader is already in the
+                                                ; flags.
                                                 ;
                                                 ; "Keep my CONTENT ORIGIN on a
                                                 ; multiple of 8." Ask for this

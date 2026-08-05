@@ -878,7 +878,7 @@ wm_fs_drop:
 ; wm_snap - set or clear a window's WF_SNAP bit (public; API 0x0268,
 ;           SPEC.md 11.94)
 ; in:  BX = window ptr, AL = 0 clear / non-zero set
-; out: nothing (all registers preserved)
+; out: nothing - every register preserved, FLAGS INCLUDED (see below)
 ;
 ; "My CONTENT origin wants to be a multiple of 8." Not "snap my W_X": the
 ; frame carries a 1px border, so wm_content returns W_X + 1 and the alignment
@@ -896,13 +896,27 @@ wm_fs_drop:
 ; W_FLAGS writer runs on the UI task or under the gfx lock.
 ; -----------------------------------------------------------------------------
 wm_snap:
+    pushf                       ; FLAGS INCLUDED, and that is not politeness.
+                                ; A package's ENTRY PROC returns CF to the
+                                ; loader (SPEC.md 20.2) and calls this from
+                                ; there, after wm_create's CF has already been
+                                ; consumed by a branch - so the carry riding
+                                ; in the flags at that point IS the return
+                                ; value. wm_snap_ax exits on a `cmp` against
+                                ; the screen width, which leaves CF set for
+                                ; every window that fits; without this, asking
+                                ; to be snapped aborted the launch. On MONO
+                                ; only, because that cmp is inside the
+                                ; [vid_mono] gate - it loaded perfectly on VGA
     or al, al
     jz .clear
     or word [bx+W_FLAGS], WF_SNAP
     call wm_snap_win
+    popf
     ret
 .clear:
     and word [bx+W_FLAGS], ~WF_SNAP & 0xFFFF
+    popf
     ret
 
 ; -----------------------------------------------------------------------------

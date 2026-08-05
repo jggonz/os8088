@@ -113,7 +113,16 @@ NP_MAXROWS   equ 60             ; signature slots, one per row the content can
                                 ; rows past 60 are always redrawn" rather than
                                 ; writing past the array
 NP_BSS_TOTAL equ 744 + NP_IOCAP ; see the bss layout after OS88_IMAGE_END
-NP_MARGIN    equ 6              ; left/top text margin inside the content
+NP_MARGIN    equ 8              ; left/top text margin inside the content. It
+                                ; was 6, and 8 is what puts every glyph cell
+                                ; on a multiple of 8 once OSAPI_WM_SNAP has
+                                ; put the content origin on one (SPEC.md
+                                ; 11.94): np_tx is content left + this, and
+                                ; np_walk advances the pen by 8 from there.
+                                ; A glyph at an unaligned x spills into a
+                                ; SECOND framebuffer byte whenever the shift
+                                ; carries ink into it, and this window redraws
+                                ; text on every keystroke
 NP_KEY_SAVE  equ 0x3C           ; F2 scan code (DOS Editor's keys)
 NP_KEY_LOAD  equ 0x3D           ; F3
 NP_K_HOME    equ 0x47           ; the caret keys, int 16h scan codes
@@ -150,7 +159,12 @@ np_entry:
     push ax
     mov al, 1                       ; resizable (SPEC.md 11.1/27): np_paint
     call OSAPI_WM_SIZABLE           ; already lays out from the live record,
-    pop ax                          ; so the next repaint re-wraps for free
+    mov al, 1                       ; so the next repaint re-wraps for free
+    call OSAPI_WM_SNAP              ; ...and snapped (SPEC.md 11.94), because
+    pop ax                          ; every keystroke redraws a row of text and
+                                    ; an aligned cell writes ONE framebuffer
+                                    ; byte where an unaligned one writes two.
+                                    ; A no-op on VGA, so it is unconditional
     push si
     mov si, np_menus                ; BX is still the window: hand it our
     call OSAPI_MENU_SET             ; menus (draws nothing, takes no lock)

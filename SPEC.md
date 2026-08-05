@@ -1936,14 +1936,34 @@ Three consequences worth naming:
   moves on release, so the snap reads as the outline stepping rather than a
   window stuttering.
 
+**`wm_snap` preserves FLAGS**, and that is load-bearing rather than polite. A
+package's entry proc returns CF to the loader (§20.2) and is exactly where
+this gets called — after `wm_create`'s CF has been consumed by a branch, so
+the carry riding in the flags at that point *is* the return value.
+`wm_snap_ax` exits on a `cmp` against the screen width, which leaves CF set
+for every window that fits, so without the `pushf`/`popf` asking to be
+snapped **aborted the launch**. On mono only, because that `cmp` is inside the
+`[vid_mono]` gate — Note Pad loaded perfectly on VGA and answered "Load
+failed" on Hercules, which is the shape every mono-gated bug in this system
+has.
+
 **The app's half of the contract is not enforced.** `WF_SNAP` puts the content
 origin on a boundary; whether the app's own text sits at content-relative x
 values that are multiples of 8 is the app's business, and getting it wrong
-costs the 2.5% fallback silently rather than drawing anything wrong. The three
-converted consumers each had to move something: the Task Manager's process
-list and captions from a 6-pixel inset to 8 (`TM_PEN`), and the file manager
-and Note Pad likewise. Two pixels of margin bought a whole window the
-single-store path.
+costs the 2.5% fallback silently rather than drawing anything wrong. Both converted consumers had to move something, and both moved the same two
+pixels: the Task Manager's process list and captions from a 6-pixel inset to
+8 (`TM_PEN`), and Note Pad's text margin likewise (`NP_MARGIN`). Two pixels
+of margin bought a whole window the single-store path.
+
+**The Disk window was considered and left alone.** Its dominant cost is
+`fm_repaint`, which fills the whole content once with `rep stosw` and then
+letters ~40 strings into it — and `font_run` per string would repaint each
+string's background over ground that one fill already covered, the same
+reason apps/tracker keeps `font_str` on colour (§6.1.1). So the flag would
+buy it about 3% (alignment alone removes `font_char`'s second-byte spill)
+while costing 8-pixel drag steps on the window users move most. Not every
+text-heavy window is a candidate; the question is whether it draws its text
+as *runs it erases behind*, and the Disk window does not.
 
 ## 12. menu.inc
 
