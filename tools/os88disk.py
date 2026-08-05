@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """os88disk: build (or verify) a FAT data floppy image from .o88 packages.
 
-    python3 tools/os88disk.py -o OUT.img --size {1440,360} [[DIR:]FILE ...]
+    python3 tools/os88disk.py -o OUT.img --size {1440,360} [[DIR:]PKG.o88 ...]
     python3 tools/os88disk.py --verify IMG
 
 The image is a canonical DOS FAT floppy (SPEC.md section 19): boot sector
@@ -15,33 +15,12 @@ truncation guard depends on it) and fixed timestamps (date 0x5C21 =
 argument order; every field is fixed, so rebuilds are byte-identical.
 Directory display names are the host filenames (8.3, uppercased).
 
-A file argument whose extension is NOT .O88 is a DATA file (SPEC.md 24):
-it skips the package validation and is shipped byte-for-byte as an
-ordinary FAT12 file, same fixed timestamps, same exact-size rule. The
-kernel lists it as a type-0 entry with the generic icon and the Standard
-File dialog can Open it -- BEVERLY.MOD on the shipped apps disk is the
-first. The 8.3 name rules, the DIR: prefix and the per-directory
-duplicate check all apply the same; only *.O88 files are validated as
-packages, and --verify's structural fsck covers both kinds alike (it
-never validated package contents in the first place).
-
-A package argument may carry a FOLDER prefix -- "GAMES:build/mines.o88" --
-which puts it in a first-level subdirectory of that name (SPEC.md 19.2:
-the kernel lists folders as type-2 entries and enters them with the same
-validated mount path). Folders are emitted in first-appearance order and
-come BEFORE any root-level packages, so a disk built entirely out of
-folders has the folders at root indices 0..n-1. Each folder is a real FAT
-subdirectory: its own cluster chain, '.' and '..' as the first two entries
-('..' carries cluster 0, meaning the root, exactly as the spec requires),
-then its members in argument order. The 32-entry listing cap is per
-DIRECTORY, and so is the duplicate-name check -- two folders may each hold
-a MINES.O88.
-
 Geometries: 1440 (1.44MB, FAT12) and 360 (360KB, FAT12) are the shipped
-disks; 2880 (2.88MB ED, 5,698 clusters => FAT16) is test-only -- it exists
-so the kernel's FAT16 path is positively tested and is never referenced by
-the Makefile. The FAT width is derived from the cluster count exactly like
-the kernel does (< 4085 clusters => FAT12, else FAT16).
+disks, and now the only ones. A 2880 (2.88MB ED, 5,698 clusters => FAT16)
+geometry lived here so the kernel's FAT16 path had a positive test; it went
+when DSK_FAT_SECS fell to 10 sectors, which is below the 16 a FAT has to
+have to be FAT16 at all, so mount rule 10 (SPEC.md 18.2) now turns every
+FAT16 volume away and there is nothing left to test with.
 
 Boot-sector stub (offset 62): fixed hand-assembled bytes that print
 "Not a bootable disk. Press any key." via int 10h AH=0Eh teletype, wait
@@ -70,6 +49,7 @@ import sys
 SECTOR = 512
 MAX_FILES = 32                # kernel listing cap (SPEC.md section 19)
 VOL_LABEL = b"OS8088APPS "    # 11 bytes, BS_VolLab == root label entry
+SYS_LABEL = b"OS8088SYS  "    # ...and what a --boot/--kernel disk is called
 VOL_ID = 0x88000888           # fixed serial -> deterministic images
 FIXED_DATE = 0x5C21           # 2026-01-01 in FAT date encoding
 FIXED_TIME = 0x0000
@@ -80,7 +60,6 @@ NAME_CHARS = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
 GEOMETRY = {
     1440: (18, 2, 2880, 1, 9, 224, 0xF0),
     360: (9, 2, 720, 2, 2, 112, 0xFD),
-    2880: (36, 2, 5760, 1, 23, 240, 0xF0),   # test-only: FAT16
 }
 
 # Hand-assembled A.4 stub (verified against nasm; see module docstring):
@@ -114,13 +93,15 @@ def validate_o88(path: str) -> bytes:
         fail(f"{path}: bad magic 0x{magic:04X} (not a .o88 package)")
     if data[2] != 3:
         fail(f"{path}: format version {data[2]}; this is the v3 toolchain "
-             "(rebuild with the v3 toolchain)")
+             "(rebuild the package)")
     if len(data) > 0xFFFF:
         fail(f"{path}: {len(data)} bytes overflows the 16-bit size field")
-    image, = struct.unpack_from("<H", data, 8)
+    image = struct.unpack_from("<H", data, 8)[0]
+    if not 32 <= image <= len(data):
+        fail(f"{path}: header image size {image} out of range")
     if image != len(data):
-        fail(f"{path}: header image size {image} != file size {len(data)} "
-             "(they must be equal since v3 - run os88pkg.py first)")
+        fail(f"{path}: header image size {image} != file size {len(data)}; "
+             "a v3 package has no relocation table (run os88pkg.py first)")
     hname = data[16:32].split(b"\0", 1)[0]
     if not hname:
         fail(f"{path}: empty name field in header")
@@ -129,19 +110,6 @@ def validate_o88(path: str) -> bytes:
     if data[3] & 1 and len(data) < 96:     # embedded icon (SPEC.md 20.2)
         fail(f"{path}: flags bit 0 set but no icon block "
              "(run os88pkg.py first)")
-    return data
-
-
-def read_data_file(path: str) -> bytes:
-    """Read one non-.O88 data file: shipped as-is, no package validation."""
-    try:
-        with open(path, "rb") as f:
-            data = f.read()
-    except OSError as e:
-        fail(f"cannot read {path}: {e}")
-    if not data:
-        fail(f"{path}: empty file (a zero-byte file has no cluster chain; "
-             "nothing to ship)")
     return data
 
 
@@ -157,6 +125,11 @@ def name83(path: str, seen: set) -> bytes:
     if not 1 <= len(stem) <= 8 or len(ext) > 3:
         fail(f"{path}: '{base}' is not a valid 8.3 name "
              "(stem 1-8 chars, extension 0-3)")
+    # Any 8.3 extension is legal now that a disk may carry DATA next to its
+    # programs (SPEC.md 24). The kernel still only marks *.O88 entries
+    # loadable, so a data file simply lists with the generic icon and does
+    # nothing on a double-click - which is the behaviour a non-package has
+    # always had for any file a host OS put there.
     if stem in RESERVED_STEMS:
         fail(f"{path}: '{stem}' is a reserved DOS device name")
     for ch in (stem + ext).encode("ascii", "replace"):
@@ -231,8 +204,19 @@ def dirent(name11: bytes, attr: int, clus: int, size: int) -> bytes:
 
 
 def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
-                lay: Layout) -> bytes:
-    bs = bytearray(SECTOR)
+                lay: Layout, code: bytes = None, label: bytes = None) -> bytes:
+    """One BPB, two uses. `code` is os8088's own 512-byte boot sector: its
+    first three bytes are already EB 3C 90 and bytes 62.. are its loader, so
+    the BPB is written into the hole between them and everything else is left
+    exactly as nasm assembled it. Without `code` the sector carries the
+    not-bootable stub instead."""
+    bs = bytearray(code if code else SECTOR)
+    if code:
+        if len(code) != SECTOR:
+            fail(f"boot code is {len(code)} bytes, not {SECTOR}")
+        if code[0:3] != b"\xEB\x3C\x90":
+            fail("boot code does not open with `jmp short 0x3E / nop` - "
+                 "see boot/boot.asm's BPB_END")
     bs[0:3] = b"\xEB\x3C\x90"                   # jmp short 0x3E; nop
     bs[3:11] = b"MSDOS5.0"                      # interop OEM name
     struct.pack_into("<H", bs, 11, SECTOR)      # BPB_BytsPerSec
@@ -248,11 +232,24 @@ def boot_sector(spt, heads, tot, spc, fatsz, root_ent, media,
     # BPB_HiddSec, BPB_TotSec32 stay 0; BS_DrvNum 0; BS_Reserved1 0.
     bs[38] = 0x29                               # BS_BootSig
     struct.pack_into("<I", bs, 39, VOL_ID)      # BS_VolID
-    bs[43:54] = VOL_LABEL                       # BS_VolLab
+    bs[43:54] = label or VOL_LABEL              # BS_VolLab
     bs[54:62] = b"FAT12   " if lay.fat12 else b"FAT16   "
-    bs[62:62 + len(BOOT_STUB)] = BOOT_STUB
+    if not code:
+        bs[62:62 + len(BOOT_STUB)] = BOOT_STUB
     bs[510:512] = b"\x55\xAA"
     return bytes(bs)
+
+
+def read_data_file(path: str) -> bytes:
+    """Read one non-.O88 data file: shipped as-is, no package validation."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError as e:
+        fail(f"cannot read {path}: {e}")
+    if not data:
+        fail(f"{path}: empty")
+    return data
 
 
 def folder83(name: str) -> bytes:
@@ -278,12 +275,44 @@ def split_spec(arg: str):
     return folder.upper(), path
 
 
+def read_blob(path: str, what: str) -> bytes:
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError as e:
+        fail(f"cannot read {what} {path}: {e}")
+
+
 def build(args) -> int:
     spt, heads, tot, spc, fatsz, root_ent, media = GEOMETRY[args.size]
-    lay = Layout(spc, 1, 2, root_ent, tot, fatsz)
 
-    # Group by folder, keeping first-appearance order. Names are checked
-    # for duplicates PER DIRECTORY: two folders may each hold a MINES.O88.
+    # --- the system disk (SPEC.md 19.3) --------------------------------------
+    # The kernel goes in the RESERVED AREA - the sectors between the boot
+    # sector and FAT1, which BPB_RsvdSecCnt covers and which no file system
+    # structure can ever reach. So boot/boot.asm's raw `read LBA 1..K` is
+    # untouched and still correct, while everything after the kernel is an
+    # ordinary FAT12 volume that DOS, Linux, macOS and os8088's own file
+    # manager and write path can all read AND WRITE.
+    #
+    # It is the reserved count that makes this legal rather than a trick:
+    # mount rule 5 (SPEC.md 18.2) has always been `RsvdSecCnt >= 1`, and a
+    # boot loader living in reserved sectors is exactly what the field is for.
+    boot = label = None
+    ksecs = 0
+    if args.boot or args.kernel:
+        if not (args.boot and args.kernel):
+            fail("--boot and --kernel go together (a system disk needs both)")
+        boot = read_blob(args.boot, "boot sector")
+        kern = read_blob(args.kernel, "kernel")
+        ksecs = (len(kern) + SECTOR - 1) // SECTOR
+        label = SYS_LABEL
+    lay = Layout(spc, 1 + ksecs, 2, root_ent, tot, fatsz)
+    if lay.nclus < 1:
+        fail(f"a {ksecs}-sector kernel leaves no data clusters on a "
+             f"{args.size}KB disk")
+
+    # Group by folder, keeping first-appearance order. Names are checked for
+    # duplicates PER DIRECTORY: two folders may each hold a MINES.O88.
     groups: dict = {}                            # folder ('' = root) -> list
     seen: dict = {}                              # folder -> set of name11
     for arg in args.packages:
@@ -295,8 +324,11 @@ def build(args) -> int:
             if folder:
                 folder83(folder)                 # validate once, on creation
         name11 = name83(path, seen[key])
-        # Only *.O88 entries are packages; anything else ships as data.
-        if name11[8:11] == b"O88":
+        # Only *.O88 entries are packages; anything else ships as data, so a
+        # disk can carry a module, a picture or a text file next to the
+        # programs that read it (SPEC.md 24). The 8.3 name, the per-directory
+        # cap and the duplicate check all apply the same either way.
+        if path.lower().endswith(".o88"):
             data = validate_o88(path)
         else:
             data = read_data_file(path)
@@ -325,8 +357,8 @@ def build(args) -> int:
     if need > lay.nclus:
         fail(f"packages need {need} clusters; disk holds {lay.nclus}")
 
-    # Allocate the directory chains first, contiguously and in root order,
-    # so a folder's listing is one seek away from the root's.
+    # Allocate the directory chains first, contiguously and in root order, so
+    # a folder's listing is one seek away from the root's.
     nxt = 2
     dir_chains = {}
     for k in dirs:
@@ -379,9 +411,9 @@ def build(args) -> int:
         put(dir_chains[k], bytes(raw))
 
     root = bytearray(lay.root_secs * SECTOR)
-    root[0:32] = dirent(VOL_LABEL, 0x08, 0, 0)   # label first: the kernel
-    slot = 1                                     # filters it, so the first
-    for k in dirs:                               # listed entry is index 0
+    root[0:32] = dirent(label or VOL_LABEL, 0x08, 0, 0)  # label first: the
+    slot = 1                                     # kernel filters it, so the
+    for k in dirs:                               # first listed entry is 0
         root[slot * 32:(slot + 1) * 32] = dirent(
             folder83(k), 0x10, dir_chains[k][0], 0)
         slot += 1
@@ -392,7 +424,9 @@ def build(args) -> int:
         slot += 1
 
     image = bytearray(boot_sector(spt, heads, tot, spc, fatsz, root_ent,
-                                  media, lay))
+                                  media, lay, boot, label))
+    if boot:
+        image += kern.ljust(ksecs * SECTOR, b"\0")   # the reserved area
     image += fat.buf + fat.buf                   # FAT2 = FAT1
     image += root
     image += data_area
@@ -408,6 +442,7 @@ def build(args) -> int:
           f"{lay.type_name}) {len(files)} file(s)"
           + (f" in {len(dirs)} folder(s)" if dirs else "")
           + f", {need}/{lay.nclus} clusters"
+          + (f", kernel in {ksecs} reserved sectors" if boot else "")
           + (", scrambled" if args.scramble and files else ""))
     return 0
 
@@ -458,8 +493,8 @@ def verify(path: str) -> int:
     if media != 0xF0 and not 0xF8 <= media <= 0xFF:
         fail(f"{path}: BPB_Media 0x{media:02X} not spec-legal")
     fatsz, = struct.unpack_from("<H", bs, 22)
-    if not 1 <= fatsz <= 32:
-        fail(f"{path}: BPB_FATSz16 {fatsz} outside 1..32 (DSK_FAT_SECS)")
+    if not 1 <= fatsz <= 10:
+        fail(f"{path}: BPB_FATSz16 {fatsz} outside 1..10 (DSK_FAT_SECS)")
     spt, = struct.unpack_from("<H", bs, 24)
     if spt not in (8, 9, 15, 18, 21, 36):
         fail(f"{path}: BPB_SecPerTrk {spt} not a real floppy geometry")
@@ -592,22 +627,24 @@ def verify(path: str) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Build or verify a FAT data floppy of .o88 packages "
-                    "and data files.")
+        description="Build or verify a FAT data floppy of .o88 packages and data files.")
     ap.add_argument("-o", "--output", metavar="OUT.img",
                     help="floppy image to write")
-    ap.add_argument("--size", type=int, choices=(1440, 360, 2880),
-                    help="disk size in KB: 1440 (18 spt), 360 (9 spt), "
-                         "or 2880 (36 spt, FAT16 -- test only)")
+    ap.add_argument("--size", type=int, choices=(1440, 360),
+                    help="disk size in KB: 1440 (18 spt) or 360 (9 spt)")
     ap.add_argument("--scramble", action="store_true",
                     help="fragment cluster chains round-robin (test only)")
     ap.add_argument("--verify", metavar="IMG",
                     help="structural fsck of an existing image (no build)")
-    ap.add_argument("packages", metavar="[DIR:]FILE", nargs="*",
-                    help="files, in directory order (none = empty disk): "
-                         "*.o88 is validated as a package, anything else "
-                         "ships as a data file; a DIR: prefix puts one in "
-                         "a first-level folder of that name")
+    ap.add_argument("--boot", metavar="BOOT.bin",
+                    help="os8088's own 512-byte boot sector: makes this a "
+                         "bootable SYSTEM disk (needs --kernel)")
+    ap.add_argument("--kernel", metavar="KERNEL.bin",
+                    help="the kernel, placed in the FAT reserved area so the "
+                         "boot sector's raw LBA read still finds it")
+    ap.add_argument("packages", metavar="[DIR:]PKG.o88", nargs="*",
+                    help="package files, in directory order "
+                         "(none = empty disk)")
     args = ap.parse_args()
 
     if args.verify:

@@ -207,6 +207,25 @@ font_char:
 ; in:       CX = x, DX = y (cell fully on screen - font_char clipped),
 ;           SI -> 8 glyph row bytes
 ; clobbers: ax, bx, cx, dx, si, di, es (font_char's epilogue restores all)
+;
+; **This is the mono adapters' ONLY text renderer** (SPEC.md 39.5), so its
+; row loop is the innermost loop of every string os8088 draws on a Hercules
+; or CGA machine - and those are the slow machines. Three things it does that
+; the straight port did not, all of them the VRAM path's own tricks arriving
+; late:
+;
+; - **The ink test is hoisted.** [gfx_color]'s plane bit cannot change inside
+;   a plane, so `test ch, 1` belongs above the eight rows rather than in them.
+;   Two loops instead of one branch per row.
+; - **A blank glyph row is skipped whole.** or-ing in 0 and and-ing in FF are
+;   both identity, and a read-modify-write of framebuffer memory is ~30 cycles
+;   on an 8088 whether or not it changes anything. Most glyphs have a blank
+;   descender row and many a blank top row; a SPACE is eight of them, and the
+;   Task Manager's columns are largely spaces.
+; - **gfx_nextrow is inlined.** Its body is three instructions and the call
+;   and ret around them cost as much again - about a third of a row's work
+;   once the redundant writes above are gone. The CS overrides come with it:
+;   see gfx_nextrow for why they are not optional.
 ; -----------------------------------------------------------------------------
 font_char_bb:
     mov ax, cx                  ; dirty: columns x/8..(x+7)/8, rows y..y+7
@@ -243,25 +262,50 @@ font_char_bb:
     mov si, [font_bb_si]
     mov di, [font_bb_di]
     mov bh, 8                   ; row counter
-.row:
+    test ch, 1                  ; this plane's ink, decided ONCE rather than
+    jz .crow                    ; once per row
+.srow:
     mov ah, [si]                ; glyph row in the window's high byte
     inc si
+    or ah, ah                   ; a blank row ors in nothing, whatever the
+    jz .snext                   ; shift does to it
     xor al, al
     shr ax, cl                  ; AH = first-byte mask, AL = second-byte mask
-    test ch, 1                  ; (zero masks make both writes identity ops -
-    jz .clr                     ;  cheaper than branching around them)
     or [es:di], ah
+    or al, al                   ; ...and nothing spilled into the second byte
+    jz .snext                   ; at all when x is byte-aligned
     or [es:di+1], al
-    jmp .adv
-.clr:
-    not ah
-    not al
-    and [es:di], ah
-    and [es:di+1], al
-.adv:
-    call gfx_nextrow
+.snext:
+    add di, [cs:vid_rowadd]     ; gfx_nextrow, inlined (see the note above)
+    test di, [cs:vid_wrapbit]
+    jz .snw
+    add di, [cs:vid_wrapfix]
+.snw:
     dec bh
-    jnz .row
+    jnz .srow
+    jmp short .pnext
+.crow:
+    mov ah, [si]
+    inc si
+    or ah, ah                   ; a blank row masks nothing out either
+    jz .cnext
+    xor al, al
+    shr ax, cl
+    not ah
+    and [es:di], ah
+    or al, al
+    jz .cnext
+    not al
+    and [es:di+1], al
+.cnext:
+    add di, [cs:vid_rowadd]
+    test di, [cs:vid_wrapbit]
+    jz .cnw
+    add di, [cs:vid_wrapfix]
+.cnw:
+    dec bh
+    jnz .crow
+.pnext:
     add dx, [vid_rpara]
     shr ch, 1
     dec bl
@@ -305,11 +349,35 @@ font_ink:
 ; clobbers: nothing
 ; -----------------------------------------------------------------------------
 font_str:
+    push es                     ; the kernel's own strings live in DS; the
+    push ds                     ; ES-taking body below is the one that draws
+    pop es                      ; (SPEC.md 20.1: a package's are in its own
+    call font_str_x             ; segment, and wm/menu pass that in ES)
+    pop es
+    ret
+
+; -----------------------------------------------------------------------------
+; font_str_x - font_str with the string at ES:SI
+;
+; in:       CX = x, DX = y, ES:SI -> ASCIIZ, [gfx_color] = pen
+; out:      nothing
+; clobbers: nothing else (flags)
+;
+; Since packages left the kernel segment (SPEC.md 20.1) a drawn string can
+; belong to the kernel or to any loaded package, and the caller is the only
+; one who knows which. Five call sites in the tree pass a package segment -
+; the window title (wm_draw_win), the app name and menu titles
+; (menu_draw_bar), and the item strings (menu_drop, menu_widest); every other
+; caller reaches this through font_str above with ES = DS.
+; -----------------------------------------------------------------------------
+font_str_x:
     push ax
     push cx
     push si
+    cld
 .next:
-    lodsb
+    mov al, [es:si]
+    inc si
     or al, al
     jz .done
     call font_char              ; out-of-range chars draw nothing; pen still
@@ -329,10 +397,24 @@ font_str:
 ; clobbers: nothing else
 ; -----------------------------------------------------------------------------
 font_width:
+    push es
+    push ds
+    pop es
+    call font_width_x
+    pop es
+    ret
+
+; -----------------------------------------------------------------------------
+; font_width_x - font_width with the string at ES:SI (SPEC.md 20.1)
+; in:       ES:SI -> ASCIIZ string
+; out:      AX = 8 * length
+; clobbers: nothing else
+; -----------------------------------------------------------------------------
+font_width_x:
     push si
     xor ax, ax
 .next:
-    cmp byte [si], 0
+    cmp byte [es:si], 0
     je .done
     inc si
     add ax, 8

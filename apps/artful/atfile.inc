@@ -134,11 +134,16 @@ at_savepend:
 ; at_cmd_save / at_cmd_saveas - the File menu's two save doors
 ; -----------------------------------------------------------------------------
 at_cmd_save:
+    mov byte [at_pend], 0           ; a direct save continues nothing: a
+                                    ; pend left by a CANCELLED dialog (which
+                                    ; calls nobody, SPEC.md 38) or a failed
+                                    ; titled save must not fire here
     cmp byte [at_havefile], 0
     je at_cmd_saveas
     call at_save_named
     ret
 at_cmd_saveas:
+    mov byte [at_pend], 0
     call at_dlg_save
     ret
 
@@ -266,6 +271,13 @@ at_load_named:
     jmp short .out
 .err:
     mov [at_ferr], ax               ; the code survives this frame's pops
+    cmp ax, FERR_IO                 ; a mid-chain FERR_IO already clobbered
+    jne .keep                       ; part of at_doc (only FERR_BIG and the
+    call at_cmd_newdoc              ; pre-I/O refusals leave it alone): the
+                                    ; old text is gone, so become a fresh
+                                    ; Untitled rather than a hybrid a later
+                                    ; Save would silently write over the file
+.keep:
     stc
 .out:
     pop es
@@ -337,7 +349,7 @@ at_dlg_go:
 ; at_ondlg - the dialog's completion proc (SPEC.md 38.6)
 ; in:  AL = mode, SI = our window ptr, ES:DI = the chosen name (kernel's
 ;      buffer - copy it out through ES); UI task, gfx lock HELD, the
-;      dialog already gone. Returns with retf.
+;      dialog already gone. Returns with a near ret (the header dispatcher retfs).
 ; -----------------------------------------------------------------------------
 at_ondlg:
     mov bl, al                      ; BL = the mode
@@ -356,8 +368,8 @@ at_ondlg:
     loop .copy
     mov byte [di], 0
 .copied:
-    push ds
-    pop es
+    push ds                         ; the name is copied out; ES was
+    pop es                          ; KERNEL_SEG (SPEC.md 38.6) - ours now
     or bl, bl
     jnz .save
     ; open: load, then show the result - entering fullscreen when the
@@ -396,4 +408,4 @@ at_ondlg:
     jne .done                       ; failed: the alert is up, pend waits
     call at_runpend                 ; Save As inside a quit/new/open flow
 .done:
-    retf
+    ret

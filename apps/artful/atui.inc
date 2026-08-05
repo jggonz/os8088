@@ -1082,17 +1082,15 @@ at_mdclose:
     push bx
     push cx
     push dx
-    call at_mdrect
-    mov [at_msy2], dx
-    push bx
     mov al, CWHITE
     call OSAPI_SET_COLOR
-    pop bx
     call at_mdrect
     sub ax, 3                       ; the default ring bleeds 3px out
     sub bx, 3
     add cx, 3
     add dx, 3
+    mov [at_msy2], dx               ; the redraw must cover the EXPANDED
+                                    ; erase, or its bottom 3 rows stay white
     call OSAPI_GFX_FILL
     mov byte [at_modal], 0
     cmp bx, 20
@@ -1242,9 +1240,9 @@ at_bigtext:
     jmp short .ch
 .composed:
     mov ax, di
-    cmp ax, AT_S1ST*8
-    jbe .w
-    mov ax, AT_S1ST*8
+    cmp ax, AT_S4ST*2               ; the 4bpp strip's 608px, not the 1bpp
+    jbe .w                          ; 640: at_expand writes 4 bytes per
+    mov ax, AT_S4ST*2               ; 8px column against AT_S4ST rows
 .w:
     mov [at_xw], ax
     or ax, ax

@@ -31,7 +31,7 @@ HL_CONT_H equ 71                    ; content height: 90 outer - TITLE_H - 1
 
 ; -----------------------------------------------------------------------------
 ; hl_entry - package entry point (SPEC.md 20.2)
-; in:  CS=DS=ES = our own segment, IF=1, gfx lock NOT held
+; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF clear (CF set = abort, propagated from wm_create)
 ; The loader wm_shows the window; we must not show, draw or spawn here.
 ;
@@ -51,7 +51,7 @@ hl_entry:
     call OSAPI_MENU_SET              ; BX = the window we just created
 .out:
     pop si
-    retf                            ; far-called by the loader (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; hl_paint - W_PAINT: two centred lines on the white content
@@ -77,7 +77,7 @@ hl_paint:
     xor ah, ah
     shl ax, 1
     shl ax, 1                       ; 4 bytes per page: two string pointers
-    add ax, hl_pages                ; a plain org-0 offset (SPEC.md 20.1)
+    add ax, hl_pages                ; whole-word package address (SPEC.md 20.2)
     mov si, ax
     add dx, 25                      ; content is 71px tall; two 8px lines
     push si                         ; 12px apart, centred as a 20px block
@@ -92,7 +92,7 @@ hl_paint:
     pop cx
     pop bx
     pop ax
-    retf                            ; far-called W_PAINT (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; hl_line - draw one line centred in the content width
@@ -127,7 +127,7 @@ hl_line:
 hl_oncmd:
     mov [hl_page], al
     call hl_repaint
-    retf                            ; far-called menu handler (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; hl_repaint - erase the content and draw it again
@@ -154,10 +154,7 @@ hl_repaint:
     add cx, HL_CONT_W-1             ; x2
     add dx, HL_CONT_H-1             ; y2
     call OSAPI_GFX_FILL             ; AX = x1 already
-    push cs                         ; hl_paint is a kernel-called proc and
-    call hl_paint                   ; returns with retf: give it the CS a
-                                    ; far call would have pushed
-                                    ; (SI = window ptr still)
+    call hl_paint                   ; SI = window ptr still
     pop dx
     pop cx
     pop bx

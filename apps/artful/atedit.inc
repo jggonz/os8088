@@ -4,7 +4,7 @@
 ; ArtfulType's editing engine (SPEC.md 46.3): the keystroke dispatch, caret
 ; navigation and selection (shift-click, shift-arrows and a sol_drag-style
 ; drag-select that XORs only the delta range per pass), the app-local
-; clipboard, snapshot undo/redo in an arena block, and the scroll-bar
+; clipboard, snapshot undo/redo in a heap claim, and the scroll-bar
 ; interactions. The Style/File/View commands live in atcmd.inc.
 ;
 ; The performance contract (SPEC.md 46.1): a printable keystroke costs a
@@ -240,6 +240,9 @@ at_backspace:
     mov dx, ax
     dec ax
     call at_delrange
+    mov ax, [at_caret]              ; the anchor rides along, like every
+    mov [at_sela], ax               ; other caret-moving edit - a stale one
+    mov [at_selb], ax               ; mis-anchors the next shift-extend
     mov dx, -1
     call at_apply_edit
     jmp short .out
@@ -345,6 +348,14 @@ at_apply_edit:
     call at_redraw_range
     jmp short .see
 .below:
+    call at_maxtop                  ; an incremental delete can strand a
+    mov bx, ax                      ; bottom-scrolled view too (the .full
+    mov ax, [at_top]                ; clamp, same reason)
+    cmp ax, bx
+    jbe .bok
+    mov [at_top], bx
+    jmp short .fdraw                ; the view moved: everything repaints
+.bok:
     mov bx, [at_dfrom]
     call at_redraw_below
     call at_sbar
@@ -354,9 +365,9 @@ at_apply_edit:
     mov bx, ax
     mov ax, [at_top]
     cmp ax, bx
-    jbe .topok
+    jbe .fdraw
     mov [at_top], bx
-.topok:
+.fdraw:
     call at_draw_text
     call at_sbar
 .see:
@@ -1239,8 +1250,6 @@ at_paste:
     push es
     mov cx, [at_cliplen]
     jcxz .out
-    call at_undo_push
-    mov byte [at_typrun], 0
     call at_selget
     mov bx, dx
     sub bx, ax                      ; BX = bytes the selection frees
@@ -1253,6 +1262,9 @@ at_paste:
     add si, cx                      ; SI = the length afterwards
     cmp si, AT_DOCCAP
     ja .nofit
+    call at_undo_push               ; only a paste that WILL land pays:
+    mov byte [at_typrun], 0         ; before the fit check, a refused one
+                                    ; cost the whole redo stack for nothing
     cmp bx, 0
     je .ins
     push cx
@@ -1317,30 +1329,30 @@ at_selall:
 
 ; =============================================================================
 ; Undo / redo (SPEC.md 46.6): whole-document snapshots (app.h's design -
-; canonical text round-trips styling for free) in one arena block, pushed
+; canonical text round-trips styling for free) in one heap claim, pushed
 ; per typing run and per command. Compacting stacks: entries back-to-back,
-; the oldest dropped by an in-segment slide when space runs out. No arena =
+; the oldest dropped by an in-segment slide when space runs out. No claim =
 ; the feature quietly reports itself unavailable through the menus' gray.
 ; =============================================================================
 
-; at_undo_init - one-time arena claim (first fullscreen entry)
+; at_undo_init - one-time heap claim (first fullscreen entry)
 at_undo_init:
     push ax
     push bx
     push cx
     cmp word [at_aseg], 0
     jne .out
-    mov ax, 4096                    ; 64KB: 24K undo + 24K redo + 16K clip
+    mov ax, 64                      ; 64KB: 24K undo + 24K redo + 16K clip
     mov bx, 24576
     mov cx, 16384
     call at_ualloc
     jnc .out
-    mov ax, 2048
+    mov ax, 32
     mov bx, 12288
     mov cx, 8192
     call at_ualloc
     jnc .out
-    mov ax, 1024
+    mov ax, 16
     mov bx, 6144
     mov cx, 4096
     call at_ualloc
@@ -1350,12 +1362,12 @@ at_undo_init:
     pop ax
     ret
 
-; at_ualloc - AX paragraphs; BX = per-stack bytes; CX = clip bytes
+; at_ualloc - AX = KB wanted; BX = per-stack bytes; CX = clip bytes
 at_ualloc:
     push dx
-    call OSAPI_MEM_ALLOC
+    call OSAPI_MEM_CLAIM            ; AX KB -> DX segment (SPEC.md 50.3)
     jc .no
-    mov [at_aseg], ax
+    mov [at_aseg], dx
     mov [at_usz], bx
     mov dx, bx
     add dx, bx
@@ -1494,7 +1506,7 @@ at_snstore:
 
 ; -----------------------------------------------------------------------------
 ; at_sndrop - evict the staged stack's oldest entry (sncnt > 0)
-; DS stays OURS throughout; the arena is reached through ES overrides.
+; DS stays OURS throughout; the claim is reached through ES overrides.
 ; -----------------------------------------------------------------------------
 at_sndrop:
     push ax
@@ -1552,6 +1564,10 @@ at_undo:
     push ax
     cmp word [at_ucnt], 0
     je .out
+    call at_dlen                    ; the take DESTROYS the current text,
+    add ax, 8                       ; so refuse while it cannot first be
+    cmp ax, [at_usz]                ; pushed - snap_push would .wipe, and
+    ja .out                         ; the only copy would die unwarned
     mov al, 1                       ; current state -> the REDO stack
     call at_snap_push
     mov al, 0
@@ -1564,6 +1580,10 @@ at_redo:
     push ax
     cmp word [at_rcnt], 0
     je .out
+    call at_dlen                    ; same guard as at_undo
+    add ax, 8
+    cmp ax, [at_usz]
+    ja .out
     mov al, 0                       ; current state -> the UNDO stack,
     call at_snap_push               ; WITHOUT clearing redo
     mov al, 1
@@ -1610,14 +1630,14 @@ at_snap_take:
     mov ax, [es:si+6]
     mov [at_selb], ax
     add si, 8
-    ; the text: arena ES:SI -> our at_doc[0..len)
+    ; the text: claim ES:SI -> our at_doc[0..len)
     mov ax, es                      ; AX = source segment
     mov cx, bp
     mov di, at_doc
     push ds
     push ds
     pop es                          ; ES = ours
-    mov ds, ax                      ; DS = arena
+    mov ds, ax                      ; DS = the claim
     cld
     rep movsb
     pop ds

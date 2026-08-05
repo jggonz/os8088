@@ -5,11 +5,7 @@
 ; that owns a segment (SPEC.md 20.1) and reaches every service through the API
 ; table in os88api.inc. Prefix `ark_`, embedded icon, one worker task.
 ;
-; Contributed as a fork by github.com/Elendilon, who also wrote Solitaire
-; (SPEC.md 43) - which is what 'About Arkanoid' under our name in the menu
-; bar says, and the reason this package registers one at all.
-;
-; Six things shape it:
+; Four things shape it:
 ;
 ;  - **The paddle reflects, it does not re-launch.** A bounce mirrors vy and
 ;    KEEPS vx, then adds where along the paddle it landed (ark_zbias) and how
@@ -57,12 +53,6 @@
 ;    further - no row colour may reduce to BLACK, or that row disappears into
 ;    the background entirely, so the palette is drawn from the white and
 ;    dither classes only and alternates between them.
-;
-;  - **The credits are a panel, not a window**, drawn inside our own content
-;    by the UI task while [ark_abon] holds the worker off (ark_about below).
-;    A package cannot put up a second window, and the game field is exactly
-;    the rectangle a notice wants; the game pauses under it, because a
-;    dropped frame does not stop a ball.
 ;
 ; Keys: left/right move, Space launches the ball (and fires the laser when one
 ; is armed), P pauses, N starts a new game.
@@ -163,6 +153,11 @@ ARK_PUH     equ 10                  ; 8px glyph drawn one row in, or the letter
                                     ; it and every frame leaves a slice of the
                                     ; last one behind
 ARK_PUFALL  equ 2                   ; ...and how fast it falls
+ARK_LAGMAX  equ 4                   ; how far behind its own deadline the
+                                    ; worker will chase before giving up and
+                                    ; re-anchoring (ark_worker). Small, because
+                                    ; the point is to absorb ONE slow frame,
+                                    ; not to run a backlog of them
 
 ; game modes ([ark_mode])
 M_READY     equ 0                   ; ball parked on the paddle, Space to go
@@ -224,8 +219,15 @@ ark_entry:
 
     mov ax, [ark_chwant]            ; the height the layout wants...
     add ax, TITLE_H + 1
-    mov bx, [ark_dock]              ; ...clamped to the desktop band, exactly
-    sub bx, MBAR_H                  ; as wm_fit would (SPEC.md 11)
+    mov bx, [ark_dock]              ; ...clamped to the desktop band, and one
+    sub bx, MBAR_H + 1              ; pixel short of it, exactly as wm_fit
+                                    ; does (SPEC.md 11): the drop shadow is
+                                    ; on row y+h, so a frame that merely
+                                    ; REACHES the dock already covers it.
+                                    ; wm_fit would shave this pixel anyway -
+                                    ; taking it here keeps ark_chgt, and so
+                                    ; the whole layout, in step with the
+                                    ; window the kernel actually made
     cmp ax, bx
     jbe .hok
     mov ax, bx
@@ -264,45 +266,44 @@ ark_entry:
     jc .full
     mov [ark_win], bx
     mov si, ark_menus
-    call OSAPI_MENU_SET             ; draws nothing, and preserves the flags
+    call OSAPI_MENU_SET
     mov si, ark_about
     call OSAPI_ABOUT_SET            ; 'About Arkanoid' under our name in the
-                                    ; bar (SPEC.md 12.2) - same contract, and
-                                    ; it preserves the flags for the same
-                                    ; reason: the CF above is the loader's
+                                    ; bar (SPEC.md 12.2); preserves the flags
 .full:
     pop di
     pop si
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; ark_track - adopt the content origin and size (top of every callback and of
 ;             every rendered frame)
 ; in:  SI = window ptr
-; out: [ark_ox]/[ark_oy], [ark_cwid]/[ark_chgt] and the derived rows
+; out: [ark_ox]/[ark_oy], [ark_cwid]/[ark_chgt] and the derived rows;
+;      ES = KERNEL_SEG
 ;
 ; The window moves and wm_fit may have clamped what we asked for, so the
-; layout is re-derived from the kernel's live answer rather than from
-; ark_entry's arithmetic. A window pointer is an OPAQUE HANDLE (SPEC.md
-; 11/20.5): our DS is our own segment and cannot reach the record, so the
-; size comes from OSAPI_WM_GEOM - `[es:bx + W_W]` against a borrowed
-; KERNEL_SEG is the v2 idiom and is dead.
+; layout is re-derived from the record rather than from ark_entry's
+; arithmetic. ES is loaded rather than relied on: it is ours to clobber.
 ; -----------------------------------------------------------------------------
 ark_track:
     push ax
     push bx
-    push cx
     push dx
+    mov ax, KERNEL_SEG
+    mov es, ax
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
     mov [ark_ox], ax
     mov [ark_oy], dx
-    call OSAPI_WM_GEOM              ; CX = content width, DX = content height
-    mov [ark_cwid], cx
-    mov [ark_chgt], dx
+    mov ax, [es:bx + W_W]
+    sub ax, 2
+    mov [ark_cwid], ax
+    mov ax, [es:bx + W_H]
+    sub ax, TITLE_H + 1
+    mov [ark_chgt], ax
     call ark_layout
     pop dx
-    pop cx
     pop bx
     pop ax
     ret
@@ -334,6 +335,12 @@ ark_layout:
 ; ark_paint - W_PAINT: full content repaint, and where the worker is hired
 ; in:  SI = window ptr; caller holds the gfx lock
 ; out: nothing; preserves all registers
+;
+; The three "owed" flags are cleared here, not just in ark_render's own full
+; branch: ark_draw_all satisfies all three, and W_PAINT is the OTHER caller
+; of it. Left set, the worker's very next frame drew the whole board a second
+; time - most visibly on the launch, where ark_newgame raises [ark_full] and
+; the first paint therefore rendered twice in a row.
 ; -----------------------------------------------------------------------------
 ark_paint:
     push ax
@@ -344,6 +351,9 @@ ark_paint:
     push di
     call ark_track
     call ark_draw_all
+    mov byte [ark_full], 0
+    mov byte [ark_msg], 0
+    mov byte [ark_stat], 0
     call ark_hire                   ; idempotent: only the first paint spawns
     pop di
     pop si
@@ -351,7 +361,7 @@ ark_paint:
     pop cx
     pop bx
     pop ax
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; ark_hire - spawn the worker, once
@@ -454,7 +464,7 @@ ark_onkey:
     pop cx
     pop bx
     pop ax
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; ark_oncmd - AM_ONCMD: a Game menu item (SPEC.md 12.2)
@@ -481,11 +491,13 @@ ark_oncmd:
 .out:
     pop di
     pop si
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
-; ark_onclick - W_ONCLICK: nothing steers with the mouse, so a click exists
-;               only to take the credit panel down
+; ark_onclick - W_ONCLICK: nothing in this game steers with the mouse, so a
+;               click exists only to take the credit panel down. A panel you
+;               dismiss with a key but not with a click reads as a hung
+;               window, which is the whole reason this callback exists.
 ; in:  CX = x, DX = y (screen), SI = window ptr; caller holds the gfx lock
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
@@ -504,7 +516,7 @@ ark_onclick:
     pop cx
     pop bx
     pop ax
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; ark_cmd_new / ark_cmd_pause - the two commands, shared by keys and menu
@@ -539,6 +551,10 @@ ark_cmd_pause:
     ret
 
 ; =============================================================================
+; The worker: the game itself (SPEC.md 20.6)
+; =============================================================================
+
+; =============================================================================
 ; 'About Arkanoid' - the credits (SPEC.md 12.2)
 ; =============================================================================
 ; The panel is drawn INSIDE our own content, not in a window of its own: a
@@ -556,7 +572,7 @@ ark_cmd_pause:
 
 ; -----------------------------------------------------------------------------
 ; ark_about - the OSAPI_ABOUT_SET handler: a window callback in every respect
-; in:  SI = our window ptr; caller holds the gfx lock; returns with retf
+; in:  SI = our window ptr; caller holds the gfx lock
 ; -----------------------------------------------------------------------------
 ark_about:
     push ax
@@ -580,7 +596,7 @@ ark_about:
     pop cx
     pop bx
     pop ax
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; ark_abdismiss - take the panel down if it is up
@@ -593,8 +609,11 @@ ark_abdismiss:
     je .none
     mov byte [ark_abon], 0
     call ark_draw_all               ; the game stays paused: the key that took
-    stc                             ; the credits down is not also a resume
-    ret
+    mov byte [ark_full], 0          ; the credits down is not also a resume.
+    mov byte [ark_msg], 0           ; This IS the whole repaint every skipped
+    mov byte [ark_stat], 0          ; frame under the panel asked for, so it
+    stc                             ; settles the debt rather than leaving the
+    ret                             ; worker to draw the board a second time
 .none:
     clc
     ret
@@ -738,13 +757,42 @@ ark_abdraw:
 ; machine usable: a worker that spun would starve the UI task it shares the
 ; scheduler with. Everything is lock-free except ark_render, which takes the
 ; lock for one short burst of drawing (rule 3).
+
+; -----------------------------------------------------------------------------
+; ark_worker - THE background task
+; in:  DX = our instance index, DS = ES = CS = our segment, IF = 1, gfx lock
+;      free. NEVER returns and never exits on its own: the only way out is
+;      OSAPI_TASK_ALIVE not coming back.
+;
+; One frame a tick. The sleep is what sets the frame rate AND what keeps the
+; machine usable: a worker that spun would starve the UI task it shares the
+; scheduler with. Everything is lock-free except ark_render, which takes the
+; lock for one short burst of drawing (rule 3).
 ; -----------------------------------------------------------------------------
 ark_worker:
+    call OSAPI_GET_TICKS
+    mov [ark_due], ax               ; the first frame is due now
 .loop:
     mov bx, [ark_win]
     call OSAPI_TASK_ALIVE           ; the lock must NOT be held here (rule 4)
-    mov ax, 1
+
+    inc word [ark_due]              ; ...and the next one a tick after this
+    call OSAPI_GET_TICKS            ; AX = now
+    mov bx, [ark_due]
+    sub bx, ax                      ; BX = ticks still to wait, SIGNED, and
+    jle .behind                     ; wrap-safe by subtraction (SPEC.md 8)
+    mov ax, bx
     call OSAPI_TASK_SLEEP
+    jmp short .frame
+.behind:
+    cmp bx, -ARK_LAGMAX             ; a little late: run now and keep the
+    jg .frame                       ; deadline, so the next short frame catches
+    mov [ark_due], ax               ; back up. Hopelessly late - a long stall,
+                                    ; or a machine that cannot hold 18fps at
+                                    ; all - and the deadline is re-anchored to
+                                    ; now, or it runs away and this loop never
+                                    ; sleeps again
+.frame:
     call ark_update
     call ark_render
     jmp .loop
@@ -1461,9 +1509,12 @@ ark_do_pu:
     mov bx, si
     add bx, bx
     mov ax, [ark_puy+bx]
-    mov [ark_puold+bx], ax          ; where to erase it from
-    add ax, ARK_PUFALL
-    mov [ark_puy+bx], ax
+    add ax, ARK_PUFALL              ; [ark_puold] is NOT touched here: it means
+    mov [ark_puy+bx], ax            ; where the capsule was last DRAWN, and
+                                    ; ark_draw_pu is the only thing that knows
+                                    ; that. Moved here, it drifts from the
+                                    ; pixels the moment ark_render skips a
+                                    ; frame - and then the erase misses
     mov cx, ax                      ; caught? its bottom against the paddle
     add cx, ARK_PUH
     cmp cx, [ark_pady]
@@ -1624,9 +1675,8 @@ ark_do_shots:
     mov bx, si
     add bx, bx
     mov ax, [ark_shy+bx]
-    mov [ark_shold+bx], ax
-    sub ax, 6
-    mov [ark_shy+bx], ax
+    sub ax, 6                       ; [ark_shold] is ark_draw_shots' to write,
+    mov [ark_shy+bx], ax            ; for the reason ark_do_pu explains
     cmp ax, [ark_status]
     jle .kill
     mov cx, [ark_shx+bx]
@@ -1852,16 +1902,18 @@ ark_render:
     push si
     push di
     call OSAPI_GFX_LOCK
+    mov ax, KERNEL_SEG
+    mov es, ax
     mov bx, [ark_win]
-    call OSAPI_WM_GEOM              ; CF = 1: hidden (the v2 idiom of testing
-    jc .unlock                      ; [bx+W_FLAGS] is dead - SPEC.md 11/20.5)
+    test word [es:bx + W_FLAGS], 2  ; still visible?
+    jz .skip
     mov si, bx
     call ark_track                  ; the window may have been dragged
     mov bx, [ark_win]
     call OSAPI_WM_CLIP_SET
-    jc .unlock
+    jc .skip
     cmp byte [ark_abon], 0          ; the credits are up: the UI task owns the
-    jne .unlock                     ; content until a click or a key takes them
+    jne .skip                       ; content until a click or a key takes them
                                     ; down, and the game is paused underneath
     cmp byte [ark_full], 0
     je .parts
@@ -1888,6 +1940,22 @@ ark_render:
     mov byte [ark_msg], 0
     call ark_clear_msg
     call ark_draw_msg
+    jmp short .unlock
+
+    ; --- a frame that drew nothing owes a WHOLE one -------------------------
+    ; ark_update ran and moved everything; the screen did not follow. Every
+    ; erase this module does is aimed at where something was last DRAWN, so
+    ; one skipped frame is survivable - but that is an invariant six separate
+    ; pieces of state have to keep, and it cost a stranded capsule once
+    ; already (SPEC.md 44.4).
+    ;
+    ; In practice the kernel repaints us anyway: un-hiding goes through
+    ; wm_show, uncovering through wm_paint_dmg, and both end in W_PAINT. That
+    ; is a guarantee this module cannot enforce and does not own - and it is
+    ; being actively narrowed (SPEC.md 11.90/11.91 exist to make W_PAINT run
+    ; LESS often). One byte buys independence from it.
+.skip:
+    mov byte [ark_full], 1
 .unlock:
     call OSAPI_GFX_UNLOCK
     pop di
@@ -2225,26 +2293,33 @@ ark_draw_pu:
     mov di, ax                      ; DI = kind, for the colour/letter tables
     mov bx, si
     add bx, bx                      ; BX = the word-indexed slot
-    mov al, [ark_pucol+di]
-    call OSAPI_SET_COLOR
-    mov ax, [ark_pux+bx]
-    mov bx, [ark_puy+bx]
-    mov cx, ax
-    add cx, ARK_PUW - 1
-    mov dx, bx
+
+    mov al, CBLACK                  ; the 1px frame, as a SOLID rect that the
+    call OSAPI_SET_COLOR            ; body is then inset into: two fills for
+    mov ax, [ark_pux+bx]            ; what a fill plus a gfx_frame did in five
+    mov bx, [ark_puy+bx]            ; (a frame is four of them inside the
+    mov cx, ax                      ; kernel), and the same pixels. A capsule
+    add cx, ARK_PUW - 1             ; still has an edge against the background
+    mov dx, bx                      ; when its own colour is a light one
     add dx, ARK_PUH - 1
     call ark_fillc
-    mov al, CBLACK                  ; a 1px frame, so a white capsule still
-    call OSAPI_SET_COLOR            ; has an edge against the background
+
+    mov al, [ark_pucol+di]
+    call OSAPI_SET_COLOR
     mov bx, si
     add bx, bx
     mov ax, [ark_pux+bx]
+    inc ax
     mov bx, [ark_puy+bx]
+    inc bx
     mov cx, ax
-    add cx, ARK_PUW - 1
+    add cx, ARK_PUW - 3             ; x+1 .. x+PUW-2, y+1 .. y+PUH-2
     mov dx, bx
-    add dx, ARK_PUH - 1
-    call ark_framec
+    add dx, ARK_PUH - 3
+    call ark_fillc
+
+    mov al, CBLACK                  ; the letter is black on the body, and the
+    call OSAPI_SET_COLOR            ; body fill above left the pen its colour
     mov al, [ark_puletter+di]
     mov bx, si
     add bx, bx
@@ -2253,6 +2328,11 @@ ark_draw_pu:
     mov dx, [ark_puy+bx]
     inc dx
     call ark_charc
+
+    mov bx, si                      ; ...and THIS is where it now sits, which
+    add bx, bx                      ; is the only honest thing to erase from
+    mov ax, [ark_puy+bx]
+    mov [ark_puold+bx], ax
 .next:
     inc si
     cmp si, ARK_MAXPU
@@ -2278,10 +2358,23 @@ ark_wipe_pu:
     xor si, si
 .each:
     cmp byte [ark_pukind+si], PU_NONE
-    jne .wipe
-    cmp byte [ark_puwipe+si], 0     ; caught or lost: one last erase
-    je .next
+    jne .fall
+    cmp byte [ark_puwipe+si], 0     ; caught or lost: one last erase, and it
+    je .next                        ; has to be the WHOLE capsule
     mov byte [ark_puwipe+si], 0
+    mov dx, ARK_PUH - 1
+    jmp short .wipe
+.fall:                              ; still falling: only the strip it VACATED
+    mov bx, si                      ; since it was last drawn. Two rows in the
+    add bx, bx                      ; ordinary frame; more if ark_render
+    mov ax, [ark_puy+bx]            ; skipped one and the capsule kept moving;
+    sub ax, [ark_puold+bx]          ; NONE if it has not moved since, which is
+    jbe .next                       ; every frame of the pause after a death
+    dec ax
+    mov dx, ax                      ; The other eight rows are drawn over
+                                    ; anyway, and erasing them first was 120
+                                    ; pixels a frame per capsule spent on
+                                    ; pixels nothing would ever see
 .wipe:
     mov al, ARK_BG
     call OSAPI_SET_COLOR
@@ -2291,8 +2384,7 @@ ark_wipe_pu:
     mov bx, [ark_puold+bx]
     mov cx, ax
     add cx, ARK_PUW - 1
-    mov dx, bx
-    add dx, ARK_PUH - 1
+    add dx, bx
     call ark_fillc
 .next:
     inc si
@@ -2330,6 +2422,10 @@ ark_draw_shots:
     mov dx, bx
     add dx, 5
     call ark_fillc
+    mov bx, si                      ; where it now sits, for the erase
+    add bx, bx
+    mov ax, [ark_shy+bx]
+    mov [ark_shold+bx], ax
 .next:
     inc si
     cmp si, ARK_MAXSHOT
@@ -2788,16 +2884,14 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     ABYTE ark_launch                ; Space, set by the UI task
     ABYTE ark_hired                 ; the worker exists
     ABYTE ark_full                  ; the next frame must repaint everything
+    ABYTE ark_abon                  ; 1 = it is up, and the worker draws nothing
+    AWORD ark_abw                   ; the credit panel's measured width, height,
+    AWORD ark_abh                   ; left and top - content coords, all four
+    AWORD ark_abl                   ; settled by ark_abmeas before a pixel of
+    AWORD ark_abt                   ; it is drawn
     ABYTE ark_stat                  ; ...or at least the status strip
     ABYTE ark_msg                   ; ...or at least the banner
     ABYTE ark_padwipe
-
-; --- the credit panel (SPEC.md 12.2) ------------------------------------------
-    ABYTE ark_abon                  ; 1 = it is up, and the worker draws nothing
-    AWORD ark_abw                   ; its measured width, height, left and top -
-    AWORD ark_abh                   ; content coords, all four settled by
-    AWORD ark_abl                   ; ark_abmeas before a pixel is drawn
-    AWORD ark_abt
 
 ; --- the ball -----------------------------------------------------------------
     AWORD ark_bx
@@ -2814,6 +2908,9 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     AWORD ark_sy
     AWORD ark_err
     AWORD ark_nstep
+
+; --- the worker's frame clock -------------------------------------------------
+    AWORD ark_due                   ; [ticks] the next frame is due at
 
 ; --- drawing scratch ----------------------------------------------------------
     AWORD ark_dx

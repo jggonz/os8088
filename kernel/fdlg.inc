@@ -74,7 +74,15 @@ FD_BX2      equ 286
 FD_BY0      equ 20              ; Open / Save (the default button)
 FD_BY1      equ 40              ; Cancel
 FD_BY2      equ 60              ; Drive
+FD_BY3      equ 80              ; New Folder - SAVE MODE ONLY (SPEC.md 38.3)
 FD_BH       equ 13
+FD_BH2      equ 24              ; ...and it is TWO lines tall: 'New' over
+                                ; 'Folder' says what the button does, where
+                                ; 'New' alone next to Save/Cancel/Drive reads
+                                ; as new WHAT. 63px of button holds 7 glyphs,
+                                ; so the two words cannot share a line
+FD_BT1      equ 4               ; the two text rows inside it, 8px glyphs
+FD_BT2      equ 13              ; with 3px of margin above and below
 
 FD_NBX1     equ 72              ; the name box
 FD_NBX2     equ 213
@@ -99,8 +107,11 @@ fdlg_s_open:   db 'Open', 0
 fdlg_s_save:   db 'Save', 0
 fdlg_s_cancel: db 'Cancel', 0
 fdlg_s_drive:  db 'Drive', 0
+fdlg_s_newf:   db 'New', 0      ; the two-line New Folder button (FD_BH2)
+fdlg_s_newf2:  db 'Folder', 0
 fdlg_s_lopen:  db 'Open:', 0
 fdlg_s_lsave:  db 'Save as:', 0
+fdlg_s_lfold:  db 'Folder:', 0 ; 8 glyphs is what fits before the box
 fdlg_s_dotdot: db '..', 0
 fdlg_s_folder: db 'folder', 0
 fdlg_s_up:     db 'up', 0
@@ -129,9 +140,7 @@ fdlg_win:   dw 0
 ; -----------------------------------------------------------------------------
 ; fdlg_open - API slot 0x0150 (SPEC.md 38.6)
 ; in:  AL = 0 Open / 1 Save, BX = requester window ptr, DI = completion proc
-;      OFFSET in the caller's segment (stored as a value; the SEGMENT is
-;      resolved from the requester's instance when the callback is invoked,
-;      never stored - SPEC.md 38.6/11), SI = default name (NUL, <= 12) or 0.
+;      (near, in the caller's image), SI = default name (NUL, <= 12) or 0.
 ;      THE CALLER HOLDS THE GFX LOCK - every legal caller is a window
 ;      callback or an AM_ONCMD handler, which is what lets this create and
 ;      show the window inline instead of posting a launch.
@@ -141,10 +150,8 @@ fdlg_win:   dw 0
 ;
 ; The staleness triple (record, I_WIN, I_SPTR) is captured here and checked
 ; again at commit time: a package whose window closes while the dialog is up
-; has had its region freed, and its callback offset stops meaning anything.
-; The window pointer alone would not do - window slots are reused. I_SPTR is
-; a segment since v3 (SPEC.md 29.1); the triple only ever compares it for
-; equality, so the unit change costs it nothing.
+; has had its region freed, and its near callback pointer stops meaning
+; anything. The window pointer alone would not do - window slots are reused.
 ; -----------------------------------------------------------------------------
 fdlg_open:
     push ax
@@ -171,7 +178,9 @@ fdlg_open:
     mov [fdlg_rqsp], ax
 
     mov byte [fdlg_nlen], 0     ; seed the name box from the caller's default
-    mov byte [fdlg_name], 0
+    mov byte [fdlg_ncur], 0
+    mov byte [fdlg_nmode], 0    ; ...as a FILE name; the New Folder button is
+    mov byte [fdlg_name], 0     ; what switches the box to naming a folder
     or si, si
     jz .fresh
     call fdlg_setname
@@ -185,8 +194,12 @@ fdlg_open:
     call dsk_chdir              ; (SPEC.md 22.1), and from here until the
                                 ; dialog closes nothing else can move it
 
-    mov si, fdlg_tpl
+    mov si, fdlg_tpl            ; wm_create reads the template at ES:SI, and
+    push es                     ; ours is kernel data - which is also what
+    push ds                     ; tells it this is a KERNEL window (W_SEG 0)
+    pop es
     call wm_create              ; BX = window ptr, CF = table full
+    pop es
     jc .refuse
     mov ax, fdlg_s_topen
     cmp byte [fdlg_mode], 0
@@ -413,33 +426,36 @@ fdlg_commit:
     mov cx, [fdlg_rqcb]
     or cx, cx
     jz .out
-    call inst_cb_seg            ; AX = the requester's segment (DI = the
-                                ; record the triple just validated) -
-                                ; resolved at INVOKE time, never stored
-                                ; (SPEC.md 38.6/11)
-    push word [snd_inst]        ; stamp the dispatched instance, like every
-    call snd_disp_set           ; other callback site (SPEC.md 34.3): sound
-                                ; grants made inside the completion proc,
-                                ; and inst_pkg_spawn's identity fence
-                                ; (SPEC.md 20.6), both read it. DI = the
-                                ; requester's record
-    push es                     ; the callback owes us nothing (SPEC.md
-                                ; 38.6), and ES is the one register the
-                                ; kernel cannot shrug off (SPEC.md 1)
-    push ds
-    pop es                      ; ES = KERNEL_SEG: the name travels as
-                                ; ES:DI since v3 - a package's DS is its
-                                ; own segment and cannot read fdlg_name
-                                ; flat any more (SPEC.md 38.6)
-    push ax                     ; the resolved segment above the offset:
-    push cx                     ; inst_cb_call_es's argument pair
+    push word [snd_inst]        ; STAMP THE DISPATCHED INSTANCE (SPEC.md
+    call snd_disp_set           ; 34.3), exactly as W_ONKEY, W_ONCLICK, the
+                                ; menu handler and W_PAINT all do - and DI is
+                                ; still [fdlg_rqrec] here, validated three
+                                ; tests up, so the record is free.
+                                ;
+                                ; This was the one dispatch site that did not,
+                                ; and the consequence was invisible: a sound
+                                ; GRANT taken inside a completion proc got
+                                ; snd_req_inst's fallback, the running task's
+                                ; T_INST, which on the UI task is 0xFF - "no
+                                ; instance". The app's own worker is stamped
+                                ; with the real instance, so sbl_grant_chk's
+                                ; owner compare could never match and every
+                                ; stage into that grant was refused. Tracker
+                                ; loads a module through this dialog and mixes
+                                ; from a worker: the ring kept the open's
+                                ; pre-roll and played zeros for the rest of
+                                ; it, forever. The 0xFF stamp also outlives
+                                ; the app, because snd_release_inst releases
+                                ; by instance and nothing owns 0xFF.
     mov al, [fdlg_mode]         ; the callback's contract: AL = mode,
-    mov ah, 0                   ; SI = its window, ES:DI = the name
-    mov si, [fdlg_rqwin]
-    mov di, fdlg_name
-    call inst_cb_call_es        ; near for a kernel requester, far with
-                                ; DS = the package segment else - ES stays
-                                ; KERNEL_SEG on both legs (SPEC.md 38.6)
+    mov ah, 0                   ; SI = its window, ES:DI = the name - ES,
+    mov si, [fdlg_rqwin]        ; because for a package DS is its own
+    mov di, fdlg_name           ; segment and this buffer is ours (20.1)
+    push es                     ; the callback owes us nothing (SPEC.md
+    push bp                     ; 38.6), and ES is the one register the
+    mov bp, cx                  ; kernel cannot shrug off (SPEC.md 1)
+    call wm_pkgcall             ; SI = its window, BP = the completion proc
+    pop bp
     pop es
     pop word [snd_inst]         ; the outer dispatch's stamp, back
 .out:
@@ -474,7 +490,8 @@ fdlg_setname:
 .done:
     mov byte [bx+fdlg_name], 0
     mov [fdlg_nlen], bl
-    pop si
+    mov [fdlg_ncur], bl         ; a name arriving whole puts the caret after
+    pop si                      ; it, which is where typing continues
     pop bx
     pop ax
     ret
@@ -518,6 +535,7 @@ fdlg_stage:
     jnz .below
     mov word [fdlg_type], 2
     mov word [fdlg_size], 0
+    mov word [fdlg_sizeh], 0
     mov word [fdlg_row], '..'   ; two bytes, then the terminator
     mov byte [fdlg_row+2], 0
     jmp short .out
@@ -535,8 +553,10 @@ fdlg_stage:
     mov byte [fdlg_row+16], 0
     mov ax, [si]                ; SI has advanced to offset 16: the type...
     mov [fdlg_type], ax
-    mov ax, [si+4]              ; ...and offset 20: the size
+    mov ax, [si+4]              ; ...and offsets 20/22: the size dword
     mov [fdlg_size], ax
+    mov ax, [si+6]
+    mov [fdlg_sizeh], ax
 .out:
     pop si
     pop cx
@@ -560,8 +580,11 @@ fdlg_go:
     call dsk_chdir
     mov word [fdlg_sel], 0xFFFF
     mov word [fdlg_scrl], 0
-    pop ax
-    ret
+    call fdlg_unfold            ; a folder name half typed here would be made
+    pop ax                      ; THERE - abandon it with the location it was
+    ret                         ; meant for (fdlg_newfolder calls this itself,
+                                ; and unfolds again after: both are no-ops the
+                                ; second time)
 
 ; -----------------------------------------------------------------------------
 ; fdlg_setsel - move the selection and scroll it into view (internal)
@@ -751,19 +774,81 @@ fdlg_btn:
     call fdlg_off
     call gfx_frame
 .label:
-    call font_width             ; AX = 8 * length
-    mov cx, FD_BX2-FD_BX1+1
-    sub cx, ax
-    shr cx, 1
-    add cx, FD_BX1              ; centered in the 63px rect
     mov dx, bp
     add dx, 3
-    call fdlg_text
+    call fdlg_blabel
     pop bp
     pop si
     pop dx
     pop cx
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_btn2 - a TWO-LINE button of the same column (internal)
+; in:  BX = its top (content-relative), SI = the upper label, DI = the lower
+; out: nothing (all registers preserved)
+;
+; Never the default button, so there is no outer frame to draw and no AL to
+; read. It exists for one button - New / Folder - because 'New' on its own,
+; sitting under Save, Cancel and Drive, reads as new *what*, and the two
+; words do not fit one 63px line.
+; -----------------------------------------------------------------------------
+fdlg_btn2:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov bp, bx                  ; BP = the button top (a value, never an
+                                ; address: SS is not DS, SPEC.md 1)
+    mov byte [gfx_color], CBLACK
+    mov ax, FD_BX1
+    mov bx, bp
+    mov cx, FD_BX2
+    mov dx, bp
+    add dx, FD_BH2
+    call fdlg_off
+    call gfx_frame
+    mov dx, bp
+    add dx, FD_BT1
+    call fdlg_blabel            ; SI = the upper label
+    mov si, di
+    mov dx, bp
+    add dx, FD_BT2
+    call fdlg_blabel
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_blabel - one line of button text, centred in the button column
+; in:  SI = the string, DX = its top row (content-relative), [gfx_color] set
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fdlg_blabel:
+    push ax
+    push cx
+    push si
+    call font_width             ; AX = 8 * length
+    mov cx, FD_BX2-FD_BX1+1
+    sub cx, ax
+    jns .pad                    ; a label wider than the button would make the
+    xor cx, cx                  ; halved padding a huge unsigned number and
+.pad:                           ; put the text off screen entirely
+    shr cx, 1
+    add cx, FD_BX1              ; centered in the 63px rect
+    call fdlg_text
+    pop si
+    pop cx
     pop ax
     ret
 
@@ -817,9 +902,7 @@ fdlg_paint:
     call fdlg_off
     call gfx_frame
 
-    call fdlg_clamp
-    call fdlg_draw_rows
-    call fdlg_draw_sbar
+    call fdlg_list_body
 
     ; --- the button column ---
     mov si, fdlg_s_open
@@ -838,13 +921,24 @@ fdlg_paint:
     mov bx, FD_BY2
     xor al, al
     call fdlg_btn
+    cmp byte [fdlg_mode], 0     ; New Folder is a SAVE-mode button: opening a
+    je .nonewf                  ; file has no use for one, and the fourth
+    mov si, fdlg_s_newf         ; frame would be clutter in the common case
+    mov di, fdlg_s_newf2
+    mov bx, FD_BY3
+    call fdlg_btn2
+.nonewf:
 
     ; --- the name box ---
     mov si, fdlg_s_lopen
     cmp byte [fdlg_mode], 0
     je .nlabel
     mov si, fdlg_s_lsave
-.nlabel:
+    cmp byte [fdlg_nmode], 0
+    je .nlabel
+    mov si, fdlg_s_lfold        ; the box is naming a folder: say so, or the
+.nlabel:                        ; user is typing a folder name into a field
+                                ; labelled 'Save as:'
     mov byte [gfx_color], CBLACK
     mov cx, 6
     mov dx, FD_NTY
@@ -855,22 +949,8 @@ fdlg_paint:
     mov dx, FD_NBY2
     call fdlg_off
     call gfx_frame
-    mov si, fdlg_name
-    mov cx, FD_NTX
-    mov dx, FD_NTY
-    call fdlg_text
-    cmp byte [fdlg_mode], 0
-    je .done                    ; no caret in Open mode: there is nothing
-                                ; to type there (SPEC.md 38.5)
-    call font_width             ; AX = 8 * length; SI is still fdlg_name
-    add ax, FD_NTX
-    add ax, [fdlg_cx]           ; a 1px caret right after the text
-    mov bx, FD_NTY
-    add bx, [fdlg_cy]
-    mov dx, FD_NTY+7
-    add dx, [fdlg_cy]
-    call gfx_vline              ; AX = x, BX = y1, DX = y2
-.done:
+    call fdlg_name_body
+
     pop bp
     pop di
     pop si
@@ -878,6 +958,126 @@ fdlg_paint:
     pop cx
     pop bx
     pop ax
+    ret
+
+; =============================================================================
+; Partial redraws - what a keystroke actually changes (SPEC.md 38.8)
+;
+; The dialog does not resize, so unlike a text window it never has to work out
+; WHICH pixels moved: every key and every click knows what it touched. Typing
+; a character changes the name box and nothing else - not the listing, not the
+; four buttons, not the header, not two frames and a scroll bar - so a
+; keystroke that repainted the whole content was redrawing about a hundred
+; glyphs to move one.
+;
+; So the content is three parts, and each of the two that change on their own
+; is a BODY (draws) plus a wrapper (erases its own rectangle first, and only
+; its own). fdlg_paint calls the bodies, because wm_paint_all already handed
+; it a white content; everything else calls the wrappers.
+;
+; The third part - the header, the two frames, the buttons and the name
+; label - changes only when the volume, the mode or the folder-naming state
+; does, and those paths keep fdlg_repaint. That is the rule for deciding
+; where a new action goes: if it can change the drive letter, the word
+; 'Disk'/'Folder', or the 'Save as:'/'Folder:' label, it is a full repaint.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; fdlg_name_body / fdlg_draw_name - the name box's contents, and the caret
+; in:  [fdlg_cx]/[fdlg_cy] valid; gfx lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fdlg_draw_name:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [gfx_color], CWHITE    ; INSIDE the frame: the frame itself is
+    mov ax, FD_NBX1+1               ; part of the chrome and never moves
+    mov bx, FD_NBY1+1
+    mov cx, FD_NBX2-1
+    mov dx, FD_NBY2-1
+    call fdlg_off
+    call gfx_fill
+    call fdlg_name_body
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+fdlg_name_body:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [gfx_color], CBLACK
+    mov si, fdlg_name
+    mov cx, FD_NTX
+    mov dx, FD_NTY
+    call fdlg_text
+    cmp byte [fdlg_mode], 0
+    je .out                     ; no caret in Open mode: there is nothing
+                                ; to type there (SPEC.md 38.5)
+    mov al, [fdlg_ncur]         ; a 1px caret AT the caret index - 8px cells,
+    xor ah, ah                  ; so its column is the index times eight
+    mov cl, 3
+    shl ax, cl
+    add ax, FD_NTX
+    add ax, [fdlg_cx]
+    mov bx, FD_NTY
+    add bx, [fdlg_cy]
+    mov dx, FD_NTY+7
+    add dx, [fdlg_cy]
+    call gfx_vline              ; AX = x, BX = y1, DX = y2
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_list_body / fdlg_draw_list - the listing and its scroll bar
+; in:  [fdlg_cx]/[fdlg_cy] valid; gfx lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fdlg_draw_list:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [gfx_color], CWHITE    ; inside the list frame, which the scroll
+    mov ax, FD_LX1+1                ; bar's own rules are drawn against
+    mov bx, FD_LY1+1
+    mov cx, FD_LX2-1
+    mov dx, FD_LY2-1
+    call fdlg_off
+    call gfx_fill
+    call fdlg_list_body
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+fdlg_list_body:
+    call fdlg_clamp
+    call fdlg_draw_rows
+    call fdlg_draw_sbar
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_draw_both - a selection move: the listing scrolled AND the box took the
+;                  new selection's name (fdlg_pick)
+; in:  as above
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fdlg_draw_both:
+    call fdlg_draw_list
+    call fdlg_draw_name
     ret
 
 ; -----------------------------------------------------------------------------
@@ -929,9 +1129,10 @@ fdlg_draw_rows:
     cmp word [fdlg_type], 2     ; word 'folder' - a column of zeroes under
     je .right                   ; every directory would only read as one
     mov ax, [fdlg_size]
+    mov dx, [fdlg_sizeh]
     push di
     mov di, fdlg_num
-    call fm_utoa
+    call fm_ultoa               ; the full dword (SPEC.md 19)
     pop di
     mov si, fdlg_num
 .right:
@@ -1117,16 +1318,25 @@ fdlg_repaint:
 ; -----------------------------------------------------------------------------
 fdlg_act:
     push ax
-    cmp byte [fdlg_mode], 0
-    jne .save
+    cmp byte [fdlg_nmode], 0
+    jne .mkfolder               ; the box is naming a FOLDER, not a file
     mov ax, [fdlg_sel]
     cmp ax, 0xFFFF
-    je .refuse                  ; nothing chosen: the button is inert
+    je .nosel
     call fdlg_stage
     cmp word [fdlg_type], 2
-    jne .save                   ; a file: commit it like Save does
-    call fdlg_dive
-    jmp short .stay
+    jne .save                   ; a FILE: commit it, in either mode
+    call fdlg_dive              ; a FOLDER: navigate into it, in either mode.
+    jmp short .stay             ; Selecting one and pressing Enter in Save mode
+.nosel:                         ; used to save a file under whatever name the
+                                ; box still held
+    ; Open mode with no ROW chosen is not the same as nothing to open. The
+    ; box is not editable in Open mode, so the only name it can be holding is
+    ; the one the CALLER passed in - and it is drawn, in a box labelled
+    ; 'Open:', which is a promise. This used to refuse it: the dialog showed a
+    ; file name, and the Open button and Enter both just beeped, while a
+    ; double-click on a row worked. The empty-name gate below is what actually
+    ; distinguishes "nothing to act on", and it serves both modes.
 .save:
     cmp byte [fdlg_nlen], 0
     je .refuse                  ; an empty name is not an answer
@@ -1134,11 +1344,207 @@ fdlg_act:
     call fdlg_commit
     stc
     ret
+.mkfolder:
+    call fdlg_newfolder         ; Enter finishes naming it, the same as
+    jmp short .stay             ; clicking the button again does
 .refuse:
     call snd_beep
 .stay:
     pop ax
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_newfolder - the New Folder button, both halves of it
+; in:  SI = window ptr; lock held
+; out: nothing (all registers preserved)
+;
+; **The name box holds the FILE name**, which is the whole point of a Save As
+; dialog - so using it as the folder name, which the first version of this
+; did, created a folder called PICTURE.GIF and then saved the picture inside
+; it. The button is therefore a two-step: the first click parks the file name
+; and turns the box into a folder-name field (the label changes to say so),
+; the second click - or Enter - creates the folder, navigates into it, and
+; puts the file name back so the user can carry on saving. Escape backs out
+; the same way.
+;
+; This is the same shape the Disk window's New Folder already has (SPEC.md
+; 22: `n` arms a status-line prompt), which is why it needs no new input
+; path: the box is already a line editor with the FAT character set enforced
+; per keystroke.
+; -----------------------------------------------------------------------------
+fdlg_newfolder:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [fdlg_nmode], 0
+    jne .create
+
+    ; --- first click: park the file name and empty the box ------------------
+    mov si, fdlg_name
+    mov di, fdlg_nsave
+    call fdlg_ncopy
+    mov al, [fdlg_nlen]
+    mov [fdlg_nslen], al
+    mov byte [fdlg_nlen], 0
+    mov byte [fdlg_ncur], 0
+    mov byte [fdlg_name], 0
+    mov byte [fdlg_nmode], 1
+    jmp short .out
+
+    ; --- second click: make it, go into it, and restore the file name -------
+.create:
+    cmp byte [fdlg_nlen], 0
+    je .beep                    ; an empty name is not a folder name
+    mov si, fdlg_name
+    call dskw_mkdir             ; CF=1 with AX = FERR_*; on success it has
+    jc .beep                    ; already remounted (SPEC.md 18.5), so the
+    mov si, fdlg_name           ; listing below is the fresh one
+    call fdlg_findname          ; AX = its first cluster, CF=1 = not found
+    jc .restore
+    mov dl, [disk_drive]
+    call fdlg_go
+.restore:
+    call fdlg_unfold
+    jmp short .out
+.beep:
+    call snd_beep               ; refused (a bad name, a full disk, a
+.out:                           ; write-protected volume) - the same answer
+    pop di                      ; every other refusal in this dialog gives.
+    pop si                      ; SI first: the folder work above pointed it
+    call fdlg_repaint           ; at fdlg_name, and fdlg_repaint wants the
+    pop dx                      ; WINDOW - through the name it silently draws
+    pop cx                      ; nothing and the dialog shows a stale screen
+    pop bx                      ; while the volume really has moved. The
+    pop ax                      ; repaint is here and not at the call sites
+    ret                         ; because both halves of the button change
+                                ; what the box says, and one of the two ways
+                                ; in (Enter, through fdlg_act) has none
+
+; -----------------------------------------------------------------------------
+; fdlg_unfold - leave folder-naming mode, putting the file name back
+; out: nothing (all registers preserved). A no-op when the box is already a
+;      file name, so every caller can call it unconditionally.
+; -----------------------------------------------------------------------------
+fdlg_unfold:
+    push ax
+    push si
+    push di
+    cmp byte [fdlg_nmode], 0
+    je .out
+    mov si, fdlg_nsave
+    mov di, fdlg_name
+    call fdlg_ncopy
+    mov al, [fdlg_nslen]
+    mov [fdlg_nlen], al
+    mov [fdlg_ncur], al
+    mov byte [fdlg_nmode], 0
+.out:
+    pop di
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_ncopy - copy a NUL name between the box and its parking space
+; in:  SI = source, DI = destination (both 16 bytes, in our own segment)
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fdlg_ncopy:
+    push ax
+    push cx
+    push si
+    push di
+    mov cx, 16
+.b:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    loop .b
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_findname - the first cluster of the directory named SI, in this listing
+; in:  SI = a NUL 8.3 name; the volume already listed
+; out: CF=0 with AX = its first cluster; CF=1 = no such folder
+; clobbers: AX (the output), CF
+; -----------------------------------------------------------------------------
+fdlg_findname:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov cx, [disk_nfiles]
+    jcxz .no
+    xor bx, bx                  ; BX = entry index
+.scan:
+    push cx
+    push bx
+    mov ax, bx
+    call dsk_get_dir            ; SI -> the staged entry: name, then the type
+    cmp word [si+16], 2         ; word at +16 and the first cluster at +18
+    jne .next                   ; (SPEC.md 19) - only a folder can match
+    mov di, si
+    mov si, fdlg_name
+    call fdlg_streq             ; CF=0 = same name
+    jc .next
+    pop bx
+    pop cx
+    mov ax, bx
+    call dsk_get_dir
+    mov ax, [si+18]
+    clc
+    jmp short .out
+.next:
+    pop bx
+    pop cx
+    inc bx
+    loop .scan
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_streq - do the NUL strings at DS:SI and DS:DI match? (internal)
+; out: CF=0 = equal; preserves all registers
+; -----------------------------------------------------------------------------
+fdlg_streq:
+    push ax
+    push si
+    push di
+.c:
+    mov al, [si]
+    cmp al, [di]
+    jne .no
+    or al, al
+    jz .yes
+    inc si
+    inc di
+    jmp short .c
+.no:
+    stc
+    jmp short .out
+.yes:
+    clc
+.out:
+    pop di
+    pop si
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1193,6 +1599,13 @@ fdlg_onkey:
     push dx
     push di
 
+    push ax                     ; the content origin the partial redraws
+    mov bx, si                  ; below need. This proc used to get it for
+    call wm_content             ; free from fdlg_paint, which it no longer
+    mov [fdlg_cx], ax           ; always reaches - and AX is the keystroke,
+    mov [fdlg_cy], dx           ; which the ladder below still wants
+    pop ax
+
     cmp al, 27
     je .cancel
     cmp al, 13
@@ -1207,6 +1620,19 @@ fdlg_onkey:
     je .kpgdn
     cmp byte [fdlg_mode], 0
     je .out                     ; Open mode: nothing else is typing
+    or al, al
+    jnz .typing                 ; an EXTENDED key has AL = 0. The numeric
+    cmp ah, 0x4B                ; keypad sends '4' '6' '7' '1' '.' with these
+    je .kleft                   ; very scan codes, so without this gate
+    cmp ah, 0x4D                ; NumLock would turn typing a digit into
+    je .kright                  ; moving the caret
+    cmp ah, 0x47
+    je .khome
+    cmp ah, 0x4F
+    je .kend
+    cmp ah, 0x53
+    je .kdel
+.typing:
     cmp al, 8
     je .bksp
     cmp al, 32
@@ -1218,8 +1644,8 @@ fdlg_onkey:
     jae .out
     cmp al, '.'
     jne .plain
-    or bl, bl
-    jz .out                     ; a short name may not start with the dot...
+    cmp byte [fdlg_ncur], 0
+    je .out                     ; a short name may not start with the dot...
     call fdlg_hasdot
     jc .out                     ; ...and may not carry a second one
     jmp short .store
@@ -1227,21 +1653,37 @@ fdlg_onkey:
     call dskw_char              ; upper-cases, CF = 1 = not in the FAT set
     jc .out
 .store:
-    mov [bx+fdlg_name], al
-    inc bx
-    mov byte [bx+fdlg_name], 0
-    mov [fdlg_nlen], bl
-    jmp short .redraw
+    call fdlg_nins              ; at the caret, which moves past it
+    jmp .rname
 
 .bksp:
-    mov bl, [fdlg_nlen]
-    xor bh, bh
-    or bl, bl
-    jz .out
-    dec bl
-    mov [fdlg_nlen], bl
-    mov byte [bx+fdlg_name], 0  ; BX is the NEW length: the terminator lands
-    jmp short .redraw           ; on the character just dropped
+    cmp byte [fdlg_ncur], 0
+    je .out                     ; nothing to the left of the caret
+    dec byte [fdlg_ncur]
+    call fdlg_ndel
+    jmp .rname
+
+.kdel:
+    call fdlg_ndel              ; forward delete: the caret stays put
+    jmp .rname
+.kleft:
+    cmp byte [fdlg_ncur], 0
+    je .out
+    dec byte [fdlg_ncur]
+    jmp short .rname
+.kright:
+    mov al, [fdlg_ncur]
+    cmp al, [fdlg_nlen]
+    jae .out
+    inc byte [fdlg_ncur]
+    jmp short .rname
+.khome:
+    mov byte [fdlg_ncur], 0
+    jmp short .rname
+.kend:
+    mov al, [fdlg_nlen]
+    mov [fdlg_ncur], al
+    jmp short .rname
 
 .kup:
     mov ax, [fdlg_sel]
@@ -1265,13 +1707,25 @@ fdlg_onkey:
 .setsel:
     call fdlg_setsel
     call fdlg_pick              ; keep the name box on the selection
-    jmp short .redraw
+    jmp short .rboth
 
 .enter:
     call fdlg_act               ; CF = 1: the window is gone, do not repaint
     jmp short .out
 .cancel:
+    cmp byte [fdlg_nmode], 0    ; Escape while naming a folder backs OUT of
+    je .close                   ; that, not out of the dialog: the user asked
+    call fdlg_unfold            ; for a folder, changed their mind, and still
+    jmp short .redraw           ; wants to save. WHOLE: the box's label goes
+                                ; back from 'Folder:' to 'Save as:'
+.close:
     call fdlg_close
+    jmp short .out
+.rname:                         ; the box changed and nothing else did
+    call fdlg_draw_name
+    jmp short .out
+.rboth:                         ; ...the selection moved, so the list did too
+    call fdlg_draw_both
     jmp short .out
 .redraw:
     call fdlg_repaint
@@ -1279,6 +1733,68 @@ fdlg_onkey:
     pop di
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_nins - insert AL at the caret, which then sits after it (internal)
+; in:  AL = the character, already through dskw_char; [fdlg_nlen] < FD_NAMEMAX
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+fdlg_nins:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov dl, al
+    mov bl, [fdlg_nlen]
+    xor bh, bh
+    mov cl, bl
+    sub cl, [fdlg_ncur]
+    xor ch, ch                  ; CX = the characters right of the caret
+    inc bx                      ; ...and the terminator moves with them
+.mv:
+    mov al, [bx+fdlg_name-1]
+    mov [bx+fdlg_name], al
+    dec bx
+    jcxz .place
+    dec cx
+    jmp short .mv
+.place:
+    mov bl, [fdlg_ncur]
+    xor bh, bh
+    mov [bx+fdlg_name], dl
+    inc byte [fdlg_nlen]
+    inc byte [fdlg_ncur]
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fdlg_ndel - delete the character the caret sits in front of (internal)
+; out: nothing (all registers preserved). A caret at the end deletes nothing.
+; -----------------------------------------------------------------------------
+fdlg_ndel:
+    push ax
+    push bx
+    mov al, [fdlg_ncur]
+    cmp al, [fdlg_nlen]
+    jae .out
+    mov bl, al
+    xor bh, bh
+.mv:
+    mov al, [bx+fdlg_name+1]    ; pull the tail down over it, terminator
+    mov [bx+fdlg_name], al      ; included
+    or al, al
+    jz .done
+    inc bx
+    jmp short .mv
+.done:
+    dec byte [fdlg_nlen]
+.out:
     pop bx
     pop ax
     ret
@@ -1319,7 +1835,9 @@ fdlg_hasdot:
 fdlg_pick:
     push ax
     push si
-    mov ax, [fdlg_sel]
+    cmp byte [fdlg_nmode], 0
+    jne .out                    ; the box is a folder name being typed: a
+    mov ax, [fdlg_sel]          ; selection must not overwrite it
     cmp ax, 0xFFFF
     je .out
     call fdlg_stage
@@ -1379,15 +1897,54 @@ fdlg_onclick:
     cmp cx, FD_BY2
     jl .out
     cmp cx, FD_BY2+FD_BH
-    jg .out
+    jg .b_newf
     mov dl, [disk_drive]        ; the other drive, at its root; disk_mount
     xor dl, 1                   ; is what publishes [disk_drive]
     xor ax, ax
     call fdlg_go
     jmp .redraw
+.b_newf:
+    cmp byte [fdlg_mode], 0
+    je .out                     ; not drawn in Open mode, so not clickable
+    cmp cx, FD_BY3
+    jl .out
+    cmp cx, FD_BY3+FD_BH2       ; the two-line button is FD_BH2 tall, and the
+    jg .out                     ; hit band has to be the drawn one
+    call fdlg_newfolder         ; repaints itself, both halves
+    jmp .out
+
+    ; --- the name box: put the caret where the user pointed ---
+    ; This is the first thing every click that missed the button column sees,
+    ; which is why the scroll bar's own test is a label further down: the
+    ; button column jumps HERE when it misses, so anything reached only by
+    ; falling out of it would never see a click on the left of the dialog.
+.sbar:
+    cmp byte [fdlg_mode], 0
+    je .sbar2                   ; nothing to type there in Open mode
+    cmp cx, FD_NBY1
+    jl .sbar2
+    cmp cx, FD_NBY2
+    jg .sbar2
+    cmp dx, FD_NBX1
+    jl .sbar2
+    cmp dx, FD_NBX2
+    jg .sbar2
+    mov ax, dx                  ; column = (x - the text origin + half a
+    sub ax, FD_NTX - 4          ; cell) / 8, so a click in the left half of a
+    jns .nb_ok                  ; character puts the caret before it
+    xor ax, ax
+.nb_ok:
+    mov cl, 3
+    shr ax, cl
+    cmp al, [fdlg_nlen]
+    jbe .nb_set
+    mov al, [fdlg_nlen]         ; past the text: the caret goes after it
+.nb_set:
+    mov [fdlg_ncur], al
+    jmp .rname
 
     ; --- the scroll bar ---
-.sbar:
+.sbar2:
     cmp dx, FD_SBX
     jl .rows
     cmp dx, FD_LX2
@@ -1401,25 +1958,25 @@ fdlg_onclick:
     cmp cx, FD_LY2-11
     jge .s_dn
     call fdlg_thumb             ; the track pages against the thumb
-    jc .redraw                  ; no thumb: the track is inert
-    cmp cx, ax
+    jc .out                     ; no thumb: the track is inert, and inert
+    cmp cx, ax                  ; means nothing to draw
     jl .s_pgup
     add ax, dx
     cmp cx, ax
     jge .s_pgdn
-    jmp short .redraw           ; on the thumb itself: nothing to do
+    jmp .out                    ; on the thumb itself: nothing to do
 .s_up:
     dec word [fdlg_scrl]
-    jmp short .redraw
+    jmp .rlist
 .s_dn:
     inc word [fdlg_scrl]
-    jmp short .redraw
+    jmp .rlist
 .s_pgup:
     sub word [fdlg_scrl], FD_ROWS
-    jmp short .redraw
+    jmp .rlist
 .s_pgdn:
     add word [fdlg_scrl], FD_ROWS
-    jmp short .redraw
+    jmp short .rlist
 
     ; --- the rows ---
 .rows:
@@ -1463,6 +2020,14 @@ fdlg_onclick:
     mov bx, [ui_click_t]
     mov [fdlg_clkt], bx
     call fdlg_pick
+    call fdlg_draw_both         ; the list scrolled and the box took the name
+    jmp short .out
+.rlist:                         ; the listing scrolled; the box did not move
+    call fdlg_draw_list
+    jmp short .out
+.rname:                         ; only the caret in the box moved
+    call fdlg_draw_name
+    jmp short .out
 .redraw:
     call fdlg_repaint           ; SI is still the window ptr
 .out:
@@ -1480,12 +2045,10 @@ section .bss
                                 ; `dw 0` up in .text; see the note there)
 fdlg_mode:  resb 1              ; 0 = Open, 1 = Save
 fdlg_rqwin: resw 1              ; the requester's window...
-fdlg_rqcb:  resw 1              ; ...its completion proc OFFSET (the segment
-                                ; is resolved at invoke time, SPEC.md 38.6)
+fdlg_rqcb:  resw 1              ; ...its near completion proc...
 fdlg_rqrec: resw 1              ; ...its instance record...
-fdlg_rqsp:  resw 1              ; ...and that record's I_SPTR (a segment
-                                ; since v3, compared only for equality): the
-                                ; staleness triple of SPEC.md 38.6
+fdlg_rqsp:  resw 1              ; ...and that record's I_SPTR: the staleness
+                                ; triple of SPEC.md 38.6
 fdlg_sel:   resw 1              ; selected DISPLAY row, 0FFFFh = none
 fdlg_scrl:  resw 1              ; first visible row
 fdlg_clkt:  resw 1              ; birth tick of the last click on the
@@ -1493,14 +2056,24 @@ fdlg_clkt:  resw 1              ; birth tick of the last click on the
 fdlg_name:  resb 16             ; the answer: the caller's default in, the
                                 ; chosen name out, the edit buffer between
 fdlg_nlen:  resb 1              ; its length, 0..12
+fdlg_nmode: resb 1              ; 0 = the box holds the FILE name, 1 = it is
+                                ; naming a new folder (SPEC.md 38.3)
+fdlg_nsave: resb 16             ; ...and the file name parked while it does
+fdlg_nslen: resb 1
+fdlg_ncur:  resb 1              ; ...and the CARET, 0..[fdlg_nlen]: the
+                                ; character it sits in front of. Typing,
+                                ; backspace and delete all act here, which is
+                                ; what makes the box an editor rather than an
+                                ; append-only field (SPEC.md 38.5)
 fdlg_cx:    resw 1              ; content origin, cached by paint and click
 fdlg_cy:    resw 1
 fdlg_total: resw 1              ; display rows, and how many of them show -
 fdlg_shown: resw 1              ; painter scratch, valid inside one draw
 fdlg_row:   resb 18             ; one staged row's name (16 + NUL, padded)
 fdlg_type:  resw 1              ; and its SPEC.md 19 type...
-fdlg_size:  resw 1              ; ...and size words
-fdlg_num:   resb 8              ; the size column's digits
+fdlg_size:  resw 1              ; ...and size dword, lo...
+fdlg_sizeh: resw 1              ; ...and hi (SPEC.md 19)
+fdlg_num:   resb 11             ; the size column's digits (fm_ultoa: 10+NUL)
 fdlg_bdef:  resb 1              ; fdlg_btn: is this the default button?
 
 section .text

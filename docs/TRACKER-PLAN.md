@@ -1,5 +1,12 @@
 # os8088 Tracker plan
 
+> **Historical planning document**, kept as the design record for SPEC.md §45.
+> Its two "kernel amendments" — a worker-safe stream and a file read with no
+> 64KB ceiling — both landed, here as well as on the branch it was written for.
+> Where it describes memory it describes an arena in paragraphs; this tree has
+> a claim heap in KB (SPEC.md §50), which is the one correction to carry while
+> reading. SPEC.md §45 is the binding description of what was built.
+
 **Standing plan for the Tracker package (SPEC.md §45) and the two kernel amendments
 it needs.** SPEC.md is the binding contract for what the kernel *is*; this document is
 the design record for how os8088 gets a FastTracker-style MOD player — why each

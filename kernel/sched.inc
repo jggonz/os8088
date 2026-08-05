@@ -14,22 +14,16 @@
 ;
 ; Up to MAX_TASKS tasks; task 0 is the boot thread (the UI task) and runs on
 ; the task-0 stack (SS:STK0_TOP) — it owns no slice of sch_stacks. Slots
-; 1..MAX_TASKS-1 are dynamic (task_spawn / task_exit), each with a 1536-byte
-; stack in .lowbss.
+; 1..MAX_TASKS-1 are dynamic (task_spawn / task_exit), each with an
+; SCH_STACK-byte stack in .lowbss.
 ;
-; Every task runs SS = LOW_SEG (SPEC.md 1/2.1): the stacks live in low
-; memory, outside the kernel's 64KB window, and a context switch is still
-; nothing more than swapping SP because every task shares the one SS. SS is
-; therefore NOT saved in the frame below and never changes after kmain sets
-; it. A task's CODE/DATA segment travels in the frame instead (v3, SPEC.md
-; 7/8): the DS, ES and CS words are saved and restored generically by the
-; one switch path and are seeded by task_spawn from its CX argument -
-; KERNEL_SEG for every kernel task, the owning instance's segment for a
-; package's worker (SPEC.md 20.6). The consequence for the rest of the
-; kernel is that BP-relative operands address SS, not DS: code that uses BP
-; as a pointer into a kernel structure must carry an explicit `ds:`
-; override - and since v3 that SS != DS footgun covers package workers
-; verbatim (SPEC.md 1).
+; All tasks run CS = DS = KERNEL_SEG and SS = LOW_SEG (SPEC.md 1/2.1): the
+; stacks live in low memory, outside the kernel's 64KB window, and a context
+; switch is still nothing more than swapping SP because every task shares the
+; one SS. SS is therefore NOT saved in the frame below and never changes
+; after kmain sets it. The consequence for the rest of the kernel is that
+; BP-relative operands address SS, not DS: code that uses BP as a pointer
+; into a kernel structure must carry an explicit `ds:` override.
 ;
 ; Saved-frame layout (top of a suspended task's stack, low address first):
 ;       [SP+ 0] DS      pushed last by the save path
@@ -57,7 +51,16 @@ T_INST      equ 6               ; byte: owning instance index (SPEC.md 29),
                                 ; 0xFF = none (the UI task)
 T_SIZE      equ 8               ; record stride (1 byte padding)
 
-SCH_STACK   equ 1536            ; per-task stack bytes
+SCH_STACK   equ 512             ; per-task stack bytes. It was 1,536, chosen
+                                ; when the stacks were the only thing in
+                                ; .lowbss and nothing competed with them. A
+                                ; 0xCC fill probe under the heaviest load the
+                                ; machine can carry - Clock, two Bounces and
+                                ; the Fractal's worker all live at once, with
+                                ; the tick and mouse ISRs landing on top of
+                                ; them - left its deepest mark 150 bytes down.
+                                ; 512 is 3.4x that, and it is what buys task 0
+                                ; the 6KB it now has (SPEC.md 2.1)
 SCH_FRAME   equ 24              ; saved-frame size: 9 regs + IP/CS/FLAGS
 
 SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
@@ -192,17 +195,11 @@ sched_unhook:
     ret
 
 ; -----------------------------------------------------------------------------
-; task_spawn - create a task that iret-launches into CX:AX
+; task_spawn - create a task that iret-launches into a near entry point
 ;
 ; Builds a complete saved frame at the top of the slot's stack: DX = the
-; spawn argument, other GP regs zero, DS = ES = CS = the CX segment,
-; IP = entry, FLAGS with IF=1. The frame's three segment words were
-; hardcoded KERNEL_SEG before v3; the context switch has always saved and
-; restored them generically, so seeding them from CX is the whole scheduler
-; cost of the SPEC.md 20 ABI break. SS stays LOW_SEG whatever the segment:
-; the stack is the slot's sch_stacks slice, the switch path is untouched,
-; and SS != DS holds for the new task on day one (SPEC.md 8).
-; The slot's sch_cycles counter is zeroed
+; spawn argument, other GP regs zero, DS = ES = KERNEL_SEG, CS = KERNEL_SEG,
+; IP = entry, FLAGS with IF=1. The slot's sch_cycles counter is zeroed
 ; before the publish (the ISR only charges the RUNNING slot, so a
 ; pre-publish write cannot race - SPEC.md 8.1). The scan starts at slot 1:
 ; slot 0 is the UI task, never free, and runs on the boot stack.
@@ -225,10 +222,13 @@ sched_unhook:
 ; which DS does not address. The task record itself is ordinary kernel .bss
 ; and stays DS-relative.
 ;
-; in:       AX = entry point (an offset in the CX segment)
-;           CX = the new task's code/data segment (SPEC.md 8): KERNEL_SEG
-;                from every kernel caller, the instance's I_SPTR segment
-;                from inst_pkg_spawn (SPEC.md 20.6/29.4)
+; in:       AX = entry point (an offset in the code segment below)
+;           BX = the code segment the task runs in, or 0 for KERNEL_SEG.
+;                A package's worker runs with CS = DS = its own segment and
+;                ES = KERNEL_SEG (SPEC.md 20.1/20.6), which is exactly what
+;                the frame below sets up - the scheduler itself needs no
+;                change, because DS, ES and CS are already part of the saved
+;                frame and sch_resume pops all three.
 ;           DX = argument word - lands in the new task's DX; DL is also
 ;                stored to T_INST (instance index, 0xFF = none)
 ; out:      CF = 1 if no free slot (task not created)
@@ -241,14 +241,16 @@ task_spawn:
     push dx
     push si
     push di
-    push bp
     push es
     pushf                       ; the caller's IF, banked across the window
     cli
-    mov bp, cx                  ; BP = the new task's segment: CX itself is
-                                ; the slot-scan counter below. BP is data
-                                ; only here - no [bp+disp] operand, so the
-                                ; SS-addressing footgun never engages
+    or bx, bx                   ; BX = 0 means the kernel's own segment
+    jnz .haveseg
+    mov bx, KERNEL_SEG
+.haveseg:
+    mov [sch_newseg], bx        ; banked: BX is the scan pointer below, and
+                                ; this whole routine runs at IF=0 so no
+                                ; second spawner can be in here with us
 
     mov bx, sch_tasks + T_SIZE  ; scan for a free slot, from slot 1
     mov cx, 1                   ; CX = slot index
@@ -266,9 +268,9 @@ task_spawn:
 .found:
     mov si, ax                  ; SI = entry (AX becomes scratch)
     mov ax, cx                  ; stack top = sch_stacks + slot*SCH_STACK
-    mov di, SCH_STACK           ; (slot 1 owns sch_stacks[0..1535]; slot 0
-    push dx                     ; has no slice - it runs on the boot stack)
-    mul di                      ; DX:AX = AX * 1536 (high half discarded)
+    mov di, SCH_STACK           ; (slot 1 owns the FIRST slice; slot 0 has no
+    push dx                     ; slice - it runs on the task-0 stack)
+    mul di                      ; DX:AX = AX * SCH_STACK (high half discarded)
     pop dx
     add ax, sch_stacks
     sub ax, SCH_FRAME           ; carve the fake frame at the very top
@@ -278,9 +280,13 @@ task_spawn:
     mov ax, LOW_SEG             ; the frame lives in LOW_SEG, so it is built
     mov es, ax                  ; through ES - DS cannot reach it. AX is dead
                                 ; here: DI already carries the frame address
-                                ; and the xor below is its next use
-    mov [es:di], bp             ; DS slot - the caller's CX segment
-    mov [es:di+2], bp           ; ES slot
+                                ; and the xor below is its next use. CX IS
+                                ; NOT DEAD - it is the slot index, and it is
+                                ; still needed for the cycle counter and the
+                                ; return value below
+    mov ax, [sch_newseg]
+    mov [es:di], ax                ; DS slot = the task's own segment
+    mov word [es:di+2], KERNEL_SEG ; ES slot: the kernel, always (SPEC 20.1)
     xor ax, ax
     mov [es:di+4], ax           ; BP
     mov [es:di+6], ax           ; DI
@@ -290,8 +296,8 @@ task_spawn:
     mov [es:di+14], ax          ; CX
     mov [es:di+16], ax          ; AX
     mov [es:di+18], si          ; IP = entry
-    mov [es:di+20], bp          ; CS - the iret lands at CX:AX with
-                                ; DS = ES = CX (SPEC.md 8)
+    mov ax, [sch_newseg]
+    mov [es:di+20], ax          ; CS = the task's own segment
     mov word [es:di+22], 0x0202 ; FLAGS: IF=1, reserved bit 1 set
     mov [bx+T_INST], dl         ; owning instance (0xFF = none)
 
@@ -311,7 +317,6 @@ task_spawn:
                                 ; AL = 0 -> CF = 1 (table full), else CF = 0.
                                 ; The pops below touch no flags.
     pop es
-    pop bp
     pop di
     pop si
     pop dx
@@ -782,7 +787,7 @@ sch_resume:
 section .lowbss                         ; LOW_SEG, reached through SS (SPEC.md 2.1)
 
 sch_stacks: resb (MAX_TASKS-1) * SCH_STACK ; slots 1..11 only: slot n's stack
-                                        ; top at n*1536 (slot 0 = the UI task
+                                        ; top at n*SCH_STACK (slot 0 = the UI task
                                         ; runs on the task-0 stack, SS:STK0_TOP,
                                         ; which grows down from above this
                                         ; section - it needs no reservation)
@@ -807,8 +812,11 @@ sch_hold:   resb 1                      ; ticks the running task has held the
                                         ; and is compared against
                                         ; SCH_WD_TICKS (18) on the tick that
                                         ; incremented it, so it cannot pass 18
+sch_newseg: resw 1                      ; task_spawn scratch: the code segment
+                                        ; of the task being built (IF=0, so
+                                        ; it cannot race a second spawner)
 sch_wd_hits: resw 1                     ; watchdog-forced switches; diagnostic
-                                        ; only (QMP xp on segment 0x1000),
+                                        ; only (QMP xp on segment 0x0800),
                                         ; wraps mod 65536, never reset
 
 section .text

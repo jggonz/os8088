@@ -194,7 +194,16 @@ at_wrapsel:
     neg dx
     jmp short .apply
 .insert:
-    ; wrap: suffix first (offsets), then prefix
+    ; wrap: both markers or neither - at_insn checks only ITS length, and
+    ; a suffix that fits can leave no room for the prefix, stranding one
+    ; marker in the buffer with the layout table never re-applied
+    mov ax, [at_ge]
+    sub ax, [at_gs]                 ; AX = the gap = free bytes
+    mov dx, cx
+    add dx, cx
+    cmp ax, dx
+    jb .full
+    ; suffix first (offsets), then prefix
     mov ax, [at_whi]
     call at_gapto
     push cx
@@ -206,9 +215,7 @@ at_wrapsel:
     push cx
     call at_insn
     pop cx
-    jc .full                        ; (half-wrapped cannot happen: at_insn
-                                    ; checks the whole length up front and
-                                    ; the suffix already fitted)
+    jc .full                        ; (unreachable now: 2*CX was checked)
     mov ax, [at_wlo]
     add ax, cx
     mov [at_sela], ax
@@ -308,11 +315,21 @@ at_heading:
     xor dx, dx                      ; DX = running delta
     jcxz .nodel
     mov ax, [at_wlo]
+    mov si, [at_caret]              ; latch: at_delrange parks the caret at
+                                    ; the deletion start, but mid-line it
+                                    ; should ride the edit, not teleport
     push dx
     mov dx, ax
     add dx, cx
     inc dx
     call at_delrange
+    sub si, cx                      ; slide back over the removed strip...
+    dec si
+    cmp si, ax
+    jge .ckeep                      ; ...clamped to the line start when the
+    mov si, ax                      ; caret sat inside the prefix itself
+.ckeep:
+    mov [at_caret], si
     pop dx
     sub dx, cx
     dec dx
@@ -367,7 +384,13 @@ at_cmd_link:
     call at_selget
     mov [at_wlo], ax
     mov [at_whi], dx
-    ; "](" + ")" after the selection, "[" before it - far end first
+    ; "](" + ")" after the selection, "[" before it - far end first.
+    ; All four bytes or none: a tail that fits into a gap of exactly 3
+    ; would strand "]()" when the "[" is refused (the at_wrapsel rule)
+    mov ax, [at_ge]
+    sub ax, [at_gs]
+    cmp ax, 4
+    jb .out
     mov ax, dx
     call at_gapto
     mov si, at_d_ltail              ; "]()"

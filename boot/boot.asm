@@ -3,12 +3,19 @@
 ;
 ; The BIOS loads this single 512-byte sector to 0000:7C00 and jumps to it with
 ; DL set to the drive we came from. Our only job is to pull the kernel off the
-; floppy into 1000:0000 and hand control over. The loading screen itself lives
+; floppy into 0060:0000 and hand control over. The loading screen itself lives
 ; in the kernel (kernel/splash.inc, SPEC.md 15): once its opening SPL_RESIDENT
-; sectors are aboard we far-call its pinned 1000:0008 entry after every
+; sectors are aboard we far-call its pinned 0060:0008 entry after every
 ; further sector, and it draws the welcome dialog, progress bar and spinning
 ; 8088. Strictly event-driven - a completed read is the only thing that ever
 ; advances it, so the animation costs no load time.
+;
+; **We move out of the way first.** The kernel lands at linear 0x00600 and is
+; up to 64KB (SPEC.md 2), so it covers 0x7C00 - this sector, and the stack
+; below it - long before the last sector arrives. `start` therefore copies
+; these 512 bytes to BOOT_RELOC:7C00 and jumps there. The copy keeps the SAME
+; OFFSET, so every label in this file still resolves at org 0x7C00 and the
+; only thing that changes is which segment the segment registers name.
 ;
 ; Assembled with -DKERNEL_SECTORS=<n> by the Makefile, which measures the
 ; built kernel so we never read more sectors than exist.
@@ -31,19 +38,64 @@ org 0x7C00
 %define HEADS 2
 %endif
 
-KERNEL_SEG   equ 0x1000         ; kernel lands at linear 0x10000
-STACK_TOP    equ 0x7C00         ; stack grows down, away from our code
+KERNEL_SEG   equ 0x0060         ; kernel lands at linear 0x00600, the first
+                                ; paragraph above the BIOS data area. Mirrored
+                                ; in kernel/kernel.asm, which asserts that the
+                                ; kernel ends clear of our relocated stack
+BOOT_RELOC   equ 0x0C00         ; 0x0C00*16 + 0x7C00 = linear 0x13C00: where
+                                ; we copy ourselves, above anything the kernel
+                                ; can reach. Mirrored in kernel/kernel.asm
+STACK_TOP    equ 0x7C00         ; stack grows down from our own base, so it
+                                ; relocates with us and stays out of the way
 SPLASH_OFF   equ 0x0008         ; the kernel's boot splash far entry (SPEC.md 15)
 SPL_RESIDENT equ 6              ; splash is fully aboard after this many
                                 ; sectors - must match kernel/splash.inc
 
+BPB_END      equ 62             ; where a DOS BPB stops and our code starts
+
 ; -----------------------------------------------------------------------------
-start:
+; The first 62 bytes are NOT ours. tools/os88disk.py writes a full FAT12 BPB
+; over them when it builds the image (SPEC.md 19.3), because the OS disk is a
+; real FAT12 volume now: the kernel sits in the RESERVED AREA, sectors 1..K,
+; which BPB_RsvdSecCnt covers and no file system structure can ever reach. So
+; the raw LBA read below is unchanged and still correct, and at the same time
+; DOS, Linux, macOS - and os8088's own file manager and write path - can all
+; mount drive A: and see the files after it.
+;
+; Everything above `entry` therefore has to be exactly the three bytes DOS
+; expects (a short jump and a NOP) followed by a hole. The jump is `short`,
+; not `near`, because that is what BS_jmpBoot's first-byte test looks for
+; (mount rule 2, SPEC.md 18.2) - and it is our own mount code that would
+; refuse the disk otherwise.
+; -----------------------------------------------------------------------------
+    jmp short entry
+    nop
+    times BPB_END - ($ - $$) db 0
+
+entry:
     cli
     xor ax, ax
     mov ds, ax
     mov ss, ax
     mov sp, STACK_TOP
+
+    ; --- relocate: same offset, new segment ---------------------------------
+    ; Nothing above this point touches memory through a label, so it runs
+    ; correctly at 0000:7C00 where the BIOS put it. After the far jump CS is
+    ; BOOT_RELOC and every org-0x7C00 label below is correct again.
+    mov si, STACK_TOP
+    mov di, STACK_TOP
+    mov ax, BOOT_RELOC
+    mov es, ax
+    mov cx, 256
+    cld
+    rep movsw
+    jmp BOOT_RELOC:.moved
+.moved:
+    mov ax, cs
+    mov ds, ax
+    mov ss, ax                  ; the stack comes with us: same offset, so it
+    mov sp, STACK_TOP           ; grows down from linear 0x13400
     sti
     cld
 
@@ -68,7 +120,9 @@ start:
 
     ; --- copy KERNEL_SECTORS sectors, starting at LBA 1, to KERNEL_SEG:0000 --
     ; The destination segment advances one sector (0x20 paragraphs) per read
-    ; with BX held at zero, so the pointer can never wrap inside a segment.
+    ; with BX held at zero, so the pointer can never wrap inside a segment,
+    ; and every transfer is 512 bytes at a 512-aligned linear address - which
+    ; is what keeps a single read from ever straddling a 64KB DMA boundary.
     mov word [lba], 1
     mov cx, KERNEL_SECTORS
 

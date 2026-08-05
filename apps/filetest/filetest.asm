@@ -24,13 +24,21 @@
 
 FT_BIG    equ 1500            ; spans sectors AND ends mid-sector
 FT_SMALL  equ 300             ; the replace is smaller: the chain must shrink
-FT_ROWS   equ 24              ; result slots: exactly the checks below
+FT_ROWS   equ 25              ; result slots: exactly the checks below
+FT_BIGKB  equ 128             ; the heap claim readbig lands in, KB
+FT_BIGSZ_HI equ 0x0001        ; BIG.DAT is 96KB = 0x00018000 bytes, and its
+FT_BIGSZ_LO equ 0x8000        ; byte at offset i is (i >> 9) - one distinct
+FT_BIGPROBE equ 0x0088        ; value per 512-byte sector, so a destination
+                              ; that failed to advance by segment reads a
+                              ; DIFFERENT one. The probe is offset 0x11111,
+                              ; sector 0x88, past the 64KB horizon every
+                              ; other file op stops at
 FT_MAXF   equ 999             ; scratch-name ceiling for the fill check
 FT_BSS_TOTAL equ 3064         ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; ft_entry - run the suite, then create the window that reports it
-; in:  CS=DS=ES = our own segment, IF=1, gfx lock NOT held
+; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF from wm_create
 ; -----------------------------------------------------------------------------
 ft_entry:
@@ -39,7 +47,7 @@ ft_entry:
     mov si, ft_tpl
     call OSAPI_WM_CREATE
     pop si
-    retf                            ; far-called by the loader (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; ft_run - the checks, in order
@@ -56,6 +64,51 @@ ft_run:
     push es
     push ds
     pop es                      ; every buffer here is our own bss
+
+    ; 25. readbig: the one file op with no 64KB ceiling (SPEC.md 18.4). It
+    ; needs somewhere bigger than our own segment to land, which is what the
+    ; claim heap is for (SPEC.md 50.3) - so a machine that cannot fund the
+    ; claim records nothing rather than failing. Refusal is a normal path.
+    ;
+    ; ONE check, not three: the size and the probe byte are both part of "it
+    ; read the file", and splitting them would need the call's CF carried
+    ; across two ft_note calls. Note `mov dx, 0` and not `xor dx, dx` below -
+    ; ft_note wants the CF the call under test left, and XOR clears it.
+    mov ax, FT_BIGKB
+    call OSAPI_MEM_CLAIM        ; DX = the claim's base segment
+    jc .nobig
+    push dx
+    mov es, dx                  ; the destination is ES:0000
+    mov si, ft_nbig
+    mov cx, 0x0000              ; DX:CX = FT_BIGKB * 1024, the capacity
+    mov dx, 0x0002
+    call OSAPI_FILE_READBIG     ; out DX:AX = the file's 32-bit size
+    jc .rbnote                  ; CF and AX = FERR_* already
+    cmp dx, FT_BIGSZ_HI         ; the real size, which is more than 16 bits
+    jne .rbwrong
+    cmp ax, FT_BIGSZ_LO
+    jne .rbwrong
+    pop dx
+    push dx
+    add dx, 0x1000              ; a byte PAST the 64KB horizon: if the
+    mov es, dx                  ; destination had not advanced by SEGMENT,
+    mov bx, 0x1111              ; this sector never landed here
+    mov al, [es:bx]
+    xor ah, ah
+    cmp ax, FT_BIGPROBE
+    jne .rbwrong
+    clc
+    jmp short .rbnote
+.rbwrong:
+    mov ax, FERR_IO
+    stc
+.rbnote:
+    mov dx, 0                   ; expect success - and keep CF
+    call ft_note
+    pop dx                      ; the claim stays: the kernel frees it at
+    push ds                     ; teardown (SPEC.md 50.4)
+    pop es                      ; every other buffer here is our own bss
+.nobig:
 
     ; 1. free space, before anything
     call OSAPI_FILE_DFREE       ; DX:AX = bytes, BX = sectors/cluster
@@ -490,7 +543,7 @@ ft_paint:
     pop cx
     pop bx
     pop ax
-    retf                            ; far-called W_PAINT (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; ft_num2 / ft_num5 - AX -> a NUL-terminated decimal string in ft_num
@@ -538,6 +591,7 @@ ft_s_fail: db 'FAIL', 0
 ft_s_free: db 'free', 0
 
 ; the files this suite creates and removes again
+ft_nbig: db 'BIG.DAT', 0        ; shipped as DATA on the test image
 ft_n1:   db 'FTEST1.TXT', 0
 ft_n2:   db 'FTEST2.TXT', 0
 ft_n3:   db 'FTEST3.TXT', 0

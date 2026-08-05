@@ -190,7 +190,7 @@ the plan as originally written:
   `WF_FULL` the frame *is* the content.
 - **Kernel budget.** Estimated ~650 bytes of code and 128 bytes of `.bss`;
   actual cost of both parts together is **914 bytes** of `.text` (the
-  binding guard is assertion 2, `KTEXT_SIZE + KFAR_SIZE > APP_LOAD_OFF`),
+  binding guard is assertion 2, `KTEXT_SIZE + KFAR_SIZE > KERN_MAX`),
   taking `build/kernel.bin` from 40,825 to 41,739 against the 45,056 limit —
   3,317 bytes of slack left. The overrun over the estimate is the
   `gfx_xor_rect` decomposition, three API slots rather than two, the icon

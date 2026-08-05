@@ -67,18 +67,14 @@ ui_task:
     call snd_disp_set           ; grants made inside the handler (SPEC 34.3)
     push ax                     ; the key - task_cycles returns in DX:AX
     call task_cycles            ; DX:AX = start stamp
-    mov cx, ax                  ; stamp lo steps aside into CX: BX must
-                                ; still name the WINDOW here, which
-                                ; inst_cb_seg's unowned fallback consults
-                                ; (SPEC.md 11)
-    call inst_cb_seg            ; AX = the owner's segment (DI = the record)
-    mov bx, ax                  ; segment steps aside...
-    pop ax                      ; ...key back for the handler's contract
+    mov bx, ax
+    pop ax                      ; key back for the handler's contract
     push dx                     ; start stamp: hi, then lo
-    push cx
-    push bx                     ; the resolved segment above the offset:
-    push word [si + W_ONKEY]    ; inst_cb_call's argument pair
-    call inst_cb_call
+    push bx
+    push bp
+    mov bp, [si + W_ONKEY]      ; wm_pkgcall: record in SI (where the
+    call wm_pkgcall             ; contract already puts it), offset in BP
+    pop bp
     pop ax
     pop dx
     pop word [snd_inst]         ; the outer dispatch's stamp, back
@@ -184,14 +180,10 @@ ui_task:
     pop cx                      ; click x
     push ax                     ; start stamp: hi, then lo
     push bx
-    mov bx, si                  ; BX = the window again for inst_cb_seg's
-                                ; unowned fallback (the stamp lo it banked
-                                ; is already on the stack - SPEC.md 11)
-    call inst_cb_seg            ; AX = the owner's segment (DI = the record;
-    push ax                     ; both stamps are already banked, so AX is
-    push word [si + W_ONCLICK]  ; free). SPEC.md 11 dispatch: near for the
-                                ; kernel, far at the package's segment else
-    call inst_cb_call
+    push bp
+    mov bp, [si + W_ONCLICK]    ; wm_pkgcall: record in SI, offset in BP
+    call wm_pkgcall
+    pop bp
     pop ax
     pop dx
     pop word [snd_inst]         ; the outer dispatch's stamp, back
@@ -378,12 +370,11 @@ ui_rdown:
     or al, al
     jnz .ret                    ; title bar, close/minimize/grow box: the
                                 ; chrome has no context menu
-    call fm_is_fmwin            ; only Locator's file-manager windows - the
-    jc .ret                     ; W_MENUS = fm_menus identity test made
-                                ; OWNER-AWARE (SPEC.md 13, binding since
-                                ; v3: a package's org-0 set offset can
-                                ; equal fm_menus by coincidence). BX = SI =
-                                ; the frontmost window here
+    cmp word [si + W_SEG], 0    ; a kernel window whose set is fm_menus -
+    jne .ret                    ; the OFFSET alone is not identity: a
+    cmp word [si + W_MENUS], fm_menus
+    jne .ret                    ; package's org-0 W_MENUS can collide with
+                                ; it numerically (SPEC.md 12.3)
 
     call gfx_lock
     call fm_rclick              ; select + track the popup: UNBILLED, exactly
@@ -416,13 +407,21 @@ ui_rdown:
 ;           release (SPEC.md 13 - the ordering below is binding)
 ; in:  BX = window ptr, CX = mousedown x, DX = mousedown y
 ; out: nothing; window's W_X/W_Y updated (clamped: title bar fully on screen),
-;      full repaint done
-; clobbers: AX, BX, CX, DX (internal helper of the UI task)
+;      and a full repaint IF it moved
+; clobbers: AX, BX, CX, DX, DI (internal helper of the UI task)
 ;
 ; The gfx lock is only released while the outline is erased: XOR draw/erase is
 ; self-inverting only if nothing touches the covered pixels in between, and
 ; the background tasks repaint the instant the lock drops. The release path
 ; runs entirely under the lock already held - re-locking would deadlock.
+;
+; **A drag that did not move the window repaints nothing**, and that is not a
+; micro-optimisation: clicking a background window's title bar to focus it
+; comes through here, and the caller has ALREADY repainted everything to
+; raise it (.title_bar's wm_front). Repainting again on release made every
+; focus change cost two full screen redraws - visible as a double flash, and
+; on a 4.77MHz machine as a wait. The outline is XOR-erased before the clamps
+; below, so when neither coordinate changes the screen is already correct.
 ; -----------------------------------------------------------------------------
 ui_drag:
     mov [ui_dragwin], bx
@@ -500,6 +499,11 @@ ui_drag:
     xor ax, ax
 .x_low_ok:
     mov bx, [ui_dragwin]
+    xor di, di                  ; DI = "the window actually moved"
+    cmp [bx + W_X], ax
+    je .x_same
+    inc di
+.x_same:
     mov [bx + W_X], ax
 
     ; clamp y: MBAR_H <= y and y + TITLE_H <= [vid_h] (title bar on screen)
@@ -512,9 +516,35 @@ ui_drag:
     jge .y_low_ok
     mov ax, MBAR_H
 .y_low_ok:
+    cmp [bx + W_Y], ax
+    je .y_same
+    inc di
+.y_same:
     mov [bx + W_Y], ax
 
-    call wm_paint_all           ; caller-held lock, per the wm contract
+    call wm_dock_snap           ; barely over the dock? then back above it,
+    jnc .nosnap                 ; if it still fits (SPEC.md 11.90)
+    inc di                      ; ...and it moved after all
+.nosnap:
+
+    or di, di                   ; a click that only raised the window (above)
+    jz .done                    ; leaves the screen already correct
+
+    ; It moved. Only two rects changed: the one it left and the one it now
+    ; occupies - everything outside their union is still correct on screen,
+    ; so this is wm_paint_dmg's case, not wm_paint_all's (SPEC.md 11.91). The
+    ; union rather than two passes because the two overlap on any short drag,
+    ; and a rect that big is still a fraction of the screen.
+    mov ax, [ui_origx]          ; where it was, drop shadow included
+    mov cx, ax
+    add cx, [ui_dragw]
+    mov bx, [ui_origy]
+    mov dx, bx
+    add dx, [ui_dragh]
+    mov si, [ui_dragwin]
+    call wm_dmg_union           ; ...grown to cover where it is now
+    call wm_paint_dmg           ; caller-held lock, per the wm contract
+.done:
     call gfx_unlock             ; NO second gfx_lock here - already held (§7)
     ret
 
@@ -549,8 +579,8 @@ ui_drag_xor:
 ;           its SIZE follows the mouse; W_W/W_H commit on release
 ;           (SPEC.md 11.1/13 - ui_drag's binding lock/XOR ordering, verbatim)
 ; in:  BX = window ptr (frontmost, WF_SIZABLE), CX = mousedown x, DX = " y
-; out: nothing; W_W/W_H updated (clamped WMIN_W/H .. screen edge), full
-;      repaint done
+; out: nothing; W_W/W_H updated (clamped WMIN_W/H .. screen edge), and the
+;      union of the old and new rects repainted
 ; clobbers: AX, BX, CX, DX, DI (internal helper of the UI task)
 ;
 ; Reuses ui_drag's statics - one tracker runs at a time on the single UI
@@ -634,7 +664,7 @@ ui_grow:
     jge .w_low_ok
     mov ax, WMIN_W
 .w_low_ok:
-    mov [bx + W_W], ax
+    mov cx, ax
 
     ; clamp h: WMIN_H <= h <= [vid_h] - W_Y
     mov ax, [ui_dragh]
@@ -648,9 +678,42 @@ ui_grow:
     jge .h_low_ok
     mov ax, WMIN_H
 .h_low_ok:
-    mov [bx + W_H], ax
+    mov dx, ax
 
-    call wm_paint_all           ; caller-held lock, per the wm contract
+    call wm_ask_size            ; the window gets a say BEFORE the record
+    mov [bx + W_W], cx          ; changes (SPEC.md 11.1): it answers with the
+    mov [bx + W_H], dx          ; size it will take, per axis, and by then
+                                ; nothing has been drawn at the other one
+
+    ; A grow that stopped just over the dock is nudged back above it, if it
+    ; still fits there (SPEC.md 11.90). It moves the ORIGIN, which nothing
+    ; else in this loop does, so the old bottom is banked first: the union
+    ; below has to reach it whichever way the origin went.
+    mov ax, [bx + W_Y]
+    add ax, [ui_origy]          ; the old rect's last row, origin unmoved
+    push ax
+    call wm_dock_snap
+    pop ax
+
+    ; Only the rect it had and the rect it has changed, so the repaint is
+    ; their union: wm_paint_dmg's case, not wm_paint_all's (SPEC.md 11.91).
+    ; Dragging a corner used to repaint every window on the screen.
+    mov dx, [bx + W_Y]
+    add dx, [bx + W_H]          ; the new last row...
+    cmp dx, ax
+    jae .uh
+    mov dx, ax                  ; ...or the old one, whichever is lower
+.uh:
+    mov ax, [bx + W_W]
+    cmp ax, [ui_origx]          ; width never moves its origin, so that axis
+    jge .uw                     ; is still just the larger of the two
+    mov ax, [ui_origx]
+.uw:
+    mov cx, ax
+    add cx, [bx + W_X]          ; x2 = x + w: the drop shadow's own column
+    mov ax, [bx + W_X]
+    mov bx, [bx + W_Y]          ; (the read completes before BX changes)
+    call wm_paint_dmg           ; caller-held lock, per the wm contract
     call gfx_unlock             ; NO second gfx_lock here - already held (§7)
     ret
 
@@ -661,44 +724,43 @@ ui_grow:
 ; out: nothing (CMD_REBOOT never returns)
 ; clobbers: AX, BX, CX, DX, SI, DI (internal helper of the UI task)
 ;
-; Four routes, in this order (SPEC.md 12/12.2/12.3):
+; Three routes, in this order (SPEC.md 12/12.2/12.3):
 ;   AH = 0                  the System menu - identical in every
 ;                           application; cmd = CMD_ABOUT + item
-;   AH = [menu_abcell]      the NAME cell: the window's own About handler,
-;                           dispatched exactly like the one below but with
-;                           no selection to hand it
 ;   AM_ONCMD = 0            a kernel-dispatched set, i.e. Locator;
 ;                           cmd = ui_loc_base[cell] + item
 ;   otherwise               the active application's own handler, called
 ;                           exactly like W_ONCLICK: under the gfx lock, on
 ;                           this task, billed to the owning instance
-;
-; The last two share one body - the gfx lock, the re-check of the owner, the
-; sound stamp and the billing are the same work whichever offset is called -
-; and [ui_about] is which of the two offsets it resolves at the end of it.
 ; -----------------------------------------------------------------------------
 ui_dispatch:
     cmp ax, 0xFFFF
     je .ret
-    mov word [ui_about], 0
-    mov bx, [menu_abcell]
-    or bx, bx
-    jz .no_about                ; the active application declared none
-    cmp ah, bl
-    jne .no_about
-    mov word [ui_about], 1      ; the name cell: About, and nothing else is
-    xor ax, ax                  ; in it - the handler gets no selection
-    mov [ui_menusel], ax
-    jmp .call
-.no_about:
     or ah, ah
     jz .kernel                  ; cell 0: the System menu
+    mov word [ui_about], 0
+    mov bx, [menu_abcell]       ; the app-NAME cell (SPEC.md 12.2)? It is
+    or bx, bx                   ; APPENDED after the app's own menus, so it
+    jz .notab                   ; is tested before the set - and it is legal
+    cmp bl, ah                  ; on a window that has no menu set at all,
+    jne .notab                  ; which the test below would have dropped
+    mov word [ui_about], 1
+    jmp .app
+.notab:
     mov bx, [menu_set]
     or bx, bx
     jz .ret                     ; a window with no menus cannot be here
-    cmp word [menu_kset + AM_ONCMD], 0  ; the KERNEL COPY (SPEC.md 12.2) -
-    jne .app                    ; [menu_set] is an owner-segment offset the
-                                ; kernel no longer dereferences
+    push es                     ; the set is the OWNER's data (SPEC.md 12.2):
+    push cs                     ; Locator's lives in kernel .text, a
+    pop es                      ; package's in its own segment - so this
+    mov di, [menu_win]          ; read must go through the owner's segment,
+    or di, di                   ; like every other read of the set. Through
+    jz .ownset                  ; DS it tested a random word of kernel .text
+    call wm_strseg              ; at the package set's offset, and dispatched
+.ownset:                        ; app menus as Locator commands whenever that
+    cmp word [es:bx + AM_ONCMD], 0  ; word happened to be zero
+    pop es
+    jne .app
 .kernel:
     mov bl, ah                  ; cmd = the cell's base + the item index
     xor bh, bh
@@ -720,7 +782,6 @@ ui_dispatch:
     ; the UI task is the only thing that can ever be in here.
     dec ah                      ; cell -> the app's own 0-based menu index
     mov [ui_menusel], ax
-.call:
     call gfx_lock
     mov bx, [menu_win]          ; the lock dropped between menu_track and
     or bx, bx                   ; here, so re-check the owner before calling
@@ -739,14 +800,6 @@ ui_dispatch:
                                 ; we hold, and only the UI task (us) calls
                                 ; wm_create, so the slot cannot be recycled
                                 ; behind this test.
-    mov ax, [menu_kset + AM_ONCMD]  ; the offset to call: the command handler
-    cmp word [ui_about], 0          ; from the kernel copy (SPEC.md 12.2), or
-    je .have_ofs                    ; the window's About handler - resolved
-    call wm_about_get               ; HERE, with BX = the re-checked window,
-    or ax, ax                       ; because the lock was down until a moment
-    jz .app_done                    ; ago and a handler withdrawn in that gap
-.have_ofs:                          ; must not be called at offset 0
-    mov [ui_cbofs], ax
     call inst_win_owner         ; DI = owning record, 0 = unowned window
     push di
     push word [snd_inst]
@@ -754,22 +807,32 @@ ui_dispatch:
     call task_cycles            ; DX:AX = start stamp
     push dx                     ; start stamp: hi, then lo
     push ax
-    call inst_cb_seg            ; AX = the owner's segment (DI = the record
-                                ; captured above; SPEC.md 11/12.2 dispatch)
     mov si, [menu_win]          ; the handler's contract: AL = item,
-    mov bx, [menu_set]          ; AH = menu, SI = window, BX = the set as
-                                ; the application registered it (its own
-                                ; offset in its own segment, SPEC.md 12.2 -
-                                ; a handler may keep indexing its own
-                                ; tables through it)
-    push ax                     ; the resolved segment above the offset:
-    push word [ui_cbofs]        ; inst_cb_call's argument pair - the handler
-                                ; OFFSET banked above, out of the kernel copy
-                                ; or out of wm_about (SPEC.md 12.2: the
-                                ; registered set is never dereferenced at
-                                ; dispatch)
-    mov ax, [ui_menusel]
-    call inst_cb_call
+    mov bx, [menu_set]          ; AH = menu, SI = window, BX = the set
+    push es                     ; the set is the OWNER's data (SPEC.md 12.2),
+    push di                     ; so AM_ONCMD is read through its segment
+    mov di, si
+    call wm_strseg              ; ES = the window's string/data segment
+    cmp word [ui_about], 0      ; the name cell dispatches the About handler
+    je .oncmd                   ; wm_about_set registered, not AM_ONCMD -
+    push bx                     ; and BX may be 0 here (no menu set), so the
+    mov bx, si                  ; read below must not happen at all
+    call wm_about_get           ; AX = the handler's offset in the owner's seg
+    mov cx, ax
+    pop bx
+    jmp short .cbok
+.oncmd:
+    mov cx, [es:bx + AM_ONCMD]
+.cbok:
+    pop di
+    pop es
+    jcxz .nocb                  ; a handler withdrawn while the lock was down
+    mov ax, [ui_menusel]        ; (wm_about_set 0 / MENU_SET in the gap) must
+    push bp                     ; not be called at offset 0 (SPEC.md 12.2)
+    mov bp, cx
+    call wm_pkgcall             ; SI = window, BP = the handler
+    pop bp
+.nocb:
     pop ax                      ; start stamp
     pop dx
     pop word [snd_inst]         ; the outer dispatch's stamp, back
@@ -886,6 +949,21 @@ ui_cmd:
     ret
 
 .reboot:
+    call cp_flush_close         ; the OTHER way the panel stops existing
+                                ; (SPEC.md 31.8). Before the lock, because a
+                                ; disk write is not something to do with the
+                                ; GUI already torn down - and before vid_text,
+                                ; so a failure still has a screen to have
+                                ; happened on
+    call drv_shutdown           ; detach every loaded driver (SPEC.md 51.2):
+                                ; int 19h resets no hardware, so a hooked
+                                ; card would ride the reboot with its vector
+                                ; pointing into a heap the next boot reuses
+                                ; and an auto-init DMA still running. Before
+                                ; sched_unhook, because the unload WAITS on
+                                ; the worker's death, which needs the
+                                ; scheduler alive - and before the lock,
+                                ; because that wait yields
     call gfx_lock               ; never released - the GUI is done
     call vid_text
     call sched_unhook           ; restores int 08h/0Ch (unhooks the mouse too)
@@ -898,11 +976,9 @@ section .bss
 ui_ev:      resb 8              ; popped event record (EV_TYPE/A/B/C)
 ui_menusel: resw 1              ; ui_dispatch scratch: AH = menu, AL = item,
                                 ; held across the billing calls (SPEC 12.2)
-ui_about:   resw 1              ; ui_dispatch scratch: 1 = this selection is
-                                ; the name cell's About, so the offset called
-                                ; comes from wm_about and not from AM_ONCMD
-ui_cbofs:   resw 1              ; ...and the offset itself, resolved after the
-                                ; owner re-check and banked for inst_cb_call
+ui_about:   resw 1              ; 1 = the selection came from the app-NAME
+                                ; cell, so the callback offset is the one
+                                ; wm_about_set stored and not AM_ONCMD
 ui_click_t: resw 1              ; EV_C of the event being dispatched: the
                                 ; click's birth tick (valid during dispatch,
                                 ; which always stores before handlers read)

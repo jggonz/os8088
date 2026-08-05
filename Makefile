@@ -22,6 +22,9 @@ VMHERC := $(CURDIR)/vm/xt-hercules
 VM286 := $(CURDIR)/vm/286
 VM386SX := $(CURDIR)/vm/386sx
 VM386DX := $(CURDIR)/vm/386dx
+# ...and the same three machines with a sound card in them (SPEC.md 51.4).
+# QEMU's -device adlib/sb16 is the only other way to give the driver
+# something to attach to, and it is not a real card: these are.
 VMXTSND := $(CURDIR)/vm/xt-sound
 VM286SND := $(CURDIR)/vm/286-sound
 VM386SND := $(CURDIR)/vm/386-sound
@@ -44,6 +47,21 @@ endif
 ifneq ($(HERCSEG),)
 VIDDEF += -DVID_HERC_SEG=$(HERCSEG)
 endif
+# RTC=none|at|ns|rp|bios forces one rung of the clock ladder instead of
+# walking it (SPEC.md 37.90). Same reason as VIDEO=: QEMU has an MC146818 and
+# nothing else, so rung 1 always wins there and the other three would never
+# be reached under the QMP harness. `none` exercises the fallback date.
+RTCFORCE_none := 5
+RTCFORCE_at   := 1
+RTCFORCE_ns   := 2
+RTCFORCE_rp   := 3
+RTCFORCE_bios := 4
+ifneq ($(RTC),)
+ifeq ($(RTCFORCE_$(RTC)),)
+$(error RTC must be one of: none at ns rp bios)
+endif
+VIDDEF += -DCLK_FORCE=$(RTCFORCE_$(RTC))
+endif
 # ...and a stamp so that CHANGING VIDEO rebuilds the kernel. Without it make
 # sees an up-to-date kernel.bin, skips it, and boots the PREVIOUS adapter -
 # which reads exactly like the probe or the renderer being broken.
@@ -54,7 +72,7 @@ endif
 # about a file that recipe just removed, and then build the floppy image from
 # a kernel that is not there. Doing it here means the file is simply gone
 # before make builds its graph.
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin; \
                                 touch $(VIDSTAMP); })
@@ -67,7 +85,7 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
 .PHONY: all run run-640 debug test test-snd xt xt-640 xt-cga xt-hercules \
-        286 386sx 386 xt-sound 286-sound 386-sound clean
+        286 386sx 386 xt-sound 286-sound 386-sound check-images clean
 
 all: $(IMG) $(IMG360) $(APPSIMG) $(APPSIMG360)
 
@@ -80,9 +98,9 @@ $(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) | $(BUILD)
 	$(NASM) -f bin -w+error -I kernel/ $(VIDDEF) -o $@ $(KERNEL_SRC)
 	@echo "kernel: $(call FILESIZE,$@) bytes"
 ifneq ($(VIDDEF),)
-	@echo "  *** VIDEO=$(VIDEO): this kernel has the adapter probe FORCED. ***"
+	@echo "  *** VIDEO=$(VIDEO) RTC=$(RTC): this kernel has a probe FORCED. ***"
 	@echo "  *** build/ is git-tracked - rebuild with plain \`make\` before  ***"
-	@echo "  *** committing, or every machine boots as $(VIDEO).             ***"
+	@echo "  *** committing, or every machine boots that way.               ***"
 endif
 
 # The boot sector needs to know how many sectors to read, so we measure the
@@ -103,168 +121,37 @@ $(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin | $(BUILD)
 		-o $@ boot/boot.asm
 	@test $(call FILESIZE,$@) -eq 512 || { echo "boot sector is not 512 bytes"; exit 1; }
 
-$(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin
-	@dd if=/dev/zero of=$@ bs=512 count=2880 status=none
-	@dd if=$(BUILD)/boot.bin of=$@ conv=notrunc status=none
-	@dd if=$(BUILD)/kernel.bin of=$@ bs=512 seek=1 conv=notrunc status=none
-	@echo "image:  $@ (1.44MB, 18 spt)"
+# The system disk is a FAT12 volume with the kernel in its RESERVED AREA
+# (SPEC.md 19.3). The boot sector still reads LBA 1..K raw - reserved sectors
+# belong to the boot loader by definition - and everything after them is an
+# ordinary file system, so drive A: mounts, browses and WRITES like the apps
+# disk. That is what gives drivers a place to live and settings a place to be
+# kept (SPEC.md 51).
+#
+# DRIVERS is the list, one .drv per line, root-level: the kernel resolves them
+# by name in the volume's current directory and the file manager shows them.
+DRIVERS := $(BUILD)/sound.drv
 
-$(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin
-	@dd if=/dev/zero of=$@ bs=512 count=720 status=none
-	@dd if=$(BUILD)/boot360.bin of=$@ conv=notrunc status=none
-	@dd if=$(BUILD)/kernel.bin of=$@ bs=512 seek=1 conv=notrunc status=none
-	@echo "image:  $@ (360KB, 9 spt)"
+$(BUILD)/sound.bin: drivers/sound/sound.asm drivers/sound/sb.inc \
+                    drivers/os88drv.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/sound/ -I drivers/ -I apps/ \
+		-o $@ drivers/sound/sound.asm
+	@echo "sound:  $(call FILESIZE,$@) bytes"
 
-# Minesweeper, the first loadable program: a flat binary with the .o88 v3
-# package header, assembled ONCE at org 0 - since v3 a package loads into
-# its own segment, so there is no relocation table and no second assembly
-# pass (SPEC.md 20.2/24). os88pkg.py validates the header and stamps the
-# memory-requirement word.
-$(BUILD)/mines.bin: apps/mines/mines.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/mines/mines.asm
-	@echo "mines:  $(call FILESIZE,$@) bytes"
+$(BUILD)/sound.drv: $(BUILD)/sound.bin tools/os88drv.py
+	python3 tools/os88drv.py $(BUILD)/sound.bin -o $@
 
-$(BUILD)/mines.o88: $(BUILD)/mines.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/mines.bin -o $@
+$(IMG): $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(BUILD)/kernel.bin $(DRIVERS)
 
-# HELLO, the second package: minimal, no embedded icon (proves the
-# generic-icon fallback in the Disk window).
-$(BUILD)/hello.bin: apps/hello/hello.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/hello/hello.asm
-	@echo "hello:  $(call FILESIZE,$@) bytes"
+$(IMG360): $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin $(DRIVERS)
 
-$(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/hello.bin -o $@
-
-# Note Pad, formerly the built-in KIND_NOTE app (SPEC.md 27).
-$(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/notepad/notepad.asm
-	@echo "notepad: $(call FILESIZE,$@) bytes"
-
-$(BUILD)/notepad.o88: $(BUILD)/notepad.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/notepad.bin -o $@
-
-# Recorder, the fourth shipped package (SPEC.md 35): sound wave recorder and
-# player over the SPEC.md 34 sound layer (grants, streams, PCM_EXCL fallback).
-$(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/recorder/recorder.asm
-	@echo "recorder: $(call FILESIZE,$@) bytes"
-
-$(BUILD)/recorder.o88: $(BUILD)/recorder.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/recorder.bin -o $@
-
-# Piano, the fifth shipped package (SPEC.md 36): a colorful playable piano
-# over the SPEC.md 34 tone tier (note viewer, replay, embedded songs).
-$(BUILD)/piano.bin: apps/piano/piano.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/piano/piano.asm
-	@echo "piano:  $(call FILESIZE,$@) bytes"
-
-$(BUILD)/piano.o88: $(BUILD)/piano.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/piano.bin -o $@
-
-# Fractal, the sixth shipped package: five escape-time fractals in Q4.12
-# fixed point, rendered by a background WORKER TASK (SPEC.md 20.6) while the
-# GUI stays live. The first client of OSAPI_TASK_SPAWN / OSAPI_TASK_ALIVE.
-$(BUILD)/fractal.bin: apps/fractal/fractal.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/fractal/fractal.asm
-	@echo "fractal: $(call FILESIZE,$@) bytes"
-
-$(BUILD)/fractal.o88: $(BUILD)/fractal.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/fractal.bin -o $@
-
-# Paint, the seventh shipped package: a bitmap editor - eight tools, a 4bpp
-# offscreen canvas, one-level undo/redo, an internal clipboard and BMP + GIF
-# load/save through the Standard File dialog. The first client of
-# OSAPI_MEM_ALLOC (SPEC.md 2.6/20.7): its canvas, undo image and clipboard
-# are one arena grant, sized from what OSAPI_MEM_AVAIL actually answers, so
-# a machine that cannot fund one gets a notice window instead of a canvas.
-# `make run-640` is the way to see it at full size.
-$(BUILD)/paint.bin: apps/paint/paint.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/paint/paint.asm
-	@echo "paint:  $(call FILESIZE,$@) bytes"
-
-$(BUILD)/paint.o88: $(BUILD)/paint.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/paint.bin -o $@
-
-# Solitaire, the eighth shipped package (SPEC.md 43): Klondike, with the drag
-# done as an XOR outline the way the window manager drags a window - nothing
-# is repainted until the button comes up, so a hand of seven cards costs four
-# thin XOR strips a tick. Card backs are rendered once into a packed 4bpp
-# image and blitted with OSAPI_GFX_BLIT4 (SPEC.md 5.4); faces are drawn from
-# the kernel font plus 1-bit suit masks, hollow for the red suits on a 1bpp
-# adapter. It is also the first client of OSAPI_ABOUT_SET (SPEC.md 12.2) -
-# 'About Solitaire' under its own name in the bar.
-# The package file is SOLITAIR.O88, not SOLITAIRE.O88: the data disk is
-# FAT12 (SPEC.md 19) and an 8.3 stem is eight characters, so the name is
-# truncated the way DOS would truncate it. The name INSIDE the header - what
-# the Task Manager and the dock show - is still 'SOLITAIRE'; that field is 16
-# bytes (SPEC.md 20.2) and has nothing to do with the file name.
-$(BUILD)/solitair.bin: apps/solitaire/solitaire.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/solitaire/solitaire.asm
-	@echo "solitaire: $(call FILESIZE,$@) bytes"
-
-$(BUILD)/solitair.o88: $(BUILD)/solitair.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/solitair.bin -o $@
-
-# Arkanoid, the ninth shipped package (SPEC.md 44): a brick-breaker whose game
-# loop is a WORKER TASK (SPEC.md 20.6) rather than a callback, because a ball
-# has to keep moving between keystrokes. Arrow keys steer on a deadline (int
-# 16h has no key-up, so a held key is inferred from typematic repeat), the
-# capsules are caught with the paddle, and the PC speaker (SPEC.md 34) is
-# driven FROM the worker - which snd_req_inst attributes correctly by falling
-# back to the running task's instance. Contributed as a fork by
-# github.com/Elendilon, like Paint and Solitaire before it, and its
-# OSAPI_ABOUT_SET panel says so. 'ARKANOID' is exactly eight characters, so
-# unlike SOLITAIR.O88 the file name needs no truncating.
-$(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -o $@ apps/arkanoid/arkanoid.asm
-	@echo "arkanoid: $(call FILESIZE,$@) bytes"
-
-$(BUILD)/arkanoid.o88: $(BUILD)/arkanoid.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/arkanoid.bin -o $@
-
-# Tracker, the tenth shipped package (SPEC.md 45): an FT2-homage 4-channel
-# ProTracker MOD player. It loads .MOD files through the Standard File
-# dialog (the whole-file read is OSAPI_FILE_READBIG, slot 0x01E8, because
-# real modules run past 64KB), mixes them into a ring-mode Sound Blaster
-# stream fed by its WORKER task (the SPEC.md 34 amendment both halves of
-# this feature exist for), and draws the FastTracker II pattern view -
-# windowed splash first, fullscreen (wm_fullscreen) on a key. Ships with
-# BEVERLY.MOD (Beverly Hills Cop, 116,085 bytes) as the APPS folder's
-# first data file; the deterministic 5,596-byte TEST.MOD below is what the
-# scripted tests play.
-$(BUILD)/tracker.bin: apps/tracker/tracker.asm apps/tracker/trkplay.inc \
-		apps/tracker/trkui.inc apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -I apps/tracker/ -o $@ apps/tracker/tracker.asm
-	@echo "tracker: $(call FILESIZE,$@) bytes"
-
-$(BUILD)/tracker.o88: $(BUILD)/tracker.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/tracker.bin -o $@
-
-# ArtfulType, the eleventh shipped package (SPEC.md 46): a port of
-# ActionRetro's ArtfulType, the distraction-free Markdown writer for classic
-# 68k Macs, onto the fullscreen surface (SPEC.md 11.2). Windowed it is the
-# splash card; a button takes the whole screen, where it draws its own
-# Macintosh menu bar (inverted in Writer mode), styles markdown live from
-# its own ROM-font glyph renderer (bold overstrike / italic shear / scaled
-# headings / underlined links / gray code cells), and does word wrap, drag
-# selection, snapshot undo in an arena block, and Open/Save through the
-# Standard File dialog. One line = one OSAPI_GFX_BLIT4 is the whole
-# performance story; the caret blink is its worker task.
-$(BUILD)/artful.bin: apps/artful/artful.asm apps/artful/atdoc.inc \
-		apps/artful/atrend.inc apps/artful/atui.inc apps/artful/atedit.inc \
-		apps/artful/atcmd.inc apps/artful/atfile.inc apps/artful/atimg.inc \
-		apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -I apps/artful/ -o $@ apps/artful/artful.asm
-	@echo "artful: $(call FILESIZE,$@) bytes"
-
-$(BUILD)/artful.o88: $(BUILD)/artful.bin tools/os88pkg.py
-	python3 tools/os88pkg.py $(BUILD)/artful.bin -o $@
-
-# FMTEST, the sound Phase 3 gate package (docs/SOUND-PLAN.md): drives the FM
-# slot 0x0084 end to end (patch-load, chord, all-off, tone expiry, teardown).
-# Never on the shipped apps disks - their directory order is pinned - it gets
-# its own scratch image, mounted with:
+# FMTEST: the AdLib gate package (SPEC.md 34.2/51.4). NEVER on the shipped
+# apps disks - their directory order is pinned (SPEC.md 24) - so it rides its
+# own scratch image, the filetest precedent:
 #   make test-snd ADLIB=1 TESTAPPS=build/fmtest.img
 $(BUILD)/fmtest.bin: apps/fmtest/fmtest.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/fmtest/fmtest.asm
@@ -276,10 +163,8 @@ $(BUILD)/fmtest.o88: $(BUILD)/fmtest.bin tools/os88pkg.py
 $(BUILD)/fmtest.img: $(BUILD)/fmtest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/fmtest.o88
 
-# SBTEST, the sound Phase 4 gate package (docs/SOUND-PLAN.md): drives the
-# stream + staging slot 0x0088 end to end (grant, stage, open, status,
-# underrun, close, teardown). Like fmtest it is never on the shipped apps
-# disks - it gets its own scratch image, mounted with:
+# SBTEST: the Sound Blaster gate package (SPEC.md 34.5/34.6). Like fmtest it
+# is never on the shipped apps disks and rides its own scratch image:
 #   make test-snd SB16=1 TESTAPPS=build/sbtest.img
 $(BUILD)/sbtest.bin: apps/sbtest/sbtest.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/sbtest/sbtest.asm
@@ -290,6 +175,154 @@ $(BUILD)/sbtest.o88: $(BUILD)/sbtest.bin tools/os88pkg.py
 
 $(BUILD)/sbtest.img: $(BUILD)/sbtest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/sbtest.o88
+
+# Minesweeper, the first loadable program: a flat binary with the .o88
+# package header. ONE assembly per package since SPEC.md 20.1 - a package
+# links at org 0 and owns a segment, so it is position-independent and there
+# is no relocation table to build (os88pkg.py validates and stamps).
+$(BUILD)/mines.bin: apps/mines/mines.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/mines/mines.asm
+	@echo "mines:  $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/mines.o88: $(BUILD)/mines.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/mines.bin -o $@
+
+# HELLO, the second package: minimal, no embedded icon (proves the
+# generic-icon fallback in the Disk window).
+$(BUILD)/hello.bin: apps/hello/hello.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/hello/hello.asm
+	@echo "hello:  $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/hello.o88: $(BUILD)/hello.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/hello.bin -o $@
+
+# Note Pad, formerly the built-in KIND_NOTE app (SPEC.md 27).
+$(BUILD)/notepad.bin: apps/notepad/notepad.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/notepad/notepad.asm
+	@echo "notepad: $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/notepad.o88: $(BUILD)/notepad.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/notepad.bin -o $@
+
+# Piano, the fifth shipped package (SPEC.md 36): a colorful playable piano
+# over the SPEC.md 34 tone tier (note viewer, replay, embedded songs).
+$(BUILD)/piano.bin: apps/piano/piano.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/piano/piano.asm
+	@echo "piano:  $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/piano.o88: $(BUILD)/piano.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/piano.bin -o $@
+
+# Recorder (SPEC.md 35): the sound layer's recording and streaming client,
+# ported back from `main` once the driver put SND_CAP_PCM_IN and PCM_BG
+# streams behind SOUND.DRV (SPEC.md 51.4). It needs no card to be USEFUL -
+# DEMO stages a built-in sweep and PLAY falls back to speaker clips - so it
+# ships on every disk and greys REC on a machine with no Sound Blaster.
+$(BUILD)/recorder.bin: apps/recorder/recorder.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/recorder/recorder.asm
+	@echo "recorder: $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/recorder.o88: $(BUILD)/recorder.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/recorder.bin -o $@
+
+# Tracker (SPEC.md 45): a four-channel ProTracker MOD player, ported back
+# from `main` with the rest of the sound apps. Its mixer is a worker task
+# feeding a RING-mode stream (SPEC.md 34.5), which is the only thing in the
+# tree that uses ring mode at all, and the module blob is a heap claim read
+# with OSAPI_FILE_READBIG - the one file op with no 64KB ceiling, which is
+# why it exists. Three sources, one binary.
+$(BUILD)/tracker.bin: apps/tracker/tracker.asm apps/tracker/trkplay.inc \
+                      apps/tracker/trkui.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/tracker/ -o $@ apps/tracker/tracker.asm
+	@echo "tracker: $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/tracker.o88: $(BUILD)/tracker.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/tracker.bin -o $@
+
+# ArtfulType, the eleventh shipped package (SPEC.md 46): a port of
+# ActionRetro's ArtfulType, the distraction-free Markdown writer for classic
+# 68k Macs, onto the fullscreen surface (SPEC.md 11.2). Windowed it is the
+# splash card; a button takes the whole screen, where it draws its own
+# Macintosh menu bar (inverted in Writer mode), styles markdown live from
+# its own ROM-font glyph renderer (bold overstrike / italic shear / scaled
+# headings / underlined links / gray code cells), and does word wrap, drag
+# selection, snapshot undo in a heap claim (SPEC.md 50.3), and Open/Save
+# through the Standard File dialog. One line = one OSAPI_GFX_BLIT4 is the
+# whole performance story; the caret blink is its worker task.
+$(BUILD)/artful.bin: apps/artful/artful.asm apps/artful/atdoc.inc \
+		apps/artful/atrend.inc apps/artful/atui.inc apps/artful/atedit.inc \
+		apps/artful/atcmd.inc apps/artful/atfile.inc apps/artful/atimg.inc \
+		apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/artful/ -o $@ apps/artful/artful.asm
+	@echo "artful: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/artful.o88: $(BUILD)/artful.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/artful.bin -o $@
+
+# Fractal, the sixth shipped package: five escape-time fractals in Q4.12
+# fixed point, rendered by a background WORKER TASK (SPEC.md 20.6) while the
+# GUI stays live. The first client of OSAPI_TASK_SPAWN / OSAPI_TASK_ALIVE.
+$(BUILD)/fractal.bin: apps/fractal/fractal.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/fractal/fractal.asm
+	@echo "fractal: $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/fractal.o88: $(BUILD)/fractal.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/fractal.bin -o $@
+
+# Paint, the seventh shipped package: a bitmap editor - eight tools, a 4bpp
+# offscreen canvas above BB_SEG, one-level undo/redo, an internal clipboard and
+# BMP load/save through the Standard File dialog. Needs ~620KB of conventional
+# memory for its canvas (int 12h decides; a smaller machine gets a notice
+# window instead), so `make run-640` is the way to exercise it.
+$(BUILD)/paint.bin: apps/paint/paint.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/paint/paint.asm
+	@echo "paint:  $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/paint.o88: $(BUILD)/paint.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/paint.bin -o $@
+
+# Solitaire, the eighth shipped package (SPEC.md 43): Klondike, with the drag
+# done as an XOR outline the way the window manager drags a window - nothing
+# is repainted until the button comes up, so a hand of seven cards costs four
+# thin XOR strips a tick. Card backs are rendered once into a packed 4bpp
+# image and blitted with gfx_blit4; faces are drawn from the kernel font plus
+# 1-bit suit masks, hollow for the red suits on a 1bpp adapter.
+# The package file is SOLITAIR.O88, not SOLITAIRE.O88: the data disk is
+# FAT12 (SPEC.md 19) and an 8.3 stem is eight characters, so the name is
+# truncated the way DOS would truncate it. The name INSIDE the header - what
+# the Task Manager and the dock show - is still 'SOLITAIRE'; that field is 16
+# bytes (SPEC.md 20.2) and has nothing to do with the file name.
+$(BUILD)/solitair.bin: apps/solitaire/solitaire.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/solitaire/solitaire.asm
+	@echo "solitaire: $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/solitair.o88: $(BUILD)/solitair.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/solitair.bin -o $@
+
+# Arkanoid, the ninth shipped package (SPEC.md 44): a brick-breaker whose game
+# loop is a WORKER TASK (SPEC.md 20.6) rather than a callback, because a ball
+# has to keep moving between keystrokes. Arrow keys steer on a deadline (int
+# 16h has no key-up, so a held key is inferred from typematic repeat), the
+# capsules are caught with the paddle, and the PC speaker (SPEC.md 34) is
+# driven FROM the worker - which snd_req_inst attributes correctly by falling
+# back to the running task's instance. 'ARKANOID' is exactly eight characters,
+# so unlike SOLITAIR.O88 the file name needs no truncating.
+$(BUILD)/arkanoid.bin: apps/arkanoid/arkanoid.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ apps/arkanoid/arkanoid.asm
+	@echo "arkanoid: $(call FILESIZE,$@) bytes"
+
+
+$(BUILD)/arkanoid.o88: $(BUILD)/arkanoid.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/arkanoid.bin -o $@
 
 # FILETEST, the file-API gate package (SPEC.md 18.4): drives the file slots
 # 0x0098..0x00A8 end to end (write, read-back, replace, rename, delete,
@@ -302,11 +335,21 @@ $(BUILD)/filetest.bin: apps/filetest/filetest.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ apps/filetest/filetest.asm
 	@echo "filetest: $(call FILESIZE,$@) bytes"
 
+
 $(BUILD)/filetest.o88: $(BUILD)/filetest.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/filetest.bin -o $@
 
-$(BUILD)/filetest.img: $(BUILD)/filetest.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/filetest.o88
+# BIG.DAT: 96KB, larger than any other file op can move, so filetest's
+# readbig check has something to read. Byte i is (i >> 9) - one distinct value
+# per 512-byte sector - so a destination that failed to advance by SEGMENT
+# reads a different byte rather than a plausible one. Generated, never
+# committed: 96KB of git churn per rebuild for a fixture is not worth it, and
+# it rides the filetest image only (never the shipped apps disks).
+$(BUILD)/big.dat: Makefile | $(BUILD)
+	python3 -c "import sys; n=96*1024; sys.stdout.buffer.write(bytes((i>>9)&0xFF for i in range(n)))" > $@
+
+$(BUILD)/filetest.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/filetest.o88 $(BUILD)/big.dat
 
 # The same package on a legally fragmented volume: --scramble interleaves the
 # chains, so the write path's allocator and the free/replace paths meet holes
@@ -314,25 +357,12 @@ $(BUILD)/filetest.img: $(BUILD)/filetest.o88 tools/os88disk.py
 $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 --scramble $(BUILD)/filetest.o88 $(BUILD)/mines.o88 $(BUILD)/piano.o88
 
-# ...and on a FAT16 volume (2.88MB test geometry), which differs only in the
-# FAT entry encoding - the one part of the write path FAT12 cannot exercise.
-$(BUILD)/filetest-fat16.img: $(BUILD)/filetest.o88 tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 2880 $(BUILD)/filetest.o88
-
-# TEST.MOD, the deterministic 5,596-byte module the tracker tests play
-# (docs/TRACKER-PLAN.md): Ode to Joy over four synthesized samples, a
-# pinned spread of v1 effects (not the full set - see mkmod.py's list),
-# and the square lead SOLO for the first eight rows so sndcheck.py sees a
-# clean ~327 Hz at song start.
-$(BUILD)/test.mod: tools/mkmod.py | $(BUILD)
-	python3 tools/mkmod.py $@
-
-# The tracker's scratch image (filetest.img pattern): TRACKER.O88 and
-# TEST.MOD at root level, never on the shipped apps disks. Mounted with:
-#   make test-snd SB16=1 TESTAPPS=build/tracker-test.img
-# then verified after QMP quit with tools/sndcheck.py (327 Hz dominant).
-$(BUILD)/tracker-test.img: $(BUILD)/tracker.o88 $(BUILD)/test.mod tools/os88disk.py
-	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/tracker.o88 $(BUILD)/test.mod
+# There WAS a third image here - the same package on a FAT16 volume, built on
+# the 2.88MB test geometry, which exercised the one part of the write path
+# FAT12 cannot. It went with DSK_FAT_SECS: at 10 sectors the mount's rule 10
+# rejects every FAT16 volume there can be (a FAT is only FAT16 with >= 4,085
+# clusters, i.e. >= 16 FAT sectors), so the image would build and refuse to
+# mount. dsk_next_clus / dskw_setfat keep their FAT16 halves, unreachable.
 
 # The software floppies (drive B:) hold packages, not boot code - os88fs only.
 # The volume is FOLDERED (SPEC.md 19.2): the root holds APPS and GAMES and
@@ -340,31 +370,34 @@ $(BUILD)/tracker-test.img: $(BUILD)/tracker.o88 $(BUILD)/test.mod tools/os88disk
 # two double-clicks away rather than one. Order inside each folder is pinned
 # and new packages ALWAYS append at the end of their folder - the scripted
 # tests click the Disk window by row index, and every index inside a folder
-# is now independent of what the other folder holds.
-APPS_TOOLS := $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/recorder.o88 \
-              $(BUILD)/piano.o88 $(BUILD)/fractal.o88 $(BUILD)/paint.o88 \
+# is now independent of what the other folder holds. (Recorder came BACK with
+# the driver - SPEC.md 34.5/34.6/51.4 - so APPS holds the same six packages
+# `main` does; it sits LAST here and third there, because the append rule
+# above outranks matching the other fork's row order.)
+APPS_TOOLS := $(BUILD)/hello.o88 $(BUILD)/notepad.o88 $(BUILD)/piano.o88 \
+              $(BUILD)/fractal.o88 $(BUILD)/paint.o88 $(BUILD)/recorder.o88 \
               $(BUILD)/tracker.o88 $(BUILD)/artful.o88
 APPS_GAMES := $(BUILD)/mines.o88 $(BUILD)/solitair.o88 $(BUILD)/arkanoid.o88
-APPS := $(APPS_TOOLS) $(APPS_GAMES)
 
-# The tracker's demo module rides the APPS folder as its LAST entry - a
-# DATA file, the first non-package on a shipped disk (SPEC.md 24): the
-# kernel lists it with the generic icon and the tracker's Open dialog
-# finds it next to the app. It fits the 360KB disk too: all ten packages
-# plus its 114 clusters use 165 of the 354 available (49 package + 114
-# module + 2 folder clusters) - just under half, ~189KB free.
-BEVERLY := apps/tracker/beverly.mod
+# Data that ships beside the programs that read it (SPEC.md 24): os88disk.py
+# treats anything not ending .o88 as a plain file. Tracker with no module to
+# open is a player with nothing to play, and this is the one it was written
+# against - so it travels with it rather than being something you have to
+# find. 116KB, which the 360KB disk can still hold alongside every package.
+APPS_DATA := apps/tracker/beverly.mod
+APPS := $(APPS_TOOLS) $(APPS_GAMES) $(APPS_DATA)
 
 # ...and the same list with the folder each package lands in. os88disk.py
 # reads a "DIR:" prefix per package, so the grouping lives here rather than
 # in the tool.
-APPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(BEVERLY)) \
-            $(addprefix GAMES:,$(APPS_GAMES))
+APPSARGS := $(addprefix APPS:,$(APPS_TOOLS)) \
+            $(addprefix GAMES:,$(APPS_GAMES)) \
+            $(addprefix APPS:,$(APPS_DATA))
 
-$(APPSIMG): $(APPS) $(BEVERLY) tools/os88disk.py
+$(APPSIMG): $(APPS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS)
 
-$(APPSIMG360): $(APPS) $(BEVERLY) tools/os88disk.py
+$(APPSIMG360): $(APPS) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 $(APPSARGS)
 
 # The GUI reads a Microsoft serial mouse on COM1; QEMU emulates one natively.
@@ -372,7 +405,7 @@ MOUSE := -chardev msmouse,id=m0 -serial chardev:m0
 
 run: $(IMG) $(APPSIMG)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
-		-drive file=$(APPSIMG),format=raw,if=floppy,index=1
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 $(DEVCARD)
 
 # A maxed-out 640KB machine. QEMU/SeaBIOS cannot boot with less than 1MB
 # of guest RAM (SeaBIOS wedges during POST at -m 512k and -m 640k alike),
@@ -380,43 +413,64 @@ run: $(IMG) $(APPSIMG)
 # -m 1M makes int 12h report 640K - same as a fully populated XT.
 run-640: $(IMG) $(APPSIMG)
 	$(QEMU) -m 1M -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
-		-drive file=$(APPSIMG),format=raw,if=floppy,index=1
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 $(DEVCARD)
 
 debug: $(IMG) $(APPSIMG)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) -s -S \
-		-drive file=$(APPSIMG),format=raw,if=floppy,index=1
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 $(DEVCARD)
 
 # Headless boot with a QMP socket, for scripted screendumps and input:
 #   make test
 #   python3 tools/qmp.py build/qmp.sock 'screendump build/shot.ppm'
 #   python3 tools/qmp.py build/qmp.sock 'quit'
-test: $(IMG) $(APPSIMG)
-	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
-		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 \
-		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid
-
-# `make test` plus audio capture (SPEC.md 34 / docs/SOUND-PLAN.md): the PC
-# speaker renders into build/snd.wav, finalized when QMP `quit` stops QEMU.
-# Verify with tools/sndcheck.py (RMS + dominant-frequency assertions).
-# `make test-snd ADLIB=1` adds an emulated AdLib (OPL2 at 388h) on the same
-# wav audiodev, so sndcheck hears FM output too (Phase 3); without it the
-# boot has no OPL2 and the probe must report absent. TESTAPPS swaps the B:
-# disk for a scratch image (the fmtest gate above).
+# ADLIB=1 / SB16=1 put an emulated card in the machine, for `test` as well as
+# `test-snd`: without one the sound DRIVER (SPEC.md 51.4) probes, finds
+# nothing and reports DRVE_HW, which is the correct answer and not the one
+# you want to be testing against. `make test ADLIB=1` is how the OPL2 path is
+# exercised at all - QEMU's -device adlib is an OPL2 at 388h.
 ifneq ($(ADLIB),)
 ADLIBDEV = -device adlib,audiodev=snd
 endif
-# `make test-snd SB16=1` adds an emulated Sound Blaster 16 (iobase 0x220,
-# IRQ 5, DMA 1; DSP reports 4.x, so QEMU only ever exercises the auto-init
-# strategy - SPEC.md 34.5; DSP < 2.00 is 86Box/real-hardware work).
 ifneq ($(SB16),)
 SBDEV = -device sb16,audiodev=snd
 endif
+# ...and both need an audiodev to hang off, which `test` otherwise has none
+# of. `none` is a real backend and costs nothing headless.
+ifneq ($(ADLIBDEV)$(SBDEV),)
+CARDAUDIO = -audiodev none,id=snd
+endif
+
+# The plain dev-loop targets (`run`, `run-640`, `debug`, `test`) carry the
+# OPL2 by DEFAULT. The sound driver is WANTED out of the box (SPEC.md 51.4),
+# and on a machine with no card the boot reports "No hardware found" by
+# opening the Control Panel on its Drivers page (SPEC.md 51.3) - the right
+# answer on real cardless hardware, pure noise at every boot of the dev
+# loop. NOCARD=1 boots the cardless machine deliberately, to see exactly
+# that path; an explicit ADLIB=1/SB16=1 supplies its own card, so the
+# default stands down rather than double-mapping port 388h. `test-snd` is
+# NOT in the list: its wav capture asserts on PC-speaker output, and a
+# present card would route the very tones it measures away to FM.
+ifeq ($(NOCARD)$(ADLIB)$(SB16),)
+DEVCARD = -audiodev none,id=devsnd -device adlib,audiodev=devsnd
+endif
+
+test: $(IMG) $(APPSIMG)
+	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
+		-drive file=$(APPSIMG),format=raw,if=floppy,index=1 \
+		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
+		$(CARDAUDIO) $(ADLIBDEV) $(SBDEV) $(DEVCARD)
+
+# `make test` plus audio capture (SPEC.md 34): the PC speaker renders into
+# build/snd.wav, finalized when QMP `quit` stops QEMU. Verify with
+# tools/sndcheck.py (RMS + dominant-frequency assertions). TESTAPPS swaps
+# the B: disk for a scratch image (the filetest gate above).
 TESTAPPS ?= $(APPSIMG)
 test-snd: $(IMG) $(TESTAPPS)
 	$(QEMU) -drive file=$(IMG),format=raw,if=floppy -boot a $(MOUSE) \
 		-drive file=$(TESTAPPS),format=raw,if=floppy,index=1 \
 		-display none -qmp unix:build/qmp.sock,server,nowait -daemonize -pidfile build/qemu.pid \
-		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd $(ADLIBDEV) $(SBDEV)
+		-audiodev wav,id=snd,path=build/snd.wav -machine pcspk-audiodev=snd \
+		$(ADLIBDEV) $(SBDEV)
 
 # 86Box rewrites its own config file on exit, and twice now it has put the
 # wp:// (write-protect) prefix back on the DATA floppy - which makes every
@@ -484,20 +538,12 @@ xt-hercules: $(IMG360) $(APPSIMG360)
 	@$(UNPROTECT_B) $(VM386DX)/86box.cfg
 	$(BOX) -P $(VM386DX) -N
 
-# The sound machines: the same three tiers with a real Sound Blaster in the
-# slot, so what test-snd verifies headlessly can be heard on emulated period
-# hardware. The XT carries a Sound Blaster v2.0 - an 8-BIT card (an SB16 is
-# 16-bit ISA and physically cannot seat in an XT) whose DSP 2.01 is the
-# OLDEST auto-init part, and on the ibmxt86's 640KB the Tracker package is
-# loadable. NOTE: this is NOT the single-cycle (DSP < 2.00) gate SPEC.md
-# 34.5 / docs/SOUND-PLAN.md still owe as `vm/xtsb` - that branch needs
-# `sndcard = sb1.5` (DSP 1.05), one config-line swap away when someone sits
-# down to verify it. The 286 and 386 carry a Sound Blaster 16 like QEMU's
-# -device sb16. All three cards sit at base 0x220, IRQ 5, DMA 1 (dma16 5 on
-# the SB16) - inside the {7,5,3,2} set the kernel's F2h IRQ discovery
-# probes. Device section names ([Sound Blaster v2.0 #1] / [Sound Blaster 16
-# #1]) are exactly what 86Box writes back on exit; keep them, or 86Box
-# ignores the base/irq/dma keys.
+# The three sound machines: an XT with a Sound Blaster 2.0 (so the OPL2 is
+# the FM tier and the DSP the stream tier on the CPU this OS is FOR), and the
+# 286/386 with an SB16. `make test ADLIB=1` / `SB16=1` gives the driver
+# something to attach to under QEMU; these give it a card on a machine whose
+# bus and clock are period-correct, which is the only place a stream's pacing
+# means anything (SPEC.md 34.5/51.4).
 xt-sound: $(IMG360) $(APPSIMG360)
 	@$(UNPROTECT_B) $(VMXTSND)/86box.cfg
 	$(BOX) -P $(VMXTSND) -N
@@ -509,6 +555,81 @@ xt-sound: $(IMG360) $(APPSIMG360)
 386-sound: $(IMG) $(APPSIMG)
 	@$(UNPROTECT_B) $(VM386SND)/86box.cfg
 	$(BOX) -P $(VM386SND) -N
+
+# check-images - are the git-tracked binaries in build/ what the sources
+# actually produce?
+#
+# build/ is gitignored, but a handful of artifacts inside it are force-added
+# and shipped: the kernel, the two boot sectors, the two bootable floppies and
+# the two software floppies. Nothing makes them follow a source change, so
+# they go stale in silence - edit a package, skip the rebuild, and the tree
+# still builds, still boots, and still looks right while carrying a floppy
+# image that no longer holds what the source says it does. That is not
+# hypothetical: two "Rebuild the shipped images" commits exist because someone
+# caught it by hand, and a merge shipped a Paint two fixes out of date until
+# the merge rebuilt it.
+#
+# This is the mechanical version of catching it. Every shipped artifact is
+# built a SECOND time into a scratch directory and compared byte for byte.
+# That is only meaningful because the toolchain is deterministic on purpose -
+# tools/os88disk.py pins the volume serial and every FAT timestamp for exactly
+# this reason - so a difference is always staleness and never noise.
+#
+# Three things are deliberate:
+#
+#  - **The tracked set comes from git, not from a list here.** A list would
+#    drift from what is actually tracked, and the drift would be invisible.
+#  - **A tracked file the build does NOT produce is reported too**, and so is
+#    a tracked VIDEO=/RTC= stamp. Both are the other half of the same problem:
+#    build/ has been force-added wholesale more than once, which swept in a
+#    stamp twice and, on the occasion the parse-time hook had just deleted it,
+#    took kernel.bin OUT of the repo. The stamp needs naming specially because
+#    it would otherwise pass - the scratch build makes one too, and two empty
+#    files compare equal.
+#  - **The scratch build is knob-free.** The shipped images must be built with
+#    no VIDEO=/HERCSEG=/RTC= forcing - the kernel recipe already says so in a
+#    comment it prints at you - so building the comparison without them turns
+#    that comment into a check: a forced kernel that reached the tree reads as
+#    stale, which is exactly what it is.
+#
+# It is not part of `all`: it costs a second full build, and it is a
+# pre-commit gate rather than something every build should pay for.
+CHECKDIR := $(BUILD)/.check
+
+check-images:
+	@rm -rf $(CHECKDIR)
+	@$(MAKE) BUILD=$(CHECKDIR) VIDEO= HERCSEG= RTC= all >/dev/null
+	@stale=0; bogus=0; n=0; \
+	for t in $$(git ls-files $(BUILD) 2>/dev/null); do \
+	    n=$$((n+1)); \
+	    b=$$(basename $$t); \
+	    case $$b in .video-*) \
+	        echo "  SCRATCH $$t - a build stamp, not a shipped artifact"; \
+	        bogus=1; continue;; \
+	    esac; \
+	    if [ ! -f $(CHECKDIR)/$$b ]; then \
+	        echo "  ORPHAN  $$t - tracked, but no build rule produces it"; \
+	        bogus=1; \
+	    elif cmp -s $$t $(CHECKDIR)/$$b; then \
+	        :; \
+	    else \
+	        echo "  STALE   $$t - does not match what the sources build"; \
+	        stale=1; \
+	    fi; \
+	done; \
+	rm -rf $(CHECKDIR); \
+	if [ $$n -eq 0 ]; then \
+	    echo "check-images: nothing tracked in $(BUILD)/ - is this a git checkout?"; \
+	    exit 1; \
+	fi; \
+	if [ $$stale -ne 0 ]; then \
+	    echo "check-images: STALE above - run \`make\`, then commit $(BUILD)/"; \
+	fi; \
+	if [ $$bogus -ne 0 ]; then \
+	    echo "check-images: SCRATCH/ORPHAN above - untrack it: git rm --cached <path>"; \
+	fi; \
+	if [ $$stale -ne 0 ] || [ $$bogus -ne 0 ]; then exit 1; fi; \
+	echo "check-images: $$n tracked artifact(s) match the sources"
 
 clean:
 	rm -rf $(BUILD)

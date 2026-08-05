@@ -48,11 +48,9 @@
 ; SPEC.md 20.6, and the reason the GUI stays responsive.
 ;
 ; THERE IS NO FRAME BUFFER, AND THERE IS A RESTORE CACHE. A raw canvas is
-; 320x170 at 4bpp = 27,200 bytes - more than this package's whole region
-; wants to be (SPEC.md 40.1; the v2 pool it was sized against is history,
-; but a 27KB bss would still cost four arena regions' worth of RAM per
-; instance) - and a run-length copy of a whole frame measured
-; 11,712-13,928. What fits is a
+; 320x170 at 4bpp = 27,200 bytes against a 19,968-byte package region shared
+; by every resident package, and a run-length copy of a whole frame measured
+; 11,712-13,928 - most of the pool, for one instance. What fits is a
 ; run-length copy of PASS 0 alone: 3,886 bytes worst case over five types
 ; and five zooms, and it is the right quarter of the work to keep, because
 ; pass 0 already covers the whole canvas at quarter vertical resolution
@@ -188,11 +186,10 @@ FR_X_PAL    equ 250
 ; not fit: a Mandelbrot at zoom 0 wants ~1,650 runs for its 43 pass-0 rows and
 ; the five types spread about 10% around that.
 ;
-; 4,000 bytes is 2,000 runs, and the ceiling keeps the whole package inside
-; one 512-rounded 7,168-byte region (image + bss = 7,168 exactly as of v3 -
-; zero slack). That bound was originally forced by the v2 19,968-byte pool;
-; the arena (SPEC.md 2.5) no longer forces it, but a frugal region is still
-; what lets many instances coexist, so it stays (SPEC.md 40.1).
+; 4,000 bytes is 2,000 runs, and the ceiling is not the number - it is that
+; image + bss must stay inside one 512-rounded 7,168-byte region, because two
+; Fractals plus mines plus notepad is 19,456 of the 19,968-byte pool and the
+; next step up does not fit.
 FR_CRUN      equ 2                  ; bytes per cached run
 FR_CACHE_MAX equ 4000               ; = 2000 * FR_CRUN
 
@@ -200,7 +197,7 @@ FR_BSS_TOTAL equ 4394               ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; fr_entry - package entry point (SPEC.md 20.2)
-; in:  CS=DS=ES = our own segment, IF=1, gfx lock NOT held
+; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF clear (CF set = abort, propagated from wm_create)
 ;
 ; The loader zeroed our bss, which is type 0 / palette 0 / zoom 0 - but the
@@ -232,7 +229,7 @@ fr_entry:
     call OSAPI_MENU_SET             ; BX = the window, SI = our set
 .out:
     pop si                          ; POP leaves the flags alone
-    retf                            ; far-called by the loader (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; fr_paint - W_PAINT: put the picture back, and spawn the worker on the
@@ -268,7 +265,7 @@ fr_paint:
     pop cx
     pop bx
     pop ax
-    retf                            ; far-called W_PAINT (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; fr_onclick - W_ONCLICK: re-centre on the clicked point and restart
@@ -334,7 +331,7 @@ fr_onclick:
     pop cx
     pop bx
     pop ax
-    retf                            ; far-called W_ONCLICK (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; fr_oncmd - AM_ONCMD: the three menus (SPEC.md 12.2)
@@ -390,13 +387,13 @@ fr_oncmd:
     call fr_defaults
 .kick:
     call fr_kick
-    retf                            ; far-called menu handler (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; fr_worker - THE background task (SPEC.md 20.6)
-; in:  DX = our instance index, DS = ES = CS = our own segment, IF = 1, gfx
-;      lock free. NEVER returns and never exits on its own - the only way
-;      out is OSAPI_TASK_ALIVE not coming back.
+; in:  DX = our instance index, DS = ES = CS = KERNEL_SEG, IF = 1, gfx lock
+;      free. NEVER returns and never exits on its own - the only way out is
+;      OSAPI_TASK_ALIVE not coming back.
 ;
 ; Outer loop, in the order the contract demands:
 ;   1. OSAPI_TASK_ALIVE with the lock NOT held (rule 4: it takes the lock
@@ -487,8 +484,8 @@ fr_hire:
     cmp byte [fr_spawned], 1
     je .out                         ; we own one already: a second
                                     ; OSAPI_TASK_SPAWN would only be refused
-    mov ax, fr_worker               ; a plain org-0 offset in our own
-    mov bx, [fr_win]                ; segment (SPEC.md 20.6)
+    mov ax, fr_worker               ; a whole-word package address: os88pkg
+    mov bx, [fr_win]                ; relocates it as class 0 (SPEC.md 20.2)
     call OSAPI_TASK_SPAWN           ; CF=1 refused, nothing was created
     jc .none
     mov byte [fr_spawned], 1
@@ -597,9 +594,9 @@ fr_kick:
 ; RESUME - fr_restart = 2 - rather than start over, so it keeps the pass and
 ; row this routine hands it.
 ;
-; The geometry compare is belt and braces: fr_setup re-asks OSAPI_WM_GEOM
-; every time and wm_fit can clamp the frame, and a cache built for a
-; different canvas would replay runs at the wrong columns.
+; The geometry compare is belt and braces: fr_setup re-reads W_W/W_H every
+; time and wm_fit can clamp them, and a cache built for a different canvas
+; would replay runs at the wrong columns.
 ;
 ; With nothing cached this is exactly the old behaviour, spelled fr_kick.
 ; -----------------------------------------------------------------------------
@@ -809,9 +806,9 @@ fr_replay:
 ;      [fr_step] [fr_x0] [fr_y0] [fr_palp]; the centre re-clamped
 ; clobbers: nothing
 ;
-; The content rectangle is re-asked of OSAPI_WM_GEOM every time, never taken
+; The content rectangle is re-read from the window record every time, never
 ; from the template: wm_fit clamps the frame onto the live screen and the
-; kernel's record, not the template, is the truth (SPEC.md 39.7/39.10).
+; record, not the template, is the truth (SPEC.md 39.7/39.10).
 ; -----------------------------------------------------------------------------
 fr_setup:
     push ax
@@ -824,15 +821,19 @@ fr_setup:
     jnz .have
     jmp .out
 .have:
-    call OSAPI_WM_GEOM              ; CX = content width, DX = content height
-    mov ax, cx                      ; (the window record is kernel memory now
-    cmp ax, 1                       ; - SPEC.md 11); canvas = content less
-    jge .cwok                       ; the status strip
+    call OSAPI_WM_GEOM              ; CX/DX = CONTENT w/h (SPEC.md 11) - the
+                                    ; kernel does the w-2 / h-TITLE_H-1 that
+                                    ; every caller used to repeat off the
+                                    ; record, so this package no longer needs
+                                    ; ES to point at kernel memory at all
+    mov ax, cx
+    cmp ax, 1
+    jge .cwok
     mov ax, 1                       ; never 0: it is a divisor below
 .cwok:
     mov [fr_cw], ax
     mov ax, dx
-    sub ax, FR_STRIP_H
+    sub ax, FR_STRIP_H              ; ...less our own status strip
     cmp ax, 1
     jge .chok
     mov ax, 1
@@ -1233,8 +1234,12 @@ fr_emit_body:
     mov bx, [fr_win]
     or bx, bx
     jz .step
-    call OSAPI_WM_GEOM              ; CF = 1: hidden (the v2 idiom of testing
-    jc .step                        ; [bx+W_FLAGS] is dead - SPEC.md 20.6)
+    call OSAPI_WM_GEOM              ; CF=1: not visible (SPEC.md 11). Was a
+    jc .step                        ; [es:bx+W_FLAGS] test, which needed ES
+                                    ; still pointing at the record inside the
+                                    ; WORKER's frame - true, but only by
+                                    ; convention, and one stray `mov es` away
+                                    ; from reading a flag out of our own image
     call OSAPI_WM_CLIP_SET          ; how much of it shows? (SPEC.md 11.3)
     jc .step
     jmp short .draw

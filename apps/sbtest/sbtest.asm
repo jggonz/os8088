@@ -2,7 +2,7 @@
 ; os8088 - apps/sbtest/sbtest.asm
 ;
 ; SBTEST: the sound Phase 4+5 gate package (docs/SOUND-PLAN.md). Exercises
-; the stream + staging surface (slot 0x0088, SPEC.md 20.3/34.5/34.6) end to
+; the stream + staging surface (slot 0x0100, SPEC.md 20.3/34.5/34.6) end to
 ; end from a real package: grant -> synthesise -> stage -> open -> poll ->
 ; close, exactly the model SPEC.md 34.5 prescribes (the package never holds
 ; an ES pointer into SND_SEG; the kernel refill/drain tasks pace the card).
@@ -45,6 +45,12 @@
 ;
 ; Window procs run with the gfx lock held (SPEC.md 11) and preserve all
 ; registers, like every package.
+;
+; Ported from the other fork with the one edit every such port needs: over
+; there a callback is far-called and ends in `retf`; here the kernel reaches
+; it through the three-byte dispatcher in the package's own header
+; (SPEC.md 20.1), so every proc below - the entry included - is an ordinary
+; near proc with a near `ret`, and the `push cs` around sb_paint goes with it.
 ; =============================================================================
 
 %include "os88api.inc"
@@ -66,7 +72,7 @@ sb_entry:
     mov si, sb_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     pop si
-    retf                            ; far-called by the loader (SPEC.md 20.5)
+    ret                            ; far-called by the loader (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; sb_paint - W_PAINT: the three status lines
@@ -99,7 +105,7 @@ sb_paint:
     pop cx
     pop bx
     pop ax
-    retf                            ; far-called W_PAINT (SPEC.md 20.5)
+    ret                            ; far-called W_PAINT (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; sb_onclick - W_ONCLICK: toggle the full 2s stream open/closed
@@ -129,14 +135,13 @@ sb_onclick:
     add cx, SB_CONT_W-1             ; x2
     add dx, SB_CONT_H-1             ; y2
     call OSAPI_GFX_FILL
-    push cs                         ; sb_paint returns with retf (it is the
-    call sb_paint                   ; far-called W_PAINT); SI = win ptr still
+    call sb_paint                   ; a NEAR call: SI = win ptr still
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
-    retf                            ; far-called W_ONCLICK (SPEC.md 20.5)
+    ret                            ; far-called W_ONCLICK (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; sb_onkey - W_ONKEY: 'u' underrun, 'p' progressive, 'f' feed, 'r' open-in,
@@ -202,15 +207,14 @@ sb_onkey:
     add cx, SB_CONT_W-1
     add dx, SB_CONT_H-1
     call OSAPI_GFX_FILL
-    push cs                         ; same push-cs idiom: sb_paint retfs
-    call sb_paint
+    call sb_paint                   ; near, like every proc here
 .out:
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
-    retf                            ; far-called W_ONKEY (SPEC.md 20.5)
+    ret                            ; far-called W_ONKEY (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; sb_start - grant + synthesise + stage + open one stream

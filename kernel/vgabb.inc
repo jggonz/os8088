@@ -5,7 +5,8 @@
 ; kernel can drive a Hercules or a CGA card at all (SPEC.md 39.3).
 ;
 ;   1. Optional double buffering on VGA (SPEC.md 32) - what it was written
-;      for: four planes of RAM at BB_SEG, flushed to VRAM by gfx_flush.
+;      for: four planes of CLAIMED RAM at [bb_seg], flushed to VRAM by
+;      gfx_flush.
 ;   2. THE 1BPP DRIVER. Nothing in here touches a VGA port or a latch - it
 ;      was written against RAM, so it already does the ALU's work with plain
 ;      CPU instructions. Point it at the framebuffer instead of a back
@@ -19,18 +20,20 @@
 ; buffer is armed and must be flushed" - the two were one flag until the
 ; mono path needed the first without the second.
 ;
-; bb_init probes conventional RAM
-; via int 12h: at >= DB_MIN_KB it arms [bb_on] and from then on every public
-; drawing entry in vga12.inc (plus font_char and ico_core) renders into a
-; 4-plane back buffer at BB_SEG instead of VRAM, and gfx_flush copies the
-; dirty rectangle to VRAM through the Sequencer Map Mask. Below the floor
-; [bb_on] stays 0 and every entry falls through to its original VRAM body.
+; The buffer is not reserved: bb_set CLAIMS its 150KB from the SPEC.md 50
+; heap when the Control Panel arms it and FREES them when it is switched off,
+; so a machine that never turns it on never spends a byte, and a machine
+; whose heap is full is refused with a reason the Display page can print.
+; While armed, every public drawing entry in vga12.inc (plus font_char and
+; ico_core) renders into the 4-plane buffer instead of VRAM and gfx_flush
+; copies the dirty rectangle to VRAM through the Sequencer Map Mask; the
+; rest of the time every entry falls through to its original VRAM body.
 ;
 ; RAM has no latches or Set/Reset, so the bb_* twins do the VGA ALU's work
 ; in software, one plane at a time: solid ops or/and the edge masks per the
 ; [gfx_color] plane bit (interiors are rep stosb of FF/00), XOR ops xor the
 ; edge masks and `not` whole interior bytes. Plane p lives at segment
-; BB_SEG + p*BB_PLANE_PARA with the same 80-byte rows as VRAM, so
+; [bb_seg] + p*BB_PLANE_PARA with the same 80-byte rows as VRAM, so
 ; vga_rect_setup's masks and offsets serve both worlds; every solid/XOR
 ; primitive here funnels through it. Pixel/hline/vline are degenerate
 ; fills - a rect setup costs one mul, same as the dedicated VRAM loops.
@@ -64,10 +67,15 @@ bb_dbl          db 0            ; is TRUE double buffering armed - i.e. is
                                 ; Manager must not claim otherwise
                                 ; (SPEC.md 39.5). Initialized data, as below.
 
-bb_avail        db 0            ; did the boot RAM probe clear DB_MIN_KB?
-                                ; Set once by bb_init; gates bb_set, so on a
-                                ; small machine [bb_on] can never become 1
-                                ; and the Display page says why.
+bb_avail        db 0            ; can this ADAPTER double-buffer at all?
+                                ; Set once by bb_init (colour only); gates
+                                ; bb_set. Whether the MEMORY is there is a
+                                ; separate question, asked of the heap at
+                                ; arm time and answered by bb_set's CF.
+
+bb_seg          dw 0            ; the claimed buffer's base segment, 0 =
+                                ; not armed. Plane p is at
+                                ; bb_seg + p*BB_PLANE_PARA.
 
 bb_mono         db 1            ; are all four back-buffer planes identical?
                                 ; True from boot (bb_init zeroes them) and
@@ -86,25 +94,48 @@ bb_mono         db 1            ; are all four back-buffer planes identical?
                                 ; bb_on.
 
 ; -----------------------------------------------------------------------------
-; bb_init - probe conventional RAM; arm and clear the back buffer at >= 512KB
+; bb_init - can this machine double-buffer at all?
 ;
-; Called from kmain right after vid_init (the mode set cleared VRAM, so
-; zeroed planes start in sync) and before the first drawing call. Runs on
-; task 0, so the int 12h BIOS call honors SPEC.md 7.
+; Called from kmain right after vid_init. It no longer probes RAM: the only
+; permanent question is the ADAPTER (a 1bpp screen has nothing to double,
+; SPEC.md 39.5), and the memory question is asked of the heap every time the
+; buffer is armed - which is the difference between "150KB reserved from
+; boot" and "150KB spent while you are using it".
 ; in:       -
-; out:      [bb_on] = 1 and planes zeroed, or [bb_on] = 0 (fallback)
+; out:      [bb_avail] = 1 on a colour adapter
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 bb_init:
-    push ax
     cmp byte [vid_mono], 0      ; a 1bpp adapter has no back buffer to offer:
     jne .done                   ; [bb_on] is already 1 and means something
-                                ; else entirely (SPEC.md 39.5)
-    int 0x12                    ; AX = conventional memory, KB
-    cmp ax, DB_MIN_KB
-    jb .done                    ; too small: the Control Panel will not offer
-    mov byte [bb_avail], 1      ; it, and [bb_on] can never become 1
+    mov byte [bb_avail], 1      ; else entirely (SPEC.md 39.5)
 .done:
+    ret
+
+; -----------------------------------------------------------------------------
+; bb_canfit - is there room in the heap for a back buffer right now?
+; in:       nothing
+; out:      CF = 0 there is (or it is already armed), CF = 1 there is not
+; clobbers: nothing (flags)
+;
+; The Display page's caption and its greying read this (SPEC.md 31.3): a
+; refusal must be explainable BEFORE the click, not only after it.
+; -----------------------------------------------------------------------------
+bb_canfit:
+    push ax
+    push bx
+    cmp word [bb_seg], 0
+    jne .yes                    ; armed: the memory is ours already
+    call mem_avail              ; AX = largest free run, KB
+    cmp ax, BB_KB
+    jb .no
+.yes:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop bx
     pop ax
     ret
 
@@ -129,9 +160,11 @@ bb_sync:
     push ds
     push es
     cld
+    mov bx, [bb_seg]            ; BX = destination plane segment - read
+                                ; BEFORE DS leaves the kernel segment, or it
+                                ; is a VRAM fetch at that offset
     mov ax, VGA_SEG
     mov ds, ax                  ; source = VRAM, one plane at a time
-    mov bx, BB_SEG              ; BX = destination plane segment
     mov ah, 0                   ; AH = plane index
 .plane:
     mov al, 4                   ; GC4: Read Map Select = this plane
@@ -177,35 +210,62 @@ bb_sync:
 ; -----------------------------------------------------------------------------
 bb_set:
     push ax
+    push bx
+    push dx
     or al, al
     je .off
     cmp byte [bb_avail], 0
-    je .out                     ; not enough RAM: stays off, silently
+    je .refuse                  ; wrong adapter: stays off
     cmp byte [bb_on], 0
-    jne .out                    ; already on
+    jne .ok                     ; already on
+    mov ax, BB_KB               ; the memory question, asked now and not at
+    mov bx, MEM_K_BB            ; boot (SPEC.md 50.2)
+    call mem_claim
+    jc .refuse                  ; the heap cannot fund it: the Display page
+    mov [bb_seg], dx            ; prints why and the click does nothing
+    mov [vid_rseg], dx          ; point the software renderer at it
+    add dx, 4*BB_PLANE_PARA
+    mov [vid_rend], dx
     call bb_sync
     call bb_dirty_reset
     mov byte [bb_dbl], 1        ; publish last: every bb_* entry keys off
     mov byte [bb_on], 1         ; bb_on, and gfx_flush off bb_dbl
-    jmp .out
+    jmp short .ok
 .off:
     cmp byte [bb_on], 0
-    je .out                     ; already off
+    je .ok                      ; already off
     call gfx_flush              ; land anything still pending in VRAM
     mov byte [bb_dbl], 0
     mov byte [bb_on], 0
+    mov dx, [bb_seg]            ; and hand the 150KB back (SPEC.md 50.2):
+    mov bx, MEM_K_BB            ; switched off means not spent
+    call mem_free
+    mov word [bb_seg], 0
+    mov word [vid_rseg], 0
+    mov word [vid_rend], 0
+.ok:
+    clc
+    jmp short .out
+.refuse:
+    stc
 .out:
+    pop dx
+    pop bx
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; osapi_gfx_dbuf - API slot 0x01F0 (SPEC.md 32/20.3): a package's bb_set.
+; osapi_gfx_dbuf - API slot 0x01D8 (SPEC.md 32/20.3): a package's bb_set.
 ; in:  AL = 1 arm / 0 disarm; caller holds the gfx lock (the CP's context)
 ; out: CF=1 [bb_avail] clear, NOTHING changed - the gate covers BOTH
 ;      directions, because bb_set's AL=0 path keys on [bb_on], which a mono
-;      adapter holds at 1 as its RENDERER (SPEC.md 39.3); CF=0 done, AL =
+;      adapter holds at 1 as its RENDERER (SPEC.md 39.5); CF=0 done, AL =
 ;      the previous [bb_dbl] (hand it back here to restore the user's mode)
 ; clobbers: nothing else
+;
+; Arming can still fail on a heap too small to fund BB_KB - bb_set answers
+; CF=1 for that too (SPEC.md 50.2), which is the same "you did not get it"
+; the caller already has to handle.
 ; -----------------------------------------------------------------------------
 osapi_gfx_dbuf:
     cmp byte [bb_avail], 0
@@ -215,9 +275,8 @@ osapi_gfx_dbuf:
     call bb_set
     mov al, bl
     pop bx
-    clc
-    ret
-.no:
+    ret                         ; bb_set's own CF: a refused claim is a
+.no:                            ; refusal too (SPEC.md 50.2)
     stc
     ret
 
@@ -308,19 +367,7 @@ bb_dirty_rect:
     jmp bb_dirty                ; its ret returns to our caller
 
 ; -----------------------------------------------------------------------------
-; gfx_flush - copy the dirty back-buffer rect to VRAM, plane by plane
-;
-; Caller holds the gfx lock (cursor hidden - the flush may overwrite the
-; cursor cell, which must therefore not be on screen). Plain replace-mode
-; writes through SEQ2 Map Mask, one plane at a time; the GC keeps its
-; default state throughout. No-op when double buffering is off or the
-; dirty rect is empty. Public: menu_track and ui_drag call it mid-lock;
-; gfx_unlock calls it before cursor_show.
-; in:       -
-; out:      dirty rect reset
-; clobbers: flags
-; -----------------------------------------------------------------------------
-; gfx_scroll - vertical scroll blit (SPEC.md 5.5; API slot 0x01F8)
+; gfx_scroll - vertical scroll blit (SPEC.md 5.5; API slot 0x01E0)
 ;
 ; in:       AX = x1, BX = y1, CX = x2, DX = y2 (inclusive, absolute screen
 ;           coords), SI = dy SIGNED: positive moves the rect's content UP dy
@@ -401,7 +448,7 @@ gfx_scroll:
     jl .down
     mov [bbs_ydst], bx          ; up: dest rows y1..y2-|dy|, walked top-down
     mov word [bbs_step], 1      ; (source below destination - forward-safe)
-    jmp .disp
+    jmp short .disp
 .down:
     mov [bbs_ydst], dx          ; down: dest rows y1+|dy|..y2, walked
     mov word [bbs_step], -1     ; bottom-up (source above destination)
@@ -413,8 +460,8 @@ gfx_scroll:
     call gfx_flush              ; pending dirty inside the region would
                                 ; scroll stale VRAM against fresh RAM
     mov cx, 4                   ; the four buffer planes...
-    mov dx, BB_SEG
-.plane:
+    mov dx, [bb_seg]            ; ...at a CLAIMED base (SPEC.md 50), so this
+.plane:                         ; is a load, not an immediate
     push cx
     push dx
     call bbs_lincopy
@@ -431,12 +478,12 @@ gfx_scroll:
     mov dx, 0x03CE
     mov ax, 0x0005              ; write mode back to 0 (SPEC.md 1 rule 7)
     out dx, ax
-    jmp .ok
+    jmp short .ok
 .mono:
     call bbs_bankcopy           ; the framebuffer IS [vid_rseg] (SPEC.md 39)
 .ok:
     clc
-    jmp .out
+    jmp short .out
 .no:
     stc
 .out:
@@ -449,8 +496,8 @@ gfx_scroll:
     ret
 
 ; -----------------------------------------------------------------------------
-; bbs_lincopy - scroll one LINEAR segment (80-byte VGA stride): a buffer
-; plane, or VRAM itself in write mode 1
+; bbs_lincopy - scroll one LINEAR segment (the VGA stride): a buffer plane,
+; or VRAM itself in write mode 1
 ; in:       DX = target segment; the bbs_* geometry
 ; clobbers: AX/BX/CX/DX/SI/DI, flags (gfx_scroll banked the caller's)
 ; -----------------------------------------------------------------------------
@@ -520,6 +567,18 @@ bbs_bankcopy:
     ret
 
 ; -----------------------------------------------------------------------------
+; gfx_flush - copy the dirty back-buffer rect to VRAM, plane by plane
+;
+; Caller holds the gfx lock (cursor hidden - the flush may overwrite the
+; cursor cell, which must therefore not be on screen). Plain replace-mode
+; writes through SEQ2 Map Mask, one plane at a time; the GC keeps its
+; default state throughout. No-op when double buffering is off or the
+; dirty rect is empty. Public: menu_track and ui_drag call it mid-lock;
+; gfx_unlock calls it before cursor_show.
+; in:       -
+; out:      dirty rect reset
+; clobbers: flags
+; -----------------------------------------------------------------------------
 gfx_flush:
     cmp byte [bb_dbl], 0        ; NOT [bb_on]: on mono that is 1 and there is
     je .off                     ; no back buffer to copy from
@@ -547,7 +606,7 @@ gfx_flush:
     inc bx                      ; BX = row count
     mov ax, VGA_SEG
     mov es, ax
-    mov cx, BB_SEG              ; CX = current plane segment
+    mov cx, [bb_seg]            ; CX = current plane segment
     mov al, 1                   ; Map Mask bit: one plane per pass...
     cmp byte [bb_mono], 0
     je .setp

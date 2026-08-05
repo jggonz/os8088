@@ -1,42 +1,27 @@
 # Paint — design notes, and what the OS would need to do this properly
 
-`apps/paint/paint.asm` is a bitmap editor, contributed as a fork of os8088
-by [Elendilon](https://github.com/Elendilon) and ported to the v3 package
-ABI. This document records what it needed from the kernel, what it got, the
-capabilities whose absence still cost the most, and how the picture formats
-it reads and writes were arrived at.
+`apps/paint/paint.asm` is a bitmap editor written entirely against the
+published package ABI (SPEC.md §20.3). **No kernel file was changed to make
+it work** — not one byte of `kernel/`, and no new API slot. This document
+records the two liberties it took that the ABI did not sanction, the
+capabilities whose absence cost the most, and how the picture formats it reads
+and writes were arrived at.
 
-**The two liberties this file was written to record are gone.** As written
-against v2 it claimed conventional memory above `BB_SEG` by picking an
-address, and it wrote `W_W`/`W_H` in the kernel's window record by hand.
-Neither is possible in v3 — a package's DS cannot reach the record, and the
-arena at 0x65800 is where every package segment now comes from, so an
-address Paint picked would be an address the loader had granted somebody
-else. What the notes asked for is what the port added:
+## What has since landed
 
-- **`alloc(paragraphs) → segment` / `free(segment)`, stamped with the
-  calling instance and force-freed at teardown** — `OSAPI_MEM_ALLOC` /
-  `OSAPI_MEM_FREE`, SPEC.md §2.6/§20.7, built on `kernel/cmem.inc`. The
-  §34.6 sound-grant precedent named here is exactly the shape it took,
-  teardown fence included.
-- **A `largest_free` query** — `OSAPI_MEM_AVAIL`, which answers the largest
-  contiguous run and the total separately, because an app must size itself
-  from the first and not the second.
-- **A `wm_resize` that clamps to the screen** — `OSAPI_WM_RESIZE`, SPEC.md
-  §11.1, which retires the record write and is also how a grow-box drag is
-  refused.
+Four of the things below are now in the kernel, and the sections that asked
+for them are marked **RESOLVED** where that is so. In short:
 
-Two of the three reciprocal concerns in the old text answered themselves.
-The Task Manager **does** bill the grant now (`cm_inst_mem`), so Paint's
-quarter megabyte is no longer invisible. And `bb_set` never has to refuse:
-`ARENA_SEG` is one paragraph above the back buffer's pinned extent by
-construction, so the two can never want the same paragraph and Paint no
-longer reads `DB_MIN_KB` to guess whether the kernel is going to.
+| asked for | shipped as |
+|-----------|------------|
+| `alloc(paragraphs)`/`free`, a `largest_free` query, and the same map governing the kernel's own speculative RAM | the **claim heap**, SPEC.md §50 — `OSAPI_MEM_CLAIM` / `OSAPI_MEM_FREE` / `OSAPI_MEM_AVAIL`, freed at instance teardown, billed by the Task Manager, and `bb_set` asking it for the back buffer like anyone else |
+| a `gfx_blit4` slot | SPEC.md §5.4 — packed 4bpp, adapter- and back-buffer- and clip-aware |
+| the kernel's glyph table | `OSAPI_FONT_GLYPHS`, SPEC.md §6 |
+| `wm_resize(BX, w, h)`, and a resize callback whose refusal `ui_grow` honours | `OSAPI_WM_RESIZE` and `W_ONSIZE`/`OSAPI_WM_ONSIZE`, SPEC.md §11.1 |
 
-What is still missing is the **teardown callback** (below): a task-less
-package is never told its window is closing. The allocator is safe without
-one only because the *kernel* force-frees; an app that owned anything the
-kernel does not know about still has no way to clean it up.
+The rest — positioned file I/O, a teardown callback, mouse-motion events,
+menu item state, a package-visible modal gate — is still outstanding, and the
+sections below still describe why each one costs what it costs.
 
 ## What it is
 
@@ -56,65 +41,150 @@ File dialog (SPEC.md §38). Ctrl+Z, Ctrl+C, Ctrl+X, Ctrl+V and Delete reach the
 same routines the Edit menu does — they are the control codes int 16h already
 hands W_ONKEY, so no scan-code decoding is involved.
 
-The app's **name in the menu bar is itself a menu**, and `About Paint` lives
-in it — the Macintosh place for it. That needed no kernel change: SPEC.md
-§12.2 draws `AM_NAME` and then the app's cells to its right, so a set whose
-name is the empty string and whose first menu is titled "Paint" puts a
-pull-down exactly where the label would have been. The About window is a
-second, instance-less window of the file dialog's species (§38): no dock
-tile, no Task Manager row, close reduces to `wm_hide`, and Paint's teardown
-sweeps it by segment stamp. Its command is dispatched ahead of the mode
-test, so a machine too small to fund a canvas can still read it.
-
 Shrinking the window never silently eats the picture: the rows or columns
 about to go are checked for ink first, per axis, and a dirty axis keeps its
 size while the other one still moves. When that happens the frame is written
 back to fit the canvas and the status toast says why.
 
-## What the memory looks like now
+## The two liberties it takes
 
-One `OSAPI_MEM_ALLOC` grant, sliced into canvas, undo image, clipboard and a
-12KB scratch area. `pt_geom` asks `OSAPI_MEM_AVAIL` for the largest free run,
-divides it in three tiers — clipboard first to go, then undo — and asks for
-exactly what it decided. Nothing is a fixed address and no kernel constant is
-read to derive one.
+**1. It claims conventional memory above `BB_SEG`** — from linear 0x66000 up —
+**(RESOLVED — it now calls `OSAPI_MEM_CLAIM`; the rest of this section is
+kept as the record of what the absence cost.)**
+for the canvas, an equally-sized undo image, the clipboard and a 12KB scratch
+area. There is no other place for them: a package's whole world is
+`APP_MAX_SIZE` = 19.5KB of image + bss (SPEC.md §20.1), and even a modest
+canvas is 60KB. Nothing is a fixed size any more: `pt_geom` divides what int
+12h reports, so the same binary runs a 101KB canvas on a 640KB machine, a
+39KB one at 512KB, and refuses below about 499KB.
 
-It deliberately leaves `PT_RESERVEP` (64KB, one whole package region) behind
-when doing so still funds the top tier. Without that, a canvas plus an equal
-undo image eats a 233KB arena whole and no other package can load while Paint
-is open — a true answer to a question nobody asked. With it, the default
-448×280 canvas still fits and Minesweeper still launches alongside.
+0x66000 is the first paragraph above the four back-buffer planes (SPEC.md §2:
+`BB_SEG` + 4 × 0x9600 ends at 0x657FF), so the Control Panel can arm or disarm
+double buffering underneath the app with no effect. Nothing else in the tree
+touches memory above 0x40000.
 
-Two instances get two grants, so the v2 claim record and its liveness test
-(`pt_dupchk`, which existed because a fixed address had to be arbitrated and
-a closed Paint left a stale magic word behind) are gone outright. A closed
-Paint's grant is force-freed by the kernel, which is the only thing that
-could have freed it: nothing tells a task-less package it is closing.
+**Except when it never will.** `bb_init` sets `[bb_avail]` only on a colour
+adapter with `DB_MIN_KB` (500) KB or more, and nothing can arm the buffer
+without it — so on a smaller machine, or any 1bpp adapter, those 150KB at
+`BB_SEG` are dead for the entire session. Paint therefore starts at `BB_SEG`
+in that case, and it is worth a tier or two everywhere it applies: a 460KB
+machine goes from *no undo, no clipboard, 448×166* to the full app at 448×280,
+and the floor for running at all drops from about 452KB to about 300KB.
 
-**Two bugs this shook out of the kernel, worth knowing.** `ld_alloc` reserves
-a package's region at SPEC.md §21 step 5, but the instance record is not
-published until step 10, after the entry proc returns. Paint was the first
-package to call `OSAPI_MEM_ALLOC` from its entry — and the allocator, whose
-only evidence is `I_STATE`, handed it `ARENA_SEG`: the segment it was
-executing in. It filled its canvas with white and the machine wedged
-mid-repaint on the first `0xFF` opcode, gfx lock held. `cm_hold`/`cm_unhold`
-(SPEC.md §2.6) is the reservation for that window.
+That is the app reading a kernel *policy* constant, and it is the least
+defensible thing in this file. It is correct today and it is checked in the one
+place the kernel states it — but if `DB_MIN_KB` ever drops, or `bb_init` grows a
+third way to succeed, Paint will be sitting inside the back buffer's planes and
+the failure will look like random corruption during a Control Panel toggle. The
+next paragraph is what would make that impossible rather than merely unlikely.
 
-And the canvas is the first disk buffer in the tree that is not 512-aligned
-by accident. `dsk_xfer` does one sector per int 13h call, which the spec took
-to mean "DMA alignment never matters" — but the 8237's page register does not
-increment, so a single 512-byte transfer that straddles a 64KB physical
-boundary is refused with AH=09h. The undo image sits `pt_smaxp` paragraphs
-above the grant base, `pt_smaxp` is an arbitrary paragraph count, and opening
-any file long enough to reach the next page boundary answered "Disk error".
-`dsk_xfer` now stages such a sector through `dsk_dmabuf` in `LOW_SEG`
-(SPEC.md §18.1). Worth knowing because it is the caller's *address*, not its
-size or its content, that decides — so it reproduces on exactly one file in
-several and looks like flaky hardware.
+Three consequences are handled rather than hoped about:
+
+- **It holds four claims, sized for the canvas that is up.** Scratch (fixed
+  12KB), canvas, undo image, clipboard — each asked for on its own, so each
+  refusal costs exactly the feature it funds. A resize frees undo and
+  clipboard, re-claims the canvas, copies block to block, frees the old one
+  and asks for the other two again; the clipboard starts at its floor and
+  grows the first time a Copy needs more. A fresh 448×280 Paint therefore
+  holds about 150KB where the first version held 318KB, and the figure tracks
+  what the picture actually is: 236K after growing the window to 514×371, 245K
+  after copying a 240×210 selection.
+
+  The first version took one block sized for the largest canvas the machine
+  (later, the screen) could hold, because `pt_resize` staged the old picture
+  **in the undo image** — so the undo image had to cover any canvas that could
+  ever be adopted, and the bases had to be fixed for the staging to be safe.
+  Copying between two claims removes the staging area entirely, and with it
+  both constraints. It also means a machine that cannot fund an undo image can
+  still resize, which is why `WF_SIZABLE` is no longer conditional.
+- **The memory may not be there.** `pt_entry` asks the allocator first and
+  gives up features rather than refusing outright. The thresholds below are for a
+  machine whose back buffer is live; where it is not, the base drops to
+  `BB_SEG` and every one of them moves down by 150KB. Below about 499KB the
+  clipboard goes
+  (no Cut/Copy/Paste, and no GIF — the LZW tables are what the clipboard's
+  reserved floor is for), and below about 483KB undo goes too, along with the
+  ability to resize the canvas, since `pt_resize` stages the old picture in the
+  undo image. The whole region is then canvas, so the smallest machines get the
+  *largest* picture. Only below about 452KB is no canvas fundable at all, and the
+  window then says "Not enough memory" and touches nothing. Opening files keeps
+  working in every tier: with no undo image to stage the file in, the reader
+  borrows the scratch area's flood-fill stack, which is idle during a load.
+
+  A command that is unavailable keeps its menu label and gains "(Not Enough
+  Ram)" — the kernel's menus have no disabled state — and answers with a toast,
+  which is what the Ctrl-key shortcut hits. All of it is decided once, at
+  startup: because the buffer bases are fixed from the largest canvas the
+  machine can fund, the undo image is always big enough for any canvas that can
+  be adopted and the clipboard's size is a constant, so there is nothing a later
+  load or resize could invalidate.
+- **Two instances would share one canvas.** The claim record at the scratch
+  base holds a magic pair and the owner's window pointer, and `pt_dupchk`
+  believes it only if that pointer still names a used window slot whose title
+  starts "Paint". A closed Paint leaves the magic behind — there is no close
+  hook (see below) — and that test is what keeps the staleness harmless. In
+  practice the loader refuses first: two 12KB regions do not fit the 19.5KB
+  pool, so the second launch fails with "Out of memory" in the Disk window
+  before the app runs at all.
+- **The claim is invisible to the Task Manager**, which sums package regions
+  and the kernel's own segments. Paint's quarter-megabyte does not appear in
+  its RAM figure. *(Resolved: a claim is billed to the instance that holds it,
+  in both Task Manager views — SPEC.md §28/§50.5.)*
+
+**2. It writes W_W/W_H in the window record.** **(RESOLVED — `OSAPI_WM_RESIZE`
+and `W_ONSIZE`. `pt_wfix` survives only for `wm_fullscreen`, which does not
+negotiate, and because it runs inside W_PAINT where anything that repaints
+would re-enter the app.)** Opening a picture makes the
+window match the picture, and there is no `wm_resize` slot to ask for that —
+`ui_grow` and `wm_fullscreen` are the only things that resize a window, and
+both are kernel-internal. So Paint stores the new frame in the record and calls
+`OSAPI_WM_FRONT` for the repaint, which *is* sanctioned. The record's geometry
+is documented as no longer set-once (SPEC.md §11), so this is a small liberty
+rather than a violation — but it is a liberty, and a one-line
+`wm_resize(BX, w, h)` that clamped to the screen and repainted would retire it.
+
+The same write is what lets a resize be *refused*: when shrinking the window
+would crop artwork, `pt_wfix` puts the frame back to what the canvas needs
+(clamping x/y on screen and above the dock the way `ui_drag` does) and the
+toast explains why. There is no sanctioned way to say no to `ui_grow` — it has
+already rewritten the record and repainted by the time the app sees anything —
+so the app corrects it afterwards and pays one `OSAPI_WM_FRONT` to put the
+corrected frame up. A resize callback that could return "refused" would be the
+clean version, and would cost nothing; see the smaller gaps below.
+
+**What the kernel should provide for the memory.** The whole of this section
+exists because there is no way to ask. What is missing is small and it is one
+thing, not several:
+
+- **`alloc(paragraphs) → segment` and `free(segment)`**, stamped with the
+  calling instance and force-freed by `inst_release` the way sound grants
+  already are (SPEC.md §34.6 verb 7 is the exact precedent, including the
+  teardown fence). The allocator itself is a handful of records; what matters
+  is that the *kernel* owns the map, so two packages cannot pick the same
+  address, an app cannot outlive its claim, and the Task Manager can bill it —
+  Paint's quarter-megabyte is invisible in its RAM figure today.
+- **A `largest_free` query**, so an app can size itself to what is actually
+  there instead of dividing an int 12h figure and hoping nothing else wants
+  any. Paint's three tiers are that arithmetic done blind.
+- **And the reciprocal half, which is the part usually forgotten: the same map
+  has to govern the kernel's own speculative uses of RAM.** `bb_set` should ask
+  the allocator for `BB_SEG`'s 150KB when double buffering is switched on and
+  **refuse if a package already holds it** — the Control Panel would then say
+  "not available while Paint is open" instead of the app having to predict, from
+  a constant it should not be reading, whether the kernel is ever going to want
+  that block. Reserved-but-unarmed regions are the same problem in the other
+  direction: a package cannot tell "spoken for" from "dead", and 150KB of dead
+  RAM is the difference between running on a 320KB machine and refusing to
+  start.
+
+With those three, every liberty in this section reduces to two API calls and
+the memory map stops being a thing two pieces of software have to agree about
+by reading each other's source. `docs/MEMORY-PLAN.md` Step D (packages into
+their own segments) is the adjacent step and wants the same allocator.
 
 ## The three capabilities whose absence cost the most
 
-### 1. No bitmap blit
+### 1. No bitmap blit — RESOLVED
 
 `gfx_*` draws rectangles, lines and glyphs. There is no way to hand the
 kernel a block of pixels. Every canvas repaint therefore goes through
@@ -129,6 +199,34 @@ back-buffer-aware — would make a full repaint 3–5× faster on VGA and would
 let any future imaging app skip the coalescer entirely. It is also the one
 addition that would let the canvas be larger than the screen without the
 repaint becoming the bottleneck.
+
+**It landed as SPEC.md §5.4**, and the argument got stronger in the
+meantime: since packages own a segment every gfx call from one is a FAR
+call, so the coalescer's "one call a run" became one *far* call a run.
+`pt_blit` now makes one call per band of rows — usually one for the whole
+rectangle — and the kernel runs the identical scan.
+
+**"Identical" is the load-bearing word, and the first version was not.** It
+decoded every pixel one at a time rather than comparing byte pairs, which is
+75–90 clocks a pixel against `repe scasb`'s seven and a half — so a full
+repaint got about nine times *slower* while appearing, in QEMU, to be exactly
+as fast, because QEMU does not model 8086 timing. The `repe scasb` pair scan
+described below is now what `gfx_blit4` does; it is the same algorithm this
+section is about, and the reason the section exists is that it is easy to
+keep the shape of an optimisation and lose the optimisation. Two things about the
+geometry were worth the trouble: the source must start on an **even** pixel,
+because gfx_blit4 takes the first byte's high nibble as pixel 0, so an odd
+left edge is widened one column (harmless — that column is inside the canvas
+and inside the window, and is redrawn with what it held); and the stride is
+**negative**, because the canvas is stored as the BMP it will be written as,
+so a band is addressed from its *last* row's segment and no row's offset can
+go below zero.
+
+The plane-parallel VGA path is still unbuilt and still worth building: build
+a byte-per-8-pixels mask per plane and write it through the Map Mask. It
+would beat the run coalescer on photographs and lose on flat drawings, and it
+would need its own back-buffer and 1bpp twins — which is exactly why the
+coalescer went first.
 
 ### 2. The file API is whole-file and caps at 64KB
 
@@ -156,21 +254,30 @@ A positioned read/write (`read(name, offset, len, buf)`) or a real
 open/seek/close would lift both limits, and would also let a decoder stream
 instead of demanding the whole file in RAM at once.
 
-### 3. No teardown callback for a package
+### 3. No teardown callback for a package — half resolved
 
 Closing a task-less package's window is a synchronous `wm_destroy` +
 `I_STATE = 0` (SPEC.md §21/§29). The package is never told. Anything it
-owns outside its own region — a file it was writing, state another instance
-can see — leaks or goes stale, and there is no defence but a liveness test.
-Arena memory is the one case that is now safe *without* a callback, and only
-because the kernel force-frees the grant itself (SPEC.md §2.6); the app never
-learns it happened. A `KD_QUIT`-style optional entry in the package header,
-called under the lock before the region is freed, would cost the kernel one
-indirect call and would generalise that safety to everything else.
+owns outside its own region — memory it claimed, a file it was writing,
+state another instance can see — leaks or goes stale, and the only defence
+is a liveness test like `pt_dupchk`'s. A `KD_QUIT`-style optional entry in
+the package header, called under the lock before the region is freed, would
+cost the kernel one indirect call and would make an allocator (above) safe
+by construction.
+
+**The allocator case is closed without the callback**: `mem_free_rec`
+(SPEC.md §50.4) runs at all three teardown sites and returns every claim the
+instance held, so `OSAPI_MEM_CLAIM` needs no hook and `pt_dupchk` is gone —
+two instances get two claims by construction. What is still missing is
+everything else a package might want to finish: flushing a file it was
+writing, telling a peer instance it is going. Nothing in the tree needs that
+today, which is why it has not been built.
 
 ## Smaller gaps, in order of how much they cost here
 
-- **No access to the kernel's font bitmaps.** `font_char` draws to the
+- **No access to the kernel's font bitmaps — RESOLVED** (`OSAPI_FONT_GLYPHS`,
+  SPEC.md §6; the probe and the fallback are both gone, and the text tool
+  stamps the same typeface the UI draws on every adapter). `font_char` draws to the
   screen; the text tool has to write glyph pixels into its own canvas, so
   `pt_font_init` re-probes the ROM 8×8 font through int 10h AX=1130h (with the
   kernel's own F000:FA6E fallback) and keeps the pointer. Glyphs are then read
@@ -198,16 +305,19 @@ indirect call and would generalise that safety to everything else.
   thing for free: a background painter *underneath* Paint now draws its own
   visible part instead of skipping the frame, which makes the drag loops'
   released-lock windows better behaved than when this was written.
-- **No resize callback.** A resizable window learns it was resized by finding
-  a different geometry at its next paint (`OSAPI_WM_GEOM`, SPEC.md §11.1).
-  That works, but the size is adopted *during* the paint — after the kernel
-  has already drawn the title bar — which is why the canvas dimensions are
-  printed in the tool palette rather than the title, where they would always
-  be one repaint stale, at the cost of a second full repaint to fix. A
-  callback that ran *before* the paint, and whose refusal `ui_grow` honoured,
-  would let the crop guard reject a drag outright instead of resizing back
-  with `OSAPI_WM_RESIZE` and putting the notice up a paint later. The slot
-  made the correction legal; it did not make it unnecessary.
+- **No resize callback — RESOLVED** (`W_ONSIZE`, SPEC.md §11.1: `ui_grow`
+  asks before it commits, the answer is a size rather than a yes/no so a
+  refusal can be per-axis, and a refused drag now costs no repaint at all —
+  only the toast). The rest of this note is why it mattered.
+  A resizable window learns it was resized by finding
+  a different W_W/W_H at its next paint (SPEC.md §11.1). That works, but the
+  size is adopted *during* the paint — after the kernel has already drawn the
+  title bar — which is why the canvas dimensions are printed in the tool
+  palette rather than the title, where they would always be one repaint
+  stale, at the cost of a second full repaint to fix. A callback that ran
+  *before* the paint, and whose refusal `ui_grow` honoured, would also let the
+  crop guard reject a drag without the app having to rewrite the record behind
+  the kernel's back and put the notice up a paint later.
 - **No way to hand the menu bar back, and no modal gate.** `menu_activate` is
   kernel-internal; the only slot that reaches it is `OSAPI_WM_FRONT`, which
   repaints everything. And `fdlg_grab`, which swallows every press outside the
@@ -246,7 +356,7 @@ Two things about it are worth knowing before touching it:
 - **The dictionary is 16KB, so it lives in borrowed memory.** The clipboard's
   reserved floor holds the read tables exactly (prefix, suffix, output stack)
   and the smaller write tables with room over; the file being read, or built,
-  goes in the undo image. Both are slices of the one arena grant. Both are already invalidated by the operation, and two
+  goes in the undo image. Both are already invalidated by the operation, and two
   build-time assertions fail the build if that floor stops being big enough.
 - **Writing and reading are not mirror images**, and the asymmetry is real
   rather than a bug: a writer defines a new string as it emits the code before
@@ -265,10 +375,11 @@ worse. The 64KB file ceiling also means the only JPEGs that could be opened at
 all are small ones. The app recognises it by magic and says so rather than
 guessing.
 
-(The package is 14,112 bytes of image + 3,582 of bss today. Since v3 the
-budget is the 65,520-byte `PKG_MAX_PARA` cap on one segment, not the 19,968
-of the retired kernel-segment pool, so size is no longer the binding
-constraint it was when this file was written.)
+(The package is about 13.8KB of image + 3.6KB of bss. The budget is
+`APP_MAX_SIZE` = 61,440 now — a package owns a segment (SPEC.md §20.1) — so
+size stopped being the constraint it was when this was written; the pool is
+shared, so a package that takes all of it is still a package nothing else can
+run beside.)
 
 ## Performance notes
 

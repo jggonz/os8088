@@ -176,49 +176,22 @@ dsk_xfer:
     mov dh, al                  ; DH = head
     mov dl, [disk_drive]        ; DL = drive
 
-    ; --- the 64KB DMA page rule (SPEC.md 18.1) ------------------------------
-    ; The floppy controller transfers through the 8237, whose address
-    ; register is 16 bits plus a separate PAGE register that DOES NOT
-    ; INCREMENT: a transfer may not cross a 64KB PHYSICAL boundary, and a
-    ; BIOS that is asked to anyway answers AH=09h rather than wrapping the
-    ; buffer. ES:BX is caller memory here - a package's, since SPEC.md 18.4
-    ; - so this is not a rule the caller can be asked to know.
-    ;
-    ; A 512-byte transfer straddles iff the low 16 bits of its linear
-    ; address exceed 0x10000-512. Those bits are (ES << 4) + BX computed in
-    ; 16 bits, where the wrap IS the mod-64K the test wants, so no 20-bit
-    ; arithmetic is needed on an 8086.
-    mov ax, es
-    shl ax, 1                   ; NOT `mov cl,4` + `shl ax,cl`: CL is the
-    shl ax, 1                   ; SECTOR number, computed six instructions
-    shl ax, 1                   ; ago and needed by the int 13h below
-    shl ax, 1                   ; (the low 16 bits of ES:0000, mod 64K)
-    add ax, bx                  ; ...and of ES:BX (the carry out is the page,
-    cmp ax, 0x10000 - 512       ; which is exactly what we must not change)
-    ja .bounce                  ; ends past this page: go the long way round
-    call dsk_try                ; ES:BX, three attempts; CF=1 = give up
-    jc .fail
-    jmp short .ok
-.bounce:
-    ; Through dsk_dmabuf in LOW_SEG, which is 512-aligned inside linear
-    ; 0x08000..0x0CFFF and can therefore never straddle anything. One extra
-    ; 512-byte copy, at most once per 64KB of transfer.
-    push es
-    push bx
-    cmp byte [dsk_op], 0x03     ; a WRITE has to stage its data first...
-    jne .bounce_go
-    call dsk_bounce_out
-.bounce_go:
-    mov ax, LOW_SEG
-    mov es, ax
-    mov bx, dsk_dmabuf
-    call dsk_try
-    pop bx                      ; POP touches no flags: dsk_try's CF is still
-    pop es                      ; the live answer at the jc below
-    jc .fail
-    cmp byte [dsk_op], 0x03
-    je .ok                      ; ...and a READ has to fetch it afterwards
-    call dsk_bounce_in
+    mov bp, 3                   ; attempts left for this sector
+.attempt:
+    mov ah, [dsk_op]            ; 02 read / 03 write
+    mov al, 1                   ; one sector per call, to ES:BX
+    int 0x13
+    jnc .ok
+    mov [dsk_ioerr], ah         ; keep the status for diskw.inc's mapping
+    cmp ah, 0x03
+    je .fail                    ; write-protected: retrying cannot help
+    mov ah, 0x00                ; failed: reset the controller and retry
+    mov dl, [disk_drive]
+    int 0x13
+    dec bp
+    jnz .attempt
+    jmp short .fail             ; 3 strikes: unrecoverable
+
 .ok:
     add bx, 512                 ; advance destination
     inc di                      ; next LBA
@@ -239,101 +212,6 @@ dsk_xfer:
     pop cx
     pop bx
     pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; dsk_try - one sector at ES:BX, CHS already in CH/CL/DH, three attempts
-; in:  ES:BX = the buffer, CH/CL/DH = CHS, [dsk_op] = 02 read / 03 write
-; out: CF = 0 done; CF = 1 unrecoverable, [dsk_ioerr] = the last BIOS status
-; clobbers: AX, BP, DL and the flags (the dsk_xfer body's own set)
-;
-; Factored out of dsk_xfer's loop when the bounce path arrived: the retry
-; policy must be identical whether the buffer is the caller's or the DMA
-; staging one, and two copies of it would eventually stop being identical.
-; -----------------------------------------------------------------------------
-dsk_try:
-    mov bp, 3                   ; attempts left for this sector
-.attempt:
-    mov ah, [dsk_op]            ; 02 read / 03 write
-    mov al, 1                   ; one sector per call, to ES:BX
-    mov dl, [disk_drive]        ; a retry's controller reset takes DL, and
-    int 0x13                    ; some BIOSes do not give it back
-    jnc .ok
-    mov [dsk_ioerr], ah         ; keep the status for diskw.inc's mapping
-    cmp ah, 0x03
-    je .bad                     ; write-protected: retrying cannot help
-    mov ah, 0x00                ; failed: reset the controller and retry
-    mov dl, [disk_drive]
-    int 0x13
-    dec bp
-    jnz .attempt
-.bad:
-    stc
-    ret
-.ok:
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; dsk_bounce_in  - dsk_dmabuf -> the caller's ES:BX (after a read)
-; dsk_bounce_out - the caller's ES:BX -> dsk_dmabuf (before a write)
-; in:  ES:BX = the caller's sector
-; out: nothing; both preserve EVERY register and the flags
-;
-; DS is swapped to the far end for the move, so no kernel variable is
-; readable in either body - the dsk_copy_in discipline (SPEC.md 18). Both
-; ends are word-aligned 512-byte buffers, so `rep movsw` moves 256 words.
-; -----------------------------------------------------------------------------
-dsk_bounce_in:
-    pushf
-    push ax
-    push cx
-    push si
-    push di
-    push ds
-    push es
-    pop ds                      ; DS = the caller's segment...
-    push ds
-    pop es                      ; ...and ES with it: this is a DS->ES move
-    mov di, bx                  ; ES:DI = the caller's sector
-    mov ax, LOW_SEG             ; DS:SI = the staging buffer
-    mov ds, ax
-    mov si, dsk_dmabuf
-    mov cx, 256
-    cld
-    rep movsw
-    pop ds
-    pop di
-    pop si
-    pop cx
-    pop ax
-    popf
-    ret
-
-dsk_bounce_out:
-    pushf
-    push ax
-    push cx
-    push si
-    push di
-    push ds
-    push es
-    push es
-    pop ds                      ; DS:SI = the caller's sector
-    mov si, bx
-    mov ax, LOW_SEG             ; ES:DI = the staging buffer
-    mov es, ax
-    mov di, dsk_dmabuf
-    mov cx, 256
-    cld
-    rep movsw
-    pop es
-    pop ds
-    pop di
-    pop si
-    pop cx
-    pop ax
-    popf
     ret
 
 ; -----------------------------------------------------------------------------
@@ -520,7 +398,7 @@ disk_mount:
 
     ; --- 4. icon harvest (SPEC.md 18.3 step 4; failures are NON-fatal) ---
     ; Type-1 entries carry a validated first cluster: peek the file's first
-    ; sector, and if it is a v2 .o88 with the embedded-icon flag, its bytes
+    ; sector, and if it is a v3 .o88 with the embedded-icon flag, its bytes
     ; 32..95 are the 16x16 icon body. Everything else - type 0, iconless,
     ; read failure - gets the all-zero slot (the generic-icon sentinel).
     ; disk_icons is fully rewritten every mount (SPEC.md 29.1).
@@ -547,8 +425,8 @@ disk_mount:
     call dsk_copy_in
     cmp word [dsk_ent+0], 0x384F    ; .o88 magic 'O','8'
     jne .h_zero
-    cmp byte [dsk_ent+2], 3         ; format version (v3, SPEC.md 18.3/20.2:
-    jne .h_zero                     ; a v2 file shows the generic icon)
+    cmp byte [dsk_ent+2], 3         ; format version (SPEC.md 20.2)
+    jne .h_zero
     test byte [dsk_ent+3], 1        ; embedded-icon flag
     jz .h_zero
     mov si, dsk_secbuf+32       ; icon body -> disk_icons + i*64, both
@@ -687,7 +565,10 @@ dsk_bpb_check:
 .jfail1:                        ; relay: the early rules' jumps land here
     jmp .fail
 .r10:
-    ; rule 10: 1 <= FATSz16 <= DSK_FAT_SECS (the snapshot buffer's size)
+    ; rule 10: 1 <= FATSz16 <= DSK_FAT_SECS (the snapshot buffer's size).
+    ; Since DSK_FAT_SECS fell to 10 this also rejects every FAT16 volume:
+    ; a FAT is only FAT16 with >= 4,085 clusters, which needs >= 16 FAT
+    ; sectors. The .fat16 decode below stays; nothing reaches it.
     mov ax, [dsk_bpb+DSK_B_FATSZ]
     test ax, ax
     jz .jfail1
@@ -898,14 +779,12 @@ dsk_synth:
     ; --- @18: first cluster = raw FstClusLO, verbatim even when type=0 ---
     mov ax, [es:si+DSK_R_CLUS]
     mov [dsk_ent+18], ax
-    ; --- @20: size word = raw size dword, clamped to 0xFFFF (display) ---
+    ; --- @20: size dword - lo word at 20, hi at 22 (SPEC.md 19). It was one
+    ;     word clamped to 0xFFFF, and a 116KB module listed as 65535 ---
     mov dx, [es:si+DSK_R_SIZE+2]    ; DX = size high word (held for below)
     mov ax, [es:si+DSK_R_SIZE]
-    test dx, dx
-    jz .szok
-    mov ax, 0xFFFF
-.szok:
     mov [dsk_ent+20], ax
+    mov [dsk_ent+22], dx
     ; --- @16: type 2 = subdirectory, and nothing else about it is trusted:
     ;     a folder's size field is zero by spec, and its first cluster is
     ;     validated exactly like a file's because dsk_chdir will walk it
@@ -920,7 +799,8 @@ dsk_synth:
     cmp ax, [dsk_maxclus]       ; listed, inert, never enterable
     ja .typed
     mov word [dsk_ent+16], 2
-    mov word [dsk_ent+20], 0    ; folders have no meaningful size
+    mov word [dsk_ent+20], 0    ; folders have no meaningful size - both
+    mov word [dsk_ent+22], 0    ; halves, a hostile entry can carry either
     jmp short .typed
 .notdir:
 
@@ -1012,9 +892,11 @@ dsk_clus2lba:
 ; off = clus + clus/2, then the word straddling that offset (an unaligned
 ; word load - legal on 8086; the 3-nibble problem dissolves against a
 ; resident FAT): odd cluster takes the top 12 bits, even the bottom.
-; FAT16 entry: a plain word array. Rule 16 guarantees off+1 stays inside
-; the snapshot for every valid cluster. No EOC/bad-mark decoding lives
-; here - dsk_read_chain's walk is size-driven (SPEC.md 18).
+; FAT16 entry: a plain word array - kept for the shape of the thing, but
+; unreachable since DSK_FAT_SECS fell to 10 (a FAT16 volume needs at least
+; 16 FAT sectors, so mount rule 10 turns it away first). Rule 16 guarantees
+; off+1 stays inside the snapshot for every valid cluster. No EOC/bad-mark
+; decoding lives here - dsk_read_chain's walk is size-driven (SPEC.md 18).
 ; -----------------------------------------------------------------------------
 dsk_next_clus:
     push bx
@@ -1465,11 +1347,6 @@ disk_icons: resb 2048           ; 32 harvested icon slots x 64 bytes; slot i
                                 ; no icon; fully rewritten every mount
 dsk_secbuf: resb 512            ; sector scratch: BPB read, root-dir scan,
                                 ; icon harvest, and the loader's header peek
-dsk_dmabuf: resb 512            ; the 64KB-DMA-page staging sector (dsk_xfer).
-                                ; Its own: dsk_secbuf is live across a whole
-                                ; dskw_* operation, and this is used INSIDE
-                                ; one. LOW_SEG puts it at linear 0x08000+,
-                                ; where nothing can straddle a page.
 
 section .bss
 

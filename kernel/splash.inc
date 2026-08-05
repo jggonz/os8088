@@ -2,7 +2,7 @@
 ; splash.inc - boot-time loading screen (SPEC.md 15)
 ;
 ; While the boot sector is still pulling the rest of this kernel off the
-; floppy, it far-calls spl_tick (via the pinned 1000:0008 entry) after every
+; floppy, it far-calls spl_tick (via the pinned 0800:0008 entry) after every
 ; sector that lands. The first tick switches to mode 12h and draws the
 ; welcome dialog; every tick advances a pixel-granular progress bar, a
 ; percentage, and a spinning vector "8088" - stroke digits coin-flipped
@@ -16,10 +16,9 @@
 ; inside the disk's rotational latency toward the next sector.
 ;
 ; State lives in in-module data words, never .bss: .bss starts at the image
-; end, where the final sector read lands, and nothing has cleared it yet.
-; Since SPEC.md 33 that address is also where the .fartext blob rides in, and
-; far_init has not run yet - so a .bss write here would corrupt far code as
-; well as itself. This module must stay near, and must stay off .bss.
+; end, where the final sector read lands, and nothing has cleared it yet - so
+; a .bss write here is a write into memory the loader is still filling. This
+; module must stay off .bss.
 ; The build assertion at the bottom guarantees the module is aboard before
 ; the first tick can arrive.
 ; =============================================================================
@@ -43,7 +42,7 @@ SPL_BAR_Y   equ 264             ; bar interior top row on VGA - inside the
 SPL_BAR_H   equ 16
 
 ; -----------------------------------------------------------------------------
-; spl_tick - the 1000:0008 far entry (SPEC.md 15).
+; spl_tick - the 0800:0008 far entry (SPEC.md 15).
 ; in: AX = sectors loaded, DX = total sectors. Preserves every register and
 ; segment; flags clobbered. Runs on the boot stack, boot sector's segments.
 ; -----------------------------------------------------------------------------

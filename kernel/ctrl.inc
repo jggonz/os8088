@@ -66,6 +66,12 @@ CP_IBX2   equ CP_DIVX - 3       ; 85: selection bar right edge
 
 ; --- right pane: the selected item's page -----------------------------------
 CP_RX     equ 96                ; pane left edge (pane top = content top)
+CP_PRGT   equ CP_CW - CP_RX - 1 ; ...and its LAST COLUMN, as an offset from
+                                ; DI. A paint proc is handed DI = the PANE
+                                ; left (cp_page adds CP_RX before dispatch),
+                                ; so a line erase that reaches `di + CP_CW`
+                                ; runs CP_RX pixels past the window's right
+                                ; edge and paints the desktop
 
 ; --- Scheduler page, PANE-relative ------------------------------------------
 CP_PMX    equ 2                 ; left margin for the heading and the caption
@@ -93,6 +99,17 @@ cp_sname:   db 'Control', 0     ; KD_NAME: fits the 7-char NAME column
 ; .text data, not .bss, so it is initialised on disk and needs no cp_init -
 ; the osapi_seed trick from kernel.asm.
 cp_dirty:   db 0                ; 1 = the mode changed, repaint everything
+cp_wdirty:  db 0                ; 1 = a setting changed and SYSTEM.CFG is owed
+                                ; a write. Deferred to the panel's teardown
+                                ; (cp_flush_close) rather than taken on the
+                                ; click, so a session of fiddling costs ONE
+                                ; floppy write instead of one per click - and
+                                ; a floppy write is ~a second on the floor
+                                ; machine, during which the panel is frozen.
+                                ; .text and not .bss, like everything else
+                                ; here: nothing zeroes .bss (-f bin)
+cp_dsave:   db 0                ; 1 = the last SYSTEM.CFG write failed, and
+                                ; the Drivers page's caption says so (51.5)
 
 ; Selected item, index into cp_items. Inline .text data for the same reason;
 ; 0 = Scheduler is the boot selection, so the panel opens on it.
@@ -109,13 +126,18 @@ CP_ISTRIDE  equ 8
 cp_items:
     dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
     dw cp_s_disp,  cp_disp_paint,  cp_disp_click,  0
-    dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0
     dw cp_s_time,  cp_time_paint,  cp_time_click,  0
+    dw cp_s_drv,   cp_drv_paint,   cp_drv_click,   0
+    dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0
 cp_items_end:
 CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
-CP_ITIME  equ 3                 ; the Date/Time item: ui.inc selects it by
+CP_ITIME  equ 2                 ; the Date/Time item: ui.inc selects it by
                                 ; name when the menu bar clock is clicked
                                 ; (SPEC.md 12.1/31.5)
+CP_IDRV   equ 3                 ; ...and the Drivers item, which drv_notice
+                                ; opens the panel on when a driver did not
+                                ; load at boot (SPEC.md 51.3)
+CP_ISND   equ 4                 ; ...and Sound, the tone tier's route (34.8)
 
 ; List names are at most 9 characters (72px): the selection bar ends at
 ; CP_IBX2 = 85 and the name starts at CP_IX = 6, so a tenth glyph would
@@ -130,62 +152,51 @@ cp_s_disp:  db 'Display', 0     ; list name AND the page heading
 cp_s_dbof:  db 'Direct to screen', 0
 cp_s_dbon:  db 'Double buffered', 0
 cp_s_dcap:  db 'Smoother; costs 150K', 0
-cp_s_dna:   db 'Needs 500K of memory', 0
+cp_s_dna:   db 'Not Enough Ram', 0          ; the heap cannot fund 150KB
+                                            ; RIGHT NOW - it is a claim, not
+                                            ; a reservation, so this can
+                                            ; change while the panel is open
+                                            ; (close an app and it comes back)
 cp_s_dmono: db 'Not on this adapter', 0     ; a 1bpp adapter draws straight
                                             ; to the framebuffer and has no
                                             ; buffer to double (SPEC.md 39.5)
-                                            ; - saying "needs 500K" here
-                                            ; would be a lie on a 640K
-                                            ; Hercules machine
-
-; --- Sound page (SPEC.md 31.4/34) --------------------------------------------
-cp_s_snd:   db 'Sound', 0       ; list name AND the page heading
-cp_s_sspk:  db 'Speaker', 0     ; tone route, row 0
-cp_s_sopl:  db 'AdLib', 0       ; tone route, row 1 (arms in Phase 3)
-cp_s_sexc:  db 'Exclusive clips', 0
-cp_s_stst:  db 'Test', 0
-cp_s_sano:  db 'AdLib: no', 0   ; caption, read live from the driver table
-cp_s_sayes: db 'AdLib: yes', 0
-cp_s_sfrz:  db 'Clips freeze GUI', 0   ; the trade, stated honestly (34.4)
-cp_s_soff:  db 'Clips: off', 0
-
-; The built-in test clip is the Recorder demo's 1 s sine sweep (SPEC.md
-; 31.4/35): 400 Hz rising linearly to 800 Hz over the first half second
-; and back down over the second, synthesised by cp_sndclip straight into
-; SND_SEG (8-bit unsigned) and played at 8,000 Hz through slot 0x00F0's
-; target - which is what feeds the emitted/resync counters the caption
-; below reports. Its own copy of the recorder's table (kernel code cannot
-; call into a package): 128 + round(88*sin(2*pi*i/256)), range 40..216.
-cp_sine:
-    db 128,130,132,134,137,139,141,143,145,147,149,151,154,156,158,160
-    db 162,164,166,168,169,171,173,175,177,179,180,182,184,185,187,189
-    db 190,192,193,195,196,197,199,200,201,202,203,205,206,207,208,208
-    db 209,210,211,212,212,213,213,214,214,215,215,215,216,216,216,216
-    db 216,216,216,216,216,215,215,215,214,214,213,213,212,212,211,210
-    db 209,208,208,207,206,205,203,202,201,200,199,197,196,195,193,192
-    db 190,189,187,185,184,182,180,179,177,175,173,171,169,168,166,164
-    db 162,160,158,156,154,151,149,147,145,143,141,139,137,134,132,130
-    db 128,126,124,122,119,117,115,113,111,109,107,105,102,100, 98, 96
-    db  94, 92, 90, 88, 87, 85, 83, 81, 79, 77, 76, 74, 72, 71, 69, 67
-    db  66, 64, 63, 61, 60, 59, 57, 56, 55, 54, 53, 51, 50, 49, 48, 48
-    db  47, 46, 45, 44, 44, 43, 43, 42, 42, 41, 41, 41, 40, 40, 40, 40
-    db  40, 40, 40, 40, 40, 41, 41, 41, 42, 42, 43, 43, 44, 44, 45, 46
-    db  47, 48, 48, 49, 50, 51, 53, 54, 55, 56, 57, 59, 60, 61, 63, 64
-    db  66, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 85, 87, 88, 90, 92
-    db  94, 96, 98,100,102,105,107,109,111,113,115,117,119,122,124,126
-cp_swdir:   dw 1                ; sweep direction, +1 up / -1 down (re-armed
-                                ; by cp_sndclip on every click)
-
-cp_sndbtn_f: db 0               ; Test button look: 0 normal / 1 pressed
-cp_sndbuf:  times 16 db 0       ; counters caption text ('E:nnnnn R:nnnnn');
-                                ; .text data, not .bss - the panel stays
-                                ; boot-clean with nothing to zero (SPEC.md 31)
+                                            ; - a memory answer would be a lie
+                                            ; on a 640K Hercules machine
 
 ; --- Date/Time page (SPEC.md 31.5/37) ----------------------------------------
 cp_s_time:  db 'Date/Time', 0   ; list name AND the page heading
 cp_s_tcap:  db 'Click a field, then + or -', 0
-cp_s_trtc:  db 'Hardware clock: yes', 0
+
+; --- Drivers page (SPEC.md 31.6/51) ------------------------------------------
+; One row per drv_tab row: a checkbox, the driver's name, and - in the caption
+; - what the last load attempt actually answered. The click loads or unloads
+; ON THE SPOT and then writes SYSTEM.CFG, so the box is never a promise about
+; the next boot: what it shows is what is running right now.
+cp_s_drv:   db 'Drivers', 0     ; list name AND the page heading
+cp_s_dsave: db 'Cannot save to the system disk', 0
+
+; --- Sound page (SPEC.md 31.7/34.8) ------------------------------------------
+; The three row labels are FIXED and name TIERS, not whatever a driver called
+; itself. The row used to be labelled from the driver's own DSV_NAME, which on
+; a Sound Blaster read 'Sound Blaster' with the DSP tier up and 'AdLib' with it
+; down - the label moved as the setting moved, so the one control on the page
+; could not be read as a choice between two things.
+cp_s_snd:   db 'Sound', 0       ; list name AND the page heading
+cp_s_sspk:  db 'PC Speaker', 0
+cp_s_sfm:   db 'AdLib', 0
+cp_s_ssb:   db 'Sound Blaster', 0
+cp_s_stest: db 'Test', 0
+; The Date/Time page names the RTC ladder tier that answered (SPEC.md 37.90),
+; not just yes/no: on a machine whose clock will not hold a setting, which of
+; the four answered is the whole diagnosis, and there is nowhere else to see
+; it. **Indexed by [clk_tier], i.e. by the CLK_T_* enum - NOT by the order
+; clk_probe tries them in, which is a different order.**
 cp_s_tnrt:  db 'Hardware clock: none', 0
+cp_s_trt1:  db 'Hardware clock: AT 70h', 0
+cp_s_trt2:  db 'Hardware clock: 58167 2C0h', 0
+cp_s_trt3:  db 'Hardware clock: 5C01 2C0h', 0
+cp_s_trt4:  db 'Hardware clock: BIOS', 0
+cp_rtcnam:  dw cp_s_tnrt, cp_s_trt1, cp_s_trt2, cp_s_trt3, cp_s_trt4
 cp_s_t12:   db '12-hour clock', 0       ; option row 0 label
 cp_s_tsec:  db 'Seconds in menu bar', 0 ; option row 1 label
 cp_s_tplus: db '+', 0
@@ -266,42 +277,13 @@ CPS_B1Y2  equ CPS_R1Y + CP_GW - 1       ; 47: route row 1 bottom
 CPS_CBY2  equ CPS_CBY + CP_GW - 1       ; 63: checkbox band bottom
 
 ; -----------------------------------------------------------------------------
-; Everything above this line is DATA and stays in the kernel segment, because
-; far code still reads it through DS (SPEC.md 33 rule 2). Everything below is
-; code and lives in .fartext, outside the kernel's 64KB window. The two entry
-; points the kernel dispatches to - the window template's paint and onclick
-; procs - keep their near names here as 6-byte shims, so instance.inc's kind
-; table and wm's W_PAINT dispatch (near at KERNEL_SEG for a kernel-owned
-; window, SPEC.md 11) are unchanged.
-;
-; Note that cp_items (above) holds .fartext offsets in its paint/click words.
-; That is legal because the only code that calls through them, cp_page and
-; cpf_onclick, is itself far and therefore runs with CS = FAR_SEG
-; (SPEC.md 33 rule 5).
-; -----------------------------------------------------------------------------
-    FARSHIM cp_paint,   cpf_paint
-    FARSHIM cp_onclick, cpf_onclick
-    FARSHIM cp_tick,    cpf_tick    ; the once-a-second Date/Time refresh,
-                                    ; called by ui_task step 4 (SPEC 31.5)
-
-; -----------------------------------------------------------------------------
-; cp_tick_due - is a live Date/Time page on screen? (SPEC.md 31.5)
-;
-; in:  nothing; NO gfx lock held
-; out: CF = 1 if the Control Panel is live, visible and showing that page
-; clobbers: nothing else
-;
-; The gate ui_task consults BEFORE taking the gfx lock (SPEC.md 13 step 4):
-; with the menu bar's seconds hidden, an open Date/Time page is the only
-; thing that still wants a per-second redraw, and taking the lock to find
-; that out would blink the cursor every second - the very flicker the
-; setting removes.
-;
-; Near code, not far: it runs every second and is a dozen instructions (the
-; tm_init precedent, SPEC.md 33). It reads the instance table with no lock
-; held, which is safe because only the UI task allocates or frees a
-; task-less instance and this IS the UI task; a stale answer costs one
-; wasted lock, and cp_tick re-checks everything under it anyway.
+; Everything above this line is DATA and everything below is code, and both
+; are ordinary .text in the kernel's own segment. This module used to live in
+; .fartext, copied down to a segment of its own at boot so its ~1,800 bytes
+; would not count against the kernel's 64KB window; SPEC.md 33 records why
+; that was retired - the mechanism reserved 10,752 bytes of low memory to
+; hold a 5,455-byte blob, so it cost more RAM than it saved as soon as the
+; whole footprint became the number being steered by.
 ; -----------------------------------------------------------------------------
 cp_tick_due:
     push ax
@@ -325,10 +307,10 @@ cp_tick_due:
     pop ax
     ret
 
-section .fartext
+section .text
 
 ; -----------------------------------------------------------------------------
-; cpf_paint - W_PAINT for the Control Panel window (far body of cp_paint)
+; cp_paint - W_PAINT for the Control Panel window (far body of cp_paint)
 ;
 ; in:  SI = window ptr (content already white-filled, gfx lock held)
 ; out: nothing
@@ -338,7 +320,7 @@ section .fartext
 ; derived from the live window rect, never a screen constant - and every
 ; helper below takes it in the same pair.
 ; -----------------------------------------------------------------------------
-cpf_paint:
+cp_paint:
     push ax
     push bx
     push cx
@@ -348,7 +330,7 @@ cpf_paint:
     push bp
 
     mov bx, si                  ; wm_content takes the window in BX
-    KCALL wm_content             ; AX = content left, DX = content top
+    call wm_content             ; AX = content left, DX = content top
     mov di, ax                  ; DI = content left \ the panel's origin
     mov bp, dx                  ; BP = content top  /
 
@@ -363,10 +345,10 @@ cpf_paint:
     pop cx
     pop bx
     pop ax
-    retf                        ; far body: reached through the cp_paint shim
+    ret
 
 ; -----------------------------------------------------------------------------
-; cpf_onclick - W_ONCLICK for the Control Panel window (far body)
+; cp_onclick - W_ONCLICK for the Control Panel window (far body)
 ;
 ; in:  CX = x, DX = y (ABSOLUTE screen coords), SI = window ptr
 ;      (gfx lock held by the caller, call already billed to the instance)
@@ -384,7 +366,7 @@ cpf_paint:
 ; wm_paint_all here (that would deadlock or recurse) - a page that needs
 ; other windows repainted posts a deferred flag instead (SPEC.md 31.2).
 ; -----------------------------------------------------------------------------
-cpf_onclick:
+cp_onclick:
     push ax
     push bx
     push cx
@@ -395,7 +377,7 @@ cpf_onclick:
 
     mov bx, si                  ; wm_content takes the window in BX
     mov si, dx                  ; SI = click y; the window ptr is done with
-    KCALL wm_content             ; AX = content left, DX = content top
+    call wm_content             ; AX = content left, DX = content top
     mov di, ax                  ; DI = content left \ same origin pair as
     mov bp, dx                  ; BP = content top  / cp_paint's
     sub cx, di                  ; CX = content-relative click x
@@ -429,7 +411,7 @@ cpf_onclick:
     pop cx
     pop bx
     pop ax
-    retf                        ; far body: reached through the cp_onclick shim
+    ret
 
 ; -----------------------------------------------------------------------------
 ; cp_entry - item index -> item record
@@ -511,7 +493,7 @@ cp_list:
     add cx, CP_DIVX - 1
     mov dx, bp
     add dx, CP_CH - 1
-    KCALL gfx_fill
+    call gfx_fill
 
     mov dx, bp
     add dx, CP_I0Y              ; DX = row 0 top, screen y
@@ -534,7 +516,7 @@ cp_list:
     add cx, CP_IBX2
     mov bx, dx                  ; y1 = row top
     add dx, CP_IBH - 1          ; y2
-    KCALL gfx_fill
+    call gfx_fill
     pop dx
     pop cx
     pop bx
@@ -549,7 +531,7 @@ cp_list:
     add cx, CP_IX
     push dx
     add dx, CP_ITDY
-    KCALL font_str
+    call font_str
     pop dx
 
     add dx, CP_IROWH
@@ -582,7 +564,7 @@ cp_divider:
     mov bx, bp
     mov dx, bp
     add dx, CP_CH - 1
-    KCALL gfx_vline              ; in AX = x, BX = y1, DX = y2
+    call gfx_vline              ; in AX = x, BX = y1, DX = y2
     pop dx
     pop bx
     pop ax
@@ -614,7 +596,7 @@ cp_page:
     add cx, CP_CW - 1
     mov dx, bp
     add dx, CP_CH - 1
-    KCALL gfx_fill
+    call gfx_fill
 
     mov al, [cp_sel]
     call cp_entry               ; SI = the selected item's record
@@ -654,28 +636,28 @@ cp_sched_paint:
     add cx, CP_PMX
     mov dx, bp
     add dx, CP_PHY
-    KCALL font_str
+    call font_str
 
     mov si, cp_s_pre            ; row 0 label
     mov cx, di
     add cx, CP_PLX
     mov dx, bp
     add dx, CP_PR0Y + CP_PLDY
-    KCALL font_str
+    call font_str
 
     mov si, cp_s_coop           ; row 1 label
     mov cx, di
     add cx, CP_PLX
     mov dx, bp
     add dx, CP_PR0Y + CP_PROWH + CP_PLDY
-    KCALL font_str
+    call font_str
 
     mov si, cp_s_cap            ; caption: the flip is immediate
     mov cx, di
     add cx, CP_PMX
     mov dx, bp
     add dx, CP_PCAPY
-    KCALL font_str
+    call font_str
 
     call cp_radios              ; both glyphs, filled per the live mode
 
@@ -713,11 +695,12 @@ cp_sched_click:
     mov al, 0                   ; upper band = Pre-emptive
 .set:
     mov ah, al                  ; AH = the mode this row selects
-    KCALL sched_mode_get         ; AL = the live mode
+    call sched_mode_get         ; AL = the live mode
     cmp al, ah
     je .done                    ; that row is already live: change nothing
     mov al, ah
-    KCALL sched_mode_set         ; live on the next tick (SPEC.md 8.2)
+    call sched_mode_set         ; live on the next tick (SPEC.md 8.2)
+    mov byte [cp_wdirty], 1     ; ...and remembered on close (31.8)
     mov byte [cp_dirty], 1      ; ui_task step 3 repaints the About box's
                                 ; third line and any other mode-quoting
                                 ; window, outside the lock (SPEC.md 13)
@@ -743,7 +726,7 @@ cp_radios:
     push dx
     push si
 
-    KCALL sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
+    call sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
     mov bl, al                  ; BL = the row whose glyph is filled
 
     mov byte [gfx_color], CBLACK ; the pen cp_glyph draws the bitmap with:
@@ -803,27 +786,35 @@ cp_disp_paint:
     add cx, CP_PMX
     mov dx, bp
     add dx, CP_PHY
-    KCALL font_str
+    call font_str
 
     mov si, cp_s_dbof           ; row 0 label
     mov cx, di
     add cx, CP_PLX
     mov dx, bp
     add dx, CP_PR0Y + CP_PLDY
-    KCALL font_str
+    call font_str
 
+    call cpf_dbok               ; CF = 1: the option cannot be taken now, so
+    mov byte [gfx_color], CBLACK    ; its label is drawn greyed (SPEC.md
+    jnc .lbl1                       ; 31.3/42.5). CDGRAY is the tree's only
+    mov byte [gfx_color], CDGRAY    ; disabled colour; on a 1bpp adapter
+.lbl1:                              ; font_ink rounds it to black, which is
+                                    ; why the caption below carries the
+                                    ; reason in words as well
     mov si, cp_s_dbon           ; row 1 label
     mov cx, di
     add cx, CP_PLX
     mov dx, bp
     add dx, CP_PR0Y + CP_PROWH + CP_PLDY
-    KCALL font_str
+    call font_str
+    mov byte [gfx_color], CBLACK
 
     mov si, cp_s_dcap           ; caption: what it costs...
-    cmp byte [bb_avail], 0
-    jne .cap
-    mov si, cp_s_dna            ; ...or why the machine cannot have it:
-    cmp byte [vid_mono], 0      ; too little RAM, or the wrong kind of card
+    call cpf_dbok
+    jnc .cap
+    mov si, cp_s_dna            ; ...or why it cannot be had right now:
+    cmp byte [vid_mono], 0      ; no room in the heap, or the wrong adapter
     je .cap
     mov si, cp_s_dmono
 .cap:
@@ -831,13 +822,42 @@ cp_disp_paint:
     add cx, CP_PMX
     mov dx, bp
     add dx, CP_PCAPY
-    KCALL font_str
+    call font_str
 
     call cp_dbradios            ; both glyphs, filled per the live state
 
     pop si
     pop dx
     pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; cpf_dbok - can double buffering be turned on right now? (far, internal)
+; in:  nothing
+; out: CF = 0 yes, CF = 1 no (wrong adapter, or the heap has no 150KB run)
+; clobbers: nothing (flags)
+;
+; Three layers, the bb_avail idiom of SPEC.md 31.3: this is the question the
+; caption answers, the label greys on and the click refuses on - so all three
+; agree by construction rather than by three copies of the test.
+; -----------------------------------------------------------------------------
+cpf_dbok:
+    cmp byte [bb_avail], 0
+    je .no                      ; the adapter can never do it
+    cmp byte [bb_dbl], 0
+    jne .yes                    ; already armed: the memory is ours
+    push ax
+    push bx
+    call mem_avail             ; AX = largest free run, KB
+    cmp ax, BB_KB
+    pop bx
+    pop ax
+    jb .no
+.yes:
+    clc
+    ret
+.no:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -885,6 +905,48 @@ cp_dbradios:
     ret
 
 ; -----------------------------------------------------------------------------
+; cpf_disp_cap - redraw the Display page's caption line only (far, internal)
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+cpf_disp_cap:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [gfx_color], CWHITE    ; erase the whole caption line first -
+    mov ax, di                      ; the strings differ in length
+    add ax, CP_PMX
+    mov bx, bp
+    add bx, CP_PCAPY
+    mov cx, di
+    add cx, CP_PRGT
+    mov dx, bx
+    add dx, 7
+    call gfx_fill
+    mov byte [gfx_color], CBLACK
+    mov si, cp_s_dcap
+    call cpf_dbok
+    jnc .draw
+    mov si, cp_s_dna
+    cmp byte [vid_mono], 0
+    je .draw
+    mov si, cp_s_dmono
+.draw:
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PCAPY
+    call font_str
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; cp_disp_click - a click inside the Display page
 ;
 ; in:  DI = pane left, BP = pane top, CX = pane-relative x (ignored),
@@ -906,8 +968,6 @@ cp_disp_click:
     jl .done
     cmp dx, CP_B1Y2
     jg .done
-    cmp byte [bb_avail], 0
-    je .done                    ; not offered on this machine
 
     mov al, 1                   ; lower band = double buffered
     cmp dx, CP_B0Y2
@@ -916,514 +976,19 @@ cp_disp_click:
 .set:
     cmp al, [bb_dbl]
     je .done                    ; that row is already live: change nothing
-    KCALL bb_set                 ; flips both flags; we hold the lock
+    or al, al
+    jz .doit
+    call cpf_dbok               ; arming: refuse if it cannot be funded, and
+    jc .done                    ; leave the dot where it is (the caption and
+.doit:                          ; the greyed label already say why)
+    call bb_set                ; flips both flags; we hold the lock
+    mov byte [cp_wdirty], 1     ; ...and remembered on close (31.8)
     call cp_dbradios            ; the two glyph boxes only
+    call cpf_disp_cap           ; the caption can change with the claim:
+                                ; turning it OFF hands 150KB back, which may
+                                ; un-grey it for the next machine state
 
 .done:
-    pop ax
-    ret
-
-; =============================================================================
-; Sound page (SPEC.md 31.4/34) - tone route, the exclusive-clips policy, a
-; Test button, and the emitted/resync counters caption (the Phase 2 gate's
-; instrument, SPEC.md 34.4).
-;
-; Everything is read live at paint time - the live tone route from
-; snd_tone_route, presence from the driver table, the policy byte and the
-; counters through DS - so the page keeps no state of its own and can
-; never disagree with the router. The AdLib row obeys the bb_avail idiom
-; three layers deep (SPEC.md 31.4): snd_route_set refuses an absent
-; driver, the caption says 'AdLib: no', and the click is ignored outright.
-;
-; The Test button is the one sanctioned BLOCKING page click (SPEC.md 31.4):
-; it synthesises the built-in clip into SND_SEG and plays it through slot
-; 0x0080's target, which freezes the desktop for the clip - exactly the
-; trade the caption discloses - and is what makes the counters caption a
-; real instrument rather than decoration.
-; =============================================================================
-
-; -----------------------------------------------------------------------------
-; cp_snd_paint - the Sound page (page contract of SPEC.md 31.1)
-; in:  DI = pane left, BP = pane top; gfx lock held; entry pen is CWHITE
-; out: nothing
-; clobbers: nothing (flags only)
-; -----------------------------------------------------------------------------
-cp_snd_paint:
-    push ax
-    push cx
-    push dx
-    push si
-
-    mov byte [gfx_color], CBLACK ; entry pen is CWHITE (cp_page's erase)
-
-    mov si, cp_s_snd            ; heading, same string as the list row
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CP_PHY
-    KCALL font_str
-
-    mov si, cp_s_sspk           ; route row 0 label
-    mov cx, di
-    add cx, CP_PLX
-    mov dx, bp
-    add dx, CPS_R0Y + CP_PLDY
-    KCALL font_str
-
-    mov si, cp_s_sopl           ; route row 1 label
-    mov cx, di
-    add cx, CP_PLX
-    mov dx, bp
-    add dx, CPS_R1Y + CP_PLDY
-    KCALL font_str
-
-    mov si, cp_s_sexc           ; checkbox label
-    mov cx, di
-    add cx, CP_PLX
-    mov dx, bp
-    add dx, CPS_CBY + CP_PLDY
-    KCALL font_str
-
-    call cp_sndradios           ; route glyphs, filled per the live route
-    call cp_sndchk              ; the policy checkbox
-    mov al, 0
-    call cp_sndbtn              ; the Test button, released look
-    call cp_sndcap1             ; 'AdLib: yes/no' + the clip trade
-    call cp_sndcap2             ; the emitted/resync counters
-
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; cp_snd_click - a click inside the Sound page
-;
-; in:  DI = pane left, BP = pane top, CX = pane-relative x, DX = pane-
-;      relative y; gfx lock held by the caller
-; out: nothing
-; clobbers: nothing (flags only)
-;
-; Comparisons SIGNED throughout (SPEC.md 31.2). The pane splits at x =
-; CPS_BTNX: left of it the three control bands (y decides, the gutter's
-; negative x included); at or right of it only the Test button rect. A
-; click on the live route row does nothing; the AdLib row is ignored while
-; no OPL2 is present; the checkbox toggles the policy byte and repaints
-; its glyph + the caption stating the trade. The Test click BLOCKS for the
-; clip (sanctioned, SPEC.md 31.4), then repaints the counters caption -
-; the screendump-readable observable the Phase 2 gate reads.
-; -----------------------------------------------------------------------------
-cp_snd_click:
-    push ax
-    push bx
-    push si
-
-    cmp cx, CPS_BTNX
-    jge .btncol
-
-    cmp dx, CPS_B0Y1            ; above every band: nothing
-    jl .done
-    cmp dx, CPS_B0Y2
-    jle .spk
-    cmp dx, CPS_B1Y2
-    jle .opl
-    cmp dx, CPS_CBY2
-    jg .done
-
-    xor byte [snd_excl_ok], 1   ; the checkbox: flip the policy byte
-    call cp_sndchk              ; (SPEC.md 34.4) and say what it means
-    call cp_sndcap1
-    jmp .done
-
-.spk:
-    KCALL snd_tone_route         ; BL = the live sink
-    cmp bl, DRV_SPK
-    je .done                    ; already the route: change nothing
-    mov al, DRV_SPK
-    mov bl, SND_TIER_TONE
-    KCALL snd_route_set          ; cannot refuse: the speaker is always there
-    call cp_sndradios
-    jmp .done
-
-.opl:
-    test byte [snd_drv + SDRV_SIZE*DRV_OPL + SDRV_FLAGS], 1
-    jz .done                    ; no OPL2: click ignored outright (31.4)
-    KCALL snd_tone_route
-    cmp bl, DRV_OPL
-    je .done
-    mov al, DRV_OPL
-    mov bl, SND_TIER_TONE
-    KCALL snd_route_set          ; presence just checked: stores
-    call cp_sndradios
-    jmp .done
-
-.btncol:
-    cmp cx, CPS_BTNX + CPS_BTNW - 1
-    jg .done
-    cmp dx, CPS_BTNY
-    jl .done
-    cmp dx, CPS_BTNY + CPS_BTNH - 1
-    jg .done
-    mov al, 1                   ; pressed look for the clip's duration -
-    call cp_sndbtn              ; the desktop freezes with it (34.4)
-    call cp_sndclip             ; synthesise + play; BLOCKS for the clip
-    mov al, 0
-    call cp_sndbtn
-    call cp_sndcap2             ; the counters, freshly read
-
-.done:
-    pop si
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; cp_sndradios - the tone-route glyph pair, filled per the LIVE route
-; in:  DI = pane left, BP = pane top; gfx lock held
-; out: nothing
-; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
-; -----------------------------------------------------------------------------
-cp_sndradios:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    KCALL snd_tone_route         ; BL = the live sink (SI clobber saved)
-    mov byte [gfx_color], CBLACK
-    mov cx, di
-    add cx, CP_PGX
-    mov dx, bp
-    add dx, CPS_R0Y
-
-    mov si, cp_radio_on         ; --- row 0: Speaker ---
-    cmp bl, DRV_OPL
-    jne .r0
-    mov si, cp_radio_off
-.r0:
-    call cp_glyph
-
-    add dx, CPS_ROWH            ; --- row 1: AdLib ---
-    mov si, cp_radio_off
-    cmp bl, DRV_OPL
-    jne .r1
-    mov si, cp_radio_on
-.r1:
-    call cp_glyph
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; cp_sndchk - the exclusive-clips checkbox glyph, from [snd_excl_ok]
-; in:  DI = pane left, BP = pane top; gfx lock held
-; out: nothing
-; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
-; -----------------------------------------------------------------------------
-cp_sndchk:
-    push ax
-    push cx
-    push dx
-    push si
-    mov byte [gfx_color], CBLACK
-    mov cx, di
-    add cx, CP_PGX
-    mov dx, bp
-    add dx, CPS_CBY
-    mov si, cp_chk_off
-    cmp byte [snd_excl_ok], 0
-    je .draw
-    mov si, cp_chk_on
-.draw:
-    call cp_glyph
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; cp_sndbtn - draw the Test button
-; in:  AL = 0 released / 1 pressed; DI = pane left, BP = pane top; lock held
-; out: nothing
-; clobbers: nothing (flags only; leaves [gfx_color] = the label pen)
-; -----------------------------------------------------------------------------
-cp_sndbtn:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    mov [cp_sndbtn_f], al
-    mov byte [gfx_color], CBLACK ; the frame is always black
-    mov ax, di
-    add ax, CPS_BTNX
-    mov bx, bp
-    add bx, CPS_BTNY
-    mov cx, di
-    add cx, CPS_BTNX + CPS_BTNW - 1
-    mov dx, bp
-    add dx, CPS_BTNY + CPS_BTNH - 1
-    KCALL gfx_frame
-
-    mov byte [gfx_color], CWHITE ; interior: white, inverted while pressed
-    cmp byte [cp_sndbtn_f], 0
-    je .fill
-    mov byte [gfx_color], CBLACK
-.fill:
-    inc ax
-    inc bx
-    dec cx
-    dec dx
-    KCALL gfx_fill
-
-    mov byte [gfx_color], CBLACK ; label: the interior's opposite
-    cmp byte [cp_sndbtn_f], 0
-    je .lbl
-    mov byte [gfx_color], CWHITE
-.lbl:
-    mov si, cp_s_stst
-    mov cx, di
-    add cx, CPS_BTNX + 10       ; 'Test' = 32px, centred in the 52px box
-    mov dx, bp
-    add dx, CPS_BTNY + 4
-    KCALL font_str
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; cp_sndcap1 - status caption: AdLib presence + what clips cost
-; in:  DI = pane left, BP = pane top; gfx lock held
-; out: nothing
-; clobbers: nothing (flags only)
-; -----------------------------------------------------------------------------
-cp_sndcap1:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    mov byte [gfx_color], CWHITE ; erase the caption row first, so the
-    mov ax, di                   ; checkbox toggle redraws in place
-    mov bx, bp
-    add bx, CPS_CAP1Y
-    mov cx, di
-    add cx, CP_CW - CP_RX - 1
-    mov dx, bp
-    add dx, CPS_CAP1Y + 9
-    KCALL gfx_fill
-
-    mov byte [gfx_color], CBLACK
-    mov si, cp_s_sano           ; presence, read live from the table -
-    test byte [snd_drv + SDRV_SIZE*DRV_OPL + SDRV_FLAGS], 1
-    jz .have                    ; the caption layer of the bb_avail idiom
-    mov si, cp_s_sayes
-.have:
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CPS_CAP1Y
-    KCALL font_str
-
-    mov si, cp_s_sfrz           ; the trade, stated honestly (34.4)...
-    cmp byte [snd_excl_ok], 0
-    jne .frz
-    mov si, cp_s_soff           ; ...or that play now returns err 3
-.frz:
-    mov cx, di
-    add cx, CPS_CAP2X
-    KCALL font_str              ; same DX: one text row, two columns
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; cp_sndcap2 - the counters caption: 'E:<emitted> R:<resync>'
-; in:  DI = pane left, BP = pane top; gfx lock held
-; out: nothing
-; clobbers: nothing (flags only)
-; The Phase 2 gate's instrument (SPEC.md 34.4): after a Test clip the test
-; asserts emitted ~= clip length and resync ~= 0 from a screendump.
-; -----------------------------------------------------------------------------
-cp_sndcap2:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-
-    mov bx, cp_sndbuf           ; format into the .text scratch line
-    mov byte [bx], 'E'
-    inc bx
-    mov byte [bx], ':'
-    inc bx
-    mov ax, [snd_pcm_emitted]
-    call cp_putu16
-    mov byte [bx], ' '
-    inc bx
-    mov byte [bx], 'R'
-    inc bx
-    mov byte [bx], ':'
-    inc bx
-    mov ax, [snd_pcm_resync]
-    call cp_putu16
-    mov byte [bx], 0
-
-    mov byte [gfx_color], CWHITE ; erase, then draw - the redraw path
-    mov ax, di                   ; after every Test click
-    mov bx, bp
-    add bx, CPS_CAP2Y
-    mov cx, di
-    add cx, CP_CW - CP_RX - 1
-    mov dx, bp
-    add dx, CPS_CAP2Y + 9
-    KCALL gfx_fill
-
-    mov byte [gfx_color], CBLACK
-    mov si, cp_sndbuf
-    mov cx, di
-    add cx, CP_PMX
-    mov dx, bp
-    add dx, CPS_CAP2Y
-    KCALL font_str
-
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; cp_putu16 - unsigned 16-bit value to decimal text, no padding
-; in:  AX = value, BX -> destination (DS)
-; out: BX advanced past the last digit written
-; clobbers: nothing else (flags)
-; -----------------------------------------------------------------------------
-cp_putu16:
-    push ax
-    push cx
-    push dx
-    push si
-    mov si, 10
-    xor cx, cx
-.div:
-    xor dx, dx
-    div si                      ; AX = quotient, DX = digit
-    push dx
-    inc cx
-    or ax, ax
-    jnz .div
-.emit:
-    pop dx
-    add dl, '0'
-    mov [bx], dl
-    inc bx
-    loop .emit
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; cp_sndclip - synthesise the built-in test clip into SND_SEG and play it
-; in:  nothing (DI/BP inputs unused); gfx lock held by the caller
-; out: nothing; [snd_pcm_emitted]/[snd_pcm_resync] hold the clip's tale
-; clobbers: nothing (flags only; [cp_swdir] is scratch)
-;
-; Takes a staging grant through the public verb-7 surface (SPEC.md 34.6 -
-; the Phase 4 allocator; stamped with the Control Panel's own instance and
-; freed on the way out), synthesises the sine sweep into it (direct ES
-; writes - kernel code may hold an ES into SND_SEG, packages may not): the
-; recorder demo's generator (SPEC.md 35), a 16-bit phase accumulator whose
-; top byte indexes cp_sine and whose increment is Bresenham-stepped from
-; CPS_INC400 to CPS_INC800 across the first half and back down the second
-; (BP carries the error term, preserved like everything else). Then plays
-; it at 8,000 Hz (N = 149, the default carrier) through slot 0x00F0's
-; target - the same path a package takes, ES pointing away from DS and
-; all. The result codes are deliberately ignored: the counters caption
-; reports what actually happened, which is the point of the button. A
-; refused grant (pool full) plays nothing and the counters stay 0 - the
-; same honest tale.
-; -----------------------------------------------------------------------------
-cp_sndclip:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push es
-
-    mov ax, 0x0007              ; verb 7 grant, sub-op 0 alloc
-    mov cx, CPS_TESTN
-    KCALL osapi_snd_stream       ; out AX = 0 + SI = grant offset
-    or ax, ax
-    jnz .out                    ; no grant, no clip: counters stay 0
-
-    mov ax, SND_SEG
-    mov es, ax
-    mov di, si                  ; ES:DI = the grant
-    push si                     ; the grant offset, back for play/free
-    xor bx, bx                  ; BX = phase accumulator
-    mov dx, CPS_INC400          ; DX = phase increment (400 Hz)
-    xor bp, bp                  ; BP = Bresenham error accumulator
-    mov word [cp_swdir], 1      ; first half sweeps upward
-    mov cx, CPS_TESTN
-    cld
-.samp:
-    mov al, bh                  ; top phase byte indexes the table
-    xor ah, ah
-    mov si, ax
-    mov al, [cp_sine+si]        ; DS = KERNEL_SEG in far code (SPEC.md 33)
-    stosb
-    add bx, dx                  ; phase += increment
-    add bp, CPS_INC800-CPS_INC400   ; err += span; overflow past the
-    cmp bp, CPS_TESTN/2             ; half-length steps the increment
-    jb .keep                        ; by the sweep direction
-    sub bp, CPS_TESTN/2
-    add dx, [cp_swdir]
-.keep:
-    cmp cx, CPS_TESTN/2 + 1     ; halfway: the sweep turns around
-    jne .on
-    neg word [cp_swdir]
-.on:
-    loop .samp
-    pop si
-
-    mov cx, CPS_TESTN           ; ES:SI = the grant, exactly as staged
-    mov dx, 8000
-    KCALL osapi_snd_play         ; BLOCKS for the clip; AX = 0/err ignored
-
-    mov ax, 0x0107              ; verb 7 grant, sub-op 1 free (SI = offset)
-    KCALL osapi_snd_stream
-.out:
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     pop ax
     ret
 
@@ -1460,7 +1025,7 @@ cp_time_paint:
     add cx, CP_PMX
     mov dx, bp
     add dx, CP_PHY
-    KCALL font_str
+    call font_str
 
     call cp_time_rows           ; both field rows, from the live clock
 
@@ -1475,13 +1040,13 @@ cp_time_paint:
     add cx, CP_PLX
     mov dx, bp
     add dx, CPT_O0Y + CP_PLDY
-    KCALL font_str
+    call font_str
     mov si, cp_s_tsec
     mov cx, di
     add cx, CP_PLX
     mov dx, bp
     add dx, CPT_O1Y + CP_PLDY
-    KCALL font_str
+    call font_str
     call cp_timechk
 
     mov byte [gfx_color], CBLACK
@@ -1490,18 +1055,23 @@ cp_time_paint:
     add cx, CP_PMX
     mov dx, bp
     add dx, CPT_CAP1Y
-    KCALL font_str
+    call font_str
 
     mov si, cp_s_tnrt           ; caption 2: read live from the probe's
-    cmp byte [clk_rtc], 0       ; verdict (SPEC.md 37) - informative only,
+    cmp byte [clk_rtc], 0       ; verdict (SPEC.md 37.90) - informative only,
     je .cap                     ; since editing works either way
-    mov si, cp_s_trtc
+    push bx
+    mov bl, [clk_tier]
+    xor bh, bh
+    add bx, bx
+    mov si, [cp_rtcnam+bx]
+    pop bx
 .cap:
     mov cx, di
     add cx, CP_PMX
     mov dx, bp
     add dx, CPT_CAP2Y
-    KCALL font_str
+    call font_str
 
     pop si
     pop dx
@@ -1557,7 +1127,7 @@ cp_time_click:
     jg .done
 .step:
     mov al, [cp_tsel]
-    KCALL clk_fld_adj           ; in AL = field, BL = +1/-1 (SPEC.md 37)
+    call clk_fld_adj           ; in AL = field, BL = +1/-1 (SPEC.md 37)
     call cp_time_rows
     jmp .done
 
@@ -1577,6 +1147,7 @@ cp_time_click:
 .osec:
     xor byte [clk_secs], 1      ; row 1: seconds in the menu bar
 .oredraw:
+    mov byte [cp_wdirty], 1     ; both remembered on close (31.8)
     mov byte [clk_barq], 1      ; the bar's text (and width) changed: ui_task
                                 ; redraws it in this same pass (SPEC.md 37).
                                 ; NOT [cp_dirty] - a whole-desktop repaint to
@@ -1602,7 +1173,7 @@ cp_time_click:
 ; nothing may be on top of it. Only then is the origin re-derived from the
 ; live window rect and the two rows redrawn in place.
 ; -----------------------------------------------------------------------------
-cpf_tick:
+cp_tick:
     push ax
     push bx
     push cx
@@ -1614,14 +1185,14 @@ cpf_tick:
     cmp byte [cp_sel], CP_ITIME
     jne .out
     mov al, KIND_CTRL
-    KCALL inst_find_kind         ; CF = 1: no live Control Panel
+    call inst_find_kind         ; CF = 1: no live Control Panel
     jc .out
     mov bx, [di+I_WIN]
     test word [bx+W_FLAGS], 2   ; visible?
     jz .out
-    KCALL wm_obscured
+    call wm_obscured
     jc .out
-    KCALL wm_content             ; AX = content left, DX = content top
+    call wm_content             ; AX = content left, DX = content top
     mov di, ax
     add di, CP_RX               ; DI = pane left, BP = pane top
     mov bp, dx
@@ -1635,7 +1206,7 @@ cpf_tick:
     pop cx
     pop bx
     pop ax
-    retf                        ; far body: reached through the cp_tick shim
+    ret
 
 ; -----------------------------------------------------------------------------
 ; cp_time_rows - redraw both field rows from the live clock
@@ -1663,7 +1234,7 @@ cp_time_rows:
     add cx, CPT_BX - 4
     mov dx, bp
     add dx, CPT_TY + 11
-    KCALL gfx_fill
+    call gfx_fill
 
     mov byte [gfx_color], CBLACK ; the time row's two ':' separators (the
     mov si, cp_s_tcol            ; date row's gaps are simply blank)
@@ -1671,12 +1242,12 @@ cp_time_rows:
     add cx, CPT_FX + 16
     mov dx, bp
     add dx, CPT_TY
-    KCALL font_str
+    call font_str
     mov cx, di
     add cx, CPT_FX + 40
-    KCALL font_str
+    call font_str
 
-    KCALL clk_snap               ; ONE snapshot for all the fields, so the
+    call clk_snap               ; ONE snapshot for all the fields, so the
                                  ; row cannot straddle a second (SPEC.md 37)
     mov ah, 6                   ; active field count: the meridiem exists
     add ah, [clk_h12]           ; only in 12-hour mode (SPEC.md 31.5)
@@ -1741,7 +1312,7 @@ cp_time_fld:
     sub bx, 2                   ; y1 = y - 2
     add dx, 9                   ; y2 = y + 9
     mov byte [gfx_color], CBLACK
-    KCALL gfx_fill
+    call gfx_fill
     pop ax
     pop bx
     pop dx
@@ -1752,8 +1323,8 @@ cp_time_fld:
     mov byte [gfx_color], CBLACK
 .text:
     mov al, ah                  ; AL = field index for the formatter
-    KCALL clk_fld_str            ; SI = that field's text (SPEC.md 37)
-    KCALL font_str               ; in SI, CX = x, DX = y
+    call clk_fld_str            ; SI = that field's text (SPEC.md 37)
+    call font_str               ; in SI, CX = x, DX = y
 
     pop si
     pop dx
@@ -1831,7 +1402,7 @@ cp_time_pick:
 ; out: nothing
 ; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
 ; Both are always drawn and cp_glyph white-fills its own box, so this is
-; also the redraw path after a toggle (the Sound page's cp_sndchk idiom).
+; also the redraw path after a toggle.
 ; -----------------------------------------------------------------------------
 cp_timechk:
     push ax
@@ -1898,13 +1469,13 @@ cp_timebtn:
     mov dx, bx
     add dx, CPT_BH - 1          ; DX = y2
     mov byte [gfx_color], CBLACK
-    KCALL gfx_frame
+    call gfx_frame
     inc ax                      ; the interior, one pixel in from the frame
     inc bx
     dec cx
     dec dx
     mov byte [gfx_color], CWHITE
-    KCALL gfx_fill
+    call gfx_fill
     pop bx
 
     mov byte [gfx_color], CBLACK ; the 8px glyph, centred in the box
@@ -1912,7 +1483,7 @@ cp_timebtn:
     add cx, CPT_BX + (CPT_BW - 8) / 2
     mov dx, bx
     add dx, (CPT_BH - 8) / 2
-    KCALL font_str
+    call font_str
 
     pop si
     pop dx
@@ -1953,7 +1524,7 @@ cp_glyph:
     mov ax, cx                  ; white box: (x,y) .. (x+11, y+11)
     add cx, CP_GW - 1
     add dx, CP_GW - 1
-    KCALL gfx_fill               ; in AX = x1, BX = y1, CX = x2, DX = y2
+    call gfx_fill               ; in AX = x1, BX = y1, CX = x2, DX = y2
     pop ax
     mov [gfx_color], al
 
@@ -1966,7 +1537,7 @@ cp_glyph:
 .col:
     shl ax, 1
     jnc .skip
-    KCALL gfx_pixel              ; in CX = x, DX = y, color [gfx_color]
+    call gfx_pixel              ; in CX = x, DX = y, color [gfx_color]
 .skip:
     inc cx
     dec bl
@@ -2035,6 +1606,696 @@ cp_chk_off:
     dw 0x8010                   ;  9  #..........#
     dw 0x8010                   ; 10  #..........#
     dw 0xFFF0                   ; 11  ############
+
+; -----------------------------------------------------------------------------
+; cp_flush - persist every Control Panel setting (SPEC.md 31.8/51.5)
+; in:  nothing
+; out: nothing (all registers preserved)
+;
+; EVERY page calls this after it changes anything, so the machine boots in the
+; state it was left in. It is one write of one 32-byte file, and the file
+; carries the whole panel - the driver list, the sound route, the clock
+; options, the scheduler mode and the back buffer - so there is no per-setting
+; bookkeeping to keep in step.
+;
+; It writes ONCE, when the panel closes, rather than on every click. A floppy
+; write is ~a second on the floor machine and the panel is frozen for it, so
+; a session of trying settings out used to cost a second per click. Pages mark
+; [cp_wdirty] instead and cp_flush_close spends it.
+;
+; What that gives up is the crash window: a machine switched off with the
+; panel still open loses whatever was changed. That is the deliberate trade -
+; the settings are a convenience, not a document - and it is bounded by
+; flushing on the two ways the panel can go away, teardown and reboot, rather
+; than on the one obvious one.
+;
+; [cp_dsave] carries a failed write to the Drivers page's caption, the only
+; page with room to say it. It now says so the NEXT time the panel is opened,
+; because by the time the write happens the page is gone - and cp_flush_close
+; leaves [cp_wdirty] set on failure, so the next close retries rather than
+; silently dropping it.
+; -----------------------------------------------------------------------------
+cp_flush:
+    push ax
+    call drv_cfg_save
+    mov byte [cp_dsave], 0
+    jnc .out
+    mov byte [cp_dsave], 1
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_flush_close - spend [cp_wdirty], if there is anything to spend
+; in:  nothing
+; out: nothing (all registers preserved)
+;
+; Called from the Control Panel's teardown (app_close_win, SPEC.md 29.4) and
+; from the reboot path (SPEC.md 12.3) - the two ways the panel stops existing.
+; Minimizing is NOT one of them: the panel is still open, and hiding it is not
+; a decision to save.
+;
+; Safe to call when nothing changed, when the panel was never opened, and when
+; no disk is in the drive: the flag gates the first two and drv_cfg_save's own
+; failure path handles the third.
+; -----------------------------------------------------------------------------
+cp_flush_close:
+    cmp byte [cp_wdirty], 0
+    je .out
+    call cp_flush
+    cmp byte [cp_dsave], 0      ; the write failed: KEEP the flag, so closing
+    jne .out                    ; the panel again - or rebooting - tries once
+    mov byte [cp_wdirty], 0     ; more rather than dropping the settings
+.out:
+    ret
+
+; =============================================================================
+; The Sound page (SPEC.md 31.7/34.8)
+;
+; WHICH SOUND HARDWARE THE MACHINE USES. Three radio rows on the Display
+; page's geometry, and a Test button under them that plays a tone through
+; whatever is selected - so the answer to "did that do anything?" is one click
+; away and does not need an app.
+;
+; The rows are a LADDER, not three devices: PC Speaker is the resident sink
+; every machine has, AdLib adds the FM tier, and Sound Blaster adds the stream
+; tier on top of it. Every Sound Blaster carries an OPL2, so an SB owner who
+; picks AdLib is not giving up their card - they are giving up the DMA buffer,
+; the IRQ and the worker task that only the stream tier needs. On a 128KB
+; machine that is 12KB of a 55KB heap back, which is the whole reason the
+; middle rung exists.
+;
+; TWO THINGS ARE GREYED AND ONE IS NOT, and the difference is what the kernel
+; can actually know:
+;
+;   - AdLib greys when no loaded driver publishes a tone sink. That is a
+;     stable fact: the FM half of the sound driver is never torn down by a
+;     tier change, so if it is not published now it is not there.
+;   - Sound Blaster greys only when NO sound driver is published at all.
+;     Whether a card is there, and whether the heap can fund a page-safe 12KB
+;     for it right now, are both answerable ONLY by making the claim - so the
+;     click makes it (SPEC.md 50.3) and cp_snd_note reports what came back.
+;     Greying it on a full heap would be a guess, and mem_avail cannot even
+;     make that guess: it reports the largest free run and says nothing about
+;     whether a 64KB-page-safe base exists inside it.
+;
+; That is the one place this page departs from the bb_avail idiom (SPEC.md
+; 31.3), and deliberately: bb_canfit is a real predicate and mem_claim_dma has
+; none.
+; =============================================================================
+
+CPS_B2Y2  equ CP_PR0Y + 2*CP_PROWH + CP_GW + 3  ; 81: route row 2's bottom
+CPS_BTX1  equ CP_PGX                    ; the Test button
+CPS_BTX2  equ CP_PGX + 44
+CPS_BTY1  equ 84
+CPS_BTY2  equ 99
+CPS_NOTEY equ 104                       ; the refusal notice's text row
+
+; Which row a click asked for, in [snd_route] order, so the band test is an
+; index rather than a ladder of compares.
+cp_snd_tiers: db SND_RT_SPK, SND_RT_FM, SND_RT_SB
+
+; The last click's refusal, as a DRVE_* (0 = the last click was fine, and the
+; notice line is blank). .text and not .bss for the reason everything else
+; here is: -f bin zeroes nothing.
+cp_snd_err: db 0
+
+; -----------------------------------------------------------------------------
+; cp_snd_paint - the page: heading, three tier rows, the Test button, notice
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+cp_snd_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov byte [gfx_color], CBLACK    ; entry pen is CWHITE (cp_page's erase)
+    mov si, cp_s_snd
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PHY
+    call font_str
+
+    xor bx, bx                      ; BX = row 0..2
+.lbl:
+    mov al, bl
+    call cp_snd_rowok               ; greyed rows still draw - they are what
+    mov byte [gfx_color], CBLACK    ; the machine does not have, and a missing
+    jnc .pen                        ; row would just look like a shorter list
+    mov byte [gfx_color], CDGRAY
+.pen:
+    mov si, cp_s_sspk               ; three fixed labels, in ladder order
+    or bl, bl
+    jz .str
+    mov si, cp_s_sfm
+    cmp bl, 1
+    je .str
+    mov si, cp_s_ssb
+.str:
+    mov cx, di
+    add cx, CP_PLX
+    mov ax, CP_PROWH
+    mul bl                          ; AX = bl * CP_PROWH (bl <= 2, so AH = 0)
+    mov dx, bp
+    add dx, ax
+    add dx, CP_PR0Y + CP_PLDY
+    call font_str
+    inc bl
+    cmp bl, 3
+    jb .lbl
+    mov byte [gfx_color], CBLACK
+
+    mov ax, di                      ; the Test button: a plain framed box
+    add ax, CPS_BTX1
+    mov bx, bp
+    add bx, CPS_BTY1
+    mov cx, di
+    add cx, CPS_BTX2
+    mov dx, bp
+    add dx, CPS_BTY2
+    call gfx_frame
+    mov si, cp_s_stest
+    mov cx, di
+    add cx, CPS_BTX1 + 11
+    mov dx, bp
+    add dx, CPS_BTY1 + 4
+    call font_str
+
+    call cp_snd_radios
+    call cp_snd_note
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_snd_rowok - is tier row AL selectable? (module internal)
+; in:  AL = 0 speaker, 1 AdLib, 2 Sound Blaster
+; out: CF = 0 yes; CF = 1 no - the hardware that row names is not here
+; clobbers: nothing (flags)
+;
+; See the header above for why row 2's test is so much weaker than row 1's.
+; -----------------------------------------------------------------------------
+cp_snd_rowok:
+    or al, al
+    jz .yes                     ; the speaker is always there
+    cmp al, 1
+    je .fm
+    cmp word [drv_owner], 0     ; row 2: a published sound driver is the most
+    je .no                      ; we can assert without claiming
+    jmp short .yes
+.fm:
+    cmp word [drv_svc+DSV_TONE], 0
+    je .no
+.yes:
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_snd_row - which row is EFFECTIVELY live? (module internal)
+; in:  nothing
+; out: AL = 0 speaker, 1 AdLib, 2 Sound Blaster
+; clobbers: AL (the output), flags
+;
+; The dot follows the effective tier, not the stored setting, so it can never
+; claim hardware that is not sounding. The two disagree in exactly one case: a
+; disk written on a machine with a Sound Blaster, carried to one without.
+; [snd_route] keeps SND_RT_SB there - taking the setting away would mean the
+; disk stopped working when it went home - and the dot honestly shows AdLib or
+; the speaker, whichever the driver actually reached.
+; -----------------------------------------------------------------------------
+cp_snd_row:
+    cmp byte [snd_route], SND_RT_SPK
+    je .spk
+    cmp byte [snd_route], SND_RT_FM
+    je .fm                      ; AUTO and SB both take the best tier up
+    cmp word [drv_svc+DSV_STREAM], 0
+    jne .sb
+.fm:
+    cmp word [drv_svc+DSV_TONE], 0
+    jne .adlib
+.spk:
+    xor al, al
+    ret
+.adlib:
+    mov al, 1
+    ret
+.sb:
+    mov al, 2
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_snd_radios - the three glyphs (module internal)
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
+; -----------------------------------------------------------------------------
+cp_snd_radios:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [gfx_color], CBLACK
+    call cp_snd_row             ; AL = the row that owns the dot
+    mov bh, al
+    xor bl, bl
+    mov cx, di
+    add cx, CP_PGX
+    mov dx, bp
+    add dx, CP_PR0Y
+.r:
+    mov si, cp_radio_off
+    cmp bl, bh
+    jne .draw
+    mov si, cp_radio_on
+.draw:
+    call cp_glyph
+    add dx, CP_PROWH
+    inc bl
+    cmp bl, 3
+    jb .r
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_snd_note - the notice line: why the last click did not take (internal)
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+;
+; Blank unless a tier change was refused, and it uses the LOADER's strings
+; (drv_errstr) because a tier that cannot be had and a driver that cannot be
+; loaded fail for the same two reasons - no hardware, or no memory - and one
+; vocabulary for both is one less thing for the user to map.
+; -----------------------------------------------------------------------------
+cp_snd_note:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov dx, bp
+    add dx, CPS_NOTEY
+    call cp_drv_wipe            ; the strings differ in length, and the line
+    mov bl, [cp_snd_err]        ; is usually empty
+    or bl, bl
+    jz .out
+    cmp bl, DRVE_NERR           ; the code came out of a driver, and a table
+    jae .out                    ; index is not a thing to take on trust
+    xor bh, bh
+    shl bx, 1
+    mov si, [bx+drv_errstr]
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CPS_NOTEY
+    call font_str
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_snd_click - a click inside the Sound page
+; in:  DI = pane left, BP = pane top, CX = pane-relative x, DX = pane-relative
+;      y; gfx lock held by the caller
+; out: nothing (all registers preserved)
+;
+; A tier change is ASKED FOR, not asserted: drv_tier carries the candidate to
+; the driver, which may have to claim memory for it, and only an answer of yes
+; stores it. That order is what lets the AdLib -> Sound Blaster switch simply
+; try - there is no predicate to pre-check with, and refusing on a guess would
+; keep a machine that has the room off a tier it can afford (SPEC.md 34.8).
+; -----------------------------------------------------------------------------
+cp_snd_click:
+    push ax
+    push bx
+    push cx
+    push dx
+
+    cmp dx, CPS_BTY1            ; --- the Test button ------------------------
+    jl .rows
+    cmp dx, CPS_BTY2
+    jg .done
+    cmp cx, CPS_BTX1
+    jl .done
+    cmp cx, CPS_BTX2
+    jg .done
+    mov ax, 660                 ; one second of a tone through whatever the
+    mov cx, 18                  ; page currently selects. UI priority, so it
+    mov dl, SND_PRI_UI          ; outranks anything a package is playing -
+    call osapi_snd_tone         ; the user asked for it
+    jmp short .done
+
+.rows:
+    cmp dx, CP_B0Y1             ; --- the three tier rows -------------------
+    jl .done
+    xor bl, bl                  ; BL = the row the y lands in
+    cmp dx, CP_B0Y2
+    jle .band
+    inc bl
+    cmp dx, CP_B1Y2
+    jle .band
+    inc bl
+    cmp dx, CPS_B2Y2
+    jg .done
+.band:
+    mov al, bl
+    call cp_snd_rowok           ; a row whose hardware is not here is refused
+    jc .done                    ; without a notice: it is drawn grey, which
+                                ; has already said so
+    xor bh, bh
+    mov ah, [bx+cp_snd_tiers]   ; the SND_RT_* that row asks for
+    mov byte [cp_snd_err], 0
+    cmp ah, [snd_route]
+    je .redraw                  ; already the setting: still redraw, because
+                                ; the click clears a stale notice
+    call drv_tier               ; ask the driver to move; AL = why not
+    jnc .take
+    mov [cp_snd_err], al        ; the tier stands where it was, and the notice
+    jmp short .redraw           ; line says which of the two reasons
+.take:
+    mov [snd_route], ah
+    mov byte [cp_wdirty], 1
+.redraw:
+    call cp_snd_radios
+    call cp_snd_note
+.done:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; The Drivers page (SPEC.md 31.6/51)
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; cp_drv_paint - the page: heading, a checkbox row per driver, one caption
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+;
+; A row's LABEL is the driver's name and its CAPTION is what its last load
+; attempt answered - DRVE_OK reads 'Loaded', and every other value is the
+; reason it is not (kernel/driver.inc's drv_errstr, the same strings the boot
+; notice uses). That is the bb_avail idiom again: the box, the caption and
+; the click all read one word, so they cannot disagree.
+; -----------------------------------------------------------------------------
+cp_drv_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov byte [gfx_color], CBLACK    ; entry pen is CWHITE (cp_page's erase)
+    mov si, cp_s_drv                ; heading, same string as the list row
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PHY
+    call font_str
+
+    xor bx, bx                      ; BX = row index
+.row:
+    push bx
+    mov al, bl
+    call drv_row                    ; BX = the drv_tab row
+    cmp word [bx+DRVR_FILE], 0
+    je .next                        ; an empty table row draws nothing
+    mov si, [bx+DRVR_TITLE]
+    pop ax
+    push ax                         ; AX = the row index again
+    push bx
+    call cp_drv_rowy                ; DX = this row's glyph top
+    mov cx, di
+    add cx, CP_PLX
+    add dx, CP_PLDY
+    call font_str                   ; the driver's name
+    pop bx
+
+    call drv_status                 ; ...and what it is doing right now
+    pop ax
+    push ax
+    call cp_drv_rowy
+    add dx, CP_PLDY + 9
+    mov cx, di
+    add cx, CP_PLX
+    call font_str
+.next:
+    pop bx
+    inc bx
+    cmp bx, DRV_MAX
+    jb .row
+
+    call cp_drv_boxes               ; every checkbox, from the live state
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_drv_rowy - a driver row's glyph top (module internal)
+; in:  AL = row index, BP = pane top
+; out: DX = the absolute y of that row's checkbox
+; clobbers: nothing else (flags)
+;
+; Two text lines per row, so the pitch is wider than the radio pages': the
+; name sits on the glyph's own baseline and the reason 9px under it.
+; -----------------------------------------------------------------------------
+CP_DR0Y   equ 24                ; first driver row: glyph top
+CP_DROWH  equ 26                ; row pitch
+CP_DB0Y1  equ CP_DR0Y - 4                       ; row 0's hit band, top...
+CP_DB0Y2  equ CP_DR0Y + CP_DROWH - 5            ; ...and bottom = row 1 top-1
+CP_DB1Y2  equ CP_DR0Y + CP_DROWH + CP_GW + 5    ; row 1's bottom
+
+cp_drv_rowy:
+    push ax
+    push cx
+    mov ah, 0
+    mov cx, CP_DROWH
+    mul cx
+    add ax, CP_DR0Y
+    add ax, bp
+    mov dx, ax
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_drv_boxes - redraw every driver row's checkbox from the live table
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
+;
+; The box tracks DRVR_SEG - what is LOADED - and not DRVR_WANT, which is only
+; what the settings file asks for. A driver the user enabled on a machine with
+; no card is unchecked, and its caption says why.
+; -----------------------------------------------------------------------------
+cp_drv_boxes:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [gfx_color], CBLACK
+    xor bx, bx
+.row:
+    push bx
+    mov al, bl
+    call drv_row
+    cmp word [bx+DRVR_FILE], 0
+    je .next
+    mov si, cp_chk_off
+    cmp word [bx+DRVR_SEG], 0
+    je .off
+    mov si, cp_chk_on
+.off:
+    pop ax
+    push ax
+    call cp_drv_rowy
+    mov cx, di
+    add cx, CP_PGX
+    call cp_glyph
+.next:
+    pop bx
+    inc bx
+    cmp bx, DRV_MAX
+    jb .row
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_drv_click - a click inside the Drivers page (SPEC.md 51.3)
+;
+; in:  DI = pane left, BP = pane top, CX = pane-relative x (ignored),
+;      DX = pane-relative y; gfx lock held by the caller
+; out: nothing
+; clobbers: nothing (flags only)
+;
+; The click LOADS OR UNLOADS ON THE SPOT and only then writes SYSTEM.CFG, so
+; the page never shows a promise about the next boot. Both halves can fail
+; and both failures are reported in place: a load that finds no disk or no
+; card leaves the box clear with the reason under it, and a settings write
+; that cannot reach the disk says so in the caption while the driver it just
+; loaded stays loaded - which is the honest split, because the two are
+; genuinely separate outcomes.
+;
+; A load does floppy I/O with the gfx lock held. That is the same bargain
+; every other file operation in this OS makes (SPEC.md 18.4): the cursor
+; freezes for the length of the read, and the alternative - dropping the lock
+; inside a click handler - is not one the window manager offers.
+; -----------------------------------------------------------------------------
+cp_drv_click:
+    push ax
+    push bx
+    push dx
+
+    cmp dx, CP_DB0Y1            ; outside every band: nothing
+    jl .done
+    cmp dx, CP_DB1Y2
+    jg .done
+    xor al, al                  ; upper band = row 0
+    cmp dx, CP_DB0Y2
+    jle .got
+    mov al, 1                   ; lower band = row 1
+.got:
+    push ax
+    call drv_row
+    cmp word [bx+DRVR_FILE], 0  ; an empty table row is not a control
+    pop ax
+    je .done
+
+    push ax
+    call drv_row
+    cmp word [bx+DRVR_SEG], 0
+    pop ax
+    je .load
+    call drv_unload             ; it is up: take it down
+    push ax
+    call drv_row
+    mov byte [bx+DRVR_WANT], 0
+    mov byte [bx+DRVR_ERR], DRVE_OK ; nothing failed - it was turned off
+    pop ax
+    jmp short .save
+.load:
+    push ax
+    call drv_row
+    mov byte [bx+DRVR_WANT], 1  ; wanted first, so a failed load still
+    pop ax                      ; persists the intent: put the disk in and
+    call drv_load               ; the next boot picks it up
+.save:
+    mov byte [cp_wdirty], 1     ; ...and only now, the settings file
+.redraw:
+    call cp_drv_boxes
+    call cp_drv_lines
+.done:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_drv_lines - redraw the reason under each row, and the save caption
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+;
+; The strings differ in length, so each line is erased before it is drawn -
+; the cpf_disp_cap idiom.
+; -----------------------------------------------------------------------------
+cp_drv_lines:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    xor bx, bx
+.row:
+    push bx
+    mov al, bl
+    call drv_row
+    cmp word [bx+DRVR_FILE], 0
+    je .next
+    call drv_status
+    pop ax
+    push ax
+    call cp_drv_rowy
+    add dx, CP_PLDY + 9
+    call cp_drv_wipe
+    mov cx, di
+    add cx, CP_PLX
+    call font_str
+.next:
+    pop bx
+    inc bx
+    cmp bx, DRV_MAX
+    jb .row
+
+    mov dx, bp                  ; the caption: only a failed SAVE speaks here
+    add dx, CP_PCAPY
+    call cp_drv_wipe
+    cmp byte [cp_dsave], 0
+    je .out
+    mov si, cp_s_dsave
+    mov cx, di
+    add cx, CP_PMX
+    call font_str
+.out:
+    mov byte [gfx_color], CBLACK
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_drv_wipe - white out one text line of the pane (module internal)
+; in:  DI = pane left, DX = the line's baseline y; gfx lock held
+; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
+; -----------------------------------------------------------------------------
+cp_drv_wipe:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [gfx_color], CWHITE
+    mov ax, di
+    add ax, CP_PMX
+    mov bx, dx
+    mov cx, di
+    add cx, CP_PRGT             ; the PANE's last column, not the content's
+    add dx, 7
+    call gfx_fill
+    mov byte [gfx_color], CBLACK
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; cp_chk_on - the same square with an X through it (checked)
 cp_chk_on:

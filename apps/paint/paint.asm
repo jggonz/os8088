@@ -3,47 +3,39 @@
 ;
 ; PAINT, the seventh shipped package: a bitmap editor with eight tools, a
 ; 4bpp offscreen canvas, one-level undo/redo, an internal clipboard and
-; BMP + GIF load/save through the Standard File dialog (SPEC.md 38). It runs
-; on all three adapters (SPEC.md 39); every pixel it puts on screen goes
-; through the published gfx_* slots.
+; BMP load/save through the Standard File dialog (SPEC.md 38). It runs on
+; all three adapters (SPEC.md 39) and needs no kernel change of any kind -
+; every pixel it puts on screen goes through the published gfx_* slots.
 ;
 ; THE CANVAS LIVES OUTSIDE THE PACKAGE REGION. A 448x280 image at 4bpp is
-; 62,720 bytes against a region capped at one segment (SPEC.md 20.1), so the
-; pixels cannot be here. They come from the conventional ARENA, through
-; OSAPI_MEM_ALLOC (SPEC.md 2.6/20.8) - the same memory this package's own
-; segment was carved out of, asked for rather than picked:
+; 62,720 bytes against a 19.5KB region (SPEC.md 20.1), so the pixels cannot
+; be here. They sit in four 64KB windows starting at linear 0x66000 - the
+; first paragraph above BB_SEG's four planes (SPEC.md 2: BB_SEG's 4 x 0x9600
+; bytes end at 0x657FF), which is the lowest address in the machine that no
+; kernel structure can ever reach:
 ;
-;   pt_base   canvas      118-byte BMP header + rows, bottom-up
-;   pt_unseg  undo image  same layout, row-granular (see pt_umark)
-;   pt_cbseg  clipboard   also the load staging buffer
-;   pt_scseg  scratch     the flood-fill span stack
+;   0x66000  PT_CVSEG   canvas      118-byte BMP header + rows, bottom-up
+;   0x76000  PT_UNSEG   undo image  same layout, row-granular (see pt_umark)
+;   0x86000  PT_CBSEG   clipboard   also the load staging buffer (64KB)
+;   0x96000  PT_SCSEG   scratch     the claim record + the flood-fill stack
 ;
-; ONE grant, subdivided here, which is the rule the API is shaped around -
-; the block table is eight entries for the whole machine. Nothing below is a
-; fixed address and nothing reads a kernel constant to derive one: pt_geom
-; asks OSAPI_MEM_AVAIL what the largest free run actually is, divides THAT,
-; and asks for exactly what it decided.
-;
+; That is memory nobody granted us, and it is the ONE thing here that a
+; kernel service should own instead (see the notes in docs/PAINT-NOTES.md).
 ; Three consequences are handled rather than hoped about:
 ;
-;  1. The memory may not be there. The arena is ~233KB on a 640KB machine,
-;     ~107KB at 512KB and EMPTY on the 256KB floor, and other packages are
-;     loaded into the same space - so a grant is refused often enough to be
-;     a normal outcome, not an error path. Paint gives up features in tiers
-;     (below) rather than refusing, and puts up a window that explains
-;     itself when even the smallest canvas cannot be funded.
-;  2. Nothing has to be given back. The grant is stamped with this instance
-;     and force-freed at teardown, which is what makes it safe for a
-;     task-less package: nothing tells us the window is closing (SPEC.md
-;     21), so nothing here could have been relied on to free it. That is
-;     also why there is no claim record and no duplicate check any more -
-;     two Paints get two grants, and the second one is a different canvas
-;     rather than the same one twice.
-;  3. The back buffer is not our business. ARENA_SEG sits one paragraph
-;     above BB_SEG's pinned extent by construction (SPEC.md 2.5), so the
-;     Control Panel's Display page can arm or disarm double buffering
-;     underneath us with no effect but the flush - and this file does not
-;     have to know DB_MIN_KB, or predict it, to be sure of that.
+;  1. The region only exists on a machine with ~620KB of conventional RAM,
+;     so pt_entry asks int 12h first and puts up "Not enough memory" instead
+;     of a canvas when the answer is short. A 256KB or 512KB machine gets a
+;     window that explains itself and touches nothing.
+;  2. Two instances would share one canvas, so the SECOND one refuses. The
+;     claim record at PT_SCSEG:0 carries a magic pair and the owner's window
+;     pointer; pt_dupchk trusts it only if that record is still a used
+;     window whose title string is ours (SPEC.md 11's W_FLAGS bit 0 and
+;     W_TITLE, read through DS = KERNEL_SEG). A closed Paint leaves a stale
+;     magic behind - there is no close hook for a task-less package - and
+;     that test is what makes the staleness harmless.
+;  3. BB_SEG is never touched, so the Control Panel's Display page can arm
+;     or disarm double buffering under us with no effect but the flush.
 ;
 ; PERFORMANCE. Two decisions carry the whole app:
 ;
@@ -136,44 +128,44 @@
     dw 0x0000
     OS88_ICON16_END
 
-; --- the memory we ask the arena for (see the header) ---------------------------
-; All of it is sized from OSAPI_MEM_AVAIL at startup, because the canvas is
-; not a fixed size: the picture, its undo image and the clipboard are three
-; runtime-sized buffers, and how big a picture the machine can hold is one
-; division. NOTHING here is a base address - every base is a slice of the one
-; grant, and the grant's segment is whatever the kernel hands back.
-PT_SC_KB    equ 12                  ; the scratch slice (the flood fill's span
-PT_SC_PARA  equ PT_SC_KB * 64       ; stack), in KB and in paragraphs. Not
-                                    ; optional and not a tier: a fill with no
-                                    ; stack is a fill that cannot run.
-PT_CLIPMINP equ 1024                ; the clipboard's size, in paragraphs - a
-                                    ; floor in the tiering below and, once the
-                                    ; canvas has taken the rest in equal
-                                    ; halves, exactly what is left for it
+; --- the memory we CLAIM from the kernel (SPEC.md 50) ---------------------------
+; One contiguous block, asked for at startup and carved into four: canvas,
+; undo image, clipboard, scratch. Nothing here is a fixed address any more -
+; the kernel owns the map and hands us a segment, which is the whole of what
+; docs/PAINT-NOTES.md asked for. What used to be here instead: two hard-coded
+; bases (0x66000, or BB_SEG when the kernel could never arm a back buffer),
+; a mirror of the kernel's DB_MIN_KB policy constant to choose between them,
+; and a magic-word claim record so two Paints could not silently share one
+; canvas. All three are gone: OSAPI_MEM_CLAIM cannot hand the same paragraph
+; to two instances, so two Paints now simply both run.
+PT_SC_KB    equ 12                  ; scratch (the flood-fill stack), taken off
+                                    ; the TOP of the block
+PT_CLIPMINP equ 256                 ; the clipboard's floor, in paragraphs. It
+                                    ; was 1024 - 16KB - and that was the GIF
+                                    ; codec's requirement, not the
+                                    ; clipboard's; the tables have their own
+                                    ; claim now, so a machine that can spare
+                                    ; only a little gets a small clipboard
+                                    ; instead of none
 PT_MINP     equ 2000                ; ...and a canvas under 32,000 bytes
                                     ; (320x200) is not worth starting
-PT_RESERVEP equ 4096                ; what we deliberately DO NOT take: one
-                                    ; whole package region (PKG_MAX_PARA + 1,
-                                    ; 64KB). The arena is ~233KB at 640KB and
-                                    ; a canvas plus an undo image will eat all
-                                    ; of it, and then no other package can
-                                    ; load at all while Paint is open - which
-                                    ; is a true answer to a question nobody
-                                    ; asked. Left behind ONLY when doing so
-                                    ; still funds the top tier, so a small
-                                    ; machine is never made smaller for the
-                                    ; sake of an app it could not have run
-
-PT_SC_STACK equ 16                  ; flood-fill span stack starts here. The
-                                    ; 16-byte lead-in is what the load-staging
-                                    ; fallback's capacity subtracts (pt_bmp_read)
+PT_WANT_KB  equ 318                 ; the hard ceiling: two canvases at the
+                                    ; 736x464 row-table limit, the clipboard
+                                    ; floor and the scratch. pt_geom asks for
+                                    ; far less than this in practice - see
+                                    ; pt_want - and this only stops the
+                                    ; arithmetic there running away
+PT_SC_STACK equ 16                  ; flood-fill span stack starts here
 PT_FSTK_MAX equ 1024                ; entries of 8 bytes (y, x1, x2, dy)
 
 ; --- the GIF codec's work areas (SPEC.md 42) ---------------------------------
-; Both directions borrow buffers a load or a save has already invalidated, which
-; is the whole reason an LZW dictionary fits an app whose own world is 19.5KB.
-; The clipboard's floor exists to be borrowed here; the assertion below is what
-; keeps that true if PT_CLIPMINP ever moves.
+; The LZW tables have their own claim, taken for the length of one GIF and
+; handed straight back (pt_alloc_lzw / pt_free_lzw). They used to BORROW the
+; clipboard, which is why PT_CLIPMINP had a floor big enough to hold them -
+; a legacy of the days before a package could ask the kernel for memory at
+; all (SPEC.md 50.3). Borrowing cost more than it saved: it tied Save Gif to
+; whether a clipboard happened to be funded, and it kept 16KB reserved in
+; every clipboard on every machine for a codec that is idle almost always.
 PT_GD_PREF  equ 0                   ; read: prefix[4096] words
 PT_GD_SUFF  equ 8192                ; read: suffix[4096] bytes
 PT_GD_STK   equ 12288               ; read: the output stack, 4096 bytes
@@ -187,11 +179,12 @@ PT_GE_MAXC  equ 2047                ; the writer's code ceiling: 11 bits, minus
                                     ; (see pt_gadd - its table runs one behind)
 PT_GDIM_MAX equ 4096                ; a GIF bigger than this in either axis is
                                     ; refused, not decoded row by row to nowhere
-%if PT_GD_END > PT_CLIPMINP * 16
-%error "the GIF read tables no longer fit the clipboard's reserved floor"
+PT_LZW_KB   equ 16                  ; the claim both directions run in
+%if PT_GD_END > PT_LZW_KB * 1024
+%error "the GIF read tables no longer fit PT_LZW_KB"
 %endif
-%if PT_GE_END > PT_CLIPMINP * 16
-%error "the GIF write tables no longer fit the clipboard's reserved floor"
+%if PT_GE_END > PT_LZW_KB * 1024
+%error "the GIF write tables no longer fit PT_LZW_KB"
 %endif
 
 ; --- canvas geometry -----------------------------------------------------------
@@ -249,28 +242,24 @@ PT_NTOOL    equ 8
 
 ; --- modes: anything but PT_M_LIVE draws a notice and eats every input ---------
 PT_M_LIVE   equ 0
-PT_M_NOMEM  equ 1                   ; int 12h cannot fund a minimum canvas
-PT_M_DUP    equ 2                   ; retired: two Paints get two grants
-                                    ; (SPEC.md 20.8), so nothing sets this
-                                    ; any more. The value is kept so the
-                                    ; notice table below need not renumber.
-PT_M_SMALL  equ 3                   ; the desktop cannot hold a usable canvas
+PT_M_NOMEM  equ 1                   ; the heap cannot fund a minimum canvas
+PT_M_SMALL  equ 2                   ; the desktop cannot hold a usable canvas
 
 PT_NAMEMAX  equ 12                  ; 8 + '.' + 3, as SPEC.md 38.6 hands it over
 
 ; -----------------------------------------------------------------------------
 ; pt_entry - package entry point (SPEC.md 20.2)
-; in:  CS=DS=ES = our own segment, IF=1, gfx lock NOT held
+; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF clear (CF set = abort, propagated from wm_create)
 ;
 ; Order is load-bearing. The geometry probe decides the window size, so it
 ; runs before wm_create - a template sized here never meets wm_fit's clamp
-; (SPEC.md 39.7), and [pt_ch] is still re-derived from the live geometry
-; afterwards because the window, not the template, is the truth. The memory
-; grant is taken in there too, which is legal HERE and only here-and-after:
-; the loader stamps this call as a dispatched site (SPEC.md 21 step 9), so
-; the grant is owned by the instance about to exist rather than by the
-; kernel.
+; (SPEC.md 39.7), and [pt_ch] is still re-derived from the record afterwards
+; because the record, not the template, is the truth. The RAM check runs
+; before the duplicate check, because the duplicate check READS the claim
+; record and there is no claim record on a machine that has no such memory.
+; The claim itself waits until wm_create has given us the window pointer it
+; has to publish.
 ;
 ; The loader shows the window after we return, so nothing here draws.
 ; -----------------------------------------------------------------------------
@@ -279,31 +268,37 @@ pt_entry:
     mov byte [pt_ethick], 1         ; text scale; the eraser starts at 16px
                                     ; against the pencil's 1px, which is what
                                     ; "much thicker by default" means here
-    call pt_geom                    ; screen limits, the arena grant, canvas
+    call pt_geom                    ; screen limits, the memory claim, canvas
+.make:
     push si
     mov si, pt_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     pop si
-    jc .out                         ; no window: the grant goes back at
-                                    ; teardown like any other (SPEC.md 20.8),
-                                    ; and the loader's abort path runs it
+    jc .out                         ; no window: nothing to flag, nothing to
+                                    ; claim - the region stays untouched
     mov [pt_win], bx
     cmp byte [pt_mode], PT_M_LIVE
     jne .menus
     push ax
     mov al, 1                       ; resizable: the canvas IS the content, so
-    cmp byte [pt_haveundo], 0       ; dragging the grow box sizes the picture -
-    jne .sizable                    ; except with no undo image to stage the
-    xor al, al                      ; old picture in, when the size is fixed
-.sizable:
-    call OSAPI_WM_SIZABLE
+    call OSAPI_WM_SIZABLE           ; dragging the grow box sizes the picture.
+                                    ; It used to be conditional on there being
+                                    ; an undo image to stage the old picture
+                                    ; in; pt_resize copies block to block now
+                                    ; and needs no staging area at all
+    mov ax, pt_onsize               ; ...and the kernel asks us before it
+    call OSAPI_WM_ONSIZE            ; commits one (SPEC.md 11.1)
     pop ax
-    call pt_menufix                 ; and the menus say what is unavailable -
-                                    ; a notice window gets the menu bar too,
+    push si                         ; SI is the loader's, like the two other
+    mov si, pt_about                ; borrowings in this proc
+    call OSAPI_ABOUT_SET            ; 'About Paint' under our name in the bar
+    pop si                          ; (SPEC.md 12.2); BX is still the window.
+                                    ; LIVE only - see pt_about
+    call pt_menufix                 ; and the menus say what is unavailable                      ; a notice window gets the menu bar too,
                                     ; so its name shows and File/Edit are
                                     ; visibly inert rather than absent
     pushf                           ; the CF wm_create owes the loader rides
-    call pt_canvas_init             ; through both of these
+    call pt_canvas_init             ; through every one of these
     call pt_font_init
     popf
 .menus:
@@ -312,32 +307,29 @@ pt_entry:
     call OSAPI_MENU_SET             ; menu_win_set preserves flags too)
     pop si
 .out:
-    retf                            ; far-called by the loader (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
-; pt_geom - the screen's limits, the memory budget, and the first canvas
+; pt_geom - the screen's limits, the memory claims, and the first canvas
 ; in:  nothing
 ; out: pt_tpl patched; [pt_cwmax]/[pt_chmax] = the biggest canvas this SCREEN
-;      can show; [pt_smaxp] = the biggest this MACHINE can hold, in paragraphs;
-;      the three buffer bases; [pt_cw]/[pt_ch] = the starting canvas;
+;      can show; [pt_smaxp] = what the canvas CLAIM holds, in paragraphs; the
+;      four claim segments; [pt_cw]/[pt_ch] = the starting canvas;
 ;      [pt_mode] = PT_M_NOMEM or PT_M_SMALL when a bound cannot be met
 ;
-; Both bounds are real and neither is a constant. The screen bound comes from
-; OSAPI_VIDEO (SPEC.md 39.2): the window sits at PT_WIN_Y and may reach the
-; row the dock owns. The memory bound comes from OSAPI_MEM_AVAIL (SPEC.md
-; 20.8) - the LARGEST contiguous free run in the arena, which is the number
-; one grant can be, not the total: the canvas and its undo image are always
-; the same size and the clipboard has a floor, so the largest canvas is
-; (largest run - scratch - clipboard floor) / 2.
+; The screen bound comes from OSAPI_VIDEO (SPEC.md 39.2): the window sits at
+; PT_WIN_Y and may reach the row the dock owns.
 ;
-; The buffer bases are fixed here, once, from that MAXIMUM rather than from the
-; starting canvas - which is what makes a later resize safe: no base ever
-; moves, so pt_resize can stage the old picture in the undo buffer and lay the
-; new one out with no overlap to reason about.
-;
-; ONE grant covers all four (SPEC.md 20.8's "take one block and subdivide it
-; yourself"), so the whole memory story is one refusable call, and a refusal
-; is a notice window rather than a crash or a broken address.
+; **FOUR separate claims, sized for the canvas we are about to show** - not
+; one block sized for the biggest canvas the screen could ever show. The
+; difference is the whole memory story: a package may hold several claims
+; (SPEC.md 50.2) and the kernel frees all of them at teardown, so there is no
+; reason to reserve the maximum up front. What made the old version do it was
+; that pt_resize staged the old picture in the undo image, which therefore had
+; to be big enough for any canvas that could ever be adopted - and the bases
+; had to be fixed for the staging to be safe. pt_resize re-claims now, so
+; both constraints are gone and a fresh 448x280 Paint holds about 150KB on a
+; 640KB machine instead of 260KB.
 ; -----------------------------------------------------------------------------
 pt_geom:
     call OSAPI_VIDEO                ; AX=w, BX=h, CX=dock row, DL=kind, DH=bpp
@@ -370,86 +362,29 @@ pt_geom:
     mov byte [pt_mode], PT_M_SMALL
     mov word [pt_cwmax], PT_CW_MIN  ; the window will only carry a notice, but
     mov word [pt_chmax], PT_CH_MIN  ; the arithmetic below still has to run
-    ; --- what memory allows, and what has to be given up to fit -------------
-    ; Three tiers, in the order the features are worth least: the clipboard
-    ; goes first, then undo. Each is a whole canvas's worth of paragraphs (the
-    ; clipboard a fixed floor), so dropping one is what lets a machine that can
-    ; hold a picture but not two of them run the program at all.
+    ; --- what memory allows -------------------------------------------------
+    ; Four claims (SPEC.md 50.3), each independently refusable, and each
+    ; refusal costs exactly the feature it funds. That is the tier system the
+    ; old single block emulated with arithmetic, expressed as what it is.
 .mem:
-    call OSAPI_MEM_AVAIL            ; AX = the LARGEST contiguous free run in
-                                    ; the arena, PARAGRAPHS (DX's total can be
-                                    ; far bigger and still not hold one buffer,
-                                    ; which is why this is the number to
-                                    ; divide - SPEC.md 20.8)
-    cmp ax, PT_RESERVEP + PT_SC_PARA + PT_CLIPMINP + 2 * PT_MINP
-    jb .takeall                     ; taking the reserve out would cost us a
-    sub ax, PT_RESERVEP             ; tier: on this machine, take the lot
-.takeall:
-    cmp ax, PT_SC_PARA
-    jbe .nomem                      ; not even a span stack: 0 here is the
-                                    ; 256KB floor, where the arena is empty
-    sub ax, PT_SC_PARA
-    mov byte [pt_haveundo], 1
-    mov byte [pt_haveclip], 1
-    cmp ax, PT_CLIPMINP + 2 * PT_MINP
-    jb .noclip
-    sub ax, PT_CLIPMINP
-    shr ax, 1                       ; canvas and undo image, equal halves
-    jmp short .split
-.noclip:
-    mov byte [pt_haveclip], 0       ; no Cut/Copy/Paste - and no GIF either, the
-    cmp ax, 2 * PT_MINP             ; codec's tables live in the clipboard
-    jb .noundo
-    shr ax, 1
-    jmp short .split
-.noundo:
-    mov byte [pt_haveundo], 0       ; no Undo/Redo, no resize (pt_resize stages
-    cmp ax, PT_MINP                 ; the old picture there) and no Open (so
-    jb .nomem                       ; does the file reader) - but the whole of
-                                    ; memory is canvas, so the picture is bigger
-    ; --- ask for exactly what those tiers decided, and slice it -------------
-    ; The order is canvas, undo image, clipboard, scratch. Only the canvas's
-    ; own size varies; the other three are decided above and never move
-    ; again, which is what pt_resize relies on.
-.split:
-    mov [pt_smaxp], ax
-    mov cx, ax                      ; CX = paragraphs to ask for
-    cmp byte [pt_haveundo], 0
-    je .noun2
-    add cx, ax                      ; + the undo image, one whole canvas
-.noun2:
-    xor dx, dx
-    cmp byte [pt_haveclip], 0
-    je .nocb2
-    mov dx, PT_CLIPMINP             ; + the clipboard, which is exactly the
-.nocb2:                             ; floor: the halving above left it that
-    mov [pt_cbparas], dx            ; much and no more
-    add cx, dx
-    add cx, PT_SC_PARA              ; + the span stack
-    push dx
-    mov ax, cx
-    call OSAPI_MEM_ALLOC            ; AX = the grant's base SEGMENT, CF=1 and
-    pop dx                          ; AX = why not (SPEC.md 20.8)
-    jc .nomem                       ; a run that was free a moment ago is gone:
-                                    ; refuse the same way as never having had
-                                    ; one, rather than laying out on garbage
-    mov [pt_base], ax               ; the canvas starts at the grant's base...
-    add ax, [pt_smaxp]
-    cmp byte [pt_haveundo], 0
-    je .nound3
-    mov [pt_unseg], ax              ; ...the undo image one whole canvas up...
-    add ax, [pt_smaxp]
-.nound3:
-    mov [pt_cbseg], ax              ; ...then the clipboard...
-    add ax, dx
-    mov [pt_scseg], ax              ; ...and the span stack on top
-    jmp short .first
+    mov ax, PT_CW_DEF               ; the canvas we are about to show, which is
+    cmp ax, [pt_cwmax]              ; what we size the claims for
+    jle .dw_ok
+    mov ax, [pt_cwmax]
+.dw_ok:
+    mov dx, PT_CH_DEF
+    cmp dx, [pt_chmax]
+    jle .dh_ok
+    mov dx, [pt_chmax]
+.dh_ok:
+    call pt_growmax                 ; what one canvas could be, given the heap
+    call pt_fit                     ; ...and shrink the request until it fits
+    call pt_alloc                   ; scratch, canvas, undo image, clipboard
+    jnc .first
 .nomem:
     mov byte [pt_mode], PT_M_NOMEM
-    mov word [pt_smaxp], PT_MINP    ; nothing is allocated or drawn, but the
-    mov byte [pt_haveundo], 0       ; layout arithmetic still runs once, and
-    mov byte [pt_haveclip], 0       ; every base stays 0 - which nothing will
-                                    ; read, because PT_M_NOMEM eats every input
+    mov word [pt_smaxp], PT_MINP    ; nothing is claimed or drawn, but the
+                                    ; layout arithmetic still runs once
     ; --- the starting canvas: the default, held inside both bounds ----------
 .first:
     mov ax, PT_CW_DEF
@@ -500,6 +435,12 @@ pt_wsize:
 ; Height gives first: a picture that loses rows off the bottom stays more
 ; recognisable than one losing columns off the right AND rows off the bottom.
 ; Only with the height already at the floor does the width start to give.
+;
+; [pt_pinw]/[pt_pinh] take an axis out of the ladder. pt_sizeask sets one when
+; its ink guard has just put that axis back to the size it already has: the
+; guard's answer must not then be undone by the very routine whose cut it was
+; overruling, so the OTHER axis gives the ground instead. Both pinned means
+; nothing can give, and the CF=1 that comes back says exactly that.
 ; -----------------------------------------------------------------------------
 pt_fit:
     push bx
@@ -508,9 +449,13 @@ pt_fit:
 .retry:
     call pt_paras                   ; BX = stride, CX = paragraphs needed
     cmp cx, [pt_smaxp]
-    jbe .out
+    jbe .out                        ; the block we hold carries it...
+    cmp cx, [pt_growp]
+    jbe .out                        ; ...or a bigger one we could claim does
     mov byte [pt_fitcut], 1
-    cmp dx, PT_CH_MIN
+    cmp byte [pt_pinh], 0
+    jne .narrow                     ; an axis the ink guard put back is not
+    cmp dx, PT_CH_MIN               ; this routine's to cut (pt_sizeask)
     jbe .narrow
     mov cx, dx
     shr cx, 1                       ; an eighth of the height at a time (the
@@ -526,6 +471,8 @@ pt_fit:
     mov dx, PT_CH_MIN
     jmp short .retry
 .narrow:
+    cmp byte [pt_pinw], 0
+    jne .out
     cmp ax, PT_CW_MIN
     jbe .out                        ; both floors reached: nothing left to give
     mov cx, ax
@@ -550,6 +497,294 @@ pt_fit:
     ret
 .clean:
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_kb_of - KB a claim of CX paragraphs needs
+; in:  CX = paragraphs
+; out: AX = KB, rounded UP (a claim a paragraph short is a claim that
+;      corrupts); preserves every other register
+; -----------------------------------------------------------------------------
+pt_kb_of:
+    push cx
+    mov ax, cx
+    add ax, 63
+    jnc .ok
+    mov ax, 0xFFFF                  ; cannot happen: pt_fit caps the canvas
+.ok:
+    mov cl, 6
+    shr ax, cl
+    or ax, ax
+    jnz .out
+    inc ax
+.out:
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_alloc - claim everything a canvas of AX x DX needs (SPEC.md 50.3)
+; in:  AX = width, DX = height (already through pt_fit)
+; out: CF=1 nothing usable could be claimed; else the four claim segments are
+;      published and [pt_haveundo]/[pt_haveclip] say what was funded.
+;      Preserves AX and DX.
+;
+; The canvas is the only claim that must succeed. The undo image and the
+; clipboard are each worth exactly one feature, so each is asked for on its
+; own and a refusal simply switches that feature off - which is the same three
+; tiers the single-block version produced by arithmetic, without the
+; arithmetic. The scratch is a fixed 12KB and comes first, because the flood
+; fill and the file readers borrow it and neither can be given up.
+; -----------------------------------------------------------------------------
+pt_alloc:
+    push bx
+    push cx
+    push dx
+    push ax
+    call pt_paras                   ; CX = paragraphs one canvas needs
+    mov [pt_needp], cx
+
+    cmp word [pt_scseg], 0          ; scratch is claimed once and never moves
+    jne .canvas
+    mov ax, PT_SC_KB
+    call OSAPI_MEM_CLAIM
+    jc .fail
+    mov [pt_scseg], dx
+
+.canvas:
+    mov cx, [pt_needp]
+    call pt_kb_of
+    call OSAPI_MEM_CLAIM
+    jc .fail
+    mov [pt_base], dx
+    mov cl, 6
+    shl ax, cl                      ; what the claim actually holds...
+    mov [pt_smaxp], ax              ; ...which is >= [pt_needp]
+
+    call pt_alloc_undo
+    call pt_alloc_clip
+    pop ax
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.fail:
+    pop ax
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_alloc_undo - claim an undo image the size of the canvas claim
+; out: [pt_unseg]/[pt_undelta]/[pt_haveundo]; preserves all registers
+;
+; [pt_undelta] is a paragraph DELTA and not an address, so pt_urowset stays
+; one add per row even though the two blocks are now unrelated claims that
+; may sit either way round in memory (16-bit wraparound makes a negative
+; delta work unchanged).
+; -----------------------------------------------------------------------------
+pt_alloc_undo:
+    push ax
+    push cx
+    push dx
+    mov byte [pt_haveundo], 0
+    mov word [pt_unseg], 0
+    mov cx, [pt_smaxp]
+    call pt_kb_of
+    call OSAPI_MEM_CLAIM
+    jc .out
+    mov [pt_unseg], dx
+    sub dx, [pt_base]
+    mov [pt_undelta], dx
+    mov byte [pt_haveundo], 1
+.out:
+    call pt_menufix                 ; funded or not, the menu says which
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_alloc_clip - claim a clipboard: the canvas size if the heap will fund it,
+;                 the floor if not, nothing if not even that
+; out: [pt_cbseg]/[pt_cbparas]/[pt_haveclip]; preserves all registers
+;
+; The floor is what the GIF codec's tables need (PT_CLIPMINP), so a clipboard
+; that shrank to it still leaves Save Gif working while Cut/Copy of a large
+; selection starts refusing - which is what [pt_cbparas] already gates.
+; -----------------------------------------------------------------------------
+pt_alloc_clip:
+    push ax
+    push cx
+    push dx
+    mov byte [pt_haveclip], 0
+    mov word [pt_cbseg], 0
+    mov word [pt_cbparas], 0
+    mov cx, PT_CLIPMINP             ; the FLOOR to start with: the GIF codec's
+.try:                               ; tables need it and a paste needs nothing
+                                    ; until something has been copied, so a
+                                    ; canvas-sized clipboard nobody has used
+                                    ; is 60KB of dead claim (pt_clip_need
+                                    ; grows it when a Copy actually asks)
+    call pt_kb_of
+    call OSAPI_MEM_CLAIM
+    jnc .got
+    cmp cx, PT_CLIPMINP             ; already at the floor: no clipboard
+    jbe .out
+    mov cx, PT_CLIPMINP
+    jmp short .try
+.got:
+    mov [pt_cbseg], dx
+    mov cl, 6
+    shl ax, cl
+    mov [pt_cbparas], ax
+    mov byte [pt_haveclip], 1
+.out:
+    call pt_menufix                 ; funded or not, the menu says which
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_clip_need - make the clipboard claim at least AX paragraphs
+; in:  AX = paragraphs a Copy is about to need
+; out: CF=0 the claim is big enough (it may have been replaced), CF=1 it could
+;      not be grown and the old one is still intact; preserves all registers
+;
+; The clipboard starts at PT_CLIPMINP and grows here, the first time a Copy
+; asks for more. Growing means claiming the bigger block BEFORE freeing the
+; smaller one - the reverse would hand the memory back and then discover it
+; had gone to someone else - so the peak is old + new, both of which are small.
+; What is in the old clipboard is discarded either way, which is fine: this
+; runs at the top of the Copy that is about to overwrite it.
+; -----------------------------------------------------------------------------
+pt_clip_need:
+    push ax
+    push cx
+    push dx
+    cmp ax, [pt_cbparas]
+    jbe .ok
+    mov cx, ax
+    call pt_kb_of
+    call OSAPI_MEM_CLAIM            ; the bigger one first...
+    jc .no
+    push dx
+    call pt_free_clip               ; ...then give the smaller one back
+    pop dx
+    mov [pt_cbseg], dx
+    mov cl, 6
+    shl ax, cl
+    mov [pt_cbparas], ax
+    mov byte [pt_haveclip], 1
+.ok:
+    pop dx
+    pop cx
+    pop ax
+    clc
+    ret
+.no:
+    pop dx
+    pop cx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_free_undo / pt_free_clip - hand a claim back (SPEC.md 50.3)
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+pt_free_undo:
+    push dx
+    mov dx, [pt_unseg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+    mov word [pt_unseg], 0
+    mov byte [pt_haveundo], 0
+    mov byte [pt_undo_ok], 0
+    call pt_menufix             ; the menu says so now
+.out:
+    pop dx
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_alloc_lzw / pt_free_lzw - the GIF codec's tables, for one file only
+; out: CF=0 and [pt_lzwseg] is a claim; CF=1 nothing was funded
+;
+; Taken at the top of a GIF and released at the bottom, so a Paint that is not
+; converting a GIF holds none of it. 16KB is the READ direction's need; the
+; write direction uses 10KB of the same block.
+; -----------------------------------------------------------------------------
+pt_alloc_lzw:
+    push ax
+    push dx
+    mov word [pt_lzwseg], 0
+    mov ax, PT_LZW_KB
+    call OSAPI_MEM_CLAIM
+    jc .no
+    mov [pt_lzwseg], dx
+    pop dx
+    pop ax
+    clc
+    ret
+.no:
+    pop dx
+    pop ax
+    stc
+    ret
+
+pt_free_lzw:
+    push dx
+    mov dx, [pt_lzwseg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+    mov word [pt_lzwseg], 0
+.out:
+    pop dx
+    ret
+
+pt_free_clip:
+    push dx
+    mov dx, [pt_cbseg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+    mov word [pt_cbseg], 0
+    mov word [pt_cbparas], 0
+    mov byte [pt_haveclip], 0
+    mov word [pt_cbw], 0
+    call pt_menufix             ; the menu says so now
+.out:
+    pop dx
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_growmax - the biggest canvas a NEW claim could fund, in paragraphs
+; out: [pt_growp] set; preserves all registers
+;
+; What bounds a GROW, as opposed to what the block we already hold can carry.
+; A grow re-bases (pt_resize), and re-basing needs the new block and the old
+; one live at the same time - so the bound is the largest free RUN, not the
+; total free. Assumes the clipboard survives, which it does at every size
+; this can return.
+; -----------------------------------------------------------------------------
+pt_growmax:
+    push ax
+    push cx
+    call OSAPI_MEM_AVAIL            ; AX = largest free run, KB
+    cmp ax, PT_WANT_KB
+    jbe .capped
+    mov ax, PT_WANT_KB
+.capped:
+    mov cl, 6
+    shl ax, cl                      ; KB -> paragraphs
+    mov [pt_growp], ax
+    pop cx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -588,17 +823,23 @@ pt_paras:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_layout - adopt a canvas size: stride, row tables, undo offset
+; pt_layout - adopt a canvas size: stride and the row tables
 ; in:  AX = width, DX = height (already through pt_fit)
-; out: [pt_cw], [pt_ch], [pt_stride], [pt_cvparas], pt_rowseg/pt_rowoff built,
-;      [pt_undelta] set; preserves all registers
+; out: [pt_cw], [pt_ch], [pt_stride], [pt_cvparas], pt_rowseg/pt_rowoff built;
+;      preserves all registers
 ;
 ; The row tables are the whole of the addressing story. A canvas can be bigger
 ; than one 64KB segment - a 636x326 picture is 104KB - so a row is named by a
 ; (segment, offset) pair instead of a 16-bit offset: rowseg[y] is the paragraph
 ; it starts in, rowoff[y] the 0..15 bytes into that paragraph. The undo image
-; has the identical layout one whole canvas higher, so its row segment is
+; has the identical layout [pt_undelta] paragraphs away, so its row segment is
 ; rowseg[y] + [pt_undelta] and there is no second table.
+;
+; **[pt_undelta] is pt_alloc_undo's to set, not this routine's.** It used to be
+; stamped here as [pt_smaxp], from the era when one claim held the canvas and
+; the undo image back to back; they are two independent claims now and may sit
+; either way round, so writing the old constant here sent every undo row into
+; whatever the heap put after the canvas.
 ; -----------------------------------------------------------------------------
 pt_layout:
     push ax
@@ -612,8 +853,6 @@ pt_layout:
     call pt_paras                   ; BX = stride, CX = paragraphs
     mov [pt_stride], bx
     mov [pt_cvparas], cx
-    mov ax, [pt_smaxp]
-    mov [pt_undelta], ax
     ; --- row 0 is the LAST row in the file, so the walk runs downward -------
     mov ax, [pt_ch]
     dec ax
@@ -681,18 +920,6 @@ pt_urowset:
     mov es, bx
     pop bx
     ret
-
-; -----------------------------------------------------------------------------
-; (retired: pt_dupchk and pt_claim, the SPEC.md 20.8 dividend. They existed
-; because the canvas was at a FIXED address, so a second instance would have
-; drawn into the first one's picture - and, there being no close hook for a
-; task-less package, the claim record they used had to survive a stale magic
-; word left behind by a Paint that had already gone. With the canvas coming
-; from OSAPI_MEM_ALLOC there is no shared address to arbitrate: two Paints
-; get two grants, and a closed one's grant is force-freed by the kernel at
-; teardown. PT_M_DUP survives as an unreachable mode value rather than
-; renumbering the notice table around it.)
-; -----------------------------------------------------------------------------
 
 ; -----------------------------------------------------------------------------
 ; pt_canvas_init - stamp the DIB header, white the picture
@@ -817,60 +1044,31 @@ pt_bmp_hdr:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_font_init - find the ROM 8x8 font and remember where it is
+; pt_font_init - remember where the kernel keeps its 8x8 glyphs
 ; in:  nothing
-; out: [pt_fseg]:[pt_foff] -> glyph 0; preserves all registers
+; out: [pt_fseg]:[pt_foff] -> glyph 32 (the space); preserves all registers
 ;
-; The kernel's own font buffer is not in the API table, and the text tool
-; has to write glyph pixels into the CANVAS rather than onto the screen, so
-; it needs the bitmaps themselves. This is font_init's probe verbatim
-; (SPEC.md 6): zero ES:BP, ask int 10h AX=1130h BH=03h, and fall back to the
-; IBM ROM 8x8 set at F000:FA6E when a pre-EGA BIOS leaves the pair alone.
-; int 10h AH=11h reads a table pointer and touches no adapter register, so it
-; is safe long after the mode was set.
+; The text tool writes glyph pixels into the CANVAS rather than onto the
+; screen, so it needs the bitmaps themselves, not font_char. This used to be
+; font_init's probe re-run inside the package - int 10h AX=1130h with the
+; kernel's own F000:FA6E fallback behind it - forty lines to arrive at the
+; table the kernel had already built. OSAPI_FONT_GLYPHS hands it over
+; (SPEC.md 6/20.3), which also means the picture gets the same typeface the
+; UI does on every adapter, rather than whatever the BIOS happens to hold.
+;
+; The glyphs stay where they are and are fetched eight bytes at a time
+; (pt_gfetch) rather than copied into 760 bytes of our own bss, which is 3.8%
+; of everything this package is allowed to be.
 ; -----------------------------------------------------------------------------
 pt_font_init:
     push ax
-    push bx
     push cx
-    push dx
     push si
-    push di
-    push bp
-    push es
-    xor ax, ax
-    mov es, ax
-    xor bp, bp
-    mov ax, 0x1130
-    mov bh, 3
-    int 0x10                        ; ES:BP -> 8x8 font, if the BIOS has one
-    mov ax, es
-    or ax, bp
-    jnz .got
-    mov ax, 0xF000
-    mov es, ax
-    mov bp, 0xFA6E
-.got:
-    ; The font stays in ROM and glyphs are fetched eight bytes at a time
-    ; (pt_gfetch), rather than copied into 760 bytes of our own bss - which is
-    ; 3.8% of everything this package is allowed to be. Normalising the offset
-    ; into the segment first means the per-glyph `add` can never carry out of a
-    ; word, whatever the BIOS hands back.
-    mov ax, bp
-    mov cl, 4
-    shr ax, cl
-    mov bx, es
-    add bx, ax
-    mov [pt_fseg], bx
-    and bp, 15
-    mov [pt_foff], bp
-    pop es
-    pop bp
-    pop di
+    call OSAPI_FONT_GLYPHS          ; SI = the table's offset in KERNEL_SEG,
+    mov [pt_foff], si               ; AL = the first code it covers (32)
+    mov word [pt_fseg], KERNEL_SEG
     pop si
-    pop dx
     pop cx
-    pop bx
     pop ax
     ret
 
@@ -894,10 +1092,13 @@ pt_org:
     add ax, PT_CV_X
     mov [pt_cx0], ax
     mov [pt_cy0], dx
-    call OSAPI_WM_GEOM              ; the LIVE geometry is the truth about size,
-    mov [pt_contw], cx              ; and a resizable window's is rewritten
-    mov [pt_conth], dx              ; under us by ui_grow (SPEC.md 11.1). CF=1
-                                    ; means hidden, which a painter cannot be
+    mov ax, [es:bx + W_W]           ; the live record is the truth about size,
+    sub ax, 2                       ; and a resizable window's is rewritten
+    mov [pt_contw], ax              ; under us by ui_grow (SPEC.md 11.1).
+                                    ; It is KERNEL memory: ES (SPEC.md 20.1)
+    mov ax, [es:bx + W_H]
+    sub ax, TITLE_H + 1
+    mov [pt_conth], ax
     mov ax, [pt_ch]
     inc ax
     mov [pt_stripy], ax
@@ -1320,85 +1521,34 @@ pt_undo_swap:
 
 
 ; -----------------------------------------------------------------------------
-; pt_runend - extend a run of one colour along a canvas row
-; in:  AL = the run's colour, DX = its first x, BP = the row's byte offset,
-;      [pt_cx2] = last x to consider, ES = PT_CVSEG
-; out: DX = the run's last x, AL = the colour again
-; clobbers: BX, CX, DI, flags
-;
-; The blit's inner loop, and the reason a repaint is affordable at all: a run
-; of colour c is a run of BYTES equal to c|c<<4, so `repe scasb` walks it two
-; pixels at a time at 15 clocks a byte instead of a decode per pixel. The odd
-; ends are handled by hand - the first pixel when the run starts on a low
-; nibble, the last when it ends on a high one.
-; -----------------------------------------------------------------------------
-pt_runend:
-    mov bl, al
-    mov cl, 4
-    shl bl, cl
-    or bl, al                       ; BL = the byte a matching pair holds
-    mov cx, dx
-    test cl, 1
-    jz .even
-    inc cx                          ; the run's first pixel is a low nibble:
-.even:                              ; pair scanning starts at the next pixel
-    mov ax, [pt_cx2]
-    sub ax, cx
-    js .tail
-    inc ax
-    shr ax, 1                       ; AX = whole pairs available from CX
-    jz .tail
-    mov di, cx
-    shr di, 1
-    add di, bp                      ; ES:DI = the first pair's byte
-    mov dx, cx                      ; DX = the first pixel not yet in the run
-    mov [pt_scan0], di              ; SI belongs to the caller's row loop, so
-    mov cx, ax                      ; the scan's origin is parked in memory
-    mov al, bl
-    cld
-    repe scasb
-    mov ax, di                      ; `mov` leaves scasb's ZF alone, and the
-    jne .mism                       ; branch has to read it before anything
-    sub ax, [pt_scan0]              ; else does: every byte matched
-    jmp short .have
-.mism:
-    dec ax                          ; the mismatch sits at DI-1, so it is not
-    sub ax, [pt_scan0]              ; part of the run
-.have:
-    add ax, ax                      ; bytes matched -> pixels
-    add dx, ax                      ; DX = first pixel beyond the pair run
-.tail:
-    mov al, bl
-    and al, 0x0F                    ; the colour, back from the pair byte
-    cmp dx, [pt_cx2]
-    jg .done
-    mov di, dx
-    shr di, 1
-    add di, bp
-    mov ah, [es:di]
-    test dl, 1
-    jnz .lo
-    mov cl, 4
-    shr ah, cl
-.lo:
-    and ah, 0x0F
-    cmp ah, al
-    jne .done
-    inc dx                          ; the odd final nibble matches too
-.done:
-    dec dx                          ; DX = the last pixel IN the run
-    ret
-
-; -----------------------------------------------------------------------------
-; pt_blit - put a canvas rectangle on screen, run-coalesced
+; pt_blit - put a canvas rectangle on screen
 ; in:  [pt_rx1]..[pt_ry2] = canvas rect; gfx lock held
 ; out: nothing; preserves all registers
 ;
 ; The path for everything that cannot know what it changed: W_PAINT, undo,
-; paste, a file load, and erasing the text caret. One gfx_hline per run of
-; equal pixels, so a flat picture costs a call per row and a dithered one
-; costs more - which is the right shape for a paint program, where the
-; expensive case is also the rare one.
+; paste, a file load, and erasing the text caret. It is one OSAPI_GFX_BLIT4
+; per BAND of rows - usually one call for the whole rectangle - and the
+; kernel does the run coalescing, the clipping, the adapter dispatch and the
+; back buffer.
+;
+; This used to be the app's own coalescer (pt_runend, `repe scasb` over the
+; packed bytes) emitting one OSAPI_GFX_HLINE per run. That was the right
+; shape when a gfx call was near; since packages own a segment (SPEC.md 20.1)
+; every one of them is a FAR call, and a detailed picture makes thousands per
+; repaint. gfx_blit4 runs the identical scan from inside the kernel.
+;
+; Two things about the geometry:
+;
+;  - the source pointer must start on an EVEN pixel, because gfx_blit4 takes
+;    the first byte's high nibble as pixel 0. An odd left edge is therefore
+;    widened by one column to the left. That column is inside the canvas and
+;    inside the window (the frame always fits the picture, pt_wfollow), so it
+;    is redrawn with what it already held.
+;  - row y+1 sits one stride BELOW row y in memory - the canvas is stored as
+;    the BMP it will be written as, bottom row first - so the stride handed
+;    over is negative, and the band is addressed from its LAST row's
+;    segment so no row's offset can go below zero. [pt_brmax] is how many
+;    rows can share one segment that way; a 448x280 canvas is one band.
 ; -----------------------------------------------------------------------------
 pt_blit:
     push ax
@@ -1411,41 +1561,57 @@ pt_blit:
     push es
     call pt_clip
     jc .out
-    mov si, [pt_cy1]                ; SI = canvas row
-.row:
-    mov ax, si
-    call pt_rowset                  ; ES = the row's segment...
-    mov bp, di                      ; ...and BP its offset, for pt_runend
-    mov dx, [pt_cx1]
-.run:
-    mov bx, dx
+    mov ax, [pt_cx1]
+    and ax, 0xFFFE                  ; even left edge (see above)
+    mov [pt_bx0], ax
+    mov bx, [pt_cx2]
+    sub bx, ax
+    inc bx
+    mov [pt_bwid], bx               ; width in pixels
+    mov ax, 65520                   ; rows that fit one segment, worst-case
+    xor dx, dx                      ; 15-byte row offset included
+    div word [pt_stride]
+    or ax, ax
+    jnz .rmok
+    inc ax                          ; a stride past 64KB cannot happen (the
+.rmok:                              ; canvas is clamped well below), but a
+    mov [pt_brmax], ax              ; zero band height would not terminate
+    mov ax, [pt_cy1]
+    mov [pt_bsi], ax                ; the band's first row
+.band:
+    mov ax, [pt_cy2]
+    sub ax, [pt_bsi]
+    inc ax                          ; AX = rows left
+    cmp ax, [pt_brmax]
+    jbe .nok
+    mov ax, [pt_brmax]
+.nok:
+    mov [pt_bn], ax                 ; AX = rows in this band
+    add ax, [pt_bsi]
+    dec ax                          ; ...whose LAST row is the lowest address
+    call pt_rowset                  ; in it: ES:DI, and every other row of the
+    mov ax, [pt_bn]                 ; band is a positive offset from there
+    dec ax
+    mul word [pt_stride]            ; AX = (n-1) strides (bounded by pt_brmax,
+    add ax, di                      ; so DX is 0 and this cannot wrap)
+    mov bx, [pt_bx0]
     shr bx, 1
-    add bx, bp
-    mov al, [es:bx]
-    test dl, 1
-    jnz .lo
-    mov cl, 4
-    shr al, cl
-.lo:
-    and al, 0x0F                    ; AL = the run's colour
-    mov [pt_runx], dx
-    call pt_runend                  ; DX = run end, AL = colour
-    mov [pt_runy], dx
-    call OSAPI_SET_COLOR
-    mov ax, [pt_runx]
+    add ax, bx                      ; + the left edge, two pixels to a byte
+    mov si, ax                      ; ES:SI = the band's FIRST row
+    mov bp, [pt_stride]
+    neg bp                          ; down the picture is up the file
+    mov cx, [pt_bwid]
+    mov dx, [pt_bn]
+    mov ax, [pt_bx0]
     add ax, [pt_cx0]
-    mov bx, [pt_runy]
-    add bx, [pt_cx0]
-    mov dx, si
-    add dx, [pt_cy0]
-    call OSAPI_GFX_HLINE
-    mov dx, [pt_runy]
-    inc dx
-    cmp dx, [pt_cx2]
-    jbe .run
-    inc si
-    cmp si, [pt_cy2]
-    jbe .row
+    mov bx, [pt_bsi]
+    add bx, [pt_cy0]
+    call OSAPI_GFX_BLIT4
+    mov ax, [pt_bsi]
+    add ax, [pt_bn]
+    mov [pt_bsi], ax
+    cmp ax, [pt_cy2]
+    jbe .band
 .out:
     pop es
     pop bp
@@ -1835,8 +2001,14 @@ pt_draw_dims:
 ; control that is not drawn from being clickable.
 ; -----------------------------------------------------------------------------
 pt_szon:
-    cmp byte [pt_haveundo], 0
-    je .no                          ; a fixed canvas has nothing to type into
+    ; NOT gated on [pt_haveundo] any more. It was, on the reasoning that a
+    ; machine with no undo image had a fixed canvas - true when the only way
+    ; to restage an in-place resize was that buffer. It is not true now: a
+    ; resize that MOVES to a new block stages in the old one, pt_resize asks
+    ; for an undo image itself when it needs one, and a refusal it cannot
+    ; avoid is a toast rather than a wipe. Hiding the boxes made a large
+    ; canvas on a small machine unresizable and unexplained - the controls
+    ; simply were not there.
     push ax
     mov ax, PT_SZ_END
     cmp ax, [pt_ch]
@@ -2017,20 +2189,23 @@ pt_szapply:
     mov dx, ax
     mov ax, bx
     call pt_setsize
-    jc .refused
-    cmp byte [pt_szchg], 0
-    je .redraw                      ; nothing moved: just drop the caret
-    call pt_wfix                    ; the window follows the canvas...
-    mov bx, [pt_win]
-    call OSAPI_WM_FRONT             ; ...and one repaint shows both
-    jmp short .out
-.refused:
+    pushf                           ; CF = an axis was held back. That is NOT
+    cmp byte [pt_szchg], 0          ; the same as "nothing happened": a grow
+    je .nomove                      ; that shortens too takes the half it can,
+    mov bx, [pt_win]                ; and skipping the frame here left the
+    mov cx, [pt_cw]                 ; window at one size and the canvas at
+    add cx, PT_CHROME_W             ; another (SPEC.md 11.1)
+    mov dx, [pt_ch]
+    add dx, PT_CHROME_H
+    call OSAPI_WM_RESIZE
+    jmp short .said
+.nomove:
     call pt_draw_dims               ; the boxes go back to the live size
-    mov si, pt_s_crop
-    call pt_msg_show
-    jmp short .out
-.redraw:
-    call pt_draw_dims
+.said:
+    popf
+    jnc .out
+    call pt_szsi                    ; ...and the toast goes on top of whichever
+    call pt_msg_show                ; of the two just drew
 .out:
     pop di
     pop si
@@ -2446,12 +2621,27 @@ pt_paint:
     call pt_blit_all
     mov byte [pt_selshown], 0
     call pt_marq                    ; the marquee, if a selection is live
-    cmp byte [pt_apend], 0          ; a refused resize (pt_track), deferred to
-    je .out                         ; here - see the note there
+    cmp byte [pt_abon], 0           ; ...and the About card over the lot
+    je .noab
+    call pt_abdraw
+.noab:
+    cmp byte [pt_apend], 0          ; a refused resize, deferred to here
+    je .out
+    cmp byte [pt_apend], 2          ; 2 = pt_onsize held an axis back, so the
+    je .justsay                     ; frame the kernel drew is already right
     mov byte [pt_apend], 0
     mov bx, [pt_win]
     call OSAPI_WM_FRONT             ; the corrected frame, over a clean desktop
-    mov si, pt_s_crop               ; ...and the toast on top of the picture
+    cmp byte [pt_apsay], 0
+    je .out                         ; the frame was corrected but the canvas
+    call pt_szsi                    ; moved: no notice is owed (pt_track)
+    call pt_msg_show
+    jmp short .out
+.justsay:
+    mov byte [pt_apend], 0
+    cmp byte [pt_apsay], 0
+    je .out
+    call pt_szsi
     call pt_msg_show
     jmp short .out
 .notice:
@@ -2474,7 +2664,7 @@ pt_paint:
     pop cx
     pop bx
     pop ax
-    retf                            ; far-called W_PAINT (SPEC.md 20.5)
+    ret
 
 ; =============================================================================
 ; Screen-only drawing in canvas coordinates
@@ -2641,6 +2831,8 @@ pt_click:
     jne .out
     mov bx, si
     call pt_org
+    call pt_abdismiss               ; a click anywhere takes the credits down,
+    jc .out                         ; and is spent doing it
     call pt_msg_hide
     mov al, [pt_fbox]               ; a click may move the keyboard focus, and
     mov [pt_fbold], al              ; the group has to be redrawn if it does
@@ -2677,7 +2869,7 @@ pt_click:
     pop cx
     pop bx
     pop ax
-    retf                            ; far-called W_ONCLICK (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; pt_pal_click - a press in the tool column
@@ -3696,10 +3888,10 @@ pt_copy:
     mov cl, 4
     shr dx, cl
     or ax, dx                       ; AX = paragraphs
-    cmp ax, [pt_cbparas]
-    jbe .room
-    mov word [pt_cbw], 0            ; too big: no clipboard rather than a
-    mov word [pt_msgp], pt_s_bigsel ; corrupted one
+    call pt_clip_need               ; grow the claim if this needs more
+    jnc .room
+    mov word [pt_cbw], 0            ; it would not grow: no clipboard rather
+    mov word [pt_msgp], pt_s_bigsel ; than a corrupted one
     jmp short .out
 .room:
     mov ax, [pt_cbseg]
@@ -4456,8 +4648,8 @@ pt_type:
     shl ax, 1
     shl ax, 1
     shl ax, 1
-    add ax, 32 * 8                  ; [pt_gch] counts from the space
-    add ax, [pt_foff]
+    add ax, [pt_foff]               ; [pt_gch] counts from the space, and so
+                                    ; does the kernel's table (FONT_FIRST)
     call pt_gfetch                  ; ES belongs to the canvas the moment
     mov si, pt_gl8                  ; pt_rect starts drawing, so the glyph
                                     ; comes out of ROM before that, not during
@@ -4602,6 +4794,8 @@ pt_onkey:
     mov [pt_key], ax
     mov bx, si
     call pt_org
+    call pt_abdismiss               ; ...and so does any key
+    jc .out
     call pt_msg_hide
     mov ax, [pt_key]
     cmp byte [pt_fbox], 0           ; a size box has the keyboard: it gets the
@@ -4670,7 +4864,7 @@ pt_onkey:
     pop cx
     pop bx
     pop ax
-    retf                            ; far-called W_ONKEY (SPEC.md 20.5)
+    ret
 
 ; =============================================================================
 ; Menus (SPEC.md 12.2)
@@ -4682,11 +4876,6 @@ pt_onkey:
 ; returns.
 ; =============================================================================
 
-PT_MENU_APP  equ 0                  ; the bar cells, left to right: the app's
-PT_MENU_FILE equ 1                  ; own name first (About lives there, where
-PT_MENU_EDIT equ 2                  ; a Macintosh keeps it), then the three
-PT_MENU_DRAW equ 3                  ; working menus
-PT_MA_ABOUT  equ 0                  ; Paint
 PT_MF_NEW    equ 0                  ; File
 PT_MF_OPEN   equ 1
 PT_MF_SAVE   equ 2                  ; the format is the VERB, not the extension:
@@ -4710,30 +4899,19 @@ PT_MD_F4     equ 3
 ; out: nothing; clobbers AX/BX/CX/DX/DI/ES like any window callback
 ; -----------------------------------------------------------------------------
 pt_oncmd:
-    mov [pt_key], ax                ; the (menu, item) pair, out of AX's way
-; --- Paint -----------------------------------------------------------------
-; Ahead of the mode test on purpose: a machine that could not fund a canvas
-; still gets a window, still owns the bar, and is still entitled to be told
-; what this program is and who wrote it.
-    cmp ah, PT_MENU_APP
-    jne .live
-    cmp al, PT_MA_ABOUT
-    jne .out
-    call pt_about
-    jmp .out
-.live:
     cmp byte [pt_mode], PT_M_LIVE
     jne .out
+    mov [pt_key], ax                ; the (menu, item) pair, out of AX's way
     mov bx, si
     call pt_org
     call pt_msg_hide
     mov ax, [pt_key]
-    cmp ah, PT_MENU_EDIT
+    cmp ah, 1
     je .edit
-    cmp ah, PT_MENU_DRAW
+    cmp ah, 2
     je .draw
-    cmp ah, PT_MENU_FILE
-    jne .out
+    or ah, ah
+    jnz .out
 ; --- File ------------------------------------------------------------------
     cmp al, PT_MF_NEW
     je .new
@@ -4748,13 +4926,10 @@ pt_oncmd:
     cmp al, PT_MF_SAVEAG
     je .saveas_gif
 .out:
-    retf                            ; far-called menu handler (SPEC.md 20.5):
-                                    ; every arm below funnels back here rather
-                                    ; than tail-jumping into a near routine,
-                                    ; which a far callback can no longer do
+    ret
 .new:
     call pt_new
-    jmp short .out
+    ret
 .save_gif:
     mov byte [pt_sfmt], 1
     jmp short .gifchk
@@ -4768,7 +4943,7 @@ pt_oncmd:
     mov word [pt_msgp], pt_s_trunc  ; the file holds more than we loaded: one
     mov si, [pt_msgp]               ; click must not throw the rest away
     call pt_msg_show
-    jmp short .out
+    ret
 .save_go:
     mov si, pt_s_saving
     call pt_msg_show
@@ -4778,7 +4953,7 @@ pt_oncmd:
     or si, si                       ; Save As path, and this path has none
     jz .out
     call pt_msg_show                ; (which hides "Saving..." on the way in)
-    jmp short .out
+    ret
 .open:
     mov al, FDLG_OPEN
     jmp short .dlg
@@ -4807,8 +4982,8 @@ pt_oncmd:
     mov al, FDLG_SAVE
 .dlg:
     mov si, [pt_win]
-    call pt_dlg                     ; and NO repaint after it: the dialog is
-    jmp .out                        ; on top of us now (SPEC.md 38)
+    jmp pt_dlg                      ; tail call, and NO repaint after it: the
+                                    ; dialog is on top of us now (SPEC.md 38)
 ; --- Edit ------------------------------------------------------------------
 .edit:
     cmp al, PT_ME_UNDO
@@ -4821,36 +4996,29 @@ pt_oncmd:
     je .paste
     cmp al, PT_ME_CLEAR
     je .clear
-    jmp .out
+    ret
 .undo:
-    call pt_undo_cmd
-    jmp .out
+    jmp pt_undo_cmd
 .cut:
-    call pt_cmd_cut
-    jmp .out
+    jmp pt_cmd_cut
 .copy:
-    call pt_cmd_copy
-    jmp .out
+    jmp pt_cmd_copy
 .paste:
-    call pt_cmd_paste
-    jmp .out
+    jmp pt_cmd_paste
 .clear:
-    call pt_sel_clear
-    jmp .out
+    jmp pt_sel_clear
 ; --- Draw ------------------------------------------------------------------
 .draw:
     cmp al, PT_MD_FILL
     jne .font
     xor byte [pt_filled], 1
-    call pt_draw_strip
-    jmp .out
+    jmp pt_draw_strip
 .font:
     cmp al, PT_MD_F4
     ja .out
     dec al                          ; item 1/2/3 -> shift 0/1/2 -> scale 1/2/4
     call pt_setscale
-    call pt_draw_strip
-    jmp .out
+    jmp pt_draw_strip
 
 ; =============================================================================
 ; What a smaller machine does without (SPEC.md 42)
@@ -4861,11 +5029,12 @@ pt_oncmd:
 ; clipboard's size is a constant. There is deliberately no re-check on load or
 ; resize - there is nothing that could have changed.
 ;
-; The kernel's menus have no disabled state (SPEC.md 12.2), so an unavailable
-; command KEEPS its own label and gains "(Not Enough Ram)" after it - the item
-; still has to say what it would do - and the command itself answers with a
-; toast. Both doors have to be closed: the label is what the user sees, and the
-; toast is what the keyboard shortcut hits.
+; An unavailable command KEEPS its own label, gains "(NoRam)" after it and is
+; marked MENU_DIS so the kernel greys it and refuses to select it (SPEC.md
+; 12.2). The label still has to say what the command would do, and the greying
+; is what says it cannot right now. The command itself still answers with a
+; toast, because the keyboard shortcut never goes near a menu - both doors
+; have to be closed.
 ;
 ; Open is never one of them. The reader needs somewhere to put the file, and
 ; when there is no undo image it borrows the scratch area's flood-fill stack,
@@ -4882,129 +5051,47 @@ pt_oncmd:
 ; paint will do.
 ; -----------------------------------------------------------------------------
 pt_menufix:
+    ; BOTH ways, and called whenever a capability moves - not once at startup.
+    ; It used to set the disabled labels only, from the entry proc, so a
+    ; clipboard or undo image handed back to fund a bigger canvas left the
+    ; menu still offering what it could no longer do; and one re-funded later
+    ; stayed greyed for the rest of the session. This fork's kernel reads a
+    ; menu set LIVE out of the owning segment (SPEC.md 12.2), so a store here
+    ; is enough - there is nothing to re-register.
     cmp byte [pt_haveclip], 0
-    jne .undo
+    je .noclip
+    mov word [pt_it_edit + 2 * PT_ME_CUT], pt_i_cut
+    mov word [pt_it_edit + 2 * PT_ME_COPY], pt_i_copy
+    mov word [pt_it_edit + 2 * PT_ME_PASTE], pt_i_paste
+    jmp short .undo
+.noclip:
     mov word [pt_it_edit + 2 * PT_ME_CUT], pt_i_cut2
     mov word [pt_it_edit + 2 * PT_ME_COPY], pt_i_copy2
     mov word [pt_it_edit + 2 * PT_ME_PASTE], pt_i_paste2
+.undo:
+    ; The GIF items follow the LZW claim, which is taken per file and so
+    ; cannot be tested here - what decides them is whether the heap could
+    ; fund PT_LZW_KB at all, which is also what pt_save will ask.
+    push ax
+    push bx                         ; MEM_AVAIL answers in AX *and* BX, and
+    call OSAPI_MEM_AVAIL            ; AX = largest free run, KB
+    cmp ax, PT_LZW_KB               ; this routine promises to preserve both
+    pop bx
+    pop ax
+    jb .nogif
+    mov word [pt_it_file + 2 * PT_MF_SAVEG], pt_i_saveg
+    mov word [pt_it_file + 2 * PT_MF_SAVEAG], pt_i_saveag
+    jmp short .undo2
+.nogif:
     mov word [pt_it_file + 2 * PT_MF_SAVEG], pt_i_saveg2
     mov word [pt_it_file + 2 * PT_MF_SAVEAG], pt_i_saveag2
-.undo:
+.undo2:
     cmp byte [pt_haveundo], 0
-    jne .out
+    je .noundo
+    mov word [pt_it_edit + 2 * PT_ME_UNDO], pt_i_undo
+    ret
+.noundo:
     mov word [pt_it_edit + 2 * PT_ME_UNDO], pt_i_undo2
-.out:
-    ret
-
-; =============================================================================
-; About Paint (SPEC.md 42)
-;
-; A SECOND window, and one this package does not own an instance for - the
-; same species as the kernel's own file dialog (SPEC.md 38): wm_create'd
-; here, never bound to inst_tab, so it gets no dock tile and no Task Manager
-; row, and its close and minimize boxes both reduce to wm_hide. That is what
-; makes it cheap: there is no teardown path to write, the record is reused
-; every time About is chosen again, and when Paint itself closes the loader
-; sweeps the window by its wm_wseg creator stamp (SPEC.md 11/21) because the
-; segment it would otherwise dispatch into is about to be freed.
-;
-; Called from the menu handler, so the gfx lock is HELD - which is why the
-; window is created and shown inline, exactly as fdlg_open does, rather than
-; queued for later.
-; =============================================================================
-
-; -----------------------------------------------------------------------------
-; pt_about - put the About window up (or raise the one already made)
-; in:  gfx lock held, UI task; out: nothing; preserves all registers
-; -----------------------------------------------------------------------------
-pt_about:
-    push ax
-    push bx
-    push si
-    mov bx, [pt_about_win]
-    or bx, bx
-    jnz .raise
-    mov si, pt_about_tpl
-    call OSAPI_WM_CREATE            ; BX = window ptr, CF = table full
-    jc .out                         ; no slot: About is not worth a message
-    mov [pt_about_win], bx
-.raise:
-    call OSAPI_WM_SHOW              ; BX; a no-op if it is already up...
-    call OSAPI_WM_FRONT             ; ...and this is what raises it either way
-.out:
-    pop si
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; pt_about_paint - W_PAINT for the About window
-; in:  SI = window ptr; the content is already white-filled and the gfx lock
-;      is held (SPEC.md 11)
-; out: nothing
-;
-; Centred lines on a 12px pitch rather than the kernel About's 16, because
-; there are six of them and the whole window has to fit a CGA desktop of 132
-; rows (SPEC.md 39.2). Every line is re-measured, so unequal lengths are fine.
-; -----------------------------------------------------------------------------
-pt_about_paint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-
-    mov bx, si
-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
-    mov [pt_ab_x], ax
-    add dx, 10
-    mov [pt_ab_y], dx
-    call OSAPI_WM_GEOM              ; CX = content width (DX = height, unused)
-    mov [pt_ab_w], cx
-
-    push ax
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    pop ax
-
-    mov si, pt_about_lines
-    mov cx, PT_ABOUT_N
-.line:
-    push cx
-    push si
-    mov si, [si]
-    call pt_ab_center
-    pop si
-    add si, 2
-    add word [pt_ab_y], 12
-    pop cx
-    loop .line
-
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    retf                            ; far-called W_PAINT (SPEC.md 20.5)
-
-; -----------------------------------------------------------------------------
-; pt_ab_center - one string, centred in the About window's content
-; in:  SI = NUL string, [pt_ab_x]/[pt_ab_y]/[pt_ab_w]
-; out: nothing; clobbers AX, CX, DX and flags (an internal helper)
-; -----------------------------------------------------------------------------
-pt_ab_center:
-    call OSAPI_FONT_WIDTH           ; AX = the string's pixel width
-    mov cx, [pt_ab_w]
-    sub cx, ax
-    jns .fits
-    xor cx, cx                      ; wider than the window: flush left rather
-.fits:                              ; than off the left edge
-    shr cx, 1
-    add cx, [pt_ab_x]
-    mov dx, [pt_ab_y]
-    call OSAPI_FONT_STR
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5128,11 +5215,6 @@ pt_track:
     push bx
     push cx
     push dx
-    cmp byte [pt_haveundo], 0
-    jne .live
-    call pt_wfix                    ; no staging buffer: the frame is not
-    jmp short .out                  ; allowed to move the canvas at all
-.live:
     mov ax, [pt_contw]              ; the canvas the content asks for
     sub ax, PT_CV_X
     mov dx, [pt_conth]
@@ -5140,6 +5222,12 @@ pt_track:
     call pt_setsize
     jnc .out
     call pt_wfix                    ; the frame follows the canvas, not the drag
+    mov al, 1
+    cmp byte [pt_szchg], 0
+    je .say
+    xor al, al                      ; the canvas DID move, so the frame just
+.say:                               ; followed it - and that is the answer,
+    mov [pt_apsay], al              ; without a notice contradicting it
     mov byte [pt_apend], 1          ; and the toast goes up at the END of this
                                     ; paint, not here: the frame ui_grow already
                                     ; drew is the wrong size, so one repaint is
@@ -5158,16 +5246,29 @@ pt_track:
 ; out: CF=1 if a shrink was refused on either axis, [pt_szchg] = 1 if the canvas
 ;      actually changed; preserves all registers
 ;
-; The one place a size is decided, whichever way it was asked for: the grow box,
-; the Apply button, or Enter in a size box. Clamps to the screen, then to what
-; memory will fund, then to what the picture will stand to lose.
+; The one place a size is COMMITTED, whichever way it was asked for: the grow
+; box, the Apply button, or Enter in a size box. Deciding it is pt_sizeask's
+; job, because the kernel asks that question a step earlier now.
 ; -----------------------------------------------------------------------------
-pt_setsize:
-    push ax
+; pt_sizeask - what canvas size will we take, given this one was asked for?
+; in:  AX = wanted width, DX = wanted height (unclamped, may be negative)
+; out: AX/DX = the size we will accept, [pt_kept] = 1 if an axis was held back
+;      to save artwork; preserves every other register
+;
+; Clamps to the screen, then to what memory will fund, then to what the
+; picture will stand to lose. It decides and commits nothing, which is what
+; lets OSAPI_WM_ONSIZE (SPEC.md 11.1) run it before the kernel has drawn a
+; frame at either size - the answer and the commit used to be the same
+; routine, and that is the whole reason a refused drag needed a second
+; repaint to undo.
+; -----------------------------------------------------------------------------
+pt_sizeask:
     push bx
     push cx
-    push dx
-    mov byte [pt_szchg], 0
+    call pt_growmax                 ; what a NEW canvas claim could fund right
+                                    ; now - the bound on a GROW, since
+                                    ; pt_resize re-claims (the block we hold
+                                    ; is [pt_smaxp], and pt_fit takes either)
     cmp ax, PT_CW_MIN               ; signed: a tiny window makes this negative
     jge .w_ok
     mov ax, PT_CW_MIN
@@ -5184,17 +5285,31 @@ pt_setsize:
     jle .h_cap
     mov dx, [pt_chmax]
 .h_cap:
+    mov [pt_reqw], ax               ; what was asked for, before memory has
+    mov [pt_reqh], dx               ; its say
     call pt_fit                     ; what memory will actually fund
+    mov byte [pt_szmem], 0          ; ...and whether that is what bound it
+    cmp ax, [pt_reqw]
+    jb .ramcut
+    cmp dx, [pt_reqh]
+    jae .nocut
+.ramcut:
+    mov byte [pt_szmem], 1
+.nocut:
     ; --- and what the picture will stand to lose ----------------------------
     ; A shrink that would throw away ink is refused per axis: the other axis
     ; still moves, so widening while shortening does the half that is safe.
     mov byte [pt_kept], 0
+    mov byte [pt_pinw], 0
+    mov byte [pt_pinh], 0
     cmp ax, [pt_cw]
     jae .w_ok2                      ; growing (or level): nothing to lose
     call pt_lose_w
     jnc .w_ok2
     mov ax, [pt_cw]
     mov byte [pt_kept], 1
+    mov byte [pt_pinw], 1
+    mov byte [pt_szmem], 0          ; ink, not memory, is why THIS axis held
 .w_ok2:
     cmp dx, [pt_ch]
     jae .h_ok2
@@ -5202,17 +5317,139 @@ pt_setsize:
     jnc .h_ok2
     mov dx, [pt_ch]
     mov byte [pt_kept], 1
+    mov byte [pt_pinh], 1
+    mov byte [pt_szmem], 0
 .h_ok2:
+    ; --- and it has to FIT again ------------------------------------------
+    ; The guards above put an axis back to a size pt_fit had already ruled
+    ; out, so the pair may no longer be one memory can fund - and pt_resize
+    ; would then discover that, fail its claim and re-fit blindly, cropping
+    ; the very rows the guard just saved. Re-fit with the held axis pinned so
+    ; the other one gives instead, and never below what we already have, which
+    ; is fundable by definition. That makes typing 600 into the width box on a
+    ; machine that cannot fund it a partial grow, not a wipe.
+    cmp byte [pt_kept], 0
+    je .out
+    call pt_paras                   ; CX = paragraphs the pair now needs
+    cmp cx, [pt_smaxp]
+    jbe .out
+    cmp cx, [pt_growp]
+    jbe .out
+    call pt_fit
+    cmp ax, [pt_cw]
+    jae .w_ok3
+    mov ax, [pt_cw]
+.w_ok3:
+    cmp dx, [pt_ch]
+    jae .out
+    mov dx, [pt_ch]
+.out:
+    mov byte [pt_pinw], 0
+    mov byte [pt_pinh], 0
+    ; A grow memory would not fund is a refusal too. [pt_kept] used to mean
+    ; "ink held an axis back" alone, so a size memory simply could not reach
+    ; either said nothing at all or - through a [pt_szmem] left over from the
+    ; last commit - borrowed the crop toast and blamed the artwork.
+    cmp byte [pt_szmem], 0
+    je .askdone
+    cmp ax, [pt_cw]
+    jne .askdone
+    cmp dx, [pt_ch]
+    jne .askdone
+    mov byte [pt_kept], 1           ; nothing moved, and memory is why
+.askdone:
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_onsize - the resize negotiator the kernel calls before it commits a drag
+; in:  SI = our window, CX = proposed frame width, DX = proposed frame height;
+;      gfx lock held, nothing drawn yet
+; out: CX/DX = the frame size we will take; preserves every other register
+; -----------------------------------------------------------------------------
+pt_onsize:
+    push ax
+    push bx
+    push dx
+    cmp byte [pt_mode], PT_M_LIVE   ; a notice window has no canvas to resize
+    jne .fixed
+    mov ax, cx
+    sub ax, PT_CHROME_W             ; the canvas the proposal implies
+    sub dx, PT_CHROME_H
+    call pt_sizeask
+    ; --- is a notice owed? ONLY if nothing at all moved ---------------------
+    ; The guards are per axis, so a drag that narrows the window and refuses
+    ; to shorten it is a drag that was largely honoured - and a toast reading
+    ; "Would crop artwork" on top of a window that visibly just got smaller
+    ; says the opposite of what happened. The unshrunk axis is its own
+    ; explanation; the toast is for the case where the drag did nothing.
+    xor bl, bl
+    cmp byte [pt_kept], 0
+    je .sized
+    cmp ax, [pt_cw]
+    jne .sized
+    cmp dx, [pt_ch]
+    jne .sized
+    mov bl, 1
+.sized:
+    add ax, PT_CHROME_W             ; ...and the frame the answer implies
+    mov cx, ax
+    add dx, PT_CHROME_H
+    mov [pt_wanth], dx
+    mov [pt_apsay], bl
+    or bl, bl
+    jz .out
+    mov byte [pt_apend], 2          ; refused outright: the toast is owed, but
+    jmp short .out                  ; not the repaint that used to undo the
+.fixed:                             ; frame - there is nothing to undo now
+    mov cx, [pt_cw]
+    add cx, PT_CHROME_W
+    mov ax, [pt_ch]
+    add ax, PT_CHROME_H
+    mov [pt_wanth], ax
+.out:
+    pop dx
+    mov dx, [pt_wanth]
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_szsi - SI = the toast that explains the last refused resize
+; out: SI; clobbers flags and nothing else
+; -----------------------------------------------------------------------------
+pt_szsi:
+    mov si, pt_s_crop
+    cmp byte [pt_szmem], 0
+    je .out
+    mov si, pt_s_noram              ; refused for want of memory, not ink
+.out:
+    ret
+
+pt_setsize:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [pt_szchg], 0
+    call pt_sizeask                 ; AX/DX = the size we will take, and
+                                    ; [pt_szmem] = whether memory bound it
     cmp ax, [pt_cw]
     jne .go
     cmp dx, [pt_ch]
     je .done                        ; nothing moved; [pt_kept] says whether
 .go:                                ; that was a refusal
     call pt_resize
+    jc .noram                       ; no staging room: the canvas is untouched
     mov ax, [pt_ch]                 ; a canvas memory would not fund leaves the
     inc ax                          ; strip where the canvas ends, not where
     mov [pt_stripy], ax             ; the window ends - pt_org ran before this
     mov byte [pt_szchg], 1
+    jmp short .done
+.noram:
+    mov byte [pt_kept], 1           ; refused, and for a different reason than
+    mov byte [pt_szmem], 1          ; cropping - the toast says which
 .done:
     pop dx
     pop cx
@@ -5229,15 +5466,35 @@ pt_setsize:
 ; -----------------------------------------------------------------------------
 ; pt_resize - adopt a new canvas size, keeping the picture's top-left corner
 ; in:  AX = new width, DX = new height (both already through pt_fit)
-; out: the canvas relaid out and repopulated; undo, clipboard and selection
-;      dropped; preserves all registers
+; out: CF=0 the canvas is relaid out and repopulated, undo, clipboard and
+;      selection dropped; CF=1 nothing changed at all (see .nostage);
+;      preserves all registers
 ;
-; The old picture is staged in the UNDO IMAGE, which is why the buffer bases
-; are sized for the biggest canvas the machine allows and never move
-; (pt_geom): staging and the new layout then live in different segments and
-; there is no overlap to reason about. The old row geometry is recomputed
-; arithmetically for the read-back, because the tables now describe the new
-; one.
+; **It re-claims.** The undo image and the clipboard go back to the kernel
+; first - a resize drops both anyway - then a NEW canvas claim is taken, the
+; picture is copied across, the old claim is freed, and undo and clipboard are
+; asked for again at the new size. So the peak is the old canvas plus the new
+; one, and the steady state is what the picture actually needs.
+;
+; The version this replaces staged the old picture in the undo image, which is
+; what forced every claim to be sized for the largest canvas the screen could
+; ever show: the undo image had to be able to hold any canvas that could be
+; adopted later, and the bases had to be fixed for the staging to be safe.
+; Copying block-to-block needs no staging area at all, which also means a
+; resize no longer depends on there being an undo image - a machine that could
+; not fund one can still resize.
+;
+; If the new claim is refused the size is re-fitted against the block we
+; already hold and the old path runs, so a resize can degrade but never fail
+; half-done. The old row geometry is recomputed arithmetically for the
+; read-back, because the tables describe the new layout by then.
+;
+; The in-place path DOES need a staging area, and the refused grow above has
+; just handed the undo image back to make room for a claim that did not
+; happen - so it asks for one again before staging. If there is genuinely
+; none to be had the resize is REFUSED (CF=1), because the alternative is the
+; pt_wipe below erasing a picture there was nowhere to carry across, which is
+; exactly what typing an unfundable width into the size box used to do.
 ; -----------------------------------------------------------------------------
 pt_resize:
     push ax
@@ -5248,15 +5505,100 @@ pt_resize:
     push di
     push bp
     push es
-    push ax                         ; the new size, held across the staging
+    push ax                         ; the new size, held across the move
     push dx
-    ; --- stage every old row in the undo image ------------------------------
+
+    call pt_paras                   ; CX = paragraphs the new canvas needs
+    cmp cx, [pt_smaxp]
+    jbe .inplace                    ; the claim we hold already carries it
+
+    ; --- grow: give back what a resize drops, then claim the new canvas -----
+    call pt_free_undo
+    call pt_free_clip
+    call pt_kb_of                   ; AX = KB for CX paragraphs
+    push ax
+    call OSAPI_MEM_CLAIM            ; DX = the new base, CF = refused
+    pop bx                          ; BX = the KB, for the fallback below
+    jnc .moved
+
+    ; The heap could not hand us a SECOND block that big - but it may well be
+    ; able to extend the one we already hold, which needs only the DIFFERENCE
+    ; free rather than old + new at once. That is the whole fragmentation
+    ; case: plenty of total room, no single run wide enough for two canvases.
+    ; It costs the staging the two-block path avoids, so it is the fallback
+    ; and not the first move.
+    mov ax, bx
+    mov dx, [pt_base]
+    call OSAPI_MEM_REGROW           ; DX = where it is now (same = in place)
+    jc .refit
+    mov [pt_base], dx               ; unchanged unless it had to move, and the
+    mov ax, bx                      ; picture came with it either way
+    mov cl, 6
+    shl ax, cl
+    mov [pt_smaxp], ax
+    jmp .inplace                    ; one block now: stage as in-place does -
+                                    ; the wanted size is still on the stack,
+                                    ; which is exactly what .inplace expects
+
+.moved:
+    mov bx, [pt_base]
+    mov [pt_obase], bx              ; the old canvas: source, then freed
+    mov [pt_osrc], bx
+    mov [pt_base], dx
+    mov cl, 6
+    shl ax, cl
+    mov [pt_smaxp], ax
+    jmp short .geom
+
+.refit:
+    pop dx                          ; no bigger block after all: take what the
+    pop ax                          ; one we hold can carry
+    mov word [pt_growp], 0
+    call pt_fit
+    push ax
+    push dx
+
+.inplace:
+    mov word [pt_obase], 0          ; no move: stage in the undo image, the
+    cmp word [pt_unseg], 0          ; way this always did - and again the
+    jne .stage                      ; SEGMENT, because pt_osrc below is one
+    call pt_alloc_undo              ; ...so ASK for one, because the grow just
+    cmp word [pt_unseg], 0          ; handed it back to make room and was
+    je .nostage                     ; refused anyway (and a machine that could
+.stage:                             ; not fund one at startup may be able to)
+    mov ax, [pt_base]
+    add ax, [pt_undelta]
+    mov [pt_osrc], ax
     mov byte [pt_undo_off], 0
     call pt_undo_new
     xor ax, ax
     mov dx, [pt_ch]
     dec dx
     call pt_umark
+    jmp .geom
+
+    ; --- nowhere to stage the old picture ----------------------------------
+    ; A blank canvas has nothing to carry, so the resize goes ahead. Anything
+    ; else would be wiped white by the pt_wipe below and the artwork silently
+    ; destroyed - which is what a 384KB machine (no undo image) or a refused
+    ; grow used to do - so refuse the resize instead and leave the picture
+    ; exactly where it is. The caller reports it like any other refusal.
+.nostage:
+    xor ax, ax
+    call pt_lose_w                  ; is there any ink at all to lose?
+    jnc .blank
+    cmp byte [pt_haveclip], 0
+    jne .nocb
+    call pt_alloc_clip              ; put back what the grow attempt gave away
+.nocb:                              ; (pt_alloc_undo above already tried)
+    pop dx
+    pop ax
+    stc
+    jmp .out
+.blank:
+    mov word [pt_osrc], 0
+
+.geom:
     mov ax, [pt_cw]                 ; the old geometry, for the read-back
     mov [pt_ocw], ax
     mov ax, [pt_ch]
@@ -5269,8 +5611,11 @@ pt_resize:
     call pt_bmp_hdr
     mov al, CWHITE
     call pt_wipe                    ; whatever the old picture does not reach
+
     ; --- copy the overlap back, row by row ----------------------------------
-    mov bp, [pt_och]                ; BP = rows to carry across
+    cmp word [pt_osrc], 0
+    je .done                        ; nothing to carry across
+    mov bp, [pt_och]                ; BP = rows to carry
     cmp bp, [pt_ch]
     jbe .rows
     mov bp, [pt_ch]
@@ -5285,7 +5630,7 @@ pt_resize:
     cmp si, bp
     jae .done
     mov ax, si
-    call pt_orowset                 ; ES:DI = the staged old row
+    call pt_orowset                 ; ES:DI = the old row
     mov bx, di                      ; BX = its offset; [pt_orseg] its segment
     mov ax, si
     call pt_rowset                  ; ES:DI = the new row
@@ -5302,11 +5647,26 @@ pt_resize:
     inc si
     jmp short .row
 .done:
-    mov byte [pt_undo_ok], 0        ; the staging overwrote the undo image
-    mov word [pt_cbw], 0
+    mov dx, [pt_obase]              ; the old canvas has been read out of
+    or dx, dx
+    jz .kept
+    call OSAPI_MEM_FREE
+    mov word [pt_obase], 0
+    call pt_alloc_undo              ; ...and the two claims a resize drops come
+    call pt_alloc_clip              ; back at the new size, best effort
+.kept:
+    cmp byte [pt_haveclip], 0
+    jne .kept2
+    call pt_alloc_clip              ; the grow attempt gave it away; without
+.kept2:                             ; this a refused grow disabled Copy for
+                                    ; the rest of the session
+    mov byte [pt_undo_ok], 0        ; a resize is never undoable (the image it
+    mov word [pt_cbw], 0            ; would need was just reused or replaced)
     mov byte [pt_selon], 0
     mov byte [pt_selshown], 0
     call pt_text_end
+    clc
+.out:
     pop es
     pop bp
     pop di
@@ -5433,34 +5793,58 @@ pt_lose_h:
 
 ; -----------------------------------------------------------------------------
 ; pt_wfix - put the frame back where the canvas needs it
-; in:  [pt_cw], [pt_ch]; out: the window frame resized; preserves all
+; in:  [pt_cw], [pt_ch]; out: the window record's W_* updated; preserves all
 ;
-; How a grow-box drag is REFUSED. ui_grow has already rewritten the record
-; and repainted by the time this app sees anything, so a resize that would
-; crop artwork is undone afterwards rather than prevented - one
-; OSAPI_WM_RESIZE (SPEC.md 11.1), which re-clamps the position with the
-; size, and the toast in the next repaint says why. Until that slot existed
-; this wrote W_W/W_H in the kernel's record by hand, which is the liberty
-; docs/PAINT-NOTES.md used to describe and no longer has to.
+; The last place this app still writes the record itself, and the only one it
+; cannot give up: it runs from pt_track, which runs at the TOP of W_PAINT, and
+; OSAPI_WM_RESIZE repaints - calling it there would re-enter our own paint
+; proc. The grow box no longer arrives here at all (pt_onsize settles the size
+; before the kernel commits it); what does is a size change with no
+; negotiation in front of it, wm_fullscreen being the one in the tree. The
+; position is clamped as ui_drag would: fully on screen, above the dock.
 ; -----------------------------------------------------------------------------
 pt_wfix:
+    push ax
     push bx
-    push cx
     push dx
+    push es
+    mov ax, KERNEL_SEG          ; the record we are about to rewrite is the
+    mov es, ax                  ; kernel's (SPEC.md 20.1)
     mov bx, [pt_win]
-    mov cx, [pt_cw]
-    add cx, PT_CHROME_W
+    mov ax, [pt_cw]
+    add ax, PT_CHROME_W
+    mov [es:bx + W_W], ax
     mov dx, [pt_ch]
     add dx, PT_CHROME_H
-    call OSAPI_WM_RESIZE            ; CF=1 only if BX is not a window, which
-    pop dx                          ; it is - nothing to do about it either way
-    pop cx
+    mov [es:bx + W_H], dx
+    mov ax, [pt_scrw]               ; x + w <= screen width
+    sub ax, [es:bx + W_W]
+    jns .xc
+    xor ax, ax
+.xc:
+    cmp [es:bx + W_X], ax
+    jle .yc
+    mov [es:bx + W_X], ax
+.yc:
+    mov ax, [pt_dockr]              ; y + h <= the row the dock owns
+    sub ax, dx
+    cmp ax, MBAR_H
+    jge .yc2
+    mov ax, MBAR_H
+.yc2:
+    cmp [es:bx + W_Y], ax
+    jle .out
+    mov [es:bx + W_Y], ax
+.out:
+    pop es
+    pop dx
     pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_orowset - ES:DI = row AX of the staged OLD picture in the undo image
-; in:  AX = row, [pt_och]/[pt_ostride]
+; pt_orowset - ES:DI = row AX of the OLD picture, wherever pt_resize left it
+; in:  AX = row, [pt_och]/[pt_ostride], [pt_osrc] = its base segment
 ; out: ES:DI, and [pt_orseg] = ES; clobbers BX, flags
 ; -----------------------------------------------------------------------------
 pt_orowset:
@@ -5485,9 +5869,8 @@ pt_orowset:
     mov cl, 4
     shr dx, cl
     or ax, dx
-    add ax, [pt_base]
-    add ax, [pt_undelta]            ; ...in the undo image
-    mov es, ax
+    add ax, [pt_osrc]               ; the old canvas claim, or the undo image
+    mov es, ax                      ; it was staged in (pt_resize)
     mov [pt_orseg], ax
     pop dx
     pop cx
@@ -5511,6 +5894,193 @@ pt_num:
     mov [di], al
     inc di
     loop .emit
+    ret
+
+; =============================================================================
+; The About panel (SPEC.md 12.2/42) - a card drawn ON the content, not a
+; window of its own.
+;
+; `main`'s Paint makes a second window for this. That cannot be ported here
+; and it is worth writing down why: a package's SECOND window is never bound
+; to its instance record (only the entry's is - SPEC.md 21), so nothing
+; destroys it at teardown, and after Paint closes the kernel frees the region
+; while the window still carries W_SEG/W_DISP pointing into it. The next
+; repaint far-calls into whatever claimed that memory. There is also no
+; OSAPI_WM_DESTROY for a package to clean up with. A card drawn on our own
+; content has none of that: it is a flag and some pixels, and it dies with
+; the instance because it never existed apart from it. Solitaire and Arkanoid
+; do the same, so this is the fork's idiom rather than a workaround.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; pt_about - the OSAPI_ABOUT_SET handler (slot 0x01E0, SPEC.md 12.2)
+; in:  SI = our window; UI task, gfx lock HELD
+; out: nothing; preserves all registers
+;
+; Registered only in PT_M_LIVE (pt_entry), because dismissing it repaints
+; through pt_repaint and that draws a canvas. A Paint that could not claim
+; one has a notice on screen already saying so, which is the more useful
+; thing for it to be showing.
+; -----------------------------------------------------------------------------
+pt_about:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, si
+    call pt_org                     ; the window may have been dragged
+    mov byte [pt_abon], 1
+    call pt_abdraw                  ; straight on top - the content under it
+    pop di                          ; is untouched and comes back on dismiss
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_abdismiss - take the card down if it is up
+; in:  the origin already tracked; gfx lock held
+; out: CF = 1 it WAS up and the content has been repainted, so the caller
+;      swallows the click or key that dismissed it; CF = 0 otherwise.
+;      Preserves every register.
+; -----------------------------------------------------------------------------
+pt_abdismiss:
+    cmp byte [pt_abon], 0
+    je .none
+    mov byte [pt_abon], 0
+    call pt_repaint
+    stc
+    ret
+.none:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_abmeas - size and centre the card from the strings themselves
+; out: [pt_abw]/[pt_abh]/[pt_abl]/[pt_abt], content coords
+; preserves every register
+;
+; Measured, never pinned: the widest line decides the width. Both axes are
+; clamped to the content, because this window is RESIZABLE (SPEC.md 11.1) -
+; the card has to fit whatever the user has dragged it down to, not the size
+; it was measured against.
+; -----------------------------------------------------------------------------
+pt_abmeas:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    xor cx, cx                      ; CX = widest line, DI = line count
+    xor di, di
+    mov si, pt_ablines
+.next:
+    mov bx, [si]
+    or bx, bx
+    jz .done
+    inc di
+    add si, 2
+    push si
+    mov si, bx
+    call OSAPI_FONT_WIDTH           ; AX = pixel width
+    pop si
+    cmp ax, cx
+    jbe .next
+    mov cx, ax
+    jmp .next
+.done:
+    add cx, 24                      ; 12px of margin either side
+    cmp cx, [pt_contw]
+    jbe .wok
+    mov cx, [pt_contw]
+.wok:
+    mov [pt_abw], cx
+    mov ax, di                      ; height = lines * PT_ABLH + margins
+    mov bx, PT_ABLH
+    mul bx
+    add ax, 16
+    cmp ax, [pt_conth]
+    jbe .hok
+    mov ax, [pt_conth]
+.hok:
+    mov [pt_abh], ax
+    mov ax, [pt_contw]
+    sub ax, [pt_abw]
+    shr ax, 1
+    mov [pt_abl], ax
+    mov ax, [pt_conth]
+    sub ax, [pt_abh]
+    shr ax, 1
+    mov [pt_abt], ax
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; pt_abdraw - the card: white fill, black frame, the credit centred in it
+; in:  the origin already tracked; gfx lock held
+; out: nothing; preserves all registers
+;
+; Every line is centred on the CARD rather than on the content, so the block
+; still reads as one card when the card has been clamped narrower than the
+; text wanted.
+; -----------------------------------------------------------------------------
+pt_abdraw:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call pt_abmeas
+    mov ax, [pt_abl]                ; pt_cwell: fill in [pt_pen], frame black
+    mov bx, [pt_abt]
+    mov cx, [pt_abw]
+    dec cx                          ; it takes width-1 / height-1
+    mov dx, [pt_abh]
+    dec dx
+    mov byte [pt_pen], CWHITE
+    call pt_cwell
+    mov si, pt_ablines
+    mov di, [pt_abt]
+    add di, 8                       ; the first baseline, inside the frame
+.line:
+    mov bx, [si]
+    or bx, bx
+    jz .out
+    add si, 2
+    push si
+    mov si, bx
+    call OSAPI_FONT_WIDTH           ; AX = this line's width
+    mov cx, [pt_abw]
+    sub cx, ax
+    jns .fits
+    xor cx, cx                      ; wider than the card: flush left rather
+.fits:                              ; than off its left edge
+    shr cx, 1
+    add cx, [pt_abl]
+    mov dx, di
+    mov byte [pt_pen], CBLACK
+    call pt_ctext                   ; content coords; it adds the origin
+    pop si
+    add di, PT_ABLH
+    jmp .line
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5541,6 +6111,10 @@ pt_repaint:
     mov byte [pt_msgon], 0
     mov byte [pt_careton], 0
     call pt_marq
+    cmp byte [pt_abon], 0           ; the card sits on top of everything, so
+    je .noab                        ; it is drawn last and by every repaint -
+    call pt_abdraw                  ; otherwise a paint triggered while it is
+.noab:                              ; up would quietly erase it
     mov bx, [pt_win]
     call OSAPI_WM_GROW              ; the white-fill idiom ate the grow box
                                     ; (SPEC.md 11.1) - put it back
@@ -5589,23 +6163,21 @@ pt_dlg:
 
 ; -----------------------------------------------------------------------------
 ; pt_ondlg - the dialog's completion callback (SPEC.md 38.6)
-; in:  AL = the mode it ran in, SI = our window ptr, ES:DI = the chosen name
-;      (ES = KERNEL_SEG since v3 - the buffer is the kernel's, so it is read
-;      through ES and never through DS); UI task, gfx lock HELD, the dialog
-;      window already destroyed
+; in:  AL = the mode it ran in, SI = our window ptr, DI = the chosen name;
+;      UI task, gfx lock HELD, the dialog window already destroyed
 ; out: nothing; no register need be preserved
 ; -----------------------------------------------------------------------------
 pt_ondlg:
     mov [pt_dmode], al              ; to MEMORY, not to a register: the name
                                     ; copy below wants AL and pt_org wants BX,
                                     ; so the mode has to outlive both
-    mov si, di                      ; ES:SI = the kernel's name buffer
+    mov si, di
     mov di, pt_name
     mov cx, PT_NAMEMAX              ; bounded even though SPEC.md 38.6 promises
 .copy:                              ; 12 or fewer: a package that trusts a
-    mov al, [es:si]                 ; promise is a package with an overrun
-    mov [di], al
-    or al, al
+    mov al, [es:si]                 ; promise is a package with an overrun.
+    mov [di], al                    ; The name buffer is the KERNEL's and ES
+    or al, al                       ; points there on entry (SPEC.md 20.1/38.6)
     jz .copied
     inc si
     inc di
@@ -5635,8 +6207,11 @@ pt_ondlg:
     je .plain                       ; repaint the DESKTOP too, not just us:
     mov byte [pt_wchg], 0           ; the old frame is still on the glass
     mov bx, [pt_win]
-    call OSAPI_WM_FRONT             ; raise + repaint all (SPEC.md 11), which
-    jmp short .toast                ; re-enters our W_PAINT with the new size
+    mov cx, [pt_tpl + WT_W]
+    mov dx, [pt_tpl + WT_H]
+    call OSAPI_WM_RESIZE            ; clamp, re-fit and repaint the lot
+    jmp short .toast                ; (SPEC.md 11.1), which re-enters our
+                                    ; W_PAINT at the picture's size
 .plain:
     call pt_repaint
 .toast:
@@ -5645,7 +6220,7 @@ pt_ondlg:
     jz .out
     call pt_msg_show
 .out:
-    retf                            ; far-called completion (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; pt_save - write pt_name out in the format the menu verb asked for
@@ -5668,12 +6243,13 @@ pt_save:
     mov si, pt_name
     cmp byte [pt_sfmt], 0
     je .bmp
-    cmp byte [pt_haveclip], 0       ; the LZW tables live in the clipboard
-    jne .gif
+    call pt_alloc_lzw               ; the tables, for the length of this file
+    jnc .gif
     mov word [pt_msgp], pt_s_ng
     jmp .out
 .gif:
     call pt_gif_out
+    call pt_free_lzw                ; ...and straight back
     jmp .out
 .bmp:
     ; --- one write, so the whole file must fit the API's 64KB (SPEC.md 18.4)
@@ -5721,22 +6297,21 @@ pt_load:
     push di
     push es
     mov word [pt_msgp], pt_s_opened
-    cmp byte [pt_haveundo], 0
-    je .scratch
-    mov ax, [pt_unseg]              ; the file is staged in the UNDO image: it
-    mov es, ax                      ; is the biggest single buffer we have, and
+    cmp word [pt_unseg], 0          ; the SEGMENT, not [pt_haveundo]: what this
+    je .scratch                     ; needs is a buffer it can ADDRESS, and the
+    mov ax, [pt_unseg]              ; file is staged in the UNDO image: it
+    mov [pt_gseg], ax               ; is the biggest single buffer we have, and
+    mov es, ax                      ; the decoder reads whichever this was
     xor bx, bx                      ; a load invalidates undo anyway
-    mov cx, [pt_smaxp]              ; its capacity, in bytes, capped at what a
-    cmp cx, 4096                    ; 16-bit count can express
-    jb .cap
-    mov cx, 0xFFFF
+    mov ax, [pt_smaxp]              ; its capacity, in bytes - 32-bit now, so
+    xor dx, dx                      ; a canvas block bigger than 64KB is not
+    mov cx, 4                       ; truncated to describe itself
+.p2b:
+    shl ax, 1
+    rcl dx, 1
+    loop .p2b
+    mov cx, ax
     jmp short .rd
-.cap:
-    shl cx, 1                       ; paragraphs -> bytes. NOT `mov cl,4` and a
-    shl cx, 1                       ; shift by CL: that overwrites the low byte
-    shl cx, 1                       ; of the very value being shifted, which on
-    shl cx, 1                       ; a small-canvas machine handed the reader a
-    jmp short .rd                   ; capacity up to 64 bytes past its buffer
 .scratch:
     ; No undo image (SPEC.md 42), so the scratch area lends its flood-fill
     ; stack - idle during a load, and re-initialised by the next fill. One
@@ -5744,17 +6319,38 @@ pt_load:
     ; offset 0 of a segment, which is what both decoders assume.
     mov ax, [pt_scseg]
     inc ax
+    mov [pt_gseg], ax
     mov es, ax
     xor bx, bx
     mov cx, PT_SC_KB * 1024 - 16
+    xor dx, dx
 .rd:
-    call OSAPI_FILE_READ
+    ; READBIG, not READ: the destination advances by SEGMENT (SPEC.md 18.4.1),
+    ; so a picture whose file runs past 64KB - which a full-screen canvas's
+    ; BMP does - loads in one call instead of being refused. ES is the base
+    ; segment and the buffer starts at ES:0000, which is what both decoders
+    ; already assume; DX:CX is the capacity, and the size comes back in DX:AX.
+    call OSAPI_FILE_READBIG
     jnc .got
     call pt_ferr
     jmp short .out
 .got:
+    ; DX:AX is the file's 32-bit size. Every check downstream is 16-bit, and
+    ; every one of them is an UPPER bound - "the pixel data must be inside
+    ; what we read" - so a file at or past 64KB saturates to 0xFFFF rather
+    ; than wrapping. That is conservative by construction: READBIG either
+    ; read the whole file or refused, so at >= 64KB every 16-bit offset the
+    ; decoders can form is inside the buffer. (The BMP decoder still refuses
+    ; more than 64KB of PIXELS on its own account - a separate ceiling, and
+    ; not one readbig was ever going to lift.)
+    or dx, dx
+    jz .sz16
+    mov ax, 0xFFFF
+    jmp short .szok
+.sz16:
     cmp ax, 64
     jb .bad
+.szok:
     cmp word [es:0], 0x4D42         ; 'BM'
     je .bmp
     cmp word [es:0], 0x4947         ; 'GI'
@@ -5768,12 +6364,15 @@ pt_load:
     mov word [pt_msgp], pt_s_nofmt
     jmp short .out
 .gifin:
-    cmp byte [pt_haveclip], 0       ; the LZW tables live in the clipboard
-    jne .gif
+    call pt_alloc_lzw               ; the tables, for the length of this file
+    jnc .gif
     mov word [pt_msgp], pt_s_ng
     jmp short .out
 .gif:
     call pt_gif_in                  ; the magic decides, not the extension
+    pushf
+    call pt_free_lzw                ; ...and straight back, error or not
+    popf
     jnc .out
     mov [pt_msgp], si
     jmp short .out
@@ -6285,29 +6884,19 @@ pt_adopt:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_wfollow - the window takes the canvas's size and position
-; out: [pt_wchg] = 1, so the caller repaints the desktop too; preserves all
+; pt_wfollow - the window is to take the canvas's size
+; out: pt_tpl sized from the canvas, [pt_wchg] = 1 so the caller asks the
+;      kernel for it; preserves all registers
+;
+; It used to write W_W/W_H/W_X/W_Y in the record itself - the second of the
+; two liberties docs/PAINT-NOTES.md recorded - and OSAPI_WM_RESIZE
+; (SPEC.md 11.1) retired it. The caller does the asking rather than this
+; routine, because it is deep inside a decoder and the answer is a full
+; repaint.
 ; -----------------------------------------------------------------------------
 pt_wfollow:
-    push bx
-    push cx
-    push dx
-    call pt_wsize                   ; the template carries the new frame...
-    mov bx, [pt_win]
-    mov cx, [pt_tpl + WT_W]
-    mov dx, [pt_tpl + WT_H]
-    call OSAPI_WM_RESIZE            ; ...and the kernel adopts it, clamping
-                                    ; the position with it (SPEC.md 11.1).
-                                    ; pt_wsize's own centred WT_X is not
-                                    ; passed on: a window the user has moved
-                                    ; should not jump back to the middle of
-                                    ; the screen because the picture changed
-                                    ; size, and wm_fit only moves it if the
-                                    ; new size would push it off
+    call pt_wsize
     mov byte [pt_wchg], 1
-    pop dx
-    pop cx
-    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -6666,7 +7255,7 @@ pt_gbits:
     cmp bx, [pt_glen]
     jae .end
     add bx, [pt_gbase]
-    mov ax, [pt_unseg]
+    mov ax, [pt_gseg]
     mov es, ax
     mov ax, [es:bx]
     mov dl, [es:bx+2]
@@ -6866,7 +7455,7 @@ pt_gdec:
     push si
     push di
     push es
-    mov ax, [pt_cbseg]
+    mov ax, [pt_lzwseg]
     mov es, ax                      ; the tables, for the whole loop
     mov word [pt_gbyte], 0
     mov byte [pt_gbit], 0
@@ -7008,7 +7597,7 @@ pt_gwr:
     mov bx, [pt_gout]
     cmp bx, [pt_gcap]
     jae .full
-    mov ax, [pt_unseg]
+    mov ax, [pt_gseg]
     mov es, ax
     mov [es:bx], cl
     inc bx
@@ -7124,7 +7713,7 @@ pt_gflush:
     inc ax
     cmp ax, [pt_gcap]
     ja .full
-    mov ax, [pt_unseg]
+    mov ax, [pt_gseg]
     mov es, ax
     mov di, [pt_gout]
     mov al, cl
@@ -7332,7 +7921,7 @@ pt_genc:
     push si
     push di
     push es
-    mov ax, [pt_cbseg]
+    mov ax, [pt_lzwseg]
     mov es, ax                      ; the tables, for the whole loop
     mov byte [pt_gbn], 0
     mov word [pt_gacc], 0
@@ -7419,7 +8008,34 @@ pt_gif_out:
     push si
     push di
     push es
-    mov ax, [pt_smaxp]
+    ; Where the file is BUILT, and how much of it there is room for. It used
+    ; to be [pt_unseg] unconditionally, with pt_save gating only on the
+    ; clipboard - so on a machine whose undo image had been handed back to
+    ; fund a big canvas this encoded the GIF at 0000:0000, over the interrupt
+    ; vector table, and the machine died mid-save. The load path already had
+    ; the answer (pt_load's .scratch): stage in the flood-fill scratch, which
+    ; is idle here and re-initialised by the next fill.
+    ;
+    ; **The gate is [pt_unseg], not [pt_haveundo].** The two agree today, so
+    ; testing the flag happens to work - but they are different questions.
+    ; [pt_haveundo] means "the user can Undo" and is what the menu and pt_gate
+    ; ask; this needs "there is a buffer I can put a segment register on", and
+    ; the only variable that means that is the segment. The three sites that
+    ; stage in the undo image (here, pt_load, and pt_resize's in-place path)
+    ; all ask the second question, so all three test the segment. The moment
+    ; anything makes an undo image that is not conventionally addressable,
+    ; testing the flag puts ES back at 0000 and this fault returns - which is
+    ; not hypothetical: it is what the paragraph above is about.
+    mov ax, [pt_unseg]
+    mov cx, [pt_smaxp]
+    cmp word [pt_unseg], 0          ; the SEGMENT, not [pt_haveundo] - see the
+    jne .havestage                  ; note above: this is the test that stops
+    mov ax, [pt_scseg]              ; it encoding at 0000:0000. One paragraph
+    inc ax                          ; claim record survives and the buffer
+    mov cx, PT_SC_KB * 64 - 1       ; still starts at offset 0 of a segment
+.havestage:
+    mov [pt_gseg], ax
+    mov ax, cx
     cmp ax, 4095
     jae .big
     mov cl, 4
@@ -7442,7 +8058,7 @@ pt_gif_out:
     cmp byte [pt_govf], 0
     jne .toobig
     mov cx, [pt_gout]
-    mov ax, [pt_unseg]
+    mov ax, [pt_gseg]
     mov es, ax
     xor bx, bx
     call OSAPI_FILE_WRITE           ; SI is still the name
@@ -7469,8 +8085,23 @@ pt_gif_out:
 ; Data
 ; =============================================================================
 
-pt_s_title:  db 'Paint', 0          ; the title's stem: the live title carries
-                                    ; the canvas size after it
+pt_s_title:  db 'Paint', 0          ; the title's stem, and the fingerprint
+                                    ; pt_dupchk matches on
+pt_appname:  db 'Paint', 0          ; the menu bar's app label (SPEC.md 12.2)
+
+; --- the About card (SPEC.md 12.2/42) ---------------------------------------
+; A 12px line pitch rather than the kernel About's 16: six lines have to fit
+; a CGA content of about 132 rows (SPEC.md 39.2), and pt_abmeas clamps to
+; whatever the window has actually been resized to anyway.
+PT_ABLH     equ 12
+pt_ablines:
+    dw pt_ab_1, pt_ab_2, pt_ab_3, pt_ab_4, pt_ab_5, pt_ab_6, 0
+pt_ab_1:     db 'Paint for os8088', 0
+pt_ab_2:     db 'a bitmap editor for the 8086', 0
+pt_ab_3:     db 0                   ; a blank line is a line with no glyphs
+pt_ab_4:     db 'Paint, and the fork it came', 0
+pt_ab_5:     db 'from, contributed by Elendilon', 0
+pt_ab_6:     db 'github.com/Elendilon', 0
 pt_s_defname: db 'PICTURE.BMP', 0
 pt_s_defgif:  db 'PICTURE.GIF', 0
 pt_s_ebmp:    db 'BMP', 0
@@ -7479,6 +8110,7 @@ pt_g_magic:   db 'GIF87a'
 pt_gstep:     db 8, 8, 4, 2         ; the interlaced row passes: step...
 pt_gstart:    db 0, 4, 2, 1         ; ...and where each one starts
 pt_s_crop:   db 'Would crop artwork - erase it first', 0
+pt_s_noram:  db 'Not enough memory to resize', 0
 pt_s_loading: db 'Loading...', 0
 pt_s_saving: db 'Saving...', 0
 pt_s_wlab:   db 'W', 0
@@ -7500,62 +8132,19 @@ pt_tpl:
     dw pt_click                     ; WT_ONCLICK
 
 ; --- menus (SPEC.md 12.2) ----------------------------------------------------
-; The APP NAME is a menu here, not the bar's plain label. SPEC.md 12.2 draws
-; AM_NAME at MENU_NAME_X and then hangs the app's cells to its right, so a
-; set whose name is the EMPTY string and whose first menu is titled 'Paint'
-; puts a pull-down exactly where the label would have been - which is where
-; a Macintosh keeps About, and the only place a user looks for it. Nothing
-; else identifies the app by AM_NAME: the dock tile, the Task Manager row and
-; the loader all read the package header's name (SPEC.md 29.1).
-;
-; MENU_APPMAX is 4 and this uses all four. A fifth would be dropped whole
-; and silently, so anything new goes INSIDE one of these.
-    OS88_MENUSET pt_menus, pt_s_noname, pt_oncmd
-        OS88_MENU pt_s_app,  pt_it_app,  1
+    OS88_MENUSET pt_menus, pt_appname, pt_oncmd
         OS88_MENU pt_s_file, pt_it_file, 6
         OS88_MENU pt_s_edit, pt_it_edit, 5
         OS88_MENU pt_s_draw, pt_it_draw, 4
     OS88_MENUSET_END pt_menus
 
-; --- the About window (SPEC.md 42) -----------------------------------------
-; Sized for its longest line (26 glyphs = 208px) plus a margin, and short
-; enough that a CGA desktop's 132 rows hold it whole; wm_fit clamps anything
-; this gets wrong on an adapter it was not measured against (SPEC.md 39.7).
-PT_ABOUT_W  equ 248
-PT_ABOUT_H  equ 6 * 12 + 20 + TITLE_H + 1
-PT_ABOUT_N  equ 6                   ; lines in pt_about_lines
-
-pt_about_tpl:
-    dw 150                          ; WT_X
-    dw 90                           ; WT_Y
-    dw PT_ABOUT_W                   ; WT_W
-    dw PT_ABOUT_H                   ; WT_H
-    dw pt_s_abttl                   ; WT_TITLE
-    dw pt_about_paint               ; WT_PAINT
-    dw 0                            ; WT_ONKEY  - nothing to type at
-    dw 0                            ; WT_ONCLICK- and nothing to click
-
-pt_s_abttl:  db 'About Paint', 0
-pt_about_lines:
-    dw pt_ab_1, pt_ab_2, pt_ab_3, pt_ab_4, pt_ab_5, pt_ab_6
-pt_ab_1:     db 'Paint for os8088', 0
-pt_ab_2:     db 'a bitmap editor for the 8086', 0
-pt_ab_3:     db 0
-pt_ab_4:     db 'Paint, and the fork it came', 0
-pt_ab_5:     db 'from, contributed by Elendilon', 0
-pt_ab_6:     db 'github.com/Elendilon', 0
-
-pt_s_noname: db 0                   ; the bar label, deliberately empty
-pt_s_app:    db 'Paint', 0
 pt_s_file:   db 'File', 0
 pt_s_edit:   db 'Edit', 0
 pt_s_draw:   db 'Draw', 0
-pt_it_app:   dw pt_i_about
 pt_it_file:  dw pt_i_new, pt_i_open, pt_i_save, pt_i_saveas
              dw pt_i_saveg, pt_i_saveag
 pt_it_edit:  dw pt_i_undo, pt_i_cut, pt_i_copy, pt_i_paste, pt_i_clear
 pt_it_draw:  dw pt_i_fill, pt_i_f1, pt_i_f2, pt_i_f4
-pt_i_about:  db 'About Paint', 0
 pt_i_new:    db 'New', 0
 pt_i_open:   db 'Open...', 0
 pt_i_save:   db 'Save Bmp', 0
@@ -7563,15 +8152,16 @@ pt_i_saveas: db 'Save as Bmp...', 0
 pt_i_saveg:  db 'Save Gif', 0
 pt_i_saveag: db 'Save as Gif...', 0
 ; --- and the same items on a machine that cannot fund them (SPEC.md 42) -----
-; MENU_STRMAX is 19 characters and the kernel truncates past it in silence,
-; so these say "(no RAM)" rather than the "(Not Enough Ram)" that would have
-; been cut mid-word in the pull-down.
-pt_i_undo2:   db 'Undo/Redo (no RAM)', 0
-pt_i_cut2:    db 'Cut (no RAM)', 0
-pt_i_copy2:   db 'Copy (no RAM)', 0
-pt_i_paste2:  db 'Paste (no RAM)', 0
-pt_i_saveg2:  db 'Save Gif (no RAM)', 0
-pt_i_saveag2: db 'Save as Gif(no RAM)', 0
+; The leading MENU_DIS byte is the kernel's disabled marker (SPEC.md 12.2):
+; the item draws grey and cannot be highlighted or picked. The suffix stays,
+; shortened - greying says "not now", the words say why - and at 24 glyphs
+; the longest of them fits the pull-down without truncation.
+pt_i_undo2:   db MENU_DIS, 'Undo / Redo (NoRam)', 0
+pt_i_cut2:    db MENU_DIS, 'Cut (NoRam)', 0
+pt_i_copy2:   db MENU_DIS, 'Copy (NoRam)', 0
+pt_i_paste2:  db MENU_DIS, 'Paste (NoRam)', 0
+pt_i_saveg2:  db MENU_DIS, 'Save Gif (NoRam)', 0
+pt_i_saveag2: db MENU_DIS, 'Save as Gif... (NoRam)', 0
 pt_i_undo:   db 'Undo / Redo', 0
 pt_i_cut:    db 'Cut', 0
 pt_i_copy:   db 'Copy', 0
@@ -7583,9 +8173,8 @@ pt_i_f2:     db 'Text Size 2x', 0
 pt_i_f4:     db 'Text Size 4x', 0
 
 ; --- the notice windows (indexed by [pt_mode] - 1) ---------------------------
-pt_notice:   dw pt_s_nomem, pt_s_dup, pt_s_small
+pt_notice:   dw pt_s_nomem, pt_s_small
 pt_s_nomem:  db 'Not enough memory.', 0
-pt_s_dup:    db 'Paint is already running.', 0   ; PT_M_DUP: unreachable
 pt_s_small:  db 'The screen is too small.', 0
 pt_s_note2:  db 'Close this window.', 0
 
@@ -7729,10 +8318,6 @@ pt_ic_text:
 %endmacro
 
     PTWORD pt_win                   ; our window record
-    PTWORD pt_about_win             ; the About window's, 0 = not made yet
-    PTWORD pt_ab_x                  ; and its content origin + width, held
-    PTWORD pt_ab_y                  ; across pt_about_paint's line loop
-    PTWORD pt_ab_w
     PTWORD pt_ch                    ; canvas height, decided by pt_geom
     PTWORD pt_ox                    ; content origin, screen coords
     PTWORD pt_oy
@@ -7751,9 +8336,11 @@ pt_ic_text:
     PTWORD pt_cy2
     PTWORD pt_lb                    ; left byte index within a row
     PTWORD pt_span                  ; right byte - left byte
-    PTWORD pt_scan0                 ; pt_runend: where the pair scan began
-    PTWORD pt_runx                  ; pt_blit: the run's first and last column
-    PTWORD pt_runy
+    PTWORD pt_bx0                   ; pt_blit: the band's (even) left edge...
+    PTWORD pt_bwid                  ; ...its width in pixels...
+    PTWORD pt_bsi                   ; ...its first canvas row...
+    PTWORD pt_bn                    ; ...how many rows it covers...
+    PTWORD pt_brmax                 ; ...and the most that fit one segment
 
     PTWORD pt_ax                    ; the press point, canvas coords
     PTWORD pt_ay
@@ -7839,6 +8426,11 @@ pt_ic_text:
     PTWORD pt_ic_rs
     PTWORD pt_msgw
     PTWORD pt_msgp                  ; the toast a file operation asked for
+    PTBYTE pt_abon                  ; 1 = the About card is up (SPEC.md 12.2)
+    PTWORD pt_abl                   ; ...and where pt_abmeas settled it,
+    PTWORD pt_abt                   ; content coords
+    PTWORD pt_abw
+    PTWORD pt_abh
     PTWORD pt_uy1                   ; the rows an undo swap touched
     PTWORD pt_uy2
     PTWORD pt_mbest                 ; pt_map16's best distance so far
@@ -7860,7 +8452,11 @@ pt_ic_text:
     PTWORD pt_cvparas               ; what the canvas costs, in paragraphs
     PTWORD pt_cwmax                 ; the biggest canvas this SCREEN can show
     PTWORD pt_chmax
-    PTWORD pt_smaxp                 ; ...and this MACHINE can hold, paragraphs
+    PTWORD pt_smaxp                 ; ...and what the canvas CLAIM holds, paras
+    PTWORD pt_growp                 ; ...and what a NEW claim could hold, paras
+    PTWORD pt_needp                 ; pt_alloc scratch: paragraphs per canvas
+    PTWORD pt_obase                 ; pt_resize: the canvas claim being replaced
+    PTWORD pt_osrc                  ; ...the segment pt_orowset reads through
     PTWORD pt_scrw                  ; screen width, for centring the window
     PTWORD pt_unseg                 ; the undo image's base segment
     PTWORD pt_cbseg                 ; the clipboard's
@@ -7921,7 +8517,9 @@ pt_ic_text:
     PTBYTE pt_wchg                  ; the window was resized: repaint the lot
     PTBYTE pt_kept                  ; a resize was refused to save the artwork
     PTBYTE pt_apend                 ; ...and the notice for it is owed
-    PTWORD pt_base                  ; PT_BASE_HI or PT_BASE_LO (SPEC.md 42)
+    PTWORD pt_wanth                 ; pt_onsize: the height it settled on, held
+                                    ; over the register shuffle on the way out
+    PTWORD pt_base                  ; the claimed block's base (SPEC.md 50.3)
     PTBYTE pt_haveundo              ; this machine can fund an undo image...
     PTBYTE pt_haveclip              ; ...and a clipboard (SPEC.md 42)
     PTBYTE pt_fbox                  ; the size box with the keyboard, 0 = none
@@ -7929,6 +8527,16 @@ pt_ic_text:
     PTBYTE pt_fresh                 ; the next digit replaces the value
     PTBYTE pt_szi                   ; pt_szdraw's box counter
     PTBYTE pt_szchg                 ; pt_setsize moved the canvas
+    PTBYTE pt_szmem                 ; ...and refused for want of memory, not ink
+    PTWORD pt_reqw                  ; the size asked for, before pt_fit had its
+    PTWORD pt_reqh                  ; say - so the two can be compared
+    PTWORD pt_lzwseg                ; the LZW tables' own claim, 0 = none
+    PTWORD pt_gseg                  ; where a GIF is staged, either direction:
+                                    ; the undo image when there is one, the
+                                    ; flood-fill scratch when there is not
+    PTBYTE pt_apsay                 ; 1 = pt_apend also owes the user a notice
+    PTBYTE pt_pinw                  ; pt_fit: an axis pt_sizeask's ink guard
+    PTBYTE pt_pinh                  ; has already settled - do not cut it
     PTWORD pt_szy                   ; the box being drawn: its top row...
     PTWORD pt_szp                   ; ...and the text it shows
     PTBUF  pt_wtxt, 4               ; the two edit buffers, three digits and a

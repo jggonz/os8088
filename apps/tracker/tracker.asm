@@ -164,13 +164,12 @@ trk_entry:
     mov [trk_win], bx
     mov si, trk_menus
     call OSAPI_MENU_SET             ; preserves registers AND flags, so the
-    mov si, trk_about               ; loader's CF survives to the retf
+    mov si, trk_about               ; loader's CF survives to the ret
     call OSAPI_ABOUT_SET
 .out:
     pop di
     pop si
-    retf
-
+    ret
 ; =============================================================================
 ; The UI task's half: paint, keys, clicks, menu, About, file dialog
 ; =============================================================================
@@ -200,8 +199,7 @@ trk_paint:
     pop cx
     pop bx
     pop ax
-    retf
-
+    ret
 ; -----------------------------------------------------------------------------
 ; trk_hire - spawn the worker, once (the ark_hire shape)
 ; in:  gfx lock held (OSAPI_TASK_SPAWN requires it); preserves all registers
@@ -376,8 +374,7 @@ trk_onkey:
     pop cx
     pop bx
     pop ax
-    retf
-
+    ret
 ; -----------------------------------------------------------------------------
 ; trk_onclick - W_ONCLICK: windowed, a click enters fullscreen (the splash's
 ;               other promise); fullscreen, a click in a scope cell toggles
@@ -409,8 +406,7 @@ trk_onclick:
     pop cx
     pop bx
     pop ax
-    retf
-
+    ret
 ; -----------------------------------------------------------------------------
 ; trk_oncmd - AM_ONCMD (SPEC.md 12.2): File > Open..., View > Fullscreen.
 ; Reachable windowed only (fullscreen hides the bar), which is why every
@@ -468,8 +464,7 @@ trk_oncmd:
     pop cx
     pop bx
     pop ax
-    retf
-
+    ret
 ; -----------------------------------------------------------------------------
 ; trk_about - the OSAPI_ABOUT_SET handler: panel-in-content, the [ark_abon]
 ;             pattern. The worker checks [trk_abon] under the lock, right
@@ -492,8 +487,7 @@ trk_about:
     pop cx
     pop bx
     pop ax
-    retf
-
+    ret
 ; -----------------------------------------------------------------------------
 ; trk_abdismiss - take the About panel down if it is up
 ; out: CF=1 the key/click was spent doing it; preserves every register
@@ -534,12 +528,66 @@ trk_do_open:
     ret
 
 ; -----------------------------------------------------------------------------
+; trk_trim - give back the part of the blob claim the file did not need
+;
+; in:  [trk_modseg] = the claim, [mp_bloblen_hi]:[mp_bloblen_lo] = bytes read
+; out: [trk_modseg] / [trk_capk] updated; preserves every register
+;
+; The claim is sized BEFORE the file's size is known - the dialog's completion
+; proc is handed a name, not a directory entry - so it is min(largest run,
+; 128KB) and a 5.6KB module would sit on 128KB of heap until the next load or
+; teardown. One call gives the difference back.
+;
+; This is a call and not a redesign because OSAPI_MEM_REGROW SHRINKS IN PLACE
+; (SPEC.md 50.3.1): the record's length changes and nothing moves. Claim-copy-
+; free could not do it - it needs both blocks at once, and may hand back a
+; different base - which is why the tree this came from documented the
+; over-claim as a thing it could not fix rather than a thing it had not.
+;
+; Called before mp_load, so no sample pointer exists yet to be invalidated
+; even on the impossible path where a shrink relocated. mp_load bounds every
+; read against [mp_bloblen_*] rather than the claim, so a claim trimmed to
+; exactly those bytes cannot narrow what it may look at.
+; -----------------------------------------------------------------------------
+trk_trim:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [mp_bloblen_lo]
+    mov dx, [mp_bloblen_hi]
+    add ax, 1023                    ; round UP: the heap's granularity is KB,
+    adc dx, 0                       ; and a truncating divide would hand back
+    mov cl, 10                      ; the tail of the file with the tail of
+    shr ax, cl                      ; the claim
+    mov bx, dx
+    mov cl, 6
+    shl bx, cl                      ; DX:AX >> 10 = (DX << 6) + (AX >> 10),
+    or ax, bx                       ; and the 128KB cap keeps it under 129
+    jnz .go
+    inc ax                          ; 0 KB is a refusal, not a claim
+.go:
+    cmp ax, [trk_capk]
+    jae .out                        ; the file filled it: nothing to give back
+    mov dx, [trk_modseg]
+    call OSAPI_MEM_REGROW
+    jc .out                         ; refused: keep the oversized claim, which
+    mov [trk_modseg], dx            ; costs heap and breaks nothing
+    mov [trk_capk], ax
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; trk_fdone - the file-dialog completion proc (SPEC.md 38.6). UI task, gfx
 ;             lock held, ES:DI = the chosen name with ES = KERNEL_SEG, valid
 ;             for this call only - so it is copied out FIRST.
 ;
 ; The load path: stop playback, free the previous module grant, size a new
-; grant from OSAPI_MEM_AVAIL (capped at 8192 paragraphs = 128KB), read the
+; grant from OSAPI_MEM_AVAIL (capped at 128KB), read the
 ; whole file with OSAPI_FILE_READBIG (DX:CX capacity in bytes - this is the
 ; slot that exists because real MODs exceed dskw_read's 64KB ceiling), then
 ; mp_load validates and builds tables. Any failure frees the grant and puts
@@ -575,27 +623,27 @@ trk_fdone:
                                     ; reader may trust it past this line
     cmp word [trk_modseg], 0
     je .alloc
-    mov ax, [trk_modseg]
+    mov dx, [trk_modseg]            ; DX, not AX (docs/PORTING.md 8)
     call OSAPI_MEM_FREE
     mov word [trk_modseg], 0
 .alloc:
-    call OSAPI_MEM_AVAIL            ; AX = LARGEST contiguous run, paragraphs
-    or ax, ax
-    jz .nomem
-    cmp ax, 8192                    ; cap the grant at 128KB - bigger than any
+    call OSAPI_MEM_AVAIL            ; AX = LARGEST contiguous run in KB, and
+    or ax, ax                       ; BX = the total (this fork counts KB, not
+    jz .nomem                       ; paragraphs - docs/PORTING.md 8)
+    cmp ax, 128                     ; cap the grant at 128KB - bigger than any
     jbe .sized                      ; sane 4-channel MOD
-    mov ax, 8192
+    mov ax, 128
 .sized:
-    mov [trk_capp], ax
-    call OSAPI_MEM_ALLOC            ; AX = paragraphs -> AX = base segment
-    jc .nomem
-    mov [trk_modseg], ax
+    mov [trk_capk], ax
+    call OSAPI_MEM_CLAIM            ; AX = KB -> DX = base segment, CF=1
+    jc .nomem                       ; refused (the answer moves register too)
+    mov [trk_modseg], dx
 
-    mov ax, [trk_capp]              ; DX:CX = capacity in bytes = paras * 16
+    mov ax, [trk_capk]              ; DX:CX = capacity in bytes = KB * 1024
     mov dx, ax
-    mov cl, 4
+    mov cl, 10
     shl ax, cl
-    mov cl, 12
+    mov cl, 6
     shr dx, cl
     mov cx, ax
     mov es, [trk_modseg]
@@ -606,8 +654,9 @@ trk_fdone:
     jc .rderr
     mov [mp_bloblen_lo], ax
     mov [mp_bloblen_hi], dx
-    mov ax, [trk_modseg]
-    mov [mp_blobseg], ax
+    call trk_trim                   ; ...and hand back what it did not need
+    mov ax, [trk_modseg]            ; AFTER the trim, so a claim that somehow
+    mov [mp_blobseg], ax            ; moved is still the one mp_load indexes
     call mp_load                    ; CF=1, AX = offset of a NUL error string
     jc .lderr
     mov si, mp_title                ; the loaded title becomes the status line
@@ -637,8 +686,8 @@ trk_fdone:
     mov si, ax                      ; mp_load's own verdict string
 .failfree:
     push si
-    mov ax, [trk_modseg]
-    or ax, ax
+    mov dx, [trk_modseg]            ; DX, not AX (docs/PORTING.md 8)
+    or dx, dx
     jz .npop
     call OSAPI_MEM_FREE
     mov word [trk_modseg], 0
@@ -654,8 +703,7 @@ trk_fdone:
     pop cx
     pop bx
     pop ax
-    retf
-
+    ret
 ; =============================================================================
 ; Fullscreen (SPEC.md 11.2) - entered only from W_ONKEY / W_ONCLICK /
 ; AM_ONCMD, all of which hold the gfx lock, which OSAPI_FULLSCREEN requires.
@@ -857,7 +905,7 @@ trk_mix_stage:
 ; -----------------------------------------------------------------------------
 ; trk_stream_close / trk_play_stop
 ; UI context only (verb 2). The close box needs neither: teardown force-frees
-; the stream, the pool grant and the arena grant (SPEC.md 34.3/2.6).
+; the stream, the pool grant and the heap claim (SPEC.md 34.3/50.2).
 ; -----------------------------------------------------------------------------
 trk_stream_close:
     push ax
@@ -1284,9 +1332,9 @@ trk_s_smmoff: db 'Smooth off', 0
     TRKB trk_abon                   ; the About panel is up; worker frames drop
     TRKB trk_pmode                  ; 0 = song, 1 = pattern loop
 
-; --- the module blob (arena grant, SPEC.md 2.6) --------------------------------
+; --- the module blob (a heap claim, SPEC.md 50) -------------------------------
     TRKW trk_modseg                 ; grant base segment, 0 = none
-    TRKW trk_capp                   ; its size in paragraphs
+    TRKW trk_capk                   ; its size in KB
     TRKBUF trk_fname, 13            ; the chosen 8.3 name, copied out of the
                                     ; kernel's buffer during the completion call
 

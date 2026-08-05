@@ -60,7 +60,7 @@
     OS88_ICON16_END
 
 AT_DOCCAP  equ 20480                ; document bytes (bss - works with an
-                                    ; empty arena; the arena only adds undo
+                                    ; empty heap; a claim only adds undo
                                     ; depth and clipboard reach)
 AT_NL      equ 10                   ; the internal newline
 AT_MAXLN   equ 2048                 ; visual-line table entries
@@ -72,7 +72,7 @@ AT_S4ST    equ 304                  ; 4bpp strip stride (608 px)
 AT_SROWS   equ 30                   ; strip rows (the tallest row height)
 AT_CBGCAP  equ 80                   ; per-8px-column background flags
 AT_UMAX    equ 15                   ; undo/redo depth (MAX_UNDO_LEVELS)
-AT_CLIPBSS equ 2048                 ; clipboard fallback when no arena
+AT_CLIPBSS equ 2048                 ; clipboard fallback when no claim
 AT_ZMAX    equ 1                    ; zoom levels 0..1 (Default / Large)
 AT_NMENUS  equ 5
 
@@ -80,6 +80,8 @@ AT_NMENUS  equ 5
 ; at_entry - package entry (SPEC.md 20.2): create the window, own the bar
 ; -----------------------------------------------------------------------------
 at_entry:
+    push ds                         ; ES arrives = KERNEL_SEG (SPEC.md 20.2);
+    pop es                          ; the string ops below want ES = ours
     push si
     mov si, at_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
@@ -97,7 +99,7 @@ at_entry:
     call at_cmd_newdoc              ; a fresh untitled document
     clc                             ; the CF the loader is owed
 .out:
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; at_font_init - copy ROM glyphs 32..126 into at_fontbuf
@@ -231,6 +233,8 @@ at_paint:
     push di
     push bp
     push es
+    push ds                         ; ES arrives = KERNEL_SEG (SPEC.md 20.2)
+    pop es
     mov byte [at_cshown], 0         ; fresh pixels carry no caret
     mov byte [at_cphase], 0
     cmp byte [at_fs], 0
@@ -248,7 +252,7 @@ at_paint:
     pop cx
     pop bx
     pop ax
-    retf
+    ret
 
 ; at_fs_paint_body - bar + text + scroll bar (+ a live alert on top)
 at_fs_paint_body:
@@ -303,6 +307,8 @@ at_onkey:
     push di
     push bp
     push es
+    push ds                         ; ES arrives = KERNEL_SEG (SPEC.md 20.2)
+    pop es
     cmp byte [at_fs], 0
     je .win
     cmp byte [at_modal], 0
@@ -347,7 +353,7 @@ at_onkey:
     pop cx
     pop bx
     pop ax
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; at_onclick - W_ONCLICK (CX = x, DX = y, absolute screen; lock held)
@@ -361,6 +367,8 @@ at_onclick:
     push di
     push bp
     push es
+    push ds                         ; ES arrives = KERNEL_SEG (SPEC.md 20.2)
+    pop es
     cmp byte [at_fs], 0
     je .win
     cmp byte [at_modal], 0
@@ -395,13 +403,15 @@ at_onclick:
     pop cx
     pop bx
     pop ax
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; at_koncmd - the WINDOWED bar's menu handler (SPEC.md 12.2)
 ; in:  AL = item, AH = menu (0 = File), SI = window ptr; lock held
 ; -----------------------------------------------------------------------------
 at_koncmd:
+    push ds                         ; ES arrives = KERNEL_SEG (SPEC.md 20.2)
+    pop es
     or ah, ah
     jnz .out
     cmp al, 0
@@ -419,7 +429,7 @@ at_koncmd:
 .open:
     call at_dlg_open
 .out:
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; at_fs_enter / at_fs_exit - the fullscreen transitions (SPEC.md 11.2,
@@ -449,7 +459,7 @@ at_fs_enter:
     mov byte [at_fs], 0             ; refused: another window owns the
     jmp short .out                  ; screen; the splash stays
 .ok:
-    call at_undo_init               ; arena, once
+    call at_undo_init               ; the heap claim, once
     cmp byte [at_wspawned], 0
     jne .out
     mov ax, at_worker
@@ -483,6 +493,8 @@ at_fs_exit:
 ;      where this task dies when the window closes
 ; -----------------------------------------------------------------------------
 at_worker:
+    push cs                         ; ES is unspecified at task birth; the
+    pop es                          ; caret path wants ES = ours (CS = DS)
 .loop:
     mov bx, [at_win]
     call OSAPI_TASK_ALIVE           ; the close box ends the task in here
@@ -914,7 +926,7 @@ at_ferr     equ at_wn + 2
 at_win      equ at_ferr + 2                  ; word: our window ptr
 at_name     equ at_win + 2                   ; 14 bytes: 8.3 + NUL
 at_cliplen  equ at_name + 14                 ; word
-at_aseg     equ at_cliplen + 2               ; word: arena block (0 = none)
+at_aseg     equ at_cliplen + 2               ; word: heap claim (0 = none)
 at_usz      equ at_aseg + 2                  ; word: per-stack bytes
 at_coff     equ at_usz + 2                   ; word: clip slice offset
 at_csz      equ at_coff + 2                  ; word: clip slice bytes

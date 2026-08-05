@@ -927,9 +927,18 @@ at_splice:
     add si, 2
     loop .shl
 .fresh:
-    ; copy staging into [F .. F+K)
+    ; copy staging into [F .. F+K) - clamped like the tail move above:
+    ; a paste can put F+K past the table, and an unclamped copy would
+    ; run at_lstart into at_lattr and at_lattr into the scan state
     mov cx, [at_lput]
     jcxz .none
+    mov ax, AT_MAXLN
+    sub ax, [at_dfrom]              ; AX = entries the table has room for
+    jle .none
+    cmp cx, ax
+    jbe .stg
+    mov cx, ax
+.stg:
     mov si, at_stgs
     mov di, [at_dfrom]
     shl di, 1

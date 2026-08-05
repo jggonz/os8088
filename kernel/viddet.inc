@@ -29,7 +29,7 @@
 ; kernel is still coming off the floppy. Everything here therefore obeys the
 ; splash's rules: it must be resident inside the first SPL_RESIDENT sectors,
 ; and ALL its data lives in .text - never .bss, which is not yet cleared and
-; still has the .fartext blob sitting on it (SPEC.md 15/33).
+; holds whatever the machine left there (SPEC.md 15).
 ; =============================================================================
 
 ; A build-time override for the probe, so the fallbacks can be exercised on
@@ -102,14 +102,15 @@ vid_wm8     dw SCREEN_W-8       ; font_char's whole-cell clip, and the menu
                                 ; bar's right margin
 vid_hm8     dw SCREEN_H-8
 vid_strm1   dw ROW_BYTES-1
-vid_rseg    dw BB_SEG           ; the software renderer's target segment:
-                                ; the back buffer on VGA, the FRAMEBUFFER
-                                ; itself on mono
+vid_rseg    dw 0                ; the software renderer's target segment:
+                                ; the claimed back buffer on VGA (0 until
+                                ; bb_set arms one), the FRAMEBUFFER itself
+                                ; on mono
 vid_rpara   dw BB_PLANE_PARA    ; paragraphs from one plane to the next.
                                 ; MUST be nonzero even at one plane -
                                 ; bb_xfer's loop terminates on a segment
                                 ; compare, and a step of 0 never terminates.
-vid_rend    dw BB_SEG + 4*BB_PLANE_PARA     ; that loop's exclusive end
+vid_rend    dw 0                ; that loop's exclusive end
 vid_dock_y0 dw SCREEN_H-24      ; dock strip top row (DOCK_H, dock.inc)
 vid_dock_ty0 dw SCREEN_H-24+3   ; dock tile top row
 vid_clk_hx  dw SCREEN_W-206     ; menu bar clock cell: hit band left edge
@@ -291,9 +292,9 @@ vid_apply:
     mov byte [vid_mono], 0      ; --- the renderer's target
     mov byte [vid_planes], 4
     mov word [vid_planes_w], 4
-    mov ax, BB_SEG
-    mov bx, BB_PLANE_PARA
-    mov dx, BB_SEG + 4*BB_PLANE_PARA
+    xor ax, ax                  ; VGA: the renderer has no target until
+    mov bx, BB_PLANE_PARA       ; bb_set claims one (SPEC.md 32/50.2)
+    xor dx, dx
     cmp byte [vid_kind], VID_VGA
     je .rend
     mov byte [vid_mono], 1
@@ -491,7 +492,7 @@ gfx_rowbase:
 ; its movsb, and its restore path sets DS to the caller's buffer (SAVE_SEG
 ; for a menu's save-under). Reading the step through DS there fetches
 ; framebuffer bytes as a scan-line stride. CS is KERNEL_SEG for everything
-; in .text, and .fartext reaches this only through the .text shims, so the
+; in .text - every byte of kernel code, since SPEC.md 33 - so the
 ; override is always right and costs one byte per reference.
 ; -----------------------------------------------------------------------------
 gfx_nextrow:

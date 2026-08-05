@@ -11,6 +11,18 @@
 ; command picked in the wrong state is refused with the same status line a
 ; click on the grayed button would have written.
 ;
+; Ported back from `main` (docs/PORTING.md) once the Sound Blaster became a
+; loadable driver here (SPEC.md 51.4). Two things about that are worth
+; knowing. Every callback is a NEAR proc with a near `ret` - the kernel
+; reaches us through our own header dispatcher, not a far call - so there is
+; no `retf` anywhere in this file and a stray one would return into the
+; loader's frame and hang the machine at the first paint. And the caps this
+; app branches on are RUNTIME state rather than boot state: with no driver
+; loaded OSAPI_SND_CAPS answers TONE|PCM_EXCL, both card slots refuse CF=1,
+; and the app degrades to exactly what it already does on a speaker-only
+; machine. The `main` rule "query the caps, do not assume" is not politeness
+; here - it is the only thing that works.
+;
 ;   - REC needs SND_CAP_PCM_IN (a Sound Blaster): verb 7 grants a 40,000 B
 ;     capture buffer (5 s at 8 kHz), verb 4 opens the input stream, and the
 ;     kernel drain task fills the grant. Without the cap the button is drawn
@@ -113,7 +125,16 @@ RC_BTN_H    equ 16
 RC_BTN_W    equ 52                  ; buttons at x 4 / 58 / 112 / 166
 
 ; --- capture / playback parameters ---------------------------------------------
-RC_CAP      equ 40000               ; grant size: 5 s at 8 kHz
+; The grant is asked for in TIERS, not taken as a constant (rc_grant). On
+; `main` the staging pool was a pinned segment and 40,000 B was always there;
+; here the pool is whatever the loaded driver claimed off the heap - the
+; Sound Blaster's is SBL_WANT minus its DMA-visible head, 20,480 B today -
+; and a driver written tomorrow may have a different one. So this asks for 5
+; seconds, then 3, then 2, then 1, and records into whatever it got. The
+; floor is RC_D_LEN on purpose: DEMO stages exactly that much, so the
+; built-in sweep fits every tier and the app is never useless.
+RC_TIERS    equ 4
+RC_CAP_MAX  equ 40000               ; tier 0: 5 s at 8 kHz
 RC_RATE     equ 8000                ; one rate everywhere (PWM N=149, in range)
 RC_CHUNK    equ 1000                ; demo synth/stage chunk (divides RC_D_LEN/2,
                                     ; so the sweep turns on a chunk boundary)
@@ -152,7 +173,7 @@ rc_entry:
     mov [rc_caps], ax               ; per the contract - both dead here)
     test al, SND_CAP_PCM_IN
     jz .noin
-    mov word [rc_s_line2+16], 'SB'  ; the IN:-- field becomes IN:SB
+    mov word [rc_s_line2+18], 'SB'  ; the IN:-- field becomes IN:SB
 .noin:
     mov word [rc_msg], rc_s_idle
     mov si, rc_tpl
@@ -167,7 +188,8 @@ rc_entry:
     pop si                          ; failure still propagates unchanged
     pop dx
     pop ax
-    retf                            ; far-called by the loader (SPEC.md 20.5)
+    ret                             ; the loader reaches us through our own
+                                    ; dispatcher, so this is a NEAR ret
 
 ; -----------------------------------------------------------------------------
 ; rc_paint - W_PAINT: poll the stream, then draw the full content
@@ -193,7 +215,7 @@ rc_paint:
     pop cx
     pop bx
     pop ax
-    retf                            ; far-called W_PAINT (SPEC.md 20.5)
+    ret                             ; near: dispatched (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; rc_onclick - W_ONCLICK: poll, hit-test the buttons, act, repaint content
@@ -256,7 +278,7 @@ rc_onclick:
     pop cx
     pop bx
     pop ax
-    retf                            ; far-called W_ONCLICK (SPEC.md 20.5)
+    ret                             ; near: dispatched (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; rc_oncmd - the Sound menu's command handler (SPEC.md 12.2)
@@ -304,7 +326,7 @@ rc_oncmd:
                                     ; have moved the state, so repaint anyway
 .repaint:
     call rc_repaint
-    retf                            ; far-called menu handler (SPEC.md 20.5)
+    ret                             ; near: dispatched (SPEC.md 20.5)
 
 ; -----------------------------------------------------------------------------
 ; rc_repaint - white-fill our own content and draw it again
@@ -384,7 +406,7 @@ rc_poll:
     je .rwdog                       ; (on QEMU they never start - SPEC.md 35)
     cmp ax, SND_ST_UNDER            ; state 1 is BOTH pauses (SPEC.md 20.3):
     jne .pstale                     ; (not 1: stale, torn down under us)
-    cmp dx, RC_CAP                  ; consumed < capacity = drain starve -
+    cmp dx, [rc_cap]                ; consumed < capacity = drain starve -
     jb .rlive                       ; track the count, kernel resumes (34.6)
     mov [rc_len], dx                ; consumed == capacity: full - close
     call rc_close
@@ -413,21 +435,49 @@ rc_close:
     ret
 
 ; -----------------------------------------------------------------------------
-; rc_grant - ensure the 40,000-byte capture/staging grant exists
+; rc_grant - ensure the capture/staging grant exists, as big as we can get
 ; in:  nothing
-; out: CF=0 with [rc_goff]/[rc_have] set, CF=1 refused ([rc_msg] explains);
-;      clobbers AX, CX, SI
+; out: CF=0 with [rc_goff]/[rc_cap]/[rc_have] set, CF=1 refused ([rc_msg]
+;      explains); clobbers AX, CX, SI
+;
+; Walks rc_caps down (see RC_TIERS above) and keeps the first size the driver
+; will part with, so a small pool costs seconds of recording rather than the
+; whole app. Err 7 is "bigger than the pool" and err 8 is "the pool is
+; fragmented"; both are just "try smaller" here, and running out of tiers is
+; the only refusal - which on a machine with no driver at all is what the
+; very first call gets, because the slot itself answers CF=1.
 ; -----------------------------------------------------------------------------
 rc_grant:
     cmp byte [rc_have], 0
     jne .ok
+    push bx
+    mov bx, rc_captab
+.try:
+    mov cx, [bx]
     mov ax, 0x0007                  ; verb 7 grant, sub-op 0: alloc CX bytes
-    mov cx, RC_CAP
     call OSAPI_SND_STREAM           ; out AX = 0 + SI = grant offset
     or ax, ax
-    jnz .fail
+    jz .got
+    cmp ax, 4                       ; 4 = no streaming sink at all: no tier
+    je .nodrv                       ; is going to help, and 'NO SOUND MEMORY'
+                                    ; would send the user looking for RAM
+    add bx, 2                       ; anything else: the next tier down
+    cmp bx, rc_captab + RC_TIERS*2
+    jb .try
+.nodrv:
+    pop bx
+    cmp ax, 4
+    je .nosink
+    jmp short .fail
+.got:
     mov [rc_goff], si
+    mov cx, [bx]                    ; the size we actually got is the capacity
+    mov [rc_cap], cx
     mov byte [rc_have], 1
+    mov ax, cx                      ; ...and line 2 says so, because it is not
+    mov bx, rc_s_line2+6            ; the same number on every machine now
+    call rc_putu5
+    pop bx
 .ok:
     clc
     ret
@@ -435,6 +485,13 @@ rc_grant:
     mov word [rc_msg], rc_s_nomem
     stc
     ret
+.nosink:
+    mov word [rc_msg], rc_s_nodrv
+    stc
+    ret
+
+; the tiers, largest first (RC_TIERS entries). The last MUST be >= RC_D_LEN.
+rc_captab:  dw RC_CAP_MAX, 24000, 16000, RC_D_LEN
 
 ; -----------------------------------------------------------------------------
 ; rc_do_rec - the REC button: verb 4 open-in into the grant
@@ -452,7 +509,7 @@ rc_do_rec:
     jc .out
     mov ax, 0x0004                  ; verb 4 open-in: capture CX bytes into
     mov si, [rc_goff]               ; the grant at SI (SPEC.md 20.3)
-    mov cx, RC_CAP
+    mov cx, [rc_cap]
     mov dx, RC_RATE
     call OSAPI_SND_STREAM           ; out AL = err, AH = handle
     or al, al
@@ -1018,12 +1075,16 @@ rc_s_busy:   db 'BUSY - STOP FIRST', 0
 rc_s_nodata: db 'NOTHING RECORDED', 0
 rc_s_noin:   db 'NO REC DEVICE (SB NEEDED)', 0
 rc_s_nomem:  db 'NO SOUND MEMORY', 0
+rc_s_nodrv:  db 'NO SOUND DRIVER', 0
 rc_s_spkoff: db 'SPEAKER PCM DISABLED', 0
 rc_s_nosink: db 'NO OUTPUT DEVICE', 0
 rc_s_notrun: db 'NOT RUNNING', 0
 rc_s_demo:   db 'DEMO STAGED - 400-800 HZ', 0
 rc_s_err:    db 'ERROR -', 0        ; [+6] patched by rc_errmsg
-rc_s_line2:  db '00000 BYTES  IN:--', 0 ; [+0..4] count, [+16..17] device
+rc_s_line2:  db '00000/00000 B  IN:--', 0 ; [+0..4] captured, [+6..10] the
+                                    ; CAPACITY rc_grant actually got (it is
+                                    ; not 40,000 on every machine any more),
+                                    ; [+18..19] the input device
 
 ; 256-entry sine table for the demo sweep: 128 + round(88*sin(2*pi*i/256)),
 ; range 40..216 - the amplitude the square demo used (0x28/0xD8)
@@ -1045,7 +1106,7 @@ rc_sine:
     db  66, 67, 69, 71, 72, 74, 76, 77, 79, 81, 83, 85, 87, 88, 90, 92
     db  94, 96, 98,100,102,105,107,109,111,113,115,117,119,122,124,126
 
-    OS88_BSS 4020
+    OS88_BSS 4022
     OS88_IMAGE_END
 
 ; --- loader-zeroed bss (SPEC.md 21 step 5) -------------------------------------
@@ -1064,4 +1125,10 @@ rc_have  equ os88_image_end + 14    ; byte: the grant exists
 rc_pbuf  equ os88_image_end + 16    ; 4,000 B: synth / read-back / clip buffer
 rc_err   equ os88_image_end + 4016  ; word: demo sweep Bresenham error accum
 rc_dstep equ os88_image_end + 4018  ; word: sweep direction, +1 up / -1 down
-                                    ; total 4020
+rc_cap   equ os88_image_end + 4020  ; word: the grant size rc_grant actually
+                                    ; got - a TIER, not RC_CAP_MAX (see the
+                                    ; parameters above). Appended rather than
+                                    ; slotted into the pad at +15, because an
+                                    ; odd-addressed word is legal and slow and
+                                    ; this is read on every poll
+                                    ; total 4022

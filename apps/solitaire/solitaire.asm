@@ -145,7 +145,7 @@ SOL_GHOST   equ CDGRAY              ; empty-slot outlines and their ghost
 
 ; -----------------------------------------------------------------------------
 ; sol_entry - package entry point (SPEC.md 20.2)
-; in:  CS=DS=ES=our own segment (v3, SPEC.md 20.1), IF=1, gfx lock NOT held
+; in:  DS=ES=KERNEL_SEG, IF=1, gfx lock NOT held
 ; out: BX = window ptr, CF clear (CF set = abort, propagated from wm_create)
 ;
 ; Everything the rest of the program treats as constant is decided here: the
@@ -216,8 +216,19 @@ sol_entry:
     add ax, [sol_taby]
     add ax, [sol_ch]
     add ax, TITLE_H + 1
-    mov bx, [sol_dock]              ; ...clamped to the desktop band, exactly
-    sub bx, MBAR_H                  ; as wm_fit would
+    mov bx, [sol_dock]              ; ...clamped to the desktop band, and ONE
+    sub bx, MBAR_H + 1              ; PIXEL SHORT of it: the kernel tests
+                                    ; y+h against the dock's first row with
+                                    ; `jae`, because the drop shadow lives on
+                                    ; row y+h - so a frame that merely REACHES
+                                    ; the dock is already covering it, and
+                                    ; every window opened over this one then
+                                    ; pays for the dock to be redrawn under
+                                    ; it. wm_fit would hand out exactly that
+                                    ; height; this is the same pixel tm_init
+                                    ; spends for the same reason. It costs
+                                    ; Hercules and CGA one row of tableau and
+                                    ; VGA nothing, since VGA never clamps
     cmp ax, bx
     jbe .hok
     mov ax, bx
@@ -262,32 +273,44 @@ sol_entry:
 .full:
     pop di
     pop si
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sol_track - adopt the content origin and size (top of every callback)
 ; in:  SI = window ptr
-; out: [sol_ox]/[sol_oy], [sol_cwid]/[sol_chgt], [sol_avail]
+; out: [sol_ox]/[sol_oy], [sol_cwid]/[sol_chgt], [sol_avail]; ES = KERNEL_SEG
 ; clobbers: nothing else
 ;
-; The kernel is asked rather than the entry proc's arithmetic trusted: the
-; window moves, and wm_fit may have clamped what we asked for. Since v3 a
-; window pointer is an OPAQUE HANDLE - the record is kernel memory our DS
-; cannot reach - so the live size comes from OSAPI_WM_GEOM, which answers
-; the CONTENT box directly (SPEC.md 11/20.3).
+; The record is read rather than trusted from sol_entry's arithmetic: the
+; window moves, and wm_fit may have clamped what we asked for. ES is loaded
+; here rather than relied on, because a card back blitted earlier in the same
+; callback left it pointing at our own segment and never put it back
+; (SPEC.md 20.1 says it may).
 ; -----------------------------------------------------------------------------
 sol_track:
     push ax
     push bx
-    push cx
     push dx
+    mov ax, KERNEL_SEG
+    mov es, ax
     mov bx, si
     call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
     mov [sol_ox], ax
     mov [sol_oy], dx
-    call OSAPI_WM_GEOM              ; CX = content width, DX = content height
-    mov [sol_cwid], cx
-    mov ax, dx
+    cmp ax, [sol_lastox]            ; the window moved? every cached sliver is
+    jne .moved                      ; remembered at the OLD origin
+    cmp dx, [sol_lastoy]
+    je .same
+.moved:
+    mov [sol_lastox], ax
+    mov [sol_lastoy], dx
+    call sol_pinv
+.same:
+    mov ax, [es:bx + W_W]
+    sub ax, 2
+    mov [sol_cwid], ax
+    mov ax, [es:bx + W_H]
+    sub ax, TITLE_H + 1
     mov [sol_chgt], ax
     sub ax, [sol_taby]              ; the deepest a column's LAST card may
     sub ax, [sol_ch]                ; start; sol_colfan tightens to fit it
@@ -296,7 +319,6 @@ sol_track:
 .ok:
     mov [sol_avail], ax
     pop dx
-    pop cx
     pop bx
     pop ax
     ret
@@ -325,22 +347,19 @@ sol_paint:
     pop cx
     pop bx
     pop ax
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
-; sol_drawall - felt, thirteen piles, and whichever panel is up
+; sol_drawall - felt, thirteen piles, and the plaque if the game is won
 ; in:  the origin already tracked; gfx lock held
 ; out: nothing; preserves all registers
-;
-; The win plaque and the About panel are drawn LAST and are not mutually
-; exclusive by accident: About goes over the plaque because it is the thing
-; the player just asked for, and dismissing it repaints both.
 ; -----------------------------------------------------------------------------
 sol_drawall:
     push ax
     push bx
     push cx
     push dx
+    call sol_pinv                   ; the felt fill below wipes every column
     mov al, SOL_TABLE
     call OSAPI_SET_COLOR
     xor ax, ax
@@ -389,17 +408,19 @@ sol_drawpile:
     push di
     mov [sol_dpp], al
     call sol_pilerect               ; [sol_rx1]..[sol_ry2], content-relative
-    mov al, SOL_TABLE
-    call OSAPI_SET_COLOR
+    call sol_count                  ; CL = cards in the pile
+    mov [sol_dpn], cl
+    call sol_plan                   ; how much of a tableau column is already
+    call sol_covers                 ; right on the screen (0 for the others)
+    jc .nowipe                      ; the card is about to cover every pixel
+    mov al, SOL_TABLE               ; of this rect: erasing it first is a
+    call OSAPI_SET_COLOR            ; second fill of the same pixels
     mov ax, [sol_rx1]
     mov bx, [sol_ry1]
     mov cx, [sol_rx2]
     mov dx, [sol_ry2]
     call sol_fillc
-
-    mov al, [sol_dpp]
-    call sol_count                  ; CL = cards in the pile
-    mov [sol_dpn], cl
+.nowipe:
     mov al, [sol_dpp]
     call sol_pilexy                 ; CX = x, DX = y (content-relative)
     mov [sol_dpx], cx
@@ -415,8 +436,8 @@ sol_drawpile:
     ; --- a tableau column: every card, at this column's own fan -------------
     cmp byte [sol_dpn], 0
     je .slot
-    call sol_colfan                 ; [sol_cfd]/[sol_cfa]/[sol_cfu]
-    mov byte [sol_dpi], 0
+    mov ax, [sol_keepn]             ; sol_plan has already run sol_colfan and
+    mov [sol_dpi], al               ; decided how many leading cards to skip
 .tab:
     mov al, [sol_dpi]
     call sol_yoff                   ; AX = this card's y offset
@@ -447,6 +468,7 @@ sol_drawpile:
     mov al, [sol_dpi]
     cmp al, [sol_dpn]
     jb .tab
+    call sol_prec                   ; remember what the slivers look like now
     jmp .out
 
     ; --- the stock: one card back, or the turn-over-again ring --------------
@@ -526,6 +548,182 @@ sol_drawpile:
     pop cx
     pop bx
     pop ax
+    ret
+
+; =============================================================================
+; Keeping the buried backs (SPEC.md 43.7)
+;
+; A tableau column redrew every card whenever any of them changed, and the
+; cards at the bottom of it are face-DOWN - the one drawing in this program
+; that is genuinely expensive, because the back is a lattice and gfx_blit4
+; emits one gfx_fill per run of equal pixels (41 runs for a fanned sliver, 634
+; for a whole back). A column with five buried cards therefore paid ~205 runs
+; to redraw pixels that had not changed, on every single move that touched it.
+;
+; What makes skipping them safe is that **face-down cards are
+; indistinguishable**: every back is the same image, so the question is never
+; "is it still the same card" but only "is it still drawn in the same place at
+; the same size". Two numbers settle that, cached per column by sol_prec:
+;
+;   [sol_pfa+p]  the face-down fan step it was drawn at, and
+;   [sol_pslv+p] how many leading cards were drawn as slivers of exactly that
+;                height.
+;
+; A leading card's offset is index * step, so an unchanged step means an
+; unchanged position. sol_keep takes the smaller of what is wanted now and
+; what was drawn then, and sol_plan turns that into the row the erase starts
+; at - because an erase that reached higher would wipe the very slivers being
+; kept.
+;
+; The cache is invalidated - sol_pinv - wherever something else may have
+; painted over a column: a full repaint (which fills the content with felt
+; first), the win plaque (which lands on the felt between the piles), and a
+; change of content origin, which is what a window move looks like from here.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; sol_slv - how many leading cards of this column are drawn as face-down
+;           slivers of exactly [sol_cfa] height
+; in:  [sol_dpn], [sol_cfd]; out: AX; preserves all other registers
+;
+; All of the face-down run when something covers it. When the column is ALL
+; face-down - which only happens mid-deal - the last one is drawn at its full
+; height instead, so it is not a sliver and does not count.
+; -----------------------------------------------------------------------------
+sol_slv:
+    push cx
+    mov cl, [sol_dpn]
+    mov ch, 0
+    mov ax, [sol_cfd]
+    cmp cx, ax
+    ja .out
+    mov ax, cx
+    or ax, ax
+    jz .out
+    dec ax
+.out:
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_keep - how many leading cards are already correct on the screen
+; in:  [sol_dpp] (a tableau pile), [sol_dpn], sol_colfan already run
+; out: AX; preserves all other registers
+; -----------------------------------------------------------------------------
+sol_keep:
+    push bx
+    push si
+    mov al, [sol_dpp]
+    mov ah, 0
+    mov si, ax
+    add si, si
+    call sol_slv                    ; AX = what this draw wants to skip
+    mov bx, [sol_cfa]
+    cmp bx, [sol_pfa+si]            ; ...drawn at the same step as last time?
+    jne .none
+    cmp ax, [sol_pslv+si]           ; ...and no more than were drawn then?
+    jbe .out
+    mov ax, [sol_pslv+si]
+    jmp .out
+.none:
+    xor ax, ax
+.out:
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_prec - record what this column's slivers now look like
+; in:  [sol_dpp], [sol_dpn], sol_colfan already run; preserves all registers
+; -----------------------------------------------------------------------------
+sol_prec:
+    push ax
+    push si
+    mov al, [sol_dpp]
+    mov ah, 0
+    mov si, ax
+    add si, si
+    mov ax, [sol_cfa]
+    mov [sol_pfa+si], ax
+    call sol_slv
+    mov [sol_pslv+si], ax
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_pinv - forget every column's cache; the next draw of each redraws whole
+; preserves all registers
+; -----------------------------------------------------------------------------
+sol_pinv:
+    push cx
+    push si
+    xor si, si
+    mov cx, P_TABN
+.each:
+    mov word [sol_pslv+si], 0       ; 0 kept: sol_keep's min can only be 0
+    add si, 2
+    loop .each
+    pop si
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_plan - decide the keep count, and raise the erase to match it
+; in:  [sol_dpp], [sol_dpn]
+; out: [sol_keepn]; [sol_ry1] moved down when anything is kept; and for a
+;      tableau column sol_colfan has been run. Preserves all registers.
+; -----------------------------------------------------------------------------
+sol_plan:
+    push ax
+    mov word [sol_keepn], 0
+    mov al, [sol_dpp]
+    cmp al, P_TABN
+    jae .out                        ; only a tableau column has a run of
+    cmp byte [sol_dpn], 0           ; identical slivers to keep
+    je .out
+    call sol_colfan
+    call sol_keep
+    mov [sol_keepn], ax
+    or ax, ax
+    jz .out
+    call sol_yoff                   ; AL = the first index we WILL draw...
+    add ax, [sol_taby]
+    mov [sol_ry1], ax               ; ...and the erase may not start above it
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_covers - will this pile's own drawing cover every pixel of the rect
+;              sol_drawpile is about to erase?
+; in:  [sol_dpp], [sol_dpn]
+; out: CF = 1 yes, so skip the erase; preserves all registers
+;
+; True for exactly two piles, and only when they hold a card: the stock and a
+; foundation are one card drawn into a one-card rect. A tableau's rect runs
+; the whole height of the content and the waste's is two fan steps wider than
+; a card, so both really do need clearing; an empty pile draws an outline and
+; needs it most of all.
+; -----------------------------------------------------------------------------
+sol_covers:
+    push ax
+    cmp byte [sol_dpn], 0
+    je .no
+    mov al, [sol_dpp]
+    cmp al, P_STOCK
+    je .yes
+    cmp al, P_FND0
+    jb .no                          ; a tableau column
+    cmp al, P_WASTE
+    je .no
+.yes:
+    pop ax
+    stc
+    ret
+.no:
+    pop ax
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1071,80 +1269,9 @@ sol_bpx:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; sol_banner - the win plaque, centred in the content
-; in:  gfx lock held, origin tracked
-; out: nothing; preserves all registers
-; -----------------------------------------------------------------------------
-sol_banner:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov si, sol_s_win
-    call OSAPI_FONT_WIDTH           ; AX = pixel width
-    mov [sol_tmpa], ax
-    add ax, 24
-    cmp ax, [sol_cwid]
-    jbe .wok
-    mov ax, [sol_cwid]
-.wok:
-    mov [sol_tmpb], ax              ; plaque width
-    mov ax, [sol_cwid]
-    sub ax, [sol_tmpb]
-    shr ax, 1
-    mov [sol_tmpc], ax              ; plaque left
-    mov ax, [sol_chgt]
-    sub ax, 28
-    jns .hok
-    xor ax, ax
-.hok:
-    shr ax, 1
-    mov [sol_tmpd], ax              ; plaque top
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    call .box
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov ax, [sol_tmpc]
-    mov bx, [sol_tmpd]
-    mov cx, ax
-    add cx, [sol_tmpb]
-    dec cx
-    mov dx, bx
-    add dx, 27
-    call sol_framec
-    mov cx, [sol_cwid]
-    sub cx, [sol_tmpa]
-    shr cx, 1
-    add cx, [sol_ox]
-    mov dx, [sol_tmpd]
-    add dx, 10
-    add dx, [sol_oy]
-    mov si, sol_s_win
-    call OSAPI_FONT_STR
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-.box:
-    mov ax, [sol_tmpc]
-    mov bx, [sol_tmpd]
-    mov cx, ax
-    add cx, [sol_tmpb]
-    dec cx
-    mov dx, bx
-    add dx, 27
-    call sol_fillc
-    ret
-
-; -----------------------------------------------------------------------------
 ; sol_about - the About handler (API 0x01E0, SPEC.md 12.2/43)
 ; in:  SI = our window; the UI task, gfx lock HELD, far-called at our segment
-; out: nothing (retf); may clobber the callback set
+; out: nothing; may clobber the callback set
 ;
 ; A window callback in every respect that matters, so it draws directly and
 ; repaints itself. The panel is state, not a modal loop: [sol_abon] goes up,
@@ -1169,7 +1296,7 @@ sol_about:
     pop cx
     pop bx
     pop ax
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sol_abdismiss - take the About panel down, if it is up
@@ -1322,6 +1449,77 @@ sol_abdraw:
     mov dx, bx
     add dx, [sol_abh]
     dec dx
+    ret
+
+; -----------------------------------------------------------------------------
+; sol_banner - the win plaque, centred in the content
+; in:  gfx lock held, origin tracked
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+sol_banner:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, sol_s_win
+    call OSAPI_FONT_WIDTH           ; AX = pixel width
+    mov [sol_tmpa], ax
+    add ax, 24
+    cmp ax, [sol_cwid]
+    jbe .wok
+    mov ax, [sol_cwid]
+.wok:
+    mov [sol_tmpb], ax              ; plaque width
+    mov ax, [sol_cwid]
+    sub ax, [sol_tmpb]
+    shr ax, 1
+    mov [sol_tmpc], ax              ; plaque left
+    mov ax, [sol_chgt]
+    sub ax, 28
+    jns .hok
+    xor ax, ax
+.hok:
+    shr ax, 1
+    mov [sol_tmpd], ax              ; plaque top
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    call .box
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov ax, [sol_tmpc]
+    mov bx, [sol_tmpd]
+    mov cx, ax
+    add cx, [sol_tmpb]
+    dec cx
+    mov dx, bx
+    add dx, 27
+    call sol_framec
+    mov cx, [sol_cwid]
+    sub cx, [sol_tmpa]
+    shr cx, 1
+    add cx, [sol_ox]
+    mov dx, [sol_tmpd]
+    add dx, 10
+    add dx, [sol_oy]
+    mov si, sol_s_win
+    call OSAPI_FONT_STR
+    call sol_pinv                   ; the plaque lands on the felt BETWEEN the
+    pop si                          ; piles, and on a short window its top row
+    pop dx                          ; is a pixel off a column's slivers
+    pop cx
+    pop bx
+    pop ax
+    ret
+.box:
+    mov ax, [sol_tmpc]
+    mov bx, [sol_tmpd]
+    mov cx, ax
+    add cx, [sol_tmpb]
+    dec cx
+    mov dx, bx
+    add dx, 27
+    call sol_fillc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2194,12 +2392,8 @@ sol_onclick:
     jc .out
     cmp al, P_STOCK
     jne .grab
-    call sol_stock
-    mov al, P_STOCK
-    call sol_drawpile
-    mov al, P_WASTE
-    call sol_drawpile
-    jmp .out
+    call sol_cmd_deal               ; the same path the Space key takes, so
+    jmp .out                        ; the redraw rule lives in one place
 .grab:
     call sol_grab                   ; CF = 1: there is nothing to drag
     jc .out
@@ -2212,7 +2406,7 @@ sol_onclick:
     pop cx
     pop bx
     pop ax
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sol_hit - what is under a content-relative point?
@@ -2825,7 +3019,7 @@ sol_onkey:
     pop cx
     pop bx
     pop ax
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sol_oncmd - AM_ONCMD: run a menu item (SPEC.md 12.2)
@@ -2873,7 +3067,7 @@ sol_oncmd:
     pop bp
     pop di
     pop si
-    retf
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sol_cmd_* - the commands themselves, shared by the keys and the menu
@@ -2890,13 +3084,42 @@ sol_cmd_restart:
     call sol_drawall
     ret
 
+; The stock's PICTURE is one bit - a card back, or the turn-over-again ring -
+; so it needs redrawing only when that bit flips: when the last card leaves it,
+; and when a recycle refills it. Dealing from a stock that still has cards
+; leaves exactly the picture that is already on the screen, and redrawing it
+; is not cheap: the back is a lattice, so gfx_blit4 coalesces it into 634
+; gfx_fill runs on the 32x44 metrics (336 on CGA's 28x28). That was being paid
+; on every single click of the stock, which is the one thing a player does
+; over and over.
 sol_cmd_deal:
     push ax
+    push bx
+    push cx
+    mov al, P_STOCK
+    call sol_count
+    mov bl, 0
+    or cl, cl
+    jz .before
+    mov bl, 1                       ; BL = "the stock showed a card" before
+.before:
     call sol_stock
     mov al, P_STOCK
+    call sol_count
+    mov bh, 0
+    or cl, cl
+    jz .after
+    mov bh, 1                       ; ...and after
+.after:
+    cmp bl, bh
+    je .waste                       ; same picture: leave it alone
+    mov al, P_STOCK
     call sol_drawpile
+.waste:
     mov al, P_WASTE
     call sol_drawpile
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -2926,38 +3149,22 @@ sol_cmd_auto:
 
 ; -----------------------------------------------------------------------------
 ; sol_dealmenu - grey out whichever Deal item is already in force
-; in:  SI = our window; out: nothing; preserves all registers
+; in:  [sol_draw3]; out: nothing; preserves all registers
 ;
-; MENU_DIS (SPEC.md 12.2) is half of it: an item string that begins with that
-; byte is drawn grey and never selected, so pointing the two items at their
-; disabled twins turns the menu into a radio pair with no new kernel support
-; at all.
-;
-; The other half is the v3 rule that makes it work. The kernel does not read
-; this set while it draws or tracks - it took a COPY of the whole thing when
-; the bar was laid out (SPEC.md 12.2), so the two stores above change nothing
-; a player can see. RE-REGISTERING the set is how an application says its
-; menus have changed: menu_win_set relayouts when the window is the active
-; one, which re-copies the labels we just repointed. It draws nothing and
-; preserves the flags, so it is safe from inside a menu handler.
+; MENU_DIS (SPEC.md 12.2) is the whole of it: an item string that begins with
+; that byte is drawn grey and never selected, so pointing the two items at
+; their disabled twins turns the menu into a radio pair with no new kernel
+; support at all.
 ; -----------------------------------------------------------------------------
 sol_dealmenu:
     cmp byte [sol_draw3], 0
     jne .three
     mov word [sol_mi_deal], sol_s_d1x
     mov word [sol_mi_deal+2], sol_s_d3
-    jmp short .tell
+    ret
 .three:
     mov word [sol_mi_deal], sol_s_d1
     mov word [sol_mi_deal+2], sol_s_d3x
-.tell:
-    push bx
-    push si
-    mov bx, si                      ; our window; SI = the set, as at start-up
-    mov si, sol_menus
-    call OSAPI_MENU_SET
-    pop si
-    pop bx
     ret
 
 ; =============================================================================
@@ -2993,7 +3200,8 @@ sol_s_d3x:   db MENU_DIS, 'Draw Three', 0
 sol_ttl:     db 'Solitaire', 0
 sol_s_win:   db 'You win!', 0
 
-; --- the About panel's credit (SPEC.md 43) -------------------------------------
+; Rank glyphs, indexed by rank 0..12. Zero means "the ten", the one rank that
+; --- the About panel's credit (SPEC.md 43.8) -----------------------------------
 ; A NUL-terminated array of line pointers, measured rather than pinned
 ; (sol_abmeas): the widest line sets the width and the count sets the
 ; height. Keep every line inside 24 glyphs - CGA gives this window 220px of
@@ -3009,7 +3217,6 @@ sol_ab5:     db 'github.com/Elendilon,', 0
 sol_ab6:     db 'who forked os8088 and', 0
 sol_ab7:     db 'wrote this game.', 0
 
-; Rank glyphs, indexed by rank 0..12. Zero means "the ten", the one rank that
 ; needs two glyphs, and sol_drawface spells it out.
 sol_rankch:
     db 'A', '2', '3', '4', '5', '6', '7', '8', '9', 0, 'J', 'Q', 'K'
@@ -3129,6 +3336,11 @@ sol_ic_ring:
     SBYTE sol_draw3                 ; 0 = deal one, 1 = deal three
     SBYTE sol_wfan                  ; waste cards to fan, 0..3
     SBYTE sol_won
+    SBYTE sol_abon                  ; 1 = the credit panel is up (43.8)
+    SWORD sol_abw                   ; its measured width, height, left and top
+    SWORD sol_abh                   ; - content coords, all four settled by
+    SWORD sol_abl                   ; sol_abmeas before a pixel is drawn
+    SWORD sol_abt
     SBYTE sol_bkcol                 ; the card back's field colour
 
 ; --- sol_drawpile's loop -----------------------------------------------------
@@ -3166,6 +3378,11 @@ sol_ic_ring:
     SWORD sol_cfa                   ; ...their fan step
     SWORD sol_cfu                   ; ...and the face-up one
     SBYTE sol_cfp                   ; the column being measured
+    SWORD sol_keepn                 ; leading cards this draw may skip
+    SWORD sol_lastox                ; the origin the cache below belongs to
+    SWORD sol_lastoy
+    SBUF  sol_pfa, P_TABN*2         ; per column: the fan its slivers were
+    SBUF  sol_pslv, P_TABN*2        ; drawn at, and how many of them
 
 ; --- sol_move / sol_domove / sol_tofnd ---------------------------------------
     SBYTE sol_mvs
@@ -3201,13 +3418,6 @@ sol_ic_ring:
     SWORD sol_dgy
     SWORD sol_dcx                   ; the dropped card's centre
     SWORD sol_dcy
-
-; --- the About panel ---------------------------------------------------------
-    SBYTE sol_abon                  ; 1 = the credit panel is up (SPEC.md 43)
-    SWORD sol_abw                   ; its measured width, height, left and top
-    SWORD sol_abh                   ; - content coords, all four settled by
-    SWORD sol_abl                   ; sol_abmeas before a pixel is drawn
-    SWORD sol_abt
 
 ; --- odds and ends -----------------------------------------------------------
     SWORD sol_tmpa

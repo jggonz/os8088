@@ -87,6 +87,97 @@ desk_paint:
     ret
 
 ; -----------------------------------------------------------------------------
+; desk_zone_rect - one drive zone's DRAWN rect (not its hit zone)
+; in:  AL = zone index
+; out: AX = x1, BX = y1, CX = x2, DX = y2 (inclusive)
+; clobbers: the four outputs (AH included)
+;
+; The drawn rect is wider than the hit zone: the label's white box overhangs
+; DESK_ZOVER px each side, which is what [vid_desk_zl]/[vid_desk_zr] carry
+; (SPEC.md 26/39.2). desk_zone_redraw's own overlap test uses the same two.
+; -----------------------------------------------------------------------------
+desk_zone_rect:
+    xor ah, ah
+    mov bl, DESK_ZSTEP
+    mul bl                      ; AX = zone * pitch (zone <= 1, so AH stays 0)
+    add ax, DESK_ZY0
+    mov bx, ax                  ; y1 = zone top
+    mov dx, ax
+    add dx, DESK_ZH-1           ; y2 = top + 43
+    mov ax, [vid_desk_zl]       ; x1, label overhang included
+    mov cx, [vid_desk_zr]
+    dec cx                      ; x2
+    ret
+
+; -----------------------------------------------------------------------------
+; desk_dmg_zones - which drive zones does the damage rect touch?
+; in:  [wm_dmg_*] (wm.inc); caller holds the gfx lock
+; out: AL = bit n set = zone n is in the damage; the damage rect is GROWN to
+;      cover every one of them. AH clobbered, everything else preserved.
+;
+; A zone is redrawn whole - gray fill, icon, label, highlight - so growing the
+; rect to it is not slack: it is what makes wm_paint_dmg's marking pass notice
+; a window sitting over that zone and redraw it too.
+; -----------------------------------------------------------------------------
+desk_dmg_zones:
+    push bx
+    push cx
+    push dx
+    mov byte [desk_dmask], 0
+    mov byte [desk_dzi], 0      ; the loop index lives in .bss because
+                                ; desk_zone_rect writes all four GP registers
+.zone:
+    mov al, [desk_dzi]
+    cmp al, [desk_ndrives]
+    jae .done
+    call desk_zone_rect
+    call wm_dmg_hit             ; preserves the rect
+    jnc .next
+    call wm_dmg_add
+    mov cl, [desk_dzi]
+    mov al, 1
+    shl al, cl                  ; 8086: a variable shift goes through CL
+    or [desk_dmask], al
+.next:
+    inc byte [desk_dzi]
+    jmp .zone
+.done:
+    mov al, [desk_dmask]
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; desk_paint_mask - draw the drive zones named by a bitmask
+; in:  AL = bit n set = draw zone n; caller holds the gfx lock
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+desk_paint_mask:
+    push ax
+    push bx
+    push cx
+    mov bl, al                  ; BL = the mask for the duration
+    xor cl, cl
+.next:
+    cmp cl, [desk_ndrives]
+    jae .done
+    mov al, bl
+    shr al, cl
+    test al, 1
+    jz .skip
+    mov al, cl
+    call desk_draw_zone         ; preserves every register
+.skip:
+    inc cl
+    jmp .next
+.done:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; desk_click - desktop hit test, called by ui.inc when wm_hit found no
 ;              window under an EVT_MDOWN. NO lock held on entry; selection
 ;              flips redraw only the affected zones under an internally
@@ -337,4 +428,6 @@ desk_clkt    resw 1             ; click birth tick (EV_C) of the last zone click
 desk_zy      resw 1             ; desk_draw_zone: current zone top
 desk_zdrv    resw 1             ; desk_draw_zone: current zone index
 desk_gcol    resb 1             ; desk_draw_zone: saved [gfx_color]
+desk_dmask   resb 1             ; desk_dmg_zones: the mask under construction
+desk_dzi     resb 1             ; desk_dmg_zones: its loop index
 section .text

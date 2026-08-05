@@ -50,8 +50,9 @@ Apple's linker only speaks Mach-O, which is part of why this project uses
 **nasm must be 3.0 or newer.** `kernel/farcall.inc` and `kernel/taskmgr.inc`
 spell their far jumps `call far SEG:OFF` / `jmp far SEG:OFF`, and every nasm
 2.x — 2.11 through 2.16.03 — rejects that form with *mismatch in operand
-sizes*; 3.x accepts it and encodes the 9A/EA you expect. If your
-distribution only has 2.16, the deb from Ubuntu's universe pool
+sizes*; 3.01 accepts it and encodes the 9A/EA you expect. Verified: a clean
+`make` under 3.01 reproduces the committed `build/kernel.bin` byte for byte.
+If your distribution only has 2.16, the deb from Ubuntu's universe pool
 (`pool/universe/n/nasm/nasm_3.01-1_amd64.deb`) installs standalone.
 
 ### Linux
@@ -173,8 +174,13 @@ has read a lot of modern x86:
   no `pusha`/`popa`, no `push imm`, no `shl reg, imm` other than 1 (use CL), no
   `movzx`, no 32-bit registers. If the build fails with a warning-as-error
   about the CPU level, the agent reached for a 186+ instruction.
-- **Tiny model.** CS = DS = SS = 0x1000 for the kernel *and* every loaded
-  program. All calls are near. ES is scratch but must be restored.
+- **Near model.** CS = DS = `KERNEL_SEG` (0x0060) for the kernel and every
+  task; **SS = `LOW_SEG`**, because the task stacks live outside the kernel
+  segment — so `[bp+disp]` addresses SS, and a kernel pointer held in BP needs
+  an explicit `ds:` override. Kernel calls are near; a loaded package owns its
+  own segment and crosses the boundary by far call in one direction and
+  through its header's dispatcher in the other. ES is scratch but must be
+  restored.
 - **Register discipline.** Every public routine preserves all registers except
   its documented outputs. ISRs push DS/ES, load DS = KERNEL_SEG and `cld`
   before string ops. Critical sections are `pushf`/`cli` … `popf` — never

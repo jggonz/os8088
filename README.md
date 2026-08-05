@@ -108,9 +108,8 @@ the menus. All of classic Mac's core interactions work:
   carries a mine glyph; packages without one — and any file that isn't a
   package at all — fall back to the generic icon.
 - **Minesweeper** — the first software package: a colorful 9×9
-  minesweeper that ships on `build/apps.img` in its `GAMES` folder
-  (the software floppy is organized into `APPS` and `GAMES`), loaded
-  through the Disk window. Blue 1s, green 2s, red flags, first-click-safe mine placement,
+  minesweeper that ships on `build/apps.img`, loaded through the Disk
+  window. Blue 1s, green 2s, red flags, first-click-safe mine placement,
   flood fill; `F` toggles flag mode, `N` starts a new game.
 - **Clock** and **Bounce** — each instance runs as its *own pre-empted task*,
   up to ten of each. The clocks tick and the balls bounce while you type or
@@ -127,13 +126,6 @@ the menus. All of classic Mac's core interactions work:
   move the window and the picture is back instantly and the render *resumes*
   instead of starting over. On a 4.77MHz XT a frame takes about two minutes,
   which is exactly why that matters.
-- **Arkanoid** — a brick-breaker whose *game loop is a background task*, so
-  the ball keeps moving between keystrokes and the desktop stays live around
-  it. Powerup capsules, a laser paddle, PC-speaker effects driven straight
-  from the worker, and a paddle that reflects the ball rather than
-  re-launching it — where you hit it and how you were moving both go into
-  the bounce. Contributed, like Paint and Solitaire, by
-  [github.com/Elendilon](https://github.com/Elendilon).
 - **Task Manager** — System → Task Manager: a live CPU load gauge with a
   scrolling history graph, a RAM readout with a usage bar, and one row per
   instance with its state, CPU share and memory. Apps with no task of their own
@@ -160,19 +152,20 @@ the menus. All of classic Mac's core interactions work:
 
 | piece         | how it works on an XT                                       |
 |---------------|--------------------------------------------------------------|
-| graphics      | VGA mode 12h, 640x480x16 planar, drawn directly (no double buffer — a 150KB backbuffer wouldn't fit in 256KB of RAM; the real Mac drew directly too). Set/Reset + Bit Mask fills, XOR for drag outlines and menu highlights. |
-| multitasking  | round-robin off int 08h (PIT, 18.2Hz): chain to the BIOS tick, then save the register frame on the task stack, swap SP, and iret into the next ready task. 12 task slots, 1536-byte stacks. Pre-emptive by default; in cooperative mode the tick declines to switch and a task runs until it yields, sleeps or exits — with a ~1s watchdog so a runaway one can't take the machine with it. |
+| graphics      | VGA mode 12h, 640x480x16 planar, drawn directly by default (the real Mac drew directly too). A 150KB back buffer is available as a runtime option on machines with the heap for it — it is a claim, not a reservation, so a small machine never pays for it. Set/Reset + Bit Mask fills, XOR for drag outlines and menu highlights. |
+| multitasking  | round-robin off int 08h (PIT, 18.2Hz): chain to the BIOS tick, then save the register frame on the task stack, swap SP, and iret into the next ready task. 12 task slots, 512-byte stacks (sized against a measured 150-byte high-water mark). Pre-emptive by default; in cooperative mode the tick declines to switch and a task runs until it yields, sleeps or exits — with a ~1s watchdog so a runaway one can't take the machine with it. |
 | mouse         | Microsoft serial mouse on COM1, IRQ4, 1200 baud 7N1, 3-byte packets — the period-correct XT mouse. QEMU emulates one natively (`-chardev msmouse`). |
 | cursor        | arrow with save-under, drawn by the mouse ISR itself when it's safe, deferred to the next unlock when a task holds the drawing lock. |
 | keyboard      | BIOS int 16h, polled by the UI task. |
 | font          | the VGA ROM's own 8x8 font, copied out via int 10h AX=1130h at boot. |
 | floppy        | BIOS int 13h, one sector per call with retries — reads and writes share one routine, so the CHS math and the retry policy can't drift apart; task switching pauses during a transfer (the tick still runs — the floppy motor needs it). |
-| software      | `.o88` packages on a plain FAT12 data floppy in B: — any PC, Mac or Linux box can read and write the disk, and so can os8088: apps create, replace, rename and delete whole files through five API slots, and the kernel validates every byte it reads off the disk before any of it becomes an address (Note Pad saves and loads DOS-readable text files, named through the kernel's Standard File dialog). A package is a flat binary loaded into a first-fit region of 1000:A000..1000:EFFF — inside the kernel segment, so its window procs are ordinary near pointers — calling the kernel through a fixed jump table at 1000:0010. It ships with a relocation table, so several packages, or several copies of one, run at once. |
+| software      | `.o88` packages on a plain FAT12 data floppy in B: — any PC, Mac or Linux box can read and write the disk, and so can os8088: apps create, replace, rename and delete whole files through five API slots, and the kernel validates every byte it reads off the disk before any of it becomes an address (Note Pad saves and loads DOS-readable text files, named through the kernel's Standard File dialog). A package is a flat binary assembled at org 0 and loaded into a first-fit region of a 60KB pool that is **its own address space**, one segment per package, so there are no relocations at all: it calls the kernel through a fixed table of far-call cells at 0060:0010, and the kernel calls back through a three-byte dispatcher in the package's header. Several packages, or several copies of one, run at once. |
 | concurrency   | one drawing mutex (`gfx_lock`); background tasks re-check visibility *under* the lock and then arm a clip region — their window's content rect less every window above it — so a covered window draws the part that shows instead of skipping the frame; ISRs run IF=0 throughout and never draw over a held lock. SPEC.md is the binding contract. |
 
-The kernel is ~14KB. Everything runs in the tiny model — CS = DS = SS =
-0x1000, all near calls, no linker: NASM `-f bin` flat binaries only, which
-keeps Apple's Mach-O-only toolchain out of the picture.
+The kernel is ~44KB of code and data, 63.5KB with its buffers. Kernel code is
+near-model — CS = DS = `KERNEL_SEG` (0x0060) — with SS pointed at the task
+stacks just above it, and no linker anywhere: NASM `-f bin` flat binaries only, which keeps Apple's
+Mach-O-only toolchain out of the picture.
 
 Only 8086 instructions are used, and `cpu 8086` at the top of kernel.asm
 makes NASM enforce that: no `pusha`, no `push imm`, no shifts by an
@@ -181,24 +174,37 @@ on a slower bus.
 
 ## Memory map
 
+A ladder: every rung is the one below it plus its size, so there are no gaps
+and only the sizes are real numbers.
+
 | linear    | segment | contents                                          |
 |-----------|---------|----------------------------------------------------|
-| `0x00500` | —       | free; boot stack grows down from `0x7C00`          |
-| `0x07C00` | `0000`  | boot sector, where the BIOS puts us                |
-| `0x10000` | `1000`  | kernel: code, data, .bss (task stacks, buffers)    |
-| `0x1A000` | `1000`  | loaded-program pool, offsets `0xA000`..`0xEFFF`    |
-| `0x20000` | `2000`  | menu save-under heap                               |
+| `0x00600` | `0060`  | kernel: code, data, .bss                           |
+| derived   | —       | the mount-time FAT snapshot                        |
+| derived   | —       | task stacks and disk buffers, then task 0's stack  |
+| derived   | —       | the claim heap: everything else, handed out on demand — a package's region is a claim off the top of it, like any other |
 | `0xA0000` | `A000`  | VGA planar framebuffer, 80 bytes per row           |
 
-Fits and runs in 256KB of RAM; a build-time assertion fails the build if the
-kernel image + bss ever reach offset 0xA000, where the loaded-program pool
-starts.
+**The whole kernel — buffers and stacks included — is one span held to a
+single budget**, and a build-time assertion says so. Nothing in the ladder
+carries growth room: each rung is the measured size of what it holds, so the
+heap starts wherever this build's kernel actually ends and moves when the
+kernel does. There is no package pool — a 60KB reservation that every machine
+paid for whether or not anything was loaded — and retiring it is what returned
+that memory to the heap. `docs/KERNEL-MEMORY.md` is the standing account of what the budget is spent
+on, and of the measured RAM floor: **80KB boots and loads a package**, ~176KB
+runs every shipped app at full function, and the heap is simply whatever
+int 12h reports minus 73KB.
 
 ## Layout
 
 ```
 SPEC.md              the binding module contracts (interfaces, layouts,
                      concurrency rules) - read this first
+docs/KERNEL-MEMORY.md what the kernel's byte budget is spent on, and the
+                     measured RAM floor
+docs/PORTING.md      bringing forward a package written against an older
+                     API table (the slot numbers above 0x01B0 have moved)
 boot/boot.asm        512-byte boot sector: LBA->CHS, retrying reads
 kernel/kernel.asm    constants, boot sequence, includes, size assertion
 kernel/vga12.inc     mode 12h planar primitives, save/restore, gfx lock

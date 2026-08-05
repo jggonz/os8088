@@ -2,11 +2,19 @@
 ; os8088 - apps/fmtest/fmtest.asm
 ;
 ; FMTEST: the committed sound Phase 3 gate package (docs/SOUND-PLAN.md).
-; Exercises the public FM surface (slot 0x0084, SPEC.md 20.3/34.2) end to
-; end, so the AdLib gate can be re-run mechanically at later phases. It is
-; NEVER shipped on the apps disks (their directory order is pinned) - the
-; Makefile builds it into its own scratch image, build/fmtest.img, mounted
-; with `make test-snd ADLIB=1 TESTAPPS=build/fmtest.img`.
+; Exercises the public FM surface (slot 0x00F8, SPEC.md 20.3/34.2) end to
+; end, so the AdLib gate can be re-run mechanically. It is NEVER shipped on
+; the apps disks (their directory order is pinned) - the Makefile builds it
+; into its own scratch image, build/fmtest.img, mounted with
+; `make test-snd ADLIB=1 TESTAPPS=build/fmtest.img`.
+;
+; Ported from the other fork, and the one thing that had to change is the
+; thing that changes in EVERY such port: over there a callback is far-called
+; and ends in `retf`; here the kernel reaches it through the three-byte
+; dispatcher in the package's own header (SPEC.md 20.1), so every proc below
+; - the entry included - is an ordinary near proc with a near `ret`. A `retf`
+; left in place returns into the loader's stack frame and hangs the machine
+; at the first paint, which is exactly what it did.
 ;
 ; What each input proves:
 ;   click 1  verb 2 patch-load (DS:SI, carrier MULT=2) on channel 0, then
@@ -14,7 +22,11 @@
 ;            sounding frequency, so sndcheck reading a dominant of 880 Hz
 ;            proves the CALLER'S patch bytes reached the chip - the exact
 ;            path the P3 review found severed (osapi_snd_fm destroyed SI).
-;            The window shows 'FM patch: K' (CF=0) or 'E' per call.
+;            The window shows 'FM patch: K' (both CF=0), 'P' (the patch
+;            verb was refused) or 'N' (the note-on was). Splitting the two
+;            is this fork's one change to the app, and it earned itself
+;            immediately: the port's first failure was N, which said the
+;            frequency never reached the driver - drv_svc_call was eating BX.
 ;   click 2  patch + note-on 660 Hz on channel 1 -> the sustained chord
 ;            (sounding 880 + 1320).
 ;   click 3  verb 3 all-off: both channels keyed off and released.
@@ -45,7 +57,10 @@ ft_entry:
     mov si, ft_tpl
     call OSAPI_WM_CREATE            ; BX = window ptr, CF on table full
     pop si
-    retf                            ; far-called by the loader (SPEC.md 20.5)
+    ret                             ; NEAR: the kernel reaches every proc in a
+                                    ; package through the dispatcher in its
+                                    ; own header (SPEC.md 20.1), so a package
+                                    ; author never writes retf
 
 ; -----------------------------------------------------------------------------
 ; ft_paint - W_PAINT: the patch result line and the stage line
@@ -83,7 +98,7 @@ ft_paint:
     pop cx
     pop bx
     pop ax
-    retf                            ; far-called W_PAINT (SPEC.md 20.5)
+    ret                             ; near, like every callback here
 
 ; -----------------------------------------------------------------------------
 ; ft_onclick - W_ONCLICK: advance the gate stage (see file header)
@@ -126,14 +141,13 @@ ft_onclick:
     add cx, FT_CONT_W-1             ; x2
     add dx, FT_CONT_H-1             ; y2
     call OSAPI_GFX_FILL
-    push cs                         ; ft_paint returns with retf (it is the
-    call ft_paint                   ; far-called W_PAINT); SI = win ptr still
+    call ft_paint                   ; a NEAR call here: SI = win ptr still
     pop si
     pop dx
     pop cx
     pop bx
     pop ax
-    retf                            ; far-called W_ONCLICK (SPEC.md 20.5)
+    ret
 
 ; -----------------------------------------------------------------------------
 ; ft_voice - patch-load ft_patch onto one channel, then key a note
@@ -146,14 +160,17 @@ ft_voice:
     mov al, 2                       ; verb 2: patch-load, DS:SI = the patch
     mov si, ft_patch                ; (the P3 blocker's severed input)
     call OSAPI_SND_FM
-    jc .err
+    jc .errp
     mov al, 0                       ; verb 0: note-on
     call OSAPI_SND_FM
-    jc .err
+    jc .errn
     mov byte [ft_s_line1+10], 'K'
     jmp .out
-.err:
-    mov byte [ft_s_line1+10], 'E'
+.errp:
+    mov byte [ft_s_line1+10], 'P'   ; the patch verb refused
+    jmp .out
+.errn:
+    mov byte [ft_s_line1+10], 'N'   ; ...or the note-on
 .out:
     pop si
     pop ax
@@ -178,7 +195,7 @@ ft_onkey:
     pop dx
     pop cx
     pop ax
-    retf                            ; far-called W_ONKEY (SPEC.md 20.5)
+    ret
 
 ; --- the gate patch (11 bytes, SPEC.md 34.2 layout) --------------------------
 ; A near-sine voice whose carrier runs at TWICE the keyed frequency: the
@@ -198,7 +215,7 @@ ft_tpl:
 
 ft_ttl:     db 'FM Test', 0
 ft_stage:   db 0                    ; 0 idle / 1 one note / 2 chord
-ft_s_line1: db 'FM patch: -', 0     ; [+10] = result: 'K' ok / 'E' refused
+ft_s_line1: db 'FM patch: -', 0     ; [+10] = 'K' ok / 'P' / 'N' refused
 ft_s_idle:  db 'idle - click me', 0
 ft_s_one:   db '440 keyed (880)', 0
 ft_s_two:   db 'chord 880+1320', 0
