@@ -5521,12 +5521,10 @@ Two limits, recorded rather than hidden:
   means fixing up a moved directory's own `..` and reasoning about a chain
   that is briefly named twice. The cost is that a Cut needs room for both
   copies at once.
-- **A file larger than the copy buffer is refused with `Too large`.**
-  `dskw_write` takes a 16-bit length, so 64KB is the ceiling whatever the
-  heap says; the buffer is one `MEM_K_COPY` claim (§50) sized from
-  `mem_avail`, held for the whole operation *including* the part suspended
-  on a question, and released by `fcp_stop` on every exit. `BEVERLY.MOD` is
-  deliberately larger than that.
+- **File size is not a limit** — see §22.5. The buffer is one `MEM_K_COPY`
+  claim (§50) sized from `mem_avail`, held for the whole operation
+  *including* the part suspended on a question, and released by `fcp_stop`
+  on every exit.
 
 `dskw_stat` (name → CF, attribute, first cluster) is published for this: the
 overwrite prompt has to ask "would this replace something, and is that
@@ -5564,6 +5562,58 @@ A drop onto the folder it came from is a no-op, not a copy of everything
 into itself. `..` cannot be dragged (§19.5). A drag is always a move — the
 Macintosh rule within one volume, and the only one this system can honour
 without a modifier key it has no way to report.
+
+### 22.5 A copy is a stream, so size is not a limit
+
+`dskw_write` takes a 16-bit length and always will. A copy is therefore a
+**truncating create followed by a run of appends**: `fcp_xfer` opens the
+source with `fcp_rdopen`, writes a zero-length destination through the
+ordinary `dskw_write` (so the replace, the free-slot hunt and the old
+chain's release all keep their §18.4 discipline), then loops read-chunk /
+`dskw_append` until the source runs out. The buffer bounds the **chunk**,
+not the file.
+
+**`dskw_append`** (module-internal, no API slot) carries a precondition no
+published entry point could: the file's current size must be a whole number
+of clusters, so an append starts on a fresh one and never has to fill a
+partial sector inside a chain that is already there. `fcp_chunkset`
+guarantees it by rounding the chunk down to a cluster multiple; anything
+else is refused rather than mis-written. Its commit order is §18.4's in the
+only shape an append can have — build and write the new sub-chain, flush the
+FAT so it is durable, link the last existing cluster to it and flush again,
+and only then let the directory entry take the new size, which is the single
+sector write that makes those bytes part of the file.
+
+**The read side is not a `dskw_` entry point.** Nothing there writes: the
+FAT snapshot is already in RAM, so stepping the chain is a lookup and the
+only I/O is the data. `fcp_rdnext` reads whole clusters and clamps the
+*count*, never the transfer — the trailing bytes of the last cluster are
+allocated sectors of the file's own chain, so reading them costs nothing and
+saves a second, ragged case.
+
+**Chunk size.** As much as the heap will give, up to 65,024 bytes — 127
+sectors, because 64KB exactly wraps a 16-bit byte count — then rounded down
+to whole clusters. Big is what we ask for: every chunk is a seek, and a real
+floppy is where that is felt.
+
+**The buffer is 512-byte aligned by hand.** `mem_claim` is only paragraph
+aligned, and §2's rule that every disk-visible base is 512-aligned exists
+because int 13h moves one sector per call and the DMA controller answers a
+64KB-boundary straddle with error 09h. The claim's base is rounded up to a
+32-paragraph boundary and one KB given back, which costs at most 496 bytes.
+
+Two bugs this found, both worth naming because neither was in the new code's
+logic:
+
+- **`mem_claim` answers in DX, not AX.** `filecp.inc` read AX, which still
+  held the KB asked for — so the copy buffer was segment 0x0040 and every
+  read scribbled over the interrupt vector table. A small file wrote too
+  little to matter; the first file big enough wedged the machine inside
+  int 13h. The counters that found it bracketed `disk_read`: entered 23
+  times, returned 22.
+- **A read that crosses a 64KB physical boundary is not a *logic* error**,
+  so it does not fail — it hangs in the BIOS. That is why the alignment is
+  explicit here rather than assumed.
 
 ## 23. Minesweeper — the first software package (apps/mines/mines.asm)
 

@@ -39,9 +39,10 @@
 ;   about a chain that is briefly named twice; copy-then-delete reuses one
 ;   engine and is obviously correct, at the cost of needing room for both
 ;   copies at once. Recorded, not overlooked.
-; - A file bigger than the copy buffer is refused with 'Too large'.
-;   dskw_write takes a 16-bit length, so 64KB is the ceiling whatever the
-;   heap says, and BEVERLY.MOD is deliberately larger than that.
+; - Nothing about the SIZE of a file: the buffer bounds the CHUNK, not the
+;   file (SPEC.md 22.5). dskw_write still takes a 16-bit length and always
+;   will, so a copy is a truncating create followed by a run of
+;   dskw_append calls, each one a whole number of clusters.
 ; =============================================================================
 
 FCP_NONE    equ 0               ; [fcp_op]
@@ -57,9 +58,14 @@ FCP_FDST    equ 2               ;        word, its mirror in the destination
 FCP_FPOS    equ 4               ;        word, the next raw entry ordinal to
 FCP_FSIZE   equ 6               ;        examine in the source
 
-FCP_MAXKB   equ 64              ; the copy buffer's cap: dskw_write's length
-FCP_MINKB   equ 4               ; is 16 bits, so a bigger one could not be
-                                ; spent. Below the minimum, Paste refuses.
+FCP_MAXKB   equ 64              ; the copy buffer. It bounds the CHUNK, not
+FCP_MINKB   equ 3               ; the file (SPEC.md 22.5), so the minimum is
+FCP_MAXCH   equ 65024           ; small - but big is still what we ASK for,
+                                ; because every chunk is a seek and a real
+                                ; floppy is where that is felt. The chunk
+                                ; caps at 127 sectors: 64KB exactly would
+                                ; wrap a 16-bit byte count, and this is the
+                                ; largest whole-sector run below it.
 
 ; The step machine's answers, returned in AL by fcp_step:
 FCPS_DONE   equ 0               ; the operation finished
@@ -354,10 +360,15 @@ fcp_bufget:
 .size:
     mov [fcp_kb], ax
     mov bx, MEM_K_COPY
-    call mem_claim              ; AX = segment, 0 = refused
-    or ax, ax
-    jz .no
-    mov [fcp_seg], ax
+    call mem_claim              ; CF=1 refused; the segment comes back in DX,
+    jc .no                      ; NOT in AX - AX still holds the KB asked for
+    mov [fcp_raw], dx           ; what mem_free must be handed back...
+    mov ax, dx
+    add ax, 31                  ; ...and the 512-BYTE aligned base every
+    and ax, 0xFFE0              ; int 13h target has to have (SPEC.md 2): a
+    mov [fcp_seg], ax           ; claim is only PARAGRAPH aligned
+    dec word [fcp_kb]           ; the alignment costs at most 496 bytes
+    call fcp_chunkset
     pop dx
     pop cx
     pop bx
@@ -365,6 +376,7 @@ fcp_bufget:
     ret
 .no:
     mov word [fcp_seg], 0
+    mov word [fcp_raw], 0
     pop dx
     pop cx
     pop bx
@@ -372,14 +384,18 @@ fcp_bufget:
     ret
 
 fcp_bufput:
-    push ax
-    mov ax, [fcp_seg]
-    or ax, ax
+    push bx
+    push dx
+    mov dx, [fcp_raw]           ; the claim, not the aligned view of it
+    or dx, dx
     jz .out
-    call mem_free
+    mov bx, MEM_K_COPY          ; mem_free takes the owner word too, and
+    call mem_free               ; refuses a base that is not this owner's
+    mov word [fcp_raw], 0
     mov word [fcp_seg], 0
 .out:
-    pop ax
+    pop dx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -935,6 +951,145 @@ fcp_fnames:
     ret
 
 ; -----------------------------------------------------------------------------
+; fcp_rdopen - begin a streaming read of SI in the CURRENT directory
+; out: CF=0 with the chain and the size latched; CF=1 with AX = FERR_*
+; clobbers: AX, flags
+; -----------------------------------------------------------------------------
+fcp_rdopen:
+    push bx
+    push cx
+    push dx
+    call dskw_stat              ; BX = first cluster, DX:CX = size
+    jc .out
+    mov [fcp_rclus], bx
+    mov [fcp_rsz], cx
+    mov [fcp_rszh], dx
+    clc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_rdnext - read the next chunk of that file into the copy buffer
+; in:  the SOURCE directory is current
+; out: CF=0 with AX = bytes read, 0 = the file is finished; CF=1 = FERR_IO
+; clobbers: AX (the output), flags
+;
+; Whole clusters, because [fcp_chunk] is a cluster multiple - so the last
+; cluster is read complete even when the file ends inside it, and only the
+; COUNT is clamped. Those trailing bytes are allocated sectors of the file's
+; own chain; reading them costs nothing and saves a second, ragged case.
+;
+; A resumable walk rather than a dskw_ entry point because nothing here
+; writes: the FAT snapshot is already in RAM, so stepping the chain is a
+; lookup and the only I/O is the data. The WRITE side is where the new
+; primitive had to go (dskw_append), and that is where the commit discipline
+; lives.
+; -----------------------------------------------------------------------------
+fcp_rdnext:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov word [fcp_rgot], 0
+    mov es, [fcp_seg]
+.next:
+    mov ax, [fcp_rsz]           ; anything left of the file?
+    or ax, [fcp_rszh]
+    jz .done
+    mov ax, [fcp_rgot]          ; room left in this chunk?
+    cmp ax, [fcp_chunk]
+    jae .done
+    mov ax, [fcp_rclus]
+    cmp ax, 2
+    jb .io
+    cmp ax, [dsk_maxclus]
+    ja .io
+    call dsk_clus2lba
+    jc .io
+    mov bx, [fcp_rgot]
+    mov cl, [dsk_spc]
+    xor ch, ch
+    call disk_read              ; AX = LBA, CX = sectors, ES:BX
+    jc .io
+    call dskw_clbytes           ; AX = bytes per cluster
+    mov cx, ax
+    cmp word [fcp_rszh], 0
+    jne .whole                  ; more than 64KB left: a whole cluster
+    cmp [fcp_rsz], cx
+    jae .whole
+    mov cx, [fcp_rsz]           ; ...or the tail
+.whole:
+    add [fcp_rgot], cx
+    sub [fcp_rsz], cx
+    sbb word [fcp_rszh], 0
+    mov ax, [fcp_rclus]
+    call dsk_next_clus
+    jc .stop
+    mov [fcp_rclus], ax
+    jmp short .next
+.stop:
+    mov word [fcp_rclus], 0     ; the chain ended; the size test above is
+.done:                          ; what decides whether that was expected
+    mov ax, [fcp_rgot]
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.io:
+    mov ax, FERR_IO
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fcp_chunkset - the chunk size: the buffer, rounded DOWN to whole clusters
+; out: [fcp_chunk]; all registers preserved
+;
+; A cluster multiple is dskw_append's precondition (SPEC.md 22.5): every
+; append but the last therefore lands on a cluster boundary, so none of them
+; has to fill a partial sector inside an existing chain.
+; -----------------------------------------------------------------------------
+fcp_chunkset:
+    push ax
+    push cx
+    push dx
+    mov ax, [fcp_kb]
+    cmp ax, FCP_MAXKB
+    jb .kb
+    mov ax, FCP_MAXCH
+    jmp short .round
+.kb:
+    mov cl, 10
+    shl ax, cl
+.round:
+    push ax
+    call dskw_clbytes
+    mov cx, ax
+    pop ax
+    xor dx, dx
+    div cx
+    mul cx                      ; floor(bytes / clusterbytes) * clusterbytes
+    mov [fcp_chunk], ax
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; fcp_xfer - move one file's bytes, source directory to destination
 ; out: CF=0, or CF=1 with AX = FERR_* (FERR_BIG when it does not fit the
 ;      buffer - see the header note about dskw_write's 16-bit length)
@@ -947,25 +1102,34 @@ fcp_xfer:
     push si
     push di
     push es
+    mov al, [fcp_fsdrv]         ; open the source stream
+    mov bx, [fcp_fsclus]
+    call fcp_goto
+    jc .err
+    mov si, fcp_fname
+    call fcp_rdopen
+    jc .err
+
+    mov al, [fcp_fddrv]         ; create (or truncate) the destination: one
+    mov bx, [fcp_fdclus]        ; empty file, through the ordinary write path
+    call fcp_goto               ; so the replace, the slot hunt and the old
+    jc .err                     ; chain's release all keep their discipline
+    mov es, [fcp_seg]
+    xor bx, bx
+    xor cx, cx
+    mov si, fcp_fname
+    call dskw_write
+    jc .err
+
+.chunk:
     mov al, [fcp_fsdrv]
     mov bx, [fcp_fsclus]
     call fcp_goto
     jc .err
-    mov ax, [fcp_kb]            ; KB -> a 16-bit byte capacity. 64 KB is
-    cmp ax, FCP_MAXKB           ; 65,536, which WRAPS TO ZERO - and a zero
-    jb .kb                      ; capacity is not "the lot", it is a file
-    mov ax, 0xFFFF              ; that never fits, so every copy came back
-    jmp short .cap              ; 'Too large'. The claim really is 64 KB;
-.kb:                            ; what cannot be expressed is its last byte
-    mov cl, 10
-    shl ax, cl
-.cap:
-    mov cx, ax
-    mov es, [fcp_seg]
-    xor bx, bx
-    mov si, fcp_fname
-    call dskw_read              ; AX = the file's size, or FERR_BIG
+    call fcp_rdnext             ; AX = bytes, 0 = the file is finished
     jc .err
+    or ax, ax
+    jz .fin
     mov [fcp_flen], ax
     mov al, [fcp_fddrv]
     mov bx, [fcp_fdclus]
@@ -975,8 +1139,10 @@ fcp_xfer:
     xor bx, bx
     mov cx, [fcp_flen]
     mov si, fcp_fname
-    call dskw_write
+    call dskw_append
     jc .err
+    jmp .chunk
+.fin:
     pop es
     pop di
     pop si
@@ -1048,8 +1214,15 @@ fcp_sdrv:   resb 1              ; ...and the source tree's (they are the
                                 ; one word wherever it is)
 fcp_dcwd:   resw 1              ; the paste target's folder
 
-fcp_seg:    resw 1              ; the copy buffer's claim, 0 = none
-fcp_kb:     resw 1              ; its size in KB
+fcp_raw:    resw 1              ; the copy buffer as mem_claim gave it...
+fcp_seg:    resw 1              ; ...and rounded up to a 512-byte boundary
+fcp_kb:     resw 1              ; its size in KB...
+fcp_chunk:  resw 1              ; ...and the bytes one pass moves
+
+fcp_rclus:  resw 1              ; the streaming read: the next cluster...
+fcp_rsz:    resw 1              ; ...the bytes of the file still to come,
+fcp_rszh:   resw 1              ; low and high...
+fcp_rgot:   resw 1              ; ...and what this chunk has taken so far
 
 fcp_depth:  resw 1              ; frames in use, 0 = not inside a tree
 fcp_stack:  resb FCP_MAXD * FCP_FSIZE

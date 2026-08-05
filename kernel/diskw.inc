@@ -1689,9 +1689,10 @@ dskw_sync:
 ; -----------------------------------------------------------------------------
 ; dskw_stat - does NAME exist in the current directory? (SPEC.md 18.4)
 ; in:  SI -> a NUL-terminated 8.3 name
-; out: CF=0 = it exists, with AL = its raw attribute byte and BX = its first
-;      cluster; CF=1 with AX = FERR_NODISK / FERR_NAME / FERR_NOENT / FERR_IO
-; clobbers: AX, BX (the outputs), CF
+; out: CF=0 = it exists, with AL = its raw attribute byte, BX = its first
+;      cluster and DX:CX = its size; CF=1 with AX = FERR_NODISK / FERR_NAME
+;      / FERR_NOENT / FERR_IO
+; clobbers: AX, BX, CX, DX (the outputs), CF
 ;
 ; The lookup half of every other operation in this module, published because
 ; filecp.inc has to ask "would this replace something, and is that something
@@ -1700,8 +1701,6 @@ dskw_sync:
 ; doing the thing.
 ; -----------------------------------------------------------------------------
 dskw_stat:
-    push cx
-    push dx
     push si
     push di
     cmp byte [dsk_mntok], 1
@@ -1714,6 +1713,8 @@ dskw_stat:
     call dskw_ent_load
     jc .fail
     mov bx, [dskw_raw+DSK_R_CLUS]
+    mov cx, [dskw_raw+DSK_R_SIZE]
+    mov dx, [dskw_raw+DSK_R_SIZE+2]
     mov al, [dskw_raw+DSK_R_ATTR]
     clc
     jmp short .out
@@ -1727,8 +1728,160 @@ dskw_stat:
 .out:
     pop di
     pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_clbytes - bytes per cluster
+; out: AX = [dsk_spc] * 512 (a power of two, <= 32,768 by mount rule 8)
+; clobbers: AX (the output), flags
+; -----------------------------------------------------------------------------
+dskw_clbytes:
+    push cx
+    mov al, [dsk_spc]
+    xor ah, ah
+    mov cl, 9
+    shl ax, cl
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; dskw_append - add CX bytes to the end of an existing file (SPEC.md 22.5)
+; in:  SI -> a NUL 8.3 name, ES:BX -> the bytes, CX = count (>= 1)
+; out: CF=0, AX = 0; CF=1, AX = FERR_*
+; clobbers: AX (the output), CF
+;
+; MODULE-INTERNAL - no API slot - because it carries a precondition no
+; published entry point could: the file's current size must be a whole
+; number of CLUSTERS, so the append starts on a fresh one and never has to
+; fill a partial sector inside a chain that is already there. filecp.inc's
+; copy guarantees it by chunking at a cluster multiple (SPEC.md 22.5), and
+; anything else is refused rather than mis-written.
+;
+; This is what removes the 64KB ceiling from a copy. dskw_write takes a
+; 16-bit length and always will; a file of any size is now moved as a run of
+; appends, so the buffer bounds the CHUNK rather than the file.
+;
+; The commit order is SPEC.md 18.4's, in the only shape an append can have:
+; the new sub-chain is allocated and written first (a crash there leaks
+; clusters, which is the failure the rule exists to prefer), the FAT is
+; flushed so it is durable, the last existing cluster is linked to it and the
+; FAT flushed again - and only then does the directory entry take the new
+; size, which is the single sector write that makes those bytes part of the
+; file.
+; -----------------------------------------------------------------------------
+dskw_append:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov [dskw_seg], es
+    mov [dskw_src], bx
+    mov [dskw_len], cx
+    call dskw_apbody
+    pop es
+    pop bp
+    pop di
+    pop si
     pop dx
     pop cx
+    pop bx
+    ret
+
+dskw_apbody:
+    cmp byte [dsk_mntok], 1
+    je .gated
+    mov ax, FERR_NODISK
+    stc
+    ret
+.gated:
+    mov di, dskw_n83
+    call dskw_name83
+    jc .badarg
+    call dskw_find
+    jc .out                     ; AX = FERR_NOENT / FERR_IO already
+    call dskw_ent_load
+    jc .out
+    test byte [dskw_raw+DSK_R_ATTR], DSKW_PROT
+    jnz .prot
+
+    call dskw_clbytes           ; the precondition, checked not assumed: a
+    dec ax                      ; power of two, so the modulo is a mask, and
+    and ax, [dskw_raw+DSK_R_SIZE]   ; only the low word can carry a remainder
+    jnz .badarg
+
+    mov ax, [dskw_len]          ; size the job exactly as dskw_wbody does
+    mov cl, 9
+    shr ax, cl
+    mov dx, [dskw_len]
+    and dx, 511
+    jz .sized
+    inc ax
+.sized:
+    mov [dskw_rem], ax
+    mov [dskw_tail], dx
+    mov word [dskw_zapnext], 0
+
+    call dskw_wdata             ; the new sub-chain, allocated and written
+    jc .rollback
+    call dskw_flush             ; ...and durable
+    jc .rollback
+
+    mov ax, [dskw_raw+DSK_R_CLUS]
+    or ax, ax
+    jz .sethead                 ; the file was empty: the ENTRY takes the
+    mov cx, DSKW_RT_MAX         ; head, and there is nothing to link to
+.walk:
+    mov dx, ax                  ; DX = the last cluster seen
+    call dsk_next_clus
+    jc .linkdx
+    cmp ax, 2
+    jb .linkdx
+    cmp ax, [dsk_maxclus]
+    ja .linkdx
+    loop .walk
+    mov ax, FERR_IO             ; a chain longer than any real disk: a cycle
+    stc
+    ret
+.linkdx:
+    mov ax, dx
+    mov dx, [dskw_first]
+    call dskw_setfat            ; the join
+    call dskw_flush
+    jc .out
+    jmp short .size
+.sethead:
+    mov ax, [dskw_first]
+    mov [dskw_raw+DSK_R_CLUS], ax
+.size:
+    mov ax, [dskw_raw+DSK_R_SIZE]   ; the commit: the entry takes the bytes
+    add ax, [dskw_len]
+    mov [dskw_raw+DSK_R_SIZE], ax
+    mov ax, [dskw_raw+DSK_R_SIZE+2]
+    adc ax, 0
+    mov [dskw_raw+DSK_R_SIZE+2], ax
+    call dskw_ent_store
+    jc .out
+    call dskw_sync
+    xor ax, ax
+    clc
+    ret
+.badarg:
+    mov ax, FERR_NAME
+    stc
+    ret
+.prot:
+    mov ax, FERR_PROT
+    stc
+.out:
+    ret
+.rollback:
+    push ax
+    call dskw_refat             ; drop the half-built sub-chain
+    pop ax
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
