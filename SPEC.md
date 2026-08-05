@@ -610,6 +610,17 @@ which path it got.
 Clipping is `font_char`'s, per cell, screen edge and clip region alike — the
 background clips with the glyph rather than independently of it.
 
+**It also does not flicker, and on a slow machine that is not a small thing.**
+The erase-and-letter pair leaves the run *blank* between the fill and the last
+glyph, and on a 4.77MHz XT that gap is tens of milliseconds — several display
+frames, plainly visible as a flash every time the text is redrawn. `font_run`
+has no such interval on either path: a cell goes from its old content to its
+final content in one write, so there is never a moment when the line is empty.
+Observed directly on the XT — §11.94's benchmark draws the same line three
+ways, and the two erase-and-letter rows flicker and flash while the `font_run`
+row draws smoothly. **No timing column reports this**, because the two methods
+take comparable time and differ in what is on screen during it.
+
 #### 6.1.1 What it is worth, measured
 
 `apps/fontbench` is the measurement. It lives on the **`testing` branch**, not
@@ -664,7 +675,33 @@ spills into it and the fill covers one more byte column:
 
 Mean 291. So the operation goes from **228..336 depending where the window
 was dragged to, to a flat 80** — 2.85x at best and 4.2x at worst, 3.6x on
-average. The aligned row is measured; the rest is that measurement's model
+average.
+
+**And on a real XT the traffic figure is NOT the one that comes true.** It was
+written here that instruction count "understates the win", that the true
+figure sat between the two and probably near the traffic end. Run on a
+4.77MHz 8088 with a Hercules card, the same four rows say:
+
+| row | ms for 120 runs | per run |
+|---|---|---|
+| PAIR aligned | 1211 | 10.09 ms |
+| `font_run` aligned | **932** | **7.77 ms** |
+| PAIR at x+5 | 1251 | 10.43 ms |
+| `font_run` at x+5 | 1267 | 10.56 ms |
+
+**1.30x aligned against aligned — the instruction figure to three digits, not
+the 3.6x traffic figure.** Alignment alone is 3.3% and the fallback costs 1.3%
+over hand-writing the pair, both close to what `-icount` said. So on this
+machine the per-cell overhead — the clip test, the glyph lookup,
+`gfx_rowbase`, `font_ink`, the plane setup — dominates the eight byte-writes
+it guards, and instructions are the better proxy. The traffic count remains
+the right *explanation* of where the writes went; it is not the right
+predictor of time, and this section previously said it was.
+
+Worth keeping for its own sake: **about 1 ms per 8x8 cell** on that machine,
+which two independent harnesses agree on (fontbench 10.09 ms per ten cells,
+typebench 33.3 ms per forty). Nothing else in this document measures the
+hardware all of this is for. The aligned row is measured; the rest is that measurement's model
 (fill = two masked edge columns at 8 rows x 2 read-modify-writes, plus the
 interior as word stores; glyphs = one read-modify-write per non-blank glyph
 row, two when the shift spills) evaluated against the ROM font actually in
@@ -1962,12 +1999,24 @@ its dirty band (§27.2). Under `-icount`:
 
 So snapping is **2.1% on Hercules and 5.8% on VGA** in instructions — more on
 VGA because four planes make the spilled second byte cost four times — and
-drawing the row as a run instead would be a further 6.4% on mono and nothing
-at all on VGA, where `[bb_on]` is 0 and `font_run` falls back. Thin numbers,
-and honestly so: the instruction story for this feature is small and the
-framebuffer-traffic story of §6.1.1 is where the mono case actually lives.
-It is also why Note Pad was left drawing character by character rather than
-restructured onto `font_run`.
+drawing the row as a run instead would be a further 6.4% on mono.
+
+**On the real machine both are bigger, and the second one is bigger than its
+speed.** The same three rows on a 4.77MHz 8088 with a Hercules card:
+
+| row | ms for 40 keystrokes | per keystroke |
+|---|---|---|
+| CHAR aligned | 1332 | 33.3 ms |
+| CHAR at x+5 | 1370 | 34.3 ms |
+| one `font_run` | **1203** | **30.1 ms** |
+
+Snapping is 2.9% and the run conversion a further 10.7%, against 2.1% and
+6.4% under `-icount`. But the number that decides it is not in the table:
+**the two CHAR rows visibly flicker on that machine and the `font_run` row
+does not** (§6.1). A keystroke costs 33 ms there, and the erase-and-letter
+pair spends most of it with the line blank. That is why Note Pad drawing
+character by character is a defect rather than a tuning choice, and why the
+case for converting it does not rest on the 10.7%.
 
 **The app's half of the contract is not enforced.** `WF_SNAP` puts the content
 origin on a boundary; whether the app's own text sits at content-relative x
