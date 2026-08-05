@@ -1043,3 +1043,22 @@ OS88_BSS_SIZE equ 0
                                                 ; to fill+FONT_STR, so it is
                                                 ; never slower than doing it
                                                 ; by hand
+
+%define OSAPI_WM_TOP        KERNEL_SEG:0x0260   ; out BX = the frontmost
+                                                ; VISIBLE window, 0 if none.
+                                                ; Preserves everything else,
+                                                ; takes no lock, callable from
+                                                ; a worker.
+                                                ;
+                                                ; "Do I have focus?" - compare
+                                                ; it against your own window
+                                                ; ptr. You learn that you HAVE
+                                                ; focus (W_ONCLICK fires) and
+                                                ; never that you LOST it, so
+                                                ; without this a real-time app
+                                                ; could not pause when another
+                                                ; window came forward.
+                                                ; W_FLAGS bit1 is not the same
+                                                ; question: it says VISIBLE,
+                                                ; which a wholly covered
+                                                ; window still is.

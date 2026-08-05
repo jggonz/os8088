@@ -131,10 +131,37 @@ ARK_PKEEP   equ 11                  ; ticks a keypress keeps the paddle moving.
                                     ; anything shorter stalls a held key
 ARK_PSTEP   equ 4                   ; paddle pixels a tick, tapped...
 ARK_PFAST   equ 8                   ; ...and held
-ARK_VXMAX   equ 4                   ; the flattest angle the ball may reach.
+
+; --- ball velocity is in QUARTER pixels (SPEC.md 44.3.2) ----------------------
+; It used to be whole pixels a frame, which made the speed ladder 3, 4, 5 and
+; nothing in between - and 3 was too slow while 4 was a jump. A quarter-pixel
+; unit with a per-axis remainder carried across frames buys fractional speeds
+; for two adds and two shifts, and the collision walk below never sees it: the
+; accumulator hands ark_do_ball a whole-pixel delta exactly as [ark_bvx] used
+; to.
+;
+; It also fixes what a dead-centre paddle hit felt like. The walk takes
+; max(|dx|,|dy|) single-pixel steps, so with vx at 0 the ball moved vymag
+; pixels a frame and with vx at the ceiling it moved the ceiling - a centre
+; hit was measurably the slowest shot in the game. At quarter resolution the
+; two are 3.75 and 4, and ARK_VXMIN keeps a centre hit off the vertical
+; entirely.
+ARK_VQ      equ 4                   ; velocity units per pixel
+ARK_VXMAX   equ 4 * ARK_VQ          ; the flattest angle the ball may reach.
                                     ; vx accumulates across bounces, so it
                                     ; needs a ceiling or a rally converges on
                                     ; horizontal and stops coming down
+ARK_VXMIN   equ 1 * ARK_VQ          ; ...and the steepest one a PADDLE bounce
+                                    ; may leave: a ball going straight up is
+                                    ; covering no ground and reads as stalled.
+                                    ; Walls and bricks are free to send it
+                                    ; vertical - it is the shot the player
+                                    ; aimed that has to stay lively
+ARK_VYBASE  equ 15                  ; 3.75 px/frame: the rally speed on wall 1
+ARK_VYSTEP  equ 3                   ; +0.75 a wall...
+ARK_VYMAX   equ 5 * ARK_VQ          ; ...to a 5 px/frame ceiling
+ARK_VYFLOOR equ 10                  ; 2.5 px/frame: Slow may not go below it
+ARK_VYSLOW  equ 2                   ; ...and takes 0.5 px/frame at a time
 
 ; powerup kinds, and the letter each capsule carries
 PU_NONE     equ 0
@@ -142,11 +169,20 @@ PU_EXPAND   equ 1                   ; 'E' a wider paddle
 PU_CATCH    equ 2                   ; 'C' the ball sticks until Space
 PU_LASER    equ 3                   ; 'L' Space fires
 PU_SLOW     equ 4                   ; 'S' the ball slows down
-PU_LIFE     equ 5                   ; 'X' one more life
+PU_LIFE     equ 5                   ; a HEART, and the only thing in the game
+                                    ; that hands back a life. It carried an
+                                    ; 'X' before, which said nothing about
+                                    ; what it did - and an extra life is worth
+                                    ; a glyph of its own rather than the one
+                                    ; letter of five that a player has to
+                                    ; learn by dying. The heart is drawn by
+                                    ; ark_heart, not by the font: the kernel's
+                                    ; ROM set is glyphs 32..126 (SPEC.md 6),
+                                    ; so there is no character to ask for
 PU_KINDS    equ 5
 ARK_MAXPU   equ 3                   ; capsules falling at once
 ARK_MAXSHOT equ 2                   ; bullets in the air at once
-ARK_PUCHANCE equ 4                  ; 1 in this many broken bricks drops one
+ARK_PUCHANCE equ 8                  ; 1 in this many broken bricks drops one
 ARK_PUW     equ 12                  ; capsule size. The height must CONTAIN the
 ARK_PUH     equ 10                  ; 8px glyph drawn one row in, or the letter
                                     ; hangs a row below the rect that erases
@@ -809,6 +845,7 @@ ark_update:
     push si
     push di
     call ark_do_paddle              ; the paddle moves even while parked
+    call ark_focuschk               ; ...and a rally stops if we lost focus
     mov al, [ark_mode]
     cmp al, M_PAUSE
     je .out
@@ -838,6 +875,46 @@ ark_update:
     pop si
     pop dx
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ark_focuschk - pause the rally if another window has come forward
+; preserves all registers
+;
+; A ball keeps moving while the game is covered - that is deliberate (SPEC.md
+; 44.1: a dropped FRAME must not stop the game), and it is exactly wrong when
+; the player has gone to another window. They come back to a lost life they
+; never saw.
+;
+; **The pause is sticky.** Coming back to the front does not resume, because a
+; ball that starts moving the instant a window is raised is a ball nobody was
+; watching yet - the same reason a new life waits on Space. It resumes the way
+; every other pause does, through ark_cmd_pause, and it uses ark_cmd_pause's
+; own [ark_wasmode] so the two cannot leave the mode in different places.
+;
+; Only M_PLAY is interrupted. Every other mode is already still, and M_READY
+; has the ball parked on the paddle where losing focus costs nothing.
+;
+; Runs on the WORKER, holding no lock. That is what OSAPI_WM_TOP is for: it
+; takes no lock, touches no VRAM and answers from the z-order, so a background
+; task may ask. Drawing the banner is not done here - [ark_full] makes the
+; next ark_render frame repaint under the gfx lock, where drawing belongs.
+; -----------------------------------------------------------------------------
+ark_focuschk:
+    push ax
+    push bx
+    cmp byte [ark_mode], M_PLAY
+    jne .out
+    call OSAPI_WM_TOP               ; BX = frontmost visible, 0 = none
+    cmp bx, [ark_win]
+    je .out
+    mov al, M_PLAY
+    mov [ark_wasmode], al
+    mov byte [ark_mode], M_PAUSE
+    mov byte [ark_full], 1          ; the banner, on the next frame that draws
+.out:
     pop bx
     pop ax
     ret
@@ -892,11 +969,13 @@ ark_do_paddle:
 
 ; -----------------------------------------------------------------------------
 ; ark_english - the sideways kick the paddle's own motion imparts
-; out: AX = -2..+2; preserves all other registers
+; out: AX = -2..+2 PIXELS, in quarter units; preserves all other registers
 ;
 ; The paddle moves 4 pixels a tick tapped and 8 held (ARK_PSTEP/ARK_PFAST), so
 ; a quarter of that is a clean -2..+2 without a table. idiv truncates toward
 ; zero, which is what makes a rail-clamped part-move round down to nothing.
+; The result is scaled to quarter units at the end, so the arithmetic above
+; stays the pixel arithmetic it reads as.
 ; -----------------------------------------------------------------------------
 ark_english:
     push bx
@@ -913,13 +992,15 @@ ark_english:
     jge .out
     mov ax, -2
 .out:
+    mov bx, ARK_VQ                  ; pixels -> quarter units, once, here
+    imul bx
     pop dx
     pop bx
     ret
 
 ; -----------------------------------------------------------------------------
 ; ark_throw - the sideways speed a SERVE gets from the paddle's motion
-; out: AX = -3..+3; preserves all other registers
+; out: AX = -3..+3 PIXELS, in quarter units; preserves all other registers
 ;
 ; Twice ark_english's weight, because a serve has no incoming direction to
 ; build on: the flick IS the aim. A paddle standing still serves straight up,
@@ -941,28 +1022,47 @@ ark_throw:
     jge .out
     mov ax, -3
 .out:
+    mov bx, ARK_VQ                  ; pixels -> quarter units
+    imul bx
     pop dx
     pop bx
     ret
 
 ; -----------------------------------------------------------------------------
 ; ark_setspeed - the rally's vertical speed for this level
-; out: [ark_vymag] = 3..5; preserves all registers
+; out: [ark_vymag] = ARK_VYBASE .. ARK_VYMAX, in QUARTER pixels
+; preserves all registers
 ;
 ; |vy| is the authority, not [ark_bvy]: a paddle bounce restores it rather
 ; than inventing one, so the vertical rhythm of a rally stays constant while
 ; the ANGLE is free to change. It is also the one number Slow reduces.
+;
+; 3.75 px/frame on wall 1, where it used to be 3. The ladder was 3/4/5 and
+; could not express anything between, so the opening rally was sluggish and
+; the only cure was a whole extra pixel a frame. Quarter units put the base a
+; third of the way from the old 3 to the old ceiling and keep the ceiling.
 ; -----------------------------------------------------------------------------
 ark_setspeed:
     push ax
+    push bx
+    push dx                         ; mul writes DX, and this routine promises
+                                    ; not to. It used to be an add
     mov al, [ark_level]
     mov ah, 0
-    add ax, 2
-    cmp ax, 5
+    or ax, ax                       ; level 1 is the base; wall 0 never
+    jz .base                        ; happens, but the multiply must not
+    dec ax                          ; underflow if it ever does
+.base:
+    mov bx, ARK_VYSTEP
+    mul bx                          ; AX = (level-1) * step, both small
+    add ax, ARK_VYBASE
+    cmp ax, ARK_VYMAX
     jbe .set
-    mov ax, 5
+    mov ax, ARK_VYMAX
 .set:
     mov [ark_vymag], ax
+    pop dx
+    pop bx
     pop ax
     ret
 
@@ -1029,15 +1129,50 @@ ark_do_ball:
     mov [ark_by], ax
     jmp .out
 .free:
-    mov ax, [ark_bvx]               ; |vx|, sign in [ark_sx]
-    mov word [ark_sx], 1
+    ; --- quarter-pixel velocity -> whole-pixel delta for THIS frame ---------
+    ; The walk below is unchanged: it still gets a whole-pixel (dx,dy) and
+    ; still steps one pixel at a time. All that moved is where those two come
+    ; from - the velocity is in quarters now, and the remainder is carried
+    ; rather than thrown away, which is the whole of what buys 3.75 px/frame.
+    ;
+    ; sar twice is a FLOOR, so the remainder stays 0..3 and never changes
+    ; sign; the long-run average is exact either way, and floor keeps the
+    ; accumulator from oscillating around zero. It is deliberately NOT reset
+    ; on a bounce: what it holds is less than one pixel of travel, so the
+    ; worst a sign flip can do is delay the first step of the new direction
+    ; by a single frame.
+    mov ax, [ark_accx]
+    add ax, [ark_bvx]
+    mov bx, ax
+    sar bx, 1
+    sar bx, 1                       ; BX = whole pixels this frame
+    mov cx, bx
+    shl cx, 1
+    shl cx, 1
+    sub ax, cx
+    mov [ark_accx], ax              ; ...and 0..3 quarters left over
+    mov ax, bx
+
+    mov word [ark_sx], 1            ; |dx|, sign in [ark_sx]
     or ax, ax
     jns .dxok
     neg ax
     mov word [ark_sx], -1
 .dxok:
     mov [ark_adx], ax
-    mov ax, [ark_bvy]
+
+    mov ax, [ark_accy]
+    add ax, [ark_bvy]
+    mov bx, ax
+    sar bx, 1
+    sar bx, 1
+    mov cx, bx
+    shl cx, 1
+    shl cx, 1
+    sub ax, cx
+    mov [ark_accy], ax
+    mov ax, bx
+
     mov word [ark_sy], 1
     or ax, ax
     jns .dyok
@@ -1273,6 +1408,7 @@ ark_padbounce:
 .z2:
     mov ax, 2
 .have:
+    mov [ark_zlast], ax             ; banked for the .minvx tie-break below
     mov bx, ax
     add bx, bx
     mov dx, [ark_zbias+bx]          ; where along the paddle it landed
@@ -1284,8 +1420,40 @@ ark_padbounce:
     mov ax, ARK_VXMAX
 .hi:
     cmp ax, -ARK_VXMAX
-    jge .setvx
+    jge .minvx
     mov ax, -ARK_VXMAX
+.minvx:
+    ; ...and a FLOOR as well as a ceiling. A dead-centre hit with a still
+    ; paddle used to leave vx at 0, and a ball going straight up covers no
+    ; ground: the walk takes max(|dx|,|dy|) steps, so it was also the slowest
+    ; shot in the game, and it comes straight back to where the paddle already
+    ; is. The sign is whichever way it was already going, and a ball with no
+    ; opinion is sent the way the paddle is (ark_english's sign), falling back
+    ; to the side of the paddle it landed on. Only PADDLE bounces get this -
+    ; a brick or a wall may still send it vertical.
+    cmp ax, ARK_VXMIN
+    jge .setvx
+    cmp ax, -ARK_VXMIN
+    jle .setvx
+    or ax, ax
+    jg .plus
+    jl .minus
+    mov ax, [ark_bvx]               ; exactly nothing: use the incoming side
+    or ax, ax
+    jg .plus
+    jl .minus
+    mov ax, [ark_pvel]              ; ...then the paddle's own motion...
+    or ax, ax
+    jg .plus
+    jl .minus
+    mov ax, [ark_zlast]             ; ...then which half of the paddle it hit,
+    cmp ax, 2                       ; which is never a tie: zone 2 is the
+    jl .minus                       ; middle, so <2 is the left half
+.plus:
+    mov ax, ARK_VXMIN
+    jmp short .setvx
+.minus:
+    mov ax, -ARK_VXMIN
 .setvx:
     mov [ark_bvx], ax
     mov ax, 880
@@ -1601,19 +1769,28 @@ ark_apply:
     ret
 
 ; -----------------------------------------------------------------------------
-; ark_slower - knock the rally's vertical speed down one notch, never below 2
-;              (a ball with no vy would never come back down)
+; ark_slower - knock the rally's vertical speed down a notch, never below
+;              ARK_VYFLOOR (a ball with no vy would never come back down)
 ; preserves all registers
 ;
 ; It moves [ark_vymag] rather than [ark_bvy], because vymag is what every
 ; paddle bounce restores - changing only the live velocity would last exactly
 ; until the next one.
+;
+; The notch is ARK_VYSLOW, a QUARTER of what it was: the old step was a whole
+; pixel a frame off a base of three, so one capsule took a third of the
+; rally's speed away and two made it sluggish. Against the 3.75 base this is
+; an eighth, and the floor is 2.5 rather than 2.
 ; -----------------------------------------------------------------------------
 ark_slower:
     push ax
-    cmp word [ark_vymag], 2
+    cmp word [ark_vymag], ARK_VYFLOOR
     jle .out
-    dec word [ark_vymag]
+    sub word [ark_vymag], ARK_VYSLOW
+    cmp word [ark_vymag], ARK_VYFLOOR
+    jge .live
+    mov word [ark_vymag], ARK_VYFLOOR
+.live:
     mov ax, [ark_vymag]             ; ...and take the live ball with it, in
     cmp word [ark_bvy], 0           ; whichever direction it is already going
     jge .set
@@ -2318,16 +2495,24 @@ ark_draw_pu:
     add dx, ARK_PUH - 3
     call ark_fillc
 
-    mov al, CBLACK                  ; the letter is black on the body, and the
+    mov al, CBLACK                  ; the mark is black on the body, and the
     call OSAPI_SET_COLOR            ; body fill above left the pen its colour
-    mov al, [ark_puletter+di]
     mov bx, si
     add bx, bx
     mov cx, [ark_pux+bx]
-    add cx, 2
     mov dx, [ark_puy+bx]
+    mov al, [ark_puletter+di]
+    or al, al
+    jnz .letter
+    add cx, (ARK_PUW - ARK_HEARTW) / 2      ; the heart, centred in the body
+    add dx, (ARK_PUH - ARK_HEARTH) / 2
+    call ark_heart
+    jmp short .marked
+.letter:
+    add cx, 2
     inc dx
     call ark_charc
+.marked:
 
     mov bx, si                      ; ...and THIS is where it now sits, which
     add bx, bx                      ; is the only honest thing to erase from
@@ -2709,6 +2894,71 @@ ark_fillc:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; ark_heart - the extra-life capsule's mark, content-relative
+; in:  CX = left x, DX = top y; the pen is already set
+; out: nothing; preserves all registers
+;
+; Not a font character: the kernel's ROM set is glyphs 32..126 (SPEC.md 6), so
+; there is no heart to ask for. Six rows of horizontal runs through ark_fillc,
+; which is the same primitive every other shape in this module uses.
+; -----------------------------------------------------------------------------
+ark_heart:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    mov di, cx                      ; DI = left x
+    mov bp, dx                      ; BP = this row's y. A VALUE and never an
+                                    ; address: SS is not DS (SPEC.md 1)
+    mov si, ark_heartrun
+.row:
+    call ark_hrun                   ; a row is two runs, the second optional
+    inc si
+    inc si
+    call ark_hrun
+    inc si
+    inc si
+    inc bp
+    cmp si, ark_heartend
+    jb .row
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; one run of the heart: SI -> x1,x2 (x1 = 0xFF means there is none),
+; DI = left x, BP = the row's y; preserves all registers
+ark_hrun:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov al, [si]
+    cmp al, 0xFF
+    je .out
+    mov ah, 0
+    add ax, di                      ; AX = x1
+    mov cl, [si+1]
+    mov ch, 0
+    add cx, di                      ; CX = x2
+    mov bx, bp                      ; BX = y1, DX = y2: one row tall
+    mov dx, bp
+    call ark_fillc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ark_framec:
     push ax
     push bx
@@ -2790,7 +3040,7 @@ ark_ab7:     db 'wrote Solitaire too.', 0
 ; to replace it with: replacing is what made the bounce feel arbitrary, because
 ; a ball arriving steeply from the left and one drifting in from the right left
 ; the paddle identically if they landed in the same zone.
-ark_zbias:   dw -2, -1, 0, 1, 2
+ark_zbias:   dw -2*ARK_VQ, -1*ARK_VQ, 0, 1*ARK_VQ, 2*ARK_VQ
 
 ; Brick colours by row. Not free choices: every one is drawn on the BLACK
 ; background, so none of them may fall in SPEC.md 39.4's black class (0..6) or
@@ -2804,7 +3054,23 @@ ark_rowcol:  db CLRED, CLCYAN, CYELLOW, CLGREEN, CWHITE, CLMAGENTA, CLBLUE, CLGR
 ; Capsules, indexed by PU_* (0 unused). The letter is the identifier; the
 ; colour is a hint that only a 4bpp screen can carry.
 ark_pucol:   db 0, CLGREEN, CLCYAN, CLRED, CYELLOW, CLMAGENTA
-ark_puletter: db 0, 'E', 'C', 'L', 'S', 'X'
+ark_puletter: db 0, 'E', 'C', 'L', 'S', 0   ; 0 = not a letter (the heart)
+
+; The heart, as horizontal runs: x1..x2 per row, 0xFF ends it. Seven columns
+; and six rows, which fits the 10x8 capsule body with a pixel to spare all
+; round. Runs and not a bitmap walk because ark_fillc is what this module
+; already has, and six fills is cheaper than 42 pixel calls on a 4.77MHz
+; machine.
+ark_heartrun:
+    db 1,2,  4,5                    ; .##.##.
+    db 0,6,  0xFF, 0                ; #######
+    db 0,6,  0xFF, 0                ; #######
+    db 1,5,  0xFF, 0                ; .#####.
+    db 2,4,  0xFF, 0                ; ..###..
+    db 3,3,  0xFF, 0                ; ...#...
+ark_heartend:
+ARK_HEARTW  equ 7
+ARK_HEARTH  equ 6
 
 ; --- metrics records (ARK_NMET words each, copied into bss by ark_entry) --------
 ; brick w, brick h, rows, rail, status strip, gap under it, paddle w, paddle h,
@@ -2871,7 +3137,11 @@ ark_met_sml:                        ; CGA 640x200: 137 rows of content, all in
     AWORD ark_pkeep                 ; ticks the paddle keeps moving
     AWORD ark_pspd
     AWORD ark_pvel                  ; pixels the paddle moved this frame
-    AWORD ark_vymag                 ; the rally's vertical speed, 2..5
+    AWORD ark_vymag                 ; the rally's vertical speed, QUARTER px
+    AWORD ark_accx                  ; ...and the sub-pixel remainder each axis
+    AWORD ark_accy                  ; carries between frames (SPEC.md 44.3.2)
+    AWORD ark_zlast                 ; the paddle zone the last bounce landed
+                                    ; in, for ark_padbounce's vx tie-break
     ABYTE ark_pdir
     ABYTE ark_bpp
     ABYTE ark_mode

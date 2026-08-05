@@ -1221,7 +1221,7 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | `wm_paint_chrome` | the dock and the menu bar and nothing else, for a change that revealed no pixels. Declines to `wm_paint_dmg` over the dock strip when a window hangs over it. Caller holds the gfx lock. |
 | `wm_covered`   | in BX = win ptr; out CF=1 = every pixel of its **frame** rect (drop shadow included) is covered by visible windows above it, so a back-to-front painter may skip it entirely — **W_PAINT included**. Overflow of the 16-rect list answers "not covered". Leaves the clip list disarmed. Caller holds the gfx lock. §11.91. |
 | `wm_win_rect`  | in SI = win ptr; out AX,BX,CX,DX = its occupied rect, inclusive, drop shadow included (WF_FULL: no shadow). Clobbers only those four. |
-| `wm_top`       | out BX = frontmost visible window ptr, 0 if none             |
+| `wm_top`       | out BX = frontmost visible window ptr, 0 if none. Takes no lock, touches no VRAM and reads only `wm_zord`, so a **worker task** may call it — which is what API slot 0x0260 (§20.3) is for: a package is told when it *gains* the front (`W_ONCLICK`, `W_PAINT`) and never when it loses it, and `W_FLAGS` bit 1 answers *visible*, which a covered window still is. apps/arkanoid pauses on it (§44.8). |
 | `wm_hit`       | in CX=x, DX=y; out BX = topmost visible window ptr containing the point (0 if none), AL = 0 content, 1 title bar, 2 close box, 3 minimize box, 4 grow box. AL=2/AL=3 only when BX is the frontmost visible window (the only one with the boxes drawn); on any other window those regions report AL=1. AL=4 only when BX is the frontmost visible window **and** has WF_SIZABLE (and not WF_FULL): the 13×13 grow-box rect of the frame drawing above; anywhere else that region is plain content (AL=0). A WF_FULL window reports AL=0 for every point — it has no chrome. |
 | `wm_paint_all` | full repaint: desktop gray (below menu bar), then `desk_paint` (§26 — desktop icons sit on the desktop, under every window), then `dock_paint` (§30 — the dock strip sits on the desktop under every window, like the icons), menu bar, every visible window back→front (frame + white content + W_PAINT) — **except** one `wm_covered` answers yes about, which is skipped whole (§11.91). Caller holds gfx lock. |
 | `wm_content`   | in BX = win ptr; out AX = content left, DX = content top. WF_FULL set → AX = W_X, DX = W_Y (no border, no title bar — §11.2). |
@@ -3922,6 +3922,8 @@ mirrors every offset as an `OSAPI_*` `%define` (§20.5).
                                                 0x0240 wm_title_set
                                                 0x0248 osapi_drv_task (X)
                                                 0x0250 mem_claim_dma  (X)
+                                                0x0258 font_run       (X)
+                                                0x0260 wm_top
 ```
 
 **Every slot `main` ever published keeps `main`'s number and contract**, on
@@ -9471,22 +9473,92 @@ serve flicked right leaves at +21px per 0.18s sample and one flicked left at
 −21; `|vy|` holds at 3px a frame across fifty-five samples and every kind of
 bounce, where the old table would have swung it between 2 and 4 per zone; and
 a ball that arrives at vx=0 leaves a paddle held right at vx=+2, which is
-`ark_english` exactly.
+`ark_english` exactly. Those figures are in the whole-pixel units of the time;
+§44.3.2 rescaled every one of them and moved the base speed, and the *shape*
+each measurement was demonstrating is what still holds.
+
+### 44.3.2 Velocity is in quarter pixels, and a paddle bounce has a floor
+
+`[ark_bvx]`/`[ark_bvy]`/`[ark_vymag]` count **quarter** pixels a frame
+(`ARK_VQ` = 4), and `ark_do_ball` carries the remainder of each axis across
+frames in `[ark_accx]`/`[ark_accy]`. The walk in §44.3 is untouched: it is
+handed a whole-pixel `(dx, dy)` exactly as it was, and still tests after every
+single pixel. All that moved is where those two numbers come from.
+
+The reason is that the speed ladder could not express anything between whole
+pixels. It was 3, 4, 5 by wall, and 3 was sluggish while the only cure
+available was a whole extra pixel a frame — a third faster in one step. The
+base is `ARK_VYBASE` = 15 quarters = **3.75 px/frame** now, a third of the way
+from the old base to the old ceiling, rising `ARK_VYSTEP` (0.75) a wall to the
+same 5 px/frame ceiling. Two adds and two shifts a frame buy the whole range.
+
+Three details are load-bearing:
+
+- **The split is a FLOOR** (`sar` twice, not `idiv`), so the remainder stays
+  0..3 and never changes sign. The long-run average is exact either way;
+  flooring is what keeps the accumulator from oscillating about zero.
+- **It is not reset on a bounce.** What it holds is less than one pixel of
+  travel, so the worst a sign flip can do is delay the first step of the new
+  direction by a single frame — cheaper than the special case.
+- **`ark_english` and `ark_throw` scale at their exit, once.** Both read
+  `[ark_pvel]` in pixels and clamp in pixels, so the arithmetic in the body
+  stays the pixel arithmetic it reads as; the `imul ARK_VQ` is the last
+  instruction before the `ret`. `ark_zbias` is written `-2*ARK_VQ` … `2*ARK_VQ`
+  for the same reason.
+
+**`ARK_VXMIN` is the other half, and it is a fix rather than a rescale.** The
+walk takes `max(|dx|, |dy|)` steps, so a ball going straight up moves `vymag`
+pixels a frame while one at the vx ceiling moves the ceiling: a dead-centre
+hit off a still paddle was *measurably the slowest shot in the game*, and it
+came straight back down to where the paddle already was. So a **paddle**
+bounce — and only a paddle bounce; a wall or a brick may still send the ball
+vertical — floors `|vx|` at one pixel a frame. The sign is whichever way the
+ball was already going, falling back in order to the paddle's own motion and
+then to which half of the paddle it landed on (`[ark_zlast]`, banked by the
+zone computation; zone 2 is the middle, so `< 2` is the left half and the test
+can never tie).
+
+Measured on the running game: the opening rally travels **68px in 1.005s**, or
+3.72 px/frame at 18.2 fps, against the 3.75 asked for. A serve with a still
+paddle rises and falls at a fixed x=318..321 as designed, and the paddle bounce
+that follows leaves at 20px per 1.0s sample — `ARK_VXMIN` exactly, where it
+used to leave at 0.
 
 ### 44.4 Powerups
 
 One broken brick in `ARK_PUCHANCE` drops a capsule, up to three falling at
 once; catching it with the paddle applies it. Five kinds: **E** expand, **C**
 catch (the ball sticks until Space), **L** laser (Space fires, two bolts at a
-time, each breaking one brick), **S** slow, **X** extra life.
+time, each breaking one brick), **S** slow, and a **heart** for an extra life.
 
-A capsule is identified by the **letter** drawn on it from the kernel font,
-not by its colour — five colours cannot survive §39.4's reduction to three
-inks. Its height must *contain* that glyph: an 8px letter drawn one row into
-an 8px box hangs a row below the rect that erases it, and every frame leaves a
-slice of the last one behind. The laser bolt spawns clear of the paddle for
-the same class of reason — spawned *on* it, the bolt's first erase punches a
-hole in the paddle it was fired from.
+A capsule is identified by the **mark** drawn on it, not by its colour — five
+colours cannot survive §39.4's reduction to three inks. Its height must
+*contain* that mark: an 8px letter drawn one row into an 8px box hangs a row
+below the rect that erases it, and every frame leaves a slice of the last one
+behind. The laser bolt spawns clear of the paddle for the same class of reason
+— spawned *on* it, the bolt's first erase punches a hole in the paddle it was
+fired from.
+
+**The extra life is a heart and not a letter**, which costs this module a
+sprite: the kernel's ROM font is glyphs 32..126 (§6), so there is no character
+to ask for. `ark_heart` draws it as six rows of horizontal runs through
+`ark_fillc` — a table of `x1,x2` pairs, `0xFF` ending a row's second run —
+because that is the primitive every other shape here already uses, and six
+fills is cheaper than 42 pixel calls on a 4.77MHz machine. `ark_puletter`
+carries 0 in that slot, and 0 is the flag `ark_draw_pu` branches on. It was an
+**X** before, which said nothing about what it did; an extra life is the one
+effect worth a glyph of its own rather than the one letter in five a player
+has to learn by dying. It is also the **only** thing in the game that hands a
+life back — `ark_apply`'s other four branches never touch `[ark_lives]`.
+
+Two constants carry the game's difficulty and are set by feel rather than by
+derivation. `ARK_PUCHANCE` is 8, half as often as it was: at 4 a wall of
+bricks rained capsules. And `ARK_VYSLOW` — what one **S** takes off
+`[ark_vymag]` — is 2 quarters, an eighth of the base against the *third* the
+old whole-pixel step took off the old base, with the floor at `ARK_VYFLOOR`
+(2.5 px/frame) rather than 2. A ball with no vy would never come back down,
+which is what the floor is for; a ball at a third of its speed after one
+capsule was what the step size was for.
 
 **Three capsules are the frame's dominant cost, so each one is three fills
 rather than six.** What matters here is the *count* of `gfx_fill` calls, not
@@ -9593,6 +9665,39 @@ game steers with the mouse, so the callback's whole body is `ark_track` plus
 as a hung window, which is the only reason the slot is non-zero. It is the
 window's *content* that dispatches it: a click on the frame or the drop shadow
 never reaches a callback, so the panel correctly survives one.
+
+### 44.8 Losing the front pauses the rally, and the pause is sticky
+
+A ball that keeps moving while its window is covered is deliberate — §44.1's
+whole argument is that a dropped *frame* must not stop the game — and it is
+exactly wrong when the player has gone to another window. They come back to a
+lost life they never saw.
+
+`ark_focuschk` runs once per frame, from `ark_update` just after the paddle
+moves. If `[ark_mode]` is `M_PLAY` and `OSAPI_WM_TOP` (slot 0x0260, §20.3)
+answers something other than this window, it banks `M_PLAY` in
+`[ark_wasmode]`, drops to `M_PAUSE` and raises `[ark_full]`. Only `M_PLAY` is
+interrupted: every other
+mode is already still, and `M_READY` has the ball parked on the paddle where
+losing the front costs nothing.
+
+**Coming back to the front does not resume**, and that is the point rather
+than an omission. A ball that starts moving the instant a window is raised is
+a ball nobody was watching yet — the same reason a new life waits on Space. It
+resumes the way every other pause does, through `ark_cmd_pause`, and it uses
+`ark_cmd_pause`'s own `[ark_wasmode]` so the two cannot leave the mode in
+different places.
+
+Three things about where it runs:
+
+- **It is on the WORKER, holding no lock.** That is what `wm_top` can be asked
+  from: it takes no lock, touches no VRAM and answers out of `wm_zord`.
+- **It does not draw.** `[ark_full]` makes the next `ark_render` repaint the
+  board with its banner, under the gfx lock, where drawing belongs.
+- **It needs asking rather than telling.** A package learns it *has* the front
+  (`W_ONCLICK`, `W_PAINT`), but nothing tells it when it *loses* the front —
+  `W_FLAGS` bit 1 only says visible, and a covered window is still visible.
+  `OSAPI_WM_TOP` exists for this.
 
 ## 45. Tracker — the tenth package (apps/tracker/tracker.asm)
 

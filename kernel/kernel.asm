@@ -485,7 +485,18 @@ osapi_table:
                                   ;          been holding empty are filled now
                                   ;          (SPEC.md 20.8), and everything
                                   ;          above them moved 24 bytes up
-osapi_table_end:                  ; 0x0260
+    OSAPI_SLOT wm_top             ; 0x0260 - out BX = the frontmost VISIBLE
+                                  ;          window, 0 if none. The one thing
+                                  ;          a package could not find out: it
+                                  ;          learns it HAS focus (W_ONCLICK)
+                                  ;          and never that it LOST it, so a
+                                  ;          real-time app had no way to pause
+                                  ;          when another window came forward
+                                  ;          (SPEC.md 44.8). Compare against
+                                  ;          your own window ptr; W_FLAGS bit1
+                                  ;          only says VISIBLE, which a wholly
+                                  ;          covered window still is
+osapi_table_end:                  ; 0x0268
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -493,8 +504,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 74 * 8
-%error "os8088 API jump table must be exactly 74 8-byte slots"
+%if OSAPI_TABLE_LEN != 75 * 8
+%error "os8088 API jump table must be exactly 75 8-byte slots"
 %endif
 
 ; =============================================================================
