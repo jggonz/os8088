@@ -34,6 +34,8 @@ make 386         # 86Box Micronics: 386DX @ 25MHz, 2MB, VGA (vm/386dx)
 make xt-sound    # ...the XT again with a Sound Blaster 2.0 in it (vm/xt-sound)
 make 286-sound   # 286 + SB16 (vm/286-sound)
 make 386-sound   # 386DX + SB16 (vm/386-sound)
+make 486         # 86Box AMI 486 (SiS 471): 486DX2 @ 66MHz, 8MB, VGA, SB16 (vm/486)
+make pentium     # 86Box ASUS P/I-P55TP4XE: Pentium 133, 16MB, VGA, SB16 (vm/pentium)
 make bench    # build the testing apps in tests/ into build/bench.img and
               # bench360.img. ON DEMAND ONLY — `all` never builds tests/ and
               # nothing under it ships. Run one with

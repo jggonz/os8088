@@ -28,6 +28,9 @@ VM386DX := $(CURDIR)/vm/386dx
 VMXTSND := $(CURDIR)/vm/xt-sound
 VM286SND := $(CURDIR)/vm/286-sound
 VM386SND := $(CURDIR)/vm/386-sound
+# The top of the range: a 486DX2/66 and a Pentium 133, both with an SB16.
+VM486 := $(CURDIR)/vm/486
+VMPENT := $(CURDIR)/vm/pentium
 
 # VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
 # 39.1). The shipped images are always built without it, so they auto-detect;
@@ -85,7 +88,7 @@ KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
 .PHONY: all run run-640 debug test test-snd xt xt-640 xt-cga xt-hercules \
-        286 386sx 386 xt-sound 286-sound 386-sound bench clean
+        286 386sx 386 xt-sound 286-sound 386-sound 486 pentium bench clean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
 # below). The testing apps are on-demand only: `make bench`.
@@ -689,6 +692,33 @@ xt-sound: $(IMG360) $(APPSIMG360)
 386-sound: $(IMG) $(APPSIMG)
 	@$(UNPROTECT_B) $(VM386SND)/86box.cfg
 	$(BOX) -P $(VM386SND) -N
+
+# The far end of the range, both carrying an SB16 on the ISA bus:
+#
+#   486      AMI 486 (SiS 471) board, 486DX2 @ 66MHz (2 x 33), 8MB
+#   pentium  ASUS P/I-P55TP4XE (430FX), Pentium P54C @ 133MHz (2 x 66), 16MB
+#
+# 8086 real-mode code runs verbatim on both, so what these are FOR is the
+# other end of the timing range: everything sized while looking at a 4.77MHz
+# 8088 (typematic deadlines, the tracker's ring refill, Arkanoid's frame
+# pacing) also has to behave on a machine two orders of magnitude faster,
+# and that is not something QEMU's untimed execution can answer either.
+#
+# The CPU names are 86Box's own and were checked by launching it on a
+# throwaway config and reading the file back after exit (which is how the
+# tree checks any candidate machine): `pentium` is NOT a family - 86Box
+# silently falls back to `pentium_p54c` at its default 75MHz, so a config
+# saying `pentium` boots a P75 while claiming a P133. `i486dx2` is real.
+#
+# Both are AT-class, so the first launch of each stops at the BIOS setup
+# screen wanting a CMOS - same one-time cost per VM directory as the 286.
+486: $(IMG) $(APPSIMG)
+	@$(UNPROTECT_B) $(VM486)/86box.cfg
+	$(BOX) -P $(VM486) -N
+
+pentium: $(IMG) $(APPSIMG)
+	@$(UNPROTECT_B) $(VMPENT)/86box.cfg
+	$(BOX) -P $(VMPENT) -N
 
 # NOTHING IN build/ IS TRACKED, and that is a decision rather than an accident.
 #

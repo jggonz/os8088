@@ -328,13 +328,27 @@ floppy. The judgement is made on hardware.
 Real period hardware: the video **detection probe**, the 6845 programming, a
 4.77 MHz 8088's actual timing, a real CGA or Hercules card, an SB 2.0 on an
 XT bus, and the 286/386 machines. `make xt`, `xt-640`, `xt-cga`,
-`xt-hercules`, `xt-sound`, `286`, `286-sound`, `386sx`, `386`, `386-sound`.
+`xt-hercules`, `xt-sound`, `286`, `286-sound`, `386sx`, `386`, `386-sound`,
+`486`, `pentium`.
+
+The last two are the *fast* end rather than the period end: a 486DX2/66 and a
+Pentium 133, both with an SB16. 8086 real-mode code runs on them verbatim, so
+what they answer is whether the constants sized against a 4.77 MHz 8088 still
+behave two orders of magnitude up — typematic deadlines, the tracker's ring
+refill, Arkanoid's frame pacing. QEMU cannot answer that either: it does not
+model a clock speed at all.
 
 It is not installed in the web container and needs BIOS ROMs, so those
 targets do not run there. Nothing above them does.
 
-Two 86Box-specific traps worth knowing before blaming the OS: it silently
-clamps `mem_size` to the machine's maximum, and a `wp://` prefix on an
+Three 86Box-specific traps worth knowing before blaming the OS: it silently
+clamps `mem_size` to the machine's maximum; a `wp://` prefix on an
 `fdd_0N_fn` path mounts that floppy write-protected — which the OS then
 faithfully reports as "Write protected", and which means `SYSTEM.CFG`
-settings do not survive a reboot.
+settings do not survive a reboot; and an unrecognised `cpu_family` is
+**silently replaced** rather than rejected, at that family's *default* speed.
+`cpu_family = pentium` is not a name 86Box knows: it boots a P54C at 75MHz
+while the config still says 133. The cheap check for any candidate machine or
+CPU is the one in CLAUDE.md — launch 86Box on a throwaway copy of the config,
+`kill -TERM` it, and read the file back, because 86Box rewrites it on exit
+with whatever it actually accepted.
