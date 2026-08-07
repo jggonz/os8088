@@ -13022,3 +13022,419 @@ and freeing it first would leave a claim nothing could ever name again.
 5. **You may own a task.** `task_spawn` takes a segment, so a driver's refill
    loop is an ordinary background task — but it must be gone before detach
    returns.
+
+## 52. ModPlug Player — the fourteenth package (apps/modplug/modplug.asm)
+
+A port of **ModPlug Player V2**'s look and feel onto the window manager:
+`modplug.asm` (shell, transport, playlist store, worker), `mppmix.inc` (the
+replayer and mixer), `mppui.inc` (the skinned player window), `mppset.inc`
+(the Setup window) and `mpplist.inc` (the PlayList editor). Prefixes `mpp_`,
+`mpm_`, `mppu_`, `mpps_`, `mppl_`.
+
+It is the second MOD player in this tree and that is deliberate — see §52.1.
+Tracker (§45) is a FastTracker II *pattern editor's* view of a module, drawn
+fullscreen; this is a **player**, windowed, with an LCD, a transport row and a
+visualiser. They share a lineage and no code.
+
+### 52.1 What was ported, what was not, and why there are two of them
+
+ModPlug Player (github.com/ModPlugPlayer, GPLv3, © Volkan Orhan) is a Qt6
+application. Its interface is nine `.ui` files; its **playback is
+libopenmpt**, with PortAudio underneath and KissFFT/FFTW driving the spectrum
+analyser. Not one of those four libraries is a thing a 4.77 MHz 8086 runs, and
+nothing is gained by pretending otherwise. So the split is drawn explicitly:
+
+- **The interface is ported**, closely: the bevelled body, the green LCD
+  panel, the LED transport row, the time scrubber, the volume slider, the
+  option-button grid, the three visualisers, the Setup window's left-hand page
+  list, and the PlayList editor with its seven buttons. Where a control exists
+  in ModPlug Player and cannot work here it is **drawn and greyed with its
+  reason in the caption** rather than dropped (§47 rule 4) — the shape of the
+  app is the thing being ported, and `16 Bit (8-Bit DAC)` tells a user
+  something that an absent control does not.
+- **The replayer is this tree's own.** `mppmix.inc` starts as
+  `apps/tracker/trkplay.inc` (§45.5) with its `mp_`/`MP_`/`MS_` prefixes
+  renamed, and adds the four DSP stages ModPlug Player's Setup pages actually
+  expose (§52.5) plus an absolute seek and a master volume. It is an
+  **independent copy**: the two players are allowed to diverge, and a replayer
+  bug fixed in one is *not* fixed in the other. That is the cost of the
+  decision and it is recorded here so nobody discovers it as a surprise.
+- **The spectrum analyser is not an FFT** and §52.6 says so rather than
+  leaving it to be found.
+
+### 52.2 Three windows, one instance, and the transport
+
+The player window is the **bound** one — the entry proc returns it — so its
+close box tears the instance down. Setup and PlayList are created later and
+**never bound**, which means `wm_owner` never names them, and three things
+follow at once (the §38 file-dialog model applied to an application):
+
+- their close **and** minimize boxes both reduce to a plain `wm_hide`, so
+  reopening is one `wm_show` and this package contains no close-path code;
+- teardown sweeps them by the `W_SEG` creator stamp (§20.2);
+- and **a file dialog cannot be opened against them.** `fdlg_open` asks
+  `inst_win_owner` and refuses outright when the answer is "nobody", so
+  PlayList ▸ `Add...` passes the *player's* window. That is a hard
+  requirement, not a tidiness; the completion proc reads `[mpp_addpl]` to know
+  which of its two callers it is answering.
+
+The audio half is §45.2's architecture, because it is the architecture §34
+was built for: the UI task opens, closes and pre-mixes; the worker mixes and
+feeds a 16KB ring stream (§34.5 ring mode) at 2,048-byte halves; and every
+close **drains** the worker's in-flight pass (`[mpp_mixing]`) before the
+module blob can move. `mpm_gen` is not reentrant, and that drain is the only
+thing between a mid-fetch mixer and a freed heap claim.
+
+**Pause is not Stop, and the difference is the stream.** Pause leaves the
+stream open and the ring where it is and only stops the replayer advancing,
+so the worker feeds silence and resuming is one flag; Stop closes. The two
+lamps say so: the Stop button lights on the absence of a *stream*, not on the
+absence of playback, so a paused player is not a stopped one.
+
+### 52.3 The face
+
+Content 416 wide, and every rectangle on it is a **word in bss** filled by
+`mppu_layout` from one of two tables (§52.4) — no drawing routine below that
+point contains a screen-derived constant, and `mppu_hit` reads the same words,
+so a control cannot be drawn somewhere it cannot be clicked (the `fm_hit`
+rule).
+
+- **The LCD**: four lines on the full layout — the module's title, the elapsed
+  time and file, the granted format with the DSP flags that are on, and the
+  transport readout (or, with **Info**, what each channel is playing, from
+  `mpm_insname`; those are raw bytes a stranger wrote, so they are filtered to
+  printable ASCII and truncated before any glyph renderer sees them).
+- **Nine LED transport buttons** in ModPlug Player's order: eject, `|<<`,
+  `<<`, `>`, `||`, `[]`, `>>`, `>>|`, and a three-slider Setup mark. Its
+  buttons *are* LEDs — the play triangle lights when it plays — and the strip
+  under each glyph is how that survives to one bit, where "lit green" and
+  "unlit grey" are the same pixel.
+- **The scrubber** seeks by absolute order position, which is why the mixer
+  grew `mpm_setposn`: expressing it as a delta would mean computing
+  `target - current` from a `[mpm_songpos]` the worker is moving underneath
+  it.
+- **The volume slider** folds into `mpm_volslice`, which scales the *volume
+  table selection* — one multiply per channel per chunk, where scaling samples
+  would be one per output sample, and no table rebuild (that is 16,640
+  `imul`s, and this control moves continuously).
+- **Twelve option buttons**, each with an LED, and `mppu_opt_state` is the one
+  predicate the LED, the caption's pen and `mpp_option`'s refusal all read —
+  §47's rule 2, so the greying and the behaviour cannot disagree.
+
+**Every text element on this face is an `OSAPI_FONT_RUN`** (§6.1) and every
+other element is a solid fill. That is what lets the worker — and
+`mppu_refresh`, below — redraw the face under an armed clip region with no
+per-cell gate: fills clip per pixel, and a run decides erase-and-letter
+together per cell, so §11.3's granularity trap has no pair left to break.
+
+**`mppu_refresh` is the difference between "repaint me" and "repaint me over
+whatever is in front of me."** The kernel orders a `W_PAINT`; a menu command,
+an option toggle or a click in the Setup window does not. Every player repaint
+that is not `mpp_paint` itself arms the clip on the player's own window,
+draws, and clears it explicitly — the lock is already held, and `gfx_unlock`,
+which is what normally clears a region, belongs to somebody else. Without it,
+opening Setup drew the player straight over the window it had just opened.
+
+### 52.4 Two layouts, because CGA's desktop band is 156 rows
+
+ModPlug Player's own window is 417x226. CGA gives the whole desktop 156 rows
+(§39), so the full layout cannot exist there. `mppu_layout` copies one of two
+24-word tables into the live layout block, and the **compact** layout keeps
+the LCD (three lines), the transport, the scrubber, the visualiser and six of
+the twelve option buttons: what it gives up is rows, not features. The Setup
+window and the PlayList editor each pick a height the same way, and the Setup
+pane's controls are laid out so that **no control sits below y 96** — which is
+what lets the compact dialog show every control the full one does, rather than
+silently clipping the bottom of a page.
+
+**Two colours are adapter questions, and both were learned by looking at the
+result on CGA:**
+
+- `[mppu_ink]`, the LCD's: `CLGREEN` at 4bpp, `CWHITE` at 1bpp. Green is in
+  the dither class and a glyph rounds to *black* (§39.4), so the ported panel
+  came out black text on a black panel — Missile Command's trap exactly
+  (§48).
+- `[mppu_body]`, the chassis: `CLGRAY` at 4bpp, `CWHITE` at 1bpp. A grey
+  chassis reduces to a 50% checkerboard, and every black button glyph, option
+  caption and status line on it was competing with a screen. White body, black
+  outlines is the 1bpp Macintosh look this OS is modelled on, and a raised
+  bevel survives it as a black L on two sides — which is how a Mac drew a
+  raised edge anyway.
+
+And **a selection inverts rather than taking a colour**, in both list windows.
+`CBLUE` was the obvious choice and is wrong on two adapters out of three:
+colours 0..6 all reduce to black, so a blue band on a black well is a
+selection you cannot see. Inversion is what the Standard File dialog does
+(§38.3) and it survives every reduction.
+
+### 52.5 The Setup window, and the four DSP stages that are real
+
+`SetupWindow.ui` is a 5,034-line Qt form with a page tree down the left. The
+shape is ported — a page list, a pane, and ModPlug Player's own control names
+— and the controls are a **table**, not code: each row is 10 bytes (page,
+kind, x, y, label, value, flags, target) and one drawing loop plus one hit
+loop walk it. That is the only way a dialog with sixty controls stays readable
+in assembly, and the only way its drawing and its hit test cannot drift.
+
+Four settings out of Setup ▸ Audio, ▸ Player and ▸ DSP are **live**, each
+placed where it is honest on this hardware and each costing nothing while it
+is off:
+
+| Setting | Where it lands | Cost |
+|---|---|---|
+| Interpolation Mode | a **second** inner loop in `mpm_mixch` | `imul r/m8` is ~80-98 cycles on an 8088; four channels at 11 kHz would be 4.4M cycles/s on interpolation alone, which is why Linear greys on a tier-0 machine and Cubic and 8-tap Sinc grey everywhere |
+| Dither | its own conversion loop | the default path truncates 2 bits away, so 2 bits of LFSR noise added *before* the shift is textbook rounding dither — real here and nowhere else in the tree |
+| Amiga Filter Type | `mpm_post`, one pole, `y += (x - y) >> k` | k = 1 for the 500's LED filter, k = 2 for the 1200's. A lowpass in the Amiga's spirit; **not Paula**, and the page says so rather than implying it |
+| Bit Crush | `mpm_post`, one `AND` per byte | which is why this one survived the port at all |
+
+Two details of the tail are load-bearing. The one-pole works on **centred**
+samples (`(x - 128) << 8`): the output byte is unsigned around a 0x80 bias, so
+`x << 8` for `x >= 128` reads negative as a signed word and the filter would
+run backwards on the top half of the waveform. And the tail runs **once per
+`mpm_gen`**, over the whole finished output, so a setting changed between
+calls can never split a buffer.
+
+Everything else on those pages is drawn and greyed with its reason:
+`16 Bit (8-Bit DAC)`, `Stereo (Mono Mixer)`, `Cubic (Too Slow)`,
+`Equalizer (No CPU)`, `Auto (No Paula)`, `None (No FFT)`. Nothing is greyed on
+a guess — every reason is a property of the hardware, of the mixer, or of the
+mode that is on right now — and a click on one is refused in silence, because
+the greying already explained itself (§47 rule 6).
+
+**A greyed box changes SHAPE, not just ink.** A live box is a black well with
+a white mark; a greyed one is a *dithered outline* on the body colour, with no
+well and no mark. At 1bpp a greyed caption is pixel-identical to a live one (a
+glyph rounds to black), so without that the user would have no way to tell an
+unavailable control from an available unchecked one — and a frame *does*
+dither, which is precisely what §47 means by greying the whole control.
+
+**Frequency and XT do not take the plain store**, because neither can change
+under a running stream: they route to `mpp_rate_set` / `mpp_xt_toggle`, which
+stop playback through §52.2's drain first.
+
+### 52.6 The spectrum analyser is a projection, not a transform
+
+ModPlug Player runs KissFFT over its output. This machine has no cycles for
+that, and a four-voice source makes it unnecessary: each channel's **period**
+is matched against the replayer's own ProTracker period table — 36 entries,
+three octaves, one semitone apart — and the note index that comes back is
+projected onto the bands, with half the level going to each neighbour so a
+four-voice source has the shape of a spectrum rather than four isolated
+spikes. A semitone index *is* a logarithmic frequency axis, which is the axis
+a spectrum analyser is drawn on, so the bars land where the notes are.
+
+**What it cannot show is harmonic content**: a square-wave lead puts up one
+bar, not the odd-harmonic comb a real transform would draw. It is called an
+analyser because that is ModPlug Player's word for the control; this section
+is the correction, and Setup ▸ Visualization repeats it on screen.
+
+The oscilloscope is honest by construction — it plots the bytes `mpm_gen` just
+produced, banked in `mppu_viz_feed` at the one moment that buffer is fresh,
+read by the drawing side with no handshake (a torn trace is one frame drawn
+from two chunks, invisible at 18 fps and not worth a lock). The VU meter is
+the four channels' own volumes, and a click in a VU row mutes that channel —
+the same gesture the number keys are.
+
+**The elapsed clock is counted on the worker's wake, not on the frame.** It
+cannot come from `[mpp_total]` (16 bits, free-running, wraps every six seconds
+at 11 kHz) and it cannot come from the redraw, because a covered or hidden
+window skips frames and the clock would stop with the picture.
+
+### 52.7 XT mode
+
+§45.9's mode, in this player's clothes: **off by default on a 286-or-better
+and pre-armed on a tier-0 machine**, where the entry proc's `OSAPI_CPU_INFO`
+answer both sets it and relabels its menu item, because the machine this mode
+exists for should not have to go and find the toggle. Reachable four ways —
+the **T** key, the Playback menu's relabeling `XT Mode: Off/On` item (the §12.2
+copy rule: repoint the string and re-call `OSAPI_MENU_SET`), the **XT** option
+button, and Setup ▸ XT — all of which land in `mpp_xt_toggle`.
+
+What it changes: the rate drops 11,000 → 5,500 Hz; the volume tables
+pre-scale the output stage away so the 16-bit accumulator, its zero pass and
+its conversion pass all disappear; and the bounds check leaves the mixer's
+inner loop (§45.9 has the cycle counts). **And it forces the whole DSP tail
+off**, in `mpm_setxt` rather than in the Setup window — so no path into XT
+mode, key or menu or button or the tier-0 pre-arm, can leave a
+per-output-sample cost switched on in the mode whose entire purpose is buying
+those cycles back. The Amiga and Dither controls grey while it is on, for the
+same reason and by the same predicate.
+
+On a **tier-0 machine, and only while something is playing**, the visualiser
+is not animated (§45.9.1's argument, and it keys on `[mpp_cpu0]` — the
+machine — rather than on `[mpm_xt]`, which is a playback setting a 386 user
+may switch on and which says nothing about what that 386 can draw). The LCD,
+the transport lamps and the scrubber keep following the music either way.
+
+The LCD's rate readout carries **one decimal**, and `mpp_rate_arm` keeps
+`[mpm_mixrate]` following the *mode* rather than only the last Play: a
+whole-number readout turns 5,500 Hz into `05 kHz`, and a rate that only became
+true at the next Play left the panel claiming `11.0 kHz` for as long as XT
+mode was on and stopped.
+
+### 52.8 The PlayList editor
+
+ModPlug Player's `PlayListEditorWindow.ui`, with its Add... / Remove /
+Clear List / Shuffle List / Sort List / Save List row. **The store is not in
+that file**: `[mpp_plist]` and its count live with the rest of the player's
+state, because the *transport* reads them — a song ending walks the list
+whether or not this window was ever opened — and an editor that owned the list
+would make the playlist a property of a window a user may never open.
+
+Two departures from ModPlug Player, both deliberate:
+
+- **There is no double-click.** The kernel delivers one `W_ONCLICK` per press
+  (§13) and a package detecting a double-click would have to compare tick
+  counts itself, which on a 4.77 MHz machine under a 1200-baud serial mouse is
+  a timing guess. Clicking a row selects it; clicking the row that is *already*
+  selected plays it. No timing, and no gesture that works on a fast machine
+  and not on a slow one.
+- **Save List and Load List are greyed `(No File)`** rather than dropped: a
+  playlist file would be a format this OS has nowhere else.
+
+**The end of a shuffled list is what `[mpp_plplayed]` answers.** Sequentially,
+"the walk is over" is just the cursor reaching the end; shuffled, a random
+draw goes on forever, so Repeat: Off would never stop — which is not what
+either ModPlug Player or a user means by it. The counter counts songs since
+the last *deliberate* start (an Open, the Prev/Next buttons, a click on the
+selected row) and one list's worth ends the walk in both modes. It is a count
+and not a played-set because 16 entries of set would cost more state than the
+list itself, and the only visible difference is that a shuffle may repeat a
+song before the pass is out.
+
+### 52.9 Keys
+
+The transport row is Winamp's and ModPlug Player's own, which is what a user
+of either already has in their fingers; everything else is the initial of the
+thing it does. §44.2's keypad gate applies verbatim — the numeric keypad sends
+digits with arrow scan codes, so ascii is tested before any scan code is
+trusted.
+
+| Key | Action |
+|---|---|
+| Z X C V B | previous / play / pause / stop / next |
+| L | Open… (the Standard File dialog) |
+| P | PlayList Editor |
+| E | Setup… |
+| R | Repeat: Off → Song → List |
+| H | Shuffle |
+| T | XT mode (§52.7) |
+| G | cycle the visualiser |
+| 1..4 | channel mute (a click in a VU row does the same) |
+| Left / Right | seek by song position |
+| Up / Down | master volume |
+| Esc | close the Setup window or the PlayList editor |
+
+The two secondary windows pass every key they do not use to `mpp_onkey`, so
+there is one keyboard for the application rather than one per window.
+
+### 52.10 Memory
+
+The same four stores as §45.4, and none of them guessed: the package segment
+(image + bss, including the mixer's 65×256 volume table and the 2,048-byte
+output buffer), the module blob as a heap claim sized from `OSAPI_MEM_AVAIL`
+and capped at 128KB then **trimmed** to the file's real size with
+`OSAPI_MEM_REGROW` (§50.3.1 — the shrink that always succeeds in place), one
+16KB ring grant out of the sound driver's staging pool, and nothing else. All
+three are stamped with the instance and force-freed at teardown (§50.2/§34.3),
+which is why the close box needs no code in this package at all.
+
+### 52.11 The honest degradations
+
+- **No Sound Blaster: the interface, without the audio.** `osapi_snd_caps`
+  without `PCM_BG` refuses Play with a status-line message; loading, the LCD,
+  the Setup window, the playlist and every control still work.
+- **Mono adapters**: §52.4's two palette words are what carry the look across;
+  what is genuinely lost is the LCD's green and the spectrum's
+  green/yellow/red ramp, where the bar's **height** becomes the whole reading.
+- **Real-8088 throughput is not promised in the default mode**, and §52.7 is
+  the mode that aims at it — opt-in, and honest about its trade.
+- **A second copy of the replayer** is a maintenance cost this package chose
+  (§52.1) and it is the one thing here that will age.
+
+### 52.12 The invalidation mask — the face is drawn from dirty bits
+
+The worker wakes ~18 times a second (§52.2) and every wake used to redraw the
+LCD's four lines, the fifty-character status line, all nine transport lamps,
+all twelve option lamps and the whole 405-pixel scrubber groove. Measured on
+the shipped build with a counter in `font_char` and `gfx_fill`, that was
+**158 glyph cells and ~71 fills per frame**, essentially none of which
+differed from the pixels already on the screen. At §6.1.1's figure — a cell is
+about a millisecond on a 4.77 MHz XT with Hercules — the text alone was 158 ms
+of work inside a 55 ms frame. The player could not keep its own clock.
+
+Drawing is therefore gated on `[mppu_dirty]`, a word of `MPPI_*` bits, one per
+independently drawable element. This is the period's update-region idea
+applied at the widget rather than the pixel: `InvalRect` + `BeginUpdate` on
+the Macintosh, `InvalidateRect` + the region `BeginPaint` hands back on
+Windows, the layer damage list behind Intuition's `BeginRefresh` on the Amiga.
+Three things fill the mask, and the split is the design:
+
+- **`mppu_poll` asks the cheap pure predicates.** Nine `mppu_btn_lit` calls,
+  twelve `mppu_opt_state` calls, one multiply-and-divide per slider handle and
+  one pointer compare for the status line — arithmetic on bytes this package
+  already owns, folded to one signature word each and compared through
+  `mppu_chk`. **This is what lets the ~14 event handlers keep their single
+  unconditional `call mppu_refresh`**: a click that toggles Shuffle moves
+  `mppu_sig_opts`' answer, `MPPI_OPTLED` goes up, one lamp is drawn, and the
+  handler never had to know which lamp it touched.
+- **`mppu_inval` is for what polling cannot see** — the static face. Body,
+  bevels, LCD well, button glyphs and option labels change only when the
+  kernel repaints us or the About panel comes and goes, and `MPPI_BODY` says
+  so. There are exactly three such sites: `mpp_paint`, `mpp_about`,
+  `mpp_abdismiss`. `MPPI_BODY` **is** all of them — the body fill wipes
+  everything above it — so it short-circuits `mppu_paint` to `mppu_draw_all`.
+- **The LCD is neither.** Its four lines are *composed* every frame (~0.4 ms
+  of arithmetic) and each line's **hash** decides whether it becomes pixels,
+  in `mppu_lcd_emit`, which all four builders already emit through. That is
+  the Task Manager's `tm_chunksum`/`tm_rowck` discipline and its reason: the
+  content check comes first, so a covered readout costs a hash and not a
+  redraw.
+
+Four rules hold it up.
+
+1. **A frame that is not drawn must not clear the bits it did not spend.**
+   `mppu_refresh` returns with the mask intact when the window is hidden,
+   wholly covered or behind its own About panel. That is `tm_rowok`'s rule —
+   ask before you record — and getting it backwards loses the change forever
+   rather than merely delaying it.
+2. **`mppu_draw_all` calls `mppu_ckclr` first.** Every element's recorded
+   state describes pixels that fill is about to destroy, the LCD's line hashes
+   above all. It is the single "pixels died" site, which is why the clear
+   lives there and not at each painter.
+3. **`mppu_chk` never stores a zero key**, `tm_elchk`'s rule verbatim: 0 is
+   what `mppu_ckclr` writes, and a blank LCD line hashes to zero, so an
+   element that legitimately hashes to zero would read as unchanged on the
+   first paint and never be drawn at all.
+4. **`mppu_layout` invalidates `MPPI_BODY` when the content origin moved**,
+   because every recorded state then describes pixels at the old origin.
+
+`mppu_refresh` draws **synchronously** rather than leaving the mask for the
+worker, which is the one place this departs from the deferred-`WM_PAINT` model
+it is otherwise copying. The worker is *hired*, `mpp_hire`'s refusal is
+transient and retried, and a handler that only marked would draw nothing at
+all on a machine where the hire has not yet succeeded — there is no second
+timer here to notice. A line the clip region *cuts* is recorded anyway and
+that is safe rather than sloppy: `font_run` draws per cell under an armed
+region (§6.1.2), so the refused cells are exactly the covered ones, and
+uncovering is a `wm_paint_dmg` repaint, which arrives as a `W_PAINT`, which is
+`MPPI_BODY`, which is `mppu_ckclr`.
+
+**Measured, not asserted** — same counters, same module, same ten seconds of
+playback under QEMU:
+
+| | before | after | |
+|---|---|---|---|
+| glyph cells drawn | 28,365 | 2,468 | **11.5x fewer** |
+| `gfx_fill` calls | 12,856 | 4,130 | **3.1x fewer** |
+| glyph cells per frame | 158 | 13.7 | |
+
+The fills fall by less because what remains is mostly the visualiser's sixteen
+bands and their peak caps, which are animation and were never redundant. The
+cost is 432 bytes of image and 20 bytes of bss.
+
+What this does **not** do, and is the obvious next step: a slider whose handle
+moved still redraws its whole groove, because the groove fill is what erases
+the old handle. The §22.2/§38.3 answer — erase the band it left, draw the band
+it arrived at — applies unchanged, and would also remove the last erase-then-
+draw pair on this face.
