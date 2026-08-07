@@ -37,12 +37,27 @@ Optional: **gitleaks** (the pre-commit hook wants it), **gdb** (for
 ### macOS
 
 ```
+tools/setup-macos.sh               # all of the below, plus the 86Box ROMs
+```
+
+...or by hand:
+
+```
 brew install nasm qemu python3
 brew install gitleaks              # optional but recommended
 brew install --cask 86box          # optional, only for `make xt`
 ```
 
 Xcode Command Line Tools supply `make` and `git` (`xcode-select --install`).
+
+Both spellings work on Apple Silicon and on Intel, and neither wants Rosetta:
+Homebrew's qemu is a native arm64 binary that *emulates* x86, and 86Box ships
+a universal build. What the script does that the three `brew` lines do not is
+**check the nasm version** (below) and **install the 86Box ROM set**, which is
+the step that is easiest to miss — 86Box ships with no ROMs at all, so without
+them it launches fine and then every machine in `vm/` fails at the BIOS.
+`tools/setup-macos.sh --dry-run` prints what it would do and changes nothing;
+`--roms-only` does just the ROM half, for a 86Box installed some other way.
 
 Apple's linker only speaks Mach-O, which is part of why this project uses
 `nasm -f bin` and no linker at all — so there is nothing else to install.
