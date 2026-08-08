@@ -20107,7 +20107,7 @@ field's verdict was exact: *"the numbers freeze entirely, and that is not
 smooth"*. A frozen number beside a moving animation is a frozen number.
 
 So the readout is a fixed **LABEL** (`TLOG_PACEW` cells) and a **BODY**
-(`TLOG_BODYW`: `Pos xx/yy  Row zz` plus the beat ruler), and in a burst mode
+(`TLOG_BODYW`: `Pos xx/yy  Row zz`), and in a burst mode
 the hold **replaces the body, whole** — the animation is *where the numbers
 were*, not beside them, and nothing on screen is standing still because
 nothing on screen is a number.
@@ -20125,12 +20125,14 @@ pays nothing at all.
 perception.** `E` cycles A, B and then all five, and the label names the live
 one:
 
+**Five were built and two survived.** `bar` (full at the seam, decaying),
+`sweep` (one cell running the field) and `in` (a block closing from the
+edges) were all judged and dropped; what is left is the pair that are not
+variations on each other:
+
 | | the hold shows |
 |---|---|
-| **bar** | full at the seam, shrinking from the right — an impact at the front, a decay across |
-| **sweep** | one cell running the field, wrapping — the quietest; still moving when the bar has decayed to nothing |
-| **out** | a solid block growing from the centre to the edges |
-| **in** | a solid block growing from the edges to the centre |
+| **out** | one cell at the centre, growing to the edges — it reaches them in `TLOG_ANIMC` frames, which is about a hold at one cell a frame |
 | **hide** | every cell at once, unchanged for the whole hold — then the letters **revealed from the centre** over `TLOG_REVN` frames once the burst resumes |
 
 `hide` is the one that spends nothing during the wait (one drawing call for
@@ -20138,13 +20140,17 @@ the whole hold) and pays on the far side instead, and its reveal is
 deliberately on the **burst** frames: by the time anything legible is on
 screen the display is already back in step, so the seam was never visible.
 
-**They are NAMED and not lettered**, because the list has been renumbered
-twice — §45.16.3's every-other-frame grid is gone, measured widest and read
-as the worst — and a `PACE C` that means a different thing in two builds is
-worse than no letter at all. **And each one's step is scaled to the field**
-(`TLOG_BARSTEP` / `TLOG_SWPSTEP` / `TLOG_EDGESTEP`): a hold is ~10 frames and
-the body is 33 cells, so one cell a frame left the bar three-quarters full
-when the next burst took it away, which reads as a bar that does not move.
+**The beat ruler went with them, and that is a width decision.** §45.16.4's
+ruler was the instrument for judging evenness by eye, and it made the body —
+and therefore the animation, which *replaces* the body — sixteen cells wider
+than it needed to be, which is too wide to read as one object. In a burst
+mode it was redundant anyway: the row it tracks is on the burst grid rather
+than the music's. The mode label stays, because it does not move and so
+competes with nothing.
+
+They are named and not lettered because the list has now been renumbered
+three times, and a `PACE C` meaning a different thing in two builds is worse
+than no letter at all.
 
 Three details are load-bearing. `[tlog_sweep]` counts **frames since the
 burst ended**, with `TLOG_NOBAR` as the burst's own value — so "is this the

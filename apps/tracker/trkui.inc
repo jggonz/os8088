@@ -2861,15 +2861,15 @@ tui_draw_dyn:
 %else
 ; --- the bench readout: a fixed LABEL and a BODY the hold takes over --------
 ;
-;   LABEL  'BURST bar   '                 TLOG_PACEW cells at x = 8
-;   BODY   'Pos 01  Row 12  |.#........'  TLOG_BODYW cells, beyond it
+;   LABEL  'PACE every  '          TLOG_PACEW cells at x = 8
+;   BODY   'Pos 01/04  Row 12'      TLOG_BODYW cells, beyond it
 ;
 ; The label is NEVER blanked and changes only when the mode does: it is the one
 ; thing on the line that is not part of the experiment, and a label blinking
 ; once a second competes with the animation it is labelling.
 ;
-; The body is everything that is part of it - the position, the row and the
-; beat ruler - and in a burst mode the hold REPLACES it, whole. That is the
+; The body is everything that is part of it - the position and the row - and
+; in a burst mode the hold REPLACES it, whole. That is the
 ; point rather than a saving: a frozen row number beside a moving animation is
 ; a frozen row number, so there is no number, and the animation is where the
 ; numbers were rather than off to one side of them.
@@ -2943,7 +2943,6 @@ tui_draw_dyn:
     jmp short .tdraw
 .thave:
     call tui_wpos
-    call tlog_rule_draw
     mov al, [tlog_tkey]
     cmp al, 0xFF
     je .tdraw

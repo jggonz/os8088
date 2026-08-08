@@ -790,12 +790,12 @@ make test SB16=1 TESTAPPS=build/trklog.img   # builds the disk on demand
 #      is being judged is what the line does over a minute and the key's own
 #      message has gone by then.
 #        every  the shipped cadence - an irregular 110/165
-#        bar    burst, then a bar full at the seam and shrinking
-#        sweep  burst, then one cell running the field
 #        out    burst, then stars OUT from the centre to the edges
-#        in     burst, then stars IN from the edges to the centre
 #        hide   burst, ALL stars for the whole wait, then the letters
 #               revealed from the centre once the display is back in step
+#      (bar, sweep and in were built, judged and dropped; so was the beat
+#      ruler, which made the animation sixteen cells wider than it needed to
+#      be - see SPEC.md 45.16.4.)
 #      In every mode but the first the BODY - the position, the row and the
 #      ruler - is REPLACED by the animation for the whole hold. A frozen row
 #      number beside a moving animation is a frozen row number, which is what
@@ -805,12 +805,8 @@ make test SB16=1 TESTAPPS=build/trklog.img   # builds the disk on demand
 #      (The every-other-frame grid was here as 'B' and is GONE - measurably
 #      the widest spread of the lot, and it read as the worst.)
 #
-#      WHAT YOU WATCH IS THE BEAT RULER, not the hex row number. 16 cells,
-#      one per row, marker walking left to right, and it lands back on cell 0
-#      on the row the click sounds:
-#
-#          PACE every  Pos 01/04  Row 02  |.#.............
-#          PACE every  Pos 01/04  Row 10  #...............  <- CLICK
+#          PACE every  Pos 01/04  Row 02
+#          BURST out   Pos 01/04       *         <- the hold, in place of them
 #
 #      'Pos xx/yy' is the ORDER POSITION out of the song's length - which
 #      entry of the arrangement is playing, not a row. It steps once every 64

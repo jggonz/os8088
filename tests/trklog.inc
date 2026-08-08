@@ -115,25 +115,34 @@ TLOG_TXTKB  equ (TLOG_RECS * TLOG_LINE + 1024 + 1023) / 1024
 
 ; --- the windowed pacing experiment, on the E key (SPEC.md 45.16.4) ---------
 ;
-; `every` is the shipped cadence. Everything from TLOG_PACE_BAR up is the SAME
-; burst - TLOG_BURST rows at one per frame, then a hold until the music catches
-; up - and they differ only in what covers the hold, so the tests below are
-; `jb` against TLOG_PACE_BURST and never `jne`.
+; `every` is the shipped cadence. The other two are the SAME burst - TLOG_BURST
+; rows at one per frame, then a hold until the music catches up - and they
+; differ only in what covers the hold, so the tests below are `jb` against
+; TLOG_PACE_BURST and never `jne`.
 ;
-; THE MODES ARE NAMED, NOT LETTERED, because the list has been renumbered
-; twice: the every-other-frame grid (45.16.3) is gone - it was measurably the
-; widest spread of the lot and read as the worst - and a `PACE C` that means a
-; different thing in two builds is worse than no letter at all.
+; THERE WERE SEVEN AND THERE ARE THREE, which is what the experiment was for.
+; The every-other-frame grid (45.16.3) went first, measured widest and read as
+; the worst; then the field judged the five hold animations and kept the one
+; that was not a variation on a theme - a shape expanding from the centre -
+; plus hiding the wait entirely. `bar`, `sweep` and `in` are gone.
+;
+; AND SO IS THE BEAT RULER. It was the instrument for judging evenness by eye,
+; and it made the body - and therefore the animation, which replaces the body -
+; sixteen cells wider than it needed to be, which is too wide to read as one
+; object. In a burst mode it was redundant anyway: the row it tracks is on the
+; burst grid rather than the music's. The MODE LABEL stays: it does not move,
+; so it competes with nothing.
+;
+; They are named and not lettered because the list has now been renumbered
+; three times, and a `PACE C` meaning a different thing in two builds is worse
+; than no letter at all.
 TLOG_PACE_EVERY equ 0               ; every frame - the shipped behaviour,
                                     ;   an irregular 110/165 (45.16.2)
-TLOG_PACE_BAR   equ 1               ; burst, then a bar full at the seam
-TLOG_PACE_SWEEP equ 2               ; burst, then one cell running the field
-TLOG_PACE_OUT   equ 3               ; burst, then stars centre -> edges
-TLOG_PACE_IN    equ 4               ; burst, then stars edges -> centre
-TLOG_PACE_HIDE  equ 5               ; burst, all stars, then the letters
+TLOG_PACE_OUT   equ 1               ; burst, then stars centre -> edges
+TLOG_PACE_HIDE  equ 2               ; burst, all stars, then the letters
                                     ;   revealed from the centre once synced
-TLOG_PACE_N     equ 6
-TLOG_PACE_BURST equ TLOG_PACE_BAR   ; the first burst mode
+TLOG_PACE_N     equ 3
+TLOG_PACE_BURST equ TLOG_PACE_OUT   ; the first burst mode
 
 TLOG_BURST      equ 8               ; rows in a burst; a power of two, so the
 TLOG_BURST_MASK equ (256 - TLOG_BURST) & 0xFF   ; base is one AND
@@ -146,9 +155,10 @@ TLOG_SWMAX      equ 63              ; ...so the counter saturates BELOW it -
                                     ; k" into 0..3Fh and tags the other two
                                     ; states with 40h and 80h
 TLOG_REVN       equ 4               ; frames `hide` takes to reveal the letters
-TLOG_BARSTEP    equ 4               ; cells an animation moves per HOLD FRAME:
-TLOG_SWPSTEP    equ 3               ; the field is TLOG_BODYW and a hold is
-TLOG_EDGESTEP   equ 2               ; ~10 frames, so one a frame is too slow
+TLOG_ANIMC      equ TLOG_BODYW / 2  ; the animation's centre cell - it reaches
+                                    ; an edge in TLOG_ANIMC frames, which is
+                                    ; about a hold at one cell a frame, so it
+                                    ; needs no scale constant
 TLOG_PACEW      equ 12              ; 'PACE C bar  ' - the mode AND what its
                                     ; hold draws, because seven of them cannot
                                     ; be told apart by a letter alone. It is a
@@ -157,15 +167,9 @@ TLOG_PACEW      equ 12              ; 'PACE C bar  ' - the mode AND what its
                                     ; not part of the experiment, so a label
                                     ; blinking once a second competes with the
                                     ; animation it is labelling
-TLOG_RULEW      equ 16              ; the BEAT RULER: one cell per row, marker
-                                    ; at row mod this. 16 is CLICK.MOD's note
-                                    ; spacing (tests/mkclick.py), so the marker
-                                    ; restarts at cell 0 on the frame the click
-                                    ; is heard - which is the whole instrument:
-                                    ; a hex counter says WHICH row and a walking
-                                    ; marker says whether the rows are EVEN, and
-                                    ; only the second is the question here
-TLOG_BODYW      equ TUI_WPOSW + TLOG_RULEW  ; 'Pos xx/yy  Row zz' + the ruler
+TLOG_BODYW      equ TUI_WPOSW       ; 'Pos xx/yy  Row zz' - and the span an
+                                    ; animation covers, because it REPLACES
+                                    ; them rather than sitting beside them
                                     ; span an animation covers, because the
                                     ; animation REPLACES them rather than
                                     ; sitting beside them
@@ -482,7 +486,7 @@ tlog_clk_key:
 tlog_even_key:
     push ax
     push si
-    mov al, [tlog_pace]             ; E CYCLES every -> bar -> sweep -> out
+    mov al, [tlog_pace]             ; E CYCLES every -> out -> hide
     inc al
     cmp al, TLOG_PACE_N
     jb .set
@@ -507,8 +511,7 @@ tlog_even_key:
     pop ax
     ret
 
-tlog_pace_str:  dw tlog_s_eveno, tlog_s_bar, tlog_s_swp
-                dw tlog_s_out, tlog_s_in, tlog_s_hide
+tlog_pace_str:  dw tlog_s_eveno, tlog_s_out, tlog_s_hide
 
 ; -----------------------------------------------------------------------------
 ; tlog_rate_key (K) - XT mode's SAMPLE RATE, without leaving XT mode
@@ -718,8 +721,7 @@ tlog_pace_draw:
     ret
 
 tlog_pace_lbl:
-    db 'PACE every  ', 'BURST bar   ', 'BURST sweep ', 'BURST out   '
-    db 'BURST in    ', 'BURST hide  '
+    db 'PACE every  ', 'BURST out   ', 'BURST hide  '
 
 ; -----------------------------------------------------------------------------
 ; tlog_blank - CX cells of space at [DI]
@@ -732,51 +734,6 @@ tlog_blank:
     mov [di], al
     inc di
     loop .c
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; tlog_rule_draw - the BEAT RULER at [DI]: TLOG_RULEW cells, marker at
-;                  [tui_arow] mod TLOG_RULEW, cell 0 always marked
-;
-; The field's complaint about the first CLICK.MOD was that the row count
-; "changes, but most of them are completely unrelated to an actual noise" -
-; which is true and is the module working as designed: 60 of its 64 rows are
-; silent so that the four that are not can be timed. What was missing is a way
-; to SEE the thing being judged. A hex row number answers "which row", and the
-; question is "are the rows EVENLY spaced", which a walking marker answers and
-; a number does not.
-;
-; So the marker steps one cell per row and wraps every TLOG_RULEW - which is
-; CLICK.MOD's note spacing, so it lands back on cell 0 exactly when the click
-; sounds. Even walk plus a click on the wrap is the whole of "it is smooth and
-; it is in time"; bunched steps, or a wrap that does not coincide, is not.
-; -----------------------------------------------------------------------------
-tlog_rule_draw:
-    push ax
-    push cx
-    push dx
-    mov al, [tui_arow]
-    and al, TLOG_RULEW - 1          ; a power of two, so no division
-    mov ah, al
-    mov cx, TLOG_RULEW
-    xor dh, dh
-.c:
-    mov al, '.'
-    or dh, dh
-    jnz .nb
-    mov al, '|'                     ; cell 0 is the beat, marker or not
-.nb:
-    cmp dh, ah
-    jne .put
-    mov al, '#'
-.put:
-    mov [di], al
-    inc di
-    inc dh
-    loop .c
-    pop dx
     pop cx
     pop ax
     ret
@@ -808,77 +765,24 @@ tlog_hold_draw:
     push bx
     push cx
     push dx
-    mov bl, [tlog_sweep]            ; BL = k, the frame within the hold...
+    mov bl, [tlog_sweep]            ; BL = k, the frame within the hold
     mov bh, [tlog_pace]
-    mov al, TLOG_BARSTEP            ; ...SCALED, so an animation crosses the
-    cmp bh, TLOG_PACE_BAR           ; field in about a hold. The field is
-    je .scale                       ; TLOG_BODYW wide and a hold is ~10 frames
-    mov al, TLOG_SWPSTEP            ; at CLICK.MOD's tempo, so one cell a frame
-    cmp bh, TLOG_PACE_SWEEP         ; would leave a 33-cell bar three-quarters
-    je .scale                       ; full when the next burst took it away -
-    mov al, TLOG_EDGESTEP           ; which reads as a bar that does not move
-.scale:
-    mul bl                          ; AX = k * step (both bytes: AH is the
-    cmp ax, TLOG_BODYW              ; overflow, and the clamp catches it)
-    jbe .kok
-    mov ax, TLOG_BODYW
-.kok:
-    mov bl, al
     mov cx, TLOG_BODYW
     xor dh, dh                      ; DH = the cell index
 .c:
-    mov al, ' '
-    cmp bh, TLOG_PACE_BAR
-    jne .nbar
-    mov al, TLOG_BODYW              ; bar: lit while index < W - k, so it is
-    sub al, bl                      ; full at the seam and shrinks from the
-    jbe .dark                       ; RIGHT - a decay, where shrinking from
-    cmp dh, al                      ; the left reads as the block MOVING
-    jae .dark
-    mov al, '#'
-    jmp short .put
-.nbar:
-    cmp bh, TLOG_PACE_SWEEP
-    jne .nswp
-    mov al, bl                      ; sweep: one cell, wrapping
-    cmp al, TLOG_BODYW
-    jb .swok
-    xor al, al
-.swok:
-    cmp al, dh
-    mov al, ' '
-    jne .put
-    mov al, '*'
-    jmp short .put
-.nswp:
-    cmp bh, TLOG_PACE_OUT
-    jne .nout
-    mov al, TLOG_BODYW / 2          ; out: cells [W/2-1-k .. W/2+k]
-    sub al, 1
-    sub al, bl
-    jc .lit                         ; k past the half: the whole field
-    cmp dh, al
-    jb .dark
-    mov al, TLOG_BODYW / 2
-    add al, bl
-    cmp dh, al
+    cmp bh, TLOG_PACE_HIDE          ; hide: every cell, every frame - so the
+    je .lit                         ; whole hold is ONE drawing call, and what
+                                    ; it trades for that is the reveal on the
+                                    ; far side (tlog_rev)
+    mov al, dh                      ; out: lit while |i - centre| <= k, so the
+    sub al, TLOG_ANIMC              ; frame the burst ends is the centre cell
+    jns .pos                        ; alone and it reaches the edges in
+    neg al                          ; TLOG_ANIMC frames - about a hold
+.pos:
+    cmp al, bl
     jbe .lit
-.dark:
     mov al, ' '
     jmp short .put
-.nout:
-    cmp bh, TLOG_PACE_IN
-    jne .nin
-    cmp dh, bl                      ; in: cells [0..k] and [W-1-k..W-1]
-    jbe .lit
-    mov al, TLOG_BODYW - 1
-    sub al, bl
-    jc .lit
-    cmp dh, al
-    jae .lit
-    mov al, ' '
-    jmp short .put
-.nin:                               ; hide: every cell, every frame
 .lit:
     mov al, '*'
 .put:
@@ -1385,10 +1289,7 @@ tlog_s_syncx:   db 'Sync OFF: the screen follows the mixer', 0
 tlog_s_clkt:    db 'Clock: one frame per tick', 0
 tlog_s_clkr:    db 'Clock: one frame per sub-tick', 0
 tlog_s_eveno:   db 'Every frame - 110/165, the shipped cadence', 0
-tlog_s_bar:     db 'Burst, then a decaying BAR over the wait', 0
-tlog_s_swp:     db 'Burst, then a SWEEP running the field', 0
 tlog_s_out:     db 'Burst, then stars OUT from the centre', 0
-tlog_s_in:      db 'Burst, then stars IN from the edges', 0
 tlog_s_hide:    db 'Burst, all stars, then the letters REVEALED', 0
 
 ; --- bss ---------------------------------------------------------------------
