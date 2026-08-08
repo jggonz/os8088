@@ -2487,6 +2487,35 @@ says which UART the mouse is on and the line says which wire it pulls, and
 `0x08` with row 0, is a cross-wired card — a fact no emulator here produces
 by accident and no reading of the source can supply.
 
+#### 9.4.3 …and a fourth word, which is the HARNESS's
+
+A pointer to **`mouse_x`**, and behind it `mouse_y` and `mouse_btn`. It is
+**appended**, so every offset above is unmoved and a reader written against
+the older block is unaffected.
+
+It is there for a different reason from the rest of this block, and the
+reason is worth stating because it has cost every scripted test in this tree
+time. **MartyPC's mouse is RELATIVE** — `os88marty.py mouse` clocks a real
+Microsoft packet through the UART, which is the whole point (§9.4.2's path is
+what a test exists to exercise) — so a script that wants to click a button at
+`(x, y)` can only get there by **dead reckoning**: drive hard into a corner
+until the kernel's edge clamp pins the cursor at a known point, then step out
+by the difference. Every packet the guest rounded, coalesced or dropped
+while the UART was busy moves the destination, and the failure is silent: the
+click lands a few pixels off a 16px control, nothing happens, and the harness
+reports a feature that does not work.
+
+Reading where the cursor **actually is** closes the loop. `tools/os88mouse.py`
+reads this pointer, reads the live position, computes the exact remaining
+delta, sends it, and re-reads until it agrees — typically two packets, and it
+can *say* when it failed to converge instead of clicking into empty desktop.
+
+**It is not a way to place the cursor, and must not become one.** A poke to
+`mouse_x` would skip the UART, `mou_isr` and the packet decoder — the three
+things a scripted click is there to drive — and CLAUDE.md's note that no debug
+module was written for the mouse *for exactly that reason* still stands. The
+packet does all the work; this word only reports where it landed.
+
 It shares §18.94's mechanism and **deliberately not its knob** — it had a
 fixed word of its own at `0060:0006` until §57 replaced the per-instrument
 words with one registry, and that address is free again.
@@ -7075,6 +7104,65 @@ one-sector file **3 → 2**. `tests/filetest` passes all 25 checks and
 `tools/os88disk.py --verify` is clean, which is the gate this had to clear —
 the change touches create, replace, delete, rename and stat alike.
 
+### 18.4.4 Chunked I/O — `OSAPI_FILE_APPEND` and `OSAPI_FILE_READ_AT`
+
+`OSAPI_FILE_READ` and `OSAPI_FILE_WRITE` move a **whole file**, so the
+largest file a package could touch was the largest heap claim it could take.
+A 116KB module on a small machine could not be opened at all, and nothing in
+the API said why — the read simply answered `FERR_BIG`.
+
+The pair that fixes it is not new code. §22.5's copy has moved files bigger
+than its buffer since it was written, through `dskw_append` and a resumable
+`dsk_read_chain`; both were deliberately module-internal, `dskw_append`'s own
+comment saying "no API slot" because it carries a precondition. **The
+precondition is publishable — it just has to be published**, which is what
+these two slots do.
+
+**One rule governs both, at each end: a chunk is a whole number of
+CLUSTERS**, except the last, which is whatever is left. That is what makes an
+offset land exactly where the previous chunk stopped, and what lets an append
+start on a fresh cluster instead of filling a partial sector inside a chain
+that is already there. `OSAPI_FILE_DFREE` has always answered the cluster
+size, so nothing new was needed to ask it.
+
+**And the cluster size is the DESTINATION's as well as the source's.** Two
+volumes need not agree — a hard-disk partition picks its cluster size from
+its capacity (§52.3) while a floppy is 512 bytes — so a copy chunks at a
+multiple of both. This is `fcp_clspan`'s rule (§22.5), and it is stated here
+because a package now has to obey it: getting it wrong loses the tail of
+every cluster, which is exactly the bug `fcp_clspan` exists to prevent and
+which only showed up when partitions stopped all having 512-byte clusters.
+
+**The read is STATELESS and the offset is the whole argument.** `fcp_rdnext`
+resumes through `[dsk_chain_end]` and three module words, which is right for
+a caller that is the only thing running and wrong for a published slot: the
+loop this exists for is *read → write → read*, and the write walks
+directories and the FAT. A resume token living in the kernel would be
+destroyed by exactly the work it is feeding. Same reasoning as §19.7.1's
+ordinal, and the two were designed together.
+
+The price is walking the chain from the front on every call, and it is
+smaller than it looks: the walk is FAT lookups against a resident window,
+while the caller is spending **65 ms a sector** (PERFORMANCE.md — a sector
+inside a well-coalesced run; 238 was the `AL` bug, not the drive) on the data
+being handed to it. A 116KB file in 32KB chunks is four walks averaging ~116
+clusters — a few hundred word reads against twelve seconds of floppy.
+
+Both preconditions are **refused rather than mis-handled**, and both answer
+`FERR_NAME`: a non-cluster offset or capacity on the read, and a file whose
+current size is not a cluster multiple on the append. A read at or past the
+end of the file is **not** an error — it answers zero bytes, which is how the
+caller's loop terminates.
+
+`dskw_append` also refuses a **protected** file with `FERR_PROT`, `DSKW_PROT`
+being read-only|hidden|system|label|directory — so there is no chunked path
+to a system file and §19.6.1's slot is the only way to write one. That is a
+constraint on §52.10.4 rather than an oversight: the installer writes
+`KERNEL.SYS` **whole**, in one `OSAPI_FILE_WRITE_SYS` call, which is also the
+strongest guarantee that it lands contiguously from cluster 2 the way
+§52.10.2 requires. Chunked I/O is for the *application* files, which are the
+big ones and are not protected.
+
 ### 18.94 The transfer instrument, published at a fixed offset
 
 **`make DISKCNT=1`, which is now every FIELD kernel and no shipped one.** The
@@ -7835,9 +7923,12 @@ Two things do NOT follow, and both had to be arranged:
   treats hidden and system as untouchable, so the first `SYSTEM.CFG` save
   would create the file and every save after it would be refused
   `FERR_PROT` by the very bits the first one set. `dskw_write_sys` is the
-  narrow exemption: **kernel-only, no API slot and there must never be one**,
-  because the whole point of this section is that a package cannot make a
-  file the user can neither see nor delete. It differs from `dskw_write` in
+  narrow exemption: **kernel-only, and reachable from outside the kernel by
+  a DRIVER alone** (§19.6.1) — because the whole point of this section is
+  that a *package* cannot make a file the user can neither see nor delete.
+  This clause used to read "no API slot and there must never be one", which
+  is what §19.6.1 narrows and why the reason is restated beside it rather
+  than left implied. It differs from `dskw_write` in
   exactly two ways, both keyed off `[dskw_syswr]`:
 
   1. a file it **creates** is stamped hidden + system, and
@@ -7854,6 +7945,55 @@ Two things do NOT follow, and both had to be arranged:
 Read-only needs no exemption anywhere, because nothing in the kernel ever
 rewrites a read-only file: `KERNEL.SYS` and the drivers are replaced by
 rebuilding the disk, not by the running system.
+
+### 19.6.1 …and a DRIVER may call it, which a package may not
+
+`OSAPI_FILE_WRITE_SYS` (slot 0x0340) is `dskw_write_sys` published, and it is
+the one cell in the table with a caller test in front of it. It exists for
+§52.10's installer: making a hard-disk partition **bootable** means putting
+`KERNEL.SYS`, `SYSTEM.CFG` and every `*.DRV` on it with the attributes this
+section describes, and the installer is driver code because the partition
+table, the MBR and the device are the driver's.
+
+**The rule above is narrowed, not dropped, and the test is the reason §19.6
+gives for it**: *a package cannot make a file the user can neither see nor
+delete*. That is a statement about packages, and it still holds exactly — an
+application calling this slot gets `CF=1` / `AX = FERR_PROT` and writes
+nothing, which is the same answer naming a system file through
+`OSAPI_FILE_WRITE` has always produced.
+
+A driver is the other species (§51), and the boundary is real rather than an
+honour system:
+
+- `drv_tab` is a **fixed kernel-side table** of known driver files, so the
+  set of things that can ever be a driver is decided when the kernel is
+  built and a user cannot add to it;
+- a `.DRV` carries **header version 4**, which `ld_check_hdr` refuses for an
+  application, and `disk_mount` types only `*.O88` as launchable — two
+  independent gates, so a driver can never be double-clicked into existence;
+- and the driver files themselves are hidden + system + read-only on the
+  system disk, so the OS offers no way to put one there.
+
+The fence is **`drv_owns_seg`**, and the precedent is §51.7's spawn fence:
+`ES` is the caller's `DS`, stamped by §20.3's stub convention, and a
+package's `DS` is its own segment, which is never a `drv_tab` row. It is an
+**identity** test, not a containment approximation. `BX` is banked across it
+because `BX` is the caller's data buffer offset in this ABI and the fence
+needs a register.
+
+Two consequences worth stating, because both are load-bearing for §52.10:
+
+- **A file this slot creates is hidden + system and NOT read-only**
+  (`DSKW_SYSAT` is `DSKW_HID | DSKW_SYS`). The read-only bit on the shipped
+  floppy's `KERNEL.SYS` is `os88disk.py`'s, applied when the image is built.
+  So an installed volume's system files are invisible to every listing
+  exactly as the floppy's are, and a **re-install can replace them** —
+  `DSKW_SPROT` still refuses a read-only file, and if the installer stamped
+  one it could never install over itself.
+- The slot carries **no V** (§19.2.1). Every other name-taking cell resolves
+  in the calling instance's own directory; this one must not, because the
+  installer is naming files on the volume it is building and a folder put
+  underneath it would scatter them.
 
 ### 19.7 `README.TXT` — the manual is on the disk, and the reader sets its shape
 
@@ -7910,6 +8050,84 @@ lookup finds `NOTEPAD.O88` on the *other* floppy by §54.4's rungs, so the
 system disk needs no copy of it. And the `sys_attr` rule above stamps the
 file read-only, so it lists like an ordinary document and cannot be deleted
 or saved over.
+
+### 18.5.1 …and a package may create one — `OSAPI_FILE_MKDIR` (slot 0x0360)
+
+`dskw_mkdir` published, and it is **only wiring**: the routine is exactly the
+one the Folder menu, the Standard File dialog's New Folder button and
+`fcp_mksub` have always used, unchanged.
+
+It looked unpublished for a reason worth recording, because it reads as a
+duplication and is not one. All three of those callers — `files.inc`,
+`fdlg.inc`, `filecp.inc` — live in the **cold segment** (§2.6), so each of
+them reaches `dskw_mkdir_x` with a *near* call and no `.text` thunk was ever
+needed. The absence of the thunk, not any absence of the routine, is what
+made it unreachable from the API table. CLAUDE.md already notes the same
+shape for `filecp.inc`, whose `fcp_` routines need no thunks because their
+only caller is cold as well.
+
+What made it worth publishing is §52.10.4: an installer has to reproduce the
+apps disk's folders (§19.2), and one of them is not cosmetic — §28.3 needs
+`SYSTEM/TASKMGR.O88` to exist, or the chip menu cannot open the Task Manager
+on the installed volume.
+
+**No `rmdir` goes with it.** The kernel has one and nothing outside the kernel
+has ever wanted it; a slot that exists for symmetry is a permanent promise
+bought for nothing (§20.8 rule 4).
+
+### 19.7.1 Listing a directory — `OSAPI_FILE_FIND` (slot 0x0348)
+
+**These are not the numbers this block was written with, and §55.4's
+paragraph is the precedent.** `OSAPI_FILE_WRITE_SYS`, `FILE_FIND`,
+`FILE_APPEND`, `FILE_READ_AT`, `FILE_MKDIR` and `OSAPI_REBOOT` were drafted
+at 0x0338..0x0360 and moved up one cell when the branch met `evq_pending`
+(§13.4), which had taken 0x0338 while these were being written. §20.8 rule 4
+exactly: **a RELEASED slot keeps its contract, and a slot introduced since the
+last release is not one** — neither block had shipped, so neither was frozen,
+and the one that had not yet reached the integration branch is the one that
+moved. It cost a rebuild of every `.o88` and one `.drv`, which is survivable
+only because every consumer is in this tree; the next contract change to any
+of them is a new number.
+
+The file operation the API had no way to express. A package could write,
+read, delete, rename and ask the free space **by name**, and never find out
+what names were there — everything in this tree that enumerates (the Disk
+window §22, the Standard File dialog §38, the copy engine §22.5) is kernel
+code reading the mount snapshot directly, which a package cannot reach. That
+was survivable while every consumer was in the kernel, and stopped being so
+at §52.10.4: an installer must copy *whatever is on the disk*, and a baked
+list of the shipped layout goes stale in silence the moment a user's floppy
+differs from it.
+
+**It is by ORDINAL and the kernel keeps no cursor**, which is the design
+rather than an economy. Find-first / find-next would need kernel state, and
+`dsk_dirw_start`'s cursor is three module words already shared with
+`fcp_scan` and the file manager — while the loop this exists for is
+*find → read → write → find*, and every one of those middle steps walks
+directories through `dskw_find`. A cursor living in the kernel would be
+destroyed by exactly the work the walk is feeding. Ask for ordinal 0, then
+for whatever `CX` comes back as; nothing the caller does in between can
+corrupt it.
+
+The cost is a directory re-seek per entry, and it is the right trade here: a
+directory is a few hundred entries at most, a seek reads whole sectors
+without decoding them, and the caller is spending 65 ms a sector
+(PERFORMANCE.md) moving the file data this is feeding.
+
+**Hidden and system entries are reported to a DRIVER only**, and that is the
+same boundary §19.6.1 draws in the other direction. Together they are one
+sentence rather than two rules: *a package can neither find a system file nor
+create one.* The filter is otherwise `disk_mount`'s own (§19) — the end of
+the directory, deleted entries, the on-disk dot links, long-name fragments
+and the volume label are never reported to anybody.
+
+It resolves in the **calling instance's** directory (§19.2.1), like every
+other name-taking cell: "list the current directory" has to mean the
+directory `OSAPI_FILE_READ` would resolve a name in, or a package would
+enumerate one folder and open its files from another.
+
+The answer is 24 bytes, and the **size is 32-bit** where the listing's is
+clamped to a word (§19) — a copy cannot work from a truncated length.
 
 
 ## 20. Loadable programs — the .o88 package format
@@ -8763,6 +8981,32 @@ DS. Giving that variable a segment would put one on every kernel caller of a
 primitive that re-enters per clip fragment, so the cell is an `X` whose stub
 stages the eight bytes into the kernel's own segment first — the
 `dsk_get_dir` idiom of §2.1, at its smallest.
+
+### 20.10 Restart is POSTED, never performed
+
+`OSAPI_REBOOT` (slot 0x0368) takes nothing, answers nothing and **sets a
+byte**. `ui_task` spends it at the top of its pass, before the keyboard poll
+and with nothing held; the body is the System menu's own `CMD_REBOOT` path,
+reached at a second label rather than copied.
+
+The deferral is not tidiness. Every caller of this slot is a window callback,
+a Control Panel page or a driver's tool window, and all three run on the UI
+task **with the gfx lock held** (§13) — while the reboot path takes that lock
+itself, and before it calls `drv_shutdown`, which *waits for every driver's
+worker to die* (§51.2) by yielding to a task that may want the lock. Called
+inline from a callback that is a deadlock with the machine already half torn
+down: the Control Panel flushed, the drivers detaching, and nothing left to
+say so. It is the same reasoning that runs the app menu's `Close` inline in
+`ui_dispatch` (§12.7) — that one runs *there* because that is where no lock
+is held, and this one cannot, so it waits for a place where none is.
+
+A second post before the first is spent is the same restart, which is why it
+is a flag and not a count. The flag is cleared **before** the call: the body
+does not return, but a path that ever did must not find the post standing.
+
+The first consumer is the hard disk installer's Restart button (§52.10.6),
+which is the case that needed it: the user has just written a bootable
+volume and the next thing they want is to boot it.
 
 ## 21. loader.inc
 
@@ -16064,6 +16308,62 @@ coming out — so blanking costs the monitor nothing, and behind it the
 unavoidable sync transient of a half-written 6845 (its registers are not
 double-buffered) is invisible too.
 
+**The CGA has the same defect and the opposite cure.** The blank above is a
+port this module owns; a CGA's mode control register belongs to `int 10h`
+for the whole of the mode set, so there is no window we can hold that card
+dark across — and the flash was reported back in the same words, *garbage in
+the graphics memory immediately before the progress bar*, on a machine where
+the Hercules fix had already landed.
+
+So the garbage is **removed rather than hidden**: `vid_setmode` zeroes 16KB
+at B800 **while the card is still in text mode**, before it calls the BIOS.
+It is the same buffer either way — B8000 is the text screen now and the
+bitmap a moment later — so whatever order a given ROM uses, the bytes it
+switches the card onto are already zero and there is no frame in which the
+old TEXT page is displayed as a 640x200 bitmap. What that frame looks like
+depends on how the machine got here: mode 3's clear leaves `0x0720` per cell,
+a regular field of dots, and a **hard-disk boot** leaves the POST's own text,
+because `boot/boothd.asm` deliberately sets no video mode (§52.10.2).
+
+**The A/B on MartyPC is a NULL RESULT, and what makes it a null result rather
+than a refutation is worth writing down** — it is not "no emulator can show a
+flash", which stopped being true when PERFORMANCE.md Part 3.1's per-frame
+instrument landed. Three things:
+
+- Part 3.1's `transient` count **cannot price a mode change**. It counts
+  pixels that ended as they started while showing something else in between,
+  and across a mode set no pixel does — the before picture is a text raster
+  and the after picture is a bitmap. The count is ~0 however bad the flash.
+  The measurement that works is direct: step frames, and count lit pixels in
+  the first frames after the card reports the new mode.
+- Measured that way on `os8088_5150_cga` — **the real IBM 5150 ROM**, which is
+  what every `os8088_5150_*` machine runs; only the 5160s are GLaBIOS, and
+  `os8088_5150_cga_gla` exists to A/B the ROM itself — the first graphics
+  frame is **1 lit pixel of 128,000 without this fix and 2 with it**. No
+  garbage frame either way.
+- And the frame *before* the switch says why: the text screen measures **0–16
+  lit pixels**. There is nothing in that buffer to reinterpret, because
+  **MartyPC's video RAM comes up zeroed** and the mode-3 screen behind it is
+  blank.
+
+**The leading explanation is the one an emulator structurally cannot have: a
+real card comes up with static in its RAM.** That is already written into the
+Hercules half above — "the card's own DRAM as it powered up" — and it applies
+to a CGA for the same reason. It also explains why *this* machine sees it:
+docs/FIELD-MACHINES.md's 5150 holds both cards, POST initialises the one the
+DIP switches name, and the other card's 16KB is **untouched power-up static**
+until `vid_cga_equip` asks the BIOS for it. A machine whose CGA is primary has
+had that buffer cleared by the mode-3 set long before we arrive; a machine
+where it is the second card has not. PCem models powered-up RAM as noise;
+MartyPC models it as zeros, so the defect has nowhere to come from there.
+
+The fix covers that mechanism and every other one, because it does not care
+what was in the buffer or what the ROM does next — the bytes are zero before
+the mode set either way. It costs ~26 ms of `rep stosw` once per boot, against
+a ROM clear of the same 16KB that was already being paid. **It is unverified
+on the glass**, and that is the honest status until somebody watches a 5150 do
+it.
+
 **3BFh bit 1 is deliberately clear.** It enables the second 32KB page, which
 is at B8000 — a CGA's framebuffer. A machine can hold both cards (the 5150
 this was found on does), and the kernel only ever addresses page 0 (maximum
@@ -19835,6 +20135,43 @@ is the opposite trade from everything else in §45.15. And a hold frame
 redraws the bar's ten cells even though the row did not move — the burst
 itself, which is the part being judged, pays nothing.
 
+**`D` is the sweep, kept beside the bang rather than replaced by it.** It is
+the quieter of the two — it says *still going* where the bang says *here is
+the seam* — and on a module whose holds are long the bang has decayed to
+nothing while the sweep keeps moving. Which reads better is the same species
+of question as A against B, so it gets the same answer: both stay, `E` cycles
+A → B → C → D, and the live one is named on screen. They share `tlog_burst`
+and one counter (`[tlog_sweep]`, frames since the burst ended): C draws
+`TLOG_BARW` minus it, D draws it modulo `TLOG_BARW`, and nothing in the burst
+machinery knows which mode is live.
+
+#### 45.16.5 …and on a real module the windowed frame rate is BELOW the row rate
+
+Everything in §45.16.2 through §45.16.4 is arithmetic about a 55 ms frame
+against a 125 ms row. Measured windowed on a cycle-accurate 4.77MHz 8088 with
+a Sound Blaster, against the two modules on the bench disk:
+
+| module | rows/s | windowed frames/s | frames spent in a burst mode's HOLD |
+|---|---|---|---|
+| `CLICK.MOD` — one sparse channel | 8.00 | **16.8** | 48% |
+| `BEVERLY.MOD` — four channels of samples | 7.14 | **6.0** | **0%** |
+
+**The mixer eats the drawing, and on a real module it wins.** At 6.0 frames a
+second against 7.14 rows, the display cannot show every row *at all*, let
+alone run ahead of one — so C and D never complete a burst, never reach a
+hold, and there is no bang and no sweep to look at. `[tlog_drow]` climbs to
+`base+6` and the music has already crossed into the next group.
+
+Three things follow. **The pacing modes are judged on `CLICK.MOD`**, which is
+what it is for: a metronome whose mixing is nearly free, so the frame clock
+is the only thing under test. **A real module windowed on a floor machine is
+a different problem** — not "which of four cadences reads best" but "the
+drawing gets a third of the frames it is being modelled with" — and no
+pacing scheme can fix a display that is slower than the thing it is
+displaying. And **this is exactly why the text screen exists** (§45.13): in
+`FSXM_TEXT80` a row change is a `rep movsw` rather than 2,567 glyph cells a
+second, which is what buys the frames back on the module that needs them.
+
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
 A port of ActionRetro's **ArtfulType** — "a distraction-free Markdown
@@ -23290,16 +23627,293 @@ the editor staged that on the click that changed it.
 
 ### 52.9 Not in scope
 
-- **Booting os8088 from the hard disk.** `boot/boot.asm` reads `KERNEL.SYS`
-  as a flat run from the data area (§19.3) with the floppy geometry injected
-  at build time and relocates itself to `BOOT_RELOC`; hard-disk boot needs an
-  MBR, an AH=08h geometry probe and a second boot sector variant. The system
-  disk stays A:, and `SYSTEM.CFG` with it.
+- ~~**Booting os8088 from the hard disk.**~~ **Retired — this is §52.10.**
+  The entry is kept rather than deleted because its reasoning was right and
+  is worth reading beside what replaced it: `boot/boot.asm` does read
+  `KERNEL.SYS` as a flat run from the data area (§19.3) with the floppy
+  geometry injected at build time, and hard-disk boot does need an MBR, an
+  AH=08h geometry probe and a second boot sector variant — all three are
+  §52.10. What it did **not** name is the blocker that turned out to bind
+  hardest, and a reader who trusted this list would not have looked for it:
+  the kernel cannot read the hard disk until `HDD.DRV` is loaded, and
+  `HDD.DRV` is on the hard disk (§52.10.3). It also said "the system disk
+  stays A:, and `SYSTEM.CFG` with it", and that half is still true — an
+  installed machine boots with the **boot volume** as its system volume and
+  A: stays the floppy (§52.10.3).
 - **Low-level (surface) MFM formatting**, §52.3.
 - **The XT DCB register path**, §52.1. The row exists in the ladder so the
   page can one day say "not supported" rather than "no drive".
 - **Extended partitions.** Four primaries of ≤32MB is 128MB of usable disk,
   against MFM drives of 10–40MB and early IDE drives of 20–120MB.
+
+## 52.10 Install — booting os8088 from a hard-disk partition
+
+The Hard Drive page's third button. It asks which partition, copies both
+floppies onto it — hidden system files and `KERNEL.SYS` included — and marks
+it bootable, after which the machine starts from the disk with no floppy in
+the drive.
+
+**Four things had to be built and they are independent**, which is why this
+section is in four parts. Three of them were named in §52.9's retired bullet;
+the fourth is the one that bound hardest and was not.
+
+### 52.10.1 The MBR is a real chain-loader now
+
+`hd_mbr_blank` wrote a stub that printed `Not bootable` and halted, because
+that was the truth. It is a loader: relocate the 512 bytes off `0000:7C00`
+(the volume boot record wants that address), walk the four table entries for
+the one whose status byte is 80h, read its first sector to `0000:7C00`, and
+far-jump to it with `DL` = the BIOS drive and `DS:SI` at the entry, which is
+the convention every DOS-era VBR expects. 446 bytes are available and this
+needs a small fraction of them.
+
+Two failures keep a message, for the reason the old stub existed at all — a
+machine that hangs with a dark screen says nothing: no active entry, and a
+read that fails. Both halt rather than falling through into whatever is in
+memory.
+
+### 52.10.2 A second boot sector, because the first one has 17 bytes free
+
+`boot/boothd.asm`. Not a preference: `build/boot.bin`'s last non-zero byte is
+at offset 492, so there are **17 bytes** between it and the signature, and
+what a hard disk needs does not fit in 17 bytes. §52.9 predicted this and it
+is measured rather than assumed.
+
+It differs from `boot/boot.asm` in exactly three ways, and is otherwise the
+same file doing the same arithmetic:
+
+- **The geometry comes from int 13h AH=08h**, not from `-DSPT`/`-DHEADS`. A
+  floppy build knows its geometry because the Makefile builds one image per
+  geometry; a hard disk's is the drive's and is not known until it answers.
+- **Every LBA has the partition base added**, from `BPB_HiddSec` at offset 28
+  — which `hd_fmt_bpb` (`drivers/hdd/fmt.inc`) already writes, and has since
+  the formatter was written, commented "DOS reads it, os8088 does not". It
+  does now.
+- **It does not touch int 1Eh.** §18.92's diskette parameter table is the
+  floppy controller's EOT and means nothing to a hard disk.
+
+What it does **not** change is the part that looks like it would: the
+data-area arithmetic is already generic over FAT12 and FAT16, because it is
+computed from `BPB_RsvdSecCnt`, `BPB_NumFATs`, `BPB_FATSz16` and
+`BPB_RootEntCnt` rather than from a format. A FAT16 partition needs no new
+code in it at all.
+
+**`KERNEL.SYS` must be first and contiguous**, exactly as on a floppy: the
+sector reads it as a flat run rather than walking a cluster chain, which is
+what makes it fit in 512 bytes (§19.3). `os88disk.py` guarantees that at
+image-build time by allocating it from cluster 2; the installer guarantees it
+by **formatting the partition first and writing `KERNEL.SYS` before anything
+else** (§52.10.4).
+
+### 52.10.3 The kernel reads its boot partition before any driver loads
+
+**This is the blocker §52.9 did not name, and it is the reason this was more
+than a boot sector.** `drv_boot` mounts the system volume to read
+`SYSTEM.CFG` and load the drivers the user asked for — and on an installed
+machine one of those drivers is `HDD.DRV`, which is *on the volume it is
+needed to read*. A driver-backed volume goes out through `DSV_BLK` (§18.7),
+so with no driver there is no transport, and with no transport there is no
+driver.
+
+The way out is that **rung 0 is the BIOS** (§52.1): int 13h answers for drive
+80h with no driver in the machine at all, exactly as it does for a floppy.
+So the boot volume is an ordinary `DVK_BIOS` row, and what it needs beyond
+A: and B: is what a partition is: a **unit** that is not the volume index, a
+**32-bit base**, and a geometry that is not a floppy's.
+
+Four changes, all in `dsk_xfer`'s BIOS path and its table:
+
+- **`DV_UNIT` is read for the int 13h drive.** It was already in the row and
+  the transfer used `[disk_drive]` — the *volume index* — which was correct
+  only because A: and B: are volumes 0 and 1 and drives 0 and 1. A boot
+  partition is volume 2 and drive 80h, and that coincidence ends there. This
+  is a latent bug fixed, not a new field.
+- **`DV_BASE`, a 32-bit partition base**, added to the volume-relative LBA.
+  Zero for a floppy, so the floppy path is arithmetically unchanged.
+- **32-bit LBA → CHS**, because base + offset leaves 16 bits. It is
+  `hd_chs`'s proof reused: `spt*heads` is at most 63×255 and the quotient is
+  under 1024, so one `div` pair still suffices.
+- **The cylinder clamp moves.** `cmp ax, 80 / jae .fail` is a floppy's bound
+  and rejects every cylinder on a hard disk; it becomes the volume's own.
+
+`drv_mounted` then goes to **`[dsk_bootvol]`** instead of a hardcoded `xor
+dl, dl`, and that byte is 0 on a floppy machine — so a machine that boots
+from a floppy runs the identical path it always did.
+
+**The mount needs a geometry BEFORE it has a BPB, and 9/2 is not it.**
+`disk_mount` set `[disk_spt]`/`[disk_heads]` to a floppy's before the LBA 0
+read, which is the one read that cannot take them from the BPB — it is the
+read that *fetches* the BPB. On a partition that read is not at LBA 0 of the
+device either: it is `base` sectors in, so a wrong geometry does not mis-seek
+by a track, it translates somewhere else entirely. With 9/2 and a base of 26
+the drive was asked for (1,0,9) and answered absolute LBA 112, in the middle
+of the FAT, so **the boot volume never mounted** — and the machine still
+booted, because `boot/boothd.asm` probes `int 13h` AH=08h for itself, so this
+showed up as a Task Manager that could not find its file and a Disk window
+with nothing in it rather than as a failure to start. `dsk_boot_from` makes
+the same AH=08h probe once, into `[dsk_bootspt]`/`[dsk_boothds]`, and
+`disk_mount` uses it for a `DVK_BIOS` row whose unit is ≥ 80h. A drive that
+refuses the call leaves the floppy fallback, so the mount fails honestly
+rather than reading somewhere it was not asked to.
+
+**And `ui_tm_sysdir` had the same hardcoded A: one call deeper.** Its
+`dsk_chdir` into `SYSTEM` was `xor dl, dl` — so on an installed machine it
+took the folder's cluster from C: and walked it on the *floppy*, which reads
+to the user as `TASKMGR.O88 is not in SYSTEM`. A fix at one call site is not
+a fix: the assumption was written down in more than one place.
+
+**A: stays the floppy.** The boot partition is C: (volume 2), not A:, because
+the alternative renumbers every drive letter, desktop zone and `FS_DRV` in
+the system to save one indirection. §52.9's "the system disk stays A:" is
+half-right in the way that matters: what moves is *which volume is the system
+volume*, not *which volume is A:*.
+
+**And `HDD.DRV` must not mount the boot partition twice.** Its automount
+skips a partition already in the volume table, matched on device and base
+LBA — the kernel got there first, through the BIOS, and the row is live.
+
+### 52.10.4 The installer
+
+Driver code, in `drivers/hdd/inst.inc`, because the partition table, the MBR
+and the device are the driver's. What is *not* the driver's is writing a file
+with system attributes, and §19.6.1 is the one slot that lets it.
+
+The order is forced and each step is the next one's precondition:
+
+1. **Format the partition** (§52.3's formatter, unchanged). Not optional: it
+   is what makes cluster 2 free, and §52.10.2 needs `KERNEL.SYS` there.
+2. **`KERNEL.SYS` first**, through `OSAPI_FILE_WRITE_SYS`, so it is
+   contiguous from cluster 2.
+3. **The rest of the system disk** — `SYSTEM.CFG`, every `*.DRV`,
+   `README.TXT` — then the apps disk's folders and their contents.
+4. **The volume boot record**, `boot/boothd.asm`'s 512 bytes with this
+   volume's BPB written over the first 62 (`os88disk.py`'s split, done in the
+   driver), to volume-relative LBA 0.
+5. **The MBR**: §52.10.1's loader into bytes 0..445, preserving the table,
+   and the chosen entry's status byte set to 80h with the other three
+   cleared. **Last**, because it is the commit — every earlier step leaves a
+   disk that simply is not bootable yet, which is the same discipline
+   §52.3's formatter follows in writing its boot sector last.
+
+**Only usable partitions are offered.** The dialog lists a slot when it is
+mounted, writable and large enough; a slot that is `Unmountable`, foreign or
+too small is shown with the reason rather than hidden, on §47 rule 3's terms
+— the honest test is whether it would work, and saying *why not* is worth
+more than an absent row.
+
+**A single-floppy machine is the normal case** (docs/FIELD-MACHINES.md), so
+the copy prompts for the disk swap rather than assuming two drives — unless
+§52.10.5 finds it has not got to.
+
+**Progress is §12.8's widget.** A file operation freezes the machine by
+design, and this is the largest one in the system — both floppies is
+hundreds of sectors at **65 ms** each on the field machine — so `fpg_begin`'s
+bar is stepped from inside the transfer loop, which is the one piece of code
+still running.
+
+### 52.10.5 A disk already in the machine is not asked for
+
+The swap prompt is right on the machine this project is calibrated against
+and wrong on one with two drives, where the apps disk is usually sitting in
+B: while the user is asked to put it in A:. `hd_iapps_find` asks the machine
+before it asks the user: on a two-drive machine with the apps disk already
+in the other drive, stage 1 falls straight into stage 2 and the whole
+install is **one confirm** rather than a confirm, a swap and a second
+confirm.
+
+Three things decide it, and each answers a question nothing else can:
+
+- **How many floppy drives there are is `int 11h`'s answer**, bits 7:6 (the
+  count less one), and the kernel's volume table is no help at all: A: and
+  B: are unconditional rows in `dsk_vtab`, because on a one-drive PC the
+  BIOS aliases unit 1 onto the same physical drive and DOS asks for the
+  swap. Reading the volume table would say "two drives" on every machine
+  there is.
+- **Which drive to look in is the OTHER one** — `[hd_ivdrv] XOR 1`, and only
+  when the drive stage 1 read was a floppy at all. A hard-disk source makes
+  "the other one" meaningless, so that case asks.
+- **What makes a disk the apps disk takes THREE tests, and two of them are
+  not enough.** An `APPS` folder in the root was the first answer and it has
+  a short life, because the system disk is going to carry one too. Adding
+  "and no `KERNEL.SYS`" fixes *that* and fixes nothing else: it says the disk
+  is not a **system** disk, which is not the same as saying it is one of
+  ours, and the failure it still allows is the expensive one — a stranger's
+  floppy copied onto the volume the user has just installed to.
+
+  So the last test is **positive**: at least one `*.O88` inside `APPS`. That
+  is what the disk exists for and what the copy is about to move, and it is
+  the only one of the three that can be passed by accident just once.
+
+  `KERNEL.SYS` is the marker `drv_cfg_save` already uses to identify the
+  system volume (§51.5.1), so there is one answer to *which disk is that*
+  rather than two that can drift, and a driver's `OSAPI_FILE_FIND` sees
+  hidden and system entries (§19.7.1's fence) — which is what lets it ask
+  about a file §19.6 hides from everything else.
+
+  The root walk therefore **does not stop at `APPS`**: the listing is sorted
+  by name (§19.4), so `APPS` comes first and a `KERNEL.SYS` further down
+  would be missed by an early exit. It records the folder's cluster and keeps
+  going; only the end of the root is an answer, and then the descent decides.
+
+Every refusal falls back to the prompt exactly as it was: a renamed disk, a
+data disk, an empty drive and a one-drive machine all take the path they
+took before, which is what makes this an optimisation of the common case
+rather than a new way for an install to go wrong. **The volume is put back
+on every path**, including the ones that stood on a candidate drive to look
+at it, because the caller has already restored the user's volume by then
+(§51.5.2) and a probe that moved it would be a navigation the user did not
+ask for.
+
+The source drive is its own byte. `[hd_isrcdrv]` is what `hd_isrc` and
+`hd_isrc_sub` stand on and `[hd_ivdrv]` is what `hd_ivol_back` puts the user
+on; `hd_ivol_bank` sets both and the auto-detected drive overrides only the
+first. One word for both would have ended the install with the user standing
+on a drive they were never on.
+
+### 52.10.6 Restart, and a dialog that stops flashing
+
+Two things, and they are one change because they are the same window.
+
+**Restart.** The install ends with a bootable volume and a user who has to
+find the System menu to use it, so the dialog carries a third button.
+`OSAPI_REBOOT` (§20.10) is what makes it possible from inside a driver's
+click handler: it posts, and `ui_task` performs. The button is greyed until
+`[hd_iw_st]` reaches `HII_DONE`, which is §47 rule 3's *fact* — what there is
+to restart into is the install this dialog just did — and `hd_rest_ok` is its
+one predicate, shared by the greying and the click refusal exactly as
+`hd_inst_ok` is Install's. `hd_iw_button`'s `CL` therefore picks a
+*predicate* rather than a state: 0 = `hd_inst_ok`, 1 = always live (Close,
+which is never disabled), 2 = `hd_rest_ok`.
+
+**And no click repaints the window any more.** `hd_iw_repaint` erased the
+content and re-ran `W_PAINT` for every change there was, so a click that only
+altered the caption threw away the header, four rows and two buttons to put
+back the same pixels — which **flashes on every adapter, VGA included**, on
+real hardware. It is three emitters now, and a click spends only the one
+whose content changed: `hd_imsg_draw` for an arm, a refusal or a progress
+message; `hd_irows_draw` when the selection moves; `hd_ibtns_draw` when a
+greying predicate flipped. A stage change is buttons + message and never the
+rows, because `hd_iw_scan` runs at open and no stage alters a slot's state.
+
+Three things hold the flicker fix up:
+
+- **Every text element is one opaque `OSAPI_FONT_RUN` padded to
+  `HIW_CELLS`** — a space paints background on the fast path, so the padding
+  *is* the erase and the cell goes from what it was to what it will be in a
+  single store (§6.1). There is no frame in which a band is blank.
+- **The selection bar is that same run with ink and background swapped**, so
+  the black bar arrives with its text already on it. It was a `GFX_FILL` as
+  wide as the band followed by `FONT_STR` over it — Note Pad's §27.8.2 trick,
+  and the same reasoning.
+- **`HIW_LX` is a multiple of 8 and the window carries `WF_SNAP`** (§11.94),
+  which is what puts those runs on the single-store path on the two mono
+  adapters. It was 4, four pixels off it. The price is 8px drag steps on a
+  dialog nobody drags twice.
+
+The **button band is the one thing still erased before it is drawn**, and
+that is the stated exception rather than an oversight: a frame cannot be
+drawn opaquely, so a dithered frame over a solid one leaves the solid one's
+pixels behind. It is a single 16px fill, and only on a state change.
 
 ## 53. fsx.inc — fullscreen exclusive
 

@@ -10,9 +10,10 @@
 ;
 ; The on-disk shape, at LBA 0:
 ;
-;   0..445    boot code - we write a stub that halts with a message, because
-;             os8088 does not boot from a hard disk (SPEC.md 52.9) and a
-;             blank 446 bytes is a machine that hangs with no explanation
+;   0..445    boot code - boot/mbr.asm, incbin'ed below: it chain-loads the
+;             active partition's own boot sector (SPEC.md 52.10.1). It used to
+;             be a stub that halted with a message, because os8088 could not
+;             boot from a hard disk at all (SPEC.md 52.9, retired)
 ;   446+16n   four entries:
 ;               +0  status      80h active / 00h
 ;               +1  start head
@@ -690,22 +691,41 @@ hd_part_write:
 hd_s_mb:     db 'M', 0
 hd_s_close:  db 'Close', 0
 
-; The MBR's boot code. os8088 does not boot from a hard disk (SPEC.md 52.9),
-; and 446 blank bytes is a machine that hangs with no explanation - so this
-; says so and stops.
+; The MBR's boot code (SPEC.md 52.10.1) - a real chain-loader now: it finds
+; the active entry, reads that partition's first sector to 0000:7C00 and jumps
+; to it. boot/mbr.asm is the source and it is `incbin`ed rather than written
+; out as a `db` list, which is what the previous occupant of these bytes was.
+;
+; That occupant printed `Not bootable` and halted, and it was the truth for as
+; long as SPEC.md 52.9 said os8088 does not boot from a hard disk. Its
+; REASONING outlives it and is why the loader still carries three messages:
+; 446 blank bytes is a machine that hangs with no explanation.
+;
+; Exactly 446 bytes, asserted at both ends - boot/mbr.asm pads itself to the
+; partition table's offset and refuses to overrun it, and the equ below is
+; checked against what actually arrived. A short blob here would leave the
+; tail of somebody else's boot code in front of our table; a long one would
+; eat the table itself.
 hd_bootstub:
-    db 0xFA                     ; cli
-    db 0xFC                     ; cld
-    db 0x31, 0xC0               ; xor ax, ax
-    db 0x8E, 0xD8               ; mov ds, ax
-    db 0xBE, 0x1B, 0x7C         ; mov si, msg (0x7C00 + 27)
-    db 0xAC                     ; lodsb
-    db 0x08, 0xC0               ; or al, al
-    db 0x74, 0x06               ; jz halt
-    db 0xB4, 0x0E               ; mov ah, 0x0E
-    db 0xCD, 0x10               ; int 0x10
-    db 0xEB, 0xF5               ; jmp lodsb
-    db 0xF4                     ; halt: hlt
-    db 0xEB, 0xFD               ; jmp halt
-    db 'Not bootable', 13, 10, 0
+    incbin "mbr.bin"
 hd_bootstub_end:
+
+HD_MBRCODE   equ 446            ; the space in front of the table
+%if hd_bootstub_end - hd_bootstub != HD_MBRCODE
+%error "build/mbr.bin is not 446 bytes - see boot/mbr.asm"
+%endif
+
+; ...and the VOLUME boot record the installer writes (SPEC.md 52.10.2), the
+; same way and for the same reason: it is real assembly in boot/boothd.asm,
+; incbin'ed rather than transcribed. BOOTHD_KSECS is the ONE word the
+; installer patches - the kernel's length in sectors - and it is pinned at a
+; documented offset in that file precisely so this side can find it without
+; knowing anything else about the sector's layout.
+BOOTHD_KSECS equ 508
+hd_bootvbr:
+    incbin "boothd.bin"
+hd_bootvbr_end:
+
+%if hd_bootvbr_end - hd_bootvbr != 512
+%error "build/boothd.bin is not 512 bytes - see boot/boothd.asm"
+%endif

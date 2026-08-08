@@ -9,14 +9,34 @@ anybody can make without instruments:
 
     when you HEAR the click, what row does the screen SHOW?
 
-The notes are on rows 00, 10, 20 and 30 (hex) of a single 64-row pattern, so
-the expected answer is one of those four. Anything else is the offset, read
-straight off the screen in rows, and a row here is exactly 125 ms.
+The notes are on rows 00, 10, 20 and 30 (hex), so the expected answer is one
+of those four. Anything else is the offset, read straight off the screen in
+rows, and a row here is exactly 125 ms.
 
 THE TIMING IS CHOSEN TO MAKE THAT ARITHMETIC EXACT. A MOD row lasts
 speed / (BPM * 0.4) seconds. At BPM 120 and speed 6 that is 6/48 = 0.125 s
-exactly, so 16 rows is 2.000 s and the whole 64-row pattern is 8 s. The
-pattern is the only order, so it loops forever.
+exactly, so 16 rows is 2.000 s and a 64-row pattern is 8 s.
+
+FOUR ORDERS AND FOUR PITCHES, which the first version did not have and which
+cost a round of field testing. With one order and one pitch:
+
+  - `Pos` never leaves 00, so half the readout is dead and the P key - the
+    PATTERN LOOP toggle - has nothing to loop that the song does not already
+    play, which makes it look like a bare restart;
+  - and every click sounds the same, so the ear cannot tell one from the next.
+    "The row count changes, but most of them are unrelated to an actual noise"
+    is that in the field's own words: 60 of the 64 rows are silent by design,
+    and with nothing to distinguish the four that are not, the display and the
+    music cannot be tied together by ear at all.
+
+So: four patterns, four orders, and a pitch per pattern (C-2, E-2, G-2, C-3).
+`Pos` walks 00 01 02 03 and the ear hears the song climb, so the position on
+screen is CHECKABLE against what is sounding - and P now loops one rung of
+that climb, audibly.
+
+THE DOWNBEAT IS MARKED TOO. Row 00 of every pattern is a fifth above that
+pattern's other three clicks, so a bar of four reads as TICK tick tick tick -
+the ear knows which of the four it is hearing without counting from the start.
 
 The click itself is a decaying square burst about an eighth of a second long
 - a sharp attack, because an attack is what the ear times, and a long gap
@@ -29,11 +49,17 @@ import sys, struct
 
 TITLE = b"os8088 sync click"
 SMPNAME = b"click"
-PERIOD_C2 = 428                 # C-2 in the ProTracker period table
 SMPLEN = 1024                   # bytes; even, as the format's word count needs
 ROWS = 64
 NOTE_EVERY = 16                 # rows -> 2.000 s at BPM 120 / speed 6
 BPM, SPEED = 120, 6
+
+# ProTracker periods. One per PATTERN, so the order position is audible; the
+# downbeat of each bar is a fifth above its pattern's own pitch, so which of
+# the four clicks in a bar you are hearing is audible too.
+PERIOD = [428, 339, 285, 214]           # C-2  E-2  G-2  C-3
+DOWNBEAT = [285, 226, 190, 143]         # G-2  B-2  D-3  G-3
+NPAT = len(PERIOD)
 
 
 def sample_data():
@@ -59,6 +85,23 @@ def cell(sample, period, eff, parm):
     ))
 
 
+def pattern(n):
+    pat = bytearray()
+    for r in range(ROWS):
+        if r % NOTE_EVERY:
+            pat += cell(0, 0, 0, 0) * 4
+            continue
+        p = DOWNBEAT[n] if r == 0 else PERIOD[n]
+        if r == 0 and n == 0:                        # the song's own first row
+            pat += cell(1, p, 0x0F, SPEED)           # sets speed...
+            pat += cell(0, 0, 0x0F, BPM)             # ...and tempo
+            pat += cell(0, 0, 0, 0) * 2
+        else:
+            pat += cell(1, p, 0, 0)                  # the click, channel 1
+            pat += cell(0, 0, 0, 0) * 3
+    return bytes(pat)
+
+
 def build():
     m = bytearray()
     m += TITLE.ljust(20, b"\0")
@@ -71,23 +114,11 @@ def build():
         else:
             m += b"\0" * 22 + struct.pack(">H", 0) + bytes((0, 0)) \
                  + struct.pack(">HH", 0, 1)
-    m += bytes((1, 127))                             # 1 order, restart 127
-    m += bytes([0] + [0] * 127)                      # order table: pattern 0
+    m += bytes((NPAT, 127))                          # orders, restart 127
+    m += bytes(list(range(NPAT)) + [0] * (128 - NPAT))
     m += b"M.K."
-
-    pat = bytearray()
-    for r in range(ROWS):
-        if r == 0:
-            pat += cell(1, PERIOD_C2, 0x0F, SPEED)   # note + Fxx = set speed
-            pat += cell(0, 0, 0x0F, BPM)             # ...and Fxx = set tempo
-            pat += cell(0, 0, 0, 0)
-            pat += cell(0, 0, 0, 0)
-        elif r % NOTE_EVERY == 0:
-            pat += cell(1, PERIOD_C2, 0, 0)          # the click, channel 1
-            pat += cell(0, 0, 0, 0) * 3
-        else:
-            pat += cell(0, 0, 0, 0) * 4
-    m += pat
+    for n in range(NPAT):
+        m += pattern(n)
     m += sample_data()
     return bytes(m)
 
@@ -96,6 +127,7 @@ if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "build/click.mod"
     data = build()
     open(out, "wb").write(data)
-    print("mkclick: %s (%d bytes) - a click on rows 00/10/20/30, "
-          "%d ms a row, 2.000 s a click"
-          % (out, len(data), 1000 * SPEED // (BPM * 2 // 5)))
+    print("mkclick: %s (%d bytes) - %d patterns, a click on rows 00/10/20/30 "
+          "of each, %d ms a row, 2.000 s a click, %d s a position"
+          % (out, len(data), NPAT, 1000 * SPEED // (BPM * 2 // 5),
+             ROWS * SPEED // (BPM * 2 // 5)))
