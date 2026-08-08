@@ -11178,6 +11178,113 @@ Verified by differential: the same scripted run against a build whose
 `np_scrollpaint` always refuses is **pixel-identical inside the window**, on
 VGA over nine states and on Hercules over six.
 
+### 27.7.3 The height is counted a chunk at a time
+
+§27.7.1 bounded every walk that draws to the bottom of the view, which left
+exactly one walk unbounded: `np_height`, the one that answers *how many rows
+is this note*. Nothing else asks, because nothing else draws below the view —
+so the note's tail is paid for here or nowhere. On a 15,889-byte `README.TXT`
+that is **781 rows** walked in a single hold, and the hold is the gfx lock, so
+the machine is frozen behind it with nothing on the disk and nothing on the
+glass. It is not I/O (`DISKCNT` counters are flat across it) and not the
+drawing (549 glyphs and 115 fills, ~0.65 s).
+
+**The count is chunked: `NP_HCHUNK` rows per worker pass, resuming where the
+last one stopped.** `np_height` still finishes it in one hold for the caller
+that needs the answer exact; `np_hchunk` is what the worker calls, and both
+are thin entries onto `np_hwalk`.
+
+**Why the lock does not forbid this.** `np_height` runs with `np_draw` and
+`np_sigup` clear and writes no framebuffer: the lock here is a mutex over the
+walk's SCRATCH — `np_row`, `np_curx`, `np_i`, `np_rows` are module globals and
+nine of `np_walk`'s ten call sites are UI callbacks, which hold it already.
+So the hold is needed for a CHUNK and never for the COUNT, and "give up the
+machine if something else wants it" falls out of the release rather than
+needing the worker to ask anyone.
+
+Five things hold it up:
+
+- **`[np_hdirty]` already says which exit the walk took**, so the resume needs
+  no flag of its own: `.done` clears it and sets an exact `[np_drows]`,
+  `.stop` leaves it up and raises `[np_drows]` as a lower bound.
+- **`.stop` publishes `(absolute row, index)`** into `[np_stoprow]`/`[np_stopi]`,
+  and this is the one piece of new plumbing. `np_seedrow` cannot reconstruct
+  it: `np_rows` is `NP_MAXROWS` long and `NP_MAXROWS` is 60, ONE SLOT PER
+  VISIBLE ROW, so the table describes the view and can never name row 300 of a
+  500-row note. Published on every bounded stop and kept only by `np_hwalk`,
+  which reads it under the lock with nothing between the call and the read.
+- **The banked row is ABSOLUTE and `[np_sdr]` is VISIBLE**, so the seed is
+  derived from `[np_top]` at the moment the chunk runs. The view may have
+  moved between one chunk and the next, and `np_scrollto` clears `[np_resume]`
+  for precisely this reason.
+- **The pair survives the release because wrapping is deterministic**: row *R*
+  begins at index *I* whoever computed it. An interleaved `W_PAINT` scribbles
+  over the walk's in-flight scratch and cannot touch those two words. Only the
+  note CHANGING invalidates them — and that is `np_hmark`, which raises the
+  flag and forgets the pair as one act, because they are one event. It stores
+  only to memory, so it preserves the flags and drops in where each of its
+  five callers had `mov byte [np_hdirty], 1`.
+- **Seeding at (0, 0) is identical to not seeding at all**, so the first chunk
+  needs no case of its own.
+
+**The worker has to EXIST, and on the one path that matters it did not.** The
+hire hung off `np_redraw`'s `.done`, and `.fullpaint` falls straight past it —
+so a note that repaints in full got no worker. Worse, a document opened by
+DOUBLE-CLICKING IT loads the file in the entry proc and is drawn by `W_PAINT`,
+which is not `np_redraw` at all: the note whose height most needs counting was
+the one note that never got a worker to count it. `np_hirechk` is the
+predicate in one place, called from `np_redraw`'s single exit and from
+`np_paint`.
+
+**And a click in the TEXT no longer buys a total it does not use.**
+`np_onclick` called `np_height` before it knew where the click had landed, so
+the first click after opening a file paid the whole remaining count in one
+hold — the freeze, moved from the load to the click. The bar's rect is
+`np_sbhit` now, shared with `np_sbclick` so two copies cannot disagree about
+where the bar is, and only a click inside it finishes the count.
+
+Measured on MartyPC (`os8088_5150_cga_gla`), README.TXT opened by
+double-click and then left alone: the count reaches **781** rows with no
+input at all, against `drows` stuck at **18** before. The chunk's resume pair
+was watched advancing — row 187, row 510, done — which is the check the
+previous attempt at this failed: it stalled at the first chunk and the tell
+was a thumb that stayed at ~75% of the track.
+
+### 27.7.4 ...and until it lands, the length is the estimate
+
+The chunked count is seconds of background work, and until it lands
+`[np_drows]` holds only what the first screenful's bounded walk reached — so a
+781-row file claims to be 18 rows tall and the scroll bar is drawn for a
+document that does not exist. `np_hguess` is the arithmetic answer available
+for nothing: **the characters, divided by the cells a row holds.**
+
+**It can only ever be too SMALL, which is what makes it safe to publish.** A
+row holds at most `[np_rcols]` cells, so a note of *L* characters needs at
+least *L*/cols rows — and every newline ends a row EARLY, which can only push
+the real number up. That is exactly `[np_drows]`'s existing direction of error
+(§27.7: a lower bound, never lowered), so nothing downstream needs a new rule,
+nothing has to test whether the count "got there yet", and the walk goes on
+correcting it upward as it always did.
+
+Three things about it:
+
+- **The font is fixed-width, so "cells a row holds" is not an average of
+  anything.** It is `[np_rcols]`, which `np_bounds` has just computed for the
+  row buffer — which is also why the estimate lives at the end of `np_bounds`
+  rather than anywhere else: that is where the geometry becomes known, and
+  every path that is about to draw goes through it.
+- **One `DIV`, riding on two far calls into the kernel** at ~756us apiece
+  (PERFORMANCE.md Part 2) — under 2% of a routine that was going to run
+  anyway. `[np_len]` is capped at `NP_MAXKB`, so the dividend never needs DX
+  and the divide cannot overflow; a window too narrow to hold one cell divides
+  by nothing and says nothing.
+- **It is not gated on `[np_hdirty]`.** When the count is exact the estimate is
+  by construction no larger, so the "never lowered" test refuses it and the
+  gate would be a second thing to keep in step for no gain.
+
+On README.TXT: 15,428 characters in a 24-cell row is **642** against the true
+781, so the bar is within 18% of right immediately instead of wrong by 43x.
+
 ### 27.8 A selection, and the two things a drag can mean
 
 The selection is a **pair of character indices**, `[np_sel0]`..`[np_sel1)`,

@@ -168,6 +168,18 @@ NP_IDLE      equ 9              ; ticks of no typing before the break is
 NP_WTICKS    equ 3              ; ...and how often the worker looks, ~165ms.
                                 ; Finer than NP_IDLE so the settle lands
                                 ; near the deadline rather than a tick late
+NP_HCHUNK    equ 16             ; rows of the height count per worker pass
+                                ; (SPEC.md 27.7.3). The count is the one walk
+                                ; that cannot be bounded by the view, so it is
+                                ; bounded by TIME instead: this many rows, then
+                                ; the lock goes back. It sizes a LOCK HOLD and
+                                ; nothing else - the count's total cost is the
+                                ; same however it is sliced - so the number
+                                ; wanted is the largest hold nobody notices,
+                                ; and a measure row is ~2ms on a 4.77MHz 8088
+                                ; (no framebuffer: np_draw and np_sigup are
+                                ; both clear), which puts a chunk at ~32ms,
+                                ; inside one 55ms tick
 NP_SB_W      equ 14             ; scroll bar width, the Disk window's
                                 ; (SPEC.md 22) so the two look like one OS.
                                 ; It is reserved ALWAYS, present or not:
@@ -677,19 +689,37 @@ np_sbcheck:
 ; the track pages against the thumb, and the thumb itself does nothing -
 ; there is no drag, here or there.
 ; -----------------------------------------------------------------------------
-np_sbclick:
+; np_sbhit - is the click at (CX, DX) inside the scroll bar's rect?
+; out: CF = 0 = yes; preserves every register
+;
+; Its own routine because np_onclick asks the same question for a different
+; reason - whether this click needs the note's height to be EXACT - and two
+; copies of a rect are two things that have to agree about where the bar is.
+np_sbhit:
     push ax
-    push bx
-    push dx
-    mov bx, dx                      ; BX = the click's y; np_thumb wants DX
     mov ax, [np_sbr]
     sub ax, NP_SB_W-1
     cmp cx, ax
     jb .no
-    cmp bx, [np_ty]
+    cmp dx, [np_ty]
     jb .no
-    cmp bx, [np_sbb]
+    cmp dx, [np_sbb]
     ja .no
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
+    ret
+
+np_sbclick:
+    push ax
+    push bx
+    push dx
+    call np_sbhit
+    jc .no
+    mov bx, dx                      ; BX = the click's y; np_thumb wants DX
     mov ax, [np_ty]
     add ax, NP_SB_ARR
     cmp bx, ax
@@ -1150,6 +1180,9 @@ np_bounds:
     mov ax, [np_bot]                ; the bar's own bottom, clear of the corner
     sub ax, NP_GROW                 ; the kernel draws the grow box in
     mov [np_sbb], ax
+    call np_hguess                  ; ...and now the geometry is known, what the
+                                    ; note's LENGTH already says about its
+                                    ; height (SPEC.md 27.7.3)
 .geom:
     ; The checkpoint and np_rows are ROW INDICES, so they mean nothing under a
     ; different geometry - and unlike the signatures, nothing else was going to
@@ -1472,8 +1505,17 @@ np_walk:
     ; until something walks it whole, and the cost of that is one blank row at
     ; the end rather than a caret nobody can see (SPEC.md 27.7)
     push ax
-    mov ax, [np_row]
-    add ax, [np_top]
+    mov ax, [np_row]                ; the ABSOLUTE row this walk stopped on,
+    add ax, [np_top]                ; and the index that row begins at: the
+    mov [np_stoprow], ax            ; pair a resumable walk picks up from
+    push ax                         ; (SPEC.md 27.7.3). np_rstart has already
+    mov ax, [np_i]                  ; run for this row, so [np_i] is its FIRST
+    mov [np_stopi], ax              ; character and not the last of the row
+    pop ax                          ; above. Published on EVERY bounded stop
+                                    ; and kept only by np_height, on the walk
+                                    ; it issued itself - which is safe because
+                                    ; it reads them under the lock with
+                                    ; nothing between the call and the read
     inc ax
     cmp ax, [np_drows]
     jbe .nolb
@@ -2568,7 +2610,12 @@ np_worker:
     cmp byte [np_hdirty], 0
     je .count
     call np_bounds                  ; the walk reads [np_ty]/[np_rgt], and the
-    call np_height                  ; window may have been resized since
+    call np_hchunk                  ; window may have been resized since.
+                                    ; A CHUNK of the count and not the whole of
+                                    ; it (SPEC.md 27.7.3): the lock is held
+                                    ; across this, so the bound on the walk is
+                                    ; the bound on how long a UI action behind
+                                    ; it has to wait
     mov bx, [np_win]
     call OSAPI_WM_OBSCURED
     jc .count
@@ -2759,14 +2806,58 @@ np_sigsame:
 ;
 ; It preserves the two query fields because np_onclick sets them BEFORE it
 ; gets here, and a walk consumes them.
+;
+; It comes in two sizes (SPEC.md 27.7.3). np_height finishes the count in one
+; hold, for the one caller that needs the answer exact - a click on the bar.
+; np_hchunk does NP_HCHUNK rows of it and hands the lock back, which is what
+; the worker calls: the count of a 16KB note is seconds of walking, and doing
+; it in one hold freezes the machine behind it with nothing on the disk and
+; nothing on the glass.
+;
+; Chunking is legal because the gfx lock here is a mutex over the walk's
+; SCRATCH and not a drawing lock - np_height writes no framebuffer, and nine of
+; np_walk's ten call sites are UI callbacks that hold the lock already. So the
+; hold is needed for a CHUNK and never for the COUNT, and "give up the machine
+; if somebody else wants it" falls out of the release rather than needing the
+; worker to ask anyone.
+;
+; The resume pair survives the release because WRAPPING IS DETERMINISTIC: row R
+; begins at index I whoever computed it. An interleaved W_PAINT scribbles over
+; the walk's in-flight scratch and cannot touch those two words. Only the note
+; CHANGING invalidates them, and that goes through np_hmark, which resets them.
 ; -----------------------------------------------------------------------------
 np_height:
+    push ax
+    mov ax, 0x7FFF                  ; no bound: to the last character, however
+    call np_hwalk                   ; many rows that is
+    pop ax
+    ret
+
+np_hchunk:
+    push ax
+    mov ax, [np_hi]                 ; a stale seed can only mean the note shrank
+    cmp ax, [np_len]                ; without going through np_hmark; np_walk
+    jbe .seedok                     ; would fall back to a full walk, and the
+    mov word [np_hrow], 0           ; bound below would then be a chunk's worth
+    mov word [np_hi], 0             ; of rows past where it actually starts -
+.seedok:                            ; one unbounded hold, the thing being fixed
+    mov ax, [np_hrow]               ; [np_lastrow] is a VISIBLE row and
+    sub ax, [np_top]                ; [np_hrow] is absolute, so the bound is
+    add ax, NP_HCHUNK               ; this chunk's own start plus its length
+    call np_hwalk
+    pop ax
+    ret
+
+; np_hwalk - the count itself, stopping after visible row AX
+; in:  AX = the last visible row this pass may stand on, SI = window ptr
+np_hwalk:
     cmp byte [np_hdirty], 0
     jne .go
     ret
 .go:
     push ax
     push si
+    mov [np_lastrow], ax
     mov ax, [np_hity]
     push ax
     mov ax, [np_wanty]
@@ -2776,14 +2867,50 @@ np_height:
     mov byte [np_draw], 0
     mov byte [np_sigup], 0
     mov byte [np_clip], 0
-    mov byte [np_resume], 0         ; from index 0, and to the last character:
-    call np_walk                    ; anything less is what we already have
+
+    mov ax, [np_hi]                 ; resume where the last chunk stopped, which
+    mov [np_sdi], ax                ; for the first one is index 0 of row 0 -
+    mov ax, [np_hrow]               ; identical to the unseeded start np_walk
+    sub ax, [np_top]                ; would make, so the top of the note needs
+    mov [np_sdr], ax                ; no case of its own. np_sdr is a VISIBLE
+    mov byte [np_resume], 1         ; row, so it is derived from [np_top] HERE
+    call np_walk                    ; and not banked - the view may have moved
+    mov byte [np_resume], 0         ; between one chunk and the next
+
+    cmp byte [np_hdirty], 0         ; .done clears it and .stop leaves it up, so
+    jne .more                       ; the flag already says which exit was taken
+    mov word [np_hrow], 0           ; finished: the next count starts at the top
+    mov word [np_hi], 0
+    jmp short .fin
+.more:
+    mov ax, [np_stoprow]            ; stopped: pick this up next pass
+    mov [np_hrow], ax
+    mov ax, [np_stopi]
+    mov [np_hi], ax
+.fin:
     pop ax
     mov [np_wanty], ax
     pop ax
     mov [np_hity], ax
     pop si
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_hmark - the note changed: the height is owed, and owed from the TOP
+; preserves every register AND the flags (it only stores to memory), so it is a
+; drop-in for the `mov byte [np_hdirty], 1` it replaces at each of its callers
+;
+; The reset is the whole reason this is a routine. A chunked count that is
+; part-way down a note holds a (row, index) pair that describes the note it
+; started on; an edit makes that pair name a row that may no longer begin
+; there, so the count has to start over. Raising the flag and forgetting the
+; pair are the same event and must not be separable.
+; -----------------------------------------------------------------------------
+np_hmark:
+    mov byte [np_hdirty], 1
+    mov word [np_hrow], 0
+    mov word [np_hi], 0
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2980,6 +3107,73 @@ np_paint:
                                     ; strip np_bounds took off the top of the
                                     ; content (SPEC.md 27.10)
     call np_toast                   ; last, so it sits above the text
+    call np_hirechk                 ; this walk stopped at the bottom of the
+    ret                             ; view, so the height is still owed
+
+; -----------------------------------------------------------------------------
+; np_hguess - what the note's LENGTH alone says about its height (SPEC.md 27.7.3)
+; in:  [np_rcols] valid (np_bounds has run); out: [np_drows] raised to it
+; preserves all registers
+;
+; The chunked count takes seconds on a long note, and until it lands the only
+; thing [np_drows] holds is what the first screenful's bounded walk reached -
+; so a 781-row file claimed to be 18 rows tall and the bar was drawn for a
+; document that does not exist. This is the arithmetic answer available for
+; nothing: the characters, divided by the cells a row holds.
+;
+; IT CAN ONLY EVER BE TOO SMALL, which is what makes it safe to publish. A row
+; holds at most [np_rcols] cells, so a note of L characters needs at least
+; L/cols rows - and every newline ends a row EARLY, which can only push the
+; real number up. That is exactly [np_drows]'s existing direction of error
+; (SPEC.md 27.7: a lower bound, never lowered), so nothing downstream needs a
+; new rule and the walk goes on correcting it upward as it always did.
+;
+; The font is fixed-width, so "cells a row holds" is not an average of
+; anything - it is [np_rcols], which np_bounds has just computed for the row
+; buffer. One DIV, in a routine that has already made two far calls into the
+; kernel at PERFORMANCE.md's ~756us apiece: under 2% of what it is riding on.
+; -----------------------------------------------------------------------------
+np_hguess:
+    push ax
+    push cx
+    push dx
+    mov cx, [np_rcols]
+    jcxz .out                       ; a window too narrow to hold a cell: no
+    mov ax, [np_len]                ; geometry to divide by, and nothing to say
+    xor dx, dx                      ; [np_len] is capped at NP_MAXKB, so the
+    div cx                          ; dividend never needs DX and cannot overflow
+    cmp ax, [np_drows]
+    jbe .out                        ; never LOWERED, the one rule this shares
+    mov [np_drows], ax              ; with every other writer of it
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_hirechk - a height debt outlived this paint: make sure a worker exists
+; preserves all registers
+;
+; The predicate in ONE place, called from both ends of the drawing: every exit
+; of np_redraw, and np_paint - which is W_PAINT, and W_PAINT is the only thing
+; that draws a window opened by DOUBLE-CLICKING A DOCUMENT. That launch loads
+; the file in the entry proc and never calls np_redraw at all, so the note
+; whose height most needs counting - a whole file, arriving at once - was the
+; one note that never got a worker to count it. It sat at the first
+; screenful's lower bound until some later edit happened to hire one, and
+; before then the first click paid the entire count in a single hold.
+; -----------------------------------------------------------------------------
+np_hirechk:
+    push ax
+    cmp byte [np_hdirty], 0
+    je .out
+    mov ax, [np_drows]              ; a note that FITS needs no worker: the
+    cmp ax, [np_vrows]              ; walk that drew it ran to the note's end
+    jbe .out                        ; and cleared the debt on the way
+    call np_hire
+.out:
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3436,7 +3630,7 @@ np_ins:
     call np_room                    ; grow by a kilobyte if this is the
     jc .out                         ; keystroke that fills the claim; a
                                     ; refusal drops it, as a full note always
-    mov byte [np_hdirty], 1         ; the note is a different length, so it
+    call np_hmark                   ; the note is a different length, so it
                                     ; may be a different number of rows, and
                                     ; [np_drows] is a lower bound until
                                     ; something walks the whole of it
@@ -3642,13 +3836,18 @@ np_onclick:
     pop dx
     jmp .out
 .notpanel:
-    call np_height                  ; ...and a click on the BAR is the one
-                                    ; place the note's height has to be exact
-                                    ; rather than a lower bound, because it is
-                                    ; what the thumb and the paging are a
-                                    ; fraction of. One walk, on a click, and
-                                    ; only if something was typed since the
-                                    ; last one (SPEC.md 27.7)
+    call np_sbhit                   ; a click on the BAR is the one place the
+    jc .nobar                       ; note's height has to be exact rather than
+    call np_height                  ; a lower bound, because it is what the
+.nobar:                             ; thumb and the paging are a fraction of.
+                                    ; A click in the TEXT is answered by
+                                    ; np_measure and wants no total at all, and
+                                    ; it used to pay for one anyway - the whole
+                                    ; remaining count, in one hold, on the
+                                    ; first click after opening a file
+                                    ; (SPEC.md 27.7.3). What is left here is
+                                    ; bounded by what the worker has already
+                                    ; counted, and shrinks while the user reads
     call np_sbclick                 ; ...and the scroll bar is not the note
     jc .text
     pop dx
@@ -3705,7 +3904,7 @@ np_clamp:
     mov byte [np_fcok], 0           ; about the note that just went away, and
     mov byte [np_fcdirty], 1        ; an undo record applied to a different
                                     ; note corrupts it (SPEC.md 27.9)
-    mov byte [np_hdirty], 1         ; a whole new note is a whole new height
+    call np_hmark                   ; a whole new note is a whole new height
     mov word [np_top], 0            ; a NOTE row, so it names nothing once the
                                     ; note is replaced - and the top of a file
                                     ; just opened is where a reader starts
@@ -4357,13 +4556,6 @@ np_redraw:
     call np_toast                   ; the thumb, and nothing else redraws it
                                     ; on this path
 .done:
-    cmp byte [np_hdirty], 0         ; the height is a lower bound and only the
-    je .nohire                      ; worker puts it right, so a note that has
-    mov ax, [np_drows]              ; outgrown its window needs one hired -
-    cmp ax, [np_vrows]              ; same lazy rule as the visual break, and
-    jbe .nohire                     ; for the same reason: a note that fits
-    call np_hire                    ; needs neither
-.nohire:
     mov byte [np_resume], 0
     jmp short .out
 
@@ -4428,6 +4620,10 @@ np_redraw:
     mov bx, si                      ; the white fill erased the grow box;
     call OSAPI_WM_GROW              ; restore it (SPEC.md 11.1/27)
 .out:
+    call np_hirechk                 ; a debt left by ANY of this routine's
+                                    ; exits, not just the .done path it used to
+                                    ; hang off - .fullpaint fell straight past
+                                    ; that one (SPEC.md 27.7.3)
     call np_selmark                 ; the screen shows this selection now
     mov byte [np_selonly], 0        ; ONE-SHOT: whoever set it meant THIS
                                     ; redraw, and the next one may well be a
@@ -5131,7 +5327,7 @@ np_delspan:
     mov cx, ax
 .have:
     jcxz .out
-    mov byte [np_hdirty], 1
+    call np_hmark
     mov ax, bx
     call np_urec_del            ; while the bytes are still here to be copied
     mov es, [np_dseg]
@@ -5206,7 +5402,7 @@ np_gaproom:
     mov ax, [np_len]
     add ax, cx
     mov [np_len], ax
-    mov byte [np_hdirty], 1
+    call np_hmark
 .ok:
     clc
     jmp short .out
@@ -5235,7 +5431,7 @@ np_gaproom:
 ; -----------------------------------------------------------------------------
 np_editinv:
     push ax
-    mov byte [np_hdirty], 1
+    call np_hmark
     mov byte [np_ckok], 0
     mov byte [np_rowsok], 0
     mov byte [np_fcok], 0       ; ...and the match count counted the old note
@@ -8978,6 +9174,25 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                             ; other character - because the alternative is
                             ; reading the character BEFORE the one in hand,
                             ; which a seeded walk cannot always do
+
+; --- the chunked height count (SPEC.md 27.7.3) -------------------------------
+; Where the count has got to, and where a bounded walk stopped. The two are
+; separate because np_walk's .stop is shared by every bounded walk in the
+; module - a paint, a caret key - and only np_height may keep what it reports.
+    NPVAR np_hrow,  2       ; word: the ABSOLUTE row the next chunk resumes at,
+                            ; 0 = from the top. Absolute and not visible,
+                            ; because [np_top] may move between chunks and the
+                            ; seed np_walk wants is relative to wherever the
+                            ; view is when the chunk actually runs
+    NPVAR np_hi,    2       ; word: the character index that row begins at.
+                            ; np_seedrow cannot supply this - np_rows is
+                            ; NP_MAXROWS long, one slot per VISIBLE row, so it
+                            ; describes the view and can never name row 300 of
+                            ; a 500-row note (SPEC.md 27.5)
+    NPVAR np_stoprow, 2     ; word } what .stop reached, published every time
+    NPVAR np_stopi, 2       ; word } and read only by np_height, on the walk it
+                            ; issued itself - under the lock, with nothing
+                            ; between the call and the read
 
 %assign NP_BSS_TOTAL NPB
 
