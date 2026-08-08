@@ -6458,6 +6458,63 @@ path** (`fmv_sync`), and a reader that adopts the snapshot wholesale **pays
 `dsk_relist` first** (`fmv_bcast`, which is idempotent and free when nothing
 is owed).
 
+### 18.9.1 …and a switch to where we already are is not a switch
+
+`dsk_chdir_q` re-mounted unconditionally. `dsk_chdir` writes `[dsk_cwd]` and
+calls `disk_mount`, and nothing anywhere asked whether the volume and
+directory it names are the ones the machine is *already standing in* — so a
+document open paid **three** mounts, most of a copy's switches were to a
+place it had just left, and every one of them re-read the boot sector.
+
+**The compare alone is not the test, and that is the whole of this section.**
+"We are already on this volume" says nothing about whether it is the same
+*disk*: an app writes a file, the user swaps the floppy, the app writes
+again — both writes are "already here", and the second lands on the new disk
+with the old FAT and the old free-cluster map. That is a corrupted volume,
+not a stale listing, so the second half of the predicate is what licenses the
+first.
+
+**A driver volume (§18.7) needs no second half.** It is not removable. An
+ST-225 cannot be swapped between two writes, so `DVK_DRV` short-circuits on
+the compare alone — and a hard disk is exactly where the re-validation was
+most obviously wasted.
+
+**A floppy is answered by the BIOS's own motor timeout, which is a physical
+fact and not a heuristic.** `0040:0040` is the motor-off countdown; int 08h
+decrements it — our own ISR chains the BIOS tick precisely so that keeps
+happening (§7) — and `dsk_dpt` byte 2 loads it with `0x25`, **37 ticks =
+2.03 seconds**. A non-zero count therefore means a floppy motor is *still
+spinning*, and nobody opens a drive door, swaps a disk and closes it inside
+two seconds while the spindle is turning. `0040:003F` bit *n* says which
+drive, because a two-drive machine may be mid-copy with the other one
+running.
+
+That predicate is the batch boundary, and it is one nobody has to declare:
+the reads of a single operation are milliseconds apart and the motor never
+stops, while two operations separated by a human are always a fresh
+validation. **No bracket, so no bracket to forget** — which is why this is
+not `dsk_batch_begin`/`end`.
+
+**It fails safe in the one direction that matters.** A BIOS that does not
+maintain the byte reads 0, which means "validate", which is what every mount
+does today. The failure mode of being wrong is a wasted mount, never a
+skipped one.
+
+Three things about the implementation:
+
+- **`dsk_here_ok` preserves every register**, so the motor bit comes out of
+  a 4-byte table (`dsk_mbit`) rather than `shl al, cl` — CX belongs to the
+  caller. The first draft spent it and said so in a comment, which is how it
+  was caught.
+- **Skipping adds no `[dsk_lstale]` debt.** A quiet mount publishes
+  `disk_nfiles` = 0 and raises the flag because it *destroys* the listing;
+  skipping destroys nothing, so the listing keeps whatever state it already
+  had and `dsk_relist` stays correct either way.
+- **It is on the QUIET path only.** A full `dsk_chdir` is a navigation and
+  the Disk window's Refresh is exactly a request to re-read — a
+  short-circuit there would make Refresh a no-op, which is the one thing it
+  must never be.
+
 ### 18.91 The transfer loop batches a run into one int 13h
 
 > **The 5150 measured this as a 15% LOSS, and Set 16 found why: `.ok` used to
