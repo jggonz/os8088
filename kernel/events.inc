@@ -138,6 +138,31 @@ evq_pop:
     ret
 
 ; -----------------------------------------------------------------------------
+; evq_pending - how many events are still queued behind this one?
+; out: AX = 0..EVQ_CAP; preserves every other register and the flags
+;
+; SPEC.md 13.4. A callback is dispatched one event at a time, so a handler that
+; REDRAWS has no way to know it is about to be asked to do the same thing
+; again - and a user holding down a scroll arrow, or spamming the track, queues
+; a burst of clicks whose redraws then play out one after the other long after
+; the clicking stopped. The scroll positions in that burst are superseded the
+; instant the next one is read; only the last one is worth a repaint.
+;
+; One word, read with no lock. It is a single memory read of a word the ISR
+; only ever increments, so a torn value is not possible and a stale one is
+; harmless in the only direction that matters: too LOW means a redraw happens
+; that need not have, which is exactly today's behaviour.
+;
+; It answers a question about the QUEUE and not about which window an event is
+; for, so a handler that skips a redraw on the strength of it must still make
+; sure the redraw eventually happens - the next event may belong to somebody
+; else. Note Pad owes it to its worker (SPEC.md 27.7.8).
+; -----------------------------------------------------------------------------
+evq_pending:
+    mov ax, [evq_count]
+    ret                             ; NEAR - the OSAPI_SLOT cell owns the retf
+
+; -----------------------------------------------------------------------------
 section .bss
 
 evq_buf:    resb EVQ_RECSIZE * EVQ_CAP  ; the ring itself (128 bytes)
