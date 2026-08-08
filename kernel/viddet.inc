@@ -114,7 +114,12 @@ vid_rpara   dw BB_PLANE_PARA    ; paragraphs from one plane to the next.
 vid_rend    dw 0                ; that loop's exclusive end
 vid_dock_y0 dw SCREEN_H-24      ; dock strip top row (DOCK_H, dock.inc)
 vid_dock_ty0 dw SCREEN_H-24+3   ; dock tile top row
-vid_clk_hx  dw SCREEN_W-206     ; menu bar clock cell: hit band left edge
+vid_clk_hx  dw (SCREEN_W-206) & 0FFF8h  ; menu bar clock cell: hit band left
+                                ; edge, and the left edge of the clock's own
+                                ; SEGMENT (SPEC.md 12.1) - on a GLYPH CELL
+                                ; boundary, which is what lets the bar's three
+                                ; segments be whole numbers of 8px cells and
+                                ; font_run's single-pass path reach them
 vid_ymax    dw SCREEN_H-18      ; lowest y a title bar may be dragged to
 vid_popmax  dw 16               ; pull-down items that fit under the bar
 vid_desk_zx dw SCREEN_W-56      ; desktop drive column: hit zone left, and
@@ -260,7 +265,8 @@ vid_apply:
     mov [vid_wm1], ax
     sub ax, 7
     mov [vid_wm8], ax
-    sub ax, 198                 ; w - 8 - MENU_CLK_W - 6
+    sub ax, 198                 ; w - 8 - MENU_CLK_W - 6, floored to a glyph
+    and ax, 0FFF8h              ; cell: the bar's segments are cell ranges
     mov [vid_clk_hx], ax
 
     mov ax, [vid_h]             ; --- heights

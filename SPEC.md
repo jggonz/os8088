@@ -4116,25 +4116,28 @@ step 2), and that flush is what clears the last item highlight from VRAM.
 ### 12.05 The bar is redrawn only when its contents changed
 
 `menu_draw_bar` is on the same hot path as `dock_paint` — every window
-operation calls it because the bar *might* have changed owner — and unlike the
-dock there is no useful per-cell granularity: the bar's contents **are** the
-active application's, so either the owner changed and every cell did, or it
-did not and none of them did. So one flag, `[menu_bdirty]`, gates the white
-field, the black rule, the name label and every cell title.
+operation calls it because the bar *might* have changed owner. `[menu_bdirty]`
+is the gate: `menu_relayout` is the single rebuild point and sets it, which
+covers every ownership change including the one `menu_check` makes at the top
+of `menu_draw_bar` itself. `menu_init` sets it too, because `-f bin` zeroes no
+`.bss`.
 
-`menu_relayout` is the single rebuild point and sets it, which covers every
-ownership change including the one `menu_check` makes at the top of
-`menu_draw_bar` itself. The only other thing that can invalidate the bar is
-somebody having drawn **over** it, and just two things can: a fullscreen
-window (§11.2) and a dropped menu whose save-under claim was refused. So
-`wm_paint_all` and `menu_track` call `menu_force` rather than reason about it
-— one bar redraw per menu interaction is not worth a proof. `menu_init` sets
-it too, because `-f bin` zeroes no `.bss`.
+**What the flag gates is the MENUS SEGMENT and nothing else** — see §12.9. The
+bar is three independently-drawn segments (logo, menus, clock) and a fourth
+borrows space from the second (§12.8); this flag is the second one's. The
+static furniture has its own flag `[menu_bovr]`, the clock has its own check
+word, and no one of them can make another draw a pixel.
 
-**The clock is outside all of this.** `menu_draw_clock` fills its own cell and
-is called unconditionally at the end of `menu_draw_bar`, as well as directly
-by the UI task's own clock step (§12.1) — nothing to do with the Timer
-application of §14.
+That is a correction, and the claim it replaces is worth recording because it
+sounds right: *"unlike the dock there is no useful per-cell granularity — the
+bar's contents ARE the active application's, so either the owner changed and
+every cell did, or it did not and none did."* Both halves are false in
+practice. The **clock** is on the bar and changes on its own cadence, so
+"every cell changed" was never true of it — and it was redrawn on every window
+operation to prove it. The **logo** is on the bar and changes never. And the
+file-activity widget (§12.8) changes an 88px span and used to force all of it.
+Granularity by *cell* is indeed useless here; granularity by **segment** is
+the whole feature.
 
 ### 12.1 The menu-bar clock
 
@@ -4147,26 +4150,38 @@ the cell is sized for the longest and **the string is right-aligned in it**:
 ```nasm
 MENU_CLK_W  equ 24*8                        ; the LONGEST form, not the live one
 MENU_CLK_X  equ SCREEN_W - 8 - MENU_CLK_W   ; 440: cell left, 8px right margin
-MENU_CLK_HX equ MENU_CLK_X - 6              ; 434: hit band left edge
+MENU_CLK_HX equ (MENU_CLK_X - 6) & 0FFF8h   ; 432: hit band left edge
 ```
 
 Those three are the **VGA reference**: nothing reads them at run time. The
-live cell is the derived word `[vid_clk_hx]` = `vid_w - 206` (§39.2), and the
-layout limit, the erase and the hit test all read that — the clock hangs off
-the right edge of whatever screen the boot probe found.
+live cell is the derived word `[vid_clk_hx]` = `(vid_w - 206) & ~7` (§39.2),
+and the layout limit, the field and the hit test all read that — the clock
+hangs off the right edge of whatever screen the boot probe found.
+
+**It is floored to a glyph cell**, which is what makes the bar's segments
+whole numbers of 8px cells (§12.9) and so reachable by `font_run`'s
+single-pass path (§6.1). The 2px it gives up widen the dead gap between the
+last menu title and the clock; nothing else in the bar can see it.
 
 | symbol            | contract                                                  |
 |-------------------|------------------------------------------------------------|
-| `menu_draw_clock` | in: nothing (gfx lock held by the caller). Formats the live clock with `clk_fmt` (§37), white-fills the whole cell — x `[vid_clk_hx]`..`[vid_wm1]`, rows 0..`MBAR_H-2`, the black rule excluded — and draws the string **right-aligned**: `font_width` gives its pixel width and the pen goes at `[vid_wm8] - width`, `MENU_TEXT_Y`. Preserves all registers. |
+| `menu_draw_clock` | in: nothing (gfx lock held by the caller). Formats the live clock with `clk_fmt` (§37), and **returns having drawn nothing if the string is the one already on the glass** — a check word over it, `0` reserved for "nothing drawn yet". Otherwise stages it into `menu_clkbuf` right-aligned in the field by **leading spaces** and emits ONE `font_run` at x = `[vid_clk_hx]`, y = `MENU_TEXT_Y`, black on white. Leaves `[gfx_color]` = `CBLACK` on both paths; preserves all registers. |
 
-Right alignment is what makes a format change a redraw of the same cell
-rather than a relayout: the erase is always the full 24-glyph cell, so a
-shorter string leaves clean white to its left and the time stays pinned to
-the same right margin whichever form it is in.
+The field is `[vid_clk_hx] .. vid_w-9`, both ends on cell boundaries, so it is
+exactly 25 cells on both screen widths — one more than the longest form, so
+the pad is never negative. Right alignment is what makes a format change a
+redraw of the same field rather than a relayout, and **the padding is the
+erase**: a shorter string blanks the cells it gave up inside the same opaque
+pass that letters the rest, so there is no fill in this path at all and the
+clock is never momentarily blank. It used to erase 206px of bar and then
+re-letter ~20 glyph cells — tens of milliseconds of blank clock on a 4.77MHz
+machine, on **every window operation**, for a string that changes once a
+minute.
 
 `menu_draw_bar` ends with a `menu_draw_clock` call, so every `wm_paint_all`
-repaints it; ui_task redraws just the cell when its text changes — once a
-second with seconds shown, **once a minute without** (§13 step 4). No
+reaches it (and the check word usually stops it there); ui_task redraws just
+the cell when its text changes — once a second with seconds shown, **once a
+minute without** (§13 step 4). No
 `wm_obscured` check is needed anywhere: windows clamp to `y >= MBAR_H`
 (§13), so nothing can ever cover the bar — **except a fullscreen window
 (§11.2), which is why step 4's redraw and the ladder's menu-bar branch are
@@ -4583,7 +4598,7 @@ itself.
 |-------------|---------------------------------------------------------------|
 | `fpg_begin` | in: AX = sectors this operation expects (0 is read as 1). Arms the widget and draws the **whole** of the expensive part — the white bed, the document icon and the box frame. Preserves all registers and the flags. |
 | `fpg_step`  | in: nothing. One sector done. Preserves **every register and the flags** — its caller is the middle of `dsk_xfer`'s per-sector loop, `spl_step`'s contract exactly. |
-| `fpg_end`   | in: nothing. Disarms and gives the bar back (`menu_force` + `menu_draw_bar`). Preserves all registers and the flags. |
+| `fpg_end`   | in: nothing. Disarms and gives the bar back: white-fills the rows of its own bed that carry no menu text, `menu_inval`s the bed's cells, and calls `menu_draw_bar`. Preserves all registers and the flags. |
 
 **The chrome is drawn once and the bar is the only thing that moves.** A
 `gfx_*` call costs ~756us of arriving whatever it draws (PERFORMANCE.md Part
@@ -4625,12 +4640,27 @@ Five things hold it up.
 - **The space is borrowed, not reserved.** `menu_relayout`'s limit
   (`cmp dx, [vid_clk_hx]`) is untouched, so app menus keep every pixel they
   have today and a machine that never touches the disk looks exactly as it
-  did. `fpg_begin` white-fills its bed over whatever was there and `fpg_end`
-  gives it back with `menu_force` + `menu_draw_bar`, which redraws the
-  field, the name, the titles and the clock in one pass. Reserving the 88
+  did. `fpg_begin` white-fills its bed over whatever was there and **tells
+  the bar which cells it took** (`menu_inval`), so `fpg_end` gives back
+  exactly those and nothing else. Reserving the 88
   pixels instead would have cost them on every machine forever — and on CGA
   the file manager's own titles have only ~108px of slack against that limit
   to begin with.
+
+  It used to end in `menu_force` + `menu_draw_bar`, which redrew the field,
+  the logo, the name, every title **and the clock** — so every file operation
+  in the system ended with the whole bar flashing white to put back an 88px
+  strip. That is §12.9's case in its plainest form: a segment changed and the
+  other three redrew.
+
+  Giving the bed back is two thin fills and a re-letter, and the split is the
+  whole point. `fpg_end` erases only the rows of its bed that carry **no menu
+  text** — 0..`MENU_TEXT_Y-1` and `MENU_TEXT_Y+8`..`MBAR_H-2`, which is where
+  the document icon's top and bottom and the box frame live — and leaves the
+  text band alone, because `menu_bar_text`'s opaque run is about to write
+  every one of those cells from what the widget left to what the menu says
+  in one pass. Erasing the text band as well would put a white flash back
+  exactly where the fix removed it.
 
 **Where it is armed** is the file-operation layer, because that is the only
 place a *total* exists: `dsk_xfer` knows one call's run and `dskw_rdata`
@@ -4647,6 +4677,86 @@ Metadata sectors — the FAT flush, the directory commit — are outside
 rather than wrapping. The alternative was a total that had to be revised
 downward mid-operation, and a progress bar that goes backwards is worse than
 one that sits at 100% for a sector or two.
+
+### 12.9 The bar is three segments, and each answers for itself
+
+**Only the segment that changed may put pixels on the bar.** The menu bar
+carries four things that change on four completely different cadences — a
+logo that never changes, the active application's menus, a clock that changes
+once a minute, and the file-activity widget of §12.8 — and until this they
+shared one flag. Any of them moving redrew all of them, as a full-width white
+fill followed by every glyph being put back: **PERFORMANCE.md Part 1's
+double-draw flash**, at the top of the screen, on every window operation.
+
+| segment | x span | drawn when | by |
+|---|---|---|---|
+| logo | `0 .. MENU_TXT_X0-1` | the bar was painted **over** (`[menu_bovr]`) | `menu_furniture` |
+| menus | `MENU_TXT_X0 .. [vid_clk_hx]-1` | its composed text differs from what is showing | `menu_bar_text` |
+| clock | `[vid_clk_hx] .. vid_w-9` | its string differs from what is showing | `menu_draw_clock` (§12.1) |
+
+The file-activity widget is not a fourth segment: it **borrows** the right
+end of the menus segment and gives it back through `menu_inval` (§12.8).
+
+Both interior boundaries are glyph-cell boundaries — `MENU_TXT_X0` is 32 and
+`[vid_clk_hx]` is floored to a multiple of 8 (§12.1) — so a segment is a whole
+number of 8x8 cells. That is not tidiness: it is what lets a segment be
+redrawn by `font_run` (§6.1) on its **single-pass** path, where a cell row is
+one framebuffer store on the two mono adapters and the span is never
+momentarily blank. The layout follows: `MENU_NAME_X` is 40, `MENU_TITLE_PAD`
+is 16, and a title's pen is `MB_XL + 8` — so every cell's pen x is a multiple
+of 8, since a glyph is 8 wide and the running left edge starts aligned. This
+is Tracker moving its pattern columns onto 8px boundaries to earn the same
+path (§45), and `WF_SNAP` (§11.94) doing it for ordinary windows.
+
+| symbol | contract |
+|---|---|
+| `menu_force` | in: nothing. The bar was **painted over**: sets `[menu_bovr]` and `[menu_bdirty]`. The only path that reaches `menu_furniture`, and so the only one that erases anything. Preserves all registers. |
+| `menu_inval` | in: AX = x1, CX = x2 (inclusive, absolute). Forgets what was drawn in that span of the **menus** segment, rounded OUTWARD to whole cells and clamped to the segment; sets `[menu_bdirty]`. Preserves all registers. |
+| `menu_furniture` | in: nothing (gfx lock held). White-fills the bar's field, draws the black rule and the logo, forgets every cell and the clock's check word. Preserves all registers. |
+| `menu_bar_text` | in: nothing (gfx lock held). Composes the menus segment into `menu_bcell` and emits the one `font_run` span that differs. Preserves all registers. |
+
+#### The composition IS the diff
+
+`menu_bcell` is one byte per glyph cell, and it is two things at once: the
+buffer the bar's text is composed into, and the record of **what is on the
+glass**. So there is no separate "what did I draw last time" structure to
+keep in step — writing a cell and comparing it are the same instruction pair,
+and the first and last cells that differ bound exactly one `font_run`.
+
+Four things hold it up, and three of them are somebody else's rule first.
+
+- **Spaces are content.** The segment is composed *whole* — the name at
+  `MENU_NAME_X`, each title at its `MB_TX`, and **spaces everywhere else**,
+  out to the clock. So a bar that lost its longest menu blanks the cells it
+  gave up inside the same opaque pass that letters the ones it kept. There is
+  no fill in this path at all, which is what removes the flash rather than
+  shrinking it. (Note Pad's rows, §27.2, and Missile Command's status strip,
+  §48.9.3, are the same trick: the padding is the erase.)
+- **It is sound only because the bar can never be covered.** Windows clamp to
+  `y >= MBAR_H` (§13), so what the last emit drew is still what is showing,
+  and the only thing that can falsify `menu_bcell` is somebody drawing over
+  the bar — which is precisely what `menu_force` and `menu_inval` are for.
+  This is `fm_sel_bar`'s licence (§22.2) in another place: you may reason
+  about what is on screen only where nothing else can have written to it.
+- **The About cell is composed FIRST and walked past afterwards.** §12.7
+  appends the app-name cell **last** in `menu_bar` so the app's own menus
+  keep bar index == set index + 1, but it sits at `MENU_NAME_X`, left of all
+  of them. Composition must run in **x order** or the padding walks
+  backwards, so `menu_bar_text` emits `[menu_abcell]` before the loop and
+  skips it inside.
+- **Invalidation writes a byte that can never be composed.** `0` is the
+  sentinel because every byte that goes into this buffer is a printable
+  character — a NUL would have ended the string it came from.
+
+#### What each flag is NOT
+
+`[menu_bdirty]` and `[menu_bovr]` look like a coarse and a fine version of one
+question and are two different questions. `[menu_bdirty]` says *the menus
+segment's text may have moved*, and is cheap and frequently set — the answer
+is usually "nothing differs" and nothing is drawn. `[menu_bovr]` says *our
+pixels were destroyed*, is rare, and is the one flag in the module that
+erases. A caller that overdrew part of the bar and reached for `menu_force`
+because it was the only thing available is the bug §12.8 had.
 
 ## 13. ui.inc — the UI task (task 0)
 
@@ -12908,24 +13018,26 @@ all** — which is what lets `wm_dock_under` (§11.90) skip putting the windows
 back over it.
 
 Each tile carries a **key** (`dock_key`): its `I_ICON`, rotated so the
-pointer's high bits reach the low ones, XORed with live / minimized / active.
-A tile whose key still matches `dock_ck[i]` — what it was last *drawn* as —
-is left alone. 0 is reserved for "no tile", so a slot going free erases and a
-slot filling draws. A focus change costs two tiles; nothing changing costs no
-pixels. A tile that does change is **erased to white first**, because its
-marks are not nested: active → plain has an inner frame to remove, and
-minimized → plain an XOR to undo.
+pointer's high bits reach the low end of the word, with live / minimized /
+active in **bits 0..2 and nothing else there** (§30.3). A tile whose key still
+matches `dock_ck[i]` — what it was last *drawn* as — is left alone. 0 is
+reserved for "no tile", so a slot going free erases and a slot filling draws.
+A focus change costs two tiles; nothing changing costs no pixels. A tile whose
+**identity** changed is erased to white first; a tile where only a MARK moved
+is not erased at all — see §30.3.
 
 The strip's own rule and white field are redrawn only when `[dock_full]` says
 so, and the single thing that sets it is somebody having drawn **over** the
 strip: `wm_paint_all`'s dither, and `wm_paint_dmg`'s when the damage reaches
 `[vid_dock_y0]` — which is how *"a window that was covering the dock moved
 away"* gets its full redraw, since hiding, destroying, dragging and resizing
-all arrive there with a rect that reaches the strip. `dock_force` is the
-entry point and it clears the per-tile keys with it: a tile whose pixels were
-painted over is not "unchanged" however much its state still matches.
+all arrive there with a rect that reaches the strip. `dock_force` /
+`dock_force_x` are the entry points and they clear the per-tile keys **of the
+tiles the damage reached**: a tile whose pixels were painted over is not
+"unchanged" however much its state still matches, and a tile the damage never
+came near is not repainted to prove it.
 
-`.bss` is not zeroed at boot (`-f bin`), so `dock_init` sets `[dock_full]`
+`.bss` is not zeroed at boot (`-f bin`), so `dock_init` calls `dock_force`
 and clears the keys itself.
 
 The dock renders ONLY records read as I_STATE = 1 during the same lock
@@ -12938,6 +13050,8 @@ tile vanishes with the `wm_hide` repaint. Icon pointers must satisfy
 | symbol       | contract                                                    |
 |--------------|--------------------------------------------------------------|
 | `dock_init`  | reset module scratch. From kmain, right after desk_init.    |
+| `dock_force` | in: nothing. The WHOLE strip was painted over. Preserves all registers. |
+| `dock_force_x` | in: AX = x1, CX = x2 (inclusive). Only that span was. Repeated calls UNION. Preserves all registers. |
 | `dock_paint` | draw the rule, the strip and every live instance's tile. Called by wm_paint_all after `desk_paint`, before the menu bar and windows (lock held by caller) — windows cover the dock exactly like desktop icons (§26). |
 | `dock_hit`   | in CX=x, DX=y. Out: CF=1 = the point is not in the strip at all; CF=0 = the strip owns it, and then **DI = the live instance record under the pointer, or 0** for bare strip, an inter-tile gap, a slot past the last, and an empty or dying one. AL = the slot when DI ≠ 0. Clobbers AX and DI only. The one hit test both buttons use (§30.2). |
 | `dock_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window, BEFORE desk_click). Out: CF=1 = consumed (any click with y ≥ `[vid_dock_y0]` — strip background clicks are consumed no-ops), CF=0 = not in the dock. Tile hit on a live instance: minimized → gfx_lock, `inst_restore`, gfx_unlock; else → gfx_lock, `wm_front` on I_WIN, gfx_unlock. Single click activates; no double-click logic. |
@@ -12955,6 +13069,72 @@ fallback).
 The window drag clamp (§13) is unchanged: windows may be dropped over the
 dock; clicks in the overlap go to the window (wm_hit wins), and the strip
 repaints when the window moves away — desk-icon semantics throughout.
+
+### 30.3 A mark is not a redraw — the tile diff
+
+**A tile whose icon did not change must not have its icon redrawn.** Every
+raise moves the active mark off one tile and onto another, so a focus change
+is the dock's commonest event by a wide margin — and it used to cost two
+tiles **erased to white and rebuilt**: a fill, a frame, a two-pass masked icon
+blit and the marks, twice, to move one 1px rectangle. On a 4.77MHz machine
+that is the double-draw flash of PERFORMANCE.md Part 1, in the one strip the
+user is looking at when they switch applications.
+
+The erase was there for an honest reason — *"the marks are not nested: active
+→ plain has an inner frame to remove, and minimized → plain an XOR to undo"* —
+and the reason dissolves once you notice that **both marks are their own
+inverse**:
+
+| mark | drawn as | toggled by |
+|---|---|---|
+| active (`DOCK_K_ACT`) | `gfx_frame` inside the tile frame, black on background | `gfx_xor_rect` on the same rect |
+| minimized (`DOCK_K_MINI`) | `gfx_xor_fill` of the interior | `gfx_xor_fill` of the same rect |
+
+So `dock_paint` compares old key with new and branches on **what moved**:
+
+```nasm
+    xor dx, ax                  ; DX = old XOR new
+    test dx, DOCK_K_ID          ; anything but the marks?
+    jnz .rebuild                ; the icon changed, or the tile came or went
+    test dl, DOCK_K_ACT
+    jz .mini
+    call dock_xor_ring          ; ...otherwise the icon is never touched
+```
+
+Three things make it exact.
+
+- **The marks own bits 0..2 and the identity owns the rest.** `dock_key` used
+  to XOR the rotated icon pointer's top three bits straight onto the mark
+  bits — fine for *did anything change*, useless for *what changed*. They are
+  folded into the high byte instead, so nothing about the icon is lost and
+  `old XOR new` names the difference. A live tile's key now always has
+  `DOCK_K_LIVE` set, so it can never be 0 and the collision bump the old key
+  needed is gone — and "one of the two keys is 0" falls out as a bit-0
+  difference, which `DOCK_K_ID` catches, so a tile appearing or disappearing
+  takes the rebuild path without a test of its own.
+- **The ring never touches the icon.** The icon body is 16x16 at +4,+2 inside
+  a 24x20 tile, so the inner frame's four edges clear it by 2px and 1px. Every
+  pixel `dock_xor_ring` writes is plain background — white normally, black
+  under an inverted interior — and XOR is right in both, which is why the
+  minimized state needs no branch there.
+- **Order does not matter.** Both are XOR over the same or nested rects, so a
+  tile that changes both marks in one paint composes them either way round.
+
+### 30.3.1 The damage span — the empty end of the strip is not redrawn
+
+`dock_force` restored **all 640 pixels** of rule and field and cleared every
+key, and `wm_paint_dmg` called it for any damage that so much as touched
+`[vid_dock_y0]`. A window closing in one corner therefore repainted the whole
+strip — nearly all of it white over white, where nothing had changed and
+nothing could have — and rebuilt every tile on it, which is where the white
+became a flash.
+
+`dock_force_x` takes the span (`wm_paint_dmg` passes `[wm_dmg_x1]`..
+`[wm_dmg_x2]`), repeated calls union it, and `dock_paint` restores that span
+and clears the keys of **the tiles it overlaps** — a tile outside the damage
+still has its pixels, so its key is still the truth. `dock_force` is the
+whole-width form and `wm_paint_all` keeps it and means it: its dither runs
+from `MBAR_H` to the last row, so the strip really is gone.
 
 ### 30.2 A tile's context menu — right-click to Close
 
