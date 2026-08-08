@@ -11531,6 +11531,69 @@ writes the framebuffer directly (§39.5) — rows appear top to bottom as they
 are computed. The user already watches it fill in. What they were waiting on
 was the invisible pass in front of it.
 
+### 27.7.6 Only a scroll past the counted extent may finish the count
+
+§27.7.3 moved the height count into the background and §27.7.4 gave the bar an
+estimate to draw from, and one caller still finished the whole thing
+synchronously: `np_onclick`, for any click on the scroll bar. That is the
+worst possible moment for it — the first bar click after opening a file is
+exactly when the count has got least far, so the freeze it caused was nearly
+the whole note. Reported from the field as "clicking the scrollbar before the
+load is finished still fully freezes".
+
+**None of the bar's actions needs the total.** `.lineup`, `.linedn`, `.pageup`
+and `.pagedn` are all RELATIVE — `[np_top]` ± `NP_SB_STEP` or ± `[np_vrows]`.
+The total is consulted in exactly two places: `np_thumb`, for where to draw
+the thumb and therefore for the above/below classification of a track click,
+and `np_scrollmax`, for the clamp. The first is cosmetic while the count runs
+(a slightly tall thumb, and a page-up where a page-down was meant, only for a
+click landing on the thumb's own edge). The second is the only one that can
+give a *wrong answer*: a lower bound clamps the view short of a row that
+really exists.
+
+So the test belongs at the clamp and nowhere else. `np_sbclick`'s `.set` —
+the one place that knows which row is being asked for — compares the request
+against `np_scrollmax` and calls `np_height` **only when the request reaches
+past it**. Every other scroll is answered from what is already counted, for
+nothing.
+
+The freeze that remains is the honest one: paging to the end of a note whose
+end has not been found yet has to find it. It is also self-limiting, because
+the background count is meanwhile making the answer nearer.
+
+### 27.7.7 The caret-follow net resumes forward, it does not restart
+
+`np_redraw`'s safety net exists because a bounded walk can stop short of the
+caret, leaving `[np_cury]` meaningless — and it answered that by walking the
+whole note **from index 0**, unbounded. Its own comment defended that: "the
+seed is what let the walk miss the caret and the bound is what made it
+missable, so a net carrying either finds nothing too."
+
+**That is true of a seed AFTER the caret and false of one before it**, and the
+difference is the most-used key in the editor. Down on the bottom visible row
+puts the caret one row below the view, `[np_curseen]` stays clear, and finding
+a caret one row away cost a walk of every row in the note — multiple seconds
+on a long one, on every press. Reported from the field in exactly those words.
+
+`np_netseed` resumes at the deepest row `np_rows` describes whose start index
+is **at or before `[np_cur]`**, walking back a row at a time until one
+qualifies. Three things make it safe, and all three are arguments that already
+existed:
+
+- **Everything before the seed laid out identically.** If there was an edit it
+  was at the caret, so at or after the seed — §27.4's licence to resume,
+  unchanged.
+- **§27.11's word-wrap lookahead cannot reach back past it** for the same
+  reason: the break in front of a row is decided by the word behind it, and
+  that word is before the seed and did not move.
+- **A caret above the table walks back to row 0, finds nothing that qualifies,
+  and leaves `[np_resume]` clear** — which is the old behaviour, still correct,
+  and still the answer for the case the net was written for (page the view
+  away with the bar, then press a key).
+
+The walk is still *unbounded*, and has to be: the caret's row is not known,
+which is the whole problem. What changed is where it starts.
+
 ### 27.8 A selection, and the two things a drag can mean
 
 The selection is a **pair of character indices**, `[np_sel0]`..`[np_sel1)`,

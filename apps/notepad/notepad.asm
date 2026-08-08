@@ -168,18 +168,31 @@ NP_IDLE      equ 9              ; ticks of no typing before the break is
 NP_WTICKS    equ 3              ; ...and how often the worker looks, ~165ms.
                                 ; Finer than NP_IDLE so the settle lands
                                 ; near the deadline rather than a tick late
-NP_HCHUNK    equ 16             ; rows of the height count per worker pass
+NP_HCHUNK    equ 4              ; rows of the height count per worker pass
                                 ; (SPEC.md 27.7.3). The count is the one walk
                                 ; that cannot be bounded by the view, so it is
                                 ; bounded by TIME instead: this many rows, then
-                                ; the lock goes back. It sizes a LOCK HOLD and
-                                ; nothing else - the count's total cost is the
-                                ; same however it is sliced - so the number
-                                ; wanted is the largest hold nobody notices,
-                                ; and a measure row is ~2ms on a 4.77MHz 8088
-                                ; (no framebuffer: np_draw and np_sigup are
-                                ; both clear), which puts a chunk at ~32ms,
-                                ; inside one 55ms tick
+                                ; the lock goes back.
+                                ;
+                                ; It sizes TWO things and the second is what
+                                ; set it. The lock HOLD is what a UI action
+                                ; waits behind, and the DUTY CYCLE is what the
+                                ; count costs the rest of the machine: the
+                                ; worker sleeps NP_WTICKS between passes, so
+                                ; the fraction spent counting is hold/(hold +
+                                ; 165ms). At 16 rows the hold measured 124ms
+                                ; (`make npbench`) - two ticks, and 43% of the
+                                ; machine for as long as the count runs, which
+                                ; the field reported as exactly that. A
+                                ; measure row is ~6ms, not the ~2 assumed, so
+                                ; 4 rows is a ~25ms hold and ~13%.
+                                ;
+                                ; The count taking longer in WALL time is the
+                                ; thing being traded away, and it is nearly
+                                ; free to trade: SPEC.md 27.7.4's estimate
+                                ; already put the bar in the right place, so
+                                ; what the count adds is exactness, and
+                                ; nothing needs that in a hurry
 NP_SB_W      equ 14             ; scroll bar width, the Disk window's
                                 ; (SPEC.md 22) so the two look like one OS.
                                 ; It is reserved ALWAYS, present or not:
@@ -752,6 +765,24 @@ np_sbclick:
     mov ax, [np_top]
     add ax, [np_vrows]
 .set:
+    ; [np_drows] is a LOWER BOUND while the count is unfinished (SPEC.md
+    ; 27.7.4), so np_scrollmax would clamp this short of a row that really
+    ; exists. Only a request that reaches past the counted extent needs the
+    ; exact total - every other one is answered by what is already known, and
+    ; every one of them used to pay for a full walk (SPEC.md 27.7.6).
+    cmp byte [np_hdirty], 0
+    je .doset
+    push ax                         ; the row being asked for...
+    call np_scrollmax               ; ...against the furthest one counted so far
+    mov bx, ax                      ; (BX is this routine's own, saved above)
+    pop ax
+    cmp ax, bx
+    jbe .doset
+    push si                         ; SI is the CALLER's - np_onclick has more
+    mov si, [np_win]                ; to do with it after this returns
+    call np_height
+    pop si
+.doset:
     call np_scrollto
 .yes:
     clc
@@ -3045,6 +3076,55 @@ np_rowstart:
     stc
     ret
 
+; -----------------------------------------------------------------------------
+; np_netseed - seed the caret-follow safety net FORWARD (SPEC.md 27.7.7)
+; out: [np_resume] set if a row start at or before the caret was found
+; preserves all registers
+;
+; The net exists because a bounded walk can stop short of the caret, and it
+; used to answer that by walking the whole note from index 0. Its comment
+; justified that with "the seed is what let the walk miss the caret" - which
+; is true of a seed AFTER the caret and false of one before it. The case that
+; fires this constantly is Down on the bottom visible row: the caret lands one
+; row below the view, and finding it cost a walk of the entire note on the
+; most-used key in the editor.
+;
+; So resume at the deepest row [np_rows] describes whose start index is at or
+; before [np_cur], and walk forward from there. Everything before that row laid
+; out identically - the edit, if there was one, is AT the caret and so at or
+; after the seed, which is SPEC.md 27.4's argument unchanged, and 27.11's
+; lookahead cannot reach back past it either. A caret ABOVE the table walks
+; back to row 0, finds nothing that qualifies and leaves [np_resume] clear,
+; which is the old behaviour and still the right answer.
+; -----------------------------------------------------------------------------
+np_netseed:
+    push ax
+    push bx
+    mov byte [np_resume], 0
+    cmp byte [np_rowsok], 0
+    je .out
+    mov ax, [np_rowsn]
+    or ax, ax
+    jz .out
+    dec ax                          ; the deepest row the table describes
+.try:
+    call np_rowstart                ; BX = where it begins, CF=1 = it does not
+    jc .out
+    cmp bx, [np_cur]
+    jbe .seed                       ; at or before the caret: safe to resume
+    or ax, ax
+    jz .out
+    dec ax                          ; ...past it, so try the row above
+    jmp short .try
+.seed:
+    mov [np_sdi], bx
+    mov [np_sdr], ax
+    mov byte [np_resume], 1
+.out:
+    pop bx
+    pop ax
+    ret
+
 np_seedrow:
     push ax
     push bx
@@ -3856,18 +3936,17 @@ np_onclick:
     pop dx
     jmp .out
 .notpanel:
-    call np_sbhit                   ; a click on the BAR is the one place the
-    jc .nobar                       ; note's height has to be exact rather than
-    call np_height                  ; a lower bound, because it is what the
-.nobar:                             ; thumb and the paging are a fraction of.
-                                    ; A click in the TEXT is answered by
-                                    ; np_measure and wants no total at all, and
-                                    ; it used to pay for one anyway - the whole
-                                    ; remaining count, in one hold, on the
-                                    ; first click after opening a file
-                                    ; (SPEC.md 27.7.3). What is left here is
-                                    ; bounded by what the worker has already
-                                    ; counted, and shrinks while the user reads
+                                    ; NOTHING here finishes the count any more.
+                                    ; A click in the TEXT wants no total at
+                                    ; all, and one on the BAR wants it only if
+                                    ; it asks to go PAST what has been counted
+                                    ; - which np_sbclick tests for itself, at
+                                    ; the one place that knows which row is
+                                    ; being asked for (SPEC.md 27.7.6).
+                                    ; Finishing it here froze the machine on
+                                    ; the first bar click after opening a file,
+                                    ; which is exactly when the count has got
+                                    ; least far and the freeze is longest
     call np_sbclick                 ; ...and the scroll bar is not the note
     jc .text
     pop dx
@@ -4469,9 +4548,15 @@ np_redraw:
                                     ; page the view away with the bar and then
                                     ; press a key, and the caret is a whole
                                     ; screenful below the last row walked
-    mov byte [np_resume], 0
-    mov word [np_lastrow], 0x7FFF
-    call np_measure
+    call np_netseed             ; ...FORWARD from the deepest row the table
+    mov word [np_lastrow], 0x7FFF   ; describes, when that row begins at or
+    call np_measure             ; before the caret. Unbounded still - the
+                                ; caret's row is not known, which is the whole
+                                ; problem - but not from INDEX 0: Down on the
+                                ; bottom visible row puts the caret one row
+                                ; below the view and re-walked the entire note
+                                ; to find it, which is seconds on the most
+                                ; used key there is (docs/NOTEPAD-NOTES.md 1.4)
 .haveit:
     call np_seecaret                ; when it MOVED. A scroll bar click also
     jnc .scrolled                   ; ends here, and following the caret then
