@@ -254,10 +254,13 @@ fsx_restore:
     mov byte [fsx_worker], 0xFF ; bracket run from the next tick
     popf
     mov byte [fsx_cur], 0xFF
-    call menu_force             ; the bar really WAS overdrawn - an exclusive
-    call wm_paint_all           ; app owned the whole screen (SPEC.md 12.9),
-                                ; so the logo and the rule are owed too. This
-                                ; is one of the three callers that mean it
+    call menu_force             ; the bar and the strip really WERE overdrawn -
+    call dock_force             ; an exclusive app owned the whole screen
+    call wm_paint_all           ; (SPEC.md 12.9/30.3), so the logo, the rule
+                                ; and every tile are owed. wm_paint_all does
+                                ; not force either any more, because nothing
+                                ; inside it destroys them; this is a caller
+                                ; that genuinely did
     pop di
     pop ax
     ret

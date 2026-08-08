@@ -176,12 +176,15 @@ dock_force_x:
 dock_paint:
     call wm_fs_vis              ; a visible fullscreen window is OVER the strip
     jnc .go                     ; (SPEC.md 11.2). Same reasoning as
-    clc                         ; menu_draw_bar's guard: whether the dock is on
-    ret                         ; screen is a fact about the screen. CF = 0,
-                                ; "nothing was drawn", which is exactly what
-                                ; wm_dock_under needs to hear. [dock_full] and
-                                ; the per-tile keys are left alone, so the
-                                ; strip is still owed its redraw afterwards
+    call dock_force             ; menu_draw_bar's guard: whether the dock is on
+    clc                         ; screen is a fact about the screen - and while
+    ret                         ; one is up our pixels are being destroyed, so
+                                ; the whole strip is owed when it goes. That is
+                                ; how wm_paint_all stopped needing dock_force:
+                                ; its dither no longer reaches us (SPEC 30.3.2)
+                                ; and this is the only other thing that can.
+                                ; CF = 0, "nothing was drawn", which is what
+                                ; wm_dock_under needs to hear
 .go:
     push ax
     push bx
