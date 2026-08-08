@@ -1871,7 +1871,10 @@ wm_paint_dmg:
     mov ax, [wm_dmg_y2]         ; reached the strip? then the dither above
     cmp ax, [vid_dock_y0]       ; just ran over it, and whatever WAS covering
     jl .dock                    ; it has moved - the one case that owes the
-    call dock_force             ; dock a whole redraw rather than a tile
+    mov ax, [wm_dmg_x1]         ; strip a restore rather than a tile. Only the
+    mov cx, [wm_dmg_x2]         ; DAMAGED span of it, though: this used to
+    call dock_force_x           ; force all 640px and rebuild every tile for a
+                                ; window that closed in one corner (SPEC 30.3)
 .dock:
     call dock_paint             ; CF = 1 if it actually put pixels on the strip
     jnc .bar                    ; - and only then does a window sitting on the

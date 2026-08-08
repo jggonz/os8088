@@ -965,6 +965,67 @@ reverse of `fm_vp_set`, because `[ld_pwin]` holds the poster's **state block**,
 not its window — a distinction that silently draws a Disk window's contents
 through a garbage rect if you miss it.
 
+### The menu bar is three segments and the dock diffs its marks (SPEC.md §12.9/§30.3)
+
+**Only the segment that changed may put pixels on a strip.** The menu bar
+carries four things on four completely different cadences — a logo that
+never changes, the active application's menus, a clock that changes once a
+minute, and §12.8's file-activity widget — and they shared one flag, so any
+of them moving redrew all of them as a full-width white fill followed by
+every glyph being put back. Measured on a cycle-accurate 5150/CGA with
+PERFORMANCE.md Part 3.1's instrument: switching application was **9 frames
+flashing = 149 ms, worst 534 transient pixels** across the whole bar, and it
+is **1 frame = 17 ms, worst 37 px — those 37 being the mouse arrow**.
+
+The segments are `0..MENU_TXT_X0-1` (logo), `MENU_TXT_X0..[vid_clk_hx]-1`
+(menus) and `[vid_clk_hx]..w-9` (clock); the widget BORROWS the right end of
+the menus and gives it back through `menu_inval` rather than forcing the lot.
+Both interior boundaries are glyph-cell boundaries — `[vid_clk_hx]` is
+floored to a multiple of 8 now — because that is what earns `font_run`'s
+single-pass path (§6.1), where a cell row is one store on 1bpp and the span
+is never momentarily blank. The layout follows: `MENU_NAME_X` 38 → 40,
+`MENU_TITLE_PAD` 12 → 16, a title's pen at `MB_XL + 8`. Tracker moving its
+pattern columns to earn the same path is the precedent.
+
+Five things are easy to undo. **`menu_bcell` is the composition buffer AND
+the record of what is on the glass**, so composing IS the diff and no second
+structure can fall out of step; the first and last differing cells bound one
+`font_run`. **Spaces are content** — the segment is composed whole, out to
+the clock, so a bar that lost a menu blanks those cells in the same opaque
+pass that letters the rest, and there is no fill in the path at all.
+**`[menu_bovr]` is the only flag that erases anything**, which is why
+`menu_track` no longer ends in `menu_force` (it would redraw the logo on
+every menu click — nothing there damages the bar: the highlight is XOR and
+both droppers floor at `MBAR_H`) and why `fsx` now does. **The About cell is
+composed FIRST and skipped in the loop**, because §12.7 appends it last and
+positions it leftmost, and composition must run in x order. And **it is
+sound only because the bar can never be covered** — windows clamp to
+`y >= MBAR_H` — which is `fm_sel_bar`'s licence in another place.
+
+**The dock is the same argument at the tile.** A focus change is its
+commonest event and it cost two tiles *erased to white and rebuilt* — fill,
+frame, two-pass masked icon blit, marks — to move one 1px rectangle. The
+erase existed because "the marks are not nested", and the reason dissolves
+once you notice **both marks are their own inverse**: active is a `gfx_frame`
+toggled by `gfx_xor_rect`, minimized is already a `gfx_xor_fill`. So
+`dock_paint` branches on `old XOR new` and **never touches the icon unless
+the icon changed**. That needed the key rearranged — the rotated icon
+pointer's top three bits used to land ON the mark bits, fine for *did
+anything change* and useless for *what changed*, so they are folded into the
+high byte instead; a live tile's key now always has bit 0 set, so 0 means
+"no tile" by construction and the old collision bump is gone. `dock_force`
+also gained a **span** (`dock_force_x`), because `wm_paint_dmg` forced all
+640px and every tile for any damage that touched the strip.
+
+**Verified by BYTE IDENTITY, not by looking**: `make REDRAWFULL=1` builds
+the old paths as a reference kernel, and the same scripted session driven
+through both must agree pixel for pixel — 15 steps on CGA (including
+minimize, restore, a window dragged over the strip and back, and a package
+load through the progress widget) and 10 on Hercules and VGA mode 12h, **0
+differing pixels each**. Keep that knob working: "the picture is the same,
+only the number of times it was drawn changed" is the whole claim, and a
+screenshot of one build cannot check it.
+
 ### Retitling costs a strip, and the dock stopped being a trap (SPEC.md §11.92/§39.7)
 
 A caption changes on an **event**, never on a paint — so a window knows what it
