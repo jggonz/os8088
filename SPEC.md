@@ -18969,6 +18969,31 @@ frame, so the intervals must alternate two frames and three: **110 ms and
 ±20% the graphics bracket had before §45.15.2, and it is why the *fullscreen*
 answer was a finer clock rather than a cleverer schedule.
 
+#### 45.16.3 `E` — the even-grid experiment, and why arithmetic could not settle it
+
+§45.16.2's floor is that a 125 ms row on a 55 ms frame must alternate two
+frames and three. The obvious next question is whether making every interval
+a multiple of **two** frames instead — a steady 110 ms with an occasional 220
+where the drift is taken up — *looks* better than an irregular 110/165.
+
+**Arithmetically it is worse, and that is not the question.** 110 seven times
+then 220 has a wider spread than 110 twice then 165: quantizing to a coarser
+grid can only raise the error, because the error is bounded by half the grid.
+But a rhythm the eye can lock onto may read better than a smaller irregular
+one, and no measurement in this tree can say. Nor can the arithmetic say
+whether a periodic hitch is more forgivable than constant unevenness — that
+is a fact about people.
+
+So it is a **bench key**, `E` in the TRKLOG build, exactly like `Y` and `T`
+and for the same stated reason: it splits a question in half that a rebuild
+per hypothesis would answer slowly and a listener answers in ten seconds. The
+shipped build carries none of it. It gates `tui_draw_dyn` to every other wake
+when windowed, and leaves the bracket alone — the bracket has a 54.6 Hz clock
+of its own (§53.5.1) and nothing to fix.
+
+If it wins, it stops being a key and becomes the windowed path. If it loses,
+the arithmetic was right and this section is the record of having checked.
+
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
 A port of ActionRetro's **ArtfulType** — "a distraction-free Markdown

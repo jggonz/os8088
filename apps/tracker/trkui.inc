@@ -2706,6 +2706,15 @@ tui_draw_dyn:
     push di
     cmp byte [tui_inited], 0
     je .out
+%ifdef TRKLOG
+    cmp byte [tlog_even], 0         ; E: the windowed readout on an even
+    je .noeven                      ; two-frame grid (SPEC.md 45.16.3) - bench
+    cmp byte [trk_fs], 0            ; only. The bracket has its own 54.6 Hz
+    jne .noeven                     ; clock and nothing to fix (53.5.1)
+    xor byte [tlog_ephase], 1
+    jnz .out                        ; the other half of the grid: draw nothing
+.noeven:
+%endif
     call tui_sync                   ; the position being HEARD (SPEC.md 45.15)
     call tui_track
     mov al, [mp_playing]            ; did playback START or STOP? the test is

@@ -402,6 +402,42 @@ tlog_clk_key:
     ret
 
 ; -----------------------------------------------------------------------------
+; tlog_even_key (E) - the WINDOWED readout on an even two-frame grid
+;                     (SPEC.md 45.16.3). Bench-only, like Y and T, and for the
+;                     same reason: it settles a question about what LOOKS
+;                     better, which no measurement here can answer.
+;
+; Windowed the frame is 55 ms and the row is 125, so the intervals between
+; row changes must be two frames or three - 110 ms and 165 - and that
+; alternation is the floor (45.16.2). This makes every interval a multiple of
+; TWO frames instead, by drawing on every other wake: a steady 110 with an
+; occasional 220 where the drift is taken up, rather than an irregular
+; 110/165.
+;
+; The arithmetic says this is WORSE - 110 seven times then 220 has a wider
+; spread than 110 twice then 165 - and the arithmetic is not what is being
+; asked. A rhythm the eye can lock onto may read better than a smaller but
+; irregular one. That is what the key is for.
+;
+; The bracket is left alone: it has a 54.6 Hz clock of its own (SPEC.md
+; 53.5.1) and nothing to fix.
+; -----------------------------------------------------------------------------
+tlog_even_key:
+    push ax
+    push si
+    xor byte [tlog_even], 1
+    mov byte [tlog_ephase], 0
+    mov si, tlog_s_eveno
+    cmp byte [tlog_even], 0
+    je .say
+    mov si, tlog_s_evenx
+.say:
+    call tui_msg
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; tlog_tick - write one record IF the tick has moved since the last one
 ;
 ; Both producers call this, so a tick in which either side ran gets a record
@@ -847,6 +883,8 @@ tlog_s_synco:   db 'Sync ON: the screen follows the card', 0
 tlog_s_syncx:   db 'Sync OFF: the screen follows the mixer', 0
 tlog_s_clkt:    db 'Clock: one frame per tick', 0
 tlog_s_clkr:    db 'Clock: one frame per sub-tick', 0
+tlog_s_eveno:   db 'Even OFF: windowed draws every frame (110/165)', 0
+tlog_s_evenx:   db 'Even ON: windowed draws every 2nd frame (110/220)', 0
 
 ; --- bss ---------------------------------------------------------------------
     TRKW tlog_seg                   ; the record claim, 0 = not armed
@@ -865,6 +903,8 @@ tlog_s_clkr:    db 'Clock: one frame per sub-tick', 0
     TRKB tlog_wloop                 ; worker loop passes since the record
     TRKB tlog_src                   ; which producer is opening this one
     TRKB tlog_nosync                ; Y: the display is back on the mixer
+    TRKB tlog_even                  ; E: the windowed readout on an EVEN
+    TRKB tlog_ephase                ; two-frame grid, and which half we are on
     TRKW tlog_cons                  ; what the worker last saw...
     TRKW tlog_totl
     TRKB tlog_state
