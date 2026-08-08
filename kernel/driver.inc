@@ -2183,8 +2183,10 @@ drv_cfg_save:
     push di
     push es
     call drv_vol_bank           ; the panel is closing on top of whatever the
-                                ; user was doing; this write goes to A: and
-                                ; must not move them (SPEC.md 51.5.2)
+                                ; user was doing; this write goes to the BOOT
+                                ; VOLUME - A: on a floppy machine and the
+                                ; installed partition otherwise (SPEC.md
+                                ; 52.10.3) - and must not move them (51.5.2)
     call drv_mounted
     jc .nodisk
     mov si, drv_sysname

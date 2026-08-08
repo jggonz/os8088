@@ -3207,6 +3207,18 @@ dsk_here_ok:
     cmp byte [bx+DV_KIND], DVK_DRV
     je .yes                     ; not removable: nothing to re-validate
     mov bl, [bx+DV_UNIT]        ; the int 13h drive, for the motor bit
+    test bl, 0x80               ; ...and a FIXED disk reached through the BIOS
+    jnz .yes                    ; is not removable either (SPEC.md 52.10.3's
+                                ; boot partition). DV_KIND says the TRANSPORT
+                                ; and only the UNIT says the medium - they
+                                ; were the same question until a hard disk
+                                ; became a DVK_BIOS row, and asking the kind
+                                ; alone sends an ST-225 to the floppy motor
+                                ; test below. It FAILS SAFE (drive 0x80 has no
+                                ; bit in 0040:003F, so `cmp bl, 4` refuses and
+                                ; it mounts) - the cost is correctness kept
+                                ; and the whole optimisation lost on the one
+                                ; volume an installed machine uses most
     cmp bl, 4
     jae .no                     ; only drives 0..3 have a bit in 0040:003F
     xor bh, bh                  ; BL was the row pointer's low half a moment

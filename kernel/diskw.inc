@@ -2202,7 +2202,8 @@ dskw_clbytes:
 ;
 ; The price is walking the chain from the front on every call, and it is
 ; smaller than it looks: the walk is FAT lookups, the FAT window is resident,
-; and the caller is spending 238 ms a sector (PERFORMANCE.md) on the data
+; and the caller is spending 65 ms a sector (PERFORMANCE.md - a sector inside
+; a well-coalesced run; 238 was the AL bug, not the drive) on the data
 ; this is handing it. A 116KB file in 32KB chunks is four walks averaging
 ; ~116 clusters - a few hundred word reads against twelve seconds of floppy.
 ;

@@ -7008,7 +7008,8 @@ ordinal, and the two were designed together.
 
 The price is walking the chain from the front on every call, and it is
 smaller than it looks: the walk is FAT lookups against a resident window,
-while the caller is spending **238 ms a sector** (PERFORMANCE.md) on the data
+while the caller is spending **65 ms a sector** (PERFORMANCE.md — a sector
+inside a well-coalesced run; 238 was the `AL` bug, not the drive) on the data
 being handed to it. A 116KB file in 32KB chunks is four walks averaging ~116
 clusters — a few hundred word reads against twelve seconds of floppy.
 
@@ -7963,7 +7964,7 @@ corrupt it.
 
 The cost is a directory re-seek per entry, and it is the right trade here: a
 directory is a few hundred entries at most, a seek reads whole sectors
-without decoding them, and the caller is spending 238 ms a sector
+without decoding them, and the caller is spending 65 ms a sector
 (PERFORMANCE.md) moving the file data this is feeding.
 
 **Hidden and system entries are reported to a DRIVER only**, and that is the
@@ -23323,7 +23324,7 @@ the copy prompts for the disk swap rather than assuming two drives.
 
 **Progress is §12.8's widget.** A file operation freezes the machine by
 design, and this is the largest one in the system — both floppies is
-hundreds of sectors at 238 ms each on the field machine — so `fpg_begin`'s
+hundreds of sectors at **65 ms** each on the field machine — so `fpg_begin`'s
 bar is stepped from inside the transfer loop, which is the one piece of code
 still running.
 

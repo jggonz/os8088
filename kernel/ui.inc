@@ -1124,7 +1124,17 @@ ui_tm_open:
                                 ; UI-task-only and one load at a time, like
                                 ; ld_fp
 
-    xor dl, dl                  ; A: - the disk we booted from
+    mov dl, [dsk_bootvol]       ; the disk we booted from - A: on a floppy
+                                ; machine, where this byte is 0 and this is
+                                ; the `xor dl, dl` it replaced, and the
+                                ; installed PARTITION on a machine that boots
+                                ; from its hard disk (SPEC.md 52.10.3).
+                                ;
+                                ; This one mounts for itself rather than going
+                                ; through drv_mounted, because it is the one
+                                ; caller that needs a LISTING - it hands the
+                                ; loader a directory index - so it has its own
+                                ; copy of the question and needed its own fix
     call disk_mount
     mov si, ui_s_nodisk
     jc .fail
