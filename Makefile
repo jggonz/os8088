@@ -163,7 +163,7 @@ KERNEL_INC := $(wildcard kernel/*.inc)
 
 .PHONY: all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
-        bench field stackprobe trklog clicktest marty comscan checkdocs clean
+        bench field stackprobe trklog npbench clicktest marty comscan checkdocs clean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
 # below). The testing apps are on-demand only: `make bench`.
@@ -729,6 +729,55 @@ $(BUILD)/trklog.img: $(BUILD)/trklog.o88 apps/tracker/beverly.mod tools/os88disk
 $(BUILD)/trklog360.img: $(BUILD)/trklog.o88 apps/tracker/beverly.mod tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
 		$(BUILD)/trklog.o88 apps/tracker/beverly.mod
+
+# --- the Note Pad walk bench (ON DEMAND: `make npbench`) ---------------------
+# NPBENCH.O88 is apps/notepad built with -DNPBENCH, which is the only
+# difference: the shipped NOTEPAD.O88 has no bench, no Ctrl-B and no buffer,
+# and the hooks that reach tests/npbench.inc are inside %ifdef NPBENCH. One
+# source, two binaries - the trklog arrangement above, for its reason.
+#
+#   make npbench                                # build the disks
+#   make test TESTAPPS=build/npbench.img        # ...or build and boot
+#
+# WHAT IT ANSWERS: SPEC.md 27.7.3's NP_HCHUNK sizes a gfx-lock hold and has
+# never been measured on iron - every figure behind it is a MartyPC cycle
+# count, which is the right units and the wrong machine. Boot it, open a file
+# (README.TXT on the system disk is the reference: 15,889 bytes, 781 rows),
+# press Ctrl-B, and the report REPLACES the note. The disk must NOT be
+# write-protected if you then want Ctrl-S to keep it.
+#
+# It carries no document of its own on purpose: the numbers are per-row and
+# depend on the note, so the note wanted is the one already on the system
+# disk in A: rather than a copy here that can drift from it.
+NPBENCHSRC := apps/notepad/notepad.asm tests/npbench.inc
+
+npbench: $(BUILD)/npbench.img $(BUILD)/npbench360.img
+
+$(BUILD)/npbench.bin: $(NPBENCHSRC) apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -DNPBENCH -I apps/ -I tests/ \
+		-o $@ apps/notepad/notepad.asm
+	@echo "npbench: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/npbench.o88: $(BUILD)/npbench.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/npbench.bin -o $@
+
+# It ships as APPS/NOTEPAD.O88 and not as NPBENCH.O88, which is the whole
+# ergonomics of the thing: SPEC.md 54's association maps TXT to the stem
+# NOTEPAD and hunts for NOTEPAD.O88 in the document's folder, both roots and
+# each volume's APPS - so with this disk in B:, DOUBLE-CLICKING README.TXT on
+# the system disk opens it in the BENCH build with the reference note already
+# loaded. Named NPBENCH.O88 the association would miss it and the operator
+# would have to launch it and drive a file dialog on a machine they are
+# standing next to with a stopwatch.
+$(BUILD)/npb/notepad.o88: $(BUILD)/npbench.o88
+	@mkdir -p $(BUILD)/npb
+	@cp $< $@
+
+$(BUILD)/npbench.img: $(BUILD)/npb/notepad.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 APPS:$(BUILD)/npb/notepad.o88
+
+$(BUILD)/npbench360.img: $(BUILD)/npb/notepad.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 APPS:$(BUILD)/npb/notepad.o88
 
 # --- the A/V SYNC disk (ON DEMAND: `make clicktest`) -------------------------
 #
