@@ -420,7 +420,8 @@ host tails a file. No protocol, no host tool, no ISR.
 it fixes three things about how this tree reports results today:
 
 - `gfxbench` and `sysbench` write their reports to a **file on the floppy**.
-  A floppy write is 238 ms/sector on the calibration machine — the harness is
+  A floppy write is ~65 ms/sector in a run on the calibration machine (it was
+  238 before SPEC.md §18.91's `AL` fix) — the harness is
   paying, in the same units it is measuring, for the privilege of reporting.
   Serial costs the guest a polled `out` per byte and no disk at all.
 - A run that hangs before it writes its report loses **everything**. Streamed,

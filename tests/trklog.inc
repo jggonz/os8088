@@ -810,7 +810,7 @@ tlog_dec4:
 ; text is a TRANSIENT claim held across this one call - 44KB of it, which has
 ; no business living in a region that caps at 60 (SPEC.md 27.6's rule, and
 ; Note Pad's) - and the write itself is ~20 seconds of floppy at the measured
-; 2,100 bytes/second (PERFORMANCE.md Part 2), which is why the status line
+; 7,457 bytes/second (PERFORMANCE.md Part 2), which is why the status line
 ; says so before it starts.
 ; -----------------------------------------------------------------------------
 tlog_save:

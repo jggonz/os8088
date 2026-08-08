@@ -218,49 +218,83 @@ ASC_NAME  = b"ASSOC   DAT"   # SPEC.md 54.7: the volume's icon + assoc cache
 ASC_MAGIC = b"OS88AC"
 ASC_VER   = 1
 ASC_HDR   = 16
-ASC_ROW   = 80               # stem 8 + size 2 + 6 reserved + a 64-byte icon
-ASC_NAPP  = 16
+ASC_ROW   = 80               # stem 8 + size 2 + cluster 2 + 4 rsvd + icon 64
+ASC_ROWICO  = 16             # the icon's offset inside a row
+ASC_ROWCLUS = 10             # the folder the program lives in (0 = root),
+                             # patched in after cluster assignment (SPEC.md
+                             # 54.7.1) - it costs the file nothing, the row
+                             # having reserved six bytes since it was written
+ASC_NAPP  = 32
 ASC_NEXT  = 24
 
+# The kernel's own built-in association stems (kernel/assoc.inc assoc_stem).
+# Mirrored here ONLY to order the rows, so that if the cap ever bites it is an
+# icon row that is lost and never an association. Being out of date costs a
+# cached icon, never correctness - which is why it is a plain list and not a
+# generated one.
+ASC_DEFAULT_STEMS = (b"PAINT", b"NOTEPAD", b"TRACKER", b"ARTFUL")
 
-def build_assoc(groups) -> bytes:
-    """ASSOC.DAT for this volume (SPEC.md 54.7).
+
+def build_assoc(groups):
+    """ASSOC.DAT for this volume (SPEC.md 54.7 / 54.7.1).
 
     A warm cache, written HERE because this tool already places every package
-    and therefore already knows its stem, its size and its icon. A shipped
-    disk then arrives with the mount's per-package icon read (mechanism D of
-    docs/DISK-PERF-PLAN.md) already answered - opening APPS/ costs 5 int 13h
-    calls instead of 13, and nothing has to run on the target to earn it.
+    and therefore already knows its stem, its size, its icon and - since
+    54.7.1 - the FOLDER it ends up in. A shipped disk arrives with the mount's
+    per-package icon read already answered, and with every association on the
+    disk locatable from one root mount.
 
-    The row key is (stem, size) and there is deliberately NO cluster in it:
-    the harvest still has the directory entry, so where a program lives comes
-    from there. That also means this body depends only on the packages and
-    not on the layout, so it can be built before a single cluster is assigned.
+    Returns (body, rowdirs): the bytes, and the folder key of each app row.
+    The CLUSTER field is left 0 here and patched by the caller once the
+    directory chains exist - which is the whole of the two-pass, and it works
+    because only the row's CONTENTS depend on the layout, never its size.
 
-    An iconless package still gets a row, holding 64 zero bytes - which is the
-    all-zero "no icon" sentinel the kernel already understands, so caching the
-    ABSENCE saves the read too.
+    Rows are ordered association-bearing first (a header declaration, or a
+    stem the kernel already knows), so that if ASC_NAPP ever bites it is an
+    icon that is lost and not the ability to open a document.
+
+    An iconless package still gets a row, holding 64 zero bytes - the all-zero
+    "no icon" sentinel the kernel already understands, so caching the ABSENCE
+    saves that read too.
     """
-    apps, exts = [], []
+    cand, exts = [], []
     for key in groups:
         for name11, body, _ in groups[key]:
-            if name11[8:11] != b"O88" or len(apps) >= ASC_NAPP:
+            if name11[8:11] != b"O88":
                 continue
             if len(body) < 32 or body[0:2] != b"O8" or body[2] != 3:
                 continue
             flags = body[3]
             icon = body[32:96] if flags & 1 and len(body) >= 96 else bytes(64)
-            idx = len(apps)
-            apps.append((name11[0:8], len(body) & 0xFFFF, icon))
+            decl = []
             if flags & 2:                       # a header declaration (54.6)
                 base = 96 if flags & 1 else 32
                 if len(body) >= base + 16:
                     for i in range(min(body[base], 5)):
                         e = body[base + 1 + 3 * i:base + 4 + 3 * i]
-                        if len(exts) < ASC_NEXT and e != b"O88":
-                            exts.append((e, idx))
+                        if e != b"O88":
+                            decl.append(e)
+            stem = name11[0:8]
+            known = stem.rstrip() in ASC_DEFAULT_STEMS
+            cand.append((not (decl or known), stem, len(body) & 0xFFFF,
+                         icon, decl, key))
+    # stable: the ordering key is only the association flag, so argument order
+    # survives inside each half and a rebuild is byte-identical
+    cand.sort(key=lambda c: c[0])
+    if len(cand) > ASC_NAPP:
+        print(f"os88disk: assoc: {len(cand)} packages, caching "
+              f"{ASC_NAPP} - {len(cand) - ASC_NAPP} harvested the slow way")
+        cand = cand[:ASC_NAPP]
+    apps, rowdirs = [], []
+    for _, stem, size, icon, decl, key in cand:
+        idx = len(apps)
+        apps.append((stem, size, icon))
+        rowdirs.append(key)
+        for e in decl:
+            if len(exts) < ASC_NEXT:
+                exts.append((e, idx))
     if not apps:
-        return b""
+        return bytearray(), []
     buf = bytearray(ASC_HDR + ASC_ROW * len(apps) + 4 * len(exts))
     buf[0:6] = ASC_MAGIC
     buf[6], buf[7], buf[8] = ASC_VER, len(apps), len(exts)
@@ -268,12 +302,12 @@ def build_assoc(groups) -> bytes:
         o = ASC_HDR + i * ASC_ROW
         buf[o:o + 8] = stem
         struct.pack_into("<H", buf, o + 8, size)
-        buf[o + 16:o + 80] = icon
+        buf[o + ASC_ROWICO:o + ASC_ROWICO + 64] = icon
     eo = ASC_HDR + ASC_ROW * len(apps)
     for i, (e, ix) in enumerate(exts):
         buf[eo + 4 * i:eo + 4 * i + 3] = e
         buf[eo + 4 * i + 3] = ix
-    return bytes(buf)
+    return buf, rowdirs
 
 
 def sys_attr(name11: bytes, boot: bool) -> int:
@@ -461,7 +495,7 @@ def build(args) -> int:
     # A warm ASSOC.DAT (SPEC.md 54.7), from the packages on this disk. It is
     # built before any cluster is assigned, which it can be because its rows
     # are keyed by (stem, size) and carry no layout at all.
-    asc = build_assoc(groups)
+    asc, asc_rowdirs = build_assoc(groups)
     if asc:
         root_files = root_files + [(
             ASC_NAME, asc,
@@ -523,6 +557,15 @@ def build(args) -> int:
         for c, f in zip(chains, files):
             c.extend(range(nxt, nxt + f[2]))
             nxt += f[2]
+
+    # PASS 2 of ASSOC.DAT (SPEC.md 54.7.1): the folder each program lives in,
+    # now that the directory chains exist. `asc` is a bytearray and `files`
+    # holds the same object, so patching here reaches the bytes `put` writes -
+    # and only the row CONTENTS depend on the layout, never the row COUNT, so
+    # nothing above this had to know.
+    for i, key in enumerate(asc_rowdirs):
+        struct.pack_into("<H", asc, ASC_HDR + i * ASC_ROW + ASC_ROWCLUS,
+                         0 if not key else dir_chains[key][0])
 
     fat = Fat(lay, media)
     data_area = bytearray((tot - lay.data_lba) * SECTOR)

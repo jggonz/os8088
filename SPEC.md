@@ -4548,7 +4548,9 @@ away — §18 keeps the disk on the UI task, `dsk_xfer` raises `[sch_lock]`
 across every `int 13h`, and the caller is a window callback that has been
 holding the gfx lock since before it started (§22). So the cursor stops, no
 window paints, and nothing moves for as long as the disk takes. On the field
-machine a sector is **238 ms** (PERFORMANCE.md Part 2) — a 116KB module is
+machine a sector is **~65 ms** inside a run (PERFORMANCE.md Part 2; 238 ms
+before SPEC.md §18.91's `AL` fix, which is what the figure below was taken
+at) — a 116KB module is
 tens of seconds of a screen that looks hung.
 
 What was missing was not concurrency but **feedback**. The widget is a file
@@ -4598,7 +4600,7 @@ Five things hold it up.
 
 - **`fpg_step` must not be able to cost anything when nothing is armed.**
   It is `pushf` / `cmp byte [fpg_on], 0` / `je` on the disk path for the life
-  of the machine, the same ~13us against a 238 ms sector that `spl_step`
+  of the machine, the same ~13us against a 65 ms sector that `spl_step`
   settled for (§15.3). All of its state is in `.text` with real
   initialisers, **not `.bss`** — `-f bin` zeroes nothing, `drv_boot` reads
   the disk before any init routine could run, and a garbage `[fpg_on]` would
@@ -5285,7 +5287,8 @@ address.** `KERNEL_SEG` is the only constant `kernel/kernel.asm` and
 The progress bar used to reach 100% when the boot sector's final sector
 landed, and `vid_init`'s mode set then wiped the whole loading screen — with
 several seconds of kmain still to run. On the field machine (Part 2 of
-PERFORMANCE.md: **238 ms per floppy sector**) that tail is:
+PERFORMANCE.md: **~65 ms per floppy sector** in a run, 238 before the `AL`
+fix this paragraph predates) that tail is:
 
 | after the last sector of the kernel | cost |
 |---|---|
@@ -5311,7 +5314,7 @@ Three parts, all in `splash.inc` except the hooks:
   boundaries. It preserves **every register and the flags** — its hot caller
   is the middle of a transfer loop — and it is a compare and a `ret` once the
   splash is down, which is what makes leaving it on the disk path for the
-  life of the machine free (~13 us against a sector's 238 ms).
+  life of the machine free (~13 us against a sector's 65 ms).
 - **`spl_finish`** forces the bar to 100%, repaints once and clears
   `[spl_live]`. kmain calls it immediately before the first `wm_paint_all`,
   which is the last moment a full bar is true — and no erase is needed,
@@ -5355,7 +5358,8 @@ and as milliseconds.
 
 It exists because a boot is the one thing this project could never measure.
 It is over before a package can run, and on a floppy machine it is mostly
-**disk**: 125 sectors of kernel at 238 ms each (PERFORMANCE.md Part 2), then
+**disk**: 125 sectors of kernel at the pre-fix 238 ms each (PERFORMANCE.md
+Part 2; the whole boot is a measured 9.94 s now), then
 the mount, then every driver `SYSTEM.CFG` asked for. Any change to the read
 path — §18.91's batching, §18.93's parameter table — has to answer to a
 number, and this is the number.
@@ -5955,7 +5959,8 @@ panel, which writes `SYSTEM.CFG` to the *system* disk — §51.5.1):
 | **this rule** | **2** | **28** | **12** |
 
 Nineteen sectors is **~4.5 s of floppy on the field machine** at
-PERFORMANCE.md's 238 ms per sector, spent rebuilding a listing that no
+PERFORMANCE.md's then-238 ms per sector (~65 now), spent rebuilding a
+listing that no
 pixel on screen was drawn from — and `SYSTEM.CFG` is hidden+system (§19.6),
 so it does not appear in a listing even on a machine with A:'s root open.
 The two that remain are the volume switch to A: and the switch back, which
@@ -6550,7 +6555,8 @@ panel — §18.4's case, carried the rest of the way:
 | …and 18.4.3's kept entry | 2 | **9** | **9** |
 
 47 → 10 sectors is **4.7x**, about **8.8 s of floppy** on the field machine
-at PERFORMANCE.md's 238 ms per sector. The two mounts are irreducible — they
+at PERFORMANCE.md's then-238 ms per sector (~65 now). The two mounts are
+irreducible — they
 are the switch to A: and the switch back — and what is left of them is the
 boot sector, the directory and the commit.
 
@@ -6625,6 +6631,63 @@ a reader that can re-list where it stands **falls through to its own load
 path** (`fmv_sync`), and a reader that adopts the snapshot wholesale **pays
 `dsk_relist` first** (`fmv_bcast`, which is idempotent and free when nothing
 is owed).
+
+### 18.9.1 …and a switch to where we already are is not a switch
+
+`dsk_chdir_q` re-mounted unconditionally. `dsk_chdir` writes `[dsk_cwd]` and
+calls `disk_mount`, and nothing anywhere asked whether the volume and
+directory it names are the ones the machine is *already standing in* — so a
+document open paid **three** mounts, most of a copy's switches were to a
+place it had just left, and every one of them re-read the boot sector.
+
+**The compare alone is not the test, and that is the whole of this section.**
+"We are already on this volume" says nothing about whether it is the same
+*disk*: an app writes a file, the user swaps the floppy, the app writes
+again — both writes are "already here", and the second lands on the new disk
+with the old FAT and the old free-cluster map. That is a corrupted volume,
+not a stale listing, so the second half of the predicate is what licenses the
+first.
+
+**A driver volume (§18.7) needs no second half.** It is not removable. An
+ST-225 cannot be swapped between two writes, so `DVK_DRV` short-circuits on
+the compare alone — and a hard disk is exactly where the re-validation was
+most obviously wasted.
+
+**A floppy is answered by the BIOS's own motor timeout, which is a physical
+fact and not a heuristic.** `0040:0040` is the motor-off countdown; int 08h
+decrements it — our own ISR chains the BIOS tick precisely so that keeps
+happening (§7) — and `dsk_dpt` byte 2 loads it with `0x25`, **37 ticks =
+2.03 seconds**. A non-zero count therefore means a floppy motor is *still
+spinning*, and nobody opens a drive door, swaps a disk and closes it inside
+two seconds while the spindle is turning. `0040:003F` bit *n* says which
+drive, because a two-drive machine may be mid-copy with the other one
+running.
+
+That predicate is the batch boundary, and it is one nobody has to declare:
+the reads of a single operation are milliseconds apart and the motor never
+stops, while two operations separated by a human are always a fresh
+validation. **No bracket, so no bracket to forget** — which is why this is
+not `dsk_batch_begin`/`end`.
+
+**It fails safe in the one direction that matters.** A BIOS that does not
+maintain the byte reads 0, which means "validate", which is what every mount
+does today. The failure mode of being wrong is a wasted mount, never a
+skipped one.
+
+Three things about the implementation:
+
+- **`dsk_here_ok` preserves every register**, so the motor bit comes out of
+  a 4-byte table (`dsk_mbit`) rather than `shl al, cl` — CX belongs to the
+  caller. The first draft spent it and said so in a comment, which is how it
+  was caught.
+- **Skipping adds no `[dsk_lstale]` debt.** A quiet mount publishes
+  `disk_nfiles` = 0 and raises the flag because it *destroys* the listing;
+  skipping destroys nothing, so the listing keeps whatever state it already
+  had and `dsk_relist` stays correct either way.
+- **It is on the QUIET path only.** A full `dsk_chdir` is a navigation and
+  the Disk window's Refresh is exactly a request to re-read — a
+  short-circuit there would make Refresh a no-op, which is the one thing it
+  must never be.
 
 ### 18.91 The transfer loop batches a run into one int 13h
 
@@ -6777,7 +6840,8 @@ something in this area is in doubt.
 > below is correctness rather than speed and is unaffected.
 
 `boot/boot.asm` read `AL = 1`. 131 sectors, one int 13h each, at
-PERFORMANCE.md's measured **238 ms per sector** — **over thirty seconds**, and
+PERFORMANCE.md's then-measured **238 ms per sector** (the `AL` bug; ~65 ms
+since) — **over thirty seconds**, and
 the single largest cost in the boot of the machine this targets. PERFORMANCE.md
 already named the fix and priced it at "about 9x on every load in the system,
 which is the largest single number in this document"; §18.91 took it for the
@@ -6891,7 +6955,8 @@ given for the separation was two things that have both since expired:
 
 - *"the counters are two instructions in the hot path of every transfer"* —
   measured, they are about twelve instructions per int 13h **call**, not per
-  sector, against a sector that costs **238 ms** on the target machine. And
+  sector, against a sector that costs **~65 ms** on the target machine (238
+  when this was written). And
   the image is **byte for byte the same size** either way, because the growth
   lands inside the padding to `OVL_START`: 72,199 bytes with them and without,
   the same 142-sector rung, so the memory ladder, the boot sector's read and
@@ -15392,6 +15457,34 @@ in, without the app storing anything or calling anything. Names are still
 bare 8.3 names with no path in them (§19.2); what changed is whose current
 directory they resolve against.
 
+### 38.11 The Drive button cycles every volume, not two floppies
+
+`fdlg_nextvol` walks `dsk_vtab` from `[disk_drive]` upward, wrapping, and
+stops at the first row whose `DV_KIND` is not `DVK_FREE`. It was `xor dl, 1`
+— *"the other drive"* — which was the whole truth while A: and B: were the
+whole machine and has been wrong since §52 made `[disk_drive]` a **volume
+index** with one row per partition.
+
+The consequence was larger than the button: the dialog has **no other way to
+change volume** — the list shows one directory and the Drive button is the
+only control that leaves it — so **no application could Open or Save on a
+hard disk at all.** Every `fdlg` in the system cycled C: right past, between
+0 and 1, on a machine with four partitions mounted and four icons on the
+desktop saying so.
+
+It reads `dsk_vtab` **directly**, with no `cw_` shim, and that is worth
+stating because `fdlg.inc` is cold (§2.6): cold code keeps `DS =
+KERNEL_SEG`, so kernel *data* is already in reach and only *calls* have to
+cross. The fix therefore costs `.text` nothing at all — which is the whole
+of why it is a data read rather than a call to `dsk_vol_row`.
+
+The loop is bounded at `DVOL_MAX` candidates, so the last one it tries is
+where it started: a machine with one live volume answers that volume instead
+of running off the end. A: and B: are permanent `DVK_BIOS` rows and can
+never be freed (`dsk_vol_del` refuses a row that is not `DVK_DRV`), so that
+fallback is unreachable in practice and is kept because it is cheaper than
+depending on the fact.
+
 ## 39. viddet.inc — video adapters, runtime geometry, the mono renderer
 
 The kernel drives three display adapters and picks one at boot. One binary,
@@ -21886,7 +21979,8 @@ default.** Both `drv_tab` rows ship with `DRVR_WANT` = 0. The sound row used
 to ship with 1, so a freshly built image — which carries no `SYSTEM.CFG` at
 all — read the whole 5.5KB driver off the floppy on every boot to be told
 there was no card: **27 sectors, about 6.4 seconds** at the field machine's
-238 ms per sector (PERFORMANCE.md Part 2), and then a Control Panel opened
+the then-238 ms per sector (~65 now, PERFORMANCE.md Part 2), and then a
+Control Panel opened
 on a failure nobody had asked for. A driver probes hardware and costs a
 floppy read; both are the user's to ask for, and the tick in the Drivers page
 is both the request and the record of it. The kernel does not guess.
@@ -23589,6 +23683,67 @@ That is also the general answer for **any** program shipping under a stem the
 kernel's defaults do not name — which is every third-party package there will
 ever be.
 
+### 54.4.2 Finding the program: the rungs, and the volume sweep
+
+`assoc_locate` answers *where is `<STEM>.O88`?* and it is the only thing
+between a double-click and `ld_run_name`. Four rungs, each leaving the
+program's volume and directory **current** when it succeeds, and each re-
+checking the NAME on arrival — which is what makes a remembered cluster safe,
+since a cluster means nothing on a disk that has been swapped:
+
+| rung | where |
+|---|---|
+| 1 | the **hint**: `assoc_drv[i]` / `assoc_clus[i]`, if this program has ever been seen |
+| 2 | the **document's own directory** |
+| 3 | the **root** of a volume |
+| 4 | the folder `assoc_dfold[i]` names on that volume — `APPS` or `GAMES` |
+
+Rungs 3 and 4 are a pair applied per volume (`assoc_tryvol`), and **which
+volumes they are applied to is the whole of this section.** It used to be
+two: the document's own, and then `xor dl, 1` — *"A: ↔ B:, the only other
+floppy there is"*. That was true when it was written and stopped being true at
+§52, where a disk driver mounts one volume per partition and `[disk_drive]` is
+a **volume index** running 0..`DVOL_MAX`-1, not a floppy.
+
+The failure it produced is worth stating exactly, because it reads as the
+feature being half-built rather than as an off-by-one. A document on **E:**
+(volume 4) swept volume 4 and then volume **5** — `4 xor 1` — so it never
+looked at A: or B: at all, where every shipped program lives. Reported from
+the field as *"opening `README.TXT` from drive A works, and `SONIC.MOD` from
+drive E says `TRACKER.O88 - not on this disk`"*, and both halves of that are
+this one line: from A: the toggle lands on B:, which is exactly right, and
+from anywhere above B: it lands on a volume that is usually not even mounted.
+
+**So the sweep is every live volume, the document's own first.** A row whose
+`DV_KIND` is `DVK_FREE` is skipped — not for correctness, since mounting one
+fails anyway, but because that failure is the BIOS's retries and on a 4.77MHz
+machine those are seconds. The document's volume is tried before the sweep and
+skipped inside it, so no volume is visited twice.
+
+The order inside the sweep is the **volume index** and deliberately not a
+heuristic. Preferring volumes of the document's own kind — hard disk before
+floppy for a document on C: — is plausible and would sometimes skip an empty
+floppy drive's retries, and it is exactly the kind of unmeasured ordering rule
+this tree has learned to refuse (PERFORMANCE.md Part 4). What it would buy is
+bounded by the case below, which removes the repeat entirely.
+
+**A successful locate writes the hint back**, which is new and is what keeps
+the sweep from being paid twice. `assoc_try` navigates with `dsk_chdir_q`
+(§18.9) — quiet, so there is no listing and therefore no harvest, and
+therefore nothing that would have called `assoc_note_app`. So before this,
+finding `TRACKER.O88` by sweeping five volumes taught the machine nothing and
+the *next* `.MOD` double-click swept them all again. `.found` records
+`[disk_drive]`/`[dsk_cwd]` into the slot's hint, which is exactly the pair
+rung 1 reads, so the second open of that type is **one quiet mount**. Browsing
+the folder still teaches it the same thing at no I/O at all (§54.3.1); this is
+the same lesson learned the expensive way, kept.
+
+**`assoc_locate` answers CF only**, and its comment used to promise `AX = the
+program's directory index`. It never did: `assoc_try` restores AX across its
+own frame, and §21.4 removed the last consumer when `ld_run_name` started
+resolving by name. The contract now says what the code does, which is what
+frees `.found` to spend AX on the hint.
+
 ### 54.5 The API: the app PULLS its document, and may claim an extension
 
 Two cells, **appended past the last one**, so no `.o88` is invalidated
@@ -23766,6 +23921,122 @@ commands to 4**. The 12 sectors that remain are the boot sector, the FAT
 window and the directory — §5's mechanisms A and B, which §4 declined to
 touch, so 12 is the floor that decision leaves.
 
+### 54.7.1 …and it says WHERE, so one root mount seeds the whole disk
+
+**The harvest is per DIRECTORY and the cache is per VOLUME**, and until now
+only the harvest could teach §54.4.2's hints. `assoc_note_app` fires once per
+type-1 entry of *the one directory being listed*; folders are never walked.
+So on the shipped apps disk — foldered on purpose (§19.2), with `APPS`,
+`GAMES`, `MEDIA`, `SYSTEM` and **nothing in the root** — a full mount of B:
+root taught the machine *nothing at all*, and the sweep ran cold every
+session until the user happened to open the right folder. Measured: hints all
+`0xFF` after boot, all `0xFF` after a full mount of B: root, and nine slots
+populated the moment `B:\APPS` was entered.
+
+`ASSOC.DAT` already covers the whole volume — `build_assoc` walks every
+folder group, so the shipped file carries **15 rows across three folders**.
+The only thing a row was missing was *where*, and the row had **six reserved
+bytes** in it. So the cluster costs the file **nothing**: 1,220 bytes before
+and after.
+
+`asc_seed` runs at the end of `asc_use`, after `asc_merge_ext`, and the two
+choices in it are the load-bearing ones:
+
+- **`assoc_app_of`, not `asc_slot_of` — find, never create.** A slot only
+  matters if some extension points at it, and the kernel's table is
+  `ASSOC_NAPP` = **12** rows against a disk that may now cache 32. Creating a
+  slot per package would evict the associations this exists to serve.
+- **After `asc_merge_ext`**, so a package that *declares* its extensions
+  (§54.6) has already been given its slot and is found here like anything
+  else. Getting that order wrong silently loses exactly the third-party case
+  the declaration mechanism was built for.
+
+**A wrong hint costs one wasted mount and never a wrong file** — `assoc_try`
+re-checks the name on arrival and falls through to the remaining rungs — and
+that is the whole reason a *cache* is safe to seed from. A file moved by DOS
+leaves a stale cluster; the mount that follows it finds no such name there
+and the sweep continues.
+
+#### The cap stops being a cliff
+
+`ASC_NAPP` was 16 and the shipped apps disk holds **15**, with
+`os88disk.py` silently `continue`-ing past the cap and the kernel refusing
+the *entire* file if the count exceeded it. One package of headroom, no
+guard, and the failure mode was an association that quietly stopped working.
+
+It is **32** now (`ASC_KB` 2 → 3 — one more kilobyte of heap, and the buffer
+is one shared claim for the whole machine, not one per volume), the tool
+**reports** what it drops instead of dropping it in silence, and rows are
+ordered **association-bearing first** — a header declaration, or a stem the
+kernel already knows — so that if the cap ever does bite, what is lost is an
+icon-cache row and never the ability to open a document. `ASC_DEFAULT_STEMS`
+mirrors the kernel's four defaults for that ordering alone; being out of date
+there costs a cached icon, not correctness, which is why it is a plain list
+and not a generated one.
+
+#### The size guard that was missing
+
+`asc_use` handed `dsk_read_chain` a file of whatever size the directory
+claimed, into a fixed claim. **A larger `ASSOC.DAT` than the build knows
+about was a heap overwrite**, not a bad cache — §18.2's "every byte off a
+disk is hostile" with no test behind it. It refuses anything over `ASC_KB*2`
+sectors now. The bug predates this section; growing the row is what made it
+worth asking.
+
+#### Two passes in `os88disk.py`, and why the file did not have to move
+
+The tool built `ASSOC.DAT` **before any cluster was assigned**, which was a
+stated property: rows keyed by `(stem, size)` carry no layout, so the body
+could be produced up front. A folder cluster breaks that — but only for the
+row's *contents*, never its *size*, and the size is what the layout depends
+on. So `build_assoc` returns the body **and the folder key of each row**, the
+cluster field is left 0, and one loop patches it once `dir_chains` exists.
+`asc` is a `bytearray` and `files` holds the same object, so the patch
+reaches the bytes `put` writes and nothing upstream had to know.
+
+### 54.7.2 The sweep warms the disk it found the program on
+
+§54.7.1 seeds from `asc_use`, and **`asc_use` hangs off the harvest, which a
+quiet mount skips** (§18.9) — while `assoc_try` navigates with
+`dsk_chdir_q`, quietly, precisely because it is answering a question about a
+FILE and wants no listing. So the two never met: the sweep could walk B:
+root and B:`\APPS`, find the program, and never load the `ASSOC.DAT` it had
+just walked past.
+
+The visible consequence was the **second document type**. A cold machine
+opening `README.TXT` swept A: root, A:`\APPS`, B: root, B:`\APPS` to find
+Note Pad and wrote one hint; a `.BMP` opened next swept all four again to
+find Paint, on a machine that had held B:'s cache in its hands moments
+earlier. Measured on the 5150: `assoc_drv` reads `ff 01 ff ff` after the cold
+open, where a seeded volume reads `01 01 01 01`.
+
+`assoc_locate`'s `.found` calls `asc_use` — the volume that **answered**, so
+every association on it is seeded and no later type sweeps again. Four things
+about the placement:
+
+- **It costs ~2 `int 13h` calls, once per volume.** The `asc_vol` stamp makes
+  every later call a compare, so a warm machine pays nothing and only a
+  volume the cache does not currently describe pays at all.
+- **Safe from a subdirectory**, which is where `.found` leaves us —
+  `B:\APPS`, not the root. `asc_root_find` walks the root **directly** rather
+  than through `dskw_stat`, and §54.7 says it was written that way for
+  exactly this: "a mount may be landing in a subdirectory, which is exactly
+  when this runs."
+- **Before the hint write-back, deliberately.** The seed writes what the
+  *cache* believes; the write-back writes where the program was *actually
+  found*. In that order a stale cached cluster for this program loses to the
+  truth, which is the only ordering that is right in both directions.
+- **`asc_use` preserves every register and touches neither `[dsk_cwd]` nor
+  `[disk_drive]`** — `dsk_dirw_start` keeps its own walker state — so the
+  `ld_run_name` that follows still loads out of the directory the locate left
+  current.
+
+**And this is what makes the boot-time mount unnecessary.** The alternative
+was mounting B: at boot to pre-warm it (~0.8–1.6 s on every machine, whether
+or not a document is ever opened). Paying it here instead puts the cost at
+the moment the user has already asked for a file and is expecting the drive
+to run — and charges it only to sessions that actually open a document.
+
 ### 54.8 Accepting the document: four apps, and the two traps between them
 
 Note Pad, Paint, Tracker and ArtfulType all take a document handed to them at
@@ -23826,7 +24097,8 @@ in the same folder - the case where the volume never actually changes:
 | **quiet** | 3 | **284** | **32** |
 
 11 sectors, about **2.6 s** of floppy on the field machine at
-PERFORMANCE.md's 238 ms per sector. The mount COUNT is unchanged because a
+PERFORMANCE.md's then-238 ms per sector (~65 now). The mount COUNT is
+unchanged because a
 quiet mount is still a mount - what changed is what it costs: ~12 sectors
 becomes ~1, the boot sector alone, with 18.8.2's FAT window supplying the
 rest.
