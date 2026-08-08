@@ -23825,6 +23825,79 @@ commands to 4**. The 12 sectors that remain are the boot sector, the FAT
 window and the directory — §5's mechanisms A and B, which §4 declined to
 touch, so 12 is the floor that decision leaves.
 
+### 54.7.1 …and it says WHERE, so one root mount seeds the whole disk
+
+**The harvest is per DIRECTORY and the cache is per VOLUME**, and until now
+only the harvest could teach §54.4.2's hints. `assoc_note_app` fires once per
+type-1 entry of *the one directory being listed*; folders are never walked.
+So on the shipped apps disk — foldered on purpose (§19.2), with `APPS`,
+`GAMES`, `MEDIA`, `SYSTEM` and **nothing in the root** — a full mount of B:
+root taught the machine *nothing at all*, and the sweep ran cold every
+session until the user happened to open the right folder. Measured: hints all
+`0xFF` after boot, all `0xFF` after a full mount of B: root, and nine slots
+populated the moment `B:\APPS` was entered.
+
+`ASSOC.DAT` already covers the whole volume — `build_assoc` walks every
+folder group, so the shipped file carries **15 rows across three folders**.
+The only thing a row was missing was *where*, and the row had **six reserved
+bytes** in it. So the cluster costs the file **nothing**: 1,220 bytes before
+and after.
+
+`asc_seed` runs at the end of `asc_use`, after `asc_merge_ext`, and the two
+choices in it are the load-bearing ones:
+
+- **`assoc_app_of`, not `asc_slot_of` — find, never create.** A slot only
+  matters if some extension points at it, and the kernel's table is
+  `ASSOC_NAPP` = **12** rows against a disk that may now cache 32. Creating a
+  slot per package would evict the associations this exists to serve.
+- **After `asc_merge_ext`**, so a package that *declares* its extensions
+  (§54.6) has already been given its slot and is found here like anything
+  else. Getting that order wrong silently loses exactly the third-party case
+  the declaration mechanism was built for.
+
+**A wrong hint costs one wasted mount and never a wrong file** — `assoc_try`
+re-checks the name on arrival and falls through to the remaining rungs — and
+that is the whole reason a *cache* is safe to seed from. A file moved by DOS
+leaves a stale cluster; the mount that follows it finds no such name there
+and the sweep continues.
+
+#### The cap stops being a cliff
+
+`ASC_NAPP` was 16 and the shipped apps disk holds **15**, with
+`os88disk.py` silently `continue`-ing past the cap and the kernel refusing
+the *entire* file if the count exceeded it. One package of headroom, no
+guard, and the failure mode was an association that quietly stopped working.
+
+It is **32** now (`ASC_KB` 2 → 3 — one more kilobyte of heap, and the buffer
+is one shared claim for the whole machine, not one per volume), the tool
+**reports** what it drops instead of dropping it in silence, and rows are
+ordered **association-bearing first** — a header declaration, or a stem the
+kernel already knows — so that if the cap ever does bite, what is lost is an
+icon-cache row and never the ability to open a document. `ASC_DEFAULT_STEMS`
+mirrors the kernel's four defaults for that ordering alone; being out of date
+there costs a cached icon, not correctness, which is why it is a plain list
+and not a generated one.
+
+#### The size guard that was missing
+
+`asc_use` handed `dsk_read_chain` a file of whatever size the directory
+claimed, into a fixed claim. **A larger `ASSOC.DAT` than the build knows
+about was a heap overwrite**, not a bad cache — §18.2's "every byte off a
+disk is hostile" with no test behind it. It refuses anything over `ASC_KB*2`
+sectors now. The bug predates this section; growing the row is what made it
+worth asking.
+
+#### Two passes in `os88disk.py`, and why the file did not have to move
+
+The tool built `ASSOC.DAT` **before any cluster was assigned**, which was a
+stated property: rows keyed by `(stem, size)` carry no layout, so the body
+could be produced up front. A folder cluster breaks that — but only for the
+row's *contents*, never its *size*, and the size is what the layout depends
+on. So `build_assoc` returns the body **and the folder key of each row**, the
+cluster field is left 0, and one loop patches it once `dir_chains` exists.
+`asc` is a `bytearray` and `files` holds the same object, so the patch
+reaches the bytes `put` writes and nothing upstream had to know.
+
 ### 54.8 Accepting the document: four apps, and the two traps between them
 
 Note Pad, Paint, Tracker and ArtfulType all take a document handed to them at

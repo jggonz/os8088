@@ -1352,11 +1352,16 @@ assoc_self_glyph:
 ; =============================================================================
 
 ASC_HDR      equ 16             ; magic 6 + version + napp + next + 7 reserved
-ASC_ROW      equ 80             ; stem 8 + size 2 + 6 reserved + a 64-byte icon
+ASC_ROW      equ 80             ; stem 8 + size 2 + cluster 2 + 4 reserved + a
+                                ; 64-byte icon
+ASC_ROWCLUS  equ 10             ; the DIRECTORY the program lives in (0 = root),
+                                ; taken out of the six bytes the row already
+                                ; reserved - so SPEC.md 54.7.1's seeding costs
+                                ; the file not one byte
 ASC_ROWICO   equ 16             ; ...the icon's offset inside a row
-ASC_NAPP     equ 16
-ASC_NEXT     equ 24
-ASC_KB       equ 2              ; 16*80 + 16 + 24*4 = 1,392 bytes
+ASC_NAPP     equ 32             ; was 16, and the shipped apps disk holds 15 -
+ASC_NEXT     equ 24             ; one package of headroom, with no guard
+ASC_KB       equ 3              ; 32*80 + 16 + 24*4 = 2,672 bytes
 
 ; -----------------------------------------------------------------------------
 ; asc_use - make the cache describe THIS volume (SPEC.md 54.7)
@@ -1393,6 +1398,13 @@ asc_use:
 .haveseg:
     call asc_root_find          ; CF=0, AX = first cluster, DX = sectors
     jc .out
+    cmp dx, ASC_KB*2            ; ...and it must FIT (SPEC.md 54.7.1). Every
+    ja .out                     ; byte off a disk is hostile (SPEC.md 18.2)
+                                ; and dsk_read_chain reads the whole file into
+                                ; a fixed claim - so a bigger ASSOC.DAT than
+                                ; this build knows about is a heap overwrite,
+                                ; not a bad cache. It was unbounded until the
+                                ; row grew a cluster and made it worth asking
     mov es, [asc_seg]
     xor bx, bx
     call dsk_read_chain         ; ES:BX = the claim
@@ -1416,9 +1428,79 @@ asc_use:
     ja .out
     xor ah, ah
     mov [asc_ne], ax
-    call asc_merge_ext          ; the declarations this volume knows about
+    call asc_merge_ext          ; the declarations this volume knows about...
+    call asc_seed               ; ...and WHERE each of them is (SPEC.md 54.7.1)
 .out:
     pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; asc_seed - teach the hints where this whole DISK's programs are (54.7.1)
+; in:  ES = [asc_seg], [asc_n] rows valid, [disk_drive] = this volume
+; out: nothing (all registers preserved)
+;
+; The harvest is per DIRECTORY - assoc_note_app fires once per type-1 entry of
+; the one directory being listed - so browsing B: root taught the machine
+; nothing, because every program on the shipped apps disk is one folder down
+; (SPEC.md 19.2). ASSOC.DAT already covers the whole VOLUME, so one root mount
+; can answer for all of it, and the only thing the row was missing was where.
+;
+; assoc_app_of and NOT asc_slot_of: find, never create. A slot only matters if
+; some extension points at it, and the kernel's table is 12 rows against a disk
+; that can hold 32 - creating one per package would evict the associations this
+; exists to serve. Run AFTER asc_merge_ext so a DECLARING package (54.6) has
+; already been given its slot and is found here like any other.
+;
+; A wrong hint costs one wasted mount and never a wrong file: assoc_try
+; re-checks the NAME on arrival and falls through to the remaining rungs
+; (SPEC.md 54.4.2). That is what makes a cache safe to seed from at all.
+; -----------------------------------------------------------------------------
+asc_seed:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov cx, [asc_n]
+    jcxz .out
+    mov si, ASC_HDR             ; ES:SI walks the app rows
+.row:
+    push cx
+    push si
+    mov di, assoc_stemb         ; stage the stem: assoc_app_of reads through DS
+    mov cx, 8
+.cp:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .cp
+    pop si
+    push si
+    mov di, si                  ; bank the row: assoc_app_of clobbers SI
+    mov si, assoc_stemb
+    call assoc_app_of           ; AL = the slot, CF=1 = this program has no
+    jc .next                    ; association, so there is nothing to point
+    mov bl, al
+    xor bh, bh
+    mov dl, [disk_drive]
+    mov [assoc_drv+bx], dl
+    mov ax, [es:di+ASC_ROWCLUS]
+    shl bx, 1
+    mov [assoc_clus+bx], ax
+.next:
+    pop si
+    pop cx
+    add si, ASC_ROW
+    loop .row
+.out:
     pop di
     pop si
     pop dx
