@@ -290,6 +290,10 @@ make marty    # the MARTYPC DEBUGGER (docs/MARTYPC-DEBUG.md): a remote debug
               # is FIELD-MACHINES.md's self-validating dump as one command
               # Machines: os8088_5150_cga (default), _5150_herc, _5150_cga_gla,
               # _5150_sb (AdLib + Sound Blaster), _xt_vga (mode 12h),
+              # _xt_vga_sb (that plus sound, and the one to run with --turbo:
+              # 7.16MHz is the fastest MartyPC has, and the CGA PANICS there,
+              # so a turbo machine is a VGA one - it is a CONTROL for "is this
+              # cost CPU-bound", never a source of a PERFORMANCE.md number),
               # _xt_hdd (XT-IDE, SPEC.md 52's rung 0). Add
               # MARTYPC_WAV=/tmp/cap for one wav per sound source.
 make clean

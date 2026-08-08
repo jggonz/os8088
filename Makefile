@@ -1435,9 +1435,11 @@ marty: $(IMG360)
 	@echo "       python3 tools/os88marty.py 127.0.0.1:9001 verify"
 	@echo ""
 	@echo "       machines: os8088_5150_cga (default), _herc, _cga_gla, _sb,"
-	@echo "                 _sbonly, and os8088_xt_vga"
+	@echo "                 _sbonly, os8088_xt_vga and _xt_vga_sb"
 	@echo "       ..._sb has an AdLib AND a Sound Blaster, _sbonly has the DSP"
-	@echo "       and NOTHING at 388h - the SPEC.md 51.3.1 pair; add"
+	@echo "       and NOTHING at 388h - the SPEC.md 51.3.1 pair; _xt_vga_sb is"
+	@echo "       the one to run with --turbo (7.16MHz, the fastest MartyPC has;"
+	@echo "       the CGA panics there, so a turbo machine is a VGA one); add"
 	@echo "       MARTYPC_WAV=/tmp/cap for one wav per source (sndcheck.py reads them)"
 
 # The far end of the range, both carrying an SB16 on the ISA bus:

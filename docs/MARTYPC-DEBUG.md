@@ -125,10 +125,44 @@ happened" is the one failure a debugger must not have.
 | `os8088_5150_sb` | the same with an AdLib **and** a Sound Blaster (DSP 2.01, 0x220, IRQ 7) |
 | `os8088_5150_sbonly` | ...and with the FM half taken out: a DSP at 0x220 and **nothing at 0x388**. No real card is built that way, which is why it needs an emulator — it is SPEC.md §51.3.1's jumpered-off-FM case, and `_sb`/`_sbonly` are one pair with `make SNDSNIFF=sb` between them |
 | `os8088_xt_vga` | an IBM 5160 XT with GLaBIOS and a VGA — SPEC.md §39's mode 12h |
+| `os8088_xt_vga_sb` | ...and the same XT with the AdLib + Sound Blaster pair, which exists **to be run with `--turbo`** — see below |
 | `os8088_xt_hdd` | the same XT with an **XT-IDE** controller — SPEC.md §52's rung 0 |
 
 The first five are shaped after docs/FIELD-MACHINES.md's calibration machine,
 as closely as MartyPC allows.
+
+### The fastest machine here is 7.16MHz, and it is a CONTROL
+
+`--turbo` takes the XT clock from 4.77MHz to 7.16, and that is the whole of
+the available range: MartyPC is an 8088/8086 emulator by design, so every
+machine type it offers is a 5150, a 5160, a PCjr, a Tandy or a Compaq
+Portable. 1.5x is not a modern CPU and it does not have to be — it answers
+whether a cost is **CPU-bound**, which shows as a proportional change and not
+as an absolute one.
+
+```
+./martypc_headless --machine-config-name os8088_xt_vga_sb --turbo \
+                   --mount fd:0:media/floppies/os8088-360.img
+```
+
+Two things about it. **The CGA panics under turbo** — its video clock is
+derived from the CPU clock and `devices/cga/videocard.rs:399` asserts on the
+result (`ticks_advanced: 27 > clocks: 20`), which is why the turbo machine is
+a VGA one; the MDA is untested for the same reason, and nothing in a timing
+question about a *worker* cares which adapter drew. And **no PERFORMANCE.md
+number may be taken off it**: 7.16MHz is not a machine anybody in
+docs/FIELD-MACHINES.md owns, and GLaBIOS is not a period ROM.
+
+Its first use is the worked example of what a control is for. SPEC.md
+§45.16.4's mode-C burst was designed to hold a row for one system tick and
+measured ~700 ms for eight rows against a designed 385 — and the question
+"is that the design or is that the 5150 being slow" is exactly the question a
+faster machine answers. It was the latter: on the 5150 **99%** of the
+stretched burst steps have the worker mixing inside them against **2%** of
+the healthy ones, and at 7.16MHz the mean burst step is **5.3% of a cycle
+against one tick = 5.49%** — i.e. one tick, as designed — with the burst
+falling from ~69% of the cycle to 48% (the ideal, if no wake is ever missed,
+is 38.5%).
 
 **`subtype = "Hercules"` is load-bearing and its absence is silent.** Without
 it MartyPC builds a plain MDA, whose `mem_mask` is `MDA_MEM_MASK` = 0x0FFF —
