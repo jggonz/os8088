@@ -127,6 +127,39 @@ is then drawn; `wm_grow_paint` filling its 13×13 square before framing it,
 which survived as a flashing corner after Note Pad's rows were fixed; a
 pattern strip erased then re-lettered every scroll row (§45.11).
 
+#### The standing rule: do not blank and then redraw
+
+**Treat every blank-then-redraw as a defect until it has been shown to be the
+cheaper of two evils, and assume it is visible on every adapter — VGA
+included — on real hardware.** It is not a mono problem and it is not a
+slow-machine problem; it is a *two-writes-to-one-pixel* problem, and the eye
+samples between them at 50–70Hz whatever the card is.
+
+Two things make this rule necessary rather than obvious. The defect **does
+not appear in any timing column**, because blanking first is usually the same
+amount of work; and it **does not appear on any emulator here**, because they
+paint a frame after the operation rather than during it. So it is neither
+measured away nor caught by a screenshot: it is caught by a person looking at
+a real machine, or by Part 3.1's per-frame instrument, and by nothing else.
+
+What the fix looks like, in order of preference:
+
+1. **One opaque write per cell** — `font_run` (§6.1) for text, an image blit
+   for pictures. Old content straight to final; nothing in between exists.
+   Padding a run with spaces out to the band *is* the erase.
+2. **Draw only what changed.** A caption that changed does not owe the
+   header, the rows and the buttons a repaint (§52.10.6); a scroll owes the
+   rows and not the chrome (§22.11); a lamp owes a lamp (§56.12).
+3. **Invert rather than repaint.** XOR is its own inverse, so moving a
+   selection is two inversions and no glyph is re-lettered (§22.2, §27.8.2).
+
+The exceptions worth knowing, both structural rather than lazy: a **frame
+cannot be drawn opaquely**, so a control whose border changes from solid to
+dithered has to have its rect cleared first (§52.10.6) — keep that rect as
+small as the control; and **`wm_draw_win`'s content fill** is the one blank a
+window is *entitled* to, because a window being shown had no pixels there at
+all.
+
 ### Stall and input overrun
 
 The machine stops answering. A held gfx lock across a long render freezes

@@ -16004,6 +16004,29 @@ coming out — so blanking costs the monitor nothing, and behind it the
 unavoidable sync transient of a half-written 6845 (its registers are not
 double-buffered) is invisible too.
 
+**The CGA has the same defect and the opposite cure.** The blank above is a
+port this module owns; a CGA's mode control register belongs to `int 10h`
+for the whole of the mode set, so there is no window we can hold that card
+dark across — and the flash was reported back in the same words, *garbage in
+the graphics memory immediately before the progress bar*, on a machine where
+the Hercules fix had already landed.
+
+So the garbage is **removed rather than hidden**: `vid_setmode` zeroes 16KB
+at B800 **while the card is still in text mode**, before it calls the BIOS.
+It is the same buffer either way — B8000 is the text screen now and the
+bitmap a moment later — so whatever order a given ROM uses, the bytes it
+switches the card onto are already zero and there is no frame in which the
+old TEXT page is displayed as a 640x200 bitmap. What that frame looks like
+depends on how the machine got here: mode 3's clear leaves `0x0720` per cell,
+a regular field of dots, and a **hard-disk boot** leaves the POST's own text,
+because `boot/boothd.asm` deliberately sets no video mode (§52.10.2).
+
+**No emulator in this tree can show either flash** — they clear instantly and
+have no beam — which is why both halves of this were found on the iron, and
+why the CGA half survived the Hercules fix by a whole release. The pre-clear
+costs ~26 ms of `rep stosw` once per boot, against a ROM clear of the same
+16KB that was already being paid.
+
 **3BFh bit 1 is deliberately clear.** It enables the second 32KB page, which
 is at B8000 — a CGA's framebuffer. A machine can hold both cards (the 5150
 this was found on does), and the kernel only ever addresses page 0 (maximum
