@@ -2179,6 +2179,161 @@ dskw_clbytes:
     ret
 
 ; -----------------------------------------------------------------------------
+; dskw_read_at - read one chunk of a file, by BYTE OFFSET (SPEC.md 18.4.4)
+; in:  SI -> a NUL 8.3 name, ES:BX -> the buffer, CX = its capacity in bytes,
+;      DX:AX = the offset into the file to read from
+; out: CF=0 with DX:AX = the bytes delivered, 0 meaning the offset is at or
+;      past the end; CF=1 with AX = FERR_*
+; clobbers: AX, DX (the outputs), CF
+;
+; The read half of what SPEC.md 22.5's copy has had internally since it was
+; written, and what OSAPI_FILE_READ could never express: that call reads a
+; WHOLE file into a buffer that must hold it, so the largest file a package
+; could touch was the largest claim it could take. A 116KB module on a small
+; machine simply could not be opened.
+;
+; **STATELESS, AND THE OFFSET IS THE WHOLE ARGUMENT.** fcp_rdnext resumes
+; through [dsk_chain_end] and three module words, which is right for a caller
+; that is the only thing running; it is wrong for a published slot, because
+; the loop this exists for is read -> write -> read and the WRITE walks
+; directories and the FAT. A resume token living in the kernel would be
+; destroyed by exactly the work it is feeding - the same reasoning that made
+; OSAPI_FILE_FIND take an ordinal (SPEC.md 19.7.1).
+;
+; The price is walking the chain from the front on every call, and it is
+; smaller than it looks: the walk is FAT lookups, the FAT window is resident,
+; and the caller is spending 65 ms a sector (PERFORMANCE.md - a sector inside
+; a well-coalesced run; 238 was the AL bug, not the drive) on the data
+; this is handing it. A 116KB file in 32KB chunks is four walks averaging
+; ~116 clusters - a few hundred word reads against twelve seconds of floppy.
+;
+; TWO PRECONDITIONS, both refused rather than mis-read, and both the same
+; discipline dskw_append carries at the other end: the offset and the
+; capacity must each be a whole number of CLUSTERS. That is what makes the
+; resume point exact and lets one dsk_read_chain call serve a chunk. A caller
+; asks OSAPI_FILE_DFREE for the cluster size, which has always answered it.
+; The FINAL chunk is the exception the arithmetic makes for itself: the take
+; is clamped to what is left of the file, so a tail shorter than a cluster is
+; delivered whole and the next call answers 0.
+; -----------------------------------------------------------------------------
+dskw_read_at_x:
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    mov [dwr_buf], bx
+    mov [dwr_cap], cx
+    mov [dwr_off], ax
+    mov [dwr_off+2], dx
+
+    call dskw_clbytes           ; AX = bytes per cluster on this volume
+    mov [dwr_clb], ax
+    test ax, ax
+    jz .badarg                  ; an unmounted volume has no cluster size
+    mov cx, ax
+    mov ax, [dwr_off]           ; the offset must land on a cluster boundary
+    xor dx, dx
+    div cx
+    or dx, dx
+    jnz .badarg
+    mov ax, [dwr_cap]           ; ...and so must the capacity, or a chunk
+    xor dx, dx                  ; would not end where the next one starts
+    div cx
+    or dx, dx
+    jnz .badarg
+    test ax, ax
+    jz .badarg                  ; a capacity under one cluster reads nothing
+
+    call dskw_stat_x            ; BX = first cluster, DX:CX = the size
+    jc .err
+    mov [dwr_clus], bx
+    mov [dwr_sz], cx
+    mov [dwr_sz+2], dx
+
+    mov ax, [dwr_off+2]         ; at or past the end? then no bytes, and that
+    cmp ax, dx                  ; is a normal answer rather than an error -
+    ja .eof                     ; it is how a caller's loop terminates
+    jb .inrange
+    mov ax, [dwr_off]
+    cmp ax, cx
+    jae .eof
+.inrange:
+    mov ax, [dwr_sz]            ; take = min(size - offset, capacity)
+    mov dx, [dwr_sz+2]
+    sub ax, [dwr_off]
+    sbb dx, [dwr_off+2]
+    or dx, dx
+    jnz .wholecap               ; more than 64KB left: the buffer is the bound
+    cmp ax, [dwr_cap]
+    jbe .take
+.wholecap:
+    mov ax, [dwr_cap]
+.take:
+    mov [dwr_take], ax
+
+    ; --- walk to the cluster holding the offset ------------------------------
+    ; offset / cluster_bytes, and one div is enough: a volume caps at 65,535
+    ; sectors (SPEC.md 18.7), so the offset is under 33MB and its high word is
+    ; under 512 - which is at or below every cluster size there is.
+    mov ax, [dwr_off]
+    mov dx, [dwr_off+2]
+    div word [dwr_clb]          ; AX = clusters to skip
+    mov cx, ax
+    mov ax, [dwr_clus]
+    jcxz .atclus
+.skip:
+    call KERNEL_SEG:cw_dsk_next_clus    ; AX = the next cluster; CF=1 = the
+    jc .corrupt                 ; chain ended before the size said it would
+    cmp ax, 2
+    jb .corrupt
+    cmp ax, [dsk_maxclus]
+    ja .corrupt
+    loop .skip
+.atclus:
+    mov [dwr_clus], ax
+
+    ; --- and read it ---------------------------------------------------------
+    ; dsk_read_chain moves whole SECTORS, so a tail shorter than one is
+    ; rounded up. That cannot overrun the caller: the capacity is a cluster
+    ; multiple, the take is at most the capacity, and a cluster is a whole
+    ; number of sectors.
+    mov ax, [dwr_take]
+    add ax, 511
+    mov cl, 9
+    shr ax, cl
+    mov dx, ax                  ; DX = sectors
+    mov ax, [dwr_clus]
+    mov bx, [dwr_buf]
+    call KERNEL_SEG:cw_dsk_read_chain
+    jc .ioerr
+    mov ax, [dwr_take]
+    xor dx, dx
+    clc
+    jmp short .out
+.eof:
+    xor ax, ax
+    xor dx, dx
+    clc
+    jmp short .out
+.badarg:
+    mov ax, FERR_NAME           ; a bad ARGUMENT, and FERR_NAME is this API's
+    jmp short .fail             ; word for that (SPEC.md 20.3)
+.corrupt:
+.ioerr:
+    mov ax, FERR_IO
+.fail:
+    stc
+.err:
+.out:
+    pop bp
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; dskw_append - add CX bytes to the end of an existing file (SPEC.md 22.5)
 ; in:  SI -> a NUL 8.3 name, ES:BX -> the bytes, CX = count (>= 1)
 ; out: CF=0, AX = 0; CF=1, AX = FERR_*
@@ -2207,7 +2362,7 @@ dskw_clbytes:
 ; size, which is the single sector write that makes those bytes part of the
 ; file.
 ; -----------------------------------------------------------------------------
-dskw_append:
+dskw_append_x:
     push bx
     push cx
     push dx
@@ -3212,6 +3367,16 @@ dskw_oldclus: resw 1            ; the replaced chain's head, freed after the
                                 ; commit (0 = there was none)
 dskw_date:    resw 1            ; dskw_now: the FAT-encoded date...
 dskw_time:    resw 1            ; ...and time
+; --- dskw_read_at's arguments, banked (SPEC.md 18.4.4) -----------------------
+; Module scratch on dsk_op's terms: the disk is the UI task's (SPEC.md 18) and
+; a transfer holds sch_lock, so nothing can be inside this twice.
+dwr_buf:      resw 1            ; the caller's buffer offset (ES is theirs)
+dwr_cap:      resw 1            ; ...and its capacity in bytes
+dwr_off:      resd 1            ; the byte offset asked for
+dwr_sz:       resd 1            ; the file's size, from its directory entry
+dwr_clb:      resw 1            ; bytes per cluster on this volume
+dwr_clus:     resw 1            ; the cluster the walk reached
+dwr_take:     resw 1            ; bytes this call will deliver
 
 section .text
 
@@ -3240,6 +3405,12 @@ dwf_dskw_sync:          call dskw_sync_x
 dwf_dskw_write:         call dskw_write_x
                     retf
 dwf_dskw_write_sys:     call dskw_write_sys_x
+                    retf
+dwf_dskw_mkdir:         call dskw_mkdir_x
+                    retf
+dwf_dskw_read_at:       call dskw_read_at_x
+                    retf
+dwf_dskw_append:        call dskw_append_x
                     retf
 
 section .text

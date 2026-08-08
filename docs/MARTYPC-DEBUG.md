@@ -268,7 +268,7 @@ is the client — a CLI, a REPL and an importable `Marty` class.
 | `advance` | run a bounded amount of GUEST time — `frames=` or `cycles=` |
 | `snapshot` / `restore` | fork a holder process; wake it on a port, any number of times |
 | `key` | a keypress by MartyKey name — `KeyA`, `Enter`, `ArrowRight` |
-| `mouse` | one Microsoft packet: relative `dx`/`dy` and button state |
+| `mouse` | one Microsoft packet: relative `dx`/`dy` and button state. **To click a CONTROL use `tools/os88mouse.py` instead** — it reads the live cursor from the debug registry (SPEC.md §9.4.3) and converges on an absolute target, where aiming this one by dead reckoning drifts and misses silently |
 | `history` / `callstack` | the CPU's own instruction history |
 | `quit` | stop the emulator |
 

@@ -53,6 +53,13 @@ UI_TDBLT    equ 9               ; title-bar double-click window, ticks - the
 ; -----------------------------------------------------------------------------
 ui_task:
 .loop:
+    ; --- 0. a posted restart, spent with NOTHING held (SPEC.md 20.10) --------
+    cmp byte [ui_rebootq], 0
+    je .keys
+    mov byte [ui_rebootq], 0    ; ...cleared first: ui_cmd_reboot does not
+    call ui_cmd_reboot          ; return, but a path that ever did must not
+                                ; find the post still standing
+.keys:
     ; --- 1. keyboard: poll, and feed the front window's key handler ----------
     mov ah, 0x01                ; any key pending?
     int 0x16
@@ -1124,7 +1131,17 @@ ui_tm_open:
                                 ; UI-task-only and one load at a time, like
                                 ; ld_fp
 
-    xor dl, dl                  ; A: - the disk we booted from
+    mov dl, [dsk_bootvol]       ; the disk we booted from - A: on a floppy
+                                ; machine, where this byte is 0 and this is
+                                ; the `xor dl, dl` it replaced, and the
+                                ; installed PARTITION on a machine that boots
+                                ; from its hard disk (SPEC.md 52.10.3).
+                                ;
+                                ; This one mounts for itself rather than going
+                                ; through drv_mounted, because it is the one
+                                ; caller that needs a LISTING - it hands the
+                                ; loader a directory index - so it has its own
+                                ; copy of the question and needed its own fix
     call disk_mount
     mov si, ui_s_nodisk
     jc .fail
@@ -1201,7 +1218,14 @@ ui_tm_sysdir:
     mov ax, [si+18]             ; its first cluster
     or ax, ax
     jz .no                      ; 0 is the root: a directory entry naming it
-    xor dl, dl                  ; would be a loop, not a folder
+    mov dl, [dsk_bootvol]       ; would be a loop, not a folder.
+                                ;
+                                ; The DRIVE is the one ui_tm_open just mounted,
+                                ; and this was `xor dl, dl` - the same A:
+                                ; assumption its caller had, one call deeper.
+                                ; On an installed machine it walked into
+                                ; SYSTEM's cluster on the FLOPPY, which reads
+                                ; to the user as the file not being there
     jmp dsk_chdir               ; CF is its answer, and it is ours
 .no:
     stc
@@ -1238,7 +1262,11 @@ ui_tm_errs:                     ; indexed by LD_* (loader.inc)
 
 ui_s_tmttl:  db 'Task Manager', 0
 ui_s_tmlead: db 'Cannot open the Task Manager:', 0
-ui_s_nodisk: db 'No system disk in drive A:', 0
+ui_s_nodisk: db 'No system disk in drive '
+ui_s_nodisk_l: db 'A:', 0       ; the LETTER, stamped once by dsk_boot_from
+                                ; (SPEC.md 52.10.3) - a label rather than an
+                                ; offset, so rewording the message cannot
+                                ; leave the stamp pointing at a space
 ui_s_nofile: db 'TASKMGR.O88 is not in SYSTEM', 0    ; ...and it fits the
                                  ; 288px notice window, which a path spelled
                                  ; out in full would not: app_about_center
@@ -1456,6 +1484,10 @@ ui_cmd:
     ret
 
 .reboot:
+; ...and its OTHER entry point, ui_reboot_post's deferred one (SPEC.md 20.10).
+; A label rather than a routine: the body below never returns, so there is
+; nothing for two callers to disagree about.
+ui_cmd_reboot:
     call cp_flush_close         ; the OTHER way the panel stops existing
                                 ; (SPEC.md 31.8). Before the lock, because a
                                 ; disk write is not something to do with the
@@ -1475,10 +1507,31 @@ ui_cmd:
     call vid_text
     call sched_unhook           ; restores int 08h/0Ch (unhooks the mouse too)
     int 0x19
-    jmp .reboot                 ; unreachable; int 19h does not return
+    jmp ui_cmd_reboot           ; unreachable; int 19h does not return
+
+; -----------------------------------------------------------------------------
+; ui_reboot_post - API slot 0x0368 (SPEC.md 20.10). No arguments, no answer.
+;
+; POSTS a restart; it does not perform one. Every caller of this slot is a
+; window callback or a Control Panel page, and all of those run on the UI task
+; WITH THE GFX LOCK HELD - while the path above takes that lock itself and,
+; before it, waits for every driver's worker to die (SPEC.md 51.2), a wait
+; that yields to a task which may want the lock. Called inline from a callback
+; it is a deadlock with the machine half torn down.
+;
+; So it sets a byte and returns, and ui_task spends it at the top of its pass
+; where nothing is held - the same reasoning that runs the app menu's Close
+; inline in ui_dispatch (SPEC.md 12.7). A second post before the first is
+; spent is the same restart, which is why this is a flag and not a count.
+; -----------------------------------------------------------------------------
+ui_reboot_post:
+    mov byte [ui_rebootq], 1
+    ret
 
 ; -----------------------------------------------------------------------------
 section .bss
+
+ui_rebootq: resb 1              ; 1 = a restart is owed (SPEC.md 20.10)
 
 ui_ev:      resb 8              ; popped event record (EV_TYPE/A/B/C)
 ui_menusel: resw 1              ; ui_dispatch scratch: AH = menu, AL = item,

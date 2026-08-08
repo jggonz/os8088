@@ -125,7 +125,7 @@ emulator have the hardware": a ✅ means reach for it first.
 | AdLib / OPL2 | ✅ | ✅ | `make test-snd ADLIB=1`, or the `os8088_5150_sb` machine | dominant 880.0 Hz from a keyed 440; the Sound page's Test tone came out of MartyPC's OPL2 at 660 Hz |
 | Sound Blaster (DMA streams) | ✅ | ✅ | `make test-snd SB16=1 TESTAPPS=build/sbtest.img`, or the `os8088_5150_sb` machine | 2.00 s at 1000.0 Hz on BOTH. MartyPC's is a DSP **2.01** by default — the classic `0x48`+`0x1C` auto-init path — where QEMU's is an SB16; `dsp_version` picks |
 | Boot sound probe (SPEC.md §51.3.1) | ⚠️ | ✅ | the `os8088_5150_sb` / `_sbonly` / `_cga` machines, fresh image | MartyPC is the instrument here: its AdLib **answers the OPL2 timer-flag dance** on a cycle-accurate 8088, which is the whole of what the probe reads and what QEMU cannot show — QEMU's `-device sb16` has an OPL *stub* that does not answer, so on QEMU an SB16-only box reads as cardless. `_sb` → row 0 `WANT` 1, `SEG` 9E80, and the Sound page comes up on **Sound Blaster** with nothing ticked; `_cga` → `WANT` 0, nothing loaded, no `DRVE_HW`; `_sbonly` → `WANT` 0 by default and 1 under `make SNDSNIFF=sb`, against a real DSP 2.01 |
-| Scripted mouse / keys | ✅ | ✅ | `os88marty.py key` / `mouse`, or `tools/mouse.py` | MartyPC drives the REAL devices: a Microsoft packet through the UART (`mou_seen` goes 0→1) and a keystroke through int 09h (SPEC.md §9.6's arrows moved `mouse_x` 320→350) |
+| Scripted mouse / keys | ✅ | ✅ | **`tools/os88mouse.py click X Y`** (absolute, closes the loop — see the MartyPC section; `os88marty.py mouse` is the relative primitive under it), `os88marty.py key`, or `tools/mouse.py` on QEMU | MartyPC drives the REAL devices: a Microsoft packet through the UART (`mou_seen` goes 0→1) and a keystroke through int 09h (SPEC.md §9.6's arrows moved `mouse_x` 320→350) |
 | **Screenshots** (CGA/Herc) | ✅ | ✅ | `os88marty.py shot`, or `tools/shot.py` / `hercshot.py` | MartyPC reads VRAM directly — 60.0% lit, matching QEMU's CGA on the same desktop |
 | Mouse on COM2 (SPEC.md §9.5) | ➖ | ✅ | `make test MOUSEPORT=com2` | both UARTs probe present, COM2 wins, COM1 retired |
 | A **cross-wired IRQ** (SPEC.md §9.5.2) | ➖ | ✅ | `make test MOUSEPORT=com2irq4` | the Compaq Portable III: mouse at 2F8 driving IRQ4. Undetectable before the fix |
@@ -532,6 +532,58 @@ Phase 4.
 ---
 
 ## Hard disks
+
+### Booting FROM one (SPEC.md §52.10)
+
+The boot chain — MBR, volume boot record, kernel — is testable **without the
+installer, and deliberately so**: if a disk the fixture builds boots and one
+the installer builds does not, the fault is in the installer, and without a
+fixture there is no way to make that distinction.
+
+`tools/os88hdd.py` writes what SPEC.md §52.10.4 says the installer writes, in
+the same order: `boot/mbr.asm`'s 446 bytes and one active partition entry, a
+FAT16 volume, `boot/boothd.asm` with that volume's BPB over its first 62 bytes
+and the kernel's sector count patched into the word at offset 508, and
+`KERNEL.SYS` first and contiguous from cluster 2 — which the VBR *requires*,
+because it reads the kernel as a flat run rather than walking a cluster chain.
+
+MartyPC's `os8088_xt_hdd` is the machine, and it is **rung 0** (an option ROM
+answering int 13h), which is the rung the field machine uses:
+
+```sh
+python3 tools/os88hdd.py \
+    --template build/martypc/run/media/hdds/default_xtide.vhd \
+    --out /tmp/boot.vhd --kernel build/kernel.bin \
+    --vbr build/boothd.bin --mbr build/mbr.bin
+cd build/martypc/run && MARTYPC_DEBUG_ADDR=127.0.0.1:9001 ./martypc_headless \
+    --machine-config-name os8088_xt_hdd --mount hd:0:/tmp/boot.vhd &
+python3 tools/os88marty.py 127.0.0.1:9001 run          # it starts PAUSED
+python3 tools/os88marty.py 127.0.0.1:9001 verify       # the kernel is aboard
+python3 tools/os88marty.py 127.0.0.1:9001 shot --rendered /tmp/hd.png
+```
+
+**NOTE THE `run`.** `martypc_headless` comes up with the CPU paused at the
+reset vector, and every debug command answers perfectly well while it sits
+there — so a `verify` that reports 88% differing and `boot_ticks: 0` is a
+machine that was never started, not a boot that failed. That reads exactly
+like a broken kernel and cost an hour once.
+
+**NO FLOPPY IS MOUNTED**, which is the whole point: `--mount fd:0:` is absent,
+so anything that reaches for A: has nothing to find. What the screenshot must
+show is the desktop with a **Disk C** zone beside Disk A and Disk B. That zone
+is the proof rather than a detail — `HDD.DRV` is not loaded (a fixture disk
+carries no `SYSTEM.CFG`, so nothing asks for it), so the only thing that could
+have created a third volume row is `dsk_boot_from` adopting the partition the
+machine booted from (SPEC.md §52.10.3).
+
+Two things this cannot tell you, both of which want the 5150: whether the
+**timing** is tolerable (no emulator here is disk-accurate, and MartyPC's
+error is 30× in the flattering direction — see the rule at the top of this
+file), and whether a **real** option ROM's AH=08h reports the geometry its
+AH=02h then translates with, which is the one assumption `boot/boothd.asm`
+cannot make without hardware.
+
+### The driver, its partitioner and its formatter
 
 QEMU has an ATA disk at 1F0h and SeaBIOS gives it to int 13h as drive 80h, so
 **both rungs of the driver's transport ladder (SPEC.md §52.1) are testable
@@ -1275,6 +1327,30 @@ AT-class 86Box targets (`make 286`, `make 386sx`, `make 386`) are the honest
 middle of that range.
 
 ## MartyPC — the first thing to reach for
+
+> **Before you script a single click: use `tools/os88mouse.py`, not
+> `os88marty.py mouse`.** The latter is *relative* — a real Microsoft packet
+> through the real UART, which is what makes it worth having — so aiming at a
+> control means dead reckoning from the kernel's edge clamp, and that drifts:
+> a packet is a signed byte per axis, the UART is 1200 baud so anything under
+> ~25 ms apart can be dropped, and the clamp eats overshoot without saying so.
+> **The failure looks exactly like a broken feature**: the click lands three
+> pixels off a 16px control, nothing happens, and the session reports a bug
+> that is not there. `os88mouse.py` reads the live cursor out of the debug
+> registry (SPEC.md §9.4.3), sends the exact remaining delta and re-reads
+> until it agrees — pixel-exact in ~0.8 s, and it *fails loudly* when it
+> cannot converge.
+>
+> ```sh
+> python3 tools/os88mouse.py 127.0.0.1:9001 where
+> python3 tools/os88mouse.py 127.0.0.1:9001 click 445 153
+> python3 tools/os88mouse.py 127.0.0.1:9001 menu 12 8 40 45   # NOT click
+> python3 tools/os88mouse.py 127.0.0.1:9001 drag 200 78 200 120
+> ```
+>
+> `menu` is its own verb because a menu **cannot** be opened with a click —
+> `menu_track` draws the pull-down and then polls a level, so press-and-release
+> in place opens and closes it in one breath.
 
 `make marty`, and the whole recipe is docs/MARTYPC-DEBUG.md. What it gives
 that neither of the others does:

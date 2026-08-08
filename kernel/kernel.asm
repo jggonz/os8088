@@ -1107,7 +1107,50 @@ osapi_table:
                                   ;          can drop a redraw it is about to
                                   ;          be asked to do again (SPEC.md
                                   ;          13.4)
-osapi_table_end:                  ; 0x0340
+    OSAPI_JSLOT api_file_write_sys ; 0x0340 - N, and the ONE cell in this table
+                                  ;          a package may not call: dskw_write
+                                  ;          for a file that belongs to the
+                                  ;          KERNEL (SPEC.md 19.6.1). Fenced on
+                                  ;          the caller being a loaded DRIVER,
+                                  ;          so 19.6's rule - a package cannot
+                                  ;          make a file the user can neither
+                                  ;          see nor delete - stands unchanged
+    OSAPI_JSLOT api_file_find     ; 0x0348  X: ES:DI is the caller's buffer.
+                                  ;         List the current directory by
+                                  ;         ORDINAL (SPEC.md 19.7.1) - the
+                                  ;         one file operation the API had no
+                                  ;         way to express, so a package could
+                                  ;         read a file by name and never find
+                                  ;         out what was there
+    OSAPI_JSLOT api_file_append   ; 0x0350  N: SI = name, ES:BX = bytes, CX =
+                                  ;         count. Add to the END of a file
+                                  ;         (SPEC.md 18.4.4). Its precondition
+                                  ;         is the file's current size being a
+                                  ;         whole number of clusters, which is
+                                  ;         what a chunked write already is
+    OSAPI_JSLOT api_file_read_at  ; 0x0358  N: ...and the read half. DX:AX =
+                                  ;         the byte offset, CX = capacity;
+                                  ;         out DX:AX = bytes delivered, 0 at
+                                  ;         the end. Stateless, so a copy loop
+                                  ;         may write between two reads
+    OSAPI_JSLOT api_file_mkdir    ; 0x0360  N: SI = name. Create a folder in
+                                  ;         the current directory (SPEC.md
+                                  ;         18.5). The routine is the file
+                                  ;         manager's own - its three callers
+                                  ;         were all cold-segment, so it had
+                                  ;         never needed a .text thunk, which
+                                  ;         is the whole reason it looked
+                                  ;         unpublished
+    OSAPI_SLOT ui_reboot_post     ; 0x0368  no arguments, no answer: POST a
+                                  ;         restart, which ui_task spends with
+                                  ;         no lock held (SPEC.md 20.10). The
+                                  ;         System menu's Restart, reachable
+                                  ;         from a callback - which cannot do
+                                  ;         it inline, because that path takes
+                                  ;         the gfx lock the caller is holding
+                                  ;         and waits on workers that need to
+                                  ;         be scheduled
+osapi_table_end:                  ; 0x0370
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1115,8 +1158,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 102 * 8
-%error "os8088 API jump table must be exactly 102 8-byte slots"
+%if OSAPI_TABLE_LEN != 108 * 8
+%error "os8088 API jump table must be exactly 108 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -1246,6 +1289,114 @@ dbg_reg:
     OSAPI_NSTUB api_file_read,   dskw_read,   1
     OSAPI_NSTUB api_file_delete, dskw_delete, 1
     OSAPI_NSTUB api_fdlg_open,   fdlg_open       ; NO V - see the macro
+    OSAPI_NSTUB api_file_append, dskw_append, 1
+    OSAPI_NSTUB api_file_read_at, dskw_read_at, 1
+    OSAPI_NSTUB api_file_mkdir,  dskw_mkdir,  1
+
+; -----------------------------------------------------------------------------
+; api_file_find - slot 0x0348 (X). in CX = ordinal, ES:DI = a DSK_FIND_SZ
+; buffer; out CF=0 with it filled and CX = the next ordinal (SPEC.md 19.7.1)
+;
+; An X stub because the buffer is the caller's, and it is the same fence as
+; api_file_write_sys below in its OTHER direction: a driver may SEE hidden and
+; system entries, a package may not. The two together are one boundary rather
+; than two rules - a package can neither find a system file here nor create
+; one there - which is what keeps SPEC.md 19.6 true as a sentence and not
+; merely as a list of blocked entry points.
+;
+; It resolves in the CALLING INSTANCE's directory (SPEC.md 19.2.1), like every
+; other name-taking cell: "list the current directory" has to mean the same
+; directory that OSAPI_FILE_READ would resolve a name in, or a package would
+; enumerate one folder and open files from another.
+; -----------------------------------------------------------------------------
+api_file_find:
+    push ds
+    push si
+    push bx
+    mov bx, ds                  ; the caller's segment, for the fence
+    push cs
+    pop ds                      ; DS = KERNEL
+    call inst_vol_enter         ; this instance's own folder; preserves
+                                ; everything including the flags
+    call drv_owns_seg           ; CF = 0: a loaded driver, so it may see the
+    mov al, 0                   ; system files it is going to have to copy
+    jc .nothid
+    mov al, 1
+.nothid:
+    pop bx
+    call dsk_find
+    pop si
+    pop ds
+    retf
+
+; -----------------------------------------------------------------------------
+; api_file_write_sys - slot 0x0340, and the ONE fenced cell (SPEC.md 19.6.1)
+;
+; dskw_write for a file that belongs to the KERNEL: hidden, system and (bar
+; SYSTEM.CFG) read-only, which is what makes an installed volume a SYSTEM
+; volume rather than a folder with the same bytes in it.
+;
+; SPEC.md 19.6 says this entry point must never get an API slot, and the
+; reason it gives is the test to apply: "a package cannot make a file the
+; user can neither see nor delete". That is a statement about PACKAGES, and
+; it still holds - the fence below refuses one. A DRIVER is the other species
+; (SPEC.md 51): drv_tab is a fixed kernel-side table of known files, a .DRV
+; carries header version 4 which ld_check_hdr refuses for an application, and
+; disk_mount types only *.O88 as launchable - so the set of things that can
+; ever be a driver is decided when this kernel is built and a user cannot add
+; to it. That is a real boundary rather than an honour system, which is why
+; 19.6's rule is narrowed here rather than dropped.
+;
+; The fence is drv_owns_seg, and the precedent is SPEC.md 51.7's spawn fence:
+; ES is the caller's DS stamped by the stub convention (SPEC.md 20.3), and a
+; package's DS is its own segment, which is never a drv_tab row. It is an
+; IDENTITY test, not a containment one.
+;
+; BX is banked across it because BX is the caller's DATA BUFFER offset here -
+; the fence needs a register and that one is live.
+; -----------------------------------------------------------------------------
+api_file_write_sys:
+    push ds
+    push si
+    push di
+    push es
+    push bx                     ; the caller's buffer offset: live, and
+    mov bx, ds                  ; drv_owns_seg wants a register
+    push ds                     ; ...AND THE CALLER'S DS IS KEPT, because
+    push cs                     ; api_copyname below reads the name through
+    pop ds                      ; it. The fence needs DS = KERNEL to reach
+    call drv_owns_seg           ; drv_tab, and the first version of this stub
+    pop ds                      ; switched and never switched back - so it
+                                ; staged 13 bytes of KERNEL image as the file
+                                ; name and handed that to dskw_write_sys.
+                                ; OSAPI_NSTUB avoids it by copying BEFORE it
+                                ; touches DS; this one has to put it back
+    pop bx
+    jc .refuse
+    push cs
+    pop es                      ; ES = KERNEL for the copy destination
+    mov di, api_name
+    call api_copyname           ; caller DS:SI -> ES:DI, at most 13 bytes
+    pop es                      ; the caller's ES back: it is the buffer
+    pop di
+    push cs
+    pop ds                      ; DS = KERNEL
+                                ; NO V (SPEC.md 19.2.1): the installer names
+                                ; the volume it is building and must not have
+                                ; its own instance's folder put underneath it
+    mov si, api_name
+    call dskw_write_sys
+    pop si
+    pop ds
+    retf
+.refuse:                        ; DS is already KERNEL; unwind what is left
+    pop es
+    pop di
+    pop si
+    pop ds
+    mov ax, FERR_PROT           ; the same answer DSKW_PROT gives a package
+    stc                         ; that names a system file: it is protected,
+    retf                        ; and from out there that is the whole truth
 
 ; ...and the two-name case, which needs DI as well and so is written out
 api_file_rename:
@@ -1347,6 +1498,19 @@ kmain:
     mov sp, STK0_TOP            ; the image, so a stack offset stays small and
     sti                         ; the kernel's own 64KB window stays for code
     cld
+
+    call dsk_boot_from          ; WHICH VOLUME DID WE COME OFF? (SPEC.md
+                                ; 52.10.3) DL and BX:CX are the boot sector's
+                                ; handoff and nothing above touches them - the
+                                ; segment loads spend AX alone - so this is
+                                ; the first instruction that may. On a floppy
+                                ; boot BX:CX are 0 and DL is 0 or 1, and all
+                                ; this does is store the byte drv_mounted used
+                                ; to hardcode. On a hard disk it claims the
+                                ; boot partition as a DVK_BIOS row, which is
+                                ; what lets the kernel read SYSTEM.CFG and
+                                ; load HDD.DRV off the volume that driver
+                                ; would otherwise have been needed to reach
 
     call FAT_SEG:ovl_cpu_detect ; CPU tier + memory above 1MB (SPEC.md 41),
                                 ; here and nowhere else: BEFORE sched_init,
@@ -1984,6 +2148,12 @@ dskw_sync:            call COLD_SEG:dwf_dskw_sync
 dskw_write:           call COLD_SEG:dwf_dskw_write
                     ret
 dskw_write_sys:       call COLD_SEG:dwf_dskw_write_sys
+                    ret
+dskw_mkdir:           call COLD_SEG:dwf_dskw_mkdir
+                    ret
+dskw_read_at:         call COLD_SEG:dwf_dskw_read_at
+                    ret
+dskw_append:          call COLD_SEG:dwf_dskw_append
                     ret
 files_init:           call COLD_SEG:fmf_files_init
                     ret
