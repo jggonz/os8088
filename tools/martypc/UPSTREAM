@@ -1,0 +1,5 @@
+# The MartyPC build this instrument is pinned to. Edit and re-run build.sh to
+# move it; that is a deliberate act, not maintenance (see build.sh).
+repo=https://github.com/dbalsom/martypc.git
+commit=e15cb04f7b3747676b7a230e8586d15742a1e479
+# 2026-06-28, MartyPC 0.4.2. MIT licensed.

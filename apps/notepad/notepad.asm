@@ -11,12 +11,14 @@
 ;
 ; Editing behaviour is unchanged from the built-in (SPEC.md 14): printable
 ; 32..126 append, backspace deletes, Enter stores a newline byte; text wraps
-; at the content width with 6px margins, rows that would overflow the
+; at the content width BY WORD (SPEC.md 27.11), with 6px margins, rows that
+; would overflow the
 ; content bottom are dropped rather than scrolled, and a 1px caret follows
 ; the text when its own row fits.
 ;
-; What is new is SPEC.md 27.1: F2 saves the note to NOTES.TXT on the mounted
-; data disk and F3 loads it back, over the file API of SPEC.md 18.4 - which
+; What is new is SPEC.md 27.1: Ctrl-S saves the note to NOTES.TXT on the
+; mounted data disk and Ctrl-O loads it back - they were F2 and F3, and F3 is
+; Find Next now (SPEC.md 27.10) - over the file API of SPEC.md 18.4 - which
 ; makes this package the first caller of those slots and the proof that they
 ; work from an ordinary window callback. Line endings are translated in both
 ; directions (13 here, CR LF on the disk), because the whole point of
@@ -28,8 +30,8 @@
 ; application the menu bar while its window is frontmost, so Note Pad ships
 ; a one-menu set - File: New, Open, Save - registered from the entry proc
 ; and dispatched to np_oncmd. The menu is strictly a second door onto the
-; existing routines: "Open" is np_load, "Save" is np_save, F3 and F2 still
-; call exactly the same two, and both doors end at np_redraw. "New" is the
+; existing routines: "Open" is np_load, "Save" is np_save, Ctrl-O and Ctrl-S
+; still call exactly the same two, and both doors end at np_redraw. "New" is the
 ; one thing here that is genuinely new rather than a second door - emptying
 ; the buffer had no key and no button before - and it is menu-only for the
 ; same reason it was missing: there was no spare key worth spending on it.
@@ -132,7 +134,15 @@ NP_MAXCOL    equ 91             ; cells a row can hold: 720/8 is the widest
                                 ; screen this runs on, plus one for the NUL.
                                 ; A row is accumulated into a buffer and drawn
                                 ; as ONE opaque font_run (SPEC.md 6.1/27.2)
-NP_MAXROWS   equ 60             ; signature slots, one per row the content can
+%define NP_MAXROWS 60           ; signature slots, one per row the content can
+                                ; A %define and not an equ, because the bss
+                                ; block at the foot of this file is laid out
+                                ; by a preprocessor counter now (it was ~120
+                                ; hand-computed offsets, and this change adds
+                                ; forty fields to it) - and %assign can only
+                                ; add up things the PREPROCESSOR knows.
+                                ; Textually substituted, so every use below
+                                ; reads exactly as it did.
                                 ; show (SPEC.md 27.2). The tallest this window
                                 ; can be is a fullscreen VGA frame, where the
                                 ; frame IS the content (SPEC.md 11.2): 480 rows
@@ -141,21 +151,35 @@ NP_MAXROWS   equ 60             ; signature slots, one per row the content can
                                 ; this, so a taller screen degrades to "the
                                 ; rows past 60 are always redrawn" rather than
                                 ; writing past the array
-NP_BSS_TOTAL equ 508 + NP_MAXROWS*2  ; see the bss layout below
+                                ; (NP_BSS_TOTAL lives at the foot of this file
+                                ; now, with the fields it counts)
 NP_BRK_CELLS equ 60             ; the visual break's trigger (SPEC.md 27.3):
                                 ; the CELLS a keystroke would repaint BELOW
                                 ; the caret's row. Not rows - this window is
                                 ; resizable and a row is 30 cells or 90
                                 ; depending how wide the user dragged it, so
                                 ; a row count means two different amounts of
-                                ; work. 60 cells is about 60ms on a 4.77MHz
-                                ; 8088 (SPEC.md 6.1.1), which is the point
+                                ; work. A cell is ~0.9ms on a 4.77MHz 8088 -
+                                ; measured four ways, PERFORMANCE.md Part 2 -
+                                ; so 60 cells is ~54ms, which is the point
                                 ; where a keystroke stops keeping up
 NP_IDLE      equ 9              ; ticks of no typing before the break is
                                 ; reconciled: ~500ms at 18.2Hz
 NP_WTICKS    equ 3              ; ...and how often the worker looks, ~165ms.
                                 ; Finer than NP_IDLE so the settle lands
                                 ; near the deadline rather than a tick late
+NP_HCHUNK    equ 16             ; rows of the height count per worker pass
+                                ; (SPEC.md 27.7.3). The count is the one walk
+                                ; that cannot be bounded by the view, so it is
+                                ; bounded by TIME instead: this many rows, then
+                                ; the lock goes back. It sizes a LOCK HOLD and
+                                ; nothing else - the count's total cost is the
+                                ; same however it is sliced - so the number
+                                ; wanted is the largest hold nobody notices,
+                                ; and a measure row is ~2ms on a 4.77MHz 8088
+                                ; (no framebuffer: np_draw and np_sigup are
+                                ; both clear), which puts a chunk at ~32ms,
+                                ; inside one 55ms tick
 NP_SB_W      equ 14             ; scroll bar width, the Disk window's
                                 ; (SPEC.md 22) so the two look like one OS.
                                 ; It is reserved ALWAYS, present or not:
@@ -185,8 +209,14 @@ NP_MARGIN    equ 8              ; left/top text margin inside the content. It
                                 ; SECOND framebuffer byte whenever the shift
                                 ; carries ink into it, and this window redraws
                                 ; text on every keystroke
-NP_KEY_SAVE  equ 0x3C           ; F2 scan code (DOS Editor's keys)
-NP_KEY_LOAD  equ 0x3D           ; F3
+                                ; The two F-keys are NP_KEY_NEXT and
+                                ; NP_KEY_PREV below, and they are the only
+                                ; two: F2 was Save and F3 was Load, the DOS
+                                ; Editor's pair, and both are Ctrl-letters now
+                                ; (SPEC.md 27.1/27.10). What made the DOS keys
+                                ; worth keeping was that they were the ones a
+                                ; user of that machine already knew, and this
+                                ; window has a Macintosh menu bar over it
 NP_K_HOME    equ 0x47           ; the caret keys, int 16h scan codes
 NP_K_UP      equ 0x48
 NP_K_LEFT    equ 0x4B
@@ -199,6 +229,70 @@ NP_MI_OPEN   equ 1              ; np_items_file, which is what the kernel
 NP_MI_SAVE   equ 2              ; hands np_oncmd in AL (SPEC.md 12.2)
 NP_MI_SAVEAS equ 3
 NP_NAMEMAX   equ 12             ; 8 + '.' + 3, as SPEC.md 38.6 hands it over
+
+; --- the Edit menu (SPEC.md 27.8) --------------------------------------------
+NP_MI_UNDO   equ 0              ; menu 1's items, in np_items_edit's order.
+NP_MI_CUT    equ 1              ; There is no Clear: Backspace and Delete
+NP_MI_COPY   equ 2              ; already delete a selection (SPEC.md 27.8),
+NP_MI_PASTE  equ 3              ; so it was a third door onto np_selkill
+NP_MI_SELALL equ 4
+
+NP_FI_FIND   equ 0              ; ...and menu 2's, in np_items_find's
+NP_FI_NEXT   equ 1
+NP_FI_REPL   equ 2
+
+; --- keys (SPEC.md 27.8) -----------------------------------------------------
+; The control characters int 16h already hands over in AL. Backspace (8),
+; Tab (9) and Enter (13) are Ctrl-H/I/M, so those three letters are spoken
+; for and none of the shortcuts below uses them.
+NP_C_SELALL  equ 0x01           ; Ctrl-A
+NP_C_COPY    equ 0x03           ; Ctrl-C
+NP_C_FIND    equ 0x06           ; Ctrl-F
+NP_C_OPEN    equ 0x0F           ; Ctrl-O
+NP_C_REPL    equ 0x12           ; Ctrl-R
+NP_C_SAVE    equ 0x13           ; Ctrl-S
+NP_C_PASTE   equ 0x16           ; Ctrl-V
+NP_C_CUT     equ 0x18           ; Ctrl-X
+NP_C_UNDO    equ 0x1A           ; Ctrl-Z
+NP_C_ESC     equ 0x1B
+NP_C_TAB     equ 0x09
+NP_KEY_NEXT  equ 0x3D           ; F3 - Find Next. It WAS Load, and Load has a
+                                ; menu item and Ctrl-O now: a find with no
+                                ; key for the next match is not a find
+NP_KEY_PREV  equ 0x56           ; Shift-F3 (Shift-F1..F10 are 0x54..0x5D)
+
+; --- the selection (SPEC.md 27.8) --------------------------------------------
+NP_SELDRAG   equ 3              ; pixels the pointer must travel before a
+                                ; press inside a selection becomes a MOVE
+                                ; rather than a click that collapses it
+
+; --- undo (SPEC.md 27.9) -----------------------------------------------------
+NP_UNDO      equ 5              ; edits deep, as asked
+NP_UKB0      equ 1              ; the arena's first claim, KB...
+NP_UMAXKB    equ 16             ; ...and its ceiling. 16 and not 8, because a
+                                ; Replace All records the whole tail of the
+                                ; note it rewrote and the note itself caps at
+                                ; NP_MAXKB - so this is what makes the one
+                                ; operation nobody wants to retype by hand
+                                ; undoable at all
+
+; --- find and replace (SPEC.md 27.10) ----------------------------------------
+NP_PATMAX    equ 47             ; characters a pattern or a replacement holds
+NP_RXST      equ 12             ; backtrack frames the matcher may stack. An
+                                ; EXPLICIT stack in bss, not the CPU's: a
+                                ; recursive matcher would run on the worker's
+                                ; 256-byte task stack (SPEC.md 8), and a
+                                ; pattern is user input
+NP_FP_ROW    equ 12             ; the panel's row pitch: an 8px line plus 4
+NP_FP_PAD    equ 2              ; ...and the border above and below it
+NP_FP_LBL    equ 44             ; the 'Find:'/'Repl:' label column
+NP_FP_BTNH   equ 11             ; button height
+NP_FPAN_NONE equ 0              ; [np_fpan]: closed / find / find + replace
+NP_FPAN_FIND equ 1
+NP_FPAN_REPL equ 2
+NP_FF_FIND   equ 0              ; [np_ffield]: which box the keys go to. 2 is
+NP_FF_REPL   equ 1              ; the document, which is where Tab lands last
+NP_FF_DOC    equ 2
 
 ; -----------------------------------------------------------------------------
 ; np_entry - package entry point (SPEC.md 20.2)
@@ -253,10 +347,16 @@ np_entry:
     mov word [np_prowi], 0xFFFF     ; .bss arrives zeroed and 0 is a REAL row
                                     ; index, so the delta cache has to be told
                                     ; it holds nothing (SPEC.md 27.2)
+    mov byte [np_ffield], NP_FF_DOC  ; ...and 0 is a real FOCUS too - the find
+                                    ; box - so without this a fresh Note Pad
+                                    ; sends every keystroke to a panel that is
+                                    ; not on screen, and typing does nothing
+    mov word [np_dpos], 0xFFFF      ; no drop marker, and 0 is a real index
+    mov word [np_dmark], 0xFFFF
     pushf                           ; ...and so must this: the bss arrives
     call np_defname                 ; zeroed and an empty name is not a file
-    popf                            ; (SPEC.md 27.1), but np_defname is an
-                                    ; ordinary routine and the CF we owe the
+    call np_arg                     ; (SPEC.md 27.1), but np_defname is an
+    popf                            ; ordinary routine and the CF we owe the
                                     ; loader is still riding in the flags
 .out:
     ret
@@ -589,19 +689,37 @@ np_sbcheck:
 ; the track pages against the thumb, and the thumb itself does nothing -
 ; there is no drag, here or there.
 ; -----------------------------------------------------------------------------
-np_sbclick:
+; np_sbhit - is the click at (CX, DX) inside the scroll bar's rect?
+; out: CF = 0 = yes; preserves every register
+;
+; Its own routine because np_onclick asks the same question for a different
+; reason - whether this click needs the note's height to be EXACT - and two
+; copies of a rect are two things that have to agree about where the bar is.
+np_sbhit:
     push ax
-    push bx
-    push dx
-    mov bx, dx                      ; BX = the click's y; np_thumb wants DX
     mov ax, [np_sbr]
     sub ax, NP_SB_W-1
     cmp cx, ax
     jb .no
-    cmp bx, [np_ty]
+    cmp dx, [np_ty]
     jb .no
-    cmp bx, [np_sbb]
+    cmp dx, [np_sbb]
     ja .no
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
+    ret
+
+np_sbclick:
+    push ax
+    push bx
+    push dx
+    call np_sbhit
+    jc .no
+    mov bx, dx                      ; BX = the click's y; np_thumb wants DX
     mov ax, [np_ty]
     add ax, NP_SB_ARR
     cmp bx, ax
@@ -1002,8 +1120,13 @@ np_bounds:
     push dx
     add ax, NP_MARGIN
     mov [np_tx], ax
-    add dx, NP_MARGIN
-    mov [np_ty], dx
+    push ax                         ; the find panel is docked at the TOP of
+    call np_fph                     ; the content (SPEC.md 27.10), so the text
+    add dx, ax                      ; simply starts lower - which is the whole
+    pop ax                          ; of what the rest of this module has to
+    add dx, NP_MARGIN               ; know about it. np_bounds's own geometry
+    mov [np_ty], dx                 ; test below then catches the change and
+                                    ; np_sigsame turns it into a full repaint
     call OSAPI_WM_GEOM              ; CX/DX = content w/h (BX still the window)
     pop ax                          ; content top
     add ax, dx
@@ -1057,22 +1180,33 @@ np_bounds:
     mov ax, [np_bot]                ; the bar's own bottom, clear of the corner
     sub ax, NP_GROW                 ; the kernel draws the grow box in
     mov [np_sbb], ax
+    call np_hguess                  ; ...and now the geometry is known, what the
+                                    ; note's LENGTH already says about its
+                                    ; height (SPEC.md 27.7.3)
 .geom:
     ; The checkpoint and np_rows are ROW INDICES, so they mean nothing under a
     ; different geometry - and unlike the signatures, nothing else was going to
     ; notice. np_sigsame guards np_redraw; this guards everything else, which
     ; is every caret key and every click.
-    mov ax, [np_tx]
-    cmp ax, [np_stx]
-    jne .stale
-    mov ax, [np_ty]
-    cmp ax, [np_sty]
-    jne .stale
+    ; ...and what "a different geometry" means here is the WRAP WIDTH and the
+    ; view HEIGHT, never the origin. These four words are the content box in
+    ; SCREEN coordinates, so dragging the window changes np_tx and np_ty while
+    ; the note wraps identically - and comparing them absolutely made every
+    ; MOVE set [np_gchg], which np_paint pays with np_measure: an unbounded
+    ; walk of the whole note. On a 16KB file that is seconds of a window that
+    ; has been dropped and is not yet drawing, reported as exactly that. The
+    ; comment below is a RESIZE argument and always was.
     mov ax, [np_rgt]
-    cmp ax, [np_srgt]
+    sub ax, [np_tx]                 ; the wrap width now...
+    mov dx, [np_srgt]
+    sub dx, [np_stx]                ; ...against the one the screen was laid
+    cmp ax, dx                      ; out under
     jne .stale
     mov ax, [np_bot]
-    cmp ax, [np_sbot]
+    sub ax, [np_ty]                 ; ...and the view height, which decides how
+    mov dx, [np_sbot]               ; many of those rows fit and so whether the
+    sub dx, [np_sty]                ; view is looking past the end
+    cmp ax, dx
     je .out
 .stale:
     mov byte [np_ckok], 0
@@ -1146,6 +1280,12 @@ np_walk:
                                     ; an array by it already tests UNSIGNED
                                     ; against a limit, and a negative word
                                     ; read as unsigned is past all of them
+    mov byte [np_wstart], 1         ; whatever this walk starts on begins a
+                                    ; word as far as it can tell (SPEC.md
+                                    ; 27.11). A seeded walk may in fact resume
+                                    ; inside one, and cannot be wrong for it:
+                                    ; a seed is always a row START, where the
+                                    ; word test never breaks anyway
     mov bx, [np_len]                ; BX = characters remaining
     xor si, si                      ; ES:SI = the document (SPEC.md 27.6), and
     mov es, [np_dseg]               ; ES survives every callee below: np_rstart
@@ -1173,7 +1313,14 @@ np_walk:
     mov cx, di
     add cx, 7
     cmp cx, [np_rgt]
-    jbe .fits
+    ja .over                        ; the cell itself does not fit...
+    call np_wordfit                 ; ...or the WORD that begins here would run
+    jnc .fits                       ; off the row (SPEC.md 27.11)
+    jmp short .wrap
+.over:
+    call np_hangsp                  ; a trailing SPACE hangs past the margin
+    jc .fits                        ; rather than indent the row below it
+.wrap:
     call np_rflush                  ; the row that is ENDING, before np_nextrow
     mov di, [np_tx]                 ; moves [np_row] off it
     add bp, 8
@@ -1210,6 +1357,8 @@ np_walk:
     inc word [np_i]
     cmp al, 13
     jne .glyph
+    mov byte [np_wstart], 1         ; a line break is a break opportunity like
+                                    ; a space (SPEC.md 27.11)
     call np_rflush                  ; same as the wrap above: flush before
     mov di, [np_tx]                 ; np_nextrow moves off this row
     add bp, 8                       ; newline: carriage return + line feed,
@@ -1220,10 +1369,23 @@ np_walk:
     jle .loop                       ; the reason at the wrap above
     jmp .stop
 .glyph:
+    mov byte [np_wstart], 0         ; the next index is mid-word...
+    cmp al, ' '
+    jne .wsdone
+    mov byte [np_wstart], 1         ; ...unless this is the space that ended
+.wsdone:                            ; one (SPEC.md 27.11)
     push ax                         ; fold it in whatever this pass is for:
     xor ah, ah                      ; the pass that COMPUTES the signatures is
-    call np_fold                    ; a measure pass, so this cannot hang off
-    pop ax                          ; np_draw
+    push ax                         ; a measure pass, so this cannot hang off
+    mov ax, [np_i]                  ; np_draw.
+    dec ax                          ; ...and a SELECTED cell folds differently
+    call np_selq                    ; (SPEC.md 27.8), because the inversion is
+    pop ax                          ; pixels like the glyph is and moving the
+    jnc .nfsel                      ; selection has to dirty the row it left
+    mov ah, 0x80                    ; as well as the one it arrived at. POP
+.nfsel:                             ; touches no flags, so the answer survives
+    call np_fold
+    pop ax
     cmp byte [np_draw], 0
     je .advance
     mov cx, bp                      ; vertical clip: drop rows that overflow,
@@ -1242,7 +1404,33 @@ np_walk:
     cmp bx, [np_rcols]
     jae .nocell                     ; past the band: the wrap rule above means
     mov [np_rbuf+bx], al            ; this cannot normally happen, and a
-.nocell:                            ; clamped np_rcols is the case where it can
+    push ax                         ; clamped np_rcols is the case where it can
+    push dx
+    mov ax, [np_i]
+    dec ax
+    call np_selq                    ; selected NOW...
+    mov dl, 0
+    jnc .n1
+    mov dl, 1
+.n1:
+    call np_selqo                   ; ...and selected ON SCREEN (SPEC.md 27.8.2)
+    mov dh, 0
+    jnc .n2
+    mov dh, 1
+.n2:
+    or dl, dl
+    jz .nosel
+    mov ax, bx                      ; inside the selection: widen the span
+    call np_selfold                 ; np_rflush inverts (SPEC.md 27.8)
+.nosel:
+    cmp dl, dh
+    je .noxf
+    mov ax, bx                      ; ...and its inversion has to CHANGE, which
+    call np_xfold                   ; is the only thing a drag actually owes
+.noxf:
+    pop dx
+    pop ax
+.nocell:
     pop bx
 .advance:
     add di, 8
@@ -1317,8 +1505,17 @@ np_walk:
     ; until something walks it whole, and the cost of that is one blank row at
     ; the end rather than a caret nobody can see (SPEC.md 27.7)
     push ax
-    mov ax, [np_row]
-    add ax, [np_top]
+    mov ax, [np_row]                ; the ABSOLUTE row this walk stopped on,
+    add ax, [np_top]                ; and the index that row begins at: the
+    mov [np_stoprow], ax            ; pair a resumable walk picks up from
+    push ax                         ; (SPEC.md 27.7.3). np_rstart has already
+    mov ax, [np_i]                  ; run for this row, so [np_i] is its FIRST
+    mov [np_stopi], ax              ; character and not the last of the row
+    pop ax                          ; above. Published on EVERY bounded stop
+                                    ; and kept only by np_height, on the walk
+                                    ; it issued itself - which is safe because
+                                    ; it reads them under the lock with
+                                    ; nothing between the call and the read
     inc ax
     cmp ax, [np_drows]
     jbe .nolb
@@ -1360,6 +1557,138 @@ np_walk:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_hangsp - may the cell at this pen hang past the right edge?
+; in:  ES:SI = the document at [np_i], BX = characters left, DI = pen x
+; out: CF = 1 = do not wrap, let it hang; preserves every register
+;
+; Only a SPACE, and only one cell's worth. Word wrap ends a row after the last
+; word that fits, and the space that follows that word then has nowhere to go:
+; the cell rule sends it to the next row, where it is an indent nobody typed -
+; one row in [np_rcols], often enough to look like a mistake in a narrow
+; window. Every text editor hangs it past the margin instead, and here that
+; costs nothing, because the cell is beyond [np_rcols] and so is dropped by
+; the row buffer's own bound rather than drawn: a space paints nothing anyway.
+;
+; The overshoot is capped at that one cell, which is what keeps a run of
+; spaces from walking the pen out of the window - and out of a 16-bit DI.
+; -----------------------------------------------------------------------------
+np_hangsp:
+    or bx, bx
+    jz .no                          ; the end of the note: nothing to hang
+    push ax
+    mov ax, [np_rgt]
+    inc ax
+    cmp di, ax
+    ja .popno                       ; already hanging: the next one wraps
+    mov al, [es:si]
+    cmp al, ' '
+    jne .popno
+    pop ax
+    stc
+    ret
+.popno:
+    pop ax
+.no:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; np_wordfit - would the word beginning at this index run off the row?
+; in:  ES:SI = the document at [np_i], BX = characters left, DI = pen x,
+;      [np_wstart] = 1 if this index begins a word
+; out: CF = 1 = break the row BEFORE this index; preserves every register
+;
+; The whole of SPEC.md 27.11's word wrap, and the only lookahead in this
+; module. It is asked at a word's FIRST character and nowhere else, because
+; the answer cannot change inside one: what is left of a word only gets
+; shorter as the pen advances it, so a word that fitted at its first cell
+; still fits at its second. That is what keeps the cost one scan per word
+; rather than one per character.
+;
+; TWO thresholds, not one, and the second is what stops it spinning. R is what
+; is left of THIS row, and a word ending inside it needs no break at all.
+; [np_rcols] is a whole row, and a word longer than THAT can never be helped
+; by breaking - it has to be split by the cell rule wherever it stands, and
+; forcing a wrap for it would put the pen at the left margin and ask the same
+; question again, forever. Between the two thresholds is the only case there
+; is.
+;
+; A word already AT the left margin is the same guard doing second duty and
+; needs no test of its own: there R equals [np_rcols], so "longer than R" and
+; "longer than a row" are one question and the answer is always "do not
+; break".
+; -----------------------------------------------------------------------------
+np_wordfit:
+    cmp byte [np_wstart], 0
+    je .no                          ; mid-word: asked and answered at its first
+    or bx, bx                       ; character
+    jz .no                          ; nothing left to measure
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov ax, [np_rgt]
+    inc ax
+    sub ax, di                      ; pixels left on this row, this cell first
+    jle .pop_no                     ; the caller has already tested the cell,
+    mov cl, 3                       ; so this cannot fire - but a shift of a
+    shr ax, cl                      ; negative width would answer nonsense
+    mov dx, ax                      ; DX = R, whole cells left on this row
+
+    mov cx, dx                      ; --- does the word END inside them? -----
+.p1:                                ; THE BREAK TEST COMES FIRST, and the cell
+    or bx, bx                       ; count second: a word that exactly fills
+    jz .pop_no                      ; the space left ends on the cell after the
+    mov al, [es:si]                 ; last one it occupies, and testing the
+    cmp al, ' '                     ; count first calls that an overflow. It
+    je .pop_no                      ; is invisible at 29 columns and constant
+    cmp al, 13                      ; at 9, which is what a narrow window
+    je .pop_no                      ; showed
+    jcxz .p2
+    inc si
+    dec bx
+    dec cx
+    jmp short .p1
+
+.p2:                                ; --- no. Would a whole row hold it? -----
+    mov cx, [np_rcols]
+    sub cx, dx                      ; the cells a FRESH row would add
+    jbe .pop_no                     ; the pen is at the left margin already
+.p2l:
+    or bx, bx                       ; same order, for the same reason
+    jz .pop_yes                     ; the note ends: a fresh row would hold it
+    mov al, [es:si]
+    cmp al, ' '
+    je .pop_yes
+    cmp al, 13
+    je .pop_yes
+    jcxz .pop_no                    ; longer than a row: the cell rule owns it
+    inc si
+    dec bx
+    dec cx
+    jmp short .p2l
+
+.pop_yes:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+.pop_no:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.no:
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1475,6 +1804,12 @@ np_carets:
     push bx
     push cx
     push dx
+    cmp byte [np_selon], 0
+    jne .out                        ; a selection REPLACES the caret, which is
+                                    ; the Macintosh rule and is also the only
+                                    ; honest one here: a 1px black bar inside
+                                    ; an inverted band is invisible, so drawing
+                                    ; it would cost a line and show nothing
     mov ax, [np_i]
     cmp ax, [np_cur]
     jne .out
@@ -1552,6 +1887,10 @@ np_rstart:
     cld
     mov [np_rby], bp
     mov word [np_rcx], 0xFFFF
+    mov word [np_rs0], 0xFFFF       ; ...and no inverted cells yet either
+    mov word [np_rs1], 0xFFFF
+    mov word [np_xs0], 0xFFFF       ; ...nor any whose inversion must change
+    mov word [np_xs1], 0xFFFF
     mov ax, [np_i]                  ; where this row STARTS, banked as the
     mov [np_ckpc], ax               ; checkpoint candidate: np_ask promotes it
     mov ax, [np_row]                ; the moment the walk stands on the caret
@@ -1619,6 +1958,52 @@ np_rflush:
     cmp word [np_rcols], 0
     je .caret
 
+    ; --- ONLY THE INVERSION MOVED (SPEC.md 27.8.2) -------------------------
+    ; A drag changes no character anywhere. What it changes is which cells are
+    ; inverted, and XOR is exactly the operation for that - so flip the cells
+    ; whose selected-ness differs from the screen's and letter NOTHING. The
+    ; row's glyphs are already correct and re-drawing them to invert them was
+    ; costing a full row of font_run per dirty row per pass.
+    ;
+    ; Gated on a selection existing at BOTH ends, which is what guarantees no
+    ; caret is drawn either before or after (np_carets returns early while one
+    ; is up): a caret bar sits on top of a glyph, so erasing one needs that
+    ; cell lettered again and this path draws no cells.
+    cmp byte [np_selonly], 0
+    je .normal
+    cmp byte [np_selon], 0
+    je .normal
+    cmp byte [np_oselon], 0
+    je .normal
+    mov ax, [np_xs0]
+    cmp ax, 0xFFFF
+    je .cache                       ; this row's inversion is already right
+    mov cx, [np_xs1]
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_tx]                 ; x1
+    push ax
+    mov ax, cx
+    inc ax
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_tx]
+    dec ax
+    mov cx, ax                      ; x2
+    pop ax
+    mov bx, [np_rby]
+    mov dx, bx
+    add dx, 7
+    call OSAPI_GFX_XOR_FILL
+    jmp .cache                      ; np_prow still describes the screen -
+                                    ; not one character moved - but .cache
+                                    ; owes np_prs0/np_prs1 the new span
+.normal:
+
     mov word [np_fcc], 0xFFFF       ; this row's caret column, if it has one
     mov ax, [np_rcx]
     cmp ax, 0xFFFF
@@ -1658,20 +2043,47 @@ np_rflush:
     call np_fold1                   ; both ends: the one it left has to lose
     mov ax, [np_fcc]                ; its bar, and the one it arrived at has
     call np_fold1                   ; to get one
+    mov ax, [np_rs0]                ; ...and so does the SELECTION, for exactly
+    cmp ax, [np_prs0]               ; the same reason and only when it MOVED:
+    jne .selchg                     ; a row whose inverted span is unchanged
+    mov ax, [np_rs1]                ; has the right pixels already, and folding
+    cmp ax, [np_prs1]               ; it in unconditionally would redraw every
+    je .seldone                     ; selected row on every pass
+.selchg:
+    mov ax, [np_prs0]               ; the union of the two spans, which
+    call np_fold1                   ; contains every cell whose inverted-ness
+    mov ax, [np_prs1]               ; changed. Wider than the difference and
+    call np_fold1                   ; very much simpler; a selection is a
+    mov ax, [np_rs0]                ; static thing, so this runs once as it
+    call np_fold1                   ; arrives and once as it leaves
+    mov ax, [np_rs1]
+    call np_fold1
+.seldone:
     cmp word [np_flo], 0xFFFF
     je .cache                       ; nothing moved: draw NOTHING
 
 .draw:
     cmp byte [np_clean], 0          ; the band is known blank (a full repaint
     je .draw2                       ; white-filled it, SPEC.md 27.2), so the
-    mov bx, [np_fhi]                ; padding has nothing to erase and the run
-.tl:                                ; stops at the last real character. A
-    cmp byte [np_rbuf+bx], ' '      ; fullscreen window is 90 cells wide and a
-    jne .tdone                      ; note is rarely that long: without this a
-    cmp bx, [np_flo]                ; repaint costs rows x width instead of
-    jbe .cache                      ; characters, and on a 4.77MHz 8088 that
-    dec bx                          ; is the difference between half a second
-    jmp short .tl                   ; and five
+    mov cx, [np_flo]                ; padding has nothing to erase and the run
+    mov ax, [np_rs1]                ; stops at the last real character - but
+    cmp ax, 0xFFFF                  ; never short of the last SELECTED one: a
+    je .tf                          ; selected trailing space is drawn to be
+    cmp ax, cx                      ; inverted, and trimming it away would
+    jbe .tf                         ; leave a gap in the highlight
+    mov cx, ax
+.tf:
+    mov bx, [np_fhi]                ; A fullscreen window is 90 cells wide and
+.tl:                                ; a note is rarely that long: without this
+    cmp byte [np_rbuf+bx], ' '      ; a repaint costs rows x width instead of
+    jne .tdone                      ; characters, and on a 4.77MHz 8088 that
+    cmp bx, cx                      ; is the difference between half a second
+    jbe .tstop                      ; and five
+    dec bx
+    jmp short .tl
+.tstop:
+    cmp word [np_rs1], 0xFFFF       ; all blank from the floor up: nothing to
+    je .cache                       ; do, unless a selection reaches here
 .tdone:
     mov [np_fhi], bx
 .draw2:
@@ -1696,6 +2108,11 @@ np_rflush:
     pop bx
     pop ax
     mov [np_rbuf+bx], al
+    call np_selxor                  ; the run drew the cells upright; invert
+                                    ; the selected ones it covered (SPEC.md
+                                    ; 27.8). AFTER the run, for the reason the
+                                    ; caret is drawn after it: the run would
+                                    ; paint over an inversion made first
 
 .cache:
     push es                         ; the span was drawn, so the screen now
@@ -1711,6 +2128,10 @@ np_rflush:
     mov [np_prowi], ax
     mov ax, [np_fcc]
     mov [np_prcc], ax
+    mov ax, [np_rs0]                ; ...and which of its cells came out
+    mov [np_prs0], ax               ; inverted, or the next pass has no way to
+    mov ax, [np_rs1]                ; tell that the highlight moved off a row
+    mov [np_prs1], ax               ; whose characters did not
 
 .caret:
     mov ax, [np_rcx]
@@ -2154,7 +2575,11 @@ np_worker:
     cmp byte [np_bmode], 0
     jne .idle
     cmp byte [np_hdirty], 0         ; ...or a height to recount, which is the
-    je .loop                        ; other thing worth waking up for
+    jne .idle                       ; other thing worth waking up for
+    cmp byte [np_uopen], 0          ; ...or an edit group whose half-second is
+    jne .idle                       ; nearly up (SPEC.md 27.9)
+    cmp byte [np_fcdirty], 0        ; ...or a match count somebody is waiting
+    je .loop                        ; to see (SPEC.md 27.10)
 .idle:
     call OSAPI_WM_TOP               ; BX = frontmost visible, 0 = none
     cmp bx, [np_win]
@@ -2165,6 +2590,11 @@ np_worker:
     jb .loop
 .go:
     call OSAPI_GFX_LOCK
+    call np_uclose                  ; half a second without an edit is what a
+                                    ; user means by ONE edit, and this is the
+                                    ; clock that measures it (SPEC.md 27.9).
+                                    ; UNDER the lock, because every recorder
+                                    ; runs inside a callback that holds it
     mov si, [np_win]
     cmp byte [np_bmode], 0          ; re-read UNDER the lock: the UI task may
     je .height                      ; have settled it while we waited
@@ -2178,13 +2608,38 @@ np_worker:
     ; visible: this is arithmetic, np_sbcheck draws only when a number moved,
     ; and a covered window's bar is redrawn by W_PAINT anyway.
     cmp byte [np_hdirty], 0
-    je .unlock
+    je .count
     call np_bounds                  ; the walk reads [np_ty]/[np_rgt], and the
-    call np_height                  ; window may have been resized since
+    call np_hchunk                  ; window may have been resized since.
+                                    ; A CHUNK of the count and not the whole of
+                                    ; it (SPEC.md 27.7.3): the lock is held
+                                    ; across this, so the bound on the walk is
+                                    ; the bound on how long a UI action behind
+                                    ; it has to wait
+    mov bx, [np_win]
+    call OSAPI_WM_OBSCURED
+    jc .count
+    call np_sbcheck
+.count:
+    ; The match count, which walks the whole note with the matcher and so is
+    ; owed rather than paid on the keystroke that changed the pattern
+    ; (SPEC.md 27.10) - the same trade np_height makes above it. UNDER the
+    ; lock, because the matcher's backtrack stack is one block of bss that the
+    ; UI task's own finds use too.
+    cmp byte [np_fcdirty], 0
+    je .unlock
+    cmp byte [np_fpan], NP_FPAN_NONE
+    je .nocount                     ; no panel: nobody can see the answer, so
+                                    ; the debt is simply cancelled
+    call np_fcount_do
     mov bx, [np_win]
     call OSAPI_WM_OBSCURED
     jc .unlock
-    call np_sbcheck
+    mov si, [np_win]
+    call np_pdrawn                  ; a recount changes ONE string on screen
+    jmp short .unlock
+.nocount:
+    mov byte [np_fcdirty], 0
 .unlock:
     call OSAPI_GFX_UNLOCK
     jmp .loop
@@ -2259,6 +2714,7 @@ np_rowdirty:
 ; -----------------------------------------------------------------------------
 np_sigmark:
     push ax
+    call np_selmark
     mov ax, [np_tx]
     mov [np_stx], ax
     mov ax, [np_ty]
@@ -2275,6 +2731,26 @@ np_sigmark:
     mov byte [np_gchg], 0           ; this paint laid the note out under the
     pop ax                          ; geometry just recorded, so the view has
     ret                             ; been re-clamped against it
+
+; -----------------------------------------------------------------------------
+; np_selmark - the screen now shows THIS selection (SPEC.md 27.8.2)
+; out: nothing; preserves all registers
+;
+; The one fact np_selqo reads. Every path that finishes a redraw sets it,
+; including the ones that drew nothing: a row whose selection did not change
+; is not in the dirty band, so "what the screen shows" is the live selection
+; either way.
+; -----------------------------------------------------------------------------
+np_selmark:
+    push ax
+    mov ax, [np_sel0]
+    mov [np_osel0], ax
+    mov ax, [np_sel1]
+    mov [np_osel1], ax
+    mov al, [np_selon]
+    mov [np_oselon], al
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; np_sigsame - do the stored signatures still describe this window?
@@ -2330,14 +2806,58 @@ np_sigsame:
 ;
 ; It preserves the two query fields because np_onclick sets them BEFORE it
 ; gets here, and a walk consumes them.
+;
+; It comes in two sizes (SPEC.md 27.7.3). np_height finishes the count in one
+; hold, for the one caller that needs the answer exact - a click on the bar.
+; np_hchunk does NP_HCHUNK rows of it and hands the lock back, which is what
+; the worker calls: the count of a 16KB note is seconds of walking, and doing
+; it in one hold freezes the machine behind it with nothing on the disk and
+; nothing on the glass.
+;
+; Chunking is legal because the gfx lock here is a mutex over the walk's
+; SCRATCH and not a drawing lock - np_height writes no framebuffer, and nine of
+; np_walk's ten call sites are UI callbacks that hold the lock already. So the
+; hold is needed for a CHUNK and never for the COUNT, and "give up the machine
+; if somebody else wants it" falls out of the release rather than needing the
+; worker to ask anyone.
+;
+; The resume pair survives the release because WRAPPING IS DETERMINISTIC: row R
+; begins at index I whoever computed it. An interleaved W_PAINT scribbles over
+; the walk's in-flight scratch and cannot touch those two words. Only the note
+; CHANGING invalidates them, and that goes through np_hmark, which resets them.
 ; -----------------------------------------------------------------------------
 np_height:
+    push ax
+    mov ax, 0x7FFF                  ; no bound: to the last character, however
+    call np_hwalk                   ; many rows that is
+    pop ax
+    ret
+
+np_hchunk:
+    push ax
+    mov ax, [np_hi]                 ; a stale seed can only mean the note shrank
+    cmp ax, [np_len]                ; without going through np_hmark; np_walk
+    jbe .seedok                     ; would fall back to a full walk, and the
+    mov word [np_hrow], 0           ; bound below would then be a chunk's worth
+    mov word [np_hi], 0             ; of rows past where it actually starts -
+.seedok:                            ; one unbounded hold, the thing being fixed
+    mov ax, [np_hrow]               ; [np_lastrow] is a VISIBLE row and
+    sub ax, [np_top]                ; [np_hrow] is absolute, so the bound is
+    add ax, NP_HCHUNK               ; this chunk's own start plus its length
+    call np_hwalk
+    pop ax
+    ret
+
+; np_hwalk - the count itself, stopping after visible row AX
+; in:  AX = the last visible row this pass may stand on, SI = window ptr
+np_hwalk:
     cmp byte [np_hdirty], 0
     jne .go
     ret
 .go:
     push ax
     push si
+    mov [np_lastrow], ax
     mov ax, [np_hity]
     push ax
     mov ax, [np_wanty]
@@ -2347,14 +2867,50 @@ np_height:
     mov byte [np_draw], 0
     mov byte [np_sigup], 0
     mov byte [np_clip], 0
-    mov byte [np_resume], 0         ; from index 0, and to the last character:
-    call np_walk                    ; anything less is what we already have
+
+    mov ax, [np_hi]                 ; resume where the last chunk stopped, which
+    mov [np_sdi], ax                ; for the first one is index 0 of row 0 -
+    mov ax, [np_hrow]               ; identical to the unseeded start np_walk
+    sub ax, [np_top]                ; would make, so the top of the note needs
+    mov [np_sdr], ax                ; no case of its own. np_sdr is a VISIBLE
+    mov byte [np_resume], 1         ; row, so it is derived from [np_top] HERE
+    call np_walk                    ; and not banked - the view may have moved
+    mov byte [np_resume], 0         ; between one chunk and the next
+
+    cmp byte [np_hdirty], 0         ; .done clears it and .stop leaves it up, so
+    jne .more                       ; the flag already says which exit was taken
+    mov word [np_hrow], 0           ; finished: the next count starts at the top
+    mov word [np_hi], 0
+    jmp short .fin
+.more:
+    mov ax, [np_stoprow]            ; stopped: pick this up next pass
+    mov [np_hrow], ax
+    mov ax, [np_stopi]
+    mov [np_hi], ax
+.fin:
     pop ax
     mov [np_wanty], ax
     pop ax
     mov [np_hity], ax
     pop si
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_hmark - the note changed: the height is owed, and owed from the TOP
+; preserves every register AND the flags (it only stores to memory), so it is a
+; drop-in for the `mov byte [np_hdirty], 1` it replaces at each of its callers
+;
+; The reset is the whole reason this is a routine. A chunked count that is
+; part-way down a note holds a (row, index) pair that describes the note it
+; started on; an edit makes that pair name a row that may no longer begin
+; there, so the count has to start over. Raising the flag and forgetting the
+; pair are the same event and must not be separable.
+; -----------------------------------------------------------------------------
+np_hmark:
+    mov byte [np_hdirty], 1
+    mov word [np_hrow], 0
+    mov word [np_hi], 0
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2403,18 +2959,90 @@ np_settle:
 ; fall back. That fallback is the ONLY thing keeping a stale table from
 ; answering with a plausible wrong index.
 ; -----------------------------------------------------------------------------
+; np_seedck seeds one row EARLIER than the caret's, and walks back further
+; still through a long word. SPEC.md 27.4's licence to resume at the caret's
+; own row was "wrapping is an automaton with no lookahead", and SPEC.md 27.11
+; took that away: the break in FRONT of a row is decided by the length of the
+; word BEHIND it, so an edit inside the caret's row can move the break that
+; put the row where it is. Redoing the row above is what re-decides it.
+;
+; The walk back covers the other half. A row that begins mid-word was split by
+; the cell rule, and the word-fit test that let it get that far was taken at
+; the word's first character, which may be several rows up; only from there is
+; the layout genuinely independent of the edit. It is bounded by the note and
+; runs one iteration in every ordinary case, because an ordinary row begins
+; after a space.
+;
+; Failing back to a full walk when the table runs out is not a fallback but
+; the correct answer: [np_rows] describes visible rows only, so row 0 of a
+; SCROLLED view was placed by a break above the view, and nothing here can
+; redo it.
 np_seedck:
     push ax
+    push bx
+    push cx
+    push es
     mov byte [np_resume], 0
     cmp byte [np_ckok], 0
     je .out
-    mov ax, [np_ckpi]
-    mov [np_sdi], ax
-    mov ax, [np_ckpr]
+    mov es, [np_dseg]
+    mov ax, [np_ckpr]               ; the caret's row...
+.back:
+    call np_rowstart                ; ...and the index it begins at
+    jc .out
+    or bx, bx
+    jz .seed                        ; index 0 begins the NOTE: there is no
+                                    ; earlier break to be redecided
+    mov cl, [es:bx-1]
+    cmp cl, ' '
+    je .prev
+    cmp cl, 13
+    je .prev
+    or ax, ax                       ; mid-word: this row was split by the cell
+    jz .out                         ; rule, and the word began further back
+    dec ax
+    jmp short .back
+.prev:
+    or ax, ax                       ; a word start, so the break in front of it
+    jz .out                         ; was taken while the row ABOVE was laid
+    dec ax                          ; out - so redo that one too
+    call np_rowstart
+    jc .out
+.seed:
+    mov [np_sdi], bx
     mov [np_sdr], ax
     mov byte [np_resume], 1
 .out:
+    pop es
+    pop cx
+    pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_rowstart - the index visible row AX begins at (SPEC.md 27.5)
+; in:  AX = the row
+; out: CF = 0 and BX = the index; CF = 1 = np_rows does not describe that row
+; clobbers: BX and CF; every other register preserved
+; -----------------------------------------------------------------------------
+np_rowstart:
+    push ax
+    cmp byte [np_rowsok], 0
+    je .no
+    cmp ax, [np_rowsn]
+    jae .no                         ; unsigned, so a row ABOVE the view - a
+                                    ; negative index - fails here too
+    shl ax, 1
+    mov bx, ax
+    mov bx, [bx+np_rows]
+    cmp bx, [np_len]
+    ja .no
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
     ret
 
 np_seedrow:
@@ -2475,7 +3103,77 @@ np_paint:
     mov [np_ptop], ax               ; ...and the screen now shows THIS view
     pop ax
     call np_sbar                    ; the fill took the bar with it
+    call np_fpaint                  ; ...and the find panel, which lives in the
+                                    ; strip np_bounds took off the top of the
+                                    ; content (SPEC.md 27.10)
     call np_toast                   ; last, so it sits above the text
+    call np_hirechk                 ; this walk stopped at the bottom of the
+    ret                             ; view, so the height is still owed
+
+; -----------------------------------------------------------------------------
+; np_hguess - what the note's LENGTH alone says about its height (SPEC.md 27.7.3)
+; in:  [np_rcols] valid (np_bounds has run); out: [np_drows] raised to it
+; preserves all registers
+;
+; The chunked count takes seconds on a long note, and until it lands the only
+; thing [np_drows] holds is what the first screenful's bounded walk reached -
+; so a 781-row file claimed to be 18 rows tall and the bar was drawn for a
+; document that does not exist. This is the arithmetic answer available for
+; nothing: the characters, divided by the cells a row holds.
+;
+; IT CAN ONLY EVER BE TOO SMALL, which is what makes it safe to publish. A row
+; holds at most [np_rcols] cells, so a note of L characters needs at least
+; L/cols rows - and every newline ends a row EARLY, which can only push the
+; real number up. That is exactly [np_drows]'s existing direction of error
+; (SPEC.md 27.7: a lower bound, never lowered), so nothing downstream needs a
+; new rule and the walk goes on correcting it upward as it always did.
+;
+; The font is fixed-width, so "cells a row holds" is not an average of
+; anything - it is [np_rcols], which np_bounds has just computed for the row
+; buffer. One DIV, in a routine that has already made two far calls into the
+; kernel at PERFORMANCE.md's ~756us apiece: under 2% of what it is riding on.
+; -----------------------------------------------------------------------------
+np_hguess:
+    push ax
+    push cx
+    push dx
+    mov cx, [np_rcols]
+    jcxz .out                       ; a window too narrow to hold a cell: no
+    mov ax, [np_len]                ; geometry to divide by, and nothing to say
+    xor dx, dx                      ; [np_len] is capped at NP_MAXKB, so the
+    div cx                          ; dividend never needs DX and cannot overflow
+    cmp ax, [np_drows]
+    jbe .out                        ; never LOWERED, the one rule this shares
+    mov [np_drows], ax              ; with every other writer of it
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_hirechk - a height debt outlived this paint: make sure a worker exists
+; preserves all registers
+;
+; The predicate in ONE place, called from both ends of the drawing: every exit
+; of np_redraw, and np_paint - which is W_PAINT, and W_PAINT is the only thing
+; that draws a window opened by DOUBLE-CLICKING A DOCUMENT. That launch loads
+; the file in the entry proc and never calls np_redraw at all, so the note
+; whose height most needs counting - a whole file, arriving at once - was the
+; one note that never got a worker to count it. It sat at the first
+; screenful's lower bound until some later edit happened to hire one, and
+; before then the first click paid the entire count in a single hold.
+; -----------------------------------------------------------------------------
+np_hirechk:
+    push ax
+    cmp byte [np_hdirty], 0
+    je .out
+    mov ax, [np_drows]              ; a note that FITS needs no worker: the
+    cmp ax, [np_vrows]              ; walk that drew it ran to the note's end
+    jbe .out                        ; and cleared the debt on the way
+    call np_hire
+.out:
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2499,6 +3197,10 @@ np_toast:
     mov bx, si                  ; BX = window ptr
     call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
     mov di, ax                  ; DI = content left (the clamp)
+    push ax
+    call np_fph                 ; ...below the find panel, if one is up: the
+    add dx, ax                  ; toast belongs over the TEXT (SPEC.md 27.10)
+    pop ax
     add dx, 2
     mov [np_by1], dx
     add dx, 11
@@ -2540,6 +3242,22 @@ np_toast:
     add dx, 2
     mov si, [np_msg]
     call OSAPI_FONT_STR
+    mov word [np_msg], 0        ; ...and FORGET it. A toast belongs to the
+                                ; operation that raised it, and this routine
+                                ; is reached from np_paint - so every later
+                                ; repaint was putting it back up. Dragging the
+                                ; window re-showed 'Loaded README.TXT', which
+                                ; reads as the file being loaded AGAIN and was
+                                ; reported as exactly that; the counters say
+                                ; the disk is never touched. The header above
+                                ; already claimed the toast could "never
+                                ; become stale furniture" because a keystroke
+                                ; clears it - a repaint is not a keystroke.
+                                ; The np_smsg shadow is published BEFORE this
+                                ; runs, so the next paint sees 0 against the
+                                ; toast it was drawn with, mismatches, and
+                                ; redraws the rows underneath - which is what
+                                ; erases it
 .out:
     pop di
     pop si
@@ -2912,7 +3630,7 @@ np_ins:
     call np_room                    ; grow by a kilobyte if this is the
     jc .out                         ; keystroke that fills the claim; a
                                     ; refusal drops it, as a full note always
-    mov byte [np_hdirty], 1         ; the note is a different length, so it
+    call np_hmark                   ; the note is a different length, so it
                                     ; may be a different number of rows, and
                                     ; [np_drows] is a lower bound until
                                     ; something walks the whole of it
@@ -2936,6 +3654,9 @@ np_ins:
     mov [es:bx], dl
     inc word [np_len]
     inc word [np_cur]
+    mov ax, bx                      ; ...and remember it, which is what makes
+    mov cx, 1                       ; a burst of typing one undoable edit
+    call np_urec_ins                ; (SPEC.md 27.9)
 .out:
     pop es
     pop di
@@ -2951,41 +3672,17 @@ np_ins:
 ; out: nothing; preserves all registers. A caret at the end deletes nothing.
 ; -----------------------------------------------------------------------------
 np_del:
-    push ax
     push bx
     push cx
-    push si
-    push di
-    push es
     mov bx, [np_cur]
     cmp bx, [np_len]
-    jae .out
-    mov byte [np_hdirty], 1         ; ...and shrinking counts too, though this
-                                    ; is the direction the lower bound cannot
-                                    ; follow (SPEC.md 27.7)
-    mov es, [np_dseg]
-    mov cx, [np_len]
-    sub cx, bx
-    dec cx                          ; CX = the bytes that move down
-    mov di, bx
-    mov si, di
-    inc si
-    jcxz .close
-.mv:
-    mov al, [es:si]
-    mov [es:di], al
-    inc si
-    inc di
-    loop .mv
-.close:
-    dec word [np_len]
+    jae .out                        ; a caret at the end deletes nothing
+    mov cx, 1
+    call np_delspan                 ; the run is the primitive now (SPEC.md
+                                    ; 27.8), and it is what records the undo
 .out:
-    pop es
-    pop di
-    pop si
     pop cx
     pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3132,13 +3829,25 @@ np_onclick:
     mov word [np_wanty], 0xFFFF
     call np_settle                  ; the pointer has to be over the NOTE
     call np_bounds                  ; before it can be resolved (SPEC.md 27.3)
-    call np_height                  ; ...and a click on the BAR is the one
-                                    ; place the note's height has to be exact
-                                    ; rather than a lower bound, because it is
-                                    ; what the thumb and the paging are a
-                                    ; fraction of. One walk, on a click, and
-                                    ; only if something was typed since the
-                                    ; last one (SPEC.md 27.7)
+    call np_uclose                  ; ...and a click is not typing, so whatever
+                                    ; was being typed is one finished edit
+    call np_fpclick                 ; the find panel owns the top of the
+    jc .notpanel                    ; content (SPEC.md 27.10)
+    pop dx
+    jmp .out
+.notpanel:
+    call np_sbhit                   ; a click on the BAR is the one place the
+    jc .nobar                       ; note's height has to be exact rather than
+    call np_height                  ; a lower bound, because it is what the
+.nobar:                             ; thumb and the paging are a fraction of.
+                                    ; A click in the TEXT is answered by
+                                    ; np_measure and wants no total at all, and
+                                    ; it used to pay for one anyway - the whole
+                                    ; remaining count, in one hold, on the
+                                    ; first click after opening a file
+                                    ; (SPEC.md 27.7.3). What is left here is
+                                    ; bounded by what the worker has already
+                                    ; counted, and shrinks while the user reads
     call np_sbclick                 ; ...and the scroll bar is not the note
     jc .text
     pop dx
@@ -3159,11 +3868,27 @@ np_onclick:
     call np_measure
     mov byte [np_resume], 0
     mov ax, [np_hiti]
-    cmp ax, [np_cur]
-    je .out                         ; the caret did not move: no repaint
+    push ax                         ; a click in the note takes the keys back
+    mov al, NP_FF_DOC               ; off the find panel (SPEC.md 27.10)
+    call np_ffocus
+    pop ax
+    call np_selq                    ; a press INSIDE the selection is a drag of
+    jc .move                        ; the text, not a new selection (27.8.1)
+    mov [np_anchor], ax
     mov [np_cur], ax
     mov word [np_msg], 0
+    push ax
+    call np_selclr
+    pop ax
+    jc .nosel                       ; there was no selection to erase, so the
+    mov byte [np_ckok], 0           ; band the walk resumes at would have left
+.nosel:                             ; its inversion on screen
     call np_redraw
+    call np_dragsel                 ; ...and then follow the pointer until the
+    call np_pdrawn                  ; button comes up; the counter's ordinal
+    jmp short .out                  ; goes with the selection it named                  ; button comes up
+.move:
+    call np_dragmove
 .out:
     pop ax
     ret
@@ -3174,7 +3899,12 @@ np_onclick:
 ; -----------------------------------------------------------------------------
 np_clamp:
     push ax
-    mov byte [np_hdirty], 1         ; a whole new note is a whole new height
+    call np_selclr                  ; a whole new buffer: the selection, the
+    call np_uclear                  ; undo stack and the match count are all
+    mov byte [np_fcok], 0           ; about the note that just went away, and
+    mov byte [np_fcdirty], 1        ; an undo record applied to a different
+                                    ; note corrupts it (SPEC.md 27.9)
+    call np_hmark                   ; a whole new note is a whole new height
     mov word [np_top], 0            ; a NOTE row, so it names nothing once the
                                     ; note is replaced - and the top of a file
                                     ; just opened is where a reader starts
@@ -3310,16 +4040,59 @@ np_onkey:
     push dx
     push di
 
-    cmp ah, NP_KEY_SAVE
-    jne .nosave
-    call np_save
-    jmp .redraw                 ; near: the key ladder below outruns a short
-.nosave:                        ; jump
-    cmp ah, NP_KEY_LOAD
-    jne .noload
-    mov al, FDLG_OPEN           ; F3 ASKS now (SPEC.md 27.1): a load with no
-    call np_dlgopen             ; way to say what was never the useful half.
-    jmp .out                    ; No repaint - the dialog is on top of us
+    ; --- the keys that mean the same thing wherever the focus is -----------
+    ; They come first because the find panel must not swallow F3, and the
+    ; document must not swallow Ctrl-F. Everything below this block is routed
+    ; by [np_ffield] (SPEC.md 27.10).
+    cmp ah, NP_KEY_NEXT
+    jne .nonext
+    call np_donext              ; F3 - it WAS Load, which is Ctrl-O and the
+    jmp .redraw                 ; File menu now (SPEC.md 27.10). Near: the key
+                                ; ladder below outruns a short jump
+.nonext:
+    cmp ah, NP_KEY_PREV
+    jne .noprev
+    call np_doprev              ; Shift-F3
+    jmp .redraw
+.noprev:
+    or al, al
+    jz .noctl                   ; an extended key carries no ascii, so none of
+                                ; the control characters below can be one
+    cmp al, NP_C_FIND
+    je .kfind
+    cmp al, NP_C_REPL
+    je .krepl
+    cmp al, NP_C_ESC
+    je .kesc
+    cmp al, NP_C_TAB
+    je .ktab
+    cmp al, NP_C_COPY
+    je .kcopy
+    cmp al, NP_C_CUT
+    je .kcut
+    cmp al, NP_C_PASTE
+    je .kpaste
+    cmp al, NP_C_UNDO
+    je .kundo
+    cmp al, NP_C_SELALL
+    je .kselall
+    cmp al, NP_C_SAVE
+    je .ksave
+    cmp al, NP_C_OPEN
+    je .kopen
+.noctl:
+    cmp byte [np_ffield], NP_FF_DOC
+    je .noload                  ; the document has the keys
+    cmp al, 13
+    je .kenter                  ; Enter in a box IS Find Next
+    cmp byte [np_fpan], NP_FPAN_NONE
+    je .noload                  ; no panel on screen can own a keystroke
+    call np_fpkey               ; ...and the find panel has the rest
+    jc .out                     ; not a key it wants: nothing happens
+    mov si, [np_win]            ; np_fpkey is free with SI and np_pdrawf wants
+    call np_pdrawf              ; the window: only the box changed, so only it
+                                ; is redrawn
+    jmp .out
 .noload:
     ; --- moving the caret: no edit, but the screen changes ------------------
     ; An EXTENDED key has AL = 0, and the gate matters: the numeric keypad
@@ -3350,15 +4123,20 @@ np_onkey:
     jb .out
     cmp al, 126
     ja .out
-    call np_fastok                  ; a printable at the caret is THE case the
-                                    ; incremental paths exist for (SPEC.md
-                                    ; 27.3/27.4); Enter is not, and jumps in
-                                    ; below this
-.append:
+    call np_selkill                 ; typing REPLACES a selection (SPEC.md
+    call np_fastok                  ; 27.8), and the two halves land in one
+    jmp short .doins                ; undo group. A printable at the caret is
+                                    ; THE case the incremental paths exist for
+                                    ; (SPEC.md 27.3/27.4); Enter is not, and
+.append:                            ; jumps in below np_fastok
+    call np_selkill
+.doins:
     call np_ins                     ; at the caret, which follows it
-    jmp short .edited
+    jmp .edited
 
 .bksp:
+    call np_selkill
+    jnc .edited                     ; the selection WAS the deletion
     cmp word [np_cur], 0
     je .out                         ; nothing to the left of the caret
     call np_fastokb                 ; ...and so is a backspace, as long as the
@@ -3367,6 +4145,8 @@ np_onkey:
     jmp short .edited
 
 .del:
+    call np_selkill
+    jnc .edited
     mov ax, [np_cur]                ; forward delete: the caret stays put
     cmp ax, [np_len]
     jae .out
@@ -3375,12 +4155,14 @@ np_onkey:
     jmp short .edited
 
 .left:
+    call np_caretpre
     cmp word [np_cur], 0
     je .out
     call np_fastokm                 ; a caret move is not an edit, but the row
     dec word [np_cur]               ; above it still cannot have changed
     jmp short .edited
 .right:
+    call np_caretpre
     mov ax, [np_cur]
     cmp ax, [np_len]
     jae .out
@@ -3388,18 +4170,22 @@ np_onkey:
     inc word [np_cur]
     jmp short .edited
 .up:
+    call np_caretpre
     mov dx, -8
     call np_vmove
     jmp short .edited
 .down:
+    call np_caretpre
     mov dx, 8
     call np_vmove
     jmp short .edited
 .home:
+    call np_caretpre
     xor dx, dx
     call np_hmove
     jmp short .edited
 .end:
+    call np_caretpre
     mov dx, 0x7FFF
     call np_hmove
 
@@ -3422,6 +4208,126 @@ np_onkey:
     pop cx
     pop bx
     pop ax
+    ret
+
+    ; --- the shortcuts (SPEC.md 27.8/27.10) --------------------------------
+    ; Reached only by the ladder at the top of this proc, which is why they
+    ; sit past its `ret`: every one of them ends by jumping back into it.
+.kfind:
+    mov al, NP_FPAN_FIND
+    jmp short .kpan
+.krepl:
+    mov al, NP_FPAN_REPL
+.kpan:
+    cmp [np_fpan], al
+    je .kfocus                      ; already up in this mode: the shortcut
+    call np_fopen                   ; means "put the cursor back in the box"
+    call np_redrawall               ; the panel moved [np_ty]: everything below
+    jmp .out                        ; it wraps into a different set of rows
+.kfocus:
+    mov al, NP_FF_FIND
+    call np_ffocus
+    call np_fpaint
+    jmp .out
+.kesc:
+    cmp byte [np_fpan], NP_FPAN_NONE
+    je .kescsel
+    call np_fclose
+    call np_redrawall
+    jmp .out
+.kescsel:
+    call np_selclr
+    jc .out
+    mov byte [np_ckok], 0
+    jmp .redraw
+.ktab:
+    cmp byte [np_fpan], NP_FPAN_NONE
+    je .out
+    mov al, [np_ffield]             ; Find -> Repl -> the document -> Find
+    inc al
+    cmp al, NP_FF_DOC
+    jbe .ktset
+    xor al, al
+.ktset:
+    cmp al, NP_FF_REPL
+    jne .ktok
+    cmp byte [np_fpan], NP_FPAN_REPL
+    je .ktok
+    inc al                          ; there is no Replace box in Find mode
+.ktok:
+    call np_ffocus
+    call np_fpaint
+    jmp .out
+.kcopy:
+    call np_uclose
+    call np_copy
+    jmp .redraw
+.kcut:
+    call np_uclose
+    call np_cut
+    jmp short .kstamp
+.kpaste:
+    call np_paste
+    jmp short .kstamp
+.kundo:
+    call np_undo
+    jnc .kstamp
+    mov ax, np_m_noundo
+    call np_saymsg
+    jmp .redraw
+.kselall:
+    call np_uclose
+    xor ax, ax
+    mov dx, [np_len]
+    call np_selset
+    mov [np_cur], dx
+    mov byte [np_ckok], 0
+    jmp .redraw
+.ksave:
+    call np_uclose
+    call np_save
+    jmp .redraw
+.kopen:
+    call np_uclose
+    mov al, FDLG_OPEN
+    call np_dlgopen
+    jmp .out                        ; no repaint: the dialog is on top of us
+.kenter:
+    call np_donext                  ; Enter in a find box is Find Next
+    jmp .redraw
+.kstamp:
+    call OSAPI_GET_TICKS            ; an EDIT, so the settle clock restarts -
+    mov [np_ktick], ax              ; but the toast it may have set stands,
+    jmp .redraw                     ; which is why this is not .edited
+
+; -----------------------------------------------------------------------------
+; np_selkill - an edit is about to happen: if a selection is up, it goes
+; out: CF = 1 there was none; preserves all registers
+; -----------------------------------------------------------------------------
+np_selkill:
+    call np_seldel
+    jc .out
+    call np_editinv
+    clc
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; np_caretpre - a caret key is about to run: end the edit group and drop the
+;               selection
+; out: nothing; preserves all registers
+;
+; Clearing [np_ckok] when a selection actually went is the load-bearing half.
+; The checkpoint lets np_redraw resume its walk at the caret's own row, and a
+; selection reaches rows ABOVE that - a resumed walk never re-signs them, so
+; the inversion would stay drawn on a row nothing intends to redraw again.
+; -----------------------------------------------------------------------------
+np_caretpre:
+    call np_uclose
+    call np_selclr
+    jc .out
+    mov byte [np_ckok], 0
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3650,13 +4556,6 @@ np_redraw:
     call np_toast                   ; the thumb, and nothing else redraws it
                                     ; on this path
 .done:
-    cmp byte [np_hdirty], 0         ; the height is a lower bound and only the
-    je .nohire                      ; worker puts it right, so a note that has
-    mov ax, [np_drows]              ; outgrown its window needs one hired -
-    cmp ax, [np_vrows]              ; same lazy rule as the visual break, and
-    jbe .nohire                     ; for the same reason: a note that fits
-    call np_hire                    ; needs neither
-.nohire:
     mov byte [np_resume], 0
     jmp short .out
 
@@ -3721,6 +4620,14 @@ np_redraw:
     mov bx, si                      ; the white fill erased the grow box;
     call OSAPI_WM_GROW              ; restore it (SPEC.md 11.1/27)
 .out:
+    call np_hirechk                 ; a debt left by ANY of this routine's
+                                    ; exits, not just the .done path it used to
+                                    ; hang off - .fullpaint fell straight past
+                                    ; that one (SPEC.md 27.7.3)
+    call np_selmark                 ; the screen shows this selection now
+    mov byte [np_selonly], 0        ; ONE-SHOT: whoever set it meant THIS
+                                    ; redraw, and the next one may well be a
+                                    ; keystroke that moves characters
     mov byte [np_follow], 0         ; ONE-SHOT, like [np_fast]: whoever set it
                                     ; meant this redraw and no other, and the
                                     ; next one may well be a scroll bar click
@@ -3754,7 +4661,7 @@ np_new:
     call np_resize              ; place, so this cannot fail (SPEC.md 50.3.1)
     pop ax
     jmp np_defname              ; a new note is a new document: leaving the
-                                ; old name would make the next F2 overwrite
+                                ; old name would make the next Ctrl-S overwrite
                                 ; the file the user just walked away from
 
 ; -----------------------------------------------------------------------------
@@ -3763,7 +4670,7 @@ np_new:
 ;      BX = our menu set ptr; gfx lock held by the caller, UI task
 ; out: nothing; clobbers AX/BX/CX/DX/DI/ES like any window callback
 ;
-; Open and Save are menu-driven twins of F3 and F2 - the same np_load /
+; Open and Save are menu-driven twins of Ctrl-O and Ctrl-S - the same np_load /
 ; np_save the keyboard path calls, so the two doors can never drift apart;
 ; New is menu-only, and empties the buffer. Every item changes
 ; what the window shows - the text, the toast, or both - and the kernel does
@@ -3773,8 +4680,71 @@ np_new:
 ; the first case.
 ; -----------------------------------------------------------------------------
 np_oncmd:
+    call np_uclose                  ; a menu command is not typing, so the edit
+                                    ; group it interrupts is finished
     test ah, ah
-    jnz .out                        ; not File: nothing of ours
+    jz .file
+    cmp ah, 1
+    je .edit
+    cmp ah, 2
+    je .find
+    ret                             ; none of ours: do nothing rather than
+                                    ; fall into the first case
+.edit:
+    cmp al, NP_MI_UNDO
+    je .e_undo
+    cmp al, NP_MI_CUT
+    je .e_cut
+    cmp al, NP_MI_COPY
+    je .e_copy
+    cmp al, NP_MI_PASTE
+    je .e_paste
+    cmp al, NP_MI_SELALL
+    je .e_all
+    ret
+.find:
+    cmp al, NP_FI_FIND
+    je .e_find
+    cmp al, NP_FI_NEXT
+    je .e_next
+    cmp al, NP_FI_REPL
+    je .e_repl
+    ret
+.e_undo:
+    call np_undo
+    jnc .draw
+    mov ax, np_m_noundo
+    call np_saymsg
+    jmp short .draw
+.e_cut:
+    call np_cut
+    jmp short .draw
+.e_copy:
+    call np_copy
+    jmp short .draw
+.e_paste:
+    call np_paste
+    jmp short .draw
+.e_all:
+    xor ax, ax
+    mov dx, [np_len]
+    call np_selset
+    mov [np_cur], dx
+    mov byte [np_ckok], 0
+    jmp short .draw
+.e_next:
+    call np_donext
+    jmp short .draw
+.e_find:
+    mov al, NP_FPAN_FIND
+    jmp short .e_pan
+.e_repl:
+    mov al, NP_FPAN_REPL
+.e_pan:
+    call np_fopen
+    jmp np_redrawall                ; a tail call: the panel moved [np_ty], so
+                                    ; every row below it wraps differently
+.file:
     cmp al, NP_MI_NEW
     je .new
     cmp al, NP_MI_OPEN
@@ -3788,6 +4758,7 @@ np_oncmd:
 .new:
     call np_new
 .draw:
+    mov byte [np_follow], 1
     call np_redraw                  ; SI is still the window ptr
 .out:
     ret
@@ -3878,15 +4849,21 @@ np_ondlg:
 ; np_goto - put the volume back in this document's folder (SPEC.md 19.2)
 ; out: nothing; preserves all registers
 ;
-; A file name resolves in the volume's CURRENT directory, and that is one
-; global word shared by every Disk window and by the file dialog. Right after
-; Save As it still names the folder the user picked - which is why saving
-; into a folder worked - but by the next Save anything that navigated has
-; moved it, and the write landed in the root. The pair OSAPI_FILE_HERE
-; recorded is what says otherwise.
+; **THE KERNEL DOES THIS NOW, and this routine is kept as a no-op that costs
+; two compares** (SPEC.md 19.2.1). A file name used to resolve in the ONE
+; global current directory shared by every Disk window and by the file
+; dialog: right after Save As it still named the folder the user picked -
+; which is why saving into a folder worked - but by the next Save anything
+; that navigated had moved it, and the write landed in the root. Four
+; packages each carried their own copy of the six lines below, which is what
+; eventually said the kernel owed the feature rather than the SDK owing an
+; example. An instance owns its directory now, so OSAPI_FILE_HERE answers
+; this document's folder and the OSAPI_FILE_GOTO below never fires.
 ;
-; A remount is real floppy I/O, so it is skipped when the volume is already
-; there, which is the common case.
+; It stays because the slots keep their contract (SPEC.md 20.8 rule 4) and
+; because a remount was always skipped when the volume was already there -
+; which is now every time. Deleting it would be correct and would also delete
+; the record of why it was ever needed.
 ; -----------------------------------------------------------------------------
 np_goto:
     push ax
@@ -3910,11 +4887,70 @@ np_goto:
     ret
 
 ; -----------------------------------------------------------------------------
+; np_arg - open the document we were launched to open (SPEC.md 54.5)
+; in:  nothing; called from np_entry once the window and the claim exist
+; out: nothing; preserves all registers AND the flags, because the CF this
+;      package owes the loader is still riding in them
+;
+; The kernel hands over a name and a (cluster, volume) pair rather than
+; putting us in the right folder, because it cannot: the loader read our own
+; image out of OUR directory and far-called this entry as one unit. So the
+; whole of accepting a document is to copy the name, record the folder the
+; way Save As already records one, and let np_load do what Ctrl-O does.
+;
+; The name lives in the KERNEL segment, so ES is loaded explicitly rather
+; than trusted: it happens to still be KERNEL_SEG here, and a later edit that
+; left a package segment in ES would read this package's own image as a file
+; name and fail in a way that looks like a kernel bug.
+; -----------------------------------------------------------------------------
+np_arg:
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call OSAPI_ARG_FILE             ; CF=1 = launched empty, the usual case
+    jc .out
+    mov [np_dir], dx                ; the folder it lives in, recorded the
+    mov [np_drv], bl                ; way Save As records one - np_goto then
+    mov byte [np_dirok], 1          ; takes np_load there
+    mov ax, KERNEL_SEG
+    mov es, ax
+    mov di, np_name
+    mov cx, 13
+.copy:
+    mov al, [es:si]
+    mov [di], al
+    or al, al
+    jz .named
+    inc si
+    inc di
+    loop .copy
+    mov byte [di], 0
+.named:
+    push ds
+    pop es                          ; ES = DS again, the callback default
+    call np_load                    ; ...and this is Ctrl-O, unchanged
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; np_defname - seed the current document name (internal)
 ; in:  nothing
 ; out: np_name = 'NOTES.TXT'; preserves all registers
 ; The loader zeroes our bss (SPEC.md 21 step 5), and an empty name would
-; make F2 fail with FERR_NAME on a brand-new note - so a fresh Note Pad
+; make Ctrl-S fail with FERR_NAME on a brand-new note - so a fresh Note Pad
 ; still has the document the fixed-name version always had.
 ; -----------------------------------------------------------------------------
 np_defname:
@@ -3972,6 +5008,3894 @@ np_setmsg:
     pop ax
     ret
 
+; =============================================================================
+; THE SELECTION (SPEC.md 27.8)
+;
+; A range of character indices, [np_sel0], [np_sel1), and an inversion drawn
+; over the cells that fall inside it. Two things make it nearly free.
+;
+; It is an XOR FILL, per row, applied by np_rflush right after the run that
+; drew that row - so it costs one primitive call per selected row and needs no
+; second colour, no second font pass and no change to how a row is measured.
+; On the two 1bpp adapters an inversion is what a Macintosh selection IS.
+;
+; And it rides the row signatures (SPEC.md 27.2) rather than sitting beside
+; them: a cell inside the selection folds with bit 15 of its character set, so
+; a selection that moves dirties exactly the rows it left and the rows it
+; arrived at, and a redraw that changed nothing still draws nothing. The one
+; thing signatures cannot carry is which CELLS of a redrawn row are inverted -
+; a row can be redrawn for a reason that has nothing to do with the selection
+; - so np_rflush keeps [np_prs0]/[np_prs1] the way it keeps [np_prcc], and
+; folds the union of the old span and the new one into the cells it redraws.
+;
+; XOR is its own inverse, and that is the sharp edge here. A cell the run did
+; NOT redraw still carries the inversion the last pass gave it, so inverting
+; it a second time would take it away - which is why np_selxor intersects the
+; row's selected span with [np_flo]..[np_fhi], the cells actually written.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; np_selq - is character index AX inside the selection?
+; in:  AX = a character index; out: CF = 1 if it is; preserves all registers
+; -----------------------------------------------------------------------------
+np_selq:
+    cmp byte [np_selon], 0
+    je .no
+    cmp ax, [np_sel0]
+    jb .no
+    cmp ax, [np_sel1]
+    jae .no
+    stc
+    ret
+.no:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; np_selqo - was character index AX selected in the selection ON SCREEN?
+; in:  AX; out: CF = 1 if it was; preserves all registers
+; -----------------------------------------------------------------------------
+np_selqo:
+    cmp byte [np_oselon], 0
+    je .no
+    cmp ax, [np_osel0]
+    jb .no
+    cmp ax, [np_osel1]
+    jae .no
+    stc
+    ret
+.no:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; np_xfold - widen the row's CHANGED-inversion span to include column AX
+; in:  AX; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_xfold:
+    cmp word [np_xs0], 0xFFFF
+    jne .lo
+    mov [np_xs0], ax
+    mov [np_xs1], ax
+    ret
+.lo:
+    cmp ax, [np_xs0]
+    jae .hi
+    mov [np_xs0], ax
+.hi:
+    cmp ax, [np_xs1]
+    jbe .out
+    mov [np_xs1], ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; np_selfold - widen the row's inverted span to include cell column AX
+; in:  AX = a column; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_selfold:
+    cmp word [np_rs0], 0xFFFF
+    jne .lo
+    mov [np_rs0], ax
+    mov [np_rs1], ax
+    ret
+.lo:
+    cmp ax, [np_rs0]
+    jae .hi
+    mov [np_rs0], ax
+.hi:
+    cmp ax, [np_rs1]
+    jbe .out
+    mov [np_rs1], ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; np_selxor - invert the selected cells of the row just drawn
+; in:  [np_rs0]/[np_rs1] = the row's selected span (0xFFFF = none),
+;      [np_flo]/[np_fhi] = the cells the run actually wrote, [np_rby],
+;      [np_tx]; gfx lock held
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_selxor:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [np_rs0]
+    cmp ax, 0xFFFF
+    je .out
+    mov cx, [np_rs1]
+    cmp ax, [np_flo]            ; the intersection, and nothing wider: a cell
+    jae .l0                     ; the run did not touch is still carrying the
+    mov ax, [np_flo]            ; inversion the last pass gave it, and a
+.l0:                            ; second XOR would take it back off
+    cmp cx, [np_fhi]
+    jbe .l1
+    mov cx, [np_fhi]
+.l1:
+    cmp ax, cx
+    ja .out
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_tx]             ; AX = x1
+    push ax
+    mov ax, cx
+    inc ax
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_tx]
+    dec ax
+    mov cx, ax                  ; CX = x2, the last column of the last cell
+    pop ax
+    mov bx, [np_rby]
+    mov dx, bx
+    add dx, 7
+    call OSAPI_GFX_XOR_FILL
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_selclr - there is no selection any more
+; out: CF = 1 there was none to clear (so nothing needs redrawing);
+;      preserves all registers
+; -----------------------------------------------------------------------------
+np_selclr:
+    cmp byte [np_selon], 0
+    je .none
+    mov byte [np_selon], 0
+    clc
+    ret
+.none:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; np_selset - select [AX, DX), in either order
+; in:  AX, DX = two character indices; out: nothing; preserves all registers
+; An empty range is no selection at all, which is what makes "click" and
+; "drag back to where you started" the same thing.
+; -----------------------------------------------------------------------------
+np_selset:
+    push ax
+    push dx
+    cmp ax, dx
+    jbe .ord
+    xchg ax, dx
+.ord:
+    cmp ax, dx
+    je .none
+    mov [np_sel0], ax
+    mov [np_sel1], dx
+    mov byte [np_selon], 1
+    jmp short .out
+.none:
+    mov byte [np_selon], 0
+.out:
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_selget - the live selection
+; out: CF = 1 there is none; else CF = 0 with AX = its start and CX = its
+;      length; preserves all other registers
+; -----------------------------------------------------------------------------
+np_selget:
+    cmp byte [np_selon], 0
+    je .no
+    mov ax, [np_sel0]
+    cmp ax, [np_len]
+    jae .no                     ; the note is SHORTER than the selection now
+    mov cx, [np_sel1]
+    cmp cx, [np_len]            ; ...and the far end is clamped rather than
+    jbe .end                    ; refused, so a shrink leaves the part of the
+    mov cx, [np_len]            ; selection that still exists selected
+.end:
+    cmp cx, ax
+    jbe .no                     ; BELOW, not just equal: an inverted pair here
+                                ; would make `sub` answer ~65,000 and hand
+                                ; that to whoever asked - clip_put refuses it,
+                                ; but np_rev would swap bytes clean off the
+                                ; end of the document claim
+    sub cx, ax
+    clc
+    ret
+.no:
+    xor ax, ax
+    xor cx, cx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; np_seldel - delete the selection; the caret lands where it began
+; out: CF = 1 there was none; preserves all registers
+; -----------------------------------------------------------------------------
+np_seldel:
+    push ax
+    push bx
+    push cx
+    call np_selget
+    jc .no
+    mov bx, ax
+    call np_delspan
+    mov [np_cur], bx
+    call np_selclr
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; Editing a RANGE (SPEC.md 27.8)
+;
+; np_ins and np_del were the whole edit surface, and both were "one character
+; at the caret". Cut, Paste, Replace and Undo all move runs, so the run is the
+; primitive now and the two old routines are cases of it.
+;
+; Both record undo BEFORE they move anything (SPEC.md 27.9) - a deletion has
+; to reach the undo blob while its bytes are still in the note - and both
+; leave [np_cur] alone. Where the caret goes afterwards is the caller's
+; decision and differs for every one of them.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; np_capfor - make the document claim hold AX bytes
+; in:  AX = the bytes wanted
+; out: CF = 0 and [np_cap] >= AX; CF = 1 refused. Preserves all registers.
+; -----------------------------------------------------------------------------
+np_capfor:
+    push ax
+    push bx
+    push cx
+    mov bx, ax
+    cmp bx, [np_cap]
+    jbe .yes
+    mov ax, bx
+    add ax, 1023
+    jc .no                      ; past 64KB, which NP_MAXKB refuses anyway
+    mov cl, 10
+    shr ax, cl
+    call np_resize              ; clamps to NP_MAXKB and may be refused
+    jc .no
+    cmp bx, [np_cap]
+    ja .no                      ; the clamp bit: the note is as big as it gets
+.yes:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_delspan - remove CX bytes at index BX
+; in:  BX = the first index to go, CX = how many (both clamped to the note)
+; out: nothing; preserves all registers. [np_len] shrinks; [np_cur] is the
+;      caller's business.
+; -----------------------------------------------------------------------------
+np_delspan:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov ax, [np_len]
+    cmp bx, ax
+    jae .out
+    sub ax, bx
+    cmp cx, ax
+    jbe .have
+    mov cx, ax
+.have:
+    jcxz .out
+    call np_hmark
+    mov ax, bx
+    call np_urec_del            ; while the bytes are still here to be copied
+    mov es, [np_dseg]
+    mov si, bx
+    add si, cx                  ; the first byte that survives
+    mov di, bx
+    mov dx, [np_len]
+    sub dx, si                  ; ...and how many of them there are
+.mv:
+    or dx, dx
+    jz .close
+    mov al, [es:si]
+    mov [es:di], al
+    inc si
+    inc di
+    dec dx
+    jmp short .mv
+.close:
+    mov ax, [np_len]
+    sub ax, cx
+    mov [np_len], ax
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_gaproom - open a CX-byte gap at index BX for the caller to fill
+; in:  BX = where, CX = how many
+; out: CF = 0 and [np_len] already counts the gap; CF = 1 refused and nothing
+;      moved. Preserves all registers.
+;
+; It does NOT record undo: the caller knows what it is about to put there and
+; how much of it survives, and a paste's filter can shorten it afterwards.
+; -----------------------------------------------------------------------------
+np_gaproom:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    jcxz .ok
+    mov ax, [np_len]
+    add ax, cx
+    jc .no                      ; a 16-bit note cannot pass 65535
+    call np_capfor
+    jc .no
+    mov es, [np_dseg]
+    mov si, [np_len]
+    dec si                      ; the last live byte
+    mov di, si
+    add di, cx
+    mov dx, [np_len]
+    sub dx, bx                  ; the bytes to the right of the gap
+.mv:
+    or dx, dx
+    jz .done
+    mov al, [es:si]
+    mov [es:di], al
+    dec si
+    dec di
+    dec dx
+    jmp short .mv
+.done:
+    mov ax, [np_len]
+    add ax, cx
+    mov [np_len], ax
+    call np_hmark
+.ok:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_editinv - the layout state is all indices into a buffer that just moved
+; out: nothing; preserves all registers
+;
+; The lighter half of np_clamp: it does NOT put the view back at the top,
+; because a paste, a replace and an undo all happen where the user is looking
+; and scrolling away from that would be the opposite of helpful. What it must
+; do is drop the checkpoint and np_rows - np_redraw seeds the next walk from
+; one of them, and both are character indices whose row a bulk edit above the
+; view has just renamed.
+; -----------------------------------------------------------------------------
+np_editinv:
+    push ax
+    call np_hmark
+    mov byte [np_ckok], 0
+    mov byte [np_rowsok], 0
+    mov byte [np_fcok], 0       ; ...and the match count counted the old note
+    mov byte [np_fcdirty], 1
+    mov word [np_fmno], 0
+    mov ax, [np_len]
+    cmp [np_cur], ax
+    jbe .cur
+    mov [np_cur], ax
+.cur:
+    cmp byte [np_selon], 0      ; the SELECTION is a pair of indices into the
+    je .out                     ; same buffer and it was clamped nowhere: a
+    cmp [np_sel1], ax           ; Replace All that shortens the note, or an
+    jbe .out                    ; undo of a paste, leaves it pointing past the
+    mov [np_sel1], ax           ; end. np_selget clamps too - this is the
+    mov ax, [np_sel0]           ; other half, so the stored pair is never a
+    cmp ax, [np_sel1]           ; lie in the first place
+    jb .out
+    mov byte [np_selon], 0      ; nothing of it survives
+.out:
+    pop ax
+    ret
+
+; =============================================================================
+; Cut, Copy and Paste over the system clipboard (SPEC.md 55/27.8)
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; np_copy - put the selection on the clipboard
+; out: CF = 1 nothing was selected, or the clipboard refused (and then the
+;      toast says so); preserves all registers
+; -----------------------------------------------------------------------------
+np_copy:
+    push ax
+    push bx
+    push cx
+    push si
+    push es
+    call np_selget              ; AX = start, CX = length
+    jc .no
+    mov si, ax
+    mov es, [np_dseg]           ; the note is a claim of its own, which is
+    call OSAPI_CLIP_PUT         ; exactly why the slot takes a far pointer
+    jc .full
+    clc
+    jmp short .out
+.full:
+    mov ax, np_e_cbig
+    call np_saymsg
+    stc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_cut - copy the selection, then take it out
+; out: CF = 1 nothing happened; preserves all registers
+; The copy comes first and its refusal is final: a cut that lost the text
+; because the clipboard would not hold it is the one outcome nobody can undo
+; from the keyboard.
+; -----------------------------------------------------------------------------
+np_cut:
+    call np_copy
+    jc .out
+    call np_seldel
+    call np_editinv
+    clc
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; np_paste - replace the selection with the clipboard's text
+; out: CF = 1 nothing happened; preserves all registers
+;
+; No staging buffer, and that is the point of doing it in this order: the gap
+; is opened in the document first and OSAPI_CLIP_GET writes straight into it,
+; so a 4KB paste needs 4KB of document and not 8KB of anything.
+;
+; What arrives is then FILTERED in place, because the clipboard is shared and
+; the bytes in it were put there by another program: a stray control code
+; would draw as a random glyph and a lone LF would show as a missing line
+; break. CR LF folds to one 13, a lone LF likewise, and anything else outside
+; 32..126 is dropped - exactly np_load's rule, for exactly np_load's reason.
+; -----------------------------------------------------------------------------
+np_paste:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call OSAPI_CLIP_SIZE        ; AX = the whole length; CF = 1 = it is empty
+    jc .none
+    mov dx, ax                  ; DX = n, held all the way through
+    call np_seldel              ; a paste REPLACES the selection - and the two
+                                ; halves land in ONE undo group, because the
+                                ; insert starts exactly where the delete left
+    mov bx, [np_cur]
+    mov cx, dx
+    call np_gaproom
+    jc .nomem
+    mov es, [np_dseg]
+    mov di, bx
+    mov cx, dx
+    call OSAPI_CLIP_GET         ; ES:DI = the gap; it holds the text now
+    mov si, bx                  ; read...
+    mov di, bx                  ; ...and write, both inside the gap
+    mov cx, dx
+    xor ax, ax                  ; AL = the byte before, AH = this one
+.f:
+    jcxz .fdone
+    mov ah, [es:si]
+    inc si
+    dec cx
+    cmp ah, 10
+    jne .fnotlf
+    cmp al, 13
+    je .fskip                   ; CR LF: the 13 already went in
+    mov ah, 13                  ; a lone LF is a line break too
+.fnotlf:
+    cmp ah, 13
+    je .fkeep
+    cmp ah, 32
+    jb .fskip
+    cmp ah, 126
+    ja .fskip
+.fkeep:
+    mov [es:di], ah
+    inc di
+.fskip:
+    mov al, ah
+    jmp short .f
+.fdone:
+    mov cx, di
+    sub cx, bx                  ; CX = the bytes that survived
+    push cx
+    mov si, bx
+    add si, dx                  ; the first byte past the gap
+    mov cx, [np_len]
+    sub cx, si                  ; ...and the tail behind it
+.t:
+    jcxz .tdone
+    mov ah, [es:si]
+    mov [es:di], ah
+    inc si
+    inc di
+    dec cx
+    jmp short .t
+.tdone:
+    pop cx
+    mov ax, [np_len]
+    sub ax, dx
+    add ax, cx
+    mov [np_len], ax            ; the gap was n; only CX of it is text
+    mov ax, bx
+    call np_urec_ins            ; AX = where, CX = how many
+    add bx, cx
+    mov [np_cur], bx
+    call np_editinv
+    clc
+    jmp short .out
+.nomem:
+    mov ax, np_e_nomem
+    call np_saymsg
+    stc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; UNDO, five edits deep (SPEC.md 27.9)
+;
+; An EDIT is a burst of keystrokes with no half-second gap in it - which is
+; what the user means by one - and the clock that measures it is the worker
+; that was already there for the visual break (SPEC.md 27.3). A group also
+; closes on anything that is not an edit (a click, a caret key, a save, a
+; menu command) and on an edit that does not touch the group's own span,
+; because the record can only describe a contiguous change.
+;
+; A record is three numbers and a blob: at [np_upos], this group INSERTED
+; [np_uins] bytes and REMOVED the [np_udel] bytes now sitting at [np_uoff] in
+; the arena. Undoing it is "delete uins at upos, put the blob back at upos",
+; and that is the whole of it - which is also why there is no redo: the
+; inverse record would need the bytes that are being taken back out, and
+; nobody asked for one.
+;
+; The blobs live in a HEAP CLAIM sized on demand: nothing at all until the
+; first edit worth remembering, a kilobyte at a time after that, and up to
+; NP_UMAXKB. When it will not grow, the OLDEST record is evicted - a stack
+; four deep is still an undo, and a refusal is not - and only when there is
+; nothing left to evict is the whole stack dropped. It has to be the whole
+; stack: an edit that went unrecorded makes every record under it describe a
+; note that no longer exists, and applying one would corrupt the document.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; np_uclear - forget every record and give the arena back
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_uclear:
+    push ax
+    push bx
+    push dx
+    mov byte [np_un], 0
+    mov byte [np_uopen], 0
+    mov word [np_utop], 0
+    mov dx, [np_useg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE         ; the owner is our segment, which the slot's
+    mov word [np_useg], 0       ; X stub supplies (SPEC.md 50.3)
+    mov word [np_ukb], 0
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_uclose - the open group is finished; the next edit starts a new one
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_uclose:
+    mov byte [np_uopen], 0
+    ret
+
+; -----------------------------------------------------------------------------
+; np_utop_rec - the newest record, if one is open
+; out: CF = 1 there is none; else CF = 0 and SI = its word offset (every
+;      array below is indexed by it). Clobbers BX and SI.
+; -----------------------------------------------------------------------------
+np_utop_rec:
+    cmp byte [np_uopen], 0
+    je .no
+    mov bl, [np_un]
+    xor bh, bh
+    or bx, bx
+    jz .no
+    dec bx
+    shl bx, 1
+    mov si, bx
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; np_ugrow - make the arena AX kilobytes
+; in:  AX = KB; out: CF = 1 refused; preserves all registers
+; -----------------------------------------------------------------------------
+np_ugrow:
+    push ax
+    push bx
+    push dx
+    cmp ax, [np_ukb]
+    jbe .yes
+    cmp word [np_useg], 0
+    jne .re
+    call OSAPI_MEM_CLAIM        ; out CF = 0, DX = the base
+    jc .no
+    mov [np_useg], dx
+    mov [np_ukb], ax
+    jmp short .yes
+.re:
+    mov dx, [np_useg]
+    call OSAPI_MEM_REGROW       ; out CF = 0, DX = the base NOW - a grow that
+    jc .no                      ; had to move reports a new one (50.3.1)
+    mov [np_useg], dx
+    mov [np_ukb], ax
+.yes:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_udrop0 - forget the OLDEST record, sliding the arena down under it
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_udrop0:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    cmp byte [np_un], 0
+    je .out
+    mov cx, [np_udel]           ; record 0's blob, which starts at offset 0
+    or cx, cx
+    jz .arrays
+    mov es, [np_useg]
+    mov si, cx
+    xor di, di
+    mov bx, [np_utop]
+    sub bx, cx
+.mv:
+    or bx, bx
+    jz .shrunk
+    mov al, [es:si]
+    mov [es:di], al
+    inc si
+    inc di
+    dec bx
+    jmp short .mv
+.shrunk:
+    mov ax, [np_utop]
+    sub ax, cx
+    mov [np_utop], ax
+.arrays:
+    xor bx, bx                  ; shift the four arrays down one, and every
+.sh:                            ; surviving blob offset with them
+    mov al, [np_un]
+    xor ah, ah
+    dec ax
+    cmp bx, ax
+    jae .last
+    mov si, bx
+    shl si, 1
+    mov ax, [si+np_upos+2]
+    mov [si+np_upos], ax
+    mov ax, [si+np_uins+2]
+    mov [si+np_uins], ax
+    mov ax, [si+np_udel+2]
+    mov [si+np_udel], ax
+    mov ax, [si+np_uoff+2]
+    sub ax, cx
+    mov [si+np_uoff], ax
+    inc bx
+    jmp short .sh
+.last:
+    dec byte [np_un]
+    cmp byte [np_un], 0
+    jne .out
+    mov byte [np_uopen], 0      ; the record that went WAS the open one, and
+                                ; np_utop_rec has to say so - every blob
+                                ; writer re-asks after making room
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_uroom - make sure CX more blob bytes fit
+; in:  CX = the bytes wanted
+; out: CF = 0 there is room; CF = 1 there is not and the whole stack has been
+;      dropped. Preserves all registers.
+; -----------------------------------------------------------------------------
+np_uroom:
+    push ax
+    push bx
+    push cx
+    push dx
+.try:
+    mov ax, [np_utop]
+    add ax, cx
+    jc .evict
+    mov bx, [np_ukb]
+    push cx
+    mov cl, 10
+    shl bx, cl
+    pop cx
+    cmp ax, bx
+    jbe .yes
+    push cx
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl
+    pop cx
+    cmp ax, NP_UMAXKB
+    ja .evict
+    call np_ugrow
+    jnc .yes
+.evict:
+    cmp byte [np_un], 0
+    je .no
+    call np_udrop0
+    jmp short .try
+.no:
+    call np_uclear
+    stc
+    jmp short .out
+.yes:
+    clc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_ublob_copy - CX note bytes at SI into the arena at ES:DI
+; in:  SI = document offset, DI = arena offset, CX = count, ES = [np_useg]
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_ublob_copy:
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    mov ax, [np_dseg]           ; read it BEFORE DS stops being ours
+    mov ds, ax
+    cld
+    rep movsb
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_ublob_app - append the CX note bytes at AX to the open record's blob
+; in:  AX = document position, CX = count
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_ublob_app:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    call np_uroom               ; may evict, may drop the lot
+    jc .out
+    call np_utop_rec            ; re-asked, because an eviction renumbers the
+    jc .out                     ; records and may have taken this one
+    push si
+    mov di, [np_utop]
+    mov si, ax
+    mov es, [np_useg]
+    call np_ublob_copy
+    pop si
+    mov ax, [np_utop]
+    add ax, cx
+    mov [np_utop], ax
+    mov ax, [si+np_udel]
+    add ax, cx
+    mov [si+np_udel], ax
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_ublob_pre - put the CX note bytes at AX at the FRONT of the open blob,
+;                and start the group CX bytes lower
+; in:  AX = document position, CX = count
+; out: nothing; preserves all registers
+;
+; The open record's blob is always the LAST one in the arena, so sliding it up
+; disturbs nothing else - which is the whole reason the arena is a stack.
+; -----------------------------------------------------------------------------
+np_ublob_pre:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call np_uroom
+    jc .out
+    call np_utop_rec
+    jc .out
+    mov dx, [si+np_udel]        ; the blob's current length...
+    mov bx, [si+np_uoff]        ; ...and where it starts
+    add [si+np_udel], cx
+    sub [si+np_upos], cx        ; the group's span starts CX lower now
+    mov es, [np_useg]
+    push ax
+    mov ax, [np_utop]
+    mov di, ax
+    add di, cx
+    dec di                      ; the new last byte...
+    mov si, ax
+    dec si                      ; ...and the old one
+.sl:
+    or dx, dx
+    jz .slid
+    mov al, [es:si]
+    mov [es:di], al
+    dec si
+    dec di
+    dec dx
+    jmp short .sl
+.slid:
+    pop ax
+    mov si, ax
+    mov di, bx
+    call np_ublob_copy
+    mov ax, [np_utop]
+    add ax, cx
+    mov [np_utop], ax
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_ubegin - close whatever is open and start a record at position AX
+; in:  AX = the group's start; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_ubegin:
+    push ax
+    push bx
+    push si
+    cmp byte [np_un], NP_UNDO
+    jb .have
+    call np_udrop0              ; five deep means the sixth costs the first
+.have:
+    mov bl, [np_un]
+    xor bh, bh
+    mov si, bx
+    shl si, 1
+    mov [si+np_upos], ax
+    mov word [si+np_uins], 0
+    mov word [si+np_udel], 0
+    mov ax, [np_utop]
+    mov [si+np_uoff], ax
+    inc byte [np_un]
+    mov byte [np_uopen], 1
+    call np_hire                ; the group's half-second is measured by the
+                                ; worker (SPEC.md 27.9), and until this it was
+                                ; hired only by the visual break and by a note
+                                ; that outgrew its window - so on a machine
+                                ; with neither, nothing ever closed a group
+                                ; and the whole session was one undo
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_urec_ins - record an insertion of CX bytes at AX
+; in:  AX = where, CX = how many; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_urec_ins:
+    push ax
+    push bx
+    push si
+    cmp byte [np_unolog], 0
+    jne .out
+    jcxz .out
+    call np_utop_rec
+    jc .new
+    mov bx, [si+np_upos]
+    add bx, [si+np_uins]
+    cmp bx, ax
+    jne .new                    ; not where this group left off: a new one
+    add [si+np_uins], cx
+    jmp short .out
+.new:
+    call np_ubegin
+    call np_utop_rec
+    jc .out
+    mov [si+np_uins], cx
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_urec_del - record the removal of CX bytes at AX, copying them into the
+;               arena while they are still in the note
+; in:  AX = where, CX = how many; out: nothing; preserves all registers
+;
+; Four cases, tested in this order, and the order matters:
+;   1. the bytes are ones THIS group inserted - they were never in the note
+;      before it, so nothing reaches the blob and [np_uins] simply shrinks.
+;      This is a backspace walking back over what was just typed;
+;   2. they sit immediately AFTER the group's span - original text, so they
+;      belong at the END of the blob. This is forward Delete while typing;
+;   3. immediately BEFORE it - a backspace walking left out of the group - so
+;      they belong at the FRONT of it and the span starts lower;
+;   4. anywhere else: a new group.
+; Case 1 has to come first because when [np_uins] is 0 cases 2 and 3 can both
+; look true, and taking 1 when it does not apply would forget a deletion.
+; -----------------------------------------------------------------------------
+np_urec_del:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    cmp byte [np_unolog], 0
+    jne .out
+    jcxz .out
+    call np_utop_rec
+    jc .new
+    mov dx, [si+np_upos]
+    add dx, [si+np_uins]        ; DX = one past the group's span
+    mov bx, ax
+    add bx, cx                  ; BX = one past the deletion
+    cmp bx, dx
+    jne .try2
+    cmp cx, [si+np_uins]
+    ja .try2
+    sub [si+np_uins], cx        ; 1.
+    jmp short .out
+.try2:
+    cmp ax, dx
+    jne .try3
+    call np_ublob_app           ; 2.
+    jmp short .out
+.try3:
+    cmp bx, [si+np_upos]
+    jne .new
+    call np_ublob_pre           ; 3.
+    jmp short .out
+.new:
+    call np_ubegin              ; 4. AX is still the position
+    call np_ublob_app
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_urec_bulk - record a whole-span replacement, for the operations that
+;                rewrite more than one place at once
+; in:  AX = where the change begins, CX = the bytes there NOW that are about
+;      to be replaced (Replace All passes the whole tail of the note)
+; out: CF = 1 = it could not be recorded, and the stack has been dropped;
+;      preserves all registers
+;
+; Drag-and-drop and Replace All both move text at two positions at once, which
+; the (pos, inserted, removed) record cannot say. Saying it as ONE replacement
+; of everything between them can, exactly, at the price of a bigger blob - and
+; NP_UMAXKB is 16 so that a Replace All over a full note still fits.
+; np_urec_bulkend closes it with the new length.
+; -----------------------------------------------------------------------------
+np_urec_bulk:
+    push ax
+    push bx
+    push cx
+    push si
+    call np_uclose              ; a bulk change is never part of a typing run
+    call np_ubegin
+    call np_ublob_app
+    call np_utop_rec
+    jc .no
+    cmp [si+np_udel], cx        ; np_ublob_app is allowed to give up
+    jne .no
+    clc
+    jmp short .out
+.no:
+    call np_uclear
+    stc
+.out:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; np_urec_bulkend - in: CX = the bytes that replaced them. Preserves all.
+np_urec_bulkend:
+    push bx
+    push si
+    call np_utop_rec
+    jc .out
+    mov [si+np_uins], cx
+    call np_uclose
+.out:
+    pop si
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; np_undo - take the newest group back (SPEC.md 27.9)
+; out: CF = 1 there was nothing to undo; preserves all registers
+; -----------------------------------------------------------------------------
+np_undo:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call np_uclose
+    cmp byte [np_un], 0
+    je .no
+    mov bl, [np_un]
+    xor bh, bh
+    dec bx
+    shl bx, 1
+    mov si, bx
+    mov byte [np_unolog], 1     ; an undo is not an edit to be remembered
+    mov ax, [si+np_upos]
+    mov cx, [si+np_uins]
+    mov di, [si+np_uoff]
+    mov dx, [si+np_udel]
+    push dx                     ; the blob's length, wanted twice below
+    push di                     ; ...and where it is
+    push ax                     ; ...and where all of this happens
+    jcxz .noins
+    mov bx, ax
+    call np_delspan             ; the group's insertion comes back out
+.noins:
+    pop ax
+    pop di
+    pop dx
+    push ax
+    mov cx, dx
+    jcxz .nodel
+    mov bx, ax
+    call np_gaproom             ; ...and the bytes it removed go back in
+    jc .fail
+    mov si, di
+    mov di, bx
+    push ds
+    push es
+    mov es, [np_dseg]           ; both segments loaded while DS is still ours
+    mov ax, [np_useg]
+    mov ds, ax
+    cld
+    rep movsb
+    pop es
+    pop ds
+.nodel:
+    pop ax
+    add ax, dx                  ; the caret lands at the end of what came back
+    mov [np_cur], ax
+    call np_selclr
+    mov ax, [np_utop]
+    sub ax, dx
+    mov [np_utop], ax           ; the blob is the arena's last, so this is all
+    dec byte [np_un]            ; there is to giving it back
+    mov byte [np_uopen], 0
+    mov byte [np_unolog], 0
+    call np_editinv
+    clc
+    jmp short .out
+.fail:
+    pop ax                      ; the gap was refused: the record stays where
+    mov byte [np_unolog], 0     ; it is and the note is short of its insertion,
+    call np_editinv             ; which is the honest half of an undo rather
+    clc                         ; than a hang
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; =============================================================================
+; The regular-expression matcher (SPEC.md 27.10.1)
+;
+; A backtracking matcher over the note, supporting the subset a text editor
+; actually uses: any character is itself, `.` is any character but a line
+; break, `[abc]` / `[^abc]` / `[a-z]` are classes, `*` `+` `?` repeat the
+; element before them, `^` and `$` anchor to the start and end of a LINE (this
+; is a multi-line document, so anchoring to the note would be useless), and
+; `\` makes the next character literal.
+;
+; IT IS ITERATIVE, WITH AN EXPLICIT STACK, and that is not a style choice. The
+; textbook matcher recurses once per repeat element and once per repetition;
+; the second is fatal on its own (`.*` over a 16KB note is 16,000 frames) and
+; the first is fatal here too, because the match COUNT is recomputed by the
+; worker task and a worker's stack is 256 bytes (SPEC.md 8). So repetition is
+; a greedy count plus a frame that gives ground one at a time, the frames live
+; in bss, and there are NP_RXST of them - a pattern needing more is refused
+; whole, by np_fchk, before anything runs.
+;
+; Matching is CASE SENSITIVE, deliberately. Folding would have to fold class
+; ranges too, and `[a-z]` quietly matching `Q` is a worse surprise than
+; retyping a capital.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; np_docb - AL = the note's byte at index DI
+; np_docb2 - ...and at index AX
+; both preserve every other register
+; -----------------------------------------------------------------------------
+np_docb:
+    push bx
+    push es
+    mov es, [np_dseg]
+    mov bx, di
+    mov al, [es:bx]
+    pop es
+    pop bx
+    ret
+np_docb2:
+    push bx
+    push es
+    mov es, [np_dseg]
+    mov bx, ax
+    mov al, [es:bx]
+    pop es
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; np_rx_next - SI = the offset just past the element at SI
+; in/out: SI; preserves every other register
+; -----------------------------------------------------------------------------
+np_rx_next:
+    push ax
+    mov al, [si]
+    cmp al, '\'
+    jne .nesc
+    inc si
+    cmp byte [si], 0
+    je .out
+    inc si
+    jmp short .out
+.nesc:
+    cmp al, '['
+    jne .one
+    inc si
+    cmp byte [si], '^'
+    jne .c0
+    inc si
+.c0:
+    cmp byte [si], ']'          ; a ']' first is a literal ']', the convention
+    jne .cl
+    inc si
+.cl:
+    mov al, [si]
+    or al, al
+    jz .out                     ; unterminated: the element is the rest of it
+    cmp al, ']'
+    je .close
+    cmp al, '\'
+    jne .cnext
+    inc si
+    cmp byte [si], 0
+    je .out
+.cnext:
+    inc si
+    jmp short .cl
+.close:
+    inc si
+    jmp short .out
+.one:
+    inc si
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_rx_ch - does the element at SI match the character in AL?
+; in:  SI = a pattern offset, AL = a character
+; out: CF = 1 = yes; preserves all registers
+; -----------------------------------------------------------------------------
+np_rx_ch:
+    push ax
+    push bx
+    push cx
+    push si
+    mov bl, [si]
+    cmp bl, '.'
+    jne .notdot
+    cmp al, 13                  ; '.' stops at a line break, which is what
+    je .no                      ; makes '.*' mean "the rest of this line"
+    jmp short .yes
+.notdot:
+    cmp bl, '['
+    je .class
+    cmp bl, '\'
+    jne .lit
+    inc si
+    mov bl, [si]
+    or bl, bl
+    jz .no                      ; a trailing backslash matches nothing
+.lit:
+    cmp al, bl
+    je .yes
+    jmp short .no
+.class:
+    inc si
+    xor ch, ch
+    cmp byte [si], '^'
+    jne .cl
+    mov ch, 1
+    inc si
+.cl:
+    xor cl, cl
+.clp:
+    mov bl, [si]
+    or bl, bl
+    jz .cldone
+    cmp bl, ']'
+    je .cldone
+    cmp bl, '\'
+    jne .nocesc
+    inc si
+    mov bl, [si]
+    or bl, bl
+    jz .cldone
+    jmp short .clone
+.nocesc:
+    cmp byte [si+1], '-'        ; a range, unless the '-' is the class's last
+    jne .clone
+    cmp byte [si+2], ']'
+    je .clone
+    cmp byte [si+2], 0
+    je .clone
+    cmp al, bl
+    jb .clskip
+    cmp al, [si+2]
+    ja .clskip
+    mov cl, 1
+.clskip:
+    add si, 2
+    jmp short .clnext
+.clone:
+    cmp al, bl
+    jne .clnext
+    mov cl, 1
+.clnext:
+    inc si
+    jmp short .clp
+.cldone:
+    or ch, ch
+    jz .clyes
+    xor cl, 1                   ; a negated class
+.clyes:
+    or cl, cl
+    jnz .yes
+.no:
+    clc
+    jmp short .out
+.yes:
+    stc
+.out:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_rx_push - stack a repetition frame
+; in:  BX = the quantifier's offset (the pattern resumes at BX+1), DI = the
+;      text index the repeat started at, DX = the fewest it may keep,
+;      CX = how many it is keeping now
+; out: CF = 1 = NP_RXST frames are already in use; preserves all registers
+; -----------------------------------------------------------------------------
+np_rx_push:
+    push ax
+    push cx
+    push si
+    mov ax, [np_rxsp]
+    cmp ax, NP_RXST
+    jae .no
+    mov si, ax
+    shl si, 1                   ; *8 by hand: CX is an ARGUMENT here, so CL
+    shl si, 1                   ; is not available to shift with
+    shl si, 1
+    add si, np_rxs
+    mov ax, bx
+    inc ax
+    mov [si], ax
+    mov [si+2], di
+    mov [si+4], dx
+    mov [si+6], cx
+    inc word [np_rxsp]
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_rx_top - read the newest frame
+; out: SI = the frame, BX = the resume offset, AX = the text base, DX = the
+;      fewest it may keep, CX = how many it is keeping. Preserves nothing but
+;      DI. Only legal with [np_rxsp] nonzero.
+; -----------------------------------------------------------------------------
+np_rx_top:
+    mov si, [np_rxsp]
+    dec si
+    mov cl, 3
+    shl si, cl
+    add si, np_rxs
+    mov bx, [si]
+    mov ax, [si+2]
+    mov dx, [si+4]
+    mov cx, [si+6]
+    ret
+
+; -----------------------------------------------------------------------------
+; np_rx_at - does the pattern match the note at index AX?
+; in:  AX = the index; the pattern in np_fpat, [np_frx] = regex or literal
+; out: CF = 0 with [np_rxend] = one past the match; CF = 1 = no match HERE
+;      (this asks about one position - np_findfrom is what walks)
+;      Preserves all registers.
+; -----------------------------------------------------------------------------
+np_rx_at:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [np_frx], 0
+    jne .rx
+
+    mov si, np_fpat             ; --- literal ------------------------------
+    mov di, ax
+.ll:
+    mov bl, [si]
+    or bl, bl
+    jz .match
+    mov ax, di
+    cmp ax, [np_len]
+    jae .fail
+    call np_docb
+    cmp al, bl
+    jne .fail
+    inc si
+    inc di
+    jmp short .ll
+
+.rx:                            ; --- regular expression -------------------
+    mov word [np_rxsp], 0
+    mov si, np_fpat
+    mov di, ax
+    cmp byte [si], '^'
+    jne .step
+    inc si                      ; anchored to the start of a LINE
+    or ax, ax
+    jz .step
+    dec ax
+    call np_docb2
+    cmp al, 13
+    jne .fail
+
+.step:
+    mov bl, [si]
+    or bl, bl
+    jz .match
+    cmp bl, '$'
+    jne .elem
+    cmp byte [si+1], 0
+    jne .elem
+    mov ax, di                  ; '$' last: the end of the note, or a line
+    cmp ax, [np_len]            ; break just ahead of us
+    je .match
+    call np_docb
+    cmp al, 13
+    je .match
+    jmp .back
+
+.elem:
+    push si                     ; the element's own offset
+    call np_rx_next
+    mov bl, [si]                ; BL = what follows it
+    cmp bl, '*'
+    je .quant
+    cmp bl, '+'
+    je .quant
+    cmp bl, '?'
+    je .quant
+    pop si                      ; a plain element: one character or nothing
+    mov ax, di
+    cmp ax, [np_len]
+    jae .back
+    call np_docb
+    call np_rx_ch
+    jnc .back
+    inc di
+    call np_rx_next
+    jmp short .step
+
+.quant:
+    mov bx, si                  ; BX = the quantifier
+    pop si                      ; SI = the element it applies to
+    xor cx, cx                  ; greedy first: take as many as there are
+.gr:
+    mov ax, di
+    add ax, cx
+    cmp ax, [np_len]
+    jae .grdone
+    push cx
+    call np_docb2
+    call np_rx_ch
+    pop cx
+    jnc .grdone
+    inc cx
+    cmp cx, 0x7FF0
+    jb .gr
+.grdone:
+    mov al, [bx]
+    cmp al, '?'
+    jne .q2
+    cmp cx, 1
+    jbe .q2
+    mov cx, 1                   ; '?' is at most one
+.q2:
+    xor dx, dx
+    cmp al, '+'
+    jne .q3
+    mov dx, 1                   ; '+' is at least one
+.q3:
+    cmp cx, dx
+    jb .back
+    call np_rx_push             ; a frame, so this can give ground later
+    jc .fail                    ; NP_RXST exceeded: np_fchk should have said
+    add di, cx
+    mov si, bx
+    inc si
+    jmp .step
+
+.back:
+    cmp word [np_rxsp], 0
+    je .fail
+    call np_rx_top              ; SI = the frame, and nothing below moves it
+    or cx, cx
+    jz .pop
+    dec cx
+    cmp cx, dx
+    jb .pop
+    mov [si+6], cx              ; keep one fewer and try the rest again
+    mov si, bx
+    mov di, ax
+    add di, cx
+    jmp .step
+.pop:
+    dec word [np_rxsp]
+    jmp short .back
+
+.match:
+    mov [np_rxend], di
+    clc
+    jmp short .out
+.fail:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_fchk - can this pattern be run at all?
+; out: [np_fbad] set when it cannot; preserves all registers
+;
+; One reason only: more repetition elements than NP_RXST frames. Refusing here
+; rather than mid-match is what lets np_rx_at treat a full stack as impossible
+; and lets the panel say so once instead of finding nothing forever.
+; -----------------------------------------------------------------------------
+np_fchk:
+    push ax
+    push cx
+    push si
+    mov byte [np_fbad], 0
+    cmp byte [np_frx], 0
+    je .out
+    xor cx, cx
+    mov si, np_fpat
+.l:
+    cmp byte [si], 0
+    je .done
+    call np_rx_next
+    mov al, [si]
+    cmp al, '*'
+    je .q
+    cmp al, '+'
+    je .q
+    cmp al, '?'
+    jne .l
+.q:
+    inc si
+    inc cx
+    jmp short .l
+.done:
+    cmp cx, NP_RXST
+    jbe .out
+    mov byte [np_fbad], 1
+.out:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; =============================================================================
+; Finding, and replacing (SPEC.md 27.10)
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; np_findfrom - the first match at or after index AX, wrapping to the top
+; in:  AX = where to start looking
+; out: CF = 0 with AX = the match's start and DX = one past its end;
+;      CF = 1 = the pattern is not in the note at all. Preserves all others.
+;
+; The wrap is unconditional and is the whole of what "loops to the top" means:
+; the second pass stops where the first began, so a pattern that occurs once
+; is found from anywhere and one that occurs nowhere is refused after exactly
+; one traversal.
+; -----------------------------------------------------------------------------
+np_findfrom:
+    push bx
+    push cx
+    push si
+    push di
+    cmp word [np_fpatn], 0
+    je .no
+    cmp byte [np_fbad], 0
+    jne .no
+    mov bx, ax
+    mov cx, [np_len]
+    mov byte [np_fwrap], 0
+.p1:
+    cmp ax, cx
+    ja .wrap
+    call np_rx_at
+    jnc .hit
+    inc ax
+    jmp short .p1
+.wrap:
+    mov byte [np_fwrap], 1      ; past the end and back to the top: whatever
+    xor ax, ax                  ; this finds is match 1 (SPEC.md 27.10)
+.p2:
+    cmp ax, bx
+    jae .no
+    call np_rx_at
+    jnc .hit
+    inc ax
+    jmp short .p2
+.hit:
+    mov dx, [np_rxend]
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; np_findprev - the last match that STARTS before index AX, wrapping to the
+;               bottom of the note
+; in:  AX = the limit
+; out: as np_findfrom
+;
+; One forward walk, remembering the last match seen before the limit and the
+; last one seen at all - because a backtracking matcher cannot be run
+; backwards, and running it forwards twice would cost twice as much. It steps
+; match-to-match rather than character-to-character, so the pass is bounded by
+; the number of matches and not by the length of the note.
+; -----------------------------------------------------------------------------
+np_findprev:
+    push bx
+    push cx
+    push si
+    push di
+    cmp word [np_fpatn], 0
+    je .no
+    cmp byte [np_fbad], 0
+    jne .no
+    mov bx, ax                  ; BX = the limit
+    mov byte [np_fwrap], 0
+    mov cx, 0xFFFF              ; CX = the best answer before it...
+    mov si, 0xFFFF              ; SI = ...and the last one anywhere
+    xor ax, ax
+.l:
+    cmp ax, [np_len]
+    ja .done
+    call np_rx_at
+    jc .step1
+    mov si, ax
+    cmp ax, bx
+    jae .adv
+    mov cx, ax
+.adv:
+    mov di, [np_rxend]          ; matches are counted without overlapping
+    cmp di, ax
+    ja .setax
+    mov di, ax
+    inc di
+.setax:
+    mov ax, di
+    jmp short .l
+.step1:
+    inc ax
+    jmp short .l
+.done:
+    cmp cx, 0xFFFF
+    jne .have
+    mov byte [np_fwrap], 1      ; nothing before the limit: wrap to the last
+    mov cx, si                  ; match in the note, which is match [np_fcount]
+    cmp cx, 0xFFFF
+    je .no
+.have:
+    mov ax, cx
+    call np_rx_at               ; re-run it for its end, which is one match's
+    jc .no                      ; worth of work rather than a second array
+    mov dx, [np_rxend]
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; np_fcount_do - count the pattern's non-overlapping matches
+; out: [np_fcount] and [np_fcok]; preserves all registers
+;
+; Called by the WORKER, half a second after the typing stops, for exactly the
+; reason np_height is (SPEC.md 27.7): this walks the whole note, and doing it
+; on every keystroke in the find box is the cost that made the box unusable.
+; It runs under the gfx lock because the matcher's backtrack stack is one
+; block of bss shared with the UI task's own finds.
+; -----------------------------------------------------------------------------
+np_fcount_do:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [np_fcdirty], 0
+    mov byte [np_fcok], 1
+    mov word [np_fmno], 0       ; re-derived below, from the same walk
+    xor cx, cx
+    cmp word [np_fpatn], 0
+    je .done
+    cmp byte [np_fbad], 0
+    jne .done
+    xor ax, ax
+.l:
+    cmp ax, [np_len]
+    ja .done
+    call np_rx_at
+    jc .step1
+    inc cx
+    cmp byte [np_selon], 0      ; ...and this is where the ordinal comes from
+    je .noord                   ; when nothing stepped it: the walk is already
+    cmp ax, [np_fmst]           ; passing every match, so recognising the one
+    jne .noord                  ; on screen costs a compare
+    mov [np_fmno], cx
+.noord:
+    mov bx, [np_rxend]
+    cmp bx, ax
+    ja .setax
+    mov bx, ax
+    inc bx
+.setax:
+    mov ax, bx
+    jmp short .l
+.step1:
+    inc ax
+    jmp short .l
+.done:
+    mov [np_fcount], cx
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_showmatch - select [AX, DX) and make sure it is on screen
+; in:  AX = start, DX = end, SI = window ptr
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_showmatch:
+    push ax
+    push dx
+    mov [np_fmst], ax
+    mov [np_fmen], dx
+    call np_selset
+    mov [np_cur], dx            ; the caret sits at the END of it, so F3 twice
+                                ; walks forwards rather than finding the same
+                                ; match again
+    mov byte [np_follow], 1     ; np_redraw scrolls it into view for us
+    mov byte [np_ckok], 0       ; the checkpoint is the CARET's row start and
+    pop dx                      ; the caret just jumped somewhere else
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_donext - F3: the next match after the caret
+; np_doprev - Shift-F3: the last one before it
+; in:  SI = window ptr; out: nothing; clobbers what a callback may
+; -----------------------------------------------------------------------------
+np_donext:
+    call np_uclose
+    mov ax, [np_cur]
+    call np_findfrom
+    jc .no
+    call np_showmatch
+    cmp byte [np_fwrap], 0      ; the ordinal is STEPPED, not counted: a
+    je .step                    ; forward search from the end of match n lands
+    mov word [np_fmno], 1       ; on n+1, and a wrap lands on 1. Counting it
+    jmp short .draw             ; would walk the whole note per keypress,
+.step:                          ; which is the cost 27.10 exists to avoid
+    cmp word [np_fmno], 0
+    je .draw                    ; not known: leave it for the worker to answer
+    mov ax, [np_fmno]
+    inc ax
+    cmp ax, [np_fcount]
+    jbe .set
+    mov ax, [np_fcount]
+.set:
+    mov [np_fmno], ax
+.draw:
+    call np_pdrawn
+    ret
+.no:
+    call np_fmiss
+    call np_pdrawn
+    ret
+
+np_doprev:
+    call np_uclose
+    mov ax, [np_sel0]
+    cmp byte [np_selon], 0
+    jne .have
+    mov ax, [np_cur]
+.have:
+    call np_findprev
+    jc .no
+    call np_showmatch
+    cmp byte [np_fwrap], 0
+    je .step
+    mov ax, [np_fcount]         ; wrapped backwards: the LAST match
+    mov [np_fmno], ax
+    jmp short .draw
+.step:
+    cmp word [np_fmno], 0
+    je .draw
+    cmp word [np_fmno], 1
+    jbe .draw
+    dec word [np_fmno]
+.draw:
+    call np_pdrawn
+    ret
+.no:
+    call np_fmiss
+    call np_pdrawn
+    ret
+
+; np_fmiss - say why nothing happened. Preserves all registers.
+np_fmiss:
+    push ax
+    mov ax, np_e_noent
+    cmp word [np_fpatn], 0
+    jne .say
+    mov ax, np_m_nopat
+.say:
+    cmp byte [np_fbad], 0
+    je .go
+    mov ax, np_m_badpat
+.go:
+    call np_saymsg
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_dorepl - replace the match the selection is showing, then find the next
+; in:  SI = window ptr; out: nothing; clobbers what a callback may
+;
+; It only replaces a selection that IS the current match, which is what makes
+; the button honest: press Replace on a selection you made by hand and it
+; finds the match instead of overwriting whatever you had highlighted.
+; -----------------------------------------------------------------------------
+np_dorepl:
+    push ax
+    push bx
+    push cx
+    push dx
+    call np_uclose
+    call np_fatmatch            ; only a selection that IS the current match
+    jnc .find                   ; is replaced; one the user made by hand sends
+    mov ax, [np_fmst]           ; us to find instead of overwriting it
+    mov cx, [np_fmen]
+    sub cx, ax
+    call np_replat              ; CF = 1 = no room; DX = one past the new text
+    jc .out
+    mov ax, dx
+    call np_selclr
+    mov [np_cur], ax
+    call np_editinv
+    mov byte [np_fcdirty], 1
+.find:
+    mov ax, [np_cur]
+    call np_findfrom
+    jc .miss
+    call np_showmatch
+    jmp short .out
+.miss:
+    call np_fmiss
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_replat - swap the CX bytes at AX for the replacement text
+; in:  AX = where, CX = how many bytes go
+; out: CF = 0 with DX = one past the text that replaced them; CF = 1 refused
+;      and nothing changed. Preserves all other registers.
+; -----------------------------------------------------------------------------
+np_replat:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    mov bx, ax
+    push bx
+    call np_delspan             ; out with the old...
+    pop bx
+    mov cx, [np_frepn]
+    push cx
+    call np_gaproom             ; ...and in with the new
+    pop cx
+    jc .no
+    mov es, [np_dseg]
+    mov di, bx
+    mov si, np_frep
+    jcxz .filled
+.f:
+    mov al, [si]
+    mov [es:di], al
+    inc si
+    inc di
+    dec cx
+    jnz .f
+.filled:
+    mov ax, bx
+    mov cx, [np_frepn]
+    call np_urec_ins
+    mov dx, bx
+    add dx, [np_frepn]
+    clc
+    jmp short .out
+.no:
+    mov dx, bx
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+
+; -----------------------------------------------------------------------------
+; np_dorepall - replace every match, from the top of the note
+; in:  SI = window ptr; out: nothing; clobbers what a callback may
+;
+; ONE undo record for the whole sweep, and it has to be one: the operation
+; nobody wants to retype by hand is exactly the one worth being able to take
+; back, and five separate records would only take back the last five. It is
+; recorded as a replacement of everything from the first match to the end of
+; the note (SPEC.md 27.9's bulk form), because that is the smallest span the
+; three-number record can describe honestly.
+; -----------------------------------------------------------------------------
+np_dorepall:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    call np_uclose
+    xor ax, ax
+    call np_findfrom            ; is there anything to do at all?
+    jc .miss
+    push ax
+    mov cx, [np_len]
+    sub cx, ax
+    call np_urec_bulk           ; the tail as it stands, into the blob
+    pop ax
+    mov byte [np_unolog], 1     ; every edit below is inside that one record
+    xor bx, bx                  ; BX = how many were replaced
+    mov di, ax                  ; DI = where the caret ends up
+.l:
+    cmp ax, [np_len]
+    ja .done
+    call np_rx_at
+    jc .step
+    mov cx, [np_rxend]
+    sub cx, ax
+    call np_replat              ; AX survives; DX = one past the new text
+    jc .done                    ; the note cannot take the growth: stop here,
+                                ; with everything up to now replaced
+    inc bx
+    mov di, dx
+    cmp dx, ax
+    ja .setax
+    mov dx, ax                  ; an empty match replaced by nothing would
+    inc dx                      ; stand still forever
+.setax:
+    mov ax, dx
+    jmp short .l
+.step:
+    inc ax
+    jmp short .l
+.done:
+    mov byte [np_unolog], 0
+    call np_urec_bulkend_at
+    mov [np_cur], di
+    call np_selclr
+    call np_editinv
+    mov byte [np_fcdirty], 1
+    mov byte [np_follow], 1
+    mov ax, bx
+    call np_saycnt
+    jmp short .out
+.miss:
+    call np_fmiss
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; np_urec_bulkend_at - close the bulk record: what replaced its span is
+; everything from the record's own start to the end of the note. This is the
+; Replace All shape, where the sweep runs to the end by construction.
+; Preserves all registers.
+np_urec_bulkend_at:
+    push bx
+    push cx
+    push si
+    call np_utop_rec
+    jc .out
+    mov cx, [np_len]
+    sub cx, [si+np_upos]
+    mov [si+np_uins], cx
+    call np_uclose
+.out:
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; =============================================================================
+; Selecting with the pointer, and dropping what was selected (SPEC.md 27.8.1)
+;
+; ui_drag's shape (SPEC.md 13) written against the API, the way sol_drag is:
+; the gfx lock is held for the whole of a pass and released only between them,
+; so nothing else can draw over a half-finished frame and the cursor still
+; moves. What a pass does depends on where the press landed - outside the
+; selection it EXTENDS one, inside it MOVES the text - and the second is why
+; the dead zone exists: a plain click inside a selection is still a click, and
+; what a click does is put the caret there.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; np_selpace - drop the lock, wait for the tick, take it back
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_selpace:
+    push ax
+    push bx
+    call OSAPI_GFX_UNLOCK
+    call OSAPI_GET_TICKS
+    mov bx, ax
+.spin:
+    call OSAPI_TASK_YIELD
+    call OSAPI_GET_TICKS
+    cmp ax, bx
+    je .spin
+    call OSAPI_GFX_LOCK
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_hitpt - the character index under the pointer, scrolling the view when
+;            the pointer has left it
+; in:  CX = x, DX = y (absolute), SI = window ptr, np_bounds run, lock held
+; out: AX = the index; CF = 1 if [np_top] moved as well. Preserves all others.
+;
+; The scroll is what makes a selection longer than the window possible at all,
+; and it is one row a tick because that is the rate the drag loop runs at.
+; -----------------------------------------------------------------------------
+np_hitpt:
+    push bx
+    push cx
+    push dx
+    xor bx, bx                  ; BX = "the view moved"
+    mov ax, [np_vrows]
+    or ax, ax
+    jz .hit
+    cmp dx, [np_ty]
+    jb .up
+    dec ax
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_ty]             ; AX = the last visible row's top
+    cmp dx, ax
+    jbe .hit
+    mov dx, ax                  ; below the view: clamp, and page down one
+    mov ax, [np_top]
+    inc ax
+    call np_scrollto
+    jc .hit                     ; CF = 1 from np_scrollto means it did NOT
+    mov bx, 1                   ; move, which is the bottom of the note
+    jmp short .hit
+.up:
+    mov dx, [np_ty]
+    mov ax, [np_top]
+    dec ax
+    call np_scrollto
+    jc .hit
+    mov bx, 1
+.hit:
+    mov [np_hitx], cx
+    mov [np_hity], dx
+    mov word [np_wanty], 0xFFFF
+    push ax                     ; the pointer names ONE row, and np_rows knows
+    push dx                     ; where it starts (SPEC.md 27.5) - so seed
+    mov ax, dx                  ; there and stop after it, which is what
+    sub ax, [np_ty]             ; np_onclick has always done for a click. This
+    jc .nseed                   ; was walking the WHOLE note per drag pass
+    push cx
+    mov cl, 3
+    shr ax, cl
+    pop cx
+    mov dx, ax
+    call np_seedrow
+.nseed:
+    pop dx
+    pop ax
+    call np_measure
+    mov byte [np_resume], 0
+    mov ax, [np_hiti]
+    or bx, bx
+    jz .noscr
+    stc
+    jmp short .out
+.noscr:
+    clc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; np_dragsel - follow the pointer, extending the selection from [np_anchor]
+; in:  SI = window ptr, gfx lock held; out: nothing; clobbers as a callback
+; -----------------------------------------------------------------------------
+np_dragsel:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, [np_anchor]         ; what the last pass resolved
+    mov word [np_lmx], 0xFFFF   ; ...and where the pointer was when it did
+    mov word [np_lmy], 0xFFFF
+.pass:
+    call np_selpace
+    call OSAPI_MOUSE            ; CX = x, DX = y, AL = buttons
+    test al, 1
+    jz .up
+    call np_bounds
+    cmp cx, [np_lmx]            ; A POINTER THAT HAS NOT MOVED HAS NOTHING TO
+    jne .moved                  ; SAY. The loop runs at a tick whether the
+    cmp dx, [np_lmy]            ; mouse reports anything or not, and at 1200
+    jne .moved                  ; baud it usually does not
+    cmp dx, [np_ty]
+    jb .moved                   ; ...unless it is parked outside the view,
+    push ax                     ; where every tick owes another row of scroll
+    mov ax, [np_vrows]
+    or ax, ax
+    jz .still
+    dec ax
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_ty]             ; the last visible row's top - np_hitpt's own
+    cmp dx, ax                  ; threshold for scrolling, so the two cannot
+    ja .scrolling               ; disagree about which passes matter
+.still:
+    pop ax
+    jmp short .pass
+.scrolling:
+    pop ax
+.moved:
+    mov [np_lmx], cx
+    mov [np_lmy], dx
+    call np_hitpt
+    jc .draw                    ; the view scrolled: owed a redraw either way
+    cmp ax, bx
+    je .pass
+.draw:
+    mov bx, ax
+    mov [np_cur], ax
+    mov dx, [np_anchor]
+    call np_selset
+    mov byte [np_ckok], 0       ; the checkpoint is the CARET's row start and
+    mov byte [np_selonly], 1    ; the caret has just jumped - and a drag moves
+                                ; no character, so every dirty row owes an
+                                ; inversion and no glyphs (SPEC.md 27.8.2)
+    call np_redraw
+    jmp short .pass
+.up:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_rev - reverse the note's bytes in [AX, BX], inclusive
+; in:  AX, BX; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_rev:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    mov es, [np_dseg]
+    mov si, ax
+    mov di, bx
+.l:
+    cmp si, di
+    jae .out
+    mov al, [es:si]
+    mov cl, [es:di]
+    mov [es:si], cl
+    mov [es:di], al
+    inc si
+    dec di
+    jmp short .l
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_dmark_on / np_dmark_off - the drop point's insertion bar
+; in:  [np_dpos] (0xFFFF = none), SI = window ptr, lock held
+; out: nothing; preserves all registers
+;
+; XOR, so the erase is the draw again - and the pixels it was drawn at are
+; BANKED rather than recomputed, because a scroll between the two would move
+; where the bar belongs and leave the old one behind for good. That is
+; SPEC.md 48.11's rule in miniature.
+; -----------------------------------------------------------------------------
+np_dmark_on:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov word [np_dmark], 0xFFFF
+    mov ax, [np_dpos]
+    cmp ax, 0xFFFF
+    je .out
+    mov bx, [np_cur]
+    push bx
+    mov [np_cur], ax            ; np_walk answers where the CARET is, so the
+    mov word [np_hity], 0xFFFF  ; drop point borrows it for one measure pass
+    mov word [np_wanty], 0xFFFF
+    call np_measure
+    pop bx
+    mov [np_cur], bx
+    mov byte [np_ckok], 0       ; ...and the checkpoint that pass left behind
+                                ; describes the drop point's row, not ours
+    cmp byte [np_curseen], 0
+    je .out
+    mov ax, [np_curx]
+    mov bx, [np_cury]
+    cmp bx, [np_ty]
+    jb .out
+    mov dx, bx
+    add dx, 7
+    cmp dx, [np_bot]
+    ja .out
+    mov cx, ax
+    call OSAPI_GFX_XOR_FILL
+    mov [np_dmark], ax
+    mov [np_dmy], bx
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+np_dmark_off:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [np_dmark]
+    cmp ax, 0xFFFF
+    je .out
+    mov bx, [np_dmy]
+    mov cx, ax
+    mov dx, bx
+    add dx, 7
+    call OSAPI_GFX_XOR_FILL
+    mov word [np_dmark], 0xFFFF
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_movesel - move the selected text to [np_dpos]
+; in:  SI = window ptr; out: nothing; clobbers as a callback
+;
+; THREE IN-PLACE REVERSALS AND NO BUFFER. Reversing [s,e), then the run beside
+; it, then the two together, rotates the block to the far end of the span -
+; which is exactly what a move is. The alternative was a staging claim the
+; size of the selection, and a drag that fails because the heap is busy is a
+; drag the user has no way to understand.
+;
+; The undo record is the bulk form (SPEC.md 27.9): one replacement of the
+; whole span between the old place and the new, because a (pos, in, out)
+; record cannot say "these bytes went from here to there".
+; -----------------------------------------------------------------------------
+np_movesel:
+    push ax
+    push bx
+    push cx
+    push dx
+    call np_selget              ; AX = s, CX = n
+    jc .out
+    mov [np_mvs], ax
+    mov [np_mvn], cx
+    add ax, cx
+    mov [np_mve], ax
+    mov ax, [np_dpos]
+    mov [np_mvp], ax
+    cmp ax, [np_mvs]
+    jb .left
+    cmp ax, [np_mve]
+    jbe .out                    ; dropped inside itself: nothing to do
+    mov ax, [np_mvs]            ; --- rightwards: [s,e)[e,p) -> [e,p)[s,e) ---
+    mov cx, [np_mvp]
+    sub cx, ax
+    call np_urec_bulk           ; the whole span [s, p), as one replacement
+    mov byte [np_unolog], 1
+    mov ax, [np_mvs]
+    mov bx, [np_mve]
+    dec bx
+    call np_rev
+    mov ax, [np_mve]
+    mov bx, [np_mvp]
+    dec bx
+    call np_rev
+    mov ax, [np_mvs]
+    mov bx, [np_mvp]
+    dec bx
+    call np_rev
+    mov ax, [np_mvp]
+    sub ax, [np_mvn]            ; the block ends where it was dropped
+    jmp short .fin
+.left:                          ; --- leftwards: [p,s)[s,e) -> [s,e)[p,s) ---
+    mov ax, [np_mvp]
+    mov cx, [np_mve]
+    sub cx, ax
+    call np_urec_bulk           ; the whole span [p, e)
+    mov byte [np_unolog], 1
+    mov ax, [np_mvp]
+    mov bx, [np_mvs]
+    dec bx
+    call np_rev
+    mov ax, [np_mvs]
+    mov bx, [np_mve]
+    dec bx
+    call np_rev
+    mov ax, [np_mvp]
+    mov bx, [np_mve]
+    dec bx
+    call np_rev
+    mov ax, [np_mvp]            ; ...and here it begins where it was dropped
+.fin:
+    mov byte [np_unolog], 0
+    mov dx, ax
+    add dx, [np_mvn]
+    call np_selset              ; it stays selected, which is what the user
+    mov [np_cur], dx            ; just spent a drag pointing at
+    call np_urec_bulkend_span
+    call np_editinv
+    mov byte [np_follow], 1
+    mov byte [np_ckok], 0
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; np_urec_bulkend_span - close a bulk record whose span did not change length
+; (a move rearranges bytes, it does not add or remove any). Preserves all.
+np_urec_bulkend_span:
+    push bx
+    push cx
+    push si
+    call np_utop_rec
+    jc .out
+    mov cx, [si+np_udel]
+    mov [si+np_uins], cx
+    call np_uclose
+.out:
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; np_dragmove - a press that landed INSIDE the selection
+; in:  AX = the index pressed, SI = window ptr, lock held
+; out: nothing; clobbers as a callback
+; -----------------------------------------------------------------------------
+np_dragmove:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov [np_anchor], ax         ; where the press was, for the click case
+    mov word [np_dpos], 0xFFFF
+    mov word [np_dmark], 0xFFFF
+    call OSAPI_MOUSE
+    mov [np_dpx], cx
+    mov [np_dpy], dx
+    xor bx, bx                  ; BX = the pointer has left the dead zone
+.pass:
+    call np_selpace
+    call OSAPI_MOUSE
+    test al, 1
+    jz .up
+    or bx, bx
+    jnz .track
+    mov ax, cx
+    sub ax, [np_dpx]
+    call np_absw
+    cmp ax, NP_SELDRAG
+    ja .moved
+    mov ax, dx
+    sub ax, [np_dpy]
+    call np_absw
+    cmp ax, NP_SELDRAG
+    jbe .pass
+.moved:
+    mov bx, 1
+.track:
+    call np_bounds
+    call np_hitpt
+    jnc .same
+    mov word [np_dmark], 0xFFFF ; the view scrolled out from under the bar
+    mov word [np_dpos], 0xFFFF
+    call np_redraw
+.same:
+    cmp ax, [np_dpos]
+    je .pass
+    call np_dmark_off
+    mov [np_dpos], ax
+    call np_dmark_on
+    jmp short .pass
+.up:
+    call np_dmark_off
+    or bx, bx
+    jz .click
+    cmp word [np_dpos], 0xFFFF
+    je .click
+    call np_movesel
+    call np_redraw
+    jmp short .out
+.click:
+    mov ax, [np_anchor]         ; never left the dead zone: it was a click,
+    mov [np_cur], ax            ; and a click puts the caret where it landed
+    call np_selclr
+    mov byte [np_ckok], 0
+    call np_redraw
+.out:
+    mov word [np_dpos], 0xFFFF
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; np_absw - AX = |AX|, treating it as signed. Preserves all other registers.
+np_absw:
+    or ax, ax
+    jns .out
+    neg ax
+.out:
+    ret
+
+; =============================================================================
+; The find and replace panel (SPEC.md 27.10)
+;
+; It is docked at the TOP of the content rather than being a window of its
+; own, and that is worth stating because a second window was the obvious
+; shape. A window would have needed its own record, its own dispatcher entry
+; and its own answer to "what happens when the user clicks the note behind
+; it"; a strip of the content needs one number - the height np_bounds adds to
+; [np_ty] - and every other thing in this module follows for nothing. The
+; signatures notice the geometry changed and repaint once (SPEC.md 27.2), the
+; scroll bar re-derives its track, the note re-wraps at the same width.
+;
+; The count is NOT recomputed on a keystroke. Counting walks the whole note
+; with the matcher, so it is owed by [np_fcdirty] and paid by the worker half
+; a second later - the same trade np_height makes (SPEC.md 27.7), for the same
+; reason, and it is why typing in the box stays as cheap as typing in the note.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; np_fph - the panel's height in pixels, 0 when it is closed
+; out: AX; preserves every other register
+; -----------------------------------------------------------------------------
+np_fph:
+    cmp byte [np_fpan], NP_FPAN_NONE
+    je .none
+    mov ax, NP_FP_ROW*2 + NP_FP_PAD*2 + 1
+    cmp byte [np_fpan], NP_FPAN_REPL
+    jne .out
+    add ax, NP_FP_ROW
+    jmp short .out
+.none:
+    xor ax, ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; np_pbset - place button BX, CX pixels wide, with its right edge at DI
+; in:  BX = 0..3, CX = width (0 = not shown), DI = the right-edge cursor
+; out: DI moved left past it; preserves all other registers
+; -----------------------------------------------------------------------------
+np_pbset:
+    push ax
+    push si
+    mov si, bx
+    shl si, 1
+    mov [si+np_pbw], cx
+    jcxz .zero
+    mov ax, di
+    sub ax, cx
+    inc ax
+    mov [si+np_pbx], ax
+    sub di, cx
+    sub di, 3
+    jmp short .out
+.zero:
+    mov word [si+np_pbx], 0
+.out:
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_fpgeom - the panel's live geometry, in one place
+; in:  SI = window ptr; out: the np_p* block; preserves all registers
+;
+; The fm_hit discipline (SPEC.md 22): the painter and the hit test read the
+; same words, so a button cannot be drawn in one place and clicked in another.
+; -----------------------------------------------------------------------------
+np_fpgeom:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov bx, si
+    call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
+    mov [np_pl], ax
+    mov [np_pt], dx
+    push ax
+    call OSAPI_WM_GEOM          ; CX = content w, DX = content h
+    pop ax
+    add ax, cx
+    dec ax
+    mov [np_pr], ax
+    mov ax, [np_pl]
+    add ax, 4 + NP_FP_LBL
+    mov [np_pfx], ax            ; a text box's interior...
+    mov ax, [np_pr]
+    sub ax, 4
+    mov [np_pfr], ax            ; ...left and right
+    call np_fph
+    mov bx, ax
+    mov ax, [np_pt]
+    add ax, bx
+    sub ax, NP_FP_PAD + 1 + NP_FP_ROW
+    mov [np_pbtny], ax          ; the button row's top
+    mov ax, [np_pl]
+    add ax, 4
+    mov [np_pcbx], ax           ; the Regex tick box...
+    add ax, 9 + 4 + 16 + 8
+    mov [np_pnx], ax            ; ...then 'Rx', then the count
+    mov di, [np_pr]
+    sub di, 3
+    xor bx, bx                  ; 0 = the close box
+    mov cx, 14
+    call np_pbset
+    cmp byte [np_fpan], NP_FPAN_REPL
+    jne .nrepl
+    mov bx, 1                   ; 1 = All
+    mov cx, 3*8+8
+    call np_pbset
+    mov bx, 2                   ; 2 = Repl
+    mov cx, 4*8+8
+    call np_pbset
+    jmp short .next
+.nrepl:
+    mov bx, 1
+    xor cx, cx
+    call np_pbset
+    mov bx, 2
+    xor cx, cx
+    call np_pbset
+.next:
+    mov bx, 3                   ; 3 = Next
+    mov cx, 4*8+8
+    call np_pbset
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_pfcols - AX = whole cells a text box shows; preserves everything else
+; -----------------------------------------------------------------------------
+np_pfcols:
+    push cx
+    mov ax, [np_pfr]
+    sub ax, [np_pfx]
+    inc ax
+    jns .ok
+    xor ax, ax
+.ok:
+    mov cl, 3
+    shr ax, cl
+    cmp ax, NP_PATMAX
+    jbe .out
+    mov ax, NP_PATMAX
+.out:
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; np_pfield - draw one text box, interior and all
+; in:  AL = 0 the Find box / 1 the Replace box; np_fpgeom run, lock held
+; out: nothing; clobbers as a callback
+;
+; The interior is ONE opaque font_run over a space-padded buffer (SPEC.md 6.1)
+; rather than a fill and then glyphs: this is redrawn on every keystroke in
+; the box, and the pair leaves it blank in between.
+; -----------------------------------------------------------------------------
+np_pfield:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    xor ah, ah
+    mov bp, ax                  ; BP = which box (a VALUE - SS is not DS here)
+    mov cx, NP_FP_ROW
+    mul cx
+    add ax, [np_pt]
+    add ax, NP_FP_PAD
+    mov di, ax                  ; DI = this row's top
+
+    mov al, CBLACK              ; the label
+    call OSAPI_SET_COLOR
+    mov si, np_s_find
+    or bp, bp
+    jz .lbl
+    mov si, np_s_repl
+.lbl:
+    mov cx, [np_pl]
+    add cx, 4
+    mov dx, di
+    add dx, 1
+    call OSAPI_FONT_STR
+
+    mov ax, [np_pfx]            ; the box
+    sub ax, 2
+    mov bx, di
+    mov cx, [np_pfr]
+    add cx, 2
+    mov dx, di
+    add dx, NP_FP_ROW - 3
+    call OSAPI_GFX_FRAME
+
+    push di
+    call np_pfbuf               ; np_fbuf = what the box shows, padded
+    pop di                      ; ...which walks DI over it
+    mov si, np_fbuf
+    mov cx, [np_pfx]
+    mov dx, di
+    inc dx                      ; di+1..di+8, INSIDE the frame at di..di+9:
+                                ; the run is opaque, so a cell that reached
+                                ; the frame's own row would erase it
+    mov al, CBLACK
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
+
+    mov al, [np_ffield]         ; the caret, when this box has the focus
+    cmp al, bl                  ; BL = the box index, set by np_pfbuf
+    jne .out
+    mov ax, [np_fpcur]
+    sub ax, [np_fview]
+    js .out
+    push cx
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_pfx]
+    cmp ax, [np_pfr]
+    ja .out
+    mov bx, di
+    inc bx
+    mov dx, bx
+    add dx, 7
+    push ax
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_VLINE
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_pfbuf - fill np_fbuf with the visible part of box BP, space-padded
+; in:  BP = 0 find / 1 replace
+; out: BL = BP (the box index, for the caret test), [np_fview] = the first
+;      character shown; clobbers AX/CX/SI/DI
+;
+; The window slides so the caret is always inside it, which is the whole of
+; what a one-line editor owes: NP_PATMAX is 47 characters and no window this
+; runs on is that wide.
+; -----------------------------------------------------------------------------
+np_pfbuf:
+    push dx
+    push es
+    push ds
+    pop es
+    mov si, np_fpat
+    mov cx, [np_fpatn]
+    or bp, bp
+    jz .have
+    mov si, np_frep
+    mov cx, [np_frepn]
+.have:
+    mov al, [np_ffield]         ; only the focused box scrolls to its caret
+    xor ah, ah
+    cmp ax, bp
+    jne .top
+    push cx
+    call np_pfcols              ; AX = cells
+    mov cx, [np_fpcur]
+    sub cx, ax
+    inc cx
+    jns .set
+    xor cx, cx
+.set:
+    mov [np_fview], cx
+    pop cx
+    jmp short .win
+.top:
+    mov word [np_fview], 0
+.win:
+    mov di, [np_fview]
+    cmp di, cx
+    jbe .from
+    mov di, cx                  ; past the end: nothing to show
+.from:
+    add si, di
+    sub cx, di
+    push cx
+    call np_pfcols
+    mov di, ax                  ; DI = cells the box holds
+    pop cx
+    cmp cx, di
+    jbe .cp
+    mov cx, di
+.cp:
+    sub di, cx                  ; DI = the padding after it
+    push di
+    mov di, np_fbuf
+    cld
+    rep movsb
+    pop cx
+    mov al, ' '
+    rep stosb
+    mov byte [di], 0
+    mov bx, bp                  ; the caret test wants the index back
+    pop es
+    pop dx
+    ret
+
+; -----------------------------------------------------------------------------
+; np_pdrawf - redraw just the focused box (a keystroke in it changed nothing
+;             else on the panel)
+; in:  SI = window ptr, lock held; out: nothing; clobbers as a callback
+; -----------------------------------------------------------------------------
+np_pdrawf:
+    push ax
+    cmp byte [np_fpan], NP_FPAN_NONE
+    je .out
+    mov al, [np_ffield]
+    cmp al, NP_FF_DOC
+    je .out
+    call np_fpgeom
+    call np_pfield
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_pcount - compose what the count line says into np_fnum
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+; np_fatmatch - is the selection on screen the match [np_fmno] names?
+; out: CF = 1 = yes; preserves all registers.
+;
+; ONE predicate with two readers - the counter, which must not name a match
+; nobody can see, and Replace, which must not overwrite a selection the user
+; made by hand. Keeping them the same test is what stops the panel saying
+; "3/4" while Replace declines to act on it.
+np_fatmatch:
+    push ax
+    cmp byte [np_selon], 0
+    je .no
+    mov ax, [np_sel0]
+    cmp ax, [np_fmst]
+    jne .no
+    mov ax, [np_sel1]
+    cmp ax, [np_fmen]
+    jne .no
+    pop ax
+    stc
+    ret
+.no:
+    pop ax
+    clc
+    ret
+
+np_pcount:
+    push ax
+    push di
+    push si
+    mov di, np_fnum
+    cmp byte [np_fbad], 0
+    jne .bad
+    cmp word [np_fpatn], 0
+    je .blank
+    cmp byte [np_fcok], 0
+    je .wait
+    ; --- n/total, which is both more use and SHORTER than 'n found' -------
+    ; The room on this row is the tightest thing in the panel: the tick box
+    ; and its label are on the left of it and four buttons on the right, and
+    ; on a 260px window there are nine cells between them. '12 found' is
+    ; eight of the nine; '3/12' is four, and it answers the question the
+    ; count was really being asked - where am I, of how many.
+    cmp word [np_fmno], 0
+    je .dash
+    call np_fatmatch            ; ...and the selection has to still BE it: a
+    jc .num                     ; click clears the selection without touching
+.dash:                          ; the ordinal, and 3/4 with nothing highlighted
+    mov byte [di], '-'          ; names a match nobody can see. Honest about
+    inc di                      ; which half is unknown, rather than showing a
+    jmp short .slash            ; 0 that looks like an answer
+.num:
+    mov ax, [np_fmno]
+    call np_utoa
+.slash:
+    mov byte [di], '/'
+    inc di
+    mov ax, [np_fcount]
+    call np_utoa
+    jmp short .out
+.wait:
+    mov si, np_m_wait
+    jmp short .tail
+.bad:
+    mov si, np_m_badpat
+    jmp short .tail
+.blank:
+    mov si, np_m_blank
+.tail:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .tail
+.out:
+    pop si
+    pop di
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_pdrawn - redraw just the count, which is all a recount changes
+; in:  SI = window ptr, lock held; out: nothing; clobbers as a callback
+; -----------------------------------------------------------------------------
+np_pdrawn:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [np_fpan], NP_FPAN_NONE
+    je .out
+    call np_fpgeom
+    call np_pcount
+    mov bx, [np_pbx+6]          ; button 3 (Next) is the leftmost one shown,
+    or bx, bx                   ; and the count may not reach it
+    jnz .room
+    mov bx, [np_pr]
+.room:
+    sub bx, 4
+    sub bx, [np_pnx]
+    js .out
+    mov cl, 3
+    shr bx, cl                  ; BX = the cells there is room for
+    jz .out
+    cmp bx, 13
+    jbe .cap
+    mov bx, 13
+.cap:
+    mov si, np_fnum             ; ...and the string is padded to exactly that,
+    mov di, np_fnum             ; so a shorter answer erases the longer one it
+.len:                           ; replaces and nothing runs into a button
+    cmp byte [di], 0
+    je .pad
+    inc di
+    dec bx
+    jnz .len
+    mov byte [di], 0            ; longer than the room: it is cut, not spilled
+    jmp short .draw
+.pad:
+    or bx, bx
+    jz .draw
+    mov byte [di], ' '
+    inc di
+    dec bx
+    jmp short .pad
+.draw:
+    mov byte [di], 0
+    mov cx, [np_pnx]
+    mov dx, [np_pbtny]
+    add dx, 2
+    mov al, CBLACK
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_pbutton - draw button BX with label SI
+; in:  BX = 0..3, SI = its NUL label; np_fpgeom run, lock held
+; out: nothing; preserves all registers
+; -----------------------------------------------------------------------------
+np_pbutton:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    shl bx, 1
+    mov cx, [bx+np_pbw]
+    jcxz .out
+    mov di, [bx+np_pbx]
+    or di, di
+    jz .out
+    mov bp, cx                  ; BP = the width, as a VALUE: SS is not DS in
+                                ; a package, so it may never address anything
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    mov ax, di
+    mov bx, [np_pbtny]
+    mov cx, di
+    add cx, bp
+    dec cx
+    mov dx, bx
+    add dx, NP_FP_BTNH - 1
+    call OSAPI_GFX_FILL
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov ax, di
+    mov bx, [np_pbtny]
+    mov cx, di
+    add cx, bp
+    dec cx
+    mov dx, bx
+    add dx, NP_FP_BTNH - 1
+    call OSAPI_GFX_FRAME
+    call OSAPI_FONT_WIDTH       ; SI is still the label; out AX = its width
+    mov cx, bp
+    sub cx, ax
+    jns .c
+    xor cx, cx                  ; a label wider than its button: start at the
+.c:                             ; left edge and let it run, which is visible
+    shr cx, 1                   ; and therefore fixable
+    add cx, di
+    mov dx, [np_pbtny]
+    add dx, 2
+    call OSAPI_FONT_STR
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_fpaint - draw the whole panel
+; in:  SI = window ptr, lock held; out: nothing; clobbers as a callback
+; -----------------------------------------------------------------------------
+np_fpaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [np_fpan], NP_FPAN_NONE
+    je .out
+    call np_fpgeom
+    call np_fph
+    mov di, ax                  ; DI = the panel's height
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    mov ax, [np_pl]
+    mov bx, [np_pt]
+    mov cx, [np_pr]
+    mov dx, bx
+    add dx, di
+    sub dx, 2
+    call OSAPI_GFX_FILL
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    mov ax, [np_pl]
+    mov bx, [np_pr]
+    mov dx, [np_pt]
+    add dx, di
+    dec dx
+    call OSAPI_GFX_HLINE        ; the rule that separates it from the note
+
+    xor ax, ax
+    call np_pfield              ; Find:
+    cmp byte [np_fpan], NP_FPAN_REPL
+    jne .btn
+    mov ax, 1
+    call np_pfield              ; Repl:
+
+.btn:
+    mov ax, [np_pcbx]           ; the Regex tick box
+    mov bx, [np_pbtny]
+    inc bx
+    mov cx, ax
+    add cx, 8
+    mov dx, bx
+    add dx, 8
+    call OSAPI_GFX_FRAME
+    cmp byte [np_frx], 0
+    je .norx
+    mov ax, [np_pcbx]
+    add ax, 2
+    mov bx, [np_pbtny]
+    add bx, 3
+    mov cx, ax
+    add cx, 4
+    mov dx, bx
+    add dx, 4
+    call OSAPI_GFX_FILL
+.norx:
+    mov cx, [np_pcbx]
+    add cx, 13
+    mov dx, [np_pbtny]
+    add dx, 2
+    mov si, np_s_rx
+    call OSAPI_FONT_STR
+
+    mov bx, 3
+    mov si, np_b_next
+    call np_pbutton
+    mov bx, 2
+    mov si, np_b_repl
+    call np_pbutton
+    mov bx, 1
+    mov si, np_b_all
+    call np_pbutton
+    xor bx, bx
+    mov si, np_b_x
+    call np_pbutton
+    mov si, [np_win]            ; np_pdrawn re-derives the geometry from the
+    call np_pdrawn              ; window, and SI has been label strings since
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_fopen - put the panel up (AL = NP_FPAN_FIND or NP_FPAN_REPL)
+; in:  AL, SI = window ptr; out: nothing; clobbers as a callback
+;
+; A selection that fits on one line SEEDS the pattern, which is the one thing
+; every editor does that nobody notices until it is missing.
+; -----------------------------------------------------------------------------
+np_fopen:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov [np_fpan], al
+    mov byte [np_ffield], NP_FF_FIND    ; .curok below is what puts the caret
+                                        ; inside this box; np_ffocus is the
+                                        ; general form and cannot be used here
+                                        ; because the seed sets it explicitly
+    call np_selget              ; AX = start, CX = length
+    jc .nosel
+    cmp cx, NP_PATMAX
+    ja .nosel
+    jcxz .nosel
+    mov es, [np_dseg]
+    mov si, ax
+    mov di, np_fpat
+    mov dx, cx
+.cp:
+    mov al, [es:si]
+    cmp al, 13
+    je .nosel                   ; more than one line: not a pattern
+    mov [di], al
+    inc si
+    inc di
+    dec cx
+    jnz .cp
+    mov byte [di], 0
+    mov [np_fpatn], dx
+    mov [np_fpcur], dx
+.nosel:
+    mov ax, [np_fpatn]
+    cmp [np_fpcur], ax
+    jbe .curok
+    mov [np_fpcur], ax
+.curok:
+    call np_fchk
+    mov byte [np_fcok], 0
+    mov byte [np_fcdirty], 1
+    call np_hire                ; the count is the worker's to pay
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; np_fclose - take the panel down. Preserves all registers.
+np_fclose:
+    mov byte [np_fpan], NP_FPAN_NONE
+    mov byte [np_ffield], NP_FF_DOC
+    ret
+
+; -----------------------------------------------------------------------------
+; np_ffocus - hand the keys to field AL, and put its caret at the end
+; in:  AL = NP_FF_*; out: nothing; preserves all registers
+;
+; The caret is one word for both boxes, so moving the focus has to move it
+; too - and the end of the text is where every dialog on every machine puts
+; the caret when a box is tabbed into.
+; -----------------------------------------------------------------------------
+np_ffocus:
+    push ax
+    push bx
+    mov [np_ffield], al
+    cmp al, NP_FF_DOC
+    je .out
+    mov bx, [np_fpatn]
+    cmp al, NP_FF_FIND
+    je .set
+    mov bx, [np_frepn]
+.set:
+    mov [np_fpcur], bx
+.out:
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_fpclick - a press inside the panel
+; in:  CX = x, DX = y (absolute), SI = window ptr, np_bounds run, lock held
+; out: CF = 0 = it was ours and has been dealt with; CF = 1 = it was not.
+;      Clobbers as a callback.
+; -----------------------------------------------------------------------------
+np_fpclick:
+    push ax
+    push bx
+    push di
+    cmp byte [np_fpan], NP_FPAN_NONE
+    je .no
+    call np_fpgeom
+    call np_fph
+    mov bx, [np_pt]
+    add bx, ax
+    cmp dx, bx
+    jae .no                     ; below the panel: the note's press, not ours
+    cmp dx, [np_pt]
+    jb .no
+
+    mov bx, [np_pbtny]          ; --- the button row ---
+    cmp dx, bx
+    jb .fields
+    xor bx, bx
+.b:
+    mov di, bx
+    shl di, 1
+    mov ax, [di+np_pbw]
+    or ax, ax
+    jz .bnext
+    mov ax, [di+np_pbx]
+    cmp cx, ax
+    jb .bnext
+    add ax, [di+np_pbw]
+    cmp cx, ax
+    jae .bnext
+    jmp short .hit
+.bnext:
+    inc bx
+    cmp bx, 4
+    jb .b
+    mov ax, [np_pcbx]           ; the Regex tick box, and its label with it
+    cmp cx, ax
+    jb .yes
+    add ax, 9 + 4 + 16
+    cmp cx, ax
+    jae .yes
+    xor byte [np_frx], 1
+    call np_fchk
+    mov byte [np_fcok], 0
+    mov byte [np_fcdirty], 1
+    call np_fpaint
+    jmp short .yes
+.hit:
+    mov si, [np_win]            ; every handler below draws, and SI has to be
+    or bx, bx                   ; the window for all of them
+    jnz .h1
+    call np_fclose              ; 0 = close
+    call np_redrawall
+    jmp short .yes
+.h1:
+    cmp bx, 1
+    jne .h2
+    call np_dorepall            ; 1 = All
+    mov si, [np_win]
+    call np_redraw
+    call np_pdrawn
+    jmp short .yes
+.h2:
+    cmp bx, 2
+    jne .h3
+    call np_dorepl              ; 2 = Repl
+    mov si, [np_win]
+    call np_redraw
+    call np_pdrawn
+    jmp short .yes
+.h3:
+    call np_donext              ; 3 = Next
+    mov si, [np_win]
+    call np_redraw
+    jmp short .yes
+
+.fields:
+    mov ax, dx                  ; --- a text box ---
+    sub ax, [np_pt]
+    sub ax, NP_FP_PAD
+    js .yes
+    mov bx, NP_FP_ROW
+    xor dx, dx
+    div bx                      ; AX = the row index
+    cmp ax, 1
+    ja .yes
+    cmp al, 1
+    jne .f0
+    cmp byte [np_fpan], NP_FPAN_REPL
+    jne .yes
+.f0:
+    call np_ffocus
+    mov bx, ax
+    call np_fpcaret             ; CX = x -> [np_fpcur], which np_ffocus has
+                                ; just put at the end of THIS box
+    call np_fpaint
+.yes:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_fpcaret - put the box's caret at pixel CX
+; in:  CX = an absolute x, BX = the box index; out: [np_fpcur]; preserves all
+; -----------------------------------------------------------------------------
+np_fpcaret:
+    push ax
+    push cx
+    push dx
+    mov ax, cx
+    sub ax, [np_pfx]
+    jns .ok
+    xor ax, ax
+.ok:
+    add ax, 4
+    mov cl, 3
+    shr ax, cl
+    add ax, [np_fview]
+    mov dx, [np_fpatn]
+    or bx, bx
+    jz .lim
+    mov dx, [np_frepn]
+.lim:
+    cmp ax, dx
+    jbe .set
+    mov ax, dx
+.set:
+    mov [np_fpcur], ax
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_fpkey - a key while a text box has the focus
+; in:  AL = ascii, AH = scan
+; out: CF = 0 = consumed (the box changed and wants redrawing); CF = 1 = not
+;      ours. Clobbers AX/BX/CX/DX/SI/DI.
+; -----------------------------------------------------------------------------
+np_fpkey:
+    push si
+    push di
+    mov si, np_fpat             ; SI = the buffer, DI = its length's address
+    mov di, np_fpatn
+    cmp byte [np_ffield], NP_FF_FIND
+    je .have
+    mov si, np_frep
+    mov di, np_frepn
+.have:
+    mov bx, [di]                ; ONE caret word serves both boxes, so the
+    cmp [np_fpcur], bx          ; first thing this must do is make sure it is
+    jbe .cur                    ; inside THIS one. Without it, tabbing from a
+    mov [np_fpcur], bx          ; long pattern into a short replacement gave
+.cur:                           ; the insert loop a NEGATIVE count, and it
+                                ; wrote 64KB across this package's own bss
+    or al, al
+    jnz .ascii
+    cmp ah, NP_K_LEFT
+    je .left
+    cmp ah, NP_K_RIGHT
+    je .right
+    cmp ah, NP_K_HOME
+    je .home
+    cmp ah, NP_K_END
+    je .end
+    cmp ah, NP_K_DEL
+    je .del
+    jmp .no
+.ascii:
+    cmp al, 8
+    je .bksp
+    cmp al, 32
+    jb .no
+    cmp al, 126
+    ja .no
+    mov bx, [di]
+    cmp bx, NP_PATMAX
+    jae .yes                    ; full: the keystroke is dropped, as a full
+                                ; note's is
+    push ax                     ; open a gap at the caret
+    mov cx, bx
+    sub cx, [np_fpcur]
+    mov bx, [di]
+.ig:
+    jcxz .iplace
+    mov al, [si+bx-1]
+    mov [si+bx], al
+    dec bx
+    dec cx
+    jmp short .ig
+.iplace:
+    pop ax
+    mov bx, [np_fpcur]
+    mov [si+bx], al
+    inc word [di]
+    inc word [np_fpcur]
+    mov bx, [di]
+    mov byte [si+bx], 0
+    jmp short .chg
+.bksp:
+    cmp word [np_fpcur], 0
+    je .yes
+    dec word [np_fpcur]
+    jmp short .cut1
+.del:
+    mov bx, [np_fpcur]
+    cmp bx, [di]
+    jae .yes
+.cut1:
+    mov bx, [np_fpcur]
+.dg:
+    mov cx, [di]
+    cmp bx, cx
+    jae .dend
+    mov al, [si+bx+1]
+    mov [si+bx], al
+    inc bx
+    jmp short .dg
+.dend:
+    dec word [di]
+    mov bx, [di]
+    mov byte [si+bx], 0
+    jmp short .chg
+.left:
+    cmp word [np_fpcur], 0
+    je .yes
+    dec word [np_fpcur]
+    jmp short .yes
+.right:
+    mov bx, [np_fpcur]
+    cmp bx, [di]
+    jae .yes
+    inc word [np_fpcur]
+    jmp short .yes
+.home:
+    mov word [np_fpcur], 0
+    jmp short .yes
+.end:
+    mov bx, [di]
+    mov [np_fpcur], bx
+    jmp short .yes
+.chg:
+    call np_fchk                ; the pattern changed: it may not compile, and
+    mov byte [np_fcok], 0       ; the count it had is about somebody else
+    mov byte [np_fcdirty], 1
+    mov word [np_fmno], 0
+.yes:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; np_redrawall - a full repaint of the content, panel included
+; in:  SI = window ptr, lock held; out: nothing; clobbers as a callback
+;
+; What opening or closing the panel needs: [np_ty] moved, so every row
+; signature describes a layout that no longer exists - which np_sigsame would
+; have worked out for itself, but saying so costs nothing and cannot be got
+; wrong by a later edit.
+; -----------------------------------------------------------------------------
+; =============================================================================
+; Opening and closing the panel MOVES the text (SPEC.md 27.10.2)
+;
+; The panel changes exactly one number - the height np_bounds adds to
+; [np_ty] - and changes NOTHING about the wrap: [np_tx] and [np_rgt] are the
+; content's own edges and the panel is docked above the text, not beside it.
+; So every row holds exactly the same characters before and after; they are
+; simply H pixels lower or higher, and the view keeps the same [np_top].
+;
+; That makes the whole repaint a BLIT. Opening was ~19 rows of ~30 cells
+; through np_redraw's full path - about 570 glyph cells, over half a second on
+; a 4.77MHz machine (PERFORMANCE.md Part 2's ~1ms a cell) - and is now one
+; OSAPI_GFX_SCROLL plus the panel. Closing is the blit plus the four rows the
+; text moving up EXPOSES at the bottom, which is the only part of it that was
+; never on screen.
+;
+; Three things make it safe, and all three are refusals rather than
+; corrections, because a wrong blit shows text that was never in the note:
+;
+;  - **Only [np_ty] may have moved.** [np_tx], [np_rgt] and [np_bot] are
+;    compared against what np_sigmark recorded; a resize that happens to
+;    coincide falls back.
+;  - **[np_top] must not be clamped.** Closing GROWS [np_vrows], which shrinks
+;    np_scrollmax, and a view that has to move renames every row. Opening
+;    shrinks vrows and so can never need it.
+;  - **A toast, the visual break and stale signatures all refuse.** The toast
+;    is drawn over the text at a y the panel moves, so the blit would carry it
+;    to the wrong place and nothing would put it back - np_scrollpaint refuses
+;    for the same reason (SPEC.md 27.7.2).
+;
+; The panel's OWN pixels are inside the band that moves, which is what makes
+; closing leave nothing behind: they blit off the top of the content and are
+; clipped. What the band cannot reach is the <8px left margin the x-rounding
+; gives up and the scroll bar's columns; both are repainted afterwards, which
+; np_sbar was going to do anyway because the thumb has moved.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; np_panmove - move the text to where the panel now leaves room for it
+; in:  SI = window ptr, np_bounds ALREADY run for the NEW geometry, gfx lock
+;      held
+; out: CF = 0 the screen is correct and the signatures describe it; CF = 1
+;      nothing was drawn and the caller must repaint in full.
+;      Clobbers what a window callback may.
+; -----------------------------------------------------------------------------
+np_panmove:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    cmp byte [np_sigok], 0
+    je .no                      ; the arrays do not describe the screen
+    cmp byte [np_bmode], 0
+    jne .no
+    cmp word [np_msg], 0
+    jne .no
+    mov ax, [np_tx]             ; only [np_ty] may have moved
+    cmp ax, [np_stx]
+    jne .no
+    mov ax, [np_rgt]
+    cmp ax, [np_srgt]
+    jne .no
+    mov ax, [np_bot]
+    cmp ax, [np_sbot]
+    jne .no
+    cmp word [np_vrows], 0
+    je .no
+    mov di, [np_ty]
+    sub di, [np_sty]            ; DI = how far the text is moving, + = down
+    jz .no
+    jns .open
+    call np_scrollmax           ; closing: the view has more rows to show, so
+    cmp [np_top], ax            ; [np_top] may be past the new maximum - and a
+    ja .no                      ; view that moves renames every row
+.open:
+
+    mov bx, si                  ; the band is the whole content height, so the
+    call OSAPI_WM_CONTENT       ; panel's own pixels move with the text
+    push ax                     ; AX = content left, DX = content top
+    push dx
+    mov ax, [np_tx]
+    and ax, 0xFFF8              ; x1 down to a byte column - [np_tx] and not
+                                ; the content's own left edge, because
+                                ; rounding THAT down would leave the content
+    mov cx, [np_rgt]
+    add cx, 8
+    and cx, 0xFFF8
+    dec cx                      ; x2, with x2+1 up to a byte column
+    pop bx                      ; y1 = content top
+    push bx
+    mov dx, [np_bot]            ; y2 = content bottom
+    push si
+    mov si, di
+    neg si                      ; OSAPI_GFX_SCROLL's positive is text UP
+    call OSAPI_GFX_SCROLL
+    pop si
+    pop dx                      ; content top
+    pop ax                      ; content left
+    jc .no                      ; refused, and having drawn nothing
+
+    push ax                     ; --- the left margin the rounding gave up ---
+    push dx
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop dx
+    pop ax
+    mov bx, dx                  ; y1 = content top
+    mov cx, [np_tx]
+    and cx, 0xFFF8
+    dec cx                      ; x2 = just left of the band
+    mov dx, [np_bot]
+    cmp ax, cx
+    jg .noleft
+    call OSAPI_GFX_FILL
+.noleft:
+
+    or di, di
+    js .close
+
+    ; --- OPENING: the panel goes in the strip the text left behind --------
+    ; and the rows pushed past the bottom are simply gone, which is what a
+    ; smaller view means. All that is owed below is the sliver under the last
+    ; whole row, where the blit left a slice of the row that used to be there.
+    call np_fpaint
+    jmp .tail
+
+.close:
+    ; --- CLOSING: the text moved UP, so the bottom of the view is stale ----
+    ; The first row that needs lettering is the one whose pixels reach the
+    ; band the blit could not fill: (bot - |d| + 1 - ty) >> 3.
+    mov ax, di
+    neg ax
+    mov bx, [np_bot]
+    sub bx, ax
+    inc bx
+    sub bx, [np_ty]
+    jns .r0
+    xor bx, bx
+.r0:
+    mov cl, 3
+    shr bx, cl                  ; BX = the first exposed row
+    cmp bx, [np_vrows]
+    jae .tail                   ; nothing was exposed
+    mov [np_dr0], bx
+    mov ax, [np_vrows]
+    dec ax
+    mov [np_dr1], ax
+
+    push cx                     ; erase the band: OSAPI_GFX_SCROLL leaves what
+    mov ax, bx                  ; it vacates holding a copy of its neighbour
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_ty]
+    mov bx, ax                  ; y1
+    mov dx, [np_bot]            ; y2 - to the very bottom, so the sliver under
+                                ; the last whole row goes too
+    mov ax, [np_tx]
+    sub ax, NP_MARGIN           ; x1 = the content's own left edge
+    mov cx, [np_rgt]
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+    mov word [np_prowi], 0xFFFF ; the fill erased what the delta cache knew
+
+    mov word [np_hity], 0xFFFF  ; one pass, drawing AND re-signing: the band
+    mov word [np_wanty], 0xFFFF ; was just filled, so np_clean
+    mov byte [np_draw], 1
+    mov byte [np_sigup], 1
+    mov byte [np_clip], 1
+    mov byte [np_clean], 1
+    mov byte [np_resume], 0
+    mov ax, [np_vrows]
+    mov [np_lastrow], ax
+    call np_walk
+    mov byte [np_clip], 0
+    mov byte [np_clean], 0
+    jmp short .done
+
+.tail:
+    ; the sliver under the last whole row, which after a move DOWN holds a
+    ; slice of the row that used to be there
+    push cx
+    mov ax, [np_vrows]
+    mov cl, 3
+    shl ax, cl
+    pop cx
+    add ax, [np_ty]
+    cmp ax, [np_bot]
+    ja .done
+    mov bx, ax                  ; y1
+    mov dx, [np_bot]            ; y2
+    mov ax, [np_tx]
+    sub ax, NP_MARGIN
+    mov cx, [np_rgt]
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_FILL
+
+.done:
+    call np_sbar                ; unconditional: the track changed height, and
+                                ; the blit reached into the bar's columns
+    mov bx, si
+    call OSAPI_WM_GROW          ; ...and the corner it sits in
+    call np_sigmark             ; the signatures describe THIS geometry now,
+    mov ax, [np_top]            ; and [np_gchg] is spent with them
+    mov [np_ptop], ax
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+np_redrawall:
+    call np_bounds              ; the NEW geometry, so np_panmove can compare
+    call np_panmove             ; it against what the signatures were taken at
+    jnc .out                    ; (SPEC.md 27.10.2): the panel only moves the
+                                ; text, so MOVE it rather than draw it again
+    mov byte [np_sigok], 0
+    mov word [np_prowi], 0xFFFF
+    mov byte [np_ckok], 0
+    mov byte [np_rowsok], 0
+    call np_redraw
+.out:
+    ret
+
+; =============================================================================
+; Small change (SPEC.md 27.8/27.10)
+; =============================================================================
+
+; np_saymsg - AX = a NUL string -> the toast. Preserves all registers.
+np_saymsg:
+    mov [np_msg], ax
+    inc word [np_msgn]          ; the GENERATION, or two different toasts at
+    ret                         ; the same address read as one (SPEC.md 27.2)
+
+; np_utoa - AX as decimal at DI, no leading zeros; DI advances past it.
+; Preserves every other register.
+np_utoa:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, 10
+    xor cx, cx
+.div:
+    xor dx, dx
+    div bx
+    push dx
+    inc cx
+    or ax, ax
+    jnz .div
+.emit:
+    pop ax
+    add al, '0'
+    mov [di], al
+    inc di
+    loop .emit
+    mov byte [di], 0
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; np_saycnt - "<AX> replaced" as the toast. Preserves all registers.
+np_saycnt:
+    push ax
+    push si
+    push di
+    mov di, np_tbuf
+    call np_utoa
+    mov si, np_m_repld
+.cp:
+    mov al, [si]
+    mov [di], al
+    inc si
+    inc di
+    or al, al
+    jnz .cp
+    mov ax, np_tbuf
+    call np_saymsg
+    pop di
+    pop si
+    pop ax
+    ret
+
 ; --- window template (SPEC.md 11: 16 bytes, 8 words) ---------------------------
 ; Same geometry the built-in used: 260x180 outer -> 258x160 content.
 np_tpl:
@@ -3982,20 +8906,55 @@ np_ttl: db 'Note Pad', 0
 
 ; --- the app menu set (SPEC.md 12.2) -------------------------------------------
 ; One menu, three items, all of them existing behaviour: New empties the
-; buffer, Open is F3, Save is F2. AM_NAME reuses np_ttl so the bar label and
+; buffer, Open is Ctrl-O, Save is Ctrl-S. AM_NAME reuses np_ttl so the bar
+; label and
 ; the window title are the same eight characters by construction. The bar
 ; runs 38 + 64 ('Note Pad') + 16 = 118 to the File cell's left edge, and
 ; 32 + 12 more to its right edge at 162 - nowhere near the clock at 434.
     OS88_MENUSET np_menus, np_ttl, np_oncmd
         OS88_MENU np_m_file, np_items_file, 4
+        OS88_MENU np_m_edit, np_items_edit, 5
+        OS88_MENU np_m_find, np_items_find, 3
     OS88_MENUSET_END np_menus
 
 np_m_file:     db 'File', 0
 np_items_file: dw np_i_new, np_i_open, np_i_save, np_i_saveas  ; = NP_MI_*
 np_i_new:      db 'New', 0
-np_i_open:     db 'Open...', 0      ; the ellipsis is the convention and it
-np_i_save:     db 'Save', 0         ; is honest: these two ask a question
-np_i_saveas:   db 'Save As...', 0   ; first (SPEC.md 38), Save never does
+np_i_open:     db 'Open...  ^O', 0  ; the ellipsis is the convention and it
+np_i_save:     db 'Save  ^S', 0     ; is honest: these two ask a question
+np_i_saveas:   db 'Save As...', 0   ; first (SPEC.md 38), Save never does.
+                                    ; The keys are on the items because they
+                                    ; are the fast path and a menu nobody can
+                                    ; learn from is one that has to be opened
+                                    ; forever - the Edit menu's own rule
+
+; The Edit menu (SPEC.md 27.8), and the Find menu beside it. Every item
+; carries its key, because the keys are the fast path and a menu nobody can
+; learn from is a menu that has to be opened forever.
+;
+; There is no Clear, and searching is not in Edit. Clear was a third door onto
+; np_selkill, which Backspace and Delete already open - a menu item whose only
+; distinction is that it is slower than the key everybody presses anyway. And
+; finding is not editing: it is the one thing here that reads the note without
+; changing it, it owns a panel and three keys of its own (SPEC.md 27.10), and
+; three items is a menu rather than a tail.
+;
+; The bar is 38 + 64 ('Note Pad') + 16 = 118 to File's left edge, and each
+; cell is its name plus 12: File 118..162, Edit 162..206, Find 206..250 -
+; still nowhere near the clock at 434.
+np_m_edit:     db 'Edit', 0
+np_items_edit: dw np_i_undo, np_i_cut, np_i_copy, np_i_paste, np_i_all ; NP_MI_*
+np_i_undo:     db 'Undo  ^Z', 0
+np_i_cut:      db 'Cut  ^X', 0
+np_i_copy:     db 'Copy  ^C', 0
+np_i_paste:    db 'Paste  ^V', 0
+np_i_all:      db 'Select All  ^A', 0
+
+np_m_find:     db 'Find', 0
+np_items_find: dw np_i_find, np_i_next, np_i_rep               ; = NP_FI_*
+np_i_find:     db 'Find...  ^F', 0
+np_i_next:     db 'Find Next  F3', 0
+np_i_rep:      db 'Replace...  ^R', 0
 
 ; --- the file and what the toast can say (SPEC.md 27.1) ------------------------
 ; The name is per-instance state now (np_name in bss), seeded from this at
@@ -4024,6 +8983,218 @@ np_e_prot:    db 'Protected', 0
 np_e_wprot:   db 'Write protected', 0
 np_e_big:     db 'Too big', 0
 np_e_nomem:   db 'No memory', 0      ; the staging claim was refused (50.3)
+
+; --- the find panel and the clipboard (SPEC.md 27.8/27.10/55) ----------------
+np_s_find:    db 'Find:', 0
+np_s_repl:    db 'Repl:', 0
+np_s_rx:      db 'Rx', 0             ; short on purpose: the button row has to
+                                     ; fit a 260px window, and 'Regex' is five
+                                     ; cells that would push the count off it
+np_b_next:    db 'Next', 0
+np_b_repl:    db 'Repl', 0
+np_b_all:     db 'All', 0
+np_b_x:       db 'X', 0
+np_m_wait:    db '...', 0            ; the worker owes a count (SPEC.md 27.10)
+np_m_blank:   db ' ', 0
+np_m_badpat:  db 'Bad pattern', 0
+np_m_nopat:   db 'No pattern', 0
+np_m_repld:   db ' replaced', 0
+np_m_noundo:  db 'Nothing to undo', 0
+np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
+                                        ; not fund the clipboard (SPEC.md 55)
+
+; --- the state SPEC.md 27.8/27.9/27.10 added ---------------------------------
+; The block below the image (further down this file) is ~120 hand-computed
+; `equ os88_image_end + N` lines, and that was survivable while it grew a word
+; at a time. Selection, undo, the clipboard glue and the find panel add forty
+; fields at once, so these are laid out by a PREPROCESSOR COUNTER instead:
+; NPVAR emits the same equ and moves the counter on, and NP_BSS_TOTAL falls
+; out of where it stops. Nothing about the older fields changed - they are
+; still where they were - and the two blocks cannot collide, because this one
+; starts at the byte the other one ends on.
+;
+; It is here, ABOVE OS88_BSS, because OS88_BSS needs the total and the counter
+; is the total. os88_image_end is still a forward reference at this point,
+; which is exactly what every line of code referencing these fields already
+; relies on.
+%assign NPB 508 + NP_MAXROWS*2      ; where the original block ends
+%macro NPVAR 2                      ; name, size in bytes
+    %1 equ os88_image_end + NPB
+    %assign NPB NPB + %2
+%endmacro
+
+; --- the selection (SPEC.md 27.8) --------------------------------------------
+    NPVAR np_sel0,  2       ; word: the first selected character index...
+    NPVAR np_sel1,  2       ; word: ...and one past the last. sel1 > sel0
+                            ; whenever [np_selon] is set, and the pair is
+                            ; ORDERED here so nothing downstream has to ask
+    NPVAR np_anchor, 2      ; word: where a drag started, which is the end
+                            ; that does NOT move while the pointer does
+    NPVAR np_selon, 1       ; byte: a selection exists
+    NPVAR np_rs0,   2       ; word } the CELLS of the row being accumulated
+    NPVAR np_rs1,   2       ; word } that fall inside it, 0xFFFF = none. The
+                            ; inversion is per row, like the caret's column,
+                            ; because that is the unit np_rflush draws in
+    NPVAR np_osel0, 2       ; word } the selection the SCREEN is showing, as
+    NPVAR np_osel1, 2       ; word } character indices, and whether it has one
+    NPVAR np_oselon, 1      ; byte }
+    NPVAR np_selonly, 1     ; byte: this redraw cannot have changed a
+                            ; character - only the selection moved - so a row
+                            ; owes an INVERSION and no glyphs at all. One-shot
+    NPVAR np_xs0,   2       ; word } the cells of the row being accumulated
+    NPVAR np_xs1,   2       ; word } whose selected-ness DIFFERS from what the
+                            ; screen shows: the symmetric difference, which is
+                            ; exactly what one XOR has to flip
+    NPVAR np_prs0,  2       ; word } and what the delta cache's row was last
+    NPVAR np_prs1,  2       ; word } DRAWN with, so a selection that moved
+                            ; over unchanged text still redraws (SPEC.md 27.8)
+    NPVAR np_dpos,  2       ; word: a drag-and-drop's insertion point, or
+                            ; 0xFFFF when no marker is on screen
+    NPVAR np_dmark, 2       ; word } the marker's x and y, banked so the XOR
+    NPVAR np_dmy,   2       ; word } that erases it cannot disagree with the
+                            ; XOR that drew it - a scroll between the two
+                            ; would leave the old bar on screen for good
+    NPVAR np_dpx,   2       ; word } where the press landed, for the dead-zone
+    NPVAR np_dpy,   2       ; word } test that keeps a click a click
+    NPVAR np_mvs,   2       ; word } np_movesel's four numbers. In bss rather
+    NPVAR np_mve,   2       ; word } than in registers because the three
+    NPVAR np_mvp,   2       ; word } reversals want all four at once and the
+    NPVAR np_mvn,   2       ; word } 8086 has nowhere to put them
+
+; --- undo (SPEC.md 27.9) -----------------------------------------------------
+; Five records, oldest first, and a heap arena holding their blobs packed in
+; the same order. A record says: at [np_upos], this group INSERTED [np_uins]
+; bytes and REMOVED the [np_udel] bytes at [np_uoff] in the arena. Undoing it
+; is therefore "delete uins at upos, insert the blob at upos" and nothing else
+; - which is why there is no redo and no second representation.
+    NPVAR np_upos, NP_UNDO*2
+    NPVAR np_uins, NP_UNDO*2
+    NPVAR np_udel, NP_UNDO*2
+    NPVAR np_uoff, NP_UNDO*2
+                            ; there is no "caret before the group" word, and
+                            ; there was one until it turned out to be derived:
+                            ; an undo puts the caret at upos + udel, the end
+                            ; of what it just put back, and that is right for
+                            ; all four shapes a group can have - a typing run
+                            ; (udel 0, so upos: where you started), a
+                            ; backspace run (the position you backspaced
+                            ; from), a cut and a paste
+    NPVAR np_useg, 2        ; word: the arena claim, 0 = none held. Claimed on
+                            ; the first edit worth remembering and given back
+                            ; by File > New, a load and np_uclear
+    NPVAR np_ukb,  2        ; word: its size in KB
+    NPVAR np_utop, 2        ; word: bytes of it in use - also the top record's
+                            ; blob end, which is what makes an append free
+    NPVAR np_un,   1        ; byte: records live, 0..NP_UNDO
+    NPVAR np_uopen, 1       ; byte: the newest is still ACCUMULATING. Closed
+                            ; by NP_IDLE ticks of not editing (the worker), by
+                            ; anything that is not an edit, and by an edit
+                            ; that does not touch the group's own span
+    NPVAR np_unolog, 1      ; byte: suppress recording - set while undo itself
+                            ; is editing the buffer, or the undo of an undo
+                            ; would be recorded as an edit
+    NPVAR np_upad, 1        ; byte: keeps the words below even
+
+; --- the find/replace panel (SPEC.md 27.10) ----------------------------------
+    NPVAR np_fpan,  1       ; byte: NP_FPAN_*
+    NPVAR np_ffield, 1      ; byte: NP_FF_*  - which box the keys go to
+    NPVAR np_frx,   1       ; byte: the Regex box is ticked
+    NPVAR np_fcok,  1       ; byte: [np_fcount] describes the live note and
+                            ; the live pattern
+    NPVAR np_fcdirty, 1     ; byte: ...and this says one is OWED, which the
+                            ; worker pays half a second after the typing stops
+                            ; - counting matches walks the whole note, and
+                            ; doing it per keystroke in the box is exactly the
+                            ; cost np_height was moved off the keystroke to
+                            ; avoid
+    NPVAR np_fbad,  1       ; byte: the pattern will not compile (too many
+                            ; repeats for NP_RXST, or an unclosed class)
+    NPVAR np_fpad,  1       ; byte: keeps the words below even
+    NPVAR np_fcount, 2      ; word: matches in the note...
+    NPVAR np_fmno,  2       ; word: ...and WHICH of them the selection is
+                            ; showing, 1-based. 0 = not known, which is a real
+                            ; state and not a failure: an edit or a click can
+                            ; move the caret off every match, and the ordinal
+                            ; is then the worker's to re-derive
+    NPVAR np_lmx, 2
+    NPVAR np_lmy, 2
+    NPVAR np_fwrap, 1       ; byte: the last search ran off the end and came
+                            ; back to the top - which is what turns "the next
+                            ; match" into "match 1" without counting anything
+    NPVAR np_fpad2, 1       ; byte: keeps the words after it even
+    NPVAR np_fpatn, 2       ; word: characters in the pattern...
+    NPVAR np_frepn, 2       ; word: ...and in the replacement
+    NPVAR np_fpcur, 2       ; word: the caret in the focused box
+    NPVAR np_fview, 2       ; word: the first character the box SHOWS. A
+                            ; pattern is 47 characters and no box this runs on
+                            ; is that wide, so the window slides to keep the
+                            ; caret inside it - recomputed at every paint, so
+                            ; nothing has to keep it in step
+    NPVAR np_fmst,  2       ; word } the match the view is showing, so Replace
+    NPVAR np_fmen,  2       ; word } knows what to replace without re-finding
+    NPVAR np_fpat,  NP_PATMAX+1
+    NPVAR np_frep,  NP_PATMAX+1
+    NPVAR np_fnum,  16      ; the match count as digits, for the panel. 16 and
+                            ; not 12 because np_pdrawn space-pads it to a
+                            ; fixed span so a shorter answer erases a longer
+                            ; one, and the pad has to fit the NUL after it
+    NPVAR np_fbuf,  NP_PATMAX+2  ; a box's interior, space-padded and drawn as
+                            ; ONE opaque font_run - the same reason np_rbuf is
+                            ; (SPEC.md 6.1/27.2): a fill followed by glyphs
+                            ; leaves the box blank in between, and on the
+                            ; machine this is for that is visible
+; the panel's geometry, computed by np_fpgeom and read by the painter and the
+; hit test alike - the fm_hit discipline (SPEC.md 22), so a button cannot be
+; drawn in one place and clicked in another
+    NPVAR np_pl,    2       ; word } content left and right, inclusive
+    NPVAR np_pr,    2
+    NPVAR np_pt,    2       ; word: the panel's top row
+    NPVAR np_pbtny, 2       ; word: the button row's top
+    NPVAR np_pbx,   8       ; 4 words: each button's left edge, right to left
+    NPVAR np_pbw,   8       ; 4 words: ...and its width. 0 = not shown
+    NPVAR np_pcbx,  2       ; word: the Regex tick box's left edge
+    NPVAR np_pnx,   2       ; word: ...and where the match count starts
+    NPVAR np_pfx,   2       ; word } a text box's interior, left and right
+    NPVAR np_pfr,   2
+
+; --- the regex matcher's explicit backtrack stack (SPEC.md 27.10.1) ----------
+; Four words a frame: the pattern offset to resume at, the text index the
+; repeat started from, the fewest repetitions it may keep, and how many it is
+; currently keeping. A frame is pushed per * + ? element and popped when it
+; runs out of ways to give ground.
+    NPVAR np_rxs, NP_RXST*8
+    NPVAR np_rxsp, 2        ; word: frames in use
+    NPVAR np_rxend, 2       ; word: one past the match, when one is found
+
+; --- word wrap (SPEC.md 27.11) -----------------------------------------------
+    NPVAR np_wstart, 1      ; byte: the index the walk is standing on begins a
+                            ; word, so np_wordfit has a question to answer.
+                            ; Maintained by the walk itself - set at its start,
+                            ; by a space and by a line break, cleared by every
+                            ; other character - because the alternative is
+                            ; reading the character BEFORE the one in hand,
+                            ; which a seeded walk cannot always do
+
+; --- the chunked height count (SPEC.md 27.7.3) -------------------------------
+; Where the count has got to, and where a bounded walk stopped. The two are
+; separate because np_walk's .stop is shared by every bounded walk in the
+; module - a paint, a caret key - and only np_height may keep what it reports.
+    NPVAR np_hrow,  2       ; word: the ABSOLUTE row the next chunk resumes at,
+                            ; 0 = from the top. Absolute and not visible,
+                            ; because [np_top] may move between chunks and the
+                            ; seed np_walk wants is relative to wherever the
+                            ; view is when the chunk actually runs
+    NPVAR np_hi,    2       ; word: the character index that row begins at.
+                            ; np_seedrow cannot supply this - np_rows is
+                            ; NP_MAXROWS long, one slot per VISIBLE row, so it
+                            ; describes the view and can never name row 300 of
+                            ; a 500-row note (SPEC.md 27.5)
+    NPVAR np_stoprow, 2     ; word } what .stop reached, published every time
+    NPVAR np_stopi, 2       ; word } and read only by np_height, on the walk it
+                            ; issued itself - under the lock, with nothing
+                            ; between the call and the read
+
+%assign NP_BSS_TOTAL NPB
 
     OS88_BSS NP_BSS_TOTAL
     OS88_IMAGE_END

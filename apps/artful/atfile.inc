@@ -332,6 +332,110 @@ at_e_wprot:   db 'The disk is write-protected.', 0
 at_e_big:     db 'Too large to open here.', 0
 
 ; -----------------------------------------------------------------------------
+; at_arg - accept a document handed to us at launch (SPEC.md 54.5)
+; in:  nothing; called from at_entry once the window and the claim exist
+; out: nothing; preserves all registers AND the flags - the loader's CF is
+;      still riding in them
+;
+; It RECORDS and does not load. at_load_named repaints and can enter
+; fullscreen, which want the gfx lock HELD, and an entry proc holds none
+; (SPEC.md 20.2) - the first W_PAINT spends it, where the window is also
+; placed and the geometry is known.
+; -----------------------------------------------------------------------------
+at_arg:
+    pushf
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call OSAPI_ARG_FILE             ; CF=1 = launched empty, the usual case
+    jc .out
+    mov [at_argclus], dx
+    mov [at_argdrv], bl
+    mov ax, KERNEL_SEG              ; the name is a KERNEL pointer, so ES is
+    mov es, ax                      ; loaded rather than trusted
+    mov di, at_name
+    mov cx, 13
+.copy:
+    mov al, [es:si]
+    mov [di], al
+    or al, al
+    jz .named
+    inc si
+    inc di
+    loop .copy
+    mov byte [di], 0
+.named:
+    push ds
+    pop es                          ; ES = DS again, the callback default
+    mov byte [at_argp], 1
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; at_argload - spend it, from the first paint (SPEC.md 54.5)
+; in:  the gfx lock HELD, the window visible
+; out: CF=1 = the screen is already painted, the caller must draw nothing;
+;      CF=0 = nothing happened, paint the splash. All registers preserved.
+;
+; The load AND at_ondlg's fullscreen entry, because the paint this runs
+; inside would otherwise draw the SPLASH over a perfectly loaded document -
+; [at_fs] is 0 at launch, so at_paint's own test sends it to at_splash. The
+; entry is what makes the document visible at all, and it repaints
+; everything itself (through W_PAINT, re-entering this proc with [at_argp]
+; already spent), which is what the CF is for.
+;
+; A failure of any kind - unlistable folder, unreadable file, or a
+; fullscreen refused because another window owns the screen - leaves
+; [at_fs] at 0, and that one test answers all three: the splash is then the
+; honest thing to show, over the fresh untitled document at_cmd_newdoc
+; already made, with no alert over a window that has not been seen yet.
+; -----------------------------------------------------------------------------
+at_argload:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov byte [at_argp], 0           ; once, whatever happens below
+    mov dx, [at_argclus]
+    mov bl, [at_argdrv]
+    call OSAPI_FILE_GOTO            ; the folder it was opened from
+    jc .out
+    call at_load_named
+    jc .out
+    call at_fs_enter                ; ...which paints everything itself
+.out:
+    pop es                          ; whatever at_load_named left in ES, the
+                                    ; caller's is what goes back
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    cmp byte [at_fs], 0             ; did we reach the editor? (POP leaves the
+    je .nofs                        ; flags alone, so this is the only test)
+    stc
+    ret
+.nofs:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
 ; at_dlg_open / at_dlg_save - raise the Standard File dialog (SPEC.md 38.6)
 ; A refusal (one is already up) is silently nothing, notepad's rule.
 ; -----------------------------------------------------------------------------

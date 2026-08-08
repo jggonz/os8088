@@ -26,9 +26,10 @@ never had (switchable to cooperative from the Control Panel, if you want to
 feel what they were up against).
 
 ```
-make          # build all four floppy images
+make          # build all six floppy images
 make run      # boot it in QEMU (with an emulated serial mouse)
 make run-640  # the same, on a 640KB machine
+make run-720  # the same, off the 720KB pair
 make xt       # boot the 360KB image on an emulated IBM PC/XT in 86Box
 make xt-640   # the same XT with a full 640KB of RAM
 make 286      # 86Box: 286 @ 12.5MHz, 1MB, VGA
@@ -36,11 +37,15 @@ make 386sx    # 86Box: 386SX @ 16MHz, 2MB, VGA
 make 386      # 86Box: 386DX @ 25MHz, 2MB, VGA
 make test     # boot headless with a QMP socket for scripted testing
 make debug    # boot with QEMU halted, waiting for gdb on :1234
+make marty    # a cycle-accurate IBM 5150 (MartyPC) with a debugger attached -
+              # memory, registers, breakpoints, single-step, cycle counts,
+              # and no code in the guest. THE FIRST TOOL TO REACH FOR when
+              # what you are testing runs on an 8088 (docs/MARTYPC-DEBUG.md)
 make clean
 ```
 
 ![what it looks like: gray dithered desktop, menu bar, drive icons, Note Pad,
-Clock, Bounce, Control Panel and Task Manager windows, and the dock
+Timer, Bounce, Control Panel and Task Manager windows, and the dock
 strip](docs/screenshot.png)
 
 ## What it does
@@ -56,7 +61,7 @@ the menus. All of classic Mac's core interactions work:
   the dock.
 - **Apps as instances** — every running thing, built-in or loaded from disk,
   is a record in one instance table (12 slots). Launching from the menu opens
-  a *new* instance up to that app's cap — two Note Pads, ten Clocks — and at
+  a *new* instance up to that app's cap — two Note Pads, ten Timers — and at
   the cap it fronts the one already open instead. Closing frees the slot, the
   task and the memory.
 - **Dock** — the bottom strip carries one tile per live instance. Click a
@@ -82,7 +87,7 @@ the menus. All of classic Mac's core interactions work:
   swaps back to **Locator**, which is what the OS itself is called when it
   is acting as an application (the desktop, the drive icons, the Disk
   browser, and the menus that launch everything else): Locator →
-  File → Clock / Bounce / Disk / Close Window, Special → Restart. Apps get
+  File → Timer / Bounce / Disk / Close Window, Special → Restart. Apps get
   their menus from one SDK call, so a loaded `.o88` from the software
   floppy takes over the bar exactly like a built-in.
 - **Note Pad** — a loadable package on the software floppy. Type; it wraps
@@ -111,8 +116,14 @@ the menus. All of classic Mac's core interactions work:
   minesweeper that ships on `build/apps.img`, loaded through the Disk
   window. Blue 1s, green 2s, red flags, first-click-safe mine placement,
   flood fill; `F` toggles flag mode, `N` starts a new game.
-- **Clock** and **Bounce** — each instance runs as its *own pre-empted task*,
-  up to ten of each. The clocks tick and the balls bounce while you type or
+- **Timer** and **Bounce** — each instance runs as its *own pre-empted task*,
+  up to ten of each. The Timer is a stopwatch: it starts counting the moment
+  you open it, and **Start · Stop · Reset** sit under the digits — Start greys
+  out while it runs and Stop while it does not, so a button never looks
+  available and then refuses. Stopping throws its interval away rather than
+  owing it, so Start picks up where the digits stand; Reset zeroes them
+  without stopping the count. The timers tick and the balls bounce while you
+  type or
   hold a drag: that is the PIT timer interrupt switching tasks out from under
   each other, on an 8086. Cover half of one and it keeps going in the half
   you can see — the kernel hands a background task the *visible region* of
@@ -154,7 +165,7 @@ the menus. All of classic Mac's core interactions work:
 |---------------|--------------------------------------------------------------|
 | graphics      | VGA mode 12h, 640x480x16 planar, drawn directly by default (the real Mac drew directly too). A 150KB back buffer is available as a runtime option on machines with the heap for it — it is a claim, not a reservation, so a small machine never pays for it. Set/Reset + Bit Mask fills, XOR for drag outlines and menu highlights. |
 | multitasking  | round-robin off int 08h (PIT, 18.2Hz): chain to the BIOS tick, then save the register frame on the task stack, swap SP, and iret into the next ready task. 12 task slots, 512-byte stacks (sized against a measured 150-byte high-water mark). Pre-emptive by default; in cooperative mode the tick declines to switch and a task runs until it yields, sleeps or exits — with a ~1s watchdog so a runaway one can't take the machine with it. |
-| mouse         | Microsoft serial mouse on COM1, IRQ4, 1200 baud 7N1, 3-byte packets — the period-correct XT mouse. QEMU emulates one natively (`-chardev msmouse`). |
+| mouse         | Microsoft serial mouse on **COM1 or COM2** (IRQ4 / IRQ3), 1200 baud 7N1, 3-byte packets — the period-correct XT mouse. The port is neither asked nor configured: both are probed for a UART, every one that answers is listened to at once, and the first to deliver a run of clean packets wins — so the other port stays free for the modem that is usually on it. QEMU emulates a mouse natively (`-chardev msmouse`); `make run MOUSEPORT=com2` puts it on the second port. |
 | cursor        | arrow with save-under, drawn by the mouse ISR itself when it's safe, deferred to the next unlock when a task holds the drawing lock. |
 | keyboard      | BIOS int 16h, polled by the UI task. |
 | font          | the VGA ROM's own 8x8 font, copied out via int 10h AX=1130h at boot. |
@@ -201,13 +212,23 @@ int 12h reports minus 73KB.
 ```
 SPEC.md              the binding module contracts (interfaces, layouts,
                      concurrency rules) - read this first
+PERFORMANCE.md       the target machine - a 4.77MHz 8088, ~1000x slower than
+                     the emulator you are testing on. Calibration numbers,
+                     the standing redraw budget, and the visible defects
+                     QEMU cannot show - read this second
+docs/TESTING.md      WHICH TOOL to reach for and what each can test:
+                     MartyPC first, then QEMU, then 86Box, then the 5150 for
+                     anything with a disk in it
+docs/MARTYPC-DEBUG.md a cycle-accurate 5150 with a debugger attached, and the
+                     one boundary that matters - cycle accurate is NOT disk
+                     accurate
 docs/KERNEL-MEMORY.md what the kernel's byte budget is spent on, and the
                      measured RAM floor
 boot/boot.asm        512-byte boot sector: LBA->CHS, retrying reads
 kernel/kernel.asm    constants, boot sequence, includes, size assertion
 kernel/vga12.inc     mode 12h planar primitives, save/restore, gfx lock
 kernel/font.inc      ROM font grab + transparent text drawing
-kernel/mouse.inc     COM1 UART, IRQ4 ISR, packet decode, cursor
+kernel/mouse.inc     COM1/COM2 UARTs, IRQ4+IRQ3 ISRs, packet decode, cursor
 kernel/sched.inc     PIT hook, context switch, spawn/yield/sleep,
                      pre-emptive/cooperative mode + watchdog
 kernel/events.inc    ISR-safe event ring queue
@@ -218,7 +239,7 @@ kernel/instance.inc  the instance table: app kinds, launch, close, billing
 kernel/menu.inc      menu bar: the active app's name + menus, runtime bar
                      layout, pull-down tracking, Locator's own menu set
 kernel/ui.inc        UI task: event pump, keyboard, drags, dispatch
-kernel/apps.inc      About, Note Pad, Clock task, Bounce task
+kernel/apps.inc      About, Timer task, Bounce task
 kernel/disk.inc      int 13h floppy transfers, FAT12/16 mount + chain walk
 kernel/diskw.inc     the FAT write path: allocate, flush, directory entries
 kernel/loader.inc    .o88 package validation, region alloc, relocate, launch
@@ -270,14 +291,16 @@ from then on the program is event-driven — its paint/key/click procs are
 called like any built-in window's — and from one of those it can claim a
 single pre-empted worker task of its own. Closing a package frees its region.
 
-## Two geometries of everything
+## Three geometries of everything
 
-| image                | geometry                | for                             |
-|----------------------|-------------------------|---------------------------------|
-| `build/os8088.img`      | 1.44MB, 18 spt, 2 heads | QEMU boot floppy (A:)           |
-| `build/os8088-360.img`   | 360KB, 9 spt, 2 heads   | 86Box / real XT boot floppy     |
-| `build/apps.img`     | 1.44MB FAT12             | QEMU software floppy (B:)       |
-| `build/apps360.img`  | 360KB FAT12              | 86Box / real XT software floppy |
+| image                  | geometry                 | for                             |
+|------------------------|--------------------------|---------------------------------|
+| `build/os8088.img`     | 1.44MB, 18 spt, 2 heads  | QEMU boot floppy (A:)           |
+| `build/os8088-720.img` | 720KB, 9 spt, 2 heads    | 3.5" DD / USB floppy / Gotek    |
+| `build/os8088-360.img` | 360KB, 9 spt, 2 heads    | 86Box / real XT boot floppy     |
+| `build/apps.img`       | 1.44MB FAT12             | QEMU software floppy (B:)       |
+| `build/apps720.img`    | 720KB FAT12              | 3.5" DD software floppy         |
+| `build/apps360.img`    | 360KB FAT12              | 86Box / real XT software floppy |
 
 The boot sector takes its geometry from `-DSPT` / `-DHEADS` at assembly
 time and reads exactly as many sectors as the measured kernel occupies.
@@ -285,13 +308,21 @@ A 1.44MB drive postdates the 8086 by years, so period hardware gets the
 360KB build.
 
 **No binary is committed to this repository.** `build/` is gitignored
-outright — the four images, the kernel, the boot sectors and every package
-are products of `make`, which needs only `nasm` and `python3`. For a floppy
-you can boot without a toolchain, take a
+outright — the six images, the kernel, the boot sectors, the drivers and
+every package are products of `make`, which needs only `nasm` and `python3`.
+For a floppy you can boot without a toolchain, take a
 [release](https://github.com/jggonz/os8088/releases) or
 [os8088.com](https://os8088.com); the build is deterministic
 (`tools/os88disk.py` pins the volume serial and every FAT timestamp), so a
 released image rebuilds from its own sources byte for byte.
+
+720KB is the one in between, and it is the same sector at both ends: 9
+sectors and 2 heads like the 360KB disk, on 80 cylinders instead of 40,
+and the boot sector derives its cylinder from the LBA rather than counting
+them — so the two share `build/boot360.bin` and only the BPB differs. It is
+there for the machines that can take neither of the others: an XT or AT
+fitted with a 3.5" DD drive, and every USB floppy drive and Gotek made,
+which read 720KB and 1.44MB and nothing 5.25" at all.
 
 ## Emulators
 
@@ -335,7 +366,7 @@ screen, and picking "EXIT FOR BOOT" once writes `vm/<machine>/nvr/`.)
 ```
 python3 tools/mouse.py build/qmp.sock to 110 8          # Locator's File menu
 python3 tools/mouse.py build/qmp.sock down              # menus need press...
-python3 tools/mouse.py build/qmp.sock to 110 30         # ...drag to Clock...
+python3 tools/mouse.py build/qmp.sock to 110 30         # ...drag to Timer...
 python3 tools/mouse.py build/qmp.sock up                # ...release to choose
 python3 tools/qmp.py build/qmp.sock 'sendkey h' 'sendkey i'
 python3 tools/qmp.py build/qmp.sock 'screendump /abs/path/shot.ppm'

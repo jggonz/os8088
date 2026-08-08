@@ -4,8 +4,10 @@
 ; The menu bar and pull-down menus (SPEC.md 12). The bar is three zones:
 ; the System menu (an 11x11 hand-authored chip silhouette - the os8088
 ; logo, and the one place bitmap data is hand-made), which is cell 0 in
-; EVERY application; the ACTIVE APPLICATION'S NAME, a label with no hit
-; range; and that application's own menus (SPEC.md 12.2).
+; EVERY application; the ACTIVE APPLICATION'S NAME, which is a real menu
+; cell for every application (SPEC.md 12.7 - 'About <Name>' when the window
+; registered a handler, and 'Close' always, at the bottom) and a bare label
+; for Locator alone; and that application's own menus (SPEC.md 12.2).
 ;
 ; So the bar is not static data any more. [menu_win] names the window that
 ; owns it (0 = Locator, the kernel's own application - SPEC.md 12.3), and
@@ -46,7 +48,7 @@
 CMD_ABOUT   equ 1               ; --- System (cell 0, every application) ---
 CMD_CTRL    equ 2
 CMD_TASKS   equ 3
-CMD_CLOCK   equ 4               ; --- Locator: File ---
+CMD_TIMER   equ 4               ; --- Locator: File ---
 CMD_BOUNCE  equ 5
 CMD_FILES   equ 6
 CMD_CLOSE   equ 7
@@ -82,10 +84,11 @@ MB_SEG      equ 12              ; word: the SEGMENT this cell's title and
 MB_ENTSZ    equ 14
 MENU_APPMAX equ 4               ; app menus the bar can host
 MENU_BARMAX equ MENU_APPMAX + 2 ; + the System cell, which is always cell 0,
-                                ; + the app-NAME cell, which exists only when
-                                ; the front window declared an About handler
-                                ; (SPEC.md 12.2) and is APPENDED last so the
-                                ; app's own menus keep bar index = set index+1
+                                ; + the app-NAME cell, which exists for every
+                                ; application (SPEC.md 12.7) and is APPENDED
+                                ; last so the app's own menus keep bar
+                                ; index = set index + 1
+MENU_ABMAX  equ 2               ; items the name cell can carry: About, Close
 MENU_ABPFX_LEN equ 6            ; 'About ' - menu_abstr's name copy starts
                                 ; here, which is why one buffer serves both
                                 ; the cell's TITLE and its single ITEM
@@ -182,11 +185,41 @@ menu_activate:
     cmp bx, [menu_win]
     je .same
     mov [menu_win], bx
+    mov byte [fm_fchk], 1       ; the active application changed, so a Disk
+                                ; window may have just gained the focus with
+                                ; a refresh owing (SPEC.md 22.8). This is the
+                                ; catch-all rather than the main path -
+                                ; wm_raise spends the debt before it draws -
+                                ; and it is here because THIS is where every
+                                ; focus change passes, including the one no
+                                ; raise reaches: losing the front window
+                                ; promotes the window under it (menu_check)
     call menu_relayout
     stc
     ret
 .same:
     clc
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_owner - who is the ACTIVE APPLICATION? (API 0x02B8, SPEC.md 12/12.6)
+; in:  nothing
+; out: BX = the window owning the menu bar, 0 = Locator. Every other
+;      register, and FLAGS, preserved.
+;
+; The read half of menu_activate, and the answer to a question wm_top cannot
+; be asked: clicking the bare desktop hands the bar to Locator (SPEC.md 12)
+; and moves nothing in wm_zord, so the frontmost visible window is still
+; whatever it was. A real-time package that must stop when the player walks
+; away needs THIS one - apps/arkanoid (SPEC.md 44.8) pauses on it.
+;
+; Takes no lock and touches no VRAM, so a worker task may call it every
+; frame, exactly like wm_top. It is a plain word read: [menu_win] is written
+; only by menu_activate on the UI task, and the 8086 recognises interrupts
+; only at instruction boundaries, so it cannot be torn.
+; -----------------------------------------------------------------------------
+menu_owner:
+    mov bx, [menu_win]
     ret
 
 ; -----------------------------------------------------------------------------
@@ -257,7 +290,7 @@ menu_check:
 ; out: nothing (all registers preserved)
 ;
 ; The name falls back twice: the set's AM_NAME, else the owning instance's
-; I_NAME (an accessory like Clock has no menu set at all), else the
+; I_NAME (an accessory like Timer has no menu set at all), else the
 ; window's own title. Locator - [menu_win] = 0 - takes menu_loc_set, whose
 ; AM_NAME is the string 'Locator'.
 ; -----------------------------------------------------------------------------
@@ -326,13 +359,13 @@ menu_relayout:
 
     ; --- cell 0: the System menu, fixed in every application ---------------
     mov di, menu_bar
-    mov word [di + MB_TITLE], 0 ; 0 = draw the logo glyph
-    mov word [di + MB_ITEMS], menu_items_logo
-    mov word [di + MB_NITEM], 3
-    mov word [di + MB_XL], 0
-    mov word [di + MB_XR], MENU_SYS_XR
-    mov word [di + MB_TX], MENU_SYS_TX
-    mov word [di + MB_SEG], 0   ; the System menu is the kernel's, always
+    mov word [ss:di + MB_TITLE], 0 ; 0 = draw the logo glyph
+    mov word [ss:di + MB_ITEMS], menu_items_logo
+    mov word [ss:di + MB_NITEM], 3
+    mov word [ss:di + MB_XL], 0
+    mov word [ss:di + MB_XR], MENU_SYS_XR
+    mov word [ss:di + MB_TX], MENU_SYS_TX
+    mov word [ss:di + MB_SEG], 0   ; the System menu is the kernel's, always
     mov word [menu_nbar], 1
     add di, MB_ENTSZ
 
@@ -369,20 +402,20 @@ menu_relayout:
                                 ; ui_dispatch's `dec ah` would hand the
                                 ; handler the wrong menu (SPEC.md 12/12.2)
     mov ax, [es:si + AMENU_TITLE]
-    mov [di + MB_TITLE], ax
+    mov [ss:di + MB_TITLE], ax
     mov ax, [es:si + AMENU_ITEMS]
-    mov [di + MB_ITEMS], ax
+    mov [ss:di + MB_ITEMS], ax
     mov ax, [es:si + AMENU_NITEM]
-    mov [di + MB_NITEM], ax
+    mov [ss:di + MB_NITEM], ax
     mov ax, [menu_seg]          ; ...and these are the owner's
-    mov [di + MB_SEG], ax
-    mov [di + MB_XL], bx
+    mov [ss:di + MB_SEG], ax
+    mov [ss:di + MB_XL], bx
     mov ax, bx
     add ax, 6                   ; half of MENU_TITLE_PAD: the text is centred
-    mov [di + MB_TX], ax
+    mov [ss:di + MB_TX], ax
     mov ax, dx
     dec ax
-    mov [di + MB_XR], ax        ; xr = left + width - 1
+    mov [ss:di + MB_XR], ax        ; xr = left + width - 1
     mov bx, dx                  ; next cell starts where this one ended
     inc word [menu_nbar]
     add di, MB_ENTSZ
@@ -407,10 +440,10 @@ menu_relayout:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_ab_cell - turn the app-name label into a bar cell, if the front window
-;                declared an About handler (SPEC.md 12.2)
+; menu_ab_cell - turn the app-name label into a bar cell (SPEC.md 12.7)
 ; in:  DI = the next free menu_bar slot, [menu_namep]/[menu_seg] = the label
-; out: [menu_abcell] = the cell's bar index, 0 = no cell (all regs preserved)
+; out: [menu_abcell] = the cell's bar index, 0 = no cell (Locator);
+;      [menu_abclose] = the index of its Close item. All regs preserved.
 ;
 ; It is APPENDED, after the application's own menus, and that is the whole
 ; trick: hit-testing and drawing both walk menu_bar by XL/XR and TX, so where
@@ -420,28 +453,38 @@ menu_relayout:
 ; either side like a title cell, so it highlights the way every other cell
 ; does and still clears the first menu by MENU_NAME_PAD - 6.
 ;
-; BOTH of its strings are copied into menu_abstr, which is why its MB_SEG is
-; 0 even when the bar belongs to a package: the item is the whole buffer
-; ('About Paint') and the title is menu_abstr+MENU_ABPFX_LEN, the same bytes
-; from the name onward. Reading the title out of the package's segment
-; instead would work, but then one cell would need two segments.
+; **The cell no longer depends on the About handler.** It used to exist only
+; when wm_about_get answered non-zero, so most applications had a bare label
+; where their name is and no way at all to quit from the bar. Now the whole
+; condition is that an application owns the bar, and the handler decides only
+; whether the cell has one item or two: 'About <Name>' if there is one, and
+; 'Close' - the kernel's own, dispatched by ui_dispatch - at the bottom
+; either way. WHICH index Close ended up at is recorded in [menu_abclose]
+; rather than re-derived at dispatch time, or that would be a second place
+; that has to agree with this one about what the cell looks like.
+;
+; menu_abstr is therefore built on every relayout and not only in the About
+; case: the cell's TITLE is menu_abstr+MENU_ABPFX_LEN, the same bytes read
+; from the name onward, which is why one buffer serves both and why the
+; cell's MB_SEG is 0 even when the bar belongs to a package. Reading the
+; title out of the package's segment instead would work, but then one cell
+; would need two segments.
 ;
 ; Locator never gets one: the kernel's own About is CMD_ABOUT, in the System
-; menu, which is cell 0 of every application including this one.
+; menu, which is cell 0 of every application including this one, and its
+; Close Window is already an item of its own File menu (SPEC.md 12.3).
 ; -----------------------------------------------------------------------------
 menu_ab_cell:
     push ax
     push bx
+    push cx
     push si
     push di
     push es
     mov word [menu_abcell], 0
     mov bx, [menu_win]
     or bx, bx
-    jz .out                     ; Locator: the System menu is its About
-    call wm_about_get           ; AX = the window's handler offset, 0 = none
-    or ax, ax
-    jz .out
+    jz .out                     ; Locator: see above
 
     push di                     ; --- 'About ' + the name, into menu_abstr ---
     mov di, menu_abstr
@@ -454,20 +497,33 @@ menu_ab_cell:
     call menu_ab_cat
     mov byte [di], 0
     pop di
+
+    mov bx, [menu_win]          ; --- the items: About if it is offered, then
+    call wm_about_get           ; Close, which every application gets (12.7)
+    mov cx, 1                   ; CX = item count, BX = Close's index
+    xor bx, bx
+    or ax, ax
+    jz .noab
     mov word [menu_abitems], menu_abstr
+    mov bx, 1
+    mov cx, MENU_ABMAX
+.noab:
+    mov [menu_abclose], bl
+    add bx, bx                  ; ...to a word offset
+    mov word [menu_abitems + bx], menu_s_appclose
 
     push cs                     ; --- the cell, over the label's own rect ---
     pop es                      ; the copy is kernel data now, so measure it
     mov si, menu_abstr + MENU_ABPFX_LEN
     call font_width_x           ; AX = the label's pixel width
-    mov [di + MB_TITLE], si
-    mov word [di + MB_ITEMS], menu_abitems
-    mov word [di + MB_NITEM], 1
-    mov word [di + MB_XL], MENU_NAME_X - 6
+    mov [ss:di + MB_TITLE], si
+    mov word [ss:di + MB_ITEMS], menu_abitems
+    mov [ss:di + MB_NITEM], cx
+    mov word [ss:di + MB_XL], MENU_NAME_X - 6
     add ax, MENU_NAME_X + 5
-    mov [di + MB_XR], ax
-    mov word [di + MB_TX], MENU_NAME_X
-    mov word [di + MB_SEG], 0   ; both its strings are in menu_abstr
+    mov [ss:di + MB_XR], ax
+    mov word [ss:di + MB_TX], MENU_NAME_X
+    mov word [ss:di + MB_SEG], 0   ; every string it names is kernel data
     mov ax, [menu_nbar]
     mov [menu_abcell], ax
     inc word [menu_nbar]
@@ -475,6 +531,7 @@ menu_ab_cell:
     pop es
     pop di
     pop si
+    pop cx
     pop bx
     pop ax
     ret
@@ -560,7 +617,8 @@ menu_des:
 ; which only two things can do - a fullscreen window (SPEC.md 11.2) and a
 ; dropped menu whose save-under was refused - so wm_paint_all and menu_track
 ; set it rather than reason about it. The clock is outside all of this:
-; menu_draw_clock fills its own cell and is what the Clock task calls direct.
+; menu_draw_clock fills its own cell and is what the UI task's own clock
+; step calls direct - nothing to do with the Timer app (SPEC.md 14).
 ; -----------------------------------------------------------------------------
 menu_draw_bar:
     push ax
@@ -617,18 +675,18 @@ menu_draw_bar:
     mov cx, [menu_nbar]
 .title:
     push cx
-    mov ax, [si + MB_TITLE]
+    mov ax, [ss:si + MB_TITLE]
     test ax, ax
     jz .glyph
-    mov cx, [si + MB_TX]
+    mov cx, [ss:si + MB_TX]
     mov dx, MENU_TEXT_Y
     push si
     push es
     push cs
     pop es                      ; this cell's own segment (SPEC.md 12.2):
-    cmp word [si + MB_SEG], 0   ; cell 0's title is never drawn (it is the
+    cmp word [ss:si + MB_SEG], 0   ; cell 0's title is never drawn (it is the
     je .tseg                    ; logo), but the rule is the same for all
-    mov es, [si + MB_SEG]
+    mov es, [ss:si + MB_SEG]
 .tseg:
     mov si, ax
     call font_str_x
@@ -636,7 +694,7 @@ menu_draw_bar:
     pop si
     jmp .next
 .glyph:
-    mov cx, [si + MB_TX]
+    mov cx, [ss:si + MB_TX]
     call menu_logo_glyph
 .next:
     pop cx
@@ -723,9 +781,9 @@ menu_track:
     mov di, [menu_nbar]
     mov byte [menu_cell], 0
 .find:
-    cmp cx, [si + MB_XL]
+    cmp cx, [ss:si + MB_XL]
     jb .miss
-    cmp cx, [si + MB_XR]
+    cmp cx, [ss:si + MB_XR]
     jbe .found
 .miss:
     add si, MB_ENTSZ
@@ -741,11 +799,11 @@ menu_track:
                                 ; no flush needed - SPEC.md 32)
 
     ; --- menu rect: width = widest item + 16, items are 16px cells -----------
-    mov bx, [si + MB_ITEMS]
+    mov bx, [ss:si + MB_ITEMS]
     mov [menu_iptr], bx
-    mov ax, [si + MB_SEG]       ; the dropped menu's segment: this CELL's,
+    mov ax, [ss:si + MB_SEG]       ; the dropped menu's segment: this CELL's,
     mov [menu_dseg], ax         ; not the bar owner's (SPEC.md 12.2)
-    mov cx, [si + MB_NITEM]
+    mov cx, [ss:si + MB_NITEM]
     cmp cx, [vid_popmax]        ; the height clamp a bar menu never had: a
     jbe .cnt_ok                 ; package's set is not trusted for count any
     mov cx, [vid_popmax]        ; more than for width (SPEC.md 12.2/2.2)
@@ -753,7 +811,7 @@ menu_track:
     mov [menu_cnt], cx
     call menu_widest            ; AX = widest item text, px (BX/CX in)
     add ax, 16
-    mov bx, [si + MB_XL]        ; the pull-down hangs off the title's left
+    mov bx, [ss:si + MB_XL]        ; the pull-down hangs off the title's left
     mov [menu_x1], bx
     add bx, ax
     dec bx
@@ -1082,6 +1140,9 @@ menu_drop:
                                 ; no flush: the highlights are VRAM-direct and
                                 ; nothing else draws while we hold the lock,
                                 ; so the back buffer is untouched here (§32)
+    call kbm_pollm              ; ...and let the keyboard mouse release the
+                                ; button it latched, or this loop never ends
+                                ; on a machine with no mouse (SPEC.md 9.6)
     call task_yield             ; keep the scheduler healthy while we spin
     jmp .poll
 
@@ -1251,9 +1312,9 @@ menu_title_xor:
     push dx
     push si
     mov si, [menu_ent]
-    mov ax, [si + MB_XL]
+    mov ax, [ss:si + MB_XL]
     xor bx, bx
-    mov cx, [si + MB_XR]
+    mov cx, [ss:si + MB_XR]
     mov dx, MBAR_H - 2          ; the black rule stays black
     call gfx_xor_fill
     pop si
@@ -1420,7 +1481,7 @@ menu_s_special  db 'Special', 0
 
 menu_s_about    db 'About os8088...', 0
 menu_s_ctrl     db 'Control Panel', 0
-menu_s_clock    db 'Clock', 0
+menu_s_timer    db 'Timer', 0
 menu_s_bounce   db 'Bounce', 0
 menu_s_disk     db 'Disk', 0
 menu_s_close    db 'Close Window', 0
@@ -1430,12 +1491,18 @@ menu_s_closex   db MENU_DIS, 'Close Window', 0  ; ...with nothing to close;
 menu_s_tasks    db 'Task Manager', 0
 menu_s_restart  db 'Restart', 0
 
+; The app-name menu's bottom item (SPEC.md 12.7), and the whole of the dock
+; tile's context menu (SPEC.md 30.2) - dock_ctx_items points here. One
+; string, so two menus that both say 'Close' can never come to say
+; different things.
+menu_s_appclose db 'Close', 0
+
 menu_items_logo:
     dw menu_s_about
     dw menu_s_ctrl
     dw menu_s_tasks
 menu_items_file:
-    dw menu_s_clock
+    dw menu_s_timer
     dw menu_s_bounce
     dw menu_s_disk
     dw menu_s_close
@@ -1458,13 +1525,21 @@ menu_loc_set:
 ; -----------------------------------------------------------------------------
 menu_s_abpfx db 'About ', 0     ; + the app's name -> menu_abstr (12.2)
 
+section .lowbss                 ; LOW_SEG (SPEC.md 2.1): the runtime bar is
+                                ; walked by pointer (menu_relayout writes it,
+                                ; menu_draw_bar and menu_hit read it) and is
+                                ; never addressed by name outside this module,
+                                ; so it costs one ss: prefix per field access
+                                ; and nothing in the kernel's 64KB segment
+menu_bar:   resb 84             ; MENU_BARMAX x MB_ENTSZ (6 x 14; a literal
+                                ; per the no-forward-ref-in-bss rule; guard 3b
+                                ; in kernel.asm catches the next cell)
+
 section .bss
 
 menu_win:   resw 1              ; window owning the bar, 0 = Locator (12)
 menu_set:   resw 1              ; its app menu set (SPEC.md 12.2)
 menu_namep: resw 1              ; the name string drawn at MENU_NAME_X
-menu_bar:   resb 84             ; MENU_BARMAX x MB_ENTSZ (6 x 14; a literal
-                                ; per the no-forward-ref-in-bss rule)
 menu_nbar:  resw 1              ; live cells in menu_bar (>= 1: the System
                                 ; menu is always cell 0)
 menu_ent:   resw 1              ; -> bar cell being tracked
@@ -1493,9 +1568,13 @@ menu_sseg:  resw 1              ; the save-under claim's segment, 0 = none
 menu_tbuf:  resb MENU_MAXCH + 1 ; menu_trunc's staging buffer
 menu_abcell: resw 1             ; bar index of the app-NAME cell, 0 = none -
                                 ; cell 0 is the System menu, so 0 is free to
-                                ; mean "this application declared no About"
-menu_abitems: resw 1            ; the name cell's item array: one entry, and
-                                ; it points at menu_abstr below
+                                ; mean "Locator owns the bar" (SPEC.md 12.7)
+menu_abclose: resb 1            ; ...and which of that cell's items is Close:
+                                ; 1 with an About above it, 0 without. Read by
+                                ; ui_dispatch, which must know before it hands
+                                ; the cell to the application (SPEC.md 12.7)
+menu_abitems: resw MENU_ABMAX   ; the name cell's item array: menu_abstr below
+                                ; when there is an About, then menu_s_appclose
 menu_abstr: resb MENU_ABPFX_LEN + MENU_MAXCH + 1
                                 ; 'About ' + the app's name + NUL. The cell's
                                 ; TITLE is menu_abstr+MENU_ABPFX_LEN - the

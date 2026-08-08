@@ -51,11 +51,16 @@ font_init:
     mov di, font_glyphs
     mov cx, FONT_BYTES / 2
     mov dx, es                  ; ROM segment becomes the source
-    mov ax, KERNEL_SEG
-    mov es, ax                  ; destination: our .bss buffer
-    mov ds, dx
+    mov ax, LOW_SEG             ; destination: the table is in LOW_SEG now
+    mov es, ax                  ; (SPEC.md 2.1), so the copy goes through SS's
+    mov ds, dx                  ; segment rather than the kernel's own
     cld
     rep movsw
+
+    mov cx, 4                   ; ...and the blank cell, which nothing else
+    mov di, font_zero           ; zeroes: .lowbss is nobits and the loader
+    xor ax, ax                  ; never writes it. ES is still LOW_SEG from
+    rep stosw                   ; the copy above, which is what stosw needs
 
     pop es
     pop ds
@@ -85,6 +90,7 @@ font_init:
 ; glyph is unreadable anyway.
 ; -----------------------------------------------------------------------------
 font_char:
+    call fnt_unlazy
     push ax
     push bx
     push cx
@@ -157,7 +163,7 @@ font_char:
 
     mov ch, 8                   ; row counter
 .row:
-    mov ah, [si]                ; glyph row in the high byte of the window
+    mov ah, [ss:si]             ; glyph row in the high byte of the window
     inc si
     xor al, al
     shr ax, cl                  ; AH = first-byte mask, AL = second-byte mask
@@ -218,10 +224,15 @@ font_char:
 ;   a plane, so `test ch, 1` belongs above the eight rows rather than in them.
 ;   Two loops instead of one branch per row.
 ; - **A blank glyph row is skipped whole.** or-ing in 0 and and-ing in FF are
-;   both identity, and a read-modify-write of framebuffer memory is ~30 cycles
-;   on an 8088 whether or not it changes anything. Most glyphs have a blank
-;   descender row and many a blank top row; a SPACE is eight of them, and the
-;   Task Manager's columns are largely spaces.
+;   both identity, and a read-modify-write of framebuffer memory costs the
+;   same on an 8088 whether or not it changes anything. MEASURED on a real
+;   5150 (PERFORMANCE.md Part 9): **79.6 clocks per byte** on a Hercules and
+;   81.0 on a CGA, for the whole five-instruction step. This comment used to
+;   say ~30, which was low by 2.6x AND attributed to the wrong thing - only
+;   about 7 of those clocks are the framebuffer, the rest is the 8088
+;   executing the loop, and the same loop against plain RAM measures 72.8.
+;   Most glyphs have a blank descender row and many a blank top row; a SPACE
+;   is eight of them, and the Task Manager's columns are largely spaces.
 ; - **gfx_nextrow is inlined.** Its body is three instructions and the call
 ;   and ret around them cost as much again - about a third of a row's work
 ;   once the redundant writes above are gone. The CS overrides come with it:
@@ -268,7 +279,7 @@ font_char_bb:
     jne .dstart                 ; always on the clear-bits side
     jmp .crow
 .srow:
-    mov ah, [si]                ; glyph row in the window's high byte
+    mov ah, [ss:si]             ; glyph row in the window's high byte
     inc si
     or ah, ah                   ; a blank row ors in nothing, whatever the
     jz .snext                   ; shift does to it
@@ -288,7 +299,7 @@ font_char_bb:
     jnz .srow
     jmp short .pnext
 .crow:
-    mov ah, [si]
+    mov ah, [ss:si]
     inc si
     or ah, ah                   ; a blank row masks nothing out either
     jz .cnext
@@ -320,7 +331,7 @@ font_char_bb:
 .dstart:
     mov byte [font_dmask], 0xAA
 .drow:
-    mov ah, [si]
+    mov ah, [ss:si]
     inc si
     or ah, ah                   ; a blank row masks nothing out...
     jz .dnext
@@ -479,7 +490,19 @@ font_str_x:
 ;     before. No regression, no new planar VRAM code, and the answer is
 ;     identical either way.
 ; =============================================================================
+; fnt_unlazy - a glyph under an ARMED clip region is confined to it by
+; wm_clip_test (it draws a cell whole or not at all), so a cursor outside that
+; region is provably safe. Unarmed, a glyph lands wherever it is told and the
+; deferred hide is owed (SPEC.md 7.1.4).
+fnt_unlazy:
+    cmp word [wm_clip_n], 0
+    jne .out
+    call cur_unlazy
+.out:
+    ret
+
 font_run:
+    call fnt_unlazy
     push es
     push ds
     pop es
@@ -641,7 +664,7 @@ font_run_cell:
     add si, font_glyphs
     jmp short .have
 .blank:
-    mov si, font_rn_zero        ; an unprintable character is a blank cell -
+    mov si, font_zero           ; an unprintable character is a blank cell -
 .have:                          ; which still has to be PAINTED here
 
     ; The back buffer's dirty rect, which this path owes exactly as
@@ -697,7 +720,7 @@ font_run_cell:
     sbb al, al
     mov [font_rn_bm], al
 .row:
-    mov al, [si]                ; AL = the glyph row
+    mov al, [ss:si]             ; AL = the glyph row
     inc si
     mov ah, al
     and al, [font_rn_fm]        ; ink where the glyph is set...
@@ -771,7 +794,6 @@ font_run_scell:
     pop ax
     ret
 
-font_rn_zero:   db 0,0,0,0,0,0,0,0   ; the blank cell an unprintable draws
 
 ; -----------------------------------------------------------------------------
 ; font_width - pixel width of a NUL-terminated string
@@ -808,8 +830,20 @@ font_width_x:
     ret
 
 ; -----------------------------------------------------------------------------
-section .bss
+section .lowbss                 ; LOW_SEG (SPEC.md 2.1): 760 bytes is the
+                                ; largest single object the kernel's own 64KB
+                                ; segment was carrying, against five reads -
+                                ; the glyph-row loops - so it costs five ss:
+                                ; prefixes and buys the whole table back for
+                                ; KERN_CODE_MAX. font_init fills both from the ROM.
 font_glyphs:    resb 760        ; glyphs 32..126, 8 bytes per row (FONT_BYTES)
+font_zero:      resb 8          ; the blank cell an unprintable character
+                                ; draws. It has to live BESIDE the table: the
+                                ; row loops take either in SI and read it with
+                                ; one segment, and .lowbss is not zeroed by
+                                ; anything, so font_init clears it by hand
+
+section .bss
 font_rn_fg:     resb 1          ; font_run: the run's two colours, and the
 font_rn_bg:     resb 1          ; per-plane bit sources and 00/FF masks its
 font_rn_fs:     resb 1          ; cell loop consumes. In .bss for the same

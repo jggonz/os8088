@@ -21,12 +21,12 @@
 ; application's own menu (SPEC.md 12.2) is a window callback reached
 ; through the bar, so its handler runs under the gfx lock and is billed to
 ; the owning instance exactly like W_ONCLICK.
-; A RIGHT mouse-down takes none of that ladder: ui_rdown swallows the bar,
-; the dock and the desktop, raises a background window without opening
-; anything, and pops a context menu (SPEC.md 12.4) only on the frontmost
-; file-manager window's content. It never stamps [ui_click_t], which is what
-; keeps a right-click from composing with the next left click into a
-; double-click.
+; A RIGHT mouse-down takes none of that ladder: ui_rdown swallows the bar
+; and the desktop, raises a background window without opening anything, and
+; pops a context menu (SPEC.md 12.4) on two things only - the frontmost
+; file-manager window's content, and a DOCK TILE, whose one item is Close
+; (SPEC.md 30.2). It never stamps [ui_click_t], which is what keeps a
+; right-click from composing with the next left click into a double-click.
 ; Mouse-downs on windows also hand the clicked window the menu bar
 ; (SPEC.md 12 - the raise paths repaint anyway, but a click on the window
 ; that is already frontmost never reaches wm_front), and QUIT (close box ->
@@ -37,6 +37,13 @@
 ; XOR outline is erased, and the release path never re-takes the lock it
 ; already holds (it is non-reentrant, SPEC 7).
 ; =============================================================================
+
+UI_TDBLT    equ 9               ; title-bar double-click window, ticks - the
+                                ; same half second as DESK_DBLT, FM_DBLCLK
+                                ; and FD_DBLCLK, and deliberately the same
+                                ; number rather than a shared constant: they
+                                ; are four independent detectors and one of
+                                ; them may one day want to differ
 
 ; -----------------------------------------------------------------------------
 ; ui_task - the UI task main loop (task 0 jumps here from kmain; never returns)
@@ -52,6 +59,10 @@ ui_task:
     jz .events
     mov ah, 0x00                ; fetch it: AL = ascii, AH = scan
     int 0x16
+    call kbm_key                ; with no mouse on the machine, the arrows ARE
+    jc .events                  ; the mouse (SPEC.md 9.6) and this key is not
+                                ; the application's. One compare per keystroke
+                                ; on a machine that has one
     call gfx_lock               ; handler draws; it runs under the lock
     call wm_top                 ; BX = frontmost visible window, 0 if none
     call fdlg_top               ; ...unless a modal file dialog is up, which
@@ -228,6 +239,20 @@ ui_task:
 
 .title_bar:
     mov si, bx                  ; keep the hit window; wm_top returns in BX
+    call ui_tdbl                ; the second press on THIS title bar inside
+    jnc .tb_raise               ; UI_TDBLT ticks ZOOMS it (SPEC.md 11.95)
+    test word [si+W_FLAGS], WF_SIZABLE
+    jz .tb_raise                ; ...if it is resizable. A fixed-layout window
+                                ; has nothing to zoom into, so the press stays
+                                ; an ordinary one and drags as before
+    mov bx, si
+    call gfx_lock
+    call wm_zoom                ; out to the desktop band, or back to wherever
+    call gfx_unlock             ; it was when it left
+    jmp short .yield            ; and no drag: the button is still down, but
+                                ; the EVT_MUP behind it is ignored by the
+                                ; loop above, which acts on EVT_MDOWN alone
+.tb_raise:
     call wm_top
     cmp bx, si
     mov bx, si                  ; restore hit window (flags survive the mov)
@@ -250,6 +275,11 @@ ui_task:
 
     ; --- 3. deferred work (SPEC.md 13/21/29): OUTSIDE the gfx lock ------------
 .yield:
+    call kbm_ui                 ; the keyboard mouse's end-of-pass service
+                                ; (SPEC.md 9.6.1): a press held the button so
+                                ; that whatever this pass dispatched could
+                                ; track it, and if nothing did, this is where
+                                ; the press becomes a click
     call fdlg_reap              ; a file dialog cancelled by its close or
                                 ; minimize box is only HIDDEN by that route
                                 ; (SPEC.md 38.1) - collect it here rather
@@ -263,24 +293,50 @@ ui_task:
     call app_launch             ; in: AL = kind; does its own locking
 .chk_ld:
     cmp word [ld_pending], 0    ; set by files.inc's click handler
-    je .chk_pcmd
+    je .chk_assoc               ; ...and NOT .chk_pcmd: a document open posts
+                                ; no package index, so skipping past the step
+                                ; below on "no package pending" is skipping
+                                ; the only case that can be pending
     mov ax, [ld_pending]        ; stored as directory index + 1
     dec ax
     mov word [ld_pending], 0    ; consume before running, not after
     call loader_run             ; in: AX = index; does its own locking
+.chk_assoc:
+    cmp byte [assoc_dapp], 0xFF ; a document double-click (SPEC.md 54.4):
+    je .chk_pcmd                ; find its program, load it, and hand the
+    call assoc_run              ; document over by pull. Consumes the slot
+                                ; itself, and does its own locking
 .chk_pcmd:
     mov ax, [ui_pcmd]           ; a kernel menu command posted from under
     or ax, ax                   ; the lock (ui_post_cmd, SPEC.md 13)
-    jz .chk_cp
+    jz .chk_fmf                 ; every step's "nothing to do" names the NEXT
+                                ; step, so a step inserted below is a step
+                                ; this jump has to be pointed at
     mov word [ui_pcmd], 0       ; consume before running, not after
     call ui_cmd                 ; in: AX = CMD_*; takes its own locks, and
                                 ; CMD_REBOOT never comes back
+.chk_fmf:
+    cmp byte [fm_fchk], 0       ; a file operation changed a folder, or the
+    je .chk_cp                  ; active window changed (SPEC.md 22.8): the
+    mov byte [fm_fchk], 0       ; FRONT window may be a Disk window owing a
+    call gfx_lock               ; refresh. One compare per pass when it is
+    call wm_top                 ; not - which is nearly always, because
+    mov al, 1                   ; wm_raise has usually spent the debt on the
+    call fm_focus               ; way in. AL = 1: there is nobody here to
+    call gfx_unlock             ; defer the repaint to, so fm_focus draws
 .chk_cp:
     cmp byte [cp_dirty], 0      ; scheduler mode changed in the Control
-    je .chk_clk                 ; Panel (SPEC.md 31.2): windows that quote
+    je .chk_zones               ; Panel (SPEC.md 31.2): windows that quote
     mov byte [cp_dirty], 0      ; the mode - the About box's third line -
     call gfx_lock               ; are already painted, so repaint them here,
     call wm_paint_all           ; outside cp_onclick's held lock
+    call gfx_unlock
+.chk_zones:
+    cmp byte [desk_zdirty], 0   ; a volume was mounted or unmounted (26.2),
+    je .chk_clk                 ; posted for the same reason and drained in
+    mov byte [desk_zdirty], 0   ; the same pass - but it costs the drive-zone
+    call gfx_lock               ; grid and the windows over it, not the screen
+    call desk_zones_paint
     call gfx_unlock
 .chk_clk:
     cmp byte [clk_dirty], 0     ; the clock was set from the Date/Time page
@@ -294,6 +350,9 @@ ui_task:
     ; taken only when the bar's text really changed (mask bit 1), or when a
     ; Date/Time page is on screen and wants its seconds (SPEC.md 13/37).
 .clock:
+    call mou_hotplug            ; a mouse plugged in after boot gets its
+                                ; reset edge (SPEC.md 9.4); one cmp per pass
+                                ; once any packet has ever arrived
     call clk_tick               ; AL: bit0 = a second passed, bit1 = the bar
     mov bl, al                  ; text changed
     or al, al
@@ -335,14 +394,17 @@ ui_task:
 ;     user never opened. (fm_rclick keeps the other half of that rule: it
 ;     moves FS_SEL without touching FS_CLKT.)
 ;   - reach dock_click. A dock tile toggles minimize; a right-press must
-;     not. The bare desktop and desk_click are out for the same reason -
-;     there is nothing here a right button should mean.
+;     not. It reaches dock_rclick instead (SPEC.md 30.2), which is the right
+;     button's own, much smaller routine and shares only the hit test. The
+;     bare desktop and desk_click stay out altogether - there is nothing
+;     there a right button should mean, and activating Locator would move a
+;     focus the press did not have to.
 ;   - open anything on a background window. It raises it and stops: the
 ;     popup always belongs to the window you can already see.
 ;
-; The bar is skipped whole, clock cell included. Only a file-manager window
-; answers - the ones carrying fm_menus - so no package's window changes
-; behaviour and no shipped .o88 needs rebuilding.
+; The bar is skipped whole, clock cell included. Of the WINDOWS only a
+; file-manager one answers - the ones carrying fm_menus - so no package's
+; window changes behaviour and no shipped .o88 needs rebuilding.
 ; -----------------------------------------------------------------------------
 ui_rdown:
     mov cx, [ui_ev + EV_A]      ; CX = press x, DX = press y. NO [ui_click_t]
@@ -355,7 +417,8 @@ ui_rdown:
 .hit:
     call wm_hit                 ; BX = window hit (0 = none), AL = region
     or bx, bx
-    jz .ret                     ; desktop and dock: nothing at all
+    jz .strip                   ; no window: the dock gets the press, and the
+                                ; bare desktop gets nothing (SPEC.md 30.2)
 
     mov si, bx                  ; keep the hit window; wm_top returns in BX
     call wm_top                 ; AL, the region, survives it
@@ -401,6 +464,48 @@ ui_rdown:
 .ctx_done:
     call gfx_unlock
 .ret:
+    ret
+
+.strip:
+    call dock_rclick            ; CX/DX; CF = 1 = consumed (locks internally,
+    ret                         ; SPEC.md 30.2). CF is nobody's answer here -
+                                ; the desktop's case IS "do nothing"
+
+; -----------------------------------------------------------------------------
+; ui_tdbl - was this title-bar press the second half of a double-click?
+; in:  SI = the window the press landed on; [ui_click_t] = its birth tick
+; out: CF = 1 double-click (and the pair is spent), CF = 0 first click (and
+;      it is recorded)
+; clobbers: AX
+;
+; The same shape as the double-click detectors of SPEC.md 22/26/38, and for
+; the same three reasons. It compares the clicks' BIRTH ticks (EV_C) and not
+; [ticks], so two presses queued either side of something slow - a mount, a
+; package load - cannot collapse into a pair they never were. It keys on the
+; WINDOW as well as on the time, so a press on one title bar followed by a
+; press on another is two first clicks rather than a maximize of the second.
+; And a completed pair is SPENT, so a third press starts a fresh pair instead
+; of maximizing again on every press of a held-down triple.
+;
+; A window pointer is never 0, so 0 is the "nothing recorded" sentinel - and
+; .bss arrives zeroed (the overlay note in kernel.asm), so the machine's very
+; first title-bar press takes .first like any other.
+; -----------------------------------------------------------------------------
+ui_tdbl:
+    mov ax, [ui_click_t]
+    cmp si, [ui_tclkw]
+    jne .first                  ; a different window: this is a first click
+    sub ax, [ui_tclkt]          ; wrap-safe - the difference is what matters
+    cmp ax, UI_TDBLT
+    jae .first                  ; too slow: it restarts the pair below
+    mov word [ui_tclkw], 0
+    stc
+    ret
+.first:
+    mov ax, [ui_click_t]
+    mov [ui_tclkt], ax
+    mov [ui_tclkw], si
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -460,6 +565,7 @@ ui_drag:
     jz .release                 ; (queue full) - the level still says so
     call ui_drag_xor            ; erase...
     call gfx_unlock             ; ...only then may the lock drop
+    call kbm_pollm              ; the keyboard mouse drags too (SPEC.md 9.6)
     call task_yield             ; background tasks stay live here
     call gfx_lock
     mov ax, [mouse_x]           ; outline pos = orig + (mouse - start)
@@ -627,6 +733,7 @@ ui_grow:
     jz .release
     call ui_drag_xor            ; erase...
     call gfx_unlock             ; ...only then may the lock drop
+    call kbm_pollm              ; ...and resizes (SPEC.md 9.6)
     call task_yield
     call gfx_lock
     mov ax, [mouse_x]           ; tracked size = orig + (mouse - start),
@@ -759,7 +866,7 @@ ui_grow:
 ;
 ; NOT called before a popup (§12.4) or from menu_relayout: this list is only
 ; ever read while a menu is dropping, and one call site is one thing to keep
-; right. The tables-full refusals below (Clock, Bounce, Disk at the instance
+; right. The tables-full refusals below (Timer, Bounce, Disk at the instance
 ; cap) stay beeps - MAX_TASKS is 12, a user reaches it about never, and the
 ; predicate is per-kind rather than one word.
 ; -----------------------------------------------------------------------------
@@ -783,11 +890,16 @@ ui_dispatch:
     or ah, ah
     jz .kernel                  ; cell 0: the System menu
     mov word [ui_about], 0
-    mov bx, [menu_abcell]       ; the app-NAME cell (SPEC.md 12.2)? It is
+    mov bx, [menu_abcell]       ; the app-NAME cell (SPEC.md 12.7)? It is
     or bx, bx                   ; APPENDED after the app's own menus, so it
     jz .notab                   ; is tested before the set - and it is legal
     cmp bl, ah                  ; on a window that has no menu set at all,
     jne .notab                  ; which the test below would have dropped
+    cmp al, [menu_abclose]      ; its bottom item is Close and that one is the
+    je .appclose                ; KERNEL's, whatever the application is: it is
+                                ; answered here rather than handed on, so no
+                                ; package ever sees an item it was not written
+                                ; for (SPEC.md 12.7)
     mov word [ui_about], 1
     jmp .app
 .notab:
@@ -815,6 +927,26 @@ ui_dispatch:
     add ax, [ui_loc_base + bx]
     jmp ui_cmd
 .ret:
+    ret
+
+.appclose:
+    ; 'Close' from the app-name menu (SPEC.md 12.7): the close box of
+    ; SPEC.md 13 reached from the bar, and the same routine answers both.
+    ; It runs inline rather than through ui_post_cmd because ui_dispatch is
+    ; reached with NO lock held - menu_track's was released before the call -
+    ; which is exactly why .close_box can take its own lock too.
+    call gfx_lock
+    mov bx, [menu_win]          ; the lock dropped between menu_track and
+    or bx, bx                   ; here, so the window that owned the bar may
+    jz .apc_done                ; be gone: the same re-check .app makes below,
+    test word [bx + W_FLAGS], 2 ; and for the same reasons
+    jz .apc_done
+    call app_close_win          ; in: BX; lock held, UI task (SPEC.md 29.4).
+                                ; Unbilled, like the close box - and here it
+                                ; could not be billed anyway: the record the
+                                ; cycles would go to is the one being freed
+.apc_done:
+    call gfx_unlock
     ret
 
 .app:
@@ -891,7 +1023,7 @@ ui_dispatch:
 ; the base CMD_* of each kernel-dispatched bar cell (SPEC.md 12.3): the
 ; System menu, then Locator's File and Special
 ui_loc_base:
-    dw CMD_ABOUT, CMD_CLOCK, CMD_REBOOT
+    dw CMD_ABOUT, CMD_TIMER, CMD_REBOOT
 
 ; -----------------------------------------------------------------------------
 ; ui_post_cmd - defer one of the kernel's own menu commands (SPEC.md 13)
@@ -921,6 +1053,336 @@ ui_post_cmd:
 
 ui_pcmd:    dw 0                ; posted CMD_*, 0 = none (see above)
 
+; =============================================================================
+; The Task Manager, which lives on the system disk (SPEC.md 28)
+;
+; It was a built-in kind and is a package now, so the chip menu's item cannot
+; be an app_launch. What it does instead is what a Disk window's double-click
+; does, with the navigation added: bank the current volume and directory,
+; mount A:, go into SYSTEM, find TASKMGR.O88 in the snapshot by name, run the
+; loader, put the volume back. drv_boot does the same dance for a .DRV and
+; for the same reason - every file name resolves in the CURRENT directory
+; (SPEC.md 19.2), which is wherever the user last browsed to.
+;
+; SYSTEM is a SECOND navigation (SPEC.md 28.3), so the file costs two mounts
+; rather than one - the folder has to be listed before its cluster is known.
+; That is the price of the kernel's own applications not being loose in the
+; root of the user's disk, it is paid once per chip-menu open, and it is
+; small beside the seven kilobytes of package that follow it.
+;
+; **The item stays live, and it says why when it fails.** Greying it would
+; mean answering "can this be loaded?" without loading it, and the only
+; honest test is the load itself - no disk, a disk without the file, a full
+; instance table, a heap too fragmented to hold seven kilobytes. SPEC.md 47
+; rule 3 is explicit that a control greys on a FACT and never on a guess, so
+; this one is always clickable and the failure is a notice with the reason in
+; it. That is also the only reporting channel here: a Disk window's load
+; failures land in its status line, and a menu item has no status line.
+;
+; It is a SINGLETON from this menu, which it was as a kind. Loading a second
+; copy would cost another seven kilobytes and another task slot to say the
+; same thing twice, so an already-open one is fronted instead. A double-click
+; on TASKMGR.O88 in a Disk window is unaffected and still opens as many as
+; you like - that is the package rule, and this is the menu item's rule.
+; =============================================================================
+ui_s_tmdir:  db 'SYSTEM', 0      ; the folder it lives in (SPEC.md 28.3), on
+                                 ; the system disk and the apps disk alike -
+                                 ; the menu cannot know which is in the drive
+ui_s_tmfile: db 'TASKMGR.O88', 0
+ui_s_tmname: db 'TaskMgr', 0     ; the 16-byte header name inst_set_name_x
+                                 ; copied into the record - what identifies
+                                 ; an already-running one
+
+; -----------------------------------------------------------------------------
+; ui_tm_open - front the Task Manager, or load it off the system disk
+; in:  nothing; UI task, no lock held
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+ui_tm_open:
+    push ax
+    push bx
+    push cx                     ; CX/BP/ES too: ld_run_body is documented as
+    push dx                     ; "loader_run saves regs", and loader_run
+    push si                     ; pushes exactly these three around it - its
+    push di                     ; failure exits return with ES = LOW_SEG or a
+    push bp                     ; just-freed region segment
+    push es
+
+    call ui_tm_find             ; already running? front it and stop
+    jc .load
+    call gfx_lock
+    and byte [di+I_FLAGS], 0xFE ; un-minimize, the app_launch cap path's rule
+    mov bx, [di+I_WIN]
+    call wm_show
+    call gfx_unlock
+    jmp short .out
+
+.load:
+    call osapi_file_here        ; bank where the user was: DX = the directory
+    mov [ui_tm_cwd], dx         ; cluster, BL = the drive. Two module words
+    mov [ui_tm_drv], bl         ; rather than the stack, because this is
+                                ; UI-task-only and one load at a time, like
+                                ; ld_fp
+
+    xor dl, dl                  ; A: - the disk we booted from
+    call disk_mount
+    mov si, ui_s_nodisk
+    jc .fail
+    call ui_tm_sysdir           ; into SYSTEM (SPEC.md 28.3); CF=1 = no such
+    mov si, ui_s_nofile         ; folder, which reads to the user as the file
+    jc .fail                    ; not being there, because it is not
+    mov si, ui_s_tmfile
+    call dsk_find_name          ; AX = its directory index
+    mov si, ui_s_nofile
+    jc .fail
+
+    mov word [ld_pwin], 0       ; no poster: this is not a Disk window's load,
+    call ld_run_body            ; and so not loader_run either - there is no
+                                ; listing to refresh and no status line to
+                                ; correct ([ld_status] is loader_run's to
+                                ; write; storing it here would retitle an
+                                ; open Disk window's status line for a load
+                                ; it never posted). AL = LD_*; it shows the
+                                ; window itself on the way out
+    push ds
+    pop es                      ; ld_run_body's failure exits leave ES aimed
+                                ; at LOW_SEG or a freed region (see the push
+                                ; list above); nothing below may inherit that
+    or al, al
+    jz .back                    ; LD_OK
+    mov bl, al                  ; the reason, out of the same codes a Disk
+    xor bh, bh                  ; window's status line uses
+    shl bx, 1
+    mov si, [bx + ui_tm_errs]
+.fail:
+    push si                     ; the volume FIRST, then the notice: putting
+    call ui_tm_back             ; it back touches the floppy and the notice
+    pop si                      ; takes the gfx lock, and neither wants the
+    mov di, ui_s_tmttl          ; other held while it runs
+    mov bx, ui_s_tmlead
+    call ui_note
+    jmp short .out
+.back:
+    call ui_tm_back
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ui_tm_sysdir - step into SYSTEM on the volume just mounted (SPEC.md 28.3)
+; in:  the volume is mounted and standing in its root
+; out: CF = 0 and the volume is inside SYSTEM; CF = 1 = there is no SYSTEM
+;      folder here, or entering it failed
+; clobbers: AX, DL, SI, flags (ui_tm_open has banked all three)
+;
+; The entry has to be LISTED before its first cluster is known, which is why
+; this is a second mount and not an extra argument to the first: dsk_find_name
+; reads the snapshot the mount published (no I/O at all), and dsk_chdir then
+; re-runs the one validated pipeline over the folder (SPEC.md 19.2).
+;
+; The type test is what stops a FILE called SYSTEM being walked as a
+; directory: dsk_synth writes 1 for a file and 2 for a subdirectory, and 3 is
+; the synthesized '..' (SPEC.md 19.5), which cannot carry this name.
+; -----------------------------------------------------------------------------
+ui_tm_sysdir:
+    mov si, ui_s_tmdir
+    call dsk_find_name          ; AX = its index in the root's listing
+    jc .no
+    call dsk_get_dir            ; SI -> the staged 32-byte entry (SPEC.md 19)
+    cmp word [si+16], 2         ; its type: a folder, not a file of that name
+    jb .no
+    mov ax, [si+18]             ; its first cluster
+    or ax, ax
+    jz .no                      ; 0 is the root: a directory entry naming it
+    xor dl, dl                  ; would be a loop, not a folder
+    jmp dsk_chdir               ; CF is its answer, and it is ours
+.no:
+    stc
+    ret
+
+; ui_tm_back - put the volume the user was on back. Preserves everything; a
+; failed remount leaves the banked volume mount-failed at its root with the
+; write gate shut (not A: - the bank holds whatever drive the user was on),
+; which is a survivable place to be.
+ui_tm_back:
+    push ax
+    push dx
+    mov ax, [ui_tm_cwd]
+    mov dl, [ui_tm_drv]
+    call dsk_chdir
+    pop dx
+    pop ax
+    ret
+
+ui_tm_cwd:  dw 0                ; the directory and drive to go back to. In
+ui_tm_drv:  db 0                ; .text: -f bin zeroes no .bss, and A:'s root
+                                ; is the right answer before the first load
+
+ui_tm_errs:                     ; indexed by LD_* (loader.inc)
+    dw ui_s_nofile              ; LD_OK never reaches here
+    dw ui_s_dskerr              ; LD_EDISK
+    dw ui_s_badpkg              ; LD_EBAD
+    dw ui_s_toobig              ; LD_EBIG
+    dw ui_s_abort               ; LD_EABORT - it loaded and refused itself,
+                                ; and for this package the dominant cause is
+                                ; wm_create failing (window table full), so
+                                ; "not a valid package" would be a lie
+    dw ui_s_nomem               ; LD_ENOMEM
+
+ui_s_tmttl:  db 'Task Manager', 0
+ui_s_tmlead: db 'Cannot open the Task Manager:', 0
+ui_s_nodisk: db 'No system disk in drive A:', 0
+ui_s_nofile: db 'TASKMGR.O88 is not in SYSTEM', 0    ; ...and it fits the
+                                 ; 288px notice window, which a path spelled
+                                 ; out in full would not: app_about_center
+                                 ; centres it and font_str stops at the SCREEN
+                                 ; edge, not the window's
+ui_s_dskerr: db 'Disk error reading it', 0
+ui_s_badpkg: db 'TASKMGR.O88 is not a valid package', 0
+ui_s_toobig: db 'TASKMGR.O88 is too large', 0
+ui_s_abort:  db 'It refused to start', 0
+ui_s_nomem:  db 'Not enough memory to open it', 0
+
+; -----------------------------------------------------------------------------
+; ui_tm_find - the running Task Manager, by the name in its instance record
+; in:  nothing
+; out: CF = 0 and DI = its record; CF = 1 none open
+; clobbers: DI (the output), flags
+;
+; By NAME and not by a remembered window pointer, because a window slot is
+; reused: a pointer banked at load time names some other app's window the
+; moment this one closes, and fronting that is a bug with no symptom until
+; someone notices the wrong window coming up.
+; -----------------------------------------------------------------------------
+ui_tm_find:
+    push ax
+    push cx
+    push si
+    mov di, inst_tab
+    mov cx, INST_MAX
+.scan:
+    cmp byte [di+I_STATE], 1
+    jne .next
+    test byte [di+I_KIND], KIND_PKG
+    jz .next
+    push di
+    mov si, ui_s_tmname
+    add di, I_NAME
+.cmp:
+    mov al, [si]
+    cmp al, [di]
+    jne .nomatch
+    inc si
+    inc di
+    or al, al
+    jnz .cmp
+    pop di
+    clc
+    jmp short .out
+.nomatch:
+    pop di
+.next:
+    add di, I_RECSZ
+    loop .scan
+    stc
+.out:
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; ui_note - the kernel's one-line notice window
+; in:  SI = a NUL reason, BX = the line above it, DI = the window's title;
+;      UI task, no lock held
+; out: nothing (all registers preserved)
+;
+; All three strings come from the CALLER. They used to be one caller's: the
+; title was 'Task Manager' and the lead 'Cannot open the Task Manager:',
+; baked in because ui_tm_open was the only thing that raised a notice. When
+; assoc_run (SPEC.md 54.4) became the second, a document whose program was
+; not on the disk reported "Cannot open the Task Manager" over a window
+; titled Task Manager - a message about a component the user had not
+; mentioned, in place of the one that had actually failed.
+;
+; The species is the file dialog's (SPEC.md 38): a bare wm_create'd window
+; this module owns, with no instance behind it - so no dock tile, no Task
+; Manager row, and a close box that reduces to wm_hide, which is exactly what
+; dismissing a notice means. ONE window, created on first use and shown
+; again after that, so W_TITLE is restamped per call; [ui_note_win] lives in
+; .text because -f bin zeroes no .bss and this is read before anything writes
+; it (the fdlg_win precedent).
+; -----------------------------------------------------------------------------
+ui_note_tpl: dw 150, 150, 288, 78, ui_s_tmttl, ui_note_paint, 0, 0
+ui_note_win: dw 0
+ui_note_msg: dw 0
+ui_note_lead: dw 0
+
+ui_note:
+    push ax
+    push bx
+    push si
+    push di
+    push es
+    push ds
+    pop es                      ; wm_create reads the template through ES:SI
+                                ; and stamps W_SEG from ES (SPEC.md 11/20.1) -
+                                ; a caller arriving with ES elsewhere would
+                                ; register a garbage PACKAGE window whose
+                                ; callbacks far-call into that segment
+    mov [ui_note_msg], si
+    mov [ui_note_lead], bx
+    call gfx_lock
+    mov bx, [ui_note_win]
+    or bx, bx
+    jnz .have
+    mov si, ui_note_tpl
+    call wm_create              ; CF = the window table is full, in which case
+    jc .out                     ; the notice is simply not shown - there is
+    mov [ui_note_win], bx       ; nothing further to fall back to
+.have:
+    mov [bx+W_TITLE], di        ; the window is reused, so the caption belongs
+                                ; to whichever caller last asked for it. Set
+                                ; before wm_show, which draws the frame whole
+    call wm_show                ; ...or bring an already-dismissed one back
+.out:
+    call gfx_unlock
+    pop es
+    pop di
+    pop si
+    pop bx
+    pop ax
+    ret
+
+ui_note_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    call gfx_pen_live           ; CBLACK and the disabled flag clear (47)
+    mov bx, si
+    mov dx, [bx+W_Y]
+    add dx, TITLE_H + 16
+    mov si, [ui_note_lead]
+    call app_about_center
+    add dx, 16
+    mov si, [ui_note_msg]
+    call app_about_center
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; ui_cmd - act on one of the kernel's own menu commands
 ; in:  AX = CMD_* (0 = nothing; ignored)
@@ -939,8 +1401,8 @@ ui_cmd:
     je .about
     cmp ax, CMD_CTRL
     je .ctrl
-    cmp ax, CMD_CLOCK
-    je .clock
+    cmp ax, CMD_TIMER
+    je .timer
     cmp ax, CMD_BOUNCE
     je .bounce
     cmp ax, CMD_FILES
@@ -960,14 +1422,15 @@ ui_cmd:
 .ctrl:
     mov al, KIND_CTRL
     jmp .launch
-.clock:
-    mov al, KIND_CLOCK
+.timer:
+    mov al, KIND_TIMER
     jmp .launch
 .bounce:
     mov al, KIND_BOUNCE
     jmp .launch
 .tasks:
-    mov al, KIND_TASKMGR
+    call ui_tm_open             ; not a kind any more: it is a package on the
+    ret                         ; system disk (SPEC.md 28)
 .launch:
     call app_launch             ; takes its own locks; out CF = tables full
     jnc .launched
@@ -1026,6 +1489,9 @@ ui_about:   resw 1              ; 1 = the selection came from the app-NAME
 ui_click_t: resw 1              ; EV_C of the event being dispatched: the
                                 ; click's birth tick (valid during dispatch,
                                 ; which always stores before handlers read)
+ui_tclkt:   resw 1              ; birth tick of the last title-bar press, and
+ui_tclkw:   resw 1              ; the window it landed on (0 = none recorded):
+                                ; ui_tdbl's pair, SPEC.md 11.95
 ui_dragwin: resw 1              ; window being dragged
 ui_startx:  resw 1              ; mousedown position (drag origin)
 ui_starty:  resw 1

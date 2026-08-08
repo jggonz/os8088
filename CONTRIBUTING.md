@@ -62,13 +62,16 @@ them it launches fine and then every machine in `vm/` fails at the BIOS.
 Apple's linker only speaks Mach-O, which is part of why this project uses
 `nasm -f bin` and no linker at all — so there is nothing else to install.
 
-**nasm must be 3.0 or newer.** `kernel/farcall.inc` and `kernel/taskmgr.inc`
-spell their far jumps `call far SEG:OFF` / `jmp far SEG:OFF`, and every nasm
-2.x — 2.11 through 2.16.03 — rejects that form with *mismatch in operand
-sizes*; 3.01 accepts it and encodes the 9A/EA you expect. Verified: a clean
-`make` under 3.01 reproduces the committed `build/kernel.bin` byte for byte.
-If your distribution only has 2.16, the deb from Ubuntu's universe pool
-(`pool/universe/n/nasm/nasm_3.01-1_amd64.deb`) installs standalone.
+**nasm 2.16 is enough here, and that is a difference from `main`.** The 3.0
+floor exists for one construct — `call far SEG:OFF` / `jmp far SEG:OFF` as an
+*immediate*, which every nasm 2.11 through 2.16.03 rejects with *mismatch in
+operand sizes* — and this branch has none of it: SPEC.md §33 retired far code
+along with `kernel/farcall.inc`, and SPEC.md §28 moved the Task Manager out to
+`apps/taskmgr`, and those two files were where the form lived. Every far call
+left is memory-indirect (`call far [bx+DRVR_DISP]`), which 2.x has always
+taken. Verified: a clean `make` under 2.16.01 assembles the whole tree with
+zero warnings and reproduces every artifact this branch used to ship, byte for
+byte. Homebrew's nasm is 3.x and is fine too; nothing here needs it.
 
 ### Linux
 
@@ -172,12 +175,13 @@ Docs: <https://github.com/openai/codex>.
 
 ### Any agent
 
-The three files that matter, in order:
+The four files that matter, in order:
 
 | file          | what it is                                                  |
 |---------------|-------------------------------------------------------------|
 | `SPEC.md`     | the binding contract — every symbol, register contract, constant and data layout. **Update it before changing an interface, not after.** |
 | `CLAUDE.md`   | the working brief — hard rules, build/test commands, the quirks that cost someone an afternoon. |
+| `PERFORMANCE.md` | the target machine — a 4.77 MHz 8088, which your emulator is ~1000× faster than. Calibration numbers, the standing budget every redraw path was measured down to, and the three visible defects QEMU cannot show. **Read it before changing anything that draws or loops.** |
 | `README.md`   | what the OS does and how, for orientation.                   |
 
 ## 3. Rules an agent will break if you don't tell it not to

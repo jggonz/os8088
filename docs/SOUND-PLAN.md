@@ -30,8 +30,14 @@ Lens: every promise in the API is backed by a per-device budget on the floor mac
 says so at call time (CF/error return) and the Control Panel says so in prose — the
 `bb_avail` idiom, three layers deep: the probe flag gates the setter AND the caption AND
 the click. Cycle figures below are 8086-nominal; a real 8088's 8-bit bus and prefetch
-stalls inflate them 20–40%, which is why every margin claim here is a *bound to be
-validated* at its phase gate, not an established fact.
+stalls inflate them — and that inflation has since been MEASURED, which changes how
+to read every figure below. It is not a percentage: an 8088 costs
+`max(execution clocks, 4.34 x instruction BYTES)`, so the ratio to the 8086 book runs
+from 1.01 for `mul`/`div` (execution-bound, nothing to hide) to 4.34 for a
+register-to-register `mov` (fetch-bound, nothing hidden). See PERFORMANCE.md Part 2.
+A budget here made of long instructions is close to right; one made of short ones can
+be out by 4x, and every margin claim remains a *bound to be validated* at its phase
+gate rather than an established fact.
 
 ## The constraint
 
@@ -527,7 +533,7 @@ preference list routes tones to OPL2 when present.
 
 ## Memory
 
-Against measured headroom (guard 1 text+bss **27,565 B** free; guard 2 text+fartext
+Against measured headroom (`KERN_BUDGET` text+bss **27,565 B** free; `KERN_CODE_MAX` text+fartext
 **26,780 B** free; `.lowbss` slack 4,094 B — §15.1 recipe, measured 2026-07-29).
 Per-phase figures are **estimates to be re-measured at each phase boundary with the
 §15.1 recipe** — Phase 1 in particular is ownership-and-table machinery whose
@@ -546,13 +552,13 @@ Phase 1 measured at its gate (§15.1 recipe, 2026-07-29): **861 B .text, 13 B
 .bss, 0 B .fartext** — under the estimate, and the .fartext figure is zero by
 construction, not luck: nothing §34.7 assigns to far code exists yet (the
 speaker needs no probe; the OPL2/SB probes land with their phases), and
-`snd_init` itself is a `.text` routine like every other kmain init. Guard 1
-now 26,691 B free, guard 2 25,919 B free.
+`snd_init` itself is a `.text` routine like every other kmain init. `KERN_BUDGET`
+now 26,691 B free, `KERN_CODE_MAX` 25,919 B free.
 
 Phase 2 measured at its gate (§15.1 recipe, 2026-07-29): totals now
-**15,893 B .text, 3,561 B .bss, 4,828 B .fartext** — guard 1 **25,602 B
-free**, guard 2 **24,335 B free** (Phase 2 cost ≈ 1,089 B against guard 1,
-≈ 1,584 B against guard 2 — within the ~600/~310/~950 estimate row).
+**15,893 B .text, 3,561 B .bss, 4,828 B .fartext** — `KERN_BUDGET` **25,602 B
+free**, `KERN_CODE_MAX` **24,335 B free** (Phase 2 cost ≈ 1,089 B against `KERN_BUDGET`,
+≈ 1,584 B against `KERN_CODE_MAX` — within the ~600/~310/~950 estimate row).
 Counters in QEMU at N = 149: a full 12,000-sample Test clip reads
 **E:12000 R:2–4**; a mid-clip click-abort at ~0.55 s reads E:4389 with the
 page quiescent after (the drain held — no click-through). The **floor
@@ -560,9 +566,9 @@ gate** — the same counters read on 86Box at N = 149 — is still owed; the
 default rate stays 8,008 Hz until that read says otherwise.
 
 Phase 3 measured at its gate (§15.1 recipe, 2026-07-29): totals now
-**16,562 B .text, 3,581 B .bss, 5,005 B .fartext** — guard 1 **24,913 B
-free**, guard 2 **23,489 B free**. Phase 3 cost ≈ 689 B against guard 1,
-≈ 846 B against guard 2 — the split ran opposite the ~300/~16/~1,300
+**16,562 B .text, 3,581 B .bss, 5,005 B .fartext** — `KERN_BUDGET` **24,913 B
+free**, `KERN_CODE_MAX` **23,489 B free**. Phase 3 cost ≈ 689 B against `KERN_BUDGET`,
+≈ 846 B against `KERN_CODE_MAX` — the split ran opposite the ~300/~16/~1,300
 estimate row (+669 .text, +177 .fartext): the ops, the channel allocator
 and `opl_wr` are all §33-barred from far (ISR-adjacent or
 pointer-dispatched), while the far half (probe + init loop + patch loader)
@@ -577,9 +583,9 @@ close-mid-chord (the `snd_release_inst` → `opl_release_inst` teardown
 leg). Floor-gate items (real-XT probe timing by ear) ride with Phase 2's.
 
 Phase 4 measured at its gate (§15.1 recipe, 2026-07-29): totals now
-**18,432 B .text, 3,700 B .bss, 5,429 B .fartext** — guard 1 **22,924 B
-free**, guard 2 **21,195 B free**. Phase 4 cost ≈ 1,989 B against guard 1,
-≈ 2,294 B against guard 2 (+1,870 .text / +119 .bss / +424 .fartext) —
+**18,432 B .text, 3,700 B .bss, 5,429 B .fartext** — `KERN_BUDGET` **22,924 B
+free**, `KERN_CODE_MAX` **21,195 B free**. Phase 4 cost ≈ 1,989 B against `KERN_BUDGET`,
+≈ 2,294 B against `KERN_CODE_MAX` (+1,870 .text / +119 .bss / +424 .fartext) —
 over the ~1.0 KB .text estimate (the grant allocator, the verb surface and
 the Test button's move onto it were under-counted) but the far half
 compressed, and the total is well inside the slack. QEMU gate
@@ -615,8 +621,8 @@ and bounded; assert those sessions with the burst-map method instead, or
 close the stream before quitting.
 
 Phase 5 measured at its gate (§15.1 recipe, 2026-07-29): totals now
-**19,370 B .text, 3,702 B .bss, 5,429 B .fartext** — guard 1 **21,984 B
-free**, guard 2 **20,257 B free**. Phase 5 cost ≈ 940 B against guard 1
+**19,370 B .text, 3,702 B .bss, 5,429 B .fartext** — `KERN_BUDGET` **21,984 B
+free**, `KERN_CODE_MAX` **20,257 B free**. Phase 5 cost ≈ 940 B against `KERN_BUDGET`
 (+938 .text / +2 .bss / +0 .fartext) — over the ~300 B estimate row for
 the same reason Phase 3 inverted its split: everything recording adds
 (the open-in body, the ISR input leg, the drain machinery, the read verb)
@@ -676,7 +682,7 @@ the old clip was live; any regression re-run from here reads **E:8000**,
 and a sndcheck dominant assertion on the Test clip must accept the whole
 400–800 Hz band (a sweep has no single line).
 
-Post-all-phases slack ≈ 21.5 KB (guard 1) / ≈ 19.8 KB (guard 2) — measured,
+Post-all-phases slack ≈ 21.5 KB (`KERN_BUDGET`) / ≈ 19.8 KB (`KERN_CODE_MAX`) — measured,
 not estimated, now that all five phases are in. `.lowbss` untouched (the refill task's stack is a normal
 dynamic spawn). SND_SEG folds into the Task Manager's RAM figure via the `KLOWFAR_KB`
 accounting hook idiom. A 256 KB machine gets: tones, beeps, FM if an AdLib is present,

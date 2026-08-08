@@ -38,7 +38,7 @@
 ; proc: the loader publishes the instance only after the entry returns, so a
 ; spawn there is refused by contract. Every restart (fr_kick -> fr_hire)
 ; retries until one is granted, because a full task table is a normal,
-; TRANSIENT outcome - close a Clock and the next repaint gets the worker.
+; TRANSIENT outcome - close a Timer and the next repaint gets the worker.
 ; Until then the canvas carries a notice and nothing renders: with no frame
 ; buffer, a fallback that renders under the caller's lock would either be
 ; erased by the next repaint before it finished a second band, or hold the
@@ -47,23 +47,40 @@
 ; the lock for a short run-coalesced emit and releases it - rule 3 of
 ; SPEC.md 20.6, and the reason the GUI stays responsive.
 ;
-; THERE IS NO FRAME BUFFER, AND THERE IS A RESTORE CACHE. A raw canvas is
-; 320x170 at 4bpp = 27,200 bytes against a 19,968-byte package region shared
-; by every resident package, and a run-length copy of a whole frame measured
-; 11,712-13,928 - most of the pool, for one instance. What fits is a
-; run-length copy of PASS 0 alone: 3,886 bytes worst case over five types
-; and five zooms, and it is the right quarter of the work to keep, because
-; pass 0 already covers the whole canvas at quarter vertical resolution
-; (fr_advance). fr_cache holds it as (colour, last column) triples, appended
-; by fr_cache_row as each pass-0 row is emitted, and fr_replay blits it back.
+; THERE IS NO FRAME BUFFER, AND THERE IS A RESTORE CACHE. The cache holds
+; EVERY emitted row - all three passes - as (colour, last column) words in
+; emission order, in a HEAP CLAIM (SPEC.md 50.3) rather than in bss. It held
+; pass 0 alone until this branch, for a reason that expired: image + bss had
+; to fit a 7,168-byte slice of the 19,968-byte package pool, and that pool is
+; retired - a package's region is an ordinary claim now (SPEC.md 20.1). Pass 0
+; alone meant the cache STOPPED GROWING at 25%, so every later repaint threw
+; away three quarters of a frame that had already been computed and the
+; percentage fell back to 25 and climbed again. Measured with a C model of
+; this core: a whole frame is 15,366 bytes worst case over the five types,
+; five zooms and four palettes at their default centres (pass 0 alone was
+; 3,856), so the 16KB tier holds any of them whole.
 ;
-; So a W_PAINT - window moved, uncovered, repainted - no longer restarts at
-; row 0: fr_redraw replays the coarse image in one pass of fills and tells
-; the worker to RESUME refining from where the cache ends. A view change
-; still restarts, because fr_kick is the single invalidation point and every
-; type/palette/centre/zoom change funnels through it. Overflow degrades: the
-; cache stops growing, the rows it holds still replay, and the rest is
-; recomputed - never corrupted.
+; So a W_PAINT - window moved, uncovered, repainted - restarts nothing and
+; RECOMPUTES nothing. fr_redraw replays the pass-0 prefix inline, because
+; that is the coarse image and it is owed within the paint, and then hands
+; the worker the rest to replay a row at a time. That split is the whole
+; performance argument: a row is ~40 runs and a drawing call costs ~756us on
+; a 4.77MHz 8088 (PERFORMANCE.md Part 2), so replaying a finished 170-row
+; frame in one lock hold would be seconds of frozen desktop, while replaying
+; it the way it was rendered - lock, one row, unlock, yield - costs the same
+; drawing and freezes nothing. It is still ~12x faster than recomputing those
+; rows, which is half a second EACH.
+;
+; fr_prog therefore counts rows COMPUTED, never rows replayed, and a repaint
+; does not touch it: that is what the percentage is a percentage of, and it
+; is why a redraw no longer moves it. A view change still restarts, because
+; fr_kick is the single invalidation point and every type/palette/centre/zoom
+; change funnels through it. Overflow degrades exactly as it always did: the
+; cache stops growing, the rows it holds still replay, the rest is recomputed
+; - never corrupted - and fr_prog drops to what the cache can restore, which
+; is the honest number because the remainder is about to be computed again.
+; A refused claim degrades one rung further, to the pre-cache behaviour of a
+; repaint being a restart, and is retried on every kick.
 ;
 ; Colors beyond 0/15 retire [bb_mono] (SPEC.md 32) - supported, expected.
 ; On a 1bpp adapter (SPEC.md 39.4) the entry proc defaults to the Contour
@@ -176,24 +193,40 @@ FR_X_ZNUM   equ 170
 FR_X_PCT    equ 200
 FR_X_PAL    equ 250
 
-; --- the pass-0 restore cache (see the file header) ----------------------------
+; --- the restore cache (see the file header) -----------------------------------
 ; ONE WORD per run: colour in bits 15..12, the run's last column in 11..0.
 ; A colour index is 0..15 and a column 0..319, so they do not collide and the
 ; pack is an OR. Runs start at column 0 and each one begins where the last
 ; ended, so the start column is implied and a row ends with the run whose last
-; column is cw-1; the row is implied too, because pass 0 emits rows 0, 4, 8 ...
-; in order. Nothing else about a run needs storing, and at three bytes it did
-; not fit: a Mandelbrot at zoom 0 wants ~1,650 runs for its 43 pass-0 rows and
-; the five types spread about 10% around that.
+; column is cw-1. The ROW is implied too - not by pass 0's 0, 4, 8 ... any
+; more, but by replaying the (pass, row) state machine from (0, 0): rows are
+; appended in the order fr_advance produces them, so stepping fr_stepv once
+; per stored row names every one of them. That is why there is exactly one
+; copy of that arithmetic and why fr_stepv exists.
 ;
-; 4,000 bytes is 2,000 runs, and the ceiling is not the number - it is that
-; image + bss must stay inside one 512-rounded 7,168-byte region, because two
-; Fractals plus mines plus notepad is 19,456 of the 19,968-byte pool and the
-; next step up does not fit.
-FR_CRUN      equ 2                  ; bytes per cached run
-FR_CACHE_MAX equ 4000               ; = 2000 * FR_CRUN
+; It STARTS at 4KB and REGROWS, doubling whenever a row will not fit, and
+; that is the shape rather than a fixed size because how much a view needs is
+; a property of the PICTURE and spans a factor of two hundred. Measured with
+; a C model of this core: a whole frame is 340 bytes for a deep zoom that is
+; all interior, 15,366 worst case over the five types, five zooms and four
+; palettes at their default centres, and 69,690 for a recentred deep zoom on
+; the Burning Ship - so any fixed claim is either too small for the view that
+; wanted it or held against a machine that never asked. 4KB is what the old
+; bss cache held, so the first claim is never worse than what this replaced;
+; doubling keeps the number of grows to three even at the ceiling, and only a
+; grow that has to MOVE copies anything (SPEC.md 50.3 path 2 extends in
+; place, which is what a claim with free heap above it normally gets).
+;
+; A grow is only taken when the heap's largest free run is at least twice the
+; increment: a fractal must not be the reason the next package cannot load,
+; and this is an optimisation, not the app. The ceiling is 32KB because
+; fr_cn, fr_cpos and fr_cmax are WORDS - past 64KB they could not name the
+; cache at all, and 32KB keeps every compare on them clear of the sign bit.
+FR_CRUN        equ 2                ; bytes per cached run
+FR_CACHE_KB0   equ 4                ; the first claim
+FR_CACHE_MAXKB equ 32               ; ...and where doubling stops
 
-FR_BSS_TOTAL equ 4394               ; see the bss layout after OS88_IMAGE_END
+FR_BSS_TOTAL equ 414                ; see the bss layout after OS88_IMAGE_END
 
 ; -----------------------------------------------------------------------------
 ; fr_entry - package entry point (SPEC.md 20.2)
@@ -268,13 +301,26 @@ fr_paint:
     ret
 
 ; -----------------------------------------------------------------------------
-; fr_onclick - W_ONCLICK: re-centre on the clicked point and restart
+; fr_onclick - W_ONCLICK: re-centre on the clicked point, zoom one level in,
+;              and restart
 ; in:  CX = x, DX = y (absolute screen), SI = window ptr; gfx lock held
 ; out: nothing; preserves all registers
 ;
 ; cen += (pixel - half) * step, then frac_clamp. |px - cw/2| <= 160 and
 ; step <= 64, so the product is at most 10240 and the addition cannot
 ; overflow before the clamp brings it back.
+;
+; The ZOOM goes after the recentre and not before it, and the order is the
+; whole of the arithmetic: the two products above convert a PIXEL offset into
+; a complex one using [fr_step], which is the step of the view the user
+; actually clicked in. Zooming first would deepen the step and then measure
+; the click against a view that was never on screen, putting the centre a
+; factor of two away from the thing pointed at. fr_kick's fr_setup is what
+; recomputes the step from the new zoom, after both.
+;
+; At FR_ZMAX the click still recentres and simply does not deepen - the point
+; clicked is worth moving to whether or not there is a level left, and the
+; strip goes on reporting the zoom it really has.
 ; -----------------------------------------------------------------------------
 fr_onclick:
     push ax
@@ -322,6 +368,7 @@ fr_onclick:
     imul word [fr_step]
     add ax, [fr_ceny]
     mov [fr_ceny], ax
+    call fr_zoom_in                 ; ...and only now, with both products taken
     call fr_kick                    ; fr_setup re-clamps both axes
 .out:
     pop bp
@@ -370,9 +417,7 @@ fr_oncmd:
 .m2:
     or al, al                       ; --- View: Zoom In / Out / Reset / Redraw
     jnz .v1
-    cmp word [fr_z], FR_ZMAX
-    jae .kick
-    inc word [fr_z]
+    call fr_zoom_in
     jmp .kick
 .v1:
     cmp al, 1
@@ -407,11 +452,18 @@ fr_oncmd:
 ;      there are two values - a separate test and clear could see the resume,
 ;      have fr_kick overwrite it with a restart, and then clear the restart
 ;      away. No lock, no protocol.
-;   3. Nothing to do -> sleep. Otherwise compute ONE row lock-free, re-check
+;   3. Nothing to do -> sleep. Otherwise get ONE row lock-free - out of the
+;      cache if a repaint left rows there to replay, else computed - re-check
 ;      the restart flag (a view change mid-row makes the row stale - drop
 ;      it), emit under the lock, yield. The check below is only the cheap
 ;      early-out: the binding one is inside fr_emit_body, under the lock,
 ;      which is the only place it can be atomic against fr_kick.
+;
+; fr_take is where a repaint stops costing anything. A replayed row is the
+; same row through the same emit path - same band, same clip, same visibility
+; test - so nothing downstream knows the difference, and the loop paces it
+; exactly as it paces a computed one: one row per lock hold, yield between.
+; That is what keeps a 5-second worth of restored detail off the UI task.
 ;
 ; Note what is NOT here: fr_advance, and the fr_prog increment. Both belong
 ; to "this row was consumed", and both live inside fr_emit_body so that they
@@ -449,7 +501,10 @@ fr_worker:
     call OSAPI_TASK_SLEEP
     jmp .loop
 .work:
+    call fr_take                    ; CF=0: a repaint left this row cached
+    jnc .ready
     call fr_rowcalc                 ; the expensive part: NO lock held
+.ready:
     cmp word [fr_restart], 0
     jne .again                      ; the view changed under us: drop the row
     call fr_emit                    ; lock, cache, paint the band, step, unlock
@@ -466,8 +521,8 @@ fr_worker:
 ;
 ; Called from fr_kick, so EVERY paint, click and menu command retries the
 ; spawn. Refusal is a normal outcome - the 12-slot task table fills with
-; Clocks, Bounces, tm_task and a transient SB refill task - and it is
-; transient: the slot the user frees by closing a Clock has to be reachable
+; Timers, Bounces, tm_task and a transient SB refill task - and it is
+; transient: the slot the user frees by closing a Timer has to be reachable
 ; without relaunching the package, so fr_spawned latches only on SUCCESS.
 ;
 ; There is no inline-render fallback, deliberately. With no frame buffer a
@@ -582,17 +637,32 @@ fr_kick:
     ret
 
 ; -----------------------------------------------------------------------------
-; fr_redraw - W_PAINT-side repaint: replay what the cache holds, resume the
-;             rest
+; fr_redraw - W_PAINT-side repaint: replay the coarse image here, hand the
+;             rest to the worker
 ; in:  [fr_ox]/[fr_oy] valid; gfx lock held (the caller is W_PAINT)
 ; out: nothing; clobbers AX, BX, CX, DX, SI, DI
 ;
-; The content arrived white-filled and the view state is untouched, so the
-; only question is how much of the picture can be put back without computing
-; it. fr_cache holds the pass-0 rows for THIS view (fr_kick empties it on
-; every view change) and fr_replay blits them; the worker is then told to
-; RESUME - fr_restart = 2 - rather than start over, so it keeps the pass and
-; row this routine hands it.
+; The content arrived white-filled and the view state is untouched, so
+; nothing has to be COMPUTED again - the cache holds every row that was
+; emitted for this view (fr_kick empties it on every view change). What has
+; to be decided is how much of it to put back HERE, holding the gfx lock,
+; and the answer is the pass-0 prefix and no more: that is the whole canvas
+; at quarter vertical resolution, it is what "the picture is back" means,
+; and it is a quarter of the drawing. The rest is left to the worker, which
+; replays it a row per lock hold (fr_take) - the same rows, the same total
+; drawing, none of it in one frozen hold.
+;
+; So the resume point is the row after the last cached PASS-0 one, which is
+; fr_stepv from (0, c0row-4) - one step of the one state machine, and it
+; handles both cases without a branch: pass 0 interrupted lands back in pass
+; 0, pass 0 complete lands at the head of pass 1 (and skips a pass a
+; degenerate canvas has no rows for). The worker is told to RESUME -
+; fr_restart = 2 - rather than start over, so it keeps what this sets.
+;
+; fr_prog becomes the cached row count, which is a no-op when the cache holds
+; everything (it does, up to its ceiling) and a truthful reduction when it
+; overflowed, because those rows are about to be computed a second time and
+; will be counted a second time.
 ;
 ; The geometry compare is belt and braces: fr_setup re-reads W_W/W_H every
 ; time and wm_fit can clamp them, and a cache built for a different canvas
@@ -611,20 +681,16 @@ fr_redraw:
     cmp ax, [fr_ch]
     jne fr_kick
 
-    call fr_replay
-    mov ax, [fr_crow]               ; resume where the cache stops: still
-    cmp ax, [fr_ch]                 ; inside pass 0, or at the head of pass 1
-    jae .refine
-    mov word [fr_pass], 0
-    mov [fr_row], ax
-    jmp short .prog
-.refine:
-    mov word [fr_pass], 1
-    mov word [fr_row], 2
-.prog:
-    mov ax, [fr_crow]               ; rows computed so far = cached rows, and
-    shr ax, 1                       ; pass 0 steps by 4
-    shr ax, 1
+    call fr_replay                  ; the pass-0 prefix, inline
+    mov ax, [fr_c0n]                ; the worker picks the cache up where that
+    mov [fr_cpos], ax               ; stopped, and replays what is past it
+    xor ax, ax
+    mov bx, [fr_c0row]
+    sub bx, 4                       ; the last cached pass-0 row...
+    call fr_stepv                   ; ...and the row after it
+    mov [fr_pass], ax
+    mov [fr_row], bx
+    mov ax, [fr_cnrow]
     mov [fr_prog], ax
     mov word [fr_restart], 2        ; 2 = resume, not restart
     mov byte [fr_pct], 0xFF         ; no percentage: force the strip out with
@@ -633,14 +699,122 @@ fr_redraw:
     ret
 
 ; -----------------------------------------------------------------------------
-; fr_cache_reset - empty the pass-0 cache and stamp it with this canvas
+; fr_cache_claim - take the run cache off the heap (SPEC.md 50.3)
+; in:  nothing; out: [fr_cseg]/[fr_ckb]/[fr_cmax], or [fr_cseg] = 0 if refused
+; preserves all registers
+;
+; Called from fr_cache_reset, so the FIRST kick claims it and every later one
+; retries - fr_hire's reasoning exactly: a heap that is full while Paint has
+; a canvas open is a transient fact, and the user who closes Paint should get
+; the cache back without relaunching. The claim is freed for us when the
+; instance dies (SPEC.md 50.3), so there is no teardown hook here.
+;
+; It asks for the first 4KB only, and fr_cache_grow earns the rest.
+; -----------------------------------------------------------------------------
+fr_cache_claim:
+    push ax
+    push dx
+    mov ax, FR_CACHE_KB0
+    call OSAPI_MEM_CLAIM            ; DX = base segment, CF=1 refused
+    jc .out
+    mov [fr_cseg], dx
+    mov word [fr_ckb], FR_CACHE_KB0
+    call fr_cache_size
+.out:
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_cache_grow - double the cache, if the heap can spare it (SPEC.md 50.3)
+; in:  [fr_cseg] valid; out: CF=0 it is bigger and [fr_cseg] may have MOVED,
+;      CF=1 it is untouched and the caller must stop growing
+; preserves all registers
+;
+; Called from fr_cache_row's out-of-room path, so the cache is exactly as big
+; as the pictures this session has drawn and no bigger. Three things about it:
+;
+; ALWAYS take the base from DX. A grow that had to move leaves the old
+; segment pointing at memory that is no longer ours (SPEC.md 50.3), so the
+; caller reloads ES from [fr_cseg] and lays the row down again.
+;
+; It never shrinks, on a view change or otherwise. The next view is drawn on
+; the same screen at the same zoom range as the one before it, so the size
+; this reached is the best available guess at what the next one wants, and a
+; shrink-then-regrow per kick is two heap operations to arrive back where it
+; started - possibly via a move, which copies.
+;
+; A move copies inside mem_regrow's IF=0 window, so it is a tick or two of
+; lost time on a 4.77MHz machine. That is affordable BECAUSE it doubles:
+; three moves buys the ceiling, and the total copied is bounded by twice the
+; final size however big that gets.
+; -----------------------------------------------------------------------------
+fr_cache_grow:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov cx, [fr_ckb]
+    cmp cx, FR_CACHE_MAXKB
+    jae .no                         ; the ceiling: our offsets are words
+    call OSAPI_MEM_AVAIL            ; AX = largest free run in KB
+    mov bx, cx                      ; the increment is the size again, and we
+    add bx, bx                      ; want that much left for everybody else
+    cmp ax, bx
+    jb .no
+    add cx, cx
+    mov ax, cx
+    mov dx, [fr_cseg]
+    call OSAPI_MEM_REGROW           ; out DX = the base NOW: it may have MOVED
+    jc .no
+    mov [fr_cseg], dx
+    mov [fr_ckb], cx
+    call fr_cache_size
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_cache_size - [fr_ckb] KB -> [fr_cmax] bytes, the one place that converts
+; in:  [fr_ckb]; out: [fr_cmax]; preserves all registers except the flags
+; -----------------------------------------------------------------------------
+fr_cache_size:
+    push ax
+    push cx
+    mov ax, [fr_ckb]
+    mov cl, 10
+    shl ax, cl                      ; 32,768 at the ceiling: still a word
+    mov [fr_cmax], ax
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_cache_reset - empty the cache and stamp it with this canvas
 ; in:  [fr_cw]/[fr_ch] valid (fr_setup has run)
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
 fr_cache_reset:
     push ax
+    cmp word [fr_cseg], 0
+    jne .have
+    call fr_cache_claim             ; a refusal is transient: retry every kick
+.have:
     mov word [fr_cn], 0
+    mov word [fr_cnrow], 0
+    mov word [fr_cpass], 0
     mov word [fr_crow], 0
+    mov word [fr_c0n], 0
+    mov word [fr_c0row], 0
+    mov word [fr_cpos], 0
+    mov byte [fr_cfrom], 0
     mov ax, [fr_cw]
     mov [fr_ccw], ax
     mov ax, [fr_ch]
@@ -649,7 +823,7 @@ fr_cache_reset:
     ret
 
 ; -----------------------------------------------------------------------------
-; fr_cache_row - append the row in fr_line to the pass-0 cache
+; fr_cache_row - append the row in fr_line to the cache
 ; in:  fr_line valid for canvas row [fr_row]; the gfx lock is HELD
 ; out: nothing; preserves all registers
 ;
@@ -660,11 +834,22 @@ fr_cache_reset:
 ; because a fully covered fractal still renders and its cache is exactly
 ; what makes uncovering it cheap.
 ;
+; EVERY pass is cached, and the (fr_cpass, fr_crow) frontier is what keeps
+; the rows in step with the state machine that names them. It is stepped by
+; fr_stepv - the same routine fr_advance steps the render with - so the two
+; cannot drift, which is the whole reason that arithmetic was factored out.
+; [fr_c0n] tracks the byte the pass-0 prefix ends at, because that is the
+; part fr_redraw replays inline, and [fr_c0row] the pass-0 row it stops at,
+; because that is where the worker resumes.
+;
 ; A row is committed whole or not at all: a partial row would desync every
 ; row after it, since the start column of each run is implied by the end of
-; the last. When there is no room the cache simply stops growing - fr_crow
-; stays put, so every later row fails the test above and the cached prefix
-; remains replayable.
+; the last. Out of room, it asks fr_cache_grow for more and lays the row down
+; again from the rollback point - re-encoding one row is a few hundred byte
+; compares against the half-second that computed it, and it is a great deal
+; simpler than resuming a run walk into a claim that may have moved. When the
+; heap says no the cache simply stops growing: the frontier stays put, so
+; every later row fails the test above and the cached prefix stays replayable.
 ; -----------------------------------------------------------------------------
 fr_cache_row:
     push ax
@@ -673,8 +858,14 @@ fr_cache_row:
     push dx
     push si
     push di
-    cmp word [fr_pass], 0
-    jne .out                        ; only pass 0 is cached
+    push es
+    mov ax, [fr_cseg]
+    or ax, ax
+    jz .out                         ; the heap refused us: no cache at all
+    mov es, ax
+    mov ax, [fr_pass]
+    cmp ax, [fr_cpass]
+    jne .out
     mov ax, [fr_row]
     cmp ax, [fr_crow]
     jne .out                        ; not the row the cache is waiting for
@@ -691,7 +882,9 @@ fr_cache_row:
     cmp al, [fr_line+bx]
     je .ext
 .flush:
-    cmp di, FR_CACHE_MAX-FR_CRUN
+    mov cx, [fr_cmax]
+    sub cx, FR_CRUN
+    cmp di, cx
     ja .full
     mov ah, al                      ; pack: colour << 12 | last column
     mov al, 0
@@ -699,20 +892,40 @@ fr_cache_row:
     shl ax, cl
     dec bx                          ; BX = last column of the run
     or ax, bx
-    mov [fr_cache+di], ax
+    mov [es:di], ax
     inc bx
     add di, FR_CRUN
     mov si, bx
     cmp si, [fr_cw]
     jb .run
     mov [fr_cn], di                 ; commit the whole row
-    mov ax, [fr_crow]
-    add ax, 4
-    mov [fr_crow], ax
+    inc word [fr_cnrow]
+    cmp word [fr_cpass], 0
+    jne .adv                        ; past pass 0: the inline prefix is fixed
+    mov [fr_c0n], di
+.adv:
+    mov ax, [fr_cpass]              ; step the frontier the ONE way rows step
+    mov bx, [fr_crow]
+    call fr_stepv
+    mov [fr_cpass], ax
+    mov [fr_crow], bx
+    or ax, ax
+    jz .p0
+    mov bx, [fr_ch]                 ; out of pass 0: the prefix is complete,
+.p0:                                ; which is what fr_redraw reads c0row for
+    mov [fr_c0row], bx
     jmp short .out
 .full:
+    call fr_cache_grow              ; CF=0: bigger now - lay the row again
+    jc .stop
+    mov es, [fr_cseg]               ; ...and it may be somewhere else entirely
+    mov di, dx                      ; back to where this row started
+    xor si, si
+    jmp .run
+.stop:
     mov [fr_cn], dx                 ; never a partial row
 .out:
+    pop es
     pop di
     pop si
     pop dx
@@ -722,12 +935,80 @@ fr_cache_row:
     ret
 
 ; -----------------------------------------------------------------------------
-; fr_replay - blit the cached pass-0 rows back onto the canvas
+; fr_take - fill fr_line from the cached row at [fr_cpos], if there is one
+; in:  the cache; NO lock held - this is where fr_rowcalc would be, and it is
+;      a read of memory only the lock's holders ever write
+; out: CF=0 fr_line holds the row and [fr_ctlen] its bytes, [fr_cfrom] = 1;
+;      CF=1 nothing to replay here - the caller must compute the row
+; clobbers: AX, BX, CX, SI, DI, ES
+;
+; The cursor is NOT advanced here. It belongs to "this row was consumed",
+; which is fr_emit_body's business under the lock and behind its restart
+; check, for the same reason fr_advance is (see fr_worker): a repaint
+; republishes the cursor together with the (pass, row) it names, and a step
+; taken out here would walk past it.
+;
+; Every read is bounded by [fr_cn] - re-read per run, not banked - so a
+; fr_kick emptying the cache under this walk ends it rather than running it
+; off the claim. The row it half-decoded is then dropped by the restart
+; check, like any other stale row.
+; -----------------------------------------------------------------------------
+fr_take:
+    mov byte [fr_cfrom], 0
+    mov ax, [fr_cseg]
+    or ax, ax
+    jz .none
+    mov si, [fr_cpos]
+    cmp si, [fr_cn]
+    jae .none                       ; the cursor is at the frontier: compute
+    xor di, di                      ; DI = the column this run starts at
+.run:
+    mov es, ax                      ; (AX holds fr_cseg for the whole walk)
+    cmp si, [fr_cn]
+    jae .none                       ; ran out mid-row: not a row, so not ours
+    mov bx, [es:si]
+    add si, FR_CRUN
+    mov ax, bx
+    and bx, 0x0FFF                  ; BX = the run's last column
+    cmp bx, di
+    jb .none                        ; runs only ever move forward
+    cmp bx, [fr_cw]
+    jae .none
+    mov al, ah                      ; AH = colour<<4 | column bits 8..11, and
+    shr al, 1                       ; a 320-wide canvas never sets more than
+    shr al, 1                       ; one of those, so four shifts leave the
+    shr al, 1                       ; colour alone in AL
+    shr al, 1
+    mov cx, bx
+    sub cx, di
+    inc cx                          ; CX = pixels in the run
+    push ds
+    pop es                          ; stos writes through ES: aim it at us
+    add di, fr_line
+    cld
+    rep stosb
+    sub di, fr_line                 ; DI = the next run's first column
+    mov ax, [fr_cseg]
+    cmp di, [fr_cw]
+    jb .run
+    sub si, [fr_cpos]
+    mov [fr_ctlen], si              ; the whole row, and only a whole row
+    mov byte [fr_cfrom], 1
+    clc
+    ret
+.none:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_replay - put the cached PASS-0 rows back onto the canvas
 ; in:  the cache, [fr_ox]/[fr_oy]/[fr_cw]/[fr_ch]; the gfx lock is HELD
 ; out: nothing; preserves all registers
 ;
 ; The same 4-row bands fr_emit_body paints, from the same run representation
-; - this IS the emit loop with the arithmetic removed. Rows the cache does
+; - this IS the emit loop with the arithmetic removed. It stops at [fr_c0n],
+; the end of the pass-0 prefix, because everything past that is a refinement
+; and refinements are the worker's to replay (fr_redraw). Rows the cache does
 ; not reach are left as wm_paint_all's white fill and the worker computes
 ; them; the run walk is bounded by the byte count, not by the row loop, so a
 ; truncated cache stops cleanly.
@@ -739,8 +1020,9 @@ fr_replay:
     push dx
     push si
     push di
-    mov si, fr_cache
-    mov di, [fr_cn]
+    push es
+    xor si, si
+    mov di, [fr_c0n]
     mov word [fr_crrow], 0
 .row:
     mov ax, [fr_crrow]              ; band bottom = row + 3, clipped to the
@@ -762,8 +1044,9 @@ fr_replay:
 .run:
     or di, di
     jz .out                         ; the cache ran out mid-frame
-    mov ax, [si]                    ; unpack (see the FR_CRUN comment)
-    mov cx, ax
+    mov es, [fr_cseg]               ; re-aimed per run: the two API calls
+    mov ax, [es:si]                 ; below go through stubs that own ES
+    mov cx, ax                      ; unpack (see the FR_CRUN comment)
     and cx, 0x0FFF                  ; CX = last column of the run
     mov al, ah                      ; AH = colour<<4 | column bits 8..11, and
     shr al, 1                       ; a 320-wide canvas never sets more than
@@ -791,6 +1074,7 @@ fr_replay:
     cmp ax, [fr_ch]
     jb .row
 .out:
+    pop es
     pop di
     pop si
     pop dx
@@ -949,6 +1233,23 @@ fr_clamp:
     ret
 
 ; -----------------------------------------------------------------------------
+; fr_zoom_in - one level deeper, if there is one
+; in:  [fr_z]; out: [fr_z]; preserves every register (flags go)
+;
+; Two callers - View > Zoom In and a click on the canvas - so the cap lives
+; here rather than at each of them. It is MEASURED and not chosen (see the
+; file header): zoom is a shift count, so at z = 5 the step reaches the Q4.12
+; format's 1-ulp floor and z = 6 draws the identical picture. A control that
+; deepened past it would report a zoom the arithmetic cannot deliver.
+; -----------------------------------------------------------------------------
+fr_zoom_in:
+    cmp word [fr_z], FR_ZMAX
+    jae .out
+    inc word [fr_z]
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; fr_defaults - the current type's own view: its centre, zoom 0
 ; in:  [fr_type]
 ; out: [fr_cenx] [fr_ceny] [fr_z]; clobbers nothing
@@ -973,10 +1274,10 @@ fr_defaults:
     ret
 
 ; -----------------------------------------------------------------------------
-; fr_advance - move the (pass, row) state machine on by one computed row
-; in:  [fr_pass] [fr_row] [fr_ch]
-; out: the next row to compute, or pass 3 = frame complete
-; clobbers: nothing
+; fr_stepv - the (pass, row) state machine, one row on
+; in:  AX = pass, BX = row, [fr_ch]
+; out: AX = pass, BX = row - the next row to draw, or pass 3 = frame complete
+; clobbers: nothing else
 ;
 ; Progressive refinement, three passes over the canvas:
 ;   pass 0: rows r = 0, 4, 8, ...  painted as a band of 4 rows
@@ -985,34 +1286,53 @@ fr_defaults:
 ; ch/4 + ch/4 + ch/2 = ch: NO pixel is ever computed twice, only painted
 ; twice, so the finished image is exactly the non-progressive image - and a
 ; full (chunky) preview lands in a quarter of the time.
+;
+; It takes its state in registers because there are THREE walkers over it and
+; they must not be able to disagree: the render (fr_advance), the cache's
+; frontier (fr_cache_row), and fr_redraw working out where the worker resumes.
+; The cache stores rows in exactly the order this produces them and nothing
+; else records which row is which, so a second copy of this arithmetic would
+; be a second opinion about what the cache contains.
+; -----------------------------------------------------------------------------
+fr_stepv:
+    push dx
+    mov dx, 4
+    cmp ax, 2
+    jne .step
+    mov dx, 2
+.step:
+    add bx, dx
+    cmp bx, [fr_ch]
+    jb .out
+.next:
+    inc ax
+    cmp ax, 3
+    jae .out                        ; frame complete
+    mov bx, 2                       ; pass 1 starts at row 2, pass 2 at row 1
+    cmp ax, 1
+    je .set
+    mov bx, 1
+.set:
+    cmp bx, [fr_ch]
+    jae .next                       ; degenerate canvas: skip the empty pass
+.out:
+    pop dx
+    ret
+
+; -----------------------------------------------------------------------------
+; fr_advance - move the render's (pass, row) on by one drawn row
+; in:  [fr_pass] [fr_row] [fr_ch]
+; out: the next row to draw, or pass 3 = frame complete
+; clobbers: nothing
 ; -----------------------------------------------------------------------------
 fr_advance:
     push ax
     push bx
-    mov ax, [fr_row]
-    mov bx, 4
-    cmp word [fr_pass], 2
-    jne .step
-    mov bx, 2
-.step:
-    add ax, bx
-    mov [fr_row], ax
-    cmp ax, [fr_ch]
-    jb .out
-.next:
-    inc word [fr_pass]
-    mov bx, [fr_pass]
-    cmp bx, 3
-    jae .out                        ; frame complete
-    mov ax, 2                       ; pass 1 starts at row 2, pass 2 at row 1
-    cmp bx, 1
-    je .set
-    mov ax, 1
-.set:
-    mov [fr_row], ax
-    cmp ax, [fr_ch]
-    jae .next                       ; degenerate canvas: skip the empty pass
-.out:
+    mov ax, [fr_pass]
+    mov bx, [fr_row]
+    call fr_stepv
+    mov [fr_pass], ax
+    mov [fr_row], bx
     pop bx
     pop ax
     ret
@@ -1229,8 +1549,22 @@ fr_emit_body:
     cmp word [fr_restart], 0        ; the view changed while we waited for
     jne .out                        ; the lock: this row is the old view's -
                                     ; do not cache it, paint it OR step past it
-    call fr_cache_row               ; keep it, seen or not
-    inc word [fr_prog]
+    cmp byte [fr_cfrom], 0
+    jne .cached
+    call fr_cache_row               ; computed: keep it, seen or not
+    mov ax, [fr_cn]                 ; the cursor FOLLOWS the frontier, or the
+    mov [fr_cpos], ax               ; next fr_take replays the row just
+    inc word [fr_prog]              ; appended onto the row after it
+    jmp short .vis
+.cached:
+    mov ax, [fr_ctlen]              ; replayed: step the cursor instead, here
+    add [fr_cpos], ax               ; and not in fr_take, for fr_advance's
+                                    ; reason - fr_redraw republishes the
+                                    ; cursor with the row it names, and a step
+                                    ; taken outside the lock walks past it.
+                                    ; fr_prog counts COMPUTED rows only, which
+                                    ; is what makes a repaint free of it
+.vis:
     mov bx, [fr_win]
     or bx, bx
     jz .step
@@ -1651,13 +1985,29 @@ fr_pct     equ os88_image_end + 56   ; byte: last percentage drawn
 fr_col     equ os88_image_end + 57   ; byte: emit scratch - the run's colour
 fr_numbuf  equ os88_image_end + 58   ; 6 bytes: "100%" + NUL
 fr_line    equ os88_image_end + 64   ; 320 bytes: one colour index per column
-; --- the pass-0 restore cache (see the file header)
-fr_cn      equ os88_image_end + 384  ; word: BYTES of fr_cache in use, not runs
-fr_crow    equ os88_image_end + 386  ; word: the next pass-0 row not yet cached
-                                     ; (rows 0..fr_crow-4 step 4 are in there)
-fr_ccw     equ os88_image_end + 388  ; word: the canvas the cache was built for
-fr_cch     equ os88_image_end + 390  ; word:  - a mismatch invalidates it
-fr_crrow   equ os88_image_end + 392  ; word: fr_replay scratch - the row being
+; --- the restore cache (see the file header). The runs themselves are a HEAP
+; claim that regrows, not bss: a busy view wants 32KB and a plain one 340
+; bytes, and a package that reserved the larger in its region would be
+; refused a launch on a machine that can run it perfectly well with the
+; smaller - or with no cache at all.
+fr_cseg    equ os88_image_end + 384  ; word: the claim, or 0 = we have none
+fr_cmax    equ os88_image_end + 386  ; word: its size in BYTES
+fr_cn      equ os88_image_end + 388  ; word: BYTES of it in use, not runs
+fr_cnrow   equ os88_image_end + 390  ; word: ROWS in it - what fr_prog becomes
+                                     ; across a repaint
+fr_cpass   equ os88_image_end + 392  ; word: the frontier - the (pass, row) the
+fr_crow    equ os88_image_end + 394  ; word:  cache is waiting to be handed
+fr_c0n     equ os88_image_end + 396  ; word: BYTES of the pass-0 prefix, which
+                                     ; is the part fr_redraw replays inline
+fr_c0row   equ os88_image_end + 398  ; word: the next pass-0 row not cached
+                                     ; (>= ch once pass 0 is all in there)
+fr_cpos    equ os88_image_end + 400  ; word: the worker's replay cursor
+fr_ctlen   equ os88_image_end + 402  ; word: bytes of the row fr_take decoded
+fr_ccw     equ os88_image_end + 404  ; word: the canvas the cache was built for
+fr_cch     equ os88_image_end + 406  ; word:  - a mismatch invalidates it
+fr_crrow   equ os88_image_end + 408  ; word: fr_replay scratch - the row being
                                      ; blitted back
-fr_cache   equ os88_image_end + 394  ; FR_CACHE_MAX bytes of packed runs
-                                     ; total 394 + 4000 = 4394 = FR_BSS_TOTAL
+fr_cfrom   equ os88_image_end + 410  ; byte: 1 = fr_line was REPLAYED, not
+                                     ; computed
+fr_ckb     equ os88_image_end + 412  ; word: the claim's size in KB, which is
+                                     ; what doubles; total 414 = FR_BSS_TOTAL

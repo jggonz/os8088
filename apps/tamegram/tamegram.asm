@@ -1967,12 +1967,16 @@ tg_draw_hud:
     ; Every column here is one glyph clear of the field before it, and the
     ; rightmost - FACTION's 'ORANGE' at 180 - ends at 228, inside TG_HUD_W.
     ;
-    ; CWHITE, not the CLGRAY this had: SPEC.md 39.4 puts CLGRAY and the band's
-    ; own CDGRAY in the SAME dither class, so on Hercules and CGA the labels
-    ; were a 50% pattern on a 50% pattern - and a dithered glyph loses half of
-    ; every stroke besides, which is what left Missile Command's wave counter
-    ; not faint but absent. Text comes from the white class; a filled BAND may
-    ; dither, because an area survives what a 1px stroke does not.
+    ; CWHITE, not the CLGRAY this had: SPEC.md 39.4 rounds an UNFLAGGED glyph
+    ; to black or white rather than dithering it, and CLGRAY rounds to black -
+    ; so on Hercules and CGA these labels were black letters on the band's own
+    ; 50% pattern, which is what left Missile Command's wave counter not faint
+    ; but absent. Text that must be read comes from the white class; a filled
+    ; BAND may dither, because an area survives what a 1px stroke does not.
+    ;
+    ; A DISABLED label is the separate case and it does dither, legibly, via
+    ; [gfx_dis] and OSAPI_GFX_PEN (SPEC.md 47 rule 3) - nothing here is
+    ; disabled, so nothing here wants it.
     mov al, CWHITE
     call OSAPI_SET_COLOR
     mov cx, 4

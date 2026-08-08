@@ -18,6 +18,7 @@ for them are marked **RESOLVED** where that is so. In short:
 | a `gfx_blit4` slot | SPEC.md §5.4 — packed 4bpp, adapter- and back-buffer- and clip-aware |
 | the kernel's glyph table | `OSAPI_FONT_GLYPHS`, SPEC.md §6 |
 | `wm_resize(BX, w, h)`, and a resize callback whose refusal `ui_grow` honours | `OSAPI_WM_RESIZE` and `W_ONSIZE`/`OSAPI_WM_ONSIZE`, SPEC.md §11.1 |
+| a way to stop paying the drawing lock on every mouse sample of a stroke | **fullscreen exclusive**, SPEC.md §53 — and Paint is its same-mode consumer (SPEC.md §42.7): `OSAPI_FSX_RUN` holds the lock for the whole session, so `pt_wait` stops being an unlock/yield/lock round trip and becomes `OSAPI_FSX_WAIT`. It takes the bracket *without* the §11.2 surface, because for an app this expensive to repaint the surface costs a spare full-canvas draw on the way home |
 
 The rest — positioned file I/O, a teardown callback, mouse-motion events,
 menu item state, a package-visible modal gate — is still outstanding, and the
@@ -45,6 +46,16 @@ Shrinking the window never silently eats the picture: the rows or columns
 about to go are checked for ink first, per axis, and a dirty axis keeps its
 size while the other one still moves. When that happens the frame is written
 back to fit the canvas and the status toast says why.
+
+View ▸ Full Screen (Ctrl+F) hands the whole screen and the whole machine to
+the editor — SPEC.md §42.7 and §53 — on all three adapters, with the app
+drawing its own crosshair and polling its own input because the desktop is
+frozen underneath it. Ctrl+F comes back, and so does Escape when it has
+nothing else to cancel. **That same rule about eating the picture is what
+bounds the feature**: the canvas grows to fill the screen only as far as a
+*window* could show it afterwards, because a picture that outgrew every window
+could never come back to one, and the 67 rows of white it leaves are the price
+of an exit that always works.
 
 ## The two liberties it takes
 
@@ -206,11 +217,28 @@ call, so the coalescer's "one call a run" became one *far* call a run.
 `pt_blit` now makes one call per band of rows — usually one for the whole
 rectangle — and the kernel runs the identical scan.
 
+**What a blit actually costs, measured** (PERFORMANCE.md Part 9, a real
+5150): `gfx_blit4` emits one `gfx_hline` per coalesced run, and a `gfx_hline`
+costs **~0.5 ms whatever its length** — a drawing call on the mono renderer is
+~756 us of fixed setup with almost nothing per pixel. So a blit costs
+**runs × 0.5 ms** and the pixel count barely enters it. The same 64×64 block
+is 28 ms at one run per row and 561 ms at sixteen.
+
+**So Paint's performance is decided by how FLAT the picture is, not how big
+it is.** A 448×280 canvas at two runs a row is a few hundred milliseconds; the
+same canvas dithered, at twenty runs a row, is seconds. Two
+things follow for anyone changing this app: blitting only the band that
+changed is worth far more than making the scan faster, and a dither or a
+gradient is expensive to *display*, not just to compute.
+
 **"Identical" is the load-bearing word, and the first version was not.** It
 decoded every pixel one at a time rather than comparing byte pairs, which is
-75–90 clocks a pixel against `repe scasb`'s seven and a half — so a full
-repaint got about nine times *slower* while appearing, in QEMU, to be exactly
-as fast, because QEMU does not model 8086 timing. The `repe scasb` pair scan
+75–90 clocks a pixel against `repe scasb`'s seven and a half — **both figures
+read off an instruction stream rather than measured**, and the "about nine
+times slower" and "~0.25 s coalesced" that this document used to derive from
+them were never measurements either. Use the measured `runs × 0.5 ms` above
+instead. What is not in doubt is the failure mode: the slow version appeared,
+in QEMU, to be exactly as fast, because QEMU does not model 8086 timing. The `repe scasb` pair scan
 described below is now what `gfx_blit4` does; it is the same algorithm this
 section is about, and the reason the section exists is that it is easy to
 keep the shape of an optimisation and lose the optimisation. Two things about the
@@ -435,6 +463,16 @@ with obstacles completes in about four seconds of wall clock, opening a 448×280
 times slower; a 4.77MHz 8088 slower again. The AT-class 86Box targets
 (`make 286`, `make 386sx`, `make 386` — SPEC.md §16) are the other end of that
 range and the honest place to judge whether a full repaint is tolerable.
+
+**"Slower again" now has a number, and it is worse than the wall clock
+suggests.** On the 4.77MHz 5150 this project is calibrated against
+(PERFORMANCE.md Part 9) a `gfx_fill` costs ~177 µs per scan line with the
+pixels nearly free, so a **280-row canvas fill is ~50 ms per pass** — the
+flood fill's cost is the number of *spans* it emits, not the number of pixels
+it touches, exactly as the blit's is its runs. Budget any Paint operation by
+counting the primitive calls it makes and multiplying by ~0.5–0.8 ms. The
+QEMU wall clock above stays useful for the reason given: anything already
+measured in seconds *there* is out of reach on the target.
 
 **One thing to know before running this on a 286 or a 386.** The tree is 8086
 code and those machines execute it verbatim, with one divergence: an 8086 uses a

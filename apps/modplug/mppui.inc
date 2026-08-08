@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/modplug/mppui.inc
 ;
-; ModPlug Player's face (SPEC.md 52.3/52.4/52.6). Prefix mppu_. Everything
+; ModPlug Player's face (SPEC.md 56.3/56.4/56.6). Prefix mppu_. Everything
 ; ModPlug Player V2 draws in its 417x226 main window, drawn here in 16
 ; colours that survive reduction to one bit:
 ;
@@ -9,7 +9,7 @@
 ;   the time scrubber      the volume slider       the option-button grid
 ;   the spectrum analyser / oscilloscope / VU meter, and the status line
 ;
-; TWO LAYOUTS, ONE CODE PATH (SPEC.md 52.4). ModPlug Player's own window is
+; TWO LAYOUTS, ONE CODE PATH (SPEC.md 56.4). ModPlug Player's own window is
 ; 417x226 and CGA's whole desktop band is 156 rows, so the full layout cannot
 ; exist there. Every rectangle on the face is therefore a WORD IN BSS, filled
 ; by mppu_layout from one of two tables, and no drawing routine below that
@@ -74,7 +74,7 @@ MPPU_VUCH    equ 4                  ; VU rows: one per replayer channel
 MPPU_LROW    equ 11                 ; LCD text rows are this far apart
 MPPU_LMAX    equ 4                  ; ...and the most any layout has
 
-; --- the invalidation mask (SPEC.md 52.12) -------------------------------------
+; --- the invalidation mask (SPEC.md 56.12) -------------------------------------
 ; One bit per independently drawable element of the face. mppu_inval sets them,
 ; mppu_poll sets the ones whose state is a cheap pure function, and mppu_paint
 ; spends them. MPPI_BODY is the whole face: the body fill wipes everything on
@@ -90,7 +90,7 @@ MPPI_STATUS  equ 0040h              ; the status line
 MPPI_VIZ     equ 0080h              ; the visualiser pane
 MPPI_ALL     equ 00FFh
 
-; --- the two layout tables (SPEC.md 52.4) --------------------------------------
+; --- the two layout tables (SPEC.md 56.4) --------------------------------------
 ; MPPU_LAYW words each, copied wholesale into the bss block at the end of this
 ; file - which is laid out in exactly this order and asserted to match.
 mppu_lay_full:
@@ -298,6 +298,63 @@ mppu_run:
     call OSAPI_FONT_RUN
     sub cx, [mppu_dx0]
     sub dx, [mppu_dy0]
+    ret
+
+; -----------------------------------------------------------------------------
+; mppu_dpen / mppu_dink / mppu_dpen_off - the DISABLED pen, SPEC.md 47 rule 1
+;
+; in (dpen, dink):  CF = 0 live / CF = 1 disabled
+; out (mppu_dpen):  [gfx_color] and [gfx_dis] set together. EVERY register
+;                   preserved, CF included - for a caller drawing a SHAPE,
+;                   which reads the pen and takes no colour argument.
+; out (mppu_dink):  the above, plus AL = the ink to letter in - for a caller
+;                   drawing an opaque run, which takes its own ink and ground.
+; out (dpen_off):   the pen back to live. Every register preserved.
+;
+; This package was written against a kernel with no OSAPI_GFX_PEN, so it greyed
+; by putting CDGRAY in AL and nothing else - and that is rule 1's own failure
+; rather than a shortcut. A disabled control is TWO pieces of state, the colour
+; and the [gfx_dis] flag, and on Hercules and CGA the flag is the entire
+; difference: font_ink masks a flagged glyph to a checkerboard, while CDGRAY on
+; its own rounds to solid black. So every greyed caption in the three windows
+; was pixel-identical to a live one at 1bpp - the Setup pane's dead rows, the
+; PlayList's Save List and the option grid's unavailable labels all stopped
+; saying so on two adapters out of three, while their FRAMES dithered around
+; them (gfx_ink screens a shape with no help), which is rule 2's failure on
+; top: the two halves of one control disagreeing.
+;
+; TWO ENTRY POINTS BECAUSE AX IS SOMETIMES LIVE, and that is not a style
+; choice - it is the bug the first version of this had. mpps_draw_box holds the
+; control's x in AX across the branch that greys it, so a pen routine that
+; returns an ink in AL corrupts the rect it is about to draw. The shape callers
+; take mppu_dpen and keep their registers; only the three run callers, which
+; are all building AX rather than holding it, take mppu_dink.
+;
+; The pen is one lock hold long - gfx_unlock clears it like it clears the clip
+; region - but that is not licence to leave it set: the next thing this package
+; draws in the same hold would come out disabled. mppu_dpen_off is the `clc`
+; half, and every caller below spends it before it returns rather than at the
+; branch, so no path can leak the flag.
+; -----------------------------------------------------------------------------
+mppu_dpen:
+    push ax
+    call OSAPI_GFX_PEN              ; CF IS the argument, and the cell touches
+    pop ax                          ; no flag - nor do the push/pop - so it
+    ret                             ; crosses to mppu_dink unchanged
+
+mppu_dink:
+    call mppu_dpen
+    mov al, CBLACK
+    jnc .out
+    mov al, CDGRAY
+.out:
+    ret
+
+mppu_dpen_off:
+    push ax
+    clc
+    call OSAPI_GFX_PEN
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -677,7 +734,7 @@ mppu_puth2:
     ret
 
 ; =============================================================================
-; The LCD panel (SPEC.md 52.3) - ModPlug Player's own readout, line for line
+; The LCD panel (SPEC.md 56.3) - ModPlug Player's own readout, line for line
 ; =============================================================================
 ; in: DI = 0 draw the well too (a full repaint), 1 the text alone (a frame)
 mppu_draw_lcd:
@@ -738,7 +795,7 @@ mppu_draw_lcd:
 ; after itself without a fill anywhere.
 ; -----------------------------------------------------------------------------
 ;
-; AND IT IS CHECKED BEFORE IT IS DRAWN (SPEC.md 52.12). Composing a line is
+; AND IT IS CHECKED BEFORE IT IS DRAWN (SPEC.md 56.12). Composing a line is
 ; arithmetic; drawing one is twenty-four glyph cells, which on the machine
 ; this package exists for is twenty-four milliseconds. The title changes when
 ; a module loads, the format line never changes while one plays, and the
@@ -1015,7 +1072,7 @@ mppu_lcd_pos:
     ret
 
 ; =============================================================================
-; The transport row (SPEC.md 52.3): nine bevelled buttons, each with a vector
+; The transport row (SPEC.md 56.3): nine bevelled buttons, each with a vector
 ; glyph and an LED strip beneath it. ModPlugPlayer's buttons ARE LEDs - its
 ; play triangle lights when it plays - and the strip is how that survives to
 ; one bit, where "lit green" and "unlit grey" are the same pixel.
@@ -1348,7 +1405,7 @@ mppu_vbar:                          ; a 2x9 upright bar at AX
     ret
 
 ; =============================================================================
-; The time scrubber and the volume slider (SPEC.md 52.3)
+; The time scrubber and the volume slider (SPEC.md 56.3)
 ; =============================================================================
 mppu_draw_scrub:
     push ax
@@ -1455,7 +1512,7 @@ mppu_vol_thumb:
     ret
 
 ; =============================================================================
-; The visualiser (SPEC.md 52.6) - spectrum analyser, oscilloscope, VU meter
+; The visualiser (SPEC.md 56.6) - spectrum analyser, oscilloscope, VU meter
 ; =============================================================================
 
 ; mppu_viz_reset - clear every bar, cap and trace
@@ -1519,7 +1576,7 @@ mppu_viz_feed:
 ;                 what the replayer is playing now, drag the peak caps behind
 ; preserves all registers
 ;
-; THE SPECTRUM ANALYSER IS NOT AN FFT, and SPEC.md 52.6 says so in the
+; THE SPECTRUM ANALYSER IS NOT AN FFT, and SPEC.md 56.6 says so in the
 ; contract rather than leaving it to be discovered. ModPlugPlayer runs KissFFT
 ; over its output; this machine has no cycles for that, and a four-voice
 ; source makes it unnecessary. Each channel's PERIOD is matched against the
@@ -2038,7 +2095,7 @@ mppu_vu_row:
     ret
 
 ; =============================================================================
-; The option-button grid (SPEC.md 52.3) - ModPlug Player's labelled toggles,
+; The option-button grid (SPEC.md 56.3) - ModPlug Player's labelled toggles,
 ; each with an LED at its left edge saying whether it is on
 ; =============================================================================
 mppu_draw_opts:
@@ -2191,13 +2248,15 @@ mppu_opt_label:
     mov dx, [mppu_q2]               ; button - the reason the LED is 4px
     add dx, 2
     add dx, [mppu_dy0]
-    mov al, CBLACK                  ; an opaque run again, so a label may be
-    cmp byte [mppu_qdis], 0         ; redrawn on its own without a fill under
-    je .run                         ; it (and so a clip edge cannot blank it)
-    mov al, CDGRAY
-.run:
-    mov ah, [mppu_body]
+    cmp byte [mppu_qdis], 0         ; an opaque run again, so a label may be
+    stc                             ; redrawn on its own without a fill under
+    jne .pen                        ; it (and so a clip edge cannot blank it)
+    clc
+.pen:
+    call mppu_dink                  ; -> AL, and [gfx_dis] with it: at 1bpp
+    mov ah, [mppu_body]             ; the flag is the whole of the greying
     call OSAPI_FONT_RUN
+    call mppu_dpen_off
     pop di
     pop si
     pop dx
@@ -2259,7 +2318,7 @@ mppu_opt_state:
     je .amig
     inc bl
 .amig:
-    mov bh, [mpm_xt]                ; XT mode owns the DSP tail (SPEC.md 52.7)
+    mov bh, [mpm_xt]                ; XT mode owns the DSP tail (SPEC.md 56.7)
     jmp .out
 .dith:
     mov bl, [mpm_dither]
@@ -2427,7 +2486,7 @@ mppu_clock_reset:
     ret
 
 ; =============================================================================
-; The invalidation mask (SPEC.md 52.12) - what makes this a player and not a
+; The invalidation mask (SPEC.md 56.12) - what makes this a player and not a
 ; slideshow
 ;
 ; The worker wakes ~18 times a second and every one of those wakes used to
@@ -2627,7 +2686,7 @@ mppu_sig_opts:
 ; mppu_lcd_emit - composing four lines is arithmetic, and the hash there is
 ; what stops the arithmetic becoming pixels.
 ;
-; The visualiser is marked only while it is actually animating. SPEC.md 52.7's
+; The visualiser is marked only while it is actually animating. SPEC.md 56.7's
 ; XT rule is the one exception and it is applied by the caller, not here.
 ; =============================================================================
 mppu_poll:
@@ -2814,7 +2873,7 @@ mppu_draw_all:
 ; =============================================================================
 mppu_frame:
     push ax
-    cmp byte [mpp_cpu0], 0          ; SPEC.md 52.7: on the machine XT mode
+    cmp byte [mpp_cpu0], 0          ; SPEC.md 56.7: on the machine XT mode
     je .viz                         ; exists for, the visualiser is not
     cmp byte [mpm_playing], 0       ; animated WHILE PLAYING - those cycles
     jne .poll                       ; are what the audio needs. Stopped, it
@@ -2845,7 +2904,7 @@ mppu_frame:
 ; pixel, and a run decides erase-and-letter together per cell, so there is no
 ; pair left that can disagree.
 ;
-; IT NO LONGER REPAINTS THE FACE (SPEC.md 52.12). It polls and spends the
+; IT NO LONGER REPAINTS THE FACE (SPEC.md 56.12). It polls and spends the
 ; dirty mask, exactly as the worker's frame does, so the ~14 handlers that
 ; call it keep their one unconditional `call mppu_refresh` and get a redraw
 ; scaled to what they actually changed - a lamp for a lamp, a slider for a
@@ -3164,7 +3223,7 @@ mppu_hit:
     MPPB mppu_qdis                  ; the option label's greyed answer, banked
                                     ; between mppu_opt_state and the run
 
-; --- the invalidation mask and the check words (SPEC.md 52.12) ----------------
+; --- the invalidation mask and the check words (SPEC.md 56.12) ----------------
 ; mppu_dirty is the update region; the rest are one element's last-drawn state
 ; each, all of them zeroed together by mppu_ckclr, and all of them read and
 ; written only through mppu_chk - which is where the never-zero rule lives.

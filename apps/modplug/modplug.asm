@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/modplug/modplug.asm
 ;
-; ModPlug Player, the fourteenth software package (SPEC.md 52): a port of
+; ModPlug Player, the fourteenth software package (SPEC.md 56): a port of
 ; ModPlug Player V2's LOOK AND FEEL - the skinned player window, the Setup
 ; window and the PlayList editor - onto the os8088 window manager, playing
 ; ProTracker modules through the SPEC.md 34 sound layer.
@@ -25,7 +25,7 @@
 ;     extended with the four DSP stages ModPlugPlayer's Setup pages actually
 ;     expose and that this hardware can actually run.
 ;   - The SPECTRUM ANALYSER is not an FFT and does not claim to be. mppui.inc
-;     projects the four channels onto bands by period; SPEC.md 52.6 is the
+;     projects the four channels onto bands by period; SPEC.md 56.6 is the
 ;     honest statement of what that is and is not.
 ;
 ; Three windows, one instance. The player window is the BOUND one (the entry
@@ -123,7 +123,7 @@ MPP_RATE22  equ 22050
 MPP_RATE44  equ 44100               ; the SPEC.md 34.5 wide-rate regime: a
                                     ; DSP 4.x card, and an honest refusal on
                                     ; anything older
-MPP_RATE_XT equ 5500                ; XT mode's own rate (SPEC.md 52.7)
+MPP_RATE_XT equ 5500                ; XT mode's own rate (SPEC.md 56.7)
 MPP_MAXFEED equ 6                   ; halves per worker wake: bounds the
                                     ; lock-free burst at ~1.1 s of mixing
 
@@ -139,11 +139,11 @@ MPP_FW      equ MPP_CW + 2          ; frame = content + the 1px borders...
 MPP_FHF     equ MPP_CHF + TITLE_H + 1   ; ...and the title bar
 MPP_FHC     equ MPP_CHC + TITLE_H + 1
 
-; --- the playlist (SPEC.md 52.8) -----------------------------------------------
+; --- the playlist (SPEC.md 56.8) -----------------------------------------------
 MPP_PLMAX   equ 16                  ; entries; 13 bytes each, all in bss
 MPP_PLENT   equ 13                  ; an 8.3 name and its NUL
 
-; --- control ids, as mppu_hit answers them (SPEC.md 52.3) ----------------------
+; --- control ids, as mppu_hit answers them (SPEC.md 56.3) ----------------------
 ; Up here with the other constants rather than beside the tables they index,
 ; because mpp_onclick compares against them and a forward-referenced equ in an
 ; instruction operand is exactly the shape NASM will not always fold.
@@ -179,7 +179,7 @@ mpp_entry:
     or al, al                       ; machine gets XT mode pre-armed with its
     jnz .cpu                        ; menu item already relabeled: the machine
     mov byte [mpp_cpu0], 1          ; this mode exists for should not have to
-    mov al, 1                       ; go and find the toggle (SPEC.md 52.7)
+    mov al, 1                       ; go and find the toggle (SPEC.md 56.7)
     call mpm_setxt                  ; ...through the setter, so the DSP tail is
     mov word [mpp_mi_play + 14], mpp_s_xton  ; forced off with it (item 7 of a
 .cpu:                               ; dw array is at +14, not +12)
@@ -198,7 +198,7 @@ mpp_entry:
     cmp ax, MPP_FHF                 ; does the full layout fit in it?
     jae .fits
     mov word [mpp_tpl + WT_H], MPP_FHC
-    mov byte [mpp_compact], 1       ; CGA: the compact layout (SPEC.md 52.4)
+    mov byte [mpp_compact], 1       ; CGA: the compact layout (SPEC.md 56.4)
 .fits:
     mov ax, [mpp_scrw]              ; centre the frame on the screen...
     sub ax, MPP_FW
@@ -246,7 +246,7 @@ mpp_paint:
     push si
     push di
     call mpp_reap                   ; watchdog/F00 leftovers close on any UI
-    call mppu_layout                ; event (SPEC.md 52.2)
+    call mppu_layout                ; event (SPEC.md 56.2)
     call mpp_hire                   ; idempotent; a refusal is transient, so
                                     ; it is retried every paint, never latched
     mov ax, MPPI_ALL                ; the kernel ordered this one: our content
@@ -526,7 +526,7 @@ mpp_t_setup:
     ret
 
 ; -----------------------------------------------------------------------------
-; mpp_option - one of the option buttons (SPEC.md 52.3)
+; mpp_option - one of the option buttons (SPEC.md 56.3)
 ; in:  AL = the option index; gfx lock held
 ; -----------------------------------------------------------------------------
 mpp_option:
@@ -597,7 +597,7 @@ mpp_o_vu:
 mpp_o_info:
     xor byte [mpp_info], 1          ; the LCD's third line switches between
     ret                             ; the transport readouts and the module's
-                                    ; sample list (SPEC.md 52.3)
+                                    ; sample list (SPEC.md 56.3)
 mpp_o_setup:
     call mpps_toggle
     ret
@@ -737,7 +737,7 @@ mpp_abdismiss:
     ret
 
 ; =============================================================================
-; Loading (SPEC.md 52.2) - the Standard File dialog, and the completion proc
+; Loading (SPEC.md 56.2) - the Standard File dialog, and the completion proc
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -767,6 +767,8 @@ mpp_do_open:
 ; mpp_fdone - the file-dialog completion proc (SPEC.md 38.6). UI task, gfx
 ;             lock held, ES:DI = the chosen name with ES = KERNEL_SEG, valid
 ;             for THIS CALL ONLY - so it is copied out first, before anything.
+;             DX:CX = that file's SIZE, which is banked here for the same
+;             reason and for a better one (see mpp_load_name).
 ;
 ; Two callers with one completion proc, told apart by [mpp_addpl]: the
 ; player's Open loads and plays, the PlayList editor's Add... appends and
@@ -779,6 +781,8 @@ mpp_fdone:
     push dx
     push si
     push di
+    mov [mpp_fszl], cx              ; the size, before anything can clobber it.
+    mov [mpp_fszh], dx              ; 0 = this listing had no such file
     mov si, di                      ; the kernel's buffer dies when this call
     mov di, mpp_fname               ; returns: copy it out NOW
     mov cx, 12
@@ -797,6 +801,9 @@ mpp_fdone:
     call mpp_pl_add                 ; both windows, nothing else
     call mppl_redraw
     call mppu_refresh
+    xor ax, ax                      ; nothing consumed the banked size on this
+    mov [mpp_fszl], ax              ; branch, and a later playlist advance must
+    mov [mpp_fszh], ax              ; not inherit some other file's
     jmp .out
 .load:
     call mpp_load_name              ; the shared load, used by Open and by
@@ -840,6 +847,46 @@ mpp_load_name:
     call OSAPI_MEM_FREE
     mov word [mpp_modseg], 0
 .alloc:
+    mov cx, [mpp_fszl]              ; READ-AND-CLEAR the size the dialog gave
+    mov dx, [mpp_fszh]              ; us: the next load may be a playlist
+    xor ax, ax                      ; advance, which had no dialog and must
+    mov [mpp_fszl], ax              ; not inherit this file's figure
+    mov [mpp_fszh], ax
+    mov ax, cx
+    or ax, dx
+    jz .blind                       ; 0 = size unknown: the old behaviour
+
+    ; The size is known, so REFUSE BEFORE THE READ rather than after it. On the
+    ; 5150 a 116KB module is seconds of motor (PERFORMANCE.md), and a machine
+    ; that reads all of it to then say 'File too big' looks exactly like one
+    ; that is working. The figure is free - the dialog reads it out of the
+    ; mount snapshot already in RAM - and it also lets the claim be EXACTLY
+    ; what the file needs instead of the largest run in the heap, which is
+    ; what mpp_trim below was invented to undo.
+    cmp dx, 2                       ; > 128KB: bigger than any sane 4-channel
+    ja .toobig                      ; MOD, and the same cap the blind path
+    jb .kb                          ; takes
+    or cx, cx
+    jnz .toobig
+.kb:
+    add cx, 1023                    ; KB = ceil(bytes / 1024) across 32 bits:
+    adc dx, 0                       ; the +1023 can carry out of CX, and DX is
+    mov ax, cx                      ; at most 2 past the cap above, so the
+    mov cl, 10                      ; >> 10 always lands inside one word
+    shr ax, cl                      ; (CX is dead the moment AX has it)
+    mov cl, 6
+    shl dx, cl
+    or ax, dx                       ; ...and it cannot come out 0: the smallest
+                                    ; size that reaches here is 1 byte, and a
+                                    ; size of 0 means UNKNOWN and went .blind
+    mov cx, ax
+    call OSAPI_MEM_AVAIL            ; AX = the LARGEST contiguous run, in KB
+    cmp cx, ax
+    ja .toobig                      ; it will not fit this heap: say so NOW,
+    mov ax, cx                      ; with the drive still stopped
+    jmp short .sized
+
+.blind:
     call OSAPI_MEM_AVAIL            ; AX = the LARGEST contiguous run, in KB
     or ax, ax
     jz .nomem
@@ -885,6 +932,10 @@ mpp_load_name:
 .nomem:
     mov si, mpp_s_nomem
     jmp .fail
+.toobig:
+    mov si, mpp_s_toobig            ; refused on the SIZE, before any claim was
+    jmp .fail                       ; made - so there is nothing to free, and
+                                    ; nothing is playing that this interrupted
 .rderr:
     cmp ax, FERR_BIG
     je .big
@@ -925,12 +976,18 @@ mpp_load_name:
 ; mpp_trim - hand back the part of the claim the file did not need
 ; in:  [mpp_modseg], [mpm_bloblen_*]; preserves every register
 ;
-; The claim is sized BEFORE the file's size is known - the dialog hands over a
-; name, not a directory entry - so a 5.6KB module would otherwise sit on 128KB
-; of heap. OSAPI_MEM_REGROW shrinks IN PLACE (SPEC.md 50.3.1): the record's
-; length changes and nothing moves. Called before mpm_load, so no sample
-; pointer exists yet to be invalidated even on the impossible path where a
-; shrink relocated.
+; This exists for the loads whose size is NOT known up front - a playlist
+; advance, which had no dialog - where the claim is the largest run in the heap
+; and a 5.6KB module would otherwise sit on 128KB of it. A load that came
+; through the dialog claims the file's exact size (mpp_load_name), so the trim
+; finds nothing to give back and costs one compare; it is kept rather than
+; being made conditional because the two paths must not disagree about who
+; owns the tail of a claim.
+;
+; OSAPI_MEM_REGROW shrinks IN PLACE (SPEC.md 50.3.1): the record's length
+; changes and nothing moves. Called before mpm_load, so no sample pointer
+; exists yet to be invalidated even on the impossible path where a shrink
+; relocated.
 ; -----------------------------------------------------------------------------
 mpp_trim:
     push ax
@@ -965,7 +1022,7 @@ mpp_trim:
     ret
 
 ; =============================================================================
-; The transport (SPEC.md 52.2)
+; The transport (SPEC.md 56.2)
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -1038,7 +1095,7 @@ mpp_play:
     call mpm_stop
     mov si, mpp_s_snderr
     cmp ax, 2                       ; err 2 = rate refused: the 44 kHz pick on
-    jne .ofmsg                      ; a pre-4.x DSP (SPEC.md 52.5)
+    jne .ofmsg                      ; a pre-4.x DSP (SPEC.md 56.5)
     mov si, mpp_s_norate
 .ofmsg:
     call mppu_msg
@@ -1078,7 +1135,7 @@ mpp_rate_arm:
     push ax
     push bx
     cmp byte [mpm_xt], 0            ; XT mode overrides Setup > Audio with its
-    je .sel                         ; own 5,500 Hz (SPEC.md 52.7)
+    je .sel                         ; own 5,500 Hz (SPEC.md 56.7)
     mov ax, MPP_RATE_XT
     jmp .set
 .sel:
@@ -1181,7 +1238,7 @@ mpp_stream_close:
     call OSAPI_SND_STREAM
     mov byte [mpp_sopen], 0
 .drain:
-    cmp byte [mpp_mixing], 0        ; park the worker (SPEC.md 52.2): a feed
+    cmp byte [mpp_mixing], 0        ; park the worker (SPEC.md 56.2): a feed
     jne .drain                      ; pass already past its mpp_sopen guard
                                     ; runs to completion first. Deadlock-free
                                     ; (mpp_feed never takes the gfx lock this
@@ -1271,11 +1328,11 @@ mpp_msg_transport:
     ret
 
 ; -----------------------------------------------------------------------------
-; mpp_xt_toggle - XT mode (SPEC.md 52.7), from the key, the menu, the option
+; mpp_xt_toggle - XT mode (SPEC.md 56.7), from the key, the menu, the option
 ;                 button and the Setup window's own page
 ; in:  gfx lock held; preserves all registers
 ;
-; Toggling while playing STOPS first (through the SPEC.md 52.2 drain): the
+; Toggling while playing STOPS first (through the SPEC.md 56.2 drain): the
 ; mode change is a volume-table rebuild plus a rate change, never a
 ; mid-stream switch. The menu item is relabeled the SPEC.md 12.2 way - the
 ; string is repointed and OSAPI_MENU_SET re-called (the Solitaire Deal-menu
@@ -1332,7 +1389,7 @@ mpp_rate_set:
     ret
 
 ; =============================================================================
-; The playlist (SPEC.md 52.8). The store lives here rather than in
+; The playlist (SPEC.md 56.8). The store lives here rather than in
 ; mpplist.inc because the transport reads it and the editor only edits it.
 ; =============================================================================
 
@@ -1666,7 +1723,7 @@ mpp_worker:
 ;            FLAGGED here and closed later on the UI task (mpp_reap).
 ;
 ; [mpp_mixing] brackets the WHOLE pass, set before the entry guards and
-; cleared last (SPEC.md 52.2): mpp_stream_close drains it, which is what makes
+; cleared last (SPEC.md 56.2): mpp_stream_close drains it, which is what makes
 ; the UI task's replayer resets, pre-rolls and blob frees safe against a
 ; worker suspended anywhere in here - mpm_gen is not reentrant. A pass that
 ; entered between a close and a reopen sees mpp_sopen = 0 and falls straight
@@ -1789,7 +1846,7 @@ mpp_tpl:
 mpp_transtab:
     dw mpp_t_open, mpp_pl_prev, mpp_t_rew, mpp_play, mpp_pause
     dw mpp_stop, mpp_t_ffwd, mpp_pl_next, mpp_t_setup
-; --- the option buttons (SPEC.md 52.3) -----------------------------------------
+; --- the option buttons (SPEC.md 56.3) -----------------------------------------
 mpp_opttab:
     dw mpp_o_repeat, mpp_o_shuffle, mpp_o_plist
     dw mpp_o_amiga,  mpp_o_dither,  mpp_o_xt
@@ -1901,7 +1958,7 @@ mpp_ab3: db 'Interface ported from ModPlug Player V2', 0
 mpp_ab4: db 'by Volkan Orhan - modplugplayer.org, GPLv3', 0
 mpp_ab5: db 0
 mpp_ab6: db 'Replayer: 4-channel ProTracker, 8-bit mono.', 0
-mpp_ab7: db 'Not libopenmpt - see SPEC.md 52.1.', 0
+mpp_ab7: db 'Not libopenmpt - see SPEC.md 56.1.', 0
 
 ; =============================================================================
 ; The other three quarters of the package
@@ -1920,7 +1977,7 @@ mpp_ab7: db 'Not libopenmpt - see SPEC.md 52.1.', 0
     MPPW mpp_win                    ; the bound window (opaque handle)
     MPPB mpp_hired                  ; the worker exists
     MPPB mpp_abon                   ; the About panel is up; worker frames drop
-    MPPB mpp_compact                ; the compact layout (SPEC.md 52.4)
+    MPPB mpp_compact                ; the compact layout (SPEC.md 56.4)
     MPPW mpp_scrw                   ; the screen this machine actually has
     MPPW mpp_docky                  ; ...and its first dock row
     MPPB mpp_cpu0                   ; the MACHINE is a tier-0 8086/8088
@@ -1935,6 +1992,12 @@ mpp_ab7: db 'Not libopenmpt - see SPEC.md 52.1.', 0
     MPPW mpp_capk                   ; ...its size in KB
     MPPBUF mpp_fname, 13            ; the chosen 8.3 name, copied out of the
                                     ; kernel's buffer during the completion call
+    MPPW mpp_fszl                   ; ...and that file's size, banked the same
+    MPPW mpp_fszh                   ; way. 0 = unknown, which is every load
+                                    ; that did not come from the dialog - a
+                                    ; playlist advance. READ-AND-CLEAR in
+                                    ; mpp_load_name, so one can never inherit
+                                    ; the other's figure
     MPPBUF mpp_lcdname, 13          ; ...and the copy the LCD panel shows
     MPPB mpp_addpl                  ; the file dialog is serving PlayList > Add
 
@@ -1951,7 +2014,7 @@ mpp_ab7: db 'Not libopenmpt - see SPEC.md 52.1.', 0
                                     ; mpp_stream_close drains it before any
                                     ; UI-task touch of mpm_ state or the blob
     MPPB mpp_paused                 ; Pause: the stream stays OPEN and the
-                                    ; replayer stops. Not Stop (SPEC.md 52.2)
+                                    ; replayer stops. Not Stop (SPEC.md 56.2)
 
 ; --- the player's own settings -------------------------------------------------
     MPPB mpp_rsel                   ; Setup > Audio > Frequency: 0/1/2 =
@@ -1961,7 +2024,7 @@ mpp_ab7: db 'Not libopenmpt - see SPEC.md 52.1.', 0
     MPPB mpp_viz                    ; MPPV_SPECTRUM / _SCOPE / _VU
     MPPB mpp_info                   ; the LCD's third line shows the sample list
 
-; --- the playlist (SPEC.md 52.8) -----------------------------------------------
+; --- the playlist (SPEC.md 56.8) -----------------------------------------------
     MPPB mpp_plcount                ; entries in use, 0..MPP_PLMAX
     MPPB mpp_plcur                  ; the one playing (or last played)
     MPPB mpp_plplayed               ; songs since the last deliberate start -

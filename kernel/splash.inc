@@ -23,9 +23,36 @@
 ; the first tick can arrive.
 ; =============================================================================
 
-SPL_RESIDENT equ 6              ; sectors the boot sector waits for before
-                                ; ticking us (must match boot/boot.asm)
+SPL_RESIDENT equ 7              ; sectors the boot sector waits for before
+                                ; ticking us (must match boot/boot.asm).
+                                ; It was 6, and the module ended at 3,072
+                                ; bytes EXACTLY - no headroom at all, so the
+                                ; next thing that had to be resident (the
+                                ; equipment-flag fix in viddet.inc, 32 bytes)
+                                ; failed the assertion below rather than
+                                ; silently ticking a splash that was not
+                                ; aboard. One more sector is one more BIOS
+                                ; read before the bar starts moving, which on
+                                ; a 4.77MHz machine is a fifth of a second of
+                                ; a thirty-second boot
 SPL_GC      equ 0x3CE           ; VGA Graphics Controller index port
+
+; The bar counts SECTORS, and the boot sector's read is not the last of them:
+; kmain's tail mounts A:, reads SYSTEM.CFG and loads whatever it asks for,
+; which on the 1.44MB system disk is thirteen more sectors before a pixel of
+; desktop can be drawn - about three seconds at PERFORMANCE.md's measured
+; 238 ms per sector. The bar used to reach 100% at the last sector of the
+; kernel and then sit there through all of it.
+;
+; So SPL_POST notches are added to the DENOMINATOR and spent after the load
+; (SPEC.md 15.3): thirteen for that mount, three for the phases of kmain that
+; are not I/O (the mouse's ~165 ms reset is the big one), and spl_finish
+; forces the last. It is tuned for the common boot - a system disk whose
+; SYSTEM.CFG asks for no driver - and it is a CLAMP, not a scale: a machine
+; that has enabled the sound or disk driver spends twenty-seven more sectors
+; here and the bar waits at 100% for them, which is what every boot used to
+; do for all of it.
+SPL_POST    equ 16
 
 ; Spinner: "8088" as 19 stroke segments in a 104x40 box, screen-centred at
 ; x=320 with its top at SPL_TOP. The coin-flip transform only ever scales x
@@ -60,20 +87,16 @@ spl_tick:
     pop ds                      ; our data lives in the kernel segment
 
     mov [spl_done], ax
+    add dx, SPL_POST            ; kmain's tail is on this bar too (SPEC 15.3)
     mov [spl_total], dx
 
     cmp byte [spl_on], 0
     jne .running
     mov byte [spl_on], 1
-    call spl_chrome
+    mov byte [spl_live], 1      ; ...and from here the splash OWNS the screen
+    call spl_chrome             ; and the video mode, until spl_finish
 .running:
-    call spl_bar                ; the ONE stage that runs on all three
-                                ; adapters - see spl_chrome
-    cmp byte [vid_mono], 0
-    jne .painted
-    call spl_pct
-    call spl_spin
-.painted:
+    call spl_paint
 
     pop es
     pop ds
@@ -87,6 +110,108 @@ spl_tick:
     retf
 
 ; -----------------------------------------------------------------------------
+; spl_paint - one frame of the loading screen, from [spl_done]/[spl_total].
+;             clobbers: ax, bx, cx, dx, si, di, bp, es
+;
+; Factored out of spl_tick so the boot sector's ticks and kmain's post-load
+; notches (spl_step) cannot disagree about what a frame is.
+; -----------------------------------------------------------------------------
+spl_paint:
+    call spl_bar                ; the ONE stage that runs on all three
+                                ; adapters - see spl_chrome
+    cmp byte [vid_mono], 0
+    jne .out
+    call spl_pct
+    call spl_spin
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; spl_step - one post-load notch on the bar (SPEC.md 15.3)
+; in:  nothing;  DS = KERNEL_SEG (every caller is kernel code)
+; out: nothing - EVERY register and the flags preserved, because the hot
+;      caller is the middle of dsk_xfer's per-sector loop
+;
+; A no-op unless the splash is on screen, which is the whole of its safety:
+; after spl_finish this is a compare and a return, and it stays on the disk
+; path for the life of the machine at that price (~13 us against a sector's
+; 238 ms).
+; -----------------------------------------------------------------------------
+spl_step:
+    pushf
+    cmp byte [spl_live], 0
+    je .out
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov ax, [spl_done]
+    inc ax
+    cmp ax, [spl_total]
+    jb .set
+    mov ax, [spl_total]         ; the last notch is spl_finish's, so a boot
+    dec ax                      ; that overruns its allowance crowds up
+.set:                           ; against 100% instead of claiming to be done
+    mov [spl_done], ax
+    call spl_paint
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; spl_finish - the bar to 100%, and hand the screen over (SPEC.md 15.3)
+; in:  nothing;  DS = KERNEL_SEG
+; out: nothing (every register and the flags preserved)
+;
+; Called by kmain immediately before the first wm_paint_all, which is the last
+; moment at which a full bar is still the truth: the desktop paint covers
+; every pixel of the screen (the menu bar's field, the desktop dither over the
+; dock strip, then the dock), so the loading screen needs no erase of its own.
+;
+; Clearing [spl_live] is also what re-arms vid_setmode: from here on the mode
+; is the kernel's to change again (SPEC.md 39.1).
+; -----------------------------------------------------------------------------
+spl_finish:
+    pushf
+    cmp byte [spl_live], 0
+    je .out
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov ax, [spl_total]
+    mov [spl_done], ax
+    call spl_paint
+    mov byte [spl_live], 0
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
 ; spl_chrome - first tick only: mode 12h, the double-framed welcome dialog,
 ;              the bar trough, the title. clobbers: ax, bx, cx, dx, si, es
 ; -----------------------------------------------------------------------------
@@ -96,6 +221,13 @@ spl_chrome:
     call vid_setmode            ; splash owns the first mode set, and kmain's
                                 ; vid_init later re-runs all three (SPEC 39.1)
 
+; ...and the same chrome onto a mode SOMEBODY ELSE has just set: spl_reset's
+; entry, for when drv_boot moves the machine onto the adapter SYSTEM.CFG asks
+; for while the loading screen is still up (SPEC.md 39.11.3). Entering above
+; would re-run vid_detect, which answers with the PROBE's adapter and would
+; undo the switch three instructions after it happened. Costs nothing: it is
+; a label, and the geometry below is read live either way.
+spl_rechrome:
     mov ax, [vid_h]             ; the bar's origin, centred on whatever screen
     shr ax, 1                   ; we got. On VGA this would be row 232, but
     cmp byte [vid_mono], 0      ; the bar has to sit inside the dialog's
@@ -561,7 +693,11 @@ spl_cos_tab:                    ; cos(k/16 rev) * 64, k = 0..15
 
 spl_bar_adr dw 0            ; the bar's top-left byte, set by spl_chrome
 spl_mask    db 0xFF          ; mono: what the GC's Bit Mask holds on VGA
-spl_on      db 0
+spl_on      db 0             ; the chrome has been drawn - spl_tick's latch
+spl_live    db 0             ; ...and the splash still OWNS the screen and the
+                             ; video mode. A different question, and it stays
+                             ; true right through kmain: spl_finish clears it
+                             ; (SPEC.md 15.3)
 spl_done    dw 0
 spl_total   dw 1
 spl_cos     dw 64

@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/modplug/mppmix.inc
 ;
-; ModPlug Player's replayer third (SPEC.md 52): ProTracker MOD loader/
+; ModPlug Player's replayer third (SPEC.md 56): ProTracker MOD loader/
 ; validator, the 4-channel replayer, and the 8-bit mono mixer. Prefix mpm_.
 ; Included by modplug.asm AFTER the MPPB/MPPW/MPPBUF bss macros; all state is
 ; package bss declared through them at the end of this file.
@@ -13,12 +13,12 @@
 ; (apps/tracker/trkplay.inc, SPEC.md 45.5) taken as the starting point and
 ; then given the DSP stages ModPlugPlayer's Setup window actually exposes -
 ; see "The ModPlug DSP tail" below. It is an INDEPENDENT copy, deliberately
-; (SPEC.md 52.1): the two players are allowed to diverge, and a replayer bug
+; (SPEC.md 56.1): the two players are allowed to diverge, and a replayer bug
 ; fixed in one is not automatically fixed in the other. Anything below that
 ; is not marked as a ModPlug addition is byte-identical to trkplay.inc with
 ; its mp_/MP_/MS_ prefixes renamed to mpm_/MPM_/MPS_.
 ;
-; THE ModPlug DSP TAIL (SPEC.md 52.5). Four settings out of ModPlugPlayer's
+; THE ModPlug DSP TAIL (SPEC.md 56.5). Four settings out of ModPlugPlayer's
 ; Setup > Audio and Setup > DSP pages, each landing where it is honest on
 ; this hardware and each costing NOTHING while it is off:
 ;
@@ -43,7 +43,7 @@
 ;       One AND per byte, in the same tail pass as the filter.
 ;
 ; The tail runs over the finished output in mpm_post, once per mpm_gen, so a
-; mode change can never split a chunk. XT mode (SPEC.md 52.7) forces every
+; mode change can never split a chunk. XT mode (SPEC.md 56.7) forces every
 ; one of them off: they are all per-output-sample costs and XT mode exists
 ; to buy per-output-sample costs back.
 ;
@@ -452,7 +452,7 @@ mpm_vtbuild:
 ; -----------------------------------------------------------------------------
 mpm_setxt:
     mov [mpm_xt], al
-    or al, al                       ; ModPlug (SPEC.md 52.7): XT mode forces
+    or al, al                       ; ModPlug (SPEC.md 56.7): XT mode forces
     jz .built                       ; the whole DSP tail off, and does it HERE
     mov byte [mpm_interp], 0        ; rather than in the Setup window, so no
     mov byte [mpm_dither], 0        ; path into XT mode - key, menu, option
@@ -877,7 +877,7 @@ mpm_gen:
     mov si, mpm_mixbuf
     mov di, [mpm_outp]
     mov cx, [mpm_chunk]
-    cmp byte [mpm_dither], 0        ; ModPlug (SPEC.md 52.5): dither gets its
+    cmp byte [mpm_dither], 0        ; ModPlug (SPEC.md 56.5): dither gets its
     jne .cvd                        ; OWN loop, so this one keeps its cost
 .cv:
     lodsw
@@ -947,14 +947,14 @@ mpm_gen:
     rep stosb                   ; CX = remaining need
     mov word [mpm_need], 0
 .done:
-    call mpm_post                   ; ModPlug DSP tail (SPEC.md 52.5) over the
+    call mpm_post                   ; ModPlug DSP tail (SPEC.md 56.5) over the
     push ds                         ; finished chunk: Amiga filter, bit crush
     pop es
     pop bp
     ret
 
 ; -----------------------------------------------------------------------------
-; mpm_post - the ModPlug DSP tail, over mpm_outbuf .. [mpm_outp] (SPEC.md 52.5)
+; mpm_post - the ModPlug DSP tail, over mpm_outbuf .. [mpm_outp] (SPEC.md 56.5)
 ;
 ; ModPlug addition. Runs once per mpm_gen, after every chunk of the call is
 ; rendered, so a setting changed between calls can never split a buffer. Both
@@ -1034,7 +1034,7 @@ mpm_post:
 
 ; -----------------------------------------------------------------------------
 ; mpm_volslice - ModPlug addition: the volume-table slice for a channel, with
-;                the master volume folded in (SPEC.md 52.3)
+;                the master volume folded in (SPEC.md 56.3)
 ; in:  AL = the channel's output volume, 0..64
 ; out: CF=0 and BX = the slice base for (vol * master) >> 6; CF=1 the channel
 ;      is inaudible at this master setting and the caller takes its silent
@@ -1093,7 +1093,7 @@ mpm_mixch:
     jne .silent
     mov al, [si+MPM_OVOL]
     call mpm_volslice               ; ModPlug addition: the volume slider folds
-    jc .silent                      ; in HERE (SPEC.md 52.3) - one multiply per
+    jc .silent                      ; in HERE (SPEC.md 56.3) - one multiply per
                                     ; channel per chunk, never one per sample
     ; the inner loop
     mov es, [si+MPM_SEG]
@@ -1102,7 +1102,7 @@ mpm_mixch:
     mov di, mpm_mixbuf
     push si
     mov si, [si+MPM_POSI]
-    cmp byte [mpm_interp], 0        ; ModPlug (SPEC.md 52.5): Setup > Audio >
+    cmp byte [mpm_interp], 0        ; ModPlug (SPEC.md 56.5): Setup > Audio >
     jne .lin                        ; Interpolation Mode picks the loop
 .mx:
     mov al, [es:si]
@@ -2291,7 +2291,7 @@ mpme_song:   db 'Bad song data', 0
     MPPW mpm_bloblen_hi
     MPPW mpm_mixrate                 ; mixer output rate, Hz
 
-; --- ModPlug: the DSP tail's settings and state (SPEC.md 52.5) -----------------
+; --- ModPlug: the DSP tail's settings and state (SPEC.md 56.5) -----------------
 ; Settings, written by the Setup window; state, owned by the mixer. All zero
 ; at load, which is every stage off - so a machine that never opens Setup pays
 ; nothing for any of it.

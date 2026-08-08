@@ -41,12 +41,26 @@
 ; happens.
 ; =============================================================================
 
-DRV_MAX     equ 2               ; rows in drv_tab. The settings word carries
+DRV_MAX     equ 3               ; rows in drv_tab. The settings word carries
                                 ; one bit per row, so this may grow to 16
                                 ; without touching the file format.
 
 ; --- driver classes (SPEC.md 51.2) -------------------------------------------
+; A class is also a PUBLICATION SLOT. Every table below that says "the driver
+; whose services are published" is per class, because two drivers of different
+; classes are attached at once the moment a machine has a sound card and a hard
+; disk - and a single publication made the second attach silently disconnect
+; the first (SPEC.md 51.2.1).
 DRVC_SOUND  equ 1               ; fills the FM and STREAM tiers (SPEC.md 34)
+DRVC_DISK   equ 2               ; block volumes: hard disks (SPEC.md 51.8)
+DRVC_DEBUG  equ 3               ; the serial monitor (SPEC.md 58). It publishes
+                                ; no service the kernel dispatches - only a
+                                ; Control Panel page - so it needs a class for
+                                ; one reason: a class IS the publication slot,
+                                ; and giving it somebody else's would
+                                ; disconnect a sound card or a hard disk the
+                                ; moment the user ticked it (SPEC.md 51.2.1)
+DRVC_MAX    equ 3               ; classes, and so publication slots
 
 ; --- driver table row, stride DRVR_SIZE --------------------------------------
 ; DRVR_DISP and DRVR_SEG are adjacent, in that order, ON PURPOSE: together
@@ -71,7 +85,15 @@ DRVE_NOENT  equ 2               ; it is not on that disk
 DRVE_BAD    equ 3               ; not a driver image
 DRVE_MEM    equ 4               ; the heap cannot fund it
 DRVE_HW     equ 5               ; it loaded and found no hardware
-DRVE_NERR   equ 6               ; how many strings drv_errstr has
+DRVE_BUSY   equ 6               ; ...or found it and cannot have it, because
+                                ; something the kernel owns is already using
+                                ; the line. DISTINCT from DRVE_HW on purpose:
+                                ; "no hardware found" sends the user looking
+                                ; for a card that is sitting right there, and
+                                ; the fix for the two is not the same one -
+                                ; DRVE_HW wants a card, this wants a jumper
+                                ; or a different port (SPEC.md 58.2)
+DRVE_NERR   equ 7               ; how many strings drv_errstr has
 
 ; --- .drv header: the .o88 header's shape with a different version -----------
 DRV_H_MAGIC equ 0               ; word: 0x384F ('O','8')
@@ -85,11 +107,25 @@ DRV_H_DISP  equ PKG_DISP        ; 12: `call bp / retf`, exactly as a package
 DRV_HDR_SZ  equ 0x20
 DRV_VER     equ 4
 DRV_MAX_KB  equ 40              ; the biggest driver image we will claim
+DRV_BLOB_SZ equ 34              ; a driver's own settings, carried in
+                                ; SYSTEM.CFG (SPEC.md 51.9). 34 bytes is what
+                                ; the disk driver needs for four devices, and
+                                ; it is reserved on every machine - which is
+                                ; the price of not making the ONE file the
+                                ; boot already reads into two
 
 ; --- entry verbs (SPEC.md 51.2) ----------------------------------------------
 DRVV_ATTACH equ 0               ; probe + hook. out CF=1 = no hardware, and
                                 ; the contract is that NOTHING was hooked
 DRVV_DETACH equ 1               ; silence, unhook, restore. Cannot fail.
+DRVV_READY  equ 3               ; "your services are published and the kernel
+                                ; can take your calls now". Sent once, right
+                                ; after drv_publish, and the ONLY point at
+                                ; which a driver may do anything that comes
+                                ; back through the API - a slot's fence tests
+                                ; the publication slot, and attach runs before
+                                ; it is armed (SPEC.md 51.2.2). Optional: a
+                                ; driver that does not implement it returns.
 DRVV_TIER   equ 2               ; in AH = SND_RT_*: how much of itself the
                                 ; user wants (SPEC.md 34.8). out CF=0 and
                                 ; SI = its service table, RE-COPIED because
@@ -120,7 +156,30 @@ DSV_TIERS   equ 14              ; dw: bitmap of 1 << SND_RT_* saying which
                                 ; driver did not answer the question, and the
                                 ; Control Panel then assumes it can (SPEC.md
                                 ; 34.8/31.7)
-DSV_SIZE    equ 16
+DSV_BLK     equ 16              ; dw: DRVC_DISK only - the block transport
+                                ; behind a driver-backed volume (SPEC.md
+                                ; 51.8). in AL = 0 read / 1 write, AH = the
+                                ; driver's own volume handle, SI = the
+                                ; VOLUME-RELATIVE LBA, CX = sectors,
+                                ; DX:BX = the buffer. DX and not ES, because
+                                ; the buffer is in LOW_SEG, the FAT window or
+                                ; a heap claim and never in KERNEL_SEG - so
+                                ; ES cannot carry its usual meaning here and
+                                ; pretending otherwise is how a driver reads
+                                ; its own image as a sector buffer.
+                                ; out CF=0 done; CF=1 and AL = the int 13h
+                                ; status byte convention: 03h = write
+                                ; protected, anything else = a hard error
+DSV_CPNAME  equ 18              ; dw: -> a NUL Control Panel page name in ITS
+                                ; segment, 0 = this driver has no page. The
+                                ; kernel STAGES it (SPEC.md 31.9), because
+                                ; cp_list draws it with font_str and font_str
+                                ; reads through DS
+DSV_CPPAINT equ 20              ; dw: near proc, that page's paint - in
+                                ; DI = pane left, DX = pane top, lock held
+DSV_CPCLICK equ 22              ; dw: near proc, that page's click - in
+                                ; DI/DX as above, CX/BX = pane-relative x/y
+DSV_SIZE    equ 24
 
 ; --- SYSTEM.CFG: a KEYED record file (SPEC.md 51.5) --------------------------
 ; It is the whole Control Panel's file, not just the driver list: every
@@ -165,11 +224,6 @@ CFG_GEN_V   equ 3               ; what this kernel writes, and the only one it
                                 ; reads: generation 2 was the positional
                                 ; struct, and a struct read as records is
                                 ; nonsense, so it falls back to the defaults
-CFG_FBUF    equ 64              ; the file buffer. The table below emits 10
-                                ; bytes of header, 31 of records and a 2-byte
-                                ; terminator = 43, so this is the next round
-                                ; number up with room for a few more keys
-
 CFR_KEY     equ 0               ; one record
 CFR_VER     equ 2
 CFR_LEN     equ 3
@@ -185,7 +239,25 @@ CFG_H12     equ 3               ; db: [clk_h12]    (SPEC.md 31.5)
 CFG_SEC     equ 4               ; db: [clk_secs]
 CFG_SCH     equ 5               ; db: the scheduler mode (SPEC.md 8.2)
 CFG_BB      equ 6               ; db: double buffering  (SPEC.md 32)
-CFG_NB      equ 7               ; ...the struct's size
+CFG_VID     equ 7               ; db: the display adapter (SPEC.md 39.11.3) -
+                                ; a VID_* kind, not a bitmap. Applied by
+                                ; drv_boot and NOT by drv_cfg_unpack, for the
+                                ; back buffer's reason one line up: it is not
+                                ; a store. It sets a video mode, and it is
+                                ; refused outright when the machine no longer
+                                ; has that card - which is what stops a disk
+                                ; carried from a machine with a Hercules in it
+                                ; booting this one to a dead monitor
+CFG_DBLOB   equ 8               ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
+                                ; and the kernel does not know what is in
+                                ; them (SPEC.md 51.9). It knows the NAME and
+                                ; the LENGTH, carries them to disk and back,
+                                ; and hands them over when a driver asks -
+                                ; which is why they round-trip untouched on
+                                ; a machine whose driver never loads, rather
+                                ; than being dropped like a key this kernel
+                                ; does not know (rule 1 above)
+CFG_NB      equ CFG_DBLOB + DRV_BLOB_SZ     ; ...the struct's size
 
 ; key, ver, len, offset into the struct. ONE table drives the reader and the
 ; writer both, so a new setting is five bytes here and nothing else - and the
@@ -207,8 +279,22 @@ drv_cfg_keys:
     db 1, 1, CFG_SCH
     dw 'BB'                     ; Back Buffer
     db 1, 1, CFG_BB
-CFG_NKEY    equ 6
+    dw 'VM'                     ; Video Mode - which adapter (SPEC.md 39.11.3)
+    db 1, 1, CFG_VID
+    dw 'HD'                     ; Hard Disk - the DRIVER's own blob (51.9)
+    db 1, DRV_BLOB_SZ, CFG_DBLOB
+CFG_NKEY    equ 8
 CFG_KESZ    equ 5               ; bytes per table entry
+
+; The file buffer, DERIVED rather than guessed: drv_cfg_ser emits the header,
+; one CFR_HDR-byte header per key, that key's bytes, and a 2-byte terminator -
+; and the keys TILE THE STRUCT EXACTLY (every byte of drv_cfg belongs to one
+; key and no key overlaps another), so the bytes come to CFG_NB. 81 today, and
+; it follows a new key automatically. It used to be a round number chosen by
+; hand with slack under it, and slack in the one buffer that is sized by an
+; expression anyone can evaluate is just .bss nothing can use - which, with
+; KERN_CODE_MAX as tight as it now is, is memory somebody else needs.
+CFG_FBUF    equ CFG_REC0 + CFG_NKEY * CFR_HDR + CFG_NB + 2
 
 ; The three plain bytes, as (struct offset, kernel byte) pairs: one loop packs
 ; and another unpacks, so a new setting is three bytes of table rather than
@@ -231,19 +317,41 @@ DRV_CFG_MAPN equ 3
 
 drv_f_sound: db 'SOUND.DRV', 0
 drv_t_sound: db 'Sound', 0
+drv_f_hdd:   db 'HDD.DRV', 0
+drv_t_hdd:   db 'Hard Drive', 0
+drv_f_debug: db 'DEBUG.DRV', 0
+drv_t_debug: db 'Debug', 0
 
-; The published driver's dispatcher, as a FAR POINTER. Adjacent and in this
-; order because together they ARE the dword `call far [drv_fptr]` reads, and
-; in .text because drv_svc_call tests the segment half on the machine's first
-; beep. drv_publish arms it, drv_release clears it - so "is a service
-; dispatchable" is one word test and the call itself needs NO REGISTER, which
-; is the whole point: every general register is an argument to something in
-; the sound ABI (SPEC.md 34.2), and BX in particular is the FM verb's
-; frequency.
-drv_fptr:    dw PKG_DISP
+; The published drivers' dispatchers, as FAR POINTERS - ONE PAIR PER CLASS.
+; Adjacent and in this order because together they ARE the dword
+; `call far [drv_fptr]` reads, and in .text because drv_svc_call tests the
+; segment half on the machine's first beep. drv_publish arms one, drv_release
+; clears one - so "is a service dispatchable" is one word test and the call
+; itself needs NO REGISTER, which is the whole point: every general register
+; is an argument to something in the sound ABI (SPEC.md 34.2), and BX in
+; particular is the FM verb's frequency.
+;
+; **Per class, and that is a fix rather than a generalisation.** There used to
+; be one pair, one [drv_owner] and one drv_svc, overwritten by whichever
+; driver attached last - so on a machine with a sound card AND a hard disk the
+; second attach silently disconnected the first, and the symptom (sound stops
+; when the disk driver is enabled) is nowhere near the cause. Class 1 is index
+; 0, so every `[drv_svc+DSV_*]` in snd.inc still names the sound driver's copy
+; and not one line of it changed.
+DRV_FPSZ    equ 4               ; bytes per class: offset + segment
+DRV_CPNSZ   equ 12              ; a staged Control Panel page name: the list
+                                ; column is 9 glyphs wide (SPEC.md 31.1)
+drv_fptr:    dw PKG_DISP        ; class 1 (DRVC_SOUND)
 drv_fseg:    dw 0
+drv_fptr2:   dw PKG_DISP        ; class 2 (DRVC_DISK)
+drv_fseg2:   dw 0
+drv_fptr3:   dw PKG_DISP        ; class 3 (DRVC_DEBUG). drv_cls_fp indexes
+drv_fseg3:   dw 0               ; these contiguously, so a class is appended
+                                ; here and nowhere else
 
 drv_cfgname: db 'SYSTEM.CFG', 0
+drv_sysname: db 'KERNEL.SYS', 0 ; what makes a disk THE system disk (19.6): the
+                                ; settings are written beside it or not at all
 drv_cfgsig:  db 'O88CFG', 0, 0  ; 8 bytes, byte for byte the file's head
 
 drv_tab:
@@ -251,22 +359,51 @@ drv_tab:
     dw drv_f_sound, drv_t_sound
     dw 0, 0
     db DRVC_SOUND
-    db 1                        ; wanted by default: a fresh disk loads it,
-                                ; and a machine with no card simply reports
-                                ; DRVE_HW once and carries on
+    db 0                        ; NOT wanted by default, exactly like the disk
+                                ; driver below. It was 1, so a fresh image -
+                                ; which carries no SYSTEM.CFG at all - read
+                                ; the whole 5.5KB driver off the floppy on
+                                ; every boot to be told there was no card:
+                                ; 27 sectors, and a sector is 238 ms on the
+                                ; machine this is for (PERFORMANCE.md Part 2),
+                                ; so about six and a half seconds. Then it
+                                ; opened the Control Panel to report a failure
+                                ; nobody had asked for. NOTHING LOADS UNLESS
+                                ; SYSTEM.CFG ASKS FOR IT (SPEC.md 51.3), so
+                                ; the tick in the Drivers page is both the
+                                ; request and the record of it
     db DRVE_OK
     db 0
 
-    dw PKG_DISP, 0              ; row 1: spare, and deliberately kept. A row
-    dw 0, 0                     ; costs 16 bytes, and an empty one is how the
-    dw 0, 0                     ; settings word's bit assignment stays stable
-    db 0                        ; when the second driver arrives
+    dw PKG_DISP, 0              ; row 1: the hard-disk driver (SPEC.md 51.8)
+    dw drv_f_hdd, drv_t_hdd
+    dw 0, 0
+    db DRVC_DISK
+    db 0                        ; NOT wanted by default, unlike sound. This
+                                ; one PROBES CONTROLLERS - an IDE task file
+                                ; and, later, an XT DCB - and a machine with
+                                ; neither should not be poking at 1F0h every
+                                ; boot to be told so. The Drivers page turns
+                                ; it on and SYSTEM.CFG remembers
+    db DRVE_OK
     db 0
+
+    dw PKG_DISP, 0              ; row 2: the serial debug monitor (SPEC.md 58)
+    dw drv_f_debug, drv_t_debug
+    dw 0, 0
+    db DRVC_DEBUG
+    db 0                        ; NOT wanted by default, and this is the row
+                                ; where that rule matters most: it opens a
+                                ; channel that reads and writes any byte of
+                                ; the machine, so it exists only while
+                                ; somebody has ticked it and SYSTEM.CFG says
+                                ; so. On a machine that never does, the whole
+                                ; cost is this row and a file on the disk
     db DRVE_OK
     db 0
 
 drv_errstr:                     ; DRVE_* -> what the user is told
-    dw drv_e0, drv_e1, drv_e2, drv_e3, drv_e4, drv_e5
+    dw drv_e0, drv_e1, drv_e2, drv_e3, drv_e4, drv_e5, drv_e6
 drv_e0: db 'Loaded', 0
 drv_s_off: db 'Not loaded', 0   ; ...and what a row that never failed and is
                                 ; not up says instead (drv_status)
@@ -275,6 +412,7 @@ drv_e2: db 'Not on the system disk', 0
 drv_e3: db 'Not a valid driver', 0
 drv_e4: db 'Not enough memory', 0
 drv_e5: db 'No hardware found', 0
+drv_e6: db 'Port or IRQ in use', 0
 
 ; -----------------------------------------------------------------------------
 ; drv_init - the state the table cannot carry as initialised data
@@ -287,7 +425,18 @@ drv_init:
     push cx
     mov byte [drv_nerr], 0
     mov byte [drv_wcnt], 0
-    call drv_svc_clear
+    push di                     ; the driver blob starts EMPTY: -f bin zeroes
+    push es                     ; no .bss, and a garbage blob is one a driver
+    push ds                     ; would be entitled to believe (SPEC.md 51.9)
+    pop es
+    mov di, drv_cfg + CFG_DBLOB
+    mov cx, DRV_BLOB_SZ
+    xor al, al
+    cld
+    rep stosb
+    pop es
+    pop di
+    call drv_svc_clear_all
     xor cx, cx                  ; nothing is loaded on a cold boot, and .bss
     mov bx, drv_tab             ; is not what these live in - clear the two
 .next:                          ; per-load words the table ships non-zero
@@ -301,6 +450,67 @@ drv_init:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; drv_cls_fp / drv_cls_svc - one class's publication slot (module internal)
+; in:  AL = class (1..DRVC_MAX)
+; out: drv_cls_fp:  DI = &drv_fptr for that class
+;      drv_cls_svc: DI = &drv_svc  for that class
+;      CF = 1 and DI = 0 if the class is out of range (an empty table row)
+; clobbers: DI (the output), flags
+; -----------------------------------------------------------------------------
+drv_cls_fp:
+    push ax
+    call drv_cls_idx            ; DI = class-1, CF set if bad
+    jc .bad
+    shl di, 1
+    shl di, 1                   ; * DRV_FPSZ
+    add di, drv_fptr
+    clc
+.out:
+    pop ax
+    ret
+.bad:
+    xor di, di
+    stc
+    jmp short .out
+
+drv_cls_svc:
+    push ax
+    push cx
+    call drv_cls_idx
+    jc .bad
+    mov ax, DSV_SIZE
+    push dx
+    mul di                      ; DSV_SIZE is not a power of two
+    pop dx
+    mov di, ax
+    add di, drv_svc
+    clc
+.out:
+    pop cx
+    pop ax
+    ret
+.bad:
+    xor di, di
+    stc
+    jmp short .out
+
+; drv_cls_idx - AL = class -> DI = class-1, CF=1 if out of range (internal)
+drv_cls_idx:
+    xor di, di
+    cmp al, 1
+    jb .bad
+    cmp al, DRVC_MAX
+    ja .bad
+    mov di, ax                  ; AH is the caller's and must never reach the
+    and di, 0x00FF              ; index, so zero-extend AL by hand
+    dec di
+    clc
+    ret
+.bad:
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -325,6 +535,43 @@ drv_init:
 ; A zero owner word can never match, because DRVR_SEG is 0 exactly when the
 ; row is not loaded, and the test skips those rows.
 ; -----------------------------------------------------------------------------
+; drv_pub_seg - is BX the segment of a driver whose services are PUBLISHED?
+; in:  BX = a segment
+; out: CF = 0 yes (some class's publication slot names it), CF = 1 no
+; clobbers: nothing else (flags)
+;
+; drv_owns_seg's stricter sibling, and the spawn fence (SPEC.md 51.7): loaded
+; is not enough, because drv_publish arms a slot only after DRVV_ATTACH
+; returns and a worker spawned from inside attach would outlive a refusal.
+drv_pub_seg:
+    push ax
+    push cx
+    push di
+    mov al, 1
+.scan:
+    push ax
+    call drv_cls_fp
+    pop ax
+    jc .next
+    mov cx, [di+2]
+    or cx, cx
+    jz .next
+    cmp cx, bx
+    je .yes
+.next:
+    inc al
+    cmp al, DRVC_MAX
+    jbe .scan
+    stc
+    jmp short .out
+.yes:
+    clc
+.out:
+    pop di
+    pop cx
+    pop ax
+    ret
+
 drv_owns_seg:
     push ax
     push cx
@@ -452,9 +699,9 @@ drv_call:
 ; -----------------------------------------------------------------------------
 drv_svc_call:
     or bp, bp
-    jz .none
+    jz drv_svc_none
     cmp word [drv_fseg], 0
-    je .none
+    je drv_svc_none
     push ds
     push es
     push cs
@@ -464,9 +711,277 @@ drv_svc_call:
     pop es
     pop ds
     ret
-.none:
+
+; -----------------------------------------------------------------------------
+; drv_blk_call - the same, for the DRVC_DISK publication slot
+; in / out: exactly drv_svc_call's, on the disk class's far pointer
+;
+; A SECOND BODY rather than a class argument, and that is the register
+; contract above taken seriously: the disk ABI (SPEC.md 51.8) spends AL, AH,
+; BX, CX, DX and SI on the transfer itself, so there is no register left to
+; say which class this is. Twenty bytes of duplication buys a dispatcher that
+; still consumes nothing.
+; -----------------------------------------------------------------------------
+drv_blk_call:
+    or bp, bp
+    jz drv_svc_none
+    cmp word [drv_fseg2], 0
+    je drv_svc_none
+    push ds
+    push es
+    push cs
+    pop es
+    mov ds, [es:drv_fseg2]
+    call far [es:drv_fptr2]
+    pop es
+    pop ds
+    ret
+
+drv_svc_none:
     xor ax, ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; drv_cp_call - dispatch one class's Control Panel page proc (SPEC.md 31.9)
+; in:  AL = class, BP = the published near offset, and DI/DX (+ CX/BX for a
+;      click) = the page ABI's own arguments
+; out: whatever the page returns
+; clobbers: AX, BP; DS and ES restored
+;
+; A CLASS ARGUMENT is affordable here and nowhere else: the page ABI spends
+; DI, DX, CX and BX and leaves AX alone, where the sound ABI spends every
+; register there is. That is why drv_svc_call and drv_blk_call are two bodies
+; and this is one.
+; -----------------------------------------------------------------------------
+drv_cp_call:
+    push si
+    push di                     ; DI is the PAGE's argument (the pane left)
+    or bp, bp                   ; and drv_cls_fp answers in it, so it has to
+    jz .out                     ; come back before the call
+    call drv_cls_fp
+    jc .out
+    cmp word [di+2], 0
+    je .out
+    mov si, di                  ; SI = the far pointer
+    pop di
+    push di                     ; ...and DI is the pane left again
+    push ds
+    push es
+    push cs
+    pop es
+    mov ds, [es:si+2]
+    call far [es:si]
+    pop es
+    pop ds
+.out:
+    pop di
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; osapi_drv_cfg - a driver's own settings, in the kernel's file (SPEC.md 51.9)
+; in:  AL = 0 get / anything else set
+;      ES:SI = the driver's buffer, CX = its size
+; out: get: CX = bytes handed over (never more than either side's size)
+;      set: CF = 1 = CX is bigger than DRV_BLOB_SZ and nothing was stored
+; clobbers: CX (an output), flags
+;
+; **The kernel does not know what is in it.** It knows the key, the length and
+; how to get it to the disk and back; the driver owns the content and versions
+; it itself, which is the only split that lets a setting belong to a driver
+; and still ride in the one file the boot already reads.
+;
+; That matters most on the machine where the driver is NOT loaded: the blob
+; comes off the disk at boot, sits in the struct, and is written back out
+; unchanged. It is not dropped the way an unknown key is (SPEC.md 51.5 rule
+; 1), and the difference is that this key is known - only its meaning is not.
+;
+; **A set never touches the disk**, and there is no verb that does. There was
+; one - verb 2, "set and write NOW" - taken because a MOUNT is not a
+; preference: a machine powered off with the panel still open comes back with
+; a hard disk it had been told to mount and has not. That is the argument
+; every page makes for being SPEC.md 31.8's exception, and it is refused here
+; for the same reasons it is refused there, plus one this cell had to itself -
+; the write remounts A: to reach the file, so a driver that had just made its
+; own volume current silently lost it mid-click.
+;
+; AL = 2 is still ACCEPTED and means exactly what AL = 1 means, so a .DRV
+; built against the old contract stores its blob and defers rather than
+; failing (SPEC.md 20.8 rule 4: a shipped slot keeps its contract; this is a
+; narrowing of when the bytes reach the disk, not of what the call does).
+; -----------------------------------------------------------------------------
+osapi_drv_cfg:
+    push ax
+    push bx
+    push si
+    push di
+    mov bx, es
+    call drv_pub_seg            ; a published DRIVER's slot, and nobody
+    jc .no                      ; else's - the drv_task fence exactly
+    cmp cx, DRV_BLOB_SZ
+    jbe .size
+    or al, al
+    jnz .no                     ; a set bigger than the blob stores nothing
+    mov cx, DRV_BLOB_SZ         ; ...a get just hands over what there is
+.size:
+    cld
+    push cx                     ; rep eats it, and it is the get's answer
+    or al, al
+    jnz .set
+    mov di, si                  ; get: the store -> the caller's buffer. DS is
+    mov si, drv_cfg + CFG_DBLOB ; the kernel and ES the caller already, so this
+    rep movsb                   ; is one rep movsb with no override
+    pop cx
+    jmp short .ok
+.set:                           ; ...and a set is the SAME copy with the two
+    mov di, drv_cfg + CFG_DBLOB ; segments swapped, rather than a second loop
+    push ds
+    push es
+    push cs
+    pop es                      ; ES = the kernel...
+    mov ds, bx                  ; ...DS = the caller, whose segment is BX
+    rep movsb
+    pop es
+    pop ds
+    pop cx
+    mov byte [cp_wdirty], 1     ; the file is OWED a write, and the panel's
+                                ; teardown is the only thing that pays it -
+                                ; there is no reachable flush from here now
+                                ; (SPEC.md 31.8)
+.ok:
+    pop di
+    pop si
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    xor cx, cx
+    pop di
+    pop si
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; drv_cp_count / drv_cp_class - the pages loaded drivers publish
+; drv_cp_count  out: AL = how many classes publish a page
+; drv_cp_class  in:  AL = a 0-based ordinal; out CF = 0 and AL = its class
+; clobbers: AL (the output), flags
+;
+; Derived and not stored, so a page can never outlive the driver that owns it:
+; the answer is a walk of the publication slots, and drv_release clears one.
+; -----------------------------------------------------------------------------
+drv_cp_count:
+    push bx
+    push di
+    xor bx, bx                  ; BL = the count, BH = the class
+    mov bh, 1
+.next:
+    mov al, bh
+    call drv_cls_svc
+    jc .done
+    cmp word [di+DSV_CPNAME], 0
+    je .skip
+    inc bl
+.skip:
+    inc bh
+    cmp bh, DRVC_MAX
+    jbe .next
+.done:
+    mov al, bl
+    pop di
+    pop bx
+    ret
+
+drv_cp_class:
+    push bx
+    push di
+    mov bl, al                  ; BL = the ordinal wanted
+    mov bh, 1
+.next:
+    mov al, bh
+    call drv_cls_svc
+    jc .no
+    cmp word [di+DSV_CPNAME], 0
+    je .skip
+    or bl, bl
+    jz .hit
+    dec bl
+.skip:
+    inc bh
+    cmp bh, DRVC_MAX
+    jbe .next
+.no:
+    pop di
+    pop bx
+    stc
+    ret
+.hit:
+    mov al, bh
+    pop di
+    pop bx
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; drv_cp_name - a class's staged page name
+; in:  AL = class
+; out: SI -> a NUL string in the kernel segment ('' if none)
+; clobbers: SI (the output), flags
+; -----------------------------------------------------------------------------
+drv_cp_name:
+    push ax
+    push dx
+    mov ah, DRV_CPNSZ
+    mul ah
+    sub ax, DRV_CPNSZ           ; class 1 is slot 0
+    add ax, drv_cpname
+    mov si, ax
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; drv_cp_stage - copy one class's page name into the kernel (module internal)
+; in:  BX = the row, ES = the driver's segment, DI = its published table copy
+; out: nothing (all registers preserved)
+;
+; The dsk_get_dir idiom in a new place, and the reason is font_str: it reads
+; its string through DS, and DS is the KERNEL's everywhere the Control Panel
+; draws. A pointer into the driver's segment would render its own image.
+; -----------------------------------------------------------------------------
+drv_cp_stage:
+    push ax
+    push cx
+    push si
+    push di
+    push di
+    mov al, [bx+DRVR_CLASS]
+    call drv_cp_name            ; SI = the staged slot
+    pop di
+    mov cx, [di+DSV_CPNAME]
+    mov di, si
+    mov byte [di], 0
+    jcxz .out                   ; no page: an empty name, and drv_cp_count
+    mov si, cx                  ; then skips this class
+    mov cx, DRV_CPNSZ - 1
+.copy:
+    mov al, [es:si]
+    mov [di], al
+    or al, al
+    jz .out
+    inc si
+    inc di
+    loop .copy
+    mov byte [di], 0
+.out:
+    pop di
+    pop si
+    pop cx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -476,22 +991,51 @@ drv_svc_call:
 ; -----------------------------------------------------------------------------
 drv_svc_clear:
     push ax
+    push bx
     push cx
     push di
     push es
     push ds
     pop es
-    mov word [drv_owner], 0
-    mov word [drv_fseg], 0
-    mov di, drv_svc
+    mov bl, al                  ; BL = the class, for the second lookup
+    call drv_cls_fp
+    jc .out
+    mov word [di+2], 0          ; the segment half: dispatch disarmed
+    mov al, bl
+    call drv_cls_idx
+    shl di, 1
+    mov word [di+drv_owner], 0
+    mov al, bl
+    call drv_cls_svc
     mov cx, DSV_SIZE            ; the table alone: the 16-byte staged sink
     xor al, al                  ; name this once also cleared is gone, and
                                 ; drv_cfg now sits right behind drv_svc
     cld
     rep stosb
+    mov al, bl                  ; ...and the staged page name with it, which
+    call drv_cp_name            ; is what makes drv_cp_count stop counting
+    mov byte [si], 0            ; this class
+.out:
     pop es
     pop di
     pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; drv_svc_clear_all - forget every class's services (module internal)
+; in:  nothing
+; out: nothing (all registers preserved)
+; -----------------------------------------------------------------------------
+drv_svc_clear_all:
+    push ax
+    mov al, 1
+.next:
+    call drv_svc_clear
+    inc al
+    cmp al, DRVC_MAX
+    jbe .next
     pop ax
     ret
 
@@ -510,60 +1054,134 @@ drv_mounted:
     push ax
     push dx
     xor dl, dl                  ; drive A: - the disk we booted from
-    call disk_mount
+    xor ax, ax                  ; ...at its root, which is where 19.6 puts
+                                ; KERNEL.SYS, SYSTEM.CFG and every *.DRV
+    call dsk_chdir_q            ; QUIET (SPEC.md 18.9): all three callers here
+                                ; read or write a file BY NAME - drv_find is
+                                ; dskw_stat and drv_cfg_* are dskw_read /
+                                ; dskw_write_sys, none of which look at the
+                                ; listing - so the scan, the sort and one
+                                ; icon-harvest read per file in A:'s root are
+                                ; all bought for nothing. ui_tm_open is the
+                                ; caller that DOES need a listing (it hands
+                                ; the loader a directory index) and it mounts
+                                ; A: itself rather than coming through here
     pop dx
     pop ax
     ret
 
 ; -----------------------------------------------------------------------------
-; drv_find - a file's byte size, out of the mount snapshot
+; drv_vol_bank / drv_vol_back - put the user's volume back (SPEC.md 51.5.2)
+; in (bank):  nothing.  in (back): the banked pair
+; out: nothing. BOTH PRESERVE EVERY REGISTER AND THE FLAGS.
+;
+; drv_mounted goes to A: because that is where the system files are, and for
+; a long time nothing put the volume back - so a user working on B: was
+; silently moved to A: by a Control Panel click. Nothing said so: the next
+; Standard File dialog simply opened on the wrong disk, and a package
+; resolving a file name resolved it there. It is the same shape of bug the
+; hard disk's Mount had (SPEC.md 52.6) and the same answer ui_tm_open already
+; used for the Task Manager (SPEC.md 28.3) - which is why this is a routine
+; and not a third open-coded dance.
+;
+; FLAGS ARE PRESERVED, and that is the load-bearing part rather than
+; politeness: both callers return a result in CF and in AX, the restore runs
+; at their common exit, and a remount that failed must not be mistaken for a
+; driver that failed to load. A failed restore is therefore SWALLOWED - the
+; volume is left at its root with the write gate shut, exactly as after any
+; failed mount, which is ui_tm_back's answer too and a survivable place to be.
+;
+; THE COMPARE IS WHAT MAKES IT FREE. A remount is a floppy's worth of sectors
+; (SPEC.md 19.2), so putting back a volume that never moved would put one on
+; the boot path: drv_boot calls drv_load once per wanted driver, and each of
+; those would have paid a mount to arrive where it already was. Banked equal
+; to current means nothing moved and there is nothing to undo.
+;
+; One static pair, like ui_tm_cwd and for the same reason: this is UI-task
+; context and the two brackets never nest - cp_flush_x is the only caller of
+; drv_cfg_save, and drv_load reaches no path that writes the settings file.
+; In .text with real initialisers, because -f bin zeroes no .bss and A:'s root
+; is the right answer before anything has been banked.
+; -----------------------------------------------------------------------------
+drv_vol_bank:
+    push ax
+    push bx
+    push dx
+    call osapi_file_here        ; DX = the directory cluster, BL = the drive
+    mov [drv_vol_cwd], dx
+    mov [drv_vol_drv], bl
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+drv_vol_back:
+    pushf
+    push ax
+    push dx
+    mov ax, [drv_vol_cwd]       ; dsk_chdir's arguments, loaded before the
+    mov dl, [drv_vol_drv]       ; compare because they ARE the compare
+    cmp dl, [disk_drive]        ; still where the user left us? then there is
+    jne .go                     ; nothing to undo, and the remount is the
+    cmp ax, [dsk_cwd]           ; whole cost
+    je .out
+.go:
+    call dsk_chdir_q            ; CF = the remount failed; swallowed by the
+                                ; popf below, deliberately.
+                                ;
+                                ; QUIET (SPEC.md 18.9), because putting the
+                                ; user's VOLUME back is not the same as
+                                ; putting a LISTING on screen: every Disk
+                                ; window paints from its own view cache
+                                ; (22.1), so nothing here is drawn from the
+                                ; global snapshot, and whoever reads it next
+                                ; pays for the rebuild if it is ever needed
+.out:
+    pop dx
+    pop ax
+    popf
+    ret
+
+drv_vol_cwd: dw 0               ; the directory and drive to go back to
+drv_vol_drv: db 0
+
+; -----------------------------------------------------------------------------
+; drv_find - a file's byte size, straight out of the directory
 ; in:  SI -> a NUL display name (upper case, as dsk_synth writes them);
 ;      drive A: already mounted
 ; out: CF = 0 and AX = its size; CF = 1 not found
 ; clobbers: AX (the output), flags
 ;
-; The snapshot, not a directory walk: disk_mount has already synthesized every
-; root entry and dsk_get_dir stages one back into the kernel segment, so this
-; is a string compare against memory we own. It is also what lets the claim be
-; made at exactly the right size before a byte of the file is read.
+; **dskw_stat, NOT dsk_find_name** (SPEC.md 19.6). The latter walks the mount
+; SNAPSHOT, and the snapshot is a display listing: dsk_synth filters the
+; hidden and system entries out of it, which is exactly what a .DRV is now.
+; Through it every driver on the disk reads as "not on the system disk" -
+; and the Control Panel says so on its Drivers page, which is a long way
+; from the cause. dskw_stat walks the directory sectors themselves and so
+; sees a file whether or not it is meant to be shown.
+;
+; What stays here is the one thing a DRIVER wants out of the entry: its size,
+; which is what lets the claim be made at exactly the right size before a
+; byte of the file is read. DX:CX is a 32-bit size and a driver is capped at
+; DRV_MAX_KB, so a non-zero high word is simply not one of ours.
 ; -----------------------------------------------------------------------------
 drv_find:
     push bx
     push cx
     push dx
     push si
-    push di
-    mov dx, si                  ; DX = the name wanted (SI is the walker's)
-    xor bx, bx                  ; BX = entry index
-.next:
-    cmp bx, [disk_nfiles]
-    jae .no
-    mov ax, bx
-    call dsk_get_dir            ; SI -> dsk_ent, in our own segment
-    mov di, dx
-.cmp:
-    mov al, [si]
-    mov ah, [di]
-    cmp al, ah
-    jne .nextent
-    inc si
-    inc di
-    or al, al
-    jnz .cmp
-    mov si, dsk_ent             ; matched to the NUL
-    mov ax, [si+LD_DE_SIZE]
-    pop di
+    call dskw_stat              ; AL = attribute, BX = first cluster,
+    jc .no                      ; DX:CX = the size
+    test dx, dx
+    jnz .no
+    mov ax, cx
     pop si
     pop dx
     pop cx
     pop bx
     clc
     ret
-.nextent:
-    inc bx
-    jmp short .next
 .no:
-    pop di
     pop si
     pop dx
     pop cx
@@ -599,6 +1217,8 @@ drv_load:
     push bp
     push es
 
+    call drv_vol_bank           ; this goes to A: to find the .DRV, and the
+                                ; user may have been anywhere (SPEC.md 51.5.2)
     call drv_row                ; BX = the row for the whole routine
     cmp word [bx+DRVR_SEG], 0
     jne .already
@@ -643,7 +1263,7 @@ drv_load:
     jc .badfree
 
     call drv_attach             ; the far call into the driver itself
-    jc .nohw
+    jc .nohwal                  ; ...which may say WHY in AL (SPEC.md 51.2)
 
     mov byte [bx+DRVR_ERR], DRVE_OK
     clc
@@ -673,6 +1293,18 @@ drv_load:
 .badfree:
     mov al, DRVE_BAD
     jmp short .failfree
+.nohwal:
+    ; A refusing attach MAY hand back a DRVE_* in AL, and most do not: the
+    ; verb's contract was CF alone for a long time, so anything outside the
+    ; table - DRVE_OK included, since a refusal is not OK - means "no
+    ; hardware" and the driver simply did not say. That is the whole
+    ; compatibility rule, and it is why the two drivers that predate this now
+    ; set AL explicitly rather than leaving it to whatever their last compare
+    ; happened to load.
+    cmp al, DRVE_OK
+    je .nohw
+    cmp al, DRVE_NERR
+    jb .failfree
 .nohw:
     mov al, DRVE_HW
 .failfree:
@@ -683,7 +1315,9 @@ drv_load:
     mov [bx+DRVR_ERR], al
     stc
 .out:
-    pop es
+    call drv_vol_back           ; every exit, including .already, which never
+                                ; mounted - the compare makes that free. It
+    pop es                      ; preserves CF, so the result above survives
     pop bp
     pop di
     pop si
@@ -754,8 +1388,19 @@ drv_attach:
     jc .out
     mov es, [bx+DRVR_SEG]
     call drv_publish            ; SI is an offset in ES, so copy it now
+    cmp byte [bx+DRVR_CLASS], DRVC_SOUND
+    jne .notier                 ; a tier is SND_RT_*: it means nothing to a
+                                ; class that is not sound, and sending it
+                                ; would hand the SOUND driver's own row a
+                                ; verb on the disk driver's attach
     mov ah, [snd_route]         ; ...then hand it the persisted tier, which
     call drv_tier               ; may take memory back off it (SPEC.md 34.8).
+.notier:
+    mov bp, [bx+DRVR_ENT]       ; ...and only now, when the slot is armed and
+    mov al, DRVV_READY          ; every API cell will answer it, tell the
+    call drv_call               ; driver so (SPEC.md 51.2.2). This is where a
+                                ; disk driver re-mounts what its settings say
+                                ; it had mounted last time
     clc                         ; A refusal is not a failed attach: the driver
                                 ; is up at whatever tier it could reach, and
                                 ; the Sound page shows which
@@ -862,7 +1507,9 @@ drv_publish:
     push cx
     push si
     push di
-    mov di, drv_svc
+    mov al, [bx+DRVR_CLASS]
+    call drv_cls_svc            ; DI = this CLASS's copy, not the one copy
+    jc .out
     mov cx, DSV_SIZE / 2
 .copy:
     mov ax, [es:si]
@@ -873,9 +1520,18 @@ drv_publish:
     inc di
     loop .copy
 
-    mov [drv_owner], bx         ; which row these belong to, so a detach can
-    mov ax, [bx+DRVR_SEG]       ; take them away again - and the far pointer
-    mov [drv_fseg], ax          ; drv_svc_call dispatches through
+    mov al, [bx+DRVR_CLASS]     ; which row these belong to, so a detach can
+    call drv_cls_idx            ; take them away again...
+    shl di, 1
+    mov [di+drv_owner], bx
+    mov al, [bx+DRVR_CLASS]     ; ...and the far pointer this class's
+    call drv_cls_fp             ; dispatcher goes through
+    mov ax, [bx+DRVR_SEG]
+    mov [di+2], ax
+    mov al, [bx+DRVR_CLASS]     ; the Control Panel page's NAME is staged
+    call drv_cls_svc            ; here and its two procs dispatched through
+    call drv_cp_stage           ; the far pointer above (SPEC.md 31.9)
+.out:
     pop di
     pop si
     pop cx
@@ -988,14 +1644,30 @@ drv_release:
     push ax
     push bx
     push dx
+    push di
     mov dx, [bx+DRVR_SEG]
     or dx, dx
     jz .out
-    cmp bx, [drv_owner]         ; disarm DISPATCH before a byte is freed:
-    jne .norow                  ; snd_tick far-calls through drv_fseg inside
-    mov word [drv_fseg], 0      ; IRQ0, and a tick landing between the free
-    call drv_svc_clear          ; and a later disarm ran freed code. The
-.norow:                         ; single word store is atomic against it
+    mov al, [bx+DRVR_CLASS]     ; disarm DISPATCH before a byte is freed:
+    call drv_cls_idx            ; snd_tick far-calls through drv_fseg inside
+    jc .norow                   ; IRQ0, and a tick landing between the free
+    shl di, 1                   ; and a later disarm ran freed code. The
+    cmp bx, [di+drv_owner]      ; single word store is atomic against it
+    jne .norow
+    mov al, [bx+DRVR_CLASS]
+    call drv_cls_fp
+    mov word [di+2], 0
+    mov al, [bx+DRVR_CLASS]
+    call drv_svc_clear
+    call cp_drv_gone            ; a page this driver owned is on screen no
+                                ; longer, and [cp_sel] must not name it
+                                ; (SPEC.md 31.9)
+.norow:
+    call dsk_vol_drop_drv       ; every volume this driver registered goes
+                                ; BEFORE its claims do (SPEC.md 51.8): a
+                                ; mounted volume whose transport has been
+                                ; freed is a read into whatever claims that
+                                ; memory next
     mov word [bx+DRVR_SEG], 0   ; ...and drv_call is disarmed the same way
     mov word [bx+DRVR_KB], 0
     push bx                     ; anything the DRIVER itself claimed is owned
@@ -1005,6 +1677,7 @@ drv_release:
     call mem_free               ; whose owner word no longer names anything
     pop bx                      ; could never be found again. The mem_free_rec
 .out:                           ; fence (SPEC.md 50.4), for a driver
+    pop di
     pop dx
     pop bx
     pop ax
@@ -1067,8 +1740,11 @@ drv_task:
     jz .fail
     or ax, ax
     jz .exit
-    cmp bx, [drv_fseg]          ; spawn: only the loaded driver, and only its
-    jne .fail                   ; own segment, may ask
+    call drv_pub_seg            ; spawn: only a PUBLISHED driver, and only its
+    jc .fail                    ; own segment, may ask - published and not
+                                ; merely loaded, because drv_publish arms the
+                                ; fence after attach returns and a worker
+                                ; spawned from attach outlives a refusal
     cmp ax, DRV_HDR_SZ          ; an entry inside its own image, past the
     jb .fail                    ; header - the ld_check_hdr test
     mov dl, 0xFF                ; DL -> T_INST: no instance (SPEC.md 8/28);
@@ -1078,7 +1754,15 @@ drv_task:
     inc byte [drv_wcnt]         ; BEFORE the task can run, so the count never
     call task_spawn             ; lags a worker that spawned and died at once
     jc .spfail                  ; (task_spawn preserves IF, so nothing runs
-    popf                        ; until our popf)
+    push bx                     ; until our popf)
+    mov bl, al                  ; AL = the slot: a driver's worker is service
+    xor bh, bh                  ; plumbing and survives the fsx freeze
+    shl bx, 1                   ; (SPEC.md 53.2) - stamped inside the same
+    shl bx, 1                   ; IF=0 window, so no tick can scan the record
+    shl bx, 1                   ; before the bit is on
+    or byte [bx+sch_tasks+T_FLAGS], TF_SERVICE
+    pop bx
+    popf
     clc
     jmp short .out
 .spfail:
@@ -1087,8 +1771,6 @@ drv_task:
     stc
     jmp short .out
 .exit:
-    cmp bx, [drv_fseg]
-    je .die
     call drv_owns_seg           ; CF = 0: ES is some loaded row's image
     jc .fail
 .die:
@@ -1144,6 +1826,11 @@ drv_cfg_pack:
     mov [drv_cfg+CFG_SCH], al
     mov al, [bb_dbl]
     mov [drv_cfg+CFG_BB], al
+    mov al, [vid_kind]          ; the adapter the machine is RUNNING as, which
+    mov [drv_cfg+CFG_VID], al   ; on a machine that has never been asked is
+                                ; exactly what vid_detect chose - so the file
+                                ; records the probe's answer and a first save
+                                ; changes nothing about the next boot
     pop di
     pop si
     pop cx
@@ -1465,6 +2152,24 @@ drv_cfg_ser:
 ; Mounts first, because this is reached from a Control Panel click and the
 ; disk in A: may not be the one that booted. UI-task context only, like every
 ; other write (SPEC.md 18.4).
+;
+; **And it may not be the SYSTEM disk at all** (SPEC.md 51.5.1), which is the
+; other half of that sentence and used to go unsaid. A single-floppy machine
+; swaps to the apps disk to launch anything - `ui_tm_open` is built around
+; exactly that - so a Control Panel change made afterwards wrote SYSTEM.CFG to
+; whatever was in the drive. Two things went wrong at once: the setting never
+; reached the system disk, and the user's data disk gained a hidden + system
+; file that SPEC.md 19.6's own protection makes IMPOSSIBLE to list or delete
+; from inside os8088.
+;
+; So the volume is identified before it is written: KERNEL.SYS in the root is
+; what makes a disk the system disk, and dskw_stat answers that off the
+; directory sectors, which is where a hidden + system entry can be seen at all.
+;
+; **dskw_stat and not drv_find**, deliberately: drv_find answers a SIZE and
+; refuses one whose high word is non-zero, and KERNEL.SYS is 63,944 bytes
+; today - so the day the kernel passes 64KB, the check would start reporting
+; that the system disk is not the system disk. Existence is the question here.
 ; -----------------------------------------------------------------------------
 drv_cfg_save:
     push bx
@@ -1473,8 +2178,14 @@ drv_cfg_save:
     push si
     push di
     push es
+    call drv_vol_bank           ; the panel is closing on top of whatever the
+                                ; user was doing; this write goes to A: and
+                                ; must not move them (SPEC.md 51.5.2)
     call drv_mounted
     jc .nodisk
+    mov si, drv_sysname
+    call dskw_stat              ; the disk in A: is not guaranteed to be ours
+    jc .notsys
 
     push ds                     ; rebuild the whole file: a settings file is
     pop es                      ; small and a partial one is a bug waiting for
@@ -1484,13 +2195,22 @@ drv_cfg_save:
     mov bx, drv_cfgbuf
     xor dx, dx                  ; DX:CX = the count; a settings file is bytes
     mov si, drv_cfgname
-    call dskw_write             ; ES is already ours, which is where it reads
+    call dskw_write_sys         ; ES is already ours, which is where it reads.
+                                ; _sys: SYSTEM.CFG is hidden + system, so it
+                                ; is neither listed nor deletable, and only
+                                ; this entry point may rewrite one (19.6)
     jmp short .out
-.nodisk:
+.notsys:
+    mov ax, FERR_NOENT          ; a disk, but not ours. [cp_dsave] carries it
+    stc                         ; to the Drivers page, whose caption already
+    jmp short .out              ; says 'Cannot save to the system disk' - which
+.nodisk:                        ; is exactly the truth in this case
     mov ax, FERR_NODISK
     stc
 .out:
-    pop es
+    call drv_vol_back           ; CF and AX are this routine's result and
+                                ; drv_vol_back preserves both - a remount
+    pop es                      ; that failed must not read as a write that did
     pop di
     pop si
     pop dx
@@ -1501,6 +2221,197 @@ drv_cfg_save:
 ; =============================================================================
 ; Boot (SPEC.md 51.3) and the notice that follows it
 ; =============================================================================
+
+section .ovl                    ; boot overlay (SPEC.md 2.5): this runs ONCE,
+                                ; from kmain, before the first mount overwrites
+                                ; it - so it costs no RAM and nothing at all
+                                ; against KERN_BUDGET. Same shape and the same
+                                ; home as clk_init's four-rung RTC ladder
+                                ; (SPEC.md 37.90), for the same reason: a
+                                ; hardware probe that answers once at boot has
+                                ; no business being resident.
+
+DRVP_OPL    equ 0x388           ; the OPL2's address/status port; +1 is data
+
+; -----------------------------------------------------------------------------
+; drv_snd_sniff - is there an FM chip in this machine? (SPEC.md 51.3.1)
+; in:  nothing (kmain, after drv_init and BEFORE drv_boot's first mount)
+; out: nothing (all registers preserved). On a hit, row 0's DRVR_WANT is set
+;
+; Called before drv_cfg_load rather than after, because the overlay is dead by
+; then - drv_boot's own mount is what writes over it. Setting DRVR_WANT is
+; therefore a DEFAULT and not an override, and no test of "did the file exist"
+; is needed anywhere: a SYSTEM.CFG that deserialises calls drv_want_set, which
+; overwrites all three WANT bytes with the file's bitmap, so the user's answer
+; always wins. A missing or malformed file leaves the defaults standing, and
+; on a machine with a card the default is now "load it".
+;
+; SPEC.md 51.3 says the kernel does not GUESS, and it still does not: what it
+; refused to do was read 5.5KB of driver off a floppy - 27 sectors, ~6.4 s on
+; the field machine - to be told there was no card. This costs about a
+; millisecond of port I/O and only ever asks for the read on a machine that
+; answered.
+;
+; ONE probe covers both cards. Every Sound Blaster ever made carries an OPL2
+; of its own at 388h - which is why the driver's own attach probes the FM half
+; FIRST and lets the SB rename the Control Panel row afterwards (SPEC.md 34.2).
+; The DSP reset scan is six bases x ~10ms plus a ~100ms slow retry, all of it
+; paid on every boot of every machine with no card, and it would find nothing
+; the timer-flag dance below has not already found on any real hardware.
+;
+; The dance is SPEC.md 34.2's, exactly: mask + reset the timers, read the flags
+; (they must be clear), run timer 1 for >= 80us, read them again (they must
+; have fired), and clean up so the chip is left as it was found. That last part
+; is what makes this safe to run ahead of the driver's own probe.
+; -----------------------------------------------------------------------------
+drv_snd_sniff:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, 0x0460              ; 04h <- 60h: mask both timers
+    call drvp_wr
+    mov ax, 0x0480              ; 04h <- 80h: reset the IRQ flags
+    call drvp_wr
+    mov dx, DRVP_OPL
+    in al, dx
+    mov bl, al                  ; s1: the flags must read clear
+    mov ax, 0x02FF              ; timer 1 count FFh (overflows in 80us)
+    call drvp_wr
+    mov ax, 0x0421              ; start timer 1, timer 2 masked
+    call drvp_wr
+    mov cx, 200                 ; >= 80us of counted status reads on any bus
+.wait:
+    in al, dx
+    loop .wait
+    in al, dx
+    mov bh, al                  ; s2: overflow + timer-1 flags must be set
+    mov ax, 0x0460              ; clean up: mask + reset, leaving the flags
+    call drvp_wr                ; clear for the driver's own probe
+    mov ax, 0x0480
+    call drvp_wr
+    and bl, 0xE0
+    jnz .nofm                   ; an absent bus floats, so a NON-zero s1 is
+    and bh, 0xE0                ; the commonest way this ends
+    cmp bh, 0xC0
+    jne .nofm
+    mov byte [drv_tab+DRVR_WANT], 1   ; row 0 is the sound driver. Through DS,
+                                ; which is KERNEL_SEG in here (SPEC.md 2.5)
+    jmp short .out
+.nofm:                          ; No OPL2. On real hardware that settles it -
+                                ; every Sound Blaster has one - so what follows
+                                ; is built only under SNDSNIFF=sb, and with the
+                                ; knob unset this label simply falls into .out
+%ifdef SND_SNIFF_SB
+    push si                     ; --- the DSP reset scan (SPEC.md 34.2) ------
+    mov si, drvp_sbbase         ; ...read through CS: the overlay may not reach
+    cld                         ; its own data through DS (SPEC.md 2.5)
+.base:
+    cs lodsw
+    or ax, ax
+    jz .sbno                    ; list exhausted: no card
+    mov bx, ax
+    mov cx, 2000                ; ~10ms of ISA status reads per base
+    call drvp_reset
+    jc .base
+    mov byte [drv_tab+DRVR_WANT], 1
+.sbno:
+    pop si
+%endif
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    retf                        ; kmain reaches this as FAT_SEG:drv_snd_sniff
+
+; -----------------------------------------------------------------------------
+; drvp_wr - write one OPL2 register (overlay-local; SPEC.md 34.1)
+; in:  AH = register index, AL = value
+; out: nothing (all registers preserved)
+;
+; The driver owns 388h/389h and opl_wr is the only routine allowed to touch
+; them (SPEC.md 34.1) - this is the one exception, and it is bounded: it runs
+; before any driver exists, it is a byte-for-byte copy of that protocol, and
+; the overlay it lives in is gone before the driver can be loaded. Select via
+; 388h, 6 counted status reads, data to 389h, 35 more.
+; -----------------------------------------------------------------------------
+drvp_wr:
+    push ax
+    push cx
+    push dx
+    pushf
+    cli
+    mov dx, DRVP_OPL
+    xchg al, ah                 ; AL = register (value parked in AH)
+    out dx, al
+    mov cx, 6
+.post_addr:
+    in al, dx
+    loop .post_addr
+    mov al, ah
+    inc dx                      ; 389h
+    out dx, al
+    popf                        ; the long delay runs at the caller's IF
+    dec dx
+    mov cx, 35
+.post_data:
+    in al, dx
+    loop .post_data
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+%ifdef SND_SNIFF_SB
+drvp_sbbase: dw 0x220, 0x240, 0x210, 0x230, 0x250, 0x260, 0
+                                ; the pinned scan order (SPEC.md 34.2), read
+                                ; through CS - see the overlay contract
+
+; -----------------------------------------------------------------------------
+; drvp_reset - reset the DSP at BX and wait for 0AAh (overlay-local)
+; in:  BX = the card's base, CX = poll budget
+; out: CF = 0 a DSP answered; CF = 1 nothing there
+; clobbers: AL, CX (flags)
+; -----------------------------------------------------------------------------
+drvp_reset:
+    push dx
+    mov dx, bx
+    add dx, 6                   ; 2x6h: reset
+    mov al, 1
+    out dx, al
+    push cx
+    add dx, 8                   ; hold >= 3us: 8 ISA reads of 2xEh
+    mov cx, 8
+.dly:
+    in al, dx
+    loop .dly
+    sub dx, 8
+    pop cx
+    xor al, al
+    out dx, al
+    add dx, 8                   ; 2xEh: data-available status
+.poll:
+    in al, dx
+    test al, 0x80
+    jz .next
+    sub dx, 4                   ; 2xAh: read the identity byte
+    in al, dx
+    add dx, 4
+    cmp al, 0xAA
+    je .yes
+.next:
+    loop .poll
+    stc
+    jmp short .ret
+.yes:
+    clc
+.ret:
+    pop dx
+    ret
+%endif
+
+section .text
 
 ; -----------------------------------------------------------------------------
 ; drv_boot - load every driver the settings file asks for
@@ -1515,18 +2426,28 @@ drv_boot:
     push ax
     push bx
     push cx
+    xor ch, ch                  ; CH = 1 once a settings RECORD has been read
     call drv_mounted
     jc .nodisk
-    call drv_cfg_load
-    jc .load                    ; no record: every default stands
-    cmp byte [drv_cfg+CFG_BB], 0
-    je .load
-    call gfx_lock               ; the one setting that is not a store: it
-    mov al, 1                   ; claims 150KB and seeds the buffer from
-    call bb_set                 ; VRAM, and refuses itself on an adapter or
-    call gfx_unlock             ; a heap that cannot fund it (SPEC.md 32)
+    call drv_cfg_load           ; CF = 1: no file, so every default stands -
+    jc .load                    ; and every default is now "not wanted", so
+    mov ch, 1                   ; the loop below correctly loads nothing
+
+    ; --- the display adapter, FIRST (SPEC.md 39.11.3) ------------------------
+    ; Before the driver loads and long before the back buffer at the bottom of
+    ; this routine, because everything after it draws: the splash bar is
+    ; ticked once per sector by dsk_xfer (SPEC.md 15.3), and vid_setmode
+    ; CLEARS the framebuffer - so the switch has to happen while there is the
+    ; least possible loading screen to put back, and spl_chrome puts that back
+    ; immediately. vid_switch refuses a card this machine does not have, which
+    ; is the whole safety story for a settings disk carried between machines.
+    mov al, [drv_cfg+CFG_VID]
+    call vid_switch
+    jc .load                    ; no such adapter here: stay on the probe's
+    call spl_reset              ; answer. Otherwise redraw the loading screen
+                                ; onto the framebuffer the mode set just wiped
 .load:
-    xor cx, cx
+    xor cl, cl
 .next:
     mov al, cl
     call drv_row
@@ -1539,10 +2460,27 @@ drv_boot:
     jnc .skip
     mov byte [drv_nerr], 1      ; something to say once there is a screen
 .skip:
-    inc cx
-    cmp cx, DRV_MAX
+    inc cl
+    cmp cl, DRV_MAX
     jb .next
-    jmp short .out
+
+    ; --- and the back buffer LAST (SPEC.md 32) -------------------------------
+    ; It is the one setting that is not a store: it claims 150KB and SEEDS
+    ; ITSELF FROM VRAM. Until this line VRAM holds the loading screen, whose
+    ; bar is still being ticked one notch per sector by everything above
+    ; (SPEC.md 15.3) - a buffer armed ahead of the reads would swallow every
+    ; notch after it, because a direct VRAM write is exactly what the next
+    ; flush undoes. The heap does not care which end of this routine it
+    ; happens at: data claims grow up and a driver's region down (SPEC 50.3).
+    or ch, ch
+    jz .out
+    cmp byte [drv_cfg+CFG_BB], 0
+    je .out
+    call gfx_lock
+    mov al, 1
+    call bb_set                 ; refuses itself on an adapter or a heap that
+    call gfx_unlock             ; cannot fund it - an ordinary answer, not an
+    jmp short .out              ; error (SPEC.md 32/50)
 .nodisk:
     ; No system disk at all. Only a row the user actually wanted counts as a
     ; failure: a machine that has never enabled a driver must not be told
@@ -1604,8 +2542,13 @@ drv_wcnt:   resb 1              ; live driver worker tasks: +1 inside the
                                 ; (drv_task). drv_unload waits for 0 before
                                 ; the image is freed (SPEC.md 51.7)
 drv_fsz:    resw 1              ; the driver file's byte size
-drv_owner:  resw 1              ; the row whose services are published, or 0
-drv_svc:    resb DSV_SIZE       ; a copy of that row's service table
+drv_owner:  resw DRVC_MAX       ; per class: the row whose services are
+                                ; published, or 0. Class 1 is index 0
+drv_cpname: resb DRV_CPNSZ*DRVC_MAX ; each class's staged Control Panel page
+                                ; name; empty = that class has no page
+drv_svc:    resb DSV_SIZE*DRVC_MAX  ; ...and a copy of each one's table, so
+                                ; every `[drv_svc+DSV_*]` in snd.inc still
+                                ; names the SOUND driver's and did not change
 drv_cfg:    resb CFG_NB         ; the live settings, staged (layout above)
 drv_cfgbuf: resb CFG_FBUF       ; the file itself, records and all
 

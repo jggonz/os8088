@@ -223,6 +223,13 @@ spk_pcm_run:
     inc byte [sch_lock]         ; the clip owns the CPU (SPEC.md 34.4/7)
     cld                         ; lodsb below runs forward
 
+    mov al, [sch_fast]          ; an fsx sub-tick (SPEC.md 53.2.1) divides
+    mov [snd_pcm_fast], al      ; ch0's period, and 65536 is the radix this
+    or al, al                   ; pacer's deadline arithmetic wraps on - so
+    jz .nofast                  ; park it for the clip and put it back at
+    call sch_fast_off           ; .out. sch_lock is up either way, so a finer
+.nofast:                        ; quantum buys nothing here to give up
+
     pushf                       ; ch2 -> mode 0 lobyte-only; gate + data
     cli                         ; high. 61h is RMW under IF=0 - the upper
     mov al, 0x90                ; bits belong to the XT's keyboard/parity
@@ -303,6 +310,15 @@ spk_pcm_run:
     mov al, 2                   ; aborted by the flag
     stc
 .out:
+    pushf                       ; re-arm the sub-tick. The bank is taken
+    push ax                     ; UNCONDITIONALLY - CF is this routine's
+    mov al, [snd_pcm_fast]      ; result and AL its abort code, and the test
+    or al, al                   ; of the parked byte would clobber CF before
+    jz .nore                    ; the branch that skips the restore
+    call sch_fast_on
+.nore:
+    pop ax
+    popf
     pop bp
     pop di
     pop si
@@ -688,7 +704,7 @@ snd_disp_set:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; snd_init - initialise the sound layer (kmain, after tm_init)
+; snd_init - initialise the sound layer (kmain, after drv_init)
 ;
 ; in:       nothing
 ; out:      nothing
@@ -700,6 +716,12 @@ snd_disp_set:
 ; probe fully initialises the chip before reporting present, SPEC.md 34.2),
 ; and sets snd_live LAST: the publish that arms snd_tick and the public
 ; entry points (SPEC.md 34.7, the 29.2 publish-last idiom).
+
+section .ovl                    ; the boot overlay (SPEC.md 2.5): saving the boot
+                                ; 61h bits and publishing snd_live happens
+                                ; once. snd_unhook below is the shutdown
+                                ; path and stays resident. Nothing here
+                                ; calls out of the overlay at all
 ; -----------------------------------------------------------------------------
 snd_init:
     push ax
@@ -744,6 +766,8 @@ snd_init:
 ; Called by sched_unhook beside mouse_unhook: 61h bits 0-1 go back to their
 ; saved boot state (upper bits preserved), leaving ch2 quiescent. That is the
 ; whole of it - the speaker owns no vector, no IRQ and no DMA channel.
+
+section .text
 ; -----------------------------------------------------------------------------
 snd_unhook:
     push ax
@@ -949,25 +973,16 @@ osapi_snd_tone:
 ; else falls through to their own T_INST. Arkanoid's worker calls SND_TONE
 ; while UI callbacks run, which is what makes this reachable rather than
 ; theoretical.
+;
+; **The body is inst_caller's now** (instance.inc). Nothing about this
+; contract changed - the reasoning above is still exactly why it is written
+; the way it is - but the question stopped being the sound tier's alone when
+; the file API needed the same answer to stand the volume in the calling
+; app's own directory (SPEC.md 19.2.1). Two copies of "who is asking?" is
+; the kind of pair that drifts silently, so there is one.
 ; -----------------------------------------------------------------------------
 snd_req_inst:
-    push bx
-    mov bx, [snd_inst]          ; BL = the stamped instance, BH = the task
-    cmp bh, [sch_cur]           ; that stamped it. A DIFFERENT task is running
-    jne .task                   ; now, so it pre-empted that callback and the
-    mov dh, bl                  ; callback's instance is not its to spend
-    cmp dh, 0xFF
-    jne .out
-.task:
-    mov bl, [sch_cur]           ; not our callback: the running task's
-    xor bh, bh                  ; instance (0xFF for the UI task)
-    shl bx, 1                   ; T_SIZE = 8
-    shl bx, 1
-    shl bx, 1
-    mov dh, [bx+sch_tasks+T_INST]
-.out:
-    pop bx
-    ret
+    jmp inst_caller
 
 ; -----------------------------------------------------------------------------
 ; osapi_snd_play - PCM_EXCL clip, run-to-completion (slot 0x00F0, SPEC.md
@@ -1236,6 +1251,9 @@ snd_abort:     resb 1           ; set by snd_stop / snd_release_inst
 snd_pcm_busy:  resb 1           ; a PCM_EXCL clip is running (34.3)
 snd_pcm_inst:  resb 1           ;   the instance that owns it (0xFF kernel)
 snd_pcm_smp:   resb 1           ;   the sample parked across pacer polls
+snd_pcm_fast:  resb 1           ;   the fsx sub-tick parked across the clip
+                                ;   (SPEC.md 53.2.1); written before every
+                                ;   read, so an unzeroed .bss cannot bite
 snd_pcm_n:     resw 1           ;   the clip divisor N (74..255)
 snd_pcm_emitted: resw 1         ; debug counters (34.4), reset per clip:
 snd_pcm_resync:  resw 1         ;   pulses emitted / deadline resyncs

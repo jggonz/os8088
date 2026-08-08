@@ -40,7 +40,7 @@ W_SEG   equ 22                  ; reach this window's procs - {PKG_DISP, the
                                 ; record is relative to: title, paint, onkey,
                                 ; onclick, menus. Zero for a kernel window,
                                 ; and zero is what makes the dispatch near
-                                ; again for About/Clock/Disk/TaskMgr/Ctrl and
+                                ; again for About/Timer/Disk/TaskMgr/Ctrl and
                                 ; the file dialog (SPEC.md 11/20.1).
 W_ONSIZE equ 24                 ; word: near ptr or 0 - the resize negotiator
                                 ; (SPEC.md 11.1). Called BEFORE a new size is
@@ -217,6 +217,38 @@ wm_fit:
     mov word [bx+W_Y], MBAR_H
 .out:
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_refit - clamp EVERY live window back onto the screen (SPEC.md 39.11.2)
+;
+; in:       nothing (the live geometry has just changed)
+; out:      every used record's W_X..W_H clamped
+; clobbers: flags
+;
+; wm_fit runs once per window at creation because the screen never used to
+; change afterwards. It can now (vid_switch), and a 640x480 machine switched
+; to CGA has every window hanging off the bottom of a 200-row screen - with
+; its title bar below the dock, which is a window the user cannot reach to
+; drag back. One pass over wm_wins puts them all inside the new one.
+;
+; A free slot is skipped rather than clamped: W_W/W_H are whatever the last
+; owner left there, and wm_create fits the record it fills in anyway.
+; -----------------------------------------------------------------------------
+wm_refit:
+    push bx
+    push cx
+    mov bx, wm_wins
+    mov cx, MAX_WIN
+.next:
+    test word [bx+W_FLAGS], 1   ; used?
+    jz .skip
+    call wm_fit
+.skip:
+    add bx, WIN_SIZE
+    loop .next
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -465,6 +497,213 @@ wm_resize:
     ret
 
 ; -----------------------------------------------------------------------------
+; The zoom bank: the rect a zoomed window goes back to (SPEC.md 11.95).
+; One entry per window SLOT, a side table rather than four more words in the
+; record, because WIN_SIZE is what wm_idx2ptr multiplies by and every reader
+; of a window pays for a wider record whether it zooms or not.
+;
+; ZR_W = 0 is "nothing banked", and it is a safe sentinel because a banked
+; width is a live window's, which WMIN_W floors at 96. .bss arrives zeroed
+; (the overlay note in kernel.asm), so a slot starts empty; wm_destroy clears
+; it again, or a reused slot would restore to a stranger's rect.
+; -----------------------------------------------------------------------------
+ZR_X    equ 0
+ZR_Y    equ 2
+ZR_W    equ 4                   ; ...and the "nothing banked" sentinel
+ZR_H    equ 6
+ZR_SIZE equ 8
+
+; -----------------------------------------------------------------------------
+; wm_zoom - the Macintosh zoom box, on a double-clicked title bar
+;           (SPEC.md 11.95)
+;
+; in:  BX = window ptr - resizable and not fullscreen, both the CALLER's to
+;      check (ui.inc's title-bar branch is the only one); caller HOLDS the
+;      gfx lock
+; out: nothing (all registers preserved); the record carries the new rect and
+;      the screen is repainted
+;
+; A TOGGLE between the two states the Macintosh names: the STANDARD state,
+; which here is the whole desktop band, and the USER state, which is whatever
+; the window was before it went there. Not wm_fullscreen (SPEC.md 11.2) and
+; not an fsx bracket (SPEC.md 53) - the window keeps its border, its title
+; bar, its boxes and its place in the z-order, so nothing is taken away that
+; has to be given back, and everything that reads a window rect keeps reading
+; what it always did.
+;
+; **Which state it is in is DERIVED, never tracked.** The test is whether the
+; record already holds the standard rect; there is no "is zoomed" flag,
+; because a flag would have to be cleared by every one of the four sites that
+; write W_X and the several that write W_W/W_H, and a missed one is a window
+; that answers wrong about itself. Deriving it also makes a DRAG the natural
+; way to leave the standard state: a window moved off the band is simply not
+; in it any more, and the next double-click zooms afresh, banking where the
+; drag left it.
+;
+; The standard rect is wm_fit's clamp said forwards instead of backwards -
+; full screen width, from the menu bar down to ONE PIXEL SHORT of the dock.
+; That pixel is not a rounding choice: the drop shadow lives on row y+h and
+; wm_dock_clear tests y+h with `jae`, so a frame flush against the strip makes
+; every window later shown over this one pay a wm_dock_under pass (SPEC.md
+; 11.90). A zoom is the one operation guaranteed to land on that boundary, so
+; getting it wrong here would make the feature expensive for everything else
+; on the screen.
+;
+; Three things it borrows rather than repeats:
+;
+;   - wm_snap_want (SPEC.md 11.94) for the WF_SNAP question. wm_snap_ax
+;     itself cannot serve: it moves LEFT and re-tests the window's CURRENT
+;     width, and at full screen width x = 7 always fails that test - so a
+;     snapped window would zoom to x = 0 and lose the fast path it asked for.
+;     Here x moves RIGHT to 7 and the width gives back exactly the seven
+;     pixels x took, which is the one place a snap can be paid for.
+;   - wm_ask_size, because this is a KERNEL-initiated resize and those always
+;     ask (SPEC.md 11.1) - ONCE for the state being tested and once more for
+;     the one being gone to. Growing, every negotiator accepts; SHRINKING
+;     back can be refused, and that refusal is the feature working: apps/paint
+;     will not crop artwork for a restore any more than it will for a drag of
+;     the grow box, and it says so in its own toast. A refusal leaves the
+;     window in the standard state with its bank intact, so the restore can be
+;     asked for again once there is nothing to lose.
+;   - wm_resize for the commit, which is both clamps, the WF_SNAP re-fit and
+;     the repaint. The one thing it will not do is move a window UP or LEFT -
+;     it only ever clamps a frame back down onto the screen - so the origin is
+;     written here first and wm_resize then finds it already legal.
+; -----------------------------------------------------------------------------
+wm_zoom:
+    push ax
+    push cx
+    push dx
+    push si
+    xor ax, ax                  ; the standard state: x = the left edge...
+    mov cx, [vid_w]             ; ...and w = the whole live screen (SPEC 39.2)
+    call wm_snap_want
+    jnc .nosnap
+    mov ax, 7                   ; WF_SNAP: the leftmost frame x whose CONTENT
+    sub cx, ax                  ; origin is a multiple of 8, and the width
+                                ; hands back exactly what x took
+.nosnap:
+    mov dx, [vid_dock_y0]       ; h = the desktop band, one pixel short of the
+    sub dx, MBAR_H + 1          ; dock - wm_fit's clamp, for wm_fit's reason
+    call wm_ask_size            ; ...as the window will have it (SPEC.md 11.1),
+                                ; which is what makes the compare below hold
+                                ; for a negotiator with a quantum of its own
+    cmp [bx+W_X], ax            ; is the window already in the standard state?
+    jne .go
+    cmp word [bx+W_Y], MBAR_H
+    jne .go
+    cmp [bx+W_W], cx
+    jne .go
+    cmp [bx+W_H], dx
+    jne .go
+
+    ; --- it is: put the user state back --------------------------------------
+    ; NOT through wm_resize, and that is the one asymmetry in this routine.
+    ; wm_resize DERIVES a legal origin - it holds y + h to the dock row - which
+    ; is right for an app sizing itself and wrong for replaying a rect the
+    ; window manager itself last had, because ui_drag is deliberately looser:
+    ; a window may be dragged until only its title bar is on screen, and one
+    ; left more than half over the dock is left exactly there (SPEC.md 11.90).
+    ; Put back through wm_resize, such a window came home 39 rows too high.
+    ; The banked rect needs no clamping - every writer of it clamped already -
+    ; and the negotiator's answer is trusted the same way ui_grow trusts it:
+    ; the proposal was legal, so the reply is written as given.
+    call wm_zoom_slot           ; SI -> this window's bank
+    mov cx, [si+ZR_W]
+    jcxz .out                   ; nothing banked - the window was CREATED this
+                                ; size and has never been anywhere else, so
+                                ; there is nothing to go back to and nothing
+                                ; is drawn
+    mov ax, [si+ZR_X]
+    mov dx, [si+ZR_H]
+    call wm_ask_size            ; preserves SI, which is why the bank can still
+                                ; be read after it. The bank is NOT spent: a
+                                ; refused shrink has to be re-askable, and a
+                                ; zoom re-banks anyway
+    ; Refused OUTRIGHT? Then the restore did not happen, and NOTHING moves -
+    ; SPEC.md 11.1's rule that a refusal costs no repaint, plus the reason the
+    ; origin does not travel on its own: a window is not "partly back" because
+    ; it went three pixels down while keeping the size it was refused.
+    ;
+    ; The test is against what was ASKED and not against the record, and that
+    ; distinction is the whole of it: a window DRAGGED while it was zoomed
+    ; banks the standard SIZE with a different origin, so "the answer equals
+    ; the record" is also exactly what a perfectly accepted restore of that
+    ; window looks like. Asking the other question tells the two apart.
+    cmp cx, [si+ZR_W]
+    jne .rref
+    cmp dx, [si+ZR_H]
+    je .rgo                     ; we were given the size we asked for
+.rref:
+    cmp cx, [bx+W_W]            ; not that size - but if what came back is the
+    jne .rgo                    ; size it ALREADY has, on both axes, then
+    cmp dx, [bx+W_H]            ; nothing was given back at all. One axis is a
+    je .out                     ; partial restore, and it travels
+.rgo:
+    push dx                     ; x is replayed and then CLAMPED, because on
+    mov dx, [vid_w]             ; that partial path the size is not the one it
+    sub dx, cx                  ; was banked with - a negotiator refusing to
+    jns .rx                     ; shrink hands back the STANDARD width, and
+    xor dx, dx                  ; the banked x plus that runs off the right
+.rx:                            ; edge
+    cmp ax, dx
+    jle .rxc
+    mov ax, dx
+.rxc:
+    pop dx
+    mov [bx+W_W], cx
+    mov [bx+W_H], dx
+    mov [bx+W_X], ax
+    mov ax, [si+ZR_Y]           ; y is replayed and never clamped: what bounds
+    mov [bx+W_Y], ax            ; it is the TITLE BAR being on screen, which is
+                                ; independent of the height (SPEC.md 11.90)
+    call wm_snap_win            ; ...and back onto a byte boundary (11.94),
+                                ; which the x clamp above may have taken it off
+    call wm_paint_all           ; the band it is vacating is most of the
+    jmp short .out              ; screen, so this is wm_resize's repaint too
+.go:
+    ; --- it is not: bank where it stands, and go to the standard state -------
+    call wm_zoom_slot
+    push ax                     ; the standard x, which the bank writes over
+    mov ax, [bx+W_X]
+    mov [si+ZR_X], ax
+    mov ax, [bx+W_Y]
+    mov [si+ZR_Y], ax
+    mov ax, [bx+W_W]
+    mov [si+ZR_W], ax
+    mov ax, [bx+W_H]
+    mov [si+ZR_H], ax
+    pop ax
+    mov [bx+W_X], ax
+    mov word [bx+W_Y], MBAR_H   ; wm_resize's y clamp only ever pushes a window
+                                ; UP OFF the dock, never down off the bar, so
+                                ; this is the half it cannot do
+    call wm_resize              ; ...and this is the half it can
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_zoom_slot - SI -> this window's entry in the zoom bank
+; in:  BX = window ptr
+; out: SI = wm_zoomr + index * ZR_SIZE; every other register preserved
+; clobbers: flags
+; -----------------------------------------------------------------------------
+wm_zoom_slot:
+    push ax
+    call wm_ptr2idx             ; AL = index, AH = 0
+    mov si, ax
+    shl si, 1
+    shl si, 1
+    shl si, 1                   ; x8: ZR_SIZE, and an 8086 has no shl by imm
+    add si, wm_zoomr
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; wm_destroy - free a window record and repaint everything
 ; in:  BX = window ptr (caller holds the gfx lock)
 ; out: nothing (all registers preserved)
@@ -515,6 +754,12 @@ wm_destroy:
     shl si, 1                   ; ...and its About handler with it, or a
     mov word [wm_about+si], 0   ; reused slot inherits a stranger's (12.2)
     shr si, 1
+    shl si, 1                   ; ...and its zoom bank, for the same reason:
+    shl si, 1                   ; a reused slot must not restore to the rect
+    shl si, 1                   ; the last tenant was zoomed out of (11.95).
+    mov word [wm_zoomr+si+ZR_W], 0  ; the sentinel word is the whole of it
+                                ; (SI is dead from here - the z-order walk
+                                ; below reloads it)
     mov ch, 0
     mov cl, [wm_zn]
     jcxz .paint                 ; empty z-order: nothing to remove
@@ -725,6 +970,13 @@ wm_fs_zpos:
 ; one thing that can.
 ; -----------------------------------------------------------------------------
 wm_raise:
+    push ax                     ; a Disk window whose folder changed under it
+    xor al, al                  ; is re-listed BEFORE a pixel is drawn, so
+    call fm_focus               ; this raise puts the new listing up rather
+    pop ax                      ; than the old one and then the new. AL = 0:
+    jnc .listed                 ; the drawing below is ours, not its (22.8)
+    mov al, 1                   ; and CF = 1 upgrades a title-bar raise to a
+.listed:                        ; whole-window one - the CONTENT changed too
     push ax
     call menu_activate          ; BX owns the menu bar from here (SPEC.md 12)
     call wm_lift                ; ...and the top of the z-order
@@ -933,12 +1185,16 @@ wm_snap_win:
     ret
 
 ; -----------------------------------------------------------------------------
-; wm_snap_ax - snap a candidate frame x for a WF_SNAP window
-; in:  AX = candidate x (the caller's clamps already applied), BX = window ptr
-; out: AX = the x to use; every other register preserved, flags clobbered
+; wm_snap_want - does this window's content origin want to be 8-aligned?
+; in:  BX = window ptr
+; out: CF = 1 yes, CF = 0 no; every register preserved
 ;
-; The whole of SPEC.md 11.94's mechanism, in one place because four sites
-; write W_X and every one of them has to agree.
+; SPEC.md 11.94's GATE, on its own, because two places ask the question and
+; only one of them can use wm_snap_ax to act on it: that routine moves a
+; candidate x LEFT and re-tests the CURRENT width against the right edge,
+; and wm_zoom (SPEC.md 11.95) is exactly the case where x wants to move
+; RIGHT and the width is about to shrink to pay for it. One answer, two
+; users, rather than a second copy of three tests that has to agree.
 ;
 ; MONO ONLY, and the gate is [vid_mono] rather than [bb_on] on purpose. The
 ; two say the same thing on Hercules and CGA, but [bb_on] is also 1 on a VGA
@@ -950,6 +1206,28 @@ wm_snap_win:
 ; WF_FULL is left alone: a fullscreen window is at x=0 with no border, so its
 ; content origin is 0 and already aligned (SPEC.md 11.2) - which is why the
 ; tracker has had the fast path all along without any of this.
+; -----------------------------------------------------------------------------
+wm_snap_want:
+    test word [bx+W_FLAGS], WF_SNAP
+    jz .no
+    test word [bx+W_FLAGS], WF_FULL
+    jnz .no
+    cmp byte [vid_mono], 0
+    je .no
+    stc
+    ret
+.no:
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_snap_ax - snap a candidate frame x for a WF_SNAP window
+; in:  AX = candidate x (the caller's clamps already applied), BX = window ptr
+; out: AX = the x to use; every other register preserved, flags clobbered
+;
+; The whole of SPEC.md 11.94's ARITHMETIC, in one place because four sites
+; write W_X and every one of them has to agree; the gate above is the fifth
+; site's half of it.
 ;
 ; The arithmetic moves LEFT, to the nearest x with x+1 a multiple of 8. Left
 ; because the caller has already clamped against the right edge and moving
@@ -959,12 +1237,8 @@ wm_snap_win:
 ; edge. That is the visible cost of the feature and it is 7 pixels.
 ; -----------------------------------------------------------------------------
 wm_snap_ax:
-    test word [bx+W_FLAGS], WF_SNAP
-    jz .out
-    test word [bx+W_FLAGS], WF_FULL
-    jnz .out
-    cmp byte [vid_mono], 0
-    je .out
+    call wm_snap_want
+    jnc .out
     push cx
     mov cx, ax
     inc cx
@@ -1543,9 +1817,10 @@ wm_paint_dmg:
     push bp
 
     mov byte [wm_dmg_fs], 0     ; a visible fullscreen window covers the
-    call wm_fs_vis              ; desktop, its drive zones, the dock and the
-    jnc .clamp                  ; bar - so none of those is drawn, and the
-    mov byte [wm_dmg_fs], 1     ; window pass is the whole of the work
+    mov byte [wm_dmg_dk], 0     ; desktop, its drive zones, the dock and the
+    call wm_fs_vis              ; bar - so none of those is drawn, and the
+    jnc .clamp                  ; window pass is the whole of the work
+    mov byte [wm_dmg_fs], 1
 
 .clamp:
     or ax, ax                   ; onto the live screen (SPEC.md 39.2)
@@ -1598,7 +1873,10 @@ wm_paint_dmg:
     jl .dock                    ; it has moved - the one case that owes the
     call dock_force             ; dock a whole redraw rather than a tile
 .dock:
-    call dock_paint
+    call dock_paint             ; CF = 1 if it actually put pixels on the strip
+    jnc .bar                    ; - and only then does a window sitting on the
+    mov byte [wm_dmg_dk], 1     ; strip owe a redraw (SPEC.md 11.91)
+.bar:
     call menu_draw_bar
 .wins:
     call wm_dmg_wins            ; mark and draw; leaves wm_dmg_mask for below
@@ -1646,8 +1924,26 @@ wm_paint_dmg:
 ; over a strip it has just redrawn.
 ; -----------------------------------------------------------------------------
 ; wm_dmg_wins - redraw every window that a damage rect touched, back to front
-; in:  wm_dmg_x1/y1/x2/y2 set; caller holds the gfx lock
-; out: wm_dmg_mask = which windows were drawn. All registers preserved.
+; in:  wm_dmg_x1/y1/x2/y2 set; [wm_dmg_dk] = 1 if the DOCK STRIP was just
+;      drawn, which damages every window sitting on it however far that is
+;      from the rect; caller holds the gfx lock
+; out: wm_dmg_mask = which windows were drawn. [wm_dmg_dk] consumed (a
+;      one-shot argument, so it can never be left set for the next caller).
+;      All registers preserved.
+;
+; The dock flag is an ARGUMENT and not something read from the strip, because
+; dock_paint is incremental (SPEC.md 30): it keys each tile on its icon and
+; its live/minimized/active state, so a quiet desktop costs no pixels at all.
+; This test used to be unconditional - the comment said "the dock is repainted
+; unconditionally above", which stopped being true when the tiles got their
+; keys - and the cost was one whole window repaint, W_PAINT included, on every
+; damage pass, for a strip that had not changed. A window dragged low enough
+; to sit on the strip therefore redrew itself every time a volume was mounted,
+; and the marking is transitive, so everything overlapping it went too.
+;
+; A wrong 1 costs a needless repaint; a wrong 0 leaves a window with the dock
+; drawn through it. So the flag is cleared HERE rather than by the caller: a
+; path that forgets to set it can only be one that did not draw the strip.
 ; -----------------------------------------------------------------------------
 wm_dmg_wins:
     push ax
@@ -1678,11 +1974,12 @@ wm_dmg_wins:
     call wm_win_rect            ; AX,BX,CX,DX = our rect, shadow included
     call wm_dmg_hit
     jc .mset
-    cmp dx, [vid_dock_y0]       ; the dock is repainted unconditionally above
-    jge .mset                   ; and it is drawn UNDER windows, so a window
-                                ; reaching into the strip is damaged by it -
-                                ; per window, rather than by widening the
-                                ; rect, which would erase the whole width
+    cmp byte [wm_dmg_dk], 0     ; the strip was drawn, and it is drawn UNDER
+    je .mnodock                 ; windows, so a window reaching into it is
+    cmp dx, [vid_dock_y0]       ; damaged by it - per window, rather than by
+    jge .mset                   ; widening the rect, which would erase the
+.mnodock:                       ; whole width. Gated, because dock_paint draws
+                                ; nothing at all on a quiet desktop
     mov word [wm_dmg_j], 0      ; not damaged directly - but a marked window
 .mbelow:                        ; below is redrawn WHOLE and would paint on us
     mov ax, [wm_dmg_j]
@@ -1749,7 +2046,8 @@ wm_dmg_wins:
     inc si
     jmp .dwin
 .wdone:
-    pop bp
+    mov byte [wm_dmg_dk], 0     ; consumed: a one-shot argument must not be
+    pop bp                      ; left set for a caller that draws no strip
     pop di
     pop si
     pop dx
@@ -1789,8 +2087,9 @@ wm_dock_under:
     mov [wm_dmg_x2], ax
     mov ax, [vid_hm1]
     mov [wm_dmg_y2], ax
-    call wm_dmg_wins
-.out:
+    mov byte [wm_dmg_dk], 1     ; dock_paint said CF = 1 above, so the strip
+    call wm_dmg_wins            ; really was drawn (the rect covers it anyway,
+.out:                           ; but the flag is an argument and says so)
     pop ax
     ret
 
@@ -2087,10 +2386,16 @@ wm_dmg_mask dw 0                ; bit n = window n must be redrawn
 wm_dmg_zn   db 0                ; bit n = drive zone n must be redrawn
 wm_dmg_fs   db 0                ; 1 = a fullscreen window is over the chrome,
                                 ; so this pass draws windows and nothing else
+wm_dmg_dk   db 0                ; 1 = the dock strip really was drawn, so a
+                                ; window sitting on it owes a redraw. A
+                                ; one-shot argument to wm_dmg_wins, which
+                                ; clears it on the way out
 wm_dmg_j    dw 0                ; the marking pass's inner index
 wm_hide_r   times 4 dw 0        ; wm_hide/wm_destroy: the vacated rect,
                                 ; banked across the record teardown
 
+wm_clipwin  dw 0                ; the window wm_clip_set was given, banked
+                                ; for cur_lazyck (SPEC.md 7.1.4)
 wm_clip_n   dw 0                ; rects in wm_clip_tab; 0 = disarmed.
                                 ; Initialized data, NOT .bss: every gfx_fill
                                 ; reads it, including the machine's first,
@@ -2109,7 +2414,8 @@ wm_clip_set:
     push cx
     push dx
     push si
-    mov word [wm_clip_n], 0
+    mov [wm_clipwin], bx        ; for cur_lazyck at .done (SPEC.md 7.1.4) -
+    mov word [wm_clip_n], 0     ; BX does not survive the fragment loop
 
     mov ax, [bx+W_X]            ; seed with the content rect - the same one
     mov dx, [bx+W_Y]            ; wm_draw_win white-fills before W_PAINT
@@ -2130,12 +2436,7 @@ wm_clip_set:
     jg .none                    ; degenerate content rect
     cmp dx, si
     jg .none
-    mov [wm_clip_tab+WCR_X1], ax
-    mov [wm_clip_tab+WCR_Y1], dx
-    mov [wm_clip_tab+WCR_X2], cx
-    mov [wm_clip_tab+WCR_Y2], si
-    mov word [wm_clip_n], 1
-
+    call wm_clip_seed
     call wm_clip_occl           ; subtract every visible window above us
     jc .none                    ; the list overflowed: degrade to a skip
     cmp word [wm_clip_n], 0
@@ -2145,6 +2446,17 @@ wm_clip_set:
     stc
     jmp short .out
 .done:
+    ; The region is armed, and from here to gfx_unlock every clipped primitive
+    ; is CONFINED to it - so if the cursor is outside this window the deferred
+    ; hide (SPEC.md 7.1.4) is not owed and the pointer stays on screen through
+    ; the whole refresh. This is the one place that can prove that, and it is
+    ; already on the path of all twelve background painters.
+    ;
+    ; The FAILURE path above deliberately does not check: with no region armed
+    ; every primitive falls to its own unconditional cur_unlazy, which is the
+    ; safe default and exactly what happened before any of this.
+    mov si, [wm_clipwin]        ; the window, banked at entry: BX does not
+    call cur_lazyck             ; survive the fragment loop
     clc
 .out:
     pop si
@@ -2249,11 +2561,7 @@ wm_covered:
     dec cx                      ; fullscreen has no shadow (SPEC.md 11.2)
     dec si
 .seed:
-    mov [wm_clip_tab+WCR_X1], ax
-    mov [wm_clip_tab+WCR_Y1], dx
-    mov [wm_clip_tab+WCR_X2], cx
-    mov [wm_clip_tab+WCR_Y2], si
-    mov word [wm_clip_n], 1
+    call wm_clip_seed
     call wm_clip_occl
     jc .no
     cmp word [wm_clip_n], 0
@@ -2268,6 +2576,83 @@ wm_covered:
     pop si
     pop dx
     pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_clip_seed - internal: arm the list with one rect and nothing subtracted
+; in:  AX = x1, DX = y1, CX = x2, SI = y2 (inclusive, and non-degenerate -
+;      every caller has already tested that in its own terms)
+; out: [wm_clip_n] = 1; all registers preserved, flags included
+;
+; The three region builds below start here and then differ only in WHICH
+; occluders they subtract, which is the whole of what separates them.
+; -----------------------------------------------------------------------------
+wm_clip_seed:
+    mov [wm_clip_tab+WCR_X1], ax
+    mov [wm_clip_tab+WCR_Y1], dx
+    mov [wm_clip_tab+WCR_X2], cx
+    mov [wm_clip_tab+WCR_Y2], si
+    mov word [wm_clip_n], 1
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_clip_rect - arm clipping to a bare screen rect's visible region
+; in:  AX = x1, BX = y1, CX = x2, DX = y2 (inclusive); caller HOLDS the gfx
+;      lock
+; out: CF = 1 the region needs more than WM_CLIP_MAX rects - nothing is armed
+;          and the caller must fall back to something unconditional;
+;      CF = 0 armed, and ZF = 1 means the rect is WHOLLY covered (the list is
+;          empty, i.e. disarmed: every pixel of it belongs to some window).
+;      All registers preserved; the region dies at the next gfx_unlock.
+;
+; wm_clip_set's arithmetic for something that is not a window. The DESKTOP is
+; what needs it (SPEC.md 26.2): it is below every window, so there is no
+; z-order position to find and no "above us" to walk from - every visible
+; window is an occluder. That is the whole difference, and it is why this
+; walks wm_wins directly instead of going through wm_clip_occl.
+;
+; The two degradations are wm_clip_set's, split apart because a caller can
+; act on them differently: an overflow says nothing valid is known (repaint
+; the world), while an empty list is a FACT (draw nothing at all).
+; -----------------------------------------------------------------------------
+wm_clip_rect:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov word [wm_clip_n], 0
+    cmp ax, cx
+    jg .done                    ; degenerate rect: read as wholly covered
+    cmp bx, dx
+    jg .done
+    mov si, dx                  ; wm_clip_seed's argument order, which is
+    mov dx, bx                  ; wm_clip_set's and wm_covered's
+    call wm_clip_seed
+
+    mov bx, wm_wins             ; BX walks the table and the END is the bound,
+.win:                           ; the old desk_zone_redraw idiom: wm_clip_sub
+    test word [bx+W_FLAGS], 2   ; reads through BX and preserves it
+    jz .next
+    call wm_clip_sub            ; subtract it, shadow included. An emptied
+    jc .over                    ; list needs no early exit - the subtractions
+.next:                          ; that follow walk it zero times
+    add bx, WIN_SIZE
+    cmp bx, wm_wins + MAX_WIN*WIN_SIZE
+    jb .win
+.done:
+    cmp word [wm_clip_n], 0     ; ZF = 1: wholly covered. clc leaves it alone,
+    clc                         ; and so does every pop below
+    jmp short .out
+.over:
+    mov word [wm_clip_n], 0
+    stc
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -3027,6 +3412,11 @@ section .bss
 wm_wins:    resb MAX_WIN * WIN_SIZE ; 12 windows x WIN_SIZE bytes
 wm_zord:    resb MAX_WIN            ; window indices, [0] = backmost
 wm_zn:      resb 1                  ; entries in wm_zord
+wm_zoomr:   resb MAX_WIN * ZR_SIZE  ; per slot: the USER state a zoomed window
+                                    ; goes back to (SPEC.md 11.95). A side
+                                    ; table, not four more words in the record,
+                                    ; because WIN_SIZE is the stride every
+                                    ; reader of a window pays
 wm_about:   resw MAX_WIN            ; per-slot About handler offset, 0 = none
                                     ; (SPEC.md 12.2); inside wm_init's zero
                                     ; run, so a fresh slot has no About

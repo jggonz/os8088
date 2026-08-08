@@ -44,7 +44,16 @@
                                 ; the kernel exactly as a package does
 
 ; --- driver classes, mirrored from kernel/driver.inc -------------------------
+; A class is also a PUBLICATION SLOT: one driver of each class may be
+; attached at a time, and each has its own copy of the service table below,
+; so a sound driver and a disk driver do not disconnect one another.
 DRVC_SOUND   equ 1
+DRVC_DISK    equ 2              ; block volumes: hard disks (SPEC.md 51.8)
+DRVC_DEBUG   equ 3              ; the serial monitor (SPEC.md 58): no service
+                                ; the kernel dispatches, only a Control Panel
+                                ; page - but a class of its own, because a
+                                ; class is the publication slot and sharing
+                                ; one disconnects the driver already in it
 
 ; --- the capability bits a sound driver may ADD (SPEC.md 34.2) ---------------
 ; os88api.inc publishes the two the resident kernel already has (TONE and
@@ -66,6 +75,18 @@ SND_RT_SB    equ 3              ; Sound Blaster - FM and streams
 DRVV_ATTACH  equ 0              ; out CF=0 and SI = your service table;
                                 ;     CF=1 = no hardware, nothing hooked
 DRVV_DETACH  equ 1              ; out: nothing. Cannot fail.
+DRVV_READY   equ 3              ; "your services are published; the kernel can
+                                ; take your calls now". Sent ONCE, right after
+                                ; attach returns, and it is the earliest point
+                                ; at which you may call anything that comes
+                                ; back through a fence - OSAPI_DRV_TASK,
+                                ; OSAPI_VOL_*, anything keyed on the
+                                ; publication slot. From ATTACH those all
+                                ; refuse, because the slot is armed afterwards
+                                ; and deliberately: a worker or a volume
+                                ; created by an attach that then says no would
+                                ; outlive the image. Optional - return if you
+                                ; have nothing to do here.
 DRVV_TIER    equ 2              ; in AH = how much of yourself the user wants
                                 ; (SPEC.md 34.8); out CF=0 and SI = your
                                 ; service table, which the kernel RE-COPIES
@@ -95,6 +116,12 @@ DRVV_TIER    equ 2              ; in AH = how much of yourself the user wants
 ; with the string it already has for a refused LOAD - one vocabulary for both.
 DRVE_MEM     equ 4              ; the heap cannot fund that tier right now
 DRVE_HW      equ 5              ; the hardware that tier needs is not there
+DRVE_BUSY    equ 6              ; ...or it IS there and something the kernel
+                                ; already owns has its port or its IRQ. A
+                                ; separate code because the two send the user
+                                ; to different places: DRVE_HW means buy or
+                                ; fit a card, this means move a jumper
+                                ; (SPEC.md 58.2)
 
 ; --- the service table you return in SI at attach ----------------------------
 ; Offsets in YOUR segment. The kernel copies the whole thing once, so it may
@@ -136,7 +163,47 @@ DSV_RELINST  equ 8
 DSV_NAME     equ 10
 DSV_TONE     equ 12
 DSV_TIERS    equ 14
-DSV_SIZE     equ 16
+DSV_BLK      equ 16             ; DRVC_DISK: the block transport (below)
+DSV_CPNAME   equ 18             ; -> a NUL Control Panel page name, in YOUR
+                                ; segment; 0 = no page. The kernel STAGES it,
+                                ; because cp_list draws it with font_str and
+                                ; font_str reads through DS
+DSV_CPPAINT  equ 20             ; near proc: that page's paint
+DSV_CPCLICK  equ 22             ; near proc: that page's click
+DSV_SIZE     equ 24
+
+; --- DSV_BLK: one driver-backed volume's sectors (SPEC.md 51.8) -------------
+;   in   AL = 0 read / 1 write
+;        AH = YOUR volume handle, the one you passed to OSAPI_VOL_ADD
+;        SI = the VOLUME-RELATIVE LBA, 16-bit - the kernel knows nothing
+;             about partitions, so you add your own 32-bit base
+;        CX = sector count
+;        DX:BX = the buffer. DX and NOT ES, because the buffer is in the
+;             kernel's low segment, its FAT window or a heap claim and never
+;             in your segment or the kernel's - so ES cannot carry its usual
+;             meaning here, and `mov es, dx` is yours to do
+;   out  CF = 0 done; CF = 1 and AL = an int 13h status byte (03h = write
+;             protected, anything else = a hard error)
+;
+; A volume is capped at 65,535 sectors (31.99MB) by the kernel's own BPB
+; rule 8, which is also the DOS 3.3 partition limit these machines ran. More
+; capacity is more partitions, each its own volume and its own drive letter.
+
+; --- the Control Panel page you own (SPEC.md 31.9) --------------------------
+; Publish DSV_CPNAME and your page appears in the panel's list - and only
+; while you are loaded, which falls out of the publication slot being cleared
+; at detach rather than being arranged anywhere.
+;
+;   paint   DI = pane left, DX = pane top
+;   click   DI = pane left, DX = pane top, CX = rel x, BX = rel y
+;
+; The pane is 221 x 121 px - 27 characters by 13 rows - and the panel is not
+; resizable, so anything bigger belongs in a window of your own.
+;
+; Everything a package callback must obey applies: the gfx lock is HELD (draw
+; straight through the primitives, and NEVER take it), ES is KERNEL_SEG, and
+; you must repaint yourself because the kernel does not repaint after you
+; return. A greyed control follows SPEC.md 47 - a FLAG, not a colour.
 
 ; --- a driver's worker task (SPEC.md 51.7) -----------------------------------
 ; OSAPI_TASK_SPAWN is not available to you: its fence is a chain of tests on
@@ -160,6 +227,38 @@ DSV_SIZE     equ 16
 ;      run queue leaves the scheduler holding a stack frame whose CS points
 ;      at memory the next heap claim takes.
 %define OSAPI_DRV_TASK      KERNEL_SEG:0x0248
+
+; --- volumes a DRVC_DISK driver mounts (SPEC.md 18.7/51.8) -------------------
+; A volume is a small INDEX - 0 = A:, 1 = B:, 2 = C: - and the desktop zone,
+; the drive letter and the file manager all fall out of it. The fence on all
+; three is the same identity test OSAPI_DRV_TASK uses: your segment must be
+; the segment of the driver whose DISK services are published.
+;
+;   OSAPI_VOL_ADD    in  AL = your own volume handle (whatever you like: it
+;                            comes back in DSV_BLK's AH)
+;                        CX = the volume's sector count, for the kernel's own
+;                            "does this BPB claim to be bigger than its
+;                            partition" check
+;                        DX = a listing claim's segment, or 0 for the kernel's
+;                            32-entry floor. HDD_LISTKB below is its size
+;                        SI = a NUL desktop label in YOUR segment (0 = the
+;                            kernel derives 'Disk X' from the index)
+;                    out CF = 0 and AL = the volume index; CF = 1 = no room
+;   OSAPI_VOL_DEL    in  AL = a volume index you registered
+;   OSAPI_VOL_MOUNT  in  AL = a volume index; out CF = 1 = not a readable
+;                        FAT12/16 volume. UI-TASK CONTEXT ONLY, like every
+;                        file slot: it takes the scheduler lock around int 13h
+;   OSAPI_VOL_PAINT  repaint the desktop's drive zones. It takes the gfx lock
+;                        ITSELF, so never call it from a page click - defer it
+;                        the way the Control Panel defers its own repaints
+; The four slots themselves are published by os88api.inc, which this file
+; includes: a slot number belongs in one place (SPEC.md 20.8).
+
+; The listing claim a mounted volume wants (SPEC.md 22.6): DSK_VENT entries of
+; 32 bytes followed by the same number of 64-byte icon slots. Claim it before
+; OSAPI_VOL_ADD and hand over the segment; pass 0 instead and the volume lists
+; into the kernel's own 32-entry buffers, which works and shows fewer files.
+HDD_LISTKB   equ 6
 
 ; --- memory a bus-master can reach (SPEC.md 50.3/51.6) -----------------------
 ; Everything in the app SDK's memory section applies to you unchanged - your

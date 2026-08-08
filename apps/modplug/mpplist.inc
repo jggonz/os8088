@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/modplug/mpplist.inc
 ;
-; ModPlug Player's PlayList Editor (SPEC.md 52.8). Prefix mppl_.
+; ModPlug Player's PlayList Editor (SPEC.md 56.8). Prefix mppl_.
 ;
 ; ModPlugPlayer's PlayListEditorWindow.ui is a table with Add... / Remove /
 ; Save List / Load List / Shuffle List / Sort List / Clear List down one side.
@@ -27,7 +27,7 @@
 ;     A playlist file would be a format this OS has nowhere else, and SPEC.md
 ;     47's rule 4 wants the reason drawn rather than the control hidden.
 ;
-; Like the Setup window it is UNBOUND (SPEC.md 52.1), so its close and
+; Like the Setup window it is UNBOUND (SPEC.md 56.1), so its close and
 ; minimize boxes are both a plain wm_hide, and it draws with mppui.inc's
 ; helpers pointed at its own origin.
 ; =============================================================================
@@ -403,11 +403,12 @@ mppl_draw_buttons:
     call mppl_btn_live              ; CF=1: this button cannot act right now
     pop bx
     pop ax
-    mov byte [mppl_ink], CBLACK
-    jnc .lab
-    mov byte [mppl_ink], CDGRAY     ; greyed WHOLE, per SPEC.md 47 - the face
-.lab:                               ; keeps its bevel so it still reads as a
-    push si                         ; button, and the caption carries the why
+    call mppu_dink                  ; greyed WHOLE, per SPEC.md 47 - the face
+    mov [mppl_ink], al              ; keeps its bevel so it still reads as a
+                                    ; button, and the caption carries the why.
+                                    ; The pen, not just the colour: at 1bpp the
+                                    ; [gfx_dis] flag is the whole difference
+    push si
     mov ax, si
     shl ax, 1
     mov di, ax
@@ -423,7 +424,8 @@ mppl_draw_buttons:
     inc si
     cmp si, MPPL_NBTN
     jb .b
-    pop di
+    call mppu_dpen_off              ; the pen never outlives the routine that
+    pop di                          ; set it, whichever branch each button took
     pop si
     pop dx
     pop cx
@@ -488,7 +490,7 @@ mppl_btn_live:
 ; THE WINDOW PASSED IS THE PLAYER'S, not this editor's, and that is a hard
 ; requirement rather than a convenience: fdlg_open calls inst_win_owner on it
 ; and refuses outright when the answer is "nobody" (SPEC.md 38). This window
-; is deliberately unbound (SPEC.md 52.1) so that its close box is a plain
+; is deliberately unbound (SPEC.md 56.1) so that its close box is a plain
 ; wm_hide - which means it can never be the window a file dialog is opened
 ; against. The bound player window can, and the completion proc does not care
 ; which it was told: it reads [mpp_addpl] to know what the answer is for.

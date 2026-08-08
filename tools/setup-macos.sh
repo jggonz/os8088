@@ -6,12 +6,12 @@
 # Four things get installed and one gets DOWNLOADED, which is the whole
 # reason this script exists:
 #
-#   nasm        the assembler, and it must be 3.0+ (see the version gate
-#               below - a 2.x nasm fails this tree in a way that reads like
-#               broken source rather than a stale tool)
+#   nasm        the assembler (see the version gate below - the 3.0 floor
+#               this script shipped with does NOT apply to this branch, and
+#               the comment there says why)
 #   qemu        qemu-system-i386, for `make run` / `make test`
 #   python3     the host-side tooling in tools/ - stdlib only, no pip
-#   86Box       optional, for `make xt` and the six other period machines
+#   86Box       optional, for `make xt` and the nine other period machines
 #   86Box ROMs  NOT shipped with 86Box, from github.com/86Box/roms. Without
 #               them 86Box starts and every machine in vm/ fails to boot.
 #
@@ -40,7 +40,20 @@ ROM_DIR="$HOME/Library/Application Support/net.86box.86Box/roms"
 ROM_DIR_LEGACY="$HOME/Library/Application Support/86Box/roms"
 
 # The minimum nasm this tree assembles under (CONTRIBUTING.md).
-NASM_MIN_MAJOR=3
+#
+# THIS IS 2 HERE AND 3 ON main, and the difference is real rather than a
+# merge accident. The 3.0 floor exists for one construct - `call far SEG:OFF`
+# as an IMMEDIATE, which every nasm 2.11 through 2.16.03 rejects with
+# "mismatch in operand sizes" - and this branch has none: SPEC.md 33 retired
+# far code (kernel/farcall.inc with it) and SPEC.md 28 moved the Task Manager
+# out to apps/taskmgr, and those two files were where the form lived. Every
+# far call left is memory-indirect (`call far [bx+DRVR_DISP]`), which 2.x has
+# always taken. Verified rather than assumed: nasm 2.16.01 builds this tree
+# with zero warnings and reproduces all 41 artifacts the branch used to ship
+# byte for byte. Older 2.x is untested, so the gate still exists - and if the
+# immediate form ever comes back, this goes to 3 and the message below stops
+# being a footnote.
+NASM_MIN_MAJOR=2
 
 # The ROM subdirectories vm/*/86box.cfg actually names. Checked after the
 # download, because a truncated tarball extracts happily and then every
@@ -195,13 +208,12 @@ if [ "$ROMS_ONLY" = 0 ]; then
 	brew_install qemu    qemu-system-i386
 	brew_install python3 python3
 
-	# The nasm version gate. This is the single most valuable check in
-	# the script: kernel/farcall.inc and kernel/taskmgr.inc spell their
-	# far jumps `call far SEG:OFF`, which EVERY nasm 2.x - 2.11 through
-	# 2.16.03 - rejects with "mismatch in operand sizes". The failure
-	# reads like broken source, not a stale assembler, and Apple's
-	# /usr/local/bin or an old conda env shadowing Homebrew's nasm is
-	# the usual way to end up there.
+	# The nasm version gate. It matters much less on this branch than on
+	# main - see NASM_MIN_MAJOR above for why the floor is 2 here - but a
+	# shadowed nasm is still the usual way to end up with a tool-shaped
+	# failure that reads like broken source, so the version is reported
+	# either way and Apple's /usr/local/bin or an old conda env is the
+	# first place to look when one turns up.
 	step "Checking nasm version (this tree needs ${NASM_MIN_MAJOR}.0 or newer)"
 	if [ "$DRY_RUN" = 1 ] && ! command -v nasm >/dev/null 2>&1; then
 		warn "nasm not installed yet; the version gate runs on the real pass"
@@ -213,8 +225,8 @@ if [ "$ROMS_ONLY" = 0 ]; then
 		if [ "$NASM_MAJOR" -lt "$NASM_MIN_MAJOR" ]; then
 			printf '\n'
 			warn "nasm $NASM_VER at $NASM_BIN is too old."
-			warn "Every nasm 2.x rejects \`call far SEG:OFF\` with"
-			warn "\"mismatch in operand sizes\" - it is the TOOL, not the source."
+			warn "When an assembly failure here looks like broken source,"
+			warn "suspect the TOOL first - a shadowed nasm is the usual cause."
 			if BREW_NASM="$(brew --prefix nasm 2>/dev/null)/bin/nasm" && [ -x "$BREW_NASM" ]; then
 				warn "Homebrew's nasm is at $BREW_NASM ($("$BREW_NASM" -v | awk '{print $3}'))"
 				warn "and is being shadowed. Put $(dirname "$BREW_NASM") ahead of"
@@ -346,7 +358,7 @@ if [ "$WANT_86BOX" = 1 ] || [ "$ROMS_ONLY" = 1 ]; then
 fi
 
 # --------------------------------------------------------------------------
-# 6. smoke test: actually build the four floppies
+# 6. smoke test: actually build the six floppies
 # --------------------------------------------------------------------------
 
 if [ "$ROMS_ONLY" = 0 ] && [ "$WANT_BUILD" = 1 ]; then
@@ -355,7 +367,8 @@ if [ "$ROMS_ONLY" = 0 ] && [ "$WANT_BUILD" = 1 ]; then
 		printf '    %s+%s make -C %s\n' "$Y" "$Z" "$REPO"
 	else
 		( cd "$REPO" && make ) || die "\`make\` failed - see the output above"
-		for img in build/os8088.img build/os8088-360.img build/apps.img build/apps360.img; do
+		for img in build/os8088.img build/os8088-720.img build/os8088-360.img \
+		           build/apps.img build/apps720.img build/apps360.img; do
 			[ -f "$REPO/$img" ] && ok "$img ($(stat -f%z "$REPO/$img") bytes)" \
 			                    || warn "$img was not produced"
 		done
@@ -382,9 +395,11 @@ $B==> Ready.$Z
     VM directory.
 
   - 86Box rewrites vm/*/86box.cfg when it exits, so the configs in this repo
-    drift. The Makefile strips the wp:// write-protect prefix off the DATA
-    floppy at every launch for exactly that reason; \`git diff vm/\` after a
-    session is normal.
+    drift. The Makefile strips the wp:// write-protect prefix off BOTH
+    floppies at every launch for exactly that reason - the system disk is a
+    writable FAT12 volume too and SYSTEM.CFG lives in its root, so protected
+    it silently loses every Control Panel setting at reboot (SPEC.md 19.3).
+    \`git diff vm/\` after a session is normal.
 
   If macOS refuses to open 86Box the first time ("cannot be opened because
   the developer cannot be verified"), clear the quarantine flag:

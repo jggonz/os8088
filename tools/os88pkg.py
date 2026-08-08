@@ -29,6 +29,8 @@ VERSION = 3
 ENTRY_MIN = 0x20          # first byte after the header
 ENTRY_MIN_ICON = 0x60     # first byte after the embedded icon (flags bit 0)
 ICON_END = 96             # header (32) + icon block (64)
+ASSOC_SIZE = 16           # the association block (SPEC.md 54.6), flags bit 1
+ASSOC_MAXN = 5            # ...holding a count byte and up to five extensions
 APP_MAX_SIZE = 0xF000     # image + bss budget: 60KB (one segment's worth -
                           # the region is a heap claim, so the real limit is
                           # also whatever the heap has contiguous)
@@ -85,8 +87,8 @@ def main() -> int:
     if version != VERSION:
         fail(f"bad version {version} (want {VERSION}; rebuild against the "
              "v3 os88api.inc)")
-    if flags & 0xFE:
-        fail(f"flags 0x{flags:02X} has reserved bits set (bits 1-7 must be 0)")
+    if flags & 0xFC:
+        fail(f"flags 0x{flags:02X} has reserved bits set (bits 2-7 must be 0)")
     if link != 0:
         fail(f"bad link base 0x{link:04X}: a v3 package links at org 0")
     if a[12:16] != DISPATCH:
@@ -95,7 +97,32 @@ def main() -> int:
              "against an older os88api.inc")
     if image != len(a):
         fail(f"image size field {image} != actual file size {len(a)}")
-    entry_min = ENTRY_MIN_ICON if flags & 1 else ENTRY_MIN
+    # The association block (SPEC.md 54.6) follows the icon, or the header when
+    # there is none - so it moves where the code can start. This is the whole
+    # of the format change and it needs NO version bump: everything an older
+    # kernel reads is unmoved, and LD_H_ENTRY is absolute, so where the code
+    # begins is told rather than derived.
+    assoc_base = ICON_END if flags & 1 else HEADER_SIZE
+    entry_min = ICON_END if flags & 1 else ENTRY_MIN
+    if flags & 2:
+        entry_min = assoc_base + ASSOC_SIZE
+        if image < entry_min:
+            fail(f"flags bit 1 set but the image is {image} bytes; the "
+                 f"association block needs at least {entry_min}")
+        n = a[assoc_base]
+        if n > ASSOC_MAXN:
+            fail(f"association block declares {n} extensions, at most "
+                 f"{ASSOC_MAXN} fit")
+        for i in range(n):
+            ext = a[assoc_base + 1 + 3 * i:assoc_base + 4 + 3 * i]
+            if any(not 0x20 <= b <= 0x7E for b in ext):
+                fail(f"association {i}: extension bytes must be printable")
+            if ext.decode("ascii") != ext.decode("ascii").upper():
+                fail(f"association {i}: {ext!r} must be uppercase - the mount "
+                     f"compares exactly (SPEC.md 19.1)")
+            if ext == b"O88":
+                fail("association: O88 cannot be declared - a package is "
+                     "never opened through an association")
     if not (entry_min <= entry < image):
         fail(f"entry +0x{entry:04X} outside [0x{entry_min:04X}, "
              f"0x{image:04X})")
@@ -113,8 +140,9 @@ def main() -> int:
         fail(f"cannot write {args.output}: {e}")
 
     icon = "yes" if flags & 1 else "no"
+    assoc = a[assoc_base] if flags & 2 else 0
     print(f"os88pkg: {name!r} entry=+0x{entry:04X} image={image} bss={bss} "
-          f"icon={icon} -> {args.output}")
+          f"icon={icon} assoc={assoc} -> {args.output}")
     return 0
 
 

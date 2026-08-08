@@ -102,15 +102,20 @@ bb_mono         db 1            ; are all four back-buffer planes identical?
 ; buffer is armed - which is the difference between "150KB reserved from
 ; boot" and "150KB spent while you are using it".
 ; in:       -
-; out:      [bb_avail] = 1 on a colour adapter
+; out:      [bb_avail] = 1 on a colour adapter, [bb_mono] retired on a 1bpp one
 ; clobbers: flags
 ; -----------------------------------------------------------------------------
 bb_init:
     cmp byte [vid_mono], 0      ; a 1bpp adapter has no back buffer to offer:
-    jne .done                   ; [bb_on] is already 1 and means something
+    jne .mono                   ; [bb_on] is already 1 and means something
     mov byte [bb_avail], 1      ; else entirely (SPEC.md 39.5)
-.done:
     ret
+.mono:
+    mov byte [bb_mono], 0       ; ...and "all four planes are identical" is a
+    ret                         ; question about a buffer that can never be
+                                ; armed here, so retiring it at boot is what
+                                ; makes bb_mono_chk's early-out free on the
+                                ; machine that needs it (SPEC.md 39.5)
 
 ; -----------------------------------------------------------------------------
 ; bb_canfit - is there room in the heap for a back buffer right now?
@@ -292,9 +297,18 @@ osapi_gfx_dbuf:
 ; buffering can be switched on at any time (SPEC.md 31.3) and bb_sync seeds
 ; the planes from VRAM, which is only plane-identical if nothing but 0/15
 ; has ever been drawn - including while the buffer was off.
+;
+; THE FLAG IS ONE-WAY, so testing it first is not a shortcut with a caveat -
+; a cleared flag has nothing left to decide. That is what makes this routine
+; free where it is paid for most: on a 1bpp adapter bb_init retires it at
+; boot (no buffer can ever be armed), so every fill and every glyph on the
+; 4.77MHz machine costs a compare and a branch instead of eight instructions
+; (PERFORMANCE.md Part 2 - the per-call floor).
 ; clobbers: flags only
 ; -----------------------------------------------------------------------------
 bb_mono_chk:
+    cmp byte [bb_mono], 0       ; already retired? then there is nothing this
+    je .out                     ; routine can do - and on mono, never was
     push ax
     mov al, [gfx_color]
     and al, 0x0F
@@ -304,6 +318,7 @@ bb_mono_chk:
     mov byte [bb_mono], 0
 .ok:
     pop ax
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -354,9 +369,16 @@ bb_dirty:
 ;                 (vga_lcol/vga_span/vga_y1/vga_rows must be valid).
 ;                 Callers invoke it straight after vga_rect_setup, while
 ;                 AX..DX are dead - so unlike bb_dirty it may clobber them.
+;
+; The [bb_dbl] test that bb_dirty makes is repeated HERE, at the top, because
+; with no buffer armed the eight instructions below compute a rectangle that
+; bb_dirty's first compare then throws away - on every fill, on every machine,
+; and unconditionally on the two mono adapters where a buffer can never exist.
 ; clobbers: ax, bx, cx, dx, flags
 ; -----------------------------------------------------------------------------
 bb_dirty_rect:
+    cmp byte [bb_dbl], 0
+    je .out
     mov ax, [vga_lcol]
     mov bx, ax
     add bx, [vga_span]
@@ -365,6 +387,8 @@ bb_dirty_rect:
     add dx, [vga_rows]
     dec dx
     jmp bb_dirty                ; its ret returns to our caller
+.out:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; gfx_scroll - vertical scroll blit (SPEC.md 5.5; API slot 0x01E0)
@@ -394,6 +418,7 @@ bb_dirty_rect:
 ;                  banked layouts by construction.
 ; -----------------------------------------------------------------------------
 gfx_scroll:
+    call cur_unlazy             ; off the clip list (SPEC.md 11.3): 7.1.4
     push ax
     push bx
     push cx
@@ -582,6 +607,9 @@ bbs_bankcopy:
 gfx_flush:
     cmp byte [bb_dbl], 0        ; NOT [bb_on]: on mono that is 1 and there is
     je .off                     ; no back buffer to copy from
+    call cur_unlazy             ; the flush writes an arbitrary dirty rect
+                                ; straight to VRAM, and menu_track/ui_drag/
+                                ; fsx_wait call it MID-hold (SPEC.md 7.1.4)
     push ax
     push bx
     push cx
@@ -688,16 +716,19 @@ BBM_SOLID equ 0
 BBM_GRAY  equ 1
 BBM_XOR   equ 2
 
-bb_fill:
-    mov byte [bb_mode], BBM_SOLID
+; SOLID is the one that falls through, because it is the one the machine
+; spends its day on: every window background, every glyph cell's erase, every
+; frame. XOR pays the jump instead - selection bands and drag outlines.
+bb_xor_fill:
+    mov byte [bb_mode], BBM_XOR
     jmp bb_rect
 
 bb_fill_gray:
     mov byte [bb_mode], BBM_GRAY
     jmp bb_rect
 
-bb_xor_fill:
-    mov byte [bb_mode], BBM_XOR
+bb_fill:
+    mov byte [bb_mode], BBM_SOLID
     ; fall through to bb_rect
 
 bb_rect:
@@ -712,17 +743,13 @@ bb_rect:
     call vga_rect_setup
     jc .done
     call bb_dirty_rect
-    mov al, 0xAA                ; gray pattern for the top clipped row
-    test byte [vga_y1], 1
-    jz .par
-    mov al, 0x55
-.par:
-    mov [bb_pat], al            ; (solid overwrites this per plane below;
-    mov byte [bb_altm], 0       ;  XOR ignores it)
-    cmp byte [bb_mode], BBM_GRAY
-    jne .planes
-    mov byte [bb_altm], 0xFF    ; gray: AA <-> 55 each row
-.planes:
+    mov byte [bb_altm], 0
+    cmp byte [bb_mode], BBM_GRAY ; ONLY gray starts from the dither byte. Solid
+    jne .planes                  ; overwrote it per plane below (bb_ink), and
+    call bb_parity               ; its own dither branch stages it there; XOR
+    mov byte [bb_altm], 0xFF     ; never reads [bb_pat] at all. Staging it for
+.planes:                         ; all three cost every solid fill five
+                                 ; instructions it threw away
     mov dx, [vid_rseg]          ; DX = plane segment - the back buffer on VGA,
     mov bl, [gfx_color]         ; the framebuffer itself on mono (SPEC.md 39.3)
     mov bh, [vid_planes]        ; BH = plane counter: 4 or 1
@@ -748,6 +775,21 @@ bb_rect:
     ret
 
 ; -----------------------------------------------------------------------------
+; bb_parity - internal: [bb_pat] = the 50% dither byte for the rect's top
+;             row, which the row loops then alternate through [bb_altm].
+; in:       [vga_y1] valid
+; clobbers: AL, flags
+; -----------------------------------------------------------------------------
+bb_parity:
+    mov al, 0xAA
+    test byte [vga_y1], 1
+    jz .set
+    mov al, 0x55
+.set:
+    mov [bb_pat], al
+    ret
+
+; -----------------------------------------------------------------------------
 ; bb_ink - internal: solid mode's byte pattern for the pass about to run
 ;
 ; VGA: the plane's own bit of [gfx_color], consumed LSB-first out of BL -
@@ -761,7 +803,7 @@ bb_rect:
 ;
 ; in:       BL = the colour's remaining bits (VGA path only)
 ; out:      [bb_pat], possibly [bb_altm]; BL shifted on the VGA path
-; clobbers: AL, flags
+; clobbers: AL, SI, flags
 ; -----------------------------------------------------------------------------
 bb_ink:
     cmp byte [vid_mono], 0
@@ -771,14 +813,17 @@ bb_ink:
     mov [bb_pat], al
     ret
 .mono:
-    mov al, [gfx_color]
-    call gfx_ink
-    cmp al, 1
+    mov al, [gfx_color]         ; gfx_ink's table read, inlined through SI -
+    and ax, 15                  ; it indexes through BX, and BX is the plane
+    mov si, ax                  ; counter and the colour bits here. SI is dead
+    mov al, [si + gfx_inktab]   ; between vga_rect_setup and bb_plane_op, which
+    cmp al, 1                   ; loads it itself
     je .dither
     mov [bb_pat], al
     ret
 .dither:
-    mov byte [bb_altm], 0xFF    ; keep bb_rect's AA/55 and alternate it
+    call bb_parity              ; the AA/55 byte, and then alternate it
+    mov byte [bb_altm], 0xFF
     ret
 
 ; -----------------------------------------------------------------------------
@@ -787,8 +832,17 @@ bb_ink:
 ; in:       ES = plane segment; [bb_mode]/[bb_pat]/[bb_altm]; vga_* rect
 ;           scratch from vga_rect_setup
 ; clobbers: ax, cx, si, di, bp, flags (preserves BX, DX)
+;
+; It banks BX and DX ONCE per plane so that bb_col - which used to save five
+; registers on each of its two calls - can have the run of the register file
+; and save none, and so that this routine's own interior loop can hold
+; gfx_nextrow's two parameters in registers (SPEC.md 39.3). A row step was a
+; near call plus two CS-overridden memory reads; it is three register
+; instructions now, and a fill walks its rows THREE times.
 ; -----------------------------------------------------------------------------
 bb_plane_op:
+    push bx
+    push dx
     mov ah, [vga_lmsk]          ; left edge column (whole rect if 1 byte wide)
     mov di, [vga_off]
     call bb_col
@@ -799,12 +853,15 @@ bb_plane_op:
     mov di, [vga_off]
     add di, bp
     call bb_col
+    mov bp, [vga_span]          ; bb_col owns BP too (it parks the wrap bit)
     dec bp                      ; interior bytes per row
     jz .out
     mov di, [vga_off]
     inc di
     mov si, [vga_rows]
     mov ah, [bb_pat]
+    mov bx, [cs:vid_rowadd]     ; gfx_nextrow's two parameters, hoisted out of
+    mov dx, [cs:vid_wrapbit]    ; the row loop and inlined below
     cmp byte [bb_mode], BBM_XOR
     je .xrow
 .irow:
@@ -817,7 +874,11 @@ bb_plane_op:
     stosb                       ; odd interior width: one tail byte
 .ieven:
     pop di
-    call gfx_nextrow
+    add di, bx                  ; gfx_nextrow, inlined (see the note above)
+    test di, dx
+    jz .inw
+    add di, [cs:vid_wrapfix]
+.inw:
     xor ah, [bb_altm]           ; gray alternates, solid stays
     dec si
     jnz .irow
@@ -830,10 +891,16 @@ bb_plane_op:
     inc di
     loop .xbyte
     pop di
-    call gfx_nextrow
+    add di, bx
+    test di, dx
+    jz .xnw
+    add di, [cs:vid_wrapfix]
+.xnw:
     dec si
     jnz .xrow
 .out:
+    pop dx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -841,20 +908,24 @@ bb_plane_op:
 ;          XOR mode: dest ^= mask. Else: dest = (dest & ~mask) |
 ;          (pattern & mask), pattern xor-stepped by [bb_altm] per row.
 ; in:       AH = mask, DI = top byte, ES = plane; [bb_mode]/[bb_pat]/[bb_altm]
-; clobbers: flags only
+; clobbers: AL, BX, CX, DX, SI, DI, BP, flags (AH and ES survive)
+;
+; It preserves NOTHING, deliberately: bb_plane_op banks BX/DX for the whole
+; plane and reloads AH, DI, SI and BP itself around every call, so the five
+; push/pop pairs this used to open with were saving registers their only
+; caller was about to overwrite - a fifth of the cost of drawing one pixel
+; (PERFORMANCE.md Part 2). SI and BP then pay for themselves by holding
+; gfx_nextrow's step and wrap bit across the row loop.
 ; -----------------------------------------------------------------------------
 bb_col:
-    push ax
-    push bx
-    push cx
-    push dx
-    push di
     mov bl, ah
     not bl                      ; BL = ~mask
     mov ch, [bb_pat]            ; CH = running pattern
     mov cl, [bb_altm]
     mov dx, [vga_rows]
-    cmp byte [bb_mode], BBM_XOR
+    mov si, [cs:vid_rowadd]     ; gfx_nextrow, hoisted and inlined - its body
+    mov bp, [cs:vid_wrapbit]    ; is three instructions and the call and ret
+    cmp byte [bb_mode], BBM_XOR ; around them cost as much again
     je .xrow
 .row:
     mov al, ch
@@ -862,21 +933,23 @@ bb_col:
     and [es:di], bl
     or  [es:di], al
     xor ch, cl
-    call gfx_nextrow
+    add di, si
+    test di, bp
+    jz .nw
+    add di, [cs:vid_wrapfix]
+.nw:
     dec dx
     jnz .row
-    jmp .out
+    ret
 .xrow:
     xor [es:di], ah
-    call gfx_nextrow
+    add di, si
+    test di, bp
+    jz .xnw
+    add di, [cs:vid_wrapfix]
+.xnw:
     dec dx
     jnz .xrow
-.out:
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1082,10 +1155,12 @@ bb_xfer:
     mov cx, bp
     rep movsb                   ; buffer DI advances contiguously
     sub si, bp
-    xchg si, di                 ; gfx_nextrow walks DI by contract, and here
-    call gfx_nextrow            ; the framebuffer pointer is SI
-    xchg si, di
-    dec dx
+    add si, [cs:vid_rowadd]     ; gfx_nextrow INLINED, on SI: the framebuffer
+    test si, [cs:vid_wrapbit]   ; pointer is SI here, so through the call it
+    jz .snw                     ; cost two xchg's as well as the call and the
+    add si, [cs:vid_wrapfix]    ; ret - on a loop whose body is a rep movsb of
+.snw:                           ; two or three bytes (PERFORMANCE.md Part 9
+    dec dx                      ; Set 3: inline it in every row loop)
     jnz .srow
     pop si
     jmp .pnext
@@ -1099,7 +1174,11 @@ bb_xfer:
     mov cx, bp
     rep movsb
     sub di, bp
-    call gfx_nextrow
+    add di, [cs:vid_rowadd]     ; ...and here on DI, which is what gfx_nextrow
+    test di, [cs:vid_wrapbit]   ; takes, so this one saves only the call and
+    jz .rnw                     ; the ret
+    add di, [cs:vid_wrapfix]
+.rnw:
     dec dx
     jnz .rrow
     pop di

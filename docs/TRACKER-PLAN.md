@@ -93,7 +93,7 @@ hole every few seconds. Ring mode reuses the same three counters as **free-runni
   `fed` bound, needs no new ABI) and `total − consumed ≥ 2048` ahead.
 
 Estimated delta for 1a+1b+1c: ~200–250 bytes of `.text` (ISR-adjacent; §34.7's section
-rule bars any of it from `.fartext`) against 19,278 bytes of measured guard-1 headroom.
+rule bars any of it from `.fartext`) against 19,278 bytes of measured `KERN_BUDGET` headroom.
 
 ## Kernel amendment 2 — `dskw_readbig` (API slot 0x01E8)
 

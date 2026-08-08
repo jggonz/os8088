@@ -6,9 +6,17 @@ emulates no Hercules card, and `screendump` can never show you Hercules
 pixels. Everything else works, including scripted mouse input, and the
 720x348 renderer can be verified pixel for pixel without leaving QEMU.
 
-`make xt-hercules` (86Box, a real emulated Hercules card) remains the only
-test of the **detection probe** and of the 6845 programming. This document is
-about everything above those two things, which is almost all of it.
+**`make marty` is the first thing to reach for now** (docs/MARTYPC-DEBUG.md):
+MartyPC models a real MDA/Hercules on a cycle-accurate 8088, so the
+**detection probe** and the 6845 programming genuinely run there, `screen`
+reads the card back without a screenshot trick, and none of the `HERCSEG=`
+relocation below is needed. `make xt-hercules` (86Box) is the second opinion
+rather than the only one — that sentence used to read "remains the only test
+of the detection probe", and it has been overtaken.
+
+This document remains the QEMU recipe, and QEMU is still where the scripted
+mouse and the pixel-for-pixel framebuffer comparison live. It is about
+everything above those two things, which is almost all of it.
 
 ---
 
@@ -93,7 +101,7 @@ changing one rebuilds the kernel. Two consequences:
   state matters:
 
 ```sh
-rm -f build/os8088.img build/os8088-360.img && make
+rm -f build/os8088.img build/os8088-720.img build/os8088-360.img && make
 ```
 
 The `os8088.img` removal is separate and unrelated to the video knob: QEMU

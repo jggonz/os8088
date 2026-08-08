@@ -43,24 +43,54 @@
 ; =============================================================================
 
 ; --- task table (SPEC.md 8) --------------------------------------------------
-MAX_TASKS   equ 12
+MAX_TASKS   equ 12              ; mirrored in apps/os88api.inc, which sizes
+                                ; every package's snapshot buffer from it
+                                ; (SPEC.md 20.9) - change them together and
+                                ; rebuild every .o88
 T_STATE     equ 0               ; byte: 0 free, 1 ready, 2 sleeping
 T_SP        equ 2               ; word: saved SP (frame above)
 T_WAKE      equ 4               ; word: [ticks] value to wake at
 T_INST      equ 6               ; byte: owning instance index (SPEC.md 29),
                                 ; 0xFF = none (the UI task)
-T_SIZE      equ 8               ; record stride (1 byte padding)
+T_FLAGS     equ 7               ; byte (was padding): bit 0 = TF_SERVICE -
+                                ; set only by the driver-worker cell, read
+                                ; only by the fsx freeze (SPEC.md 53.2)
+T_SIZE      equ 8               ; record stride
 
-SCH_STACK   equ 512             ; per-task stack bytes. It was 1,536, chosen
-                                ; when the stacks were the only thing in
-                                ; .lowbss and nothing competed with them. A
-                                ; 0xCC fill probe under the heaviest load the
-                                ; machine can carry - Clock, two Bounces and
-                                ; the Fractal's worker all live at once, with
+TF_SERVICE  equ 1               ; survives the fullscreen-exclusive freeze:
+                                ; a loaded driver's refill/drain worker is
+                                ; plumbing, not app work, and parking it
+                                ; would starve a Sound Blaster stream mid-
+                                ; game (SPEC.md 53.2)
+
+SCH_STACK   equ 256             ; per-task stack bytes. It was 1,536 when the
+                                ; stacks were the only thing in .lowbss, then
+                                ; 512. A 0xCC fill probe under the heaviest
+                                ; load the machine can carry - Timer, two
+                                ; Bounces, the Fractal's drawing worker and
+                                ; Arkanoid's game loop all live at once, with
                                 ; the tick and mouse ISRs landing on top of
-                                ; them - left its deepest mark 150 bytes down.
-                                ; 512 is 3.4x that, and it is what buys task 0
-                                ; the 6KB it now has (SPEC.md 2.1)
+                                ; them - left its deepest mark 142 bytes down,
+                                ; and Tracker's streaming worker feeding a
+                                ; Sound Blaster through its own IRQ reached
+                                ; the same 142. 256 is 1.8x that, which is
+                                ; thinner than this project usually runs, so
+                                ; SCH_MAGIC below makes an overrun a CAUGHT
+                                ; failure instead of a silent one.
+                                ;
+                                ; It must stay a power of two: sch_switch
+                                ; turns the slot index into the slice's base
+                                ; with a byte swap rather than a multiply,
+                                ; which is what makes the canary check nearly
+                                ; free on the switch path
+%if SCH_STACK != 256
+  %error "sch_switch's canary check assumes SCH_STACK = 256 (a byte swap)"
+%endif
+SCH_MAGIC   equ 0x5A57          ; the word at the BOTTOM of every slice. A
+                                ; stack that reaches it has overrun, and the
+                                ; next push corrupts the slice below - which
+                                ; is another task's, so the symptom would be
+                                ; arbitrary and nowhere near the cause
 SCH_FRAME   equ 24              ; saved-frame size: 9 regs + IP/CS/FLAGS
 
 SCH_WD_TICKS equ 18             ; cooperative mode: the watchdog forces a
@@ -94,6 +124,7 @@ sched_init:
     mov byte [sch_cur], 0
     mov byte [sch_lock], 0
     mov word [ticks], 0
+    mov byte [sch_fast], 0      ; no sub-tick until a bracket asks (53.8)
     mov byte [sch_coop], 0      ; pre-emptive until the Control Panel says
     mov byte [sch_hold], 0      ; otherwise (SPEC.md 8.2). All three are
     mov word [sch_wd_hits], 0   ; zeroed HERE by hand: nothing clears .bss at
@@ -101,6 +132,10 @@ sched_init:
                                 ; boot into a random mode
     mov byte [sch_tasks+T_STATE], 1     ; task 0 = this thread, ready
     mov byte [sch_tasks+T_INST], 0xFF   ; the UI task owns no instance
+    mov byte [sch_tasks+T_FLAGS], 0
+    mov byte [fsx_task], 0xFF   ; fullscreen exclusive off (SPEC.md 53.2);
+    mov byte [fsx_worker], 0xFF ; .bss arrives zeroed but 0 is task 0, so
+                                ; the OFF value must be stored explicitly
 
     ; PIT ch0 -> mode 2 (rate generator), divisor 0 = 65536: the IRQ rate
     ; stays 18.2065 Hz (BIOS timekeeping counts IRQs, unaffected), but the
@@ -148,6 +183,89 @@ sched_init:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; sch_fast_on / sch_fast_off - the fsx sub-tick (SPEC.md 53.2.1)
+;
+; in: AL = sub-ticks per tick, 2..4 (anything else is refused)
+;
+; IRQ0 is made to arrive N times a system tick so the round-robin quantum -
+; the thing that decides how long the drawing side waits when the audio worker
+; becomes ready - drops from 55 ms to 18. [ticks] does NOT change rate: the
+; ISR divides, and the Nth entry does everything a tick has always done, chain
+; and all. So task_sleep, every timeout, the double-click window, snd_tick's
+; duties and the BIOS clock are all untouched by construction rather than by
+; adjustment, and only the SWITCHING gets finer.
+;
+; It is safe here and would not be system-wide because the bracket's task set
+; is small and known (SPEC.md 53.2): the exclusive task, its kept worker and
+; TF_SERVICE drivers. Nothing else can be mid-anything.
+;
+; The one thing that genuinely cannot survive is sch_account, whose elapsed
+; arithmetic reads the PIT counter against its own 65536 period; it pauses
+; while armed and is re-seeded here on the way out.
+; -----------------------------------------------------------------------------
+sch_fast_on:
+    push ax
+    push bx
+    cmp al, 2
+    jb .out
+    cmp al, 4
+    ja .out
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    mov bx, [sch_fdivs + bx - 4] ; BX = 65536/N, tabled: no division in an arm.
+                                ; AL stays N - the index arithmetic is BX's
+                                ; alone, because both are wanted below
+    pushf
+    cli
+    mov [sch_fcnt], al          ; divide from the first sub-tick, and set the
+    mov [sch_fast], al          ; flag INSIDE the same window as the reprogram
+    push ax
+    mov al, 0x34                ; ch0, lo/hi, mode 2 - the mode is unchanged,
+    out 0x43, al                ; only the divisor (SPEC.md 8.1)
+    mov ax, bx
+    out 0x40, al
+    mov al, ah
+    out 0x40, al
+    pop ax
+    popf
+.out:
+    pop bx
+    pop ax
+    ret
+
+sch_fast_off:
+    push ax
+    push cx
+    cmp byte [sch_fast], 0
+    je .out
+    pushf
+    cli
+    mov al, 0x34                ; the BIOS-compatible divisor 0 = 65536 back
+    out 0x43, al
+    xor al, al
+    out 0x40, al
+    out 0x40, al
+    mov al, 0x00                ; ...and re-seed the accounting stamp, or the
+    out 0x43, al                ; first full tick after this charges a whole
+    in al, 0x40                 ; bracket's worth of garbage to somebody
+    mov cl, al
+    in al, 0x40
+    mov ch, al
+    neg cx
+    mov [sch_pit_last], cx
+    mov ax, [ticks]
+    mov [sch_pit_last+2], ax
+    mov byte [sch_fast], 0
+    popf
+.out:
+    pop cx
+    pop ax
+    ret
+
+sch_fdivs:  dw 32768, 21845, 16384      ; N = 2, 3, 4
 
 ; -----------------------------------------------------------------------------
 ; sched_unhook - restore the BIOS int 08h vector, then unhook mouse + sound
@@ -273,6 +391,13 @@ task_spawn:
     mul di                      ; DX:AX = AX * SCH_STACK (high half discarded)
     pop dx
     add ax, sch_stacks
+    push ax                     ; seed this slice's canary before the frame:
+    sub ax, SCH_STACK           ; AX is the slice TOP, so its base is one
+    mov di, ax                  ; SCH_STACK below
+    mov ax, LOW_SEG
+    mov es, ax
+    mov word [es:di], SCH_MAGIC
+    pop ax
     sub ax, SCH_FRAME           ; carve the fake frame at the very top
     mov di, ax
     mov [bx+T_SP], di
@@ -300,6 +425,8 @@ task_spawn:
     mov [es:di+20], ax          ; CS = the task's own segment
     mov word [es:di+22], 0x0202 ; FLAGS: IF=1, reserved bit 1 set
     mov [bx+T_INST], dl         ; owning instance (0xFF = none)
+    mov byte [bx+T_FLAGS], 0    ; TF_SERVICE is the driver cell's to set
+                                ; (SPEC.md 53.2), never inherited
 
     mov ax, cx                  ; zero the slot's cycle counter before the
     shl ax, 1                   ; publish, so a reused slot never inherits
@@ -456,6 +583,12 @@ task_exit:
 ; clobbers: AX, BX, CX, DX, SI
 ; -----------------------------------------------------------------------------
 sch_account:
+    cmp byte [sch_fast], 0      ; the fsx sub-tick (SPEC.md 53.2.1) divides the
+    jne .idle                   ; very period this arithmetic is built on, so
+                                ; accounting PAUSES for the bracket - here
+                                ; rather than at the call sites, because
+                                ; task_yield and task_cycles reach it too and
+                                ; a half-gated stamp is worse than none
     mov al, 0x00                ; latch channel 0's count
     out 0x43, al
     in al, 0x40                 ; count lo
@@ -486,6 +619,7 @@ sch_account:
     mov si, cx
     add [si+sch_cycles], ax
     adc [si+sch_cycles+2], bx
+.idle:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -600,7 +734,7 @@ task_debit:
 ; sch_lock is deliberately NOT reused as the "don't switch" flag even though
 ; it looks like one: task_yield tests it too and self-resumes when it is set
 ; (see task_yield above), so raising sch_lock would not make multitasking
-; cooperative - it would stop multitasking altogether and freeze every Clock
+; cooperative - it would stop multitasking altogether and freeze every Timer
 ; and Bounce instance forever, their task_sleep never handing the CPU on.
 ; Cooperative mode must leave the VOLUNTARY path fully working and suppress
 ; only the INVOLUNTARY one, hence a separate byte tested after sch_lock.
@@ -676,6 +810,30 @@ sch_isr:
     mov ax, KERNEL_SEG
     mov ds, ax
 
+    inc word [sch_subs]         ; EVERY entry, sub-ticks included: fsx_wait's
+                                ; frame clock waits on this (SPEC.md 53.5.1),
+                                ; and it must count the interrupts the PIT
+                                ; actually delivers rather than the ticks this
+                                ; routine chooses to publish. Above the
+                                ; sch_fast split for exactly that reason
+
+    cmp byte [sch_fast], 0      ; the fsx sub-tick (SPEC.md 53.2.1). While it is
+    je .full                    ; armed IRQ0 arrives N times a tick and only
+    dec byte [sch_fcnt]         ; the Nth entry IS a tick: everything that
+    jz .tick                    ; counts in ticks stays on that one, so
+                                ; nothing outside this file can tell
+    mov al, 0x20                ; ...and a sub-tick owes the EOI itself,
+    out 0x20, al                ; because the BIOS handler that normally
+                                ; sends it is only chained on the tick
+    cmp byte [sch_lock], 0      ; the lock still bars a switch (a floppy
+    jne sch_resume              ; transfer must not be pre-empted)
+    cmp byte [sch_coop], 0      ; cooperative mode: only the watchdog
+    jne sch_resume              ; switches, and it counts TICKS, not these
+    jmp sch_switch
+.tick:
+    mov al, [sch_fast]
+    mov [sch_fcnt], al
+.full:
     pushf                       ; chain: BIOS ticks its count and sends EOI
     call far [sch_old08]
 
@@ -683,7 +841,9 @@ sch_isr:
     call sch_account            ; after the inc, so [ticks] and the freshly
                                 ; reloaded counter agree (SPEC.md 8.1); and
                                 ; before the sch_lock check, so accounting
-                                ; runs every tick even during floppy reads
+                                ; runs every tick even during floppy reads.
+                                ; It no-ops itself while the fsx sub-tick is
+                                ; armed (SPEC.md 53.2.1)
     call snd_tick               ; sound duties (SPEC.md 8.2/34): a called
                                 ; leaf, gated on snd_live until snd_init
                                 ; publishes; runs every tick in both modes,
@@ -740,6 +900,25 @@ sch_switch:
     shl bx, cl
     mov [bx+sch_tasks+T_SP], sp
 
+    ; --- the outgoing task's canary (SPEC.md 8): slot n's slice starts at
+    ; sch_stacks + (n-1)*SCH_STACK, and with SCH_STACK = 256 the offset part
+    ; is the slot index in the HIGH byte and nothing else - no multiply on
+    ; the switch path. Task 0 owns no slice of sch_stacks and is skipped. SS
+    ; is LOW_SEG, so the read needs no segment set-up. sch_stacks is NOT at
+    ; .lowbss offset 0 (font's glyph block precedes it); the math here is
+    ; symbol-relative and does not care, but the alignb at the declaration
+    ; keeps the slices 256-ALIGNED, which SP-only arithmetic (tests/
+    ; stackprobe) does depend on.
+    mov bl, [sch_cur]
+    or bl, bl
+    jz .nocanary                ; task 0: its stack is above .lowbss, not in it
+    dec bl
+    mov bh, bl                  ; BX = (cur-1) * 256
+    xor bl, bl
+    cmp word [ss:bx+sch_stacks], SCH_MAGIC
+    jne sch_stkdie
+.nocanary:
+
     mov dl, [sch_cur]           ; scan cur+1, cur+2, ... (cur itself last)
     mov dh, MAX_TASKS
 .scan:
@@ -753,7 +932,16 @@ sch_switch:
     mov cl, 3
     shl bx, cl
     cmp byte [bx+sch_tasks+T_STATE], 1
+    jne .skip
+    cmp byte [fsx_task], 0xFF   ; the fsx freeze (SPEC.md 53.2): off means
+    je .pick                    ; every ready task is eligible; armed, only
+    cmp dl, [fsx_task]          ; the exclusive task itself...
     je .pick
+    cmp dl, [fsx_worker]        ; ...its kept worker (FSXF_KEEPWORKER)...
+    je .pick
+    test byte [bx+sch_tasks+T_FLAGS], TF_SERVICE
+    jnz .pick                   ; ...and a driver's service worker may run
+.skip:
     dec dh
     jnz .scan
     mov dl, [sch_cur]           ; nothing ready (task 0 never sleeps, so
@@ -781,16 +969,55 @@ sch_resume:
     pop ax
     iret
 
+; -----------------------------------------------------------------------------
+; sch_stkdie - a task overran its stack slice (SPEC.md 8)
+;
+; Reached only from sch_switch's canary check, so the machine is already
+; inside a switch with the outgoing frame parked. There is nothing safe to
+; do: the overrun has already written into the slice BELOW this one, which is
+; another task's stack, so every task table entry is now suspect and any
+; attempt to report through the window manager would run on the corrupted
+; stack that got us here.
+;
+; So it stops, loudly and reproducibly. A halted machine is a bug report; a
+; machine that carries on is a bug that gets blamed on something else three
+; subsystems away. This is a can't-happen path - 256 bytes is 1.8x the
+; measured worst case - and it exists so that "can't" is checked rather than
+; assumed. Re-run the 0xCC fill probe (docs/KERNEL-MEMORY.md) if it ever hits.
+; -----------------------------------------------------------------------------
+sch_stkdie:
+    cli
+.hang:
+    hlt
+    jmp short .hang
+
+; -----------------------------------------------------------------------------
+
 ; =============================================================================
 ; scheduler state
 ; =============================================================================
 section .lowbss                         ; LOW_SEG, reached through SS (SPEC.md 2.1)
 
+resb (256 - (($-$$) % 256)) % 256       ; keep every slice on a 256-byte
+                                        ; boundary (alignb spelled out - NASM
+                                        ; refuses the macro form against this
+                                        ; nobits section). The canary math
+                                        ; above is symbol-relative and does
+                                        ; not need this, but tests/stackprobe
+                                        ; derives its slice top from SP
+                                        ; alone, and anything else doing SP
+                                        ; arithmetic will assume it too. Free
+                                        ; today: font's 768-byte block
+                                        ; precedes this one and 768 is
+                                        ; already a multiple
 sch_stacks: resb (MAX_TASKS-1) * SCH_STACK ; slots 1..11 only: slot n's stack
-                                        ; top at n*SCH_STACK (slot 0 = the UI task
-                                        ; runs on the task-0 stack, SS:STK0_TOP,
+                                        ; top at n*SCH_STACK relative to
+                                        ; sch_stacks, which is NOT offset 0
+                                        ; of .lowbss (font_glyphs precedes
+                                        ; it). Slot 0 = the UI task runs on
+                                        ; the task-0 stack, SS:STK0_TOP,
                                         ; which grows down from above this
-                                        ; section - it needs no reservation)
+                                        ; section - it needs no reservation
 
 section .bss
 
@@ -798,11 +1025,30 @@ sch_tasks:  resb MAX_TASKS * T_SIZE     ; task records (layout above)
 sch_old08:  resb 4                      ; saved BIOS int 08h vector (off:seg)
 ticks:      resw 1                      ; public tick count, wraps at 65536
 sch_cur:    resb 1                      ; index of the running task
+fsx_task:   resb 1                      ; the fsx freeze (SPEC.md 53.2):
+                                        ; 0xFF off, else the exclusive
+                                        ; task's slot. Scheduler state
+                                        ; because sch_switch reads it every
+                                        ; scan; fsx_run/fsx_restore write
+                                        ; it, sched_init stores the OFF
+                                        ; value (0 would mean task 0)
+fsx_worker: resb 1                      ; the kept worker's slot, 0xFF none
 sch_lock:   resb 1                      ; non-zero: ISR counts but won't switch
 sch_cycles: resw MAX_TASKS * 2          ; per-task CPU time, PIT cycles, dword
                                         ; each (lo word first); readers snap-
                                         ; shot under pushf/cli (SPEC.md 8.1)
 sch_pit_last: resw 2                    ; last timestamp: phase, then ticks
+sch_fast:   resb 1                      ; fsx sub-tick (SPEC.md 53.2.1): 0 off,
+sch_fcnt:   resb 1                      ; else N, with this counting down
+sch_subs:   resw 1                      ; free-running IRQ0 entries, SUB-TICKS
+                                        ; included (SPEC.md 53.5.1). The
+                                        ; finest clock a task can WAIT on:
+                                        ; [ticks] moves 18.2 times a second
+                                        ; whatever sch_fast is, and this moves
+                                        ; every time the PIT does. Compared
+                                        ; for CHANGE only, so the value it
+                                        ; starts at does not matter and the
+                                        ; wrap at 65536 is not a case
 sch_coop:   resb 1                      ; mode (SPEC.md 8.2): 0 pre-emptive,
                                         ; 1 cooperative; sched_mode_set/_get
 sch_hold:   resb 1                      ; ticks the running task has held the

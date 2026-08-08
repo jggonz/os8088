@@ -37,7 +37,7 @@ HDR = 32
 MAGIC = 0x384F                  # 'O','8'
 DRV_VER = 4
 MAX_SIZE = 40 * 1024            # DRV_MAX_KB in kernel/driver.inc
-CLASSES = {1: "sound"}
+CLASSES = {1: "sound", 2: "disk", 3: "debug"}
 
 
 def fail(msg: str) -> None:

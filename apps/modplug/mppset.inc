@@ -1,7 +1,7 @@
 ; =============================================================================
 ; os8088 - apps/modplug/mppset.inc
 ;
-; ModPlug Player's Setup window (SPEC.md 52.5). Prefix mpps_.
+; ModPlug Player's Setup window (SPEC.md 56.5). Prefix mpps_.
 ;
 ; ModPlugPlayer's SetupWindow.ui is a 5,034-line Qt form: a page TREE down the
 ; left - General, Audio, Player, DSP, Directories, Visualization (with
@@ -27,7 +27,7 @@
 ; assembly, and the only way its drawing and its hit test cannot drift apart
 ; (the fm_hit rule again).
 ;
-; THE WINDOW IS NOT BOUND to the instance (SPEC.md 52.1). The entry proc
+; THE WINDOW IS NOT BOUND to the instance (SPEC.md 56.1). The entry proc
 ; returned the player, so wm_owner never names this one - which means its
 ; close box and its minimize box both reduce to a plain wm_hide, exactly like
 ; the kernel's own Standard File dialog (SPEC.md 38), and reopening is one
@@ -97,7 +97,7 @@ mpps_p_xt:  db 'XT', 0
 ; x and y are relative to the pane's control origin, so no row knows where the
 ; pane is. Two columns per page - 6 and 140 - and nothing below y 96, which is
 ; what lets the COMPACT window show every control the full one does rather
-; than silently clipping the bottom of a page (SPEC.md 52.4).
+; than silently clipping the bottom of a page (SPEC.md 56.4).
 ; =============================================================================
 %macro MPPS_CTL 8
     db %1, %2, %3, %4
@@ -255,7 +255,7 @@ mpps_visible:
     je .out
     mov bx, [mpps_win]
     call OSAPI_WM_GEOM              ; CF=1 = hidden, and for an unbound window
-    jc .out                         ; minimized IS hidden (SPEC.md 52.1)
+    jc .out                         ; minimized IS hidden (SPEC.md 56.1)
     mov al, 1
 .out:
     pop dx
@@ -595,9 +595,11 @@ mpps_draw_box:
     MPPU_PEN CBLACK
     jmp .fill
 .grey:
-    MPPU_PEN CDGRAY                 ; greyed: a screened outline round the
-    call mppu_framer                ; body colour - no well, no mark, and
-    MPPU_PEN [mppu_body]            ; visibly not a live box at one bit
+    stc                             ; greyed: a screened outline round the
+    call mppu_dpen                  ; body colour - no well, no mark, and
+    call mppu_framer                ; visibly not a live box at one bit.
+    call mppu_dpen_off              ; The pen sets [gfx_dis] with the colour,
+    MPPU_PEN [mppu_body]            ; which is what the LABEL below needs too
 .fill:
     push ax
     push bx
@@ -649,13 +651,15 @@ mpps_draw_label:
     je .y
     inc dx                          ; a caption beside a box sits one pixel
 .y:                                 ; low, so the two read as one control
-    mov al, CBLACK
-    cmp byte [mpps_cdis], 0
-    je .run
-    mov al, CDGRAY
-.run:
+    cmp byte [mpps_cdis], 0         ; CF = the row's disabled state, which is
+    stc                             ; the shape the pen takes
+    jne .pen
+    clc
+.pen:
+    call mppu_dink                  ; -> AL, and [gfx_dis] with it
     mov ah, [mppu_body]
     call mppu_run
+    call mppu_dpen_off
     pop di
     pop si
     pop dx
@@ -854,7 +858,7 @@ mpps_ctl_hit:
 ; Two settings do not go through the plain store, and both for the same
 ; reason: they cannot be changed under a running stream. The rate and the XT
 ; toggle route to mpp_rate_set / mpp_xt_toggle, which stop playback through
-; the SPEC.md 52.2 drain first.
+; the SPEC.md 56.2 drain first.
 ; -----------------------------------------------------------------------------
 mpps_apply:
     push ax
@@ -957,7 +961,7 @@ mpps_s_g1:       db 'Interface ported from ModPlug Player V2', 0
 mpps_s_g2:       db 'by Volkan Orhan - modplugplayer.org, GPLv3', 0
 mpps_s_replayer: db 'Replayer', 0
 mpps_s_g3:       db '4-channel ProTracker, 8-bit mono output.', 0
-mpps_s_g4:       db 'Not libopenmpt - see SPEC.md 52.1.', 0
+mpps_s_g4:       db 'Not libopenmpt - see SPEC.md 56.1.', 0
 mpps_s_settings: db 'Settings', 0
 mpps_s_saveimm:  db 'Save Immediately (No Settings File)', 0
 
@@ -1040,7 +1044,7 @@ mpps_s_x6:       db 'The DSP tail goes off with it.', 0
 ; =============================================================================
     MPPW mpps_win                   ; 0 until Setup is opened for the first
                                     ; time; never bound, so never destroyed
-                                    ; except by teardown (SPEC.md 52.1)
+                                    ; except by teardown (SPEC.md 56.1)
     MPPW mpps_sel                   ; the page showing, 0..MPPS_NPAGE-1
     MPPW mpps_w                     ; its content size, latched at paint
     MPPW mpps_h

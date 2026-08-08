@@ -116,6 +116,7 @@ at_entry:
     call at_font_init               ; the ROM 8x8 glyphs, copied in
     mov byte [at_writer], 1         ; Writer is the default view (main.c)
     call at_cmd_newdoc              ; a fresh untitled document
+    call at_arg                     ; ...unless we were launched to open one
     clc                             ; the CF the loader is owed
 .out:
     ret
@@ -252,6 +253,11 @@ at_paint:
     push di
     push bp
     push es
+    cmp byte [at_argp], 0           ; a document handed to us at launch
+    je .noarg                       ; (SPEC.md 54.5): the gfx lock is held
+    call at_argload                 ; here and the window is placed, which
+    jc .done                        ; the entry proc could promise neither.
+.noarg:                             ; CF=1: it entered the editor and painted
     push ds                         ; ES arrives = KERNEL_SEG (SPEC.md 20.2)
     pop es
     mov byte [at_cshown], 0         ; fresh pixels carry no caret
@@ -960,7 +966,10 @@ at_ferr     equ at_wn + 2
 at_win      equ at_ferr + 2                  ; word: our window ptr
 at_name     equ at_win + 2                   ; 14 bytes: 8.3 + NUL
 at_cliplen  equ at_name + 14                 ; word
-at_aseg     equ at_cliplen + 2               ; word: heap claim (0 = none)
+at_argp     equ at_cliplen + 2              ; byte: 1 = launched to open
+at_argdrv   equ at_argp + 1                 ; byte: ...and where it lives
+at_argclus  equ at_argdrv + 1               ; word
+at_aseg     equ at_argclus + 2               ; word: heap claim (0 = none)
 at_usz      equ at_aseg + 2                  ; word: per-stack bytes
 at_coff     equ at_usz + 2                   ; word: clip slice offset
 at_csz      equ at_coff + 2                  ; word: clip slice bytes

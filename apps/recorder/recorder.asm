@@ -957,9 +957,15 @@ rc_draw_btns:
     ret
 
 ; -----------------------------------------------------------------------------
-; rc_btn - one button: 1px frame + centered label, black or dark gray
+; rc_btn - one button: 1px frame + centered label, live or disabled
 ; in:  AX = content-relative x1, SI = label, CL = 1 enabled / 0 disabled
 ; out: nothing; preserves all registers
+;
+; OSAPI_GFX_PEN and not OSAPI_SET_COLOR (SPEC.md 47 rule 3): a disabled control
+; is CDGRAY *and* [gfx_dis], and the flag is what makes the LABEL a
+; checkerboard on Hercules and CGA. With the colour alone this drew a dotted
+; frame - gfx_ink dithers a shape without help - around a solid-black caption,
+; which is rule 2's own failure, the two halves of one control disagreeing.
 ; -----------------------------------------------------------------------------
 rc_btn:
     push ax
@@ -969,12 +975,14 @@ rc_btn:
     push si
     push di
     mov di, ax                      ; DI = x1, content-relative
-    mov al, CBLACK
-    or cl, cl
-    jnz .col
-    mov al, CDGRAY
+    or cl, cl                       ; CF = 1 when disabled, which is the shape
+    jnz .live                       ; the pen takes
+    stc
+    jmp short .col
+.live:
+    clc
 .col:
-    call OSAPI_SET_COLOR
+    call OSAPI_GFX_PEN
     mov ax, [rc_ox]
     add ax, di
     mov di, ax                      ; DI = x1, absolute
@@ -993,6 +1001,10 @@ rc_btn:
     mov dx, [rc_oy]
     add dx, RC_BTN_Y+4
     call OSAPI_FONT_STR
+    clc                             ; ...and put the pen back. Leaving CDGRAY
+    call OSAPI_GFX_PEN              ; behind was untidy; leaving the FLAG
+                                    ; behind draws the next string in this
+                                    ; lock hold as a checkerboard
     pop di
     pop si
     pop dx

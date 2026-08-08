@@ -24,6 +24,15 @@
 ;    is a single OSAPI_GFX_BLIT4 (SPEC.md 5.4) - one far call instead of
 ;    several hundred, twenty-one times over on a full repaint.
 ;
+;    What that buys, measured (PERFORMANCE.md Part 9): a blit is priced by the
+;    RUNS it emits, not by its pixels, because each run is a gfx_hline and a
+;    drawing call on a 4.77MHz 8088 costs ~756us of fixed setup before it
+;    draws anything - about 0.5ms per run all-in for the short runs a card
+;    produces. So a 634-run whole back is ~0.3s of drawing and a 41-run sliver
+;    is ~20ms. The "one far call instead of several hundred" above is the
+;    saving on the RENDER; the blit itself still pays a call per run, which is
+;    exactly why SPEC.md 43.7's buried-back skip is worth as much as it is.
+;
 ;  - **Two metric sets, chosen by screen height, and a per-column fan.**
 ;    32x44 cards on VGA and Hercules, 28x28 on CGA's 200 rows; and on top of
 ;    that every tableau column computes its OWN fan step (sol_colfan), so a
@@ -559,6 +568,10 @@ sol_drawpile:
 ; emits one gfx_fill per run of equal pixels (41 runs for a fanned sliver, 634
 ; for a whole back). A column with five buried cards therefore paid ~205 runs
 ; to redraw pixels that had not changed, on every single move that touched it.
+; A run is a drawing call and a drawing call on this machine has a ~756us
+; floor (PERFORMANCE.md Part 2), so those 205 runs are about a TENTH OF A
+; SECOND of visible redraw per move - not a rounding error, which is the whole
+; reason this section exists.
 ;
 ; What makes skipping them safe is that **face-down cards are
 ; indistinguishable**: every back is the same image, so the question is never

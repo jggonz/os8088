@@ -1,0 +1,900 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index df0a894..6bc5c7b 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -3427,6 +3427,7 @@ dependencies = [
+  "flate2",
+  "getrandom 0.3.1",
+  "indexmap 2.14.0",
++ "libc",
+  "log",
+  "marty_common",
+  "marty_config",
+diff --git a/crates/binaries/martypc_headless/Cargo.toml b/crates/binaries/martypc_headless/Cargo.toml
+index ccfc2ba..fd8383d 100644
+--- a/crates/binaries/martypc_headless/Cargo.toml
++++ b/crates/binaries/martypc_headless/Cargo.toml
+@@ -12,12 +12,17 @@ path = "src/lib.rs"
+ crate-type = ["lib"]
+ 
+ [dependencies]
+-marty_core = { path = "../../marty_core" }
++marty_core = { path = "../../marty_core", features = ["sound", "opl"] }
+ marty_common = { path = "../../marty_common" }
+-marty_frontend_common =  { path = "../../lib/frontend/marty_frontend_common", default-features = false }
++marty_frontend_common =  { path = "../../lib/frontend/marty_frontend_common", default-features = false, features = ["ega", "vga"] }
+ marty_display_common = { path = "../../lib/frontend/marty_display_common", default-features = false }
+ marty_config = { path = "../../lib/frontend/marty_config" }
+ 
++# For the fork() snapshot (docs/SNAPSHOT-PLAN.md B). Unix only; the feature
++# refuses to arm itself elsewhere rather than failing to compile.
++[target.'cfg(unix)'.dependencies]
++libc = "0.2"
++
+ colored = "3.0"
+ log.workspace = true
+ env_logger = "0.11"
+diff --git a/crates/binaries/martypc_headless/src/emulator/mod.rs b/crates/binaries/martypc_headless/src/emulator/mod.rs
+index c2c1591..a2508ed 100644
+--- a/crates/binaries/martypc_headless/src/emulator/mod.rs
++++ b/crates/binaries/martypc_headless/src/emulator/mod.rs
+@@ -230,25 +230,50 @@ impl Emulator {
+         let mut config_drive_idx: usize = 0;
+         for vhd_name in vhd_names.into_iter().filter_map(|x| x) {
+             let vhd_os_name: OsString = vhd_name.into();
++            // A NAME THAT IS ALREADY A PATH IS TAKEN AS ONE. `--mount hd:N:path`
++            // puts whatever the command line said into this list, and the
++            // scan below only ever resolves a bare filename against the
++            // media/hdds resource directory - so an absolute path failed with
++            // "File not found scanning Vhd directory", which reads as the
++            // image being missing rather than as the wrong lookup. A test
++            // wants a scratch copy of a disk, not a shared one in the run
++            // tree, so the path case is the common one here.
++            if std::path::Path::new(&vhd_os_name).is_file() {
++                if let Err(e) = crate::debug_server::mount_vhd(
++                    &mut self.machine,
++                    config_drive_idx,
++                    std::path::Path::new(&vhd_os_name),
++                ) {
++                    log::error!("Could not mount VHD {:?}: {}", vhd_os_name, e);
++                }
++                config_drive_idx += 1;
++                continue;
++            }
+             match self.vhd_manager.load_vhd_file_by_name(config_drive_idx, &vhd_os_name) {
+                 Ok((vhd_file, _vhd_idx)) => match VirtualHardDisk::parse(Box::new(vhd_file), false) {
+                     Ok(vhd) => {
+-                        if let Some(hdc) = self.machine.hdc_mut() {
+-                            match hdc.set_vhd(config_drive_idx, vhd) {
+-                                Ok(_) => {
+-                                    log::info!(
+-                                        "VHD image {:?} successfully loaded into virtual drive: {}",
+-                                        vhd_os_name,
+-                                        config_drive_idx
+-                                    );
+-                                }
+-                                Err(err) => {
+-                                    log::error!("Error mounting VHD: {}", err);
+-                                }
+-                            }
++                        // BOTH controllers, because `hdc_mut()` is the Xebec
++                        // alone: an XtIde machine took the else branch and
++                        // reported "No Hard Disk Controller present" while
++                        // having one, so every XT-IDE config came up with an
++                        // empty drive.
++                        let set = if let Some(xtide) = self.machine.xtide_mut() {
++                            Some(xtide.set_vhd(config_drive_idx, vhd).map_err(|e| format!("{:?}", e)))
+                         }
+                         else {
+-                            log::error!("Couldn't load VHD: No Hard Disk Controller present!");
++                            self.machine
++                                .hdc_mut()
++                                .as_mut()
++                                .map(|hdc| hdc.set_vhd(config_drive_idx, vhd).map_err(|e| format!("{}", e)))
++                        };
++                        match set {
++                            Some(Ok(())) => log::info!(
++                                "VHD image {:?} successfully loaded into virtual drive: {}",
++                                vhd_os_name,
++                                config_drive_idx
++                            ),
++                            Some(Err(err)) => log::error!("Error mounting VHD: {}", err),
++                            None => log::error!("Couldn't load VHD: No Hard Disk Controller present!"),
+                         }
+                     }
+                     Err(err) => {
+diff --git a/crates/binaries/martypc_headless/src/lib.rs b/crates/binaries/martypc_headless/src/lib.rs
+index e1680ee..a748b4f 100644
+--- a/crates/binaries/martypc_headless/src/lib.rs
++++ b/crates/binaries/martypc_headless/src/lib.rs
+@@ -29,9 +29,15 @@
+ 
+ #![allow(clippy::upper_case_acronyms)]
+ #![allow(clippy::too_many_arguments)]
+-#![forbid(unsafe_code)]
++// `forbid` rather than `deny` upstream. Relaxed here because the fork()
++// snapshot (docs/SNAPSHOT-PLAN.md B) needs exactly one unsafe call and
++// `forbid` cannot be overridden locally by an `allow`. Everything else in the
++// crate is still denied, so a second unsafe block is a compile error and has
++// to be a deliberate act.
++#![deny(unsafe_code)]
+ 
+ mod cpu_test;
++mod debug_server;
+ mod emulator;
+ 
+ mod run_benchmark;
+@@ -740,9 +746,57 @@ pub fn run() {
+     // Start emulator
+     emu.start();
+ 
+-    // TODO: We don't have any backend to run an event loop. If we want to actually run the
+-    //       emulator now we need some way of controlling / stopping it.
+-    log::debug!("Headless operation not implemented. Exiting.");
++    // The debug server is the backend the TODO here always wanted: something
++    // that both DRIVES the machine and can STOP it. Without one there is
++    // nothing for a headless frontend to do but exit, which is what it used
++    // to do.
++    //
++    // It is opt-in through the environment rather than through
++    // ConfigFileParams on purpose, for now: it keeps this addition inside one
++    // crate and one module, and an address on the command line is what a test
++    // harness wants to vary per run anyway. A config key is the shape this
++    // should take if it is ever wanted permanently.
++    match std::env::var("MARTYPC_DEBUG_ADDR") {
++        Ok(addr) if !addr.is_empty() => match debug_server::DebugServer::bind(&addr) {
++            Ok(mut server) => {
++                // Honour --mount fd:N:path / [[emulator.media.floppy]]. The
++                // config has always been parsed; in a headless run nothing
++                // ever acted on it.
++                if let Some(floppies) = emu.config.emulator.media.floppy.as_ref() {
++                    let entries: Vec<(usize, String)> =
++                        floppies.iter().map(|f| (f.drive, f.filename.clone())).collect();
++                    for (drive, filename) in entries {
++                        if let Err(e) =
++                            debug_server::mount_floppy(&mut emu.machine, drive, std::path::Path::new(&filename))
++                        {
++                            log::error!("Could not mount floppy {}: {}", filename, e);
++                        }
++                    }
++                }
++                // NOTE: VHDs are NOT mounted here, unlike floppies. The
++                // headless emulator already has an insert_vhds() that runs
++                // before this and reads the same config; it was simply broken
++                // in two ways (see emulator/mod.rs), and fixing it there is
++                // what keeps this from double-mounting a drive.
++                if let Ok(wav) = std::env::var("MARTYPC_WAV") {
++                    if !wav.is_empty() {
++                        server.capture_audio(&emu.machine, &wav);
++                    }
++                }
++                log::info!("Headless debug server on {}. Machine starts PAUSED.", addr);
++                server.run_loop(&mut emu.machine);
++                log::info!("Debug server exiting.");
++                std::process::exit(0);
++            }
++            Err(e) => {
++                log::error!("Could not bind debug server to {}: {}", addr, e);
++                std::process::exit(1);
++            }
++        },
++        _ => {}
++    }
++
++    log::debug!("Headless operation not implemented (set MARTYPC_DEBUG_ADDR). Exiting.");
+ 
+     std::process::exit(0);
+ }
+diff --git a/crates/marty_core/src/bus/io.rs b/crates/marty_core/src/bus/io.rs
+index e23c0a2..ddcea3f 100644
+--- a/crates/marty_core/src/bus/io.rs
++++ b/crates/marty_core/src/bus/io.rs
+@@ -149,6 +149,16 @@ impl BusInterface {
+                         byte = Some(adlib.read_u8(port, DeviceRunTimeUnit::Microseconds(delta_us)));
+                     }
+                 }
++                // A SEPARATE variant, not Sound: that arm dispatches
++                // unconditionally to the AdLib, so a second card registered
++                // under it has its ports answered by the OPL - which returns
++                // 0xFF for anything outside 0x388/0x389 and reads exactly
++                // like a card that is not there.
++                IoDeviceType::SoundBlaster => {
++                    if let Some(sb) = &mut self.sblaster {
++                        byte = Some(sb.read_u8(port, DeviceRunTimeUnit::Microseconds(delta_us)));
++                    }
++                }
+                 _ => {}
+             }
+         }
+@@ -366,6 +376,20 @@ impl BusInterface {
+                         resolved = true;
+                     }
+                 }
++                IoDeviceType::SoundBlaster => {
++                    if let Some(mut sb) = self.sblaster.take() {
++                        IoDevice::write_u8(
++                            &mut sb,
++                            port,
++                            data,
++                            None,
++                            DeviceRunTimeUnit::Microseconds(delta_us),
++                            None,
++                        );
++                        self.sblaster = Some(sb);
++                        resolved = true;
++                    }
++                }
+                 IoDeviceType::Sn76489 => {
+                     if let Some(sn76489) = &mut self.sn76489 {
+                         sn76489.write_u8(port, data, None, NULL_DELTA_US, analyzer);
+diff --git a/crates/marty_core/src/bus/memory.rs b/crates/marty_core/src/bus/memory.rs
+index 3b0f44c..d8ee082 100644
+--- a/crates/marty_core/src/bus/memory.rs
++++ b/crates/marty_core/src/bus/memory.rs
+@@ -289,7 +289,11 @@ impl BusInterface {
+     }
+ 
+     pub fn peek_range(&self, address: usize, len: usize) -> Result<&[u8], MemError> {
+-        if address + len < self.memory.len() {
++        // `<=`, not `<`: a range ENDING at the last byte of memory is in
++        // bounds. With `<`, peek_range(0xFFFF0, 16) - the reset vector
++        // paragraph, and the most-read 16 bytes in an 8088 machine - was
++        // refused, while 15 bytes at the same address succeeded.
++        if address + len <= self.memory.len() {
+             Ok(&self.memory[address..address + len])
+         }
+         else {
+diff --git a/crates/marty_core/src/bus/mod.rs b/crates/marty_core/src/bus/mod.rs
+index df89d15..b52c67b 100644
+--- a/crates/marty_core/src/bus/mod.rs
++++ b/crates/marty_core/src/bus/mod.rs
+@@ -85,6 +85,7 @@ use marty_common::{
+ 
+ #[cfg(feature = "opl")]
+ use crate::devices::adlib::AdLibCard;
++use crate::devices::sblaster::SoundBlasterCard;
+ #[cfg(feature = "ega")]
+ use crate::devices::ega::EGACard;
+ #[cfg(feature = "vga")]
+@@ -313,6 +314,7 @@ pub enum IoDeviceType {
+     GamePort,
+     Video(VideoCardId),
+     Sound,
++    SoundBlaster,
+     Sn76489,
+ }
+ 
+@@ -479,6 +481,7 @@ pub struct BusInterface {
+     game_port: Option<GamePort>,
+     #[cfg(feature = "opl")]
+     adlib: Option<AdLibCard>,
++    sblaster: Option<SoundBlasterCard>,
+     sound_source: Option<DSoundSource>,
+     sn76489: Option<Sn76489>,
+ 
+@@ -568,6 +571,7 @@ impl Default for BusInterface {
+             game_port: None,
+             #[cfg(feature = "opl")]
+             adlib: None,
++            sblaster: None,
+             sound_source: None,
+             sn76489: None,
+             videocards: MartyHashMap::default(),
+@@ -1290,6 +1294,27 @@ impl BusInterface {
+         // Create sound cards
+         #[cfg(feature = "sound")]
+         for card in machine_config.sound.iter() {
++            // The Sound Blaster is installed OUTSIDE the `opl` cfg below,
++            // because its DSP half needs no OPL: the FM half of a real card
++            // is an AdLib at 0x388, and a machine that wants both lists both.
++            if let SoundType::SoundBlaster = card.sound_type {
++                let (s, r) = unbounded();
++                installed_devices.sound_sources.push(SoundSourceDescriptor::new(
++                    "Sound Blaster",
++                    sound_config.sample_rate,
++                    1,
++                    r,
++                ));
++                let sb = SoundBlasterCard::new(
++                    card.io_base.unwrap_or(crate::devices::sblaster::DEFAULT_SB_BASE),
++                    card.irq.unwrap_or(crate::devices::sblaster::DEFAULT_SB_IRQ),
++                    card.dsp_version.unwrap_or((2, 1)),
++                    sound_config.sample_rate,
++                    s,
++                );
++                add_io_device!(self, sb, IoDeviceType::SoundBlaster);
++                self.sblaster = Some(sb);
++            }
+             #[cfg(feature = "opl")]
+             {
+                 #[allow(clippy::single_match)]
+@@ -1565,6 +1590,14 @@ impl BusInterface {
+             self.fdc = Some(fdc);
+         }
+ 
++        // Run the Sound Blaster, which needs the DMA controller for the same
++        // reason the FDC does. It must run BEFORE dma1.run() below, so a byte
++        // it pulls this tick is accounted for in the same tick.
++        if let Some(mut sb) = self.sblaster.take() {
++            sb.run(&mut dma1, self, us);
++            self.sblaster = Some(sb);
++        }
++
+         // Run the HDC, passing it DMA controller while DMA is still unattached.
+         if let Some(mut hdc) = self.hdc.take() {
+             hdc.run(&mut dma1, self, us);
+diff --git a/crates/marty_core/src/devices/mod.rs b/crates/marty_core/src/devices/mod.rs
+index 4793d84..ebab37a 100644
+--- a/crates/marty_core/src/devices/mod.rs
++++ b/crates/marty_core/src/devices/mod.rs
+@@ -59,6 +59,7 @@ pub mod null_sound;
+ pub mod pic;
+ pub mod pit;
+ pub mod ppi;
++pub mod sblaster;
+ pub mod serial;
+ pub mod sn76489;
+ pub mod sound_source;
+diff --git a/crates/marty_core/src/devices/sblaster.rs b/crates/marty_core/src/devices/sblaster.rs
+new file mode 100644
+index 0000000..1ef832a
+--- /dev/null
++++ b/crates/marty_core/src/devices/sblaster.rs
+@@ -0,0 +1,518 @@
++/*
++    MartyPC
++    https://github.com/dbalsom/martypc
++
++    Copyright 2022-2026 Daniel Balsom
++
++    Permission is hereby granted, free of charge, to any person obtaining a
++    copy of this software and associated documentation files (the “Software”),
++    to deal in the Software without restriction, including without limitation
++    the rights to use, copy, modify, merge, publish, distribute, sublicense,
++    and/or sell copies of the Software, and to permit persons to whom the
++    Software is furnished to do so, subject to the following conditions:
++
++    The above copyright notice and this permission notice shall be included in
++    all copies or substantial portions of the Software.
++
++    THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
++    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
++    DEALINGS IN THE SOFTWARE.
++
++    ---------------------------------------------------------------------------
++
++    devices::sblaster.rs
++
++    Creative Sound Blaster: the DSP half. The FM half of a real card is an
++    OPL2 at the same 0x388 an AdLib lives at, so `adlib.rs` is that and this
++    is only the digital side - a DSP command port, DMA channel 1, and an IRQ.
++
++    WHAT IT IS FOR. A Sound Blaster stream is the one thing in this emulator's
++    reach that no other instrument can answer honestly. A guest feeding a DMA
++    ring has to keep ahead of the card, and whether it does is a question about
++    CPU time: on a host-speed emulator it always does, and on real hardware the
++    machine that would tell you may not have a card in it at all. A
++    cycle-accurate 8088 with a real DSP clocking DMA at a real sample rate is
++    where an underrun is a fact rather than a guess.
++
++    THE VERSION IS A SETTING, NOT A CONSTANT, and that is deliberate. Drivers
++    branch hard on it: below DSP 2.00 there is no auto-init mode, so a player
++    must re-arm the 8237 and re-issue a command per half-buffer from inside its
++    interrupt handler, and at or above it the card loops on its own. Those are
++    two entirely different pieces of guest code, and a card that can only be
++    one of them can only test one of them. `dsp_version` picks.
++
++    WHAT IS NOT HERE. No mixer beyond the registers a driver reads to find its
++    own IRQ, no 16-bit or stereo modes, no ADPCM, no MIDI/MPU-401. A DSP 2.01
++    card had none of those either; the SB16 commands (0x41 sample rate, 0xB0/
++    0xC6 16-bit) are refused rather than half-implemented, because a command
++    that is accepted and does the wrong thing is worse than one that is not
++    accepted at all.
++*/
++
++use crate::{
++    bus::{BusInterface, DeviceRunTimeUnit, IoDevice},
++    cpu_common::LogicAnalyzer,
++    device_traits::sounddevice::AudioSample,
++    devices::dma,
++};
++use crossbeam_channel::Sender;
++
++pub const DEFAULT_SB_BASE: u16 = 0x220;
++pub const DEFAULT_SB_IRQ: u8 = 7;
++pub const SB_DMA: usize = 1;
++
++/// Port offsets from the card's base.
++const PORT_MIXER_ADDR: u16 = 0x04;
++const PORT_MIXER_DATA: u16 = 0x05;
++const PORT_DSP_RESET: u16 = 0x06;
++// 0x08/0x09 are the card's OPL2 alias. Deliberately NOT handled here: the FM
++// half is `adlib.rs` at 0x388, and a machine that wants both installs both.
++// Claiming the alias without an OPL behind it would make a driver's FM probe
++// succeed and then hear nothing.
++const PORT_DSP_READ: u16 = 0x0A;
++const PORT_DSP_WRITE: u16 = 0x0C;
++const PORT_DSP_WSTAT: u16 = 0x0C;
++const PORT_DSP_RSTAT: u16 = 0x0E;
++
++/// What the DSP answers a reset with, and the only handshake a driver has.
++const DSP_READY: u8 = 0xAA;
++
++/// The 8237 is asked for a byte at a time; this is how many the card is
++/// willing to pull in one `run()` before giving the CPU its bus back. A
++/// stream at 22 kHz owes ~22 bytes a millisecond, so this is generous and
++/// still bounded - an unbounded drain would let a mis-programmed count starve
++/// the guest instead of underrunning it, which is the wrong failure to model.
++const MAX_DMA_PER_RUN: usize = 512;
++
++#[derive(Copy, Clone, Debug, PartialEq)]
++enum DspState {
++    /// Waiting for a command byte.
++    Idle,
++    /// Collecting `remaining` operand bytes for `cmd`.
++    Operands { cmd: u8, remaining: u8 },
++}
++
++#[derive(Copy, Clone, Debug, PartialEq)]
++enum Direction {
++    Output,
++    Input,
++}
++
++pub struct SoundBlasterCard {
++    pub io_base: u16,
++    pub irq: u8,
++    /// Reported by command 0xE1 - and the thing a driver branches on.
++    ver_major: u8,
++    ver_minor: u8,
++
++    // --- DSP command state ---
++    state: DspState,
++    operands: [u8; 2],
++    operand_n: usize,
++    /// Bytes the DSP is waiting for the CPU to read, oldest first.
++    out_queue: Vec<u8>,
++    reset_armed: bool,
++
++    // --- transfer state ---
++    running: bool,
++    paused: bool,
++    auto_init: bool,
++    direction: Direction,
++    /// From command 0x48; the number of bytes in a block, minus one.
++    block_len: u16,
++    block_left: u16,
++    time_constant: u8,
++    speaker_on: bool,
++    /// Set when a block completes and cleared when the driver acknowledges by
++    /// reading the read-buffer-status port. A second block completing while
++    /// it is still set is an ACKNOWLEDGE MISS - the guest was too slow - and
++    /// is counted rather than hidden, because it is the whole point of having
++    /// a cycle-accurate card.
++    irq_pending: bool,
++    /// One-shot: command 0xF2 asks for an IRQ from a context with no bus, so
++    /// the assertion is deferred to the next `run()`. It has to BE a one-shot
++    /// rather than "re-assert while pending", which would put a second edge
++    /// in the IRR behind the one the CPU is already servicing - a real card
++    /// holds one line, it does not re-pulse it.
++    irq_force: bool,
++    /// The same deferral the other way: reading the read-buffer-status port
++    /// lowers the card's IR line, and `IoDevice::read_u8` has no bus either.
++    irq_lower: bool,
++    pub missed_acks: u32,
++    pub blocks_done: u32,
++
++    // --- mixer ---
++    mixer_addr: u8,
++    mixer: [u8; 256],
++
++    // --- audio output ---
++    sender: Sender<AudioSample>,
++    sample_rate: u32,
++    /// Fractional sample accumulator: the DSP's rate and the host's differ,
++    /// and rounding per run would drift audibly over a long stream.
++    accum: f64,
++    /// Carries a sub-sample slice between runs. Dropping it instead silences
++    /// the card whenever the tick rate is fast enough that fewer than one
++    /// sample is due per call, which is most of them.
++    pending_frac: f64,
++    last_sample: f32,
++}
++
++impl SoundBlasterCard {
++    pub fn new(io_base: u16, irq: u8, dsp_version: (u8, u8), sample_rate: u32, sender: Sender<AudioSample>) -> Self {
++        log::debug!(
++            "Creating Sound Blaster at {:04X} IRQ {} DSP {}.{:02}",
++            io_base,
++            irq,
++            dsp_version.0,
++            dsp_version.1
++        );
++        Self {
++            io_base,
++            irq,
++            ver_major: dsp_version.0,
++            ver_minor: dsp_version.1,
++            state: DspState::Idle,
++            operands: [0; 2],
++            operand_n: 0,
++            out_queue: Vec::new(),
++            reset_armed: false,
++            running: false,
++            paused: false,
++            auto_init: false,
++            direction: Direction::Output,
++            block_len: 0,
++            block_left: 0,
++            time_constant: 0,
++            speaker_on: false,
++            irq_pending: false,
++            irq_force: false,
++            irq_lower: false,
++            missed_acks: 0,
++            blocks_done: 0,
++            mixer_addr: 0,
++            mixer: [0; 256],
++            sender,
++            sample_rate,
++            accum: 0.0,
++            pending_frac: 0.0,
++            last_sample: 0.0,
++        }
++    }
++
++    fn supports_auto_init(&self) -> bool {
++        self.ver_major >= 2
++    }
++
++    /// The DSP's own sample rate, from the time constant it was given.
++    ///
++    /// `rate = 1000000 / (256 - tc)`, which is the card's documented formula
++    /// and not an approximation of one. A driver that never set a constant
++    /// gets a nominal 8 kHz rather than a divide by zero.
++    fn dsp_rate(&self) -> f64 {
++        if self.time_constant == 0 {
++            8000.0
++        }
++        else {
++            1_000_000.0 / (256.0 - self.time_constant as f64)
++        }
++    }
++
++    fn dsp_reset(&mut self) {
++        self.state = DspState::Idle;
++        self.operand_n = 0;
++        self.out_queue.clear();
++        self.running = false;
++        self.paused = false;
++        self.auto_init = false;
++        self.irq_pending = false;
++        self.block_left = 0;
++        // The time constant, the block length and the speaker bit SURVIVE a
++        // reset on a real card, and a driver that resets between blocks
++        // relies on it. Only the command machine and the transfer stop.
++        self.out_queue.push(DSP_READY);
++    }
++
++    fn start_transfer(&mut self, dir: Direction, auto_init: bool, len: Option<u16>) {
++        if let Some(l) = len {
++            self.block_len = l;
++        }
++        self.direction = dir;
++        self.auto_init = auto_init && self.supports_auto_init();
++        self.block_left = self.block_len.wrapping_add(1);
++        self.running = true;
++        self.paused = false;
++    }
++
++    /// One DSP command, with its operands already collected.
++    fn execute(&mut self, cmd: u8, ops: &[u8]) {
++        match cmd {
++            // --- transfer control ---
++            0x14 => self.start_transfer(Direction::Output, false, Some(u16::from_le_bytes([ops[0], ops[1]]))),
++            0x24 => self.start_transfer(Direction::Input, false, Some(u16::from_le_bytes([ops[0], ops[1]]))),
++            0x1C => self.start_transfer(Direction::Output, true, None),
++            0x2C => self.start_transfer(Direction::Input, true, None),
++            0x48 => self.block_len = u16::from_le_bytes([ops[0], ops[1]]),
++            0x40 => self.time_constant = ops[0],
++
++            0xD0 => self.paused = true,
++            0xD4 => self.paused = false,
++            0xD1 => self.speaker_on = true,
++            0xD3 => self.speaker_on = false,
++            // Exit auto-init: the CURRENT block still finishes, which is the
++            // whole reason the command exists - a player uses it to stop
++            // cleanly at a block boundary rather than mid-buffer.
++            0xDA => self.auto_init = false,
++
++            0xE1 => {
++                self.out_queue.push(self.ver_major);
++                self.out_queue.push(self.ver_minor);
++            }
++            // Force an 8-bit IRQ. A driver uses this to find which line the
++            // card is jumpered to (SPEC.md 34.5), so it must fire even with
++            // no transfer running - which is why it goes through the same
++            // one-shot the block-complete interrupt does.
++            0xF2 => self.irq_force = true,
++
++            0x10 => { /* direct DAC write - accepted and dropped, see the header */ }
++            0xE0 => {
++                // DSP identify: returns the operand's complement.
++                let v = if ops.is_empty() { 0 } else { ops[0] };
++                self.out_queue.push(!v);
++            }
++            other => {
++                log::debug!("Sound Blaster: unimplemented DSP command {:02X}", other);
++            }
++        }
++    }
++
++    /// How many operand bytes a command takes. An unknown command takes none,
++    /// which is what a real DSP does - it simply ignores it - and is why a
++    /// driver probing with a bad command does not desynchronise the port.
++    fn operand_count(&self, cmd: u8) -> u8 {
++        match cmd {
++            0x14 | 0x24 | 0x48 => 2,
++            0x10 | 0x40 | 0xE0 => 1,
++            // SB16: refused rather than half-implemented. Reporting a DSP
++            // below 4.00 means a correct driver never sends these.
++            0x41 | 0xB0..=0xCF => {
++                log::warn!("Sound Blaster: SB16 command {:02X} on a DSP {}.{:02} card - ignored",
++                           cmd, self.ver_major, self.ver_minor);
++                0
++            }
++            _ => 0,
++        }
++    }
++
++    fn write_dsp(&mut self, data: u8) {
++        match self.state {
++            DspState::Idle => {
++                let n = self.operand_count(data);
++                if n == 0 {
++                    self.execute(data, &[]);
++                }
++                else {
++                    self.operand_n = 0;
++                    self.state = DspState::Operands { cmd: data, remaining: n };
++                }
++            }
++            DspState::Operands { cmd, remaining } => {
++                if self.operand_n < self.operands.len() {
++                    self.operands[self.operand_n] = data;
++                }
++                self.operand_n += 1;
++                if remaining <= 1 {
++                    let ops = self.operands;
++                    self.state = DspState::Idle;
++                    self.execute(cmd, &ops[..self.operand_n.min(ops.len())]);
++                }
++                else {
++                    self.state = DspState::Operands { cmd, remaining: remaining - 1 };
++                }
++            }
++        }
++    }
++
++    fn read_dsp(&mut self) -> u8 {
++        if self.out_queue.is_empty() {
++            // A real DSP holds the last byte on the bus rather than floating.
++            0xFF
++        }
++        else {
++            self.out_queue.remove(0)
++        }
++    }
++
++    /// Push one 8-bit unsigned PCM sample out, resampled to the host rate.
++    ///
++    /// The DSP's rate is whatever the time constant says and the host's is
++    /// fixed, so this holds a fractional accumulator and emits however many
++    /// host samples the guest's one sample is worth. Rounding per byte would
++    /// drift, and a stream is minutes long.
++    fn emit(&mut self, byte: u8) {
++        // 8-bit SB PCM is unsigned, centred on 0x80.
++        self.last_sample = ((byte as f32) - 128.0) / 128.0;
++        let ratio = self.sample_rate as f64 / self.dsp_rate();
++        self.accum += ratio;
++        while self.accum >= 1.0 {
++            let s = if self.speaker_on { self.last_sample } else { 0.0 };
++            let _ = self.sender.try_send(s);
++            self.accum -= 1.0;
++        }
++    }
++
++    fn raise_irq(&mut self, bus: &mut BusInterface) {
++        if self.irq_pending {
++            // The previous block's interrupt was never acknowledged: the
++            // guest did not keep up. Counted, not hidden.
++            self.missed_acks += 1;
++        }
++        self.irq_pending = true;
++        if let Some(pic) = bus.pic_mut().as_mut() {
++            pic.request_interrupt(self.irq);
++        }
++    }
++
++    /// Clock the transfer. Called with the DMA controller detached from the
++    /// bus, exactly as the FDC and HDC are.
++    pub fn run(&mut self, dma: &mut dma::DMAController, bus: &mut BusInterface, us: f64) {
++        // The two deferred IR-line transitions, spent before anything else -
++        // a lower owed from this tick's port read must not be swallowed by
++        // the early return below, and command 0xF2 fires with nothing
++        // running at all, which is the whole point of it.
++        if self.irq_lower {
++            self.irq_lower = false;
++            if let Some(pic) = bus.pic_mut().as_mut() {
++                pic.clear_interrupt(self.irq);
++            }
++        }
++        if self.irq_force {
++            self.irq_force = false;
++            self.raise_irq(bus);
++        }
++
++        if !self.running || self.paused {
++            return;
++        }
++
++        // How many guest samples are due in this slice of emulated time. The
++        // remainder is CARRIED, not dropped: run() is called far more often
++        // than once per sample period, so truncating each call to an integer
++        // would silence the card entirely.
++        self.pending_frac += self.dsp_rate() * us / 1_000_000.0;
++        let mut budget = self.pending_frac as usize;
++        self.pending_frac -= budget as f64;
++        if budget > MAX_DMA_PER_RUN {
++            // Whatever is over the cap stays owed rather than vanishing, so a
++            // slow host makes the stream late instead of shortening it.
++            self.pending_frac += (budget - MAX_DMA_PER_RUN) as f64;
++            budget = MAX_DMA_PER_RUN;
++        }
++
++        for _ in 0..budget {
++            if !dma.check_dma_ready(SB_DMA) {
++                break;
++            }
++            match self.direction {
++                Direction::Output => {
++                    let byte = dma.do_dma_read_u8(bus, SB_DMA);
++                    self.emit(byte);
++                }
++                Direction::Input => {
++                    // Recording: a flat mid-scale value. The card being
++                    // asked for input at the right RATE is what the guest
++                    // side is being tested for; what it records is not.
++                    dma.do_dma_write_u8(bus, SB_DMA, 0x80);
++                }
++            }
++
++            self.block_left = self.block_left.saturating_sub(1);
++            if self.block_left == 0 {
++                self.blocks_done += 1;
++                self.raise_irq(bus);
++                if self.auto_init {
++                    self.block_left = self.block_len.wrapping_add(1);
++                }
++                else {
++                    self.running = false;
++                    break;
++                }
++            }
++        }
++    }
++}
++
++impl IoDevice for SoundBlasterCard {
++    fn read_u8(&mut self, port: u16, _delta: DeviceRunTimeUnit) -> u8 {
++        match port.wrapping_sub(self.io_base) {
++            PORT_DSP_READ => self.read_dsp(),
++            // Write-buffer status: bit 7 clear means "ready for a byte". This
++            // card is always ready, which is honest - the DSP's command FIFO
++            // is not what makes a stream late.
++            PORT_DSP_WSTAT => 0x7F,
++            // Read-buffer status: bit 7 set means a byte is waiting. READING
++            // THIS PORT ACKNOWLEDGES THE 8-BIT IRQ, which is the only way a
++            // driver has to clear it and is why the acknowledge-miss counter
++            // lives here.
++            PORT_DSP_RSTAT => {
++                if self.irq_pending {
++                    self.irq_lower = true;
++                }
++                self.irq_pending = false;
++                if self.out_queue.is_empty() {
++                    0x7F
++                }
++                else {
++                    0xFF
++                }
++            }
++            PORT_MIXER_DATA => self.mixer[self.mixer_addr as usize],
++            _ => 0xFF,
++        }
++    }
++
++    fn write_u8(
++        &mut self,
++        port: u16,
++        data: u8,
++        _bus: Option<&mut BusInterface>,
++        _delta: DeviceRunTimeUnit,
++        _analyzer: Option<&mut LogicAnalyzer>,
++    ) {
++        match port.wrapping_sub(self.io_base) {
++            // Reset is a 1 then a 0, and only that sequence resets. A driver
++            // probing for a card writes exactly this and reads 0xAA back;
++            // treating a bare 0 as a reset would make an unrelated port write
++            // look like a card.
++            PORT_DSP_RESET => {
++                if data & 1 != 0 {
++                    self.reset_armed = true;
++                }
++                else if self.reset_armed {
++                    self.reset_armed = false;
++                    self.dsp_reset();
++                }
++            }
++            PORT_DSP_WRITE => self.write_dsp(data),
++            PORT_MIXER_ADDR => self.mixer_addr = data,
++            PORT_MIXER_DATA => self.mixer[self.mixer_addr as usize] = data,
++            _ => {}
++        }
++    }
++
++    #[rustfmt::skip]
++    fn port_list(&self) -> Vec<(String, u16)> {
++        vec![
++            (String::from("SB Mixer Address"), self.io_base + PORT_MIXER_ADDR),
++            (String::from("SB Mixer Data"),    self.io_base + PORT_MIXER_DATA),
++            (String::from("SB DSP Reset"),     self.io_base + PORT_DSP_RESET),
++            (String::from("SB DSP Read"),      self.io_base + PORT_DSP_READ),
++            (String::from("SB DSP Write"),     self.io_base + PORT_DSP_WRITE),
++            (String::from("SB DSP Rd Status"), self.io_base + PORT_DSP_RSTAT),
++        ]
++    }
++}
+diff --git a/crates/marty_core/src/machine_config.rs b/crates/marty_core/src/machine_config.rs
+index 67d671c..a81c85c 100644
+--- a/crates/marty_core/src/machine_config.rs
++++ b/crates/marty_core/src/machine_config.rs
+@@ -200,6 +200,14 @@ pub struct SoundDeviceConfig {
+     pub sound_type: SoundType,
+     pub io_base:    Option<u16>,
+     pub lpt_port:   Option<usize>,
++    /// Sound Blaster only: its jumpered IRQ, and the DSP version it reports
++    /// to command 0xE1. The version is a SETTING because drivers branch hard
++    /// on it - below 2.00 there is no auto-init DMA, so a player has to
++    /// re-arm the 8237 per half-buffer from inside its own interrupt handler,
++    /// and that is a different piece of guest code from the one a 2.01 card
++    /// exercises. A card fixed at one version can only ever test one of them.
++    pub irq: Option<u8>,
++    pub dsp_version: Option<(u8, u8)>,
+ }
+ 
+ #[derive(Clone, Debug, Deserialize)]
+diff --git a/crates/marty_core/src/machine_types.rs b/crates/marty_core/src/machine_types.rs
+index f036f16..5143e82 100644
+--- a/crates/marty_core/src/machine_types.rs
++++ b/crates/marty_core/src/machine_types.rs
+@@ -94,6 +94,7 @@ impl MachineType {
+ pub enum SoundType {
+     AdLib,
+     SoundSource,
++    SoundBlaster,
+ }
+ 
+ #[derive(Copy, Clone, Debug, Deserialize, Hash, Eq, PartialEq)]
+@@ -106,6 +107,7 @@ impl From<SoundType> for SoundConnectionType {
+     fn from(val: SoundType) -> Self {
+         match val {
+             SoundType::AdLib => SoundConnectionType::Card,
++            SoundType::SoundBlaster => SoundConnectionType::Card,
+             SoundType::SoundSource => SoundConnectionType::Parallel,
+         }
+     }

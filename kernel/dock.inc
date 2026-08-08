@@ -50,6 +50,20 @@ DOCK_TILE_H equ 20
 DOCK_X0     equ 8               ; first tile's left edge
 DOCK_STEP   equ 28              ; tile + 4px gap; 8 + 12*28 = 344 < 640
 
+DOCK_CTX_N  equ 1               ; items in dock_ctx_items (SPEC.md 30.2)
+DOCK_CTX_H  equ DOCK_CTX_N * MENU_ITEM_H + 2
+                                ; ...and the height menu_popup will give them:
+                                ; count*16 plus the two frame rows. A copy of
+                                ; that arithmetic, and a deliberately cheap
+                                ; one - it decides only where the menu is
+                                ; ANCHORED, and menu_popup shifts and floors
+                                ; the result anyway (SPEC.md 12.4), so drift
+                                ; costs a few pixels of placement and can
+                                ; never put a menu off the screen. Anchoring
+                                ; at the press point instead would drop the
+                                ; menu ON the strip, over the very tile it is
+                                ; asking about
+
 ; -----------------------------------------------------------------------------
 ; dock_init - reset module scratch
 ; in:  nothing
@@ -293,9 +307,8 @@ dock_draw_tile:
     mov dx, [vid_dock_ty0]
     add dx, 2
     push si
-    mov si, [di+I_ICON]
-    or si, si
-    jnz .icon
+    call inst_icon_ptr          ; SI -> 64 bytes in OUR segment, staged if
+    jnc .icon                   ; this instance's body lives in LOW_SEG
     mov si, ico_app16 + 2       ; generic fallback: skip the library
 .icon:                          ; record's 2-byte header (SPEC.md 25/30)
     call icon_draw16
@@ -336,6 +349,49 @@ dock_draw_tile:
     ret
 
 ; -----------------------------------------------------------------------------
+; dock_hit - which tile is under a point? (SPEC.md 30/30.2)
+; in:  CX = x, DX = y (absolute)
+; out: CF = 1 the point is not in the strip at all;
+;      CF = 0 the strip owns it, and DI = the LIVE instance record under the
+;      pointer with AL = its slot - or DI = 0 for the bare strip, the gap
+;      between two tiles, a slot past the last, and an empty or dying one.
+; clobbers: AX, DI (the outputs)
+;
+; Lifted whole out of dock_click when the right button wanted the same find
+; (SPEC.md 30.2). Factored rather than copied because "which records have a
+; tile" is one question - SPEC.md 29.2 rule 3 - and a second copy of the
+; answer is a second place for a dying record to be offered a menu.
+; -----------------------------------------------------------------------------
+dock_hit:
+    push bx
+    cmp dx, [vid_dock_y0]       ; above the rule: not ours at all
+    jl .miss
+
+    xor di, di                  ; in the strip, no tile yet
+    cmp cx, DOCK_X0             ; left of the first tile
+    jl .in
+    mov ax, cx
+    sub ax, DOCK_X0
+    mov bl, DOCK_STEP           ; slot = (x - DOCK_X0) / DOCK_STEP
+    div bl                      ; AL = slot, AH = within-slot x
+    cmp ah, DOCK_TILE_W         ; in the gap between tiles?
+    jae .in
+    cmp al, INST_MAX            ; past the last slot?
+    jae .in
+    call inst_ptr               ; DI = record (in: AL = index; AX survives)
+    cmp byte [di+I_STATE], 1
+    je .in                      ; live: DI is the answer
+    xor di, di                  ; empty or dying: no tile here
+.in:
+    clc
+    pop bx
+    ret
+.miss:
+    stc
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; dock_click - hit-test a click against the strip (SPEC.md 30)
 ; in:  CX = x, DX = y (absolute); NO lock held (takes it internally)
 ; out: CF = 1 the click was consumed (anywhere in the strip, tile or not),
@@ -350,23 +406,10 @@ dock_click:
     push cx
     push di
 
-    cmp dx, [vid_dock_y0]       ; below the rule?
-    jl .miss
-
-    cmp cx, DOCK_X0             ; left of the first tile: consumed no-op
-    jl .consumed
-    sub cx, DOCK_X0
-    mov ax, cx
-    mov bl, DOCK_STEP           ; slot = (x - DOCK_X0) / DOCK_STEP
-    div bl                      ; AL = slot, AH = within-slot x
-    cmp ah, DOCK_TILE_W         ; in the gap between tiles?
-    jae .consumed
-    cmp al, INST_MAX            ; past the last slot?
-    jae .consumed
-
-    call inst_ptr               ; DI = record (in: AL = index)
-    cmp byte [di+I_STATE], 1    ; empty/dying slot: consumed no-op
-    jne .consumed
+    call dock_hit               ; DI = the live instance under the pointer
+    jc .miss
+    or di, di
+    jz .consumed                ; bare strip, gap or dead slot: consumed no-op
 
     test byte [di+I_FLAGS], 1
     jz .front
@@ -394,6 +437,86 @@ dock_click:
     ret
 
 ; -----------------------------------------------------------------------------
+; dock_rclick - right-press on the strip: a tile's context menu (SPEC.md 30.2)
+; in:  CX = x, DX = y (absolute); NO lock held (takes it internally)
+; out: CF = 1 the press was consumed (anywhere in the strip, tile or not),
+;      CF = 0 not in the dock. All registers preserved.
+;
+; One item, 'Close': the close box of SPEC.md 13 reached from the dock, which
+; is the only way to quit an application without first restoring its window
+; off the strip. It is anchored at the press x and JUST ABOVE the strip
+; (DOCK_CTX_H), so it does not land on the tile it is asking about - the one
+; place this departs from fm_rclick, which anchors on the press outright
+; because a Disk window's rows are nowhere near a screen edge. The strip's
+; own background is
+; consumed and drops NOTHING - a press there is neither a tile nor the
+; desktop, and a menu about no application would be a menu with nothing in it.
+;
+; **The record pointer does not survive the tracker; the slot does.**
+; menu_popup holds the button and yields (SPEC.md 12.4), so a package worker
+; can reach inst_task_die and free the very record this menu is about. So the
+; SLOT is banked, re-resolved afterwards, and re-tested for I_STATE = 1
+; before anything is done to it. Nothing can refill the slot in that window -
+; inst_alloc runs on the UI task, which is standing inside menu_drop - so the
+; state test is sufficient and the I_WIN test after it is insurance.
+;
+; Unbilled, exactly like menu_track and fm_rclick (SPEC.md 13): a held
+; button's dwell time is nobody's CPU cost, and the command that follows
+; destroys the very record it would be charged to.
+; -----------------------------------------------------------------------------
+dock_rclick:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+
+    call dock_hit               ; DI = the live instance under the pointer
+    jc .miss
+    or di, di
+    jz .consumed                ; bare strip: consumed, and no menu
+
+    mov [dock_rslot], al        ; AL = its slot - see above
+    call gfx_lock
+    mov dx, [vid_dock_y0]       ; the menu sits ABOVE the strip rather than on
+    sub dx, DOCK_CTX_H          ; it: CX, the press x, is still the anchor
+    mov bx, dock_ctx_items
+    mov ax, DOCK_CTX_N
+    call menu_popup             ; CF = 1 nothing chosen; else AL = the item,
+    jc .rdone                   ; and 'Close' is the only one there is
+
+    mov al, [dock_rslot]        ; the tracker yielded: find the record again
+    call inst_ptr               ; and take it only if it is still live
+    cmp byte [di+I_STATE], 1
+    jne .rdone
+    mov bx, [di+I_WIN]
+    or bx, bx
+    jz .rdone
+    call app_close_win          ; in: BX; lock held, UI task (SPEC.md 29.4)
+.rdone:
+    call gfx_unlock
+
+.consumed:
+    stc
+    jmp .out
+.miss:
+    clc
+.out:
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; The whole descriptor (SPEC.md 12.4/30.2): one near pointer to a NUL string,
+; and the string is menu.inc's - the same bytes the app-name menu's own Close
+; item draws (SPEC.md 12.7), so the two can never come to say different
+; things. Kernel data, so menu_popup's [menu_dseg] = 0 is right for it.
+dock_ctx_items:
+    dw menu_s_appclose
+
+; -----------------------------------------------------------------------------
 section .bss
 
 dock_gcol:  resb 1              ; dock_paint's [gfx_color] save
@@ -402,6 +525,9 @@ dock_drew:  resb 1              ; ...and dock_paint's CF: did anything move?
 dock_act:   resw 1              ; the instance record owning the frontmost
                                 ; visible window, 0 = none. Read per tile, so
                                 ; it is resolved once per dock_paint
+dock_rslot: resb 1              ; the SLOT dock_rclick's popup is about - a
+                                ; record pointer cannot survive the tracker's
+                                ; yields (SPEC.md 30.2)
 dock_ck:    resw INST_MAX       ; what each tile was last DRAWN as (dock_key)
 
 section .text

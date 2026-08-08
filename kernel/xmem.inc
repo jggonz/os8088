@@ -43,11 +43,14 @@
 ; assembly-time permission only (SPEC.md 41.9 rule 2): an island reached on a
 ; 286 is an illegal-opcode trap on a machine with no handler for it.
 ;
-; Context (SPEC.md 20.3/41.9 rule 4, binding): the allocator and the copy are
-; UI-task / window-callback only. On tier 1 xm_copy goes through int 15h
-; AH=87h, and some 286 BIOSes implement that call by RESETTING THE CPU to
-; get back to real mode. A worker task calling it - or any caller holding the
-; gfx lock while it runs - is a machine that stops.
+; Context (SPEC.md 41.8): the allocator and the copy are UI-task context -
+; the entry proc or any window callback, and the gfx lock MAY be held (a
+; callback always holds it; stashing a render buffer to/from the store is the
+; intended use). They touch no VRAM and hold no drawing lock, so the gfx lock
+; is orthogonal. NOT from a worker: on tier 1 xm_copy goes through int 15h
+; AH=87h (a BIOS call the kernel keeps on the UI task per SPEC.md 7; some 286
+; BIOSes implement it by a transparent CPU reset), and the scratch it shares
+; is serialized against a switch, not against re-entry.
 ; =============================================================================
 
 XM_SEL_FLAT     equ 0x08        ; GDT entry 1: base 0, limit 4GB, data r/w
@@ -135,6 +138,12 @@ xm_gdtr:
 ; not "we wrote to the gate" - the thing every consumer keys off, and a 386
 ; whose gate never answered has no reachable store no matter what AH=88h
 ; says.
+
+section .ovl                    ; the boot overlay (SPEC.md 2.5): sizing the store
+                                ; happens once, at boot. xm_arm stays
+                                ; resident - xm_copy re-arms unreal mode
+                                ; inside the window that uses it - so the one
+                                ; call to it from here goes through a shim
 ; -----------------------------------------------------------------------------
 xm_init:
     push ax
@@ -186,7 +195,8 @@ xm_init:
     mov [xm_base_hi], dx        ; xm_base_lo stays 0 - both bases are on a
     cmp byte [cpu_tier], CPU_386        ; 64KB boundary
     jne .publish
-    call xm_arm                 ; unreal mode, once, here (SPEC.md 41.4)
+    call KERNEL_SEG:ovw_xm_arm  ; unreal mode, once, here (SPEC.md 41.4).
+                                ; FAR: this is the overlay calling resident code
 .publish:
     mov [xm_kb], bx             ; LAST, and deliberately so
 .done:
@@ -224,6 +234,8 @@ xm_init:
 ;
 ; There is no far jump. CS is never reloaded and keeps its real-mode base,
 ; which is what makes the instruction after `mov cr0` reachable at all.
+
+section .text
 ; -----------------------------------------------------------------------------
 xm_arm:
     cmp byte [cpu_tier], CPU_386
@@ -690,9 +702,15 @@ xm_chk:
 ;           3 bad length
 ; clobbers: nothing else (ES restored per SPEC.md 1; flags)
 ;
-; UI-TASK / WINDOW-CALLBACK CONTEXT ONLY (SPEC.md 41.9 rule 4): never from an
-; ISR, never under the gfx lock, never on a hot path. On tier 1 this enters
-; int 15h AH=87h, and some 286 BIOSes implement that by resetting the CPU.
+; UI-TASK CONTEXT (SPEC.md 41.8): the entry proc or any window callback, and
+; THE GFX LOCK MAY BE HELD - a callback always holds it, and stashing a render
+; buffer to/from the store is the intended use. This routine touches no VRAM
+; and takes no drawing lock of its own, so the gfx lock is orthogonal to it.
+; NOT from an ISR and NOT from a worker task: on tier 1 this enters int 15h
+; AH=87h (a BIOS call, kept on the UI task per SPEC.md 7; some 286 BIOSes
+; implement it by a transparent CPU reset), and it shares [xm_src]/[xm_dst]
+; scratch serialized by sch_lock against a switch, not against re-entry. It is
+; still not a HOT path: the copy is bounded (below) but it is not free.
 ;
 ; One ABI, two transports, and the caller cannot tell which ran - that is
 ; what makes the slot safe to hand to an 8086-only package. Both ends are

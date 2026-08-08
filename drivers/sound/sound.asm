@@ -73,7 +73,7 @@ snd_entry:
     mov byte [drv_up], 1
     mov word [snd_services+DSV_FM], opl_fm_op
     mov word [snd_services+DSV_TONE], opl_tone
-    mov word [snd_services+DSV_RELINST], opl_release_inst
+    mov word [snd_services+DSV_RELINST], snd_release_both
     or word [snd_services+DSV_CAPS], SND_CAP_FM
     or word [snd_services+DSV_TIERS], 1 << SND_RT_FM
     mov word [snd_services+DSV_NAME], snd_s_opl
@@ -83,6 +83,13 @@ snd_entry:
     mov byte [drv_up], 1
     mov word [snd_services+DSV_STREAM], sbl_stream_op
     mov word [snd_services+DSV_TICK], sbl_tick
+    mov word [snd_services+DSV_RELINST], snd_release_both
+                                ; ...and the release verb, which the OPL leg
+                                ; above may already have published. It must be
+                                ; set by EITHER half attaching, because it is
+                                ; now the one entry that releases BOTH - a
+                                ; card with no OPL still has grants and a
+                                ; staging pool to give back
     or word [snd_services+DSV_CAPS], SND_CAP_PCM_BG | SND_CAP_PCM_IN
     or word [snd_services+DSV_TIERS], 1 << SND_RT_SB
                                 ; ...and THIS is the only place that bit is
@@ -122,8 +129,9 @@ snd_entry:
     clc
     ret
 .nohw:
-    stc
-    ret
+    mov al, DRVE_HW             ; the reason, explicitly: attach's refusal may
+    stc                         ; carry a DRVE_* now (SPEC.md 51.2) and the
+    ret                         ; kernel reads whatever AL holds
 
 ; -----------------------------------------------------------------------------
 ; snd_tier - DRVV_TIER: how much of ourselves the user wants (SPEC.md 34.8)
@@ -245,6 +253,12 @@ snd_services:
     dw 0                        ; DSV_NAME
     dw 0                        ; DSV_TONE
     dw 0                        ; DSV_TIERS
+    dw 0                        ; DSV_BLK    - a disk driver's, not ours
+    dw 0                        ; DSV_CPNAME - no Control Panel page: the
+    dw 0                        ; DSV_CPPAINT  Sound and Drivers pages the
+    dw 0                        ; DSV_CPCLICK  kernel already has are this
+                                ; driver's whole interface (SPEC.md 31.7)
+    times DSV_SIZE - ($ - snd_services) db 0
 
 snd_s_opl:  db 'AdLib', 0
 snd_s_sb:   db 'Sound Blaster', 0
@@ -681,8 +695,44 @@ opl_fm_op:
     ret
 
 ; -----------------------------------------------------------------------------
+; snd_release_both - the DSV_RELINST verb: give back EVERYTHING a dying
+;                    instance holds, on BOTH halves of this driver
+;
+; in:       AL = instance slot
+; out:      nothing
+; clobbers: nothing (flags)
+;
+; The cell used to be `opl_release_inst` alone, which keys off FM channels and
+; touches nothing of the Sound Blaster's - so a package that streamed and then
+; closed left its staging grant behind, and with it the driver's 20KB staging
+; POOL, which sbl_pool_put only releases once the last grant has gone. That is
+; a 20KB claim stranded in the MIDDLE of the heap for the rest of the session
+; (SPEC.md 50.3's warning about long-lived mid-heap claims), and the visible
+; symptom was the next launch of the same app being refused its module buffer
+; on a machine with room for it - reported from the field, reproduced here as
+; System heap staying at 122K instead of returning to 102K after a close.
+;
+; Each half is gated on its own attach flag rather than on a published service
+; word: snd_tier can take the DSP tier away and give it back all session
+; (it clears DSV_STREAM to do it), and a teardown must still free memory for a
+; card whose tier is currently parked.
+; -----------------------------------------------------------------------------
+snd_release_both:
+    cmp byte [drv_up], 0        ; nothing attached at all
+    je .out
+    cmp byte [sbl_up], 0        ; the Sound Blaster's grants + staging pool
+    je .fm
+    call sbl_release_inst
+.fm:
+    cmp word [snd_services+DSV_FM], 0   ; the OPL's channels, if one attached
+    je .out                             ; (DSV_FM is set once at attach and
+    call opl_release_inst               ; never cleared, unlike DSV_STREAM)
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; opl_release_inst - force-release every FM channel an instance holds
-;                    (DSV_RELINST)
+;                    (reached through snd_release_both, the DSV_RELINST cell)
 ; in:       AL = instance slot
 ; out:      nothing
 ; clobbers: nothing (flags)

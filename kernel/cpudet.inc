@@ -31,11 +31,13 @@
 ; decodes to whatever that machine happens to put there. cpu_a20_enable
 ; returns having touched no port at all, and cpu_hma_claim refuses.
 ;
-; This module is .text only. cpu_detect runs from kmain immediately after
-; far_init and before anything else may key off the tier (SPEC.md 15), and
-; every routine here is plain 8086 code - cpu_detect by necessity, since it
-; runs before the tier it publishes is known, and the other two because
-; nothing they do needs more.
+; This module is almost all BOOT OVERLAY (SPEC.md 2.5): cpu_detect,
+; cpu_a20_enable and cpu_hma_claim run once from kmain - first thing, before
+; sched_init hooks an ISR and before anything else may key off the tier - and
+; are then written over by the first mount's FAT. Only cpu_info stays in
+; .text: it is API slot 0x0188 and answers all session. Every routine here is
+; plain 8086 code - cpu_detect by necessity, since it runs before the tier it
+; publishes is known, and the others because nothing they do needs more.
 ; =============================================================================
 
 ; Feature bits in [cpu_feat]. Mirrored in the osapi_cpu_info contract
@@ -86,6 +88,15 @@ cpu_feat        db 0            ; CPU_F_* - what actually verified, as
 ;
 ; This routine is the one place in either module that runs before the tier
 ; is known, so there is no island in it and there cannot be one.
+
+section .ovl                    ; the boot overlay (SPEC.md 2.5): runs once from
+                                ; kmain and is written over by the first
+                                ; mount. cpu_info stays resident below: it is
+                                ; API slot 0x0188 and answers all session
+                                ; long. Nothing here calls out of the overlay
+                                ; and nothing here has data of its own -
+                                ; cpu_tier and cpu_feat are .text, written
+                                ; through DS like any kernel byte
 ; -----------------------------------------------------------------------------
 cpu_detect:
     push ax
@@ -416,6 +427,8 @@ cpu_hma_claim:
 ; Callable from any context, gfx lock held or not - it reads two bytes and
 ; touches no hardware. A package must branch on the KB figure from
 ; xm_caps, never on this tier byte (SPEC.md 41.8).
+
+section .text
 ; -----------------------------------------------------------------------------
 cpu_info:
     mov al, [cpu_tier]

@@ -194,6 +194,17 @@ tui_track:
     push bx
     push cx
     push dx
+    cmp byte [trk_fs], 0            ; on the fsx surface (SPEC.md 53) the
+    je .win                         ; screen IS the content: origin 0, the
+    xor ax, ax                      ; whole adapter. fsx does not resize the
+    mov [tui_ox], ax                ; window record the way WF_FULL did, so
+    mov [tui_oy], ax                ; the kernel would answer the WINDOWED
+    mov ax, [tui_vw]                ; box - the FT2 screen is drawn from the
+    mov [tui_cw], ax                ; live adapter size instead (tui_vw/vh,
+    mov ax, [tui_vh]                ; from OSAPI_VIDEO at layout init)
+    mov [tui_ch], ax
+    jmp short .out
+.win:
     mov bx, [trk_win]
     call OSAPI_WM_CONTENT           ; AX = content left, DX = top
     mov [tui_ox], ax
@@ -201,6 +212,7 @@ tui_track:
     call OSAPI_WM_GEOM              ; CX = content width, DX = height
     mov [tui_cw], cx
     mov [tui_ch], dx
+.out:
     pop dx
     pop cx
     pop bx
@@ -523,46 +535,130 @@ tui_dec3:
     ret
 
 ; -----------------------------------------------------------------------------
-; tui_rdout - ONE gated erase+text pair (the fr_status idiom, SPEC.md 11.3):
-;             clip-test the erase rect; covered in any part, skip BOTH.
-; in:  SI = NUL string, CX = x, DX = y (content), BX = erase width px,
-;      AH = erase colour index, AL = text colour index
+; tui_rdout - ONE readout field: the value, opaque, in its own rect.
+; in:  SI = NUL string, CX = x, DX = y (content), BX = field width px,
+;      AH = background colour index, AL = text colour index
 ; preserves all registers
+;
+; IT WAS AN ERASE-AND-LETTER PAIR AND THAT IS PERFORMANCE.md PART 1's
+; DOUBLE-DRAW FLASH. Every value readout in the windowed view goes through
+; here - Pos, Row, BPM, Spd, Ptn, Np, the song title, the status line - and
+; the pair left the field BLANK between the fill and the last glyph. On an
+; 8088 that gap is tens of milliseconds, and the Pos/Row line redraws about
+; seven times a second, so the field visibly strobes. Reported from the field
+; as "windowed mode is drawing flashing characters".
+;
+; On a mono adapter it is now ONE OSAPI_FONT_RUN (SPEC.md 6.1): the string is
+; space-padded to the field's width and a space paints background on the fast
+; path, so THE PADDING IS THE ERASE and every cell goes from its old contents
+; to its final contents in a single store. There is no moment at which the
+; field is empty.
+;
+; Two things earn that fast path and both are needed. The window is WF_SNAP
+; (SPEC.md 11.94), so [tui_ox] is a multiple of 8; and the field's x must be
+; too, which is what the round-down below is for - font_run's fallback is
+; literally the fill-then-letter pair this routine is escaping, so an
+; unaligned run would buy nothing. Rounding DOWN rather than moving the
+; callers is safe because the up-to-7 extra pixels are inside the field's own
+; background - a value sits in a box face with its label a cell or more to
+; the left - and it makes every caller aligned, including ones not yet
+; written. The one site where the pixels to the left are NOT this field's
+; background is the song title, whose x is 296 rather than 295 for exactly
+; this reason.
+;
+; On a colour adapter tui_runc has no fill (its callers there have already
+; filled the band), so this keeps the pair: VGA is unchanged, and VGA is not
+; where the flash was reported from.
+;
+; A string longer than the field is now TRUNCATED where it used to overflow
+; the erase rect and draw outside it. That is the better behaviour and no
+; shipped string reaches it - the widest field is the status line at ~51
+; cells and the longest message is far shorter.
 ; -----------------------------------------------------------------------------
+TUI_RDCELLS equ 56                  ; the widest field is [tui_cw]/8 and the
+                                    ; frame is TRK_WINW = 420, so 52 cells;
+                                    ; the clamp is a bound, not a budget
 tui_rdout:
     push ax
     push bx
     push cx
     push dx
     push si
+    push di
+    push es
     mov [tui_tcol], al
     mov [tui_ecol], ah
-    mov ax, bx
-    add ax, cx
-    dec ax                          ; x2
-    mov bx, dx                      ; y1
-    push dx                         ; text y
-    push cx                         ; text x
-    mov dx, bx
+    cmp byte [tui_mono], 0
+    je .keep
+    mov ax, cx                      ; mono: widen the field LEFT to the byte
+    and ax, 7                       ; boundary, so the run takes font_run's
+    sub cx, ax                      ; single-store path (see the header)
+    add bx, ax
+.keep:
+    mov [tui_rdw], bx
+    mov [tui_rdx], cx
+    mov [tui_rdy], dx
+    mov ax, cx                      ; the clip gate runs on the rect actually
+    mov bx, dx                      ; drawn, widened or not
+    mov cx, [tui_rdw]
+    add cx, ax
+    dec cx                          ; x2
     add dx, 7                       ; y2
-    xchg ax, cx                     ; AX = x1, CX = x2
     call tui_clipc
-    jc .skip
-    push ax
+    jc .out
+    cmp byte [tui_mono], 0
+    je .pair
+    push ds                         ; stosb writes through ES, and ES is
+    pop es                          ; KERNEL_SEG on entry to a callback
+    cld
+    mov ax, [tui_rdw]
+    mov cl, 3
+    shr ax, cl                      ; AX = cells the field spans
+    cmp ax, TUI_RDCELLS
+    jbe .cok
+    mov ax, TUI_RDCELLS
+.cok:
+    mov cx, ax
+    mov di, tui_rbuf
+.cp:
+    jcxz .cdone                     ; the value, then spaces to the field's
+    lodsb                           ; end - the pad is what erases what was
+    or al, al                       ; there before
+    jz .pad
+    stosb
+    dec cx
+    jmp short .cp
+.pad:
+    mov al, ' '
+    rep stosb
+.cdone:
+    mov byte [di], 0
+    mov si, tui_rbuf
+    mov cx, [tui_rdx]
+    mov dx, [tui_rdy]
+    mov al, [tui_tcol]
+    mov ah, [tui_ecol]
+    call tui_runc
+    jmp short .out
+.pair:
+    mov ax, [tui_rdx]               ; colour: the erase-and-letter pair, as
+    mov bx, [tui_rdy]               ; before - tui_runc does not fill there
+    mov cx, [tui_rdw]
+    add cx, ax
+    dec cx
+    mov dx, bx
+    add dx, 7
     mov al, [tui_ecol]
     call tui_setcol
-    pop ax
     call tui_fillc
     mov al, [tui_tcol]
     call tui_setcol
-    pop cx
-    pop dx
+    mov cx, [tui_rdx]
+    mov dx, [tui_rdy]
     call tui_textc
-    jmp .out
-.skip:
-    pop cx
-    pop dx
 .out:
+    pop es
+    pop di
     pop si
     pop dx
     pop cx
@@ -586,6 +682,13 @@ tui_msg_draw:
     push cx
     push dx
     push si
+    cmp byte [trk_tx], 0            ; the XT text screen (SPEC.md 45.13) owns
+    jne .out                        ; the adapter: every kernel drawing slot
+                                    ; renders DESKTOP geometry after an
+                                    ; OSAPI_FSX_MODE call (SPEC.md 53.1). The
+                                    ; message is already in [tui_msgp] and
+                                    ; ttx_draw_dyn's status line spends it, so
+                                    ; recording it IS delivering it
     mov si, [tui_msgp]
     or si, si
     jnz .have
@@ -691,7 +794,7 @@ tui_posed_body:
     mov al, TC_FACET
 .col:
     call tui_setcol
-    mov al, [mp_songpos]            ; ord = songpos - 2 + k
+    mov al, [tui_apos]              ; ord = songpos - 2 + k
     xor ah, ah
     sub ax, 2
     mov bl, [tui_chn]
@@ -738,7 +841,7 @@ tui_posed_body:
     mov dx, 66
     call tui_textc
     TSETC TC_FACET
-    mov al, [mp_songpos]
+    mov al, [tui_apos]
     call tui_hex2
     mov si, tui_nbuf
     mov cx, 38
@@ -746,7 +849,7 @@ tui_posed_body:
     call tui_textc
     jmp short .out
 .pos:
-    mov al, [mp_songpos]
+    mov al, [tui_apos]
     call tui_hex2
     mov si, tui_nbuf
     mov cx, 38
@@ -788,7 +891,7 @@ tui_val_bpm:
     push cx
     push dx
     push si
-    mov al, [mp_bpm]
+    mov al, [tui_abpm]
     call tui_dec3
     mov si, tui_nbuf
     mov cx, 168
@@ -797,7 +900,7 @@ tui_val_bpm:
     mov ah, TC_FACE
     mov al, TC_FACET
     call tui_rdout
-    mov al, [mp_speed]
+    mov al, [tui_aspd]
     call tui_dec3
     mov si, tui_nbuf
     mov cx, 168
@@ -806,9 +909,9 @@ tui_val_bpm:
     mov ah, TC_FACE
     mov al, TC_FACET
     call tui_rdout
-    mov al, [mp_bpm]
+    mov al, [tui_abpm]
     mov [tui_lbpm], al
-    mov al, [mp_speed]
+    mov al, [tui_aspd]
     mov [tui_lspd], al
     pop si
     pop dx
@@ -824,7 +927,7 @@ tui_val_ptn:
     push cx
     push dx
     push si
-    mov al, [mp_pattern]
+    mov al, [tui_apat]
     call tui_hex2
     mov si, tui_nbuf
     mov cx, 258
@@ -904,7 +1007,7 @@ tui_el_bpm:
     mov cx, 116
     mov dx, 36
     call tui_textc
-    mov al, [mp_bpm]
+    mov al, [tui_abpm]
     call tui_dec3
     mov si, tui_nbuf
     mov cx, 168
@@ -913,14 +1016,14 @@ tui_el_bpm:
     mov cx, 116
     mov dx, 50
     call tui_textc
-    mov al, [mp_speed]
+    mov al, [tui_aspd]
     call tui_dec3
     mov si, tui_nbuf
     mov cx, 168
     call tui_textc
-    mov al, [mp_bpm]
+    mov al, [tui_abpm]
     mov [tui_lbpm], al
-    mov al, [mp_speed]
+    mov al, [tui_aspd]
     mov [tui_lspd], al
 .out:
     pop si
@@ -949,7 +1052,7 @@ tui_el_ptn:
     mov cx, 210
     mov dx, 36
     call tui_textc
-    mov al, [mp_pattern]
+    mov al, [tui_apat]
     call tui_hex2
     mov si, tui_nbuf
     mov cx, 258
@@ -1103,7 +1206,9 @@ tui_el_scopes:
     test byte [tui_lay + TL_FLAGS], TLF_INSTR | TLF_CMPCT
     jnz .sync
     mov si, mp_title
-    mov cx, 295
+    mov cx, 296                     ; byte-aligned: tui_rdout rounds DOWN and
+                                    ; the 7 pixels left of 295 are the scope
+                                    ; row, not this field's background
     mov dx, 52
     mov bx, 176
     mov ah, TC_STATB
@@ -1384,7 +1489,7 @@ tui_val_cga_pos:
     push si
     push di
     mov di, tui_nbuf                ; 'pp/ll'
-    mov al, [mp_songpos]
+    mov al, [tui_apos]
     call tui_hexb
     mov byte [di], '/'
     inc di
@@ -1398,7 +1503,7 @@ tui_val_cga_pos:
     mov ah, TC_BG
     mov al, TC_TEXT
     call tui_rdout
-    mov al, [mp_pattern]
+    mov al, [tui_apat]
     call tui_hex2
     mov si, tui_nbuf
     mov cx, 320
@@ -1420,7 +1525,7 @@ tui_val_cga_bs:
     push cx
     push dx
     push si
-    mov al, [mp_bpm]
+    mov al, [tui_abpm]
     call tui_dec3
     mov si, tui_nbuf
     mov cx, 96
@@ -1429,7 +1534,7 @@ tui_val_cga_bs:
     mov ah, TC_BG
     mov al, TC_TEXT
     call tui_rdout
-    mov al, [mp_speed]
+    mov al, [tui_aspd]
     call tui_dec3
     mov si, tui_nbuf
     mov cx, 168
@@ -1437,9 +1542,9 @@ tui_val_cga_bs:
     mov ah, TC_BG
     mov al, TC_TEXT
     call tui_rdout
-    mov al, [mp_bpm]
+    mov al, [tui_abpm]
     mov [tui_lbpm], al
-    mov al, [mp_speed]
+    mov al, [tui_aspd]
     mov [tui_lspd], al
     pop si
     pop dx
@@ -1503,13 +1608,265 @@ tui_hdr:
     ret
 
 ; -----------------------------------------------------------------------------
+; tui_sync - publish the position the LISTENER is at (SPEC.md 45.15). Every
+;            drawer calls this once, first thing, and then quotes tui_a*
+;            instead of mp_*.
+;
+; mp_row and its neighbours are the row being MIXED, and trk_feed keeps the
+; ring topped up to TRK_RING - TRK_HALF: at XT mode's 5,500 Hz that is 2.2-3.0
+; SECONDS of music the card has not played yet. Quoting them put the whole
+; screen that far ahead of the sound - measured, not modelled (press Enter,
+; screendump 0.4 s later, and the grid is on row 21).
+;
+; So the display asks the stamps (SPEC.md 45.15) which row the card is inside.
+; [trk_consumed] is the worker's own status poll, at most a tick old, which is
+; a fifth of a row at the default tempo and can never move backwards.
+;
+; With no stream the two positions ARE the same thing, and that is also what
+; keeps the stopped view live: Up/Down and the position keys move mp_*, and
+; the display has to follow them with no music to sync to.
+; -----------------------------------------------------------------------------
+tui_sync:
+    push ax
+    push bx
+    push dx
+    push si
+    cmp byte [trk_sopen], 0
+    je .live
+    cmp byte [mp_playing], 0
+    je .live
+%ifdef TRKLOG
+    cmp byte [tlog_nosync], 0       ; Y: back on the mixer, to A/B this
+    jne .live                       ; against the card (tests/trklog.inc)
+%endif
+    call tui_playpos                ; AX = where the card is, INTERPOLATED
+    call mp_at_pos                  ; SI = the stamp being heard
+    mov al, [si + MP_SP_SPOS]
+    mov [tui_apos], al
+    mov al, [si + MP_SP_PAT]
+    mov [tui_apat], al
+    mov al, [si + MP_SP_ROW]
+    mov [tui_arow], al
+    mov al, [si + MP_SP_BPM]
+    mov [tui_abpm], al
+    mov al, [si + MP_SP_SPD]
+    mov [tui_aspd], al
+    mov ax, [si + MP_SP_VOL]
+    mov [tui_avol], ax
+    mov ax, [si + MP_SP_VOL + 2]
+    mov [tui_avol + 2], ax
+    mov ax, [si + MP_SP_POS]        ; a row BECOMING AUDIBLE kicks the needles
+    cmp ax, [tui_vlpos]             ; of the channels that struck in it
+    je .out                         ; (SPEC.md 45.12.1). The gate is the
+    mov [tui_vlpos], ax             ; stamp's stream position, which is unique
+    xor bx, bx                      ; per row and monotonic - so this is
+.kick:                              ; idempotent across the several drawers
+    cmp byte [si + MP_SP_HIT + bx], 0   ; that call tui_sync in one frame, and
+    je .kn                          ; it fires once per row however many
+    mov al, [tui_avol + bx]         ; frames that row is on screen for
+    mov [tui_vu + bx], al
+.kn:
+    inc bx
+    cmp bx, 4
+    jb .kick
+    jmp short .out
+.live:
+    mov al, [mp_songpos]
+    mov [tui_apos], al
+    mov al, [mp_pattern]
+    mov [tui_apat], al
+    mov al, [mp_row]
+    mov [tui_arow], al
+    mov al, [mp_bpm]
+    mov [tui_abpm], al
+    mov al, [mp_speed]
+    mov [tui_aspd], al
+    mov ax, [mp_chvol]
+    mov [tui_avol], ax
+    mov ax, [mp_chvol + 2]
+    mov [tui_avol + 2], ax
+.out:
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tui_playpos - out AX = the stream byte the card is playing NOW (SPEC.md
+;               45.15.1), interpolated between block interrupts
+;
+; [trk_consumed] is the truth and it is COARSE: the driver advances it one
+; whole DMA half per block IRQ, which at XT mode's 5,500 Hz is 2,048 bytes -
+; 372 ms, ~6.8 system ticks, about three rows. Following it raw makes the grid
+; stand still for a third of a second and then jump three rows, measured
+; exactly so in a SPEC.md 45.14 capture: the longest run of ticks with the
+; screen row unchanged was 7 whatever the frame rate.
+;
+; So between blocks the position is ESTIMATED from elapsed ticks at the
+; stream's own byte rate, and two properties make that safe rather than
+; merely smoother:
+;
+;   BOUNDED BY WHAT WAS STAGED. The card cannot have played bytes the mixer
+;   has not written, so [trk_total] is the cap - a physical bound rather than
+;   an arbitrary one. It used to be "one block past the last REPORT", and the
+;   field showed why that is not the same thing: [trk_consumed] is not sampled
+;   per tick, it is whatever the WORKER last saw, and a capture has feed
+;   passes 10 to 20 ticks apart. Through a gap like that the estimate hit the
+;   clamp after one block and stopped, so the scroll ran three or four rows
+;   and then froze for about a fifth of a second - reported from the field in
+;   exactly those words. The card was playing normally throughout; only our
+;   view of it had stalled.
+;
+;   AN ACCUMULATOR, NOT A STOPWATCH. [tui_lcons] is the model's own running
+;   position and [tui_ct0] the tick it was last advanced on, so the elapsed
+;   term is only ever 0, 1 or 2 ticks. Holding an anchor and multiplying a
+;   growing elapsed against it overflows a word at 217 ticks - twelve seconds
+;   - and the overflow branch then slammed the estimate to [trk_total], which
+;   is the MIXER's position, nearly three seconds ahead of the music. The
+;   field caught it and QEMU could not: the model only free-runs that long
+;   when the report does not overtake it for twelve seconds, which needs a
+;   machine whose byte rate matches the model as closely as the real one does.
+;
+;   ANCHORED ONLY FORWARD. A report is the driver's block counter, so it is
+;   quantized DOWN: it names the last 2,048-byte boundary the card crossed and
+;   is therefore up to a whole block BEHIND where the card actually is. The
+;   model interpolates past that on purpose - so restarting the model at every
+;   report threw the interpolation away and, with the monotone guard holding
+;   the old answer, froze the display until the model climbed back. Up to a
+;   block of it, which is 6.8 ticks; the field measured 26% of row-to-row gaps
+;   at 4 ticks or more with exactly that shape. So the report re-anchors the
+;   model only when it has OVERTAKEN it, which means the model ran slow and
+;   the truth is the better answer. Drift the other way is bounded by the
+;   staged cap above.
+;
+;   MONOTONE, and this is the load-bearing one. [tui_play] is the last answer
+;   given and the estimate can never go below it. Without that, any
+;   disagreement between the estimate and the next real block - a rate that
+;   is a hair fast, a block that arrives early - moves the answer BACKWARDS,
+;   and a scroll that jumps back a row reads far worse than one that steps.
+;
+;   SUB-TICK, and it is the same argument one level down (SPEC.md 45.15.2).
+;   Everything above interpolates between the card's BLOCK reports, 2,048
+;   bytes apart; what it leaves is a staircase whose step is the SYSTEM TICK,
+;   because [tui_lcons] only moves when [ticks] does. At the XT rate a row is
+;   2.55 ticks, so row changes land on tick edges in a 3,2,3,3,2 pattern -
+;   165 ms, 110, 165, 165, 110 - and a 1.5x swing in the spacing of a scroll
+;   is exactly the "microstutter" the field reported after the music itself
+;   was smooth. The field capture is the proof rather than the theory: every
+;   single-tick PLAY step in it is 0, 302 or 604 and nothing between.
+;
+;   The screen redraws far more often than the tick - on the SPEC.md 53.5.1
+;   frame clock, exactly FSX_SUBTICK times - so the frames THEMSELVES are the
+;   finer clock, and no other one is available: SPEC.md 34.1 reserves the ch0
+;   latch and a package has no slot for it. So the frames of the PREVIOUS
+;   tick are counted and this tick is divided into that many equal steps. It
+;   cannot drift, because the sub-term is an offset ON TOP of the exact
+;   accumulator and is thrown away at every tick edge rather than added into
+;   it; it cannot go backwards, because the offset is capped one byte below a
+;   whole tick, so the edge that zeroes it also adds [tui_bpt]; and a machine
+;   that manages only one frame a tick divides by one and gets exactly the
+;   old behaviour back.
+;
+;   THE DIVISOR IS [tui_fcnt] PLUS ONE, and the missing +1 was a stutter of
+;   its own (SPEC.md 45.15.2). [tui_fcnt] is reset AT the tick edge by the
+;   frame standing on it, so it ends the tick holding the number of frames
+;   INSIDE the tick - two of the three the frame clock delivers. Divided by
+;   two, a tick's three frames offered 0, bpt/2 and (capped) bpt/2 again:
+;   the estimate froze for the last third of every tick and then jumped half
+;   a tick, which is one row in six at the XT rate. Measured as [tui_fpt] = 2
+;   on a machine measured at three frames a tick - the two numbers
+;   disagreeing is the whole bug, and 0, bpt/3, 2*bpt/3 is what it should
+;   always have been.
+; -----------------------------------------------------------------------------
+tui_playpos:
+    push bx
+    push cx
+    push dx
+    call OSAPI_GET_TICKS
+    mov cx, ax                      ; CX = now, asked once
+    sub cx, [tui_ct0]               ; CX = ticks since the model last moved -
+    jz .subtick                     ; ALWAYS 0 or 1 or 2, because the model is
+    add [tui_ct0], cx               ; an accumulator: the anchor advances with
+    mov ax, cx                      ; it every call, so the multiply below can
+    mul word [tui_bpt]              ; never overflow and the clock never has a
+    add [tui_lcons], ax             ; long elapsed to multiply (see the header)
+
+    mov al, [tui_fcnt]              ; a new tick: last tick's frame count is
+    inc al                          ; this tick's divisor - PLUS ONE, because
+    jnz .div                        ; [tui_fcnt] counts the frames INSIDE the
+    dec al                          ; tick and the frame standing on the edge
+.div:                               ; is a frame too (saturate, never wrap to
+    mov [tui_fpt], al               ; 0: a 0 divisor is a #DE below)
+    mov byte [tui_fcnt], 0          ; the edge itself carries no offset: the
+    mov word [tui_sub], 0           ; whole tick just landed in [tui_lcons]
+    xor ah, ah
+    mov cx, ax
+    xor dx, dx
+    mov ax, [tui_bpt]
+    div cx                          ; bpt / frames, so fcnt*bpf <= bpt always
+    mov [tui_bpf], ax
+    jmp short .have
+.subtick:
+    mov al, [tui_fcnt]              ; the k'th frame inside this tick. COUNTING
+    inc al                          ; and CAPPING are separate on purpose: cap
+    jnz .fok                        ; the counter and it can never exceed its
+    dec al                          ; own previous value, so the divider
+.fok:                               ; ratchets down to 1 and stays there
+    mov [tui_fcnt], al
+    cmp al, [tui_fpt]               ; past what the last tick held: leave the
+    jae .have                       ; offset where it is rather than let it
+    xor ah, ah                      ; reach a whole tick
+    mul word [tui_bpf]              ; DX = 0 by the cap above
+    mov cx, [tui_bpt]
+    dec cx                          ; one byte short of the next tick edge:
+    cmp ax, cx                      ; monotone across it by construction
+    jbe .subok
+    mov ax, cx
+.subok:
+    mov [tui_sub], ax
+.have:
+    mov ax, [tui_lcons]             ; AX = what the model says, plus however
+    add ax, [tui_sub]               ; far into this tick the frames say we are
+    mov bx, [trk_consumed]          ; has the REPORT overtaken the model?
+    sub bx, ax                      ; (wrap-safe: the sign decides)
+    js .bound                       ; no - and that is the normal case: a
+                                    ; report is quantized BEHIND us, and
+                                    ; re-anchoring there throws the
+                                    ; interpolation away
+    mov ax, [trk_consumed]          ; yes: the model ran slow, so take the
+    mov [tui_lcons], ax             ; truth - and the anchor is now HERE, so
+    mov word [tui_sub], 0           ; the sub-tick offset that got us here is
+                                    ; spent, not owed again
+.bound:
+    mov bx, [trk_total]             ; ...bounded by what the mixer has WRITTEN,
+    sub bx, ax                      ; because the card cannot play what is not
+    jns .mono                       ; there yet (wrap-safe: the sign decides)
+    mov ax, [trk_total]
+    mov [tui_lcons], ax             ; a capped model stays capped rather than
+    mov word [tui_sub], 0           ; sprinting into a ceiling it cannot pass
+.mono:
+    mov bx, ax                      ; ...and it may never go backwards
+    sub bx, [tui_play]
+    jns .keep
+    mov ax, [tui_play]
+    jmp short .out
+.keep:
+    mov [tui_play], ax
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; tui_viewrow - the row the band shows: the playing row, or the scroll row
 ;               (tracker.asm's Up/Down) while stopped
 ; out: [tui_cvr]
 ; -----------------------------------------------------------------------------
 tui_viewrow:
     push ax
-    mov al, [mp_row]
+    mov al, [tui_arow]
     cmp byte [mp_playing], 0
     jne .set
     mov al, [tui_vrow]
@@ -1607,7 +1964,7 @@ tui_row1:
     add ax, [tui_lay + TL_PAD]
     mov [tui_t2], ax                ; cell text x
     push bx
-    mov al, [mp_pattern]
+    mov al, [tui_apat]
     xor ah, ah
     mov di, ax
     mov ax, bx
@@ -1640,11 +1997,11 @@ tui_row1:
 tui_marks:
     push ax
     call tui_viewrow
-    mov al, [mp_row]
+    mov al, [tui_arow]
     mov [tui_lrow], al
-    mov al, [mp_songpos]
+    mov al, [tui_apos]
     mov [tui_lpos], al
-    mov al, [mp_pattern]
+    mov al, [tui_apat]
     mov [tui_lpat], al
     mov al, [tui_vrow]
     mov [tui_lvrow], al
@@ -1825,10 +2182,10 @@ tui_scrl:
     push dx
     push si
     push di
-    mov al, [mp_songpos]
+    mov al, [tui_apos]
     cmp al, [tui_lpos]
     jne .no
-    mov al, [mp_pattern]
+    mov al, [tui_apat]
     cmp al, [tui_lpat]
     jne .no
     call tui_viewrow                ; [tui_cvr] = the row the band shows now
@@ -1930,7 +2287,7 @@ tui_row_lt:
     push bx
     push dx
     call tui_viewrow
-    mov al, [mp_row]
+    mov al, [tui_arow]
     mov [tui_lrow], al
     mov al, [tui_cvr]
     cbw
@@ -1947,6 +2304,46 @@ tui_row_lt:
 ; =============================================================================
 ; Volume bars (every worker frame) and the scope hit-test
 ; =============================================================================
+; tui_vu_step - one channel's needle: DECAY. in BX = channel 0..3; out AL =
+;               the level 0..64, also stored. Every other register preserved.
+;
+; Factored out because the SPEC.md 45.13 text bars need the same needle: the
+; rule about how a level moves belongs in one place, or the two surfaces
+; disagree about what the music is doing.
+;
+; IT USED TO RISE INSTANTLY TO [tui_avol] AND THAT WAS THE BUG (SPEC.md
+; 45.12.1). A MOD's volume column changes only when a volume command does, so
+; on a channel holding one value the rise and the fall cancelled EXACTLY: the
+; needle oscillated between the volume and two units under it, and both
+; quantized to the same cell. Measured on the field module, channel 2:
+; mp_chvol a constant 30, tui_vu alternating 30 and 28, 30*10/64 and 28*10/64
+; both flooring to 4 - a bar stuck at four tenths for the whole song while
+; notes played through it. The other three sat pinned at 10/10, which is the
+; same defect wearing a plausible face.
+;
+; So the needle is driven by the NOTE now and not by the volume: tui_sync
+; kicks it to the struck volume when a row that struck one becomes audible,
+; and this decays it the rest of the time. What that gives up is a sustained
+; note, which fades to nothing while it is still sounding - unavoidable,
+; because the true amplitude is only knowable by measuring the mixer's
+; output, and mp_mixch_xt is already half of a 4.77MHz machine (SPEC.md
+; 53.5.1). Note energy is what this can honestly show, and it is what a
+; tracker's bars have always shown.
+TUI_VUFALL equ 2                    ; units per call, ~18 calls a second: full
+                                    ; to empty in 1.8 s, and about one cell of
+                                    ; ten per row at the XT default
+tui_vu_step:
+    mov al, [tui_vu + bx]
+    cmp al, TUI_VUFALL
+    jae .sub
+    xor al, al
+    jmp short .st
+.sub:
+    sub al, TUI_VUFALL
+.st:
+    mov [tui_vu + bx], al
+    ret
+
 tui_draw_vu:
     push ax
     push bx
@@ -1958,22 +2355,7 @@ tui_draw_vu:
 .c:
     mov bl, [tui_chn]
     xor bh, bh
-    mov al, [mp_chvol + bx]         ; 0..64, 0 while muted/silent
-    cmp al, [tui_vu + bx]
-    jbe .decay
-    mov [tui_vu + bx], al           ; jump up, fall slowly: a VU needle
-    jmp .have
-.decay:
-    mov al, [tui_vu + bx]
-    cmp al, 2
-    jae .sub
-    xor al, al
-    jmp .st
-.sub:
-    sub al, 2
-.st:
-    mov [tui_vu + bx], al
-.have:
+    call tui_vu_step
     xor ah, ah                      ; SI = bar width = vu * vuw / 64
     mul word [tui_vuw]
     mov cl, 6
@@ -2148,6 +2530,7 @@ tui_draw_all:
     push di
     cmp byte [tui_inited], 0
     je .out
+    call tui_sync                   ; the position being HEARD (SPEC.md 45.15)
     call tui_track
     cmp byte [trk_fs], 0
     je .win
@@ -2226,6 +2609,49 @@ tui_draw_all:
     ret
 
 ; -----------------------------------------------------------------------------
+; tui_win_lines - redraw ONLY the two windowed-splash lines a load changes
+; in:  gfx lock held; preserves all registers
+;
+; The splash card is static except for the module title and the status line,
+; so a load owes the screen those and nothing else. tui_cline erases its own
+; band before lettering it, which is what makes this safe without the full
+; content fill - and skipping that fill is the point: on a 4.77MHz machine
+; the fill plus five untouched lines was a couple of hundred milliseconds of
+; redrawing text that had not changed (PERFORMANCE.md).
+;
+; The About panel is checked exactly as tui_draw_all checks it: while it is
+; up it owns the content, and these two lines must not be painted through it.
+; -----------------------------------------------------------------------------
+tui_win_lines:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp byte [tui_inited], 0
+    je .out
+    cmp byte [trk_abon], 0
+    jne .out
+    call tui_track
+    mov si, mp_title
+    cmp byte [mp_loaded], 0
+    jne .title
+    mov si, tui_s_none
+.title:
+    mov dx, 56                      ; the same y tui_draw_all letters it at
+    call tui_cline
+    call tui_msg_draw
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; tui_cline - a centred splash line: one gated erase+text pair on white
 ; in:  SI = NUL string, DX = y (content)
 ; -----------------------------------------------------------------------------
@@ -2280,6 +2706,16 @@ tui_draw_dyn:
     push di
     cmp byte [tui_inited], 0
     je .out
+%ifdef TRKLOG
+    cmp byte [tlog_even], 0         ; E: the windowed readout on an even
+    je .noeven                      ; two-frame grid (SPEC.md 45.16.3) - bench
+    cmp byte [trk_fs], 0            ; only. The bracket has its own 54.6 Hz
+    jne .noeven                     ; clock and nothing to fix (53.5.1)
+    xor byte [tlog_ephase], 1
+    jnz .out                        ; the other half of the grid: draw nothing
+.noeven:
+%endif
+    call tui_sync                   ; the position being HEARD (SPEC.md 45.15)
     call tui_track
     mov al, [mp_playing]            ; did playback START or STOP? the test is
     cmp al, [tui_lplay]             ; above the fullscreen split because the
@@ -2296,13 +2732,13 @@ tui_draw_dyn:
     cmp byte [trk_fs], 0            ; that can start or stop a module
     je .win
 .played:
-    mov al, [mp_row]                ; did the view move?
+    mov al, [tui_arow]              ; did the view move?
     cmp al, [tui_lrow]
     jne .rows
-    mov al, [mp_songpos]
+    mov al, [tui_apos]
     cmp al, [tui_lpos]
     jne .rows
-    mov al, [mp_pattern]
+    mov al, [tui_apat]
     cmp al, [tui_lpat]
     jne .rows
     mov al, [tui_vrow]
@@ -2316,10 +2752,10 @@ tui_draw_dyn:
 .xtno:
     cmp byte [mp_xt], 0             ; XT (SPEC.md 45.9): a row-only change
     je .rfull                       ; relights the band alone; the full
-    mov al, [mp_songpos]            ; repaint waits for a position/pattern
+    mov al, [tui_apos]              ; repaint waits for a position/pattern
     cmp al, [tui_lpos]              ; (or stopped-scroll) move
     jne .rfull
-    mov al, [mp_pattern]
+    mov al, [tui_apat]
     cmp al, [tui_lpat]
     jne .rfull
     mov al, [tui_vrow]
@@ -2340,10 +2776,10 @@ tui_draw_dyn:
 .rowc:
     call tui_val_cga_pos
 .norows:
-    mov al, [mp_bpm]                ; did the tempo?
+    mov al, [tui_abpm]              ; did the tempo?
     cmp al, [tui_lbpm]
     jne .bs
-    mov al, [mp_speed]
+    mov al, [tui_aspd]
     cmp al, [tui_lspd]
     je .nobs
 .bs:
@@ -2381,32 +2817,46 @@ tui_draw_dyn:
 .win:
     cmp byte [mp_playing], 0        ; windowed: a live position line on the
     je .out                         ; splash while something plays
-    mov al, [mp_row]
+%ifdef TRKLOG
+    cmp byte [tlog_pace], TLOG_PACE_BURST
+    jne .nob
+    call tlog_burst                 ; C: rewrite [tui_arow] onto the burst
+    jnz .wupd                       ; grid (SPEC.md 45.16.4). ZF=0 = the
+%endif                              ; sweep moved, so redraw even on a row
+.nob:                               ; that did not change
+    mov al, [tui_arow]
     cmp al, [tui_lrow]
     jne .wupd
-    mov al, [mp_songpos]
+    mov al, [tui_apos]
     cmp al, [tui_lpos]
     je .out
 .wupd:
-    mov al, [mp_row]
+    mov al, [tui_arow]
     mov [tui_lrow], al
-    mov al, [mp_songpos]
+    mov al, [tui_apos]
     mov [tui_lpos], al
     mov di, tui_pbuf
     mov si, tui_s_posl
     call tui_scpy
-    mov al, [mp_songpos]
+    mov al, [tui_apos]
     call tui_hexb
     mov si, tui_s_rowl
     call tui_scpy
-    mov al, [mp_row]
+    mov al, [tui_arow]
     call tui_hexb
+    mov bx, 120
+%ifdef TRKLOG
+    cmp byte [tlog_pace], TLOG_PACE_BURST
+    jne .nosw
+    call tlog_sweep_draw            ; ...and the sweep that covers the hold
+    mov bx, 120 + TLOG_SWEEPW * 8   ; (SPEC.md 45.16.4)
+.nosw:
+%endif
     mov byte [di], 0
     mov si, tui_pbuf
     mov cx, 8
     mov dx, [tui_ch]
     sub dx, 22
-    mov bx, 120
     mov ah, TC_WBG
     mov al, TC_WTX
     call tui_rdout
@@ -2561,7 +3011,7 @@ tui_s_splash2: db 'A FastTracker II style MOD player', 0
 tui_s_none:    db 'No module loaded', 0
 tui_s_keys1:   db 'ENTER play  SPACE stop  P pattern', 0
 tui_s_keys2:   db 'ARROWS position  1-4 mute  L load  X xt', 0
-tui_s_anykey:  db 'Press any key for fullscreen', 0
+tui_s_anykey:  db 'Press F or click for fullscreen', 0
 tui_s_hint:    db 'ENTER play  SPACE stop  L load', 0
 
 ; the About panel
@@ -2591,6 +3041,28 @@ tui_ab5:     db 'Any key closes', 0
     TRKW tui_vuw                    ; volume bar full width
     TRKB tui_vrow                   ; the Up/Down scroll row while stopped
     TRKB tui_cvr                    ; the view row this frame
+
+; --- what the LISTENER is hearing (SPEC.md 45.15): tui_sync publishes these
+; --- once a frame and every drawer quotes them instead of mp_* -----------------
+    TRKB tui_apos                   ; order position
+    TRKB tui_apat                   ; pattern
+    TRKB tui_arow                   ; row
+    TRKB tui_abpm                   ; tempo...
+    TRKB tui_aspd                   ; ...and ticks per row, as they were heard
+    TRKBUF tui_avol, 4              ; the channel volumes the needles show
+
+; --- tui_playpos's interpolation between block IRQs (SPEC.md 45.15.1) ---------
+    TRKW tui_bpt                    ; stream bytes per system tick
+    TRKW tui_lcons                  ; the reported position it is anchored to
+    TRKW tui_ct0                    ; ...and the tick that anchor landed on
+    TRKW tui_play                   ; the last answer given: never goes back
+    TRKW tui_sub                    ; the SUB-TICK offset (SPEC.md 45.15.2):
+                                    ; how far the frames say we are into the
+                                    ; current tick. An offset on top of the
+                                    ; accumulator, never added into it
+    TRKW tui_bpf                    ; ...[tui_bpt] / the frames a tick holds
+    TRKB tui_fpt                    ; frames the LAST tick held: this one's
+    TRKB tui_fcnt                   ; divisor, and the count so far in this
     TRKB tui_band                   ; tui_row1: drawing the band row
     TRKB tui_chn                    ; shared small loop counter
     TRKB tui_lplay                  ; last seen [mp_playing], for the 8088
@@ -2607,6 +3079,9 @@ tui_ab5:     db 'Any key closes', 0
     TRKB tui_lspd
     TRKBUF tui_lmute, 4
     TRKBUF tui_vu, 4                ; decaying VU levels
+    TRKW tui_vlpos                  ; the stamp position the needles were last
+                                    ; kicked on (SPEC.md 45.12.1) - the row
+                                    ; gate, not a display value
     TRKBUF tui_vupx, 8              ; last-drawn bar widths, px (SPEC.md
                                     ; 45.12 - the delta-draw baseline)
     TRKB tui_lcvr                   ; last-drawn view row (the scroll path's
@@ -2614,8 +3089,15 @@ tui_ab5:     db 'Any key closes', 0
     TRKW tui_msgp                   ; status-line string, 0 = the key hint
     TRKB tui_tcol                   ; tui_rdout scratch
     TRKB tui_ecol
+    TRKW tui_rdw                    ; ...and the field it is drawing, banked
+    TRKW tui_rdx                    ; because the clip gate spends CX and DX
+    TRKW tui_rdy
+    TRKBUF tui_rbuf, TUI_RDCELLS + 1    ; the space-padded run (SPEC.md 6.1):
+                                        ; the padding is what erases the old
+                                        ; value, so there is no blank moment
     TRKW tui_t1                     ; shared scratch words (serial: every
     TRKW tui_t2                     ; drawer runs under the one gfx lock)
     TRKBUF tui_nbuf, 8              ; number/text compose buffers
-    TRKBUF tui_pbuf, 20
+    TRKBUF tui_pbuf, 48             ; 'Pos xx  Row yy' plus, in the TRKLOG
+                                    ; build only, SPEC.md 45.16.4's sweep
     TRKBUF tui_insbuf, 20
