@@ -19509,11 +19509,39 @@ is a claim about perception, so like §45.16.3 it is a bench key rather than
 a decision, and `E` now cycles A → B → C so all three can be compared in
 place without a rebuild between them.
 
+**The animation is a BANG and it started as a sweep, which was not visible
+at all.** The first build ran one `*` back and forth through a twelve-cell
+field, and the field report was simply that there was no bang — a single
+character moving inside a status line is not an event, and an event is the
+entire job: what is being hidden is a resync, and it only reads as
+punctuation if it lands like one. So the hold opens with a **full
+`TLOG_BARW` bar** on the frame the burst ends and drops one cell on every
+frame after, an impact at the front and a decay across it. At CLICK.MOD's
+tempo the hold is 8–9 frames and the bar is 8, so it empties as the next
+burst begins.
+
+Two details in that are load-bearing. `[tlog_sweep]` counts **frames since
+the burst ended** and the bar is `TLOG_BARW` minus it, with `TLOG_NOBAR`
+(0xFF) as the burst's own value — so "is this the first frame of the hold"
+needs no flag of its own, and the count **saturates** rather than wrapping,
+because a decay that restarted would read as a second bang nothing caused.
+And the bar is **its own drawing field**, next to the position rather than
+inside it, compared against what was last *drawn*: a burst frame and a
+decayed hold frame then cost no drawing at all, which matters because a cell
+is ~1 ms on the machine this is for (§6.1.1) and the burst's evenness is the
+whole thing under test.
+
+**Which mode is live is on screen** (`PACE A` / `PACE B` / `PACE C`, in the
+same run as the position so it costs no call). `E` says which mode it moved
+to, and a transient message is the wrong shape here: what is being judged is
+what the line does over a *minute*, so by the time an opinion has formed the
+message has gone.
+
 Two things it costs, both stated so the comparison is honest. Inside a
 burst the row shown is up to `TLOG_BURST - 1` rows ahead of the music, which
-is the opposite trade from everything else in §45.15. And the windowed frame
-now redraws on every wake while a burst mode is active, because the sweep
-moves even when the row does not.
+is the opposite trade from everything else in §45.15. And a hold frame
+redraws the bar's ten cells even though the row did not move — the burst
+itself, which is the part being judged, pays nothing.
 
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 

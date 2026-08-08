@@ -719,6 +719,13 @@ make test SB16=1 TESTAPPS=build/trklog.img   # builds the disk on demand
 #      sets the clock back, so pressing it inside fullscreen changes nothing
 #      until the next F. Press it, then F.
 #
+# E    the WINDOWED pacing experiment, A -> B -> C (SPEC.md 45.16.3/45.16.4).
+#      Windowed-only - the bracket has a 54.6 Hz clock of its own and nothing
+#      to fix. The live mode is on screen as 'PACE A/B/C' beside the position,
+#      because what is being judged is what the line does over a minute and
+#      the key's own message has gone by then. C's bang is a bar that is full
+#      on the frame the burst ends and one cell shorter each frame after.
+#
 # K    XT mode's SAMPLE RATE - 4,000 / 5,500 / 11,000 Hz - WITHOUT leaving XT
 #      mode (docs/FIELD-NOTES.md 16). Windowed-only, takes effect at the next
 #      Play, and the text screen's header cell says which rate is running.

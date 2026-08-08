@@ -123,7 +123,21 @@ TLOG_PACE_BURST equ 2               ; C: TLOG_BURST rows at one per frame,
 TLOG_PACE_N     equ 3
 TLOG_BURST      equ 8               ; rows in a burst; a power of two, so the
 TLOG_BURST_MASK equ (256 - TLOG_BURST) & 0xFF   ; base is one AND
-TLOG_SWEEPW     equ 12              ; cells the sweep occupies, brackets in
+TLOG_BARW       equ 8               ; the BANG: a bar this many cells wide, full
+                                    ; on the frame the burst ends and one cell
+                                    ; shorter every frame after - so the hold
+                                    ; has an impact at the front of it and a
+                                    ; decay across it, and the burst itself
+                                    ; costs no drawing at all (the bar is empty
+                                    ; and unchanged throughout)
+TLOG_SWEEPW     equ TLOG_BARW + 2   ; ...plus its two brackets
+TLOG_NOBAR      equ 0xFF            ; [tlog_sweep] during a BURST: no bar, and
+                                    ; the value the hold recognises as its own
+                                    ; first frame
+TLOG_PACEW      equ 8               ; 'PACE A  ' - the label that says which of
+                                    ; the three is live, because the E key's
+                                    ; message is transient and the thing being
+                                    ; judged is what the line does for a minute
 
 TLOGF_REBUILD equ 1
 TLOGF_STEP    equ 2
@@ -450,7 +464,10 @@ tlog_even_key:
     jne .nb
     mov byte [tlog_even], 1         ; B still drives the every-other-wake gate
 .nb:
-    mov byte [tlog_bbase], 0xFF     ; C restarts its burst on the next row
+    mov byte [tlog_bbase], 0xFF     ; C restarts its burst on the next row...
+    mov byte [tui_lrow], 0xFF       ; ...and the LABEL has changed, so the
+                                    ; readout owes a redraw that no row change
+                                    ; has asked for yet
     xor ah, ah
     mov si, ax
     shl si, 1
@@ -583,8 +600,8 @@ tlog_burst:
     cmp al, [tlog_bbase]
     je .same
     mov [tlog_bbase], al            ; a new burst: snap to its first row and
-    mov [tlog_drow], al             ; start the scroll
-    mov byte [tlog_sweep], 0
+    mov [tlog_drow], al             ; start the scroll, with no bar on screen
+    mov byte [tlog_sweep], TLOG_NOBAR
     jmp short .show
 .same:
     mov al, [tlog_drow]             ; inside a burst: one row per FRAME until
@@ -593,47 +610,102 @@ tlog_burst:
     jae .hold
     inc byte [tlog_drow]
     jmp short .show
-.hold:
-    mov al, [tlog_sweep]            ; the hold: the sweep is what moves
-    inc al
-    cmp al, TLOG_SWEEPW
-    jb .sw
-    xor al, al
-.sw:
+.hold:                              ; the hold: the BANG is what moves. It
+    mov al, [tlog_sweep]            ; counts FRAMES SINCE the burst ended and
+    cmp al, TLOG_NOBAR              ; the bar is TLOG_BARW - that, so the
+    je .bang                        ; frame the burst ends is a full bar and
+    cmp al, TLOG_BARW               ; every frame after is one cell shorter.
+    jae .sw                         ; TLOG_NOBAR is the burst's own value, so
+    inc al                          ; "which frame is the first of the hold"
+    jmp short .sw                   ; needs no flag of its own; and the count
+.bang:                              ; SATURATES rather than wrapping, because
+    xor al, al                      ; a decay that restarted would read as a
+.sw:                                ; second bang nothing caused
     mov [tlog_sweep], al
 .show:
     mov al, [tlog_drow]
     mov [tui_arow], al              ; what every windowed drawer will quote
     pop bx
     pop ax
-    cmp byte [tlog_pace], 0         ; ZF=0 by construction - we are only ever
-    ret                             ; here with pace = BURST - so the caller
-                                    ; redraws on a frame whose row did not
-                                    ; change and the sweep still moved
+    ret                             ; the caller compares [tlog_sweep] against
+                                    ; what it last DREW, so a fully decayed
+                                    ; bar and the whole of a burst cost no
+                                    ; drawing at all
 
 ; -----------------------------------------------------------------------------
-; tlog_sweep_draw - append the hold's sweep to DI (SPEC.md 45.16.4). The
-; marker sits still while the burst scrolls and runs while it holds, so the
-; pause reads as the animation it is rather than as a stall.
+; tlog_pace_draw - the label that says which of A/B/C is live, at [DI]
+;
+; The E key already SAYS which mode it moved to, and a transient message is
+; the wrong shape for this: what is being judged is what the line does over a
+; minute, so by the time an opinion has formed the message has gone. It is
+; eight cells, it is in the same run as the position (so it costs no drawing
+; call of its own), and it is constant - so it is redrawn only when the row
+; is, which is what it was going to cost anyway.
 ; -----------------------------------------------------------------------------
-tlog_sweep_draw:
+tlog_pace_draw:
     push ax
     push cx
-    mov byte [di], ' '
+    push si
+    mov al, [tlog_pace]
+    xor ah, ah
+    mov cl, 3                       ; x8: the labels are a fixed-width table,
+    shl ax, cl                      ; so there is no terminator to walk
+    mov si, tlog_pace_lbl
+    add si, ax
+    mov cx, TLOG_PACEW
+.c:
+    mov al, [si]
+    mov [di], al
+    inc si
     inc di
+    loop .c
+    pop si
+    pop cx
+    pop ax
+    ret
+
+tlog_pace_lbl:  db 'PACE A  ', 'PACE B  ', 'PACE C  '
+
+; -----------------------------------------------------------------------------
+; tlog_bang_draw - the hold's BANG at [DI] (SPEC.md 45.16.4)
+;
+; A bar TLOG_BARW wide, FULL on the frame the burst ends and one cell shorter
+; on every frame after. It replaces a one-cell marker sweeping back and forth,
+; which was the first attempt and was reported as not visible at all: a single
+; character moving inside a status line is not an event, and what this is for
+; is to make the resync land as one - an impact at the front of the hold and a
+; decay across it, so the pause reads as something happening rather than as
+; the display stalling.
+;
+; During a burst there is no bar ([tlog_sweep] = TLOG_NOBAR), which is what
+; makes it affordable: on a 4.77MHz machine a cell is ~1ms (SPEC.md 6.1.1) and
+; the burst - the part whose evenness is the whole point - pays nothing.
+; -----------------------------------------------------------------------------
+tlog_bang_draw:
+    push ax
+    push cx
     mov byte [di], '['
     inc di
-    mov cx, TLOG_SWEEPW - 2
-    xor ah, ah
+    mov ah, [tlog_sweep]            ; lit = BARW - frames since the burst
+    mov al, TLOG_BARW               ; ended, and none at all during one
+    cmp ah, TLOG_NOBAR
+    je .none
+    sub al, ah
+    jnc .lit
+.none:
+    xor al, al
+.lit:
+    mov ah, al
+    mov cx, TLOG_BARW
 .c:
     mov al, ' '
-    cmp ah, [tlog_sweep]
-    jne .put
-    mov al, '*'
+    or ah, ah
+    jz .put
+    mov al, '#'
+    dec ah
 .put:
     mov [di], al
     inc di
-    inc ah
     loop .c
     mov byte [di], ']'
     inc di
@@ -1089,7 +1161,7 @@ tlog_s_clkt:    db 'Clock: one frame per tick', 0
 tlog_s_clkr:    db 'Clock: one frame per sub-tick', 0
 tlog_s_eveno:   db 'Pace A: every frame - 110/165, the shipped one', 0
 tlog_s_evenx:   db 'Pace B: every 2nd frame - an even 110, a 220 to catch up', 0
-tlog_s_burst:   db 'Pace C: 8 rows at 55ms, then a sweep while it waits', 0
+tlog_s_burst:   db 'Pace C: 8 rows at 55ms, then a BANG over the wait', 0
 
 ; --- bss ---------------------------------------------------------------------
     TRKW tlog_seg                   ; the record claim, 0 = not armed
@@ -1112,8 +1184,9 @@ tlog_s_burst:   db 'Pace C: 8 rows at 55ms, then a sweep while it waits', 0
     TRKB tlog_ephase                ; two-frame grid, and which half we are on
     TRKB tlog_pace                  ; ...which of the three modes E has picked
     TRKB tlog_bbase                 ; C: the burst's first row, its displayed
-    TRKB tlog_drow                  ; row, and how far the hold's sweep has got
-    TRKB tlog_sweep
+    TRKB tlog_drow                  ; row, how far the hold's BANG has decayed
+    TRKB tlog_sweep                 ; - and what was last DRAWN of it, so a
+    TRKB tlog_lsweep                ; decayed bar costs no drawing at all
     TRKW tlog_cons                  ; what the worker last saw...
     TRKW tlog_totl
     TRKB tlog_state

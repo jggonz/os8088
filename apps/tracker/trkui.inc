@@ -575,6 +575,15 @@ tui_dec3:
 ; shipped string reaches it - the widest field is the status line at ~51
 ; cells and the longest message is far shorter.
 ; -----------------------------------------------------------------------------
+; The windowed position readout's row, measured UP from the bottom of the
+; content. It was 22, which put it on rows [ch-22 .. ch-15] - and on the two
+; adapters where wm_fit squeezes the 180-row template (CGA gives [tui_ch] =
+; 136) that is 114..121, straight through the splash's last line at 108..115.
+; The gap between that line and the status line at ch-10 is where it belongs:
+; 38 clears the splash at every geometry this window has (ch = 136 puts it at
+; 98..105, against a keys line ending at 95) and still clears the status line.
+TUI_WPOSY   equ 38
+
 TUI_RDCELLS equ 56                  ; the widest field is [tui_cw]/8 and the
                                     ; frame is TRK_WINW = 420, so 52 cells;
                                     ; the clamp is a bound, not a budget
@@ -2843,21 +2852,31 @@ tui_draw_dyn:
     cmp byte [tlog_pace], TLOG_PACE_BURST
     jne .nob
     call tlog_burst                 ; C: rewrite [tui_arow] onto the burst
-    jnz .wupd                       ; grid (SPEC.md 45.16.4). ZF=0 = the
-%endif                              ; sweep moved, so redraw even on a row
-.nob:                               ; that did not change
+%endif                              ; grid (SPEC.md 45.16.4)
+.nob:
     mov al, [tui_arow]
     cmp al, [tui_lrow]
     jne .wupd
     mov al, [tui_apos]
     cmp al, [tui_lpos]
-    je .out
+    jne .wupd
+%ifdef TRKLOG
+    mov al, [tlog_sweep]            ; the row did not move - but the BANG is
+    cmp al, [tlog_lsweep]           ; drawn per FRAME, and it is its own field
+    jne .bang                       ; so nothing else is redrawn for it
+%endif
+    jmp .out
 .wupd:
     mov al, [tui_arow]
     mov [tui_lrow], al
     mov al, [tui_apos]
     mov [tui_lpos], al
     mov di, tui_pbuf
+    mov bx, 120
+%ifdef TRKLOG
+    call tlog_pace_draw             ; which of A/B/C is live, in the SAME run
+    add bx, TLOG_PACEW * 8          ; as the position so it costs no call
+%endif
     mov si, tui_s_posl
     call tui_scpy
     mov al, [tui_apos]
@@ -2866,22 +2885,32 @@ tui_draw_dyn:
     call tui_scpy
     mov al, [tui_arow]
     call tui_hexb
-    mov bx, 120
-%ifdef TRKLOG
-    cmp byte [tlog_pace], TLOG_PACE_BURST
-    jne .nosw
-    call tlog_sweep_draw            ; ...and the sweep that covers the hold
-    mov bx, 120 + TLOG_SWEEPW * 8   ; (SPEC.md 45.16.4)
-.nosw:
-%endif
     mov byte [di], 0
     mov si, tui_pbuf
     mov cx, 8
     mov dx, [tui_ch]
-    sub dx, 22
+    sub dx, TUI_WPOSY
     mov ah, TC_WBG
     mov al, TC_WTX
     call tui_rdout
+%ifdef TRKLOG
+.bang:
+    cmp byte [tlog_pace], TLOG_PACE_BURST
+    jne .out
+    mov al, [tlog_sweep]            ; the BANG is a field of its own, beyond
+    mov [tlog_lsweep], al           ; the position's, so a frame in which only
+    mov di, tui_pbuf                ; it moved redraws TLOG_SWEEPW cells and
+    call tlog_bang_draw             ; not the whole line (SPEC.md 45.16.4)
+    mov byte [di], 0
+    mov si, tui_pbuf
+    mov bx, TLOG_SWEEPW * 8
+    mov cx, 8 + 120 + TLOG_PACEW * 8 + 8
+    mov dx, [tui_ch]
+    sub dx, TUI_WPOSY
+    mov ah, TC_WBG
+    mov al, TC_WTX
+    call tui_rdout
+%endif
 .out:
     pop di
     pop si
