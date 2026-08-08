@@ -1169,14 +1169,45 @@ hd_iapps_find:
     mov di, hd_s_iapps
     call hd_iname_same
     jnc .scan
+    mov ax, [hd_ifind+16]       ; its first cluster, for the descent below
+    mov [hd_iappsc], ax
     mov byte [hd_iafound], 1    ; ...and keep WALKING rather than stopping
     jmp short .scan             ; here, because a KERNEL.SYS further down the
                                 ; listing still disqualifies the disk - and it
                                 ; is sorted by name (SPEC.md 19.4), so APPS
                                 ; comes FIRST and an early exit would miss it
 .ended:
-    cmp byte [hd_iafound], 0    ; the whole root walked: an APPS folder and no
-    je .refuse                  ; KERNEL.SYS anywhere in it is the apps disk
+    cmp byte [hd_iafound], 0
+    je .refuse
+
+    ; --- and it must actually HOLD SOMETHING OF OURS ------------------------
+    ; "No KERNEL.SYS" only says the disk is not a system disk, and "a folder
+    ; called APPS" is a name anybody's floppy may happen to carry. Neither is
+    ; a statement that this is an os8088 apps disk, and the failure that pair
+    ; allows is the expensive one: a stranger's floppy copied onto the volume
+    ; the user just installed to. So the last test is POSITIVE - at least one
+    ; *.O88 inside APPS - which is what the disk exists for and what the copy
+    ; is about to move.
+    push bx
+    mov dx, [hd_iappsc]
+    call OSAPI_FILE_GOTO
+    pop bx
+    jc .refuse
+    xor cx, cx
+.pscan:
+    push es
+    push cs
+    pop es
+    mov di, hd_ifind
+    call OSAPI_FILE_FIND
+    pop es
+    jc .refuse                  ; walked the whole folder and found no package
+    cmp word [hd_ifind+14], 1   ; a FILE (2 = folder, 3 = the synthesized '..')
+    jne .pscan
+    mov si, hd_ifind
+    call hd_io88
+    jnc .pscan
+
     call hd_ivol_back           ; found it - and the volume goes back either
     mov al, bl                  ; way, because hd_inst_apps banks afresh
     clc
@@ -1705,6 +1736,36 @@ hd_idst_findsub:
 ; hd_iname_copy - CX bytes from SI to DI (module internal, NUL-safe)
 ; hd_iname_same - CF=1 when the NUL strings at SI and DI match
 ; -----------------------------------------------------------------------------
+; hd_io88 - does the NUL name at SI end in '.O88'? (module internal)
+; out: CF = 1 yes.  Preserves every register.
+; -----------------------------------------------------------------------------
+hd_io88:
+    push ax
+    push si
+    push di
+    mov di, si
+.len:
+    cmp byte [di], 0
+    je .end
+    inc di
+    jmp short .len
+.end:
+    sub di, 4                   ; the last four characters, if there are four
+    cmp di, si
+    jb .no
+    mov si, di
+    mov di, hd_s_o88
+    call hd_iname_same          ; CF is its answer, and it is ours
+    jmp short .out
+.no:
+    clc
+.out:
+    pop di
+    pop si
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 hd_iname_copy:
     push ax
     push cx
@@ -2073,6 +2134,7 @@ hd_s_idash:   db '   -', 0
 hd_s_ik:      db 'K', 0
 hd_s_kernel:  db 'KERNEL.SYS', 0
 hd_s_iapps:   db 'APPS', 0      ; what makes a disk THE APPS DISK (52.10.5)
+hd_s_o88:     db '.O88', 0      ; ...and what has to be INSIDE it
 
 hd_s_iready:  db 'Ready', 0
 hd_s_ismall:  db 'Too Small', 0
@@ -2131,6 +2193,7 @@ hd_isrcdrv:   db 0              ; the drive the COPY reads from, which is the
                                 ; what hd_ivol_back puts the user on, and the
                                 ; two must not be the same word
 hd_iafound:   db 0              ; hd_iapps_find: an APPS folder has been seen
+hd_iappsc:    dw 0              ; ...and its first cluster, for the descent
 hd_iautod:    db 0xFF           ; the auto-detected apps drive, 0xFF = none.
                                 ; .text with a real initialiser, hd_iwin's
                                 ; reason: -f bin zeroes nothing and 0 here is

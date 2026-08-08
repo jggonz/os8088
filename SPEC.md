@@ -16145,10 +16145,10 @@ depends on how the machine got here: mode 3's clear leaves `0x0720` per cell,
 a regular field of dots, and a **hard-disk boot** leaves the POST's own text,
 because `boot/boothd.asm` deliberately sets no video mode (§52.10.2).
 
-**This is a claim about the machine's own ROM, and it is the one defect here
-that MartyPC cannot arbitrate** — which is not the same as "no emulator can
-show a flash", a thing that stopped being true when PERFORMANCE.md Part 3.1's
-per-frame instrument landed. Two separate reasons, both worth knowing:
+**The A/B on MartyPC is a NULL RESULT, and what makes it a null result rather
+than a refutation is worth writing down** — it is not "no emulator can show a
+flash", which stopped being true when PERFORMANCE.md Part 3.1's per-frame
+instrument landed. Three things:
 
 - Part 3.1's `transient` count **cannot price a mode change**. It counts
   pixels that ended as they started while showing something else in between,
@@ -16156,18 +16156,33 @@ per-frame instrument landed. Two separate reasons, both worth knowing:
   and the after picture is a bitmap. The count is ~0 however bad the flash.
   The measurement that works is direct: step frames, and count lit pixels in
   the first frames after the card reports the new mode.
-- Measured that way, **GLaBIOS does not produce the flash at all**: the first
-  graphics frame is **1 lit pixel of 128,000 without this fix and 2 with it**.
-  So the A/B is a null result on MartyPC, and it is a null result *about
-  GLaBIOS*, whose mode-6 routine evidently clears before it enables video. The
-  IBM ROM on the field machine is a different program, and it is that program
-  the report came from.
+- Measured that way on `os8088_5150_cga` — **the real IBM 5150 ROM**, which is
+  what every `os8088_5150_*` machine runs; only the 5160s are GLaBIOS, and
+  `os8088_5150_cga_gla` exists to A/B the ROM itself — the first graphics
+  frame is **1 lit pixel of 128,000 without this fix and 2 with it**. No
+  garbage frame either way.
+- And the frame *before* the switch says why: the text screen measures **0–16
+  lit pixels**. There is nothing in that buffer to reinterpret, because
+  **MartyPC's video RAM comes up zeroed** and the mode-3 screen behind it is
+  blank.
 
-Which is why the fix is written to be **independent of the ROM's order**
-rather than to defeat a particular one — the buffer is already zero whatever
-the ROM does next — and why it is verified on the iron and nowhere else. It
-costs ~26 ms of `rep stosw` once per boot, against a ROM clear of the same
-16KB that was already being paid.
+**The leading explanation is the one an emulator structurally cannot have: a
+real card comes up with static in its RAM.** That is already written into the
+Hercules half above — "the card's own DRAM as it powered up" — and it applies
+to a CGA for the same reason. It also explains why *this* machine sees it:
+docs/FIELD-MACHINES.md's 5150 holds both cards, POST initialises the one the
+DIP switches name, and the other card's 16KB is **untouched power-up static**
+until `vid_cga_equip` asks the BIOS for it. A machine whose CGA is primary has
+had that buffer cleared by the mode-3 set long before we arrive; a machine
+where it is the second card has not. PCem models powered-up RAM as noise;
+MartyPC models it as zeros, so the defect has nowhere to come from there.
+
+The fix covers that mechanism and every other one, because it does not care
+what was in the buffer or what the ROM does next — the bytes are zero before
+the mode set either way. It costs ~26 ms of `rep stosw` once per boot, against
+a ROM clear of the same 16KB that was already being paid. **It is unverified
+on the glass**, and that is the honest status until somebody watches a 5150 do
+it.
 
 **3BFh bit 1 is deliberately clear.** It enables the second 32KB page, which
 is at B8000 — a CGA's framebuffer. A machine can hold both cards (the 5150
@@ -23637,19 +23652,28 @@ Three things decide it, and each answers a question nothing else can:
 - **Which drive to look in is the OTHER one** — `[hd_ivdrv] XOR 1`, and only
   when the drive stage 1 read was a floppy at all. A hard-disk source makes
   "the other one" meaningless, so that case asks.
-- **What makes a disk the apps disk is an `APPS` folder in its root and no
-  `KERNEL.SYS` anywhere in it.** The folder alone was the first answer and it
-  has a short life: the system disk is going to carry an `APPS` folder too,
-  at which point "has APPS" stops telling the two apart. `KERNEL.SYS` is the
-  marker `drv_cfg_save` already uses to identify the system volume (§51.5.1),
-  so there is one answer to *which disk is that* rather than two that can
-  drift, and a driver's `OSAPI_FILE_FIND` sees hidden and system entries
-  (§19.7.1's fence) — which is what lets it ask about a file §19.6 hides.
+- **What makes a disk the apps disk takes THREE tests, and two of them are
+  not enough.** An `APPS` folder in the root was the first answer and it has
+  a short life, because the system disk is going to carry one too. Adding
+  "and no `KERNEL.SYS`" fixes *that* and fixes nothing else: it says the disk
+  is not a **system** disk, which is not the same as saying it is one of
+  ours, and the failure it still allows is the expensive one — a stranger's
+  floppy copied onto the volume the user has just installed to.
 
-  The walk therefore **does not stop at `APPS`**: the listing is sorted by
-  name (§19.4), so `APPS` comes first and a `KERNEL.SYS` further down would
-  be missed by an early exit. It records the folder and keeps going, and only
-  the end of the root is an answer.
+  So the last test is **positive**: at least one `*.O88` inside `APPS`. That
+  is what the disk exists for and what the copy is about to move, and it is
+  the only one of the three that can be passed by accident just once.
+
+  `KERNEL.SYS` is the marker `drv_cfg_save` already uses to identify the
+  system volume (§51.5.1), so there is one answer to *which disk is that*
+  rather than two that can drift, and a driver's `OSAPI_FILE_FIND` sees
+  hidden and system entries (§19.7.1's fence) — which is what lets it ask
+  about a file §19.6 hides from everything else.
+
+  The root walk therefore **does not stop at `APPS`**: the listing is sorted
+  by name (§19.4), so `APPS` comes first and a `KERNEL.SYS` further down
+  would be missed by an early exit. It records the folder's cluster and keeps
+  going; only the end of the root is an answer, and then the descent decides.
 
 Every refusal falls back to the prompt exactly as it was: a renamed disk, a
 data disk, an empty drive and a one-drive machine all take the path they

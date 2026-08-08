@@ -600,10 +600,17 @@ one is a number that has not been attributed.
   direct: step frames and count **lit pixels in the first few frames after the
   card reports the new mode**. A cleared framebuffer is ~0; the previous text
   page reinterpreted as 640x200 is not. SPEC.md §39.6 is the worked example,
-  and its result is worth carrying: with GLaBIOS the first graphics frame is
-  **1–2 lit pixels of 128,000 with the fix and without it**, so that ROM never
-  produces the flash — which makes it the one defect here that is genuinely a
-  claim about *the machine's own ROM* and not about the kernel.
+  and its result is worth carrying: on `os8088_5150_cga` — **the real IBM 5150
+  ROM**, which every `os8088_5150_*` machine runs — the first graphics frame is
+  **1–2 lit pixels of 128,000 with the fix and without it**, and the text frame
+  before it is 0–16. A null result, and the reason is the next bullet.
+- **Powered-up video RAM.** A real card comes up with static in it; MartyPC
+  comes up with zeros. So any defect whose *material* is uninitialised VRAM —
+  SPEC.md §39.6's flash before the progress bar is the standing example — has
+  nothing to work with here and cannot be reproduced however finely you
+  sample. PCem models it as noise. This is a short list, but it is the one
+  place where "the emulator cannot show it" is still literally true, so do not
+  read the rest of this section as saying no such class exists.
 - **Work.** A change can cut the flash and cost more cycles, or the reverse.
   Part 4 and Part 9 price work; this prices what the work looked like.
 - **The disk.** Unchanged and absolute — an operation with a disk in it has
