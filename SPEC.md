@@ -19288,14 +19288,23 @@ overtake snap stays as a **floor**: the card has provably played `CONS` bytes,
 which is a fact and not an estimate. The `[trk_total]` cap stays as the
 ceiling. The loop only decides where between them the model rides.
 
-**What this does NOT fix is anything downstream of `[trk_consumed]`.** The
-display is quoting the driver's block counter, so it can be exactly right about
+**What this does not reach is anything downstream of `[trk_consumed]`.** The
+display quotes the driver's block counter, so it can be exactly right about
 that counter and still be early or late against a *speaker*, if the machine
-buffers the card's output. That is a different measurement and it needs a
-different instrument — the discriminator is the **sample rate**: a guest-side
+buffers the card's output. That is a different measurement wanting a different
+instrument — the discriminator is the **sample rate**, since a guest-side
 offset is a fixed number of BYTES and so halves in time when the rate doubles,
 where host-side output buffering is a fixed number of MILLISECONDS and does
-not move at all.
+not move at all. The bench build's `K` key sweeps it (4,000 / 5,500 / 11,000 Hz
+with XT mode held on — docs/FIELD-NOTES.md 16).
+
+**Swept on the field machine, it came back flat and at zero**, so nothing is
+hiding down there: this section accounts for the whole of a reported ~3-row
+offset, with the same log measuring **+1.20 rows before and −0.21 after** —
+which is MartyPC's figure at every rate. The one-DMA-block hypothesis that
+"three rows" invites (a block IS 2.99 rows at the XT rate) is a coincidence,
+and it survived a capture, a mechanism and a designed experiment before the
+experiment killed it.
 
 ### 45.16 The text screen's frame clock is measured, not assumed
 

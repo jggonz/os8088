@@ -1522,7 +1522,7 @@ display of a 7.14 Hz row stream quantizes to and is therefore the floor.
   machine with a real Sound Blaster in it, which is `make marty`'s whole
   argument arriving as a bug.
 
-## 16. The scroll runs about three rows ahead of the music (PARTLY FIXED — one row was ours; the rest is not yet attributed)
+## 16. The scroll runs about three rows ahead of the music (FIXED, confirmed on the field machine — all of it was ours)
 
 **Reported** off PCem with a Sound Blaster, playing `CLICK.MOD` (the metronome
 module — `make clicktest` — one note every two seconds, 125 ms rows) in
@@ -1597,3 +1597,32 @@ which is exactly what makes the sweep a measurement of the *residual*:
 `sbl_consumed`. Flat at ~3 → a fixed time, i.e. PCem's output path — and the
 matching control is FM: Missile Command and Arkanoid are timing-tight on the
 same machine and read as matched, but they are OPL, not DSP.
+
+### The answer: neither. It was all phase.
+
+The field machine reports the click **spot on**, at every rate `K` offers —
+*"I tried pressing K a few times and it stayed spot on"* — and a `TRKLOG.TXT`
+from that run puts a number on it. Same machine, same module, same column:
+
+| | mean | median | min | max | |
+|---|---|---|---|---|---|
+| before | 1,835 | 1,830 | 696 | 2,982 | **101 of 253 samples past the 2,048 ceiling** |
+| after | 884 | 906 | −174 | 1,874 | never leaves the band |
+
+**+1.20 rows → −0.21 rows**, and the −0.21 is the same figure MartyPC gives at
+all three rates (−0.18 / −0.20 / −0.21). So §45.15.3 accounts for the whole
+reported offset: there is no one-DMA-block error in `sbl_consumed`, and PCem's
+DSP output is not meaningfully buffered — which is also why FM always read as
+matched. Both hypotheses above are retired, and they are left standing because
+the sweep that killed them is the useful part.
+
+**Two things worth keeping from how this was got wrong.** The estimate that
+"about 1.2 rows of the 3 is ours" came from measuring a *drifting* quantity
+once: the phase has no controller, so it is a different number every minute,
+and that 24-second capture caught it decaying from something higher (its
+sawtooth floor falls 1,274 → 696 across the log — visible in the file, and
+read past). **A single capture of an uncontrolled quantity is a sample, not a
+size.** And "exactly three rows" being almost exactly one DMA block at the XT
+rate (2.99) was a **coincidence**, and a persuasive one — it survived a
+capture, a plausible mechanism and a designed experiment before the experiment
+killed it.
