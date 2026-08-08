@@ -125,12 +125,21 @@ disagrees with them is recognisable as news rather than noise.
 | one 8×8 glyph cell | 901 µs Hercules, 909 µs CGA |
 | a solid fill | 177 µs/row + 0.28 µs/px Hercules; 182 + 0.33 CGA |
 | framebuffer read-modify-write | 79.6 clocks/byte Hercules, 81.0 CGA — only ~7 of them the bus |
-| floppy | **238 ms per sector**, 2,100 bytes/second; a one-sector file open+read is 796 ms |
+| floppy, sector inside a coalesced run | **65 ms**, **7,457 bytes/second** (Set 17; it was 238 ms / 2,100 B/s before SPEC.md §18.91's `AL` bug was fixed, and that older pair is quoted all over this tree's history) |
+| floppy, one `int 13h` call | **~400 ms** — 1–2 of the 200 ms revolutions, near enough whatever it moves |
+| floppy, isolated single-sector access (LBA 0, a lone directory sector) | **~150–200 ms** modelled, seek + latency + settle — **not measured** |
+| floppy, open+read a one-sector file | 810 ms |
 | the kernel's own interrupts | 1–3% of a busy CPU |
 
 Two of those are the load-bearing ones. **756 µs** is the per-call floor
-(SPEC.md §5.7), and **238 ms a sector** is why a 116KB module load is 57
-seconds.
+(SPEC.md §5.7), and on the disk it is **the `int 13h` call, not the sector** —
+a call costs one to two revolutions almost regardless of what it moves, which
+is why §18.94's counters report both and why a mount is quoted as
+`12 sectors / 4 calls`. A 116 KB module load was 57 seconds and is about 15.
+
+**Check which side of the `AL` fix a disk figure comes from before comparing
+anything to it.** PERFORMANCE.md Part 2 has the three quantities and why one
+number was doing all three.
 
 ### Two things the 5150 can test that nothing else here can
 

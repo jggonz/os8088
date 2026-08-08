@@ -148,8 +148,15 @@ fdlg_s_up:     db 'up', 0
 fdlg_s_root:   db 'Disk', 0
 fdlg_s_sub:    db 'Folder', 0
 fdlg_s_nodisk: db 'no disk', 0
-fdlg_s_drva:   db 'A:', 0
-fdlg_s_drvb:   db 'B:', 0
+fdlg_s_drv:    db 'A:', 0        ; the letter is STAMPED per paint (SPEC.md
+                                 ; 38.11) - 'A' + [disk_drive], the same
+                                 ; derivation desk_zone_label and the Disk
+                                 ; window use. It was two strings picked by
+                                 ; `cmp byte [disk_drive], 0`, so every
+                                 ; volume above A: drew as 'B:' - and on a
+                                 ; machine with a hard disk that is a header
+                                 ; naming the wrong volume over a listing
+                                 ; that is right
 
 ; -----------------------------------------------------------------------------
 ; fdlg_win - the live dialog window, 0 = none, AND the modal gate.
@@ -925,6 +932,49 @@ fdlg_stage:
     ret
 
 ; -----------------------------------------------------------------------------
+; fdlg_nextvol - the live volume after the current one, wrapping (SPEC.md 38.11)
+; in:  nothing
+; out: DL = a live volume index - the current one if it is the only one
+; clobbers: DL (the output), flags
+;
+; The Drive button was `xor dl, 1`, "the other drive": true while A: and B:
+; were the whole machine, and false since SPEC.md 52, where [disk_drive] is a
+; VOLUME INDEX and a disk driver mounts one per partition. No Open or Save in
+; any application could reach a hard disk at all - the button cycled 0 <-> 1
+; and the dialog has no other way to change volume.
+;
+; dsk_vtab is read STRAIGHT, with no cw_ shim: cold code keeps DS = KERNEL_SEG
+; (SPEC.md 2.6), so kernel DATA is already reachable here and only CALLS have
+; to cross - which is what keeps this fix out of .text entirely.
+; -----------------------------------------------------------------------------
+fdlg_nextvol:
+    push bx
+    push cx
+    mov dl, [disk_drive]
+    mov cl, DVOL_MAX            ; ...so the last candidate tried is where we
+.next:                          ; started, and a machine with one volume
+    inc dl                      ; answers it rather than running off the end
+    cmp dl, DVOL_MAX
+    jb .test
+    xor dl, dl
+.test:
+    mov bl, dl
+    mov bh, 0
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1                   ; * DV_SIZE (16), the dsk_vol_slot shift
+    cmp byte [dsk_vtab+bx+DV_KIND], DVK_FREE
+    jne .out
+    dec cl
+    jnz .next
+    mov dl, [disk_drive]        ; unreachable while A: and B: are permanent
+.out:                           ; rows, and cheaper than trusting that
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; fdlg_go - navigate to a directory (SPEC.md 38.4)
 ; in:  AX = first cluster (0 = root), DL = drive; caller holds the gfx lock
 ; out: nothing; selection and scroll reset. Preserves all registers.
@@ -1355,11 +1405,10 @@ fdlg_paint_x:
 
     ; --- header: the drive, then what kind of place this is ---
     mov byte [gfx_color], CBLACK
-    mov si, fdlg_s_drva
-    cmp byte [disk_drive], 0
-    je .drv
-    mov si, fdlg_s_drvb
-.drv:
+    mov al, [disk_drive]
+    add al, 'A'
+    mov [fdlg_s_drv], al        ; the string is in .text, so it is writable -
+    mov si, fdlg_s_drv          ; `fdlg_win` below is the same idiom
     mov cx, 6
     mov dx, 6
     call fdlg_text
@@ -2416,11 +2465,10 @@ fdlg_onclick_x:
     jl .out
     cmp cx, FD_BY2+FD_BH
     jg .b_newf
-    mov dl, [disk_drive]        ; the other drive, at its root; disk_mount
-    xor dl, 1                   ; is what publishes [disk_drive]
-    xor ax, ax
-    call fdlg_go
-    jmp .redraw
+    call fdlg_nextvol           ; the next LIVE volume, at its root; the
+    xor ax, ax                  ; button cycles every volume the machine has
+    call fdlg_go                ; (SPEC.md 38.11), and disk_mount is what
+    jmp .redraw                 ; publishes [disk_drive]
 .b_newf:
     cmp byte [fdlg_mode], 0
     je .out                     ; not drawn in Open mode, so not clickable
