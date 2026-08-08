@@ -1431,7 +1431,11 @@ trk_play:
                                     ; already read but nothing has mixed yet
     mov word [tui_lcons], 0         ; ...and so does tui_playpos's estimate
     mov word [tui_play], 0          ; (SPEC.md 45.15.1), which is anchored on
-    call OSAPI_GET_TICKS            ; those same counters
+    mov word [tui_pcon], 0          ; those same counters - the phase loop's
+                                    ; last-measured report included, or the
+                                    ; first edge of the new stream is compared
+                                    ; against the old one's (SPEC.md 45.15.3)
+    call OSAPI_GET_TICKS
     mov [tui_ct0], ax
     mov ax, [mp_mixrate]            ; bytes per system tick: rate / 18.2065,
     mov dx, 3600                    ; and 3600/65536 is that to 0.011% - so

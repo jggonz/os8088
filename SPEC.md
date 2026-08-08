@@ -19108,6 +19108,102 @@ QEMU's normal one, since §53.5.1's clock is a PIT divider and answers
 still tests is the arithmetic: `PLAY` never backwards, and steps that are
 whole multiples of `bpf` inside a tick and `bpt` across one.
 
+#### 45.15.3 …and the PHASE of that estimate is controlled, not inherited
+
+§45.15.1's estimator has an exact rate and **no control over where it sits
+inside a block**, and that is a real offset between what is heard and what is
+shown — up to a whole block, in *either* direction, decided by nothing better
+than the machine it is running on.
+
+The band is not in dispute. A report names the last block boundary the card
+crossed, so the card's true position is `CONS + (bytes since that IRQ)`, which
+is somewhere in `[CONS, CONS+BLOCK)`. The model is supposed to sweep that band
+once per block. What decides *where* in the band it sweeps — the **phase** —
+was, before this, whatever history left there:
+
+- **The only correction was upward.** `[trk_consumed]` overtaking the model
+  snaps the model to it, because the model ran slow and the truth is the better
+  answer. Nothing at all pulled the model *down*, so a model whose rate is a
+  hair fast climbs and stays climbed.
+- **`[tui_bpt]` is `mixrate * 3600 >> 16`, and the card's real rate is
+  `1000000 / (256 - tc)`** — the DSP time constant, quantized. The two differ
+  by a fraction of a percent, and the sign of that fraction is a property of
+  the *rate that was asked for*, not of the code.
+
+Measured on the same binary and the same module (`CLICK.MOD`, 125 ms rows):
+a field capture (§45.14) at the XT rate has the model riding **+806 bytes**
+above where it belongs — **0.88 rows EARLY**, shown before it is heard — with
+the sawtooth's peak 630 bytes past the physical ceiling, while a MartyPC run
+at 11,000 Hz has the same binary **591 bytes LOW** and the report snapping it
+down on every block. Both are wrong by about a row and **they disagree about
+the sign**, which is what says the phase was never being decided by anything.
+
+**A settled phase is not evidence of a controlled one, and this is why the
+bench could not find the defect by waiting.** MartyPC at the XT rate measures
+−0.06 rows before the change and −0.20 after: its worker never starves, so its
+phase is never displaced, so nothing there ever needs correcting. What
+displaces a phase is a run of missed `[trk_consumed]` polls — the model
+free-runs while the report stands still — and the field log has a ten-second
+hole in it, which is what one looks like from the inside. So the property to
+measure is not the settled offset but the RECOVERY: displace `[tui_lcons]` by
+900 bytes (1.3 rows) from the debugger, and count the reports until the offset
+is back in its band.
+
+| | settled offset | back in band after |
+|---|---|---|
+| before | 492 B | **55 reports = 20.5 s of music** |
+| after | 599 B | **6 reports = 2.2 s** |
+
+Twenty seconds is the point: it is longer than the gap between starves on a
+busy machine, so before this the phase never shed a displacement at all — it
+accumulated them. The old recovery was not a mechanism, it was the *rate
+error* grinding the excess off at ~10 bytes a block.
+
+So it is a **first-order loop closed on the report edge**, and every term in it
+is one the estimator already had:
+
+```
+at a report EDGE, and only when the report advanced by exactly one block:
+    err = (model - CONS) - [tui_bpt]/2
+    model -= err/4
+```
+
+Four things about it are load-bearing.
+
+- **The edge is the only place phase is observable.** Between reports there is
+  nothing to compare against; `[tui_pcon]` is the last report the loop
+  measured on and exists solely to find that edge.
+- **The target is half a tick, not zero.** The IRQ is not observed when it
+  fires: the worker's feed pass reads `[trk_consumed]` once a tick and
+  `tui_playpos` sees it a frame later, so at the moment of observation the card
+  is already ~⅔ of a tick past `CONS`. Targeting zero would park the model
+  *behind* the card and hand every subsequent report an overtake to snap.
+- **A jump of two blocks is not a phase measurement.** A late poll means the
+  model was right to have run on; the offset it shows is the poll's lateness,
+  not its own error. Those edges are skipped rather than corrected — which is
+  the same reasoning that made the anchor forward-only in the first place.
+- **Gain ¼ per report, which is what keeps it invisible.** Measured above:
+  six reports from a 900-byte displacement. The largest single correction is a
+  quarter of the error, and a *backward* step of the model is held by
+  §45.15.1's monotone guard, so it shows as the display pausing for 225 bytes ÷
+  the byte rate — 41 ms, once, while converging. A higher gain would shed a
+  displacement faster and turn every block's rate error into a visible pause;
+  a lower one would not beat the starve rate, which is the whole point.
+
+It does not replace the two guards above it and must not be made to. The
+overtake snap stays as a **floor**: the card has provably played `CONS` bytes,
+which is a fact and not an estimate. The `[trk_total]` cap stays as the
+ceiling. The loop only decides where between them the model rides.
+
+**What this does NOT fix is anything downstream of `[trk_consumed]`.** The
+display is quoting the driver's block counter, so it can be exactly right about
+that counter and still be early or late against a *speaker*, if the machine
+buffers the card's output. That is a different measurement and it needs a
+different instrument — the discriminator is the **sample rate**: a guest-side
+offset is a fixed number of BYTES and so halves in time when the rate doubles,
+where host-side output buffering is a fixed number of MILLISECONDS and does
+not move at all.
+
 ### 45.16 The text screen's frame clock is measured, not assumed
 
 `fsx_wait` takes a **tick** (18.2065 Hz), a **vertical retrace**, or the
