@@ -787,6 +787,38 @@ make test VIDEO=cga                  TESTAPPS=build/bench.img
 make test VIDEO=herc HERCSEG=0x7000  TESTAPPS=build/bench.img
 ```
 
+### A benchmark that is meant for the FIELD is ONE BOOTABLE DISK
+
+Binding, and stated here because this is the file a person reaches for when
+they are *writing* a harness — docs/FIELD-MACHINES.md has said it since
+`make field` was built, under that target, and being filed under a target is
+how it gets missed. `tests/npbench` was built as a second disk to be put in
+B: and had to be rebuilt as a boot disk.
+
+**The calibration machine has one floppy drive** (docs/FIELD-MACHINES.md). A
+harness on a data floppy therefore means a swap mid-session, and on that
+machine a swap is a walk to another room and back — so the operator cannot
+boot the OS and mount the bench at the same time, and the numbers do not get
+taken.
+
+So a field harness rides the SYSTEM disk: `--boot`, `--kernel`, the drivers,
+`TASKMGR.O88` in `SYSTEM/`, and the harness itself where a double-click
+reaches it. `make field` and `make npbench` are both that shape; copy either
+rule. Two consequences that are easy to miss:
+
+- **It must not be write-protected.** The report is the deliverable and a
+  protected disk answers int 13h status 03h, which the OS correctly reports as
+  `Write protected`.
+- **A harness that is a rebuild of a shipped app should carry the app's own
+  file name**, not the harness's. SPEC.md §54's association resolves a
+  document by the app's *stem*, so `npbench` ships as `APPS/NOTEPAD.O88` and
+  the operator opens the reference note by double-clicking it. Named for
+  itself, they would have to launch it and drive a file dialog by hand.
+
+`make bench`'s four harnesses ride a scratch `TESTAPPS=` image because they
+are driven under an emulator here, where there are two drives; the moment one
+of them is wanted on the 5150 it needs the treatment above.
+
 ### `gfxbench` and `sysbench` — the two that write a file
 
 The first two benchmarks answer one question each and fit on a screen. These
