@@ -774,11 +774,37 @@ assoc_tryfold:
     ret
 
 ; -----------------------------------------------------------------------------
-; assoc_locate - find the program, four rungs (SPEC.md 54.4)
-; in:  AL = app slot; [assoc_ddrv]/[assoc_dclus] = where the document lives
-; out: CF=0 and AX = the program's directory index, its volume+directory
-;      CURRENT; CF=1 = not found on any volume that would mount
+; assoc_tryvol - one whole volume: its root, then the folder a default names
+;                (rungs 3 and 4 of SPEC.md 54.4.2)
+; in:  DL = volume, DI = the app slot
+; out: as assoc_try
 ; clobbers: AX (the output), CF
+; -----------------------------------------------------------------------------
+assoc_tryvol:
+    push bx
+    push dx
+    xor ax, ax
+    call assoc_try              ; the volume's root
+    jnc .out
+    mov bx, di                  ; ...then APPS or GAMES, if a default names
+    mov bl, [assoc_dfold+bx]    ; one for this program (0 = nothing to try)
+    call assoc_tryfold
+.out:
+    pop dx                      ; a pop touches no flag, so the CF both rungs
+    pop bx                      ; answer in is what reaches the caller
+    ret
+
+; -----------------------------------------------------------------------------
+; assoc_locate - find the program, four rungs (SPEC.md 54.4.2)
+; in:  AL = app slot; [assoc_ddrv]/[assoc_dclus] = where the document lives
+; out: CF=0 = found, with its volume+directory CURRENT; CF=1 = not found on
+;      any volume that would mount
+; clobbers: AX, CF
+;
+; AX is NOT an output. It used to be documented as the program's directory
+; index and never was one - assoc_try restores AX across its own frame, and
+; SPEC.md 21.4 removed the last consumer when ld_run_name started resolving
+; by name - which is what frees .found to spend it on the hint.
 ; -----------------------------------------------------------------------------
 assoc_locate:
     push bx
@@ -807,25 +833,32 @@ assoc_locate:
     call assoc_try
     jnc .found
 
-    ; --- rungs 3 and 4: the root, then the folder a default names, on the
-    ; document's volume and then the other floppy --------------------------
-    mov cl, 2                   ; two volumes to try
+    ; --- rungs 3 and 4: the root, then the folder a default names, on EVERY
+    ; LIVE VOLUME - the document's own first (SPEC.md 54.4.2). This was the
+    ; document's volume and then `xor dl, 1`, "A: <-> B:, the only other
+    ; floppy there is" - true when it was written and false since SPEC.md 52,
+    ; where [disk_drive] is a VOLUME INDEX and a disk driver mounts one per
+    ; partition. A document on E: swept volumes 4 and 5 and never looked at
+    ; the floppies at all, which is where every shipped program lives.
     mov dl, [assoc_ddrv]
+    call assoc_tryvol           ; its own volume first: already mounted, and
+    jnc .found                  ; skipped below so nothing is visited twice
+    xor cl, cl                  ; CL = the volume index of the sweep
 .vol:
-    push dx
-    xor ax, ax
-    call assoc_try              ; the root
-    pop dx
+    mov bl, cl
+    cmp bl, [assoc_ddrv]
+    je .volnext
+    call dsk_vol_row            ; a FREE row is skipped for the TIME, not for
+    jc .volnext                 ; correctness: mounting one fails anyway, but
+                                ; that failure is the BIOS's retries and on a
+                                ; 4.77MHz machine those are seconds
+    mov dl, cl
+    call assoc_tryvol
     jnc .found
-    push dx
-    mov bx, di
-    mov bl, [assoc_dfold+bx]
-    call assoc_tryfold
-    pop dx
-    jnc .found
-    xor dl, 1                   ; A: <-> B:, the only other floppy there is
-    dec cl
-    jnz .vol
+.volnext:
+    inc cl
+    cmp cl, DVOL_MAX
+    jb .vol
     pop di
     pop si
     pop dx
@@ -834,13 +867,34 @@ assoc_locate:
     stc
     ret
 .found:
+    call asc_use                ; the volume that ANSWERED (SPEC.md 54.7.2):
+                                ; seed EVERY association on it, not just the
+                                ; one we came for. assoc_try navigates with
+                                ; dsk_chdir_q and asc_use hangs off the
+                                ; harvest, which a quiet mount skips - so
+                                ; nothing else on this path would ever load
+                                ; this disk's ASSOC.DAT, and the next document
+                                ; of a DIFFERENT type swept all over again.
+                                ; ~2 int 13h calls, once per volume: the
+                                ; asc_vol stamp makes every later call a
+                                ; compare. Safe from a subdirectory (we are
+                                ; standing in B:\APPS) because asc_root_find
+                                ; walks the ROOT directly rather than through
+                                ; dskw_stat, which is what it was written for
+    mov bx, di                  ; ...then the AUTHORITATIVE hint for the one
+    mov al, [disk_drive]        ; program we actually located - AFTER the seed
+    mov [assoc_drv+bx], al      ; on purpose, so a stale cached cluster for
+    shl bx, 1                   ; THIS program loses to where it really is
+    mov ax, [dsk_cwd]
+    mov [assoc_clus+bx], ax
     pop di
     pop si
     pop dx
     pop cx
     pop bx
-    clc
-    ret
+    clc                         ; explicit, not inherited: a slot is 0..11 so
+    ret                         ; the shl above happens to clear CF, and that
+                                ; is an accident of the table's size
 
 ; -----------------------------------------------------------------------------
 ; assoc_run - open the pending document (SPEC.md 54.4)
@@ -1312,11 +1366,16 @@ assoc_self_glyph:
 ; =============================================================================
 
 ASC_HDR      equ 16             ; magic 6 + version + napp + next + 7 reserved
-ASC_ROW      equ 80             ; stem 8 + size 2 + 6 reserved + a 64-byte icon
+ASC_ROW      equ 80             ; stem 8 + size 2 + cluster 2 + 4 reserved + a
+                                ; 64-byte icon
+ASC_ROWCLUS  equ 10             ; the DIRECTORY the program lives in (0 = root),
+                                ; taken out of the six bytes the row already
+                                ; reserved - so SPEC.md 54.7.1's seeding costs
+                                ; the file not one byte
 ASC_ROWICO   equ 16             ; ...the icon's offset inside a row
-ASC_NAPP     equ 16
-ASC_NEXT     equ 24
-ASC_KB       equ 2              ; 16*80 + 16 + 24*4 = 1,392 bytes
+ASC_NAPP     equ 32             ; was 16, and the shipped apps disk holds 15 -
+ASC_NEXT     equ 24             ; one package of headroom, with no guard
+ASC_KB       equ 3              ; 32*80 + 16 + 24*4 = 2,672 bytes
 
 ; -----------------------------------------------------------------------------
 ; asc_use - make the cache describe THIS volume (SPEC.md 54.7)
@@ -1353,6 +1412,13 @@ asc_use:
 .haveseg:
     call asc_root_find          ; CF=0, AX = first cluster, DX = sectors
     jc .out
+    cmp dx, ASC_KB*2            ; ...and it must FIT (SPEC.md 54.7.1). Every
+    ja .out                     ; byte off a disk is hostile (SPEC.md 18.2)
+                                ; and dsk_read_chain reads the whole file into
+                                ; a fixed claim - so a bigger ASSOC.DAT than
+                                ; this build knows about is a heap overwrite,
+                                ; not a bad cache. It was unbounded until the
+                                ; row grew a cluster and made it worth asking
     mov es, [asc_seg]
     xor bx, bx
     call dsk_read_chain         ; ES:BX = the claim
@@ -1376,9 +1442,79 @@ asc_use:
     ja .out
     xor ah, ah
     mov [asc_ne], ax
-    call asc_merge_ext          ; the declarations this volume knows about
+    call asc_merge_ext          ; the declarations this volume knows about...
+    call asc_seed               ; ...and WHERE each of them is (SPEC.md 54.7.1)
 .out:
     pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; asc_seed - teach the hints where this whole DISK's programs are (54.7.1)
+; in:  ES = [asc_seg], [asc_n] rows valid, [disk_drive] = this volume
+; out: nothing (all registers preserved)
+;
+; The harvest is per DIRECTORY - assoc_note_app fires once per type-1 entry of
+; the one directory being listed - so browsing B: root taught the machine
+; nothing, because every program on the shipped apps disk is one folder down
+; (SPEC.md 19.2). ASSOC.DAT already covers the whole VOLUME, so one root mount
+; can answer for all of it, and the only thing the row was missing was where.
+;
+; assoc_app_of and NOT asc_slot_of: find, never create. A slot only matters if
+; some extension points at it, and the kernel's table is 12 rows against a disk
+; that can hold 32 - creating one per package would evict the associations this
+; exists to serve. Run AFTER asc_merge_ext so a DECLARING package (54.6) has
+; already been given its slot and is found here like any other.
+;
+; A wrong hint costs one wasted mount and never a wrong file: assoc_try
+; re-checks the NAME on arrival and falls through to the remaining rungs
+; (SPEC.md 54.4.2). That is what makes a cache safe to seed from at all.
+; -----------------------------------------------------------------------------
+asc_seed:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov cx, [asc_n]
+    jcxz .out
+    mov si, ASC_HDR             ; ES:SI walks the app rows
+.row:
+    push cx
+    push si
+    mov di, assoc_stemb         ; stage the stem: assoc_app_of reads through DS
+    mov cx, 8
+.cp:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .cp
+    pop si
+    push si
+    mov di, si                  ; bank the row: assoc_app_of clobbers SI
+    mov si, assoc_stemb
+    call assoc_app_of           ; AL = the slot, CF=1 = this program has no
+    jc .next                    ; association, so there is nothing to point
+    mov bl, al
+    xor bh, bh
+    mov dl, [disk_drive]
+    mov [assoc_drv+bx], dl
+    mov ax, [es:di+ASC_ROWCLUS]
+    shl bx, 1
+    mov [assoc_clus+bx], ax
+.next:
+    pop si
+    pop cx
+    add si, ASC_ROW
+    loop .row
+.out:
     pop di
     pop si
     pop dx

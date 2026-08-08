@@ -320,7 +320,8 @@ entry:
 ;
 ; This used to be read_sector, AL=1, and on a real drive that costs a whole
 ; REVOLUTION per sector: by the time the next command reaches the controller
-; the sector after it has already passed the head. 131 sectors at 238ms
+; the sector after it has already passed the head. 131 sectors at the
+; pre-AL-fix 238ms
 ; (PERFORMANCE.md) is over thirty seconds of the boot, and it is the single
 ; largest cost in it.
 ;

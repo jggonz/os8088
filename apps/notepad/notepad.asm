@@ -4075,6 +4075,13 @@ np_onkey:
     call np_doprev              ; Shift-F3
     jmp .redraw
 .noprev:
+%ifdef NPBENCH
+    cmp al, 0x02                ; Ctrl-B - the walk bench, and it belongs up
+    jne .nobench                ; here with F3 for the same reason: it must
+    call npb_run                ; work whatever [np_ffield] is focused on
+    jmp .redraw
+.nobench:
+%endif
     or al, al
     jz .noctl                   ; an extended key carries no ascii, so none of
                                 ; the control characters below can be one
@@ -8976,6 +8983,13 @@ np_i_find:     db 'Find...  ^F', 0
 np_i_next:     db 'Find Next  F3', 0
 np_i_rep:      db 'Replace...  ^R', 0
 
+%ifdef NPBENCH
+; The walk bench (`make npbench`), and the ONLY thing that reaches it in this
+; file is the Ctrl-B in np_onkey and the four NPVAR words at the foot - both
+; inside %ifdef NPBENCH, so NOTEPAD.O88 carries not a byte of it.
+%include "npbench.inc"
+%endif
+
 ; --- the file and what the toast can say (SPEC.md 27.1) ------------------------
 ; The name is per-instance state now (np_name in bss), seeded from this at
 ; launch and replaced by whatever the file dialog returns. The two verbs are
@@ -9213,6 +9227,15 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
     NPVAR np_stopi, 2       ; word } and read only by np_height, on the walk it
                             ; issued itself - under the lock, with nothing
                             ; between the call and the read
+
+%ifdef NPBENCH
+; --- the walk bench (tests/npbench.inc), in the -DNPBENCH build only ---------
+    NPVAR npb_buf, 640      ; the report, composed here and then copied into
+                            ; the document claim: np_utoa writes through DS
+    NPVAR npb_ls,  2        ; word: where the line being composed began
+    NPVAR npb_t,   2        ; word } the row being emitted: ticks over
+    NPVAR npb_i,   2        ; word } iterations
+%endif
 
 %assign NP_BSS_TOTAL NPB
 

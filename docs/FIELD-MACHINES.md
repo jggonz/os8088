@@ -125,12 +125,21 @@ disagrees with them is recognisable as news rather than noise.
 | one 8×8 glyph cell | 901 µs Hercules, 909 µs CGA |
 | a solid fill | 177 µs/row + 0.28 µs/px Hercules; 182 + 0.33 CGA |
 | framebuffer read-modify-write | 79.6 clocks/byte Hercules, 81.0 CGA — only ~7 of them the bus |
-| floppy | **238 ms per sector**, 2,100 bytes/second; a one-sector file open+read is 796 ms |
+| floppy, sector inside a coalesced run | **65 ms**, **7,457 bytes/second** (Set 17; it was 238 ms / 2,100 B/s before SPEC.md §18.91's `AL` bug was fixed, and that older pair is quoted all over this tree's history) |
+| floppy, one `int 13h` call | **~400 ms** — 1–2 of the 200 ms revolutions, near enough whatever it moves |
+| floppy, isolated single-sector access (LBA 0, a lone directory sector) | **~150–200 ms** modelled, seek + latency + settle — **not measured** |
+| floppy, open+read a one-sector file | 810 ms |
 | the kernel's own interrupts | 1–3% of a busy CPU |
 
 Two of those are the load-bearing ones. **756 µs** is the per-call floor
-(SPEC.md §5.7), and **238 ms a sector** is why a 116KB module load is 57
-seconds.
+(SPEC.md §5.7), and on the disk it is **the `int 13h` call, not the sector** —
+a call costs one to two revolutions almost regardless of what it moves, which
+is why §18.94's counters report both and why a mount is quoted as
+`12 sectors / 4 calls`. A 116 KB module load was 57 seconds and is about 15.
+
+**Check which side of the `AL` fix a disk figure comes from before comparing
+anything to it.** PERFORMANCE.md Part 2 has the three quantities and why one
+number was doing all three.
 
 ### Two things the 5150 can test that nothing else here can
 
@@ -504,7 +513,12 @@ Both are shaped by the machine, and neither decision in them is cosmetic:
   `TASKMGR.O88` is on it at all (§28.3 — that one is in `SYSTEM/`, because
   it is the kernel's and these are yours to double-click). With one floppy drive, a
   benchmark on a separate data floppy means a disk swap mid-session — and on
-  this machine a disk swap is a walk to another room and back (below). Boot
+  this machine a disk swap is a walk to another room and back (below).
+  **THAT IS A RULE FOR EVERY FIELD HARNESS AND NOT A FACT ABOUT THIS TARGET**,
+  which is how it gets missed: it is written down here, under `make field`, so
+  someone writing a *new* bench does not read it. `tests/npbench` was built as
+  a second disk and had to be rebuilt as a boot disk; docs/TESTING.md now
+  carries the same rule where a harness author will actually meet it. Boot
   either image and the four harnesses are one double-click away in Disk A,
   and the reports they save land back on the disk they came from.
   `os88disk.py` marks them visible + read-only (§19.6), so they list and

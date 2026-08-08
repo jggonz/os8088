@@ -10,7 +10,8 @@
 ; [sch_lock] across every int 13h, and the caller is a window callback that
 ; has held the gfx lock since before it started (SPEC.md 22). So the cursor
 ; stops, no window paints, and nothing moves for as long as the disk takes -
-; 238 ms per sector on the field machine (PERFORMANCE.md Part 2), which for a
+; 65 ms per sector in a run on the field machine (PERFORMANCE.md Part 2 -
+; 238 before SPEC.md 18.91's AL fix), which for a
 ; 116KB module is tens of seconds of a screen that looks hung. What was
 ; missing was never concurrency; it was FEEDBACK. This is stepped from inside
 ; the transfer loop, the one piece of code still running while the rest of
@@ -130,7 +131,7 @@ fpg_begin:
 ;      reason.
 ;
 ; Unarmed this is a compare and a return, and it stays on the disk path for
-; the life of the machine at that price (~13 us against a sector's 238 ms).
+; the life of the machine at that price (~13 us against a sector's 65 ms).
 ; Armed, it draws only when the bar's pixel extent actually CHANGED - the
 ; trough is 62 pixels and an operation is usually more sectors than that, so
 ; most steps draw nothing at all.

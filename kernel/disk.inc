@@ -150,6 +150,10 @@ dsk_vbase:   times DVOL_MAX dd 0
 dsk_bootvol: db 0
 
 ; --- module data (initialized: lives in .text, not .bss) ---------------------
+; 0040:003F's motor bit per int 13h drive (SPEC.md 18.9.1). A table because
+; dsk_here_ok preserves every register and `shl al, cl` would spend CX.
+dsk_mbit:    db 1, 2, 4, 8
+
 disk_drive:  db 1                ; current VOLUME (0 = A:, 1 = B:), init B:
 disk_spt:    dw 9                ; sectors per track  } fallback geometry,
 disk_heads:  dw 2                ; heads              } replaced at mount
@@ -3145,9 +3149,88 @@ dsk_chdir:
 ; every path that can return to the event loop must make it.
 ; -----------------------------------------------------------------------------
 dsk_chdir_q:
+    call dsk_here_ok            ; already standing here, on media that cannot
+    jnc .here                   ; have changed under us? (SPEC.md 18.9.1)
     mov byte [dsk_quiet], 1
     call dsk_chdir
     mov byte [dsk_quiet], 0
+    ret
+.here:
+    clc                         ; nothing read, nothing published, no debt
+    ret                         ; added: the listing keeps whatever state it
+                                ; already had, which is what it describes
+
+; -----------------------------------------------------------------------------
+; dsk_here_ok - is a quiet chdir to (DL, AX) a no-op? (SPEC.md 18.9.1)
+; in:  DL = volume, AX = the directory cluster
+; out: CF=0 = we are already there AND the media cannot have changed, so the
+;      mount may be skipped entirely; CF=1 = mount
+; clobbers: CF only (every register preserved, including the flags' other bits
+;      being irrelevant to the one caller)
+;
+; The compare alone is NOT the test, and that is the whole of why this is a
+; routine rather than three lines inside dsk_chdir_q. "We are already on this
+; volume" says nothing about whether it is the same DISK: an app writes a
+; file, the user swaps the floppy, the app writes another - both writes are
+; "already here" and the second one lands on the new disk with the old FAT.
+; What makes it safe is the second half.
+;
+; A DRIVER volume (SPEC.md 18.7) is not removable, so the question does not
+; arise: an ST-225 cannot be swapped between two writes.
+;
+; A FLOPPY is answered by the BIOS's own MOTOR TIMEOUT, which is a physical
+; fact rather than a heuristic. 0040:0040 is the motor-off countdown, ticked
+; down by int 08h - which our own ISR chains precisely so this keeps running
+; - and the DPT's byte 2 sets it to 0x25 = 37 ticks = 2.03 seconds. So a
+; non-zero count means a floppy motor is STILL SPINNING, and nobody opens a
+; drive door, swaps a disk and closes it inside two seconds while the spindle
+; is turning. That is exactly the batch case: consecutive reads of one
+; operation are milliseconds apart and the motor never stops, while two
+; operations separated by a human are always a fresh validation.
+;
+; It fails SAFE in the direction that matters: a BIOS that does not maintain
+; the byte reads 0, which means "validate", which is what we do today.
+; -----------------------------------------------------------------------------
+dsk_here_ok:
+    push ax
+    push bx
+    push es
+    cmp byte [dsk_mntok], 0     ; the last mount of this volume worked...
+    je .no
+    cmp dl, [disk_drive]        ; ...it is this volume...
+    jne .no
+    cmp ax, [dsk_cwd]           ; ...and this directory
+    jne .no
+    mov bl, dl
+    call dsk_vol_row
+    jc .no
+    cmp byte [bx+DV_KIND], DVK_DRV
+    je .yes                     ; not removable: nothing to re-validate
+    mov bl, [bx+DV_UNIT]        ; the int 13h drive, for the motor bit
+    cmp bl, 4
+    jae .no                     ; only drives 0..3 have a bit in 0040:003F
+    xor bh, bh                  ; BL was the row pointer's low half a moment
+                                ; ago, so the index needs its top clearing
+    mov al, [dsk_mbit+bx]       ; a TABLE, not `shl al, cl`: this preserves
+                                ; every register by contract and CX is not
+                                ; ours to spend (SPEC.md 18.9.1)
+    mov bx, 0x0040
+    mov es, bx
+    cmp byte [es:0x0040], 0     ; the motor-off countdown: 0 = spun down, so
+    je .no                      ; the last two seconds are unaccounted for
+    test [es:0x003F], al        ; is THIS drive's motor one of the running
+    jz .no                      ; ones? (a two-drive machine may be mid-copy)
+.yes:
+    pop es
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop es
+    pop bx
+    pop ax
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
