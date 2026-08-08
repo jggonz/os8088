@@ -789,24 +789,30 @@ make test SB16=1 TESTAPPS=build/trklog.img   # builds the disk on demand
 #      to fix. The live mode is named on screen ('PACE C bar'), because what
 #      is being judged is what the line does over a minute and the key's own
 #      message has gone by then.
-#        A  every frame - the shipped 110/165
-#        B  every other frame - an even 110 with a 220 to catch up
-#        C  burst, then a BAR full at the seam and decaying
-#        D  burst, then a one-cell SWEEP running the field
-#        E  burst, then stars OUT from the centre to the edges
-#        F  burst, then stars IN from the edges to the centre
-#        G  burst, ALL stars for the whole wait, then the letters revealed
-#           from the centre once the display is back in step
-#      In C..G the TEXT IS BLANKED for the whole hold - that is the point of
-#      them. A frozen row number beside a moving animation is a frozen row
-#      number, which is what the first two builds got wrong.
+#        every  the shipped cadence - an irregular 110/165
+#        out    burst, then stars OUT from the centre to the edges
+#        hide   burst, ALL stars for the whole wait, then the letters
+#               revealed from the centre once the display is back in step
+#      (bar, sweep and in were built, judged and dropped; so was the beat
+#      ruler, which made the animation sixteen cells wider than it needed to
+#      be - see SPEC.md 45.16.4.)
+#      In every mode but the first the BODY - the position, the row and the
+#      ruler - is REPLACED by the animation for the whole hold. A frozen row
+#      number beside a moving animation is a frozen row number, which is what
+#      the first two builds got wrong. The LABEL is never blanked, for the
+#      other half of the same reason: it is not part of the experiment, and
+#      one blinking once a second competes with what it is labelling.
+#      (The every-other-frame grid was here as 'B' and is GONE - measurably
+#      the widest spread of the lot, and it read as the worst.)
 #
-#      WHAT YOU WATCH IS THE BEAT RULER, not the hex row number. 16 cells,
-#      one per row, marker walking left to right, and it lands back on cell 0
-#      on the row the click sounds:
+#          PACE every  Pos 01/04  Row 02
+#          BURST out   Pos 01/04       *         <- the hold, in place of them
 #
-#          PACE A  Pos 01  Row 02  [        ]  |.#.............
-#          PACE A  Pos 01  Row 10  [        ]  #...............  <- CLICK
+#      'Pos xx/yy' is the ORDER POSITION out of the song's length - which
+#      entry of the arrangement is playing, not a row. It steps once every 64
+#      rows, which is 8 s on CLICK.MOD and 8.9 on BEVERLY.MOD, so beside a row
+#      counter running at eight a second it looks dead; the denominator is
+#      there to say that it is a different kind of number.
 #
 #      A number answers "which row" and the question here is "are the rows
 #      EVENLY spaced", which only a moving marker answers. Even walk plus a
