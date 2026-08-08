@@ -6708,6 +6708,64 @@ one-sector file **3 → 2**. `tests/filetest` passes all 25 checks and
 `tools/os88disk.py --verify` is clean, which is the gate this had to clear —
 the change touches create, replace, delete, rename and stat alike.
 
+### 18.4.4 Chunked I/O — `OSAPI_FILE_APPEND` and `OSAPI_FILE_READ_AT`
+
+`OSAPI_FILE_READ` and `OSAPI_FILE_WRITE` move a **whole file**, so the
+largest file a package could touch was the largest heap claim it could take.
+A 116KB module on a small machine could not be opened at all, and nothing in
+the API said why — the read simply answered `FERR_BIG`.
+
+The pair that fixes it is not new code. §22.5's copy has moved files bigger
+than its buffer since it was written, through `dskw_append` and a resumable
+`dsk_read_chain`; both were deliberately module-internal, `dskw_append`'s own
+comment saying "no API slot" because it carries a precondition. **The
+precondition is publishable — it just has to be published**, which is what
+these two slots do.
+
+**One rule governs both, at each end: a chunk is a whole number of
+CLUSTERS**, except the last, which is whatever is left. That is what makes an
+offset land exactly where the previous chunk stopped, and what lets an append
+start on a fresh cluster instead of filling a partial sector inside a chain
+that is already there. `OSAPI_FILE_DFREE` has always answered the cluster
+size, so nothing new was needed to ask it.
+
+**And the cluster size is the DESTINATION's as well as the source's.** Two
+volumes need not agree — a hard-disk partition picks its cluster size from
+its capacity (§52.3) while a floppy is 512 bytes — so a copy chunks at a
+multiple of both. This is `fcp_clspan`'s rule (§22.5), and it is stated here
+because a package now has to obey it: getting it wrong loses the tail of
+every cluster, which is exactly the bug `fcp_clspan` exists to prevent and
+which only showed up when partitions stopped all having 512-byte clusters.
+
+**The read is STATELESS and the offset is the whole argument.** `fcp_rdnext`
+resumes through `[dsk_chain_end]` and three module words, which is right for
+a caller that is the only thing running and wrong for a published slot: the
+loop this exists for is *read → write → read*, and the write walks
+directories and the FAT. A resume token living in the kernel would be
+destroyed by exactly the work it is feeding. Same reasoning as §19.7.1's
+ordinal, and the two were designed together.
+
+The price is walking the chain from the front on every call, and it is
+smaller than it looks: the walk is FAT lookups against a resident window,
+while the caller is spending **238 ms a sector** (PERFORMANCE.md) on the data
+being handed to it. A 116KB file in 32KB chunks is four walks averaging ~116
+clusters — a few hundred word reads against twelve seconds of floppy.
+
+Both preconditions are **refused rather than mis-handled**, and both answer
+`FERR_NAME`: a non-cluster offset or capacity on the read, and a file whose
+current size is not a cluster multiple on the append. A read at or past the
+end of the file is **not** an error — it answers zero bytes, which is how the
+caller's loop terminates.
+
+`dskw_append` also refuses a **protected** file with `FERR_PROT`, `DSKW_PROT`
+being read-only|hidden|system|label|directory — so there is no chunked path
+to a system file and §19.6.1's slot is the only way to write one. That is a
+constraint on §52.10.4 rather than an oversight: the installer writes
+`KERNEL.SYS` **whole**, in one `OSAPI_FILE_WRITE_SYS` call, which is also the
+strongest guarantee that it lands contiguously from cluster 2 the way
+§52.10.2 requires. Chunked I/O is for the *application* files, which are the
+big ones and are not protected.
+
 ### 18.94 The transfer instrument, published at a fixed offset
 
 **`make DISKCNT=1`, which is now every FIELD kernel and no shipped one.** The

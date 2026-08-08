@@ -1605,6 +1605,49 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
 CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; than this is refused whole, never truncated
 
+; --- files bigger than your buffer (SPEC.md 18.4.4) ---------------------------
+; OSAPI_FILE_READ and OSAPI_FILE_WRITE move a WHOLE file, so the largest file
+; a package could touch was the largest claim it could take - a 116KB module
+; on a small machine simply could not be opened. These two are the same pair
+; in chunks, and they are what the file manager's copy has used internally
+; since it was written (SPEC.md 22.5); they are published now because an
+; installer needs them and because every package has needed them all along.
+;
+; ONE RULE GOVERNS BOTH, and it is the same rule at each end: **a chunk is a
+; whole number of CLUSTERS**, except the last, which is whatever is left.
+; That is what makes an offset land exactly where the previous chunk stopped
+; and lets an append start on a fresh cluster instead of filling a partial
+; sector inside a chain. Ask OSAPI_FILE_DFREE for the cluster size - it
+; answers SECTORS per cluster in BX, and has always done so.
+;
+; **AND THE CLUSTER SIZE IS THE DESTINATION'S AS WELL AS THE SOURCE'S.** Two
+; volumes need not agree - a hard disk partition picks its cluster size from
+; its capacity (SPEC.md 52.3) while a floppy is 512 bytes - so a copy chunks
+; at a multiple of BOTH. Getting that wrong loses the tail of every cluster.
+;
+; The read is STATELESS: the offset is the whole argument, there is no handle
+; and no cursor, so you may write between two reads. That is the point - the
+; loop this exists for is read -> write -> read, and the write walks
+; directories and the FAT.
+%define OSAPI_FILE_APPEND   KERNEL_SEG:0x0348   ; SI = NUL 8.3 name, ES:BX =
+                                 ; bytes, CX = count (>= 1); out CF=0 AX=0,
+                                 ; else AX = FERR_*. The file must already
+                                 ; exist and its size must be a whole number
+                                 ; of clusters - so create it with
+                                 ; OSAPI_FILE_WRITE and the first chunk, then
+                                 ; append the rest. FERR_NAME if the size is
+                                 ; not a cluster multiple - refused, never
+                                 ; mis-written - and FERR_PROT on a read-only,
+                                 ; hidden or system file, which is SPEC.md
+                                 ; 19.6's rule reaching this slot too
+%define OSAPI_FILE_READ_AT  KERNEL_SEG:0x0350   ; SI = name, ES:BX = buffer,
+                                 ; CX = its capacity in BYTES, DX:AX = the
+                                 ; offset to read from; out CF=0 and DX:AX =
+                                 ; the bytes delivered, 0 meaning you are at
+                                 ; or past the end - which is how the loop
+                                 ; terminates. Offset AND capacity must each
+                                 ; be a cluster multiple; FERR_NAME if not
+
 ; --- listing a directory (SPEC.md 19.7.1) -------------------------------------
 ; The operation this API had no way to express: a package could read a file by
 ; name and never find out what names were there. Everything in the tree that

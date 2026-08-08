@@ -1116,7 +1116,18 @@ osapi_table:
                                   ;         way to express, so a package could
                                   ;         read a file by name and never find
                                   ;         out what was there
-osapi_table_end:                  ; 0x0348
+    OSAPI_JSLOT api_file_append   ; 0x0348  N: SI = name, ES:BX = bytes, CX =
+                                  ;         count. Add to the END of a file
+                                  ;         (SPEC.md 18.4.4). Its precondition
+                                  ;         is the file's current size being a
+                                  ;         whole number of clusters, which is
+                                  ;         what a chunked write already is
+    OSAPI_JSLOT api_file_read_at  ; 0x0350  N: ...and the read half. DX:AX =
+                                  ;         the byte offset, CX = capacity;
+                                  ;         out DX:AX = bytes delivered, 0 at
+                                  ;         the end. Stateless, so a copy loop
+                                  ;         may write between two reads
+osapi_table_end:                  ; 0x0358
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1124,8 +1135,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 103 * 8
-%error "os8088 API jump table must be exactly 103 8-byte slots"
+%if OSAPI_TABLE_LEN != 105 * 8
+%error "os8088 API jump table must be exactly 105 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -1255,6 +1266,8 @@ dbg_reg:
     OSAPI_NSTUB api_file_read,   dskw_read,   1
     OSAPI_NSTUB api_file_delete, dskw_delete, 1
     OSAPI_NSTUB api_fdlg_open,   fdlg_open       ; NO V - see the macro
+    OSAPI_NSTUB api_file_append, dskw_append, 1
+    OSAPI_NSTUB api_file_read_at, dskw_read_at, 1
 
 ; -----------------------------------------------------------------------------
 ; api_file_find - slot 0x0340 (X). in CX = ordinal, ES:DI = a DSK_FIND_SZ
@@ -2101,6 +2114,10 @@ dskw_sync:            call COLD_SEG:dwf_dskw_sync
 dskw_write:           call COLD_SEG:dwf_dskw_write
                     ret
 dskw_write_sys:       call COLD_SEG:dwf_dskw_write_sys
+                    ret
+dskw_read_at:         call COLD_SEG:dwf_dskw_read_at
+                    ret
+dskw_append:          call COLD_SEG:dwf_dskw_append
                     ret
 files_init:           call COLD_SEG:fmf_files_init
                     ret
