@@ -194,6 +194,59 @@ overlays = [
     type = "VGA"
     clock_mode = "Default"
 
+# ...and the same XT with SOUND, which exists to be run with --turbo.
+#
+# THE ONLY FASTER MACHINE MARTYPC HAS IS 7.16MHz, and this is the only way to
+# get there with a Sound Blaster in the box. MartyPC is an 8088/8086 emulator
+# by design - every machine type it offers is a 5150, a 5160, a PCjr, a Tandy
+# or a Compaq Portable - so `--turbo`, which takes the XT clock from 4.77MHz
+# to 7.16, is the whole of the available range. It is 1.5x and not a modern
+# CPU, and that is enough for the question it answers: whether a cost is
+# CPU-BOUND, which shows as a proportional change rather than as an absolute
+# one.
+#
+# It is a VGA machine and not a CGA one because MartyPC's CGA PANICS under
+# turbo - its video clock is derived from the CPU clock and
+# devices/cga/videocard.rs asserts on the result. The MDA is untested here for
+# the same reason. VGA survives, so VGA is what a turbo machine gets, and
+# nothing in a timing question about the WORKER cares which adapter drew.
+#
+#   ./martypc_headless --machine-config-name os8088_xt_vga_sb --turbo ...
+#
+# Do not take a PERFORMANCE.md number off it: 7.16MHz is not a machine anyone
+# in docs/FIELD-MACHINES.md owns, and GLaBIOS is not a period ROM (see the
+# note on os8088_5150_cga_gla). It is a control, not an instrument.
+[[machine]]
+name = "os8088_xt_vga_sb"
+type = "Ibm5160"
+rom_set = "glabios_xt"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "VGA"
+    clock_mode = "Default"
+
+    [[machine.sound]]
+    type = "AdLib"
+    io_base = 0x388
+
+    [[machine.sound]]
+    type = "SoundBlaster"
+    io_base = 0x220
+    irq = 7
+    dsp_version = [2, 1]
+
 # ...and the HARD DISK machine, for SPEC.md 52's driver.
 #
 # THE CONTROLLER IS XT-IDE AND NOT THE IBM/XEBEC, for one reason: MartyPC's
@@ -247,4 +300,53 @@ overlays = [
     [[machine.video]]
     bus_type = "ISA"
     type = "CGA"
+    clock_mode = "Dynamic"
+
+# ...and the calibration machine as it ACTUALLY is: a 5150 with a Hercules AND
+# a CGA in it, both permanent, each on its own monitor (docs/FIELD-MACHINES.md).
+# This is the configuration SPEC.md 39.11's adapter switching exists for, and
+# until it was added there was no way to see two rows in the Display page
+# without a VGA.
+#
+# THE CGA IS FIRST AND THAT IS NOT COSMETIC. With the MDA first the 1982 IBM
+# POST never finishes - the machine sits in the ROM at CS=F000 with both
+# framebuffers dark - so the order is what makes this boot at all.
+#
+# ONE THING IT CANNOT MODEL, and it matters before you believe a result from
+# it: MartyPC's MDA decodes the WHOLE 64KB at B0000-BFFFF regardless of
+# 3BFh's page-1 bit, so B8000 is the Hercules' second page here and the two
+# cards CONTEND for it. Measured: after switching to the CGA the card is
+# correctly in Mode6HiResGraphics and drawing, and B0000 and B8000 read back
+# byte-identical - one memory wearing two addresses, with the MDA winning. So
+# the CGA's rendered output stays black on this config and the picture does
+# not actually move. A real HGC with the page bit clear (which vid_setmode
+# leaves clear, SPEC.md 39.6) decodes B0000-B7FFF only and has no such
+# conflict. Two consequences: the CGA->Hercules direction is verifiable here
+# and the Hercules->CGA direction is not, and vid_cga_alias (SPEC.md 39.11.1)
+# is written for exactly the aliasing this config exhibits.
+[[machine]]
+name = "os8088_5150_both"
+type = "Ibm5150v256K"
+rom_set = "ibm5150_82_v4"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
     clock_mode = "Dynamic"

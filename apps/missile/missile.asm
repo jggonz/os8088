@@ -177,6 +177,11 @@ MC_DRN      equ 36                  ; the stride. Not a shift any more, and
 MC_DRNRATE  equ 24                  ; ...and its floor: eight times the rate a
                                     ; trail is DRAWN at, so a spent one is
                                     ; gone in well under a second
+MC_EGDEF    equ 3                   ; frames a dying burst will wait for a lit
+                                    ; neighbour before erasing anyway (48.25.1)
+MC_ERSH     equ 3                   ; the band quantum an ERASE uses, as a
+                                    ; right shift of R (SPEC.md 48.25). 3 is
+                                    ; the drawn shape; 0 is one bounding rect
 MC_DHEXT    equ 6                   ; probes mc_drn_hold spends walking the
                                     ; Chebyshev square back to the DISC. The
                                     ; gap is at most 0.41r and r is 13, so
@@ -2484,6 +2489,7 @@ mc_add_exp:
     mov [mc_ey + di], ax
     mov byte [mc_et + si], 0
     mov byte [mc_er + si], 0
+    mov byte [mc_edef + si], 0
     mov byte [mc_ea + si], 1
 .out:
     pop si
@@ -5276,10 +5282,23 @@ mc_draw_exp:
     call mc_blob
     jmp .next
 .gone:
+    mov bl, [mc_er + si]            ; SPEC.md 48.25.1: while a LIT burst still
+    mov bh, 0                       ; overlaps, WAIT. Erasing now would take a
+    mov di, si                      ; bite out of it and buy a repair - and a
+    add di, di                      ; repair is a whole mc_blob, which is the
+    mov ax, [mc_ex + di]            ; larger half of this stage. A cluster
+    mov dx, [mc_ey + di]            ; expires together, so the wait is a frame
+    call mc_exp_lit                 ; or two and nothing can see it
+    jnc .gogo
+    inc byte [mc_edef + si]
+    cmp byte [mc_edef + si], MC_EGDEF
+    jb .next                        ; ...but never forever: a chain of fresh
+.gogo:                              ; bursts must not pin one on the screen
     cmp byte [mc_egone], 0          ; a burst already left this frame: this one
     jne .next                       ; waits, and stays 0FFh to be found again
     mov byte [mc_egone], 1
     mov byte [mc_ea + si], 0
+    mov byte [mc_bqsh], MC_ERSH     ; SPEC.md 48.25: an erase may OVER-cover
     mov al, MC_BG
     call mc_setcol
     mov ax, [mc_ex + di]
@@ -5293,6 +5312,7 @@ mc_draw_exp:
 .gdisc:
     call mc_disc
 .gdone:
+    mov byte [mc_bqsh], 3           ; the drawn shape's quantum back
     mov bl, [mc_er + si]            ; SPEC.md 48.22: that erase was a DISC of
     mov bh, 0                       ; background, and any other burst it
     mov ax, [mc_ex + di]            ; overlapped has a bite out of it now
@@ -5333,6 +5353,59 @@ mc_draw_exp:
 ; not changed, so it stays holed for the rest of its life. Marking it here
 ; costs one mc_blob and only when two bursts really did overlap.
 ; -----------------------------------------------------------------------------
+; mc_exp_lit - is any LIT burst overlapping the disc at AX,DX radius BX?
+; out: CF=1 yes; preserves every register (SPEC.md 48.25.1)
+mc_exp_lit:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov [mc_ehx], ax
+    mov [mc_ehy], dx
+    mov [mc_ehr], bx
+    xor si, si
+.each:
+    cmp byte [mc_ea + si], 1
+    jne .next
+    mov bl, [mc_er + si]
+    mov bh, 0
+    or bx, bx
+    jz .next
+    add bx, [mc_ehr]
+    mov di, si
+    add di, di
+    mov ax, [mc_ex + di]
+    sub ax, [mc_ehx]
+    jns .xp
+    neg ax
+.xp:
+    cmp ax, bx
+    ja .next
+    mov cx, [mc_ey + di]
+    sub cx, [mc_ehy]
+    jns .yp
+    neg cx
+.yp:
+    cmp cx, bx
+    ja .next
+    stc
+    jmp short .out
+.next:
+    inc si
+    cmp si, MC_MAXEXP
+    jb .each
+    clc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 mc_exp_hole:
     push ax
     push bx
@@ -5720,10 +5793,10 @@ mc_blob:
     mov [mc_bw], bx                 ; ...and the half-width of the rect that
                                     ; is currently open, which lags it
     mov ax, bx
-    mov cl, 3
-    shr ax, cl
-    inc ax
-    mov [mc_bq], ax                 ; the quantum: R/8 + 1
+    mov cl, [mc_bqsh]               ; the quantum: R >> [mc_bqsh], + 1. THREE
+    shr ax, cl                      ; for a drawn burst; an ERASE may be
+    inc ax                          ; coarser (SPEC.md 48.25)
+    mov [mc_bq], ax
     mov word [mc_bprev], -1         ; no band closed yet (SPEC.md 48.10)
     mov di, 1                       ; DI = dy; row 0 is inside the first rect
 .row:
@@ -7342,6 +7415,11 @@ mc_rad3v:    db 0, 13, 13
 ; RADIUS, so a same-radius state is a state nobody sees.
 mc_col3:     db MC_BG, CYELLOW, CYELLOW
 
+; mc_blob's band quantum, as a right shift of R (SPEC.md 48.25). It lives HERE
+; and not in bss because bss arrives zeroed and zero means "one bounding rect",
+; which is the erase's shape and must never be the drawn one.
+mc_bqsh:     db 3
+
 ; The coastline: how many rows the ground rises above its base every 16px.
 ; Fixed rather than random, so a repaint puts back exactly what was there.
 mc_coast:    db 0, 1, 2, 3, 2, 1, 0, 2, 4, 3, 1, 0, 1, 3, 2, 1
@@ -7526,6 +7604,8 @@ mc_coast:    db 0, 1, 2, 3, 2, 1, 0, 2, 4, 3, 1, 0, 1, 3, 2, 1
     MBUF  mc_er,     MC_MAXEXP      ; the radius it is DRAWN at
     MBYTE mc_egone                  ; a burst has already been erased this
                                     ; frame; the rest wait (SPEC.md 48.24)
+    MBUF  mc_edef,   MC_MAXEXP      ; ...and frames it has waited for a lit
+                                    ; neighbour to go first (SPEC.md 48.25.1)
     MWORD mc_ehx                    ; ...and the disc of background it laid
     MWORD mc_ehy
     MWORD mc_ehr

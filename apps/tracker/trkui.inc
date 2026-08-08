@@ -535,46 +535,130 @@ tui_dec3:
     ret
 
 ; -----------------------------------------------------------------------------
-; tui_rdout - ONE gated erase+text pair (the fr_status idiom, SPEC.md 11.3):
-;             clip-test the erase rect; covered in any part, skip BOTH.
-; in:  SI = NUL string, CX = x, DX = y (content), BX = erase width px,
-;      AH = erase colour index, AL = text colour index
+; tui_rdout - ONE readout field: the value, opaque, in its own rect.
+; in:  SI = NUL string, CX = x, DX = y (content), BX = field width px,
+;      AH = background colour index, AL = text colour index
 ; preserves all registers
+;
+; IT WAS AN ERASE-AND-LETTER PAIR AND THAT IS PERFORMANCE.md PART 1's
+; DOUBLE-DRAW FLASH. Every value readout in the windowed view goes through
+; here - Pos, Row, BPM, Spd, Ptn, Np, the song title, the status line - and
+; the pair left the field BLANK between the fill and the last glyph. On an
+; 8088 that gap is tens of milliseconds, and the Pos/Row line redraws about
+; seven times a second, so the field visibly strobes. Reported from the field
+; as "windowed mode is drawing flashing characters".
+;
+; On a mono adapter it is now ONE OSAPI_FONT_RUN (SPEC.md 6.1): the string is
+; space-padded to the field's width and a space paints background on the fast
+; path, so THE PADDING IS THE ERASE and every cell goes from its old contents
+; to its final contents in a single store. There is no moment at which the
+; field is empty.
+;
+; Two things earn that fast path and both are needed. The window is WF_SNAP
+; (SPEC.md 11.94), so [tui_ox] is a multiple of 8; and the field's x must be
+; too, which is what the round-down below is for - font_run's fallback is
+; literally the fill-then-letter pair this routine is escaping, so an
+; unaligned run would buy nothing. Rounding DOWN rather than moving the
+; callers is safe because the up-to-7 extra pixels are inside the field's own
+; background - a value sits in a box face with its label a cell or more to
+; the left - and it makes every caller aligned, including ones not yet
+; written. The one site where the pixels to the left are NOT this field's
+; background is the song title, whose x is 296 rather than 295 for exactly
+; this reason.
+;
+; On a colour adapter tui_runc has no fill (its callers there have already
+; filled the band), so this keeps the pair: VGA is unchanged, and VGA is not
+; where the flash was reported from.
+;
+; A string longer than the field is now TRUNCATED where it used to overflow
+; the erase rect and draw outside it. That is the better behaviour and no
+; shipped string reaches it - the widest field is the status line at ~51
+; cells and the longest message is far shorter.
 ; -----------------------------------------------------------------------------
+TUI_RDCELLS equ 56                  ; the widest field is [tui_cw]/8 and the
+                                    ; frame is TRK_WINW = 420, so 52 cells;
+                                    ; the clamp is a bound, not a budget
 tui_rdout:
     push ax
     push bx
     push cx
     push dx
     push si
+    push di
+    push es
     mov [tui_tcol], al
     mov [tui_ecol], ah
-    mov ax, bx
-    add ax, cx
-    dec ax                          ; x2
-    mov bx, dx                      ; y1
-    push dx                         ; text y
-    push cx                         ; text x
-    mov dx, bx
+    cmp byte [tui_mono], 0
+    je .keep
+    mov ax, cx                      ; mono: widen the field LEFT to the byte
+    and ax, 7                       ; boundary, so the run takes font_run's
+    sub cx, ax                      ; single-store path (see the header)
+    add bx, ax
+.keep:
+    mov [tui_rdw], bx
+    mov [tui_rdx], cx
+    mov [tui_rdy], dx
+    mov ax, cx                      ; the clip gate runs on the rect actually
+    mov bx, dx                      ; drawn, widened or not
+    mov cx, [tui_rdw]
+    add cx, ax
+    dec cx                          ; x2
     add dx, 7                       ; y2
-    xchg ax, cx                     ; AX = x1, CX = x2
     call tui_clipc
-    jc .skip
-    push ax
+    jc .out
+    cmp byte [tui_mono], 0
+    je .pair
+    push ds                         ; stosb writes through ES, and ES is
+    pop es                          ; KERNEL_SEG on entry to a callback
+    cld
+    mov ax, [tui_rdw]
+    mov cl, 3
+    shr ax, cl                      ; AX = cells the field spans
+    cmp ax, TUI_RDCELLS
+    jbe .cok
+    mov ax, TUI_RDCELLS
+.cok:
+    mov cx, ax
+    mov di, tui_rbuf
+.cp:
+    jcxz .cdone                     ; the value, then spaces to the field's
+    lodsb                           ; end - the pad is what erases what was
+    or al, al                       ; there before
+    jz .pad
+    stosb
+    dec cx
+    jmp short .cp
+.pad:
+    mov al, ' '
+    rep stosb
+.cdone:
+    mov byte [di], 0
+    mov si, tui_rbuf
+    mov cx, [tui_rdx]
+    mov dx, [tui_rdy]
+    mov al, [tui_tcol]
+    mov ah, [tui_ecol]
+    call tui_runc
+    jmp short .out
+.pair:
+    mov ax, [tui_rdx]               ; colour: the erase-and-letter pair, as
+    mov bx, [tui_rdy]               ; before - tui_runc does not fill there
+    mov cx, [tui_rdw]
+    add cx, ax
+    dec cx
+    mov dx, bx
+    add dx, 7
     mov al, [tui_ecol]
     call tui_setcol
-    pop ax
     call tui_fillc
     mov al, [tui_tcol]
     call tui_setcol
-    pop cx
-    pop dx
+    mov cx, [tui_rdx]
+    mov dx, [tui_rdy]
     call tui_textc
-    jmp .out
-.skip:
-    pop cx
-    pop dx
 .out:
+    pop es
+    pop di
     pop si
     pop dx
     pop cx
@@ -1122,7 +1206,9 @@ tui_el_scopes:
     test byte [tui_lay + TL_FLAGS], TLF_INSTR | TLF_CMPCT
     jnz .sync
     mov si, mp_title
-    mov cx, 295
+    mov cx, 296                     ; byte-aligned: tui_rdout rounds DOWN and
+                                    ; the 7 pixels left of 295 are the scope
+                                    ; row, not this field's background
     mov dx, 52
     mov bx, 176
     mov ah, TC_STATB
@@ -1569,6 +1655,20 @@ tui_sync:
     mov [tui_avol], ax
     mov ax, [si + MP_SP_VOL + 2]
     mov [tui_avol + 2], ax
+    mov ax, [si + MP_SP_POS]        ; a row BECOMING AUDIBLE kicks the needles
+    cmp ax, [tui_vlpos]             ; of the channels that struck in it
+    je .out                         ; (SPEC.md 45.12.1). The gate is the
+    mov [tui_vlpos], ax             ; stamp's stream position, which is unique
+    xor bx, bx                      ; per row and monotonic - so this is
+.kick:                              ; idempotent across the several drawers
+    cmp byte [si + MP_SP_HIT + bx], 0   ; that call tui_sync in one frame, and
+    je .kn                          ; it fires once per row however many
+    mov al, [tui_avol + bx]         ; frames that row is on screen for
+    mov [tui_vu + bx], al
+.kn:
+    inc bx
+    cmp bx, 4
+    jb .kick
     jmp short .out
 .live:
     mov al, [mp_songpos]
@@ -2204,27 +2304,42 @@ tui_row_lt:
 ; =============================================================================
 ; Volume bars (every worker frame) and the scope hit-test
 ; =============================================================================
-; tui_vu_step - one channel's needle: rise instantly to the live volume, fall
-;               two units a frame. in BX = channel 0..3; out AL = the level
-;               0..64, also stored. Every other register preserved.
+; tui_vu_step - one channel's needle: DECAY. in BX = channel 0..3; out AL =
+;               the level 0..64, also stored. Every other register preserved.
 ;
 ; Factored out because the SPEC.md 45.13 text bars need the same needle: the
 ; rule about how a level moves belongs in one place, or the two surfaces
 ; disagree about what the music is doing.
+;
+; IT USED TO RISE INSTANTLY TO [tui_avol] AND THAT WAS THE BUG (SPEC.md
+; 45.12.1). A MOD's volume column changes only when a volume command does, so
+; on a channel holding one value the rise and the fall cancelled EXACTLY: the
+; needle oscillated between the volume and two units under it, and both
+; quantized to the same cell. Measured on the field module, channel 2:
+; mp_chvol a constant 30, tui_vu alternating 30 and 28, 30*10/64 and 28*10/64
+; both flooring to 4 - a bar stuck at four tenths for the whole song while
+; notes played through it. The other three sat pinned at 10/10, which is the
+; same defect wearing a plausible face.
+;
+; So the needle is driven by the NOTE now and not by the volume: tui_sync
+; kicks it to the struck volume when a row that struck one becomes audible,
+; and this decays it the rest of the time. What that gives up is a sustained
+; note, which fades to nothing while it is still sounding - unavoidable,
+; because the true amplitude is only knowable by measuring the mixer's
+; output, and mp_mixch_xt is already half of a 4.77MHz machine (SPEC.md
+; 53.5.1). Note energy is what this can honestly show, and it is what a
+; tracker's bars have always shown.
+TUI_VUFALL equ 2                    ; units per call, ~18 calls a second: full
+                                    ; to empty in 1.8 s, and about one cell of
+                                    ; ten per row at the XT default
 tui_vu_step:
-    mov al, [tui_avol + bx]         ; 0..64, 0 while muted/silent
-    cmp al, [tui_vu + bx]
-    jbe .decay
-    mov [tui_vu + bx], al           ; jump up, fall slowly: a VU needle
-    ret
-.decay:
     mov al, [tui_vu + bx]
-    cmp al, 2
+    cmp al, TUI_VUFALL
     jae .sub
     xor al, al
     jmp short .st
 .sub:
-    sub al, 2
+    sub al, TUI_VUFALL
 .st:
     mov [tui_vu + bx], al
     ret
@@ -2591,6 +2706,15 @@ tui_draw_dyn:
     push di
     cmp byte [tui_inited], 0
     je .out
+%ifdef TRKLOG
+    cmp byte [tlog_even], 0         ; E: the windowed readout on an even
+    je .noeven                      ; two-frame grid (SPEC.md 45.16.3) - bench
+    cmp byte [trk_fs], 0            ; only. The bracket has its own 54.6 Hz
+    jne .noeven                     ; clock and nothing to fix (53.5.1)
+    xor byte [tlog_ephase], 1
+    jnz .out                        ; the other half of the grid: draw nothing
+.noeven:
+%endif
     call tui_sync                   ; the position being HEARD (SPEC.md 45.15)
     call tui_track
     mov al, [mp_playing]            ; did playback START or STOP? the test is
@@ -2693,6 +2817,13 @@ tui_draw_dyn:
 .win:
     cmp byte [mp_playing], 0        ; windowed: a live position line on the
     je .out                         ; splash while something plays
+%ifdef TRKLOG
+    cmp byte [tlog_pace], TLOG_PACE_BURST
+    jne .nob
+    call tlog_burst                 ; C: rewrite [tui_arow] onto the burst
+    jnz .wupd                       ; grid (SPEC.md 45.16.4). ZF=0 = the
+%endif                              ; sweep moved, so redraw even on a row
+.nob:                               ; that did not change
     mov al, [tui_arow]
     cmp al, [tui_lrow]
     jne .wupd
@@ -2713,12 +2844,19 @@ tui_draw_dyn:
     call tui_scpy
     mov al, [tui_arow]
     call tui_hexb
+    mov bx, 120
+%ifdef TRKLOG
+    cmp byte [tlog_pace], TLOG_PACE_BURST
+    jne .nosw
+    call tlog_sweep_draw            ; ...and the sweep that covers the hold
+    mov bx, 120 + TLOG_SWEEPW * 8   ; (SPEC.md 45.16.4)
+.nosw:
+%endif
     mov byte [di], 0
     mov si, tui_pbuf
     mov cx, 8
     mov dx, [tui_ch]
     sub dx, 22
-    mov bx, 120
     mov ah, TC_WBG
     mov al, TC_WTX
     call tui_rdout
@@ -2941,6 +3079,9 @@ tui_ab5:     db 'Any key closes', 0
     TRKB tui_lspd
     TRKBUF tui_lmute, 4
     TRKBUF tui_vu, 4                ; decaying VU levels
+    TRKW tui_vlpos                  ; the stamp position the needles were last
+                                    ; kicked on (SPEC.md 45.12.1) - the row
+                                    ; gate, not a display value
     TRKBUF tui_vupx, 8              ; last-drawn bar widths, px (SPEC.md
                                     ; 45.12 - the delta-draw baseline)
     TRKB tui_lcvr                   ; last-drawn view row (the scroll path's
@@ -2948,8 +3089,15 @@ tui_ab5:     db 'Any key closes', 0
     TRKW tui_msgp                   ; status-line string, 0 = the key hint
     TRKB tui_tcol                   ; tui_rdout scratch
     TRKB tui_ecol
+    TRKW tui_rdw                    ; ...and the field it is drawing, banked
+    TRKW tui_rdx                    ; because the clip gate spends CX and DX
+    TRKW tui_rdy
+    TRKBUF tui_rbuf, TUI_RDCELLS + 1    ; the space-padded run (SPEC.md 6.1):
+                                        ; the padding is what erases the old
+                                        ; value, so there is no blank moment
     TRKW tui_t1                     ; shared scratch words (serial: every
     TRKW tui_t2                     ; drawer runs under the one gfx lock)
     TRKBUF tui_nbuf, 8              ; number/text compose buffers
-    TRKBUF tui_pbuf, 20
+    TRKBUF tui_pbuf, 48             ; 'Pos xx  Row yy' plus, in the TRKLOG
+                                    ; build only, SPEC.md 45.16.4's sweep
     TRKBUF tui_insbuf, 20

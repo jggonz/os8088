@@ -38,6 +38,13 @@
 ; already holds (it is non-reentrant, SPEC 7).
 ; =============================================================================
 
+UI_TDBLT    equ 9               ; title-bar double-click window, ticks - the
+                                ; same half second as DESK_DBLT, FM_DBLCLK
+                                ; and FD_DBLCLK, and deliberately the same
+                                ; number rather than a shared constant: they
+                                ; are four independent detectors and one of
+                                ; them may one day want to differ
+
 ; -----------------------------------------------------------------------------
 ; ui_task - the UI task main loop (task 0 jumps here from kmain; never returns)
 ; in:  nothing
@@ -232,6 +239,20 @@ ui_task:
 
 .title_bar:
     mov si, bx                  ; keep the hit window; wm_top returns in BX
+    call ui_tdbl                ; the second press on THIS title bar inside
+    jnc .tb_raise               ; UI_TDBLT ticks ZOOMS it (SPEC.md 11.95)
+    test word [si+W_FLAGS], WF_SIZABLE
+    jz .tb_raise                ; ...if it is resizable. A fixed-layout window
+                                ; has nothing to zoom into, so the press stays
+                                ; an ordinary one and drags as before
+    mov bx, si
+    call gfx_lock
+    call wm_zoom                ; out to the desktop band, or back to wherever
+    call gfx_unlock             ; it was when it left
+    jmp short .yield            ; and no drag: the button is still down, but
+                                ; the EVT_MUP behind it is ignored by the
+                                ; loop above, which acts on EVT_MDOWN alone
+.tb_raise:
     call wm_top
     cmp bx, si
     mov bx, si                  ; restore hit window (flags survive the mov)
@@ -449,6 +470,43 @@ ui_rdown:
     call dock_rclick            ; CX/DX; CF = 1 = consumed (locks internally,
     ret                         ; SPEC.md 30.2). CF is nobody's answer here -
                                 ; the desktop's case IS "do nothing"
+
+; -----------------------------------------------------------------------------
+; ui_tdbl - was this title-bar press the second half of a double-click?
+; in:  SI = the window the press landed on; [ui_click_t] = its birth tick
+; out: CF = 1 double-click (and the pair is spent), CF = 0 first click (and
+;      it is recorded)
+; clobbers: AX
+;
+; The same shape as the double-click detectors of SPEC.md 22/26/38, and for
+; the same three reasons. It compares the clicks' BIRTH ticks (EV_C) and not
+; [ticks], so two presses queued either side of something slow - a mount, a
+; package load - cannot collapse into a pair they never were. It keys on the
+; WINDOW as well as on the time, so a press on one title bar followed by a
+; press on another is two first clicks rather than a maximize of the second.
+; And a completed pair is SPENT, so a third press starts a fresh pair instead
+; of maximizing again on every press of a held-down triple.
+;
+; A window pointer is never 0, so 0 is the "nothing recorded" sentinel - and
+; .bss arrives zeroed (the overlay note in kernel.asm), so the machine's very
+; first title-bar press takes .first like any other.
+; -----------------------------------------------------------------------------
+ui_tdbl:
+    mov ax, [ui_click_t]
+    cmp si, [ui_tclkw]
+    jne .first                  ; a different window: this is a first click
+    sub ax, [ui_tclkt]          ; wrap-safe - the difference is what matters
+    cmp ax, UI_TDBLT
+    jae .first                  ; too slow: it restarts the pair below
+    mov word [ui_tclkw], 0
+    stc
+    ret
+.first:
+    mov ax, [ui_click_t]
+    mov [ui_tclkt], ax
+    mov [ui_tclkw], si
+    clc
+    ret
 
 ; -----------------------------------------------------------------------------
 ; ui_drag - title-bar drag: XOR outline follows the mouse, window moves on
@@ -1431,6 +1489,9 @@ ui_about:   resw 1              ; 1 = the selection came from the app-NAME
 ui_click_t: resw 1              ; EV_C of the event being dispatched: the
                                 ; click's birth tick (valid during dispatch,
                                 ; which always stores before handlers read)
+ui_tclkt:   resw 1              ; birth tick of the last title-bar press, and
+ui_tclkw:   resw 1              ; the window it landed on (0 = none recorded):
+                                ; ui_tdbl's pair, SPEC.md 11.95
 ui_dragwin: resw 1              ; window being dragged
 ui_startx:  resw 1              ; mousedown position (drag origin)
 ui_starty:  resw 1

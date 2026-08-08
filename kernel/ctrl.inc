@@ -144,12 +144,21 @@ CP_I_PAINT  equ 2               ; -> page paint proc (in DI/BP = pane origin)
 CP_I_CLICK  equ 4               ; -> page click proc (in DI/BP, CX/DX = rel)
 CP_ISTRIDE  equ 8
 
+; DISPLAY IS LAST, AND THAT IS WHAT MAKES IT HIDEABLE (SPEC.md 31.10.1). A
+; machine with one adapter has nothing to choose between, so the page is not
+; shown at all - and "hidden" for a row in the MIDDLE of this table would mean
+; every row below it maps to a different record, which is a second opinion
+; about what the user clicked on at four call sites. Last, it is simply a
+; shorter list: [cp_nst] falls by one, row -> record stays the identity, and
+; cp_entry does not change. It also leaves the four indices below at the
+; values they had before this page existed.
 cp_items:
     dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
-    dw cp_s_disp,  cp_disp_paint,  cp_disp_click,  0
+    dw cp_s_buf,   cp_buf_paint,   cp_buf_click,   0
     dw cp_s_time,  cp_time_paint,  cp_time_click,  0
     dw cp_s_drv,   cp_drv_paint,   cp_drv_click,   0
     dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0
+    dw cp_s_vid,   cp_vid_paint,   cp_vid_click,   0
 cp_items_end:
 CP_ITEMS  equ (cp_items_end - cp_items) / CP_ISTRIDE
 CP_ITIME  equ 2                 ; the Date/Time item: ui.inc selects it by
@@ -160,6 +169,31 @@ CP_IDRV   equ 3                 ; ...and the Drivers item, which drv_notice
                                 ; load at boot (SPEC.md 51.3)
 CP_ISND   equ 4                 ; ...and Sound, the tone tier's route (34.8)
 
+; How many static rows the list is showing RIGHT NOW - CP_ITEMS, or one fewer
+; when the Display page is hidden. It is the boundary between a static row and
+; a driver's (SPEC.md 31.9), so every site that used to compare against
+; CP_ITEMS reads this instead, and there is exactly one place that writes it:
+; vid_probe_avail, which is also the only thing that could ever answer the
+; question (SPEC.md 39.11.1). [vid_avail] is fixed for the life of the
+; machine, so this is written once at boot and read for ever after.
+;
+; Initialised .text data, like cp_sel and cp_tsel - and the initialiser is the
+; SAFE answer: a build whose probe never ran shows the page rather than losing
+; a row of somebody else's.
+cp_nst:   db CP_ITEMS
+
+; THE LIST HAS ROOM FOR EIGHT ROWS AND NO MORE: row i's bar runs
+; CP_I0Y + i*CP_IROWH .. + CP_IBH - 1, so row 7 ends at 116 inside a content
+; box 121 tall and row 8 would run through the bottom border onto the
+; desktop. Six static items plus the two drivers that publish a page
+; (SPEC.md 31.9 - the hard disk's and the debug monitor's; the sound driver
+; publishes none) is exactly eight. A THIRD driver page, or a seventh static
+; item, needs the window to grow first. CP_ITEMS and not [cp_nst], because
+; the guard has to hold on the machine that shows every row.
+%if CP_ITEMS + 2 > (CP_CH - CP_I0Y) / CP_IROWH
+%error "ctrl: the item list can overflow its pane - grow CP_CH (SPEC.md 31.1)"
+%endif
+
 ; List names are at most 9 characters (72px): the selection bar ends at
 ; CP_IBX2 = 85 and the name starts at CP_IX = 6, so a tenth glyph would
 ; cross the divider. 'Scheduler' and 'Date/Time' are both exactly at it.
@@ -169,7 +203,12 @@ cp_s_pre:   db 'Pre-emptive', 0
 cp_s_coop:  db 'Cooperative', 0
 cp_s_cap:   db 'Takes effect immediately', 0
 
-cp_s_disp:  db 'Display', 0     ; list name AND the page heading
+; The BUFFER page (SPEC.md 31.3). It was called 'Display' until the Display
+; page below existed, and the rename is the honest one of the two: this page
+; has never had anything to do with which display the machine drives - it
+; chooses whether drawing goes straight to the framebuffer or through the
+; 150KB back buffer of SPEC.md 32, which is a question about buffering.
+cp_s_buf:   db 'Buffer', 0      ; list name AND the page heading
 cp_s_dbof:  db 'Direct to screen', 0
 cp_s_dbon:  db 'Double buffered', 0
 cp_s_dcap:  db 'Smoother; costs 150K', 0
@@ -195,6 +234,51 @@ cp_s_dna:   db 'Not Enough Ram', 0          ; the heap cannot fund 150KB
                                             ; room under it.
 cp_s_dmono: db 'Framebuffer is the display', 0
 cp_s_dmono2: db 'driver on this adapter', 0
+
+; --- Display page (SPEC.md 31.10/39.11) --------------------------------------
+; One radio row per adapter the machine actually HAS, and a button that moves
+; the machine onto the selected one. The rows are the ADAPTERS, not the modes
+; the kernel could theoretically set: each adapter has exactly one graphics
+; mode here (SPEC.md 39), so naming the resolution beside it is a description
+; rather than a second choice.
+;
+; The names are indexed by VID_* and so is everything else on this page - the
+; kernel's own enum is the row order, which is what keeps the label, the dot,
+; the click and vid_switch from ever disagreeing about which row is which.
+cp_s_vid:   db 'Display', 0     ; list name AND the page heading
+cp_s_vvga:  db 'Vga 640x480', 0
+cp_s_vherc: db 'Hercules 720x348', 0
+cp_s_vcga:  db 'Cga 640x200', 0
+cp_vidnam:  dw cp_s_vvga, cp_s_vherc, cp_s_vcga
+cp_s_vact:  db 'Activate Mode', 0
+; The two captions, both inside the pane's 27-character limit: the ordinary
+; one, and SPEC.md 47 rule 7's say-why-not for the button, which greys
+; whenever the dot is already on the running adapter. There was a third -
+; 'No other adapter found' - until SPEC.md 31.10.1 stopped drawing the page
+; at all on a machine with one adapter, which is the same answer given by
+; not asking the question.
+cp_s_vcap:  db 'Switches now, and is kept', 0
+cp_s_vnow:  db 'This adapter is running', 0
+
+; Display page geometry, PANE-relative. The Sound page's tighter 16px row
+; pitch rather than the two-row pages' 20, because three rows plus a button
+; plus a caption have to fit CP_CH.
+CPV_R0Y   equ 20                ; row 0 glyph top
+CPV_ROWH  equ 16                ; row pitch: rows at 20, 36, 52
+CPV_BTNX  equ CP_PMX            ; the Activate button, under the rows
+CPV_BTNY  equ 72
+CPV_BTNW  equ 116               ; 'Activate Mode' is 13 glyphs = 104px
+CPV_BTNH  equ 18
+CPV_CAPY  equ 96                ; caption row, below the button
+; Row hit bands: generous and contiguous, like every other page's (31.2). The
+; bands are laid out for THREE rows whatever the machine has - a row that is
+; not drawn is refused by cp_vid_row, not by the geometry.
+CPV_B0Y1  equ CPV_R0Y - 4                   ; 16: row 0 top
+CPV_BROWH equ CPV_ROWH                      ; ...and one band per row pitch
+CPV_B2Y2  equ CPV_R0Y + 2*CPV_ROWH + CP_GW - 1   ; 63: row 2 bottom
+; ...and the button's, which must start below them
+CPV_BB1   equ CPV_BTNY - 4
+CPV_BB2   equ CPV_BTNY + CPV_BTNH + 3
 
 ; --- Date/Time page (SPEC.md 31.5/37) ----------------------------------------
 cp_s_time:  db 'Date/Time', 0   ; list name AND the page heading
@@ -290,6 +374,19 @@ cp_tsel:  db 0                  ; selected field; initialised .text data like
                                 ; cp_sel, so the panel stays boot-clean
 cp_tendp: dw 0                  ; cp_time_pick scratch: one past the last
                                 ; ACTIVE field record
+
+; The Display page's PENDING adapter - which row the dot is on, not which
+; adapter is running (that is [vid_kind], read live like every other page
+; reads its subject). The two differ exactly between picking a row and
+; pressing Activate, which is the whole reason the button exists.
+;
+; 0FFh = "follow the live one", and it has to be a sentinel rather than a
+; kind: this is initialised .text data like cp_sel and cp_tsel above, so it
+; is fixed at assembly time, and which adapter a machine boots on is not
+; known until vid_detect has run. cp_vid_pick resolves it - and re-resolves
+; it whenever it names something this machine cannot do, which is what makes
+; the byte safe to keep across a switch.
+cp_vsel:  db 0xFF
 
 ; Sound page geometry, PANE-relative. Three control rows at a tighter
 ; 16px pitch than the two-row pages (the page holds more), the Test
@@ -504,7 +601,7 @@ cp_entry:
 ; -----------------------------------------------------------------------------
 cp_nitems:
     call KERNEL_SEG:cw_drv_cp_count
-    add al, CP_ITEMS
+    add al, [cp_nst]
     ret
 
 ; -----------------------------------------------------------------------------
@@ -514,14 +611,14 @@ cp_nitems:
 ; clobbers: AL (on a hit), flags
 ; -----------------------------------------------------------------------------
 cp_drv_item:
-    cmp al, CP_ITEMS
+    cmp al, [cp_nst]
     jb .static
-    sub al, CP_ITEMS
+    sub al, [cp_nst]
     call KERNEL_SEG:cw_drv_cp_class           ; CF=1 if the driver went away under us
     jc .gone
     ret
 .gone:
-    add al, CP_ITEMS            ; hand back the ROW index, not the rebased
+    add al, [cp_nst]            ; hand back the ROW index, not the rebased
     stc                         ; one (add clears CF): a CF=1 answer carrying
     ret                         ; the rebased index read as "static row 5 ->
                                 ; dispatch the Scheduler page", and the
@@ -544,7 +641,7 @@ cp_item_name:
     pop ax
     ret
 .static:
-    cmp al, CP_ITEMS            ; a vanished driver's row has no name; the
+    cmp al, [cp_nst]            ; a vanished driver's row has no name; the
     jae .gone                   ; empty string letters as a blank row
     call cp_entry
     mov si, [si + CP_I_NAME]
@@ -581,7 +678,7 @@ cp_item_paint:
     call KERNEL_SEG:cw_drv_cp_call
     jmp short .done
 .static:
-    cmp al, CP_ITEMS            ; a vanished driver's row paints nothing -
+    cmp al, [cp_nst]            ; a vanished driver's row paints nothing -
     jae .done                   ; unreachable while cp_drv_gone_x clamps
     call cp_entry               ; [cp_sel] at detach, and checked anyway
     call [si + CP_I_PAINT]
@@ -615,7 +712,7 @@ cp_item_click:
     call KERNEL_SEG:cw_drv_cp_call
     jmp short .done
 .static:
-    cmp al, CP_ITEMS            ; a vanished driver's row refuses the click
+    cmp al, [cp_nst]            ; a vanished driver's row refuses the click
     jae .done                   ; (same reasoning as cp_item_paint's guard)
     call cp_entry
     call [si + CP_I_CLICK]
@@ -644,7 +741,8 @@ cp_drv_gone_x:
     mov al, [cp_sel]
     call cp_drv_item
     jnc .out                    ; still a live page: this was another class
-    cmp byte [cp_sel], CP_ITEMS
+    mov al, [cp_nst]
+    cmp [cp_sel], al
     jb .out
     mov byte [cp_sel], 0        ; Scheduler: the boot selection, always there
 .out:
@@ -993,19 +1091,19 @@ cp_radios:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; cp_disp_paint - the Display page
+; cp_buf_paint - the Display page
 ; in:  DI = pane left, BP = pane top; gfx lock held; entry pen is CWHITE
 ; out: nothing
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
-cp_disp_paint:
+cp_buf_paint:
     push cx
     push dx
     push si
 
     mov byte [gfx_color], CBLACK ; entry pen is CWHITE (cp_page's erase)
 
-    mov si, cp_s_disp           ; heading, same string as the list row
+    mov si, cp_s_buf           ; heading, same string as the list row
     mov cx, di
     add cx, CP_PMX
     mov dx, bp
@@ -1097,7 +1195,7 @@ cpf_dbok:
 ; out: nothing
 ; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
 ;
-; Row 1's glyph takes cpf_dbok's pen, the same one cp_disp_paint gives its
+; Row 1's glyph takes cpf_dbok's pen, the same one cp_buf_paint gives its
 ; label (SPEC.md 47 rule 2). It was drawn in CBLACK here while the label
 ; beside it went grey, so a row the click band refuses still showed a
 ; full-strength ring - which reads as a live control with faint writing next
@@ -1146,11 +1244,11 @@ cp_dbradios:
     ret
 
 ; -----------------------------------------------------------------------------
-; cpf_disp_cap - redraw the Display page's caption line only (far, internal)
+; cpf_buf_cap - redraw the Display page's caption line only (far, internal)
 ; in:  DI = pane left, BP = pane top; gfx lock held
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
-cpf_disp_cap:
+cpf_buf_cap:
     push ax
     push bx
     push cx
@@ -1197,7 +1295,7 @@ cpf_disp_cap:
     ret
 
 ; -----------------------------------------------------------------------------
-; cp_disp_click - a click inside the Display page
+; cp_buf_click - a click inside the Display page
 ;
 ; in:  DI = pane left, BP = pane top, CX = pane-relative x (ignored),
 ;      DX = pane-relative y; gfx lock held by the caller
@@ -1211,7 +1309,7 @@ cpf_disp_cap:
 ; rather than moving a dot that bb_set would refuse to honour. No [cp_dirty]:
 ; no other window quotes this setting, and the buffer state is invisible.
 ; -----------------------------------------------------------------------------
-cp_disp_click:
+cp_buf_click:
     push ax
 
     cmp dx, CP_B0Y1             ; outside both bands: nothing
@@ -1234,11 +1332,376 @@ cp_disp_click:
     call KERNEL_SEG:cw_bb_set                ; flips both flags; we hold the lock
     mov byte [cp_wdirty], 1     ; ...and remembered on close (31.8)
     call cp_dbradios            ; the two glyph boxes only
-    call cpf_disp_cap           ; the caption can change with the claim:
+    call cpf_buf_cap           ; the caption can change with the claim:
                                 ; turning it OFF hands 150KB back, which may
                                 ; un-grey it for the next machine state
 
 .done:
+    pop ax
+    ret
+
+; =============================================================================
+; Display page (SPEC.md 31.10) - which adapter this machine is driven as
+;
+; One radio row per adapter vid_probe_avail found (SPEC.md 39.11.1), and an
+; Activate button that moves the machine onto the selected one there and then
+; (SPEC.md 39.11.2). The rows show FACTS - an adapter with no card is not a
+; greyed row, it is no row - which is SPEC.md 47 rule 3 read the other way
+; round: greying is a claim about a control, and a control for hardware that
+; is absent should not be drawn at all. The one thing that does grey is the
+; button, whose predicate is "the dot is not on the running adapter".
+;
+; THE SELECTION AND THE SWITCH ARE TWO ACTIONS ON PURPOSE. A click that
+; switched immediately would make a mis-click on a 5150 with two monitors
+; move the picture to the other tube - recoverable, but only by finding a
+; window you can no longer see. It is also what lets the button carry the
+; page's whole refusal story in one place.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; cp_vid_rowok - does this machine have adapter AL? (module internal)
+; in:  AL = a VID_* kind
+; out: CF = 0 yes, CF = 1 no
+; clobbers: nothing (flags)
+; -----------------------------------------------------------------------------
+cp_vid_rowok:
+    call KERNEL_SEG:cw_vid_avail_test
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_vid_pick - the pending adapter, resolved (module internal)
+; in:  nothing
+; out: AL = [cp_vsel], normalised to something this machine can actually do
+; clobbers: AL, flags
+;
+; 0FFh means "whatever is running", which is the boot value; so does any kind
+; the machine turns out not to have, which is what a settings byte written on
+; a machine with a card this one does not have decays to. Both are repaired
+; here rather than at the twelve places that read the byte.
+; -----------------------------------------------------------------------------
+cp_vid_pick:
+    mov al, [cp_vsel]
+    call cp_vid_rowok
+    jnc .out
+    mov al, [vid_kind]
+    mov [cp_vsel], al
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_vid_slot - which adapter is drawn in row slot AL? (module internal)
+;
+; in:  AL = slot, 0..2 (the visible row, top to bottom)
+; out: AL = the VID_* kind in it, CF = 0; CF = 1 = that slot has no row
+; clobbers: AL, flags
+;
+; THE PAINT AND THE CLICK BOTH GO THROUGH THIS, which is the fm_hit argument
+; of SPEC.md 22.2: the rows are COMPACTED - a machine with a Hercules and a
+; CGA and no VGA draws them in slots 0 and 1, not 1 and 2 with a hole at the
+; top - so "which kind is this row" is real arithmetic over [vid_avail] and
+; not the identity. Two copies of it would be two opinions about what the
+; user just clicked on.
+; -----------------------------------------------------------------------------
+cp_vid_slot:
+    push bx
+    push cx
+    mov ch, al                  ; CH = the slot wanted
+    xor cl, cl                  ; CL = slots filled so far
+    xor bl, bl                  ; BL = the kind being considered
+.n:
+    mov al, bl
+    call cp_vid_rowok
+    jc .skip
+    cmp cl, ch
+    je .hit
+    inc cl
+.skip:
+    inc bl
+    cmp bl, 3
+    jb .n
+    pop cx
+    pop bx
+    stc                         ; fewer rows than the slot asked for
+    ret
+.hit:
+    mov al, bl
+    pop cx
+    pop bx
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; cpf_vidok - has the Activate button anything to do? (far, internal)
+; in:  nothing
+; out: CF = 0 yes, CF = 1 no (the dot is already on the running adapter)
+; clobbers: nothing (flags)
+;
+; The SPEC.md 31.3 idiom: one predicate, read by the greying, by the click's
+; refusal and by the caption, so all three agree by construction.
+; -----------------------------------------------------------------------------
+cpf_vidok:
+    push ax
+    call cp_vid_pick
+    cmp al, [vid_kind]
+    pop ax                      ; POP does not touch flags
+    je .no
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_vid_rows - the radio rows: glyph and label, one per available adapter
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
+;
+; The label is drawn BEFORE the glyph because both want SI - the name out of
+; cp_vidnam, then the 12-word bitmap - and cp_glyph fills its own box white
+; first, so nothing is left half-erased between the two.
+; -----------------------------------------------------------------------------
+cp_vid_rows:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    call cp_vid_pick            ; [cp_vsel] now names a row that exists
+    xor bl, bl                  ; BL = slot
+.r:
+    mov al, bl
+    call cp_vid_slot
+    jc .done
+    mov bh, al                  ; BH = the kind in this slot
+
+    mov al, bl                  ; DX = this row's glyph top
+    mov cl, CPV_ROWH
+    mul cl                      ; AX = slot * pitch (mul r/m8: AX = AL * op)
+    mov dx, bp
+    add dx, CPV_R0Y
+    add dx, ax
+
+    mov al, bh                  ; --- the label
+    xor ah, ah
+    shl ax, 1
+    mov si, ax
+    mov si, [si + cp_vidnam]
+    mov byte [gfx_color], CBLACK
+    mov cx, di
+    add cx, CP_PLX
+    push dx
+    add dx, CP_PLDY
+    call KERNEL_SEG:cw_font_str
+    pop dx
+
+    mov si, cp_radio_off        ; --- the glyph
+    cmp bh, [cp_vsel]
+    jne .g
+    mov si, cp_radio_on
+.g:
+    mov cx, di
+    add cx, CP_PGX
+    call cp_glyph
+
+    inc bl
+    cmp bl, 3
+    jb .r
+.done:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_vid_btn - the Activate button, greyed when there is nothing to activate
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
+;
+; The frame AND the label take cpf_vidok's pen (SPEC.md 47 rule 2 - grey the
+; WHOLE control), so on the two 1bpp adapters the ring comes out dotted and
+; the caption a checkerboard rather than both staying solid black. The
+; interior is white either way: [gfx_dis] is read by font_ink alone, so a
+; white fill between the two pen calls neither carries the flag nor clears it.
+; -----------------------------------------------------------------------------
+cp_vid_btn:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    call cpf_vidok
+    call KERNEL_SEG:cw_gfx_pen_cf
+    mov ax, di
+    add ax, CPV_BTNX
+    mov bx, bp
+    add bx, CPV_BTNY
+    mov cx, ax
+    add cx, CPV_BTNW - 1
+    mov dx, bx
+    add dx, CPV_BTNH - 1
+    call KERNEL_SEG:cw_gfx_frame
+    inc ax                      ; the interior, one pixel in from the frame
+    inc bx
+    dec cx
+    dec dx
+    mov byte [gfx_color], CWHITE
+    call KERNEL_SEG:cw_gfx_fill
+
+    call cpf_vidok              ; ...and the label in the same pen as the ring
+    call KERNEL_SEG:cw_gfx_pen_cf
+    mov si, cp_s_vact
+    mov cx, di
+    add cx, CPV_BTNX + 6
+    mov dx, bp
+    add dx, CPV_BTNY + (CPV_BTNH - 8) / 2
+    call KERNEL_SEG:cw_font_str
+    call KERNEL_SEG:cw_gfx_pen_live
+
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_vid_cap - the caption line, erased and redrawn (module internal)
+; in:  DI = pane left, BP = pane top; gfx lock held
+; out: nothing (all registers preserved)
+;
+; Three answers, most specific first: a machine with one adapter is not being
+; offered a choice at all and says so; a dot already on the running adapter
+; is SPEC.md 47 rule 7's say-why-not for the greyed button; anything else is
+; the ordinary "what pressing it will do".
+; -----------------------------------------------------------------------------
+cp_vid_cap:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov byte [gfx_color], CWHITE    ; erase the line first - the three answers
+    mov ax, di                      ; are different lengths
+    add ax, CP_PMX
+    mov bx, bp
+    add bx, CPV_CAPY
+    mov cx, di
+    add cx, CP_PRGT
+    mov dx, bx
+    add dx, 7
+    call KERNEL_SEG:cw_gfx_fill
+
+    mov byte [gfx_color], CBLACK
+    mov si, cp_s_vcap           ; two answers, not three: the page is not
+    call cpf_vidok              ; drawn at all on a machine with one adapter
+    jnc .draw                   ; (SPEC.md 31.10.1), so there is no longer a
+    mov si, cp_s_vnow           ; "nothing to choose from" case to caption
+.draw:
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CPV_CAPY
+    call KERNEL_SEG:cw_font_str
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_vid_paint - the Display page
+; in:  DI = pane left, BP = pane top; gfx lock held; entry pen is CWHITE
+; out: nothing
+; clobbers: nothing (flags only)
+; -----------------------------------------------------------------------------
+cp_vid_paint:
+    push cx
+    push dx
+    push si
+
+    mov byte [gfx_color], CBLACK ; entry pen is CWHITE (cp_page's erase)
+    mov si, cp_s_vid            ; heading, same string as the list row
+    mov cx, di
+    add cx, CP_PMX
+    mov dx, bp
+    add dx, CP_PHY
+    call KERNEL_SEG:cw_font_str
+
+    call cp_vid_rows
+    call cp_vid_btn
+    call cp_vid_cap
+
+    pop si
+    pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; cp_vid_click - a click inside the Display page
+;
+; in:  DI = pane left, BP = pane top, CX = pane-relative x, DX = pane-relative
+;      y; gfx lock held by the caller
+; out: nothing
+; clobbers: nothing (flags only)
+;
+; X MATTERS HERE, unlike every other page in the panel: the radio bands run
+; the pane's whole width as usual, but the button is a rect and a click to
+; the right of it is not a press. The button's band is tested first because
+; it sits below the rows and the two are contiguous.
+;
+; NOTHING IS REDRAWN AFTER A SUCCESSFUL SWITCH, and that is load-bearing
+; rather than an economy: vid_switch changes the geometry and re-fits every
+; window (SPEC.md 39.11.2), so DI/BP - this window's content origin, computed
+; before the call - now describe a rectangle that may not exist. [cp_dirty]
+; hands the whole screen to ui_task's step 3, which repaints it outside the
+; lock (SPEC.md 13/31.2), and that is the only correct redraw here.
+; -----------------------------------------------------------------------------
+cp_vid_click:
+    push ax
+    push cx
+    push dx
+
+    cmp dx, CPV_BB1             ; --- the Activate button ---
+    jl .rows
+    cmp dx, CPV_BB2
+    jg .done
+    cmp cx, CPV_BTNX
+    jl .done
+    cmp cx, CPV_BTNX + CPV_BTNW - 1
+    jg .done
+    call cpf_vidok              ; greyed: the caption already says why, so a
+    jc .done                    ; refused press says nothing more (47 rule 5)
+    mov al, [cp_vsel]
+    call KERNEL_SEG:cw_vid_switch
+    jc .done                    ; refused: the adapter went away under us
+    mov byte [cp_wdirty], 1     ; ...remembered on close (SPEC.md 31.8)
+    mov byte [cp_dirty], 1      ; ...and the whole screen is a new shape
+    jmp short .done
+
+.rows:                          ; --- the radio rows ---
+    cmp dx, CPV_B0Y1
+    jl .done
+    cmp dx, CPV_B2Y2
+    jg .done
+    mov ax, dx                  ; AH = 0: the band check above bounds this
+    sub ax, CPV_B0Y1
+    mov cl, CPV_ROWH
+    div cl                      ; AL = slot, AH = the remainder
+    call cp_vid_slot
+    jc .done                    ; a band with no row under it
+    cmp al, [cp_vsel]
+    je .done                    ; already the pending choice: draw nothing
+    mov [cp_vsel], al
+    call cp_vid_rows            ; the dots...
+    call cp_vid_btn             ; ...the button, which may have just un-greyed
+    call cp_vid_cap             ; ...and the caption, which follows it
+.done:
+    pop dx
+    pop cx
     pop ax
     ret
 
@@ -2611,7 +3074,7 @@ cp_drv_click:
 ; out: nothing (all registers preserved; leaves [gfx_color] = CBLACK)
 ;
 ; The strings differ in length, so the line is erased before it is drawn - the
-; cpf_disp_cap idiom - and the erase is where this page's one drawing bug
+; cpf_buf_cap idiom - and the erase is where this page's one drawing bug
 ; lived. The line's first row IS the checkbox's last (CP_DSTDY = CP_GW - 1),
 ; so a wipe starting at the pane margin runs straight through the box and
 ; takes its bottom edge off. It starts at CP_PLX, the column the text itself

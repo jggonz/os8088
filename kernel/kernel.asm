@@ -131,10 +131,10 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; folder it created from the file dialog - the deepest mark left was 246 bytes
 ; on task 0's stack and 150 on a background task's.
 ; =============================================================================
-KERN_BUDGET equ 86016           ; the whole kernel's FOOTPRINT. Growing past
+KERN_BUDGET equ 90112           ; the whole kernel's FOOTPRINT. Growing past
                                 ; this is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
-                                ; It has moved eleven times, every raise asked
+                                ; It has moved twelve times, every raise asked
                                 ; for and granted: 65,536 -> 71,680 for the
                                 ; SPEC.md 41 store and the two API surfaces
                                 ; that came with it (wm_geom, wm_about_set);
@@ -360,6 +360,38 @@ KERN_BUDGET equ 86016           ; the whole kernel's FOOTPRINT. Growing past
                                 ; sysbench reading them, and this was one
                                 ; kernel-side consumer of that store, not the
                                 ; store itself.
+                                ;
+                                ; The twelfth move, 86,016 -> 90,112, is 4KB
+                                ; asked for and granted in ADVANCE, on the
+                                ; seventh move's terms and the fifth move's
+                                ; warning: the project is in a growth phase
+                                ; and the raise lands with the commit that
+                                ; first needs it. That commit is SPEC.md
+                                ; 39.11's adapter switching, which took the
+                                ; spare to EXACTLY ZERO - 6 bytes left in the
+                                ; image rung and 155 in the cold one, so the
+                                ; next byte added to .text anywhere failed the
+                                ; build. What it buys immediately is 39.11.4
+                                ; (blanking the card the machine has just
+                                ; left, so a two-monitor 5150 does not sit
+                                ; with a frozen desktop on the tube nobody is
+                                ; using) and 31.10's hiding of a Display page
+                                ; that has nothing to choose between.
+                                ;
+                                ; It is granted WITHOUT the usual "and hand
+                                ; back what the optimisation pass saves",
+                                ; because the plan for the small machine has
+                                ; changed shape: the 128KB floor is to be met
+                                ; by a SECOND BUILD of this kernel rather than
+                                ; by keeping one build inside a figure both
+                                ; machines can live with. Once that exists the
+                                ; guard here is kern_big's, and the one that
+                                ; has to be defended byte by byte is
+                                ; kern_small's. Until it exists this is still
+                                ; the only guard there is, so the fifth move's
+                                ; rule stands unchanged: this is headroom for
+                                ; ordinary growth, not an invitation to spend
+                                ; 4KB without a conversation.
 KERN_CODE_MAX equ 65536         ; the kernel's own SEGMENT: .text + .bss are
                                 ; both addressed through KERNEL_SEG, so they
                                 ; must fit one 64KB window. Unlike KERN_BUDGET
@@ -1253,6 +1285,8 @@ ovw_xm_arm:         call xm_arm
                     retf
 ovw_dsk_vol_slot:   call dsk_vol_slot
                     retf
+ovw_desk_rowcalc:   call desk_rowcalc
+                    retf
 
 ; ...and the clock's five. Each is a port helper the READ path (overlay) and
 ; the WRITE path (resident, because the Control Panel can set the clock all
@@ -1341,6 +1375,15 @@ kmain:
                                 ; splash already did, EXCEPT the mode set -
                                 ; the loading screen stays up and keeps
                                 ; ticking until spl_finish below (15.3)
+    call vid_probe_avail        ; ...and which OTHER adapters this machine has
+                                ; (SPEC.md 39.11.1). AFTER the mode is set, and
+                                ; that is the whole correctness argument: a VGA
+                                ; in mode 12h decodes A000 only, so B000 and
+                                ; B800 are free for a second card to answer at.
+                                ; Probed before the mode set, a VGA whose BIOS
+                                ; came up in mono text answers at B000 as
+                                ; ITSELF and reports a Hercules that is not
+                                ; there
     call mem_init               ; the claim heap (SPEC.md 50): int 12h, the
                                 ; empty map. FIRST of the memory users -
                                 ; every claim below goes through it
@@ -1608,6 +1651,12 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
                                 ; so this must be resident with it
 %include "splash.inc"           ; must be resident within the image's opening
                                 ; SPL_RESIDENT sectors (SPEC.md 15)
+%include "vidsel.inc"           ; which adapters the machine HAS, and moving
+                                ; between them at run time (SPEC.md 39.11).
+                                ; AFTER splash.inc and not beside viddet.inc,
+                                ; because nothing here is reachable from the
+                                ; splash and everything above it eats that
+                                ; module's residency budget
 %include "cpudet.inc"           ; CPU tiers + the A20 line (SPEC.md 41.1-41.3)
 %include "xmem.inc"             ; memory above 1MB (SPEC.md 41.4/41.5): after
                                 ; cpudet.inc, whose tier and feature bits it
@@ -1787,6 +1836,10 @@ cw_gfx_pen_live:        call gfx_pen_live
                     retf
 cw_gfx_pixel:           call gfx_pixel
                     retf
+cw_gfx_scroll:          call gfx_scroll
+                    retf                    ; retf leaves the flags alone, so
+                                            ; gfx_scroll's CF is still its
+                                            ; answer at the cold caller
 cw_gfx_unlock:          call gfx_unlock
                     retf
 cw_gfx_vline:           call gfx_vline
@@ -1842,6 +1895,10 @@ cw_task_yield:          call task_yield
 cw_ui_post_cmd:         call ui_post_cmd
                     retf
 cw_vga_xor_rect_vram:   call vga_xor_rect_vram
+                    retf
+cw_vid_avail_test:      call vid_avail_test
+                    retf
+cw_vid_switch:          call vid_switch
                     retf
 cw_wm_clip_set:         call wm_clip_set
                     retf
@@ -2019,6 +2076,37 @@ OVL_SIZE equ ovl_end - $$
 ; is one contiguous span and there is nothing of the kernel outside it.
 KERN_KB    equ (KERN_SIZE + 1023) / 1024
 KBUF_KB    equ ((FAT_PARA + LOW_PARA) * 16 + 1023) / 1024
+
+; --- the size report, for tools/kernsize.py (docs/KERNEL-MEMORY.md) ----------
+; Every figure in the ladder, published in one line, so that measuring the
+; kernel is a command rather than a bisect. It is a knob and not an
+; unconditional %warning because -w+error is deliberately strict here: relax
+; the `user` class for every build and a %warning somebody adds as a real
+; alarm stops failing. `make` runs it with -DKERNSIZE -w-error=user, which
+; changes not one byte of the code being measured.
+;
+; %assign is what makes this work: it defines a single-line macro that
+; expands to the EVALUATED number, and %warning macro-expands its argument.
+; The line is tagged `ks:` and not `KERNSIZE` for the same reason: -D defines
+; that name as the empty string, so %warning expanded the tag to nothing.
+%ifdef KERNSIZE
+  %assign KS_TEXT   KTEXT_SIZE
+  %assign KS_BSS    KBSS_SIZE
+  %assign KS_COLD   COLD_SIZE
+  %assign KS_LOW    KLOW_SIZE
+  %assign KS_OVL    OVL_SIZE
+  %assign KS_STK0   STK0_SIZE
+  %assign KS_IMGP   KIMG_PARA
+  %assign KS_COLDP  COLD_PARA
+  %assign KS_FATP   FAT_PARA
+  %assign KS_LOWP   LOW_PARA
+  %assign KS_SIZE   KERN_SIZE
+  %assign KS_BUDGET KERN_BUDGET
+  %assign KS_CODEM  KERN_CODE_MAX
+  %assign KS_END    KERN_END
+  %assign KS_KSEG   KERNEL_SEG
+  %warning ks: text=KS_TEXT bss=KS_BSS cold=KS_COLD lowbss=KS_LOW ovl=KS_OVL stk0=KS_STK0 imgpara=KS_IMGP coldpara=KS_COLDP fatpara=KS_FATP lowpara=KS_LOWP ksize=KS_SIZE budget=KS_BUDGET codemax=KS_CODEM kend=KS_END kseg=KS_KSEG
+%endif
 
 ; 1. KERN_BUDGET - the FOOTPRINT. The whole kernel - image, scratch, FAT
 ;    snapshot, disk buffers and every task stack - is one span starting at

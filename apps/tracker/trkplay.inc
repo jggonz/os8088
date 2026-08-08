@@ -63,6 +63,13 @@ MP_SP_BPM  equ 5                ; b: tempo, so a tempo change is heard and
 MP_SP_SPD  equ 6                ; b: ...ticks per row, shown at the same moment
 MP_SP_VOL  equ 8                ; 4b: the channel volumes, so the VU needles
                                 ; move with the note rather than ahead of it
+MP_SP_HIT  equ 12               ; 4b: which channels STRUCK a note in this row
+                                ; (SPEC.md 45.12.1). The volumes above cannot
+                                ; say it - a MOD's volume column changes only
+                                ; when a volume command does, so a channel
+                                ; holding one value is indistinguishable from
+                                ; a silent one. Fits because MP_ST_SIZE is 16
+                                ; and VOL ends at 11
 
 ; --- channel record (bss, MP_CHSZ bytes each, 4 of them) -----------------------
 MP_PER    equ 0                 ; w: real period (persistent)
@@ -593,6 +600,12 @@ mp_stamp_at:
     mov [bx + MP_SP_VOL], ax
     mov ax, [mp_chvol + 2]
     mov [bx + MP_SP_VOL + 2], ax
+    mov ax, [mp_hit]            ; ...and the strikes since the last stamp,
+    mov [bx + MP_SP_HIT], ax    ; READ AND CLEARED: a strike belongs to the
+    mov word [mp_hit], 0        ; row that made it and to no later one
+    mov ax, [mp_hit + 2]
+    mov [bx + MP_SP_HIT + 2], ax
+    mov word [mp_hit + 2], 0
     inc byte [mp_stw]
     mov al, [mp_stw]
     sub al, [mp_str]            ; the ring is full: the next stamp overwrites
@@ -625,6 +638,8 @@ mp_stclear:
     push ax
     mov byte [mp_stw], 0
     mov byte [mp_str], 0
+    mov word [mp_hit], 0            ; strikes belong to the stream that made
+    mov word [mp_hit + 2], 0        ; them: a restart must not carry one over
     mov al, [mp_songpos]        ; no row has begun since mp_start, so the
     mov [mp_pendpos], al        ; live position IS the pending one
     mov al, [mp_pattern]
@@ -1738,7 +1753,15 @@ mp_trig:
     mov [di+MP_POSI], ax
     mov word [di+MP_POSF], 0
     mov byte [di+MP_ACT], 1
-    ret
+    push bx                     ; the needle's impulse (SPEC.md 45.12.1), on
+    mov bl, [mp_curc]           ; the SUCCESS path only - a trigger that fell
+    xor bh, bh                  ; through to .dead makes no sound and must
+    mov byte [mp_hit + bx], 1   ; light nothing. Here rather than at the three
+    pop bx                      ; call sites because this is the one place a
+    ret                         ; note actually starts: the initial trigger,
+                                ; EDx's delayed one and E9x's retrigger all
+                                ; arrive through it, each inside a loop that
+                                ; maintains [mp_curc]
 .dead:
     mov byte [di+MP_ACT], 0
     ret
@@ -2168,6 +2191,9 @@ mpe_song:   db 'Bad song data', 0
     TRKB mp_npat                    ; pattern count P
     TRKBUF mp_mute, 4               ; per-channel mute flags
     TRKBUF mp_chvol, 4              ; current output volumes 0..64 (0 = quiet)
+    TRKBUF mp_hit, 4                ; a note STRUCK on this channel since the
+                                    ; last stamp (SPEC.md 45.12.1) - mp_trig
+                                    ; sets, mp_stamp_at reads and clears
     TRKBUF mp_chper, 8              ; current playing periods (0 = silent)
     TRKBUF mp_title, 21             ; module title, NUL-terminated
     TRKBUF mp_outbuf, 2048          ; mp_gen's rendered output

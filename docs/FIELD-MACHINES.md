@@ -649,3 +649,42 @@ costs nothing to watch because `make field` runs `tools/fieldsize.py`:
 
 Growing past a rung is allowed. It just has to be **known about** rather than
 discovered later in a number that moved for no visible reason.
+
+### Delivering images in `Elendilon/os8088` — on request, and after every commit
+
+Everything above is about a **field run**: a set of numbers, a seven-step path
+to a real 360 KB disk, and a knob banner. This section is about the ordinary
+case, and it has different rules. They apply to work on **any branch of the
+`Elendilon/os8088` fork**, and they are that fork owner's standing preference
+rather than a property of the project — a session working in a different fork
+should not assume them.
+
+**Send the 360 KB pair after every commit, without being asked.** That is
+`build/os8088-360.img` (the system disk) and `build/apps360.img` (the apps
+disk) — the 360 KB geometry because it is what the register's machines read.
+The owner does not have to ask each time, and a commit that lands without its
+images is a commit they cannot put on a machine.
+
+**"Send" means attach the files to the reply.** A path into the session's own
+`build/` or scratch directory is not a delivery: those live in a container the
+owner cannot reach, and the container is reclaimed when the session ends. Use
+whatever the running harness offers for attaching a file (in Claude Code, the
+`SendUserFile` tool).
+
+**Do not boot an image after building it.** Not on request, not after a
+commit. Build it, send it, and say what is in it. The reasoning is the trade
+rather than a claim that booting is worthless: a boot-and-drive cycle costs
+minutes of session time, and by the time an image is being built that cycle
+has almost always just been run as part of the change being committed — so
+the second one re-establishes what the first one already established. When
+the owner wants an image exercised harder because it is going to real
+hardware, they will ask for that specifically, and then the rest of this file
+applies.
+
+Two things this does **not** relax. A change is still tested before it is
+committed — the rule removes a redundant boot after the build, not the
+verification that earned the commit (docs/TESTING.md is still the matrix, and
+`make marty` is still the default instrument). And a **merge** onto the
+integration branch still rebuilds and boots before it is pushed, because a
+merge combines two trees that were never tested together, so no earlier run
+covers the result.

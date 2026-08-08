@@ -74,6 +74,20 @@ machine a report came from), and **the 5150's C: is a real DOS 3.3 install**,
 so nothing may format, partition, write or delete on it. `make field`'s two
 images are built on demand and SENT, never committed.
 
+**Two standing rules for work on any branch of the `Elendilon/os8088` fork,
+written down in that file's last section.** They are that fork owner's
+preference, not a property of the project. **Send the 360KB pair
+(`build/os8088-360.img` and `build/apps360.img`) after EVERY commit, without
+being asked** - and "send" means ATTACH the files (`SendUserFile`), because a
+path into the session's `build/` is a container the owner cannot reach.
+**And do not boot an image after building it**, on request or after a commit:
+by the time one is being built, the change it carries has almost always just
+been driven as part of the work, so a second cycle re-establishes what the
+first already did - the owner asks when they want one exercised harder. It
+relaxes neither the testing that earns a commit nor the rule that a MERGE
+onto the integration branch rebuilds and boots first, a merge being two trees
+that were never tested together.
+
 **"Merge to elendilon" means the BRANCH, not the repository.** `elendilon` is
 the integration branch this work lands on — feature branches merge into it and
 it is what gets tested on the iron; `main` is behind it and is not the target.
@@ -276,6 +290,10 @@ make marty    # the MARTYPC DEBUGGER (docs/MARTYPC-DEBUG.md): a remote debug
               # is FIELD-MACHINES.md's self-validating dump as one command
               # Machines: os8088_5150_cga (default), _5150_herc, _5150_cga_gla,
               # _5150_sb (AdLib + Sound Blaster), _xt_vga (mode 12h),
+              # _xt_vga_sb (that plus sound, and the one to run with --turbo:
+              # 7.16MHz is the fastest MartyPC has, and the CGA PANICS there,
+              # so a turbo machine is a VGA one - it is a CONTROL for "is this
+              # cost CPU-bound", never a source of a PERFORMANCE.md number),
               # _xt_hdd (XT-IDE, SPEC.md 52's rung 0). Add
               # MARTYPC_WAV=/tmp/cap for one wav per sound source.
 make clean
@@ -693,6 +711,39 @@ Testing quirks (learned the hard way):
   screen is `[vid_w]`/`[vid_h]`/`[vid_stride]` and the derived words in §39.2. New code that
   clips, centres or anchors to a screen edge must read those, or it is wrong on two adapters
   out of three.
+- **…and the machine may have MORE THAN ONE, and may be moved between them
+  while it runs (SPEC.md §39.11, `kernel/vidsel.inc`).** `vid_detect` answers
+  *which adapter am I driving*; `[vid_avail]` answers *which ones could I
+  drive*, and on the machine this project is calibrated against — a 5150 with
+  a Hercules AND a CGA, each on its own monitor — that is two. The Control
+  Panel's **Display** page (§31.10) lists them and its **Activate Mode**
+  button switches there and then; the old Display page, which was always
+  about double buffering, is called **Buffer** now (§31.3). Four things are
+  easy to undo. **`vid_probe_avail` runs from `kmain` AFTER the mode is set**,
+  because a VGA in mode 12h decodes A000 only and so leaves B000/B800 free for
+  a second card to answer at — probed earlier, a VGA whose BIOS came up in
+  mono text answers at B000 *as itself*. **Memory answering at B800 is not a
+  CGA**: a Hercules has 64KB in two pages and page 1 IS B8000, so
+  `vid_cga_alias` writes at B000:8000 and looks for it at B800:0000 — MartyPC's
+  MDA decodes the whole 64KB whatever 3BFh says and reported a CGA on a machine
+  that has only a mono card. **`vid_switch` drops the back buffer and spends
+  the cursor's deferred hide BEFORE the geometry moves**, or `gfx_unlock`
+  restores a save-under through the new addressing and smears the arrow
+  permanently; and it re-runs `desk_rowcalc` and `wm_refit`, the two things
+  `vid_apply` does not own. **The caller owes the repaint** — the panel posts
+  `[cp_dirty]`, `drv_boot` redraws the splash — because `vid_setmode` clears
+  the framebuffer and the two callers want different things put back.
+  `SYSTEM.CFG`'s `VM` key remembers the choice and `vid_switch` REFUSES a card
+  the machine does not have, so a settings disk carried between machines
+  cannot boot one to a dead monitor. **One adapter is not a choice, so the
+  page is not drawn at all** (§31.10.1) — and the Display item is LAST in
+  `cp_items` precisely so that hiding it is a shorter list rather than a
+  remapping every row below it would have to agree about. `[cp_nst]`, not
+  `CP_ITEMS`, is §31.9's static/driver boundary now; miss one of those sites
+  and a loaded driver's row dispatches as the Display page. **And the card
+  the machine LEAVES is darked** (§39.11.4), but only when the two kinds are
+  two cards — on a VGA the CGA row IS the VGA doing mode 6, so blanking "the
+  outgoing card" there would blank the one being programmed.
 - **8086 only.** `kernel.asm` opens with `cpu 8086` and the build uses `-w+error`, so NASM rejects anything newer: no `pusha`, no `push imm`, no `shl reg, imm` other than 1 (use CL), no `movzx`, no 32-bit registers.
 - **Near model — for the kernel.** CS = DS = `KERNEL_SEG` (0x0060) for all kernel code and every task; **SS = `LOW_SEG`**, because every task stack lives outside the kernel's own segment (just above it). **Every** inter-module call in the kernel is near — there is no far code and no second code segment (SPEC.md §33). ES is scratch but must be restored unless documented. **SS ≠ DS means `[bp+disp]` addresses SS** — code holding a kernel pointer in BP needs `[ds:bp+…]`. **A package owns its own segment** (SPEC.md §20.1), so every crossing of that boundary is a far call in one direction and a dispatcher call in the other; see "Packages own a segment" below.
 - **Register discipline.** Every public routine preserves all registers except documented outputs. ISRs push DS/ES, load DS = KERNEL_SEG, `cld` before string ops. Critical sections use `pushf`/`cli` … `popf`, never `cli` … `sti`.
@@ -736,7 +787,7 @@ Testing quirks (learned the hard way):
   when a **document's** program was missing. A second caller is where a
   hard-coded string becomes a lie; the window is reused, so `W_TITLE` is
   restamped per call, before `wm_show`.
-- **Memory budget — read `docs/KERNEL-MEMORY.md` before spending any.** Two guards bind the kernel, they bind *different* things, and they are named for what they bound rather than numbered (they were "guard 1" and "guard 2" until the numbering turned out to be why the distinction kept getting lost). **`KERN_BUDGET` — the FOOTPRINT**: the whole kernel — image, `.bss`, the cold segment, the FAT window, the disk buffers and every task stack — is one contiguous span from `KERNEL_SEG`, measured against it (84KB, with the kernel at 84,480 — **1,536 bytes spare**, one step UNDER the four the fifth move settled on as the standard, so the next feature has to ask; it has moved eleven times, every raise asked for and granted, and twice downward: the fifth to put the guard back within reach of ordinary growth after an optimisation pass, and the eleventh to hand back the step SPEC.md §53.6.1's removed XMS desktop stash had cost. The tenth granted 4KB in advance for incoming quality-of-life work and its terms said to give back whatever that work did not spend — the constant's own comment in `kernel.asm` is the history, and `docs/KERNEL-MEMORY.md` carries the bisect recipe rather than a figure, so the next author measures rather than trusts). **`KERN_BUDGET` can be raised again, and for one release it could not** — move 9 landed it exactly on guard 5's ceiling, because the kernel had to end below a boot sector nailed to linear 0x15000. The sector relocates to the **top of conventional RAM** now (SPEC.md §2.7: `int 12h`, its last byte on the machine's last byte), so it is above every kernel that could fit the machine at all and guard 5 is a statement about `MIN_RAM_KB` = 128 instead — a ceiling of 126,976, some 44.5KB above the budget. A further raise is therefore the same decision the earlier ones were, and **not** an invitation to take the slack. When the kernel approaches *that* ceiling the answer is two kernels off one tree, a full one and a minimum one, rather than a raise. **`KERN_CODE_MAX` — the SEGMENT**: `.text` + `.bss` must fit the kernel's own 64KB segment, which no budget and no conversation can raise — 16-bit offsets. Two mechanisms relieve `KERN_CODE_MAX` and neither relieves `KERN_BUDGET`: the **boot overlay** (`.ovl`, SPEC.md §2.5 — run-once init code landed in the FAT window and overwritten by the first mount, costing nothing at all) and the **cold segment** (`.cold`, SPEC.md §2.6 — resident code with a CS of its own, DS still `KERNEL_SEG`; it holds 20.1KB now — the five file modules and the Control Panel, and since §53.6.1's removal nothing else at all — which is 30% of the kernel's code). Moving a module cold to fix a *footprint* overrun is a no-op that looks like a fix, and because the two rungs it moves between round separately it usually costs a 512-byte step. The levers on the footprint itself are deleting kernel code, moving a feature out to a package (SPEC.md §28's precedent), and asking for the raise. A near call or branch crossing either boundary is a bug NASM cannot see; `tools/os88ovlchk.py`, run by `make`, refuses it. The menu save-under is a heap claim rather than a reservation. **Growing past the budget is a decision to take with whoever asked for the feature, not a build fix.** The heap starts where *this build's* kernel ends, so it moves whenever the kernel does. Task stacks are **256 bytes** with a `SCH_MAGIC` canary at the bottom of every slice, checked at each switch away — an overrun halts in `sch_stkdie` instead of corrupting the next task's stack. Re-run the fill probe (KERNEL-MEMORY) before trusting a smaller number, and remember the probe under QEMU understates a real BIOS's interrupt stack use — SeaBIOS services its interrupts on an internal stack; an IBM BIOS lands them on whichever task stack is current.
+- **Memory budget — read `docs/KERNEL-MEMORY.md` before spending any.** Two guards bind the kernel, they bind *different* things, and they are named for what they bound rather than numbered (they were "guard 1" and "guard 2" until the numbering turned out to be why the distinction kept getting lost). **`KERN_BUDGET` — the FOOTPRINT**: the whole kernel — image, `.bss`, the cold segment, the FAT window, the disk buffers and every task stack — is one contiguous span from `KERNEL_SEG`, measured against it (84KB, with the kernel at 84,480 — **1,536 bytes spare**, one step UNDER the four the fifth move settled on as the standard, so the next feature has to ask; it has moved eleven times, every raise asked for and granted, and twice downward: the fifth to put the guard back within reach of ordinary growth after an optimisation pass, and the eleventh to hand back the step SPEC.md §53.6.1's removed XMS desktop stash had cost. The tenth granted 4KB in advance for incoming quality-of-life work and its terms said to give back whatever that work did not spend — the constant's own comment in `kernel.asm` is the history, and `docs/KERNEL-MEMORY.md` carries the bisect recipe rather than a figure, so the next author measures rather than trusts). **`KERN_BUDGET` can be raised again, and for one release it could not** — move 9 landed it exactly on guard 5's ceiling, because the kernel had to end below a boot sector nailed to linear 0x15000. The sector relocates to the **top of conventional RAM** now (SPEC.md §2.7: `int 12h`, its last byte on the machine's last byte), so it is above every kernel that could fit the machine at all and guard 5 is a statement about `MIN_RAM_KB` = 128 instead — a ceiling of 126,976, some 44.5KB above the budget. A further raise is therefore the same decision the earlier ones were, and **not** an invitation to take the slack. When the kernel approaches *that* ceiling the answer is two kernels off one tree, a full one and a minimum one, rather than a raise. **`KERN_CODE_MAX` — the SEGMENT**: `.text` + `.bss` must fit the kernel's own 64KB segment, which no budget and no conversation can raise — 16-bit offsets. Two mechanisms relieve `KERN_CODE_MAX` and neither relieves `KERN_BUDGET`: the **boot overlay** (`.ovl`, SPEC.md §2.5 — run-once init code landed in the FAT window and overwritten by the first mount, costing nothing at all) and the **cold segment** (`.cold`, SPEC.md §2.6 — resident code with a CS of its own, DS still `KERNEL_SEG`; it holds 20.1KB now — the five file modules and the Control Panel, and since §53.6.1's removal nothing else at all — which is 30% of the kernel's code). Moving a module cold to fix a *footprint* overrun is a no-op that looks like a fix, and because the two rungs it moves between round separately it usually costs a 512-byte step. The levers on the footprint itself are deleting kernel code, moving a feature out to a package (SPEC.md §28's precedent), and asking for the raise. A near call or branch crossing either boundary is a bug NASM cannot see; `tools/os88ovlchk.py`, run by `make`, refuses it. The menu save-under is a heap claim rather than a reservation. **`make` reports what a change cost** — `tools/kernsize.py` prints the per-section deltas (`.text`, `.bss`, `.cold`, `.lowbss`, `.ovl`), their sum, the 512-byte rung each rounds into with the slack left in it, and a loud line when a rung is CROSSED; `--modules` is the same measurement per `%include`, and it costs the shipped kernel nothing by construction rather than by claim — the markers go into a temporary copy and it refuses to report unless the instrumented and plain binaries are byte-identical; it never fails the build, and `--bless` records the new figures in docs/KERNEL-MEMORY.md, which is where the baseline lives so the document cannot go stale quietly. **Report both numbers, and do not call a change that crossed no rung "free"**: it cost the machine nothing *yet*, and it spent slack that belonged to the next feature — the doc's Accounting section is the rule. **Growing past the budget is a decision to take with whoever asked for the feature, not a build fix.** The heap starts where *this build's* kernel ends, so it moves whenever the kernel does. Task stacks are **256 bytes** with a `SCH_MAGIC` canary at the bottom of every slice, checked at each switch away — an overrun halts in `sch_stkdie` instead of corrupting the next task's stack. Re-run the fill probe (KERNEL-MEMORY) before trusting a smaller number, and remember the probe under QEMU understates a real BIOS's interrupt stack use — SeaBIOS services its interrupts on an internal stack; an IBM BIOS lands them on whichever task stack is current.
 
 ### Concurrency (SPEC.md §7 — the crux)
 
@@ -1072,6 +1123,48 @@ icons and a per-window heap cache, while the dialog is a fixed-size modal of
 true thing: the entry format (§19), `dsk_get_dir`, `fm_ultoa`, and the
 one-place-for-geometry discipline that `fm_hit`, `fm_thumb`/`fdlg_thumb` and
 now the two `*_sel_bar`s all follow.
+
+### A scroll moves the rows and nothing else on the window (SPEC.md §22.11)
+
+All eight ways to scroll a Disk window — the two arrow cells, the two halves
+of the track, Up/Down/PgUp/PgDn — ended in `fm_repaint`, so moving a list
+redrew the header, two framed buttons, every visible row, the whole scroll bar
+and the status line. **Not one of those four can change when the view
+scrolls**: the header counts files, the buttons are labels in fixed rects, and
+the status line is §22.7's `Size … Free …` or a §22.9 verdict — questions about
+the selection and the volume, which a scroll moves neither of. Measured on a
+cycle-accurate 5150 with PERFORMANCE.md Part 3.1's flicker instrument, one row
+cost **16 frames of visible redraw = 262 ms, 15 of them flashing, worst 2,772
+transient pixels over the whole content**; it is **5 frames = 83 ms, 2
+flashing, worst 320 px** over one row and the bar, and a scroll at an **end
+stop** — which used to repaint the window to show the same pixels — now draws
+**nothing at all**.
+
+Three tiers behind one entry (`fm_scroll_by`, so the clamp, the tier choice and
+the write-back cannot drift between the mouse and the keyboard):
+`fm_scrollpaint` (list view, `|d| < fit`: one `gfx_scroll`, the `d` rows it
+exposed, two XOR bands and the thumb), `fm_rows_only` (the grid, or a jump of a
+windowful — the row band only, header and buttons and status line still
+untouched), and `fm_repaint` when a clip region cuts the band, which is §11.3's
+granularity rule taken exactly where `fm_status_only` takes it.
+
+Four things are worth knowing before touching it. **The blit rounds INWARD**,
+which is the opposite of Note Pad's §27.7.2 and for a reason: `NP_MARGIN` is 8
+there so rounding `x1` down stays inside the content, while a Disk row's icon
+starts *four* pixels in and rounding down would put the blit's left edge on the
+window frame and then outside the window altogether. **The delta the drawing is
+a function of is the one the CLAMP took**, not the one the click asked for.
+**A scroll draws no text, so a status line owed elsewhere is still owed** —
+`fm_onkey` had to start banking `[fm_statowed]` because "every path below draws
+the line one way or another" stopped being true. And the bug this shipped
+before an A/B diff caught it: **an icon does not erase what it lands on.**
+`ico_core`'s white pass is the icon's own *silhouette* (`ico_app16`'s is a
+diamond), not its 16x16 cell, so redrawing one leaves every pixel the previous
+row's icon lit outside the new outline — a three-column stripe of stale icon
+edge, on the three window positions in eight that reach it and no others. The
+strip is erased first. Verified by driving 25 scroll captures through this
+kernel and through one with `fm_scroll_by` stubbed to `stc`/`ret`: **0
+differing pixels** on CGA at two byte phases, on Hercules and on VGA mode 12h.
 
 ### The mono adapters reuse the back-buffer renderer (SPEC.md §39)
 

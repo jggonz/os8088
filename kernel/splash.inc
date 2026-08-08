@@ -221,6 +221,13 @@ spl_chrome:
     call vid_setmode            ; splash owns the first mode set, and kmain's
                                 ; vid_init later re-runs all three (SPEC 39.1)
 
+; ...and the same chrome onto a mode SOMEBODY ELSE has just set: spl_reset's
+; entry, for when drv_boot moves the machine onto the adapter SYSTEM.CFG asks
+; for while the loading screen is still up (SPEC.md 39.11.3). Entering above
+; would re-run vid_detect, which answers with the PROBE's adapter and would
+; undo the switch three instructions after it happened. Costs nothing: it is
+; a label, and the geometry below is read live either way.
+spl_rechrome:
     mov ax, [vid_h]             ; the bar's origin, centred on whatever screen
     shr ax, 1                   ; we got. On VGA this would be row 232, but
     cmp byte [vid_mono], 0      ; the bar has to sit inside the dialog's

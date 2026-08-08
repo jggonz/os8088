@@ -3147,6 +3147,7 @@ Frame drawing (paint-all does this before calling W_PAINT):
 | `wm_content`   | in BX = win ptr; out AX = content left, DX = content top. WF_FULL set → AX = W_X, DX = W_Y (no border, no title bar — §11.2). |
 | `wm_sizable`   | in BX = win ptr, AL = 0 clear / non-zero set WF_SIZABLE. No repaint (the grow box appears at the next paint). UI-task context only (entry procs and window callbacks qualify); safe with or without the gfx lock there — every W_FLAGS writer runs on the UI task or under the lock. API slot 0x0108 (§20.3). |
 | `wm_grow_paint`| in BX = win ptr (caller holds the gfx lock): draw the grow box **iff** BX is the frontmost visible window with WF_SIZABLE set and WF_FULL clear; a no-op otherwise, so it is always safe to call. wm_draw_win uses it after W_PAINT, and a resizable window's **self-initiated content repaint must end with it** — the white-fill idiom (§22) erases the corner, and without the call the box vanishes until the next full repaint while wm_hit still reports AL=4 there. Packages reach it through API slot 0x0118 (§20.3). |
+| `wm_zoom`      | in BX = win ptr (resizable and not fullscreen — the CALLER's check); **caller holds the gfx lock**. Toggles the window between the **standard** state — the whole desktop band, full width, `MBAR_H` down to one pixel short of the dock, honouring `WF_SNAP` — and the **user** state it was in before, banked per slot in `wm_zoomr`. Which state it is in is derived from the record, never tracked; `wm_ask_size` is asked for both, and a refused shrink leaves it standard with its bank intact. All registers preserved. Not `wm_fullscreen`: the window keeps its chrome and its place in the z-order. §11.95. |
 | `wm_fullscreen`| in AL = 1 enter (BX = win ptr) / AL = 0 exit; **caller holds the gfx lock** (the intended callers are W_ONKEY/W_ONCLICK handlers, which already do). See §11.2. Out CF=1 refused (enter while another window owns the screen), CF=0 done. API slot 0x0110 (§20.3). |
 | `wm_ptr2idx`   | in BX = win ptr (record-aligned); out AL = window index, AH = 0. Clobbers nothing else. The one public home of the `(ptr − wm_wins) / WIN_SIZE` idiom. |
 | `wm_obscured`  | in BX = win ptr; out CF=1 if any visible window above BX in z-order overlaps its frame rect. Result is only trustworthy while the caller holds the gfx lock — the UI task mutates `wm_zord`/window rects under it. Kept, but **no longer the right answer for a background painter**: it vetoes a whole frame for one covered pixel. Use `wm_clip_set` (§11.3). |
@@ -3745,6 +3746,14 @@ Four sites write `W_X` and all four go through `wm_snap_ax`:
   origin is already 0. That is why apps/tracker has had the fast path all
   along without any of this (§45.9).
 
+A fifth site, **`wm_zoom`** (§11.95), shares the *gate* and not the
+arithmetic: `wm_snap_ax` moves left and re-tests the window's current width,
+and a zoom is the one case where x wants to move **right** and the width is
+about to shrink by the same seven pixels to pay for it. The three tests are
+therefore `wm_snap_want` (BX = window; CF = 1 = this window wants an 8-aligned
+content origin right now), which `wm_snap_ax` calls too — one answer to the
+question, two ways of acting on it.
+
 Three consequences worth naming:
 
 - **A snapped window cannot sit flush against the left edge.** The smallest x
@@ -3826,6 +3835,156 @@ buy it about 3% (alignment alone removes `font_char`'s second-byte spill)
 while costing 8-pixel drag steps on the window users move most. Not every
 text-heavy window is a candidate; the question is whether it draws its text
 as *runs it erases behind*, and the Disk window does not.
+
+### 11.95 Double-clicking a title bar zooms a resizable window
+
+**Two presses on the same title bar inside `UI_TDBLT` (9) ticks toggle that
+window between the two states the Macintosh names**: the **standard state**,
+which here is the whole desktop band — full screen width, from the row under
+the menu bar down to one pixel short of the dock — and the **user state**,
+whatever the window was before it went there. `wm_zoom` (BX = window, caller
+holds the gfx lock) is the operation; `ui_tdbl` in §13's click ladder is what
+decides a press is the second of a pair.
+
+**It is not `wm_fullscreen` and it is not an fsx bracket.** §11.2 takes the
+screen away from the window manager — no border, no title bar, no chrome, one
+window at a time, and an exit path that has to put the old rect back; §53
+takes the machine away from the kernel. This takes neither. The window keeps
+its border, its title bar, its close/minimize/grow boxes and its place in
+`wm_zord`; it is simply as large as `wm_fit` would ever have let it be. So
+there is no `[wm_fs]` to arm and every routine that reads a window rect keeps
+reading exactly what it read before.
+
+**Resizable only.** `WF_SIZABLE` is the gate, tested in ui.inc before
+`wm_zoom` is called, because a fixed-layout window (a dialog, the Control
+Panel, Minesweeper) lays out against constants and has nothing to zoom into. A
+double-click on one of those title bars is an ordinary pair of presses and
+drags exactly as it always did — no beep and no notice, because §47 rule 6
+applies: nothing on that window ever offered to zoom, so there is nothing to
+explain. A `WF_FULL` window cannot reach here at all: `wm_hit` reports every
+point on it as content (§11.2), so region 1 never comes back for one.
+
+**Which state a window is in is DERIVED, never tracked.** The test is whether
+the record already holds the standard rect. There is no "is zoomed" bit, and
+that is deliberate: a flag would have to be cleared by each of the four sites
+that write `W_X` and the several that write `W_W`/`W_H`, and a missed one is a
+window that answers wrong about itself — §48.9.1's shape, where an
+optimisation inherits every place that used to rely on the thing it removed.
+Deriving it also makes **dragging the natural way to leave the standard
+state**: a window moved off the band is not in it any anymore, so the next
+double-click zooms afresh and banks where the drag left it.
+
+**The standard rect is `wm_fit`'s clamp said forwards**, and the one pixel
+matters:
+
+```
+x = 0                             (7 for a WF_SNAP window on mono — below)
+y = MBAR_H
+w = [vid_w]                       (less that 7)
+h = [vid_dock_y0] − MBAR_H − 1
+```
+
+That last `− 1` is not rounding. A window's drop shadow is on row `y+h` and
+`wm_dock_clear` tests `y+h` with `jae`, so a frame flush against the strip is
+*on* the dock as far as §11.90 is concerned, and every window later shown over
+this one pays a `wm_dock_under` pass. A zoom is the one operation guaranteed
+to land on that boundary, so getting it wrong here would make the feature
+expensive for everything else on the screen rather than for itself.
+
+**The user state lives in a side table, one entry per window SLOT.**
+`wm_zoomr` is `MAX_WIN × ZR_SIZE` (8) bytes of `.bss` — `{ZR_X, ZR_Y, ZR_W,
+ZR_H}` — rather than four more words in the window record, because `WIN_SIZE`
+is the stride `wm_idx2ptr` multiplies by and every reader of every window
+would pay for it. §38.10's `inst_f*` rows are the same decision for the same
+reason. Three things about it:
+
+- **`ZR_W = 0` is "nothing banked"**, and it is a safe sentinel because a
+  banked width is a live window's, which `WMIN_W` floors at 96. `.bss` arrives
+  zeroed (§2.5), so a slot starts empty.
+- **`wm_destroy` clears it**, beside the `wm_owner` and `wm_about` entries it
+  already clears and for the identical reason: a `wm_create` that reuses the
+  slot must not restore its window to the rect the last tenant was zoomed out
+  of.
+- **A restore does not spend the bank.** A refused shrink (below) has to be
+  askable again, and a zoom re-banks anyway.
+
+**`WF_SNAP` is honoured, and it is the one case where a snap moves RIGHT.**
+§11.94's `wm_snap_ax` moves a candidate x *left* and re-tests the window's
+**current** width against the right edge — and at full screen width x = 7
+always fails that test, so a snapped window put through it would zoom to x = 0
+and silently lose the single-store fast path it asked for. So the gate alone
+is factored out as **`wm_snap_want`** (BX = window; CF = 1 if this window's
+content origin wants to be 8-aligned right now — `WF_SNAP` set, `WF_FULL`
+clear, `[vid_mono]` non-zero) and `wm_zoom` acts on it in the other direction:
+x = 7, and the width gives back exactly the seven pixels x took, so the right
+edge is unmoved. `wm_snap_ax` calls the same routine, so there is still one
+answer to the question and not two that can drift.
+
+**It asks the window — twice, and the second answer can be no.**
+`wm_ask_size` (§11.1) runs on the state being *tested* (so the compare above
+holds for a negotiator with a size quantum of its own: apps/paint is offered
+640×435 and answers 640×432, and it is 640×432 the record is compared
+against), and again on the state being *gone to*. Growing, every negotiator
+accepts. **Shrinking back can be refused, and that refusal is the feature
+working rather than failing**: apps/paint will not crop artwork for a restore
+any more than it will for a drag of the grow box, and it says so in its own
+toast. The bank is never spent, so the restore can be asked for again once
+there is nothing to lose.
+
+**A refusal on BOTH axes moves nothing at all** — not even the origin. §11.1's
+rule is that a refusal costs no repaint, and there is a second reason here: a
+window is not "partly back" because it went three pixels down while keeping
+the size it was just refused. One axis given back *is* a partial restore, and
+that one travels, origin included.
+
+**Which makes the refusal test the sharp edge, and it is not the obvious
+one.** "The answer equals the size the window already has" looks like the
+test for a refusal and is wrong, because a window **dragged while it was
+zoomed** banks the *standard* size with a different origin — so that
+condition is also exactly what a perfectly accepted restore of such a window
+looks like, and using it left the window pinned to the band with no way back.
+The test is against **what was asked** — the banked size — and only when the
+answer differs from that is the record consulted at all.
+
+**Nothing is drawn in two cases, then**: an outright refusal, and a window in
+the standard state whose bank is empty — which means it was *created* at that
+size and has never been anywhere else. Otherwise every double-click moves the
+window, because the bank is only written when the record differs from the
+standard rect.
+
+**Zooming out commits through `wm_resize`; restoring does not, and that
+asymmetry is the sharp edge of the whole feature.** Going out, `wm_resize`
+(§11.1) is exactly right: it carries both clamps, the `wm_snap_win` re-fit and
+the repaint, and the only thing it will not do is move a window up or left, so
+`W_X`/`W_Y` are written first and it finds them already legal.
+
+Coming back, it is wrong, because it **derives** a legal origin where a
+restore has to **replay** one. `wm_resize` holds `y + h` to the dock row —
+correct for an app sizing itself — while `ui_drag` is deliberately looser: a
+window may be dragged until only its title bar is on screen, and one left more
+than half over the dock is left *exactly* where it was put (§11.90, and that
+case is the one `wm_dock_snap` explicitly protects). Put back through
+`wm_resize`, a window dragged 40 rows over the dock came home 39 rows too
+high. So the restore writes all four fields and calls `wm_paint_all` itself.
+
+**`y` is replayed untouched** — what bounds it is the title bar being on
+screen, which is independent of the height — but **`x` is replayed and then
+clamped**, and that asymmetry is the partial-refusal case: the size being
+committed is not always the size the origin was banked with, so a negotiator
+that hands back the *standard* width puts `banked x + that width` off the
+right-hand edge. It takes `ui_drag`'s clamp and then `wm_snap_win`, which the
+clamp may have knocked off a byte boundary (§11.94).
+
+`wm_paint_all` rather than `wm_paint_dmg` in both directions is the right cost
+and not a concession: the standard state *is* most of the desktop band, so it
+is the damage rect either way.
+
+**The press is consumed, and the button is still down.** `wm_zoom` returns
+without entering `ui_drag`, so nothing tracks the release; the `EVT_MUP`
+behind it is popped by the UI loop and ignored, which is what that loop
+already does with every mouse-up. On a machine with no mouse (§9.6) the same
+press is a latched level, and `kbm_ui`'s end-of-pass service releases it for
+exactly this case — a pass that dispatched a press and did not track it.
 
 ## 12. menu.inc
 
@@ -4519,7 +4678,16 @@ Loop forever:
      instance reaches too once it owns a §20.6 worker; an ownerless window
      degrades to plain `wm_hide`), gfx_unlock. Minimize box (AL=3) →
      gfx_lock, `inst_minimize` BX (§29 — sets the instance's minimized
-     flag and hides; the dock tile inverts), gfx_unlock. Title bar → if
+     flag and hides; the dock tile inverts), gfx_unlock. Title bar → ask
+     `ui_tdbl` whether this press is the **second on this same title bar
+     inside `UI_TDBLT` (9) ticks**; if it is and the window has
+     `WF_SIZABLE`, that is a **zoom** (§11.95) — gfx_lock, `wm_zoom` BX,
+     gfx_unlock, and no drag at all (the button is still down; the
+     `EVT_MUP` behind it is ignored by this loop like every other
+     mouse-up). It is a toggle: out to the desktop band, or back to the
+     rect the window was in when it left. `ui_tdbl` keys on the window as well as the tick, compares
+     the clicks' BIRTH ticks (EV_C) like §22/§26, and spends a completed
+     pair so a third press starts a fresh one. Otherwise: if
      not front, `wm_front`; then run
      the **drag loop**: gfx_lock; xor-draw the outline at the window rect
      (via `vga_xor_rect_vram`, §5/§32 — the outline is a transient overlay
@@ -9368,6 +9536,147 @@ where the user did nothing. `fm_samename` compares the two and cancels
 instead. Both sides are §19.1 display names, sanitized identically, so the
 comparison is uppercase-exact and needs no folding.
 
+### 22.11 A scroll moves the rows; nothing else on the window changes
+
+All eight ways to scroll a Disk window — the two arrow cells, the two halves
+of the track, and Up/Down/PgUp/PgDn — ended in `fm_repaint`: a white fill of
+the whole content and then every pixel of it back again. That is the header
+line, two framed buttons, every visible row, a whole scroll bar and the
+status line redrawn to move a list, and on a 4.77MHz machine it is the
+content going blank and filling back in a piece at a time — the flash
+PERFORMANCE.md Part 1 is about, with a visible redraw behind it.
+
+**Not one of those four things can change when the view scrolls.** The header
+is `Drive B:  9 files`, and scrolling moves no file. The two buttons are
+labels in fixed rects. The status line is §22.7's resting `Size … Free …`, or
+one of §22.9's verdicts, and both are questions about the *selection* and the
+*volume* — a scroll moves neither. So the scroll paths draw none of them.
+
+And the rows mostly only **move**. Scrolling by `d` rows leaves `fit - d` of
+them showing the same names at a different y, which is exactly what
+`gfx_scroll` (§5.5) moves in one blit, so a click on the down arrow letters
+ONE row rather than ten. Three tiers, cheapest first, chosen by
+`fm_scroll_by` — the one entry all eight paths call, so the clamp, the tier
+choice and the write-back cannot drift apart between the mouse and the
+keyboard:
+
+| tier | when | what it draws |
+|---|---|---|
+| `fm_scrollpaint` | list view, `\|d\| < fit` | one blit, the `d` rows it exposed, two selection bands, the thumb |
+| `fm_rows_only` | the icon grid, or `\|d\| >= fit` | the row band erased and redrawn; header, buttons and status line untouched |
+| `fm_repaint` | a clip region cuts the band | everything, as before |
+
+The third is §11.3's granularity rule and not caution, taken exactly where
+`fm_status_only` takes it: the erase is a fill (per-pixel clipping) and the
+rows are glyphs (whole-cell clipping), so a clip edge crossing the band would
+erase rows the text could not be put back into — the window would go *blank*
+rather than stale. `wm_clip_test` on the whole band answers it in one call.
+
+Three things are load-bearing.
+
+**`fm_draw_rows` is one body, not two.** It is everything `fm_draw_core`
+draws between the buttons and the status line, split out so the scroll paths
+can have exactly that and no more. A second copy would be a second opinion
+about what a row area looks like — the argument `fm_hit`, `fm_thumb` and
+`fm_sel_bar` already won here.
+
+**The delta the drawing is a function of is the one the CLAMP took**, not the
+one the click asked for: a PgDn two rows from the end moves two, and a blit
+for a whole page would move rows that are not there. `fm_scroll_by` computes
+it after `fm_clamp_scroll` and publishes it in `[fm_sdlt]`. A delta of zero —
+a click on an end stop — now draws **nothing at all**, where it used to
+repaint the window to show the same pixels.
+
+**A scroll draws no text, so a status line owed elsewhere is still owed.**
+`fm_onclick` already banked that in `[fm_statowed]` for §22.9's retired
+verdicts and §22.2's selection bands; `fm_onkey` has to bank it too now,
+because "every path below draws the line one way or another" stopped being
+true the moment the scroll keys stopped drawing the header band. Both spend
+it with `fm_status_only`, and its own CF=1 is the same fallback to
+`fm_repaint`.
+
+**Measured**, on a cycle-accurate 4.77MHz 5150 with a CGA card, by
+PERFORMANCE.md Part 3.1's flicker instrument — which samples the card's
+rendered framebuffer once per *displayed frame*, so it counts what an eye
+would see rather than what the guest did:
+
+| one row, CGA | visible redraw | flash | worst transient | bounding box |
+|---|---|---|---|---|
+| was | 16 frames = 262 ms | 15 frames = 246 ms | 2,772 px | x 116..429, y 40..173 — the whole content |
+| is | 5 frames = 83 ms | 2 frames = 33 ms | 320 px | one row and the scroll bar |
+| at an end stop, was | 16 frames = 266 ms | 15 frames = 249 ms | 2,766 px | the whole content |
+| at an end stop, is | 0 | 0 | 0 | — |
+
+And it draws **the same pixels**. The gate is an A/B against a kernel with
+`fm_scroll_by` stubbed to `stc`/`ret` — every scroll a `fm_repaint`, exactly
+the behaviour this replaces — driven through one scripted session of 25
+captures: both arrow cells, both halves of the track, Up/Down/PgUp/PgDn, both
+end stops, a selection scrolled out of view and back, and the icon grid. The
+framebuffers are **byte-identical** on CGA at content-x phase 1 *and* phase 7
+(§22.11.1's strip pass on and off), on Hercules (the four-bank layout at a
+different geometry), and on VGA mode 12h (the planar blit through the
+latches): **0 differing pixels of 2.9M**, once the menu bar's clock — which
+ticks between two runs of different speed — is excluded.
+
+#### 22.11.1 The blit rounds INWARD, and each strip it leaves is answered
+
+`gfx_scroll` wants byte columns at both ends, and a Disk window is not
+`WF_SNAP` (§11.94) — its content origin is `W_X+1`, wherever the user dragged
+it. So the span is rounded **inward**, which is the opposite of Note Pad's
+§27.7.2 and for a reason worth stating: `NP_MARGIN` is 8 there, so rounding a
+text band's `x1` DOWN still lands inside the content, while a Disk row's icon
+starts four pixels in — rounding down would put the blit's left edge outside
+the window altogether, onto the frame and then onto whatever is to the left
+of it. Inward rounding leaves two strips the blit cannot move, and each is
+answered rather than paid for:
+
+- **Left, up to 7px**: white margin, plus at most three columns of the 16x16
+  icon at `x+4`. The strip is erased and those rows re-iconed
+  (`fm_draw_licon`), and **only when the rounding really did reach them** —
+  `align_up(cx) > cx+4` is true for three window positions in eight, and the
+  other five need no pass at all.
+
+  **The erase in front of it is not belt and braces, and leaving it out is the
+  one bug this shipped before the pixel diff caught it.** An icon is *not*
+  drawn opaque over its cell: `ico_core`'s white pass is the icon's own
+  **silhouette mask** — `ico_app16`'s is a diamond, `ico_disk32`'s a solid
+  rectangle, and a harvested one is whatever the package's author drew — so
+  re-drawing an icon leaves every pixel the *previous* row's icon lit outside
+  the new outline. It showed as a three-column stripe of stale icon edge down
+  the left of the row band, on the three window positions in eight that reach
+  it and no others, which is exactly the shape of bug an eyeball misses and an
+  A/B diff does not.
+- **Right, up to 7px**: always white. The span stops at the byte column
+  *before* the scroll bar, so the bar's frame, its two rules and its two arrow
+  glyphs are never disturbed — only the thumb is redrawn — and a list row's
+  size column right-aligns to `rgt-21`, clear of anything the rounding can
+  leave behind.
+
+**The selection is the one thing that spans both strips**, its band running
+the full row width. So it comes OFF before the blit and back ON after, at the
+row it now sits in — §22.2's two-band move with the blit in the middle. It
+needs no fixing up, because XOR is its own inverse and the band it is taken
+off is the band that was drawn.
+
+**The thumb translates and nothing else on the bar moves.** Its height is
+`fit*track/total`, which no scroll changes, so `fm_sb_thumb` draws the new
+thumb and then greys the strip it vacated — three calls against the bar's
+sixteen. The new thumb goes **first**, which is §42.7.1's ordering: for the
+width of one fill the thumb is briefly doubled, and a doubled thumb reads as
+movement where an absent one reads as a blink. A step too small to move it
+draws nothing.
+
+#### 22.11.2 The icon grid takes the middle tier, deliberately
+
+A grid cell is 78 wide and centres a 9-character name in it, so the leftmost
+cell's name can start 3px into the content and the rightmost can end 4px
+short of the last cell's edge — which is *inside* the strips inward rounding
+leaves. Repairing those means redrawing the first and last columns whole, and
+at the three columns a 320px window fits that is two thirds of the grid: the
+blit would be buying a third of the work at the price of a second exposed-cell
+painter. So the grid stops at `fm_rows_only`, which still leaves the header,
+both buttons and the status line alone, and the blit is the list view's.
+
 ### 22.3 Cut, Copy and Paste (`kernel/filecp.inc`)
 
 The clipboard is **(drive, folder, name, type)** and deliberately not an
@@ -11067,6 +11376,153 @@ Verified by differential: the same scripted run against a build whose
 `np_scrollpaint` always refuses is **pixel-identical inside the window**, on
 VGA over nine states and on Hercules over six.
 
+### 27.7.3 The height is counted a chunk at a time
+
+§27.7.1 bounded every walk that draws to the bottom of the view, which left
+exactly one walk unbounded: `np_height`, the one that answers *how many rows
+is this note*. Nothing else asks, because nothing else draws below the view —
+so the note's tail is paid for here or nowhere. On a 15,889-byte `README.TXT`
+that is **781 rows** walked in a single hold, and the hold is the gfx lock, so
+the machine is frozen behind it with nothing on the disk and nothing on the
+glass. It is not I/O (`DISKCNT` counters are flat across it) and not the
+drawing (549 glyphs and 115 fills, ~0.65 s).
+
+**The count is chunked: `NP_HCHUNK` rows per worker pass, resuming where the
+last one stopped.** `np_height` still finishes it in one hold for the caller
+that needs the answer exact; `np_hchunk` is what the worker calls, and both
+are thin entries onto `np_hwalk`.
+
+**Why the lock does not forbid this.** `np_height` runs with `np_draw` and
+`np_sigup` clear and writes no framebuffer: the lock here is a mutex over the
+walk's SCRATCH — `np_row`, `np_curx`, `np_i`, `np_rows` are module globals and
+nine of `np_walk`'s ten call sites are UI callbacks, which hold it already.
+So the hold is needed for a CHUNK and never for the COUNT, and "give up the
+machine if something else wants it" falls out of the release rather than
+needing the worker to ask anyone.
+
+Five things hold it up:
+
+- **`[np_hdirty]` already says which exit the walk took**, so the resume needs
+  no flag of its own: `.done` clears it and sets an exact `[np_drows]`,
+  `.stop` leaves it up and raises `[np_drows]` as a lower bound.
+- **`.stop` publishes `(absolute row, index)`** into `[np_stoprow]`/`[np_stopi]`,
+  and this is the one piece of new plumbing. `np_seedrow` cannot reconstruct
+  it: `np_rows` is `NP_MAXROWS` long and `NP_MAXROWS` is 60, ONE SLOT PER
+  VISIBLE ROW, so the table describes the view and can never name row 300 of a
+  500-row note. Published on every bounded stop and kept only by `np_hwalk`,
+  which reads it under the lock with nothing between the call and the read.
+- **The banked row is ABSOLUTE and `[np_sdr]` is VISIBLE**, so the seed is
+  derived from `[np_top]` at the moment the chunk runs. The view may have
+  moved between one chunk and the next, and `np_scrollto` clears `[np_resume]`
+  for precisely this reason.
+- **The pair survives the release because wrapping is deterministic**: row *R*
+  begins at index *I* whoever computed it. An interleaved `W_PAINT` scribbles
+  over the walk's in-flight scratch and cannot touch those two words. Only the
+  note CHANGING invalidates them — and that is `np_hmark`, which raises the
+  flag and forgets the pair as one act, because they are one event. It stores
+  only to memory, so it preserves the flags and drops in where each of its
+  five callers had `mov byte [np_hdirty], 1`.
+- **Seeding at (0, 0) is identical to not seeding at all**, so the first chunk
+  needs no case of its own.
+
+**The worker has to EXIST, and on the one path that matters it did not.** The
+hire hung off `np_redraw`'s `.done`, and `.fullpaint` falls straight past it —
+so a note that repaints in full got no worker. Worse, a document opened by
+DOUBLE-CLICKING IT loads the file in the entry proc and is drawn by `W_PAINT`,
+which is not `np_redraw` at all: the note whose height most needs counting was
+the one note that never got a worker to count it. `np_hirechk` is the
+predicate in one place, called from `np_redraw`'s single exit and from
+`np_paint`.
+
+**And a click in the TEXT no longer buys a total it does not use.**
+`np_onclick` called `np_height` before it knew where the click had landed, so
+the first click after opening a file paid the whole remaining count in one
+hold — the freeze, moved from the load to the click. The bar's rect is
+`np_sbhit` now, shared with `np_sbclick` so two copies cannot disagree about
+where the bar is, and only a click inside it finishes the count.
+
+Measured on MartyPC (`os8088_5150_cga_gla`), README.TXT opened by
+double-click and then left alone: the count reaches **781** rows with no
+input at all, against `drows` stuck at **18** before. The chunk's resume pair
+was watched advancing — row 187, row 510, done — which is the check the
+previous attempt at this failed: it stalled at the first chunk and the tell
+was a thumb that stayed at ~75% of the track.
+
+### 27.7.4 ...and until it lands, the length is the estimate
+
+The chunked count is seconds of background work, and until it lands
+`[np_drows]` holds only what the first screenful's bounded walk reached — so a
+781-row file claims to be 18 rows tall and the scroll bar is drawn for a
+document that does not exist. `np_hguess` is the arithmetic answer available
+for nothing: **the characters, divided by the cells a row holds.**
+
+**It can only ever be too SMALL, which is what makes it safe to publish.** A
+row holds at most `[np_rcols]` cells, so a note of *L* characters needs at
+least *L*/cols rows — and every newline ends a row EARLY, which can only push
+the real number up. That is exactly `[np_drows]`'s existing direction of error
+(§27.7: a lower bound, never lowered), so nothing downstream needs a new rule,
+nothing has to test whether the count "got there yet", and the walk goes on
+correcting it upward as it always did.
+
+Three things about it:
+
+- **The font is fixed-width, so "cells a row holds" is not an average of
+  anything.** It is `[np_rcols]`, which `np_bounds` has just computed for the
+  row buffer — which is also why the estimate lives at the end of `np_bounds`
+  rather than anywhere else: that is where the geometry becomes known, and
+  every path that is about to draw goes through it.
+- **One `DIV`, riding on two far calls into the kernel** at ~756us apiece
+  (PERFORMANCE.md Part 2) — under 2% of a routine that was going to run
+  anyway. `[np_len]` is capped at `NP_MAXKB`, so the dividend never needs DX
+  and the divide cannot overflow; a window too narrow to hold one cell divides
+  by nothing and says nothing.
+- **It is not gated on `[np_hdirty]`.** When the count is exact the estimate is
+  by construction no larger, so the "never lowered" test refuses it and the
+  gate would be a second thing to keep in step for no gain.
+
+On README.TXT: 15,428 characters in a 24-cell row is **642** against the true
+781, so the bar is within 18% of right immediately instead of wrong by 43x.
+
+### 27.7.5 A resize walks to the bottom of the view, not to the end
+
+§27.7.1 bounded every walk that draws, and §27.7.3 chunked the one that
+counts. One unbounded walk was left, on a path neither of them looks at:
+`np_paint`, when `[np_gchg]` says the geometry moved. A resize changes the
+wrap width, so every row start moves and the whole layout is stale — and the
+old answer to that was `np_measure`, run to the last character, **drawing
+nothing at all while it went**. The note was walked invisibly and only then
+did the first row appear.
+
+It ran for ONE number. `np_scrollto` clamps `[np_top]` into the new layout and
+`np_scrollmax` is `[np_drows] - [np_vrows]`, so the total had to be known
+before a pixel could be drawn.
+
+**The bound answers the clamp exactly, and without the total.** The walk stops
+after `[np_vrows]`, and its exit is the answer:
+
+- **`.stop`** — the note demonstrably reaches past the bottom of the view, so
+  `[np_top]` is still a legal top and the clamp cannot bite. No total needed.
+- **`.done`** — the note ended inside the view, so `.done` has just set
+  `[np_drows]` to the truth (it assigns, it does not raise), and the clamp is
+  right for the same reason it always was.
+
+So nothing tests which happened: `np_hmark` raises the debt *before* the walk,
+and the walk either clears it on the way out or leaves it owed for §27.7.3's
+worker. The two cases are the two exits, and they were already there.
+
+**What this does NOT remove, because nothing can.** Wrapping is sequential:
+row *N* cannot be laid out without laying out rows 0..*N*-1, so a resize while
+scrolled to row 400 must still walk 400 rows to draw the view. The tail beyond
+the view is the avoidable part, and at the top of a file — which is where a
+file is when it has just been opened — that is nearly all of it. On README.TXT
+widened to full screen: **556 rows walked before, 18 after**.
+
+**And the drawing itself was never the problem.** `np_walk` calls `np_rflush`
+per row as it lays each one out, so on the 1bpp adapters — where the renderer
+writes the framebuffer directly (§39.5) — rows appear top to bottom as they
+are computed. The user already watches it fill in. What they were waiting on
+was the invisible pass in front of it.
+
 ### 27.8 A selection, and the two things a drag can mean
 
 The selection is a **pair of character indices**, `[np_sel0]`..`[np_sel1)`,
@@ -12516,14 +12972,18 @@ change.
 CP_I_NAME  equ 0   ; -> list name, ASCIIZ
 CP_I_PAINT equ 2   ; -> page paint proc   (in DI = pane left, BP = pane top)
 CP_I_CLICK equ 4   ; -> page click proc   (in DI/BP, CX/DX = pane-relative)
-CP_ISTRIDE equ 8   ; 4th word reserved (a future page onkey proc)
+CP_ISTRIDE equ 8   ; 4th word = the dispatch class (§31.9): 0 = a kernel proc
 cp_items:  dw cp_s_sched, cp_sched_paint, cp_sched_click, 0
-           dw cp_s_disp,  cp_disp_paint,  cp_disp_click,  0   ; §31.3
-           dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0   ; §31.4
+           dw cp_s_vid,   cp_vid_paint,   cp_vid_click,   0   ; §31.10
+           dw cp_s_buf,   cp_buf_paint,   cp_buf_click,   0   ; §31.3
            dw cp_s_time,  cp_time_paint,  cp_time_click,  0   ; §31.5
+           dw cp_s_drv,   cp_drv_paint,   cp_drv_click,   0   ; §31.6
+           dw cp_s_snd,   cp_snd_paint,   cp_snd_click,   0   ; §31.7
 cp_items_end:
 CP_ITEMS   equ (cp_items_end - cp_items) / CP_ISTRIDE
 CP_ITIME   equ 3     ; the Date/Time item's index: §12.1 selects it by name
+CP_IDRV    equ 4     ; ...the Drivers item (§51.3's drv_notice opens it)
+CP_ISND    equ 5     ; ...and Sound (§34.8)
 ```
 
 **List names are at most 9 characters** (72px): the selection bar runs from
@@ -12635,10 +13095,19 @@ repainted within the same UI pass by the `cp_dirty` repaint above, and the
 Task Manager's SCHED field (§28), rewritten at its next sample (≤ 9 ticks)
 and by that repaint.
 
-### 31.3 Display page — double buffering
+### 31.3 Buffer page — double buffering
 
-Second item in the panel list, same two-row radio geometry as §31.2 (it
-shares `cp_glyph` and the `CP_B*Y` hit bands). Heading "Display"; row 0
+Third item in the panel list, same two-row radio geometry as §31.2 (it
+shares `cp_glyph` and the `CP_B*Y` hit bands).
+
+**It was called "Display" until §31.10's Display page existed**, and the
+rename is the honest one of the two: this page has never had anything to do
+with *which* display the machine drives — it chooses whether drawing goes
+straight to the framebuffer or through the 150KB back buffer of §32, which
+is a question about buffering. Its procs are `cp_buf_*` to match; the
+string is `cp_s_buf`.
+
+Heading "Buffer"; row 0
 "Direct to screen", row 1 "Double buffered"; the filled glyph follows
 `[bb_dbl]`, the armed-buffer flag and **not** `[bb_on]` (1 on any mono
 adapter, §39.5); it is **0 at boot** — double buffering is opt-in.
@@ -12665,7 +13134,7 @@ be told no by the same answer. It is live state, not a boot-time verdict —
 open a package that claims a canvas and the row greys out; close it and the
 row comes back.
 
-`cp_disp_click` mirrors `cp_sched_click` — signed comparisons, x ignored,
+`cp_buf_click` mirrors `cp_sched_click` — signed comparisons, x ignored,
 a hit on the live row does nothing — and calls `bb_set` (§32), which
 requires the gfx lock the click handler already holds. It then redraws just
 the two glyphs. No `[cp_dirty]`: unlike the scheduler mode, no window quotes
@@ -12678,10 +13147,12 @@ a tone route, to allow or forbid exclusive clips, and to
 play a test clip through the sound card. With one sink there is nothing to
 choose, and the page went with §34's driver table. `CP_ITIME` — the
 Date/Time item index ui.inc selects when the menu-bar clock is clicked
-(§12.1) — is therefore **2**, not 3.
+(§12.1) — is therefore **2**, not 3, and §31.10's Display page did not move
+it: that page is appended LAST, for §31.10.1's reason. `CP_IDRV` is 3 and
+`CP_ISND` 4.
 
 The three-layer refusal idiom the page demonstrated (setter refuses,
-caption explains, click ignored) is not retired with it: §31.3's Display
+caption explains, click ignored) is not retired with it: §31.3's Buffer
 page still uses it, and §50.5 extends it to "Not Enough Ram".
 
 ### 31.5 Date/Time page — setting the system clock
@@ -13091,6 +13562,114 @@ Three things hold it up:
 The pane is 221 × 121 px — 27 characters by 13 rows — and the panel is not
 resizable, so a driver whose interface needs more room opens a window of its
 own (§38.1's unowned-window species, and §52.2/§52.3 are the worked examples).
+
+**The list holds eight rows and no more.** Row *i*'s bar runs
+`CP_I0Y + i*CP_IROWH` to `+ CP_IBH - 1`, so row 7 ends at 116 inside a
+content box 121 tall and row 8 would run through the bottom border onto the
+desktop. Six static items plus the two drivers that publish a page (the hard
+disk's and the debug monitor's; the sound driver publishes none) is exactly
+eight. A **third** driver page, or a **seventh** static item, needs the
+window to grow first — `%if CP_ITEMS + 2 > (CP_CH - CP_I0Y) / CP_IROWH` in
+`ctrl.inc` is the guard, and it fails the build rather than the pane.
+
+### 31.10 Display page — which adapter the machine is driven as
+
+**Last** item in the list, for §31.10.1's reason. One radio row per adapter `vid_probe_avail` found
+(§39.11.1), and an **"Activate Mode"** button that moves the machine onto the
+selected one there and then (§39.11.2). Heading "Display"; the row labels are
+"Vga 640x480", "Hercules 720x348" and "Cga 640x200", indexed by `VID_*` —
+the kernel's own enum *is* the row order, which is what keeps the label, the
+dot, the click and `vid_switch` from ever disagreeing about which row is
+which.
+
+**The rows are adapters, not modes.** Each adapter has exactly one graphics
+mode here (§39), so the resolution beside the name is a description rather
+than a second choice.
+
+**An adapter the machine does not have is no row, not a greyed row.** That is
+§47 rule 3 read the other way round: greying is a claim about a *control*,
+and a control for absent hardware should not be drawn at all. It is the same
+answer §52.2.2 reached for the partition rows. The one thing that does grey
+is the button, whose predicate is "the dot is not already on the running
+adapter" — and the frame *and* the label take that pen together through
+`gfx_pen_cf`, so on the two 1bpp adapters the ring comes out dotted and the
+caption a checkerboard (§47 rule 2).
+
+**The rows are COMPACTED, and `cp_vid_slot` is the one place that knows it.**
+A machine with a Hercules and a CGA and no VGA draws them in slots 0 and 1,
+not slots 1 and 2 with a hole at the top — so "which kind is this row" is
+real arithmetic over `[vid_avail]` and not the identity. The paint and the
+click both go through that one routine, which is §22.2's `fm_hit` argument:
+two copies of it would be two opinions about what the user just clicked on.
+
+**Selecting and switching are two actions on purpose.** A click that switched
+immediately would make a mis-click on a 5150 with two monitors move the
+picture to the other tube — recoverable, but only by finding a window you can
+no longer see. `[cp_vsel]` is the pending adapter; `[vid_kind]` is the
+running one, read live like every other page reads its subject; the two
+differ exactly between picking a row and pressing the button.
+
+`[cp_vsel]` is initialised `.text` data like `[cp_sel]` and `[cp_tsel]`, so
+its value is fixed at assembly time and which adapter a machine boots on is
+not known until `vid_detect` has run. **0FFh is therefore a sentinel, not a
+kind**, and so is any kind the machine turns out not to have — which is what
+a settings byte written on a machine with a card this one lacks decays to.
+`cp_vid_pick` repairs both, in one place rather than at every read.
+
+**Nothing is redrawn after a successful switch**, and that is load-bearing
+rather than an economy: `vid_switch` changes the geometry and re-fits every
+window, so `DI`/`BP` — this window's content origin, computed before the call
+— now describe a rectangle that may not exist. `[cp_dirty]` hands the whole
+screen to `ui_task`'s step 3, which repaints it outside the lock (§13/§31.2),
+and that is the only correct redraw here. `[cp_wdirty]` is set alongside it,
+so the choice reaches `SYSTEM.CFG` on the panel's close like every other
+setting (§31.8) — no page writes on a click, and this one is no exception.
+
+**`x` matters in this page's click handler, unlike every other page in the
+panel.** The radio bands run the pane's whole width as usual, but the button
+is a rect and a click to the right of it is not a press. The button's band is
+tested first because it sits below the rows and the two are contiguous.
+
+The caption has two answers: a dot already on the running adapter says "This
+adapter is running", which is §47 rule 7's say-why-not for the greyed button;
+anything else says "Switches now, and is kept". (It had a third — "No other
+adapter found" — until §31.10.1 made that state unreachable.)
+
+#### 31.10.1 One adapter is not a choice, so the page is not shown
+
+A machine with a single adapter got a page with one row, a dead button and a
+caption explaining that there was nothing to do. That is a page whose entire
+content is an apology, and §47's reasoning about *controls* applies to a
+whole *page* the same way: the honest answer to "there is nothing here" is
+not to draw it. So `[cp_nst]` — the number of static rows the list is
+showing — is `CP_ITEMS` normally and one fewer when `[vid_avail]` has a
+single bit set.
+
+**The Display item is LAST in `cp_items` and that is what makes it
+hideable.** Hiding a row in the *middle* of the table would mean every row
+below it maps to a different record, which is a second opinion about what the
+user just clicked on at four separate call sites. Last, it is simply a
+shorter list: row → record stays the identity and `cp_entry` does not change.
+It also leaves `CP_ITIME`/`CP_IDRV`/`CP_ISND` at the values they had before
+this page existed.
+
+**`[cp_nst]` is the static/driver boundary, not just a row count.** §31.9's
+rebasing (`cmp al, CP_ITEMS` → `sub al, CP_ITEMS` → the class) is what
+decides whether a row is a static page or a driver's, so every one of those
+sites reads the byte instead of the constant — otherwise, on a machine with
+the page hidden, the first driver's row would dispatch as static item 5 and
+paint the Display page over it.
+
+**One writer, and it is the only routine that could answer the question:**
+`vid_probe_avail` (§39.11.1), which sets it in the same pass that fills
+`[vid_avail]`. Because `[vid_avail]` is fixed for the life of the machine,
+the byte is written once at boot and read for ever after — no refresh, no
+staleness. It is initialised `.text` data like `[cp_sel]`, and the
+initialiser is the safe answer: a build whose probe never ran shows the page
+rather than losing a row belonging to something else.
+
+The pane assertion still uses `CP_ITEMS` rather than the byte, because the
+guard has to hold on the machine that shows every row.
 
 ## 32. vgabb.inc — the software renderer (double buffering, and §39's 1bpp driver)
 
@@ -15286,6 +15865,170 @@ On CGA the usable desktop is 156 rows, so windows authored at 640x480 meet
 The general rule this leaves for any new window: **the clamp is not a clip.**
 If a paint proc lays out from constants rather than from `W_W`/`W_H`, it can
 write outside its frame on a short screen, and only the screen edge stops it.
+
+### 39.11 More than one adapter — `vidsel.inc`
+
+§39.1 answers *which adapter am I driving*. This answers *which ones could
+I drive*, which is a different question and has more than one answer on the
+machine this project is calibrated against: `docs/FIELD-MACHINES.md`'s IBM
+5150 carries a Hercules **and** a CGA, both permanent, each on its own
+monitor, and until this existed the probe picked one at boot and the other
+card was unreachable for the life of the session.
+
+Module `kernel/vidsel.inc`, prefix `vid_`. It is `%include`d **after**
+`splash.inc`, and that placement is mechanical rather than editorial:
+`viddet.inc` comes *before* the splash because the splash calls into it on
+its first tick, so every byte added there pushes `splash.inc` further down
+the image and against the `SPL_RESIDENT` assertion (§15) — which had 234
+bytes of room when this was written. Nothing in this module is reachable
+from the splash: the probe runs from `kmain` and the switch from the Control
+Panel.
+
+#### 39.11.1 What the machine has — `vid_probe_avail`
+
+`[vid_avail]` is a bitmap, one bit per `VID_*` kind (`1 << VID_VGA` etc.),
+filled **once** at boot and cached — `vid_switch` moves `[vid_kind]`, so
+re-deriving it later would ask the question of the wrong machine.
+
+Three answers, and only one of them is a probe:
+
+- **VGA** — already answered. §39.1's steps 1 and 2 run *before* the
+  equipment word, so `[vid_kind]` is `VID_VGA` on every machine with a VGA
+  or EGA BIOS. There is nothing further to ask.
+- **CGA** — available on any machine that has a VGA or an EGA, because mode
+  6 is a standard BIOS mode on every one of them and its framebuffer is the
+  byte-exact 640x200 one this kernel's CGA path already drives (§39.9's
+  `VIDEO=cga` has relied on that for as long as it has existed).
+  Otherwise, a memory probe at B800.
+- **Hercules** — a memory probe at B000. There is no BIOS to ask: Hercules
+  graphics has no BIOS mode at all (§39.6).
+
+**The running adapter is marked available without being probed**, because
+the probe *writes* and that memory is the screen.
+
+**`vid_probe_avail` is called from `kmain` AFTER the mode is set, and that
+is the whole correctness argument.** A VGA in mode 12h has its Graphics
+Controller mapping 64KB at A000, so it decodes neither B000 nor B800 and a
+card answering there is a real second card. Run *before* the mode set, on a
+machine whose BIOS came up in mono text, the VGA answers at B000 **as
+itself** and the kernel reports a Hercules that is not there. The same
+ordering is what makes the CGA probe meaningful on a Hercules-primary
+machine: `vid_setmode` deliberately leaves the Hercules' second 32KB page
+disabled (§39.6), so B800 belongs to the CGA if there is one.
+
+**`vid_memchk` writes two different values to two different offsets and
+reads the first back.** The obvious test — write a byte, read it back —
+passes on an empty bus: ISA is capacitive and a read with nothing driving
+it returns whatever crossed the bus last, which is the byte just written.
+Writing 0xAA to a second address in between is what makes the read of 0x55
+mean something. Both bytes are restored either way.
+
+**The second offset is 0x1000, and that is also the Hercules-versus-MDA
+discrimination §39.1 recorded as a scope cut.** A plain MDA has 4KB at B000
+and aliases it upward, so its 0x1000 *is* its 0x0000: the 0xAA lands on top
+of the 0x55 and the probe fails — which is the right answer, because an MDA
+is text-only and has no 720x348 mode to offer. A Hercules has 32KB in page
+0 and a CGA 16KB at B800, and both keep the two offsets apart. So the one
+probe that rejects an empty bus rejects a text-only card for free, and
+nothing here needs the 3BAh vertical-sync timing loop. §39.1's fallback
+behaviour is unchanged: that cut still stands for *detection*, where driving
+an MDA as a Hercules remains strictly less wrong than driving it as a CGA.
+
+#### 39.11.2 Changing adapter while it runs — `vid_switch`
+
+`AL` = the target kind; `CF = 1` refuses one the machine does not have.
+**The caller owes the repaint**, deliberately: `vid_setmode` clears the
+framebuffer, so what is on screen on return is a black rectangle of the new
+geometry, and the two callers want different things put back (§39.11.3).
+
+Order is binding, and every step is somebody else's invariant:
+
+1. **The back buffer belongs to the old adapter.** Its 150KB claim is sized
+   for four 640x480 planes and its flush targets that framebuffer, so
+   `bb_set 0` runs while the old geometry still describes it. `bb_init`
+   below then re-answers whether the new adapter can have one at all — on
+   mono it cannot (§39.5), and a stale `[bb_avail]` would let the Buffer
+   page offer a buffer `bb_set` would refuse.
+2. **`cur_unlazy`, while the old geometry still describes the save-under.**
+   `gfx_lock` only *promises* the hide (§7.1.4), so under the Control
+   Panel's lock the arrow is typically still on screen with 24 bytes of
+   background banked against the old stride. Change the geometry first and
+   `gfx_unlock` restores those bytes through the new addressing, smearing
+   the arrow across the screen permanently. It is a no-op on the boot path,
+   where no promise is outstanding.
+3. **`vid_equip`, `vid_apply`, `bb_init`, `vid_setmode`.** `vid_apply`
+   republishes all nine live words and everything derived from them, and
+   homes the mouse — load-bearing for §39.2's reason.
+4. **`desk_rowcalc` and `wm_refit`**, the two things `vid_apply` does not
+   own. Zones per column is 7 on VGA, 4 on Hercules and 2 on CGA; and every
+   window's frame was clamped onto the *old* screen, so a 640x480 window is
+   off the bottom of a 640x200 one — with its title bar below the dock,
+   which is a window the user cannot reach to drag back.
+
+**`vid_equip` is the counterpart to `vid_cga_equip`, and it exists because
+that one is a one-way door.** `vid_cga_equip` flips 40:10's bits 5:4 from
+mono to colour so an XT BIOS's equipment-driven mode set can reach the CGA,
+and nothing ever put them back — correct while the adapter was chosen once
+at boot, wrong once the user can switch. On the 5150 with both cards,
+Hercules → CGA → Hercules left the flag saying colour, and `CMD_REBOOT`'s
+`vid_text` (int 10h AX=0007h) would then have programmed the CGA instead of
+the MDA: a machine that reboots to a dead mono monitor. Only `vid_switch`
+calls it, so the boot path is untouched.
+
+**`desk_rowcalc` moved out of `desk_init` for this.** `desk_init` is boot
+overlay code (§2.5) and is dead FAT by the time the Control Panel can change
+the adapter under it, so the arithmetic is resident and the overlay
+far-calls it through `ovw_desk_rowcalc` like any other overlay→text step.
+
+#### 39.11.3 Remembering it — the `VM` key
+
+`SYSTEM.CFG` gains one byte, key `VM` (§51.5's keyed container), holding a
+`VID_*` kind. `drv_cfg_pack` records `[vid_kind]` — the adapter actually
+running — so on a machine that has never been asked, the file records the
+probe's own answer and a first save changes nothing about the next boot.
+
+**It is applied by `drv_boot` and not by `drv_cfg_unpack`**, for the back
+buffer's reason: it is not a store. It sets a video mode.
+
+**It is applied FIRST, before the driver load loop and long before the back
+buffer at the bottom of that routine.** Everything after it draws — the
+splash bar is ticked once per sector by `dsk_xfer` (§15.3) — and
+`vid_setmode` clears the framebuffer, so the switch happens while there is
+the least possible loading screen to put back. `spl_reset` puts it back
+immediately, entering `spl_rechrome`: `spl_chrome` minus the `vid_detect`
+that would answer with the *probe's* adapter and undo the switch three
+instructions after it happened.
+
+**A refusal is the safety story.** `vid_switch` returns `CF = 1` for a card
+this machine does not have, and `drv_boot` then simply stays on the probe's
+answer — so a settings disk carried from a machine with a Hercules in it
+cannot boot a machine without one to a dead monitor.
+
+#### 39.11.4 Darking the card the machine just left — `vid_blank`
+
+On a two-monitor 5150 a switch otherwise leaves the outgoing tube lit with a
+frozen desktop on it. Harmless — the live screen is the one whose cursor
+moves — and still the wrong thing to show somebody. Stopping the video signal
+costs two `out`s and the card keeps its sync, exactly as `vid_setmode`'s own
+blank-first sequence does (§39.6). Leaving the Hercules writes 0 to 3B8h
+(video off) and 0 to 3BFh (graphics disallowed, and the page-1 decode locked
+out again); leaving a CGA writes 0 to 3D8h.
+
+**Only when the two kinds are two CARDS, which here means exactly one of them
+is the mono one.** That test is not fussiness. On a VGA machine the CGA row
+*is* the VGA doing mode 6 (§39.11.1), so "blank the outgoing card" would
+blank the very card the next three lines programme and the machine would come
+back on a dark screen.
+
+Nothing has to be un-blanked: `vid_setmode` re-enables whichever card it
+programmes, on both of its paths.
+
+The one case it does not cover is a VGA **and** a Hercules in the same
+machine: 3D8h is a CGA register that a VGA does not implement, so the write
+lands nowhere and the VGA stays lit. Accepted rather than fixed — that
+pairing is not a machine anybody built, and reaching the VGA's own screen-off
+(Sequencer register 1, bit 5) would put a VGA-specific register write on a
+path that runs on all three adapters.
 
 ## 40. apps/fractal — the progressive renderer and its restore cache
 
@@ -17773,6 +18516,85 @@ difference — a rising bar fills its growth, a falling one erases its
 shrinkage, a steady one costs nothing; `tui_el_scopes` zeroes the four
 widths whenever it repaints the cells under them.
 
+**And every value readout is ONE OPAQUE RUN, not an erase and a letter.**
+`tui_rdout` is the single routine behind Pos, Row, BPM, Spd, Ptn, Np, the
+song title and the status line, and it was a `gfx_fill` of the field's rect
+followed by a `font_str` over it — Part 1's **double-draw flash**, with the
+field blank for the gap between them. On an 8088 that gap is tens of
+milliseconds and the Pos/Row line redraws about seven times a second, so it
+strobes; reported from the field as *"windowed mode is drawing flashing
+characters"*. On a mono adapter it is now one `OSAPI_FONT_RUN` with the
+string **space-padded to the field's width**, so the padding *is* the erase
+and every cell goes from its old contents to its final contents in one store
+(§6.1).
+
+Two things earn that, and the second is the one that is easy to leave out:
+the window is `WF_SNAP` (§11.94) so `[tui_ox]` is a multiple of 8, **and the
+field's own x must be too** — `font_run`'s fallback is literally the
+fill-then-letter pair being escaped, so an unaligned run buys nothing at all.
+`tui_rdout` rounds its x **down** to the byte boundary rather than moving its
+callers: the up-to-7 extra pixels are inside the field's own background (a
+value sits in a box face with its label a cell or more to its left), and
+doing it in the routine makes every caller aligned including ones not yet
+written. The song title is the one field whose left-hand neighbour is *not*
+its own background, so its x is 296 rather than 295.
+
+On a colour adapter `tui_runc` does not fill — its callers there have already
+filled the band — so `tui_rdout` keeps the pair on VGA and is unchanged
+there. Measured on CGA with `os88marty.py flicker`, 200 frames of the same
+windowed scene: the **worst single flash goes 278 px → 57 px**, and what is
+left is the instrument counting a hex digit that cycled back to a value it
+had held before, which is a counter doing its job rather than a field going
+blank.
+
+#### 45.12.1 The needle is driven by the NOTE, and driving it by the volume cancelled out
+
+`tui_vu_step` used to *rise instantly to `[tui_avol]` and fall two units a
+call*, and on a MOD that is not a meter — it is a readout of the **volume
+column**, which changes only when a volume command changes it. On a channel
+holding one value the two halves of the rule cancel **exactly**: the needle
+falls two, finds the volume above it again, and jumps straight back.
+
+Measured on the field module, from outside the guest, one sample every 0.7 s:
+
+| | channel 2 | channels 1, 3, 4 |
+|---|---|---|
+| `mp_chvol` | **30, constant** | 64, constant |
+| `tui_vu` | alternating **30 / 28** | 64 / 62 |
+| `ttx_vuc` (cells of ten) | **4, for the whole song** | 10 |
+
+30·10/64 and 28·10/64 both floor to 4, so the bar never moved while notes
+played through it — reported from the field as *"stuck at like 40% filled,
+even when the second column is playing things"*, with the mechanism named in
+the same breath: *"the decay and growth are exactly matching up."* The three
+channels pinned at 10/10 are the identical defect wearing a plausible face.
+
+So the needle is an **impulse and a decay**:
+
+- **`mp_trig` raises `[mp_hit]`** for its channel, on the success path only —
+  a trigger that falls through to `.dead` makes no sound and must light
+  nothing. It is the one place a note actually starts, so the initial
+  trigger, `EDx`'s delayed one and `E9x`'s retrigger are all covered by one
+  edit, each inside a loop that maintains `[mp_curc]`.
+- **The stamp carries it** (`MP_SP_HIT`, the four bytes at offset 12 that
+  `MP_ST_SIZE` = 16 already had spare), **read and cleared** by
+  `mp_stamp_at`, so a strike belongs to the row that made it and to no later
+  one — and so the meter moves when the note is **heard**, not when it is
+  mixed, which is §45.15's whole rule.
+- **`tui_sync` spends it** when a row *becomes audible*, gated on the stamp's
+  stream position: unique per row and monotonic, so the kick is idempotent
+  across the several drawers that call `tui_sync` in one frame and fires once
+  per row however many frames that row is on screen for.
+- **`tui_vu_step` only decays**, `TUI_VUFALL` (2) a call at ~18 calls a
+  second — full to empty in 1.8 s, about one cell of ten per row at the XT
+  default. One constant, one place, both surfaces.
+
+**What this gives up is a sustained note**, which now fades while it is still
+sounding. That is unavoidable rather than a compromise: the true amplitude is
+only knowable by measuring the mixer's output, and `mp_mixch_xt` is already
+half of a 4.77MHz machine (§53.5.1). Note energy is what the app can honestly
+show, and it is what a tracker's bars have always shown.
+
 ### 45.13 XT mode's fullscreen is an 80x25 TEXT screen — and the grid scrolls again
 
 `apps/tracker/trktxt.inc`, prefix `ttx_`. **While XT mode is on, F enters a
@@ -18477,6 +19299,108 @@ priced the status poll and not the pass. It closes at `trk_feed`'s own exit
 now. That matters because a capture holds **18-tick windows with no record at
 all** — neither producer ran for a full second — and a pass that mixes
 `TRK_MAXFEED` halves is the standing suspect for them.
+
+#### 45.16.2 The windowed frame is the worker's, and the mixer was displacing it
+
+§45.16 and §53.5.1 are about the **bracket's** clock. Windowed there is no
+bracket: the worker draws, paced by `OSAPI_TASK_SLEEP 1`, and **the same
+worker does the mixing**. A feed pass that mixes one 2,048-byte half is about
+three ticks at XT mode's rate, and those are three frames not drawn — so the
+row change due in them arrives one to three ticks late.
+
+Measured against CLICK.MOD's exactly-125 ms row, sampling the displayed row
+and `[trk_mixing]` together:
+
+| gap between row changes | count | of which the worker was mixing |
+|---|---|---|
+| 100 ms | 91 | 18 (20%) |
+| 150 ms | 55 | 23 (42%) |
+| **200 ms** | 11 | **9 (82%)** |
+
+The worker is inside `trk_feed` on 13% of samples overall and on 82% of the
+200 ms gaps. **No row is ever dropped** — 129 changes against a true 128 over
+16 s, every step exactly one row — so what reads as *"skipping whole rows"*
+is entirely the spacing.
+
+`trk_deep` is the fix: when the ring's lead is at or above half the ring the
+frame goes **first** and lands on the tick edge, and the mix happens behind
+it. That is not a trade against "audio first" so much as an application of
+it — below the threshold the loop is exactly what it always was, and the
+windowed ring measures 7 to 8 halves of 8, so a partial redraw of a few
+readouts costs the mixer tens of milliseconds out of a 2.6-second cushion.
+`[trk_consumed]` is at most one wake old and only ever grows, so a stale read
+under-states the lead by ~302 bytes against an 8,192-byte threshold — the
+error is towards feeding first.
+
+**What this does NOT fix is the frame rate itself, and that has a floor.**
+Outside a bracket IRQ0 *is* 18.2065 Hz — `FSXF_FASTTICK` is the only thing in
+the system that makes it finer and it is scoped to the bracket by design
+(§53.2.1) — so a package has no clock between 55 ms and nothing. Against a
+125 ms row that is 2.27 frames, and a row change can only be shown on a
+frame, so the intervals must alternate two frames and three: **110 ms and
+165 ms**. No amount of pacing inside the app can beat that; it is the same
+±20% the graphics bracket had before §45.15.2, and it is why the *fullscreen*
+answer was a finer clock rather than a cleverer schedule.
+
+#### 45.16.3 `E` — the even-grid experiment, and why arithmetic could not settle it
+
+§45.16.2's floor is that a 125 ms row on a 55 ms frame must alternate two
+frames and three. The obvious next question is whether making every interval
+a multiple of **two** frames instead — a steady 110 ms with an occasional 220
+where the drift is taken up — *looks* better than an irregular 110/165.
+
+**Arithmetically it is worse, and that is not the question.** 110 seven times
+then 220 has a wider spread than 110 twice then 165: quantizing to a coarser
+grid can only raise the error, because the error is bounded by half the grid.
+But a rhythm the eye can lock onto may read better than a smaller irregular
+one, and no measurement in this tree can say. Nor can the arithmetic say
+whether a periodic hitch is more forgivable than constant unevenness — that
+is a fact about people.
+
+So it is a **bench key**, `E` in the TRKLOG build, exactly like `Y` and `T`
+and for the same stated reason: it splits a question in half that a rebuild
+per hypothesis would answer slowly and a listener answers in ten seconds. The
+shipped build carries none of it. It gates `tui_draw_dyn` to every other wake
+when windowed, and leaves the bracket alone — the bracket has a 54.6 Hz clock
+of its own (§53.5.1) and nothing to fix.
+
+If it wins, it stops being a key and becomes the windowed path. If it loses,
+the arithmetic was right and this section is the record of having checked.
+
+#### 45.16.4 `C` — stop trying to be right, and hide the resync behind a bang
+
+Modes A and B both try to be **accurate**: show each row as near to when it
+is played as a 55 ms frame allows. §45.16.2 proves that lands on an
+irregular 110/165 and §45.16.3 proves a coarser grid only widens it. Both
+are optimisations of the same losing position.
+
+The third mode abandons it. **Show `TLOG_BURST` rows at one per frame — a
+fast, perfectly even scroll, deliberately faster than the music — then HOLD
+on the last of them until the music catches up, and run an animation through
+the hold so the eye has something moving to follow.** At CLICK.MOD's 125 ms
+row against a 55 ms frame, 8 rows is a 385 ms burst and a 615 ms hold,
+repeating once a second.
+
+What makes it defensible rather than a cheat is where the error goes. The
+display is **exactly right at every burst boundary** — it snaps to the base
+row the moment the music reaches it — and it is deliberately *ahead* inside
+a burst, never behind and never late by accident. The scroll itself is
+perfectly even, which neither A nor B can be. And the hold is not a stall
+that the app is hoping nobody notices: it is filled, on purpose, and reads
+as punctuation.
+
+The idea is not mine and the framing is worth keeping: *"instead of being
+right, let's be innovative"* — the observation being that a rhythm the eye
+can read as **designed** beats a smaller error it reads as **broken**. That
+is a claim about perception, so like §45.16.3 it is a bench key rather than
+a decision, and `E` now cycles A → B → C so all three can be compared in
+place without a rebuild between them.
+
+Two things it costs, both stated so the comparison is honest. Inside a
+burst the row shown is up to `TLOG_BURST - 1` rows ahead of the music, which
+is the opposite trade from everything else in §45.15. And the windowed frame
+now redraws on every wake while a burst mode is active, because the sweep
+moves even when the row does not.
 
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
@@ -20244,6 +21168,82 @@ CONTAIN what was drawn. A single rect over the whole disc is one fill and 27
 rows — **5.5 ms against 11.6** — at the price of taking every trail pixel and
 neighbour inside its bounding box, which is more `mc_exp_hole` repairs. That
 trade has not been measured and should not be guessed at.
+
+### 48.25 An erase may over-cover; a draw may not
+
+Researching §48.24's remaining cost. The drawn burst and the erase that takes
+it away are the same `mc_blob` today, and they are not the same problem: the
+draw has to look like a fireball, and the erase has to make one **go away**.
+Background written over background is invisible, so the erase's only real
+obligation is to CONTAIN what was drawn — §48.4's "it must be the SAME shape"
+is true of a *shrinking* burst giving back an annulus and was carried over to
+`.gone` without being re-asked.
+
+`mc_blob`'s band quantum is `R >> 3 + 1` and it is `[mc_bqsh]` now, so `.gone`
+can pick a coarser one. At r = 13 that is a straight trade of fills against
+area, and both ends are measured below:
+
+| quantum | bands | cost at r=13 | area erased beyond the disc |
+|---|---|---|---|
+| `R>>3` (the drawn shape) | 9 | 11.6 ms | 0 |
+| `R>>1` | ~4 | 7.8 ms | small |
+| `R>>0` — one bounding rect | 1 | **5.5 ms** | the four corners, ~200 px |
+
+**The marking needs no adjustment for any of them**, which is the property
+that makes this cheap to try: whatever the quantum, the erase never reaches
+outside the bounding square of half-width `r`, and `mc_exp_hole`'s test is
+already a square on the **sum** of the radii. A coarser erase takes more
+*area* and never more *reach*.
+
+`mc_bqsh` lives in `.text` with a real initialiser rather than in bss, because
+bss arrives zeroed and zero here means "one bounding rect" — the erase's shape,
+which must never be the drawn one.
+
+#### 48.25.1 …but the erase was never the expensive half
+
+**The coarse erase was measured and REJECTED**, and `MC_ERSH` stays at 3.
+`mc_draw_exp` on a dying frame goes **21.2 → 16.93 ms** with the bounding
+rect — not the 6.1 ms the fill count predicts — and the whole dying frame only
+**67.6 → 65.36**, which is not smoothness. Meanwhile the fidelity check gets
+*worse*: a settled screen differs from a forced repaint by **63 pixels at
+`R>>3` and 130 at `R>>0`**, both in a three-row band at the ground line. Dearer
+to look at, barely cheaper to run.
+
+The reason it disappoints is the split: the erase is 5.5–11.6 ms of a 17–21 ms
+stage, and **the rest is `mc_exp_hole`'s repairs** — a repair is a whole
+`mc_blob`, so a coarser erase saves fills and buys back neighbours to redraw.
+The knob is kept so the measurement can be repeated, not because it is
+expected to pay.
+
+So the answer is not to erase more cheaply, it is **not to erase yet**.
+`mc_exp_lit` asks whether any burst that is still lit overlaps the one that
+just expired, and if so the erase WAITS — the slot stays at `0FFh` and is
+found again next frame. A cluster detonates together and so expires together,
+so the wait is a frame or two and nothing can see it; and when the neighbour
+has gone, the erase takes no bite out of anything and **needs no repair at
+all**. It is §48.15's rule once more: the work is owed, not urgent.
+
+`MC_EGDEF` bounds the wait, because a chain of fresh bursts arriving on top of
+an old one must not pin a fireball on the screen; past it the erase runs and
+marks exactly as before. **It is 3 and not 8, and that was measured on both
+axes** — at 8 the counter was seen reaching 7 in ordinary play, which is a
+fireball hanging about for 0.44 s, and 3 is *better for smoothness as well*:
+
+| | `mc_draw_exp`, dying frame | whole dying frame | worst frame | frames > 65 ms |
+|---|---|---|---|---|
+| §48.24, before this | 21.2 ms | 67.6 ms | 94–160 ms | 13–32 of 259 |
+| one bounding rect | 16.93 | 65.36 | 111.6 | 25 |
+| defer, `MC_EGDEF` 8 | **9.40** | 59.91 | 94.4 | 22 |
+| **defer, `MC_EGDEF` 3** | 13.10 | **59.17** | **87.6** | **16** |
+
+A shorter wait runs more erases, so the *stage* is dearer than at 8 — and the
+frame is the same, the worst frame is 7 ms better and a quarter fewer frames
+cross the tick, because the work is spread rather than pooled. The stage mean
+is the wrong number to tune on; the tail is the one the eye sees.
+
+`[mc_edef]` is cleared in `mc_add_exp` beside `mc_et` and `mc_er`, since a slot
+is reused. Verified for the other half at the same time: scanning every lit
+burst on every frame, **0 holed of 124 samples**.
 
 ## 49. TameGram — the thirteenth package (apps/tamegram/tamegram.asm)
 

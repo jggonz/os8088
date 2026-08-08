@@ -93,19 +93,11 @@ desk_init:
     cmp cl, 2
     jb .zloop
 
-    ; How many zones fit in one column above the dock (SPEC.md 26.1). At
-    ; least one, always: a screen with no room for a drive icon is not one
-    ; this OS boots.
-    mov ax, [vid_dock_y0]
-    sub ax, DESK_ZY0
-    xor dx, dx
-    mov cx, DESK_ZSTEP
-    div cx
-    or ax, ax
-    jnz .rows
-    mov ax, 1
-.rows:
-    mov [desk_rows], ax
+    call KERNEL_SEG:ovw_desk_rowcalc  ; FAR: overlay -> resident. The row
+                                ; count is geometry, and geometry can change
+                                ; after boot now (SPEC.md 39.11.2), so the
+                                ; arithmetic lives in .text where vid_switch
+                                ; can reach it too
 
     mov byte [desk_sel], 0xFF   ; no selection
     mov word [desk_clkt], 0
@@ -126,6 +118,39 @@ desk_init:
 ; one flag and disappear by clearing it.
 
 section .text
+
+; -----------------------------------------------------------------------------
+; desk_rowcalc - how many drive zones fit in one column (SPEC.md 26.1)
+;
+; in:       [vid_dock_y0]
+; out:      [desk_rows]
+; clobbers: flags
+;
+; 7 on VGA, 4 on Hercules, 2 on CGA - and at least one, always: a screen with
+; no room for a single drive icon is not one this OS boots. It was inline in
+; desk_init, which is boot-overlay code and therefore dead by the time the
+; Control Panel can change the adapter under it (SPEC.md 39.11.2), so it is
+; resident now and desk_init far-calls it like any other overlay->text step.
+; -----------------------------------------------------------------------------
+desk_rowcalc:
+    push ax
+    push cx
+    push dx
+    mov ax, [vid_dock_y0]
+    sub ax, DESK_ZY0
+    xor dx, dx
+    mov cx, DESK_ZSTEP
+    div cx
+    or ax, ax
+    jnz .rows
+    mov ax, 1
+.rows:
+    mov [desk_rows], ax
+    pop dx
+    pop cx
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 desk_ord:
     push bx

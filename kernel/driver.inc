@@ -239,7 +239,16 @@ CFG_H12     equ 3               ; db: [clk_h12]    (SPEC.md 31.5)
 CFG_SEC     equ 4               ; db: [clk_secs]
 CFG_SCH     equ 5               ; db: the scheduler mode (SPEC.md 8.2)
 CFG_BB      equ 6               ; db: double buffering  (SPEC.md 32)
-CFG_DBLOB   equ 7               ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
+CFG_VID     equ 7               ; db: the display adapter (SPEC.md 39.11.3) -
+                                ; a VID_* kind, not a bitmap. Applied by
+                                ; drv_boot and NOT by drv_cfg_unpack, for the
+                                ; back buffer's reason one line up: it is not
+                                ; a store. It sets a video mode, and it is
+                                ; refused outright when the machine no longer
+                                ; has that card - which is what stops a disk
+                                ; carried from a machine with a Hercules in it
+                                ; booting this one to a dead monitor
+CFG_DBLOB   equ 8               ; DRV_BLOB_SZ bytes: A DRIVER'S OWN SETTINGS,
                                 ; and the kernel does not know what is in
                                 ; them (SPEC.md 51.9). It knows the NAME and
                                 ; the LENGTH, carries them to disk and back,
@@ -270,9 +279,11 @@ drv_cfg_keys:
     db 1, 1, CFG_SCH
     dw 'BB'                     ; Back Buffer
     db 1, 1, CFG_BB
+    dw 'VM'                     ; Video Mode - which adapter (SPEC.md 39.11.3)
+    db 1, 1, CFG_VID
     dw 'HD'                     ; Hard Disk - the DRIVER's own blob (51.9)
     db 1, DRV_BLOB_SZ, CFG_DBLOB
-CFG_NKEY    equ 7
+CFG_NKEY    equ 8
 CFG_KESZ    equ 5               ; bytes per table entry
 
 ; The file buffer, DERIVED rather than guessed: drv_cfg_ser emits the header,
@@ -1815,6 +1826,11 @@ drv_cfg_pack:
     mov [drv_cfg+CFG_SCH], al
     mov al, [bb_dbl]
     mov [drv_cfg+CFG_BB], al
+    mov al, [vid_kind]          ; the adapter the machine is RUNNING as, which
+    mov [drv_cfg+CFG_VID], al   ; on a machine that has never been asked is
+                                ; exactly what vid_detect chose - so the file
+                                ; records the probe's answer and a first save
+                                ; changes nothing about the next boot
     pop di
     pop si
     pop cx
@@ -2416,6 +2432,20 @@ drv_boot:
     call drv_cfg_load           ; CF = 1: no file, so every default stands -
     jc .load                    ; and every default is now "not wanted", so
     mov ch, 1                   ; the loop below correctly loads nothing
+
+    ; --- the display adapter, FIRST (SPEC.md 39.11.3) ------------------------
+    ; Before the driver loads and long before the back buffer at the bottom of
+    ; this routine, because everything after it draws: the splash bar is
+    ; ticked once per sector by dsk_xfer (SPEC.md 15.3), and vid_setmode
+    ; CLEARS the framebuffer - so the switch has to happen while there is the
+    ; least possible loading screen to put back, and spl_chrome puts that back
+    ; immediately. vid_switch refuses a card this machine does not have, which
+    ; is the whole safety story for a settings disk carried between machines.
+    mov al, [drv_cfg+CFG_VID]
+    call vid_switch
+    jc .load                    ; no such adapter here: stay on the probe's
+    call spl_reset              ; answer. Otherwise redraw the loading screen
+                                ; onto the framebuffer the mode set just wiped
 .load:
     xor cl, cl
 .next:
