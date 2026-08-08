@@ -657,6 +657,35 @@ drive zone does not fit above the dock on a 200-line screen and wraps into a
 second column to the left (SPEC.md §26.1) — which is invisible on VGA and
 therefore exactly the kind of thing that ships broken.
 
+## Host-side tools live in `tools/`, and a set of them goes in a FOLDER
+
+`tests/` is guest code; `tools/` is the host side — the Python that drives an
+emulator, builds an image or checks a document. Most of it is one file doing
+one job and belongs at the top level, which is where `os88marty.py`,
+`os88disk.py`, `mouse.py` and the rest are.
+
+**A tool that grows into several files gets a directory, and the directory is
+named for WHAT IT DRIVES**, not for what it does:
+
+- **an application** → the app's name, as the user sees it in the dock and
+  the Task Manager: `tools/notepad/`, and a Paint one would be `tools/paint/`.
+- **a driver** → its Control Panel checkbox label (SPEC.md §31.9), because
+  that is the name the machine itself puts on it and it is the one a bug
+  report will use.
+- **anything else** → the subsystem it belongs to, chosen the way a module
+  prefix is: `tools/martypc/` is the emulator, and that is the pattern.
+
+The point is that the folder answers "what is this for" before the reader
+opens anything. A folder named for the technique — `tools/tracer/`,
+`tools/bench/` — stops doing that the moment a second one exists.
+
+Give the folder a `README.md` saying what the tool answers, what the OTHER
+instrument for the same subject is and when to prefer it, and the ways it has
+already lied. `tools/notepad/README.md` is the worked example: it exists
+alongside `tests/npbench.inc`, and the two measure Note Pad from outside and
+inside respectively, so the first thing its README does is say which question
+each one answers.
+
 ## Everything not shipped lives in `tests/`
 
 `tests/` holds every package that is not shipping software, and it is **not**
