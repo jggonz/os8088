@@ -2817,6 +2817,13 @@ tui_draw_dyn:
 .win:
     cmp byte [mp_playing], 0        ; windowed: a live position line on the
     je .out                         ; splash while something plays
+%ifdef TRKLOG
+    cmp byte [tlog_pace], TLOG_PACE_BURST
+    jne .nob
+    call tlog_burst                 ; C: rewrite [tui_arow] onto the burst
+    jnz .wupd                       ; grid (SPEC.md 45.16.4). ZF=0 = the
+%endif                              ; sweep moved, so redraw even on a row
+.nob:                               ; that did not change
     mov al, [tui_arow]
     cmp al, [tui_lrow]
     jne .wupd
@@ -2837,12 +2844,19 @@ tui_draw_dyn:
     call tui_scpy
     mov al, [tui_arow]
     call tui_hexb
+    mov bx, 120
+%ifdef TRKLOG
+    cmp byte [tlog_pace], TLOG_PACE_BURST
+    jne .nosw
+    call tlog_sweep_draw            ; ...and the sweep that covers the hold
+    mov bx, 120 + TLOG_SWEEPW * 8   ; (SPEC.md 45.16.4)
+.nosw:
+%endif
     mov byte [di], 0
     mov si, tui_pbuf
     mov cx, 8
     mov dx, [tui_ch]
     sub dx, 22
-    mov bx, 120
     mov ah, TC_WBG
     mov al, TC_WTX
     call tui_rdout
@@ -3084,5 +3098,6 @@ tui_ab5:     db 'Any key closes', 0
     TRKW tui_t1                     ; shared scratch words (serial: every
     TRKW tui_t2                     ; drawer runs under the one gfx lock)
     TRKBUF tui_nbuf, 8              ; number/text compose buffers
-    TRKBUF tui_pbuf, 20
+    TRKBUF tui_pbuf, 48             ; 'Pos xx  Row yy' plus, in the TRKLOG
+                                    ; build only, SPEC.md 45.16.4's sweep
     TRKBUF tui_insbuf, 20

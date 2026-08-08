@@ -113,6 +113,18 @@ TLOG_KB     equ (TLOG_RECS * TLOG_RSZ + 1023) / 1024
 TLOG_LINE   equ 76                  ; 70 columns + CR LF
 TLOG_TXTKB  equ (TLOG_RECS * TLOG_LINE + 1024 + 1023) / 1024
 
+; --- the windowed pacing experiment, A/B/C on the E key (SPEC.md 45.16.4) ----
+TLOG_PACE_EVERY equ 0               ; A: every frame - the shipped behaviour,
+                                    ;    an irregular 110/165 (45.16.2)
+TLOG_PACE_EVEN  equ 1               ; B: every OTHER frame - an even 110 with
+                                    ;    a 220 where the drift is taken up
+TLOG_PACE_BURST equ 2               ; C: TLOG_BURST rows at one per frame,
+                                    ;    then a held sweep (45.16.4)
+TLOG_PACE_N     equ 3
+TLOG_BURST      equ 8               ; rows in a burst; a power of two, so the
+TLOG_BURST_MASK equ (256 - TLOG_BURST) & 0xFF   ; base is one AND
+TLOG_SWEEPW     equ 12              ; cells the sweep occupies, brackets in
+
 TLOGF_REBUILD equ 1
 TLOGF_STEP    equ 2
 TLOGF_BLIT    equ 4
@@ -425,15 +437,112 @@ tlog_clk_key:
 tlog_even_key:
     push ax
     push si
-    xor byte [tlog_even], 1
+    mov al, [tlog_pace]             ; E CYCLES A -> B -> C -> A
+    inc al
+    cmp al, TLOG_PACE_N
+    jb .set
+    xor al, al
+.set:
+    mov [tlog_pace], al
     mov byte [tlog_ephase], 0
-    mov si, tlog_s_eveno
-    cmp byte [tlog_even], 0
-    je .say
-    mov si, tlog_s_evenx
-.say:
+    mov byte [tlog_even], 0
+    cmp al, TLOG_PACE_EVEN
+    jne .nb
+    mov byte [tlog_even], 1         ; B still drives the every-other-wake gate
+.nb:
+    mov byte [tlog_bbase], 0xFF     ; C restarts its burst on the next row
+    xor ah, ah
+    mov si, ax
+    shl si, 1
+    mov si, [tlog_pace_str + si]
     call tui_msg
     pop si
+    pop ax
+    ret
+
+tlog_pace_str:  dw tlog_s_eveno, tlog_s_evenx, tlog_s_burst
+
+; -----------------------------------------------------------------------------
+; tlog_burst (C) - put the DISPLAYED row on a burst grid (SPEC.md 45.16.4).
+;
+; The other two modes try to be RIGHT: they show each row as near to when it
+; is played as a 55 ms frame allows, and the arithmetic then forces an
+; irregular 110/165. This one stops trying. It shows TLOG_BURST rows at ONE
+; PER FRAME - a fast, perfectly even scroll, faster than the music - and then
+; HOLDS on the last of them until the music catches up, with a sweep running
+; through the hold so the eye has something moving to follow.
+;
+; At CLICK.MOD's 125 ms row and a 55 ms frame, TLOG_BURST = 8 gives a 385 ms
+; burst and a 615 ms hold, repeating once a second. Nothing is ever late by
+; accident; the display is exactly right at every burst boundary and
+; deliberately ahead inside one.
+;
+; out: ZF=0 when the sweep moved, so the caller redraws on a frame whose ROW
+;      did not change. Every register preserved but the flags.
+; -----------------------------------------------------------------------------
+tlog_burst:
+    push ax
+    push bx
+    mov al, [tui_arow]              ; the burst this row belongs to
+    and al, TLOG_BURST_MASK         ; (a power of two, so this is the base)
+    cmp al, [tlog_bbase]
+    je .same
+    mov [tlog_bbase], al            ; a new burst: snap to its first row and
+    mov [tlog_drow], al             ; start the scroll
+    mov byte [tlog_sweep], 0
+    jmp short .show
+.same:
+    mov al, [tlog_drow]             ; inside a burst: one row per FRAME until
+    sub al, [tlog_bbase]            ; the last of them, then hold
+    cmp al, TLOG_BURST - 1
+    jae .hold
+    inc byte [tlog_drow]
+    jmp short .show
+.hold:
+    mov al, [tlog_sweep]            ; the hold: the sweep is what moves
+    inc al
+    cmp al, TLOG_SWEEPW
+    jb .sw
+    xor al, al
+.sw:
+    mov [tlog_sweep], al
+.show:
+    mov al, [tlog_drow]
+    mov [tui_arow], al              ; what every windowed drawer will quote
+    pop bx
+    pop ax
+    cmp byte [tlog_pace], 0         ; ZF=0 by construction - we are only ever
+    ret                             ; here with pace = BURST - so the caller
+                                    ; redraws on a frame whose row did not
+                                    ; change and the sweep still moved
+
+; -----------------------------------------------------------------------------
+; tlog_sweep_draw - append the hold's sweep to DI (SPEC.md 45.16.4). The
+; marker sits still while the burst scrolls and runs while it holds, so the
+; pause reads as the animation it is rather than as a stall.
+; -----------------------------------------------------------------------------
+tlog_sweep_draw:
+    push ax
+    push cx
+    mov byte [di], ' '
+    inc di
+    mov byte [di], '['
+    inc di
+    mov cx, TLOG_SWEEPW - 2
+    xor ah, ah
+.c:
+    mov al, ' '
+    cmp ah, [tlog_sweep]
+    jne .put
+    mov al, '*'
+.put:
+    mov [di], al
+    inc di
+    inc ah
+    loop .c
+    mov byte [di], ']'
+    inc di
+    pop cx
     pop ax
     ret
 
@@ -883,8 +992,9 @@ tlog_s_synco:   db 'Sync ON: the screen follows the card', 0
 tlog_s_syncx:   db 'Sync OFF: the screen follows the mixer', 0
 tlog_s_clkt:    db 'Clock: one frame per tick', 0
 tlog_s_clkr:    db 'Clock: one frame per sub-tick', 0
-tlog_s_eveno:   db 'Even OFF: windowed draws every frame (110/165)', 0
-tlog_s_evenx:   db 'Even ON: windowed draws every 2nd frame (110/220)', 0
+tlog_s_eveno:   db 'Pace A: every frame - 110/165, the shipped one', 0
+tlog_s_evenx:   db 'Pace B: every 2nd frame - an even 110, a 220 to catch up', 0
+tlog_s_burst:   db 'Pace C: 8 rows at 55ms, then a sweep while it waits', 0
 
 ; --- bss ---------------------------------------------------------------------
     TRKW tlog_seg                   ; the record claim, 0 = not armed
@@ -905,6 +1015,10 @@ tlog_s_evenx:   db 'Even ON: windowed draws every 2nd frame (110/220)', 0
     TRKB tlog_nosync                ; Y: the display is back on the mixer
     TRKB tlog_even                  ; E: the windowed readout on an EVEN
     TRKB tlog_ephase                ; two-frame grid, and which half we are on
+    TRKB tlog_pace                  ; ...which of the three modes E has picked
+    TRKB tlog_bbase                 ; C: the burst's first row, its displayed
+    TRKB tlog_drow                  ; row, and how far the hold's sweep has got
+    TRKB tlog_sweep
     TRKW tlog_cons                  ; what the worker last saw...
     TRKW tlog_totl
     TRKB tlog_state

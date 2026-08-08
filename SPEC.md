@@ -18994,6 +18994,41 @@ of its own (§53.5.1) and nothing to fix.
 If it wins, it stops being a key and becomes the windowed path. If it loses,
 the arithmetic was right and this section is the record of having checked.
 
+#### 45.16.4 `C` — stop trying to be right, and hide the resync behind a bang
+
+Modes A and B both try to be **accurate**: show each row as near to when it
+is played as a 55 ms frame allows. §45.16.2 proves that lands on an
+irregular 110/165 and §45.16.3 proves a coarser grid only widens it. Both
+are optimisations of the same losing position.
+
+The third mode abandons it. **Show `TLOG_BURST` rows at one per frame — a
+fast, perfectly even scroll, deliberately faster than the music — then HOLD
+on the last of them until the music catches up, and run an animation through
+the hold so the eye has something moving to follow.** At CLICK.MOD's 125 ms
+row against a 55 ms frame, 8 rows is a 385 ms burst and a 615 ms hold,
+repeating once a second.
+
+What makes it defensible rather than a cheat is where the error goes. The
+display is **exactly right at every burst boundary** — it snaps to the base
+row the moment the music reaches it — and it is deliberately *ahead* inside
+a burst, never behind and never late by accident. The scroll itself is
+perfectly even, which neither A nor B can be. And the hold is not a stall
+that the app is hoping nobody notices: it is filled, on purpose, and reads
+as punctuation.
+
+The idea is not mine and the framing is worth keeping: *"instead of being
+right, let's be innovative"* — the observation being that a rhythm the eye
+can read as **designed** beats a smaller error it reads as **broken**. That
+is a claim about perception, so like §45.16.3 it is a bench key rather than
+a decision, and `E` now cycles A → B → C so all three can be compared in
+place without a rebuild between them.
+
+Two things it costs, both stated so the comparison is honest. Inside a
+burst the row shown is up to `TLOG_BURST - 1` rows ahead of the music, which
+is the opposite trade from everything else in §45.15. And the windowed frame
+now redraws on every wake while a burst mode is active, because the sweep
+moves even when the row does not.
+
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
 A port of ActionRetro's **ArtfulType** — "a distraction-free Markdown
