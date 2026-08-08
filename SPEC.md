@@ -23280,6 +23280,28 @@ Four changes, all in `dsk_xfer`'s BIOS path and its table:
 dl, dl`, and that byte is 0 on a floppy machine — so a machine that boots
 from a floppy runs the identical path it always did.
 
+**The mount needs a geometry BEFORE it has a BPB, and 9/2 is not it.**
+`disk_mount` set `[disk_spt]`/`[disk_heads]` to a floppy's before the LBA 0
+read, which is the one read that cannot take them from the BPB — it is the
+read that *fetches* the BPB. On a partition that read is not at LBA 0 of the
+device either: it is `base` sectors in, so a wrong geometry does not mis-seek
+by a track, it translates somewhere else entirely. With 9/2 and a base of 26
+the drive was asked for (1,0,9) and answered absolute LBA 112, in the middle
+of the FAT, so **the boot volume never mounted** — and the machine still
+booted, because `boot/boothd.asm` probes `int 13h` AH=08h for itself, so this
+showed up as a Task Manager that could not find its file and a Disk window
+with nothing in it rather than as a failure to start. `dsk_boot_from` makes
+the same AH=08h probe once, into `[dsk_bootspt]`/`[dsk_boothds]`, and
+`disk_mount` uses it for a `DVK_BIOS` row whose unit is ≥ 80h. A drive that
+refuses the call leaves the floppy fallback, so the mount fails honestly
+rather than reading somewhere it was not asked to.
+
+**And `ui_tm_sysdir` had the same hardcoded A: one call deeper.** Its
+`dsk_chdir` into `SYSTEM` was `xor dl, dl` — so on an installed machine it
+took the folder's cluster from C: and walked it on the *floppy*, which reads
+to the user as `TASKMGR.O88 is not in SYSTEM`. A fix at one call site is not
+a fix: the assumption was written down in more than one place.
+
 **A: stays the floppy.** The boot partition is C: (volume 2), not A:, because
 the alternative renumbers every drive letter, desktop zone and `FS_DRV` in
 the system to save one indirection. §52.9's "the system disk stays A:" is
@@ -23320,13 +23342,54 @@ too small is shown with the reason rather than hidden, on §47 rule 3's terms
 more than an absent row.
 
 **A single-floppy machine is the normal case** (docs/FIELD-MACHINES.md), so
-the copy prompts for the disk swap rather than assuming two drives.
+the copy prompts for the disk swap rather than assuming two drives — unless
+§52.10.5 finds it has not got to.
 
 **Progress is §12.8's widget.** A file operation freezes the machine by
 design, and this is the largest one in the system — both floppies is
 hundreds of sectors at **65 ms** each on the field machine — so `fpg_begin`'s
 bar is stepped from inside the transfer loop, which is the one piece of code
 still running.
+
+### 52.10.5 A disk already in the machine is not asked for
+
+The swap prompt is right on the machine this project is calibrated against
+and wrong on one with two drives, where the apps disk is usually sitting in
+B: while the user is asked to put it in A:. `hd_iapps_find` asks the machine
+before it asks the user: on a two-drive machine with the apps disk already
+in the other drive, stage 1 falls straight into stage 2 and the whole
+install is **one confirm** rather than a confirm, a swap and a second
+confirm.
+
+Three things decide it, and each answers a question nothing else can:
+
+- **How many floppy drives there are is `int 11h`'s answer**, bits 7:6 (the
+  count less one), and the kernel's volume table is no help at all: A: and
+  B: are unconditional rows in `dsk_vtab`, because on a one-drive PC the
+  BIOS aliases unit 1 onto the same physical drive and DOS asks for the
+  swap. Reading the volume table would say "two drives" on every machine
+  there is.
+- **Which drive to look in is the OTHER one** — `[hd_ivdrv] XOR 1`, and only
+  when the drive stage 1 read was a floppy at all. A hard-disk source makes
+  "the other one" meaningless, so that case asks.
+- **What makes a disk the apps disk is an `APPS` folder in its root**
+  (§19.2). The system disk has `SYSTEM` and `MEDIA` and not that, so the two
+  cannot be confused, and a disk that is neither is not copied by accident.
+
+Every refusal falls back to the prompt exactly as it was: a renamed disk, a
+data disk, an empty drive and a one-drive machine all take the path they
+took before, which is what makes this an optimisation of the common case
+rather than a new way for an install to go wrong. **The volume is put back
+on every path**, including the ones that stood on a candidate drive to look
+at it, because the caller has already restored the user's volume by then
+(§51.5.2) and a probe that moved it would be a navigation the user did not
+ask for.
+
+The source drive is its own byte. `[hd_isrcdrv]` is what `hd_isrc` and
+`hd_isrc_sub` stand on and `[hd_ivdrv]` is what `hd_ivol_back` puts the user
+on; `hd_ivol_bank` sets both and the auto-detected drive overrides only the
+first. One word for both would have ended the install with the user standing
+on a drive they were never on.
 
 ## 53. fsx.inc — fullscreen exclusive
 

@@ -734,12 +734,21 @@ hd_page_click:
                                 ; is all it reads, and the editor staged that on
                                 ; the click that changed it. A Delete INSIDE it
                                 ; can unmount, and stages there (SPEC.md 52.2.4)
+                                ; Both tools repaint the PANE FIRST and open the
+                                ; window SECOND. A Control Panel page draws
+                                ; itself unclipped (SPEC.md 31.9) and the kernel
+                                ; does not repaint after a click returns, so a
+                                ; pane repaint AFTER wm_show paints straight
+                                ; over the window it has just put up - which is
+                                ; what the Install dialog arrived doing.
 .dofmt:
+    call hd_page_repaint
     call hd_tw_open
-    jmp .repaint
+    jmp short .done
 .doinst:                        ; Install stages nothing either, for the tool's
-    call hd_iw_open             ; reason: what it changes is a DISK, and about
-    jmp .repaint                ; the machine's settings nothing at all
+    call hd_page_repaint        ; reason: what it changes is a DISK, and about
+    call hd_iw_open             ; the machine's settings nothing at all
+    jmp short .done
 .refused:
     ; A greyed control explains itself (SPEC.md 47 rule 5), so the refusal
     ; says nothing new - it just makes sure the reason is on screen.

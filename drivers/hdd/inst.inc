@@ -102,6 +102,7 @@ hd_iw_open:
     push si
     mov byte [hd_iw_st], HII_IDLE
     mov word [hd_imsg], hd_s_ipick
+    mov byte [hd_iautod], 0xFF  ; a fresh run asks the machine again
     call hd_iw_scan             ; a fresh table every time, tool.inc's reason:
                                 ; the disk can be swapped between two clicks
     cmp word [hd_iwin], 0
@@ -617,6 +618,12 @@ hd_inst_step:
 .go:
     call hd_inst_sys
     jc .failed
+    call hd_iapps_find          ; ...and do not ask for a disk that is already
+    jc .swap                    ; in the machine (SPEC.md 52.10.5). Falling
+    mov [hd_iautod], al         ; straight into .apps is what makes the whole
+                                ; install one confirm on a two-drive machine
+    jmp short .apps
+.swap:
     mov byte [hd_iw_st], HII_SYSDONE
     mov word [hd_imsg], hd_s_iswap
     jmp short .out
@@ -698,7 +705,13 @@ hd_inst_apps:
     jc .nomem
     mov word [hd_imsg], hd_s_iwork
     call hd_iw_repaint
-    call hd_ivol_bank
+    call hd_ivol_bank           ; ...which set hd_isrcdrv to the user's volume;
+    mov al, [hd_iautod]         ; an auto-detected apps disk overrides THAT one
+    cmp al, 0xFF                ; and never hd_ivdrv, or the restore below puts
+    je .src                     ; the user on a drive they were never on
+    mov [hd_isrcdrv], al
+    mov byte [hd_iautod], 0xFF  ; spent: a second install asks afresh
+.src:
     call hd_icopy_tree
     jc .failed
     call hd_ivol_back
@@ -815,6 +828,8 @@ hd_ivol_bank:
     call OSAPI_FILE_HERE        ; DX = the directory, BL = the drive
     mov [hd_ivcwd], dx
     mov [hd_ivdrv], bl
+    mov [hd_isrcdrv], bl        ; the copy reads from there too, unless the
+                                ; caller overrides it after this returns
     pop dx
     pop bx
     pop ax
@@ -836,6 +851,77 @@ hd_ivol_back:
     ret
 
 ; -----------------------------------------------------------------------------
+; hd_iapps_find - is the apps disk already in the OTHER floppy drive?
+; in:  the volume is wherever hd_inst_sys left it (the user's, restored)
+; out: CF = 0 and AL = that drive; CF = 1 = ask the user to swap
+; clobbers: AX, flags. The volume is put back on EVERY path.
+;
+; A one-drive machine has to be asked to swap disks and a two-drive machine
+; usually does not, because the disk is already sitting in B:. int 11h is the
+; only honest source for how many drives there are - bits 7:6 are the count
+; less one, and the kernel's volume table is no help at all, since A: and B:
+; are unconditional rows in it and on a one-drive PC the BIOS aliases unit 1
+; onto the same physical drive.
+;
+; The test for the disk itself is an APPS FOLDER in its root, which is what
+; makes it the apps disk (SPEC.md 19.2) and what the system disk does not
+; have. Nothing here is a guess: if the folder is not found - a renamed disk,
+; a data disk, no disk at all - this refuses and the swap prompt happens
+; exactly as it did before.
+; -----------------------------------------------------------------------------
+hd_iapps_find:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    int 0x11                    ; the equipment word
+    test al, 1                  ; ...any floppy drive at all
+    jz .no
+    mov cl, 6
+    shr al, cl                  ; bits 7:6 = drives - 1
+    or al, al
+    jz .no                      ; one drive: there is nowhere else to look
+    mov bl, [hd_ivdrv]          ; the drive stage 1 read from
+    cmp bl, 2
+    jae .no                     ; not a floppy at all: "the other one" has no
+    xor bl, 1                   ; meaning, so ask
+    push bx
+    xor dx, dx                  ; its ROOT
+    call OSAPI_FILE_GOTO
+    pop bx
+    jc .no                      ; no disk in it, or one we cannot read
+    xor cx, cx
+.scan:
+    push es
+    push cs
+    pop es
+    mov di, hd_ifind            ; NOT hd_ient: the tree walk owns that one and
+    call OSAPI_FILE_FIND        ; this runs between two of its passes
+    pop es
+    jc .no
+    cmp word [hd_ifind+14], 2   ; a folder, and not the synthesized '..' (3)
+    jne .scan
+    mov si, hd_ifind
+    mov di, hd_s_iapps
+    call hd_iname_same
+    jnc .scan
+    call hd_ivol_back           ; found it - and the volume goes back either
+    mov al, bl                  ; way, because hd_inst_apps banks afresh
+    clc
+    jmp short .out
+.no:
+    call hd_ivol_back
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; hd_isrc / hd_isrc_sub / hd_idst / hd_idst_sub - stand somewhere (internal)
 ;
 ; A driver has no folder of its own and uses the machine's (SPEC.md 19.2.1),
@@ -847,7 +933,7 @@ hd_isrc:
     push ax
     push bx
     push dx
-    mov bl, [hd_ivdrv]          ; the source is where the user was: A: on a
+    mov bl, [hd_isrcdrv]        ; the source is where the user was: A: on a
     xor dx, dx                  ; one-floppy machine, at its ROOT
     call OSAPI_FILE_GOTO
     pop dx
@@ -859,7 +945,7 @@ hd_isrc_sub:
     push ax
     push bx
     push dx
-    mov bl, [hd_ivdrv]
+    mov bl, [hd_isrcdrv]
     mov dx, [hd_isubc]
     call OSAPI_FILE_GOTO
     pop dx
@@ -1714,6 +1800,7 @@ hd_s_igap:    db '    ', 0
 hd_s_idash:   db '   -', 0
 hd_s_ik:      db 'K', 0
 hd_s_kernel:  db 'KERNEL.SYS', 0
+hd_s_iapps:   db 'APPS', 0      ; what makes a disk THE APPS DISK (52.10.5)
 
 hd_s_iready:  db 'Ready', 0
 hd_s_ismall:  db 'Too Small', 0
@@ -1752,6 +1839,17 @@ hd_ibufkb:    dw 0
 hd_idrv:      db 0              ; the destination's kernel volume index
 hd_ivdrv:     db 0              ; ...and the user's, banked
 hd_ivcwd:     dw 0
+hd_isrcdrv:   db 0              ; the drive the COPY reads from, which is the
+                                ; banked one on a one-drive machine and the
+                                ; other floppy when hd_iapps_find has found the
+                                ; apps disk already in it (SPEC.md 52.10.5).
+                                ; Separate from hd_ivdrv because that one is
+                                ; what hd_ivol_back puts the user on, and the
+                                ; two must not be the same word
+hd_iautod:    db 0xFF           ; the auto-detected apps drive, 0xFF = none.
+                                ; .text with a real initialiser, hd_iwin's
+                                ; reason: -f bin zeroes nothing and 0 here is
+                                ; drive A:
 hd_iord:      dw 0              ; the root walk's ordinal (SPEC.md 19.7.1)
 hd_isord:     dw 0              ; ...and the sub-folder walk's
 hd_isubc:     dw 0              ; the source folder's cluster

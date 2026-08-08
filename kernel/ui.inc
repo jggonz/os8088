@@ -1211,7 +1211,14 @@ ui_tm_sysdir:
     mov ax, [si+18]             ; its first cluster
     or ax, ax
     jz .no                      ; 0 is the root: a directory entry naming it
-    xor dl, dl                  ; would be a loop, not a folder
+    mov dl, [dsk_bootvol]       ; would be a loop, not a folder.
+                                ;
+                                ; The DRIVE is the one ui_tm_open just mounted,
+                                ; and this was `xor dl, dl` - the same A:
+                                ; assumption its caller had, one call deeper.
+                                ; On an installed machine it walked into
+                                ; SYSTEM's cluster on the FLOPPY, which reads
+                                ; to the user as the file not being there
     jmp dsk_chdir               ; CF is its answer, and it is ours
 .no:
     stc

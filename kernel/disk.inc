@@ -149,6 +149,14 @@ dsk_vbase:   times DVOL_MAX dd 0
 ; disk could be the answer instead.
 dsk_bootvol: db 0
 
+; The boot drive's own geometry, probed once (SPEC.md 52.10.3). Zero on a
+; floppy machine and unread there. disk_mount needs it for the ONE read that
+; cannot get a geometry from the BPB - the read that fetches the BPB - and
+; there is nowhere else to get it: the volume table carries a unit and a base,
+; and the drive's shape belongs to the drive.
+dsk_bootspt: dw 0
+dsk_boothds: dw 0
+
 ; --- module data (initialized: lives in .text, not .bss) ---------------------
 ; 0040:003F's motor bit per int 13h drive (SPEC.md 18.9.1). A table because
 ; dsk_here_ok preserves every register and `shl al, cl` would spend CX.
@@ -811,6 +819,34 @@ dsk_boot_from:
 .hard:
     mov si, bx                  ; the base is banked BEFORE BX becomes the row
                                 ; walker - SI:CX for the rest of the routine
+
+    ; --- the drive's geometry, while we still know which drive it is --------
+    ; int 13h AH=08h, the same question boot/boothd.asm asks and for the same
+    ; reason: every CHS read of this volume needs it, and the FIRST of them
+    ; fetches the BPB, so it cannot come from there. AH=08h spends BX, CX, DX,
+    ; DI and ES, so everything live crosses it on the stack.
+    push cx
+    push dx
+    push di
+    push es
+    mov ah, 0x08
+    int 0x13
+    jc .nogeom
+    and cl, 0x3F                ; sectors per track, bits 0..5
+    xor ch, ch
+    jcxz .nogeom                ; a zero would divide by zero in dsk_xfer
+    mov [dsk_bootspt], cx
+    mov al, dh                  ; heads = last head + 1
+    xor ah, ah
+    inc ax
+    jz .nogeom                  ; DH = 0FFh is not a geometry
+    mov [dsk_boothds], ax
+.nogeom:
+    pop es
+    pop di
+    pop dx
+    pop cx
+
     mov bx, dsk_vtab + 2*DV_SIZE    ; the row walks, as dsk_vol_add's does
 .scan:
     cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE
@@ -1414,8 +1450,38 @@ disk_mount:
     mov byte [dsk_vflop], 0
 .kindok:
     pop bx
-    mov word [disk_spt], 9      ; fallback geometry for the LBA 0 read
+    ; --- the geometry for the LBA 0 read, BEFORE the BPB can supply one -----
+    ; A floppy's fallback is 9/2 and always was. A BIOS-transported HARD DISK
+    ; (SPEC.md 52.10.3's boot partition) needs its OWN, and this is the one
+    ; read that cannot get it from the BPB - it is the read that FETCHES the
+    ; BPB. Its LBA is not 0 either: a partition's sector 0 is `base` sectors
+    ; in, so the wrong geometry does not merely mis-seek by a track, it asks
+    ; for a CHS that translates somewhere else entirely. With 9/2 and a base
+    ; of 26 the drive was asked for (1,0,9) and answered LBA 112 - inside the
+    ; FAT - so the BPB never validated and the volume "was not an os8088
+    ; disk". The machine still booted, because the BOOT SECTOR probes AH=08h
+    ; and reads the kernel correctly; the kernel simply never mounted the
+    ; volume it had booted from, which is why this showed up as a Task
+    ; Manager that could not find its file and a Disk window with nothing in
+    ; it rather than as a failure to start.
+    mov word [disk_spt], 9
     mov word [disk_heads], 2
+    push bx
+    mov bl, dl
+    call dsk_vol_row
+    jc .geomok
+    cmp byte [bx+DV_KIND], DVK_BIOS
+    jne .geomok                 ; a driver volume never reaches the CHS code
+    test byte [bx+DV_UNIT], 0x80
+    jz .geomok                  ; a floppy: 9/2, as before
+    mov ax, [dsk_bootspt]       ; the drive's own, probed once at boot
+    or ax, ax
+    jz .geomok                  ; never probed: leave the floppy fallback and
+    mov [disk_spt], ax          ; let the mount fail honestly
+    mov ax, [dsk_boothds]
+    mov [disk_heads], ax
+.geomok:
+    pop bx
     mov word [disk_nfiles], 0   ; stays 0 unless the mount fully succeeds
     mov byte [dsk_mntok], 0     ; the write gate (SPEC.md 18.4) closes for
                                 ; the whole mount: a torn mount leaves it
