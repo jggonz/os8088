@@ -222,9 +222,10 @@ row setup.
 | Framebuffer vs. RAM, read-modify-write | 1.09× (CGA 1.11×) |
 | An ISA status-port `in` | 8.7 us |
 | The kernel's own tick + mouse + scheduler | **1–3%** of a busy CPU |
-| Floppy throughput | **2,100 bytes/second** |
-| Floppy, per 512-byte sector | 238 ms — one sector per 200 ms revolution |
-| Floppy, open and read a one-sector file | 800 ms |
+| Floppy throughput | **7,457 bytes/second** (was 2,100 before Set 17) |
+| Floppy, per `int 13h` CALL | **~400 ms — about 2 of the 200 ms revolutions**, whether it moves 1 sector or 9. THIS is the unit to estimate a disk change in |
+| Floppy, per 512-byte sector | **65 ms** inside a well-coalesced run (was 238 — see below) |
+| Floppy, open and read a one-sector file | 810 ms |
 | System tick | 18.2065 Hz; **65,536 PIT counts, measured exactly** |
 | Serial mouse | 1200 baud |
 
@@ -232,6 +233,32 @@ row setup.
 §39.5 for years. It is 79.6, and only about 7 of those are the bus** — the
 rest is five 8088 instructions. The figure was low, and it was attributed to
 the wrong thing.
+
+**The floppy rows above carried the SAME kind of error for longer, and it
+was the bug rather than the measurement.** `238 ms per sector` and
+`2,100 bytes/second` were measured honestly and then outlived their cause:
+they are SPEC.md §18.91's `AL` bug, where the BIOS moved nine sectors,
+answered `AL = 1`, and the kernel re-asked for the other eight one at a time
+— a revolution each. Set 17 fixed it and the same 16 KB read went 8.29 s →
+2.09 s, so **every estimate made from 238 ms is 3.9x too pessimistic**, and
+every conclusion that "we must not spend sectors at boot" needs re-deriving
+before it is quoted again. Set 18 then took the boot itself from 39.88 s to
+**9.94 s** on the same machine.
+
+**And the sector was always the wrong unit — the call is the right one.**
+Set 14 timed a whole 9-sector track in ONE `int 13h` at **384 ms**, 1.92
+revolutions, and Set 17's residual is read off the same figure: *"32 sectors
+in ~4 calls of ~400 ms is 1.6 s, and we measure 2.09 — about two extra
+calls' worth."* A call costs one to two revolutions almost regardless of how
+much it moves, so **`int 13h` calls, not sectors, are what a disk change
+should be costed in** — which is exactly why §18.94's counters report both
+and why a mount is quoted as `12 sectors / 4 calls`. The per-sector row is
+kept because it is the right unit inside one long coalesced run, and that is
+the only place it means anything.
+
+The Compaq Portable III (Set 18) is the second data point and it moves with
+the drive rather than the CPU: 360 RPM, so a revolution is 166.7 ms and the
+same read is **11,047 B/s / 46 ms a sector**.
 
 ### The 8088 instruction floor — what replaced "add 20–40%"
 
@@ -1279,10 +1306,10 @@ worth taking:
 | `gfxbench: FULLSCREEN in+out` | **the whole-screen repaint.** Part 1 calls it a "visible redraw", Part 5's entire budget table is organised around avoiding it, and no field set has ever put a number on it — because a package cannot reach one. `wm_fullscreen`'s exit is a `wm_paint_all`, and it is the ONE composition call legal from a window callback (below) | **seconds**, and it is method T for that reason. What is in it: the desktop dither, the drive zones, the dock, the menu bar and every visible window — one of which is this report, priced separately by `whole page of rows` |
 | `gfxbench: GFX_FILL 64x64 clipped` | **what §11.3's clip region costs a covered background window.** `WM_CLIP_SET+CLEAR` was measured; drawing *under* one never was. It sits next to its own unclipped row, so the gap is the answer | a little over the unclipped row plus the `SET+CLEAR` cell. Much more and `gfx_clip_run`'s re-entry is dearer than the region arithmetic it saves |
 | `gfxbench:` the whole **fullscreen block** | **whether a primitive costs what it costs wherever it is drawn.** Same code, same sandbox, different place on the glass, no chrome around it. The rows carry the same labels as their windowed twins so they diff by name | the primitives to be **boring** — landing on their twins. One that does not has found something position-dependent nobody believed was |
-| `sysbench: boot ticks` / `boot ms` | **how long the machine takes to boot** (§15.4) — the one thing this project could never measure, because it is over before a package can run. On a floppy machine it is mostly the 125-sector kernel read at 238 ms a sector, so it is what §18.91's batching and §18.93's parameter table have to answer to | a number at last. Resolution is one tick, 54.925 ms, which on a boot measured in seconds is quantisation rather than noise |
+| `sysbench: boot ticks` / `boot ms` | **how long the machine takes to boot** (§15.4) — the one thing this project could never measure, because it is over before a package can run. On a floppy machine it is mostly the 125-sector kernel read, and Sets 17/18 took it from 39.88 s to **9.94 s** by fixing §18.91's `AL` bug in both transfer loops - so 238 ms a sector is the number this row was written against and NOT the one to expect now | a number at last. Resolution is one tick, 54.925 ms, which on a boot measured in seconds is quantisation rather than noise |
 | `gfxbench: GFX_LSTEP x8` vs **`GFX_LSTEPV x8`** | **§5.6.8's batching, which was argued from §5.7's floor and never measured.** The two rows draw the identical eight pixels and differ only in arriving eight times or once | it already contradicted its own prediction: **118** in instructions, not the ~800 the floor implies, because `gfx_lstep` is not a rect primitive and its arrival is a far-call cell rather than `vga_rect_setup`. Expect higher than 118 on iron — far-call cells are 46.7 µs for ~7 instructions — but §5.6.8's own field figures imply **356**, and nothing reconciles that yet. **This is the row most likely to find something** |
 | `gfxbench:` the four **`GFX_LINE`** rows | **§5.6.6's dilated-line optimisation, in microseconds.** The instruction answer is already in (below); this is the duration. The two geometries are the same line transposed, 128 pixels each, so the pair checks itself | the two **thin** rows to match; `line shal fat/thin` near **300** (three walks, the control); `line steep fat/thin` near **156**, which is the claim |
-| `sysbench:` the **hard-disk block** | **§52's driver on real spinning MFM, which has never been measured** — and the first hard-disk twin of the floppy rows. Read-only by construction: it mounts, walks the FAT, reads one file and puts the volume back, because the disk it will run against is somebody's DOS 3.3 install (docs/FIELD-MACHINES.md) | anything at all. The floppy is 2,100 bytes/second and 238 ms a sector; whatever `hdd bytes/sec` says is the first number on the other side of that. `HDD FILE_DFREE` is the one to watch — the 9-sector FAT window (§18.8) has to page across a 41-sector FAT, which is what §18.8.1 was written against |
+| `sysbench:` the **hard-disk block** | **§52's driver on real spinning MFM, which has never been measured** — and the first hard-disk twin of the floppy rows. Read-only by construction: it mounts, walks the FAT, reads one file and puts the volume back, because the disk it will run against is somebody's DOS 3.3 install (docs/FIELD-MACHINES.md) | anything at all. The floppy is **7,457 bytes/second** post-Set-17 (2,100 before it, and that older pair is quoted all over this tree's history - check which side of the `AL` fix a figure comes from before comparing anything to it); whatever `hdd bytes/sec` says is the first number on the other side of that. `HDD FILE_DFREE` is the one to watch — the 9-sector FAT window (§18.8) has to page across a 41-sector FAT, which is what §18.8.1 was written against |
 
 None of them says anything on an emulator, and two say so loudly: under
 `-icount` both shift rows measure identically and the derived per-bit line
