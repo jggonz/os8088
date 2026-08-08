@@ -1521,3 +1521,52 @@ display of a 7.14 Hz row stream quantizes to and is therefore the floor.
   time in the world and the counters read perfect. It needed a cycle-accurate
   machine with a real Sound Blaster in it, which is `make marty`'s whole
   argument arriving as a bug.
+
+## 16. The scroll runs about three rows ahead of the music (PARTLY FIXED — one row was ours; the rest is not yet attributed)
+
+**Reported** off PCem with a Sound Blaster, playing `CLICK.MOD` (the metronome
+module — `make clicktest` — one note every two seconds, 125 ms rows) in
+fullscreen XT mode: *"I think its exactly three rows"*, and the offset is
+**completely consistent**, so the reporter timed their keypress *ahead* of the
+note rather than reacting to it. `TRKLOG.TXT` from that run carries seven
+`MARK` records, and the row on screen at each is **3 to 6 rows past the note
+that was sounding** (mean 4.9, which includes however far ahead they aimed).
+
+**What the log settles without needing the human at all.** `PLAY-CONS` — the
+interpolated display position minus the driver's last block report — must
+sweep `0 .. 2048` once per block, because a report names the last block
+boundary the card crossed. In that capture it sweeps **696 .. 2,982**: it
+rides ~800 bytes high for the whole run and its peak is 630 bytes *past the
+physical ceiling*. 800 bytes is **1.2 rows**, and it is ours.
+
+**Why the bench could not find it by waiting.** MartyPC at the same rate
+measures the phase at −0.06 rows — near perfect — because its worker never
+starves, so its phase is never displaced. §45.15.1's estimator had **no
+downward correction at all**: the only thing that ever pulled it back was its
+own rate error, at ~10 bytes a block. Displaced 900 bytes from the debugger it
+took **55 reports — 20.5 s of music** to come back, which is longer than the
+gap between starves on a busy machine, so a real machine accumulates
+displacements instead of shedding them. The field log has a ten-second hole in
+it, which is what a starve looks like from the inside. SPEC.md §45.15.3 closes
+a first-order loop on the report edge: **6 reports, 2.2 s.**
+
+**What is left, and the experiment that settles it.** ~1.2 rows of 3 is
+accounted for. The residual is either **PCem's own output buffering** or
+something between `[trk_consumed]` and the speaker that this instrument cannot
+see — it compares the display against the *driver's DMA counter*, so a clean
+reading does not exonerate anything downstream of that counter.
+
+The discriminator is the **sample rate**, and it needs no instruments:
+
+- A **guest-side** offset is a fixed number of BYTES. One DMA block is 2,048
+  bytes, which is **2.99 rows at the XT rate (5,500 Hz)** and **1.49 rows at
+  11,000 Hz** — the "exactly three rows" is exactly one block, which is why
+  this hypothesis is worth testing first.
+- **Host output buffering** is a fixed number of MILLISECONDS and does not
+  move with the rate at all.
+
+So: play `CLICK.MOD`, judge the offset in rows, press `X` to leave XT mode
+(which takes the rate to 11,000 Hz), judge it again. **Halved → still ours,
+and it is one DMA block. Unchanged → it is PCem's output path**, and the
+matching control is FM: Missile Command and Arkanoid are timing-tight on the
+same machine and read as matched, but they are OPL, not DSP.

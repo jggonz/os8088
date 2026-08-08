@@ -1828,6 +1828,28 @@ tui_playpos:
 .have:
     mov ax, [tui_lcons]             ; AX = what the model says, plus however
     add ax, [tui_sub]               ; far into this tick the frames say we are
+
+    mov bx, [trk_consumed]          ; --- the PHASE loop (SPEC.md 45.15.3) ---
+    cmp bx, [tui_pcon]              ; a REPORT EDGE is the only place the
+    je .phdone                      ; model's phase can be measured at all
+    mov cx, bx
+    sub cx, [tui_pcon]              ; exactly one block, or the poll was late
+    mov [tui_pcon], bx              ; (a jump of two is not a measurement of
+    cmp cx, TRK_HALF                ; phase - the model was right to run on)
+    jne .phdone
+    push ax
+    sub ax, bx                      ; AX = the model's offset above the report
+    mov cx, [tui_bpt]               ; ...against where it SHOULD be: the report
+    shr cx, 1                       ; is seen about half a tick after the IRQ
+    sub ax, cx                      ; that raised it, so that is the target
+    sar ax, 1                       ; ...and a QUARTER of the error, so the
+    sar ax, 1                       ; loop converges in a few blocks and never
+    mov cx, ax                      ; steps the model back far enough to be
+    pop ax                          ; seen (SPEC.md 45.15.3)
+    sub ax, cx
+    sub [tui_lcons], cx
+.phdone:
+
     mov bx, [trk_consumed]          ; has the REPORT overtaken the model?
     sub bx, ax                      ; (wrap-safe: the sign decides)
     js .bound                       ; no - and that is the normal case: a
@@ -3055,6 +3077,7 @@ tui_ab5:     db 'Any key closes', 0
     TRKW tui_bpt                    ; stream bytes per system tick
     TRKW tui_lcons                  ; the reported position it is anchored to
     TRKW tui_ct0                    ; ...and the tick that anchor landed on
+    TRKW tui_pcon                   ; the report the phase loop last measured on
     TRKW tui_play                   ; the last answer given: never goes back
     TRKW tui_sub                    ; the SUB-TICK offset (SPEC.md 45.15.2):
                                     ; how far the frames say we are into the

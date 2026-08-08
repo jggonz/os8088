@@ -513,7 +513,12 @@ Both are shaped by the machine, and neither decision in them is cosmetic:
   `TASKMGR.O88` is on it at all (§28.3 — that one is in `SYSTEM/`, because
   it is the kernel's and these are yours to double-click). With one floppy drive, a
   benchmark on a separate data floppy means a disk swap mid-session — and on
-  this machine a disk swap is a walk to another room and back (below). Boot
+  this machine a disk swap is a walk to another room and back (below).
+  **THAT IS A RULE FOR EVERY FIELD HARNESS AND NOT A FACT ABOUT THIS TARGET**,
+  which is how it gets missed: it is written down here, under `make field`, so
+  someone writing a *new* bench does not read it. `tests/npbench` was built as
+  a second disk and had to be rebuilt as a boot disk; docs/TESTING.md now
+  carries the same rule where a harness author will actually meet it. Boot
   either image and the four harnesses are one double-click away in Disk A,
   and the reports they save land back on the disk they came from.
   `os88disk.py` marks them visible + read-only (§19.6), so they list and
