@@ -732,13 +732,22 @@ make test SB16=1 TESTAPPS=build/trklog.img   # builds the disk on demand
 #      sets the clock back, so pressing it inside fullscreen changes nothing
 #      until the next F. Press it, then F.
 #
-# E    the WINDOWED pacing experiment, A -> B -> C -> D (SPEC.md 45.16.3 and
-#      45.16.4). Windowed-only - the bracket has a 54.6 Hz clock of its own
-#      and nothing to fix. The live mode is on screen as 'PACE A/B/C/D' beside
-#      the position, because what is being judged is what the line does over a
-#      minute and the key's own message has gone by then. C's bang is a bar
-#      full on the frame the burst ends and one cell shorter each frame after;
-#      D is the original one-cell sweep, kept beside it.
+# E    the WINDOWED pacing experiment, seven modes (SPEC.md 45.16.3/45.16.4).
+#      Windowed-only - the bracket has a 54.6 Hz clock of its own and nothing
+#      to fix. The live mode is named on screen ('PACE C bar'), because what
+#      is being judged is what the line does over a minute and the key's own
+#      message has gone by then.
+#        A  every frame - the shipped 110/165
+#        B  every other frame - an even 110 with a 220 to catch up
+#        C  burst, then a BAR full at the seam and decaying
+#        D  burst, then a one-cell SWEEP running the field
+#        E  burst, then stars OUT from the centre to the edges
+#        F  burst, then stars IN from the edges to the centre
+#        G  burst, ALL stars for the whole wait, then the letters revealed
+#           from the centre once the display is back in step
+#      In C..G the TEXT IS BLANKED for the whole hold - that is the point of
+#      them. A frozen row number beside a moving animation is a frozen row
+#      number, which is what the first two builds got wrong.
 #
 #      WHAT YOU WATCH IS THE BEAT RULER, not the hex row number. 16 cells,
 #      one per row, marker walking left to right, and it lands back on cell 0

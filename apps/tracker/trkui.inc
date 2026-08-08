@@ -2848,24 +2848,13 @@ tui_draw_dyn:
 .win:
     cmp byte [mp_playing], 0        ; windowed: a live position line on the
     je .out                         ; splash while something plays
-%ifdef TRKLOG
-    cmp byte [tlog_pace], TLOG_PACE_BURST
-    jb .nob                         ; C and D: rewrite [tui_arow] onto the
-    call tlog_burst                 ; burst grid (SPEC.md 45.16.4) - they
-%endif                              ; differ only in the hold's animation
-.nob:
+%ifndef TRKLOG
     mov al, [tui_arow]
     cmp al, [tui_lrow]
     jne .wupd
     mov al, [tui_apos]
     cmp al, [tui_lpos]
-    jne .wupd
-%ifdef TRKLOG
-    mov al, [tlog_sweep]            ; the row did not move - but the BANG is
-    cmp al, [tlog_lsweep]           ; drawn per FRAME, and it is its own field
-    jne .bang                       ; so nothing else is redrawn for it
-%endif
-    jmp .out
+    je .out
 .wupd:
     mov al, [tui_arow]
     mov [tui_lrow], al
@@ -2873,10 +2862,151 @@ tui_draw_dyn:
     mov [tui_lpos], al
     mov di, tui_pbuf
     mov bx, 120
-%ifdef TRKLOG
-    call tlog_pace_draw             ; which of the four is live, in the SAME
+    call tui_wpos
+    mov byte [di], 0
+    mov cx, 8
+    call tui_wfld
+%else
+; --- the bench readout: two fields, and the HOLD owns them both (45.16.4) ----
+;
+; TEXT is the label and the position; VISUAL is the beat ruler, or - while a
+; burst mode is holding - the animation that covers the hold. What makes the
+; hold read as punctuation rather than as a stall is that the TEXT IS NOT
+; THERE: a frozen row number beside a moving animation is a frozen row number,
+; which is the whole of what the field reported. So the text is blanked on the
+; first frame of a hold and put back on the first frame of the next burst,
+; twice a cycle rather than per frame.
+;
+; [tlog_tkey] is what the text field is currently SHOWING - 0 blank, 0FFh
+; normal, 1..TLOG_REVN a G reveal in progress - so each field redraws only
+; when its own content moved.
+    cmp byte [tlog_pace], TLOG_PACE_BURST
+    jb .nob
+    call tlog_burst                 ; the burst grid: rewrites [tui_arow] and
+.nob:                               ; steps [tlog_sweep]/[tlog_rev]
+    mov ah, 0xFF                    ; AH = the text state this frame wants
+    cmp byte [tlog_pace], TLOG_PACE_BURST
+    jb .tk
+    cmp byte [tlog_sweep], TLOG_NOBAR
+    jne .hold
+    cmp byte [tlog_pace], TLOG_PACE_HIDE
+    jne .tk                         ; C..F come straight back to the text;
+    mov al, [tlog_rev]              ; only G reveals it (the other four say
+    cmp al, TLOG_REVN               ; "then all disappear to the normal
+    jae .tk                         ; display", which is one frame)
+    mov ah, al
+    inc ah                          ; 1..TLOG_REVN, never 0 (that is BLANK)
+    jmp short .tk
+.hold:
+    xor ah, ah                      ; holding: no text at all
+.tk:
+    mov [tlog_wtk], ah
+    cmp ah, [tlog_tkey]
+    jne .wupd                       ; the state moved: redraw the text
+    or ah, ah
+    jz .vis                         ; blank stays blank however the row moves
+    mov al, [tui_arow]
+    cmp al, [tui_lrow]
+    jne .wupd
+    mov al, [tui_apos]
+    cmp al, [tui_lpos]
+    jne .wupd
+    jmp short .vis
+.wupd:
+    mov al, [tui_arow]
+    mov [tui_lrow], al
+    mov al, [tui_apos]
+    mov [tui_lpos], al
+    mov al, [tlog_wtk]
+    mov [tlog_tkey], al
+    mov di, tui_pbuf
+    or al, al
+    jnz .thave
+    mov cx, TLOG_TXTW               ; BLANK - the poof
+    call tlog_blank
+    jmp short .tdraw
+.thave:
+    mov bx, 120
+    call tlog_pace_draw             ; which of the seven is live, in the SAME
     add bx, TLOG_PACEW * 8          ; run as the position so it costs no call
+    call tui_wpos
+    mov al, [tlog_tkey]
+    cmp al, 0xFF
+    je .tdraw
+    mov di, tui_pbuf                ; a G reveal: star everything outside the
+    mov cx, TLOG_TXTW               ; middle, widening each frame
+    call tlog_mask
+.tdraw:
+    mov di, tui_pbuf
+    add di, TLOG_TXTW
+    mov byte [di], 0
+    mov bx, TLOG_TXTW * 8
+    mov cx, 8
+    call tui_wfld
+
+.vis:                               ; --- the VISUAL field ---
+    mov al, [tlog_sweep]            ; its key: the hold's frame, or the row
+    cmp byte [tlog_pace], TLOG_PACE_BURST
+    jae .vk
+    mov al, TLOG_NOBAR
+.vk:
+    cmp al, TLOG_NOBAR
+    jne .vgo                        ; holding: redraw when the frame moved
+    mov al, [tui_arow]              ; not holding: when the row moved...
+    and al, TLOG_RULEW - 1
+    or al, 0x40                     ; (40h/80h keep these out of the hold's
+    cmp byte [tlog_pace], TLOG_PACE_HIDE     ; 0..3Fh range)
+    jne .vgo
+    cmp byte [tlog_rev], TLOG_REVN
+    jae .vgo
+    mov al, [tlog_rev]              ; ...or while G is revealing
+    or al, 0x80
+.vgo:
+    cmp al, [tlog_lsweep]
+    je .out
+    mov [tlog_lsweep], al
+    mov di, tui_pbuf
+    test al, 0xC0
+    jz .vhold
+    call tlog_rule_draw
+    test al, 0x80
+    jz .vdraw
+    mov di, tui_pbuf
+    mov cx, TLOG_RULEW
+    mov al, [tlog_rev]
+    call tlog_mask
+    jmp short .vdraw
+.vhold:
+    call tlog_hold_draw
+.vdraw:
+    mov di, tui_pbuf
+    add di, TLOG_RULEW
+    mov byte [di], 0
+    mov bx, TLOG_RULEW * 8
+    mov cx, 8 + TLOG_TXTW * 8 + 8
+    call tui_wfld
 %endif
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; tui_wpos / tui_wfld - the windowed readout's two halves, factored out
+;
+; tui_wpos appends 'Pos xx  Row yy' at [DI] and leaves DI past it. tui_wfld
+; draws tui_pbuf as one opaque run (SPEC.md 6.1) at x = CX, width BX, on the
+; readout's row. They are separate because the bench build has TWO fields on
+; that row and they redraw on different things - the text on a row change, the
+; hold's animation on a frame - so neither may redraw for the other.
+; -----------------------------------------------------------------------------
+tui_wpos:
+    push ax
+    push si
     mov si, tui_s_posl
     call tui_scpy
     mov al, [tui_apos]
@@ -2885,55 +3015,22 @@ tui_draw_dyn:
     call tui_scpy
     mov al, [tui_arow]
     call tui_hexb
-    mov byte [di], 0
+    pop si
+    pop ax
+    ret
+
+tui_wfld:
+    push ax
+    push dx
+    push si
     mov si, tui_pbuf
-    mov cx, 8
     mov dx, [tui_ch]
     sub dx, TUI_WPOSY
     mov ah, TC_WBG
     mov al, TC_WTX
     call tui_rdout
-%ifdef TRKLOG
-    mov di, tui_pbuf                ; the BEAT RULER, its own field again: it
-    call tlog_rule_draw             ; changes on a ROW and the hold animation
-    mov byte [di], 0                ; changes on a FRAME, so neither redraws
-    mov si, tui_pbuf                ; for the other
-    mov bx, TLOG_RULEW * 8
-    mov cx, 8 + 120 + TLOG_PACEW * 8 + TLOG_SWEEPW * 8
-    mov dx, [tui_ch]
-    sub dx, TUI_WPOSY
-    mov ah, TC_WBG
-    mov al, TC_WTX
-    call tui_rdout
-.bang:
-    cmp byte [tlog_pace], TLOG_PACE_BURST
-    jb .out
-    mov al, [tlog_sweep]            ; the hold's animation is a field of its
-    mov [tlog_lsweep], al           ; own, beyond the position's, so a frame
-    mov di, tui_pbuf                ; in which only IT moved redraws
-    cmp byte [tlog_pace], TLOG_PACE_SWEEP   ; TLOG_SWEEPW cells and not the
-    je .swp                                 ; whole line (SPEC.md 45.16.4)
-    call tlog_bang_draw             ; C: the bar
-    jmp short .fld
-.swp:
-    call tlog_sweep_draw            ; D: the one-cell runner
-.fld:
-    mov byte [di], 0
-    mov si, tui_pbuf
-    mov bx, TLOG_SWEEPW * 8
-    mov cx, 8 + 120 + TLOG_PACEW * 8 + 8
-    mov dx, [tui_ch]
-    sub dx, TUI_WPOSY
-    mov ah, TC_WBG
-    mov al, TC_WTX
-    call tui_rdout
-%endif
-.out:
-    pop di
     pop si
     pop dx
-    pop cx
-    pop bx
     pop ax
     ret
 
