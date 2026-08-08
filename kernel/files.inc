@@ -1913,25 +1913,30 @@ fm_onclick_x:
     cmp cx, ax
     jge .sb_down
     call fm_thumb               ; track: page against the thumb top
-    jc .redraw                  ; no thumb: the track is inert
+    jnc .sb_track
+    jmp .quiet                  ; no thumb: the track is inert, and an inert
+                                ; click owes the status line at most
+.sb_track:
     sub ax, [fm_cy]             ; thumb top, content-relative
     cmp cx, ax
     jl .sb_pgup
     mov ax, [fm_fit]            ; at/below the thumb top: page down
-    add [fm_lscr], ax
-    jmp .sb_clamp
+    jmp short .sb_move
 .sb_pgup:
     mov ax, [fm_fit]
-    sub [fm_lscr], ax
-    jmp .sb_clamp
+    neg ax
+    jmp short .sb_move
 .sb_up:
-    dec word [fm_lscr]
-    jmp .sb_clamp
+    mov ax, -1
+    jmp short .sb_move
 .sb_down:
-    inc word [fm_lscr]
-.sb_clamp:
-    call fm_clamp_scroll
-    jmp .redraw
+    mov ax, 1
+.sb_move:                       ; SPEC.md 22.11: the view moves, and the
+    call fm_scroll_by           ; header, the buttons and the status line do
+    jc .redraw                  ; not. CF = 1 is 11.3's granularity refusal
+    jmp .quiet                  ; .quiet pays the status line if this click
+                                ; also retired a verdict (22.9), and nothing
+                                ; else - a scroll moves no selection
 
     ; --- the row area ---
 .rows:
@@ -2103,8 +2108,13 @@ fm_onkey_x:
                                 ; prompt already owns the line, so there is no
                                 ; verdict on it to retire
     call fm_stat_clear          ; ...otherwise this keystroke retires it
-                                ; (22.9). Every path below draws the line one
-                                ; way or another, so nothing is owed here
+    mov byte [fm_statowed], 0   ; (22.9), and the line is owed a redraw. Every
+    adc byte [fm_statowed], 0   ; path below used to draw it one way or
+                                ; another; the scroll keys do not any more
+                                ; (22.11), so the debt has to be recorded -
+                                ; the same byte, and the same question, that
+                                ; fm_onclick banks it in. MOV leaves CF alone,
+                                ; so the ADC is fm_stat_clear's answer
 
     cmp al, 13
     je .enter
@@ -2198,28 +2208,32 @@ fm_onkey_x:
 
 .scr_up:
     mov bx, si                  ; the scroll keys clamp against the live
-    call fm_layout              ; layout (fm_fit/fm_total) and move the
-    dec word [fm_lscr]          ; mirror; fm_clamp_scroll commits it
-    jmp .scr_clamp
+    call fm_layout              ; layout (fm_fit/fm_total); fm_scroll_by
+    mov ax, -1                  ; commits the mirror and draws what moved
+    jmp short .scr_move
 .scr_dn:
     mov bx, si
     call fm_layout
-    inc word [fm_lscr]
-    jmp .scr_clamp
+    mov ax, 1
+    jmp short .scr_move
 .scr_pgup:
     mov bx, si
     call fm_layout
     mov ax, [fm_fit]
-    sub [fm_lscr], ax
-    jmp .scr_clamp
+    neg ax
+    jmp short .scr_move
 .scr_pgdn:
     mov bx, si
     call fm_layout
     mov ax, [fm_fit]
-    add [fm_lscr], ax
-.scr_clamp:
-    call fm_clamp_scroll
-    jmp .redraw
+.scr_move:                      ; SPEC.md 22.11, the fm_onclick .sb_move path
+    call fm_scroll_by
+    jc .redraw
+    cmp byte [fm_statowed], 0   ; the keystroke may also have retired a
+    je .out                     ; verdict (22.9), which nothing above draws
+    call fm_status_only         ; now that the header band is left alone
+    jc .redraw
+    jmp short .out
 
 .enter:
     mov ax, [di+FS_SEL]
@@ -4284,6 +4298,39 @@ fm_draw_core:
     call KERNEL_SEG:cw_font_str
 .nobtns:
 
+    call fm_draw_rows           ; the row area, the selection and the bar -
+                                ; a proc of its own so a SCROLL can have them
+                                ; without the header and the two buttons,
+                                ; which a scroll never changes (SPEC.md 22.11)
+    call fm_draw_status         ; the status line is a proc of its own so a
+                                ; status-ONLY change - the loader's
+                                ; 'Loading...' and back again - can cost one
+                                ; line instead of a whole content repaint
+                                ; (fm_status_only below)
+
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_draw_rows - the row area, the selection and the scroll bar
+; in:  fm_layout already run for the acting window; the content under this
+;      band already erased; gfx lock held
+; out: nothing
+; clobbers: AX, BX, CX, DX, SI, DI, BP (fm_draw_core banked them)
+;
+; Everything fm_draw_core draws BETWEEN the buttons and the status line, and
+; nothing else. Split out for SPEC.md 22.11: a scroll changes no pixel of the
+; header, of either button or of the status line, so the paths that scroll
+; call this and leave those alone - and cannot drift from the full painter,
+; because there is only the one body.
+; -----------------------------------------------------------------------------
+fm_draw_rows:
     ; --- rows / grid + scroll bar (only when at least one row fits) ---
     cmp word [fm_fit], 0
     je .norows
@@ -4303,59 +4350,11 @@ fm_draw_core:
     jne .icons
 
     ; --- list rows ---
-    xor di, di                  ; DI = visible row index
-.lrow:
-    cmp di, [fm_shown]
-    jae .lsel
-    mov ax, FM_ROW_H            ; BP = row band top (absolute)
-    mul di
-    add ax, [fm_cy]
-    add ax, FM_ROW_Y0
-    mov bp, ax
-    mov ax, di
-    add ax, [fm_lscr]         ; AX = directory index
-
-    push ax
-    mov cx, [fm_cx]             ; 16x16 icon at x=4, row top
-    add cx, 4
-    mov dx, bp
-    call fm_draw_icon16
-    pop ax
-    call fm_stage_name          ; fm_name + [fm_fsize]
-
-    mov bx, [fm_nch]            ; truncate the name to the live budget
-    cmp bx, 16
-    jae .lname
-    mov byte [fm_name+bx], 0
-.lname:
-    add bp, 4                   ; text y: row top + 4 centers 8px glyphs
-    mov byte [gfx_color], CBLACK
-    mov cx, [fm_cx]
-    add cx, 24
-    mov dx, bp
-    mov si, fm_name
-    call KERNEL_SEG:cw_font_str ; name at x = 24
-
-    cmp word [fm_ftype], 2      ; a folder and the parent link have no
-    jae .lnosize                ; meaningful size (19), and a column of
-                                ; zeroes would only read as one
-    mov ax, [fm_fsize]
-    mov dx, [fm_fsizeh]
-    push di
-    mov di, fm_numbuf
-    call fm_ultoa_x             ; the full dword: BEVERLY.MOD is 116,085
-    pop di                      ; bytes, not 65,535
-    mov si, fm_numbuf
-    call KERNEL_SEG:cw_font_width ; AX = string width, px
-    mov cx, [fm_rgt]            ; right-align ending at cw-22 (clear of
-    sub cx, 20                  ; the scroll bar, SPEC.md 22)
-    sub cx, ax
-    mov dx, bp
-    call KERNEL_SEG:cw_font_str
-.lnosize:
-
-    inc di
-    jmp .lrow
+    xor ax, ax                  ; every visible row of them
+    mov [fm_rlo], ax
+    mov ax, [fm_shown]
+    mov [fm_rhi], ax
+    call fm_draw_lrows
 
 .lsel:
     mov ax, [fm_lsel]           ; the selection bar, drawn by the same proc a
@@ -4503,20 +4502,113 @@ fm_draw_core:
     call KERNEL_SEG:cw_gfx_frame
 .nothumb:
 .norows:
-    call fm_draw_status         ; the status line is a proc of its own so a
-                                ; status-ONLY change - the loader's
-                                ; 'Loading...' and back again - can cost one
-                                ; line instead of a whole content repaint
-                                ; (fm_status_only below)
-
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; fm_draw_lrows - the list rows [fm_rlo, fm_rhi), and nothing around them
+; in:  fm_layout already run; the band under those rows already erased; lock
+;      held
+; out: nothing
+; clobbers: AX, BX, CX, DX, SI, DI, BP
+;
+; The range is an argument because a scroll draws only the rows the blit
+; EXPOSED (SPEC.md 22.11), and the full painter draws 0..fm_shown. One loop
+; for both, so the two cannot disagree about what a row looks like.
+; -----------------------------------------------------------------------------
+fm_draw_lrows:
+    mov di, [fm_rlo]
+.next:
+    cmp di, [fm_rhi]
+    jae .out
+    call fm_draw_lrow
+    inc di
+    jmp short .next
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_draw_lrow - one list row: its icon, its name and its size
+; in:  DI = visible row index (below fm_shown); fm_layout already run; the
+;      row's band already erased; gfx lock held
+; out: nothing; DI preserved
+; clobbers: AX, BX, CX, DX, SI, BP
+; -----------------------------------------------------------------------------
+fm_draw_lrow:
+    push di
+    mov ax, FM_ROW_H            ; BP = row band top (absolute)
+    mul di
+    add ax, [fm_cy]
+    add ax, FM_ROW_Y0
+    mov bp, ax
+    mov ax, di
+    add ax, [fm_lscr]           ; AX = directory index
+
+    push ax
+    mov cx, [fm_cx]             ; 16x16 icon at x=4, row top
+    add cx, 4
+    mov dx, bp
+    call fm_draw_icon16
+    pop ax
+    call fm_stage_name          ; fm_name + [fm_fsize]
+
+    mov bx, [fm_nch]            ; truncate the name to the live budget
+    cmp bx, 16
+    jae .lname
+    mov byte [fm_name+bx], 0
+.lname:
+    add bp, 4                   ; text y: row top + 4 centers 8px glyphs
+    mov byte [gfx_color], CBLACK
+    mov cx, [fm_cx]
+    add cx, 24
+    mov dx, bp
+    mov si, fm_name
+    call KERNEL_SEG:cw_font_str ; name at x = 24
+
+    cmp word [fm_ftype], 2      ; a folder and the parent link have no
+    jae .lnosize                ; meaningful size (19), and a column of
+                                ; zeroes would only read as one
+    mov ax, [fm_fsize]
+    mov dx, [fm_fsizeh]
+    push di
+    mov di, fm_numbuf
+    call fm_ultoa_x             ; the full dword: BEVERLY.MOD is 116,085
+    pop di                      ; bytes, not 65,535
+    mov si, fm_numbuf
+    call KERNEL_SEG:cw_font_width ; AX = string width, px
+    mov cx, [fm_rgt]            ; right-align ending at cw-22 (clear of
+    sub cx, 20                  ; the scroll bar, SPEC.md 22)
+    sub cx, ax
+    mov dx, bp
+    call KERNEL_SEG:cw_font_str
+.lnosize:
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_draw_licon - visible list row DI's 16x16 icon, and nothing else
+; in:  DI = visible row index; fm_layout already run; gfx lock held
+; out: nothing; DI preserved (fm_draw_icon16 preserves everything)
+; clobbers: AX, CX, DX - its one caller is fm_scrollpaint's strip loop, whose
+;           only live register across it is the row counter
+;
+; The repair pass for the few columns a scroll blit cannot reach (SPEC.md
+; 22.11.1). Its caller erases the strip first and that is NOT belt and
+; braces: ico_core's white pass is the icon's own SILHOUETTE (ico_app16's is
+; a diamond), not its 16x16 cell, so an icon leaves every pixel the row
+; before it lit outside the new outline. Caught by a pixel diff against a
+; forced full repaint, which showed the old row's icon edge surviving in a
+; three-column stripe.
+; -----------------------------------------------------------------------------
+fm_draw_licon:
+    mov ax, FM_ROW_H
+    mul di                      ; (DX is clobbered here and set below)
+    add ax, [fm_by1]            ; = fm_cy + FM_ROW_Y0, which fm_scrollpaint
+    mov dx, ax                  ; has already worked out. DX = row band top
+    mov ax, di
+    add ax, [fm_lscr]           ; AX = directory index
+    mov cx, [fm_cx]
+    add cx, 4
+    jmp fm_draw_icon16          ; ...and its ret returns to the loop
 
 ; -----------------------------------------------------------------------------
 ; fm_sel_bar - XOR the selection highlight for ONE directory index
@@ -4658,6 +4750,386 @@ fm_status_only:
     pop cx
     pop bx
     pop ax
+    ret
+
+; =============================================================================
+; Scrolling (SPEC.md 22.11)
+;
+; Every one of the eight ways to scroll a Disk window - the two arrow cells,
+; the two halves of the track, and Up/Down/PgUp/PgDn - used to end in
+; fm_repaint: a white fill of the whole content and then every pixel of it
+; back again. That is a header, two framed buttons, a whole scroll bar and a
+; status line redrawn to move a list, and on a 4.77MHz machine it is the
+; content going blank and filling in a piece at a time. None of those four
+; things can change when the view scrolls.
+;
+; What DOES change is the rows - and mostly they only MOVE. Scrolling by d
+; rows leaves fit-d of them showing exactly the same names at a different y,
+; which is what gfx_scroll (SPEC.md 5.5) moves in one blit, so a click on the
+; down arrow letters ONE row instead of ten. Three tiers, cheapest first:
+;
+;   fm_scrollpaint  the list view moving by less than a windowful: one blit,
+;                   the rows it exposed, the two selection bands and the
+;                   thumb. Nothing else on the window is touched at all.
+;   fm_rows_only    the icon grid, and any jump longer than the view: the row
+;                   band is erased and redrawn, and the header, the buttons
+;                   and the status line are still left alone.
+;   fm_repaint      the fallback, when a clip region cuts the band - SPEC.md
+;                   11.3's granularity rule, exactly as fm_status_only takes
+;                   it: a fill clips per pixel and a glyph per whole cell, so
+;                   a cut band would come back BLANK rather than stale.
+;
+; And a scroll that hits an end stop now draws nothing whatever, where it
+; used to repaint the window to show the same pixels.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; fm_scroll_by - move one Disk window's view by a signed number of rows
+; in:  SI = window ptr, AX = signed row delta; fm_layout has run for this
+;      window; gfx lock held
+; out: CF = 0 the screen is current; CF = 1 the caller must fm_repaint.
+;      All registers preserved.
+;
+; The ONE entry the eight scroll paths share, so the clamp, the tier choice
+; and the write-back cannot drift apart between the mouse and the keyboard.
+; fm_clamp_scroll is still the only place the mirror reaches the state block;
+; what this adds is the delta the clamp ACTUALLY took, which is what the
+; drawing below is a function of - a PgDn two rows from the end moves two.
+; -----------------------------------------------------------------------------
+fm_scroll_by:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si                     ; the two tiers below clobber freely and bank
+    push di                     ; nothing: this is their only caller, so one
+    push bp                     ; prologue serves both (they are 14 bytes of
+                                ; .cold apiece otherwise, and the budget is
+                                ; measured in 512-byte rungs)
+    mov bx, [fm_lscr]           ; where the SCREEN stands
+    add [fm_lscr], ax
+    call fm_clamp_scroll        ; ...and where the window now does
+    mov ax, [fm_lscr]
+    sub ax, bx
+    mov [fm_sdlt], ax
+    jz .same                    ; an end stop: not one pixel changes, where
+                                ; this used to repaint the window whole
+    cmp byte [fm_lview], 0
+    jne .rows                   ; the grid is 22.11.2's exception
+    cwd                         ; |d|, the branchless way
+    xor ax, dx
+    sub ax, dx
+    cmp ax, [fm_fit]
+    jae .rows                   ; a jump of a windowful or more: every row is
+                                ; new, so there is nothing for a blit to move.
+                                ; fm_fit = 0 - no row area at all - lands here
+                                ; too, and fm_rows_only draws nothing for it,
+                                ; so it needs no test of its own
+    call fm_scrollpaint
+    jnc .done
+.rows:
+    call fm_rows_only
+    jmp short .done
+.same:
+    clc
+.done:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret                         ; POP does not touch flags: CF is still the
+                                ; answer
+
+; -----------------------------------------------------------------------------
+; fm_rows_only - erase and redraw the row band, and NOTHING around it
+; in:  fm_layout already run for the acting window; gfx lock held
+; out: CF = 0 drawn; CF = 1 refused - the caller must fm_repaint
+; clobbers: AX, BX, CX, DX, SI, DI, BP (fm_scroll_by banked them)
+;
+; The middle tier. It is fm_status_only's shape at the other end of the
+; window: one rect, tested WHOLE against any armed clip region (SPEC.md 11.3)
+; because the erase clips per pixel and the glyphs per cell, then filled and
+; redrawn. What it saves over fm_repaint is the header, both buttons and the
+; status line - about thirty glyph cells, and the flash of the whole content
+; going white to move a list.
+;
+; It does NOT re-run fm_layout: fm_clamp_scroll has just written the mirror
+; every one of these reads, and re-deriving the rest from an unchanged window
+; record would answer with what is already there. Same contract as
+; fm_draw_rows, fm_sel_bar and fm_thumb.
+; -----------------------------------------------------------------------------
+fm_rows_only:
+    cmp word [fm_fit], 0
+    je .done                    ; no row area: a scroll shows nowhere
+
+    mov ax, [fm_cx]             ; the row band: full content width (the bar
+    mov bx, [fm_cy]             ; is inside it and is redrawn with it), from
+    add bx, FM_ROW_Y0           ; the header's bottom to the status line's top
+    mov cx, [fm_rgt]
+    mov dx, [fm_cy]
+    add dx, [fm_listb]
+    dec dx
+    cmp ax, cx
+    jg .refuse                  ; degenerate content: nothing to draw into.
+                                ; The y span needs no test of its own - fit
+                                ; >= 1 puts fm_listb a row or more below 22
+    call KERNEL_SEG:cw_wm_clip_test
+    jc .refuse
+
+    mov byte [gfx_color], CWHITE
+    call KERNEL_SEG:cw_gfx_fill
+    call fm_draw_rows
+.done:
+    clc
+    ret
+.refuse:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_scrollpaint - move the list view with one blit (SPEC.md 22.11.1)
+; in:  fm_layout run and [fm_lscr] ALREADY the new position; [fm_sdlt] = the
+;      signed row delta taken, non-zero and smaller than [fm_fit]; gfx lock
+;      held
+; out: CF = 0 drawn; CF = 1 refused - the caller falls back
+; clobbers: AX, BX, CX, DX, SI, DI, BP (fm_scroll_by banked them)
+;
+; gfx_scroll wants byte columns, and a Disk window is not WF_SNAP - its
+; content origin is W_X+1, wherever the user dragged it. So the span is
+; rounded INWARD at both ends, which is the opposite of what Note Pad does
+; (SPEC.md 27.7.2) and for a reason: NP_MARGIN is 8 there, so rounding a text
+; band's x1 DOWN still lands inside the content, while a Disk row's icon
+; starts four pixels in and rounding down would take the blit outside the
+; window altogether - onto the frame, and past it onto whatever is to the
+; left. Rounding in leaves two strips this cannot move, and each is answered
+; rather than paid for:
+;
+;   left, up to 7px:  white margin, and at most three columns of the icon at
+;                     x+4. 22.11.1's strip pass erases those and re-icons the
+;                     rows, and only when the rounding really did reach them -
+;                     five window positions in eight need nothing at all.
+;   right, up to 7px: always white. The span stops LEFT of the scroll bar, so
+;                     the bar's frame, rules and arrows are never disturbed
+;                     and only the thumb is redrawn; and a list row's size
+;                     column ends at rgt-21, clear of everything the rounding
+;                     can leave behind.
+;
+; The selection is the one thing that spans both strips - its band runs the
+; full row width - so it comes OFF before the blit and back ON after, at the
+; new row. That is SPEC.md 22.2's two-band move with the blit in the middle,
+; and it needs no fixing up because XOR is its own inverse.
+; -----------------------------------------------------------------------------
+fm_scrollpaint:
+    ; --- the band the blit may move ---
+    mov ax, [fm_cx]
+    add ax, 7
+    and ax, 0xFFF8              ; x1, IN to a byte column
+    mov [fm_bx1], ax
+    mov ax, [fm_rgt]
+    sub ax, FM_SB_W-1           ; the scroll bar's left column...
+    and ax, 0xFFF8
+    dec ax                      ; ...and x2, stopping short of it. A window
+    mov [fm_bx2], ax            ; too narrow to hold a whole byte column
+                                ; needs no test of its own: it lands x1 > x2
+                                ; or x2 off the screen, and gfx_scroll's own
+                                ; contract refuses both
+    mov ax, [fm_cy]
+    add ax, FM_ROW_Y0
+    mov [fm_by1], ax
+    mov ax, [fm_fit]            ; whole rows only: a content height with a
+    mov cl, 4                   ; remainder leaves a sliver below the last
+    shl ax, cl                  ; row that no row painter would ever erase
+    add ax, [fm_by1]
+    dec ax
+    mov [fm_by2], ax
+
+    mov ax, [fm_cx]             ; the whole band, tested against an armed
+    mov bx, [fm_by1]            ; clip region (11.3) - the blit tests its own
+    mov cx, [fm_rgt]            ; rect, but the exposed rows below are wider
+    mov dx, [fm_by2]            ; than it and are a fill plus glyphs
+    call KERNEL_SEG:cw_wm_clip_test
+    jc .refuse
+
+    ; --- the selection comes off where it is now ---
+    mov ax, [fm_sdlt]
+    sub [fm_lscr], ax           ; ...so fm_sel_bar sees the OLD scroll
+    mov ax, [fm_lsel]
+    call fm_sel_bar
+    mov ax, [fm_sdlt]
+    add [fm_lscr], ax
+
+    ; --- and the rows move ---
+    mov si, ax
+    mov cl, 4
+    shl si, cl                  ; SI = dy = d * FM_ROW_H, sign and all
+    mov ax, [fm_bx1]
+    mov bx, [fm_by1]
+    mov cx, [fm_bx2]
+    mov dx, [fm_by2]
+    call KERNEL_SEG:cw_gfx_scroll
+    jc .refuse                  ; it refused: fm_repaint puts the selection
+                                ; back with everything else
+
+    ; --- which rows it exposed ---
+    mov ax, [fm_sdlt]
+    mov bx, [fm_fit]
+    or ax, ax
+    jl .expup
+    mov [fm_rhi], bx            ; scrolled DOWN: the last d rows are new
+    sub bx, ax
+    mov [fm_rlo], bx
+    jmp short .stripck
+.expup:
+    mov word [fm_rlo], 0        ; scrolled UP: the first |d| are
+    neg ax
+    mov [fm_rhi], ax
+
+    ; --- the columns the rounding put out of the blit's reach ---
+    ; Erased and re-iconed BEFORE the exposed band, so that band's own fill
+    ; and row painter cover the rows this skips.
+.stripck:
+    mov ax, [fm_cx]
+    add ax, 4                   ; the icon's left edge
+    cmp [fm_bx1], ax
+    jle .expfill                ; the blit reached it: nothing stale anywhere
+    mov ax, [fm_cx]
+    mov cx, [fm_bx1]
+    dec cx                      ; the strip, over the whole row band
+    mov bx, [fm_by1]
+    mov dx, [fm_by2]
+    mov byte [gfx_color], CWHITE
+    call KERNEL_SEG:cw_gfx_fill ; an icon does NOT erase what it lands on: it
+                                ; is drawn through a SILHOUETTE mask (the
+                                ; generic one is a diamond), so the pixels
+                                ; the old row's icon put outside the new
+                                ; one's outline survive a redraw
+    xor di, di
+.strip:
+    cmp di, [fm_fit]
+    jae .expfill
+    cmp di, [fm_rlo]
+    jb .stripdo
+    cmp di, [fm_rhi]
+    jb .stripnext               ; an exposed row is drawn whole below
+.stripdo:
+    call fm_draw_licon
+.stripnext:
+    inc di
+    jmp short .strip
+
+    ; --- and the rows it exposed, and only those ---
+.expfill:
+    mov cl, 4
+    mov ax, [fm_rlo]
+    shl ax, cl
+    add ax, [fm_by1]
+    mov bx, ax                  ; y1 = the first exposed row's top
+    mov ax, [fm_rhi]
+    shl ax, cl
+    add ax, [fm_by1]
+    dec ax
+    mov dx, ax                  ; y2 = the last one's bottom
+    mov ax, [fm_cx]
+    mov cx, [fm_rgt]
+    sub cx, FM_SB_W             ; the column left of the bar
+    mov byte [gfx_color], CWHITE
+    call KERNEL_SEG:cw_gfx_fill
+    call fm_draw_lrows
+
+.thumb:
+    call fm_sb_thumb            ; the only part of the bar a scroll moves
+    mov ax, [fm_lsel]           ; ...and the selection goes back on, at the
+    call fm_sel_bar             ; row it now sits in
+    clc
+    ret
+.refuse:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; fm_sb_thumb - move the scroll-bar thumb, and draw nothing else on the bar
+; in:  fm_layout run, [fm_lscr] the new scroll, [fm_sdlt] the delta that got
+;      it there; gfx lock held
+; out: nothing
+; clobbers: AX, BX, CX, DX - its one caller reaches it with nothing live
+;
+; The thumb's HEIGHT is fit*track/total, which no scroll changes - so a scroll
+; TRANSLATES it, and the frame, the two rules, the two arrow glyphs and all
+; of the track it did not cover are exactly where they were. Three calls
+; instead of the bar's sixteen.
+;
+; The new thumb is drawn BEFORE the strip it vacated is greyed, which is
+; SPEC.md 42.7.1's ordering: for the width of one fill the thumb is briefly
+; doubled, and a doubled thumb reads as movement where an absent one reads as
+; a blink. A step too small to move it draws nothing at all.
+; -----------------------------------------------------------------------------
+fm_sb_thumb:
+    call fm_thumb               ; where it goes ([fm_lscr] is already new)
+    jc .out                     ; no thumb: everything fits, so nothing moved
+    mov [fm_thnew], ax
+    mov [fm_thh], dx
+    mov ax, [fm_sdlt]
+    sub [fm_lscr], ax
+    call fm_thumb               ; ...and where it was. Its CF is deliberately
+    mov bx, [fm_sdlt]           ; not tested: fm_thumb refuses on fm_total
+    add [fm_lscr], bx           ; against fm_fit, and a scroll changes
+                                ; neither, so it cannot disagree with the
+                                ; call above - and the restore has spent the
+                                ; flags by here anyway
+    cmp ax, [fm_thnew]
+    je .out                     ; the track is short enough that this step
+                                ; does not move it: draw nothing
+
+    mov bx, ax                  ; BX/DX = the band it is leaving
+    mov dx, ax
+    add dx, [fm_thh]
+    dec dx
+    push ax                     ; AX = the old top, wanted after the fills
+
+    mov ax, [fm_rgt]            ; the new thumb: white body, black frame
+    sub ax, FM_SB_W-3           ; (= scroll-bar x1 + 2)
+    mov cx, [fm_rgt]
+    sub cx, 2
+    push bx
+    push dx
+    mov bx, [fm_thnew]
+    mov dx, bx
+    add dx, [fm_thh]
+    dec dx
+    mov byte [gfx_color], CWHITE
+    call KERNEL_SEG:cw_gfx_fill
+    mov byte [gfx_color], CBLACK
+    call KERNEL_SEG:cw_gfx_frame
+    pop dx
+    pop bx
+    pop ax
+
+    cmp ax, [fm_thnew]
+    jl .down
+    mov ax, [fm_thnew]          ; it moved UP: what it vacated is the strip
+    add ax, [fm_thh]            ; below the new one (= new bottom + 1)
+    cmp ax, bx
+    jle .grey                   ; disjoint: the whole old band is vacated
+    mov bx, ax
+    jmp short .grey
+.down:
+    mov ax, [fm_thnew]          ; it moved DOWN: the strip above it
+    dec ax
+    cmp ax, dx
+    jge .grey
+    mov dx, ax
+.grey:
+    cmp bx, dx
+    jg .out
+    mov ax, [fm_rgt]            ; the track, between the arrow-cell rules
+    sub ax, FM_SB_W-2           ; (= scroll-bar x1 + 1)
+    mov cx, [fm_rgt]
+    dec cx
+    call KERNEL_SEG:cw_gfx_fill_gray
+.out:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -5038,9 +5510,11 @@ fm_lnf:     resw 1              ; FS_N
 fm_lscr:    resw 1              ; FS_SCRL
 fm_lsel:    resw 1              ; FS_SEL
 fm_lldst:   resb 1              ; FS_LDST
-fm_statowed: resb 1             ; 1 = this click retired a verdict, so the
-                                ; status line owes a redraw the two selection
-                                ; bands do not provide (SPEC.md 22.9)
+fm_statowed: resb 1             ; 1 = this click or keystroke retired a
+                                ; verdict, so the status line owes a redraw
+                                ; that the cheap paths do not provide - the
+                                ; two selection bands (SPEC.md 22.9) and now
+                                ; a scroll, which draws no text at all (22.11)
 fm_cmdline: resb 1              ; 1 = the FMC_* just run changed the status
                                 ; LINE and nothing else on the window
 
@@ -5068,6 +5542,20 @@ fm_total:   resw 1              ; fm_layout: total rows
 fm_nch:     resw 1              ; fm_layout: list-view name chars that fit
 
 fm_shown:   resw 1              ; draw scratch: rows drawn this paint
+fm_rlo:     resw 1              ; draw scratch: the visible rows fm_draw_lrows
+fm_rhi:     resw 1              ; is to letter, [lo, hi) - every one of them
+                                ; for a full paint, the ones a blit EXPOSED
+                                ; for a scroll (SPEC.md 22.11)
+fm_sdlt:    resw 1              ; scroll scratch: the signed row delta the
+                                ; clamp actually took, which is what all of
+                                ; the drawing below it is a function of
+fm_bx1:     resw 1              ; scroll scratch: the blit band, rounded in
+fm_bx2:     resw 1              ; to byte columns and stopping short of the
+fm_by1:     resw 1              ; scroll bar; y covers whole rows only
+fm_by2:     resw 1
+fm_thnew:   resw 1              ; scroll scratch: where the thumb is going
+fm_thh:     resw 1              ; ...and its height, which a scroll cannot
+                                ; change (fm_sb_thumb)
 fm_fsize:   resw 1              ; fm_stage_name: entry size, bytes (lo word)
 fm_fsizeh:  resw 1              ; ...and its high word (SPEC.md 19)
 fm_ftype:   resw 1              ; fm_stage_name: SPEC.md 19 type word

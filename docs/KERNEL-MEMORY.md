@@ -6,9 +6,10 @@ same commit as any change that moves a number in it. SPEC.md §2 is the
 binding contract for the addresses; this is the reasoning behind them.
 
 Every figure below was measured against the shipped build on the day it was
-written — the guards by bisection, the module sizes by a marker pass, and the
-Task Manager's own rows by reading them off a running machine. The section at
-the end says how to re-measure each one. **Nothing here is derived from an
+written. The section sizes, the rungs and the per-module breakdown are
+**generated** now — `tools/kernsize.py`, which `make` runs — and the Task
+Manager's own rows were read off a running machine. The section at the end
+says how to re-measure what is left. **Nothing here is derived from an
 earlier edition of this file**; that is how it went three budget moves stale
 last time.
 
@@ -17,8 +18,11 @@ last time.
 ## The rule
 
 **The kernel is ONE contiguous span starting at linear 0x00600, and that
-includes its buffers.** The span is `KERN_BUDGET` bytes — 84KB today. It
-currently runs 0x00600 through 0x152FF, and the budget's ceiling is 0x15600.
+includes its buffers.** The budget is 88KB today; the span it holds currently
+runs 0x00600 through **0x157FF**, and the budget's ceiling is 0x16600 — so
+there are **seven 512-byte steps** left under it, which is move 12's granted
+headroom and not an invitation. `tools/kernsize.py`, below, is what says so,
+and `make` runs it on every build.
 
 Not the code and then some scratch elsewhere: *everything*. Code, read-only
 data, `.bss`, the cold segment, the FAT window, the directory and icon
@@ -169,11 +173,13 @@ with the bisect above, not inferred.
 **Recommend it; do not remove it unasked.** On a machine with no working
 mouse, taking it out means the desktop cannot be clicked at all.
 
-### The ten moves
+### The twelve moves
 
 `KERN_BUDGET` was 65,536 — the first 64KB above the BIOS data area, which is
-where the "one region" rule came from. It has moved ten times; the raises
-were each asked for and granted, and move 5 is the only one downward.
+where the "one region" rule came from. It has moved twelve times; the raises
+were each asked for and granted, and moves 5 and 11 are the two downward.
+The constant's own comment in `kernel/kernel.asm` is the long form of every
+row below, and it is the copy to trust if the two ever disagree.
 
 | | budget | bought |
 |---|---:|---|
@@ -188,6 +194,7 @@ were each asked for and granted, and move 5 is the only one downward.
 | 9 | 80,384 → **82,432** | the file modules into `.cold` (SPEC.md §2.6). The first raise bought for the OTHER guard, and it landed exactly on guard 5's ceiling — the last one possible until that ceiling moved |
 | 10 | 82,432 → **86,528** | **"Incoming QOL improvements"** — 4KB granted in ADVANCE, and the first move taken against the room SPEC.md §2.7 opened up. Terms below |
 | 11 | 86,528 → **86,016** | *nothing — this one gives back too.* SPEC.md §53.6.1's XMS desktop stash was removed (a snapshot cannot restore a desktop that moved while the bracket ran), and the 512-byte step it cost goes back with it rather than becoming slack. **It landed alongside §22.9's status-line work, which spent a step of its own**, so the footprint is back at 84,480 and the slack is 1,536 — one step UNDER the standard. That is the guard working rather than a fault in either change: the next feature has to ask |
+| 12 | 86,016 → **90,112** | 4KB asked for and granted **in advance**, on move 7's terms: SPEC.md §39.11's adapter switching took the spare to EXACTLY ZERO — 6 bytes left in the image rung and 155 in the cold one — and what the headroom buys immediately is §39.11.4 (blanking the card the machine has just left, so a two-monitor 5150 does not sit with a frozen desktop on the tube nobody is using) and §31.10's hiding of a Display page with nothing to choose between. Granted WITHOUT the usual "hand back what the optimisation pass saves", because the 128KB floor is to be met by a SECOND BUILD of this kernel rather than by holding one build to a figure both machines can live with. Until that exists this is still the only guard there is, so move 5's rule stands: headroom for ordinary growth, not an invitation to spend it |
 
 **`BOOT_RELOC` moved with the first five** — 0x0940 → 0x0AA0 → 0x0B80 →
 0x0C00 → **0x0D40** (linear 0x11000 → 0x12600 → 0x13400 → 0x13C00 →
@@ -212,9 +219,9 @@ Move 9 made that lopsided:
 
 | | headroom |
 |---|---:|
-| `KERN_CODE_MAX`, the segment | **17,168 B** for `.text` + `.bss` |
-| **`KERN_BUDGET`, the footprint** | **4,096 B** for the whole span |
-| guard 5, the smallest supported machine | **44,544 B** for the whole span |
+| `KERN_CODE_MAX`, the segment | **13,903 B** for `.text` + `.bss` |
+| **`KERN_BUDGET`, the footprint** | **3,584 B** for the whole span — seven steps |
+| guard 5, the smallest supported machine | **40,448 B** for the whole span |
 
 The budget is still the tighter of the three and is meant to be. What changed
 with SPEC.md §2.7 is that it is a *decision* again rather than a wall: below
@@ -249,6 +256,115 @@ out of the segment is not free**, and neither is moving code into `.cold`.
 
 ---
 
+## Accounting: a rung is the unit, and staying under one is not free
+
+**"It did not cross a rung" is not "it cost nothing".** It is the single
+easiest thing to get wrong when reporting a change, and it has been reported
+wrongly in this tree, so it gets its own section.
+
+A section's bytes are rounded up to a whole 512 before they enter the ladder,
+so most changes move `KERN_SIZE` by exactly **zero**. That is a true statement
+about the machine — no boot takes another byte of RAM, the heap starts in the
+same place, no figure a user can see moves — and it is a false statement about
+the cost. The bytes came out of the **slack in that rung**, and that slack is
+not the change's to keep: it is the space the *next* feature has before it
+pays a whole 512 for its first byte.
+
+So a change has two prices and both have to be named:
+
+| | what it is | who pays |
+|---|---|---|
+| **the bytes** | `.text` + `.bss` + `.cold` + `.lowbss` deltas, summed | the next feature, out of the rung's slack |
+| **the rung** | whether `KERN_SIZE` moved a step | the machine, in RAM, on every boot |
+
+Two failure modes follow, and they are opposite. Reporting only the rung says
+"free" about a change that quietly ate 400 of a rung's 512 bytes, and the
+author of the next 200-byte change then gets handed a 512-byte bill they did
+nothing to earn — the SPEC.md §14.1 case, where 80 bytes of Timer state met a
+rung with **12** left and cost a whole step. Reporting only the bytes hides
+the moment the machine's RAM actually changed, which is the thing
+`KERN_BUDGET` exists to make a decision rather than an accident.
+
+**Report both, always: the per-section jumps, their sum, and the rung state
+including how much slack is left in each.** The last part is the one that
+makes the next author's estimate possible. `tools/kernsize.py` produces
+exactly that, and `make` runs it.
+
+### `tools/kernsize.py` — the numbers, as a command
+
+Every figure in this document used to be produced by hand, either by
+bisecting a constant (the recipe above) or by injecting a `%warning` probe
+into a copy of `kernel.asm`. That is why it has gone stale three times: a
+number nobody can produce in one command stops being produced. The probe is
+in `kernel.asm` now, behind `%ifdef KERNSIZE`, and the tool reads it:
+
+```
+$ make                                     # ...or tools/kernsize.py
+kernsize: sections   text 47,094 +273  bss 3,889 +100  cold 20,355 +0  lowbss 7,748 +0  ovl 2,680 +0   (sum +373)
+kernsize: rungs      image 51,200 +512 (217 left, was 78)   cold 20,480 +0 (125 left, was 125)   low 9,216 +0 (444 left, was 444)
+kernsize: footprint  KERN_SIZE 85,504 of KERN_BUDGET 86,016 -> 512 spare (1 step), was 1,024  [+512]
+kernsize: segment    .text+.bss 50,983 of KERN_CODE_MAX 65,536 -> 14,553 left
+kernsize: ladder     KERNEL 0x0060  COLD 0x0ce0  FAT 0x11e0  LOW 0x1300  HEAP 0x1540 = 85.0 KB   (heap KB = int 12h - 85.0)
+kernsize: *** the image rung CROSSED: 99 -> 100 steps of 512 - the machine's RAM moved ***
+```
+
+That is a real run — SPEC.md §11.95's title-bar zoom, reported against the
+commit it was branched from — and it is this section's worked example twice
+over. The image rung had **78 bytes** left when the work started, so the
+first commit's 140 bytes crossed a step and cost the machine 512; the second
+commit's 186 landed inside the new rung's 512 and was reported as "free",
+which is the word this section exists to retire. What the second commit
+actually did was take 186 of the 403 bytes the crossing had just bought.
+
+Three things about it:
+
+- **It never fails the build.** The guards inside `kernel.asm` are what refuse
+  an overrun; a reporter that can break `make` is a reporter somebody deletes.
+- **The figures come out of NASM**, from `kernel.asm`'s own `KIMG_PARA` /
+  `COLD_PARA` / `LOW_PARA` equations, not from a Python copy of them. A second
+  opinion about how a rung rounds is a second opinion that can drift, and the
+  tool would be the last place anyone looked when it did.
+- **A knob build is measured as itself.** `make VIDEO=cga`, `DISKCNT=1` and
+  the rest pass their own `-D` flags through, because a report describing a
+  different binary from the one on disk is worse than none. The first thing
+  that turned up is worth keeping as a habit: **`DISKCNT=1` costs a whole
+  rung** — 87,040 against the shipped 86,528, so SPEC.md §18.94.1's field
+  kernel runs one step nearer the guard than the one you tested. It had
+  landed on `KERN_BUDGET` *exactly*, with 0 spare, before move 12 raised the
+  budget; measure it again rather than trusting either figure. `--bless`
+  refuses a knob build for the same reason: the baseline is the shipped
+  kernel.
+- **The baseline is in this file**, in the fenced block below, and
+  `tools/kernsize.py --bless` rewrites it. So the delta `make` prints is
+  "since this document last told the truth" — which means the document cannot
+  go stale quietly any more: an un-blessed change shows up as a non-zero delta
+  on every build until somebody either explains it or blesses it. Bless it in
+  the same commit as the change, and paste the report into the commit message.
+
+<!-- kernsize:begin -->
+```json
+{
+  "bss": 3897,
+  "budget": 90112,
+  "codemax": 65536,
+  "cold": 20839,
+  "coldpara": 1312,
+  "fatpara": 288,
+  "imgpara": 3232,
+  "kend": 5504,
+  "kseg": 96,
+  "ksize": 86528,
+  "lowbss": 7748,
+  "lowpara": 576,
+  "ovl": 2662,
+  "stk0": 1024,
+  "text": 47736
+}
+```
+<!-- kernsize:end -->
+
+---
+
 ## Where it goes
 
 Measured on the shipped build: the five section sizes by bisection, the rungs
@@ -256,19 +372,24 @@ derived from them exactly as `kernel/kernel.asm` derives them.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` 45,910 + `.bss` 3,769) | 50,176 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
-| cold code | 20,480 B | 20,087 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
+| image (`.text` 47,736 + `.bss` 3,897) | 51,712 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
+| cold code | 20,992 B | 20,839 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
 | FAT window | 4,608 B | nine of the mounted volume's FAT sectors (SPEC.md §18.8) — the whole FAT on any floppy, a sliding window on a hard disk |
 | `.lowbss` + task 0's stack | 9,216 B | 7,748 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 |
-| the boot overlay | 0 B | 2,680 bytes of code inside the FAT window, gone by the first mount |
-| **total** | **84,480 B** | of an 86,016-byte budget — **1,536 B spare**, one step UNDER the fifth move's standard: see move 11 |
+| the boot overlay | 0 B | 2,662 bytes of code inside the FAT window, gone by the first mount |
+| **total** | **86,528 B** | of a 90,112-byte budget — **3,584 B spare**, seven steps: move 12's granted headroom |
 
 Each rung is its contents rounded up to a whole 512 bytes, and the remainders
-are the only slack anywhere in the ladder: 497 bytes on the image, 393 on the
-cold segment, 444 on `.lowbss`. They are rounding artefacts, not reservations.
+are the only slack anywhere in the ladder: **79 bytes on the image, 153 on
+the cold segment, 444 on `.lowbss`**. They are rounding artefacts, not
+reservations — and per the accounting section above they are also the whole
+of what the next feature can spend without moving the machine's RAM. The
+image rung has **79 bytes** in it: the next feature of any size at all takes
+one of move 12's seven steps, and that is the number to quote when asking.
 
-The ladder lands on these segments: `KERNEL_SEG` 0x0060, `COLD_SEG` 0x0CA0,
-`FAT_SEG` 0x11A0, `LOW_SEG` 0x12C0, `HEAP_SEG` 0x1500.
+The ladder lands on these segments: `KERNEL_SEG` 0x0060, `COLD_SEG` 0x0D00,
+`FAT_SEG` 0x1220, `LOW_SEG` 0x1340, `HEAP_SEG` 0x1580. `tools/kernsize.py`
+prints that line, so it need never be derived by hand again.
 
 **`.lowbss` is where the rounding last bit**, and SPEC.md §14.1 is the worked
 example of the warning above it: the Timer's per-instance state grew 8 bytes
@@ -284,14 +405,14 @@ Everything above `KERN_END` is the claim heap, up to whatever int 12h
 reports. The arithmetic is exact and worth writing down, because every RAM
 figure in this project falls out of it:
 
-> **heap KB = what int 12h reports − 80.5**
+> **heap KB = what int 12h reports − 86.0**
 
-`KERN_END` is 5,152 paragraphs = 82,432 bytes = **exactly 80.5 KB**, and the
-heap starts there. It was a round 80.0 for the whole of moves 1..10 and the
-`.lowbss` step above is what ended that, which is worth noticing precisely
-because the half-kilobyte is easy to drop from a mental sum. Re-derive this
-after any change that moves `KERN_END`, which is any change at all that
-crosses a rung step.
+`KERN_END` is 5,504 paragraphs = 88,064 bytes = **exactly 86.0 KB**, and the
+heap starts there. It was a round 80.0 for the whole of moves 1..10, and a
+`.lowbss` step took it to the awkward 80.5 that is easy to drop from a mental
+sum. **Do not re-derive it by hand**: it moves with every rung crossing, and
+`tools/kernsize.py`'s `ladder` line prints both the segment and this
+subtraction, which is the point of the tool.
 
 ## What it actually takes to run
 
@@ -419,13 +540,13 @@ shoulder to shoulder, and the scale is coarse enough (4KB per pixel on a
 
 ## Each region in detail
 
-### The image — `.text` 45,910 B + `.bss` 3,769 B
+### The image — `.text` 47,736 B + `.bss` 3,897 B
 
 One flat binary at `KERNEL_SEG:0000`, assembled `-f bin` with no linker.
 `.bss` follows `.text` immediately and is uninitialised by definition, so it
 costs nothing on the floppy and everything in RAM. The ladder charges the
 pair **rounded up to a whole 512 bytes** (see the alignment invariant below)
-— 50,176 B, so 497 bytes of the rung are rounding remainder.
+— 51,712 B, so 79 bytes of the rung are rounding remainder.
 
 **The file on disk runs past that rung**, and the gap is not padding for its
 own sake — it is where the cold segment and then the boot overlay live.
@@ -453,8 +574,8 @@ sizes are not terms in their own `start=`, so there is nothing to converge.
 section used to say. There was a period after `.fartext` was retired
 (SPEC.md §33) when it was true — when "cold code is ordinary code" and there
 was nowhere to put a module that was too cold to be worth the space. That
-stopped being true with SPEC.md §2.6: `.cold` holds 20,087 bytes today, and
-`.ovl` another 2,680 that cost nothing at all. Both have their own sections
+stopped being true with SPEC.md §2.6: `.cold` holds **20,839** bytes today,
+and `.ovl` another 2,662 that cost nothing at all. Both have their own sections
 below. What has *not* changed is the warning that went with it: neither
 mechanism buys a byte of footprint, so neither is a way to make the kernel
 smaller.
@@ -652,95 +773,116 @@ package calls into empty memory.
 
 ## Where the code goes
 
-65,997 bytes of kernel code — `.text` 45,910 plus `.cold` 20,087 — module by
-module. Measured by bracketing every `%include` with a bare label in each
-section and reading the differences back; bare labels emit nothing, so the
-measurement does not perturb what it measures. The module rows sum to the
-section totals exactly, which is the check that the attribution is complete.
+Every byte of `.text` and `.cold`, attributed to the file that emitted it.
+**Both tables below are generated** — `tools/kernsize.py --modules`, blessed
+in by `--bless` — by bracketing every `%include` with a bare label in each
+section and reading the differences back.
 
-Three results are worth knowing before you go looking:
+Bare labels emit nothing, and the tool **proves** that rather than asserting
+it: the markers go into a temporary copy, `kernel/kernel.asm` is never
+written to, and it assembles both the plain and the instrumented source and
+refuses to report a single number unless the two binaries are byte for byte
+identical. A measurement that can perturb what it measures is not one. The
+module rows sum to the section totals, which is the check that the
+attribution is complete — and `kernel.asm`'s own row is the **residual**, so
+anything the pass failed to attribute lands there in plain sight instead of
+disappearing.
 
-- **The file system is 37.2% of the kernel.** `disk` + `diskw` + `files` +
-  `filecp` + `fdlg` + `loader` + `assoc` come to 24,548 bytes, nearly twice
-  the whole window system and its furniture. FAT12 is not a small thing to
-  implement twice (read and write), and the Disk window is the largest single
-  module in the tree by a wide margin.
-- **30% of the kernel's code is not in the kernel's segment, and it is now
-  exactly the file modules and the Control Panel.** Those six are 20,087 of
-  20,087 cold bytes — `fsx`'s XMS desktop stash used to be a seventh at 190,
-  and SPEC.md §53.6.1 removed it. That is what bought `KERN_CODE_MAX` its
-  headroom, and it bought the footprint nothing.
-- **The three built-in apps are 2.1%.** About, Timer and Bounce cost 1,376
-  bytes together — moving Note Pad out to a package (SPEC.md §27) was worth
-  ~1.4KB on its own, which is more than all three of these.
+Three results are worth knowing before you go looking. The figures for them
+are in the tables and deliberately not repeated here: a number stated twice
+is a number that goes stale once, which is how this section came to be
+generated in the first place.
 
+- **The file system is the largest theme by a wide margin** — bigger than the
+  whole window system and its furniture put together. FAT12 is not a small
+  thing to implement twice (read and write), and the Disk window is the
+  largest single module in the tree.
+- **Nearly a third of the kernel's code is not in the kernel's segment, and
+  it is exactly the file modules and the Control Panel.** Six modules hold
+  every byte of `.cold` between them; `fsx.inc` was a seventh at 190 bytes
+  until SPEC.md §53.6.1 removed its XMS desktop stash. That is what bought
+  `KERN_CODE_MAX` its headroom, and it bought the footprint nothing.
+- **The three built-in kinds are about 2%.** About, Timer and Bounce together
+  cost less than moving Note Pad out to a package (SPEC.md §27) saved on its
+  own.
+
+<!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 24,548 | 37.2% |
-| the window system and its furniture | 12,453 | 18.9% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,484 | 14.4% |
-| drawing: adapters, primitives, glyphs, icons | 9,471 | 14.4% |
-| the kernel proper: API table, heap, scheduler, events | 4,853 | 7.4% |
-| the Control Panel | 3,812 | 5.8% |
-| the three built-in kinds | 1,376 | 2.1% |
+| the file system, end to end | 24,824 | 36.2% |
+| the window system and its furniture | 13,484 | 19.7% |
+| drawing: adapters, primitives, glyphs, icons | 9,866 | 14.4% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,500 | 13.9% |
+| the kernel proper: API table, heap, scheduler, events | 5,101 | 7.4% |
+| the Control Panel | 4,424 | 6.5% |
+| the three built-in kinds | 1,376 | 2.0% |
+| **total** | **68,575** | |
+<!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
-| `files.inc` — the Disk window (§22) | 821 | 6,272 | **7,093** | 319 | — |
-| `diskw.inc` — the FAT write path (§18.4–18.6) | 20 | 4,341 | **4,361** | 137 | — |
-| `wm.inc` — the window manager (§11) | 4,209 | — | **4,209** | 523 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 3,975 | — | **3,975** | 199 | 3,584 |
-| `ctrl.inc` — the Control Panel (§31) | 714 | 3,098 | **3,812** | — | — |
+| `files.inc` — the Disk window (§22) | 806 | 6,420 | **7,226** | 319 | — |
+| `wm.inc` — the window manager (§11) | 4,445 | — | **4,445** | 619 | — |
+| `ctrl.inc` — the Control Panel (§31) | 842 | 3,582 | **4,424** | — | — |
+| `diskw.inc` — the FAT write path (§18.4–18.6) | 20 | 4,380 | **4,400** | 137 | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 3,992 | — | **3,992** | 199 | 3,584 |
+| `fdlg.inc` — the Standard File dialog (§38) | 130 | 3,580 | **3,710** | 98 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 3,668 | — | **3,668** | 118 | — |
-| `fdlg.inc` — the Standard File dialog (§38) | 124 | 3,499 | **3,623** | 97 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 2,989 | — | **2,989** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,619 | — | **2,619** | 43 | — |
-| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,450 | — | **2,450** | 240 | — |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,193 | — | **2,193** | 32 | — |
+| `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,472 | — | **2,472** | 246 | — |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,333 | — | **2,333** | 36 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,127 | **2,127** | 135 | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 1,932 | — | **1,932** | 93 | 84 |
+| `menu.inc` — the menu bar and pull-downs (§12) | 1,965 | — | **1,965** | 96 | 84 |
+| `instance.inc` — instances and the built-in kinds (§29) | 1,819 | — | **1,819** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
-| `instance.inc` — instances and the built-in kinds (§29) | 1,684 | — | **1,684** | 661 | — |
 | `vgabb.inc` — the software renderer / back buffer (§32, §39.5) | 1,649 | — | **1,649** | 27 | — |
 | `memory.inc` — the claim heap (§50) | 1,573 | — | **1,573** | 10 | 256 |
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
 | `icons.inc` — the icon renderer (§10) | 1,312 | — | **1,312** | 34 | — |
-| `snd.inc` — the sound layer (§34) | 1,201 | — | **1,201** | 299 | — |
+| `snd.inc` — the sound layer (§34) | 1,195 | — | **1,195** | 300 | — |
 | `font.inc` — the 8x8 text renderers (§6) | 1,155 | — | **1,155** | 17 | 768 |
+| `sched.inc` — pre-emptive scheduling (§7–8) | 1,088 | — | **1,088** | 168 | 2,816 |
 | `xmem.inc` — memory above 1MB (§41.4–41.5) | 1,040 | — | **1,040** | 124 | — |
 | `splash.inc` — the boot splash (§15) | 961 | — | **961** | — | — |
-| `sched.inc` — pre-emptive scheduling (§7–8) | 921 | — | **921** | 164 | 2,816 |
-| `desk.inc` — the desktop and volume zones (§14/§26.1) | 882 | — | **882** | 16 | — |
-| `fsx.inc` — fullscreen exclusive (§53) | 847 | — | **847** | 9 | — |
+| `desk.inc` — the desktop and volume zones (§14/§26.1) | 912 | — | **912** | 16 | — |
+| `fsx.inc` — fullscreen exclusive (§53) | 888 | — | **888** | 9 | — |
 | `loader.inc` — the package loader (§21) | — | 750 | **750** | 58 | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 726 | — | **726** | — | — |
-| `dock.inc` — the dock (§30) | 513 | — | **513** | 29 | — |
+| `dock.inc` — the dock (§30) | 607 | — | **607** | 30 | — |
+| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 395 | — | **395** | — | — |
+| `fprog.inc` — the file-operation progress widget (§12.8) | 322 | — | **322** | — | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 134 | — | **134** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,225 | — | **2,225** | — | — |
-| **total** | **45,910** | **20,087** | **65,997** | **3,769** | **7,748** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,306 | — | **2,306** | — | — |
+| **total** | **47,736** | **20,839** | **68,575** | **3,897** | **7,748** |
 <!-- END generated table -->
 
 ### Reading it
 
-A few rows say something that is not obvious from the size alone.
+A few rows say something that is not obvious from the size alone. The
+figures are the table's; what is here is the reason for them, so a row that
+moves does not drag a paragraph out of date with it.
 
-- **`files.inc` has 821 bytes left in `.text` and 6,298 cold.** What stayed
-  is data: the window template, the menu sets, every string and error table,
-  and the two command-dispatch tables. Cold code reads all of it through DS
-  (SPEC.md §2.6), so the split is code/data and nothing else. `diskw.inc`
-  keeps 20 bytes; `filecp.inc` and `loader.inc` keep none at all.
+- **What `files.inc` keeps in `.text` is DATA, not code.** What stayed
+  is the window template, the menu sets, every string and error table, and
+  the two command-dispatch tables. Cold code reads all of it through DS
+  (SPEC.md §2.6), so the split is code/data and nothing else — which is why
+  `diskw.inc` keeps 20 bytes and `filecp.inc` and `loader.inc` keep none at
+  all.
 - **`clock.inc` is four clocks, and more than half of it boots away.** Each
   rung of SPEC.md §37.90's ladder is a different chip with a different
   register layout. Only one can ever run on a machine and there is no way to
   know which until the probe has walked them, so none of it can be *loadable*
   the way the sound tiers are — but the walking happens once, so all four
-  probe-and-read halves are in the boot overlay. The 1,794 bytes here are the
-  four writers (the Control Panel can set the clock all session), the
+  probe-and-read halves are in the boot overlay. What is left in `.text` is
+  the four writers (the Control Panel can set the clock all session), the
   software calendar the tick advances, and the formatters.
-- **`kernel.asm`'s 2,225 bytes are almost entirely tables of stubs.** The API
+- **`kernel.asm`'s row is almost entirely tables of stubs**, and it is a
+  RESIDUAL: whatever the per-module pass did not attribute lands there, so it
+  is the row to look at first if a total ever looks wrong. The API
   jump table, its X and N stubs, and now 91 `cw_*` shims plus 42 resident
   thunks for the cold segment. That is the price of a package living in its
   own segment (SPEC.md §20.1) and of code living outside the kernel's, and
@@ -766,27 +908,41 @@ A few rows say something that is not obvious from the size alone.
 
 ### How to re-measure this
 
-The table is generated, not maintained by hand. Bracket every `%include` in
-`kernel/kernel.asm` with a bare label in `.text`, `.cold`, `.bss` and
-`.lowbss`, append a `dw` of every label at the very end of `.text`, assemble
-with `-l`, and read the values out of the listing's hex column. Two things
-make it exact:
+    tools/kernsize.py --modules          # look
+    tools/kernsize.py --bless            # ...and write it back into this file
 
-1. **Bare labels emit no bytes**, so every offset before the appended table is
-   identical to the shipped build.
-2. **The `dw` table goes at the end of `.text`**, the only place that can grow
-   without moving anything being measured.
+That is the whole recipe now; what follows is how it works, for whoever has
+to change it. The tool brackets every `%include` in a **temporary copy** of
+`kernel/kernel.asm` with a bare label in each of `.text`, `.bss`, `.lowbss`,
+`.cold` and `.ovl`, and emits the differences through `%assign` + `%warning`
+at the end of the file, where every label it names already exists. Four
+things make it exact:
 
-The module deltas must sum to `KTEXT_SIZE` / `COLD_SIZE` / `KBSS_SIZE` /
-`KLOW_SIZE`; the remainder against `KTEXT_SIZE` is `kernel.asm`'s own. If they
-do not sum, the attribution is wrong and the table is fiction.
+1. **Bare labels emit no bytes**, so no offset moves — and the tool does not
+   take that on trust: it assembles the plain source and the instrumented one
+   and **refuses to report unless the two binaries are identical**. Nothing is
+   ever written to `kernel/kernel.asm`.
+2. **The marker block ends in `section .text`.** Every `%include` in
+   `kernel.asm` sits at `.text` scope and every module is required to switch
+   back before it ends (SPEC.md §4), so the marker has to hand back what it
+   was given or the module after it starts in the wrong section.
+3. **The module deltas must sum to the section totals**, and the table's
+   total row is those totals rather than a sum of its own rows — so a gap
+   shows up as an implausible `kernel.asm` residual instead of quietly
+   vanishing.
+4. **Descriptions come from the table itself**, not from the tool, so the
+   prose half of each row survives regeneration. A module the table has never
+   seen is rendered **(undescribed)** and that placeholder is deliberately
+   never read back as a description: write one.
 
-For per-routine detail, take each label's address from the same listing — a
-routine's size is the distance to the next label — and attribute by **address
-range**, not by the listing's `<1>` include markers, because macro expansions
-are marked at include depth too.
+The theme grouping is a judgement, so it lives in `THEMES` in the tool rather
+than in this file. A module that is in no theme stops the report and names
+itself.
 
-Both are throwaway; nothing in the tree needs to carry them.
+For per-routine detail there is still no tool: take each label's address from
+a `-l` listing — a routine's size is the distance to the next label — and
+attribute by **address range**, not by the listing's `<1>` include markers,
+because macro expansions are marked at include depth too.
 
 ---
 
@@ -967,15 +1123,11 @@ being steered by was the *footprint*. Today the ladder is derived —
 `COLD_PARA` is the size rounded to 512 with no slack at all — and the segment
 was the guard with no room. Nothing is copied and nothing is reserved.
 
-| tenant | bytes | |
-|---|---:|---|
-| `files.inc` | 6,298 | the Disk window (§22) |
-| `diskw.inc` | 4,341 | the FAT write path (§18.4) |
-| `fdlg.inc` | 3,499 | the Standard File dialog (§38) |
-| `ctrl.inc` | 3,098 | the Control Panel (§31) |
-| `filecp.inc` | 2,127 | Cut/Copy/Paste (§22.3) |
-| `loader.inc` | 735 | the package loader (§21) |
-| **total** | **20,087** | of a 20,480-byte rung |
+The six tenants are `files`, `diskw`, `fdlg`, `ctrl`, `filecp` and `loader`,
+and **their sizes are the `.cold` column of the generated table in "Where the
+code goes"** — stated there and nowhere else, because this table used to
+restate them and was 268 bytes and one missing module out of date by the time
+anybody noticed. `tools/kernsize.py` prints the rung and its remaining slack.
 
 `fsx.inc` was a seventh tenant at 190 bytes — SPEC.md §53.6.1's XMS desktop
 stash, the one cold module that was not part of the file system or the

@@ -210,6 +210,14 @@ $(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) tools/os88ovlchk.py
 	@python3 tools/os88ovlchk.py
 	$(NASM) -f bin -w+error -I kernel/ -I $(BUILD)/ $(VIDDEF) -o $@ $(KERNEL_SRC)
 	@echo "kernel: $(call FILESIZE,$@) bytes (image rung + boot overlay)"
+# What that cost, per section and in 512-byte rungs, against the baseline in
+# docs/KERNEL-MEMORY.md. A REPORT and never a gate: the guards inside
+# kernel.asm are what refuse an overrun, and this says how close you came and
+# how much of each rung's slack is left for the next feature. It costs one
+# extra assembly of the kernel, which is why it is not folded into the line
+# above: -w+error would turn its %warning into an error, and relaxing that
+# for every build would silence a %warning somebody meant as an alarm.
+	@python3 tools/kernsize.py $(VIDDEF) || true
 ifneq ($(VIDDEF),)
 	@echo "  *** VIDEO=$(VIDEO) RTC=$(RTC) DISKCNT=$(DISKCNT) FLOPPY1=$(FLOPPY1): kernel is ***"
 	@echo "  *** BUILT WITH A KNOB - a forced probe and/or disk counters.   ***"
@@ -1445,9 +1453,11 @@ marty: $(IMG360)
 	@echo "       python3 tools/os88marty.py 127.0.0.1:9001 verify"
 	@echo ""
 	@echo "       machines: os8088_5150_cga (default), _herc, _cga_gla, _sb,"
-	@echo "                 _sbonly, and os8088_xt_vga"
+	@echo "                 _sbonly, os8088_xt_vga and _xt_vga_sb"
 	@echo "       ..._sb has an AdLib AND a Sound Blaster, _sbonly has the DSP"
-	@echo "       and NOTHING at 388h - the SPEC.md 51.3.1 pair; add"
+	@echo "       and NOTHING at 388h - the SPEC.md 51.3.1 pair; _xt_vga_sb is"
+	@echo "       the one to run with --turbo (7.16MHz, the fastest MartyPC has;"
+	@echo "       the CGA panics there, so a turbo machine is a VGA one); add"
 	@echo "       MARTYPC_WAV=/tmp/cap for one wav per source (sndcheck.py reads them)"
 
 # The far end of the range, both carrying an SB16 on the ISA bus:
