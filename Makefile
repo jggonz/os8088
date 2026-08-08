@@ -163,7 +163,8 @@ KERNEL_INC := $(wildcard kernel/*.inc)
 
 .PHONY: all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
-        bench field stackprobe trklog clicktest marty comscan checkdocs clean
+        bench field stackprobe trklog clicktest marty comscan checkdocs clean \
+        clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
 # below). The testing apps are on-demand only: `make bench`.
@@ -1506,5 +1507,19 @@ pentium: $(IMG) $(APPSIMG)
 # released image and get the same bytes - it just no longer has a make target
 # guarding it.
 
+# `clean` SPARES build/martypc, and that is deliberate. MartyPC is an
+# INSTRUMENT, not an output of this source tree: it is pinned to an upstream
+# commit (tools/martypc/UPSTREAM), nothing in this repo changes what it
+# builds, and rebuilding it is a several-minute cargo build. A `clean` that
+# threw it away made the DEFAULT test target expensive to get back, which is
+# the wrong incentive when CLAUDE.md's rule is "build it at the START of a
+# session". `clean-marty` is the escape hatch, and it is what re-pinning
+# wants.
 clean:
-	rm -rf $(BUILD)
+	find $(BUILD) -mindepth 1 -maxdepth 1 ! -name martypc -exec rm -rf {} + \
+		2>/dev/null || true
+
+clean-marty:
+	rm -rf $(BUILD)/martypc
+
+distclean: clean clean-marty
