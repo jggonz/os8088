@@ -20186,11 +20186,19 @@ a Sound Blaster, against the two modules on the bench disk:
 | `CLICK.MOD` — one sparse channel | 8.00 | **16.8** | 48% |
 | `BEVERLY.MOD` — four channels of samples | 7.14 | **6.0** | **0%** |
 
-**The mixer eats the drawing, and on a real module it wins.** At 6.0 frames a
-second against 7.14 rows, the display cannot show every row *at all*, let
-alone run ahead of one — so C and D never complete a burst, never reach a
-hold, and there is no bang and no sweep to look at. `[tlog_drow]` climbs to
+**The mixer eats the drawing, and on a real module it wins.** Measured on the
+same machine: on Beverly the worker is **mixing 65% of wall time**, and the
+5.8 frames a second that leaves is *fewer than the 7.14 rows the music has*.
+The display cannot show every row at all, let alone run ahead of one — so a
+burst mode never completes a burst, never reaches a hold, and there is
+nothing to see of whatever was going to cover it. `[tlog_drow]` climbs to
 `base+6` and the music has already crossed into the next group.
+
+**That is what an animation is for, as an instrument.** The same starvation
+was there when the readout was a hex row counter and it read as *the numbers
+are a bit uneven*; the moment the wait carried a moving shape it read as
+*dropping frames*, which is exactly what it is. A number hides a missing
+frame and a moving object cannot.
 
 Three things follow. **The pacing modes are judged on `CLICK.MOD`**, which is
 what it is for: a metronome whose mixing is nearly free, so the frame clock
