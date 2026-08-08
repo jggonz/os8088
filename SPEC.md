@@ -19655,6 +19655,43 @@ is the opposite trade from everything else in §45.15. And a hold frame
 redraws the bar's ten cells even though the row did not move — the burst
 itself, which is the part being judged, pays nothing.
 
+**`D` is the sweep, kept beside the bang rather than replaced by it.** It is
+the quieter of the two — it says *still going* where the bang says *here is
+the seam* — and on a module whose holds are long the bang has decayed to
+nothing while the sweep keeps moving. Which reads better is the same species
+of question as A against B, so it gets the same answer: both stay, `E` cycles
+A → B → C → D, and the live one is named on screen. They share `tlog_burst`
+and one counter (`[tlog_sweep]`, frames since the burst ended): C draws
+`TLOG_BARW` minus it, D draws it modulo `TLOG_BARW`, and nothing in the burst
+machinery knows which mode is live.
+
+#### 45.16.5 …and on a real module the windowed frame rate is BELOW the row rate
+
+Everything in §45.16.2 through §45.16.4 is arithmetic about a 55 ms frame
+against a 125 ms row. Measured windowed on a cycle-accurate 4.77MHz 8088 with
+a Sound Blaster, against the two modules on the bench disk:
+
+| module | rows/s | windowed frames/s | frames spent in a burst mode's HOLD |
+|---|---|---|---|
+| `CLICK.MOD` — one sparse channel | 8.00 | **16.8** | 48% |
+| `BEVERLY.MOD` — four channels of samples | 7.14 | **6.0** | **0%** |
+
+**The mixer eats the drawing, and on a real module it wins.** At 6.0 frames a
+second against 7.14 rows, the display cannot show every row *at all*, let
+alone run ahead of one — so C and D never complete a burst, never reach a
+hold, and there is no bang and no sweep to look at. `[tlog_drow]` climbs to
+`base+6` and the music has already crossed into the next group.
+
+Three things follow. **The pacing modes are judged on `CLICK.MOD`**, which is
+what it is for: a metronome whose mixing is nearly free, so the frame clock
+is the only thing under test. **A real module windowed on a floor machine is
+a different problem** — not "which of four cadences reads best" but "the
+drawing gets a third of the frames it is being modelled with" — and no
+pacing scheme can fix a display that is slower than the thing it is
+displaying. And **this is exactly why the text screen exists** (§45.13): in
+`FSXM_TEXT80` a row change is a `rep movsw` rather than 2,567 glyph cells a
+second, which is what buys the frames back on the module that needs them.
+
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
 A port of ActionRetro's **ArtfulType** — "a distraction-free Markdown
