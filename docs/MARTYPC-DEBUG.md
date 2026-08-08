@@ -131,6 +131,19 @@ happened" is the one failure a debugger must not have.
 The first five are shaped after docs/FIELD-MACHINES.md's calibration machine,
 as closely as MartyPC allows.
 
+**Which ROM you are running is decided by the machine's family, and the split
+is systematic: every `os8088_5150_*` runs the REAL IBM ROM** (the 27 Oct 1982
+`1501476`, in the repo), **and every `os8088_xt_*` — an IBM 5160 — runs
+GLaBIOS.** `os8088_5150_cga_gla` is the one deliberate exception, and it is
+there so the ROM itself can be A/B'd against `os8088_5150_cga` with nothing
+else changed.
+
+Worth stating rather than leaving to the table, because it decides what a
+result *means*: a BIOS-dependent measurement taken on a 5150 machine here is
+about the same ROM the field machine runs, and one taken on an XT is not.
+A session assumed the opposite and attributed a null result to GLaBIOS that
+had been measured on the IBM ROM (SPEC.md §39.6).
+
 ### The fastest machine here is 7.16MHz, and it is a CONTROL
 
 `--turbo` takes the XT clock from 4.77MHz to 7.16, and that is the whole of
