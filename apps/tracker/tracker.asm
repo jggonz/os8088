@@ -1803,7 +1803,25 @@ trk_xt_toggle:
 ; The worker (SPEC.md 20.6): ALIVE -> SLEEP 1 -> feed audio lock-free ->
 ; one short lock hold to draw. Never returns; OSAPI_TASK_ALIVE is where it
 ; dies when the close box is clicked.
+;
+; WHICH COMES FIRST IS THE WINDOWED FRAME'S PACING (SPEC.md 45.16.2). This
+; worker both mixes and draws when windowed, so a feed pass that mixes a
+; 2,048-byte half - about three ticks at XT mode's rate - is three frames not
+; drawn, and the row change that was due in them arrives one to three ticks
+; late. Measured against CLICK.MOD's 125 ms row: the worker is inside
+; trk_feed on 13% of samples but on 82% of the row gaps that ran to 200 ms.
+;
+; So when the ring is DEEP the frame goes first and lands on the tick edge,
+; and the mix happens behind it. "Audio first" is not being traded away - it
+; is being applied where it means something: trk_deep gates on the lead, so
+; the moment the ring is anything less than half full this is exactly the
+; loop it always was. What makes that safe is that the windowed ring measures
+; 7 to 8 halves of 8, and a windowed frame is a partial redraw of a few
+; readouts, so the mixer loses tens of milliseconds out of a 2.6-second
+; cushion.
 ; =============================================================================
+TRK_DEEP    equ 4 * TRK_HALF        ; half the ring: draw first above this
+
 trk_worker:
 .loop:
 %ifdef TRKLOG
@@ -1814,14 +1832,52 @@ trk_worker:
     call OSAPI_TASK_ALIVE           ; lock NOT held here (rule 4)
     mov ax, 1
     call OSAPI_TASK_SLEEP           ; ~18 wakes a second
-    call trk_feed                   ; audio first - it must not starve behind
-    cmp byte [trk_fs], 0            ; a slow frame ([trk_abon] drops the frame
-    jne .loop                       ; inside trk_render, under the lock).
-    call trk_render                 ; On the fsx surface (SPEC.md 53.2) the
-    jmp .loop                       ; BRACKET draws and this worker is the
+    mov byte [trk_drew], 0
+    cmp byte [trk_fs], 0            ; on the fsx surface (SPEC.md 53.2) the
+    jne .feed                       ; BRACKET draws and this worker is the
                                     ; kept feeder - it must NOT take the gfx
                                     ; lock, or it parks on the bracket's hold
                                     ; and the ring starves. It keeps feeding.
+    call trk_deep
+    jnc .feed                       ; ring tight: audio first, as it always was
+    call trk_render
+    mov byte [trk_drew], 1
+.feed:
+    call trk_feed
+    cmp byte [trk_fs], 0            ; re-tested: F can be pressed inside the
+    jne .loop                       ; frame we just drew
+    cmp byte [trk_drew], 0
+    jne .loop
+    call trk_render                 ; ...and the tight-ring path still draws,
+    jmp .loop                       ; just behind the mix ([trk_abon] drops
+                                    ; the frame inside trk_render, under the
+                                    ; lock)
+
+; -----------------------------------------------------------------------------
+; trk_deep - CF = 1 when the ring has enough in it that a frame may go first
+;            (SPEC.md 45.16.2). Preserves every register.
+;
+; The lead is total - consumed, both free-running, so the subtraction is exact
+; across the wrap. [trk_consumed] is at most one wake old and only ever grows,
+; so a stale read UNDER-states the lead by a tick's worth - 302 bytes against
+; an 8,192-byte threshold - which errs towards feeding first.
+;
+; A stream that is not open has no ring to starve, so drawing first is free.
+; -----------------------------------------------------------------------------
+trk_deep:
+    push ax
+    cmp byte [trk_sopen], 0
+    je .yes
+    mov ax, [trk_total]
+    sub ax, [trk_consumed]
+    cmp ax, TRK_DEEP
+    cmc                             ; CF = 1 when the lead is AT or above it
+    pop ax                          ; (pop leaves the flags alone)
+    ret
+.yes:
+    pop ax
+    stc
+    ret
 
 ; -----------------------------------------------------------------------------
 ; trk_feed - keep the ring ahead of the DSP. Lock-free, worker context: verbs
@@ -2051,6 +2107,9 @@ trk_s_txsm:   db 'Smooth is a graphics mode only', 0
 
     TRKW trk_win                    ; our window ptr (opaque handle)
     TRKB trk_fs                     ; 1 = fullscreen active (read by trkui)
+    TRKB trk_drew                   ; this wake already drew, before the mix
+                                    ; (SPEC.md 45.16.2) - so the tail does not
+                                    ; draw the same frame twice
     TRKB trk_tx                     ; 1 = that fullscreen is the XT TEXT screen
                                     ; (SPEC.md 45.13) and the adapter is in a
                                     ; foreign mode: every kernel drawing slot

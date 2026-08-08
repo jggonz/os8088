@@ -18759,6 +18759,48 @@ now. That matters because a capture holds **18-tick windows with no record at
 all** — neither producer ran for a full second — and a pass that mixes
 `TRK_MAXFEED` halves is the standing suspect for them.
 
+#### 45.16.2 The windowed frame is the worker's, and the mixer was displacing it
+
+§45.16 and §53.5.1 are about the **bracket's** clock. Windowed there is no
+bracket: the worker draws, paced by `OSAPI_TASK_SLEEP 1`, and **the same
+worker does the mixing**. A feed pass that mixes one 2,048-byte half is about
+three ticks at XT mode's rate, and those are three frames not drawn — so the
+row change due in them arrives one to three ticks late.
+
+Measured against CLICK.MOD's exactly-125 ms row, sampling the displayed row
+and `[trk_mixing]` together:
+
+| gap between row changes | count | of which the worker was mixing |
+|---|---|---|
+| 100 ms | 91 | 18 (20%) |
+| 150 ms | 55 | 23 (42%) |
+| **200 ms** | 11 | **9 (82%)** |
+
+The worker is inside `trk_feed` on 13% of samples overall and on 82% of the
+200 ms gaps. **No row is ever dropped** — 129 changes against a true 128 over
+16 s, every step exactly one row — so what reads as *"skipping whole rows"*
+is entirely the spacing.
+
+`trk_deep` is the fix: when the ring's lead is at or above half the ring the
+frame goes **first** and lands on the tick edge, and the mix happens behind
+it. That is not a trade against "audio first" so much as an application of
+it — below the threshold the loop is exactly what it always was, and the
+windowed ring measures 7 to 8 halves of 8, so a partial redraw of a few
+readouts costs the mixer tens of milliseconds out of a 2.6-second cushion.
+`[trk_consumed]` is at most one wake old and only ever grows, so a stale read
+under-states the lead by ~302 bytes against an 8,192-byte threshold — the
+error is towards feeding first.
+
+**What this does NOT fix is the frame rate itself, and that has a floor.**
+Outside a bracket IRQ0 *is* 18.2065 Hz — `FSXF_FASTTICK` is the only thing in
+the system that makes it finer and it is scoped to the bracket by design
+(§53.2.1) — so a package has no clock between 55 ms and nothing. Against a
+125 ms row that is 2.27 frames, and a row change can only be shown on a
+frame, so the intervals must alternate two frames and three: **110 ms and
+165 ms**. No amount of pacing inside the app can beat that; it is the same
+±20% the graphics bracket had before §45.15.2, and it is why the *fullscreen*
+answer was a finer clock rather than a cleverer schedule.
+
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
 A port of ActionRetro's **ArtfulType** — "a distraction-free Markdown
