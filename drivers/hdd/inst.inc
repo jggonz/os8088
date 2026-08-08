@@ -737,10 +737,21 @@ hd_inst_apps:
 hd_ibuf_get:
     push ax
     push cx
-    mov cx, HIW_KMAXKB
-    call OSAPI_MEM_CLAIM        ; AX = the segment
-    jnc .got
-    mov cx, HIW_CHUNKKB         ; not enough for the kernel in one piece: take
+    push dx
+    mov ax, HIW_KMAXKB          ; THE SIZE GOES IN AX AND THE SEGMENT COMES
+    call OSAPI_MEM_CLAIM        ; BACK IN DX (SPEC.md 50.3). This asked in CX
+    jnc .got                    ; and read the answer out of AX, so the buffer
+                                ; segment was whatever AX happened to hold -
+                                ; 0x0047 on the machine that found it, which
+                                ; is BELOW KERNEL_SEG. Reading 76KB of
+                                ; KERNEL.SYS there writes over the interrupt
+                                ; vector table, the BIOS data area and the
+                                ; bottom of the kernel, which is why this
+                                ; presented first as a crash to CS=0000:IP=0000
+                                ; and then as an endless loop through damaged
+                                ; kernel code. A claim can never be below the
+                                ; heap base, so the value alone was the tell
+    mov ax, HIW_CHUNKKB         ; not enough for the kernel in one piece: take
     call OSAPI_MEM_CLAIM        ; the chunk size and let hd_icopy_one refuse
     jc .no                      ; the one file that needs more
     mov word [hd_ibufkb], HIW_CHUNKKB
@@ -748,13 +759,15 @@ hd_ibuf_get:
 .got:
     mov word [hd_ibufkb], HIW_KMAXKB
 .have:
-    mov [hd_ibufseg], ax
+    mov [hd_ibufseg], dx
+    pop dx
     pop cx
     pop ax
     clc
     ret
 .no:
     mov word [hd_ibufseg], 0
+    pop dx
     pop cx
     pop ax
     stc
@@ -766,7 +779,7 @@ hd_ibuf_get:
 ;
 ; A routine rather than a shift because HIW_KMAXKB * 1024 does not fit a word,
 ; and the 16-bit version of this arithmetic is what made the installer refuse
-; KERNEL.SYS.
+; KERNEL.SYS outright.
 ; -----------------------------------------------------------------------------
 hd_ibufbytes:
     push cx
@@ -778,12 +791,14 @@ hd_ibufbytes:
 
 hd_ibuf_put:
     push ax
-    mov ax, [hd_ibufseg]
-    or ax, ax
+    push dx
+    mov dx, [hd_ibufseg]        ; DX here too, for the same reason
+    or dx, dx
     jz .out
     call OSAPI_MEM_FREE
     mov word [hd_ibufseg], 0
 .out:
+    pop dx
     pop ax
     ret
 
@@ -910,6 +925,18 @@ hd_icopy_tree:
     je .entry                   ; the synthesized '..' is not ours to copy
     cmp ax, 2
     je .folder
+    mov si, hd_ient             ; ...and NEITHER IS KERNEL.SYS, which
+    mov di, hd_s_kernel         ; hd_inst_sys has already written FIRST so
+    call hd_iname_same          ; that it lands on cluster 2 (SPEC.md
+    jc .entry                   ; 52.10.2). Copying it again is a REPLACE: it
+                                ; allocates a fresh chain at the end of the
+                                ; volume and frees the one at the front, so
+                                ; the kernel ended up at cluster 40 with
+                                ; MEDIA sitting on cluster 2 - a volume that
+                                ; is perfectly good and cannot be booted,
+                                ; because the boot sector reads a flat run
+                                ; from the start of the data area rather than
+                                ; walking a chain
     mov si, hd_ient
     call hd_icopy_one
     jc .fail
