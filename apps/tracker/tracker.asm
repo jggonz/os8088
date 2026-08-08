@@ -478,6 +478,10 @@ trk_onkey:
     je .clkt
     cmp bl, 'T'
     je .clkt
+    cmp bl, 'e'
+    je .event
+    cmp bl, 'E'
+    je .event
 %endif
     cmp bl, '1'
     jb .out
@@ -523,6 +527,9 @@ trk_onkey:
 .clkt:
     call tlog_clk_key               ; T: SPEC.md 45.16 off, likewise
     jmp .out
+.event:
+    call tlog_even_key              ; E: the windowed readout on an EVEN
+    jmp .out                        ; two-frame grid (SPEC.md 45.16.3)
 %endif
 .play:
     mov al, 0
