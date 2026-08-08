@@ -827,13 +827,21 @@ clicktest: $(BUILD)/click.img $(BUILD)/click360.img
 $(BUILD)/click.mod: tests/mkclick.py | $(BUILD)
 	python3 tests/mkclick.py $@
 
-$(BUILD)/click.img: $(BUILD)/trklog.o88 $(BUILD)/click.mod tools/os88disk.py
+# BEVERLY.MOD rides along, and it is not padding. CLICK.MOD is ONE 64-row
+# pattern by construction, so the pattern-loop key P has nothing to loop that
+# the song does not already play - it looks like a bare restart, and a
+# multi-pattern module is the only thing that shows otherwise. It is also what
+# a REAL scroll looks like: the pacing modes are being judged by eye, and a
+# metronome at 8 rows a second is the easiest possible case.
+$(BUILD)/click.img: $(BUILD)/trklog.o88 $(BUILD)/click.mod \
+                    apps/tracker/beverly.mod tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 \
-		$(BUILD)/trklog.o88 $(BUILD)/click.mod
+		$(BUILD)/trklog.o88 $(BUILD)/click.mod apps/tracker/beverly.mod
 
-$(BUILD)/click360.img: $(BUILD)/trklog.o88 $(BUILD)/click.mod tools/os88disk.py
+$(BUILD)/click360.img: $(BUILD)/trklog.o88 $(BUILD)/click.mod \
+                       apps/tracker/beverly.mod tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 360 \
-		$(BUILD)/trklog.o88 $(BUILD)/click.mod
+		$(BUILD)/trklog.o88 $(BUILD)/click.mod apps/tracker/beverly.mod
 
 # --- the benchmark disk, from tests/ (ON DEMAND: `make bench`) ---------------
 #

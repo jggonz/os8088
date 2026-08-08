@@ -2850,9 +2850,9 @@ tui_draw_dyn:
     je .out                         ; splash while something plays
 %ifdef TRKLOG
     cmp byte [tlog_pace], TLOG_PACE_BURST
-    jne .nob
-    call tlog_burst                 ; C: rewrite [tui_arow] onto the burst
-%endif                              ; grid (SPEC.md 45.16.4)
+    jb .nob                         ; C and D: rewrite [tui_arow] onto the
+    call tlog_burst                 ; burst grid (SPEC.md 45.16.4) - they
+%endif                              ; differ only in the hold's animation
 .nob:
     mov al, [tui_arow]
     cmp al, [tui_lrow]
@@ -2874,8 +2874,8 @@ tui_draw_dyn:
     mov di, tui_pbuf
     mov bx, 120
 %ifdef TRKLOG
-    call tlog_pace_draw             ; which of A/B/C is live, in the SAME run
-    add bx, TLOG_PACEW * 8          ; as the position so it costs no call
+    call tlog_pace_draw             ; which of the four is live, in the SAME
+    add bx, TLOG_PACEW * 8          ; run as the position so it costs no call
 %endif
     mov si, tui_s_posl
     call tui_scpy
@@ -2896,11 +2896,17 @@ tui_draw_dyn:
 %ifdef TRKLOG
 .bang:
     cmp byte [tlog_pace], TLOG_PACE_BURST
-    jne .out
-    mov al, [tlog_sweep]            ; the BANG is a field of its own, beyond
-    mov [tlog_lsweep], al           ; the position's, so a frame in which only
-    mov di, tui_pbuf                ; it moved redraws TLOG_SWEEPW cells and
-    call tlog_bang_draw             ; not the whole line (SPEC.md 45.16.4)
+    jb .out
+    mov al, [tlog_sweep]            ; the hold's animation is a field of its
+    mov [tlog_lsweep], al           ; own, beyond the position's, so a frame
+    mov di, tui_pbuf                ; in which only IT moved redraws
+    cmp byte [tlog_pace], TLOG_PACE_SWEEP   ; TLOG_SWEEPW cells and not the
+    je .swp                                 ; whole line (SPEC.md 45.16.4)
+    call tlog_bang_draw             ; C: the bar
+    jmp short .fld
+.swp:
+    call tlog_sweep_draw            ; D: the one-cell runner
+.fld:
     mov byte [di], 0
     mov si, tui_pbuf
     mov bx, TLOG_SWEEPW * 8
@@ -3062,7 +3068,15 @@ tui_s_splash2: db 'A FastTracker II style MOD player', 0
 tui_s_none:    db 'No module loaded', 0
 tui_s_keys1:   db 'ENTER play  SPACE stop  P pattern', 0
 tui_s_keys2:   db 'ARROWS position  1-4 mute  L load  X xt', 0
+%ifdef TRKLOG                       ; the bench keys are on screen, because a
+                                    ; key nothing names is a key nobody finds:
+                                    ; this line said 'P pattern' one row above
+                                    ; it and P was reached for as the pace
+                                    ; cycler for a whole round of testing
+tui_s_anykey:  db 'F full  E pace ABCD  K rate  D log  W write  M mark', 0
+%else
 tui_s_anykey:  db 'Press F or click for fullscreen', 0
+%endif
 tui_s_hint:    db 'ENTER play  SPACE stop  L load', 0
 
 ; the About panel

@@ -697,6 +697,10 @@ make test SB16=1 TESTAPPS=build/trklog.img   # builds the disk on demand
 # double-click Disk B, launch TRKLOG.O88
 # X    XT mode (5,500 Hz - what the 4.77MHz floor machine boots with)
 # L    load BEVERLY.MOD (it is on the same disk), which starts playback
+#      NOT 'P' - that is the PATTERN LOOP toggle (song vs loop one pattern),
+#      and on a one-pattern module like CLICK.MOD looping the pattern IS the
+#      song, so it looks like a bare restart. The bench build lists its own
+#      keys on the windowed splash for exactly this reason.
 # D    arm the log       -> the status line counts 'LOG nnnn /0512'
 # F    fullscreen; let it run through a few pattern boundaries (~9 s each)
 # Esc  back to windowed  (W is refused in a bracket - the file API is
@@ -719,12 +723,19 @@ make test SB16=1 TESTAPPS=build/trklog.img   # builds the disk on demand
 #      sets the clock back, so pressing it inside fullscreen changes nothing
 #      until the next F. Press it, then F.
 #
-# E    the WINDOWED pacing experiment, A -> B -> C (SPEC.md 45.16.3/45.16.4).
-#      Windowed-only - the bracket has a 54.6 Hz clock of its own and nothing
-#      to fix. The live mode is on screen as 'PACE A/B/C' beside the position,
-#      because what is being judged is what the line does over a minute and
-#      the key's own message has gone by then. C's bang is a bar that is full
-#      on the frame the burst ends and one cell shorter each frame after.
+# E    the WINDOWED pacing experiment, A -> B -> C -> D (SPEC.md 45.16.3 and
+#      45.16.4). Windowed-only - the bracket has a 54.6 Hz clock of its own
+#      and nothing to fix. The live mode is on screen as 'PACE A/B/C/D' beside
+#      the position, because what is being judged is what the line does over a
+#      minute and the key's own message has gone by then. C's bang is a bar
+#      full on the frame the burst ends and one cell shorter each frame after;
+#      D is the original one-cell sweep, kept beside it.
+#
+#      JUDGE THESE ON CLICK.MOD, NOT ON BEVERLY.MOD (SPEC.md 45.16.5). The
+#      mixer eats the drawing: windowed on a 4.77MHz machine CLICK.MOD gets
+#      16.8 frames/s against 8.00 rows/s, and BEVERLY.MOD gets 6.0 against
+#      7.14 - so on a real module the display cannot show every row at all,
+#      C and D never complete a burst, and there is no bang or sweep to see.
 #
 # K    XT mode's SAMPLE RATE - 4,000 / 5,500 / 11,000 Hz - WITHOUT leaving XT
 #      mode (docs/FIELD-NOTES.md 16). Windowed-only, takes effect at the next
