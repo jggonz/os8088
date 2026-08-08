@@ -879,10 +879,56 @@ dsk_boot_from:
     mov [dsk_vbase+bx], si
     mov [dsk_vbase+bx+2], cx
 .out:
+    call dsk_bootltr            ; and the messages that NAME the system disk
     pop si
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; dsk_bootltr - stamp the boot volume's drive letter into the messages
+; in:  [dsk_bootvol] settled
+; out: nothing (all registers preserved)
+;
+; Three kernel messages say which disk the system files are on and all three
+; said A: whatever the machine had booted from - so an installed machine
+; reported "No system disk in A:" about a driver sitting on C:, which points
+; the user at a drive that is not even involved.
+;
+; STAMPED once rather than composed per use, because the boot volume is
+; settled here and cannot change afterwards: the alternative is a buffer and
+; a format call at three sites, for one byte. The table holds the address of
+; the letter BYTE, and each of those is its own LABEL inside its string -
+; an offset would silently drift the first time somebody reworded a message.
+;
+; Called from dsk_boot_from's .out, so a floppy machine runs it too and
+; writes back the 'A' that was already there.
+; -----------------------------------------------------------------------------
+dsk_bootltr:
+    push ax
+    push bx
+    push cx
+    push si
+    mov al, [dsk_bootvol]
+    add al, 'A'
+    mov bx, dsk_ltrtab
+    mov cx, DSK_LTRN
+.next:
+    mov si, [bx]
+    mov [si], al
+    add bx, 2
+    loop .next
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+dsk_ltrtab:                     ; every message that names the system disk
+    dw ui_s_nodisk_l            ; the Task Manager's notice (SPEC.md 28.3)
+    dw cp_s_dsave_l             ; the Control Panel's save refusal (51.5.1)
+    dw drv_e1_l                 ; DRVE_DISK, the Drivers page's status (51)
+DSK_LTRN equ 3
 
 ; -----------------------------------------------------------------------------
 ; dsk_geom_pick - bank the current volume's partition base and cylinder bound

@@ -50,17 +50,28 @@
 
 HIW_W        equ 300
 HIW_H        equ 150
-HIW_LX       equ 4
+HIW_LX       equ 8              ; a MULTIPLE OF 8, with OSAPI_WM_SNAP on the
+                                ; window, so every OSAPI_FONT_RUN in here takes
+                                ; SPEC.md 6.1's single-store path on the two
+                                ; mono adapters. It was 4, which is off that
+                                ; path by four pixels
 HIW_HY       equ 6
 HIW_R0Y      equ 24
 HIW_ROWH     equ 12
 HIW_BY       equ 96
 HIW_BH       equ 16
 HIW_CAPY     equ 120
-HIW_B0X      equ 4              ; 'Install'
-HIW_B1X      equ 84             ; 'Close'
+HIW_B0X      equ 8              ; 'Install'
+HIW_B1X      equ 88             ; 'Close'
+HIW_B2X      equ 152            ; 'Restart' (SPEC.md 52.10.6)
 HIW_BW0      equ 72
 HIW_BW1      equ 56
+HIW_BW2      equ 72
+HIW_CELLS    equ 35             ; characters across the text band: HIW_W - 12
+                                ; less HIW_LX, in 8px cells. Every run in this
+                                ; window is padded to it, which is what makes
+                                ; the run OPAQUE over the whole band and so
+                                ; what removes the blank-then-letter flash
 
 ; What a slot is as an install TARGET, which is not tool.inc's HTS_* question.
 ; That one asks what is there; this asks whether an install would work, and
@@ -111,6 +122,12 @@ hd_iw_open:
     call OSAPI_WM_CREATE
     jc .out
     mov [hd_iwin], bx
+    mov al, 1                   ; WF_SNAP (SPEC.md 11.94): the content origin
+    call OSAPI_WM_SNAP          ; stays on a multiple of 8, so every run in
+                                ; here takes SPEC.md 6.1's single-store path
+                                ; on the two mono adapters. It costs 8px drag
+                                ; steps, which for a dialog nobody drags twice
+                                ; is not a cost at all
 .show:
     mov bx, [hd_iwin]
     call OSAPI_WM_SHOW
@@ -135,34 +152,12 @@ hd_iw_shut:
     pop bx
     ret
 
-; -----------------------------------------------------------------------------
-; hd_iw_repaint - the window, when the caption has changed (module internal)
-; -----------------------------------------------------------------------------
-hd_iw_repaint:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov bx, [hd_iwin]
-    or bx, bx
-    jz .out
-    call hd_win_erase           ; the CONTENT, and only the content - tool.inc's
-    mov si, [hd_iwin]           ; ...and the window in SI, which is where
-    call hd_iw_paint            ; W_PAINT's contract puts it. The reason this
-                                ; is not WM_FRONT is
-                                ; SPEC.md 11.90: raising a window that is
-                                ; ALREADY frontmost repaints nothing at all, so
-                                ; a changed caption never reached the glass
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+; hd_iw_repaint - GONE, and worth a line about why. It erased the content and
+; ran the whole W_PAINT for any change at all, which is the blank-then-redraw
+; this window used to flash with: a click that only changed the caption threw
+; away the header, four rows and two buttons to put back the same pixels.
+; SPEC.md 52.10.6's three emitters replace it, and nothing calls a full
+; repaint of this window any more except W_PAINT itself.
 
 ; -----------------------------------------------------------------------------
 ; hd_iw_scan - what each slot would be as a target (module internal)
@@ -285,70 +280,10 @@ hd_iw_paint:
     add dx, HIW_HY
     call OSAPI_FONT_STR
 
-    xor cl, cl
-.row:
-    push cx
-    mov [hd_irow], cl
-    call hd_iw_rowtext          ; -> hd_line
-    mov al, [hd_irow]
-    mov ah, HIW_ROWH
-    mul ah
-    add ax, HIW_R0Y
-    mov dx, bp
-    add dx, ax
-    mov al, [hd_irow]
-    cmp al, [hd_isel]
-    jne .plain
-    push dx                     ; the selected row is a black bar - page.inc's
-    mov al, CBLACK              ; and tool.inc's, so a selection reads the same
-    call OSAPI_SET_COLOR        ; everywhere in this driver
-    mov ax, di
-    add ax, HIW_LX - 1
-    pop dx
-    push dx
-    mov bx, dx
-    dec bx
-    mov cx, di
-    add cx, HIW_W - 12
-    mov dx, bx
-    add dx, 9
-    call OSAPI_GFX_FILL
-    pop dx
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    jmp short .text
-.plain:
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-.text:
-    mov si, hd_line
-    mov cx, di
-    add cx, HIW_LX
-    call OSAPI_FONT_STR
-    pop cx
-    inc cl
-    cmp cl, 4
-    jb .row
+    call hd_irows_emit
 
-    mov si, hd_s_iinst
-    mov ax, HIW_B0X
-    mov bx, HIW_BW0
-    xor cl, cl
-    call hd_iw_button
-    mov si, hd_s_close
-    mov ax, HIW_B1X
-    mov bx, HIW_BW1
-    mov cl, 1
-    call hd_iw_button
-
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov si, [hd_imsg]
-    mov cx, di
-    add cx, HIW_LX
-    mov dx, bp
-    add dx, HIW_CAPY
-    call OSAPI_FONT_STR
+    call hd_ibtns_emit
+    call hd_imsg_emit
 
     pop bp
     pop di
@@ -368,6 +303,10 @@ hd_iw_paint:
 ; as well as CDGRAY and its LABEL dithers on the two 1bpp adapters instead of
 ; coming out solid black inside a dotted frame (SPEC.md 47 rule 1). Close is
 ; never disabled: there is always a way out of a window.
+;
+; CL picks the PREDICATE, not the state: 0 = hd_inst_ok, 1 = always live,
+; 2 = hd_rest_ok. One predicate per control, shared by the greying, the click
+; refusal and the explanation (SPEC.md 47 rule 2).
 ; -----------------------------------------------------------------------------
 hd_iw_button:
     push ax
@@ -379,10 +318,14 @@ hd_iw_button:
     mov [hd_ibx], ax
     mov [hd_ibw], bx
     mov [hd_ibl], si
-    or cl, cl
-    jnz .live
+    cmp cl, 1
+    je .live
+    ja .rest
     call hd_inst_ok             ; the ONE predicate, shared by the greying,
     jmp short .pen              ; the refusal and the explanation (47 rule 2)
+.rest:
+    call hd_rest_ok
+    jmp short .pen
 .live:
     clc
 .pen:
@@ -414,6 +357,297 @@ hd_iw_button:
     pop cx
     pop bx
     pop ax
+    ret
+
+; =============================================================================
+; Drawing the face a piece at a time (SPEC.md 52.10.6)
+;
+; NOTHING HERE BLANKS AND THEN LETTERS. Every text element is one opaque
+; OSAPI_FONT_RUN space-padded to HIW_CELLS, so a cell goes from what it was to
+; what it will be in a single store (SPEC.md 6.1) and there is no frame in
+; which the band is empty. The window carries OSAPI_WM_SNAP and HIW_LX is a
+; multiple of 8, which is what puts those runs on the single-store path.
+;
+; The three emitters take the content origin in DI/BP - the painter already
+; has it - and the three *_draw entry points fetch it for a caller that does
+; not. A click spends only the one whose content actually changed: the message
+; alone for an arm or a refusal, the rows for a selection, the buttons only
+; when a greying predicate flipped.
+;
+; The button band is the ONE thing still erased before it is drawn, because a
+; frame cannot be drawn opaquely: a dithered frame over a solid one leaves the
+; solid one's pixels behind. It is a single 16px-high fill and it happens only
+; on a state change, which is the "massively more expensive not to" case.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; hd_iorg - the installer window's content origin (module internal)
+; out: CF=0 with DI = content left, BP = content top; CF=1 = no window, or it
+;      is not visible, and the caller must draw nothing
+; -----------------------------------------------------------------------------
+hd_iorg:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, [hd_iwin]
+    or bx, bx
+    jz .no
+    call OSAPI_WM_GEOM          ; the visibility question; CX/DX are its answer
+    jc .no
+    call OSAPI_WM_CONTENT       ; AX = content left, DX = content top - the
+    mov di, ax                  ; KERNEL's, never the template's (wm_fit)
+    mov bp, dx
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_ipad - space-pad hd_line out to HIW_CELLS and re-terminate it
+; out: nothing (all registers preserved)
+;
+; What makes a run OPAQUE over the whole band rather than over its own text:
+; a space paints background on the fast path, so the padding IS the erase.
+; -----------------------------------------------------------------------------
+hd_ipad:
+    push ax
+    push cx
+    push si
+    mov si, hd_line
+    xor cx, cx
+.len:
+    cmp cx, HIW_CELLS
+    jae .cap
+    cmp byte [si], 0
+    je .pad
+    inc si
+    inc cx
+    jmp short .len
+.pad:
+    mov byte [si], ' '
+    inc si
+    inc cx
+    cmp cx, HIW_CELLS
+    jb .pad
+.cap:
+    mov byte [si], 0
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_irun - hd_line as one opaque run (module internal)
+; in:  DI/BP = content origin, DX = the row's y OFFSET inside the content,
+;      AL = ink, AH = background
+; -----------------------------------------------------------------------------
+hd_irun:
+    push cx
+    push dx
+    push si
+    clc                         ; A LIVE PEN, every time. FONT_RUN takes its
+    call OSAPI_GFX_PEN          ; ink and background in AX, but [gfx_dis] is a
+                                ; separate piece of state (SPEC.md 47 rule 1)
+                                ; and masks a glyph to a checkerboard whatever
+                                ; the ink says - so a greyed BUTTON drawn just
+                                ; before this left the caption and every row
+                                ; dithered. Preserves every register
+    call hd_ipad
+    mov cx, di
+    add cx, HIW_LX
+    add dx, bp
+    mov si, hd_line
+    call OSAPI_FONT_RUN
+    pop si
+    pop dx
+    pop cx
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_irows_emit / hd_irows_draw - the four slot rows
+; in (emit): DI/BP = content origin
+;
+; The selected row is the same run with ink and background swapped, which is
+; how the black bar arrives with the text already on it: there is no fill and
+; then a letter, so the row cannot be seen empty. The bar it replaced was a
+; GFX_FILL as wide as the band followed by FONT_STR over it.
+; -----------------------------------------------------------------------------
+hd_irows_emit:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    xor cl, cl
+.row:
+    push cx
+    mov [hd_irow], cl
+    call hd_iw_rowtext          ; -> hd_line
+    mov al, [hd_irow]
+    mov ah, HIW_ROWH
+    mul ah
+    add ax, HIW_R0Y
+    mov dx, ax
+    mov al, [hd_irow]
+    cmp al, [hd_isel]
+    mov ax, (CWHITE << 8) | CBLACK      ; AL = ink, AH = background
+    jne .go
+    mov ax, (CBLACK << 8) | CWHITE
+.go:
+    call hd_irun
+    pop cx
+    inc cl
+    cmp cl, 4
+    jb .row
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+hd_irows_draw:
+    push di
+    push bp
+    call hd_iorg
+    jc .out
+    call hd_irows_emit
+.out:
+    pop bp
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_imsg_emit / hd_imsg_draw - the caption line, and NOTHING else
+;
+; The whole point of the pair: a click that only changes what the window SAYS
+; used to erase the content and repaint every row, both buttons and the
+; header, which flashes on every adapter including VGA.
+; -----------------------------------------------------------------------------
+hd_imsg_emit:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, [hd_imsg]
+    mov bx, hd_line
+.cp:
+    mov al, [si]
+    mov [bx], al
+    inc si
+    inc bx
+    or al, al
+    jnz .cp
+    mov dx, HIW_CAPY
+    mov ax, (CWHITE << 8) | CBLACK
+    call hd_irun
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+hd_imsg_draw:
+    push di
+    push bp
+    call hd_iorg
+    jc .out
+    call hd_imsg_emit
+.out:
+    pop bp
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_ibtns_emit / hd_ibtns_draw - the three buttons, greying and all
+; -----------------------------------------------------------------------------
+hd_ibtns_emit:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov si, hd_s_iinst
+    mov ax, HIW_B0X
+    mov bx, HIW_BW0
+    xor cl, cl
+    call hd_iw_button
+    mov si, hd_s_close
+    mov ax, HIW_B1X
+    mov bx, HIW_BW1
+    mov cl, 1
+    call hd_iw_button
+    mov si, hd_s_irest
+    mov ax, HIW_B2X
+    mov bx, HIW_BW2
+    mov cl, 2
+    call hd_iw_button
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+hd_ibtns_draw:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    call hd_iorg
+    jc .out
+    mov al, CWHITE              ; the band, once: see the header - a frame is
+    call OSAPI_SET_COLOR        ; the one thing that cannot be drawn opaquely
+    mov ax, di
+    add ax, HIW_LX
+    mov bx, bp
+    add bx, HIW_BY
+    mov cx, di
+    add cx, HIW_W - 12
+    mov dx, bx
+    add dx, HIW_BH - 1
+    call OSAPI_GFX_FILL
+    call hd_ibtns_emit
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_rest_ok - may Restart be clicked? (module internal)
+; out: CF = 0 yes / 1 no.  SPEC.md 47 rule 2's predicate for that button.
+;
+; A FACT and not a guess (rule 3): the install this dialog just did is what
+; there is to restart into, so the button is live from the moment the stage
+; machine says the MBR was written and greyed before it.
+; -----------------------------------------------------------------------------
+hd_rest_ok:
+    cmp byte [hd_iw_st], HII_DONE
+    je .yes
+    stc
+    ret
+.yes:
+    clc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -564,14 +798,27 @@ hd_iw_click:
     cmp cx, HIW_B1X
     jl .done
     cmp cx, HIW_B1X + HIW_BW1
+    jl .close
+    cmp cx, HIW_B2X
+    jl .done
+    cmp cx, HIW_B2X + HIW_BW2
     jge .done
+    call hd_rest_ok             ; a greyed control explains itself, so a
+    jc .done                    ; refused click here says nothing (47 rule 5)
+    call OSAPI_REBOOT           ; POSTED, not performed: we are holding the
+    jmp short .done             ; gfx lock (SPEC.md 20.10)
+.close:
     call hd_iw_shut
     jmp short .done
 .install:
     call hd_inst_ok
     jc .refused
     call hd_inst_step
-    jmp short .repaint
+    call hd_ibtns_draw          ; the stage moved, so hd_inst_ok and hd_rest_ok
+    call hd_imsg_draw           ; may both have flipped - and the message
+    jmp short .done             ; always did. The ROWS did not: hd_iw_scan
+                                ; runs at open, and a stage changes no slot's
+                                ; state (SPEC.md 52.10.6)
 .rows:
     mov ax, [hd_icly]
     sub ax, HIW_R0Y - 2
@@ -585,14 +832,16 @@ hd_iw_click:
     mov [hd_isel], al
     mov byte [hd_iw_st], HII_IDLE   ; picking another row disarms, tool.inc's
     mov word [hd_imsg], hd_s_ipick  ; rule: anything but the same button again
-    jmp short .repaint
+    call hd_irows_draw          ; the bar moved, the message changed, and the
+    call hd_ibtns_draw          ; disarm may have re-greyed Install. The header
+    call hd_imsg_draw           ; did not change and is not redrawn
+    jmp short .done
 .refused:
     ; A greyed control explains itself (SPEC.md 47 rule 5), so this says
     ; nothing new - it makes sure the reason is on screen.
     mov word [hd_imsg], hd_s_ibad
-.repaint:
-    call hd_iw_repaint
-.done:
+    call hd_imsg_draw           ; ONE line: nothing else about the window has
+.done:                          ; changed, and a full repaint here flashed
     pop bp
     pop di
     pop si
@@ -657,9 +906,12 @@ hd_inst_sys:
     call hd_ibuf_get            ; the buffer FIRST: a format we cannot follow
     jc .nomem                   ; with a copy is a wiped partition
     mov word [hd_imsg], hd_s_iwork
-    call hd_iw_repaint          ; say so BEFORE the writes - a 32MB format is
+    call hd_imsg_draw           ; say so BEFORE the writes - a 32MB format is
                                 ; hundreds of sectors and the user should not
-                                ; watch a frozen window wonder
+                                ; watch a frozen window wonder. ONE LINE: the
+                                ; rest of the window has not changed, and a
+                                ; full repaint here was a flash right before
+                                ; a long freeze (SPEC.md 52.10.6)
     call hd_ivol_bank           ; SPEC.md 51.5.2, whatever happens below
     call hd_inst_fmt
     jc .failed
@@ -704,7 +956,7 @@ hd_inst_apps:
     call hd_ibuf_get
     jc .nomem
     mov word [hd_imsg], hd_s_iwork
-    call hd_iw_repaint
+    call hd_imsg_draw
     call hd_ivol_bank           ; ...which set hd_isrcdrv to the user's volume;
     mov al, [hd_iautod]         ; an auto-detected apps disk overrides THAT one
     cmp al, 0xFF                ; and never hd_ivdrv, or the restore below puts
@@ -1795,6 +2047,7 @@ hd_inst_mbr:
 hd_s_ititle:  db 'Install', 0
 hd_s_ihead:   db 'Install to        Size   State', 0
 hd_s_iinst:   db 'Install', 0
+hd_s_irest:   db 'Restart', 0
 hd_s_islot:   db 'Slot ', 0
 hd_s_igap:    db '    ', 0
 hd_s_idash:   db '   -', 0
@@ -1808,17 +2061,29 @@ hd_s_ialien:  db 'Unusable', 0
 hd_s_inone:   db 'No Room', 0
 hd_itab:      dw hd_s_iready, hd_s_ismall, hd_s_ialien, hd_s_inone
 
-hd_s_ipick:   db 'Pick a partition, then Install', 0
-hd_s_iarm:    db 'Erases it - Install again to confirm', 0
-hd_s_iwork:   db 'Copying - this takes a few minutes', 0
-hd_s_iswap:   db 'Now insert the APPS disk, then Install', 0
-hd_s_idone:   db 'Done - restart with no floppy in A:', 0
-hd_s_ibad:    db 'That partition cannot be used', 0
-hd_s_inomem:  db 'Not enough memory to copy', 0
-hd_s_ifmt:    db 'Could not format that partition', 0
-hd_s_imnt:    db 'Formatted, but it would not mount', 0
-hd_s_ierr:    db 'Disk error - the install stopped', 0
-hd_s_ibig:    db 'A file is too big for this machine', 0
+; Every line below is one CAPTION, and the macro is what stops one growing
+; past the band: HIW_CELLS is the run's width and a longer string is silently
+; TRUNCATED on screen, which is the kind of defect nobody sees until the one
+; state that produces it happens on somebody else's machine.
+%macro HIMSG 2
+%1: db %2, 0
+    %strlen %%n %2
+    %if %%n > HIW_CELLS
+        %error "installer caption is wider than HIW_CELLS"
+    %endif
+%endmacro
+
+    HIMSG hd_s_ipick, 'Pick a partition, then Install'
+    HIMSG hd_s_iarm, 'Erases it: Install again to confirm'
+    HIMSG hd_s_iwork, 'Copying - this takes a few minutes'
+    HIMSG hd_s_iswap, 'Insert the APPS disk, then Install'
+    HIMSG hd_s_idone, 'Done - remove the floppy, Restart'
+    HIMSG hd_s_ibad, 'That partition cannot be used'
+    HIMSG hd_s_inomem, 'Not enough memory to copy'
+    HIMSG hd_s_ifmt, 'Could not format that partition'
+    HIMSG hd_s_imnt, 'Formatted, but it would not mount'
+    HIMSG hd_s_ierr, 'Disk error - the install stopped'
+    HIMSG hd_s_ibig, 'A file is too big for this machine'
 
 hd_iwin:      dw 0              ; .text with a real initialiser: -f bin zeroes
                                 ; nothing, and a garbage window pointer here

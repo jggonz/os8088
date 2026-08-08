@@ -407,7 +407,11 @@ drv_errstr:                     ; DRVE_* -> what the user is told
 drv_e0: db 'Loaded', 0
 drv_s_off: db 'Not loaded', 0   ; ...and what a row that never failed and is
                                 ; not up says instead (drv_status)
-drv_e1: db 'No system disk in A:', 0
+drv_e1: db 'No system disk in '
+drv_e1_l: db 'A:', 0            ; the letter, stamped (SPEC.md 52.10.3): this
+                                ; is the string an installed machine showed
+                                ; as "No system disk in A:" about a driver
+                                ; sitting on C:
 drv_e2: db 'Not on the system disk', 0
 drv_e3: db 'Not a valid driver', 0
 drv_e4: db 'Not enough memory', 0

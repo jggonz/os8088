@@ -8835,6 +8835,32 @@ primitive that re-enters per clip fragment, so the cell is an `X` whose stub
 stages the eight bytes into the kernel's own segment first — the
 `dsk_get_dir` idiom of §2.1, at its smallest.
 
+### 20.10 Restart is POSTED, never performed
+
+`OSAPI_REBOOT` (slot 0x0360) takes nothing, answers nothing and **sets a
+byte**. `ui_task` spends it at the top of its pass, before the keyboard poll
+and with nothing held; the body is the System menu's own `CMD_REBOOT` path,
+reached at a second label rather than copied.
+
+The deferral is not tidiness. Every caller of this slot is a window callback,
+a Control Panel page or a driver's tool window, and all three run on the UI
+task **with the gfx lock held** (§13) — while the reboot path takes that lock
+itself, and before it calls `drv_shutdown`, which *waits for every driver's
+worker to die* (§51.2) by yielding to a task that may want the lock. Called
+inline from a callback that is a deadlock with the machine already half torn
+down: the Control Panel flushed, the drivers detaching, and nothing left to
+say so. It is the same reasoning that runs the app menu's `Close` inline in
+`ui_dispatch` (§12.7) — that one runs *there* because that is where no lock
+is held, and this one cannot, so it waits for a place where none is.
+
+A second post before the first is spent is the same restart, which is why it
+is a flag and not a count. The flag is cleared **before** the call: the body
+does not return, but a path that ever did must not find the post standing.
+
+The first consumer is the hard disk installer's Restart button (§52.10.6),
+which is the case that needed it: the user has just written a bootable
+volume and the next thing they want is to boot it.
+
 ## 21. loader.inc
 
 State (.bss, cleared by `loader_init`): `ld_pending` (word: 0 = none, else
@@ -23390,6 +23416,51 @@ The source drive is its own byte. `[hd_isrcdrv]` is what `hd_isrc` and
 on; `hd_ivol_bank` sets both and the auto-detected drive overrides only the
 first. One word for both would have ended the install with the user standing
 on a drive they were never on.
+
+### 52.10.6 Restart, and a dialog that stops flashing
+
+Two things, and they are one change because they are the same window.
+
+**Restart.** The install ends with a bootable volume and a user who has to
+find the System menu to use it, so the dialog carries a third button.
+`OSAPI_REBOOT` (§20.10) is what makes it possible from inside a driver's
+click handler: it posts, and `ui_task` performs. The button is greyed until
+`[hd_iw_st]` reaches `HII_DONE`, which is §47 rule 3's *fact* — what there is
+to restart into is the install this dialog just did — and `hd_rest_ok` is its
+one predicate, shared by the greying and the click refusal exactly as
+`hd_inst_ok` is Install's. `hd_iw_button`'s `CL` therefore picks a
+*predicate* rather than a state: 0 = `hd_inst_ok`, 1 = always live (Close,
+which is never disabled), 2 = `hd_rest_ok`.
+
+**And no click repaints the window any more.** `hd_iw_repaint` erased the
+content and re-ran `W_PAINT` for every change there was, so a click that only
+altered the caption threw away the header, four rows and two buttons to put
+back the same pixels — which **flashes on every adapter, VGA included**, on
+real hardware. It is three emitters now, and a click spends only the one
+whose content changed: `hd_imsg_draw` for an arm, a refusal or a progress
+message; `hd_irows_draw` when the selection moves; `hd_ibtns_draw` when a
+greying predicate flipped. A stage change is buttons + message and never the
+rows, because `hd_iw_scan` runs at open and no stage alters a slot's state.
+
+Three things hold the flicker fix up:
+
+- **Every text element is one opaque `OSAPI_FONT_RUN` padded to
+  `HIW_CELLS`** — a space paints background on the fast path, so the padding
+  *is* the erase and the cell goes from what it was to what it will be in a
+  single store (§6.1). There is no frame in which a band is blank.
+- **The selection bar is that same run with ink and background swapped**, so
+  the black bar arrives with its text already on it. It was a `GFX_FILL` as
+  wide as the band followed by `FONT_STR` over it — Note Pad's §27.8.2 trick,
+  and the same reasoning.
+- **`HIW_LX` is a multiple of 8 and the window carries `WF_SNAP`** (§11.94),
+  which is what puts those runs on the single-store path on the two mono
+  adapters. It was 4, four pixels off it. The price is 8px drag steps on a
+  dialog nobody drags twice.
+
+The **button band is the one thing still erased before it is drawn**, and
+that is the stated exception rather than an oversight: a frame cannot be
+drawn opaquely, so a dithered frame over a solid one leaves the solid one's
+pixels behind. It is a single 16px fill, and only on a state change.
 
 ## 53. fsx.inc — fullscreen exclusive
 

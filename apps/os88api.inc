@@ -1659,6 +1659,22 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; it, and an unused slot is a promise for
                                  ; nothing (SPEC.md 20.8 rule 4)
 
+%define OSAPI_REBOOT        KERNEL_SEG:0x0360   ; no arguments, no answer, every
+                                 ; register preserved. POSTS a restart (SPEC.md
+                                 ; 20.10): the System menu's own Restart, but
+                                 ; performed by ui_task at the top of its next
+                                 ; pass rather than here. You are holding the
+                                 ; gfx lock and that path takes it, so an
+                                 ; inline restart would deadlock with the
+                                 ; machine already half torn down.
+                                 ;
+                                 ; So this RETURNS, and your callback should
+                                 ; finish normally afterwards - draw what it
+                                 ; was going to draw, return to the kernel.
+                                 ; The restart happens a moment later, after
+                                 ; the Control Panel's settings are flushed and
+                                 ; every driver is detached
+
 ; --- listing a directory (SPEC.md 19.7.1) -------------------------------------
 ; The operation this API had no way to express: a package could read a file by
 ; name and never find out what names were there. Everything in the tree that

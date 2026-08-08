@@ -1135,7 +1135,16 @@ osapi_table:
                                   ;         never needed a .text thunk, which
                                   ;         is the whole reason it looked
                                   ;         unpublished
-osapi_table_end:                  ; 0x0360
+    OSAPI_SLOT ui_reboot_post     ; 0x0360  no arguments, no answer: POST a
+                                  ;         restart, which ui_task spends with
+                                  ;         no lock held (SPEC.md 20.10). The
+                                  ;         System menu's Restart, reachable
+                                  ;         from a callback - which cannot do
+                                  ;         it inline, because that path takes
+                                  ;         the gfx lock the caller is holding
+                                  ;         and waits on workers that need to
+                                  ;         be scheduled
+osapi_table_end:                  ; 0x0368
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1143,8 +1152,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 106 * 8
-%error "os8088 API jump table must be exactly 106 8-byte slots"
+%if OSAPI_TABLE_LEN != 107 * 8
+%error "os8088 API jump table must be exactly 107 8-byte slots"
 %endif
 
 ; =============================================================================
