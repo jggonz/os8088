@@ -1127,7 +1127,15 @@ osapi_table:
                                   ;         out DX:AX = bytes delivered, 0 at
                                   ;         the end. Stateless, so a copy loop
                                   ;         may write between two reads
-osapi_table_end:                  ; 0x0358
+    OSAPI_JSLOT api_file_mkdir    ; 0x0358  N: SI = name. Create a folder in
+                                  ;         the current directory (SPEC.md
+                                  ;         18.5). The routine is the file
+                                  ;         manager's own - its three callers
+                                  ;         were all cold-segment, so it had
+                                  ;         never needed a .text thunk, which
+                                  ;         is the whole reason it looked
+                                  ;         unpublished
+osapi_table_end:                  ; 0x0360
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1135,8 +1143,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 105 * 8
-%error "os8088 API jump table must be exactly 105 8-byte slots"
+%if OSAPI_TABLE_LEN != 106 * 8
+%error "os8088 API jump table must be exactly 106 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -1268,6 +1276,7 @@ dbg_reg:
     OSAPI_NSTUB api_fdlg_open,   fdlg_open       ; NO V - see the macro
     OSAPI_NSTUB api_file_append, dskw_append, 1
     OSAPI_NSTUB api_file_read_at, dskw_read_at, 1
+    OSAPI_NSTUB api_file_mkdir,  dskw_mkdir,  1
 
 ; -----------------------------------------------------------------------------
 ; api_file_find - slot 0x0340 (X). in CX = ordinal, ES:DI = a DSK_FIND_SZ
@@ -1338,9 +1347,15 @@ api_file_write_sys:
     push es
     push bx                     ; the caller's buffer offset: live, and
     mov bx, ds                  ; drv_owns_seg wants a register
-    push cs
-    pop ds                      ; DS = KERNEL to reach drv_tab
-    call drv_owns_seg           ; CF = 0: the caller IS a loaded driver
+    push ds                     ; ...AND THE CALLER'S DS IS KEPT, because
+    push cs                     ; api_copyname below reads the name through
+    pop ds                      ; it. The fence needs DS = KERNEL to reach
+    call drv_owns_seg           ; drv_tab, and the first version of this stub
+    pop ds                      ; switched and never switched back - so it
+                                ; staged 13 bytes of KERNEL image as the file
+                                ; name and handed that to dskw_write_sys.
+                                ; OSAPI_NSTUB avoids it by copying BEFORE it
+                                ; touches DS; this one has to put it back
     pop bx
     jc .refuse
     push cs
@@ -2114,6 +2129,8 @@ dskw_sync:            call COLD_SEG:dwf_dskw_sync
 dskw_write:           call COLD_SEG:dwf_dskw_write
                     ret
 dskw_write_sys:       call COLD_SEG:dwf_dskw_write_sys
+                    ret
+dskw_mkdir:           call COLD_SEG:dwf_dskw_mkdir
                     ret
 dskw_read_at:         call COLD_SEG:dwf_dskw_read_at
                     ret

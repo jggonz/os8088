@@ -3405,6 +3405,8 @@ dwf_dskw_write:         call dskw_write_x
                     retf
 dwf_dskw_write_sys:     call dskw_write_sys_x
                     retf
+dwf_dskw_mkdir:         call dskw_mkdir_x
+                    retf
 dwf_dskw_read_at:       call dskw_read_at_x
                     retf
 dwf_dskw_append:        call dskw_append_x

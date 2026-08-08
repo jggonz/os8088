@@ -1648,6 +1648,17 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; terminates. Offset AND capacity must each
                                  ; be a cluster multiple; FERR_NAME if not
 
+%define OSAPI_FILE_MKDIR    KERNEL_SEG:0x0358   ; SI = a NUL 8.3 name; creates a
+                                 ; FOLDER in your current directory (SPEC.md
+                                 ; 18.5). out CF=0 AX=0, else AX = FERR_*
+                                 ; (FERR_EXIST if the name is taken,
+                                 ; FERR_DIRFULL if the directory has no free
+                                 ; slot, FERR_FULL if the disk has no cluster).
+                                 ; There is deliberately no rmdir here: the
+                                 ; kernel has one, nothing outside has wanted
+                                 ; it, and an unused slot is a promise for
+                                 ; nothing (SPEC.md 20.8 rule 4)
+
 ; --- listing a directory (SPEC.md 19.7.1) -------------------------------------
 ; The operation this API had no way to express: a package could read a file by
 ; name and never find out what names were there. Everything in the tree that

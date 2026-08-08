@@ -52,8 +52,11 @@ HDP_BY       equ 82             ; the button row
 HDP_BH       equ 16
 HDP_B0X      equ 2              ; 'Format'
 HDP_B1X      equ 78             ; 'Mount' / 'Unmount'
+HDP_B2X      equ 154            ; 'Install' (SPEC.md 52.10.4)
 HDP_BW0      equ 64
 HDP_BW1      equ 72
+HDP_BW2      equ 64             ; 154 + 64 = 218, inside the 221px pane - the
+                                ; same arithmetic the caption column obeys
 HDP_CAPY     equ 104
 
 ; -----------------------------------------------------------------------------
@@ -233,6 +236,11 @@ hd_page_paint:
     mov ax, HDP_B1X
     mov bx, HDP_BW1
     mov cl, 1
+    call hd_page_button
+    mov si, hd_s_install
+    mov ax, HDP_B2X
+    mov bx, HDP_BW2
+    mov cl, 2
     call hd_page_button
 
     ; --- and the caption, which is where the truth goes ----------------------
@@ -699,6 +707,11 @@ hd_page_click:
     cmp cx, HDP_B1X
     jl .done
     cmp cx, HDP_B1X + HDP_BW1
+    jl .hit
+    mov bl, 2
+    cmp cx, HDP_B2X
+    jl .done
+    cmp cx, HDP_B2X + HDP_BW2
     jge .done
 .hit:
     mov al, bl
@@ -706,6 +719,8 @@ hd_page_click:
     jc .refused
     cmp bl, 0
     je .dofmt
+    cmp bl, 2
+    je .doinst
     call hd_mounted
     jc .domount
     call hd_unmount
@@ -722,6 +737,9 @@ hd_page_click:
 .dofmt:
     call hd_tw_open
     jmp .repaint
+.doinst:                        ; Install stages nothing either, for the tool's
+    call hd_iw_open             ; reason: what it changes is a DISK, and about
+    jmp .repaint                ; the machine's settings nothing at all
 .refused:
     ; A greyed control explains itself (SPEC.md 47 rule 5), so the refusal
     ; says nothing new - it just makes sure the reason is on screen.
@@ -1070,9 +1088,13 @@ hd_win_close_all:
     push bx
     mov bx, [hd_twin]
     or bx, bx
-    jz .out
+    jz .inst
     call OSAPI_WM_HIDE
-.out:
+.inst:
+    call hd_iw_shut             ; ...and the installer's (SPEC.md 52.10.4). A
+                                ; window of ours left on screen at detach is a
+                                ; paint through freed memory: the kernel
+                                ; releases this image the moment we return
     pop bx
     ret
 
@@ -1254,6 +1276,7 @@ hd_utoa_body:
     pop cx
     ret
 
+hd_s_install: db 'Install', 0
 hd_s_bios:    db 'BIOS', 0
 hd_s_ide:     db 'IDE', 0
 hd_s_x:       db 'x', 0

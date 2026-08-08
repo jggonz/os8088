@@ -7653,6 +7653,30 @@ system disk needs no copy of it. And the `sys_attr` rule above stamps the
 file read-only, so it lists like an ordinary document and cannot be deleted
 or saved over.
 
+### 18.5.1 …and a package may create one — `OSAPI_FILE_MKDIR` (slot 0x0358)
+
+`dskw_mkdir` published, and it is **only wiring**: the routine is exactly the
+one the Folder menu, the Standard File dialog's New Folder button and
+`fcp_mksub` have always used, unchanged.
+
+It looked unpublished for a reason worth recording, because it reads as a
+duplication and is not one. All three of those callers — `files.inc`,
+`fdlg.inc`, `filecp.inc` — live in the **cold segment** (§2.6), so each of
+them reaches `dskw_mkdir_x` with a *near* call and no `.text` thunk was ever
+needed. The absence of the thunk, not any absence of the routine, is what
+made it unreachable from the API table. CLAUDE.md already notes the same
+shape for `filecp.inc`, whose `fcp_` routines need no thunks because their
+only caller is cold as well.
+
+What made it worth publishing is §52.10.4: an installer has to reproduce the
+apps disk's folders (§19.2), and one of them is not cosmetic — §28.3 needs
+`SYSTEM/TASKMGR.O88` to exist, or the chip menu cannot open the Task Manager
+on the installed volume.
+
+**No `rmdir` goes with it.** The kernel has one and nothing outside the kernel
+has ever wanted it; a slot that exists for symmetry is a permanent promise
+bought for nothing (§20.8 rule 4).
+
 ### 19.7.1 Listing a directory — `OSAPI_FILE_FIND` (slot 0x0340)
 
 The file operation the API had no way to express. A package could write,

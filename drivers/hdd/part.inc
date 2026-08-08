@@ -714,3 +714,18 @@ HD_MBRCODE   equ 446            ; the space in front of the table
 %if hd_bootstub_end - hd_bootstub != HD_MBRCODE
 %error "build/mbr.bin is not 446 bytes - see boot/mbr.asm"
 %endif
+
+; ...and the VOLUME boot record the installer writes (SPEC.md 52.10.2), the
+; same way and for the same reason: it is real assembly in boot/boothd.asm,
+; incbin'ed rather than transcribed. BOOTHD_KSECS is the ONE word the
+; installer patches - the kernel's length in sectors - and it is pinned at a
+; documented offset in that file precisely so this side can find it without
+; knowing anything else about the sector's layout.
+BOOTHD_KSECS equ 508
+hd_bootvbr:
+    incbin "boothd.bin"
+hd_bootvbr_end:
+
+%if hd_bootvbr_end - hd_bootvbr != 512
+%error "build/boothd.bin is not 512 bytes - see boot/boothd.asm"
+%endif

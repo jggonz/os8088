@@ -351,6 +351,7 @@ $(BUILD)/boothd.bin: boot/boothd.asm | $(BUILD)
 
 $(BUILD)/hdd.bin: drivers/hdd/hdd.asm drivers/hdd/part.inc drivers/hdd/fmt.inc \
                   drivers/hdd/tool.inc drivers/hdd/page.inc drivers/hdd/cfg.inc \
+                  drivers/hdd/inst.inc \
                   drivers/os88drv.inc apps/os88api.inc \
                   $(BUILD)/mbr.bin $(BUILD)/boothd.bin | $(BUILD)
 	$(NASM) -f bin -w+error -I drivers/hdd/ -I drivers/ -I apps/ -I $(BUILD) -o $@ $<
