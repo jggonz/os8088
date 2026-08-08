@@ -23898,6 +23898,49 @@ cluster field is left 0, and one loop patches it once `dir_chains` exists.
 `asc` is a `bytearray` and `files` holds the same object, so the patch
 reaches the bytes `put` writes and nothing upstream had to know.
 
+### 54.7.2 The sweep warms the disk it found the program on
+
+§54.7.1 seeds from `asc_use`, and **`asc_use` hangs off the harvest, which a
+quiet mount skips** (§18.9) — while `assoc_try` navigates with
+`dsk_chdir_q`, quietly, precisely because it is answering a question about a
+FILE and wants no listing. So the two never met: the sweep could walk B:
+root and B:`\APPS`, find the program, and never load the `ASSOC.DAT` it had
+just walked past.
+
+The visible consequence was the **second document type**. A cold machine
+opening `README.TXT` swept A: root, A:`\APPS`, B: root, B:`\APPS` to find
+Note Pad and wrote one hint; a `.BMP` opened next swept all four again to
+find Paint, on a machine that had held B:'s cache in its hands moments
+earlier. Measured on the 5150: `assoc_drv` reads `ff 01 ff ff` after the cold
+open, where a seeded volume reads `01 01 01 01`.
+
+`assoc_locate`'s `.found` calls `asc_use` — the volume that **answered**, so
+every association on it is seeded and no later type sweeps again. Four things
+about the placement:
+
+- **It costs ~2 `int 13h` calls, once per volume.** The `asc_vol` stamp makes
+  every later call a compare, so a warm machine pays nothing and only a
+  volume the cache does not currently describe pays at all.
+- **Safe from a subdirectory**, which is where `.found` leaves us —
+  `B:\APPS`, not the root. `asc_root_find` walks the root **directly** rather
+  than through `dskw_stat`, and §54.7 says it was written that way for
+  exactly this: "a mount may be landing in a subdirectory, which is exactly
+  when this runs."
+- **Before the hint write-back, deliberately.** The seed writes what the
+  *cache* believes; the write-back writes where the program was *actually
+  found*. In that order a stale cached cluster for this program loses to the
+  truth, which is the only ordering that is right in both directions.
+- **`asc_use` preserves every register and touches neither `[dsk_cwd]` nor
+  `[disk_drive]`** — `dsk_dirw_start` keeps its own walker state — so the
+  `ld_run_name` that follows still loads out of the directory the locate left
+  current.
+
+**And this is what makes the boot-time mount unnecessary.** The alternative
+was mounting B: at boot to pre-warm it (~0.8–1.6 s on every machine, whether
+or not a document is ever opened). Paying it here instead puts the cost at
+the moment the user has already asked for a file and is expecting the drive
+to run — and charges it only to sessions that actually open a document.
+
 ### 54.8 Accepting the document: four apps, and the two traps between them
 
 Note Pad, Paint, Tracker and ArtfulType all take a document handed to them at

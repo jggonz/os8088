@@ -867,12 +867,26 @@ assoc_locate:
     stc
     ret
 .found:
-    mov bx, di                  ; remember where it was, so a second document
-    mov al, [disk_drive]        ; of this type costs ONE quiet mount instead
-    mov [assoc_drv+bx], al      ; of the sweep again: assoc_try navigates with
-    shl bx, 1                   ; dsk_chdir_q, so there is no listing, no
-    mov ax, [dsk_cwd]           ; harvest and nothing that would have called
-    mov [assoc_clus+bx], ax     ; assoc_note_app for us (SPEC.md 54.4.2)
+    call asc_use                ; the volume that ANSWERED (SPEC.md 54.7.2):
+                                ; seed EVERY association on it, not just the
+                                ; one we came for. assoc_try navigates with
+                                ; dsk_chdir_q and asc_use hangs off the
+                                ; harvest, which a quiet mount skips - so
+                                ; nothing else on this path would ever load
+                                ; this disk's ASSOC.DAT, and the next document
+                                ; of a DIFFERENT type swept all over again.
+                                ; ~2 int 13h calls, once per volume: the
+                                ; asc_vol stamp makes every later call a
+                                ; compare. Safe from a subdirectory (we are
+                                ; standing in B:\APPS) because asc_root_find
+                                ; walks the ROOT directly rather than through
+                                ; dskw_stat, which is what it was written for
+    mov bx, di                  ; ...then the AUTHORITATIVE hint for the one
+    mov al, [disk_drive]        ; program we actually located - AFTER the seed
+    mov [assoc_drv+bx], al      ; on purpose, so a stale cached cluster for
+    shl bx, 1                   ; THIS program loses to where it really is
+    mov ax, [dsk_cwd]
+    mov [assoc_clus+bx], ax
     pop di
     pop si
     pop dx
