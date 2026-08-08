@@ -1120,6 +1120,48 @@ true thing: the entry format (§19), `dsk_get_dir`, `fm_ultoa`, and the
 one-place-for-geometry discipline that `fm_hit`, `fm_thumb`/`fdlg_thumb` and
 now the two `*_sel_bar`s all follow.
 
+### A scroll moves the rows and nothing else on the window (SPEC.md §22.11)
+
+All eight ways to scroll a Disk window — the two arrow cells, the two halves
+of the track, Up/Down/PgUp/PgDn — ended in `fm_repaint`, so moving a list
+redrew the header, two framed buttons, every visible row, the whole scroll bar
+and the status line. **Not one of those four can change when the view
+scrolls**: the header counts files, the buttons are labels in fixed rects, and
+the status line is §22.7's `Size … Free …` or a §22.9 verdict — questions about
+the selection and the volume, which a scroll moves neither of. Measured on a
+cycle-accurate 5150 with PERFORMANCE.md Part 3.1's flicker instrument, one row
+cost **16 frames of visible redraw = 262 ms, 15 of them flashing, worst 2,772
+transient pixels over the whole content**; it is **5 frames = 83 ms, 2
+flashing, worst 320 px** over one row and the bar, and a scroll at an **end
+stop** — which used to repaint the window to show the same pixels — now draws
+**nothing at all**.
+
+Three tiers behind one entry (`fm_scroll_by`, so the clamp, the tier choice and
+the write-back cannot drift between the mouse and the keyboard):
+`fm_scrollpaint` (list view, `|d| < fit`: one `gfx_scroll`, the `d` rows it
+exposed, two XOR bands and the thumb), `fm_rows_only` (the grid, or a jump of a
+windowful — the row band only, header and buttons and status line still
+untouched), and `fm_repaint` when a clip region cuts the band, which is §11.3's
+granularity rule taken exactly where `fm_status_only` takes it.
+
+Four things are worth knowing before touching it. **The blit rounds INWARD**,
+which is the opposite of Note Pad's §27.7.2 and for a reason: `NP_MARGIN` is 8
+there so rounding `x1` down stays inside the content, while a Disk row's icon
+starts *four* pixels in and rounding down would put the blit's left edge on the
+window frame and then outside the window altogether. **The delta the drawing is
+a function of is the one the CLAMP took**, not the one the click asked for.
+**A scroll draws no text, so a status line owed elsewhere is still owed** —
+`fm_onkey` had to start banking `[fm_statowed]` because "every path below draws
+the line one way or another" stopped being true. And the bug this shipped
+before an A/B diff caught it: **an icon does not erase what it lands on.**
+`ico_core`'s white pass is the icon's own *silhouette* (`ico_app16`'s is a
+diamond), not its 16x16 cell, so redrawing one leaves every pixel the previous
+row's icon lit outside the new outline — a three-column stripe of stale icon
+edge, on the three window positions in eight that reach it and no others. The
+strip is erased first. Verified by driving 25 scroll captures through this
+kernel and through one with `fm_scroll_by` stubbed to `stc`/`ret`: **0
+differing pixels** on CGA at two byte phases, on Hercules and on VGA mode 12h.
+
 ### The mono adapters reuse the back-buffer renderer (SPEC.md §39)
 
 There is **no second graphics driver**. `kernel/vgabb.inc` was written as a latch-free,
