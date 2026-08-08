@@ -11285,6 +11285,46 @@ Three things about it:
 On README.TXT: 15,428 characters in a 24-cell row is **642** against the true
 781, so the bar is within 18% of right immediately instead of wrong by 43x.
 
+### 27.7.5 A resize walks to the bottom of the view, not to the end
+
+§27.7.1 bounded every walk that draws, and §27.7.3 chunked the one that
+counts. One unbounded walk was left, on a path neither of them looks at:
+`np_paint`, when `[np_gchg]` says the geometry moved. A resize changes the
+wrap width, so every row start moves and the whole layout is stale — and the
+old answer to that was `np_measure`, run to the last character, **drawing
+nothing at all while it went**. The note was walked invisibly and only then
+did the first row appear.
+
+It ran for ONE number. `np_scrollto` clamps `[np_top]` into the new layout and
+`np_scrollmax` is `[np_drows] - [np_vrows]`, so the total had to be known
+before a pixel could be drawn.
+
+**The bound answers the clamp exactly, and without the total.** The walk stops
+after `[np_vrows]`, and its exit is the answer:
+
+- **`.stop`** — the note demonstrably reaches past the bottom of the view, so
+  `[np_top]` is still a legal top and the clamp cannot bite. No total needed.
+- **`.done`** — the note ended inside the view, so `.done` has just set
+  `[np_drows]` to the truth (it assigns, it does not raise), and the clamp is
+  right for the same reason it always was.
+
+So nothing tests which happened: `np_hmark` raises the debt *before* the walk,
+and the walk either clears it on the way out or leaves it owed for §27.7.3's
+worker. The two cases are the two exits, and they were already there.
+
+**What this does NOT remove, because nothing can.** Wrapping is sequential:
+row *N* cannot be laid out without laying out rows 0..*N*-1, so a resize while
+scrolled to row 400 must still walk 400 rows to draw the view. The tail beyond
+the view is the avoidable part, and at the top of a file — which is where a
+file is when it has just been opened — that is nearly all of it. On README.TXT
+widened to full screen: **556 rows walked before, 18 after**.
+
+**And the drawing itself was never the problem.** `np_walk` calls `np_rflush`
+per row as it lays each one out, so on the 1bpp adapters — where the renderer
+writes the framebuffer directly (§39.5) — rows appear top to bottom as they
+are computed. The user already watches it fill in. What they were waiting on
+was the invisible pass in front of it.
+
 ### 27.8 A selection, and the two things a drag can mean
 
 The selection is a **pair of character indices**, `[np_sel0]`..`[np_sel1)`,

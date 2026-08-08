@@ -3082,11 +3082,31 @@ np_paint:
     mov word [np_wanty], 0xFFFF
     cmp byte [np_gchg], 0           ; a resize got here through W_PAINT, which
     je .laidout                     ; is not np_redraw and so has clamped
-    call np_measure                 ; nothing: measure the note under the new
-    mov ax, [np_top]                ; wrap width and put the view back inside
-    call np_scrollto                ; it. np_bmode is 0 above, so np_settle
-    mov byte [np_resume], 0         ; inside np_measure is a no-op and this is
-.laidout:                           ; just the walk
+                                    ; nothing: measure the note under the new
+                                    ; wrap width and put the view back inside
+                                    ; it. np_bmode is 0 above, so np_settle
+                                    ; inside np_measure is a no-op and this is
+                                    ; just the walk
+    call np_hmark                   ; the wrap width moved, so every row start
+                                    ; moved with it: the height is owed, and
+                                    ; owed from the TOP (SPEC.md 27.7.5)
+    mov ax, [np_vrows]              ; ...and this walk is BOUNDED to the view
+    mov [np_lastrow], ax            ; like every other one (SPEC.md 27.7.1).
+    call np_measure                 ; It used to run to the last character for
+                                    ; one number - the total - and drew not a
+                                    ; pixel while it did, so a resize was the
+                                    ; whole note walked INVISIBLY before the
+                                    ; first row appeared
+    mov ax, [np_top]                ; The bound is also what answers the clamp,
+    call np_scrollto                ; exactly, without the total: a walk that
+    mov byte [np_resume], 0         ; STOPPED proved the note reaches past the
+.laidout:                           ; bottom of the view, so [np_top] is still
+                                    ; good and np_scrollmax cannot bite; one
+                                    ; that ENDED set [np_drows] to the truth on
+                                    ; its way out and cleared the debt this
+                                    ; block raised, so the clamp is right. The
+                                    ; walk's own exit decides which, which is
+                                    ; why nothing here tests for it
     mov byte [np_draw], 1
     mov byte [np_sigup], 1          ; the content was white-filled on the way
     mov byte [np_clip], 0           ; here, so this pass draws every row AND is
