@@ -125,7 +125,7 @@ emulator have the hardware": a ✅ means reach for it first.
 | AdLib / OPL2 | ✅ | ✅ | `make test-snd ADLIB=1`, or the `os8088_5150_sb` machine | dominant 880.0 Hz from a keyed 440; the Sound page's Test tone came out of MartyPC's OPL2 at 660 Hz |
 | Sound Blaster (DMA streams) | ✅ | ✅ | `make test-snd SB16=1 TESTAPPS=build/sbtest.img`, or the `os8088_5150_sb` machine | 2.00 s at 1000.0 Hz on BOTH. MartyPC's is a DSP **2.01** by default — the classic `0x48`+`0x1C` auto-init path — where QEMU's is an SB16; `dsp_version` picks |
 | Boot sound probe (SPEC.md §51.3.1) | ⚠️ | ✅ | the `os8088_5150_sb` / `_sbonly` / `_cga` machines, fresh image | MartyPC is the instrument here: its AdLib **answers the OPL2 timer-flag dance** on a cycle-accurate 8088, which is the whole of what the probe reads and what QEMU cannot show — QEMU's `-device sb16` has an OPL *stub* that does not answer, so on QEMU an SB16-only box reads as cardless. `_sb` → row 0 `WANT` 1, `SEG` 9E80, and the Sound page comes up on **Sound Blaster** with nothing ticked; `_cga` → `WANT` 0, nothing loaded, no `DRVE_HW`; `_sbonly` → `WANT` 0 by default and 1 under `make SNDSNIFF=sb`, against a real DSP 2.01 |
-| Scripted mouse / keys | ✅ | ✅ | `os88marty.py key` / `mouse`, or `tools/mouse.py` | MartyPC drives the REAL devices: a Microsoft packet through the UART (`mou_seen` goes 0→1) and a keystroke through int 09h (SPEC.md §9.6's arrows moved `mouse_x` 320→350) |
+| Scripted mouse / keys | ✅ | ✅ | **`tools/os88mouse.py click X Y`** (absolute, closes the loop — see the MartyPC section; `os88marty.py mouse` is the relative primitive under it), `os88marty.py key`, or `tools/mouse.py` on QEMU | MartyPC drives the REAL devices: a Microsoft packet through the UART (`mou_seen` goes 0→1) and a keystroke through int 09h (SPEC.md §9.6's arrows moved `mouse_x` 320→350) |
 | **Screenshots** (CGA/Herc) | ✅ | ✅ | `os88marty.py shot`, or `tools/shot.py` / `hercshot.py` | MartyPC reads VRAM directly — 60.0% lit, matching QEMU's CGA on the same desktop |
 | Mouse on COM2 (SPEC.md §9.5) | ➖ | ✅ | `make test MOUSEPORT=com2` | both UARTs probe present, COM2 wins, COM1 retired |
 | A **cross-wired IRQ** (SPEC.md §9.5.2) | ➖ | ✅ | `make test MOUSEPORT=com2irq4` | the Compaq Portable III: mouse at 2F8 driving IRQ4. Undetectable before the fix |
@@ -1240,6 +1240,30 @@ AT-class 86Box targets (`make 286`, `make 386sx`, `make 386`) are the honest
 middle of that range.
 
 ## MartyPC — the first thing to reach for
+
+> **Before you script a single click: use `tools/os88mouse.py`, not
+> `os88marty.py mouse`.** The latter is *relative* — a real Microsoft packet
+> through the real UART, which is what makes it worth having — so aiming at a
+> control means dead reckoning from the kernel's edge clamp, and that drifts:
+> a packet is a signed byte per axis, the UART is 1200 baud so anything under
+> ~25 ms apart can be dropped, and the clamp eats overshoot without saying so.
+> **The failure looks exactly like a broken feature**: the click lands three
+> pixels off a 16px control, nothing happens, and the session reports a bug
+> that is not there. `os88mouse.py` reads the live cursor out of the debug
+> registry (SPEC.md §9.4.3), sends the exact remaining delta and re-reads
+> until it agrees — pixel-exact in ~0.8 s, and it *fails loudly* when it
+> cannot converge.
+>
+> ```sh
+> python3 tools/os88mouse.py 127.0.0.1:9001 where
+> python3 tools/os88mouse.py 127.0.0.1:9001 click 445 153
+> python3 tools/os88mouse.py 127.0.0.1:9001 menu 12 8 40 45   # NOT click
+> python3 tools/os88mouse.py 127.0.0.1:9001 drag 200 78 200 120
+> ```
+>
+> `menu` is its own verb because a menu **cannot** be opened with a click —
+> `menu_track` draws the pull-down and then polls a level, so press-and-release
+> in place opens and closes it in one breath.
 
 `make marty`, and the whole recipe is docs/MARTYPC-DEBUG.md. What it gives
 that neither of the others does:

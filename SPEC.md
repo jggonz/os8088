@@ -2487,6 +2487,35 @@ says which UART the mouse is on and the line says which wire it pulls, and
 `0x08` with row 0, is a cross-wired card — a fact no emulator here produces
 by accident and no reading of the source can supply.
 
+#### 9.4.3 …and a fourth word, which is the HARNESS's
+
+A pointer to **`mouse_x`**, and behind it `mouse_y` and `mouse_btn`. It is
+**appended**, so every offset above is unmoved and a reader written against
+the older block is unaffected.
+
+It is there for a different reason from the rest of this block, and the
+reason is worth stating because it has cost every scripted test in this tree
+time. **MartyPC's mouse is RELATIVE** — `os88marty.py mouse` clocks a real
+Microsoft packet through the UART, which is the whole point (§9.4.2's path is
+what a test exists to exercise) — so a script that wants to click a button at
+`(x, y)` can only get there by **dead reckoning**: drive hard into a corner
+until the kernel's edge clamp pins the cursor at a known point, then step out
+by the difference. Every packet the guest rounded, coalesced or dropped
+while the UART was busy moves the destination, and the failure is silent: the
+click lands a few pixels off a 16px control, nothing happens, and the harness
+reports a feature that does not work.
+
+Reading where the cursor **actually is** closes the loop. `tools/os88mouse.py`
+reads this pointer, reads the live position, computes the exact remaining
+delta, sends it, and re-reads until it agrees — typically two packets, and it
+can *say* when it failed to converge instead of clicking into empty desktop.
+
+**It is not a way to place the cursor, and must not become one.** A poke to
+`mouse_x` would skip the UART, `mou_isr` and the packet decoder — the three
+things a scripted click is there to drive — and CLAUDE.md's note that no debug
+module was written for the mouse *for exactly that reason* still stands. The
+packet does all the work; this word only reports where it landed.
+
 It shares §18.94's mechanism and **deliberately not its knob** — it had a
 fixed word of its own at `0060:0006` until §57 replaced the per-instrument
 words with one registry, and that address is free again.

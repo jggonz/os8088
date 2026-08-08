@@ -333,6 +333,42 @@ is the default for VGA work all the same, because the alternative is a
 machine that is not an 8088 at all. But **a disagreement between MartyPC and
 QEMU about a VGA pixel is not yet automatically MartyPC's win** - go and find
 out which is right, and then delete this paragraph.
+**CLICK WITH `tools/os88mouse.py`, NOT WITH `os88marty.py mouse` (SPEC.md
+9.4.3).** This is the first thing to know about driving the UI here, and it
+is written this high up because every agent so far has found it the
+expensive way. `os88marty.py mouse` is RELATIVE - a real Microsoft packet
+through the real UART, which is exactly what you want it to be - so aiming
+at a control means dead reckoning from the kernel's edge clamp, and dead
+reckoning DRIFTS: a packet is a signed byte per axis so a long move is
+several of them, the UART is 1200 baud so anything sent under ~25ms apart
+can be dropped, and the clamp silently eats overshoot. **The failure is
+silent and it always looks like a bug in the thing you are testing** - the
+click lands three pixels outside a 16px control, nothing happens, and the
+session concludes the feature is broken. It has cost several sessions real
+time.
+
+`os88mouse.py` closes the loop instead: the kernel publishes a pointer to
+`mouse_x` in the debug registry's `'MO'` block, so it READS where the cursor
+actually is, sends the exact remaining delta, and re-reads until it agrees -
+pixel-exact in about 0.8s, and it SAYS SO and exits non-zero when it cannot
+converge rather than clicking into empty desktop.
+
+```
+python3 tools/os88mouse.py 127.0.0.1:9001 where          # (320,100) buttons 00
+python3 tools/os88mouse.py 127.0.0.1:9001 click 445 153
+python3 tools/os88mouse.py 127.0.0.1:9001 menu 12 8 40 45    # press/drag/release
+python3 tools/os88mouse.py 127.0.0.1:9001 drag 200 78 200 120
+```
+
+**`menu` is a separate verb because a menu cannot be opened with a click**:
+`menu_track` draws the pull-down and then polls a level, so press-and-release
+in place opens it and closes it in the same breath (SPEC.md 9.6.1's flashing
+menu, seen from the harness side). It does NOT place the cursor by poking
+`mouse_x` and must never learn how - that would skip the UART, `mou_isr` and
+the packet decoder, which are the three things a scripted click exists to
+drive. The packet still does all the work; the registry only reports where it
+landed.
+
 `os88marty.py key` enters the emulator's keyboard buffer so the guest sees a
 keystroke through the 8255 and int 09h, and `mouse` builds a real Microsoft
 3-byte packet and clocks it into the serial controller so mou_isr decodes it
