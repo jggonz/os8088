@@ -19924,16 +19924,22 @@ place without a rebuild between them.
 **The load-bearing part is that the TEXT IS NOT THERE.** The first two
 builds put the animation *next to* a row number that had stopped, and the
 field's verdict was exact: *"the numbers freeze entirely, and that is not
-smooth"*. A frozen number beside a moving animation is a frozen number. So
-the readout is two fields — `TEXT` (the mode label and `Pos`/`Row`,
-`TLOG_TXTW` cells) and `VISUAL` (`TLOG_RULEW` cells) — and the text **poofs
-on the first frame of the hold** and comes back on the first frame of the
-next burst. Nothing on screen is standing still, because nothing on screen
-is a number.
+smooth"*. A frozen number beside a moving animation is a frozen number.
 
-That split is also what makes it affordable: the text is blanked *once* per
-cycle rather than per frame, and the animation is 16 cells — ~13 ms on the
-machine this is for (§6.1.1) against ~34 for the whole line.
+So the readout is a fixed **LABEL** (`TLOG_PACEW` cells) and a **BODY**
+(`TLOG_BODYW`: `Pos xx/yy  Row zz` plus the beat ruler), and in a burst mode
+the hold **replaces the body, whole** — the animation is *where the numbers
+were*, not beside them, and nothing on screen is standing still because
+nothing on screen is a number.
+
+**The label is never blanked**, and that is the second half of the same
+report: it is the one thing on the line that is not part of the experiment,
+and a label blinking once a second competes with the animation it is
+labelling. It redraws only when the mode changes.
+
+The split is also what makes it affordable: the body is redrawn per hold
+frame but the label is not, and the burst — the part actually being judged —
+pays nothing at all.
 
 **Five animations, because which one reads best is a claim about
 perception.** `E` cycles A, B and then all five, and the label names the live
@@ -19941,16 +19947,24 @@ one:
 
 | | the hold shows |
 |---|---|
-| **C bar** | a bar full at the seam, one cell shorter each frame — an impact at the front, a decay across |
-| **D sweep** | one cell running the field, wrapping — the quietest; still moving when the bar has decayed to nothing |
-| **E out** | a solid block growing from the centre to the edges |
-| **F in** | a solid block growing from the edges to the centre |
-| **G hide** | every cell at once, unchanged for the whole hold — then the letters **revealed from the centre** over `TLOG_REVN` frames once the burst resumes |
+| **bar** | full at the seam, shrinking from the right — an impact at the front, a decay across |
+| **sweep** | one cell running the field, wrapping — the quietest; still moving when the bar has decayed to nothing |
+| **out** | a solid block growing from the centre to the edges |
+| **in** | a solid block growing from the edges to the centre |
+| **hide** | every cell at once, unchanged for the whole hold — then the letters **revealed from the centre** over `TLOG_REVN` frames once the burst resumes |
 
-`G` is the one that spends nothing during the wait (one drawing call for the
-whole hold) and pays on the far side instead, and its reveal is deliberately
-on the **burst** frames: by the time anything legible is on screen the
-display is already back in step, so the seam was never visible.
+`hide` is the one that spends nothing during the wait (one drawing call for
+the whole hold) and pays on the far side instead, and its reveal is
+deliberately on the **burst** frames: by the time anything legible is on
+screen the display is already back in step, so the seam was never visible.
+
+**They are NAMED and not lettered**, because the list has been renumbered
+twice — §45.16.3's every-other-frame grid is gone, measured widest and read
+as the worst — and a `PACE C` that means a different thing in two builds is
+worse than no letter at all. **And each one's step is scaled to the field**
+(`TLOG_BARSTEP` / `TLOG_SWPSTEP` / `TLOG_EDGESTEP`): a hold is ~10 frames and
+the body is 33 cells, so one cell a frame left the bar three-quarters full
+when the next burst took it away, which reads as a bar that does not move.
 
 Three details are load-bearing. `[tlog_sweep]` counts **frames since the
 burst ended**, with `TLOG_NOBAR` as the burst's own value — so "is this the

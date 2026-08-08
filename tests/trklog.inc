@@ -113,23 +113,26 @@ TLOG_KB     equ (TLOG_RECS * TLOG_RSZ + 1023) / 1024
 TLOG_LINE   equ 76                  ; 70 columns + CR LF
 TLOG_TXTKB  equ (TLOG_RECS * TLOG_LINE + 1024 + 1023) / 1024
 
-; --- the windowed pacing experiment, A..G on the E key (SPEC.md 45.16.4) ----
+; --- the windowed pacing experiment, on the E key (SPEC.md 45.16.4) ---------
 ;
-; A and B are cadences. Everything from TLOG_PACE_BAR up is the SAME burst -
-; TLOG_BURST rows at one per frame, then a hold until the music catches up -
-; and they differ only in what covers the hold, so the tests below are `jb`
-; against TLOG_PACE_BURST and never `jne`.
-TLOG_PACE_EVERY equ 0               ; A: every frame - the shipped behaviour,
-                                    ;    an irregular 110/165 (45.16.2)
-TLOG_PACE_EVEN  equ 1               ; B: every OTHER frame - an even 110 with
-                                    ;    a 220 where the drift is taken up
-TLOG_PACE_BAR   equ 2               ; C: a bar, full at the seam, decaying
-TLOG_PACE_SWEEP equ 3               ; D: one cell running the field
-TLOG_PACE_OUT   equ 4               ; E: stars from the centre out to the edges
-TLOG_PACE_IN    equ 5               ; F: stars from the edges in to the centre
-TLOG_PACE_HIDE  equ 6               ; G: all stars at once, then the letters
-                                    ;    revealed from the centre once synced
-TLOG_PACE_N     equ 7
+; `every` is the shipped cadence. Everything from TLOG_PACE_BAR up is the SAME
+; burst - TLOG_BURST rows at one per frame, then a hold until the music catches
+; up - and they differ only in what covers the hold, so the tests below are
+; `jb` against TLOG_PACE_BURST and never `jne`.
+;
+; THE MODES ARE NAMED, NOT LETTERED, because the list has been renumbered
+; twice: the every-other-frame grid (45.16.3) is gone - it was measurably the
+; widest spread of the lot and read as the worst - and a `PACE C` that means a
+; different thing in two builds is worse than no letter at all.
+TLOG_PACE_EVERY equ 0               ; every frame - the shipped behaviour,
+                                    ;   an irregular 110/165 (45.16.2)
+TLOG_PACE_BAR   equ 1               ; burst, then a bar full at the seam
+TLOG_PACE_SWEEP equ 2               ; burst, then one cell running the field
+TLOG_PACE_OUT   equ 3               ; burst, then stars centre -> edges
+TLOG_PACE_IN    equ 4               ; burst, then stars edges -> centre
+TLOG_PACE_HIDE  equ 5               ; burst, all stars, then the letters
+                                    ;   revealed from the centre once synced
+TLOG_PACE_N     equ 6
 TLOG_PACE_BURST equ TLOG_PACE_BAR   ; the first burst mode
 
 TLOG_BURST      equ 8               ; rows in a burst; a power of two, so the
@@ -142,11 +145,18 @@ TLOG_SWMAX      equ 63              ; ...so the counter saturates BELOW it -
                                     ; field's redraw key packs "holding, frame
                                     ; k" into 0..3Fh and tags the other two
                                     ; states with 40h and 80h
-TLOG_REVN       equ 4               ; frames G takes to reveal the letters
+TLOG_REVN       equ 4               ; frames `hide` takes to reveal the letters
+TLOG_BARSTEP    equ 4               ; cells an animation moves per HOLD FRAME:
+TLOG_SWPSTEP    equ 3               ; the field is TLOG_BODYW and a hold is
+TLOG_EDGESTEP   equ 2               ; ~10 frames, so one a frame is too slow
 TLOG_PACEW      equ 12              ; 'PACE C bar  ' - the mode AND what its
                                     ; hold draws, because seven of them cannot
-                                    ; be told apart by a letter alone
-TLOG_TXTW       equ TLOG_PACEW + 14 ; ...plus 'Pos xx  Row yy'
+                                    ; be told apart by a letter alone. It is a
+                                    ; FIELD OF ITS OWN and it is never blanked:
+                                    ; it is the one thing on the line that is
+                                    ; not part of the experiment, so a label
+                                    ; blinking once a second competes with the
+                                    ; animation it is labelling
 TLOG_RULEW      equ 16              ; the BEAT RULER: one cell per row, marker
                                     ; at row mod this. 16 is CLICK.MOD's note
                                     ; spacing (tests/mkclick.py), so the marker
@@ -155,6 +165,10 @@ TLOG_RULEW      equ 16              ; the BEAT RULER: one cell per row, marker
                                     ; a hex counter says WHICH row and a walking
                                     ; marker says whether the rows are EVEN, and
                                     ; only the second is the question here
+TLOG_BODYW      equ TUI_WPOSW + TLOG_RULEW  ; 'Pos xx/yy  Row zz' + the ruler
+                                    ; span an animation covers, because the
+                                    ; animation REPLACES them rather than
+                                    ; sitting beside them
 
 TLOGF_REBUILD equ 1
 TLOGF_STEP    equ 2
@@ -468,24 +482,19 @@ tlog_clk_key:
 tlog_even_key:
     push ax
     push si
-    mov al, [tlog_pace]             ; E CYCLES A -> B -> C -> D -> E -> F -> G
+    mov al, [tlog_pace]             ; E CYCLES every -> bar -> sweep -> out
     inc al
     cmp al, TLOG_PACE_N
     jb .set
     xor al, al
 .set:
     mov [tlog_pace], al
-    mov byte [tlog_ephase], 0
-    mov byte [tlog_even], 0
-    cmp al, TLOG_PACE_EVEN
-    jne .nb
-    mov byte [tlog_even], 1         ; B still drives the every-other-wake gate
-.nb:
     mov byte [tlog_bbase], 0xFF     ; the burst restarts on the next row, with
     mov byte [tlog_sweep], TLOG_NOBAR       ; nothing held over from the mode
     mov byte [tlog_rev], TLOG_REVN          ; being left - a half-finished
     mov byte [tlog_lsweep], 0               ; reveal would star the new mode's
     mov byte [tlog_tkey], 0                 ; own first frames
+    mov byte [tlog_llbl], 0              ; ...and the LABEL has changed
     mov byte [tui_lrow], 0xFF       ; ...and the LABEL has changed, so both
                                     ; fields owe a redraw that no row change
                                     ; has asked for yet
@@ -498,7 +507,7 @@ tlog_even_key:
     pop ax
     ret
 
-tlog_pace_str:  dw tlog_s_eveno, tlog_s_evenx, tlog_s_bar, tlog_s_swp
+tlog_pace_str:  dw tlog_s_eveno, tlog_s_bar, tlog_s_swp
                 dw tlog_s_out, tlog_s_in, tlog_s_hide
 
 ; -----------------------------------------------------------------------------
@@ -709,8 +718,8 @@ tlog_pace_draw:
     ret
 
 tlog_pace_lbl:
-    db 'PACE A      ', 'PACE B      ', 'PACE C bar  ', 'PACE D sweep'
-    db 'PACE E out  ', 'PACE F in   ', 'PACE G hide '
+    db 'PACE every  ', 'BURST bar   ', 'BURST sweep ', 'BURST out   '
+    db 'BURST in    ', 'BURST hide  '
 
 ; -----------------------------------------------------------------------------
 ; tlog_blank - CX cells of space at [DI]
@@ -773,7 +782,8 @@ tlog_rule_draw:
     ret
 
 ; -----------------------------------------------------------------------------
-; tlog_hold_draw - the HOLD's animation at [DI], TLOG_RULEW cells
+; tlog_hold_draw - the HOLD's animation at [DI], TLOG_BODYW cells - the
+;                  WHOLE body, in place of the position and the ruler
 ;
 ; Five of them, and they are five answers to one question: a burst mode is
 ; deliberately ahead of the music and then waits, and the wait has to read as
@@ -798,15 +808,29 @@ tlog_hold_draw:
     push bx
     push cx
     push dx
-    mov bl, [tlog_sweep]            ; BL = k, the frame within the hold
+    mov bl, [tlog_sweep]            ; BL = k, the frame within the hold...
     mov bh, [tlog_pace]
-    mov cx, TLOG_RULEW
+    mov al, TLOG_BARSTEP            ; ...SCALED, so an animation crosses the
+    cmp bh, TLOG_PACE_BAR           ; field in about a hold. The field is
+    je .scale                       ; TLOG_BODYW wide and a hold is ~10 frames
+    mov al, TLOG_SWPSTEP            ; at CLICK.MOD's tempo, so one cell a frame
+    cmp bh, TLOG_PACE_SWEEP         ; would leave a 33-cell bar three-quarters
+    je .scale                       ; full when the next burst took it away -
+    mov al, TLOG_EDGESTEP           ; which reads as a bar that does not move
+.scale:
+    mul bl                          ; AX = k * step (both bytes: AH is the
+    cmp ax, TLOG_BODYW              ; overflow, and the clamp catches it)
+    jbe .kok
+    mov ax, TLOG_BODYW
+.kok:
+    mov bl, al
+    mov cx, TLOG_BODYW
     xor dh, dh                      ; DH = the cell index
 .c:
     mov al, ' '
     cmp bh, TLOG_PACE_BAR
     jne .nbar
-    mov al, TLOG_RULEW              ; bar: lit while index < W - k, so it is
+    mov al, TLOG_BODYW              ; bar: lit while index < W - k, so it is
     sub al, bl                      ; full at the seam and shrinks from the
     jbe .dark                       ; RIGHT - a decay, where shrinking from
     cmp dh, al                      ; the left reads as the block MOVING
@@ -816,8 +840,11 @@ tlog_hold_draw:
 .nbar:
     cmp bh, TLOG_PACE_SWEEP
     jne .nswp
-    mov al, bl                      ; sweep: one cell at k mod W
-    and al, TLOG_RULEW - 1
+    mov al, bl                      ; sweep: one cell, wrapping
+    cmp al, TLOG_BODYW
+    jb .swok
+    xor al, al
+.swok:
     cmp al, dh
     mov al, ' '
     jne .put
@@ -826,13 +853,13 @@ tlog_hold_draw:
 .nswp:
     cmp bh, TLOG_PACE_OUT
     jne .nout
-    mov al, TLOG_RULEW / 2          ; out: cells [W/2-1-k .. W/2+k]
+    mov al, TLOG_BODYW / 2          ; out: cells [W/2-1-k .. W/2+k]
     sub al, 1
     sub al, bl
-    js .lit                         ; k past the half: the whole field
+    jc .lit                         ; k past the half: the whole field
     cmp dh, al
     jb .dark
-    mov al, TLOG_RULEW / 2
+    mov al, TLOG_BODYW / 2
     add al, bl
     cmp dh, al
     jbe .lit
@@ -844,7 +871,7 @@ tlog_hold_draw:
     jne .nin
     cmp dh, bl                      ; in: cells [0..k] and [W-1-k..W-1]
     jbe .lit
-    mov al, TLOG_RULEW - 1
+    mov al, TLOG_BODYW - 1
     sub al, bl
     jc .lit
     cmp dh, al
@@ -1357,13 +1384,12 @@ tlog_s_synco:   db 'Sync ON: the screen follows the card', 0
 tlog_s_syncx:   db 'Sync OFF: the screen follows the mixer', 0
 tlog_s_clkt:    db 'Clock: one frame per tick', 0
 tlog_s_clkr:    db 'Clock: one frame per sub-tick', 0
-tlog_s_eveno:   db 'Pace A: every frame - 110/165, the shipped one', 0
-tlog_s_evenx:   db 'Pace B: every 2nd frame - an even 110, a 220 to catch up', 0
-tlog_s_bar:     db 'C: burst, then a decaying BAR - no text in the wait', 0
-tlog_s_swp:     db 'D: burst, then a SWEEP running the field', 0
-tlog_s_out:     db 'E: burst, then stars OUT from the centre', 0
-tlog_s_in:      db 'F: burst, then stars IN from the edges', 0
-tlog_s_hide:    db 'G: burst, all stars in the wait, then REVEAL', 0
+tlog_s_eveno:   db 'Every frame - 110/165, the shipped cadence', 0
+tlog_s_bar:     db 'Burst, then a decaying BAR over the wait', 0
+tlog_s_swp:     db 'Burst, then a SWEEP running the field', 0
+tlog_s_out:     db 'Burst, then stars OUT from the centre', 0
+tlog_s_in:      db 'Burst, then stars IN from the edges', 0
+tlog_s_hide:    db 'Burst, all stars, then the letters REVEALED', 0
 
 ; --- bss ---------------------------------------------------------------------
     TRKW tlog_seg                   ; the record claim, 0 = not armed
@@ -1382,17 +1408,16 @@ tlog_s_hide:    db 'G: burst, all stars in the wait, then REVEAL', 0
     TRKB tlog_wloop                 ; worker loop passes since the record
     TRKB tlog_src                   ; which producer is opening this one
     TRKB tlog_nosync                ; Y: the display is back on the mixer
-    TRKB tlog_even                  ; E: the windowed readout on an EVEN
-    TRKB tlog_ephase                ; two-frame grid, and which half we are on
     TRKB tlog_pace                  ; ...which of the three modes E has picked
     TRKB tlog_bbase                 ; C: the burst's first row, its displayed
     TRKB tlog_drow                  ; row, how far the hold's BANG has decayed
     TRKB tlog_sweep                 ; - and the VISUAL field's key as last
     TRKB tlog_lsweep                ; drawn, so neither field redraws for the
     TRKB tlog_rev                   ; other. G's reveal progress, 0..TLOG_REVN
-    TRKB tlog_tkey                  ; what the TEXT field is showing: 0 blank,
-    TRKB tlog_wtk                   ; 0FFh normal, 1..REVN revealing - and what
-                                    ; this frame wants it to be
+    TRKB tlog_tkey                  ; what the BODY is showing: 0 animation,
+    TRKB tlog_wtk                   ; 0FFh text, 1..REVN revealing - and what
+    TRKB tlog_llbl                  ; this frame wants; plus the pace the LABEL
+                                    ; was last drawn for
     TRKW tlog_cons                  ; what the worker last saw...
     TRKW tlog_totl
     TRKB tlog_state
