@@ -11643,6 +11643,75 @@ The same argument applies to the keyboard's `Up`/`Down` held on typematic and
 to any other app with a large scroll surface, which is why the peek is a
 kernel slot rather than something Note Pad worked out for itself.
 
+### 27.7.9 A walk that cannot be seeded must still be bounded
+
+`[np_lastrow]` is a **one-shot**: `np_walk` resets it to `0x7FFF` on the way
+out, and its own comment says why — "a caller that forgets to set it gets the
+whole note, which is slow and never wrong". Two callers forgot, and they
+forgot in the one case that matters.
+
+`np_vmove` and `np_move` both set the bound *inside the branch that set the
+seed*:
+
+```
+    call np_seedck          ; or np_seedrow
+    cmp byte [np_resume], 0
+    je .nolim               ; <- no seed, and so no bound either
+    mov [np_lastrow], dx
+.nolim:
+    call np_measure
+```
+
+The two seeders refuse for four different reasons and **say nothing about
+which**, so the refusal took the bound with it. `np_seedck` asks for the row
+*before* the caret's and `np_rows` describes only rows a completed walk
+reached — so a caret on the last visible row asks for a row past the table,
+is refused, and the walk that follows lays out **every row in the note** to
+find the row the caret is already standing on.
+
+Measured on a cycle-accurate 4.77MHz 8088 (README.TXT, 781 rows, a 16-row
+view): Down on the bottom visible row is **4,866 ms, of which 4,664 ms is
+that one walk**. Down anywhere else is ~180 ms. It is the most-used key in
+the editor.
+
+Two changes, and the first is the whole fix:
+
+- **The bound is set on every path**, seeded or not. A walk from index 0 that
+  stops at the row wanted is `[np_top]` rows instead of 781 — still not free,
+  but paid in the depth of the view rather than the length of the note.
+- **`np_seedtail` is the seed for the case that has one.** When the row wanted
+  is at or past the table's reach, the deepest row the table *does* describe
+  is above it, so the walk resumes there and steps forward a row or two. That
+  is §27.7.7's argument moved from the caret to a row, and a weaker case than
+  §27.7.7's: both callers are moving the caret, which reflows nothing, so
+  every row above the seed laid out identically by inspection.
+
+**`np_seedtail` carries its own guard, and that is why it is a routine.** The
+deepest row is a seed only for a row BELOW it. A caret on row 0 asks
+`np_seedck` for row −1 and is refused too — and seeding *that* at row 13
+starts the walk below the row it is looking for, which then never finds it.
+Ungated, the caret stopped moving on `Up` and the view stopped following it;
+`cmp dx, [np_rowsn]` / `jb` is the whole of the fix, at the one place both
+callers pass through.
+
+Measured after, on the same states: a scrolling `Down` is **250–407 ms
+against 4,802–5,088**, 12–19x, and a `Down` that does not scroll is unchanged
+to within 1%.
+
+**This is the fix §27.7.7 was written for and did not reach**, which is worth
+recording rather than quietly correcting. §27.7.7 names this symptom exactly —
+"Down on the bottom visible row … cost a walk of every row in the note" — and
+fixes `np_redraw`'s caret-follow net, which is a real unbounded walk on a
+different path: the A/B across it moved a scrolling `Down` by 72 cycles in
+4,455,200. The walk on this path is two routines earlier, in the key handler,
+and `np_redraw` never sees it. docs/NOTEPAD-NOTES.md 6 is where that lesson
+lives.
+
+What is **not** fixed here is `Up` out of the top of the view. The row wanted
+is above the view, no table entry can seed it, and `np_redraw`'s net then
+walks unbounded by §27.7.7's own design — so it stays ~5.2 s and is the case
+docs/NOTEPAD-NOTES.md 1's row index was designed for.
+
 ### 27.8 A selection, and the two things a drag can mean
 
 The selection is a **pair of character indices**, `[np_sel0]`..`[np_sel1)`,

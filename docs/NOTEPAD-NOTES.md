@@ -118,6 +118,15 @@ This is the strongest single argument for building it, and it is why §1.3's
 trigger list should be read as "any of these, **or** someone complaining that
 Find is slow on a long file".
 
+**And §5.1.1 is now a second caller, on an arrow key.** `Up` out of the top of
+the view asks for a row above everything `np_rows` describes, so §27.7.9's
+`np_seedtail` cannot help it and the net walks unbounded: measured at 5.2 s a
+press. That is not a corner — it is the other half of the most-used pair of
+keys in the editor, and unlike §1.4's case it happens without the user doing
+anything unusual first. The index answers it in the same inverse direction:
+binary-search the table for the checkpoint at or before the row wanted, and
+walk forward at most *K* rows.
+
 ### 1.5 Traps, so they are not rediscovered
 
 - **The stored row must be ABSOLUTE**, not visible. `[np_top]` moves under the
@@ -229,6 +238,7 @@ nothing on the glass**.
 | §27.7.6 | only a scroll asking to go PAST the counted extent may finish the count | `np_sbclick`'s `.set` |
 | §27.7.7 | the caret-follow net resumes forward instead of restarting at index 0 | `np_netseed` |
 | §27.7.8 | a superseded scroll is not drawn at all | `[np_sowed]`, `np_worker` |
+| §27.7.9 | a walk that cannot be seeded is still BOUNDED, and the deepest row the table holds is the seed when there is one | `np_seedtail`, `np_vmove`, `np_move` |
 | §13.4 | `OSAPI_EVQ_PENDING` (slot **0x0338**): are more events queued behind me? | `evq_pending` |
 
 Three things in there are worth knowing on their own terms:
@@ -257,24 +267,59 @@ Three things in there are worth knowing on their own terms:
 All four are reproducible on the 5150 and none is fixed. What each entry is
 for is the *ruled out* column: start from evidence.
 
-### 5.1 Down on the bottom visible row — ~933 ms
+### 5.1 Down on the bottom visible row — FIXED (SPEC.md §27.7.9)
 
-The press that SCROLLS costs 933 ms; presses that only move the caret inside
-the view cost 50 ms. On the most-used key in the editor.
+**It was not in the redraw path**, which is where this entry used to send the
+next reader, and the correction is worth keeping because the reasoning that
+pointed there was sound and wrong.
 
-**Ruled out.** It is *not* the caret-follow net: §27.7.7's `np_netseed` was
-written for exactly this and the A/B says it changes nothing — 4,455,200
-cycles against 4,455,272, five significant figures, with and without. The
-reason is that the walk is bounded to `[np_vrows]`, which is one row *past*
-the last visible, so it DOES find the caret and `[np_curseen]` is set.
+The walk is in the KEY HANDLER, two routines before `np_redraw` ever runs.
+`np_vmove` seeds its walk with `np_seedck` and sets the bound *inside the
+branch that seeded* — so when `np_seedck` refused, `[np_lastrow]` kept the
+`0x7FFF` `np_walk` resets it to and the walk laid out the whole note. And
+`np_seedck` refuses on exactly the press that scrolls: it asks for the row
+before the caret's, and a caret on the last visible row asks for a row past
+what `np_rows` describes.
 
-It is also *not* a walk from index 0, and this is the useful measurement: the
-cost **falls** with depth — 1000 ms at `top` = 0 against 267 ms at `top` = 262
-— where anything walking from the top would grow. So it is in the redraw path,
-and the likely shape is `np_redraw` choosing a full repaint where a band or
-`np_scrollpaint`'s blit would do. **Start by finding which of `.band`,
-`.scrolled` and `.fullpaint` a scrolling Down actually takes**, and why the
-two depths take different ones.
+Measured on MartyPC's cycle-accurate 8088 (README.TXT, 781 rows, 16-row
+view): **4,866 ms, of which 4,664 ms is that one walk**. Three consecutive
+presses agreed to 0.02%. Fixed, a scrolling `Down` is **250–407 ms against
+4,802–5,088 — 12–19x** — and a `Down` that does not scroll is unchanged to
+within 1%, which is the control that says the band path was not disturbed.
+
+The two things this entry had wrong, and how:
+
+- **"It is in the redraw path."** Inferred from the cost falling with depth.
+  It does not: re-measured across eleven presses at `top` = 0..10 it is flat
+  at ~4.8 s, because an unbounded walk from index 0 does not care where the
+  view is.
+- **"Ruled out: not a walk from index 0."** It is exactly that. What made the
+  old A/B honest and the conclusion wrong is that §27.7.7 fixed a *different*
+  unbounded walk, on a path a scrolling `Down` does not take — so the A/B
+  really did move nothing, and the inference from it went one step too far.
+  §6's coda is the general form.
+
+The trap in the apparatus that hid it for one more round is in §6.5: a
+breakpoint trace stamps the time between two hits against the SECOND, so a
+routine that is not itself traced has its cost billed to whatever is traced
+after it. `np_move` wore `np_vmove`'s 4,664 ms until `np_move` was given a
+breakpoint of its own.
+
+### 5.1.1 Up out of the top of the view — ~5.2 s, and it was ~20 s and WRONG
+
+Still open, and now the largest single latency left in the editor.
+
+The row wanted is above the view, `np_rows` describes visible rows only, so
+nothing can seed it and `np_redraw`'s caret-follow net walks unbounded by
+§27.7.7's own design. **This is the case §1's row index was designed for**,
+and it is the strongest argument for building it.
+
+What §27.7.9 did reach here was the correctness half. Before it, `Up` was
+**14.9–20.4 s** and the view *flew to the end of the note* — `[np_top]` going
+5 → 769 → 3 → 767 → 1 → 765 on consecutive presses of a key that means "up
+one line", confirmed on the glass as well as in the numbers. It is now
+5.15–5.22 s and the view steps 5 → 4 → 3 → 2 → 1 → 0. An `Up` with nothing to
+do — caret already at the top of the note — went **4,956 ms to 145 ms**.
 
 ### 5.2 Typing in the front or middle of a long note — "impossible"
 
@@ -308,6 +353,38 @@ content repaint: ~18 rows × ~29 cells at PERFORMANCE.md's ~1 ms a glyph cell is
 covered costs only its title bar, so **the first thing to establish is whether
 the window was actually obscured** — if an unobscured raise is repainting the
 content, that is a bug in the cheap-path test rather than a cost.
+
+### 5.3.1 `[np_rowsn]` is not capped to the array it indexes
+
+Found while building §27.7.9 and **left alone deliberately** — it is latent,
+not live, and the change that would fix it is bigger than the bug.
+
+`np_rows` is `NP_MAXROWS` = 60 words. `[np_rowsn]` says how many of them are
+good, and three of its four write sites clamp it; the fourth — the walk's
+natural end, `.sigpad` — stores `[np_row] + 1` with only a sign test. A
+781-row note walked to its end therefore leaves `[np_rowsn]` = 771 against 60
+slots, and `np_seedrow` bounds its index against `[np_rowsn]` alone:
+
+```
+    cmp ax, [np_rowsn]
+    jae .out
+    shl ax, 1
+    mov bx, ax
+    mov ax, [bx+np_rows]        ; ...up to 1,540 bytes past the array
+```
+
+**Nothing reaches it today** because every caller passes a *visible* row and
+`np_bounds` caps `[np_vrows]` at `NP_MAXROWS`, so the index is always < 60
+whatever `[np_rowsn]` claims. `np_seedtail` is the first caller that takes its
+row *from* `[np_rowsn]`, which is why it carries its own `NP_MAXROWS` clamp
+rather than trusting the word.
+
+The honest fix is at `.sigpad`, and it is not free: capping there would make
+`[np_rowsn]` mean "rows in the table" everywhere, which is what
+`np_seedrow`'s test wants — but §27.7.3's chunked count and `np_shiftrows`
+read the same word, and the natural-end path is where `[np_drows]` gets its
+truth. Establish what each reader wants the word to MEAN before changing it;
+do not just add a clamp and rebuild.
 
 ### 5.4 `NP_HCHUNK` is set from an emulator number
 
@@ -353,6 +430,43 @@ The container runs the guest ~3.6× real time, so **work the guest does** is
 exact and **how long it took** is not. Use the cycle counter for everything and
 convert at 4.772727 MHz. `npbench` sidesteps this by timing in guest ticks from
 inside the guest.
+
+### 6.5 A breakpoint trace bills a leg to the routine at its END
+
+The instrument that finally found §5.1 is a breakpoint trace: put an `exec`
+breakpoint on every branch of interest, inject the key, and stamp each stop
+with the guest cycle count. It is exact and it costs the guest nothing —
+**and the delta printed beside a name is the time BEFORE that name, not
+inside it**. A routine with no breakpoint of its own is invisible, and its
+cost is billed to whichever traced label happens to follow it.
+
+That produced a confident wrong answer within minutes: with `np_measure`
+traced and `np_move` not, the 4,664 ms showed up as a gap between two
+`np_measure` hits and read as "np_move is slow". With `np_move` traced too,
+the same 4,664 ms moved to the leg *before* it — `np_vmove`'s own walk. One
+fix was written against the wrong routine before the second breakpoint was
+added.
+
+**So trace the entries either side of anything you are about to blame**, and
+treat a large delta as "somewhere in the gap" until a breakpoint splits it.
+
+Three smaller things about the same harness, all of which produced a wrong
+number first:
+
+- **`run` does not resume from a breakpoint.** MartyPC's `ExecutionControl`
+  stays latched in `BreakpointHit` through a Run and advances nothing,
+  reporting success and zero cycles — `debug_server.rs` says so in a comment
+  and the harness hit it anyway. Use `step(1)` then `advance(cycles=...)`.
+- **The budget passed to `advance` is a silent truncation.** A budget shorter
+  than the leg being measured ends the trace early and it reads as "the path
+  stopped there". One unbounded walk is 22 million cycles; the first budget
+  was 4 million.
+- **A warmup of N keypresses does not put two builds in the same state** when
+  the builds differ in how long a keypress takes: the same 20 Downs left the
+  fixed build at `top` = 5 and the original at `top` = 3, because `advance`
+  waited a fixed number of FRAMES and the slow build had presses still in
+  flight. Read the state back and compare the runs where they agree — here
+  presses 1..14 matched to 0.3%, which is what licensed comparing 15..19.
 
 And one that is not the apparatus but cost a whole attempt: **a fix must be
 measured against the symptom it claims to fix.** §27.7.7 is correct, targets a

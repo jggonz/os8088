@@ -3131,6 +3131,59 @@ np_netseed:
     pop ax
     ret
 
+; -----------------------------------------------------------------------------
+; np_seedtail - seed at the DEEPEST row [np_rows] describes, stopping after DX
+; in:  DX = the visible row the walk has to reach
+; out: [np_resume] set if a seed was had; preserves all registers
+;
+; np_seedrow's refusal is silent and its caller is then walking from index 0,
+; so this is the fallback both of its callers want: the table stops somewhere,
+; and the row BELOW where it stops is reached by walking forward a row or two
+; rather than by laying the note out again from the top.
+;
+; It is np_netseed's argument (SPEC.md 27.7.7) for a ROW instead of for the
+; caret, and a weaker case than np_netseed's: both of these callers are moving
+; the caret, which reflows nothing, so every row above the seed laid out
+; identically by inspection rather than by 27.4's reasoning.
+; -----------------------------------------------------------------------------
+np_seedtail:
+    push ax
+    cmp byte [np_rowsok], 0
+    je .out                         ; no table at all
+    mov ax, [np_rowsn]
+    or ax, ax
+    jz .out                         ; it describes nothing: index 0 it is
+    cmp ax, NP_MAXROWS              ; ...and [np_rowsn] IS NOT CAPPED TO THE
+    jbe .have                       ; ARRAY on the walk's natural-end path -
+    mov ax, NP_MAXROWS              ; it is np_row+1 there, so a 781-row note
+.have:                              ; leaves it at 771 against 60 slots. Every
+                                    ; np_seedrow caller before this one passed
+                                    ; a VISIBLE row, which np_bounds caps at
+                                    ; NP_MAXROWS, so nothing ever indexed past
+                                    ; the table and the miss went unseen; this
+                                    ; caller takes its row FROM [np_rowsn] and
+                                    ; would have been the first to read out of
+                                    ; it
+    cmp dx, ax
+    jb .out                         ; THE GUARD, and the whole reason this is a
+                                    ; routine rather than six lines at each
+                                    ; call site: the deepest row is only a seed
+                                    ; for a row BELOW it. np_seedrow and
+                                    ; np_seedck each refuse for four different
+                                    ; reasons and "the row is past the table"
+                                    ; is only one of them - a caret on row 0
+                                    ; asks np_seedck for row -1 and is refused
+                                    ; too, and seeding THAT at row 13 starts
+                                    ; the walk below the row it is looking for,
+                                    ; which then never finds it. Measured: the
+                                    ; caret stopped moving on Up and the view
+                                    ; stopped following it
+    dec ax
+    call np_seedrow                 ; ...which also carries the bound in DX
+.out:
+    pop ax
+    ret
+
 np_seedrow:
     push ax
     push bx
@@ -3802,14 +3855,32 @@ np_move:
     mov word [np_hity], 0xFFFF      ; one query at a time
     mov ax, [np_wanty]              ; the row it names is the ONLY row this
     sub ax, [np_ty]                 ; walk has to visit (SPEC.md 27.5)
-    jc .full
     push cx
     mov cl, 3
-    shr ax, cl
-    pop cx
-    mov dx, ax
+    sar ax, cl                      ; SIGNED, and floor: a row ABOVE the view
+    pop cx                          ; is negative, which the old unsigned shift
+    mov dx, ax                      ; could not say, so it took the seedless
+                                    ; branch below and said nothing about it
+    js .bound                       ; nothing above the view is in [np_rows],
+                                    ; so there is no seed to be had - but the
+                                    ; walk still stops AT the row wanted
     call np_seedrow
-.full:
+    cmp byte [np_resume], 0
+    jne .bound                      ; the table describes it: one row walked
+    call np_seedtail                ; ...and when it does NOT - which is every
+                                    ; Down on the bottom visible row, the row
+                                    ; below the view being one past the table -
+                                    ; resume at the deepest row it DOES hold
+.bound:
+    ; THE BOUND IS SET ON EVERY PATH, and that is the whole fix (SPEC.md
+    ; 27.7.9). [np_lastrow] is a one-shot that np_walk resets to 0x7FFF, so a
+    ; caller which does not set it walks the WHOLE NOTE - "slow and never
+    ; wrong", which np_seedrow's silent refusal turned into the common case:
+    ; Down on the bottom visible row asks for a row one past the table, got no
+    ; seed AND no bound, and re-laid out all 781 rows of README.TXT to find the
+    ; row directly under the caret. Measured on a 4.77MHz 8088: 4,663 ms of a
+    ; 4,866 ms keystroke, on the most used key in the editor.
+    mov [np_lastrow], dx
     call np_measure
     mov byte [np_resume], 0
     mov ax, [np_wanti]
@@ -3870,7 +3941,21 @@ np_vmove:
     mov dx, [np_ckpr]               ; definition, so this walk is that row and
     call np_seedck                  ; no more (SPEC.md 27.4/27.5)
     cmp byte [np_resume], 0
-    je .nolim
+    jne .lim
+    cmp byte [np_ckok], 0           ; THE SEED FAILED, and the bound used to go
+    je .nolim                       ; with it (SPEC.md 27.7.9). np_seedck asks
+                                    ; for the row BEFORE the caret's, so a
+                                    ; caret on a row past what [np_rows]
+                                    ; describes is refused - and [np_lastrow]
+                                    ; is a one-shot np_walk resets to 0x7FFF,
+                                    ; so the walk then laid out the WHOLE NOTE
+                                    ; to find the row the caret is already on.
+                                    ; With no checkpoint there is no row to
+                                    ; bound to either, and that case is the
+                                    ; old one unchanged
+    call np_seedtail                ; ...but with one, the table still reaches
+                                    ; SOMEWHERE: resume there and walk forward
+.lim:
     or dx, dx                       ; ...unless that row is ABOVE the view,
     js .nolim                       ; where the signed limit would stop the
     mov [np_lastrow], dx            ; walk before it had found anything
