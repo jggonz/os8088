@@ -2894,6 +2894,17 @@ tui_draw_dyn:
     mov al, TC_WTX
     call tui_rdout
 %ifdef TRKLOG
+    mov di, tui_pbuf                ; the BEAT RULER, its own field again: it
+    call tlog_rule_draw             ; changes on a ROW and the hold animation
+    mov byte [di], 0                ; changes on a FRAME, so neither redraws
+    mov si, tui_pbuf                ; for the other
+    mov bx, TLOG_RULEW * 8
+    mov cx, 8 + 120 + TLOG_PACEW * 8 + TLOG_SWEEPW * 8
+    mov dx, [tui_ch]
+    sub dx, TUI_WPOSY
+    mov ah, TC_WBG
+    mov al, TC_WTX
+    call tui_rdout
 .bang:
     cmp byte [tlog_pace], TLOG_PACE_BURST
     jb .out

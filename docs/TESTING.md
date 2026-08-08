@@ -749,10 +749,19 @@ make test SB16=1 TESTAPPS=build/trklog.img   # builds the disk on demand
 # double-click Disk B, launch TRKLOG.O88
 # X    XT mode (5,500 Hz - what the 4.77MHz floor machine boots with)
 # L    load BEVERLY.MOD (it is on the same disk), which starts playback
-#      NOT 'P' - that is the PATTERN LOOP toggle (song vs loop one pattern),
-#      and on a one-pattern module like CLICK.MOD looping the pattern IS the
-#      song, so it looks like a bare restart. The bench build lists its own
-#      keys on the windowed splash for exactly this reason.
+#      NOT 'P' - that is the PATTERN LOOP toggle (song vs loop one pattern).
+#      The bench build lists its own keys on the windowed splash, because P
+#      was reached for as the pace cycler for a whole round of testing.
+#
+#      CLICK.MOD is FOUR patterns and four orders (tests/mkclick.py), and it
+#      had to become that: with one of each, `Pos` never left 00, P had
+#      nothing to loop that the song did not already play, and every click
+#      sounded identical - so the ear could not tie the display to the music
+#      at all. Now the position is AUDIBLE (a pitch per pattern, C-2 E-2 G-2
+#      C-3, climbing) and so is which of a bar's four clicks you are hearing
+#      (row 00 is a fifth above the other three: TICK tick tick tick).
+#      Verified in a MARTYPC_WAV capture: bursts 2.0 s apart at ~1555/1025/
+#      992/959 Hz, then ~1753/1290/1257/1213, then ~2117/1555/1510/1455.
 # D    arm the log       -> the status line counts 'LOG nnnn /0512'
 # F    fullscreen; let it run through a few pattern boundaries (~9 s each)
 # Esc  back to windowed  (W is refused in a bracket - the file API is
@@ -782,6 +791,17 @@ make test SB16=1 TESTAPPS=build/trklog.img   # builds the disk on demand
 #      minute and the key's own message has gone by then. C's bang is a bar
 #      full on the frame the burst ends and one cell shorter each frame after;
 #      D is the original one-cell sweep, kept beside it.
+#
+#      WHAT YOU WATCH IS THE BEAT RULER, not the hex row number. 16 cells,
+#      one per row, marker walking left to right, and it lands back on cell 0
+#      on the row the click sounds:
+#
+#          PACE A  Pos 01  Row 02  [        ]  |.#.............
+#          PACE A  Pos 01  Row 10  [        ]  #...............  <- CLICK
+#
+#      A number answers "which row" and the question here is "are the rows
+#      EVENLY spaced", which only a moving marker answers. Even walk plus a
+#      click on the wrap is the whole of "smooth and in time".
 #
 #      JUDGE THESE ON CLICK.MOD, NOT ON BEVERLY.MOD (SPEC.md 45.16.5). The
 #      mixer eats the drawing: windowed on a 4.77MHz machine CLICK.MOD gets

@@ -146,9 +146,17 @@ TLOG_SWMAX      equ 254             ; ...so the counter saturates BELOW it. It
                                     ; it modulo BARW (so a long hold keeps
                                     ; sweeping, which was D's whole point)
 TLOG_PACEW      equ 8               ; 'PACE A  ' - the label that says which of
-                                    ; the three is live, because the E key's
+                                    ; the four is live, because the E key's
                                     ; message is transient and the thing being
                                     ; judged is what the line does for a minute
+TLOG_RULEW      equ 16              ; the BEAT RULER: one cell per row, marker
+                                    ; at row mod this. 16 is CLICK.MOD's note
+                                    ; spacing (tests/mkclick.py), so the marker
+                                    ; restarts at cell 0 on the frame the click
+                                    ; is heard - which is the whole instrument:
+                                    ; a hex counter says WHICH row and a walking
+                                    ; marker says whether the rows are EVEN, and
+                                    ; only the second is the question here
 
 TLOGF_REBUILD equ 1
 TLOGF_STEP    equ 2
@@ -676,6 +684,54 @@ tlog_pace_draw:
     ret
 
 tlog_pace_lbl:  db 'PACE A  ', 'PACE B  ', 'PACE C  ', 'PACE D  '
+
+; -----------------------------------------------------------------------------
+; tlog_rule_draw - the BEAT RULER at [DI]: TLOG_RULEW cells, marker at
+;                  [tui_arow] mod TLOG_RULEW, cell 0 always marked
+;
+; The field's complaint about the first CLICK.MOD was that the row count
+; "changes, but most of them are completely unrelated to an actual noise" -
+; which is true and is the module working as designed: 60 of its 64 rows are
+; silent so that the four that are not can be timed. What was missing is a way
+; to SEE the thing being judged. A hex row number answers "which row", and the
+; question is "are the rows EVENLY spaced", which a walking marker answers and
+; a number does not.
+;
+; So the marker steps one cell per row and wraps every TLOG_RULEW - which is
+; CLICK.MOD's note spacing, so it lands back on cell 0 exactly when the click
+; sounds. Even walk plus a click on the wrap is the whole of "it is smooth and
+; it is in time"; bunched steps, or a wrap that does not coincide, is not.
+;
+; Cell 0 is '|' when the marker is elsewhere, so the beat is visible even when
+; the marker is nowhere near it.
+; -----------------------------------------------------------------------------
+tlog_rule_draw:
+    push ax
+    push cx
+    push dx
+    mov al, [tui_arow]
+    and al, TLOG_RULEW - 1          ; a power of two, so no division
+    mov ah, al
+    mov cx, TLOG_RULEW
+    xor dh, dh
+.c:
+    mov al, '.'
+    or dh, dh
+    jnz .nb
+    mov al, '|'                     ; cell 0 is the beat, marker or not
+.nb:
+    cmp dh, ah
+    jne .put
+    mov al, '#'
+.put:
+    mov [di], al
+    inc di
+    inc dh
+    loop .c
+    pop dx
+    pop cx
+    pop ax
+    ret
 
 ; -----------------------------------------------------------------------------
 ; tlog_bang_draw - the hold's BANG at [DI] (SPEC.md 45.16.4)
