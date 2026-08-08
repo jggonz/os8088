@@ -96,6 +96,10 @@ fpg_begin:
     mov dx, MBAR_H - 2          ; the black rule on the last row is not ours
     mov byte [gfx_color], CWHITE
     call gfx_fill
+    mov ax, [fpg_x0]            ; ...and the bar has lost those cells: tell it
+    mov cx, ax                  ; which, so fpg_end gives back exactly them
+    add cx, FPG_W - 1           ; and not the whole bar (SPEC.md 12.9)
+    call menu_inval
 
     mov cx, [fpg_x0]            ; --- the document icon
     mov dx, FPG_ICO_Y
@@ -192,19 +196,52 @@ fpg_step:
 ; out: nothing - all registers and the flags preserved (its call sites sit in
 ;      the dskw_*_x epilogues, between a body's CF/AX answer and the caller's)
 ;
-; menu_draw_bar redraws the field, the app name, every cell title and the
-; clock in one pass, which subsumes erasing our bed - so nothing here has to
-; know what was underneath.
+; **Only our own cells go back, not the whole bar** (SPEC.md 12.9). This used
+; to be menu_force + menu_draw_bar, which white-filled the bar end to end and
+; put back the logo, the app name, every cell title AND the clock - so every
+; file operation in the system finished with the bar flashing to restore an
+; 88px strip.
+;
+; The split is between the rows that carry menu text and the rows that do
+; not. fpg_begin already told the bar which CELLS it took, so menu_bar_text's
+; opaque run is about to rewrite the text band from what the widget left to
+; what the menu says, in one pass and with no white in between - erasing that
+; band here would put the flash straight back. What it cannot reach is the
+; icon's top and bottom and the box frame, which live ABOVE and BELOW the
+; glyph rows: those are ours to clean up, and they are two thin fills.
 ; -----------------------------------------------------------------------------
 fpg_end:
     pushf
+    push ax
+    push bx
+    push cx
+    push dx
     cmp byte [fpg_on], 0
     je .out
     mov byte [fpg_on], 0
-    call menu_force             ; no register is pushed here and none needs to
-    call menu_draw_bar          ; be: all three of these preserve everything,
-    call gfx_flush              ; and this routine holds nothing of its own
+
+    mov byte [gfx_color], CWHITE
+    mov ax, [fpg_x0]            ; --- above the text band: the icon's head
+    mov cx, ax
+    add cx, FPG_W - 1
+    xor bx, bx
+    mov dx, MENU_TEXT_Y - 1
+    call gfx_fill
+
+    mov ax, [fpg_x0]            ; --- and below it: its foot and the box
+    mov cx, ax
+    add cx, FPG_W - 1
+    mov bx, MENU_TEXT_Y + 8
+    mov dx, MBAR_H - 2
+    call gfx_fill
+
+    call menu_draw_bar          ; the text band, as the ONE run that differs
+    call gfx_flush
 .out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     popf
     ret
 

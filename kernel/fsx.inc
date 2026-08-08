@@ -254,8 +254,10 @@ fsx_restore:
     mov byte [fsx_worker], 0xFF ; bracket run from the next tick
     popf
     mov byte [fsx_cur], 0xFF
-    mov byte [menu_bdirty], 1   ; the bar was overdrawn (the save-under
-    call wm_paint_all           ; precedent, SPEC.md 12.05)
+    call menu_force             ; the bar really WAS overdrawn - an exclusive
+    call wm_paint_all           ; app owned the whole screen (SPEC.md 12.9),
+                                ; so the logo and the rule are owed too. This
+                                ; is one of the three callers that mean it
     pop di
     pop ax
     ret
