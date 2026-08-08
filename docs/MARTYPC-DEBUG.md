@@ -266,6 +266,18 @@ Three things about it are load-bearing:
 - **`bp` replaces the whole set.** A debugger that can only add breakpoints
   accumulates them until something stops for a reason nobody remembers asking
   for.
+- **Resuming from a breakpoint takes a `step` FIRST, and `run` on its own
+  wedges the machine.** MartyPC clears the CPU's latched breakpoint flag
+  inside `machine.run()`'s `BreakpointHit → Run` transition, and this
+  server's `run` sets the state to `Running` itself, which skips that
+  transition — so the CPU re-reports `BreakpointHit` at the same address
+  forever, **with an empty breakpoint list and `bp` answering `count: 0`**.
+  `step` goes through the `BreakpointHit → Step` arm, which does clear the
+  flag, so `m.step(); m.run()` resumes. Worth recognising rather than
+  re-deriving: every symptom points at the guest — `status` says
+  `"breakpoint"` at an address nothing is armed on, and a scripted test that
+  polls `state != "running"` reports a *hit* on every later check, so a
+  breakpoint that never fired reads as one that fired every time.
 - **`execseg` and `memseg` are folded to flat addresses, because the
   segmented breakpoint types do not work.** `BreakPointType::Execute(seg,
   off)` and `MemAccess(seg, off)` are declared in `breakpoints.rs` and matched

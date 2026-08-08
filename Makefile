@@ -210,6 +210,14 @@ $(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) tools/os88ovlchk.py
 	@python3 tools/os88ovlchk.py
 	$(NASM) -f bin -w+error -I kernel/ -I $(BUILD)/ $(VIDDEF) -o $@ $(KERNEL_SRC)
 	@echo "kernel: $(call FILESIZE,$@) bytes (image rung + boot overlay)"
+# What that cost, per section and in 512-byte rungs, against the baseline in
+# docs/KERNEL-MEMORY.md. A REPORT and never a gate: the guards inside
+# kernel.asm are what refuse an overrun, and this says how close you came and
+# how much of each rung's slack is left for the next feature. It costs one
+# extra assembly of the kernel, which is why it is not folded into the line
+# above: -w+error would turn its %warning into an error, and relaxing that
+# for every build would silence a %warning somebody meant as an alarm.
+	@python3 tools/kernsize.py $(VIDDEF) || true
 ifneq ($(VIDDEF),)
 	@echo "  *** VIDEO=$(VIDEO) RTC=$(RTC) DISKCNT=$(DISKCNT) FLOPPY1=$(FLOPPY1): kernel is ***"
 	@echo "  *** BUILT WITH A KNOB - a forced probe and/or disk counters.   ***"

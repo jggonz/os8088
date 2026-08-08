@@ -2073,6 +2073,37 @@ OVL_SIZE equ ovl_end - $$
 KERN_KB    equ (KERN_SIZE + 1023) / 1024
 KBUF_KB    equ ((FAT_PARA + LOW_PARA) * 16 + 1023) / 1024
 
+; --- the size report, for tools/kernsize.py (docs/KERNEL-MEMORY.md) ----------
+; Every figure in the ladder, published in one line, so that measuring the
+; kernel is a command rather than a bisect. It is a knob and not an
+; unconditional %warning because -w+error is deliberately strict here: relax
+; the `user` class for every build and a %warning somebody adds as a real
+; alarm stops failing. `make` runs it with -DKERNSIZE -w-error=user, which
+; changes not one byte of the code being measured.
+;
+; %assign is what makes this work: it defines a single-line macro that
+; expands to the EVALUATED number, and %warning macro-expands its argument.
+; The line is tagged `ks:` and not `KERNSIZE` for the same reason: -D defines
+; that name as the empty string, so %warning expanded the tag to nothing.
+%ifdef KERNSIZE
+  %assign KS_TEXT   KTEXT_SIZE
+  %assign KS_BSS    KBSS_SIZE
+  %assign KS_COLD   COLD_SIZE
+  %assign KS_LOW    KLOW_SIZE
+  %assign KS_OVL    OVL_SIZE
+  %assign KS_STK0   STK0_SIZE
+  %assign KS_IMGP   KIMG_PARA
+  %assign KS_COLDP  COLD_PARA
+  %assign KS_FATP   FAT_PARA
+  %assign KS_LOWP   LOW_PARA
+  %assign KS_SIZE   KERN_SIZE
+  %assign KS_BUDGET KERN_BUDGET
+  %assign KS_CODEM  KERN_CODE_MAX
+  %assign KS_END    KERN_END
+  %assign KS_KSEG   KERNEL_SEG
+  %warning ks: text=KS_TEXT bss=KS_BSS cold=KS_COLD lowbss=KS_LOW ovl=KS_OVL stk0=KS_STK0 imgpara=KS_IMGP coldpara=KS_COLDP fatpara=KS_FATP lowpara=KS_LOWP ksize=KS_SIZE budget=KS_BUDGET codemax=KS_CODEM kend=KS_END kseg=KS_KSEG
+%endif
+
 ; 1. KERN_BUDGET - the FOOTPRINT. The whole kernel - image, scratch, FAT
 ;    snapshot, disk buffers and every task stack - is one span starting at
 ;    KERNEL_SEG, and it fits KERN_BUDGET (72.5KB) just above the BIOS data
