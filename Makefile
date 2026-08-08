@@ -342,10 +342,28 @@ $(BUILD)/sound.bin: drivers/sound/sound.asm drivers/sound/sb.inc \
 $(BUILD)/sound.drv: $(BUILD)/sound.bin tools/os88drv.py
 	python3 tools/os88drv.py $(BUILD)/sound.bin -o $@
 
+# The MBR's 446 bytes of boot code (SPEC.md 52.10.1). Assembled on its own and
+# incbin'ed by drivers/hdd/part.inc, which is why the driver gets -I $(BUILD):
+# a chain-loader is too much to write as a `db` list and far too much to
+# review as one, which is what the `Not bootable` stub it replaced was.
+$(BUILD)/mbr.bin: boot/mbr.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ $<
+	@echo "mbr:    $(call FILESIZE,$@) bytes (of 446)"
+
+# The hard disk's volume boot record (SPEC.md 52.10.2), likewise incbin'ed by
+# the driver. NO -DKERNEL_SECTORS: unlike the floppy sectors, this one is
+# built long before it knows which kernel it will boot, so the count is a word
+# at a pinned offset that the installer patches when it writes the VBR.
+$(BUILD)/boothd.bin: boot/boothd.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ $<
+	@echo "boothd: $(call FILESIZE,$@) bytes"
+
 $(BUILD)/hdd.bin: drivers/hdd/hdd.asm drivers/hdd/part.inc drivers/hdd/fmt.inc \
                   drivers/hdd/tool.inc drivers/hdd/page.inc drivers/hdd/cfg.inc \
-                  drivers/os88drv.inc apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I drivers/hdd/ -I drivers/ -I apps/ -o $@ $<
+                  drivers/hdd/inst.inc \
+                  drivers/os88drv.inc apps/os88api.inc \
+                  $(BUILD)/mbr.bin $(BUILD)/boothd.bin | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/hdd/ -I drivers/ -I apps/ -I $(BUILD) -o $@ $<
 	@echo "hdd:    $(call FILESIZE,$@) bytes"
 
 $(BUILD)/hdd.drv: $(BUILD)/hdd.bin tools/os88drv.py

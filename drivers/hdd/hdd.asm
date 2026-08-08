@@ -105,6 +105,7 @@ IDE_C_INITP  equ 0x91
 %include "part.inc"
 %include "fmt.inc"
 %include "tool.inc"
+%include "inst.inc"
 %include "page.inc"
 
 ; =============================================================================

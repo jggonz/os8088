@@ -23,7 +23,7 @@
 ; the first tick can arrive.
 ; =============================================================================
 
-SPL_RESIDENT equ 7              ; sectors the boot sector waits for before
+SPL_RESIDENT equ 8              ; sectors the boot sector waits for before
                                 ; ticking us (must match boot/boot.asm).
                                 ; It was 6, and the module ended at 3,072
                                 ; bytes EXACTLY - no headroom at all, so the
@@ -31,10 +31,25 @@ SPL_RESIDENT equ 7              ; sectors the boot sector waits for before
                                 ; equipment-flag fix in viddet.inc, 32 bytes)
                                 ; failed the assertion below rather than
                                 ; silently ticking a splash that was not
-                                ; aboard. One more sector is one more BIOS
-                                ; read before the bar starts moving, which on
-                                ; a 4.77MHz machine is a fifth of a second of
-                                ; a thirty-second boot
+                                ; aboard.
+                                ;
+                                ; It is 8 for the second instance of exactly
+                                ; that, and the shape is worth recognising:
+                                ; the assertion fires on whatever crosses the
+                                ; line, not on whatever is to blame. This time
+                                ; it was a MERGE - SPEC.md 39.6's 15-byte CGA
+                                ; pre-clear in viddet.inc arriving on top of
+                                ; the other branch's growth - and the module
+                                ; ended 4 bytes over 3,584. Shaving four bytes
+                                ; off a module that has twice filled its rung
+                                ; buys one more collision; a sector buys 512.
+                                ;
+                                ; One more sector is one more BIOS read before
+                                ; the bar starts moving: ~65 ms on the field
+                                ; machine (PERFORMANCE.md's measured sector
+                                ; inside a coalesced run), where the figure
+                                ; this comment used to quote - a fifth of a
+                                ; second - was a sector at the pre-18.91 238 ms
 SPL_GC      equ 0x3CE           ; VGA Graphics Controller index port
 
 ; The bar counts SECTORS, and the boot sector's read is not the last of them:

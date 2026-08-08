@@ -407,7 +407,11 @@ drv_errstr:                     ; DRVE_* -> what the user is told
 drv_e0: db 'Loaded', 0
 drv_s_off: db 'Not loaded', 0   ; ...and what a row that never failed and is
                                 ; not up says instead (drv_status)
-drv_e1: db 'No system disk in A:', 0
+drv_e1: db 'No system disk in '
+drv_e1_l: db 'A:', 0            ; the letter, stamped (SPEC.md 52.10.3): this
+                                ; is the string an installed machine showed
+                                ; as "No system disk in A:" about a driver
+                                ; sitting on C:
 drv_e2: db 'Not on the system disk', 0
 drv_e3: db 'Not a valid driver', 0
 drv_e4: db 'Not enough memory', 0
@@ -1053,7 +1057,11 @@ drv_svc_clear_all:
 drv_mounted:
     push ax
     push dx
-    xor dl, dl                  ; drive A: - the disk we booted from
+    mov dl, [dsk_bootvol]       ; the disk we booted from - A: on a floppy
+                                ; machine, where this byte is 0 and this is
+                                ; the `xor dl, dl` it replaced, and the
+                                ; installed PARTITION on a machine that boots
+                                ; from its hard disk (SPEC.md 52.10.3)
     xor ax, ax                  ; ...at its root, which is where 19.6 puts
                                 ; KERNEL.SYS, SYSTEM.CFG and every *.DRV
     call dsk_chdir_q            ; QUIET (SPEC.md 18.9): all three callers here
@@ -2179,8 +2187,10 @@ drv_cfg_save:
     push di
     push es
     call drv_vol_bank           ; the panel is closing on top of whatever the
-                                ; user was doing; this write goes to A: and
-                                ; must not move them (SPEC.md 51.5.2)
+                                ; user was doing; this write goes to the BOOT
+                                ; VOLUME - A: on a floppy machine and the
+                                ; installed partition otherwise (SPEC.md
+                                ; 52.10.3) - and must not move them (51.5.2)
     call drv_mounted
     jc .nodisk
     mov si, drv_sysname
