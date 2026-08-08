@@ -1787,6 +1787,10 @@ cw_gfx_pen_live:        call gfx_pen_live
                     retf
 cw_gfx_pixel:           call gfx_pixel
                     retf
+cw_gfx_scroll:          call gfx_scroll
+                    retf                    ; retf leaves the flags alone, so
+                                            ; gfx_scroll's CF is still its
+                                            ; answer at the cold caller
 cw_gfx_unlock:          call gfx_unlock
                     retf
 cw_gfx_vline:           call gfx_vline
