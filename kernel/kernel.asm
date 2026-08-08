@@ -1109,7 +1109,14 @@ osapi_table:
                                   ;          so 19.6's rule - a package cannot
                                   ;          make a file the user can neither
                                   ;          see nor delete - stands unchanged
-osapi_table_end:                  ; 0x0340
+    OSAPI_JSLOT api_file_find     ; 0x0340  X: ES:DI is the caller's buffer.
+                                  ;         List the current directory by
+                                  ;         ORDINAL (SPEC.md 19.7.1) - the
+                                  ;         one file operation the API had no
+                                  ;         way to express, so a package could
+                                  ;         read a file by name and never find
+                                  ;         out what was there
+osapi_table_end:                  ; 0x0348
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1117,8 +1124,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 102 * 8
-%error "os8088 API jump table must be exactly 102 8-byte slots"
+%if OSAPI_TABLE_LEN != 103 * 8
+%error "os8088 API jump table must be exactly 103 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -1248,6 +1255,42 @@ dbg_reg:
     OSAPI_NSTUB api_file_read,   dskw_read,   1
     OSAPI_NSTUB api_file_delete, dskw_delete, 1
     OSAPI_NSTUB api_fdlg_open,   fdlg_open       ; NO V - see the macro
+
+; -----------------------------------------------------------------------------
+; api_file_find - slot 0x0340 (X). in CX = ordinal, ES:DI = a DSK_FIND_SZ
+; buffer; out CF=0 with it filled and CX = the next ordinal (SPEC.md 19.7.1)
+;
+; An X stub because the buffer is the caller's, and it is the same fence as
+; api_file_write_sys below in its OTHER direction: a driver may SEE hidden and
+; system entries, a package may not. The two together are one boundary rather
+; than two rules - a package can neither find a system file here nor create
+; one there - which is what keeps SPEC.md 19.6 true as a sentence and not
+; merely as a list of blocked entry points.
+;
+; It resolves in the CALLING INSTANCE's directory (SPEC.md 19.2.1), like every
+; other name-taking cell: "list the current directory" has to mean the same
+; directory that OSAPI_FILE_READ would resolve a name in, or a package would
+; enumerate one folder and open files from another.
+; -----------------------------------------------------------------------------
+api_file_find:
+    push ds
+    push si
+    push bx
+    mov bx, ds                  ; the caller's segment, for the fence
+    push cs
+    pop ds                      ; DS = KERNEL
+    call inst_vol_enter         ; this instance's own folder; preserves
+                                ; everything including the flags
+    call drv_owns_seg           ; CF = 0: a loaded driver, so it may see the
+    mov al, 0                   ; system files it is going to have to copy
+    jc .nothid
+    mov al, 1
+.nothid:
+    pop bx
+    call dsk_find
+    pop si
+    pop ds
+    retf
 
 ; -----------------------------------------------------------------------------
 ; api_file_write_sys - slot 0x0338, and the ONE fenced cell (SPEC.md 19.6.1)

@@ -29,6 +29,10 @@
 ; =============================================================================
 
 DSK_DE_SIZE  equ 32              ; staged directory entry stride (SPEC.md 19)
+DSK_FIND_SZ  equ 24              ; dsk_find's answer (SPEC.md 19.7.1): a
+                                 ; 13-byte NUL name, the attribute, the type
+                                 ; word, the first cluster, a 32-bit size and
+                                 ; one reserved word
 DSK_ICO_SIZE equ 64              ; harvested icon slot stride (SPEC.md 19)
 
 ; How many entries a listing holds. DSK_NENT is the FLOOR - the .lowbss pair
@@ -2949,6 +2953,158 @@ dsk_dirw_next:
     ret
 
 ; -----------------------------------------------------------------------------
+; dsk_find - one entry of the CURRENT directory, by ordinal (SPEC.md 19.7.1)
+; in:  CX = the ordinal to fetch, 0 to start; ES:DI = a DSK_FIND_SZ buffer;
+;      AL = 1 if the caller may see hidden and system entries
+; out: CF=0 and the buffer filled, CX = the ordinal to ask for next;
+;      CF=1 and AX = FERR_NOENT at the end of the directory, or FERR_* on a
+;      read that failed
+; clobbers: AX, CX (the outputs), flags
+;
+; **STATELESS BETWEEN CALLS, AND THAT IS THE WHOLE DESIGN.** The obvious
+; shape is find-first / find-next over dsk_dirw_start's cursor, and it would
+; be wrong here: that cursor is three module words shared with fcp_scan and
+; the file manager, and EVERY file operation walks directories through
+; dskw_find. The caller this exists for is an installer, whose loop is
+; find -> read -> write -> find, so a cursor living in the kernel would be
+; destroyed by the very operations the walk is feeding. Re-seeking from the
+; ordinal costs a directory re-read per entry and cannot be corrupted by
+; anything the caller does between calls.
+;
+; A directory here is at most a few hundred entries and each seek reads whole
+; sectors without decoding them, so the quadratic term is a few extra sector
+; reads over a whole listing - against a copy that is spending 238 ms a sector
+; moving file data (PERFORMANCE.md).
+;
+; The species filter is disk_mount's (SPEC.md 19), one rule at a time: the end
+; of the directory, deleted entries, the on-disk dot links, long-name
+; fragments and the volume label are never reported. Hidden and system are
+; reported only to a DRIVER (AL = 1, set by the API cell's fence, SPEC.md
+; 19.6.1) - the same boundary that governs writing one, so a package can
+; neither see a system file here nor create one there.
+; -----------------------------------------------------------------------------
+dsk_find:
+    push bx
+    push dx
+    push si
+    push bp
+    mov [dsk_fdhid], al
+    mov [dsk_fdord], cx
+    mov bp, cx                  ; BP counts the ordinals still to skip
+    mov ax, [dsk_cwd]
+    call dsk_dirw_start
+.sector:
+    call dsk_dirw_next          ; AX = the next directory sector's LBA
+    jc .end
+    mov cx, 1
+    push di
+    mov bx, dsk_secbuf
+    push es
+    mov dx, LOW_SEG             ; the buffer is in .lowbss, reached through ES
+    mov es, dx
+    call disk_read
+    pop es
+    pop di
+    jc .ioerr
+    mov si, dsk_secbuf
+    mov cx, 16                  ; entries to a 512-byte sector
+.entry:
+    push cx
+    push es
+    mov dx, LOW_SEG
+    mov es, dx
+    mov al, [es:si]
+    mov ah, [es:si+DSK_R_ATTR]
+    pop es
+    pop cx
+    test al, al
+    jz .end                     ; 0x00: the end of the directory, per spec
+    cmp al, 0xE5
+    je .skip                    ; deleted
+    cmp al, '.'
+    je .skip                    ; the on-disk dot links (SPEC.md 19)
+    cmp al, 0x20
+    je .skip
+    mov al, ah
+    and al, 0x3F
+    cmp al, 0x0F
+    je .skip                    ; a long-name fragment
+    test ah, 0x08
+    jnz .skip                   ; the volume label
+    test ah, 0x06
+    jz .live                    ; neither hidden nor system: everybody sees it
+    cmp byte [dsk_fdhid], 1
+    jne .skip                   ; ...and only a driver sees the rest
+.live:
+    or bp, bp
+    jz .take
+    dec bp                      ; still seeking: this one is somebody else's
+.skip:
+    add si, DSK_DE_SIZE         ; the on-disk stride, which is the staged
+    loop .entry                 ; one's too - both are 32 bytes
+    jmp short .sector
+
+.take:
+    ; dsk_synth stages the display name, the type and the cluster into the
+    ; kernel's own dsk_ent (SPEC.md 19) - the dsk_get_dir idiom, so the copy
+    ; out to the caller is a plain move with no raw-field decoding here.
+    push di
+    push es
+    mov dx, LOW_SEG
+    mov es, dx
+    call dsk_synth              ; ES:SI = the raw entry -> dsk_ent
+    mov bx, si                  ; ...and the raw entry again, for the 32-bit
+    mov ax, [es:bx+DSK_R_SIZE]      ; size, which dsk_ent CLAMPS to a word
+    mov dx, [es:bx+DSK_R_SIZE+2]    ; and a copy cannot work from
+    mov cl, [es:bx+DSK_R_ATTR]      ; ...and the attribute, for the caller
+    pop es
+    pop di
+    push ax
+    push dx
+    push cx
+    mov si, dsk_ent             ; the name, 13 bytes with its NUL
+    mov cx, 13
+.name:
+    mov al, [si]
+    mov [es:di], al
+    inc si
+    inc di
+    loop .name
+    pop cx
+    mov [es:di], cl             ; +13 the attribute byte
+    inc di
+    mov ax, [dsk_ent+16]
+    mov [es:di], ax             ; +14 the type word (1 file, 2 dir, 3 parent)
+    mov ax, [dsk_ent+18]
+    mov [es:di+2], ax           ; +16 the first cluster
+    pop dx
+    pop ax
+    mov [es:di+4], ax           ; +18 the size, all 32 bits of it
+    mov [es:di+6], dx
+    mov word [es:di+8], 0       ; +22 reserved: a later field goes here and a
+                                ; caller that ignores it today still works
+    mov cx, [dsk_fdord]
+    inc cx                      ; the ordinal to ask for next
+    pop bp
+    pop si
+    pop dx
+    pop bx
+    clc
+    ret
+.ioerr:
+    mov ax, FERR_IO
+    jmp short .fail
+.end:
+    mov ax, FERR_NOENT
+.fail:
+    pop bp
+    pop si
+    pop dx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; dsk_chdir - make a directory the current one and re-list the volume
 ; in:  AX = the directory's first cluster (0 = the root),
 ;      DL = drive (0 = A:, 1 = B:)
@@ -3563,6 +3719,9 @@ dsk_ioerr:    resb 1            ; status (AH) of the last FAILED transfer;
 ; transfer, so nothing can be inside dsk_xfer twice and one copy of each is
 ; enough. .bss and not .text because every one of them is WRITTEN at the top
 ; of the transfer that reads them.
+dsk_fdhid:    resb 1            ; dsk_find: may this caller see hidden and
+                                ; system entries? (SPEC.md 19.6.1's fence)
+dsk_fdord:    resw 1            ; ...and the ordinal it was asked for
 dsk_unit:     resb 1            ; the row's int 13h drive - 0/1 for A:/B:, 80h
                                 ; for a boot partition. NOT the volume index
 dsk_cylhi:    resb 1            ; cylinder bits 9:8, for CL bits 7:6

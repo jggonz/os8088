@@ -1605,6 +1605,36 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
 CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; than this is refused whole, never truncated
 
+; --- listing a directory (SPEC.md 19.7.1) -------------------------------------
+; The operation this API had no way to express: a package could read a file by
+; name and never find out what names were there. Everything in the tree that
+; enumerates - the Disk window, the file dialog, the copy engine - is kernel
+; code reading the mount snapshot directly, which a package cannot reach.
+;
+; It is BY ORDINAL and keeps no cursor in the kernel, deliberately. The
+; find-first / find-next shape would need kernel state, and the loop this
+; exists for is find -> read -> write -> find: every one of those middle steps
+; walks directories itself, so a shared cursor would be destroyed by the very
+; work the walk is feeding. Ask for 0, then for whatever CX comes back as.
+;
+; Hidden and system entries are reported to a DRIVER only, the same boundary
+; OSAPI_FILE_WRITE_SYS draws in the other direction - so a package can neither
+; find a system file nor create one.
+;
+; The buffer is DSK_FIND_SZ bytes:
+;   +0   char[13]  the display name, NUL-terminated (SPEC.md 19's 8.3 form)
+;   +13  byte      the raw attribute
+;   +14  word      type: 1 = file, 2 = folder, 3 = the synthesized '..'
+;   +16  word      first cluster - what OSAPI_FILE_GOTO takes for a folder
+;   +18  dword     the size in bytes, all 32 bits (unlike the listing's, which
+;                  is clamped to a word)
+;   +22  word      reserved, currently 0
+OSAPI_FIND_SZ equ 24
+%define OSAPI_FILE_FIND     KERNEL_SEG:0x0340   ; CX = ordinal (0 to start),
+                                 ; ES:DI = an OSAPI_FIND_SZ buffer; out CF=0
+                                 ; filled with CX = the next ordinal, else
+                                 ; CF=1 and AX = FERR_NOENT at the end
+
 ; --- the one cell a PACKAGE may not call (SPEC.md 19.6.1) ---------------------
 ; It is published here because a DRIVER assembles against this same SDK, and
 ; refused here in the text because an application author reading the list is

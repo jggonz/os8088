@@ -7595,6 +7595,48 @@ system disk needs no copy of it. And the `sys_attr` rule above stamps the
 file read-only, so it lists like an ordinary document and cannot be deleted
 or saved over.
 
+### 19.7.1 Listing a directory — `OSAPI_FILE_FIND` (slot 0x0340)
+
+The file operation the API had no way to express. A package could write,
+read, delete, rename and ask the free space **by name**, and never find out
+what names were there — everything in this tree that enumerates (the Disk
+window §22, the Standard File dialog §38, the copy engine §22.5) is kernel
+code reading the mount snapshot directly, which a package cannot reach. That
+was survivable while every consumer was in the kernel, and stopped being so
+at §52.10.4: an installer must copy *whatever is on the disk*, and a baked
+list of the shipped layout goes stale in silence the moment a user's floppy
+differs from it.
+
+**It is by ORDINAL and the kernel keeps no cursor**, which is the design
+rather than an economy. Find-first / find-next would need kernel state, and
+`dsk_dirw_start`'s cursor is three module words already shared with
+`fcp_scan` and the file manager — while the loop this exists for is
+*find → read → write → find*, and every one of those middle steps walks
+directories through `dskw_find`. A cursor living in the kernel would be
+destroyed by exactly the work the walk is feeding. Ask for ordinal 0, then
+for whatever `CX` comes back as; nothing the caller does in between can
+corrupt it.
+
+The cost is a directory re-seek per entry, and it is the right trade here: a
+directory is a few hundred entries at most, a seek reads whole sectors
+without decoding them, and the caller is spending 238 ms a sector
+(PERFORMANCE.md) moving the file data this is feeding.
+
+**Hidden and system entries are reported to a DRIVER only**, and that is the
+same boundary §19.6.1 draws in the other direction. Together they are one
+sentence rather than two rules: *a package can neither find a system file nor
+create one.* The filter is otherwise `disk_mount`'s own (§19) — the end of
+the directory, deleted entries, the on-disk dot links, long-name fragments
+and the volume label are never reported to anybody.
+
+It resolves in the **calling instance's** directory (§19.2.1), like every
+other name-taking cell: "list the current directory" has to mean the
+directory `OSAPI_FILE_READ` would resolve a name in, or a package would
+enumerate one folder and open its files from another.
+
+The answer is 24 bytes, and the **size is 32-bit** where the listing's is
+clamped to a word (§19) — a copy cannot work from a truncated length.
+
 
 ## 20. Loadable programs — the .o88 package format
 
