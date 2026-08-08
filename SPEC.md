@@ -9479,6 +9479,147 @@ where the user did nothing. `fm_samename` compares the two and cancels
 instead. Both sides are §19.1 display names, sanitized identically, so the
 comparison is uppercase-exact and needs no folding.
 
+### 22.11 A scroll moves the rows; nothing else on the window changes
+
+All eight ways to scroll a Disk window — the two arrow cells, the two halves
+of the track, and Up/Down/PgUp/PgDn — ended in `fm_repaint`: a white fill of
+the whole content and then every pixel of it back again. That is the header
+line, two framed buttons, every visible row, a whole scroll bar and the
+status line redrawn to move a list, and on a 4.77MHz machine it is the
+content going blank and filling back in a piece at a time — the flash
+PERFORMANCE.md Part 1 is about, with a visible redraw behind it.
+
+**Not one of those four things can change when the view scrolls.** The header
+is `Drive B:  9 files`, and scrolling moves no file. The two buttons are
+labels in fixed rects. The status line is §22.7's resting `Size … Free …`, or
+one of §22.9's verdicts, and both are questions about the *selection* and the
+*volume* — a scroll moves neither. So the scroll paths draw none of them.
+
+And the rows mostly only **move**. Scrolling by `d` rows leaves `fit - d` of
+them showing the same names at a different y, which is exactly what
+`gfx_scroll` (§5.5) moves in one blit, so a click on the down arrow letters
+ONE row rather than ten. Three tiers, cheapest first, chosen by
+`fm_scroll_by` — the one entry all eight paths call, so the clamp, the tier
+choice and the write-back cannot drift apart between the mouse and the
+keyboard:
+
+| tier | when | what it draws |
+|---|---|---|
+| `fm_scrollpaint` | list view, `\|d\| < fit` | one blit, the `d` rows it exposed, two selection bands, the thumb |
+| `fm_rows_only` | the icon grid, or `\|d\| >= fit` | the row band erased and redrawn; header, buttons and status line untouched |
+| `fm_repaint` | a clip region cuts the band | everything, as before |
+
+The third is §11.3's granularity rule and not caution, taken exactly where
+`fm_status_only` takes it: the erase is a fill (per-pixel clipping) and the
+rows are glyphs (whole-cell clipping), so a clip edge crossing the band would
+erase rows the text could not be put back into — the window would go *blank*
+rather than stale. `wm_clip_test` on the whole band answers it in one call.
+
+Three things are load-bearing.
+
+**`fm_draw_rows` is one body, not two.** It is everything `fm_draw_core`
+draws between the buttons and the status line, split out so the scroll paths
+can have exactly that and no more. A second copy would be a second opinion
+about what a row area looks like — the argument `fm_hit`, `fm_thumb` and
+`fm_sel_bar` already won here.
+
+**The delta the drawing is a function of is the one the CLAMP took**, not the
+one the click asked for: a PgDn two rows from the end moves two, and a blit
+for a whole page would move rows that are not there. `fm_scroll_by` computes
+it after `fm_clamp_scroll` and publishes it in `[fm_sdlt]`. A delta of zero —
+a click on an end stop — now draws **nothing at all**, where it used to
+repaint the window to show the same pixels.
+
+**A scroll draws no text, so a status line owed elsewhere is still owed.**
+`fm_onclick` already banked that in `[fm_statowed]` for §22.9's retired
+verdicts and §22.2's selection bands; `fm_onkey` has to bank it too now,
+because "every path below draws the line one way or another" stopped being
+true the moment the scroll keys stopped drawing the header band. Both spend
+it with `fm_status_only`, and its own CF=1 is the same fallback to
+`fm_repaint`.
+
+**Measured**, on a cycle-accurate 4.77MHz 5150 with a CGA card, by
+PERFORMANCE.md Part 3.1's flicker instrument — which samples the card's
+rendered framebuffer once per *displayed frame*, so it counts what an eye
+would see rather than what the guest did:
+
+| one row, CGA | visible redraw | flash | worst transient | bounding box |
+|---|---|---|---|---|
+| was | 16 frames = 262 ms | 15 frames = 246 ms | 2,772 px | x 116..429, y 40..173 — the whole content |
+| is | 5 frames = 83 ms | 2 frames = 33 ms | 320 px | one row and the scroll bar |
+| at an end stop, was | 16 frames = 266 ms | 15 frames = 249 ms | 2,766 px | the whole content |
+| at an end stop, is | 0 | 0 | 0 | — |
+
+And it draws **the same pixels**. The gate is an A/B against a kernel with
+`fm_scroll_by` stubbed to `stc`/`ret` — every scroll a `fm_repaint`, exactly
+the behaviour this replaces — driven through one scripted session of 25
+captures: both arrow cells, both halves of the track, Up/Down/PgUp/PgDn, both
+end stops, a selection scrolled out of view and back, and the icon grid. The
+framebuffers are **byte-identical** on CGA at content-x phase 1 *and* phase 7
+(§22.11.1's strip pass on and off), on Hercules (the four-bank layout at a
+different geometry), and on VGA mode 12h (the planar blit through the
+latches): **0 differing pixels of 2.9M**, once the menu bar's clock — which
+ticks between two runs of different speed — is excluded.
+
+#### 22.11.1 The blit rounds INWARD, and each strip it leaves is answered
+
+`gfx_scroll` wants byte columns at both ends, and a Disk window is not
+`WF_SNAP` (§11.94) — its content origin is `W_X+1`, wherever the user dragged
+it. So the span is rounded **inward**, which is the opposite of Note Pad's
+§27.7.2 and for a reason worth stating: `NP_MARGIN` is 8 there, so rounding a
+text band's `x1` DOWN still lands inside the content, while a Disk row's icon
+starts four pixels in — rounding down would put the blit's left edge outside
+the window altogether, onto the frame and then onto whatever is to the left
+of it. Inward rounding leaves two strips the blit cannot move, and each is
+answered rather than paid for:
+
+- **Left, up to 7px**: white margin, plus at most three columns of the 16x16
+  icon at `x+4`. The strip is erased and those rows re-iconed
+  (`fm_draw_licon`), and **only when the rounding really did reach them** —
+  `align_up(cx) > cx+4` is true for three window positions in eight, and the
+  other five need no pass at all.
+
+  **The erase in front of it is not belt and braces, and leaving it out is the
+  one bug this shipped before the pixel diff caught it.** An icon is *not*
+  drawn opaque over its cell: `ico_core`'s white pass is the icon's own
+  **silhouette mask** — `ico_app16`'s is a diamond, `ico_disk32`'s a solid
+  rectangle, and a harvested one is whatever the package's author drew — so
+  re-drawing an icon leaves every pixel the *previous* row's icon lit outside
+  the new outline. It showed as a three-column stripe of stale icon edge down
+  the left of the row band, on the three window positions in eight that reach
+  it and no others, which is exactly the shape of bug an eyeball misses and an
+  A/B diff does not.
+- **Right, up to 7px**: always white. The span stops at the byte column
+  *before* the scroll bar, so the bar's frame, its two rules and its two arrow
+  glyphs are never disturbed — only the thumb is redrawn — and a list row's
+  size column right-aligns to `rgt-21`, clear of anything the rounding can
+  leave behind.
+
+**The selection is the one thing that spans both strips**, its band running
+the full row width. So it comes OFF before the blit and back ON after, at the
+row it now sits in — §22.2's two-band move with the blit in the middle. It
+needs no fixing up, because XOR is its own inverse and the band it is taken
+off is the band that was drawn.
+
+**The thumb translates and nothing else on the bar moves.** Its height is
+`fit*track/total`, which no scroll changes, so `fm_sb_thumb` draws the new
+thumb and then greys the strip it vacated — three calls against the bar's
+sixteen. The new thumb goes **first**, which is §42.7.1's ordering: for the
+width of one fill the thumb is briefly doubled, and a doubled thumb reads as
+movement where an absent one reads as a blink. A step too small to move it
+draws nothing.
+
+#### 22.11.2 The icon grid takes the middle tier, deliberately
+
+A grid cell is 78 wide and centres a 9-character name in it, so the leftmost
+cell's name can start 3px into the content and the rightmost can end 4px
+short of the last cell's edge — which is *inside* the strips inward rounding
+leaves. Repairing those means redrawing the first and last columns whole, and
+at the three columns a 320px window fits that is two thirds of the grid: the
+blit would be buying a third of the work at the price of a second exposed-cell
+painter. So the grid stops at `fm_rows_only`, which still leaves the header,
+both buttons and the status line alone, and the blit is the list view's.
+
 ### 22.3 Cut, Copy and Paste (`kernel/filecp.inc`)
 
 The clipboard is **(drive, folder, name, type)** and deliberately not an
