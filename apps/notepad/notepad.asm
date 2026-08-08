@@ -2621,6 +2621,12 @@ np_worker:
     jb .loop
 .go:
     call OSAPI_GFX_LOCK
+    cmp byte [np_sowed], 0          ; a scroll whose repaint was dropped because
+    je .nosowed                     ; another click was right behind it
+    mov byte [np_sowed], 0          ; (SPEC.md 27.7.8). Cleared FIRST: a repaint
+    mov si, [np_win]                ; that faults must not leave the debt to be
+    call np_redraw                  ; paid again forever
+.nosowed:
     call np_uclose                  ; half a second without an edit is what a
                                     ; user means by ONE edit, and this is the
                                     ; clock that measures it (SPEC.md 27.9).
@@ -3950,6 +3956,12 @@ np_onclick:
     call np_sbclick                 ; ...and the scroll bar is not the note
     jc .text
     pop dx
+    call OSAPI_EVQ_PENDING          ; is another click right behind this one?
+    or ax, ax                       ; then this scroll position is already
+    jz .drawscroll                  ; superseded and drawing it is work the
+    mov byte [np_sowed], 1          ; user will never see (SPEC.md 27.7.8).
+    jmp short .out                  ; The WORKER owes the last one, because the
+.drawscroll:                        ; queue may not be ours to finish
     call np_redraw                  ; np_scrollto dropped np_sigok, so this is
     jmp short .out                  ; the full path (SPEC.md 27.7)
 .text:
@@ -9308,6 +9320,13 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                             ; NP_MAXROWS long, one slot per VISIBLE row, so it
                             ; describes the view and can never name row 300 of
                             ; a 500-row note (SPEC.md 27.5)
+    NPVAR np_sowed, 1       ; byte: a scroll moved [np_top] and its repaint was
+                            ; dropped, because OSAPI_EVQ_PENDING said another
+                            ; event was right behind it. The worker owes it
+                            ; (SPEC.md 27.7.8) - and it must be the WORKER
+                            ; rather than the next click, because the next
+                            ; event in the queue may belong to another window
+                            ; and this one would then never be drawn at all
     NPVAR np_stoprow, 2     ; word } what .stop reached, published every time
     NPVAR np_stopi, 2       ; word } and read only by np_height, on the walk it
                             ; issued itself - under the lock, with nothing

@@ -1602,6 +1602,22 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                  ; heap that is the difference between a paste
                                  ; that works and one that half-arrives.
                                  ; Preserves all but AX.
+%define OSAPI_EVQ_PENDING   KERNEL_SEG:0x0338   ; out AX = events still queued
+                                 ; behind the one being dispatched (SPEC.md
+                                 ; 13.4). "Am I about to be asked to do this
+                                 ; again?" - for a handler whose work is
+                                 ; SUPERSEDED by the next event rather than
+                                 ; added to by it, which is every scroll: a
+                                 ; held arrow or a spammed track queues a burst
+                                 ; whose repaints then play out long after the
+                                 ; clicking stopped, and only the last position
+                                 ; was ever worth drawing.
+                                 ; It answers about the QUEUE, not about whose
+                                 ; event is next - so a handler that skips a
+                                 ; redraw on it MUST still guarantee the redraw
+                                 ; happens, because the next event may belong
+                                 ; to another window. Owe it to your worker.
+                                 ; Takes no lock; preserves all but AX.
 CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; than this is refused whole, never truncated
 %define OSAPI_BOOT_TICKS    KERNEL_SEG:0x02F8   ; out AX = how long this machine

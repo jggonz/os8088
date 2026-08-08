@@ -4873,6 +4873,31 @@ mode 3, or mode 7 with the Hercules graphics bit cleared),
 
 All wm_* calls that repaint are made under gfx_lock by the UI task.
 
+### 13.4 A handler can ask whether another event is right behind it
+
+`OSAPI_EVQ_PENDING` (slot 0x0338) answers `AX` = the events still queued.
+
+Events are dispatched one at a time, so a callback that REDRAWS has no way to
+know it is about to be asked to do the same thing again. For a handler whose
+work is *added to* by the next event that is fine; for one whose work is
+**superseded** by it, every repaint but the last is drawn for nobody — and
+scrolling is entirely the second kind. A held arrow or a spammed scroll track
+queues a burst of clicks, each of which moves the view and repaints it, and on
+a 4.77MHz machine those repaints then play out one after another long after
+the clicking has stopped. Reported from the field in exactly those words.
+
+It is one word read with no lock, which is safe in both directions that
+matter: the count is a single word the producer only increments, so it cannot
+tear, and a stale answer that is too LOW merely produces a redraw that need
+not have happened — today's behaviour, and never a missing one.
+
+**It answers a question about the QUEUE and not about whose event is next**,
+which is the trap. A handler that skips its redraw on the strength of it must
+still guarantee that the redraw eventually happens, because the event behind
+it may belong to another window and this one would then never be drawn at
+all. Owe it to a worker, not to the next event of your own — §27.7.8 is the
+reference consumer.
+
 ## 14. apps.inc
 
 The built-in app **kinds**: About, Timer, Bounce. Nothing is
@@ -11593,6 +11618,30 @@ existed:
 
 The walk is still *unbounded*, and has to be: the caret's row is not known,
 which is the whole problem. What changed is where it starts.
+
+### 27.7.8 A superseded scroll is not drawn at all
+
+Every bar click moved the view and repainted it, so spamming the track or
+holding an arrow queued a burst whose repaints played out one after another
+long after the clicking stopped — the view visibly *catching up*. Each of
+those positions was superseded by the next click before anyone saw it.
+
+`np_onclick` asks `OSAPI_EVQ_PENDING` (§13.4) after the scroll has moved
+`[np_top]` and **skips the repaint entirely when anything is queued behind
+it**. The scroll itself always happens; only the drawing is dropped. A burst
+of twenty clicks therefore costs twenty scrolls and one repaint, and the one
+repaint shows where the twentieth click landed — which is the only position
+the user was ever asking for.
+
+**The worker owes the last one, and it has to be the worker.** The next event
+in the queue may belong to another window, in which case nothing of Note Pad's
+would run again and the view would sit permanently stale. `[np_sowed]` is that
+debt; `np_worker` spends it under the lock it already takes, and **clears it
+before drawing** so a repaint that fails cannot leave a debt owed forever.
+
+The same argument applies to the keyboard's `Up`/`Down` held on typematic and
+to any other app with a large scroll surface, which is why the peek is a
+kernel slot rather than something Note Pad worked out for itself.
 
 ### 27.8 A selection, and the two things a drag can mean
 

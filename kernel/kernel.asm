@@ -1101,7 +1101,13 @@ osapi_table:
     OSAPI_SLOT clip_size          ; 0x0330 - out CF=1 and AX=0 when empty,
                                   ;          else AX = the length. What a
                                   ;          paste asks BEFORE it makes room
-osapi_table_end:                  ; 0x0338
+    OSAPI_SLOT evq_pending        ; 0x0338 - out AX = events still queued.
+                                  ;          "Is there another one of these
+                                  ;          right behind me?", so a handler
+                                  ;          can drop a redraw it is about to
+                                  ;          be asked to do again (SPEC.md
+                                  ;          13.4)
+osapi_table_end:                  ; 0x0340
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1109,8 +1115,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 101 * 8
-%error "os8088 API jump table must be exactly 101 8-byte slots"
+%if OSAPI_TABLE_LEN != 102 * 8
+%error "os8088 API jump table must be exactly 102 8-byte slots"
 %endif
 
 ; =============================================================================
