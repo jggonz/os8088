@@ -109,8 +109,16 @@ class Mouse:
         self.m.mouse(dx, dy, l=l)
         time.sleep(GAP)
 
-    def to(self, x, y, tries=6, l=False):
+    def to(self, x, y, tries=None, l=False):
         """Drive to (x, y) and PROVE it, or raise."""
+        if tries is None:
+            # A packet moves at most STEP per axis, so the budget has to scale
+            # with the DISTANCE: a fixed six was enough for a short hop and
+            # silently too few to cross the screen, which reported a target as
+            # unreachable while walking steadily towards it.
+            cx, cy, _ = self.where()
+            far = max(abs(x - cx), abs(y - cy))
+            tries = (far + STEP - 1) // STEP + 4
         for n in range(tries):
             cx, cy, _ = self.where()
             dx, dy = x - cx, y - cy
