@@ -435,6 +435,15 @@ vid_switch:
 
     call desk_rowcalc           ; 4. the two things vid_apply does not own
     call wm_refit
+    call menu_force             ; ...and the two the CHROME does not: setmode
+    call dock_force             ; cleared the framebuffer, so the bar's logo
+                                ; and rule and the whole dock strip are gone,
+                                ; and both modules keep a record of what they
+                                ; last put on the glass (SPEC.md 12.9/30.3).
+                                ; The caller's repaint is what spends these -
+                                ; it used to inherit them from wm_paint_all,
+                                ; which no longer forces either, because
+                                ; nothing IN wm_paint_all destroys them
 .already:
     clc
     ret

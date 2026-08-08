@@ -13380,6 +13380,47 @@ still has its pixels, so its key is still the truth. `dock_force` is the
 whole-width form and `wm_paint_all` keeps it and means it: its dither runs
 from `MBAR_H` to the last row, so the strip really is gone.
 
+### 30.3.2 The dither stops above the strip, and nobody forces the chrome
+
+**A full repaint is not a reason for the chrome to flash.** `wm_paint_all`
+dithered the desktop from `MBAR_H` to the last row of the screen — *through*
+the dock strip — and then called `dock_force` + `dock_paint` to put the strip
+back over it. So the strip was drawn twice on every full repaint, and because
+`dock_force` clears the keys, **every tile was rebuilt as well**. It then
+called `menu_force`, which under §12.9 means "our pixels were destroyed", so
+the menu bar was white-filled and its logo redrawn too.
+
+None of that was ever necessary, and the double-draw is what the user sees:
+double-clicking a window's title bar to zoom it (§11.95) ends in
+`wm_paint_all`, and both strips flashed end to end.
+
+- **The dither now stops at `[vid_dock_y0] - 1`.** `dock_paint` is the next
+  call but one and owns every row from there down, so filling them grey was a
+  full-width band drawn only to be painted over.
+- **So `wm_paint_all` calls neither `dock_force` nor `menu_force`.** Nothing
+  in it can reach either strip: the dither starts at `MBAR_H` and now stops
+  above the dock. A quiet desktop's full repaint costs the chrome **nothing**.
+- **`wm_paint_dmg` clamps its dither the same way.** Damage that reaches the
+  strip already forces the span through `dock_force_x`, so dithering those
+  rows is drawn only to be painted over.
+
+What replaces the two forces is each module noticing its own coverage, which
+is the same move §12.9 makes with `menu_inval`: the routine that has to repair
+the damage is the one that observes it.
+
+| what destroys the chrome | who says so |
+|---|---|
+| a §11.2 fullscreen window | `dock_paint` / `menu_draw_bar` themselves — both already early-out on `wm_fs_vis`, and now set their own flag on the way out |
+| an fsx bracket (§53) | `fsx_restore`, explicitly |
+| a video mode change (§39.11) | `vid_switch`, explicitly — `vid_setmode` clears the framebuffer |
+| boot | `menu_init` / `dock_init` |
+
+The fullscreen case is the one worth stating: while such a window is up, the
+strips are being overwritten continuously and neither module may draw. Setting
+the flag *in the early-out* means the repair is owed from the first moment the
+damage starts, is idempotent for as long as it lasts, and is spent by whatever
+repaints once the window goes — with no caller anywhere having to know.
+
 ### 30.2 A tile's context menu — right-click to Close
 
 A right-press on a tile drops a one-item `menu_popup` (§12.4), `Close`, and

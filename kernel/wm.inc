@@ -1861,7 +1861,12 @@ wm_paint_dmg:
     mov bx, MBAR_H
 .fy:
     mov cx, [wm_dmg_x2]
-    mov dx, [wm_dmg_y2]
+    mov dx, [vid_dock_y0]       ; ...and stopping above the strip, which
+    dec dx                      ; dock_paint restores below (SPEC.md 30.3.2):
+    cmp dx, [wm_dmg_y2]         ; damage that reaches the dock already forces
+    jle .fy2                    ; the span through dock_force_x, so dithering
+    mov dx, [wm_dmg_y2]         ; those rows is drawn only to be painted over
+.fy2:
     cmp bx, dx
     jg .zones
     call gfx_fill_gray
@@ -2115,17 +2120,23 @@ wm_paint_all:
     call wm_fs_vis              ; a visible fullscreen window covers the
     jc .fswins                  ; desktop, dock and menu bar - painting
                                 ; them under it is pure waste (SPEC.md 11.2)
-    xor ax, ax                  ; desktop: 50% dither under the bar
-    mov bx, MBAR_H
-    mov cx, [vid_wm1]
-    mov dx, [vid_hm1]
-    call gfx_fill_gray
+    xor ax, ax                  ; desktop: 50% dither under the bar, and
+    mov bx, MBAR_H              ; STOPPING ABOVE THE DOCK (SPEC.md 30.3.2) -
+    mov cx, [vid_wm1]           ; dock_paint is the next call but one and owns
+    mov dx, [vid_dock_y0]       ; every row from here down, so dithering them
+    dec dx                      ; was a full-width band drawn to be painted
+    call gfx_fill_gray          ; over: the double-draw flash, and the reason
+                                ; every tile had to be rebuilt afterwards
     call desk_paint             ; drive icons live on the desktop, under
                                 ; every window (SPEC.md 26)
-    call dock_force             ; the dither just ran over the strip, and it
-    call dock_paint             ; is drawn UNDER windows (SPEC.md 30)
-    call menu_force
-    call menu_draw_bar
+    call dock_paint             ; ...so the strip is UNTOUCHED and usually has
+                                ; nothing to do. No dock_force: nothing here
+                                ; drew on it any more
+    call menu_draw_bar          ; and no menu_force either - the dither starts
+                                ; at MBAR_H, so nothing in this routine has
+                                ; ever been able to touch the bar (SPEC 12.9).
+                                ; The one thing that covers it is a fullscreen
+                                ; window, and menu_draw_bar sees that itself
 .wins:
     call wm_top
     mov bp, bx                  ; BP = frontmost visible (0 if none)

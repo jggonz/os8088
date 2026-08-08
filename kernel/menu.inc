@@ -743,7 +743,15 @@ menu_draw_bar:
     push di
 
     call wm_fs_vis              ; a visible fullscreen window is OVER the bar
-    jc .out                     ; (SPEC.md 11.2), so there is nothing here to
+    jnc .live                   ; (SPEC.md 11.2), so there is nothing here to
+    mov byte [menu_bovr], 1     ; draw on - AND our pixels are being destroyed
+    jmp .out                    ; while it is up, which is the whole of how
+                                ; wm_paint_all stopped needing menu_force: the
+                                ; ONE thing that can cover the bar is seen
+                                ; here, by the module that has to repair it,
+                                ; rather than assumed by every caller that
+                                ; repaints the screen for some other reason
+.live:                          ;
                                 ; draw on. The guard is here and not at the
                                 ; callers because "the bar is not on screen"
                                 ; is a fact about the screen, not about the
