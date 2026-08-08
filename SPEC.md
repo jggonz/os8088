@@ -4548,7 +4548,9 @@ away — §18 keeps the disk on the UI task, `dsk_xfer` raises `[sch_lock]`
 across every `int 13h`, and the caller is a window callback that has been
 holding the gfx lock since before it started (§22). So the cursor stops, no
 window paints, and nothing moves for as long as the disk takes. On the field
-machine a sector is **238 ms** (PERFORMANCE.md Part 2) — a 116KB module is
+machine a sector is **~65 ms** inside a run (PERFORMANCE.md Part 2; 238 ms
+before SPEC.md §18.91's `AL` fix, which is what the figure below was taken
+at) — a 116KB module is
 tens of seconds of a screen that looks hung.
 
 What was missing was not concurrency but **feedback**. The widget is a file
@@ -4598,7 +4600,7 @@ Five things hold it up.
 
 - **`fpg_step` must not be able to cost anything when nothing is armed.**
   It is `pushf` / `cmp byte [fpg_on], 0` / `je` on the disk path for the life
-  of the machine, the same ~13us against a 238 ms sector that `spl_step`
+  of the machine, the same ~13us against a 65 ms sector that `spl_step`
   settled for (§15.3). All of its state is in `.text` with real
   initialisers, **not `.bss`** — `-f bin` zeroes nothing, `drv_boot` reads
   the disk before any init routine could run, and a garbage `[fpg_on]` would
@@ -5285,7 +5287,8 @@ address.** `KERNEL_SEG` is the only constant `kernel/kernel.asm` and
 The progress bar used to reach 100% when the boot sector's final sector
 landed, and `vid_init`'s mode set then wiped the whole loading screen — with
 several seconds of kmain still to run. On the field machine (Part 2 of
-PERFORMANCE.md: **238 ms per floppy sector**) that tail is:
+PERFORMANCE.md: **~65 ms per floppy sector** in a run, 238 before the `AL`
+fix this paragraph predates) that tail is:
 
 | after the last sector of the kernel | cost |
 |---|---|
@@ -5311,7 +5314,7 @@ Three parts, all in `splash.inc` except the hooks:
   boundaries. It preserves **every register and the flags** — its hot caller
   is the middle of a transfer loop — and it is a compare and a `ret` once the
   splash is down, which is what makes leaving it on the disk path for the
-  life of the machine free (~13 us against a sector's 238 ms).
+  life of the machine free (~13 us against a sector's 65 ms).
 - **`spl_finish`** forces the bar to 100%, repaints once and clears
   `[spl_live]`. kmain calls it immediately before the first `wm_paint_all`,
   which is the last moment a full bar is true — and no erase is needed,
@@ -5355,7 +5358,8 @@ and as milliseconds.
 
 It exists because a boot is the one thing this project could never measure.
 It is over before a package can run, and on a floppy machine it is mostly
-**disk**: 125 sectors of kernel at 238 ms each (PERFORMANCE.md Part 2), then
+**disk**: 125 sectors of kernel at the pre-fix 238 ms each (PERFORMANCE.md
+Part 2; the whole boot is a measured 9.94 s now), then
 the mount, then every driver `SYSTEM.CFG` asked for. Any change to the read
 path — §18.91's batching, §18.93's parameter table — has to answer to a
 number, and this is the number.
@@ -5955,7 +5959,8 @@ panel, which writes `SYSTEM.CFG` to the *system* disk — §51.5.1):
 | **this rule** | **2** | **28** | **12** |
 
 Nineteen sectors is **~4.5 s of floppy on the field machine** at
-PERFORMANCE.md's 238 ms per sector, spent rebuilding a listing that no
+PERFORMANCE.md's then-238 ms per sector (~65 now), spent rebuilding a
+listing that no
 pixel on screen was drawn from — and `SYSTEM.CFG` is hidden+system (§19.6),
 so it does not appear in a listing even on a machine with A:'s root open.
 The two that remain are the volume switch to A: and the switch back, which
@@ -6550,7 +6555,8 @@ panel — §18.4's case, carried the rest of the way:
 | …and 18.4.3's kept entry | 2 | **9** | **9** |
 
 47 → 10 sectors is **4.7x**, about **8.8 s of floppy** on the field machine
-at PERFORMANCE.md's 238 ms per sector. The two mounts are irreducible — they
+at PERFORMANCE.md's then-238 ms per sector (~65 now). The two mounts are
+irreducible — they
 are the switch to A: and the switch back — and what is left of them is the
 boot sector, the directory and the commit.
 
@@ -6834,7 +6840,8 @@ something in this area is in doubt.
 > below is correctness rather than speed and is unaffected.
 
 `boot/boot.asm` read `AL = 1`. 131 sectors, one int 13h each, at
-PERFORMANCE.md's measured **238 ms per sector** — **over thirty seconds**, and
+PERFORMANCE.md's then-measured **238 ms per sector** (the `AL` bug; ~65 ms
+since) — **over thirty seconds**, and
 the single largest cost in the boot of the machine this targets. PERFORMANCE.md
 already named the fix and priced it at "about 9x on every load in the system,
 which is the largest single number in this document"; §18.91 took it for the
@@ -6948,7 +6955,8 @@ given for the separation was two things that have both since expired:
 
 - *"the counters are two instructions in the hot path of every transfer"* —
   measured, they are about twelve instructions per int 13h **call**, not per
-  sector, against a sector that costs **238 ms** on the target machine. And
+  sector, against a sector that costs **~65 ms** on the target machine (238
+  when this was written). And
   the image is **byte for byte the same size** either way, because the growth
   lands inside the padding to `OVL_START`: 72,199 bytes with them and without,
   the same 142-sector rung, so the memory ladder, the boot sector's read and
@@ -21875,7 +21883,8 @@ default.** Both `drv_tab` rows ship with `DRVR_WANT` = 0. The sound row used
 to ship with 1, so a freshly built image — which carries no `SYSTEM.CFG` at
 all — read the whole 5.5KB driver off the floppy on every boot to be told
 there was no card: **27 sectors, about 6.4 seconds** at the field machine's
-238 ms per sector (PERFORMANCE.md Part 2), and then a Control Panel opened
+the then-238 ms per sector (~65 now, PERFORMANCE.md Part 2), and then a
+Control Panel opened
 on a failure nobody had asked for. A driver probes hardware and costs a
 floppy read; both are the user's to ask for, and the tick in the Drivers page
 is both the request and the record of it. The kernel does not guess.
@@ -23876,7 +23885,8 @@ in the same folder - the case where the volume never actually changes:
 | **quiet** | 3 | **284** | **32** |
 
 11 sectors, about **2.6 s** of floppy on the field machine at
-PERFORMANCE.md's 238 ms per sector. The mount COUNT is unchanged because a
+PERFORMANCE.md's then-238 ms per sector (~65 now). The mount COUNT is
+unchanged because a
 quiet mount is still a mount - what changed is what it costs: ~12 sectors
 becomes ~1, the boot sector alone, with 18.8.2's FAT window supplying the
 rest.

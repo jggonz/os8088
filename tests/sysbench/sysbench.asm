@@ -2505,8 +2505,10 @@ sb_b_rdsml:
 ;
 ; Every row in the floppy block above has a hard-disk twin nobody has ever
 ; seen, starting with the one that decides whether a hard disk is worth having
-; as a system volume at all: a floppy moves 2,100 bytes a second and takes
-; 238 ms to fetch one sector (PERFORMANCE.md Part 9). It is also the only
+; as a system volume at all: a floppy moves 7,457 bytes a second and takes
+; ~65 ms to fetch a sector in a run - 2,100 and 238 before SPEC.md 18.91's
+; AL fix, and that older pair is quoted all over this tree (PERFORMANCE.md
+; Part 2). It is also the only
 ; measurement of SPEC.md 52's driver on real spinning MFM - rung 0, the
 ; controller ROM, which is the only rung an 8088 can take at all.
 ;
@@ -2650,7 +2652,8 @@ sb_hdd:
 ; The one number in this suite that CANNOT be measured by this suite: it is
 ; over before a package can run. The kernel carries it from the boot sector's
 ; first instruction to the first desktop frame, which on a floppy machine is
-; mostly the kernel read - 125 sectors at 238 ms each (PERFORMANCE.md Part 2)
+; mostly the kernel read - 125 sectors, which was 125 x 238 ms before
+; SPEC.md 18.91's AL fix and is a measured 9.94 s of boot after it
 ; - so it is the row that any change to the boot path has to answer to.
 ;
 ; Both units, deliberately: the tick is what was actually counted and the

@@ -1612,7 +1612,9 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; read, the video probe, the mount and every
                                  ; driver SYSTEM.CFG asked for, which is most
                                  ; of what a boot IS on a floppy machine -
-                                 ; 238 ms a sector (PERFORMANCE.md Part 2).
+                                 ; 65 ms a sector inside a run, and ~400 ms per int 13h
+                                 ; CALL, which is the unit that matters
+                                 ; (PERFORMANCE.md Part 2).
                                  ; AX = 0xFFFF means the boot sector never
                                  ; stamped it: an image built before the timer
                                  ; existed. Report unknown, do not print it as

@@ -260,6 +260,33 @@ The Compaq Portable III (Set 18) is the second data point and it moves with
 the drive rather than the CPU: 360 RPM, so a revolution is 166.7 ms and the
 same read is **11,047 B/s / 46 ms a sector**.
 
+#### THREE quantities, all different, and one number was doing all three
+
+This is Set 11's lesson again — a walk step's arrival, a one-pixel block and
+a marginal pixel turned out to be three figures where the tree had one — and
+the disk had the same disease for longer. Estimate with the row that matches
+the ACCESS SHAPE:
+
+| shape | cost | how known |
+|---|---|---|
+| a sector **inside a coalesced run** | **65 ms** (5150), 46 ms (Compaq III) | measured, Sets 17/18 |
+| an **`int 13h` call** in such a run | **~400 ms**, 1–2 revolutions, near enough whatever it moves | measured, Sets 14/17 |
+| an **isolated single-sector access** — a boot sector at LBA 0, a lone directory sector | **~150–200 ms once the motor is up**, and most of a second if it is not | **MODELLED, NOT MEASURED** (docs/ASSOC-PLAN.md): ~100 ms average rotational latency + ~80 ms average seek across 40 tracks at a 6 ms step + ~15 ms settle |
+
+The third row is the one that keeps getting confused with the first, and it
+is the one that matters for anything re-reading track 0: **an isolated
+first-sector read is not a 65 ms sector, because it is a seek**. A read of
+LBA 0 from wherever the heads were is up to a full 39-track stroke, so the
+~80 ms in that model is an *average* and the worst case is dearer.
+
+**`238 ms` is none of the three.** It is the AL bug — a revolution burned per
+sector because the kernel re-asked for eight of every nine — and it happened
+to sit near the isolated-access figure, which is exactly what let it survive
+as a plausible per-sector cost for so long. **Anything derived from it is
+wrong, and derivations from it are annotated as pre-fix throughout this
+tree rather than deleted**, so the reasoning that produced a decision is
+still readable next to the number that has since moved.
+
 ### The 8088 instruction floor — what replaced "add 20–40%"
 
 This document used to end Part 2 with "8086-nominal cycle counts under-report
@@ -1561,7 +1588,9 @@ an ISA status-port `in` 8.7 us.
 | a one-sector file, open and read | 796 ms |
 | throughput | **2,100 bytes/second** |
 
-32 sectors in 7.63 s is **238 ms per sector**, and a 360KB floppy turns once
+32 sectors in 7.63 s is **238 ms per sector** — the figure this whole tree
+then quoted for years, and the one Sets 16-18 turned into 65 by fixing the
+`AL` bug this very row is the symptom of — and a 360KB floppy turns once
 every 200 ms — so `dsk_xfer`'s one-`int 13h`-per-sector loop (§18.4.1) catches
 **one sector per revolution and misses the other eight**. Warm is not faster
 than cold, which confirms it: this is rotational latency, not motor spin-up
