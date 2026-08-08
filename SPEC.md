@@ -9479,6 +9479,147 @@ where the user did nothing. `fm_samename` compares the two and cancels
 instead. Both sides are §19.1 display names, sanitized identically, so the
 comparison is uppercase-exact and needs no folding.
 
+### 22.11 A scroll moves the rows; nothing else on the window changes
+
+All eight ways to scroll a Disk window — the two arrow cells, the two halves
+of the track, and Up/Down/PgUp/PgDn — ended in `fm_repaint`: a white fill of
+the whole content and then every pixel of it back again. That is the header
+line, two framed buttons, every visible row, a whole scroll bar and the
+status line redrawn to move a list, and on a 4.77MHz machine it is the
+content going blank and filling back in a piece at a time — the flash
+PERFORMANCE.md Part 1 is about, with a visible redraw behind it.
+
+**Not one of those four things can change when the view scrolls.** The header
+is `Drive B:  9 files`, and scrolling moves no file. The two buttons are
+labels in fixed rects. The status line is §22.7's resting `Size … Free …`, or
+one of §22.9's verdicts, and both are questions about the *selection* and the
+*volume* — a scroll moves neither. So the scroll paths draw none of them.
+
+And the rows mostly only **move**. Scrolling by `d` rows leaves `fit - d` of
+them showing the same names at a different y, which is exactly what
+`gfx_scroll` (§5.5) moves in one blit, so a click on the down arrow letters
+ONE row rather than ten. Three tiers, cheapest first, chosen by
+`fm_scroll_by` — the one entry all eight paths call, so the clamp, the tier
+choice and the write-back cannot drift apart between the mouse and the
+keyboard:
+
+| tier | when | what it draws |
+|---|---|---|
+| `fm_scrollpaint` | list view, `\|d\| < fit` | one blit, the `d` rows it exposed, two selection bands, the thumb |
+| `fm_rows_only` | the icon grid, or `\|d\| >= fit` | the row band erased and redrawn; header, buttons and status line untouched |
+| `fm_repaint` | a clip region cuts the band | everything, as before |
+
+The third is §11.3's granularity rule and not caution, taken exactly where
+`fm_status_only` takes it: the erase is a fill (per-pixel clipping) and the
+rows are glyphs (whole-cell clipping), so a clip edge crossing the band would
+erase rows the text could not be put back into — the window would go *blank*
+rather than stale. `wm_clip_test` on the whole band answers it in one call.
+
+Three things are load-bearing.
+
+**`fm_draw_rows` is one body, not two.** It is everything `fm_draw_core`
+draws between the buttons and the status line, split out so the scroll paths
+can have exactly that and no more. A second copy would be a second opinion
+about what a row area looks like — the argument `fm_hit`, `fm_thumb` and
+`fm_sel_bar` already won here.
+
+**The delta the drawing is a function of is the one the CLAMP took**, not the
+one the click asked for: a PgDn two rows from the end moves two, and a blit
+for a whole page would move rows that are not there. `fm_scroll_by` computes
+it after `fm_clamp_scroll` and publishes it in `[fm_sdlt]`. A delta of zero —
+a click on an end stop — now draws **nothing at all**, where it used to
+repaint the window to show the same pixels.
+
+**A scroll draws no text, so a status line owed elsewhere is still owed.**
+`fm_onclick` already banked that in `[fm_statowed]` for §22.9's retired
+verdicts and §22.2's selection bands; `fm_onkey` has to bank it too now,
+because "every path below draws the line one way or another" stopped being
+true the moment the scroll keys stopped drawing the header band. Both spend
+it with `fm_status_only`, and its own CF=1 is the same fallback to
+`fm_repaint`.
+
+**Measured**, on a cycle-accurate 4.77MHz 5150 with a CGA card, by
+PERFORMANCE.md Part 3.1's flicker instrument — which samples the card's
+rendered framebuffer once per *displayed frame*, so it counts what an eye
+would see rather than what the guest did:
+
+| one row, CGA | visible redraw | flash | worst transient | bounding box |
+|---|---|---|---|---|
+| was | 16 frames = 262 ms | 15 frames = 246 ms | 2,772 px | x 116..429, y 40..173 — the whole content |
+| is | 5 frames = 83 ms | 2 frames = 33 ms | 320 px | one row and the scroll bar |
+| at an end stop, was | 16 frames = 266 ms | 15 frames = 249 ms | 2,766 px | the whole content |
+| at an end stop, is | 0 | 0 | 0 | — |
+
+And it draws **the same pixels**. The gate is an A/B against a kernel with
+`fm_scroll_by` stubbed to `stc`/`ret` — every scroll a `fm_repaint`, exactly
+the behaviour this replaces — driven through one scripted session of 25
+captures: both arrow cells, both halves of the track, Up/Down/PgUp/PgDn, both
+end stops, a selection scrolled out of view and back, and the icon grid. The
+framebuffers are **byte-identical** on CGA at content-x phase 1 *and* phase 7
+(§22.11.1's strip pass on and off), on Hercules (the four-bank layout at a
+different geometry), and on VGA mode 12h (the planar blit through the
+latches): **0 differing pixels of 2.9M**, once the menu bar's clock — which
+ticks between two runs of different speed — is excluded.
+
+#### 22.11.1 The blit rounds INWARD, and each strip it leaves is answered
+
+`gfx_scroll` wants byte columns at both ends, and a Disk window is not
+`WF_SNAP` (§11.94) — its content origin is `W_X+1`, wherever the user dragged
+it. So the span is rounded **inward**, which is the opposite of Note Pad's
+§27.7.2 and for a reason worth stating: `NP_MARGIN` is 8 there, so rounding a
+text band's `x1` DOWN still lands inside the content, while a Disk row's icon
+starts four pixels in — rounding down would put the blit's left edge outside
+the window altogether, onto the frame and then onto whatever is to the left
+of it. Inward rounding leaves two strips the blit cannot move, and each is
+answered rather than paid for:
+
+- **Left, up to 7px**: white margin, plus at most three columns of the 16x16
+  icon at `x+4`. The strip is erased and those rows re-iconed
+  (`fm_draw_licon`), and **only when the rounding really did reach them** —
+  `align_up(cx) > cx+4` is true for three window positions in eight, and the
+  other five need no pass at all.
+
+  **The erase in front of it is not belt and braces, and leaving it out is the
+  one bug this shipped before the pixel diff caught it.** An icon is *not*
+  drawn opaque over its cell: `ico_core`'s white pass is the icon's own
+  **silhouette mask** — `ico_app16`'s is a diamond, `ico_disk32`'s a solid
+  rectangle, and a harvested one is whatever the package's author drew — so
+  re-drawing an icon leaves every pixel the *previous* row's icon lit outside
+  the new outline. It showed as a three-column stripe of stale icon edge down
+  the left of the row band, on the three window positions in eight that reach
+  it and no others, which is exactly the shape of bug an eyeball misses and an
+  A/B diff does not.
+- **Right, up to 7px**: always white. The span stops at the byte column
+  *before* the scroll bar, so the bar's frame, its two rules and its two arrow
+  glyphs are never disturbed — only the thumb is redrawn — and a list row's
+  size column right-aligns to `rgt-21`, clear of anything the rounding can
+  leave behind.
+
+**The selection is the one thing that spans both strips**, its band running
+the full row width. So it comes OFF before the blit and back ON after, at the
+row it now sits in — §22.2's two-band move with the blit in the middle. It
+needs no fixing up, because XOR is its own inverse and the band it is taken
+off is the band that was drawn.
+
+**The thumb translates and nothing else on the bar moves.** Its height is
+`fit*track/total`, which no scroll changes, so `fm_sb_thumb` draws the new
+thumb and then greys the strip it vacated — three calls against the bar's
+sixteen. The new thumb goes **first**, which is §42.7.1's ordering: for the
+width of one fill the thumb is briefly doubled, and a doubled thumb reads as
+movement where an absent one reads as a blink. A step too small to move it
+draws nothing.
+
+#### 22.11.2 The icon grid takes the middle tier, deliberately
+
+A grid cell is 78 wide and centres a 9-character name in it, so the leftmost
+cell's name can start 3px into the content and the rightmost can end 4px
+short of the last cell's edge — which is *inside* the strips inward rounding
+leaves. Repairing those means redrawing the first and last columns whole, and
+at the three columns a 320px window fits that is two thirds of the grid: the
+blit would be buying a third of the work at the price of a second exposed-cell
+painter. So the grid stops at `fm_rows_only`, which still leaves the header,
+both buttons and the status line alone, and the blit is the list view's.
+
 ### 22.3 Cut, Copy and Paste (`kernel/filecp.inc`)
 
 The clipboard is **(drive, folder, name, type)** and deliberately not an
@@ -11177,6 +11318,153 @@ Six things the band arithmetic has to get right:
 Verified by differential: the same scripted run against a build whose
 `np_scrollpaint` always refuses is **pixel-identical inside the window**, on
 VGA over nine states and on Hercules over six.
+
+### 27.7.3 The height is counted a chunk at a time
+
+§27.7.1 bounded every walk that draws to the bottom of the view, which left
+exactly one walk unbounded: `np_height`, the one that answers *how many rows
+is this note*. Nothing else asks, because nothing else draws below the view —
+so the note's tail is paid for here or nowhere. On a 15,889-byte `README.TXT`
+that is **781 rows** walked in a single hold, and the hold is the gfx lock, so
+the machine is frozen behind it with nothing on the disk and nothing on the
+glass. It is not I/O (`DISKCNT` counters are flat across it) and not the
+drawing (549 glyphs and 115 fills, ~0.65 s).
+
+**The count is chunked: `NP_HCHUNK` rows per worker pass, resuming where the
+last one stopped.** `np_height` still finishes it in one hold for the caller
+that needs the answer exact; `np_hchunk` is what the worker calls, and both
+are thin entries onto `np_hwalk`.
+
+**Why the lock does not forbid this.** `np_height` runs with `np_draw` and
+`np_sigup` clear and writes no framebuffer: the lock here is a mutex over the
+walk's SCRATCH — `np_row`, `np_curx`, `np_i`, `np_rows` are module globals and
+nine of `np_walk`'s ten call sites are UI callbacks, which hold it already.
+So the hold is needed for a CHUNK and never for the COUNT, and "give up the
+machine if something else wants it" falls out of the release rather than
+needing the worker to ask anyone.
+
+Five things hold it up:
+
+- **`[np_hdirty]` already says which exit the walk took**, so the resume needs
+  no flag of its own: `.done` clears it and sets an exact `[np_drows]`,
+  `.stop` leaves it up and raises `[np_drows]` as a lower bound.
+- **`.stop` publishes `(absolute row, index)`** into `[np_stoprow]`/`[np_stopi]`,
+  and this is the one piece of new plumbing. `np_seedrow` cannot reconstruct
+  it: `np_rows` is `NP_MAXROWS` long and `NP_MAXROWS` is 60, ONE SLOT PER
+  VISIBLE ROW, so the table describes the view and can never name row 300 of a
+  500-row note. Published on every bounded stop and kept only by `np_hwalk`,
+  which reads it under the lock with nothing between the call and the read.
+- **The banked row is ABSOLUTE and `[np_sdr]` is VISIBLE**, so the seed is
+  derived from `[np_top]` at the moment the chunk runs. The view may have
+  moved between one chunk and the next, and `np_scrollto` clears `[np_resume]`
+  for precisely this reason.
+- **The pair survives the release because wrapping is deterministic**: row *R*
+  begins at index *I* whoever computed it. An interleaved `W_PAINT` scribbles
+  over the walk's in-flight scratch and cannot touch those two words. Only the
+  note CHANGING invalidates them — and that is `np_hmark`, which raises the
+  flag and forgets the pair as one act, because they are one event. It stores
+  only to memory, so it preserves the flags and drops in where each of its
+  five callers had `mov byte [np_hdirty], 1`.
+- **Seeding at (0, 0) is identical to not seeding at all**, so the first chunk
+  needs no case of its own.
+
+**The worker has to EXIST, and on the one path that matters it did not.** The
+hire hung off `np_redraw`'s `.done`, and `.fullpaint` falls straight past it —
+so a note that repaints in full got no worker. Worse, a document opened by
+DOUBLE-CLICKING IT loads the file in the entry proc and is drawn by `W_PAINT`,
+which is not `np_redraw` at all: the note whose height most needs counting was
+the one note that never got a worker to count it. `np_hirechk` is the
+predicate in one place, called from `np_redraw`'s single exit and from
+`np_paint`.
+
+**And a click in the TEXT no longer buys a total it does not use.**
+`np_onclick` called `np_height` before it knew where the click had landed, so
+the first click after opening a file paid the whole remaining count in one
+hold — the freeze, moved from the load to the click. The bar's rect is
+`np_sbhit` now, shared with `np_sbclick` so two copies cannot disagree about
+where the bar is, and only a click inside it finishes the count.
+
+Measured on MartyPC (`os8088_5150_cga_gla`), README.TXT opened by
+double-click and then left alone: the count reaches **781** rows with no
+input at all, against `drows` stuck at **18** before. The chunk's resume pair
+was watched advancing — row 187, row 510, done — which is the check the
+previous attempt at this failed: it stalled at the first chunk and the tell
+was a thumb that stayed at ~75% of the track.
+
+### 27.7.4 ...and until it lands, the length is the estimate
+
+The chunked count is seconds of background work, and until it lands
+`[np_drows]` holds only what the first screenful's bounded walk reached — so a
+781-row file claims to be 18 rows tall and the scroll bar is drawn for a
+document that does not exist. `np_hguess` is the arithmetic answer available
+for nothing: **the characters, divided by the cells a row holds.**
+
+**It can only ever be too SMALL, which is what makes it safe to publish.** A
+row holds at most `[np_rcols]` cells, so a note of *L* characters needs at
+least *L*/cols rows — and every newline ends a row EARLY, which can only push
+the real number up. That is exactly `[np_drows]`'s existing direction of error
+(§27.7: a lower bound, never lowered), so nothing downstream needs a new rule,
+nothing has to test whether the count "got there yet", and the walk goes on
+correcting it upward as it always did.
+
+Three things about it:
+
+- **The font is fixed-width, so "cells a row holds" is not an average of
+  anything.** It is `[np_rcols]`, which `np_bounds` has just computed for the
+  row buffer — which is also why the estimate lives at the end of `np_bounds`
+  rather than anywhere else: that is where the geometry becomes known, and
+  every path that is about to draw goes through it.
+- **One `DIV`, riding on two far calls into the kernel** at ~756us apiece
+  (PERFORMANCE.md Part 2) — under 2% of a routine that was going to run
+  anyway. `[np_len]` is capped at `NP_MAXKB`, so the dividend never needs DX
+  and the divide cannot overflow; a window too narrow to hold one cell divides
+  by nothing and says nothing.
+- **It is not gated on `[np_hdirty]`.** When the count is exact the estimate is
+  by construction no larger, so the "never lowered" test refuses it and the
+  gate would be a second thing to keep in step for no gain.
+
+On README.TXT: 15,428 characters in a 24-cell row is **642** against the true
+781, so the bar is within 18% of right immediately instead of wrong by 43x.
+
+### 27.7.5 A resize walks to the bottom of the view, not to the end
+
+§27.7.1 bounded every walk that draws, and §27.7.3 chunked the one that
+counts. One unbounded walk was left, on a path neither of them looks at:
+`np_paint`, when `[np_gchg]` says the geometry moved. A resize changes the
+wrap width, so every row start moves and the whole layout is stale — and the
+old answer to that was `np_measure`, run to the last character, **drawing
+nothing at all while it went**. The note was walked invisibly and only then
+did the first row appear.
+
+It ran for ONE number. `np_scrollto` clamps `[np_top]` into the new layout and
+`np_scrollmax` is `[np_drows] - [np_vrows]`, so the total had to be known
+before a pixel could be drawn.
+
+**The bound answers the clamp exactly, and without the total.** The walk stops
+after `[np_vrows]`, and its exit is the answer:
+
+- **`.stop`** — the note demonstrably reaches past the bottom of the view, so
+  `[np_top]` is still a legal top and the clamp cannot bite. No total needed.
+- **`.done`** — the note ended inside the view, so `.done` has just set
+  `[np_drows]` to the truth (it assigns, it does not raise), and the clamp is
+  right for the same reason it always was.
+
+So nothing tests which happened: `np_hmark` raises the debt *before* the walk,
+and the walk either clears it on the way out or leaves it owed for §27.7.3's
+worker. The two cases are the two exits, and they were already there.
+
+**What this does NOT remove, because nothing can.** Wrapping is sequential:
+row *N* cannot be laid out without laying out rows 0..*N*-1, so a resize while
+scrolled to row 400 must still walk 400 rows to draw the view. The tail beyond
+the view is the avoidable part, and at the top of a file — which is where a
+file is when it has just been opened — that is nearly all of it. On README.TXT
+widened to full screen: **556 rows walked before, 18 after**.
+
+**And the drawing itself was never the problem.** `np_walk` calls `np_rflush`
+per row as it lays each one out, so on the 1bpp adapters — where the renderer
+writes the framebuffer directly (§39.5) — rows appear top to bottom as they
+are computed. The user already watches it fill in. What they were waiting on
+was the invisible pass in front of it.
 
 ### 27.8 A selection, and the two things a drag can mean
 
