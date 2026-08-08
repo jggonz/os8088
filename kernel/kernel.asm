@@ -1413,6 +1413,19 @@ kmain:
     sti                         ; the kernel's own 64KB window stays for code
     cld
 
+    call dsk_boot_from          ; WHICH VOLUME DID WE COME OFF? (SPEC.md
+                                ; 52.10.3) DL and BX:CX are the boot sector's
+                                ; handoff and nothing above touches them - the
+                                ; segment loads spend AX alone - so this is
+                                ; the first instruction that may. On a floppy
+                                ; boot BX:CX are 0 and DL is 0 or 1, and all
+                                ; this does is store the byte drv_mounted used
+                                ; to hardcode. On a hard disk it claims the
+                                ; boot partition as a DVK_BIOS row, which is
+                                ; what lets the kernel read SYSTEM.CFG and
+                                ; load HDD.DRV off the volume that driver
+                                ; would otherwise have been needed to reach
+
     call FAT_SEG:ovl_cpu_detect ; CPU tier + memory above 1MB (SPEC.md 41),
                                 ; here and nowhere else: BEFORE sched_init,
                                 ; because this is the last moment at which no

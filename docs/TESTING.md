@@ -533,6 +533,58 @@ Phase 4.
 
 ## Hard disks
 
+### Booting FROM one (SPEC.md §52.10)
+
+The boot chain — MBR, volume boot record, kernel — is testable **without the
+installer, and deliberately so**: if a disk the fixture builds boots and one
+the installer builds does not, the fault is in the installer, and without a
+fixture there is no way to make that distinction.
+
+`tools/os88hdd.py` writes what SPEC.md §52.10.4 says the installer writes, in
+the same order: `boot/mbr.asm`'s 446 bytes and one active partition entry, a
+FAT16 volume, `boot/boothd.asm` with that volume's BPB over its first 62 bytes
+and the kernel's sector count patched into the word at offset 508, and
+`KERNEL.SYS` first and contiguous from cluster 2 — which the VBR *requires*,
+because it reads the kernel as a flat run rather than walking a cluster chain.
+
+MartyPC's `os8088_xt_hdd` is the machine, and it is **rung 0** (an option ROM
+answering int 13h), which is the rung the field machine uses:
+
+```sh
+python3 tools/os88hdd.py \
+    --template build/martypc/run/media/hdds/default_xtide.vhd \
+    --out /tmp/boot.vhd --kernel build/kernel.bin \
+    --vbr build/boothd.bin --mbr build/mbr.bin
+cd build/martypc/run && MARTYPC_DEBUG_ADDR=127.0.0.1:9001 ./martypc_headless \
+    --machine-config-name os8088_xt_hdd --mount hd:0:/tmp/boot.vhd &
+python3 tools/os88marty.py 127.0.0.1:9001 run          # it starts PAUSED
+python3 tools/os88marty.py 127.0.0.1:9001 verify       # the kernel is aboard
+python3 tools/os88marty.py 127.0.0.1:9001 shot --rendered /tmp/hd.png
+```
+
+**NOTE THE `run`.** `martypc_headless` comes up with the CPU paused at the
+reset vector, and every debug command answers perfectly well while it sits
+there — so a `verify` that reports 88% differing and `boot_ticks: 0` is a
+machine that was never started, not a boot that failed. That reads exactly
+like a broken kernel and cost an hour once.
+
+**NO FLOPPY IS MOUNTED**, which is the whole point: `--mount fd:0:` is absent,
+so anything that reaches for A: has nothing to find. What the screenshot must
+show is the desktop with a **Disk C** zone beside Disk A and Disk B. That zone
+is the proof rather than a detail — `HDD.DRV` is not loaded (a fixture disk
+carries no `SYSTEM.CFG`, so nothing asks for it), so the only thing that could
+have created a third volume row is `dsk_boot_from` adopting the partition the
+machine booted from (SPEC.md §52.10.3).
+
+Two things this cannot tell you, both of which want the 5150: whether the
+**timing** is tolerable (no emulator here is disk-accurate, and MartyPC's
+error is 30× in the flattering direction — see the rule at the top of this
+file), and whether a **real** option ROM's AH=08h reports the geometry its
+AH=02h then translates with, which is the one assumption `boot/boothd.asm`
+cannot make without hardware.
+
+### The driver, its partitioner and its formatter
+
 QEMU has an ATA disk at 1F0h and SeaBIOS gives it to int 13h as drive 80h, so
 **both rungs of the driver's transport ladder (SPEC.md §52.1) are testable
 here** — and so are the partitioner, the formatter, the mount and the desktop

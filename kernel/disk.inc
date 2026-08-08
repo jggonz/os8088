@@ -762,6 +762,85 @@ dsk_vol_row:
     ret
 
 ; -----------------------------------------------------------------------------
+; dsk_boot_from - adopt the volume the boot sector loaded us from
+; in:  DL = the BIOS drive it read with; BX:CX = the partition base (both 0
+;      from boot/boot.asm, which does not set them and does not need to)
+; out: nothing; every register preserved
+;
+; Called from kmain before anything touches a disk (SPEC.md 52.10.3).
+;
+; A FLOPPY BOOT CHANGES NOTHING AT ALL: DL is 0 or 1, that is already a live
+; row whose unit matches, and [dsk_bootvol] is the index - so this stores the
+; byte that drv_mounted was hardcoding and returns. That is the common path
+; and it stays free.
+;
+; A HARD DISK BOOT claims the first free row for the partition, as DVK_BIOS -
+; the transport really is the BIOS, which is the entire point: rung 0 answers
+; for drive 80h with no driver in the machine, so the kernel can read
+; SYSTEM.CFG and load HDD.DRV off the very volume the driver would otherwise
+; have been needed to reach.
+;
+; The label is left EMPTY so desk_zone_label derives one from the index, which
+; is the same courtesy dsk_vol_add extends a driver: the drive letter is the
+; kernel's to assign (SPEC.md 52.4) and this row has no more right to name
+; itself than a driver's does.
+;
+; DV_SECS is left 0 - "unknown" - because the boot sector does not know it and
+; could not tell us in the registers it has. Rule 13's replacement reads that
+; word, and 0 means it does not run; what stands in its place for this volume
+; is rule 16, which proves the declared FAT covers its own cluster count. The
+; row is describing a volume the machine has just successfully read a kernel
+; out of, which is a stronger statement than any of the bounds would make.
+; -----------------------------------------------------------------------------
+dsk_boot_from:
+    push ax
+    push bx
+    push si
+    test dl, 0x80               ; a floppy boot: DL is already the volume
+    jnz .hard
+    mov [dsk_bootvol], dl
+    jmp short .out
+.hard:
+    mov si, bx                  ; the base is banked BEFORE BX becomes the row
+                                ; walker - SI:CX for the rest of the routine
+    mov bx, dsk_vtab + 2*DV_SIZE    ; the row walks, as dsk_vol_add's does
+.scan:
+    cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE
+    jae .out                    ; no free row cannot happen at boot, nothing
+                                ; having run - but a scan that falls off its
+                                ; own table must not write past the end of it
+    cmp byte [bx+DV_KIND], DVK_FREE
+    je .got
+    add bx, DV_SIZE
+    jmp short .scan
+.got:
+    mov [bx+DV_UNIT], dl
+    mov word [bx+DV_SECS], 0    ; unknown - see the header
+    mov word [bx+DV_SEG], 0     ; no donated listing claim: the .lowbss floor
+    mov byte [bx+DV_FLAGS], 1   ; shown on the desktop, like any volume
+    mov byte [bx+DV_LBL], 0     ; ...and named by the kernel, not by us
+    mov ax, bx
+    sub ax, dsk_vtab
+    push cx                     ; the base's high word, and shr wants CL
+    mov cl, 4                   ; DV_SIZE = 16: the index back out of the row
+    shr ax, cl
+    pop cx
+    mov [dsk_bootvol], al
+    mov byte [bx+DV_KIND], DVK_BIOS ; published LAST, dsk_vol_add's discipline:
+                                    ; the row is live from this store on
+    mov bl, al                  ; the base goes in the side table, which is
+    xor bh, bh                  ; indexed by VOLUME and not by row
+    add bx, bx
+    add bx, bx
+    mov [dsk_vbase+bx], si
+    mov [dsk_vbase+bx+2], cx
+.out:
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; dsk_geom_pick - bank the current volume's partition base and cylinder bound
 ; in:  [disk_drive] = the volume, [dsk_unit] already set from its row
 ; out: [dsk_base] (32-bit) and [dsk_cylmax]; every register kept, FLAGS NOT -
@@ -1294,6 +1373,7 @@ disk_mount:
     mov [disk_drive], dl
     mov byte [dsk_vkind], DVK_BIOS  ; what the BPB rules are checked against
     mov word [dsk_vsecs], 0         ; (SPEC.md 18.2/18.7)
+    mov byte [dsk_vflop], 1
     push bx
     mov bl, dl
     call dsk_vol_row
@@ -1302,6 +1382,28 @@ disk_mount:
     mov [dsk_vkind], al
     mov ax, [bx+DV_SECS]
     mov [dsk_vsecs], ax
+    ; --- IS IT A FLOPPY? which is not the same question as DV_KIND ----------
+    ; Four of the BPB rules below are floppy limits - a FAT of at most
+    ; DSK_FAT_SECS, the two geometry whitelists, and the total-sectors bound -
+    ; and every one of them used to ask DVK_BIOS, because for as long as BIOS
+    ; transport meant a floppy that was the same question.
+    ;
+    ; SPEC.md 52.10.3 separated them: a BOOT PARTITION is a DVK_BIOS row, so
+    ; that the kernel can read it through int 13h before HDD.DRV exists, and
+    ; it is a 32MB FAT16 volume whose FAT is far more than nine sectors. Asked
+    ; the old way it failed rule 10 and would not mount - which is the mount
+    ; refusing the disk the machine had just booted from.
+    ;
+    ; DV_KIND stays the TRANSPORT, because that is what dsk_xfer needs it for.
+    ; This byte is the MEDIUM, and a floppy is a BIOS row whose unit is below
+    ; 80h - the same test dsk_geom_pick uses for the cylinder bound, and a
+    ; fact about int 13h drive numbers rather than about this OS.
+    cmp al, DVK_BIOS
+    jne .nofloppy
+    test byte [bx+DV_UNIT], 0x80
+    jz .kindok
+.nofloppy:
+    mov byte [dsk_vflop], 0
 .kindok:
     pop bx
     mov word [disk_spt], 9      ; fallback geometry for the LBA 0 read
@@ -1719,7 +1821,7 @@ dsk_bpb_check:
     mov ax, [dsk_bpb+DSK_B_FATSZ]
     test ax, ax
     jz .jfail1
-    cmp byte [dsk_vkind], DVK_BIOS
+    cmp byte [dsk_vflop], 1
     jne .r11
     cmp ax, DSK_FAT_SECS
     ja .jfail1
@@ -1730,7 +1832,7 @@ dsk_bpb_check:
     ; A driver-backed volume never reaches that divisor - its driver owns the
     ; addressing - so the bound is only that the product cannot overflow.
     mov ax, [dsk_bpb+DSK_B_SPT]
-    cmp byte [dsk_vkind], DVK_BIOS
+    cmp byte [dsk_vflop], 1
     jne .r11d
     cmp ax, 8
     je .r12
@@ -1752,7 +1854,7 @@ dsk_bpb_check:
     ja .jfail1
 .r12:
     mov ax, [dsk_bpb+DSK_B_HEADS]
-    cmp byte [dsk_vkind], DVK_BIOS
+    cmp byte [dsk_vflop], 1
     jne .r12d
     cmp ax, 1
     je .r13
@@ -1771,7 +1873,7 @@ dsk_bpb_check:
     ; the volume, and the question stops being "is this geometry plausible"
     ; and becomes the sharper "does this volume claim to be bigger than the
     ; partition it lives in" (SPEC.md 18.7).
-    cmp byte [dsk_vkind], DVK_BIOS
+    cmp byte [dsk_vflop], 1
     jne .r13d
     mov ax, [dsk_bpb+DSK_B_SPT]
     mul word [dsk_bpb+DSK_B_HEADS]  ; AX = spt*heads (<= 72), DX = 0
@@ -3424,7 +3526,12 @@ dsk_fatwn:    resw 1            ; ...and how many are resident. On a floppy
                                 ; this is the whole FAT and the window never
                                 ; moves - the degenerate case, byte for byte
 dsk_vkind:    resb 1            ; the mounted volume's DVK_* (SPEC.md 18.7):
-                                ; which half of BPB rules 10..13 applies
+                                ; its TRANSPORT, which is what dsk_xfer needs
+dsk_vflop:    resb 1            ; ...and whether it is a FLOPPY, which is what
+                                ; BPB rules 10..13 need and is no longer the
+                                ; same question (SPEC.md 52.10.3): a boot
+                                ; partition is a DVK_BIOS row with a 64-sector
+                                ; FAT, and rule 10 caps a floppy's at 9
 dsk_vsecs:    resw 1            ; ...and the sector count its driver declared,
                                 ; which is rule 13's replacement
 dsk_nfats:    resb 1            ; 1 or 2
