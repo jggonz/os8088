@@ -135,12 +135,36 @@ included — on real hardware.** It is not a mono problem and it is not a
 slow-machine problem; it is a *two-writes-to-one-pixel* problem, and the eye
 samples between them at 50–70Hz whatever the card is.
 
-Two things make this rule necessary rather than obvious. The defect **does
-not appear in any timing column**, because blanking first is usually the same
-amount of work; and it **does not appear on any emulator here**, because they
-paint a frame after the operation rather than during it. So it is neither
-measured away nor caught by a screenshot: it is caught by a person looking at
-a real machine, or by Part 3.1's per-frame instrument, and by nothing else.
+What makes this rule necessary rather than obvious is that the defect **does
+not appear in any timing column** — blanking first is usually the same amount
+of work — and does not appear in a *screenshot* either, since a capture taken
+after the operation shows the correct final pixels.
+
+**It is not invisible to this harness, and do not write that it is.**
+MartyPC measures it and Part 3.1 is the method: sample the rendered
+framebuffer once per displayed frame and count the pixels whose before and
+after agree while something else was on the glass between them. That count
+*is* this defect. Reach for it before concluding anything about a flash, and
+read the BBOX with the number. QEMU is the one that cannot show it, and QEMU
+is the fallback for 286+/VGA and a short list besides.
+
+Two sampling mistakes, because both look like an absence: **screendumps over
+a socket are not frames** — a shot every ~50 ms straddles a 40 ms window and
+reports a clean picture on both sides of it — and the instrument's floor is
+**3 frames**, so an event of one or two needs the capture window slid across
+it rather than aimed at it.
+
+The one exception is written up under *What it does not cover*: a flash that
+**spans a mode change** has no before/after pair for `transient` to compare,
+and wants the lit-pixel count of the first frames in the new mode instead.
+
+What is left for a person on a real machine is narrower than the above makes
+it sound, but it is not nothing: whether the flash is *objectionable* at the
+size and position it occupies; anything decided by **the machine's own ROM**
+rather than by this kernel (§39.6's CGA mode set is the worked example — the
+emulated ROM does not produce the flash the IBM one does); and the analogue
+consequences a framebuffer has no field for, the beam-current swing an IBM
+5151 answers with an audible pop among them.
 
 What the fix looks like, in order of preference:
 
@@ -567,6 +591,19 @@ one is a number that has not been attributed.
   and the frame rate, not whether a cell is blanked before it is lettered.
 - **Anything shorter than a frame**, as above. Correct by construction and
   worth restating: a defect the raster never catches is a defect nobody saw.
+- **Anything that spans a MODE CHANGE**, and this one is a property of the
+  metric rather than of the emulator. `transient` counts pixels that *ended as
+  they started* while showing something else in between — and across a mode
+  set there is no such pixel, because the before picture is a text raster and
+  the after picture is a bitmap. Nothing ends as it started, so the count is
+  ~0 however bad the flash. The measurement that does work there is cruder and
+  direct: step frames and count **lit pixels in the first few frames after the
+  card reports the new mode**. A cleared framebuffer is ~0; the previous text
+  page reinterpreted as 640x200 is not. SPEC.md §39.6 is the worked example,
+  and its result is worth carrying: with GLaBIOS the first graphics frame is
+  **1–2 lit pixels of 128,000 with the fix and without it**, so that ROM never
+  produces the flash — which makes it the one defect here that is genuinely a
+  claim about *the machine's own ROM* and not about the kernel.
 - **Work.** A change can cut the flash and cost more cycles, or the reverse.
   Part 4 and Part 9 price work; this prices what the work looked like.
 - **The disk.** Unchanged and absolute — an operation with a disk in it has

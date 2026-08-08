@@ -1127,22 +1127,23 @@ hd_iapps_find:
     push dx
     push si
     push di
+    mov byte [hd_iafound], 0
     int 0x11                    ; the equipment word
     test al, 1                  ; ...any floppy drive at all
-    jz .no
+    jz .refuse
     mov cl, 6
     shr al, cl                  ; bits 7:6 = drives - 1
     or al, al
-    jz .no                      ; one drive: there is nowhere else to look
+    jz .refuse                  ; one drive: there is nowhere else to look
     mov bl, [hd_ivdrv]          ; the drive stage 1 read from
     cmp bl, 2
-    jae .no                     ; not a floppy at all: "the other one" has no
+    jae .refuse                 ; not a floppy at all: "the other one" has no
     xor bl, 1                   ; meaning, so ask
     push bx
     xor dx, dx                  ; its ROOT
     call OSAPI_FILE_GOTO
     pop bx
-    jc .no                      ; no disk in it, or one we cannot read
+    jc .refuse                  ; no disk in it, or one we cannot read
     xor cx, cx
 .scan:
     push es
@@ -1151,18 +1152,36 @@ hd_iapps_find:
     mov di, hd_ifind            ; NOT hd_ient: the tree walk owns that one and
     call OSAPI_FILE_FIND        ; this runs between two of its passes
     pop es
-    jc .no
+    jc .ended                   ; the end of the root, and no KERNEL.SYS in it
+    mov si, hd_ifind            ; A SYSTEM DISK IS NOT THE APPS DISK, and this
+    mov di, hd_s_kernel         ; is the test that says so - not the APPS
+    call hd_iname_same          ; folder below, which the system disk is going
+    jc .refuse                  ; to have too. Same marker drv_cfg_save uses to
+                                ; find the system volume (SPEC.md 51.5.1), so
+                                ; there is one answer to "which disk is that"
+                                ; rather than two that can drift. A driver's
+                                ; FILE_FIND sees hidden and system entries
+                                ; (SPEC.md 19.7.1's fence), which is what makes
+                                ; it able to ask at all
     cmp word [hd_ifind+14], 2   ; a folder, and not the synthesized '..' (3)
     jne .scan
     mov si, hd_ifind
     mov di, hd_s_iapps
     call hd_iname_same
     jnc .scan
+    mov byte [hd_iafound], 1    ; ...and keep WALKING rather than stopping
+    jmp short .scan             ; here, because a KERNEL.SYS further down the
+                                ; listing still disqualifies the disk - and it
+                                ; is sorted by name (SPEC.md 19.4), so APPS
+                                ; comes FIRST and an early exit would miss it
+.ended:
+    cmp byte [hd_iafound], 0    ; the whole root walked: an APPS folder and no
+    je .refuse                  ; KERNEL.SYS anywhere in it is the apps disk
     call hd_ivol_back           ; found it - and the volume goes back either
     mov al, bl                  ; way, because hd_inst_apps banks afresh
     clc
     jmp short .out
-.no:
+.refuse:
     call hd_ivol_back
     stc
 .out:
@@ -2111,6 +2130,7 @@ hd_isrcdrv:   db 0              ; the drive the COPY reads from, which is the
                                 ; Separate from hd_ivdrv because that one is
                                 ; what hd_ivol_back puts the user on, and the
                                 ; two must not be the same word
+hd_iafound:   db 0              ; hd_iapps_find: an APPS folder has been seen
 hd_iautod:    db 0xFF           ; the auto-detected apps drive, 0xFF = none.
                                 ; .text with a real initialiser, hd_iwin's
                                 ; reason: -f bin zeroes nothing and 0 here is

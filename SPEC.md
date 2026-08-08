@@ -16021,9 +16021,27 @@ depends on how the machine got here: mode 3's clear leaves `0x0720` per cell,
 a regular field of dots, and a **hard-disk boot** leaves the POST's own text,
 because `boot/boothd.asm` deliberately sets no video mode (§52.10.2).
 
-**No emulator in this tree can show either flash** — they clear instantly and
-have no beam — which is why both halves of this were found on the iron, and
-why the CGA half survived the Hercules fix by a whole release. The pre-clear
+**This is a claim about the machine's own ROM, and it is the one defect here
+that MartyPC cannot arbitrate** — which is not the same as "no emulator can
+show a flash", a thing that stopped being true when PERFORMANCE.md Part 3.1's
+per-frame instrument landed. Two separate reasons, both worth knowing:
+
+- Part 3.1's `transient` count **cannot price a mode change**. It counts
+  pixels that ended as they started while showing something else in between,
+  and across a mode set no pixel does — the before picture is a text raster
+  and the after picture is a bitmap. The count is ~0 however bad the flash.
+  The measurement that works is direct: step frames, and count lit pixels in
+  the first frames after the card reports the new mode.
+- Measured that way, **GLaBIOS does not produce the flash at all**: the first
+  graphics frame is **1 lit pixel of 128,000 without this fix and 2 with it**.
+  So the A/B is a null result on MartyPC, and it is a null result *about
+  GLaBIOS*, whose mode-6 routine evidently clears before it enables video. The
+  IBM ROM on the field machine is a different program, and it is that program
+  the report came from.
+
+Which is why the fix is written to be **independent of the ROM's order**
+rather than to defeat a particular one — the buffer is already zero whatever
+the ROM does next — and why it is verified on the iron and nowhere else. It
 costs ~26 ms of `rep stosw` once per boot, against a ROM clear of the same
 16KB that was already being paid.
 
@@ -23421,9 +23439,19 @@ Three things decide it, and each answers a question nothing else can:
 - **Which drive to look in is the OTHER one** — `[hd_ivdrv] XOR 1`, and only
   when the drive stage 1 read was a floppy at all. A hard-disk source makes
   "the other one" meaningless, so that case asks.
-- **What makes a disk the apps disk is an `APPS` folder in its root**
-  (§19.2). The system disk has `SYSTEM` and `MEDIA` and not that, so the two
-  cannot be confused, and a disk that is neither is not copied by accident.
+- **What makes a disk the apps disk is an `APPS` folder in its root and no
+  `KERNEL.SYS` anywhere in it.** The folder alone was the first answer and it
+  has a short life: the system disk is going to carry an `APPS` folder too,
+  at which point "has APPS" stops telling the two apart. `KERNEL.SYS` is the
+  marker `drv_cfg_save` already uses to identify the system volume (§51.5.1),
+  so there is one answer to *which disk is that* rather than two that can
+  drift, and a driver's `OSAPI_FILE_FIND` sees hidden and system entries
+  (§19.7.1's fence) — which is what lets it ask about a file §19.6 hides.
+
+  The walk therefore **does not stop at `APPS`**: the listing is sorted by
+  name (§19.4), so `APPS` comes first and a `KERNEL.SYS` further down would
+  be missed by an early exit. It records the folder and keeps going, and only
+  the end of the root is an answer.
 
 Every refusal falls back to the prompt exactly as it was: a renamed disk, a
 data disk, an empty drive and a one-drive machine all take the path they
