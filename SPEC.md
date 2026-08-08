@@ -20101,49 +20101,59 @@ is a claim about perception, so like §45.16.3 it is a bench key rather than
 a decision, and `E` now cycles A → B → C so all three can be compared in
 place without a rebuild between them.
 
-**The animation is a BANG and it started as a sweep, which was not visible
-at all.** The first build ran one `*` back and forth through a twelve-cell
-field, and the field report was simply that there was no bang — a single
-character moving inside a status line is not an event, and an event is the
-entire job: what is being hidden is a resync, and it only reads as
-punctuation if it lands like one. So the hold opens with a **full
-`TLOG_BARW` bar** on the frame the burst ends and drops one cell on every
-frame after, an impact at the front and a decay across it. At CLICK.MOD's
-tempo the hold is 8–9 frames and the bar is 8, so it empties as the next
-burst begins.
+**The load-bearing part is that the TEXT IS NOT THERE.** The first two
+builds put the animation *next to* a row number that had stopped, and the
+field's verdict was exact: *"the numbers freeze entirely, and that is not
+smooth"*. A frozen number beside a moving animation is a frozen number. So
+the readout is two fields — `TEXT` (the mode label and `Pos`/`Row`,
+`TLOG_TXTW` cells) and `VISUAL` (`TLOG_RULEW` cells) — and the text **poofs
+on the first frame of the hold** and comes back on the first frame of the
+next burst. Nothing on screen is standing still, because nothing on screen
+is a number.
 
-Two details in that are load-bearing. `[tlog_sweep]` counts **frames since
-the burst ended** and the bar is `TLOG_BARW` minus it, with `TLOG_NOBAR`
-(0xFF) as the burst's own value — so "is this the first frame of the hold"
-needs no flag of its own, and the count **saturates** rather than wrapping,
-because a decay that restarted would read as a second bang nothing caused.
-And the bar is **its own drawing field**, next to the position rather than
-inside it, compared against what was last *drawn*: a burst frame and a
-decayed hold frame then cost no drawing at all, which matters because a cell
-is ~1 ms on the machine this is for (§6.1.1) and the burst's evenness is the
-whole thing under test.
+That split is also what makes it affordable: the text is blanked *once* per
+cycle rather than per frame, and the animation is 16 cells — ~13 ms on the
+machine this is for (§6.1.1) against ~34 for the whole line.
 
-**Which mode is live is on screen** (`PACE A` / `PACE B` / `PACE C`, in the
-same run as the position so it costs no call). `E` says which mode it moved
-to, and a transient message is the wrong shape here: what is being judged is
-what the line does over a *minute*, so by the time an opinion has formed the
-message has gone.
+**Five animations, because which one reads best is a claim about
+perception.** `E` cycles A, B and then all five, and the label names the live
+one:
+
+| | the hold shows |
+|---|---|
+| **C bar** | a bar full at the seam, one cell shorter each frame — an impact at the front, a decay across |
+| **D sweep** | one cell running the field, wrapping — the quietest; still moving when the bar has decayed to nothing |
+| **E out** | a solid block growing from the centre to the edges |
+| **F in** | a solid block growing from the edges to the centre |
+| **G hide** | every cell at once, unchanged for the whole hold — then the letters **revealed from the centre** over `TLOG_REVN` frames once the burst resumes |
+
+`G` is the one that spends nothing during the wait (one drawing call for the
+whole hold) and pays on the far side instead, and its reveal is deliberately
+on the **burst** frames: by the time anything legible is on screen the
+display is already back in step, so the seam was never visible.
+
+Three details are load-bearing. `[tlog_sweep]` counts **frames since the
+burst ended**, with `TLOG_NOBAR` as the burst's own value — so "is this the
+first frame of the hold" needs no flag, and it **saturates** rather than
+wrapping, because a decay that restarted would read as a second bang nothing
+caused. It saturates below **0x40**, because the visual field's redraw key
+packs "holding, frame k" into `0..0x3F` and tags the ruler and the reveal
+with `0x40` and `0x80`. And the reveal is gated on `G` alone — C through F
+say *then all disappear to the normal display*, which is one frame.
+
+**Which mode is live is on screen** (`PACE C bar`, `PACE G hide`, … in the
+text field's own run, so it costs no call). `E` says which mode it moved to,
+and a transient message is the wrong shape here: what is being judged is what
+the line does over a *minute*, so by the time an opinion has formed the
+message has gone — and seven modes cannot be told apart by a letter alone,
+so the label names the animation too.
 
 Two things it costs, both stated so the comparison is honest. Inside a
 burst the row shown is up to `TLOG_BURST - 1` rows ahead of the music, which
 is the opposite trade from everything else in §45.15. And a hold frame
-redraws the bar's ten cells even though the row did not move — the burst
-itself, which is the part being judged, pays nothing.
-
-**`D` is the sweep, kept beside the bang rather than replaced by it.** It is
-the quieter of the two — it says *still going* where the bang says *here is
-the seam* — and on a module whose holds are long the bang has decayed to
-nothing while the sweep keeps moving. Which reads better is the same species
-of question as A against B, so it gets the same answer: both stay, `E` cycles
-A → B → C → D, and the live one is named on screen. They share `tlog_burst`
-and one counter (`[tlog_sweep]`, frames since the burst ended): C draws
-`TLOG_BARW` minus it, D draws it modulo `TLOG_BARW`, and nothing in the burst
-machinery knows which mode is live.
+redraws the visual field's sixteen cells even though the row did not move —
+the burst itself, which is the part being judged, pays nothing, and `G` pays
+nothing for the hold either.
 
 #### 45.16.5 …and on a real module the windowed frame rate is BELOW the row rate
 
