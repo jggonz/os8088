@@ -463,6 +463,101 @@ tlog_even_key:
 tlog_pace_str:  dw tlog_s_eveno, tlog_s_evenx, tlog_s_burst
 
 ; -----------------------------------------------------------------------------
+; tlog_rate_key (K) - XT mode's SAMPLE RATE, without leaving XT mode
+;                     (docs/FIELD-NOTES.md 16). Bench-only.
+;
+; This exists because the obvious way to change the rate - press X - changes
+; the SURFACE too (SPEC.md 45.13): XT off is the graphics FT2 screen, which
+; SPEC.md 45.9.1 measured at 2,567 glyph cells a second and which on a real XT
+; is unusable. It also destroys the measurement, because a starved frame clock
+; makes tui_playpos degenerate (SPEC.md 45.15.2's fpt = 1 case) and the phase
+; being asked about is then not the phase under test.
+;
+; What it is FOR: separating a GUEST-side offset between the display and the
+; music from HOST-side output buffering in an emulator. One DMA block is
+; TRK_HALF bytes whatever the rate, so in TIME it is 512 ms at 4 kHz, 372 at
+; 5.5 and 186 at 11 - against a fixed 125 ms row that is 4.1, 3.0 and 1.5
+; rows. A host buffer is a fixed number of MILLISECONDS and does not move.
+; Three points, one line, and the slope is the answer.
+;
+; The floor is the hardware's: a Sound Blaster's rate is 1000000/(256-tc) with
+; tc a BYTE, so nothing below 3,906 Hz exists to ask for. 4,000 is tc = 6.
+;
+; A rate change needs the stream reopened, so this is windowed-only and takes
+; effect at the next Play - like X, and for the same reason.
+; -----------------------------------------------------------------------------
+tlog_rate_key:
+    push ax
+    push bx
+    push si
+    mov al, [tlog_xr]
+    inc al
+    cmp al, 3
+    jb .set
+    xor al, al
+.set:
+    mov [tlog_xr], al
+    mov bl, al
+    xor bh, bh
+    shl bx, 1
+    mov ax, [tlog_xrates + bx]
+    mov [tlog_xrate], ax
+    mov si, [tlog_xrstr + bx]
+    call tui_msg
+    pop si
+    pop bx
+    pop ax
+    ret
+
+tlog_xrates:    dw 4000, 5500, 11000
+tlog_xrstr:     dw tlog_s_r4, tlog_s_r55, tlog_s_r11
+tlog_xrate:     dw TRK_RATE_XT      ; the live one, and the index that names it
+tlog_xr:        db 1                ; - in the IMAGE and not in bss, because
+                                    ; trk_stream_open reads the rate and a
+                                    ; package's bss arrives zeroed, which here
+                                    ; would be a request for 0 Hz
+
+; -----------------------------------------------------------------------------
+; tlog_xtrate_stamp - put the LIVE rate into the text screen's header string
+;                     (SPEC.md 45.13's 'XT 5500 Hz' cell)
+;
+; The shipped build bakes 5,500 in because XT mode IS 5,500 Hz. Here K moves
+; it, so the screen has to say which one is running - a swept rate nobody can
+; read off the machine is not a measurement.
+;
+; Called from ttx_put's caller with SI already on the string, DI the VRAM
+; offset and AH the attribute, so it preserves EVERYTHING. [mp_mixrate] and
+; not [tlog_xrate], because what the header owes is the rate the stream was
+; OPENED at, and K takes effect at the next Play.
+; -----------------------------------------------------------------------------
+tlog_xtrate_stamp:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov di, ttx_s_xtrate + 7        ; the last of the five digits
+    mov ax, [mp_mixrate]
+    mov cx, 5
+    mov bx, 10
+.d:
+    xor dx, dx
+    div bx
+    add dl, '0'
+    mov [di], dl
+    dec di
+    loop .d
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+tlog_s_r4:      db 'XT rate 4000 Hz - block 512ms = 4.1 rows (press Enter)', 0
+tlog_s_r55:     db 'XT rate 5500 Hz - block 372ms = 3.0 rows (press Enter)', 0
+tlog_s_r11:     db 'XT rate 11000 Hz - block 186ms = 1.5 rows (press Enter)', 0
+
+; -----------------------------------------------------------------------------
 ; tlog_burst (C) - put the DISPLAYED row on a burst grid (SPEC.md 45.16.4).
 ;
 ; The other two modes try to be RIGHT: they show each row as near to when it

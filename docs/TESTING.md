@@ -718,6 +718,14 @@ make test SB16=1 TESTAPPS=build/trklog.img   # builds the disk on demand
 #      T is WINDOWED-ONLY in practice: ttx_clkpick runs at bracket entry and
 #      sets the clock back, so pressing it inside fullscreen changes nothing
 #      until the next F. Press it, then F.
+#
+# K    XT mode's SAMPLE RATE - 4,000 / 5,500 / 11,000 Hz - WITHOUT leaving XT
+#      mode (docs/FIELD-NOTES.md 16). Windowed-only, takes effect at the next
+#      Play, and the text screen's header cell says which rate is running.
+#      X is the wrong way to do this: it changes the SURFACE too, to the
+#      graphics FT2 screen, which SPEC.md 45.9.1 measured at 2,567 glyph
+#      cells a second - unusable on a real XT, and a starved frame clock
+#      degenerates tui_playpos so the measurement is not the one you wanted.
 ```
 
 **The buffer is a RING of the LAST 512 ticks (28 s).** It used to stop at the

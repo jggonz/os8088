@@ -1559,14 +1559,41 @@ reading does not exonerate anything downstream of that counter.
 The discriminator is the **sample rate**, and it needs no instruments:
 
 - A **guest-side** offset is a fixed number of BYTES. One DMA block is 2,048
-  bytes, which is **2.99 rows at the XT rate (5,500 Hz)** and **1.49 rows at
-  11,000 Hz** — the "exactly three rows" is exactly one block, which is why
-  this hypothesis is worth testing first.
-- **Host output buffering** is a fixed number of MILLISECONDS and does not
-  move with the rate at all.
+  bytes, which against a fixed 125 ms row is **4.15 rows at 4,000 Hz, 2.98 at
+  5,500 and 1.49 at 11,000** — the "exactly three rows" is exactly one block
+  at the XT rate, which is why this hypothesis is worth testing first.
+- **Host output buffering** is a fixed number of MILLISECONDS and therefore a
+  fixed number of rows, whatever the rate.
 
-So: play `CLICK.MOD`, judge the offset in rows, press `X` to leave XT mode
-(which takes the rate to 11,000 Hz), judge it again. **Halved → still ours,
-and it is one DMA block. Unchanged → it is PCem's output path**, and the
+**`X` is the wrong way to change the rate, and that is worth writing down
+because it was the first thing tried.** Leaving XT mode changes the
+**surface** as well: fullscreen is then the graphics FT2 screen, which
+SPEC.md §45.9.1 measured at 2,567 glyph cells a second and which on a real XT
+is unusable. It also destroys the measurement — with the frame clock starved
+to one call every 3.4 ticks, `[tui_lcons]` never advances between reports at
+all and is simply snapped, so §45.15.2's interpolation degenerates and the
+phase being measured is not the phase under test. On MartyPC that alone reads
+as −0.79 rows on the graphics screen against −0.21 on the text screen at the
+same 11,000 Hz.
+
+So the bench build has **`K`** (`make clicktest`), which moves XT mode's rate
+through 4,000 / 5,500 / 11,000 **without leaving XT mode** — same text screen,
+same everything, only the block duration. It is windowed-only and takes effect
+at the next Play, like `X`; the header cell says which rate is running. The
+floor is the hardware's: a Sound Blaster's rate is `1000000/(256-tc)` with `tc`
+a byte, so nothing below 3,906 Hz exists to ask for.
+
+Validated on MartyPC — where the estimator is rate-invariant after §45.15.3,
+which is exactly what makes the sweep a measurement of the *residual*:
+
+| XT rate | block | display vs the driver's counter |
+|---|---|---|
+| 4,000 Hz | 4.15 rows | −0.18 rows |
+| 5,500 Hz | 2.98 rows | −0.20 rows |
+| 11,000 Hz | 1.49 rows | −0.21 rows |
+
+**On the field machine: judge the offset at each of the three.** Tracking
+4/3/1.5 → guest-side, one DMA block, and the hunt moves into the driver's
+`sbl_consumed`. Flat at ~3 → a fixed time, i.e. PCem's output path — and the
 matching control is FM: Missile Command and Arkanoid are timing-tight on the
 same machine and read as matched, but they are OPL, not DSP.

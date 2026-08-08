@@ -786,7 +786,11 @@ ttx_name:
     mov di, TTXAT(TTX_NAMEY, TTX_COLS - 12)
     mov si, ttx_s_xtrate            ; XT mode IS 5,500 Hz for as long as it is
     mov ah, TTX_A_INV               ; on (SPEC.md 45.9), and this screen only
-    call ttx_put                    ; exists while it is - so it is a fact
+%ifdef TRKLOG                       ; exists while it is - so it is a fact...
+    call tlog_xtrate_stamp          ; ...unless K has moved it, in which case
+%endif                              ; the screen has to SAY which (FIELD-NOTES
+    call ttx_put                    ; 16): a swept rate nobody can read off
+                                    ; the machine is not a measurement
     pop es
     pop di
     pop si
@@ -1276,7 +1280,11 @@ ttx_draw_dyn:
 ; =============================================================================
 ttx_s_name:   db 'TRACKER', 0
 ttx_s_nomod:  db 'no module loaded', 0
-ttx_s_xtrate: db 'XT 5500 Hz', 0
+%ifdef TRKLOG
+ttx_s_xtrate: db 'XT 00000 Hz', 0   ; K sweeps it, so it is stamped per paint
+%else                               ; (docs/FIELD-NOTES.md 16); TTX_COLS - 12
+ttx_s_xtrate: db 'XT 5500 Hz', 0    ; leaves room for the extra digit
+%endif
 ttx_s_pos:    db 'Pos ', 0
 ttx_s_slash:  db '/', 0
 ttx_s_ptn:    db '  Ptn ', 0

@@ -482,6 +482,10 @@ trk_onkey:
     je .event
     cmp bl, 'E'
     je .event
+    cmp bl, 'k'
+    je .xrate
+    cmp bl, 'K'
+    je .xrate
 %endif
     cmp bl, '1'
     jb .out
@@ -530,6 +534,9 @@ trk_onkey:
 .event:
     call tlog_even_key              ; E: the windowed readout on an EVEN
     jmp .out                        ; two-frame grid (SPEC.md 45.16.3)
+.xrate:
+    call tlog_rate_key              ; K: XT mode's sample rate, WITHOUT
+    jmp .out                        ; leaving XT mode (FIELD-NOTES.md 16)
 %endif
 .play:
     mov al, 0
@@ -1410,8 +1417,12 @@ trk_play:
 .granted:
     cmp byte [mp_xt], 0             ; XT mode overrides the Rate menu with
     je .rsel                        ; its own 5,500 Hz (SPEC.md 45.9/45.10)
-    mov ax, TRK_RATE_XT
-    jmp .rate
+%ifdef TRKLOG
+    mov ax, [tlog_xrate]            ; ...which K can move WITHOUT leaving XT
+%else                               ; mode, so the rate can be swept with the
+    mov ax, TRK_RATE_XT             ; surface held still (docs/FIELD-NOTES.md
+%endif                              ; 16). Bench-only; the shipped build is
+    jmp .rate                       ; the constant it always was
 .rsel:
     mov bl, [trk_rsel]              ; the Rate menu's pick: 0/1/2
     xor bh, bh
