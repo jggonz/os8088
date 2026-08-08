@@ -1101,7 +1101,15 @@ osapi_table:
     OSAPI_SLOT clip_size          ; 0x0330 - out CF=1 and AX=0 when empty,
                                   ;          else AX = the length. What a
                                   ;          paste asks BEFORE it makes room
-osapi_table_end:                  ; 0x0338
+    OSAPI_JSLOT api_file_write_sys ; 0x0338 - N, and the ONE cell in this table
+                                  ;          a package may not call: dskw_write
+                                  ;          for a file that belongs to the
+                                  ;          KERNEL (SPEC.md 19.6.1). Fenced on
+                                  ;          the caller being a loaded DRIVER,
+                                  ;          so 19.6's rule - a package cannot
+                                  ;          make a file the user can neither
+                                  ;          see nor delete - stands unchanged
+osapi_table_end:                  ; 0x0340
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1109,8 +1117,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 101 * 8
-%error "os8088 API jump table must be exactly 101 8-byte slots"
+%if OSAPI_TABLE_LEN != 102 * 8
+%error "os8088 API jump table must be exactly 102 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -1240,6 +1248,69 @@ dbg_reg:
     OSAPI_NSTUB api_file_read,   dskw_read,   1
     OSAPI_NSTUB api_file_delete, dskw_delete, 1
     OSAPI_NSTUB api_fdlg_open,   fdlg_open       ; NO V - see the macro
+
+; -----------------------------------------------------------------------------
+; api_file_write_sys - slot 0x0338, and the ONE fenced cell (SPEC.md 19.6.1)
+;
+; dskw_write for a file that belongs to the KERNEL: hidden, system and (bar
+; SYSTEM.CFG) read-only, which is what makes an installed volume a SYSTEM
+; volume rather than a folder with the same bytes in it.
+;
+; SPEC.md 19.6 says this entry point must never get an API slot, and the
+; reason it gives is the test to apply: "a package cannot make a file the
+; user can neither see nor delete". That is a statement about PACKAGES, and
+; it still holds - the fence below refuses one. A DRIVER is the other species
+; (SPEC.md 51): drv_tab is a fixed kernel-side table of known files, a .DRV
+; carries header version 4 which ld_check_hdr refuses for an application, and
+; disk_mount types only *.O88 as launchable - so the set of things that can
+; ever be a driver is decided when this kernel is built and a user cannot add
+; to it. That is a real boundary rather than an honour system, which is why
+; 19.6's rule is narrowed here rather than dropped.
+;
+; The fence is drv_owns_seg, and the precedent is SPEC.md 51.7's spawn fence:
+; ES is the caller's DS stamped by the stub convention (SPEC.md 20.3), and a
+; package's DS is its own segment, which is never a drv_tab row. It is an
+; IDENTITY test, not a containment one.
+;
+; BX is banked across it because BX is the caller's DATA BUFFER offset here -
+; the fence needs a register and that one is live.
+; -----------------------------------------------------------------------------
+api_file_write_sys:
+    push ds
+    push si
+    push di
+    push es
+    push bx                     ; the caller's buffer offset: live, and
+    mov bx, ds                  ; drv_owns_seg wants a register
+    push cs
+    pop ds                      ; DS = KERNEL to reach drv_tab
+    call drv_owns_seg           ; CF = 0: the caller IS a loaded driver
+    pop bx
+    jc .refuse
+    push cs
+    pop es                      ; ES = KERNEL for the copy destination
+    mov di, api_name
+    call api_copyname           ; caller DS:SI -> ES:DI, at most 13 bytes
+    pop es                      ; the caller's ES back: it is the buffer
+    pop di
+    push cs
+    pop ds                      ; DS = KERNEL
+                                ; NO V (SPEC.md 19.2.1): the installer names
+                                ; the volume it is building and must not have
+                                ; its own instance's folder put underneath it
+    mov si, api_name
+    call dskw_write_sys
+    pop si
+    pop ds
+    retf
+.refuse:                        ; DS is already KERNEL; unwind what is left
+    pop es
+    pop di
+    pop si
+    pop ds
+    mov ax, FERR_PROT           ; the same answer DSKW_PROT gives a package
+    stc                         ; that names a system file: it is protected,
+    retf                        ; and from out there that is the whole truth
 
 ; ...and the two-name case, which needs DI as well and so is written out
 api_file_rename:

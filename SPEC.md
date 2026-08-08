@@ -7467,9 +7467,12 @@ Two things do NOT follow, and both had to be arranged:
   treats hidden and system as untouchable, so the first `SYSTEM.CFG` save
   would create the file and every save after it would be refused
   `FERR_PROT` by the very bits the first one set. `dskw_write_sys` is the
-  narrow exemption: **kernel-only, no API slot and there must never be one**,
-  because the whole point of this section is that a package cannot make a
-  file the user can neither see nor delete. It differs from `dskw_write` in
+  narrow exemption: **kernel-only, and reachable from outside the kernel by
+  a DRIVER alone** (§19.6.1) — because the whole point of this section is
+  that a *package* cannot make a file the user can neither see nor delete.
+  This clause used to read "no API slot and there must never be one", which
+  is what §19.6.1 narrows and why the reason is restated beside it rather
+  than left implied. It differs from `dskw_write` in
   exactly two ways, both keyed off `[dskw_syswr]`:
 
   1. a file it **creates** is stamped hidden + system, and
@@ -7486,6 +7489,55 @@ Two things do NOT follow, and both had to be arranged:
 Read-only needs no exemption anywhere, because nothing in the kernel ever
 rewrites a read-only file: `KERNEL.SYS` and the drivers are replaced by
 rebuilding the disk, not by the running system.
+
+### 19.6.1 …and a DRIVER may call it, which a package may not
+
+`OSAPI_FILE_WRITE_SYS` (slot 0x0338) is `dskw_write_sys` published, and it is
+the one cell in the table with a caller test in front of it. It exists for
+§52.10's installer: making a hard-disk partition **bootable** means putting
+`KERNEL.SYS`, `SYSTEM.CFG` and every `*.DRV` on it with the attributes this
+section describes, and the installer is driver code because the partition
+table, the MBR and the device are the driver's.
+
+**The rule above is narrowed, not dropped, and the test is the reason §19.6
+gives for it**: *a package cannot make a file the user can neither see nor
+delete*. That is a statement about packages, and it still holds exactly — an
+application calling this slot gets `CF=1` / `AX = FERR_PROT` and writes
+nothing, which is the same answer naming a system file through
+`OSAPI_FILE_WRITE` has always produced.
+
+A driver is the other species (§51), and the boundary is real rather than an
+honour system:
+
+- `drv_tab` is a **fixed kernel-side table** of known driver files, so the
+  set of things that can ever be a driver is decided when the kernel is
+  built and a user cannot add to it;
+- a `.DRV` carries **header version 4**, which `ld_check_hdr` refuses for an
+  application, and `disk_mount` types only `*.O88` as launchable — two
+  independent gates, so a driver can never be double-clicked into existence;
+- and the driver files themselves are hidden + system + read-only on the
+  system disk, so the OS offers no way to put one there.
+
+The fence is **`drv_owns_seg`**, and the precedent is §51.7's spawn fence:
+`ES` is the caller's `DS`, stamped by §20.3's stub convention, and a
+package's `DS` is its own segment, which is never a `drv_tab` row. It is an
+**identity** test, not a containment approximation. `BX` is banked across it
+because `BX` is the caller's data buffer offset in this ABI and the fence
+needs a register.
+
+Two consequences worth stating, because both are load-bearing for §52.10:
+
+- **A file this slot creates is hidden + system and NOT read-only**
+  (`DSKW_SYSAT` is `DSKW_HID | DSKW_SYS`). The read-only bit on the shipped
+  floppy's `KERNEL.SYS` is `os88disk.py`'s, applied when the image is built.
+  So an installed volume's system files are invisible to every listing
+  exactly as the floppy's are, and a **re-install can replace them** —
+  `DSKW_SPROT` still refuses a read-only file, and if the installer stamped
+  one it could never install over itself.
+- The slot carries **no V** (§19.2.1). Every other name-taking cell resolves
+  in the calling instance's own directory; this one must not, because the
+  installer is naming files on the volume it is building and a folder put
+  underneath it would scatter them.
 
 ### 19.7 `README.TXT` — the manual is on the disk, and the reader sets its shape
 
@@ -22213,16 +22265,166 @@ the editor staged that on the click that changed it.
 
 ### 52.9 Not in scope
 
-- **Booting os8088 from the hard disk.** `boot/boot.asm` reads `KERNEL.SYS`
-  as a flat run from the data area (§19.3) with the floppy geometry injected
-  at build time and relocates itself to `BOOT_RELOC`; hard-disk boot needs an
-  MBR, an AH=08h geometry probe and a second boot sector variant. The system
-  disk stays A:, and `SYSTEM.CFG` with it.
+- ~~**Booting os8088 from the hard disk.**~~ **Retired — this is §52.10.**
+  The entry is kept rather than deleted because its reasoning was right and
+  is worth reading beside what replaced it: `boot/boot.asm` does read
+  `KERNEL.SYS` as a flat run from the data area (§19.3) with the floppy
+  geometry injected at build time, and hard-disk boot does need an MBR, an
+  AH=08h geometry probe and a second boot sector variant — all three are
+  §52.10. What it did **not** name is the blocker that turned out to bind
+  hardest, and a reader who trusted this list would not have looked for it:
+  the kernel cannot read the hard disk until `HDD.DRV` is loaded, and
+  `HDD.DRV` is on the hard disk (§52.10.3). It also said "the system disk
+  stays A:, and `SYSTEM.CFG` with it", and that half is still true — an
+  installed machine boots with the **boot volume** as its system volume and
+  A: stays the floppy (§52.10.3).
 - **Low-level (surface) MFM formatting**, §52.3.
 - **The XT DCB register path**, §52.1. The row exists in the ladder so the
   page can one day say "not supported" rather than "no drive".
 - **Extended partitions.** Four primaries of ≤32MB is 128MB of usable disk,
   against MFM drives of 10–40MB and early IDE drives of 20–120MB.
+
+## 52.10 Install — booting os8088 from a hard-disk partition
+
+The Hard Drive page's third button. It asks which partition, copies both
+floppies onto it — hidden system files and `KERNEL.SYS` included — and marks
+it bootable, after which the machine starts from the disk with no floppy in
+the drive.
+
+**Four things had to be built and they are independent**, which is why this
+section is in four parts. Three of them were named in §52.9's retired bullet;
+the fourth is the one that bound hardest and was not.
+
+### 52.10.1 The MBR is a real chain-loader now
+
+`hd_mbr_blank` wrote a stub that printed `Not bootable` and halted, because
+that was the truth. It is a loader: relocate the 512 bytes off `0000:7C00`
+(the volume boot record wants that address), walk the four table entries for
+the one whose status byte is 80h, read its first sector to `0000:7C00`, and
+far-jump to it with `DL` = the BIOS drive and `DS:SI` at the entry, which is
+the convention every DOS-era VBR expects. 446 bytes are available and this
+needs a small fraction of them.
+
+Two failures keep a message, for the reason the old stub existed at all — a
+machine that hangs with a dark screen says nothing: no active entry, and a
+read that fails. Both halt rather than falling through into whatever is in
+memory.
+
+### 52.10.2 A second boot sector, because the first one has 17 bytes free
+
+`boot/boothd.asm`. Not a preference: `build/boot.bin`'s last non-zero byte is
+at offset 492, so there are **17 bytes** between it and the signature, and
+what a hard disk needs does not fit in 17 bytes. §52.9 predicted this and it
+is measured rather than assumed.
+
+It differs from `boot/boot.asm` in exactly three ways, and is otherwise the
+same file doing the same arithmetic:
+
+- **The geometry comes from int 13h AH=08h**, not from `-DSPT`/`-DHEADS`. A
+  floppy build knows its geometry because the Makefile builds one image per
+  geometry; a hard disk's is the drive's and is not known until it answers.
+- **Every LBA has the partition base added**, from `BPB_HiddSec` at offset 28
+  — which `hd_fmt_bpb` (`drivers/hdd/fmt.inc`) already writes, and has since
+  the formatter was written, commented "DOS reads it, os8088 does not". It
+  does now.
+- **It does not touch int 1Eh.** §18.92's diskette parameter table is the
+  floppy controller's EOT and means nothing to a hard disk.
+
+What it does **not** change is the part that looks like it would: the
+data-area arithmetic is already generic over FAT12 and FAT16, because it is
+computed from `BPB_RsvdSecCnt`, `BPB_NumFATs`, `BPB_FATSz16` and
+`BPB_RootEntCnt` rather than from a format. A FAT16 partition needs no new
+code in it at all.
+
+**`KERNEL.SYS` must be first and contiguous**, exactly as on a floppy: the
+sector reads it as a flat run rather than walking a cluster chain, which is
+what makes it fit in 512 bytes (§19.3). `os88disk.py` guarantees that at
+image-build time by allocating it from cluster 2; the installer guarantees it
+by **formatting the partition first and writing `KERNEL.SYS` before anything
+else** (§52.10.4).
+
+### 52.10.3 The kernel reads its boot partition before any driver loads
+
+**This is the blocker §52.9 did not name, and it is the reason this was more
+than a boot sector.** `drv_boot` mounts the system volume to read
+`SYSTEM.CFG` and load the drivers the user asked for — and on an installed
+machine one of those drivers is `HDD.DRV`, which is *on the volume it is
+needed to read*. A driver-backed volume goes out through `DSV_BLK` (§18.7),
+so with no driver there is no transport, and with no transport there is no
+driver.
+
+The way out is that **rung 0 is the BIOS** (§52.1): int 13h answers for drive
+80h with no driver in the machine at all, exactly as it does for a floppy.
+So the boot volume is an ordinary `DVK_BIOS` row, and what it needs beyond
+A: and B: is what a partition is: a **unit** that is not the volume index, a
+**32-bit base**, and a geometry that is not a floppy's.
+
+Four changes, all in `dsk_xfer`'s BIOS path and its table:
+
+- **`DV_UNIT` is read for the int 13h drive.** It was already in the row and
+  the transfer used `[disk_drive]` — the *volume index* — which was correct
+  only because A: and B: are volumes 0 and 1 and drives 0 and 1. A boot
+  partition is volume 2 and drive 80h, and that coincidence ends there. This
+  is a latent bug fixed, not a new field.
+- **`DV_BASE`, a 32-bit partition base**, added to the volume-relative LBA.
+  Zero for a floppy, so the floppy path is arithmetically unchanged.
+- **32-bit LBA → CHS**, because base + offset leaves 16 bits. It is
+  `hd_chs`'s proof reused: `spt*heads` is at most 63×255 and the quotient is
+  under 1024, so one `div` pair still suffices.
+- **The cylinder clamp moves.** `cmp ax, 80 / jae .fail` is a floppy's bound
+  and rejects every cylinder on a hard disk; it becomes the volume's own.
+
+`drv_mounted` then goes to **`[dsk_bootvol]`** instead of a hardcoded `xor
+dl, dl`, and that byte is 0 on a floppy machine — so a machine that boots
+from a floppy runs the identical path it always did.
+
+**A: stays the floppy.** The boot partition is C: (volume 2), not A:, because
+the alternative renumbers every drive letter, desktop zone and `FS_DRV` in
+the system to save one indirection. §52.9's "the system disk stays A:" is
+half-right in the way that matters: what moves is *which volume is the system
+volume*, not *which volume is A:*.
+
+**And `HDD.DRV` must not mount the boot partition twice.** Its automount
+skips a partition already in the volume table, matched on device and base
+LBA — the kernel got there first, through the BIOS, and the row is live.
+
+### 52.10.4 The installer
+
+Driver code, in `drivers/hdd/inst.inc`, because the partition table, the MBR
+and the device are the driver's. What is *not* the driver's is writing a file
+with system attributes, and §19.6.1 is the one slot that lets it.
+
+The order is forced and each step is the next one's precondition:
+
+1. **Format the partition** (§52.3's formatter, unchanged). Not optional: it
+   is what makes cluster 2 free, and §52.10.2 needs `KERNEL.SYS` there.
+2. **`KERNEL.SYS` first**, through `OSAPI_FILE_WRITE_SYS`, so it is
+   contiguous from cluster 2.
+3. **The rest of the system disk** — `SYSTEM.CFG`, every `*.DRV`,
+   `README.TXT` — then the apps disk's folders and their contents.
+4. **The volume boot record**, `boot/boothd.asm`'s 512 bytes with this
+   volume's BPB written over the first 62 (`os88disk.py`'s split, done in the
+   driver), to volume-relative LBA 0.
+5. **The MBR**: §52.10.1's loader into bytes 0..445, preserving the table,
+   and the chosen entry's status byte set to 80h with the other three
+   cleared. **Last**, because it is the commit — every earlier step leaves a
+   disk that simply is not bootable yet, which is the same discipline
+   §52.3's formatter follows in writing its boot sector last.
+
+**Only usable partitions are offered.** The dialog lists a slot when it is
+mounted, writable and large enough; a slot that is `Unmountable`, foreign or
+too small is shown with the reason rather than hidden, on §47 rule 3's terms
+— the honest test is whether it would work, and saying *why not* is worth
+more than an absent row.
+
+**A single-floppy machine is the normal case** (docs/FIELD-MACHINES.md), so
+the copy prompts for the disk swap rather than assuming two drives.
+
+**Progress is §12.8's widget.** A file operation freezes the machine by
+design, and this is the largest one in the system — both floppies is
+hundreds of sectors at 238 ms each on the field machine — so `fpg_begin`'s
+bar is stepped from inside the transfer loop, which is the one piece of code
+still running.
 
 ## 53. fsx.inc — fullscreen exclusive
 

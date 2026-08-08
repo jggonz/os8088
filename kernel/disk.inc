@@ -122,6 +122,29 @@ dsk_vtab:
     db 'Disk B', 0, 0
     times DVOL_MAX - 2 db DVK_FREE, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 
+; --- the BOOT VOLUME's partition base (SPEC.md 52.10.3) ----------------------
+; A SIDE TABLE, for inst_fdrv's reason (SPEC.md 19.2.1): DV_SIZE is 16 and the
+; row is full - DV_LBL runs to the last byte of it - and index*DV_SIZE with a
+; power-of-two stride is what makes a row cheap to reach everywhere else.
+;
+; It is non-zero for exactly ONE row and usually for none: the volume the
+; machine booted from when that was a hard-disk partition. Every driver-backed
+; volume adds its own base inside the driver (SPEC.md 18.7), and a floppy has
+; none - so a machine that boots from a floppy carries 24 zero bytes and runs
+; the arithmetic below on a base of 0, which is the identical transfer it made
+; before this existed.
+;
+; .text with real initialisers, like dsk_vtab above it and for the same
+; reason: -f bin zeroes nothing and the first disk_mount runs before any init
+; routine of ours could.
+dsk_vbase:   times DVOL_MAX dd 0
+
+; Which volume the system files are on - what drv_mounted mounts (SPEC.md
+; 51.5.1) and what the desktop calls the system disk. 0 = A:, which is every
+; floppy machine and was hardcoded as `xor dl, dl` until an installed hard
+; disk could be the answer instead.
+dsk_bootvol: db 0
+
 ; --- module data (initialized: lives in .text, not .bss) ---------------------
 disk_drive:  db 1                ; current VOLUME (0 = A:, 1 = B:), init B:
 disk_spt:    dw 9                ; sectors per track  } fallback geometry,
@@ -427,9 +450,15 @@ dsk_xfer:
     mov bl, [disk_drive]        ; into the code below unchanged, and a
     call dsk_vol_row            ; driver-backed volume goes out to its driver
     jc .jbadvol                 ; with the SAME volume-relative LBA (18.7)
+    mov al, [bx+DV_UNIT]        ; THE ROW'S UNIT, not the volume index
+    mov [dsk_unit], al          ; (SPEC.md 52.10.3). This was [disk_drive] and
+                                ; was right only because A: and B: are volumes
+                                ; 0 and 1 AND drives 0 and 1; a boot partition
+                                ; is volume 2 and drive 80h and ends that
     cmp byte [bx+DV_KIND], DVK_DRV
     pop bx
     je .drv
+    call dsk_geom_pick          ; [dsk_base] and [dsk_cylmax] for this volume
     jmp short .sector
 .jbadvol:
     pop bx
@@ -458,20 +487,33 @@ dsk_xfer:
     test si, si
     jz .success                 ; all sectors read (count 0 reads nothing)
 
-    ; --- LBA (DI) -> CHS in CH/CL/DH, drive in DL ---
+    ; --- LBA (DI) + the partition base -> CHS in CH/CL/DH, drive in DL ---
+    ; The base is 0 on every floppy and on every driver-backed volume (the
+    ; driver adds its own, SPEC.md 18.7), so what follows is arithmetically
+    ; the transfer this always made except on a BOOT PARTITION reached through
+    ; the BIOS, which is the one row that carries one (SPEC.md 52.10.3).
     mov ax, [disk_spt]
-    mul word [disk_heads]       ; AX = spt*heads (fits: <= 36)
+    mul word [disk_heads]       ; AX = spt*heads (<= 16,065 on a hard disk)
     mov cx, ax
-    mov ax, di
+    mov ax, di                  ; the volume-relative LBA...
     xor dx, dx
+    add ax, [dsk_base]          ; ...made absolute
+    adc dx, [dsk_base+2]
+    cmp dx, cx                  ; ONE div pair and no 32/16 two-step, on
+    jae .fail                   ; hd_chs's proof: the highest LBA CHS can name
+                                ; is 1024*255*63 and the quotient - the
+                                ; cylinder - is under 1024, so DX is far below
+                                ; the divisor. A dividend that fails this is a
+                                ; corrupt LBA and must fail, not wrap
     div cx                      ; AX = cylinder, DX = rem
-    cmp ax, 80                  ; a corrupt LBA (bad directory entry) must
+    cmp ax, [dsk_cylmax]        ; a corrupt LBA (bad directory entry) must
     jae .fail                   ; fail, not truncate into CH and read the
-                                ; wrong sector. All three real geometries
-                                ; end at cylinder 79 or below: 1.44MB and
-                                ; 720KB both fill 0..79 (2880/36 and
-                                ; 1440/18), the 360KB disk stops at 39
-    mov ch, al                  ; CH = cyl low 8 bits (cyl < 80)
+                                ; wrong sector. 80 on a floppy - all three
+                                ; geometries end at cylinder 79 or below - and
+                                ; CHS's own 1024 on a hard disk
+    mov ch, al                  ; CH = cyl low 8 bits
+    mov [dsk_cylhi], ah         ; ...and bits 9:8, which ride in CL below on a
+                                ; hard disk and are always 0 on a floppy
     mov ax, dx
     xor dx, dx
     div word [disk_spt]         ; AX = head, DX = sector-1
@@ -499,10 +541,18 @@ dsk_xfer:
 %endif
     pop ax                      ; the head again
 
-    mov cl, dl
-    inc cl                      ; CL = sector, 1-based
+    push ax                     ; ...and away again: AL is wanted for the
+    mov al, [dsk_cylhi]         ; shift. Cylinder bits 9:8 ride in CL bits 7:6
+    mov cl, 6                   ; (SPEC.md 52.10.3) - the standard CHS packing,
+    shl al, cl                  ; inert on a floppy where the byte is 0. The
+                                ; count goes through CL because an 8086 has no
+                                ; `shl reg, imm` other than 1
+    or al, dl                   ; ...over the sector index, still 0-based
+    mov cl, al
+    inc cl                      ; CL = sector (1-based) | cylinder high
+    pop ax
     mov dh, al                  ; DH = head
-    mov dl, [disk_drive]        ; DL = drive
+    mov dl, [dsk_unit]          ; DL = THE ROW'S int 13h drive
 
     mov bp, 3                   ; attempts left at this run length
 .attempt:
@@ -539,8 +589,9 @@ dsk_xfer:
     cmp ah, 0x03
     je .fail                    ; write-protected: retrying cannot help
     mov ah, 0x00                ; failed: reset the controller and retry
-    mov dl, [disk_drive]
-    int 0x13
+    mov dl, [dsk_unit]          ; the ROW's drive (SPEC.md 52.10.3): resetting
+    int 0x13                    ; drive 2 because the volume index is 2 resets
+                                ; a floppy that is not in this transfer
 %ifdef DISK_COUNTERS
     inc word [dsk_dbg_rst]
 %endif
@@ -708,6 +759,44 @@ dsk_vol_row:
 .bad:
     xor bx, bx
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_geom_pick - bank the current volume's partition base and cylinder bound
+; in:  [disk_drive] = the volume, [dsk_unit] already set from its row
+; out: [dsk_base] (32-bit) and [dsk_cylmax]; every register kept, FLAGS NOT -
+;      the caller is dsk_xfer's entry sequence and .sector opens with its own
+;      `test si, si`, so there is nothing in flight to preserve
+;
+; Called once per dsk_xfer, not once per sector: both answers are properties
+; of the VOLUME and the run loop below rereads them from memory. On a floppy
+; it stores a zero base and 80, which is what the transfer assumed when both
+; were constants (SPEC.md 52.10.3).
+;
+; The cylinder bound is taken from the UNIT and not from the kind, because
+; that is the thing it is a fact about: 80 is a floppy's last cylinder plus
+; one, and int 13h drive numbers >= 80h are the fixed disks. A driver-backed
+; volume never reaches here at all - it left through .drv.
+; -----------------------------------------------------------------------------
+dsk_geom_pick:
+    push ax
+    push bx
+    mov bl, [disk_drive]
+    xor bh, bh
+    add bx, bx
+    add bx, bx                  ; volume * 4: dsk_vbase is dwords
+    mov ax, [dsk_vbase+bx]
+    mov [dsk_base], ax
+    mov ax, [dsk_vbase+bx+2]
+    mov [dsk_base+2], ax
+    mov ax, 80                  ; the floppy bound, and the corrupt-LBA net
+    test byte [dsk_unit], 0x80  ; that has caught bad directory entries since
+    jz .set                     ; before there was a hard disk to ask about
+    mov ax, 1024                ; CHS's own ceiling: 10 bits of cylinder
+.set:
+    mov [dsk_cylmax], ax
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3362,6 +3451,17 @@ dsk_run:      resw 1            ; sectors in the int 13h call being issued
                                 ; nothing can be inside it twice
 dsk_ioerr:    resb 1            ; status (AH) of the last FAILED transfer;
                                 ; 03h = write-protected media (SPEC.md 18.4)
+; --- the transfer's volume, banked once per dsk_xfer (SPEC.md 52.10.3) -------
+; Module scratch on dsk_op's terms exactly: sch_lock is held across the whole
+; transfer, so nothing can be inside dsk_xfer twice and one copy of each is
+; enough. .bss and not .text because every one of them is WRITTEN at the top
+; of the transfer that reads them.
+dsk_unit:     resb 1            ; the row's int 13h drive - 0/1 for A:/B:, 80h
+                                ; for a boot partition. NOT the volume index
+dsk_cylhi:    resb 1            ; cylinder bits 9:8, for CL bits 7:6
+dsk_cylmax:   resw 1            ; 80 on a floppy, 1024 on a hard disk
+dsk_base:     resd 1            ; the partition base added to every LBA; 0
+                                ; everywhere except a boot partition
 
 ; --- write-path state (SPEC.md 18.4), all reset by disk_mount ---------------
 dsk_mntok:    resb 1            ; 1 only between a fully successful mount and

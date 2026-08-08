@@ -1604,6 +1604,28 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                  ; Preserves all but AX.
 CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; than this is refused whole, never truncated
+
+; --- the one cell a PACKAGE may not call (SPEC.md 19.6.1) ---------------------
+; It is published here because a DRIVER assembles against this same SDK, and
+; refused here in the text because an application author reading the list is
+; owed the reason rather than a silent CF=1.
+;
+; OSAPI_FILE_WRITE with the system attributes: hidden + system, and read-only
+; for everything except SYSTEM.CFG, which the kernel rewrites. That is what
+; makes an installed volume a SYSTEM volume - KERNEL.SYS and every *.DRV on
+; it are then exactly what SPEC.md 19.6 puts on the shipped boot floppy, so
+; DOS's DIR hides them and disk_mount's species filter keeps them out of every
+; listing, icon grid and file dialog.
+;
+; The kernel fences it on the caller's segment being a LOADED DRIVER's
+; (drv_owns_seg, the SPEC.md 51.7 idiom). From an application it answers
+; CF=1 / AX = FERR_PROT and writes nothing - which is the same answer naming
+; a system file through OSAPI_FILE_WRITE has always given, and it is the
+; whole of SPEC.md 19.6's rule: a package cannot make a file the user can
+; neither see nor delete.
+%define OSAPI_FILE_WRITE_SYS KERNEL_SEG:0x0338  ; SI = NUL 8.3 name, ES:BX =
+                                 ; bytes, DX:CX = count; out as
+                                 ; OSAPI_FILE_WRITE. DRIVERS ONLY.
 %define OSAPI_BOOT_TICKS    KERNEL_SEG:0x02F8   ; out AX = how long this machine
                                  ; took to boot, in SYSTEM TICKS (18.2065 Hz,
                                  ; 54.925 ms each): the boot sector's first

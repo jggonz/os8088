@@ -1053,7 +1053,11 @@ drv_svc_clear_all:
 drv_mounted:
     push ax
     push dx
-    xor dl, dl                  ; drive A: - the disk we booted from
+    mov dl, [dsk_bootvol]       ; the disk we booted from - A: on a floppy
+                                ; machine, where this byte is 0 and this is
+                                ; the `xor dl, dl` it replaced, and the
+                                ; installed PARTITION on a machine that boots
+                                ; from its hard disk (SPEC.md 52.10.3)
     xor ax, ax                  ; ...at its root, which is where 19.6 puts
                                 ; KERNEL.SYS, SYSTEM.CFG and every *.DRV
     call dsk_chdir_q            ; QUIET (SPEC.md 18.9): all three callers here
