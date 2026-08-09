@@ -24142,6 +24142,14 @@ chunked copy, and the marker technique that found §19.7.1's type bug — a
 temporary caption that **aborts**, because one that only sets `[hd_imsg]` is
 overwritten by the completion message and says nothing.
 
+**And a second thing blocks that work today.** Since the pre-merge safety pass
+the installer stops at `Cannot read the partition table` on MartyPC's
+`os8088_xt_hdd` — on a **pristine** `default_xtide.vhd` as well as on a
+zeroed-table one, and after the slot list has already been drawn from that
+same table, so the scan reads it and the install does not. Nothing above is
+re-testable until that is understood; it is independent of everything in
+§52.10.7 and of §19.7.1's fix.
+
 ## 53. fsx.inc — fullscreen exclusive
 
 §11.2's fullscreen surface is a real window: the desktop's mode, the

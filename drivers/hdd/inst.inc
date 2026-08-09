@@ -1435,9 +1435,10 @@ hd_icopy_sub:
                                 ; not FILE (SPEC.md 19.7.1); making it so is
                                 ; what BEVERLY.MOD needs, and it is also what
                                 ; first ran the chunked write (SPEC.md 18.4.4),
-                                ; which then fails the NEXT source mount. A
-                                ; broken installer is worse than an incomplete
-                                ; copy, so the gap stands until that is fixed
+                                ; which then failed the NEXT source mount and
+                                ; left a fully populated, unbootable partition.
+                                ; A broken installer is worse than an
+                                ; incomplete copy, so the gap stands
     mov byte [hd_iinsub], 1
     mov si, hd_ient
     call hd_icopy_one
