@@ -92,8 +92,21 @@ DBL_TICKS = 9
 
 
 class Mouse:
-    def __init__(self, addr, timeout=60.0, verbose=False):
-        self.m = Marty(addr, timeout=timeout)
+    def __init__(self, addr=None, timeout=60.0, verbose=False, marty=None):
+        # SHARE a connection when one is offered. The debug server takes a
+        # single client, so a script that wants the mouse driver AND the
+        # framebuffer must not build two Martys - the second does not error,
+        # it hangs until the read times out, which reads as a wedged guest.
+        #
+        #     with os88marty.launch(img, apps=apps) as m:
+        #         mo = Mouse(marty=m)
+        #         mo.dblclick(150, 90)
+        #         m.vram("cga")            # ...the same connection
+        if marty is None:
+            if addr is None:
+                raise MartyError("Mouse needs an addr or an open marty=")
+            marty = Marty(addr, timeout=timeout)
+        self.m = marty
         self.verbose = verbose
         self._cur = None
 
