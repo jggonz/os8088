@@ -596,6 +596,25 @@ drv_pub_seg:
 
 drv_owns_seg:
     push ax
+    push bx                     ; BX is banked because the second pass BELOW
+    push cx                     ; rewrites it, and this is an input-only
+    push si                     ; register to every caller
+    call drv_seg_scan
+    jnc .out
+    call mem_owner_of           ; SPEC.md 52.11.6: not a driver image itself -
+    jc .out                     ; is it a claim OWNED by one? A driver's SECOND
+    call drv_seg_scan           ; image (52.11) is exactly that, and it is not
+.out:                           ; in drv_tab by design. ONE level, like
+    pop si                      ; mem_own_drv's
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; drv_seg_scan - the drv_tab walk itself. in BX = segment; out CF=0 if a
+; loaded row's image starts there. Clobbers flags.
+drv_seg_scan:
+    push ax
     push cx
     push si
     mov si, drv_tab

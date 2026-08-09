@@ -1499,6 +1499,40 @@ mem_own:
     ret
 
 ; -----------------------------------------------------------------------------
+; mem_owner_of - who owns the claim based at BX?
+; in:  BX = a base segment
+; out: CF = 0 and BX = that claim's owner word; CF = 1 = no claim starts there
+; clobbers: BX (the output), flags
+;
+; SPEC.md 52.11.6. The kernel has two fences that ask "is this segment one I
+; handed out" - mem_own for a claim and drv_owns_seg for a driver image - and
+; a driver's SECOND image (SPEC.md 52.11) answers no to both, because it is
+; neither an instance, nor MEM_K_DRV, nor a row in drv_tab. Both need the same
+; one step: take the owner of the claim the caller is running in and ask about
+; THAT. This is the step; each fence decides for itself what a valid answer is.
+; -----------------------------------------------------------------------------
+mem_owner_of:
+    push cx
+    push si
+    mov si, mem_tab
+    mov cx, MEM_MAX
+.scan:
+    cmp [ss:si+MC_SEG], bx
+    je .hit
+    add si, MC_SIZE
+    loop .scan
+    pop si
+    pop cx
+    stc
+    ret
+.hit:
+    mov bx, [ss:si+MC_OWN]
+    pop si
+    pop cx
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
 ; mem_own_drv - is DX the segment of a DRIVER's image? (module internal)
 ; in:  DX = a candidate segment
 ; out: CF = 0 yes, CF = 1 no

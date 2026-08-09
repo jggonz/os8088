@@ -26770,6 +26770,78 @@ settled it in one run, where reading the source had already produced a
 plausible wrong answer (the new 63KB sector cache, §18.95.4, which an A/B with
 `DIRW1=1` cleared immediately).
 
+### 52.11.5 CLOSED: the mount worked and the answer did not
+
+With §52.11.4 fixed the installer got as far as **`Formatted, but it would not
+mount`** — and everything it names had already happened. The platter carried a
+type-04 entry at LBA 26 and a valid `OS8088` FAT16 BPB; `hd_vols` carried
+`used=1 dev=0 vol=2 part=0 base=26`; **HDD C was on the desktop.** The mount
+succeeded and the *answer* never got back across the seam.
+
+`hd_svc_mount` reads its request block through `ES:SI`, and `hd_part_ent`
+overwrites `SI` with a pointer into the resident's `hd_mbr`. The bank was one
+line late:
+
+```
+    call hd_part_ent            ; SI = the entry hd_mount_one wants...
+    push es                     ; ...and SI is no longer the request block, so
+    push si                     ; the answer below re-finds it
+```
+
+Nothing re-found it. `pop si` restored the **entry** pointer, so the answer
+block then read `[es:si+HRQ_DEV]` — two bytes of the tool's own image at a
+meaningless offset — handed them to `hd_vol_of`, got `0xFF` because no volume
+matches a garbage device, and **wrote that `0xFF` into the tool's image** at
+`si+HRQ_RES` instead of into the request block. The tool read the `0xFF` it
+had initialised and reported failure. `push si` moves above `hd_part_ent`.
+
+**Three things about this are worth keeping.** The comment described the fix
+and the code did not implement it — *"the answer below re-finds it"* is true
+of nothing in those six lines, and a comment that states an intention is not
+evidence the intention was carried out. The failure was a **stray write into
+another image** as well as a wrong answer, which is the sharper half: a
+byte-sized `0xFF` landed in the tool's `hd_mbr` and nothing anywhere reported
+it. And the symptom pointed at the wrong subsystem entirely — everything the
+message blamed was demonstrably fine, which is what said the defect was in the
+*reporting* and not in the mounting.
+
+**The post-mortem that does not work**, because it cost a session's time:
+reading the tool's `hd_req` or `hd_mvol` after the failure tells you nothing.
+The tool image is freed and reloaded (its segment moves — measured, 19A0 →
+1CA0), so what you read is a fresh image with zeroed bss. The instrument that
+answers is the resident's `hd_vols` **plus** the platter, both of which
+outlive the tool.
+
+### 52.11.6 CLOSED: the tool could not SEE the files it exists to copy
+
+Past §52.11.5 the installer stopped with **`KERNEL.SYS`** in the caption —
+§52.10.7's "name the file it stopped on", and this time the name was the whole
+diagnosis. `KERNEL.SYS` and every `*.DRV` are **hidden + system** (§19.6), and
+the kernel reports those to a DRIVER and to nobody else. The fence is
+`drv_owns_seg`, which scans `drv_tab` for a row whose image starts at the
+caller's segment — and **the tool is deliberately not in `drv_tab` at all**
+(§52.11). So the installer, whose entire job is copying exactly those files,
+could not see one of them.
+
+It was not the heap, which is what the symptom suggests: `hd_ibuf_get` falls
+back from 96KB to 32KB and lets `hd_icopy_one` refuse the one file too big for
+the chunk, which prints the same caption. Measured at the moment of failure,
+the heap had **442KB free in one run**, so the 96KB claim was never refused.
+
+**This is §52.11.4's bug in the other fence, and the kernel has exactly two.**
+`mem_own` asks "is this segment a claim I handed out"; `drv_owns_seg` asks "is
+it a driver image". A driver's second image answers no to both, for the same
+reason: it is neither an instance, nor `MEM_K_DRV`, nor a `drv_tab` row.
+`mem_owner_of` is the one step both need — *take the owner of the claim the
+caller is running in and ask about THAT* — and each fence decides for itself
+what a valid answer is. One level, no chain-walking.
+
+**The generalisation worth carrying**: a second image is a new KIND of caller,
+and every fence that answers "who is asking" had to be re-asked. Two were
+found by running the installer and one at a time; a third would have been
+found the same way. When a subsystem gains a new species of caller, the
+fences are the checklist.
+
 ## 53. fsx.inc — fullscreen exclusive
 
 §11.2's fullscreen surface is a real window: the desktop's mode, the

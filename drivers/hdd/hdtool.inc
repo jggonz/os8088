@@ -419,13 +419,13 @@ hd_svc_mount:
     call hd_part_load           ; OUR copy of the table, as the format left it
     mov al, [es:si+HRQ_SLOT]
     mov [hd_pslot], al
-    call hd_part_ent            ; SI = the entry hd_mount_one wants...
-    push es                     ; ...and SI is no longer the request block, so
-    push si                     ; the answer below re-finds it
-    call hd_mount_one
-    pop si
-    pop es
-    jc hd_svc_out
+    push es                     ; THE REQUEST BLOCK, banked BEFORE hd_part_ent
+    push si                     ; takes SI - which is the whole of SPEC.md
+    call hd_part_ent            ; 52.11.5. It used to be banked AFTER, so what
+    call hd_mount_one           ; came back was the ENTRY pointer and the
+    pop si                      ; answer below was read from, and written to,
+    pop es                      ; the tool's image at a garbage offset
+    jc hd_svc_out               ; (`pop` leaves CF alone)
     mov al, [es:si+HRQ_DEV]     ; which kernel volume did it become? The row
     mov ah, [es:si+HRQ_SLOT]    ; hd_mount_one filled says, and finding it here
     call hd_vol_of              ; is what spares the tool a sight of hd_vols
