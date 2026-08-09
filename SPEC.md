@@ -3688,6 +3688,49 @@ boxes belong to the front window alone (§11). After the marked windows are
 drawn, `wm_paint_dmg` asks `wm_top` again; if the answer was **not** redrawn
 in this pass, it owes exactly one `wm_draw_title` with DI = BP.
 
+#### 11.91.1 The dither skips ground a window is about to cover
+
+`wm_paint_dmg` dithered the whole damage rect and then drew, **whole**, every
+window that overlaps it — so every pixel under one of those windows was
+dithered and then painted over. That is PERFORMANCE.md Part 1's double-draw,
+and on the two operations where the damage is mostly *window* it is most of
+the cost: **dragging a window** (`ui_drag` passes the union of where it was
+and where it is, and the second half is covered by the window itself) and
+**un-zooming one** (§11.95.1, where the union is nearly the desktop band).
+
+`wm_dmg_gray` replaces the fill. The region machinery already answers this
+exact question, so there is no new drawing code: `wm_clip_seed` takes the
+damage rect, `wm_dmg_occl` subtracts every visible window — shadow included,
+because `wm_draw_win` draws the shadow — and `gfx_fill_gray` is a **clipped**
+primitive, so one call paints only what is genuinely being uncovered.
+
+Subtracting *every visible* window is both correct and simpler than
+subtracting the marked ones: a window that overlaps the damage is marked by
+`wm_dmg_wins` and redrawn whole, so it is ground that needs no dither; one
+that does not overlap subtracts nothing and costs a compare.
+
+Four things are load-bearing.
+
+- **The dither's phase is a function of absolute `x+y`**, so painting it as
+  fragments is pixel-identical to painting it whole. A pattern phased from
+  its own fill origin could not be split this way — which is why this works
+  for `gfx_fill_gray` and would need thought for anything else.
+- **Overflow degrades to dithering the WHOLE rect** — the opposite of
+  `wm_clip_set`'s degradation, and for the opposite reason. There, one
+  fragment too many means *skip, we might overdraw somebody*; here it means
+  *draw it all, or we leave stale pixels behind*.
+- **The window being vacated must already be invisible.** `wm_hide` clears
+  the visible bit and `wm_destroy` zeroes the record *before* calling in, so
+  neither is subtracted and the ground each gives up is dithered. A caller
+  that repainted the damage while the departing window still read as visible
+  would leave its pixels on screen — and it would look like the damage rect
+  being wrong, not like the dither being clipped.
+- **The hide is spent explicitly.** `GFXCLIP` calls `cur_unlazy` only on its
+  *unclipped* branch (§7.1.4), trusting `wm_clip_set`'s `cur_lazyck` to have
+  decided for an armed region — and there is no window here to decide about.
+  `wm_dmg_gray` calls `cur_unlazy` itself, which is exactly what the
+  unclipped fill did before it.
+
 ### 11.92 Retitling costs a strip — `wm_title_set`
 
 A caption changes on an **event** — a folder was entered, a document was
