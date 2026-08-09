@@ -349,6 +349,10 @@ zf_onkey:
 
     call zi_putkey                  ; into the ring; the worker consumes it
     call zi_service                 ; a posted @save/@restore, if any
+    call zi_script_flush            ; and SCRIPT.TXT catches up. The worker
+                                    ; buffers the transcript because it may not
+                                    ; touch a file slot; this is the UI task,
+                                    ; so this is where it reaches the disk
     jmp .out
 .pgup:
     mov ax, -1
@@ -451,6 +455,8 @@ zf_oncmd:
     jmp .out
 .script:
     xor byte [zf_script], 1
+    call zi_script_flush            ; turning it OFF must land what is buffered;
+                                    ; turning it on costs one empty write
 .out:
     pop di
     pop dx
