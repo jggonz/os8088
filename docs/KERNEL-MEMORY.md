@@ -374,7 +374,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52741
+    "text": 52824
   },
   "small": {
     "bss": 4654,
@@ -867,12 +867,12 @@ generated in the first place.
 |---|---:|---:|
 | the file system, end to end | 27,391 | 36.8% |
 | the window system and its furniture | 15,809 | 21.2% |
-| drawing: adapters, primitives, glyphs, icons | 10,085 | 13.6% |
+| drawing: adapters, primitives, glyphs, icons | 10,165 | 13.6% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,560 | 12.8% |
-| the kernel proper: API table, heap, scheduler, events | 5,758 | 7.7% |
+| the kernel proper: API table, heap, scheduler, events | 5,761 | 7.7% |
 | the Control Panel | 4,426 | 5.9% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **74,405** | |
+| **total** | **74,488** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -907,14 +907,14 @@ generated in the first place.
 | `viddet.inc` — adapter detection and geometry (§39) | 788 | — | **788** | — | — |
 | `dock.inc` — the dock (§30) | 777 | — | **777** | 34 | — |
 | `loader.inc` — the package loader (§21) | — | 754 | **754** | 58 | — |
-| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 544 | — | **544** | 80 | — |
+| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 624 | — | **624** | 80 | — |
 | `toast.inc` — **(undescribed)** | 438 | — | **438** | 43 | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 379 | — | **379** | — | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,672 | — | **2,672** | — | — |
-| **total** | **52,741** | **21,664** | **74,405** | **4,734** | **7,748** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,675 | — | **2,675** | — | — |
+| **total** | **52,824** | **21,664** | **74,488** | **4,734** | **7,748** |
 <!-- END generated table -->
 
 ### Reading it
