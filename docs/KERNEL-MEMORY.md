@@ -374,7 +374,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52733
+    "text": 52741
   },
   "small": {
     "bss": 4654,
@@ -391,7 +391,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52595
+    "text": 52603
   }
 }
 ```
@@ -406,7 +406,7 @@ derived from them exactly as `kernel/kernel.asm` derives them.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` 52,733 + `.bss` 4,734) | 57,856 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
+| image (`.text` 52,741 + `.bss` 4,734) | 57,856 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
 | cold code | 22,016 B | 21,664 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
 | FAT window | 4,608 B | nine of the mounted volume's FAT sectors (SPEC.md §18.8) — the whole FAT on any floppy, a sliding window on a hard disk |
 | `.lowbss` + task 0's stack | 9,216 B | 7,748 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 |
@@ -869,10 +869,10 @@ generated in the first place.
 | the window system and its furniture | 15,809 | 21.2% |
 | drawing: adapters, primitives, glyphs, icons | 10,085 | 13.6% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,560 | 12.8% |
-| the kernel proper: API table, heap, scheduler, events | 5,750 | 7.7% |
+| the kernel proper: API table, heap, scheduler, events | 5,758 | 7.7% |
 | the Control Panel | 4,426 | 5.9% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **74,397** | |
+| **total** | **74,405** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -913,8 +913,8 @@ generated in the first place.
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,664 | — | **2,664** | — | — |
-| **total** | **52,733** | **21,664** | **74,397** | **4,734** | **7,748** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,672 | — | **2,672** | — | — |
+| **total** | **52,741** | **21,664** | **74,405** | **4,734** | **7,748** |
 <!-- END generated table -->
 
 ### Reading it
