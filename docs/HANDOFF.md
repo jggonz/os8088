@@ -102,7 +102,18 @@ the `call wm_su_try` to three NOPs in the running guest — no rebuild needed.
 (My first attempt used the listing's `.text`-relative offset and hit the wrong
 instruction; confirm the byte reads `E8` before writing.)
 
-### 3.5 `NP_HCHUNK` = 4 is still an emulator number
+### 3.5 Typing at the END of a note — the field report, reproduced
+
+docs/NOTEPAD-NOTES.md §5.5 has the numbers. A keystroke at the end of the note
+roughly **doubles as the page fills** (35 ms → 66 ms in a 16×29 window) and
+then flattens — it is bounded by a screenful, not by the note — with the
+keystroke that scrolls costing **190 ms**. One keystroke does two walks, six
+`np_rflush` (three rows per pass, because `np_seedck` backs the seed up a row
+for §27.11's word wrap) and **17 `gfx_fill`s**, which is 12.8 ms of arrival
+before a glyph is drawn. The fills are where to start; the seed and the row
+index are ruled out and the trace is what ruled them out.
+
+### 3.5.1 `NP_HCHUNK` = 4 is still an emulator number
 
 It sizes a gfx-lock hold and a duty cycle, both of which the operator feels,
 and only the 5150 can set it. `make npbench`, boot, double-click README.TXT,

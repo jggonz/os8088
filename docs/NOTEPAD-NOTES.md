@@ -513,6 +513,66 @@ do not just add a clamp and rebuild.
 cycle, both of which the operator feels, and the field number is what should
 set it. `make npbench` reports what it costs on the machine in front of you.
 
+### 5.5 Typing at the END of a note gets slower as the page fills — REPRODUCED
+
+Reported from the field, in the reporter's own words: *"with the cursor at the
+end of the file it should only be drawing one character and doing no massive
+operations on the rest of the text behind it. Currently it gets slower as I
+fill the page."*
+
+**It reproduces, it is real, and it plateaus.** Empty the note (`Ctrl-A`,
+`Backspace`), then type, with the caret never leaving the end — a 16×29 window
+on a cycle-accurate 4.77MHz 8088:
+
+| note length | rows | `[np_top]` | keystroke | pass 1 | drawing |
+|---|---|---|---|---|---|
+| 26 | 1 | 0 | **35 ms** | 10 | 21 |
+| 151 | 5 | 0 | 38 | 12 | 21 |
+| 351 | 12 | 0 | 56 | 13 | 40 |
+| 601 | 16 | 9 | **66 ms** | 15 | 45 |
+| 776 | 16 | 17 | 50 | 11 | 35 |
+| — the keystroke that scrolls — | | | **190 ms** | 18 | 168 |
+
+So it roughly **doubles as the page fills** and then flattens: it is bounded
+by a *screenful*, not by the note. That is why it reads as "as I fill the
+page" and stops there. On a bigger window it will be worse in proportion — a
+25×76 window is 3.5× the cells.
+
+**What one keystroke actually does**, counted by breakpoint at a full page
+(`len` = 700, `top` = 13):
+
+```
+np_walk=2   np_rflush=6   np_rstart=6   gfx_fill=17     (and 38 + gfx_scroll on the scroll)
+```
+
+Two walks is by design — pass 1 finds which signatures moved, pass 2 draws.
+The **six** `np_rflush` is three rows per pass, and that is the answer to "it
+should only be drawing one character": `np_seedck` deliberately backs the seed
+up a row, because §27.11's word wrap decides a row's break from the length of
+the word *behind* it, so the row above the caret's has to be laid out again
+too. Both passes pay it. **17 `gfx_fill`s is 12.8 ms of pure arrival** at
+PERFORMANCE.md's ~756 µs a call, before a glyph is drawn.
+
+**Ruled out.** Not the seed failing: `[np_ckok]` and `[np_rowsok]` read 1 at
+every depth and the trace shows `np_seedck` then `np_seedrow` on every press,
+so nothing walks from index 0. Not §27.13's row index being dropped by
+`np_hmark` — that was the first hypothesis, it is wrong, and the trace is what
+killed it. Not the note's total length: at a fixed `[np_top]` the cost does not
+move as the note grows behind the view.
+
+**Where to go next**, in the order the numbers justify: the 17 fills per
+keystroke (what are they, and can the margins be folded into the run the way
+§27.2 folded the band?); the 190 ms scroll keystroke, which is §7.2's
+`np_scrollpaint` on the one press that also inserts; and only then pass 1,
+which is already down to 11–18 ms here.
+
+**One trap it sprang, and it is §6-shaped**: counting glyphs by breakpointing
+`font_char` and `font_run` reports **zero**, on a keystroke that plainly
+letters a row. `OSAPI_FONT_RUN` lands on **`font_run_x`**, which is the
+implementation and not a stub — it takes SPEC.md §6.1's aligned single-store
+path itself and only falls through to the slow one. Both symbols resolve, so
+the zero looks like a measurement rather than a miss. Count `font_run_x`.
+
 ---
 
 ## 6. Measuring Note Pad, and the seven ways the apparatus lied
