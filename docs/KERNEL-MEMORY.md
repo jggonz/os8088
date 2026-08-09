@@ -358,7 +358,7 @@ Three things about it:
   "lowpara": 576,
   "ovl": 2662,
   "stk0": 1024,
-  "text": 49963
+  "text": 50032
 }
 ```
 <!-- kernsize:end -->
@@ -816,21 +816,21 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 26,686 | 37.2% |
-| the window system and its furniture | 14,574 | 20.3% |
+| the file system, end to end | 26,686 | 37.1% |
+| the window system and its furniture | 14,578 | 20.3% |
 | drawing: adapters, primitives, glyphs, icons | 9,893 | 13.8% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,504 | 13.2% |
-| the kernel proper: API table, heap, scheduler, events | 5,347 | 7.4% |
+| the kernel proper: API table, heap, scheduler, events | 5,412 | 7.5% |
 | the Control Panel | 4,424 | 6.2% |
 | the three built-in kinds | 1,376 | 1.9% |
-| **total** | **71,804** | |
+| **total** | **71,873** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 806 | 7,053 | **7,859** | 337 | — |
-| `wm.inc` — the window manager (§11) | 4,828 | — | **4,828** | 627 | — |
+| `wm.inc` — the window manager (§11) | 4,832 | — | **4,832** | 627 | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 20 | 4,708 | **4,728** | 155 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 4,656 | — | **4,656** | 211 | 3,584 |
 | `ctrl.inc` — the Control Panel (§31) | 842 | 3,582 | **4,424** | — | — |
@@ -863,8 +863,8 @@ generated in the first place.
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,548 | — | **2,548** | — | — |
-| **total** | **49,963** | **21,841** | **71,804** | **4,056** | **7,748** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,613 | — | **2,613** | — | — |
+| **total** | **50,032** | **21,841** | **71,873** | **4,056** | **7,748** |
 <!-- END generated table -->
 
 ### Reading it

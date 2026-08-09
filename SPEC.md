@@ -4090,6 +4090,19 @@ is, through `wm_paint_dmg` (§11.91): what a shrink genuinely owes, and still
 far less than the screen. The union is taken one pixel wide at the far edges,
 which is exactly the drop shadow.
 
+**`wm_draw_win` takes "which window is frontmost" in `BP`, and the cheap path
+has to set it.** It shipped without, and a zoomed window came up with a bare
+white title bar: no pinstripes, and **no close or minimize box** — which
+`wm_hit` still reports from geometry, so both were invisible and clickable,
+`wm_grow_paint`'s warning arriving at the other end of the same window. The
+register is easy to miss because the two paths either side of it look after
+themselves: `wm_paint_all` sets `BP` once before its back-to-front loop and
+`wm_paint_dmg` sets it per window, so the shrink half was always right and
+only the grow half was wrong. On this path the value needs no work to find —
+the branch is taken only after `wm_top` has answered with this very window —
+but it does have to be *written*, and saved, because `wm_rz_paint` preserves
+every register.
+
 Two things are load-bearing.
 
 - **The bank must be the TRUE old rect, and `wm_zoom`'s zoom-out is where that
@@ -7777,6 +7790,54 @@ What this does **not** change: the file API is still UI-task context only, a
 name is still an 8.3 name with no path in it (§19.2), and a *navigation* is
 still a remount. The instance's folder is where names resolve, not a second
 naming scheme.
+
+### 19.2.2 Standing somewhere to WORK is not navigating — `OSAPI_FILE_GOTO_Q`
+
+`OSAPI_FILE_GOTO` (slot 0x0230) is a **navigation**: a full `dsk_chdir`, which
+is the BPB, the FAT window, the directory scan, the sort, one icon harvest per
+file, and a move of the calling instance's own folder (§19.2.1). That is right
+for an app that is about to *show* a folder and wrong for every copy loop
+ever written, which stands somewhere only to read or write **by name**.
+
+`OSAPI_FILE_GOTO_Q` (slot 0x0370) is the same move with none of that. It is
+`fcp_goto`'s two paths, which the kernel's own copy engine has had since
+§22.5, published because a copy engine *outside* the kernel needs them just
+as much:
+
+- **Inside the volume you are already on it is a WORD** — `[dsk_cwd]`, no
+  I/O at all. Nothing a caller can do between two of these reads the
+  listing: `dskw_*` resolve names by walking `[dsk_cwd]`'s raw directory
+  sectors, and so does `dsk_find` (§19.7.1). The FAT window and every
+  derived geometry belong to the **volume**, which has not changed.
+- **Crossing to another volume is a quiet mount** (§18.9) — BPB, FAT window,
+  cwd — and §18.8.2's banked per-volume window usually means the FAT is not
+  re-read either.
+
+The cluster is range-checked at the slot, because the quiet path skips
+`disk_mount`'s own `.cwd_lost` validation. That is `fcp_goto`'s reason and
+the same two compares.
+
+**It is not a replacement for `GOTO` and must not become one.** It leaves the
+global listing empty and `[dsk_lstale]` raised, so a caller about to *show* a
+folder wants the other slot; and it deliberately does not move the instance's
+own folder, because this is where the caller is standing to do a job, not
+where the application now believes it lives.
+
+What it is worth: the hard-disk installer (§52.10.4) was paying a full
+`dsk_chdir` **twice per file and twice per chunk**. §22.5 records what that
+costs from the other side — the per-switch icon harvest alone "was 23% of
+all sectors read" and made a copy quadratic.
+
+**The media does not change under a running operation, and that is a stated
+assumption.** A human does not take a floppy out and put a different one in
+between two files of a copy their frozen machine is in the middle of; §18.9.1
+already reasons this way for a single quiet switch, using the BIOS motor
+timeout as its physical evidence. That evidence does **not** span a
+floppy-to-hard-disk copy — the motor stops while the destination is being
+written — so it is stated here rather than measured there. What still costs a
+sector per switch is re-validating the BPB signature before reusing a banked
+FAT window (§18.8.2); a caller-declared batch bracket would remove that too,
+and is the next step rather than something this slot does.
 
 ### 19.3 The system disk — a FAT12 volume, and the kernel is a file on it
 
@@ -20369,6 +20430,40 @@ displaying. And **this is exactly why the text screen exists** (§45.13): in
 `FSXM_TEXT80` a row change is a `rep movsw` rather than 2,567 glyph cells a
 second, which is what buys the frames back on the module that needs them.
 
+#### 45.16.6 So the windowed readout shows the POSITION and no row at all
+
+The conclusion §45.16.5 forces. A row counter windowed is a number that
+**cannot be right** — the display gets fewer frames than the music has rows,
+so whatever it shows was true a moment ago and the next value is not the next
+row — and it cost a **17-cell `font_run` about seven times a second** on
+Beverly to say so, a millisecond a cell (§6.1.1). The readout is `Pos xx/yy`,
+nine cells, and it redraws **once per order** — every 64 rows, which at
+Beverly's tempo is 8.9 seconds.
+
+That is not a smaller version of the same defect. The position is the one
+figure on that line whose update rate the machine can actually meet, so it is
+never visibly stale; the row was the only thing asking for frames that do not
+exist. Everything §45.16.2–§45.16.4 was reaching for — an even grid, a bang,
+a burst covering the resync — was reaching for a way to make a
+faster-than-the-machine field *read* as smooth. Not drawing it is the version
+that needs no cadence at all.
+
+**The denominator is load-bearing.** A bare `Pos 09` that steps once every
+nine seconds reads as a dead field; `Pos 09/53` says what it is counting
+towards, so standing still looks like progress rather than a hang. It is the
+same argument that put it there when there *was* a row counter beside it, and
+it matters more now that there is not.
+
+**Two markers, and the second is the one that is easy to miss.**
+`[tui_lpos]` is the value last drawn — the ordinary "only draw when it
+changed" test. `[tui_wdrawn]` is whether those pixels are still on the glass,
+and it exists because the windowed splash repaint fills the whole card: with
+the marker alone, a repaint would leave the line **blank until the position
+next moved**, which is up to nine seconds. It lives in `.text` with a real
+initialiser rather than in bss, so a fresh instance starts owing the line
+(§20.1 — every launch reloads the image). The row counter used to hide both
+problems by changing often enough to paper over them.
+
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
 A port of ActionRetro's **ArtfulType** — "a distraction-free Markdown
@@ -24111,6 +24206,97 @@ The **button band is the one thing still erased before it is drawn**, and
 that is the stated exception rather than an oversight: a frame cannot be
 drawn opaquely, so a dithered frame over a solid one leaves the solid one's
 pixels behind. It is a single 16px fill, and only on a state change.
+
+### 52.10.7 OPEN: the chunked copy breaks the next source mount
+
+**Known, reproduced, unfixed, and the installer is deliberately less capable
+than it should be because of it.** `hd_icopy_sub` copies only *packages* out
+of a folder — `type == OSAPI_FT_PKG` — where the right test is "not a folder
+and not `..`", because type 1 means **package** and not **file** (§19.7.1).
+Making it right is a two-line change and it is not in the tree.
+
+What happens when it is: every file copies, `BEVERLY.MOD` included and
+byte-exact — and then the walk's next `hd_isrc_sub` fails, so
+`hd_icopy_tree` reports an error and the MBR is never written. The partition
+ends up **fully populated and not bootable**, which is worse than the missing
+file it fixes. Hence the gap stands.
+
+What is known:
+
+- It is the **chunked write** (§18.4.4). `BEVERLY.MOD` at 116,085 bytes is
+  the only file on either shipped disk that does not fit the copy buffer
+  whole, so the chunk loop had **never executed once** until the type test
+  changed. Every other file in the tree is one read and one write.
+- The failure is a **source mount**, not a file operation: `hd_icopy_one`
+  names the file it stops on and did not, and splitting `hd_icopy_tree`'s
+  four failure paths put it in `hd_icopy_sub`'s `.entry` — `hd_isrc_sub`,
+  which is a plain `dsk_chdir` of the floppy.
+- **It is not `OSAPI_FILE_GOTO_Q`** (§19.2.2). The quiet slot was wired in at
+  the same time, blamed, and reverting it changed nothing — a wrong diagnosis
+  worth recording, because the two changes landed together and the newer one
+  looked guiltier.
+- The suspicion, untested: the chunk loop alternates two volumes **eight
+  times** with the destination's FAT window dirty, and §18.8.2 requires a
+  dirty window to be flushed at the switch rather than carried. Nothing else
+  in the system alternates volumes that often mid-write.
+
+Where to start: `make DISKCNT=1` and read §18.94's counters either side of one
+chunked copy, and the marker technique that found §19.7.1's type bug — a
+temporary caption that **aborts**, because one that only sets `[hd_imsg]` is
+overwritten by the completion message and says nothing.
+
+**And a second thing blocks that work today: LBA 0 does not read on
+`os8088_xt_hdd`.** The evidence, all on a **pristine** `default_xtide.vhd`
+whose sector 0 has `55 AA` at 510 and a type-04 partition at LBA 26:
+
+- the Control Panel's **Mount** answers `No partition table yet`;
+- the installer's slot list offers **four free slots** on that same disk;
+- **Install** refuses with `Cannot read the partition table` — `HMB_BAD`.
+
+**The safety pass did not break this; it made it visible.** `HMB_BAD` and
+`HMB_NONE` used to be one answer, so a failing read presented as "nobody has
+partitioned this" and the installer formatted straight through it. Every
+install this session that "worked" was writing a fabricated table over a disk
+whose real one had never been read — which is exactly the data-loss shape
+§52.2.1 and `hd_part_load`'s own header describe, and the reason that
+distinction was introduced.
+
+It is a **regression** and not a standing limitation: docs/MARTYPC-DEBUG.md
+records this same machine reading the table, mounting, and listing the DOS
+filesystem on the shipped image (`COMMAND.COM`, `CONFIG.SYS`, `Free
+31760K`). The transport is **rung 0** — int 13h through the XT-IDE ROM
+(§52.1) — so it is one of the BIOS-rung paths.
+
+Ruled out by reading, so the next reader does not repeat it:
+
+- **`hd_geom_push`** returns immediately unless `HDD_KIND == HDK_IDE`, so it
+  issues no task-file command on this rung.
+- **`hd_chs`** translates LBA 0 under 615×4×26 to (0, 0, 1) with no refusal
+  on any of its four `.bad` tests.
+- **The buffer alignment** the new guard depends on does hold:
+  `mem_claim`/`mem_claim_hi` allocate in whole KB from a heap top derived
+  from `int 12h`, so a region base is 1KB-aligned and `align 512` inside the
+  image lands `hd_mbr` on a 512-aligned linear address.
+
+**`hd_bios_run` is ruled out too, by arithmetic.** Its cap is
+`neg(seg*16 + ofs) >> 9`, which for a 512-aligned buffer is at least one
+sector — the refusal it added can only fire on a buffer that is not
+512-aligned, and the bullet above shows this one is. For LBA 0 the track cap
+is `26 - 1 + 1 = 26` and `SI` is 1, so `AX` leaves as 1.
+
+That leaves the `int 13h` in `hd_bios_xfer` itself, and the next step is
+**instrumentation rather than reading**: `hd_bios_xfer` already banks the
+BIOS's own status in `[hd_status]` before it retries, so the question is
+which of `hd_chs`, `hd_bios_run` and the three `int 13h` attempts returns the
+failure, and what status the BIOS gave (0C = media type unidentified, 04 =
+sector not found, 09 = DMA page crossed, 80 = no answer — §18.93's table).
+`[di+HDD_UNIT]` reaching `DL` as 80h is worth confirming in the same pass.
+
+Use the technique that found §19.7.1's bug: a temporary caption that
+**aborts**, one per candidate, because a marker that only sets `[hd_imsg]` is
+overwritten by the completion message and says nothing.
+
+Nothing else in §52.10.7 is re-testable until that is settled.
 
 ## 53. fsx.inc — fullscreen exclusive
 

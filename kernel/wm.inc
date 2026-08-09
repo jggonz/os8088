@@ -568,7 +568,17 @@ wm_rz_paint:
     cmp bx, si
     mov bx, si
     jne .dmg
+    push bp                     ; wm_draw_win takes "which window is FRONTMOST"
+    mov bp, bx                  ; in BP, and this path has just proved we are
+                                ; it. Without this the title bar is drawn with
+                                ; whatever BP the caller happened to hold, so a
+                                ; zoomed window came up with no pinstripes and
+                                ; NO CLOSE OR MINIMIZE BOX - which wm_hit still
+                                ; reports from geometry, so they were invisible
+                                ; and clickable. wm_paint_all and wm_raise set
+                                ; it; this was the one site that did not
     call wm_draw_win            ; then this window is the whole of it
+    pop bp                      ; ...and wm_rz_paint preserves every register
     call menu_draw_bar          ; (the chrome may still have changed owner)
     call dock_paint
     jmp short .out
@@ -990,7 +1000,8 @@ wm_destroy_seg:
 ; It survives it exactly: a window shown OVER a fullscreen one reveals
 ; nothing, like any other, and a fullscreen window shown over everything
 ; reveals nothing because it covers the screen. The chrome is the only part
-; that had to change, and wm_raise skips it (wm_fs_vis) rather than the
+; that had to change, and wm_raise calls the bar and the dock anyway and lets
+; each DECLINE for itself (wm_fs_vis, SPEC.md 30.3.2) rather than the
 ; caller repainting the world to avoid drawing it. Opening the Standard File
 ; dialog over a fullscreen player was a whole-screen repaint including that
 ; player's W_PAINT, twice - once to show the dialog and once to take it away.
