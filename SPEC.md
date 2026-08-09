@@ -24876,6 +24876,71 @@ something the user asked for, and `mem_avail_ns` when you are about to claim
 a convenience.** A cache that displaces another cache buys nothing and
 thrashes.
 
+#### 50.6.4 A cache has a PRIORITY, because losing one is not like losing another
+
+§50.6 made "purgeable" one bit, so every cache was worth the same as every
+other — and they are not. Losing a **window raise cache** costs one window
+redrawing itself, which is what every window did before it existed. Losing
+the **directory read-ahead window** is the difference between 316 `int 13h`
+calls and 114 on an install (§18.95), which on the target machine is seconds
+the user sits through. With one bit, the trivial one could evict the
+expensive one — and did: `wm_su`'s speculative claim went through
+`mem_claim`'s shed-and-retry like anything else, and the first purgeable
+record in `mem_tab` order is what it took.
+
+**The owner's high byte is the priority.** The word already carried a
+namespace (§50.6: `0..INST_MAX-1` an instance, `0xFFxx` a kernel tag,
+`0xFExx` purgeable), so the change is to spread that one purgeable value into
+a range and let the ORDER mean something:
+
+| high byte | rank | losing it costs |
+|---|---|---|
+| `MEM_PG_TRIV` `0xFB` | trivial | a redraw or a recompute |
+| `MEM_PG_LOW` `0xFC` | low | a little I/O, or a visible pause |
+| `MEM_PG_MED` `0xFD` | medium | seconds of work the user waits through |
+| `MEM_PG_HIGH` `0xFE` | high | a long operation getting much longer |
+| `MEM_LVL_TOP` `0xFF`, and every instance slot | **unpurgeable — the default** | it is not a cache |
+
+Nothing new is stored, no record grows, `osapi_claim_snapshot` is unchanged
+and **no `.o88` is invalidated** — a package cannot make a purgeable claim
+yet (§50.6.2), so the whole ladder is kernel-internal and needs no slot.
+
+**The test is two compares and the scale is what makes it two.** A record is
+takeable by a claimant of rank `L` when its high byte is `>= MEM_PG_MIN` — so
+it is a cache at all — **and `< L`**. Ordinary claims rank `MEM_LVL_TOP` and
+so take any cache; a cache ranks itself and so takes only cheaper ones; and
+nothing takes a non-cache, because `0xFF` and every instance slot fall
+outside the range by construction rather than by a third test.
+
+**The rank comes out of the owner, so there is no parameter.** `mem_claim`
+already says *the tag IS the request*; `mem_shed_one` reads `BX` — which
+`mem_claim` holds across its retry — and needs nothing passed. Only the
+QUERY takes a rank, because a caller may want to know what is free to
+something it is not: `mem_avail` is `mem_avail_lvl` at `MEM_LVL_TOP`, which
+is the published answer and the right one for a package.
+
+**And the shed takes the CHEAPEST block it outranks, not the first.** One
+pass, remembering the lowest-ranked record strictly below the claimant, seeded
+at the claimant's own rank so only strictly cheaper records can win. Shedding
+in `mem_tab` order was a second wrong answer hiding behind the first: given
+two caches it took whichever sat lower in the table.
+
+Two consumers today, and they sit at the ends of the ladder on purpose —
+`MEM_P_WSAVE` trivial, `MEM_P_DIRW` high — so the middle two ranks are
+declared and unused. That is deliberate: the encoding costs nothing to
+reserve, adding a rank later would renumber nothing (there is no ABI here),
+and naming four gives the next cache a scale to be honest against instead of
+a binary choice between "free" and "sacred".
+
+**Cache-versus-cache thrash is bounded by the levels being honest, not by
+this routine.** A mount may now take the raise cache to fund the read-ahead
+window, and the next raise takes it back. That is fine *because* what it
+takes is by definition cheaper to rebuild than what it is taken for — a blit
+against a directory re-read. A ladder with a dishonest rank on it would
+thrash expensively, which makes the rank the thing to argue about in review,
+and the mechanism not.
+
+
 ## 51. driver.inc — loadable drivers
 
 The kernel carries what every machine has. What only *some* machines have is
