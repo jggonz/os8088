@@ -123,10 +123,39 @@
 ; --- tuning --------------------------------------------------------------------
 TRK_RITEM   equ 16                  ; a composed Rate item: MENU_DIS + '* ' +
                                     ; '11 kHz' + ' (Xt)' + NUL = 15
-TRK_RING    equ 16384               ; ring grant size, bytes (power of two,
-                                    ; 4096..32768 per the ring-mode contract);
-                                    ; ~1.49s of audio at 11kHz
-TRK_RMASK   equ TRK_RING - 1
+; --- the ring is CHOSEN, not fixed (SPEC.md 45.18) ---------------------------
+; It was a flat 16,384 and that is still what a machine with room gets. What
+; it cost on a small one was the worst shape available: the module loaded,
+; its title went up, and Play then said "Out of memory" because the grant
+; would not fit what the module had left. So the size is picked from the free
+; RAM that will remain AFTER the module is claimed, and the two numbers below
+; are the whole policy.
+TRK_RING    equ 16384               ; the FULL ring: 8 halves, and the only
+                                    ; one that can hold TRK_PRE_FULL. Still a
+                                    ; power of two in 4096..32768, which the
+                                    ; ring-mode contract requires
+TRK_RING_SM equ 8192                ; the SMALL ring: 4 halves. Not a
+                                    ; compromise about steady state - the lead
+                                    ; never drains below its top-up target on
+                                    ; either (PERFORMANCE.md Set 21) - it is a
+                                    ; compromise about the PRE-ROLL, which is
+                                    ; what the ring has to be big enough to
+                                    ; hold
+; Both sizes are whole KB and both are POOL TIERS: the grant comes out of the
+; driver's staging pool, which tiers in 4KB steps (SPEC.md 34.6.2), so each
+; lands on a tier exactly rather than rounding up into one the heap may not be
+; able to fund. Asserted, because it is a fact about the DRIVER that this app
+; cannot see and would otherwise only discover as a refusal on a small machine.
+%if (TRK_RING % 4096) || (TRK_RING_SM % 4096)
+  %error "a ring size must land on a staging-pool tier (SPEC.md 34.6.2)"
+%endif
+TRK_ROOMYKB equ 64                  ; ...and the line between them. Above this
+                                    ; much free RAM left over we take the full
+                                    ; ring and the full cushion; at or below
+                                    ; it we take the small one and ACCEPT the
+                                    ; pre-roll hitch, because on a machine
+                                    ; that tight the alternative is not a
+                                    ; better cushion, it is no playback at all
 TRK_HALF    equ 2048                ; the stream's fill unit, pinned (SPEC.md
                                     ; 34.5): fills are whole halves only
 TRK_RATE    equ 11000               ; open rate request, Hz (kernel quantizes
@@ -137,6 +166,15 @@ TRK_RATE22  equ 22050               ; Rate menu (SPEC.md 45.10): still the
                                     ; classic TC regime, any DSP
 TRK_RATE44  equ 44100               ; the 34.5 wide-rate regime - DSP >= 4
                                     ; only; an older card refuses err 2
+; The small ring's pre-roll is DERIVED by trk_ring_set - every half it has bar
+; the one the feed ceiling keeps free - and comes out at THREE, which is 1.12 s
+; at the XT rate against the 744 ms that produced the field hitch TRK_PREROLL
+; was raised to fix. So a tight machine keeps 1.5x a figure already known to be
+; too short, and that is the whole of what it gives up. The full ring's answer
+; is 6 rather than 7 because the derivation is capped at TRK_PREROLL.
+%if TRK_RING_SM / TRK_HALF - 1 < 3
+  %error "the small ring cannot stage a usable pre-roll (SPEC.md 45.18)"
+%endif
 TRK_PREROLL equ 6                   ; ring halves staged before the stream is
                                     ; opened - the cushion the worker's first
                                     ; refill has to arrive within. It was TWO
@@ -190,6 +228,15 @@ trk_entry:
     push di
     call mp_init                    ; first: mp_* may clobber, and the CF we
                                     ; owe the loader comes from wm_create
+    mov cx, TRK_RING                ; the ring DEFAULTS to the full one, and
+    call trk_ring_set               ; it has to be set here rather than left
+                                    ; to trk_ring_pick: bss arrives zeroed
+                                    ; (SPEC.md 20.2), a zero [trk_rmask] wraps
+                                    ; every stage onto offset 0, and the load
+                                    ; path that would have picked is skipped
+                                    ; entirely when the dialog reports no size
+                                    ; (a typed name). The grant walk then
+                                    ; corrects it downward if the heap says so
     call OSAPI_CPU_INFO             ; AL = tier (SPEC.md 41.8); a tier-0
     or al, al                       ; machine gets XT mode pre-armed with
     jnz .cpu                        ; its menu item already relabeled
@@ -973,6 +1020,15 @@ trk_fdone:
     jc .nomem                       ; refused (the answer moves register too)
     mov [trk_modseg], dx
 
+    call trk_ring_probe             ; RESERVE the ring before the floppy turns
+    jc .noring                      ; (SPEC.md 45.18): the module is claimed,
+                                    ; so what is free now is what the grant
+                                    ; will have to come out of - and this ASKS
+                                    ; for it rather than estimating, because
+                                    ; OSAPI_MEM_AVAIL cannot see through a
+                                    ; PURGEABLE claim and a subtraction from
+                                    ; it refuses modules that play perfectly
+
     mov ax, [trk_capk]              ; DX:CX = capacity in bytes = KB * 1024
     mov dx, ax
     mov cl, 10
@@ -1018,6 +1074,9 @@ trk_fdone:
 .nomem2:
     mov si, trk_s_nofit
     jmp .fail
+.noring:                            ; the module fits and the RING does not, so
+    mov si, trk_s_nofit             ; the claim has to come back off the heap
+    jmp .failfree                   ; before we say so (SPEC.md 45.18)
 .rderr:
     cmp ax, FERR_BIG
     je .big
@@ -1447,6 +1506,139 @@ trk_fsx_key:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
+; trk_ring_set - commit a ring size and everything derived from it
+; in:  CX = ring bytes (TRK_RING or TRK_RING_SM)
+; out: nothing; [trk_ring]/[trk_rmask]/[trk_preroll] set
+; clobbers: nothing (flags)
+;
+; The ONE writer of the three, because they are one fact. The pre-roll is
+; derived rather than tabled - every half the ring has bar the one the feed
+; ceiling keeps free - and then capped at TRK_PREROLL, which is what stops a
+; bigger ring buying a longer pre-roll nobody asked for. The cap is why the
+; full ring's answer is 6 and not 7.
+; -----------------------------------------------------------------------------
+trk_ring_set:
+    push ax
+    push cx
+    mov [trk_ring], cx
+    mov ax, cx
+    dec ax
+    mov [trk_rmask], ax             ; ring - 1: a power of two, so this is the
+    mov ax, cx                      ; wrap mask
+    mov cl, 11                      ; halves = ring / TRK_HALF (2048)
+    shr ax, cl
+    dec ax                          ; ...bar the one the ceiling keeps free
+    cmp ax, TRK_PREROLL
+    jbe .cap
+    mov ax, TRK_PREROLL
+.cap:
+    mov [trk_preroll], ax
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_ring_pick - choose the ring from the free RAM, and NEVER refuse
+; in:  nothing (asks OSAPI_MEM_AVAIL itself)
+; out: nothing; the ring committed
+; clobbers: nothing (flags)
+;
+; SPEC.md 45.18's policy in one compare: above TRK_ROOMYKB of free RAM take
+; the full ring and the full cushion, at or below it take the small ring and
+; the pre-roll hitch with it. That is a question about POLITENESS rather than
+; about fit - 16KB out of a 20KB run is most of a small machine's heap, and
+; the app is not the only thing that wants it.
+;
+; **It cannot refuse, and that is deliberate.** OSAPI_MEM_AVAIL walks the
+; claim map with mem_run, which counts a PURGEABLE claim (SPEC.md 50.4's
+; 0xFExx tags - the directory read-ahead window is 63KB of one) as blocking,
+; while an actual mem_claim will purge to satisfy a request. So the number
+; here can be far smaller than what a claim would really get: measured on a
+; 256KB machine it answered 21.5KB while the old code went on to fund an 18KB
+; module AND a 16KB ring out of the same heap. Estimating downward from it
+; and refusing turned a module that played perfectly into "Too big for free
+; memory" - so this only ever biases the CHOICE, and trk_ring_probe does the
+; refusing by asking.
+; -----------------------------------------------------------------------------
+trk_ring_pick:
+    push ax
+    push bx
+    push cx
+    call OSAPI_MEM_AVAIL            ; AX = largest run KB (BX = total)
+    mov cx, TRK_RING_SM
+    cmp ax, TRK_ROOMYKB
+    jbe .set
+    mov cx, TRK_RING
+.set:
+    call trk_ring_set
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; trk_ring_probe - reserve the ring BEFORE the floppy turns
+; in:  the module claim already taken (so the heap is as Play will find it)
+; out: CF = 0 a ring of [trk_ring] can be had; CF = 1 nothing can, and the
+;      caller must free the module and refuse the load
+; clobbers: nothing (flags via CF)
+;
+; The original defect this whole section exists for: the module was claimed
+; and read - seconds of floppy on the target machine - and Play then said
+; "Out of memory" over a title that was already on screen. The expensive half
+; succeeded and the cheap half failed.
+;
+; So the ring is asked for HERE, between the module's claim and its READ, and
+; given straight back. Asking is the only honest test (SPEC.md 50.3's rule
+; for mem_claim_dma, for the same reason): a purgeable claim makes every
+; estimate pessimistic, and only the allocator knows what it would do. The
+; grant is not KEPT because a stopped Tracker deliberately holds no pool
+; (SPEC.md 34.6) - and it need not be, since trk_stream_open walks the tiers
+; again and the heap is free to move in between either way.
+; -----------------------------------------------------------------------------
+trk_ring_probe:
+    push ax
+    push cx
+    push si
+    call OSAPI_SND_CAPS             ; AX = merged caps word
+    test ax, SND_CAP_PCM_BG
+    jz .none                        ; NO BACKGROUND PCM SINK: this machine is
+                                    ; a viewer (trk_play's own gate), so there
+                                    ; is no ring to reserve and a load must
+                                    ; never be refused for the want of one -
+                                    ; without this the whole no-Sound-Blaster
+                                    ; case stops loading modules at all
+    call trk_ring_pick              ; the policy choice, from what is free now
+    mov cx, [trk_ring]
+.try:
+    mov al, 7
+    mov ah, 0                       ; sub-op 0 = alloc
+    call OSAPI_SND_STREAM           ; out AX = 0 ok, SI = grant offset
+    or ax, ax
+    jz .got
+    cmp cx, TRK_RING_SM
+    jbe .no                         ; even the small ring is unfundable
+    mov cx, TRK_RING_SM
+    jmp short .try
+.got:
+    call trk_ring_set               ; what we ACTUALLY got, not what we asked
+    mov al, 7
+    mov ah, 1                       ; sub-op 1 = free: we only wanted to know
+    call OSAPI_SND_STREAM
+.none:
+    pop si
+    pop cx
+    pop ax
+    clc
+    ret
+.no:
+    pop si
+    pop cx
+    pop ax
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; trk_play - start playback
 ; in:  AL = 0 play song from the top / 1 loop the current pattern
 ;      gfx lock held (key handler, menu, completion proc)
@@ -1496,13 +1688,23 @@ trk_play:
                                     ; while we are stopped (SPEC.md 34.6);
                                     ; teardown still force-frees it (34.3) if
                                     ; a close never ran
+    mov cx, [trk_ring]              ; the size trk_ring_pick chose at LOAD
+.gtry:
     mov al, 7
     mov ah, 0                       ; sub-op 0 = alloc
-    mov cx, TRK_RING
     call OSAPI_SND_STREAM           ; out AX = 0 ok, SI = grant offset
     or ax, ax
-    jnz .nogrant
-    mov [trk_grant], si
+    jz .ggot
+    cmp cx, TRK_RING_SM             ; refused. The pick was made when the
+    jbe .nogrant                    ; module was loaded and the heap has been
+    mov cx, TRK_RING_SM             ; free to move since - another app, a Disk
+    jmp short .gtry                 ; window - so drop a tier and ask again
+                                    ; rather than making the user close things
+                                    ; and re-load. One retry: below the small
+                                    ; ring there is nothing left to try
+.ggot:
+    call trk_ring_set               ; CX is what we ACTUALLY got, so the mask
+    mov [trk_grant], si             ; and pre-roll follow it and not the pick
     mov byte [trk_ghave], 1
 .granted:
     cmp byte [mp_xt], 0             ; XT mode overrides the Rate menu with
@@ -1549,8 +1751,8 @@ trk_play:
     mov si, trk_s_buffer            ; ...and SAY SO, because the loop below is
     call tui_msg                    ; the longest thing this app ever does with
     call trk_say                    ; the gfx lock held (SPEC.md 45.17.2)
-    mov cx, TRK_PREROLL             ; stage the cushion before the open, so
-.pre:                               ; the stream starts TRK_PREROLL halves
+    mov cx, [trk_preroll]           ; stage the cushion before the open, so
+.pre:                               ; the stream starts [trk_preroll] halves
     call trk_mix_stage              ; ahead of the DSP instead of two
     loop .pre                       ; (trk_mix_stage preserves everything)
 .preok:
@@ -1620,7 +1822,7 @@ trk_mix_stage:
     call mp_gen                     ; renders into mp_outbuf, advances the
                                     ; replayer; clobbers freely (mp_* rule)
     mov di, [trk_total]
-    and di, TRK_RMASK
+    and di, [trk_rmask]
     add di, [trk_grant]             ; physical grant offset of stream byte n
     mov si, mp_outbuf
     mov cx, TRK_HALF
@@ -2199,8 +2401,10 @@ trk_feed:
     cmp byte [trk_halves], TRK_MAXFEED
     jae .out
     mov ax, [trk_total]
-    sub ax, dx                      ; AX = lead, 0..TRK_RING
-    cmp ax, TRK_RING - TRK_HALF
+    sub ax, dx                      ; AX = lead, 0..[trk_ring]
+    mov bx, [trk_ring]              ; the feed ceiling is the ring less one
+    sub bx, TRK_HALF                ; half, and the ring is chosen now
+    cmp ax, bx                      ; (SPEC.md 45.18)
     ja .out                         ; no room for a whole half
     push dx
     call trk_mix_stage              ; mix + stage + total += 2048
@@ -2403,8 +2607,18 @@ trk_s_txsm:   db 'Smooth is a graphics mode only', 0
                                     ; kernel's buffer during the completion call
 
 ; --- the ring stream (SPEC.md 34.5 ring mode) ----------------------------------
-    TRKB trk_ghave                  ; the 16KB pool grant exists
+    TRKB trk_ghave                  ; the pool grant exists
     TRKW trk_grant                  ; ...its SND_SEG offset
+    TRKW trk_ring                   ; ...and how big it is: TRK_RING or
+                                    ; TRK_RING_SM, chosen by trk_ring_set from
+                                    ; the free RAM left after the module
+                                    ; (SPEC.md 45.18). These three move
+                                    ; together and NOTHING may set one alone -
+                                    ; a mask that disagrees with its ring
+                                    ; wraps the stage into the middle of the
+                                    ; grant and plays the seam forever
+    TRKW trk_rmask                  ; ...ring - 1, the stage's wrap
+    TRKW trk_preroll                ; ...and the halves staged before the open
     TRKB trk_sopen                  ; a stream is open
     TRKB trk_hand                   ; ...its handle
     TRKB trk_ended                  ; watchdog/F00-ended: stop feeding, close

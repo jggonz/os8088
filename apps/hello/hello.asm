@@ -49,6 +49,11 @@ hl_entry:
     jc .out
     mov si, hl_menus
     call OSAPI_MENU_SET              ; BX = the window we just created
+                                     ; NO WF_SAVEU: the promise holds, but the
+                                     ; repaint is one fixed string, and there
+                                     ; is ONE cache for the machine (SPEC.md
+                                     ; 11.96) - taking it for this would be
+                                     ; taking it from something that letters
 .out:
     pop si
     ret

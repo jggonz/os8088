@@ -274,6 +274,14 @@ sol_entry:
     jc .full
     mov si, sol_menus
     call OSAPI_MENU_SET             ; draws nothing, and preserves the flags
+    mov al, 1                       ; ...and it PROMISES its content stands
+    call OSAPI_WM_SAVEU             ; still while it is not drawing (SPEC.md
+                                    ; 11.96.1): no worker, so the table only
+                                    ; moves when a card is dragged. sol_track
+                                    ; in the paint proc is a GEOMETRY re-read,
+                                    ; and geometry is what wm_su_ck already
+                                    ; invalidates on, so skipping it costs
+                                    ; nothing
     mov si, sol_about
     call OSAPI_ABOUT_SET            ; 'About Solitaire' under our name in the
                                     ; bar (SPEC.md 12.2) - same contract, and
