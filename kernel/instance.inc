@@ -1113,6 +1113,12 @@ app_close_win:
                                 ; whose slot inst_caller answers with
     cmp byte [di+I_KIND], KIND_CTRL
     jne .noflush                ; the Control Panel defers its settings write
+    call drv_cp_closed          ; ...and tell the drivers, which is where the
+                                ; hard disk's tool image goes back (SPEC.md
+                                ; 31.9.1). BEFORE the settings write, so a
+                                ; driver that stages something on the way out
+                                ; is staging it into the blob that is about to
+                                ; be written rather than the one after
     call cp_flush_close         ; to here (SPEC.md 31.8): one floppy write per
                                 ; session instead of one per click. Only the
                                 ; TASK-LESS branch needs it - the panel owns
