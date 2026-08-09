@@ -413,6 +413,7 @@ zw_run:
 ; zw_rowdraw - in AX = screen row; draws zw_rbuf across it. ONE primitive call.
 zw_rowdraw:
     push ax
+    push bx
     push cx
     push dx
     push si
@@ -420,9 +421,39 @@ zw_rowdraw:
     mov cx, [zw_tx]
     mov si, zw_rbuf
     call zw_run
+
+    ; THE LEADING ROW. OSAPI_FONT_RUN paints the eight rows of the cell and
+    ; nothing else, but a text row is ZF_LEAD (9) tall - so the ninth row is
+    ; painted by no one and keeps whatever the window had there before. On a
+    ; freshly white-filled content that is invisible; anywhere else it is a
+    ; rule under every line, which is exactly how it looked.
+    ;
+    ; One OSAPI_GFX_HLINE, not a fill: it is a single pixel row, and at 756us
+    ; a primitive call on the target machine (PERFORMANCE.md) the difference
+    ; between one call and one call is the point - this adds ONE to the row's
+    ; cost, and the row already costs a FONT_RUN per word.
+    push ax
+    call zw_runsel                  ; AH = the background the style asks for
+    mov al, ah
+    call OSAPI_SET_COLOR
+    pop ax
+    call zw_rowy
+    add dx, CELL_H                  ; the row ZF_LEAD reserves under the cells
+    mov ax, [zw_cols]
+    mov cl, 3
+    shl ax, cl
+    add ax, [zw_tx]
+    dec ax
+    mov bx, ax                      ; BX = x2
+    mov ax, [zw_tx]                 ; AX = x1
+    call OSAPI_GFX_HLINE
+    mov al, CBLACK                  ; the pen is one global (apps/os88api.inc)
+    call OSAPI_SET_COLOR
+
     pop si
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
