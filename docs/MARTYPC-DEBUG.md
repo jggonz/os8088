@@ -249,13 +249,45 @@ gate is not optional — the two obvious ones are both wrong:
 - **"Has the card left text mode" hangs on Hercules.** MartyPC's MDA reports
   text mode forever, in graphics mode as in any other.
 
-So the gate is the **menu bar's white field**, which neither the POST nor the
-splash has, sampled through `vram` on the 1bpp cards and `fbuf` on VGA —
-because `vram` is impossible on VGA and is the *exact* answer on the other two,
-where `fbuf` comes back cropped to a display aperture (720x350 against a
-720x348 framebuffer, and 16 columns short of it). Measured boots: CGA 17.5s,
-Hercules 16.1s, VGA 7.1s, against the 26-second fixed sleep every script used
-to carry.
+So the gate is the **desktop**, sampled through `vram` on the 1bpp cards and
+`fbuf` on VGA — because `vram` is impossible on VGA and is the *exact* answer
+on the other two, where `fbuf` comes back cropped to a display aperture
+(720x350 against a 720x348 framebuffer, and 16 columns short of it). Measured
+boots: CGA 4.6s, Hercules 4.7s, VGA 7.1s on this container, against the
+26-second fixed sleep every script used to carry.
+
+**It is THREE facts, and it was one.** The gate used to be the menu bar's
+white field alone, which is *nearly* enough — `wm_paint_all` draws the
+dither, the drive zones and the dock **before** the bar, so the bar going up
+means the rest is already there — but "nearly" was carrying the whole
+argument, and everything after a boot gate is measuring a machine it believed
+was ready. So the bar is tested the way SPEC.md §12 defines it, white field
+**and** the 1px black rule under it, and the **dock strip** as well: the first
+thing on the screen and the last. Measured from reset at 8 Hz, field / rule /
+dock —
+
+| | field | rule | dock |
+|---|---|---|---|
+| POST text | 0.26 | **0.25** | 0.25 |
+| splash | 0.00 | 0.00 | 0.00 |
+| CGA desktop | 0.93 | 0.00 | 0.96 |
+| Hercules desktop | 0.94 | 0.00 | 0.96 |
+| VGA desktop | 1.00 | 0.00 | 0.96 |
+
+— and the rule is what rejects POST text, which is the one screen here whose
+top band is genuinely lit.
+
+**And the gate and the stillness test now read the screen ONCE, together.**
+They used to read it independently, one round trip apart — and this emulator
+runs the guest **several times faster than real time** (measured: a CGA boot
+is 25.8M cycles, 5.4 guest seconds, in 1.25 s of host), so a round trip is
+tens of milliseconds of *guest* time, which is most of a desktop paint on a
+4.77MHz machine. Two reads can therefore report a state that never existed: a
+probe built that way reported the menu bar up while the same screen was 26%
+lit, on a machine whose desktop is 56% and whose bar goes up last. That is a
+lie about the guest produced entirely by the instrument, and it is the same
+family as the offset-crop trap below — **when the host is fast, two questions
+asked separately are two questions asked about different machines.**
 
 This paragraph used to say `fbuf` was **dead** on Hercules — that the MDA does
 not rasterise graphics mode at all — and that is not true at the pinned build:

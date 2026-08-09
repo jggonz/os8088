@@ -51,6 +51,13 @@ and a click that lands on bare desktop switches to Locator and raises nothing
 through wm_owner (window slot -> instance slot) rather than counted off by
 eye, because the Disk window is an instance too and holds tile 0.
 
+IT WAITS WITH `launch`'s OWN GATE and has no boot poll of its own, which it
+did have: `settle` used to gate on the menu bar's white field alone and read
+the screen for that a round trip apart from reading it for stillness, so on
+an emulator running the guest faster than real time the two could answer
+about a state that never existed. It tests the whole desktop from one frame
+now (os88marty `_desktop_up`), so `boot=True` is the wait again.
+
 EVERY COORDINATE IS DERIVED, so this runs on all three adapters. The drive
 zone is desk_ord_xy's arithmetic (SPEC.md 26.1) over [vid_desk_zx] and
 [desk_rows] read out of the guest - 2 rows on CGA, 4 on Hercules, 7 on VGA,
@@ -243,21 +250,6 @@ def pixdiff(frame, a, b):
                if a[i:i + bpp] != b[i:i + bpp])
 
 
-def wait_desktop(m, limit=240):
-    """settle()'s menu-bar gate fires on the SPLASH on a slow machine or a
-    full apps disk, so wait on the desktop's own lit fraction instead - which
-    is a fraction rather than a count because the three adapters have three
-    screen sizes. The desktop is a 50% dither over its whole area; the splash
-    is a logo and a bar on black, nowhere near."""
-    t0 = time.time()
-    while time.time() - t0 < limit:
-        data = fb(m)[2]
-        if sum(1 for c in data if c) > len(data) // 4:
-            return
-        time.sleep(2)
-    raise SystemExit("sucheck: no desktop after %ds" % limit)
-
-
 def named(m, title):
     for w in windows(m):
         if w.title.upper().startswith(title):
@@ -271,8 +263,7 @@ def main():
     bad = []
     with os88marty.launch(os.path.join(ROOT, "build/os8088-360.img"),
                           apps=os.path.join(ROOT, "build/apps360.img"),
-                          machine=machine, boot=2) as m:
-        wait_desktop(m)
+                          machine=machine) as m:
         mo = Mouse(marty=m)
         mo.dblclick(*zone(m, VOL_B)); time.sleep(4)
         disk = [w for w in windows(m) if w.visible][0]

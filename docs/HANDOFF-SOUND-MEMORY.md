@@ -149,9 +149,19 @@ cover. See §5.
 
 ## 5. Harness notes that cost real time
 
-- **`settle()`'s boot gate fires on the SPLASH** on a slow machine (128KB) or
-  with a full apps disk. Use `launch(..., boot=2)` and then poll the desktop's
-  own lit count (>70,000 on CGA). Every script in this round needed it.
+- ~~**`settle()`'s boot gate fires on the SPLASH**~~ **— fixed, and the
+  workarounds are deleted.** `boot=True` is the wait again. The symptom as
+  reported could not be reproduced on any machine buildable here (the 128KB
+  one wants the IBM ROM this tree cannot ship, and on CGA, Hercules and VGA
+  from reset the old gate went True at exactly the desktop and never during
+  POST or splash). What WAS demonstrable is the mechanism that can produce
+  it: the gate and the stillness test read the screen a round trip apart, and
+  the emulator runs the guest several times faster than real time, so the two
+  can answer about a state that never existed — a probe built that way
+  reported the menu bar up while the same screen was 26% lit. One read serves
+  both now, and the gate tests the whole desktop (bar field, its rule, the
+  dock strip) rather than one band that another screen can imitate.
+  docs/MARTYPC-DEBUG.md carries the measurements.
 - **`m.sym()` returns a LINEAR address**, not an offset in `KERNEL_SEG`. Use
   `m.read(sym, n)`; `m.readseg(0x0060, sym, n)` reads code and looks plausible.
 - **A driver's variable offsets MOVE whenever the driver's size does.** Derive

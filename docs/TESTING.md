@@ -1441,9 +1441,13 @@ middle of that range.
 > which sits perfectly still for seconds before the floppy is touched
 > (measured — an 8.3 s "boot" showing a quarter of the desktop's lit pixels),
 > and "has the card left text mode" hangs the full timeout on Hercules, whose
-> MDA reports text mode in every mode. The gate is the **menu bar's white
-> field**, read through `vram` on the 1bpp cards and `fbuf` on VGA. CGA 17.5 s,
-> Hercules 16.1 s, VGA 7.1 s, against the 26 s fixed sleep it replaces.
+> MDA reports text mode in every mode. The gate is the **desktop** — the menu
+> bar's white field, the 1px black rule under it and the dock strip, three
+> facts from ONE read of the screen, because a gate and a stillness test that
+> read it separately can answer about a state that never existed on an
+> emulator running the guest faster than real time (docs/MARTYPC-DEBUG.md).
+> Read through `vram` on the 1bpp cards and `fbuf` on VGA. CGA 4.6 s,
+> Hercules 4.7 s, VGA 7.1 s, against the 26 s fixed sleep it replaces.
 >
 > `m.sym("fpg_on")` — or `python3 tools/os88sym.py --all` — is where a kernel
 > symbol lives. **Never take one from `nasm -l`.** For anything in `.bss` the
