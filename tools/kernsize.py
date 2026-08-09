@@ -55,6 +55,14 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KERNEL = os.path.join(ROOT, "kernel", "kernel.asm")
+
+# The build directory, which is NOT always build/: `make small` and the
+# per-typeface targets (SPEC.md 6.2) run a sub-make with BUILD= pointed
+# somewhere else, and the generated includes the kernel needs - associco.inc
+# always, font8x8.inc under FONT= - are in THAT directory.  Assuming build/
+# measured the wrong kernel for `small` silently and could not assemble a
+# baked-font one at all.  --build is how the Makefile says which.
+BUILDDIR = os.path.join(ROOT, "build")
 DOC = os.path.join(ROOT, "docs", "KERNEL-MEMORY.md")
 BEGIN = "<!-- kernsize:begin -->"
 END = "<!-- kernsize:end -->"
@@ -157,7 +165,7 @@ def measure(nasm_args=()):
     try:
         cmd = ["nasm", "-f", "bin", "-w+error", "-w-error=user", "-DKERNSIZE",
                "-I", os.path.join(ROOT, "kernel") + os.sep,
-               "-I", os.path.join(ROOT, "build") + os.sep,
+               "-I", BUILDDIR + os.sep,
                *nasm_args, "-o", out_path, KERNEL]
         r = subprocess.run(cmd, capture_output=True, text=True)
     finally:
@@ -222,7 +230,7 @@ def _nasm(path, out_path, nasm_args=()):
     return subprocess.run(
         ["nasm", "-f", "bin", "-w+error", "-w-error=user",
          "-I", os.path.join(ROOT, "kernel") + os.sep,
-         "-I", os.path.join(ROOT, "build") + os.sep,
+         "-I", BUILDDIR + os.sep,
          *nasm_args, "-o", out_path, path],
         capture_output=True, text=True)
 
@@ -542,10 +550,16 @@ def main():
     ap.add_argument("--modules", action="store_true",
                     help="the per-module attribution")
     ap.add_argument("--json", action="store_true", help="the raw figures")
+    ap.add_argument("--build", metavar="DIR",
+                    help="where the generated includes are (default build/); "
+                         "a sub-make with BUILD= set needs this")
     # Anything else is handed to NASM verbatim - parse_known_args rather than
     # a positional, because the knobs arrive looking like options
     # (-DVID_FORCE=3) and argparse would claim them.
     a, nasm_args = ap.parse_known_args()
+    if a.build:
+        global BUILDDIR
+        BUILDDIR = os.path.abspath(a.build)
     variant = variant_of(nasm_args)
     knobs = knob_args(nasm_args)
 
