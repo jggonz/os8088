@@ -1,8 +1,14 @@
 # Discardable claims, and a window that can be raised without repainting
 
-Forward-looking, in `docs/SOUND-PLAN.md`'s sense: nothing here is built. It is
-the argument and the costing, written down before the code so the decisions
-are the ones we meant to take.
+**Recommendations 1–2 and the placement in 3 are BUILT** — SPEC.md §50.6
+(purgeable claims) and §11.96 (the raise cache). What is left of this document
+is the argument behind them, plus the items still open, which are marked in
+§4. The costing below was written before the code; the measured outcome is at
+the end of §4.
+
+Forward-looking in `docs/SOUND-PLAN.md`'s sense for the rest: it is the
+argument and the costing, written down before the code so the decisions are
+the ones we meant to take.
 
 It starts from two things measured in docs/NOTEPAD-NOTES.md §7: raising an
 obscured Note Pad costs **1,026 ms**, of which **578 ms is lettering 464 glyph
@@ -212,6 +218,24 @@ places and a masked compare is a trap for later; take the 64 bytes.
 ---
 
 ## 4. Recommendations, in the order worth doing them
+
+**BUILT: 1, 2, and 3's placement.** The opt-in in 1 was dropped on the
+argument in §11.96 — purgeable memory is not spent, so there is nothing to opt
+out of, and the kernel knows everything the decision needs. What is measured:
+a raise makes **zero `W_PAINT` calls** where it used to make one costing
+578 ms, and the restored content is **pixel-identical** (0 differing of a
+124,928-byte content rect). The kernel cost is **+809 bytes**, which crossed
+two 512-byte rungs and left `KERN_BUDGET` at 1,536 spare.
+
+**Owed on it:** a clean end-to-end wall figure for the raise. The obvious
+measurement — step frames until the screen stops changing — is confounded by
+Note Pad's worker waking every `NP_WTICKS` ticks and drawing, so it reports
+when the WORKER settled and not when the raise did. Bracket it kernel-side
+instead (a breakpoint either end of `wm_raise`), and A/B it by patching the
+`call wm_su_try` to three NOPs in the running guest, which needs no rebuild.
+The first attempt at that patch used the listing's `.text`-relative offset and
+hit the wrong instruction — the address to write is the one `os88marty read`
+confirms holds `E8`.
 
 1. **Per-window save-under for a raise, opt-in via a window flag** — the
    biggest single latency left, ~578 ms → ~20 ms, using `gfx_save`,

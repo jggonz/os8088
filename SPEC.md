@@ -3986,6 +3986,51 @@ already does with every mouse-up. On a machine with no mouse (§9.6) the same
 press is a latched level, and `kbm_ui`'s end-of-pass service releases it for
 exactly this case — a pass that dispatched a press and did not track it.
 
+### 11.96 The raise cache — a covered window put back, not redrawn
+
+Raising an obscured window measured **1,026 ms** on a 4.77MHz 8088, and
+**578 ms of it is `W_PAINT` lettering cells that were genuinely overwritten**
+while the window was covered (docs/NOTEPAD-NOTES.md §5.3). There is no faster
+way to draw them, so the only way under one typematic repeat is not to draw
+them: `wm_su_take` banks the content when the window is covered and
+`wm_su_try` puts it back when it is raised — **~10 ms of blit each way**.
+
+It is a **purgeable claim** (§50.6), `MEM_P_WSAVE`, which is what makes it
+affordable to take speculatively: the memory goes back the instant anything
+else needs it, and `mem_shed_one` zeroes `[wm_su_seg]` on the way out so
+`wm_su_ck`'s first test is the notice. A machine with no room behaves exactly
+as it did before this existed, because the fallback *is* the old code.
+
+**There is no opt-in, and that is deliberate.** An API slot was the obvious
+shape — `WF_SIZABLE` and `WF_SNAP` are both opted into that way — and it is
+the wrong one here. The only reason to opt *out* would be to stop a window
+spending memory it does not need, and purgeable memory is not spent; the
+kernel also knows everything the decision needs (the rect, whether the block
+fits) and the application knows nothing extra.
+
+**One cache for the machine**, like the menu's save-under: it covers the case
+that was reported — two windows alternating — and bounds the memory at one
+block rather than one per window.
+
+What makes it safe is that **a covered window cannot change its pixels without
+the kernel finding out**. §11.3 already requires a background painter to arm a
+clip region before it draws, because a covered window that draws without one
+paints over the window on top of it — so `wm_clip_set` dropping the cache
+covers every application at once, with no rule for an application to
+remember. The rest are free: `wm_su_ck` compares the **banked rect with the
+window's rect now**, so a move, a resize, a `wm_fit` and an adapter change all
+invalidate by disagreeing rather than by being hooked; and `wm_destroy` drops
+it, because a reused slot would otherwise alias the window pointer.
+
+Two orderings are load-bearing. The take happens **after `wm_draw_title` and
+before the incoming window draws**, which is the last moment the outgoing
+window's pixels are both correct and still on the glass. And `wm_su_win` is
+**published last**, so a cache whose claim succeeded but whose `gfx_save` did
+not can never be tried.
+
+The chrome is redrawn either way: it is cheap, and a raise changes the title
+bar's pinstripes, so banking it would be banking the wrong picture.
+
 ## 12. menu.inc
 
 Menu bar: rows 0..MBAR_H-1, white, 1px black line at row MBAR_H-1. Its
@@ -22153,6 +22198,87 @@ replaced it is *live*: arm double buffering and the figure rises 150K, close
 Paint and it falls by whatever Paint held. `mem_claimed_kb` sums every
 claim; `mem_kernel_kb` sums only the `0xFFxx`-tagged ones, so a package's
 claim lands on the package's row rather than on System's.
+
+### 50.6 Purgeable claims
+
+A cache the kernel can take back the instant anything else needs the room —
+the Macintosh Memory Manager's **purgeable handle**, which is where the name
+comes from and which this OS is that machine's homage to.
+
+**It is encoded in the owner, and that is what makes it cost nothing.** The
+owner word already carries a namespace — `0..INST_MAX-1` an instance slot,
+`0xFFxx` a kernel tag — so **`0xFExx` is "a kernel tag, and purgeable"**.
+Three things fall out of that with no new field anywhere: the claim record
+does not grow, so `mem_tab` is the size it was; `osapi_claim_snapshot`
+(§20.9) is unchanged, so no `.o88` is invalidated and the Task Manager can
+pick the class out of what it already reads; and `mem_claim` cannot be asked
+for a purgeable claim and place it as an ordinary one, because **the tag is
+the request**.
+
+**To be purgeable, a claim must have exactly one kernel word naming it, and a
+zero in that word must ALREADY mean "no buffer, do it the slow way".** That is
+the whole contract. `mem_pg_own` maps tag → that word and `mem_shed_one`
+zeroes it *before* freeing the block, so there is no window in which the word
+names memory somebody else holds — and the consumer's existing refusal path
+is the notification. `menu_drop`'s `or ax, ax` / `jz .nosave` is the shape
+every purgeable consumer must already have.
+
+#### 50.6.1 Where they are placed
+
+`mem_pg_ceil` bounds the scan at **the lowest region base**, so a purgeable
+claim is highest-fit *inside the data arena* and never in the region arena.
+
+The obvious placement — with the regions, top-down — is wrong, and it is
+wrong for the reason §50.3 exists: a purgeable block among the regions is
+indistinguishable from a region to the placement scan while it is live, so it
+splits exactly the run a package needs. Shed-and-retry does not rescue that,
+because it fires only on a **refusal**, and a region that merely fits *worse*
+has been fragmented with nothing noticing. Highest-fit in the data arena keeps
+§50.3's property that everything in the region arena is a region, and still
+puts the block against the free middle — the one run both arenas grow toward,
+and so the only one worth enlarging when it is shed.
+
+A region is told from a data claim by its owner alone: §50.3 makes a region's
+owner the instance **slot** and its data claims' the **segment**, so "below
+`INST_MAX`" is the test and this needs no new field either.
+
+#### 50.6.2 Shed and retry, not discard and notify
+
+`mem_claim` already fails when no hole fits and every caller already has a
+refusal path, so the first cut needs no notification protocol at all: on
+failure, **shed one purgeable block and try again**, until it succeeds or
+there is nothing left to shed. It terminates because each shed removes a
+record and `mem_shed_one` refuses when there are none.
+
+It is on **`mem_claim_hi`'s path too**: a package load is a user action and a
+cache is not, so the cache loses every time.
+
+This also side-steps a real concurrency trap. A discard is only safe when the
+owner is not mid-use, and `mem_claim` is called from the loader, from `kmain`,
+from drivers and from window callbacks — some holding the gfx lock and some
+not. With kernel caches that are re-derived at next use, "when is the owner
+told" has no answer to get wrong.
+
+When packages eventually get this, the rule to publish is that **a purgeable
+claim may only be touched under the gfx lock**, because the lock is what
+already serialises a worker against the UI task — and they will need a
+handle-based ABI rather than a bare segment, since a package that keeps a
+discarded segment in its own bss writes into somebody else's memory.
+
+#### 50.6.3 What the Task Manager shows
+
+**Purgeable is in nobody's total, not even System's.** It is not memory
+anyone can run out of — the next claim that needs it takes it — so counting it
+as used would be the *misleading* answer rather than the honest one, and a
+bar that reads full while the machine is not is worse than a figure nobody
+reads.
+
+It gets **one line of its own**, and that line is a developer instrument: it
+is how you see that a cache was claimed rather than refused, and that a shed
+actually happened. `mem_avail` still reports only genuinely free space, which
+under-reports for a caller that would have succeeded after a shed — a
+conservative direction, and the one that keeps `bb_canfit` and Paint's
+tier-sizing honest.
 
 ## 51. driver.inc — loadable drivers
 
