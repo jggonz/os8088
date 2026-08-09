@@ -4186,6 +4186,37 @@ correctness.** Note Pad opts in and is entitled to: everything that draws
 there goes through `np_redraw` or `np_paint`, and the worker's two background
 drawers ask `OSAPI_WM_OBSCURED` first.
 
+**Verified on a cycle-accurate 5150, with a control** — and the state it needs
+is not the one the obvious test produces, which is why the first attempt was
+inconclusive. **The window that owns the cache is never frontmost**: it is
+taken in `wm_raise` from the *outgoing* front window, and `wm_hit` gives the
+close and minimize boxes to the frontmost window alone. So "minimize Note Pad
+and restore it" cannot reach the hook — by the time its minimize box is
+clickable the cache has been spent by `wm_su_try` on the raise that put it
+there.
+
+The state is reachable by **promotion** (§11.91): hide the window covering it
+and the one underneath comes to the front without `wm_draw_win` running on it
+— *provided it does not overlap the damage*, or that repaint spends the cache
+honestly. Side by side, it survives. Then its minimize box is live and
+`wm_hide` runs with `BX == [wm_su_win]`. Measured:
+
+| | hide drops the cache | restore runs `W_PAINT` |
+|---|---|---|
+| as shipped | yes | yes |
+| `call wm_su_drop` NOPped out in the running guest | no | **no** |
+
+The control is the half that matters: without the hook the cache survives the
+hide and `wm_su_try` *succeeds* on the restore — putting back a picture of the
+window as it was before it went down, which is precisely the defect this
+section describes. It is also the reason a second application may now opt in.
+
+(That verification was only possible after §50.6.1's placement bug was fixed.
+Until then the claim was refused on any desktop with a Disk window open, so
+the cache was never taken and there was nothing to drop — and "no `W_PAINT`"
+is what a *missed click* reports too, which is how the first attempt came back
+inconclusive rather than wrong.)
+
 ## 12. menu.inc
 
 Menu bar: rows 0..MBAR_H-1, white, 1px black line at row MBAR_H-1. Its
@@ -23033,9 +23064,34 @@ has been fragmented with nothing noticing. Highest-fit in the data arena keeps
 puts the block against the free middle — the one run both arenas grow toward,
 and so the only one worth enlarging when it is shed.
 
-A region is told from a data claim by its owner alone: §50.3 makes a region's
-owner the instance **slot** and its data claims' the **segment**, so "below
-`INST_MAX`" is the test and this needs no new field either.
+**A region is `I_SPTR` of a `KIND_PKG` instance, and nothing else is.** That
+test replaces the one this section shipped with, which was "the owner is below
+`INST_MAX`" — §50.3's rule read one step too far. §50.3 says a *package's*
+region is owned by the instance **slot** and a *package's* data claims by its
+**segment**; it says nothing about a **built-in**, whose data claims are
+stamped with its slot as well, and `mem_free_rec` is where that is written
+down in the code ("a built-in's claims are stamped with its instance slot (the
+Disk window's cache)").
+
+So "below `INST_MAX`" also matched a Disk window's 3KB listing cache (§22.1) —
+a data claim, placed **bottom-up**, and therefore sitting at the very floor of
+the heap. Measured with README.TXT open from a Disk window: the ceiling came
+back as that cache's base, `0x17C0` against a heap floor of `0x1680`, with the
+FAT window (§18.8.1) already filling every paragraph between them. Every
+raise-cache claim was refused on a machine with **505KB free**, so §11.96 never
+once fired on the commonest desktop there is — one Disk window and one
+document. It is not a rare shape: a Disk window is how a document gets opened.
+
+The failure was silent in both directions, which is why it survived a round.
+`wm_su_take` treats a refusal as "no cache, raise the ordinary way" (correctly
+— that is the whole contract of a purgeable claim), and §11.96.1's `wm_hide`
+hook could not be verified *because there was never a cache to drop*: the
+verification that was attempted reported "no `W_PAINT`", which is also what a
+missed click reports.
+
+The current test is two compares on the few records that reach it: the owner
+is below `INST_MAX`, that instance is a package, and the claim's base is its
+`I_SPTR`.
 
 #### 50.6.2 Shed and retry, not discard and notify
 

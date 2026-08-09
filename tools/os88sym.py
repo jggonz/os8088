@@ -24,6 +24,19 @@ described a different binary is an error rather than a subtle wrong answer.
 
 Knob builds (`VIDEO=`, `DISKCNT=1`, ...) move everything: pass the same
 `-D`s with `--define`, or the addresses will be a different kernel's.
+
+**AND THE SECTION DECIDES THE SEGMENT.** This answered `KERNEL_SEG:offset` for
+every symbol for as long as it existed, which is right for `.text` and `.bss`
+and wrong for the other three: `.cold` runs at COLD_SEG, `.ovl` at FAT_SEG and
+`.lowbss` lives at LOW_SEG (SPEC.md 2.1/2.5/2.6). That is 25KB of resident
+code and every task stack, disk buffer and claim record - and the wrong answer
+is a small plausible address INSIDE the kernel image that reads back happily
+and means nothing, which is the exact failure this file was written to stop,
+one section over. It cost a session: `mem_tab` resolved into `.text`, the
+claim map read as 32 rows of noise, and a heap with 505KB free looked full.
+So the map is parsed with `[map all]` now, symbols are attributed to their
+section, and the four segment bases are read out of the map's own equates -
+so a rung that moves cannot desync them.
 """
 
 import os
@@ -34,17 +47,93 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 KERNEL_SEG = 0x0060                      # SPEC.md 2 - one place, one meaning
 
+# Which segment each section is addressed through at run time. The VALUES come
+# out of the map's own equates, so only this mapping lives here - and a section
+# nobody has named is an error, not a guess at KERNEL_SEG (which is how the
+# bug in the header went unnoticed: the wrong answer was always plausible).
+SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
+               ".cold": "COLD_SEG", ".ovl": "FAT_SEG", ".lowbss": "LOW_SEG"}
+
 _cache = {}
 
 
+def _parse_map(path):
+    """-> ({name: virtual offset}, {name: section}, {equate: value})
+
+    nasm's `[map all]` groups the symbol listing under `---- Section .x ----`
+    headers and lists every EQU under `---- No Section ----`. Two columns
+    precede the name, real and virtual; virtual is the one an offset within
+    the section's own segment.
+    """
+    off, sect, equ = {}, {}, {}
+    cur = None
+    insyms = False
+    for line in open(path):
+        s = line.strip()
+        if s.startswith("-- Symbols"):
+            insyms = True
+            continue
+        if not insyms:
+            continue
+        if s.startswith("---- Section "):
+            cur = s.split()[2]
+            continue
+        if s.startswith("---- No Section"):
+            cur = None
+            continue
+        parts = s.split()
+        if len(parts) == 2 and parts[1][0].isalpha():        # "Value  NAME"
+            try:
+                equ[parts[1]] = int(parts[0], 16)
+            except ValueError:
+                pass
+        elif len(parts) == 3 and cur and parts[2][0].isalpha():
+            try:
+                off[parts[2]] = int(parts[1], 16)
+                sect[parts[2]] = cur
+            except ValueError:
+                pass
+    return off, sect, equ
+
+
 def syms(defines=(), check=True):
-    """{name: offset in KERNEL_SEG} for every label in the kernel.
+    """{name: offset within its OWN segment} for every label in the kernel.
+
+    Unchanged for `.text` and `.bss`, which are KERNEL_SEG's; `linear()` is
+    what turns any of them into an address, because only it knows the segment.
 
     `check` compares the temporary build against `build/kernel.bin` and
     raises if they differ - which means the tree has been edited since the
     last `make`, and every address below would describe a kernel that is not
     the one running.
     """
+    return _load(defines, check)[0]
+
+
+def sections(defines=(), check=True):
+    """{name: the section it is in}, for anything that needs to know."""
+    return _load(defines, check)[1]
+
+
+def segment_of(name, defines=(), check=True):
+    """The segment `name` is addressed through at run time."""
+    off, sect, equ = _load(defines, check)
+    if name not in off:
+        raise KeyError("no kernel symbol %r" % name)
+    s = sect[name]
+    if s not in SECTION_SEG:
+        raise RuntimeError("section %s has no segment in SECTION_SEG - add it "
+                           "rather than assuming KERNEL_SEG" % s)
+    nm = SECTION_SEG[s]
+    if nm == "KERNEL_SEG":
+        return KERNEL_SEG
+    if nm not in equ:
+        raise RuntimeError("the map has no %s equate to place section %s"
+                           % (nm, s))
+    return equ[nm]
+
+
+def _load(defines=(), check=True):
     key = tuple(defines)
     if key in _cache:
         return _cache[key]
@@ -57,7 +146,7 @@ def syms(defines=(), check=True):
     asm = os.path.join(tmp, "kernel.asm")
     binf = os.path.join(tmp, "k.bin")
     with open(asm, "w") as f:            # the directive emits no bytes, which
-        f.write("[map symbols %s]\n" % mapf)     # is what `check` proves
+        f.write("[map all %s]\n" % mapf)         # is what `check` proves
         f.write(body)
 
     cmd = ["nasm", "-f", "bin", "-w+error",
@@ -78,29 +167,25 @@ def syms(defines=(), check=True):
                 "run `make` (or pass the knob's --define) before trusting any "
                 "address from it.")
 
-    out = {}
-    with open(mapf) as f:
-        for line in f:
-            parts = line.split()
-            # "  <realaddr>  <virtaddr>  <name>" in the symbols section
-            if len(parts) == 3 and parts[2] and parts[2][0].isalpha():
-                try:
-                    out[parts[2]] = int(parts[1], 16)
-                except ValueError:
-                    pass
+    out, sect, equ = _parse_map(mapf)
     if not out:
         raise RuntimeError("nasm produced an empty symbol map (%s)" % mapf)
-    _cache[key] = out
-    return out
+    _cache[key] = (out, sect, equ)
+    return _cache[key]
 
 
 def linear(name, defines=()):
-    """The 20-bit address a debugger wants: KERNEL_SEG:offset flattened."""
+    """The 20-bit address a debugger wants: <this symbol's segment>:offset.
+
+    NOT always KERNEL_SEG - see the header. `.cold`, `.ovl` and `.lowbss` each
+    run somewhere else, and getting that wrong yields a readable address in
+    the wrong place rather than an error.
+    """
     s = syms(defines)
     if name not in s:
         raise KeyError("no kernel symbol %r (a package's symbols are in its "
                        "own segment and are not here)" % name)
-    return KERNEL_SEG * 16 + s[name]
+    return segment_of(name, defines) * 16 + s[name]
 
 
 def main(argv):
@@ -114,9 +199,16 @@ def main(argv):
         else:
             names.append(a)
     s = syms(defines)
+    sect = sections(defines)
+
+    def row(n):
+        seg = segment_of(n, defines)
+        print("%-28s %-8s %04X:%04X  %05X"
+              % (n, sect[n], seg, s[n], seg * 16 + s[n]))
+
     if want_all:
-        for n in sorted(s, key=lambda k: s[k]):
-            print("%-28s %04X  %05X" % (n, s[n], KERNEL_SEG * 16 + s[n]))
+        for n in sorted(s, key=lambda k: (sections(defines)[k], s[k])):
+            row(n)
         return 0
     if not names:
         print(__doc__.strip())
@@ -125,7 +217,7 @@ def main(argv):
         if n not in s:
             print("%-28s ?" % n)
             continue
-        print("%-28s %04X  %05X" % (n, s[n], KERNEL_SEG * 16 + s[n]))
+        row(n)
     return 0
 
 

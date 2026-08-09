@@ -448,27 +448,60 @@ mem_claim_1:
 ; is a region, and the block still sits against the free middle, which is the
 ; one run both arenas grow toward and the only one worth enlarging.
 ;
-; A region is told from a data claim by its owner and nothing else: 50.3 makes
-; a region's owner the instance SLOT and its data claims' the SEGMENT, so
-; "below INST_MAX" is the test and no new field is needed for this either.
+; AN INSTANCE SLOT IN MC_OWN IS NOT A REGION, and reading it as one made this
+; whole feature dead on the commonest desktop there is. 50.3's rule is that a
+; PACKAGE's region is owned by the instance slot and a PACKAGE's data claims by
+; its segment - it says nothing about a BUILT-IN, whose data claims are stamped
+; with its slot as well, and mem_free_rec forty lines below is where that is
+; written down ("a built-in's claims are stamped with its instance slot (the
+; Disk window's cache)"). So "below INST_MAX" also matches a Disk window's
+; 3KB listing cache (SPEC.md 22.1), which is a data claim placed BOTTOM UP and
+; therefore sits at the very floor of the heap. Measured, with README.TXT open
+; from a Disk window: the ceiling came back as that cache's base, 0x17C0
+; against a heap floor of 0x1680 - and the FAT window already filled every
+; paragraph between them, so every raise-cache claim was refused on a machine
+; with 505KB free and SPEC.md 11.96 never once fired.
+;
+; A region is what a package's image IS: I_SPTR of a KIND_PKG instance. That is
+; the test, and it is two compares on the few records that get that far.
 ; -----------------------------------------------------------------------------
 mem_pg_ceil:
     push bx
     push cx
+    push si
+    push di
     mov ax, [mem_top]
     mov bx, mem_tab
     mov cx, MEM_MAX
 .scan:
     cmp word [ss:bx+MC_SEG], 0
     je .next
-    cmp word [ss:bx+MC_OWN], INST_MAX
-    jae .next                   ; a data claim or a kernel tag, not a region
     cmp [ss:bx+MC_SEG], ax
-    jae .next
-    mov ax, [ss:bx+MC_SEG]
+    jae .next                   ; at or above the lowest region found so far:
+                                ; it cannot lower the ceiling whatever it is
+    mov di, [ss:bx+MC_OWN]
+    cmp di, INST_MAX
+    jae .next                   ; a kernel tag, or a package's own segment -
+                                ; either way a data claim
+    mov si, di                  ; si = di*I_RECSZ, without CL: the loop counter
+    shl si, 1                   ; is in CX and the 8086 has no shl reg, imm
+    shl si, 1
+    shl si, 1
+    shl si, 1
+    shl si, 1
+    add si, inst_tab
+    test byte [si+I_KIND], KIND_PKG
+    jz .next                    ; a built-in stamps its DATA claims with its
+                                ; slot too - see the header
+    mov di, [ss:bx+MC_SEG]
+    cmp di, [si+I_SPTR]
+    jne .next                   ; ...and a package's region is the one claim
+    mov ax, di                  ; whose base is its I_SPTR
 .next:
     add bx, MC_SIZE
     loop .scan
+    pop di
+    pop si
     pop cx
     pop bx
     ret

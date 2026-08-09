@@ -11,9 +11,10 @@ re-deriving it, and so a decision that was right in one round is re-opened for
 the right reason in the next rather than for a hunch.
 
 **Read §5 before picking up any of the open reports and §6 before measuring
-anything.** Between them they carry four wrong diagnoses that each survived a
-casual look, and three of the four were failures of the *harness* rather than
-of the code.
+anything.** Between them they carry seven wrong diagnoses that each survived a
+casual look, and five of the seven were failures of the *harness* rather than
+of the code — including one, §6.7, in the tool written to prevent exactly that
+class of mistake.
 
 | | |
 |---|---|
@@ -22,7 +23,7 @@ of the code.
 | §3 | deliberately rejected, with the reason |
 | §4 | what shipped, and where each piece lives |
 | §5 | open field reports, with the diagnosis so far |
-| §6 | measuring Note Pad, and the six ways the apparatus lied |
+| §6 | measuring Note Pad, and the seven ways the apparatus lied |
 | §7 | the latency budget: one typematic repeat, and what is still over it |
 
 ---
@@ -400,6 +401,25 @@ terminator the same click reads **445 ms**, because the trace ends at the last
 label inside the callback and §6.5's rule bills `np_paint`'s own 578 ms to
 nobody. The first number this measurement produced was that 445.
 
+**SPEC.md §11.96's raise cache is the answer to this and it now actually
+runs.** It shipped not working: §50.6.1 placed a purgeable claim under a
+ceiling computed by reading any claim owned by an instance *slot* as a region,
+and a Disk window's 3KB listing cache is exactly that — a data claim, placed
+bottom-up, at the floor of the heap. So on the one desktop this report is
+about, the ceiling was 5KB above the heap floor with the FAT window already
+filling it, every claim was refused, and the cache was never taken. Verified
+on the machine, before and after the fix: `[wm_su_seg]` 0 always → `0x9A40`,
+and a raise of a covered Note Pad now runs `wm_su_try` and **no `np_paint` at
+all**. The 578 ms is gone rather than reduced.
+
+Two things about that are worth carrying forward. **A refusal was the correct
+behaviour of every piece involved** — `mem_claim` refuses, `wm_su_take` treats
+a refusal as "no cache, raise the ordinary way", and the raise then repaints
+exactly as it did before the feature existed — so the feature being 100% dead
+looked identical to the feature being absent, on every screen and in every
+timing. And **the arithmetic was visible in the claim table the whole time**;
+what stopped anyone reading it is §6.7 below.
+
 ### 5.2.1 The first scroll after opening leaves ~11 cells stale
 
 **Found while pixel-verifying §27.13, and it PREDATES all of this work** — the
@@ -463,11 +483,12 @@ set it. `make npbench` reports what it costs on the machine in front of you.
 
 ---
 
-## 6. Measuring Note Pad, and the four ways the apparatus lied
+## 6. Measuring Note Pad, and the seven ways the apparatus lied
 
 Every one of these produced a confident wrong answer that looked right.
 PERFORMANCE.md Part 4's rule — the apparatus is the thing most likely to be
-wrong — earned its keep four times in one session.
+wrong — has now earned its keep seven times, and §6.7 is the sharpest: it is
+the same defect, in the tool built to stop it, one section over.
 
 ### 6.1 The A/B must wait the same length of time on both sides
 
@@ -560,6 +581,31 @@ IRQ1, so Ctrl+Z did nothing at all until each event got its own advance.
 
 `Tracer.collect` never showed any of this because it already does `step(1)`
 before every `advance`, for the unrelated reason in §6.5's second bullet.
+
+### 6.7 `os88sym.py` answered `KERNEL_SEG:offset` for three other segments
+
+The tool that exists so nobody reads a `.bss` symbol out of a NASM listing had
+the same defect one section over, and it cost this round a session. `linear()`
+added `KERNEL_SEG * 16` to **every** symbol — right for `.text` and `.bss`,
+wrong for `.cold` (COLD_SEG), `.ovl` (FAT_SEG) and `.lowbss` (LOW_SEG), which
+between them hold 25KB of resident code and every task stack, disk buffer and
+claim record.
+
+The wrong answer is the bad kind: a small plausible address *inside the kernel
+image*, which reads back without error. `mem_tab` resolved into `.text`, so
+the claim map came out as 32 rows of noise — `0x0efe, 44,642 KB, owner
+0x5859` — and a heap with 505KB free read as "581,598 KB claimed of 550, zero
+free", which is a diagnosis of the wrong thing entirely. `mem_tab` is at
+`0x15200`; the tool said `0x01400`.
+
+Fixed: the map is cut with `[map all]`, symbols are attributed to their
+section, and the four segment bases are read from the map's own equates so a
+rung that moves cannot desync them. `os88sym.py --all` prints the section and
+`seg:off` now. **A section not in `SECTION_SEG` is an error rather than a
+guess at `KERNEL_SEG`** — guessing is what made this invisible.
+
+Confirm a suspicious address against `SS` (which is `LOW_SEG` for every task)
+before believing anything read through it.
 
 And one that is not the apparatus but cost a whole attempt: **a fix must be
 measured against the symptom it claims to fix.** §27.7.7 is correct, targets a
