@@ -82,7 +82,10 @@ ZID_RESTORE  equ 3
 ; using no more than 32 stack entries at a time gets 90 levels of recursion
 ; out of 1024 words, and "old Infocom games will all run with 512 words"; 2048
 ; is four times that and still one claim.
-ZI_STKKB     equ 4
+ZI_STKKB     equ 16     ; and zexec.inc's ZX_STKBYTES is DERIVED from this,
+                        ; because the two disagreed once (4KB claimed, 16KB
+                        ; bounds-checked) and the story ran off the end of its
+                        ; own claim into the next one
 ZI_STKMAX    equ ZI_STKKB * 1024
 
 ; A frame, as it sits on the Z-stack. Locals follow the header, then this
@@ -391,6 +394,8 @@ zi_service:
     push di
     cmp byte [zf_req], ZREQ_NONE
     je .out
+    cmp byte [zf_req], ZREQ_RESTART
+    je .restart
     cmp byte [zf_req], ZREQ_SAVE
     jne .restore
     call zi_savename                ; seed Save with STORY.SAV
@@ -407,10 +412,85 @@ zi_service:
     mov di, zi_ondlg
     call OSAPI_FILE_DLG             ; CF=1 = one is already up; ignore it,
                                     ; the request simply stands
+    jmp short .out
+
+    ; @restart. No dialog: the story is the one already open, and the only
+    ; thing that has to happen is that dynamic memory goes back to how it was
+    ; on disk. There is no resident pristine copy (SPEC.md 59.4), so this is a
+    ; re-read - which is a FILE slot, which is why it is here on the UI task
+    ; and not in the worker that executed the opcode.
+    ;
+    ; Only the bytes below [zf_static] are re-read. Static and high memory
+    ; cannot have changed: zm_wrok refuses every write at or above it, so the
+    ; copy in the claim is still the copy that was loaded.
+.restart:
+    call zi_reload
+    jmp short .out
 .out:
     pop di
     pop si
     pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; zi_reload - put dynamic memory back the way the file has it (UI TASK)
+; in:  nothing; out: [zf_reqres] and [zf_req] answered; preserves all registers
+;
+; OSAPI_FILE_READ_AT is what makes a resident pristine copy unnecessary: it
+; reads a RANGE, so the restart costs one seek and [zf_static] bytes rather
+; than a permanent second buffer the size of dynamic memory. On the target
+; machine that is one int 13h run - about 400ms - for something the player
+; asked for and expects to take a moment.
+;
+; zm_setup runs again afterwards because the header just came back off disk
+; with the story's own bytes in it: the interpreter number, the screen
+; dimensions and the Flags 1/2 capability bits all have to be re-asserted, and
+; zm_setup is the one routine that owns which those are (Standard 11.1).
+; -----------------------------------------------------------------------------
+zi_reload:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov byte [zf_reqres], ZRES_FAIL
+    call zm_dynlen                  ; AX = [zf_static]
+    or ax, ax
+    jz .done
+    mov cx, ax
+    mov es, [zf_sseg]               ; the story claim, at offset 0
+    xor bx, bx
+    xor dx, dx
+    xor ax, ax                      ; DX:AX = read from the start of the file
+    mov si, zi_story
+    call OSAPI_FILE_READ_AT         ; out CF=0 and DX:AX = bytes delivered
+    jc .done
+    call zm_setup                   ; re-assert the header (Standard 11.1)
+    jc .done
+    mov byte [zf_reqres], ZRES_OK
+.done:
+    mov byte [zf_req], ZREQ_NONE    ; last: the worker is watching this byte
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; zi_restart - @restart's worker half (WORKER)
+; out: CF = 0 if dynamic memory was reloaded; preserves all registers
+;
+; zexec.inc's zxo_restart re-boots the VM itself once this answers, so all
+; this owes it is the memory.
+; -----------------------------------------------------------------------------
+zi_restart:
+    push ax
+    mov al, ZREQ_RESTART
+    call zi_request
     pop ax
     ret
 
@@ -2175,3 +2255,129 @@ zi_script_flush:
 
 zi_scrname:  db 'SCRIPT.TXT', 0
 zi_m_scrfull: db 'Transcript full - it stops here.', 0
+
+; The find record is ours, and the %define has to precede its first USE - a
+; %define expands at the use site but NASM still reads this file top to bottom.
+
+; The find record is ours. The %define must precede its first USE: a %define
+; expands at the use site, but NASM still reads this file top to bottom.
+%define zi_find (os88_image_end + ZIO_SLACK + 46)   ; OSAPI_FIND_SZ = 24
+
+; -----------------------------------------------------------------------------
+; zi_openpend - open the story a double-click named (UI TASK, first paint)
+; in:  [zf_pend] = a NUL 8.3 name; out: nothing; the notice says why on failure
+;
+; The association path (SPEC.md 54.7) hands over a NAME and nothing else,
+; while the file dialog hands over a name AND the size - and the size is what
+; SPEC.md 59.4's refusal is decided from, before any disk I/O. So this looks
+; the size up the only way a package can: OSAPI_FILE_FIND walks the mount
+; snapshot, which is in RAM, so the walk costs no motor time either.
+;
+; Then it joins the dialog's own path at zi_dlg_story, so a story opened by
+; double-click gets exactly the same sizing, the same refusal and the same
+; message as one opened through File > Open Story. Two ways in, one decision.
+; -----------------------------------------------------------------------------
+zi_openpend:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+
+    ; ES FIRST, and this is not a formality. We are called from W_PAINT, so ES
+    ; is KERNEL_SEG (SPEC.md 20.5) - and `rep movsb` stores through ES:DI. The
+    ; first version of this proc copied the name before setting ES and wrote
+    ; thirteen bytes into the KERNEL's segment, which assembles cleanly, runs,
+    ; and leaves [zi_name] empty so the search below finds nothing.
+    push ds
+    pop es
+
+    ; zi_dlg_story reads [zi_name], not [zf_pend].
+    mov si, zf_pend
+    mov di, zi_name
+    mov cx, 13
+    cld
+    rep movsb
+
+    xor cx, cx                      ; ordinal 0 = start of this directory
+.scan:
+    mov di, zi_find
+    call OSAPI_FILE_FIND            ; out CF=1 at the end, else CX = next
+    jc .nofile
+    push cx
+    mov si, zi_find
+    mov di, zi_name
+    call zi_samename
+    pop cx
+    jne .scan
+    mov ax, [zi_find + 14]          ; the type word
+    cmp ax, OSAPI_FT_DIR
+    jae .nofile                     ; a folder with the story's name is not it
+    mov cx, [zi_find + 18]          ; the size, all 32 bits of it
+    mov dx, [zi_find + 20]
+    mov [zi_fsz_l], cx
+    mov [zi_fsz_h], dx
+    push ds
+    pop es                          ; zi_dlg_story and zi_load expect ES back
+    call zi_dlg_story               ; sizing, refusal and the load, shared
+    jmp short .out
+.nofile:
+    mov si, zi_m_notfound
+    call zw_notice
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+zi_m_notfound: db 'That story is not on this disk.', 0
+
+; -----------------------------------------------------------------------------
+; zi_samename - compare two NUL 8.3 names, case-insensitively
+; in:  SI = one, DI = the other (both in our segment)
+; out: ZF=1 if they match; preserves all registers
+;
+; Case-insensitive because the two sources disagree: os88disk.py uppercases
+; every name it writes, but a host OS that rewrote the disk may not have.
+; -----------------------------------------------------------------------------
+zi_samename:
+    push si
+    push di
+    push ax
+    push bx
+.loop:
+    mov al, [si]
+    mov bl, [di]
+    cmp al, 'a'
+    jb .noa
+    cmp al, 'z'
+    ja .noa
+    sub al, 32
+.noa:
+    cmp bl, 'a'
+    jb .nob
+    cmp bl, 'z'
+    ja .nob
+    sub bl, 32
+.nob:
+    cmp al, bl
+    jne .out                        ; ZF=0
+    or al, al
+    jz .out                         ; both hit NUL together: ZF=1
+    inc si
+    inc di
+    jmp short .loop
+.out:
+    pop bx
+    pop ax
+    pop di
+    pop si
+    ret
+
+

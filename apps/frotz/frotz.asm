@@ -212,6 +212,13 @@ zf_entry:
     call zf_copyname                ; ES:SI -> DS:DI, NUL, at most 13 bytes
     mov byte [zf_pendok], 1
 .noarg:
+    ; **RELOAD BX.** Our contract is BX = the window pointer, and everything
+    ; between wm_create and here is free to clobber it - OSAPI_ARG_FILE does.
+    ; Returning CF=0 with a bogus BX is not defended against: the loader's
+    ; inst_bind_win divides by it (wm_ptr2idx) with no int 0 handler, so the
+    ; whole machine hangs with the cursor still moving because the mouse ISR
+    ; keeps running. That is exactly how this was found.
+    mov bx, [zf_win]
     clc                             ; wm_create's CF was consumed at .out's jc
 .out:
     pop dx
@@ -275,6 +282,17 @@ zf_paint:
 
     mov [zf_win], si                ; the window pointer never changes, but a
                                     ; repaint is the cheapest place to be sure
+
+    ; A story named by a double-click (SPEC.md 54.7) is opened HERE and not in
+    ; the entry proc, because opening one draws - the refusal notice, the
+    ; status line, the first screenful - and the entry proc may not. The first
+    ; paint is the earliest moment that is allowed to, and the flag makes it
+    ; happen exactly once.
+    cmp byte [zf_pendok], 0
+    je .nopend
+    mov byte [zf_pendok], 0
+    call zi_openpend
+.nopend:
 
     cmp byte [zf_state], ZFS_RUN
     jne .nostory
@@ -605,6 +623,9 @@ ZFS_RUN     equ 2
 ZREQ_NONE   equ 0                   ; [zf_req] - see zio.inc
 ZREQ_SAVE   equ 1
 ZREQ_RESTORE equ 2
+ZREQ_RESTART equ 3                  ; @restart: dynamic memory is re-read off
+                                    ; the floppy, and a file slot is the UI
+                                    ; task's (SPEC.md 59.4/59.6)
 
     OS88_BSS ZF_BSS_TOTAL
     OS88_IMAGE_END

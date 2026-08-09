@@ -1766,6 +1766,37 @@ zw_cursor:
     ret
 
 ; -----------------------------------------------------------------------------
+; zw_getcur - where the cursor is, for @get_cursor (v4+, Standard 15)
+; out: AX = row, BX = column, both 1-BASED; preserves every other register
+;
+; It answers for the SELECTED window, which is the pair zw_cursor writes when
+; the upper one is selected and the pair the wrap engine maintains when the
+; lower one is. The lower window's [zw_col]/[zw_row] are 0-based internally -
+; they index a cell grid - so both are converted here rather than at the eight
+; places that maintain them.
+; -----------------------------------------------------------------------------
+zw_getcur:
+    cmp byte [zw_cur], 0
+    je .lower
+    mov ax, [zw_urow]               ; the upper window's pair is already 1-based
+    mov bx, [zw_ucol]
+    or ax, ax
+    jnz .haverow
+    inc ax
+.haverow:
+    or bx, bx
+    jnz .out
+    inc bx
+    ret
+.lower:
+    mov ax, [zw_row]
+    inc ax
+    mov bx, [zw_col]
+    inc bx
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
 ; zw_upclear - empty the upper window's grid and blank its rows
 ; -----------------------------------------------------------------------------
 zw_upclear:

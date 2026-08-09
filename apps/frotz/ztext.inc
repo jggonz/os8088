@@ -513,6 +513,17 @@ zt_putc:
     push dx
     push si
     push di
+    push es                     ; ES IS THE PROGRAM COUNTER'S SEGMENT
+                                ; (docs/FROTZ-PLAN.md 3.1), and this is the one
+                                ; funnel from the VM into the window - so every
+                                ; drawing path below reaches ES sooner or later
+                                ; and putting it back HERE is what keeps that
+                                ; from being every caller's problem. Without
+                                ; it @print_paddr returned with ES pointing at
+                                ; a font or a back buffer and the interpreter
+                                ; carried on executing whatever lay at the same
+                                ; offset in it, dying hundreds of instructions
+                                ; later somewhere unrelated.
     cmp word [zt_s3n], 0
     jne .mem
     cmp byte [zt_s1off], 0
@@ -528,6 +539,7 @@ zt_putc:
 .mem:
     call zt_memput
 .done:
+    pop es
     pop di
     pop si
     pop dx
