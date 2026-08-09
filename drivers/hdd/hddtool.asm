@@ -66,6 +66,8 @@ hd_tentry:
     je hd_tinst
     cmp al, HDT_SHUT
     je hd_tshut
+    cmp al, HDT_BUSY
+    je hd_tbusy
     stc                         ; a verb from a newer resident than this image
     ret                         ; - refuse it rather than run another one
 
@@ -124,25 +126,85 @@ hd_tinst:
 ; in:  nothing
 ; out: CF = 0
 ;
-; HIDE, because closing an unowned window IS hiding (SPEC.md 38.1) and the
-; API publishes no destroy. That is safe here for the reason it was safe in
-; the single-image driver: this verb is sent at DETACH, so the record is
-; hidden and inert and nothing will ever create a second one - hdtool.inc's
-; note on why the image is not reclaimed any earlier is the same point seen
-; from the other side.
+; DESTROY AND NOT HIDE, which is what OSAPI_WM_DESTROY (slot 0x0398) was added
+; for. Hiding takes the pixels down and leaves the RECORD, holding a W_SEG that
+; names this image - inert while nothing re-shows it, and a loaded gun once the
+; image is freed and something else claims the memory. It also costs a window
+; slot per load, and MAX_WIN is 12: with the image now reclaimed every time the
+; tool is finished with, an open/close cycle that leaked one would run the
+; table out inside a session.
+;
+; hd_iw_shut runs FIRST for whatever else the installer holds; destroying a
+; window it has already hidden is fine - wm_destroy tests the visible bit and
+; passes an empty damage rect when it is clear.
 ; -----------------------------------------------------------------------------
 hd_tshut:
     push ax
     push bx
+    call hd_iw_shut
     mov bx, [hd_twin]
     or bx, bx
     jz .inst
-    call OSAPI_WM_HIDE
+    call OSAPI_WM_DESTROY
     mov word [hd_twin], 0
 .inst:
-    call hd_iw_shut
+    mov bx, [hd_iwin]
+    or bx, bx
+    jz .done
+    call OSAPI_WM_DESTROY
+    mov word [hd_iwin], 0
+.done:
     pop bx
     pop ax
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tbusy - HDT_BUSY: is a window of ours still on screen?
+; in:  nothing
+; out: CF = 1 = yes, do not unload me
+;
+; VISIBLE, not merely allocated. Closing one of our windows is a hide, so
+; [hd_twin] stays non-zero for the rest of the load and testing it would pin
+; this image until detach - which is the whole thing this verb exists to stop.
+;
+; The resident asks; we never volunteer. A "you may free me now" call would be
+; answered by freeing the image the call has to return into.
+; -----------------------------------------------------------------------------
+hd_tbusy:
+    push bx
+    mov bx, [hd_twin]
+    call hd_win_live
+    jc .busy
+    mov bx, [hd_iwin]
+    call hd_win_live
+    jc .busy
+    pop bx
+    clc
+    ret
+.busy:
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_win_live - CF = 1 when BX names a window of ours that is on screen
+; in:  BX = a window pointer, or 0
+; out: CF = 1 visible; CF = 0 = never created, or closed
+; clobbers: flags
+; -----------------------------------------------------------------------------
+hd_win_live:
+    or bx, bx
+    jz .no
+    push cx
+    push dx
+    call OSAPI_WM_GEOM          ; CF = 1 = not visible
+    pop dx
+    pop cx
+    jc .no
+    stc
+    ret
+.no:
     clc
     ret
 

@@ -26822,6 +26822,39 @@ copy (`HSV_SYNC`) and the resident's is the real thing.
   byte, the link base and the dispatcher bytes, against the image that
   actually arrived.
 
+### 52.11.4 The image goes back when the tool is finished with
+
+The tool is freed as soon as it has no window on screen, and at detach
+whatever happens. **The trigger is the Hard Drive page's own paint and
+click**, which sounds as though the user would have to come back to the panel
+and does not: closing the tool's window repaints whatever was under it, and
+what was under it is the Control Panel — so shutting the disk tool runs
+`hd_page_paint`, which reaps on the spot.
+
+**It cannot be the tool saying it has finished.** That call would be answered
+by freeing the image it has to return into, and there is no way to return from
+a routine whose code segment has just been given away. So the tool is *asked*
+(`HDT_BUSY`) and never volunteers, and the two call sites are both the kernel
+calling the resident.
+
+**`HDT_BUSY` answers on VISIBILITY, not on a handle.** Closing one of these
+windows is a hide, so `[hd_twin]` stays non-zero for the rest of the load;
+testing it would pin the image until detach, which is the thing this exists to
+stop. `OSAPI_WM_GEOM`'s CF is the question already published.
+
+**This is the one kernel change the split had avoided**, and §52.11.3 named it
+in advance: `OSAPI_WM_DESTROY`, slot 0x0398, **8 bytes** of jump table
+(measured — `.text` +8, no rung crossed, `KERN_BUDGET` spare unchanged at
+2,560). Without it, `HDT_SHUT` can only hide, every load leaks a window record
+holding a `W_SEG` that names a freed claim, and twelve open/close cycles
+exhaust `MAX_WIN`. The routine already existed and already took the gfx lock
+the way `OSAPI_WM_HIDE` does; only the slot was missing.
+
+The slot is published for the **unowned species** generally (§38.1), not for
+this driver: a package's second window has the same hole, and an app's own
+window needs neither, because closing it tears the instance down and the
+kernel frees the record.
+
 ### 52.11.3 What it costs, stated rather than buried
 
 - **Format now needs the system disk in the drive.** Install always did — it
@@ -26832,17 +26865,14 @@ copy (`HSV_SYNC`) and the resident's is the real thing.
 - **The peak is 3KB worse.** With the tool open the machine holds 7KB + 11KB
   against the old 15KB. That is the right trade — a tool window is open for
   seconds a session and the resident is up forever — but it is a real number.
-- **The image is not reclaimed when the last tool window closes**, only at
-  detach. Closing an unowned window is `wm_hide` (§38.1); the record survives
-  with a `W_SEG` naming the claim, and the next load would create another one,
-  so reclaiming early would leak a window-table slot per open/close cycle —
-  worse than holding the memory. Freeing at detach keeps it to exactly one
-  record per attach, which is what the single-image driver always cost. What
-  would lift it is a published `wm_destroy`: the routine exists and takes the
-  gfx lock the same way `OSAPI_WM_HIDE` does, it simply has no slot. It is
-  deliberately **not** added, because 8 bytes of jump table is still a
-  permanent ABI and the claim of this split is that it costs the kernel
-  nothing.
+- ~~**The image is not reclaimed when the last tool window closes**, only at
+  detach.~~ **Retired — this is §52.11.4.** It was a real limit and the
+  reasoning is worth keeping beside what replaced it: closing an unowned
+  window is `wm_hide` (§38.1), the record survives with a `W_SEG` naming the
+  claim, and the next load creates another — so reclaiming early leaks a
+  window-table slot per open/close cycle, and `MAX_WIN` is 12. Holding 11KB
+  was the better of the two. What lifted it is the published `wm_destroy` the
+  bullet named as the fix and declined to add.
 - **Disk grows ~2.3KB** across the two images — the duplicated helpers, the
   second header and the thunks.
 

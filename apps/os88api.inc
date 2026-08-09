@@ -154,6 +154,17 @@ CWHITE    equ 15
 %define OSAPI_WM_CREATE     KERNEL_SEG:0x0078   ; SI=template; out BX = win ptr, CF on full
 %define OSAPI_WM_SHOW       KERNEL_SEG:0x0080   ; BX=win ptr
 %define OSAPI_WM_HIDE       KERNEL_SEG:0x0088   ; BX=win ptr
+%define OSAPI_WM_DESTROY    KERNEL_SEG:0x0398   ; BX = a window of YOURS; the gfx
+                                 ; lock is held, as OSAPI_WM_HIDE wants it. Frees
+                                 ; the RECORD - hide only takes the pixels down,
+                                 ; and the slot stays used with your segment in
+                                 ; its W_SEG. That is fine for a window you keep
+                                 ; and fatal for one you close while your IMAGE
+                                 ; is about to be unloaded, which is the unowned
+                                 ; species (SPEC.md 38.1): a driver's windows,
+                                 ; and a package's second one. An app's own
+                                 ; window needs neither - closing it tears the
+                                 ; instance down and the kernel frees the record
 %define OSAPI_WM_FRONT      KERNEL_SEG:0x0090   ; BX=win ptr
 %define OSAPI_WM_CONTENT    KERNEL_SEG:0x0098   ; BX=win ptr; out AX=content left, DX=top
 %define OSAPI_WM_OBSCURED   KERNEL_SEG:0x00A0   ; BX=win ptr; out CF=1 if covered

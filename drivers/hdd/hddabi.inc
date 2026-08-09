@@ -114,7 +114,9 @@ HP_MAXSEC    equ 65535          ; the kernel's volume ceiling (SPEC.md 18.7)
 ; image, runs through the header into its own `retf` byte, and returns having
 ; done nothing - no crash, no window, and nothing on screen to say so.
 ; =============================================================================
-HDT_INIT     equ 0              ; in: AX = the resident's segment. Called once
+HDT_INIT     equ 0              ; in: DX = the resident's segment, BX = hd_svc's
+                                ; offset in it. DX and not AX, because AL is
+                                ; the verb. Called once
                                 ; immediately after the image is read, before
                                 ; anything else. out: CF = 1 = refuse (an ABI
                                 ; mismatch), and the resident frees the image
@@ -126,8 +128,12 @@ HDT_SHUT     equ 3              ; close every window, free every claim. Must
                                 ; returns, and a window whose W_SEG names
                                 ; freed memory is a paint into whatever
                                 ; claims it next
-HDT_BUSY     equ 4              ; out: CF = 1 = a window of mine is still up,
-                                ; so do not unload me
+HDT_BUSY     equ 4              ; out: CF = 1 = a window of mine is still
+                                ; VISIBLE, so do not unload me. Visible and not
+                                ; merely allocated: closing one of these is a
+                                ; hide (SPEC.md 38.1), so a non-zero handle
+                                ; outlives the window the user shut and would
+                                ; pin this image for the session
 
 ; =============================================================================
 ; HSV_* - what the TOOL asks of the RESIDENT

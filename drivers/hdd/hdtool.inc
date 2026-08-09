@@ -31,25 +31,23 @@
 ; failure is clean: the GOTO or the read fails, the page says so, and nothing
 ; is claimed.
 ;
-; WHEN THE MEMORY GOES BACK, and the limit that is not obvious. At DETACH -
-; unticking Hard Drive, or the machine going down - and there only. Not when
-; the tool's last window closes, which is what you would want and what this
-; cannot yet do: closing an unowned window is `wm_hide` (SPEC.md 38.1), the
-; record survives with a W_SEG naming this claim, and the NEXT load would
-; create another one. That is a window-table leak per open/close cycle, which
-; is worse than holding the memory. Freeing at detach keeps it to exactly one
-; record per attach, which is what the single-image driver always cost.
+; WHEN THE MEMORY GOES BACK (SPEC.md 52.11.4). As soon as the tool has no
+; window on screen, and at detach whatever happens. The trigger is this page's
+; own paint and click, which sounds like it would need the user to come back
+; and does not: closing the tool's window REPAINTS what was under it, and what
+; was under it is the Control Panel - so shutting the disk tool runs
+; hd_page_paint, which reaps on the spot.
 ;
-; What would lift it is a published wm_destroy - the routine exists and takes
-; the gfx lock the same way OSAPI_WM_HIDE does, it simply has no API slot. It
-; is deliberately not added here: the whole claim of this split is that it
-; costs the kernel nothing, and 8 bytes of jump table is still a permanent
-; ABI. Left as a follow-up with the reasoning attached rather than taken
-; quietly.
+; It cannot be the tool telling us it has finished. That call would be
+; answered by freeing the image it has to return into, so the tool is ASKED
+; (HDT_BUSY) and never volunteers.
 ;
-; So the win is "never in RAM unless the user asks for it", which is the one
-; that matters: a machine that never partitions never reads the file at all,
-; and that is every boot on every machine that is already installed.
+; This needed the one kernel byte-count the split had otherwise avoided:
+; OSAPI_WM_DESTROY, slot 0x0398, 8 bytes of jump table. Closing an unowned
+; window is a hide (SPEC.md 38.1), so without a destroy every load leaks a
+; window record holding a W_SEG that names a freed claim - and MAX_WIN is 12.
+; Holding 11KB was the better of those two, which is why this was a documented
+; limit rather than a bug until the slot existed.
 ; =============================================================================
 
 hd_tseg:     dw 0               ; the tool's segment, 0 = not loaded. Also the
@@ -297,6 +295,44 @@ hd_tool_open:
     mov word [hd_msg], hd_s_notool
 .out:
     pop bp
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_tool_reap - give the tool's memory back once its windows are gone
+; in:  nothing; the gfx lock is HELD (a Control Panel page callback)
+; out: nothing (all registers preserved)
+; clobbers: flags
+;
+; Called from the page's paint and its click - the two moments the user is
+; demonstrably finished with the tool, because closing its window repaints the
+; panel underneath and that IS the paint. Cheap when there is nothing to do:
+; one compare while the tool is not loaded, one far call while it is.
+;
+; It must never run from inside the tool, and cannot: both call sites are the
+; kernel calling US.
+; -----------------------------------------------------------------------------
+hd_tool_reap:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    cmp word [hd_tseg], 0
+    je .out
+    mov al, HDT_BUSY
+    call hd_tool_call
+    jc .out                     ; a window of its is still on screen
+    call hd_tool_drop
+.out:
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
     pop bx
     pop ax
     ret
