@@ -1602,6 +1602,16 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                  ; heap that is the difference between a paste
                                  ; that works and one that half-arrives.
                                  ; Preserves all but AX.
+%define OSAPI_WM_SAVEU      KERNEL_SEG:0x0378   ; BX = window ptr, AL = 0 clear
+                                                 ; / non-0 set. A PROMISE: this
+                                                 ; window's content does not
+                                                 ; change while it is not
+                                                 ; drawing, so a raise may put
+                                                 ; its old pixels back rather
+                                                 ; than call W_PAINT (SPEC.md
+                                                 ; 11.96.1). Costs nothing if
+                                                 ; refused; wrong if the
+                                                 ; promise is
 %define OSAPI_EVQ_PENDING   KERNEL_SEG:0x0338   ; out AX = events still queued
                                  ; behind the one being dispatched (SPEC.md
                                  ; 13.4). "Am I about to be asked to do this

@@ -4118,6 +4118,74 @@ Two things are load-bearing.
   is a published slot (§20) that any application may call at any depth of the
   z-order.
 
+### 11.96 The raise cache — a covered window put back, not redrawn
+
+Raising an obscured window measured **1,026 ms** on a 4.77MHz 8088, and
+**578 ms of it is `W_PAINT` lettering cells that were genuinely overwritten**
+while the window was covered (docs/NOTEPAD-NOTES.md §5.3). There is no faster
+way to draw them, so the only way under one typematic repeat is not to draw
+them: `wm_su_take` banks the content when the window is covered and
+`wm_su_try` puts it back when it is raised — **~10 ms of blit each way**.
+
+It is a **purgeable claim** (§50.6), `MEM_P_WSAVE`, which is what makes it
+affordable to take speculatively: the memory goes back the instant anything
+else needs it, and `mem_shed_one` zeroes `[wm_su_seg]` on the way out so
+`wm_su_ck`'s first test is the notice. A machine with no room behaves exactly
+as it did before this existed, because the fallback *is* the old code.
+
+**It is opt-in, `WF_SAVEU` through `OSAPI_WM_SAVEU` (0x0340), and §11.96.1
+is why** — the first cut had no opt-in and that was wrong.
+
+**One cache for the machine**, like the menu's save-under: it covers the case
+that was reported — two windows alternating — and bounds the memory at one
+block rather than one per window.
+
+What makes it safe is that **a covered window cannot change its pixels without
+the kernel finding out**. §11.3 already requires a background painter to arm a
+clip region before it draws, because a covered window that draws without one
+paints over the window on top of it — so `wm_clip_set` dropping the cache
+covers every application at once, with no rule for an application to
+remember. The rest are free: `wm_su_ck` compares the **banked rect with the
+window's rect now**, so a move, a resize, a `wm_fit` and an adapter change all
+invalidate by disagreeing rather than by being hooked; and `wm_destroy` drops
+it, because a reused slot would otherwise alias the window pointer.
+
+Two orderings are load-bearing. The take happens **after `wm_draw_title` and
+before the incoming window draws**, which is the last moment the outgoing
+window's pixels are both correct and still on the glass. And `wm_su_win` is
+**published last**, so a cache whose claim succeeded but whose `gfx_save` did
+not can never be tried.
+
+The chrome is redrawn either way: it is cheap, and a raise changes the title
+bar's pinstripes, so banking it would be banking the wrong picture.
+
+#### 11.96.1 Why it is opt-in after all
+
+The first cut had no opt-in, on the argument that the only reason to opt out
+would be to stop a window spending memory it does not need and purgeable
+memory is not spent. **That answers the memory question and not the
+correctness one**, and the opt-in was carrying both.
+
+`wm_clip_set` catches a covered window that DRAWS. It does not catch a window
+whose content **changes without being drawn**, and §11.3's background painters
+are written to do exactly that: they re-check visibility under the lock and
+*skip* when the window cannot be seen. The Timer keeps counting, a Bounce
+keeps stepping, and neither touches `wm_clip_set` while it is hidden — so a
+cache taken before is a picture of an older state, and putting it back on the
+raise shows the wrong time until something else redraws.
+
+Minimizing is the sharper form and it gets its own hook regardless of the
+flag: `wm_hide` drops the cache, because a hidden window's painter skips
+drawing for the whole time it is down. **A promise about being covered may not
+be assumed across a hide.**
+
+So the flag is a promise only the application can make — *my content does not
+change while I am not drawing* — and the asymmetry settles the default:
+**forgetting to opt in costs speed, and forgetting to invalidate costs
+correctness.** Note Pad opts in and is entitled to: everything that draws
+there goes through `np_redraw` or `np_paint`, and the worker's two background
+drawers ask `OSAPI_WM_OBSCURED` first.
+
 ## 12. menu.inc
 
 Menu bar: rows 0..MBAR_H-1, white, 1px black line at row MBAR_H-1. Its
@@ -12163,6 +12231,155 @@ The same argument applies to the keyboard's `Up`/`Down` held on typematic and
 to any other app with a large scroll surface, which is why the peek is a
 kernel slot rather than something Note Pad worked out for itself.
 
+### 27.7.9 A walk that cannot be seeded must still be bounded
+
+`[np_lastrow]` is a **one-shot**: `np_walk` resets it to `0x7FFF` on the way
+out, and its own comment says why — "a caller that forgets to set it gets the
+whole note, which is slow and never wrong". Two callers forgot, and they
+forgot in the one case that matters.
+
+`np_vmove` and `np_move` both set the bound *inside the branch that set the
+seed*:
+
+```
+    call np_seedck          ; or np_seedrow
+    cmp byte [np_resume], 0
+    je .nolim               ; <- no seed, and so no bound either
+    mov [np_lastrow], dx
+.nolim:
+    call np_measure
+```
+
+The two seeders refuse for four different reasons and **say nothing about
+which**, so the refusal took the bound with it. `np_seedck` asks for the row
+*before* the caret's and `np_rows` describes only rows a completed walk
+reached — so a caret on the last visible row asks for a row past the table,
+is refused, and the walk that follows lays out **every row in the note** to
+find the row the caret is already standing on.
+
+Measured on a cycle-accurate 4.77MHz 8088 (README.TXT, 781 rows, a 16-row
+view): Down on the bottom visible row is **4,866 ms, of which 4,664 ms is
+that one walk**. Down anywhere else is ~180 ms. It is the most-used key in
+the editor.
+
+Two changes, and the first is the whole fix:
+
+- **The bound is set on every path**, seeded or not. A walk from index 0 that
+  stops at the row wanted is `[np_top]` rows instead of 781 — still not free,
+  but paid in the depth of the view rather than the length of the note.
+- **`np_seedtail` is the seed for the case that has one.** When the row wanted
+  is at or past the table's reach, the deepest row the table *does* describe
+  is above it, so the walk resumes there and steps forward a row or two. That
+  is §27.7.7's argument moved from the caret to a row, and a weaker case than
+  §27.7.7's: both callers are moving the caret, which reflows nothing, so
+  every row above the seed laid out identically by inspection.
+
+**`np_seedtail` carries its own guard, and that is why it is a routine.** The
+deepest row is a seed only for a row BELOW it. A caret on row 0 asks
+`np_seedck` for row −1 and is refused too — and seeding *that* at row 13
+starts the walk below the row it is looking for, which then never finds it.
+Ungated, the caret stopped moving on `Up` and the view stopped following it;
+`cmp dx, [np_rowsn]` / `jb` is the whole of the fix, at the one place both
+callers pass through.
+
+Measured after, on the same states: a scrolling `Down` is **250–407 ms
+against 4,802–5,088**, 12–19x, and a `Down` that does not scroll is unchanged
+to within 1%.
+
+**This is the fix §27.7.7 was written for and did not reach**, which is worth
+recording rather than quietly correcting. §27.7.7 names this symptom exactly —
+"Down on the bottom visible row … cost a walk of every row in the note" — and
+fixes `np_redraw`'s caret-follow net, which is a real unbounded walk on a
+different path: the A/B across it moved a scrolling `Down` by 72 cycles in
+4,455,200. The walk on this path is two routines earlier, in the key handler,
+and `np_redraw` never sees it. docs/NOTEPAD-NOTES.md 6 is where that lesson
+lives.
+
+What is **not** fixed here is `Up` out of the top of the view. The row wanted
+is above the view, no table entry can seed it, and `np_redraw`'s net then
+walks unbounded by §27.7.7's own design — so it stays ~5.2 s and is the case
+docs/NOTEPAD-NOTES.md 1's row index was designed for.
+
+### 27.13 The row index — a row outside the view without walking to it
+
+`np_rows` (§27.5) describes the VIEW and nothing else, so every question about
+a row outside it fell back to laying the note out from index 0. That is `Up`
+out of the top of the view, and it measured **5.2 s a press** on a 781-row
+note — the other half of the most-used pair of keys in the editor, and the
+case §27.7.9's `np_seedtail` explicitly cannot reach because the deepest row
+a table holds is no seed for a row *above* it.
+
+`np_xi` is a sparse table of the character index at which every Kth
+**absolute** row begins: entry n describes row `n << [np_xksh]`. **It costs no
+walking at all** — §27.7.3's background count already visits every row in
+order and already computes exactly this, so `np_xnote` keeps what was being
+thrown away. It hangs off `np_rstart`, which runs once per row of every walk,
+and is one compare against `[np_xnext]` unless that row is wanted.
+
+**Bounded by decimation, not by growing.** A note of nothing but newlines is
+one row per character, so at `NP_MAXKB` the worst case is 16,384 rows.
+`np_xhalve` keeps every second entry and doubles the stride: the table then
+always spans the whole note, always costs `NP_XN` entries, and the walk from
+the nearest checkpoint is at most K rows — which grows only logarithmically in
+the note's length. `[np_xnext]` is deliberately not recomputed by a halving,
+because it is `xn * K` and halving one while doubling the other leaves that
+product exactly where it was.
+
+Five consumers, and between them they cover every "where is a row I cannot
+see" in the module: `np_vmove` and `np_move` (the caret leaving the top of the
+view), `np_redraw`'s caret-follow net through `np_xseedi`, `np_redraw`'s pass 1
+and `np_scrollpaint` (both of which lose `np_rows` to `np_scrollto` on every
+scroll), and `np_paint`, whose full repaint otherwise walks to the view before
+it can draw it.
+
+**`np_xseedi` is the one that retires §27.7.7's last sentence.** The net has
+the caret's index and wants its row, so a binary search finds the checkpoint
+below it — and if a *later* checkpoint exists, the caret's row is provably
+above that one, so the walk gets a bound. "The walk is still unbounded, and
+has to be" was true only while the table did not exist.
+
+Four things are load-bearing:
+
+- **The stored row is ABSOLUTE.** `[np_top]` moves under the table;
+  `[np_sdr]` is a visible row and is derived at seed time.
+- **Only the next entry owed is ever taken.** A seeded walk skips the rows
+  above its seed, so a table recording whatever it happened to pass would have
+  holes — and a lookup landing in one answers for a row nobody walked, which
+  is docs/FIELD-NOTES.md 4's shape. Contiguous or nothing.
+- **The table describes ONE layout**, so `np_hmark` drops it. That is the same
+  event, not two: a table of where rows begin means nothing under a layout
+  where they begin somewhere else, and keeping them one call is what stops a
+  later edit raising the height debt and forgetting the index.
+- **The stride is a power of two, kept as its log.** Every lookup would
+  otherwise be a `div` — 150 clocks against a shift's 10, once per row.
+
+**`NP_XN` is the whole cost model, and being frugal with it was the first
+cut's mistake.** A lookup lands at or *before* the row wanted, so the walk
+after it is up to K rows — and one keystroke runs FOUR walks, each paying that
+K. At 64 entries a 781-row note decimates to K = 16 and an `Up` walked 68 rows
+for one row of new text. 256 entries hold the same note at K = 4, for 512
+bytes of a package's own bss.
+
+Measured on a cycle-accurate 4.77MHz 8088, README.TXT, 16-row view:
+
+| `Up` that scrolls | |
+|---|---|
+| before the index | 5,150 ms |
+| index at `NP_XN` = 64 | 644 ms |
+| ...at 256 (K = 4 here) | 520 ms |
+| ...and `np_scrollpaint` bounded to its band | **380 ms** |
+
+That last one is not the index but it was hidden behind it: the exposed-row
+walk ran to the bottom of the view when only the band is drawn. Nothing below
+`[np_bd1]` needs laying out either — `OSAPI_GFX_SCROLL` moved those pixels and
+`np_shiftrows` moved `np_sig` and `np_rows` by the same `d`, so their
+descriptions already match the glass.
+
+**It is 13.6x and it is still 3.8x over budget**, the target being one
+typematic repeat (~100 ms, §2951) so that no held key can outrun the editor.
+What is left is 155 ms of pass 1 and 186 ms of drawing, and neither is a
+seeding problem — see docs/NOTEPAD-NOTES.md §7.
+
 ### 27.8 A selection, and the two things a drag can mean
 
 The selection is a **pair of character indices**, `[np_sel0]`..`[np_sel1)`,
@@ -12533,6 +12750,60 @@ limit and the last one anywhere, because a backtracking matcher cannot be run
 backwards and running it forwards twice would cost twice as much. It steps
 match-to-match rather than character-to-character, so the pass is bounded by the
 number of matches rather than by the length of the note.
+
+### 27.12 The note is a flat buffer, and the move is `rep movsb`
+
+Typing at the FRONT of a long note was reported from the field as
+"impossible" and had never been measured — docs/NOTEPAD-NOTES.md §6.2's
+screen probe could not see a keystroke at all. Measured on a cycle-accurate
+4.77MHz 8088 with README.TXT open (15,428 characters), a keystroke at index 0
+cost **414 ms**, and it splits three ways:
+
+| | |
+|---|---|
+| the buffer move | **220 ms** |
+| `np_walk` pass 1, the layout | 114 ms |
+| `np_walk` pass 2, the drawing | 73 ms |
+
+So the flat buffer really was the largest part — **and the fix is not a gap
+buffer.** All three of Note Pad's moves were open-coded byte loops:
+`mov al,[es:si]` / `mov [es:di],al` / two `dec`s / `loop`, which measured
+**68 clocks a byte** on the target. `rep movsb` is ~17, and the three loops
+(`np_ins` opening a one-byte gap, `np_delspan` closing one, `np_gaproom`
+opening a wide one for paste, undo and replace) are now that instruction:
+**220 ms → 59 ms, and the keystroke 414 ms → 257 ms.**
+
+Three things it has to get right, and they are the reason the loops existed:
+
+- **Direction.** `np_ins` and `np_gaproom` open a gap *upward*, so the runs
+  overlap with the destination above the source and the move must go
+  backwards — `std`, SI at the last live byte. `np_delspan` closes one
+  downward and goes forwards. Getting this wrong smears one byte over the
+  rest of the note.
+- **`cld` afterwards, always.** §1's register discipline is not optional for
+  the direction flag: every ISR in the system does `cld` before its own
+  string ops precisely because it cannot know what it interrupted, and a
+  package that returns with DF set is a fault in somebody else's code.
+- **`movsb` is `DS:SI -> ES:DI`, and the note is neither.** The document is a
+  heap claim (§27.6) reached through `[np_dseg]`, and the byte loops used an
+  `es:` override for both ends. DS is pushed, pointed at the claim and popped
+  — the read of `[np_dseg]` itself goes through the package's own DS and so
+  has to happen before the load.
+
+**Why not a gap buffer** — the answer the field report invited, and
+ArtfulType (§46.9) has one to copy. It would take the 59 ms to nothing, and
+it would make the other 187 ms *worse*: the layout walk reads every character
+of every row it lays out, and a gap buffer puts `at_getb`'s
+`push es`/load/fetch/`pop es` on each of those reads. The measurement says
+the remaining cost of typing is the WALK, not the buffer, so the structure to
+change is the one §27.7.9 and docs/NOTEPAD-NOTES.md §1 are about.
+
+The move is verified rather than argued: the document claim is read back out
+of guest RAM and compared byte for byte against README.TXT with the session's
+edits applied on the host. A run of inserts, backspaces and undos — which is
+all three routines — leaves **0 differing bytes of 15,429**. A buffer move
+that got faster and quietly wrong is the worst available outcome, and neither
+the screen nor `[np_len]` can see a byte that landed in the wrong place.
 
 ## 28. apps/taskmgr — the Task Manager
 
@@ -22740,6 +23011,87 @@ replaced it is *live*: arm double buffering and the figure rises 150K, close
 Paint and it falls by whatever Paint held. `mem_claimed_kb` sums every
 claim; `mem_kernel_kb` sums only the `0xFFxx`-tagged ones, so a package's
 claim lands on the package's row rather than on System's.
+
+### 50.6 Purgeable claims
+
+A cache the kernel can take back the instant anything else needs the room —
+the Macintosh Memory Manager's **purgeable handle**, which is where the name
+comes from and which this OS is that machine's homage to.
+
+**It is encoded in the owner, and that is what makes it cost nothing.** The
+owner word already carries a namespace — `0..INST_MAX-1` an instance slot,
+`0xFFxx` a kernel tag — so **`0xFExx` is "a kernel tag, and purgeable"**.
+Three things fall out of that with no new field anywhere: the claim record
+does not grow, so `mem_tab` is the size it was; `osapi_claim_snapshot`
+(§20.9) is unchanged, so no `.o88` is invalidated and the Task Manager can
+pick the class out of what it already reads; and `mem_claim` cannot be asked
+for a purgeable claim and place it as an ordinary one, because **the tag is
+the request**.
+
+**To be purgeable, a claim must have exactly one kernel word naming it, and a
+zero in that word must ALREADY mean "no buffer, do it the slow way".** That is
+the whole contract. `mem_pg_own` maps tag → that word and `mem_shed_one`
+zeroes it *before* freeing the block, so there is no window in which the word
+names memory somebody else holds — and the consumer's existing refusal path
+is the notification. `menu_drop`'s `or ax, ax` / `jz .nosave` is the shape
+every purgeable consumer must already have.
+
+#### 50.6.1 Where they are placed
+
+`mem_pg_ceil` bounds the scan at **the lowest region base**, so a purgeable
+claim is highest-fit *inside the data arena* and never in the region arena.
+
+The obvious placement — with the regions, top-down — is wrong, and it is
+wrong for the reason §50.3 exists: a purgeable block among the regions is
+indistinguishable from a region to the placement scan while it is live, so it
+splits exactly the run a package needs. Shed-and-retry does not rescue that,
+because it fires only on a **refusal**, and a region that merely fits *worse*
+has been fragmented with nothing noticing. Highest-fit in the data arena keeps
+§50.3's property that everything in the region arena is a region, and still
+puts the block against the free middle — the one run both arenas grow toward,
+and so the only one worth enlarging when it is shed.
+
+A region is told from a data claim by its owner alone: §50.3 makes a region's
+owner the instance **slot** and its data claims' the **segment**, so "below
+`INST_MAX`" is the test and this needs no new field either.
+
+#### 50.6.2 Shed and retry, not discard and notify
+
+`mem_claim` already fails when no hole fits and every caller already has a
+refusal path, so the first cut needs no notification protocol at all: on
+failure, **shed one purgeable block and try again**, until it succeeds or
+there is nothing left to shed. It terminates because each shed removes a
+record and `mem_shed_one` refuses when there are none.
+
+It is on **`mem_claim_hi`'s path too**: a package load is a user action and a
+cache is not, so the cache loses every time.
+
+This also side-steps a real concurrency trap. A discard is only safe when the
+owner is not mid-use, and `mem_claim` is called from the loader, from `kmain`,
+from drivers and from window callbacks — some holding the gfx lock and some
+not. With kernel caches that are re-derived at next use, "when is the owner
+told" has no answer to get wrong.
+
+When packages eventually get this, the rule to publish is that **a purgeable
+claim may only be touched under the gfx lock**, because the lock is what
+already serialises a worker against the UI task — and they will need a
+handle-based ABI rather than a bare segment, since a package that keeps a
+discarded segment in its own bss writes into somebody else's memory.
+
+#### 50.6.3 What the Task Manager shows
+
+**Purgeable is in nobody's total, not even System's.** It is not memory
+anyone can run out of — the next claim that needs it takes it — so counting it
+as used would be the *misleading* answer rather than the honest one, and a
+bar that reads full while the machine is not is worse than a figure nobody
+reads.
+
+It gets **one line of its own**, and that line is a developer instrument: it
+is how you see that a cache was claimed rather than refused, and that a shed
+actually happened. `mem_avail` still reports only genuinely free space, which
+under-reports for a caller that would have succeeded after a shed — a
+conservative direction, and the one that keeps `bb_canfit` and Paint's
+tier-sizing honest.
 
 ## 51. driver.inc — loadable drivers
 

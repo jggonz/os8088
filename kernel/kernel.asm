@@ -1176,7 +1176,13 @@ osapi_table:
                                   ;         a quiet mount. For a caller about to
                                   ;         read or write BY NAME rather than to
                                   ;         list - which is every copy loop
-osapi_table_end:                  ; 0x0378
+    OSAPI_SLOT wm_saveu           ; 0x0378 - BX = window, AL = 0 clear / non-0
+                                  ;          set. "My content does not change
+                                  ;          while I am not drawing", which
+                                  ;          lets the raise cache put its old
+                                  ;          pixels back instead of calling
+                                  ;          W_PAINT (SPEC.md 11.96.1)
+osapi_table_end:                  ; 0x0380
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1184,8 +1190,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 109 * 8
-%error "os8088 API jump table must be exactly 109 8-byte slots"
+%if OSAPI_TABLE_LEN != 110 * 8
+%error "os8088 API jump table must be exactly 110 8-byte slots"
 %endif
 
 ; =============================================================================

@@ -56,6 +56,12 @@ MAX_WIN  equ 12                 ; mirrored in apps/os88api.inc (SPEC.md 11)
 
 WF_SIZABLE equ 4                ; W_FLAGS bit2: resizable (SPEC.md 11.1)
 WF_FULL    equ 8                ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
+WF_SAVEU   equ 32               ; W_FLAGS bit5: this window PROMISES that its
+                                ; content does not change while it is not
+                                ; drawing, so the raise cache may put its old
+                                ; pixels back instead of asking for new ones
+                                ; (SPEC.md 11.96.1). Opt-in, and it has to be:
+                                ; only the application knows
 WF_SNAP    equ 16               ; W_FLAGS bit4: this window's CONTENT origin
                                 ; is kept on a multiple of 8 so its text can
                                 ; take font_run's single-store path
@@ -854,6 +860,10 @@ wm_destroy:
     push dx
     push si
     push di
+    cmp bx, [wm_su_win]         ; the slot is about to be reusable, and a new
+    jne .nosu                   ; window in it would alias this pointer
+    call wm_su_drop
+.nosu:
     mov si, bx                  ; the rect it is vacating, banked before the
     call wm_win_rect            ; record is cleared out from under us
     test word [si+W_FLAGS], 2
@@ -1135,6 +1145,9 @@ wm_raise:
                                 ; only to be painted over
     xchg bp, di                 ; DI = the outgoing front, BP = the incoming
     call wm_draw_title          ; DI != BP now, so it loses its stripes
+    call wm_su_take             ; ...and its content is banked HERE, while it
+                                ; is still on the glass and before the window
+                                ; going over it has drawn (SPEC.md 11.96)
     xchg bp, di
 .self:
     mov bx, di
@@ -1211,6 +1224,14 @@ wm_hide:
     push cx
     push dx
     push si
+    cmp bx, [wm_su_win]         ; MINIMIZING IS NOT COVERING (SPEC.md 11.96.1).
+    jne .nosu                   ; A hidden window's background painter finds
+    call wm_su_drop             ; itself invisible and SKIPS drawing, so it
+.nosu:                          ; never reaches wm_clip_set and never drops the
+                                ; cache - while its state goes on changing. The
+                                ; promise in WF_SAVEU is about a window that is
+                                ; merely covered; nothing may assume it across
+                                ; a hide
     mov si, bx
     call wm_win_rect            ; AX,BX,CX,DX = the rect it is vacating
     test word [si+W_FLAGS], WF_FULL
@@ -2578,6 +2599,13 @@ wm_clip_set:
     push cx
     push dx
     push si
+    cmp bx, [wm_su_win]         ; THIS WINDOW IS ABOUT TO DRAW, so whatever the
+    jne .nosu                   ; raise cache holds for it is now a picture of
+    call wm_su_drop             ; the past (SPEC.md 11.96). Every background
+.nosu:                          ; painter comes through here - 11.3 makes it
+                                ; arm a region or paint over the window on top
+                                ; of it - so this one test covers every app at
+                                ; once, with no rule for an app to remember
     mov [wm_clipwin], bx        ; for cur_lazyck at .done (SPEC.md 7.1.4) -
     mov word [wm_clip_n], 0     ; BX does not survive the fragment loop
 
@@ -3551,6 +3579,264 @@ wm_title_set:
 ; the paint is billed to the window's instance, not to the painting task
 ; (SPEC.md 8.1/28).
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; wm_saveu - API 0x0340: BX = window, AL = 0 clear / non-0 set
+; The window's promise that its content does not change while it is not
+; drawing (SPEC.md 11.96.1). Preserves the flags for wm_snap's reason: an
+; entry proc calls this after wm_create and the carry riding in is its own
+; return value.
+; -----------------------------------------------------------------------------
+wm_saveu:
+    pushf
+    or al, al
+    jz .clear
+    or word [bx+W_FLAGS], WF_SAVEU
+    popf
+    ret
+.clear:
+    and word [bx+W_FLAGS], ~WF_SAVEU & 0xFFFF
+    cmp bx, [wm_su_win]         ; ...and a promise withdrawn takes any cache
+    jne .out                    ; made under it with it
+    call wm_su_drop
+.out:
+    popf
+    ret
+
+; =============================================================================
+; THE RAISE CACHE (SPEC.md 11.96) - a window raised without repainting it
+;
+; Raising an obscured window was measured at 1,026 ms on a 4.77MHz 8088, and
+; 578 ms of that is W_PAINT lettering cells that were genuinely overwritten
+; while the window was covered (docs/NOTEPAD-NOTES.md 5.3). There is no faster
+; way to draw them; the only way under one typematic repeat is not to draw
+; them at all. So the content is BANKED when the window is covered and put
+; back when it is raised: ~10 ms of blit each way against 578 ms of glyphs.
+;
+; IT IS A PURGEABLE CLAIM (SPEC.md 50.6), which is what makes it affordable to
+; take speculatively: MEM_P_WSAVE, given back the instant anything else needs
+; the room, and mem_shed_one zeroes [wm_su_seg] on its way out so the test
+; below is the notice. A machine with no room for it behaves exactly as it did
+; before this existed.
+;
+; THERE IS NO OPT-IN AND THAT IS DELIBERATE. An API slot was the obvious shape
+; - WF_SIZABLE and WF_SNAP are both opted into that way - and it is the wrong
+; one here, because the only reason to opt OUT would be to stop a window
+; spending memory it does not need, and purgeable memory is not spent. The
+; kernel also knows everything the decision needs (the window's size, whether
+; the block fits) and the app knows nothing extra. So every window gets it.
+;
+; ONE CACHE FOR THE MACHINE, like the menu's save-under. It covers the case
+; that was reported - two windows alternating - and it bounds the memory at
+; one block rather than one per window.
+;
+; WHAT MAKES IT SAFE is that a covered window cannot change its pixels without
+; the kernel finding out. SPEC.md 11.3: a background painter arms a clip
+; region before it draws, because a covered window that draws without one
+; paints over the window on top of it - so it is already broken if it does
+; not. wm_clip_set therefore drops the cache, which covers every app at once
+; with no rule for an app to remember. The other two are free: wm_su_try
+; compares the banked RECT with the window's rect now, so a move, a resize, a
+; refit and an adapter change all invalidate by disagreeing, and wm_destroy
+; drops it because a reused slot would otherwise alias the pointer.
+; =============================================================================
+wm_su_seg: dw 0                 ; the banked content, 0 = none. In .text with a
+                                ; real initialiser: -f bin zeroes nothing and
+                                ; wm_su_try reads this before anything sets it
+wm_su_win: dw 0                 ; whose it is
+wm_su_x1:  dw 0                 ; ...and the rect it was taken over, compared
+wm_su_y1:  dw 0                 ; rather than trusted (see above)
+wm_su_x2:  dw 0
+wm_su_y2:  dw 0
+
+; wm_su_rect - DI = window -> AX/BX/CX/DX = its content rect, the same four
+; numbers wm_draw_win's white fill uses
+wm_su_rect:
+    mov ax, [di+W_X]
+    inc ax
+    mov bx, [di+W_Y]
+    add bx, TITLE_H
+    mov cx, [di+W_X]
+    add cx, [di+W_W]
+    sub cx, 2
+    mov dx, [di+W_Y]
+    add dx, [di+W_H]
+    sub dx, 2
+    ret
+
+; wm_su_drop - forget the cache and give the memory back
+; preserves every register and the flags
+wm_su_drop:
+    pushf
+    push ax
+    push bx
+    push dx
+    mov dx, [wm_su_seg]
+    or dx, dx
+    jz .out
+    mov word [wm_su_seg], 0
+    mov bx, MEM_P_WSAVE
+    call mem_free
+.out:
+    mov word [wm_su_win], 0
+    pop dx
+    pop bx
+    pop ax
+    popf
+    ret
+
+; wm_su_ck - CF=0 if the cache describes window DI as it is right now
+wm_su_ck:
+    push ax
+    push bx
+    push cx
+    push dx
+    cmp word [wm_su_seg], 0
+    je .no
+    cmp [wm_su_win], di
+    jne .no
+    call wm_su_rect
+    cmp ax, [wm_su_x1]
+    jne .no
+    cmp bx, [wm_su_y1]
+    jne .no
+    cmp cx, [wm_su_x2]
+    jne .no
+    cmp dx, [wm_su_y2]
+    jne .no
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wm_su_take - bank window DI's content, because it is about to be covered
+; preserves every register; a refusal anywhere just leaves no cache
+wm_su_take:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    test word [di+W_FLAGS], WF_SAVEU
+    jz .out                     ; it made no promise, so its pixels may be
+                                ; stale by the time it is raised (11.96.1)
+    test word [di+W_FLAGS], 2   ; not visible: there are no pixels to bank
+    jz .out
+    test word [di+W_FLAGS], WF_FULL
+    jnz .out                    ; a fullscreen window is not usefully covered
+                                ; by what is being raised over it, and it is
+                                ; the biggest block there is
+    mov si, di                  ; bank the WINDOW: DI is gfx_save's buffer
+    call wm_su_drop             ; one cache for the machine
+    call wm_su_rect             ; DI is still the window for this
+    cmp ax, cx
+    ja .out                     ; degenerate content: nothing to bank
+    cmp bx, dx
+    ja .out
+    mov [wm_su_x1], ax
+    mov [wm_su_y1], bx
+    mov [wm_su_x2], cx
+    mov [wm_su_y2], dx
+    call wm_su_kb               ; AX = KB for the rect just recorded
+    mov bx, MEM_P_WSAVE
+    call mem_claim              ; DX = segment
+    jc .out                     ; refused: no cache, and the raise repaints -
+                                ; which is what it did before this existed
+    mov es, dx
+    xor di, di
+    mov ax, [wm_su_x1]
+    mov bx, [wm_su_y1]
+    mov cx, [wm_su_x2]
+    mov dx, [wm_su_y2]
+    call gfx_save
+    mov ax, es
+    mov [wm_su_seg], ax
+    mov [wm_su_win], si         ; PUBLISHED LAST, so a cache that was only
+                                ; half taken can never be tried
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; wm_su_kb - KB for the banked rect, menu_save_kb's arithmetic
+; in: the four wm_su_* rect words; out: AX = KB (never 0)
+wm_su_kb:
+    push bx
+    push cx
+    push dx
+    mov ax, [wm_su_x2]
+    mov cl, 3
+    shr ax, cl
+    mov bx, [wm_su_x1]
+    shr bx, cl
+    sub ax, bx
+    add ax, 2                   ; span -> count, plus the misalignment byte
+    mov bx, [wm_su_y2]
+    sub bx, [wm_su_y1]
+    inc bx
+    mul bx
+    mov bx, [vid_planes_w]      ; 4 on VGA, 1 on the mono adapters - the _w
+    mul bx                      ; twin, for menu_save_kb's reason
+    add ax, 1023
+    mov cl, 10
+    shr ax, cl
+    or ax, ax
+    jnz .out
+    inc ax
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; wm_su_try - put window DI's content back from the cache
+; out: CF = 0 the content is on screen and W_PAINT must NOT run; CF = 1 draw
+;      it the ordinary way. Preserves every register.
+wm_su_try:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call wm_su_ck
+    jc .no
+    mov si, di                  ; DI is the buffer offset from here
+    mov es, [wm_su_seg]
+    xor di, di
+    mov ax, [wm_su_x1]
+    mov bx, [wm_su_y1]
+    mov cx, [wm_su_x2]
+    mov dx, [wm_su_y2]
+    call gfx_restore
+    call wm_su_drop             ; SPENT: the pixels are on screen and this
+    clc                         ; window is about to be the front one, so the
+    jmp short .out              ; next thing it does is change them
+.no:
+    stc
+.out:
+    pop es                      ; a pop touches no flag, so CF survives
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 wm_draw_win:
     push ax
     push bx
@@ -3603,6 +3889,13 @@ wm_draw_win:
 
     call wm_draw_title          ; the title bar, active or not (BP decides)
 
+    call wm_su_try              ; THE RAISE CACHE (SPEC.md 11.96): if the
+    jnc .growbox                ; content was banked when this window was
+                                ; covered, it is already back on screen - so
+                                ; neither the white fill nor W_PAINT runs, and
+                                ; the 578 ms of glyphs they cost is not spent.
+                                ; The chrome above is drawn either way: it is
+                                ; cheap, and a raise changes the pinstripes
 .content:
     mov byte [gfx_color], CWHITE
     mov ax, [di+W_X]            ; content area, filled white before W_PAINT

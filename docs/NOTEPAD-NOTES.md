@@ -22,13 +22,28 @@ of the code.
 | §3 | deliberately rejected, with the reason |
 | §4 | what shipped, and where each piece lives |
 | §5 | open field reports, with the diagnosis so far |
-| §6 | measuring Note Pad, and the four ways the apparatus lied |
+| §6 | measuring Note Pad, and the six ways the apparatus lied |
+| §7 | the latency budget: one typematic repeat, and what is still over it |
 
 ---
 
-## 1. The row index — random access to a row without walking to it
+## 1. The row index — BUILT (SPEC.md §27.13)
 
-**Status: designed, not built. Build it when any of §1.3's triggers lands.**
+**Status: built, measured and shipped.** What follows is the design as it was
+argued before it existed, kept because every claim in it was tested and two
+were wrong in ways worth knowing:
+
+- **§1.2's sizing was too frugal.** 64 entries decimates a 781-row note to a
+  stride of 16, and one keystroke runs FOUR walks that each pay that stride —
+  68 rows walked for one row of new text. `NP_XN` is 256.
+- **§1.3's "a page click costs the same at every depth" is still true and
+  still not the point.** The trigger that mattered was not a jump the UI
+  offers; it was `Up` out of the top of the view, which §1.4 half-identified
+  and filed under the *net* rather than under the four separate walks that
+  each needed it.
+
+SPEC.md §27.13 is the implementation; §7 below is what it did and did not
+buy.
 
 ### 1.1 What it is
 
@@ -117,6 +132,15 @@ extra state.
 This is the strongest single argument for building it, and it is why §1.3's
 trigger list should be read as "any of these, **or** someone complaining that
 Find is slow on a long file".
+
+**And §5.1.1 is now a second caller, on an arrow key.** `Up` out of the top of
+the view asks for a row above everything `np_rows` describes, so §27.7.9's
+`np_seedtail` cannot help it and the net walks unbounded: measured at 5.2 s a
+press. That is not a corner — it is the other half of the most-used pair of
+keys in the editor, and unlike §1.4's case it happens without the user doing
+anything unusual first. The index answers it in the same inverse direction:
+binary-search the table for the checkpoint at or before the row wanted, and
+walk forward at most *K* rows.
 
 ### 1.5 Traps, so they are not rediscovered
 
@@ -229,6 +253,7 @@ nothing on the glass**.
 | §27.7.6 | only a scroll asking to go PAST the counted extent may finish the count | `np_sbclick`'s `.set` |
 | §27.7.7 | the caret-follow net resumes forward instead of restarting at index 0 | `np_netseed` |
 | §27.7.8 | a superseded scroll is not drawn at all | `[np_sowed]`, `np_worker` |
+| §27.7.9 | a walk that cannot be seeded is still BOUNDED, and the deepest row the table holds is the seed when there is one | `np_seedtail`, `np_vmove`, `np_move` |
 | §13.4 | `OSAPI_EVQ_PENDING` (slot **0x0338**): are more events queued behind me? | `evq_pending` |
 
 Three things in there are worth knowing on their own terms:
@@ -257,57 +282,178 @@ Three things in there are worth knowing on their own terms:
 All four are reproducible on the 5150 and none is fixed. What each entry is
 for is the *ruled out* column: start from evidence.
 
-### 5.1 Down on the bottom visible row — ~933 ms
+### 5.1 Down on the bottom visible row — FIXED (SPEC.md §27.7.9)
 
-The press that SCROLLS costs 933 ms; presses that only move the caret inside
-the view cost 50 ms. On the most-used key in the editor.
+**It was not in the redraw path**, which is where this entry used to send the
+next reader, and the correction is worth keeping because the reasoning that
+pointed there was sound and wrong.
 
-**Ruled out.** It is *not* the caret-follow net: §27.7.7's `np_netseed` was
-written for exactly this and the A/B says it changes nothing — 4,455,200
-cycles against 4,455,272, five significant figures, with and without. The
-reason is that the walk is bounded to `[np_vrows]`, which is one row *past*
-the last visible, so it DOES find the caret and `[np_curseen]` is set.
+The walk is in the KEY HANDLER, two routines before `np_redraw` ever runs.
+`np_vmove` seeds its walk with `np_seedck` and sets the bound *inside the
+branch that seeded* — so when `np_seedck` refused, `[np_lastrow]` kept the
+`0x7FFF` `np_walk` resets it to and the walk laid out the whole note. And
+`np_seedck` refuses on exactly the press that scrolls: it asks for the row
+before the caret's, and a caret on the last visible row asks for a row past
+what `np_rows` describes.
 
-It is also *not* a walk from index 0, and this is the useful measurement: the
-cost **falls** with depth — 1000 ms at `top` = 0 against 267 ms at `top` = 262
-— where anything walking from the top would grow. So it is in the redraw path,
-and the likely shape is `np_redraw` choosing a full repaint where a band or
-`np_scrollpaint`'s blit would do. **Start by finding which of `.band`,
-`.scrolled` and `.fullpaint` a scrolling Down actually takes**, and why the
-two depths take different ones.
+Measured on MartyPC's cycle-accurate 8088 (README.TXT, 781 rows, 16-row
+view): **4,866 ms, of which 4,664 ms is that one walk**. Three consecutive
+presses agreed to 0.02%. Fixed, a scrolling `Down` is **250–407 ms against
+4,802–5,088 — 12–19x** — and a `Down` that does not scroll is unchanged to
+within 1%, which is the control that says the band path was not disturbed.
 
-### 5.2 Typing in the front or middle of a long note — "impossible"
+The two things this entry had wrong, and how:
 
-Reported as huge latency, with the observation that §27.3's visual break is
-correctly engaging, so it is not the drawing.
+- **"It is in the redraw path."** Inferred from the cost falling with depth.
+  It does not: re-measured across eleven presses at `top` = 0..10 it is flat
+  at ~4.8 s, because an unbounded walk from index 0 does not care where the
+  view is.
+- **"Ruled out: not a walk from index 0."** It is exactly that. What made the
+  old A/B honest and the conclusion wrong is that §27.7.7 fixed a *different*
+  unbounded walk, on a path a scrolling `Down` does not take — so the A/B
+  really did move nothing, and the inference from it went one step too far.
+  §6's coda is the general form.
 
-**Not yet measured, and that is the first job.** The apparatus could not see it
-(§6.2). The standing hypothesis is the document being a **flat buffer**: an
-insert at the front `rep movsb`s everything after the caret, which for 15KB is
-roughly 30–55 ms depending on bytes or words — real, but not obviously
-"impossible", so something else is probably in there too and measuring first is
-what stops the wrong half being optimised.
+The trap in the apparatus that hid it for one more round is in §6.5: a
+breakpoint trace stamps the time between two hits against the SECOND, so a
+routine that is not itself traced has its cost billed to whatever is traced
+after it. `np_move` wore `np_vmove`'s 4,664 ms until `np_move` was given a
+breakpoint of its own.
 
-**The fix, when the measurement justifies it, is a gap buffer**, and
-ArtfulType already has one to copy (SPEC.md §46.9): a 20KB gap buffer in a heap
-claim, with `at_getb` showing the cost of the indirection — one
-`push es` / load / fetch / `pop es` per character read. Two runs with a gap at
-the caret makes insertion O(1) and pays a move only when the caret jumps, and
-then only for the distance jumped.
+### 5.1.1 Up out of the top of the view — 5.2 s → 380 ms (SPEC.md §27.13)
 
-**What was considered and argued against**: a separate small staging buffer
-(256 bytes, flushed when full). That is a gap buffer with an extra copy and a
-second place that has to agree where the text is — the gap gives the same O(1)
-typing with neither.
+The row index was built for this and it is what fixed it. Four separate walks
+per press each needed a row above the view — `np_vmove`'s, `np_move`'s, the
+caret-follow net's and `np_scrollpaint`'s — and every one of them fell back to
+laying out the note from index 0.
 
-### 5.3 Bringing Note Pad to the front pauses ~half a second
+Still **3.8x over budget** at 380 ms; §7 is the accounting.
 
-**Not investigated.** The hypothesis to test first is that it is simply a full
-content repaint: ~18 rows × ~29 cells at PERFORMANCE.md's ~1 ms a glyph cell is
-~400–500 ms, which matches the report. §11.90 means a window that was NOT
-covered costs only its title bar, so **the first thing to establish is whether
-the window was actually obscured** — if an unobscured raise is repainting the
-content, that is a bug in the cheap-path test rather than a cost.
+What §27.7.9 did reach here was the correctness half. Before it, `Up` was
+**14.9–20.4 s** and the view *flew to the end of the note* — `[np_top]` going
+5 → 769 → 3 → 767 → 1 → 765 on consecutive presses of a key that means "up
+one line", confirmed on the glass as well as in the numbers. It is now
+5.15–5.22 s and the view steps 5 → 4 → 3 → 2 → 1 → 0. An `Up` with nothing to
+do — caret already at the top of the note — went **4,956 ms to 145 ms**.
+
+### 5.2 Typing in the front of a long note — MEASURED, and half fixed (SPEC.md §27.12)
+
+Measured at last, with `tools/notepad`. A keystroke at index 0 of README.TXT
+(15,428 characters) was **414 ms**, and it is three things:
+
+| | before | after |
+|---|---|---|
+| the buffer move | 220 ms | **59 ms** |
+| `np_walk` pass 1 — the layout | 114 ms | 114 ms |
+| `np_walk` pass 2 — the drawing | 73 ms | 73 ms |
+| **a keystroke at the front** | **414 ms** | **257 ms** |
+
+**The standing hypothesis was right about where and wrong about why**, and
+the correction is the useful part. This entry used to estimate the flat
+buffer at "roughly 30–55 ms for 15KB" — that is what `rep movsb` would have
+cost, and the move was not `rep movsb`. All three of Note Pad's moves were
+open-coded byte loops at **68 clocks a byte** against a string move's ~17. So
+the buffer really was the single largest cost of typing, and the fix was one
+instruction in three places rather than a new data structure.
+
+**And a gap buffer is now the wrong answer, on this measurement.** It would
+take the remaining 59 ms to nothing and make the other 187 ms worse: the
+layout walk reads every character of every row, and ArtfulType's `at_getb`
+(§46.9) is a `push es`/load/fetch/`pop es` on each of those reads. What is
+left of a keystroke is the WALK. §1's row index and SPEC.md §27.7.9 are the
+structure to change; the document is not.
+
+Still open here: **the middle of a note is not the front and has not been
+measured.** The move is shorter (only the bytes after the caret) but the
+layout walk is seeded differently, and §27.3's visual break is in play. Drive
+it with `tools/notepad/lab.py trace` after scrolling in, and read §6.6 before
+believing the first number.
+
+### 5.3 Bringing Note Pad to the front pauses ~half a second — MEASURED, and it is not a bug
+
+**The hypothesis was right and the window manager is exonerated.** Both halves
+were tested rather than one:
+
+- **Obscured raise** (Note Pad almost entirely behind a Disk window, clicked
+  on its title bar): **1,026 ms** — 447 ms of kernel-side compositing before
+  the package is called at all, then **578 ms inside `np_paint`**.
+- **Unobscured raise** (already frontmost, clicked again): **not one package
+  callback**, twice in a row. §11.90's cheap path does exactly what it says.
+
+So the pause is a legitimate full repaint of a window that really was covered,
+and there is no cheap-path test to fix. What is left is the **glyph floor**:
+`np_paint` fills the content and letters 16 rows of 29 cells, and 464 cells at
+PERFORMANCE.md's ~1 ms a cell is ~464 ms of the 578. The layout walk is the
+rest.
+
+That makes it the one open report here with **no structural fix behind it** —
+§1's row index does not help, because a full repaint has to visit every
+visible row whatever it costs to find them. Drawing fewer glyphs is the only
+lever, and the tree already has the tool for it: `np_rflush` skips a row whose
+signature is unchanged (§27.2), which a repaint deliberately cannot use
+because the content was just filled over. Anyone picking this up should start
+by asking whether a raise must fill first — not by looking at the walk.
+
+Measured with `python3 tools/notepad/lab.py click 80 30`, which terminates on
+the package's own dispatcher `retf` (SPEC.md §20.2, offset 14). Without that
+terminator the same click reads **445 ms**, because the trace ends at the last
+label inside the callback and §6.5's rule bills `np_paint`'s own 578 ms to
+nobody. The first number this measurement produced was that 445.
+
+### 5.2.1 The first scroll after opening leaves ~11 cells stale
+
+**Found while pixel-verifying §27.13, and it PREDATES all of this work** — the
+A/B is what says so, and it is the reason this is a report rather than a
+regression. Open README.TXT, press Down 24 times, then force a full repaint by
+covering the window and raising it: **705 content pixels change**, about
+eleven glyph cells. Every later state in the same session is pixel-identical.
+
+Both builds show it, in the same state (`top` = 9, `cur` = 482), at the same
+705 pixels — the pre-index build and the post-index one alike. The index build
+is strictly better either side of it: the baseline diverges again on the next
+check (3,422 pixels) where the index build is 0.
+
+What is special about the first sequence is that §27.7.3's background height
+count is still running through it, so the suspicion is an interleaving between
+the worker's chunk and the redraw's signatures rather than anything about
+seeding. **Ruled out:** it is not the row index (it predates it), and it is
+not the caret or a toast (an idle screen sampled twice is 0 differing pixels,
+so the instrument is not manufacturing it).
+
+`tools/notepad` + the crop-to-content diff in this entry reproduces it in one
+run; that harness is the thing to start from.
+
+### 5.3.1 `[np_rowsn]` is not capped to the array it indexes
+
+Found while building §27.7.9 and **left alone deliberately** — it is latent,
+not live, and the change that would fix it is bigger than the bug.
+
+`np_rows` is `NP_MAXROWS` = 60 words. `[np_rowsn]` says how many of them are
+good, and three of its four write sites clamp it; the fourth — the walk's
+natural end, `.sigpad` — stores `[np_row] + 1` with only a sign test. A
+781-row note walked to its end therefore leaves `[np_rowsn]` = 771 against 60
+slots, and `np_seedrow` bounds its index against `[np_rowsn]` alone:
+
+```
+    cmp ax, [np_rowsn]
+    jae .out
+    shl ax, 1
+    mov bx, ax
+    mov ax, [bx+np_rows]        ; ...up to 1,540 bytes past the array
+```
+
+**Nothing reaches it today** because every caller passes a *visible* row and
+`np_bounds` caps `[np_vrows]` at `NP_MAXROWS`, so the index is always < 60
+whatever `[np_rowsn]` claims. `np_seedtail` is the first caller that takes its
+row *from* `[np_rowsn]`, which is why it carries its own `NP_MAXROWS` clamp
+rather than trusting the word.
+
+The honest fix is at `.sigpad`, and it is not free: capping there would make
+`[np_rowsn]` mean "rows in the table" everywhere, which is what
+`np_seedrow`'s test wants — but §27.7.3's chunked count and `np_shiftrows`
+read the same word, and the natural-end path is where `[np_drows]` gets its
+truth. Establish what each reader wants the word to MEAN before changing it;
+do not just add a clamp and rebuild.
 
 ### 5.4 `NP_HCHUNK` is set from an emulator number
 
@@ -354,6 +500,67 @@ exact and **how long it took** is not. Use the cycle counter for everything and
 convert at 4.772727 MHz. `npbench` sidesteps this by timing in guest ticks from
 inside the guest.
 
+### 6.5 A breakpoint trace bills a leg to the routine at its END
+
+The instrument that finally found §5.1 is a breakpoint trace: put an `exec`
+breakpoint on every branch of interest, inject the key, and stamp each stop
+with the guest cycle count. It is exact and it costs the guest nothing —
+**and the delta printed beside a name is the time BEFORE that name, not
+inside it**. A routine with no breakpoint of its own is invisible, and its
+cost is billed to whichever traced label happens to follow it.
+
+That produced a confident wrong answer within minutes: with `np_measure`
+traced and `np_move` not, the 4,664 ms showed up as a gap between two
+`np_measure` hits and read as "np_move is slow". With `np_move` traced too,
+the same 4,664 ms moved to the leg *before* it — `np_vmove`'s own walk. One
+fix was written against the wrong routine before the second breakpoint was
+added.
+
+**So trace the entries either side of anything you are about to blame**, and
+treat a large delta as "somewhere in the gap" until a breakpoint splits it.
+
+Three smaller things about the same harness, all of which produced a wrong
+number first:
+
+- **`run` does not resume from a breakpoint.** MartyPC's `ExecutionControl`
+  stays latched in `BreakpointHit` through a Run and advances nothing,
+  reporting success and zero cycles — `debug_server.rs` says so in a comment
+  and the harness hit it anyway. Use `step(1)` then `advance(cycles=...)`.
+- **The budget passed to `advance` is a silent truncation.** A budget shorter
+  than the leg being measured ends the trace early and it reads as "the path
+  stopped there". One unbounded walk is 22 million cycles; the first budget
+  was 4 million.
+- **A warmup of N keypresses does not put two builds in the same state** when
+  the builds differ in how long a keypress takes: the same 20 Downs left the
+  fixed build at `top` = 5 and the original at `top` = 3, because `advance`
+  waited a fixed number of FRAMES and the slow build had presses still in
+  flight. Read the state back and compare the runs where they agree — here
+  presses 1..14 matched to 0.3%, which is what licensed comparing 15..19.
+
+### 6.6 An injected key is QUEUED, not delivered — and not always dropped
+
+`os88marty.py key` presses and releases in one call with **no guest time
+between them**, and the emulator's keyboard queue then needs the guest to
+actually run before int 09h sees anything. From a machine sitting in
+MartyPC's latched `BreakpointHit` state — which is where every `lab.py`
+command leaves it — a bare `key` followed by `advance(frames=...)` delivered
+**nothing**, and the same `advance` after a `step(1)` delivered it.
+
+**The failure mode is worse than losing the keystroke: it is kept.** Measured
+directly — three characters typed with the bad recipe all arrived at once
+during the *fourth* press's advance, so the run that inherits them reports a
+keystroke nobody asked for and a length that does not match the edits. That
+is a wrong number in the direction of looking plausible.
+
+`tools/notepad/drive.py` has `tap()` and `chord()` for this; use them rather
+than `m.key`. A modified keystroke needs guest time around *each* event as
+well — press, key, release with nothing running in between puts four
+scancodes into the controller in one instant, and an XT delivers one per
+IRQ1, so Ctrl+Z did nothing at all until each event got its own advance.
+
+`Tracer.collect` never showed any of this because it already does `step(1)`
+before every `advance`, for the unrelated reason in §6.5's second bullet.
+
 And one that is not the apparatus but cost a whole attempt: **a fix must be
 measured against the symptom it claims to fix.** §27.7.7 is correct, targets a
 real unbounded walk, and does nothing at all for the report it was written for
@@ -361,3 +568,87 @@ real unbounded walk, and does nothing at all for the report it was written for
 §27.7.3 was lost the same way, to a diagnosis (`[np_lastrow]` clobbered at
 `notepad.asm:1050`) that named a line inside a routine which never runs on
 that path.
+
+---
+
+## 7. The latency budget
+
+**The target is one typematic repeat — ~100 ms (SPEC.md §2951).** It is the
+right target and not an arbitrary one: below it, a held key cannot outrun the
+editor, so nothing the user does by leaning on a key can build a backlog. It
+applies to every user-triggered interaction *except* opening a document, which
+is disk-bound.
+
+Measured on MartyPC's cycle-accurate 4.77MHz 8088, README.TXT (15,428
+characters, 781 rows) in a 16-row × 29-column window — the smallest realistic
+case, and a wider window is worse:
+
+| interaction | at the start of this round | now | budget |
+|---|---|---|---|
+| `Up` that scrolls | 5,150 ms | **380 ms** | 100 |
+| `Down` that scrolls | 4,802–5,088 ms | **250–410 ms** | 100 |
+| `Down`/`Up` inside the view | 104–252 ms | **104–252 ms** | 100 |
+| typing at the front | 414 ms | **257 ms** | 100 |
+| raise of an obscured window | 1,026 ms | 1,026 ms | 100 |
+| `Up`/`Down` with nothing to do | 4,956 ms | **145 ms** | 100 |
+
+**Nothing is at budget yet.** Two costs remain and neither is a seeding
+problem any more — §27.13 removed the last of those.
+
+### 7.1 Pass 1 walks the view to find out what changed — ~155 ms
+
+`np_redraw`'s first pass lays out from the caret's row to the bottom of the
+view to discover which rows' signatures moved. That is ~6 ms a row (§2), so it
+is `(vrows − caret row) × 6` and hits ~96 ms with the caret at the top of a
+16-row view — the whole budget, before anything is drawn.
+
+**For a CARET MOVE it is provably unnecessary.** No character moved, so the
+only rows whose signatures can differ are the one the caret left and the one
+it arrived on; `np_ask` folds the caret into a row's signature and nothing
+else about those rows changed. `np_move` already knows both rows —
+`[np_ckpr]` is the new one — so the walk could be bounded to `max(old, new)`
+instead of `[np_vrows]`.
+
+Not attempted here, and the reason is worth stating: pass 1 also sets
+`[np_rowsn]`/`[np_rowsok]` from where it stopped, so a shorter walk shrinks
+what `np_rows` describes and pushes more traffic onto §27.13's index. That is
+probably fine — the index exists now — but it is a change to the invariant two
+other sections rest on, and it wants its own round and its own A/B rather
+than being bolted onto this one.
+
+### 7.2 A one-row scroll draws ~186 ms
+
+`np_scrollpaint` after §27.13's band bound is: one `OSAPI_GFX_SCROLL` over the
+content, a strip fill, a band fill, ~4 rows of layout from the checkpoint, one
+row of text (29 cells ≈ 29 ms at PERFORMANCE.md's ~1 ms a cell), two XOR
+selection bands and `np_sbar`.
+
+The lettering is near its floor. The blit is not obviously so — it moves the
+whole content rect to shift it one row — and `np_sbar` redraws the whole
+scroll bar for a thumb that moved a pixel. Those two are where the next
+measurement should go, and `tools/notepad/lab.py trace` will attribute them
+once they have breakpoints of their own (§6.5).
+
+### 7.3 The raise is the glyph floor and needs a different idea
+
+§5.3: 1,026 ms, of which 578 ms is `np_paint` lettering 464 cells that were
+genuinely overwritten while the window was covered. No walk is involved any
+more — §27.13 seeds it — so there is nothing left to make cheaper except
+drawing fewer glyphs, and every one of them is a glyph the user needs to see.
+Getting a raise under 100 ms means not repainting at all: a save-under, or a
+window that keeps its own back buffer. Both cost RAM this machine does not
+obviously have (§50), and both are a window-manager change rather than a Note
+Pad one.
+
+### 7.4 What the budget would need
+
+Honest arithmetic, on the 16-row window and the ~1 ms glyph cell:
+
+- a keystroke that changes one row: 1 row of layout (6 ms) + 1 row of glyphs
+  (29 ms) ≈ **35 ms**. Reachable, and §7.1 is what stands in the way.
+- a one-row scroll: the blit + 1 row of glyphs ≈ **50–60 ms** if the blit and
+  the bar come down. Reachable.
+- a raise: **464 ms of glyphs, or a repaint that does not happen.** Not
+  reachable by making the existing path faster.
+
+So two of the three are in range and the third needs a different mechanism.

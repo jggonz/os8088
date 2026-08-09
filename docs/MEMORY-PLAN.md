@@ -1,343 +1,294 @@
-# os8088 memory expansion plan
+# Discardable claims, and a window that can be raised without repainting
 
-**Status board for the work that buys the kernel room to grow.** SPEC.md is
-the binding contract for what the kernel *is*; this document is the standing
-plan for how it gets more space, why each step is shaped the way it is, and
-what is deliberately still on the shelf. Steps A through F have landed. Read
-this before assuming the kernel is out of room again — and read
-`docs/KERNEL-MEMORY.md`, which is the standing account of where the kernel's
-64KB actually goes; this document is the history of how it got there.
+**Recommendations 1–2 and the placement in 3 are BUILT** — SPEC.md §50.6
+(purgeable claims) and §11.96 (the raise cache). What is left of this document
+is the argument behind them, plus the items still open, which are marked in
+§4. The costing below was written before the code; the measured outcome is at
+the end of §4.
 
-## The constraint
+Forward-looking in `docs/SOUND-PLAN.md`'s sense for the rest: it is the
+argument and the costing, written down before the code so the decisions are
+the ones we meant to take.
 
-The kernel runs in one real-mode segment (`KERNEL_SEG`, 0x1000 then and
-0x0800 since step E), so 64KB is the hard ceiling on everything addressable through CS/DS at once. Inside that
-ceiling the kernel never had 64KB to spend — the package pool took the top
-20KB and task 0's stack the 4KB above it, leaving a 40KB window for image +
-`.bss`, enforced by the assertion at the end of `kernel/kernel.asm`.
-
-Before this work (release v1.0.20260728, commit 698b587):
-
-| region                        | bytes  |
-|-------------------------------|--------|
-| kernel window (0x0000–0xA000) | 40,960 |
-| — .text                       | 16,281 |
-| — .bss                        | 23,590 |
-| — **free**                    | **1,089** |
-| package pool (0xA000–0xEFFF)  | 20,480 |
-| gap + task 0 stack            |  4,096 |
-
-`.bss` was 59% of the budget and the task stacks alone (11 × 1,536 = 16,896)
-were 41% of the entire window. The kernel was not short of segment; it was
-spending its segment on scratch that never needed to be addressable by DS.
-
-## After A + B + C + D + E
-
-| region                        | bytes  |
-|-------------------------------|--------|
-| kernel window (0x0000–`KERN_MAX`) | 45,056 |
-| — .text + .bss                | see `make` — measure, do not guess |
-| — **free**                    | the rest |
-| package pool @ `PKG_SEG`      | 61,440 |
-| `.fartext` @ `FAR_SEG`        | `FAR_PARA`×16 = 10,752 |
-| FAT snapshot @ `FAT_SEG`      | `DSK_FAT_SECS`×512 = 5,120 |
-| `.lowbss` @ `LOW_SEG`         | 9,216, then 6,142 for task 0's stack |
-| the claim heap @ `HEAP_SEG`   | everything above, on demand |
-
-Headroom went from 1,089 bytes to five figures, and the package pool from
-19,968 bytes inside the kernel's own segment to 61,440 outside it. What
-changed most is not any single number: it is that **nothing above the pool
-has a fixed address any more**. The four pinned blocks that used to sit up
-there — `SND_SEG`, `SAVE_SEG`, `VIEW_SEG`, `BB_SEG`, 278KB of a 256KB
-machine's address space spoken for by constants — are gone or are claims
-(SPEC.md §50), and the ladder below is derived rung by rung so a size change
-slides everything above it with no gaps to lose track of.
+It starts from two things measured in docs/NOTEPAD-NOTES.md §7: raising an
+obscured Note Pad costs **1,026 ms**, of which **578 ms is lettering 464 glyph
+cells that were genuinely overwritten**, and that is the one open latency with
+no faster version of the existing path. The only way under one typematic
+repeat is **not to repaint at all**, which means keeping the pixels — which
+means memory that we do not currently have a good way to spend.
 
 ---
 
-## Step A — evict `.bss` from the kernel segment ✅ done
+## 1. Checking the premise: does a covered window's content stand still?
 
-Linear 0x00600–0x0FFFF is free on every PC once the boot sector has handed
-off: the BIOS data area ends at 0x004FF and the kernel image starts at
-0x10000. That is ~62KB nobody was using. Three segments now carve it up
-(SPEC.md §2.1): `FAR_SEG` = 0x0060 for far code, `FAT_SEG` = 0x0300 for
-the FAT driver's mount-time FAT snapshot, and `LOW_SEG` for stacks and disk
-buffers. `FAT_SEG` was claimed after this step by the FAT12/16 migration,
-reached through ES only, and size guard 5 in `kernel.asm` fences the
-`.fartext` blob below it so far-code growth cannot collide. Step E later
-sized all three against what they were measured to use and moved the kernel
-down onto them; the addresses in this paragraph are the step-A ones.
+**Nearly, and "nearly" is not good enough to build on — but the fix is one
+hook, not app discipline.**
 
-### A1 — task stacks → `LOW_SEG` (−16,896 bytes)
+Note Pad's worker runs while backgrounded, and it draws in three places. Two
+already ask: `np_sbcheck` (the thumb, when the background count moves
+`[np_drows]`) and `np_pdrawn` (the find panel's match count) are both gated on
+`OSAPI_WM_OBSCURED`. The third is not: `[np_sowed]`, §27.7.8's dropped-scroll
+debt, calls `np_redraw` unconditionally. A toast expiring is a fourth.
 
-`sch_stacks` moved to the `.lowbss` section and SS became `LOW_SEG` for
-every task including task 0, whose stack now grows down from `STK0_TOP`.
-All tasks still share one SS, so a context switch is still nothing but an SP
-swap and SS is still absent from the saved frame.
+So the premise is *nearly* true of Note Pad today and is not true of packages
+in general, and **the design must not depend on an app keeping a promise it
+does not know it is making.**
 
-The cost was that **SS ≠ DS**, which changes what `[bp+disp]` means. The
-audit found exactly 17 sites using BP as a pointer into a kernel structure
-(`apps.inc`, `instance.inc`, `taskmgr.inc` — all indexing `inst_tab`); each
-took a one-byte `ds:` override. `wm.inc:325`'s `mov bp, sp` genuinely wants
-SS and was correct as written. `vgabb.inc`'s `push ss / pop ds` became
-`push cs / pop ds`. No package uses BP-relative addressing at all, so the
-SDK was untouched.
+**Invalidate on draw instead, at `wm_clip_set`.** §11.3 makes that the choke
+point already: a background painter arms a clip region before it draws,
+because a covered window that draws without one paints over the window on top
+of it. So "covered ⇒ either it armed a region, or it is already broken" is an
+invariant the window manager relies on today. One test in `wm_clip_set` —
+this window has a saved image, drop it — makes the save self-invalidating for
+every app at once, with no new rule for anyone to forget.
 
-### A2 — disk buffers → `LOW_SEG` (−3,584 bytes)
-
-`disk_dir` (1024), `disk_icons` (2048) and `dsk_secbuf` (512) moved to
-`.lowbss`. int 13h already writes through ES:BX and needed no help. Readers
-go through `dsk_get_dir` / `dsk_get_icon`, which stage a single entry back
-into the kernel segment, so every consumer keeps the plain DS:SI pointer it
-always had and no drawing or parsing code learned about segments. The
-staging buffers cost 128 bytes, against 3,584 recovered.
-
-The FAT driver keeps the same discipline: the boot sector's 0xAA55
-signature is the one check made with an `es:` override against
-`dsk_secbuf`; the BPB's first 64 bytes are then staged into `dsk_bpb` in
-the kernel segment, so the other sixteen validation rules run on plain DS
-reads (SPEC.md §18.2).
-
-## Step B — slide the package pool up ✅ done
-
-With task 0's stack gone from the top of the segment, the 4KB gap above the
-pool was free. `APP_LOAD_OFF` moved 0xA000 → 0xB000, handing that 4KB to the
-kernel window. The pool keeps its place at the top of the segment.
-
-It gave up 512 bytes doing so: an exclusive pool end of 0x10000 is not a
-16-bit immediate, so `APP_MAX_SIZE` is 0x4E00 and the pool stops at 0xFE00,
-leaving the segment's last half-sector deliberately unused. Net: +4,096 to
-the kernel, −512 from the pool.
-
-Packages were already base-relocatable, so this was a constant change — but
-it is mirrored in four places that must move together: `kernel/kernel.asm`,
-`apps/os88api.inc`, `tools/os88pkg.py` and the Makefile's `-DOS88_ORG` probe
-org. It invalidates previously built `.o88` files, whose header records the
-link base; rebuild them.
-
-## Step C — far code modules ✅ done (mechanism + two modules)
-
-The step that scales. `kernel/farcall.inc` adds a `.fartext` section
-assembled at `vstart=0`, shipped at the tail of the kernel image, and copied
-to `FAR_SEG:0000` by `far_init` — kmain's first act. Its code costs the
-kernel window nothing.
-
-The trick that makes it free: `.bss` is declared `vfollows=.text`, *not*
-following `.fartext`, so `.bss` deliberately overlaps the blob's landing
-zone. The blob is copied out before anything writes `.bss`, and `.bss` is
-uninitialised by definition, so the same addresses serve both in turn. This
-is exactly why `splash.inc` has always kept its state in `.text` rather than
-`.bss` — it runs in that same window, before the copy.
-
-Migrated so far: `ctrl.inc` (840 bytes) and `taskmgr.inc` (2,082 bytes).
-
-### Recipe for migrating the next module
-
-1. Check it is cold. Not the boot path (it runs before `far_init`), not an
-   ISR (vectors are seg:off into `KERNEL_SEG`), not a hot inner loop.
-2. Split the file: data above, code below. **All data stays in `.text`** —
-   strings, tables, templates, bitmaps — because far code still reads it
-   through DS. Insert `section .fartext` at the boundary and `section .text`
-   again before any trailing data.
-3. For each entry point the kernel dispatches to by near pointer, rename the
-   body (`xx_foo` → `xxf_foo`), emit `FARSHIM xx_foo, xxf_foo`, and end the
-   body in `retf` instead of `ret`. Window templates and kind tables keep
-   naming the shim, so no dispatch site changes.
-4. Rewrite each call out to the kernel as `KCALL routine`, and add
-   `FARK routine` to the list in `farcall.inc` if it is not there. A tail
-   `jmp` to a routine that never returns becomes `jmp far KERNEL_SEG:...`
-   and needs no wrapper.
-5. Calls within the module stay near. An indirect near call through a table
-   of `.fartext` labels is fine *only* from far code — a near pointer means
-   nothing without knowing which CS will run it.
-
-Costs: 6 bytes per shim, 4 bytes per distinct kernel routine called, 2 extra
-bytes per call site (in far space, which is free). Both migrated modules
-together pay 123 bytes to move 2,922.
-
-### Still worth migrating
-
-`icons.inc` (962), `files.inc` (1,027), `desk.inc` (477), `menu.inc` (734)
-— roughly 3KB more, all cold. `splash.inc` (1,006) never can be. Do these
-only when the window is actually tight again; each one is churn in a working
-module.
+Three other things must drop it, and all are one-liners at sites that already
+exist: the window moving or resizing (`ui_drag`, `ui_grow`, `wm_fit`), the
+adapter changing (§39.11's `vid_switch`, which already drops the back buffer),
+and the window being destroyed.
 
 ---
 
-## Step D — packages out of the kernel segment ✅ done
+## 2. What a window's save-under costs
 
-The last big lever, and it landed with the claim heap rather than before it.
-The kernel now has its full `KERN_MAX` budget to itself and every package
-owns a segment out of `PKG_SEG`'s 60KB pool.
+The mechanism is **already in the tree at menu scale** and needs generalising
+rather than inventing: `menu_drop` claims `MEM_K_SAVE`, calls `gfx_save` over
+the menu's rect, restores it on dismiss, **and repaints instead when the claim
+is refused**. `menu_save_kb` is the sizing, and it is already adapter-correct
+— it rounds x to byte columns, adds the misalignment byte, and multiplies by
+`[vid_planes_w]`.
 
-**What it cost, against what was predicted.** Packages did stop sharing the
-tiny model, and the boundary crossings all needed mechanism — but less of it
-than this section feared, because two of the three crossings were solved
-once each rather than per call site:
+Costed with that formula, for the **content rect only** (the chrome should be
+redrawn normally, because a raise changes the title bar's pinstripes anyway):
 
-- *OSAPI near calls became far calls* — but the SDK turns `OSAPI_X` into a
-  `%define KERNEL_SEG:offset`, so `call OSAPI_X` is a far call and **not one
-  package call site changed**. The table's cells went 4 bytes to 8 (SPEC.md
-  §20.3) and that was the whole of it.
-- *The paint/key/click pointers going word → dword* did not happen. The
-  record carries **one** far pointer, `W_DISP`/`W_SEG`, aimed at a three-byte
-  **dispatcher** in the package's own header — `call bp / retf`. Every
-  callback stays a near proc with a near `ret`, so a package author never
-  writes `retf` and a missing one cannot exist. It also makes dispatch
-  re-entrant across packages for free, because the pointer is read out of the
-  record and not a global.
-- *DS switching in both directions* is `wm_pkgcall` going in and the table
-  cells coming out. What was genuinely new is **data** crossing: the X stub
-  family (ES = the caller's DS, for a template / string / fence) and the N
-  stub family (stage a file name into the kernel's own buffer), plus the
-  standing rule that **ES = KERNEL_SEG on entry to every callback** so a
-  package can read the window record it was handed.
+| | Note Pad's default window | a window grown full screen |
+|---|---|---|
+| CGA 640x200 | ~6 KB | 16 KB |
+| Hercules 720x348 | ~6 KB | 31 KB |
+| VGA 640x480 (4 planes) | ~21 KB | 152 KB |
 
-**What it bought beyond the space** was exactly what was predicted, and more
-of it: relocation did not get simpler, it **disappeared**. Packages assemble
-at org 0 and load on a paragraph boundary, so there are no fixups of either
-class, no dual assembly, no diff scan, no byte-exact reconstruction check,
-and no author rule about whole-word package addresses — and with that rule
-went the class of bug where an address folded into a constant assembled
-cleanly and relocated wrong. `tools/os88pkg.py` is now a validator, not a
-generator.
+And the time, against the 578 ms it replaces: `gfx_save` is a byte copy, so
+~5 KB is on the order of **10 ms** to bank and 10 ms to restore on the mono
+adapters, ~40 ms on VGA. **A raise becomes ~20 ms of blitting instead of 578
+ms of glyphs**, which is comfortably inside the 100 ms budget and would be the
+first interaction in §7's table to reach it.
 
-**Where the segments came from** is not where this section expected. The
-plan was to carve them out of a block shared with the save-under heap on a
-256KB floor machine, and to worry about `VIEW_SEG` having taken 16KB off the
-top of it. None of that survived: `SND_SEG` went with the sound cards,
-`SAVE_SEG` and `VIEW_SEG` became **claims** (SPEC.md §50) taken when they
-are used, and the pool is simply the paragraph after the kernel's ceiling —
-`PKG_SEG` = `KERNEL_SEG` + `KERN_MAX`/16, with the heap starting the
-paragraph after the pool. The ladder has no gaps and nothing above the pool
-has a fixed address at all. The floor machine's budget is not 48KB shared
-with a heap; it is 60KB of pool plus whatever the heap can fund on the day.
+Note what the full-screen VGA figure is: **152 KB, which is §32's back buffer
+to within a rounding**. That is the number `bb_canfit` already refuses on a
+small machine, so we know both that it is affordable on a 640 KB box and that
+it must be refusable.
 
-**What is left.** `APP_MAX_SIZE` is the whole pool, so a single package may
-be 60KB — but the pool is shared, so a package that takes all of it is a
-package nothing else can run beside. The next lever, if one is ever needed,
-is a second pool segment; nothing today wants it.
+---
 
-## Step E — size low memory, then move the kernel down onto it ✅ done
+## 3. Discardable claims — yes, and the period name for it is *purgeable*
 
-Steps A–D treated linear 0x00600–0x0FFFF as *somewhere to put things*. Nobody
-had asked the opposite question: how much of it is actually used? The answer,
-measured rather than argued, is that most of it was not.
+The proposal is right and it has good precedent in exactly this era: Windows
+3.x had `GMEM_DISCARDABLE`, and the Macintosh Memory Manager — which this OS
+is a homage to — had **purgeable handles**, `HPurge`/`HNoPurge`, where the
+Memory Manager would drop a purgeable block under pressure and the
+application checked and called `ReallocateHandle`. Using the Mac's name and
+shape would be in keeping and would make the contract familiar.
 
-The measurement is a 0xCC fill of every low byte at the top of `kmain`, then
-the machine driven as hard as it goes — Clock, two Bounces, About, the
-Control Panel on both its pages, the Task Manager with a window drag, a Disk
-window, the Fractal with its worker task, and Paint saving a GIF into a
-folder it created from the file dialog — then `pmemsave` and read the deepest
-mark in each region. ISR frames are included, because the tick and mouse
-handlers run on whichever stack they interrupt.
+**A raise-cache is the ideal first consumer**, and for a reason worth stating
+plainly: *its fallback is not merely designed, it is the code that ships
+today.* If the image is gone, `wm_raise` does what it does now. There is no
+new failure path to write, test or get wrong.
 
-| region             | reserved before | high-water | reserved after |
-|--------------------|-----------------|------------|----------------|
-| `.fartext` blob    | 10,752          | 5,455      | 10,752 (kept)  |
-| FAT snapshot       | 12,288 (24 sec) | 4,608 (9)  | 5,120 (10 sec) |
-| `sch_stacks`       | 16,896 (11×1536)| 150        | 5,632 (11×512) |
-| disk buffers       | 3,584           | 3,584      | 3,584          |
-| task 0's stack     | 20,478          | 246        | 6,142          |
+### 3.1 The one hard problem: a discarded claim leaves a dangling segment
 
-The `.fartext` reserve is deliberately **not** cut. Its 5,297 spare bytes are
-where the next cold module goes when the kernel segment needs relief again —
-worth more than 2.5KB of heap. Everything else was sized to a multiple of the
-measurement and the total came to 30,464 bytes, so `KERNEL_SEG` moved from
-0x1000 to **0x0800** and the 32,768 bytes between them went to the claim
-heap. On the 639K test machine the Task Manager's kernel figure fell from
-107K to 75K and the heap rose from 471K to 503K; a 256KB floor machine gains
-the same 32KB.
+A package keeps its claim's segment in its own bss. Discard it and that word
+names memory somebody else now owns, and the package writes through it. That
+is cross-instance corruption — the worst failure class here, because it
+presents as a bug in the victim.
 
-**The floor is the boot sector, not the ladder.** The BIOS loads
-`boot/boot.asm` to 0000:7C00 and that code is still executing while the
-kernel's sectors arrive — it far-calls the splash at `KERNEL_SEG:0008` after
-every one — so `KERNEL_SEG:0000` cannot begin below 0x7E00. 0x0800 is the
-first round paragraph that clears it, and guard 8 in `kernel.asm` asserts it.
-Three files carry the constant: `kernel/kernel.asm`, `boot/boot.asm` (it is
-assembled separately) and `apps/os88api.inc` (it is baked into every
-package's far-call targets, so **every `.o88` must be rebuilt** — a package
-built against the old value far-calls into empty memory).
+Three ways out, in increasing safety and cost:
 
-**What it cost.** FAT16. `DSK_FAT_SECS` = 10 is below the 16 FAT sectors a
-volume must have before it can be FAT16 at all, so mount rule 10 (SPEC.md
-§18.2) now rejects the whole class structurally. The 2.88MB test geometry
-that existed to give the FAT16 encoding a positive test is gone from
-`tools/os88disk.py` and the `filetest-fat16.img` target is gone from the
-Makefile; the FAT16 halves of `dsk_next_clus` and `dskw_setfat` stay in the
-tree, unreachable. Every geometry this OS boots or builds still mounts with a
-sector to spare: 360KB = 2, 720KB = 3, 1.2MB = 7, 1.44MB = 9.
+1. **The owner must ask** (`OSAPI_MEM_VALID`) before each use. Cheap, and easy
+   to forget once — after which the failure is silent and remote.
+2. **Hand back a handle, not a segment**, resolved per use. Safe, but it is a
+   new ABI shape for every consumer and a call in every inner loop.
+3. **Do not let packages have them yet.** Make discardable a *kernel-side*
+   class first, prove the mechanism on kernel caches, and publish a package
+   ABI only once the shape is known.
 
-**What to redo before trusting a smaller number.** Guard 3 only catches
-`.lowbss` crowding task 0; nothing catches a task stack that outgrows its own
-512-byte slice. Re-run the fill probe.
+**Recommend (3) for the first cut**, because the kernel already has three
+caches whose "you cannot have it" path is written and tested:
 
-## Step F — the kernel is 64KB, buffers and all ✅ done
+- `MEM_K_ASC` — a volume's `ASSOC.DAT` cache (§54.7), already "reloaded on a
+  volume switch".
+- `MEM_K_FATW` — a volume's private FAT window (§18.8.1), already gated on
+  128 KB of free heap and already documented as "a refused claim just shares".
+- `MEM_K_SAVE` — the menu save-under, already "the restore repaints instead".
 
-Steps A–E steered by the kernel's 64KB **window** — what CS/DS can address —
-and treated everything outside it as free. Step F changes what is being
-measured: the kernel's whole **footprint**, code and scratch alike, against
-64KB of physical memory. `docs/KERNEL-MEMORY.md` is the maintained account of
-it; this is what the change was.
+Every one of those is a block the kernel can lose without telling anybody,
+because losing it is a state the code already handles. That makes the first
+implementation almost entirely about the allocator and almost not at all about
+notification.
 
-Three things fell out of that switch, and the first is the interesting one.
+### 3.2 Prefer shed-and-retry to discard-and-notify
 
-**`.fartext` inverted.** Step B moved cold modules out of the window into a
-segment of their own — 5,455 bytes of code, and a 10,752-byte reservation to
-land it in. That was a clear win against the window and a 5,297-byte **loss**
-against the footprint. It is retired: the modules are ordinary `.text`, and
-the shims went with it — three `FARSHIM` stubs, twenty-seven `FARK` wrappers,
-`far_init`, and two bytes on each of 91 `KCALL` sites, which is why the image
-grew by less than the blob it absorbed.
+The notification protocol is where this gets expensive, and the first cut can
+skip it entirely.
 
-**"Whatever is left" was hiding the savings.** Step E measured the buffers and
-shrank them, and the machine came out exactly the same size. The reason was
-`STK0_TOP equ LOW_LIMIT - 2`: task 0's stack was defined as the gap between
-the top of `.lowbss` and the kernel segment, so every byte saved below it
-simply made that gap bigger. The FAT snapshot gave up 7KB and task 0's stack
-grew by 7KB. `STK0_SIZE` is a named constant now (1,024, against a measured
-246), and that one edit is what turned step E's arithmetic into memory.
+`mem_claim` currently fails when no hole fits, and every caller already has a
+refusal path. So: **on failure, shed discardable claims oldest-first and retry
+once.** No callback, no ordering question, no "when is the owner told" — the
+owner is told by the block being absent the next time it looks, which is
+exactly what those three caches already cope with.
 
-**The boot sector was the floor, so it moved.** With the kernel at 0x00600 and
-up to 64KB long, its landing zone covers 0x7C00 — where the BIOS puts the
-sector that is still reading it. The sector now copies itself to linear
-0x11000 and far-jumps there **keeping its own offset**, so every `org 0x7C00`
-label still resolves and only the segment registers change.
+That also side-steps a real concurrency trap. A discard is only safe when the
+owner is not mid-use, and `mem_claim` is called from the loader, from `kmain`,
+from drivers and from window callbacks — some holding the gfx lock and some
+not. With shed-and-retry over kernel caches, the rule is simply that a
+discardable kernel cache is re-derived at its next use, which is already true
+of all three.
 
-| region | step E | step F |
-|---|---:|---:|
-| `.fartext` reserve | 10,752 | — |
-| FAT snapshot | 5,120 | 4,608 |
-| `.lowbss` | 9,216 | 9,216 |
-| task 0's stack | 6,142 | 1,024 |
-| image + `.bss` | 44,549 | 50,176 |
-| **kernel footprint** | **75,779** | **65,024** |
+When packages do get this, the rule to publish is: **a discardable claim may
+only be touched under the gfx lock.** That is what makes a discard safe
+against a worker, because the lock is what already serialises a worker against
+the UI task.
 
-`KERN_MAX` is retired with the rest: a fixed ceiling with slack under it is
-memory nothing can use. Every base is derived from the measured sizes, so the
-package pool starts where this build's kernel ends and the heap after the
-pool — and on the 639K test machine the heap went from 503K to 515K.
+### 3.3 Where they should live in the heap
 
-**One bug came with it, and it is worth remembering.** Making the bases
-derived made them arbitrary, and three of them stopped being 512-byte
-aligned. int 13h moves one sector per call, which bounds a transfer to 512
-bytes but does *not* stop one straddling a 64KB physical boundary — only
-starting 512-aligned does. Every base here is an int 13h target, so the
-symptom was a **"Disk error" on any save large enough to reach the next 64KB
-boundary**: Paint's 63KB BMP hit it on the first try, a Note Pad file never
-would. `KIMG_PARA` rounds the image to a whole 512 bytes now and guard 6
-asserts the whole ladder. It had held by luck, because every base used to be
-a round constant.
+Data claims grow up from the bottom; regions come down from the top (§50.3),
+because a region's base is its CS and can never move — and the rule exists
+precisely because "from one end they interleave and a long-lived data claim
+mid-heap permanently splits the space a package can load into".
 
-## Rejected
+**An earlier draft of this document said to put purgeable claims at the top
+end with the regions. That was wrong, and it was wrong for the reason §50.3
+was written down.** A purgeable block in the region arena is indistinguishable
+from a region to the placement scan while it is live, so it splits exactly the
+run a package needs — and shed-and-retry does not save it, because that fires
+only on *failure*. A region that still fits, but fits worse, has been
+fragmented without anything noticing. The saving grace, that a purgeable block
+can always be removed, only pays out when something has already been refused.
 
-- ~~**Shrinking `SCH_STACK` below 1,536.**~~ Rejected at step A1 on the
-  grounds that the stacks no longer competed with anything. They did: they
-  competed with how far down the kernel segment could move. Done in step E,
-  measured rather than guessed — 512 bytes, 3.4× the observed high-water
-  mark.
-- **Moving `font_glyphs` (764 bytes) to `LOW_SEG`.** It is read per glyph on
-  the drawing hot path; an inner-loop segment override is not worth 764
-  bytes while 28KB is free.
-- **Overlays paged from floppy.** Far code gets the same win with no disk
-  I/O, no eviction policy, and no failure mode.
+The deciding question is **which allocation a cache should be traded against**,
+and the answer is: whichever one is short of the free run in the middle. Both
+arenas grow toward that one run, so it is the thing everything actually
+competes for.
+
+**So: purgeable claims are HIGHEST-FIT WITHIN THE DATA ARENA.** Not a third
+zone, and not the region zone — the top of the arena they already belong to.
+That gets three things at once:
+
+- The region arena keeps §50.3's property: everything in it is a region.
+- A purgeable block always sits against the free middle, so **shedding it
+  always enlarges the one run everything competes for**, rather than punching
+  an isolated hole among the data claims.
+- Data claims below it are unaffected, and their own churn stays where it was.
+
+`mem_dir` is already a word and already carries 0 = bottom-up, 1 = top-down
+(`mem_claim_hi`), so this is a third value on an existing knob rather than a
+new mechanism.
+
+Two consequences to write down with it: `mem_claim_hi` must shed-and-retry too
+(a package load is a user action, a cache is not, and the cache should lose
+every time), and a purgeable claim must not be a `mem_regrow` candidate —
+regrowing the block that is meant to be against the free middle is how it ends
+up in the middle of the arena instead.
+
+Compaction stays out of scope, as agreed. This is the cheap way to need it
+later rather than sooner.
+
+### 3.4 What the Task Manager should say
+
+Out of the bar and out of the used total. **And the reason is stronger than
+"do not hide things from the user": from the user's point of view it is not
+taken at all.** They can have it back the instant anything needs it, so
+counting it as used would be the misleading choice, not the honest one — a
+full bar that is not full is worse than a line nobody reads.
+
+**One `Purgeable 21K` line all the same, and it is for US.** It is a developer
+instrument: it is how you see that a save-under was claimed rather than
+refused, that a shed actually happened, and that a cache is not quietly being
+re-claimed on every pass. Nobody needs to act on it and the number moving is
+not a problem — which is exactly why it belongs on its own line and not in the
+bar. §41.6's XMS line is the precedent for a figure that is in neither map.
+
+### 3.5 Cost of the mechanism itself
+
+`MC_SIZE` is 8 (`MC_SEG`, `MC_PARA`, `MC_OWN`, `MC_DMA`). A flags word takes
+the record to 10 and the table from 256 to 320 bytes of `.bss` — **64 bytes
+against `KERN_BUDGET`**, which currently has 1,536 spare. A spare bit in
+`MC_OWN` would cost nothing, but the owner word is compared whole in several
+places and a masked compare is a trap for later; take the 64 bytes.
+
+---
+
+## 4. Recommendations, in the order worth doing them
+
+**BUILT: 1, 2, and 3's placement.** The opt-in in 1 was dropped and then put
+back: `WF_SAVEU` / `OSAPI_WM_SAVEU` (0x0340), for SPEC.md §11.96.1's reason.
+Dropping it answered the MEMORY question ("purgeable memory is not spent, so
+there is nothing to opt out of") and missed the CORRECTNESS one, which is what
+the opt-in was really carrying — `wm_clip_set` catches a covered window that
+DRAWS, and not one whose content changes without being drawn, which is exactly
+what §11.3's background painters do when they skip on invisibility.
+
+**UNVERIFIED and the first thing to check:** `wm_hide` drops the cache, and the
+test for it was inconclusive — a minimize-and-restore reported no `W_PAINT`,
+which is either the hook failing or the scripted click missing the minimize
+box, and the harness cannot tell those apart. It is safe to ship as it stands
+because the only window that opts in is Note Pad, whose promise holds across a
+hide too (its worker's two background drawers ask `OSAPI_WM_OBSCURED` and its
+state is not time-varying). **Verify it before a second application opts in** —
+a Timer or a Bounce is exactly the case that would break. What is measured:
+a raise makes **zero `W_PAINT` calls** where it used to make one costing
+578 ms, and the restored content is **pixel-identical** (0 differing of a
+124,928-byte content rect). The kernel cost is **+809 bytes**, which crossed
+two 512-byte rungs and left `KERN_BUDGET` at 1,536 spare.
+
+**Owed on it:** a clean end-to-end wall figure for the raise. The obvious
+measurement — step frames until the screen stops changing — is confounded by
+Note Pad's worker waking every `NP_WTICKS` ticks and drawing, so it reports
+when the WORKER settled and not when the raise did. Bracket it kernel-side
+instead (a breakpoint either end of `wm_raise`), and A/B it by patching the
+`call wm_su_try` to three NOPs in the running guest, which needs no rebuild.
+The first attempt at that patch used the listing's `.text`-relative offset and
+hit the wrong instruction — the address to write is the one `os88marty read`
+confirms holds `E8`.
+
+1. **Per-window save-under for a raise, opt-in via a window flag** — the
+   biggest single latency left, ~578 ms → ~20 ms, using `gfx_save`,
+   `menu_save_kb`'s sizing and `MEM_K_SAVE`'s refusal shape, all of which
+   exist. Invalidated at `wm_clip_set`, on move/resize, and on `vid_switch`.
+   Un-minimizing from the dock is the same path (`wm_show`) and comes free.
+2. **Discardable as a kernel-side claim class, with shed-and-retry** — no
+   notification protocol, first consumers the three caches that already
+   survive not existing, plus (1)'s save-under, which is the perfect fit
+   because its fallback is the shipping code path.
+3. **Task Manager: out of the bar and out of the total, one `Purgeable` line**
+   — a developer instrument, because from the user's side it is not taken.
+4. **Allocate purgeable HIGHEST-FIT WITHIN THE DATA ARENA** (§3.3), never in
+   the region arena, so a shed always enlarges the free middle and §50.3's
+   "everything in the region zone is a region" survives. `mem_claim_hi` sheds
+   and retries too; purgeable claims never `mem_regrow`.
+5. **A package-visible discardable ABI — later, and only after (2) has run.**
+   Handle-based, gfx-lock-only, and worth it mainly for Paint's undo image and
+   Tracker's sample buffers, which are the two large app allocations that
+   could honestly be re-derived or reloaded.
+6. **Heap compaction — not yet**, and (4) is what buys the time.
+
+### Carried over from docs/NOTEPAD-NOTES.md §7
+
+7. **Bound pass 1 for a caret move** (NOTEPAD-NOTES §7.1) — ~155 ms → ~6 ms on an arrow key.
+   No character moved, so only the row the caret left and the one it arrived
+   on can differ, and `np_move` knows both. The care needed is that pass 1
+   also sets `[np_rowsn]`, so a shorter walk pushes traffic onto §27.13's
+   index; that is probably fine now the index exists, but it wants its own A/B.
+8. **The scroll's blit and `np_sbar`** (NOTEPAD-NOTES §7.2) — ~186 ms for a one-row scroll,
+   of which the lettering is near its floor and the full-bar redraw for a
+   one-pixel thumb move is not. Needs breakpoints of their own before
+   attributing further (NOTEPAD-NOTES §6.5).
+9. **`NP_HCHUNK` = 4 is still an emulator number** (NOTEPAD-NOTES §5.4) — it sizes a
+   gfx-lock hold and a duty cycle, both of which the operator feels, and only
+   the 5150 can set it. `make npbench` reports it.
+10. **NOTEPAD-NOTES §5.2.1's 705 stale pixels** — pre-existing, reproducible in one run with
+    `tools/notepad`, and the suspicion is an interleaving between the
+    background count and the redraw's signatures rather than anything about
+    seeding.
+11. **`[np_rowsn]` is not capped to the array it indexes** (NOTEPAD-NOTES §5.3.1) — latent,
+    documented, and wants its meaning settled across its four readers before
+    a clamp is added.

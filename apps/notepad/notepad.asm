@@ -320,6 +320,12 @@ NP_FF_DOC    equ 2
 ; appears, the bar already says "Note Pad  File".
 ; -----------------------------------------------------------------------------
 np_entry:
+    call np_xdrop                   ; the row index starts EMPTY and at its
+                                    ; initial stride (SPEC.md 27.13). bss
+                                    ; arrives zeroed, and a zero [np_xksh] is
+                                    ; a stride of ONE - not wrong, but 64
+                                    ; entries covering 64 rows and halving four
+                                    ; times to catch up on the first count
     mov ax, NP_KB0                  ; the document, before anything else: an
     call OSAPI_MEM_CLAIM            ; editor with nowhere to put the text is
     jc .nomem                       ; not a window worth opening, and the
@@ -335,6 +341,15 @@ np_entry:
     mov al, 1                       ; resizable (SPEC.md 11.1/27): np_paint
     call OSAPI_WM_SIZABLE           ; already lays out from the live record,
     mov al, 1                       ; so the next repaint re-wraps for free
+    mov al, 1                       ; ...and it PROMISES its content stands
+    call OSAPI_WM_SAVEU             ; still while it is not drawing, so a
+                                    ; raise puts the old pixels back instead
+                                    ; of lettering 464 cells (SPEC.md 11.96.1).
+                                    ; True of this app: everything that draws
+                                    ; goes through np_redraw or np_paint, and
+                                    ; the worker's two background drawers ask
+                                    ; OSAPI_WM_OBSCURED first
+    mov al, 1
     call OSAPI_WM_SNAP              ; ...and snapped (SPEC.md 11.94), because
     pop ax                          ; every keystroke redraws a row of text and
                                     ; an aligned cell writes ONE framebuffer
@@ -1096,19 +1111,37 @@ np_scrollpaint:
     mov byte [np_clean], 1
     mov byte [np_resume], 0
     cmp byte [np_rowsok], 0
-    je .noseed
+    je .xseed
     mov ax, [np_bd0]
     or ax, ax
-    jz .noseed                      ; the band starts at the top of the view:
+    jz .xseed                       ; the band starts at the top of the view:
     dec ax                          ; there is no earlier row to start from
     mov bx, ax                      ; np_rows is valid up to here and no
     inc bx                          ; further, the entries above the band
     mov [np_rowsn], bx              ; having just been shifted out of range
     mov dx, [np_vrows]
     call np_seedrow
+    cmp byte [np_resume], 0
+    jne .noseed
+.xseed:
+    mov ax, [np_top]                ; ...and the ROW INDEX has one (SPEC.md
+    mov dx, [np_vrows]              ; 27.13). This is every scroll UPWARD: the
+    call np_xseed                   ; exposed row is row 0 of the view, so
+                                    ; there is nothing above it in np_rows and
+                                    ; the walk went back to index 0 to letter
+                                    ; ONE row - 335 ms of a 640 ms Up
 .noseed:
-    mov ax, [np_vrows]
-    mov [np_lastrow], ax
+    mov ax, [np_bd1]                ; STOP AT THE BAND, not at the bottom of
+    mov [np_lastrow], ax            ; the view (SPEC.md 27.13). Nothing below
+                                    ; np_bd1 is drawn - np_clip says so - and
+                                    ; nothing below it needs LAYING OUT
+                                    ; either: OSAPI_GFX_SCROLL moved those
+                                    ; pixels and np_shiftrows moved np_sig and
+                                    ; np_rows by the same d, so their
+                                    ; descriptions already match the glass.
+                                    ; Walking to the view's bottom to draw one
+                                    ; exposed row was 20 rows for 1 - 333 ms of
+                                    ; a 520 ms Up
     call np_walk
     mov byte [np_clip], 0
     mov byte [np_clean], 0
@@ -1926,6 +1959,10 @@ np_rstart:
     mov [np_ckpc], ax               ; checkpoint candidate: np_ask promotes it
     mov ax, [np_row]                ; the moment the walk stands on the caret
     mov [np_ckpcr], ax              ; (SPEC.md 27.4)
+    call np_xnote                   ; ...and offered to the row index, which is
+                                    ; the same fact again for a row OUTSIDE the
+                                    ; view - one compare unless it is wanted
+                                    ; (SPEC.md 27.13)
     cmp ax, NP_MAXROWS              ; ...and into np_rows, which is the same
     jae .norow                      ; fact for every row rather than for the
     shl ax, 1                       ; caret's (SPEC.md 27.5)
@@ -2948,7 +2985,14 @@ np_hmark:
     mov byte [np_hdirty], 1
     mov word [np_hrow], 0
     mov word [np_hi], 0
-    ret
+    jmp np_xdrop                    ; ...and the row index with them (SPEC.md
+                                    ; 27.13): it is the same event - a table of
+                                    ; where rows BEGIN means nothing under a
+                                    ; layout where they begin somewhere else.
+                                    ; A tail call, because np_xdrop preserves
+                                    ; the flags too and this routine's whole
+                                    ; contract is that it is a drop-in for a
+                                    ; `mov byte [np_hdirty], 1`
 
 ; -----------------------------------------------------------------------------
 ; np_measure - run the walk without drawing
@@ -3131,6 +3175,372 @@ np_netseed:
     pop ax
     ret
 
+; =============================================================================
+; THE ROW INDEX (SPEC.md 27.13) - random access to a row without walking to it
+;
+; np_rows describes the VIEW and nothing else, so every question about a row
+; outside it fell back to laying the note out from index 0. That is Up out of
+; the top of the view, and it measured 5.2 s a press.
+;
+; This is a sparse table of the character index at which every Kth ABSOLUTE
+; row begins: entry n describes row n << [np_xksh]. It costs no walking at
+; all, because SPEC.md 27.7.3's background count already visits every row in
+; order and already computes exactly this - np_xnote just keeps what was
+; being thrown away.
+;
+; BOUNDED BY DECIMATION, not by growing. A note of nothing but newlines is one
+; row per character, so at NP_MAXKB that is 16,384 rows - too many to reserve
+; and awkward to claim. When the table fills, np_xhalve keeps every second
+; entry and doubles the stride: it then always spans the whole note, always
+; costs NP_XN entries, and the walk from the nearest checkpoint is at most K
+; rows, which grows only logarithmically in the note's length.
+;
+; The stride is a POWER OF TWO and is kept as its log, because every lookup
+; would otherwise be a `div` - 150 clocks against a shift's 10, once per row
+; of every walk in the module.
+; =============================================================================
+; ENTRIES ARE THE WHOLE COST MODEL, and the first version got this wrong by
+; being frugal with them. A lookup lands on the checkpoint at or BEFORE the row
+; wanted, so the walk that follows is up to K rows - and one keystroke runs
+; FOUR walks (np_vmove's, np_move's, the redraw's pass 1 and np_scrollpaint's),
+; each paying that K. At 64 entries a 781-row note halves down to K = 16 and an
+; Up cost 68 rows of walking, which measured 644 ms and is where 27.13's first
+; cut stopped. 256 entries hold README at K = 4 with no halving at all.
+;
+; 512 bytes to do it, which is the right trade here twice over: a package's bss
+; ships inside its image (SPEC.md 51/20.2) and Note Pad's document is a heap
+; claim of its own (27.6), so this is half a kilobyte against a 16KB note and
+; nothing against KERN_BUDGET, which a package does not touch.
+NP_XN     equ 256               ; entries: 512 bytes, and 256 x 1 row means a
+                                ; note under 256 rows is answered EXACTLY
+NP_XKSH0  equ 0                 ; ...so the stride starts at 1 and doubles only
+                                ; when the note proves it has to
+
+; -----------------------------------------------------------------------------
+; np_xnote - offer the row just started to the index
+; in:  [np_row] = the visible row, [np_i] = where it begins, np_bounds run
+; out: nothing; preserves all registers and the flags
+;
+; Called from np_rstart, so it runs once per row of EVERY walk and its cost in
+; the ordinary case has to be nothing: one compare against the row the table
+; wants next.
+;
+; ONLY THE NEXT ENTRY OWED IS TAKEN, and that is what keeps the table honest.
+; A seeded walk skips the rows above its seed, so a table that recorded
+; whatever it happened to pass would have holes - and a lookup landing in one
+; answers for a row it never saw, which is docs/FIELD-NOTES.md 4's shape (an
+; index resolved against a snapshot that had shifted). Contiguous or nothing.
+; -----------------------------------------------------------------------------
+np_xnote:
+    pushf
+    push ax
+    mov ax, [np_row]
+    add ax, [np_top]                ; ABSOLUTE: the table outlives the view,
+    cmp ax, [np_xnext]              ; and [np_top] moves under it
+    jne .out
+    cmp word [np_xn], NP_XN
+    jae .out                        ; full and not yet halved: cannot happen,
+                                    ; .store halves on the way out, but a
+                                    ; table that could not be halved must not
+                                    ; be written past its end
+    push bx
+    mov bx, [np_xn]
+    shl bx, 1
+    mov ax, [np_i]
+    mov [bx+np_xi], ax
+    inc word [np_xn]
+    mov ax, [np_xnext]              ; ...and where the next one goes
+    push cx
+    mov cl, [np_xksh]
+    mov bx, 1
+    shl bx, cl
+    pop cx
+    add ax, bx
+    mov [np_xnext], ax
+    pop bx
+    cmp word [np_xn], NP_XN
+    jb .out
+    call np_xhalve
+.out:
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; np_xhalve - keep every second entry and double the stride
+; out: nothing; preserves all registers
+;
+; [np_xnext] is deliberately NOT recomputed: it is xn * K, and halving xn while
+; doubling K leaves that product exactly where it was. The next row the table
+; wants is the next row it wanted.
+; -----------------------------------------------------------------------------
+np_xhalve:
+    push ax
+    push cx
+    push si
+    push di
+    xor si, si
+    xor di, di
+    mov cx, NP_XN / 2
+.lp:
+    mov ax, [si+np_xi]
+    mov [di+np_xi], ax
+    add si, 4                       ; every SECOND entry...
+    add di, 2                       ; ...into consecutive slots
+    loop .lp
+    inc byte [np_xksh]              ; ...at twice the stride
+    mov word [np_xn], NP_XN / 2
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_xdrop - the layout moved: every entry describes a note that is not this one
+; out: nothing; preserves all registers and the flags
+;
+; Called by np_hmark, which is already "the height is owed and owed from the
+; top" - the same event, because both are invalidated by exactly the thing
+; that changes where a row begins. Keeping them one call is what stops a
+; future edit raising one and forgetting the other.
+; -----------------------------------------------------------------------------
+np_xdrop:
+    mov word [np_xn], 0
+    mov word [np_xnext], 0
+    mov byte [np_xksh], NP_XKSH0
+    ret
+
+; -----------------------------------------------------------------------------
+; np_xrow - the checkpoint at or before ABSOLUTE row AX
+; out: CF=1 none; else CF=0, AX = the checkpoint's absolute row, BX = the index
+;      it begins at, CX = 1 if a LATER checkpoint exists (so the row wanted is
+;      known to be within one stride) and 0 if this is the deepest
+; -----------------------------------------------------------------------------
+np_xrow:
+    push dx
+    mov cx, [np_xn]
+    jcxz .no
+    or ax, ax
+    js .no                          ; above row 0: nothing describes it
+    push cx
+    mov cl, [np_xksh]
+    shr ax, cl                      ; which entry - a shift, not a divide
+    pop cx
+    cmp ax, cx
+    jb .have
+    mov ax, cx                      ; past the high-water mark: the deepest
+    dec ax                          ; one we actually have
+.have:
+    mov dx, ax
+    inc dx
+    cmp dx, cx                      ; is there one BELOW it as well?
+    mov cx, 1
+    jb .later
+    xor cx, cx
+.later:
+    mov bx, ax
+    shl bx, 1
+    mov bx, [bx+np_xi]
+    cmp bx, [np_len]
+    ja .nopop                       ; a table that outlived its note
+    push cx
+    mov cl, [np_xksh]
+    shl ax, cl                      ; the entry's absolute row
+    pop cx
+    pop dx
+    clc
+    ret
+.nopop:
+    pop dx
+    stc
+    ret
+.no:
+    pop dx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; np_xseed - seed the next walk at the checkpoint at or before ABSOLUTE row AX
+; in:  AX = the absolute row wanted, DX = the VISIBLE row to stop after
+; out: CF=0 seeded; CF=1 the table cannot answer and the caller is unchanged.
+;      Preserves all registers.
+; -----------------------------------------------------------------------------
+np_xseed:
+    push ax
+    push bx
+    push cx
+    call np_xrow
+    jc .no
+    sub ax, [np_top]                ; np_sdr is a VISIBLE row (np_hwalk's rule)
+    mov [np_sdr], ax
+    mov [np_sdi], bx
+    mov [np_lastrow], dx
+    mov byte [np_resume], 1
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_xseedi - seed at the checkpoint at or before the character index AX, and
+;             BOUND the walk when the table can prove where that row ends
+; in:  AX = a character index (in practice [np_cur])
+; out: CF=0 seeded, and [np_lastrow] set when a later checkpoint exists;
+;      CF=1 not seeded and [np_lastrow] untouched. Preserves all registers.
+;
+; The inverse lookup, and the one that matters most: the caret-follow net has
+; the caret's INDEX and wants its ROW, which is the question that used to cost
+; a walk of the whole note. np_xi rises with the row, so a binary search finds
+; it in six compares.
+;
+; THE BOUND IS THE HALF WORTH HAVING. If checkpoint n is the last one at or
+; before the caret and checkpoint n+1 exists, then the caret's row is below
+; n*K and above (n+1)*K, so the walk may stop at (n+1)*K and SPEC.md 27.7.7's
+; "the walk is still unbounded, and has to be" stops being true. At the
+; deepest checkpoint there is no n+1 and it is unbounded again, which is the
+; old behaviour and still correct.
+; -----------------------------------------------------------------------------
+np_xseedi:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, ax                      ; the index wanted
+    mov cx, [np_xn]
+    jcxz .no
+    xor bx, bx                      ; lo
+    mov dx, cx
+    dec dx                          ; hi
+.bs:
+    cmp bx, dx
+    jae .found
+    mov ax, bx
+    add ax, dx
+    inc ax
+    shr ax, 1                       ; mid, rounded up
+    mov di, ax
+    shl di, 1
+    mov di, [di+np_xi]
+    cmp di, si
+    ja .lower
+    mov bx, ax                      ; np_xi[mid] <= index: mid is a candidate
+    jmp short .bs
+.lower:
+    mov dx, ax
+    dec dx
+    jmp short .bs
+.found:
+    mov ax, bx                      ; BX = the entry
+    mov di, ax
+    shl di, 1
+    mov di, [di+np_xi]
+    cmp di, si
+    ja .no                          ; even entry 0 is past it: impossible while
+                                    ; entry 0 is index 0, and cheap to refuse
+    cmp di, [np_len]
+    ja .no
+    push cx
+    mov cl, [np_xksh]
+    mov dx, ax
+    shl dx, cl                      ; DX = the checkpoint's absolute row
+    pop cx
+    inc ax
+    cmp ax, cx                      ; a checkpoint BELOW it as well?
+    mov ax, 0                       ; (0 = no, so no bound)
+    jae .nolim
+    mov ax, 1
+.nolim:
+    push ax
+    mov ax, dx
+    sub ax, [np_top]                ; visible
+    mov [np_sdr], ax
+    mov [np_sdi], di
+    mov byte [np_resume], 1
+    pop ax
+    or ax, ax
+    jz .okno
+    push cx                         ; a later checkpoint exists, so the caret's
+    mov cl, [np_xksh]               ; row is inside this stride: stop there
+    mov ax, 1
+    shl ax, cl
+    pop cx
+    add ax, [np_sdr]
+    mov [np_lastrow], ax
+.okno:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_seedtail - seed at the DEEPEST row [np_rows] describes, stopping after DX
+; in:  DX = the visible row the walk has to reach
+; out: [np_resume] set if a seed was had; preserves all registers
+;
+; np_seedrow's refusal is silent and its caller is then walking from index 0,
+; so this is the fallback both of its callers want: the table stops somewhere,
+; and the row BELOW where it stops is reached by walking forward a row or two
+; rather than by laying the note out again from the top.
+;
+; It is np_netseed's argument (SPEC.md 27.7.7) for a ROW instead of for the
+; caret, and a weaker case than np_netseed's: both of these callers are moving
+; the caret, which reflows nothing, so every row above the seed laid out
+; identically by inspection rather than by 27.4's reasoning.
+; -----------------------------------------------------------------------------
+np_seedtail:
+    push ax
+    cmp byte [np_rowsok], 0
+    je .out                         ; no table at all
+    mov ax, [np_rowsn]
+    or ax, ax
+    jz .out                         ; it describes nothing: index 0 it is
+    cmp ax, NP_MAXROWS              ; ...and [np_rowsn] IS NOT CAPPED TO THE
+    jbe .have                       ; ARRAY on the walk's natural-end path -
+    mov ax, NP_MAXROWS              ; it is np_row+1 there, so a 781-row note
+.have:                              ; leaves it at 771 against 60 slots. Every
+                                    ; np_seedrow caller before this one passed
+                                    ; a VISIBLE row, which np_bounds caps at
+                                    ; NP_MAXROWS, so nothing ever indexed past
+                                    ; the table and the miss went unseen; this
+                                    ; caller takes its row FROM [np_rowsn] and
+                                    ; would have been the first to read out of
+                                    ; it
+    cmp dx, ax
+    jb .out                         ; THE GUARD, and the whole reason this is a
+                                    ; routine rather than six lines at each
+                                    ; call site: the deepest row is only a seed
+                                    ; for a row BELOW it. np_seedrow and
+                                    ; np_seedck each refuse for four different
+                                    ; reasons and "the row is past the table"
+                                    ; is only one of them - a caret on row 0
+                                    ; asks np_seedck for row -1 and is refused
+                                    ; too, and seeding THAT at row 13 starts
+                                    ; the walk below the row it is looking for,
+                                    ; which then never finds it. Measured: the
+                                    ; caret stopped moving on Up and the view
+                                    ; stopped following it
+    dec ax
+    call np_seedrow                 ; ...which also carries the bound in DX
+.out:
+    pop ax
+    ret
+
 np_seedrow:
     push ax
     push bx
@@ -3202,6 +3612,12 @@ np_paint:
                                     ; repaint of a 16KB note otherwise walks
                                     ; 16KB of it to draw one screenful - and
                                     ; every scroll step is a full repaint
+    mov ax, [np_top]                ; ...and it STARTS at the top of the view
+    mov dx, [np_vrows]              ; rather than at index 0 (SPEC.md 27.13).
+    call np_xseed                   ; The bound above stopped it walking past
+                                    ; the view; this stops it walking TO the
+                                    ; view, which a raise of a window scrolled
+                                    ; halfway down a long note paid in full
     call np_walk                    ; (SPEC.md 27.7/27.2)
     mov byte [np_clean], 0          ; ...and because it WAS filled, a row's run
     call np_sigmark                 ; stops at its last character instead of
@@ -3744,17 +4160,16 @@ np_ins:
     mov bx, [np_len]
     mov cx, bx
     sub cx, [np_cur]                ; CX = the bytes to the right of the caret
-    mov si, bx
-    dec si                          ; SI = the last live byte
-    mov di, si
-    inc di
     jcxz .place
-.mv:
-    mov al, [es:si]
-    mov [es:di], al
-    dec si
-    dec di
-    loop .mv
+    mov si, bx
+    dec si                          ; SI = the last live byte...
+    mov di, bx                      ; ...and DI one past it: the runs overlap
+    push ds                         ; and the gap opens UPWARD, so backwards
+    mov ds, [np_dseg]               ; (SPEC.md 27.12). movsb is DS:SI -> ES:DI
+    std                             ; and both ends are the note
+    rep movsb
+    cld                             ; SPEC.md 1: never leave DF set
+    pop ds
 .place:
     mov bx, [np_cur]
     mov [es:bx], dl
@@ -3802,14 +4217,39 @@ np_move:
     mov word [np_hity], 0xFFFF      ; one query at a time
     mov ax, [np_wanty]              ; the row it names is the ONLY row this
     sub ax, [np_ty]                 ; walk has to visit (SPEC.md 27.5)
-    jc .full
     push cx
     mov cl, 3
-    shr ax, cl
-    pop cx
-    mov dx, ax
+    sar ax, cl                      ; SIGNED, and floor: a row ABOVE the view
+    pop cx                          ; is negative, which the old unsigned shift
+    mov dx, ax                      ; could not say, so it took the seedless
+                                    ; branch below and said nothing about it
+    js .above                       ; nothing above the view is in [np_rows]...
     call np_seedrow
-.full:
+    cmp byte [np_resume], 0
+    jne .bound                      ; the table describes it: one row walked
+    call np_seedtail                ; ...and when it does NOT - which is every
+                                    ; Down on the bottom visible row, the row
+                                    ; below the view being one past the table -
+                                    ; resume at the deepest row it DOES hold
+    jmp short .bound
+.above:
+    push ax                         ; ...but the ROW INDEX describes rows the
+    mov ax, dx                      ; view has never contained (SPEC.md 27.13),
+    add ax, [np_top]                ; which is what Up out of the top wants: it
+    call np_xseed                   ; takes an ABSOLUTE row, and DX is visible
+    pop ax                          ; (np_xseed sets the bound itself, and
+                                    ; .bound below setting it again is the same
+                                    ; value - one place, whichever path ran)
+.bound:
+    ; THE BOUND IS SET ON EVERY PATH, and that is the whole fix (SPEC.md
+    ; 27.7.9). [np_lastrow] is a one-shot that np_walk resets to 0x7FFF, so a
+    ; caller which does not set it walks the WHOLE NOTE - "slow and never
+    ; wrong", which np_seedrow's silent refusal turned into the common case:
+    ; Down on the bottom visible row asks for a row one past the table, got no
+    ; seed AND no bound, and re-laid out all 781 rows of README.TXT to find the
+    ; row directly under the caret. Measured on a 4.77MHz 8088: 4,663 ms of a
+    ; 4,866 ms keystroke, on the most used key in the editor.
+    mov [np_lastrow], dx
     call np_measure
     mov byte [np_resume], 0
     mov ax, [np_wanti]
@@ -3870,7 +4310,28 @@ np_vmove:
     mov dx, [np_ckpr]               ; definition, so this walk is that row and
     call np_seedck                  ; no more (SPEC.md 27.4/27.5)
     cmp byte [np_resume], 0
-    je .nolim
+    jne .lim
+    cmp byte [np_ckok], 0           ; THE SEED FAILED, and the bound used to go
+    je .nolim                       ; with it (SPEC.md 27.7.9). np_seedck asks
+                                    ; for the row BEFORE the caret's, so a
+                                    ; caret on a row past what [np_rows]
+                                    ; describes is refused - and [np_lastrow]
+                                    ; is a one-shot np_walk resets to 0x7FFF,
+                                    ; so the walk then laid out the WHOLE NOTE
+                                    ; to find the row the caret is already on.
+                                    ; With no checkpoint there is no row to
+                                    ; bound to either, and that case is the
+                                    ; old one unchanged
+    call np_seedtail                ; ...but with one, the table still reaches
+                                    ; SOMEWHERE: resume there and walk forward
+    cmp byte [np_resume], 0
+    jne .lim
+    push ax                         ; ...and when even that is refused - the
+    mov ax, dx                      ; caret's row is ABOVE what np_rows
+    add ax, [np_top]                ; describes, which is every Up out of the
+    call np_xseed                   ; top of the view - the row index has it
+    pop ax                          ; (SPEC.md 27.13)
+.lim:
     or dx, dx                       ; ...unless that row is ABOVE the view,
     js .nolim                       ; where the signed limit would stop the
     mov [np_lastrow], dx            ; walk before it had found anything
@@ -4515,10 +4976,22 @@ np_redraw:
     cmp byte [np_resume], 0         ; ...and failing that, the top of the VIEW
     jne .seeded1                    ; is a seed too: np_rows[0] is the index
     cmp byte [np_rowsok], 0         ; row 0 of the content starts at, rows
-    je .seeded1                     ; above it have neither pixels nor
+    je .xseed1                      ; above it have neither pixels nor
     xor ax, ax                      ; signatures, and nothing above the caret
     mov dx, [np_vrows]              ; can have reflowed anyway - which is the
     call np_seedrow                 ; same claim 27.4 already makes, applied
+    cmp byte [np_resume], 0
+    jne .seeded1
+.xseed1:
+    mov ax, [np_top]                ; ...and when np_rows cannot - which is
+    mov dx, [np_vrows]              ; after EVERY scroll, because np_scrollto
+    call np_xseed                   ; drops it - the row index still describes
+                                    ; the view's top row (SPEC.md 27.13).
+                                    ; Without this, pass 1 of the redraw after
+                                    ; a scroll laid the note out from index 0
+                                    ; to reach the row the view starts on: 240
+                                    ; ms of a 640 ms Up at [np_top] = 5, and
+                                    ; growing with the depth of the view
 .seeded1:                           ; from a HIGHER row and so a weaker one.
                                     ; Both die together: np_scrollto,
                                     ; np_bounds and np_clamp clear [np_ckok]
@@ -4560,8 +5033,20 @@ np_redraw:
                                     ; page the view away with the bar and then
                                     ; press a key, and the caret is a whole
                                     ; screenful below the last row walked
-    call np_netseed             ; ...FORWARD from the deepest row the table
     mov word [np_lastrow], 0x7FFF   ; describes, when that row begins at or
+    mov ax, [np_cur]                ; before the caret. THE ROW INDEX ANSWERS
+    call np_xseedi                  ; THIS DIRECTLY (SPEC.md 27.13) and it is
+    jnc .netok                      ; the case that mattered: a caret ABOVE the
+                                    ; view qualifies no row np_rows describes,
+                                    ; so np_netseed walked back to row 0, found
+                                    ; nothing and left the walk to lay out the
+                                    ; whole note - 5.2 s on every Up out of the
+                                    ; top of the view. np_xseedi seeds within a
+                                    ; stride of the caret AND sets the bound,
+                                    ; because a later checkpoint proves which
+                                    ; row the caret's row is above
+    call np_netseed             ; ...FORWARD from the deepest row the table
+.netok:
     call np_measure             ; before the caret. Unbounded still - the
                                 ; caret's row is not known, which is the whole
                                 ; problem - but not from INDEX 0: Down on the
@@ -5460,15 +5945,16 @@ np_delspan:
     mov di, bx
     mov dx, [np_len]
     sub dx, si                  ; ...and how many of them there are
-.mv:
-    or dx, dx
-    jz .close
-    mov al, [es:si]
-    mov [es:di], al
-    inc si
-    inc di
-    dec dx
-    jmp short .mv
+    push cx                     ; the SPAN, which .close still needs
+    mov cx, dx
+    jcxz .nomv
+    push ds                     ; forwards here: the gap closes DOWNWARD, so
+    mov ds, [np_dseg]           ; DI trails SI (SPEC.md 27.12)
+    cld
+    rep movsb
+    pop ds
+.nomv:
+    pop cx
 .close:
     mov ax, [np_len]
     sub ax, cx
@@ -5513,15 +5999,17 @@ np_gaproom:
     add di, cx
     mov dx, [np_len]
     sub dx, bx                  ; the bytes to the right of the gap
-.mv:
-    or dx, dx
-    jz .done
-    mov al, [es:si]
-    mov [es:di], al
-    dec si
-    dec di
-    dec dx
-    jmp short .mv
+    push cx                     ; the GAP width, which .done still needs
+    mov cx, dx
+    jcxz .nomv
+    push ds                     ; backwards: np_ins's case with a gap wider
+    mov ds, [np_dseg]           ; than one byte (SPEC.md 27.12)
+    std
+    rep movsb
+    cld
+    pop ds
+.nomv:
+    pop cx
 .done:
     mov ax, [np_len]
     add ax, cx
@@ -9355,6 +9843,20 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
     NPVAR np_stopi, 2       ; word } and read only by np_height, on the walk it
                             ; issued itself - under the lock, with nothing
                             ; between the call and the read
+
+; --- the row index (SPEC.md 27.13) -------------------------------------------
+; 134 bytes, and it is what makes a row OUTSIDE the view reachable without
+; laying out the note to get to it. Entry n is the character index at which
+; absolute row n << [np_xksh] begins; the stride doubles rather than the table
+; growing, so this is the whole cost however long the note is.
+    NPVAR np_xi, NP_XN * 2  ; the indices, one per checkpoint
+    NPVAR np_xn, 2          ; word: how many are valid, CONTIGUOUSLY from 0 -
+                            ; a hole would answer for a row nobody walked
+    NPVAR np_xnext, 2       ; word: the absolute row the next entry wants, kept
+                            ; rather than derived so np_xnote is one compare
+    NPVAR np_xksh, 1        ; byte: log2 of the stride. A log, because a lookup
+                            ; is then a shift and not a 150-clock `div`
+    NPVAR np_xpad, 1        ; byte: keep the words that follow even
 
 %ifdef NPBENCH
 ; --- the walk bench (tests/npbench.inc), in the -DNPBENCH build only ---------
