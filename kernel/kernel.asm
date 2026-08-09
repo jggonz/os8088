@@ -170,11 +170,36 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endif
 
 %ifdef KERN_BIG
-KERN_BUDGET equ 94208           ; kern_big's FOOTPRINT guard, and the SHIPPED
+KERN_BUDGET equ 96256           ; kern_big's FOOTPRINT guard, and the SHIPPED
                                 ; one: big is the default build. Free to move
                                 ; on its own terms - it has a machine with RAM
                                 ; behind it - where KERN_SMALL_BUDGET below is
                                 ; the one that has to be defended.
+                                ;
+                                ; THE FIFTEENTH MOVE, 94,208 -> 96,256, AND
+                                ; THE FIRST THAT IS kern_big's ALONE. 2KB,
+                                ; asked for and granted, for SPEC.md 39's
+                                ; dual display (docs/DUAL-DISPLAY-PLAN.md):
+                                ; the estimate is 1,400-1,900 bytes and the
+                                ; spare had fallen to 1,024 (two steps) after
+                                ; the disk round, so the feature no longer
+                                ; fitted. Granted at 2KB on the thirteenth
+                                ; move's terms - headroom, half a step - and
+                                ; NOT at the 4KB that would pre-authorise
+                                ; another feature's worth.
+                                ;
+                                ; What is new is which guard moved. Every one
+                                ; of the previous fourteen moved the figure
+                                ; the 128KB machine lives under, because there
+                                ; was only one. This one does not: KERN_SMALL
+                                ; stays at 94,208 and the raise buys room on
+                                ; the machine that has RAM, which is the whole
+                                ; reason the split exists. The fifth move's
+                                ; rule still stands for both - headroom for
+                                ; ordinary growth, not an invitation to spend
+                                ; it - and kern_small's is now the tighter of
+                                ; the two by 2KB, which is the direction it
+                                ; should drift from here.
 %else
 KERN_BUDGET equ 94208           ; the whole kernel's FOOTPRINT. Growing past
                                 ; this is not a build detail - see
@@ -1684,6 +1709,14 @@ kmain:
                                 ; splash already did, EXCEPT the mode set -
                                 ; the loading screen stays up and keeps
                                 ; ticking until spl_finish below (15.3)
+%ifdef KERN_BIG
+    call vid_ctx_init           ; ...and bank that geometry as display 0's
+                                ; (SPEC.md 39.12). AFTER vid_apply and never
+                                ; FROM it: vid_apply runs from the splash while
+                                ; the rest of the kernel is still coming off
+                                ; the floppy, and a call from there into
+                                ; vidsel.inc executes what has not loaded yet
+%endif
     call vid_probe_avail        ; ...and which OTHER adapters this machine has
                                 ; (SPEC.md 39.11.1). AFTER the mode is set, and
                                 ; that is the whole correctness argument: a VGA

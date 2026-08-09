@@ -472,3 +472,194 @@ vid_switch:
 .refuse:
     stc
     ret
+
+; =============================================================================
+; The per-display context (SPEC.md 39.12) - kern_big only
+;
+; STEP 1 of docs/DUAL-DISPLAY-PLAN.md 11: the state and the swap, with
+; [vid_ndisp] = 1 and nothing on a drawing path calling any of it. So the
+; screen is byte-identical to the build before it, on all three adapters, by
+; construction rather than by inspection - which is the gate this step is
+; allowed to land against.
+;
+; WHAT A DISPLAY OWNS is the eighteen contiguous words `vid_seg` through
+; `vid_rend`: the nine live geometry words and the nine derived ones the
+; RENDERER reads (viddet.inc). What it does not own starts at `vid_dock_y0` -
+; the dock row, the clock cell, the drive column - because those describe the
+; DESKTOP and must not change because a primitive happened to be drawing on
+; the other monitor (DUAL-DISPLAY-PLAN 5).
+;
+; COPY, DO NOT INDIRECT, and that is the whole reason this is a swap rather
+; than a pointer. gfx_rowbase and gfx_nextrow read their parameters as
+; ABSOLUTE operands through CS, and gfx_nextrow's contract is DI and flags and
+; NOTHING ELSE - several callers are inner loops with no spare register and one
+; is inside IRQ4. There is no register to index a per-display block through, so
+; the active display's numbers are copied into the words the renderer already
+; reads. It is vid_apply's own idiom, and 36 bytes of rep movsw against a
+; 756 us per-call floor is under a tenth of one primitive - paid only when the
+; display actually changes, which spatial coherence makes rare.
+; =============================================================================
+%ifdef KERN_BIG
+
+VID_NDISP_MAX equ 2             ; the machine this is for holds two cards
+VID_CTX_W    equ 18             ; words copied to and from the live block
+VID_CTX_VX   equ VID_CTX_W*2    ; ...then the display's origin in the VIRTUAL
+VID_CTX_VY   equ VID_CTX_W*2+2  ; desktop, which is NOT copied anywhere
+VID_CTX_SZ   equ VID_CTX_W*2+4
+
+; The live run this copies must be the run viddet.inc lays out, and a reorder
+; there would be silent here - so it is asserted rather than trusted.
+%if vid_rend - vid_seg != (VID_CTX_W-1)*2
+%error "vid_seg..vid_rend is not VID_CTX_W contiguous words - see viddet.inc"
+%endif
+
+; .text with REAL INITIALISERS, not .bss, and for the reason vid_avail above
+; is: -f bin zeroes nothing at all, so a byte in .bss holds whatever the
+; machine left there until something writes it. These two are read before
+; vid_ctx_init runs on any path that ever grows one - and a garbage [vid_ndisp]
+; is a loop bound, while a garbage [vid_cur] is a display index that indexes
+; past the array. cur_sptr and dsk_fatwc are the two this tree has already been
+; caught by.
+vid_ndisp   db 1                ; displays the desktop spans. 1 until step 3 of
+                                ; docs/DUAL-DISPLAY-PLAN.md brings a second
+                                ; card up, and 1 for ever on a machine with one
+vid_cur     db 0                ; which display's geometry is in the live block
+
+section .bss
+; The records themselves are scratch - written by vid_ctx_init before anything
+; reads them - so they cost the image nothing and live here.
+vid_ctx     resb VID_NDISP_MAX * VID_CTX_SZ
+section .text
+
+; -----------------------------------------------------------------------------
+; vid_ctx_ptr - internal: DI = the record for display AL
+; in:       AL = display index (0..VID_NDISP_MAX-1)
+; out:      DI = record address
+; clobbers: DI, flags. AX is preserved, because every caller still needs it.
+; -----------------------------------------------------------------------------
+vid_ctx_ptr:
+    push ax
+    push dx
+    mov dl, VID_CTX_SZ
+    mul dl                      ; AX = index * 40 (not a power of two)
+    mov di, vid_ctx
+    add di, ax
+    pop dx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_ctx_capture - bank the live geometry into display AL's record
+;
+; in:       AL = display index
+; out:      -
+; clobbers: flags
+;
+; CALLED AFTER ANYTHING THAT CHANGES THE LIVE GEOMETRY OUTSIDE A SWAP, and the
+; list is short but not empty: vid_apply (a mode or adapter change) and bb_set,
+; which writes [vid_rseg] when a back buffer is armed or dropped and is inside
+; this run. Miss one and the display's record describes a geometry that has
+; moved on - which shows up as drawing through the wrong segment the next time
+; that display is activated, a long way from the cause.
+; -----------------------------------------------------------------------------
+vid_ctx_capture:
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    mov cx, KERNEL_SEG          ; both ends are ours; the caller's ES is not
+    mov ds, cx
+    mov es, cx
+    call vid_ctx_ptr            ; DI = the record
+    mov si, vid_seg
+    mov cx, VID_CTX_W
+    cld
+    rep movsw
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_ctx_act - make display AL the one the renderer draws on
+;
+; in:       AL = display index
+; out:      [vid_cur] = AL; the live block holds that display's geometry
+; clobbers: flags
+;
+; A NO-OP WHEN IT IS ALREADY CURRENT, which is the case that decides whether
+; this is affordable: drawing is spatially coherent - a window's W_PAINT is a
+; burst of calls in one place, a font_run row is one call - so the steady state
+; is two compares against a 756 us floor. Only a rect that genuinely crosses to
+; the other monitor pays the copy.
+; -----------------------------------------------------------------------------
+vid_ctx_act:
+    cmp al, [vid_cur]
+    je .out
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    mov cx, KERNEL_SEG
+    mov ds, cx
+    mov es, cx
+    call vid_ctx_ptr
+    mov si, di                  ; ...the record is the SOURCE this way round
+    mov di, vid_seg
+    mov cx, VID_CTX_W
+    cld
+    rep movsw
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    pop ax
+    mov [vid_cur], al
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_ctx_init - one display, at the origin, holding what is on screen now
+;
+; in:       the live geometry, already published by vid_apply
+; out:      [vid_ndisp] = 1, [vid_cur] = 0, display 0 captured at (0,0)
+; clobbers: flags
+;
+; Called from kmain beside vid_probe_avail, and from vid_switch, and NOT from
+; vid_apply - which is the trap this module already carries a scar from.
+; vid_apply runs from the SPLASH, on its first tick, while the rest of the
+; kernel is still coming off the floppy (SPEC.md 15.3), so a call from there
+; into this file executes whatever has not been loaded yet: black screen, no
+; clue. viddet.inc's header says so about cur_unlazy for the same reason.
+; -----------------------------------------------------------------------------
+vid_ctx_init:
+    push ax
+    push cx
+    push di
+    push es
+    mov cx, KERNEL_SEG
+    mov es, cx
+    mov byte [vid_ndisp], 1
+    mov byte [vid_cur], 0
+    xor al, al
+    call vid_ctx_ptr
+    xor ax, ax                  ; display 0 sits at the virtual origin
+    mov [es:di+VID_CTX_VX], ax
+    mov [es:di+VID_CTX_VY], ax
+    xor al, al
+    call vid_ctx_capture
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
+%endif  ; KERN_BIG

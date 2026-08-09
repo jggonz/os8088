@@ -771,6 +771,40 @@ are pure refactoring toward SPEC.md §39.3's own argument, they are provable by
 byte identity, and they leave the tree strictly better factored than they found
 it.
 
-**The decision to take with the requester before step 3** is the budget: this
-spends three or four of the five 512-byte steps left under `KERN_BUDGET`, and
-`docs/KERNEL-MEMORY.md` says that is a conversation and not a build fix.
+~~**The decision to take with the requester before step 3** is the budget~~ —
+**taken**: `kern_big`'s `KERN_BUDGET` was raised 2KB to 96,256 (the fifteenth
+move, and the first that is big's alone), leaving 2,560 spare after step 1.
+`kern_small` stays at 94,208 with 1,024, which is the direction the two should
+drift from here.
+
+### 11.1 Step 1, as built
+
+`vid_ctx` in `vidsel.inc`, `KERN_BIG` only (SPEC.md §39.12). **Cost: `.text`
++138, `.bss` +80, one image rung.**
+
+Two things made it cheaper than this plan assumed. **The eighteen words a
+display owns were almost contiguous already** — `vid_tab` was the only thing
+between the live block and the derived renderer words, and it is a static
+table, so moving it above them makes the whole run one `rep movsw` instead of
+two. And **the boundary lands exactly where §5 wanted it**: the run ends at
+`vid_rend`, and `vid_dock_y0` — the first word the *desktop* owns — is the very
+next one, so the split between per-display and per-desktop geometry needed no
+rearranging at all, only a name.
+
+**The gate was the screen, not the binary.** `kern_small` is the pre-step-1
+kernel by construction (everything here is behind `%ifdef KERN_BIG`), so
+booting both and comparing framebuffers is the natural check — but the
+`vid_tab` move is *shared*, so it changes `kern_small`'s layout too. Measured
+both ways: **82,022 bytes before and after** (identical size, identical rung,
+177 bytes of pure relocation), and **0 differing pixels on CGA, Hercules and
+VGA** against a build of the tree immediately before. The context was then read
+back out of the guest to prove it had actually *run* rather than merely not
+broken anything — all eighteen words matching the live block, origin (0, 0),
+`[vid_ndisp]` = 1, `[vid_cur]` = 0.
+
+**Honest caveat: `vid_ctx_act`'s LOAD half is unexercised.** Nothing on a
+drawing path calls it, which is exactly what makes step 1's gate "the screen
+did not change" — so the copy *out* of a record is verified and the copy *back*
+is not. It lands the first time step 3 activates a second display. A step whose
+gate is "nothing changed" cannot also prove that something works, and claiming
+otherwise would be the more expensive mistake.

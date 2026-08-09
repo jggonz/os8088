@@ -360,6 +360,23 @@ Three things about it:
 ```json
 {
   "big": {
+    "bss": 4734,
+    "budget": 96256,
+    "codemax": 65536,
+    "cold": 21664,
+    "coldpara": 1376,
+    "fatpara": 288,
+    "imgpara": 3616,
+    "kend": 5952,
+    "kseg": 96,
+    "ksize": 93696,
+    "lowbss": 7748,
+    "lowpara": 576,
+    "ovl": 2662,
+    "stk0": 1024,
+    "text": 52637
+  },
+  "small": {
     "bss": 4654,
     "budget": 94208,
     "codemax": 65536,
@@ -375,23 +392,6 @@ Three things about it:
     "ovl": 2662,
     "stk0": 1024,
     "text": 52499
-  },
-  "small": {
-    "bss": 4510,
-    "budget": 94208,
-    "codemax": 65536,
-    "cold": 21691,
-    "coldpara": 1376,
-    "fatpara": 288,
-    "imgpara": 3520,
-    "kend": 5856,
-    "kseg": 96,
-    "ksize": 92160,
-    "lowbss": 7748,
-    "lowpara": 576,
-    "ovl": 2662,
-    "stk0": 1024,
-    "text": 51781
   }
 }
 ```
@@ -406,12 +406,12 @@ derived from them exactly as `kernel/kernel.asm` derives them.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` 51,781 + `.bss` 4,510) | 56,320 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
-| cold code | 22,016 B | 21,691 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
+| image (`.text` 52,637 + `.bss` 4,734) | 57,856 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
+| cold code | 22,016 B | 21,664 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
 | FAT window | 4,608 B | nine of the mounted volume's FAT sectors (SPEC.md §18.8) — the whole FAT on any floppy, a sliding window on a hard disk |
 | `.lowbss` + task 0's stack | 9,216 B | 7,748 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 |
 | the boot overlay | 0 B | 2,662 bytes of code inside the FAT window, gone by the first mount |
-| **total** | **92,160 B** | of a 94,208-byte budget — **2,048 B spare, FOUR steps**, which is the fifth move's standard exactly. Move 14's grant is part spent: §18.9.2's banked BPB took one step, the Note Pad keystroke round another, and the toast and baked-typeface rounds a third |
+| **total** | **93,696 B** | of a 96,256-byte budget — **2,560 B spare, FIVE steps**, which is the fifth move's standard exactly. Move 14's grant is part spent: §18.9.2's banked BPB took one step, the Note Pad keystroke round another, and the toast and baked-typeface rounds a third |
 
 **These are `kern_big`'s figures**, which is to say the shipped kernel's
 (docs/KERN-SPLIT-PLAN.md). `kern_small` is byte-identical today — nothing has
@@ -867,12 +867,12 @@ generated in the first place.
 |---|---:|---:|
 | the file system, end to end | 27,391 | 36.9% |
 | the window system and its furniture | 15,809 | 21.3% |
-| drawing: adapters, primitives, glyphs, icons | 9,906 | 13.4% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,538 | 12.9% |
-| the kernel proper: API table, heap, scheduler, events | 5,717 | 7.7% |
+| drawing: adapters, primitives, glyphs, icons | 10,041 | 13.5% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,538 | 12.8% |
+| the kernel proper: API table, heap, scheduler, events | 5,720 | 7.7% |
 | the Control Panel | 4,426 | 6.0% |
 | the three built-in kinds | 1,376 | 1.9% |
-| **total** | **74,163** | |
+| **total** | **74,301** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -907,14 +907,14 @@ generated in the first place.
 | `dock.inc` — the dock (§30) | 777 | — | **777** | 34 | — |
 | `loader.inc` — the package loader (§21) | — | 754 | **754** | 58 | — |
 | `viddet.inc` — adapter detection and geometry (§39) | 744 | — | **744** | — | — |
+| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 544 | — | **544** | 80 | — |
 | `toast.inc` — **(undescribed)** | 438 | — | **438** | 43 | — |
-| `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 409 | — | **409** | — | — |
 | `fprog.inc` — the file-operation progress widget (§12.8) | 379 | — | **379** | — | — |
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,661 | — | **2,661** | — | — |
-| **total** | **52,499** | **21,664** | **74,163** | **4,654** | **7,748** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,664 | — | **2,664** | — | — |
+| **total** | **52,637** | **21,664** | **74,301** | **4,734** | **7,748** |
 <!-- END generated table -->
 
 ### Reading it

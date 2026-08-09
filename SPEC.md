@@ -18406,6 +18406,74 @@ pairing is not a machine anybody built, and reaching the VGA's own screen-off
 (Sequencer register 1, bit 5) would put a VGA-specific register write on a
 path that runs on all three adapters.
 
+### 39.12 The per-display context — `vid_ctx` (`KERN_BIG` only)
+
+**One display's geometry is eighteen contiguous words, and making a display
+current is a `rep movsw` over them.** Present only in `kern_big`
+(docs/KERN-SPLIT-PLAN.md); `kern_small` has none of it.
+
+```
+vid_seg  vid_w  vid_h  vid_stride  vid_bmask  vid_bshift  vid_rowadd
+vid_wrapbit  vid_wrapfix                       <- the live block (§39.2)
+vid_bankmask  vid_wm1  vid_hm1  vid_wm8  vid_hm8  vid_strm1
+vid_rseg  vid_rpara  vid_rend                  <- what the RENDERER derives
+```
+
+**The run ends at `vid_rend` and that boundary is the design.** Everything from
+`vid_dock_y0` down — the dock row, the clock cell, the drive column, the
+pull-down cap — describes the **desktop**, not a display, and must not change
+because a primitive happened to be drawing on the other monitor. `viddet.inc`
+lays the two halves out back to back with `vid_tab` moved above them (it used
+to sit between and split the run), and `vidsel.inc` asserts the span at
+assembly time, because a reorder there would be silent here.
+
+**Copy, do not indirect.** `gfx_rowbase` and `gfx_nextrow` read their
+parameters as *absolute* operands through CS, and `gfx_nextrow`'s contract is
+**DI and flags and nothing else** (§39.3) — several callers are inner loops
+with no spare register and one runs inside IRQ4. There is no register to index
+a per-display block through, so the active display's numbers are copied into
+the words the renderer already reads. It is `vid_apply`'s own idiom. 36 bytes
+of `rep movsw` against the ~756 us per-call floor (PERFORMANCE.md Part 2) is
+under a tenth of one primitive, and it is paid **only when the display
+changes** — drawing is spatially coherent, so the steady state is
+`vid_ctx_act`'s two compares.
+
+| symbol | what it does |
+|---|---|
+| `[vid_ndisp]` | displays the desktop spans; **1** until a second card is brought up (docs/DUAL-DISPLAY-PLAN.md §11 step 3), and 1 for ever on a one-card machine |
+| `[vid_cur]` | which display's geometry is in the live block |
+| `vid_ctx_capture` | AL = display; bank the live geometry into that record |
+| `vid_ctx_act` | AL = display; make it current, **returning immediately if it already is** |
+| `vid_ctx_init` | one display, at the virtual origin, holding what is on screen now |
+
+Each record carries the display's origin in the virtual desktop at
+`VID_CTX_VX`/`VID_CTX_VY`, **after** the copied words, so the swap stays one
+`rep movsw`.
+
+Three things are load-bearing:
+
+- **`[vid_ndisp]` and `[vid_cur]` are in `.text` with real initialisers.**
+  `-f bin` zeroes nothing, and a garbage `[vid_ndisp]` is a loop bound while a
+  garbage `[vid_cur]` is an index past the array. `cur_sptr` and `dsk_fatwc`
+  are the two this tree has already been caught by. The records themselves are
+  `.bss` — written before they are read.
+- **`vid_ctx_init` is called from `kmain` and from `vid_switch`, never from
+  `vid_apply`.** `vid_apply` runs from the splash on its first tick, while the
+  rest of the kernel is still coming off the floppy (§15.3), so a call from
+  there into `vidsel.inc` executes what has not been loaded yet: black screen,
+  no clue. `viddet.inc` carries the same warning about `cur_unlazy`.
+- **Anything that changes the live geometry outside a swap must re-capture.**
+  The list is short and not empty: `vid_apply` (a mode or adapter change) and
+  **`bb_set`**, which writes `[vid_rseg]` when a back buffer is armed or
+  dropped and is inside the run. A missed capture shows up as drawing through
+  the wrong segment the next time that display is activated, a long way from
+  the cause.
+
+**Nothing on a drawing path calls any of it yet.** This is step 1 of
+docs/DUAL-DISPLAY-PLAN.md §11 — the state and the swap, with `[vid_ndisp]` = 1
+— so the screen is byte-identical to the build before it on all three
+adapters, by construction rather than by inspection.
+
 ## 40. apps/fractal — the progressive renderer and its restore cache
 
 The reference §20.6 worker, and the first shipped package whose window is

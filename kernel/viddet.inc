@@ -61,10 +61,33 @@ VID_REC     equ 18              ; bytes per vid_tab record
 VID_LIVE_W  equ 9               ; words in the live block below
 
 ; -----------------------------------------------------------------------------
+; vid_tab - one 18-byte record per adapter, in VID_* order.
+;
+; wrapfix is stride - nbanks*0x2000 taken as a 16-bit add, and wrapbit is the
+; bit that gfx_nextrow's unconditional `add` carries into once it steps off
+; the last bank. Both rely on the whole intra-bank extent staying under
+; 0x2000, which the assertion at the bottom of this file proves.
+; -----------------------------------------------------------------------------
+vid_tab:
+    ;    seg     w    h  stride bmask bshift rowadd  wrapbit wrapfix
+    dw VGA_SEG, 640, 480,   80,    0,     0,     80,       0,      0
+    dw VID_HERC_SEG, 720, 348, 90,   3,     2, 0x2000,  0x8000, 0x805A
+    dw  0xB800, 640, 200,   80,    1,     1, 0x2000,  0x4000, 0xC050
+
+; -----------------------------------------------------------------------------
 ; The live geometry block (SPEC.md 39.2). NINE CONTIGUOUS WORDS, in vid_tab's
 ; column order - vid_apply rep movsw's a record straight over them, so do not
 ; reorder one without the other. Initialized to the VGA row so that anything
 ; reading them before vid_apply runs sees the historical constants.
+;
+; IT IS THE FIRST HALF OF A LONGER CONTIGUOUS RUN, and that is now load-bearing
+; rather than incidental. `vid_seg` through `vid_rend` - the nine live words and
+; the nine derived ones below them - are the eighteen words A DISPLAY OWNS, and
+; SPEC.md 39.12's per-display context copies exactly that span with one
+; `rep movsw`. Everything from `vid_dock_y0` down is the DESKTOP's and must stay
+; out of it. `vid_tab` used to sit between the two halves, which is why it has
+; moved up here: it is a static table and it was splitting a run that wants to
+; be one.
 ; -----------------------------------------------------------------------------
 vid_seg     dw VGA_SEG          ; framebuffer segment
 vid_w       dw SCREEN_W         ; visible width, px
@@ -78,20 +101,6 @@ vid_wrapfix dw 0                ; last bank; then add this to land on the
                                 ; next row of bank 0. Both 0 on VGA, which
                                 ; makes gfx_nextrow degenerate to `add di,80`
                                 ; with no adapter test - see the routine.
-
-; -----------------------------------------------------------------------------
-; vid_tab - one 18-byte record per adapter, in VID_* order.
-;
-; wrapfix is stride - nbanks*0x2000 taken as a 16-bit add, and wrapbit is the
-; bit that gfx_nextrow's unconditional `add` carries into once it steps off
-; the last bank. Both rely on the whole intra-bank extent staying under
-; 0x2000, which the assertion at the bottom of this file proves.
-; -----------------------------------------------------------------------------
-vid_tab:
-    ;    seg     w    h  stride bmask bshift rowadd  wrapbit wrapfix
-    dw VGA_SEG, 640, 480,   80,    0,     0,     80,       0,      0
-    dw VID_HERC_SEG, 720, 348, 90,   3,     2, 0x2000,  0x8000, 0x805A
-    dw  0xB800, 640, 200,   80,    1,     1, 0x2000,  0x4000, 0xC050
 
 ; --- derived from the live block by vid_apply (SPEC.md 39.2) -----------------
 ; Precomputed because the sites that want them are inner loops or single
