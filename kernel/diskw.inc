@@ -2245,7 +2245,32 @@ dskw_read_at_x:
     mov [dwr_clb], ax
     test ax, ax
     jz .badarg                  ; an unmounted volume has no cluster size
-    mov cx, ax
+
+    call dskw_stat_x            ; BX = first cluster, DX:CX = the size
+    jc .err
+    mov [dwr_clus], bx
+    mov [dwr_sz], cx
+    mov [dwr_sz+2], dx
+
+    ; AT OR PAST THE END IS TESTED FIRST, AND THE ORDER IS THE CONTRACT.
+    ; A normal answer rather than an error - it is how a caller's loop
+    ; terminates - and it has to be decided BEFORE the cluster-alignment
+    ; tests below, because the final chunk is exactly what makes the next
+    ; offset unaligned. The take is clamped to what is left of the file, so a
+    ; tail shorter than a cluster leaves the offset mid-cluster; asked about
+    ; that offset, the aligned-offset test answered FERR_NAME and the loop
+    ; that had just copied the file whole reported a failure on it. Nothing
+    ; is read here, so there is nothing to align: the preconditions exist to
+    ; make a resume point exact, and past the end there is no resume.
+    mov ax, [dwr_off+2]
+    cmp ax, dx
+    ja .eof
+    jb .inrange
+    mov ax, [dwr_off]
+    cmp ax, cx
+    jae .eof
+.inrange:
+    mov cx, [dwr_clb]
     mov ax, [dwr_off]           ; the offset must land on a cluster boundary
     xor dx, dx
     div cx
@@ -2259,20 +2284,6 @@ dskw_read_at_x:
     test ax, ax
     jz .badarg                  ; a capacity under one cluster reads nothing
 
-    call dskw_stat_x            ; BX = first cluster, DX:CX = the size
-    jc .err
-    mov [dwr_clus], bx
-    mov [dwr_sz], cx
-    mov [dwr_sz+2], dx
-
-    mov ax, [dwr_off+2]         ; at or past the end? then no bytes, and that
-    cmp ax, dx                  ; is a normal answer rather than an error -
-    ja .eof                     ; it is how a caller's loop terminates
-    jb .inrange
-    mov ax, [dwr_off]
-    cmp ax, cx
-    jae .eof
-.inrange:
     mov ax, [dwr_sz]            ; take = min(size - offset, capacity)
     mov dx, [dwr_sz+2]
     sub ax, [dwr_off]

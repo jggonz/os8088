@@ -24181,48 +24181,77 @@ that is the stated exception rather than an oversight: a frame cannot be
 drawn opaquely, so a dithered frame over a solid one leaves the solid one's
 pixels behind. It is a single 16px fill, and only on a state change.
 
-### 52.10.7 OPEN: the chunked copy breaks the next source mount
+### 52.10.7 CLOSED: the chunked copy, and a read one byte past the end
 
-**Known, reproduced, unfixed, and the installer is deliberately less capable
-than it should be because of it.** `hd_icopy_sub` copies only *packages* out
-of a folder — `type == OSAPI_FT_PKG` — where the right test is "not a folder
-and not `..`", because type 1 means **package** and not **file** (§19.7.1).
-Making it right is a two-line change and it is not in the tree.
+**Three defects, and the middle one is a kernel bug in a published slot.**
+They are recorded together because the first exposed the second and the third
+is why the second was mis-diagnosed.
 
-What happens when it is: every file copies, `BEVERLY.MOD` included and
-byte-exact — and then the walk's next `hd_isrc_sub` fails, so
-`hd_icopy_tree` reports an error and the MBR is never written. The partition
-ends up **fully populated and not bootable**, which is worse than the missing
-file it fixes. Hence the gap stands.
+**One: `hd_icopy_sub` copied only PACKAGES.** Its test was
+`type == OSAPI_FT_PKG`, and type 1 means *package*, not *file* (§19.7.1) — so
+one level down only `*.O88` was copied and `MEDIA/BEVERLY.MOD` was silently
+left behind. It is `cmp ax, OSAPI_FT_DIR` / `jae` now: a folder or the
+synthesized `..` is skipped and everything below `FT_DIR` is a file. The root
+loop in `hd_icopy_tree` always had this right; only the sub-folder walk did
+not.
 
-What is known:
+**Two: `dskw_read_at` refused the call that should have said "finished".**
+`BEVERLY.MOD` at 116,085 bytes is the only file on either shipped disk that
+does not fit the copy buffer whole, so fixing the type test ran §18.4.4's
+chunk loop for the first time ever — and it failed on the last iteration,
+after the file had been copied **completely and byte-exactly**. The routine
+tested that the offset lands on a cluster boundary *before* it tested for end
+of file, and the final chunk is precisely what leaves the offset mid-cluster:
+the take is clamped to what is left of the file, so a tail shorter than a
+cluster ends at 116,085. Asked about that offset, the alignment test answered
+`FERR_NAME` where the routine's own header promises "the next call answers
+0". The EOF test now runs first, which is also the only order that can be
+right — nothing is read at or past the end, so there is nothing to align, and
+the preconditions exist to make a *resume point* exact.
 
-- It is the **chunked write** (§18.4.4). `BEVERLY.MOD` at 116,085 bytes is
-  the only file on either shipped disk that does not fit the copy buffer
-  whole, so the chunk loop had **never executed once** until the type test
-  changed. Every other file in the tree is one read and one write.
-- The failure is a **source mount**, not a file operation: `hd_icopy_one`
-  names the file it stops on and did not, and splitting `hd_icopy_tree`'s
-  four failure paths put it in `hd_icopy_sub`'s `.entry` — `hd_isrc_sub`,
-  which is a plain `dsk_chdir` of the floppy.
-- **It is not `OSAPI_FILE_GOTO_Q`** (§19.2.2). The quiet slot was wired in at
-  the same time, blamed, and reverting it changed nothing — a wrong diagnosis
-  worth recording, because the two changes landed together and the newer one
-  looked guiltier.
-- The suspicion, untested: the chunk loop alternates two volumes **eight
-  times** with the destination's FAT window dirty, and §18.8.2 requires a
-  dirty window to be flushed at the switch rather than carried. Nothing else
-  in the system alternates volumes that often mid-write.
+**Three: the copy could not say which file it stopped on, though it knew.**
+`hd_icopy_one` sets `[hd_imsg]` to the file's name on failure and comments
+that this is the one useful thing a stopped copy has to say — and every
+failure path in `hd_icopy_tree` then wrote the generic `Disk error - the
+install stopped` over it on the way out. `.failm` is the missing half: a
+failure arriving from a callee that set `[hd_imsg]` keeps that message, and
+only paths with nothing better to say fall into `.fail`. `hd_icopy_sub` gained
+the same split (`.failg` for its own mount failure).
 
-Where to start: `make DISKCNT=1` and read §18.94's counters either side of one
-chunked copy. Two in-guest markers are worth knowing about and **neither is
-the first thing to reach for any more**: a temporary caption that *aborts*
-(one that only sets `[hd_imsg]` is overwritten by the completion message and
-says nothing), and, better, an exec breakpoint on `hd_isrc_sub` with the
-MartyPC stepper — which is what §52.10.7.1 turned out to need and what a
-marker could not have shown, the defect there being a flag rather than a
-value. `drv_tab` at the kernel offset a listing gives, `DRVR_SEG` at +2, is
-how you turn a driver's listing offsets into the flat addresses `bp` wants.
+**That third defect is what made the second one look like something else, and
+the previous session's recorded diagnosis — "the failure is a source mount,
+not a file operation" — was wrong because of it.** The reasoning ran: the
+message is the tree's generic one, `hd_icopy_one` would have named the file,
+so `hd_icopy_one` cannot be where it stopped. Every step is sound and the
+premise was false. What settled it was three exec breakpoints, on
+`hd_icopy_one.fail`, `hd_icopy_sub.fail` and `hd_icopy_tree.fail`: they fire
+in that order, innermost first, with `hd_iname` reading `BEVERLY.MOD`,
+`hd_iname2` reading `MEDIA`, and `[hd_imsg]` visibly changing from the file's
+name to the generic string at the third. **A message that is overwritten on
+the way out is worse than no message**, because it is evidence and it is
+false.
+
+**`OSAPI_FILE_GOTO_Q` (§19.2.2) is still unwired, and it is still not the
+bug** — it was blamed once and reverting it changed nothing. That remains
+true; it is now an optimisation with nothing in front of it. Every
+`hd_isrc`/`hd_isrc_sub`/`hd_idst`/`hd_idst_sub` is a full `dsk_chdir` bought
+for nothing, twice per file and twice per chunk, and this file never shows a
+folder. Wire it in and measure with `make DISKCNT=1`. One related saving,
+also unmade: `hd_icopy_one`'s chunk loop always makes one extra pass to be
+told the file is finished, which costs a source remount; comparing
+`[hd_ioff]` with `[hd_isize]` would skip it.
+
+Verified end to end on `os8088_xt_hdd` with the system disk in A:, the apps
+disk in B: and a pristine `default_xtide.vhd`: one confirm installs both
+disks, the window ends on `Done - remove the floppy, Restart`, and the
+partition holds 22 files — `KERNEL.SYS` at **cluster 2** (§52.10.2),
+`APPS`, `GAMES`, `SYSTEM` and `MEDIA/BEVERLY.MOD` at its full 116,085 bytes,
+**byte-identical to `apps/tracker/beverly.mod`** extracted from the image and
+compared on the host. Rebooted with **no floppy in the machine at all** it
+boots to the desktop off the hard disk and lists `Drive C:` with
+`Free 31504K`. The zone reads `Disk C` rather than `HDD C` and that is
+§52.10.3 working: a boot partition is a `DVK_BIOS` row, so no driver is loaded
+at all on that machine — `drv_tab` reads `SEG=0` for all three rows.
 
 #### 52.10.7.1 CLOSED: `hd_bios_run` answered CF = 1 on success
 

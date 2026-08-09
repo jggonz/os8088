@@ -1258,11 +1258,17 @@ hd_iapps_find:
 ; Switching all four to OSAPI_FILE_GOTO_Q was tried and reverted, and the
 ; reason is worth keeping because the first diagnosis was WRONG: the copy
 ; failed at the end, the quiet goto was blamed, and reverting it changed
-; nothing at all. What actually broke is older - the CHUNKED write (SPEC.md
-; 18.4.4), which had never run once until *.O88 stopped being the only thing
-; copied out of a folder. So this reversion is caution rather than evidence:
-; wire the quiet slot in again once the chunk path is understood, and measure
-; it then.
+; nothing at all. What actually broke was dskw_read_at refusing the very call
+; that should have answered "finished" - it tested the offset's cluster
+; alignment BEFORE testing for end of file, and the final short chunk is
+; exactly what leaves the offset mid-cluster (SPEC.md 52.10.7).
+;
+; THAT IS FIXED, so nothing stands in front of this any more: it is now an
+; ordinary optimisation with a measurement owed. Wire the quiet slot in and
+; read 18.94's counters either side. The other saving in the same place is
+; hd_icopy_one's chunk loop, which always makes one extra pass to be told the
+; file is finished - a source remount that comparing [hd_ioff] with
+; [hd_isize] would skip.
 hd_isrc:
     push ax
     push bx
@@ -1361,7 +1367,7 @@ hd_icopy_tree:
                                 ; walking a chain
     mov si, hd_ient
     call hd_icopy_one
-    jc .fail
+    jc .failm                   ; it named the FILE; do not talk over it
     jmp short .entry
 .folder:
     mov ax, [hd_ient+16]
@@ -1373,7 +1379,7 @@ hd_icopy_tree:
     jc .mkchk
 .mkok:
     call hd_icopy_sub
-    jc .fail
+    jc .failm                   ; ...and so may this, one level down
     jmp short .entry
 .mkchk:
     cmp ax, FERR_EXIST          ; a re-install finds its own folders: that is
@@ -1383,8 +1389,21 @@ hd_icopy_tree:
     clc
     jmp short .out
     ; A copy that stops names the FILE it stopped on (hd_icopy_one) or says
-    ; nothing more than this. Splitting these four further is what found
-    ; SPEC.md 52.10.7, and the markers came back out.
+    ; nothing more than this.
+    ;
+    ; `.failm` IS THE HALF THAT WAS MISSING, and its absence is most of why
+    ; SPEC.md 52.10.7 stayed open. Every path came here, so the generic
+    ; sentence was written over hd_icopy_one's careful "NAME THE FILE" on the
+    ; way out - the comment above claimed the file was named and the code
+    ; guaranteed it never was. The user saw `Disk error` for a fault that had
+    ; already identified itself as BEVERLY.MOD, and the session that went
+    ; looking for it reached for abort-markers because the message it
+    ; already had said nothing. A failure that arrives from a callee which
+    ; sets [hd_imsg] keeps that message; only the paths that have nothing
+    ; better to say fall into `.fail`.
+.failm:
+    stc
+    jmp short .out
 .fail:
     mov word [hd_imsg], hd_s_ierr
     stc
@@ -1416,7 +1435,7 @@ hd_icopy_sub:
     mov [hd_isord], cx
 .entry:
     call hd_isrc_sub
-    jc .fail
+    jc .failg                   ; a mount, with no file to blame
     mov cx, [hd_isord]
     push es
     push cs
@@ -1427,18 +1446,15 @@ hd_icopy_sub:
     jc .done
     mov [hd_isord], cx
     mov ax, [hd_ient+14]
-    cmp ax, OSAPI_FT_PKG
-    jne .entry                  ; PACKAGES only one level down, and that is a
-                                ; KNOWN GAP rather than the intent - SPEC.md
-                                ; 52.10.7. The right test is "not a folder and
-                                ; not '..'", because type 1 means PACKAGE and
-                                ; not FILE (SPEC.md 19.7.1); making it so is
-                                ; what BEVERLY.MOD needs, and it is also what
-                                ; first ran the chunked write (SPEC.md 18.4.4),
-                                ; which then failed the NEXT source mount and
-                                ; left a fully populated, unbootable partition.
-                                ; A broken installer is worse than an
-                                ; incomplete copy, so the gap stands
+    cmp ax, OSAPI_FT_DIR
+    jae .entry                  ; a FOLDER (this walk is one level deep) or the
+                                ; synthesized '..'; everything below FT_DIR is
+                                ; a file, package or not (SPEC.md 19.7.1). This
+                                ; read `cmp ax, OSAPI_FT_PKG / jne`, which is
+                                ; type 1 - PACKAGE - so one level down only
+                                ; *.O88 was copied and MEDIA/BEVERLY.MOD was
+                                ; silently left behind. The root loop in
+                                ; hd_icopy_tree always had it right
     mov byte [hd_iinsub], 1
     mov si, hd_ient
     call hd_icopy_one
@@ -1448,6 +1464,8 @@ hd_icopy_sub:
 .done:
     clc
     jmp short .out
+.failg:                         ; nothing better to say than the generic line;
+    mov word [hd_imsg], hd_s_ierr   ; hd_icopy_one's failure keeps its own
 .fail:
     mov byte [hd_iinsub], 0
     stc
