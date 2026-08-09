@@ -3068,6 +3068,22 @@ np_seedck:
     je .out
     mov es, [np_dseg]
     mov ax, [np_ckpr]               ; the caret's row...
+    call np_rowstart                ; ...and the index it begins at. Asked
+    jc .back                        ; TWICE on the slow path, which is a shift
+                                    ; and a load: np_rowstart preserves AX
+    or bx, bx
+    jz .seed
+    mov cl, [es:bx-1]
+    cmp cl, 13
+    je .seed                        ; A HARD NEWLINE IS NOT A WRAP DECISION.
+                                    ; The row above ended because the note said
+                                    ; so, and no word can move that break - so
+                                    ; this row's start is fixed and there is
+                                    ; nothing above it to lay out again
+    cmp cl, ' '
+    jne .back
+    call np_ckword                  ; ...and a wrapped row is safe too as long
+    jnc .seed                       ; as the edit is past its first word
 .back:
     call np_rowstart                ; ...and the index it begins at
     jc .out
@@ -3095,6 +3111,61 @@ np_seedck:
     mov byte [np_resume], 1
 .out:
     pop es
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_ckword - may this row be seeded WITHOUT laying out the one above it?
+; in:  BX = the row's start index, ES = the document segment
+; out: CF = 0 yes, seed here; CF = 1 back up as before.
+;      Preserves every register.
+;
+; SPEC.md 27.11.1. np_wordfit is the whole of why np_seedck backs up: standing
+; at the first character of a word it measures whether that word ENDS inside
+; the cells left on the row, and breaks in front of it if it does not. So the
+; break that decides where this row starts is a function of the length of this
+; row's FIRST WORD and of nothing else in this row - which means an edit past
+; the end of that word cannot have moved it.
+;
+; The caret is the edit, near enough and always on the safe side: an insert
+; leaves it one PAST the character it added, a backspace and a Delete leave it
+; ON the edit, so the earliest index this keystroke can have touched is
+; [np_cur] - 1. Requiring the word to end STRICTLY before the caret is that
+; bound, and it needs no extra state to be recorded and kept in step.
+;
+; The scan is at most a row's width and stops at the caret, so it is a handful
+; of byte compares against a row of layout at ~6 ms.
+; -----------------------------------------------------------------------------
+np_ckword:
+    push ax
+    push bx
+    push cx
+    mov cx, [np_cur]
+    mov al, [es:bx]
+    cmp al, ' '                     ; a row that begins on a space or a newline
+    je .no                          ; is not a word start, and the reasoning
+    cmp al, 13                      ; above does not describe it
+    je .no
+.scan:
+    cmp bx, cx
+    jae .no                         ; the caret arrived first: the edit is
+                                    ; inside the first word, which is exactly
+                                    ; the case the back-up exists for
+    mov al, [es:bx]
+    cmp al, ' '
+    je .yes
+    cmp al, 13
+    je .yes
+    inc bx
+    jmp short .scan
+.yes:
+    clc                             ; the word ends before the caret, so its
+    jmp short .out                  ; length is what it was
+.no:
+    stc
+.out:
     pop cx
     pop bx
     pop ax
@@ -4268,8 +4339,23 @@ np_move:
     mov cl, 3
     shr ax, cl
     pop cx
+
+    ; THE TWO ROWS ARE THE WHOLE OF IT (SPEC.md 27.4.1). np_ask folds the caret
+    ; into a row's signature and a caret move changes nothing else, so the only
+    ; rows whose signatures can differ are the one it left and the one it
+    ; arrived on. The seed below already puts the walk at the FIRST of them;
+    ; this records the SECOND, so np_redraw's pass 1 can stop there instead of
+    ; laying out the rest of the view to be told nothing moved.
+    ; [np_ckpr] is still the row the caret CAME FROM at this point - the branch
+    ; below is what moves it back - so the two are in hand together here and
+    ; nowhere else.
+    mov [np_mvbot], ax
     cmp ax, [np_ckpr]
     jae .arm                        ; already at or after the checkpoint
+    push ax                         ; ...moving BACKWARDS, so the deeper of the
+    mov ax, [np_ckpr]               ; two is the row being left
+    mov [np_mvbot], ax
+    pop ax
     cmp byte [np_rowsok], 0
     je .out
     cmp ax, [np_rowsn]
@@ -4282,7 +4368,23 @@ np_move:
     mov [np_ckpi], ax
     pop bx
 .arm:
-    mov byte [np_fast], 3
+    mov byte [np_fast], 4           ; A CARET MOVE, and it used to say 3.
+                                    ; np_fastok*'s contract numbers the kinds
+                                    ; 1 insert, 2 backspace, 3 forward Delete,
+                                    ; 4 a caret move, and they carry different
+                                    ; PERMISSIONS: 1..4 may resume the walk,
+                                    ; but only 1..3 may enter the visual break.
+                                    ; np_move wants the first and never the
+                                    ; second - "a caret move reflowed nothing",
+                                    ; as np_redraw's own comment says - and 3
+                                    ; granted it both. It was invisible in a
+                                    ; 29-column window only because np_brktry
+                                    ; needs NP_BRK_CELLS = 60 cells below the
+                                    ; caret and one row there is 29; widen the
+                                    ; window past 60 columns and Up entered the
+                                    ; break, on a stale [np_ecol] left by some
+                                    ; earlier edit, which is a phantom line
+                                    ; break for as long as the settle takes
 .out:
     mov byte [np_resume], 0
     pop dx
@@ -4584,6 +4686,10 @@ np_fastokr:                         ; Right: it lands one FORWARD, and the cell
     xor cx, cx
     mov ax, [np_cur]
 np_fastcm:
+    mov word [np_mvbot], 0x7FFF ; kind 4 arrives here as well (Left and Right),
+                                ; and neither measures the row it came from -
+                                ; so park the bound at "no idea" and let
+                                ; np_move be the only thing that ever sets it
     cmp byte [np_ckok], 0
     je .out
     cmp ax, [np_ckpi]
@@ -5005,7 +5111,7 @@ np_redraw:
     mov byte [np_sigup], 1
     mov byte [np_clip], 0
     mov ax, [np_vrows]              ; STOP at the bottom of the view, plus the
-    mov [np_lastrow], ax            ; one row past it a caret can wrap onto
+                                    ; one row past it a caret can wrap onto
                                     ; (SPEC.md 27.7). Below that a row has no
                                     ; signature, cannot be dirty and is drawn
                                     ; by nobody - the only thing that ever
@@ -5014,6 +5120,31 @@ np_redraw:
                                     ; the middle of a long note used to walk
                                     ; every row beneath the window on every
                                     ; keystroke: 72% of the work, for a thumb
+
+    ; ...AND A CARET MOVE STOPS SOONER STILL (SPEC.md 27.4.1). Nothing reflowed,
+    ; so the only rows whose signatures can differ are the one the caret left
+    ; and the one it arrived on, and np_move recorded the deeper of them. The
+    ; rest of the view is laid out to be told it did not move: (vrows - row) x
+    ; ~6 ms, which is ~96 ms of the budget with the caret near the top.
+    ;
+    ; Gated on the walk actually RESUMING, and that is not caution about the
+    ; bound - it is about [np_rowsn]. np_walk's bounded stop leaves the table
+    ; alone for a resumed walk and SHRINKS it to where it stopped for one that
+    ; started at the top of the view, which would hand rows this walk skipped
+    ; back to SPEC.md 27.13's index for no reason. Resumed is the normal case
+    ; here anyway: np_seedck seeds at the earlier of the two rows.
+    cmp byte [np_ekind], 4
+    jne .p1bound
+    cmp byte [np_resume], 0
+    je .p1bound
+    mov dx, [np_mvbot]
+    or dx, dx
+    js .p1bound                     ; above the view: let the caret-follow net
+    cmp dx, ax                      ; have it, exactly as before
+    jae .p1bound                    ; never DEEPER than the view: the sentinel
+    mov ax, dx                      ; lands here, and so does a caret one row
+.p1bound:                           ; below the last visible one
+    mov [np_lastrow], ax
     call np_walk
     cmp byte [np_follow], 0         ; the caret has to be somewhere the user
     je .noflw                       ; can see it (SPEC.md 27.7) - but only
@@ -5093,7 +5224,6 @@ np_redraw:
     shl dx, 1
     add dx, [np_ty]
     add dx, 7
-    mov [np_bandb], dx              ; ...banked for the grow-box test below
     ; The band fill is GONE. It used to erase dr0..dr1 whole and pass 2 then
     ; lettered it, which is the erase-and-letter pair - and on a 4.77MHz 8088
     ; that leaves the line blank for several display frames, so every keystroke
@@ -5141,26 +5271,25 @@ np_redraw:
     call np_walk
     mov byte [np_clip], 0
 
-    ; The grow box is redrawn only if this redraw could have touched it, and
-    ; that test is new. It used to be unconditional, and it HAD to be: the band
-    ; fill spanned the full content width, so any dirty row level with the box
-    ; erased it - and there was no cheap way to know which. It is 13x13 at
-    ; (np_rgt-12, np_bot-12), the bottom-right corner of the content, and the
-    ; only things that reach it now are the right-margin fill and the last text
-    ; row, both bounded by the dirty band's rows. So one comparison answers it.
+    ; THE GROW BOX IS NOT REDRAWN HERE AT ALL, because nothing on this path
+    ; can reach it (SPEC.md 27.2.1). It was unconditional once, and it HAD to
+    ; be: the band fill spanned the full content width, so any dirty row level
+    ; with the box erased it. Then it became a row test - [np_bandb] against
+    ; np_bot-12 - and that was still wrong in the expensive direction, because
+    ; typing on the BOTTOM VISIBLE ROW satisfies it on every keystroke, which
+    ; is exactly where the caret sits while a page is being filled. Measured:
+    ; wm_grow_paint plus three gfx_frames and eighteen fills and lines, ~12 ms
+    ; of a 52 ms keystroke - and the flicker in the corner that making it
+    ; conditional was supposed to stop.
     ;
-    ; Unconditional, it redrew the box on EVERY KEYSTROKE - and wm_grow_paint
-    ; fills the square before it frames it, which is the erase-and-letter flash
-    ; all over again in one 13x13 corner. Typing anywhere in the note made the
-    ; resize handle flicker, which is exactly what a user saw once the rows
-    ; themselves had stopped.
-    mov ax, [np_bot]
-    sub ax, 12
-    cmp [np_bandb], ax
-    jb .nogrow
-    mov bx, si
-    call OSAPI_WM_GROW
-.nogrow:
+    ; The box is 13x13 at (np_sbr-12, np_bot-12) and np_bounds reserves that
+    ; corner in BOTH dimensions: [np_rgt] is np_sbr-NP_SB_W, two pixels short
+    ; of its left edge, and [np_sbb] is np_bot-NP_GROW, one row above its top.
+    ; So the text runs, the two margin fills and the scroll bar all stop clear
+    ; of it. The row test was reading the band's rows and never asked about its
+    ; COLUMNS. Every other OSAPI_WM_GROW in this module follows something that
+    ; genuinely reaches the corner - a full-content fill, or a band scroll that
+    ; drags it - and those all stay.
     call np_sbcheck                 ; a note that gained or lost a row moves
     call np_toast                   ; the thumb, and nothing else redraws it
                                     ; on this path
@@ -9858,6 +9987,16 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                             ; is then a shift and not a 150-clock `div`
     NPVAR np_xpad, 1        ; byte: keep the words that follow even
 
+; --- how deep a caret move can dirty (SPEC.md 27.4.1) ------------------------
+    NPVAR np_mvbot, 2       ; word: the DEEPER of the two visible rows a caret
+                            ; move touched - the one it left and the one it
+                            ; arrived on - or 0x7FFF for "not a caret move, or
+                            ; nowhere in particular". Written by np_move, which
+                            ; is the only caller that knows both; np_fastcm
+                            ; parks it at the sentinel, so Left and Right (kind
+                            ; 4 as well, and adjacent rows they do not measure)
+                            ; can never inherit an Up's bound
+
 %ifdef NPBENCH
 ; --- the walk bench (tests/npbench.inc), in the -DNPBENCH build only ---------
     NPVAR npb_buf, 640      ; the report, composed here and then copied into
@@ -9964,8 +10103,6 @@ np_flo      equ os88_image_end + 425    ; word } np_rflush's span,
 np_fhi      equ os88_image_end + 427    ; word } 0xFFFF = empty
 np_fcc      equ os88_image_end + 429    ; word: the caret's column
                                        ; on the row being flushed
-np_bandb    equ os88_image_end + 431    ; word: the dirty band's last
-                                       ; row, for the grow-box test
 
 ; --- the document, and the heap it lives in (SPEC.md 27.6/50.3) ----------------
 ; The text itself is NOT in this package's region. np_entry claims NP_KB0 for

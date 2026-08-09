@@ -11,9 +11,10 @@ re-deriving it, and so a decision that was right in one round is re-opened for
 the right reason in the next rather than for a hunch.
 
 **Read §5 before picking up any of the open reports and §6 before measuring
-anything.** Between them they carry four wrong diagnoses that each survived a
-casual look, and three of the four were failures of the *harness* rather than
-of the code.
+anything.** Between them they carry eight wrong diagnoses that each survived a
+casual look, and six of the eight were failures of the *harness* rather than
+of the code — including one, §6.7, in the tool written to prevent exactly that
+class of mistake, and one, §6.8, that reported a 25% win as no change at all.
 
 | | |
 |---|---|
@@ -22,7 +23,7 @@ of the code.
 | §3 | deliberately rejected, with the reason |
 | §4 | what shipped, and where each piece lives |
 | §5 | open field reports, with the diagnosis so far |
-| §6 | measuring Note Pad, and the six ways the apparatus lied |
+| §6 | measuring Note Pad, and the eight ways the apparatus lied |
 | §7 | the latency budget: one typematic repeat, and what is still over it |
 
 ---
@@ -400,7 +401,26 @@ terminator the same click reads **445 ms**, because the trace ends at the last
 label inside the callback and §6.5's rule bills `np_paint`'s own 578 ms to
 nobody. The first number this measurement produced was that 445.
 
-### 5.2.1 The first scroll after opening leaves ~11 cells stale
+**SPEC.md §11.96's raise cache is the answer to this and it now actually
+runs.** It shipped not working: §50.6.1 placed a purgeable claim under a
+ceiling computed by reading any claim owned by an instance *slot* as a region,
+and a Disk window's 3KB listing cache is exactly that — a data claim, placed
+bottom-up, at the floor of the heap. So on the one desktop this report is
+about, the ceiling was 5KB above the heap floor with the FAT window already
+filling it, every claim was refused, and the cache was never taken. Verified
+on the machine, before and after the fix: `[wm_su_seg]` 0 always → `0x9A40`,
+and a raise of a covered Note Pad now runs `wm_su_try` and **no `np_paint` at
+all**. The 578 ms is gone rather than reduced.
+
+Two things about that are worth carrying forward. **A refusal was the correct
+behaviour of every piece involved** — `mem_claim` refuses, `wm_su_take` treats
+a refusal as "no cache, raise the ordinary way", and the raise then repaints
+exactly as it did before the feature existed — so the feature being 100% dead
+looked identical to the feature being absent, on every screen and in every
+timing. And **the arithmetic was visible in the claim table the whole time**;
+what stopped anyone reading it is §6.7 below.
+
+### 5.2.1 A short run of ArrowDowns leaves 66 glyph cells stale
 
 **Found while pixel-verifying §27.13, and it PREDATES all of this work** — the
 A/B is what says so, and it is the reason this is a report rather than a
@@ -422,6 +442,38 @@ so the instrument is not manufacturing it).
 
 `tools/notepad` + the crop-to-content diff in this entry reproduces it in one
 run; that harness is the thing to start from.
+
+**It is bigger than eleven cells and it needs no scroll at all.** The
+reproduction now is three commands from a cold boot and it is deterministic to
+the byte:
+
+```sh
+python3 tools/notepad/lab.py boot
+python3 tools/notepad/lab.py press ArrowDown 6      # top stays 0 throughout
+python3 tools/notepad/pixcheck.py
+```
+
+**2,743 bytes = 686 pixels = 66 glyph cells**, bounding box x 56..299 (the
+full content width) and y 51..121 — nine rows of the sixteen, and the caret
+never left the view. Byte-for-byte identical on two different builds of the
+module, which is what says it is the code under both and not either change.
+
+Three things that narrows: the view never scrolled, so `np_scrollpaint`,
+`[np_ptop]` and §27.7.2's blit are all out; six `ArrowDown`s is fewer than the
+24 in the paragraph above, so it is not a long sequence accumulating; and it
+is the full width of nine rows rather than the tail of one, so it is whole
+rows not being drawn rather than a run stopping short. §27.7.3's chunked
+height count is still the standing suspicion — `drows` reads 532 of 781 while
+this is happening — and the next step is to hold the worker off (breakpoint
+`np_hchunk` and never resume it) and see whether the mismatch survives.
+
+**The instrument had to be repaired before any of this meant anything** — see
+the note at the top of `pixcheck.py`. Its "forced full repaint" stopped being
+forced the moment SPEC.md §50.6.1's fix brought §11.96's raise cache to life,
+because a raise then restores the banked pixels instead of calling `W_PAINT`
+and the check compares a copy against its own original. It clears `WF_SAVEU`
+for the round trip now, and it puts a breakpoint on `np_paint` and reports
+INVALID rather than a comforting zero if the repaint did not happen.
 
 ### 5.3.1 `[np_rowsn]` is not capped to the array it indexes
 
@@ -461,13 +513,125 @@ do not just add a clamp and rebuild.
 cycle, both of which the operator feels, and the field number is what should
 set it. `make npbench` reports what it costs on the machine in front of you.
 
+### 5.5 Typing at the END of a note gets slower as the page fills — REPRODUCED
+
+Reported from the field, in the reporter's own words: *"with the cursor at the
+end of the file it should only be drawing one character and doing no massive
+operations on the rest of the text behind it. Currently it gets slower as I
+fill the page."*
+
+**It reproduces, it is real, and it plateaus.** Empty the note (`Ctrl-A`,
+`Backspace`), then type, with the caret never leaving the end — a 16×29 window
+on a cycle-accurate 4.77MHz 8088:
+
+| note length | rows | `[np_top]` | keystroke | pass 1 | drawing |
+|---|---|---|---|---|---|
+| 26 | 1 | 0 | **35 ms** | 10 | 21 |
+| 151 | 5 | 0 | 38 | 12 | 21 |
+| 351 | 12 | 0 | 56 | 13 | 40 |
+| 601 | 16 | 9 | **66 ms** | 15 | 45 |
+| 776 | 16 | 17 | 50 | 11 | 35 |
+| — the keystroke that scrolls — | | | **190 ms** | 18 | 168 |
+
+So it roughly **doubles as the page fills** and then flattens: it is bounded
+by a *screenful*, not by the note. That is why it reads as "as I fill the
+page" and stops there. On a bigger window it will be worse in proportion — a
+25×76 window is 3.5× the cells.
+
+**What one keystroke actually does**, counted by breakpoint at a full page
+(`len` = 700, `top` = 13):
+
+```
+np_walk=2   np_rflush=6   np_rstart=6   gfx_fill=17     (and 38 + gfx_scroll on the scroll)
+```
+
+Two walks is by design — pass 1 finds which signatures moved, pass 2 draws.
+The **six** `np_rflush` is three rows per pass, and that is the answer to "it
+should only be drawing one character": `np_seedck` deliberately backs the seed
+up a row, because §27.11's word wrap decides a row's break from the length of
+the word *behind* it, so the row above the caret's has to be laid out again
+too. Both passes pay it. **17 `gfx_fill`s is 12.8 ms of pure arrival** at
+PERFORMANCE.md's ~756 µs a call, before a glyph is drawn.
+
+**Ruled out.** Not the seed failing: `[np_ckok]` and `[np_rowsok]` read 1 at
+every depth and the trace shows `np_seedck` then `np_seedrow` on every press,
+so nothing walks from index 0. Not §27.13's row index being dropped by
+`np_hmark` — that was the first hypothesis, it is wrong, and the trace is what
+killed it. Not the note's total length: at a fixed `[np_top]` the cost does not
+move as the note grows behind the view.
+
+**Where to go next**, in the order the numbers justify: the 17 fills per
+keystroke (what are they, and can the margins be folded into the run the way
+§27.2 folded the band?); the 190 ms scroll keystroke, which is §7.2's
+`np_scrollpaint` on the one press that also inserts; and only then pass 1,
+which is already down to 11–18 ms here.
+
+**One trap it sprang, and it is §6-shaped**: counting glyphs by breakpointing
+`font_char` and `font_run` reports **zero**, on a keystroke that plainly
+letters a row. `OSAPI_FONT_RUN` lands on **`font_run_x`**, which is the
+implementation and not a stub — it takes SPEC.md §6.1's aligned single-store
+path itself and only falls through to the slow one. Both symbols resolve, so
+the zero looks like a measurement rather than a miss. Count `font_run_x`.
+
+#### 5.5.1 …and the drawing was never the problem
+
+The whole keystroke, as an ordered breakpoint trace — one printable typed at
+the end of a 701-character note, `[np_top]` = 14, 16×29 window, **52.3 ms**.
+A leg is billed to the label at its END (§6.5):
+
+| | | |
+|---|---|---|
+| `np_ins` | 4.6 ms | the insert itself |
+| pass 1's walk | 9.8 | 2 `np_rflush`, `[np_draw]` = 0, so this is pure layout |
+| the two margin fills | 1.8 | `gfx_fill` ×2 |
+| pass 2's walk | 15.2 | **32 `np_carets`** — one per character laid out |
+| **the glyphs** | **1.2** | one `font_run_x`, `[np_flo]` = 6 `[np_fhi]` = 7 — **two cells** |
+| the caret bar | 2.3 | one `gfx_vline` |
+| ~~the grow box~~ | ~~**~12**~~ | **FIXED — SPEC.md §27.2.1**, it was erasing nothing |
+| `np_sbcheck`, `np_toast` | ~1 | |
+
+**`np_rflush` already draws only what changed.** It diffs the row buffer
+against `[np_prow]` cell by cell, folds in the caret and the selection, and
+runs exactly `[np_flo]..[np_fhi]`. Two cells for one typed character, in one
+call, in 1.2 ms. Nobody needs to fix the drawing.
+
+**~25 ms of the 52 is laying the caret's row out TWICE** — 32 characters per
+pass at ~0.3 ms each — to discover that one character changed. That is the
+real cost, and §27.4's checkpoint and §27.11.1's seed test have already taken
+it from "the whole note" down to "one row": the row is the floor of the
+current design, not of the problem.
+
+**~12 ms was the grow box, redrawn for nothing — FIXED (SPEC.md §27.2.1).**
+The test was a *row* overlap and `np_bounds` reserves that corner in **both**
+dimensions: the text and both margin fills stop two pixels short of its left
+edge, and the scroll bar stops one row above its top. Nothing on the band path
+could reach it. Keystroke **37–40 ms → 25.1 ms**, `gfx_fill` 21.2 → 3.0, and
+the corner byte-identical over 740 keystrokes.
+
+**What the problem actually requires**, for the commonest keystroke there is —
+a printable appended at the end of the note, no wrap:
+
+- the row's cell count is known (`[np_rcols]`, and the row buffer holds it)
+- "does this character still fit" is one compare; "does the current word still
+  fit" is one backward scan to the nearest space, which §27.11.1's `np_ckword`
+  already does forward
+- nothing above the caret's row can have changed, and nothing below it exists
+- so: one glyph at column C, one caret bar, and the row buffer and signature
+  updated in place — **no walk at all**
+
+That is ~9 ms against today's 52, and it is a new fast path rather than a
+tightening of the old one: every optimisation so far has made the *walk*
+shorter, and this one is about not walking. The wrap question is the only
+thing standing in front of it, and it is answerable from the row buffer.
+
 ---
 
-## 6. Measuring Note Pad, and the four ways the apparatus lied
+## 6. Measuring Note Pad, and the eight ways the apparatus lied
 
 Every one of these produced a confident wrong answer that looked right.
 PERFORMANCE.md Part 4's rule — the apparatus is the thing most likely to be
-wrong — earned its keep four times in one session.
+wrong — has now earned its keep eight times, and §6.7 is the sharpest: it is
+the same defect, in the tool built to stop it, one section over.
 
 ### 6.1 The A/B must wait the same length of time on both sides
 
@@ -560,6 +724,50 @@ IRQ1, so Ctrl+Z did nothing at all until each event got its own advance.
 
 `Tracer.collect` never showed any of this because it already does `step(1)`
 before every `advance`, for the unrelated reason in §6.5's second bullet.
+
+### 6.7 `os88sym.py` answered `KERNEL_SEG:offset` for three other segments
+
+The tool that exists so nobody reads a `.bss` symbol out of a NASM listing had
+the same defect one section over, and it cost this round a session. `linear()`
+added `KERNEL_SEG * 16` to **every** symbol — right for `.text` and `.bss`,
+wrong for `.cold` (COLD_SEG), `.ovl` (FAT_SEG) and `.lowbss` (LOW_SEG), which
+between them hold 25KB of resident code and every task stack, disk buffer and
+claim record.
+
+The wrong answer is the bad kind: a small plausible address *inside the kernel
+image*, which reads back without error. `mem_tab` resolved into `.text`, so
+the claim map came out as 32 rows of noise — `0x0efe, 44,642 KB, owner
+0x5859` — and a heap with 505KB free read as "581,598 KB claimed of 550, zero
+free", which is a diagnosis of the wrong thing entirely. `mem_tab` is at
+`0x15200`; the tool said `0x01400`.
+
+Fixed: the map is cut with `[map all]`, symbols are attributed to their
+section, and the four segment bases are read from the map's own equates so a
+rung that moves cannot desync them. `os88sym.py --all` prints the section and
+`seg:off` now. **A section not in `SECTION_SEG` is an error rather than a
+guess at `KERNEL_SEG`** — guessing is what made this invisible.
+
+Confirm a suspicious address against `SS` (which is `LOW_SEG` for every task)
+before believing anything read through it.
+
+### 6.8 A bench that types one character manufactures its own worst case
+
+The apparatus for SPEC.md §27.11.1 typed `KeyA` for every measured keystroke,
+so each five-press round grew the unbroken run at the caret. By the time it
+measured, the caret sat inside a **14-character word** — which is precisely the
+case the optimisation under test has to refuse. It reported **no change at
+all**, twice, on a build that is worth 25–30%.
+
+The tell was in the counters and not the milliseconds: `np_ckword=1.0` beside
+`np_ckword.yes=0.0` says the test ran and answered no every time, which no
+timing could have said. Reading the note out of guest memory then showed
+`'aaaaaaaaaaaaaa'` between the row start and the caret.
+
+**A text benchmark has to type text.** The fill loop already put a space every
+eighth character and the *measured* presses did not, which is the same class of
+mistake as §6.1's mismatched waits: the two halves of the run were not the same
+experiment. One counter across every press, filled and measured alike, fixed
+it — 53.5 ms → 37–40 ms, immediately.
 
 And one that is not the apparatus but cost a whole attempt: **a fix must be
 measured against the symptom it claims to fix.** §27.7.7 is correct, targets a

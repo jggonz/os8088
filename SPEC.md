@@ -4186,6 +4186,37 @@ correctness.** Note Pad opts in and is entitled to: everything that draws
 there goes through `np_redraw` or `np_paint`, and the worker's two background
 drawers ask `OSAPI_WM_OBSCURED` first.
 
+**Verified on a cycle-accurate 5150, with a control** — and the state it needs
+is not the one the obvious test produces, which is why the first attempt was
+inconclusive. **The window that owns the cache is never frontmost**: it is
+taken in `wm_raise` from the *outgoing* front window, and `wm_hit` gives the
+close and minimize boxes to the frontmost window alone. So "minimize Note Pad
+and restore it" cannot reach the hook — by the time its minimize box is
+clickable the cache has been spent by `wm_su_try` on the raise that put it
+there.
+
+The state is reachable by **promotion** (§11.91): hide the window covering it
+and the one underneath comes to the front without `wm_draw_win` running on it
+— *provided it does not overlap the damage*, or that repaint spends the cache
+honestly. Side by side, it survives. Then its minimize box is live and
+`wm_hide` runs with `BX == [wm_su_win]`. Measured:
+
+| | hide drops the cache | restore runs `W_PAINT` |
+|---|---|---|
+| as shipped | yes | yes |
+| `call wm_su_drop` NOPped out in the running guest | no | **no** |
+
+The control is the half that matters: without the hook the cache survives the
+hide and `wm_su_try` *succeeds* on the restore — putting back a picture of the
+window as it was before it went down, which is precisely the defect this
+section describes. It is also the reason a second application may now opt in.
+
+(That verification was only possible after §50.6.1's placement bug was fixed.
+Until then the claim was refused on any desktop with a Disk window open, so
+the cache was never taken and there was nothing to drop — and "no `W_PAINT`"
+is what a *missed click* reports too, which is how the first attempt came back
+inconclusive rather than wrong.)
+
 ## 12. menu.inc
 
 Menu bar: rows 0..MBAR_H-1, white, 1px black line at row MBAR_H-1. Its
@@ -11529,6 +11560,39 @@ screen) still fills the content whole first — there the fill is erasing
 everything below the text as well, and a full repaint is not what a keystroke
 pays for.
 
+#### 27.2.1 The grow box is not redrawn by a keystroke, because nothing erased it
+
+The band path does not call `OSAPI_WM_GROW` at all. It was unconditional once
+and it had to be — the band fill spanned the full content width, so any dirty
+row level with the box erased it — and when the fill went (§27.2) it became a
+row test, `[np_bandb]` against `np_bot - 12`. **That test is satisfied on every
+keystroke typed on the bottom visible row**, which is exactly where the caret
+sits while a page is being filled. Measured on a cycle-accurate 4.77MHz 8088:
+`wm_grow_paint`, three `gfx_frame`s and eighteen fills and lines — **~12 ms of
+a 52 ms keystroke**, plus the flicker in the corner that making it conditional
+was meant to stop.
+
+**`np_bounds` already reserves that corner in both dimensions**, and the row
+test only ever asked about one of them:
+
+- columns — `[np_rgt]` is `[np_sbr] - NP_SB_W`, and the box's left edge is
+  `[np_sbr] - 12`, so the text runs and both margin fills stop **two pixels
+  short** of it;
+- rows — `[np_sbb]` is `[np_bot] - NP_GROW`, one row above the box's top, and
+  the comment there has said so since the bar was written.
+
+So nothing on the band path can reach it. Every other `OSAPI_WM_GROW` in the
+module follows something that genuinely does — a full-content `gfx_fill`
+(`np_repaint`, the toast), or a band scroll that drags the corner with it
+(§27.3's break, §27.7.2's blit) — and all of those stay.
+
+Verified by capturing the box itself, which is the one thing
+`tools/notepad/pixcheck.py` cannot see: its crop ends at `[np_rgt]`, two pixels
+short by construction. 740 characters typed on the bottom row, then the corner
+diffed against a forced full repaint: **0 differing bytes of 676**.
+
+`[np_bandb]` went with it — the test was its only reader.
+
 ### 27.3 The visual break — typing in FRONT of text without reflowing it
 
 Inserting a character at the front of a note moves every character after it,
@@ -11697,6 +11761,46 @@ with a counter in `np_walk`'s loop: at 200 characters a keystroke went from
 the window to the full screen to **4** — bounded by the caret's column
 instead of by the note.
 
+#### 27.4.1 A caret move stops at the deeper of two rows
+
+The checkpoint says where pass 1 may *start*. `[np_mvbot]` says where it may
+**stop**, and only for a caret move: `np_ask` folds the caret into a row's
+signature and a move changes nothing else, so the only rows whose signatures
+can differ are **the one the caret left and the one it arrived on**. Every row
+below them is laid out to be told it did not move — `(vrows − row) × ~6 ms`,
+which is most of the budget with the caret near the top of a 16-row view.
+
+`np_move` is the one place that holds both rows: `[np_ckpr]` is still the row
+the caret came from until the branch that moves it back runs, so the deeper of
+the two is recorded there and nowhere else. `np_fastcm` parks the word at
+`0x7FFF`, because Left and Right are kind 4 as well and measure no rows — so
+they can never inherit an `Up`'s bound.
+
+**Gated on the walk actually resuming**, and that gate is not caution about
+the bound. `np_walk`'s bounded stop leaves `np_rows` alone for a *resumed*
+walk and shrinks `[np_rowsn]` to where it stopped for one that started at the
+top of the view — which would hand rows this walk skipped back to §27.13's
+index for nothing. Resumed is the normal case anyway: `np_seedck` seeds at the
+earlier of the two rows, which is what makes the pair a one-row window for
+`Up` and `Down`.
+
+Measured on a cycle-accurate 4.77MHz 8088, README.TXT in a 16×29 window, the
+same six `ArrowDown` states on both builds (identical `[np_cur]` at each step):
+**pass 1 82–124 ms → 17–27 ms**, and the whole keystroke **191–256 ms →
+103–160 ms**. `draw_ms` is unchanged at every step, which is what says the
+drawing is the same drawing.
+
+**And `np_move` was reporting the wrong kind.** `np_fastok*` numbers them
+1 insert, 2 backspace, 3 forward Delete, 4 a caret move, and they carry
+different permissions: 1..4 may resume the walk, only 1..3 may enter §27.3's
+visual break. `np_move` set **3**, so every `Up`, `Down`, `Home` and `End`
+claimed a permission the routine's own contract denies it — "a caret move
+reflowed nothing", as `np_redraw` says two screens away. It was invisible at
+29 columns only because `np_brktry` needs `NP_BRK_CELLS` = 60 cells below the
+caret and one row there is 29. Widen the window past 60 columns and `Up`
+entered the break on a stale `[np_ecol]` left by some earlier edit: a phantom
+line break for as long as the settle takes.
+
 ### 27.5 Where each row starts — a query about a row costs a row
 
 §27.4 bounded the *keystroke*. It did nothing for the caret keys, and they
@@ -11808,6 +11912,66 @@ walking the pen out of the window and out of a 16-bit `DI`.
 What this does **not** change: the document. Wrapping is display-only, so a
 file saved after the change is byte-identical to one saved before it, and a
 note reflows when the window is resized exactly as it always did.
+
+#### 27.11.1 What the lookahead costs, and when a keystroke can skip it
+
+Word wrap is the only lookahead in the module and it is not free: §27.4's
+checkpoint said "a keystroke may resume at the start of the caret's row", and
+§27.11 took that away, because the break in front of a row is decided by the
+length of the word behind it. `np_seedck` therefore seeds one row **earlier**
+and both passes pay for it. Measured on a cycle-accurate 4.77MHz 8088, a
+16×29 window, typing at the end of a 700-character note: the back-up
+**doubles** the rows a keystroke lays out — `np_rstart` 4.8 against 2.0 — and
+is worth **~15 ms of a ~53 ms keystroke**.
+
+**It is only needed when the edit is inside the row's first word.**
+`np_wordfit` is the whole of the dependency: standing at a word's first
+character it measures whether that word *ends* inside the cells left on the
+row, and breaks in front of it if it does not. So the break that decides where
+a row starts is a function of that row's first word and of **nothing else in
+the row** — and an edit past the end of that word cannot have moved it.
+
+`np_ckword` is that test, and it needs no new state to be kept in step: the
+caret is the edit, near enough and always on the safe side, because an insert
+leaves it one *past* the character it added while a backspace and a Delete
+leave it *on* the edit. So the earliest index a keystroke can have touched is
+`[np_cur] - 1`, and requiring the row's first word to end **strictly before**
+the caret is exactly that bound. The scan is at most a row's width, stops at
+the caret, and is a handful of byte compares against a row of layout at ~6 ms.
+
+**A hard newline is not a wrap decision at all**, and that case skips
+unconditionally: the row above ended because the note said so, no word can
+move that break, and the one edit that could — deleting the newline itself —
+is before the row start and is already refused by `np_fastcm`.
+
+Measured, same note and window: **53.5 ms → 37–40 ms** a keystroke, with
+`np_rstart` down from 4.8 to 2.0. Pixel-identical to the build without it:
+2,778 differing bytes against a forced full repaint on *both* builds, in the
+same bounding box — which is docs/NOTEPAD-NOTES.md §5.2.1 and predates all of
+this.
+
+**The one case it still refuses is a run of non-space longer than a row**, and
+there the cost is unbounded rather than doubled: such a run spans
+`⌈length / rcols⌉` rows, every row after its first begins mid-word, and
+`np_seedck` walks back to where the run started — so the seed is that many
+rows back and both passes lay out all of them. A 500-character token at 29
+columns is 18 rows, twice a keystroke. The walk-back itself is cheap (table
+lookups); it is the *layout from the seed it chooses* that is not. This is not
+theoretical: a benchmark that typed nothing but `a` grew a 14-character run at
+the caret and hid the optimisation above entirely, reporting no change at all
+until the harness was made to type prose (docs/NOTEPAD-NOTES.md §6.8).
+
+Two ways out are recorded rather than taken, because both are decisions rather
+than fixes. **Give the back-up a ceiling** and fall through to the view-top
+seed (`np_seedrow`) beyond it — correct, needs no change to what the text
+looks like, and bounds the case at a screenful rather than at a row.
+**Or give a long run break opportunities every X characters** — "a word longer
+than X wraps by character" — which bounds the seed to one row for any run
+length and additionally lets `np_wordfit` answer "fits" *without scanning*
+whenever the cells left are at least X. That is the stronger result and it is
+a visible behaviour change: the tree already splits a run longer than a row by
+the cell rule, so X = `[np_rcols]` is today's policy, and any smaller X breaks
+long words earlier than a reader expects.
 
 **§27.4 is the part that had to move with it** — the resume optimisation was
 licensed by "wrapping has no lookahead", which is now false. See there.
@@ -23312,9 +23476,34 @@ has been fragmented with nothing noticing. Highest-fit in the data arena keeps
 puts the block against the free middle — the one run both arenas grow toward,
 and so the only one worth enlarging when it is shed.
 
-A region is told from a data claim by its owner alone: §50.3 makes a region's
-owner the instance **slot** and its data claims' the **segment**, so "below
-`INST_MAX`" is the test and this needs no new field either.
+**A region is `I_SPTR` of a `KIND_PKG` instance, and nothing else is.** That
+test replaces the one this section shipped with, which was "the owner is below
+`INST_MAX`" — §50.3's rule read one step too far. §50.3 says a *package's*
+region is owned by the instance **slot** and a *package's* data claims by its
+**segment**; it says nothing about a **built-in**, whose data claims are
+stamped with its slot as well, and `mem_free_rec` is where that is written
+down in the code ("a built-in's claims are stamped with its instance slot (the
+Disk window's cache)").
+
+So "below `INST_MAX`" also matched a Disk window's 3KB listing cache (§22.1) —
+a data claim, placed **bottom-up**, and therefore sitting at the very floor of
+the heap. Measured with README.TXT open from a Disk window: the ceiling came
+back as that cache's base, `0x17C0` against a heap floor of `0x1680`, with the
+FAT window (§18.8.1) already filling every paragraph between them. Every
+raise-cache claim was refused on a machine with **505KB free**, so §11.96 never
+once fired on the commonest desktop there is — one Disk window and one
+document. It is not a rare shape: a Disk window is how a document gets opened.
+
+The failure was silent in both directions, which is why it survived a round.
+`wm_su_take` treats a refusal as "no cache, raise the ordinary way" (correctly
+— that is the whole contract of a purgeable claim), and §11.96.1's `wm_hide`
+hook could not be verified *because there was never a cache to drop*: the
+verification that was attempted reported "no `W_PAINT`", which is also what a
+missed click reports.
+
+The current test is two compares on the few records that reach it: the owner
+is below `INST_MAX`, that instance is a package, and the claim's base is its
+`I_SPTR`.
 
 #### 50.6.2 Shed and retry, not discard and notify
 

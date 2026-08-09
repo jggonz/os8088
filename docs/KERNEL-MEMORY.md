@@ -346,21 +346,21 @@ Three things about it:
 <!-- kernsize:begin -->
 ```json
 {
-  "bss": 4058,
+  "bss": 4461,
   "budget": 94208,
   "codemax": 65536,
   "cold": 21843,
   "coldpara": 1376,
   "fatpara": 288,
-  "imgpara": 3424,
-  "kend": 5760,
+  "imgpara": 3488,
+  "kend": 5824,
   "kseg": 96,
-  "ksize": 90624,
+  "ksize": 91648,
   "lowbss": 7748,
   "lowpara": 576,
   "ovl": 2662,
   "stk0": 1024,
-  "text": 50614
+  "text": 50860
 }
 ```
 <!-- kernsize:end -->
@@ -818,14 +818,14 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 26,688 | 36.8% |
-| the window system and its furniture | 14,979 | 20.7% |
-| drawing: adapters, primitives, glyphs, icons | 9,893 | 13.7% |
+| the file system, end to end | 26,899 | 37.0% |
+| the window system and its furniture | 14,979 | 20.6% |
+| drawing: adapters, primitives, glyphs, icons | 9,893 | 13.6% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,504 | 13.1% |
-| the kernel proper: API table, heap, scheduler, events | 5,593 | 7.7% |
+| the kernel proper: API table, heap, scheduler, events | 5,628 | 7.7% |
 | the Control Panel | 4,424 | 6.1% |
 | the three built-in kinds | 1,376 | 1.9% |
-| **total** | **72,457** | |
+| **total** | **72,703** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -833,8 +833,8 @@ generated in the first place.
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 806 | 7,053 | **7,859** | 337 | — |
 | `wm.inc` — the window manager (§11) | 5,233 | — | **5,233** | 627 | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 4,867 | — | **4,867** | 614 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 20 | 4,710 | **4,730** | 155 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 4,656 | — | **4,656** | 211 | 3,584 |
 | `ctrl.inc` — the Control Panel (§31) | 842 | 3,582 | **4,424** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 3,671 | — | **3,671** | 118 | — |
@@ -846,7 +846,7 @@ generated in the first place.
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,127 | **2,127** | 135 | — |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,819 | — | **1,819** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
-| `memory.inc` — the claim heap (§50) | 1,746 | — | **1,746** | 12 | 256 |
+| `memory.inc` — the claim heap (§50) | 1,781 | — | **1,781** | 12 | 256 |
 | `vgabb.inc` — the software renderer / back buffer (§32, §39.5) | 1,649 | — | **1,649** | 27 | — |
 | `apps.inc` — the three built-in kinds (§14) | 1,376 | — | **1,376** | 11 | 240 |
 | `icons.inc` — the icon renderer (§10) | 1,312 | — | **1,312** | 34 | — |
@@ -866,7 +866,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,621 | — | **2,621** | — | — |
-| **total** | **50,614** | **21,843** | **72,457** | **4,058** | **7,748** |
+| **total** | **50,860** | **21,843** | **72,703** | **4,461** | **7,748** |
 <!-- END generated table -->
 
 ### Reading it
