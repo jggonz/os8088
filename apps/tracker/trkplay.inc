@@ -447,18 +447,40 @@ mp_setxt:
 ; =============================================================================
 ; mp_start - reset the replayer and start playing
 ; in: AL = 0 play song from position 0 / 1 loop the current pattern
+;          / 2 RESUME where a stop parked it (SPEC.md 45.17)
+;
+; MODE 2 IS WHAT MAKES PAUSE A PAUSE. trk_play_stop already parks songpos, the
+; pattern and the row at the row the LISTENER last heard - it has to, or
+; stopping jumps the display three seconds forward (SPEC.md 45.15) - and every
+; play path then threw that away and started at position 0. Resume keeps all
+; three, and keeps the SPEED and TEMPO with them: an Fxx earlier in the pattern
+; is not on the row being resumed, so re-reading the row cannot put it back and
+; a resumed song would run at 125 BPM until the next one.
+;
+; It is not a third [mp_ploop] value. That byte is a FLAG - two readers test it
+; non-zero for "never leave this pattern" - so a 2 stored there would resume
+; into a pattern loop, which is the shape of bug that assembles and sounds
+; nearly right.
 ; =============================================================================
 mp_start:
     cmp byte [mp_loaded], 0
     jne .ok
     ret
 .ok:
+    mov ah, al                  ; AH = the mode, kept across the wipe below
+    cmp al, 2
+    jne .mode
+    xor al, al                  ; resume is not pattern loop - see the header
+.mode:
     mov [mp_ploop], al
     or al, al
     jnz .keep
+    cmp ah, 2
+    je .keep                    ; ...and resume keeps the position too
     mov byte [mp_songpos], 0
 .keep:
     ; zero the four channel records
+    push ax
     push ds
     pop es
     cld
@@ -466,10 +488,14 @@ mp_start:
     mov cx, (MP_CHSZ * 4) / 2
     xor ax, ax
     rep stosw
-    mov byte [mp_row], 0
-    mov byte [mp_tick], 0
+    pop ax
+    cmp ah, 2
+    je .tempo                   ; resume: the row, the speed and the tempo are
+    mov byte [mp_row], 0        ; the ones that were playing
     mov byte [mp_speed], 6
     mov byte [mp_bpm], 125
+.tempo:
+    mov byte [mp_tick], 0
     mov byte [mp_patdel], 0
     mov byte [mp_patdel2], 0
     mov byte [mp_pbreak], 0

@@ -704,7 +704,7 @@ tui_msg_draw:
     mov si, [tui_msgp]
     or si, si
     jnz .have
-    mov si, tui_s_hint
+    call tui_hintp
 .have:
     cmp byte [trk_fs], 0
     je .win
@@ -1112,7 +1112,7 @@ tui_el_status:
     mov si, [tui_msgp]
     or si, si
     jnz .have
-    mov si, tui_s_hint
+    call tui_hintp
 .have:
     TSETC TC_STATT
     mov cx, [tui_lay + TL_STX]
@@ -2887,6 +2887,17 @@ tui_draw_dyn:
 ; that row and they redraw on different things - the text on a row change, the
 ; hold's animation on a frame - so neither may redraw for the other.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; tui_hintp - SI = the status legend this SURFACE should carry
+; -----------------------------------------------------------------------------
+tui_hintp:
+    mov si, tui_s_hint
+    cmp byte [trk_fs], 0
+    je .out
+    mov si, tui_s_hintf
+.out:
+    ret
+
 tui_wpos:
     push ax
     push si
@@ -3061,7 +3072,7 @@ tui_b_full:  db 'Full F', 0
 tui_s_splash1: db 'T R A C K E R', 0
 tui_s_splash2: db 'A FastTracker II style MOD player', 0
 tui_s_none:    db 'No module loaded', 0
-tui_s_keys1:   db 'ENTER play  SPACE stop  P pattern', 0
+tui_s_keys1:   db 'ENTER play  SPACE stop  HOME top  P pattern', 0
 tui_s_keys2:   db 'ARROWS position  1-4 mute  L load  X xt', 0
 %ifdef TRKLOG                       ; the bench keys are on screen, because a
                                     ; key nothing names is a key nobody finds:
@@ -3072,7 +3083,15 @@ tui_s_anykey:  db 'F full  K rate  D log  W write  M mark', 0
 %else
 tui_s_anykey:  db 'Press F or click for fullscreen', 0
 %endif
-tui_s_hint:    db 'ENTER play  SPACE stop  L load', 0
+; Two status legends, because L IS REFUSED on the exclusive surface
+; (SPEC.md 53.7 - the file dialog's answer comes back through an event ladder a
+; bracket is not running) and offering a key that answers "not here" is worse
+; than not offering it. The refusal stays: a key the user presses anyway still
+; says WHY, which is SPEC.md 47 rule 3's shape - the greyed thing explains
+; itself and the unlisted thing has to.
+tui_s_hint:    db 'ENTER play  SPACE stop  HOME top  L load', 0
+tui_s_hintf:   db 'ENTER play  SPACE stop  F/ESC', 0
+
 
 ; the About panel
 tui_ablines:

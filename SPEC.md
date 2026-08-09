@@ -20753,6 +20753,95 @@ initialiser rather than in bss, so a fresh instance starts owing the line
 (§20.1 — every launch reloads the image). The row counter used to hide both
 problems by changing often enough to paper over them.
 
+### 45.17 Stop is a PAUSE, so play has to resume
+
+`trk_play_stop` has always parked the replayer where the **listener** was —
+`[mp_songpos]`, `[mp_pattern]` and `[mp_row]` taken from `tui_sync`'s answer
+rather than from the mixer, because the mixer is up to three seconds further
+on (§45.15). Every play path then threw that away: Enter, Space out of a stop
+and the Play menu all called `mp_start` with AL = 0, which zeroes
+`[mp_songpos]` and `[mp_row]`. So the display stopped exactly where the music
+did, said so, and then the next keypress went back to the beginning — the
+parking was doing real work and nothing ever spent it.
+
+**`mp_start` AL = 2 is RESUME**: it keeps the position, the pattern and the
+row, and it keeps `[mp_speed]` and `[mp_bpm]` with them. The tempo is not
+hygiene — an `Fxx` earlier in the pattern is *not on the row being resumed*,
+so re-reading that row cannot put it back, and a resumed song would run at 125
+BPM until the next one came round.
+
+Four things hold it up.
+
+- **It is not a third `[mp_ploop]` value.** That byte is a FLAG — two readers
+  test it non-zero for "never leave this pattern" — so a 2 stored there
+  resumes into a pattern loop. It assembles and it very nearly sounds right,
+  which is the worst kind.
+- **A song that RAN OUT does not resume**, because the parked position is then
+  the end and resuming there ends again on the spot. `[trk_play_go]` reads
+  `[trk_ended]` — set by the worker at F00 or the watchdog, cleared by
+  `trk_play` as it opens the next stream — so the latch says exactly "the last
+  thing that stopped us was the end".
+- **A fresh load needs no special case.** `[mp_songpos]` and `[mp_row]` are 0
+  and `[trk_ended]` is clear, so resume *is* from the top.
+- **The stream restarts regardless.** `trk_play` still closes and reopens,
+  re-zeroes `[trk_total]`/`[trk_consumed]`/`[mp_stampbase]` and re-anchors
+  §45.15.1's model. Resume is a statement about the REPLAYER, not about the
+  ring.
+
+**`Home` is the restart** that Enter used to be, on both surfaces. **`F` also
+leaves fullscreen**, next to Esc: it is the key that entered, and a toggle
+that only works in one direction is a thing to remember rather than a thing to
+use. Esc stays, being the system-wide way out of a §53 bracket.
+
+**And `L` comes off the fullscreen legend.** Loading genuinely cannot happen
+there — the §38 dialog's answer arrives through an event ladder that a bracket
+is not running (§53.7) — so the status line carries a second legend
+(`tui_s_hintf`, picked by `tui_hintp` off `[trk_fs]`) with `F or ESC exits` in
+its place. The refusal message stays: a key the user presses anyway still has
+to say why, which is §47 rule 6 seen from the other side — the greyed control
+explains itself, and the *unlisted* one has to.
+
+#### 45.17.1 The Rate menu's tick was a greyed row, and greyed means unavailable
+
+The active pick used to BE its own `MENU_DIS` twin — the radio idiom — and
+`MENU_DIS` is §47's "you cannot have this". The field read `11 kHz` greyed and
+reported the rate menu as disabled; it was **selected**. Two different facts
+cannot share one mark.
+
+So the three items are **composed at runtime** into the package's own bss
+(`trk_ritem0..2`, `trk_rate_menu`), and the two marks are separate:
+
+| | |
+|---|---|
+| `* 11 kHz` | selected, live |
+| `  22 kHz` | not selected, live |
+| `  11 kHz (Xt)`, greyed | unavailable, and the suffix says why |
+
+**XT mode is the unavailability, and it is a fact rather than a guess** (§47
+rule 3): `trk_play` takes `TRK_RATE_XT` whenever `[mp_xt]`, so every pick here
+is inert until XT mode goes — which is the whole of the "picking a rate does
+nothing, the fullscreen still says 5500" report. The rows grey with `[mp_xt]`
+and un-grey with it, `trk_xt_toggle` re-composing them; the whole row is
+greyed rather than the caption alone (rule 2); and `R`, which is a key and not
+a greyed control, **says** `Xt mode sets the rate - X first` instead of storing
+a pick nothing will read (rule 6's other half).
+
+**22 and 44 kHz stay LIVE on every machine, and that is rule 3 in the other
+direction.** `OSAPI_SND_CAPS` publishes no rate bit — TONE, FM, PCM_BG,
+PCM_EXCL, PCM_IN and nothing about sample rates — so whether a card will take
+44.1 kHz cannot be known without asking it, and when the only test is doing
+the thing, do it and report. `trk_play` already does: err 2 from
+`OSAPI_SND_STREAM` is `44 kHz needs a DSP 4.x card`. Greying them on a guess
+would be rule 3's exact violation, and greying them on a *machine* that can
+take them would be worse.
+
+Two traps in the composition. The items live in the **package's** segment,
+because a menu string is an offset in the owning window's segment (§12.2's
+`MB_SEG`) — and they are **bss, which arrives zeroed**, so `trk_rate_menu` has
+to run before the first `MENU_SET` reaches the screen or the menu carries three
+empty strings. It also preserves **FLAGS**, not just registers: the entry proc
+calls it between its `jc .out` and its own `ret`, and the loader reads that CF.
+
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
 A port of ActionRetro's **ArtfulType** — "a distraction-free Markdown

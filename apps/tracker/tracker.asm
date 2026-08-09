@@ -121,6 +121,8 @@
 %endmacro
 
 ; --- tuning --------------------------------------------------------------------
+TRK_RITEM   equ 16                  ; a composed Rate item: MENU_DIS + '* ' +
+                                    ; '11 kHz' + ' (Xt)' + NUL = 15
 TRK_RING    equ 16384               ; ring grant size, bytes (power of two,
                                     ; 4096..32768 per the ring-mode contract);
                                     ; ~1.49s of audio at 11kHz
@@ -209,9 +211,13 @@ trk_entry:
                                     ; path instead of the erase-and-letter
                                     ; fallback. wm_snap preserves FLAGS, so
                                     ; the loader's CF still survives to .out
-    mov si, trk_menus
-    call OSAPI_MENU_SET             ; preserves registers AND flags, so the
-    mov si, trk_about               ; loader's CF survives to the ret
+    call trk_rate_menu              ; ...and this ends in MENU_SET. It has to
+                                    ; run before the first paint: the three
+                                    ; Rate items are composed into BSS, which
+                                    ; arrives ZEROED, so a set installed ahead
+                                    ; of it carries three EMPTY strings.
+                                    ; It preserves FLAGS too, so the loader's
+    mov si, trk_about               ; CF still survives to .out
     call OSAPI_ABOUT_SET
     call trk_arg                    ; were we launched to play a module?
 .out:
@@ -402,6 +408,8 @@ trk_onkey:
     je .up
     cmp bh, 0x50                    ; down
     je .down
+    cmp bh, 0x47                    ; Home: back to the top and play
+    je .top
     jmp .out
 .prev:
     mov al, -1
@@ -532,8 +540,11 @@ trk_onkey:
     jmp .out                        ; leaving XT mode (FIELD-NOTES.md 16)
 %endif
 .play:
-    mov al, 0
-    call trk_play
+    call trk_play_go
+    jmp .out
+.top:
+    xor al, al                      ; Home: play from the TOP - the restart
+    call trk_play                   ; Enter used to be (SPEC.md 45.17)
     jmp .out
 .space:
     cmp byte [mp_playing], 0
@@ -1045,6 +1056,8 @@ trk_fs_enter:
     cmp byte [trk_fs], 0
     jne .out                        ; the bracket blocks, so this is belt-only
     mov byte [trk_fs], 1            ; BEFORE the call - see the header
+    call trk_legend                 ; ...and the status legend is picked FOR a
+                                    ; surface, so it changes with this byte
 
                                     ; ...and then DRAIN THE WORKER OUT OF
                                     ; trk_render, because the flag alone only
@@ -1154,7 +1167,11 @@ trk_fsx_main:
     jz .txdraw
     xor ah, ah
     int 0x16
-    cmp al, 27
+    cmp al, 27                      ; Esc, and F - the key that GOT you here
+    je .txdone                      ; is the key that leaves (SPEC.md 45.17)
+    cmp al, 'f'
+    je .txdone
+    cmp al, 'F'
     je .txdone
     call trk_fsx_key
 .txdraw:
@@ -1173,6 +1190,7 @@ trk_fsx_main:
 .txdone:
     mov byte [trk_tx], 0            ; before [trk_fs], so a message set on the
     mov byte [trk_fs], 0            ; way out reaches the windowed splash
+    call trk_legend
     jmp .out
 .gfx:
     cmp byte [trk_smooth], 0        ; Smooth (SPEC.md 45.11): arm the 32 back
@@ -1193,7 +1211,11 @@ trk_fsx_main:
     jz .draw
     xor ah, ah
     int 0x16
-    cmp al, 27                      ; Esc leaves, exactly as it left 11.2
+    cmp al, 27                      ; Esc leaves, exactly as it left 11.2 -
+    je .done                        ; and so does F, the key that entered
+    cmp al, 'f'
+    je .done
+    cmp al, 'F'
     je .done
     call trk_fsx_key
 .draw:
@@ -1214,6 +1236,7 @@ trk_fsx_main:
                                     ; on our held lock now, harmless - we are
                                     ; leaving; trk_fs_enter's clear covers the
                                     ; fsx_run-refused path where we never ran)
+    call trk_legend                 ; ...and the legend follows the surface
     cmp byte [trk_bbheld], 0        ; hand the buffer back BEFORE the return,
     je .out                         ; so the kernel's desktop repaint takes
     mov al, [trk_bbprev]            ; the mode the user actually chose
@@ -1252,6 +1275,8 @@ trk_fsx_key:
     je .up
     cmp ah, 0x50
     je .down
+    cmp ah, 0x47                    ; Home: back to the top and play
+    je .top
     jmp .out
 .ascii:
     cmp al, 13                      ; Enter: play the song
@@ -1342,8 +1367,11 @@ trk_fsx_key:
     inc byte [tui_vrow]
     jmp .out
 .play:
-    mov al, 0
-    call trk_play
+    call trk_play_go
+    jmp .out
+.top:
+    xor al, al                      ; Home: play from the TOP - the restart
+    call trk_play                   ; Enter used to be (SPEC.md 45.17)
     jmp .out
 .space:
     cmp byte [mp_playing], 0
@@ -1406,6 +1434,25 @@ trk_fsx_key:
 ; Refusals are status-line messages, never aborts: no module, no PCM_BG sink
 ; (the no-SB machine keeps the viewer), no staging memory.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; trk_play_go - Enter, and Space out of a stop: RESUME (SPEC.md 45.17)
+;
+; trk_play_stop parks the replayer at the row the LISTENER heard, so a stop IS
+; a pause and the only thing missing was a play that honoured it. The one case
+; that must not resume is a song that RAN OUT: the parked position is then the
+; end, and resuming there ends again on the spot. [trk_ended] is that latch -
+; set by the worker at F00 or the watchdog, cleared by trk_play as it opens the
+; next stream, so it says exactly "the last thing that stopped us was the end".
+; -----------------------------------------------------------------------------
+trk_play_go:
+    mov al, 2
+    cmp byte [trk_ended], 0
+    je .go
+    xor al, al
+.go:
+    call trk_play
+    ret
+
 trk_play:
     push ax
     push bx
@@ -1673,6 +1720,28 @@ trk_play_stop:
 ; where you pressed play. mp_stop leaves [mp_row] alone, which is what makes
 ; this a copy rather than a snapshot taken earlier.
 ; -----------------------------------------------------------------------------
+; trk_legend - the surface changed under a legend that was chosen FOR a
+;              surface. Re-run trk_transport, but only if what is on the
+;              status line IS one of its four strings: a real message ("Rate:
+;              22 kHz", a refusal) belongs to the user and must not be eaten
+;              by pressing F. Preserves everything.
+trk_legend:
+    push si
+    mov si, [tui_msgp]
+    cmp si, trk_s_stopd
+    je .re
+    cmp si, trk_s_playing
+    je .re
+    cmp si, trk_s_stopdf
+    je .re
+    cmp si, trk_s_playingf
+    jne .out
+.re:
+    call trk_transport
+.out:
+    pop si
+    ret
+
 trk_transport:
     push ax
     push si
@@ -1680,10 +1749,16 @@ trk_transport:
     jne .playing
     mov al, [mp_row]
     mov [tui_vrow], al
-    mov si, trk_s_stopd
-    jmp short .msg
-.playing:
-    mov si, trk_s_playing
+    mov si, trk_s_stopd             ; ...and the FULLSCREEN twin of each, which
+    cmp byte [trk_fs], 0            ; is where the legend is actually read from
+    je .msg                         ; most of the time: [tui_msgp] is non-zero
+    mov si, trk_s_stopdf            ; from the first transport change on, so
+    jmp short .msg                  ; tui_s_hint is the FIRST paint's legend and
+.playing:                           ; these two are every one after it. L is off
+    mov si, trk_s_playing           ; both fullscreen twins (SPEC.md 45.17)
+    cmp byte [trk_fs], 0
+    je .msg
+    mov si, trk_s_playingf
 .msg:
     call tui_msg
     pop si
@@ -1750,12 +1825,110 @@ trk_smooth_toggle:
 ; The active item becomes its own MENU_DIS twin (the radio idiom) and
 ; MENU_SET re-runs - the kernel holds a COPY of the set (SPEC.md 12.2).
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; trk_rate_menu - compose the three Rate items and hand the set back to the
+;                 kernel (SPEC.md 45.17.1). Preserves every register.
+;
+; TWO MARKS THAT MEAN TWO THINGS, which is the whole point of composing these
+; rather than pointing at fixed strings. The active pick used to BE a MENU_DIS
+; twin - the radio idiom - and MENU_DIS is SPEC.md 47's "you cannot have this",
+; so the field read `11 kHz` greyed and reported the rate menu as disabled. It
+; was selected. So the selection is a '*' in the text, and greying goes back to
+; meaning unavailable:
+;
+;   `* 11 kHz`          selected, live
+;   `  22 kHz`          not selected, live
+;   `  11 kHz (Xt)`     greyed, because XT MODE OVERRIDES THE RATE - trk_play
+;                       takes TRK_RATE_XT whenever [mp_xt], so every pick here
+;                       is inert until XT mode goes. That is a FACT and not a
+;                       guess (rule 3), the whole control is greyed rather than
+;                       the caption alone (rule 2), and the suffix says why
+;                       (rule 7)
+;
+; 22 and 44 kHz stay LIVE on every machine, and that is rule 3 in the other
+; direction: OSAPI_SND_CAPS publishes no rate bit, so whether a card will take
+; 44.1 kHz cannot be known without asking it - and when the only test is doing
+; the thing, do it and report. trk_play already does, with `44 kHz needs a DSP
+; 4.x card` on err 2.
+; -----------------------------------------------------------------------------
+trk_rate_menu:
+    pushf                           ; FLAGS, not just registers: the entry proc
+    push ax                         ; calls this between `jc .out` and its own
+    push bx                         ; ret, and the loader reads that CF
+    push cx
+    push si
+    push di
+    xor cx, cx                      ; CX = the item index
+.item:
+    mov bx, cx
+    shl bx, 1                       ; BX = index*2, for the word tables
+    mov di, cx
+    shl di, 1                       ; DI = index*TRK_RITEM. Shifted, not
+    shl di, 1                       ; multiplied: `mul` writes DX, which is
+    shl di, 1                       ; not on this routine's push list, and an
+    shl di, 1                       ; 8086 shift by anything but 1 needs CL -
+    add di, trk_ritem0              ; which is the loop counter
+    mov [trk_mi_rate + bx], di
+    cmp byte [mp_xt], 0
+    je .mark
+    mov byte [di], MENU_DIS         ; XT mode: the whole row is unavailable
+    inc di
+.mark:
+    mov al, ' '
+    cmp cl, [trk_rsel]
+    jne .pad
+    mov al, '*'
+.pad:
+    mov [di], al
+    inc di
+    mov byte [di], ' '
+    inc di
+    mov si, [trk_rname + bx]
+    call trk_scpy
+    cmp byte [mp_xt], 0
+    je .term
+    mov si, trk_s_rxt
+    call trk_scpy
+.term:
+    mov byte [di], 0
+    inc cx
+    cmp cx, 3
+    jb .item
+    mov bx, [trk_win]
+    mov si, trk_menus
+    call OSAPI_MENU_SET
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    popf
+    ret
+
+; DS:SI (asciiz, terminator dropped) -> [DI], DI left past it. AL, SI spent.
+trk_scpy:
+    mov al, [si]
+    inc si
+    or al, al
+    jz .out
+    mov [di], al
+    inc di
+    jmp short trk_scpy
+.out:
+    ret
+
 trk_rate_set:
     push ax
     push bx
     push cx
     push si
     push di
+    cmp byte [mp_xt], 0             ; XT mode takes TRK_RATE_XT whatever is
+    je .live                        ; picked here, so the menu rows are greyed
+    mov si, trk_s_ratext            ; (SPEC.md 45.17.1) - but R still arrives,
+    call tui_msg                    ; and a key that does nothing has to say
+    jmp .done                       ; why (SPEC.md 47 rule 6's other half)
+.live:
     cmp al, [trk_rsel]
     je .done                        ; same pick: nothing to do
     mov [trk_rsel], al
@@ -1767,23 +1940,7 @@ trk_rate_set:
     je .menu                        ; paths closes before the rate changes
     call trk_stream_close
 .menu:
-    xor si, si                      ; repoint the three items: the active
-.mi:                                ; one gets its disabled twin
-    mov bx, [trk_rplain + si]
-    mov al, [trk_rsel]
-    xor ah, ah
-    shl ax, 1
-    cmp ax, si
-    jne .plain
-    mov bx, [trk_rdis + si]
-.plain:
-    mov [trk_mi_rate + si], bx
-    add si, 2
-    cmp si, 6
-    jb .mi
-    mov bx, [trk_win]
-    mov si, trk_menus
-    call OSAPI_MENU_SET
+    call trk_rate_menu
     mov bl, [trk_rsel]
     xor bh, bh
     shl bx, 1
@@ -1829,9 +1986,10 @@ trk_xt_toggle:
     mov si, trk_s_xton
 .lab:
     mov [trk_mi_file + 2], si
-    mov bx, [trk_win]
-    mov si, trk_menus
-    call OSAPI_MENU_SET
+    call trk_rate_menu              ; XT mode overrides the Rate menu, so the
+                                    ; three rows grey and un-grey with it -
+                                    ; and this ends in MENU_SET (SPEC.md
+                                    ; 45.17.1)
     mov si, trk_s_xtmoff
     cmp byte [mp_xt], 0
     je .msg
@@ -2096,18 +2254,13 @@ trk_s_fullm: db 'Fullscreen', 0
 trk_s_smon:  db 'Smooth: On', 0
 trk_s_smoff: db 'Smooth: Off', 0
 trk_m_rate:  db 'Rate', 0
-trk_mi_rate: dw trk_s_r11d, trk_s_r22, trk_s_r44 ; the active pick is its
-                                        ; own MENU_DIS twin - the radio
-                                        ; idiom (SPEC.md 45.10); repointed
-                                        ; by trk_rate_set + MENU_SET
+trk_mi_rate: dw trk_ritem0, trk_ritem1, trk_ritem2  ; COMPOSED, by
+                                        ; trk_rate_menu (SPEC.md 45.17.1)
 trk_s_r11:   db '11 kHz', 0
-trk_s_r11d:  db MENU_DIS, '11 kHz', 0
 trk_s_r22:   db '22 kHz', 0
-trk_s_r22d:  db MENU_DIS, '22 kHz', 0
 trk_s_r44:   db '44 kHz', 0
-trk_s_r44d:  db MENU_DIS, '44 kHz', 0
-trk_rplain:  dw trk_s_r11, trk_s_r22, trk_s_r44
-trk_rdis:    dw trk_s_r11d, trk_s_r22d, trk_s_r44d
+trk_rname:   dw trk_s_r11, trk_s_r22, trk_s_r44
+trk_s_rxt:   db ' (Xt)', 0              ; SPEC.md 47 rule 7: say WHY not
 trk_rates:   dw TRK_RATE, TRK_RATE22, TRK_RATE44
 trk_rmsg:    dw trk_s_m11, trk_s_m22, trk_s_m44
 trk_s_m11:   db 'Rate: 11 kHz - Enter plays', 0
@@ -2117,9 +2270,15 @@ trk_s_m44:   db 'Rate: 44 kHz - Enter plays', 0
 trk_ttl:     db 'Tracker', 0
 
 ; --- status-line strings -------------------------------------------------------
-trk_s_stopd:  db 'Stopped  ENTER play  L load', 0
-trk_s_playing: db 'Playing  SPACE stop  L load', 0
-trk_s_fsload: db 'Load is windowed: Esc first', 0
+trk_s_stopd:  db 'Stopped  ENTER play  HOME top  L load', 0
+trk_s_playing: db 'Playing  SPACE stop  HOME top  L load', 0
+; The fullscreen twins are SHORTER because that field is: TL_STW is 284px on
+; the compact (CGA) layout = 35 cells, against the windowed splash's 52. The
+; first version was 45 and truncated to `... HOME top  L lo`, which is how a
+; legend ends up advertising a key it was written to stop advertising.
+trk_s_stopdf: db 'Stopped  ENTER play  F/ESC exits', 0
+trk_s_playingf: db 'Playing  SPACE stop  F/ESC exits', 0
+trk_s_fsload: db 'Load is windowed: F or Esc first', 0
 trk_s_notmod: db 'Not a .MOD file', 0
 trk_s_nofit:  db 'Too big for free memory', 0
 trk_s_noload: db 'No module loaded - L loads one', 0
@@ -2132,6 +2291,7 @@ trk_s_snderr: db 'Sound open failed', 0
 trk_s_xtmon:  db 'XT mode on - Enter plays', 0
 trk_s_xtmoff: db 'XT mode off - Enter plays', 0
 trk_s_norate: db '44 kHz needs a DSP 4.x card', 0
+trk_s_ratext: db 'Xt mode sets the rate - X first', 0
 trk_s_smmon:  db 'Smooth on', 0
 trk_s_smmoff: db 'Smooth off', 0
 trk_s_txxt:   db 'XT off is windowed: Esc first', 0
@@ -2176,7 +2336,11 @@ trk_s_txsm:   db 'Smooth is a graphics mode only', 0
                                     ; one re-arm after the restore
     TRKB trk_hired                  ; the worker exists
     TRKB trk_abon                   ; the About panel is up; worker frames drop
-    TRKB trk_pmode                  ; 0 = song, 1 = pattern loop
+    TRKB trk_pmode                  ; 0 = song, 1 = pattern loop, 2 = resume
+    TRKBUF trk_ritem0, TRK_RITEM      ; the three composed Rate items
+    TRKBUF trk_ritem1, TRK_RITEM      ; (SPEC.md 45.17.1) - in the PACKAGE's own
+    TRKBUF trk_ritem2, TRK_RITEM      ; segment, which is where a menu string
+                                    ; has to live (SPEC.md 12.2's MB_SEG)
     TRKB trk_cpu0                   ; the MACHINE is a tier-0 8086/8088
                                     ; (SPEC.md 41.8), latched at entry. NOT
                                     ; [mp_xt], which is a user-toggleable

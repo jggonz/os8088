@@ -881,7 +881,7 @@ ttx_status:
     mov si, [tui_msgp]
     or si, si
     jnz .have
-    mov si, tui_s_hint
+    call tui_hintp
 .have:
     mov ax, [ttx_seg]
     mov es, ax

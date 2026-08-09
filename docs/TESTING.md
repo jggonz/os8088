@@ -793,8 +793,13 @@ make test SB16=1 TESTAPPS=build/trklog.img   # builds the disk on demand
 #      992/959 Hz, then ~1753/1290/1257/1213, then ~2117/1555/1510/1455.
 # D    arm the log       -> the status line counts 'LOG nnnn /0512'
 # F    fullscreen; let it run through a few pattern boundaries (~9 s each)
-# Esc  back to windowed  (W is refused in a bracket - the file API is
-#                         UI-callback-only, SPEC.md 53.7)
+# F    ...and back to windowed - the key that entered leaves (SPEC.md 45.17)
+# Esc  also back to windowed  (W is refused in a bracket - the file API is
+#                         UI-callback-only, SPEC.md 53.7; L likewise, which is
+#                         why it is off the fullscreen legend)
+# SPACE stop, ENTER RESUME where it stopped, HOME restart from the top
+#      (SPEC.md 45.17 - Enter used to restart, which threw away the row
+#       trk_play_stop had just parked)
 # W    write TRKLOG.TXT to B:  -> 'Wrote TRKLOG.TXT'
 #
 # M    at ANY point, windowed or fullscreen: stamp FL bit 10h into the
