@@ -165,6 +165,44 @@ so the rendered buffer sits still while the guest draws) and `vram` is
 impossible on VGA. Measured boots: CGA 17.5s, Hercules 16.1s, VGA 7.1s,
 against the 26-second fixed sleep every script used to carry.
 
+### `until(m, cond, what)` — the wait for work that draws nothing
+
+`settle` watches pixels, so it is **silently wrong for anything that holds
+the gfx lock for its whole run**. A hard-disk install freezes the UI while it
+copies: the screen is *more* still while it is busy than when it is done, so
+`settle` sees stillness about five seconds in and returns — and a
+`with launch(...)` block then kills the emulator mid-copy. Nothing about that
+looks like a wait ending early. It looks like the install stopping halfway,
+which is a bug in the installer, and it is where this call came from.
+
+Ask about the thing instead. `cond` is called with the Marty each round and
+may look wherever the answer actually is — guest memory, or the **host** side
+of a mounted image, which is usually the better one because a commit tends to
+be a single write you can watch for:
+
+```python
+STUB = bytes.fromhex("fa31c08ed88ec08ed0bc007c")   # hd_bootstub's opening
+os88marty.until(m, lambda _: open(vhd, "rb").read(12) == STUB,
+                "the installer to commit the MBR")
+```
+
+SPEC.md §52.10 writes the partition table **last**, as the commit, so that
+one comparison is an exact "the install finished" and needs no offsets and no
+`DISKCNT=1` kernel.
+
+It separates the two ways the wait fails, because they want different fixes.
+A guest that has **stopped executing** can never satisfy any condition, so it
+says which state and where — `the guest is 'breakpoint' at 0060:3C21 and is
+not executing` — rather than blaming the condition. That is the shape a
+still-armed breakpoint takes, and it is exactly what cost a session an
+afternoon above. Everything else is an honest timeout that says the guest is
+still running, so the limit is too short or the condition is asking about the
+wrong thing.
+
+**Pick by whether the screen is the evidence**: `settle` for a boot, a click
+or a repaint; `until` for a format, a copy, an install, a save — anything
+whose progress is on a disk rather than on the glass.
+
 ### Naming a kernel flag: `os88sym`
 
 `m.sym("fpg_on")` is the address of a kernel symbol, and `python3
