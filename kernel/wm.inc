@@ -1104,11 +1104,16 @@ wm_raise:
     push ax
     call menu_activate          ; BX owns the menu bar from here (SPEC.md 12)
     call wm_lift                ; ...and the top of the z-order
-    call wm_fs_vis              ; a fullscreen window is over the chrome, so
-    jc .nochrome                ; neither piece of it may be drawn at all
-    call menu_draw_bar
-    call wm_dock_under          ; the strip, and anything sitting on it
-.nochrome:
+    call menu_draw_bar          ; BOTH guard themselves on wm_fs_vis, and that
+    call wm_dock_under          ; is the point: under a fullscreen window each
+                                ; draws nothing AND records that its pixels are
+                                ; being destroyed, which is the whole of how
+                                ; the strips come back when it goes (SPEC.md
+                                ; 30.3.2). This used to test wm_fs_vis HERE and
+                                ; skip them - so on the one path that matters,
+                                ; wm_fullscreen's own raise, neither module was
+                                ; ever told, and quitting a 11.2 app left its
+                                ; bar and a blank strip on screen for good
     cmp bp, di
     je .self                    ; already the front window: no outgoing one
     or bp, bp
@@ -1945,7 +1950,11 @@ wm_paint_dmg:
     call wm_fs_vis              ; bar - so none of those is drawn, and the
     jnc .clamp                  ; window pass is the whole of the work
     mov byte [wm_dmg_fs], 1
-
+    call dock_paint             ; ...drawn, but still TOLD: both early-out on
+    call menu_draw_bar          ; wm_fs_vis and mark themselves owed, so the
+                                ; repaint after the window goes puts them back
+                                ; (SPEC.md 30.3.2). All registers preserved, so
+                                ; the damage rect below is untouched
 .clamp:
     or ax, ax                   ; onto the live screen (SPEC.md 39.2)
     jns .cx1
@@ -2279,6 +2288,10 @@ wm_paint_all:
     ; examining - and, before wm_covered existed, redrawing - every window
     ; parked behind it.
 .fswins:
+    call dock_paint             ; ...but both strips are still TOLD (SPEC.md
+    call menu_draw_bar          ; 30.3.2): each early-outs on wm_fs_vis without
+                                ; drawing and marks itself owed, so whatever
+                                ; repaints when the window goes puts it back
     call wm_top
     mov bp, bx                  ; BP = frontmost visible
     mov si, wm_zord

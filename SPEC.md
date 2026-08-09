@@ -3499,9 +3499,9 @@ be one (`wm_fast_ok`): `[wm_fs]` set, or the window itself carrying
 screen. It does not stop describing it — it gets *shorter*. A window shown
 over a fullscreen one reveals nothing, like any other; a fullscreen window
 shown over everything reveals nothing because it covers the screen. Only the
-chrome had to change, and `wm_raise` now **skips** the bar and the dock
-(`wm_fs_vis`) instead of the caller repainting the world in order to avoid
-drawing them.
+chrome had to change, and `wm_raise` **calls the bar and the dock anyway and
+lets each decline for itself** (`wm_fs_vis`, §30.3.2) instead of the caller
+repainting the world in order to avoid drawing them.
 
 What that cost, before: opening the Standard File dialog over a fullscreen
 player repainted the player — its whole `W_PAINT` — to put a small dialog on
@@ -13525,6 +13525,19 @@ strips are being overwritten continuously and neither module may draw. Setting
 the flag *in the early-out* means the repair is owed from the first moment the
 damage starts, is idempotent for as long as it lasts, and is spent by whatever
 repaints once the window goes — with no caller anywhere having to know.
+
+**Which makes "the caller must still CALL them" a rule, and it was broken on
+the only path that mattered.** An early-out that is never reached records
+nothing. All three chrome painters had a `wm_fs_vis` test of their *own* that
+jumped over `dock_paint` and `menu_draw_bar` — `wm_raise`, `wm_paint_all`'s
+`.fswins` and `wm_paint_dmg` — and `wm_fullscreen`'s claim path goes through
+`wm_raise`, so entering a §11.2 fullscreen told neither module anything. On
+the way out, `wm_paint_all` found both flags clear and drew only the clock and
+the tiles whose keys had moved: the app's own menu bar stayed on screen and
+the dock strip stayed blank, permanently, with the machine otherwise live. The
+skips are gone — each painter calls both and each module answers for itself,
+which is the shape the paragraph above always described. The cost of a call
+that early-outs is one `wm_fs_vis` walk and a flag store.
 
 ### 30.2 A tile's context menu — right-click to Close
 
