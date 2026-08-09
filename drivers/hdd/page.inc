@@ -516,9 +516,15 @@ hd_page_adjust:
     cmp bl, 1
     jb .have
     mov dx, 255
-    je .have
+    je .heads
     mov dx, 63
-.have:
+    jmp short .have
+.heads:
+    cmp byte [di+HDD_KIND], HDK_IDE
+    jne .have
+    mov dx, 16                  ; the task file has four bits of head: the
+.have:                          ; field STOPS there rather than accepting a
+                                ; number hd_geom_ok would then refuse
     cmp cl, 1
     jne .down
     cmp ax, dx
@@ -547,6 +553,8 @@ hd_page_adjust:
     jc .mark                        ; the USER set it, which is what makes it
     or byte [di+HDD_FLAGS], 1       ; worth a record in the blob (SPEC.md 52.6)
     mov word [hd_msg], hd_s_typed
+    call hd_geom_push               ; ...and the DRIVE is told, or it keeps
+                                    ; translating with the one the probe left
 .mark:
     call hd_cfg_mark                ; staged on every click and written on
                                     ; none: the panel's teardown spends it

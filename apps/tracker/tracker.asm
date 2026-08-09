@@ -1052,6 +1052,37 @@ trk_fs_enter:
     cmp byte [trk_fs], 0
     jne .out                        ; the bracket blocks, so this is belt-only
     mov byte [trk_fs], 1            ; BEFORE the call - see the header
+
+                                    ; ...and then DRAIN THE WORKER OUT OF
+                                    ; trk_render, because the flag alone only
+                                    ; closes the door for a worker that has not
+                                    ; yet reached its test. One already INSIDE
+                                    ; trk_render is parked in gfx_lock behind
+                                    ; the lock this callback holds, and the
+                                    ; bracket below holds it for the whole
+                                    ; session - so it never reaches trk_feed,
+                                    ; the ring drains its cushion and the music
+                                    ; stops for as long as the user stays
+                                    ; fullscreen. The menu makes it
+                                    ; near-deterministic: a pull-down holds the
+                                    ; lock for ~18 worker wakes and ui_dispatch
+                                    ; retakes it a few instructions later.
+                                    ;
+                                    ; BEFORE the arguments below, not after:
+                                    ; the unlock/yield/lock trio is three far
+                                    ; calls and AX, BX and CX are all live once
+                                    ; they are loaded.
+    cmp byte [trk_inrend], 0
+    je .run
+    mov cx, 8                       ; BOUNDED: a worker wedged for some other
+.drain:                             ; reason must not cost the keypress the
+    call OSAPI_GFX_UNLOCK           ; machine
+    call OSAPI_TASK_YIELD
+    call OSAPI_GFX_LOCK
+    cmp byte [trk_inrend], 0
+    je .run
+    loop .drain
+.run:
     mov ax, trk_fsx_main
     mov bx, [trk_win]
     mov cx, FSXF_KEEPWORKER | FSXF_FASTTICK
@@ -1862,7 +1893,9 @@ trk_worker:
                                     ; and the ring starves. It keeps feeding.
     call trk_deep
     jnc .feed                       ; ring tight: audio first, as it always was
-    call trk_render
+    mov byte [trk_inrend], 1        ; ...and say so, so the fsx bracket can
+    call trk_render                 ; wait for us rather than lock us out
+    mov byte [trk_inrend], 0
     mov byte [trk_drew], 1
 .feed:
     call trk_feed
@@ -1870,7 +1903,9 @@ trk_worker:
     jne .loop                       ; frame we just drew
     cmp byte [trk_drew], 0
     jne .loop
+    mov byte [trk_inrend], 1
     call trk_render                 ; ...and the tight-ring path still draws,
+    mov byte [trk_inrend], 0
     jmp .loop                       ; just behind the mix ([trk_abon] drops
                                     ; the frame inside trk_render, under the
                                     ; lock)
@@ -2130,6 +2165,12 @@ trk_s_txsm:   db 'Smooth is a graphics mode only', 0
     TRKW trk_win                    ; our window ptr (opaque handle)
     TRKB trk_fs                     ; 1 = fullscreen active (read by trkui)
     TRKB trk_drew                   ; this wake already drew, before the mix
+    TRKB trk_inrend                 ; the worker is INSIDE trk_render, which
+                                    ; means it is either holding the gfx lock
+                                    ; or parked waiting for it. Setting
+                                    ; [trk_fs] cannot recall a worker that is
+                                    ; already past its own test, so the bracket
+                                    ; drains this before it takes the machine
                                     ; (SPEC.md 45.16.2) - so the tail does not
                                     ; draw the same frame twice
     TRKB trk_tx                     ; 1 = that fullscreen is the XT TEXT screen

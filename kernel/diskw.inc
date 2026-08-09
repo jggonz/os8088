@@ -1350,6 +1350,8 @@ dskw_wdata:
 .link:
     mov ax, [dskw_prev]
     call dskw_setfat            ; prev -> this one
+    jc .ioerr                   ; a link that never landed leaves a chain that
+                                ; stops short of its own data
 .lba:
     mov ax, [dskw_cur]
     mov [dskw_prev], ax
@@ -2438,6 +2440,7 @@ dskw_apbody:
     mov ax, dx
     mov dx, [dskw_first]
     call dskw_setfat            ; the join
+    jc .out
     call dskw_flush_x
     jc .out
     jmp short .size
@@ -2849,7 +2852,11 @@ dskw_alloc:
     jne .mark
     mov dx, DSKW_EOC12
 .mark:
-    call dskw_setfat
+    call dskw_setfat            ; the EOC mark. A cluster we could not MARK is
+    jc .out                     ; not a cluster we have taken - reporting it as
+                                ; allocated hands the same one out again on the
+                                ; next call, which is the cross-link the commit
+                                ; order exists to make impossible
     mov bx, ax
     inc bx
     mov [dsk_rover], bx         ; next search starts past it
@@ -2904,62 +2911,89 @@ dskw_free_chain:
 ; in:  AX = cluster, DX = value
 ; out: nothing (all registers preserved)
 ;
-; The mirror of dsk_next_clus and the single WRITER of FAT_SEG: ES only,
+; The mirror of dsk_next_clus and the single WRITER of the FAT buffer: ES only,
 ; never DS. FAT12 is a read-modify-write of the straddling word - the
 ; entry shares a byte with its neighbour, and that neighbour's nibble must
 ; survive. The dirty range grows to cover the touched sector and, for a
 ; straddle, the next one.
+;
+; **IT GOES THROUGH dsk_fat_ofs, exactly as dsk_next_clus does** (SPEC.md 18.8),
+; and that is the whole of the conversion the FAT window needed on this side.
+; The offset arithmetic used to be open-coded here and ABSOLUTE - clus*2 for
+; FAT16 - which was right while the FAT was a whole snapshot and is wrong for a
+; nine-sector window: on a 32MB FAT16 partition FATSz16 is about 64, so an entry
+; past cluster 2,048 is written outside the buffer, into whatever LOW_SEG holds
+; there (task stacks, disk_dir, disk_icons), while the real FAT never gets it -
+; so the allocator hands the same cluster out twice AND the flush writes those
+; foreign bytes to both FAT copies. A fresh volume hides it, because below
+; cluster 2,048 absolute and window-relative are the same number.
+;
+; dsk_fat_ofs faults the sector in (and, for a FAT12 straddle, its successor),
+; answers BX window-relative and DX as the ABSOLUTE FAT sector, and CF=1 when
+; the window could not be loaded - which is an I/O failure and must not be
+; silently dropped, or the entry is lost while the caller thinks it was stored.
 ; -----------------------------------------------------------------------------
 dskw_setfat:
     push ax
     push bx
     push cx
     push dx
+    push si
     push es
     cmp ax, 2
-    jb .out
+    jb .ok
     cmp ax, [dsk_maxclus]
-    ja .out
-    mov bx, [dsk_fatseg]
-    mov es, bx
+    ja .ok
+    mov si, dx                  ; SI = the value: DX is dsk_fat_ofs's second
+                                ; output and cannot carry it
+    call KERNEL_SEG:cw_dsk_fat_ofs  ; BX = window-relative, DX = abs sector
+    jc .out                     ; the window would not load: CF straight out
+    mov cx, [dsk_fatseg]
+    mov es, cx
     cmp byte [dsk_fattype], 0
     jne .fat16
     mov ch, al
     and ch, 1                   ; CH = the cluster's parity
-    mov bx, ax                  ; off = clus + clus/2
-    shr bx, 1
-    add bx, ax
     mov ax, [es:bx]             ; the straddling word
-    and dx, 0x0FFF
+    and si, 0x0FFF
     test ch, ch
     jz .even
     and ax, 0x000F              ; odd cluster: keep the low nibble
     mov cl, 4
-    shl dx, cl
-    or ax, dx
+    shl si, cl
+    or ax, si
     jmp short .store
 .even:
     and ax, 0xF000              ; even cluster: keep the high nibble
-    or ax, dx
+    or ax, si
 .store:
     mov [es:bx], ax
     jmp short .dirty
 .fat16:
-    mov bx, ax
-    shl bx, 1                   ; off = clus*2
-    mov [es:bx], dx
+    mov [es:bx], si
 .dirty:
+                                ; The dirty range is in ABSOLUTE FAT sectors,
+                                ; because that is what the flush turns into an
+                                ; LBA. BX is window-relative and the window
+                                ; starts on a sector boundary, so bx>>9 is the
+                                ; offset INTO the window and [dsk_fatw0] is
+                                ; what makes it absolute again
     mov ax, bx                  ; the sector holding the entry...
     mov cl, 9
     shr ax, cl
+    add ax, [dsk_fatw0]
     call dskw_dirty
     mov ax, bx                  ; ...and the one holding its last byte
     inc ax
     mov cl, 9
     shr ax, cl
+    add ax, [dsk_fatw0]
     call dskw_dirty
+.ok:
+    clc
 .out:
     pop es
+    pop si
     pop dx
     pop cx
     pop bx
@@ -2988,10 +3022,19 @@ dskw_dirty:
 ; out: CF=0 (clean, or written and now clean); CF=1 with AX = FERR_*
 ; clobbers: AX (the output), CF
 ;
-; Both copies are written from the same snapshot bytes, so FAT1 == FAT2
+; Both copies are written from the same buffer bytes, so FAT1 == FAT2
 ; after every operation - which is exactly what a host fsck checks first.
 ; Writing the range instead of the whole FAT keeps a save at a couple of
 ; sector writes instead of eighteen.
+;
+; **THE DIRTY RANGE IS ABSOLUTE AND THE BUFFER OFFSET IS WINDOW-RELATIVE**
+; (SPEC.md 18.8), and the subtraction between them is the second half of the
+; FAT-window conversion. Absolute is what an LBA needs; window-relative is what
+; the buffer needs; using the absolute index for both read four kilobytes past
+; the window on any volume whose FAT is longer than nine sectors and wrote them
+; to BOTH copies - destroying the redundancy dsk_fat_window falls back on. With
+; the range bounded to the window the shift maxes at 4,096 and BX cannot wrap,
+; which the absolute form did outright past FAT sector 128.
 ; -----------------------------------------------------------------------------
 dskw_flush_x:
     push bx
@@ -3001,15 +3044,25 @@ dskw_flush_x:
     mov ax, [dsk_fatd0]
     cmp ax, 0xFFFF
     je .clean
+    mov bx, [dsk_fatw0]         ; nothing resident: there is no buffer the
+    cmp bx, 0xFFFF              ; dirty range could be read out of, and
+    je .stale                   ; writing one anyway is what would corrupt
+    cmp ax, bx
+    jb .stale                   ; the range starts below the window
     mov cx, [dsk_fatd1]
+    mov dx, bx
+    add dx, [dsk_fatwn]
+    cmp cx, dx
+    jae .stale                  ; ...or ends above it
     sub cx, ax
     inc cx                      ; CX = sectors to write
     mov dx, cx
     mov bx, [dsk_fatseg]
     mov es, bx
     mov bx, ax
+    sub bx, [dsk_fatw0]         ; the range's offset IN THE WINDOW
     mov cl, 9
-    shl bx, cl                  ; BX = the range's offset in the snapshot
+    shl bx, cl
     mov cx, dx
     push ax
     add ax, [dsk_fatlba]        ; FAT1
@@ -3030,6 +3083,20 @@ dskw_flush_x:
 .clean:
     xor ax, ax
     clc
+    jmp short .out
+.stale:
+                                ; The dirty range and the window have parted -
+                                ; which nothing in the tree can currently do,
+                                ; because dsk_fat_window flushes before it
+                                ; evicts. It is a refusal rather than an
+                                ; assertion because the alternative is writing
+                                ; bytes we cannot vouch for to both FAT copies,
+                                ; and the caller's rollback (dskw_refat) drops
+                                ; the window, which is exactly the right answer
+    mov word [dsk_fatd0], 0xFFFF
+    mov word [dsk_fatd1], 0
+    mov ax, FERR_IO
+    stc
     jmp short .out
 .ioerr:
     call dskw_ioerr
