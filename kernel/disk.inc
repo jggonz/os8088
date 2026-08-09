@@ -230,6 +230,86 @@ DSK_DBG_TRC equ 40               ; (lba, run) pairs. 40 covers a 16KB read on
                                  ; short one and this exists to be READ
 dsk_dbg_trc: times DSK_DBG_TRC*2 dw 0
 
+; WHERE THE SECTORS WENT, which dsk_dbg_sec's total cannot say. The progress
+; widget (SPEC.md 12.8) reports the DATA PHASE of one file operation and
+; nothing else - deliberately, because that is the only part whose size is
+; known when it starts - so a user watching it sees a bar that stalls for
+; whole seconds with no account of what the machine is doing in between.
+; These six are that account.
+;
+; They need NO CALLER TAGGING, which is what makes them cheap enough to be
+; worth having: the mounted volume's own layout says which REGION a sector is
+; in, and [fpg_on] says whether the bar was counting it. So dsk_dbg_pdat is
+; exactly what the widget shows and the other five are exactly what it does
+; not, with no second opinion about the boundary.
+;
+; NOT in the published block above, deliberately. That one's offsets are an
+; ABI - tests/sysbench reads it by offset - so this goes after it and is
+; reached by NAME through tools/os88sym.py instead.
+dsk_dbg_ph:
+dsk_dbg_pbpb: dw 0               ; +0  below the FAT: the boot sector / BPB
+dsk_dbg_pfr:  dw 0               ; +2  FAT region, read (the window)
+dsk_dbg_pfw:  dw 0               ; +4  ...and written - a flush is BOTH copies
+dsk_dbg_prt:  dw 0               ; +6  the root directory
+dsk_dbg_pdat: dw 0               ; +8  data area, widget ARMED: the payload
+dsk_dbg_pmet: dw 0               ; +10 data area, widget NOT armed - a
+                                 ;     subdirectory walk, or an icon harvest
+
+; ...and the same six as int 13h CALLS rather than sectors, which is the
+; currency closer to TIME. A sector inside a run costs about what the media
+; can stream; a call costs a seek and a rotation whatever it carries, and the
+; 5150 measured a whole 9-sector track in ONE call at 384 ms against 10.02
+; revolutions for the same nine sectors in nine (PERFORMANCE.md Set 14). So
+; sectors-per-call PER PHASE is the thing to look at: the payload coalesces
+; into runs and the overhead phases are scattered single sectors, which is
+; exactly why a bar that is 76% of the SECTORS is nothing like 76% of the
+; wait.
+dsk_dbg_phc:  times 6 dw 0
+
+; -----------------------------------------------------------------------------
+; dsk_dbg_class - attribute [dsk_run] sectors at LBA DI to a phase (internal)
+; in:  DI = the volume-relative LBA, [dsk_run] = sectors, [dsk_op], [fpg_on]
+; out: nothing - every register AND the flags preserved
+;
+; Called from inside dsk_xfer's run loop, where the flags are live and AX is
+; about to be popped back into: it is a measurement and must be invisible.
+; -----------------------------------------------------------------------------
+dsk_dbg_class:
+    pushf
+    push ax
+    push bx
+    push dx
+    mov dx, [dsk_run]
+    mov ax, di
+    xor bx, bx                  ; +0: below the FAT
+    cmp ax, [dsk_fatlba]
+    jb .add
+    cmp ax, [dsk_rootlba]
+    jb .fat
+    cmp ax, [dsk_datalba]
+    jb .root
+    mov bx, 8                   ; the data area, and the widget decides which
+    cmp byte [fpg_on], 0        ; half of the answer this sector is
+    jne .add
+    mov bx, 10
+    jmp short .add
+.fat:
+    mov bx, 2
+    cmp byte [dsk_op], 0x03
+    jne .add
+    mov bx, 4
+    jmp short .add
+.root:
+    mov bx, 6
+.add:
+    add [bx+dsk_dbg_ph], dx
+    inc word [bx+dsk_dbg_phc]   ; ...and this run is ONE int 13h call
+    pop dx
+    pop bx
+    pop ax
+    popf
+    ret
+
 ; -----------------------------------------------------------------------------
 ; dsk_dbg_raw - one raw int 13h, from the KERNEL, with sch_lock held
 ; FAR entry: far-call KERNEL_SEG:[dsk_dbg_blk+12]
@@ -554,6 +634,7 @@ dsk_xfer:
     mov [dsk_run], bp
 %ifdef DISK_COUNTERS
     add [dsk_dbg_sec], bp
+    call dsk_dbg_class          ; ...and WHERE they went (SPEC.md 18.94.2)
 %endif
     pop ax                      ; the head again
 

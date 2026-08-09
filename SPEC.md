@@ -7451,7 +7451,47 @@ transfer, because it is the same two lines around the same instruction.
 It deliberately **does not count itself** — the counters measure os8088's
 transfer path, and a row that prices the BIOS must not move them.
 
+#### 18.94.2 …and WHERE the sectors went
 
+`dsk_dbg_sec` is a total, and a total cannot answer the question the progress
+widget provokes. §12.8's bar reports the **data phase of one file operation**
+and nothing else — deliberately, because that is the only part whose size is
+known when it starts — so what a user watching it actually sees is a bar that
+runs, stalls for seconds with no explanation, runs again. The stalls are real
+disk work; they are simply not work the bar was ever measuring.
+
+`dsk_dbg_ph` is six more counters that say what the stalls were:
+
+| | |
+|---|---|
+| `dsk_dbg_pbpb` | below the FAT — the boot sector, i.e. a mount's BPB read |
+| `dsk_dbg_pfr` | the FAT region, read: loading §18.8's window |
+| `dsk_dbg_pfw` | the FAT region, written — a flush is **both copies** |
+| `dsk_dbg_prt` | the root directory: a name lookup, or a mount's scan |
+| `dsk_dbg_pdat` | the data area **with the widget armed** — the payload |
+| `dsk_dbg_pmet` | the data area with it **not** — a subdirectory walk, or an icon harvest |
+
+**They need no caller tagging, and that is what makes them worth having.**
+Every earlier attempt at this shape in the tree wanted a phase byte set at
+each of a dozen sites, which is a dozen places to forget. Here the mounted
+volume's own layout (`[dsk_fatlba]`, `[dsk_rootlba]`, `[dsk_datalba]`) says
+which **region** a sector is in, and `[fpg_on]` — the widget's own flag —
+says whether the bar was counting it. So `dsk_dbg_pdat` is *by construction*
+exactly what the bar shows and the other five are exactly what it does not,
+with no second opinion about where the boundary is. `dsk_dbg_class` runs
+inside `dsk_xfer`'s run loop and preserves every register **and the flags**,
+because the flags are live there.
+
+Two limits worth knowing before quoting a number off it. It counts the
+**BIOS-rung path only**: a `DVK_DRV` volume leaves `dsk_xfer` for the
+driver's `DSV_BLK` before the run loop, so on a machine installing to a hard
+disk these are the *floppy* side of the work. And the data area holds
+subdirectories as well as files, which is why `pmet` exists at all — a walk
+of `APPS\` is data-region traffic that no bar should be showing.
+
+It lives **outside** §18.94's published block on purpose: those offsets are an
+ABI that `tests/sysbench` reads by number, so this sits after the trace array
+and is reached by name through `tools/os88sym.py` (`m.sym("dsk_dbg_ph")`).
 
 ## 19. FAT12/FAT16 — the data-disk format (data floppies)
 
