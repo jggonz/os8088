@@ -341,6 +341,15 @@ np_entry:
     mov al, 1                       ; resizable (SPEC.md 11.1/27): np_paint
     call OSAPI_WM_SIZABLE           ; already lays out from the live record,
     mov al, 1                       ; so the next repaint re-wraps for free
+    mov al, 1                       ; ...and it PROMISES its content stands
+    call OSAPI_WM_SAVEU             ; still while it is not drawing, so a
+                                    ; raise puts the old pixels back instead
+                                    ; of lettering 464 cells (SPEC.md 11.96.1).
+                                    ; True of this app: everything that draws
+                                    ; goes through np_redraw or np_paint, and
+                                    ; the worker's two background drawers ask
+                                    ; OSAPI_WM_OBSCURED first
+    mov al, 1
     call OSAPI_WM_SNAP              ; ...and snapped (SPEC.md 11.94), because
     pop ax                          ; every keystroke redraws a row of text and
                                     ; an aligned cell writes ONE framebuffer

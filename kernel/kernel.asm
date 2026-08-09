@@ -1107,7 +1107,12 @@ osapi_table:
                                   ;          can drop a redraw it is about to
                                   ;          be asked to do again (SPEC.md
                                   ;          13.4)
-osapi_table_end:                  ; 0x0340
+    OSAPI_SLOT wm_saveu           ; 0x0340 - BX = window, AL = 0 clear / non-0
+                                  ;          set. "My content does not change
+                                  ;          while I am not drawing", which
+                                  ;          lets the raise cache put old
+                                  ;          pixels back (SPEC.md 11.96.1)
+osapi_table_end:                  ; 0x0348
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1115,8 +1120,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 102 * 8
-%error "os8088 API jump table must be exactly 102 8-byte slots"
+%if OSAPI_TABLE_LEN != 103 * 8
+%error "os8088 API jump table must be exactly 103 8-byte slots"
 %endif
 
 ; =============================================================================

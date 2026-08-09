@@ -4001,12 +4001,8 @@ else needs it, and `mem_shed_one` zeroes `[wm_su_seg]` on the way out so
 `wm_su_ck`'s first test is the notice. A machine with no room behaves exactly
 as it did before this existed, because the fallback *is* the old code.
 
-**There is no opt-in, and that is deliberate.** An API slot was the obvious
-shape — `WF_SIZABLE` and `WF_SNAP` are both opted into that way — and it is
-the wrong one here. The only reason to opt *out* would be to stop a window
-spending memory it does not need, and purgeable memory is not spent; the
-kernel also knows everything the decision needs (the rect, whether the block
-fits) and the application knows nothing extra.
+**It is opt-in, `WF_SAVEU` through `OSAPI_WM_SAVEU` (0x0340), and §11.96.1
+is why** — the first cut had no opt-in and that was wrong.
 
 **One cache for the machine**, like the menu's save-under: it covers the case
 that was reported — two windows alternating — and bounds the memory at one
@@ -4030,6 +4026,33 @@ not can never be tried.
 
 The chrome is redrawn either way: it is cheap, and a raise changes the title
 bar's pinstripes, so banking it would be banking the wrong picture.
+
+#### 11.96.1 Why it is opt-in after all
+
+The first cut had no opt-in, on the argument that the only reason to opt out
+would be to stop a window spending memory it does not need and purgeable
+memory is not spent. **That answers the memory question and not the
+correctness one**, and the opt-in was carrying both.
+
+`wm_clip_set` catches a covered window that DRAWS. It does not catch a window
+whose content **changes without being drawn**, and §11.3's background painters
+are written to do exactly that: they re-check visibility under the lock and
+*skip* when the window cannot be seen. The Timer keeps counting, a Bounce
+keeps stepping, and neither touches `wm_clip_set` while it is hidden — so a
+cache taken before is a picture of an older state, and putting it back on the
+raise shows the wrong time until something else redraws.
+
+Minimizing is the sharper form and it gets its own hook regardless of the
+flag: `wm_hide` drops the cache, because a hidden window's painter skips
+drawing for the whole time it is down. **A promise about being covered may not
+be assumed across a hide.**
+
+So the flag is a promise only the application can make — *my content does not
+change while I am not drawing* — and the asymmetry settles the default:
+**forgetting to opt in costs speed, and forgetting to invalidate costs
+correctness.** Note Pad opts in and is entitled to: everything that draws
+there goes through `np_redraw` or `np_paint`, and the worker's two background
+drawers ask `OSAPI_WM_OBSCURED` first.
 
 ## 12. menu.inc
 

@@ -56,6 +56,12 @@ MAX_WIN  equ 12                 ; mirrored in apps/os88api.inc (SPEC.md 11)
 
 WF_SIZABLE equ 4                ; W_FLAGS bit2: resizable (SPEC.md 11.1)
 WF_FULL    equ 8                ; W_FLAGS bit3: fullscreen (SPEC.md 11.2)
+WF_SAVEU   equ 32               ; W_FLAGS bit5: this window PROMISES that its
+                                ; content does not change while it is not
+                                ; drawing, so the raise cache may put its old
+                                ; pixels back instead of asking for new ones
+                                ; (SPEC.md 11.96.1). Opt-in, and it has to be:
+                                ; only the application knows
 WF_SNAP    equ 16               ; W_FLAGS bit4: this window's CONTENT origin
                                 ; is kept on a multiple of 8 so its text can
                                 ; take font_run's single-store path
@@ -1078,6 +1084,14 @@ wm_hide:
     push cx
     push dx
     push si
+    cmp bx, [wm_su_win]         ; MINIMIZING IS NOT COVERING (SPEC.md 11.96.1).
+    jne .nosu                   ; A hidden window's background painter finds
+    call wm_su_drop             ; itself invisible and SKIPS drawing, so it
+.nosu:                          ; never reaches wm_clip_set and never drops the
+                                ; cache - while its state goes on changing. The
+                                ; promise in WF_SAVEU is about a window that is
+                                ; merely covered; nothing may assume it across
+                                ; a hide
     mov si, bx
     call wm_win_rect            ; AX,BX,CX,DX = the rect it is vacating
     test word [si+W_FLAGS], WF_FULL
@@ -3248,6 +3262,29 @@ wm_title_set:
 ; the paint is billed to the window's instance, not to the painting task
 ; (SPEC.md 8.1/28).
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; wm_saveu - API 0x0340: BX = window, AL = 0 clear / non-0 set
+; The window's promise that its content does not change while it is not
+; drawing (SPEC.md 11.96.1). Preserves the flags for wm_snap's reason: an
+; entry proc calls this after wm_create and the carry riding in is its own
+; return value.
+; -----------------------------------------------------------------------------
+wm_saveu:
+    pushf
+    or al, al
+    jz .clear
+    or word [bx+W_FLAGS], WF_SAVEU
+    popf
+    ret
+.clear:
+    and word [bx+W_FLAGS], ~WF_SAVEU & 0xFFFF
+    cmp bx, [wm_su_win]         ; ...and a promise withdrawn takes any cache
+    jne .out                    ; made under it with it
+    call wm_su_drop
+.out:
+    popf
+    ret
+
 ; =============================================================================
 ; THE RAISE CACHE (SPEC.md 11.96) - a window raised without repainting it
 ;
@@ -3370,6 +3407,9 @@ wm_su_take:
     push si
     push di
     push es
+    test word [di+W_FLAGS], WF_SAVEU
+    jz .out                     ; it made no promise, so its pixels may be
+                                ; stale by the time it is raised (11.96.1)
     test word [di+W_FLAGS], 2   ; not visible: there are no pixels to bank
     jz .out
     test word [di+W_FLAGS], WF_FULL

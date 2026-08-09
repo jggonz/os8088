@@ -219,9 +219,22 @@ places and a masked compare is a trap for later; take the 64 bytes.
 
 ## 4. Recommendations, in the order worth doing them
 
-**BUILT: 1, 2, and 3's placement.** The opt-in in 1 was dropped on the
-argument in §11.96 — purgeable memory is not spent, so there is nothing to opt
-out of, and the kernel knows everything the decision needs. What is measured:
+**BUILT: 1, 2, and 3's placement.** The opt-in in 1 was dropped and then put
+back: `WF_SAVEU` / `OSAPI_WM_SAVEU` (0x0340), for SPEC.md §11.96.1's reason.
+Dropping it answered the MEMORY question ("purgeable memory is not spent, so
+there is nothing to opt out of") and missed the CORRECTNESS one, which is what
+the opt-in was really carrying — `wm_clip_set` catches a covered window that
+DRAWS, and not one whose content changes without being drawn, which is exactly
+what §11.3's background painters do when they skip on invisibility.
+
+**UNVERIFIED and the first thing to check:** `wm_hide` drops the cache, and the
+test for it was inconclusive — a minimize-and-restore reported no `W_PAINT`,
+which is either the hook failing or the scripted click missing the minimize
+box, and the harness cannot tell those apart. It is safe to ship as it stands
+because the only window that opts in is Note Pad, whose promise holds across a
+hide too (its worker's two background drawers ask `OSAPI_WM_OBSCURED` and its
+state is not time-varying). **Verify it before a second application opts in** —
+a Timer or a Bounce is exactly the case that would break. What is measured:
 a raise makes **zero `W_PAINT` calls** where it used to make one costing
 578 ms, and the restored content is **pixel-identical** (0 differing of a
 124,928-byte content rect). The kernel cost is **+809 bytes**, which crossed
