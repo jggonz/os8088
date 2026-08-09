@@ -11798,6 +11798,66 @@ What this does **not** change: the document. Wrapping is display-only, so a
 file saved after the change is byte-identical to one saved before it, and a
 note reflows when the window is resized exactly as it always did.
 
+#### 27.11.1 What the lookahead costs, and when a keystroke can skip it
+
+Word wrap is the only lookahead in the module and it is not free: §27.4's
+checkpoint said "a keystroke may resume at the start of the caret's row", and
+§27.11 took that away, because the break in front of a row is decided by the
+length of the word behind it. `np_seedck` therefore seeds one row **earlier**
+and both passes pay for it. Measured on a cycle-accurate 4.77MHz 8088, a
+16×29 window, typing at the end of a 700-character note: the back-up
+**doubles** the rows a keystroke lays out — `np_rstart` 4.8 against 2.0 — and
+is worth **~15 ms of a ~53 ms keystroke**.
+
+**It is only needed when the edit is inside the row's first word.**
+`np_wordfit` is the whole of the dependency: standing at a word's first
+character it measures whether that word *ends* inside the cells left on the
+row, and breaks in front of it if it does not. So the break that decides where
+a row starts is a function of that row's first word and of **nothing else in
+the row** — and an edit past the end of that word cannot have moved it.
+
+`np_ckword` is that test, and it needs no new state to be kept in step: the
+caret is the edit, near enough and always on the safe side, because an insert
+leaves it one *past* the character it added while a backspace and a Delete
+leave it *on* the edit. So the earliest index a keystroke can have touched is
+`[np_cur] - 1`, and requiring the row's first word to end **strictly before**
+the caret is exactly that bound. The scan is at most a row's width, stops at
+the caret, and is a handful of byte compares against a row of layout at ~6 ms.
+
+**A hard newline is not a wrap decision at all**, and that case skips
+unconditionally: the row above ended because the note said so, no word can
+move that break, and the one edit that could — deleting the newline itself —
+is before the row start and is already refused by `np_fastcm`.
+
+Measured, same note and window: **53.5 ms → 37–40 ms** a keystroke, with
+`np_rstart` down from 4.8 to 2.0. Pixel-identical to the build without it:
+2,778 differing bytes against a forced full repaint on *both* builds, in the
+same bounding box — which is docs/NOTEPAD-NOTES.md §5.2.1 and predates all of
+this.
+
+**The one case it still refuses is a run of non-space longer than a row**, and
+there the cost is unbounded rather than doubled: such a run spans
+`⌈length / rcols⌉` rows, every row after its first begins mid-word, and
+`np_seedck` walks back to where the run started — so the seed is that many
+rows back and both passes lay out all of them. A 500-character token at 29
+columns is 18 rows, twice a keystroke. The walk-back itself is cheap (table
+lookups); it is the *layout from the seed it chooses* that is not. This is not
+theoretical: a benchmark that typed nothing but `a` grew a 14-character run at
+the caret and hid the optimisation above entirely, reporting no change at all
+until the harness was made to type prose (docs/NOTEPAD-NOTES.md §6.8).
+
+Two ways out are recorded rather than taken, because both are decisions rather
+than fixes. **Give the back-up a ceiling** and fall through to the view-top
+seed (`np_seedrow`) beyond it — correct, needs no change to what the text
+looks like, and bounds the case at a screenful rather than at a row.
+**Or give a long run break opportunities every X characters** — "a word longer
+than X wraps by character" — which bounds the seed to one row for any run
+length and additionally lets `np_wordfit` answer "fits" *without scanning*
+whenever the cells left are at least X. That is the stronger result and it is
+a visible behaviour change: the tree already splits a run longer than a row by
+the cell rule, so X = `[np_rcols]` is today's policy, and any smaller X breaks
+long words earlier than a reader expects.
+
 **§27.4 is the part that had to move with it** — the resume optimisation was
 licensed by "wrapping has no lookahead", which is now false. See there.
 

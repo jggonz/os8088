@@ -11,10 +11,10 @@ re-deriving it, and so a decision that was right in one round is re-opened for
 the right reason in the next rather than for a hunch.
 
 **Read §5 before picking up any of the open reports and §6 before measuring
-anything.** Between them they carry seven wrong diagnoses that each survived a
-casual look, and five of the seven were failures of the *harness* rather than
+anything.** Between them they carry eight wrong diagnoses that each survived a
+casual look, and six of the eight were failures of the *harness* rather than
 of the code — including one, §6.7, in the tool written to prevent exactly that
-class of mistake.
+class of mistake, and one, §6.8, that reported a 25% win as no change at all.
 
 | | |
 |---|---|
@@ -23,7 +23,7 @@ class of mistake.
 | §3 | deliberately rejected, with the reason |
 | §4 | what shipped, and where each piece lives |
 | §5 | open field reports, with the diagnosis so far |
-| §6 | measuring Note Pad, and the seven ways the apparatus lied |
+| §6 | measuring Note Pad, and the eight ways the apparatus lied |
 | §7 | the latency budget: one typematic repeat, and what is still over it |
 
 ---
@@ -575,11 +575,11 @@ the zero looks like a measurement rather than a miss. Count `font_run_x`.
 
 ---
 
-## 6. Measuring Note Pad, and the seven ways the apparatus lied
+## 6. Measuring Note Pad, and the eight ways the apparatus lied
 
 Every one of these produced a confident wrong answer that looked right.
 PERFORMANCE.md Part 4's rule — the apparatus is the thing most likely to be
-wrong — has now earned its keep seven times, and §6.7 is the sharpest: it is
+wrong — has now earned its keep eight times, and §6.7 is the sharpest: it is
 the same defect, in the tool built to stop it, one section over.
 
 ### 6.1 The A/B must wait the same length of time on both sides
@@ -698,6 +698,25 @@ guess at `KERNEL_SEG`** — guessing is what made this invisible.
 
 Confirm a suspicious address against `SS` (which is `LOW_SEG` for every task)
 before believing anything read through it.
+
+### 6.8 A bench that types one character manufactures its own worst case
+
+The apparatus for SPEC.md §27.11.1 typed `KeyA` for every measured keystroke,
+so each five-press round grew the unbroken run at the caret. By the time it
+measured, the caret sat inside a **14-character word** — which is precisely the
+case the optimisation under test has to refuse. It reported **no change at
+all**, twice, on a build that is worth 25–30%.
+
+The tell was in the counters and not the milliseconds: `np_ckword=1.0` beside
+`np_ckword.yes=0.0` says the test ran and answered no every time, which no
+timing could have said. Reading the note out of guest memory then showed
+`'aaaaaaaaaaaaaa'` between the row start and the caret.
+
+**A text benchmark has to type text.** The fill loop already put a space every
+eighth character and the *measured* presses did not, which is the same class of
+mistake as §6.1's mismatched waits: the two halves of the run were not the same
+experiment. One counter across every press, filled and measured alike, fixed
+it — 53.5 ms → 37–40 ms, immediately.
 
 And one that is not the apparatus but cost a whole attempt: **a fix must be
 measured against the symptom it claims to fix.** §27.7.7 is correct, targets a

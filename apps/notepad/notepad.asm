@@ -3068,6 +3068,22 @@ np_seedck:
     je .out
     mov es, [np_dseg]
     mov ax, [np_ckpr]               ; the caret's row...
+    call np_rowstart                ; ...and the index it begins at. Asked
+    jc .back                        ; TWICE on the slow path, which is a shift
+                                    ; and a load: np_rowstart preserves AX
+    or bx, bx
+    jz .seed
+    mov cl, [es:bx-1]
+    cmp cl, 13
+    je .seed                        ; A HARD NEWLINE IS NOT A WRAP DECISION.
+                                    ; The row above ended because the note said
+                                    ; so, and no word can move that break - so
+                                    ; this row's start is fixed and there is
+                                    ; nothing above it to lay out again
+    cmp cl, ' '
+    jne .back
+    call np_ckword                  ; ...and a wrapped row is safe too as long
+    jnc .seed                       ; as the edit is past its first word
 .back:
     call np_rowstart                ; ...and the index it begins at
     jc .out
@@ -3095,6 +3111,61 @@ np_seedck:
     mov byte [np_resume], 1
 .out:
     pop es
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_ckword - may this row be seeded WITHOUT laying out the one above it?
+; in:  BX = the row's start index, ES = the document segment
+; out: CF = 0 yes, seed here; CF = 1 back up as before.
+;      Preserves every register.
+;
+; SPEC.md 27.11.1. np_wordfit is the whole of why np_seedck backs up: standing
+; at the first character of a word it measures whether that word ENDS inside
+; the cells left on the row, and breaks in front of it if it does not. So the
+; break that decides where this row starts is a function of the length of this
+; row's FIRST WORD and of nothing else in this row - which means an edit past
+; the end of that word cannot have moved it.
+;
+; The caret is the edit, near enough and always on the safe side: an insert
+; leaves it one PAST the character it added, a backspace and a Delete leave it
+; ON the edit, so the earliest index this keystroke can have touched is
+; [np_cur] - 1. Requiring the word to end STRICTLY before the caret is that
+; bound, and it needs no extra state to be recorded and kept in step.
+;
+; The scan is at most a row's width and stops at the caret, so it is a handful
+; of byte compares against a row of layout at ~6 ms.
+; -----------------------------------------------------------------------------
+np_ckword:
+    push ax
+    push bx
+    push cx
+    mov cx, [np_cur]
+    mov al, [es:bx]
+    cmp al, ' '                     ; a row that begins on a space or a newline
+    je .no                          ; is not a word start, and the reasoning
+    cmp al, 13                      ; above does not describe it
+    je .no
+.scan:
+    cmp bx, cx
+    jae .no                         ; the caret arrived first: the edit is
+                                    ; inside the first word, which is exactly
+                                    ; the case the back-up exists for
+    mov al, [es:bx]
+    cmp al, ' '
+    je .yes
+    cmp al, 13
+    je .yes
+    inc bx
+    jmp short .scan
+.yes:
+    clc                             ; the word ends before the caret, so its
+    jmp short .out                  ; length is what it was
+.no:
+    stc
+.out:
     pop cx
     pop bx
     pop ax

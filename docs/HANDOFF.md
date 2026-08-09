@@ -107,11 +107,16 @@ instruction; confirm the byte reads `E8` before writing.)
 docs/NOTEPAD-NOTES.md §5.5 has the numbers. A keystroke at the end of the note
 roughly **doubles as the page fills** (35 ms → 66 ms in a 16×29 window) and
 then flattens — it is bounded by a screenful, not by the note — with the
-keystroke that scrolls costing **190 ms**. One keystroke does two walks, six
+keystroke that scrolls costing **190 ms**. One keystroke did two walks, six
 `np_rflush` (three rows per pass, because `np_seedck` backs the seed up a row
 for §27.11's word wrap) and **17 `gfx_fill`s**, which is 12.8 ms of arrival
-before a glyph is drawn. The fills are where to start; the seed and the row
-index are ruled out and the trace is what ruled them out.
+before a glyph is drawn.
+
+**The seed back-up is now skipped when it provably cannot matter** (SPEC.md
+§27.11.1): 53.5 ms → 37–40 ms a keystroke, `np_rstart` 4.8 → 2.0. What is
+left is the 17 fills, and the unbounded case §27.11.1 records — a run of
+non-space longer than a row, where the seed goes back as many rows as the run
+spans.
 
 ### 3.5.1 `NP_HCHUNK` = 4 is still an emulator number
 
