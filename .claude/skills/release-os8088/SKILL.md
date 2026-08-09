@@ -13,6 +13,71 @@ The release notes get written once and used twice: `data/releases.json` in the
 website repo (step 4a) and the GitHub release (step 6) say the same thing, and
 the site's /releases/ page is that file rendered.
 
+**Read "Writing the copy" below before writing a word of either.**
+
+## Writing the copy
+
+The reader is someone who found the project and is curious. They may write
+assembly, or they may just like old computers. Write so both finish the
+sentence. Assume interest, never knowledge.
+
+**Say it in this order:** what changed, what it does now, and what that means
+for someone using it. Nothing else is required.
+
+Rules, in order of how often they get broken:
+
+1. **Short sentences, one idea each.** If a sentence needs a comma-spliced
+   aside or a dash to hold together, it is two sentences.
+2. **Explain the term the first time you use it**, in the same sentence and in
+   a few words: "Hercules, a monochrome graphics card from 1982", "the FAT12
+   filesystem DOS floppies use". Do this once per release, not once per
+   highlight.
+3. **No internal shorthand.** A `§` number, a source label, an `.inc` file, a
+   register name or a symbol like `gfx_fill` means nothing outside this repo.
+   If a spec section is the authority, name it in a short closing sentence --
+   never use it as the explanation.
+4. **Numbers instead of adjectives.** "Redraw dropped from 158 character cells
+   a frame to 14" beats "much faster". If there is no measurement, say what
+   changed and leave the speed claim out.
+5. **No marketing.** Cut "powerful", "seamless", "blazing", "beautiful",
+   "exciting", "we're thrilled", "the best yet", "finally". No superlatives, no
+   exclamation marks, no first-person plural selling the work. State the fact
+   and stop.
+6. **No fluff.** Every sentence adds something a reader did not already have.
+   Do not restate the title in the body. Do not open with throat-clearing
+   ("As part of our ongoing work..."). Do not pad a small change into a
+   paragraph -- a one-sentence highlight is a fine highlight.
+7. **Leave out the war story** unless it changes what someone does. The
+   debugging that got you there is interesting to you and to nobody reading a
+   download page.
+8. **Plain words.** "Faster" not "performant". "Uses less memory" not
+   "optimises the footprint". "You can now" not "enables the ability to".
+
+The check before you commit: read each sentence and ask whether someone who
+has never opened this repository understands it. If they would have to, rewrite
+it or cut it.
+
+An example of the difference, on a real change:
+
+> **Too dense:** The player now gates widget drawing on a word of dirty bits,
+> applying the period's update-region idea at the widget -- 28,365 glyph cells
+> down to 2,468 over the same ten seconds of playback, per the spec section
+> that owns it.
+
+> **Write this instead:** The player used to redraw its whole face every time
+> the screen updated, which was more work than the machine could finish between
+> frames, so playback stuttered. It now redraws only the parts that changed.
+> Over the same ten seconds of music that is 2,468 character cells drawn
+> instead of 28,365.
+
+Lengths that fit the page and stay readable:
+
+| field | length |
+|---|---|
+| `summary` | 2-4 sentences. What this release is, leading with the one thing that matters most. |
+| `highlights[].body` | 2-5 sentences. One change each. |
+| `notes` | 1-3 sentences, written as instructions to the reader. |
+
 ## Locating the two repositories
 
 Never hardcode an absolute path. Resolve both from the current checkout, and
@@ -130,16 +195,19 @@ os8088.com/releases/) renders them, so an unfilled entry ships as a version
 number with no story attached.
 
 Write the same words you are about to put in the GitHub release notes in step
-6 -- write them once, here, and reuse them there:
+6 -- write them once, here, and reuse them there. **Follow "Writing the copy"
+above for all three fields:**
 
-- `summary` -- one sentence naming what this release is.
+- `summary` -- what this release is, in 2-4 plain sentences, most important
+  thing first.
 - `highlights` -- one entry per change worth reading about: `title`, the
   optional PR number as `issue`, and a `body` that explains it rather than
-  restating the title. HTML is allowed in `body`; keep it ASCII, and use `--`
-  the way the rest of the site does.
+  restating the title. Titles are plain too: name the change, do not sell it.
+  HTML is allowed in `body`; keep it ASCII, and use `--` the way the rest of
+  the site does.
 - `notes` -- anything that changes how the system is *used* and would
   otherwise surprise someone (a menu item that moved, a default that flipped).
-  Rendered as a call-out.
+  Write it as an instruction to the reader. Rendered as a call-out.
 
 The optional `ramBytes` / `ramCap` / `sourceLines` / `modules` fields render
 the size figures on the page. `ramCap` is always 40960 (`0xA000`). The other
@@ -233,7 +301,9 @@ fork or a rename without any edit here.
 The notes should name what changed since the previous tag
 (`git log <prev>..HEAD --oneline`), the kernel size, and point at the download
 page of whatever site this project publishes to (os8088.com/download/ for the
-upstream project).
+upstream project). A commit log is not release notes -- "Writing the copy"
+applies here exactly as it does on the website, and a reader who lands on the
+release from a search has no more context than one who lands on the page.
 
 These are the notes you already wrote in step 4a. Say the same thing in both
 places -- the releases page exists to mirror this, and the two disagreeing is
@@ -256,6 +326,10 @@ so, and say the site is not live until that merge happens.
   not optional either: the numbers are generated, the notes are not, and a
   version with nothing written against it is what an unfilled entry looks like
   to a reader.
+- **Never ship copy that only a contributor can read.** Spec section numbers,
+  symbol names and register talk stay out of the notes, and so does marketing
+  language. "Writing the copy" is the standard for both the website entry and
+  the GitHub release.
 - **Do not claim a software license.** This repo carries no LICENSE file. If
   the user wants one, that is a separate decision, not part of a release.
 - Both repositories get branches, never direct commits to `main`.
