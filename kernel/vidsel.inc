@@ -503,9 +503,19 @@ vid_switch:
 
 VID_NDISP_MAX equ 2             ; the machine this is for holds two cards
 VID_CTX_W    equ 18             ; words copied to and from the live block
+VID_CTX_CW   equ 14             ; ...within the run, the display's own extent -
+VID_CTX_CH   equ 16             ; word 7 and word 8, vid_cw/vid_ch (39.2.1)
 VID_CTX_VX   equ VID_CTX_W*2    ; ...then the display's origin in the VIRTUAL
 VID_CTX_VY   equ VID_CTX_W*2+2  ; desktop, which is NOT copied anywhere
 VID_CTX_SZ   equ VID_CTX_W*2+4
+
+; ...and those two offsets are a SECOND opinion about viddet.inc's column
+; order, so they are asserted rather than trusted, exactly as the run's length
+; is above. vid_tab's rows and the live block agree by construction; this file
+; is the only place that indexes into the middle of the copy.
+%if vid_cw - vid_seg != VID_CTX_CW || vid_ch - vid_seg != VID_CTX_CH
+%error "vid_cw/vid_ch are not at VID_CTX_CW/CH in the run - see viddet.inc"
+%endif
 
 ; The live run this copies must be the run viddet.inc lays out, and a reorder
 ; there would be silent here - so it is asserted rather than trusted.
@@ -520,10 +530,15 @@ VID_CTX_SZ   equ VID_CTX_W*2+4
 ; is a loop bound, while a garbage [vid_cur] is a display index that indexes
 ; past the array. cur_sptr and dsk_fatwc are the two this tree has already been
 ; caught by.
-vid_ndisp   db 1                ; displays the desktop spans. 1 until step 3 of
-                                ; docs/DUAL-DISPLAY-PLAN.md brings a second
-                                ; card up, and 1 for ever on a machine with one
+vid_ndisp   db 1                ; displays the kernel has brought up. 1 for
+                                ; ever on a machine with one card
 vid_cur     db 0                ; which display's geometry is in the live block
+vid_ox      dw 0                ; ...and its ORIGIN in the virtual desktop,
+vid_oy      dw 0                ; which is what every 39.14 hook subtracts.
+                                ; OUTSIDE the eighteen-word run on purpose:
+                                ; that run is asserted contiguous and is what
+                                ; the RENDERER reads, and an origin is not
+                                ; renderer state. Published by vid_ctx_act
 
 section .bss
 ; The records themselves are scratch - written by vid_ctx_init before anything
@@ -623,6 +638,15 @@ vid_ctx_act:
     pop cx
     pop ax
     mov [vid_cur], al
+    push di                     ; ...and republish the origin every hook reads
+    push ax
+    call vid_ctx_ptr
+    mov ax, [di+VID_CTX_VX]
+    mov [vid_ox], ax
+    mov ax, [di+VID_CTX_VY]
+    mov [vid_oy], ax
+    pop ax
+    pop di
 .out:
     ret
 
@@ -654,12 +678,119 @@ vid_ctx_init:
     xor ax, ax                  ; display 0 sits at the virtual origin
     mov [es:di+VID_CTX_VX], ax
     mov [es:di+VID_CTX_VY], ax
+    mov [vid_ox], ax            ; ...and it is current, so vid_ctx_act - which
+    mov [vid_oy], ax            ; is what normally publishes these - never runs
     xor al, al
     call vid_ctx_capture
     pop es
     pop di
     pop cx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_disp_dither - the desktop on every display but the primary
+;                   (SPEC.md 39.14.4)
+;
+; in:       nothing; the caller holds the gfx lock
+; out:      nothing
+; clobbers: flags
+;
+; wm_paint_all draws display 0's band itself - menu bar to dock, the call that
+; has always been there - and this is the rest. Each is ONE gfx_fill_gray in
+; VIRTUAL coordinates, and GFXDISP is what puts it on the right card; nothing
+; here knows which card that is, or that there is more than one way to be a
+; framebuffer.
+;
+; A secondary display is dithered WHOLE, because SPEC.md 39.14's chrome - the
+; menu bar, the dock, the drive column - lives on the primary alone.
+;
+; This is the only caller in the kernel that draws in virtual coordinates.
+; Everything else is inside the chrome or inside a window, and both are on
+; display 0, where virtual and local are the same numbers (39.14.4).
+; -----------------------------------------------------------------------------
+vid_disp_dither:
+    cmp byte [vid_ndisp], 1
+    jbe .out
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, 1                   ; display 0 is wm_paint_all's own
+.d:
+    mov ax, si
+    call vid_ctx_ptr
+    mov ax, [di+VID_CTX_VX]
+    mov cx, ax
+    add cx, [di+VID_CTX_CW]
+    dec cx
+    mov bx, [di+VID_CTX_VY]
+    mov dx, bx
+    add dx, [di+VID_CTX_CH]
+    dec dx
+    call gfx_fill_gray
+    inc si
+    mov al, [vid_ndisp]
+    mov ah, 0
+    cmp si, ax
+    jb .d
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; vid_disp_of - which display holds the virtual point (AX, BX)? (SPEC.md 39.14)
+;
+; in:       AX = x, BX = y, in VIRTUAL desktop coordinates
+; out:      AL = display index
+; clobbers: AX, flags
+;
+; IT NEVER FAILS, and that is what keeps every hook in 39.14.2 free of a CF to
+; test: the virtual desktop is not a rectangle (39.2.1), so a point can fall in
+; the DEAD ZONE between two displays - and the honest answer there is the
+; PRIMARY, where the primitive's own edge clip discards it for nothing. A
+; refusal would have to be handled at seven call sites, six of which would
+; handle it by discarding the shape anyway.
+; -----------------------------------------------------------------------------
+vid_disp_of:
+    push bx
+    push cx
+    push dx
+    push di
+    xor cl, cl                  ; CL = the display being tested
+.next:
+    mov al, cl
+    call vid_ctx_ptr            ; DI = its record
+    mov dx, [di+VID_CTX_VX]
+    cmp ax, dx
+    jb .no                      ; left of it
+    add dx, [di+VID_CTX_CW]
+    cmp ax, dx
+    jae .no                     ; ...or right of its last column
+    mov dx, [di+VID_CTX_VY]
+    cmp bx, dx
+    jb .no
+    add dx, [di+VID_CTX_CH]
+    cmp bx, dx
+    jb .hit
+.no:
+    inc cl
+    cmp cl, [vid_ndisp]
+    jb .next
+    xor cl, cl                  ; nowhere: the dead zone, and the primary is
+.hit:                           ; where a shape goes to be clipped away
+    mov al, cl
+    pop di
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------

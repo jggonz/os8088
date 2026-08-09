@@ -760,13 +760,73 @@ on its own.**
 | 1 | Per-display context block + swap; `[vid_ndisp]` = 1 everywhere | **byte-identical** to today on VGA, Hercules and CGA |
 | 2 | ~~`vid_cw`/`vid_ch` split at the ~24 renderer sites~~ **DONE** — SPEC.md §39.2.1 | 22 sites; **0 differing pixels** on CGA, Hercules and VGA, twice |
 | 3 | ~~Bring the second card up at boot; no desktop on it yet~~ **DONE** — SPEC.md §39.13 | both cards scanning our raster, primary framebuffer **byte-identical**, both directions |
-| 4 | `GFXDISP` at the four rect entries + font/icon/scroll/save/line | secondary shows a desktop dither |
+| 4 | ~~`GFXDISP` at the four rect entries + font/icon/scroll/line~~ **DONE** — SPEC.md §39.14 | secondary shows a desktop dither; **0 differing pixels** on all three single-card adapters. `gfx_save`/`gfx_restore` deferred to step 5, §11.4 |
 | 5 | Cursor crossing; mouse clamp to the union | pointer moves between monitors |
 | 6 | `wm_fit`, `ui_drag`, `wm_paint_all` per display | a window drags across the seam |
 | 6b | `wm_disp_of`, then §11.2 fullscreen on one display | fullscreen on the secondary leaves the menu bar reachable on the primary |
 | 6c | `fsx` on one display, others blanked; `vid_unblank` | Missile Command and Paint unchanged; the dark monitor comes back with a repainted desktop, never a stale one |
 | 7 | Control Panel mode + layout; `VM` key | survives a reboot; refuses on a single-card machine |
 | 8 | Field run on the 5150 | the three things QEMU cannot show |
+
+### 11.4 Step 4, as built
+
+`GFXDISP` under `GFXCLIP` at the four rect entries, `GFXDENTER`/`GFXDLEAVE` at
+the whole-shape ones, and `wm_paint_all` dithering every display (SPEC.md
+§39.14). **Cost: `.text` +633 for `kern_big`, one image rung crossed, and
+`kern_small` +0.**
+
+**§4's "a `GFXDISP` macro ABOVE `GFXCLIP`" was wrong and it goes below.**
+`wm_clip_tab` holds *virtual* rects, so the clip has to be applied before
+anything is translated; above it, `gfx_clip_run` would compare display-local
+coordinates against virtual fragments — right on display 0, where the two are
+the same numbers, and silently wrong everywhere else. That is a plan written
+before the clip's coordinate space had been thought about, not a change of
+mind.
+
+**Three things this discovered that §4 and §5 did not anticipate.**
+
+The whole-shape sites needed **two** spellings of the hook, because
+`font_char` and `font_run_x` carry the character in `AL` and their coordinates
+in `CX`/`DX` — hence `GFXDENTERCD`. And the sites that hold a *rect* rather
+than a point need the far corner moved as well, which is `GFXDORG`.
+
+The hooks **compose only because of a nesting count**. `font_run`'s fallback
+path is `gfx_fill` + `font_str`, and `gfx_line`'s axis-aligned cases are
+`gfx_hline`/`gfx_vline`: a translated caller reaching a hooked callee would
+translate twice. A flag would not do — `GFXDLEAVE` has to know which call owes
+the restore.
+
+And each hook **restores the display it entered from**, which is deliberately
+not the cheap arrangement §5.2 described. Leaving the last-drawn display
+current would pay one swap per burst instead of one per off-display primitive
+— but `cur_unlazy` runs at the top of `GFXCLIP`, above all of this, and erases
+the arrow through whatever display is live. Step 5 makes the cursor
+display-aware and the optimisation is available then.
+
+**`gfx_save`/`gfx_restore` are deferred to step 5 and that is a scope call,
+not an oversight.** `gfx_save` tail-*jumps* into `bb_save`, so bracketing it
+means restructuring a path the cursor is on; and its only caller today is the
+menu save-under, which hangs off the menu bar and so is on the primary by
+§3.1. The cursor's save-under calls `vga_save_vram` directly, below any hook.
+Both questions land in the same place at step 5.
+
+**The gate, and what it can and cannot say.** Byte identity first: a settled
+desktop on `os8088_5150_cga_gla`, `os8088_5150_herc_gla` and
+**`os8088_xt_vga`** is **0 differing pixels** against the build immediately
+before — better coverage than step 2 got, since mode 12h works on MartyPC
+after all. Then `tests/dispcheck.py` grew two assertions, on both primaries:
+
+- the secondary is **48.6% lit with a longest horizontal run of 1 pixel**,
+  which is what a 50% dither *is* and what nothing else is; and
+- moving `[vid_desk_zx]` — the drive column's x, one word — into the second
+  display's half of the virtual desktop and posting `[cp_dirty]` takes that
+  longest run to **53 pixels**, with the lit fraction barely moving. Volume
+  icons and their labels reached the second card, so `icon_draw16` and
+  `font_char` are exercised and not merely written.
+
+What that does **not** cover is `gfx_scroll` and `gfx_line`, which have no
+off-display-0 caller until a window can live there. They are byte-identical
+and unexercised, and step 6 is where they get a caller.
 
 ### 11.3 Step 3, as built
 

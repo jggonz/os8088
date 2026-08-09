@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Did os8088 bring the SECOND card up? (SPEC.md 39.13)
+"""Did os8088 bring the SECOND card up, and can it DRAW on it?
+   (SPEC.md 39.13/39.14)
 
     python3 tests/dispcheck.py                        # the machine's own answer
     python3 tests/dispcheck.py --primary herc         # ...with make VIDEO=herc
@@ -16,10 +17,10 @@ screen, and "both monitors lit" as an eyeball test cannot tell them apart. So
 three assertions instead:
 
   1. THE PRIMARY IS UNCHANGED - its rendered framebuffer hashed and compared
-     against a build without step 3 in it. That comparison is the caller's to
-     make (`--sha`), because the reference is a kernel this script cannot
-     build; without one it still checks the primary is drawn and the secondary
-     is not.
+     against a build without this work in it. That comparison is the caller's
+     to make (`--sha`), because the reference is a kernel this script cannot
+     build; without one it still checks the primary is drawn and the
+     secondary carries a desktop and nothing else.
   2. THE RECORDS DESCRIBE THE RIGHT CARDS - display 0 the primary at the
      virtual origin, display 1 the other one immediately to its right, each
      with its own segment, stride and extent, and the live block still being
@@ -32,6 +33,15 @@ three assertions instead:
      and only the raster can say which. It is checked as SHAPE rather than as
      absolute coordinates, because MartyPC's MDA aperture in Hercules graphics
      is offset by (-16, +2) from the guest's own origin (docs/MARTYPC-DEBUG.md).
+  4. A WHOLE SHAPE LANDS ON IT (SPEC.md 39.14.2). The drive column's x is one
+     word - [vid_desk_zx], with its erase band either side - so moving it into
+     the second display's half of the virtual desktop and posting [cp_dirty]
+     makes wm_paint_all draw the volume ICONS and their LABELS there. The
+     measurement is the longest horizontal run of lit pixels: a 50% dither
+     alternates, so its longest run is ONE, and an icon's white label box is
+     tens. Nothing else in this file can tell a glyph from a fill, and this
+     does not have to - what it asserts is that whole shapes reached the
+     second card at all.
 
 WHICH CARD IS PRIMARY IS THE KERNEL'S ANSWER, never MartyPC's `primary` flag.
 A `make VIDEO=herc` kernel on os8088_5150_both_gla draws on the Hercules while
@@ -60,6 +70,23 @@ KIND = {
 
 def u16(b, i=0):
     return b[i] | (b[i + 1] << 8)
+
+
+def longest_run(px, w, h):
+    """The longest horizontal run of lit pixels. A 50% desktop dither
+    answers 1 by construction; anything drawn answers more."""
+    best = 0
+    for y in range(h):
+        run = 0
+        base = y * w * 3
+        for x in range(w):
+            if px[base + x * 3]:
+                run += 1
+                if run > best:
+                    best = run
+            else:
+                run = 0
+    return best
 
 
 def main(argv):
@@ -175,41 +202,88 @@ def main(argv):
                    100.0 * lits[c["idx"]] / (w * h), shas[c["idx"]][:16]))
         if not lits[pri["idx"]]:
             fail.append("the primary is blank")
-        if lits[sec["idx"]]:
-            fail.append("the secondary is not blank - step 3 draws nothing "
-                        "on it, so anything there came from somewhere else")
+        # SPEC.md 39.14.4: wm_paint_all dithers every display, so the
+        # secondary carries the 50% desktop and nothing else. A tolerance
+        # rather than exactly half because `fbuf` is an APERTURE - 720x350
+        # over a 720x348 framebuffer, offset (-16, +2) - so its top and
+        # bottom rows are not the kernel's.
+        secw, sech, secpx = m.fbuf(card=sec["idx"])
+        frac = 100.0 * lits[sec["idx"]] / (secw * sech)
+        before = longest_run(secpx, secw, sech)
+        say("secondary: %.1f%% lit, longest horizontal run %d px"
+            % (frac, before))
+        if not 40.0 <= frac <= 60.0:
+            fail.append("the secondary is %.1f%% lit, not a desktop dither"
+                        % frac)
+        if before > 2:
+            fail.append("the secondary's longest lit run is %d - a 50%% "
+                        "dither alternates, so nothing is drawn there and "
+                        "this is something else" % before)
         if a.sha and not shas[pri["idx"]].startswith(a.sha):
             fail.append("the primary's framebuffer is %s, wanted %s"
                         % (shas[pri["idx"]][:16], a.sha))
 
         # --- is the secondary REALLY a banked graphics framebuffer? ---------
+        # A DIFF, not a census: since SPEC.md 39.14.4 the card carries a
+        # desktop dither, so "every lit pixel" is half the screen. What the
+        # writes change is what they wrote - and on a dithered background that
+        # is the DARK half of each byte, which is why the left edge is allowed
+        # to be a pixel out either way.
         _, base, stride, banks, _, _ = KIND[other]
         for b in range(banks):
             m.write((base << 4) + b * 0x2000 + b * 10 + 4, bytes([0xFF]))
         m.advance(frames=2, card=sec["idx"])
         w, h, px = m.fbuf(card=sec["idx"])
-        pts = [(y, x) for y in range(h) for x in range(w) if px[(y * w + x) * 3]]
+        pts = [(y, x) for y in range(h) for x in range(w)
+               if px[(y * w + x) * 3] != secpx[(y * w + x) * 3]]
         rows = sorted({y for y, _ in pts})
         if len(rows) != banks:
-            fail.append("%d banks lit %d row(s) on the secondary - it is not "
-                        "in a graphics mode" % (banks, len(rows)))
+            fail.append("%d banks changed %d row(s) on the secondary - it is "
+                        "not in a graphics mode" % (banks, len(rows)))
         else:
-            xs = [min(x for y, x in pts if y == r) for r in rows]
+            lo = [min(x for y, x in pts if y == r) for r in rows]
+            hi = [max(x for y, x in pts if y == r) for r in rows]
             dy = [r - rows[0] for r in rows]
-            dx = [x - xs[0] for x in xs]
-            say("secondary banked layout: rows %s, x %s" % (dy, dx))
+            dx = [x - lo[0] for x in lo]
+            say("secondary banked layout: rows %s, x %s (spans %s)"
+                % (dy, dx, [hi[i] - lo[i] for i in range(banks)]))
             if dy != list(range(banks)):
                 fail.append("banks landed on rows %s, not %s"
                             % (dy, list(range(banks))))
-            if dx != [b * 80 for b in range(banks)]:
-                fail.append("banks landed at x %s, not %s"
-                            % (dx, [b * 80 for b in range(banks)]))
+            for b in range(banks):
+                if abs(dx[b] - b * 80) > 1:
+                    fail.append("bank %d landed at x %+d, not %+d"
+                                % (b, dx[b], b * 80))
+                if hi[b] - lo[b] > 7:
+                    fail.append("bank %d's byte spans %d px, not 8"
+                                % (b, hi[b] - lo[b] + 1))
         if hashlib.sha256(m.fbuf(card=pri["idx"])[2]).hexdigest() \
                 != shas[pri["idx"]]:
             fail.append("writing the secondary's memory changed the PRIMARY - "
                         "these are one card wearing two addresses")
         else:
             say("primary unchanged by the secondary's writes")
+
+        # --- 4: can the KERNEL draw a whole shape there? (SPEC.md 39.14.2) --
+        # Move the drive column into the second display's half of the virtual
+        # desktop and post [cp_dirty]; ui_task's step 3 is a wm_paint_all, and
+        # desk_paint then draws every volume's icon and label at the new x.
+        zx = ctx[0][7] + ctx[1][7] // 2         # display 1, half way across
+        m.write(S("vid_desk_zx"), bytes([zx & 255, zx >> 8]))
+        m.write(S("vid_desk_zl"), bytes([(zx - 2) & 255, (zx - 2) >> 8]))
+        m.write(S("vid_desk_zr"), bytes([(zx + 50) & 255, (zx + 50) >> 8]))
+        m.write(S("cp_dirty"), bytes([1]))
+        m.advance(frames=90, card=pri["idx"])
+        os88marty.settle(m, gate=lambda mm: os88marty.bar_up(mm, gate_card),
+                         card=gate_card)
+        w, h, px = m.fbuf(card=sec["idx"])
+        after = longest_run(px, w, h)
+        lit = sum(1 for i in range(0, len(px), 3) if px[i])
+        say("secondary after the drive column moved onto it: longest run %d "
+            "px, %d lit (%.1f%%)" % (after, lit, 100.0 * lit / (w * h)))
+        if after < 16:
+            fail.append("nothing whole reached the second display: its "
+                        "longest lit run is still %d px" % after)
 
     print()
     for f in fail:

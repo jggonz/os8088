@@ -2292,6 +2292,12 @@ wm_paint_all:
     dec dx                      ; was a full-width band drawn to be painted
     call gfx_fill_gray          ; over: the double-draw flash, and the reason
                                 ; every tile had to be rebuilt afterwards
+%ifdef KERN_BIG
+    call vid_disp_dither        ; ...and every OTHER display, whole (SPEC.md
+                                ; 39.14.4): the chrome is the primary's, so a
+                                ; second monitor is pure desktop. One compare
+                                ; on a machine with one card
+%endif
     call desk_paint             ; drive icons live on the desktop, under
                                 ; every window (SPEC.md 26)
     call dock_paint             ; ...so the strip is UNTOUCHED and usually has

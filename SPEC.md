@@ -18658,6 +18658,112 @@ this.** Switching the primary from the Control Panel's Display page leaves
 — but it stops being inert at step 4, so it is that step's or step 7's and not
 a thing to leave for the field to find.
 
+### 39.14 Drawing on more than one display (`KERN_BIG` only)
+
+**Every drawing primitive takes VIRTUAL desktop coordinates, and the split
+happens inside the renderer.** A rect is intersected with each display's
+virtual rect, and the survivor is translated into that display's own
+coordinates and drawn there — which is §11.3's clip arithmetic with a
+*geometry* attached to each rect rather than only a rect. **The dead zone
+(§39.2.1) costs nothing**: a fragment that lands in no display is drawn by
+nobody, and there is no test for it anywhere.
+
+`vid_disp_of` answers which display contains a virtual point, falling back to
+display 0 rather than failing — a point in the dead zone maps to the primary,
+where the primitive's own edge clip discards it. That is what keeps every hook
+below free of a CF to test.
+
+#### 39.14.1 `GFXDISP`, and why it is BELOW `GFXCLIP` and not above
+
+```
+gfx_fill:        GFXCLIP gfx_fill_d       ; clip, in VIRTUAL space
+gfx_fill_d:      GFXDISP gfx_fill_raw     ; split by display, then translate
+gfx_fill_raw:    ...
+```
+
+The four rect entries that already carry `GFXCLIP` — `gfx_fill`,
+`gfx_fill_gray`, `gfx_fill_pat`, `gfx_xor_fill` — carry `GFXDISP` immediately
+under it, and that covers roughly ten public entries and the whole of
+blitting, because `gfx_pixel`/`gfx_hline`/`gfx_vline` are `gfx_fill` with the
+arguments rearranged, `gfx_frame` is four fills, `gfx_xor_rect` decomposes
+into four `gfx_xor_fill` strips, and **`gfx_blit4` emits one `gfx_hline` per
+run** (§5.4).
+
+**The order is the correctness argument.** `wm_clip_tab` holds *virtual*
+rects, so the clip has to be applied before anything is translated; a split
+above it would hand `gfx_clip_run` local coordinates to compare against
+virtual rects. Docs that predate this said "above" — they were written before
+the clip's coordinate space had been thought about.
+
+**Cost when there is one display: `cmp byte [vid_ndisp], 1` and a taken
+branch**, then fall straight through into the body. Nothing else changes on
+any machine that is not the two-card 5150, which is the same bargain
+`[bb_on]` and `[wm_clip_n]` already make. On `kern_small` the macro expands to
+**nothing at all**.
+
+#### 39.14.2 The shapes that are not rects
+
+`font_char`, `font_run`, `ico_core`, `gfx_scroll`, `gfx_save`/`gfx_restore`
+and `gfx_line` cannot be split into rect fragments — they clip per whole cell,
+per whole shape, or per pixel — so each takes `GFXDENTER`/`GFXDLEAVE` at its
+public entry instead: the display containing the shape's **anchor** is made
+current, the coordinates are translated into it, and the routine's existing
+edge clip does the rest.
+
+**A shape that straddles the seam is therefore drawn on one display and cut at
+its edge**, exactly as it is cut at a screen edge today. That is a decision,
+not an oversight: it is §39.14.3's rule for the cursor applied to every other
+whole-shape primitive, and on two physically separate monitors with a bezel
+between them there is nothing to see. It also makes `gfx_scroll`'s refusal of
+a straddling blit free — the existing `cmp cx, [vid_cw] / jae .no` is that
+test once the rect is local.
+
+**`[gfx_dnest]` is what makes the two hooks compose.** `font_run`'s fallback
+path is `gfx_fill` + `font_str`, and `gfx_line`'s axis-aligned cases are
+`gfx_hline`/`gfx_vline`: a translated caller reaching a hooked callee would
+translate twice. So the outermost hook raises a nesting count and every hook
+under it is a compare and a branch. It is a count rather than a flag because
+`GFXDLEAVE` has to know whether it is the one that owes the restore.
+
+#### 39.14.3 Each hook restores the display it entered from
+
+Deliberately, and it is not the cheapest arrangement. Leaving the last-drawn
+display current and restoring once at `gfx_unlock` would pay one swap per
+burst instead of one per off-display primitive, and drawing is spatially
+coherent enough for that to be nearly free — **but `cur_unlazy` runs at the
+top of `GFXCLIP`, before any of this**, and the deferred cursor hide (§7.1.4)
+reads `[vid_rseg]` and the display's stride to erase the arrow. Left on the
+wrong display it erases from the wrong card, permanently. The cursor becomes
+display-aware in its own right at docs/DUAL-DISPLAY-PLAN.md step 5, and the
+optimisation is available then; until it is, self-contained hooks are the
+version that cannot be wrong.
+
+`vid_ctx_act` publishes the active display's origin as `[vid_ox]`/`[vid_oy]`,
+which is what every hook subtracts. They are outside §39.12's eighteen-word
+run on purpose — the run is asserted contiguous and is what the *renderer*
+reads, and an origin is not renderer state.
+
+#### 39.14.4 What still draws in display 0's coordinates, and why that is safe
+
+**Only `wm_paint_all`'s desktop dither is issued in virtual coordinates
+today.** Every other caller in the kernel draws inside the chrome or inside a
+window, and both are on the primary — `[vid_w]`/`[vid_h]` are still display
+0's extent, so the window manager, the menu bar, the dock and the drive
+column all place things exactly where they placed them before. Virtual and
+display-0 coordinates are the same numbers, so those paths pass through
+`GFXDISP` and come out unchanged, byte for byte.
+
+That is also the one caveat worth writing down: **`wm_clip_tab` is virtual and
+is not translated**, which is correct only while every window is on display 0.
+Growing `[vid_w]`/`[vid_h]` to the union — docs/DUAL-DISPLAY-PLAN.md step 6 —
+is what makes a window's clip region reach the second display, and that step
+owes the translation.
+
+The dither itself is one `gfx_fill_gray` per display, each in virtual
+coordinates: display 0's is the call that was always there (menu bar to dock),
+and every other display's is its whole extent, since §39.14's chrome lives on
+the primary alone.
+
 ## 40. apps/fractal — the progressive renderer and its restore cache
 
 The reference §20.6 worker, and the first shipped package whose window is
