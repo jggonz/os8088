@@ -7024,6 +7024,48 @@ Three things about the implementation:
   short-circuit there would make Refresh a no-op, which is the one thing it
   must never be.
 
+### 18.9.2 …and a FIXED disk validates its BPB once, ever
+
+`disk_mount` re-read LBA 0 on every switch to a volume, to validate the BPB
+and to derive the geometry from it. On a **fixed** disk that read answers a
+question that cannot have changed: an ST-225 is not swapped between two
+writes. And it is not a cheap question — on a 360KB floppy the BPB, the FAT
+and the root all live in cylinder 0 while the data is spread over forty, so a
+revalidation is a seek to the front of the disk, a revolution, and a seek
+back, *per switch*. §18.94.2 measured 41 of them in one install.
+
+`dsk_bpbv` banks the 64-byte staged head per volume, `dsk_bpbsg` the §18.8.2
+signature that would otherwise be computed off the sector, and `dsk_bpbok`
+says which rows are good. `dsk_bpb_bank_get` restores both with **no I/O at
+all**; `dsk_bpb_bank_put` records them after a successful validation.
+
+Four things hold it up:
+
+- **Floppies are excluded, and that is the whole point of the split.** A
+  floppy is precisely the volume that *can* be swapped between two
+  operations. Letting one skip the check needs an assertion a **caller**
+  makes — a batch bracket, with the interface locked — rather than one the
+  kernel invents about hardware it cannot see.
+- **Every rule from 2 down still runs.** The banked path skips rule 1 and the
+  staging, and only those: rule 1 passed when the head was banked, and
+  `dsk_secbuf` now holds something else entirely. Re-validating the rest
+  costs no I/O, and a bank that has been corrupted *in RAM* must not be
+  trusted further than a sector off the disk would be. The flag that says so
+  is **read-and-clear** (`dsk_bpbpre`), because a leaked 1 would skip rule 1
+  on a sector that never passed it.
+- **`dsk_bpb_sig` runs on the read path only.** It sums `dsk_secbuf`, which
+  the banked path never filled; the bank restores the signature along with
+  the head. Calling it on both paths would overwrite a good signature with a
+  hash of stale scratch — and `dsk_fatw_pick` decides FAT-window reuse on it,
+  so the failure would be a window silently kept across a real disk change.
+- **Two events forget every bank**: the volume table changing
+  (`dsk_vol_add`/`dsk_vol_del` — a row can be re-used by another partition,
+  or the same one re-formatted under us) and **any I/O error**, which is
+  exactly the shape "this is not the disk you think it is" arrives in.
+  `dsk_bpb_bank_zap` preserves `AX` and the flags because it is called at the
+  *top* of both mutators, where `AL` is an argument.
+
+
 ### 18.91 The transfer loop batches a run into one int 13h
 
 > **The 5150 measured this as a 15% LOSS, and Set 16 found why: `.ok` used to

@@ -343,6 +343,136 @@ dsk_dbg_raw:
     retf
 %endif
 
+; -----------------------------------------------------------------------------
+; dsk_bpb_bank_zap - forget every banked BPB (SPEC.md 18.9.2)
+; out: nothing; every register preserved
+;
+; Called wherever the volume TABLE changes and wherever the disk answers an
+; error. A banked head is a claim that a specific volume still has a specific
+; boot sector, and both of those events break it: a partition can be formatted
+; under us between an unmount and a mount, and an I/O error is exactly the
+; shape "this is not the disk you think it is" arrives in.
+; -----------------------------------------------------------------------------
+dsk_bpb_bank_zap:
+    pushf                       ; AX and DF included: this is called at the TOP
+    push ax                     ; of dsk_vol_add/del, where AL is an argument
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    mov di, dsk_bpbok
+    mov cx, DVOL_MAX
+    xor al, al
+    cld
+    rep stosb
+    pop es
+    pop di
+    pop cx
+    pop ax
+    popf
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_bpb_bank_get - restore [disk_drive]'s banked BPB, if it has one
+; out: CF = 0 and dsk_bpb + [dsk_sigcur] filled with NO disk read;
+;      CF = 1 = read the boot sector the ordinary way
+; clobbers: flags
+; -----------------------------------------------------------------------------
+dsk_bpb_bank_get:
+    cmp byte [dsk_vflop], 1
+    je .no                      ; a floppy is the one that can be swapped
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    mov bl, [disk_drive]
+    xor bh, bh
+    cmp bx, DVOL_MAX
+    jae .nopop
+    cmp byte [bx+dsk_bpbok], 0
+    je .nopop
+    mov ax, bx
+    add bx, bx
+    mov si, [bx+dsk_bpbsg]      ; the signature, banked with the head
+    mov [dsk_sigcur], si
+    mov cl, 6
+    shl ax, cl                  ; index * 64
+    mov si, ax
+    add si, dsk_bpbv
+    mov di, dsk_bpb
+    push ds
+    pop es
+    mov cx, 32
+    cld
+    rep movsw                   ; 64 bytes, the staged head
+    mov byte [dsk_bpbpre], 1    ; ...so dsk_bpb_check skips rule 1 and the
+    pop es                      ; staging, and only those
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.nopop:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+.no:
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_bpb_bank_put - remember [disk_drive]'s validated BPB, if it is fixed
+; out: nothing; every register AND the flags preserved
+; -----------------------------------------------------------------------------
+dsk_bpb_bank_put:
+    cmp byte [dsk_vflop], 1
+    je .out
+    pushf
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    mov bl, [disk_drive]
+    xor bh, bh
+    cmp bx, DVOL_MAX
+    jae .done
+    mov ax, bx
+    add bx, bx
+    mov si, [dsk_sigcur]
+    mov [bx+dsk_bpbsg], si
+    shr bx, 1
+    mov byte [bx+dsk_bpbok], 1
+    mov cl, 6
+    shl ax, cl
+    mov di, ax
+    add di, dsk_bpbv
+    mov si, dsk_bpb
+    push ds
+    pop es
+    mov cx, 32
+    cld
+    rep movsw
+.done:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    popf
+.out:
+    ret
+
 ; The listing's home. A floppy uses the .lowbss buffers below and a cap of
 ; DSK_NENT; a driver-backed volume uses the claim its driver donated, with a
 ; bigger cap (SPEC.md 22.6). ONE code path, two configurations - every reader
@@ -762,7 +892,8 @@ dsk_xfer:
     clc
     jmp .out
 .fail:
-    stc
+    call dsk_bpb_bank_zap       ; an I/O error is exactly the shape "this is
+    stc                         ; not the disk you think it is" arrives in
 .out:
     dec byte [sch_lock]         ; resume switching (dec leaves CF alone)
     pop bp
@@ -1100,6 +1231,9 @@ dsk_vol_kind:
 ; whole of "mount": what follows is an ordinary disk_mount on that index.
 ; -----------------------------------------------------------------------------
 dsk_vol_add:
+    call dsk_bpb_bank_zap       ; the volume TABLE moved: a banked head names a
+                                ; row, and a row can be re-used by another
+                                ; partition, or the same one re-formatted
     push bx
     push cx
     push dx
@@ -1182,6 +1316,9 @@ dsk_vol_add:
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 dsk_vol_del:
+    call dsk_bpb_bank_zap       ; the volume TABLE moved: a banked head names a
+                                ; row, and a row can be re-used by another
+                                ; partition, or the same one re-formatted
     push ax
     push bx
     mov bl, al
@@ -1632,6 +1769,12 @@ disk_mount:
                                 ; this whole validated pipeline (19.2)
 
     ; --- 1. boot sector: read LBA 0, validate the BPB (SPEC.md 18.2) ---
+    ; ...unless this volume is FIXED and we have validated it before, in which
+    ; case the banked head is the same head and the read is a seek to cylinder
+    ; 0 and back for an answer we already have (SPEC.md 18.9.2). A floppy
+    ; always reads, because a floppy is the thing that can be swapped.
+    call dsk_bpb_bank_get
+    jnc .bpb_staged
     mov ax, LOW_SEG
     mov es, ax
     xor ax, ax                  ; LBA 0
@@ -1639,10 +1782,15 @@ disk_mount:
     mov bx, dsk_secbuf
     call disk_read
     jc .jfail
+    call dsk_bpb_sig            ; [dsk_sigcur] = which disk this is (18.8.2),
+                                ; off the sector we have just read anyway.
+                                ; ONLY on this path: it sums dsk_secbuf, which
+                                ; the banked path never filled - the bank
+                                ; restored the signature along with the head
+.bpb_staged:
     call dsk_bpb_check          ; fills the 18.1 vars + disk_spt/disk_heads
     jc .jfail
-    call dsk_bpb_sig            ; [dsk_sigcur] = which disk this is (18.8.2),
-                                ; off the sector we have just read anyway
+    call dsk_bpb_bank_put       ; ...and remember it, if this volume is fixed
 
     ; --- 2. the FAT WINDOW's first load (SPEC.md 18.8; ES only, never DS) ---
     ; Not the whole FAT any more - a 32MB FAT16 volume's is 64 sectors and the
@@ -1946,6 +2094,18 @@ dsk_bpb_check:
     push di
     push es
 
+    ; A BANKED head skips rule 1 and the staging, and only those (SPEC.md
+    ; 18.9.2): it passed rule 1 when it was banked, the bytes in dsk_bpb ARE
+    ; that sector's, and dsk_secbuf now holds something else entirely. Every
+    ; rule from 2 down still runs, because re-validating costs no I/O and a
+    ; bank that has been corrupted in RAM must not be trusted further than a
+    ; sector off the disk. READ-AND-CLEAR: the flag is for exactly one call,
+    ; and a leaked 1 would skip rule 1 on a sector that never passed it.
+    mov al, [dsk_bpbpre]
+    mov byte [dsk_bpbpre], 0
+    or al, al
+    jnz .staged
+
     ; rule 1: boot signature 0xAA55 at bytes 510..511
     mov ax, LOW_SEG
     mov es, ax
@@ -1957,6 +2117,7 @@ dsk_bpb_check:
     mov di, dsk_bpb
     mov cx, 64
     call dsk_copy_in
+.staged:
 
     ; rule 2: BS_jmpBoot[0] in {0xEB, 0xE9} (MS-spec first validity test)
     mov al, [dsk_bpb+DSK_B_JMP]
@@ -3965,7 +4126,24 @@ disk_icons: resb DSK_NENT*DSK_ICO_SIZE     ; harvested icon slots; slot i
 dsk_secbuf: resb 512            ; sector scratch: BPB read, root-dir scan,
                                 ; icon harvest, and the loader's header peek
 
+
 section .bss
+; --- the per-volume banked BPB (SPEC.md 18.9.2) ------------------------------
+; A FIXED disk cannot be swapped, so a boot sector that validated once is still
+; the same boot sector on every later switch to that volume - and re-reading it
+; is a seek to cylinder 0, a revolution, and a seek back, per switch. dsk_bpbv
+; keeps the 64-byte staged head so dsk_bpb_check can re-run against it with no
+; I/O at all; dsk_bpbsg keeps the signature dsk_fatw_pick needs to decide window
+; reuse, which is otherwise computed off the sector we would have read.
+;
+; NOT for floppies, which is the whole point of the split: a floppy is exactly
+; the volume that CAN be swapped between two operations, and the batch bracket
+; is what will let one skip this - under an assertion a caller makes,
+; not one the kernel invents.
+dsk_bpbv:     resb DVOL_MAX * 64
+dsk_bpbsg:    resw DVOL_MAX
+dsk_bpbok:    resb DVOL_MAX     ; 1 = this row's bank is good
+dsk_bpbpre:   resb 1            ; dsk_bpb already holds a banked head
 
 dsk_ent:    resb DSK_DE_SIZE    ; one staged directory entry (dsk_get_dir);
                                 ; also the mount's synthesis/harvest scratch
