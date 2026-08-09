@@ -219,9 +219,19 @@ zi_flush:
 zi_yield:
     push ax
     push bx
+    push es                         ; ES IS THE PROGRAM COUNTER'S SEGMENT
+                                    ; (docs/FROTZ-PLAN.md 3.1). OSAPI_TASK_ALIVE
+                                    ; takes the gfx lock and OSAPI_TASK_YIELD
+                                    ; runs the whole scheduler; neither owes us
+                                    ; ES, and this is called from EVERY wait
+                                    ; loop in the module - so the story got as
+                                    ; far as its first prompt and then executed
+                                    ; whatever lay at the same offset in some
+                                    ; other segment.
     mov bx, [zf_win]
     call OSAPI_TASK_ALIVE           ; never returns if we were closed
     call OSAPI_TASK_YIELD
+    pop es
     pop bx
     pop ax
     ret
@@ -934,6 +944,7 @@ zi_isterm:
 ; =============================================================================
 zi_readchar:
     push bx
+    push es                         ; the PC's segment; see zi_yield
     mov byte [zi_want], ZIW_CHAR
 .wait:
     call zi_getkey
@@ -949,6 +960,7 @@ zi_readchar:
                                     ; not an answer; keep waiting
 .done:
     mov byte [zi_want], ZIW_NONE
+    pop es
     pop bx
     ret
 
@@ -978,6 +990,7 @@ zi_readline:
     push dx
     push si
     push di
+    push es                         ; the PC's segment; see zi_yield
     mov [zi_taddr], ax
     mov [zi_paddr], bx
     or cx, cx
@@ -1053,6 +1066,7 @@ zi_readline:
     call zi_commit
     pop ax
     mov byte [zi_want], ZIW_NONE
+    pop es
     pop di
     pop si
     pop dx

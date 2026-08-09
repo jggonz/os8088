@@ -104,6 +104,13 @@ ZM_COL_WHITE equ 9
 %define zm_ckhdr  (os88_image_end + ZMEM_SLACK + 4)   ; word: header's checksum
 %define zm_lsc    (os88_image_end + ZMEM_SLACK + 6)   ; byte: file-length shift
 %define zm_bpp    (os88_image_end + ZMEM_SLACK + 7)   ; byte: OSAPI_VIDEO's DH
+; THE PC'S SEGMENT, AUTHORITATIVELY. ES holds it while the VM runs, but ES is
+; also what every OSAPI call is free to clobber - the X stub hands the callee
+; the caller's DS in ES, and only an X-stubbed slot puts it back. Rather than
+; ask sixty opcode handlers to preserve a register the OS does not preserve,
+; the three routines whose job IS to move the PC record it here, and zx_run
+; puts ES back from it after every instruction (SPEC.md 59.3).
+%define zm_pcseg  (os88_image_end + ZMEM_SLACK + 8)   ; word
 
 ; =============================================================================
 ; zm_map - the 20-bit address decoder (INTERNAL)
@@ -305,6 +312,7 @@ zm_seek:
     or ax, dx
     add ax, [zf_sseg]
     mov es, ax
+    mov [zm_pcseg], ax              ; the PC moved; record it (see zm_pcseg)
     pop dx
     pop cx
     pop ax
@@ -324,6 +332,7 @@ zm_norm:
     mov ax, es
     add ax, 0x800                   ; 0x8000 bytes = 0x800 paragraphs
     mov es, ax
+    mov [zm_pcseg], ax
     pop ax
 .out:
     ret

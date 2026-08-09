@@ -70,6 +70,7 @@ ZX_STKBYTES equ ZI_STKKB * 1024
 %define zx_badpc_l (os88_image_end + ZEXEC_SLACK + 408)  ; word: and where
 %define zx_badpc_h (os88_image_end + ZEXEC_SLACK + 410)
 %define zx_prevop  (os88_image_end + ZEXEC_SLACK + 412)  ; byte: the last opcode
+%define zx_badseg  (os88_image_end + ZEXEC_SLACK + 416)  ; word: ES at the fault
 %define zx_seglim  (os88_image_end + ZEXEC_SLACK + 414)  ; word: last valid ES
 
 ; --- call frame layout, in the [zf_stkseg] claim ------------------------------
@@ -278,6 +279,16 @@ zx_run:
     push cx
     call zx_step
     pop cx
+    mov es, [zm_pcseg]              ; ES IS RESTORED FROM THE AUTHORITY, not
+                                    ; trusted from the handler. Every OSAPI
+                                    ; call is free to clobber ES and only an
+                                    ; X-stubbed slot puts it back, so asking
+                                    ; sixty handlers to preserve it was losing
+                                    ; whack-a-mole - four separate bugs, each
+                                    ; one a story that ran correctly for
+                                    ; thousands of instructions and then
+                                    ; executed a font. The three routines whose
+                                    ; job is to MOVE the PC record it instead.
     cmp byte [zf_err], 0
     jne .stop
     cmp byte [zf_dead], 0
@@ -332,6 +343,7 @@ zx_spill:
 zx_load:
     mov es, [zf_pcseg]
     mov si, [zf_pcoff]
+    mov [zm_pcseg], es
     ret
 
 ; =============================================================================
@@ -887,6 +899,7 @@ zx_jrel:
     mov ax, es
     sub ax, 0x1000
     mov es, ax
+    mov [zm_pcseg], ax              ; the third PC mover; see zmem.inc
     pop ax
 .ok:
     ret
@@ -1157,6 +1170,8 @@ zx_halt:
 zx_lost:
     mov al, [zx_prevop]
     mov [zx_badop], al
+    mov ax, es                      ; the segment we ended up in, which names
+    mov [zx_badseg], ax             ; the claim whose owner clobbered ES
     call zm_pcaddr
     mov [zx_badpc_l], ax
     mov [zx_badpc_h], dx
@@ -1200,25 +1215,45 @@ zx_report:
     jnz .say
     mov si, zx_m_other
 .say:
+    push es
     call zw_notice
+    pop es
     ; An unknown opcode says WHICH and WHERE. Without that the reader is sent
     ; to a disassembler to find out what stopped, which defeats the point of
     ; stopping cleanly rather than executing wild (SPEC.md 47).
     cmp byte [zf_err], ZXE_BADOP
     jne .nodetail
     mov si, zx_m_opat
+    push es
     call zt_puts
+    pop es
     mov al, [zx_badop]
     xor ah, ah
     call zx_hex
     mov si, zx_m_at
+    push es
     call zt_puts
+    pop es
     mov ax, [zx_badpc_h]
     call zx_hex
     mov ax, [zx_badpc_l]
     call zx_hex
+    mov si, zx_m_seg
+    push es
+    call zt_puts
+    pop es
+    mov ax, [zx_badseg]
+    call zx_hex
+    mov si, zx_m_base
+    push es
+    call zt_puts
+    pop es
+    mov ax, [zf_sseg]
+    call zx_hex
     mov al, 13
+    push es
     call zt_putc
+    pop es
 .nodetail:
     call OSAPI_GFX_UNLOCK
     pop si
@@ -1234,6 +1269,8 @@ zx_m_ustack: db '[Frotz: stack underflow - the story has stopped.]', 0
 zx_m_ostack: db '[Frotz: stack overflow - the story has stopped.]', 0
 zx_m_opat:   db '  opcode 0x', 0
 zx_m_at:     db ' at 0x', 0
+zx_m_seg:    db ' es=', 0
+zx_m_base:   db ' story=', 0
 zx_m_locals: db '[Frotz: bad routine header - the story has stopped.]', 0
 zx_m_ret:    db '[Frotz: return with no caller - the story has stopped.]', 0
 zx_m_frame:  db '[Frotz: bad stack frame - the story has stopped.]', 0
@@ -1552,7 +1589,9 @@ zxo_set_colour:                     ; 2OP:27 set_colour foreground background
     ; meaning would become unreadable rather than plain.
     mov al, byte [zf_ops]
     mov ah, byte [zf_ops+2]
+    push es
     call zw_colour
+    pop es
     ret
 
 zxo_throw:                          ; 2OP:28 throw value stack-frame
@@ -1661,7 +1700,9 @@ zxo_dec:                            ; 1OP:134 dec (variable)
 zxo_print_addr:                     ; 1OP:135 print_addr byte-address-of-string
     mov ax, [zf_ops]
     xor dx, dx
+    push es
     call zt_print
+    pop es
     ret
 
 zxo_call_1s:                        ; 1OP:136 call_1s routine -> (result)
@@ -1686,7 +1727,9 @@ zxo_remove_obj:                     ; 1OP:137 remove_obj object
 zxo_print_obj:                      ; 1OP:138 print_obj object
     mov ax, [zf_ops]
     call zo_name                    ; out DX:AX = the short-name Z-string
+    push es
     call zt_print
+    pop es
     ret
 
 zxo_ret:                            ; 1OP:139 ret value
@@ -1706,7 +1749,9 @@ zxo_print_paddr:                    ; 1OP:141 print_paddr packed-addr-of-string
     mov ax, [zf_ops]
     mov bl, 1                       ; 1 = string, which is a different shift
     call zm_unpack                  ; from a routine in v6/v7
+    push es
     call zt_print
+    pop es
     ret
 
 zxo_load:                           ; 1OP:142 load (variable) -> (result)
@@ -1752,15 +1797,21 @@ zxo_print:                          ; 0OP:178 print (literal-string)
     ; with the top bit set, so ztext hands back where that was and the PC is
     ; re-seeked rather than guessed at.
     call zm_pcaddr
-    call zt_print_ret               ; out DX:AX = the address after the string
+    push es
+    call zt_print_ret ; out DX:AX = the address after the string
+    pop es
     call zm_seek
     ret
 
 zxo_print_ret:                      ; 0OP:179 print_ret (literal-string)
     call zm_pcaddr
+    push es
     call zt_print_ret
+    pop es
     mov al, 13
+    push es
     call zt_putc
+    pop es
     mov ax, 1
     call zx_ret
     ret
@@ -1863,7 +1914,9 @@ zxo_quit:                           ; 0OP:186 quit
 
 zxo_new_line:                       ; 0OP:187 new_line
     mov al, 13
-    call zt_putc                    ; through the stream, so stream 3 sees it
+    push es
+    call zt_putc ; through the stream, so stream 3 sees it
+    pop es
     ret
 
 zxo_show_status:                    ; 0OP:188 show_status
@@ -1872,7 +1925,9 @@ zxo_show_status:                    ; 0OP:188 show_status
     ; been mis-assembled, and it cannot corrupt anything.
     cmp byte [zf_ver], 4
     jae .no
+    push es
     call zw_status
+    pop es
 .no:
     ret
 
@@ -2047,7 +2102,9 @@ zxo_read:                           ; VAR:228 sread (v1-4) / aread (v5+)
     ; the v1-3 promise that the status line is redrawn first.
     cmp byte [zf_ver], 4
     jae .nostat
+    push es
     call zw_status
+    pop es
 .nostat:
     mov ax, [zf_ops]
     call zm_gb16                    ; byte 0 = the buffer's capacity
@@ -2078,12 +2135,16 @@ zxo_read:                           ; VAR:228 sread (v1-4) / aread (v5+)
 
 zxo_print_char:                     ; VAR:229 print_char output-character-code
     mov al, byte [zf_ops]
+    push es
     call zt_putc
+    pop es
     ret
 
 zxo_print_num:                      ; VAR:230 print_num value
     mov ax, [zf_ops]
+    push es
     call zt_num
+    pop es
     ret
 
 zxo_random:                         ; VAR:231 random range -> (result)
@@ -2183,7 +2244,9 @@ zxo_split_window:                   ; VAR:234 split_window lines
     call zx_v6
     je .no                          ; v6 owns its windows outright
     mov ax, [zf_ops]
+    push es
     call zw_split
+    pop es
 .no:
     ret
 
@@ -2191,15 +2254,21 @@ zxo_set_window:                     ; VAR:235 set_window window
     mov al, byte [zf_ops]
     call zx_v6
     je .v6
+    push es
     call zw_setwin
+    pop es
     ret
 .v6:
+    push es
     call zw6_select
+    pop es
     ret
 
 zxo_erase_window:                   ; VAR:237 erase_window window
     mov ax, [zf_ops]
+    push es
     call zw_erasewin
+    pop es
     ret
 
 zxo_erase_line:                     ; VAR:238 erase_line value / v6 pixels
@@ -2210,7 +2279,9 @@ zxo_erase_line:                     ; VAR:238 erase_line value / v6 pixels
     cmp word [zf_ops], 1
     jne .no
 .go:
+    push es
     call zw_eraseline
+    pop es
 .no:
     ret
 
@@ -2219,20 +2290,28 @@ zxo_set_cursor:                     ; VAR:239 set_cursor line column [window]
     mov bx, [zf_ops+2]
     call zx_v6
     je .v6
+    push es
     call zw_cursor
+    pop es
     ret
 .v6:
+    push es
     call zw6_setcur
+    pop es
     ret
 
 zxo_get_cursor:                     ; VAR:240 get_cursor array
     ; Two words into the array: row then column (Standard 15).
     call zx_v6
     je .v6
-    call zw_getcur                  ; out AX = row, BX = column
+    push es
+    call zw_getcur ; out AX = row, BX = column
+    pop es
     jmp short .put
 .v6:
+    push es
     call zw6_getcur
+    pop es
 .put:
     push bx
     mov bx, ax
@@ -2251,7 +2330,9 @@ zxo_set_text_style:                 ; VAR:241 set_text_style style
     ; is called zw_setstyle here; one of the two names has to move and the bss
     ; one is published in zbss.inc, so the routine is the one that gives way.
     mov al, byte [zf_ops]
+    push es
     call zw_setstyle
+    pop es
     ret
 
 zxo_buffer_mode:                    ; VAR:242 buffer_mode flag
@@ -2265,7 +2346,9 @@ zxo_output_stream:                  ; VAR:243 output_stream number [table]
     mov ax, [zf_ops]
     mov bx, [zf_ops+2]
     xor dx, dx
-    call zt_stream                  ; ztext owns the four streams
+    push es
+    call zt_stream ; ztext owns the four streams
+    pop es
     ret
 
 zxo_input_stream:                   ; VAR:244 input_stream number
@@ -2287,7 +2370,9 @@ zxo_sound_effect:                   ; VAR:245 sound_effect number effect volume
     jb .go
     mov bh, byte [zf_ops+4]
 .go:
+    push es
     call zs_effect
+    pop es
     ret
 
 zxo_read_char:                      ; VAR:246 read_char 1 time routine -> (result)
@@ -2357,7 +2442,9 @@ zxo_tokenise:                       ; VAR:251 tokenise text parse dict flag
     jb .go
     mov dl, byte [zf_ops+6]
 .go:
+    push es
     call zd_tokenise
+    pop es
     ret
 
 zxo_encode_text:                    ; VAR:252 encode_text zscii len from coded
@@ -2394,7 +2481,9 @@ zxo_encode_text:                    ; VAR:252 encode_text zscii len from coded
     mov si, zx_encbuf
     mov cx, [zx_tmp0]
     mov di, zx_encout
+    push es
     call zt_encode
+    pop es
     pop es
     pop si
     ; 6 bytes of encoded text in v1-3, 9 from v4 (three Z-char words)
@@ -2522,7 +2611,9 @@ zxo_print_table:                    ; VAR:254 print_table text width height skip
     mov ax, [zx_tmp2]
     call zm_gb16
     inc word [zx_tmp2]
+    push es
     call zt_putc
+    pop es
     pop cx
     loop .cols
 .endrow:
@@ -2531,7 +2622,9 @@ zxo_print_table:                    ; VAR:254 print_table text width height skip
     dec word [zx_tmp0]
     jz .out
     mov al, 13
+    push es
     call zt_putc
+    pop es
     jmp short .rows
 .out:
     ret
@@ -2565,10 +2658,14 @@ zxo_check_arg_count:                ; VAR:255 check_arg_count argument-number
 ; -----------------------------------------------------------------------------
 zx6_sel:
     mov ah, [zw6_cur]
+    push es
     call zw6_select
+    pop es
     ret
 zx6_unsel:
+    push es
     call zw6_select
+    pop es
     ret
 
 zxe_save:                           ; EXT:0  save table bytes name -> (result)
@@ -2700,7 +2797,9 @@ zxe_draw_picture:                   ; EXT:5  draw_picture picture-number y x
     mov ax, [zf_ops]
     mov dx, [zf_ops+2]
     mov cx, [zf_ops+4]
+    push es
     call zp_draw
+    pop es
     ret
 
 zxe_picture_data:                   ; EXT:6  picture_data pic array ?(label)
@@ -2711,7 +2810,9 @@ zxe_picture_data:                   ; EXT:6  picture_data pic array ?(label)
     mov ax, [zf_ops]
     or ax, ax
     jz .archive
-    call zp_info                    ; out CX = height, DX = width, CF = none
+    push es
+    call zp_info ; out CX = height, DX = width, CF = none
+    pop es
     jc zx_bf
     push dx
     mov bx, cx
@@ -2723,7 +2824,9 @@ zxe_picture_data:                   ; EXT:6  picture_data pic array ?(label)
     call zm_pw16
     jmp zx_bt
 .archive:
-    call zp_count_get               ; out AX = count, BX = release
+    push es
+    call zp_count_get ; out AX = count, BX = release
+    pop es
     push ax
     push bx
     mov bx, ax
@@ -2751,7 +2854,9 @@ zxe_set_margins:                    ; EXT:8  set_margins left right window
     push ax
     mov ax, [zf_ops]
     mov bx, [zf_ops+2]
+    push es
     call zw6_margins
+    pop es
     pop ax
     mov al, ah
     call zx6_unsel
@@ -2796,7 +2901,9 @@ zxe_print_unicode:                  ; EXT:11 print_unicode char-number
     jbe .ok
     mov al, '?'
 .ok:
+    push es
     call zt_putc
+    pop es
     ret
 
 zxe_check_unicode:                  ; EXT:12 check_unicode char -> (result)
@@ -2830,7 +2937,9 @@ zxe_move_window:                    ; EXT:16 move_window window y x
     push ax
     mov ax, [zf_ops+2]
     mov bx, [zf_ops+4]
+    push es
     call zw6_move
+    pop es
     pop ax
     mov al, ah
     call zx6_unsel
@@ -2842,7 +2951,9 @@ zxe_window_size:                    ; EXT:17 window_size window y x
     push ax
     mov ax, [zf_ops+2]              ; y = height, x = width
     mov bx, [zf_ops+4]
+    push es
     call zw6_size
+    pop es
     pop ax
     mov al, ah
     call zx6_unsel
@@ -2854,7 +2965,9 @@ zxe_window_style:                   ; EXT:18 window_style window flags operation
     push ax
     mov ax, [zf_ops+2]
     mov bx, [zf_ops+4]
+    push es
     call zw6_attr
+    pop es
     pop ax
     mov al, ah
     call zx6_unsel
@@ -2863,7 +2976,9 @@ zxe_window_style:                   ; EXT:18 window_style window flags operation
 zxe_get_wind_prop:                  ; EXT:19 get_wind_prop window prop -> (result)
     mov al, byte [zf_ops]
     mov bl, byte [zf_ops+2]
-    call zw6_getprop                ; out AX
+    push es
+    call zw6_getprop ; out AX
+    pop es
     mov bx, ax
     call zx_storeres
     ret
@@ -2873,7 +2988,9 @@ zxe_scroll_window:                  ; EXT:20 scroll_window window pixels
     call zx6_sel
     push ax
     mov ax, [zf_ops+2]
+    push es
     call zw6_scroll
+    pop es
     pop ax
     mov al, ah
     call zx6_unsel
@@ -2902,7 +3019,9 @@ zxe_pop_stack:                      ; EXT:21 pop_stack items stack
     ret
 
 zxe_read_mouse:                     ; EXT:22 read_mouse array
-    call zw6_mouse                  ; out AX = y, BX = x, CX = buttons
+    push es
+    call zw6_mouse ; out AX = y, BX = x, CX = buttons
+    pop es
     push cx
     push bx
     push ax
@@ -2949,7 +3068,9 @@ zxe_put_wind_prop:                  ; EXT:25 put_wind_prop window prop value
     mov al, byte [zf_ops]
     mov bl, byte [zf_ops+2]
     mov cx, [zf_ops+4]
+    push es
     call zw6_putprop
+    pop es
     ret
 
 zxe_print_form:                     ; EXT:26 print_form formatted-table
@@ -2969,11 +3090,15 @@ zxe_print_form:                     ; EXT:26 print_form formatted-table
     mov ax, [zx_tmp2]
     call zm_gb16
     inc word [zx_tmp2]
+    push es
     call zt_putc
+    pop es
     pop cx
     loop .chars
     mov al, 13
+    push es
     call zt_putc
+    pop es
     jmp short .line
 .out:
     ret
@@ -3059,32 +3184,48 @@ zx_diag:
     push si
     push es
     mov si, zxd_v
+    push es
     call zt_puts
+    pop es
     mov al, [zf_ver]
     xor ah, ah
+    push es
     call zt_num
+    pop es
     mov si, zxd_pc
+    push es
     call zt_puts
+    pop es
     mov ax, [zf_initpc]
     call zx_hex
     mov si, zxd_st
+    push es
     call zt_puts
+    pop es
     mov ax, [zf_static]
     call zx_hex
     mov si, zxd_hi
+    push es
     call zt_puts
+    pop es
     mov ax, [zf_himem]
     call zx_hex
     mov si, zxd_ob
+    push es
     call zt_puts
+    pop es
     mov ax, [zf_objtab]
     call zx_hex
     mov si, zxd_gv
+    push es
     call zt_puts
+    pop es
     mov ax, [zf_gvar]
     call zx_hex
     mov si, zxd_by
+    push es
     call zt_puts
+    pop es
     mov cx, 8
     mov ax, [zf_initpc]
     mov bx, ax
@@ -3095,12 +3236,16 @@ zx_diag:
     xor ah, ah
     call zx_hex2
     mov al, ' '
+    push es
     call zt_putc
+    pop es
     inc bx
     pop cx
     loop .bytes
     mov al, 13
+    push es
     call zt_putc
+    pop es
     pop es
     pop si
     pop dx
@@ -3134,7 +3279,9 @@ zx_hex4lo:
     jbe .ok
     add al, 7
 .ok:
+    push es
     call zt_putc
+    pop es
     pop cx
     loop .d
     pop cx
@@ -3171,7 +3318,9 @@ zx_hex:
     jbe .ok
     add al, 7
 .ok:
+    push es
     call zt_putc
+    pop es
     pop cx
     loop .d
     pop dx
@@ -3185,6 +3334,7 @@ zx_hex:
 ; whether the PC advances and what the decoder is being handed, which is the
 ; whole question when a story halts before printing anything.
 ZXT_N equ 14
+ZXT_MASK equ 0x0FFF
 %define zxt_n (os88_image_end + ZEXEC_SLACK + 400)   ; word, inside our slack
 zx_trace:
     push ax
@@ -3193,15 +3343,19 @@ zx_trace:
     push dx
     push si
     push es
-    cmp word [zxt_n], ZXT_N
-    jae .out
     inc word [zxt_n]
+    mov ax, [zxt_n]
+    and ax, ZXT_MASK            ; one sample every ZXT_MASK+1 instructions, for
+    jnz .out                    ; ever: a loop shows as the same few addresses
+                                ; repeating, which is the whole question
     mov ax, es
     push es
     push si
     call zx_hex
     mov al, ':'
+    push es
     call zt_putc
+    pop es
     pop si
     pop es
     push es
@@ -3209,7 +3363,9 @@ zx_trace:
     mov ax, si
     call zx_hex
     mov al, ' '
+    push es
     call zt_putc
+    pop es
     pop si
     pop es
     mov al, [es:si]
@@ -3218,7 +3374,9 @@ zx_trace:
     push si
     call zx_hex2
     mov al, 13
+    push es
     call zt_putc
+    pop es
     pop si
     pop es
 .out:

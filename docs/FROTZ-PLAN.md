@@ -356,6 +356,22 @@ does not hold a library. `386-z` is the comfortable one — the same code, two
 Neither is a 256KB machine, and that is deliberate: `make xt` already is one,
 and running Frotz there is how the refusal path gets tested.
 
+## 10.1 What is not finished
+
+**A real story runs its opening and then halts partway through play.** The
+conformance gate passes 44 of 44 at v3, v5 and v8; Mini-Zork I and Adventure
+print their banners, status lines and room descriptions; Adventure accepts a
+typed line, tokenises it and replies. It is a command or two later that it
+stops, with `unknown opcode ... es=<a kernel segment>`.
+
+SPEC.md §59.12 is the diagnosis and it is worth reading before touching this
+code, because the conclusion is that **§3.1's decision to keep the PC in ES:SI
+was wrong** — not slow, wrong. ES is the one register the OS does not
+preserve, so every drawing or file call is a chance to lose the program
+counter, and four separate fixes each looked like the last one. The remedy is
+to hold the PC in memory and load ES:SI per instruction; it is contained but
+it re-times the fetch path this design was built around.
+
 ## 11. Verification
 
 The host has what it needs to check this properly, which is unusual for this

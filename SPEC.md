@@ -27740,3 +27740,45 @@ letter rather than a right one.
 **`@put_prop` on an absent property does not halt.** The Standard says it
 should; here it does nothing, because the only module that can name the
 offending opcode is `zexec.inc` and the object layer has no error channel.
+
+### 59.12 The open defect: ES, and why it is the wrong register for the PC
+
+**A real story runs its opening and then halts partway through play** with
+`unknown opcode ... es=<segment> story=<segment>`, where the reported `es` is
+below the story's claim — a kernel segment. Conformance is unaffected: the
+gate story passes 44 of 44 at v3, v5 and v8, and Adventure reaches its prompt,
+accepts a typed line, tokenises it and replies. It is the second or third
+command that stops.
+
+The cause is §59.3's own bargain. Making `ES:SI` the live program counter is
+what makes instruction fetch a `lods`, and it costs one rule: **ES belongs to
+the story.** But ES is exactly the register the OS does not preserve — the X
+stub hands a callee the caller's DS *in ES*, and only an X-stubbed slot puts
+it back — so any handler that reaches an OSAPI slot can return with the
+program counter's segment pointing at a font, a back buffer or a disk cache.
+The interpreter then executes whatever lies at the same offset there, and dies
+somewhere unrelated hundreds of instructions later.
+
+Four instances of this were found and fixed, each by a different route:
+`zx_call` restoring the caller's ES over `zm_seek`'s answer; `zt_putc` — the
+one funnel from the VM to the window — preserving every register but that one;
+`zi_yield`, called from every wait loop; and the input path. Each fix was
+correct and none of them was the last one, which is the signature of a wrong
+invariant rather than a bug.
+
+The PC's segment is therefore recorded by the three routines whose job is to
+*move* the PC (`zm_seek`, `zm_norm`, `zx_jrel`) and restored by `zx_run` after
+every instruction, so a handler's clobbered ES is meant to be harmless. That
+did not close it either — `zm_seek` is also used to walk things that are not
+the PC, so the authority it maintains is not always the PC's.
+
+**The fix is to stop keeping the PC in a segment register**: hold it in
+`[zf_pcseg]`/`[zf_pcoff]` and load `ES:SI` per instruction inside `zx_step`,
+with the PC-movers writing memory rather than registers. That is contained —
+`zx_step`, `zx_call`, `zx_ret`, `zx_jrel` and `zm_seek` — but it re-times the
+fetch path that §59.3 was designed around, so it wants doing deliberately and
+re-measuring, not at the end of a session.
+
+`zx_step` range-checks the PC's segment on every instruction and names the
+last opcode that ran, which is what turned this from "a story stops" into a
+one-line diagnosis. That check earns its ~20 bytes and stays regardless.
