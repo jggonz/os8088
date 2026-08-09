@@ -25853,6 +25853,48 @@ checkerboard, and the two halves of the control cannot disagree on mono. The
 refused click still sets the caption, as the page's does: the reason is already
 on screen and this only makes sure of it.
 
+#### 52.2.5 Every extent ends on a cylinder boundary, because the BIOS reads it back
+
+§52.2.1 named the two era conventions this tool obeys — the first partition
+starts at LBA = spt, and every partition ends on a cylinder boundary — and
+then obeyed only the first. The extent is clipped to `HP_MAXSEC` (§18.7) or to
+the end of the drive, and **neither clip lands on a boundary**.
+
+That looks cosmetic and is not, because the convention is a **contract with the
+BIOS in the other direction**: a BIOS that does not already know a drive's
+geometry *guesses it from the partition table*, reading a partition's end-CHS
+as `(heads-1, spt)`. The guess is right only if the partition really does end
+where the convention says.
+
+**What it cost, on a 40MB disk.** Slot 1 came out as LBA 63 for 65,535 sectors,
+ending at cylinder 65, head 1, sector 15. On the **next boot** the BIOS read
+that back as a 2-head, 15-sector drive, so the whole disk measured
+1,023 × 2 × 15 = **30,690 sectors** — *smaller than the partition already on
+it*. The Hard Drive page said `1023x 2x 15   14M` about a 39MB drive; the
+volume was no longer addressable at the CHS it had been written at; and the
+only free space left below the new device end was the 48 sectors between the
+new floor (spt = 15) and the old partition's start at 63. Format then offered
+a **24KB partition on a disk with 25MB free**, and was arithmetically right to
+— every step below the geometry was correct, which is why reading the
+allocator found nothing wrong with it.
+
+`hd_cyl_trim` rounds the LENGTH down at `hd_slot_extent`'s single exit, so all
+three cases — reuse in place, reuse clipped at the ceiling, and the fresh hole
+scan — pass through it and none can forget. 65,535 becomes **65,457**, the end
+lands on cylinder 65 exactly, the last sector is (64, 15, 63), and the guess
+comes back 16/63: the geometry it was partitioned with. The cost is 78 sectors,
+39KB of a 32MB partition.
+
+**It also retires a size rule.** An extent that cannot reach a boundary above
+its own base is one that sits inside a single cylinder; `hd_cyl_trim` answers 0
+and `.have` reads that as "not worth a drive letter". So the sliver is refused
+because it is not a partition, rather than because it failed a threshold keyed
+to `spt` — which was the very number that had gone wrong.
+
+**The start is deliberately still unaligned.** LBA = spt is head 1, sector 1,
+cylinder 0, which is the other half of the same convention; only the end is
+rounded.
+
 ### 52.3 The formatter
 
 A **FAT format, not a surface format**. Its window is §52.2's, along with the

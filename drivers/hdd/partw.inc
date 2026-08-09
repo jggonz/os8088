@@ -234,6 +234,9 @@ hd_slot_extent:
     mov ax, [hd_xbest+2]
     mov [hd_fbase+2], ax
 .have:
+    call hd_cyl_trim            ; EVERY extent this tool commits ends on a
+                                ; cylinder boundary (SPEC.md 52.2.5), and this
+                                ; is the one place all three cases pass through
     mov ax, [hd_fsecs]
     cmp ax, [di+HDD_SPT]
     jb .no                      ; less than a track: not worth a drive letter
@@ -249,6 +252,80 @@ hd_slot_extent:
     pop cx
     pop ax
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_cyl_trim - shorten an extent so it ENDS on a cylinder boundary (internal)
+; in:  [hd_fbase] (32-bit), [hd_fsecs], DI = the device row
+; out: [hd_fsecs] reduced to the largest length whose end is a multiple of
+;      heads*spt; 0 when the whole extent sits inside one cylinder
+; clobbers: flags
+;
+; **THE ERA CONVENTION IS A CONTRACT WITH THE BIOS, NOT A TIDINESS RULE**, and
+; that is what this routine is for. Every DOS-era partition ends on a cylinder
+; boundary, and the reason it matters is the other direction: a BIOS that does
+; not know a drive's geometry GUESSES it from the partition table, by taking
+; the end-CHS of a partition and reading it as (heads-1, spt). That guess is
+; only right if the partition really does end on a boundary.
+;
+; This tool's own start is the other half of the same convention - LBA = spt,
+; head 1 sector 1 cylinder 0 - so the START is deliberately not aligned and
+; only the END is.
+;
+; What went wrong without it: an extent is clipped to HP_MAXSEC (SPEC.md 18.7)
+; or to the end of the drive, and neither clip lands on a boundary. A 40MB disk
+; got slot 1 = LBA 63 for 65,535 sectors, ending at cylinder 65 head 1 sector
+; 15 - so on the NEXT boot the BIOS read that as a 2-head, 15-sector drive.
+; The whole disk then measured 1,023 x 2 x 15 = 30,690 sectors, which is
+; SMALLER than the partition already on it: the page said `14M` about a 40MB
+; drive, the volume was no longer addressable at the CHS it was written at, and
+; the only free space the allocator could still see was the 48 sectors between
+; the new floor (spt = 15) and the old partition's start at 63. It offered a
+; 24KB partition on a disk with 25MB free and was arithmetically right to.
+;
+; Rounding the LENGTH down fixes all of it at the source: 65,535 becomes 65,457,
+; the end lands on cylinder 65 exactly, the last sector is (64, 15, 63), and the
+; guess comes back 16 heads / 63 sectors - the geometry it was partitioned with.
+; The cost is 78 sectors, 39KB of a 32MB partition.
+;
+; It also refuses the sliver for the right reason rather than by a size rule:
+; an extent that cannot reach a boundary above its own base is inside one
+; cylinder, and this answers 0, which .have then reads as "not worth a drive
+; letter".
+; -----------------------------------------------------------------------------
+hd_cyl_trim:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [di+HDD_HEADS]
+    mul word [di+HDD_SPT]
+    mov cx, ax                  ; CX = sectors per cylinder (<= 16,065)
+    or cx, cx
+    jz .out                     ; a geometry with no cylinder: leave it alone
+    mov ax, [hd_fbase]          ; DX:AX = the extent's end, exclusive
+    mov dx, [hd_fbase+2]
+    add ax, [hd_fsecs]
+    adc dx, 0
+    cmp dx, cx
+    jae .out                    ; the quotient would not fit a word - hd_cyl_up's
+                                ; own guard, and only a corrupt table gets here
+    div cx                      ; DX = end mod sectors-per-cylinder
+    or dx, dx
+    jz .out                     ; already on a boundary: the common case
+    cmp dx, [hd_fsecs]
+    jae .none                   ; the whole extent is inside one cylinder
+    mov bx, [hd_fsecs]
+    sub bx, dx
+    mov [hd_fsecs], bx
+    jmp short .out
+.none:
+    mov word [hd_fsecs], 0
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
