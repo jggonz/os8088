@@ -573,6 +573,58 @@ implementation and not a stub — it takes SPEC.md §6.1's aligned single-store
 path itself and only falls through to the slow one. Both symbols resolve, so
 the zero looks like a measurement rather than a miss. Count `font_run_x`.
 
+#### 5.5.1 …and the drawing was never the problem
+
+The whole keystroke, as an ordered breakpoint trace — one printable typed at
+the end of a 701-character note, `[np_top]` = 14, 16×29 window, **52.3 ms**.
+A leg is billed to the label at its END (§6.5):
+
+| | | |
+|---|---|---|
+| `np_ins` | 4.6 ms | the insert itself |
+| pass 1's walk | 9.8 | 2 `np_rflush`, `[np_draw]` = 0, so this is pure layout |
+| the two margin fills | 1.8 | `gfx_fill` ×2 |
+| pass 2's walk | 15.2 | **32 `np_carets`** — one per character laid out |
+| **the glyphs** | **1.2** | one `font_run_x`, `[np_flo]` = 6 `[np_fhi]` = 7 — **two cells** |
+| the caret bar | 2.3 | one `gfx_vline` |
+| **the grow box** | **~12** | `wm_grow_paint`, 3 `gfx_frame`, ~18 fills and lines |
+| `np_sbcheck`, `np_toast` | ~1 | |
+
+**`np_rflush` already draws only what changed.** It diffs the row buffer
+against `[np_prow]` cell by cell, folds in the caret and the selection, and
+runs exactly `[np_flo]..[np_fhi]`. Two cells for one typed character, in one
+call, in 1.2 ms. Nobody needs to fix the drawing.
+
+**~25 ms of the 52 is laying the caret's row out TWICE** — 32 characters per
+pass at ~0.3 ms each — to discover that one character changed. That is the
+real cost, and §27.4's checkpoint and §27.11.1's seed test have already taken
+it from "the whole note" down to "one row": the row is the floor of the
+current design, not of the problem.
+
+**~12 ms is the grow box, and it is redrawn for nothing.** SPEC.md §27.2 made
+it conditional precisely because redrawing it on every keystroke flickers the
+resize handle — but the test is `[np_bandb] >= [np_bot] - 12`, a *row* overlap,
+and typing on the bottom visible row satisfies it every time. Which is where
+you type while filling a page. The thing that actually reaches the corner is
+the **right-margin fill**, which spans the band's full height at the last
+columns; the text run only reaches it if `[np_fhi]` is the last cell.
+
+**What the problem actually requires**, for the commonest keystroke there is —
+a printable appended at the end of the note, no wrap:
+
+- the row's cell count is known (`[np_rcols]`, and the row buffer holds it)
+- "does this character still fit" is one compare; "does the current word still
+  fit" is one backward scan to the nearest space, which §27.11.1's `np_ckword`
+  already does forward
+- nothing above the caret's row can have changed, and nothing below it exists
+- so: one glyph at column C, one caret bar, and the row buffer and signature
+  updated in place — **no walk at all**
+
+That is ~9 ms against today's 52, and it is a new fast path rather than a
+tightening of the old one: every optimisation so far has made the *walk*
+shorter, and this one is about not walking. The wrap question is the only
+thing standing in front of it, and it is answerable from the row buffer.
+
 ---
 
 ## 6. Measuring Note Pad, and the eight ways the apparatus lied
