@@ -18,6 +18,12 @@ claude                                  # ...or: codex
 
 ---
 
+> **This is an experimental project, written with AI.** Essentially all of the
+> code, and these docs, were produced by coding agents (Claude Code and Codex)
+> under human direction and review. It exists for hobbyists, retrocomputing
+> enthusiasts and nostalgia — not for production use, and not as a claim of
+> hand-written craftsmanship.
+
 A Macintosh System 1-style graphical operating system for the Intel 8086,
 written in real-mode assembly and booted from a floppy. 640x480, 16 colors,
 overlapping draggable windows, pull-down menus, closable multi-instance
@@ -403,8 +409,10 @@ ever does land, rotate it; deleting the line does not un-leak it.
 
 ## License
 
-MIT -- see [LICENSE](LICENSE). Everything here is hand-written; no third-party
-code is vendored into the OS, so the whole tree is covered by that one license.
+MIT -- see [LICENSE](LICENSE). No third-party code is vendored into the OS, so
+the whole tree is covered by that one license. As noted at the top, the code
+was written with AI coding agents; it is an experimental hobby project and, per
+the MIT text, comes with no warranty of any kind.
 
 The website in the sibling `os8088-web` repository is a separate matter: it
 vendors the v86 emulator (BSD-2-Clause), SeaBIOS and SeaVGABIOS binaries
