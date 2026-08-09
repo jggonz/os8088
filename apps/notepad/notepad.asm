@@ -3797,17 +3797,16 @@ np_ins:
     mov bx, [np_len]
     mov cx, bx
     sub cx, [np_cur]                ; CX = the bytes to the right of the caret
-    mov si, bx
-    dec si                          ; SI = the last live byte
-    mov di, si
-    inc di
     jcxz .place
-.mv:
-    mov al, [es:si]
-    mov [es:di], al
-    dec si
-    dec di
-    loop .mv
+    mov si, bx
+    dec si                          ; SI = the last live byte...
+    mov di, bx                      ; ...and DI one past it: the runs overlap
+    push ds                         ; and the gap opens UPWARD, so backwards
+    mov ds, [np_dseg]               ; (SPEC.md 27.12). movsb is DS:SI -> ES:DI
+    std                             ; and both ends are the note
+    rep movsb
+    cld                             ; SPEC.md 1: never leave DF set
+    pop ds
 .place:
     mov bx, [np_cur]
     mov [es:bx], dl
@@ -5545,15 +5544,16 @@ np_delspan:
     mov di, bx
     mov dx, [np_len]
     sub dx, si                  ; ...and how many of them there are
-.mv:
-    or dx, dx
-    jz .close
-    mov al, [es:si]
-    mov [es:di], al
-    inc si
-    inc di
-    dec dx
-    jmp short .mv
+    push cx                     ; the SPAN, which .close still needs
+    mov cx, dx
+    jcxz .nomv
+    push ds                     ; forwards here: the gap closes DOWNWARD, so
+    mov ds, [np_dseg]           ; DI trails SI (SPEC.md 27.12)
+    cld
+    rep movsb
+    pop ds
+.nomv:
+    pop cx
 .close:
     mov ax, [np_len]
     sub ax, cx
@@ -5598,15 +5598,17 @@ np_gaproom:
     add di, cx
     mov dx, [np_len]
     sub dx, bx                  ; the bytes to the right of the gap
-.mv:
-    or dx, dx
-    jz .done
-    mov al, [es:si]
-    mov [es:di], al
-    dec si
-    dec di
-    dec dx
-    jmp short .mv
+    push cx                     ; the GAP width, which .done still needs
+    mov cx, dx
+    jcxz .nomv
+    push ds                     ; backwards: np_ins's case with a gap wider
+    mov ds, [np_dseg]           ; than one byte (SPEC.md 27.12)
+    std
+    rep movsb
+    cld
+    pop ds
+.nomv:
+    pop cx
 .done:
     mov ax, [np_len]
     add ax, cx

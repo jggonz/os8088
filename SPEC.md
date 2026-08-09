@@ -12083,6 +12083,60 @@ backwards and running it forwards twice would cost twice as much. It steps
 match-to-match rather than character-to-character, so the pass is bounded by the
 number of matches rather than by the length of the note.
 
+### 27.12 The note is a flat buffer, and the move is `rep movsb`
+
+Typing at the FRONT of a long note was reported from the field as
+"impossible" and had never been measured — docs/NOTEPAD-NOTES.md §6.2's
+screen probe could not see a keystroke at all. Measured on a cycle-accurate
+4.77MHz 8088 with README.TXT open (15,428 characters), a keystroke at index 0
+cost **414 ms**, and it splits three ways:
+
+| | |
+|---|---|
+| the buffer move | **220 ms** |
+| `np_walk` pass 1, the layout | 114 ms |
+| `np_walk` pass 2, the drawing | 73 ms |
+
+So the flat buffer really was the largest part — **and the fix is not a gap
+buffer.** All three of Note Pad's moves were open-coded byte loops:
+`mov al,[es:si]` / `mov [es:di],al` / two `dec`s / `loop`, which measured
+**68 clocks a byte** on the target. `rep movsb` is ~17, and the three loops
+(`np_ins` opening a one-byte gap, `np_delspan` closing one, `np_gaproom`
+opening a wide one for paste, undo and replace) are now that instruction:
+**220 ms → 59 ms, and the keystroke 414 ms → 257 ms.**
+
+Three things it has to get right, and they are the reason the loops existed:
+
+- **Direction.** `np_ins` and `np_gaproom` open a gap *upward*, so the runs
+  overlap with the destination above the source and the move must go
+  backwards — `std`, SI at the last live byte. `np_delspan` closes one
+  downward and goes forwards. Getting this wrong smears one byte over the
+  rest of the note.
+- **`cld` afterwards, always.** §1's register discipline is not optional for
+  the direction flag: every ISR in the system does `cld` before its own
+  string ops precisely because it cannot know what it interrupted, and a
+  package that returns with DF set is a fault in somebody else's code.
+- **`movsb` is `DS:SI -> ES:DI`, and the note is neither.** The document is a
+  heap claim (§27.6) reached through `[np_dseg]`, and the byte loops used an
+  `es:` override for both ends. DS is pushed, pointed at the claim and popped
+  — the read of `[np_dseg]` itself goes through the package's own DS and so
+  has to happen before the load.
+
+**Why not a gap buffer** — the answer the field report invited, and
+ArtfulType (§46.9) has one to copy. It would take the 59 ms to nothing, and
+it would make the other 187 ms *worse*: the layout walk reads every character
+of every row it lays out, and a gap buffer puts `at_getb`'s
+`push es`/load/fetch/`pop es` on each of those reads. The measurement says
+the remaining cost of typing is the WALK, not the buffer, so the structure to
+change is the one §27.7.9 and docs/NOTEPAD-NOTES.md §1 are about.
+
+The move is verified rather than argued: the document claim is read back out
+of guest RAM and compared byte for byte against README.TXT with the session's
+edits applied on the host. A run of inserts, backspaces and undos — which is
+all three routines — leaves **0 differing bytes of 15,429**. A buffer move
+that got faster and quietly wrong is the worst available outcome, and neither
+the screen nor `[np_len]` can see a byte that landed in the wrong place.
+
 ## 28. apps/taskmgr — the Task Manager
 
 **A package in the root of every shipped floppy** (`TASKMGR.O88`) — the

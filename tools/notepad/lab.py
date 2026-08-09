@@ -62,7 +62,10 @@ PRESS_LABELS = ["np_vmove", "np_move", "np_measure", "np_redraw",
                 "np_redraw.out"] + PATHS
 
 TRACE_LABELS = PRESS_LABELS + ["np_seedck", "np_seedrow", "np_seedtail",
-                               "np_scrollto", "np_scrollpaint", "np_walk"]
+                               "np_scrollto", "np_scrollpaint", "np_walk",
+                               # the edit path, for a typing question
+                               "np_ins", "np_room", "np_urec_ins", "np_hmark",
+                               "np_delspan", "np_reconcile", "np_brkdraw"]
 
 
 def attach(args, want_len=None):
@@ -79,8 +82,7 @@ def cmd_boot(args):
     lab = Lab(args.addr)
     drive.open_readme(lab.m)
     out = os.path.join(ROOT, "build", "notepad-lab-opened.png")
-    drive.shot(out)
-    print("opened; %s" % out)
+    print("opened; %s" % (out if drive.shot(out) else "(no screenshot)"))
     lab.find_pkg(name=args.pkg.encode())
     n, diff = lab.verify(args.bin)
     print("package at 0x%04x, %d bytes, %d differ from %s"

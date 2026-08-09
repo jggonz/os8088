@@ -53,9 +53,50 @@ def start(image="build/npbench360.img", machine="os8088_5150_cga"):
     time.sleep(45)
 
 
-def shot(path):
-    subprocess.run(["python3", MARTY, ADDR, "shot", path, "--rendered"],
-                   check=True)
+def shot(path, timeout=60):
+    """A rendered screenshot. NOT check=True on purpose: rasterising a frame
+    can outrun os88marty.py's default socket timeout on a busy host, and a
+    convenience capture failing must not abort the run it was documenting."""
+    r = subprocess.run(["python3", MARTY, ADDR, "--timeout", str(timeout),
+                        "shot", path, "--rendered"], check=False)
+    return r.returncode == 0
+
+
+def tap(m, key, frames=120):
+    """One keystroke, and GUEST TIME TO DELIVER IT. Use this, not m.key().
+
+    A bare `key` followed by `advance(frames=...)` does not reliably run the
+    guest: measured from a machine left in MartyPC's latched BreakpointHit
+    state, the keystroke sat in the emulator's keyboard queue and the advance
+    returned having delivered nothing. `step(1)` first - the same thing
+    Tracer.collect does, which is why the tracer never showed this.
+
+    The failure mode is the nasty one: the key is QUEUED, not dropped, so it
+    arrives during some later advance and the measurement that inherits it
+    reports a keystroke nobody asked for. Three characters typed this way
+    turned up all at once on the fourth.
+    """
+    m.key(key)
+    m.step(1)
+    m.advance(frames=frames)
+
+
+def chord(m, mods, key, frames=120):
+    """A modified keystroke - chord(m, ["ControlLeft"], "KeyZ").
+
+    Each event needs guest time of its own: press, key, release with nothing
+    running in between puts four scancodes into the controller in the same
+    instant, and an XT delivers one per IRQ1.
+    """
+    for mod in mods:
+        m.key(mod, down=True, up=False)
+        m.step(1)
+        m.advance(frames=2)
+    tap(m, key, frames=frames)
+    for mod in reversed(mods):
+        m.key(mod, down=False, up=True)
+        m.step(1)
+        m.advance(frames=2)
 
 
 def goto(m, x, y):

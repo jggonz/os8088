@@ -321,29 +321,38 @@ one line", confirmed on the glass as well as in the numbers. It is now
 5.15–5.22 s and the view steps 5 → 4 → 3 → 2 → 1 → 0. An `Up` with nothing to
 do — caret already at the top of the note — went **4,956 ms to 145 ms**.
 
-### 5.2 Typing in the front or middle of a long note — "impossible"
+### 5.2 Typing in the front of a long note — MEASURED, and half fixed (SPEC.md §27.12)
 
-Reported as huge latency, with the observation that §27.3's visual break is
-correctly engaging, so it is not the drawing.
+Measured at last, with `tools/notepad`. A keystroke at index 0 of README.TXT
+(15,428 characters) was **414 ms**, and it is three things:
 
-**Not yet measured, and that is the first job.** The apparatus could not see it
-(§6.2). The standing hypothesis is the document being a **flat buffer**: an
-insert at the front `rep movsb`s everything after the caret, which for 15KB is
-roughly 30–55 ms depending on bytes or words — real, but not obviously
-"impossible", so something else is probably in there too and measuring first is
-what stops the wrong half being optimised.
+| | before | after |
+|---|---|---|
+| the buffer move | 220 ms | **59 ms** |
+| `np_walk` pass 1 — the layout | 114 ms | 114 ms |
+| `np_walk` pass 2 — the drawing | 73 ms | 73 ms |
+| **a keystroke at the front** | **414 ms** | **257 ms** |
 
-**The fix, when the measurement justifies it, is a gap buffer**, and
-ArtfulType already has one to copy (SPEC.md §46.9): a 20KB gap buffer in a heap
-claim, with `at_getb` showing the cost of the indirection — one
-`push es` / load / fetch / `pop es` per character read. Two runs with a gap at
-the caret makes insertion O(1) and pays a move only when the caret jumps, and
-then only for the distance jumped.
+**The standing hypothesis was right about where and wrong about why**, and
+the correction is the useful part. This entry used to estimate the flat
+buffer at "roughly 30–55 ms for 15KB" — that is what `rep movsb` would have
+cost, and the move was not `rep movsb`. All three of Note Pad's moves were
+open-coded byte loops at **68 clocks a byte** against a string move's ~17. So
+the buffer really was the single largest cost of typing, and the fix was one
+instruction in three places rather than a new data structure.
 
-**What was considered and argued against**: a separate small staging buffer
-(256 bytes, flushed when full). That is a gap buffer with an extra copy and a
-second place that has to agree where the text is — the gap gives the same O(1)
-typing with neither.
+**And a gap buffer is now the wrong answer, on this measurement.** It would
+take the remaining 59 ms to nothing and make the other 187 ms worse: the
+layout walk reads every character of every row, and ArtfulType's `at_getb`
+(§46.9) is a `push es`/load/fetch/`pop es` on each of those reads. What is
+left of a keystroke is the WALK. §1's row index and SPEC.md §27.7.9 are the
+structure to change; the document is not.
+
+Still open here: **the middle of a note is not the front and has not been
+measured.** The move is shorter (only the bytes after the caret) but the
+layout walk is seeded differently, and §27.3's visual break is in play. Drive
+it with `tools/notepad/lab.py trace` after scrolling in, and read §6.6 before
+believing the first number.
 
 ### 5.3 Bringing Note Pad to the front pauses ~half a second
 
@@ -467,6 +476,30 @@ number first:
   waited a fixed number of FRAMES and the slow build had presses still in
   flight. Read the state back and compare the runs where they agree — here
   presses 1..14 matched to 0.3%, which is what licensed comparing 15..19.
+
+### 6.6 An injected key is QUEUED, not delivered — and not always dropped
+
+`os88marty.py key` presses and releases in one call with **no guest time
+between them**, and the emulator's keyboard queue then needs the guest to
+actually run before int 09h sees anything. From a machine sitting in
+MartyPC's latched `BreakpointHit` state — which is where every `lab.py`
+command leaves it — a bare `key` followed by `advance(frames=...)` delivered
+**nothing**, and the same `advance` after a `step(1)` delivered it.
+
+**The failure mode is worse than losing the keystroke: it is kept.** Measured
+directly — three characters typed with the bad recipe all arrived at once
+during the *fourth* press's advance, so the run that inherits them reports a
+keystroke nobody asked for and a length that does not match the edits. That
+is a wrong number in the direction of looking plausible.
+
+`tools/notepad/drive.py` has `tap()` and `chord()` for this; use them rather
+than `m.key`. A modified keystroke needs guest time around *each* event as
+well — press, key, release with nothing running in between puts four
+scancodes into the controller in one instant, and an XT delivers one per
+IRQ1, so Ctrl+Z did nothing at all until each event got its own advance.
+
+`Tracer.collect` never showed any of this because it already does `step(1)`
+before every `advance`, for the unrelated reason in §6.5's second bullet.
 
 And one that is not the apparatus but cost a whole attempt: **a fix must be
 measured against the symptom it claims to fix.** §27.7.7 is correct, targets a

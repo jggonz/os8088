@@ -67,6 +67,10 @@ Written up in full as docs/NOTEPAD-NOTES.md §6; the short form:
 4. **A fixed warmup does not put two builds in the same state** when they
    differ in how long a keypress takes. Read the state back, and compare the
    runs only where they agree.
+5. **An injected key is queued, not delivered.** A bare `m.key()` followed by
+   `advance(frames=…)` can run no guest time at all, and the keystroke then
+   turns up during some *later* advance — so a run inherits a press nobody
+   asked for. Use `drive.tap()` / `drive.chord()`, which `step(1)` first.
 
 ## Files
 

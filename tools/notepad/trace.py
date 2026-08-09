@@ -45,8 +45,20 @@ class Tracer:
     def disarm(self):
         self.m.breakpoints([])
 
-    def collect(self, budget=DEFAULT_BUDGET, maxhits=600):
-        """[(label, cycles)] for every stop, in order, until nothing is hit."""
+    def collect(self, budget=DEFAULT_BUDGET, maxhits=600, stop_at=None):
+        """[(label, cycles)] for every stop, in order.
+
+        `stop_at` ENDS THE TRACE at that label, and one keystroke needs it.
+        Without it the collector runs until nothing is hit inside a budget -
+        and Note Pad's worker never stops: SPEC.md 27.7.3's background height
+        count wakes every NP_WTICKS ticks for as long as the debt lasts, so a
+        trace of one keypress ran on into the count and reported 26 seconds
+        made of 164.8 ms legs. That figure is the worker's SLEEP (3 ticks),
+        billed to the label at the end of it by trap 1 above.
+
+        np_redraw.out is the terminator for a keystroke: every dispatch site
+        ends there.
+        """
         hits = []
         while len(hits) < maxhits:
             self.m.step(1)                      # off the address we stopped AT
@@ -55,16 +67,22 @@ class Tracer:
                 break
             nm = self.byaddr.get(r["flat_ip"], "?%05x" % r["flat_ip"])
             hits.append((nm, r["cycles"]))
-            if nm.startswith("?"):
+            if nm.startswith("?") or (stop_at and nm == stop_at):
                 break
         return hits
 
-    def press(self, key, budget=DEFAULT_BUDGET, settle=60):
-        """Arm, inject one key, collect, disarm, settle. -> (t0, hits)."""
+    def press(self, key, budget=DEFAULT_BUDGET, settle=60,
+              stop_at="np_redraw.out"):
+        """Arm, inject one key, collect to the end of the dispatch, settle.
+
+        `settle` runs on with the breakpoints DISARMED, which is what lets the
+        worker get on with any debt the keystroke raised without any of it
+        landing in the keystroke's own figure.
+        """
         self.arm()
         t0 = self.m.status()["cycles"]
         self.m.key(key)
-        hits = self.collect(budget=budget)
+        hits = self.collect(budget=budget, stop_at=stop_at)
         self.disarm()
         self.m.advance(frames=settle)
         return t0, hits
