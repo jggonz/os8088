@@ -33,6 +33,15 @@ VM386SND := $(CURDIR)/vm/386-sound
 # The top of the range: a 486DX2/66 and a Pentium 133, both with an SB16.
 VM486 := $(CURDIR)/vm/486
 VMPENT := $(CURDIR)/vm/pentium
+# The two Frotz machines (SPEC.md 59.9). Both carry a sound card, because
+# @sound_effect is part of what is being tested, and both have the FULL 640KB:
+# a Z-machine story is RESIDENT (SPEC.md 59.4) and 256KB does not hold the
+# interesting ones. xt-z is the honest target - the machine this OS is for,
+# with a 720KB 3.5" DD drive for B: because 360KB does not hold a library.
+# 386-z is the comfortable one: the same code, two 1.44MB drives, and the
+# machine where Anchorhead and Bronze are worth trying.
+VMXTZ := $(CURDIR)/vm/xt-z
+VM386Z := $(CURDIR)/vm/386-z
 
 # VIDEO=cga|herc|vga forces the adapter instead of probing for it (SPEC.md
 # 39.1). The shipped images are always built without it, so they auto-detect;
@@ -182,6 +191,7 @@ KERNEL_INC := $(wildcard kernel/*.inc)
 .PHONY: all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
         bench field stackprobe trklog npbench clicktest marty comscan \
+        stories zdisk xt-z 386-z \
         checkdocs clean clean-marty distclean
 
 # `all` deliberately does NOT build anything under tests/ (see the bench block
@@ -733,6 +743,115 @@ $(BUILD)/assoctest.img: $(BUILD)/asstest.o88 $(BUILD)/test.ast tools/os88disk.py
 # of what --scramble exists to test.
 $(BUILD)/filetest-frag.img: $(BUILD)/filetest.o88 $(BUILD)/big.dat tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 --scramble $(BUILD)/filetest.o88 $(BUILD)/mines.o88 $(BUILD)/piano.o88 $(BUILD)/big.dat
+
+# =============================================================================
+# FROTZ and its story floppy (SPEC.md 59) - ON DEMAND: `make zdisk`
+# =============================================================================
+# Frotz does NOT ride the shipped apps disks. The 360KB one has about 100KB
+# free (tools/os88disk.py --verify says so) and the interpreter alone is most
+# of that, never mind a story; and a Z-machine with no story to play is a menu
+# item that disappoints. So it gets its own floppy, in all three geometries,
+# and `all` does not build any of them - the documented on-demand shape that
+# bench, trklog and npbench already use.
+#
+# NO STORY FILE IS COMMITTED TO THIS REPOSITORY. Every one of them is someone
+# else's work under someone else's copyright, so tools/getstories.py fetches
+# them into build/stories/ against a manifest of pinned SHA-256s and the disk
+# is built from there - the same decision build/big.dat made, for a stronger
+# reason. The manifest is limited to what the authors released freely, which
+# is why the Infocom titles are Mini-Zork I, both Samplers and Zork: The
+# Undiscovered Underground rather than Zork I-III and Planetfall.
+#
+# Adding your own: STORIES='path/to/ZORK1.DAT path/to/HHGG.DAT' puts them in
+# the disk's root beside the folders. They must already be valid 8.3 names -
+# os88disk.py has no long-name handling and fails hard rather than truncating.
+FROTZSRC := apps/frotz/frotz.asm apps/frotz/zbss.inc apps/frotz/zmem.inc \
+            apps/frotz/ztext.inc apps/frotz/zobj.inc apps/frotz/zdict.inc \
+            apps/frotz/zwin.inc apps/frotz/zwin6.inc apps/frotz/zpic.inc \
+            apps/frotz/zsnd.inc apps/frotz/zio.inc apps/frotz/zexec.inc
+
+$(BUILD)/frotz.bin: $(FROTZSRC) apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/frotz/ -o $@ apps/frotz/frotz.asm
+	@echo "frotz:  $(call FILESIZE,$@) bytes"
+
+$(BUILD)/frotz.o88: $(BUILD)/frotz.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/frotz.bin -o $@
+
+# The story cache. A stamp file rather than a directory, because make cannot
+# depend on "sixteen files in a directory" and a directory's mtime changes for
+# reasons that are not a fetch. getstories.py is idempotent and verifies every
+# hash on every run, so re-running it costs 0.4s and no network.
+STORYDIR := $(BUILD)/stories
+$(BUILD)/stories.stamp: tools/getstories.py | $(BUILD)
+	python3 tools/getstories.py -o $(STORYDIR)
+	@touch $@
+
+stories: $(BUILD)/stories.stamp
+
+# Which stories fit which floppy. These are chosen against the CLUSTER counts
+# os88disk.py reports, not against the byte totals: a 360KB and a 720KB disk
+# allocate in 1KB clusters and a 1.44MB one in 512B, so a 52,216-byte story
+# takes 51 clusters on the first two and 102 on the third. The whole library
+# is 2,713KB and no floppy holds it, so each geometry ships a subset and
+# os88disk.py refuses at build time if a list stops fitting - which is the
+# check, rather than a comment claiming it fits.
+#
+#   360KB   what a 256KB XT can also RUN: the v3 stories (SPEC.md 59.4)
+#   720KB   the xt-z disk
+#   1.44MB  the 386-z disk, plus a second library disk you swap in
+ZS_360  := INFOCOM:$(STORYDIR)/MINIZORK.Z3 CLASSIC:$(STORYDIR)/ADVENT.Z3 \
+           CLASSIC:$(STORYDIR)/ZORK285.Z5 CLASSIC:$(STORYDIR)/BALANCES.Z5
+ZS_720  := INFOCOM:$(STORYDIR)/MINIZORK.Z3 INFOCOM:$(STORYDIR)/ZTUU.Z5 \
+           CLASSIC:$(STORYDIR)/ADVENT.Z3 CLASSIC:$(STORYDIR)/ZORK285.Z5 \
+           MODERN:$(STORYDIR)/PHOTOPIA.Z5
+ZS_1440 := INFOCOM:$(STORYDIR)/MINIZORK.Z3 INFOCOM:$(STORYDIR)/SAMPLER1.Z3 \
+           INFOCOM:$(STORYDIR)/SAMPLER2.Z3 INFOCOM:$(STORYDIR)/ZTUU.Z5 \
+           CLASSIC:$(STORYDIR)/ADVENT.Z3 CLASSIC:$(STORYDIR)/ADVENT5.Z5 \
+           CLASSIC:$(STORYDIR)/ZORK285.Z5 CLASSIC:$(STORYDIR)/BALANCES.Z5 \
+           MODERN:$(STORYDIR)/PHOTOPIA.Z5 MODERN:$(STORYDIR)/905.Z5 \
+           MODERN:$(STORYDIR)/BEAR.Z5
+# Disk 2: the big ones, and it carries NO interpreter on purpose - it is a
+# library disk you swap into B: while Frotz is already running, and the 100
+# clusters a second copy would cost are 50KB of story.
+ZS_DISK2 := MODERN:$(STORYDIR)/ANCHOR.Z8 MODERN:$(STORYDIR)/BRONZE.Z8 \
+            MODERN:$(STORYDIR)/LOSTPIG.Z8 CLASSIC:$(STORYDIR)/CURSES.Z5
+
+STORIES ?=
+
+zdisk: $(BUILD)/zork.img $(BUILD)/zork720.img $(BUILD)/zork360.img \
+       $(BUILD)/zork2.img
+
+$(BUILD)/zcat360.txt: tools/getstories.py | $(BUILD)
+	python3 tools/getstories.py --catalog $@ MINIZORK.Z3 ADVENT.Z3 ZORK285.Z5 BALANCES.Z5
+$(BUILD)/zcat720.txt: tools/getstories.py | $(BUILD)
+	python3 tools/getstories.py --catalog $@ MINIZORK.Z3 ZTUU.Z5 ADVENT.Z3 ZORK285.Z5 PHOTOPIA.Z5
+$(BUILD)/zcat.txt: tools/getstories.py | $(BUILD)
+	python3 tools/getstories.py --catalog $@ MINIZORK.Z3 SAMPLER1.Z3 SAMPLER2.Z3 ZTUU.Z5 \
+		ADVENT.Z3 ADVENT5.Z5 ZORK285.Z5 BALANCES.Z5 PHOTOPIA.Z5 905.Z5 BEAR.Z5
+$(BUILD)/zcat2.txt: tools/getstories.py | $(BUILD)
+	python3 tools/getstories.py --catalog $@ ANCHOR.Z8 BRONZE.Z8 LOSTPIG.Z8 CURSES.Z5
+
+$(BUILD)/zork.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat.txt \
+                   tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/frotz.o88 $(BUILD)/zcat.txt $(ZS_1440) $(STORIES) \
+		--folder SAVES --folder ART
+
+$(BUILD)/zork720.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat720.txt \
+                      tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 \
+		$(BUILD)/frotz.o88 $(BUILD)/zcat720.txt $(ZS_720) $(STORIES) \
+		--folder SAVES
+
+$(BUILD)/zork360.img: $(BUILD)/frotz.o88 $(BUILD)/stories.stamp $(BUILD)/zcat360.txt \
+                      tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		$(BUILD)/frotz.o88 $(BUILD)/zcat360.txt $(ZS_360) $(STORIES) \
+		--folder SAVES
+
+$(BUILD)/zork2.img: $(BUILD)/stories.stamp $(BUILD)/zcat2.txt tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		$(BUILD)/zcat2.txt $(ZS_DISK2) --folder SAVES
 
 # --- the tracker log disk (ON DEMAND: `make trklog`) -------------------------
 # TRKLOG.O88 is apps/tracker built with -DTRKLOG, which is the ONLY difference:
@@ -1528,6 +1647,36 @@ xt-sound: $(IMG360) $(APPSIMG360)
 386-sound: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VM386SND)/86box.cfg
 	$(BOX) -P $(VM386SND) -N
+
+# The two FROTZ machines (SPEC.md 59.9), both with the Z-machine story floppy
+# in B: instead of the apps disk.
+#
+#   xt-z   An IBM XT at 4.77MHz with a Sound Blaster 2.0 and the FULL 640KB,
+#          booting the 360KB system floppy with a 720KB 3.5" DD story disk in
+#          B:. The 640KB is not a luxury: a story is RESIDENT (SPEC.md 59.4),
+#          and after the 92KB kernel that leaves about 549KB, which is what
+#          makes everything on the disk playable. The 3.5" DD drive is not an
+#          anachronism either - DOS 3.2 supported one on an XT, and 360KB does
+#          not hold a library.
+#
+#   386-z  The comfortable target the same code also has to be right on: a
+#          386 with an SB16 and TWO 1.44MB drives, so B: is the full library
+#          disk and `build/zork2.img` is the one you swap in for Anchorhead
+#          and Bronze. AT-class, so the first launch stops at the BIOS setup
+#          screen wanting a CMOS - pick EXIT FOR BOOT once and 86Box writes
+#          vm/386-z/nvr/ for every later boot.
+#
+# Both call $(UNPROTECT) for the reason every other 86Box target does: 86Box
+# rewrites its own config on exit and has twice re-added the wp:// prefix,
+# which makes every guest write fail as FERR_WPROT - and here that would be
+# every save game, reading as a Frotz bug rather than an emulator setting.
+xt-z: $(IMG360) $(BUILD)/zork720.img
+	@$(UNPROTECT) $(VMXTZ)/86box.cfg
+	$(BOX) -P $(VMXTZ) -N
+
+386-z: $(IMG) $(BUILD)/zork.img $(BUILD)/zork2.img
+	@$(UNPROTECT) $(VM386Z)/86box.cfg
+	$(BOX) -P $(VM386Z) -N
 
 # The MARTYPC DEBUGGER (docs/MARTYPC-DEBUG.md): a remote debug server bolted
 # into MartyPC's headless frontend, giving memory, registers, breakpoints,

@@ -27387,3 +27387,268 @@ same page:
   `DRVE_OK` included, means `DRVE_HW`, so the verb's old CF-only contract
   still holds unchanged. The two drivers that predate it set AL explicitly
   rather than leaking whatever their last compare loaded.
+
+## 59. Frotz — the fifteenth package (`apps/frotz/frotz.asm`)
+
+An interpreter for Infocom's Z-machine, windowed, with sound and pictures, and
+its own story floppy in drive B:. `docs/FROTZ-PLAN.md` is the design record and
+the reasoning; this section is what the code promises.
+
+**It is not a port of Frotz.** David Griffith's Frotz is C and this tree has no
+C toolchain by choice. This is an independent implementation of the *Z-Machine
+Standard 1.1* in 8086 assembly, named in the Frotz tradition the way `dfrotz`
+and `wfrotz` are, and the About box says exactly that. A program that borrows a
+name and does not say where it came from is a misattribution.
+
+Prefixes: `zf_` for the package's own state and UI, and one per module —
+`zm_` memory, `zt_` text, `zo_` objects, `zd_` dictionary, `zw_` windows,
+`zw6_` v6 windows, `zp_` pictures, `zs_` sound, `zi_` input and files,
+`zx_` execution.
+
+### 59.1 Modules
+
+One subject each, and none of them reaches into another's state. The two
+crossings that exist are named here rather than discovered: the UI task writes
+`[zf_req]`/`[zf_reqres]` and the input ring that the worker reads (§59.6), and
+`zexec.inc` reads the whole story-header cache because that *is* the machine's
+configuration.
+
+| file | owns |
+|---|---|
+| `frotz.asm` | the window, the menu bar, the callbacks, the worker's hiring |
+| `zbss.inc` | **every byte of bss**, because `OS88_BSS` takes no forward reference |
+| `zmem.inc` | story memory, the header, and every big-endian word |
+| `ztext.inc` | Z-string decoding, ZSCII, the four output streams |
+| `zobj.inc` | the object tree, attributes, properties |
+| `zdict.inc` | the dictionary and the tokeniser |
+| `zwin.inc` | the v1-v5/v7/v8 text window: wrap, scroll, status line |
+| `zwin6.inc` | v6: eight windows in pixel coordinates |
+| `zpic.inc` | `.PIX` and Infocom `.mg1` pictures |
+| `zsnd.inc` | `@sound_effect` |
+| `zio.inc` | the input ring, the request handshake, Quetzal saves |
+| `zexec.inc` | decode, dispatch, frames, and every opcode |
+
+`zbss.inc` holds the locations as `%define`s and not `equ`s on purpose: a
+`%define` expands at the use site, so a forward reference to `os88_image_end`
+is an ordinary one, while an `equ` would have to be evaluated before
+`OS88_IMAGE_END` has planted the label. A module that needs state the map did
+not anticipate takes it from its own `*_SLACK` range and from no other; a
+module that overruns its range raises `ZF_BSS_TOTAL` in the same edit, which is
+the review that arrangement exists to force.
+
+### 59.2 Versions
+
+All of v1–v8. The version number is not the thing that varies — three
+mechanisms are:
+
+| | v1–v3 | v4–v5, v7–v8 | v6 |
+|---|---|---|---|
+| packed address | `<<1` | `<<2` (v7 adds the offsets) | `<<2` + offsets |
+| status line | the interpreter draws it | the story writes an upper window | none |
+| windows | lower + a 1-line status | lower + an upper character grid | 8, in **pixels** |
+| pictures | no | no | yes |
+
+v8 is v5 with `<<3`. v7 is v5 with two offset words. Neither costs anything.
+
+**v6 is in scope by decision, and nothing shippable exercises it**: every v6
+game is Activision's, 300KB and up, and needs separate picture files. It is
+verified against a v6 story compiled by `inform -v6` and against synthesised
+`.mg1` fixtures, and that is a weaker guarantee than the rest of this section
+carries. Saying so is the point — §47 forbids claiming a fact you have not
+established.
+
+### 59.3 Addressing 512KB from 16-bit registers
+
+A story address is up to 20 bits. A claim hands back a base *segment*, so the
+byte at `A` is at `[zf_sseg] + (A >> 4) : A & 15`, and for a 20-bit `A` the
+shift is a 16-bit result — no 32-bit register anywhere, which §1 rule 1 does
+not allow in the first place.
+
+Two fast paths carry nearly all of it:
+
+- **`A < 65536` is one segment**, reached as `[zf_sseg:A]` with no arithmetic.
+  All of dynamic memory lives there by construction.
+- **The PC is a live `ES:SI`.** Instruction fetch is `lods`. `ES:SI` is
+  renormalised only when SI crosses 0x8000 — once per 32KB of straight-line
+  code.
+
+That second one is what makes the interpreter affordable and it costs a rule:
+**ES belongs to the story while the VM runs.** Every kernel call from inside
+the VM saves and restores it, and every `[es:bx+W_*]` read of the window record
+happens with ES put back to `KERNEL_SEG`.
+
+Z-machine words are **big-endian** and the 8086 is not. `zmem.inc` owns that
+conversion and nothing else forms a Z-machine word by hand.
+
+### 59.4 The story is resident, and Frotz refuses rather than pretends
+
+**There is no paging.** `int 13h` costs about 400ms on the target machine
+whatever it moves (`PERFORMANCE.md`), and decoding a single turn's text touches
+high memory hundreds of times: paging is not a slower design here, it is a
+broken one.
+
+So the size is checked **before any disk I/O**. `OSAPI_FILE_DLG`'s completion
+hands over `DX:CX` = the file's size from the directory entry; Frotz compares
+it against `OSAPI_MEM_AVAIL`'s largest free run and, when it does not fit, puts
+the reason on screen and stops. That is §47's refusal path, and it is a normal
+outcome on a small machine, not an error:
+
+```
+Anchorhead needs 508K and this machine has 149K free.
+```
+
+After the 92KB kernel a 640KB machine has about 549KB of heap and a 256KB one
+about 165KB — so the v3 stories run everywhere and the large v5/v8 ones need
+the bigger machine. `make xt` is a 256KB XT and is where the refusal is tested.
+
+### 59.5 Windows and text
+
+For v1–v5/v7/v8 the Standard's two windows are drawn into one os8088 window.
+The lower window word-wraps to the content width, pages with `[MORE]`, and
+keeps a **scrollback ring in a heap claim**, so the scroll bar is real and
+`PgUp`/`PgDn` work. Those two keys belong to the interpreter at all times and
+are taken before the input ring, so a story reading a character cannot swallow
+them.
+
+**Nothing repaints more than it changed.** A new line is an `OSAPI_GFX_SCROLL`
+plus one repainted row, never a window repaint — `PERFORMANCE.md` Part 5 is the
+standing budget and a change that reintroduces a full repaint is a regression
+against a documented number. `OSAPI_GFX_SCROLL` needs its x-range 8-pixel
+aligned and may refuse; the fallback is to repaint the band, not the window.
+
+Styles map onto what the three adapters actually have (§39.4), because there is
+one 8x8 font and no true bold:
+
+| style | VGA | Hercules / CGA |
+|---|---|---|
+| roman | black on white | the same |
+| reverse video | swapped | swapped |
+| bold | drawn twice, one pixel apart | reverse video |
+| italic | underlined | underlined |
+| fixed pitch | no change — the font already is | |
+
+`@set_colour` is honoured on VGA and ignored where `OSAPI_VIDEO` answers 1 bit
+per pixel: every colour there rounds to black, white or a dither, so a story
+that colours by meaning would become less readable, not more.
+
+### 59.6 Input, and how a worker saves a game
+
+**The VM is a worker task** (§20.6). A turn is tens of thousands of
+instructions — seconds on the target machine — and running it in a key callback
+would hold the gfx lock for those seconds and freeze the clock, the mouse and
+every other window. The worker is hired from the first `W_PAINT`, because the
+loader publishes the instance only after the entry proc returns.
+
+Two worker rules shape the rest: the stack is 256 bytes (`SCH_STACK`, shared
+with the tick, mouse and sound IRQs), so the VM keeps its own stack in a claim
+and nothing recurses; and **a worker may not touch a file slot,
+`OSAPI_FILE_DLG` or `OSAPI_MEM_*`**.
+
+Every claim is therefore made before the worker exists, on the UI task, by
+`zi_load`: the story, the Z-stack, the save staging buffer, the undo snapshot
+and the scrollback. The worker never allocates.
+
+Files cannot be pre-arranged, because `@save` and `@restore` are opcodes the
+*story* executes. The handshake:
+
+1. The worker stages the Quetzal image into the staging claim — a memory copy,
+   which it may do — sets `[zf_req]`, prints `Press RETURN to choose a save
+   file.` and waits on the ordinary input path.
+2. The user presses RETURN. That is a **key callback, on the UI task**, which
+   sees `[zf_req]` and raises `OSAPI_FILE_DLG`.
+3. The dialog's completion proc — the UI task again — writes the file, sets
+   `[zf_reqres]`, and clears `[zf_req]` last, because the worker is watching it.
+4. The worker wakes and takes the branch `@save` owes the story.
+
+It costs one keypress, which is one fewer than the Infocom interpreters asked
+for, and every step happens on the task that is allowed to do it.
+
+The key ring is a byte ring with separate head and tail cursors. It needs no
+critical section: each side writes exactly one of the two cursors, and a byte
+write is atomic against an interrupt on an 8086.
+
+### 59.7 Pictures
+
+Two sources, one drawing path, and `@picture_data` answers truthfully when
+there is no picture file at all — the Standard requires the "no pictures"
+answer and stories handle it, so a v6 story with its art missing degrades
+instead of failing.
+
+**`.PIX`** is native and built on the host by `tools/os88pix.py` from PNG,
+JPEG or a Blorb's picture chunks. The pixels are already in the packed 4bpp
+layout `OSAPI_GFX_BLIT4` wants — two per byte, high nibble leftmost — so
+drawing one is a seek and a single blit rather than a decoder in the guest.
+Every picture block is 16-byte aligned so it can be addressed as a segment with
+a zero offset. `apps/frotz/zpic.inc` carries the byte-level layout and is the
+authority on it; the host tool is written to match.
+
+**`.mg1`/`.mg2`** are Infocom's own, as shipped beside the v6 games.
+
+Blorb (`FORM....IFRS`) is handled entirely on the host: `tools/getstories.py`
+takes the `ZCOD` chunk and `tools/os88pix.py` takes the picture chunks. That is
+why Bronze is on the disk — its Blorb carries a JPEG cover, so the picture path
+is exercised by a game that legally ships, and its Z-code drops from 492KB to
+359KB on the way, which is the difference between fitting a 640KB machine and
+not.
+
+### 59.8 Sound
+
+`@sound_effect` maps onto what `OSAPI_SND_CAPS` says the machine has, never
+onto an assumption. Effects 1 and 2 — the high beep and the low boop every v3
+game with sound uses — work on the floor machine through `OSAPI_SND_TONE`;
+with an AdLib or a Sound Blaster present, sampled effects are approximated
+through the FM slot. A sound that cannot be rendered gets the nearest tone; a
+sound number that does not exist gets silence. Both are normal.
+
+Sound is asked for from the worker, which the SDK's worker-safe list does not
+name. `apps/arkanoid/arkanoid.asm` already does this and documents why it is
+safe — the tone self-expires and the grant is attributed to the asking task —
+and Frotz follows it rather than inventing a second answer.
+
+### 59.9 The disks and the machines
+
+`FROTZ.O88` plus stories, in folders, on its own floppy. It does **not** ride
+the shipped apps disks: the 360KB one has about 100KB free and the interpreter
+alone is most of it.
+
+```
+B:\  FROTZ.O88     CATALOG.TXT
+     INFOCOM\  CLASSIC\  MODERN\  ART\  SAVES\
+```
+
+**No story file is committed to this repository.** `tools/getstories.py` holds
+a manifest of URL, SHA-256 and size and fetches into `build/stories/`, which is
+ignored outright — the decision `build/big.dat` already made, for a stronger
+reason: these are other people's games. The manifest carries only what its
+authors released freely, so the Infocom titles are Mini-Zork I, both Samplers
+and *Zork: The Undiscovered Underground* rather than Zork I–III, *The
+Hitchhiker's Guide to the Galaxy*, *Planetfall* and *Enchanter*, which are
+Activision's and still sold. `STORIES=` puts your own copies on the disk.
+
+The library is larger than any floppy, so each geometry ships a subset chosen
+against **cluster** counts and checked by `os88disk.py` at build time — a list
+that stops fitting fails the build rather than a comment claiming it fits.
+`build/zork2.img` is a second 1.44MB library disk carrying the large modern
+games, with no interpreter on it on purpose: it is swapped into B: while Frotz
+is already running, and the 50KB a second copy would cost is 50KB of story.
+
+Two machines, both with a sound card and both with the full 640KB, because a
+story is resident:
+
+| target | machine | drives |
+|---|---|---|
+| `make xt-z` | IBM XT, 8088 @ 4.77MHz, SB 2.0, 640KB | 360KB A:, **720KB** B: |
+| `make 386-z` | 386DX @ 25MHz, SB16 | two 1.44MB |
+
+The 3.5" DD drive on the XT is not an anachronism — DOS 3.2 supported one —
+and 360KB does not hold a library. 86Box accepts it as `fdd_02_type = 35_2dd`,
+checked the way §19's other machine settings were: launch on a throwaway copy
+of the config, terminate, and read the file back.
+
+### 59.10 Saves
+
+**Quetzal** (`FORM....IFZS`), with `CMem` compression of dynamic memory against
+the original story image. A raw dump would have been less work and Quetzal is
+worth the difference for one reason: a save written here opens in Frotz on a
+laptop, and one written there opens here. The disk has a `SAVES` folder and the
+file dialog starts in it.
