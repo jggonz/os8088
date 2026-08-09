@@ -560,10 +560,14 @@ tlog_rate_key:
     pop ax
     ret
 
-tlog_xrates:    dw 4000, 5500, 11000
-tlog_xrstr:     dw tlog_s_r4, tlog_s_r55, tlog_s_r11
+tlog_xrates:    dw 5500, 4000, 11000    ; 5,500 is XT mode's own rate and the
+                                        ; start, so the FIRST press is the one
+                                        ; worth testing: PERFORMANCE.md Set 20
+                                        ; makes the rate the only large lever
+                                        ; on the mixer's 45%
+tlog_xrstr:     dw tlog_s_r55, tlog_s_r4, tlog_s_r11
 tlog_xrate:     dw TRK_RATE_XT      ; the live one, and the index that names it
-tlog_xr:        db 1                ; - in the IMAGE and not in bss, because
+tlog_xr:        db 0                ; - in the IMAGE and not in bss, because
                                     ; trk_stream_open reads the rate and a
                                     ; package's bss arrives zeroed, which here
                                     ; would be a request for 0 Hz

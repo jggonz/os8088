@@ -1140,6 +1140,63 @@ mp_mixch:
 ; take mp_mixch's shared advance. BP carries the frac step as a register -
 ; never a memory base, so SS != DS cannot bite.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; MIXSAMP - one channel-sample of the XT mixer (PERFORMANCE.md Set 20)
+;
+;   %1 = 0  the STORE pass: this is the first live channel, so it writes
+;   %1 = 1  the ADD pass: every channel after it accumulates
+;   %2      this copy's PATCHED step immediate - a LOCAL label
+;
+; in:  ES:SI = the sample, DS:BX = the volume-table slice (xlat), DI = the
+;      output, DX = the fractional position, BP = the fractional step.
+;      Advances SI, DI and DX; leaves CX alone, so the caller owns the loop.
+;
+; WHY THE STEP IS AN IMMEDIATE AND NOT A MEMORY OPERAND. On an 8088 the bus is
+; EIGHT BITS: every byte fetched or accessed is 4 clocks and they serialise, so
+; what a loop costs is its BYTE TRAFFIC - instruction bytes and data bytes
+; alike - and not its instruction count. This body was 15 instruction bytes and
+; 6 data bytes = 21 = 84 clocks, and 84 x 4 channels x 5,500 Hz is 38.7% of a
+; 4.77MHz machine, which is what PERFORMANCE.md Set 20 profiled. The integer
+; step is LOOP-INVARIANT and cost 2 of those data bytes as
+; `adc si, [mp_cstepi]`; as an immediate it is the same four instruction bytes
+; and no read at all.
+;
+; mp_stepi_set patches every copy, once per channel per chunk - thousands of
+; samples before the prefetch queue could be holding a stale one, which is the
+; only thing that makes self-modifying code delicate on this CPU.
+; -----------------------------------------------------------------------------
+%macro MIXSAMP 2
+    mov al, [es:si]
+    xlat
+%if %1 == 0
+    add al, 0x80
+    mov [di], al
+%else
+    add [di], al
+%endif
+    inc di
+    add dx, bp
+    db 0x81, 0xD6                   ; adc si, imm16 - the immediate is DATA,
+%2: dw 0                            ; patched by mp_stepi_set
+%endmacro
+
+; -----------------------------------------------------------------------------
+; mp_stepi_set - AX = the integer step, into every MIXSAMP copy
+;                Preserves every register.
+; -----------------------------------------------------------------------------
+mp_stepi_set:                       ; STRAIGHT LINE, not a table walk: this runs
+    mov [mp_mixch_xt.ps0], ax       ; once per channel per chunk and the loop it
+    mov [mp_mixch_xt.ps1], ax       ; replaces profiled at 3.1% of the whole
+    mov [mp_mixch_xt.ps2], ax       ; machine. `mov [imm16], ax` is the
+    mov [mp_mixch_xt.ps3], ax       ; accumulator-direct form - 3 instruction
+    mov [mp_mixch_xt.ps4], ax       ; bytes and a 2-byte write, 20 clocks - so
+    mov [mp_mixch_xt.pa0], ax       ; ten of them are 200 against the loop's
+    mov [mp_mixch_xt.pa1], ax       ; ~480, and it touches no register but AX,
+    mov [mp_mixch_xt.pa2], ax       ; so the three pushes go too
+    mov [mp_mixch_xt.pa3], ax
+    mov [mp_mixch_xt.pa4], ax
+    ret
+
 mp_mixch_xt:
     mov si, [mp_crec]
     cmp byte [si+MP_ACT], 0
@@ -1151,7 +1208,8 @@ mp_mixch_xt:
     mov [mp_cloopl], ax
     mov ax, [si+MP_STEPI]
     mov [mp_cstepi], ax
-    mov ax, [si+MP_STEPF]
+    call mp_stepi_set           ; ...and into every MIXSAMP copy, once per
+    mov ax, [si+MP_STEPF]       ; channel rather than once per sample
     mov [mp_cstepf], ax
     mov bl, [mp_curc]
     xor bh, bh
@@ -1194,25 +1252,40 @@ mp_mixch_xt:
     sub cx, ax
     xchg cx, ax                 ; CX = run length, AX = remaining
     push ax
+    mov ax, cx                  ; the run is walked FOUR samples at a time and
+    shr cx, 1                   ; then the 0..3 that are left, which amortises
+    shr cx, 1                   ; `loop` from 2 bytes a sample to half of one
+    and ax, 3                   ; (PERFORMANCE.md Set 20: on an 8-bit bus the
+    mov [mp_crem], ax           ; byte count IS the cost)
     cmp byte [mp_first], 0
-    je .addl
+    je .addq
+    jcxz .strem
+.stq:
+    MIXSAMP 0, .ps0           ; store pass: out = 128 + vt[b]
+    MIXSAMP 0, .ps1
+    MIXSAMP 0, .ps2
+    MIXSAMP 0, .ps3
+    loop .stq
+.strem:
+    mov cx, [mp_crem]
+    jcxz .rejoin
 .stl:
-    mov al, [es:si]             ; store pass: out = 128 + vt[b]
-    xlat
-    add al, 0x80
-    mov [di], al
-    inc di
-    add dx, bp
-    adc si, [mp_cstepi]
+    MIXSAMP 0, .ps4
     loop .stl
     jmp .rejoin
+.addq:
+    jcxz .addrem
+.addq1:
+    MIXSAMP 1, .pa0           ; add pass: out += vt[b]
+    MIXSAMP 1, .pa1
+    MIXSAMP 1, .pa2
+    MIXSAMP 1, .pa3
+    loop .addq1
+.addrem:
+    mov cx, [mp_crem]
+    jcxz .rejoin
 .addl:
-    mov al, [es:si]             ; add pass: out += vt[b]
-    xlat
-    add [di], al
-    inc di
-    add dx, bp
-    adc si, [mp_cstepi]
+    MIXSAMP 1, .pa4
     loop .addl
 .rejoin:
     pop cx                      ; CX = remaining
@@ -1235,8 +1308,9 @@ mp_mixch_xt:
     inc di
     add dx, bp
     adc si, [mp_cstepi]
-    loop .runs                  ; one sample consumed: recut the run
-    jmp .fin
+    dec cx                      ; one sample consumed: recut the run. NOT
+    jz .fin                     ; `loop` - the unrolled bodies put .runs past
+    jmp .runs                   ; its 128-byte reach
 .wrap:
     mov ax, [mp_cloopl]
     or ax, ax
@@ -2237,6 +2311,7 @@ mpe_song:   db 'Bad song data', 0
     TRKW mp_climit                  ; mixer scratch: position limit
     TRKW mp_cloopl                  ;   loop length
     TRKW mp_cstepi                  ;   step int
+    TRKW mp_crem                    ;   samples left after the 4-at-a-time run
     TRKW mp_cstepf                  ;   step fraction
     TRKW mp_wper                    ; row decode scratch: period
     TRKB mp_wsmp                    ;   sample
