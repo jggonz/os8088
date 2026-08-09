@@ -11478,6 +11478,39 @@ screen) still fills the content whole first — there the fill is erasing
 everything below the text as well, and a full repaint is not what a keystroke
 pays for.
 
+#### 27.2.1 The grow box is not redrawn by a keystroke, because nothing erased it
+
+The band path does not call `OSAPI_WM_GROW` at all. It was unconditional once
+and it had to be — the band fill spanned the full content width, so any dirty
+row level with the box erased it — and when the fill went (§27.2) it became a
+row test, `[np_bandb]` against `np_bot - 12`. **That test is satisfied on every
+keystroke typed on the bottom visible row**, which is exactly where the caret
+sits while a page is being filled. Measured on a cycle-accurate 4.77MHz 8088:
+`wm_grow_paint`, three `gfx_frame`s and eighteen fills and lines — **~12 ms of
+a 52 ms keystroke**, plus the flicker in the corner that making it conditional
+was meant to stop.
+
+**`np_bounds` already reserves that corner in both dimensions**, and the row
+test only ever asked about one of them:
+
+- columns — `[np_rgt]` is `[np_sbr] - NP_SB_W`, and the box's left edge is
+  `[np_sbr] - 12`, so the text runs and both margin fills stop **two pixels
+  short** of it;
+- rows — `[np_sbb]` is `[np_bot] - NP_GROW`, one row above the box's top, and
+  the comment there has said so since the bar was written.
+
+So nothing on the band path can reach it. Every other `OSAPI_WM_GROW` in the
+module follows something that genuinely does — a full-content `gfx_fill`
+(`np_repaint`, the toast), or a band scroll that drags the corner with it
+(§27.3's break, §27.7.2's blit) — and all of those stay.
+
+Verified by capturing the box itself, which is the one thing
+`tools/notepad/pixcheck.py` cannot see: its crop ends at `[np_rgt]`, two pixels
+short by construction. 740 characters typed on the bottom row, then the corner
+diffed against a forced full repaint: **0 differing bytes of 676**.
+
+`[np_bandb]` went with it — the test was its only reader.
+
 ### 27.3 The visual break — typing in FRONT of text without reflowing it
 
 Inserting a character at the front of a note moves every character after it,

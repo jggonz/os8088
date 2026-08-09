@@ -587,7 +587,7 @@ A leg is billed to the label at its END (§6.5):
 | pass 2's walk | 15.2 | **32 `np_carets`** — one per character laid out |
 | **the glyphs** | **1.2** | one `font_run_x`, `[np_flo]` = 6 `[np_fhi]` = 7 — **two cells** |
 | the caret bar | 2.3 | one `gfx_vline` |
-| **the grow box** | **~12** | `wm_grow_paint`, 3 `gfx_frame`, ~18 fills and lines |
+| ~~the grow box~~ | ~~**~12**~~ | **FIXED — SPEC.md §27.2.1**, it was erasing nothing |
 | `np_sbcheck`, `np_toast` | ~1 | |
 
 **`np_rflush` already draws only what changed.** It diffs the row buffer
@@ -601,13 +601,12 @@ real cost, and §27.4's checkpoint and §27.11.1's seed test have already taken
 it from "the whole note" down to "one row": the row is the floor of the
 current design, not of the problem.
 
-**~12 ms is the grow box, and it is redrawn for nothing.** SPEC.md §27.2 made
-it conditional precisely because redrawing it on every keystroke flickers the
-resize handle — but the test is `[np_bandb] >= [np_bot] - 12`, a *row* overlap,
-and typing on the bottom visible row satisfies it every time. Which is where
-you type while filling a page. The thing that actually reaches the corner is
-the **right-margin fill**, which spans the band's full height at the last
-columns; the text run only reaches it if `[np_fhi]` is the last cell.
+**~12 ms was the grow box, redrawn for nothing — FIXED (SPEC.md §27.2.1).**
+The test was a *row* overlap and `np_bounds` reserves that corner in **both**
+dimensions: the text and both margin fills stop two pixels short of its left
+edge, and the scroll bar stops one row above its top. Nothing on the band path
+could reach it. Keystroke **37–40 ms → 25.1 ms**, `gfx_fill` 21.2 → 3.0, and
+the corner byte-identical over 740 keystrokes.
 
 **What the problem actually requires**, for the commonest keystroke there is —
 a printable appended at the end of the note, no wrap:

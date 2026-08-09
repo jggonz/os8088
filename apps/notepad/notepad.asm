@@ -5224,7 +5224,6 @@ np_redraw:
     shl dx, 1
     add dx, [np_ty]
     add dx, 7
-    mov [np_bandb], dx              ; ...banked for the grow-box test below
     ; The band fill is GONE. It used to erase dr0..dr1 whole and pass 2 then
     ; lettered it, which is the erase-and-letter pair - and on a 4.77MHz 8088
     ; that leaves the line blank for several display frames, so every keystroke
@@ -5272,26 +5271,25 @@ np_redraw:
     call np_walk
     mov byte [np_clip], 0
 
-    ; The grow box is redrawn only if this redraw could have touched it, and
-    ; that test is new. It used to be unconditional, and it HAD to be: the band
-    ; fill spanned the full content width, so any dirty row level with the box
-    ; erased it - and there was no cheap way to know which. It is 13x13 at
-    ; (np_rgt-12, np_bot-12), the bottom-right corner of the content, and the
-    ; only things that reach it now are the right-margin fill and the last text
-    ; row, both bounded by the dirty band's rows. So one comparison answers it.
+    ; THE GROW BOX IS NOT REDRAWN HERE AT ALL, because nothing on this path
+    ; can reach it (SPEC.md 27.2.1). It was unconditional once, and it HAD to
+    ; be: the band fill spanned the full content width, so any dirty row level
+    ; with the box erased it. Then it became a row test - [np_bandb] against
+    ; np_bot-12 - and that was still wrong in the expensive direction, because
+    ; typing on the BOTTOM VISIBLE ROW satisfies it on every keystroke, which
+    ; is exactly where the caret sits while a page is being filled. Measured:
+    ; wm_grow_paint plus three gfx_frames and eighteen fills and lines, ~12 ms
+    ; of a 52 ms keystroke - and the flicker in the corner that making it
+    ; conditional was supposed to stop.
     ;
-    ; Unconditional, it redrew the box on EVERY KEYSTROKE - and wm_grow_paint
-    ; fills the square before it frames it, which is the erase-and-letter flash
-    ; all over again in one 13x13 corner. Typing anywhere in the note made the
-    ; resize handle flicker, which is exactly what a user saw once the rows
-    ; themselves had stopped.
-    mov ax, [np_bot]
-    sub ax, 12
-    cmp [np_bandb], ax
-    jb .nogrow
-    mov bx, si
-    call OSAPI_WM_GROW
-.nogrow:
+    ; The box is 13x13 at (np_sbr-12, np_bot-12) and np_bounds reserves that
+    ; corner in BOTH dimensions: [np_rgt] is np_sbr-NP_SB_W, two pixels short
+    ; of its left edge, and [np_sbb] is np_bot-NP_GROW, one row above its top.
+    ; So the text runs, the two margin fills and the scroll bar all stop clear
+    ; of it. The row test was reading the band's rows and never asked about its
+    ; COLUMNS. Every other OSAPI_WM_GROW in this module follows something that
+    ; genuinely reaches the corner - a full-content fill, or a band scroll that
+    ; drags it - and those all stay.
     call np_sbcheck                 ; a note that gained or lost a row moves
     call np_toast                   ; the thumb, and nothing else redraws it
                                     ; on this path
@@ -10105,8 +10103,6 @@ np_flo      equ os88_image_end + 425    ; word } np_rflush's span,
 np_fhi      equ os88_image_end + 427    ; word } 0xFFFF = empty
 np_fcc      equ os88_image_end + 429    ; word: the caret's column
                                        ; on the row being flushed
-np_bandb    equ os88_image_end + 431    ; word: the dirty band's last
-                                       ; row, for the grow-box test
 
 ; --- the document, and the heap it lives in (SPEC.md 27.6/50.3) ----------------
 ; The text itself is NOT in this package's region. np_entry claims NP_KB0 for
