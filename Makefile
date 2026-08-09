@@ -311,7 +311,13 @@ $(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) $(FONTINC) tools/os
 # above: -w+error would turn its %warning into an error, and relaxing that
 # for every build would silence a %warning somebody meant as an alarm.
 	@python3 tools/kernsize.py $(VIDDEF) || true
-ifneq ($(VIDDEF),)
+# ...and this tests the KNOBS, not $(VIDDEF). It used to test VIDDEF, which was
+# empty on a plain build until the kern_small/kern_big split started putting
+# -DKERN_BIG in it unconditionally - after which the alarm fired on every
+# build, with every knob it names blank. A warning that is always on is a
+# warning nobody reads. The variant is not a knob: it is which PRODUCT this is,
+# `make small` builds it into a directory of its own, and it forces no probe.
+ifneq ($(VIDEO)$(HERCSEG)$(RTC)$(DISKCNT)$(DISKAL)$(BOOTDIAG)$(FLOPPY1)$(DIRW1)$(REDRAWFULL)$(SNDSNIFF)$(RAMKB)$(FONT),)
 	@echo "  *** VIDEO=$(VIDEO) RTC=$(RTC) DISKCNT=$(DISKCNT) FLOPPY1=$(FLOPPY1) FONT=$(FONT): ***"
 	@echo "  *** kernel is                                                  ***"
 	@echo "  *** BUILT WITH A KNOB - a forced probe and/or disk counters.   ***"

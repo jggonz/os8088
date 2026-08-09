@@ -252,10 +252,24 @@ gate is not optional — the two obvious ones are both wrong:
 So the gate is the **menu bar's white field**, which neither the POST nor the
 splash has, sampled through `vram` on the 1bpp cards and `fbuf` on VGA —
 because `vram` is impossible on VGA and is the *exact* answer on the other two,
-where `fbuf` comes back cropped to a display aperture (720x350 against a
-720x348 framebuffer, and 16 columns short of it). Measured boots: CGA 17.5s,
-Hercules 16.1s, VGA 7.1s, against the 26-second fixed sleep every script used
-to carry.
+where `fbuf` comes back cropped to a display aperture. **On a Hercules that
+crop is `(−16, +2)`: guest (x, y) renders at `fbuf` (x−16, y+2)**, over a
+720x350 window on a 720x348 framebuffer. Measured, not assumed — `fbuf` scanned
+against `vram` over one desktop agrees on **2,280 of 2,280** sampled pixels at
+that offset and at no other. The horizontal half of it has been written down
+here for a while; the vertical half had not, and a pixel gate that compares
+`fbuf` against anything else needs both. Measured boots: CGA 17.5s, Hercules
+16.1s, VGA 7.1s, against the 26-second fixed sleep every script used to carry.
+
+**`card=` is not optional on a two-card machine.** `settle`, `launch`,
+`_sample` and `_bar_up` ask `video` with no card by default, which answers
+MartyPC's **primary** — and os8088 need not be driving it: a `make VIDEO=herc`
+kernel on `os8088_5150_both_gla` draws on the Hercules while the config's
+first `[[machine.video]]` is the CGA. The boot gate then watches a card
+nothing is drawing on and times out after 120 seconds saying *"this machine
+never finished booting"*, about a machine that booted fine. Pass
+`launch(..., card=1)`. `advance(frames=…)` takes it too, and there it decides
+which card's 50Hz or 60Hz is being counted.
 
 This paragraph used to say `fbuf` was **dead** on Hercules — that the MDA does
 not rasterise graphics mode at all — and that is not true at the pinned build:

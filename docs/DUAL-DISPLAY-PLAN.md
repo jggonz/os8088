@@ -664,7 +664,9 @@ at B8000* (SPEC.md §39.6). Order stops deciding anything.
 | `park` command | point the CPU at an address with the queue flushed |
 | `os8088_5150_both_gla` | the GLaBIOS twin of the two-card 5150, so this is testable without the IBM ROM |
 | `os8088_5150_herc_gla` | single-card Hercules control |
-| `tests/dualcheck.py` | the gate |
+| `card=` on `settle`/`launch`/`_sample`/`_bar_up` | which card the BOOT GATE watches — os8088 need not be driving MartyPC's primary (§11.3) |
+| `tests/dualcheck.py` | the gate on the EMULATOR: two cards that are genuinely two |
+| `tests/dispcheck.py` | the gate on the KERNEL: did it bring the second one up? (§11.3) |
 
 **`park` is there because `setreg ip` cannot be made to work.** `Register16::PC`
 is settable, and setting it is not enough: `pc` is the *fetch* pointer and the
@@ -757,7 +759,7 @@ on its own.**
 | 0b | ~~Fix `vid_cga_alias` (§9.3)~~ **DONE** — SPEC.md §39.11.1 | `vid_avail = 0x06` both ways round, `0x02` for a Hercules alone, and still `0x02` for an aliasing one |
 | 1 | Per-display context block + swap; `[vid_ndisp]` = 1 everywhere | **byte-identical** to today on VGA, Hercules and CGA |
 | 2 | ~~`vid_cw`/`vid_ch` split at the ~24 renderer sites~~ **DONE** — SPEC.md §39.2.1 | 22 sites; **0 differing pixels** on CGA, Hercules and VGA, twice |
-| 3 | Bring the second card up at boot; no desktop on it yet | both monitors lit, primary unchanged |
+| 3 | ~~Bring the second card up at boot; no desktop on it yet~~ **DONE** — SPEC.md §39.13 | both cards scanning our raster, primary framebuffer **byte-identical**, both directions |
 | 4 | `GFXDISP` at the four rect entries + font/icon/scroll/save/line | secondary shows a desktop dither |
 | 5 | Cursor crossing; mouse clamp to the union | pointer moves between monitors |
 | 6 | `wm_fit`, `ui_drag`, `wm_paint_all` per display | a window drags across the seam |
@@ -765,6 +767,60 @@ on its own.**
 | 6c | `fsx` on one display, others blanked; `vid_unblank` | Missile Command and Paint unchanged; the dark monitor comes back with a repainted desktop, never a stale one |
 | 7 | Control Panel mode + layout; `VM` key | survives a reboot; refuses on a single-card machine |
 | 8 | Field run on the 5150 | the three things QEMU cannot show |
+
+### 11.3 Step 3, as built
+
+`vid_disp_init` in `vidsel.inc`, called from `kmain` after `vid_probe_avail`,
+`KERN_BIG` only (SPEC.md §39.13). **Cost: `.text` +83, no rung crossed** — 298
+bytes left in the image rung, against 381 before — and `kern_small` measures
+**+0**, which is what the split is for.
+
+It cost 83 bytes because it *reuses* the boot path rather than adding one. The
+secondary is brought up by making it momentarily the live geometry, so
+`vid_apply` derives its eighteen words and `vid_setmode` programmes the right
+card — both by construction, neither told which — and the whole routine is a
+kind swap, two `vid_apply`s, one `vid_setmode`, two captures and an origin.
+
+**The gate is stronger than "both monitors lit", because black is not
+evidence.** `vid_setmode` clears the framebuffer, so a correctly programmed
+secondary and a card nobody touched both render an empty screen.
+`tests/dispcheck.py` is that gate — `dualcheck`'s twin, one about the emulator
+and one about the kernel:
+
+```
+python3 tests/dispcheck.py --sha 1aff5c6d56aaf779
+make VIDEO=herc && python3 tests/dispcheck.py --primary herc --sha af83a91224fd5555
+```
+
+Three measurements, on `os8088_5150_both_gla`, in **both directions**:
+
+| | CGA primary (the machine's own answer) | Hercules primary (`make VIDEO=herc`) |
+|---|---|---|
+| primary framebuffer, pre-step-3 vs post | `1aff5c6d…` → `1aff5c6d…`, 76,798 lit | `af83a912…` → `af83a912…`, 136,617 lit |
+| the secondary went | MDA `frames` **0 → 442** — never scanned, now scanning | CGA `Mode3TextCo80` → **`Mode6HiResGraphics`** |
+| host writes to the secondary's aperture | 4 banks → 4 consecutive rows at x +0/+80/+160/+240 | 2 banks → 2 consecutive rows at x +0/+80 |
+
+The last row is the one that matters and it is why the test writes from the
+*host*. A card in mode 6 and a card in mode 3 both have memory at B8000; what
+tells them apart is what the raster does with a byte, and 0xFF at bank *b*
+appearing as an 8-pixel run on row *b* is SPEC.md §39.3's banked layout and
+nothing else. In text mode the same byte is a character cell. The check is
+written to be independent of *where* row 0 lands, for the reason below.
+
+**Two things about the instrument had to be fixed first, and both were silent.**
+`os88marty.settle`/`launch` asked `video` with no card, so on a two-card
+machine they always watched MartyPC's **primary** — and a `VIDEO=herc` kernel
+draws on the card the config lists second. The boot gate then timed out on a
+machine that had booted perfectly, with the message "never finished booting".
+`card=` now threads through `_sample`, `_bar_up`, `settle` and `launch`; the
+wrapper's `advance` also gained the `card=` the server already accepted.
+
+And **MartyPC's MDA aperture in Hercules graphics is offset**: guest (x, y)
+renders at `fbuf` (x−16, y+2). Measured on `os8088_5150_herc_gla` by scanning
+`fbuf` against `vram` over the same desktop — 2,280 of 2,280 sampled pixels
+agree at exactly that offset and nowhere else. docs/MARTYPC-DEBUG.md already
+warned that `fbuf` is "16 columns short"; the vertical half was not written
+down, and step 4's pixel gate is where it would have cost a day.
 
 ### 11.2 Step 2, as built
 

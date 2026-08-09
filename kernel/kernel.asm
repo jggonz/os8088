@@ -1741,6 +1741,14 @@ kmain:
                                 ; came up in mono text answers at B000 as
                                 ; ITSELF and reports a Hercules that is not
                                 ; there
+%ifdef KERN_BIG
+    call vid_disp_init          ; ...and if it has BOTH mono cards, programme
+                                ; the second one too (SPEC.md 39.13). Here
+                                ; because [vid_avail] is what decides, so this
+                                ; is the earliest it can run; it claims nothing
+                                ; and draws nothing, so the second monitor comes
+                                ; up scanning our raster and black
+%endif
     call mem_init               ; the claim heap (SPEC.md 50): int 12h, the
                                 ; empty map. FIRST of the memory users -
                                 ; every claim below goes through it
