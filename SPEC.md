@@ -7688,6 +7688,54 @@ name is still an 8.3 name with no path in it (§19.2), and a *navigation* is
 still a remount. The instance's folder is where names resolve, not a second
 naming scheme.
 
+### 19.2.2 Standing somewhere to WORK is not navigating — `OSAPI_FILE_GOTO_Q`
+
+`OSAPI_FILE_GOTO` (slot 0x0230) is a **navigation**: a full `dsk_chdir`, which
+is the BPB, the FAT window, the directory scan, the sort, one icon harvest per
+file, and a move of the calling instance's own folder (§19.2.1). That is right
+for an app that is about to *show* a folder and wrong for every copy loop
+ever written, which stands somewhere only to read or write **by name**.
+
+`OSAPI_FILE_GOTO_Q` (slot 0x0370) is the same move with none of that. It is
+`fcp_goto`'s two paths, which the kernel's own copy engine has had since
+§22.5, published because a copy engine *outside* the kernel needs them just
+as much:
+
+- **Inside the volume you are already on it is a WORD** — `[dsk_cwd]`, no
+  I/O at all. Nothing a caller can do between two of these reads the
+  listing: `dskw_*` resolve names by walking `[dsk_cwd]`'s raw directory
+  sectors, and so does `dsk_find` (§19.7.1). The FAT window and every
+  derived geometry belong to the **volume**, which has not changed.
+- **Crossing to another volume is a quiet mount** (§18.9) — BPB, FAT window,
+  cwd — and §18.8.2's banked per-volume window usually means the FAT is not
+  re-read either.
+
+The cluster is range-checked at the slot, because the quiet path skips
+`disk_mount`'s own `.cwd_lost` validation. That is `fcp_goto`'s reason and
+the same two compares.
+
+**It is not a replacement for `GOTO` and must not become one.** It leaves the
+global listing empty and `[dsk_lstale]` raised, so a caller about to *show* a
+folder wants the other slot; and it deliberately does not move the instance's
+own folder, because this is where the caller is standing to do a job, not
+where the application now believes it lives.
+
+What it is worth: the hard-disk installer (§52.10.4) was paying a full
+`dsk_chdir` **twice per file and twice per chunk**. §22.5 records what that
+costs from the other side — the per-switch icon harvest alone "was 23% of
+all sectors read" and made a copy quadratic.
+
+**The media does not change under a running operation, and that is a stated
+assumption.** A human does not take a floppy out and put a different one in
+between two files of a copy their frozen machine is in the middle of; §18.9.1
+already reasons this way for a single quiet switch, using the BIOS motor
+timeout as its physical evidence. That evidence does **not** span a
+floppy-to-hard-disk copy — the motor stops while the destination is being
+written — so it is stated here rather than measured there. What still costs a
+sector per switch is re-validating the BPB signature before reusing a banked
+FAT window (§18.8.2); a caller-declared batch bracket would remove that too,
+and is the next step rather than something this slot does.
+
 ### 19.3 The system disk — a FAT12 volume, and the kernel is a file on it
 
 The disk os8088 boots from is a **real FAT12 volume**, mounted by os8088's own
@@ -24008,6 +24056,44 @@ The **button band is the one thing still erased before it is drawn**, and
 that is the stated exception rather than an oversight: a frame cannot be
 drawn opaquely, so a dithered frame over a solid one leaves the solid one's
 pixels behind. It is a single 16px fill, and only on a state change.
+
+### 52.10.7 OPEN: the chunked copy breaks the next source mount
+
+**Known, reproduced, unfixed, and the installer is deliberately less capable
+than it should be because of it.** `hd_icopy_sub` copies only *packages* out
+of a folder — `type == OSAPI_FT_PKG` — where the right test is "not a folder
+and not `..`", because type 1 means **package** and not **file** (§19.7.1).
+Making it right is a two-line change and it is not in the tree.
+
+What happens when it is: every file copies, `BEVERLY.MOD` included and
+byte-exact — and then the walk's next `hd_isrc_sub` fails, so
+`hd_icopy_tree` reports an error and the MBR is never written. The partition
+ends up **fully populated and not bootable**, which is worse than the missing
+file it fixes. Hence the gap stands.
+
+What is known:
+
+- It is the **chunked write** (§18.4.4). `BEVERLY.MOD` at 116,085 bytes is
+  the only file on either shipped disk that does not fit the copy buffer
+  whole, so the chunk loop had **never executed once** until the type test
+  changed. Every other file in the tree is one read and one write.
+- The failure is a **source mount**, not a file operation: `hd_icopy_one`
+  names the file it stops on and did not, and splitting `hd_icopy_tree`'s
+  four failure paths put it in `hd_icopy_sub`'s `.entry` — `hd_isrc_sub`,
+  which is a plain `dsk_chdir` of the floppy.
+- **It is not `OSAPI_FILE_GOTO_Q`** (§19.2.2). The quiet slot was wired in at
+  the same time, blamed, and reverting it changed nothing — a wrong diagnosis
+  worth recording, because the two changes landed together and the newer one
+  looked guiltier.
+- The suspicion, untested: the chunk loop alternates two volumes **eight
+  times** with the destination's FAT window dirty, and §18.8.2 requires a
+  dirty window to be flushed at the switch rather than carried. Nothing else
+  in the system alternates volumes that often mid-write.
+
+Where to start: `make DISKCNT=1` and read §18.94's counters either side of one
+chunked copy, and the marker technique that found §19.7.1's type bug — a
+temporary caption that **aborts**, because one that only sets `[hd_imsg]` is
+overwritten by the completion message and says nothing.
 
 ## 53. fsx.inc — fullscreen exclusive
 

@@ -1675,6 +1675,30 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; it, and an unused slot is a promise for
                                  ; nothing (SPEC.md 20.8 rule 4)
 
+%define OSAPI_FILE_GOTO_Q   KERNEL_SEG:0x0370   ; DX = a folder's first cluster
+                                 ; (0 = the root), BL = the volume. out CF=0
+                                 ; and AX=0, else AX = FERR_*.
+                                 ;
+                                 ; OSAPI_FILE_GOTO's QUIET twin (SPEC.md
+                                 ; 19.2.2), for standing somewhere to READ OR
+                                 ; WRITE BY NAME rather than to show it. Inside
+                                 ; the volume you are already on it is a WORD -
+                                 ; no I/O at all - and crossing to another one
+                                 ; keeps the BPB and the FAT window and skips
+                                 ; the directory scan, the sort and the icon
+                                 ; harvest.
+                                 ;
+                                 ; Use it in a copy loop, where the difference
+                                 ; is the whole cost: nothing you can do between
+                                 ; two of these reads the listing, because file
+                                 ; names resolve through the raw directory
+                                 ; sectors and so does OSAPI_FILE_FIND.
+                                 ;
+                                 ; It leaves the global listing EMPTY and owed,
+                                 ; so it is NOT the one to call before showing a
+                                 ; folder, and it does not move your app's own
+                                 ; current folder the way GOTO does.
+
 %define OSAPI_REBOOT        KERNEL_SEG:0x0368   ; no arguments, no answer, every
                                  ; register preserved. POSTS a restart (SPEC.md
                                  ; 20.10): the System menu's own Restart, but

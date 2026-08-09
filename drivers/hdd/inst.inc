@@ -968,9 +968,9 @@ hd_inst_apps:
     jc .failed
     call hd_ivol_back
     call hd_inst_vbr            ; the volume boot record...
-    jc .failed2
+    jc .nboot
     call hd_inst_mbr            ; ...and the MBR LAST: it is the commit
-    jc .failed2
+    jc .nboot
     call hd_ibuf_put
     clc
     jmp short .out
@@ -982,6 +982,11 @@ hd_inst_apps:
     call hd_ivol_back
 .failed2:
     call hd_ibuf_put
+    stc
+    jmp short .out
+.nboot:                         ; the FILES are all there and the disk simply
+    mov word [hd_imsg], hd_s_inboot ; will not boot - a different sentence to
+    call hd_ibuf_put            ; the user and a different half to debug
     stc
 .out:
     pop di
@@ -1232,6 +1237,21 @@ hd_iapps_find:
 ; there. Each is a REMOUNT, which is why the copy is structured to make as
 ; few of them as it can - one per file, not one per chunk.
 ; -----------------------------------------------------------------------------
+; THESE WANT THE QUIET GOTO (SPEC.md 19.2.2) AND DO NOT YET USE IT, which is
+; recorded here rather than left as an obvious improvement nobody tried.
+; Nothing in this file ever SHOWS a folder - it reads and writes by name, and
+; OSAPI_FILE_FIND walks raw directory sectors - so every one of these is a
+; full dsk_chdir (BPB, FAT window, directory scan, sort, one icon harvest per
+; file) bought for nothing, twice per file and twice per CHUNK.
+;
+; Switching all four to OSAPI_FILE_GOTO_Q was tried and reverted, and the
+; reason is worth keeping because the first diagnosis was WRONG: the copy
+; failed at the end, the quiet goto was blamed, and reverting it changed
+; nothing at all. What actually broke is older - the CHUNKED write (SPEC.md
+; 18.4.4), which had never run once until *.O88 stopped being the only thing
+; copied out of a folder. So this reversion is caution rather than evidence:
+; wire the quiet slot in again once the chunk path is understood, and measure
+; it then.
 hd_isrc:
     push ax
     push bx
@@ -1351,6 +1371,9 @@ hd_icopy_tree:
 .done:
     clc
     jmp short .out
+    ; A copy that stops names the FILE it stopped on (hd_icopy_one) or says
+    ; nothing more than this. Splitting these four further is what found
+    ; SPEC.md 52.10.7, and the markers came back out.
 .fail:
     mov word [hd_imsg], hd_s_ierr
     stc
@@ -1392,17 +1415,18 @@ hd_icopy_sub:
     pop es
     jc .done
     mov [hd_isord], cx
-    mov ax, [hd_ient+14]        ; FILES only one level down - see the header -
-    cmp ax, OSAPI_FT_DIR        ; and a FILE is "not a folder and not '..'",
-    je .entry                   ; NEVER "type 1". Type 1 is a PACKAGE: dsk_synth
-    cmp ax, OSAPI_FT_UP         ; gives it only to an .O88 whose size fits a
-    je .entry                   ; word and whose first cluster is in range, and
-                                ; every other plain file is type 0 (SPEC.md
-                                ; 19.7.1). Testing for 1 copied the packages out
-                                ; of APPS and GAMES and silently left BEVERLY.MOD
-                                ; behind, which is how an installed machine got
-                                ; an empty MEDIA folder - and would have left
-                                ; behind any document a user had put in one
+    mov ax, [hd_ient+14]
+    cmp ax, OSAPI_FT_PKG
+    jne .entry                  ; PACKAGES only one level down, and that is a
+                                ; KNOWN GAP rather than the intent - SPEC.md
+                                ; 52.10.7. The right test is "not a folder and
+                                ; not '..'", because type 1 means PACKAGE and
+                                ; not FILE (SPEC.md 19.7.1); making it so is
+                                ; what BEVERLY.MOD needs, and it is also what
+                                ; first ran the chunked write (SPEC.md 18.4.4),
+                                ; which then fails the NEXT source mount. A
+                                ; broken installer is worse than an incomplete
+                                ; copy, so the gap stands until that is fixed
     mov byte [hd_iinsub], 1
     mov si, hd_ient
     call hd_icopy_one
@@ -1516,8 +1540,10 @@ hd_icopy_one:
     stc
     jmp short .out
 .fail:
-    mov word [hd_imsg], hd_s_ierr
-    stc
+    mov word [hd_imsg], hd_iname    ; NAME THE FILE. A copy that stops has one
+    stc                             ; useful thing to say and it is which file
+                                    ; it stopped on - "Disk error" sent this
+                                    ; session hunting the wrong half twice
 .out:
     pop di
     pop si
@@ -2175,6 +2201,7 @@ hd_itab:      dw hd_s_iready, hd_s_ismall, hd_s_ialien, hd_s_inone
     HIMSG hd_s_ifmt, 'Could not format that partition'
     HIMSG hd_s_imnt, 'Formatted, but it would not mount'
     HIMSG hd_s_ierr, 'Disk error - the install stopped'
+    HIMSG hd_s_inboot, 'Copied, but it will not boot'
     HIMSG hd_s_ibig, 'A file is too big for this machine'
 
 hd_iwin:      dw 0              ; .text with a real initialiser: -f bin zeroes

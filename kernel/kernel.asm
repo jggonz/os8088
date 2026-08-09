@@ -1150,7 +1150,13 @@ osapi_table:
                                   ;         the gfx lock the caller is holding
                                   ;         and waits on workers that need to
                                   ;         be scheduled
-osapi_table_end:                  ; 0x0370
+    OSAPI_SLOT osapi_file_goto_q  ; 0x0370  DX = folder cluster, BL = volume.
+                                  ;         GOTO's quiet twin (SPEC.md 19.2.2):
+                                  ;         same volume = a word, another one =
+                                  ;         a quiet mount. For a caller about to
+                                  ;         read or write BY NAME rather than to
+                                  ;         list - which is every copy loop
+osapi_table_end:                  ; 0x0378
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1158,8 +1164,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 108 * 8
-%error "os8088 API jump table must be exactly 108 8-byte slots"
+%if OSAPI_TABLE_LEN != 109 * 8
+%error "os8088 API jump table must be exactly 109 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -1795,6 +1801,72 @@ osapi_file_goto:
                                 ; that app now believes it is standing
 .out:
     pop ax
+    ret
+
+; ---- osapi_file_goto_q - stand here to READ OR WRITE, not to list ------------
+; in:  DX = the folder's first cluster (0 = the root), BL = the volume
+; out: CF=0 moved; CF=1 and AX = FERR_*
+;
+; SPEC.md 19.2.2. The same two quiet paths fcp_goto has had since SPEC.md
+; 22.5, published because a COPY ENGINE OUTSIDE THE KERNEL needs them just as
+; much as the one inside it - the hard-disk installer was paying a full
+; dsk_chdir per file and per chunk, twice, and a full chdir is the BPB, the
+; FAT window, the directory scan, the sort and one icon harvest per file.
+;
+;   * A move INSIDE the current volume is a word. Nothing a caller can do
+;     between two of these reads the LISTING: dskw_* resolve names by walking
+;     [dsk_cwd]'s raw directory sectors, and so does dsk_find (SPEC.md
+;     19.7.1). The FAT window and every derived geometry belong to the
+;     VOLUME, which has not changed.
+;   * Crossing to another volume is dsk_chdir_q (SPEC.md 18.9), which keeps
+;     the BPB and the FAT window and skips the scan, the sort and the
+;     harvest - and SPEC.md 18.8.2's banked window means the FAT usually is
+;     not re-read at all.
+;
+; The cluster is range-checked HERE because the quiet path skips
+; disk_mount's own .cwd_lost validation - fcp_goto's reason, and the same
+; two compares.
+;
+; NOT a replacement for OSAPI_FILE_GOTO: this leaves the global listing empty
+; and [dsk_lstale] raised, so a caller that is going to SHOW a folder wants
+; the other one. The instance's folder is deliberately NOT moved either
+; (no inst_vol_mark): this is where the caller is standing to do a job, not
+; where the application now believes it lives.
+osapi_file_goto_q:
+    push dx
+    cmp bl, [disk_drive]
+    jne .full
+    or dx, dx
+    jz .quiet                   ; 0 is the root, always legal
+    cmp dx, 2
+    jb .bad
+    cmp dx, [dsk_maxclus]
+    ja .bad
+.quiet:
+    mov [dsk_cwd], dx
+    pop dx
+    xor ax, ax
+    clc
+    ret
+.bad:
+    mov ax, FERR_IO
+    pop dx
+    stc
+    ret
+.full:
+    push dx
+    mov dl, bl
+    pop ax                      ; AX = the cluster, DL = the volume
+    call dsk_chdir_q
+    jc .ferr
+    pop dx
+    xor ax, ax
+    clc
+    ret
+.ferr:
+    mov ax, FERR_NODISK
+    pop dx
+    stc
     ret
 
 ; ---- osapi_video - the screen the program actually got (SPEC.md 39.2) --------
