@@ -1546,7 +1546,7 @@ fcp_xfer:
     xor bx, bx
     mov cx, [fcp_flen]
     mov si, fcp_fname
-    call dskw_append
+    call dskw_append_x
     jc .err
     jmp .chunk
 .fin:

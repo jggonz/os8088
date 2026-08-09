@@ -325,6 +325,10 @@ hd_cfg_apply:
     call hd_geom_ok
     jc .nogeom
     or byte [di+HDD_FLAGS], 1
+    call hd_geom_push           ; the drive has to be told too: this runs before
+                                ; the first paint, so a restored geometry that
+                                ; only we know about would automount and then
+                                ; read the wrong sectors with no user present
 .nogeom:
     test byte [si+HDC_E_FLAGS], HDC_F_MOUNT
     jz .out

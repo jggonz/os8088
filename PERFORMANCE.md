@@ -127,6 +127,63 @@ is then drawn; `wm_grow_paint` filling its 13×13 square before framing it,
 which survived as a flashing corner after Note Pad's rows were fixed; a
 pattern strip erased then re-lettered every scroll row (§45.11).
 
+#### The standing rule: do not blank and then redraw
+
+**Treat every blank-then-redraw as a defect until it has been shown to be the
+cheaper of two evils, and assume it is visible on every adapter — VGA
+included — on real hardware.** It is not a mono problem and it is not a
+slow-machine problem; it is a *two-writes-to-one-pixel* problem, and the eye
+samples between them at 50–70Hz whatever the card is.
+
+What makes this rule necessary rather than obvious is that the defect **does
+not appear in any timing column** — blanking first is usually the same amount
+of work — and does not appear in a *screenshot* either, since a capture taken
+after the operation shows the correct final pixels.
+
+**It is not invisible to this harness, and do not write that it is.**
+MartyPC measures it and Part 3.1 is the method: sample the rendered
+framebuffer once per displayed frame and count the pixels whose before and
+after agree while something else was on the glass between them. That count
+*is* this defect. Reach for it before concluding anything about a flash, and
+read the BBOX with the number. QEMU is the one that cannot show it, and QEMU
+is the fallback for 286+/VGA and a short list besides.
+
+Two sampling mistakes, because both look like an absence: **screendumps over
+a socket are not frames** — a shot every ~50 ms straddles a 40 ms window and
+reports a clean picture on both sides of it — and the instrument's floor is
+**3 frames**, so an event of one or two needs the capture window slid across
+it rather than aimed at it.
+
+The one exception is written up under *What it does not cover*: a flash that
+**spans a mode change** has no before/after pair for `transient` to compare,
+and wants the lit-pixel count of the first frames in the new mode instead.
+
+What is left for a person on a real machine is narrower than the above makes
+it sound, but it is not nothing: whether the flash is *objectionable* at the
+size and position it occupies; anything decided by **the machine's own ROM**
+rather than by this kernel (§39.6's CGA mode set is the worked example — the
+emulated ROM does not produce the flash the IBM one does); and the analogue
+consequences a framebuffer has no field for, the beam-current swing an IBM
+5151 answers with an audible pop among them.
+
+What the fix looks like, in order of preference:
+
+1. **One opaque write per cell** — `font_run` (§6.1) for text, an image blit
+   for pictures. Old content straight to final; nothing in between exists.
+   Padding a run with spaces out to the band *is* the erase.
+2. **Draw only what changed.** A caption that changed does not owe the
+   header, the rows and the buttons a repaint (§52.10.6); a scroll owes the
+   rows and not the chrome (§22.11); a lamp owes a lamp (§56.12).
+3. **Invert rather than repaint.** XOR is its own inverse, so moving a
+   selection is two inversions and no glyph is re-lettered (§22.2, §27.8.2).
+
+The exceptions worth knowing, both structural rather than lazy: a **frame
+cannot be drawn opaquely**, so a control whose border changes from solid to
+dithered has to have its rect cleared first (§52.10.6) — keep that rect as
+small as the control; and **`wm_draw_win`'s content fill** is the one blank a
+window is *entitled* to, because a window being shown had no pixels there at
+all.
+
 ### Stall and input overrun
 
 The machine stops answering. A held gfx lock across a long render freezes
@@ -534,6 +591,26 @@ one is a number that has not been attributed.
   and the frame rate, not whether a cell is blanked before it is lettered.
 - **Anything shorter than a frame**, as above. Correct by construction and
   worth restating: a defect the raster never catches is a defect nobody saw.
+- **Anything that spans a MODE CHANGE**, and this one is a property of the
+  metric rather than of the emulator. `transient` counts pixels that *ended as
+  they started* while showing something else in between — and across a mode
+  set there is no such pixel, because the before picture is a text raster and
+  the after picture is a bitmap. Nothing ends as it started, so the count is
+  ~0 however bad the flash. The measurement that does work there is cruder and
+  direct: step frames and count **lit pixels in the first few frames after the
+  card reports the new mode**. A cleared framebuffer is ~0; the previous text
+  page reinterpreted as 640x200 is not. SPEC.md §39.6 is the worked example,
+  and its result is worth carrying: on `os8088_5150_cga` — **the real IBM 5150
+  ROM**, which every `os8088_5150_*` machine runs — the first graphics frame is
+  **1–2 lit pixels of 128,000 with the fix and without it**, and the text frame
+  before it is 0–16. A null result, and the reason is the next bullet.
+- **Powered-up video RAM.** A real card comes up with static in it; MartyPC
+  comes up with zeros. So any defect whose *material* is uninitialised VRAM —
+  SPEC.md §39.6's flash before the progress bar is the standing example — has
+  nothing to work with here and cannot be reproduced however finely you
+  sample. PCem models it as noise. This is a short list, but it is the one
+  place where "the emulator cannot show it" is still literally true, so do not
+  read the rest of this section as saying no such class exists.
 - **Work.** A change can cut the flash and cost more cycles, or the reverse.
   Part 4 and Part 9 price work; this prices what the work looked like.
 - **The disk.** Unchanged and absolute — an operation with a disk in it has
@@ -1071,6 +1148,8 @@ list to check yourself against.
 | Raise an already-frontmost window | a screen | **no window at all** | §11.90 |
 | Click a background window's title bar | two full screen redraws (raise + drag release) | two title bars | §11.90, `ui_drag` |
 | Hide / destroy / drag a window | a screen | the damage rect, and only the windows in it | §11.91 |
+| The desktop dither inside a damage rect | the WHOLE rect, and then every window overlapping it drawn on top — so every pixel under a window was dithered and then painted over. Measured on CGA: dragging a window flashes **4,819 px** worst, dragging it back **5,222** | `wm_dmg_gray` — the rect minus every visible window, through the region machinery `wm_clip_set` already had, so `gfx_fill_gray`'s one clipped call paints only what is genuinely uncovered: **609** and **1,413** | §11.91.1 |
+| Double-click a title bar to zoom | `wm_paint_all` both ways: a screen's dither, every drive zone, both strips, every window's `W_PAINT`. Worst transient **23,842 px**, 445 ms of flashing | out: nothing is revealed, so `wm_draw_win` and the chrome — **1,540 px**. Back: the union through `wm_paint_dmg`, with the dither clipped — **1,161 px**, a 20x drop | §11.95.1, §11.91.1 |
 | Retitle a window | full frame repaint | one `TITLE_H` strip | §11.92 |
 | Mount / unmount a volume | `wm_paint_all` | the zone grid — measured **371 glyphs → 182** | §26.3 |
 | Select a covered drive icon | **two** whole-screen repaints per click | one XOR strip, zero repaints; byte-identical output | §26.2 |
@@ -1088,7 +1167,12 @@ list to check yourself against.
 | Task Manager row update | 20 glyphs to change 3, twice a second | the changed chunks only | §28.2 |
 | Timer digits | eight erase-and-letter pairs — 8 `gfx_fill` + 8 `font_char`, each cell blank between its two calls, **twice a second for as long as the window is open**: 320 + 320 calls in 20 s, ~24.7 ms a redraw | one `font_run` over the cells that CHANGED, byte-aligned by `WF_SNAP`: **0 fills, 0 `font_char`**, 20 runs of 22 cells in the same 20 s, and no blank interval | §14.1, §6.1 |
 | Menu bar redraw | every window operation | gated on `[menu_bdirty]` | §12.05 |
+| Menu bar when it IS owed | one white fill across the whole bar, then the logo's 121 `gfx_pixel` calls, the app name and every cell title put back — measured on CGA with `os88marty.py flicker`: switching application is **9 frames flashing = 149 ms, worst 534 transient pixels**, bounding box the full width of the bar | three segments, each on its own trigger. The menus are composed into `menu_bcell` and emitted as the one `font_run` span that DIFFERS: **1 frame = 17 ms, worst 37 px — and those 37 are the mouse arrow**. The logo and the rule are drawn only when something painted over the bar | §12.9 |
+| The menu-bar clock | a 206px erase and ~20 glyph cells re-lettered on **every window operation**, for a string that changes once a minute | a check word: nothing at all. When it does change, one opaque `font_run` right-aligned in its field by leading spaces — no fill, no blank interval | §12.1, §6.1 |
+| The file-activity widget finishing | `menu_force` + `menu_draw_bar`: the whole bar white-filled and the logo, the name, every title **and the clock** put back, to give an 88px strip back | two thin fills of the rows that carry no text, and the text band rewritten by the run that was already going to be emitted | §12.8, §12.9 |
 | Dock redraw | every window operation | per-tile keys: a focus change is 2 tiles, a quiet desktop is 0 | §30.1 |
+| A dock tile whose MARK moved (every focus change) | erased to white and rebuilt — fill, frame, two-pass masked icon blit, marks — twice, to move one 1px rectangle. On CGA: **9 frames flashing = 149 ms, worst 534 px** | one `gfx_xor_rect` or one `gfx_xor_fill`; **the icon is not touched**. Both marks are their own inverse, so old XOR new names the difference | §30.3 |
+| Damage that reaches the dock strip | `dock_force`: all 640px of rule and field restored and **every** tile rebuilt, for a window that closed in one corner | the damaged span only, and the keys of just the tiles it overlaps | §30.3.1 |
 | Arkanoid pause / resume | the whole content — background, both rails, every brick, paddle, ball, capsules, shots, status strip | the banner's 9-row band: `gfx_fill` **89 → 2**, `font_char` **10 → 6** | §44.1 |
 | Missile Command explosion (1bpp / 8088) | a full disc **every** frame for 27 frames plus 12 ring erases — ~750 fills a burst, 124 ms a frame in a busy wave | three drawn states, five-rect discs — 22 fills a burst, 7.9 ms | §48.8 |
 | Missile Command terrain repair | `[mc_gdirty]`, one byte: the whole ground band, six cities and three bases — **143 ms**, five times in 86 frames | a damage **span**: 16.5 ms, byte-identical to a full repaint | §48.9 |
@@ -3100,3 +3184,118 @@ the gap look like 1.49x and nearly closed, and the same code on a
 better-interleaved disk is 2.03x. **A single calibration machine can flatter
 a latency bug**, because how much a fixed delay costs depends on how fast the
 thing you are delaying would otherwise have gone.
+
+### Set 20 — Tracker's mixer was 45% of the machine, and it is BUS-bound
+
+**How it was found, and the instrument is worth as much as the answer.**
+MartyPC's `status` returns `flat_ip`, so sampling it from the host and
+bucketing by the nearest preceding label out of the NASM listing **is a
+profiler that costs the guest nothing** — no counters, no instrumentation, no
+guest cycles, and a sample rate uncorrelated with anything the guest does
+because it is driven from outside. `tools/`-side, ~150 samples a second, and
+it needs the listing parsed properly: a label line in a NASM listing carries
+no address (the address turns up on the next line that emits a byte), and
+getting that wrong buckets everything into the nearest *data* label — the
+first run of it put 41% of the guest in `mp_ntab`.
+
+Windowed, `BEVERLY.MOD`, XT mode (5,500 Hz, 4 channels), on a cycle-accurate
+4.77MHz 8088:
+
+| | % of the whole machine |
+|---|---|
+| `mp_mixch_xt.addl` — the add-pass inner loop | **31.7%** |
+| `mp_mixch_xt.stl` — the store-pass inner loop | **13.5%** |
+| the rest of `mp_mixch_xt` (setup, run split, edges) | 6.3% |
+| `mp_chupd` | 3.7% |
+| everything outside the package (kernel, BIOS, idle) | 35% |
+
+**45% of the machine is in two seven-instruction loops**, which agrees with
+the independent measurement that the worker is `[trk_mixing]` for **65% of
+wall time** and the windowed display gets **5.8 frames a second against 7.14
+rows** (SPEC.md §45.16.5).
+
+**Why it costs what it costs, and this is the general lesson.** The 8088 has
+an **8-bit** bus: every byte fetched *or* accessed is 4 clocks, and they
+serialise. So the cost of a loop is its BYTE TRAFFIC, instruction bytes and
+data bytes together — not its instruction count and not its "complexity".
+
+| | instr | data | |
+|---|---|---|---|
+| `mov al,[es:si]` | 3 | 1 | the sample; the `26` override is a byte |
+| `xlat` | 1 | 1 | the volume table — already no multiply |
+| `add [di],al` | 2 | 2 | accumulate: a read AND a write |
+| `inc di` | 1 | 0 | |
+| `add dx,bp` | 2 | 0 | the fractional accumulator |
+| `adc si,[mp_cstepi]` | 4 | 2 | **a loop-INVARIANT memory read** |
+| `loop` | 2 | 0 | |
+| | **15** | **6** | = 21 bytes = **84 clocks** |
+
+84 × 4 channels × 5,500 Hz = 1.85M clocks/s = **38.7%** of 4.77MHz, against
+45.2% profiled with the setup and edges in it. The model is the machine.
+
+**What is actually removable is 3.5 of those 21 bytes.** `adc si, imm16`
+patched in place instead of a loop-invariant memory read is −2; unrolling 4x
+amortises `loop` to −1.5. That is 84 → 70 clocks, **38.7% → 32.3%** — about
+**6 points of the whole machine**, given back to everything, forever. That
+was the PREDICTION; the next paragraph is what the machine actually did.
+
+**Measured after: 45.2% → 29.6%, which is 16 points and not 6.** Same
+machine, same module, same windowed XT mode, 60-second samples:
+
+| | before | after |
+|---|---|---|
+| the add-pass inner loop | `.addl` **31.7%** | `.addq1` **20.2%** + `.addl` 0.5% |
+| the store-pass inner loop | `.stl` **13.5%** | `.stq` **8.9%** + `.stl` ~0 |
+| the rest of `mp_mixch_xt` | 6.3% | 4.7% + `mp_stepi_set` 0.9% |
+| outside the package (kernel, BIOS, **idle**) | 42% | **49%** |
+
+The last row is the one that says it is real: nothing else changed, so the
+machine got its time back as idle.
+
+**The byte model under-predicted by 10 points, and the reason is worth
+keeping.** It priced only bus traffic, which is the right first-order model
+on an 8-bit bus and is not the whole cost: `adc si, [disp16]` also pays an
+effective-address calculation and the 8086's memory-operand penalty, and
+`loop` is 17 clocks *taken* where the model charged it 2 bytes = 8. Both of
+those are execution clocks the fetch model cannot see. **A byte-traffic model
+is a floor, not an estimate** — when it says an optimisation is worth 6
+points, the machine may hand back more, and it will not hand back less.
+
+**Two bugs on the way, both of which measured as successes.** The first is
+CLAUDE.md's own warning arriving in person: a stale `cmp byte [mp_first], 0 /
+je .addl` left from the pre-unrolled structure sent the **add pass** — 70% of
+the work — straight past the unrolled loop to the one-sample-at-a-time
+remainder. It assembled, it ran, the output was correct, an amplitude-envelope
+comparison against the old build matched on 90.2% of 876 windows, and the
+build was 241 bytes bigger for nothing. **Only the profile could see it**, as
+`.addl` 25.2% with `.addq1` at zero — the optimisation had kept its shape and
+lost its substance. The second: `mp_stepi_set` as a table walk over
+`mp_steppatch` profiled at **3.1% of the whole machine** on its own, because
+it runs once per channel per chunk. Straight-line `mov [imm16], ax` — the
+accumulator-direct form, 3 instruction bytes and a 2-byte write, and no
+register but AX, so the three pushes go too — is 200 clocks against ~480, and
+it profiles at 0.9%.
+
+**Verified on the running binary rather than by reading it**, because the only
+new failure mode an unrolled run split has is dropping or duplicating a
+sample. Breakpoints at `mp_mixch_xt` and its `.fin`, walked in alternation:
+**58 of 58 calls advanced DI by exactly `[mp_chunk]`**, 15 of them the store
+pass and 43 the add pass. And the self-modifying half: **20 of 20 mixes had
+all ten patched immediates equal to `[mp_cstepi]`**.
+
+**And that is the honest ceiling: it does not fix windowed Beverly.** 5.8
+frames a second becomes roughly 7, against 7.14 rows — better everywhere and
+still not enough for a display that has to show every row. The only large
+lever left is the SAMPLE RATE, because the work is `channels × rate` and
+nothing else: 5,500 → 4,000 Hz is 27% fewer channel-samples and takes the
+mixer to 23.5% with the loop fix. That is a trade against audio quality, and
+it is a decision rather than an optimisation.
+
+**Three things NOT worth doing, costed and rejected.** Moving the sample to
+`DS` to drop the `26` override needs `es: xlat` instead, which is the same
+byte back. Transposing the mix to per-sample-across-channels puts the
+accumulator in a register and saves the read-modify-write — but four
+channels' worth of position, step and table pointer cannot live in an 8086's
+registers, so it buys one byte and spends four reloading state. And filling
+the buffer with 0x80 to make every channel an add pass costs a whole extra
+`rep stosb` pass to save the store pass's two bytes.

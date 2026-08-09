@@ -52,8 +52,11 @@ HDP_BY       equ 82             ; the button row
 HDP_BH       equ 16
 HDP_B0X      equ 2              ; 'Format'
 HDP_B1X      equ 78             ; 'Mount' / 'Unmount'
+HDP_B2X      equ 154            ; 'Install' (SPEC.md 52.10.4)
 HDP_BW0      equ 64
 HDP_BW1      equ 72
+HDP_BW2      equ 64             ; 154 + 64 = 218, inside the 221px pane - the
+                                ; same arithmetic the caption column obeys
 HDP_CAPY     equ 104
 
 ; -----------------------------------------------------------------------------
@@ -233,6 +236,11 @@ hd_page_paint:
     mov ax, HDP_B1X
     mov bx, HDP_BW1
     mov cl, 1
+    call hd_page_button
+    mov si, hd_s_install
+    mov ax, HDP_B2X
+    mov bx, HDP_BW2
+    mov cl, 2
     call hd_page_button
 
     ; --- and the caption, which is where the truth goes ----------------------
@@ -508,9 +516,15 @@ hd_page_adjust:
     cmp bl, 1
     jb .have
     mov dx, 255
-    je .have
+    je .heads
     mov dx, 63
-.have:
+    jmp short .have
+.heads:
+    cmp byte [di+HDD_KIND], HDK_IDE
+    jne .have
+    mov dx, 16                  ; the task file has four bits of head: the
+.have:                          ; field STOPS there rather than accepting a
+                                ; number hd_geom_ok would then refuse
     cmp cl, 1
     jne .down
     cmp ax, dx
@@ -539,6 +553,8 @@ hd_page_adjust:
     jc .mark                        ; the USER set it, which is what makes it
     or byte [di+HDD_FLAGS], 1       ; worth a record in the blob (SPEC.md 52.6)
     mov word [hd_msg], hd_s_typed
+    call hd_geom_push               ; ...and the DRIVE is told, or it keeps
+                                    ; translating with the one the probe left
 .mark:
     call hd_cfg_mark                ; staged on every click and written on
                                     ; none: the panel's teardown spends it
@@ -699,6 +715,11 @@ hd_page_click:
     cmp cx, HDP_B1X
     jl .done
     cmp cx, HDP_B1X + HDP_BW1
+    jl .hit
+    mov bl, 2
+    cmp cx, HDP_B2X
+    jl .done
+    cmp cx, HDP_B2X + HDP_BW2
     jge .done
 .hit:
     mov al, bl
@@ -706,6 +727,8 @@ hd_page_click:
     jc .refused
     cmp bl, 0
     je .dofmt
+    cmp bl, 2
+    je .doinst
     call hd_mounted
     jc .domount
     call hd_unmount
@@ -719,9 +742,21 @@ hd_page_click:
                                 ; is all it reads, and the editor staged that on
                                 ; the click that changed it. A Delete INSIDE it
                                 ; can unmount, and stages there (SPEC.md 52.2.4)
+                                ; Both tools repaint the PANE FIRST and open the
+                                ; window SECOND. A Control Panel page draws
+                                ; itself unclipped (SPEC.md 31.9) and the kernel
+                                ; does not repaint after a click returns, so a
+                                ; pane repaint AFTER wm_show paints straight
+                                ; over the window it has just put up - which is
+                                ; what the Install dialog arrived doing.
 .dofmt:
+    call hd_page_repaint
     call hd_tw_open
-    jmp .repaint
+    jmp short .done
+.doinst:                        ; Install stages nothing either, for the tool's
+    call hd_page_repaint        ; reason: what it changes is a DISK, and about
+    call hd_iw_open             ; the machine's settings nothing at all
+    jmp short .done
 .refused:
     ; A greyed control explains itself (SPEC.md 47 rule 5), so the refusal
     ; says nothing new - it just makes sure the reason is on screen.
@@ -1070,9 +1105,13 @@ hd_win_close_all:
     push bx
     mov bx, [hd_twin]
     or bx, bx
-    jz .out
+    jz .inst
     call OSAPI_WM_HIDE
-.out:
+.inst:
+    call hd_iw_shut             ; ...and the installer's (SPEC.md 52.10.4). A
+                                ; window of ours left on screen at detach is a
+                                ; paint through freed memory: the kernel
+                                ; releases this image the moment we return
     pop bx
     ret
 
@@ -1254,6 +1293,7 @@ hd_utoa_body:
     pop cx
     ret
 
+hd_s_install: db 'Install', 0
 hd_s_bios:    db 'BIOS', 0
 hd_s_ide:     db 'IDE', 0
 hd_s_x:       db 'x', 0

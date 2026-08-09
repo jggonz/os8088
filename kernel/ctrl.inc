@@ -295,7 +295,8 @@ cp_s_drv:   db 'Drivers', 0     ; list name AND the page heading
 ; string these replace was THIRTY, and painted through the window's right
 ; border into the desktop - invisibly, because until cp_drv_cap existed the
 ; caption was only ever drawn by a driver tick.
-cp_s_dsave: db 'Needs the system disk in A:', 0
+cp_s_dsave: db 'Needs the system disk in '
+cp_s_dsave_l: db 'A:', 0        ; the letter, stamped (SPEC.md 52.10.3)
 cp_s_dserr: db 'Could not save the settings', 0
 
 ; --- Sound page (SPEC.md 31.7/34.8) ------------------------------------------

@@ -1602,7 +1602,7 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                  ; heap that is the difference between a paste
                                  ; that works and one that half-arrives.
                                  ; Preserves all but AX.
-%define OSAPI_WM_SAVEU      KERNEL_SEG:0x0340   ; BX = window ptr, AL = 0 clear
+%define OSAPI_WM_SAVEU      KERNEL_SEG:0x0378   ; BX = window ptr, AL = 0 clear
                                                  ; / non-0 set. A PROMISE: this
                                                  ; window's content does not
                                                  ; change while it is not
@@ -1630,6 +1630,171 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                  ; Takes no lock; preserves all but AX.
 CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
                                  ; than this is refused whole, never truncated
+
+; --- files bigger than your buffer (SPEC.md 18.4.4) ---------------------------
+; OSAPI_FILE_READ and OSAPI_FILE_WRITE move a WHOLE file, so the largest file
+; a package could touch was the largest claim it could take - a 116KB module
+; on a small machine simply could not be opened. These two are the same pair
+; in chunks, and they are what the file manager's copy has used internally
+; since it was written (SPEC.md 22.5); they are published now because an
+; installer needs them and because every package has needed them all along.
+;
+; ONE RULE GOVERNS BOTH, and it is the same rule at each end: **a chunk is a
+; whole number of CLUSTERS**, except the last, which is whatever is left.
+; That is what makes an offset land exactly where the previous chunk stopped
+; and lets an append start on a fresh cluster instead of filling a partial
+; sector inside a chain. Ask OSAPI_FILE_DFREE for the cluster size - it
+; answers SECTORS per cluster in BX, and has always done so.
+;
+; **AND THE CLUSTER SIZE IS THE DESTINATION'S AS WELL AS THE SOURCE'S.** Two
+; volumes need not agree - a hard disk partition picks its cluster size from
+; its capacity (SPEC.md 52.3) while a floppy is 512 bytes - so a copy chunks
+; at a multiple of BOTH. Getting that wrong loses the tail of every cluster.
+;
+; The read is STATELESS: the offset is the whole argument, there is no handle
+; and no cursor, so you may write between two reads. That is the point - the
+; loop this exists for is read -> write -> read, and the write walks
+; directories and the FAT.
+%define OSAPI_FILE_APPEND   KERNEL_SEG:0x0350   ; SI = NUL 8.3 name, ES:BX =
+                                 ; bytes, CX = count (>= 1); out CF=0 AX=0,
+                                 ; else AX = FERR_*. The file must already
+                                 ; exist and its size must be a whole number
+                                 ; of clusters - so create it with
+                                 ; OSAPI_FILE_WRITE and the first chunk, then
+                                 ; append the rest. FERR_NAME if the size is
+                                 ; not a cluster multiple - refused, never
+                                 ; mis-written - and FERR_PROT on a read-only,
+                                 ; hidden or system file, which is SPEC.md
+                                 ; 19.6's rule reaching this slot too
+%define OSAPI_FILE_READ_AT  KERNEL_SEG:0x0358   ; SI = name, ES:BX = buffer,
+                                 ; CX = its capacity in BYTES, DX:AX = the
+                                 ; offset to read from; out CF=0 and DX:AX =
+                                 ; the bytes delivered, 0 meaning you are at
+                                 ; or past the end - which is how the loop
+                                 ; terminates. Offset AND capacity must each
+                                 ; be a cluster multiple; FERR_NAME if not
+
+%define OSAPI_FILE_MKDIR    KERNEL_SEG:0x0360   ; SI = a NUL 8.3 name; creates a
+                                 ; FOLDER in your current directory (SPEC.md
+                                 ; 18.5). out CF=0 AX=0, else AX = FERR_*
+                                 ; (FERR_EXIST if the name is taken,
+                                 ; FERR_DIRFULL if the directory has no free
+                                 ; slot, FERR_FULL if the disk has no cluster).
+                                 ; There is deliberately no rmdir here: the
+                                 ; kernel has one, nothing outside has wanted
+                                 ; it, and an unused slot is a promise for
+                                 ; nothing (SPEC.md 20.8 rule 4)
+
+%define OSAPI_FILE_GOTO_Q   KERNEL_SEG:0x0370   ; DX = a folder's first cluster
+                                 ; (0 = the root), BL = the volume. out CF=0
+                                 ; and AX=0, else AX = FERR_*.
+                                 ;
+                                 ; OSAPI_FILE_GOTO's QUIET twin (SPEC.md
+                                 ; 19.2.2), for standing somewhere to READ OR
+                                 ; WRITE BY NAME rather than to show it. Inside
+                                 ; the volume you are already on it is a WORD -
+                                 ; no I/O at all - and crossing to another one
+                                 ; keeps the BPB and the FAT window and skips
+                                 ; the directory scan, the sort and the icon
+                                 ; harvest.
+                                 ;
+                                 ; Use it in a copy loop, where the difference
+                                 ; is the whole cost: nothing you can do between
+                                 ; two of these reads the listing, because file
+                                 ; names resolve through the raw directory
+                                 ; sectors and so does OSAPI_FILE_FIND.
+                                 ;
+                                 ; It leaves the global listing EMPTY and owed,
+                                 ; so it is NOT the one to call before showing a
+                                 ; folder, and it does not move your app's own
+                                 ; current folder the way GOTO does.
+
+%define OSAPI_REBOOT        KERNEL_SEG:0x0368   ; no arguments, no answer, every
+                                 ; register preserved. POSTS a restart (SPEC.md
+                                 ; 20.10): the System menu's own Restart, but
+                                 ; performed by ui_task at the top of its next
+                                 ; pass rather than here. You are holding the
+                                 ; gfx lock and that path takes it, so an
+                                 ; inline restart would deadlock with the
+                                 ; machine already half torn down.
+                                 ;
+                                 ; So this RETURNS, and your callback should
+                                 ; finish normally afterwards - draw what it
+                                 ; was going to draw, return to the kernel.
+                                 ; The restart happens a moment later, after
+                                 ; the Control Panel's settings are flushed and
+                                 ; every driver is detached
+
+; --- listing a directory (SPEC.md 19.7.1) -------------------------------------
+; The operation this API had no way to express: a package could read a file by
+; name and never find out what names were there. Everything in the tree that
+; enumerates - the Disk window, the file dialog, the copy engine - is kernel
+; code reading the mount snapshot directly, which a package cannot reach.
+;
+; It is BY ORDINAL and keeps no cursor in the kernel, deliberately. The
+; find-first / find-next shape would need kernel state, and the loop this
+; exists for is find -> read -> write -> find: every one of those middle steps
+; walks directories itself, so a shared cursor would be destroyed by the very
+; work the walk is feeding. Ask for 0, then for whatever CX comes back as.
+;
+; Hidden and system entries are reported to a DRIVER only, the same boundary
+; OSAPI_FILE_WRITE_SYS draws in the other direction - so a package can neither
+; find a system file nor create one.
+;
+; The buffer is DSK_FIND_SZ bytes:
+;   +0   char[13]  the display name, NUL-terminated (SPEC.md 19's 8.3 form)
+;   +13  byte      the raw attribute
+;   +14  word      type: OSAPI_FT_* below. READ THAT LIST BEFORE USING IT -
+;                  type 1 is not "a file", it is a PACKAGE, and "is this a
+;                  file" is `type < OSAPI_FT_DIR`
+;   +16  word      first cluster - what OSAPI_FILE_GOTO takes for a folder
+;   +18  dword     the size in bytes, all 32 bits (unlike the listing's, which
+;                  is clamped to a word)
+;   +22  word      reserved, currently 0
+OSAPI_FIND_SZ equ 24
+
+; The type word at +14, and the one thing about this record that has already
+; been got wrong: TYPE 1 IS NOT "A FILE". dsk_synth (SPEC.md 19) gives 1 only
+; to a file the LOADER could run - extension O88, size inside 16 bits, first
+; cluster in range - because the listing's consumers are the Disk window and
+; the loader. Every other ordinary file is type 0, so a walk that copies
+; "type 1" copies the packages and silently skips the documents.
+;
+; Ask the question you mean:
+;   a file   -> type <  OSAPI_FT_DIR
+;   a folder -> type == OSAPI_FT_DIR   (and +16 is what FILE_GOTO takes)
+;   skip '..'-> type == OSAPI_FT_UP
+; The raw attribute is at +13 if you want the FAT byte itself.
+OSAPI_FT_FILE equ 0             ; an ordinary file
+OSAPI_FT_PKG  equ 1             ; ...that the loader would accept: *.O88
+OSAPI_FT_DIR  equ 2             ; a subdirectory
+OSAPI_FT_UP   equ 3             ; the synthesized '..' (SPEC.md 19.5)
+%define OSAPI_FILE_FIND     KERNEL_SEG:0x0348   ; CX = ordinal (0 to start),
+                                 ; ES:DI = an OSAPI_FIND_SZ buffer; out CF=0
+                                 ; filled with CX = the next ordinal, else
+                                 ; CF=1 and AX = FERR_NOENT at the end
+
+; --- the one cell a PACKAGE may not call (SPEC.md 19.6.1) ---------------------
+; It is published here because a DRIVER assembles against this same SDK, and
+; refused here in the text because an application author reading the list is
+; owed the reason rather than a silent CF=1.
+;
+; OSAPI_FILE_WRITE with the system attributes: hidden + system, and read-only
+; for everything except SYSTEM.CFG, which the kernel rewrites. That is what
+; makes an installed volume a SYSTEM volume - KERNEL.SYS and every *.DRV on
+; it are then exactly what SPEC.md 19.6 puts on the shipped boot floppy, so
+; DOS's DIR hides them and disk_mount's species filter keeps them out of every
+; listing, icon grid and file dialog.
+;
+; The kernel fences it on the caller's segment being a LOADED DRIVER's
+; (drv_owns_seg, the SPEC.md 51.7 idiom). From an application it answers
+; CF=1 / AX = FERR_PROT and writes nothing - which is the same answer naming
+; a system file through OSAPI_FILE_WRITE has always given, and it is the
+; whole of SPEC.md 19.6's rule: a package cannot make a file the user can
+; neither see nor delete.
+%define OSAPI_FILE_WRITE_SYS KERNEL_SEG:0x0340  ; SI = NUL 8.3 name, ES:BX =
+                                 ; bytes, DX:CX = count; out as
+                                 ; OSAPI_FILE_WRITE. DRIVERS ONLY.
 %define OSAPI_BOOT_TICKS    KERNEL_SEG:0x02F8   ; out AX = how long this machine
                                  ; took to boot, in SYSTEM TICKS (18.2065 Hz,
                                  ; 54.925 ms each): the boot sector's first

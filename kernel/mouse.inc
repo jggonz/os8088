@@ -2391,6 +2391,28 @@ mou_dbg_blk:
     dw 0x4F4D                   ; 'MO' - the magic, dsk_dbg_blk's 0x4444 idiom
     dw mou_bases                ; -> the probed bases, 2 words, 0 = no UART
     dw mou_run                  ; -> the state span below
+    dw mouse_x                  ; -> the CURSOR: mouse_x, mouse_y, mouse_btn.
+                                ; APPENDED, so every offset above is unmoved
+                                ; and an older reader is unaffected.
+                                ;
+                                ; It is here for the HARNESS rather than for
+                                ; the field (SPEC.md 9.4.3): MartyPC's mouse is
+                                ; relative, so a scripted click can only be
+                                ; aimed by dead reckoning from an edge clamp,
+                                ; and every accumulated packet that the guest
+                                ; rounded or dropped moves the target. Reading
+                                ; where the cursor ACTUALLY is closes the loop:
+                                ; the driver reads, computes the exact delta,
+                                ; sends it and re-reads.
+                                ;
+                                ; This is deliberately NOT a way to place the
+                                ; cursor. Nothing here is writable by the
+                                ; harness in any meaningful sense - a poke to
+                                ; mouse_x would skip the UART, mou_isr and the
+                                ; packet decoder, which is exactly the path a
+                                ; scripted test exists to exercise. The packet
+                                ; still does all the work; this only says where
+                                ; it landed
 
 mou_run     db 0,0,0,0          ; clean packets in a row on this port
 

@@ -1158,9 +1158,12 @@ fm_s_folder:  db 'Folder', 0    ; ...and in a folder we arrived at from
 ; as windows come and go. AM_ONCMD is a real handler, which makes this the
 ; first KERNEL kind on ui_dispatch's .app route - see the note there.
 ;
-; The four titles are laid out at x 110/154/214/258 and end at 325, against
-; menu_relayout's MENU_CLK_HX limit of 434: 108px of slack, so no title can
+; The four titles are laid out at x 120/168/232/280 and end at 343, against
+; menu_relayout's MENU_CLK_HX limit of 432: 89px of slack, so no title can
 ; be silently dropped. Item strings do not enter that arithmetic at all.
+; (SPEC.md 12.9 snapped the bar's layout to 8px cells and widened
+; MENU_TITLE_PAD to 16, which cost 18px of that slack and moved every number
+; in this paragraph.)
 ; -----------------------------------------------------------------------------
 fm_s_mfile:   db 'File', 0
 fm_s_mfold:   db 'Folder', 0

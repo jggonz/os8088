@@ -29,6 +29,10 @@
 ; =============================================================================
 
 DSK_DE_SIZE  equ 32              ; staged directory entry stride (SPEC.md 19)
+DSK_FIND_SZ  equ 24              ; dsk_find's answer (SPEC.md 19.7.1): a
+                                 ; 13-byte NUL name, the attribute, the type
+                                 ; word, the first cluster, a 32-bit size and
+                                 ; one reserved word
 DSK_ICO_SIZE equ 64              ; harvested icon slot stride (SPEC.md 19)
 
 ; How many entries a listing holds. DSK_NENT is the FLOOR - the .lowbss pair
@@ -121,6 +125,37 @@ dsk_vtab:
     dw 0, 0
     db 'Disk B', 0, 0
     times DVOL_MAX - 2 db DVK_FREE, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+
+; --- the BOOT VOLUME's partition base (SPEC.md 52.10.3) ----------------------
+; A SIDE TABLE, for inst_fdrv's reason (SPEC.md 19.2.1): DV_SIZE is 16 and the
+; row is full - DV_LBL runs to the last byte of it - and index*DV_SIZE with a
+; power-of-two stride is what makes a row cheap to reach everywhere else.
+;
+; It is non-zero for exactly ONE row and usually for none: the volume the
+; machine booted from when that was a hard-disk partition. Every driver-backed
+; volume adds its own base inside the driver (SPEC.md 18.7), and a floppy has
+; none - so a machine that boots from a floppy carries 24 zero bytes and runs
+; the arithmetic below on a base of 0, which is the identical transfer it made
+; before this existed.
+;
+; .text with real initialisers, like dsk_vtab above it and for the same
+; reason: -f bin zeroes nothing and the first disk_mount runs before any init
+; routine of ours could.
+dsk_vbase:   times DVOL_MAX dd 0
+
+; Which volume the system files are on - what drv_mounted mounts (SPEC.md
+; 51.5.1) and what the desktop calls the system disk. 0 = A:, which is every
+; floppy machine and was hardcoded as `xor dl, dl` until an installed hard
+; disk could be the answer instead.
+dsk_bootvol: db 0
+
+; The boot drive's own geometry, probed once (SPEC.md 52.10.3). Zero on a
+; floppy machine and unread there. disk_mount needs it for the ONE read that
+; cannot get a geometry from the BPB - the read that fetches the BPB - and
+; there is nowhere else to get it: the volume table carries a unit and a base,
+; and the drive's shape belongs to the drive.
+dsk_bootspt: dw 0
+dsk_boothds: dw 0
 
 ; --- module data (initialized: lives in .text, not .bss) ---------------------
 ; 0040:003F's motor bit per int 13h drive (SPEC.md 18.9.1). A table because
@@ -431,9 +466,15 @@ dsk_xfer:
     mov bl, [disk_drive]        ; into the code below unchanged, and a
     call dsk_vol_row            ; driver-backed volume goes out to its driver
     jc .jbadvol                 ; with the SAME volume-relative LBA (18.7)
+    mov al, [bx+DV_UNIT]        ; THE ROW'S UNIT, not the volume index
+    mov [dsk_unit], al          ; (SPEC.md 52.10.3). This was [disk_drive] and
+                                ; was right only because A: and B: are volumes
+                                ; 0 and 1 AND drives 0 and 1; a boot partition
+                                ; is volume 2 and drive 80h and ends that
     cmp byte [bx+DV_KIND], DVK_DRV
     pop bx
     je .drv
+    call dsk_geom_pick          ; [dsk_base] and [dsk_cylmax] for this volume
     jmp short .sector
 .jbadvol:
     pop bx
@@ -462,20 +503,33 @@ dsk_xfer:
     test si, si
     jz .success                 ; all sectors read (count 0 reads nothing)
 
-    ; --- LBA (DI) -> CHS in CH/CL/DH, drive in DL ---
+    ; --- LBA (DI) + the partition base -> CHS in CH/CL/DH, drive in DL ---
+    ; The base is 0 on every floppy and on every driver-backed volume (the
+    ; driver adds its own, SPEC.md 18.7), so what follows is arithmetically
+    ; the transfer this always made except on a BOOT PARTITION reached through
+    ; the BIOS, which is the one row that carries one (SPEC.md 52.10.3).
     mov ax, [disk_spt]
-    mul word [disk_heads]       ; AX = spt*heads (fits: <= 36)
+    mul word [disk_heads]       ; AX = spt*heads (<= 16,065 on a hard disk)
     mov cx, ax
-    mov ax, di
+    mov ax, di                  ; the volume-relative LBA...
     xor dx, dx
+    add ax, [dsk_base]          ; ...made absolute
+    adc dx, [dsk_base+2]
+    cmp dx, cx                  ; ONE div pair and no 32/16 two-step, on
+    jae .fail                   ; hd_chs's proof: the highest LBA CHS can name
+                                ; is 1024*255*63 and the quotient - the
+                                ; cylinder - is under 1024, so DX is far below
+                                ; the divisor. A dividend that fails this is a
+                                ; corrupt LBA and must fail, not wrap
     div cx                      ; AX = cylinder, DX = rem
-    cmp ax, 80                  ; a corrupt LBA (bad directory entry) must
+    cmp ax, [dsk_cylmax]        ; a corrupt LBA (bad directory entry) must
     jae .fail                   ; fail, not truncate into CH and read the
-                                ; wrong sector. All three real geometries
-                                ; end at cylinder 79 or below: 1.44MB and
-                                ; 720KB both fill 0..79 (2880/36 and
-                                ; 1440/18), the 360KB disk stops at 39
-    mov ch, al                  ; CH = cyl low 8 bits (cyl < 80)
+                                ; wrong sector. 80 on a floppy - all three
+                                ; geometries end at cylinder 79 or below - and
+                                ; CHS's own 1024 on a hard disk
+    mov ch, al                  ; CH = cyl low 8 bits
+    mov [dsk_cylhi], ah         ; ...and bits 9:8, which ride in CL below on a
+                                ; hard disk and are always 0 on a floppy
     mov ax, dx
     xor dx, dx
     div word [disk_spt]         ; AX = head, DX = sector-1
@@ -503,10 +557,18 @@ dsk_xfer:
 %endif
     pop ax                      ; the head again
 
-    mov cl, dl
-    inc cl                      ; CL = sector, 1-based
+    push ax                     ; ...and away again: AL is wanted for the
+    mov al, [dsk_cylhi]         ; shift. Cylinder bits 9:8 ride in CL bits 7:6
+    mov cl, 6                   ; (SPEC.md 52.10.3) - the standard CHS packing,
+    shl al, cl                  ; inert on a floppy where the byte is 0. The
+                                ; count goes through CL because an 8086 has no
+                                ; `shl reg, imm` other than 1
+    or al, dl                   ; ...over the sector index, still 0-based
+    mov cl, al
+    inc cl                      ; CL = sector (1-based) | cylinder high
+    pop ax
     mov dh, al                  ; DH = head
-    mov dl, [disk_drive]        ; DL = drive
+    mov dl, [dsk_unit]          ; DL = THE ROW'S int 13h drive
 
     mov bp, 3                   ; attempts left at this run length
 .attempt:
@@ -543,8 +605,9 @@ dsk_xfer:
     cmp ah, 0x03
     je .fail                    ; write-protected: retrying cannot help
     mov ah, 0x00                ; failed: reset the controller and retry
-    mov dl, [disk_drive]
-    int 0x13
+    mov dl, [dsk_unit]          ; the ROW's drive (SPEC.md 52.10.3): resetting
+    int 0x13                    ; drive 2 because the volume index is 2 resets
+                                ; a floppy that is not in this transfer
 %ifdef DISK_COUNTERS
     inc word [dsk_dbg_rst]
 %endif
@@ -712,6 +775,197 @@ dsk_vol_row:
 .bad:
     xor bx, bx
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_boot_from - adopt the volume the boot sector loaded us from
+; in:  DL = the BIOS drive it read with; BX:CX = the partition base (both 0
+;      from boot/boot.asm, which does not set them and does not need to)
+; out: nothing; every register preserved
+;
+; Called from kmain before anything touches a disk (SPEC.md 52.10.3).
+;
+; A FLOPPY BOOT CHANGES NOTHING AT ALL: DL is 0 or 1, that is already a live
+; row whose unit matches, and [dsk_bootvol] is the index - so this stores the
+; byte that drv_mounted was hardcoding and returns. That is the common path
+; and it stays free.
+;
+; A HARD DISK BOOT claims the first free row for the partition, as DVK_BIOS -
+; the transport really is the BIOS, which is the entire point: rung 0 answers
+; for drive 80h with no driver in the machine, so the kernel can read
+; SYSTEM.CFG and load HDD.DRV off the very volume the driver would otherwise
+; have been needed to reach.
+;
+; The label is left EMPTY so desk_zone_label derives one from the index, which
+; is the same courtesy dsk_vol_add extends a driver: the drive letter is the
+; kernel's to assign (SPEC.md 52.4) and this row has no more right to name
+; itself than a driver's does.
+;
+; DV_SECS is left 0 - "unknown" - because the boot sector does not know it and
+; could not tell us in the registers it has. Rule 13's replacement reads that
+; word, and 0 means it does not run; what stands in its place for this volume
+; is rule 16, which proves the declared FAT covers its own cluster count. The
+; row is describing a volume the machine has just successfully read a kernel
+; out of, which is a stronger statement than any of the bounds would make.
+; -----------------------------------------------------------------------------
+dsk_boot_from:
+    push ax
+    push bx
+    push si
+    test dl, 0x80               ; a floppy boot: DL is already the volume
+    jnz .hard
+    mov [dsk_bootvol], dl
+    jmp short .out
+.hard:
+    mov si, bx                  ; the base is banked BEFORE BX becomes the row
+                                ; walker - SI:CX for the rest of the routine
+
+    ; --- the drive's geometry, while we still know which drive it is --------
+    ; int 13h AH=08h, the same question boot/boothd.asm asks and for the same
+    ; reason: every CHS read of this volume needs it, and the FIRST of them
+    ; fetches the BPB, so it cannot come from there. AH=08h spends BX, CX, DX,
+    ; DI and ES, so everything live crosses it on the stack.
+    push cx
+    push dx
+    push di
+    push es
+    mov ah, 0x08
+    int 0x13
+    jc .nogeom
+    and cl, 0x3F                ; sectors per track, bits 0..5
+    xor ch, ch
+    jcxz .nogeom                ; a zero would divide by zero in dsk_xfer
+    mov [dsk_bootspt], cx
+    mov al, dh                  ; heads = last head + 1
+    xor ah, ah
+    inc ax
+    jz .nogeom                  ; DH = 0FFh is not a geometry
+    mov [dsk_boothds], ax
+.nogeom:
+    pop es
+    pop di
+    pop dx
+    pop cx
+
+    mov bx, dsk_vtab + 2*DV_SIZE    ; the row walks, as dsk_vol_add's does
+.scan:
+    cmp bx, dsk_vtab + DVOL_MAX*DV_SIZE
+    jae .out                    ; no free row cannot happen at boot, nothing
+                                ; having run - but a scan that falls off its
+                                ; own table must not write past the end of it
+    cmp byte [bx+DV_KIND], DVK_FREE
+    je .got
+    add bx, DV_SIZE
+    jmp short .scan
+.got:
+    mov [bx+DV_UNIT], dl
+    mov word [bx+DV_SECS], 0    ; unknown - see the header
+    mov word [bx+DV_SEG], 0     ; no donated listing claim: the .lowbss floor
+    mov byte [bx+DV_FLAGS], 1   ; shown on the desktop, like any volume
+    mov byte [bx+DV_LBL], 0     ; ...and named by the kernel, not by us
+    mov ax, bx
+    sub ax, dsk_vtab
+    push cx                     ; the base's high word, and shr wants CL
+    mov cl, 4                   ; DV_SIZE = 16: the index back out of the row
+    shr ax, cl
+    pop cx
+    mov [dsk_bootvol], al
+    mov byte [bx+DV_KIND], DVK_BIOS ; published LAST, dsk_vol_add's discipline:
+                                    ; the row is live from this store on
+    mov bl, al                  ; the base goes in the side table, which is
+    xor bh, bh                  ; indexed by VOLUME and not by row
+    add bx, bx
+    add bx, bx
+    mov [dsk_vbase+bx], si
+    mov [dsk_vbase+bx+2], cx
+.out:
+    call dsk_bootltr            ; and the messages that NAME the system disk
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; dsk_bootltr - stamp the boot volume's drive letter into the messages
+; in:  [dsk_bootvol] settled
+; out: nothing (all registers preserved)
+;
+; Three kernel messages say which disk the system files are on and all three
+; said A: whatever the machine had booted from - so an installed machine
+; reported "No system disk in A:" about a driver sitting on C:, which points
+; the user at a drive that is not even involved.
+;
+; STAMPED once rather than composed per use, because the boot volume is
+; settled here and cannot change afterwards: the alternative is a buffer and
+; a format call at three sites, for one byte. The table holds the address of
+; the letter BYTE, and each of those is its own LABEL inside its string -
+; an offset would silently drift the first time somebody reworded a message.
+;
+; Called from dsk_boot_from's .out, so a floppy machine runs it too and
+; writes back the 'A' that was already there.
+; -----------------------------------------------------------------------------
+dsk_bootltr:
+    push ax
+    push bx
+    push cx
+    push si
+    mov al, [dsk_bootvol]
+    add al, 'A'
+    mov bx, dsk_ltrtab
+    mov cx, DSK_LTRN
+.next:
+    mov si, [bx]
+    mov [si], al
+    add bx, 2
+    loop .next
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+dsk_ltrtab:                     ; every message that names the system disk
+    dw ui_s_nodisk_l            ; the Task Manager's notice (SPEC.md 28.3)
+    dw cp_s_dsave_l             ; the Control Panel's save refusal (51.5.1)
+    dw drv_e1_l                 ; DRVE_DISK, the Drivers page's status (51)
+DSK_LTRN equ 3
+
+; -----------------------------------------------------------------------------
+; dsk_geom_pick - bank the current volume's partition base and cylinder bound
+; in:  [disk_drive] = the volume, [dsk_unit] already set from its row
+; out: [dsk_base] (32-bit) and [dsk_cylmax]; every register kept, FLAGS NOT -
+;      the caller is dsk_xfer's entry sequence and .sector opens with its own
+;      `test si, si`, so there is nothing in flight to preserve
+;
+; Called once per dsk_xfer, not once per sector: both answers are properties
+; of the VOLUME and the run loop below rereads them from memory. On a floppy
+; it stores a zero base and 80, which is what the transfer assumed when both
+; were constants (SPEC.md 52.10.3).
+;
+; The cylinder bound is taken from the UNIT and not from the kind, because
+; that is the thing it is a fact about: 80 is a floppy's last cylinder plus
+; one, and int 13h drive numbers >= 80h are the fixed disks. A driver-backed
+; volume never reaches here at all - it left through .drv.
+; -----------------------------------------------------------------------------
+dsk_geom_pick:
+    push ax
+    push bx
+    mov bl, [disk_drive]
+    xor bh, bh
+    add bx, bx
+    add bx, bx                  ; volume * 4: dsk_vbase is dwords
+    mov ax, [dsk_vbase+bx]
+    mov [dsk_base], ax
+    mov ax, [dsk_vbase+bx+2]
+    mov [dsk_base+2], ax
+    mov ax, 80                  ; the floppy bound, and the corrupt-LBA net
+    test byte [dsk_unit], 0x80  ; that has caught bad directory entries since
+    jz .set                     ; before there was a hard disk to ask about
+    mov ax, 1024                ; CHS's own ceiling: 10 bits of cylinder
+.set:
+    mov [dsk_cylmax], ax
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1209,6 +1463,7 @@ disk_mount:
     mov [disk_drive], dl
     mov byte [dsk_vkind], DVK_BIOS  ; what the BPB rules are checked against
     mov word [dsk_vsecs], 0         ; (SPEC.md 18.2/18.7)
+    mov byte [dsk_vflop], 1
     push bx
     mov bl, dl
     call dsk_vol_row
@@ -1217,10 +1472,62 @@ disk_mount:
     mov [dsk_vkind], al
     mov ax, [bx+DV_SECS]
     mov [dsk_vsecs], ax
+    ; --- IS IT A FLOPPY? which is not the same question as DV_KIND ----------
+    ; Four of the BPB rules below are floppy limits - a FAT of at most
+    ; DSK_FAT_SECS, the two geometry whitelists, and the total-sectors bound -
+    ; and every one of them used to ask DVK_BIOS, because for as long as BIOS
+    ; transport meant a floppy that was the same question.
+    ;
+    ; SPEC.md 52.10.3 separated them: a BOOT PARTITION is a DVK_BIOS row, so
+    ; that the kernel can read it through int 13h before HDD.DRV exists, and
+    ; it is a 32MB FAT16 volume whose FAT is far more than nine sectors. Asked
+    ; the old way it failed rule 10 and would not mount - which is the mount
+    ; refusing the disk the machine had just booted from.
+    ;
+    ; DV_KIND stays the TRANSPORT, because that is what dsk_xfer needs it for.
+    ; This byte is the MEDIUM, and a floppy is a BIOS row whose unit is below
+    ; 80h - the same test dsk_geom_pick uses for the cylinder bound, and a
+    ; fact about int 13h drive numbers rather than about this OS.
+    cmp al, DVK_BIOS
+    jne .nofloppy
+    test byte [bx+DV_UNIT], 0x80
+    jz .kindok
+.nofloppy:
+    mov byte [dsk_vflop], 0
 .kindok:
     pop bx
-    mov word [disk_spt], 9      ; fallback geometry for the LBA 0 read
+    ; --- the geometry for the LBA 0 read, BEFORE the BPB can supply one -----
+    ; A floppy's fallback is 9/2 and always was. A BIOS-transported HARD DISK
+    ; (SPEC.md 52.10.3's boot partition) needs its OWN, and this is the one
+    ; read that cannot get it from the BPB - it is the read that FETCHES the
+    ; BPB. Its LBA is not 0 either: a partition's sector 0 is `base` sectors
+    ; in, so the wrong geometry does not merely mis-seek by a track, it asks
+    ; for a CHS that translates somewhere else entirely. With 9/2 and a base
+    ; of 26 the drive was asked for (1,0,9) and answered LBA 112 - inside the
+    ; FAT - so the BPB never validated and the volume "was not an os8088
+    ; disk". The machine still booted, because the BOOT SECTOR probes AH=08h
+    ; and reads the kernel correctly; the kernel simply never mounted the
+    ; volume it had booted from, which is why this showed up as a Task
+    ; Manager that could not find its file and a Disk window with nothing in
+    ; it rather than as a failure to start.
+    mov word [disk_spt], 9
     mov word [disk_heads], 2
+    push bx
+    mov bl, dl
+    call dsk_vol_row
+    jc .geomok
+    cmp byte [bx+DV_KIND], DVK_BIOS
+    jne .geomok                 ; a driver volume never reaches the CHS code
+    test byte [bx+DV_UNIT], 0x80
+    jz .geomok                  ; a floppy: 9/2, as before
+    mov ax, [dsk_bootspt]       ; the drive's own, probed once at boot
+    or ax, ax
+    jz .geomok                  ; never probed: leave the floppy fallback and
+    mov [disk_spt], ax          ; let the mount fail honestly
+    mov ax, [dsk_boothds]
+    mov [disk_heads], ax
+.geomok:
+    pop bx
     mov word [disk_nfiles], 0   ; stays 0 unless the mount fully succeeds
     mov byte [dsk_mntok], 0     ; the write gate (SPEC.md 18.4) closes for
                                 ; the whole mount: a torn mount leaves it
@@ -1634,7 +1941,7 @@ dsk_bpb_check:
     mov ax, [dsk_bpb+DSK_B_FATSZ]
     test ax, ax
     jz .jfail1
-    cmp byte [dsk_vkind], DVK_BIOS
+    cmp byte [dsk_vflop], 1
     jne .r11
     cmp ax, DSK_FAT_SECS
     ja .jfail1
@@ -1645,7 +1952,7 @@ dsk_bpb_check:
     ; A driver-backed volume never reaches that divisor - its driver owns the
     ; addressing - so the bound is only that the product cannot overflow.
     mov ax, [dsk_bpb+DSK_B_SPT]
-    cmp byte [dsk_vkind], DVK_BIOS
+    cmp byte [dsk_vflop], 1
     jne .r11d
     cmp ax, 8
     je .r12
@@ -1667,7 +1974,7 @@ dsk_bpb_check:
     ja .jfail1
 .r12:
     mov ax, [dsk_bpb+DSK_B_HEADS]
-    cmp byte [dsk_vkind], DVK_BIOS
+    cmp byte [dsk_vflop], 1
     jne .r12d
     cmp ax, 1
     je .r13
@@ -1686,7 +1993,7 @@ dsk_bpb_check:
     ; the volume, and the question stops being "is this geometry plausible"
     ; and becomes the sharper "does this volume claim to be bigger than the
     ; partition it lives in" (SPEC.md 18.7).
-    cmp byte [dsk_vkind], DVK_BIOS
+    cmp byte [dsk_vflop], 1
     jne .r13d
     mov ax, [dsk_bpb+DSK_B_SPT]
     mul word [dsk_bpb+DSK_B_HEADS]  ; AX = spt*heads (<= 72), DX = 0
@@ -2762,6 +3069,171 @@ dsk_dirw_next:
     ret
 
 ; -----------------------------------------------------------------------------
+; dsk_find - one entry of the CURRENT directory, by ordinal (SPEC.md 19.7.1)
+; in:  CX = the ordinal to fetch, 0 to start; ES:DI = a DSK_FIND_SZ buffer;
+;      AL = 1 if the caller may see hidden and system entries
+; out: CF=0 and the buffer filled, CX = the ordinal to ask for next;
+;      CF=1 and AX = FERR_NOENT at the end of the directory, or FERR_* on a
+;      read that failed
+; clobbers: AX, CX (the outputs), flags. ES:DI comes back UNCHANGED, which is
+;      what makes SPEC.md 19.7.1's loop - set the buffer once, iterate on CX -
+;      correct rather than a walk through the caller's segment
+;
+; **STATELESS BETWEEN CALLS, AND THAT IS THE WHOLE DESIGN.** The obvious
+; shape is find-first / find-next over dsk_dirw_start's cursor, and it would
+; be wrong here: that cursor is three module words shared with fcp_scan and
+; the file manager, and EVERY file operation walks directories through
+; dskw_find. The caller this exists for is an installer, whose loop is
+; find -> read -> write -> find, so a cursor living in the kernel would be
+; destroyed by the very operations the walk is feeding. Re-seeking from the
+; ordinal costs a directory re-read per entry and cannot be corrupted by
+; anything the caller does between calls.
+;
+; A directory here is at most a few hundred entries and each seek reads whole
+; sectors without decoding them, so the quadratic term is a few extra sector
+; reads over a whole listing - against a copy that is spending 238 ms a sector
+; moving file data (PERFORMANCE.md).
+;
+; The species filter is disk_mount's (SPEC.md 19), one rule at a time: the end
+; of the directory, deleted entries, the on-disk dot links, long-name
+; fragments and the volume label are never reported. Hidden and system are
+; reported only to a DRIVER (AL = 1, set by the API cell's fence, SPEC.md
+; 19.6.1) - the same boundary that governs writing one, so a package can
+; neither see a system file here nor create one there.
+; -----------------------------------------------------------------------------
+dsk_find:
+    push bx
+    push dx
+    push si
+    push bp
+    push di                     ; DI is the caller's BUFFER and not a cursor.
+                                ; The .name loop below walks it 14 bytes
+                                ; forward, and SPEC.md 19.7.1's published loop
+                                ; sets ES:DI once and iterates on CX - so a
+                                ; returned DI+14 makes the write cursor march
+                                ; through the package's own segment. Every
+                                ; in-tree caller reloads DI and so is unharmed;
+                                ; this slot's contract freezes at merge, and no
+                                ; caller can depend on RECEIVING DI+14
+    mov [dsk_fdhid], al
+    mov [dsk_fdord], cx
+    mov bp, cx                  ; BP counts the ordinals still to skip
+    mov ax, [dsk_cwd]
+    call dsk_dirw_start
+.sector:
+    call dsk_dirw_next          ; AX = the next directory sector's LBA
+    jc .end
+    mov cx, 1
+    push di
+    mov bx, dsk_secbuf
+    push es
+    mov dx, LOW_SEG             ; the buffer is in .lowbss, reached through ES
+    mov es, dx
+    call disk_read
+    pop es
+    pop di
+    jc .ioerr
+    mov si, dsk_secbuf
+    mov cx, 16                  ; entries to a 512-byte sector
+.entry:
+    push cx
+    push es
+    mov dx, LOW_SEG
+    mov es, dx
+    mov al, [es:si]
+    mov ah, [es:si+DSK_R_ATTR]
+    pop es
+    pop cx
+    test al, al
+    jz .end                     ; 0x00: the end of the directory, per spec
+    cmp al, 0xE5
+    je .skip                    ; deleted
+    cmp al, '.'
+    je .skip                    ; the on-disk dot links (SPEC.md 19)
+    cmp al, 0x20
+    je .skip
+    mov al, ah
+    and al, 0x3F
+    cmp al, 0x0F
+    je .skip                    ; a long-name fragment
+    test ah, 0x08
+    jnz .skip                   ; the volume label
+    test ah, 0x06
+    jz .live                    ; neither hidden nor system: everybody sees it
+    cmp byte [dsk_fdhid], 1
+    jne .skip                   ; ...and only a driver sees the rest
+.live:
+    or bp, bp
+    jz .take
+    dec bp                      ; still seeking: this one is somebody else's
+.skip:
+    add si, DSK_DE_SIZE         ; the on-disk stride, which is the staged
+    loop .entry                 ; one's too - both are 32 bytes
+    jmp short .sector
+
+.take:
+    ; dsk_synth stages the display name, the type and the cluster into the
+    ; kernel's own dsk_ent (SPEC.md 19) - the dsk_get_dir idiom, so the copy
+    ; out to the caller is a plain move with no raw-field decoding here.
+    push di
+    push es
+    mov dx, LOW_SEG
+    mov es, dx
+    call dsk_synth              ; ES:SI = the raw entry -> dsk_ent
+    mov bx, si                  ; ...and the raw entry again, for the 32-bit
+    mov ax, [es:bx+DSK_R_SIZE]      ; size, which dsk_ent CLAMPS to a word
+    mov dx, [es:bx+DSK_R_SIZE+2]    ; and a copy cannot work from
+    mov cl, [es:bx+DSK_R_ATTR]      ; ...and the attribute, for the caller
+    pop es
+    pop di
+    push ax
+    push dx
+    push cx
+    mov si, dsk_ent             ; the name, 13 bytes with its NUL
+    mov cx, 13
+.name:
+    mov al, [si]
+    mov [es:di], al
+    inc si
+    inc di
+    loop .name
+    pop cx
+    mov [es:di], cl             ; +13 the attribute byte
+    inc di
+    mov ax, [dsk_ent+16]
+    mov [es:di], ax             ; +14 the type word (1 file, 2 dir, 3 parent)
+    mov ax, [dsk_ent+18]
+    mov [es:di+2], ax           ; +16 the first cluster
+    pop dx
+    pop ax
+    mov [es:di+4], ax           ; +18 the size, all 32 bits of it
+    mov [es:di+6], dx
+    mov word [es:di+8], 0       ; +22 reserved: a later field goes here and a
+                                ; caller that ignores it today still works
+    mov cx, [dsk_fdord]
+    inc cx                      ; the ordinal to ask for next
+    pop di
+    pop bp
+    pop si
+    pop dx
+    pop bx
+    clc
+    ret
+.ioerr:
+    mov ax, FERR_IO
+    jmp short .fail
+.end:
+    mov ax, FERR_NOENT
+.fail:
+    pop di
+    pop bp
+    pop si
+    pop dx
+    pop bx
+    stc
+    ret
+
+; -----------------------------------------------------------------------------
 ; dsk_chdir - make a directory the current one and re-list the volume
 ; in:  AX = the directory's first cluster (0 = the root),
 ;      DL = drive (0 = A:, 1 = B:)
@@ -2860,6 +3332,18 @@ dsk_here_ok:
     cmp byte [bx+DV_KIND], DVK_DRV
     je .yes                     ; not removable: nothing to re-validate
     mov bl, [bx+DV_UNIT]        ; the int 13h drive, for the motor bit
+    test bl, 0x80               ; ...and a FIXED disk reached through the BIOS
+    jnz .yes                    ; is not removable either (SPEC.md 52.10.3's
+                                ; boot partition). DV_KIND says the TRANSPORT
+                                ; and only the UNIT says the medium - they
+                                ; were the same question until a hard disk
+                                ; became a DVK_BIOS row, and asking the kind
+                                ; alone sends an ST-225 to the floppy motor
+                                ; test below. It FAILS SAFE (drive 0x80 has no
+                                ; bit in 0040:003F, so `cmp bl, 4` refuses and
+                                ; it mounts) - the cost is correctness kept
+                                ; and the whole optimisation lost on the one
+                                ; volume an installed machine uses most
     cmp bl, 4
     jae .no                     ; only drives 0..3 have a bit in 0040:003F
     xor bh, bh                  ; BL was the row pointer's low half a moment
@@ -3418,7 +3902,12 @@ dsk_fatwn:    resw 1            ; ...and how many are resident. On a floppy
                                 ; this is the whole FAT and the window never
                                 ; moves - the degenerate case, byte for byte
 dsk_vkind:    resb 1            ; the mounted volume's DVK_* (SPEC.md 18.7):
-                                ; which half of BPB rules 10..13 applies
+                                ; its TRANSPORT, which is what dsk_xfer needs
+dsk_vflop:    resb 1            ; ...and whether it is a FLOPPY, which is what
+                                ; BPB rules 10..13 need and is no longer the
+                                ; same question (SPEC.md 52.10.3): a boot
+                                ; partition is a DVK_BIOS row with a 64-sector
+                                ; FAT, and rule 10 caps a floppy's at 9
 dsk_vsecs:    resw 1            ; ...and the sector count its driver declared,
                                 ; which is rule 13's replacement
 dsk_nfats:    resb 1            ; 1 or 2
@@ -3445,6 +3934,20 @@ dsk_run:      resw 1            ; sectors in the int 13h call being issued
                                 ; nothing can be inside it twice
 dsk_ioerr:    resb 1            ; status (AH) of the last FAILED transfer;
                                 ; 03h = write-protected media (SPEC.md 18.4)
+; --- the transfer's volume, banked once per dsk_xfer (SPEC.md 52.10.3) -------
+; Module scratch on dsk_op's terms exactly: sch_lock is held across the whole
+; transfer, so nothing can be inside dsk_xfer twice and one copy of each is
+; enough. .bss and not .text because every one of them is WRITTEN at the top
+; of the transfer that reads them.
+dsk_fdhid:    resb 1            ; dsk_find: may this caller see hidden and
+                                ; system entries? (SPEC.md 19.6.1's fence)
+dsk_fdord:    resw 1            ; ...and the ordinal it was asked for
+dsk_unit:     resb 1            ; the row's int 13h drive - 0/1 for A:/B:, 80h
+                                ; for a boot partition. NOT the volume index
+dsk_cylhi:    resb 1            ; cylinder bits 9:8, for CL bits 7:6
+dsk_cylmax:   resw 1            ; 80 on a floppy, 1024 on a hard disk
+dsk_base:     resd 1            ; the partition base added to every LBA; 0
+                                ; everywhere except a boot partition
 
 ; --- write-path state (SPEC.md 18.4), all reset by disk_mount ---------------
 dsk_mntok:    resb 1            ; 1 only between a fully successful mount and

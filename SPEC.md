@@ -2487,6 +2487,35 @@ says which UART the mouse is on and the line says which wire it pulls, and
 `0x08` with row 0, is a cross-wired card — a fact no emulator here produces
 by accident and no reading of the source can supply.
 
+#### 9.4.3 …and a fourth word, which is the HARNESS's
+
+A pointer to **`mouse_x`**, and behind it `mouse_y` and `mouse_btn`. It is
+**appended**, so every offset above is unmoved and a reader written against
+the older block is unaffected.
+
+It is there for a different reason from the rest of this block, and the
+reason is worth stating because it has cost every scripted test in this tree
+time. **MartyPC's mouse is RELATIVE** — `os88marty.py mouse` clocks a real
+Microsoft packet through the UART, which is the whole point (§9.4.2's path is
+what a test exists to exercise) — so a script that wants to click a button at
+`(x, y)` can only get there by **dead reckoning**: drive hard into a corner
+until the kernel's edge clamp pins the cursor at a known point, then step out
+by the difference. Every packet the guest rounded, coalesced or dropped
+while the UART was busy moves the destination, and the failure is silent: the
+click lands a few pixels off a 16px control, nothing happens, and the harness
+reports a feature that does not work.
+
+Reading where the cursor **actually is** closes the loop. `tools/os88mouse.py`
+reads this pointer, reads the live position, computes the exact remaining
+delta, sends it, and re-reads until it agrees — typically two packets, and it
+can *say* when it failed to converge instead of clicking into empty desktop.
+
+**It is not a way to place the cursor, and must not become one.** A poke to
+`mouse_x` would skip the UART, `mou_isr` and the packet decoder — the three
+things a scripted click is there to drive — and CLAUDE.md's note that no debug
+module was written for the mouse *for exactly that reason* still stands. The
+packet does all the work; this word only reports where it landed.
+
 It shares §18.94's mechanism and **deliberately not its knob** — it had a
 fixed word of its own at `0060:0006` until §57 replaced the per-instrument
 words with one registry, and that address is free again.
@@ -3659,6 +3688,49 @@ boxes belong to the front window alone (§11). After the marked windows are
 drawn, `wm_paint_dmg` asks `wm_top` again; if the answer was **not** redrawn
 in this pass, it owes exactly one `wm_draw_title` with DI = BP.
 
+#### 11.91.1 The dither skips ground a window is about to cover
+
+`wm_paint_dmg` dithered the whole damage rect and then drew, **whole**, every
+window that overlaps it — so every pixel under one of those windows was
+dithered and then painted over. That is PERFORMANCE.md Part 1's double-draw,
+and on the two operations where the damage is mostly *window* it is most of
+the cost: **dragging a window** (`ui_drag` passes the union of where it was
+and where it is, and the second half is covered by the window itself) and
+**un-zooming one** (§11.95.1, where the union is nearly the desktop band).
+
+`wm_dmg_gray` replaces the fill. The region machinery already answers this
+exact question, so there is no new drawing code: `wm_clip_seed` takes the
+damage rect, `wm_dmg_occl` subtracts every visible window — shadow included,
+because `wm_draw_win` draws the shadow — and `gfx_fill_gray` is a **clipped**
+primitive, so one call paints only what is genuinely being uncovered.
+
+Subtracting *every visible* window is both correct and simpler than
+subtracting the marked ones: a window that overlaps the damage is marked by
+`wm_dmg_wins` and redrawn whole, so it is ground that needs no dither; one
+that does not overlap subtracts nothing and costs a compare.
+
+Four things are load-bearing.
+
+- **The dither's phase is a function of absolute `x+y`**, so painting it as
+  fragments is pixel-identical to painting it whole. A pattern phased from
+  its own fill origin could not be split this way — which is why this works
+  for `gfx_fill_gray` and would need thought for anything else.
+- **Overflow degrades to dithering the WHOLE rect** — the opposite of
+  `wm_clip_set`'s degradation, and for the opposite reason. There, one
+  fragment too many means *skip, we might overdraw somebody*; here it means
+  *draw it all, or we leave stale pixels behind*.
+- **The window being vacated must already be invisible.** `wm_hide` clears
+  the visible bit and `wm_destroy` zeroes the record *before* calling in, so
+  neither is subtracted and the ground each gives up is dithered. A caller
+  that repainted the damage while the departing window still read as visible
+  would leave its pixels on screen — and it would look like the damage rect
+  being wrong, not like the dither being clipped.
+- **The hide is spent explicitly.** `GFXCLIP` calls `cur_unlazy` only on its
+  *unclipped* branch (§7.1.4), trusting `wm_clip_set`'s `cur_lazyck` to have
+  decided for an armed region — and there is no window here to decide about.
+  `wm_dmg_gray` calls `cur_unlazy` itself, which is exactly what the
+  unclipped fill did before it.
+
 ### 11.92 Retitling costs a strip — `wm_title_set`
 
 A caption changes on an **event** — a folder was entered, a document was
@@ -3986,6 +4058,66 @@ already does with every mouse-up. On a machine with no mouse (§9.6) the same
 press is a latched level, and `kbm_ui`'s end-of-pass service releases it for
 exactly this case — a pass that dispatched a press and did not track it.
 
+### 11.95.1 A window that GREW reveals nothing
+
+Both halves of the zoom used to end in `wm_paint_all` — a whole-screen dither,
+every drive zone, both strips and every visible window's `W_PAINT` — to change
+the size of one window. On the way OUT that is simply wrong: the standard
+state contains the state it left, so **every pixel the window gave up it also
+covers**. Nothing is revealed, so there is nothing to put back but the window
+itself. That is §11.90's argument about raising, arriving at a resize.
+
+`wm_rz_bank` records where a window was, immediately before a geometry change;
+`wm_rz_paint` is the repaint after it and asks what actually moved.
+
+| symbol | contract |
+|---|---|
+| `wm_rz_bank` | in: BX = window. Banks its rect into `[wm_rz_o*]`. Preserves all registers. |
+| `wm_rz_paint` | in: BX = window, `[wm_rz_o*]` = where it was, gfx lock held. Draws the least that is correct. Preserves all registers. |
+| `wm_resize` | unchanged contract; banks and repaints through the pair. |
+| `wm_resize_nb` | the same body for a caller that has banked already — `wm_zoom`'s zoom-out, which moves the ORIGIN before calling in. |
+
+The cheap path needs both of:
+
+- **the new rect contains the old one**, on all four edges; and
+- **nothing is above it in `wm_zord`**, or that would have to be drawn back on
+  top of what we just drew.
+
+Then the repaint is `wm_draw_win` on that window plus the chrome — and the
+chrome is asked, not forced, so on a quiet desktop it costs nothing (§12.9,
+§30.3.2). Anything else is the **union** of where the window was and where it
+is, through `wm_paint_dmg` (§11.91): what a shrink genuinely owes, and still
+far less than the screen. The union is taken one pixel wide at the far edges,
+which is exactly the drop shadow.
+
+**`wm_draw_win` takes "which window is frontmost" in `BP`, and the cheap path
+has to set it.** It shipped without, and a zoomed window came up with a bare
+white title bar: no pinstripes, and **no close or minimize box** — which
+`wm_hit` still reports from geometry, so both were invisible and clickable,
+`wm_grow_paint`'s warning arriving at the other end of the same window. The
+register is easy to miss because the two paths either side of it look after
+themselves: `wm_paint_all` sets `BP` once before its back-to-front loop and
+`wm_paint_dmg` sets it per window, so the shrink half was always right and
+only the grow half was wrong. On this path the value needs no work to find —
+the branch is taken only after `wm_top` has answered with this very window —
+but it does have to be *written*, and saved, because `wm_rz_paint` preserves
+every register.
+
+Two things are load-bearing.
+
+- **The bank must be the TRUE old rect, and `wm_zoom`'s zoom-out is where that
+  is easy to lose.** That path writes `W_X`/`W_Y` itself — `wm_resize`'s y
+  clamp only ever pushes a window *up off the dock*, never *down off the bar*
+  — and only then calls in. Had `wm_resize` banked at its own entry it would
+  have recorded the NEW origin with the OLD size: a rect the new one contains,
+  so the grow test passes, and **the band the window actually vacated is never
+  repainted**. Hence `wm_resize_nb`.
+- **The "nothing above it" test is made, not assumed.** It holds by
+  construction for the case this exists for — §11.95's zoom is the *second*
+  press on a title bar and the first one raised the window — but `wm_resize`
+  is a published slot (§20) that any application may call at any depth of the
+  z-order.
+
 ### 11.96 The raise cache — a covered window put back, not redrawn
 
 Raising an obscured window measured **1,026 ms** on a 4.77MHz 8088, and
@@ -4184,25 +4316,28 @@ step 2), and that flush is what clears the last item highlight from VRAM.
 ### 12.05 The bar is redrawn only when its contents changed
 
 `menu_draw_bar` is on the same hot path as `dock_paint` — every window
-operation calls it because the bar *might* have changed owner — and unlike the
-dock there is no useful per-cell granularity: the bar's contents **are** the
-active application's, so either the owner changed and every cell did, or it
-did not and none of them did. So one flag, `[menu_bdirty]`, gates the white
-field, the black rule, the name label and every cell title.
+operation calls it because the bar *might* have changed owner. `[menu_bdirty]`
+is the gate: `menu_relayout` is the single rebuild point and sets it, which
+covers every ownership change including the one `menu_check` makes at the top
+of `menu_draw_bar` itself. `menu_init` sets it too, because `-f bin` zeroes no
+`.bss`.
 
-`menu_relayout` is the single rebuild point and sets it, which covers every
-ownership change including the one `menu_check` makes at the top of
-`menu_draw_bar` itself. The only other thing that can invalidate the bar is
-somebody having drawn **over** it, and just two things can: a fullscreen
-window (§11.2) and a dropped menu whose save-under claim was refused. So
-`wm_paint_all` and `menu_track` call `menu_force` rather than reason about it
-— one bar redraw per menu interaction is not worth a proof. `menu_init` sets
-it too, because `-f bin` zeroes no `.bss`.
+**What the flag gates is the MENUS SEGMENT and nothing else** — see §12.9. The
+bar is three independently-drawn segments (logo, menus, clock) and a fourth
+borrows space from the second (§12.8); this flag is the second one's. The
+static furniture has its own flag `[menu_bovr]`, the clock has its own check
+word, and no one of them can make another draw a pixel.
 
-**The clock is outside all of this.** `menu_draw_clock` fills its own cell and
-is called unconditionally at the end of `menu_draw_bar`, as well as directly
-by the UI task's own clock step (§12.1) — nothing to do with the Timer
-application of §14.
+That is a correction, and the claim it replaces is worth recording because it
+sounds right: *"unlike the dock there is no useful per-cell granularity — the
+bar's contents ARE the active application's, so either the owner changed and
+every cell did, or it did not and none did."* Both halves are false in
+practice. The **clock** is on the bar and changes on its own cadence, so
+"every cell changed" was never true of it — and it was redrawn on every window
+operation to prove it. The **logo** is on the bar and changes never. And the
+file-activity widget (§12.8) changes an 88px span and used to force all of it.
+Granularity by *cell* is indeed useless here; granularity by **segment** is
+the whole feature.
 
 ### 12.1 The menu-bar clock
 
@@ -4215,26 +4350,38 @@ the cell is sized for the longest and **the string is right-aligned in it**:
 ```nasm
 MENU_CLK_W  equ 24*8                        ; the LONGEST form, not the live one
 MENU_CLK_X  equ SCREEN_W - 8 - MENU_CLK_W   ; 440: cell left, 8px right margin
-MENU_CLK_HX equ MENU_CLK_X - 6              ; 434: hit band left edge
+MENU_CLK_HX equ (MENU_CLK_X - 6) & 0FFF8h   ; 432: hit band left edge
 ```
 
 Those three are the **VGA reference**: nothing reads them at run time. The
-live cell is the derived word `[vid_clk_hx]` = `vid_w - 206` (§39.2), and the
-layout limit, the erase and the hit test all read that — the clock hangs off
-the right edge of whatever screen the boot probe found.
+live cell is the derived word `[vid_clk_hx]` = `(vid_w - 206) & ~7` (§39.2),
+and the layout limit, the field and the hit test all read that — the clock
+hangs off the right edge of whatever screen the boot probe found.
+
+**It is floored to a glyph cell**, which is what makes the bar's segments
+whole numbers of 8px cells (§12.9) and so reachable by `font_run`'s
+single-pass path (§6.1). The 2px it gives up widen the dead gap between the
+last menu title and the clock; nothing else in the bar can see it.
 
 | symbol            | contract                                                  |
 |-------------------|------------------------------------------------------------|
-| `menu_draw_clock` | in: nothing (gfx lock held by the caller). Formats the live clock with `clk_fmt` (§37), white-fills the whole cell — x `[vid_clk_hx]`..`[vid_wm1]`, rows 0..`MBAR_H-2`, the black rule excluded — and draws the string **right-aligned**: `font_width` gives its pixel width and the pen goes at `[vid_wm8] - width`, `MENU_TEXT_Y`. Preserves all registers. |
+| `menu_draw_clock` | in: nothing (gfx lock held by the caller). Formats the live clock with `clk_fmt` (§37), and **returns having drawn nothing if the string is the one already on the glass** — a check word over it, `0` reserved for "nothing drawn yet". Otherwise stages it into `menu_clkbuf` right-aligned in the field by **leading spaces** and emits ONE `font_run` at x = `[vid_clk_hx]`, y = `MENU_TEXT_Y`, black on white. Leaves `[gfx_color]` = `CBLACK` on both paths; preserves all registers. |
 
-Right alignment is what makes a format change a redraw of the same cell
-rather than a relayout: the erase is always the full 24-glyph cell, so a
-shorter string leaves clean white to its left and the time stays pinned to
-the same right margin whichever form it is in.
+The field is `[vid_clk_hx] .. vid_w-9`, both ends on cell boundaries, so it is
+exactly 25 cells on both screen widths — one more than the longest form, so
+the pad is never negative. Right alignment is what makes a format change a
+redraw of the same field rather than a relayout, and **the padding is the
+erase**: a shorter string blanks the cells it gave up inside the same opaque
+pass that letters the rest, so there is no fill in this path at all and the
+clock is never momentarily blank. It used to erase 206px of bar and then
+re-letter ~20 glyph cells — tens of milliseconds of blank clock on a 4.77MHz
+machine, on **every window operation**, for a string that changes once a
+minute.
 
 `menu_draw_bar` ends with a `menu_draw_clock` call, so every `wm_paint_all`
-repaints it; ui_task redraws just the cell when its text changes — once a
-second with seconds shown, **once a minute without** (§13 step 4). No
+reaches it (and the check word usually stops it there); ui_task redraws just
+the cell when its text changes — once a second with seconds shown, **once a
+minute without** (§13 step 4). No
 `wm_obscured` check is needed anywhere: windows clamp to `y >= MBAR_H`
 (§13), so nothing can ever cover the bar — **except a fullscreen window
 (§11.2), which is why step 4's redraw and the ladder's menu-bar branch are
@@ -4651,7 +4798,7 @@ itself.
 |-------------|---------------------------------------------------------------|
 | `fpg_begin` | in: AX = sectors this operation expects (0 is read as 1). Arms the widget and draws the **whole** of the expensive part — the white bed, the document icon and the box frame. Preserves all registers and the flags. |
 | `fpg_step`  | in: nothing. One sector done. Preserves **every register and the flags** — its caller is the middle of `dsk_xfer`'s per-sector loop, `spl_step`'s contract exactly. |
-| `fpg_end`   | in: nothing. Disarms and gives the bar back (`menu_force` + `menu_draw_bar`). Preserves all registers and the flags. |
+| `fpg_end`   | in: nothing. Disarms and gives the bar back: white-fills the rows of its own bed that carry no menu text, `menu_inval`s the bed's cells, and calls `menu_draw_bar`. Preserves all registers and the flags. |
 
 **The chrome is drawn once and the bar is the only thing that moves.** A
 `gfx_*` call costs ~756us of arriving whatever it draws (PERFORMANCE.md Part
@@ -4693,12 +4840,27 @@ Five things hold it up.
 - **The space is borrowed, not reserved.** `menu_relayout`'s limit
   (`cmp dx, [vid_clk_hx]`) is untouched, so app menus keep every pixel they
   have today and a machine that never touches the disk looks exactly as it
-  did. `fpg_begin` white-fills its bed over whatever was there and `fpg_end`
-  gives it back with `menu_force` + `menu_draw_bar`, which redraws the
-  field, the name, the titles and the clock in one pass. Reserving the 88
+  did. `fpg_begin` white-fills its bed over whatever was there and **tells
+  the bar which cells it took** (`menu_inval`), so `fpg_end` gives back
+  exactly those and nothing else. Reserving the 88
   pixels instead would have cost them on every machine forever — and on CGA
   the file manager's own titles have only ~108px of slack against that limit
   to begin with.
+
+  It used to end in `menu_force` + `menu_draw_bar`, which redrew the field,
+  the logo, the name, every title **and the clock** — so every file operation
+  in the system ended with the whole bar flashing white to put back an 88px
+  strip. That is §12.9's case in its plainest form: a segment changed and the
+  other three redrew.
+
+  Giving the bed back is two thin fills and a re-letter, and the split is the
+  whole point. `fpg_end` erases only the rows of its bed that carry **no menu
+  text** — 0..`MENU_TEXT_Y-1` and `MENU_TEXT_Y+8`..`MBAR_H-2`, which is where
+  the document icon's top and bottom and the box frame live — and leaves the
+  text band alone, because `menu_bar_text`'s opaque run is about to write
+  every one of those cells from what the widget left to what the menu says
+  in one pass. Erasing the text band as well would put a white flash back
+  exactly where the fix removed it.
 
 **Where it is armed** is the file-operation layer, because that is the only
 place a *total* exists: `dsk_xfer` knows one call's run and `dskw_rdata`
@@ -4715,6 +4877,86 @@ Metadata sectors — the FAT flush, the directory commit — are outside
 rather than wrapping. The alternative was a total that had to be revised
 downward mid-operation, and a progress bar that goes backwards is worse than
 one that sits at 100% for a sector or two.
+
+### 12.9 The bar is three segments, and each answers for itself
+
+**Only the segment that changed may put pixels on the bar.** The menu bar
+carries four things that change on four completely different cadences — a
+logo that never changes, the active application's menus, a clock that changes
+once a minute, and the file-activity widget of §12.8 — and until this they
+shared one flag. Any of them moving redrew all of them, as a full-width white
+fill followed by every glyph being put back: **PERFORMANCE.md Part 1's
+double-draw flash**, at the top of the screen, on every window operation.
+
+| segment | x span | drawn when | by |
+|---|---|---|---|
+| logo | `0 .. MENU_TXT_X0-1` | the bar was painted **over** (`[menu_bovr]`) | `menu_furniture` |
+| menus | `MENU_TXT_X0 .. [vid_clk_hx]-1` | its composed text differs from what is showing | `menu_bar_text` |
+| clock | `[vid_clk_hx] .. vid_w-9` | its string differs from what is showing | `menu_draw_clock` (§12.1) |
+
+The file-activity widget is not a fourth segment: it **borrows** the right
+end of the menus segment and gives it back through `menu_inval` (§12.8).
+
+Both interior boundaries are glyph-cell boundaries — `MENU_TXT_X0` is 32 and
+`[vid_clk_hx]` is floored to a multiple of 8 (§12.1) — so a segment is a whole
+number of 8x8 cells. That is not tidiness: it is what lets a segment be
+redrawn by `font_run` (§6.1) on its **single-pass** path, where a cell row is
+one framebuffer store on the two mono adapters and the span is never
+momentarily blank. The layout follows: `MENU_NAME_X` is 40, `MENU_TITLE_PAD`
+is 16, and a title's pen is `MB_XL + 8` — so every cell's pen x is a multiple
+of 8, since a glyph is 8 wide and the running left edge starts aligned. This
+is Tracker moving its pattern columns onto 8px boundaries to earn the same
+path (§45), and `WF_SNAP` (§11.94) doing it for ordinary windows.
+
+| symbol | contract |
+|---|---|
+| `menu_force` | in: nothing. The bar was **painted over**: sets `[menu_bovr]` and `[menu_bdirty]`. The only path that reaches `menu_furniture`, and so the only one that erases anything. Preserves all registers. |
+| `menu_inval` | in: AX = x1, CX = x2 (inclusive, absolute). Forgets what was drawn in that span of the **menus** segment, rounded OUTWARD to whole cells and clamped to the segment; sets `[menu_bdirty]`. Preserves all registers. |
+| `menu_furniture` | in: nothing (gfx lock held). White-fills the bar's field, draws the black rule and the logo, forgets every cell and the clock's check word. Preserves all registers. |
+| `menu_bar_text` | in: nothing (gfx lock held). Composes the menus segment into `menu_bcell` and emits the one `font_run` span that differs. Preserves all registers. |
+
+#### The composition IS the diff
+
+`menu_bcell` is one byte per glyph cell, and it is two things at once: the
+buffer the bar's text is composed into, and the record of **what is on the
+glass**. So there is no separate "what did I draw last time" structure to
+keep in step — writing a cell and comparing it are the same instruction pair,
+and the first and last cells that differ bound exactly one `font_run`.
+
+Four things hold it up, and three of them are somebody else's rule first.
+
+- **Spaces are content.** The segment is composed *whole* — the name at
+  `MENU_NAME_X`, each title at its `MB_TX`, and **spaces everywhere else**,
+  out to the clock. So a bar that lost its longest menu blanks the cells it
+  gave up inside the same opaque pass that letters the ones it kept. There is
+  no fill in this path at all, which is what removes the flash rather than
+  shrinking it. (Note Pad's rows, §27.2, and Missile Command's status strip,
+  §48.9.3, are the same trick: the padding is the erase.)
+- **It is sound only because the bar can never be covered.** Windows clamp to
+  `y >= MBAR_H` (§13), so what the last emit drew is still what is showing,
+  and the only thing that can falsify `menu_bcell` is somebody drawing over
+  the bar — which is precisely what `menu_force` and `menu_inval` are for.
+  This is `fm_sel_bar`'s licence (§22.2) in another place: you may reason
+  about what is on screen only where nothing else can have written to it.
+- **The About cell is composed FIRST and walked past afterwards.** §12.7
+  appends the app-name cell **last** in `menu_bar` so the app's own menus
+  keep bar index == set index + 1, but it sits at `MENU_NAME_X`, left of all
+  of them. Composition must run in **x order** or the padding walks
+  backwards, so `menu_bar_text` emits `[menu_abcell]` before the loop and
+  skips it inside.
+- **Invalidation writes a byte that can never be composed.** `0` is the
+  sentinel because every byte that goes into this buffer is a printable
+  character — a NUL would have ended the string it came from.
+
+#### What each flag is NOT
+
+`[menu_bdirty]` and `[menu_bovr]` look like a coarse and a fine version of one
+question and are two different questions. `[menu_bdirty]` says *the menus
+segment's text may have moved*, and is cheap and frequently set — the answer
+is usually "nothing differs" and nothing is drawn. `[menu_bovr]` says *our
+pixels were destroyed*, is rare, and is the one flag in the module that
+erases. A caller that overdrew part of the bar and reached for `menu_force`
+because it was the only thing available is the bug §12.8 had.
 
 ## 13. ui.inc — the UI task (task 0)
 
@@ -7033,6 +7275,65 @@ one-sector file **3 → 2**. `tests/filetest` passes all 25 checks and
 `tools/os88disk.py --verify` is clean, which is the gate this had to clear —
 the change touches create, replace, delete, rename and stat alike.
 
+### 18.4.4 Chunked I/O — `OSAPI_FILE_APPEND` and `OSAPI_FILE_READ_AT`
+
+`OSAPI_FILE_READ` and `OSAPI_FILE_WRITE` move a **whole file**, so the
+largest file a package could touch was the largest heap claim it could take.
+A 116KB module on a small machine could not be opened at all, and nothing in
+the API said why — the read simply answered `FERR_BIG`.
+
+The pair that fixes it is not new code. §22.5's copy has moved files bigger
+than its buffer since it was written, through `dskw_append` and a resumable
+`dsk_read_chain`; both were deliberately module-internal, `dskw_append`'s own
+comment saying "no API slot" because it carries a precondition. **The
+precondition is publishable — it just has to be published**, which is what
+these two slots do.
+
+**One rule governs both, at each end: a chunk is a whole number of
+CLUSTERS**, except the last, which is whatever is left. That is what makes an
+offset land exactly where the previous chunk stopped, and what lets an append
+start on a fresh cluster instead of filling a partial sector inside a chain
+that is already there. `OSAPI_FILE_DFREE` has always answered the cluster
+size, so nothing new was needed to ask it.
+
+**And the cluster size is the DESTINATION's as well as the source's.** Two
+volumes need not agree — a hard-disk partition picks its cluster size from
+its capacity (§52.3) while a floppy is 512 bytes — so a copy chunks at a
+multiple of both. This is `fcp_clspan`'s rule (§22.5), and it is stated here
+because a package now has to obey it: getting it wrong loses the tail of
+every cluster, which is exactly the bug `fcp_clspan` exists to prevent and
+which only showed up when partitions stopped all having 512-byte clusters.
+
+**The read is STATELESS and the offset is the whole argument.** `fcp_rdnext`
+resumes through `[dsk_chain_end]` and three module words, which is right for
+a caller that is the only thing running and wrong for a published slot: the
+loop this exists for is *read → write → read*, and the write walks
+directories and the FAT. A resume token living in the kernel would be
+destroyed by exactly the work it is feeding. Same reasoning as §19.7.1's
+ordinal, and the two were designed together.
+
+The price is walking the chain from the front on every call, and it is
+smaller than it looks: the walk is FAT lookups against a resident window,
+while the caller is spending **65 ms a sector** (PERFORMANCE.md — a sector
+inside a well-coalesced run; 238 was the `AL` bug, not the drive) on the data
+being handed to it. A 116KB file in 32KB chunks is four walks averaging ~116
+clusters — a few hundred word reads against twelve seconds of floppy.
+
+Both preconditions are **refused rather than mis-handled**, and both answer
+`FERR_NAME`: a non-cluster offset or capacity on the read, and a file whose
+current size is not a cluster multiple on the append. A read at or past the
+end of the file is **not** an error — it answers zero bytes, which is how the
+caller's loop terminates.
+
+`dskw_append` also refuses a **protected** file with `FERR_PROT`, `DSKW_PROT`
+being read-only|hidden|system|label|directory — so there is no chunked path
+to a system file and §19.6.1's slot is the only way to write one. That is a
+constraint on §52.10.4 rather than an oversight: the installer writes
+`KERNEL.SYS` **whole**, in one `OSAPI_FILE_WRITE_SYS` call, which is also the
+strongest guarantee that it lands contiguously from cluster 2 the way
+§52.10.2 requires. Chunked I/O is for the *application* files, which are the
+big ones and are not protected.
+
 ### 18.94 The transfer instrument, published at a fixed offset
 
 **`make DISKCNT=1`, which is now every FIELD kernel and no shipped one.** The
@@ -7558,6 +7859,54 @@ name is still an 8.3 name with no path in it (§19.2), and a *navigation* is
 still a remount. The instance's folder is where names resolve, not a second
 naming scheme.
 
+### 19.2.2 Standing somewhere to WORK is not navigating — `OSAPI_FILE_GOTO_Q`
+
+`OSAPI_FILE_GOTO` (slot 0x0230) is a **navigation**: a full `dsk_chdir`, which
+is the BPB, the FAT window, the directory scan, the sort, one icon harvest per
+file, and a move of the calling instance's own folder (§19.2.1). That is right
+for an app that is about to *show* a folder and wrong for every copy loop
+ever written, which stands somewhere only to read or write **by name**.
+
+`OSAPI_FILE_GOTO_Q` (slot 0x0370) is the same move with none of that. It is
+`fcp_goto`'s two paths, which the kernel's own copy engine has had since
+§22.5, published because a copy engine *outside* the kernel needs them just
+as much:
+
+- **Inside the volume you are already on it is a WORD** — `[dsk_cwd]`, no
+  I/O at all. Nothing a caller can do between two of these reads the
+  listing: `dskw_*` resolve names by walking `[dsk_cwd]`'s raw directory
+  sectors, and so does `dsk_find` (§19.7.1). The FAT window and every
+  derived geometry belong to the **volume**, which has not changed.
+- **Crossing to another volume is a quiet mount** (§18.9) — BPB, FAT window,
+  cwd — and §18.8.2's banked per-volume window usually means the FAT is not
+  re-read either.
+
+The cluster is range-checked at the slot, because the quiet path skips
+`disk_mount`'s own `.cwd_lost` validation. That is `fcp_goto`'s reason and
+the same two compares.
+
+**It is not a replacement for `GOTO` and must not become one.** It leaves the
+global listing empty and `[dsk_lstale]` raised, so a caller about to *show* a
+folder wants the other slot; and it deliberately does not move the instance's
+own folder, because this is where the caller is standing to do a job, not
+where the application now believes it lives.
+
+What it is worth: the hard-disk installer (§52.10.4) was paying a full
+`dsk_chdir` **twice per file and twice per chunk**. §22.5 records what that
+costs from the other side — the per-switch icon harvest alone "was 23% of
+all sectors read" and made a copy quadratic.
+
+**The media does not change under a running operation, and that is a stated
+assumption.** A human does not take a floppy out and put a different one in
+between two files of a copy their frozen machine is in the middle of; §18.9.1
+already reasons this way for a single quiet switch, using the BIOS motor
+timeout as its physical evidence. That evidence does **not** span a
+floppy-to-hard-disk copy — the motor stops while the destination is being
+written — so it is stated here rather than measured there. What still costs a
+sector per switch is re-validating the BPB signature before reusing a banked
+FAT window (§18.8.2); a caller-declared batch bracket would remove that too,
+and is the next step rather than something this slot does.
+
 ### 19.3 The system disk — a FAT12 volume, and the kernel is a file on it
 
 The disk os8088 boots from is a **real FAT12 volume**, mounted by os8088's own
@@ -7793,9 +8142,12 @@ Two things do NOT follow, and both had to be arranged:
   treats hidden and system as untouchable, so the first `SYSTEM.CFG` save
   would create the file and every save after it would be refused
   `FERR_PROT` by the very bits the first one set. `dskw_write_sys` is the
-  narrow exemption: **kernel-only, no API slot and there must never be one**,
-  because the whole point of this section is that a package cannot make a
-  file the user can neither see nor delete. It differs from `dskw_write` in
+  narrow exemption: **kernel-only, and reachable from outside the kernel by
+  a DRIVER alone** (§19.6.1) — because the whole point of this section is
+  that a *package* cannot make a file the user can neither see nor delete.
+  This clause used to read "no API slot and there must never be one", which
+  is what §19.6.1 narrows and why the reason is restated beside it rather
+  than left implied. It differs from `dskw_write` in
   exactly two ways, both keyed off `[dskw_syswr]`:
 
   1. a file it **creates** is stamped hidden + system, and
@@ -7812,6 +8164,55 @@ Two things do NOT follow, and both had to be arranged:
 Read-only needs no exemption anywhere, because nothing in the kernel ever
 rewrites a read-only file: `KERNEL.SYS` and the drivers are replaced by
 rebuilding the disk, not by the running system.
+
+### 19.6.1 …and a DRIVER may call it, which a package may not
+
+`OSAPI_FILE_WRITE_SYS` (slot 0x0340) is `dskw_write_sys` published, and it is
+the one cell in the table with a caller test in front of it. It exists for
+§52.10's installer: making a hard-disk partition **bootable** means putting
+`KERNEL.SYS`, `SYSTEM.CFG` and every `*.DRV` on it with the attributes this
+section describes, and the installer is driver code because the partition
+table, the MBR and the device are the driver's.
+
+**The rule above is narrowed, not dropped, and the test is the reason §19.6
+gives for it**: *a package cannot make a file the user can neither see nor
+delete*. That is a statement about packages, and it still holds exactly — an
+application calling this slot gets `CF=1` / `AX = FERR_PROT` and writes
+nothing, which is the same answer naming a system file through
+`OSAPI_FILE_WRITE` has always produced.
+
+A driver is the other species (§51), and the boundary is real rather than an
+honour system:
+
+- `drv_tab` is a **fixed kernel-side table** of known driver files, so the
+  set of things that can ever be a driver is decided when the kernel is
+  built and a user cannot add to it;
+- a `.DRV` carries **header version 4**, which `ld_check_hdr` refuses for an
+  application, and `disk_mount` types only `*.O88` as launchable — two
+  independent gates, so a driver can never be double-clicked into existence;
+- and the driver files themselves are hidden + system + read-only on the
+  system disk, so the OS offers no way to put one there.
+
+The fence is **`drv_owns_seg`**, and the precedent is §51.7's spawn fence:
+`ES` is the caller's `DS`, stamped by §20.3's stub convention, and a
+package's `DS` is its own segment, which is never a `drv_tab` row. It is an
+**identity** test, not a containment approximation. `BX` is banked across it
+because `BX` is the caller's data buffer offset in this ABI and the fence
+needs a register.
+
+Two consequences worth stating, because both are load-bearing for §52.10:
+
+- **A file this slot creates is hidden + system and NOT read-only**
+  (`DSKW_SYSAT` is `DSKW_HID | DSKW_SYS`). The read-only bit on the shipped
+  floppy's `KERNEL.SYS` is `os88disk.py`'s, applied when the image is built.
+  So an installed volume's system files are invisible to every listing
+  exactly as the floppy's are, and a **re-install can replace them** —
+  `DSKW_SPROT` still refuses a read-only file, and if the installer stamped
+  one it could never install over itself.
+- The slot carries **no V** (§19.2.1). Every other name-taking cell resolves
+  in the calling instance's own directory; this one must not, because the
+  installer is naming files on the volume it is building and a folder put
+  underneath it would scatter them.
 
 ### 19.7 `README.TXT` — the manual is on the disk, and the reader sets its shape
 
@@ -7868,6 +8269,99 @@ lookup finds `NOTEPAD.O88` on the *other* floppy by §54.4's rungs, so the
 system disk needs no copy of it. And the `sys_attr` rule above stamps the
 file read-only, so it lists like an ordinary document and cannot be deleted
 or saved over.
+
+### 18.5.1 …and a package may create one — `OSAPI_FILE_MKDIR` (slot 0x0360)
+
+`dskw_mkdir` published, and it is **only wiring**: the routine is exactly the
+one the Folder menu, the Standard File dialog's New Folder button and
+`fcp_mksub` have always used, unchanged.
+
+It looked unpublished for a reason worth recording, because it reads as a
+duplication and is not one. All three of those callers — `files.inc`,
+`fdlg.inc`, `filecp.inc` — live in the **cold segment** (§2.6), so each of
+them reaches `dskw_mkdir_x` with a *near* call and no `.text` thunk was ever
+needed. The absence of the thunk, not any absence of the routine, is what
+made it unreachable from the API table. CLAUDE.md already notes the same
+shape for `filecp.inc`, whose `fcp_` routines need no thunks because their
+only caller is cold as well.
+
+What made it worth publishing is §52.10.4: an installer has to reproduce the
+apps disk's folders (§19.2), and one of them is not cosmetic — §28.3 needs
+`SYSTEM/TASKMGR.O88` to exist, or the chip menu cannot open the Task Manager
+on the installed volume.
+
+**No `rmdir` goes with it.** The kernel has one and nothing outside the kernel
+has ever wanted it; a slot that exists for symmetry is a permanent promise
+bought for nothing (§20.8 rule 4).
+
+### 19.7.1 Listing a directory — `OSAPI_FILE_FIND` (slot 0x0348)
+
+**These are not the numbers this block was written with, and §55.4's
+paragraph is the precedent.** `OSAPI_FILE_WRITE_SYS`, `FILE_FIND`,
+`FILE_APPEND`, `FILE_READ_AT`, `FILE_MKDIR` and `OSAPI_REBOOT` were drafted
+at 0x0338..0x0360 and moved up one cell when the branch met `evq_pending`
+(§13.4), which had taken 0x0338 while these were being written. §20.8 rule 4
+exactly: **a RELEASED slot keeps its contract, and a slot introduced since the
+last release is not one** — neither block had shipped, so neither was frozen,
+and the one that had not yet reached the integration branch is the one that
+moved. It cost a rebuild of every `.o88` and one `.drv`, which is survivable
+only because every consumer is in this tree; the next contract change to any
+of them is a new number.
+
+The file operation the API had no way to express. A package could write,
+read, delete, rename and ask the free space **by name**, and never find out
+what names were there — everything in this tree that enumerates (the Disk
+window §22, the Standard File dialog §38, the copy engine §22.5) is kernel
+code reading the mount snapshot directly, which a package cannot reach. That
+was survivable while every consumer was in the kernel, and stopped being so
+at §52.10.4: an installer must copy *whatever is on the disk*, and a baked
+list of the shipped layout goes stale in silence the moment a user's floppy
+differs from it.
+
+**The type word is `OSAPI_FT_*`, and TYPE 1 IS NOT "A FILE".** `dsk_synth`
+(§19) gives 1 only to a file the *loader* would accept — extension `O88`,
+size inside 16 bits, first cluster in range — because the listing's consumers
+are the Disk window and the loader. Every other ordinary file is **type 0**.
+So the question "is this a file" is `type < OSAPI_FT_DIR`, never `type == 1`,
+and the raw FAT attribute is at +13 for a caller that wants the byte itself.
+
+This is written down because it has already cost a bug, and a quiet one: the
+installer's sub-folder walk (§52.10.4) copied "type 1", which took every
+`.O88` out of `APPS` and `GAMES` and silently left `BEVERLY.MOD` behind — an
+installed machine with an empty `MEDIA` folder, no error anywhere, and the
+same fate waiting for any document a user had put in a folder of their own.
+The SDK's own comment said `1 = file`, which is where the mistake came from,
+so the constants exist now and the comment points at them.
+
+**It is by ORDINAL and the kernel keeps no cursor**, which is the design
+rather than an economy. Find-first / find-next would need kernel state, and
+`dsk_dirw_start`'s cursor is three module words already shared with
+`fcp_scan` and the file manager — while the loop this exists for is
+*find → read → write → find*, and every one of those middle steps walks
+directories through `dskw_find`. A cursor living in the kernel would be
+destroyed by exactly the work the walk is feeding. Ask for ordinal 0, then
+for whatever `CX` comes back as; nothing the caller does in between can
+corrupt it.
+
+The cost is a directory re-seek per entry, and it is the right trade here: a
+directory is a few hundred entries at most, a seek reads whole sectors
+without decoding them, and the caller is spending 65 ms a sector
+(PERFORMANCE.md) moving the file data this is feeding.
+
+**Hidden and system entries are reported to a DRIVER only**, and that is the
+same boundary §19.6.1 draws in the other direction. Together they are one
+sentence rather than two rules: *a package can neither find a system file nor
+create one.* The filter is otherwise `disk_mount`'s own (§19) — the end of
+the directory, deleted entries, the on-disk dot links, long-name fragments
+and the volume label are never reported to anybody.
+
+It resolves in the **calling instance's** directory (§19.2.1), like every
+other name-taking cell: "list the current directory" has to mean the
+directory `OSAPI_FILE_READ` would resolve a name in, or a package would
+enumerate one folder and open its files from another.
+
+The answer is 24 bytes, and the **size is 32-bit** where the listing's is
+clamped to a word (§19) — a copy cannot work from a truncated length.
 
 
 ## 20. Loadable programs — the .o88 package format
@@ -8721,6 +9215,32 @@ DS. Giving that variable a segment would put one on every kernel caller of a
 primitive that re-enters per clip fragment, so the cell is an `X` whose stub
 stages the eight bytes into the kernel's own segment first — the
 `dsk_get_dir` idiom of §2.1, at its smallest.
+
+### 20.10 Restart is POSTED, never performed
+
+`OSAPI_REBOOT` (slot 0x0368) takes nothing, answers nothing and **sets a
+byte**. `ui_task` spends it at the top of its pass, before the keyboard poll
+and with nothing held; the body is the System menu's own `CMD_REBOOT` path,
+reached at a second label rather than copied.
+
+The deferral is not tidiness. Every caller of this slot is a window callback,
+a Control Panel page or a driver's tool window, and all three run on the UI
+task **with the gfx lock held** (§13) — while the reboot path takes that lock
+itself, and before it calls `drv_shutdown`, which *waits for every driver's
+worker to die* (§51.2) by yielding to a task that may want the lock. Called
+inline from a callback that is a deadlock with the machine already half torn
+down: the Control Panel flushed, the drivers detaching, and nothing left to
+say so. It is the same reasoning that runs the app menu's `Close` inline in
+`ui_dispatch` (§12.7) — that one runs *there* because that is where no lock
+is held, and this one cannot, so it waits for a place where none is.
+
+A second post before the first is spent is the same restart, which is why it
+is a flag and not a count. The flag is cleared **before** the call: the body
+does not return, but a path that ever did must not find the post standing.
+
+The first consumer is the hard disk installer's Restart button (§52.10.6),
+which is the case that needed it: the user has just written a bootable
+volume and the next thing they want is to boot it.
 
 ## 21. loader.inc
 
@@ -13179,24 +13699,26 @@ all** — which is what lets `wm_dock_under` (§11.90) skip putting the windows
 back over it.
 
 Each tile carries a **key** (`dock_key`): its `I_ICON`, rotated so the
-pointer's high bits reach the low ones, XORed with live / minimized / active.
-A tile whose key still matches `dock_ck[i]` — what it was last *drawn* as —
-is left alone. 0 is reserved for "no tile", so a slot going free erases and a
-slot filling draws. A focus change costs two tiles; nothing changing costs no
-pixels. A tile that does change is **erased to white first**, because its
-marks are not nested: active → plain has an inner frame to remove, and
-minimized → plain an XOR to undo.
+pointer's high bits reach the low end of the word, with live / minimized /
+active in **bits 0..2 and nothing else there** (§30.3). A tile whose key still
+matches `dock_ck[i]` — what it was last *drawn* as — is left alone. 0 is
+reserved for "no tile", so a slot going free erases and a slot filling draws.
+A focus change costs two tiles; nothing changing costs no pixels. A tile whose
+**identity** changed is erased to white first; a tile where only a MARK moved
+is not erased at all — see §30.3.
 
 The strip's own rule and white field are redrawn only when `[dock_full]` says
 so, and the single thing that sets it is somebody having drawn **over** the
 strip: `wm_paint_all`'s dither, and `wm_paint_dmg`'s when the damage reaches
 `[vid_dock_y0]` — which is how *"a window that was covering the dock moved
 away"* gets its full redraw, since hiding, destroying, dragging and resizing
-all arrive there with a rect that reaches the strip. `dock_force` is the
-entry point and it clears the per-tile keys with it: a tile whose pixels were
-painted over is not "unchanged" however much its state still matches.
+all arrive there with a rect that reaches the strip. `dock_force` /
+`dock_force_x` are the entry points and they clear the per-tile keys **of the
+tiles the damage reached**: a tile whose pixels were painted over is not
+"unchanged" however much its state still matches, and a tile the damage never
+came near is not repainted to prove it.
 
-`.bss` is not zeroed at boot (`-f bin`), so `dock_init` sets `[dock_full]`
+`.bss` is not zeroed at boot (`-f bin`), so `dock_init` calls `dock_force`
 and clears the keys itself.
 
 The dock renders ONLY records read as I_STATE = 1 during the same lock
@@ -13209,6 +13731,8 @@ tile vanishes with the `wm_hide` repaint. Icon pointers must satisfy
 | symbol       | contract                                                    |
 |--------------|--------------------------------------------------------------|
 | `dock_init`  | reset module scratch. From kmain, right after desk_init.    |
+| `dock_force` | in: nothing. The WHOLE strip was painted over. Preserves all registers. |
+| `dock_force_x` | in: AX = x1, CX = x2 (inclusive). Only that span was. Repeated calls UNION. Preserves all registers. |
 | `dock_paint` | draw the rule, the strip and every live instance's tile. Called by wm_paint_all after `desk_paint`, before the menu bar and windows (lock held by caller) — windows cover the dock exactly like desktop icons (§26). |
 | `dock_hit`   | in CX=x, DX=y. Out: CF=1 = the point is not in the strip at all; CF=0 = the strip owns it, and then **DI = the live instance record under the pointer, or 0** for bare strip, an inter-tile gap, a slot past the last, and an empty or dying one. AL = the slot when DI ≠ 0. Clobbers AX and DI only. The one hit test both buttons use (§30.2). |
 | `dock_click` | in CX=x, DX=y (no lock held; called by ui.inc when wm_hit found no window, BEFORE desk_click). Out: CF=1 = consumed (any click with y ≥ `[vid_dock_y0]` — strip background clicks are consumed no-ops), CF=0 = not in the dock. Tile hit on a live instance: minimized → gfx_lock, `inst_restore`, gfx_unlock; else → gfx_lock, `wm_front` on I_WIN, gfx_unlock. Single click activates; no double-click logic. |
@@ -13226,6 +13750,113 @@ fallback).
 The window drag clamp (§13) is unchanged: windows may be dropped over the
 dock; clicks in the overlap go to the window (wm_hit wins), and the strip
 repaints when the window moves away — desk-icon semantics throughout.
+
+### 30.3 A mark is not a redraw — the tile diff
+
+**A tile whose icon did not change must not have its icon redrawn.** Every
+raise moves the active mark off one tile and onto another, so a focus change
+is the dock's commonest event by a wide margin — and it used to cost two
+tiles **erased to white and rebuilt**: a fill, a frame, a two-pass masked icon
+blit and the marks, twice, to move one 1px rectangle. On a 4.77MHz machine
+that is the double-draw flash of PERFORMANCE.md Part 1, in the one strip the
+user is looking at when they switch applications.
+
+The erase was there for an honest reason — *"the marks are not nested: active
+→ plain has an inner frame to remove, and minimized → plain an XOR to undo"* —
+and the reason dissolves once you notice that **both marks are their own
+inverse**:
+
+| mark | drawn as | toggled by |
+|---|---|---|
+| active (`DOCK_K_ACT`) | `gfx_frame` inside the tile frame, black on background | `gfx_xor_rect` on the same rect |
+| minimized (`DOCK_K_MINI`) | `gfx_xor_fill` of the interior | `gfx_xor_fill` of the same rect |
+
+So `dock_paint` compares old key with new and branches on **what moved**:
+
+```nasm
+    xor dx, ax                  ; DX = old XOR new
+    test dx, DOCK_K_ID          ; anything but the marks?
+    jnz .rebuild                ; the icon changed, or the tile came or went
+    test dl, DOCK_K_ACT
+    jz .mini
+    call dock_xor_ring          ; ...otherwise the icon is never touched
+```
+
+Three things make it exact.
+
+- **The marks own bits 0..2 and the identity owns the rest.** `dock_key` used
+  to XOR the rotated icon pointer's top three bits straight onto the mark
+  bits — fine for *did anything change*, useless for *what changed*. They are
+  folded into the high byte instead, so nothing about the icon is lost and
+  `old XOR new` names the difference. A live tile's key now always has
+  `DOCK_K_LIVE` set, so it can never be 0 and the collision bump the old key
+  needed is gone — and "one of the two keys is 0" falls out as a bit-0
+  difference, which `DOCK_K_ID` catches, so a tile appearing or disappearing
+  takes the rebuild path without a test of its own.
+- **The ring never touches the icon.** The icon body is 16x16 at +4,+2 inside
+  a 24x20 tile, so the inner frame's four edges clear it by 2px and 1px. Every
+  pixel `dock_xor_ring` writes is plain background — white normally, black
+  under an inverted interior — and XOR is right in both, which is why the
+  minimized state needs no branch there.
+- **Order does not matter.** Both are XOR over the same or nested rects, so a
+  tile that changes both marks in one paint composes them either way round.
+
+### 30.3.1 The damage span — the empty end of the strip is not redrawn
+
+`dock_force` restored **all 640 pixels** of rule and field and cleared every
+key, and `wm_paint_dmg` called it for any damage that so much as touched
+`[vid_dock_y0]`. A window closing in one corner therefore repainted the whole
+strip — nearly all of it white over white, where nothing had changed and
+nothing could have — and rebuilt every tile on it, which is where the white
+became a flash.
+
+`dock_force_x` takes the span (`wm_paint_dmg` passes `[wm_dmg_x1]`..
+`[wm_dmg_x2]`), repeated calls union it, and `dock_paint` restores that span
+and clears the keys of **the tiles it overlaps** — a tile outside the damage
+still has its pixels, so its key is still the truth. `dock_force` is the
+whole-width form and `wm_paint_all` keeps it and means it: its dither runs
+from `MBAR_H` to the last row, so the strip really is gone.
+
+### 30.3.2 The dither stops above the strip, and nobody forces the chrome
+
+**A full repaint is not a reason for the chrome to flash.** `wm_paint_all`
+dithered the desktop from `MBAR_H` to the last row of the screen — *through*
+the dock strip — and then called `dock_force` + `dock_paint` to put the strip
+back over it. So the strip was drawn twice on every full repaint, and because
+`dock_force` clears the keys, **every tile was rebuilt as well**. It then
+called `menu_force`, which under §12.9 means "our pixels were destroyed", so
+the menu bar was white-filled and its logo redrawn too.
+
+None of that was ever necessary, and the double-draw is what the user sees:
+double-clicking a window's title bar to zoom it (§11.95) ends in
+`wm_paint_all`, and both strips flashed end to end.
+
+- **The dither now stops at `[vid_dock_y0] - 1`.** `dock_paint` is the next
+  call but one and owns every row from there down, so filling them grey was a
+  full-width band drawn only to be painted over.
+- **So `wm_paint_all` calls neither `dock_force` nor `menu_force`.** Nothing
+  in it can reach either strip: the dither starts at `MBAR_H` and now stops
+  above the dock. A quiet desktop's full repaint costs the chrome **nothing**.
+- **`wm_paint_dmg` clamps its dither the same way.** Damage that reaches the
+  strip already forces the span through `dock_force_x`, so dithering those
+  rows is drawn only to be painted over.
+
+What replaces the two forces is each module noticing its own coverage, which
+is the same move §12.9 makes with `menu_inval`: the routine that has to repair
+the damage is the one that observes it.
+
+| what destroys the chrome | who says so |
+|---|---|
+| a §11.2 fullscreen window | `dock_paint` / `menu_draw_bar` themselves — both already early-out on `wm_fs_vis`, and now set their own flag on the way out |
+| an fsx bracket (§53) | `fsx_restore`, explicitly |
+| a video mode change (§39.11) | `vid_switch`, explicitly — `vid_setmode` clears the framebuffer |
+| boot | `menu_init` / `dock_init` |
+
+The fullscreen case is the one worth stating: while such a window is up, the
+strips are being overwritten continuously and neither module may draw. Setting
+the flag *in the early-out* means the repair is owed from the first moment the
+damage starts, is idempotent for as long as it lasts, and is spent by whatever
+repaints once the window goes — with no caller anywhere having to know.
 
 ### 30.2 A tile's context menu — right-click to Close
 
@@ -16154,6 +16785,62 @@ gates the video signal only — the 6845 keeps running and both syncs keep
 coming out — so blanking costs the monitor nothing, and behind it the
 unavoidable sync transient of a half-written 6845 (its registers are not
 double-buffered) is invisible too.
+
+**The CGA has the same defect and the opposite cure.** The blank above is a
+port this module owns; a CGA's mode control register belongs to `int 10h`
+for the whole of the mode set, so there is no window we can hold that card
+dark across — and the flash was reported back in the same words, *garbage in
+the graphics memory immediately before the progress bar*, on a machine where
+the Hercules fix had already landed.
+
+So the garbage is **removed rather than hidden**: `vid_setmode` zeroes 16KB
+at B800 **while the card is still in text mode**, before it calls the BIOS.
+It is the same buffer either way — B8000 is the text screen now and the
+bitmap a moment later — so whatever order a given ROM uses, the bytes it
+switches the card onto are already zero and there is no frame in which the
+old TEXT page is displayed as a 640x200 bitmap. What that frame looks like
+depends on how the machine got here: mode 3's clear leaves `0x0720` per cell,
+a regular field of dots, and a **hard-disk boot** leaves the POST's own text,
+because `boot/boothd.asm` deliberately sets no video mode (§52.10.2).
+
+**The A/B on MartyPC is a NULL RESULT, and what makes it a null result rather
+than a refutation is worth writing down** — it is not "no emulator can show a
+flash", which stopped being true when PERFORMANCE.md Part 3.1's per-frame
+instrument landed. Three things:
+
+- Part 3.1's `transient` count **cannot price a mode change**. It counts
+  pixels that ended as they started while showing something else in between,
+  and across a mode set no pixel does — the before picture is a text raster
+  and the after picture is a bitmap. The count is ~0 however bad the flash.
+  The measurement that works is direct: step frames, and count lit pixels in
+  the first frames after the card reports the new mode.
+- Measured that way on `os8088_5150_cga` — **the real IBM 5150 ROM**, which is
+  what every `os8088_5150_*` machine runs; only the 5160s are GLaBIOS, and
+  `os8088_5150_cga_gla` exists to A/B the ROM itself — the first graphics
+  frame is **1 lit pixel of 128,000 without this fix and 2 with it**. No
+  garbage frame either way.
+- And the frame *before* the switch says why: the text screen measures **0–16
+  lit pixels**. There is nothing in that buffer to reinterpret, because
+  **MartyPC's video RAM comes up zeroed** and the mode-3 screen behind it is
+  blank.
+
+**The leading explanation is the one an emulator structurally cannot have: a
+real card comes up with static in its RAM.** That is already written into the
+Hercules half above — "the card's own DRAM as it powered up" — and it applies
+to a CGA for the same reason. It also explains why *this* machine sees it:
+docs/FIELD-MACHINES.md's 5150 holds both cards, POST initialises the one the
+DIP switches name, and the other card's 16KB is **untouched power-up static**
+until `vid_cga_equip` asks the BIOS for it. A machine whose CGA is primary has
+had that buffer cleared by the mode-3 set long before we arrive; a machine
+where it is the second card has not. PCem models powered-up RAM as noise;
+MartyPC models it as zeros, so the defect has nowhere to come from there.
+
+The fix covers that mechanism and every other one, because it does not care
+what was in the buffer or what the ROM does next — the bytes are zero before
+the mode set either way. It costs ~26 ms of `rep stosw` once per boot, against
+a ROM clear of the same 16KB that was already being paid. **It is unverified
+on the glass**, and that is the honest status until somebody watches a 5150 do
+it.
 
 **3BFh bit 1 is deliberately clear.** It enables the second 32KB page, which
 is at B8000 — a CGA's framebuffer. A machine can hold both cards (the 5150
@@ -19892,49 +20579,79 @@ is a claim about perception, so like §45.16.3 it is a bench key rather than
 a decision, and `E` now cycles A → B → C so all three can be compared in
 place without a rebuild between them.
 
-**The animation is a BANG and it started as a sweep, which was not visible
-at all.** The first build ran one `*` back and forth through a twelve-cell
-field, and the field report was simply that there was no bang — a single
-character moving inside a status line is not an event, and an event is the
-entire job: what is being hidden is a resync, and it only reads as
-punctuation if it lands like one. So the hold opens with a **full
-`TLOG_BARW` bar** on the frame the burst ends and drops one cell on every
-frame after, an impact at the front and a decay across it. At CLICK.MOD's
-tempo the hold is 8–9 frames and the bar is 8, so it empties as the next
-burst begins.
+**The load-bearing part is that the TEXT IS NOT THERE.** The first two
+builds put the animation *next to* a row number that had stopped, and the
+field's verdict was exact: *"the numbers freeze entirely, and that is not
+smooth"*. A frozen number beside a moving animation is a frozen number.
 
-Two details in that are load-bearing. `[tlog_sweep]` counts **frames since
-the burst ended** and the bar is `TLOG_BARW` minus it, with `TLOG_NOBAR`
-(0xFF) as the burst's own value — so "is this the first frame of the hold"
-needs no flag of its own, and the count **saturates** rather than wrapping,
-because a decay that restarted would read as a second bang nothing caused.
-And the bar is **its own drawing field**, next to the position rather than
-inside it, compared against what was last *drawn*: a burst frame and a
-decayed hold frame then cost no drawing at all, which matters because a cell
-is ~1 ms on the machine this is for (§6.1.1) and the burst's evenness is the
-whole thing under test.
+So the readout is a fixed **LABEL** (`TLOG_PACEW` cells) and a **BODY**
+(`TLOG_BODYW`: `Pos xx/yy  Row zz`), and in a burst mode
+the hold **replaces the body, whole** — the animation is *where the numbers
+were*, not beside them, and nothing on screen is standing still because
+nothing on screen is a number.
 
-**Which mode is live is on screen** (`PACE A` / `PACE B` / `PACE C`, in the
-same run as the position so it costs no call). `E` says which mode it moved
-to, and a transient message is the wrong shape here: what is being judged is
-what the line does over a *minute*, so by the time an opinion has formed the
-message has gone.
+**The label is never blanked**, and that is the second half of the same
+report: it is the one thing on the line that is not part of the experiment,
+and a label blinking once a second competes with the animation it is
+labelling. It redraws only when the mode changes.
+
+The split is also what makes it affordable: the body is redrawn per hold
+frame but the label is not, and the burst — the part actually being judged —
+pays nothing at all.
+
+**Five animations, because which one reads best is a claim about
+perception.** `E` cycles A, B and then all five, and the label names the live
+one:
+
+**Five were built and two survived.** `bar` (full at the seam, decaying),
+`sweep` (one cell running the field) and `in` (a block closing from the
+edges) were all judged and dropped; what is left is the pair that are not
+variations on each other:
+
+| | the hold shows |
+|---|---|
+| **out** | one cell at the centre, growing to the edges — it reaches them in `TLOG_ANIMC` frames, which is about a hold at one cell a frame |
+| **hide** | every cell at once, unchanged for the whole hold — then the letters **revealed from the centre** over `TLOG_REVN` frames once the burst resumes |
+
+`hide` is the one that spends nothing during the wait (one drawing call for
+the whole hold) and pays on the far side instead, and its reveal is
+deliberately on the **burst** frames: by the time anything legible is on
+screen the display is already back in step, so the seam was never visible.
+
+**The beat ruler went with them, and that is a width decision.** §45.16.4's
+ruler was the instrument for judging evenness by eye, and it made the body —
+and therefore the animation, which *replaces* the body — sixteen cells wider
+than it needed to be, which is too wide to read as one object. In a burst
+mode it was redundant anyway: the row it tracks is on the burst grid rather
+than the music's. The mode label stays, because it does not move and so
+competes with nothing.
+
+They are named and not lettered because the list has now been renumbered
+three times, and a `PACE C` meaning a different thing in two builds is worse
+than no letter at all.
+
+Three details are load-bearing. `[tlog_sweep]` counts **frames since the
+burst ended**, with `TLOG_NOBAR` as the burst's own value — so "is this the
+first frame of the hold" needs no flag, and it **saturates** rather than
+wrapping, because a decay that restarted would read as a second bang nothing
+caused. It saturates below **0x40**, because the visual field's redraw key
+packs "holding, frame k" into `0..0x3F` and tags the ruler and the reveal
+with `0x40` and `0x80`. And the reveal is gated on `G` alone — C through F
+say *then all disappear to the normal display*, which is one frame.
+
+**Which mode is live is on screen** (`PACE C bar`, `PACE G hide`, … in the
+text field's own run, so it costs no call). `E` says which mode it moved to,
+and a transient message is the wrong shape here: what is being judged is what
+the line does over a *minute*, so by the time an opinion has formed the
+message has gone — and seven modes cannot be told apart by a letter alone,
+so the label names the animation too.
 
 Two things it costs, both stated so the comparison is honest. Inside a
 burst the row shown is up to `TLOG_BURST - 1` rows ahead of the music, which
 is the opposite trade from everything else in §45.15. And a hold frame
-redraws the bar's ten cells even though the row did not move — the burst
-itself, which is the part being judged, pays nothing.
-
-**`D` is the sweep, kept beside the bang rather than replaced by it.** It is
-the quieter of the two — it says *still going* where the bang says *here is
-the seam* — and on a module whose holds are long the bang has decayed to
-nothing while the sweep keeps moving. Which reads better is the same species
-of question as A against B, so it gets the same answer: both stay, `E` cycles
-A → B → C → D, and the live one is named on screen. They share `tlog_burst`
-and one counter (`[tlog_sweep]`, frames since the burst ended): C draws
-`TLOG_BARW` minus it, D draws it modulo `TLOG_BARW`, and nothing in the burst
-machinery knows which mode is live.
+redraws the visual field's sixteen cells even though the row did not move —
+the burst itself, which is the part being judged, pays nothing, and `G` pays
+nothing for the hold either.
 
 #### 45.16.5 …and on a real module the windowed frame rate is BELOW the row rate
 
@@ -19947,11 +20664,19 @@ a Sound Blaster, against the two modules on the bench disk:
 | `CLICK.MOD` — one sparse channel | 8.00 | **16.8** | 48% |
 | `BEVERLY.MOD` — four channels of samples | 7.14 | **6.0** | **0%** |
 
-**The mixer eats the drawing, and on a real module it wins.** At 6.0 frames a
-second against 7.14 rows, the display cannot show every row *at all*, let
-alone run ahead of one — so C and D never complete a burst, never reach a
-hold, and there is no bang and no sweep to look at. `[tlog_drow]` climbs to
+**The mixer eats the drawing, and on a real module it wins.** Measured on the
+same machine: on Beverly the worker is **mixing 65% of wall time**, and the
+5.8 frames a second that leaves is *fewer than the 7.14 rows the music has*.
+The display cannot show every row at all, let alone run ahead of one — so a
+burst mode never completes a burst, never reaches a hold, and there is
+nothing to see of whatever was going to cover it. `[tlog_drow]` climbs to
 `base+6` and the music has already crossed into the next group.
+
+**That is what an animation is for, as an instrument.** The same starvation
+was there when the readout was a hex row counter and it read as *the numbers
+are a bit uneven*; the moment the wait carried a moving shape it read as
+*dropping frames*, which is exactly what it is. A number hides a missing
+frame and a moving object cannot.
 
 Three things follow. **The pacing modes are judged on `CLICK.MOD`**, which is
 what it is for: a metronome whose mixing is nearly free, so the frame clock
@@ -19962,6 +20687,40 @@ pacing scheme can fix a display that is slower than the thing it is
 displaying. And **this is exactly why the text screen exists** (§45.13): in
 `FSXM_TEXT80` a row change is a `rep movsw` rather than 2,567 glyph cells a
 second, which is what buys the frames back on the module that needs them.
+
+#### 45.16.6 So the windowed readout shows the POSITION and no row at all
+
+The conclusion §45.16.5 forces. A row counter windowed is a number that
+**cannot be right** — the display gets fewer frames than the music has rows,
+so whatever it shows was true a moment ago and the next value is not the next
+row — and it cost a **17-cell `font_run` about seven times a second** on
+Beverly to say so, a millisecond a cell (§6.1.1). The readout is `Pos xx/yy`,
+nine cells, and it redraws **once per order** — every 64 rows, which at
+Beverly's tempo is 8.9 seconds.
+
+That is not a smaller version of the same defect. The position is the one
+figure on that line whose update rate the machine can actually meet, so it is
+never visibly stale; the row was the only thing asking for frames that do not
+exist. Everything §45.16.2–§45.16.4 was reaching for — an even grid, a bang,
+a burst covering the resync — was reaching for a way to make a
+faster-than-the-machine field *read* as smooth. Not drawing it is the version
+that needs no cadence at all.
+
+**The denominator is load-bearing.** A bare `Pos 09` that steps once every
+nine seconds reads as a dead field; `Pos 09/53` says what it is counting
+towards, so standing still looks like progress rather than a hang. It is the
+same argument that put it there when there *was* a row counter beside it, and
+it matters more now that there is not.
+
+**Two markers, and the second is the one that is easy to miss.**
+`[tui_lpos]` is the value last drawn — the ordinary "only draw when it
+changed" test. `[tui_wdrawn]` is whether those pixels are still on the glass,
+and it exists because the windowed splash repaint fills the whole card: with
+the marker alone, a repaint would leave the line **blank until the position
+next moved**, which is up to nine seconds. It lives in `.text` with a real
+initialiser rather than in bss, so a fresh instance starts owing the line
+(§20.1 — every launch reloads the image). The row counter used to hide both
+problems by changing often enough to paper over them.
 
 ## 46. ArtfulType — the eleventh package (apps/artful/artful.asm)
 
@@ -23499,16 +24258,384 @@ the editor staged that on the click that changed it.
 
 ### 52.9 Not in scope
 
-- **Booting os8088 from the hard disk.** `boot/boot.asm` reads `KERNEL.SYS`
-  as a flat run from the data area (§19.3) with the floppy geometry injected
-  at build time and relocates itself to `BOOT_RELOC`; hard-disk boot needs an
-  MBR, an AH=08h geometry probe and a second boot sector variant. The system
-  disk stays A:, and `SYSTEM.CFG` with it.
+- ~~**Booting os8088 from the hard disk.**~~ **Retired — this is §52.10.**
+  The entry is kept rather than deleted because its reasoning was right and
+  is worth reading beside what replaced it: `boot/boot.asm` does read
+  `KERNEL.SYS` as a flat run from the data area (§19.3) with the floppy
+  geometry injected at build time, and hard-disk boot does need an MBR, an
+  AH=08h geometry probe and a second boot sector variant — all three are
+  §52.10. What it did **not** name is the blocker that turned out to bind
+  hardest, and a reader who trusted this list would not have looked for it:
+  the kernel cannot read the hard disk until `HDD.DRV` is loaded, and
+  `HDD.DRV` is on the hard disk (§52.10.3). It also said "the system disk
+  stays A:, and `SYSTEM.CFG` with it", and that half is still true — an
+  installed machine boots with the **boot volume** as its system volume and
+  A: stays the floppy (§52.10.3).
 - **Low-level (surface) MFM formatting**, §52.3.
 - **The XT DCB register path**, §52.1. The row exists in the ladder so the
   page can one day say "not supported" rather than "no drive".
 - **Extended partitions.** Four primaries of ≤32MB is 128MB of usable disk,
   against MFM drives of 10–40MB and early IDE drives of 20–120MB.
+
+## 52.10 Install — booting os8088 from a hard-disk partition
+
+The Hard Drive page's third button. It asks which partition, copies both
+floppies onto it — hidden system files and `KERNEL.SYS` included — and marks
+it bootable, after which the machine starts from the disk with no floppy in
+the drive.
+
+**Four things had to be built and they are independent**, which is why this
+section is in four parts. Three of them were named in §52.9's retired bullet;
+the fourth is the one that bound hardest and was not.
+
+### 52.10.1 The MBR is a real chain-loader now
+
+`hd_mbr_blank` wrote a stub that printed `Not bootable` and halted, because
+that was the truth. It is a loader: relocate the 512 bytes off `0000:7C00`
+(the volume boot record wants that address), walk the four table entries for
+the one whose status byte is 80h, read its first sector to `0000:7C00`, and
+far-jump to it with `DL` = the BIOS drive and `DS:SI` at the entry, which is
+the convention every DOS-era VBR expects. 446 bytes are available and this
+needs a small fraction of them.
+
+Two failures keep a message, for the reason the old stub existed at all — a
+machine that hangs with a dark screen says nothing: no active entry, and a
+read that fails. Both halt rather than falling through into whatever is in
+memory.
+
+### 52.10.2 A second boot sector, because the first one has 17 bytes free
+
+`boot/boothd.asm`. Not a preference: `build/boot.bin`'s last non-zero byte is
+at offset 492, so there are **17 bytes** between it and the signature, and
+what a hard disk needs does not fit in 17 bytes. §52.9 predicted this and it
+is measured rather than assumed.
+
+It differs from `boot/boot.asm` in exactly three ways, and is otherwise the
+same file doing the same arithmetic:
+
+- **The geometry comes from int 13h AH=08h**, not from `-DSPT`/`-DHEADS`. A
+  floppy build knows its geometry because the Makefile builds one image per
+  geometry; a hard disk's is the drive's and is not known until it answers.
+- **Every LBA has the partition base added**, from `BPB_HiddSec` at offset 28
+  — which `hd_fmt_bpb` (`drivers/hdd/fmt.inc`) already writes, and has since
+  the formatter was written, commented "DOS reads it, os8088 does not". It
+  does now.
+- **It does not touch int 1Eh.** §18.92's diskette parameter table is the
+  floppy controller's EOT and means nothing to a hard disk.
+
+What it does **not** change is the part that looks like it would: the
+data-area arithmetic is already generic over FAT12 and FAT16, because it is
+computed from `BPB_RsvdSecCnt`, `BPB_NumFATs`, `BPB_FATSz16` and
+`BPB_RootEntCnt` rather than from a format. A FAT16 partition needs no new
+code in it at all.
+
+**`KERNEL.SYS` must be first and contiguous**, exactly as on a floppy: the
+sector reads it as a flat run rather than walking a cluster chain, which is
+what makes it fit in 512 bytes (§19.3). `os88disk.py` guarantees that at
+image-build time by allocating it from cluster 2; the installer guarantees it
+by **formatting the partition first and writing `KERNEL.SYS` before anything
+else** (§52.10.4).
+
+### 52.10.3 The kernel reads its boot partition before any driver loads
+
+**This is the blocker §52.9 did not name, and it is the reason this was more
+than a boot sector.** `drv_boot` mounts the system volume to read
+`SYSTEM.CFG` and load the drivers the user asked for — and on an installed
+machine one of those drivers is `HDD.DRV`, which is *on the volume it is
+needed to read*. A driver-backed volume goes out through `DSV_BLK` (§18.7),
+so with no driver there is no transport, and with no transport there is no
+driver.
+
+The way out is that **rung 0 is the BIOS** (§52.1): int 13h answers for drive
+80h with no driver in the machine at all, exactly as it does for a floppy.
+So the boot volume is an ordinary `DVK_BIOS` row, and what it needs beyond
+A: and B: is what a partition is: a **unit** that is not the volume index, a
+**32-bit base**, and a geometry that is not a floppy's.
+
+Four changes, all in `dsk_xfer`'s BIOS path and its table:
+
+- **`DV_UNIT` is read for the int 13h drive.** It was already in the row and
+  the transfer used `[disk_drive]` — the *volume index* — which was correct
+  only because A: and B: are volumes 0 and 1 and drives 0 and 1. A boot
+  partition is volume 2 and drive 80h, and that coincidence ends there. This
+  is a latent bug fixed, not a new field.
+- **`DV_BASE`, a 32-bit partition base**, added to the volume-relative LBA.
+  Zero for a floppy, so the floppy path is arithmetically unchanged.
+- **32-bit LBA → CHS**, because base + offset leaves 16 bits. It is
+  `hd_chs`'s proof reused: `spt*heads` is at most 63×255 and the quotient is
+  under 1024, so one `div` pair still suffices.
+- **The cylinder clamp moves.** `cmp ax, 80 / jae .fail` is a floppy's bound
+  and rejects every cylinder on a hard disk; it becomes the volume's own.
+
+`drv_mounted` then goes to **`[dsk_bootvol]`** instead of a hardcoded `xor
+dl, dl`, and that byte is 0 on a floppy machine — so a machine that boots
+from a floppy runs the identical path it always did.
+
+**The mount needs a geometry BEFORE it has a BPB, and 9/2 is not it.**
+`disk_mount` set `[disk_spt]`/`[disk_heads]` to a floppy's before the LBA 0
+read, which is the one read that cannot take them from the BPB — it is the
+read that *fetches* the BPB. On a partition that read is not at LBA 0 of the
+device either: it is `base` sectors in, so a wrong geometry does not mis-seek
+by a track, it translates somewhere else entirely. With 9/2 and a base of 26
+the drive was asked for (1,0,9) and answered absolute LBA 112, in the middle
+of the FAT, so **the boot volume never mounted** — and the machine still
+booted, because `boot/boothd.asm` probes `int 13h` AH=08h for itself, so this
+showed up as a Task Manager that could not find its file and a Disk window
+with nothing in it rather than as a failure to start. `dsk_boot_from` makes
+the same AH=08h probe once, into `[dsk_bootspt]`/`[dsk_boothds]`, and
+`disk_mount` uses it for a `DVK_BIOS` row whose unit is ≥ 80h. A drive that
+refuses the call leaves the floppy fallback, so the mount fails honestly
+rather than reading somewhere it was not asked to.
+
+**And `ui_tm_sysdir` had the same hardcoded A: one call deeper.** Its
+`dsk_chdir` into `SYSTEM` was `xor dl, dl` — so on an installed machine it
+took the folder's cluster from C: and walked it on the *floppy*, which reads
+to the user as `TASKMGR.O88 is not in SYSTEM`. A fix at one call site is not
+a fix: the assumption was written down in more than one place.
+
+**A: stays the floppy.** The boot partition is C: (volume 2), not A:, because
+the alternative renumbers every drive letter, desktop zone and `FS_DRV` in
+the system to save one indirection. §52.9's "the system disk stays A:" is
+half-right in the way that matters: what moves is *which volume is the system
+volume*, not *which volume is A:*.
+
+**And `HDD.DRV` must not mount the boot partition twice.** Its automount
+skips a partition already in the volume table, matched on device and base
+LBA — the kernel got there first, through the BIOS, and the row is live.
+
+### 52.10.4 The installer
+
+Driver code, in `drivers/hdd/inst.inc`, because the partition table, the MBR
+and the device are the driver's. What is *not* the driver's is writing a file
+with system attributes, and §19.6.1 is the one slot that lets it.
+
+The order is forced and each step is the next one's precondition:
+
+1. **Format the partition** (§52.3's formatter, unchanged). Not optional: it
+   is what makes cluster 2 free, and §52.10.2 needs `KERNEL.SYS` there.
+2. **`KERNEL.SYS` first**, through `OSAPI_FILE_WRITE_SYS`, so it is
+   contiguous from cluster 2.
+3. **The rest of the system disk** — `SYSTEM.CFG`, every `*.DRV`,
+   `README.TXT` — then the apps disk's folders and their contents.
+4. **The volume boot record**, `boot/boothd.asm`'s 512 bytes with this
+   volume's BPB written over the first 62 (`os88disk.py`'s split, done in the
+   driver), to volume-relative LBA 0.
+5. **The MBR**: §52.10.1's loader into bytes 0..445, preserving the table,
+   and the chosen entry's status byte set to 80h with the other three
+   cleared. **Last**, because it is the commit — every earlier step leaves a
+   disk that simply is not bootable yet, which is the same discipline
+   §52.3's formatter follows in writing its boot sector last.
+
+**Only usable partitions are offered.** The dialog lists a slot when it is
+mounted, writable and large enough; a slot that is `Unmountable`, foreign or
+too small is shown with the reason rather than hidden, on §47 rule 3's terms
+— the honest test is whether it would work, and saying *why not* is worth
+more than an absent row.
+
+**A single-floppy machine is the normal case** (docs/FIELD-MACHINES.md), so
+the copy prompts for the disk swap rather than assuming two drives — unless
+§52.10.5 finds it has not got to.
+
+**Progress is §12.8's widget.** A file operation freezes the machine by
+design, and this is the largest one in the system — both floppies is
+hundreds of sectors at **65 ms** each on the field machine — so `fpg_begin`'s
+bar is stepped from inside the transfer loop, which is the one piece of code
+still running.
+
+### 52.10.5 A disk already in the machine is not asked for
+
+The swap prompt is right on the machine this project is calibrated against
+and wrong on one with two drives, where the apps disk is usually sitting in
+B: while the user is asked to put it in A:. `hd_iapps_find` asks the machine
+before it asks the user: on a two-drive machine with the apps disk already
+in the other drive, stage 1 falls straight into stage 2 and the whole
+install is **one confirm** rather than a confirm, a swap and a second
+confirm.
+
+Three things decide it, and each answers a question nothing else can:
+
+- **How many floppy drives there are is `int 11h`'s answer**, bits 7:6 (the
+  count less one), and the kernel's volume table is no help at all: A: and
+  B: are unconditional rows in `dsk_vtab`, because on a one-drive PC the
+  BIOS aliases unit 1 onto the same physical drive and DOS asks for the
+  swap. Reading the volume table would say "two drives" on every machine
+  there is.
+- **Which drive to look in is the OTHER one** — `[hd_ivdrv] XOR 1`, and only
+  when the drive stage 1 read was a floppy at all. A hard-disk source makes
+  "the other one" meaningless, so that case asks.
+- **What makes a disk the apps disk takes THREE tests, and two of them are
+  not enough.** An `APPS` folder in the root was the first answer and it has
+  a short life, because the system disk is going to carry one too. Adding
+  "and no `KERNEL.SYS`" fixes *that* and fixes nothing else: it says the disk
+  is not a **system** disk, which is not the same as saying it is one of
+  ours, and the failure it still allows is the expensive one — a stranger's
+  floppy copied onto the volume the user has just installed to.
+
+  So the last test is **positive**: at least one `*.O88` inside `APPS`. That
+  is what the disk exists for and what the copy is about to move, and it is
+  the only one of the three that can be passed by accident just once.
+
+  `KERNEL.SYS` is the marker `drv_cfg_save` already uses to identify the
+  system volume (§51.5.1), so there is one answer to *which disk is that*
+  rather than two that can drift, and a driver's `OSAPI_FILE_FIND` sees
+  hidden and system entries (§19.7.1's fence) — which is what lets it ask
+  about a file §19.6 hides from everything else.
+
+  The root walk therefore **does not stop at `APPS`**: the listing is sorted
+  by name (§19.4), so `APPS` comes first and a `KERNEL.SYS` further down
+  would be missed by an early exit. It records the folder's cluster and keeps
+  going; only the end of the root is an answer, and then the descent decides.
+
+Every refusal falls back to the prompt exactly as it was: a renamed disk, a
+data disk, an empty drive and a one-drive machine all take the path they
+took before, which is what makes this an optimisation of the common case
+rather than a new way for an install to go wrong. **The volume is put back
+on every path**, including the ones that stood on a candidate drive to look
+at it, because the caller has already restored the user's volume by then
+(§51.5.2) and a probe that moved it would be a navigation the user did not
+ask for.
+
+The source drive is its own byte. `[hd_isrcdrv]` is what `hd_isrc` and
+`hd_isrc_sub` stand on and `[hd_ivdrv]` is what `hd_ivol_back` puts the user
+on; `hd_ivol_bank` sets both and the auto-detected drive overrides only the
+first. One word for both would have ended the install with the user standing
+on a drive they were never on.
+
+### 52.10.6 Restart, and a dialog that stops flashing
+
+Two things, and they are one change because they are the same window.
+
+**Restart.** The install ends with a bootable volume and a user who has to
+find the System menu to use it, so the dialog carries a third button.
+`OSAPI_REBOOT` (§20.10) is what makes it possible from inside a driver's
+click handler: it posts, and `ui_task` performs. The button is greyed until
+`[hd_iw_st]` reaches `HII_DONE`, which is §47 rule 3's *fact* — what there is
+to restart into is the install this dialog just did — and `hd_rest_ok` is its
+one predicate, shared by the greying and the click refusal exactly as
+`hd_inst_ok` is Install's. `hd_iw_button`'s `CL` therefore picks a
+*predicate* rather than a state: 0 = `hd_inst_ok`, 1 = always live (Close,
+which is never disabled), 2 = `hd_rest_ok`.
+
+**And no click repaints the window any more.** `hd_iw_repaint` erased the
+content and re-ran `W_PAINT` for every change there was, so a click that only
+altered the caption threw away the header, four rows and two buttons to put
+back the same pixels — which **flashes on every adapter, VGA included**, on
+real hardware. It is three emitters now, and a click spends only the one
+whose content changed: `hd_imsg_draw` for an arm, a refusal or a progress
+message; `hd_irows_draw` when the selection moves; `hd_ibtns_draw` when a
+greying predicate flipped. A stage change is buttons + message and never the
+rows, because `hd_iw_scan` runs at open and no stage alters a slot's state.
+
+Three things hold the flicker fix up:
+
+- **Every text element is one opaque `OSAPI_FONT_RUN` padded to
+  `HIW_CELLS`** — a space paints background on the fast path, so the padding
+  *is* the erase and the cell goes from what it was to what it will be in a
+  single store (§6.1). There is no frame in which a band is blank.
+- **The selection bar is that same run with ink and background swapped**, so
+  the black bar arrives with its text already on it. It was a `GFX_FILL` as
+  wide as the band followed by `FONT_STR` over it — Note Pad's §27.8.2 trick,
+  and the same reasoning.
+- **`HIW_LX` is a multiple of 8 and the window carries `WF_SNAP`** (§11.94),
+  which is what puts those runs on the single-store path on the two mono
+  adapters. It was 4, four pixels off it. The price is 8px drag steps on a
+  dialog nobody drags twice.
+
+The **button band is the one thing still erased before it is drawn**, and
+that is the stated exception rather than an oversight: a frame cannot be
+drawn opaquely, so a dithered frame over a solid one leaves the solid one's
+pixels behind. It is a single 16px fill, and only on a state change.
+
+### 52.10.7 OPEN: the chunked copy breaks the next source mount
+
+**Known, reproduced, unfixed, and the installer is deliberately less capable
+than it should be because of it.** `hd_icopy_sub` copies only *packages* out
+of a folder — `type == OSAPI_FT_PKG` — where the right test is "not a folder
+and not `..`", because type 1 means **package** and not **file** (§19.7.1).
+Making it right is a two-line change and it is not in the tree.
+
+What happens when it is: every file copies, `BEVERLY.MOD` included and
+byte-exact — and then the walk's next `hd_isrc_sub` fails, so
+`hd_icopy_tree` reports an error and the MBR is never written. The partition
+ends up **fully populated and not bootable**, which is worse than the missing
+file it fixes. Hence the gap stands.
+
+What is known:
+
+- It is the **chunked write** (§18.4.4). `BEVERLY.MOD` at 116,085 bytes is
+  the only file on either shipped disk that does not fit the copy buffer
+  whole, so the chunk loop had **never executed once** until the type test
+  changed. Every other file in the tree is one read and one write.
+- The failure is a **source mount**, not a file operation: `hd_icopy_one`
+  names the file it stops on and did not, and splitting `hd_icopy_tree`'s
+  four failure paths put it in `hd_icopy_sub`'s `.entry` — `hd_isrc_sub`,
+  which is a plain `dsk_chdir` of the floppy.
+- **It is not `OSAPI_FILE_GOTO_Q`** (§19.2.2). The quiet slot was wired in at
+  the same time, blamed, and reverting it changed nothing — a wrong diagnosis
+  worth recording, because the two changes landed together and the newer one
+  looked guiltier.
+- The suspicion, untested: the chunk loop alternates two volumes **eight
+  times** with the destination's FAT window dirty, and §18.8.2 requires a
+  dirty window to be flushed at the switch rather than carried. Nothing else
+  in the system alternates volumes that often mid-write.
+
+Where to start: `make DISKCNT=1` and read §18.94's counters either side of one
+chunked copy, and the marker technique that found §19.7.1's type bug — a
+temporary caption that **aborts**, because one that only sets `[hd_imsg]` is
+overwritten by the completion message and says nothing.
+
+**And a second thing blocks that work today: LBA 0 does not read on
+`os8088_xt_hdd`.** The evidence, all on a **pristine** `default_xtide.vhd`
+whose sector 0 has `55 AA` at 510 and a type-04 partition at LBA 26:
+
+- the Control Panel's **Mount** answers `No partition table yet`;
+- the installer's slot list offers **four free slots** on that same disk;
+- **Install** refuses with `Cannot read the partition table` — `HMB_BAD`.
+
+**The safety pass did not break this; it made it visible.** `HMB_BAD` and
+`HMB_NONE` used to be one answer, so a failing read presented as "nobody has
+partitioned this" and the installer formatted straight through it. Every
+install this session that "worked" was writing a fabricated table over a disk
+whose real one had never been read — which is exactly the data-loss shape
+§52.2.1 and `hd_part_load`'s own header describe, and the reason that
+distinction was introduced.
+
+It is a **regression** and not a standing limitation: docs/MARTYPC-DEBUG.md
+records this same machine reading the table, mounting, and listing the DOS
+filesystem on the shipped image (`COMMAND.COM`, `CONFIG.SYS`, `Free
+31760K`). The transport is **rung 0** — int 13h through the XT-IDE ROM
+(§52.1) — so it is one of the BIOS-rung paths.
+
+Ruled out by reading, so the next reader does not repeat it:
+
+- **`hd_geom_push`** returns immediately unless `HDD_KIND == HDK_IDE`, so it
+  issues no task-file command on this rung.
+- **`hd_chs`** translates LBA 0 under 615×4×26 to (0, 0, 1) with no refusal
+  on any of its four `.bad` tests.
+- **The buffer alignment** the new guard depends on does hold:
+  `mem_claim`/`mem_claim_hi` allocate in whole KB from a heap top derived
+  from `int 12h`, so a region base is 1KB-aligned and `align 512` inside the
+  image lands `hd_mbr` on a 512-aligned linear address.
+
+**`hd_bios_run` is ruled out too, by arithmetic.** Its cap is
+`neg(seg*16 + ofs) >> 9`, which for a 512-aligned buffer is at least one
+sector — the refusal it added can only fire on a buffer that is not
+512-aligned, and the bullet above shows this one is. For LBA 0 the track cap
+is `26 - 1 + 1 = 26` and `SI` is 1, so `AX` leaves as 1.
+
+That leaves the `int 13h` in `hd_bios_xfer` itself, and the next step is
+**instrumentation rather than reading**: `hd_bios_xfer` already banks the
+BIOS's own status in `[hd_status]` before it retries, so the question is
+which of `hd_chs`, `hd_bios_run` and the three `int 13h` attempts returns the
+failure, and what status the BIOS gave (0C = media type unidentified, 04 =
+sector not found, 09 = DMA page crossed, 80 = no answer — §18.93's table).
+`[di+HDD_UNIT]` reaching `DL` as 80h is worth confirming in the same pass.
+
+Use the technique that found §19.7.1's bug: a temporary caption that
+**aborts**, one per candidate, because a marker that only sets `[hd_imsg]` is
+overwritten by the completion message and says nothing.
+
+Nothing else in §52.10.7 is re-testable until that is settled.
 
 ## 53. fsx.inc — fullscreen exclusive
 

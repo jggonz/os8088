@@ -1419,9 +1419,12 @@ asc_use:
                                 ; this build knows about is a heap overwrite,
                                 ; not a bad cache. It was unbounded until the
                                 ; row grew a cluster and made it worth asking
+    push dx                     ; the sectors dsk_read_chain is about to fill:
+                                ; the ONLY bound on what the rows below may say
     mov es, [asc_seg]
     xor bx, bx
     call dsk_read_chain         ; ES:BX = the claim
+    pop dx                      ; (pop leaves CF alone)
     jc .out
     mov es, [asc_seg]
     cmp word [es:0], 'OS'       ; 'OS88AC' + a version we understand
@@ -1442,6 +1445,40 @@ asc_use:
     ja .out
     xor ah, ah
     mov [asc_ne], ax
+
+                                ; THE COUNTS MUST FIT THE BYTES WE ACTUALLY
+                                ; READ. The caps above bound them against this
+                                ; build's arrays, which keeps every derived
+                                ; offset inside the claim - but mem_claim does
+                                ; not clear the block, so a 512-byte file
+                                ; declaring 32 apps and 24 extensions had
+                                ; asc_merge_ext and asc_seed parsing ~2,160
+                                ; bytes dsk_read_chain never wrote: uninitialised
+                                ; RAM on the first mount and the PREVIOUS
+                                ; disk's ASSOC.DAT on every one after it. That
+                                ; is a cache claiming to know things about a
+                                ; volume it has never seen (SPEC.md 18.2 - every
+                                ; byte off a disk is hostile, and so is every
+                                ; byte a disk merely implied)
+    mov ax, [asc_n]
+    mov bl, ASC_ROW
+    mul bl                      ; AX = rows' bytes: napp <= 32, so <= 2,560 and
+                                ; the 8-bit multiply cannot touch DX
+    mov bx, ax
+    mov ax, [asc_ne]
+    shl ax, 1
+    shl ax, 1                   ; the extension table, four bytes a row
+    add bx, ax
+    add bx, ASC_HDR             ; BX = what the header says the file contains
+    mov ax, dx                  ; DX = sectors, and at most ASC_KB*2 = 6 of
+    mov cl, 9                   ; them, so this cannot overflow
+    shl ax, cl                  ; AX = what the file actually is
+    cmp bx, ax
+    jbe .parse
+    mov word [asc_n], 0         ; short: the clean "no cache" answer, which
+    mov word [asc_ne], 0        ; every lookup already handles as a miss
+    jmp short .out
+.parse:
     call asc_merge_ext          ; the declarations this volume knows about...
     call asc_seed               ; ...and WHERE each of them is (SPEC.md 54.7.1)
 .out:
@@ -1572,6 +1609,13 @@ asc_root_find:
     pop di
     pop cx
     mov ax, [es:di+26]          ; FstClusLO
+    cmp word [es:di+30], 0      ; size HIGH word: without this a 66,048-byte
+    jne .no                     ; ASSOC.DAT presents as one sector and the
+                                ; caller's fit test is answered about a file
+                                ; sixty-four kilobytes smaller than the one on
+                                ; the disk. A cache this big is a hostile file
+                                ; either way, so it is refused rather than
+                                ; truncated
     mov dx, [es:di+28]          ; size low word -> sectors
     add dx, 511
     mov cl, 9

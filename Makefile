@@ -105,6 +105,24 @@ VIDDEF += -DFLOPPY_ONE
 BOOTDEF += -DFLOPPY_ONE
 endif
 
+# REDRAWFULL=1 puts the menu bar and the dock back on their pre-SPEC.md
+# 12.9/30.3 paths: every bar redraw is a full one (fill, logo, name, every
+# title and the clock), every changed dock tile is erased and rebuilt, and
+# every damage to the strip is the whole strip. It exists to be DIFFED
+# against - the incremental paths must be byte-identical to it, and "the
+# picture is the same, only the number of times it was drawn changed" is the
+# whole claim they make, which a screenshot of one build alone cannot check.
+#
+#   make && cp build/os8088-360.img /tmp/inc.img
+#   make REDRAWFULL=1 && cp build/os8088-360.img /tmp/ref.img
+#   ...drive the same script on each and compare the two strips' pixels.
+#
+# Verified that way on all three adapters (SPEC.md 12.9): 15 scripted steps
+# on CGA and 10 on Hercules and VGA mode 12h, 0 differing pixels each.
+ifneq ($(REDRAWFULL),)
+VIDDEF += -DREDRAWFULL
+endif
+
 # SNDSNIFF=sb adds the Sound Blaster DSP reset scan to the boot's sound probe
 # (SPEC.md 51.3.1), which by default is the OPL2 timer-flag dance at 388h and
 # nothing else. Every Sound Blaster ever made carries an OPL2 there, so the
@@ -148,7 +166,7 @@ endif
 # about a file that recipe just removed, and then build the floppy image from
 # a kernel that is not there. Doing it here means the file is simply gone
 # before make builds its graph.
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(SNDSNIFF),-ss$(SNDSNIFF))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/boot.bin $(BUILD)/boot360.bin; \
@@ -342,10 +360,28 @@ $(BUILD)/sound.bin: drivers/sound/sound.asm drivers/sound/sb.inc \
 $(BUILD)/sound.drv: $(BUILD)/sound.bin tools/os88drv.py
 	python3 tools/os88drv.py $(BUILD)/sound.bin -o $@
 
+# The MBR's 446 bytes of boot code (SPEC.md 52.10.1). Assembled on its own and
+# incbin'ed by drivers/hdd/part.inc, which is why the driver gets -I $(BUILD):
+# a chain-loader is too much to write as a `db` list and far too much to
+# review as one, which is what the `Not bootable` stub it replaced was.
+$(BUILD)/mbr.bin: boot/mbr.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ $<
+	@echo "mbr:    $(call FILESIZE,$@) bytes (of 446)"
+
+# The hard disk's volume boot record (SPEC.md 52.10.2), likewise incbin'ed by
+# the driver. NO -DKERNEL_SECTORS: unlike the floppy sectors, this one is
+# built long before it knows which kernel it will boot, so the count is a word
+# at a pinned offset that the installer patches when it writes the VBR.
+$(BUILD)/boothd.bin: boot/boothd.asm | $(BUILD)
+	$(NASM) -f bin -w+error -o $@ $<
+	@echo "boothd: $(call FILESIZE,$@) bytes"
+
 $(BUILD)/hdd.bin: drivers/hdd/hdd.asm drivers/hdd/part.inc drivers/hdd/fmt.inc \
                   drivers/hdd/tool.inc drivers/hdd/page.inc drivers/hdd/cfg.inc \
-                  drivers/os88drv.inc apps/os88api.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I drivers/hdd/ -I drivers/ -I apps/ -o $@ $<
+                  drivers/hdd/inst.inc \
+                  drivers/os88drv.inc apps/os88api.inc \
+                  $(BUILD)/mbr.bin $(BUILD)/boothd.bin | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/hdd/ -I drivers/ -I apps/ -I $(BUILD) -o $@ $<
 	@echo "hdd:    $(call FILESIZE,$@) bytes"
 
 $(BUILD)/hdd.drv: $(BUILD)/hdd.bin tools/os88drv.py

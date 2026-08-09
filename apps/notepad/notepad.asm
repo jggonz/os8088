@@ -7614,13 +7614,37 @@ np_replat:
     push di
     push es
     mov bx, ax
+                                ; THE ROOM COMES FIRST, and the order is the
+                                ; whole of this routine's promise. np_delspan
+                                ; used to run before np_gaproom, so a refused
+                                ; claim returned CF=1 with the match ALREADY
+                                ; GONE - which the header calls "nothing
+                                ; changed". Reachable without a claim failure
+                                ; at all: a note loaded at NP_MAXKB has
+                                ; np_len == np_cap, so every replacement longer
+                                ; than its match is refused, and np_dorepl's
+                                ; `jc` then skips np_editinv with [np_cur] left
+                                ; at the match END - past [np_len] for a match
+                                ; at the end of the note, and the next
+                                ; keystroke walks 65,535 bytes backwards
+                                ; through the document claim.
+    mov ax, [np_len]
+    sub ax, cx                  ; what the note becomes: the span goes...
+    add ax, [np_frepn]          ; ...and the replacement arrives
+    jc .no                      ; a 16-bit note cannot pass 65,535
+    push bx
+    push cx
+    call np_capfor              ; non-destructive, and preserves everything
+    pop cx
+    pop bx
+    jc .no                      ; refused with the match still there
     push bx
     call np_delspan             ; out with the old...
     pop bx
     mov cx, [np_frepn]
     push cx
-    call np_gaproom             ; ...and in with the new
-    pop cx
+    call np_gaproom             ; ...and in with the new, which can no longer
+    pop cx                      ; be refused for want of room
     jc .no
     mov es, [np_dseg]
     mov di, bx

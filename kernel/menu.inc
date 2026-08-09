@@ -38,6 +38,17 @@
 ; menu_draw_clock, repainted once a second by the UI task, and - because
 ; ui.inc hit-tests its cell before menu_track ever sees the click - a
 ; shortcut to the Control Panel's Date/Time page rather than a menu title.
+;
+; **THE BAR IS THREE SEGMENTS AND EACH ANSWERS FOR ITSELF** (SPEC.md 12.9).
+; The logo never changes, the menus change when the owner does, the clock
+; changes once a minute, and SPEC.md 12.8's file-activity widget borrows the
+; right end of the menus. Those are four cadences and there used to be one
+; flag, so any of them moving white-filled the whole bar and put every glyph
+; back - tens of milliseconds of a BLANK bar on a 4.77MHz machine, on every
+; window operation. Now [menu_bovr] owns the static furniture and is the only
+; thing here that erases, the menus are composed into menu_bcell and emitted
+; as the one font_run span that differs from what is on the glass, and the
+; clock has a check word of its own.
 ; =============================================================================
 
 ; --- the kernel's own commands (SPEC.md 12.3; reconstructed by ui.inc) -------
@@ -95,9 +106,39 @@ MENU_ABPFX_LEN equ 6            ; 'About ' - menu_abstr's name copy starts
 
 MENU_SYS_XR    equ 29           ; System cell: x 0..29, glyph at MENU_SYS_TX
 MENU_SYS_TX    equ 10
-MENU_NAME_X    equ 38           ; app-name label pen x
+MENU_NAME_X    equ 40           ; app-name label pen x
 MENU_NAME_PAD  equ 16           ; gap after the name, before the first menu
-MENU_TITLE_PAD equ 12           ; per-title cell padding (6px each side)
+MENU_TITLE_PAD equ 16           ; per-title cell padding (8px each side)
+
+; --- the bar is THREE SEGMENTS, and each is redrawn on its own (SPEC.md 12.9)
+; The logo never changes, the menus change when the owner does, the clock
+; changes once a minute, and the file-activity widget (SPEC.md 12.8) borrows
+; the right end of the menus segment. Redrawing any of them used to redraw
+; all of them - one white fill across the whole bar and then every glyph put
+; back, which on a 4.77MHz machine is tens of milliseconds of a BLANK bar
+; and is the double-draw flash of PERFORMANCE.md Part 1 in its plainest form.
+;
+;   x 0 .. MENU_TXT_X0-1     the logo. Static: drawn only when something
+;                            painted OVER the bar ([menu_bovr]).
+;   x MENU_TXT_X0 .. hx-1    the menus: the app name and every cell title,
+;                            composed into menu_bcell and emitted as the ONE
+;                            font_run span that differs from what is already
+;                            on the glass.
+;   x [vid_clk_hx] .. w-1    the clock, on its own check word.
+;
+; MENU_TXT_X0 is a glyph-cell boundary and so is [vid_clk_hx], so a segment
+; is a whole number of 8px cells - which is what earns font_run's single-pass
+; path (SPEC.md 6.1) on the two mono adapters, where a cell row is one store
+; and the run is never momentarily blank. Everything the bar lays out is
+; therefore snapped to 8 as well: MENU_NAME_X, MENU_TITLE_PAD's half, and
+; the name cell's own edges.
+MENU_TXT_X0 equ 32              ; the menus segment's left edge (8-aligned,
+                                ; and clear of MENU_SYS_XR = 29)
+MENU_BCMAX  equ 62              ; cells in it, worst case: Hercules is 720
+                                ; wide, so [vid_clk_hx] = (720-206) & ~7 =
+                                ; 512 and the segment is (512-32)/8 = 60.
+                                ; menu_bar_text clamps to the LIVE count, so
+                                ; this only has to be big enough
 
 MENU_TEXT_Y equ 6               ; title text row (8px glyphs in a 19px bar)
 MENU_LOGO_Y equ 4               ; logo glyph top row (11px tall)
@@ -138,8 +179,14 @@ MENU_DIS    equ 1
 ; to the same right margin whichever form it is in.
 MENU_CLK_W  equ 24*8                        ; the LONGEST form, not the live one
 MENU_CLK_X  equ SCREEN_W - 8 - MENU_CLK_W   ; 440: cell left, 8px right margin
-MENU_CLK_HX equ MENU_CLK_X - 6              ; 434: hit band left edge, and the
-                                            ; left edge of the erased cell
+MENU_CLK_HX equ (MENU_CLK_X - 6) & 0FFF8h   ; 432: hit band left edge, and the
+                                            ; left edge of the clock SEGMENT -
+                                            ; floored to a glyph cell, so the
+                                            ; field is a whole number of them
+MENU_CLKC   equ 26              ; menu_clkbuf: the field is 25 cells on both
+                                ; screen widths ((w-8 - (w-206 & ~7)) / 8),
+                                ; and the longest form is 24 glyphs, so the
+                                ; pad is never negative. + the NUL
 
 ; -----------------------------------------------------------------------------
 ; menu_init - boot state: Locator owns the bar (SPEC.md 12)
@@ -151,6 +198,7 @@ menu_init:
     push bx
     push dx
     mov byte [menu_bdirty], 1   ; .bss is not zeroed at boot (-f bin)
+    call menu_force             ; ...and the furniture has never been drawn
     xor bx, bx
     mov [menu_win], bx
     mov word [menu_sseg], 0     ; the save-under is claimed by menu_drop for
@@ -162,14 +210,77 @@ menu_init:
     ret
 
 ; -----------------------------------------------------------------------------
-; menu_force - the whole bar must be redrawn, whoever owns it
+; menu_force - the whole bar was PAINTED OVER and owes every segment
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ;
-; For callers that drew over the bar rather than changed what belongs on it.
+; For callers that drew over the bar rather than changed what belongs on it -
+; wm_paint_all's dither and a fullscreen window coming down (SPEC.md 11.2).
+; This is the only thing that redraws the STATIC furniture (the black rule
+; and the logo glyph), because those are the only two ways they can be lost:
+; nothing else in the machine ever draws in the bar's own rows.
+;
+; A caller that overdrew only PART of the bar wants menu_inval instead -
+; forcing the whole bar for an 88px widget is what made the file-activity
+; progress bar (SPEC.md 12.8) redraw the menus, the logo and the clock every
+; time it finished.
 ; -----------------------------------------------------------------------------
 menu_force:
+    mov byte [menu_bovr], 1
     mov byte [menu_bdirty], 1
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_inval - forget what was drawn in x .. x2 of the bar (SPEC.md 12.9)
+; in:  AX = x1, CX = x2 (inclusive, absolute screen x)
+; out: nothing (all registers preserved)
+;
+; The drawn-state buffer is one byte per glyph cell, so the range is rounded
+; OUTWARD to whole cells - always safe, since a forgotten cell costs one
+; redrawn character and a remembered one costs a stale glyph. Clamped to the
+; menus segment: a caller whose rect reaches the logo or the clock is asking
+; for something this cannot express and should call menu_force.
+; -----------------------------------------------------------------------------
+menu_inval:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov byte [menu_bdirty], 1   ; ...so menu_draw_bar's text pass runs at all
+    sub ax, MENU_TXT_X0
+    jns .lo
+    xor ax, ax                  ; left of the segment: from its start
+.lo:
+    sub cx, MENU_TXT_X0
+    js .out                     ; wholly left of it: nothing of ours
+    mov dx, cx
+    mov cl, 3
+    shr ax, cl                  ; AX = first cell, rounded DOWN
+    xchg ax, dx
+    shr ax, cl                  ; ...and the cell x2 lands IN, which is the
+    xchg ax, dx                 ; outward rounding at that end
+    cmp ax, MENU_BCMAX
+    jae .out
+    cmp dx, MENU_BCMAX
+    jb .hi
+    mov dx, MENU_BCMAX-1
+.hi:
+    cmp ax, dx
+    ja .out
+    mov cx, dx
+    sub cx, ax
+    inc cx                      ; CX = cells to forget
+    mov bx, menu_bcell
+    add bx, ax
+.z:
+    mov byte [bx], 0            ; 0 is never composed: every byte that goes
+    inc bx                      ; into this buffer is a printable one, so it
+    loop .z                     ; can never match and the cell is redrawn
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -411,7 +522,9 @@ menu_relayout:
     mov [ss:di + MB_SEG], ax
     mov [ss:di + MB_XL], bx
     mov ax, bx
-    add ax, 6                   ; half of MENU_TITLE_PAD: the text is centred
+    add ax, MENU_TITLE_PAD / 2  ; the text is centred - and 8-aligned, since
+                                ; BX is and a glyph width is a multiple of 8,
+                                ; so every cell after this one is too
     mov [ss:di + MB_TX], ax
     mov ax, dx
     dec ax
@@ -519,10 +632,11 @@ menu_ab_cell:
     mov [ss:di + MB_TITLE], si
     mov word [ss:di + MB_ITEMS], menu_abitems
     mov [ss:di + MB_NITEM], cx
-    mov word [ss:di + MB_XL], MENU_NAME_X - 6
-    add ax, MENU_NAME_X + 5
-    mov [ss:di + MB_XR], ax
-    mov word [ss:di + MB_TX], MENU_NAME_X
+    mov word [ss:di + MB_XL], MENU_NAME_X - MENU_TITLE_PAD / 2
+    add ax, MENU_NAME_X + MENU_TITLE_PAD / 2 - 1
+    mov [ss:di + MB_XR], ax     ; ...so this cell is 8-aligned and a whole
+    mov word [ss:di + MB_TX], MENU_NAME_X   ; number of cells wide, like the
+                                            ; app's own (SPEC.md 12.9)
     mov word [ss:di + MB_SEG], 0   ; every string it names is kernel data
     mov ax, [menu_nbar]
     mov [menu_abcell], ax
@@ -626,9 +740,18 @@ menu_draw_bar:
     push cx
     push dx
     push si
+    push di
 
     call wm_fs_vis              ; a visible fullscreen window is OVER the bar
-    jc .out                     ; (SPEC.md 11.2), so there is nothing here to
+    jnc .live                   ; (SPEC.md 11.2), so there is nothing here to
+    mov byte [menu_bovr], 1     ; draw on - AND our pixels are being destroyed
+    jmp .out                    ; while it is up, which is the whole of how
+                                ; wm_paint_all stopped needing menu_force: the
+                                ; ONE thing that can cover the bar is seen
+                                ; here, by the module that has to repair it,
+                                ; rather than assumed by every caller that
+                                ; repaints the screen for some other reason
+.live:                          ;
                                 ; draw on. The guard is here and not at the
                                 ; callers because "the bar is not on screen"
                                 ; is a fact about the screen, not about the
@@ -640,9 +763,54 @@ menu_draw_bar:
                                 ; the bar still owes a redraw, and it gets
                                 ; one when fullscreen ends
     call menu_check             ; the owner may have closed since (SPEC 12)
-    cmp byte [menu_bdirty], 0
+
+%ifdef REDRAWFULL
+    call menu_force             ; REFERENCE BUILD: every bar redraw is a full
+%endif                          ; one, the behaviour this replaced
+    cmp byte [menu_bovr], 0     ; --- segment 1: the static furniture -------
+    je .txt                     ; only ever owed after an OVERDRAW
+    call menu_furniture
+
+.txt:
+    cmp byte [menu_bdirty], 0   ; --- segment 2: the menus ------------------
     je .clock
     mov byte [menu_bdirty], 0
+    call menu_bar_text
+
+.clock:
+    call menu_draw_clock        ; --- segment 3: the clock (SPEC.md 12.1) ---
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_furniture - the black rule and the logo glyph, after an overdraw
+; in:  nothing (caller holds the gfx lock)
+; out: nothing (all registers preserved)
+;
+; **The only path in the machine that erases the menu bar**, and it is
+; reached only from [menu_bovr] - somebody painted over us. Everything else
+; that changes the bar changes TEXT, and text is put back by an opaque run
+; that never blanks what it is replacing (SPEC.md 6.1/12.9).
+;
+; The two things drawn here are the two that cannot be recomputed from the
+; owner: the rule along the bottom row and the 11x11 System logo, both
+; identical in every application for the life of the machine. Drawing them
+; on every relayout cost 121 gfx_pixel calls and a full-width hline to put
+; back pixels that had not moved.
+; -----------------------------------------------------------------------------
+menu_furniture:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov byte [menu_bovr], 0
 
     mov byte [gfx_color], CWHITE
     xor ax, ax                  ; white field, rows 0..MBAR_H-2
@@ -657,53 +825,130 @@ menu_draw_bar:
     mov dx, MBAR_H - 1
     call gfx_hline
 
-    cmp word [menu_abcell], 0   ; the name is a CELL when the application
-    jne .cells                  ; declared an About (SPEC.md 12.2), and the
-                                ; loop below draws it at the same pen x -
-                                ; drawing it here too would double-strike it
-    push es                     ; the name and every cell title belong to the
-    call menu_es                ; owner (SPEC.md 12.2/20.1)
-    mov si, [menu_namep]        ; the active application's name (SPEC 12)
-    mov cx, MENU_NAME_X
-    mov dx, MENU_TEXT_Y
-    call font_str_x
-    pop es
+    mov cx, MENU_SYS_TX         ; the logo: cell 0's title is 0 because it is
+    call menu_logo_glyph        ; a bitmap, and this is where it lives now
 
-.cells:
+    mov di, menu_bcell          ; ...and the fill took every glyph with it,
+    mov cx, MENU_BCMAX          ; so nothing that was drawn is still drawn
+    xor al, al
+.z:
+    mov [di], al
+    inc di
+    loop .z
+    mov word [menu_ckck], 0
+    mov byte [menu_bdirty], 1
 
-    mov si, menu_bar            ; titles (gfx_color is already black)
-    mov cx, [menu_nbar]
-.title:
-    push cx
-    mov ax, [ss:si + MB_TITLE]
-    test ax, ax
-    jz .glyph
-    mov cx, [ss:si + MB_TX]
-    mov dx, MENU_TEXT_Y
-    push si
-    push es
-    push cs
-    pop es                      ; this cell's own segment (SPEC.md 12.2):
-    cmp word [ss:si + MB_SEG], 0   ; cell 0's title is never drawn (it is the
-    je .tseg                    ; logo), but the rule is the same for all
-    mov es, [ss:si + MB_SEG]
-.tseg:
-    mov si, ax
-    call font_str_x
-    pop es
-    pop si
-    jmp .next
-.glyph:
-    mov cx, [ss:si + MB_TX]
-    call menu_logo_glyph
-.next:
+    pop di
+    pop dx
     pop cx
-    add si, MB_ENTSZ
-    loop .title
+    pop bx
+    pop ax
+    ret
 
-.clock:
-    call menu_draw_clock        ; the right end of the bar (SPEC.md 12.1)
+; -----------------------------------------------------------------------------
+; menu_bar_text - the menus segment: compose it, diff it, emit what moved
+; in:  nothing (caller holds the gfx lock)
+; out: nothing (all registers preserved)
+;
+; The bar's text is composed into menu_bcell - ONE BYTE PER GLYPH CELL, the
+; app name and every cell title at the x menu_layout gave them, spaces
+; everywhere else - and menu_bcell is also the record of what is ON THE
+; GLASS. So composing it IS the diff: the first and last cells that differ
+; bound one font_run, and a bar whose owner has not changed emits nothing at
+; all.
+;
+; That is the Task Manager's row check (SPEC.md 28) and Missile Command's
+; status strip (SPEC.md 48.17) applied to the chrome, and the reason it is
+; sound here is the same one: the bar is never covered (windows clamp to
+; y >= MBAR_H), so what the last emit drew is still what is showing, and the
+; only thing that can invalidate that is an overdraw - which is exactly what
+; menu_force and menu_inval say.
+;
+; The padding IS the erase. A space is an opaque cell like any other, so a
+; bar that got SHORTER blanks its tail in the same single pass that letters
+; its head, and there is no fill anywhere in this path.
+; -----------------------------------------------------------------------------
+menu_bar_text:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+
+    mov ax, [vid_clk_hx]        ; the live segment, in whole cells - both
+    sub ax, MENU_TXT_X0         ; ends are 8-aligned by construction
+    mov cl, 3
+    shr ax, cl
+    cmp ax, MENU_BCMAX
+    jbe .n
+    mov ax, MENU_BCMAX
+.n:
+    mov [menu_bn], ax
+
+    mov word [menu_bfirst], 0FFFFh
+    xor di, di                  ; DI = cell index, 0 = x MENU_TXT_X0
+
+    mov bx, [menu_abcell]       ; --- the application's name ----------------
+    or bx, bx                   ; a CELL when the application declared an
+    jz .bare                    ; About (SPEC.md 12.2/12.7), and it is
+    call menu_bent              ; APPENDED last but positioned FIRST, so it
+    jmp short .cells            ; is composed here to keep x order
+.bare:
+    mov ax, MENU_NAME_X         ; Locator: a bare label, same pen x
+    call menu_bpad
+    push es
+    call menu_es                ; the name belongs to the owner (12.2/20.1)
+    mov si, [menu_namep]
+    call menu_bstr
+    pop es
+
+.cells:                         ; --- the app's own menus, left to right ----
+    mov bx, 1                   ; cell 0 is the logo: a bitmap, no text
+.cell:
+    cmp bx, [menu_nbar]
+    jae .tail
+    cmp bx, [menu_abcell]
+    je .next                    ; ...composed above
+    call menu_bent
+.next:
+    inc bx
+    jmp short .cell
+
+.tail:
+    mov ax, [menu_bn]           ; spaces to the clock: this is what erases
+    call menu_bpadc             ; the menus of the app that just went away
+
+    mov bx, [menu_bfirst]       ; --- emit the one span that moved ----------
+    cmp bx, 0FFFFh
+    je .out                     ; nothing on the bar changed: no pixels
+
+    mov si, [menu_blast]
+    inc si                      ; font_run wants ASCIIZ, so the byte just
+    mov al, [menu_bcell+si]     ; past the run is banked and put back - the
+    push ax                     ; buffer has one spare cell for exactly this
+    mov byte [menu_bcell+si], 0
+
+    mov ax, bx
+    mov cl, 3
+    shl ax, cl
+    add ax, MENU_TXT_X0
+    mov cx, ax                  ; CX = the run's x (8-aligned, so font_run
+    mov si, menu_bcell          ; takes its single-pass path on mono)
+    add si, bx
+    mov dx, MENU_TEXT_Y
+    mov al, CBLACK
+    mov ah, CWHITE
+    call font_run
+
+    pop ax
+    mov si, [menu_blast]
+    inc si
+    mov [menu_bcell+si], al
 .out:
+    pop es
+    pop di
     pop si
     pop dx
     pop cx
@@ -712,18 +957,138 @@ menu_draw_bar:
     ret
 
 ; -----------------------------------------------------------------------------
+; menu_bent - compose bar cell BX's title at its own pen x
+; in:  BX = bar index, DI = the running cell index
+; out: DI advanced
+; clobbers: DI (flags)
+; -----------------------------------------------------------------------------
+menu_bent:
+    push ax
+    push bx
+    push cx
+    push si
+    push es
+    mov ax, MB_ENTSZ
+    mul bl                      ; BX <= MENU_BARMAX, so BL is the whole index
+    mov si, menu_bar            ; (menu_bar is .lowbss: read through SS)
+    add si, ax
+    mov ax, [ss:si + MB_TITLE]
+    or ax, ax
+    jz .out                     ; the logo cell has no text
+    mov cx, [ss:si + MB_SEG]
+    push ax
+    mov ax, [ss:si + MB_TX]
+    call menu_bpad              ; spaces up to this cell's pen
+    pop ax
+    push cs
+    pop es                      ; this cell's own segment (SPEC.md 12.2)
+    or cx, cx
+    jz .seg
+    mov es, cx
+.seg:
+    mov si, ax
+    call menu_bstr
+.out:
+    pop es
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; menu_bpad  - spaces up to absolute x AX  |  menu_bpadc - up to cell index AX
+; menu_bstr  - a NUL string at ES:SI       |  menu_bput  - one cell, AL
+; in:  DI = the running cell index
+; out: DI advanced
+; clobbers: DI (flags)
+; -----------------------------------------------------------------------------
+menu_bpad:
+    push ax
+    push cx
+    sub ax, MENU_TXT_X0
+    jns .c
+    xor ax, ax                  ; left of the segment: nothing to pad
+.c:
+    mov cl, 3
+    shr ax, cl
+    call menu_bpadc
+    pop cx
+    pop ax
+    ret
+
+menu_bpadc:
+    push ax
+    push bx
+    mov bx, ax
+.p:
+    cmp di, bx
+    jae .d
+    mov al, ' '
+    call menu_bput
+    jmp short .p
+.d:
+    pop bx
+    pop ax
+    ret
+
+menu_bstr:
+    push ax
+    push si
+.n:
+    mov al, [es:si]
+    or al, al
+    jz .d
+    inc si
+    call menu_bput
+    cmp di, [menu_bn]
+    jb .n
+.d:
+    pop si
+    pop ax
+    ret
+
+menu_bput:
+    push bx
+    cmp di, [menu_bn]
+    jae .out                    ; past the segment: dropped, exactly as
+    mov bx, di                  ; menu_layout drops a cell that will not fit
+    cmp [menu_bcell+bx], al
+    je .same
+    mov [menu_bcell+bx], al
+    cmp word [menu_bfirst], 0FFFFh
+    jne .last
+    mov [menu_bfirst], di
+.last:
+    mov [menu_blast], di
+.same:
+    inc di
+.out:
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; menu_draw_clock - draw the system clock at the right end of the menu bar
 ; in:  nothing (caller holds the gfx lock)
 ; out: nothing
 ; clobbers: nothing (flags only; leaves [gfx_color] = CBLACK)
 ;
-; Erases the whole cell first - the longest form's worth, not the live
-; string's - so this doubles as the redraw path ui_task drives when the
-; text changes (SPEC.md 13 step 4), including a change of FORM. No
-; wm_obscured check: windows
-; clamp to y >= MBAR_H, so nothing can ever cover the bar. Ordinary
-; persistent content - it goes through the back buffer like everything else
-; and the caller's gfx_unlock flushes it (SPEC.md 32).
+; **The clock is its own segment and answers for itself** (SPEC.md 12.9).
+; menu_draw_bar calls it on every window operation and ui_task calls it once
+; a second, and the string changes once a MINUTE - so the first thing it does
+; is check. It used to erase 206px of bar and re-letter ~20 glyph cells every
+; time, which on a 4.77MHz machine is tens of milliseconds of a blank clock
+; for content that had not moved: the flash was the whole cost, since nothing
+; had changed to justify it.
+;
+; When it HAS changed it is one opaque font_run over a fixed field - the
+; string right-aligned inside it by LEADING SPACES, which is what makes the
+; erase and the lettering one pass instead of two (SPEC.md 6.1). The field is
+; [vid_clk_hx] .. w-9, both ends on glyph cells, so a shorter form blanks the
+; cells it gave up in the same pass. No wm_obscured check: windows clamp to
+; y >= MBAR_H, so nothing can ever cover the bar. Ordinary persistent content
+; - it goes through the back buffer like everything else and the caller's
+; gfx_unlock flushes it (SPEC.md 32).
 ; -----------------------------------------------------------------------------
 menu_draw_clock:
     push ax
@@ -731,22 +1096,82 @@ menu_draw_clock:
     push cx
     push dx
     push si
-
-    mov byte [gfx_color], CWHITE ; the cell, the black rule below it excluded
-    mov ax, [vid_clk_hx]
-    xor bx, bx
-    mov cx, [vid_wm1]
-    mov dx, MBAR_H - 2
-    call gfx_fill
+    push di
+    push es
 
     call clk_fmt                ; SI = the line in its live form (SPEC.md 37)
-    call font_width             ; AX = its width - right-align it, since the
-    mov cx, [vid_wm8]           ; form (and so the width) can change
-    sub cx, ax
-    mov byte [gfx_color], CBLACK
-    mov dx, MENU_TEXT_Y
-    call font_str
 
+    xor ax, ax                  ; --- its length and its check word, one walk
+    xor cx, cx
+    mov di, si
+.h:
+    mov bl, [di]
+    or bl, bl
+    jz .hd
+    rol ax, 1                   ; position-sensitive: '10:23' and '23:10' are
+    xor al, bl                  ; different times
+    inc cx
+    inc di
+    jmp short .h
+.hd:
+    or ax, ax
+    jnz .hok
+    inc ax                      ; 0 means 'nothing has been drawn' - never a
+.hok:                           ; live key (the tm_elchk rule)
+    cmp ax, [menu_ckck]
+    je .out                     ; the same string is already on the glass
+    mov [menu_ckck], ax
+
+    mov ax, [vid_clk_hx]        ; --- the field, in whole cells
+    mov bx, [vid_wm8]
+    sub bx, ax
+    push cx
+    mov cl, 3
+    shr bx, cl
+    pop cx
+    sub bx, cx                  ; BX = leading spaces = field - length
+    jns .pad
+    xor bx, bx                  ; a form wider than the field cannot happen
+.pad:                           ; (24 glyphs into 25 cells), but it must not
+                                ; underflow into a 64KB rep stosb if it did
+    push ax                     ; ...and neither may pad + text overrun the
+    mov ax, bx                  ; buffer, which is 25 cells + the NUL because
+    add ax, cx                  ; that is the field on both screen widths.
+    cmp ax, MENU_CLKC - 1       ; A wider screen would make the field wider,
+    pop ax                      ; and this is the one line that would notice
+    jbe .stage
+    mov bx, MENU_CLKC - 1
+    sub bx, cx
+    jns .stage
+    xor bx, bx
+.stage:
+    push ds
+    pop es                      ; the staging buffer is ours
+    mov di, menu_clkbuf
+    cld
+    push cx
+    mov cx, bx
+    mov al, ' '
+    jcxz .txt
+    rep stosb
+.txt:
+    pop cx
+    jcxz .nul
+    rep movsb                   ; DS:SI -> ES:DI, the live string
+.nul:
+    mov byte [es:di], 0
+
+    mov cx, [vid_clk_hx]        ; --- one opaque pass over the whole field
+    mov dx, MENU_TEXT_Y
+    mov si, menu_clkbuf
+    mov al, CBLACK
+    mov ah, CWHITE
+    call font_run
+.out:
+    mov byte [gfx_color], CBLACK   ; the documented parting state, on both
+                                   ; paths - font_run leaves its own
+    pop es
+    pop di
     pop si
     pop dx
     pop cx
@@ -1198,10 +1623,17 @@ menu_drop:
     call mem_free
     mov word [menu_sseg], 0
 .nofree:
-    call menu_force             ; the cell highlight is XOR and undoes itself,
-                                ; but the restore path above is a save-under
-                                ; that can be refused - one bar redraw per
-                                ; menu interaction is not worth reasoning about
+    mov byte [menu_bdirty], 1   ; put back only the flag .repaint cleared -
+                                ; NOT menu_force, which now means "our pixels
+                                ; were destroyed" and would redraw the logo
+                                ; and white-fill the bar on every menu click
+                                ; (SPEC.md 12.9). Nothing here damages the
+                                ; bar: the cell highlight is XOR and undoes
+                                ; itself, and both droppers floor at MBAR_H,
+                                ; so no menu can ever cover it. The flag costs
+                                ; one compose-and-compare that finds nothing
+                                ; differs, which is the honest price of not
+                                ; reasoning about whether .repaint ran
     mov ax, [menu_sel]
 
     pop es
@@ -1560,9 +1992,26 @@ menu_seg:   resw 1              ; the segment [menu_set] and the app's own
 menu_dseg:  resw 1              ; ...and the segment of the menu being
                                 ; DROPPED, which is that cell's MB_SEG: 0
                                 ; for the System menu even under a package
-menu_bdirty: resb 1             ; the bar's field, name and cells are owed a
-                                ; redraw. Set by menu_relayout and by anyone
-                                ; who drew over the bar (menu_force)
+menu_bdirty: resb 1             ; the MENUS segment's text may have moved. Set
+                                ; by menu_relayout, by menu_inval and by
+                                ; menu_force; spent by menu_bar_text, which
+                                ; then usually finds nothing differs
+menu_bovr:  resb 1              ; ...and somebody painted OVER the bar, so the
+                                ; static furniture is owed too (menu_force).
+                                ; A different question from the one above and
+                                ; a far rarer one: this is the only flag that
+                                ; erases anything (SPEC.md 12.9)
+menu_bcell: resb MENU_BCMAX + 1 ; the menus segment as it is ON THE GLASS, one
+                                ; byte per 8px cell - composed into, diffed
+                                ; against and emitted from. The spare cell is
+                                ; the NUL menu_bar_text plants past a run
+menu_bn:    resw 1              ; cells in it on THIS screen (SPEC.md 39.2)
+menu_bfirst: resw 1             ; the span that differs, 0FFFFh = none
+menu_blast: resw 1
+menu_ckck:  resw 1              ; the clock string's check word, 0 = nothing
+                                ; drawn (menu_draw_clock)
+menu_clkbuf: resb MENU_CLKC     ; ...and its field, space-padded so the erase
+                                ; and the lettering are one pass
 menu_sseg:  resw 1              ; the save-under claim's segment, 0 = none
                                 ; (menu_drop then repaints instead)
 menu_tbuf:  resb MENU_MAXCH + 1 ; menu_trunc's staging buffer

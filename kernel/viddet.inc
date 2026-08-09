@@ -114,7 +114,12 @@ vid_rpara   dw BB_PLANE_PARA    ; paragraphs from one plane to the next.
 vid_rend    dw 0                ; that loop's exclusive end
 vid_dock_y0 dw SCREEN_H-24      ; dock strip top row (DOCK_H, dock.inc)
 vid_dock_ty0 dw SCREEN_H-24+3   ; dock tile top row
-vid_clk_hx  dw SCREEN_W-206     ; menu bar clock cell: hit band left edge
+vid_clk_hx  dw (SCREEN_W-206) & 0FFF8h  ; menu bar clock cell: hit band left
+                                ; edge, and the left edge of the clock's own
+                                ; SEGMENT (SPEC.md 12.1) - on a GLYPH CELL
+                                ; boundary, which is what lets the bar's three
+                                ; segments be whole numbers of 8px cells and
+                                ; font_run's single-pass path reach them
 vid_ymax    dw SCREEN_H-18      ; lowest y a title bar may be dragged to
 vid_popmax  dw 16               ; pull-down items that fit under the bar
 vid_desk_zx dw SCREEN_W-56      ; desktop drive column: hit zone left, and
@@ -260,7 +265,8 @@ vid_apply:
     mov [vid_wm1], ax
     sub ax, 7
     mov [vid_wm8], ax
-    sub ax, 198                 ; w - 8 - MENU_CLK_W - 6
+    sub ax, 198                 ; w - 8 - MENU_CLK_W - 6, floored to a glyph
+    and ax, 0FFF8h              ; cell: the bar's segments are cell ranges
     mov [vid_clk_hx], ax
 
     mov ax, [vid_h]             ; --- heights
@@ -390,6 +396,31 @@ vid_setmode:
     cmp byte [vid_kind], VID_CGA
     jne .bios
     call vid_cga_equip          ; ...and see there: on a mono-primary machine
+
+    ; --- ZERO B800 WHILE THE CARD IS STILL IN TEXT MODE ---------------------
+    ; The Hercules path below blanks the tube for its whole mode change and
+    ; this one cannot: int 10h owns the CGA's mode control register, so there
+    ; is no window we can hold the card dark across. What there IS is the
+    ; buffer, and it is the same buffer either way - B8000 is the text screen
+    ; now and the bitmap in a moment.
+    ;
+    ; So the garbage is removed rather than hidden. Whatever the ROM's order
+    ; is - and every BIOS has its own - the bytes it switches the card onto
+    ; are already zero, so there is no frame in which the previous TEXT screen
+    ; is displayed as a 640x200 bitmap. That frame is what "the graphics
+    ; memory shows garbage just before the progress bar" is: mode 3's clear
+    ; leaves 0x0720 per cell, which as pixels is a regular field of dots, and
+    ; a hard-disk boot leaves the POST's own text, which is not regular at
+    ; all. NO EMULATOR HERE CAN SHOW IT - they clear instantly - and on a
+    ; 4.77MHz machine the ROM's own 16KB clear is tens of milliseconds.
+    mov ax, 0xB800
+    mov es, ax
+    xor di, di
+    xor ax, ax
+    mov cx, 8192
+    cld
+    rep stosw
+
     mov ax, 0x0006              ; CGA: 640x200 monochrome
 .bios:
     int 0x10

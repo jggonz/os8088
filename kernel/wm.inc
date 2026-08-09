@@ -451,6 +451,10 @@ wm_ask_size:
 ; left instead of hanging off it.
 ; -----------------------------------------------------------------------------
 wm_resize:
+    call wm_rz_bank             ; where it was, for the repaint at the end
+wm_resize_nb:                   ; ...and the entry for a caller that has
+                                ; banked it already, because it is about to
+                                ; move the ORIGIN too (wm_zoom's .go)
     push ax
     push cx
     push dx
@@ -496,9 +500,129 @@ wm_resize:
     jle .paint
     mov [bx+W_Y], ax
 .paint:
-    call wm_paint_all
+    call wm_rz_paint            ; ...and only what the move disturbed (11.95.1)
     pop dx
     pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_rz_bank  - bank BX's rect before a geometry change
+; wm_rz_paint - put back what that change actually disturbed
+; in:  BX = the window; wm_rz_paint also needs [wm_rz_o*] and the gfx lock
+; out: nothing (all registers preserved)
+;
+; **A window that GREW reveals nothing** (SPEC.md 11.95.1). Every pixel it
+; gave up it also covers, so there is no desktop to put back, no drive zone
+; to redraw and no other window to repaint - which is SPEC.md 11.90's whole
+; argument about raising, arriving at a resize. Both of these used to end in
+; wm_paint_all: a screen's worth of dither, every drive zone, both strips and
+; every window's W_PAINT, to enlarge one window over ground it already owned.
+;
+; The test is the four edges plus one question: nothing may be ABOVE us, or it
+; would have to be drawn back on top. That holds by construction for the case
+; this exists for - SPEC.md 11.95's zoom is the SECOND press on a title bar,
+; and the first one raised the window - but it is tested rather than assumed,
+; because wm_resize is a published slot any application may call.
+;
+; Anything else is the union of where it was and where it is, through
+; wm_paint_dmg (SPEC.md 11.91) - which is what a shrink genuinely owes, and
+; still an enormous improvement on the whole screen. The union is computed one
+; pixel wide at the far edges, which is exactly the drop shadow.
+; -----------------------------------------------------------------------------
+wm_rz_bank:
+    push ax
+    mov ax, [bx+W_X]
+    mov [wm_rz_ox], ax
+    mov ax, [bx+W_Y]
+    mov [wm_rz_oy], ax
+    mov ax, [bx+W_W]
+    mov [wm_rz_ow], ax
+    mov ax, [bx+W_H]
+    mov [wm_rz_oh], ax
+    pop ax
+    ret
+
+wm_rz_paint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+
+    mov ax, [bx+W_X]            ; --- did the new rect swallow the old one?
+    cmp ax, [wm_rz_ox]
+    jg .dmg
+    mov ax, [bx+W_Y]
+    cmp ax, [wm_rz_oy]
+    jg .dmg
+    mov ax, [bx+W_X]
+    add ax, [bx+W_W]
+    mov cx, [wm_rz_ox]
+    add cx, [wm_rz_ow]
+    cmp ax, cx
+    jl .dmg
+    mov ax, [bx+W_Y]
+    add ax, [bx+W_H]
+    mov cx, [wm_rz_oy]
+    add cx, [wm_rz_oh]
+    cmp ax, cx
+    jl .dmg
+
+    mov si, bx                  ; --- and is there nothing above it?
+    call wm_top                 ; BX = the frontmost visible window
+    cmp bx, si
+    mov bx, si
+    jne .dmg
+    push bp                     ; wm_draw_win takes "which window is FRONTMOST"
+    mov bp, bx                  ; in BP, and this path has just proved we are
+                                ; it. Without this the title bar is drawn with
+                                ; whatever BP the caller happened to hold, so a
+                                ; zoomed window came up with no pinstripes and
+                                ; NO CLOSE OR MINIMIZE BOX - which wm_hit still
+                                ; reports from geometry, so they were invisible
+                                ; and clickable. wm_paint_all and wm_raise set
+                                ; it; this was the one site that did not
+    call wm_draw_win            ; then this window is the whole of it
+    pop bp                      ; ...and wm_rz_paint preserves every register
+    call menu_draw_bar          ; (the chrome may still have changed owner)
+    call dock_paint
+    jmp short .out
+
+.dmg:                           ; --- otherwise: where it was, and where it is
+    mov ax, [bx+W_X]
+    cmp ax, [wm_rz_ox]
+    jle .x1
+    mov ax, [wm_rz_ox]
+.x1:
+    mov si, [bx+W_Y]
+    cmp si, [wm_rz_oy]
+    jle .y1
+    mov si, [wm_rz_oy]
+.y1:
+    mov cx, [bx+W_X]
+    add cx, [bx+W_W]
+    mov dx, [wm_rz_ox]
+    add dx, [wm_rz_ow]
+    cmp cx, dx
+    jge .x2
+    mov cx, dx
+.x2:
+    mov dx, [bx+W_Y]
+    add dx, [bx+W_H]
+    mov bx, [wm_rz_oy]
+    add bx, [wm_rz_oh]
+    cmp dx, bx
+    jge .y2
+    mov dx, bx
+.y2:
+    mov bx, si                  ; AX,BX,CX,DX = the union, shadow included
+    call wm_paint_dmg
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -657,6 +781,9 @@ wm_zoom:
     mov ax, dx
 .rxc:
     pop dx
+    call wm_rz_bank             ; the standard state we are LEAVING - what the
+                                ; restore reveals is all of it bar the rect
+                                ; being replayed (SPEC.md 11.95.1)
     mov [bx+W_W], cx
     mov [bx+W_H], dx
     mov [bx+W_X], ax
@@ -665,11 +792,17 @@ wm_zoom:
                                 ; independent of the height (SPEC.md 11.90)
     call wm_snap_win            ; ...and back onto a byte boundary (11.94),
                                 ; which the x clamp above may have taken it off
-    call wm_paint_all           ; the band it is vacating is most of the
-    jmp short .out              ; screen, so this is wm_resize's repaint too
+    call wm_rz_paint            ; the band it is vacating is most of the
+    jmp short .out              ; screen - but only that band, not the whole
+                                ; of it, and not the chrome (SPEC.md 11.95.1)
 .go:
     ; --- it is not: bank where it stands, and go to the standard state -------
     call wm_zoom_slot
+    call wm_rz_bank             ; ...for the REPAINT as well as for the user
+                                ; state - and it has to happen here, before
+                                ; the origin moves, or wm_resize would bank
+                                ; the new x/y with the old w/h and the band
+                                ; the window VACATED would never be redrawn
     push ax                     ; the standard x, which the bank writes over
     mov ax, [bx+W_X]
     mov [si+ZR_X], ax
@@ -684,7 +817,8 @@ wm_zoom:
     mov word [bx+W_Y], MBAR_H   ; wm_resize's y clamp only ever pushes a window
                                 ; UP OFF the dock, never down off the bar, so
                                 ; this is the half it cannot do
-    call wm_resize              ; ...and this is the half it can
+    call wm_resize_nb           ; ...and this is the half it can (the bank is
+                                ; ours, above)
 .out:
     pop si
     pop dx
@@ -1882,17 +2016,25 @@ wm_paint_dmg:
     mov bx, MBAR_H
 .fy:
     mov cx, [wm_dmg_x2]
-    mov dx, [wm_dmg_y2]
+    mov dx, [vid_dock_y0]       ; ...and stopping above the strip, which
+    dec dx                      ; dock_paint restores below (SPEC.md 30.3.2):
+    cmp dx, [wm_dmg_y2]         ; damage that reaches the dock already forces
+    jle .fy2                    ; the span through dock_force_x, so dithering
+    mov dx, [wm_dmg_y2]         ; those rows is drawn only to be painted over
+.fy2:
     cmp bx, dx
     jg .zones
-    call gfx_fill_gray
+    call wm_dmg_gray            ; ...minus the windows about to cover it
 .zones:
     mov al, [wm_dmg_zn]
     call desk_paint_mask        ; the touched drive zones, whole
     mov ax, [wm_dmg_y2]         ; reached the strip? then the dither above
     cmp ax, [vid_dock_y0]       ; just ran over it, and whatever WAS covering
     jl .dock                    ; it has moved - the one case that owes the
-    call dock_force             ; dock a whole redraw rather than a tile
+    mov ax, [wm_dmg_x1]         ; strip a restore rather than a tile. Only the
+    mov cx, [wm_dmg_x2]         ; DAMAGED span of it, though: this used to
+    call dock_force_x           ; force all 640px and rebuild every tile for a
+                                ; window that closed in one corner (SPEC 30.3)
 .dock:
     call dock_paint             ; CF = 1 if it actually put pixels on the strip
     jnc .bar                    ; - and only then does a window sitting on the
@@ -2133,17 +2275,23 @@ wm_paint_all:
     call wm_fs_vis              ; a visible fullscreen window covers the
     jc .fswins                  ; desktop, dock and menu bar - painting
                                 ; them under it is pure waste (SPEC.md 11.2)
-    xor ax, ax                  ; desktop: 50% dither under the bar
-    mov bx, MBAR_H
-    mov cx, [vid_wm1]
-    mov dx, [vid_hm1]
-    call gfx_fill_gray
+    xor ax, ax                  ; desktop: 50% dither under the bar, and
+    mov bx, MBAR_H              ; STOPPING ABOVE THE DOCK (SPEC.md 30.3.2) -
+    mov cx, [vid_wm1]           ; dock_paint is the next call but one and owns
+    mov dx, [vid_dock_y0]       ; every row from here down, so dithering them
+    dec dx                      ; was a full-width band drawn to be painted
+    call gfx_fill_gray          ; over: the double-draw flash, and the reason
+                                ; every tile had to be rebuilt afterwards
     call desk_paint             ; drive icons live on the desktop, under
                                 ; every window (SPEC.md 26)
-    call dock_force             ; the dither just ran over the strip, and it
-    call dock_paint             ; is drawn UNDER windows (SPEC.md 30)
-    call menu_force
-    call menu_draw_bar
+    call dock_paint             ; ...so the strip is UNTOUCHED and usually has
+                                ; nothing to do. No dock_force: nothing here
+                                ; drew on it any more
+    call menu_draw_bar          ; and no menu_force either - the dither starts
+                                ; at MBAR_H, so nothing in this routine has
+                                ; ever been able to touch the bar (SPEC 12.9).
+                                ; The one thing that covers it is a fullscreen
+                                ; window, and menu_draw_bar sees that itself
 .wins:
     call wm_top
     mov bp, bx                  ; BP = frontmost visible (0 if none)
@@ -2414,6 +2562,8 @@ wm_dmg_dk   db 0                ; 1 = the dock strip really was drawn, so a
 wm_dmg_j    dw 0                ; the marking pass's inner index
 wm_hide_r   times 4 dw 0        ; wm_hide/wm_destroy: the vacated rect,
                                 ; banked across the record teardown
+wm_dg_r     times 4 dw 0        ; wm_dmg_gray's rect, banked across the
+                                ; region build that eats its registers
 
 wm_clipwin  dw 0                ; the window wm_clip_set was given, banked
                                 ; for cur_lazyck (SPEC.md 7.1.4)
@@ -2616,6 +2766,123 @@ wm_covered:
 ; The three region builds below start here and then differ only in WHICH
 ; occluders they subtract, which is the whole of what separates them.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; wm_dmg_gray - the desktop dither, MINUS the windows about to cover it
+; in:  AX = x1, BX = y1, CX = x2, DX = y2 (inclusive, already clamped);
+;      caller holds the gfx lock
+; out: nothing (all registers preserved)
+;
+; **Ground a window is about to be drawn on does not need dithering first.**
+; wm_paint_dmg repaints the damage rect and then draws every window that
+; overlaps it - whole (SPEC.md 11.91) - so every pixel under one of those
+; windows was dithered and then painted over. That is PERFORMANCE.md Part 1's
+; double-draw, and on the two operations where the damage is mostly WINDOW it
+; is most of the cost: dragging a window (ui_drag passes the union of where it
+; was and where it is, and the second half is covered by the window itself)
+; and un-zooming one (SPEC.md 11.95.1).
+;
+; The region machinery already answers exactly this question. wm_clip_seed
+; takes the rect, wm_dmg_occl subtracts every visible window shadow and all,
+; and gfx_fill_gray is a CLIPPED primitive - so the fill is confined to what
+; is genuinely being uncovered, in one call, with no new drawing code.
+;
+; Three things are load-bearing.
+;
+;   - The dither's phase is a function of ABSOLUTE x+y (see gfx_fill_gray), so
+;     drawing it as fragments is pixel-identical to drawing it whole. A
+;     pattern phased from the fill's own origin could not be split this way.
+;   - Overflow degrades to dithering the WHOLE rect, which is the opposite of
+;     wm_clip_set's degradation and for the opposite reason: a fragment too
+;     many there means "skip, we might overdraw somebody", here it means
+;     "draw it all, or we leave stale pixels behind".
+;   - The hide is spent explicitly. GFXCLIP only calls cur_unlazy on its
+;     UNCLIPPED branch (SPEC.md 7.1.4), trusting wm_clip_set's cur_lazyck to
+;     have decided for an armed one - and there is no window here to decide
+;     about. cur_unlazy is what the unclipped fill did before, so this keeps
+;     the cursor behaviour exactly as it was.
+; -----------------------------------------------------------------------------
+wm_dmg_gray:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    call cur_unlazy             ; ...as the unclipped fill did (see above)
+    mov [wm_dg_r + 0], ax       ; the region build eats registers and the
+    mov [wm_dg_r + 2], bx       ; fill needs its rect back afterwards
+    mov [wm_dg_r + 4], cx
+    mov [wm_dg_r + 6], dx
+    mov si, dx                  ; wm_clip_seed wants AX,DX,CX,SI
+    mov dx, bx
+    call wm_clip_seed
+    call wm_dmg_occl            ; every visible window, shadow included
+    jc .whole                   ; overflowed: dither the lot, as before
+    cmp word [wm_clip_n], 0
+    je .out                     ; wholly covered: not one pixel is revealed
+    jmp short .fill
+.whole:
+    mov word [wm_clip_n], 0
+.fill:
+    mov ax, [wm_dg_r + 0]
+    mov bx, [wm_dg_r + 2]
+    mov cx, [wm_dg_r + 4]
+    mov dx, [wm_dg_r + 6]
+    call gfx_fill_gray          ; clipped to what is really being revealed
+.out:
+    mov word [wm_clip_n], 0     ; ours for one call and no longer
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_dmg_occl - subtract EVERY visible window from the armed list
+; in:  the list holds at least one rect
+; out: CF = 1 the list overflowed; CF = 0 and [wm_clip_n] = 0 means the seed
+;      rect is entirely covered
+; clobbers: flags
+;
+; wm_clip_occl's walk without the "above us" part, because there is no `us`:
+; the seed is a damage rect rather than a window. Every visible window that
+; overlaps it is marked by wm_dmg_wins and redrawn WHOLE, so every one of them
+; is ground that does not need dithering; one that does not overlap subtracts
+; nothing and costs a compare.
+; -----------------------------------------------------------------------------
+wm_dmg_occl:
+    push ax
+    push bx
+    push cx
+    push si
+    mov ch, 0
+    mov cl, [wm_zn]
+    mov si, wm_zord
+    jcxz .done
+.scan:
+    mov al, [si]
+    inc si
+    call wm_idx2ptr             ; BX = the window (AX and CX preserved)
+    test word [bx+W_FLAGS], 2
+    jz .next
+    call wm_clip_subf           ; the FRAME rect: what will be REPAINTED, not
+    jc .over                    ; what is occupied - the shadow's two corners
+    cmp word [wm_clip_n], 0     ; are in the second and in neither
+    je .done                    ; nothing left: stop walking
+.next:
+    loop .scan
+.done:
+    clc
+    jmp short .out
+.over:
+    stc
+.out:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 wm_clip_seed:
     mov [wm_clip_tab+WCR_X1], ax
     mov [wm_clip_tab+WCR_Y1], dx
@@ -2710,10 +2977,41 @@ wm_clip_clear:
 ; it covers the screen anyway and one row past the edge costs nothing:
 ; vga_rect_setup clips.
 ; -----------------------------------------------------------------------------
+; wm_clip_subf - the FRAME rect instead: what wm_draw_win actually REPAINTS.
+;
+; The difference is two pixels and they matter to exactly one caller. The
+; occupied rect above is the bounding box (x,y)..(x+w,y+h), so it includes the
+; drop shadow's row AND column - but the shadow wm_draw_win draws is an **L**,
+; starting at (+1,+1), so the top-right corner (x+w, y) and the bottom-left
+; (x, y+h) are inside that box and are never painted by anything.
+;
+; For OCCLUSION that over-counting is harmless and conservative: it says
+; "covered" about a pixel that is not, and a clipped primitive then declines to
+; draw there. For SPEC.md 11.91.1's dither it is the wrong direction - "do not
+; dither here, a window will cover it" about a pixel no window ever covers -
+; and it leaves that pixel stale. It cost exactly one: a round trip that must
+; come back byte for byte returned 1 differing pixel, at the restored window's
+; top-right shadow corner.
+;
+; So the dither subtracts the frame only, and the shadow's L is dithered and
+; then drawn over: a 1px double-draw down two edges, against a stale pixel.
+wm_clip_subf:
+    push ax
+    mov ax, [bx+W_X]
+    mov [wm_cl_ox1], ax
+    add ax, [bx+W_W]
+    dec ax
+    mov [wm_cl_ox2], ax
+    mov ax, [bx+W_Y]
+    mov [wm_cl_oy1], ax
+    add ax, [bx+W_H]
+    dec ax
+    mov [wm_cl_oy2], ax
+    pop ax
+    jmp short wm_clip_subr
+
 wm_clip_sub:
     push ax
-    push si
-    push di
     mov ax, [bx+W_X]
     mov [wm_cl_ox1], ax
     add ax, [bx+W_W]
@@ -2722,6 +3020,11 @@ wm_clip_sub:
     mov [wm_cl_oy1], ax
     add ax, [bx+W_H]
     mov [wm_cl_oy2], ax
+    pop ax
+wm_clip_subr:                   ; ...and the walk, from those four words
+    push ax
+    push si
+    push di
     mov si, wm_clip_tab
     xor di, di                  ; DI = index of the rect under test
 .rect:
@@ -3705,6 +4008,10 @@ section .bss
 wm_wins:    resb MAX_WIN * WIN_SIZE ; 12 windows x WIN_SIZE bytes
 wm_zord:    resb MAX_WIN            ; window indices, [0] = backmost
 wm_zn:      resb 1                  ; entries in wm_zord
+wm_rz_ox:   resw 1              ; where a window was, banked across ONE
+wm_rz_oy:   resw 1              ; geometry change so the repaint after it can
+wm_rz_ow:   resw 1              ; ask what actually moved (SPEC.md 11.95.1).
+wm_rz_oh:   resw 1              ; Not per-slot: it never outlives the call
 wm_zoomr:   resb MAX_WIN * ZR_SIZE  ; per slot: the USER state a zoomed window
                                     ; goes back to (SPEC.md 11.95). A side
                                     ; table, not four more words in the record,

@@ -203,9 +203,10 @@ heap starts wherever this build's kernel actually ends and moves when the
 kernel does. There is no package pool — a 60KB reservation that every machine
 paid for whether or not anything was loaded — and retiring it is what returned
 that memory to the heap. `docs/KERNEL-MEMORY.md` is the standing account of what the budget is spent
-on, and of the measured RAM floor: **80KB boots and loads a package**, ~176KB
-runs every shipped app at full function, and the heap is simply whatever
-int 12h reports minus 73KB.
+on, and of the measured RAM floor. The heap is simply whatever int 12h
+reports minus **89.0KB** — `tools/kernsize.py` prints that figure for the
+build in front of you, and it moves whenever the kernel does, so prefer it to
+any number written down here.
 
 ## Layout
 
