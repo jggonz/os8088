@@ -360,38 +360,38 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 4742,
+    "bss": 4743,
     "budget": 96256,
     "codemax": 65536,
-    "cold": 21664,
-    "coldpara": 1376,
+    "cold": 22477,
+    "coldpara": 1408,
     "fatpara": 288,
-    "imgpara": 3616,
-    "kend": 5952,
+    "imgpara": 3648,
+    "kend": 6016,
     "kseg": 96,
-    "ksize": 93696,
-    "lowbss": 7748,
+    "ksize": 94720,
+    "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52969
+    "text": 53234
   },
   "small": {
     "bss": 4662,
     "budget": 94208,
     "codemax": 65536,
-    "cold": 21664,
+    "cold": 21656,
     "coldpara": 1376,
     "fatpara": 288,
     "imgpara": 3616,
     "kend": 5952,
     "kseg": 96,
     "ksize": 93696,
-    "lowbss": 7748,
+    "lowbss": 7762,
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52748
+    "text": 52766
   }
 }
 ```
@@ -406,28 +406,32 @@ derived from them exactly as `kernel/kernel.asm` derives them.
 
 | region | size | what it is |
 |---|---:|---|
-| image (`.text` 52,741 + `.bss` 4,734) | 57,856 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
-| cold code | 22,016 B | 21,664 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
+| image (`.text` 53,234 + `.bss` 4,743) | 58,368 B | all resident kernel code in the kernel's own segment, its read-only data, and its scratch |
+| cold code | 22,528 B | 22,477 bytes with a CS of their own: the five file modules and the Control Panel, and since SPEC.md §53.6.1's removal nothing else at all |
 | FAT window | 4,608 B | nine of the mounted volume's FAT sectors (SPEC.md §18.8) — the whole FAT on any floppy, a sliding window on a hard disk |
-| `.lowbss` + task 0's stack | 9,216 B | 7,748 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 |
+| `.lowbss` + task 0's stack | 9,216 B | 7,762 B of tables, stacks and disk buffers, plus `STK0_SIZE` = 1,024 |
 | the boot overlay | 0 B | 2,662 bytes of code inside the FAT window, gone by the first mount |
-| **total** | **93,696 B** | of a 96,256-byte budget — **2,560 B spare, FIVE steps**, which is the fifth move's standard exactly. Move 14's grant is part spent: §18.9.2's banked BPB took one step, the Note Pad keystroke round another, and the toast and baked-typeface rounds a third |
+| **total** | **94,720 B** | of a 96,256-byte budget — **1,536 B spare, THREE steps**. Move 14's grant is part spent: §18.9.2's banked BPB took one step, the Note Pad keystroke round another, and the toast and baked-typeface rounds a third; SPEC.md §18.96's floppy formatter took two more |
 
 **These are `kern_big`'s figures**, which is to say the shipped kernel's
-(docs/KERN-SPLIT-PLAN.md). `kern_small` is byte-identical today — nothing has
-gone through the seam — so the table describes both; when they diverge this
-one stays big's and `make kernsplit` is what prices the difference.
+(docs/KERN-SPLIT-PLAN.md). **The two builds have DIVERGED** — SPEC.md §18.96's
+floppy formatter is the first thing through the seam — so this table is big's
+alone and `make kernsplit` is what prices the difference. `kern_small` stands
+at **93,696 B of its own 94,208-byte budget, 512 B spare, one step**, which is
+exactly where it stood before the formatter landed: the whole of that feature
+is behind `%ifndef KERN_SMALL`, and the Edit-menu split that came with it
+(SPEC.md §22.12) fits in slack the small build already had.
 
 Each rung is its contents rounded up to a whole 512 bytes, and the remainders
-are the only slack anywhere in the ladder: **144 bytes on the image, 196 on
-the cold segment, 444 on `.lowbss`**. They are rounding artefacts, not
+are the only slack anywhere in the ladder: **391 bytes on the image, 51 on
+the cold segment, 430 on `.lowbss`**. They are rounding artefacts, not
 reservations — and per the accounting section above they are also the whole
 of what the next feature can spend without moving the machine's RAM. The
-image rung has **144 bytes** in it: the next feature of any size at all takes
-move 12's LAST step, and that is the number to quote when asking.
+**cold segment has 51 bytes** in it, which is the number to quote when asking:
+anything at all added there now costs a whole step.
 
-The ladder lands on these segments: `KERNEL_SEG` 0x0060, `COLD_SEG` 0x0D80,
-`FAT_SEG` 0x12E0, `LOW_SEG` 0x1400, `HEAP_SEG` 0x1640. `tools/kernsize.py`
+The ladder lands on these segments: `KERNEL_SEG` 0x0060, `COLD_SEG` 0x0EA0,
+`FAT_SEG` 0x1420, `LOW_SEG` 0x1540, `HEAP_SEG` 0x1780. `tools/kernsize.py`
 prints that line, so it need never be derived by hand again.
 
 **Run `python3 tools/kernsize.py` rather than trusting the numbers in this
@@ -865,31 +869,31 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 27,395 | 36.7% |
-| the window system and its furniture | 15,812 | 21.2% |
-| drawing: adapters, primitives, glyphs, icons | 10,165 | 13.6% |
-| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,607 | 12.9% |
-| the kernel proper: API table, heap, scheduler, events | 5,852 | 7.8% |
-| the Control Panel | 4,426 | 5.9% |
+| the file system, end to end | 28,460 | 37.6% |
+| the window system and its furniture | 15,815 | 20.9% |
+| drawing: adapters, primitives, glyphs, icons | 10,165 | 13.4% |
+| hardware: drivers, clock, mouse, sound, CPU, XMS | 9,607 | 12.7% |
+| the kernel proper: API table, heap, scheduler, events | 5,862 | 7.7% |
+| the Control Panel | 4,426 | 5.8% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **74,633** | |
+| **total** | **75,711** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
-| `files.inc` — the Disk window (§22) | 806 | 6,930 | **7,736** | 335 | — |
+| `files.inc` — the Disk window (§22) | 905 | 7,142 | **8,047** | 336 | — |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
 | `wm.inc` — the window manager (§11) | 5,494 | — | **5,494** | 635 | — |
-| `diskw.inc` — the FAT write path (§18.4–18.6) | 20 | 4,676 | **4,696** | 155 | — |
+| `diskw.inc` — the FAT write path (§18.4–18.6) | 173 | 5,277 | **5,450** | 155 | — |
 | `ctrl.inc` — the Control Panel (§31) | 877 | 3,549 | **4,426** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 3,676 | — | **3,676** | 118 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 2,991 | — | **2,991** | 145 | — |
 | `assoc.inc` — file type associations (§54) | 2,809 | — | **2,809** | 43 | — |
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,577 | — | **2,577** | 252 | — |
-| `menu.inc` — the menu bar and pull-downs (§12) | 2,541 | — | **2,541** | 194 | 84 |
-| `ui.inc` — the UI task and the event ladder (§13) | 2,361 | — | **2,361** | 37 | — |
+| `menu.inc` — the menu bar and pull-downs (§12) | 2,541 | — | **2,541** | 194 | 98 |
+| `ui.inc` — the UI task and the event ladder (§13) | 2,364 | — | **2,364** | 37 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
 | `memory.inc` — the claim heap (§50) | 1,951 | — | **1,951** | 14 | 256 |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,828 | — | **1,828** | 673 | — |
@@ -913,8 +917,8 @@ generated in the first place.
 | `clip.inc` — the system clipboard (§55) | 193 | — | **193** | 6 | — |
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
-| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,675 | — | **2,675** | — | — |
-| **total** | **52,969** | **21,664** | **74,633** | **4,742** | **7,748** |
+| `kernel.asm` — API table, entry points, `kmain`, the shims | 2,685 | — | **2,685** | — | — |
+| **total** | **53,234** | **22,477** | **75,711** | **4,743** | **7,762** |
 <!-- END generated table -->
 
 ### Reading it

@@ -133,6 +133,13 @@ ui_task:
     cmp cx, [vid_clk_hx]        ; the clock cell at the right end (SPEC 12.1)?
     jae .clock_cell             ; tested BEFORE menu_track: it is not a title
     call ui_loc_gate            ; ...and Locator's own items go grey or live
+%ifndef KERN_SMALL
+    call fm_bar_gate            ; ...as does a Disk window's Format (22.12),
+                                ; whose owner is a WINDOW rather than the
+                                ; desktop but whose timing problem is the
+                                ; identical one. kern_big only - kern_small
+                                ; has no Format item to point anywhere
+%endif
     call gfx_lock               ; before it can draw them (SPEC.md 47 rule 5)
     call menu_track             ; in: CX = mousedown x; out: AX = CMD_* or 0
     call gfx_unlock
