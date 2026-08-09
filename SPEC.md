@@ -3688,6 +3688,49 @@ boxes belong to the front window alone (§11). After the marked windows are
 drawn, `wm_paint_dmg` asks `wm_top` again; if the answer was **not** redrawn
 in this pass, it owes exactly one `wm_draw_title` with DI = BP.
 
+#### 11.91.1 The dither skips ground a window is about to cover
+
+`wm_paint_dmg` dithered the whole damage rect and then drew, **whole**, every
+window that overlaps it — so every pixel under one of those windows was
+dithered and then painted over. That is PERFORMANCE.md Part 1's double-draw,
+and on the two operations where the damage is mostly *window* it is most of
+the cost: **dragging a window** (`ui_drag` passes the union of where it was
+and where it is, and the second half is covered by the window itself) and
+**un-zooming one** (§11.95.1, where the union is nearly the desktop band).
+
+`wm_dmg_gray` replaces the fill. The region machinery already answers this
+exact question, so there is no new drawing code: `wm_clip_seed` takes the
+damage rect, `wm_dmg_occl` subtracts every visible window — shadow included,
+because `wm_draw_win` draws the shadow — and `gfx_fill_gray` is a **clipped**
+primitive, so one call paints only what is genuinely being uncovered.
+
+Subtracting *every visible* window is both correct and simpler than
+subtracting the marked ones: a window that overlaps the damage is marked by
+`wm_dmg_wins` and redrawn whole, so it is ground that needs no dither; one
+that does not overlap subtracts nothing and costs a compare.
+
+Four things are load-bearing.
+
+- **The dither's phase is a function of absolute `x+y`**, so painting it as
+  fragments is pixel-identical to painting it whole. A pattern phased from
+  its own fill origin could not be split this way — which is why this works
+  for `gfx_fill_gray` and would need thought for anything else.
+- **Overflow degrades to dithering the WHOLE rect** — the opposite of
+  `wm_clip_set`'s degradation, and for the opposite reason. There, one
+  fragment too many means *skip, we might overdraw somebody*; here it means
+  *draw it all, or we leave stale pixels behind*.
+- **The window being vacated must already be invisible.** `wm_hide` clears
+  the visible bit and `wm_destroy` zeroes the record *before* calling in, so
+  neither is subtracted and the ground each gives up is dithered. A caller
+  that repainted the damage while the departing window still read as visible
+  would leave its pixels on screen — and it would look like the damage rect
+  being wrong, not like the dither being clipped.
+- **The hide is spent explicitly.** `GFXCLIP` calls `cur_unlazy` only on its
+  *unclipped* branch (§7.1.4), trusting `wm_clip_set`'s `cur_lazyck` to have
+  decided for an armed region — and there is no window here to decide about.
+  `wm_dmg_gray` calls `cur_unlazy` itself, which is exactly what the
+  unclipped fill did before it.
+
 ### 11.92 Retitling costs a strip — `wm_title_set`
 
 A caption changes on an **event** — a folder was entered, a document was
@@ -7734,6 +7777,54 @@ What this does **not** change: the file API is still UI-task context only, a
 name is still an 8.3 name with no path in it (§19.2), and a *navigation* is
 still a remount. The instance's folder is where names resolve, not a second
 naming scheme.
+
+### 19.2.2 Standing somewhere to WORK is not navigating — `OSAPI_FILE_GOTO_Q`
+
+`OSAPI_FILE_GOTO` (slot 0x0230) is a **navigation**: a full `dsk_chdir`, which
+is the BPB, the FAT window, the directory scan, the sort, one icon harvest per
+file, and a move of the calling instance's own folder (§19.2.1). That is right
+for an app that is about to *show* a folder and wrong for every copy loop
+ever written, which stands somewhere only to read or write **by name**.
+
+`OSAPI_FILE_GOTO_Q` (slot 0x0370) is the same move with none of that. It is
+`fcp_goto`'s two paths, which the kernel's own copy engine has had since
+§22.5, published because a copy engine *outside* the kernel needs them just
+as much:
+
+- **Inside the volume you are already on it is a WORD** — `[dsk_cwd]`, no
+  I/O at all. Nothing a caller can do between two of these reads the
+  listing: `dskw_*` resolve names by walking `[dsk_cwd]`'s raw directory
+  sectors, and so does `dsk_find` (§19.7.1). The FAT window and every
+  derived geometry belong to the **volume**, which has not changed.
+- **Crossing to another volume is a quiet mount** (§18.9) — BPB, FAT window,
+  cwd — and §18.8.2's banked per-volume window usually means the FAT is not
+  re-read either.
+
+The cluster is range-checked at the slot, because the quiet path skips
+`disk_mount`'s own `.cwd_lost` validation. That is `fcp_goto`'s reason and
+the same two compares.
+
+**It is not a replacement for `GOTO` and must not become one.** It leaves the
+global listing empty and `[dsk_lstale]` raised, so a caller about to *show* a
+folder wants the other slot; and it deliberately does not move the instance's
+own folder, because this is where the caller is standing to do a job, not
+where the application now believes it lives.
+
+What it is worth: the hard-disk installer (§52.10.4) was paying a full
+`dsk_chdir` **twice per file and twice per chunk**. §22.5 records what that
+costs from the other side — the per-switch icon harvest alone "was 23% of
+all sectors read" and made a copy quadratic.
+
+**The media does not change under a running operation, and that is a stated
+assumption.** A human does not take a floppy out and put a different one in
+between two files of a copy their frozen machine is in the middle of; §18.9.1
+already reasons this way for a single quiet switch, using the BIOS motor
+timeout as its physical evidence. That evidence does **not** span a
+floppy-to-hard-disk copy — the motor stops while the destination is being
+written — so it is stated here rather than measured there. What still costs a
+sector per switch is re-validating the BPB signature before reusing a banked
+FAT window (§18.8.2); a caller-declared batch bracket would remove that too,
+and is the next step rather than something this slot does.
 
 ### 19.3 The system disk — a FAT12 volume, and the kernel is a file on it
 
@@ -24089,6 +24180,52 @@ The **button band is the one thing still erased before it is drawn**, and
 that is the stated exception rather than an oversight: a frame cannot be
 drawn opaquely, so a dithered frame over a solid one leaves the solid one's
 pixels behind. It is a single 16px fill, and only on a state change.
+
+### 52.10.7 OPEN: the chunked copy breaks the next source mount
+
+**Known, reproduced, unfixed, and the installer is deliberately less capable
+than it should be because of it.** `hd_icopy_sub` copies only *packages* out
+of a folder — `type == OSAPI_FT_PKG` — where the right test is "not a folder
+and not `..`", because type 1 means **package** and not **file** (§19.7.1).
+Making it right is a two-line change and it is not in the tree.
+
+What happens when it is: every file copies, `BEVERLY.MOD` included and
+byte-exact — and then the walk's next `hd_isrc_sub` fails, so
+`hd_icopy_tree` reports an error and the MBR is never written. The partition
+ends up **fully populated and not bootable**, which is worse than the missing
+file it fixes. Hence the gap stands.
+
+What is known:
+
+- It is the **chunked write** (§18.4.4). `BEVERLY.MOD` at 116,085 bytes is
+  the only file on either shipped disk that does not fit the copy buffer
+  whole, so the chunk loop had **never executed once** until the type test
+  changed. Every other file in the tree is one read and one write.
+- The failure is a **source mount**, not a file operation: `hd_icopy_one`
+  names the file it stops on and did not, and splitting `hd_icopy_tree`'s
+  four failure paths put it in `hd_icopy_sub`'s `.entry` — `hd_isrc_sub`,
+  which is a plain `dsk_chdir` of the floppy.
+- **It is not `OSAPI_FILE_GOTO_Q`** (§19.2.2). The quiet slot was wired in at
+  the same time, blamed, and reverting it changed nothing — a wrong diagnosis
+  worth recording, because the two changes landed together and the newer one
+  looked guiltier.
+- The suspicion, untested: the chunk loop alternates two volumes **eight
+  times** with the destination's FAT window dirty, and §18.8.2 requires a
+  dirty window to be flushed at the switch rather than carried. Nothing else
+  in the system alternates volumes that often mid-write.
+
+Where to start: `make DISKCNT=1` and read §18.94's counters either side of one
+chunked copy, and the marker technique that found §19.7.1's type bug — a
+temporary caption that **aborts**, because one that only sets `[hd_imsg]` is
+overwritten by the completion message and says nothing.
+
+**And a second thing blocks that work today.** Since the pre-merge safety pass
+the installer stops at `Cannot read the partition table` on MartyPC's
+`os8088_xt_hdd` — on a **pristine** `default_xtide.vhd` as well as on a
+zeroed-table one, and after the slot list has already been drawn from that
+same table, so the scan reads it and the install does not. Nothing above is
+re-testable until that is understood; it is independent of everything in
+§52.10.7 and of §19.7.1's fix.
 
 ## 53. fsx.inc — fullscreen exclusive
 

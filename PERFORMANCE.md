@@ -1148,6 +1148,8 @@ list to check yourself against.
 | Raise an already-frontmost window | a screen | **no window at all** | §11.90 |
 | Click a background window's title bar | two full screen redraws (raise + drag release) | two title bars | §11.90, `ui_drag` |
 | Hide / destroy / drag a window | a screen | the damage rect, and only the windows in it | §11.91 |
+| The desktop dither inside a damage rect | the WHOLE rect, and then every window overlapping it drawn on top — so every pixel under a window was dithered and then painted over. Measured on CGA: dragging a window flashes **4,819 px** worst, dragging it back **5,222** | `wm_dmg_gray` — the rect minus every visible window, through the region machinery `wm_clip_set` already had, so `gfx_fill_gray`'s one clipped call paints only what is genuinely uncovered: **609** and **1,413** | §11.91.1 |
+| Double-click a title bar to zoom | `wm_paint_all` both ways: a screen's dither, every drive zone, both strips, every window's `W_PAINT`. Worst transient **23,842 px**, 445 ms of flashing | out: nothing is revealed, so `wm_draw_win` and the chrome — **1,540 px**. Back: the union through `wm_paint_dmg`, with the dither clipped — **1,161 px**, a 20x drop | §11.95.1, §11.91.1 |
 | Retitle a window | full frame repaint | one `TITLE_H` strip | §11.92 |
 | Mount / unmount a volume | `wm_paint_all` | the zone grid — measured **371 glyphs → 182** | §26.3 |
 | Select a covered drive icon | **two** whole-screen repaints per click | one XOR strip, zero repaints; byte-identical output | §26.2 |

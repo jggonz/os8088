@@ -1993,7 +1993,7 @@ wm_paint_dmg:
 .fy2:
     cmp bx, dx
     jg .zones
-    call gfx_fill_gray
+    call wm_dmg_gray            ; ...minus the windows about to cover it
 .zones:
     mov al, [wm_dmg_zn]
     call desk_paint_mask        ; the touched drive zones, whole
@@ -2531,6 +2531,8 @@ wm_dmg_dk   db 0                ; 1 = the dock strip really was drawn, so a
 wm_dmg_j    dw 0                ; the marking pass's inner index
 wm_hide_r   times 4 dw 0        ; wm_hide/wm_destroy: the vacated rect,
                                 ; banked across the record teardown
+wm_dg_r     times 4 dw 0        ; wm_dmg_gray's rect, banked across the
+                                ; region build that eats its registers
 
 wm_clipwin  dw 0                ; the window wm_clip_set was given, banked
                                 ; for cur_lazyck (SPEC.md 7.1.4)
@@ -2726,6 +2728,123 @@ wm_covered:
 ; The three region builds below start here and then differ only in WHICH
 ; occluders they subtract, which is the whole of what separates them.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; wm_dmg_gray - the desktop dither, MINUS the windows about to cover it
+; in:  AX = x1, BX = y1, CX = x2, DX = y2 (inclusive, already clamped);
+;      caller holds the gfx lock
+; out: nothing (all registers preserved)
+;
+; **Ground a window is about to be drawn on does not need dithering first.**
+; wm_paint_dmg repaints the damage rect and then draws every window that
+; overlaps it - whole (SPEC.md 11.91) - so every pixel under one of those
+; windows was dithered and then painted over. That is PERFORMANCE.md Part 1's
+; double-draw, and on the two operations where the damage is mostly WINDOW it
+; is most of the cost: dragging a window (ui_drag passes the union of where it
+; was and where it is, and the second half is covered by the window itself)
+; and un-zooming one (SPEC.md 11.95.1).
+;
+; The region machinery already answers exactly this question. wm_clip_seed
+; takes the rect, wm_dmg_occl subtracts every visible window shadow and all,
+; and gfx_fill_gray is a CLIPPED primitive - so the fill is confined to what
+; is genuinely being uncovered, in one call, with no new drawing code.
+;
+; Three things are load-bearing.
+;
+;   - The dither's phase is a function of ABSOLUTE x+y (see gfx_fill_gray), so
+;     drawing it as fragments is pixel-identical to drawing it whole. A
+;     pattern phased from the fill's own origin could not be split this way.
+;   - Overflow degrades to dithering the WHOLE rect, which is the opposite of
+;     wm_clip_set's degradation and for the opposite reason: a fragment too
+;     many there means "skip, we might overdraw somebody", here it means
+;     "draw it all, or we leave stale pixels behind".
+;   - The hide is spent explicitly. GFXCLIP only calls cur_unlazy on its
+;     UNCLIPPED branch (SPEC.md 7.1.4), trusting wm_clip_set's cur_lazyck to
+;     have decided for an armed one - and there is no window here to decide
+;     about. cur_unlazy is what the unclipped fill did before, so this keeps
+;     the cursor behaviour exactly as it was.
+; -----------------------------------------------------------------------------
+wm_dmg_gray:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    call cur_unlazy             ; ...as the unclipped fill did (see above)
+    mov [wm_dg_r + 0], ax       ; the region build eats registers and the
+    mov [wm_dg_r + 2], bx       ; fill needs its rect back afterwards
+    mov [wm_dg_r + 4], cx
+    mov [wm_dg_r + 6], dx
+    mov si, dx                  ; wm_clip_seed wants AX,DX,CX,SI
+    mov dx, bx
+    call wm_clip_seed
+    call wm_dmg_occl            ; every visible window, shadow included
+    jc .whole                   ; overflowed: dither the lot, as before
+    cmp word [wm_clip_n], 0
+    je .out                     ; wholly covered: not one pixel is revealed
+    jmp short .fill
+.whole:
+    mov word [wm_clip_n], 0
+.fill:
+    mov ax, [wm_dg_r + 0]
+    mov bx, [wm_dg_r + 2]
+    mov cx, [wm_dg_r + 4]
+    mov dx, [wm_dg_r + 6]
+    call gfx_fill_gray          ; clipped to what is really being revealed
+.out:
+    mov word [wm_clip_n], 0     ; ours for one call and no longer
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; wm_dmg_occl - subtract EVERY visible window from the armed list
+; in:  the list holds at least one rect
+; out: CF = 1 the list overflowed; CF = 0 and [wm_clip_n] = 0 means the seed
+;      rect is entirely covered
+; clobbers: flags
+;
+; wm_clip_occl's walk without the "above us" part, because there is no `us`:
+; the seed is a damage rect rather than a window. Every visible window that
+; overlaps it is marked by wm_dmg_wins and redrawn WHOLE, so every one of them
+; is ground that does not need dithering; one that does not overlap subtracts
+; nothing and costs a compare.
+; -----------------------------------------------------------------------------
+wm_dmg_occl:
+    push ax
+    push bx
+    push cx
+    push si
+    mov ch, 0
+    mov cl, [wm_zn]
+    mov si, wm_zord
+    jcxz .done
+.scan:
+    mov al, [si]
+    inc si
+    call wm_idx2ptr             ; BX = the window (AX and CX preserved)
+    test word [bx+W_FLAGS], 2
+    jz .next
+    call wm_clip_subf           ; the FRAME rect: what will be REPAINTED, not
+    jc .over                    ; what is occupied - the shadow's two corners
+    cmp word [wm_clip_n], 0     ; are in the second and in neither
+    je .done                    ; nothing left: stop walking
+.next:
+    loop .scan
+.done:
+    clc
+    jmp short .out
+.over:
+    stc
+.out:
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 wm_clip_seed:
     mov [wm_clip_tab+WCR_X1], ax
     mov [wm_clip_tab+WCR_Y1], dx
@@ -2820,10 +2939,41 @@ wm_clip_clear:
 ; it covers the screen anyway and one row past the edge costs nothing:
 ; vga_rect_setup clips.
 ; -----------------------------------------------------------------------------
+; wm_clip_subf - the FRAME rect instead: what wm_draw_win actually REPAINTS.
+;
+; The difference is two pixels and they matter to exactly one caller. The
+; occupied rect above is the bounding box (x,y)..(x+w,y+h), so it includes the
+; drop shadow's row AND column - but the shadow wm_draw_win draws is an **L**,
+; starting at (+1,+1), so the top-right corner (x+w, y) and the bottom-left
+; (x, y+h) are inside that box and are never painted by anything.
+;
+; For OCCLUSION that over-counting is harmless and conservative: it says
+; "covered" about a pixel that is not, and a clipped primitive then declines to
+; draw there. For SPEC.md 11.91.1's dither it is the wrong direction - "do not
+; dither here, a window will cover it" about a pixel no window ever covers -
+; and it leaves that pixel stale. It cost exactly one: a round trip that must
+; come back byte for byte returned 1 differing pixel, at the restored window's
+; top-right shadow corner.
+;
+; So the dither subtracts the frame only, and the shadow's L is dithered and
+; then drawn over: a 1px double-draw down two edges, against a stale pixel.
+wm_clip_subf:
+    push ax
+    mov ax, [bx+W_X]
+    mov [wm_cl_ox1], ax
+    add ax, [bx+W_W]
+    dec ax
+    mov [wm_cl_ox2], ax
+    mov ax, [bx+W_Y]
+    mov [wm_cl_oy1], ax
+    add ax, [bx+W_H]
+    dec ax
+    mov [wm_cl_oy2], ax
+    pop ax
+    jmp short wm_clip_subr
+
 wm_clip_sub:
     push ax
-    push si
-    push di
     mov ax, [bx+W_X]
     mov [wm_cl_ox1], ax
     add ax, [bx+W_W]
@@ -2832,6 +2982,11 @@ wm_clip_sub:
     mov [wm_cl_oy1], ax
     add ax, [bx+W_H]
     mov [wm_cl_oy2], ax
+    pop ax
+wm_clip_subr:                   ; ...and the walk, from those four words
+    push ax
+    push si
+    push di
     mov si, wm_clip_tab
     xor di, di                  ; DI = index of the rect under test
 .rect:
