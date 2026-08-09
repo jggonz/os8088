@@ -75,10 +75,19 @@ Written up in full as docs/NOTEPAD-NOTES.md §6; the short form:
 4. **A fixed warmup does not put two builds in the same state** when they
    differ in how long a keypress takes. Read the state back, and compare the
    runs only where they agree.
-5. **An injected key is queued, not delivered.** A bare `m.key()` followed by
-   `advance(frames=…)` can run no guest time at all, and the keystroke then
-   turns up during some *later* advance — so a run inherits a press nobody
-   asked for. Use `drive.tap()` / `drive.chord()`, which `step(1)` first.
+5. **Injected input is queued, not delivered.** A bare `m.key()` or `m.mouse()`
+   followed by `advance(frames=…)` can run no guest time at all — every
+   `advance` leaves the machine paused, and the input then turns up during
+   some *later* advance, so a run inherits a press nobody asked for. Use
+   `drive.tap()` / `chord()` / `click()` / `dclick()`, which give each event
+   its own `step(1)` and guest time. It bites the mouse twice over: the serial
+   mouse is 1200 baud and `mou_isr` decodes three bytes at a time, so packets
+   sent faster than the UART carries them overrun its receive register —
+   `tools/mouse.py`'s pacing rule for QEMU, true here for the same reason.
+6. **Wait on a condition, never on a clock.** `drive.wait_until()` advances
+   guest time until the thing has actually happened. A wall sleep cannot be
+   matched across two builds that differ in speed, which is trap 4 again and
+   §6.1's whole wrong answer.
 
 ## Files
 

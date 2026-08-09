@@ -99,20 +99,79 @@ def chord(m, mods, key, frames=120):
         m.advance(frames=2)
 
 
+def _pkt(m, dx=0, dy=0, l=False, frames=2):
+    """One mouse packet AND the guest time to clock it in.
+
+    Same trap as tap(): on a paused machine - which is where every `advance`
+    leaves it - packets queue instead of arriving, and a later advance then
+    delivers a burst. It also matters on a running one, because the serial
+    mouse is 1200 baud and mou_isr decodes three bytes at a time: packets sent
+    faster than the UART can carry them overrun its receive register, which is
+    tools/mouse.py's pacing rule for QEMU and true here for the same reason.
+    """
+    m.mouse(dx, dy, l=l)
+    m.step(1)
+    m.advance(frames=frames)
+
+
 def goto(m, x, y):
     for _ in range(9):                      # into the top-left corner clamp
-        m.mouse(-100, -100)
-    m.mouse_move(x, y, step=100)
+        _pkt(m, -100, -100, frames=1)
+    while x or y:
+        sx = max(-100, min(100, x))
+        sy = max(-100, min(100, y))
+        _pkt(m, sx, sy)
+        x -= sx
+        y -= sy
 
 
-def dclick(m, x, y):
-    """Two clicks inside SPEC.md 13's 9-tick window, on one connection."""
+def click(m, x, y, frames=120):
     goto(m, x, y)
-    time.sleep(0.3)
-    m.mouse(0, 0, l=True)
-    m.mouse(0, 0)
-    m.mouse(0, 0, l=True)
-    m.mouse(0, 0)
+    _pkt(m, l=True)
+    _pkt(m, frames=frames)
+
+
+def dclick(m, x, y, frames=200):
+    """Two clicks inside SPEC.md 13's 9-tick (~0.5 s) window.
+
+    The gap between them is guest time and has to be SMALL: the birth-tick
+    comparison is what makes it a double-click rather than two clicks, so the
+    two presses get 2 frames apart and only the tail waits.
+    """
+    goto(m, x, y)
+    _pkt(m, l=True)
+    _pkt(m)
+    _pkt(m, l=True)
+    _pkt(m, frames=frames)
+
+
+def pkg_present(m, name=b"NOTEPAD", lo=0x1000, hi=0xA000):
+    """Is a v3 package header carrying `name` anywhere in RAM yet?"""
+    for base in range(lo, hi, 0x400):
+        try:
+            data = m.read(base * 16, min(0x400, hi - base) * 16)
+        except Exception:
+            continue
+        for i in range(0, len(data) - 32, 16):
+            if (data[i] == 0x4F and data[i + 1] == 0x38 and data[i + 2] == 3
+                    and bytes(data[i + 16:i + 32]).split(b"\0")[0] == name):
+                return True
+    return False
+
+
+def wait_until(m, pred, frames=60, tries=60):
+    """Advance guest time until `pred` holds. Returns True if it did.
+
+    A CONDITION, not a sleep. docs/NOTEPAD-NOTES.md 6.1 is a whole wrong
+    answer caused by two runs waiting different lengths of time, and a wall
+    sleep cannot be matched across builds that differ in speed - this can,
+    because it stops when the thing has actually happened.
+    """
+    for _ in range(tries):
+        if pred():
+            return True
+        m.advance(frames=frames)
+    return pred()
 
 
 def open_readme(m):
@@ -122,6 +181,8 @@ def open_readme(m):
     that a double-click gets there - see the Makefile's npbench target.
     """
     dclick(m, *DISK_A)
-    time.sleep(5)
+    wait_until(m, lambda: True, frames=120, tries=1)
     dclick(m, *README)
-    time.sleep(25)
+    if not wait_until(m, lambda: pkg_present(m)):
+        raise SystemExit("notepad/drive: README.TXT never opened - check the "
+                         "DISK_A/README coordinates against a screenshot")
