@@ -68,6 +68,9 @@ HDP_CAPY     equ 104
 ; -----------------------------------------------------------------------------
 hd_page_paint:
     push ax
+    call hd_tool_reap           ; closing the tool's window repaints this panel,
+                                ; so this IS "the user has finished with it"
+                                ; (SPEC.md 52.11.4)
     push bx
     push cx
     push dx
@@ -637,6 +640,7 @@ hd_dev_line:
 ; -----------------------------------------------------------------------------
 hd_page_click:
     push ax
+    call hd_tool_reap
     push bx
     push cx
     push dx

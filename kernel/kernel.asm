@@ -1314,7 +1314,22 @@ osapi_table:
                                   ;         gfx_unlock ends the batch anyway,
                                   ;         which is what makes an unclosed one
                                   ;         impossible rather than merely rare
-osapi_table_end:                  ; 0x0398
+    OSAPI_SLOT wm_destroy         ; 0x0398  BX = a window of YOURS; the gfx lock
+                                  ;         is held, exactly as OSAPI_WM_HIDE
+                                  ;         wants it. Frees the RECORD, where
+                                  ;         hide only takes the pixels down.
+                                  ;
+                                  ;         For the unowned species (SPEC.md
+                                  ;         38.1) - a driver's windows, and a
+                                  ;         package's second one - because
+                                  ;         those have no instance teardown to
+                                  ;         free the slot for them. Closing one
+                                  ;         is a hide, so the record survives
+                                  ;         holding a W_SEG, and an image that
+                                  ;         is then unloaded leaves that record
+                                  ;         naming memory the next claim takes
+                                  ;         (SPEC.md 52.11.3)
+osapi_table_end:                  ; 0x03A0
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1322,8 +1337,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 113 * 8
-%error "os8088 API jump table must be exactly 113 8-byte slots"
+%if OSAPI_TABLE_LEN != 114 * 8
+%error "os8088 API jump table must be exactly 114 8-byte slots"
 %endif
 
 ; =============================================================================
