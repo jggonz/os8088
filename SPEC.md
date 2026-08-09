@@ -24666,96 +24666,186 @@ that is the stated exception rather than an oversight: a frame cannot be
 drawn opaquely, so a dithered frame over a solid one leaves the solid one's
 pixels behind. It is a single 16px fill, and only on a state change.
 
-### 52.10.7 OPEN: the chunked copy breaks the next source mount
+### 52.10.7 CLOSED: the chunked copy, and a read one byte past the end
 
-**Known, reproduced, unfixed, and the installer is deliberately less capable
-than it should be because of it.** `hd_icopy_sub` copies only *packages* out
-of a folder — `type == OSAPI_FT_PKG` — where the right test is "not a folder
-and not `..`", because type 1 means **package** and not **file** (§19.7.1).
-Making it right is a two-line change and it is not in the tree.
+**Three defects, and the middle one is a kernel bug in a published slot.**
+They are recorded together because the first exposed the second and the third
+is why the second was mis-diagnosed.
 
-What happens when it is: every file copies, `BEVERLY.MOD` included and
-byte-exact — and then the walk's next `hd_isrc_sub` fails, so
-`hd_icopy_tree` reports an error and the MBR is never written. The partition
-ends up **fully populated and not bootable**, which is worse than the missing
-file it fixes. Hence the gap stands.
+**One: `hd_icopy_sub` copied only PACKAGES.** Its test was
+`type == OSAPI_FT_PKG`, and type 1 means *package*, not *file* (§19.7.1) — so
+one level down only `*.O88` was copied and `MEDIA/BEVERLY.MOD` was silently
+left behind. It is `cmp ax, OSAPI_FT_DIR` / `jae` now: a folder or the
+synthesized `..` is skipped and everything below `FT_DIR` is a file. The root
+loop in `hd_icopy_tree` always had this right; only the sub-folder walk did
+not.
 
-What is known:
+**Two: `dskw_read_at` refused the call that should have said "finished".**
+`BEVERLY.MOD` at 116,085 bytes is the only file on either shipped disk that
+does not fit the copy buffer whole, so fixing the type test ran §18.4.4's
+chunk loop for the first time ever — and it failed on the last iteration,
+after the file had been copied **completely and byte-exactly**. The routine
+tested that the offset lands on a cluster boundary *before* it tested for end
+of file, and the final chunk is precisely what leaves the offset mid-cluster:
+the take is clamped to what is left of the file, so a tail shorter than a
+cluster ends at 116,085. Asked about that offset, the alignment test answered
+`FERR_NAME` where the routine's own header promises "the next call answers
+0". The EOF test now runs first, which is also the only order that can be
+right — nothing is read at or past the end, so there is nothing to align, and
+the preconditions exist to make a *resume point* exact.
 
-- It is the **chunked write** (§18.4.4). `BEVERLY.MOD` at 116,085 bytes is
-  the only file on either shipped disk that does not fit the copy buffer
-  whole, so the chunk loop had **never executed once** until the type test
-  changed. Every other file in the tree is one read and one write.
-- The failure is a **source mount**, not a file operation: `hd_icopy_one`
-  names the file it stops on and did not, and splitting `hd_icopy_tree`'s
-  four failure paths put it in `hd_icopy_sub`'s `.entry` — `hd_isrc_sub`,
-  which is a plain `dsk_chdir` of the floppy.
-- **It is not `OSAPI_FILE_GOTO_Q`** (§19.2.2). The quiet slot was wired in at
-  the same time, blamed, and reverting it changed nothing — a wrong diagnosis
-  worth recording, because the two changes landed together and the newer one
-  looked guiltier.
-- The suspicion, untested: the chunk loop alternates two volumes **eight
-  times** with the destination's FAT window dirty, and §18.8.2 requires a
-  dirty window to be flushed at the switch rather than carried. Nothing else
-  in the system alternates volumes that often mid-write.
+**Three: the copy could not say which file it stopped on, though it knew.**
+`hd_icopy_one` sets `[hd_imsg]` to the file's name on failure and comments
+that this is the one useful thing a stopped copy has to say — and every
+failure path in `hd_icopy_tree` then wrote the generic `Disk error - the
+install stopped` over it on the way out. `.failm` is the missing half: a
+failure arriving from a callee that set `[hd_imsg]` keeps that message, and
+only paths with nothing better to say fall into `.fail`. `hd_icopy_sub` gained
+the same split (`.failg` for its own mount failure).
 
-Where to start: `make DISKCNT=1` and read §18.94's counters either side of one
-chunked copy, and the marker technique that found §19.7.1's type bug — a
-temporary caption that **aborts**, because one that only sets `[hd_imsg]` is
-overwritten by the completion message and says nothing.
+**That third defect is what made the second one look like something else, and
+the previous session's recorded diagnosis — "the failure is a source mount,
+not a file operation" — was wrong because of it.** The reasoning ran: the
+message is the tree's generic one, `hd_icopy_one` would have named the file,
+so `hd_icopy_one` cannot be where it stopped. Every step is sound and the
+premise was false. What settled it was three exec breakpoints, on
+`hd_icopy_one.fail`, `hd_icopy_sub.fail` and `hd_icopy_tree.fail`: they fire
+in that order, innermost first, with `hd_iname` reading `BEVERLY.MOD`,
+`hd_iname2` reading `MEDIA`, and `[hd_imsg]` visibly changing from the file's
+name to the generic string at the third. **A message that is overwritten on
+the way out is worse than no message**, because it is evidence and it is
+false.
 
-**And a second thing blocks that work today: LBA 0 does not read on
-`os8088_xt_hdd`.** The evidence, all on a **pristine** `default_xtide.vhd`
-whose sector 0 has `55 AA` at 510 and a type-04 partition at LBA 26:
+#### 52.10.7.2 The copy engine takes the quiet goto
 
-- the Control Panel's **Mount** answers `No partition table yet`;
-- the installer's slot list offers **four free slots** on that same disk;
-- **Install** refuses with `Cannot read the partition table` — `HMB_BAD`.
+`OSAPI_FILE_GOTO_Q` (§19.2.2) had been published, unused, and blamed once for
+the fault above — reverting it changed nothing, because the fault was
+`dskw_read_at`. With that fixed it is an ordinary optimisation, and all four
+copy-engine helpers (`hd_isrc`, `hd_isrc_sub`, `hd_idst`, `hd_idst_sub`) use
+it now.
 
-**The safety pass did not break this; it made it visible.** `HMB_BAD` and
-`HMB_NONE` used to be one answer, so a failing read presented as "nobody has
-partitioned this" and the installer formatted straight through it. Every
-install this session that "worked" was writing a fabricated table over a disk
-whose real one had never been read — which is exactly the data-loss shape
-§52.2.1 and `hd_part_load`'s own header describe, and the reason that
-distinction was introduced.
+**What licenses it is that nothing in `inst.inc` ever SHOWS a folder.** It
+reads and writes by name, and `OSAPI_FILE_FIND` walks raw directory sectors
+(`dsk_find`, stateless by ordinal, written for exactly this caller) rather
+than the mount listing — so the directory scan, the sort and the icon harvest
+a full `dsk_chdir` pays for are bought for nothing here, twice per file and
+twice per chunk. **The write gate survives**, which is the thing that could
+have made this fail confusingly: `dsk_chdir_q` sets `[dsk_quiet]` and calls
+the *real* `dsk_chdir`, so `[dsk_mntok]` is set exactly as before and only
+the listing publish is skipped.
 
-It is a **regression** and not a standing limitation: docs/MARTYPC-DEBUG.md
-records this same machine reading the table, mounting, and listing the DOS
-filesystem on the shipped image (`COMMAND.COM`, `CONFIG.SYS`, `Free
-31760K`). The transport is **rung 0** — int 13h through the XT-IDE ROM
-(§52.1) — so it is one of the BIOS-rung paths.
+**The boundary keeps the full `GOTO`, and that is the rule rather than an
+omission.** `hd_ivol_back` hands the machine back to the user; a quiet mount
+there leaves the global listing empty with `[dsk_lstale]` owed for whatever
+they do next, and it is called once per install so it buys nothing.
+`hd_iapps_find`'s probe keeps it for the same reason. **Quiet inside the
+loop, full at the boundary.**
 
-Ruled out by reading, so the next reader does not repeat it:
+The second saving is in `hd_icopy_one`: the chunk loop always made one extra
+pass to be told the file was finished, which costs a source remount and a
+directory walk to answer 0 bytes that `hd_istat` had already answered at the
+top. It stops when `[hd_ioff]` reaches `[hd_isize]`.
 
-- **`hd_geom_push`** returns immediately unless `HDD_KIND == HDK_IDE`, so it
-  issues no task-file command on this rung.
-- **`hd_chs`** translates LBA 0 under 615×4×26 to (0, 0, 1) with no refusal
-  on any of its four `.bad` tests.
-- **The buffer alignment** the new guard depends on does hold:
-  `mem_claim`/`mem_claim_hi` allocate in whole KB from a heap top derived
-  from `int 12h`, so a region base is 1KB-aligned and `align 512` inside the
-  image lands `hd_mbr` on a 512-aligned linear address.
+**Measured together, `make DISKCNT=1` and §18.94's counters across one whole
+install** (both disks, 22 files onto a pristine 31M partition):
 
-**`hd_bios_run` is ruled out too, by arithmetic.** Its cap is
-`neg(seg*16 + ofs) >> 9`, which for a 512-aligned buffer is at least one
-sector — the refusal it added can only fire on a buffer that is not
-512-aligned, and the bullet above shows this one is. For LBA 0 the track cap
-is `26 - 1 + 1 = 26` and `SI` is 1, so `AX` leaves as 1.
+| | mounts | sectors | int 13h calls |
+|---|---|---|---|
+| before | 128 | 1,372 | 638 |
+| after | **76** | **971** | **354** |
 
-That leaves the `int 13h` in `hd_bios_xfer` itself, and the next step is
-**instrumentation rather than reading**: `hd_bios_xfer` already banks the
-BIOS's own status in `[hd_status]` before it retries, so the question is
-which of `hd_chs`, `hd_bios_run` and the three `int 13h` attempts returns the
-failure, and what status the BIOS gave (0C = media type unidentified, 04 =
-sector not found, 09 = DMA page crossed, 80 = no answer — §18.93's table).
-`[di+HDD_UNIT]` reaching `DL` as 80h is worth confirming in the same pass.
+— 41%, 29% and 45%. **The counts are the claim and the seconds are not**:
+these were taken on MartyPC, which is cycle-accurate and 30x fast on a disk,
+so what a saved mount is worth in *time* has to come off the 5150. Both runs
+produced the same 22 files at the same clusters with `BEVERLY.MOD`
+byte-identical, `FAT1 == FAT2`, 191 clusters allocated and 191 reachable, no
+orphans and no cross-links — which is the check that matters, because an
+install that got faster and quietly wrong is the worst available outcome.
 
-Use the technique that found §19.7.1's bug: a temporary caption that
-**aborts**, one per candidate, because a marker that only sets `[hd_imsg]` is
-overwritten by the completion message and says nothing.
+Verified end to end on `os8088_xt_hdd` with the system disk in A:, the apps
+disk in B: and a pristine `default_xtide.vhd`: one confirm installs both
+disks, the window ends on `Done - remove the floppy, Restart`, and the
+partition holds 22 files — `KERNEL.SYS` at **cluster 2** (§52.10.2),
+`APPS`, `GAMES`, `SYSTEM` and `MEDIA/BEVERLY.MOD` at its full 116,085 bytes,
+**byte-identical to `apps/tracker/beverly.mod`** extracted from the image and
+compared on the host. Rebooted with **no floppy in the machine at all** it
+boots to the desktop off the hard disk and lists `Drive C:` with
+`Free 31504K`. The zone reads `Disk C` rather than `HDD C` and that is
+§52.10.3 working: a boot partition is a `DVK_BIOS` row, so no driver is loaded
+at all on that machine — `drv_tab` reads `SEG=0` for all three rows.
 
-Nothing else in §52.10.7 is re-testable until that is settled.
+#### 52.10.7.1 CLOSED: `hd_bios_run` answered CF = 1 on success
+
+This blocked everything above for a session, and it is worth keeping because
+of **how the search went wrong**, not because the fix is interesting: the fix
+is one `clc`.
+
+`hd_bios_run` gained a CF contract in the safety pass — `CF = 1` meaning "this
+buffer cannot be transferred at all" — and `hd_bios_xfer` gained the matching
+`jc .fail`. The refusal path got its `stc`. **The success path was never given
+a `clc`**, and it ends:
+
+```
+.cap:
+    cmp ax, 127         ; AX = 1 here, so this BORROWS
+    jbe .done
+    mov ax, 127         ; ...and neither `mov`
+.done:
+    pop dx              ; ...nor `pop`
+    pop cx              ; ...touches the flags
+    ret                 ; CF = 1, straight into the caller's `jc .fail`
+```
+
+Every run this driver issues is below 127 — a partition-table read is one
+sector — so from that commit onward **every transfer on the BIOS rung was
+refused before an `int 13h` was issued**. All three reported symptoms are that
+one flag: Mount answering `No partition table yet`, the installer offering four
+free slots on a partitioned disk, and Install refusing with `HMB_BAD`.
+
+**Three suspects had been ruled out by arithmetic, and the arithmetic was
+right every time.** `hd_chs` does translate LBA 0 under 615×4×26 to (0, 0, 1);
+the buffer is 512-aligned (`hd_mbr` at `0x3400` of a region based at `0x9C40`,
+so linear `0x9F800`, four sectors clear of its DMA page); `hd_bios_run` does
+compute `AX = 1`. Every one of those checks is about **the value in a
+register**, and the defect was in **a flag** — so no amount of re-checking the
+value could ever have found it, and each correct answer made the next reader
+more confident the fault was further down, in the `int 13h` and the BIOS.
+
+What found it in one run was a **single-step trace of the guest**: break at
+`hd_bios_xfer`, step, and print CF beside each instruction. `cmp ax, 127` /
+`jbe .done` / `pop` / `pop` / `ret` / `jc .fail` is the whole bug, visible on
+six consecutive lines. The lesson generalises past this driver: **a routine
+whose contract is a flag must SET that flag on every exit** — a flag left over
+from the last compare is not an answer — and when a value-level audit keeps
+coming back clean, the next instrument is a stepper and not another read.
+
+An audit of every CF-answering routine in `drivers/hdd/` found no second
+instance; the other candidates all tail-call something that sets CF explicitly
+(`hd_ide_select` through `hd_ide_wait`, `hd_fmt_wr` and `hd_part_write`
+through `hd_raw`, `hd_iread_chunk` through `OSAPI_FILE_READ_AT`).
+
+**The safety pass's `HMB_BAD`/`HMB_NONE` split is what made this visible at
+all**, and it should stay: the two used to be one answer, so a failing read
+presented as "nobody has partitioned this" and the installer formatted
+straight through it — writing a fabricated table over a live one, which is
+exactly the data-loss shape §52.2.1 describes.
+
+Verified on `os8088_xt_hdd` against a pristine `default_xtide.vhd`: the page
+reports `BIOS0  615x 4x 26  31M`, Mount answers `Mounted 1 volume` and puts an
+`HDD C` zone on the desktop, the volume opens on the image's DOS filesystem
+(`AUTOEXEC.BAT`, `COMMAND.COM`, `CONFIG.SYS`, `CTMOUSE.EXE`, `LTEMM.EXE`,
+`Size 43K  Free 31760K`), the installer lists `Slot 1  31M  Ready` with the
+other three `No Room`, and the VHD is byte-identical to the pristine copy
+afterwards.
+
+**One harness fix was needed first, and it is its own trap**
+(docs/MARTYPC-DEBUG.md): the MartyPC debug server could not *resume* from a
+breakpoint — `run` set `ExecutionState::Running` itself, skipping the only arm
+that clears the CPU's latched breakpoint flag, so the first breakpoint of a
+session wedged the machine at zero cycles. Nothing looked broken from the
+host: `status`, `regs` and `read` all answered, and the guest merely stopped
+executing, so scripted mouse packets went nowhere and read as *the guest
+ignoring input*.
 
 ## 53. fsx.inc — fullscreen exclusive
 

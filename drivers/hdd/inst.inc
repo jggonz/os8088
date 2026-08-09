@@ -1248,28 +1248,39 @@ hd_iapps_find:
 ; there. Each is a REMOUNT, which is why the copy is structured to make as
 ; few of them as it can - one per file, not one per chunk.
 ; -----------------------------------------------------------------------------
-; THESE WANT THE QUIET GOTO (SPEC.md 19.2.2) AND DO NOT YET USE IT, which is
-; recorded here rather than left as an obvious improvement nobody tried.
-; Nothing in this file ever SHOWS a folder - it reads and writes by name, and
-; OSAPI_FILE_FIND walks raw directory sectors - so every one of these is a
-; full dsk_chdir (BPB, FAT window, directory scan, sort, one icon harvest per
-; file) bought for nothing, twice per file and twice per CHUNK.
+; ALL FOUR TAKE THE QUIET GOTO (SPEC.md 19.2.2), and the reason they may is
+; that nothing in this file ever SHOWS a folder: it reads and writes by name,
+; and OSAPI_FILE_FIND walks raw directory sectors (dsk_find) rather than the
+; mount listing. So the directory scan, the sort and the icon harvest a full
+; dsk_chdir pays for are all bought for nothing here - twice per file and
+; twice per CHUNK. The write gate survives, which is the thing that could
+; have made this fail confusingly: dsk_chdir_q sets [dsk_quiet] and calls the
+; REAL dsk_chdir, so [dsk_mntok] is set exactly as before and only the
+; listing publish is skipped.
 ;
-; Switching all four to OSAPI_FILE_GOTO_Q was tried and reverted, and the
-; reason is worth keeping because the first diagnosis was WRONG: the copy
-; failed at the end, the quiet goto was blamed, and reverting it changed
-; nothing at all. What actually broke is older - the CHUNKED write (SPEC.md
-; 18.4.4), which had never run once until *.O88 stopped being the only thing
-; copied out of a folder. So this reversion is caution rather than evidence:
-; wire the quiet slot in again once the chunk path is understood, and measure
-; it then.
+; Measured over one whole install (make DISKCNT=1, SPEC.md 18.94, both disks,
+; 22 files onto a pristine 31M partition), together with hd_icopy_one's
+; dropped terminating pass: 128 mounts -> 76, 1,372 sectors -> 971, 638
+; int 13h calls -> 354. Same 22 files at the same clusters, BEVERLY.MOD
+; byte-identical, FAT1 == FAT2, no orphans and no cross-links.
+;
+; It was once tried and reverted, and that is worth keeping because the
+; diagnosis was WRONG: the copy failed at the end, the quiet goto was blamed,
+; and reverting it changed nothing at all. What actually broke was
+; dskw_read_at refusing the very call that should have answered "finished".
+;
+; THE BOUNDARY KEEPS THE FULL GOTO, and that is the rule rather than an
+; omission: hd_ivol_back hands the machine back to the user, and a quiet
+; mount there would leave the global listing empty with [dsk_lstale] owed for
+; whatever they do next. Quiet inside the loop, full at the boundary.
+; hd_iapps_find's probe keeps it too - it runs once, so it buys nothing.
 hd_isrc:
     push ax
     push bx
     push dx
     mov bl, [hd_isrcdrv]        ; the source is where the user was: A: on a
     xor dx, dx                  ; one-floppy machine, at its ROOT
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q      ; QUIET (SPEC.md 19.2.2)
     pop dx
     pop bx
     pop ax
@@ -1281,7 +1292,7 @@ hd_isrc_sub:
     push dx
     mov bl, [hd_isrcdrv]
     mov dx, [hd_isubc]
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q      ; QUIET (SPEC.md 19.2.2)
     pop dx
     pop bx
     pop ax
@@ -1293,7 +1304,7 @@ hd_idst:
     push dx
     mov bl, [hd_idrv]
     xor dx, dx
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q      ; QUIET (SPEC.md 19.2.2)
     pop dx
     pop bx
     pop ax
@@ -1305,7 +1316,7 @@ hd_idst_sub:
     push dx
     mov bl, [hd_idrv]
     mov dx, [hd_idsubc]
-    call OSAPI_FILE_GOTO
+    call OSAPI_FILE_GOTO_Q      ; QUIET (SPEC.md 19.2.2)
     pop dx
     pop bx
     pop ax
@@ -1361,7 +1372,7 @@ hd_icopy_tree:
                                 ; walking a chain
     mov si, hd_ient
     call hd_icopy_one
-    jc .fail
+    jc .failm                   ; it named the FILE; do not talk over it
     jmp short .entry
 .folder:
     mov ax, [hd_ient+16]
@@ -1373,7 +1384,7 @@ hd_icopy_tree:
     jc .mkchk
 .mkok:
     call hd_icopy_sub
-    jc .fail
+    jc .failm                   ; ...and so may this, one level down
     jmp short .entry
 .mkchk:
     cmp ax, FERR_EXIST          ; a re-install finds its own folders: that is
@@ -1383,8 +1394,21 @@ hd_icopy_tree:
     clc
     jmp short .out
     ; A copy that stops names the FILE it stopped on (hd_icopy_one) or says
-    ; nothing more than this. Splitting these four further is what found
-    ; SPEC.md 52.10.7, and the markers came back out.
+    ; nothing more than this.
+    ;
+    ; `.failm` IS THE HALF THAT WAS MISSING, and its absence is most of why
+    ; SPEC.md 52.10.7 stayed open. Every path came here, so the generic
+    ; sentence was written over hd_icopy_one's careful "NAME THE FILE" on the
+    ; way out - the comment above claimed the file was named and the code
+    ; guaranteed it never was. The user saw `Disk error` for a fault that had
+    ; already identified itself as BEVERLY.MOD, and the session that went
+    ; looking for it reached for abort-markers because the message it
+    ; already had said nothing. A failure that arrives from a callee which
+    ; sets [hd_imsg] keeps that message; only the paths that have nothing
+    ; better to say fall into `.fail`.
+.failm:
+    stc
+    jmp short .out
 .fail:
     mov word [hd_imsg], hd_s_ierr
     stc
@@ -1416,7 +1440,7 @@ hd_icopy_sub:
     mov [hd_isord], cx
 .entry:
     call hd_isrc_sub
-    jc .fail
+    jc .failg                   ; a mount, with no file to blame
     mov cx, [hd_isord]
     push es
     push cs
@@ -1427,18 +1451,15 @@ hd_icopy_sub:
     jc .done
     mov [hd_isord], cx
     mov ax, [hd_ient+14]
-    cmp ax, OSAPI_FT_PKG
-    jne .entry                  ; PACKAGES only one level down, and that is a
-                                ; KNOWN GAP rather than the intent - SPEC.md
-                                ; 52.10.7. The right test is "not a folder and
-                                ; not '..'", because type 1 means PACKAGE and
-                                ; not FILE (SPEC.md 19.7.1); making it so is
-                                ; what BEVERLY.MOD needs, and it is also what
-                                ; first ran the chunked write (SPEC.md 18.4.4),
-                                ; which then failed the NEXT source mount and
-                                ; left a fully populated, unbootable partition.
-                                ; A broken installer is worse than an
-                                ; incomplete copy, so the gap stands
+    cmp ax, OSAPI_FT_DIR
+    jae .entry                  ; a FOLDER (this walk is one level deep) or the
+                                ; synthesized '..'; everything below FT_DIR is
+                                ; a file, package or not (SPEC.md 19.7.1). This
+                                ; read `cmp ax, OSAPI_FT_PKG / jne`, which is
+                                ; type 1 - PACKAGE - so one level down only
+                                ; *.O88 was copied and MEDIA/BEVERLY.MOD was
+                                ; silently left behind. The root loop in
+                                ; hd_icopy_tree always had it right
     mov byte [hd_iinsub], 1
     mov si, hd_ient
     call hd_icopy_one
@@ -1448,6 +1469,8 @@ hd_icopy_sub:
 .done:
     clc
     jmp short .out
+.failg:                         ; nothing better to say than the generic line;
+    mov word [hd_imsg], hd_s_ierr   ; hd_icopy_one's failure keeps its own
 .fail:
     mov byte [hd_iinsub], 0
     stc
@@ -1543,7 +1566,14 @@ hd_icopy_one:
     mov ax, [hd_itake]          ; the offset advances by what was TAKEN, and
     add [hd_ioff], ax           ; the next read starts exactly there
     adc word [hd_ioff+2], 0
-    jmp short .chunk
+
+    mov ax, [hd_ioff+2]         ; ...and STOP when that is the whole file,
+    cmp ax, [hd_isize+2]        ; instead of going round to be told so. The
+    jb .chunk                   ; extra pass costs a source remount and a
+    ja .ok                      ; directory walk to answer 0 bytes, which
+    mov ax, [hd_ioff]           ; hd_istat already told us at the top - the
+    cmp ax, [hd_isize]          ; loop knows it is finished the moment the
+    jb .chunk                   ; offset reaches the size (SPEC.md 52.10.7)
 .ok:
     clc
     jmp short .out

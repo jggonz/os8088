@@ -363,7 +363,27 @@ impl DebugServer {
             "outb" => out_port(machine, &req),
             "run" => {
                 exec.set_op(ExecutionOperation::Run);
-                exec.set_state(ExecutionState::Running);
+                // RESUMING FROM A BREAKPOINT IS NOT `set_state(Running)`, and
+                // that is what this used to be. machine.run()'s
+                // `BreakpointHit -> Run` arm is the ONLY place that calls
+                // cpu.clear_breakpoint_flag() and sets skip_breakpoint, so a
+                // state written straight to Running enters through the
+                // `Running` arm instead, steps the same instruction with the
+                // flag still set, and lands back in BreakpointHit having
+                // advanced ZERO cycles. Every later `run` does the same, so
+                // the first breakpoint a session hits wedges the machine
+                // permanently - and it does not look wedged: `status` answers,
+                // `read` and `regs` answer, and the guest simply stops
+                // executing. Input then goes nowhere, which reads as the guest
+                // ignoring it. Drive the transition through machine.run(),
+                // exactly as "reset" below does, and let it own the flag.
+                if matches!(exec.get_state(),
+                            ExecutionState::BreakpointHit | ExecutionState::StepOverHit) {
+                    machine.run(1, exec);
+                }
+                else {
+                    exec.set_state(ExecutionState::Running);
+                }
                 status(machine, exec)
             }
             "pause" => {
@@ -1238,13 +1258,20 @@ fn advance(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> V
     let f0 = machine.primary_videocard().map(|c| c.frame_count()).unwrap_or(0);
     let started = Instant::now();
 
-    // CLEAR A LATCHED BREAKPOINT STATE FIRST, exactly as `step` does. An
-    // ExecutionControl sitting in BreakpointHit stays there through a Run, so
-    // without this the loop below breaks on its own entry condition and
-    // advances nothing - silently, reporting 0 cycles and success.
-    if !matches!(exec.get_state(), ExecutionState::Paused) {
-        exec.set_op(ExecutionOperation::Pause);
-        exec.set_state(ExecutionState::Paused);
+    // CLEAR A LATCHED BREAKPOINT STATE FIRST. An ExecutionControl sitting in
+    // BreakpointHit stays there through a Run, so without this the loop below
+    // breaks on its own entry condition and advances nothing - silently,
+    // reporting 0 cycles and success.
+    //
+    // Going through Paused is NOT enough, which is what this used to do:
+    // `Paused -> Run` does not clear the CPU's breakpoint flag either (only
+    // the `BreakpointHit -> Run` arm does), so the first batch re-reported the
+    // same breakpoint and the advance ended where it started. Hand the
+    // transition to machine.run() and let it own the flag - see "run" above.
+    exec.set_op(ExecutionOperation::Run);
+    if matches!(exec.get_state(),
+                ExecutionState::BreakpointHit | ExecutionState::StepOverHit) {
+        machine.run(1, exec);
     }
     exec.set_op(ExecutionOperation::Run);
     exec.set_state(ExecutionState::Running);
