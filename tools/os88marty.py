@@ -504,6 +504,9 @@ def _bar_up(m):
     return sum(band) > 0.8 * 255 * len(band)
 
 
+# Wait for a machine that is going to CHANGE THE SCREEN and then stop: a boot,
+# a click, a repaint. Its twin below, `until`, is for work that changes no
+# pixels while it runs - pick by whether the screen is the evidence.
 def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0):
     """Run until the SCREEN STOPS CHANGING, and answer how long that took.
 
@@ -554,6 +557,56 @@ def settle(m, quiet=1.0, stable=2, gate=None, limit=120.0):
         "the screen was still changing after %.0fs: the machine never "
         "finished booting (or something on it is animating, in which case "
         "pass boot=<seconds> instead)." % limit)
+
+
+# Wait for a machine that is BUSY WITHOUT DRAWING: anything holding the gfx
+# lock for its whole run. `settle` cannot see that work at all - it watches
+# pixels, and there are none - so ask about the thing being waited for.
+def until(m, cond, what="that condition", poll=1.0, limit=600.0):
+    """Run until CONDITION IS TRUE, and answer how long that took.
+
+    The twin of `settle`, for the case it silently gets wrong. An operation
+    that holds the gfx lock while it works freezes the UI for its whole run,
+    so the screen is *more* still while it is busy than when it is finished:
+    `settle` sees stillness about five seconds into a hard-disk install and
+    returns, and a `with launch(...)` block then kills the emulator mid-copy.
+    Nothing about that failure looks like a wait ending early - it looks like
+    the install stopping halfway, which is a bug in the installer.
+
+    `cond` is called with the Marty each round and may look wherever the
+    answer actually is. Guest memory is one place; the HOST side of a mounted
+    image is often the better one, because a commit is usually a single write
+    you can watch for - SPEC.md 52.10 writes the partition table LAST, so our
+    boot stub appearing in sector 0 of the VHD *is* the install finishing.
+
+        os88marty.until(m, lambda _: open(vhd, "rb").read(12) == STUB,
+                        "the installer to commit the MBR")
+
+    It separates the two ways this wait fails, because they want different
+    fixes. A guest that has STOPPED EXECUTING can never satisfy any condition,
+    and "the machine is paused at 0060:3C19" is worth more than a timeout that
+    blames the condition - that is the shape a still-armed breakpoint takes,
+    and it cost a session an afternoon (docs/MARTYPC-DEBUG.md). Everything
+    else is an honest timeout.
+    """
+    import time
+    t0 = time.time()
+    while True:
+        if cond(m):
+            return time.time() - t0
+        st = m.status()
+        if st["state"] != "running":
+            raise MartyError(
+                "waited %.0fs for %s, but the guest is %r at %04X:%04X and is "
+                "not executing - a stopped machine can never make a condition "
+                "true. A breakpoint still armed, or `run` never called?"
+                % (time.time() - t0, what, st["state"], st["cs"], st["ip"]))
+        if time.time() - t0 > limit:
+            raise MartyError(
+                "waited %.0fs for %s and it never happened. The guest is still "
+                "running, so either it is slower than the limit or the "
+                "condition is asking about the wrong thing." % (limit, what))
+        time.sleep(poll)
 
 
 def launch(image, apps=None, machine="os8088_5150_cga", addr="127.0.0.1:9001",
