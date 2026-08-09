@@ -102,20 +102,38 @@ the `call wm_su_try` to three NOPs in the running guest — no rebuild needed.
 (My first attempt used the listing's `.text`-relative offset and hit the wrong
 instruction; confirm the byte reads `E8` before writing.)
 
-### 3.5 `NP_HCHUNK` = 4 is still an emulator number
+### 3.5 Typing at the END of a note — the field report, reproduced
+
+docs/NOTEPAD-NOTES.md §5.5 has the numbers. A keystroke at the end of the note
+roughly **doubles as the page fills** (35 ms → 66 ms in a 16×29 window) and
+then flattens — it is bounded by a screenful, not by the note — with the
+keystroke that scrolls costing **190 ms**. One keystroke did two walks, six
+`np_rflush` (three rows per pass, because `np_seedck` backs the seed up a row
+for §27.11's word wrap) and **17 `gfx_fill`s**, which is 12.8 ms of arrival
+before a glyph is drawn.
+
+**The seed back-up is now skipped when it provably cannot matter** (SPEC.md
+§27.11.1): 53.5 ms → 37–40 ms a keystroke, `np_rstart` 4.8 → 2.0. What is
+left is the 17 fills, and the unbounded case §27.11.1 records — a run of
+non-space longer than a row, where the seed goes back as many rows as the run
+spans.
+
+### 3.5.1 `NP_HCHUNK` = 4 is still an emulator number
 
 It sizes a gfx-lock hold and a duty cycle, both of which the operator feels,
 and only the 5150 can set it. `make npbench`, boot, double-click README.TXT,
 Ctrl-B. `NP_HCHUNK ≈ (wanted hold in µs) ÷ (measured per-row µs)`, target a
 hold under one 55 ms tick.
 
-### 3.6 docs/NOTEPAD-NOTES.md §5.2.1 — 705 stale pixels
+### 3.6 docs/NOTEPAD-NOTES.md §5.2.1 — 66 stale glyph cells
 
-The first scroll sequence after opening leaves ~11 glyph cells stale until
-something forces a full repaint. **Pre-existing** — the pre-index build shows
-the same 705 pixels in the same state. Reproducible in one run with
-`tools/notepad/pixcheck.py`. The suspicion is an interleaving between the
-background height count and the redraw's signatures.
+Six `ArrowDown`s from a cold boot leave **66 glyph cells** of the content
+disagreeing with a full repaint — 2,743 bytes, full content width, nine rows
+of sixteen, and the view never scrolls. **Pre-existing**: byte-for-byte
+identical on two different builds of the module. Reproducible in three
+commands with `tools/notepad/pixcheck.py`. The suspicion is still an
+interleaving between the background height count and the redraw's signatures,
+and the next step is to hold the worker off and see whether it survives.
 
 ### 3.7 `[np_rowsn]` is not capped to the array it indexes
 
