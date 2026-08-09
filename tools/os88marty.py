@@ -111,11 +111,25 @@ class Marty:
     def setreg(self, reg, value):
         return self.cmd(cmd="setreg", reg=reg, value=value)
 
-    def screen(self):
-        """The video card's text rows, in text modes."""
-        return self.cmd(cmd="screen")["rows"]
+    def cards(self):
+        """Every video card this machine has, in `[[machine.video]]` order.
 
-    def video(self):
+        The answer to "did my two-card config actually produce two cards",
+        which nothing else here can ask: `video` on a machine whose second
+        entry was dropped looks exactly like `video` on a machine that never
+        had one. Each entry carries `idx` (what to pass as `card=`), `type`,
+        `primary`, `mode`, `field_w`/`field_h` and `frames`.
+
+        `frames` is the one to watch: a card nothing has PROGRAMMED sits at 0
+        for ever, which is not the same as a card that is not there.
+        """
+        return self.cmd(cmd="cards")["cards"]
+
+    def screen(self, card=None):
+        """The video card's text rows, in text modes."""
+        return self.cmd(cmd="screen", card=card)["rows"]
+
+    def video(self, card=None):
         """Which card, its raster geometry, and its display apertures.
 
         `graphics` IS NOT TO BE TRUSTED ON VGA: the card's `mode_graphics`
@@ -124,9 +138,9 @@ class Marty:
         honest question - 800x524 is mode 12h's raster and a text mode's is
         not.
         """
-        return self.cmd(cmd="video")
+        return self.cmd(cmd="video", card=card)
 
-    def flicker(self, frames=60, aperture=0):
+    def flicker(self, frames=60, aperture=0, card=None):
         """Sample the glass once per DISPLAYED FRAME and price what a person
         would have seen (PERFORMANCE.md Part 3.1).
 
@@ -140,21 +154,23 @@ class Marty:
         box of the transient pixels, and `settled` - which must be true, or
         every count was measured against a moving target.
         """
-        return self.cmd(cmd="flicker", frames=frames, aperture=aperture)
+        return self.cmd(cmd="flicker", frames=frames, aperture=aperture,
+                        card=card)
 
-    def pace(self, frames=300, aperture=0, ignore=None):
+    def pace(self, frames=300, aperture=0, ignore=None, card=None):
         """Per-frame changed-pixel counts, for FRAME PACING (PERFORMANCE.md
         Part 3.2). Keeps two frames server-side, so `frames` can be large.
 
         `ignore` is an inclusive [x0,y0,x1,y1] excluded from every comparison —
         for a blinking cursor, which changes pixels on a clock of its own.
         """
-        kw = {"cmd": "pace", "frames": frames, "aperture": aperture}
+        kw = {"cmd": "pace", "frames": frames, "aperture": aperture,
+              "card": card}
         if ignore:
             kw["ignore"] = list(ignore)
         return self.cmd(**kw)
 
-    def fbuf(self, aperture=0):
+    def fbuf(self, aperture=0, card=None):
         """The card's RENDERED framebuffer as (width, height, rgb24 bytes).
 
         The complement of `vram`, and the only route that works on VGA: mode
@@ -164,7 +180,7 @@ class Marty:
         wrote the right bytes, this says the machine put them on a screen -
         and it works on every adapter and in every mode.
         """
-        r = self.cmd(cmd="fbuf", aperture=aperture)
+        r = self.cmd(cmd="fbuf", aperture=aperture, card=card)
         return r["w"], r["h"], bytes.fromhex(r["data"])
 
     def vram(self, kind=None):
@@ -387,6 +403,47 @@ class Marty:
     def history(self):
         return self.cmd(cmd="history")["history"]
 
+    # --- floppies ------------------------------------------------------------
+
+    def disks(self):
+        """Every floppy drive: what is in it, and where it was mounted from.
+
+        Each row: drive, present, writes, path, and cylinders/heads/format
+        when a disk is in.
+
+        `writes` IS NOT A DIRTY FLAG, however much it looks like one. It is
+        fluxfox's `write_ct`, which is set to 1 at mount (so it never reads 0)
+        and is never advanced for a raw sector image - the one call that would
+        do it is commented out upstream. Measured: it read 1 through a Control
+        Panel close that wrote three sectors. To ask whether the guest has
+        written, flush and compare the bytes: `os88flush.Flush(marty=m).dirty()`.
+        """
+        return self.cmd(cmd="disks")["drives"]
+
+    def flush(self, drive=0, path=None, fmt="raw"):
+        """Write a drive's live image out to a file on the host.
+
+        This is the eframe frontend's Save Floppy As, reached from the socket
+        - and it is the only way the bytes ever leave: nothing in
+        martypc_headless or marty_core writes an image back, so every sector
+        os8088 writes lives and dies in RAM. Without it a scripted session can
+        make the OS save a document and then has to ask the OS itself whether
+        it worked, which cannot catch the bug where the writer and the reader
+        agree on the same wrong thing.
+
+        `path` defaults to the file the drive was mounted from, which under
+        `launch()` is the session's private copy in the run tree - so a bare
+        `m.flush(0)` persists the session's disk where the next tool will look
+        for it. `fmt` is raw / imd / psi / pri / mfm / hfe / 86f; raw is the
+        flat sector image every other tool here reads.
+
+        PAUSE FIRST, and `os88flush.flush()` does. A flush is a read of the
+        image at the instant it is asked for, so one taken in the middle of a
+        multi-sector commit captures a volume that really is inconsistent -
+        which afterwards reads as a corrupt disk rather than a mistimed grab.
+        """
+        return self.cmd(cmd="flush", drive=drive, path=path, format=fmt)
+
     def quit(self):
         return self.cmd(cmd="quit")
 
@@ -471,12 +528,17 @@ MBAR_H = 20                     # SPEC.md 12: the same on every adapter
 def _sample(m):
     """The screen as comparable bytes, on whichever card this machine has.
 
-    `fbuf` would be the obvious one and is WRONG on Hercules: MartyPC's MDA
-    does not rasterise graphics mode, so the rendered buffer sits still while
-    the guest draws - which reads as a settled screen from the first sample.
-    `vram` is the truth on both 1bpp cards and is unavailable on VGA, where
-    mode 12h is four planes behind the Graphics Controller, so the two split
-    exactly along the line the two functions already draw.
+    `vram` on the 1bpp cards and `fbuf` on VGA, which is where the two
+    functions already split: mode 12h is four planes behind the Graphics
+    Controller and not readable as flat memory, and everything else is.
+
+    ON THE 1bpp CARDS IT IS A CHOICE RATHER THAN A NECESSITY, and the reason
+    given here used to be wrong. `fbuf` is NOT dead on Hercules - measured, a
+    live desktop is 54.2% lit through it against 55.7% through `vram`
+    (docs/MARTYPC-DEBUG.md). `vram` is still the right one for a boot gate
+    because it is EXACT: `fbuf` comes back cropped to a display aperture, so
+    it is 720x350 over a 720x348 framebuffer and 16 columns short of it, and a
+    gate that counts pixels in a named band wants the band it named.
     """
     if m.cmd(cmd="video")["type"] in ("cga", "mda", "hercules"):
         return b"".join(bytes(r) for r in m.vram()[2])

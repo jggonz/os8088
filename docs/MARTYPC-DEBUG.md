@@ -76,6 +76,97 @@ rows, which is the closest any emulator has come here.
 
 ---
 
+## …but the BYTES it writes can be checked, and now are
+
+The section above is about *time*. What the guest actually **wrote** is a
+different question, and the answer used to be that nobody could ask it.
+
+MartyPC mounts a floppy by reading the file once into an in-memory
+`DiskImage`; every sector the guest writes after that lands there and nowhere
+else. Nothing in `martypc_headless` or `marty_core` ever writes one back —
+that is the eframe frontend's **Media ▸ Save Floppy As**, a `fluxfox::
+ImageWriter` behind a menu item a headless run does not have. So a scripted
+session could drive os8088 into saving a document and then had only one way to
+find out whether it had worked: ask os8088. **That is not a test.** The writer
+and the reader are the same FAT12 code, so the one failure that matters most —
+both halves agreeing on the same wrong thing — is precisely the one that
+cannot be seen from inside. docs/FIELD-NOTES.md 4 is what that costs when it
+happens: a stale listing resolved a display row against a snapshot that had
+shifted, the loader read the entry next door, and a perfectly good package was
+reported as `Bad package`.
+
+`flush` is the missing menu item, reached from the socket, and
+**`tools/os88flush.py`** is what to do with the bytes on this side:
+
+```
+python3 tools/os88flush.py 127.0.0.1:9001 disks
+python3 tools/os88flush.py 127.0.0.1:9001 save 0 /tmp/after.img
+python3 tools/os88flush.py 127.0.0.1:9001 ls 1 APPS      # -R for the whole tree
+python3 tools/os88flush.py 127.0.0.1:9001 get 0 SYSTEM.CFG /tmp/cfg.bin
+python3 tools/os88flush.py 127.0.0.1:9001 diff 0
+python3 tools/os88flush.py 127.0.0.1:9001 verify 0
+```
+
+…and, in a scripted session, sharing the one connection the debug server
+allows (`Mouse(marty=m)`'s idiom, for `Mouse(marty=m)`'s reason — a second
+client does not error, it **hangs**):
+
+```python
+with os88marty.launch("build/os8088-360.img", apps="build/apps360.img") as m:
+    f = os88flush.Flush(marty=m)
+    assert not f.dirty(0)                     # nothing written at boot
+    ...drive the UI...
+    print(f.diff(0)["added"])                 # ['SYSTEM.CFG']
+    cfg = f.volume(0).read("SYSTEM.CFG")      # its exact bytes, on the host
+```
+
+The `Volume` class walks the BPB, the FAT and the directories itself, with no
+kernel code anywhere near it. That independence is the whole point, and it
+buys two things a guest-side check cannot: it sees the **hidden and system**
+files SPEC.md §19.6 marks and `disk_mount`'s species filter drops — a listing
+off a flushed system disk shows `KERNEL.SYS`, `SOUND.DRV`, `HDD.DRV` and
+`ASSOC.DAT`, none of which is visible from inside os8088 at all — and its
+`verify` hands the image to `tools/os88disk.py --verify`, the same structural
+fsck the build uses, so "os8088 is happy with this volume" and "this volume is
+coherent" stop being the same claim.
+
+Four things about it are load-bearing:
+
+- **It pauses the machine, and it has to.** A flush is a read of the image at
+  the instant it is asked for, and a save here is a multi-sector commit — data,
+  then the FAT, then the directory entry (SPEC.md §18.4). Caught mid-commit,
+  the volume that comes out is *genuinely* inconsistent, and it reads
+  afterwards as a corrupt disk rather than as a mistimed grab. Every verb
+  pauses, flushes and puts the machine back the way it found it, in both
+  directions.
+- **`writes` is not a dirty flag, and it looks exactly like one.** The count
+  in `disks` is fluxfox's `write_ct`. `post_load_process` sets it to **1** at
+  mount, so it never reads 0 — and for a raw sector image, which MartyPC loads
+  at BitStream resolution, it is never advanced at all: the one call that would
+  do it is commented out upstream (below). Measured here: it read 1 through a
+  Control Panel close that demonstrably wrote three sectors. `dirty()` compares
+  the **content** against the image the drive was mounted from, which is slower,
+  always right, and cannot rot.
+- **A bare `save(drive)` writes back over the mounted image** — the menu's
+  *Save Floppy*, not *Save Floppy As* — which under `launch()` is the session's
+  private copy in the run tree. That is usually what you want, and it destroys
+  the only pristine copy `diff` and `dirty` have to compare against. Name a
+  path when you want to keep the reference.
+- **The emulator writes the file, so the path is the emulator's.** Its working
+  directory is the run tree, so a relative path lands there rather than beside
+  you; every verb here hands the server an absolute path and reads the result
+  back itself.
+
+Verified end to end on `os8088_5150_cga_gla`: a fresh boot is `dirty() ==
+False`; a Control Panel change plus a close puts `SYSTEM.CFG` in `added`, with
+sectors 1, 3, 5 and 268 differing — the two FAT copies, the root directory and
+the file's data cluster, which is SPEC.md §18.4's commit order made visible
+from outside the machine for the first time — and the file reads back 86 bytes
+beginning `O88CFG`. `get 1 APPS/HELLO.O88` off the live disk is byte-identical
+to `build/hello.o88`.
+
+---
+
 ## Build and run
 
 Needs `cargo` (Rust) and, on Linux, `libudev-dev` + `pkg-config` — MartyPC
@@ -160,10 +251,17 @@ gate is not optional — the two obvious ones are both wrong:
 
 So the gate is the **menu bar's white field**, which neither the POST nor the
 splash has, sampled through `vram` on the 1bpp cards and `fbuf` on VGA —
-because `fbuf` is dead on Hercules (the MDA does not rasterise graphics mode,
-so the rendered buffer sits still while the guest draws) and `vram` is
-impossible on VGA. Measured boots: CGA 17.5s, Hercules 16.1s, VGA 7.1s,
-against the 26-second fixed sleep every script used to carry.
+because `vram` is impossible on VGA and is the *exact* answer on the other two,
+where `fbuf` comes back cropped to a display aperture (720x350 against a
+720x348 framebuffer, and 16 columns short of it). Measured boots: CGA 17.5s,
+Hercules 16.1s, VGA 7.1s, against the 26-second fixed sleep every script used
+to carry.
+
+This paragraph used to say `fbuf` was **dead** on Hercules — that the MDA does
+not rasterise graphics mode at all — and that is not true at the pinned build:
+a real os8088 Hercules desktop measures **136,617 lit of 252,000 (54.2%)**
+through `fbuf` against **55.7%** through `vram`, the two agreeing to within the
+aperture crop. See the correction under `flicker` below.
 
 ### `until(m, cond, what)` — the wait for work that draws nothing
 
@@ -235,9 +333,32 @@ pass the same `-D`s (`--define DISKCNT=1`).
 | `os8088_5150_cga_gla` | the same with GLaBIOS |
 | `os8088_5150_sb` | the same with an AdLib **and** a Sound Blaster (DSP 2.01, 0x220, IRQ 7) |
 | `os8088_5150_sbonly` | ...and with the FM half taken out: a DSP at 0x220 and **nothing at 0x388**. No real card is built that way, which is why it needs an emulator — it is SPEC.md §51.3.1's jumpered-off-FM case, and `_sb`/`_sbonly` are one pair with `make SNDSNIFF=sb` between them |
+| `os8088_5150_sb_128k` | `_sb` at the **RAM floor** — 128KB, `MIN_RAM_KB`. It tests the CLAIM HEAP under a sound card rather than the card: `HEAP_SEG` is at 91.5KB, so this machine has **36.5KB of heap** for the driver's image, its DMA buffer, its staging pool and the app, where `_sb` has 548.5KB and can never show a refusal. SPEC.md §34.6's two claims are sized against this machine and neither can be judged on the other one. Boot it with `launch(..., boot=2)` and wait on the desktop's own lit count — `settle`'s menu-bar gate fires on the splash here, because a slow machine holds a still frame for longer than the gate's patience |
 | `os8088_xt_vga` | an IBM 5160 XT with GLaBIOS and a VGA — SPEC.md §39's mode 12h |
 | `os8088_xt_vga_sb` | ...and the same XT with the AdLib + Sound Blaster pair, which exists **to be run with `--turbo`** — see below |
 | `os8088_xt_hdd` | the same XT with an **XT-IDE** controller — SPEC.md §52's rung 0 |
+| `os8088_5150_both` | **two cards**: a CGA *and* a Hercules, which is docs/FIELD-MACHINES.md's machine as it actually is. SPEC.md §39.11's adapter switching exists for this, and docs/DUAL-DISPLAY-PLAN.md is the study of driving both at once |
+| `os8088_5150_both_gla` | its GLaBIOS twin, and the one `tests/dualcheck.py` runs by default — the IBM ROM this tree cannot ship is what the other needs |
+| `os8088_5150_herc_gla` | a single-card Hercules on GLaBIOS: `os8088_5150_herc` without the ROM, and the control for "does this card rasterise at all" with no second card to confuse the question |
+
+**Two cards is a real configuration and it took two patches to make honest.**
+The `[[machine.video]]` blocks are an array and the bus builder installs every
+one of them, keyed by `VideoCardId { idx, vtype }` in config order — but
+upstream maps a Hercules-subtype MDA at B0000 **and** B8000 unconditionally
+(the mapping is built in the constructor, before any guest has written 3BFh), a
+CGA maps B8000, and `Bus::register_map` resolves the overlap by **last writer
+wins**: it stamps `mmio_map_fast` and never reads the `priority` field the
+descriptor carries. So one card silently vanished into the other, and which one
+depended only on the block order. `patches/02-hercules-page1-decode.patch`
+narrows the Hercules to page 0 — what a real card with 3BFh bit 1 clear
+decodes, and what `vid_setmode` deliberately leaves it at (SPEC.md §39.6).
+
+**The obvious test does not catch that**, which is why there is a gate: write
+to B0000, write to B8000, read both back, and they differ — because they are
+32KB apart inside one card's 64KB. `tests/dualcheck.py` asks the *rasters*
+instead (a write to one card's memory must change **that** card's rendered
+output and not the other's), parks the CPU so no guest contributes, and is
+verified to **fail** — revert patch 02 and it exits 1 naming the check.
 
 The first five are shaped after docs/FIELD-MACHINES.md's calibration machine,
 as closely as MartyPC allows.
@@ -389,13 +510,38 @@ is the client — a CLI, a REPL and an importable `Marty` class.
 | `screen` | the video card's text, in text modes |
 | `video` | which card, its raster geometry and its display apertures |
 | `fbuf` | the card's RENDERED framebuffer as rgb24 — the only route on VGA |
+
+**Every capture takes an optional `card=` and every capture reports which card
+answered.** Absent means the primary, so nothing that already worked changes;
+otherwise it is an index (`VideoCardId.idx`, the `[[machine.video]]` position —
+**not** iteration order, which is a `MartyHashMap`'s business) or a type name,
+and an ambiguous type name is refused rather than guessed. It applies to
+`video`, `screen`, `fbuf`, `flicker`, `pace` and `advance` — the last because
+`frames=` is a question about one card and the two disagree, 50Hz Hercules
+against 60Hz CGA, so pacing a capture on the wrong counter reads as jitter that
+is not there. Before this, all six went through `primary_videocard()`, which is
+`videocard_ids[0]`: on a two-card machine they silently answered about card 0
+while the caller believed otherwise.
+
+**`park` exists because `setreg ip` cannot be made to work.** `Register16::PC`
+is settable and setting it is not enough — `pc` is the FETCH pointer and the
+core derives `ip() = pc - queue.len()`, so a bare write leaves whatever the 8088
+had already prefetched from the old address in front of the new one, and those
+bytes execute first (measured: parking at 0x0500 landed at 0xD4CC). The flush is
+not reachable through `CpuDispatch`, so `park` goes through the CPU's reset
+vector, and **clears every register** as a documented consequence. Devices are
+untouched: it resets the processor, not the machine.
 | `flicker` | one sample per DISPLAYED FRAME, and the flash/redraw counts |
 | `pace` | per-frame changed counts over a long run — frame pacing / smoothness. `ignore` excludes a rect (a blinking cursor); `video` reports the card's cursor state |
 | `advance` | run a bounded amount of GUEST time — `frames=` or `cycles=` |
+| `cards` | **every** video card, in config order: `idx`, `type`, `primary`, `mode`, `field_w/h`, `frames`. The answer to "did my two-card config actually produce two cards", which `video` cannot give — on a machine whose second entry was dropped it looks exactly like a one-card machine |
+| `park` | point the CPU at `cs:ip` with the prefetch queue flushed, so a harness can take the guest **out** of a measurement |
 | `snapshot` / `restore` | fork a holder process; wake it on a port, any number of times |
 | `key` | a keypress by MartyKey name — `KeyA`, `Enter`, `ArrowRight` |
 | `mouse` | one Microsoft packet: relative `dx`/`dy` and button state. **To click a CONTROL use `tools/os88mouse.py` instead** — it reads the live cursor from the debug registry (SPEC.md §9.4.3) and converges on an absolute target, where aiming this one by dead reckoning drifts and misses silently |
 | `history` / `callstack` | the CPU's own instruction history |
+| `disks` | what is in each floppy drive, and where it was mounted from |
+| `flush` | write a drive's live image back out to a host file — the guest's writes, which live nowhere else. `tools/os88flush.py` is the client |
 | `quit` | stop the emulator |
 
 Three things about it are load-bearing:
@@ -763,12 +909,28 @@ or every count was measured against a moving target; and **always read the
 bbox** — a count alone misattributes, which is how 42 pixels of "text flash"
 turned out to be the mouse pointer blinking under the gfx lock.
 
-**It does not work on Hercules**, and that is a MartyPC gap rather than a
-choice: the MDA does not rasterise Hercules graphics mode, so the rendered
-buffer is 0 lit of 252,000 and `frame_count()` never advances. `shot`'s VRAM
-route reads guest memory and works there perfectly, which is why nobody had
-noticed. Measure the flash on CGA — §39.5 is one renderer for both 1bpp
-adapters — and note that `--rendered` is likewise CGA and VGA only.
+**IT DOES WORK ON HERCULES, and this paragraph used to say it did not.**
+Measured at the pinned build on `os8088_5150_herc_gla`: a 12-frame capture of
+an idle Hercules desktop returns `settled` with 0 changed and 0 transient — the
+same "the instrument is not manufacturing defects" baseline the CGA gives — at
+720x350, with frames arriving every ~93,500 cycles (19.6 ms, ~51 Hz, which is
+the Hercules field rate). `frame_count()` advances: 30 CGA frames against 25
+Hercules frames over the same interval, on the two-card machine.
+
+The old claim was that the MDA does not rasterise graphics mode, so the
+rendered buffer is 0 lit of 252,000 and `frame_count()` never advances. Both
+halves of that are what a card **nobody has programmed** looks like, and that
+is not the same thing as a card that cannot rasterise — an MDA sitting in a
+machine whose guest is driving the *other* card reads exactly so, forever.
+Whatever produced the original observation, it does not reproduce: `fbuf` on a
+live Hercules desktop is 54.2% lit and tracks `vram` to within the aperture
+crop.
+
+**Two honest limits remain.** The correction was measured on the GLaBIOS
+machine, because the IBM ROM this tree cannot ship is needed for
+`os8088_5150_herc`; and `mode`/`text` is still dead on the MDA (it answers
+`Mode0TextBw40` in Hercules graphics), so `field_w`/`field_h` remains the
+discriminator there, exactly as it is on VGA.
 
 **It has snapshots, and it did not need a save format to get them** —
 docs/SNAPSHOT-PLAN.md is the full pattern, §7 and §8. The headline is that **the emulator is
@@ -854,10 +1016,10 @@ All of the following was run end to end in the container, against
 
 ---
 
-## Two upstream findings
+## Upstream findings
 
-Both are in `tools/martypc/patches/01-headless-debug-server.patch` and both
-are worth offering upstream:
+All are in `tools/martypc/patches/01-headless-debug-server.patch` and all are
+worth offering upstream:
 
 - **`peek_range` was off by one.** (No longer load-bearing for us — `read`
   uses `get_vec_at_ex` now — but still a real bug.) `if address + len < self.memory.len()`
@@ -878,6 +1040,27 @@ are worth offering upstream:
   So a headless machine always booted with empty drives, which GLaBIOS reports
   as `Disk Boot Fail. You monster.` and the IBM BIOS reports by dropping into
   cassette BASIC. Both look like a bad image rather than an absent one.
+- **A bitstream track's write counter never advances** (fluxfox, branch
+  `marty_consumer_0.34`). `DiskImage::write_sector` — the one the FDC actually
+  calls — delegates straight to the track and increments nothing, and
+  `BitStreamTrack::add_write` exists but its only call site is inside a
+  commented-out block; `MetaSectorTrack` does increment. Since
+  `post_load_process` sets the count to **1** at mount, `write_ct` on a raw
+  sector image reads 1 for the life of the machine however much the guest
+  writes, which the eframe floppy viewer uses to decide whether to redraw its
+  visualisation. It is the same shape as the dead breakpoint types: a signal
+  that is present, plausible and silently constant, so **the absence of a
+  change looks like evidence** that nothing happened. This works around it by
+  not believing it — `tools/os88flush.py` compares content — and the fix
+  upstream is one uncommented line.
+- **`attach_image` takes a path and throws it away.** The parameter is
+  literally `_path`, so once an image is in a drive nothing on the machine
+  knows where its bytes came from. The eframe frontend does not notice because
+  its file manager holds the path alongside the drive; a headless run mounts
+  from argv and has nowhere to put one. `mount_floppy` keeps its own two-entry
+  registry so that `flush` can write back over the file the drive was mounted
+  from, which is what makes *Save Floppy* (as opposed to *Save Floppy As*) a
+  thing a harness can ask for at all.
 
 The server itself is the answer to the crate's own standing TODO — *"We don't
 have any backend to run an event loop. If we want to actually run the emulator

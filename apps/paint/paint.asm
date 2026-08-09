@@ -2713,7 +2713,6 @@ pt_paint:
     cmp byte [pt_mode], PT_M_LIVE
     jne .notice
     call pt_track                   ; did ui_grow resize the window under us?
-    mov byte [pt_msgon], 0          ; the toast does not survive a repaint
     call pt_draw_pal
     call pt_draw_strip
     mov byte [pt_pen], CBLACK
@@ -2820,63 +2819,27 @@ pt_sprep:
     ret
 
 ; -----------------------------------------------------------------------------
-; pt_msg_show / pt_msg_hide - the toast, top-left of the canvas
-; in:  SI = NUL string (show)
+; pt_msg_show - say one line, through the system toast (SPEC.md 59)
+; in:  SI = NUL string
 ; out: nothing; preserves all registers
 ;
-; The notepad idiom (SPEC.md 27.1): a save or a load has to say something, and
-; a paint program has no status line to spare. It sits on the glass, so
-; hiding it is a blit of the canvas rows it covered and a repaint erases it
-; for free.
+; It used to be a framed white box at the canvas's top-left corner - which
+; sat ON the picture, cost a canvas blit to hide, and could not survive a
+; repaint. The kernel's is an inverse-video strip in the MENU BAR, so it
+; costs this app no pixels at all, needs no hiding, and takes itself down
+; after about three seconds. pt_msg_hide went with the box: an interaction
+; no longer has to retire anything, because nothing here is covering the
+; user's work.
 ; -----------------------------------------------------------------------------
 pt_msg_show:
-    push ax
-    push bx
     push cx
-    push dx
-    push si
-    call pt_msg_hide
-    call OSAPI_FONT_WIDTH           ; AX = pixel width of SI
-    add ax, 7
-    mov [pt_msgw], ax
-    mov byte [pt_pen], CWHITE
-    mov ax, 2
-    mov bx, 2
-    mov cx, [pt_msgw]
-    add cx, 2
-    mov dx, 15
-    call pt_sfill
-    mov byte [pt_pen], CBLACK
-    call pt_sframe
-    mov cx, 6
-    add cx, [pt_cx0]
-    mov dx, 6
-    add dx, [pt_cy0]
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    call OSAPI_FONT_STR
-    mov byte [pt_msgon], 1
-    pop si
-    pop dx
+    push es
+    push ds
+    pop es                          ; the kernel COPIES it (SPEC.md 59.3)
+    xor cx, cx
+    call OSAPI_TOAST
+    pop es
     pop cx
-    pop bx
-    pop ax
-    ret
-
-pt_msg_hide:
-    push ax
-    cmp byte [pt_msgon], 0
-    je .out
-    mov byte [pt_msgon], 0
-    mov word [pt_rx1], 2
-    mov word [pt_ry1], 2
-    mov ax, [pt_msgw]
-    add ax, 4
-    mov [pt_rx2], ax
-    mov word [pt_ry2], 15
-    call pt_blit
-.out:
-    pop ax
     ret
 
 ; =============================================================================
@@ -3468,7 +3431,6 @@ pt_click:
     call pt_org
     call pt_abdismiss               ; a click anywhere takes the credits down,
     jc .out                         ; and is spent doing it
-    call pt_msg_hide
     mov al, [pt_fbox]               ; a click may move the keyboard focus, and
     mov [pt_fbold], al              ; the group has to be redrawn if it does
     sub cx, [pt_ox]                 ; -> content-relative
@@ -5658,7 +5620,6 @@ pt_onkey:
     call pt_org
     call pt_abdismiss               ; ...and so does any key
     jc .out
-    call pt_msg_hide
     mov ax, [pt_key]
     cmp byte [pt_fbox], 0           ; a size box has the keyboard: it gets the
     je .canvas                      ; digits, not the text tool
@@ -5772,7 +5733,6 @@ pt_oncmd:
     mov [pt_key], ax                ; the (menu, item) pair, out of AX's way
     mov bx, si
     call pt_org
-    call pt_msg_hide
     mov ax, [pt_key]
     cmp ah, 1
     je .edit
@@ -5815,14 +5775,14 @@ pt_oncmd:
     call pt_msg_show
     ret
 .save_go:
-    mov si, pt_s_saving
-    call pt_msg_show
-    call pt_wait                    ; let it reach the glass before we go quiet
+    mov si, pt_s_saving             ; an encode runs before the floppy does and
+    call pt_msg_show                ; the file-activity widget cannot see it;
+                                    ; SPEC.md 59.4 gets this on the glass
     call pt_save                    ; pt_save only SETS its toast: the dialog's
     mov si, [pt_msgp]               ; completion callback is what shows it on the
     or si, si                       ; Save As path, and this path has none
     jz .out
-    call pt_msg_show                ; (which hides "Saving..." on the way in)
+    call pt_msg_show                ; (which replaces "Saving..." )
     ret
 .open:
     mov al, FDLG_OPEN
@@ -7016,7 +6976,6 @@ pt_repaint:
     call pt_cfill
     call pt_blit_all
     mov byte [pt_selshown], 0
-    mov byte [pt_msgon], 0
     mov byte [pt_careton], 0
     call pt_marq
     cmp byte [pt_abon], 0           ; the card sits on top of everything, so
@@ -7340,12 +7299,17 @@ pt_ondlg:
     jb .toobig
 .sizeok:
 
-    mov si, pt_s_loading            ; a floppy read and a decode is seconds of
-    call pt_msg_show                ; silence: say so BEFORE starting, not after
-    call pt_wait                    ; and let go of the lock once, or a
-                                    ; double-buffered machine (SPEC.md 32) would
-                                    ; flush the toast only after the load it
-                                    ; announces
+                                    ; NO 'Loading...' here. It said what
+                                    ; SPEC.md 12.8's file-activity widget now
+                                    ; says better - a live bar rather than a
+                                    ; static line - and it says it in THE SAME
+                                    ; PIXELS, so fpg_begin retires this toast
+                                    ; (SPEC.md 59.3) a moment after it goes up.
+                                    ; A decode follows the read, but the read
+                                    ; is the long half and the widget covers
+                                    ; it; the SAVE below keeps its message
+                                    ; because an encode comes FIRST there and
+                                    ; the widget cannot see it
     mov si, pt_name
     call pt_load
     jmp short .draw
@@ -7356,9 +7320,15 @@ pt_ondlg:
     mov word [pt_msgp], pt_s_bigpic
     jmp short .draw
 .save:
-    mov si, pt_s_saving             ; and a write is no quicker than a read: a
-    call pt_msg_show                ; GIF encodes 125,000 pixels before the
-    call pt_wait                    ; floppy even starts
+    mov si, pt_s_saving             ; ...but a save is not the mirror of it: a
+    call pt_msg_show                ; GIF encodes 125,000 pixels BEFORE the
+                                    ; floppy starts, and the file-activity
+                                    ; widget cannot report work that has not
+                                    ; reached the disk. SPEC.md 59.4's
+                                    ; toast_now is what puts this on the glass
+                                    ; before the machine goes quiet, and is
+                                    ; why the pt_wait that used to be here for
+                                    ; the double-buffer flush is gone
     call pt_save
 .draw:
     cmp byte [pt_wchg], 0           ; a load that resized the window has to
@@ -9413,7 +9383,6 @@ pt_gstep:     db 8, 8, 4, 2         ; the interlaced row passes: step...
 pt_gstart:    db 0, 4, 2, 1         ; ...and where each one starts
 pt_s_crop:   db 'Would crop artwork - erase it first', 0
 pt_s_noram:  db 'Not enough memory to resize', 0
-pt_s_loading: db 'Loading...', 0
 pt_s_saving: db 'Saving...', 0
 pt_s_wlab:   db 'W', 0
 pt_s_hlab:   db 'H', 0
@@ -9737,7 +9706,6 @@ pt_ic_text:
     PTWORD pt_ic_x
     PTWORD pt_ic_y
     PTWORD pt_ic_rs
-    PTWORD pt_msgw
     PTWORD pt_msgp                  ; the toast a file operation asked for
     PTBYTE pt_abon                  ; 1 = the About card is up (SPEC.md 12.2)
     PTWORD pt_abl                   ; ...and where pt_abmeas settled it,
@@ -9822,7 +9790,6 @@ pt_ic_text:
     PTBYTE pt_selshown              ; ...and its marquee is on the glass
     PTBYTE pt_txton                 ; a text run is open
     PTBYTE pt_careton               ; ...and its caret is on the glass
-    PTBYTE pt_msgon                 ; the toast is on the glass
     PTBYTE pt_fs                    ; we own the SPEC.md 11.2 fullscreen surface
     PTBYTE pt_fsx                   ; ...and are inside the SPEC.md 53 bracket
     PTBYTE pt_ptron                 ; the bracket's crosshair is on the glass

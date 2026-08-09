@@ -93,7 +93,23 @@ DRVE_BUSY   equ 6               ; ...or found it and cannot have it, because
                                 ; the fix for the two is not the same one -
                                 ; DRVE_HW wants a card, this wants a jumper
                                 ; or a different port (SPEC.md 58.2)
-DRVE_NERR   equ 7               ; how many strings drv_errstr has
+DRVE_TWICE  equ 7               ; a driver was asked to attach while it was
+                                ; already attached. THE ONLY CODE HERE THAT
+                                ; BLAMES THE SOFTWARE: every other value is a
+                                ; fact about the machine the user might act on,
+                                ; and this one says the machine is fine and the
+                                ; code is wrong. It exists because that bug is
+                                ; otherwise SILENT and expensive - snd_entry
+                                ; let DRVV_READY fall into its attach body and
+                                ; re-attached on every single load, which
+                                ; succeeded (the hardware is still there and
+                                ; answers the second probe) while orphaning a
+                                ; 12KB DMA claim, so the only symptom was a
+                                ; heap 12KB short. A second attach now refuses
+                                ; and SAYS SO, on the Drivers page and in the
+                                ; boot notice, next to the driver's own name
+                                ; (SPEC.md 51.2.2)
+DRVE_NERR   equ 8               ; how many strings drv_errstr has
 
 ; --- .drv header: the .o88 header's shape with a different version -----------
 DRV_H_MAGIC equ 0               ; word: 0x384F ('O','8')
@@ -403,7 +419,7 @@ drv_tab:
     db 0
 
 drv_errstr:                     ; DRVE_* -> what the user is told
-    dw drv_e0, drv_e1, drv_e2, drv_e3, drv_e4, drv_e5, drv_e6
+    dw drv_e0, drv_e1, drv_e2, drv_e3, drv_e4, drv_e5, drv_e6, drv_e7
 drv_e0: db 'Loaded', 0
 drv_s_off: db 'Not loaded', 0   ; ...and what a row that never failed and is
                                 ; not up says instead (drv_status)
@@ -417,6 +433,8 @@ drv_e3: db 'Not a valid driver', 0
 drv_e4: db 'Not enough memory', 0
 drv_e5: db 'No hardware found', 0
 drv_e6: db 'Port or IRQ in use', 0
+drv_e7: db 'Attached twice (bug)', 0    ; 20 chars, drv_e1's width - the widest
+                                ; the Drivers page caption takes
 
 ; -----------------------------------------------------------------------------
 ; drv_init - the state the table cannot carry as initialised data
@@ -615,25 +633,25 @@ drv_owns_seg:
 ; -----------------------------------------------------------------------------
 drv_status:
     push ax
+    mov al, [bx+DRVR_ERR]       ; A REPORTED REASON OUTRANKS 'Loaded', which is
+    cmp al, DRVE_OK             ; the one thing that changed here: a driver can
+    je .noerr                   ; now be up AND have said something went wrong
+    cmp al, DRVE_NERR           ; (DRVE_TWICE, banked by drv_attach off the
+    jae .noerr                  ; DRVV_READY call), and 'Loaded' would be true
+    mov ah, 0                   ; and useless. Nothing else reaches that state
+    shl ax, 1                   ; - every success path stores DRVE_OK - so no
+    mov si, ax                  ; existing row's caption moves. A code from a
+    mov si, [si+drv_errstr]     ; future version still says nothing rather than
+    pop ax                      ; indexing past the table
+    ret
+.noerr:
     cmp word [bx+DRVR_SEG], 0
     jne .loaded
-    mov al, [bx+DRVR_ERR]
-    cmp al, DRVE_OK
-    je .off
-    cmp al, DRVE_NERR
-    jae .off                    ; a code from a future version: say nothing
-    mov ah, 0                   ; rather than index past the table
-    shl ax, 1
-    mov si, ax
-    mov si, [si+drv_errstr]
+    mov si, drv_s_off
     pop ax
     ret
 .loaded:
     mov si, drv_e0
-    pop ax
-    ret
-.off:
-    mov si, drv_s_off
     pop ax
     ret
 
@@ -1270,10 +1288,17 @@ drv_load:
     call drv_check              ; the header, against the image that arrived
     jc .badfree
 
+    mov byte [bx+DRVR_ERR], DRVE_OK ; the previous attempt's code is cleared
+                                ; BEFORE the attach and not after it, because
+                                ; drv_attach may BANK one of its own off the
+                                ; DRVV_READY call (DRVE_TWICE) - stamped
+                                ; afterwards, this line wiped it and the row
+                                ; read 'Loaded' about a driver that had just
+                                ; reported a bug. Every earlier failure path
+                                ; returns before here with its own code, and
+                                ; .nohwal below still overwrites this one
     call drv_attach             ; the far call into the driver itself
     jc .nohwal                  ; ...which may say WHY in AL (SPEC.md 51.2)
-
-    mov byte [bx+DRVR_ERR], DRVE_OK
     clc
     jmp short .out
 
@@ -1409,9 +1434,19 @@ drv_attach:
     call drv_call               ; driver so (SPEC.md 51.2.2). This is where a
                                 ; disk driver re-mounts what its settings say
                                 ; it had mounted last time
-    clc                         ; A refusal is not a failed attach: the driver
-                                ; is up at whatever tier it could reach, and
-                                ; the Sound page shows which
+    jnc .rdy                    ; ...and if it complained, BANK WHAT IT SAID.
+    mov [bx+DRVR_ERR], al       ; This answer used to be dropped on the floor,
+                                ; which is fine for "I could not re-mount" and
+                                ; useless for DRVE_TWICE: a driver reporting
+                                ; that it was attached twice would have been
+                                ; told nobody, and the row would read 'Loaded'
+                                ; because it IS loaded. drv_status prefers a
+                                ; reported reason over 'Loaded' now, so the
+                                ; sentence arrives beside the driver's name
+.rdy:
+    clc                         ; A refusal is STILL not a failed attach: the
+                                ; driver is up at whatever tier it could reach,
+                                ; and the Sound page shows which
 .out:
     pop es
     pop bp
@@ -1671,11 +1706,30 @@ drv_release:
                                 ; longer, and [cp_sel] must not name it
                                 ; (SPEC.md 31.9)
 .norow:
+    cmp byte [bx+DRVR_CLASS], DRVC_DISK
+    jne .novol                  ; A VOLUME BELONGS TO THE DISK CLASS, and this
+                                ; test is what says so. dsk_vol_drop_drv drops
+                                ; EVERY driver-backed row - it has no argument
+                                ; and wants none, because every kind-1 volume
+                                ; belongs to the one published DRVC_DISK
+                                ; driver (SPEC.md 51.2.1, dsk_vtab's DV_PAD) -
+                                ; so unqualified it was correct for the disk
+                                ; driver and pure damage for any other. On a
+                                ; machine with a sound card AND a hard disk,
+                                ; unticking SOUND in the Drivers page unmounted
+                                ; every hard-disk partition: the zones went off
+                                ; the desktop, C:'s FAT window was freed, and
+                                ; the disk driver stayed loaded and published
+                                ; the whole time, so nothing on screen pointed
+                                ; anywhere near the cause. The sibling of the
+                                ; bug 51.2.1's per-class publication fixed, in
+                                ; the one place that was still class-blind
     call dsk_vol_drop_drv       ; every volume this driver registered goes
                                 ; BEFORE its claims do (SPEC.md 51.8): a
                                 ; mounted volume whose transport has been
                                 ; freed is a read into whatever claims that
                                 ; memory next
+.novol:
     mov word [bx+DRVR_SEG], 0   ; ...and drv_call is disarmed the same way
     mov word [bx+DRVR_KB], 0
     push bx                     ; anything the DRIVER itself claimed is owned

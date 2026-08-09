@@ -11,10 +11,13 @@ re-deriving it, and so a decision that was right in one round is re-opened for
 the right reason in the next rather than for a hunch.
 
 **Read §5 before picking up any of the open reports and §6 before measuring
-anything.** Between them they carry eight wrong diagnoses that each survived a
-casual look, and six of the eight were failures of the *harness* rather than
+anything.** Between them they carry ten wrong diagnoses that each survived a
+casual look, and eight of the ten were failures of the *harness* rather than
 of the code — including one, §6.7, in the tool written to prevent exactly that
-class of mistake, and one, §6.8, that reported a 25% win as no change at all.
+class of mistake; one, §6.8, that reported a 25% win as no change at all; one,
+§6.9, that invented a defect out of nothing and kept it on the books for three
+rounds; and one, §6.10, that condemned a correct change on evidence the
+*unchanged* build produced just as loudly.
 
 | | |
 |---|---|
@@ -23,7 +26,7 @@ class of mistake, and one, §6.8, that reported a 25% win as no change at all.
 | §3 | deliberately rejected, with the reason |
 | §4 | what shipped, and where each piece lives |
 | §5 | open field reports, with the diagnosis so far |
-| §6 | measuring Note Pad, and the eight ways the apparatus lied |
+| §6 | measuring Note Pad, and the ten ways the apparatus lied |
 | §7 | the latency budget: one typematic repeat, and what is still over it |
 
 ---
@@ -364,11 +367,8 @@ layout walk reads every character of every row, and ArtfulType's `at_getb`
 left of a keystroke is the WALK. §1's row index and SPEC.md §27.7.9 are the
 structure to change; the document is not.
 
-Still open here: **the middle of a note is not the front and has not been
-measured.** The move is shorter (only the bytes after the caret) but the
-layout walk is seeded differently, and §27.3's visual break is in play. Drive
-it with `tools/notepad/lab.py trace` after scrolling in, and read §6.6 before
-believing the first number.
+**The middle of a note has now been measured, and it was a different bug —
+FIXED (SPEC.md §27.4.2).** See §5.6.
 
 ### 5.3 Bringing Note Pad to the front pauses ~half a second — MEASURED, and it is not a bug
 
@@ -420,60 +420,69 @@ looked identical to the feature being absent, on every screen and in every
 timing. And **the arithmetic was visible in the claim table the whole time**;
 what stopped anyone reading it is §6.7 below.
 
-### 5.2.1 A short run of ArrowDowns leaves 66 glyph cells stale
+### 5.2.1 The 66 stale cells did not exist — RESOLVED, it was the harness
 
-**Found while pixel-verifying §27.13, and it PREDATES all of this work** — the
-A/B is what says so, and it is the reason this is a report rather than a
-regression. Open README.TXT, press Down 24 times, then force a full repaint by
-covering the window and raising it: **705 content pixels change**, about
-eleven glyph cells. Every later state in the same session is pixel-identical.
+**`tools/notepad/pixcheck.py` was decoding the framebuffer wrongly, and had
+been since it was written.** The debug server sends the rendered framebuffer
+as **hex**; the tool called `base64.b64decode` on it. Every hex character is
+also a valid base64 character, so the decode never failed — it silently
+returned **4.5 bytes per pixel of nonsense instead of 3**, deterministically.
 
-Both builds show it, in the same state (`top` = 9, `cur` = 482), at the same
-705 pixels — the pre-index build and the post-index one alike. The index build
-is strictly better either side of it: the baseline diverges again on the next
-check (3,422 pixels) where the index build is 0.
+Deterministic is why it survived: identical screens still decoded identically,
+so "0 differing bytes" was honest and every A/B that compared two builds was
+honest. What was never meaningful was any *magnitude* — the byte counts, the
+bounding boxes, the "66 glyph cells", the per-row attribution, the "50%
+dither" this entry described. All of it was structure in the garbage.
 
-What is special about the first sequence is that §27.7.3's background height
-count is still running through it, so the suspicion is an interleaving between
-the worker's chunk and the redraw's signatures rather than anything about
-seeding. **Ruled out:** it is not the row index (it predates it), and it is
-not the caret or a toast (an idle screen sampled twice is 0 differing pixels,
-so the instrument is not manufacturing it).
+With `m.fbuf()` — the one decoder in the tree, and what `shot --rendered`
+already used — the check reads **0 differing bytes: incremental == full
+repaint**. The defect this entry has described for three rounds is not there.
 
-`tools/notepad` + the crop-to-content diff in this entry reproduces it in one
-run; that harness is the thing to start from.
+**What IS there is 227 pixels on row 0, at columns 168..299** — exactly the
+rectangle of the `Loaded README.TXT` toast — in a capture taken shortly after
+opening and compared against a repaint taken later. `[np_msg]` reads **0**
+throughout, and the strip does not change over **720 frames of guest time with
+no input at all**, so the pixels outlive the state that names them.
 
-**It is bigger than eleven cells and it needs no scroll at all.** The
-reproduction now is three commands from a cold boot and it is deterministic to
-the byte:
+That is one of two things and this round did not settle which: a toast that is
+*meant* to stay until the user does something (in which case the residue is
+the measurement comparing "toast up" with "toast gone", and there is no defect
+at all), or a retired toast whose pixels nothing erases. `np_onkey`'s
+`.edited` clearing `[np_msg]` suggests the first. Either way it is 34 cells in
+one strip, not a redraw-path defect, and nothing else in the content differs.
 
-```sh
-python3 tools/notepad/lab.py boot
-python3 tools/notepad/lab.py press ArrowDown 6      # top stays 0 throughout
-python3 tools/notepad/pixcheck.py
-```
+**SETTLED, and it was the second — see §8.** `np_toast` cleared `[np_msg]`
+*as it drew*, so the toast was on the glass with nothing left to put it back
+and the repaint legitimately did not reproduce it. The toast is the kernel's
+now (SPEC.md §59) and is in the menu bar rather than in anybody's content;
+this check reads **0**.
 
-**2,743 bytes = 686 pixels = 66 glyph cells**, bounding box x 56..299 (the
-full content width) and y 51..121 — nine rows of the sixteen, and the caret
-never left the view. Byte-for-byte identical on two different builds of the
-module, which is what says it is the code under both and not either change.
+**The keys were innocent and so was the height count**, both established
+before the decode bug was found and both still true: 6 `ArrowDown`s from a
+repaired screen give **0**, and stopping `np_hchunk` outright changes nothing.
 
-Three things that narrows: the view never scrolled, so `np_scrollpaint`,
-`[np_ptop]` and §27.7.2's blit are all out; six `ArrowDown`s is fewer than the
-24 in the paragraph above, so it is not a long sequence accumulating; and it
-is the full width of nine rows rather than the tail of one, so it is whole
-rows not being drawn rather than a run stopping short. §27.7.3's chunked
-height count is still the standing suspicion — `drows` reads 532 of 781 while
-this is happening — and the next step is to hold the worker off (breakpoint
-`np_hchunk` and never resume it) and see whether the mismatch survives.
+**And the trap that stopped this check being able to FAIL is fixed rather than
+merely known — `pixcheck.py --self-test` is how you check it stayed fixed.**
+The decoder above made every magnitude meaningless; this one made the
+comparison itself a tautology, and the two are independent. SPEC.md §11.96's
+raise cache can serve the "forced full repaint" *without calling `W_PAINT` at
+all*, so the reference state becomes a byte copy of the capture it is compared
+against and agrees with itself on any build. The dependency is gone at both
+ends:
+SPEC.md §11.96.2 makes `wm_su_ck` test `WF_SAVEU`, so clearing the flag
+defeats a cache that has *already* been banked and not only one that has not
+been taken yet; and the self-test proves the two properties the check rests on
+rather than assuming them — leg 1 leaves the cache armed and requires the run
+to come back `INVALID` (so a tautological pass is *reachable and caught*), leg
+2 arms the cache and clears the flag afterwards and requires `np_paint` to run
+anyway. Verified by breaking it: with `wm_su_ck`'s `jz` NOPped in the running
+guest, leg 2 fails with exit 5 and names the missing kernel test.
 
-**The instrument had to be repaired before any of this meant anything** — see
-the note at the top of `pixcheck.py`. Its "forced full repaint" stopped being
-forced the moment SPEC.md §50.6.1's fix brought §11.96's raise cache to life,
-because a raise then restores the banked pixels instead of calling `W_PAINT`
-and the check compares a copy against its own original. It clears `WF_SAVEU`
-for the round trip now, and it puts a breakpoint on `np_paint` and reports
-INVALID rather than a comforting zero if the repaint did not happen.
+A number from this file is worth what its control is worth. That is the whole
+of what SPEC.md §11.96.2 cost to learn: the raise cache shipped a window
+drawing a **solid black rectangle** past its own right edge, and the check that
+was supposed to see it reported success, because it counted `W_PAINT` calls
+and a raise that draws garbage makes exactly as many as one that does not.
 
 ### 5.3.1 `[np_rowsn]` is not capped to the array it indexes
 
@@ -624,9 +633,105 @@ tightening of the old one: every optimisation so far has made the *walk*
 shorter, and this one is about not walking. The wrap question is the only
 thing standing in front of it, and it is answerable from the row buffer.
 
+**BUILT — SPEC.md §27.14, and it measured 8.8 ms.** The two things that were
+not obvious from here: the row signature is a rolling `rol 1, add` with the
+caret folded in at its own position, so with the caret at the end of the row it
+is **invertible in four operations** and `np_sig` can be patched rather than
+walked (without that the fast path wins once and pays for it on the next
+keystroke); and the reconcile needed **no new mechanism at all** — `[np_sowed]`
+already means "this window owes a `np_redraw`" and the worker already spends it
+behind the `NP_IDLE` gate, so the deferred wrap rides the same settle as
+§27.7.3's height count.
+
+### 5.6 Typing in the middle of a long unbroken run — FIXED (SPEC.md §27.4.2)
+
+Reported from the field as *"typing into the middle of a long string is
+extremely slow"*, with the reporter's own diagnosis in the note they sent:
+**"typing at the end of a run is not [fine] so we're looking back
+somewhere."** That was right, and it named the routine.
+
+The note is the case, so it is worth stating exactly: **709 bytes with no
+newlines in it at all** — 249 `a`, a `;`, a sentence of prose, then ~400 more
+`a`. At `np_rcols` = 29 that first run is one word spanning nine rows.
+
+`np_seedck` backs up while a row begins mid-word (§27.4), because §27.11's
+word wrap decides the break in FRONT of a row by the length of the word
+behind it. Inside one 249-character word **every** row begins mid-word, so the
+back-up ran from the caret's row to row 0 and seeded the walk at index 0 — and
+pass 1 then laid out the whole view from the top of the note, twice per
+keystroke. Measured with breakpoints: **nine** `np_seedck.back` iterations and
+17 row transitions in pass 1.
+
+The licence to stop was already in `np_wordfit`: its `.p2l` answers *"longer
+than a row: the cell rule owns it"* and returns CF = 0 — **no break decision
+is made in front of such a word at all**, so there is nothing behind the row
+to redecide. `np_cellrun` is that test and §27.4.2 is the rule, including why
+the margin is `np_rcols + 2` and not `+ 1`.
+
+Measured on a cycle-accurate 4.77MHz 8088 (MartyPC, `os8088_5150_cga`, the
+period 10/27/82 BIOS), caret just after the `;` on row 8 of a 16-row view,
+keystrokes paced as a held key:
+
+| | before | after |
+|---|---|---|
+| first keystroke (enters the break) | 306 ms | 117 ms |
+| **steady, held key** | **325 ms** | **23 ms** |
+| caret deep inside the run (index 150) | — | 190 ms then **16 ms** |
+| at the front of the note, for comparison | 15.5 ms | 15.5 ms |
+
+**The break was never engaging, and that is the whole 325 ms.** With the seed
+at index 0 the caret sat at row 8 and pass 1 reported `dr0 = 8, dr1 = 9` — two
+dirty rows, 29 cells, under `NP_BRK_CELLS` = 60 — so `np_brktry` refused and
+every keystroke paid a full reflow. Correctly seeded, the break engages on the
+second keystroke and *stays up*, which is what the reporter saw at the front
+of the note and not in the middle: *"it displaces and then is fast."*
+
+**No regression on ordinary prose, by construction rather than by timing.**
+The rule needs `np_rcols + 2` consecutive non-space characters; README.TXT's
+longest unbroken run is **28**, so at 29 columns `np_cellrun` can never accept
+there and the path is identical. Confirmed anyway: `ArrowDown` pass 1
+10.0–19.7 ms and totals 75–127 ms, against §7's documented 17–27 and 103–160.
+
+Verified for pixels, not just for speed, because a bad seed draws the wrong
+text and no timing can see it: `pixcheck` against a forced full repaint reads
+**0 differing bytes of 93,696** on the reported note and on README.TXT, and
+0 on an adversarial note of words 28/29/30/31/32/33/40/60/90 characters long
+at four carets including backspaces inside threshold-length words. Read §6.10
+first — three of those checks reported large mismatches on *both* builds
+before the apparatus was fixed.
+
+Cost: **+43 bytes** of `notepad.bin`. No kernel file changed.
+
+**Reproducing it needs a note with no newlines, and `make npbench` builds one
+now.** README.TXT cannot show this and no disk in the tree could, which is
+why the report sat unmeasured for a round. `build/nprun360.img` (and the
+1.44MB `nprun.img`) carries **RUN.TXT** — 709 bytes, no newlines at all, one
+run of 249 characters, a `;`, a sentence of prose, then a long tail. It
+carries no README.TXT on purpose, so RUN.TXT sits at the same row ordinal and
+`drive.open_readme`'s fixed coordinates drive both disks.
+
+```sh
+make npbench
+python3 tools/notepad/lab.py --len 709 boot --image build/nprun360.img
+```
+
+**Two carets, and they answer different halves — take the first one.**
+
+- **Inside the run** (`Down`×5, `Right`×5, then hold a key): 439 ms to enter,
+  972 ms on the second keystroke as the break takes hold, then **17–18 ms**
+  steady with `bmode = 1`. This is the whole report in one place — the seed,
+  the break engaging, and the break *staying* engaged.
+- **Just after the `;`** (`Down`×8, `Right`×18): **110–156 ms**, down from the
+  field note's 325, but the break does *not* engage here and on the field's
+  own note it did. That is not a difference in the fix but in the prose after
+  the semicolon: word wrap absorbs a one-character shift inside the row when
+  the following words still fit, so only the caret's row is dirty (`dr1 = 8`),
+  29 cells, under `NP_BRK_CELLS` = 60. Whether the break engages at that caret
+  is a property of the sentence, not of the seeding.
+
 ---
 
-## 6. Measuring Note Pad, and the eight ways the apparatus lied
+## 6. Measuring Note Pad, and the ten ways the apparatus lied
 
 Every one of these produced a confident wrong answer that looked right.
 PERFORMANCE.md Part 4's rule — the apparatus is the thing most likely to be
@@ -769,6 +874,28 @@ mistake as §6.1's mismatched waits: the two halves of the run were not the same
 experiment. One counter across every press, filled and measured alike, fixed
 it — 53.5 ms → 37–40 ms, immediately.
 
+### 6.9 A decode that cannot fail is worse than one that can
+
+`pixcheck.py` read the rendered framebuffer with `base64.b64decode`. The
+payload is **hex**. Because every hex character is a legal base64 character
+the decode raised nothing — it returned 4.5 bytes per pixel instead of 3, and
+kept doing so for three rounds.
+
+**It was deterministic, and that is what made it dangerous.** Identical
+screens decoded identically, so every "0 differing bytes" was true and every
+two-build A/B was true; the tool was right about *whether* two screens differ
+and wrong about *everything else*. That is a much harder failure to notice
+than one that throws, because the results it gives are internally consistent —
+it produced stable byte counts, stable bounding boxes, a reproducible cell
+count and even a plausible-looking "dither", all of it structure in noise.
+docs/NOTEPAD-NOTES.md §5.2.1 was that noise, and it survived because nobody
+asked the payload what format it was in.
+
+The tell was available the whole time and cost one call to find:
+`len(data) / (w*h)` is **3.000** decoded as hex and **4.500** decoded as
+base64, and 4.5 bytes per pixel is not a format. **Use `m.fbuf()`** — the
+tree has one decoder and `shot --rendered` was already using it.
+
 And one that is not the apparatus but cost a whole attempt: **a fix must be
 measured against the symptom it claims to fix.** §27.7.7 is correct, targets a
 real unbounded walk, and does nothing at all for the report it was written for
@@ -776,6 +903,46 @@ real unbounded walk, and does nothing at all for the report it was written for
 §27.7.3 was lost the same way, to a diagnosis (`[np_lastrow]` clobbered at
 `notepad.asm:1050`) that named a line inside a routine which never runs on
 that path.
+
+### 6.10 `[np_bmode]` going to 0 is not the screen being finished
+
+A settle that polls the flag and then captures gets a **half-drawn screen**.
+`np_reconcile` clears `[np_bmode]` near its top and then fills a band and
+letters it, so between the flag moving and the last glyph landing there are
+several rows of content that are neither the break's fiction nor the note.
+Captured there, a `pixcheck` round trip reports 13,000–19,000 differing bytes
+and reads exactly like a seed landing in the wrong place.
+
+It cost a wrong diagnosis of §27.4.2 before the control was run: **the
+pre-change build failed the same four cases identically**, which is what said
+the apparatus was at fault rather than the change. The fix is to wait for the
+flag and *then* for **two identical consecutive frames** — the only statement
+about the screen that a poll of a state byte cannot make. `drive.wait_until`
+is a condition rather than a sleep for this reason; this is the same rule
+applied to the pixels instead of to the state.
+
+Two more in the same family, both of which produced a confident wrong number
+in this round and both of which the bbox identified in one line. **Both were
+found independently on the branch this work was done on, and §8 has since
+closed both at the source** — they are kept here because the *reasoning* is
+what a future measurement needs, not because either symptom is still live:
+
+- **A freshly loaded note had a toast drawn over it**, and a forced repaint
+  then differed from the screen by a toast-sized rectangle — ~3,700 pixels,
+  which is not a layout bug. §5.2.1 chased the same residue and §8 explains
+  why it was real: `np_toast` cleared `[np_msg]` as it drew, so the pixels
+  were on the glass with nothing left to put them back. The toast is the
+  kernel's now (SPEC.md §59) and sits in the menu bar, in nobody's content,
+  so this cannot recur — `np_toast` and `[np_msg]` no longer exist in this
+  module. **The general rule survives the specific fix**: anything drawn over
+  the content that a repaint will not reproduce is a difference the
+  instrument will report and the code did not cause.
+- **The mouse pointer sits inside the content box** — 108 bytes, 36 pixels, a
+  7×11 bbox at `drive.README`'s (175,100), which is an 8×12 arrow. Arrived at
+  twice, from two directions, in the same week: §8.1 is the other, and
+  `pixcheck` parks the pointer outside the content box before its first
+  capture now. Two people reading the same bbox and reaching the same answer
+  is the argument for always printing it.
 
 ---
 
@@ -860,3 +1027,53 @@ Honest arithmetic, on the 16-row window and the ~1 ms glyph cell:
   reachable by making the existing path faster.
 
 So two of the three are in range and the third needs a different mechanism.
+
+---
+
+## 8. The toast moved to the kernel, and the 227 pixels went with it
+
+§5.2.1's residue is closed. `pixcheck` reported **227 differing pixels on row
+0 of the content**, at the toast's rectangle, with `[np_msg]` = 0 and
+unchanged over 720 frames. It was the toast, and the divergence was real
+rather than an artefact: `np_toast` **cleared `[np_msg]` as it drew** — the
+fix for a drag re-showing `Loaded README.TXT` — so the toast was on the glass
+with nothing left to put it back, and a forced full repaint legitimately did
+not reproduce it.
+
+What reconciled the two paths was `np_sigsame`'s fifth and sixth tests
+(`[np_msg]` and its generation), which threw the fast path away and repainted
+the **whole content** on the next keystroke. So every save and every load was
+followed by one full `np_paint` — the exact operation the rest of §7's budget
+work exists to avoid — and it was invisible because it happened one keystroke
+after the thing that caused it.
+
+The toast is SPEC.md §59's now: an inverse-video strip at the right end of the
+menu bar, `OSAPI_TOAST` at slot 0x0380. What went with it from this module:
+`np_toast` (91 lines), `[np_msg]`, `[np_msgn]`, `[np_smsg]`, `[np_smsgn]`,
+the four toast-box words, `np_sigsame`'s two tests, `np_sigmark`'s two
+stores, the `mov word [np_msg], 0` on the hot keystroke path, and **two
+"a toast sits over the text" gates** — one in `np_scrollpaint`, which refused
+the blit outright, and one in the band path. Both were correct and neither is
+needed by a message that is in nobody's content. **−239 bytes** of package.
+
+`np_saymsg` is the whole of what is left, and it is now the single point every
+message goes through — `np_setmsg`, `np_errmsg` and the two literal writers
+were all routed into it rather than storing a word each.
+
+**Measured**: `pixcheck` 227 → **0**. The strip's own behaviour was verified
+separately on a cycle-accurate 5150/CGA: it goes up, and when it expires the
+menu bar comes back **0 differing bytes** against the capture taken before it
+appeared; and a differing span that CROSSES the strip's left edge — the
+two-run emit, which is the only genuinely new drawing logic — is **0
+differing bytes** against a forced full bar redraw.
+
+### 8.1 The instrument moved the mouse between its two captures
+
+`pixcheck` reported 108 bytes in a 7x11 box at `(175, 100)` after the
+migration, which is `drive.README` — the double-click that opens the note
+leaves the pointer there, and the routine then moves it to the title bar to
+force the repaint. **36 pixels of mouse arrow**, read as a real mismatch and
+costing a diagnosis. It is exactly the misattribution `tools/notepad/README.md`
+warns about and PERFORMANCE.md Part 3.1's third trap names, arriving in the
+instrument that carries the warning. It parks the pointer outside the content
+box before the first capture now.

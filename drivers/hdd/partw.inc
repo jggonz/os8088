@@ -1,229 +1,16 @@
 ; =============================================================================
-; os8088 - HDD.DRV / part.inc
+; os8088 - HDD.DRV / partw.inc
 ;
-; The partition table (SPEC.md 52.2) - the on-disk shape, the arithmetic, and
-; the allocator that decides what a slot's extent is. The WINDOW is tool.inc's,
-; because partitioning and formatting are one operation to the user and one
-; window in the driver. The KERNEL never sees an MBR: a driver-backed volume's
-; LBAs are volume-relative and the base lives in hd_vols, so everything about
-; partitioning is here.
+; The partition table's WRITE half: the allocator that decides where a slot's
+; extent falls (SPEC.md 52.2.1), the CHS fields an entry carries, and the
+; commit itself. part.inc keeps the read half - the on-disk shape, the entry
+; accessors and the load - because MOUNTING walks the table and mounting is
+; the resident driver's job.
 ;
-; The on-disk shape, at LBA 0:
-;
-;   0..445    boot code - boot/mbr.asm, incbin'ed below: it chain-loads the
-;             active partition's own boot sector (SPEC.md 52.10.1). It used to
-;             be a stub that halted with a message, because os8088 could not
-;             boot from a hard disk at all (SPEC.md 52.9, retired)
-;   446+16n   four entries:
-;               +0  status      80h active / 00h
-;               +1  start head
-;               +2  start sector in bits 0..5, cylinder bits 8..9 in 6..7
-;               +3  start cylinder bits 0..7
-;               +4  type        01h FAT12, 04h FAT16 <32MB, 06h FAT16
-;               +5  end head / sector / cylinder, the same encoding
-;               +8  start LBA, dword
-;               +12 sector count, dword
-;   510..511  55 AA
-;
-; Two era conventions are obeyed because DOS reads what we write: the first
-; partition starts at LBA = spt (head 1, sector 1, cylinder 0), and every
-; partition ends on a cylinder boundary. A partition is capped at 65,535
-; sectors by the kernel's own BPB rule 8 - which is also the DOS 3.3 limit -
-; so four primaries is the whole offering and an extended chain is not
-; implemented.
+; The line between the two files is the line between the two IMAGES: nothing
+; in here runs unless a human has opened the disk tool or the installer, so
+; all of it belongs to HDDTOOL.DRV and none of it need be resident.
 ; =============================================================================
-
-HP_TBL       equ 446            ; where the four entries start
-HP_ESZ       equ 16
-HP_STATUS    equ 0
-HP_SHEAD     equ 1
-HP_SSEC      equ 2
-HP_SCYL      equ 3
-HP_TYPE      equ 4
-HP_EHEAD     equ 5
-HP_ESEC      equ 6
-HP_ECYL      equ 7
-HP_LBA       equ 8
-HP_SECS      equ 12
-
-HPT_NONE     equ 0x00
-HPT_FAT12    equ 0x01
-HPT_FAT16S   equ 0x04           ; FAT16 under 32MB - what DOS 3.3 wrote, and
-                                ; every partition this driver makes is one
-HPT_FAT16B   equ 0x06           ; FAT16 at or over 32MB, and
-HPT_FAT16L   equ 0x0E           ; ...the LBA-addressed flavour of it. Both are
-                                ; MOUNTABLE even though this driver never
-                                ; writes one: another machine's FDISK did, and
-                                ; the volume inside is the same FAT16
-HP_MAXSEC    equ 65535          ; the kernel's volume ceiling (SPEC.md 18.7)
-
-; -----------------------------------------------------------------------------
-; hd_part_load - read the selected device's partition table into hd_mbr
-; in:  DI = the device row
-; out: CF = 0 and hd_mbr holds a table with a valid signature;
-;      CF = 1 = no usable table, and hd_mbr holds a BLANK one instead.
-;      [hd_mbrok] says WHICH, and callers that write must look:
-;        HMB_BAD  (0) the read FAILED - what is on the disk is unknown
-;        HMB_OK   (1) it came off the disk with a signature
-;        HMB_NONE (2) it read fine and nobody has partitioned it
-; clobbers: flags
-;
-; A disk with no signature is not an error here - it is a disk nobody has
-; partitioned - so the failure path leaves a table the user can edit rather
-; than nothing at all. What it must never do is leave the PREVIOUS device's
-; table in the buffer, which is why the blank happens before the read.
-;
-; HMB_BAD AND HMB_NONE USED TO BE THE SAME ANSWER, and that was a way to lose
-; a disk: a marginal LBA 0 on a drive with three real partitions read as "not
-; partitioned", every slot showed free, and a free slot skipped the confirm -
-; so one click wrote this fabricated table over the live one and formatted
-; through the data behind it. A blank table is a fine thing to EDIT and never
-; a fine thing to COMMIT when we could not read what it replaces.
-; -----------------------------------------------------------------------------
-hd_part_load:
-    push ax
-    push bx
-    push cx
-    push dx
-    push es
-    call hd_mbr_blank
-    push ds
-    pop es
-    mov bx, hd_mbr
-    xor ax, ax
-    xor dx, dx
-    mov cx, 1
-    mov byte [hd_rawop], 0      ; read
-    call hd_raw
-    jc .bad                     ; the READ failed: leave HMB_BAD
-    cmp word [hd_mbr+510], 0xAA55
-    jne .nosig
-    mov byte [hd_mbrok], HMB_OK
-    pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.nosig:                         ; read fine, nobody has partitioned it - the
-    call hd_mbr_blank           ; blank IS the right answer, and committing it
-    mov byte [hd_mbrok], HMB_NONE   ; destroys nothing
-    jmp short .out
-.bad:
-    call hd_mbr_blank           ; leaves HMB_BAD: this table is a fabrication
-.out:
-    pop es
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_mbr_blank - a table with nothing in it (module internal)
-; in:  nothing
-; out: hd_mbr = the boot stub, four empty entries and the signature
-; clobbers: flags
-; -----------------------------------------------------------------------------
-hd_mbr_blank:
-    push ax
-    push cx
-    push si
-    push di
-    push es
-    push ds
-    pop es
-    cld
-    mov di, hd_mbr
-    mov cx, 256
-    xor ax, ax
-    rep stosw
-    mov si, hd_bootstub
-    mov di, hd_mbr
-    mov cx, hd_bootstub_end - hd_bootstub
-    rep movsb
-    mov word [hd_mbr+510], 0xAA55
-    mov byte [hd_mbrok], 0
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_part_ent - one partition entry's address
-; in:  AL = slot (0..3)
-; out: SI = the entry
-; clobbers: SI (the output), flags
-; -----------------------------------------------------------------------------
-hd_part_ent:
-    push ax
-    push dx
-    mov ah, HP_ESZ
-    mul ah
-    add ax, hd_mbr + HP_TBL
-    mov si, ax
-    pop dx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_part_used - is a slot in use?
-; in:  SI = the entry
-; out: CF = 0 in use (a known type and a non-zero length)
-; clobbers: flags
-; -----------------------------------------------------------------------------
-hd_part_used:
-    cmp byte [si+HP_TYPE], HPT_NONE
-    je .no
-    cmp word [si+HP_SECS], 0
-    jne .yes
-    cmp word [si+HP_SECS+2], 0
-    jne .yes
-.no:
-    stc
-    ret
-.yes:
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_part_isfat - is this slot a FAT volume we could mount?
-; in:  SI = the entry
-; out: CF = 0 yes; CF = 1 = free, or a type that is not FAT
-; clobbers: flags
-;
-; The TYPE byte, and the type byte only: whether the volume inside is really
-; a FAT one is the mount's question, and `osapi_vol_mount` answering CF=1 is
-; how a partition that lies gets dropped again (SPEC.md 52.4). Extended
-; (05h/0Fh) and FAT32 (0Bh/0Ch) are deliberately not here - the first is a
-; chain this driver does not walk and the second is a format this kernel
-; does not read.
-; -----------------------------------------------------------------------------
-hd_part_isfat:
-    push ax
-    call hd_part_used
-    jc .no
-    mov al, [si+HP_TYPE]
-    cmp al, HPT_FAT12
-    je .yes
-    cmp al, HPT_FAT16S
-    je .yes
-    cmp al, HPT_FAT16B
-    je .yes
-    cmp al, HPT_FAT16L
-    je .yes
-.no:
-    pop ax
-    stc
-    ret
-.yes:
-    pop ax
-    clc
-    ret
 
 ; -----------------------------------------------------------------------------
 ; hd_part_mb - one entry's size in whole MB
@@ -690,6 +477,7 @@ hd_part_write:
     push es
     push ds
     pop es
+    call hd_mbr_stamp
     mov bx, hd_mbr
     xor ax, ax
     xor dx, dx
@@ -703,9 +491,58 @@ hd_part_write:
     pop ax
     ret
 
-; --- strings the disk tool and the page share -------------------------------
-hd_s_mb:     db 'M', 0
-hd_s_close:  db 'Close', 0
+; -----------------------------------------------------------------------------
+; hd_mbr_stamp - our chain-loader in front of the table, when those bytes are
+;                ours to write (module internal)
+; in:  nothing
+; out: nothing (all registers preserved)
+; clobbers: flags
+;
+; The 446 bytes in front of a partition table are the MBR's boot code, and
+; whose they are depends entirely on where the table came from - which is what
+; [hd_mbrok] records (part.inc):
+;
+;   HMB_OK    it came off the disk with a signature, so those bytes are THE
+;             DISK'S OWN BOOT LOADER. Leave them alone. Writing over them is
+;             how a partition edit silently unbootables somebody else's DOS,
+;             and this driver is expected to share a disk.
+;   HMB_NONE  it read fine and nobody has partitioned it: zeros, ours to fill.
+;   HMB_BAD   the read failed, so hd_mbr is a fabrication - also zeros. The
+;             tool refuses to COMMIT a fabrication, so in practice this arm is
+;             not reached from a write; it is here because the test is about
+;             what is in the buffer, and on that question BAD and NONE agree.
+;
+; This is the other half of hd_mbr_blank not stamping any more. It reproduces
+; the old behaviour exactly - the stub used to be laid down by the blank and
+; then overwritten by a successful read, so it survived to the write on
+; precisely the two states tested here - and it puts the chain-loader in the
+; image that only exists while somebody is partitioning.
+;
+; hd_inst_mbr (inst.inc) stamps unconditionally and deliberately: making a
+; partition bootable IS overwriting whatever loader was there (SPEC.md
+; 52.10.4). It runs before this and the two agree byte for byte, so the extra
+; copy this may then make is the same 446 bytes twice.
+; -----------------------------------------------------------------------------
+hd_mbr_stamp:
+    cmp byte [hd_mbrok], HMB_OK
+    je .out
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov si, hd_bootstub
+    mov di, hd_mbr
+    mov cx, hd_bootstub_end - hd_bootstub
+    rep movsb
+    pop es
+    pop di
+    pop si
+    pop cx
+.out:
+    ret
 
 ; The MBR's boot code (SPEC.md 52.10.1) - a real chain-loader now: it finds
 ; the active entry, reads that partition's first sector to 0000:7C00 and jumps
@@ -722,6 +559,7 @@ hd_s_close:  db 'Close', 0
 ; checked against what actually arrived. A short blob here would leave the
 ; tail of somebody else's boot code in front of our table; a long one would
 ; eat the table itself.
+; -----------------------------------------------------------------------------
 hd_bootstub:
     incbin "mbr.bin"
 hd_bootstub_end:
@@ -745,3 +583,14 @@ hd_bootvbr_end:
 %if hd_bootvbr_end - hd_bootvbr != 512
 %error "build/boothd.bin is not 512 bytes - see boot/boothd.asm"
 %endif
+
+; --- state this module owns (moved out of hdd.asm's data block) ---
+; -----------------------------------------------------------------------------
+hd_xslot:    db 0               ; hd_slot_extent's scan: the slot being placed,
+hd_xstart:   dd 0               ; the candidate start,
+hd_xlimit:   dd 0               ; how far it may run,
+hd_xend:     dd 0               ; one entry's end,
+hd_xbest:    dd 0               ; and the largest hole the walk has seen
+hd_xblen:    dd 0               ; (52.2.1)
+hd_fbase:    dd 0               ; the extent a format will write: its first LBA
+hd_fsecs:    dw 0               ; ...and its length

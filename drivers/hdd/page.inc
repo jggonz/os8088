@@ -751,11 +751,13 @@ hd_page_click:
                                 ; what the Install dialog arrived doing.
 .dofmt:
     call hd_page_repaint
-    call hd_tw_open
+    mov al, HDT_FORMAT          ; the tool is a second image now, read off
+    call hd_tool_open           ; the system volume on this click (52.11)
     jmp short .done
 .doinst:                        ; Install stages nothing either, for the tool's
     call hd_page_repaint        ; reason: what it changes is a DISK, and about
-    call hd_iw_open             ; the machine's settings nothing at all
+    mov al, HDT_INSTALL         ; the machine's settings nothing at all
+    call hd_tool_open
     jmp short .done
 .refused:
     ; A greyed control explains itself (SPEC.md 47 rule 5), so the refusal
@@ -1097,84 +1099,107 @@ hd_unmount_row:
     ret
 
 ; -----------------------------------------------------------------------------
+; hd_vol_of - which kernel volume is mounted on one partition (SPEC.md 52.11)
+; in:  AL = the device index, AH = the partition slot
+; out: AL = the kernel's volume index, or 0FFh if nothing is mounted there
+; clobbers: AX (the output), flags
+;
+; hd_mount_one publishes its result by filling a row rather than by answering,
+; so somebody has to go and look; the installer used to, and this is that walk
+; moved to the side of the boundary the volume table is on.
+; -----------------------------------------------------------------------------
+hd_vol_of:
+    push bx
+    push cx
+    push dx
+    mov dx, ax                  ; DL = device, DH = slot
+    mov cx, HD_MAXVOL
+    mov bx, hd_vols
+.scan:
+    cmp byte [bx+HDV_USED], 0
+    je .next
+    mov al, [bx+HDV_DEV]
+    cmp al, dl
+    jne .next
+    mov al, [bx+HDV_PART]
+    cmp al, dh
+    jne .next
+    mov al, [bx+HDV_VOL]
+    jmp short .out
+.next:
+    add bx, HDV_SIZE
+    loop .scan
+    mov al, 0xFF
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; hd_unmount_part - drop every volume mounted on one partition (SPEC.md 52.11)
+; in:  AL = the device index, AH = the partition slot
+; out: AL = 1 if anything was unmounted, 0 if not
+; clobbers: AX (the output), flags
+;
+; The disk tool's, until the split moved the volume table out of its reach.
+; It is the right place for it either way: hd_vols is the RESIDENT's - the
+; kernel's volume indices are registered from here and given back from here -
+; so the tool naming a partition and this doing the whole job is one crossing
+; instead of a shared table.
+;
+; EVERY row and not the first, for hd_unmount's own reason: one partition is
+; one volume today, and a scan that stops early is the kind of thing that
+; stops being true quietly.
+; -----------------------------------------------------------------------------
+hd_unmount_part:
+    push bx
+    push cx
+    push dx
+    mov dx, ax                  ; DL = device, DH = slot
+    xor al, al
+    mov ah, 0xFF                ; ...and AH = the last volume index dropped,
+    push ax                     ; 0xFF = none. The answer, built on the stack
+    mov cx, HD_MAXVOL
+    mov bx, hd_vols
+.scan:
+    cmp byte [bx+HDV_USED], 0
+    je .next
+    mov al, [bx+HDV_DEV]
+    cmp al, dl
+    jne .next
+    mov al, [bx+HDV_PART]
+    cmp al, dh
+    jne .next
+    pop ax                      ; the answer FIRST, because the pop would
+    mov al, 1                   ; clobber AH, and the row is still live here:
+    mov ah, [bx+HDV_VOL]        ; SPEC.md 52.10.8 needs WHICH volume went and
+    push ax                     ; not only that one did
+    call hd_unmount_row
+.next:
+    add bx, HDV_SIZE
+    loop .scan
+    pop ax
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
 ; hd_win_close_all - hide the tool window (detach's obligation)
 ; in:  nothing
 ; out: nothing (all registers preserved)
 ; -----------------------------------------------------------------------------
 hd_win_close_all:
-    push bx
-    mov bx, [hd_twin]
-    or bx, bx
-    jz .inst
-    call OSAPI_WM_HIDE
-.inst:
-    call hd_iw_shut             ; ...and the installer's (SPEC.md 52.10.4). A
-                                ; window of ours left on screen at detach is a
-                                ; paint through freed memory: the kernel
-                                ; releases this image the moment we return
-    pop bx
-    ret
+    call hd_tool_drop           ; HDT_SHUT and then the free, in that order. A
+    ret                         ; window of the TOOL's left on screen is a paint
+                                ; through freed memory twice over - the kernel
+                                ; releases this image the moment we return, and
+                                ; we release the tool's before that
 
 ; =============================================================================
 ; Shared helpers
 ; =============================================================================
-
-; -----------------------------------------------------------------------------
-; hd_win_erase - white-fill one of our windows' CONTENT, and nothing else
-; in:  BX = the window; the gfx lock is HELD
-; out: nothing (all registers preserved)
-;
-; **The size comes from OSAPI_WM_GEOM, never from the template's own
-; constants**, and that is not caution - it is a bug this had. A window's
-; CONTENT is `W_W - 2` by `W_H - TITLE_H - 1`, and TITLE_H is EIGHTEEN; a
-; repaint that open-coded `HPW_H - 14` filled six rows past the bottom of the
-; content, straight through the window's border and its drop shadow and into
-; whatever was behind it. The kernel's primitives clip to the SCREEN and not
-; to a window (SPEC.md 5), so nothing downstream was ever going to catch it.
-;
-; The frame size is not the answer either, even with the right subtraction:
-; wm_fit clamps a template that does not fit the live screen (SPEC.md 39.7),
-; so the record - not the template - is the truth. Asking is the only thing
-; that is right on all three adapters.
-; -----------------------------------------------------------------------------
-hd_win_erase:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call OSAPI_WM_GEOM          ; CX = content width, DX = content height
-    jc .out                     ; not visible: nothing to erase
-    mov si, cx
-    mov di, dx
-    call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
-    mov bx, dx
-    mov cx, ax
-    add cx, si
-    dec cx                      ; x2 = left + width - 1
-    mov dx, bx
-    add dx, di
-    dec dx                      ; y2 = top + height - 1
-    push ax
-    push bx
-    push cx
-    push dx
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    call OSAPI_GFX_FILL
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
 
 ; -----------------------------------------------------------------------------
 ; hd_raw - one raw transfer to a DEVICE, outside any volume
@@ -1212,87 +1237,6 @@ hd_raw_op:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; hd_scat - append the NUL string at SI to DI, leaving DI past it
-; in:  SI = source, DI = destination
-; out: DI advanced to the NUL (which is not written)
-; clobbers: DI (the output), flags
-; -----------------------------------------------------------------------------
-hd_scat:
-    push ax
-    push si
-.next:
-    mov al, [si]
-    or al, al
-    jz .done
-    mov [di], al
-    inc si
-    inc di
-    jmp short .next
-.done:
-    mov [hd_lineptr], di
-    pop si
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_utoa / hd_utoa3 / hd_utoa4 - AX as decimal at DI, DI advanced
-; in:  AX = the value, DI = the destination
-; out: DI past the last digit
-; clobbers: DI (the output), flags
-;
-; The padded forms right-align a column of numbers without a second pass, and
-; a value too wide for its field simply prints wide - a geometry the user can
-; see is worth more than a column that lines up.
-; -----------------------------------------------------------------------------
-hd_utoa:
-    push cx
-    xor cx, cx
-    jmp short hd_utoa_body
-hd_utoa3:
-    push cx
-    mov cx, 3
-    jmp short hd_utoa_body
-hd_utoa4:
-    push cx
-    mov cx, 4
-hd_utoa_body:
-    push ax
-    push bx
-    push dx
-    push si
-    mov si, cx                  ; SI = the width wanted. It CANNOT stay on
-    mov bx, 10                  ; the stack: the digits go there next, and
-    xor cx, cx                  ; the pop would take the last of them
-.divide:
-    xor dx, dx
-    div bx
-    push dx                     ; the digits, least significant first
-    inc cx
-    or ax, ax
-    jnz .divide
-    cmp si, cx
-    jbe .emit
-    sub si, cx                  ; pad with leading spaces
-.pad:
-    mov byte [di], ' '
-    inc di
-    dec si
-    jnz .pad
-.emit:
-    pop dx
-    add dl, '0'
-    mov [di], dl
-    inc di
-    loop .emit
-    mov [hd_lineptr], di
-    pop si
-    pop dx
-    pop bx
-    pop ax
-    pop cx
-    ret
-
 hd_s_install: db 'Install', 0
 hd_s_bios:    db 'BIOS', 0
 hd_s_ide:     db 'IDE', 0
@@ -1318,3 +1262,5 @@ hd_s_unmounted: db 'Unmounted', 0
 hd_s_mnotab:  db 'No partition table yet', 0
 hd_s_mfull:   db 'No free volume', 0
 hd_s_mbig:    db 'Partition is over 32MB', 0
+hd_s_nosys:   db 'Need the system disk', 0
+hd_s_notool:  db 'Tool would not open', 0

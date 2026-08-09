@@ -312,18 +312,22 @@ overlays = [
 # POST never finishes - the machine sits in the ROM at CS=F000 with both
 # framebuffers dark - so the order is what makes this boot at all.
 #
-# ONE THING IT CANNOT MODEL, and it matters before you believe a result from
-# it: MartyPC's MDA decodes the WHOLE 64KB at B0000-BFFFF regardless of
-# 3BFh's page-1 bit, so B8000 is the Hercules' second page here and the two
-# cards CONTEND for it. Measured: after switching to the CGA the card is
-# correctly in Mode6HiResGraphics and drawing, and B0000 and B8000 read back
-# byte-identical - one memory wearing two addresses, with the MDA winning. So
-# the CGA's rendered output stays black on this config and the picture does
-# not actually move. A real HGC with the page bit clear (which vid_setmode
-# leaves clear, SPEC.md 39.6) decodes B0000-B7FFF only and has no such
-# conflict. Two consequences: the CGA->Hercules direction is verifiable here
-# and the Hercules->CGA direction is not, and vid_cga_alias (SPEC.md 39.11.1)
-# is written for exactly the aliasing this config exhibits.
+# IT USED TO ALIAS THE TWO CARDS TOGETHER, AND patches/02 IS WHY IT NO LONGER
+# DOES. Upstream MartyPC maps a Hercules at B0000 *and* B8000 unconditionally -
+# the mapping is built in the constructor, before any guest has written 3BFh -
+# so B8000 was the Hercules' page 1 here and the two cards contended for it.
+# `Bus::register_map` resolves an overlap by LAST WRITER WINS (it never reads
+# the `priority` field the descriptor carries), so with the CGA first the MDA
+# took B8000 and the CGA's rendered output stayed black: one memory wearing two
+# addresses, and a picture that did not move. Patch 02 narrows the Hercules to
+# page 0, which is what a real card with the page bit clear decodes and what
+# vid_setmode deliberately leaves it at (SPEC.md 39.6). Both directions of the
+# switch are verifiable now, and tests/dualcheck.py is the gate that says so.
+#
+# THE CGA IS STILL FIRST, for the POST reason above and no longer for any
+# memory-map reason: with patch 02 the order no longer decides which card
+# survives. Do not reorder it anyway - the 1982 ROM is the point of this
+# machine.
 [[machine]]
 name = "os8088_5150_both"
 type = "Ibm5150v256K"
@@ -350,3 +354,198 @@ overlays = [
     type = "MDA"
     subtype = "Hercules"
     clock_mode = "Dynamic"
+
+# ...and the machine with BOTH: a hard disk AND a sound card.
+#
+# It exists because neither of the two above can answer a question about the
+# heap. SPEC.md 18.8.1 gives every mounted volume a private FAT window out of
+# the claim heap and SPEC.md 51.3 loads a driver's image into one, so what the
+# caches cost is a function of HOW MANY VOLUMES ARE MOUNTED and how many
+# drivers attached - and on `os8088_xt_hdd` there is no sound driver to load,
+# while on `os8088_5150_sb` there are only ever the two floppies. Partition a
+# disk in three here and the machine carries five volumes and two drivers at
+# once, which is the configuration the per-volume claims were written for and
+# the only one in which they can be counted.
+#
+# It is the XT and not the 5150, because the hard disk decides: rung 0 is an
+# option ROM answering int 13h (see os8088_xt_hdd above) and the XT-IDE ROM
+# wants the 5160's ROM set. The sound half is os8088_5150_sb's verbatim - an
+# OPL2 at 388h and a DSP 2.01 at 220h, which SPEC.md 51.3.1's boot probe finds
+# and 34.5's auto-init path drives.
+#
+# Copy the VHD rather than mounting it in place, for the reason os8088_xt_hdd
+# gives: a format is a write, and a test that mutates the run tree's shipped
+# image behaves differently the second time.
+#
+#   cp build/martypc/run/media/hdds/default_xtide.vhd /tmp/scratch.vhd
+#   ./martypc_headless --machine-config-name os8088_xt_hdd_sb \
+#       --mount fd:0:media/floppies/os8088-360.img --mount hd:0:/tmp/scratch.vhd
+[[machine]]
+name = "os8088_xt_hdd_sb"
+type = "Ibm5160"
+rom_set = "glabios_xt"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.hdc]
+    bus_type = "ISA"
+    type = "XtIde"
+
+        [[machine.hdc.drive]]
+        format = "Mfm"
+        vhd = "default_xtide.vhd"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+    [[machine.sound]]
+    type = "AdLib"
+    io_base = 0x388
+
+    [[machine.sound]]
+    type = "SoundBlaster"
+    io_base = 0x220
+    irq = 7
+    dsp_version = [2, 1]
+
+[[machine]]
+name = "os8088_5150_herc_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+# ...and os8088_5150_both's GLaBIOS twin, which exists because the IBM ROM this
+# tree cannot ship is what the other one needs. Same two cards, same order, same
+# everything else - so it is the machine tests/dualcheck.py runs against by
+# default, and the one to iterate on. Standing rule for every _gla here: it
+# BOOTS FAST rather than the way the calibration machine does, so develop on it
+# and never take a PERFORMANCE.md number from it.
+[[machine]]
+name = "os8088_5150_both_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+# os8088_5150_sb at the RAM FLOOR: 128KB, which is MIN_RAM_KB (SPEC.md 2.7).
+#
+# It exists to test the CLAIM HEAP under a Sound Blaster rather than the card.
+# HEAP_SEG sits at 91.5KB, so this machine has 36.5KB of heap for everything -
+# the driver's own image, its DMA buffer, its staging pool and whatever the
+# app wants - where the 640KB machine above has 548.5KB and can never show a
+# refusal. Both of SPEC.md 34.6's claims are sized against this machine and
+# neither can be judged on the other one.
+[[machine]]
+name = "os8088_5150_sb_128k"
+type = "Ibm5150v64K"
+rom_set = "ibm5150_82_v4"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0x20000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+    [[machine.sound]]
+    type = "AdLib"
+    io_base = 0x388
+
+    [[machine.sound]]
+    type = "SoundBlaster"
+    io_base = 0x220
+    irq = 7
+    dsp_version = [2, 1]
+
+# ...and at 256KB, which is where the sound apps actually live. 128KB cannot
+# run Tracker at all (its region alone is ~20KB of a 36.5KB heap - measured:
+# "Out of memory" before the window opens), so the machine that decides
+# whether a MOD player's grants fit is this one: 164.5KB of heap for a ~20KB
+# region, a module buffer sized from mem_avail, the driver's two claims and
+# the ring on top.
+[[machine]]
+name = "os8088_5150_sb_256k"
+type = "Ibm5150v64K"
+rom_set = "ibm5150_82_v4"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0x40000
+    conventional.wait_states = 0
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "CGA"
+    clock_mode = "Dynamic"
+
+    [[machine.sound]]
+    type = "AdLib"
+    io_base = 0x388
+
+    [[machine.sound]]
+    type = "SoundBlaster"
+    io_base = 0x220
+    irq = 7
+    dsp_version = [2, 1]

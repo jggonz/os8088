@@ -684,6 +684,13 @@ hd_iw_rowtext:
     push dx
     push si
     push di
+%ifdef INSTBENCH
+    cmp byte [hd_iw_st], HII_DONE   ; SPEC.md 52.10.9: the install is over, so
+    jne .slots                      ; the slot list is answering a question
+    call hd_bn_rowtext              ; nobody has any more
+    jmp .rtout
+.slots:
+%endif
     mov di, hd_line
     mov [hd_lineptr], di
     mov si, hd_s_islot
@@ -723,6 +730,9 @@ hd_iw_rowtext:
     call hd_scat
     mov di, [hd_lineptr]
     mov byte [di], 0
+%ifdef INSTBENCH
+.rtout:
+%endif
     pop di
     pop si
     pop dx
@@ -730,6 +740,320 @@ hd_iw_rowtext:
     pop bx
     pop ax
     ret
+
+%ifdef INSTBENCH
+; =============================================================================
+; SPEC.md 52.10.9 - what an install COSTS, per phase, in the only two units
+; that survive an emulator: int 13h and sectors
+;
+; `make DISKCNT=1` builds this and the kernel's own instrument (SPEC.md 18.94)
+; together, and neither exists in a shipped driver. It is here rather than in
+; sysbench because an install cannot be driven from a package: it is the
+; driver's own Control Panel page, it erases a partition, and the phases are
+; internal to hd_inst_sys.
+;
+; THE TWO SIDES ARE COUNTED SEPARATELY AND THAT IS THE POINT. The kernel's
+; counters stop at dsk_xfer's run loop and a DVK_DRV volume leaves before it
+; (SPEC.md 52), so on an install every kernel counter is the FLOPPY - the
+; hard disk is invisible to it. hd_bn_hit is the other half, counted where the
+; command is issued, so `dev` is what the drive was asked to do and not what
+; the kernel asked the driver for: rung 0 splits at the track and the DMA
+; page, rung 1 at ATA-1's 255 (SPEC.md 52.1).
+;
+; Ticks are the 18.2 Hz BIOS counter, which is the machine's own clock and not
+; the host's - the one timing an emulator cannot flatter (PERFORMANCE.md).
+; =============================================================================
+HDB_ROW  equ 10                 ; one row: floppy calls, floppy sectors,
+HDB_FC   equ 0                  ; device calls, device sectors, ticks
+HDB_FS   equ 2
+HDB_DC   equ 4
+HDB_DS   equ 6
+HDB_TK   equ 8
+HDB_NROW equ 4                  ; fmt, sys, apps, and their total
+
+hd_bt:      times HDB_NROW * HDB_ROW db 0
+hd_bt0:     times 5 dw 0        ; ...and the bank the current phase started at
+hd_bblk:    dw 0                ; SPEC.md 18.94's block in KERNEL_SEG, or 0
+hd_bfound:  db 0                ; ...looked for once, found or not
+hd_s_bfmt:  db 'fmt', 0
+hd_s_bsys:  db 'sys', 0
+hd_s_bapp:  db 'app', 0
+hd_s_btot:  db 'TOT', 0
+hd_btab:    dw hd_s_bfmt, hd_s_bsys, hd_s_bapp, hd_s_btot
+hd_bnd_cal: dw 0                ; the DEVICE counters, fetched across the seam
+hd_bnd_sec: dw 0
+hd_bnd_rst: dw 0
+hd_bp:      dw 0                ; hd_bn_save's own cursor into hd_bbuf
+hd_bvdrv:   db 0                ; ...and the volume it has to put back
+hd_bvclus:  dw 0
+hd_s_bfile: db 'INSTBNCH.TXT', 0
+hd_s_bhdr:  db 'os8088 install, SPEC.md 52.10.9', 13, 10
+            db '      fC   fS   dC   dS   tk', 13, 10, 0
+            ; ...the ROW's own columns: 3 for the label, then five 5-wide
+            ; fields. The window's legend is 5 spaces in and this is 3,
+            ; because the caption is drawn at its own x and this is not
+hd_bbuf:    times 256 db 0
+            ; the caption is with the other HIMSGs, where the macro exists
+
+; hd_bn_find - SPEC.md 57's registry, once. A kernel that publishes no 'DD'
+; block leaves [hd_bblk] at 0 and every floppy column reads 0, which is what
+; a reader that cannot find its block is supposed to do.
+hd_bn_find:
+    push ax
+    push bx
+    push si
+    push es
+    mov word [hd_bblk], 0
+    mov ax, KERNEL_SEG
+    mov es, ax
+    mov si, [es:0x000E]
+    or si, si
+    jz .out
+.scan:
+    mov bx, [es:si]
+    or bx, bx
+    jz .out
+    cmp bx, DBG_TAG_DISK
+    je .hit
+    add si, 4
+    jmp short .scan
+.hit:
+    mov bx, [es:si+2]
+    cmp word [es:bx], DBG_TAG_DISK  ; the block leads with its own tag, so a
+    jne .out                        ; followed offset can be checked
+    mov [hd_bblk], bx
+.out:
+    pop es
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; hd_bn_dev - the DEVICE counters, across the seam (SPEC.md 52.10.9/52.11)
+;
+; They are incremented in the TRANSPORT image and read here, so this is an
+; HSV_CTRS call rather than three memory reads. Preserves every register.
+hd_bn_dev:
+    push ax
+    push si
+    mov si, hd_req
+    mov al, HSV_CTRS
+    call hd_svc_call
+    jc .none
+    mov ax, [hd_req+HRQ_C0]
+    mov [hd_bnd_cal], ax
+    mov ax, [hd_req+HRQ_C1]
+    mov [hd_bnd_sec], ax
+    mov ax, [hd_req+HRQ_C2]
+    mov [hd_bnd_rst], ax
+    pop si
+    pop ax
+    ret
+.none:                          ; a resident with no instrument in it: report
+    mov word [hd_bnd_cal], 0    ; nothing rather than whatever was there
+    mov word [hd_bnd_sec], 0
+    mov word [hd_bnd_rst], 0
+    pop si
+    pop ax
+    ret
+
+; hd_bn_kern - out: AX = the kernel's int 13h count, DX = its sectors
+hd_bn_kern:
+    push bx
+    push es
+    mov bx, [hd_bblk]
+    or bx, bx
+    jz .none
+    mov ax, KERNEL_SEG
+    mov es, ax
+    mov ax, [es:bx+6]
+    mov dx, [es:bx+4]
+    jmp short .out
+.none:
+    xor ax, ax
+    xor dx, dx
+.out:
+    pop es
+    pop bx
+    ret
+
+; hd_bn_bank - a phase starts here. Preserves every register.
+hd_bn_bank:
+    push ax
+    push dx
+    cmp byte [hd_bfound], 0
+    jne .have
+    mov byte [hd_bfound], 1
+    call hd_bn_find
+.have:
+    call hd_bn_dev              ; ...across the seam (SPEC.md 52.11)
+    call hd_bn_kern
+    mov [hd_bt0+HDB_FC], ax
+    mov [hd_bt0+HDB_FS], dx
+    mov ax, [hd_bnd_cal]
+    mov [hd_bt0+HDB_DC], ax
+    mov ax, [hd_bnd_sec]
+    mov [hd_bt0+HDB_DS], ax
+    call OSAPI_GET_TICKS
+    mov [hd_bt0+HDB_TK], ax
+    pop dx
+    pop ax
+    ret
+
+; hd_bn_take - in: AL = the phase (0..2). Preserves every register.
+hd_bn_take:
+    push ax
+    push bx
+    push dx
+    mov bl, al
+    mov al, HDB_ROW
+    mul bl                      ; AX = the row's offset
+    add ax, hd_bt
+    mov bx, ax
+    call hd_bn_dev
+    call hd_bn_kern
+    sub ax, [hd_bt0+HDB_FC]
+    mov [bx+HDB_FC], ax
+    mov ax, dx
+    sub ax, [hd_bt0+HDB_FS]
+    mov [bx+HDB_FS], ax
+    mov ax, [hd_bnd_cal]
+    sub ax, [hd_bt0+HDB_DC]
+    mov [bx+HDB_DC], ax
+    mov ax, [hd_bnd_sec]
+    sub ax, [hd_bt0+HDB_DS]
+    mov [bx+HDB_DS], ax
+    call OSAPI_GET_TICKS
+    sub ax, [hd_bt0+HDB_TK]     ; modular: the tick counter wraps at midnight
+    mov [bx+HDB_TK], ax
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; hd_bn_total - the fourth row. Preserves every register.
+hd_bn_total:
+    push ax
+    push bx
+    push si
+    xor si, si
+.field:
+    mov bx, hd_bt
+    add bx, si
+    mov ax, [bx]
+    add ax, [bx+HDB_ROW]
+    add ax, [bx+2*HDB_ROW]
+    mov [bx+3*HDB_ROW], ax
+    add si, 2
+    cmp si, HDB_ROW
+    jb .field
+    pop si
+    pop bx
+    pop ax
+    ret
+
+; hd_bn_save - the table to INSTBNCH.TXT on the floppy (module internal)
+;
+; The rows on screen are the answer and this is how it leaves the machine. It
+; goes to the FLOPPY and not to the volume just installed, because on the
+; machine this is for there is ONE floppy drive and an ST-225
+; (docs/FIELD-MACHINES.md): a file on C: has to be booted to be read, and a
+; file on the disk already in the drive comes home in a pocket.
+;
+; Failure is SILENT and that is deliberate - a write-protected or full floppy
+; must not turn a finished install into an error, and the four rows are still
+; on screen either way.
+hd_bn_save:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call OSAPI_FILE_HERE            ; where the user is, to put them back
+    mov [hd_bvdrv], bl
+    mov [hd_bvclus], dx
+    xor dx, dx                      ; A:, root - the disk in the drive
+    xor bl, bl
+    call OSAPI_FILE_GOTO
+    jc .out
+    mov di, hd_bbuf
+    mov si, hd_s_bhdr               ; a header, so a photograph of the file
+    call hd_scat                    ; says what its columns are
+    mov [hd_bp], di                 ; ...our OWN cursor: hd_bn_rowtext builds
+    mov byte [hd_irow], 0           ; into hd_line and resets [hd_lineptr]
+.row:
+    call hd_bn_rowtext              ; the same builder the screen uses, so the
+    mov di, [hd_bp]                 ; file and the window cannot disagree
+    mov si, hd_line
+    call hd_scat
+    mov word [di], 0x0A0D           ; CR LF: this is read on a DOS box
+    add di, 2
+    mov [hd_bp], di
+    inc byte [hd_irow]
+    cmp byte [hd_irow], HDB_NROW
+    jb .row
+    mov byte [hd_irow], 0           ; ...and leave it where the painter wants
+    mov cx, [hd_bp]
+    sub cx, hd_bbuf
+    xor dx, dx
+    push cs
+    pop es
+    mov bx, hd_bbuf
+    mov si, hd_s_bfile
+    call OSAPI_FILE_WRITE
+.out:
+    mov dx, [hd_bvclus]             ; back where the user was, whatever
+    mov bl, [hd_bvdrv]              ; happened above (SPEC.md 51.5.2)
+    call OSAPI_FILE_GOTO
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; hd_bn_rowtext - one report row into hd_line, for [hd_irow] (module internal)
+hd_bn_rowtext:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov di, hd_line
+    mov [hd_lineptr], di
+    mov bl, [hd_irow]
+    xor bh, bh
+    shl bx, 1
+    mov si, [bx+hd_btab]
+    call hd_scat
+    mov al, [hd_irow]
+    mov ah, HDB_ROW
+    mul ah
+    add ax, hd_bt
+    mov bx, ax
+    xor si, si
+.field:
+    mov di, [hd_lineptr]
+    mov byte [di], ' '
+    inc di
+    mov ax, [bx+si]
+    call hd_utoa4               ; wide rather than truncated, if it overflows
+    add si, 2
+    cmp si, HDB_ROW
+    jb .field
+    mov di, [hd_lineptr]
+    mov byte [di], 0
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; hd_iw_size - AX sectors as '31M' or '970K' at [hd_lineptr] (module internal)
@@ -884,7 +1208,12 @@ hd_inst_step:
     call hd_inst_apps
     jc .failed
     mov byte [hd_iw_st], HII_DONE
-    mov word [hd_imsg], hd_s_idone
+%ifdef INSTBENCH
+    mov word [hd_imsg], hd_s_bdone  ; the rows below are the report now, so the
+    call hd_irows_draw              ; caption is their legend (SPEC.md 52.10.9)
+%else                               ; - and the rows have to be ASKED to
+    mov word [hd_imsg], hd_s_idone  ; redraw: only the caption has a path of
+%endif                              ; its own out of the stage machine
     jmp short .out
 .failed:
     mov byte [hd_iw_st], HII_IDLE   ; [hd_imsg] already names what went wrong
@@ -912,22 +1241,6 @@ hd_inst_sys:
                                     ; every partition we could not see
     call hd_ibuf_get            ; the buffer FIRST: a format we cannot follow
     jc .nomem                   ; with a copy is a wiped partition
-    cmp word [hd_ibufkb], HIW_KMAXKB    ; ...and BIG ENOUGH, which is the half
-    jb .small                           ; that line stopped short of. KERNEL.SYS
-                                        ; is written whole - it must land at
-                                        ; cluster 2 (SPEC.md 52.10.2), so the
-                                        ; chunk shape cannot carry it - and
-                                        ; hd_ibuf_get's fall back to
-                                        ; HIW_CHUNKKB is SILENT. Learning that
-                                        ; in hd_icopy_one's .toobig is learning
-                                        ; it after hd_inst_fmt has written the
-                                        ; partition entry, the FAT and the
-                                        ; root: the disk the user pointed at is
-                                        ; wiped, the install fails, and every
-                                        ; retry wipes it again. hd_inst_apps
-                                        ; keeps the fallback and needs it -
-                                        ; every file it copies is an ordinary
-                                        ; one and chunks
     mov word [hd_imsg], hd_s_iwork
     call hd_imsg_draw           ; say so BEFORE the writes - a 32MB format is
                                 ; hundreds of sectors and the user should not
@@ -936,8 +1249,23 @@ hd_inst_sys:
                                 ; full repaint here was a flash right before
                                 ; a long freeze (SPEC.md 52.10.6)
     call hd_ivol_bank           ; SPEC.md 51.5.2, whatever happens below
+    call hd_iunmount_dst        ; ...and NOTHING may still be mounted on the
+                                ; slot we are about to erase (SPEC.md 52.10.8)
+    call OSAPI_BATCH_BEGIN      ; the interface is frozen from here to the
+                                ; return, so the floppy in A: is the same
+                                ; floppy (SPEC.md 18.9.3). Nothing closes it:
+                                ; the unlock that ends this callback does, and
+                                ; that is true of the failure paths too
+%ifdef INSTBENCH
+    call hd_bn_bank             ; SPEC.md 52.10.9: the format on its own, which
+%endif                          ; is the phase with no file in it at all
     call hd_inst_fmt
     jc .failed
+%ifdef INSTBENCH
+    xor al, al
+    call hd_bn_take
+    call hd_bn_bank
+%endif
     call hd_inst_mount
     jc .failed
     mov si, hd_s_kernel         ; KERNEL.SYS FIRST and alone, before the walk:
@@ -945,6 +1273,10 @@ hd_inst_sys:
     jc .failed
     call hd_icopy_tree
     jc .failed
+%ifdef INSTBENCH
+    mov al, 1
+    call hd_bn_take
+%endif
     call hd_ivol_back
     call hd_ibuf_put
     clc
@@ -956,11 +1288,6 @@ hd_inst_sys:
 .nomem:
     mov word [hd_imsg], hd_s_inomem
     stc
-    jmp short .out
-.small:
-    call hd_ibuf_put            ; nothing has been written yet, so the machine
-    mov word [hd_imsg], hd_s_ibig   ; keeps its partition and hears the same
-    stc                             ; sentence it would have heard afterwards
     jmp short .out
 .failed:
     call hd_ivol_back
@@ -989,7 +1316,14 @@ hd_inst_apps:
     jc .nomem
     mov word [hd_imsg], hd_s_iwork
     call hd_imsg_draw
+%ifdef INSTBENCH
+    call hd_bn_bank             ; SPEC.md 52.10.9 - and this phase is the one
+%endif                          ; the progress bar has always shown
     call hd_ivol_bank           ; ...which set hd_isrcdrv to the user's volume;
+    call OSAPI_BATCH_BEGIN      ; a SECOND batch when the user was asked to swap
+                                ; (the ask unlocked the interface and ended the
+                                ; first), and a nested one when the apps disk
+                                ; was found and this runs on from hd_inst_sys
     mov al, [hd_iautod]         ; an auto-detected apps disk overrides THAT one
     cmp al, 0xFF                ; and never hd_ivdrv, or the restore below puts
     je .src                     ; the user on a drive they were never on
@@ -1003,6 +1337,12 @@ hd_inst_apps:
     jc .nboot
     call hd_inst_mbr            ; ...and the MBR LAST: it is the commit
     jc .nboot
+%ifdef INSTBENCH
+    mov al, 2                   ; the apps phase ends at the COMMIT, so the
+    call hd_bn_take             ; two boot records are inside it (SPEC.md
+    call hd_bn_total            ; 52.10.9)
+    call hd_bn_save             ; ...and off the machine, onto the floppy
+%endif
     call hd_ibuf_put
     clc
     jmp short .out
@@ -1971,6 +2311,55 @@ hd_inst_fmt:
     ret
 
 ; -----------------------------------------------------------------------------
+; hd_iunmount_dst - the destination cannot be mounted while we erase it
+;                   (SPEC.md 52.10.8)
+; out: nothing; every register preserved
+;
+; **This is what "Install stops on KERNEL.SYS" was.** Arriving at Install with
+; the destination already mounted is the ORDINARY way to get here - the Hard
+; Drive page's own Mount button is two buttons to the left of Install, and a
+; Disk window on C: is how anybody would look at what is there before
+; replacing it. The format then rewrote the FAT and the root of a volume the
+; kernel still had mounted, with its own FAT window (§18.8.1), its banked BPB
+; (§18.9.2) and - since §19.2.3 - cached directory sectors, all describing a
+; disk that no longer existed. The copy that followed failed on the first
+; file and named it, which is `hd_icopy_one` doing exactly what it should and
+; reads like the file being at fault.
+;
+; The existing unmount ran INSIDE hd_inst_mount, after the format: it was
+; written to catch the volume the install itself had just left behind, and it
+; is too late for a volume the USER left. Both are wanted; this is the one
+; that has to be first.
+;
+; **And the user may be standing on it.** §51.5.2's bank is taken a moment
+; before this and names a drive that stops existing, so both halves of it are
+; put back to A: when the volume that goes is the one they named -
+; `[hd_isrcdrv]` especially, because that is where KERNEL.SYS is read FROM
+; and a dead volume there fails the copy just as thoroughly.
+; -----------------------------------------------------------------------------
+hd_iunmount_dst:
+    push ax
+    mov al, [hd_isel]
+    mov ah, [hd_idev]
+    call hd_tw_unmount_slot     ; -> [hd_tdrop], [hd_tdropv]
+    cmp byte [hd_tdrop], 0
+    je .out
+    mov al, [hd_tdropv]
+    cmp al, 0xFF
+    je .out
+    cmp al, [hd_ivdrv]
+    jne .src
+    mov byte [hd_ivdrv], 0      ; nowhere to go back to: the system disk
+    mov word [hd_ivcwd], 0
+.src:
+    cmp al, [hd_isrcdrv]
+    jne .out
+    mov byte [hd_isrcdrv], 0    ; ...and nowhere to read the files from
+.out:
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; hd_inst_mount - mount what we just made, and remember its volume (internal)
 ; out: [hd_idrv] = the kernel's volume index for the destination
 ; -----------------------------------------------------------------------------
@@ -1981,42 +2370,31 @@ hd_inst_mount:
     push dx
     push si
     push di
-    mov al, [hd_isel]
-    call hd_tw_unmount_slot     ; a stale volume on this slot names a FAT the
-                                ; format has just replaced
+    mov al, [hd_isel]           ; belt: hd_inst_sys already dropped it before
+    mov ah, [hd_idev]           ; the format, and this costs a scan of four
+    call hd_tw_unmount_slot     ; rows. A stale volume on this slot names a
+                                ; FAT the format has just replaced
     mov al, [hd_idev]
     call hd_dev_row
     call hd_part_load           ; the table as the format left it
     mov al, [hd_isel]
     mov [hd_pslot], al          ; hd_mount_one reads the SLOT from here and
     call hd_part_ent            ; the entry from SI - it answers no volume
-    call hd_mount_one           ; index, so the row is looked up below
-
-    ; Which kernel volume did it become? hd_mount_one publishes that in the
-    ; hd_vols row it filled, and the row is found the way hd_mounted finds
-    ; one - by device - narrowed by the partition slot, because this device
-    ; may have several volumes on it and only one of them is ours.
-    mov cx, HD_MAXVOL
-    mov bx, hd_vols
-.scan:
-    cmp byte [bx+HDV_USED], 0
-    je .next
-    mov al, [bx+HDV_DEV]
-    cmp al, [hd_idev]
-    jne .next
-    mov al, [bx+HDV_PART]
-    cmp al, [hd_isel]
-    je .found
-.next:
-    add bx, HDV_SIZE
-    loop .scan
-    mov word [hd_imsg], hd_s_imnt
-    stc
-    jmp short .out
-.found:
-    mov al, [bx+HDV_VOL]
+    call hd_mount_one           ; ...and it ANSWERS with the kernel's volume
+                                ; index, where the resident's version left a
+                                ; row in hd_vols to be gone and found. That
+                                ; walk was this file's only sight of the
+                                ; volume table, and the table is the resident
+                                ; driver's (SPEC.md 52.11)
+    mov al, [hd_mvol]
+    cmp al, 0xFF
+    je .nomount
     mov [hd_idrv], al
     clc
+    jmp short .out
+.nomount:
+    mov word [hd_imsg], hd_s_imnt
+    stc
 .out:
     pop di
     pop si
@@ -2267,6 +2645,9 @@ hd_itab:      dw hd_s_iready, hd_s_ismall, hd_s_ialien, hd_s_inone
     HIMSG hd_s_ierr, 'Disk error - the install stopped'
     HIMSG hd_s_inboot, 'Copied, but it will not boot'
     HIMSG hd_s_ibig, 'A file is too big for this machine'
+%ifdef INSTBENCH
+    HIMSG hd_s_bdone, '     fC   fS   dC   dS   tk  done'
+%endif
 
 hd_iwin:      dw 0              ; .text with a real initialiser: -f bin zeroes
                                 ; nothing, and a garbage window pointer here
@@ -2314,3 +2695,6 @@ hd_isize:     dd 0
 hd_isys:      db 0
 hd_ioff:      dd 0
 hd_itake:     dw 0
+
+; --- state this module owns (moved out of hdd.asm's data block) ---
+hd_idev:     db 0               ; ...and the installer's, for the same reason

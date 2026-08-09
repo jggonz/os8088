@@ -528,8 +528,22 @@ fcp_bufget:
 .size:
     mov [fcp_kb], ax
     mov bx, MEM_K_COPY
-    call KERNEL_SEG:cw_mem_claim              ; CF=1 refused; the segment comes back in DX,
-    jc .no                      ; NOT in AX - AX still holds the KB asked for
+    push cx                     ; ...THE WHOLE BUFFER INSIDE ONE 64KB DMA PAGE
+    mov cx, ax                  ; (SPEC.md 22.5.1). dsk_runcap splits a run at
+                                ; the page (SPEC.md 18.91), so where this
+                                ; buffer lands decides how often a chunk costs
+                                ; two int 13h instead of one - and that made
+                                ; the copy engine's cost depend on what else
+                                ; the heap happened to be holding. Aligned, a
+                                ; chunk smaller than the buffer never reaches
+                                ; the boundary at all
+    call KERNEL_SEG:cw_mem_claim_dma
+    pop cx
+    jnc .claimed
+    call KERNEL_SEG:cw_mem_claim              ; ...and a heap with no page-aligned run
+    jc .no                      ; still copies, exactly as it did before
+.claimed:                       ; CF=1 refused; the segment comes back in DX,
+                                ; NOT in AX - AX still holds the KB asked for
     mov [fcp_raw], dx           ; what mem_free must be handed back...
     mov ax, dx
     add ax, 31                  ; ...and the 512-BYTE aligned base every
@@ -656,6 +670,11 @@ fcp_answer:
 fcp_step:
     mov byte [dskw_batch], 1    ; one remount for the whole operation, spent
                                 ; by the caller (SPEC.md 18.4 rule 3)
+    call KERNEL_SEG:cw_dsk_batch_begin  ; ...and one BPB validation per volume
+                                ; for as long as the interface stays frozen
+                                ; (SPEC.md 18.9.3). One slice is one batch: a
+                                ; question or a finish unlocks, which ends it,
+                                ; and the next slice opens another
     cmp byte [fcp_started], 0
     jne .walk
 
@@ -1012,12 +1031,12 @@ fcp_scan:
     dec word [fcp_ssec]
     jmp short .skipsec
 .readsec:
-    call KERNEL_SEG:cw_dsk_dirw_next ; AX = the sector holding the ordinal
-    jc .end
-    mov cx, 1
-    mov bx, dsk_secbuf
-    call KERNEL_SEG:cw_disk_read
-    jc .ioerr
+    call KERNEL_SEG:cw_dsk_dirw_get ; dsk_secbuf = the sector holding the
+    jnc .secok                  ; ordinal (SPEC.md 19.2.3)
+    or ax, ax
+    jz .end
+    jmp .ioerr
+.secok:
     mov si, dsk_secbuf
     mov ax, [fcp_sslot]
     mov cl, 5

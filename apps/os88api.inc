@@ -1612,6 +1612,25 @@ GLS_SZ    equ 14                 ; the walk state, in YOUR bss
                                                  ; 11.96.1). Costs nothing if
                                                  ; refused; wrong if the
                                                  ; promise is
+%define OSAPI_TOAST         KERNEL_SEG:0x0380   ; ES:SI = a NUL line, CX =
+                                 ; ticks to live (0 = ~3s at 18.2 Hz). Says it
+                                 ; as an inverse-video strip at the right end
+                                 ; of the MENU BAR and takes it down on its
+                                 ; own (SPEC.md 59) - so it costs your window
+                                 ; no pixels, survives a repaint without your
+                                 ; help, and cannot leave your incremental
+                                 ; drawing disagreeing with your W_PAINT.
+                                 ; An EMPTY string retires whatever is up, so
+                                 ; taking a message down early is one call and
+                                 ; needs no flag of your own. ES:SI rather
+                                 ; than your DS, for OSAPI_CLIP_PUT's reason:
+                                 ; the text is often in a heap claim. The
+                                 ; string is COPIED, so it may be scratch and
+                                 ; your app may close while it is still up.
+                                 ; Context: ANY - it stages and returns, and
+                                 ; the UI task draws. So a worker may call it,
+                                 ; and so may a callback holding the gfx lock.
+                                 ; CF = 1 refused. Preserves all but the flags
 %define OSAPI_EVQ_PENDING   KERNEL_SEG:0x0338   ; out AX = events still queued
                                  ; behind the one being dispatched (SPEC.md
                                  ; 13.4). "Am I about to be asked to do this
@@ -1655,6 +1674,20 @@ CLIP_MAXKB equ 32                ; the clipboard's ceiling, KB. A put longer
 ; and no cursor, so you may write between two reads. That is the point - the
 ; loop this exists for is read -> write -> read, and the write walks
 ; directories and the FAT.
+; --- SPEC.md 18.9.3: the batch bracket ---------------------------------------
+; "The interface is frozen and the disk is the same disk." Between these two,
+; a FLOPPY may reuse its banked BPB instead of re-reading LBA 0 at every volume
+; switch - which on a copy or an install is one call and one revolution per
+; switch, and was 41 of one install's 199 (SPEC.md 18.94.2).
+;
+; It NESTS, and it does not have to be closed: any gfx_unlock ends it, which is
+; every way out of a locked run of kernel code. So a caller cannot leave one
+; open across a moment when the user could reach the drive - and equally, a
+; caller that unlocks in the middle of its own operation gets no benefit from
+; the half after, which is the trade that makes the rule checkable.
+%define OSAPI_BATCH_BEGIN   KERNEL_SEG:0x0388   ; no arguments, no answer
+%define OSAPI_BATCH_END     KERNEL_SEG:0x0390   ; ...and the other end
+
 %define OSAPI_FILE_APPEND   KERNEL_SEG:0x0350   ; SI = NUL 8.3 name, ES:BX =
                                  ; bytes, CX = count (>= 1); out CF=0 AX=0,
                                  ; else AX = FERR_*. The file must already

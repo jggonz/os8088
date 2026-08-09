@@ -77,6 +77,12 @@ endif
 # being booted by accident.
 ifneq ($(DISKCNT),)
 VIDDEF += -DDISK_COUNTERS
+# ...and the same knob instruments the hard-disk INSTALLER (SPEC.md 52.10.9).
+# One knob for both, because the two halves are useless apart: the kernel's
+# counters stop at dsk_xfer's run loop, so on an install they are the FLOPPY
+# side alone and the drive is invisible; the driver's own hook is the other
+# half. A shipped HDD.DRV carries none of it.
+DRVDEF += -DINSTBENCH
 endif
 
 # FLOPPY1=1 puts the floppy transfer back to one sector per int 13h - the
@@ -103,6 +109,39 @@ endif
 ifneq ($(FLOPPY1),)
 VIDDEF += -DFLOPPY_ONE
 BOOTDEF += -DFLOPPY_ONE
+endif
+
+# DIRW1=1 never takes SPEC.md 18.95's sector cache, so every read moves exactly
+# the sectors asked for again - the pre-18.95 behaviour, reached through the
+# same refusal path a machine with no room takes. The A/B for the whole cache,
+# and the reason it is a knob is FLOPPY1's: this is a claim about REVOLUTIONS,
+# and no emulator here models one.
+ifneq ($(DIRW1),)
+VIDDEF += -DDIRW_ONE
+endif
+
+# KERN_SMALL=1 selects the SMALL build of the kernel (docs/KERN-SPLIT-PLAN.md).
+#
+# The split is the one docs/KERNEL-MEMORY.md and kernel.asm have named for
+# three budget moves: a 128KB machine and a 640KB machine stop wanting the same
+# feature set long before they stop fitting the same image, so the answer at
+# the ceiling is TWO KERNELS OFF ONE TREE rather than another raise.
+#
+# THE DEFAULT IS BIG. `all` ships kern_big, so the six images, `make field`,
+# `make marty` and every test run the full kernel, and kern_small is the one
+# you ask for. That is the right way round for the same reason the budget
+# guards are: kern_big is what nearly every machine runs, and kern_small is a
+# deliberate product for the 128KB floor rather than a fallback nobody chose.
+#
+# EXACTLY ONE OF THE TWO IS ALWAYS DEFINED, and both are POSITIVE. It would be
+# shorter to define nothing for the default and write `%ifndef KERN_SMALL` for
+# big-only code, and it would read as a double negative at every site - which
+# on a conditional whose whole job is "which build is this" is exactly where a
+# reader gets it backwards. kernel.asm asserts that precisely one arrives.
+ifneq ($(KERN_SMALL),)
+VIDDEF += -DKERN_SMALL
+else
+VIDDEF += -DKERN_BIG
 endif
 
 # REDRAWFULL=1 puts the menu bar and the dock back on their pre-SPEC.md
@@ -153,6 +192,34 @@ endif
 ifneq ($(RAMKB),)
 BOOTDEF += -DRAM_KB=$(RAMKB)
 endif
+
+# FONT=<name> bakes fonts/<name>.f8 into the kernel instead of copying the
+# machine's ROM 8x8 set at boot (SPEC.md 6.2). OFF by default and the shipped
+# images do not use it: a plain `make` still assembles the int 10h probe, so
+# this changes no released byte until it is asked for.
+#
+# The bytes ride in the BOOT OVERLAY, which lands in the FAT window and is
+# written over by the first mount - so they cost neither KERN_BUDGET nor
+# KERN_CODE_MAX, and the probe not being assembled makes .text smaller. The
+# whole price is one more floppy sector at boot (~65 ms on the 5150).
+#
+# The generated include goes in $(BUILD) and is never tracked, like every
+# other artifact; -I $(BUILD)/ on the kernel rule is what finds it.
+ifneq ($(FONT),)
+FONTSRC := fonts/$(FONT).f8
+FONTINC := $(BUILD)/font8x8.inc
+VIDDEF  += -DBAKED_FONT
+# Named here rather than left to make's own "No rule to make target
+# fonts/x.f8", which says nothing about the knob that asked for it or about
+# what else there is to ask for.
+ifeq ($(wildcard $(FONTSRC)),)
+$(error FONT=$(FONT): there is no $(FONTSRC). Available: \
+        $(patsubst fonts/%.f8,%,$(wildcard fonts/*.f8)))
+endif
+endif
+# ...and the rule that builds it is DOWN with the kernel's, not here. A target
+# defined before `all` becomes make's default goal, so a plain `make
+# FONT=os8088` built the include and stopped.
 # ...and a stamp so that CHANGING A KNOB rebuilds what it affects. Without it
 # make sees an up-to-date kernel.bin, skips it, and boots the PREVIOUS
 # adapter - which reads exactly like the probe or the renderer being broken.
@@ -166,10 +233,12 @@ endif
 # about a file that recipe just removed, and then build the floppy image from
 # a kernel that is not there. Doing it here means the file is simply gone
 # before make builds its graph.
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
-                                      $(BUILD)/boot.bin $(BUILD)/boot360.bin; \
+                                      $(BUILD)/boot.bin $(BUILD)/boot360.bin \
+                                      $(BUILD)/hdd.bin $(BUILD)/hdd.drv \
+                                      $(BUILD)/hddtool.bin $(BUILD)/hddtool.drv; \
                                 touch $(VIDSTAMP); })
 
 # "size of this file in bytes" is spelled differently by GNU coreutils and by
@@ -179,7 +248,7 @@ FILESIZE = $$(stat -c%s $(1) 2>/dev/null || stat -f%z $(1))
 KERNEL_SRC := kernel/kernel.asm
 KERNEL_INC := $(wildcard kernel/*.inc)
 
-.PHONY: all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
+.PHONY: small kernsplit all run run-640 run-720 debug test test-snd xt xt-640 xt-cga \
         xt-hercules 286 386sx 386 xt-sound 286-sound 386-sound 486 pentium \
         bench field stackprobe trklog npbench clicktest marty comscan \
         checkdocs clean clean-marty distclean
@@ -225,7 +294,12 @@ $(ASSOCICO): tools/os88mini.py $(BUILD)/paint.o88 $(BUILD)/notepad.o88 \
 		PAINT=$(BUILD)/paint.o88 NOTEPAD=$(BUILD)/notepad.o88 \
 		TRACKER=$(BUILD)/tracker.o88 ARTFUL=$(BUILD)/artful.o88
 
-$(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) tools/os88ovlchk.py | $(BUILD)
+# The baked typeface (SPEC.md 6.2), when FONT= asked for one. Empty otherwise,
+# so the prerequisite below simply is not there on a default build.
+$(FONTINC): $(FONTSRC) tools/os88font.py | $(BUILD)
+	python3 tools/os88font.py $(FONTSRC) -o $@
+
+$(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) $(FONTINC) tools/os88ovlchk.py | $(BUILD)
 	@python3 tools/os88ovlchk.py
 	$(NASM) -f bin -w+error -I kernel/ -I $(BUILD)/ $(VIDDEF) -o $@ $(KERNEL_SRC)
 	@echo "kernel: $(call FILESIZE,$@) bytes (image rung + boot overlay)"
@@ -238,7 +312,8 @@ $(BUILD)/kernel.bin: $(KERNEL_SRC) $(KERNEL_INC) $(ASSOCICO) tools/os88ovlchk.py
 # for every build would silence a %warning somebody meant as an alarm.
 	@python3 tools/kernsize.py $(VIDDEF) || true
 ifneq ($(VIDDEF),)
-	@echo "  *** VIDEO=$(VIDEO) RTC=$(RTC) DISKCNT=$(DISKCNT) FLOPPY1=$(FLOPPY1): kernel is ***"
+	@echo "  *** VIDEO=$(VIDEO) RTC=$(RTC) DISKCNT=$(DISKCNT) FLOPPY1=$(FLOPPY1) FONT=$(FONT): ***"
+	@echo "  *** kernel is                                                  ***"
 	@echo "  *** BUILT WITH A KNOB - a forced probe and/or disk counters.   ***"
 	@echo "  *** It boots that way on every machine. Rebuild with a plain   ***"
 	@echo "  *** \`make\` before testing detection or cutting a release.      ***"
@@ -301,6 +376,10 @@ $(BUILD)/boot360.bin: boot/boot.asm $(BUILD)/kernel.bin | $(BUILD)
 # own, so the root of a disk is the user's files - and the two disks agree,
 # because the chip menu cannot know which of them is in the drive.
 DRIVERS := $(BUILD)/sound.drv $(BUILD)/hdd.drv $(BUILD)/debug.drv
+# ...and the hard-disk driver's on-demand half, which rides every disk the
+# drivers do but is NOT one of them: nothing puts it in drv_tab, the Drivers
+# page never lists it, and only HDD.DRV ever loads it (SPEC.md 52.11)
+DRIVERS += $(BUILD)/hddtool.drv
 SYSAPPS := $(BUILD)/taskmgr.o88
 SYSAPPSARGS := $(addprefix SYSTEM:,$(SYSAPPS))
 
@@ -376,12 +455,40 @@ $(BUILD)/boothd.bin: boot/boothd.asm | $(BUILD)
 	$(NASM) -f bin -w+error -o $@ $<
 	@echo "boothd: $(call FILESIZE,$@) bytes"
 
-$(BUILD)/hdd.bin: drivers/hdd/hdd.asm drivers/hdd/part.inc drivers/hdd/fmt.inc \
-                  drivers/hdd/tool.inc drivers/hdd/page.inc drivers/hdd/cfg.inc \
-                  drivers/hdd/inst.inc \
-                  drivers/os88drv.inc apps/os88api.inc \
+# HDDTOOL.DRV - the hard-disk driver's OTHER half (SPEC.md 52.11): the
+# partitioner, the formatter and the installer, which only run while somebody
+# is clicking on them and so have no business being resident. HDD.DRV reads it
+# off the system volume on a Format or an Install click and frees it at detach.
+#
+# It is not a driver: no class the kernel knows, no drv_tab row, so it is NOT
+# in DRIVERS below - but it does ride the same disks, because the .DRV suffix
+# is what gives os88disk.py's sys_attr the read-only + hidden + system
+# attributes every kernel-owned file wants (SPEC.md 19.6), and what makes the
+# installer's "every *.DRV" copy pick it up (SPEC.md 52.10.4).
+$(BUILD)/hddtool.bin: drivers/hdd/hddtool.asm drivers/hdd/hddabi.inc \
+                  drivers/hdd/hdcom.inc drivers/hdd/hdsvc.inc drivers/hdd/hdsec.inc \
+                  drivers/hdd/partw.inc drivers/hdd/fmt.inc drivers/hdd/tool.inc \
+                  drivers/hdd/inst.inc drivers/os88drv.inc apps/os88api.inc \
                   $(BUILD)/mbr.bin $(BUILD)/boothd.bin | $(BUILD)
-	$(NASM) -f bin -w+error -I drivers/hdd/ -I drivers/ -I apps/ -I $(BUILD) -o $@ $<
+	$(NASM) -f bin -w+error $(DRVDEF) -I drivers/hdd/ -I drivers/ -I apps/ -I $(BUILD) -o $@ $<
+	@echo "hddtool: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/hddtool.drv: $(BUILD)/hddtool.bin tools/os88drv.py
+	python3 tools/os88drv.py $(BUILD)/hddtool.bin -o $@
+
+# -DHDTOOL_KB is the claim HDD.DRV makes for the tool, and it is injected the
+# way boot.asm is told KERNEL_SECTORS: there is no file-size slot in the API,
+# so a driver cannot ask how big a file is before it reads one. It is a
+# CEILING - a bigger tool on the disk is refused by OSAPI_FILE_READ before any
+# data moves, and a smaller one leaves the tail unread.
+$(BUILD)/hdd.bin: drivers/hdd/hdd.asm drivers/hdd/hddabi.inc drivers/hdd/hdcom.inc \
+                  drivers/hdd/hdtool.inc drivers/hdd/hdsec.inc \
+                  drivers/hdd/page.inc drivers/hdd/cfg.inc \
+                  drivers/os88drv.inc apps/os88api.inc \
+                  $(BUILD)/hddtool.bin | $(BUILD)
+	$(NASM) -f bin -w+error $(DRVDEF) -I drivers/hdd/ -I drivers/ -I apps/ -I $(BUILD) \
+		-DHDTOOL_KB=$$(( ( $(call FILESIZE,$(BUILD)/hddtool.bin) + 1023 ) / 1024 )) \
+		-o $@ $<
 	@echo "hdd:    $(call FILESIZE,$@) bytes"
 
 $(BUILD)/hdd.drv: $(BUILD)/hdd.bin tools/os88drv.py
@@ -776,6 +883,10 @@ $(BUILD)/trklog360.img: $(BUILD)/trklog.o88 apps/tracker/beverly.mod tools/os88d
 #   make npbench                        # build the disks (BOOTABLE, one each)
 #   make test HDD= FLOPPY=build/npbench.img   # ...or boot the 1.44MB one here
 #
+# It builds FOUR disks: this pair around README.TXT, and the nprun pair around
+# a note that is one long run with no newlines in it (SPEC.md 27.4.2), which
+# README.TXT cannot show - see the second block below.
+#
 # WHAT IT ANSWERS: SPEC.md 27.7.3's NP_HCHUNK sizes a gfx-lock hold and had
 # never been measured on iron - every figure behind it was a MartyPC cycle
 # count, which is the right units and the wrong machine. Boot the disk,
@@ -788,7 +899,8 @@ $(BUILD)/trklog360.img: $(BUILD)/trklog.o88 apps/tracker/beverly.mod tools/os88d
 # copy here that can drift from it.
 NPBENCHSRC := apps/notepad/notepad.asm tests/npbench.inc
 
-npbench: $(BUILD)/npbench.img $(BUILD)/npbench360.img
+npbench: $(BUILD)/npbench.img $(BUILD)/npbench360.img \
+         $(BUILD)/nprun.img $(BUILD)/nprun360.img
 
 $(BUILD)/npbench.bin: $(NPBENCHSRC) apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -DNPBENCH -I apps/ -I tests/ \
@@ -833,6 +945,62 @@ $(BUILD)/npbench360.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) \
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
 		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) \
+		APPS:$(BUILD)/npb/notepad.o88 $(MEDIAFOLDER)
+
+# --- ...and the ONE LONG RUN disk, for SPEC.md 27.4.2 ------------------------
+#
+# README.TXT is prose and CANNOT show the bug docs/NOTEPAD-NOTES.md 5.6 is
+# about: its longest unbroken run is 28 characters, and np_cellrun needs
+# np_rcols + 2 - 31 at the default 29 columns - before it will accept. So the
+# reference note is the wrong instrument here, and the report sat unmeasured
+# for a round because reproducing it meant hand-building a disk.
+#
+# RUN.TXT is that note: 709 bytes with NO NEWLINES IN IT AT ALL, one run of
+# 249 characters, a semicolon, a sentence of prose, then a long tail. All
+# three of the interesting carets are on it - inside the first run, just after
+# the semicolon (the field's own repro), and at the end of the tail.
+#
+#   make npbench
+#   python3 tools/notepad/lab.py --len 709 boot --image build/nprun360.img
+#   ...then Down x8, Right x18, and hold a key
+#
+# IT CARRIES NO README.TXT, AND THAT IS THE POINT. drive.open_readme clicks a
+# FIXED ROW and the root listing is sorted by name (SPEC.md 19.4), so leaving
+# the reference note off puts RUN.TXT at the same ordinal README.TXT occupies
+# on the disk above - APPS, MEDIA, RUN.TXT, SYSTEM - and one set of
+# coordinates drives both disks. Add README.TXT here and RUN.TXT moves down a
+# row, which reads as the harness failing to open anything.
+#
+# The note is GENERATED rather than committed, because it is 709 bytes of 'a'
+# and the toolchain is deterministic on purpose: the same command makes the
+# same bytes on every machine, so there is nothing for a checked-in copy to
+# drift from.
+NPRUNLEN := 709
+NPRUNTXT := This note is one long run with no newlines in it at all, which is \
+what docs/NOTEPAD-NOTES.md 5.6 and SPEC.md 27.4.2 are about. Put the caret \
+just after the semicolon above and hold a key down.
+
+$(BUILD)/nprun/run.txt: Makefile | $(BUILD)
+	@mkdir -p $(BUILD)/nprun
+	@python3 -c "s='a'*249+'; '+'$(NPRUNTXT) '; \
+	  assert len(s) <= $(NPRUNLEN), len(s); \
+	  open('$@','w',newline='').write(s+'a'*($(NPRUNLEN)-len(s)))"
+	@echo "npbench: $@ $(call FILESIZE,$@) bytes, no newlines"
+
+$(BUILD)/nprun.img: $(BUILD)/boot.bin $(BUILD)/kernel.bin $(DRIVERS) \
+                    $(SYSAPPS) $(BUILD)/nprun/run.txt $(BUILD)/npb/notepad.o88 \
+                    tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(BUILD)/kernel.bin \
+		$(DRIVERS) $(SYSAPPSARGS) $(BUILD)/nprun/run.txt \
+		APPS:$(BUILD)/npb/notepad.o88 $(MEDIAFOLDER)
+
+$(BUILD)/nprun360.img: $(BUILD)/boot360.bin $(BUILD)/kernel.bin $(DRIVERS) \
+                       $(SYSAPPS) $(BUILD)/nprun/run.txt $(BUILD)/npb/notepad.o88 \
+                       tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(BUILD)/boot360.bin --kernel $(BUILD)/kernel.bin \
+		$(DRIVERS) $(SYSAPPSARGS) $(BUILD)/nprun/run.txt \
 		APPS:$(BUILD)/npb/notepad.o88 $(MEDIAFOLDER)
 
 # --- the A/V SYNC disk (ON DEMAND: `make clicktest`) -------------------------
@@ -941,7 +1109,7 @@ $(BUILD)/click360.img: $(BUILD)/trklog.o88 $(BUILD)/click.mod \
 # traffic (SPEC.md 6.1.1).
 BENCHPKGS := $(BUILD)/fontbnch.o88 $(BUILD)/typebnch.o88 \
              $(BUILD)/gfxbench.o88 $(BUILD)/sysbench.o88
-BENCHDATA := $(BUILD)/bench.dat $(BUILD)/benchsml.dat
+BENCHDATA := $(BUILD)/bench.dat $(BUILD)/benchsml.dat $(BUILD)/bigfile.dat
 
 bench: $(BUILD)/bench.img $(BUILD)/bench360.img
 
@@ -1031,7 +1199,7 @@ $(BUILD)/bench360.img: $(BENCHPKGS) $(BENCHDATA) tools/os88disk.py
 #
 # The names are short and unambiguous at a DOS prompt on purpose: DOS 3.3 has
 # 8.3 names and no tab completion, and these get typed by hand into dskimage.
-FIELDBENCH := $(BENCHPKGS) $(BENCHDATA) $(BUILD)/bigfile.dat
+FIELDBENCH := $(BENCHPKGS) $(BENCHDATA)   # bigfile.dat is in BENCHDATA now
 CGADIR     := $(BUILD)/cgak
 F1DIR      := $(BUILD)/f1k
 HERCDIR    := $(BUILD)/herck
@@ -1056,11 +1224,64 @@ CQDIR      := $(BUILD)/cqk
 # a reboot in the middle of every batch.
 FIELDKNOBS := DISKCNT=1
 
+# --- the SMALL build (docs/KERN-SPLIT-PLAN.md) -------------------------------
+#
+# `make small` builds kern_small and its system disks. THE DEFAULT IS BIG, so
+# this is the one that is asked for - and it builds into a directory of its
+# own, build/smallk/, for the reason the field kernels do: a knob-built kernel
+# that reaches build/ is a kernel somebody boots by accident believing it is
+# the shipped one, and that mistake has been made in this tree before (see the
+# cgak note above). Nothing under build/smallk/ is what `all` ships.
+#
+# The APPS disks are NOT rebuilt and must not be: a package is the same bytes
+# on both kernels by construction, because the two builds hold the SAME API
+# table at the same offsets (docs/KERN-SPLIT-PLAN.md 3). The day that stops
+# being true is the day the split acquired an ABI, which is the one thing this
+# design is written to avoid.
+SMALLDIR := $(BUILD)/smallk
+
+small: $(BUILD)/small360.img $(BUILD)/small.img
+	@python3 tools/kernsplit.py $(SMALLDIR)/kernel.bin $(BUILD)/kernel.bin
+
+$(BUILD)/small360.img: $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
+	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot360.bin
+	python3 tools/os88disk.py -o $@ --size 360 \
+		--boot $(SMALLDIR)/boot360.bin --kernel $(SMALLDIR)/kernel.bin \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
+	@echo "small: $@ - kern_small on 360KB. Its apps disk is the ordinary"
+	@echo "       build/apps360.img: one package, both kernels"
+
+$(BUILD)/small.img: $(DRIVERS) $(SYSAPPS) $(SYSDOC) tools/os88disk.py
+	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/boot.bin
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(SMALLDIR)/boot.bin --kernel $(SMALLDIR)/kernel.bin \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSDOC) $(MEDIAFOLDER)
+
+# ...and the size comparison on its own, for when you want the numbers without
+# building two floppies for them. SMALL FIRST in the argument order, because it
+# is the figure being defended (tools/kernsplit.py).
+kernsplit:
+	@$(MAKE) $(BUILD)/kernel.bin
+	@$(MAKE) BUILD=$(SMALLDIR) KERN_SMALL=1 $(SMALLDIR)/kernel.bin
+	@python3 tools/kernsplit.py $(SMALLDIR)/kernel.bin $(BUILD)/kernel.bin
+
 field: $(BUILD)/herc.img $(BUILD)/cga.img $(BUILD)/cga720.img $(BUILD)/flop1.img \
        $(BUILD)/cqdiag.img
 
+# EVERY field disk rebuilds the DRIVERS under $(FIELDKNOBS) too, and that line
+# is not decoration. $(DRIVERS) comes out of $(BUILD), built with whatever
+# knobs the TOP-LEVEL invocation had - so `make field` used to pair a
+# DISKCNT=1 kernel with whatever HDD.DRV happened to be lying there. That was
+# harmless while no driver read a knob, and stopped being harmless the moment
+# SPEC.md 52.10.9 put the installer's instrument behind DISKCNT: the disk
+# would boot a counted kernel whose installer had no phase table, and nothing
+# would say so. The rebuild is seconds and the stamp puts build/ back to the
+# shipped bytes on the next knobless make.
+FIELDDRV = @$(MAKE) $(FIELDKNOBS) $(DRIVERS)
+
 $(BUILD)/herc.img: $(BUILD)/kernel.bin $(DRIVERS) \
                    $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
+	$(FIELDDRV)
 	@$(MAKE) BUILD=$(HERCDIR) $(FIELDKNOBS) $(HERCDIR)/boot360.bin
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(HERCDIR)/boot360.bin --kernel $(HERCDIR)/kernel.bin \
@@ -1070,6 +1291,7 @@ $(BUILD)/herc.img: $(BUILD)/kernel.bin $(DRIVERS) \
 	@echo "       finds the Hercules (SPEC.md 39.1)"
 
 $(BUILD)/cga.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
+	$(FIELDDRV)
 	@$(MAKE) BUILD=$(CGADIR) VIDEO=cga $(FIELDKNOBS) $(CGADIR)/boot360.bin
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(CGADIR)/boot360.bin --kernel $(CGADIR)/kernel.bin \
@@ -1088,6 +1310,7 @@ $(BUILD)/cga.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 # rule with $(BUILD)/boot360.bin and $(BUILD)/kernel.bin - the probe build -
 # in place of $(CGADIR)'s, and nothing else.
 $(BUILD)/cga720.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
+	$(FIELDDRV)
 	@$(MAKE) BUILD=$(CGADIR) VIDEO=cga $(FIELDKNOBS) $(CGADIR)/boot360.bin
 	python3 tools/os88disk.py -o $@ --size 720 \
 		--boot $(CGADIR)/boot360.bin --kernel $(CGADIR)/kernel.bin \
@@ -1109,6 +1332,7 @@ $(BUILD)/cga720.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 # nothing to do with video, and its `boot ticks` row is a second, independent
 # reading of the same thing.
 $(BUILD)/flop1.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
+	$(FIELDDRV)
 	@$(MAKE) BUILD=$(F1DIR) FLOPPY1=1 $(FIELDKNOBS) $(F1DIR)/boot360.bin
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(F1DIR)/boot360.bin --kernel $(F1DIR)/kernel.bin \
@@ -1131,6 +1355,7 @@ $(BUILD)/flop1.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
 # transfer that crossed a 64KB DMA page, 80 a drive that never answered.
 # The sector has four spare bytes, which is why this is a knob.
 $(BUILD)/cqdiag.img: $(DRIVERS) $(SYSAPPS) $(FIELDBENCH) tools/os88disk.py
+	$(FIELDDRV)
 	@$(MAKE) BUILD=$(CQDIR) BOOTDIAG=1 $(FIELDKNOBS) $(CQDIR)/boot360.bin
 	python3 tools/os88disk.py -o $@ --size 360 \
 		--boot $(CQDIR)/boot360.bin --kernel $(CQDIR)/kernel.bin \
@@ -1548,7 +1773,11 @@ marty: $(IMG360)
 	@echo "       python3 tools/os88marty.py 127.0.0.1:9001 verify"
 	@echo ""
 	@echo "       machines: os8088_5150_cga (default), _herc, _cga_gla, _sb,"
-	@echo "                 _sbonly, os8088_xt_vga and _xt_vga_sb"
+	@echo "                 _sbonly, os8088_xt_vga and _xt_vga_sb;"
+	@echo "                 _both / _both_gla are the TWO-CARD 5150 (a CGA and"
+	@echo "                 a Hercules, docs/DUAL-DISPLAY-PLAN.md) and _herc_gla"
+	@echo "                 is the single-card Hercules without the IBM ROM."
+	@echo "                 python3 tests/dualcheck.py is the two-card gate"
 	@echo "       ..._sb has an AdLib AND a Sound Blaster, _sbonly has the DSP"
 	@echo "       and NOTHING at 388h - the SPEC.md 51.3.1 pair; _xt_vga_sb is"
 	@echo "       the one to run with --turbo (7.16MHz, the fastest MartyPC has;"

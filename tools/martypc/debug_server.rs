@@ -54,17 +54,19 @@
 */
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     io::{BufRead, BufReader, ErrorKind, Write},
     net::{TcpListener, TcpStream},
-    path::Path,
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
+use fluxfox::{DiskImageFileFormat, ImageWriter};
 use marty_core::{
     breakpoints::BreakPointType,
-    cpu_common::{Cpu, Register16},
-    device_traits::videocard::{DisplayMode, RenderBpp, VideoCard},
+    cpu_common::{addressing::CpuAddress, Cpu, Register16},
+    device_traits::videocard::{DisplayMode, RenderBpp, VideoCard, VideoCardId},
     keys::MartyKey,
     machine::{ExecutionControl, ExecutionOperation, ExecutionState, Machine},
     vhd::VirtualHardDisk,
@@ -128,10 +130,169 @@ pub fn mount_floppy(machine: &mut Machine, drive: usize, path: &Path) -> Result<
             fdc.load_image_from(drive, bytes, Some(path), false)
                 .map_err(|e| format!("{}: {}", path.display(), e))?;
             log::info!("Mounted {} ({} bytes) in floppy drive {}", path.display(), len, drive);
+            if let Ok(mut m) = mounts().lock() {
+                m.insert(drive, path.to_path_buf());
+            }
             Ok(())
         }
         None => Err("no floppy controller in this machine".to_string()),
     }
+}
+
+/// Where each floppy was mounted FROM, so `flush` can put it back without
+/// being told twice.
+///
+/// `FloppyDiskDrive::attach_image` takes a path and then throws it away (the
+/// parameter is literally `_path`), so once an image is in a drive the machine
+/// no longer knows where its bytes came from. The eframe frontend does not
+/// need it to - its file manager holds the path alongside the drive - and a
+/// headless run mounts from argv and has nowhere to keep one. This is that
+/// missing half: two entries deep, written once at mount, read by `flush`.
+static MOUNTS: OnceLock<Mutex<BTreeMap<usize, PathBuf>>> = OnceLock::new();
+
+fn mounts() -> &'static Mutex<BTreeMap<usize, PathBuf>> {
+    MOUNTS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+fn mounted_path(drive: usize) -> Option<PathBuf> {
+    mounts().lock().ok().and_then(|m| m.get(&drive).cloned())
+}
+
+/// The image formats `flush` will write, by the name a caller types.
+///
+/// Deliberately a short list of the ones fluxfox compiles unconditionally: the
+/// rest sit behind cargo features (`td0`, `ipf`, `moof`, `woz`, ...) and naming
+/// one that is not built is a compile error rather than a refusal a caller can
+/// read. `raw` is the answer for os8088 anyway - a flat sector image is what
+/// `tools/os88disk.py` parses, what every other emulator here mounts, and what
+/// the six shipped images already are.
+fn format_by_name(name: &str) -> Option<DiskImageFileFormat> {
+    match name {
+        "raw" | "img" | "ima" | "dsk" => Some(DiskImageFileFormat::RawSectorImage),
+        "imd" => Some(DiskImageFileFormat::ImageDisk),
+        "psi" => Some(DiskImageFileFormat::PceSectorImage),
+        "pri" => Some(DiskImageFileFormat::PceBitstreamImage),
+        "mfm" => Some(DiskImageFileFormat::MfmBitstreamImage),
+        "hfe" => Some(DiskImageFileFormat::HfeImage),
+        "86f" => Some(DiskImageFileFormat::F86Image),
+        _ => None,
+    }
+}
+
+/// What is in each floppy drive.
+///
+/// `writes` IS NOT A DIRTY FLAG, and the shape of it invites exactly that
+/// mistake. It is fluxfox's own `write_ct`, which `post_load_process` sets to
+/// **1** at mount - so it never reads 0 - and which on a raw sector image,
+/// loaded at BitStream resolution the way MartyPC loads one, is never advanced
+/// at all: `DiskImage::write_sector` delegates straight to the track, and
+/// `BitStreamTrack`'s own `add_write` call is commented out upstream (fluxfox
+/// `marty_consumer_0.34`). Measured here: it read 1 through a Control Panel
+/// close that demonstrably wrote three sectors. It is reported because it is
+/// the machine's own number and may come back to life upstream; nothing should
+/// decide anything on it. The question it looks like it answers is answered by
+/// flushing and comparing the bytes (`tools/os88flush.py`'s `dirty`).
+fn disks(machine: &mut Machine) -> Value {
+    let fdc = match machine.fdc() {
+        Some(fdc) => fdc,
+        None => return err("no floppy controller in this machine"),
+    };
+    let mut out = Vec::new();
+    for drive in 0..fdc.drive_ct() {
+        let (image, writes) = fdc.get_image(drive);
+        let mut row = json!({"drive": drive, "present": image.is_some(), "writes": writes});
+        if let Some(arc) = image {
+            if let Ok(img) = arc.read() {
+                let geom = img.geometry();
+                row["cylinders"] = json!(geom.c());
+                row["heads"] = json!(geom.h());
+                row["format"] = json!(format!("{:?}", img.source_format()));
+            }
+        }
+        if let Some(p) = mounted_path(drive) {
+            row["path"] = json!(p.display().to_string());
+        }
+        out.push(row);
+    }
+    json!({"ok": true, "drives": out})
+}
+
+/// Write a drive's live image out to a file on the host.
+///
+/// This is the eframe frontend's `GuiEvent::SaveFloppyAs` - the same
+/// `fluxfox::ImageWriter` over the same `Arc<RwLock<DiskImage>>` - reached
+/// from a socket instead of from a menu, because a headless MartyPC has the
+/// writes and no way to spend them. Nothing in `martypc_headless` or
+/// `marty_core` ever writes an image back: `load_image_from` reads the file
+/// once at mount and every sector the guest writes after that lives and dies
+/// in RAM. So a scripted session could make os8088 save a document and then
+/// had to ask os8088 itself whether it had worked, which cannot catch the bug
+/// where the writer and the reader agree on the same wrong thing.
+///
+/// With no `path`, it writes back over the file the drive was mounted from -
+/// the menu's `Save Floppy` rather than its `Save Floppy As`. That is the
+/// verb a harness wants: `launch()` already copies each image into the run
+/// directory, so flushing in place leaves the session's disk exactly where
+/// the next tool expects to find it.
+///
+/// It does NOT pause the machine, and the caller usually should. A flush is a
+/// read of the image at the instant it is asked for, so one taken in the
+/// middle of a multi-sector commit captures a volume that is genuinely
+/// inconsistent - data written, FAT not flushed yet - which reads afterwards
+/// as a corrupt disk rather than as a badly-timed capture.
+fn flush(machine: &mut Machine, req: &Value) -> Value {
+    let drive = req.get("drive").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let fmt_name = req.get("format").and_then(Value::as_str).unwrap_or("raw");
+    let format = match format_by_name(fmt_name) {
+        Some(f) => f,
+        None => return err(&format!("unknown format '{}': raw, imd, psi, pri, mfm, hfe, 86f", fmt_name)),
+    };
+    let path = match req.get("path").and_then(Value::as_str) {
+        Some(p) => PathBuf::from(p),
+        None => match mounted_path(drive) {
+            Some(p) => p,
+            None => return err(&format!(
+                "drive {} was not mounted by this server, so there is nowhere to \
+                 write it back to: give a path", drive)),
+        },
+    };
+
+    let fdc = match machine.fdc() {
+        Some(fdc) => fdc,
+        None => return err("no floppy controller in this machine"),
+    };
+    if drive >= fdc.drive_ct() {
+        return err(&format!("drive {}: this machine has {}", drive, fdc.drive_ct()));
+    }
+    let (image, writes) = fdc.get_image(drive);
+    let image = match image {
+        Some(i) => i,
+        None => return err(&format!("drive {} is empty", drive)),
+    };
+    // `write()` and not `unwrap()`ing the guard: a poisoned lock is a JSON
+    // error the client can print, where a panic here takes the whole emulator
+    // - and the machine under it - down with a backtrace nobody asked for.
+    let mut image = match image.write() {
+        Ok(g) => g,
+        Err(_) => return err("the disk image lock is poisoned"),
+    };
+    if let Err(e) = ImageWriter::<std::fs::File>::new(&mut image)
+        .with_format(format)
+        .with_path(path.clone())
+        .write()
+    {
+        return err(&format!("{}: {:?}", path.display(), e));
+    }
+    let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    log::info!("Flushed floppy drive {} to {} ({} bytes)", drive, path.display(), bytes);
+    json!({
+        "ok": true,
+        "drive": drive,
+        "path": path.display().to_string(),
+        "format": fmt_name,
+        "bytes": bytes,
+        "writes": writes,
+    })
 }
 
 /// Put a VHD on the machine's hard disk controller.
@@ -398,8 +559,10 @@ impl DebugServer {
                 status(machine, exec)
             }
             "bp" => breakpoints(machine, &req),
-            "screen" => screen(machine),
-            "video" => video(machine),
+            "screen" => screen(machine, &req),
+            "video" => video(machine, &req),
+            "cards" => cards(machine),
+            "park" => park(machine, &req),
             "fbuf" => fbuf(machine, &req),
             "flicker" => flicker(machine, exec, &req),
             "pace" => pace(machine, exec, &req),
@@ -408,6 +571,8 @@ impl DebugServer {
             "restore" => restore(self, &req),
             "key" => key(machine, &req),
             "mouse" => mouse(machine, &req),
+            "disks" => disks(machine),
+            "flush" => flush(machine, &req),
             "history" => json!({"ok": true, "history": machine.cpu().dump_instruction_history_string()}),
             "callstack" => json!({"ok": true, "callstack": machine.cpu().dump_call_stack()}),
             "quit" => {
@@ -522,6 +687,15 @@ fn reg_of(name: &str) -> Option<Register16> {
         "ds" => Register16::DS,
         "es" => Register16::ES,
         "ss" => Register16::SS,
+        // NO "ip"/"pc" HERE, DELIBERATELY. `Register16::PC` is settable and
+        // setting it is not enough: `pc` is the FETCH pointer and the core
+        // derives `ip() = pc - queue.len()`, so a bare write leaves whatever
+        // the 8088 had already prefetched from the OLD address sitting in
+        // front of the new one, and those bytes execute first. Measured:
+        // parking at 0x0500 landed at 0xD4CC. The fix is a queue flush, and
+        // `CpuDispatch` does not expose one - only the `Cpu` trait's `reset`,
+        // which clears every register and is therefore wrong for `setreg`.
+        // `park` below is the operation that actually wants this.
         _ => return None,
     })
 }
@@ -546,6 +720,32 @@ fn setreg(machine: &mut Machine, req: &Value) -> Value {
         }
         None => err(&format!("unknown register: {}", name)),
     }
+}
+
+/// Point the CPU at an address, with the prefetch queue flushed.
+///
+/// `setreg` cannot do this - see `reg_of` - so this goes through the `Cpu`
+/// trait's reset vector instead: set it, then reset the CPU, which lands at
+/// CS:IP with an empty queue and a known state. THAT ALSO CLEARS EVERY OTHER
+/// REGISTER, which is why it is its own command with its own name rather than
+/// a quiet special case inside `setreg`. Devices are untouched: this resets
+/// the processor, not the machine.
+///
+/// What it is for is taking the guest OUT of a measurement. An emulator-level
+/// question - "do these two video cards have two separate memories" - is
+/// answered by driving the cards from here and parking the CPU in a `jmp $`,
+/// because a booted operating system programs both cards and clears both
+/// framebuffers, which is exactly the state such a test is trying to control
+/// (tests/dualcheck.py).
+fn park(machine: &mut Machine, req: &Value) -> Value {
+    let cs = req.get("cs").and_then(Value::as_u64).unwrap_or(0) as u16;
+    let ip = match req.get("ip").and_then(Value::as_u64) {
+        Some(v) => v as u16,
+        None => return err("need ip (and optionally cs, default 0)"),
+    };
+    machine.cpu_mut().set_reset_vector(CpuAddress::Segmented(cs, ip));
+    machine.cpu_mut().reset();
+    json!({"ok": true, "cs": cs, "ip": ip})
 }
 
 fn read_mem(machine: &mut Machine, req: &Value) -> Value {
@@ -710,15 +910,155 @@ fn breakpoints(machine: &mut Machine, req: &Value) -> Value {
 /// RAM at that address, which on a machine whose card has never written
 /// through is a screen of zeroes. It does not error; it returns a plausible
 /// blank screen, which is the worst way to be wrong. Ask the card instead.
+// --- WHICH CARD (docs/DUAL-DISPLAY-PLAN.md 9) -------------------------------
+//
+// A machine may hold more than one video card - `[[machine.video]]` is an
+// array and the bus builder installs every entry - and until this existed
+// every capture here went through `primary_videocard()`, which is
+// `videocard_ids[0]`: the FIRST config entry, always. On a one-card machine
+// that is the only answer there is. On a two-card machine it silently
+// answered about card 0 while the caller believed it had asked about the
+// other one, which is the worst available failure for an instrument.
+//
+// So every capture takes an optional `card`, and every capture REPORTS the
+// card it answered about. Absent means the primary, so nothing that already
+// worked changes.
+//
+// SELECTION IS BY `VideoCardId.idx`, NOT BY ITERATION ORDER. `for_each_videocard`
+// walks a `MartyHashMap`, whose order is the hasher's business; `idx` is the
+// enumerate() index of the `[[machine.video]]` entry and is the only stable
+// name a config author can predict.
+
+/// Every card the machine has, in config order.
+fn card_ids(machine: &Machine) -> Vec<VideoCardId> {
+    machine.bus().enumerate_videocards()
+}
+
+fn card_name(id: &VideoCardId) -> String {
+    format!("{:?}", id.vtype).to_lowercase()
+}
+
+/// Resolve a request's `card` to a `VideoCardId.idx`.
+///
+/// Absent -> the primary. A number -> that `idx`. A string -> that video type,
+/// and it REFUSES an ambiguous one rather than picking: two CGAs in a machine
+/// is a legal config, and "cga" would then mean whichever the hasher reached
+/// first. Errors name what the machine actually has, because the commonest
+/// mistake here is asking a one-card machine for its second card.
+fn card_idx(machine: &Machine, req: &Value) -> Result<usize, String> {
+    let ids = card_ids(machine);
+    if ids.is_empty() {
+        return Err("no video card".to_string());
+    }
+    let have = || {
+        ids.iter()
+            .map(|i| format!("{}={}", i.idx, card_name(i)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match req.get("card") {
+        None | Some(Value::Null) => Ok(ids[0].idx),
+        Some(v) if v.is_u64() => {
+            let want = v.as_u64().unwrap() as usize;
+            match ids.iter().find(|i| i.idx == want) {
+                Some(i) => Ok(i.idx),
+                None => Err(format!("no card {} - this machine has {}", want, have())),
+            }
+        }
+        Some(v) if v.is_string() => {
+            let want = v.as_str().unwrap().to_lowercase();
+            let hits: Vec<&VideoCardId> = ids.iter().filter(|i| card_name(i) == want).collect();
+            match hits.len() {
+                1 => Ok(hits[0].idx),
+                0 => Err(format!("no {} card - this machine has {}", want, have())),
+                n => Err(format!(
+                    "{} {} cards ({}) - select by index, not by type",
+                    n,
+                    want,
+                    have()
+                )),
+            }
+        }
+        Some(_) => Err("card must be an index or a video type name".to_string()),
+    }
+}
+
+/// Run `f` against the card with this `idx`.
+///
+/// `for_each_videocard` hands out one `VideoCardInterface` at a time and there
+/// is no borrow that outlives the callback, so the work happens INSIDE it and
+/// the answer comes out in a captured Option. That is also why `f` is FnOnce
+/// held in an Option: the walk is FnMut and would otherwise refuse to move it.
+fn with_card<T>(
+    machine: &mut Machine,
+    idx: usize,
+    f: impl FnOnce(&mut dyn VideoCard) -> T,
+) -> Result<T, String> {
+    let mut out = None;
+    let mut held = Some(f);
+    machine.for_each_videocard(|vci| {
+        if vci.id.idx == idx {
+            if let Some(g) = held.take() {
+                out = Some(g(&mut **vci.card));
+            }
+        }
+    });
+    out.ok_or_else(|| format!("card {} is not installed", idx))
+}
+
+/// The frame counter of one card. Every capture loop paces on this, and on a
+/// two-card machine the two cards have DIFFERENT field rates - 50Hz Hercules
+/// against 60Hz CGA - so pacing card 1's capture on card 0's counter samples
+/// the wrong clock and reads as jitter that is not there.
+fn card_frames(machine: &mut Machine, idx: usize) -> Result<u64, String> {
+    with_card(machine, idx, |c| c.frame_count())
+}
+
+/// Enumerate the machine's video cards.
+///
+/// The answer to "did my two-card config actually produce two cards", which
+/// nothing else here could ask: `video` on a machine whose second entry was
+/// dropped looks exactly like `video` on a machine that never had one.
+fn cards(machine: &mut Machine) -> Value {
+    let ids = card_ids(machine);
+    let mut out: Vec<Value> = Vec::with_capacity(ids.len());
+    for id in &ids {
+        let idx = id.idx;
+        let info = with_card(machine, idx, |c| {
+            let ext = c.display_extents();
+            let dm = c.display_mode();
+            (format!("{:?}", dm), ext.field_w, ext.field_h, c.frame_count())
+        });
+        let (mode, fw, fh, frames) = match info {
+            Ok(v) => v,
+            Err(e) => return err(&e),
+        };
+        out.push(json!({
+            "idx": idx,
+            "type": card_name(id),
+            "primary": idx == ids[0].idx,
+            "mode": mode,
+            "field_w": fw,
+            "field_h": fh,
+            "frames": frames,
+        }));
+    }
+    json!({"ok": true, "count": out.len(), "cards": out})
+}
+
 /// Which card, and whether it is in a graphics mode.
 ///
 /// A host that wants the framebuffer has to know the layout, and GUESSING it
 /// from memory does not work: an unmapped 0xB0000 reads as zeroes rather than
 /// erroring, so "is there something at the MDA aperture" answers yes on a
 /// machine that has only a CGA. The card knows; ask it.
-fn video(machine: &mut Machine) -> Value {
-    match machine.primary_videocard() {
-        Some(mut card) => {
+fn video(machine: &mut Machine, req: &Value) -> Value {
+    let idx = match card_idx(machine, req) {
+        Ok(i) => i,
+        Err(e) => return err(&e),
+    };
+    let ncards = card_ids(machine).len();
+    match with_card(machine, idx, |card| {
             let cur = card.cursor_info();
             let dm = card.display_mode();
             let mode_name = format!("{:?}", dm);
@@ -772,9 +1112,16 @@ fn video(machine: &mut Machine) -> Value {
                 "stride": ext.row_stride,
                 "double_scan": ext.double_scan,
                 "apertures": apers,
+                // WHICH CARD ANSWERED, always - so a two-card capture that
+                // silently fell back to the primary says so in its own output
+                // rather than looking like a correct answer about the card
+                // the caller meant.
+                "card": idx,
+                "cards": ncards,
             })
-        }
-        None => err("no video card"),
+    }) {
+        Ok(v) => v,
+        Err(e) => err(&e),
     }
 }
 
@@ -808,11 +1155,16 @@ fn video(machine: &mut Machine) -> Value {
 /// should not have to know which kind of buffer it came out of.
 fn fbuf(machine: &mut Machine, req: &Value) -> Value {
     let sel = req.get("aperture").and_then(Value::as_u64).unwrap_or(0) as usize;
-    match grab(machine, sel) {
+    let idx = match card_idx(machine, req) {
+        Ok(i) => i,
+        Err(e) => return err(&e),
+    };
+    match grab(machine, idx, sel) {
         Ok((w, h, data)) => json!({
             "ok": true,
             "w": w,
             "h": h,
+            "card": idx,
             "format": "rgb24",
             "data": hex_encode(&data),
         }),
@@ -862,6 +1214,10 @@ fn flicker(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> V
         return err(&format!("frames must be 3..{}", MAX_FRAMES));
     }
     let sel = req.get("aperture").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let idx = match card_idx(machine, req) {
+        Ok(i) => i,
+        Err(e) => return err(&e),
+    };
     let batch = ((machine.get_cpu_mhz() * 1_000_000.0) / 4000.0) as u32; // ~0.25ms
     let c0 = machine.cpu_cycles();
 
@@ -874,15 +1230,15 @@ fn flicker(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> V
         // Run until the card finishes a frame. Bounded twice: by a wall clock
         // and by a frame that never arrives (a guest that has switched the
         // display off, or hung with the CRTC stopped).
-        let f0 = match machine.primary_videocard() {
-            Some(c) => c.frame_count(),
-            None => return err("no video card"),
+        let f0 = match card_frames(machine, idx) {
+            Ok(f) => f,
+            Err(e) => return err(&e),
         };
         exec.set_op(ExecutionOperation::Run);
         exec.set_state(ExecutionState::Running);
         loop {
             machine.run(batch, exec);
-            let f = machine.primary_videocard().map(|c| c.frame_count()).unwrap_or(f0);
+            let f = card_frames(machine, idx).unwrap_or(f0);
             if f != f0 {
                 break;
             }
@@ -892,7 +1248,7 @@ fn flicker(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> V
         }
         exec.set_op(ExecutionOperation::Pause);
         exec.set_state(ExecutionState::Paused);
-        match grab(machine, sel) {
+        match grab(machine, idx, sel) {
             Ok((gw, gh, data)) => {
                 w = gw;
                 h = gh;
@@ -1014,6 +1370,10 @@ fn pace(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> Valu
         return err(&format!("frames must be 2..{}", MAX_PACE));
     }
     let sel = req.get("aperture").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let idx = match card_idx(machine, req) {
+        Ok(i) => i,
+        Err(e) => return err(&e),
+    };
     // An exclusion rect, [x0,y0,x1,y1] inclusive. What it exists for is a
     // BLINKING CURSOR: hardware or drawn, it changes pixels on a clock of its
     // own, and a pacing series is a question about somebody else's clock.
@@ -1037,15 +1397,15 @@ fn pace(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> Valu
     let started = Instant::now();
 
     for _ in 0..n {
-        let f0 = match machine.primary_videocard() {
-            Some(c) => c.frame_count(),
-            None => return err("no video card"),
+        let f0 = match card_frames(machine, idx) {
+            Ok(f) => f,
+            Err(e) => return err(&e),
         };
         exec.set_op(ExecutionOperation::Run);
         exec.set_state(ExecutionState::Running);
         loop {
             machine.run(batch, exec);
-            let f = machine.primary_videocard().map(|c| c.frame_count()).unwrap_or(f0);
+            let f = card_frames(machine, idx).unwrap_or(f0);
             if f != f0 {
                 break;
             }
@@ -1056,7 +1416,7 @@ fn pace(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> Valu
         }
         exec.set_op(ExecutionOperation::Pause);
         exec.set_state(ExecutionState::Paused);
-        let (gw, gh, cur) = match grab(machine, sel) {
+        let (gw, gh, cur) = match grab(machine, idx, sel) {
             Ok(v) => v,
             Err(e) => return err(&e),
         };
@@ -1253,9 +1613,16 @@ fn advance(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> V
     if want_cycles.is_none() == want_frames.is_none() {
         return err("advance needs exactly one of cycles or frames");
     }
+    // `frames` is a question about ONE card, and on a two-card machine the two
+    // disagree: 50Hz Hercules against 60Hz CGA. Absent, this is the primary,
+    // which is what it always was.
+    let idx = match card_idx(machine, req) {
+        Ok(i) => i,
+        Err(e) => return err(&e),
+    };
     let batch = ((machine.get_cpu_mhz() * 1_000_000.0) / 4000.0).max(1.0) as u32;
     let c0 = machine.cpu_cycles();
-    let f0 = machine.primary_videocard().map(|c| c.frame_count()).unwrap_or(0);
+    let f0 = card_frames(machine, idx).unwrap_or(0);
     let started = Instant::now();
 
     // CLEAR A LATCHED BREAKPOINT STATE FIRST. An ExecutionControl sitting in
@@ -1286,7 +1653,7 @@ fn advance(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> V
             }
         }
         if let Some(n) = want_frames {
-            let f = machine.primary_videocard().map(|c| c.frame_count()).unwrap_or(f0);
+            let f = card_frames(machine, idx).unwrap_or(f0);
             if f.saturating_sub(f0) >= n {
                 break;
             }
@@ -1302,18 +1669,15 @@ fn advance(machine: &mut Machine, exec: &mut ExecutionControl, req: &Value) -> V
     }
     let mut v = status(machine, exec);
     v["advanced_cycles"] = json!(machine.cpu_cycles() - c0);
-    v["advanced_frames"] = json!(machine
-        .primary_videocard()
-        .map(|c| c.frame_count())
-        .unwrap_or(f0)
-        .saturating_sub(f0));
+    v["advanced_frames"] = json!(card_frames(machine, idx).unwrap_or(f0).saturating_sub(f0));
+    v["card"] = json!(idx);
     v
 }
 
 /// One rendered frame, cropped to an aperture, as packed rgb24.
-fn grab(machine: &mut Machine, sel: usize) -> Result<(u32, u32, Vec<u8>), String> {
-    match machine.primary_videocard() {
-        Some(mut card) => {
+fn grab(machine: &mut Machine, idx: usize, sel: usize) -> Result<(u32, u32, Vec<u8>), String> {
+    with_card(machine, idx, |card| {
+        {
             let apers = card.display_apertures();
             let a = match apers.get(sel) {
                 Some(a) => *a,
@@ -1359,14 +1723,23 @@ fn grab(machine: &mut Machine, sel: usize) -> Result<(u32, u32, Vec<u8>), String
             }
             Ok((a.w, a.h, out))
         }
-        None => Err("no video card".to_string()),
-    }
+    })
+    // with_card answers Result<Result<..>>: the outer is "is there such a
+    // card", the inner is "could that card produce this aperture". Flatten;
+    // the caller wants one error either way.
+    .and_then(|r| r)
 }
 
-fn screen(machine: &mut Machine) -> Value {
-    match machine.primary_videocard() {
-        Some(mut card) => json!({"ok": true, "rows": card.get_text_mode_strings()}),
-        None => err("no video card"),
+fn screen(machine: &mut Machine, req: &Value) -> Value {
+    let idx = match card_idx(machine, req) {
+        Ok(i) => i,
+        Err(e) => return err(&e),
+    };
+    match with_card(machine, idx, |card| {
+        json!({"ok": true, "card": idx, "rows": card.get_text_mode_strings()})
+    }) {
+        Ok(v) => v,
+        Err(e) => err(&e),
     }
 }
 

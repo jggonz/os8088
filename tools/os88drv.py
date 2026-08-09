@@ -15,7 +15,9 @@ time, against the image that actually arrived in memory):
   +0   magic 'O8'                the package magic; the version tells them apart
   +2   version 4                 3 is an application. A 3 here would be a
                                  driver the app loader would try to RUN.
-  +3   class                     1 = sound; must be one the kernel knows
+  +3   class                     1 = sound; must be one this tool knows.
+                                 4 = an overlay, which is a driver's own
+                                 loadable half and not a kernel class
   +4   link base 0               org 0, like every v3 package
   +6   entry                     inside the image and past the header
   +8   image size                == the file's own size, exactly. A driver
@@ -37,7 +39,11 @@ HDR = 32
 MAGIC = 0x384F                  # 'O','8'
 DRV_VER = 4
 MAX_SIZE = 40 * 1024            # DRV_MAX_KB in kernel/driver.inc
-CLASSES = {1: "sound", 2: "disk", 3: "debug"}
+# 4 is NOT a kernel driver class: it is a driver's own loadable half
+# (OS88_OVERLAY, SPEC.md 52.11), stamped by this tool because the header, the
+# dispatcher and the one-claim load discipline are identical. The kernel never
+# loads one - its OWNER does - so drv_check never sees it and would refuse it.
+CLASSES = {1: "sound", 2: "disk", 3: "debug", 4: "overlay"}
 
 
 def fail(msg: str) -> None:

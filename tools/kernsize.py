@@ -59,6 +59,39 @@ DOC = os.path.join(ROOT, "docs", "KERNEL-MEMORY.md")
 BEGIN = "<!-- kernsize:begin -->"
 END = "<!-- kernsize:end -->"
 
+# --- the two builds (docs/KERN-SPLIT-PLAN.md) --------------------------------
+# kern_big and kern_small are two kernels off one tree, and BOTH ARE SHIPPED
+# PRODUCTS - big by default, small for the 128KB floor. That makes the variant
+# a different kind of flag from every other -D this script forwards:
+#
+#   VIDEO=cga, DISKCNT=1, REDRAWFULL=1 ... are KNOBS. They produce a kernel
+#   nobody ships, so blessing one would write a baseline describing a binary
+#   that does not exist on any disk, and --bless refuses them.
+#
+#   KERN_BIG / KERN_SMALL are VARIANTS. Each has a baseline of its own, and
+#   each is blessable, because each IS a shipped kernel.
+#
+# Conflating the two is the bug this section exists to prevent: with one flat
+# baseline, `make KERN_SMALL=1` reported small's sections against big's
+# figures and every line was a delta of the difference between the products -
+# noise that looks exactly like a regression, in the build that is supposed to
+# be defended byte by byte.
+VARIANTS = ("big", "small")
+VARIANT_DEFS = {"-DKERN_BIG": "big", "-DKERN_SMALL": "small"}
+
+
+def variant_of(nasm_args):
+    """Which product is this? Defaults to big, as the Makefile does."""
+    for arg in nasm_args:
+        if arg in VARIANT_DEFS:
+            return VARIANT_DEFS[arg]
+    return "big"
+
+
+def knob_args(nasm_args):
+    """The args that make this a KNOB build rather than a shipped variant."""
+    return [x for x in nasm_args if x not in VARIANT_DEFS]
+
 # The sections an author can actually move a byte into, in the order the
 # ladder lays them out.  `ovl` is here because it has to be watched, not
 # because it costs anything: the boot overlay lands in the FAT window and is
@@ -98,7 +131,7 @@ THEMES = (
       "loader.inc", "assoc.inc")),
     ("the window system and its furniture",
      ("wm.inc", "ui.inc", "menu.inc", "instance.inc", "desk.inc", "dock.inc",
-      "fsx.inc", "clip.inc", "fprog.inc")),
+      "fsx.inc", "clip.inc", "fprog.inc", "toast.inc")),
     ("hardware: drivers, clock, mouse, sound, CPU, XMS",
      ("mouse.inc", "clock.inc", "driver.inc", "snd.inc", "cpudet.inc",
       "xmem.inc")),
@@ -259,10 +292,16 @@ def delta(n):
     return f"{n:+,}" if n else "+0"
 
 
-def report(cur, base, out=sys.stdout):
+def report(cur, base, variant="big", out=sys.stdout):
     """Five lines. The sum first, because that is the number an author
-    controls; the rungs second, because that is what the machine feels."""
+    controls; the rungs second, because that is what the machine feels.
+
+    EVERY LINE NAMES ITS VARIANT, and that is not decoration: the two builds
+    have separate baselines and separate budgets, and a run of figures with no
+    label is a run of figures somebody will compare against the other build's.
+    """
     p = lambda s: print(s, file=out)
+    tag = "kernsize[%s]:" % variant
 
     def d(key):
         return None if base is None else cur[key] - base.get(key, cur[key])
@@ -276,7 +315,7 @@ def report(cur, base, out=sys.stdout):
             parts.append(f"{s} {kb(cur[s])} {delta(dv)}")
         else:
             parts.append(f"{s} {kb(cur[s])}")
-    p("kernsize: sections   " + "  ".join(parts)
+    p(tag + " sections   " + "  ".join(parts)
       + (f"   (sum {delta(total)})" if base is not None else ""))
 
     crossed = []
@@ -296,10 +335,10 @@ def report(cur, base, out=sys.stdout):
         else:
             cell += f" ({kb(slack)} left)"
         cells.append(cell)
-    p("kernsize: rungs      " + "   ".join(cells))
+    p(tag + " rungs      " + "   ".join(cells))
 
     spare = cur["budget"] - cur["ksize"]
-    line = (f"kernsize: footprint  KERN_SIZE {kb(cur['ksize'])}"
+    line = (f"{tag} footprint  KERN_SIZE {kb(cur['ksize'])}"
             f" of KERN_BUDGET {kb(cur['budget'])} -> {kb(spare)} spare"
             f" ({spare // 512} step{'' if spare // 512 == 1 else 's'})")
     if base is not None:
@@ -308,7 +347,7 @@ def report(cur, base, out=sys.stdout):
     p(line)
 
     seg = cur["text"] + cur["bss"]
-    p(f"kernsize: segment    .text+.bss {kb(seg)} of KERN_CODE_MAX"
+    p(f"{tag} segment    .text+.bss {kb(seg)} of KERN_CODE_MAX"
       f" {kb(cur['codemax'])} -> {kb(cur['codemax'] - seg)} left")
 
     # The ladder, because every base in it moves whenever a rung does - and
@@ -318,16 +357,17 @@ def report(cur, base, out=sys.stdout):
     cold = ks + cur["imgpara"]
     fat = cold + cur["coldpara"]
     low = fat + cur["fatpara"]
-    p(f"kernsize: ladder     KERNEL {ks:#06x}  COLD {cold:#06x}"
+    p(f"{tag} ladder     KERNEL {ks:#06x}  COLD {cold:#06x}"
       f"  FAT {fat:#06x}  LOW {low:#06x}  HEAP {cur['kend']:#06x}"
       f" = {cur['kend'] * 16 / 1024:.1f} KB   (heap KB = int 12h"
       f" - {cur['kend'] * 16 / 1024:.1f})")
 
     if base is None:
-        p("kernsize: no baseline in docs/KERNEL-MEMORY.md - run --bless")
+        p(tag + " no baseline for this variant in docs/KERNEL-MEMORY.md"
+                       " - run `--bless` on it")
     elif crossed:
         for name, a, b in crossed:
-            p(f"kernsize: *** the {name} rung CROSSED: {a} -> {b}"
+            p(f"{tag} *** the {name} rung CROSSED: {a} -> {b}"
               f" steps of 512 - the machine's RAM moved ***")
     elif total:
         p("kernsize: no rung crossed - the machine pays nothing YET, and the"
@@ -418,7 +458,7 @@ def render_themes(rows):
     return "\n".join(lines), missing
 
 
-def read_baseline():
+def read_baseline(variant):
     try:
         doc = open(DOC).read()
     except OSError:
@@ -427,10 +467,29 @@ def read_baseline():
     if not m:
         return None
     try:
-        return json.loads(re.sub(r"^```\w*$", "", m.group(1).strip(),
+        blob = json.loads(re.sub(r"^```\w*$", "", m.group(1).strip(),
                                  flags=re.M).strip())
     except ValueError:
         return None
+    return baseline_pick(blob, variant)
+
+
+def baseline_pick(blob, variant):
+    """One variant out of the block, tolerating the pre-split flat form.
+
+    The old baseline was the figures themselves, with no variant above them.
+    That form is read as BIG - which is what it described, big being the
+    default and the split having removed nothing - so an un-blessed tree keeps
+    reporting instead of going quiet the moment this landed. A missing variant
+    answers None and `report` prints the absolute numbers with no deltas, which
+    is the honest thing to say about a build nobody has blessed yet.
+    """
+    if not isinstance(blob, dict):
+        return None
+    if any(k in blob for k in VARIANTS):
+        v = blob.get(variant)
+        return v if isinstance(v, dict) else None
+    return blob if variant == "big" else None
 
 
 def write_block(begin, end, body, what):
@@ -447,9 +506,22 @@ def write_block(begin, end, body, what):
     return 0
 
 
-def write_baseline(v):
+def write_baseline(v, variant):
     doc = open(DOC).read()
-    body = json.dumps({k: v[k] for k in sorted(v)}, indent=2)
+    # MERGE, never replace: blessing big must not delete small's figures, and
+    # the two are blessed by two different commands minutes apart.
+    m = re.search(re.escape(BEGIN) + r"(.*?)" + re.escape(END), doc, re.S)
+    blob = {}
+    if m:
+        try:
+            old = json.loads(re.sub(r"^```\w*$", "", m.group(1).strip(),
+                                    flags=re.M).strip())
+            if isinstance(old, dict):
+                blob = old if any(k in old for k in VARIANTS) else {"big": old}
+        except ValueError:
+            blob = {}
+    blob[variant] = {k: v[k] for k in sorted(v)}
+    body = json.dumps({k: blob[k] for k in sorted(blob)}, indent=2)
     block = f"{BEGIN}\n```json\n{body}\n```\n{END}"
     new, n = re.subn(re.escape(BEGIN) + r".*?" + re.escape(END), block, doc,
                      flags=re.S)
@@ -474,6 +546,8 @@ def main():
     # a positional, because the knobs arrive looking like options
     # (-DVID_FORCE=3) and argparse would claim them.
     a, nasm_args = ap.parse_known_args()
+    variant = variant_of(nasm_args)
+    knobs = knob_args(nasm_args)
 
     cur, err = measure(nasm_args)
     if cur is None:
@@ -508,19 +582,27 @@ def main():
                       file=sys.stderr)
 
     if a.bless:
-        if nasm_args:
-            print("kernsize: refusing to bless a knob build - the baseline is"
-                  " the SHIPPED kernel", file=sys.stderr)
+        if knobs:
+            print("kernsize: refusing to bless a knob build (%s) - a baseline"
+                  " describes a SHIPPED kernel, and no disk carries this one"
+                  % " ".join(knobs), file=sys.stderr)
             return 1
-        report(cur, read_baseline())
-        rc = write_baseline(cur)
-        if per is not None:
+        report(cur, read_baseline(variant), variant)
+        rc = write_baseline(cur, variant)
+        # THE MODULE AND THEME TABLES ARE THE DEFAULT VARIANT'S, and there is
+        # one of each rather than one per variant. Written by whichever bless
+        # ran LAST they would silently describe kern_small on a document whose
+        # every other figure is the shipped kernel's - an ordering dependency
+        # nobody would think to preserve, producing a table that is wrong in a
+        # way no gate can see. So only big writes them; `--modules
+        # -DKERN_SMALL` prints small's on demand.
+        if per is not None and variant == "big":
             rc = write_block(MODS_BEGIN, MODS_END, table, "module table") or rc
             rc = write_block(THEMES_BEGIN, THEMES_END, themes,
                              "theme table") or rc
         return rc
 
-    report(cur, read_baseline())
+    report(cur, read_baseline(variant), variant)
     return 0
 
 

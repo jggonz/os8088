@@ -29,6 +29,15 @@ floppy is 30x fast, so no figure with a disk in its path means anything here,
 and it would not have caught SPEC.md §18.91's `AL` bug any more than QEMU did.
 docs/MARTYPC-DEBUG.md has the long version of both.
 
+**What the guest WROTE to a floppy is a different question, and `flush`
+answers it.** MartyPC keeps a mounted image in RAM and never writes it back —
+that is the eframe frontend's Media ▸ Save Floppy As, which a headless run has
+no way to reach — so the debug server grew the same `fluxfox::ImageWriter`
+call as a command, and `tools/os88flush.py` is the client: `diff` for what
+changed since the mount, `ls`/`get` for the volume read with no kernel code
+involved, `verify` for `os88disk.py`'s structural fsck. It is the only route
+to os8088's write path that is not also os8088's read path.
+
 ## The IBM BIOS is not in this tree
 
 `roms/` is gitignored and ships empty. The BIOS is IBM's, IBM has never licensed

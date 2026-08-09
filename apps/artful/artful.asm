@@ -87,6 +87,10 @@ AT_SROWS   equ 30                   ; strip rows (the tallest row height)
 AT_CBGCAP  equ 80                   ; per-8px-column background flags
 AT_UMAX    equ 15                   ; undo/redo depth (MAX_UNDO_LEVELS)
 AT_CLIPBSS equ 2048                 ; clipboard fallback when no claim
+AT_FONTBYTES equ 95*8               ; room for the kernel's glyph table
+                                    ; (FONT_FIRST..FONT_LAST at 8 rows), which
+                                    ; at_font_init copies in and at_glyph
+                                    ; indexes as (char-32)*8
 AT_ZMAX    equ 1                    ; zoom levels 0..1 (Default / Large)
 AT_NMENUS  equ 5
 
@@ -113,7 +117,7 @@ at_entry:
     pop si
     call at_geom_init               ; live screen numbers (any context)
     call at_menu_init               ; the fullscreen bar's cell widths
-    call at_font_init               ; the ROM 8x8 glyphs, copied in
+    call at_font_init               ; the KERNEL's 8x8 glyphs, copied in
     mov byte [at_writer], 1         ; Writer is the default view (main.c)
     call at_cmd_newdoc              ; a fresh untitled document
     call at_arg                     ; ...unless we were launched to open one
@@ -122,9 +126,21 @@ at_entry:
     ret
 
 ; -----------------------------------------------------------------------------
-; at_font_init - copy ROM glyphs 32..126 into at_fontbuf
-; paint.asm's probe (SPEC.md 42): int 10h AX=1130h BH=3, falling back to
-; the IBM ROM set at F000:FA6E when a pre-EGA BIOS leaves ES:BP alone.
+; at_font_init - copy the KERNEL's 8x8 glyphs into at_fontbuf
+;
+; This used to be font_init's probe re-run inside the package - int 10h
+; AX=1130h BH=3 with the kernel's own F000:FA6E fallback behind it - which
+; paint.asm had already stopped doing (SPEC.md 42) and this one was simply
+; missed. OSAPI_FONT_GLYPHS hands the table over, and what that buys is not
+; the forty lines: it is that this app letters in the SAME TYPEFACE as the UI
+; around it. On a `make FONT=` kernel (SPEC.md 6.2) the two are different
+; fonts, so a probe here would have rendered the document in the machine's ROM
+; face inside a window drawn in ours.
+;
+; The local copy stays. Paint fetches eight bytes at a time through the
+; answered segment because 760 bytes is 3.8% of everything it is allowed to
+; be; here at_glyph is the inner loop of a styled, scaled renderer and reads
+; [si] through DS, so a copy keeps that loop untouched.
 ; -----------------------------------------------------------------------------
 at_font_init:
     push ax
@@ -133,36 +149,30 @@ at_font_init:
     push dx
     push si
     push di
-    push bp
-    push es
     push ds
-    xor ax, ax
-    mov es, ax
-    xor bp, bp
-    mov ax, 0x1130
-    mov bh, 3
-    int 0x10                        ; ES:BP -> the 8x8 font, if the BIOS has
-    mov ax, es                      ; one
-    or ax, bp
-    jnz .got
-    mov ax, 0xF000
-    mov es, ax
-    mov bp, 0xFA6E
-.got:
-    ; copy 95 glyphs x 8 bytes, from glyph 32 on
-    mov si, bp
-    add si, 32*8
     push es
-    pop ds                          ; DS = the ROM (ours is on the stack)
-    pop es                          ; ES = our data segment (pushed as DS)
-    push es                         ; keep the stack balanced for the pops
+    call OSAPI_FONT_GLYPHS          ; DX:SI = the table, AL..AH = the range it
+                                    ; covers, CX = bytes per glyph
+    mov bx, dx                      ; bank the SEGMENT: mul below eats DX
+    sub ah, al
+    mov al, ah
+    xor ah, ah
+    inc ax                          ; AX = glyphs the kernel actually has...
+    mul cx                          ; ...times its own bytes-per-glyph, rather
+    cmp ax, AT_FONTBYTES            ; than 95*8 assumed from here
+    jbe .fits
+    mov ax, AT_FONTBYTES            ; a bigger table than we reserved for is
+.fits:                              ; truncated, never written past
+    mov cx, ax
+    shr cx, 1
     mov di, at_fontbuf
-    mov cx, (95*8)/2
-    cld
+    push ds
+    pop es                          ; ES = ours: the destination
+    mov ds, bx                      ; DS = the table's own segment, which is
+    cld                             ; LOW_SEG and NOT KERNEL_SEG (SPEC.md 6)
     rep movsw
-    pop ds                          ; our segment again
     pop es
-    pop bp
+    pop ds
     pop di
     pop si
     pop dx
@@ -986,5 +996,6 @@ at_sntop    equ at_sncnt + 2                 ; word
 at_snbase   equ at_sntop + 2                 ; word
 at_snoffs   equ at_snbase + 2                ; word
 at_clipbss  equ at_snoffs + 2                ; AT_CLIPBSS bytes
-at_fontbuf  equ at_clipbss + AT_CLIPBSS      ; 95*8 bytes: the ROM glyphs
-at_bss_end  equ at_fontbuf + 95*8
+at_fontbuf  equ at_clipbss + AT_CLIPBSS      ; the kernel's glyph table,
+                                             ; copied in at launch
+at_bss_end  equ at_fontbuf + AT_FONTBYTES

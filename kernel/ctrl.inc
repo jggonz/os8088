@@ -129,8 +129,13 @@ cp_wdirty:  db 0                ; 1 = a setting changed and SYSTEM.CFG is owed
                                 ; RECORD of it waits.
                                 ; .text and not .bss, like everything else
                                 ; here: nothing zeroes .bss (-f bin)
-cp_dsave:   db 0                ; 1 = the last SYSTEM.CFG write failed, and
-                                ; the Drivers page's caption says so (51.5)
+cp_dsave:   db 0                ; the last SYSTEM.CFG write: 0 = fine, 1 =
+                                ; wrong disk in A:, 2 = the write failed. Said
+                                ; as a TOAST at the moment it happens (SPEC.md
+                                ; 59.6) rather than carried to a page caption
+                                ; to be found next session; what is left of
+                                ; its old job is telling cp_flush_close_x
+                                ; whether to keep [cp_wdirty] and retry
 
 ; Selected item, index into cp_items. Inline .text data for the same reason;
 ; 0 = Scheduler is the boot selection, so the panel opens on it.
@@ -295,9 +300,30 @@ cp_s_drv:   db 'Drivers', 0     ; list name AND the page heading
 ; string these replace was THIRTY, and painted through the window's right
 ; border into the desktop - invisibly, because until cp_drv_cap existed the
 ; caption was only ever drawn by a driver tick.
-cp_s_dsave: db 'Needs the system disk in '
-cp_s_dsave_l: db 'A:', 0        ; the letter, stamped (SPEC.md 52.10.3)
-cp_s_dserr: db 'Could not save the settings', 0
+; SUBJECT, OUTCOME, CAUSE - in that order, and one string per CAUSE. A
+; message that says only that something failed sends the reader looking, and
+; the two causes here want opposite things done about them: one is the user's
+; disk and one is the disk's own answer. The bar has room for both - the
+; menus segment is 50 cells on the narrowest adapter (640px: ([vid_clk_hx] -
+; MENU_TXT_X0) / 8) and 60 on Hercules, against 38 cells for the longest of
+; these - so terseness buys nothing here and costs the reason.
+cp_s_dsok:  db 'Settings Saved', 0
+cp_s_dsdsk: db 'Settings not saved: wrong disk in '
+cp_s_dsdrv: db 'A:', 0          ; the letter, stamped (SPEC.md 52.10.3): the
+                                ; system volume is not A: on a machine booted
+                                ; from a hard disk, and a message that names
+                                ; the wrong drive is worse than one that names
+                                ; none. This is the only string in the kernel
+                                ; that needs it, and dsk_ltrtab's third entry
+                                ; exists for it
+cp_s_dserr: db 'Settings not saved: disk error', 0
+; Indexed by [cp_dsave] + 1, so slot 0 keeps toast_say's "nothing to say" and
+; SUCCESS gets a message of its own - a save is a thing the user asked for and
+; waited seconds of floppy for, so silence is the wrong report. It only fires
+; when [cp_wdirty] was set, because that is what cp_flush_close_x gates on:
+; closing a panel nobody changed says nothing.
+cp_savetab: dw 0, cp_s_dsok, cp_s_dsdsk, cp_s_dserr
+CP_NSAVE  equ 4
 
 ; --- Sound page (SPEC.md 31.7/34.8) ------------------------------------------
 ; The three row labels are FIXED and name TIERS, not whatever a driver called
@@ -2355,25 +2381,42 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in
 ; flushing on the two ways the panel can go away, teardown and reboot, rather
 ; than on the one obvious one.
 ;
-; [cp_dsave] carries a failed write to the Drivers page's caption, the only
-; page with room to say it. It now says so the NEXT time the panel is opened,
-; because by the time the write happens the page is gone - and cp_flush_close_x
-; leaves [cp_wdirty] set on failure, so the next close retries rather than
-; silently dropping it.
+; **A FAILED WRITE IS SAID AS A TOAST** (SPEC.md 59.6). It used to be carried
+; in [cp_dsave] to the Drivers page's caption - the only page with room for it
+; - and reported the NEXT time the panel was opened, because by the time the
+; write happens the page is gone. That is a verdict stored to be found later,
+; which is exactly what a toast replaces: it says so WHEN IT HAPPENS, on the
+; bar, which no window can cover and which is still there after this one is
+; destroyed. [cp_dsave] survives for its other job - cp_flush_close_x leaves
+; [cp_wdirty] set on failure, so the next close retries rather than silently
+; dropping the settings.
+;
+; It is said AFTER the write and not before, which is not a style choice:
+; drv_cfg_save arms SPEC.md 12.8's file-activity widget, and fpg_begin retires
+; a live toast because the two cannot share those pixels (SPEC.md 59.3).
 ; -----------------------------------------------------------------------------
 cp_flush_x:
     push ax
+    push bx
+    push cx
     call KERNEL_SEG:cw_drv_cfg_save
     mov byte [cp_dsave], 0
-    jnc .out
+    jnc .say
     mov byte [cp_dsave], 2      ; the write itself failed: full, protected, I/O
     cmp ax, FERR_NODISK         ; ...as against no disk in A: at all, or a disk
     je .wrongdisk               ; that is not the SYSTEM one (SPEC.md 51.5.1),
     cmp ax, FERR_NOENT          ; which is one thing the user can act on and so
-    jne .out                    ; earns a caption that says what to do
+    jne .say                    ; earns a message that says what to do
 .wrongdisk:
     mov byte [cp_dsave], 1
-.out:
+.say:
+    mov al, [cp_dsave]
+    inc al                      ; slot 0 stays toast_say's "nothing to say"
+    mov bx, cp_savetab
+    mov cx, CP_NSAVE
+    call KERNEL_SEG:cw_toast_say
+    pop cx
+    pop bx
     pop ax
     ret
 
@@ -2846,11 +2889,11 @@ cp_drv_paint:
     cmp bx, DRV_MAX
     jb .row
 
-    call cp_drv_boxes               ; every checkbox, from the live state
-    call cp_drv_cap                 ; ...and a failed save, which is reported
-                                    ; the next time the panel is OPENED
-                                    ; (SPEC.md 31.8): the write happens at the
-                                    ; close, when this page no longer exists
+    call cp_drv_boxes               ; every checkbox, from the live state.
+                                    ; NO save caption: a failed write is said
+                                    ; as a toast at the moment it fails
+                                    ; (SPEC.md 59.6), so this page has nothing
+                                    ; left to report from a previous session
     pop si
     pop dx
     pop cx
@@ -2886,12 +2929,6 @@ CP_DSTDY  equ CP_PLDY + 9       ; 11: the reason line, one text row under the
 CP_DBY1   equ CP_DR0Y - 4                       ; the first band's top
 CP_DBYN   equ CP_DBY1 + CP_DROWH * DRV_MAX      ; ...and one past the last
 
-; ...and so is the caption, for the same reason and a sharper symptom: it sat
-; at CP_PCAPY (74), which was below two rows and INSIDE the third. cp_drv_cap
-; wipes a full-width line, so a third driver had the top of its name and
-; checkbox erased on every paint - it read as the page being clipped by the
-; window rather than as two numbers colliding.
-CP_DCAPY  equ CP_DBYN + 2
 
 cp_drv_rowy:
     push ax
@@ -3109,49 +3146,6 @@ cp_drv_line1:
     pop dx
     pop cx
     pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; cp_drv_cap - the save caption, and only a failed save speaks here
-; in:  DI = pane left, BP = pane top; gfx lock held
-; out: nothing (all registers preserved)
-;
-; **cp_drv_paint's, and ONLY cp_drv_paint's.** It used to be inline in the
-; click path's status-line redraw, so the report only ever appeared if the user
-; happened to tick something after a failed save, in the same session. The
-; page's own paint drew everything else and not this, and SPEC.md 31.8 has
-; always said the opposite: by the time the write happens the page is gone, so
-; the failure is reported the NEXT time the panel is opened. That is now true.
-;
-; The click path does not call it at all, and must not: only cp_flush_x writes
-; [cp_dsave] and that runs at the close, so the caption cannot change while the
-; page is on screen and a wipe-and-letter of it per click is the erase-and-
-; letter pair PERFORMANCE.md Part 1 is about, spent on unchanged text.
-; -----------------------------------------------------------------------------
-cp_drv_cap:
-    push ax
-    push cx
-    push dx
-    push si
-    mov dx, bp
-    add dx, CP_DCAPY            ; BELOW every driver row, derived from DRV_MAX
-    mov ax, CP_PMX              ; the caption owns the pane's full width
-    call cp_drv_wipe            ; ...which leaves the pen CBLACK
-    cmp byte [cp_dsave], 0
-    je .out
-    mov si, cp_s_dsave
-    cmp byte [cp_dsave], 1
-    je .say
-    mov si, cp_s_dserr
-.say:
-    mov cx, di
-    add cx, CP_PMX
-    call KERNEL_SEG:cw_font_str
-.out:
-    pop si
-    pop dx
-    pop cx
     pop ax
     ret
 

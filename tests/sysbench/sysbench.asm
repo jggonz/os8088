@@ -77,6 +77,26 @@ SB_BIGKB    equ 32                ; the heap claim the file reads land in
 SB_TICKTRY  equ 30000             ; bound on every wait-for-tick spin here. A
                                   ; stopped tick must produce a wrong number,
                                   ; never a hung machine
+SB_FIND_N   equ 24                ; FILE_FIND calls per timed row (SPEC.md
+                                  ; 18.95.2). One is tens of microseconds and
+                                  ; the PIT wraps at 55 ms, so this stays two
+                                  ; orders inside a lap on the slowest machine
+SB_FIND_W   equ 4                 ; ...and whole enumerations per walk row,
+                                  ; which is N times as long again
+SB_FIND_X   equ 496               ; 32*31/2: the quadratic term for a 32-entry
+                                  ; directory, which is the size the operations
+                                  ; this question came from actually walk
+SB_FIND_MAX equ 512               ; a directory that never ends is a corrupt
+                                  ; one - bound the count, do not hang on it
+SB_RAH_KB   equ 8                 ; the cache-capacity block's own buffer, and
+                                  ; the ceiling on the cluster probe: one
+                                  ; cluster has to fit it
+SB_RAH_GAP  equ 9216              ; ...and the stride's floor: TWO 9-sector
+                                  ; tracks, so two reads can never share a
+                                  ; chunk however a fill was bounded
+SB_RAH_WSTEP equ 2                ; working sets go 2, 4, 6 ... which brackets
+SB_RAH_WMAX  equ 18               ; the run count to a pair. 18 x 9216 is
+                                  ; 166KB, inside the 170KB file this walks
 
 ; -----------------------------------------------------------------------------
 ; sb_entry - package entry (SPEC.md 20.2)
@@ -2081,6 +2101,8 @@ sb_raw13:
     call bl_kv
 
     call sb_dbgctr                  ; ...and what os8088's own path issued
+    call sb_find                    ; ...and what a FIND cursor would win
+    call sb_rah                     ; ...and how many chunks the cache holds
 
 .out:
     pop di
@@ -2089,6 +2111,485 @@ sb_raw13:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_rah - SPEC.md 18.95.4: how many chunks does the sector cache actually hold
+;
+; Standalone, and it MEASURES `DSK_RAH_RUNS` rather than being told it: a
+; package cannot read a kernel constant, and one that could would be checking
+; the constant against itself. So it builds a working set of W chunks, reads
+; it again, and asks the counters whether that cost any int 13h at all.
+;
+; The staircase is the evidence. Round-robin eviction and a re-read in the
+; same order is Belady's worst case, so at W <= RUNS the second pass is FREE
+; and one chunk past it EVERY read misses - not a slope, a cliff, and the
+; cliff's position is the run count.
+;
+; Two things make the working set real. The stride is at least two TRACKS, so
+; consecutive reads can never share a chunk however a fill happened to be
+; bounded; and it walks ONE 170KB file (`bigfile.dat`, which the field disks
+; already carry), so the chunks are its own data and not somebody's directory.
+; The cluster size is PROBED rather than assumed - OSAPI_FILE_READ_AT refuses
+; a capacity that is not a cluster multiple, and that refusal costs no I/O.
+; -----------------------------------------------------------------------------
+sb_rah:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    call bl_blank
+    mov si, sb_s_h_rah
+    call bl_sline
+    mov si, sb_s_h_rah2
+    call bl_sline
+    mov si, sb_s_h_rah3
+    call bl_sline
+    mov si, sb_s_h_rah4
+    call bl_sline
+    mov si, sb_s_h_rah5
+    call bl_sline
+    mov si, sb_s_h_rah6
+    call bl_sline
+    cmp word [sb_dbgblk], 0         ; the whole answer is a call count
+    je .nodbg
+
+    mov ax, SB_RAH_KB               ; a buffer of our own: this block is
+    call OSAPI_MEM_CLAIM            ; standalone and the file rows' claim is
+    jc .noclaim                     ; long gone by here
+    mov [sb_rseg], dx
+
+    call sb_rah_cluster             ; ...the volume's cluster size, by refusal
+    jc .nofile
+    mov si, sb_l_rcl
+    mov ax, [sb_rcl]
+    call sb_num
+    mov si, sb_l_rstr
+    mov ax, [sb_rstr]
+    call sb_num
+
+    mov word [sb_rw], SB_RAH_WSTEP
+.sweep:
+    call sb_rah_pass                ; populate W chunks...
+    jc .stop
+    call sb_ctr_bank
+    call sb_rah_pass                ; ...and ask for them again
+    jc .stop
+    call sb_ctr_take
+    mov si, sb_l_rw
+    mov ax, [sb_rw]
+    mov dx, [sb_c0i13]
+    call sb_rah_row
+    cmp word [sb_c0i13], 0
+    jne .cliff
+    mov ax, [sb_rw]
+    mov [sb_rlast], ax              ; the largest working set that was free
+    add ax, SB_RAH_WSTEP
+    mov [sb_rw], ax
+    cmp ax, SB_RAH_WMAX
+    jbe .sweep
+    jmp short .say
+.cliff:
+    mov ax, [sb_rw]
+    mov [sb_rfirst], ax
+.say:
+    mov si, sb_l_rhold
+    mov ax, [sb_rlast]
+    call sb_num
+    mov si, sb_l_rmiss
+    mov ax, [sb_rfirst]
+    call sb_num
+    jmp short .free
+.nofile:
+    mov si, sb_s_rnofile
+    call bl_sline
+.free:
+    mov ax, [sb_rseg]
+    mov dx, ax
+    call OSAPI_MEM_FREE
+    jmp short .out
+.stop:
+    mov si, sb_s_rerr
+    call bl_sline
+    jmp short .free
+.noclaim:
+    mov si, sb_s_rnoclaim
+    call bl_sline
+    jmp short .out
+.nodbg:
+    mov si, sb_s_nodbg
+    call bl_sline
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sb_rah_cluster - the volume's cluster size into [sb_rcl], and the stride it
+; implies into [sb_rstr]. CF=1 = the file is not here at all.
+;
+; OSAPI_FILE_READ_AT answers FERR_NAME for a capacity that is not a cluster
+; multiple and does no I/O to find out, so doubling from 512 until one is
+; accepted is a free probe - and the first ACCEPTED size is the cluster,
+; because every larger multiple would be accepted too.
+sb_rah_cluster:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov word [sb_rcl], 512
+.try:
+    mov es, [sb_rseg]
+    xor bx, bx
+    mov cx, [sb_rcl]
+    mov si, sb_f_bigger
+    xor ax, ax
+    xor dx, dx
+    call OSAPI_FILE_READ_AT
+    jnc .got
+    cmp ax, FERR_NAME               ; ...only a NAME refusal is the alignment
+    jne .none                       ; one; anything else is a missing file
+    shl word [sb_rcl], 1
+    cmp word [sb_rcl], SB_RAH_KB * 1024
+    jbe .try
+.none:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+.got:
+    mov ax, [sb_rcl]                ; the stride: whole clusters, at least two
+.round:                             ; TRACKS, so no two reads can share a chunk
+    cmp ax, SB_RAH_GAP
+    jae .have
+    add ax, [sb_rcl]
+    jmp short .round
+.have:
+    mov [sb_rstr], ax
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+
+; sb_rah_pass - read one cluster at each of [sb_rw] strided offsets
+sb_rah_pass:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    xor di, di
+.next:
+    mov ax, di
+    mul word [sb_rstr]              ; DX:AX = the offset, 32 bits
+    mov es, [sb_rseg]
+    xor bx, bx
+    mov cx, [sb_rcl]
+    mov si, sb_f_bigger
+    call OSAPI_FILE_READ_AT
+    jc .fail
+    or ax, ax                       ; 0 bytes = past the end: the file is too
+    jnz .on                         ; short for a working set this wide, and
+    or dx, dx                       ; pretending otherwise reports a cliff
+    jz .fail                        ; that is the FILE's and not the cache's
+.on:
+    inc di
+    cmp di, [sb_rw]
+    jb .next
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.fail:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    stc
+    ret
+
+; sb_rah_row - SI = label, AX = the working set, DX = the calls it cost
+sb_rah_row:
+    push ax
+    push cx
+    push dx
+    push di
+    call bl_lclr
+    xor di, di
+    call bl_lput
+    push dx
+    xor dx, dx
+    mov di, BL_C_N
+    mov cx, 5
+    call bl_dec                     ; W in the iterations column, so it reads
+    pop ax                          ; down the page beside every other row
+    xor dx, dx
+    mov di, BL_C_CNT
+    mov cx, 9
+    call bl_dec
+    call bl_lcommit
+    pop di
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_find - SPEC.md 18.95.2: what a resumable FILE_FIND cursor would be worth
+;
+; Standalone, and it does its own disk work: nothing above it has to have run
+; and nothing below it depends on what it leaves. It enumerates whichever
+; directory sysbench was launched from, so RUN IT SOMEWHERE WITH ENTRIES IN IT
+; - N is reported, and every derived figure scales by the slope rather than by
+; N, so a six-file floppy root still answers the question.
+;
+; The question is not "is enumeration slow". §18.95's cache already took the
+; revolutions out of it - the int 13h row below is normally 0, which is the
+; whole of §18.95.2's argument in one number - so what is left is CPU, and a
+; CALL COUNT CANNOT SEE IT. This times it instead.
+;
+; FILE_FIND is BY ORDINAL and keeps no cursor (SPEC.md 19.7.1), so returning
+; entry k means walking past the k before it: cost(k) = a + b*k, where a is
+; the fixed cost plus one entry and b is one entry skipped. Two rows at the
+; two ends of the SAME directory give both, so the answer extrapolates to a
+; directory of any size instead of being a fact about this floppy:
+;
+;   today, N entries      = the measured whole walk
+;   a perfect cursor      = N * a          - every call as cheap as the first
+;   what it would win     = the difference
+;
+; N * a is the tightest bound the measured quantities support, and it is
+; OPTIMISTIC on purpose: a real cursor still validates its stamp, so anything
+; it wins is less than this. A bound that flatters the change is the honest
+; direction to err in when the conclusion is "do not build it".
+; -----------------------------------------------------------------------------
+sb_find:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    call bl_blank
+    mov si, sb_s_h_fnd
+    call bl_sline
+    mov si, sb_s_h_fnd2
+    call bl_sline
+    mov si, sb_s_h_fnd3
+    call bl_sline
+    mov si, sb_s_h_fnd4
+    call bl_sline
+
+    call sb_fcount                  ; how many entries are there to walk?
+    mov si, sb_l_fn
+    mov ax, [sb_fn]
+    call sb_num
+    cmp word [sb_fordl], 1          ; one entry has no slope and no walk to
+    jb .few                         ; save: the whole block is meaningless
+
+    call bl_head
+    mov word [sb_fbord], 0          ; --- the FIRST ordinal: a, the fixed cost
+    mov word [bl_n], SB_FIND_N      ; plus exactly one entry classified
+    mov word [bl_body], sb_b_find
+    mov si, sb_r_f0
+    xor al, al
+    call bl_run
+    mov ax, [bl_lastus]
+    mov dx, [bl_lastus+2]
+    mov [sb_fa], ax
+    mov [sb_fa+2], dx
+
+    mov ax, [sb_fordl]              ; --- ...and the LAST: a + b * that ordinal
+    mov [sb_fbord], ax
+    mov word [bl_n], SB_FIND_N
+    mov word [bl_body], sb_b_find
+    mov si, sb_r_fl
+    xor al, al
+    call bl_run
+    mov ax, [bl_lastus]
+    mov dx, [bl_lastus+2]
+    mov [sb_fb], ax
+    mov [sb_fb+2], dx
+
+    call sb_ctr_bank                ; --- and one whole enumeration, timed, so
+    mov word [bl_n], SB_FIND_W      ; the model has something to be checked
+    mov word [bl_body], sb_b_fwalk  ; against rather than being the answer
+    mov si, sb_r_fw
+    xor al, al
+    call bl_run
+    call sb_ctr_take
+    mov ax, [bl_lastus]
+    mov dx, [bl_lastus+2]
+    mov [sb_fw], ax
+    mov [sb_fw+2], dx
+
+    mov ax, [sb_fb]                 ; --- the slope: (last - first) / ordinal
+    mov dx, [sb_fb+2]
+    sub ax, [sb_fa]
+    sbb dx, [sb_fa+2]
+    jnc .slope
+    xor ax, ax                      ; the last call measured faster than the
+    xor dx, dx                      ; first: noise, and a negative slope would
+.slope:                             ; make every row below it nonsense
+    mov cx, [sb_fordl]
+    call bl_div32
+    mov [sb_fslope], ax
+    mov [sb_fslope+2], dx
+    mov si, sb_l_fsl
+    call sb_us
+
+    mov ax, [sb_fa]                 ; --- a perfect cursor: N calls, each as
+    mov dx, [sb_fa+2]               ; cheap as the one that skips nothing
+    mov cx, [sb_fn]
+    call bl_mul48
+    call bl_get32
+    push ax
+    push dx
+    mov si, sb_l_fpc
+    call sb_us
+    pop dx
+    pop ax
+    mov bx, ax                      ; --- ...against what the walk really cost
+    mov cx, dx
+    mov ax, [sb_fw]
+    mov dx, [sb_fw+2]
+    mov si, sb_l_fwm
+    call sb_us
+    sub ax, bx
+    sbb dx, cx
+    jnc .win
+    xor ax, ax                      ; a cursor cannot win less than nothing,
+    xor dx, dx                      ; and on a two-entry directory it rounds
+.win:                               ; there honestly
+    mov si, sb_l_fwin
+    call sb_us
+
+    mov ax, [sb_fslope]             ; --- ...and the same at 32 entries, which
+    mov dx, [sb_fslope+2]           ; is the size the operations this question
+    mov cx, SB_FIND_X               ; came from actually walk. b * M*(M-1)/2 is
+    call bl_mul48                   ; the whole quadratic term
+    call bl_get32
+    mov si, sb_l_fx
+    call sb_us
+
+    cmp word [sb_dbgblk], 0         ; --- and the row that decides it: with
+    je .nodbg                       ; SPEC.md 18.95's cache the walk issues no
+    mov si, sb_l_fi13               ; int 13h at all, so there are no
+    mov ax, [sb_c0i13]              ; revolutions here for a cursor to save and
+    call sb_num                     ; everything above is CPU
+    mov si, sb_l_fsec
+    mov ax, [sb_c0sec]
+    call sb_num
+.nodbg:
+    jmp short .out
+.few:
+    mov si, sb_s_fnfew
+    call bl_sline
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; sb_fcount - walk the whole directory once: [sb_fn] entries, [sb_fordl] the
+; last ordinal that answered. Preserves every register.
+sb_fcount:
+    push ax
+    push cx
+    push di
+    push es
+    push cs
+    pop es                          ; the buffer is ours (an X cell, so ES:DI
+    xor cx, cx                      ; is the CALLER's - api_file_find does not
+    mov word [sb_fn], 0             ; set it)
+    mov word [sb_fordl], 0
+.next:
+    mov [sb_fask], cx               ; ...in memory, because dsk_find is under
+    mov di, sb_fent                 ; no obligation to preserve a register
+    call OSAPI_FILE_FIND
+    jc .done
+    mov ax, [sb_fask]
+    mov [sb_fordl], ax
+    inc word [sb_fn]
+    cmp word [sb_fn], SB_FIND_MAX   ; a directory that never ends is a corrupt
+    jb .next                        ; one, and this must not spin on it
+.done:
+    pop es
+    pop di
+    pop cx
+    pop ax
+    ret
+
+; sb_b_find - one FILE_FIND at [sb_fbord]. The timed body.
+sb_b_find:
+    push es
+    push cs
+    pop es
+    mov di, sb_fent
+    mov cx, [sb_fbord]
+    call OSAPI_FILE_FIND
+    pop es
+    ret
+
+; sb_b_fwalk - ...and one whole enumeration, the way a caller writes it
+sb_b_fwalk:
+    push es
+    push cs
+    pop es
+    xor cx, cx
+.next:
+    mov di, sb_fent                 ; reloaded per call: see sb_fcount
+    call OSAPI_FILE_FIND
+    jnc .next
+    pop es
+    ret
+
+; sb_us - SI = label, DX:AX = hundredths of a microsecond: one report line in
+; the same column as every timed row above. Preserves every register.
+sb_us:
+    push di
+    call bl_lclr
+    xor di, di
+    call bl_lput
+    mov di, BL_C_US
+    call bl_usfield
+    push si
+    mov si, bl_s_us
+    mov di, BL_C_UNIT
+    call bl_lput
+    pop si
+    call bl_lcommit
+    pop di
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2119,6 +2620,12 @@ sb_dbgctr:
     call bl_sline
     mov si, sb_s_h_ctr2
     call bl_sline
+    mov si, sb_s_h_ctr3
+    call bl_sline
+    mov si, sb_s_h_ctr4
+    call bl_sline
+    mov si, sb_s_h_ctr5
+    call bl_sline
 
     call sb_ctr_bank                ; --- one 16KB read
     call sb_b_rdbig
@@ -2128,12 +2635,34 @@ sb_dbgctr:
     call sb_ctr_show
     call sb_ctr_trace               ; ...and every call it made, in order
 
+    call sb_ctr_bank                ; --- the SAME 16KB read again. SPEC.md
+    call sb_b_rdbig                 ; 18.95.1's gate says a streaming read is
+    call sb_ctr_take                ; never cached, so this row must look like
+    mov si, sb_l_c16b               ; the one above it: a cache that swallowed
+    call bl_sline                   ; 16KB would show here as a collapse, and
+    call sb_ctr_show                ; would have evicted everything else
+
     call sb_ctr_bank                ; --- ...and one ONE-SECTOR read, which is
     call sb_b_rdsml                 ; the same overhead with no data behind it
     call sb_ctr_take
     mov si, sb_l_c1
     call bl_sline
     call sb_ctr_show
+
+    call sb_ctr_bank                ; --- the same one AGAIN: its directory
+    call sb_b_rdsml                 ; sector and its own track are cached now
+    call sb_ctr_take                ; (SPEC.md 18.95), so this is the cache's
+    mov si, sb_l_c1b                ; hit rate stated in the only unit that
+    call bl_sline                   ; matters. On a kernel without it the two
+    call sb_ctr_show                ; one-sector rows are identical
+
+    call sb_b_rdbig                 ; --- ...and now stream 16KB PAST it and
+    call sb_ctr_bank                ; ask a third time. This is the pollution
+    call sb_b_rdsml                 ; test: with 18.95.1's gate the stream
+    call sb_ctr_take                ; cached nothing and this row still matches
+    mov si, sb_l_c1c                ; the one above; without it the stream
+    call bl_sline                   ; evicted the lot and this matches the COLD
+    call sb_ctr_show                ; row instead
 
     pop si
     pop dx
@@ -3080,9 +3609,46 @@ sb_d_r13b:   db 'bios track 1 call B/s', 0
 sb_d_r13s:   db 'bios track 9 calls B/s', 0
 sb_s_nodbg:  db 'This kernel carries no disk instrument - build DISKCNT=1.', 0
 sb_s_h_ctr:  db '-- what os8088 own transfer path ISSUES, per operation --', 0
-sb_s_h_ctr2: db '   the 1-sector read is the same overhead with no data in it', 0
+sb_s_h_ctr2: db '   the 1-sector read is the same overhead with no data in it,', 0
+sb_s_h_ctr3: db '   and each REPEAT row prices SPEC.md 18.95 cache in int 13h:', 0
+sb_s_h_ctr4: db '   0 calls = the cache served it whole. The 16KB pair MATCH,', 0
+sb_s_h_ctr5: db '   or a stream was cached; the after-16KB row is 18.95.1.', 0
+sb_s_h_rah:  db '-- SPEC.md 18.95.4: how many chunks does the sector cache hold --', 0
+sb_s_h_rah2: db '   W chunks written, then re-read. Round-robin plus the same', 0
+sb_s_h_rah3: db '   order is Belady worst case, so this is a CLIFF, not a slope.', 0
+sb_s_h_rah4: db '   It is a LOWER BOUND on DSK_RAH_RUNS: resolving the file by', 0
+sb_s_h_rah5: db '   name touches a directory sector and the FAT, and those take', 0
+sb_s_h_rah6: db '   slots as well. 12 free against a compiled 14 is the walk.', 0
+sb_s_rnofile: db '   BIGFILE.DAT is not on this volume: nothing wide to walk.', 0
+sb_s_rnoclaim: db '   no 8KB heap claim available: the cache rows were skipped.', 0
+sb_s_rerr:   db '   a read refused mid-sweep - the rows above are what stands.', 0
+sb_l_rcl:    db '  cluster bytes, probed', 0
+sb_l_rstr:   db '  ...so the stride is', 0
+sb_l_rw:     db '  chunks re-read -> int 13h', 0
+sb_l_rhold:  db '  MEASURED: widest set kept', 0
+sb_l_rmiss:  db '  ...and the width that missed', 0
+sb_f_bigger: db 'BIGFILE.DAT', 0
+sb_s_h_fnd:  db '-- SPEC.md 18.95.2: what a resumable FILE_FIND cursor would win --', 0
+sb_s_h_fnd2: db '   FIND is BY ORDINAL and re-seeks, so entry k walks past the k', 0
+sb_s_h_fnd3: db '   before it. Two rows at the two ends of THIS directory give the', 0
+sb_s_h_fnd4: db '   slope, so the answer scales to a directory of any size.', 0
+sb_s_fnfew:  db '   ...one entry or none: no slope to fit. Run it somewhere fuller.', 0
+sb_r_f0:     db 'FIND, first ordinal', 0
+sb_r_fl:     db 'FIND, last ordinal', 0
+sb_r_fw:     db 'FIND, a whole walk', 0
+sb_l_fn:     db '  entries in this directory', 0
+sb_l_fsl:    db '  per entry SKIPPED', 0
+sb_l_fpc:    db '  a perfect cursor would be', 0
+sb_l_fwm:    db '  the walk as measured', 0
+sb_l_fwin:   db '  ...so a cursor is worth', 0
+sb_l_fx:     db '  ...and at 32 entries', 0
+sb_l_fi13:   db '  int 13h in that walk', 0
+sb_l_fsec:   db '  sectors in that walk', 0
 sb_l_c16:    db '  one 16KB FILE_READ:', 0
+sb_l_c16b:   db '  ...the same 16KB read again:', 0
 sb_l_c1:     db '  one 1-sector FILE_READ:', 0
+sb_l_c1b:    db '  ...the same 1-sector read again:', 0
+sb_l_c1c:    db '  ...and again, after 16KB streamed past it:', 0
 sb_l_cmnt:   db 'disk_mount calls', 0
 sb_l_ctrc:   db '  every int 13h it issued, as lba+run:', 0
 sb_l_vok:    db 'data check, 32 sectors', 0
@@ -3117,7 +3683,7 @@ sb_it_top:  db 'Top of Report', 0
 ; The bss offsets past the scalars are derived, never hand-totalled: a figure
 ; that is too small is a package writing over benchlib's arena, which assembles
 ; cleanly and produces a report full of plausible nonsense.
-SB_O_SYSKB equ 124
+SB_O_SYSKB equ 184
 SB_O_RES   equ SB_O_SYSKB + SYSKB_SIZE
 SB_O_RROW  equ SB_O_RES + SB_NCPU * 4
 SB_O_RAM   equ SB_O_RROW + SB_BWROWS * 2
@@ -3187,6 +3753,21 @@ sb_mbase    equ os88_image_end + 118   ; word: -> mou_bases (SPEC.md 9.4.2)
 sb_mstate   equ os88_image_end + 120   ; word: -> the mouse state span (121)
 sb_cstate   equ os88_image_end + 122   ; word: -> the clock state span (123),
                                        ; SPEC.md 37.92
+sb_fbord    equ os88_image_end + 124   ; word: the ordinal the timed FIND asks
+sb_fask     equ os88_image_end + 126   ; word: ...and the one the counter did
+sb_fn       equ os88_image_end + 128   ; word: entries in this directory
+sb_fordl    equ os88_image_end + 130   ; word: the last ordinal that answered
+sb_fa       equ os88_image_end + 132   ; dword: FIND(0), hundredths of a us
+sb_fb       equ os88_image_end + 136   ; dword: ...and FIND(the last ordinal)
+sb_fw       equ os88_image_end + 140   ; dword: one whole walk (140..143)
+sb_fslope   equ os88_image_end + 144   ; dword: per entry SKIPPED (144..147)
+sb_fent     equ os88_image_end + 148   ; OSAPI_FIND_SZ bytes (148..171)
+sb_rseg     equ os88_image_end + 172   ; word: the cache block's own claim
+sb_rcl      equ os88_image_end + 174   ; word: the volume's cluster bytes
+sb_rstr     equ os88_image_end + 176   ; word: ...and the stride it implies
+sb_rw       equ os88_image_end + 178   ; word: the working set being tried
+sb_rlast    equ os88_image_end + 180   ; word: the widest that stayed free
+sb_rfirst   equ os88_image_end + 182   ; word: ...and the first that missed
 sb_syskb    equ os88_image_end + SB_O_SYSKB    ; SYSKB_SIZE bytes
 sb_res      equ os88_image_end + SB_O_RES      ; SB_NCPU dwords
 sb_rrow     equ os88_image_end + SB_O_RROW     ; SB_BWROWS words

@@ -172,16 +172,36 @@ vid_probe_avail:
 ; enabling the second decode would put two cards on the bus for one address.
 ;
 ; A card that honours that bit does not answer at B800 and vid_memchk has
-; already rejected it. Not every card does - MartyPC's Hercules decodes the
-; whole 64KB whatever the bit says, and reported a CGA on a machine that has
-; only an MDA, whose Activate button would then have set a mode on a monitor
-; that is not there. So: write a byte at B000:8000 and look for it at
-; B800:0000. Same byte means one card wearing two addresses.
+; already rejected it. Not every card does, so this is the backstop: ONE CARD
+; WEARING TWO ADDRESSES answers at both apertures out of the same memory, and
+; two cards do not. Write a different value through each segment and read the
+; first back - vid_memchk's own idiom, one aperture apart instead of one
+; offset apart.
 ;
-; It costs nothing on the machine this is for. On a real 5150 with both cards
-; and the page bit clear, the write at B000:8000 is decoded by nobody and
-; vanishes, B800 still holds what vid_memchk restored, the two differ, and the
-; CGA is found - which is the answer that machine needs.
+; THE TEST THIS REPLACES COMPARED AN ADDRESS WITH ITSELF. It wrote at
+; B000:8000 and looked for the byte at B800:0000, and on an 8086 those are the
+; same linear address - 0xB8000 either way, whichever segment reaches it. So
+; it answered "same" on every machine where anything at all decodes B800,
+; including a machine with a perfectly good CGA in it, and vid_probe_avail
+; then threw that CGA away. It is reached only when the HERCULES is the
+; primary, which is why it survived: the direction that was testable on the
+; old emulator was CGA-primary, where this routine never runs. Found by
+; tests/dualcheck.py on a machine with two provably independent cards -
+; vid_avail read 0x02 (Hercules alone) where it should read 0x06.
+;
+; Offset 0x7F00 is inside the Hercules' page 0 and PAST THE LAST DISPLAYED
+; BYTE: four banks of 87 rows x 90 bytes end at 0x7796, and page 0 runs to
+; 0x7FFF. So the probe never flickers the screen it is running on. On the CGA
+; side that offset is past its 16KB and reads back through whatever mirroring
+; the card does, which is fine - the question is only whether the two answers
+; come from one memory, and both bytes are restored either way.
+;
+; What it still cannot see: a card that ignores the page bit AND presents a
+; true 64KB, where B000:7F00 and B800:7F00 are genuinely different bytes of
+; one device. That reports two cards. The alternative - probing the size at
+; B800, since a CGA's 16KB mirrors where a Hercules' 32KB page does not - was
+; considered and REJECTED: it trades a card nobody has built for a CGA that
+; does not mirror, which is the failure this routine was just fixed for.
 ; -----------------------------------------------------------------------------
 vid_cga_alias:
     push ax
@@ -191,17 +211,19 @@ vid_cga_alias:
     mov ax, VID_HERC_SEG
     mov cx, 0xB800
     mov es, ax
-    mov bh, [es:0x8000]         ; bank both bytes BEFORE either is written -
+    mov bh, [es:0x7F00]         ; bank both bytes BEFORE either is written -
     mov es, cx                  ; aliased, they are the same byte and the two
-    mov bl, [es:0x0000]         ; restores below simply agree
+    mov bl, [es:0x7F00]         ; restores below simply agree
     mov es, ax
-    mov byte [es:0x8000], 0x3C  ; a value neither vid_memchk pattern leaves
-    mov es, cx
-    cmp byte [es:0x0000], 0x3C
-    mov [es:0x0000], bl         ; put both back - `mov` touches no flag, so the
-    mov es, ax                  ; compare above still decides
-    mov [es:0x8000], bh
-    je .same
+    mov byte [es:0x7F00], 0x3C  ; two values neither vid_memchk pattern leaves,
+    mov es, cx                  ; and different from each other: if the second
+    mov byte [es:0x7F00], 0xC3  ; landed on the first, the first is gone
+    mov es, ax
+    cmp byte [es:0x7F00], 0x3C  ; still ours? then they are two memories
+    mov [es:0x7F00], bh         ; put both back - `mov` touches no flag, so the
+    mov es, cx                  ; compare above still decides
+    mov [es:0x7F00], bl
+    jne .same
     clc
     jmp short .o
 .same:

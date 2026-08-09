@@ -2490,6 +2490,7 @@ mc_add_exp:
     mov byte [mc_et + si], 0
     mov byte [mc_er + si], 0
     mov byte [mc_edef + si], 0
+    mov byte [mc_ehol + si], 0
     mov byte [mc_ea + si], 1
 .out:
     pop si
@@ -5251,7 +5252,8 @@ mc_draw_exp:
     jae .draw
     call mc_erase_ring              ; shrank: give the ring back to the sky
 .draw:
-    mov [mc_er + si], bl
+    mov byte [mc_ehol + si], 0      ; a whole disc goes down here, so whatever
+    mov [mc_er + si], bl            ; bit into it is filled back in (48.22.1)
     call mc_exp_pen
     mov ax, [mc_ex + di]
     mov dx, [mc_ey + di]
@@ -5262,7 +5264,7 @@ mc_draw_exp:
 
 .coarse:                            ; SPEC.md 48.8: with no colour cycle the
     cmp bx, cx                      ; radius is the only thing that can have
-    je .next                        ; changed, and the shipped ramp grows it
+    je .csame                       ; changed, and the shipped ramp grows it
     ja .cdraw                       ; exactly ONCE (48.12)
     push bx                         ; shrank: the old blob back to the sky
     mov al, MC_BG                   ; whole. Unreachable with mc_step3 as it
@@ -5272,7 +5274,12 @@ mc_draw_exp:
     mov bx, cx                      ; a ring behind. The annulus was MEASURED
     call mc_blob                    ; against this pair and lost, 22 calls to
     pop bx                          ; 16, bands or not (48.11)
+    jmp short .cdraw
+.csame:                             ; SPEC.md 48.22.1: the radius has not moved,
+    cmp byte [mc_ehol + si], 0      ; so the only reason left to draw is that a
+    je .next                        ; dying neighbour took a bite out of it
 .cdraw:
+    mov byte [mc_ehol + si], 0
     mov [mc_er + si], bl
     call mc_exp_pen
     mov ax, [mc_ex + di]
@@ -5441,9 +5448,12 @@ mc_exp_hole:
 .yp:
     cmp cx, bx
     ja .next
-    mov byte [mc_er + si], 0        ; "not drawn", which is all it takes: the
-                                    ; NEXT frame's mc_draw_exp finds target !=
-                                    ; drawn and puts it back (SPEC.md 48.24)
+    mov byte [mc_ehol + si], 1      ; "holed": the NEXT frame's mc_draw_exp
+                                    ; paints it again (SPEC.md 48.24). It is a
+                                    ; flag of its own and NOT mc_er := 0, which
+                                    ; is what this was - mc_er is the radius on
+                                    ; the GLASS, and .gone and mc_erase_ring
+                                    ; both subtract from it (SPEC.md 48.22.1)
 .next:
     inc si
     cmp si, MC_MAXEXP
@@ -5473,6 +5483,7 @@ mc_draw_exp_all:
     mov bh, 0
     mov bl, [mc_erad + bx]
     mov [mc_er + si], bl
+    mov byte [mc_ehol + si], 0      ; a full repaint owes nobody a repair
     call mc_exp_pen
     mov ax, [mc_ex + di]
     mov dx, [mc_ey + di]
@@ -7606,6 +7617,10 @@ mc_coast:    db 0, 1, 2, 3, 2, 1, 0, 2, 4, 3, 1, 0, 1, 3, 2, 1
                                     ; frame; the rest wait (SPEC.md 48.24)
     MBUF  mc_edef,   MC_MAXEXP      ; ...and frames it has waited for a lit
                                     ; neighbour to go first (SPEC.md 48.25.1)
+    MBUF  mc_ehol,   MC_MAXEXP      ; a dying neighbour's erase bit into this
+                                    ; burst: repaint it (SPEC.md 48.22.1). NOT
+                                    ; mc_er := 0, which cannot say this without
+                                    ; also forgetting what is on the glass
     MWORD mc_ehx                    ; ...and the disc of background it laid
     MWORD mc_ehy
     MWORD mc_ehr

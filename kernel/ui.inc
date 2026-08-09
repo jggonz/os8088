@@ -340,11 +340,18 @@ ui_task:
     call gfx_unlock
 .chk_zones:
     cmp byte [desk_zdirty], 0   ; a volume was mounted or unmounted (26.2),
-    je .chk_clk                 ; posted for the same reason and drained in
+    je .chk_toast               ; posted for the same reason and drained in
     mov byte [desk_zdirty], 0   ; the same pass - but it costs the drive-zone
     call gfx_lock               ; grid and the windows over it, not the screen
     call desk_zones_paint
     call gfx_unlock
+.chk_toast:
+    call toast_pass             ; put a staged toast up, or take an expired
+                                ; one down (SPEC.md 59). One compare per pass
+                                ; when nothing is up, and the ONE place
+                                ; either edge is drawn - toast_show is
+                                ; reachable from a lock-holding callback, a
+                                ; worker holding nothing, and kernel code
 .chk_clk:
     cmp byte [clk_dirty], 0     ; the clock was set from the Date/Time page
     je .clock                   ; (SPEC.md 31.5): the hardware RTC is written

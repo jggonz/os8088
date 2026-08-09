@@ -886,6 +886,12 @@ menu_bar_text:
     mov ax, MENU_BCMAX
 .n:
     mov [menu_bn], ax
+    call toast_room             ; the toast strip (SPEC.md 59) borrows the
+                                ; right end, so the MENUS are composed into a
+                                ; shorter segment and menu_bput's clamp drops
+                                ; whatever the strip covers. Composition stays
+                                ; strictly left to right and nothing below
+                                ; here knows the strip exists
 
     mov word [menu_bfirst], 0FFFFh
     xor di, di                  ; DI = cell index, 0 = x MENU_TXT_X0
@@ -917,19 +923,97 @@ menu_bar_text:
     jmp short .cell
 
 .tail:
-    mov ax, [menu_bn]           ; spaces to the clock: this is what erases
-    call menu_bpadc             ; the menus of the app that just went away
+    mov ax, [menu_bn]           ; spaces to the strip's left edge, or to the
+    call menu_bpadc             ; clock when no toast is up: this is what
+                                ; erases the menus of the app that just went
+                                ; away, and the menus the strip sits on
+    call toast_compose          ; ...and the strip owns what is left
 
-    mov bx, [menu_bfirst]       ; --- emit the one span that moved ----------
+    mov bx, [menu_bfirst]       ; --- emit the span(s) that moved -----------
     cmp bx, 0FFFFh
     je .out                     ; nothing on the bar changed: no pixels
 
-    mov si, [menu_blast]
-    inc si                      ; font_run wants ASCIIZ, so the byte just
-    mov al, [menu_bcell+si]     ; past the run is banked and put back - the
-    push ax                     ; buffer has one spare cell for exactly this
-    mov byte [menu_bcell+si], 0
+    mov dx, [menu_blast]
+    mov si, [toast_cells]       ; AT MOST TWO RUNS, because the strip is
+    or si, si                   ; inverse video and always ends at the
+    jz .plain                   ; segment's LAST cell - so a run either
+    neg si                      ; misses it, lies wholly inside it, or
+    add si, [menu_bn]           ; crosses its left edge exactly once
+    cmp dx, si
+    jb .plain                   ; wholly left of the strip
+    cmp bx, si
+    jae .inv                    ; wholly inside it
+    push dx
+    push si
+    dec si
+    mov dx, si
+    mov al, CBLACK
+    mov ah, CWHITE
+    call menu_bemit
+    pop bx
+    pop dx
+.inv:
+    mov al, CWHITE              ; the strip: inverse video, the one
+    mov ah, CBLACK              ; distinction that survives SPEC.md 39.4's
+    call menu_bemit             ; reduction on both mono adapters intact
+    jmp short .out
+.plain:
+    mov al, CBLACK
+    mov ah, CWHITE
+    call menu_bemit
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
+; -----------------------------------------------------------------------------
+; menu_bemit - letter cells BX..DX of the segment in one font_run
+; in:  BX = first cell, DX = last cell (inclusive), AL = ink, AH = background
+; out: nothing (all registers preserved)
+;
+; Split out of menu_bar_text when the toast strip (SPEC.md 59) arrived: the
+; strip is inverse video, so a differing span that crosses its left edge is
+; TWO runs with different colours rather than one. What is unchanged is the
+; rest - the byte just past the run is still banked and put back, because
+; font_run wants ASCIIZ and menu_bcell carries one spare cell for it.
+;
+; **Bit 7 in a cell is the INVERSION FLAG and not a character** (SPEC.md
+; 59.2), so it is masked off across the run before the glyphs are drawn and
+; put back after. That is exact rather than approximate: a run arriving here
+; with CWHITE ink is wholly inside the strip by construction, so every cell
+; in it carries the bit and every cell in it gets it back.
+; -----------------------------------------------------------------------------
+menu_bemit:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+
+    mov di, ax                  ; the colours, out of the way of the x
+    mov si, dx                  ; arithmetic below
+    inc si
+    mov al, [menu_bcell+si]
+    mov byte [menu_bcell+si], 0
+    push ax                     ; AL = the banked byte
+    push bx
+    push dx
+
+    cmp di, CWHITE              ; = CWHITE | (CBLACK << 8): the strip
+    jne .go
+    mov si, bx
+.m:
+    and byte [menu_bcell+si], 0x7F
+    inc si
+    cmp si, dx
+    jbe .m
+.go:
     mov ax, bx
     mov cl, 3
     shl ax, cl
@@ -938,16 +1022,25 @@ menu_bar_text:
     mov si, menu_bcell          ; takes its single-pass path on mono)
     add si, bx
     mov dx, MENU_TEXT_Y
-    mov al, CBLACK
-    mov ah, CWHITE
+    mov ax, di
     call font_run
 
+    pop dx
+    pop bx
+    cmp di, CWHITE
+    jne .rb
+    mov si, bx
+.s:
+    or byte [menu_bcell+si], 0x80
+    inc si
+    cmp si, dx
+    jbe .s
+.rb:
     pop ax
-    mov si, [menu_blast]
+    mov si, dx
     inc si
     mov [menu_bcell+si], al
-.out:
-    pop es
+
     pop di
     pop si
     pop dx
@@ -1021,9 +1114,20 @@ menu_bpadc:
     push ax
     push bx
     mov bx, ax
-.p:
-    cmp di, bx
-    jae .d
+    cmp bx, [menu_bn]           ; **NEVER PAST THE SEGMENT.** menu_bput DROPS
+    jbe .p                      ; a cell at or past [menu_bn] and does NOT
+    mov bx, [menu_bn]           ; advance DI, so a target beyond it spins here
+.p:                             ; forever - with the gfx lock held, on the UI
+    cmp di, bx                  ; task, while IRQ0 keeps the clock running, so
+    jae .d                      ; the machine looks alive and answers nothing.
+                                ; It was unreachable while [menu_bn] was
+                                ; always the whole segment (menu_layout clamps
+                                ; every pen into it); SPEC.md 59.2's toast
+                                ; strip LOWERS it, so a message wide enough to
+                                ; reach back over a menu title's pen hangs the
+                                ; UI. Clamping here rather than at the two
+                                ; callers is what keeps the invariant a
+                                ; property of the routine
     mov al, ' '
     call menu_bput
     jmp short .p

@@ -2348,6 +2348,15 @@ gfx_unlock:
     call cur_lazyend            ; ...but the ISR could not move it all hold
 .rel:
     mov byte [gfx_lock_flag], 0
+    mov byte [dsk_batch], 0     ; ANY UNLOCKING OF THE USER INTERFACE ENDS A
+                                ; BATCH (SPEC.md 18.9.3). One store, and it is
+                                ; the whole safety argument: a caller cannot
+                                ; leave a bracket open across a moment when the
+                                ; user could reach the drive, because every way
+                                ; out of a locked run of kernel code - return,
+                                ; failure, a question, a swap prompt - comes
+                                ; through here. mov leaves the flags alone,
+                                ; which this routine's contract requires
     ret
 
 ; -----------------------------------------------------------------------------

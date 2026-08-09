@@ -98,8 +98,42 @@ Written up in full as docs/NOTEPAD-NOTES.md §6; the short form:
 | `state.py` | Note Pad's bss, with the guard that refuses stale offsets |
 | `trace.py` | the breakpoint tracer |
 | `drive.py` | cold boot, and the mouse work to get README.TXT open |
-| `pixcheck.py` | is the incrementally-drawn content the same pixels a FULL repaint makes? Covers the window and raises it to force one, then diffs the content rect. The check that cleared SPEC.md §27.13 and found docs/NOTEPAD-NOTES.md §5.2.1 |
+| `pixcheck.py` | is the incrementally-drawn content the same pixels a FULL repaint makes? Covers the window and raises it to force one, then diffs the content rect. The check that cleared SPEC.md §27.13 and found docs/NOTEPAD-NOTES.md §5.2.1. **Run `--self-test` first** (below) |
 | `notecheck.py` | is the document BUFFER right? Reads the claim out of guest RAM and diffs it against README.TXT with the session's edits applied on the host. What cleared §27.12's `rep movsb` |
+
+## A check that cannot fail is not a check
+
+```sh
+python3 tools/notepad/pixcheck.py --self-test    # ...before believing a zero
+python3 tools/notepad/pixcheck.py
+```
+
+`pixcheck.py`'s "forced full repaint" is a raise, and SPEC.md §11.96's raise
+cache can serve a raise **without calling `W_PAINT` at all** — which makes the
+forced repaint a byte copy of the capture it is being compared against, so it
+agrees with itself on any build, correct or not. That is not hypothetical: it
+is how SPEC.md §11.96.2's blank window shipped, past a verification that
+counted `W_PAINT` calls and found the expected number of them.
+
+So `--self-test` asks the two questions the check rests on, and **fails loudly
+rather than passing quietly**:
+
+| leg | state | what must happen |
+|---|---|---|
+| 1 | the cache left armed | `np_paint` must **not** run — so a tautological pass is reachable *and caught* |
+| 2 | cache armed, `WF_SAVEU` cleared afterwards | `np_paint` **must** run — so withdrawing the promise defeats a bank that already exists (§11.96.2's test in `wm_su_ck`) |
+
+Exit codes: 0 both legs passed, 3 inconclusive (no cache was banked — a
+refused claim looks like this), 4 leg 1 failed, 5 leg 2 failed. Leg 2 was
+itself verified by breaking it: NOP `wm_su_ck`'s `jz` in the running guest and
+it exits 5 and names the missing kernel test.
+
+**The generalisable part is the shape, not the flag.** Any host-side check of
+the form *"drive it, then force the reference state, then diff"* is only worth
+what its control is worth — and the failure is always silent, because a
+reference state that was never produced reads as agreement. `win_geom`,
+`front_win` and `cache_for` are importable for that reason; the module has a
+`__main__` guard so importing it runs nothing.
 
 **Crop, and settle, before believing a diff.** An uncropped framebuffer diff is
 dominated by the menu-bar clock and the other window's title bar; an unsettled

@@ -1,0 +1,58 @@
+diff --git a/crates/marty_core/src/devices/mda/mmio.rs b/crates/marty_core/src/devices/mda/mmio.rs
+index 3027179c..f441eaea 100644
+--- a/crates/marty_core/src/devices/mda/mmio.rs
++++ b/crates/marty_core/src/devices/mda/mmio.rs
+@@ -111,7 +111,7 @@ impl MemoryMappedDevice for MDACard {
+                 });
+             }
+             VideoCardSubType::Hercules => {
+-                log::debug!("MDA get_mapping(): Using Hercules memory map");
++                log::debug!("MDA get_mapping(): Using Hercules memory map (page 0 only)");
+                 mapping.push(MemRangeDescriptor {
+                     address: 0xB0000,
+                     size: HGC_MEM_APERTURE_HALF,
+@@ -119,13 +119,37 @@ impl MemoryMappedDevice for MDACard {
+                     read_only: false,
+                     priority: 3, // Allow another MDA card to override this
+                 });
+-                mapping.push(MemRangeDescriptor {
+-                    address: 0xB8000,
+-                    size: HGC_MEM_APERTURE_HALF,
+-                    cycle_cost: 0,
+-                    read_only: false,
+-                    priority: 0,
+-                });
++                // --- os8088: PAGE 1 IS NOT DECODED (docs/DUAL-DISPLAY-PLAN.md) ---
++                //
++                // Upstream also maps 0xB8000 here, unconditionally, because an
++                // HGC has 64KB in two 32KB pages and page 1 lives there. But a
++                // real card only DECODES page 1 when 3BFh bit 1 says so, and
++                // `get_mapping()` is called once at construction - long before
++                // any guest has written 3BFh - so the second range is claimed
++                // whatever the guest goes on to ask for.
++                //
++                // That is harmless on a machine with one card and wrong on a
++                // machine with two, which is the machine this project is
++                // calibrated against: 0xB8000 is where a CGA lives, and
++                // `Bus::register_map` resolves the overlap by LAST WRITER WINS
++                // (it stamps `mmio_map_fast` unconditionally and never reads the
++                // `priority` field above). So one of the two cards silently
++                // disappeared, depending only on the order of the
++                // `[[machine.video]]` blocks - and it disappeared into a memory
++                // that reads back whatever was written to it, which is a
++                // convincing false pass rather than a failure.
++                //
++                // os8088 never enables page 1: `vid_setmode` writes 3BFh = 1,
++                // graphics-allowed with bit 1 CLEAR, and says in its own comment
++                // that it does so precisely so a CGA can answer at B8000
++                // (SPEC.md 39.6). The card's INTERNAL 64KB buffer and its
++                // `hgc_page_offset` are untouched by this; only the bus aperture
++                // narrows, from what the constructor guessed to what the guest
++                // actually asks for.
++                //
++                // The cost is fidelity for a guest that DOES set the page bit and
++                // then writes to B8000 - it would reach a CGA here, or nothing.
++                // No such guest exists in this tree.
+             }
+             _ => {
+                 panic!("Bad subtype for MDA!")

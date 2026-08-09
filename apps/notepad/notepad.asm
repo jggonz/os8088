@@ -970,11 +970,6 @@ np_scrollpaint:
     cmp byte [np_sigok], 0
     je .nope                        ; the arrays do not describe the screen,
                                     ; so there is nothing to shift
-    cmp word [np_msg], 0
-    jne .nope                       ; a toast sits OVER the text and is in no
-                                    ; row's signature: the blit would carry it
-                                    ; off its own frame and nothing would put
-                                    ; it back
     cmp word [np_vrows], 2
     jb .nope
     mov ax, [np_top]
@@ -2586,7 +2581,6 @@ np_reconcile:
     mov ax, [np_top]                ; the reconcile draws the note as it now
     mov [np_ptop], ax               ; is, in the view it now has
     pop ax
-    call np_toast
     pop dx
     pop cx
     pop bx
@@ -2661,15 +2655,8 @@ np_worker:
     cmp byte [np_sowed], 0          ; a scroll whose repaint was dropped because
     je .nosowed                     ; another click was right behind it
     mov byte [np_sowed], 0          ; (SPEC.md 27.7.8). Cleared FIRST: a repaint
-                                    ; that faults must not leave the debt to be
-                                    ; paid again forever
-    mov bx, [np_win]                ; ...and ASKED, like the three draws below
-    call OSAPI_WM_OBSCURED          ; it. This one drew unconditionally: covered,
-    jc .nosowed                     ; it painted over the window on top of it
-                                    ; (SPEC.md 11.3), and it was the one path
-    mov si, [np_win]                ; that changed this window's pixels without
-    call np_redraw                  ; telling the kernel - which is what the
-                                    ; raise cache's promise rests on (11.96)
+    mov si, [np_win]                ; that faults must not leave the debt to be
+    call np_redraw                  ; paid again forever
 .nosowed:
     call np_uclose                  ; half a second without an edit is what a
                                     ; user means by ONE edit, and this is the
@@ -2804,10 +2791,6 @@ np_sigmark:
     mov [np_srgt], ax
     mov ax, [np_bot]
     mov [np_sbot], ax
-    mov ax, [np_msg]
-    mov [np_smsg], ax
-    mov ax, [np_msgn]
-    mov [np_smsgn], ax
     mov byte [np_sigok], 1
     mov byte [np_gchg], 0           ; this paint laid the note out under the
     pop ax                          ; geometry just recorded, so the view has
@@ -2838,11 +2821,13 @@ np_selmark:
 ; in:  np_bounds already run
 ; out: CF = 1 if they do not and the caller must repaint whole; preserves all
 ;
-; Four of the five tests are the layout: a resized window wraps differently,
-; and the kernel white-filled its content on the way here anyway. The fifth is
-; the toast, which is drawn OVER the text by np_toast and is in no row's
-; signature - so the keystroke that retires one has to erase it the only way
-; this module can, by painting the content again.
+; All four tests are the layout: a resized window wraps differently, and the
+; kernel white-filled its content on the way here anyway. There used to be a
+; fifth and a sixth, on [np_msg] and its generation - the toast was drawn OVER
+; the text and was in no row's signature, so the keystroke that retired one
+; had to erase it the only way this module could, by painting the whole
+; content again. The toast is the kernel's now and is in the menu bar
+; (SPEC.md 59), so it is in nothing this routine describes.
 ; -----------------------------------------------------------------------------
 np_sigsame:
     push ax
@@ -2860,14 +2845,8 @@ np_sigsame:
     mov ax, [np_bot]
     cmp ax, [np_sbot]
     jne .no
-    mov ax, [np_msg]
-    cmp ax, [np_smsg]
-    jne .no
-    mov ax, [np_msgn]           ; ...and its GENERATION, not just the pointer.
-    cmp ax, [np_smsgn]          ; "Saved X" and "Loaded X" are both composed
-    jne .no                     ; into np_tbuf, so [np_msg] is the same word
-    pop ax                      ; for both and a save straight after a load
-    clc                         ; left the window still saying "Loaded"
+    pop ax
+    clc
     ret
 .no:
     pop ax
@@ -3102,8 +3081,14 @@ np_seedck:
     je .prev
     cmp cl, 13
     je .prev
-    or ax, ax                       ; mid-word: this row was split by the cell
-    jz .out                         ; rule, and the word began further back
+    call np_cellrun                 ; mid-word: this row was split by the cell
+    jnc .seed                       ; rule, and the word began further back -
+                                    ; UNLESS the word is longer than a row, in
+                                    ; which case np_wordfit never decided
+                                    ; anything about it and there is nothing
+                                    ; further back to redo (SPEC.md 27.4.2)
+    or ax, ax
+    jz .out
     dec ax
     jmp short .back
 .prev:
@@ -3139,14 +3124,8 @@ np_seedck:
 ; The caret is the edit, near enough and always on the safe side: an insert
 ; leaves it one PAST the character it added, a backspace and a Delete leave it
 ; ON the edit, so the earliest index this keystroke can have touched is
-; [np_cur] - 1. THE BOUND IS THAT INDEX, NOT THE CARET, and the difference is
-; the whole of the case it has to catch: the character an insert added may
-; ITSELF be the space that now ends the word, and then the word was LONGER when
-; the break in front of it was taken - which is precisely the decision the
-; back-up exists to redo. Accepting a terminator AT [np_cur] - 1 seeded the row
-; at a start the insert had just moved. Backspace and Delete touch nothing
-; below [np_cur] and pay one extra row for the shared bound, which is the
-; conservative direction. It needs no extra state kept in step.
+; [np_cur] - 1. Requiring the word to end STRICTLY before the caret is that
+; bound, and it needs no extra state to be recorded and kept in step.
 ;
 ; The scan is at most a row's width and stops at the caret, so it is a handful
 ; of byte compares against a row of layout at ~6 ms.
@@ -3156,8 +3135,6 @@ np_ckword:
     push bx
     push cx
     mov cx, [np_cur]
-    jcxz .no                        ; a caret at 0 would decrement to 0xFFFF
-    dec cx                          ; and accept every terminator on the row
     mov al, [es:bx]
     cmp al, ' '                     ; a row that begins on a space or a newline
     je .no                          ; is not a word start, and the reasoning
@@ -3165,9 +3142,9 @@ np_ckword:
     je .no
 .scan:
     cmp bx, cx
-    jae .no                         ; the edit arrived first: it is inside the
-                                    ; first word, or IS the terminator that now
-                                    ; ends it - the case the back-up exists for
+    jae .no                         ; the caret arrived first: the edit is
+                                    ; inside the first word, which is exactly
+                                    ; the case the back-up exists for
     mov al, [es:bx]
     cmp al, ' '
     je .yes
@@ -3184,6 +3161,74 @@ np_ckword:
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; np_cellrun - is the break in front of this row owned by the CELL RULE alone?
+; in:  BX = the row's start index, known mid-word ([es:bx-1] is neither a space
+;      nor a CR), ES = the document segment
+; out: CF = 0 seed here, the walk need go no further back; CF = 1 back up as
+;      before. Preserves every register.
+;
+; SPEC.md 27.4.2, and it is np_ckword's other half: that one asks whether the
+; edit is past the row's first word, this one asks whether there is a word-fit
+; decision in front of this row AT ALL.
+;
+; np_wordfit's .p2l answers "longer than a row: the cell rule owns it" and
+; breaks NOTHING - a word that cannot fit a whole row is laid out left to
+; right and wrapped at the margin like the pre-27.11 automaton. So inside such
+; a word every row start is the one before it plus np_rcols, anchored at the
+; word's first character, and the position of THAT was settled by text the
+; edit cannot reach. Backing up through it re-decides a break nobody ever
+; decided: on a note that is one 249-character run, the caret's row backed up
+; NINE rows to index 0 and pass 1 then laid out the whole view from the top of
+; the note, on every keystroke (docs/NOTEPAD-NOTES.md 5.6).
+;
+; THE MARGIN IS WHY THIS COUNTS TO np_rcols + 2 AND NOT np_rcols + 1. The
+; threshold np_wordfit actually applies is `length > np_rcols`, and this runs
+; AFTER the edit has been applied to the buffer - so a backspace at the caret
+; may already have taken one character out of the run being measured. Two
+; spare characters is what makes the answer the same before and after: the run
+; measured here is at least np_rcols + 2, so the word was at least np_rcols + 1
+; before the keystroke and is at least np_rcols + 1 after it, and both are past
+; the threshold. One spare would let a word of exactly np_rcols + 1 fall back
+; to np_rcols under a backspace, where np_wordfit DOES have an opinion and the
+; break in front of the word can move.
+;
+; The scan is at most a row's width of byte compares against a row of layout at
+; ~6 ms, which is np_ckword's bargain and the same one.
+; -----------------------------------------------------------------------------
+np_cellrun:
+    push ax
+    push bx
+    push cx
+    mov cx, [np_rcols]
+    inc cx
+    inc cx
+.scan:
+    or bx, bx
+    jz .no                          ; the note begins inside the run, so it is
+                                    ; shorter than the margin needs - and the
+                                    ; caller's own `or bx, bx` seeds at row 0
+                                    ; on the next iteration anyway
+    dec bx
+    mov al, [es:bx]
+    cmp al, ' '
+    je .no
+    cmp al, 13
+    je .no
+    dec cx
+    jnz .scan
+    pop cx
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    pop cx
+    pop bx
+    pop ax
+    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3564,10 +3609,7 @@ np_xseedi:
     clc
     jmp short .out
 .no:
-    mov byte [np_resume], 0         ; a REFUSAL is not a licence to resume at
-    stc                             ; whatever the last caller seeded, which is
-                                    ; what np_seedck and np_seedrow both say by
-                                    ; clearing on entry
+    stc
 .out:
     pop di
     pop si
@@ -3708,17 +3750,6 @@ np_paint:
                                     ; view, which a raise of a window scrolled
                                     ; halfway down a long note paid in full
     call np_walk                    ; (SPEC.md 27.7/27.2)
-    mov byte [np_resume], 0         ; SPENT HERE, like every other np_walk site
-                                    ; (np_hwalk, np_brkdraw, np_move, np_vmove,
-                                    ; np_onclick, np_dragsel, np_redraw's
-                                    ; .done). np_xseed sets it and np_paint
-                                    ; cleared it only on the way IN, so from
-                                    ; here it stayed set with [np_sdr]/[np_sdi]
-                                    ; still loaded - and the next walk that
-                                    ; seeds nothing of its own resumes at the
-                                    ; top of THIS view. np_measure is that
-                                    ; walk, and np_hmove reaches it bare
-                                    ; whenever [np_ckok] is 0
     mov byte [np_clean], 0          ; ...and because it WAS filled, a row's run
     call np_sigmark                 ; stops at its last character instead of
     mov ax, [np_top]                ; padding to the band's edge to erase with
@@ -3728,7 +3759,6 @@ np_paint:
     call np_fpaint                  ; ...and the find panel, which lives in the
                                     ; strip np_bounds took off the top of the
                                     ; content (SPEC.md 27.10)
-    call np_toast                   ; last, so it sits above the text
     call np_hirechk                 ; this walk stopped at the bottom of the
     ret                             ; view, so the height is still owed
 
@@ -3795,97 +3825,6 @@ np_hirechk:
     jbe .out                        ; and cleared the debt on the way
     call np_hire
 .out:
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; np_toast - draw the save/load result over the content's top-right corner
-; in:  SI = window ptr, [np_msg] = the string (0 = nothing to say)
-; out: nothing; preserves all registers
-;
-; A framed white box, so it reads over whatever text is under it, clamped to
-; the content's left edge on a narrow window. It is drawn from np_paint and
-; cleared by the next keystroke, so it can never become stale furniture.
-; -----------------------------------------------------------------------------
-np_toast:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    cmp word [np_msg], 0
-    je .out
-    mov bx, si                  ; BX = window ptr
-    call OSAPI_WM_CONTENT       ; AX = content left, DX = content top
-    mov di, ax                  ; DI = content left (the clamp)
-    push ax
-    call np_fph                 ; ...below the find panel, if one is up: the
-    add dx, ax                  ; toast belongs over the TEXT (SPEC.md 27.10)
-    pop ax
-    add dx, 2
-    mov [np_by1], dx
-    add dx, 11
-    mov [np_by2], dx
-    call OSAPI_WM_GEOM          ; CX = content width (BX is still the window;
-    mov ax, di                  ; DX is dead here, both strip rows are stored)
-    add ax, cx
-    sub ax, 3                   ; 2px frame + a 2px gap from the edge
-    mov [np_bx2], ax
-    push ax
-    mov si, [np_msg]
-    call OSAPI_FONT_WIDTH       ; AX = the string's pixel width
-    add ax, 7                   ; 4px left pad, 3px right
-    mov cx, ax
-    pop ax
-    sub ax, cx
-    cmp ax, di
-    jae .xok
-    mov ax, di                  ; a narrow window: start at the content left
-.xok:
-    mov [np_bx1], ax
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov ax, [np_bx1]
-    mov bx, [np_by1]
-    mov cx, [np_bx2]
-    mov dx, [np_by2]
-    call OSAPI_GFX_FILL
-    mov al, CBLACK
-    call OSAPI_SET_COLOR
-    mov ax, [np_bx1]
-    mov bx, [np_by1]
-    mov cx, [np_bx2]
-    mov dx, [np_by2]
-    call OSAPI_GFX_FRAME
-    mov cx, [np_bx1]
-    add cx, 4
-    mov dx, [np_by1]
-    add dx, 2
-    mov si, [np_msg]
-    call OSAPI_FONT_STR
-    mov word [np_msg], 0        ; ...and FORGET it. A toast belongs to the
-                                ; operation that raised it, and this routine
-                                ; is reached from np_paint - so every later
-                                ; repaint was putting it back up. Dragging the
-                                ; window re-showed 'Loaded README.TXT', which
-                                ; reads as the file being loaded AGAIN and was
-                                ; reported as exactly that; the counters say
-                                ; the disk is never touched. The header above
-                                ; already claimed the toast could "never
-                                ; become stale furniture" because a keystroke
-                                ; clears it - a repaint is not a keystroke.
-                                ; The np_smsg shadow is published BEFORE this
-                                ; runs, so the next paint sees 0 against the
-                                ; toast it was drawn with, mismatches, and
-                                ; redraws the rows underneath - which is what
-                                ; erases it
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     pop ax
     ret
 
@@ -4025,7 +3964,8 @@ np_stghold:
     jmp short .out
 .no:
     mov word [np_stgseg], 0
-    mov word [np_msg], np_e_nomem
+    mov ax, np_e_nomem
+    call np_saymsg
     stc
 .out:
     pop dx
@@ -4054,7 +3994,7 @@ np_stgdrop:
 ; -----------------------------------------------------------------------------
 ; np_save - write the note to NOTES.TXT (SPEC.md 18.4/27.1)
 ; in:  nothing (the buffer and its length)
-; out: nothing; [np_msg] reports the outcome; preserves all registers
+; out: nothing; the outcome is said as a toast; preserves all registers
 ;
 ; The note's bare 13s become CR LF on the way out, through the staging claim -
 ; which is sized for the worst case (every character a newline), so the
@@ -4120,7 +4060,7 @@ np_save:
 ; -----------------------------------------------------------------------------
 ; np_load - read NOTES.TXT back into the note (SPEC.md 18.4/27.1)
 ; in:  nothing
-; out: nothing; [np_msg] reports the outcome; preserves all registers
+; out: nothing; the outcome is said as a toast; preserves all registers
 ;
 ; CR LF folds back to a single 13, and so does a lone LF - a note written by
 ; a Unix editor loads correctly too. Anything else outside 32..126 is
@@ -4194,7 +4134,8 @@ np_load:
     call np_setmsg
     test dh, dh
     jz .done
-    mov word [np_msg], np_m_trunc
+    mov ax, np_m_trunc
+    call np_saymsg
     jmp short .done
 .err:
     call np_errmsg
@@ -4214,7 +4155,7 @@ np_load:
 ; -----------------------------------------------------------------------------
 ; np_errmsg - turn a FERR_* code into the toast string
 ; in:  AX = FERR_* (SPEC.md 18.4)
-; out: [np_msg]; preserves all registers
+; out: nothing - the string is said as a toast; preserves all registers
 ; -----------------------------------------------------------------------------
 np_errmsg:
     push ax
@@ -4225,8 +4166,8 @@ np_errmsg:
 .known:
     mov bx, ax
     shl bx, 1
-    mov bx, [bx+np_errtab]
-    mov [np_msg], bx
+    mov ax, [bx+np_errtab]
+    call np_saymsg
     pop bx
     pop ax
     ret
@@ -4579,7 +4520,6 @@ np_onclick:
     jc .move                        ; the text, not a new selection (27.8.1)
     mov [np_anchor], ax
     mov [np_cur], ax
-    mov word [np_msg], 0
     push ax
     call np_selclr
     pop ax
@@ -4903,8 +4843,11 @@ np_onkey:
     mov dx, 0x7FFF
     call np_hmove
 
-.edited:                        ; an edit retires the toast; an unhandled
-    mov word [np_msg], 0        ; key leaves both it and the screen alone
+.edited:                        ; the toast is the kernel's and expires on
+                                ; its own (SPEC.md 59), so a keystroke owes it
+                                ; nothing at all - this used to be a store on
+                                ; the hot path AND the reason np_sigsame threw
+                                ; the fast path away on the key after a save
     call OSAPI_GET_TICKS        ; ...and restarts the settle clock, which is
     mov [np_ktick], ax          ; what the worker measures (SPEC.md 27.3)
 
@@ -5066,6 +5009,219 @@ np_caretpre:
 ; then this is the old routine unchanged - fill the content whole, np_paint
 ; over it, put the grow box back because the fill just erased it.
 ; -----------------------------------------------------------------------------
+; -----------------------------------------------------------------------------
+; np_append - a printable typed at the end of the note, drawn as ONE GLYPH
+; in:  SI = window ptr; gfx lock held; np_bounds and np_sigsame have run and
+;      agreed; [np_ekind] is the kind np_redraw consumed
+; out: CF = 0 it drew and np_redraw owes nothing else; CF = 1 not this case.
+;      Preserves every register.
+;
+; SPEC.md 27.14. Every optimisation before this one made the WALK shorter -
+; 27.4 from the note to the caret's row, 27.11.1 by the row word wrap's
+; lookahead was forcing on top. This one does not walk at all, because for the
+; commonest keystroke in the editor there is nothing to discover: the caret is
+; at the end of the note, so nothing follows it to reflow, and nothing above
+; its row can be touched by a character typed below them.
+;
+; THE SIGNATURE IS WHAT MAKES IT POSSIBLE, and it is the part that looks like
+; it should not work. np_fold is a rolling `rol 1, add` over the row's cells in
+; order, and np_ask folds the CARET in at its own position - so with the caret
+; at the end of the row the last two things folded are the caret and nothing
+; else. That is invertible in four operations:
+;
+;     rol(B,1) = h - caret(C)                 undo the caret at column C
+;     h' = rol(rol(B,1) + ch, 1) + caret(C+1) fold the character where it was,
+;                                             then the caret after it
+;
+; so np_sig stays exact and the NEXT keystroke's np_sigsame still agrees. A
+; fast path that left the signature stale would win once and pay for it on the
+; keystroke after, which is how this was nearly built wrong.
+;
+; THE WRAP IS DEFERRED, DELIBERATELY. np_wordfit is asked at a word's first
+; character and nowhere else, so appending to a word already committed to this
+; row cannot move it - but a fresh layout WOULD ask again with the longer word
+; and might break earlier. So the screen can be a wrap behind the note while
+; the keys are still coming, exactly as 27.3's visual break is a line break
+; ahead of it, and [np_sowed] is the debt: the worker already spends it with a
+; full np_redraw, and only after NP_IDLE ticks without a keystroke. Nothing new
+; had to be hired - np_ins raises np_hmark, which is what wakes the worker at
+; all, and 27.7.3's height recount and this reconcile are the same settle.
+; -----------------------------------------------------------------------------
+np_append:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+
+    cmp byte [np_ekind], 1          ; a printable insert at the caret and
+    jne .no                         ; nothing else: a Delete moves the tail, a
+    cmp byte [np_bmode], 0          ; caret move draws two rows, and the break
+    jne .no                         ; owns the screen while it is up
+    cmp byte [np_ckok], 0
+    je .no                          ; no checkpoint: we do not know the row
+    cmp byte [np_selon], 0
+    jne .no                         ; a selection folds into the row's cells
+
+    ; NOTHING AFTER THE CARET ON THIS ROW, which is the whole precondition and
+    ; has exactly two shapes (SPEC.md 27.14.1). The end of the NOTE, where
+    ; there is no tail at all; or a HARD NEWLINE at the caret, where the tail
+    ; exists but is on other rows and none of its characters or its layout
+    ; moves. A wrapped row's end is NOT one of them and cannot be: np_ask fires
+    ; at the settled pen, so the index after the last character of a wrapped
+    ; row is reported at column 0 of the row BELOW - that caret is on the next
+    ; row, and a character typed there joins that row's first word, which is
+    ; the one thing 27.11.1 says can move a break.
+    mov byte [np_aprow], 0
+    mov ax, [np_cur]
+    cmp ax, [np_len]
+    je .tailok
+    mov es, [np_dseg]
+    mov di, ax
+    cmp byte [es:di], 13
+    jne .no
+    mov byte [np_aprow], 1          ; ...and rows BELOW start one index later
+.tailok:
+    or ax, ax
+    jz .no
+    dec ax                          ; AX = where the character landed
+    mov bx, ax
+    sub bx, [np_ckpi]
+    js .no                          ; before the row start: not our row at all
+    mov cx, [np_rcols]
+    dec cx
+    cmp bx, cx
+    jae .no                         ; the cell rule is about to wrap this row,
+                                    ; or the caret would land off the end of
+                                    ; it - either way, walk properly. BX = the
+                                    ; column the character occupies
+    mov dx, [np_ckpr]
+    or dx, dx
+    js .no
+    cmp dx, [np_vrows]
+    jae .no                         ; off the view: nothing to draw
+    cmp dx, [np_prowi]
+    jne .no                         ; THE EXISTING GATE: np_prow describes some
+                                    ; other row, so patching it would make the
+                                    ; delta cache describe a row that is not on
+                                    ; screen
+
+    mov es, [np_dseg]
+    mov di, ax
+    mov al, [es:di]                 ; the character itself
+    cmp al, ' '
+    jb .no                          ; a newline ends a row and is not a glyph
+    mov [np_ap1], al
+    mov byte [np_ap1+1], 0
+    mov [np_apch], al
+
+    mov ax, bx                      ; --- x of the cell, y of the row ---------
+    mov cl, 3
+    shl ax, cl
+    add ax, [np_tx]
+    mov [np_apx], ax                ; x of column C
+    mov ax, dx
+    mov cl, 3
+    shl ax, cl
+    add ax, [np_ty]
+    mov [np_apy], ax
+
+    mov cx, [np_apx]                ; --- the glyph, opaque, one cell ---------
+    mov dx, [np_apy]                ; opaque is what erases the caret bar that
+    mov si, np_ap1                  ; is standing on this very cell
+    mov al, CBLACK
+    mov ah, CWHITE
+    call OSAPI_FONT_RUN
+
+    mov ax, [np_apx]                ; --- and the caret, one cell along -------
+    add ax, 8
+    mov [np_apx2], ax
+    mov bx, [np_apy]
+    mov dx, bx
+    add dx, 7
+    push ax
+    mov al, CBLACK
+    call OSAPI_SET_COLOR
+    pop ax
+    call OSAPI_GFX_VLINE
+
+    ; --- and now the state the next keystroke reads --------------------------
+    mov bx, [np_cur]                ; the row cache: cell C was a space, and
+    dec bx                          ; the screen shows the character now
+    sub bx, [np_ckpi]
+    mov al, [np_apch]
+    mov [np_prow+bx], al
+    inc bx
+    mov [np_prcc], bx               ; ...and its caret is one along
+
+    mov bx, [np_ckpr]               ; the signature, patched rather than walked
+    shl bx, 1                       ; (see the header)
+    mov ax, [np_apx]
+    xor ax, 0x5A5A
+    mov dx, [bx+np_sig]
+    sub dx, ax                      ; undo the caret that was folded at C
+    xor ah, ah
+    mov al, [np_apch]
+    add dx, ax                      ; the character folds where it stood
+    rol dx, 1
+    mov ax, [np_apx2]
+    xor ax, 0x5A5A
+    add dx, ax                      ; ...and the caret after it
+    mov [bx+np_sig], dx
+
+    mov ax, [np_apx2]               ; np_seecaret and every hit test read these
+    mov [np_curx], ax
+    mov ax, [np_apy]
+    mov [np_cury], ax
+    mov byte [np_curseen], 1
+
+    ; EVERY ROW BELOW STARTS ONE INDEX LATER (SPEC.md 27.14.1). Their
+    ; characters and their layout are untouched - the pixels below the caret's
+    ; row are still right, which is what makes this case legal at all - but
+    ; np_rows is a table of INDICES and a character was inserted in front of
+    ; all of them. Sixteen words at worst, against the walk this exists to
+    ; skip. The end-of-note case has no rows below and does none of it.
+    cmp byte [np_aprow], 0
+    je .norows
+    cmp byte [np_rowsok], 0
+    je .norows
+    mov cx, [np_rowsn]
+    cmp cx, NP_MAXROWS              ; [np_rowsn] is not capped to the array it
+    jbe .rok                        ; indexes (docs/NOTEPAD-NOTES.md 5.3.1), so
+    mov cx, NP_MAXROWS              ; this caller clamps like np_seedtail does
+.rok:
+    mov bx, [np_ckpr]
+    inc bx
+.rsh:
+    cmp bx, cx
+    jae .norows
+    push bx
+    shl bx, 1
+    inc word [bx+np_rows]
+    pop bx
+    inc bx
+    jmp short .rsh
+.norows:
+
+    mov byte [np_sowed], 1          ; THE RECONCILE: the worker spends this with
+                                    ; a full np_redraw, and only once the keys
+                                    ; have stopped for NP_IDLE ticks
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 np_redraw:
     push ax
     push bx
@@ -5104,6 +5260,17 @@ np_redraw:
     pop ax                          ; the pixels first: everything below this
     jne .scrolled0                  ; indexes an array by a VISIBLE row, and
                                     ; those still count in the old view
+
+    call np_append                  ; ONE GLYPH AND NO WALK (SPEC.md 27.14),
+    jnc .done                       ; for a printable typed at the end of the
+                                    ; note - which is most of typing. Here
+                                    ; rather than earlier because it needs
+                                    ; np_sigsame to have agreed and [np_ptop]
+                                    ; to be [np_top]: it patches the row cache
+                                    ; and the signature, and both describe a
+                                    ; screen drawn for THIS geometry and THIS
+                                    ; view. AL still holds [np_ekind] below -
+                                    ; np_append preserves every register
     or al, al
     jz .noseed
     call np_seedck                  ; only an edit at the caret may skip the
@@ -5320,7 +5487,7 @@ np_redraw:
     ; genuinely reaches the corner - a full-content fill, or a band scroll that
     ; drags it - and those all stay.
     call np_sbcheck                 ; a note that gained or lost a row moves
-    call np_toast                   ; the thumb, and nothing else redraws it
+                                    ; the thumb, and nothing else redraws it
                                     ; on this path
 .done:
     mov byte [np_resume], 0
@@ -5419,8 +5586,10 @@ np_redraw:
 np_new:
     mov word [np_len], 0
     mov word [np_cur], 0
-    mov word [np_msg], 0
-    call np_clamp               ; a no-op on the caret, which is already 0 -
+    mov ax, np_s_nul            ; retire the toast: 'Loaded NOTES.TXT' over an
+    call np_saymsg              ; empty note is a lie. An EMPTY string is how
+    call np_clamp               ; SPEC.md 59.3 spells that, so no flag of ours
+               ; a no-op on the caret, which is already 0 -
                                 ; it is here for the invalidation np_clamp
                                 ; carries (SPEC.md 27.4/27.5)
     push ax                     ; ...and give the heap back what the old note
@@ -5741,8 +5910,8 @@ np_defname:
 ; -----------------------------------------------------------------------------
 ; np_setmsg - compose a toast around the live document name (internal)
 ; in:  SI = a NUL prefix ('Saved ' / 'Loaded ')
-; out: np_tbuf holds prefix + np_name and [np_msg] points at it; preserves
-;      all registers
+; out: np_tbuf holds prefix + np_name and it has been said; preserves all
+;      registers
 ; -----------------------------------------------------------------------------
 np_setmsg:
     push ax
@@ -5768,9 +5937,9 @@ np_setmsg:
     inc di
     jmp short .copy
 .done:
-    inc word [np_msgn]          ; a new toast, even at the same address
-    mov word [np_msg], np_tbuf
-    pop di
+    mov ax, np_tbuf
+    call np_saymsg              ; the kernel copies it, so np_tbuf is free to
+    pop di                      ; be recomposed the moment this returns
     pop si
     pop ax
     ret
@@ -9447,8 +9616,6 @@ np_panmove:
     je .no                      ; the arrays do not describe the screen
     cmp byte [np_bmode], 0
     jne .no
-    cmp word [np_msg], 0
-    jne .no
     mov ax, [np_tx]             ; only [np_ty] may have moved
     cmp ax, [np_stx]
     jne .no
@@ -9633,11 +9800,35 @@ np_redrawall:
 ; Small change (SPEC.md 27.8/27.10)
 ; =============================================================================
 
-; np_saymsg - AX = a NUL string -> the toast. Preserves all registers.
+; np_saymsg - AX = a NUL string -> the system toast (SPEC.md 59).
+; Preserves all registers AND the flags: two callers are error paths that
+; carry their answer in CF.
+;
+; This was six words of state and a drawing routine of its own - [np_msg],
+; [np_msgn]'s generation counter, four box coordinates, np_toast, the
+; np_smsg/np_smsgn shadow and np_sigsame's two tests of it. The toast is in
+; the MENU BAR now, so it is in none of this app's pixels: it survives a
+; repaint without help, it cannot be carried off its frame by a scroll blit,
+; and it cannot leave the incremental path disagreeing with W_PAINT - which
+; is what forced a FULL content repaint on the first keystroke after every
+; save and every load (SPEC.md 59.1).
 np_saymsg:
-    mov [np_msg], ax
-    inc word [np_msgn]          ; the GENERATION, or two different toasts at
-    ret                         ; the same address read as one (SPEC.md 27.2)
+    push ax
+    push cx
+    push si
+    push es
+    pushf
+    mov si, ax
+    push ds
+    pop es                      ; the kernel COPIES the string, so np_tbuf may
+    xor cx, cx                  ; be reused freely and this app may close
+    call OSAPI_TOAST            ; while the message is still up. CX = 0: the
+    popf                        ; default lifetime, about three seconds
+    pop es
+    pop si
+    pop cx
+    pop ax
+    ret
 
 ; np_utoa - AX as decimal at DI, no leading zeros; DI advances past it.
 ; Preserves every other register.
@@ -9767,6 +9958,9 @@ np_s_default: db 'NOTES.TXT', 0
 np_m_saved:   db 'Saved ', 0
 np_m_loaded:  db 'Loaded ', 0
 np_m_trunc:   db 'Truncated', 0
+np_s_nul:     db 0              ; an EMPTY string retires whatever is up
+                                ; (SPEC.md 59.3) - one call, and this app
+                                ; never has to know whether one was
 
 ; FERR_* (SPEC.md 18.4) -> string, indexed by the code itself
 np_errtab:
@@ -10016,6 +10210,18 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
                             ; is then a shift and not a 150-clock `div`
     NPVAR np_xpad, 1        ; byte: keep the words that follow even
 
+; --- the append fast path (SPEC.md 27.14) ------------------------------------
+    NPVAR np_ap1, 2         ; the one character np_append letters, NUL-capped:
+                            ; OSAPI_FONT_RUN takes a string and this is the
+                            ; whole of it. Not np_rbuf, which is the row cache
+                            ; np_rflush diffs against and must not be disturbed
+    NPVAR np_apch, 1        ; ...the character on its own, because AL is spent
+    NPVAR np_aprow, 1       ; the tail is a hard NEWLINE, not the end of the
+                            ; note - so rows below have shifted an index
+    NPVAR np_apx,  2        ; word } the cell's x, the caret's x one along, and
+    NPVAR np_apx2, 2        ; word } the row's y - banked because the far calls
+    NPVAR np_apy,  2        ; word } between them return nothing of their own
+
 ; --- how deep a caret move can dirty (SPEC.md 27.4.1) ------------------------
     NPVAR np_mvbot, 2       ; word: the DEEPER of the two visible rows a caret
                             ; move touched - the one it left and the one it
@@ -10048,11 +10254,15 @@ np_len      equ os88_image_end + 0     ; word: characters used. The TEXT is
 np_tx       equ os88_image_end + 2   ; word: paint scratch, text origin x
 np_rgt      equ os88_image_end + 4   ; word: content right, inclusive
 np_bot      equ os88_image_end + 6   ; word: content bottom, inclusive
-np_msg      equ os88_image_end + 8   ; word: toast string, 0 = none
-np_bx1      equ os88_image_end + 10   ; word: the toast box, computed in
-np_by1      equ os88_image_end + 12   ; np_toast and used by three calls
-np_bx2      equ os88_image_end + 14
-np_by2      equ os88_image_end + 16
+                                       ; +8..+17 FREE: [np_msg] and the four
+                                       ; toast-box words. The toast is the
+                                       ; kernel's now (SPEC.md 59) and is in
+                                       ; the menu bar, so this app holds no
+                                       ; state about it at all. The offsets
+                                       ; below are unchanged deliberately -
+                                       ; renumbering 200 hand-written equs to
+                                       ; reclaim ten bytes of bss is a large
+                                       ; risk for no measurable gain
 np_name     equ os88_image_end + 18   ; 14: the current document, 8.3 + NUL
                                        ; (SPEC.md 27.1) - per INSTANCE, so
                                        ; two Note Pads hold two documents
@@ -10102,8 +10312,8 @@ np_dr1      equ os88_image_end + 96    ; word: ...and the last.
 np_stx      equ os88_image_end + 98    ; word } the geometry the
 np_sty      equ os88_image_end + 100    ; word } signatures were
 np_srgt     equ os88_image_end + 102    ; word } taken at, and the
-np_sbot     equ os88_image_end + 104    ; word } toast that was over
-np_smsg     equ os88_image_end + 106    ; word } them (np_sigsame)
+np_sbot     equ os88_image_end + 104    ; word } taken at (np_sigsame)
+                                       ; +106 FREE: np_smsg
 np_sigup    equ os88_image_end + 108    ; byte: np_walk folds and
                                        ; compares
 np_clip     equ os88_image_end + 109    ; byte: ...and draws only
@@ -10150,13 +10360,15 @@ np_capkb    equ os88_image_end + 435    ; word: its size in KB...
 np_cap      equ os88_image_end + 437    ; word: ...and in bytes, kept in step
                                        ; by np_resize. NP_MAXKB * 1024 fits a
                                        ; word, which is what bounds the note
-np_msgn     equ os88_image_end + 441    ; word: the toast's GENERATION, bumped
-np_smsgn    equ os88_image_end + 443    ; word: ...and the one the signatures
-                                       ; were taken over. np_setmsg composes
-                                       ; every toast into the same np_tbuf, so
-                                       ; the POINTER cannot tell "Saved X"
-                                       ; from "Loaded X" and np_sigsame used
-                                       ; to skip the repaint between them
+                                       ; +441..+444 FREE: np_msgn and
+                                       ; np_smsgn, the toast's GENERATION and
+                                       ; the one the signatures were taken
+                                       ; over. Both existed because every
+                                       ; toast was composed into the same
+                                       ; np_tbuf, so the POINTER could not
+                                       ; tell "Saved X" from "Loaded X" -
+                                       ; a distinction the kernel's copy
+                                       ; makes for itself (SPEC.md 59.3)
 np_stgseg   equ os88_image_end + 439    ; word: the save's CR/LF staging
                                        ; claim, 0 = not held. A SECOND claim,
                                        ; sized from [np_len] and taken only

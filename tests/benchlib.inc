@@ -110,15 +110,20 @@
 BL_MAXLINE  equ 78              ; characters in a report line. 78 * 8 = 624 px,
                                 ; which fits the content of a 632-wide window
                                 ; on the narrowest adapter (CGA, 640 px)
-BL_MAXROWS  equ 240             ; report lines. Sized for the longest suite,
+BL_MAXROWS  equ 300             ; report lines. Sized for the longest suite,
                                 ; WITH HEADROOM - it was 190 and sysbench's
                                 ; longest report is 190, so folding SPEC.md
                                 ; 18.94's disk block and 37.92's clock block
                                 ; into every field kernel truncated it on the
                                 ; exact run it was built for. The banner says
                                 ; so, which is the only reason that was caught
-                                ; and not carried off the machine in a photo.
-BL_ARENA    equ 11500           ; bytes of packed NUL-terminated line text
+                                ; and not carried off the machine in a photo -
+                                ; and it caught the SECOND one too, at 240,
+                                ; when 18.95.2's and 18.95.4's blocks landed.
+                                ; A report that is one round from its ceiling
+                                ; is a report that truncates on somebody
+                                ; else's machine, so this is 300 for 246.
+BL_ARENA    equ 14000           ; bytes of packed NUL-terminated line text
 BL_OUTSZ    equ BL_ARENA + BL_MAXROWS * 2 + 64   ; ...plus a CR LF each
 BL_BASE_N   equ 400             ; iterations of the empty body, for the
                                 ; overhead every method-P row is net of

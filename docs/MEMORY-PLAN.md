@@ -236,9 +236,25 @@ hide too (its worker's two background drawers ask `OSAPI_WM_OBSCURED` and its
 state is not time-varying). **Verify it before a second application opts in** —
 a Timer or a Bounce is exactly the case that would break. What is measured:
 a raise makes **zero `W_PAINT` calls** where it used to make one costing
-578 ms, and the restored content is **pixel-identical** (0 differing of a
-124,928-byte content rect). The kernel cost is **+809 bytes**, which crossed
-two 512-byte rungs and left `KERN_BUDGET` at 1,536 spare.
+578 ms. The kernel cost is **+809 bytes**, which crossed two 512-byte rungs
+and left `KERN_BUDGET` at 1,536 spare.
+
+**~~and the restored content is pixel-identical (0 differing of a 124,928-byte
+content rect)~~ — THAT CLAIM WAS WRONG, and how it came to be recorded is the
+part worth keeping.** The feature shipped with `gfx_restore` handed its buffer
+in `ES:DI` where the contract is `ES:SI`, so it read the claim at the offset of
+the *window record* — past the end of the block — and every cached raise put a
+**solid black rectangle** where the window's content should be, overhanging its
+right edge. It was reported off a real desktop within the day. Neither number
+above is capable of seeing that: a raise that draws garbage makes zero
+`W_PAINT` calls exactly like a raise that draws correctly, and the pixel
+comparison was taken while §50.6.1's placement bug still refused the claim on
+any desktop with a Disk window open — so it measured the fallback path and
+agreed with itself. **A pixel check only means something when a control proves
+it would have failed**; SPEC.md §11.96.2 is the fix, the second defect the
+first one was hiding, and the A/B — cache forced off in the running guest,
+same binary, same clicks — that both now pass with a control that fails by
+134 pixels on CGA, 96 on VGA.
 
 **Owed on it:** a clean end-to-end wall figure for the raise. The obvious
 measurement — step frames until the screen stops changing — is confounded by

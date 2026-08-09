@@ -953,13 +953,13 @@ dskw_rt_scan:
     mov ax, [dsk_cwd]
     call KERNEL_SEG:cw_dsk_dirw_start
 .sector:
-    call KERNEL_SEG:cw_dsk_dirw_next ; AX = the next sector's LBA
-    jc .none                    ; the chain ended with nothing found
+    call KERNEL_SEG:cw_dsk_dirw_get ; dsk_secbuf = the next sector (19.2.1)
+    jnc .secok
+    or ax, ax
+    jz .none                    ; the chain ended with nothing found
+    jmp short .ioerr
+.secok:
     mov [dskw_rt_sec], ax
-    mov cx, 1
-    mov bx, dsk_secbuf
-    call KERNEL_SEG:cw_disk_read
-    jc .ioerr
     mov si, dsk_secbuf
     mov cx, 16                  ; entries per sector
 .entry:
@@ -1034,11 +1034,7 @@ dskw_rt_byclus:
     mov ax, [dsk_cwd]
     call KERNEL_SEG:cw_dsk_dirw_start
 .sector:
-    call KERNEL_SEG:cw_dsk_dirw_next
-    jc .none
-    mov cx, 1
-    mov bx, dsk_secbuf
-    call KERNEL_SEG:cw_disk_read
+    call KERNEL_SEG:cw_dsk_dirw_get ; either failure is "not found" here
     jc .none
     mov si, dsk_secbuf
     mov cx, 16
@@ -1125,12 +1121,12 @@ dskw_isempty:
     mov ax, [dskw_oldclus]
     call KERNEL_SEG:cw_dsk_dirw_start
 .sector:
-    call KERNEL_SEG:cw_dsk_dirw_next ; AX = the next sector's LBA
-    jc .empty                   ; the chain ended with nothing found
-    mov cx, 1
-    mov bx, dsk_secbuf
-    call KERNEL_SEG:cw_disk_read
-    jc .ioerr
+    call KERNEL_SEG:cw_dsk_dirw_get ; dsk_secbuf = the next sector (19.2.1)
+    jnc .secok
+    or ax, ax
+    jz .empty                   ; the chain ended with nothing found
+    jmp short .ioerr
+.secok:
     mov si, dsk_secbuf
     mov cx, 16                  ; entries per sector
 .entry:
@@ -2602,13 +2598,13 @@ dskw_find:
     mov ax, [dsk_cwd]           ; the CURRENT directory, not the root
     call KERNEL_SEG:cw_dsk_dirw_start ; (SPEC.md 19.2 - one walker, both shapes)
 .sector:
-    call KERNEL_SEG:cw_dsk_dirw_next ; AX = next sector LBA, CF=1 = end of dir
-    jc .noent
+    call KERNEL_SEG:cw_dsk_dirw_get ; dsk_secbuf = the next sector (19.2.1)
+    jnc .secok
+    or ax, ax
+    jz .noent                   ; the directory ended
+    jmp short .ioerr
+.secok:
     mov [dskw_cursec], ax
-    mov cx, 1
-    mov bx, dsk_secbuf
-    call KERNEL_SEG:cw_disk_read
-    jc .ioerr
     mov si, dsk_secbuf
     mov cx, 16                  ; entries per sector
 .entry:

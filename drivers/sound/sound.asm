@@ -56,12 +56,36 @@ OS88_DRIVER 'Sound', DRVC_SOUND, snd_entry
 ; in:  AL = DRVV_*; DS = CS = ours, ES = KERNEL_SEG
 ; out: attach: CF = 0 and SI = the service table, or CF = 1 = no hardware
 ;      detach: nothing
+;
+; EVERY VERB IS NAMED AND ANYTHING ELSE REFUSES, which is hd_entry's shape and
+; is not a style point. This tested DETACH and TIER and let everything else
+; fall into the attach body - so DRVV_READY, which drv_load sends right after
+; DRVV_ATTACH (SPEC.md 51.2.2), RAN A SECOND WHOLE ATTACH on every load: the
+; OPL re-probed and re-initialised, the DSP reset again, and sbl_dma_map
+; claiming a second 12KB page-safe ring while [sbl_seg] was overwritten with
+; the new one. The first was then unreachable and unfreeable, charged to the
+; driver's segment until detach swept it by owner - a silent 12KB of the claim
+; heap, on every machine with a Sound Blaster in it, for the life of the
+; session. Found by breakpointing OSAPI_MEM_CLAIM_DMA: two hits per load, both
+; from this routine's attach body, one per drv_load call site.
+;
+; The fallthrough was invisible because a re-attach SUCCEEDS - the hardware is
+; still there, so the second probe answers yes and the driver comes up looking
+; perfectly correct. Only the heap knew.
 ; -----------------------------------------------------------------------------
 snd_entry:
     cmp al, DRVV_DETACH
     je snd_detach
     cmp al, DRVV_TIER
     je snd_tier
+    cmp al, DRVV_READY
+    je .nosb                    ; nothing to do: this driver keeps no settings
+                                ; blob (SPEC.md 51.9) and the probe already
+                                ; ran at ATTACH, so READY just re-answers with
+                                ; the table it built then
+    cmp al, DRVV_ATTACH
+    jne .nohw                   ; an unknown verb REFUSES rather than probing
+                                ; hardware nobody asked about
     ; --- attach ---------------------------------------------------------------
     ; TWO tiers, independently present. Either one alone is worth attaching
     ; for, so the refusal is only when NEITHER answers - and the service
@@ -79,7 +103,20 @@ snd_entry:
     mov word [snd_services+DSV_NAME], snd_s_opl
 .nofm:
     call sbl_attach             ; the reset scan, then the DMA buffer
-    jc .nosb
+    jnc .sbok
+    cmp al, DRVE_TWICE
+    je .bug                     ; NOT .nosb. Every other refusal here is a fact
+                                ; about the machine and degrades to FM-only,
+                                ; which is a real configuration; this one says
+                                ; we attached twice, and swallowing it would
+                                ; leave the driver up and looking fine with the
+                                ; report thrown away - the exact silence the
+                                ; code exists to break. It is a FUTURE
+                                ; regression's guard: the DRVV_READY
+                                ; fallthrough that used to reach here is fixed
+                                ; above, so nothing should ever take this jump
+    jmp short .nosb
+.sbok:
     mov byte [drv_up], 1
     mov word [snd_services+DSV_STREAM], sbl_stream_op
     mov word [snd_services+DSV_TICK], sbl_tick
@@ -130,8 +167,9 @@ snd_entry:
     ret
 .nohw:
     mov al, DRVE_HW             ; the reason, explicitly: attach's refusal may
-    stc                         ; carry a DRVE_* now (SPEC.md 51.2) and the
-    ret                         ; kernel reads whatever AL holds
+.bug:                           ; carry a DRVE_* now (SPEC.md 51.2) and the
+    stc                         ; kernel reads whatever AL holds - so .bug
+    ret                         ; joins here with DRVE_TWICE already in AL
 
 ; -----------------------------------------------------------------------------
 ; snd_tier - DRVV_TIER: how much of ourselves the user wants (SPEC.md 34.8)

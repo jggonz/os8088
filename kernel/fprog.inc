@@ -86,6 +86,13 @@ fpg_begin:
     mov word [fpg_done], 0
     mov word [fpg_px], 0
 
+    call toast_kill             ; the toast strip (SPEC.md 59) is in these
+                                ; pixels and this is a newer, more urgent
+                                ; statement about the same conversation. It
+                                ; does not draw - it cannot, the lock is held
+                                ; by the operation - so the bar is put back
+                                ; on the UI task's next look
+
     call cur_unlazy             ; spend gfx_lock's promised hide before we
                                 ; draw anywhere near the arrow (SPEC.md 7.1.4)
 

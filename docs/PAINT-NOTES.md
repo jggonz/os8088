@@ -482,3 +482,35 @@ was audited against that; the largest possible count is 24 (`pt_bmp_pal`'s
 `1 << biBitCount`), so none of them can diverge. Worth re-checking if a shift
 count ever becomes a computed value rather than a small constant or a validated
 field.
+
+---
+
+## The toast is the kernel's now
+
+`pt_msg_show` was a framed white box at the canvas's top-left corner: it sat
+**on the picture**, cost a canvas blit to hide, and did not survive a repaint —
+so `pt_msgon` had to be cleared by every repaint path and `pt_msg_hide` had to
+be called at the top of the click, key and menu handlers so that any
+interaction took it down.
+
+It is SPEC.md §59's strip in the menu bar. `pt_msg_show` is nine instructions
+around `OSAPI_TOAST`; `pt_msg_hide`, `[pt_msgon]` and `[pt_msgw]` are gone,
+with the three "an interaction retires the toast" calls and the two repaint
+stores. **−138 bytes**, and the artwork stops being covered.
+
+`[pt_msgp]` stays. It was never the toast — it is the *choice* of message,
+which `pt_save` and `pt_load` set and their callers say.
+
+Two things worth knowing before adding another message here:
+
+- **A message put up BEFORE a long operation still works**, and that took
+  kernel work rather than luck. `Encoding...` precedes seconds of LZW inside a
+  window callback, so a purely deferred toast would have appeared *after* the
+  thing it announced; SPEC.md §59.4's `toast_now` draws on the spot when the
+  caller provably holds the gfx lock, which a menu command always does. The
+  `pt_wait` that used to exist to flush it on a double-buffered machine is
+  no longer needed for that reason — `toast_now` calls `gfx_flush` itself.
+- **A file operation retires it.** `fpg_begin` (SPEC.md §12.8) is in the same
+  pixels and is a live progress bar rather than a static line, so it wins.
+  That is why `Saving...` before a `pt_save` is redundant with the widget and
+  only `Encoding...`, which precedes work the widget cannot see, is not.

@@ -43,6 +43,11 @@
 %include "os88api.inc"          ; the OSAPI_* far-call table: a driver reaches
                                 ; the kernel exactly as a package does
 
+; The dispatcher's fixed offset inside the image the OS88_DRIVER macro emits.
+; The kernel far-calls it, and so may you: HDD.DRV loads HDDTOOL.DRV and calls
+; into it exactly as wm_pkgcall calls a package (SPEC.md 52.11).
+PKG_DISP     equ 12
+
 ; --- driver classes, mirrored from kernel/driver.inc -------------------------
 ; A class is also a PUBLICATION SLOT: one driver of each class may be
 ; attached at a time, and each has its own copy of the service table below,
@@ -54,6 +59,11 @@ DRVC_DEBUG   equ 3              ; the serial monitor (SPEC.md 58): no service
                                 ; page - but a class of its own, because a
                                 ; class is the publication slot and sharing
                                 ; one disconnects the driver already in it
+DRVC_OVL     equ 4              ; NOT A KERNEL CLASS. A driver's own loadable
+                                ; half (OS88_OVERLAY below): the kernel never
+                                ; loads one and drv_check would refuse it, and
+                                ; the number is here so that saying so is a
+                                ; property of the file rather than a comment
 
 ; --- the capability bits a sound driver may ADD (SPEC.md 34.2) ---------------
 ; os88api.inc publishes the two the resident kernel already has (TONE and
@@ -122,6 +132,16 @@ DRVE_BUSY    equ 6              ; ...or it IS there and something the kernel
                                 ; to different places: DRVE_HW means buy or
                                 ; fit a card, this means move a jumper
                                 ; (SPEC.md 58.2)
+DRVE_TWICE   equ 7              ; YOU were asked to attach while you were
+                                ; already attached. The one code here that
+                                ; blames the software rather than the machine,
+                                ; and the one to answer whenever a second
+                                ; attach would re-claim something you already
+                                ; hold: refuse, touch nothing, and return this
+                                ; - the Drivers page and the boot notice print
+                                ; it beside your name, so the bug arrives with
+                                ; a sentence instead of as a heap that is
+                                ; quietly short (SPEC.md 51.2.2)
 
 ; --- the service table you return in SI at attach ----------------------------
 ; Offsets in YOUR segment. The kernel copies the whole thing once, so it may
@@ -300,6 +320,49 @@ HDD_LISTKB   equ 6
     %endif
     db %1                   ; +16 driver name...
     times 16 - %%len db 0   ;     ...NUL-padded to 16 bytes
+%endmacro
+
+; -----------------------------------------------------------------------------
+; OS88_OVERLAY 'NAME', abi, entry - a driver's own loadable half (SPEC.md
+; 52.11). Same header, same dispatcher, same one-claim load discipline, and
+; NOT A DRIVER: it has no class the kernel knows, it is not in drv_tab, and
+; the kernel never sees it. Its owner is another driver, which reads it off
+; the system volume when the user asks for something that needs it and frees
+; it again afterwards - HDD.DRV and HDDTOOL.DRV are the worked example.
+;
+; Two differences from OS88_DRIVER, both deliberate:
+;
+;   class DRVC_OVL   so nothing can mistake it for a driver of a real class.
+;                    The kernel would refuse it; os88drv.py names it 'overlay'.
+;   +10 = the ABI    the reserved word carries the version of the private
+;                    interface it was built against, because there is nothing
+;                    that makes a machine's overlay the same vintage as the
+;                    driver that loads it - a half-copied floppy is exactly
+;                    that. Its owner checks this word before the first call.
+;
+; The version byte stays 4, so the APPLICATION loader refuses this file too
+; (SPEC.md 51.1) and it can never be double-clicked into the package loader.
+; -----------------------------------------------------------------------------
+%macro OS88_OVERLAY 3
+    cpu 8086
+    bits 16
+    org 0
+    db 'O', '8'             ; +0  magic
+    db 4                    ; +2  format 4: driver-shaped, not an application
+    db DRVC_OVL             ; +3  ...but no class the kernel will load
+    dw 0                    ; +4  link base: 0
+    dw (%3) - $$            ; +6  entry offset
+    dw OS88_DRV_SIZE        ; +8  image size = the whole file
+    dw %2                   ; +10 the private ABI version its owner checks
+    db 0FFh, 0D5h           ; +12 the dispatcher: `call bp`...
+    db 0CBh                 ; +14 ...`retf`
+    db 0
+    %strlen %%len %1
+    %if %%len > 15
+        %error "OS88_OVERLAY: name must be at most 15 characters"
+    %endif
+    db %1                   ; +16 name, NUL-padded to 16
+    times 16 - %%len db 0
 %endmacro
 
 ; -----------------------------------------------------------------------------

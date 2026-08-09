@@ -1,9 +1,12 @@
 diff --git a/Cargo.lock b/Cargo.lock
-index df0a894..6bc5c7b 100644
+index df0a894e..641e04ab 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
-@@ -3427,6 +3427,7 @@ dependencies = [
+@@ -3425,8 +3425,10 @@ dependencies = [
+  "crossbeam-channel",
+  "env_logger",
   "flate2",
++ "fluxfox",
   "getrandom 0.3.1",
   "indexmap 2.14.0",
 + "libc",
@@ -11,10 +14,10 @@ index df0a894..6bc5c7b 100644
   "marty_common",
   "marty_config",
 diff --git a/crates/binaries/martypc_headless/Cargo.toml b/crates/binaries/martypc_headless/Cargo.toml
-index ccfc2ba..fd8383d 100644
+index ccfc2ba7..22ec8392 100644
 --- a/crates/binaries/martypc_headless/Cargo.toml
 +++ b/crates/binaries/martypc_headless/Cargo.toml
-@@ -12,12 +12,17 @@ path = "src/lib.rs"
+@@ -12,12 +12,26 @@ path = "src/lib.rs"
  crate-type = ["lib"]
  
  [dependencies]
@@ -26,6 +29,15 @@ index ccfc2ba..fd8383d 100644
  marty_display_common = { path = "../../lib/frontend/marty_display_common", default-features = false }
  marty_config = { path = "../../lib/frontend/marty_config" }
  
++# For the debug server's `flush` (docs/MARTYPC-DEBUG.md): writing a floppy
++# image back out is fluxfox's ImageWriter, which the eframe frontend reaches
++# through its Save Floppy As menu item and a headless run could not reach at
++# all. The features match marty_core's own non-wasm set so cargo unifies the
++# two into ONE build of the crate - a different set is a second fluxfox, and
++# then the DiskImage `fdc.get_image()` hands back is not the DiskImage
++# ImageWriter takes.
++fluxfox = { workspace = true, default-features = false, features = ["core", "archives", "mfi", "fat", "flux", "ibm_pc"] }
++
 +# For the fork() snapshot (docs/SNAPSHOT-PLAN.md B). Unix only; the feature
 +# refuses to arm itself elsewhere rather than failing to compile.
 +[target.'cfg(unix)'.dependencies]

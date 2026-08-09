@@ -251,11 +251,13 @@ loader_run_x:
     mov byte [ld_painted], 0
     call ld_run_body_x          ; out: AL = LD_* status
     mov [ld_status], al
-    mov di, [ld_pwin]           ; ...and on the window that ASKED for it
-    or di, di                   ; (SPEC.md 22.9). 0 = no poster: a chip-menu
-    jz .ldst_none                    ; load reports through ui_note, not a line
-    mov [di+FS_LDST], al
-.ldst_none:
+    push bx                     ; ...and SAY it (SPEC.md 59). It used to be
+    push cx                     ; stamped on the window that asked, because
+    mov bx, fm_stattab          ; one global put 'Bad package' on every open
+    mov cx, LD_NSTAT            ; Disk window at once - a question a toast
+    call KERNEL_SEG:cw_toast_say ; cannot raise, since it belongs to no
+    pop cx                      ; window at all and appears at the moment of
+    pop bx                      ; the act (SPEC.md 22.9)
     cmp byte [ld_painted], 0
     jne .painted                ; the success path published the status and
                                 ; drew the new window itself; all that is

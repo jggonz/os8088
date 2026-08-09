@@ -534,7 +534,6 @@ hd_s_fat12id: db 'FAT12   '    ; it must never reach font_str
 hd_s_f16name: db 'FAT16', 0    ; ...and the display names, which must
 hd_s_f12name: db 'FAT12', 0
 
-hd_s_two:     db '  ', 0
 
 ; -----------------------------------------------------------------------------
 ; hd_fmt_isfat - is there a FAT volume at this partition's LBA 0? (52.2.2)
@@ -599,3 +598,10 @@ hd_fmt_isfat:
     pop ax
     stc
     ret
+
+; --- state this module owns (moved out of hdd.asm's data block) ---
+hd_fspc:     dw 0               ; the plan: sectors per cluster,
+hd_ffatsz:   dw 0               ; FAT sectors,
+hd_fclus:    dw 0               ; clusters,
+hd_fdata:    dw 0               ; the first data sector,
+hd_ftype:    db 0               ; and 0 = FAT12 / 1 = FAT16

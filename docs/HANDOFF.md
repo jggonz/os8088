@@ -125,15 +125,14 @@ and only the 5150 can set it. `make npbench`, boot, double-click README.TXT,
 Ctrl-B. `NP_HCHUNK ≈ (wanted hold in µs) ÷ (measured per-row µs)`, target a
 hold under one 55 ms tick.
 
-### 3.6 docs/NOTEPAD-NOTES.md §5.2.1 — 66 stale glyph cells
+### 3.6 The 66 stale cells — RESOLVED, they were the harness
 
-Six `ArrowDown`s from a cold boot leave **66 glyph cells** of the content
-disagreeing with a full repaint — 2,743 bytes, full content width, nine rows
-of sixteen, and the view never scrolls. **Pre-existing**: byte-for-byte
-identical on two different builds of the module. Reproducible in three
-commands with `tools/notepad/pixcheck.py`. The suspicion is still an
-interleaving between the background height count and the redraw's signatures,
-and the next step is to hold the worker off and see whether it survives.
+`pixcheck.py` decoded the framebuffer with `base64.b64decode`; the payload is
+**hex**, and every hex character is legal base64, so it silently returned 4.5
+bytes per pixel of nonsense. With the right decoder the check reads **0
+differing bytes — incremental == full repaint**. docs/NOTEPAD-NOTES.md §5.2.1
+and docs/NOTEPAD-NOTES.md §6.9. What remains is 227 pixels on row 0 at the toast's rectangle, which
+may be a toast that is meant to persist; nothing else in the content differs.
 
 ### 3.7 `[np_rowsn]` is not capped to the array it indexes
 

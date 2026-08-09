@@ -672,6 +672,7 @@ hd_tw_delete:
     jc .out                     ; the caption is asking
 
     mov al, [hd_tsel]
+    mov ah, [hd_tdev]
     call hd_tw_unmount_slot     ; -> [hd_tdrop]
     cmp byte [hd_tdrop], 0
     je .table
@@ -679,7 +680,7 @@ hd_tw_delete:
                                 ; boot reads, and it just changed: STAGED, like
                                 ; every other setting in the machine, and
                                 ; written when the panel closes (SPEC.md 31.8)
-    mov word [hd_msg], hd_s_pick    ; ...and the PAGE's caption records what the
+    call hd_page_pick               ; ...and the PAGE's caption records what the
                                     ; last PAGE click did, so it is sitting
                                     ; there saying 'Mounted 1 volume' about a
                                     ; volume this click has just taken away. The
@@ -764,45 +765,6 @@ hd_tw_delok:
     pop bx
     pop ax
     stc
-    ret
-
-; -----------------------------------------------------------------------------
-; hd_tw_unmount_slot - drop every volume mounted on one partition (internal)
-; in:  AL = the slot, [hd_tdev] = the device; the gfx lock is HELD
-; out: [hd_tdrop] = 1 if anything was unmounted, 0 if not
-; clobbers: flags
-;
-; EVERY row and not the first, for hd_unmount's own reason: one partition is
-; one volume today, and a scan that stops early is the kind of thing that
-; stops being true quietly.
-; -----------------------------------------------------------------------------
-hd_tw_unmount_slot:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov dl, al                  ; DL = the slot: AL is the comparison's
-    mov byte [hd_tdrop], 0
-    mov cx, HD_MAXVOL
-    mov bx, hd_vols
-.scan:
-    cmp byte [bx+HDV_USED], 0
-    je .next
-    mov al, [bx+HDV_DEV]
-    cmp al, [hd_tdev]
-    jne .next
-    mov al, [bx+HDV_PART]
-    cmp al, dl
-    jne .next
-    call hd_unmount_row
-    mov byte [hd_tdrop], 1
-.next:
-    add bx, HDV_SIZE
-    loop .scan
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -939,3 +901,31 @@ hd_s_tdsk1:   db '? Click Delete again', 0
 hd_s_tdeleted: db 'Slot deleted', 0
 hd_s_tdelunm: db 'Deleted - volume unmounted', 0
 hd_s_tdempty: db 'Nothing in that slot', 0
+
+; --- state this module owns (moved out of hdd.asm's data block) ---
+hd_twin:     dw 0               ; the disk tool's window, 0 = never opened
+hd_tdev:     db 0               ; the DEVICE the tool is bound to, banked when
+                                ; it opened. hd_mbr and hd_tstate describe THIS
+                                ; device; [hd_sel] is the Control Panel's
+                                ; highlight and the panel stays clickable
+                                ; underneath, so a write that reads [hd_sel]
+                                ; can commit one disk's table to another's
+                                ; LBA 0. Everything destructive reads this
+hd_tsel:     db 0               ; ...the slot it has selected,
+hd_tarm:     db 0               ; the ARMED ACTION when a destructive button is
+                                ; one click from happening, 0 when none is:
+                                ; slot+1 in the low nibble and HTA_DEL for
+                                ; which button, so Format and Delete cannot arm
+                                ; each other (52.2.3)
+hd_tdropv:   db 0xFF            ; the last kernel volume index an unmount took,
+                                ; 0xFF = none. The install repairs SPEC.md
+                                ; 51.5.2's banked drive against this: the
+                                ; volume it unmounts may be the one the user
+                                ; was standing on (SPEC.md 52.10.8)
+hd_tdrop:    db 0               ; a Delete unmounted a volume, so the caption
+                                ; says so and the mounted set is re-staged
+hd_tmsg:     dw 0               ; ...and its caption
+hd_tstate:   times 4 db 0       ; HTS_* per slot, worked out when the tool
+                                ; opens and after every format
+hd_ask:      times 40 db 0      ; the confirm question, built into a buffer of
+                                ; its own: hd_line belongs to the row painter

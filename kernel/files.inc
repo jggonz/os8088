@@ -113,17 +113,20 @@ FS_DRV      equ 10              ; byte: the drive it shows
 FS_MOK      equ 11              ; byte: 1 = that listing came from a good mount
 FS_VIEW     equ 12              ; byte: 0 = list, 1 = icon grid
 FS_EDIT     equ 13              ; byte: the status-line editor is armed here
-FS_FERR     equ 14              ; byte: FERR_* of the last file operation IN
-                                ; THIS WINDOW, 0 = none
-FS_LDST     equ 15              ; byte: LD_* of the last load THIS window
-                                ; posted. Per window for the reason FS_FERR
-                                ; is: a status line is a report about what
-                                ; the user did HERE, and [ld_status] is one
-                                ; global, so a failed load put 'Bad package'
-                                ; on every open Disk window at once - two
-                                ; windows both claiming to have been asked.
-                                ; Offset 15 was the padding hole in front of
-                                ; the word below, so FS_SIZE is unchanged
+                                ; +14 and +15 are FREE: FS_FERR and FS_LDST,
+                                ; the FERR_* of the last file operation in
+                                ; this window and the LD_* of the last load it
+                                ; posted. Both were per window because a
+                                ; status line is a report about what the user
+                                ; did HERE, and [ld_status] is one global - so
+                                ; a failed load put 'Bad package' on every
+                                ; open Disk window at once, two of them each
+                                ; claiming to have been asked. A verdict is a
+                                ; TOAST now (SPEC.md 59.5) and belongs to no
+                                ; window at all, which DISSOLVES that question
+                                ; rather than answering it. The offsets are
+                                ; left as a hole deliberately: every one below
+                                ; is hand-written, and FS_SIZE is unchanged.
 FS_VSEG     equ 16              ; word: this window's listing-cache claim
                                 ; (SPEC.md 50.2), 0 = none - fm_kinit claims
                                 ; VIEW_KB and the instance's teardown frees
@@ -248,8 +251,6 @@ fm_kinit_x:
     mov word [di+FS_N], 0           ; reopened window never resumes one
     mov byte [di+FS_VIEW], 0
     mov byte [di+FS_EDIT], 0
-    mov byte [di+FS_FERR], 0
-    mov byte [di+FS_LDST], 0
     mov byte [di+FS_DIRTY], 0   ; a KD_POOL block is REUSED (SPEC.md 29.3):
                                 ; a window closed while it still owed a
                                 ; refresh must not hand that debt to the next
@@ -606,7 +607,6 @@ fmv_load:
     mov [di+FS_N], ax
     mov word [di+FS_SEL], 0xFFFF    ; every index into the old listing is
     mov word [di+FS_SCRL], 0        ; meaningless now
-    mov byte [di+FS_FERR], 0
     call fmv_store
     call fm_measure             ; the free/size line is about the listing we
                                 ; just took, so it is read here and nowhere
@@ -1096,6 +1096,11 @@ fm_s_ldfail:  db 'Load failed', 0
 fm_s_nomem:   db 'Out of memory', 0
 fm_stattab:   dw fm_s_empty, fm_s_dskerr, fm_s_badpkg, fm_s_toobig, fm_s_ldfail
               dw fm_s_nomem
+LD_NSTAT      equ 6             ; LD_OK .. LD_ENOMEM. The bound toast_say
+                                ; tests, and it is DERIVED FROM THE TABLE
+                                ; rather than typed beside the enum, because
+                                ; the table is what an out-of-range code walks
+                                ; off the end of (SPEC.md 22.9's silent ladder)
 
 ; --- FERR_* -> status line (SPEC.md 22) --------------------------------------
 ; Every dskw_* failure has to say something. Without this table a refused
@@ -1608,10 +1613,6 @@ fm_layout:
     mov [fm_ldrv], al
     mov al, [di+FS_EDIT]
     mov [fm_ledit], al
-    mov al, [di+FS_FERR]
-    mov [fm_lferr], al
-    mov al, [di+FS_LDST]
-    mov [fm_lldst], al
     mov ax, [di+FS_N]
     mov [fm_lnf], ax
     mov ax, [di+FS_SCRL]
@@ -1832,15 +1833,12 @@ fm_onclick_x:
     mov [fm_wased], al          ; only thing besides the two selection bands a
                                 ; row click can change (SPEC.md 22.2)
     call fm_edit_end            ; clicking away abandons a half-typed name
-    call fm_stat_clear          ; ...and retires the last verdict (22.9)
-    mov al, 0
-    jnc .noclr
-    inc al
-.noclr:
-    or al, [fm_wased]           ; ONE question, two causes: a retired verdict
-    mov [fm_statowed], al       ; and an ended editor line both rewrite the
-                                ; status LINE and change nothing else on this
-                                ; window. The cheap paths below draw no text
+    mov al, [fm_wased]          ; an ended editor line rewrites the status
+    mov [fm_statowed], al       ; LINE and changes nothing else on this
+                                ; window. It used to be ONE question with TWO
+                                ; causes, the other being a retired verdict,
+                                ; and verdicts are toasts now (SPEC.md 59.5).
+                                ; The cheap paths below draw no text
                                 ; at all, so they pay one fm_status_only for
                                 ; it - where each used to escalate to a whole
                                 ; repaint instead, which is what made clicking
@@ -2110,14 +2108,12 @@ fm_onkey_x:
     jne .editing                ; naming: nothing below is reachable - and the
                                 ; prompt already owns the line, so there is no
                                 ; verdict on it to retire
-    call fm_stat_clear          ; ...otherwise this keystroke retires it
-    mov byte [fm_statowed], 0   ; (22.9), and the line is owed a redraw. Every
-    adc byte [fm_statowed], 0   ; path below used to draw it one way or
-                                ; another; the scroll keys do not any more
-                                ; (22.11), so the debt has to be recorded -
-                                ; the same byte, and the same question, that
-                                ; fm_onclick banks it in. MOV leaves CF alone,
-                                ; so the ADC is fm_stat_clear's answer
+    mov byte [fm_statowed], 0   ; no editor line was up, so this keystroke
+                                ; owes the status line nothing. It used to owe
+                                ; one whenever it retired a verdict, and the
+                                ; debt had to be RECORDED because the scroll
+                                ; keys stopped drawing the line (22.11).
+                                ; Verdicts are toasts now (SPEC.md 59.5)
 
     cmp al, 13
     je .enter
@@ -2303,7 +2299,6 @@ fm_open_sel:
     inc ax                      ; index + 1: ui.inc runs the loader once the
     mov [ld_pending], ax        ; lock drops (SPEC.md 21)
     mov [ld_pwin], di           ; ...resolved against THIS window (22.1)
-    mov byte [di+FS_LDST], 0    ; ...whose last verdict is not this one's
     jmp short .out
 .folder:
     call fm_stage_name          ; fm_name = the folder's display name, out
@@ -2656,8 +2651,6 @@ fm_docmd:
     jae .out
     shl bx, 1
     mov byte [fm_cmdline], 0    ; assume the whole window until a body says
-    call fm_stat_clear          ; a command retires the last verdict (22.9),
-                                ; BEFORE the body runs so its own survives
     call [fm_jmp+bx]            ; otherwise. CALL r/m16 near-indirect: 8086
     mov si, [fm_cmdwin]
     cmp byte [fm_cmdline], 0
@@ -3256,7 +3249,7 @@ fm_hasdot:
 ; -----------------------------------------------------------------------------
 ; fm_edit_commit - Enter in the editor: do whatever was armed (SPEC.md 22)
 ; in:  [fm_vp] published; gfx lock held, UI task - dskw_*'s required context
-; out: nothing (all registers preserved); the verdict lands in FS_FERR
+; out: nothing (all registers preserved); the verdict is said as a toast
 ;
 ; Every dskw_* resolves its name in [dsk_cwd], which is whichever window last
 ; navigated - so the sync is not a nicety: without it a New Folder typed in
@@ -3313,13 +3306,19 @@ fm_edit_commit:
 .delfile:
     call dskw_delete_x
 .verdict:
-    mov di, [fm_vp]             ; .ren left DI on the new name (mov: no flags)
     jc .bad
-    mov byte [di+FS_FERR], 0
     call fmv_bcast              ; the new listing reaches every window that
     jmp short .done             ; is showing this folder
 .bad:
-    mov [di+FS_FERR], al        ; every failure gets visible text (22)
+    push bx                     ; every failure gets visible text (22) - as a
+    push cx                     ; TOAST now (SPEC.md 59.5): a verdict is a
+    mov bx, fm_errtab           ; report about what just happened, not a fact
+    mov cx, FM_NERR             ; about this window, so it wants no per-window
+    call KERNEL_SEG:cw_toast_say ; byte, no status-line rung, and no later
+    pop cx                      ; interaction to come along and retire it.
+    pop bx                      ; BX/CX are pushed because this routine
+                                ; promises to preserve every register and
+                                ; saves only AX, SI and DI
 .done:
     call fm_edit_end
     pop di
@@ -3605,14 +3604,12 @@ fm_paste_res:
     je .ask
     call fm_edit_end            ; whatever was armed is spent
     call fmv_reload_all         ; the coherence pass this operation owes
-    mov di, [fm_vp]
     cmp al, FCPS_ERR
-    je .err
-    mov byte [di+FS_FERR], 0
-    jmp short .all
-.err:
+    jne .all
     mov al, [fcp_err]
-    mov [di+FS_FERR], al
+    mov bx, fm_errtab           ; SPEC.md 59
+    mov cx, FM_NERR
+    call KERNEL_SEG:cw_toast_say
 .all:
     call fmv_repaint_all        ; fmv_reload_all moved every window's CACHE;
     jmp short .out              ; their PIXELS are still the old listing, and
@@ -3851,36 +3848,6 @@ fm_stage_onam:
     ret
 
 ; -----------------------------------------------------------------------------
-; fm_stat_clear - a new interaction retires this window's verdicts (22.9)
-; in:  [fm_vp] published
-; out: CF = 1 if something was actually cleared (the LINE changed, so a
-;      caller drawing nothing else still owes it); all registers preserved
-;
-; A status message is a report about what the user did here, and it must not
-; outlive the doing of it: 'Bad package' used to sit under the listing through
-; every scroll, click and navigation that followed. Called at the TOP of the
-; three interaction entry points, before the handler runs - so an operation
-; that fails still publishes its own verdict straight after.
-; -----------------------------------------------------------------------------
-fm_stat_clear:
-    push di
-    mov di, [fm_vp]
-    cmp byte [di+FS_FERR], 0
-    jne .clr
-    cmp byte [di+FS_LDST], 0
-    je .none
-.clr:
-    mov byte [di+FS_FERR], 0
-    mov byte [di+FS_LDST], 0
-    pop di
-    stc
-    ret
-.none:
-    pop di
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
 ; fm_edit_arm - hand the status-line editor to one window (SPEC.md 22)
 ; in:  DI = state block, AL = mode (1 = new folder, 2 = rename, 3 = delete)
 ; out: nothing (all registers preserved)
@@ -3894,7 +3861,6 @@ fm_stat_clear:
 fm_edit_arm:
     call fm_edit_end
     mov [di+FS_EDIT], al
-    mov byte [di+FS_FERR], 0    ; the prompt replaces the old verdict
     mov byte [fm_cmdline], 1    ; ...and the prompt IS the whole change: no
                                 ; row moves, the selection stays where it is,
                                 ; and the header, the icons and the buttons
@@ -5152,19 +5118,23 @@ fm_draw_status:
     push si
     push di
     ; --- status line at (6, staty): the precedence is binding (SPEC.md 22),
-    ;     because every one of these can be true at the same moment. Rungs
-    ;     1..4 are NOTIFICATIONS and hold the line while they have something
-    ;     to say; rung 5 is what it says the rest of the time (SPEC.md 22.7),
-    ;     which is why nothing needs a rule for putting it back. The header
-    ;     buffer is free by now, so every branch stages into it and one
-    ;     truncation serves them all.
+    ;     because every one of these can be true at the same moment. There
+    ;     used to be five rungs and two of them were VERDICTS - the FERR_* of
+    ;     the last file operation and the LD_* of the last load - which took
+    ;     the line until some later interaction retired it. Those are toasts
+    ;     now (SPEC.md 59.5): a verdict is a report about what just happened,
+    ;     so it belongs to the moment rather than to a window, and it goes
+    ;     away on its own. What is left is what the line is FOR - one thing
+    ;     that is true now (a load pending), one being typed, and one that
+    ;     describes the folder. The header buffer is free by now, so every
+    ;     branch stages into it and one truncation serves them all.
     mov di, fm_hdrbuf
     mov si, fm_s_loading        ; 1. a pending load trumps everything
     cmp word [ld_pending], 0
     jne .fs_stat
     mov al, [fm_ledit]          ; 2. the input line, prompt and all - the
     or al, al                   ;    editor IS the status line (SPEC.md 22)
-    jz .fs_st_err
+    jz .fs_st_space
     cmp al, 3
     je .fs_st_del
     cmp al, 4
@@ -5206,45 +5176,13 @@ fm_draw_status:
     je .fs_stat
     mov si, fm_s_delq2
     jmp short .fs_stat
-.fs_st_err:
-    mov al, [fm_lferr]          ; 3. this window's own last word: the FERR_*
-    or al, al                   ;    text that keeps no dskw_* failure silent
-    jz .fs_st_load
-    mov bx, fm_errtab
-    jmp short .fs_st_tab
-.fs_st_load:
-    mov al, [fm_lldst]          ; 4. and finally the loader's - THIS window's
-    or al, al
-    jz .fs_st_space             ; ...and when even that has nothing to say,
-    mov bx, fm_stattab          ; the line belongs to the free/size figures
-    cmp al, 5
-    ja .fs_done                ; out-of-range status: draw nothing
-.fs_st_tab:
-    cmp al, FM_NERR
-    jae .fs_done
-    xor ah, ah
-    shl ax, 1
-    add bx, ax
-    mov si, [bx]
-    jmp short .fs_stat          ; DRAW it. This said .fs_st_tab - a jump to
-                                ; its own head - and the loop terminated
-                                ; rather than hanging only because `shl ax, 1`
-                                ; doubles the code every pass: LD_EBAD walked
-                                ; 2, 4, 8, 16, failed the FM_NERR bound and
-                                ; fell out at .fs_done, which draws NOTHING.
-                                ; So every rung of this ladder went silent -
-                                ; 'Bad package' on a corrupt .o88, and every
-                                ; FERR_* the table exists to keep from being
-                                ; silent. It fell through to .fs_stat until
-                                ; .fs_st_space was inserted below it and
-                                ; needed a jump added; the jump went to the
-                                ; wrong label
-
-    ; --- 5. the resting state: this folder's size and the volume's free
-    ;     space (SPEC.md 22.7). Every rung above is a NOTIFICATION and takes
-    ;     the line for as long as it has something to say; this one is what
-    ;     the line says the rest of the time, so it needs no clearing rule of
-    ;     its own - the notification going away restores it.
+    ; --- 3. the resting state: this folder's size and the volume's free
+    ;     space (SPEC.md 22.7). The two rungs that used to sit between here
+    ;     and the editor walked a word table by index, and a code past the end
+    ;     of it is what once made this whole ladder go SILENT - LD_EBAD
+    ;     doubled through 2, 4, 8, 16, failed the bound and fell out of a
+    ;     branch that draws nothing. toast_say carries that bound now, in one
+    ;     place, for both tables.
 .fs_st_space:
     push bx
     mov bx, [fm_vp]
@@ -5501,7 +5439,6 @@ fm_lview:   resb 1              ; FS_VIEW
 fm_lmok:    resb 1              ; FS_MOK
 fm_ldrv:    resb 1              ; FS_DRV
 fm_ledit:   resb 1              ; FS_EDIT
-fm_lferr:   resb 1              ; FS_FERR
 fm_wased:   resb 1              ; NOT a mirror: FS_EDIT as it stood BEFORE
                                 ; fm_onclick's fm_edit_end cleared it. A row
                                 ; click changes two selection bands and, if an
@@ -5512,7 +5449,6 @@ fm_wased:   resb 1              ; NOT a mirror: FS_EDIT as it stood BEFORE
 fm_lnf:     resw 1              ; FS_N
 fm_lscr:    resw 1              ; FS_SCRL
 fm_lsel:    resw 1              ; FS_SEL
-fm_lldst:   resb 1              ; FS_LDST
 fm_statowed: resb 1             ; 1 = this click or keystroke retired a
                                 ; verdict, so the status line owes a redraw
                                 ; that the cheap paths do not provide - the

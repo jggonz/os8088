@@ -131,6 +131,51 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; folder it created from the file dialog - the deepest mark left was 246 bytes
 ; on task 0's stack and 150 on a background task's.
 ; =============================================================================
+; --- the split (docs/KERN-SPLIT-PLAN.md) -------------------------------------
+; KERN_BIG and KERN_SMALL are two builds off this one tree, and the knob is
+; `make KERN_BIG=1`. The reason is three budget moves old and is written out
+; below and in docs/KERNEL-MEMORY.md: a 128KB machine and a 640KB machine stop
+; wanting the same feature set long before they stop fitting the same image,
+; so the answer at guard 5's ceiling is a second build rather than a raise.
+;
+; THE TWO FOOTPRINT GUARDS ARE SEPARATE CONSTANTS AS OF THIS COMMIT AND HOLD
+; THE SAME VALUE. That is deliberate and it is not an oversight: separating
+; them is the mechanism, and MOVING one is a decision to take with whoever
+; asked for the feature that needs it (the fifth move's rule, and every move
+; since). So the split costs kern_small nothing today - not a byte, not a
+; step - and kern_big's guard can move on its own the first time something
+; actually needs it to.
+;
+; When they do diverge, the one that has to be defended byte by byte is
+; KERN_SMALL_BUDGET. kern_big's is headroom for a machine that has RAM.
+; EXACTLY ONE of KERN_BIG / KERN_SMALL is in force. The Makefile always sends
+; one explicitly, the default being KERN_BIG; both are positive so that no site
+; has to read `%ifndef` to mean "the other build", which on the one conditional
+; whose whole job is "which build is this" is where a reader gets it backwards.
+;
+; BOTH is an error, because it is genuinely ambiguous. NEITHER is not: it
+; defaults to KERN_BIG, the same answer the Makefile gives, and that is a fix
+; rather than laxity. It was an error for about an hour, and what that broke
+; was tools/os88sym.py - which assembles a TEMPORARY COPY of this file to read
+; the symbol map out of it and has no business knowing which product is being
+; measured. The failure surfaced in a mouse script, three layers from the
+; cause. Anything that assembles this file to look at it gets the shipped
+; kernel, which is the only answer it can have wanted.
+%ifdef KERN_BIG
+ %ifdef KERN_SMALL
+%error "KERN_BIG and KERN_SMALL are both defined - pick one"
+ %endif
+%elifndef KERN_SMALL
+%define KERN_BIG
+%endif
+
+%ifdef KERN_BIG
+KERN_BUDGET equ 94208           ; kern_big's FOOTPRINT guard, and the SHIPPED
+                                ; one: big is the default build. Free to move
+                                ; on its own terms - it has a machine with RAM
+                                ; behind it - where KERN_SMALL_BUDGET below is
+                                ; the one that has to be defended.
+%else
 KERN_BUDGET equ 94208           ; the whole kernel's FOOTPRINT. Growing past
                                 ; this is not a build detail - see
                                 ; docs/KERNEL-MEMORY.md before raising it.
@@ -438,6 +483,25 @@ KERN_BUDGET equ 94208           ; the whole kernel's FOOTPRINT. Growing past
                                 ; REFUSABLE heap claim by explicit decision,
                                 ; so it costs this figure nothing and a 128KB
                                 ; machine can still install, just slowly.
+%endif                          ; KERN_BIG
+
+KERN_SMALL_BUDGET equ 94208     ; ...and kern_small's, named separately so it
+                                ; can be REPORTED on a big build rather than
+                                ; only enforced on a small one. tools/
+                                ; kernsplit.py reads both out of the map and
+                                ; says what the big build costs over the
+                                ; small; without a name for the small figure
+                                ; the only way to ask that question is to
+                                ; build twice and remember, which is how a
+                                ; number goes stale.
+                                ;
+                                ; It is the figure that has to be DEFENDED.
+                                ; kern_big has a machine with RAM behind it;
+                                ; this one is the 128KB floor the project was
+                                ; written for, and nothing may be added to
+                                ; kern_small without the conversation every
+                                ; budget move so far has had.
+
 KERN_CODE_MAX equ 65536         ; the kernel's own SEGMENT: .text + .bss are
                                 ; both addressed through KERNEL_SEG, so they
                                 ; must fit one 64KB window. Unlike KERN_BUDGET
@@ -1208,7 +1272,24 @@ osapi_table:
                                   ;          lets the raise cache put its old
                                   ;          pixels back instead of calling
                                   ;          W_PAINT (SPEC.md 11.96.1)
-osapi_table_end:                  ; 0x0380
+    OSAPI_SLOT toast_show         ; 0x0380 - ES:SI = a NUL line, CX = ticks to
+                                  ;          live (0 = ~3s). Says it in the
+                                  ;          menu bar and takes it down on its
+                                  ;          own (SPEC.md 59). An EMPTY string
+                                  ;          retires whatever is up. ES:SI for
+                                  ;          clip_put's reason: the text is
+                                  ;          often not in the caller's image
+    OSAPI_SLOT dsk_batch_begin    ; 0x0388  no arguments, no answer. "The
+                                  ;         interface is frozen and the disk is
+                                  ;         the same disk" (SPEC.md 18.9.3), so
+                                  ;         a floppy may reuse its banked BPB
+                                  ;         instead of re-reading LBA 0 at every
+                                  ;         volume switch. Nests
+    OSAPI_SLOT dsk_batch_end      ; 0x0390  ...and the other end. Optional: any
+                                  ;         gfx_unlock ends the batch anyway,
+                                  ;         which is what makes an unclosed one
+                                  ;         impossible rather than merely rare
+osapi_table_end:                  ; 0x0398
 
 ; build-time assertions: the table's start and span are ABI, prove them here
 OSAPI_TABLE_OFF equ osapi_table - $$
@@ -1216,8 +1297,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 110 * 8
-%error "os8088 API jump table must be exactly 110 8-byte slots"
+%if OSAPI_TABLE_LEN != 113 * 8
+%error "os8088 API jump table must be exactly 113 8-byte slots"
 %endif
 
 ; =============================================================================
@@ -1618,7 +1699,14 @@ kmain:
     call bb_init                ; back buffer (SPEC.md 32): can this ADAPTER
                                 ; double-buffer? The memory question is asked
                                 ; of the heap when the buffer is armed
+%ifdef BAKED_FONT
+    call FAT_SEG:ovl_font_init  ; the typeface this BUILD carries (SPEC.md
+                                ; 6.2), out of the overlay - so it needs no
+                                ; int 10h and no F000:FA6E, and the machine's
+                                ; own ROM font is not consulted at all
+%else
     call font_init              ; needs int 10h, so after the mode is set
+%endif
     call wm_init
     call menu_init              ; menu bar owner (SPEC.md 12): Locator, so
                                 ; the first wm_paint_all already has a bar
@@ -1975,6 +2063,10 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
                               ; sits beside and whose menu_draw_bar gives the
                               ; borrowed pixels back; before disk.inc, which
                               ; steps it per sector
+%include "toast.inc"          ; the transient one-line message (SPEC.md 59):
+                              ; the bar's other tenant, beside fprog.inc for
+                              ; the same reason and after it, because
+                              ; toast_show refuses while that widget is armed
 %include "ui.inc"
 %include "apps.inc"
 %include "assoc.inc"          ; file type associations (SPEC.md 54): the
@@ -2070,6 +2162,8 @@ cw_drv_tier:            call drv_tier
                     retf
 cw_drv_unload:          call drv_unload
                     retf
+cw_dsk_batch_begin:     call dsk_batch_begin
+                    retf
 cw_dsk_chdir:           call dsk_chdir
                     retf
 cw_dsk_chdir_q:         call dsk_chdir_q
@@ -2079,6 +2173,8 @@ cw_dsk_clus2lba:        call dsk_clus2lba
 cw_dsk_copy_in:         call dsk_copy_in
                     retf
 cw_dsk_copy_seg:        call dsk_copy_seg
+                    retf
+cw_dsk_dirw_get:        call dsk_dirw_get
                     retf
 cw_dsk_dirw_next:       call dsk_dirw_next
                     retf
@@ -2164,6 +2260,8 @@ cw_mem_avail:           call mem_avail
                     retf
 cw_mem_claim:           call mem_claim
                     retf
+cw_mem_claim_dma:       call mem_claim_dma
+                    retf
 cw_mem_claim_hi:        call mem_claim_hi
                     retf
 cw_mem_free:            call mem_free
@@ -2187,6 +2285,8 @@ cw_snd_beep:            call snd_beep
 cw_snd_disp_set:        call snd_disp_set
                     retf
 cw_task_yield:          call task_yield
+                    retf
+cw_toast_say:           call toast_say
                     retf
 cw_ui_post_cmd:         call ui_post_cmd
                     retf
@@ -2216,20 +2316,8 @@ cw_wm_hit:              call wm_hit
                     retf
 cw_wm_idx2ptr:          call wm_idx2ptr
                     retf
-cw_wm_obscured:         cmp bx, [wm_su_win]   ; "AM I COVERED?" IS A BACKGROUND
-                        jne .ask              ; PAINTER CLEARING ITS THROAT. On
-                        call wm_su_drop       ; CF = 0 it draws, and 11.3 lets
-.ask:                   call wm_obscured      ; it draw UNCLIPPED because it has
-                        retf                  ; just been told nothing is over
-                                              ; it - so it never reaches
-                                              ; wm_clip_set and never drops the
-                                              ; raise cache the way every other
-                                              ; painter does (SPEC.md 11.96).
-                                              ; Note Pad's worker takes exactly
-                                              ; this route. The compare goes
-                                              ; FIRST because it would destroy
-                                              ; wm_obscured's CF; wm_su_drop
-                                              ; preserves the flags either way
+cw_wm_obscured:         call wm_obscured
+                    retf
 cw_wm_paint_all:        call wm_paint_all
                     retf
 cw_wm_pkgcall:          call wm_pkgcall
@@ -2427,7 +2515,26 @@ KBUF_KB    equ ((FAT_PARA + LOW_PARA) * 16 + 1023) / 1024
 ;    KERNEL_SEG, and it fits KERN_BUDGET (72.5KB) just above the BIOS data
 ;    area. This is the guard the project is steering by; raising KERN_BUDGET
 ;    is a decision, not a build fix (docs/KERNEL-MEMORY.md).
-%if KERN_SIZE > KERN_BUDGET
+;
+;    AN INSTRUMENTED KERNEL IS NOT THE SHIPPED ONE, and the guard says so now
+;    rather than the prose alone (CLAUDE.md: "a benchmark kernel is not bound
+;    by KERN_BUDGET; what it IS bound by is parity"). DISK_COUNTERS is built
+;    only for `make field` and for a bench run, on machines that all have
+;    640KB, and it used to cost the image NOTHING because it landed in the
+;    padding to OVL_START - so the exemption was never needed and nobody had
+;    to decide anything. The baked typeface and the toast (SPEC.md 6.2, 59)
+;    spent that padding, and the same counters now cost 1,821 bytes of .text
+;    and two image rungs. Refusing to BUILD a field kernel is the wrong answer
+;    to that: the shipped kernel's own number has not moved, and it is the
+;    shipped kernel this guard exists to steer. tools/fieldsize.py is the
+;    other half - it reports whether the field kernel and the shipped one
+;    share a KIMG_PARA rung, so "bigger" stays known about rather than silent.
+%ifdef DISK_COUNTERS
+KERN_CEIL equ KERN_BUDGET + 4096    ; ...and a BOUND, not a free hand: four
+%else                               ; steps, so the instrument cannot quietly
+KERN_CEIL equ KERN_BUDGET           ; become the reason the kernel grew
+%endif
+%if KERN_SIZE > KERN_CEIL
 %error "kernel too big: it must fit KERN_BUDGET - see docs/KERNEL-MEMORY.md"
 %endif
 ; 2. KERN_CODE_MAX - the SEGMENT. The kernel's own segment is 64KB like any

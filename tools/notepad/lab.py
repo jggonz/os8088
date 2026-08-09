@@ -95,7 +95,7 @@ def attach(args, want_len=None):
 
 
 def cmd_boot(args):
-    drive.start(image=args.image)
+    drive.start(image=args.image, machine=args.machine)
     lab = Lab(args.addr)
     drive.open_readme(lab.m)
     out = os.path.join(ROOT, "build", "notepad-lab-opened.png")
@@ -192,6 +192,11 @@ def main():
 
     p = sub.add_parser("boot"); p.set_defaults(fn=cmd_boot)
     p.add_argument("--image", default="build/npbench360.img")
+    # The period IBM ROM is not in this tree (it has never been licensed for
+    # redistribution), so a container that has not been given one can only
+    # boot the GLaBIOS machines - os8088_5150_cga_gla. The CPU is the same
+    # cycle-accurate 8088 either way, which is what every figure here is in.
+    p.add_argument("--machine", default="os8088_5150_cga")
     p = sub.add_parser("verify"); p.set_defaults(fn=cmd_verify)
     p = sub.add_parser("state"); p.set_defaults(fn=cmd_state)
     p.add_argument("--rows", action="store_true")

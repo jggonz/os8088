@@ -111,6 +111,10 @@ MEM_K_CLIP equ 0xFF07           ; the system clipboard's text (SPEC.md 55) -
 ; has to already have one.
 MEM_PG_HI  equ 0xFE             ; the owner's high byte: purgeable kernel tag
 MEM_P_WSAVE equ 0xFE01          ; a window's raise cache (SPEC.md 11.96)
+MEM_P_DIRW  equ 0xFE02          ; the directory walk's read-ahead window
+                                ; (SPEC.md 19.2.3) - its zero already means
+                                ; "read one sector at a time", which is what
+                                ; every directory walk did before it existed
 
 MEM_PARA_KB equ 64              ; paragraphs per KB
 
@@ -298,16 +302,6 @@ mem_claim:
 mem_claim_1:
     push ax
     push cx
-    push si                     ; THE STAGED PARAMETERS, and they are staged in
-    push di                     ; REGISTERS on purpose (see the cli below), so
-                                ; the retry above re-reads them from here. The
-                                ; scan owns both - DI walks mem_tab, SI counts
-                                ; this owner then walks it again - so without
-                                ; this a shed-and-retry restages a mem_tab
-                                ; OFFSET as [mem_dma] and a non-zero [mem_dir]:
-                                ; a phantom DMA head measured in KB, and a
-                                ; bottom-up data claim placed top down, in the
-                                ; region arena mem_pg_ceil exists to keep whole
     pushf
     cli                         ; the whole scan-and-publish, one window -
     mov [mem_dma], si           ; the operation's PARAMETERS included. The
@@ -440,8 +434,6 @@ mem_claim_1:
     xor dx, dx
     stc
 .out:
-    pop di
-    pop si
     pop cx
     pop ax
     ret
@@ -530,29 +522,13 @@ mem_pg_ceil:
 ; -----------------------------------------------------------------------------
 mem_pg_own:
     dw MEM_P_WSAVE, wm_su_seg
+    dw MEM_P_DIRW,  dsk_rah_seg
     dw 0
 
 ; -----------------------------------------------------------------------------
 ; mem_shed_one - give up one purgeable block
 ; out: CF = 0 one was shed, CF = 1 there was nothing to shed
 ; clobbers: flags
-;
-; ONE CALLER, AND THAT IS LOAD-BEARING - it is mem_claim's retry, above, and
-; nothing else in the tree sheds. "Zeroing the word IS the notice" holds only
-; while that word is the ONLY reference to the block, and there are two spans
-; where it is not: wm_su_take publishes [wm_su_seg] LAST, so the word is still
-; 0 for the whole of gfx_save, and wm_su_try holds the segment in ES across
-; gfx_restore. A shed inside either would be written into, or read out of,
-; memory another owner already holds - tens of milliseconds each, with IF = 1.
-;
-; What makes that unreachable is not the gfx lock (a task_yield spin mutex
-; excludes other DRAWING, not preemption). It is that EVERY mem_claim in the
-; tree is either a UI-task action or made under the gfx lock, and a raise is a
-; UI-task action under that same lock - so no second task is inside mem_claim
-; while the first is inside gfx_save. A package worker that claims memory
-; directly would break it. That is the rule to keep, and it is why a worker
-; grows through OSAPI_MEM_REGROW (which never sheds) rather than claim-copy-
-; free: SPEC.md 50.6's contract rests on it.
 ; -----------------------------------------------------------------------------
 mem_shed_one:
     push ax
@@ -1503,6 +1479,52 @@ mem_own:
                                      ; buffers its own SDK tells it to claim -
                                      ; it has no instance, so the test above
                                      ; can never say yes about it
+    push dx                          ; ...or by a SEGMENT that is itself a
+    mov dx, [ss:si+MC_OWN]           ; driver image: SPEC.md 52.11.4's second
+    call mem_own_drv                 ; image, one level and no further. DX is
+    pop dx                           ; banked because osapi_mem_free passes the
+    jnc .yes                         ; segment to free in it, and `pop` leaves
+                                     ; the flags alone
+.next:
+    add si, MC_SIZE
+    loop .scan
+    pop si
+    pop cx
+    stc
+    ret
+.yes:
+    pop si
+    pop cx
+    clc
+    ret
+
+; -----------------------------------------------------------------------------
+; mem_own_drv - is DX the segment of a DRIVER's image? (module internal)
+; in:  DX = a candidate segment
+; out: CF = 0 yes, CF = 1 no
+; clobbers: flags
+;
+; SPEC.md 52.11.4. A driver may load a SECOND IMAGE of its own - HDD.DRV reads
+; HDDTOOL.DRV when the user clicks Format or Install - and it claims that
+; image through OSAPI_MEM_CLAIM like any other buffer, so the claim's owner is
+; the RESIDENT's segment. The tool then runs in a segment mem_own had never
+; heard of: not an instance, not MEM_K_DRV, so every claim it made was refused
+; whatever its size. This is the one level of indirection that says otherwise.
+;
+; ONE LEVEL, deliberately: an image loaded by an image loaded by a driver is
+; not a shape anything here has, and a walk that followed the chain could be
+; made to loop by a table it does not own.
+; -----------------------------------------------------------------------------
+mem_own_drv:
+    push cx
+    push si
+    mov si, mem_tab
+    mov cx, MEM_MAX
+.scan:
+    cmp [ss:si+MC_SEG], dx
+    jne .next
+    cmp word [ss:si+MC_OWN], MEM_K_DRV
+    je .yes
 .next:
     add si, MC_SIZE
     loop .scan
