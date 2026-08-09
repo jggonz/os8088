@@ -846,6 +846,31 @@ the wrong one does not error; it produces a plausible picture of nothing.
 | `shot --rendered` (`fbuf`) | asks the CARD what it rasterised, as rgb24 | **every mode**, CGA and VGA (see the Hercules note) |
 | `screen` | the card's text rows as **characters** | text modes |
 
+**THE RENDERED FRAME IS NOT IN THE GUEST'S COORDINATE SYSTEM, and nothing
+says so.** A whole-screen capture does not care; **a CROP does**, and this is
+the trap that costs a session. Measured by correlating `fbuf` against the
+guest's own framebuffer on a Hercules desktop, the card's frame is **720x350
+for a 720x348 screen and sits at dx = −16, dy = +2** — a perfect match at
+that alignment and at no other. VGA mode 12h happens to come back 640x480 at
+(0, 0), and CGA at (0, 0) too, so two adapters out of three encourage the
+assumption the third breaks. There is no correction to apply blind: the
+offset is the card's raster phase, not a constant of the tool.
+
+What it looks like when it bites: a crop taken at a window's guest rect is
+sampling 16 columns to the *right* of that window, so the middle of the
+window still compares perfectly and only the edges disagree — 1,670 differing
+pixels of a Minesweeper window, all of them in the rightmost 14 columns, and
+every one of them showing the window *behind* it. That reads as a smeared
+restore, which is exactly the defect `tools/sucheck.py` exists to detect, and
+it survived a forced-full-repaint control (which agreed with the "broken"
+capture to 0 pixels, because both were mis-cropped identically).
+
+So: **crop with `vram` on the 1bpp adapters** — it decodes SPEC.md §39.3's
+banked layout out of guest memory and is in guest coordinates by
+construction — and on VGA, where there is no flat framebuffer to read, at
+least **assert `fbuf`'s dimensions against `[vid_w]`/`[vid_h]`** before
+believing a crop. `tools/sucheck.py`'s `fb()` is the worked example of both.
+
 **`video` reports `mode` and `text`, and that is the discriminator to use.**
 It comes from the card's `display_mode()`, derived from its actual registers —
 unlike `graphics`, which is a dead field on the VGA and always false. `shot`

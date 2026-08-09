@@ -360,7 +360,7 @@ Three things about it:
 ```json
 {
   "big": {
-    "bss": 4734,
+    "bss": 4736,
     "budget": 96256,
     "codemax": 65536,
     "cold": 21664,
@@ -374,7 +374,7 @@ Three things about it:
     "lowpara": 576,
     "ovl": 2662,
     "stk0": 1024,
-    "text": 52741
+    "text": 52905
   },
   "small": {
     "bss": 4654,
@@ -865,22 +865,22 @@ generated in the first place.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 27,391 | 36.8% |
-| the window system and its furniture | 15,809 | 21.2% |
-| drawing: adapters, primitives, glyphs, icons | 10,085 | 13.6% |
+| the file system, end to end | 27,395 | 36.7% |
+| the window system and its furniture | 15,863 | 21.3% |
+| drawing: adapters, primitives, glyphs, icons | 10,085 | 13.5% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 9,560 | 12.8% |
-| the kernel proper: API table, heap, scheduler, events | 5,758 | 7.7% |
+| the kernel proper: API table, heap, scheduler, events | 5,864 | 7.9% |
 | the Control Panel | 4,426 | 5.9% |
 | the three built-in kinds | 1,376 | 1.8% |
-| **total** | **74,405** | |
+| **total** | **74,569** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` |
 |---|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 806 | 6,930 | **7,736** | 335 | — |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,514 | — | **5,514** | 758 | 3,584 |
-| `wm.inc` — the window manager (§11) | 5,494 | — | **5,494** | 635 | — |
+| `wm.inc` — the window manager (§11) | 5,548 | — | **5,548** | 635 | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 5,518 | — | **5,518** | 758 | 3,584 |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 20 | 4,676 | **4,696** | 155 | — |
 | `ctrl.inc` — the Control Panel (§31) | 877 | 3,549 | **4,426** | — | — |
 | `fdlg.inc` — the Standard File dialog (§38) | 127 | 3,621 | **3,748** | 98 | — |
@@ -891,7 +891,7 @@ generated in the first place.
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 2,530 | — | **2,530** | 246 | — |
 | `ui.inc` — the UI task and the event ladder (§13) | 2,361 | — | **2,361** | 37 | — |
 | `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 2,134 | **2,134** | 135 | — |
-| `memory.inc` — the claim heap (§50) | 1,860 | — | **1,860** | 12 | 256 |
+| `memory.inc` — the claim heap (§50) | 1,966 | — | **1,966** | 14 | 256 |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,825 | — | **1,825** | 673 | — |
 | `clock.inc` — the clock ladder (§37) | 1,794 | — | **1,794** | 89 | — |
 | `vgabb.inc` — the software renderer / back buffer (§32, §39.5) | 1,649 | — | **1,649** | 27 | — |
@@ -914,7 +914,7 @@ generated in the first place.
 | `events.inc` — the event ring (§10) | 138 | — | **138** | 134 | — |
 | `cpudet.inc` — CPU tiers and the A20 gate (§41.1–41.3) | 10 | — | **10** | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,672 | — | **2,672** | — | — |
-| **total** | **52,741** | **21,664** | **74,405** | **4,734** | **7,748** |
+| **total** | **52,905** | **21,664** | **74,569** | **4,736** | **7,748** |
 <!-- END generated table -->
 
 ### Reading it

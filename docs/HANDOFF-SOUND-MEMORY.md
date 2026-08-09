@@ -66,9 +66,26 @@ the *cheapest* block it outranks. (§50.6.4.)
 
 ---
 
-## 3. The one thing designed and NOT built
+## 3. The one thing designed and NOT built — BUILT, and the gate was broken
 
 **One raise cache per window instance, instead of one for the machine.**
+SPEC.md §11.96.3 is the section; it landed as designed below, with one
+simplification (a `mem_pg_own` row needs a tag, a base and a COUNT — no
+stride column, because §50.6 already requires every purgeable block to be
+named by exactly one *word*). `.text` +69 bytes, no rung crossed.
+
+**Read §5 first, though, because the gate this section told you to use did
+not work.** `tools/sucheck.py` clicked a hard-coded point that Solitaire's
+own rect contains, so it never covered anything, never entered `wm_su_take`,
+and compared the screen with itself — reporting a *better* pixel figure than
+a healthy run. That is also the answer to §4's "the claim is rare": it was
+never rare, it was never happening. The gate is fixed, computes its click
+point from the window rects, asserts the claim, and has a two-window phase
+that is the discriminating test for this feature — with the control run:
+old kernel 1 trivial claim, new kernel 2. Both restore at **0 differing
+pixels**, on CGA, Hercules and VGA.
+
+The design as it was written down, and as built:
 
 Wanted because the single slot means last-covered-wins: covering a cheap
 window takes the cache from an expensive one, and it is why SPEC.md §11.96.1's
@@ -101,6 +118,9 @@ without a working test — until Minesweeper/Piano/Solitaire opted in, *nothing
 being driven made the promise*, so every scripted session saw an empty claim
 map and there was no test of §11.96 at all. That is exactly the condition in
 which a refactor whose failure mode is smeared pixels ships a subtle bug.
+**And "a gate exists" is not "a gate works":** this one was written under
+that warning and still tested nothing, for a reason the warning does not
+cover. See §5.
 
 ---
 
@@ -115,10 +135,12 @@ which a refactor whose failure mode is smeared pixels ships a subtle bug.
   exists. The smallest machine that runs it is 256KB. XT mode is a CPU-tier
   property and every 8088 arms it, so "XT mode is every 128KB machine" is true
   of the *rate* and empty of Tracker.
-- **`wm_su`'s claim is rare.** It was never observed in any flow driven this
-  round until Solitaire opted in, and it did not appear at every cover even
-  then. Worth understanding before per-window work — if the take is refused
-  more often than expected, per-window buys less than it looks.
+- ~~**`wm_su`'s claim is rare.**~~ **Answered: it is not, and never was.** The
+  flow driving it was clicking a point inside the very window it meant to
+  cover, so `wm_su_take` was entered once in a whole session — at stage 1,
+  on a window that makes no promise. With the click corrected it is taken on
+  every cover and spent on every raise. §5, and docs/TESTING.md under "Prefer
+  a self-checking harness to a careful one".
 - **`tools/os88flush.py` was not used.** Reading the driver's counters over
   the debug connection turned out finer-grained than the guest-side log, but
   the flush harness is the right tool for anything about bytes on a disk.
