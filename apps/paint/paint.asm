@@ -287,6 +287,17 @@ pt_entry:
     jc .out                         ; no window: nothing to flag, nothing to
                                     ; claim - the region stays untouched
     mov [pt_win], bx
+                                    ; NO WF_SAVEU here, and the promise would
+                                    ; hold: what disqualifies Paint is the
+                                    ; PRICE, not the truth. 95% of its repaint
+                                    ; is already one gfx_blit4 out of its own
+                                    ; canvas claim, so the raise cache would
+                                    ; bank a second copy of the biggest window
+                                    ; on screen to save the cheapest repaint in
+                                    ; the tree - and there is ONE cache for the
+                                    ; machine (SPEC.md 11.96), so covering
+                                    ; Paint would take it from a window whose
+                                    ; repaint really is glyphs
     call pt_arg                     ; were we launched to open a picture?
     cmp byte [pt_mode], PT_M_LIVE
     jne .menus

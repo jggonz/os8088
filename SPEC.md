@@ -4273,6 +4273,41 @@ flag: `wm_hide` drops the cache, because a hidden window's painter skips
 drawing for the whole time it is down. **A promise about being covered may not
 be assumed across a hide.**
 
+**The test a window has to pass, and it is three questions.** `wm_su_try`
+returning CF = 0 skips *both* the white fill and `W_PAINT`, so anything the
+raise was going to do does not happen:
+
+1. **Does its content change while it is merely covered?** A worker that
+   advances state and skips drawing is the disqualifier — the Timer, a
+   Bounce, a game loop, a player's position readout, a capture's byte count.
+   An app with no worker at all cannot fail this, because the window ABI has
+   no periodic hook: `W_PAINT`, `W_ONKEY` and `W_ONCLICK` are the only ways
+   in, and all three are interaction.
+2. **Does it do work on gaining focus?** That work arrives as `W_PAINT`, and
+   a restored cache is exactly the case where `W_PAINT` does not run. A Disk
+   window is the worked example: §22.8 re-lists a dirtied folder when it comes
+   to the front, and putting old pixels back over a new listing is
+   docs/FIELD-NOTES.md 4's bug with a different cause.
+3. **Is its repaint actually expensive?** The first two are about being
+   *allowed*; this one is about being *worth it*. Paint fails it — 95% of its
+   repaint is one `gfx_blit4` out of a canvas it already holds in RAM — and so
+   does Hello, whose content is a fixed string.
+
+Question 3 matters more than it looks while there is **one cache for the
+machine**: marking a cheap window means covering it takes the cache from an
+expensive one. It is the reason not to bank a screenful to save a blit.
+
+Two things that look like disqualifiers and are not. A **geometry re-read** in
+the paint proc (`pt_track`, `sol_track`) is safe, because `wm_su_ck` compares
+the banked rect with the window's rect now — a change invalidates the cache
+and the full path runs. And a background painter that DRAWS is safe, because
+it must arm `wm_clip_set` first (§11.3) and that drops the cache.
+
+Marked today: **Note Pad** (its worker watches typing), **Minesweeper** (no
+worker, and the only `GET_TICKS` in it seeds the mines), **Piano** (no worker;
+its one polling loop runs inside a click callback) and **Solitaire** (no
+worker, so the table moves only when a card is dragged).
+
 So the flag is a promise only the application can make — *my content does not
 change while I am not drawing* — and the asymmetry settles the default:
 **forgetting to opt in costs speed, and forgetting to invalidate costs

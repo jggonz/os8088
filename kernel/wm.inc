@@ -3618,12 +3618,19 @@ wm_saveu:
 ; below is the notice. A machine with no room for it behaves exactly as it did
 ; before this existed.
 ;
-; THERE IS NO OPT-IN AND THAT IS DELIBERATE. An API slot was the obvious shape
-; - WF_SIZABLE and WF_SNAP are both opted into that way - and it is the wrong
-; one here, because the only reason to opt OUT would be to stop a window
-; spending memory it does not need, and purgeable memory is not spent. The
-; kernel also knows everything the decision needs (the window's size, whether
-; the block fits) and the app knows nothing extra. So every window gets it.
+; IT IS OPT-IN, THROUGH WF_SAVEU, and this comment used to say the opposite -
+; "there is no opt-in and that is deliberate... so every window gets it". That
+; was written before the flag existed and left behind when it arrived, which
+; cost a reader the belief that no window opts in at all.
+;
+; The argument it made was that the kernel knows everything the decision needs
+; and the app knows nothing extra. The second half is false, and the paragraph
+; below is why: what makes the cache safe is a covered window not changing its
+; pixels without the kernel finding out - and that only holds for a window
+; that DRAWS. A window whose state advances while it is covered and which
+; skips drawing BECAUSE it is covered never reaches wm_clip_set, so nothing
+; drops the cache and the raise puts back pixels that stopped being true. Only
+; the application knows which of those it is (SPEC.md 11.96.1).
 ;
 ; ONE CACHE FOR THE MACHINE, like the menu's save-under. It covers the case
 ; that was reported - two windows alternating - and it bounds the memory at
